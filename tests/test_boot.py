@@ -55,3 +55,15 @@ def test_오류는_전부_모인다(tmp_path):
     _tree(tmp_path, check_target="rest:/ghost", repo_name="ghost-repo")
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
     assert len(errors) >= 2
+
+
+def test_깨진_토폴로지는_크래시가_아니라_오류로_모인다(tmp_path):
+    _tree(tmp_path)
+    # 토폴로지를 스키마 위반(kafka인데 collection 선언)으로 덮어쓴다
+    _write(tmp_path, "knowledge/topology/common.yaml", """
+services:
+  twin-api:
+    writes: [ { kind: kafka, collection: wrong_field } ]
+""")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("토폴로지 로드 실패" in e.problem for e in errors)

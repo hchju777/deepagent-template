@@ -41,7 +41,12 @@ def validate_boot(config_root: Path, *, env, repo_root: Path) -> list[BootError]
             continue
 
         knowledge_root = repo_root / cfg.knowledge.root
-        topo = load_topology(knowledge_root, site.gbm, site.fct)
+        try:
+            topo = load_topology(knowledge_root, site.gbm, site.fct)
+        except Exception as exc:   # yaml 구문 오류·스키마 위반 — 사이트 단위로 모아 보고
+            errors.append(BootError(where, f"토폴로지 로드 실패: {exc}"))
+            continue
+
         errors += [BootError(where, p) for p in topology_problems(topo)]
 
         known = topo.locators()
