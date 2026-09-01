@@ -1153,6 +1153,18 @@ def test_오류는_전부_모인다(tmp_path):
     _tree(tmp_path, check_target="rest:/ghost", repo_name="ghost-repo")
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
     assert len(errors) >= 2
+
+
+def test_깨진_토폴로지는_크래시가_아니라_오류로_모인다(tmp_path):
+    _tree(tmp_path)
+    # 토폴로지를 스키마 위반(kafka인데 collection 선언)으로 덮어쓴다
+    _write(tmp_path, "knowledge/topology/common.yaml", """
+services:
+  twin-api:
+    writes: [ { kind: kafka, collection: wrong_field } ]
+""")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("토폴로지 로드 실패" in e.problem for e in errors)
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -1205,7 +1217,12 @@ def validate_boot(config_root: Path, *, env, repo_root: Path) -> list[BootError]
             continue
 
         knowledge_root = repo_root / cfg.knowledge.root
-        topo = load_topology(knowledge_root, site.gbm, site.fct)
+        try:
+            topo = load_topology(knowledge_root, site.gbm, site.fct)
+        except Exception as exc:   # yaml 구문 오류·스키마 위반 — 사이트 단위로 모아 보고
+            errors.append(BootError(where, f"토폴로지 로드 실패: {exc}"))
+            continue
+
         errors += [BootError(where, p) for p in topology_problems(topo)]
 
         known = topo.locators()
