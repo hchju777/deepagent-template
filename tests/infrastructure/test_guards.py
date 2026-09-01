@@ -31,6 +31,7 @@ async def test_예외도_error_결과로_변환된다():
     sem = asyncio.Semaphore(1)
     result = await guarded_call(boom, timeout_s=1, semaphore=sem, clock=CLOCK)
     assert result.status == "error" and "connection refused" in result.error
+    assert "어댑터 호출 예외" in result.error
 
 
 async def test_세마포어가_동시_실행을_제한한다():

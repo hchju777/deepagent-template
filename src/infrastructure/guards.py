@@ -21,4 +21,4 @@ async def guarded_call(op, *, timeout_s, semaphore, clock) -> ProbeResult:
     except Exception as exc:   # 어댑터 계약: 어떤 실패도 그래프 안으로 raise하지 않는다
         return ProbeResult(
             status="error", envelope=Envelope(observed_at=clock()),
-            error=f"{type(exc).__name__}: {exc}")
+            error=f"어댑터 호출 예외 — {type(exc).__name__}: {exc}")

@@ -331,6 +331,7 @@ async def test_예외도_error_결과로_변환된다():
     sem = asyncio.Semaphore(1)
     result = await guarded_call(boom, timeout_s=1, semaphore=sem, clock=CLOCK)
     assert result.status == "error" and "connection refused" in result.error
+    assert "어댑터 호출 예외" in result.error
 
 
 async def test_세마포어가_동시_실행을_제한한다():
@@ -380,7 +381,7 @@ async def guarded_call(op, *, timeout_s, semaphore, clock) -> ProbeResult:
     except Exception as exc:   # 어댑터 계약: 어떤 실패도 그래프 안으로 raise하지 않는다
         return ProbeResult(
             status="error", envelope=Envelope(observed_at=clock()),
-            error=f"{type(exc).__name__}: {exc}")
+            error=f"어댑터 호출 예외 — {type(exc).__name__}: {exc}")
 ```
 
 `src/infrastructure/__init__.py`는 빈 파일로 생성.
