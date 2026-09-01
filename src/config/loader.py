@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from src.config.envresolve import resolve_env_refs
-from src.config.merge import deep_merge, record_provenance
+from src.config.merge import deep_merge
 from src.config.schema_app import AppConfig, StrictModel
 from src.config.schema_site import SiteConfig
 
@@ -67,11 +67,7 @@ def load_site_config(config_root: Path, gbm: str, fct: str, *, env):
         rel = template.format(gbm=gbm, fct=fct)
         layer = _read_json(config_root / rel)
         source = rel.removesuffix(".json")
-        if not merged:
-            merged = layer
-            record_provenance(layer, source=source, provenance=provenance)
-        else:
-            merged = deep_merge(merged, layer, source=source, provenance=provenance)
+        merged = deep_merge(merged, layer, source=source, provenance=provenance)
 
     resolved, missing = resolve_env_refs(merged, env=env)
     problems = [f"{gbm}/{fct}: env 키 부재 또는 빈 값 — {k}" for k in sorted(set(missing))]

@@ -46,3 +46,13 @@ def test_registry_enabled_기본값(tmp_path):
     reg = load_registry(tmp_path / "config")
     assert [(s.gbm, s.fct, s.enabled) for s in reg.sites] == [
         ("mx", "gumi", True), ("mx", "suwon", False)]
+
+
+def test_앞_계층이_없어도_null_마커는_삭제로_동작한다(tmp_path):
+    # gbm/common 계층 없이 마지막 계층만 존재 — 스펙상 허용되는 배치
+    _write(tmp_path, "config/factories/gumi/mx.json",
+           {"target": {"redis": {"url": "redis://g:6379"}},
+            "patrol": {"checks": {"api.freshness": None}}})
+    cfg, prov = load_site_config(tmp_path / "config", "mx", "gumi", env={})
+    assert "api.freshness" not in cfg.patrol.checks
+    assert not any(p.startswith("patrol.checks.api.freshness") for p in prov)

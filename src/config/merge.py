@@ -28,13 +28,10 @@ def deep_merge(base, override, *, source, provenance, prefix=""):
         if value is None:                       # null 마커: 삭제
             out.pop(key, None)
             _drop_subtree(provenance, path)
-        elif isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = deep_merge(out[key], value, source=source,
-                                  provenance=provenance, prefix=path)
         elif isinstance(value, dict):
-            out[key] = value
-            _drop_subtree(provenance, path)
-            record_provenance(value, source=source, provenance=provenance, prefix=path)
+            # 기존 dict가 있든 없든 재귀 병합 (null 마커를 중첩에서도 처리)
+            out[key] = deep_merge(out.get(key, {}), value, source=source,
+                                  provenance=provenance, prefix=path)
         else:
             out[key] = value
             _drop_subtree(provenance, path)
