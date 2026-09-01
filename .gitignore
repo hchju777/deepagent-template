@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+output/
+.vscode/
+
+# 계획 실행용 작업 기록 (레저·브리프·리뷰 패키지)
+.superpowers/
