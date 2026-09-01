@@ -39,3 +39,20 @@ def test_mongo_롤은_read계열만_허용():
     assert mongo_role_problems(ok) == []
     assert any("readWrite" in p for p in mongo_role_problems(bad))
     assert mongo_role_problems(anon) == []
+
+
+def test_중첩된_JS_실행_연산자도_잡는다():
+    assert any("$function" in p for p in aggregate_problems(
+        [{"$project": {"x": {"$function": {"body": "evil"}}}}]))
+    assert any("$where" in p for p in aggregate_problems(
+        [{"$match": {"$where": "sleep(1000)"}}]))
+    assert any("$accumulator" in p for p in aggregate_problems(
+        [{"$group": {"_id": "$a", "y": {"$accumulator": {}}}}]))
+
+
+def test_끝점_메타문자와_개행_우회_차단():
+    assert not endpoint_allowed("/api/v1/tags/x/PLCXLine7XValue",
+                                {"/api/v1/tags/{tag}/PLC.Line7.Value"})
+    assert endpoint_allowed("/api/v1/tags/x/PLC.Line7.Value",
+                            {"/api/v1/tags/{tag}/PLC.Line7.Value"})
+    assert not endpoint_allowed("/api/v1/lines/7/oee\n", {"/api/v1/lines/{line}/oee"})
