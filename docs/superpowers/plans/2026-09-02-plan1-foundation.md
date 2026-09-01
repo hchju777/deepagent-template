@@ -19,7 +19,7 @@
 - **schedule**: 점검당 `interval` xor `cron` — 둘 다 또는 둘 다 없음은 검증 실패.
 - **전역/사이트 스코프 분리**: 전역 키(`engine`, `investigations`, `llm`, `patrol.llm_budget`, `store`, `timezone`)가 사이트 계층에 나타나면 거부 (SiteConfig의 `extra="forbid"`가 자동으로 수행).
 - **derivations는 map**: output locator 문자열을 키로 한다. 리스트 금지.
-- **코드 주석·문서·오류 메시지는 한국어** (전작 컨벤션).
+- **코드 주석·문서·오류 메시지는 한국어** (전작 컨벤션). 단, 라이브러리가 생성하는 오류 원문(pydantic 등)을 한국어 틀 안에 인용하는 것은 허용 — 번역 매핑은 유지비만 들고 정확성을 잃는다.
 - 스펙 §4.6의 기동 검증 중 **7(deployment hash 실재 — git 필요)과 8(Mongo readonly 롤 — 어댑터 필요)은 계획 2로 이월**. 이 계획은 1~6을 구현한다.
 
 ## File Structure
@@ -159,13 +159,10 @@ def deep_merge(base, override, *, source, provenance, prefix=""):
         if value is None:                       # null 마커: 삭제
             out.pop(key, None)
             _drop_subtree(provenance, path)
-        elif isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = deep_merge(out[key], value, source=source,
-                                  provenance=provenance, prefix=path)
         elif isinstance(value, dict):
-            out[key] = value
-            _drop_subtree(provenance, path)
-            record_provenance(value, source=source, provenance=provenance, prefix=path)
+            # 기존 dict가 있든 없든 재귀 병합 (null 마커를 중첩에서도 처리)
+            out[key] = deep_merge(out.get(key, {}), value, source=source,
+                                  provenance=provenance, prefix=path)
         else:
             out[key] = value
             _drop_subtree(provenance, path)
@@ -671,6 +668,16 @@ def test_registry_enabled_기본값(tmp_path):
     reg = load_registry(tmp_path / "config")
     assert [(s.gbm, s.fct, s.enabled) for s in reg.sites] == [
         ("mx", "gumi", True), ("mx", "suwon", False)]
+
+
+def test_앞_계층이_없어도_null_마커는_삭제로_동작한다(tmp_path):
+    # gbm/common 계층 없이 마지막 계층만 존재 — 스펙상 허용되는 배치
+    _write(tmp_path, "config/factories/gumi/mx.json",
+           {"target": {"redis": {"url": "redis://g:6379"}},
+            "patrol": {"checks": {"api.freshness": None}}})
+    cfg, prov = load_site_config(tmp_path / "config", "mx", "gumi", env={})
+    assert "api.freshness" not in cfg.patrol.checks
+    assert not any(p.startswith("patrol.checks.api.freshness") for p in prov)
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -691,7 +698,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from src.config.envresolve import resolve_env_refs
-from src.config.merge import deep_merge, record_provenance
+from src.config.merge import deep_merge
 from src.config.schema_app import AppConfig, StrictModel
 from src.config.schema_site import SiteConfig
 
@@ -749,11 +756,7 @@ def load_site_config(config_root: Path, gbm: str, fct: str, *, env):
         rel = template.format(gbm=gbm, fct=fct)
         layer = _read_json(config_root / rel)
         source = rel.removesuffix(".json")
-        if not merged:
-            merged = layer
-            record_provenance(layer, source=source, provenance=provenance)
-        else:
-            merged = deep_merge(merged, layer, source=source, provenance=provenance)
+        merged = deep_merge(merged, layer, source=source, provenance=provenance)
 
     resolved, missing = resolve_env_refs(merged, env=env)
     problems = [f"{gbm}/{fct}: env 키 부재 또는 빈 값 — {k}" for k in sorted(set(missing))]
