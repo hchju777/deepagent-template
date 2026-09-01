@@ -119,6 +119,19 @@ def test_null은_키를_삭제하고_하위_출처도_지운다():
     )
     assert "kafka.lag" not in merged["patrol"]["checks"]
     assert not any(p.startswith("patrol.checks.kafka.lag") for p in prov)
+
+
+def test_dict가_스칼라를_덮으면_통째로_대체된다():
+    base = {"target": "disabled"}
+    prov: dict[str, str] = {}
+    record_provenance(base, source="gbm/mx", provenance=prov)
+    merged = deep_merge(
+        base, {"target": {"redis": {"url": "x"}}},
+        source="factories/gumi/mx", provenance=prov,
+    )
+    assert merged["target"] == {"redis": {"url": "x"}}
+    assert prov["target.redis.url"] == "factories/gumi/mx"
+    assert "target" not in prov                    # 스칼라였던 자리의 출처는 제거됨
 ```
 
 - [ ] **Step 3: 실패 확인**
@@ -161,7 +174,11 @@ def deep_merge(base, override, *, source, provenance, prefix=""):
             _drop_subtree(provenance, path)
         elif isinstance(value, dict):
             # 기존 dict가 있든 없든 재귀 병합 (null 마커를 중첩에서도 처리)
-            out[key] = deep_merge(out.get(key, {}), value, source=source,
+            base_child = out.get(key)
+            if not isinstance(base_child, dict):
+                base_child = {}
+                _drop_subtree(provenance, path)   # 스칼라였던 자리의 옛 출처 제거
+            out[key] = deep_merge(base_child, value, source=source,
                                   provenance=provenance, prefix=path)
         else:
             out[key] = value

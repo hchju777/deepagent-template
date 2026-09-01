@@ -30,7 +30,11 @@ def deep_merge(base, override, *, source, provenance, prefix=""):
             _drop_subtree(provenance, path)
         elif isinstance(value, dict):
             # 기존 dict가 있든 없든 재귀 병합 (null 마커를 중첩에서도 처리)
-            out[key] = deep_merge(out.get(key, {}), value, source=source,
+            base_child = out.get(key)
+            if not isinstance(base_child, dict):
+                base_child = {}
+                _drop_subtree(provenance, path)   # 스칼라였던 자리의 옛 출처 제거
+            out[key] = deep_merge(base_child, value, source=source,
                                   provenance=provenance, prefix=path)
         else:
             out[key] = value
