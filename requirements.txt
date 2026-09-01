@@ -1,0 +1,5 @@
+# 계획 1 런타임 의존성. 계획 2~5에서 추가된다.
+pydantic>=2.13,<3
+PyYAML>=6.0,<7
+python-dotenv>=1.0,<2
+tzdata>=2024.1        # Windows에서 zoneinfo가 tz 데이터베이스를 찾도록
