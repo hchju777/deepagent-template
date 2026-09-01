@@ -56,3 +56,12 @@ def test_앞_계층이_없어도_null_마커는_삭제로_동작한다(tmp_path)
     cfg, prov = load_site_config(tmp_path / "config", "mx", "gumi", env={})
     assert "api.freshness" not in cfg.patrol.checks
     assert not any(p.startswith("patrol.checks.api.freshness") for p in prov)
+
+
+def test_깨진_JSON은_트레이스백이_아니라_ConfigError다(tmp_path):
+    p = tmp_path / "config" / "gbm"
+    p.mkdir(parents=True)
+    (p / "mx.json").write_text("{ broken", encoding="utf-8")
+    with pytest.raises(ConfigError) as exc:
+        load_site_config(tmp_path / "config", "mx", "gumi", env={})
+    assert any("JSON 파싱 실패" in prob for prob in exc.value.problems)

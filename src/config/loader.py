@@ -33,7 +33,10 @@ class Registry(StrictModel):
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError([f"{path.name}: JSON 파싱 실패 — {exc}"]) from exc
 
 
 def _validation_problems(exc: ValidationError, where: str) -> list[str]:

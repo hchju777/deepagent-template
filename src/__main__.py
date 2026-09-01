@@ -45,7 +45,12 @@ def main(argv=None) -> int:
     config_root = Path(args.config_root)
 
     if args.command == "registry":
-        registry = load_registry(config_root)
+        try:
+            registry = load_registry(config_root)
+        except ConfigError as exc:
+            for problem in exc.problems:
+                print(problem, file=sys.stderr)
+            return 1
         for site in registry.sites:
             flag = "enabled" if site.enabled else "disabled"
             print(f"{site.gbm}/{site.fct}  [{flag}]")

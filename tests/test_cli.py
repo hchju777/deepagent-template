@@ -38,3 +38,12 @@ def test_knowledge_validate_실패는_exit_1(tmp_path, capsys, monkeypatch):
                  "--repo-root", str(tmp_path)])
     assert code == 1
     assert "rest:/ghost" in capsys.readouterr().err
+
+
+def test_깨진_registry는_stderr와_exit_1(tmp_path, capsys, monkeypatch):
+    (tmp_path / "config").mkdir(parents=True)
+    (tmp_path / "config" / "registry.json").write_text("{ broken", encoding="utf-8")
+    monkeypatch.setattr("os.environ", dict(ENV))
+    code = main(["registry", "--config-root", str(tmp_path / "config")])
+    assert code == 1
+    assert "JSON 파싱 실패" in capsys.readouterr().err

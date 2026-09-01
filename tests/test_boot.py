@@ -67,3 +67,10 @@ services:
 """)
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
     assert any("토폴로지 로드 실패" in e.problem for e in errors)
+
+
+def test_깨진_JSON_config는_기동_검증_오류로_모인다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/app.json", "{ broken")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("JSON 파싱 실패" in e.problem for e in errors)

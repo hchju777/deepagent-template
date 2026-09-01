@@ -739,7 +739,10 @@ class Registry(StrictModel):
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError([f"{path.name}: JSON 파싱 실패 — {exc}"]) from exc
 
 
 def _validation_problems(exc: ValidationError, where: str) -> list[str]:
@@ -891,7 +894,7 @@ from typing import Literal
 import yaml
 from pydantic import model_validator
 
-from src.config.merge import deep_merge, record_provenance
+from src.config.merge import deep_merge
 from src.config.schema_app import StrictModel
 
 _KIND_FIELD = {"kafka": "topic", "redis": "key", "mongo": "collection", "rest": "endpoint"}
@@ -953,8 +956,9 @@ def load_topology(knowledge_root: Path, gbm: str, fct: str) -> Topology:
     site = yaml.safe_load(site_path.read_text(encoding="utf-8")) or {} \
         if site_path.exists() else {}
     provenance: dict[str, str] = {}
-    record_provenance(base, source="common", provenance=provenance)
-    merged = deep_merge(base, site, source=f"{gbm}/{fct}", provenance=provenance)
+    merged: dict = {}
+    merged = deep_merge(merged, base, source="common", provenance=provenance)
+    merged = deep_merge(merged, site, source=f"{gbm}/{fct}", provenance=provenance)
     return Topology.model_validate(merged)
 
 
@@ -1363,7 +1367,12 @@ def main(argv=None) -> int:
     config_root = Path(args.config_root)
 
     if args.command == "registry":
-        registry = load_registry(config_root)
+        try:
+            registry = load_registry(config_root)
+        except ConfigError as exc:
+            for problem in exc.problems:
+                print(problem, file=sys.stderr)
+            return 1
         for site in registry.sites:
             flag = "enabled" if site.enabled else "disabled"
             print(f"{site.gbm}/{site.fct}  [{flag}]")
