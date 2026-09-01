@@ -129,7 +129,7 @@ frame ──→ select ──Send──→ [서브에이전트 ×N 병렬] ─�
    - 불변 증거 엔트리: id, 출처, as_of, 결과 봉투 메타(§4.2), 본문 ref. **code_tracer의 로직 명세도 id를 가진 증거 엔트리다** — 재계산 태스크가 참조하고 Verdict가 인용한다.
    - 가설 보드: 가설별 `open | supported | refuted` + 지지/반박 증거 id 링크.
    - 태스크 결과, autonomous 모드에서 기록된 질문.
-3. **판정(Verdict)**: 구조화 필드 — 원인 컴포넌트 id(토폴로지 노드 참조), 판정 유형(초기 집합: `logic_bug | data_loss | config_error | stale_data | external | inconclusive | degraded` — 구현 계획에서 확정), 신뢰도, 조치 권고, **기계 검증 가능한 caveat 목록**(예: "배포 버전 미검증", "지식 digest 불일치"). 모든 주장에 증거 id 인용 필수. 구조화 필드는 E2E 채점 술어이기도 하다(§5.5-F7).
+3. **판정(Verdict)**: 구조화 필드 — **인과 사슬**: 근본 원인 1개(`root_cause`: 컴포넌트 id + 증거 인용) + 기여 요인 0..N개(`contributing[]`: 각각 컴포넌트 id + 증거 인용 + 근본 원인과의 관계 서술). 복합 원인 사건은 단일 원인 필드로 표현할 수 없기 때문이다. 그 외: 판정 유형(초기 집합: `logic_bug | data_loss | config_error | stale_data | external | inconclusive | degraded` — 구현 계획에서 확정), 신뢰도, 조치 권고, **기계 검증 가능한 caveat 목록**(예: "배포 버전 미검증", "지식 digest 불일치"). 모든 주장에 증거 id 인용 필수 — 인과 사슬의 **다리(요인 간 연결)마다** 인용이 있어야 verify를 통과한다. 구조화 필드는 E2E 채점 술어이기도 하다(§5.5-F7, 채점은 `root_cause`의 컴포넌트 id 기준).
 
 ### 2.4 노드
 
@@ -150,9 +150,10 @@ frame ──→ select ──Send──→ [서브에이전트 ×N 병렬] ─�
 - **브랜치는 절대 raise하지 않는다.** LangGraph에서 Send 브랜치 하나의 예외는 superstep 전체를 실패시켜 성공한 브랜치의 쓰기까지 증발시킨다. 서브그래프 최외곽 catch-all이 예외를 `status: error` + 원인 요약·스택으로 변환해 반환한다.
 - integrate는 부분 실패를 소비한다 — "조회했더니 비어 있음"(그 자체가 증거)과 "조회 실패"(아무것도 모름)를 구분한다.
 - 새 역할(LogReader 기반 로그 분석 등)은 역할 목록 추가로 확장한다.
+- **구현 방식**: 각 역할은 `create_agent` 기반의 유계 ReAct 루프로 만든다 — 도구는 그 역할의 쿼리 빌더만, 반환은 구조화 스키마 강제, 예산은 `recursion_limit`(루프 스텝 상한)로. 도구 호출 루프 메커니즘은 라이브러리의 검증된 경로를 쓰고, 규율(게이트·가드레일)은 전부 리드 그래프에 남는다. 필요 시 deepagents 미들웨어를 부품으로 차용할 수 있다. 접근 A(엔진 전체를 deepagents로)의 기각은 유지 — 이 설계의 통제 지점들이 그래프의 특정 노드·엣지에 살기 때문(§0.1).
 - 세 역할의 조합이 파이프라인 이분탐색의 실행 부품이다: 단계 경계마다 probe(실제값) → trace(로직) → recompute(기대값 대조), 처음 어긋나는 경계가 범인 단계.
 
-**integrate** — 리드 LLM이 새 증거로 가설 보드 갱신 → `계속 | 질문 | 결론` 선택. 라운드 상한 도달 시 코드가 강제 conclude — **"미확정" 판정 허용, 억지 결론 금지.** 단, 증거 수집이 사실상 전멸한 조사(태스크 에러율 기준)는 "미확정"이 아니라 **"조사 실패(degraded)"**로 낙인한다(§5.3-F4) — 시스템 고장이 정상적 미확정으로 위장하는 것을 막는다.
+**integrate** — 리드 LLM이 새 증거로 가설 보드 갱신 → `계속 | 질문 | 결론` 선택. State에는 증거 digest만 있지만, integrate는 **증거 id로 Store의 본문을 재조회할 수 있다** — 복합 원인 사건에서 digest 압축이 미묘한 상관관계를 지우는 것을 막는 안전판이다(남용은 컨텍스트 비용이므로 리드 프롬프트에 "필요할 때만"을 명시). 라운드 상한 도달 시 코드가 강제 conclude — **"미확정" 판정 허용, 억지 결론 금지.** 단, 증거 수집이 사실상 전멸한 조사(태스크 에러율 기준)는 "미확정"이 아니라 **"조사 실패(degraded)"**로 낙인한다(§5.3-F4) — 시스템 고장이 정상적 미확정으로 위장하는 것을 막는다.
 
 **ask_human** — `interaction_policy`에 따라:
 - `interactive`(모드 ①): interrupt로 질문, 답을 케이스 파일에 기록.
@@ -343,7 +344,7 @@ verify 규칙(§2.4)과 연동: incomplete 결과의 부정 증거로 결론 금
 | `patrol.llm_budget.max_calls_per_hour` | 순찰 LLM 판정 시간당 상한 (전역) |
 | `engine.max_rounds` | 조사 라운드 상한 — 도달 시 강제 conclude |
 | `engine.parallel_width` | 라운드당 병렬 서브에이전트 수 |
-| `engine.subagent_budgets.<role>` | 파견 1회당 내부 LLM 호출 상한 |
+| `engine.subagent_budgets.<role>` | 파견 1회당 루프 스텝 상한 (`recursion_limit`로 강제) |
 | `engine.autonomous_question_policy` | `default_and_log` \| `park` |
 | `investigations.max_concurrent` | 전역 동시 조사 워커 수 |
 | `investigations.awaiting_human_timeout_h` | park 대기 시한 |
