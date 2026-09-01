@@ -810,7 +810,7 @@ git commit -m "Load app/registry/site config through merge, env, strict validati
   - `Derivation(inputs: list[DataRef], via: str, key: str = "fan-in")` — `key`는 `"fan-in"` 또는 자리표시자 이름(per-key).
   - `Topology(services: dict[str, Service], derivations: dict[str, Derivation])`
   - `load_topology(knowledge_root: Path, gbm: str, fct: str) -> Topology` — `topology/common.yaml` + `topology/{gbm}/{fct}.yaml` deep-merge(null 삭제 동작 포함). 파일 규약은 이 함수가 소유.
-  - `topology_problems(t: Topology) -> list[str]` — 내부 정합성: derivation의 `via`가 services에 실재, `locators()`에 중복 없음. (§4.6-4)
+  - `topology_problems(t: Topology) -> list[str]` — 내부 정합성: derivation의 `via`가 services에 실재. (§4.6-4) — 중복 locator 검사는 하지 않는다: derivation 키가 그걸 만드는 서비스의 write locator와 같은 것은 정상적 모델링이라 의미 있는 중복 오류가 존재하지 않는다 (리뷰 판정).
   - `Topology.locators() -> set[str]` — 모든 서비스 reads/writes locator + derivation 키의 합집합. boot의 룰 타깃 해석(Task 8)이 소비.
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/knowledge/test_topology.py`
