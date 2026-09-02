@@ -1,0 +1,69 @@
+"""워커를 스크립트 LLM+스텁 어댑터+InMemorySaver로 결정론 검증한다."""
+from datetime import datetime, timezone
+
+from langgraph.checkpoint.memory import InMemorySaver
+
+from src.application.lifecycle import ENGINE_SCHEMA_VERSION
+from src.application.worker import CaseQueue, InvestigationWorker
+from src.domain.cases import CaseRecord, InMemoryCaseRepository
+from src.domain.store import InMemoryCaseStore
+from src.patrol.ledger import InMemoryLedger
+from tests.application.test_graph_e2e import (FRAME_ONE_TASK, INTEGRATE_CONCLUDE,
+                                              VERDICT_JSON, make_e2e_deps)
+
+T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
+
+
+def _open_case(repo, store, cid="c-1"):
+    repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="OEE 512%",
+                         t0=T, target_locator="rest:/oee", created_at=T, updated_at=T))
+    store.put_evidence(cid, "rest:/oee", {"oee": 512}, as_of=T)
+
+
+async def test_run_once는_lease로_조사하고_종결하며_verdict를_영속한다():
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {"topology": "d1"})
+    assert await worker.run_once("c-1") == "closed"
+    rec = repo.get("c-1")
+    assert rec.status == "closed" and rec.owner is None and rec.thread_ids == ["c-1#1"]
+    assert rec.thread_versions["c-1#1"] == ENGINE_SCHEMA_VERSION
+    assert store.get_verdict("c-1") is not None and rec.verdict_summary
+
+
+async def test_타인의_lease가_살아있으면_busy():
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    _open_case(repo, store)
+    from src.application.lifecycle import acquire_lease
+    repo.save(acquire_lease(repo.get("c-1"), "other", clock=lambda: T, ttl_s=600))
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: None, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=InMemoryLedger(), knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "busy"
+    assert repo.get("c-1").status == "open"
+
+
+async def test_재개_실패는_새_스레드로_한_번_재시작하고_또_실패하면_종결(monkeypatch):
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    import src.application.worker as wk
+    attempts = []
+    async def boom(*a, **k):
+        attempts.append(k.get("thread_id"))
+        raise RuntimeError("역직렬화 실패")
+    monkeypatch.setattr(wk, "investigate_case", boom)
+    assert await worker.run_once("c-1") == "failed"
+    assert attempts == ["c-1#1", "c-1#2"]                       # 1회 재시작
+    rec = repo.get("c-1")
+    assert rec.status == "closed" and "재개 실패" in rec.closed_reason
+    assert ledger.runs("mx", "gumi", "worker:c-1")[-1].status == "error"

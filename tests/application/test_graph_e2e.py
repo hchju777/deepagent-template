@@ -56,6 +56,37 @@ FRAME_ONE_TASK_JSON = (
     '"tasks": [{"id": "t-1", "goal": "twin_state 조회", "role": "data_prober"}]}')
 INTEGRATE_CONCLUDE_JSON = '{"decision": "conclude"}'
 
+# 아래 셋 + make_e2e_deps는 test_worker.py(계획 4b)가 그대로 재사용하는 모듈 수준
+# 이름이다 — 워커 테스트도 "frame이 태스크 하나를 내고 → integrate가 바로
+# conclude하고 → 실재 증거를 인용하는 verdict로 완주"라는 동일한 최소 각본이
+# 필요해서, 여기 이미 있는 조각을 알기 쉬운 이름으로만 다시 노출한다.
+FRAME_ONE_TASK = FRAME_ONE_TASK_JSON
+INTEGRATE_CONCLUDE = INTEGRATE_CONCLUDE_JSON
+# 시나리오 2의 ONE_EVIDENCE_VERDICT_JSON과 내용이 같다(ev-1 하나만 인용하는
+# 최소 verdict) — 이름만 별도로 노출해 워커 테스트가 시나리오 순서에
+# 얽매이지 않게 한다.
+VERDICT_JSON = (
+    '{"verdict_type": "stale_data", "confidence": "high", "narrative": "plan 동기화 지연.", '
+    '"root_cause": {"component": "plan-sync", "evidence_ids": ["ev-1"]}}')
+
+
+def make_e2e_deps(store, *, lead, subagent=None, site=SITE, seeds=None):
+    """_deps와 달리 store를 호출부가 넘긴 것을 그대로 쓴다 — 워커가 lease 밖에서
+    미리 읽은 초기 증거(evidence_refs_for_case)와, 엔진 실행 중 새로 쌓이는
+    증거가 같은 Store 인스턴스에 있어야 다음 라운드·다음 케이스 조회에서
+    일관되게 보이기 때문이다(§계획 4b). subagent를 안 넘기면 FRAME_ONE_TASK가
+    내는 단일 data_prober 태스크("twin_state 조회")를 그대로 처리할 mongo_find
+    호출 + 보고 한 쌍을 기본값으로 쓴다.
+    """
+    if subagent is None:
+        subagent = [_mongo_call("twin_state"), _report(["ev-2"])]
+    return EngineDeps(
+        lead_llm=ScriptedLLM(lead),
+        subagent_llm=ToolFake(messages=iter(subagent)),
+        adapters=build_adapters(site, TOPO, clock=lambda: T, stub_seeds=seeds or StubSeeds()),
+        store=store, topology=TOPO,
+        engine_cfg=EngineConfig(parallel_width=1))
+
 
 # ── 시나리오 1: 해피패스 미니 OEE ──────────────────────────────────────────
 FRAME_TWO_TASKS_JSON = (
