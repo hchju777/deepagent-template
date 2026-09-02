@@ -331,6 +331,7 @@ async def test_예외도_error_결과로_변환된다():
     sem = asyncio.Semaphore(1)
     result = await guarded_call(boom, timeout_s=1, semaphore=sem, clock=CLOCK)
     assert result.status == "error" and "connection refused" in result.error
+    assert "어댑터 호출 예외" in result.error
 
 
 async def test_세마포어가_동시_실행을_제한한다():
@@ -380,7 +381,7 @@ async def guarded_call(op, *, timeout_s, semaphore, clock) -> ProbeResult:
     except Exception as exc:   # 어댑터 계약: 어떤 실패도 그래프 안으로 raise하지 않는다
         return ProbeResult(
             status="error", envelope=Envelope(observed_at=clock()),
-            error=f"{type(exc).__name__}: {exc}")
+            error=f"어댑터 호출 예외 — {type(exc).__name__}: {exc}")
 ```
 
 `src/infrastructure/__init__.py`는 빈 파일로 생성.
@@ -405,8 +406,8 @@ git commit -m "Guard every adapter call: timeout, semaphore, never raise"
 **Interfaces:**
 - Produces (전부 순수 함수 — I/O 없음, 실구현·스텁·boot이 공유):
   - `aggregate_problems(pipeline: list[dict]) -> list[str]` — 스테이지 allowlist: `$match $project $group $sort $limit $skip $count $unwind`. 그 밖(특히 `$out $merge $function $where $accumulator`)은 문제로 보고.
-  - `filter_problems(filter: dict) -> list[str]` — 연산자 allowlist: `$eq $ne $gt $gte $lt $lte $in $nin $exists $regex $and $or`(중첩 재귀 검사). 그 밖(특히 `$where $expr $function`)은 문제.
-  - `endpoint_allowed(endpoint: str, patterns: set[str]) -> bool` — 토폴로지 rest locator의 `{자리표시자}`를 `[^/]+`("/" 제외 1+)로 바꾼 전체 일치 매칭.
+  - `filter_problems(filter: dict) -> list[str]` — 연산자 allowlist: `$eq $ne $gt $gte $lt $lte $in $nin $exists $regex $options $and $or`(`$options`는 `$regex`의 표준 짝, 중첩 재귀 검사). 그 밖(특히 `$where $expr $function`)은 문제.
+  - `endpoint_allowed(endpoint: str, patterns: set[str]) -> bool` — 토폴로지 rest locator의 `{자리표시자}`를 `[^/]+`("/" 제외 1+)로 바꾼 전체 일치 매칭. 패턴 매칭 전에 `%`(퍼센트 인코딩)나 `.`/`..` 경로 세그먼트가 있으면 조기 거부한다 — `{자리표시자}`가 `[^/]+`라 `..`도 매치돼버리는데 httpx가 이를 재정규화해 실제로는 비허용 끝점에 도달하기 때문(실증됨).
   - `kafka_effective_start(requested: datetime, resolved_ts: int | None, earliest_ts: int | None) -> tuple[datetime, bool]` — offsets_for_times가 None(보존 밖)이면 earliest 타임스탬프로 폴백하고 `(달성 시각, 폴백 여부)` 반환. 폴백=True면 호출자가 봉투의 effective_as_of를 채운다.
   - `mongo_role_problems(conn_status: dict) -> list[str]` — `connectionStatus` 응답의 `authInfo.authenticatedUserRoles`에서 `{"read", "readAnyDatabase"}` 밖의 롤을 문제로 보고. 인증 사용자가 없으면(무인증 법인) 빈 목록.
 
@@ -454,6 +455,30 @@ def test_mongo_롤은_read계열만_허용():
     assert mongo_role_problems(ok) == []
     assert any("readWrite" in p for p in mongo_role_problems(bad))
     assert mongo_role_problems(anon) == []
+
+
+def test_중첩된_JS_실행_연산자도_잡는다():
+    assert any("$function" in p for p in aggregate_problems(
+        [{"$project": {"x": {"$function": {"body": "evil"}}}}]))
+    assert any("$where" in p for p in aggregate_problems(
+        [{"$match": {"$where": "sleep(1000)"}}]))
+    assert any("$accumulator" in p for p in aggregate_problems(
+        [{"$group": {"_id": "$a", "y": {"$accumulator": {}}}}]))
+
+
+def test_끝점_메타문자와_개행_우회_차단():
+    assert not endpoint_allowed("/api/v1/tags/x/PLCXLine7XValue",
+                                {"/api/v1/tags/{tag}/PLC.Line7.Value"})
+    assert endpoint_allowed("/api/v1/tags/x/PLC.Line7.Value",
+                            {"/api/v1/tags/{tag}/PLC.Line7.Value"})
+    assert not endpoint_allowed("/api/v1/lines/7/oee\n", {"/api/v1/lines/{line}/oee"})
+
+
+def test_끝점_경로_순회와_퍼센트_인코딩_차단():
+    patterns = {"/api/v1/lines/{line}/oee"}
+    assert not endpoint_allowed("/api/v1/lines/../oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/./oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/%2e%2e/oee", patterns)
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -471,17 +496,35 @@ import re
 from datetime import datetime, timezone
 
 _AGG_ALLOW = {"$match", "$project", "$group", "$sort", "$limit", "$skip", "$count", "$unwind"}
+_AGG_BANNED_NESTED = {"$function", "$accumulator", "$where"}
 _FILTER_ALLOW = {"$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin",
-                 "$exists", "$regex", "$and", "$or"}
+                 "$exists", "$regex", "$options", "$and", "$or"}
 _READONLY_ROLES = {"read", "readAnyDatabase"}
 
 
 def aggregate_problems(pipeline):
+    """스테이지 이름은 허용 목록으로, 스테이지 내부는 금지 연산자 재귀 탐색으로 검사한다.
+
+    $function/$accumulator/$where는 스테이지 최상위가 아니라 허용된 스테이지 안에
+    중첩되어 나타나므로(실제 MongoDB 문법), 내부까지 걸어야 JS 실행을 막는다.
+    """
     problems = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in _AGG_BANNED_NESTED:
+                    problems.append(f"aggregate 내부 연산자 {key!r}는 금지된다 (JS 실행 차단)")
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
     for stage in pipeline:
-        for op in stage:
+        for op, body in stage.items():
             if op not in _AGG_ALLOW:
                 problems.append(f"aggregate 스테이지 {op!r}는 허용 목록에 없다 (쓰기/JS 실행 차단)")
+            walk(body)
     return problems
 
 
@@ -503,9 +546,21 @@ def filter_problems(filter):
 
 
 def endpoint_allowed(endpoint, patterns):
+    """토폴로지 패턴과의 전체 일치 판정. 리터럴 구간은 이스케이프, {자리표시자}는 [^/]+.
+
+    경로 순회(.., .)와 퍼센트 인코딩은 패턴 매칭 전에 조기 거부한다. `{자리표시자}`가
+    `[^/]+`로 컴파일되므로 `/api/v1/lines/../oee`가 자리표시자 구간과 매치되어
+    통과해버리는데, httpx가 이를 다시 `/api/v1/oee`로 정규화해 실제로는 비허용
+    끝점에 도달한다(실증됨) — `%2e%2e` 같은 퍼센트 인코딩도 동일하게 우회로 쓰인다.
+    """
+    if "%" in endpoint:
+        return False
+    if any(segment in (".", "..") for segment in endpoint.split("/")):
+        return False
     for pattern in patterns:
-        regex = "^" + re.sub(r"\{[^/}]+\}", r"[^/]+", pattern) + "$"
-        if re.match(regex, endpoint):
+        parts = re.split(r"\{[^/}]+\}", pattern)
+        regex = "[^/]+".join(re.escape(part) for part in parts)
+        if re.fullmatch(regex, endpoint):
             return True
     return False
 
@@ -515,15 +570,18 @@ def kafka_effective_start(requested, resolved_ts, earliest_ts):
 
     resolved_ts가 None이면 요청 시각이 보존 밖 — earliest로 폴백하고 True를 돌려
     호출자가 봉투 effective_as_of에 명시하게 한다 (조용한 폴백 금지, 스펙 §4.2).
+    둘 다 None이면 빈 파티션 — 달성 시각을 정할 수 없어 요청 시각을 그대로, 폴백 표시.
     """
     if resolved_ts is not None:
         return datetime.fromtimestamp(resolved_ts / 1000, tz=timezone.utc), False
-    return datetime.fromtimestamp(earliest_ts / 1000, tz=timezone.utc), True
+    if earliest_ts is not None:
+        return datetime.fromtimestamp(earliest_ts / 1000, tz=timezone.utc), True
+    return requested, True
 
 
 def mongo_role_problems(conn_status):
     roles = conn_status.get("authInfo", {}).get("authenticatedUserRoles", [])
-    return [f"Mongo 계정 롤 {r['role']!r}(db={r.get('db')})는 읽기 전용이 아니다"
+    return [f"Mongo 계정 롤 {r.get('role')!r}(db={r.get('db')})는 읽기 전용이 아니다"
             for r in roles if r.get("role") not in _READONLY_ROLES]
 ```
 
@@ -534,6 +592,15 @@ Run: `.venv/bin/pytest tests/infrastructure/test_query_rules.py -v` → PASS
 ```bash
 git add src/infrastructure/query_rules.py tests/infrastructure/test_query_rules.py
 git commit -m "Enforce read-only access as pure, testable rules"
+```
+
+**Fix round (전체 브랜치 리뷰):** `endpoint_allowed`가 `{자리표시자}` 구간을 `[^/]+`로 컴파일해 `..`/`.`도 매치해버려 `/api/v1/lines/../oee`가 통과했다(httpx가 이를 재정규화해 실제로는 비허용 끝점에 도달 — 실증됨). `%2e%2e` 같은 퍼센트 인코딩도 동일 우회였다. 패턴 매칭 전에 `%` 존재나 `.`/`..` 세그먼트를 조기 거부하도록 고쳤다. 곁들여 `$options`를 `_FILTER_ALLOW`에 추가했다(`$regex`의 표준 짝인데 allowlist에 없어 `$regex`와 함께 쓰면 filter 전체가 거부되고 있었다).
+
+Run: `.venv/bin/pytest tests/infrastructure/test_query_rules.py -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/query_rules.py tests/infrastructure/test_query_rules.py
+git commit -m "Close the retention, traversal, and injection gaps the branch review found"
 ```
 
 ---
@@ -550,7 +617,7 @@ git commit -m "Enforce read-only access as pure, testable rules"
   - `StubRedis(data: dict[str, str | dict], ttls: dict[str, int] = {}, *, max_rows: int, clock)` — get은 값 타입 그대로(str→string, dict→hash), scan은 fnmatch 패턴, max_rows 초과 시 절단+`complete=False`.
   - `StubMongo(collections: dict[str, list[dict]], *, max_rows: int, clock)` — find는 `$eq/$gt/$gte/$lt/$lte/$in` 지원 필터 평가 + filter_problems 검사(위반 시 error), count, aggregate는 `aggregate_problems` 검사만 하고 `$match`+`$count` 정도의 최소 평가.
   - `StubKafka(messages: dict[str, list[dict]], offsets: dict[str, dict[int, dict]] = {}, *, max_rows: int, clock)` — messages의 각 원소는 `{"ts": datetime, "value": ...}`. read는 [start, end) 필터+상한, 요청 start가 가장 이른 ts보다 과거면 earliest 폴백을 봉투에 명시. group_offsets는 offsets 시드 반환.
-  - `StubRest(responses: dict[str, Any], allowed: set[str], *, clock)` — endpoint_allowed 검사(위반 시 error "토폴로지 밖"), 등록된 응답 반환, 미등록이면 error "404".
+  - `StubRest(responses: dict[str, Any], allowed: set[str], *, clock)` — endpoint_allowed 검사(위반 시 error "토폴로지 밖"), 등록된 응답이면 `RealRest`와 동형인 `{"status_code": 200, "body": <등록된 응답>}`을 반환(status_code는 항상 200 고정), 미등록이면 error "404".
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/infrastructure/test_stubs.py`
 
@@ -598,9 +665,34 @@ async def test_kafka_스텁_보존밖_요청은_earliest_폴백_명시():
 async def test_rest_스텁_토폴로지_밖_끝점_거부():
     stub = StubRest({"/api/v1/lines/7/oee": {"oee": 5.12}},
                     allowed={"/api/v1/lines/{line}/oee"}, clock=CLOCK)
-    assert (await stub.get("/api/v1/lines/7/oee")).data == {"oee": 5.12}
+    ok = await stub.get("/api/v1/lines/7/oee")
+    assert ok.data == {"status_code": 200, "body": {"oee": 5.12}}
     outside = await stub.get("/admin/drop")
     assert outside.status == "error" and "토폴로지" in outside.error
+
+
+async def test_mongo_스텁_regex_평가():
+    stub = StubMongo({"c": [{"name": "apple"}, {"name": "banana"}]}, max_rows=10, clock=CLOCK)
+    found = await stub.find("c", {"name": {"$regex": "^a"}})
+    assert found.data == [{"name": "apple"}]
+
+
+async def test_mongo_스텁_aggregate_절단_표시():
+    stub = StubMongo({"c": [{"i": n} for n in range(5)]}, max_rows=2, clock=CLOCK)
+    res = await stub.aggregate("c", [{"$match": {}}])
+    assert res.envelope.complete is False and res.envelope.truncated_reason == "max_rows"
+
+
+async def test_mongo_스텁_잘못된_구조는_error_결과():
+    stub = StubMongo({"c": [{"a": 1}]}, max_rows=10, clock=CLOCK)
+    res = await stub.find("c", {"$and": {"a": 1}})
+    assert res.status == "error" and "구조 오류" in res.error
+
+
+async def test_mongo_스텁_sort_필드_부재도_error_결과():
+    stub = StubMongo({"c": [{"a": 1}, {"b": 2}]}, max_rows=10, clock=CLOCK)
+    res = await stub.find("c", {}, sort=[("a", 1)])
+    assert res.status == "error"
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -616,6 +708,7 @@ Run: `.venv/bin/pytest tests/infrastructure/test_stubs.py -v` → FAIL (ModuleNo
 "위험 연산 거부·절단 마킹·as_of 폴백 명시"라는 계약 자체를 검증한다.
 """
 import fnmatch
+import re
 from datetime import datetime
 
 from src.domain.envelope import Envelope, ProbeResult
@@ -673,6 +766,10 @@ def _match(doc, filter):
                 if op == "$in" and value not in rhs: return False
                 if op == "$nin" and value in rhs: return False
                 if op == "$exists" and (field in doc) != bool(rhs): return False
+                if op == "$regex" and not (isinstance(value, str) and re.search(rhs, value)): return False
+                # $options는 query_rules의 allowlist에 있지만(표준 $regex 짝) 여기서는
+                # 평가하지 않는다 — re.search에 플래그를 안 넘겨도 매치 결과 자체는
+                # 안전 쪽(더 좁게 매치)이라 no-raise 계약을 깨지 않는다.
         elif doc.get(field) != cond:
             return False
     return True
@@ -686,10 +783,16 @@ class StubMongo(MongoReaderPort):
         problems = filter_problems(filter)
         if problems:
             return _err("; ".join(problems), self._clock)
-        docs = [d for d in self._cols.get(collection, []) if _match(d, filter)]
-        if sort:
-            for field, direction in reversed(sort):
-                docs.sort(key=lambda d: d.get(field), reverse=direction < 0)
+        try:
+            docs = [d for d in self._cols.get(collection, []) if _match(d, filter)]
+            # sort도 try 안에서: 정렬 필드가 문서마다 없거나 타입이 섞이면 None과
+            # 다른 타입 비교로 TypeError가 날 수 있다 — no-raise 계약(§5.4)을 지키려면
+            # 여기서 잡아 error 결과로 돌려야 한다.
+            if sort:
+                for field, direction in reversed(sort):
+                    docs.sort(key=lambda d: d.get(field), reverse=direction < 0)
+        except Exception as exc:
+            return _err(f"filter 구조 오류 — {type(exc).__name__}: {exc}", self._clock)
         cap = min(limit, self._max_rows) if limit else self._max_rows
         truncated = len(docs) > cap
         env = Envelope(observed_at=self._clock(), complete=not truncated,
@@ -700,7 +803,10 @@ class StubMongo(MongoReaderPort):
         problems = filter_problems(filter)
         if problems:
             return _err("; ".join(problems), self._clock)
-        n = sum(1 for d in self._cols.get(collection, []) if _match(d, filter))
+        try:
+            n = sum(1 for d in self._cols.get(collection, []) if _match(d, filter))
+        except Exception as exc:
+            return _err(f"filter 구조 오류 — {type(exc).__name__}: {exc}", self._clock)
         return _ok(n, Envelope(observed_at=self._clock()))
 
     async def aggregate(self, collection, pipeline):
@@ -710,10 +816,16 @@ class StubMongo(MongoReaderPort):
         docs = list(self._cols.get(collection, []))
         for stage in pipeline:                      # 최소 평가: $match·$count만
             if "$match" in stage:
-                docs = [d for d in docs if _match(d, stage["$match"])]
+                try:
+                    docs = [d for d in docs if _match(d, stage["$match"])]
+                except Exception as exc:
+                    return _err(f"filter 구조 오류 — {type(exc).__name__}: {exc}", self._clock)
             elif "$count" in stage:
                 docs = [{stage["$count"]: len(docs)}]
-        return _ok(docs[: self._max_rows], Envelope(observed_at=self._clock()))
+        truncated = len(docs) > self._max_rows
+        env = Envelope(observed_at=self._clock(), complete=not truncated,
+                       truncated_reason="max_rows" if truncated else None)
+        return _ok(docs[: self._max_rows], env)
 
 
 class StubKafka(KafkaInspectorPort):
@@ -729,8 +841,8 @@ class StubKafka(KafkaInspectorPort):
         effective = None
         if msgs and start < msgs[0]["ts"]:          # 보존 밖 → earliest 폴백 명시
             effective = msgs[0]["ts"]
-        window = [m for m in msgs if start <= m["ts"] < end or
-                  (effective and m["ts"] < end)]
+        effective_start = effective or start
+        window = [m for m in msgs if effective_start <= m["ts"] < end]
         truncated = len(window) > self._max_rows
         env = Envelope(observed_at=self._clock(), complete=not truncated,
                        truncated_reason="max_rows" if truncated else None,
@@ -747,7 +859,11 @@ class StubRest(RestProberPort):
             return _err(f"끝점 {endpoint!r}는 토폴로지에 등록돼 있지 않다", self._clock)
         if endpoint not in self._responses:
             return _err("404: 스텁에 등록되지 않은 끝점", self._clock)
-        return _ok(self._responses[endpoint], Envelope(observed_at=self._clock()))
+        # RealRest와 동형 — {"status_code", "body"} 구조로 반환한다(status_code를
+        # 폐기하지 않는다). 스텁은 등록된 성공 응답만 흉내 내므로 status_code는
+        # 항상 200으로 고정한다.
+        data = {"status_code": 200, "body": self._responses[endpoint]}
+        return _ok(data, Envelope(observed_at=self._clock()))
 ```
 
 - [ ] **Step 4: 통과 확인 후 커밋**
@@ -759,19 +875,37 @@ git add src/infrastructure/stubs.py tests/infrastructure/test_stubs.py
 git commit -m "Add in-memory stubs sharing the real adapters' contracts"
 ```
 
+**Fix round (전체 브랜치 리뷰):** `StubMongo.find`의 sort가 try 블록 밖에 있어 정렬 필드가 문서마다 없거나(`None` vs 값 비교) 타입이 섞이면 `TypeError`가 그대로 새어나가 no-raise 계약(§5.4)을 깼다 — sort를 try 안으로 옮겨 filter 구조 오류와 동일하게 error 결과로 감싸도록 고쳤다.
+
+Run: `.venv/bin/pytest tests/infrastructure/test_stubs.py -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/stubs.py tests/infrastructure/test_stubs.py
+git commit -m "Close the retention, traversal, and injection gaps the branch review found"
+```
+
+**Fix round 2 (재리뷰 — 잔여 항목):** `StubRest.get`의 성공 경로가 `RealRest`와 형태가 달랐다 — `RealRest`는 이미 `{"status_code", "body"}` 구조를 반환하도록 고쳐졌는데(Task 6 Fix round 2) 스텁은 여전히 응답 본문을 그대로 돌려주고 있었다. 스텁이 실구현과 동형이어야 스텁으로 짠 그래프 로직이 실구현으로 바꿔도 그대로 동작한다 — `_ok({"status_code": 200, "body": self._responses[endpoint]}, ...)`로 맞췄다(스텁은 등록된 성공 응답만 흉내 내므로 status_code는 항상 200 고정).
+
+Run: `.venv/bin/pytest tests/infrastructure/test_stubs.py -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/stubs.py tests/infrastructure/test_stubs.py
+git commit -m "Report the latest fallback start and mirror the REST shape into the stub"
+```
+
 ---
 
 ### Task 6: 실구현 — Redis·Mongo·Kafka·REST (얇은 I/O + 공유 규칙)
 
 **Files:**
 - Create: `src/infrastructure/redis_reader.py`, `src/infrastructure/mongo_reader.py`, `src/infrastructure/kafka_inspector.py`, `src/infrastructure/rest_prober.py`
-- Test: 없음(신규) — I/O 래퍼는 실 백엔드 없이 테스트 불가(YAGNI 판정). 판정 로직은 전부 Task 4·5에서 검증됨. **단, 각 파일이 import 가능하고 포트를 구현하는지 확인하는 스모크 테스트 1개**를 `tests/infrastructure/test_real_adapters_smoke.py`에 둔다.
+- Test: 없음(신규) — I/O 래퍼는 실 백엔드 없이 테스트 불가(YAGNI 판정). 판정 로직은 전부 Task 4·5에서 검증됨. **단, 각 파일이 import 가능하고 포트를 구현하는지 확인하는 스모크 테스트 1개**를 `tests/infrastructure/test_real_adapters_smoke.py`에 둔다. 스모크가 못 잡는 라이브러리 API 오용(await 누락, 메타데이터 미페치)은 `tests/infrastructure/test_real_adapters_mocked.py`에서 pymongo/aiokafka의 async 표면만 흉내 낸 페이크로 검증한다.
 
 **Interfaces:**
 - Consumes: 포트, guards.guarded_call, query_rules, config의 접속 정보.
 - Produces: `RealRedis(url, password, *, guards, semaphore, clock)`, `RealMongo(url, username, password, db, *, guards, semaphore, clock)`, `RealKafka(bootstrap, *, guards, semaphore, clock)`, `RealRest(base_url, allowed: set[str], *, guards, semaphore, clock)` — 전부 해당 포트 구현. 모든 공개 메서드는 `guarded_call`로 감싼 내부 op를 실행.
 
-- [ ] **Step 1: 스모크 테스트 작성** — `tests/infrastructure/test_real_adapters_smoke.py`
+- [ ] **Step 1: 스모크 테스트 작성** — `tests/infrastructure/test_real_adapters_smoke.py`, `tests/infrastructure/test_real_adapters_mocked.py`
 
 ```python
 """실구현은 실 백엔드 없이 동작 검증이 불가하다(통합 환경 YAGNI — 스펙 리뷰 판정).
@@ -798,9 +932,258 @@ def test_포트_구현과_읽기전용_표면():
                     {"set", "delete", "insert", "update", "write", "commit", "produce", "post", "put"}]
 ```
 
+`tests/infrastructure/test_real_adapters_mocked.py` — 스모크가 못 잡는 라이브러리 API 오용(await 누락, 메타데이터 미페치)을 pymongo/aiokafka의 async 표면만 흉내 낸 페이크로 검증한다:
+
+```python
+"""라이브러리 표면만 흉내 낸 페이크로 실구현의 API 사용을 검증한다(실 백엔드 없이)."""
+import asyncio
+from datetime import datetime, timezone
+
+from src.infrastructure.kafka_inspector import RealKafka
+from src.infrastructure.mongo_reader import RealMongo
+
+T = datetime(2026, 9, 2, tzinfo=timezone.utc)
+CLOCK = lambda: T
+
+
+class _Guards:
+    timeout_s = 1
+    max_rows = 10
+
+
+# ---- Mongo: aggregate()는 코루틴을 반환하므로 await 없이 async for 하면 TypeError ----
+
+class _FakeCursor:
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def __aiter__(self):
+        return self._agen()
+
+    async def _agen(self):
+        for doc in self._docs:
+            yield doc
+
+
+class _FakeCollection:
+    def __init__(self, docs):
+        self._docs = docs
+
+    async def aggregate(self, pipeline, **kwargs):   # pymongo AsyncCollection.aggregate처럼 코루틴
+        return _FakeCursor(self._docs)                # maxTimeMS 등 커맨드 옵션은 무시하고 받기만
+
+
+class _FakeDB:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def __getitem__(self, name):
+        return _FakeCollection(self._docs)
+
+
+async def test_mongo_aggregate는_커서를_await해서_얻는다():
+    mongo = RealMongo("mongodb://localhost:1", db="test",
+                      guards=_Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    mongo._db = _FakeDB([{"i": 1}, {"i": 2}])   # 실 연결 없이 표면만 교체
+
+    res = await mongo.aggregate("c", [{"$match": {}}])
+
+    # await 누락 버그가 있으면 "어댑터 호출 예외 — TypeError: ..."로 잡혀 status=error가 된다.
+    assert res.status == "ok"
+    assert res.data == [{"i": 1}, {"i": 2}]
+
+
+# ---- Kafka: topic을 안 넘긴 fresh consumer는 topics()로 메타데이터를 먼저 페치해야
+#      partitions_for_topic이 파티션을 찾는다. 페치 전엔 None, 페치 후엔 채워진다. ----
+
+class _FakeOffsetAndTimestamp:
+    def __init__(self, offset, timestamp=None):
+        self.offset = offset
+        self.timestamp = timestamp
+
+
+class _FakeRecord:
+    def __init__(self, topic, partition, offset, timestamp, key, value):
+        self.topic, self.partition, self.offset = topic, partition, offset
+        self.timestamp, self.key, self.value = timestamp, key, value
+
+
+class _FakeConsumer:
+    def __init__(self, *, bootstrap_servers, group_id, enable_auto_commit):
+        assert group_id is None, "consumer group에 참여하면 안 된다"
+        assert enable_auto_commit is False, "커밋 계열 설정이 있으면 안 된다"
+        self._topics_fetched = False
+        self._getmany_calls = 0
+
+    async def start(self):
+        pass
+
+    async def topics(self):
+        self._topics_fetched = True   # 전체 메타데이터 페치가 일어났음을 기록
+        return {"edge.raw.7"}
+
+    def partitions_for_topic(self, topic):
+        # topics()를 먼저 부르지 않으면(버그가 있으면) 여기서 항상 None을 돌려준다.
+        return {0} if self._topics_fetched else None
+
+    def assign(self, partitions):
+        self._assigned = list(partitions)
+
+    async def offsets_for_times(self, timestamps):
+        return {tp: _FakeOffsetAndTimestamp(offset=0) for tp in timestamps}
+
+    async def beginning_offsets(self, partitions):
+        return dict.fromkeys(partitions, 0)
+
+    def seek(self, tp, offset):
+        pass
+
+    async def getmany(self, *partitions, timeout_ms=0, max_records=None):
+        self._getmany_calls += 1
+        if self._getmany_calls == 1:
+            tp = partitions[0]
+            ts = int(T.timestamp() * 1000)
+            rec = _FakeRecord(tp.topic, tp.partition, 0, ts, None, {"n": 1})
+            return {tp: [rec]}
+        return {}       # 이후 호출은 빈 배치 — 수집 루프를 종료시킨다
+
+    async def stop(self):
+        pass
+
+
+async def test_kafka_read는_topics를_먼저_페치해서_파티션을_얻는다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer", _FakeConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    # topics()를 안 부르면 partitions_for_topic이 항상 None이라 빈 ok로 끝난다(가짜 음성).
+    assert res.status == "ok"
+    assert len(res.data) == 1
+    assert res.data[0]["value"] == {"n": 1}
+
+
+async def test_kafka_read는_메타데이터_없는_토픽을_error로_구분한다(monkeypatch):
+    class _NoSuchTopicConsumer(_FakeConsumer):
+        def partitions_for_topic(self, topic):
+            return None   # topics() 이후에도 계속 없음 — 진짜 존재하지 않는 토픽
+
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer", _NoSuchTopicConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("ghost.topic", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    assert res.status == "error"
+    assert "토픽 메타데이터 없음" in res.error
+
+
+# ---- offsets_for_times는 "start 이후 메시지가 없을 때"만 None을 준다. start가
+#      보존 범위보다 오래됐으면 None이 아니라 earliest 오프셋 + 그보다 나중인
+#      실제 타임스탬프를 정상 반환한다 — 이 폴백을 놓치면 오염된 evidence를
+#      T0 evidence로 위장해 봉투에 내보내게 된다. ----
+
+class _RetentionFallbackConsumer(_FakeConsumer):
+    async def offsets_for_times(self, timestamps):
+        # None이 아니라 earliest(=beginning_offsets와 같은 offset)와 요청보다
+        # 나중인 타임스탬프를 준다 — 진짜 aiokafka의 보존-밖 응답 모양.
+        return {tp: _FakeOffsetAndTimestamp(offset=0, timestamp=ts + 5000)
+                for tp, ts in timestamps.items()}
+
+
+async def test_kafka_read는_None이_아닌_보존_밖_폴백도_감지한다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer",
+                        _RetentionFallbackConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    assert res.status == "ok"
+    start_ms = int(T.timestamp() * 1000)
+    assert res.envelope.effective_as_of == datetime.fromtimestamp(
+        (start_ms + 5000) / 1000, tz=timezone.utc)
+
+
+# ---- 파티션마다 폴백 폭이 다르면 결과 집합 전체가 빠짐없이 완전한 시점은 그 중
+#      가장 늦은 파티션이 시작되는 때부터다 — min을 쓰면 아직 데이터가 없는
+#      파티션의 구간을 "이미 완전하다"고 축소 보고하게 된다. ----
+
+class _DivergentFallbackConsumer(_FakeConsumer):
+    def partitions_for_topic(self, topic):
+        return {0, 1} if self._topics_fetched else None
+
+    async def offsets_for_times(self, timestamps):
+        # 파티션 0은 얕게(+3000ms), 파티션 1은 깊게(+9000ms) 폴백한다 — 두 값이
+        # 다르면 min/max 차이가 effective_as_of에 그대로 드러난다.
+        out = {}
+        for tp, ts in timestamps.items():
+            delta = 3000 if tp.partition == 0 else 9000
+            out[tp] = _FakeOffsetAndTimestamp(offset=0, timestamp=ts + delta)
+        return out
+
+    async def getmany(self, *partitions, timeout_ms=0, max_records=None):
+        return {}   # 레코드 자체는 이 테스트의 관심사가 아니다 — 빈 배치로 곧장 종료
+
+
+async def test_kafka_read는_파티션별_폴백_중_가장_늦은_시각을_보고한다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer",
+                        _DivergentFallbackConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    assert res.status == "ok"
+    start_ms = int(T.timestamp() * 1000)
+    # min을 썼다면 start_ms+3000(파티션 0)이 나왔을 것이다 — 파티션 1이 아직
+    # 커버하지 못하는 [start_ms+3000, start_ms+9000) 구간을 "이미 완전하다"고
+    # 축소 보고하는 셈이라 틀렸다. 더 늦은 쪽(+9000ms, 파티션 1)이 맞다.
+    assert res.envelope.effective_as_of == datetime.fromtimestamp(
+        (start_ms + 9000) / 1000, tz=timezone.utc)
+
+
+# ---- 라이브 토픽은 end 이후 레코드를 계속 내놓을 수 있다 — 파티션별로 완료
+#      처리를 안 하면 empty_polls가 매번 리셋돼 수집 루프가 안 끝난다. ----
+
+class _LiveTopicConsumer(_FakeConsumer):
+    async def getmany(self, *partitions, timeout_ms=0, max_records=None):
+        self._getmany_calls += 1
+        tp = partitions[0] if partitions else None
+        if tp is None:
+            return {}
+        end_ms = int(datetime(2026, 9, 3, tzinfo=timezone.utc).timestamp() * 1000)
+        if self._getmany_calls == 1:
+            ts = int(T.timestamp() * 1000)
+            rec = _FakeRecord(tp.topic, tp.partition, 0, ts, None, {"n": 1})
+            return {tp: [rec]}
+        # end 이후 레코드를 영원히 내놓는다(라이브 트래픽 시뮬레이션) — 파티션별
+        # 완료 처리가 없으면 이 fixture로 수집 루프가 결코 끝나지 않는다.
+        rec = _FakeRecord(tp.topic, tp.partition, self._getmany_calls,
+                          end_ms + 100_000, None, {"n": "late"})
+        return {tp: [rec]}
+
+
+async def test_kafka_read는_라이브_토픽에서_파티션별로_확정_종료한다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer", _LiveTopicConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    # 고침 전에는 empty_polls가 매번 리셋돼 guarded_call의 타임아웃(1s)으로만
+    # 끝나 status="error"가 된다 — 고친 뒤에는 파티션이 완료 처리되어 곧바로 ok.
+    res = await asyncio.wait_for(
+        kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc)),
+        timeout=5)
+
+    assert res.status == "ok"
+    assert len(res.data) == 1
+    assert res.data[0]["value"] == {"n": 1}
+```
+
 - [ ] **Step 2: 실패 확인**
 
-Run: `.venv/bin/pytest tests/infrastructure/test_real_adapters_smoke.py -v` → FAIL (ModuleNotFoundError)
+Run: `.venv/bin/pytest tests/infrastructure/test_real_adapters_smoke.py tests/infrastructure/test_real_adapters_mocked.py -v` → FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 구현** (4파일 — 구조가 같으므로 Redis를 정본으로 보이고, 나머지는 동일 패턴에 각자의 클라이언트·규칙 적용)
 
@@ -828,10 +1211,12 @@ class RealRedis(RedisReaderPort):
             kind = await self._client.type(key)
             if kind == "hash":
                 value = await self._client.hgetall(key)
+            elif kind == "string":
+                value = await self._client.get(key)
             elif kind == "none":
                 value = None
             else:
-                value = await self._client.get(key)
+                raise ValueError(f"지원하지 않는 Redis 타입 {kind!r} — string/hash만 읽는다")
             return value, Envelope(observed_at=self._clock())
         return await self._call(op)
 
@@ -857,14 +1242,20 @@ class RealRedis(RedisReaderPort):
 
 `src/infrastructure/mongo_reader.py` — 같은 패턴으로:
 - `AsyncMongoClient(url, username=..., password=...)`; `find`/`count`/`aggregate` 전에 `filter_problems`/`aggregate_problems` 검사(위반 시 즉시 error ProbeResult — DB에 안 나감), find는 `limit=min(limit or max_rows, max_rows)+1`로 읽어 절단 여부 판단 후 봉투 마킹.
+- `aggregate`는 pymongo 4.17에서 `AsyncCollection.aggregate()`가 코루틴을 반환하므로 **반드시 `cursor = await self._db[collection].aggregate(pipeline)`으로 커서를 얻은 뒤 `async for doc in cursor`로 순회한다**(`await` 없이 바로 `async for`하면 TypeError — 스모크로 못 잡혀 모킹 테스트로 검증).
+- `find`/`count_documents`/`aggregate` 전부 서버측 시간 상한을 건다(원칙 ③ — 클라이언트가 guarded_call 타임아웃으로 취소한 뒤에도 서버가 계속 도는 것을 막는다): `find`는 Cursor 파라미터라 `max_time_ms=int(guards.timeout_s * 1000)`(snake_case), `count_documents`/`aggregate`는 커맨드 옵션이라 `maxTimeMS=int(guards.timeout_s * 1000)`(camelCase) — pymongo가 인자를 그대로 커맨드로 전달하므로 이름을 틀리면 조용히 무시되거나 서버가 거부한다.
 - `connection_status()` 메서드 추가(포트 밖, boot 전용): `db.command({"connectionStatus": 1, "showPrivileges": True})` 결과 dict 반환 — Task 9의 롤 검사가 소비.
+- `db`는 기본값 없는 필수 키워드 인자(`*, db, guards, semaphore, clock`) — username/password만 인증 선택 필드라 기본값을 가진다.
 
 `src/infrastructure/kafka_inspector.py` — 같은 패턴으로:
-- `read`: `AIOKafkaConsumer(bootstrap_servers=..., group_id=None, enable_auto_commit=False)` → `partitions_for_topic` → `assign()` → `offsets_for_times`로 시작 오프셋(결과 None이면 `beginning_offsets` + `kafka_effective_start`로 폴백 판정) → `getmany`로 end 시각/상한까지 수집. **commit 계열 호출 없음.**
+- `read`: `AIOKafkaConsumer(bootstrap_servers=..., group_id=None, enable_auto_commit=False)` 생성 시 **topic을 넘기지 않는다**(auto-subscribe가 이후 수동 `assign()`과 충돌). `consumer.start()` 직후 `partitions_for_topic`을 바로 호출하면 per-topic 메타데이터가 없어 항상 `None`이다 — **`await consumer.topics()`로 전체 클러스터 메타데이터를 먼저 강제 페치한 뒤** `partitions_for_topic` → `assign()` → 모든 파티션에 대해 `beginning_offsets`와 `offsets_for_times`를 함께 조회한다. `topics()` 이후에도 파티션이 비면 진짜 존재하지 않는 토픽이므로 빈 ok가 아니라 error ProbeResult("토픽 메타데이터 없음")로 구분한다. **commit 계열 호출 없음.**
+- **보존-폴백 판정(리뷰 수정)**: aiokafka의 `offsets_for_times`는 "start 이후 메시지가 없을 때"(빈 파티션·미래 시각)만 None을 준다 — start가 보존 범위보다 오래됐으면 None이 아니라 earliest 오프셋과 그 오프셋의(요청보다 나중인) 실제 타임스탬프를 정상 반환한다. 그래서 폴백 여부를 `resolved[tp] is None`으로 보면 안 되고 `resolved[tp].offset == beginning_offset(tp) and resolved[tp].timestamp > start_ms`로 판정해야 한다. 봉투 `effective_as_of`(코드상 `coverage_start_ts`)는 폴백 파티션들의 `resolved[tp].timestamp` 중 **최댓값(가장 늦은 달성-시작)**을 `kafka_effective_start`에 넘겨 명시한다(수집된 레코드의 타임스탬프에서 역산하지 않는다 — max_rows 절단으로 폴백 파티션의 레코드가 아예 안 뽑힐 수도 있어서다). max인 이유: 파티션마다 폴백 폭이 다르면 결과 집합 전체가 빠짐없이 완전한 시점은 그 중 가장 늦게 시작되는 파티션부터다 — min을 쓰면 아직 데이터가 없는 파티션의 구간을 "이미 완전하다"고 축소 보고하게 된다(2-파티션 픽스처로 실증됨, `tests/infrastructure/test_real_adapters_mocked.py::test_kafka_read는_파티션별_폴백_중_가장_늦은_시각을_보고한다`).
+- **수집 루프 종결(리뷰 수정)**: `getmany`로 end 시각/상한까지 수집하되, 파티션별로 end 이후 레코드를 처음 본 순간 그 파티션을 완료 처리해 다음 `getmany` 호출 대상에서 뺀다. 그냥 레코드를 버리기만 하면(`ts >= end_ms`) 살아있는 토픽에서 새 레코드가 계속 들어와 `empty_polls`가 매번 리셋되어 수집 루프가 결코 끝나지 않는다(실측: 모킹 테스트로 재현 시 이벤트 루프를 완전히 점유하는 tight loop가 되어 `guarded_call`의 타임아웃조차 못 걸린다). 전 파티션 완료 시, 또는 max_rows 도달 시(기존 동작 유지) 즉시 종료한다.
 - `group_offsets`: `AIOKafkaConsumer`의 admin 경유 없이 `AIOKafkaAdminClient.list_consumer_group_offsets(group)` + `end_offsets`로 파티션별 `{committed, end, lag}` 계산. **변경 API 미노출.**
 
 `src/infrastructure/rest_prober.py` — 같은 패턴으로:
 - `httpx.AsyncClient(base_url=...)`; `get(endpoint)`은 먼저 `endpoint_allowed(endpoint, self._allowed)` 검사(위반 시 error, 네트워크에 안 나감) → `client.get(endpoint)` → JSON 파싱 시도, 실패 시 text. GET 외 메서드 미노출.
+- 응답 데이터는 `{"status_code": response.status_code, "body": <json 또는 text>}`로 반환한다(리뷰 수정) — status_code를 폐기하지 않는다. 4xx/5xx도 `status="ok"`로 유지한 채 `status_code`로 판별하게 한다: 이 프로버는 모니터링 목적이라 오류 응답 자체가 유효한 관측 증거이지, 어댑터 실패(`guarded_call`의 error)가 아니다.
 
 - [ ] **Step 4: 통과 확인 후 커밋**
 
@@ -875,6 +1266,40 @@ git add src/infrastructure/redis_reader.py src/infrastructure/mongo_reader.py \
         src/infrastructure/kafka_inspector.py src/infrastructure/rest_prober.py \
         tests/infrastructure/test_real_adapters_smoke.py
 git commit -m "Add real adapters as thin guarded IO over shared read-only rules"
+```
+
+**Fix round (리뷰):** `partitions_for_topic`을 `topics()` 없이 호출하면 항상 빈 결과라 모든 토픽이 "메시지 없음"으로 보이는 가짜 음성, `AsyncCollection.aggregate()`가 코루틴인데 await 없이 `async for`해 TypeError가 나는 버그를 각각 수정하고 `tests/infrastructure/test_real_adapters_mocked.py`로 라이브러리 표면 모킹 검증을 추가했다. 곁들여 `RealMongo.db`를 기본값 없는 필수 키워드 인자로, `RealRedis.get`이 string/hash/none 외 타입을 명시적 error ProbeResult로 바꾸도록 강화했다.
+
+Run: `.venv/bin/pytest tests/infrastructure/test_real_adapters_mocked.py tests/infrastructure/test_real_adapters_smoke.py -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/redis_reader.py src/infrastructure/mongo_reader.py \
+        src/infrastructure/kafka_inspector.py tests/infrastructure/test_real_adapters_mocked.py
+git commit -m "Fetch topic metadata and await aggregate cursors"
+```
+
+**Fix round 2 (전체 브랜치 리뷰):** Kafka `read`의 보존-폴백 판정이 `resolved[tp] is None`만 봐서 실제로는 폴백되지 않았다(aiokafka는 start가 보존 밖이어도 None이 아니라 earliest+나중 타임스탬프를 정상 반환) — 모든 파티션의 `beginning_offsets`를 함께 조회해 `offset == beginning and timestamp > start_ms`로 재판정하고, 봉투 `effective_as_of`는 폴백 파티션들의 resolved 타임스탬프 중 최솟값으로 고쳤다(이전엔 `max()`를 썼는데 이것도 오류였다). 같은 함수의 수집 루프가 `ts >= end_ms` 레코드를 버리기만 하고 `empty_polls`를 리셋해 라이브 토픽에서 결코 끝나지 않던 것도 파티션별 완료 처리(대상에서 제외)로 고쳤다 — 모킹 테스트로 재현하면 이벤트 루프를 통째로 점유하는 tight loop가 되어 `guarded_call`의 타임아웃조차 걸리지 않는 걸 확인했다. `RealRest.get`이 status_code를 버리고 항상 `status="ok"`로 body만 내보내던 것을 `{"status_code", "body"}` 구조로 바꿔 4xx/5xx를 관측 가능하게 했다. `RealMongo`의 find/count_documents/aggregate에 서버측 시간 상한(`max_time_ms`/`maxTimeMS`)을 추가해 클라이언트 타임아웃 이후에도 서버가 계속 도는 것을 막았다. `query_rules.endpoint_allowed`가 `.`/`..` 세그먼트와 `%` 인코딩을 패턴 매칭 전에 조기 거부하도록(경로 순회·퍼센트 우회 차단), `code_repo.grep`이 `-e`로 패턴을 분리하도록(대시로 시작하는 패턴의 옵션 주입 차단) 각각 고쳤다. `CodeRepoReader._run`에 `timeout=30`을 걸어 멈춘 git 프로세스가 무한정 붙잡지 않게 했다. `stubs.StubMongo.find`의 sort를 try 블록 안으로 옮겨(필드 부재·타입 혼재 시 TypeError를 no-raise 계약대로 error 결과로) 고쳤다. `$options`를 `_FILTER_ALLOW`에 추가했다(`$regex`의 표준 짝).
+
+Run: `.venv/bin/pytest tests/infrastructure -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/kafka_inspector.py src/infrastructure/rest_prober.py \
+        src/infrastructure/mongo_reader.py src/infrastructure/query_rules.py \
+        src/infrastructure/code_repo.py src/infrastructure/stubs.py \
+        tests/infrastructure/test_real_adapters_mocked.py tests/infrastructure/test_query_rules.py \
+        tests/infrastructure/test_code_repo.py tests/infrastructure/test_stubs.py \
+        docs/superpowers/plans/2026-09-03-plan2-adapters.md
+git commit -m "Close the retention, traversal, and injection gaps the branch review found"
+```
+
+**Fix round 3 (재리뷰 — 잔여 항목):** Fix round 2에서 `effective_as_of`를 폴백 파티션들의 resolved 타임스탬프 중 **최솟값**으로 고쳤는데, 이 판단 자체가 틀렸다는 재리뷰 지적을 받았다. 파티션마다 폴백 폭이 다르면(예: 파티션 0은 요청+3000ms부터, 파티션 1은 요청+9000ms부터 데이터가 있음) 결과 집합 전체가 빠짐없이 완전한 시점은 그 중 **가장 늦게 시작되는 파티션부터**다 — min을 쓰면 아직 데이터가 없는 파티션의 구간([+3000ms, +9000ms) 구간의 파티션 1)을 "이미 완전하다"고 축소 보고하는 셈이라, 바로 이 함수가 막으려는 "조용한 폴백으로 오염된 evidence를 T0 evidence로 위장" 문제를 다른 형태로 재현하고 있었다. `min()` → `max()`로 교정하고 변수명을 `coverage_start_ts`로 바꿔 의미를 드러냈다. 재리뷰어가 제시한 2-파티션 픽스처를 그대로 회귀 테스트로 추가했다(`test_kafka_read는_파티션별_폴백_중_가장_늦은_시각을_보고한다`) — 단일 파티션 테스트로는 min/max 차이가 드러나지 않아 이전 라운드에서 놓쳤다.
+
+Run: `.venv/bin/pytest tests/infrastructure -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/kafka_inspector.py tests/infrastructure/test_real_adapters_mocked.py \
+        docs/superpowers/plans/2026-09-03-plan2-adapters.md
+git commit -m "Report the latest fallback start and mirror the REST shape into the stub"
 ```
 
 ---
@@ -923,6 +1348,12 @@ def test_grep과_미등록_repo(repo):
     assert hits and "svc.py" in hits[0]
     with pytest.raises(CodeRepoError, match="등록"):
         reader.head("ghost-repo")
+
+
+def test_대시로_시작하는_패턴도_안전(repo):
+    reader = CodeRepoReader({"twin-services": repo})
+    head = reader.head("twin-services")
+    assert reader.grep("twin-services", head, "-v") == []   # 옵션이 아니라 리터럴 패턴
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -954,8 +1385,11 @@ class CodeRepoReader(CodeRepoReaderPort):
     def _run(self, repo: str, *args: str) -> subprocess.CompletedProcess:
         if repo not in self._repos:
             raise CodeRepoError(f"레포 {repo!r}는 config에 등록돼 있지 않다")
-        return subprocess.run(["git", "-C", str(self._repos[repo]), *args],
-                              capture_output=True, text=True)
+        try:
+            return subprocess.run(["git", "-C", str(self._repos[repo]), *args],
+                                  capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            raise CodeRepoError(f"{repo}: git 명령 시간 초과(30s) — {' '.join(args)}") from exc
 
     def hash_exists(self, repo, commit):
         return self._run(repo, "cat-file", "-e", f"{commit}^{{commit}}").returncode == 0
@@ -973,7 +1407,9 @@ class CodeRepoReader(CodeRepoReaderPort):
         return proc.stdout.strip()
 
     def grep(self, repo, commit, pattern):
-        proc = self._run(repo, "grep", "-n", pattern, commit)
+        # -e로 패턴을 명시적으로 구분한다 — 아니면 "-v" 같은 패턴이 git grep 옵션으로
+        # 파싱돼(예: -v는 매치 반전) 인자 주입이 된다(실증됨).
+        proc = self._run(repo, "grep", "-n", "-e", pattern, commit)
         if proc.returncode > 1:                      # 1 = 매치 없음(정상), >1 = 오류
             raise CodeRepoError(f"{repo}@{commit[:7]} grep 실패 — {proc.stderr.strip()}")
         return [line.split(":", 1)[1] if ":" in line else line
@@ -987,6 +1423,15 @@ Run: `.venv/bin/pytest tests/infrastructure/test_code_repo.py -v` → PASS
 ```bash
 git add src/infrastructure/code_repo.py tests/infrastructure/test_code_repo.py
 git commit -m "Read code repos through git plumbing, hashes first"
+```
+
+**Fix round (전체 브랜치 리뷰):** `grep`이 패턴을 옵션 자리에 그대로 넘겨 `-`로 시작하는 패턴(예: `-v`)이 git grep 옵션으로 파싱되는 인자 주입이 가능했다 — `-e`로 패턴 자리를 명시해 리터럴로 고정했다. `_run`에 `timeout=30`을 걸고 `TimeoutExpired`를 `CodeRepoError`로 변환해, 응답 없는 git 프로세스가 호출자를 무한정 붙잡지 않게 했다.
+
+Run: `.venv/bin/pytest tests/infrastructure/test_code_repo.py -v` → PASS
+
+```bash
+git add src/infrastructure/code_repo.py tests/infrastructure/test_code_repo.py
+git commit -m "Close the retention, traversal, and injection gaps the branch review found"
 ```
 
 ---
@@ -1127,7 +1572,7 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
         if cfg.target.mongo:
             m = cfg.target.mongo
             pw = m.password.get_secret_value() if m.password else None
-            out.mongo = RealMongo(m.url, username=m.username, password=pw,
+            out.mongo = RealMongo(m.url, username=m.username, password=pw, db=m.db,
                                   guards=guards, semaphore=sem, clock=clock)
         if cfg.target.kafka:
             out.kafka = RealKafka(cfg.target.kafka.bootstrap,
@@ -1142,6 +1587,8 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
 ```
 
 주의: 테스트의 팩토리 시드 주입에서 rest 케이스는 config에 rest만 있으면 된다. StubRest 생성은 `cfg.target.rest`가 있을 때만 — 테스트 두 번째 케이스가 이를 확인한다.
+
+**Task 8 deviation:** `MongoTarget`에 `db: str = "twin"` 필드를 추가했다 — RealMongo 시그니처의 `db` 키워드 필수 인자에 대응하기 위해. `src/config/schema_site.py` 수정 시 기존 테스트 호환성 확인 완료.
 
 - [ ] **Step 4: 통과 확인 후 커밋**
 

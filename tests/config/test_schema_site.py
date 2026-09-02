@@ -46,3 +46,10 @@ def test_점검_정의():
     check = cfg.patrol.checks["api.oee_range"]
     assert check.on_budget_exhausted == "skip"                  # 기본값
     assert check.params["max"] == 100
+
+
+def test_adapters_모드는_stub이_기본이고_오타는_거부():
+    cfg = SiteConfig.model_validate(_site())
+    assert cfg.target.adapters == "stub"
+    with pytest.raises(ValidationError):
+        SiteConfig.model_validate({**_site(), "target": {**_site()["target"], "adapters": "rael"}})

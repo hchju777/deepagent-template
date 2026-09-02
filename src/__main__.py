@@ -39,6 +39,8 @@ def main(argv=None) -> int:
     p_knowledge = sub.add_parser("knowledge")
     knowledge_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)
     p_validate = knowledge_sub.add_parser("validate", help="기동 검증 단독 실행 (CI용)")
+    p_validate.add_argument("--live", action="store_true",
+                            help="검사 8(Mongo readonly 롤)까지 live 접속으로 확인한다")
     _add_common(p_validate)
 
     args = parser.parse_args(argv)
@@ -70,7 +72,8 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "knowledge":
-        errors = validate_boot(config_root, env=env, repo_root=Path(args.repo_root))
+        errors = validate_boot(config_root, env=env, repo_root=Path(args.repo_root),
+                               check_live=args.live)
         if not errors:
             print("OK")
             return 0

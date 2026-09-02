@@ -23,6 +23,7 @@ class MongoTarget(StrictModel):
     url: str
     username: str | None = None
     password: SecretStr | None = None
+    db: str = "twin"  # RealMongo 필수 인자
 
 
 class KafkaTarget(StrictModel):
@@ -49,6 +50,7 @@ class Guards(StrictModel):
 
 
 class TargetConfig(StrictModel):
+    adapters: Literal["stub", "real"] = "stub"  # 스텁 ↔ 실구현 전환 (전작 패턴)
     redis: RedisTarget | None = None
     mongo: MongoTarget | None = None
     kafka: KafkaTarget | None = None

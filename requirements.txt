@@ -3,3 +3,9 @@ pydantic>=2.13,<3
 PyYAML>=6.0,<7
 python-dotenv>=1.0,<2
 tzdata>=2024.1        # Windows에서 zoneinfo가 tz 데이터베이스를 찾도록
+
+# ── 어댑터 실구현 (계획 2) ── target.adapters="real"일 때만 실제 사용
+redis>=5.0                 # redis.asyncio
+pymongo>=4.12              # AsyncMongoClient (motor는 deprecated)
+aiokafka>=0.14             # group 미참여 assign() 읽기 전용
+httpx>=0.28,<1             # REST GET
