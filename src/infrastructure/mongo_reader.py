@@ -12,7 +12,7 @@ from src.infrastructure.query_rules import aggregate_problems, filter_problems
 
 
 class RealMongo(MongoReaderPort):
-    def __init__(self, url, username=None, password=None, db=None, *, guards, semaphore, clock):
+    def __init__(self, url, username=None, password=None, *, db, guards, semaphore, clock):
         self._client = AsyncMongoClient(url, username=username, password=password)
         self._db = self._client[db]
         self._guards, self._sem, self._clock = guards, semaphore, clock
@@ -59,7 +59,8 @@ class RealMongo(MongoReaderPort):
         async def op():
             cap = self._guards.max_rows
             docs = []
-            async for doc in self._db[collection].aggregate(pipeline):
+            cursor = await self._db[collection].aggregate(pipeline)  # aggregate()는 코루틴 — await 필수
+            async for doc in cursor:
                 docs.append(doc)
                 if len(docs) > cap:          # 상한+1에서 멈춰 무제한 결과 집합을 막는다
                     break

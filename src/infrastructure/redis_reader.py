@@ -20,10 +20,12 @@ class RealRedis(RedisReaderPort):
             kind = await self._client.type(key)
             if kind == "hash":
                 value = await self._client.hgetall(key)
+            elif kind == "string":
+                value = await self._client.get(key)
             elif kind == "none":
                 value = None
             else:
-                value = await self._client.get(key)
+                raise ValueError(f"지원하지 않는 Redis 타입 {kind!r} — string/hash만 읽는다")
             return value, Envelope(observed_at=self._clock())
         return await self._call(op)
 

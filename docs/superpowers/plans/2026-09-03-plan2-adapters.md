@@ -838,13 +838,13 @@ git commit -m "Add in-memory stubs sharing the real adapters' contracts"
 
 **Files:**
 - Create: `src/infrastructure/redis_reader.py`, `src/infrastructure/mongo_reader.py`, `src/infrastructure/kafka_inspector.py`, `src/infrastructure/rest_prober.py`
-- Test: 없음(신규) — I/O 래퍼는 실 백엔드 없이 테스트 불가(YAGNI 판정). 판정 로직은 전부 Task 4·5에서 검증됨. **단, 각 파일이 import 가능하고 포트를 구현하는지 확인하는 스모크 테스트 1개**를 `tests/infrastructure/test_real_adapters_smoke.py`에 둔다.
+- Test: 없음(신규) — I/O 래퍼는 실 백엔드 없이 테스트 불가(YAGNI 판정). 판정 로직은 전부 Task 4·5에서 검증됨. **단, 각 파일이 import 가능하고 포트를 구현하는지 확인하는 스모크 테스트 1개**를 `tests/infrastructure/test_real_adapters_smoke.py`에 둔다. 스모크가 못 잡는 라이브러리 API 오용(await 누락, 메타데이터 미페치)은 `tests/infrastructure/test_real_adapters_mocked.py`에서 pymongo/aiokafka의 async 표면만 흉내 낸 페이크로 검증한다.
 
 **Interfaces:**
 - Consumes: 포트, guards.guarded_call, query_rules, config의 접속 정보.
 - Produces: `RealRedis(url, password, *, guards, semaphore, clock)`, `RealMongo(url, username, password, db, *, guards, semaphore, clock)`, `RealKafka(bootstrap, *, guards, semaphore, clock)`, `RealRest(base_url, allowed: set[str], *, guards, semaphore, clock)` — 전부 해당 포트 구현. 모든 공개 메서드는 `guarded_call`로 감싼 내부 op를 실행.
 
-- [ ] **Step 1: 스모크 테스트 작성** — `tests/infrastructure/test_real_adapters_smoke.py`
+- [ ] **Step 1: 스모크 테스트 작성** — `tests/infrastructure/test_real_adapters_smoke.py`, `tests/infrastructure/test_real_adapters_mocked.py`
 
 ```python
 """실구현은 실 백엔드 없이 동작 검증이 불가하다(통합 환경 YAGNI — 스펙 리뷰 판정).
@@ -871,9 +871,156 @@ def test_포트_구현과_읽기전용_표면():
                     {"set", "delete", "insert", "update", "write", "commit", "produce", "post", "put"}]
 ```
 
+`tests/infrastructure/test_real_adapters_mocked.py` — 스모크가 못 잡는 라이브러리 API 오용(await 누락, 메타데이터 미페치)을 pymongo/aiokafka의 async 표면만 흉내 낸 페이크로 검증한다:
+
+```python
+"""라이브러리 표면만 흉내 낸 페이크로 실구현의 API 사용을 검증한다(실 백엔드 없이)."""
+import asyncio
+from datetime import datetime, timezone
+
+from src.infrastructure.kafka_inspector import RealKafka
+from src.infrastructure.mongo_reader import RealMongo
+
+T = datetime(2026, 9, 2, tzinfo=timezone.utc)
+CLOCK = lambda: T
+
+
+class _Guards:
+    timeout_s = 1
+    max_rows = 10
+
+
+# ---- Mongo: aggregate()는 코루틴을 반환하므로 await 없이 async for 하면 TypeError ----
+
+class _FakeCursor:
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def __aiter__(self):
+        return self._agen()
+
+    async def _agen(self):
+        for doc in self._docs:
+            yield doc
+
+
+class _FakeCollection:
+    def __init__(self, docs):
+        self._docs = docs
+
+    async def aggregate(self, pipeline):     # pymongo AsyncCollection.aggregate처럼 코루틴
+        return _FakeCursor(self._docs)
+
+
+class _FakeDB:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def __getitem__(self, name):
+        return _FakeCollection(self._docs)
+
+
+async def test_mongo_aggregate는_커서를_await해서_얻는다():
+    mongo = RealMongo("mongodb://localhost:1", db="test",
+                      guards=_Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    mongo._db = _FakeDB([{"i": 1}, {"i": 2}])   # 실 연결 없이 표면만 교체
+
+    res = await mongo.aggregate("c", [{"$match": {}}])
+
+    # await 누락 버그가 있으면 "어댑터 호출 예외 — TypeError: ..."로 잡혀 status=error가 된다.
+    assert res.status == "ok"
+    assert res.data == [{"i": 1}, {"i": 2}]
+
+
+# ---- Kafka: topic을 안 넘긴 fresh consumer는 topics()로 메타데이터를 먼저 페치해야
+#      partitions_for_topic이 파티션을 찾는다. 페치 전엔 None, 페치 후엔 채워진다. ----
+
+class _FakeOffsetAndTimestamp:
+    def __init__(self, offset, timestamp=None):
+        self.offset = offset
+        self.timestamp = timestamp
+
+
+class _FakeRecord:
+    def __init__(self, topic, partition, offset, timestamp, key, value):
+        self.topic, self.partition, self.offset = topic, partition, offset
+        self.timestamp, self.key, self.value = timestamp, key, value
+
+
+class _FakeConsumer:
+    def __init__(self, *, bootstrap_servers, group_id, enable_auto_commit):
+        assert group_id is None, "consumer group에 참여하면 안 된다"
+        assert enable_auto_commit is False, "커밋 계열 설정이 있으면 안 된다"
+        self._topics_fetched = False
+        self._getmany_calls = 0
+
+    async def start(self):
+        pass
+
+    async def topics(self):
+        self._topics_fetched = True   # 전체 메타데이터 페치가 일어났음을 기록
+        return {"edge.raw.7"}
+
+    def partitions_for_topic(self, topic):
+        # topics()를 먼저 부르지 않으면(버그가 있으면) 여기서 항상 None을 돌려준다.
+        return {0} if self._topics_fetched else None
+
+    def assign(self, partitions):
+        self._assigned = list(partitions)
+
+    async def offsets_for_times(self, timestamps):
+        return {tp: _FakeOffsetAndTimestamp(offset=0) for tp in timestamps}
+
+    async def beginning_offsets(self, partitions):
+        return dict.fromkeys(partitions, 0)
+
+    def seek(self, tp, offset):
+        pass
+
+    async def getmany(self, *partitions, timeout_ms=0, max_records=None):
+        self._getmany_calls += 1
+        if self._getmany_calls == 1:
+            tp = partitions[0]
+            ts = int(T.timestamp() * 1000)
+            rec = _FakeRecord(tp.topic, tp.partition, 0, ts, None, {"n": 1})
+            return {tp: [rec]}
+        return {}       # 이후 호출은 빈 배치 — 수집 루프를 종료시킨다
+
+    async def stop(self):
+        pass
+
+
+async def test_kafka_read는_topics를_먼저_페치해서_파티션을_얻는다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer", _FakeConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    # topics()를 안 부르면 partitions_for_topic이 항상 None이라 빈 ok로 끝난다(가짜 음성).
+    assert res.status == "ok"
+    assert len(res.data) == 1
+    assert res.data[0]["value"] == {"n": 1}
+
+
+async def test_kafka_read는_메타데이터_없는_토픽을_error로_구분한다(monkeypatch):
+    class _NoSuchTopicConsumer(_FakeConsumer):
+        def partitions_for_topic(self, topic):
+            return None   # topics() 이후에도 계속 없음 — 진짜 존재하지 않는 토픽
+
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer", _NoSuchTopicConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("ghost.topic", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    assert res.status == "error"
+    assert "토픽 메타데이터 없음" in res.error
+```
+
 - [ ] **Step 2: 실패 확인**
 
-Run: `.venv/bin/pytest tests/infrastructure/test_real_adapters_smoke.py -v` → FAIL (ModuleNotFoundError)
+Run: `.venv/bin/pytest tests/infrastructure/test_real_adapters_smoke.py tests/infrastructure/test_real_adapters_mocked.py -v` → FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: 구현** (4파일 — 구조가 같으므로 Redis를 정본으로 보이고, 나머지는 동일 패턴에 각자의 클라이언트·규칙 적용)
 
@@ -901,10 +1048,12 @@ class RealRedis(RedisReaderPort):
             kind = await self._client.type(key)
             if kind == "hash":
                 value = await self._client.hgetall(key)
+            elif kind == "string":
+                value = await self._client.get(key)
             elif kind == "none":
                 value = None
             else:
-                value = await self._client.get(key)
+                raise ValueError(f"지원하지 않는 Redis 타입 {kind!r} — string/hash만 읽는다")
             return value, Envelope(observed_at=self._clock())
         return await self._call(op)
 
@@ -930,10 +1079,12 @@ class RealRedis(RedisReaderPort):
 
 `src/infrastructure/mongo_reader.py` — 같은 패턴으로:
 - `AsyncMongoClient(url, username=..., password=...)`; `find`/`count`/`aggregate` 전에 `filter_problems`/`aggregate_problems` 검사(위반 시 즉시 error ProbeResult — DB에 안 나감), find는 `limit=min(limit or max_rows, max_rows)+1`로 읽어 절단 여부 판단 후 봉투 마킹.
+- `aggregate`는 pymongo 4.17에서 `AsyncCollection.aggregate()`가 코루틴을 반환하므로 **반드시 `cursor = await self._db[collection].aggregate(pipeline)`으로 커서를 얻은 뒤 `async for doc in cursor`로 순회한다**(`await` 없이 바로 `async for`하면 TypeError — 스모크로 못 잡혀 모킹 테스트로 검증).
 - `connection_status()` 메서드 추가(포트 밖, boot 전용): `db.command({"connectionStatus": 1, "showPrivileges": True})` 결과 dict 반환 — Task 9의 롤 검사가 소비.
+- `db`는 기본값 없는 필수 키워드 인자(`*, db, guards, semaphore, clock`) — username/password만 인증 선택 필드라 기본값을 가진다.
 
 `src/infrastructure/kafka_inspector.py` — 같은 패턴으로:
-- `read`: `AIOKafkaConsumer(bootstrap_servers=..., group_id=None, enable_auto_commit=False)` → `partitions_for_topic` → `assign()` → `offsets_for_times`로 시작 오프셋(결과 None이면 `beginning_offsets` + `kafka_effective_start`로 폴백 판정) → `getmany`로 end 시각/상한까지 수집. **commit 계열 호출 없음.**
+- `read`: `AIOKafkaConsumer(bootstrap_servers=..., group_id=None, enable_auto_commit=False)` 생성 시 **topic을 넘기지 않는다**(auto-subscribe가 이후 수동 `assign()`과 충돌). `consumer.start()` 직후 `partitions_for_topic`을 바로 호출하면 per-topic 메타데이터가 없어 항상 `None`이다 — **`await consumer.topics()`로 전체 클러스터 메타데이터를 먼저 강제 페치한 뒤** `partitions_for_topic` → `assign()` → `offsets_for_times`로 시작 오프셋(결과 None이면 `beginning_offsets` + `kafka_effective_start`로 폴백 판정) → `getmany`로 end 시각/상한까지 수집. `topics()` 이후에도 파티션이 비면 진짜 존재하지 않는 토픽이므로 빈 ok가 아니라 error ProbeResult("토픽 메타데이터 없음")로 구분한다. **commit 계열 호출 없음.**
 - `group_offsets`: `AIOKafkaConsumer`의 admin 경유 없이 `AIOKafkaAdminClient.list_consumer_group_offsets(group)` + `end_offsets`로 파티션별 `{committed, end, lag}` 계산. **변경 API 미노출.**
 
 `src/infrastructure/rest_prober.py` — 같은 패턴으로:
@@ -948,6 +1099,16 @@ git add src/infrastructure/redis_reader.py src/infrastructure/mongo_reader.py \
         src/infrastructure/kafka_inspector.py src/infrastructure/rest_prober.py \
         tests/infrastructure/test_real_adapters_smoke.py
 git commit -m "Add real adapters as thin guarded IO over shared read-only rules"
+```
+
+**Fix round (리뷰):** `partitions_for_topic`을 `topics()` 없이 호출하면 항상 빈 결과라 모든 토픽이 "메시지 없음"으로 보이는 가짜 음성, `AsyncCollection.aggregate()`가 코루틴인데 await 없이 `async for`해 TypeError가 나는 버그를 각각 수정하고 `tests/infrastructure/test_real_adapters_mocked.py`로 라이브러리 표면 모킹 검증을 추가했다. 곁들여 `RealMongo.db`를 기본값 없는 필수 키워드 인자로, `RealRedis.get`이 string/hash/none 외 타입을 명시적 error ProbeResult로 바꾸도록 강화했다.
+
+Run: `.venv/bin/pytest tests/infrastructure/test_real_adapters_mocked.py tests/infrastructure/test_real_adapters_smoke.py -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/redis_reader.py src/infrastructure/mongo_reader.py \
+        src/infrastructure/kafka_inspector.py tests/infrastructure/test_real_adapters_mocked.py
+git commit -m "Fetch topic metadata and await aggregate cursors"
 ```
 
 ---

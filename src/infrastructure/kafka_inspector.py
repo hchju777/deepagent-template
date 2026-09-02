@@ -33,9 +33,15 @@ class RealKafka(KafkaInspectorPort):
                                         group_id=None, enable_auto_commit=False)
             await consumer.start()
             try:
+                # 생성자에 topic을 안 넘긴 fresh consumer는 bootstrap이 빈 MetadataRequest를
+                # 보내 per-topic 메타데이터가 없다 — topics()로 전체 클러스터 메타데이터를
+                # 강제로 페치해야 partitions_for_topic이 로컬 캐시를 찾는다.
+                # (생성자에 topic을 넘기면 auto-subscribe가 이후 수동 assign()과 충돌한다.)
+                await consumer.topics()
                 partitions = consumer.partitions_for_topic(topic)
                 if not partitions:
-                    return [], Envelope(observed_at=self._clock(), requested_as_of=start)
+                    raise RuntimeError(
+                        f"토픽 메타데이터 없음 — {topic!r}는 브로커에 존재하지 않거나 조회할 수 없다")
 
                 tps = sorted(TopicPartition(topic, p) for p in partitions)
                 consumer.assign(tps)
