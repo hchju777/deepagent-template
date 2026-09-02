@@ -78,6 +78,7 @@ class CheckConfig(StrictModel):
     judge: Literal["rule", "llm", "rule+llm"]
     schedule: Schedule
     target: str | None = None          # 토폴로지 locator — 해석 검증은 boot에서
+    probe: str | None = None           # 프로브 레지스트리 이름. None이면 target의 kind로 기본 프로브 선택
     params: dict[str, Any] = {}
     sample: int | None = None
     on_budget_exhausted: Literal["skip", "escalate"] = "skip"
