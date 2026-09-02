@@ -57,3 +57,23 @@ def test_list_evidence는_케이스별_생성_순으로_전_레코드를_반환�
     assert [r.id for r in records] == ["ev-1", "ev-2"]
     assert [r.source for r in records] == ["mongo:a", "mongo:b"]
     assert store.list_evidence("c-no-such-case") == []   # 없는 케이스는 빈 리스트(부작용 없음)
+
+
+def test_verdict_저장과_케이스_정리():
+    from datetime import datetime, timedelta
+    from src.domain.case import CauseLink, Verdict
+    store = InMemoryCaseStore()
+    t = datetime(2026, 9, 3, 8, 0)
+    store.put_evidence("c-1", "s", {"a": 1}, as_of=t)
+    store.put_evidence("c-1", "s", {"a": 2}, as_of=t + timedelta(days=5))
+    store.put_evidence("c-1", "s", {"a": 3})                       # as_of None → 유지
+    store.put_evidence("patrol:mx:gumi:x", "s", {"p": 1}, as_of=t)
+    v = Verdict(verdict_type="stale_data", confidence="high", narrative="n",
+                root_cause=CauseLink(component="plan-sync", evidence_ids=["ev-1"]))
+    store.put_verdict("c-1", v)
+    assert store.get_verdict("c-1").root_cause.component == "plan-sync"
+    assert store.get_verdict("c-9") is None
+    assert store.purge_evidence_before("c-1", t + timedelta(days=1)) == 1
+    assert [r.id for r in store.list_evidence("c-1")] == ["ev-2", "ev-3"]
+    assert store.list_case_ids("patrol:") == ["patrol:mx:gumi:x"]
+    assert store.purge_case("c-1") == 3 and store.list_evidence("c-1") == []   # 증거 2 + verdict 1

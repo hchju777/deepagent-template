@@ -5,7 +5,7 @@
 """
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class StrictModel(BaseModel):
@@ -28,6 +28,7 @@ class EngineConfig(StrictModel):
 class InvestigationsConfig(StrictModel):
     max_concurrent: int = 2
     awaiting_human_timeout_h: int = 72
+    lease_ttl_s: int = 900              # 케이스 임차(lease) 유효 시간(초) — 계획 4b
 
 
 class LlmProfiles(StrictModel):
@@ -56,6 +57,15 @@ class RetentionConfig(StrictModel):
 
 class StoreConfig(StrictModel):
     retention: RetentionConfig = RetentionConfig()
+    backend: Literal["memory", "mongo"] = "memory"     # 계획 4b: 영속화 백엔드 선택
+    mongo_url: str | None = None                       # 예: "${AGENT_MONGO_URL}" 참조
+    mongo_db: str = "deepagent"
+
+    @model_validator(mode="after")
+    def _mongo_backend_needs_url(self):
+        if self.backend == "mongo" and not self.mongo_url:
+            raise ValueError("store.backend=mongo면 store.mongo_url이 필요하다")
+        return self
 
 
 class AppConfig(StrictModel):
