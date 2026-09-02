@@ -483,10 +483,16 @@ git commit -m "Conclude with cited causal chains, degrading when evidence died"
 - Test: `tests/application/test_nodes_conclude_verify.py` (verify 추가)
 
 **Interfaces:**
-- `verify(state)` (LLM 없음): `state.verdict`의 모든 CauseLink(root_cause + contributing)에 대해 —
+- `verify(state)` (LLM 없음): `state.verdict`가 `None`이면 방어적으로 `{"verify_problems": []}`를
+  즉시 반환한다(conclude가 항상 verdict를 만들지만, 그래프 변경·재개 엣지에 대한 방어 — 노드는
+  raise하지 않는다는 계약이 무조건적이므로). 그 외에는 `state.verdict`의 모든
+  CauseLink(root_cause + contributing)에 대해 —
   1. `evidence_ids`가 비어 있으면 문제("다리에 인용 없음: {component}"). (inconclusive/degraded는 root_cause 없음이 정상 — 있는 다리만 검사.)
   2. 각 id가 `store.has_evidence(case_id, id)`로 실재하지 않으면 문제.
-  3. 인용된 id 중 state.evidence에서 `complete=False`인 것이 있는데 그 id가 verdict.caveats 문자열들 안에 등장하지 않으면 문제("불완전 증거 {id}가 caveat에 명시되지 않음").
+  3. 인용된 id 중 state.evidence에서 `complete=False`인 것이 있는데 그 id가 verdict.caveats
+     문자열들 안에 **토큰 경계로**("ev-1"이 "ev-10"의 부분 문자열로 오인되지 않도록 —
+     `(?<![\w-]){id}(?![\w-])` 정규식) 등장하지 않으면 문제("불완전 증거 {id}가 caveat에
+     명시되지 않음").
   - 문제 없음 → `{"verify_problems": []}` (통과 — 라우터가 END).
   - 문제 있고 `verify_attempts == 0` → `{"verify_problems": [...], "verify_attempts": 1}` (재작성 경로).
   - 문제 있고 `verify_attempts >= 1` → **강등 통과**: `{"verdict": verdict.model_copy(update={"confidence": "low", "caveats": verdict.caveats + ["검증 미통과: " + "; ".join(problems)]}), "verify_problems": []}`.
@@ -533,6 +539,23 @@ async def test_불완전_증거는_caveat_명시를_요구한다():
     good = _state(evidence=[ok_ref], verdict=_verdict([eid], caveats=[f"불완전 증거 {eid} 기반"]))
     update2 = await make_nodes(deps)["verify"](good)
     assert update2["verify_problems"] == []
+
+
+async def test_불완전_증거_caveat은_토큰_경계로_매칭된다():
+    deps = _deps([])
+    for n in range(10):
+        deps.store.put_evidence("c-1", "kafka:edge.raw", [n], complete=(n != 0))
+    ref1 = EvidenceRef(id="ev-1", source="kafka:edge.raw", summary="s", complete=False)
+    # caveat이 ev-10만 언급 — ev-1 미명시로 판정되어야 한다
+    state = _state(evidence=[ref1], verdict=_verdict(["ev-1"], caveats=["불완전 증거 ev-10 기반"]))
+    update = await make_nodes(deps)["verify"](state)
+    assert update["verify_problems"]
+
+
+async def test_verdict_없이_verify에_들어와도_raise하지_않는다():
+    deps = _deps([])
+    update = await make_nodes(deps)["verify"](_state())
+    assert update["verify_problems"] == []
 ```
 
 - [ ] **Step 2~4**: FAIL → 구현 → 전체 PASS → 커밋

@@ -65,3 +65,20 @@ async def test_불완전_증거는_caveat_명시를_요구한다():
     good = _state(evidence=[ok_ref], verdict=_verdict([eid], caveats=[f"불완전 증거 {eid} 기반"]))
     update2 = await make_nodes(deps)["verify"](good)
     assert update2["verify_problems"] == []
+
+
+async def test_불완전_증거_caveat은_토큰_경계로_매칭된다():
+    deps = _deps([])
+    for n in range(10):
+        deps.store.put_evidence("c-1", "kafka:edge.raw", [n], complete=(n != 0))
+    ref1 = EvidenceRef(id="ev-1", source="kafka:edge.raw", summary="s", complete=False)
+    # caveat이 ev-10만 언급 — ev-1 미명시로 판정되어야 한다
+    state = _state(evidence=[ref1], verdict=_verdict(["ev-1"], caveats=["불완전 증거 ev-10 기반"]))
+    update = await make_nodes(deps)["verify"](state)
+    assert update["verify_problems"]
+
+
+async def test_verdict_없이_verify에_들어와도_raise하지_않는다():
+    deps = _deps([])
+    update = await make_nodes(deps)["verify"](_state())
+    assert update["verify_problems"] == []

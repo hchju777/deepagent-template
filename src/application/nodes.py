@@ -3,6 +3,8 @@
 모든 노드는 절대 raise하지 않고 부분 상태 update(dict)를 반환한다.
 LLM 파싱은 재시도 1회 후 노드별 안전 경로로 강등된다.
 """
+import re
+
 from langgraph.types import Send, interrupt
 
 from src.application.briefing import build_briefing, upstream_slice
@@ -114,6 +116,12 @@ def _format_rewrite_note(verify_problems):
         return ""
     problems = "\n".join(f"- {p}" for p in verify_problems)
     return f"\n\n[재작성 요청] 다음 문제를 고쳐 다시 작성하라:\n{problems}"
+
+
+def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
+    """caveat 문자열들 안에 증거 id가 토큰 경계로 등장하는가 (ev-1 ⊄ ev-10)."""
+    pattern = re.compile(rf"(?<![\w-]){re.escape(evidence_id)}(?![\w-])")
+    return any(pattern.search(c) for c in caveats)
 
 
 async def _ask_llm(llm, prompt, schema):
@@ -260,9 +268,11 @@ def make_nodes(deps):
     async def verify(state):
         # LLM 없음 — 순수 결정론 가드레일(§2.4). 노드는 raise하지 않는다.
         verdict = state.verdict
+        if verdict is None:
+            # conclude가 항상 verdict를 만들지만, 그래프 변경·재개 엣지에 대한 방어다
+            return {"verify_problems": []}
         case_id = state.case.id
         incomplete_ids = {e.id for e in state.evidence if not e.complete}
-        caveats_text = " ".join(verdict.caveats)
         problems = []
 
         links = ([verdict.root_cause] if verdict.root_cause is not None else [])
@@ -274,7 +284,8 @@ def make_nodes(deps):
             for evidence_id in link.evidence_ids:
                 if not deps.store.has_evidence(case_id, evidence_id):
                     problems.append(f"없는 id {evidence_id} 인용")
-                elif evidence_id in incomplete_ids and evidence_id not in caveats_text:
+                elif (evidence_id in incomplete_ids
+                      and not _id_mentioned(evidence_id, verdict.caveats)):
                     problems.append(f"불완전 증거 {evidence_id}가 caveat에 명시되지 않음")
 
         if not problems:
