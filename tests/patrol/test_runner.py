@@ -69,3 +69,27 @@ async def test_llm_판정은_실재_id를_인용하고_레저가_기록한다():
     ledger.heartbeat(T)
     assert ledger.last_run("mx", "gumi", "c").status == "finding"
     assert ledger.last_heartbeat() == T and ledger.consecutive_errors("mx", "gumi", "c") == 0
+
+
+async def test_rule_llm은_룰_ok면_LLM_없이도_ok이고_스냅샷은_항상_남는다():
+    store = InMemoryCaseStore()
+    adapters_ok = _adapters(StubSeeds(rest_responses={"/oee": {"oee": 87}}))
+    out = await run_check("mx", "gumi", "c", _check(judge="rule+llm"), adapters=adapters_ok,
+                          store=store, clock=lambda: T, llm=None, budget=None)
+    assert out.status == "ok"
+    assert len(store.list_evidence("patrol:mx:gumi:c")) == 1        # 판정과 무관하게 박제
+
+    adapters_bad = _adapters(StubSeeds(rest_responses={"/oee": {"oee": 512}}))
+    store2 = InMemoryCaseStore()
+    out2 = await run_check("mx", "gumi", "c", _check(judge="llm", params={}),
+                           adapters=adapters_bad, store=store2, clock=lambda: T, llm=None)
+    assert out2.status == "error" and "LLM" in out2.error
+    assert len(store2.list_evidence("patrol:mx:gumi:c")) == 1       # error여도 스냅샷은 남는다
+
+
+def test_ledger_runs_limit_0은_빈_리스트():
+    from src.domain.patrol import CheckOutcome
+    ledger = InMemoryLedger()
+    ledger.record_run("mx", "gumi", "c", CheckOutcome(status="ok", observed_at=T))
+    assert ledger.runs("mx", "gumi", "c", limit=0) == []
+    assert len(ledger.runs("mx", "gumi", "c", limit=5)) == 1

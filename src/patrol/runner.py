@@ -31,11 +31,12 @@ async def run_check(
 ) -> CheckOutcome:
     """점검 하나를 실행하고 3상(ok/finding/skipped) + error를 돌려준다.
 
-    llm/rule+llm 인데 llm이 주입되지 않았으면(스냅샷 이후, 판정 전) 즉시
-    error다 — judge="rule+llm"을 선언한 시점에서 LLM 가용성은 이 점검의
-    구조적 전제이지, 이번 실행에서 룰이 통과했는지에 좌우되는 우연이
-    아니다(probes.py가 어댑터 미설정을 요청 내용과 무관하게 즉시 에러로
-    보는 것과 같은 층위).
+    llm이 실제로 필요한 지점(judge="llm"의 판정 진입부, judge="rule+llm"에서
+    룰이 finding을 내고 예산까지 확보된 지점)에서 llm이 주입되지 않았으면
+    그 자리에서 error("LLM 미주입")다. 스냅샷 박제(아래)는 이 검사보다
+    먼저 끝난다 — 프로브가 성공했다면 판정 방식·결과와 무관하게 항상
+    증거로 남아야 한다(모듈 docstring). rule+llm에서 룰이 ok로 끝나는
+    경로는 애초에 llm을 참조하지 않으므로 이 검사 자체가 실행되지 않는다.
     """
     try:
         probe_name = resolve_probe(check)
@@ -45,9 +46,6 @@ async def run_check(
         observed_at = result.envelope.observed_at
         if result.status == "error":
             return _error(observed_at, result.error or "프로브 실행 실패")
-
-        if check.judge in ("llm", "rule+llm") and llm is None:
-            return _error(observed_at, "LLM 미주입")
 
         case_id = scratch_case_id(gbm, fct, name)
         snap_id = store.put_evidence(
@@ -93,6 +91,8 @@ async def _call_llm(name: str, check: CheckConfig, result: ProbeResult, snap_id:
 async def _judge_llm(
     name, check, result, snap_id, llm, budget: LlmBudget | None, observed_at, make_finding: _MakeFinding,
 ) -> CheckOutcome:
+    if llm is None:  # judge="llm"은 이 판정 자체가 LLM 없이는 존재하지 않는다 — 무조건 필요
+        return _error(observed_at, "LLM 미주입")
     if budget is None or not budget.try_acquire():
         return CheckOutcome(status="skipped", observed_at=observed_at, skipped_reason="llm 예산 소진")
     out, err = await _call_llm(name, check, result, snap_id, llm)
@@ -121,6 +121,9 @@ async def _judge_rule_then_llm(
             finding = make_finding(summary, "rule+llm", [snap_id])
             return CheckOutcome(status="finding", observed_at=observed_at, finding=finding)
         return CheckOutcome(status="skipped", observed_at=observed_at, skipped_reason="llm 예산 소진")
+
+    if llm is None:  # 룰 finding + 예산 확보 — 이제야 LLM이 실제로 필요해진다
+        return _error(observed_at, "LLM 미주입")
 
     out, err = await _call_llm(name, check, result, snap_id, llm)
     if out is None:

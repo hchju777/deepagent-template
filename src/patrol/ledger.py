@@ -59,6 +59,7 @@ class InMemoryLedger(LedgerPort):
         return self._heartbeat_at
 
     def runs(self, gbm, fct, check, limit=50):
+        if limit <= 0:  # limit=0은 "0개" — -0 슬라이스가 전체를 돌려주는 함정을 피한다
+            return []
         history = self._runs.get((gbm, fct, check), [])
-        tail = history[-limit:] if limit else history
-        return list(reversed(tail))
+        return list(reversed(history[-limit:]))
