@@ -6,7 +6,7 @@ LLM 파싱은 재시도 1회 후 노드별 안전 경로로 강등된다.
 from langgraph.types import Send
 
 from src.application.briefing import build_briefing, upstream_slice
-from src.application.schemas import FrameOutput, parse_structured
+from src.application.schemas import FrameOutput, IntegrateOutput, parse_structured
 from src.application.subagents import run_subagent
 from src.domain.case import EvidenceRef, PlanTask, Verdict
 from src.knowledge.topology import Topology
@@ -21,6 +21,62 @@ _FRAME_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 아래 �
 - 재계산 태스크는 input_evidence_ids에 의존하는 증거 id를 적는다(없으면 빈 배열 — 아직 없으면 이후 라운드에서 추가된다).
 - 반드시 JSON 하나만 출력한다:
 {{"hypotheses": [{{"id": "h-1", "statement": "..."}}], "tasks": [{{"id": "t-1", "goal": "...", "role": "...", "input_evidence_ids": [], "priority": 10}}]}}"""
+
+_INTEGRATE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지금까지의 조사 진행 상황을 검토하고
+가설 보드를 갱신하라. 그리고 다음 라운드로 계속할지, 사람에게 물을지, 조사를 마칠지 결정하라.
+
+[가설 보드]
+{hypotheses}
+
+[태스크 현황]
+{tasks}
+
+[증거 목록]
+{evidence}
+
+[라운드] {round}/{max_rounds}
+
+규칙:
+- hypotheses는 갱신하는 가설만 담는다(같은 id는 교체된다).
+- new_tasks로 추가 조사가 필요하면 태스크를 제안한다(기존 계획에 없는 새 id를 쓴다).
+- cancel_task_ids로 더 이상 필요 없는 대기 중 태스크를 취소할 수 있다.
+- decision은 continue(다음 라운드 진행) / ask(사람에게 질문) / conclude(조사 종료) 중 하나.
+- ask를 고르면 question에 구체적인 질문을 적는다.
+- 반드시 JSON 하나만 출력한다:
+{{"hypotheses": [{{"id": "h-1", "statement": "...", "status": "open"}}], "new_tasks": [], "cancel_task_ids": [], "decision": "continue", "question": null}}"""
+
+
+def _format_hypothesis_board(hypotheses):
+    if not hypotheses:
+        return "없음"
+    return "\n".join(f"- {h.id} [{h.status}] {h.statement}" for h in hypotheses)
+
+
+def _format_task_status(tasks):
+    if not tasks:
+        return "없음"
+    counts = {}
+    for task in tasks:
+        counts[task.status] = counts.get(task.status, 0) + 1
+    summary = ", ".join(f"{status}={count}" for status, count in counts.items())
+    lines = [f"[요약] {summary}"]
+    errors = [f"- {task.id}: {task.error}" for task in tasks
+              if task.status == "error" and task.error]
+    if errors:
+        lines.append("[오류 원인]")
+        lines.extend(errors)
+    return "\n".join(lines)
+
+
+def _format_evidence_list(evidence):
+    if not evidence:
+        return "없음"
+    lines = []
+    for e in evidence:
+        effective = e.effective_as_of.isoformat() if e.effective_as_of else "없음"
+        lines.append(f"- {e.id}: {e.summary} (complete={e.complete}, "
+                     f"effective_as_of={effective})")
+    return "\n".join(lines)
 
 
 async def _ask_llm(llm, prompt, schema):
@@ -90,7 +146,53 @@ def make_nodes(deps):
                 "status": "error", "error": f"execute 실패 — {type(exc).__name__}: {exc}"})
             return {"plan_tasks": [updated]}
 
-    return {"frame": frame, "select": select, "execute": execute}
+    async def integrate(state):
+        round_next = state.round + 1
+        prompt = _INTEGRATE_PROMPT.format(
+            hypotheses=_format_hypothesis_board(state.hypotheses),
+            tasks=_format_task_status(state.plan_tasks),
+            evidence=_format_evidence_list(state.evidence),
+            round=round_next, max_rounds=deps.engine_cfg.max_rounds)
+        output, err = await _ask_llm(deps.lead_llm, prompt, IntegrateOutput)
+        if output is None:
+            return {
+                "round": round_next, "decision": "conclude", "question": None,
+                "qa_log": [{"kind": "integrate_parse_failure", "error": err}]}
+
+        qa_log = []
+        existing_ids = {task.id for task in state.plan_tasks}
+        kept_new_tasks = []
+        for task in output.new_tasks:
+            if task.id in existing_ids:
+                qa_log.append({"kind": "task_id_collision", "id": task.id})
+            else:
+                kept_new_tasks.append(task)
+
+        cancellable = {task.id: task for task in state.plan_tasks if task.status == "pending"}
+        cancelled_tasks = [cancellable[task_id].model_copy(update={"status": "cancelled"})
+                           for task_id in output.cancel_task_ids if task_id in cancellable]
+
+        decision = output.decision
+        question = output.question if decision == "ask" else None
+
+        if (decision == "ask" and state.interaction_policy == "autonomous"
+                and state.autonomous_question_policy == "default_and_log"):
+            qa_log.append({"kind": "auto_answered", "question": output.question,
+                           "answer": "보수적 기본값으로 진행"})
+            decision = "continue"
+            question = None
+
+        if round_next >= deps.engine_cfg.max_rounds:
+            decision = "conclude"
+            question = None
+            qa_log.append({"kind": "round_cap"})
+
+        return {
+            "round": round_next, "hypotheses": output.hypotheses,
+            "plan_tasks": kept_new_tasks + cancelled_tasks,
+            "decision": decision, "question": question, "qa_log": qa_log}
+
+    return {"frame": frame, "select": select, "execute": execute, "integrate": integrate}
 
 
 def route_after_frame(state):
@@ -105,3 +207,7 @@ def route_after_select(state):
         return "integrate"
     return [Send("execute", {"task": task.model_dump(mode="json"), "case_id": state.case.id})
             for task in running]
+
+
+def route_after_integrate(state):
+    return {"continue": "select", "ask": "ask_human", "conclude": "conclude"}[state.decision]
