@@ -1,0 +1,138 @@
+"""개발·테스트용 in-memory 스텁 — 전작 패턴. 봉투·읽기 전용 규칙은 실구현과 동일하다.
+
+스텁이 규칙(query_rules)을 실구현과 공유하므로, 스텁으로 도는 테스트가
+"위험 연산 거부·절단 마킹·as_of 폴백 명시"라는 계약 자체를 검증한다.
+"""
+import fnmatch
+from datetime import datetime
+
+from src.domain.envelope import Envelope, ProbeResult
+from src.domain.ports import (KafkaInspectorPort, MongoReaderPort,
+                              RedisReaderPort, RestProberPort)
+from src.infrastructure.query_rules import (aggregate_problems, endpoint_allowed,
+                                            filter_problems)
+
+
+def _ok(data, envelope):
+    return ProbeResult(status="ok", envelope=envelope, data=data)
+
+
+def _err(msg, clock):
+    return ProbeResult(status="error", envelope=Envelope(observed_at=clock()), error=msg)
+
+
+class StubRedis(RedisReaderPort):
+    def __init__(self, data, ttls=None, *, max_rows, clock):
+        self._data, self._ttls = data, ttls or {}
+        self._max_rows, self._clock = max_rows, clock
+
+    async def get(self, key):
+        return _ok(self._data.get(key), Envelope(observed_at=self._clock()))
+
+    async def scan(self, pattern):
+        keys = sorted(k for k in self._data if fnmatch.fnmatch(k, pattern))
+        truncated = len(keys) > self._max_rows
+        env = Envelope(observed_at=self._clock(), complete=not truncated,
+                       truncated_reason="max_rows" if truncated else None)
+        return _ok(keys[: self._max_rows], env)
+
+    async def ttl(self, key):
+        ttl = self._ttls.get(key, -1 if key in self._data else -2)
+        return _ok(ttl, Envelope(observed_at=self._clock()))
+
+
+def _match(doc, filter):
+    for field, cond in filter.items():
+        if field in ("$and", "$or"):
+            results = [_match(doc, c) for c in cond]
+            if field == "$and" and not all(results):
+                return False
+            if field == "$or" and not any(results):
+                return False
+        elif isinstance(cond, dict):
+            value = doc.get(field)
+            for op, rhs in cond.items():
+                if op == "$eq" and not value == rhs: return False
+                if op == "$ne" and not value != rhs: return False
+                if op == "$gt" and not (value is not None and value > rhs): return False
+                if op == "$gte" and not (value is not None and value >= rhs): return False
+                if op == "$lt" and not (value is not None and value < rhs): return False
+                if op == "$lte" and not (value is not None and value <= rhs): return False
+                if op == "$in" and value not in rhs: return False
+                if op == "$nin" and value in rhs: return False
+                if op == "$exists" and (field in doc) != bool(rhs): return False
+        elif doc.get(field) != cond:
+            return False
+    return True
+
+
+class StubMongo(MongoReaderPort):
+    def __init__(self, collections, *, max_rows, clock):
+        self._cols, self._max_rows, self._clock = collections, max_rows, clock
+
+    async def find(self, collection, filter, *, sort=None, limit=None):
+        problems = filter_problems(filter)
+        if problems:
+            return _err("; ".join(problems), self._clock)
+        docs = [d for d in self._cols.get(collection, []) if _match(d, filter)]
+        if sort:
+            for field, direction in reversed(sort):
+                docs.sort(key=lambda d: d.get(field), reverse=direction < 0)
+        cap = min(limit, self._max_rows) if limit else self._max_rows
+        truncated = len(docs) > cap
+        env = Envelope(observed_at=self._clock(), complete=not truncated,
+                       truncated_reason="max_rows" if truncated else None)
+        return _ok(docs[:cap], env)
+
+    async def count(self, collection, filter):
+        problems = filter_problems(filter)
+        if problems:
+            return _err("; ".join(problems), self._clock)
+        n = sum(1 for d in self._cols.get(collection, []) if _match(d, filter))
+        return _ok(n, Envelope(observed_at=self._clock()))
+
+    async def aggregate(self, collection, pipeline):
+        problems = aggregate_problems(pipeline)
+        if problems:
+            return _err("; ".join(problems), self._clock)
+        docs = list(self._cols.get(collection, []))
+        for stage in pipeline:                      # 최소 평가: $match·$count만
+            if "$match" in stage:
+                docs = [d for d in docs if _match(d, stage["$match"])]
+            elif "$count" in stage:
+                docs = [{stage["$count"]: len(docs)}]
+        return _ok(docs[: self._max_rows], Envelope(observed_at=self._clock()))
+
+
+class StubKafka(KafkaInspectorPort):
+    def __init__(self, messages, offsets=None, *, max_rows, clock):
+        self._msgs, self._offsets = messages, offsets or {}
+        self._max_rows, self._clock = max_rows, clock
+
+    async def group_offsets(self, group):
+        return _ok(self._offsets.get(group, {}), Envelope(observed_at=self._clock()))
+
+    async def read(self, topic, *, start, end):
+        msgs = sorted(self._msgs.get(topic, []), key=lambda m: m["ts"])
+        effective = None
+        if msgs and start < msgs[0]["ts"]:          # 보존 밖 → earliest 폴백 명시
+            effective = msgs[0]["ts"]
+        window = [m for m in msgs if start <= m["ts"] < end or
+                  (effective and m["ts"] < end)]
+        truncated = len(window) > self._max_rows
+        env = Envelope(observed_at=self._clock(), complete=not truncated,
+                       truncated_reason="max_rows" if truncated else None,
+                       requested_as_of=start, effective_as_of=effective)
+        return _ok(window[: self._max_rows], env)
+
+
+class StubRest(RestProberPort):
+    def __init__(self, responses, allowed, *, clock):
+        self._responses, self._allowed, self._clock = responses, allowed, clock
+
+    async def get(self, endpoint):
+        if not endpoint_allowed(endpoint, self._allowed):
+            return _err(f"끝점 {endpoint!r}는 토폴로지에 등록돼 있지 않다", self._clock)
+        if endpoint not in self._responses:
+            return _err("404: 스텁에 등록되지 않은 끝점", self._clock)
+        return _ok(self._responses[endpoint], Envelope(observed_at=self._clock()))
