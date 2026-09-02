@@ -3,7 +3,7 @@
 모든 노드는 절대 raise하지 않고 부분 상태 update(dict)를 반환한다.
 LLM 파싱은 재시도 1회 후 노드별 안전 경로로 강등된다.
 """
-from langgraph.types import Send
+from langgraph.types import Send, interrupt
 
 from src.application.briefing import build_briefing, upstream_slice
 from src.application.schemas import FrameOutput, IntegrateOutput, parse_structured
@@ -45,6 +45,24 @@ _INTEGRATE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지�
 - 반드시 JSON 하나만 출력한다:
 {{"hypotheses": [{{"id": "h-1", "statement": "...", "status": "open"}}], "new_tasks": [], "cancel_task_ids": [], "decision": "continue", "question": null}}"""
 
+_CONCLUDE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지금까지 모은 증거로 최종 판정을 작성하라.
+
+[가설 보드]
+{hypotheses}
+
+[증거 목록]
+{evidence}
+
+[태스크 오류율]
+{error_rate}{rewrite_note}
+
+규칙:
+- 모든 주장에는 실재하는 증거 id를 인용해야 한다 — 없는 id를 지어내면 안 된다.
+- complete=False인 증거를 근거로 쓰면 caveats에 그 증거 id를 명시한다.
+- 확신이 서지 않으면 verdict_type을 inconclusive로 남겨도 된다 — 억지 결론 금지.
+- 반드시 JSON 하나만 출력한다:
+{{"verdict_type": "logic_bug", "root_cause": {{"component": "...", "evidence_ids": ["ev-1"]}}, "contributing": [], "confidence": "high", "recommendations": [], "caveats": [], "narrative": "..."}}"""
+
 
 def _format_hypothesis_board(hypotheses):
     if not hypotheses:
@@ -77,6 +95,25 @@ def _format_evidence_list(evidence):
         lines.append(f"- {e.id}: {e.summary} (complete={e.complete}, "
                      f"effective_as_of={effective})")
     return "\n".join(lines)
+
+
+def _supported_first(hypotheses):
+    """supported 가설을 앞으로 — 안정 정렬이라 같은 상태 내 원래 순서는 유지된다."""
+    return sorted(hypotheses, key=lambda h: h.status != "supported")
+
+
+def _format_task_error_rate(tasks):
+    if not tasks:
+        return "태스크 없음"
+    errors = sum(1 for task in tasks if task.status == "error")
+    return f"{errors}/{len(tasks)}건 오류"
+
+
+def _format_rewrite_note(verify_problems):
+    if not verify_problems:
+        return ""
+    problems = "\n".join(f"- {p}" for p in verify_problems)
+    return f"\n\n[재작성 요청] 다음 문제를 고쳐 다시 작성하라:\n{problems}"
 
 
 async def _ask_llm(llm, prompt, schema):
@@ -192,7 +229,36 @@ def make_nodes(deps):
             "plan_tasks": kept_new_tasks + cancelled_tasks,
             "decision": decision, "question": question, "qa_log": qa_log}
 
-    return {"frame": frame, "select": select, "execute": execute, "integrate": integrate}
+    async def ask_human(state):
+        # 설계 원칙: interrupt는 노드 최상단 — resume 시 노드가 선두부터 재실행되므로
+        # interrupt 앞에 부수효과가 있으면 재개마다 반복된다.
+        answer = interrupt({"question": state.question})
+        return {
+            "qa_log": [{"kind": "human_answer", "question": state.question, "answer": answer}],
+            "decision": None, "question": None}
+
+    async def conclude(state):
+        if not state.evidence:
+            caveats = [f"{task.id}: {task.error or '원인 불명'}" for task in state.plan_tasks
+                       if task.status == "error"]
+            return {"verdict": Verdict(
+                verdict_type="degraded", confidence="low",
+                narrative="증거 수집 전멸 — 조사 실패", caveats=caveats)}
+
+        prompt = _CONCLUDE_PROMPT.format(
+            hypotheses=_format_hypothesis_board(_supported_first(state.hypotheses)),
+            evidence=_format_evidence_list(state.evidence),
+            error_rate=_format_task_error_rate(state.plan_tasks),
+            rewrite_note=_format_rewrite_note(state.verify_problems))
+        verdict, err = await _ask_llm(deps.lead_llm, prompt, Verdict)
+        if verdict is None:
+            return {"verdict": Verdict(
+                verdict_type="degraded", confidence="low",
+                narrative="conclude 출력 파싱 실패 — 조사 종료 불가", caveats=[err])}
+        return {"verdict": verdict}
+
+    return {"frame": frame, "select": select, "execute": execute, "integrate": integrate,
+            "ask_human": ask_human, "conclude": conclude}
 
 
 def route_after_frame(state):
