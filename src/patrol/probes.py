@@ -4,7 +4,7 @@
 target 형식 오류, params 부재 등은 전부 error ProbeResult로 돌려준다 —
 최외곽 try/except가 예상 밖 예외까지 마지막 방어선으로 잡는다.
 """
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from src.config.schema_site import CheckConfig
 from src.domain.envelope import Envelope, ProbeResult

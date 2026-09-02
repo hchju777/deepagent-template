@@ -67,8 +67,11 @@ class Schedule(StrictModel):
     def _exactly_one(self):
         if (self.interval is None) == (self.cron is None):
             raise ValueError("schedule은 interval과 cron 중 정확히 하나만 선언한다")
-        if self.interval is not None and not _INTERVAL.match(self.interval):
-            raise ValueError(f"interval 형식 오류: {self.interval!r} (예: '30s', '5m', '1h')")
+        if self.interval is not None:
+            if not _INTERVAL.match(self.interval):
+                raise ValueError(f"interval 형식 오류: {self.interval!r} (예: '30s', '5m', '1h')")
+            if int(self.interval[:-1]) == 0:
+                raise ValueError("interval은 0보다 커야 한다")
         if self.cron is not None and len(self.cron.split()) != 5:
             raise ValueError(f"cron은 5필드여야 한다: {self.cron!r}")
         return self

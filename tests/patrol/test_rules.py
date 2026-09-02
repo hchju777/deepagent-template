@@ -35,6 +35,16 @@ def test_미지의_rule은_KnownRuleError():
         judge_by_rule(_ok({}), {"rule": "ghost"}, clock=lambda: T)
 
 
+def test_field_없는_range_max_freshness는_KnownRuleError():
+    # exists만 field 부재를 "데이터 전체를 본다"는 뜻으로 허용한다 — range/max/
+    # freshness는 field 없이는 애초에 무엇을 검사할지 정할 수 없는 설정 결함이다.
+    for params in ({"rule": "range", "min": 0, "max": 100},
+                   {"rule": "max", "max": 1000},
+                   {"rule": "freshness", "max_age_s": 60}):
+        with pytest.raises(KnownRuleError):
+            judge_by_rule(_ok({"lag": 5, "ts": T.isoformat()}), params, clock=lambda: T)
+
+
 def test_잘못된_bound와_field는_KnownRuleError():
     for params in ({"rule": "freshness", "field": "ts"},
                    {"rule": "max", "field": "lag"},

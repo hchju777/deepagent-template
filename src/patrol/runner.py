@@ -56,7 +56,7 @@ async def run_check(
 
         def make_finding(summary: str, judge: str, evidence_ids: list[str]) -> Finding:
             return Finding(
-                id=f"{name}@{observed_at.isoformat()}", gbm=gbm, fct=fct, check=name,
+                id=f"{gbm}/{fct}/{name}@{observed_at.isoformat()}", gbm=gbm, fct=fct, check=name,
                 target=check.target, summary=summary, evidence_ids=evidence_ids,
                 scratch_case_id=case_id, observed_at=observed_at, judge=judge,
             )
@@ -93,7 +93,9 @@ async def _judge_llm(
 ) -> CheckOutcome:
     if llm is None:  # judge="llm"은 이 판정 자체가 LLM 없이는 존재하지 않는다 — 무조건 필요
         return _error(observed_at, "LLM 미주입")
-    if budget is None or not budget.try_acquire():
+    if budget is None:  # 예산이 아예 안 들어온 것(설정 오류)과 소진(skipped)은 다른 문제다
+        return _error(observed_at, "LLM 예산 미주입")
+    if not budget.try_acquire():
         return CheckOutcome(status="skipped", observed_at=observed_at, skipped_reason="llm 예산 소진")
     out, err = await _call_llm(name, check, result, snap_id, llm)
     if out is None:
@@ -115,7 +117,10 @@ async def _judge_rule_then_llm(
     if verdict.status == "ok":
         return CheckOutcome(status="ok", observed_at=observed_at)
 
-    if budget is None or not budget.try_acquire():
+    if budget is None:  # 예산이 아예 안 들어온 것(설정 오류)과 소진(skipped)은 다른 문제다
+        return _error(observed_at, "LLM 예산 미주입")
+
+    if not budget.try_acquire():
         if check.on_budget_exhausted == "escalate":
             summary = f"{verdict.reason} (LLM 미확인 — 예산 소진)"
             finding = make_finding(summary, "rule+llm", [snap_id])

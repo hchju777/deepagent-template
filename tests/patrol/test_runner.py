@@ -87,6 +87,20 @@ async def test_rule_llm은_룰_ok면_LLM_없이도_ok이고_스냅샷은_항상_
     assert len(store2.list_evidence("patrol:mx:gumi:c")) == 1       # error여도 스냅샷은 남는다
 
 
+async def test_예산_자체가_없으면_skipped가_아니라_error():
+    # budget=None(주입 자체가 없음)과 budget이 소진된 경우(try_acquire 실패)는
+    # 다른 문제다 — 전자는 설정 오류(error), 후자만 skipped다.
+    adapters = _adapters(StubSeeds(rest_responses={"/oee": {"oee": 512}}))
+    llm = ScriptedLLM([])  # 호출되면 안 됨 — budget 부재에서 이미 걸러진다
+    out = await run_check("mx", "gumi", "c", _check(judge="rule+llm"), adapters=adapters,
+                          store=InMemoryCaseStore(), clock=lambda: T, llm=llm, budget=None)
+    assert out.status == "error" and "예산" in out.error
+
+    out2 = await run_check("mx", "gumi", "c", _check(judge="llm", params={}), adapters=adapters,
+                           store=InMemoryCaseStore(), clock=lambda: T, llm=llm, budget=None)
+    assert out2.status == "error" and "예산" in out2.error
+
+
 def test_ledger_runs_limit_0은_빈_리스트():
     from src.domain.patrol import CheckOutcome
     ledger = InMemoryLedger()

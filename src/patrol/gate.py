@@ -17,7 +17,7 @@
 from typing import Callable, Literal
 
 from src.config.schema_app import StrictModel
-from src.domain.case import Case
+from src.domain.case import Case, EvidenceRef
 from src.domain.cases import CaseRecord, CaseRepositoryPort
 from src.domain.patrol import Finding, fingerprint
 from src.domain.store import CaseStorePort
@@ -44,6 +44,24 @@ def _copy_snapshots(finding: Finding, target_case_id: str, store: CaseStorePort)
         )
 
 
+def evidence_refs_for_case(store: CaseStorePort, case_id: str) -> list[EvidenceRef]:
+    """case_id에 저장된 스냅샷 전체를 엔진 State용 EvidenceRef 목록으로 바꾼다.
+
+    execute 노드(application/nodes.py)와 같은 규약으로 조립한다 — summary는
+    본문 repr을 160자로 자른 것, 메타(as_of/complete/effective_as_of)는
+    저장본을 그대로 보존한다. opened 직후의 T0 스냅샷을 investigate_case의
+    initial_evidence로 넘길 때 쓴다(§계획 3 브리지).
+    """
+    refs = []
+    for record in store.list_evidence(case_id):
+        body = store.get_evidence(case_id, record.id)
+        refs.append(EvidenceRef(
+            id=record.id, source=record.source, summary=repr(body)[:160],
+            as_of=record.as_of, complete=record.complete,
+            effective_as_of=record.effective_as_of))
+    return refs
+
+
 def admit_finding(
     finding: Finding, *, repo: CaseRepositoryPort, store: CaseStorePort, clock: Callable,
 ) -> AdmitResult:
@@ -65,6 +83,10 @@ def admit_finding(
         existing = repo.find_open_by_fingerprint(fp)
 
         if existing is not None:
+            if finding.id in existing.finding_ids:
+                # 이미 첨부된 finding의 재수신(재시도·중복 전달) — 스냅샷을 다시
+                # 복사하거나 finding_ids를 늘리지 않고 그대로 attached만 돌려준다.
+                return AdmitResult(action="attached", case_id=existing.id, reason=None, case=None)
             _copy_snapshots(finding, existing.id, store)
             updated = existing.model_copy(update={
                 "finding_ids": existing.finding_ids + [finding.id],
@@ -78,14 +100,12 @@ def admit_finding(
         now = clock()
         record = CaseRecord(
             id=case_id, gbm=finding.gbm, fct=finding.fct, fingerprint=fp,
-            status="open", created_at=now, updated_at=now, finding_ids=[finding.id],
+            symptom=finding.summary, t0=finding.observed_at, target_locator=finding.target,
+            origin="patrol", status="open", created_at=now, updated_at=now,
+            finding_ids=[finding.id],
         )
         repo.save(record)
-        case = Case(
-            id=case_id, gbm=finding.gbm, fct=finding.fct, origin="patrol",
-            symptom=finding.summary, t0=finding.observed_at, target_locator=finding.target,
-        )
-        return AdmitResult(action="opened", case_id=case_id, reason=None, case=case)
+        return AdmitResult(action="opened", case_id=case_id, reason=None, case=record.to_case())
     except Exception as exc:
         return AdmitResult(action="rejected", case_id=None,
                            reason=f"게이트 처리 실패 — {type(exc).__name__}: {exc}", case=None)

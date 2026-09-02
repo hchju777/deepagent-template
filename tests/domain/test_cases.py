@@ -11,7 +11,7 @@ def test_열린_케이스만_지문으로_찾는다():
     cid = repo.new_case_id()
     assert cid == "c-1" and repo.new_case_id() == "c-2"
     repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint="fp-a",
-                         created_at=T, updated_at=T))
+                         symptom="OEE 512%", t0=T, created_at=T, updated_at=T))
     assert repo.find_open_by_fingerprint("fp-a").id == cid
     closed = repo.get(cid).model_copy(update={"status": "closed"})
     repo.save(closed)

@@ -67,15 +67,22 @@ def get_path(data: Any, dotted: str) -> Any | None:
     return current
 
 
-def _field_name(params: dict, rule_name: str) -> str | None:
+def _field_name(params: dict, rule_name: str, *, required: bool = True) -> str | None:
     """params["field"]가 있으면 문자열이어야 한다 — 아니면 config 오류다.
 
-    field 자체가 없는 것(예: exists에서 데이터 전체를 보는 경우)은 규칙에
-    따라 허용되므로 None을 돌려준다. 있는데 문자열이 아니면(예: 123)
-    get_path에 넘겨도 애초에 의미가 없는 설정이므로 KnownRuleError.
+    field 자체가 없는 것은 exists(required=False로 호출)에서만 허용된다 —
+    데이터 전체를 보는 것이 그 규칙의 정상 형태이므로 None을 돌려준다.
+    range/max/freshness는 field 없이는 애초에 무엇을 검사할지 정할 수 없는
+    설정이므로(호출부가 기본 required=True로 둔다) field 부재 자체가
+    KnownRuleError다 — 필드 부재를 "값이 없다"는 데이터 이상(finding)으로
+    삼키면 설정 실수가 매 패트롤마다 이상 탐지로 둔갑한다(모듈 docstring).
+    있는데 문자열이 아니면(예: 123) get_path에 넘겨도 애초에 의미가 없는
+    설정이므로 마찬가지로 KnownRuleError.
     """
     field = params.get("field")
     if field is None:
+        if required:
+            raise KnownRuleError(f"rule {rule_name}에는 field가 필요하다")
         return None
     if not isinstance(field, str):
         raise KnownRuleError(f"rule {rule_name}의 field는 문자열이어야 한다 — {field!r}")
@@ -178,7 +185,7 @@ def _judge_range(result: ProbeResult, params: dict) -> RuleVerdict:
 
 
 def _judge_exists(result: ProbeResult, params: dict) -> RuleVerdict:
-    field = _field_name(params, "exists")
+    field = _field_name(params, "exists", required=False)
     value = get_path(result.data, field) if field else result.data
     if _is_empty(value):
         return RuleVerdict(status="finding", reason="대상 부재")

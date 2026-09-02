@@ -4,17 +4,27 @@ from datetime import datetime
 from typing import Literal
 
 from src.config.schema_app import StrictModel
+from src.domain.case import Case
 
 CaseStatus = Literal["open", "investigating", "awaiting_human", "closed"]
 OPEN_STATUSES = ("open", "investigating", "awaiting_human")
 
 
 class CaseRecord(StrictModel):
-    """케이스 레코드."""
+    """케이스 레코드.
+
+    symptom/t0/target_locator/origin은 게이트가 케이스를 열 때 함께 채운다
+    — 저장소에서 다시 읽었을 때 엔진에 넘길 도메인 Case를 재구성(to_case)
+    하려면 이 넷이 레코드 안에 있어야 한다(§계획 3 브리지).
+    """
     id: str                             # 케이스 id
     gbm: str                            # 사업부
     fct: str                            # 시설
     fingerprint: str                    # 지문
+    symptom: str                        # 증상 요약 — Case 재구성용
+    t0: datetime                        # 최초 관찰 시각 — Case 재구성용
+    target_locator: str | None = None   # 대상 locator — Case 재구성용
+    origin: Literal["human", "patrol"] = "patrol"  # 케이스 개설 경로
     status: CaseStatus = "open"         # 상태
     created_at: datetime                # 생성 시간
     updated_at: datetime                # 갱신 시간
@@ -22,6 +32,11 @@ class CaseRecord(StrictModel):
     thread_ids: list[str] = []          # 스레드 id 목록
     owner: str | None = None            # 소유자
     lease_until: datetime | None = None # 임차 만료 시간
+
+    def to_case(self) -> Case:
+        """저장된 레코드로부터 엔진에 넘길 도메인 Case를 재구성한다."""
+        return Case(id=self.id, gbm=self.gbm, fct=self.fct, origin=self.origin,
+                    symptom=self.symptom, t0=self.t0, target_locator=self.target_locator)
 
 
 class CaseRepositoryPort(ABC):

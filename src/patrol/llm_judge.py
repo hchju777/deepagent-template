@@ -60,7 +60,7 @@ class LlmJudgeOutput(StrictModel):
 _INSTRUCTION = (
     'finding이면 근거로 쓴 증거 id를 evidence_ids에 그대로 적어라. '
     'JSON만 출력하라: {"status": "ok 또는 finding", "summary": "...", '
-    '"evidence_ids": ["ev-1", ...]}'
+    '"evidence_ids": ["<위 목록의 증거 id>", ...]}'
 )
 
 
