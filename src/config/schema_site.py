@@ -23,6 +23,7 @@ class MongoTarget(StrictModel):
     url: str
     username: str | None = None
     password: SecretStr | None = None
+    db: str = "twin"  # RealMongo 필수 인자
 
 
 class KafkaTarget(StrictModel):

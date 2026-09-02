@@ -1361,7 +1361,7 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
         if cfg.target.mongo:
             m = cfg.target.mongo
             pw = m.password.get_secret_value() if m.password else None
-            out.mongo = RealMongo(m.url, username=m.username, password=pw,
+            out.mongo = RealMongo(m.url, username=m.username, password=pw, db=m.db,
                                   guards=guards, semaphore=sem, clock=clock)
         if cfg.target.kafka:
             out.kafka = RealKafka(cfg.target.kafka.bootstrap,
@@ -1376,6 +1376,8 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
 ```
 
 주의: 테스트의 팩토리 시드 주입에서 rest 케이스는 config에 rest만 있으면 된다. StubRest 생성은 `cfg.target.rest`가 있을 때만 — 테스트 두 번째 케이스가 이를 확인한다.
+
+**Task 8 deviation:** `MongoTarget`에 `db: str = "twin"` 필드를 추가했다 — RealMongo 시그니처의 `db` 키워드 필수 인자에 대응하기 위해. `src/config/schema_site.py` 수정 시 기존 테스트 호환성 확인 완료.
 
 - [ ] **Step 4: 통과 확인 후 커밋**
 
