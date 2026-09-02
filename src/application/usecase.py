@@ -32,7 +32,8 @@ def _initial_state(case, interaction_policy, question_policy,
 async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
                            interaction_policy="autonomous",
                            question_policy=None,
-                           initial_evidence: list[EvidenceRef] | None = None) -> dict:
+                           initial_evidence: list[EvidenceRef] | None = None,
+                           engine=None) -> dict:
     """새 조사를 연다 — 초기 CaseState를 조립해 그래프를 완주(또는 interrupt)까지 돌린다.
 
     question_policy가 None이면 deps.engine_cfg.autonomous_question_policy를 쓴다(M7) —
@@ -40,6 +41,10 @@ async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
 
     initial_evidence는 순찰 게이트가 이미 확보한 T0 스냅샷(gate.evidence_refs_for_case)을
     싣는 자리다 — 없으면(사람이 연 케이스 등) 엔진이 처음부터 증거 없이 시작한다.
+
+    engine이 주어지면 build_engine을 우회하고 그 컴파일된 그래프를 그대로 쓴다 —
+    호출부(큐 워커 등)가 그래프를 한 번 컴파일해 재사용하거나, 테스트에서 가짜
+    엔진을 주입할 수 있게 하기 위해서다.
 
     interaction_policy가 "autonomous"가 아니거나(해석된) question_policy가 "park"면
     ask_human에서 interrupt가 걸릴 수 있다 — 그런데 checkpointer가 없으면 스레드를
@@ -54,15 +59,18 @@ async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
         raise ValueError(
             "interrupt 경로에는 checkpointer가 필요하다 — interaction_policy가 "
             "autonomous가 아니거나 question_policy가 park면 ask_human에서 멈출 수 있다")
-    graph = build_engine(deps, checkpointer=checkpointer)
+    graph = engine if engine is not None else build_engine(deps, checkpointer=checkpointer)
     initial_state = _initial_state(case, interaction_policy, resolved_question_policy,
                                    initial_evidence)
     config = {"configurable": {"thread_id": thread_id or case.id}}
     return await graph.ainvoke(initial_state, config=config)
 
 
-async def resume_case(answer, *, deps, checkpointer, thread_id) -> dict:
-    """park된(§2.4) 조사를 사람의 답변으로 재개한다 — ask_human의 interrupt를 통과시킨다."""
-    graph = build_engine(deps, checkpointer=checkpointer)
+async def resume_case(answer, *, deps, checkpointer, thread_id, engine=None) -> dict:
+    """park된(§2.4) 조사를 사람의 답변으로 재개한다 — ask_human의 interrupt를 통과시킨다.
+
+    engine이 주어지면 build_engine을 우회한다(investigate_case와 동일한 이유).
+    """
+    graph = engine if engine is not None else build_engine(deps, checkpointer=checkpointer)
     config = {"configurable": {"thread_id": thread_id}}
     return await graph.ainvoke(Command(resume=answer), config=config)

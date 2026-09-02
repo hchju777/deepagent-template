@@ -19,6 +19,21 @@ def test_initial_evidence가_있으면_초기_state에_실린다():
     assert state["evidence"] == [ref]
 
 
+async def test_engine_주입이_build_engine을_우회한다(monkeypatch):
+    import src.application.usecase as uc
+    from src.domain.case import Case
+    calls = []
+    class FakeEngine:
+        async def ainvoke(self, state, config=None):
+            calls.append((state["case"].id, config["configurable"]["thread_id"]))
+            return {"done": True}
+    monkeypatch.setattr(uc, "build_engine", lambda *a, **k: (_ for _ in ()).throw(AssertionError("호출되면 안 됨")))
+    from tests.application.test_nodes_frame import T, _deps
+    case = Case(id="c-1", gbm="mx", fct="gumi", origin="patrol", symptom="s", t0=T)
+    out = await uc.investigate_case(case, deps=_deps([]), engine=FakeEngine(), thread_id="c-1#1")
+    assert out == {"done": True} and calls == [("c-1", "c-1#1")]
+
+
 def test_initial_evidence가_없으면_evidence_키_자체가_없다():
     # None이면 CaseState 기본값(빈 리스트)이 그대로 쓰이도록 evidence 키를
     # 아예 넣지 않는다 — 사람이 새로 연 케이스처럼 T0 증거가 없는 경우.
