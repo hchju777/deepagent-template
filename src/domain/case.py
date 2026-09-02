@@ -75,4 +75,5 @@ class Case(StrictModel):
     origin: Literal["human", "patrol"]
     symptom: str
     t0: datetime
+    target_locator: str | None = None
     knowledge_digests: dict[str, str] = {}   # 토폴로지·룰·deployment digest 박제(§2.5-3)
