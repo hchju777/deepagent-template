@@ -10,7 +10,17 @@ freshness면 필드 부재로 finding이 나온다 — 이는 우연이 아니�
 미지의 rule 이름 또는 params에 "rule" 키가 없으면 config 오류이므로
 KnownRuleError를 던진다 — 판정기 중 유일하게 허용되는 예외이며, runner가
 잡아서 error 3상("rule 설정 오류 — ...")으로 레저에 남긴다.
+
+전역 계약: KnownRuleError 외에는 어떤 입력에도 raise하지 않는다. params가
+가리키는 bound(min/max/max_age_s)나 field가 애초에 rule을 평가할 수 없는
+형태(비수치 bound, 부재한 필수 bound, 문자열이 아닌 field)라면 — 이는
+데이터 이상이 아니라 rule 설정 자체가 잘못된 것이므로 finding이 아니라
+KnownRuleError다(§C1/§I3). 데이터 쪽 이상(필드 부재, 비수치 값, NaN)은
+계속 finding으로 처리한다(§M4) — 값이 이상한 것과 설정이 이상한 것은
+다른 문제이고, 후자를 조용히 finding으로 삼키면 설정 오류가 매 패트롤마다
+"이상 탐지"로 둔갑해 원인 파악을 방해한다.
 """
+import math
 from datetime import datetime
 from numbers import Number
 from typing import Any, Callable, Literal
@@ -20,7 +30,8 @@ from src.domain.envelope import ProbeResult
 
 
 class KnownRuleError(Exception):
-    """params["rule"]이 없거나 알려지지 않은 이름일 때 — config 오류."""
+    """rule 이름/이름 부재뿐 아니라, bound·field 등 rule을 평가할 수 없게
+    만드는 모든 설정 결함에서 던진다 — 판정기 중 유일하게 허용되는 예외."""
 
 
 class RuleVerdict(StrictModel):
@@ -31,8 +42,13 @@ class RuleVerdict(StrictModel):
 def get_path(data: Any, dotted: str) -> Any | None:
     """dict/list에 대해 점 경로("a.b.0.c")로 값을 조회한다. 없으면 None.
 
-    리스트는 정수 인덱스 세그먼트로 접근한다("items.0.name").
+    리스트는 정수 인덱스 세그먼트로 접근한다("items.0.name"). dotted가
+    문자열이 아니면 None을 돌려준다 — 이 유틸리티 자체는 방어적으로 굴고,
+    "field는 문자열이어야 한다"는 rule 설정 의미론(KnownRuleError)은 호출부인
+    _field_name에서 판단한다.
     """
+    if not isinstance(dotted, str):
+        return None
     current = data
     for segment in dotted.split("."):
         if isinstance(current, dict):
@@ -51,25 +67,75 @@ def get_path(data: Any, dotted: str) -> Any | None:
     return current
 
 
-def _parse_timestamp(value: Any, *, reference: datetime) -> datetime | None:
-    """ISO 문자열 또는 datetime을 datetime으로 정규화한다.
+def _field_name(params: dict, rule_name: str) -> str | None:
+    """params["field"]가 있으면 문자열이어야 한다 — 아니면 config 오류다.
 
-    naive/aware 혼합 비교 TypeError를 막기 위해, 파싱 결과가 naive면
-    reference(clock() 결과)의 tzinfo를 그대로 붙인다. reference 자체가
-    naive면 결과도 naive로 둔다.
+    field 자체가 없는 것(예: exists에서 데이터 전체를 보는 경우)은 규칙에
+    따라 허용되므로 None을 돌려준다. 있는데 문자열이 아니면(예: 123)
+    get_path에 넘겨도 애초에 의미가 없는 설정이므로 KnownRuleError.
     """
+    field = params.get("field")
+    if field is None:
+        return None
+    if not isinstance(field, str):
+        raise KnownRuleError(f"rule {rule_name}의 field는 문자열이어야 한다 — {field!r}")
+    return field
+
+
+def _as_number(value: Any) -> float | None:
+    """rule bound(min/max/max_age_s)를 숫자로 정규화한다.
+
+    bool은 int의 서브클래스라 명시적으로 제외한다(True/False가 bound로
+    들어오는 것은 설정 실수일 뿐 유효한 1/0 의도가 아니다). 문자열은 변환을
+    시도하지 않는다 — "1000"과 1000은 설정 의도가 다른 값이고, 암묵적
+    형변환은 타입이 어긋난 설정 오류를 조용히 감춘다. 변환 불가면 None —
+    호출부가 이를 "bound 없음"과 "bound가 비수치"를 구분해 KnownRuleError로
+    올릴지 판단한다.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _numeric_value(value: Any) -> tuple[float | None, str | None]:
+    """관측 데이터 값(필드 부재/비수치/NaN)을 판정한다. rule 설정이 아니라
+    데이터 이상이므로 KnownRuleError가 아니라 finding 사유 문자열을 돌려준다.
+
+    반환: (숫자면 그 값, 문제 있으면 사유 문자열) — 정상이면 (value, None).
+    """
+    if not isinstance(value, Number) or isinstance(value, bool):
+        return None, "필드 부재/비수치"
+    if isinstance(value, float) and math.isnan(value):
+        return None, "비수치(NaN)"
+    return float(value), None
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    """ISO 문자열 또는 datetime을 datetime으로 파싱한다. 실패하면 None."""
     if isinstance(value, datetime):
-        ts = value
-    elif isinstance(value, str):
+        return value
+    if isinstance(value, str):
         try:
-            ts = datetime.fromisoformat(value)
+            return datetime.fromisoformat(value)
         except ValueError:
             return None
-    else:
-        return None
-    if ts.tzinfo is None and reference.tzinfo is not None:
-        ts = ts.replace(tzinfo=reference.tzinfo)
-    return ts
+    return None
+
+
+def _align_tz(ts: datetime, now: datetime) -> tuple[datetime, datetime]:
+    """naive/aware 혼합 비교 TypeError를 막기 위해 둘의 tzinfo를 맞춘다.
+
+    어느 쪽이든 한쪽만 naive면, aware인 쪽의 tzinfo를 그대로 naive 쪽에
+    붙여 둘 다 aware로 통일한다(방향 상관없이 대칭적으로 처리). 둘 다
+    naive거나 둘 다 aware면 그대로 둔다.
+    """
+    if ts.tzinfo is None and now.tzinfo is not None:
+        ts = ts.replace(tzinfo=now.tzinfo)
+    elif ts.tzinfo is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=ts.tzinfo)
+    return ts, now
 
 
 def _is_empty(data: Any) -> bool:
@@ -81,12 +147,22 @@ def _is_empty(data: Any) -> bool:
 
 
 def _judge_range(result: ProbeResult, params: dict) -> RuleVerdict:
-    field = params.get("field")
-    value = get_path(result.data, field) if field else None
-    if not isinstance(value, Number) or isinstance(value, bool):
-        return RuleVerdict(status="finding", reason=f"필드 부재/비수치 — {field}: {value!r}")
-    lo = params.get("min")
-    hi = params.get("max")
+    field = _field_name(params, "range")
+    raw_min = params.get("min")
+    raw_max = params.get("max")
+    lo = hi = None
+    if raw_min is not None:
+        lo = _as_number(raw_min)
+        if lo is None:
+            raise KnownRuleError(f"rule range의 min이 수치가 아니다 — {raw_min!r}")
+    if raw_max is not None:
+        hi = _as_number(raw_max)
+        if hi is None:
+            raise KnownRuleError(f"rule range의 max가 수치가 아니다 — {raw_max!r}")
+    raw_value = get_path(result.data, field) if field else None
+    value, bad_reason = _numeric_value(raw_value)
+    if bad_reason is not None:
+        return RuleVerdict(status="finding", reason=f"{bad_reason} — {field}: {raw_value!r}")
     if lo is not None and value < lo:
         return RuleVerdict(status="finding", reason=f"범위 미달 — {field}={value} < min({lo})")
     if hi is not None and value > hi:
@@ -95,7 +171,7 @@ def _judge_range(result: ProbeResult, params: dict) -> RuleVerdict:
 
 
 def _judge_exists(result: ProbeResult, params: dict) -> RuleVerdict:
-    field = params.get("field")
+    field = _field_name(params, "exists")
     value = get_path(result.data, field) if field else result.data
     if _is_empty(value):
         return RuleVerdict(status="finding", reason="대상 부재")
@@ -103,27 +179,33 @@ def _judge_exists(result: ProbeResult, params: dict) -> RuleVerdict:
 
 
 def _judge_freshness(result: ProbeResult, params: dict, *, clock: Callable[[], datetime]) -> RuleVerdict:
-    field = params.get("field")
+    field = _field_name(params, "freshness")
+    max_age_s = _as_number(params.get("max_age_s"))
+    if max_age_s is None:
+        raise KnownRuleError(f"rule freshness의 max_age_s이 수치가 아니다 — {params.get('max_age_s')!r}")
     raw = get_path(result.data, field) if field else None
     if raw is None:
         return RuleVerdict(status="finding", reason=f"필드 부재 — {field}")
-    now = clock()
-    ts = _parse_timestamp(raw, reference=now)
+    ts = _parse_timestamp(raw)
     if ts is None:
         return RuleVerdict(status="finding", reason=f"시각 파싱 실패 — {field}: {raw!r}")
+    now = clock()
+    ts, now = _align_tz(ts, now)
     age_s = (now - ts).total_seconds()
-    max_age_s = params.get("max_age_s")
     if age_s > max_age_s:
         return RuleVerdict(status="finding", reason=f"신선도 초과 — {field} age={age_s:.0f}s > {max_age_s}s")
     return RuleVerdict(status="ok", reason=f"신선함 — {field} age={age_s:.0f}s")
 
 
 def _judge_max(result: ProbeResult, params: dict) -> RuleVerdict:
-    field = params.get("field")
-    value = get_path(result.data, field) if field else None
-    if not isinstance(value, Number) or isinstance(value, bool):
-        return RuleVerdict(status="finding", reason=f"필드 부재/비수치 — {field}: {value!r}")
-    max_value = params.get("max")
+    field = _field_name(params, "max")
+    max_value = _as_number(params.get("max"))
+    if max_value is None:
+        raise KnownRuleError(f"rule max의 max가 수치가 아니다 — {params.get('max')!r}")
+    raw_value = get_path(result.data, field) if field else None
+    value, bad_reason = _numeric_value(raw_value)
+    if bad_reason is not None:
+        return RuleVerdict(status="finding", reason=f"{bad_reason} — {field}: {raw_value!r}")
     if value > max_value:
         return RuleVerdict(status="finding", reason=f"상한 초과 — {field}={value} > max({max_value})")
     return RuleVerdict(status="ok", reason=f"상한 이내 — {field}={value}")
@@ -140,7 +222,9 @@ _RULES: dict[str, Callable] = {
 def judge_by_rule(result: ProbeResult, params: dict, *, clock: Callable[[], datetime]) -> RuleVerdict:
     """params["rule"] 종류에 따라 result.data를 판정한다.
 
-    미지의 rule 이름 또는 "rule" 키 부재는 KnownRuleError — config 오류다.
+    미지의 rule 이름, "rule" 키 부재, 그리고 rule을 평가할 수 없게 만드는
+    설정 결함(비수치/부재 bound, 문자열이 아닌 field)은 전부 KnownRuleError
+    — config 오류다. 그 외에는 어떤 입력에도 raise하지 않는다.
     result.status가 "error"여도 별도 처리 없이 data(대개 None) 기준으로
     그대로 판정한다(모듈 docstring 참고) — error 필터링은 runner의 몫이다.
     """
