@@ -57,3 +57,13 @@ def test_naive_aware_혼합은_어느_방향이든_TypeError가_없다():
 def test_NaN은_range를_통과하지_못한다():
     params = {"rule": "range", "field": "v", "min": 0, "max": 100}
     assert judge_by_rule(_ok({"v": float("nan")}), params, clock=lambda: T).status == "finding"
+
+
+def test_range는_bound_하나는_있어야_하고_NaN_bound는_거부():
+    with pytest.raises(KnownRuleError):
+        judge_by_rule(_ok({"v": 1}), {"rule": "range", "field": "v"}, clock=lambda: T)
+    with pytest.raises(KnownRuleError):
+        judge_by_rule(_ok({"v": 1}), {"rule": "range", "field": "v", "min": float("nan")},
+                      clock=lambda: T)
+    assert judge_by_rule(_ok({"v": 1}), {"rule": "range", "field": "v", "min": 0},
+                         clock=lambda: T).status == "ok"

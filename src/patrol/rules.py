@@ -88,14 +88,19 @@ def _as_number(value: Any) -> float | None:
     bool은 int의 서브클래스라 명시적으로 제외한다(True/False가 bound로
     들어오는 것은 설정 실수일 뿐 유효한 1/0 의도가 아니다). 문자열은 변환을
     시도하지 않는다 — "1000"과 1000은 설정 의도가 다른 값이고, 암묵적
-    형변환은 타입이 어긋난 설정 오류를 조용히 감춘다. 변환 불가면 None —
-    호출부가 이를 "bound 없음"과 "bound가 비수치"를 구분해 KnownRuleError로
-    올릴지 판단한다.
+    형변환은 타입이 어긋난 설정 오류를 조용히 감춘다. NaN도 거부한다 — NaN과의
+    비교는 항상 False라 bound 검사를 조용히 무력화시킨다(값이 통과해도 아무
+    비교도 걸리지 않는 채로 통과하는 것이지 의도한 "제한 없음"이 아니다).
+    변환 불가면 None — 호출부가 이를 "bound 없음"과 "bound가 비수치"를
+    구분해 KnownRuleError로 올릴지 판단한다.
     """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        result = float(value)
+        if math.isnan(result):
+            return None
+        return result
     return None
 
 
@@ -159,6 +164,8 @@ def _judge_range(result: ProbeResult, params: dict) -> RuleVerdict:
         hi = _as_number(raw_max)
         if hi is None:
             raise KnownRuleError(f"rule range의 max가 수치가 아니다 — {raw_max!r}")
+    if lo is None and hi is None:
+        raise KnownRuleError("rule range는 min/max 중 하나 이상이 필요하다")
     raw_value = get_path(result.data, field) if field else None
     value, bad_reason = _numeric_value(raw_value)
     if bad_reason is not None:
