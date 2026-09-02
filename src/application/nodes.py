@@ -257,8 +257,38 @@ def make_nodes(deps):
                 narrative="conclude 출력 파싱 실패 — 조사 종료 불가", caveats=[err])}
         return {"verdict": verdict}
 
+    async def verify(state):
+        # LLM 없음 — 순수 결정론 가드레일(§2.4). 노드는 raise하지 않는다.
+        verdict = state.verdict
+        case_id = state.case.id
+        incomplete_ids = {e.id for e in state.evidence if not e.complete}
+        caveats_text = " ".join(verdict.caveats)
+        problems = []
+
+        links = ([verdict.root_cause] if verdict.root_cause is not None else [])
+        links += list(verdict.contributing)
+        for link in links:
+            if not link.evidence_ids:
+                problems.append(f"다리에 인용 없음: {link.component}")
+                continue
+            for evidence_id in link.evidence_ids:
+                if not deps.store.has_evidence(case_id, evidence_id):
+                    problems.append(f"없는 id {evidence_id} 인용")
+                elif evidence_id in incomplete_ids and evidence_id not in caveats_text:
+                    problems.append(f"불완전 증거 {evidence_id}가 caveat에 명시되지 않음")
+
+        if not problems:
+            return {"verify_problems": []}
+        if state.verify_attempts == 0:
+            return {"verify_problems": problems, "verify_attempts": 1}
+        # 강등 통과 — 재작성도 실패했으면 낮은 확신으로 통과시키고 문제 목록을 비운다.
+        demoted = verdict.model_copy(update={
+            "confidence": "low",
+            "caveats": verdict.caveats + ["검증 미통과: " + "; ".join(problems)]})
+        return {"verdict": demoted, "verify_problems": []}
+
     return {"frame": frame, "select": select, "execute": execute, "integrate": integrate,
-            "ask_human": ask_human, "conclude": conclude}
+            "ask_human": ask_human, "conclude": conclude, "verify": verify}
 
 
 def route_after_frame(state):
@@ -277,3 +307,7 @@ def route_after_select(state):
 
 def route_after_integrate(state):
     return {"continue": "select", "ask": "ask_human", "conclude": "conclude"}[state.decision]
+
+
+def route_after_verify(state):
+    return "__end__" if not state.verify_problems else "conclude"
