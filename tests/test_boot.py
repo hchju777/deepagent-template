@@ -74,3 +74,61 @@ def test_깨진_JSON_config는_기동_검증_오류로_모인다(tmp_path):
     _write(tmp_path, "config/app.json", "{ broken")
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
     assert any("JSON 파싱 실패" in e.problem for e in errors)
+
+
+def test_deployment의_hash가_레포에_없으면_거부(tmp_path):
+    _tree(tmp_path)
+    # 실제 git repo를 만들어 config가 가리키게 한다
+    import subprocess
+    repo = tmp_path / "repos" / "twin-services"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "init"], check=True)
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    # config의 repo path를 실제 경로로 교체
+    import json
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["code"]["repos"][0]["path"] = str(repo)
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+
+    # 실재하는 hash → 통과
+    _write(tmp_path, "knowledge/deployment/mx/gumi.yaml",
+           f"services:\n  twin-api: {{ repo: twin-services, commit: {head} }}\n")
+    assert validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path) == []
+
+    # 유령 hash → 거부
+    _write(tmp_path, "knowledge/deployment/mx/gumi.yaml",
+           "services:\n  twin-api: { repo: twin-services, commit: deadbeef }\n")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("deadbeef" in e.problem for e in errors)
+
+
+def test_deployment이_없으면_검사7은_건너뛴다(tmp_path):
+    _tree(tmp_path)
+    assert validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path) == []
+
+
+def test_check_live에서_mongo_role_problems가_가짜_connection_status로_검사된다(tmp_path, monkeypatch):
+    _tree(tmp_path)
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["adapters"] = "real"
+    data["target"]["mongo"] = {"url": "mongodb://x", "username": "svc", "db": "twin"}
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+
+    async def _fake_conn_status(cfg):
+        return {"authInfo": {"authenticatedUserRoles": [{"role": "dbOwner", "db": "twin"}]}}
+
+    import src.boot as boot
+    monkeypatch.setattr(boot, "_fetch_conn_status", _fake_conn_status)
+
+    # check_live=False(기본)는 patch된 헬퍼조차 건드리지 않고 정적 검증만 통과한다
+    assert validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path) == []
+
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path, check_live=True)
+    assert any("dbOwner" in e.problem for e in errors)
