@@ -642,6 +642,24 @@ async def test_rest_스텁_토폴로지_밖_끝점_거부():
     assert (await stub.get("/api/v1/lines/7/oee")).data == {"oee": 5.12}
     outside = await stub.get("/admin/drop")
     assert outside.status == "error" and "토폴로지" in outside.error
+
+
+async def test_mongo_스텁_regex_평가():
+    stub = StubMongo({"c": [{"name": "apple"}, {"name": "banana"}]}, max_rows=10, clock=CLOCK)
+    found = await stub.find("c", {"name": {"$regex": "^a"}})
+    assert found.data == [{"name": "apple"}]
+
+
+async def test_mongo_스텁_aggregate_절단_표시():
+    stub = StubMongo({"c": [{"i": n} for n in range(5)]}, max_rows=2, clock=CLOCK)
+    res = await stub.aggregate("c", [{"$match": {}}])
+    assert res.envelope.complete is False and res.envelope.truncated_reason == "max_rows"
+
+
+async def test_mongo_스텁_잘못된_구조는_error_결과():
+    stub = StubMongo({"c": [{"a": 1}]}, max_rows=10, clock=CLOCK)
+    res = await stub.find("c", {"$and": {"a": 1}})
+    assert res.status == "error" and "구조 오류" in res.error
 ```
 
 - [ ] **Step 2: 실패 확인**
