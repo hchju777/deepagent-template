@@ -43,7 +43,22 @@ class SubagentReport(StrictModel):
 
 
 def parse_structured(text, model_cls):
-    """본문에서 JSON을 찾아 model_cls로 검증한다. 실패는 (None, 한국어 원인)."""
+    """본문에서 JSON을 찾아 model_cls로 검증한다. 실패는 (None, 한국어 원인).
+
+    text는 보통 str이지만 langchain 메시지 content가 블록 리스트일 수 있다
+    (예: [{"type": "text", "text": "..."}]) — 그 경우 텍스트 블록만 모아
+    문자열화한다. str도 list도 아니면 파싱을 시도하지 않고 오류를 반환한다.
+    """
+    if isinstance(text, list):
+        parts = []
+        for block in text:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(block.get("text") or "")
+        text = "".join(parts)
+    elif not isinstance(text, str):
+        return None, "문자열이 아닌 응답"
     match = _FENCE.search(text)
     candidate = match.group(1) if match else None
     if candidate is None:

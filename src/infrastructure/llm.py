@@ -17,7 +17,7 @@ class ScriptedLLM:
         self._responses = list(responses)
         self.calls = []
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None, **kwargs):
         self.calls.append(messages)
         if not self._responses:
             raise RuntimeError("스크립트 소진 — 예약된 응답보다 호출이 많다")

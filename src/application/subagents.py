@@ -3,6 +3,8 @@
 - 자유가 값하는 안쪽 루프는 라이브러리에, 규율은 이 모듈의 경계에:
   도구는 결과를 Store에 넣고 증거 id를 돌려주며(인용의 원천), 어떤 실패도
   raise 대신 error 보고로 변환된다(superstep 보호).
+- LLM이 최종 JSON에 적는 evidence_ids는 echo일 뿐 신뢰하지 않는다 — 도구가
+  실제로 store.put_evidence를 호출해 만든 id(created)만 보고에 남는다.
 """
 import json
 from datetime import datetime
@@ -43,6 +45,18 @@ def _code_evidence_line(evidence_id, summary):
 
 def make_tools(role, *, adapters, store, case_id):
     tools = []
+    created: list[str] = []     # 도구가 실제로 만든 증거 id — LLM echo와 분리해 추적한다
+
+    def _put(source, body, envelope=None):
+        if envelope is not None:
+            evidence_id = store.put_evidence(case_id, source, body,
+                                             as_of=envelope.observed_at,
+                                             complete=envelope.complete,
+                                             effective_as_of=envelope.effective_as_of)
+        else:
+            evidence_id = store.put_evidence(case_id, source, body)
+        created.append(evidence_id)
+        return evidence_id
 
     if role == "data_prober" and adapters.mongo is not None:
         @tool
@@ -55,7 +69,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.mongo.find(collection, filter, limit=limit)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"mongo:{collection}", result.data)
+            evidence_id = _put(f"mongo:{collection}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{collection} {len(result.data)}건", result.envelope)
         tools.append(mongo_find)
 
@@ -69,7 +83,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.mongo.count(collection, filter)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"mongo:{collection}", result.data)
+            evidence_id = _put(f"mongo:{collection}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{collection} {result.data}건", result.envelope)
         tools.append(mongo_count)
 
@@ -80,7 +94,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.redis.get(key)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"redis:{key}", result.data)
+            evidence_id = _put(f"redis:{key}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{key} 조회", result.envelope)
         tools.append(redis_get)
 
@@ -90,7 +104,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.redis.scan(pattern)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"redis-scan:{pattern}", result.data)
+            evidence_id = _put(f"redis-scan:{pattern}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{pattern} {len(result.data)}건", result.envelope)
         tools.append(redis_scan)
 
@@ -100,7 +114,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.redis.ttl(key)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"redis-ttl:{key}", result.data)
+            evidence_id = _put(f"redis-ttl:{key}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{key} ttl={result.data}", result.envelope)
         tools.append(redis_ttl)
 
@@ -116,7 +130,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.kafka.read(topic, start=start, end=end)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"kafka:{topic}", result.data)
+            evidence_id = _put(f"kafka:{topic}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{topic} {len(result.data)}건", result.envelope)
         tools.append(kafka_read)
 
@@ -126,7 +140,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.kafka.group_offsets(group)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"kafka-offsets:{group}", result.data)
+            evidence_id = _put(f"kafka-offsets:{group}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{group} 오프셋 조회", result.envelope)
         tools.append(kafka_group_offsets)
 
@@ -137,7 +151,7 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.rest.get(endpoint)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"rest:{endpoint}", result.data)
+            evidence_id = _put(f"rest:{endpoint}", result.data, result.envelope)
             status_code = result.data.get("status_code") if isinstance(result.data, dict) else "-"
             return _evidence_line(evidence_id, f"{endpoint} status={status_code}", result.envelope)
         tools.append(rest_get)
@@ -150,7 +164,7 @@ def make_tools(role, *, adapters, store, case_id):
                 body = adapters.code.show(repo, commit, path)
             except CodeRepoError as exc:
                 return f"[오류] {exc}"
-            evidence_id = store.put_evidence(case_id, f"code:{repo}@{commit}:{path}", body)
+            evidence_id = _put(f"code:{repo}@{commit}:{path}", body)
             return _code_evidence_line(evidence_id, f"{repo}@{commit[:7]}:{path} ({len(body.splitlines())}줄)")
         tools.append(code_show)
 
@@ -161,7 +175,7 @@ def make_tools(role, *, adapters, store, case_id):
                 lines = adapters.code.grep(repo, commit, pattern)
             except CodeRepoError as exc:
                 return f"[오류] {exc}"
-            evidence_id = store.put_evidence(case_id, f"code-grep:{repo}@{commit}:{pattern}", lines)
+            evidence_id = _put(f"code-grep:{repo}@{commit}:{pattern}", lines)
             return _code_evidence_line(evidence_id, f"{pattern!r} {len(lines)}건 매치")
         tools.append(code_grep)
 
@@ -172,28 +186,30 @@ def make_tools(role, *, adapters, store, case_id):
                 commit = adapters.code.head(repo)
             except CodeRepoError as exc:
                 return f"[오류] {exc}"
-            evidence_id = store.put_evidence(case_id, f"code-head:{repo}", commit)
+            evidence_id = _put(f"code-head:{repo}", commit)
             return _code_evidence_line(evidence_id, f"{repo} HEAD={commit[:7]}")
         tools.append(code_head)
 
-    if role == "recompute_verifier":
-        @tool
-        def get_evidence(evidence_id: str) -> str:
-            """케이스 Store에 저장된 증거 본문을 JSON 문자열로 재독한다(입력 증거 읽기용)."""
-            try:
-                body = store.get_evidence(case_id, evidence_id)
-            except KeyError:
-                return f"[오류] 없는 증거 id — {evidence_id}"
-            return json.dumps(body, ensure_ascii=False, default=str)
-        tools.append(get_evidence)
+    # 입력 증거 재독은 모든 역할에 열려 있다(M4) — code_tracer도 앞선 프로브의
+    # 증거를 참조해야 할 수 있고, 이 도구 자체는 새 증거를 만들지 않으니 created에
+    # 넣지 않는다.
+    @tool
+    def get_evidence(evidence_id: str) -> str:
+        """케이스 Store에 저장된 증거 본문을 JSON 문자열로 재독한다(입력 증거 읽기용)."""
+        try:
+            body = store.get_evidence(case_id, evidence_id)
+        except KeyError:
+            return f"[오류] 없는 증거 id — {evidence_id}"
+        return json.dumps(body, ensure_ascii=False, default=str)
+    tools.append(get_evidence)
 
-    return tools
+    return tools, created
 
 
 async def run_subagent(task: PlanTask, *, adapters, store, llm, budget, case_id) -> SubagentReport:
     from langchain.agents import create_agent   # 지연 import
 
-    tools = make_tools(task.role, adapters=adapters, store=store, case_id=case_id)
+    tools, created = make_tools(task.role, adapters=adapters, store=store, case_id=case_id)
     goal = task.goal
     if task.input_evidence_ids:
         goal += f"\n입력 증거 id: {', '.join(task.input_evidence_ids)}"
@@ -201,11 +217,14 @@ async def run_subagent(task: PlanTask, *, adapters, store, llm, budget, case_id)
         agent = create_agent(model=llm, tools=tools, system_prompt=_PROMPTS[task.role])
         result = await agent.ainvoke({"messages": [("user", goal)]},
                                      config={"recursion_limit": budget})
-        final = result["messages"][-1].content
+        final = result["messages"][-1].text   # .content 대신 — 문자열을 보장한다(I2)
         report, err = parse_structured(final, SubagentReport)
         if report is None:
             return SubagentReport(status="error", summary="",
                                   error=f"보고 JSON 파싱 실패 — {err}")
+        # LLM이 적은 evidence_ids는 신뢰하지 않는다 — 도구가 실제로 만든 id(created)로
+        # 통째로 교체한다: 지어낸 인용은 사라지고, 인용을 빠뜨린 실측 id는 보충된다.
+        report.evidence_ids = created
         return report
     except Exception as exc:   # 예산 초과(GraphRecursionError) 포함 — raise 금지 계약
         return SubagentReport(status="error", summary="",

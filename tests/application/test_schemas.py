@@ -25,3 +25,18 @@ def test_ask_결정에는_question_필수():
     IntegrateOutput(decision="ask", question="계획 변경이 있었나요?")
     with pytest.raises(ValidationError):
         IntegrateOutput(decision="ask")
+
+
+def test_텍스트_블록_리스트_content도_모아서_파싱된다():
+    from src.application.schemas import SubagentReport
+    blocks = [{"type": "text", "text": '{"status": "ok", "summa'},
+             {"type": "text", "text": 'ry": "블록 합치기"}'},
+             {"type": "image_url", "image_url": "무시된다"}]
+    obj, err = parse_structured(blocks, SubagentReport)
+    assert err is None and obj.status == "ok" and obj.summary == "블록 합치기"
+
+
+def test_문자열도_리스트도_아닌_content는_TypeError_대신_오류_반환():
+    from src.application.schemas import SubagentReport
+    obj, err = parse_structured(12345, SubagentReport)
+    assert obj is None and err == "문자열이 아닌 응답"

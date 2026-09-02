@@ -318,8 +318,9 @@ git commit -m "Add CaseState with mechanical merge-by-id reducers"
 
 **Interfaces:**
 - Produces:
-  - `CaseStorePort(ABC)` — sync 메서드: `put_evidence(case_id: str, source: str, body: object) -> str`(증거 id 부여·본문 저장·id 반환, id 형식 `ev-<n>` 케이스별 증가), `get_evidence(case_id, evidence_id) -> object`(없으면 `KeyError` — 유일하게 raise 허용: 인용 실재 검증이 이 예외에 기댐), `has_evidence(case_id, evidence_id) -> bool`, `put_code_knowledge(service: str, commit: str, spec: str) -> None`, `get_code_knowledge(service, commit) -> str | None`(캐시 미스는 None — §3.4).
-  - `InMemoryCaseStore(CaseStorePort)` — dict 기반. 개발·테스트·3b E2E용. (Mongo 구현은 계획 4.)
+  - `EvidenceRecord(StrictModel)` — `id: str`, `source: str`, `body_digest: str`(canonical_digest(body)), `as_of: datetime|None=None`, `complete: bool=True`, `effective_as_of: datetime|None=None`. 결과 봉투(Envelope)의 메타를 State 밖(Store)까지 실어 나른다 — 최종 리뷰에서 발견된 C1 수정: 이게 없으면 3b의 EvidenceRef 조립이 불가능하고 verify의 "불완전 증거로 부정 결론 금지"가 저장 시점 complete 기본값(True)으로 사라진다.
+  - `CaseStorePort(ABC)` — sync 메서드: `put_evidence(case_id: str, source: str, body: object, *, as_of: datetime|None=None, complete: bool=True, effective_as_of: datetime|None=None) -> str`(증거 id 부여·본문 저장·id 반환, id 형식 `ev-<n>` 케이스별 증가; 키워드 인자는 전부 기본값이라 기존 호출부와 하위호환), `get_evidence(case_id, evidence_id) -> object`(없으면 `KeyError` — 유일하게 raise 허용: 인용 실재 검증이 이 예외에 기댐), `get_evidence_record(case_id, evidence_id) -> EvidenceRecord`(없으면 `KeyError` — get_evidence와 같은 계약), `list_evidence(case_id) -> list[EvidenceRecord]`(케이스의 전 레코드, 생성 순), `has_evidence(case_id, evidence_id) -> bool`, `put_code_knowledge(service: str, commit: str, spec: str) -> None`, `get_code_knowledge(service, commit) -> str | None`(캐시 미스는 None — §3.4).
+  - `InMemoryCaseStore(CaseStorePort)` — dict 기반. 개발·테스트·3b E2E용. (Mongo 구현은 계획 4.) 읽기 메서드는 전부 `self._evidence.get(case_id, {})`로 조회한다 — `defaultdict[case_id]`로 없는 케이스를 읽으면 빈 항목이 삽입되는 부작용이 있었다(Task 3 트리아지에서 deferred였던 항목, 최종 리뷰에서 fix).
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/domain/test_store.py`
 
@@ -358,17 +359,43 @@ Run: `.venv/bin/pytest tests/domain/test_store.py -v` → FAIL (ModuleNotFoundEr
 
 State에는 증거 id+요약만 남고 본문은 여기 있다. get_evidence의 KeyError는
 의도된 계약이다: 인용 실재 검증(verify)이 "없는 id 인용"을 이 예외로 잡는다.
+
+EvidenceRecord는 결과 봉투(Envelope)의 메타(as_of·complete·effective_as_of)를
+State 밖(Store)까지 실어 나른다 — 이게 없으면 3b의 EvidenceRef 조립이 불가능하고,
+verify의 "불완전 증거로 부정 결론 금지"가 저장 시점에 complete 기본값(True)으로
+사라져 거짓 통과가 된다(§4.2).
 """
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from datetime import datetime
+
+from src.config.schema_app import StrictModel
+from src.knowledge.digest import canonical_digest
+
+
+class EvidenceRecord(StrictModel):
+    id: str
+    source: str
+    body_digest: str            # canonical_digest(body)
+    as_of: datetime | None = None
+    complete: bool = True
+    effective_as_of: datetime | None = None
 
 
 class CaseStorePort(ABC):
     @abstractmethod
-    def put_evidence(self, case_id: str, source: str, body: object) -> str: ...
+    def put_evidence(self, case_id: str, source: str, body: object, *,
+                     as_of: datetime | None = None, complete: bool = True,
+                     effective_as_of: datetime | None = None) -> str: ...
 
     @abstractmethod
     def get_evidence(self, case_id: str, evidence_id: str) -> object: ...
+
+    @abstractmethod
+    def get_evidence_record(self, case_id: str, evidence_id: str) -> EvidenceRecord: ...
+
+    @abstractmethod
+    def list_evidence(self, case_id: str) -> list[EvidenceRecord]: ...
 
     @abstractmethod
     def has_evidence(self, case_id: str, evidence_id: str) -> bool: ...
@@ -382,21 +409,34 @@ class CaseStorePort(ABC):
 
 class InMemoryCaseStore(CaseStorePort):
     def __init__(self):
-        self._evidence: dict[str, dict[str, tuple[str, object]]] = defaultdict(dict)
+        self._evidence: dict[str, dict[str, tuple[object, EvidenceRecord]]] = {}
         self._counters: dict[str, int] = defaultdict(int)
         self._code: dict[tuple[str, str], str] = {}
 
-    def put_evidence(self, case_id, source, body):
+    def put_evidence(self, case_id, source, body, *,
+                     as_of=None, complete=True, effective_as_of=None):
         self._counters[case_id] += 1
         evidence_id = f"ev-{self._counters[case_id]}"
-        self._evidence[case_id][evidence_id] = (source, body)
+        record = EvidenceRecord(id=evidence_id, source=source,
+                                body_digest=canonical_digest(body),
+                                as_of=as_of, complete=complete,
+                                effective_as_of=effective_as_of)
+        self._evidence.setdefault(case_id, {})[evidence_id] = (body, record)
         return evidence_id
 
+    # 읽기 메서드는 전부 .get(case_id, {})로 조회한다 — defaultdict[case_id]로
+    # 없는 케이스를 읽으면 빈 딕셔너리가 삽입되는 부작용이 있었다(트리아지 권고).
     def get_evidence(self, case_id, evidence_id):
-        return self._evidence[case_id][evidence_id][1]     # 없으면 KeyError(계약)
+        return self._evidence.get(case_id, {})[evidence_id][0]     # 없으면 KeyError(계약)
+
+    def get_evidence_record(self, case_id, evidence_id):
+        return self._evidence.get(case_id, {})[evidence_id][1]     # 없으면 KeyError(계약)
+
+    def list_evidence(self, case_id):
+        return [record for _, record in self._evidence.get(case_id, {}).values()]
 
     def has_evidence(self, case_id, evidence_id):
-        return evidence_id in self._evidence[case_id]
+        return evidence_id in self._evidence.get(case_id, {})
 
     def put_code_knowledge(self, service, commit, spec):
         self._code[(service, commit)] = spec
@@ -414,6 +454,13 @@ git add src/domain/store.py tests/domain/test_store.py
 git commit -m "Add the case store holding evidence bodies and code knowledge"
 ```
 
+**최종 리뷰 수정 웨이브(C1, 별도 커밋)**: 위 코드가 최종본이다. 최초 커밋(`408822e`)은
+`put_evidence(case_id, source, body)`만 있었고 `EvidenceRecord`/`get_evidence_record`/
+`list_evidence`가 없었다 — 봉투 메타(as_of·complete·effective_as_of)가 Store 경계에서
+소실되는 C1 결함이었다. 신규 테스트는 `tests/domain/test_store.py`의
+`test_증거_레코드는_결과_봉투_메타를_왕복한다`·`test_봉투_메타_없이_호출하면_complete_기본값_True로_하위호환된다`·
+`test_list_evidence는_케이스별_생성_순으로_전_레코드를_반환한다` 참고.
+
 ---
 
 ### Task 4: LLM 층 — 구조화 출력 스키마 + 실구현/스크립트 가짜
@@ -427,10 +474,10 @@ git commit -m "Add the case store holding evidence bodies and code knowledge"
   - `FrameOutput(hypotheses: list[Hypothesis], tasks: list[PlanTask])`
   - `IntegrateOutput(hypotheses: list[Hypothesis]=[], new_tasks: list[PlanTask]=[], cancel_task_ids: list[str]=[], decision: Literal["continue","ask","conclude"], question: str|None=None)` — 검증자: decision=="ask"면 question 필수.
   - `SubagentReport(status: Literal["ok","error"], summary: str, evidence_ids: list[str]=[], error: str|None=None)`
-  - `parse_structured(text: str, model_cls) -> tuple[obj|None, str|None]` — 본문에서 JSON을 찾아 파싱: ```json 펜스 블록 우선, 없으면 첫 `{`부터 마지막 `}`까지. 성공 시 `(obj, None)`, 실패 시 `(None, "한국어 원인")`. **절대 raise하지 않는다.**
+  - `parse_structured(text: str|list, model_cls) -> tuple[obj|None, str|None]` — 본문에서 JSON을 찾아 파싱: ```json 펜스 블록 우선, 없으면 첫 `{`부터 마지막 `}`까지. 성공 시 `(obj, None)`, 실패 시 `(None, "한국어 원인")`. **절대 raise하지 않는다.** `text`가 `list`(langchain 메시지 content가 블록 리스트인 경우)면 텍스트 블록만 모아 문자열화하고, `str`도 `list`도 아니면 `(None, "문자열이 아닌 응답")`(최종 리뷰 I2 수정 — 이전엔 `.find`/`.rfind` 호출이 `TypeError`로 raise됐다).
 - Produces (llm.py):
   - `build_chat_model(model_name: str, *, base_url: str|None=None, api_key: str|None=None)` — `langchain_openai.ChatOpenAI` **지연 import**로 생성 (temperature=0). 게이트웨이 전제(스펙 §4.3).
-  - `ScriptedLLM(responses: list[str])` — 결정론 테스트용. `async def ainvoke(self, messages) -> AIMessage` — 호출 순서대로 예약 응답 반환, 소진되면 `RuntimeError("스크립트 소진")`. `.calls: list` 에 받은 메시지 기록(프롬프트 단언용). 노드가 요구하는 표면은 `ainvoke`뿐 — ChatOpenAI와 duck-type 호환.
+  - `ScriptedLLM(responses: list[str])` — 결정론 테스트용. `async def ainvoke(self, messages, config=None, **kwargs) -> AIMessage` — 호출 순서대로 예약 응답 반환, 소진되면 `RuntimeError("스크립트 소진")`. `.calls: list` 에 받은 메시지 기록(프롬프트 단언용). 노드가 요구하는 표면은 `ainvoke`뿐 — ChatOpenAI와 duck-type 호환. `config`/`**kwargs`는 최종 리뷰 M5에서 추가된 시그니처 하드닝(langgraph 호출부가 `config=`를 넘길 수 있음, 이전 시그니처는 그 경우 `TypeError`).
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -535,7 +582,22 @@ class SubagentReport(StrictModel):
 
 
 def parse_structured(text, model_cls):
-    """본문에서 JSON을 찾아 model_cls로 검증한다. 실패는 (None, 한국어 원인)."""
+    """본문에서 JSON을 찾아 model_cls로 검증한다. 실패는 (None, 한국어 원인).
+
+    text는 보통 str이지만 langchain 메시지 content가 블록 리스트일 수 있다
+    (예: [{"type": "text", "text": "..."}]) — 그 경우 텍스트 블록만 모아
+    문자열화한다. str도 list도 아니면 파싱을 시도하지 않고 오류를 반환한다.
+    """
+    if isinstance(text, list):
+        parts = []
+        for block in text:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(block.get("text") or "")
+        text = "".join(parts)
+    elif not isinstance(text, str):
+        return None, "문자열이 아닌 응답"
     match = _FENCE.search(text)
     candidate = match.group(1) if match else None
     if candidate is None:
@@ -573,7 +635,7 @@ class ScriptedLLM:
         self._responses = list(responses)
         self.calls = []
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None, **kwargs):
         self.calls.append(messages)
         if not self._responses:
             raise RuntimeError("스크립트 소진 — 예약된 응답보다 호출이 많다")
@@ -589,6 +651,13 @@ git add src/application/schemas.py src/infrastructure/llm.py \
         tests/application/test_schemas.py tests/infrastructure/test_llm.py
 git commit -m "Add structured-output schemas and a scripted test LLM"
 ```
+
+**최종 리뷰 수정 웨이브(I2·M5, 별도 커밋)**: 위 코드가 최종본이다. 최초 커밋(`7afa88e`)의
+`parse_structured`는 `text`가 str이 아니면(예: langchain 메시지 content가 블록 리스트인 경우)
+`text.find("{")`에서 `TypeError`로 raise됐다 — "절대 raise하지 않는다" 계약 위반(I2).
+`ScriptedLLM.ainvoke`도 `messages` 단일 인자만 받아 `config=`를 넘기는 호출부와 맞지
+않을 수 있었다(M5). 신규 테스트는 `tests/application/test_schemas.py`의
+`test_텍스트_블록_리스트_content도_모아서_파싱된다`·`test_문자열도_리스트도_아닌_content는_TypeError_대신_오류_반환` 참고.
 
 ---
 
@@ -738,12 +807,12 @@ git commit -m "Slice the topology upstream and assemble the case briefing"
 **Interfaces:**
 - Consumes: `AdapterSet`(계획 2 factory), `CaseStorePort`, `SubagentReport`/`parse_structured`(Task 4), `PlanTask`.
 - Produces:
-  - `make_tools(role: Role, *, adapters: AdapterSet, store: CaseStorePort, case_id: str) -> list` — 역할별 langchain `@tool` 목록:
+  - `make_tools(role: Role, *, adapters: AdapterSet, store: CaseStorePort, case_id: str) -> tuple[list, list[str]]` — `(도구 목록, created)`. `created`는 도구가 실제로 `store.put_evidence`를 호출해 만든 증거 id를 생성 순으로 담는 클로저 리스트다(최종 리뷰 I3 수정 — LLM이 최종 JSON에 echo하는 evidence_ids는 지어낼 수 있어 신뢰하지 않는다). 역할별 langchain `@tool` 목록:
     - `data_prober`: `mongo_find(collection, filter_json, limit)`, `mongo_count(collection, filter_json)`, `redis_get(key)`, `redis_scan(pattern)`, `redis_ttl(key)`, `kafka_read(topic, start_iso, end_iso)`, `kafka_group_offsets(group)`, `rest_get(endpoint)` — config에 없는 어댑터(None)는 도구 자체를 만들지 않는다.
     - `code_tracer`: `code_show(repo, commit, path)`, `code_grep(repo, commit, pattern)`, `code_head(repo)` — CodeRepoError는 도구 안에서 잡아 오류 문자열 반환(raise 금지).
-    - `recompute_verifier`: `get_evidence(evidence_id)`(Store 본문 조회 — 입력 증거 재독) + code_tracer 도구들.
-    - **모든 프로브 도구의 계약**: ProbeResult가 ok면 본문을 `store.put_evidence(case_id, source, body)`로 저장하고 `"[증거 {id}] {요약} (complete={bool}, effective_as_of={...})"` 문자열 반환. error면 `"[오류] {원인}"` 반환. **도구는 절대 raise하지 않는다.**
-  - `async run_subagent(task: PlanTask, *, adapters, store, llm, budget: int, case_id: str) -> SubagentReport` — `langchain.agents.create_agent(model=llm, tools=make_tools(...), system_prompt=역할별 한국어 프롬프트)`를 만들어 `ainvoke({"messages": [("user", 태스크 목표+입력 증거 id)]}, config={"recursion_limit": budget})`. 마지막 AI 메시지를 `parse_structured(SubagentReport)`. **최외곽 catch-all**: 어떤 예외(GraphRecursionError 포함)도 `SubagentReport(status="error", summary="", error=...)`로 변환. 파싱 실패도 error 보고.
+    - `get_evidence(evidence_id)`(Store 본문 조회 — 입력 증거 재독)는 **전 역할**에 제공한다(최종 리뷰 M4 수정 — 이전엔 `recompute_verifier` 전용이었다). 이 도구는 새 증거를 만들지 않으므로 `created`에는 넣지 않는다.
+    - **모든 프로브 도구의 계약**: ProbeResult가 ok면 본문을 `store.put_evidence(case_id, source, body, as_of=envelope.observed_at, complete=envelope.complete, effective_as_of=envelope.effective_as_of)`로 저장(최종 리뷰 C1 수정 — 이전엔 봉투 메타 없이 저장돼 Store의 `EvidenceRecord`가 항상 `complete=True` 기본값이었다)하고 `"[증거 {id}] {요약} (complete={bool}, effective_as_of={...})"` 문자열 반환. error면 `"[오류] {원인}"` 반환. **도구는 절대 raise하지 않는다.** 코드 도구(`code_show`/`code_grep`/`code_head`)는 `ProbeResult`/`Envelope`가 없어 메타 없이(기본값 `complete=True`) 저장한다.
+  - `async run_subagent(task: PlanTask, *, adapters, store, llm, budget: int, case_id: str) -> SubagentReport` — `langchain.agents.create_agent(model=llm, tools=make_tools(...)[0], system_prompt=역할별 한국어 프롬프트)`를 만들어 `ainvoke({"messages": [("user", 태스크 목표+입력 증거 id)]}, config={"recursion_limit": budget})`. 마지막 AI 메시지를 `.text`(문자열 보장 — 최종 리뷰 I2 수정, 이전엔 `.content`라 list content에서 파싱이 TypeError로 raise될 수 있었다)로 `parse_structured(SubagentReport)`. 파싱에 성공하면 `report.evidence_ids`를 LLM이 적은 값이 아니라 `created`(도구가 실제로 만든 id 전체, 생성 순)로 통째로 교체한다(I3) — 지어낸 인용은 사라지고 인용 누락된 실측 id는 보충된다. **최외곽 catch-all**: 어떤 예외(GraphRecursionError 포함)도 `SubagentReport(status="error", summary="", error=...)`로 변환. 파싱 실패도 error 보고.
   - 역할별 시스템 프롬프트(한국어, 모듈 상수): 공통 골자 — "너는 {역할}이다. 도구만으로 조사하고, 마지막에 반드시 JSON 하나로 보고하라: {\"status\": ..., \"summary\": ..., \"evidence_ids\": [도구가 준 증거 id들]}. 추측 금지, 도구 결과만 근거로."
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/application/test_subagents.py`
@@ -823,11 +892,17 @@ async def test_예산_초과와_파싱_실패는_error_보고다():
 
 
 async def test_config에_없는_어댑터의_도구는_만들지_않는다():
-    tools = make_tools("data_prober", adapters=_adapters(),
-                       store=InMemoryCaseStore(), case_id="c-1")
+    tools, _ = make_tools("data_prober", adapters=_adapters(),
+                          store=InMemoryCaseStore(), case_id="c-1")
     names = {t.name for t in tools}
     assert "mongo_find" in names and "redis_get" not in names   # SITE엔 mongo만
 ```
+
+(`tools, _ = make_tools(...)`는 최종 리뷰 I3 수정으로 `make_tools`가 `(tools, created)`
+튜플을 반환하게 되면서 바뀐 호출부다. 같은 최종 리뷰 웨이브에서 추가된 테스트
+—`test_LLM이_지어낸_증거_id는_보고에서_제거되고_누락된_실측_id는_보충된다`,
+`test_code_tracer_각본_code_show_호출_후_보고`(M6, code_tracer 역할 각본 커버리지 추가)—는
+`tests/application/test_subagents.py`를 참고.)
 
 - [ ] **Step 2: 실패 확인**
 
@@ -872,11 +947,26 @@ def _evidence_line(evidence_id, summary, envelope):
     eff = envelope.effective_as_of.isoformat() if envelope.effective_as_of else "-"
     return f"[증거 {evidence_id}] {summary} (complete={envelope.complete}, effective_as_of={eff})"
 
+# 코드 도구(_code_evidence_line)는 ProbeResult/Envelope가 없다(유일한 sync 포트) —
+# complete·effective_as_of를 논할 대상이 없어 간략한 "[증거 {id}] {요약}" 형식을 쓴다.
+
 
 def make_tools(role, *, adapters, store, case_id):
     tools = []
+    created: list[str] = []     # 도구가 실제로 만든 증거 id — LLM echo와 분리해 추적한다
 
-    if role in ("data_prober",) and adapters.mongo is not None:
+    def _put(source, body, envelope=None):
+        if envelope is not None:
+            evidence_id = store.put_evidence(case_id, source, body,
+                                             as_of=envelope.observed_at,
+                                             complete=envelope.complete,
+                                             effective_as_of=envelope.effective_as_of)
+        else:
+            evidence_id = store.put_evidence(case_id, source, body)
+        created.append(evidence_id)
+        return evidence_id
+
+    if role == "data_prober" and adapters.mongo is not None:
         @tool
         async def mongo_find(collection: str, filter_json: str, limit: int = 20) -> str:
             """Mongo 컬렉션을 필터로 조회한다. filter_json은 JSON 문자열."""
@@ -887,25 +977,27 @@ def make_tools(role, *, adapters, store, case_id):
             result = await adapters.mongo.find(collection, filter, limit=limit)
             if result.status == "error":
                 return f"[오류] {result.error}"
-            evidence_id = store.put_evidence(case_id, f"mongo:{collection}", result.data)
+            evidence_id = _put(f"mongo:{collection}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{collection} {len(result.data)}건", result.envelope)
         tools.append(mongo_find)
         # mongo_count도 같은 패턴으로 추가
 
     # data_prober: redis_get/redis_scan/redis_ttl(adapters.redis), kafka_read/
     # kafka_group_offsets(adapters.kafka), rest_get(adapters.rest) — 전부 같은 패턴:
-    #   어댑터 None이면 도구 생성 안 함 / ok→store.put_evidence→[증거 ...] / error→[오류 ...]
-    # code_tracer: code_show/code_grep/code_head — adapters.code 사용, CodeRepoError는
-    #   try/except로 잡아 "[오류] ..." 반환. 결과 본문도 store.put_evidence로 저장.
-    # recompute_verifier: get_evidence(evidence_id) — store 본문을 JSON 문자열로 반환
-    #   (없는 id는 "[오류] 없는 증거 id") + code_tracer 도구 일체.
-    return tools
+    #   어댑터 None이면 도구 생성 안 함 / ok→_put(source, body, result.envelope)→[증거 ...] / error→[오류 ...]
+    # code_tracer/recompute_verifier: code_show/code_grep/code_head — adapters.code 사용,
+    #   CodeRepoError는 try/except로 잡아 "[오류] ..." 반환. _put(source, body)로 저장하되
+    #   envelope가 없으니 두 번째 인자 없이 호출(complete=True 기본값).
+    # get_evidence(evidence_id): store 본문을 JSON 문자열로 반환(없는 id는
+    #   "[오류] 없는 증거 id") — 새 증거를 만들지 않으니 created에 안 넣는다.
+    #   role 조건 없이 전 역할에 추가한다(M4 — recompute_verifier 전용에서 해제).
+    return tools, created
 
 
 async def run_subagent(task: PlanTask, *, adapters, store, llm, budget, case_id) -> SubagentReport:
     from langchain.agents import create_agent   # 지연 import
 
-    tools = make_tools(task.role, adapters=adapters, store=store, case_id=case_id)
+    tools, created = make_tools(task.role, adapters=adapters, store=store, case_id=case_id)
     goal = task.goal
     if task.input_evidence_ids:
         goal += f"\n입력 증거 id: {', '.join(task.input_evidence_ids)}"
@@ -913,11 +1005,14 @@ async def run_subagent(task: PlanTask, *, adapters, store, llm, budget, case_id)
         agent = create_agent(model=llm, tools=tools, system_prompt=_PROMPTS[task.role])
         result = await agent.ainvoke({"messages": [("user", goal)]},
                                      config={"recursion_limit": budget})
-        final = result["messages"][-1].content
+        final = result["messages"][-1].text   # .content 대신 — 문자열을 보장한다(I2)
         report, err = parse_structured(final, SubagentReport)
         if report is None:
             return SubagentReport(status="error", summary="",
                                   error=f"보고 JSON 파싱 실패 — {err}")
+        # LLM이 적은 evidence_ids는 신뢰하지 않는다 — 도구가 실제로 만든 id(created)로
+        # 통째로 교체한다: 지어낸 인용은 사라지고, 인용을 빠뜨린 실측 id는 보충된다.
+        report.evidence_ids = created
         return report
     except Exception as exc:   # 예산 초과(GraphRecursionError) 포함 — raise 금지 계약
         return SubagentReport(status="error", summary="",
@@ -934,6 +1029,14 @@ Run: `.venv/bin/pytest tests/application/test_subagents.py -v` → PASS, 전체 
 git add src/application/subagents.py tests/application/test_subagents.py
 git commit -m "Run role subagents as budgeted create_agent loops over stored evidence"
 ```
+
+**최종 리뷰 수정 웨이브(C1·I3·I2·M4, 별도 커밋)**: 위 코드가 최종본이다. 최초 커밋
+(`c8bb2d5`)은 `make_tools`가 `list`만 반환했고, `store.put_evidence`를 봉투 메타 없이
+호출했으며, `get_evidence`는 `recompute_verifier` 전용이었고, 최종 메시지를 `.content`로
+읽어 비-str content에서 `TypeError`가 날 수 있었다. 최종 리뷰(2026-09-03)가 이를 C1(봉투
+메타 소실)·I3(LLM이 지어낸 증거 id를 그대로 신뢰)·I2(비-str content로 raise)·M4(get_evidence
+역할 제한)로 지적해 위와 같이 고쳤다. `src/domain/store.py`(Task 3 절 참고)의
+`EvidenceRecord`·확장된 `put_evidence` 시그니처가 이 수정의 전제다.
 
 ---
 

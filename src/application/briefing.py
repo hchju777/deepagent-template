@@ -9,7 +9,10 @@ from src.knowledge.topology import Topology
 
 
 def upstream_slice(topology, start_locator, *, max_depth=3):
-    # 시작 locator에서 상류로 유계 BFS를 수행한다.
+    """시작 locator에서 상류로 유계 BFS를 수행한다.
+
+    max_depth=0은 빈 슬라이스를 반환한다 — 시작 locator 자체도 확장하지 않는다.
+    """
     services, derivations = {}, {}
     queue = deque([(start_locator, 0)])
     seen = {start_locator}
