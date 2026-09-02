@@ -56,3 +56,10 @@ def test_끝점_메타문자와_개행_우회_차단():
     assert endpoint_allowed("/api/v1/tags/x/PLC.Line7.Value",
                             {"/api/v1/tags/{tag}/PLC.Line7.Value"})
     assert not endpoint_allowed("/api/v1/lines/7/oee\n", {"/api/v1/lines/{line}/oee"})
+
+
+def test_끝점_경로_순회와_퍼센트_인코딩_차단():
+    patterns = {"/api/v1/lines/{line}/oee"}
+    assert not endpoint_allowed("/api/v1/lines/../oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/./oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/%2e%2e/oee", patterns)

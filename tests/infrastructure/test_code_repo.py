@@ -29,3 +29,9 @@ def test_grep과_미등록_repo(repo):
     assert hits and "svc.py" in hits[0]
     with pytest.raises(CodeRepoError, match="등록"):
         reader.head("ghost-repo")
+
+
+def test_대시로_시작하는_패턴도_안전(repo):
+    reader = CodeRepoReader({"twin-services": repo})
+    head = reader.head("twin-services")
+    assert reader.grep("twin-services", head, "-v") == []   # 옵션이 아니라 리터럴 패턴

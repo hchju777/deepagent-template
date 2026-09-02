@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 _AGG_ALLOW = {"$match", "$project", "$group", "$sort", "$limit", "$skip", "$count", "$unwind"}
 _AGG_BANNED_NESTED = {"$function", "$accumulator", "$where"}
 _FILTER_ALLOW = {"$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin",
-                 "$exists", "$regex", "$and", "$or"}
+                 "$exists", "$regex", "$options", "$and", "$or"}
 _READONLY_ROLES = {"read", "readAnyDatabase"}
 
 
@@ -57,7 +57,17 @@ def filter_problems(filter):
 
 
 def endpoint_allowed(endpoint, patterns):
-    """토폴로지 패턴과의 전체 일치 판정. 리터럴 구간은 이스케이프, {자리표시자}는 [^/]+."""
+    """토폴로지 패턴과의 전체 일치 판정. 리터럴 구간은 이스케이프, {자리표시자}는 [^/]+.
+
+    경로 순회(.., .)와 퍼센트 인코딩은 패턴 매칭 전에 조기 거부한다. `{자리표시자}`가
+    `[^/]+`로 컴파일되므로 `/api/v1/lines/../oee`가 자리표시자 구간과 매치되어
+    통과해버리는데, httpx가 이를 다시 `/api/v1/oee`로 정규화해 실제로는 비허용
+    끝점에 도달한다(실증됨) — `%2e%2e` 같은 퍼센트 인코딩도 동일하게 우회로 쓰인다.
+    """
+    if "%" in endpoint:
+        return False
+    if any(segment in (".", "..") for segment in endpoint.split("/")):
+        return False
     for pattern in patterns:
         parts = re.split(r"\{[^/}]+\}", pattern)
         regex = "[^/]+".join(re.escape(part) for part in parts)

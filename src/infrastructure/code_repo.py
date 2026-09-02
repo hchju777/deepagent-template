@@ -20,8 +20,11 @@ class CodeRepoReader(CodeRepoReaderPort):
     def _run(self, repo: str, *args: str) -> subprocess.CompletedProcess:
         if repo not in self._repos:
             raise CodeRepoError(f"레포 {repo!r}는 config에 등록돼 있지 않다")
-        return subprocess.run(["git", "-C", str(self._repos[repo]), *args],
-                              capture_output=True, text=True)
+        try:
+            return subprocess.run(["git", "-C", str(self._repos[repo]), *args],
+                                  capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            raise CodeRepoError(f"{repo}: git 명령 시간 초과(30s) — {' '.join(args)}") from exc
 
     def hash_exists(self, repo, commit):
         return self._run(repo, "cat-file", "-e", f"{commit}^{{commit}}").returncode == 0
@@ -39,7 +42,9 @@ class CodeRepoReader(CodeRepoReaderPort):
         return proc.stdout.strip()
 
     def grep(self, repo, commit, pattern):
-        proc = self._run(repo, "grep", "-n", pattern, commit)
+        # -e로 패턴을 명시적으로 구분한다 — 아니면 "-v" 같은 패턴이 git grep 옵션으로
+        # 파싱돼(예: -v는 매치 반전) 인자 주입이 된다(실증됨).
+        proc = self._run(repo, "grep", "-n", "-e", pattern, commit)
         if proc.returncode > 1:                      # 1 = 매치 없음(정상), >1 = 오류
             raise CodeRepoError(f"{repo}@{commit[:7]} grep 실패 — {proc.stderr.strip()}")
         return [line.split(":", 1)[1] if ":" in line else line

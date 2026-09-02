@@ -1,8 +1,16 @@
 """Kafka 실구현 — aiokafka. group_id=None + assign()로 컨슈머 그룹 미참여, 커밋 계열 호출 없음.
 
-read: partitions_for_topic → assign() → offsets_for_times로 시작 오프셋을 찾고,
-결과가 None인 파티션은 beginning_offsets로 seek한 뒤 실제 수집된 첫 메시지 시각을
-kafka_effective_start에 넘겨 폴백 여부를 봉투에 명시한다.
+read: partitions_for_topic → assign() → 모든 파티션에 대해 beginning_offsets와
+offsets_for_times를 함께 조회한다. aiokafka의 offsets_for_times는 "start 이후
+메시지가 없을 때"(빈 파티션·미래 시각)만 None을 준다 — start가 보존 범위보다
+오래됐으면 None이 아니라 earliest 오프셋과 그 오프셋의(요청보다 나중인) 실제
+타임스탬프를 정상 반환한다. 그래서 폴백 여부는 None 체크가 아니라
+`resolved[tp].offset == beginning_offset(tp) and resolved[tp].timestamp > start_ms`
+로 판정하고, 봉투 effective_as_of는 폴백 파티션들의 resolved 타임스탬프 중
+최솟값(earliest)을 kafka_effective_start에 넘겨 명시한다(조용한 폴백 금지, §4.2).
+수집 루프는 파티션별로 end 이후 레코드를 처음 본 순간 그 파티션을 완료 처리해
+폴링 대상에서 뺀다 — 그래야 라이브 토픽에서도(계속 새 레코드가 들어와
+empty_polls가 리셋되는 상황) 전 파티션이 끝났을 때 확정적으로 종료한다.
 group_offsets: AIOKafkaAdminClient로 다른 그룹의 커밋 오프셋을 "읽기만" 하고,
 end_offsets는 group_id=None 컨슈머로 조회한다 — 어느 쪽도 커밋하지 않는다.
 """
@@ -48,26 +56,47 @@ class RealKafka(KafkaInspectorPort):
 
                 start_ms = int(start.timestamp() * 1000)
                 end_ms = int(end.timestamp() * 1000)
+
+                # 폴백 판정에 전 파티션의 beginning_offsets가 필요하다 — offsets_for_times가
+                # None을 주지 않고도(보존 밖) earliest로 조용히 폴백할 수 있어서(위 독스트링).
+                beginnings = await consumer.beginning_offsets(tps)
                 resolved = await consumer.offsets_for_times({tp: start_ms for tp in tps})
-                fallback_tps = [tp for tp in tps if resolved.get(tp) is None]
-                beginnings = (await consumer.beginning_offsets(fallback_tps)
-                             if fallback_tps else {})
+
+                fallback_tps = [
+                    tp for tp in tps
+                    if resolved.get(tp) is not None
+                    and resolved[tp].offset == beginnings.get(tp)
+                    and resolved[tp].timestamp is not None
+                    and resolved[tp].timestamp > start_ms]
+
                 for tp in tps:
                     hit = resolved.get(tp)
                     consumer.seek(tp, hit.offset if hit is not None else beginnings[tp])
 
                 cap = self._guards.max_rows
                 records, empty_polls = [], 0
-                while len(records) <= cap and empty_polls < _MAX_EMPTY_POLLS:
+                tps_pending = set(tps)          # end 이후를 본 파티션은 여기서 빠진다
+                while tps_pending and len(records) <= cap and empty_polls < _MAX_EMPTY_POLLS:
                     batch = await consumer.getmany(
-                        *tps, timeout_ms=_POLL_TIMEOUT_MS, max_records=cap + 1 - len(records))
+                        *tps_pending, timeout_ms=_POLL_TIMEOUT_MS,
+                        max_records=cap + 1 - len(records))
                     fetched = [rec for recs in batch.values() for rec in recs]
                     if not fetched:
                         empty_polls += 1
                         continue
                     empty_polls = 0
-                    records.extend(rec for rec in fetched
-                                   if rec.timestamp is None or rec.timestamp < end_ms)
+                    for tp, recs in batch.items():
+                        for rec in recs:
+                            if rec.timestamp is None or rec.timestamp < end_ms:
+                                records.append(rec)
+                            else:
+                                # end 이후 레코드를 이 파티션에서 처음 본 순간 완료 —
+                                # 계속 폴링하면 라이브 토픽에서 empty_polls가 매번
+                                # 리셋되어 수집 루프가 끝나지 않는다.
+                                tps_pending.discard(tp)
+                                break
+                    if len(records) > cap:      # max_rows 도달 시 즉시 종료
+                        break
 
                 records.sort(key=lambda r: (r.timestamp or 0, r.partition, r.offset))
                 truncated = len(records) > cap
@@ -77,11 +106,7 @@ class RealKafka(KafkaInspectorPort):
 
                 effective_as_of = None
                 if fallback_tps:
-                    fallback_parts = {tp.partition for tp in fallback_tps}
-                    earliest_candidates = [r["timestamp"] for r in data
-                                           if r["partition"] in fallback_parts
-                                           and r["timestamp"] is not None]
-                    earliest_ts = max(earliest_candidates) if earliest_candidates else None
+                    earliest_ts = min(resolved[tp].timestamp for tp in fallback_tps)
                     effective_as_of, _ = kafka_effective_start(start, None, earliest_ts)
 
                 env = Envelope(observed_at=self._clock(), complete=not truncated,

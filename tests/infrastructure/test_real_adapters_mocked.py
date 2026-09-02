@@ -38,8 +38,8 @@ class _FakeCollection:
     def __init__(self, docs):
         self._docs = docs
 
-    async def aggregate(self, pipeline):     # pymongo AsyncCollection.aggregate처럼 코루틴
-        return _FakeCursor(self._docs)
+    async def aggregate(self, pipeline, **kwargs):   # pymongo AsyncCollection.aggregate처럼 코루틴
+        return _FakeCursor(self._docs)                # maxTimeMS 등 커맨드 옵션은 무시하고 받기만
 
 
 class _FakeDB:
@@ -146,3 +146,67 @@ async def test_kafka_read는_메타데이터_없는_토픽을_error로_구분한
 
     assert res.status == "error"
     assert "토픽 메타데이터 없음" in res.error
+
+
+# ---- offsets_for_times는 "start 이후 메시지가 없을 때"만 None을 준다. start가
+#      보존 범위보다 오래됐으면 None이 아니라 earliest 오프셋 + 그보다 나중인
+#      실제 타임스탬프를 정상 반환한다 — 이 폴백을 놓치면 오염된 evidence를
+#      T0 evidence로 위장해 봉투에 내보내게 된다. ----
+
+class _RetentionFallbackConsumer(_FakeConsumer):
+    async def offsets_for_times(self, timestamps):
+        # None이 아니라 earliest(=beginning_offsets와 같은 offset)와 요청보다
+        # 나중인 타임스탬프를 준다 — 진짜 aiokafka의 보존-밖 응답 모양.
+        return {tp: _FakeOffsetAndTimestamp(offset=0, timestamp=ts + 5000)
+                for tp, ts in timestamps.items()}
+
+
+async def test_kafka_read는_None이_아닌_보존_밖_폴백도_감지한다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer",
+                        _RetentionFallbackConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    assert res.status == "ok"
+    start_ms = int(T.timestamp() * 1000)
+    assert res.envelope.effective_as_of == datetime.fromtimestamp(
+        (start_ms + 5000) / 1000, tz=timezone.utc)
+
+
+# ---- 라이브 토픽은 end 이후 레코드를 계속 내놓을 수 있다 — 파티션별로 완료
+#      처리를 안 하면 empty_polls가 매번 리셋돼 수집 루프가 안 끝난다. ----
+
+class _LiveTopicConsumer(_FakeConsumer):
+    async def getmany(self, *partitions, timeout_ms=0, max_records=None):
+        self._getmany_calls += 1
+        tp = partitions[0] if partitions else None
+        if tp is None:
+            return {}
+        end_ms = int(datetime(2026, 9, 3, tzinfo=timezone.utc).timestamp() * 1000)
+        if self._getmany_calls == 1:
+            ts = int(T.timestamp() * 1000)
+            rec = _FakeRecord(tp.topic, tp.partition, 0, ts, None, {"n": 1})
+            return {tp: [rec]}
+        # end 이후 레코드를 영원히 내놓는다(라이브 트래픽 시뮬레이션) — 파티션별
+        # 완료 처리가 없으면 이 fixture로 수집 루프가 결코 끝나지 않는다.
+        rec = _FakeRecord(tp.topic, tp.partition, self._getmany_calls,
+                          end_ms + 100_000, None, {"n": "late"})
+        return {tp: [rec]}
+
+
+async def test_kafka_read는_라이브_토픽에서_파티션별로_확정_종료한다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer", _LiveTopicConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    # 고침 전에는 empty_polls가 매번 리셋돼 guarded_call의 타임아웃(1s)으로만
+    # 끝나 status="error"가 된다 — 고친 뒤에는 파티션이 완료 처리되어 곧바로 ok.
+    res = await asyncio.wait_for(
+        kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc)),
+        timeout=5)
+
+    assert res.status == "ok"
+    assert len(res.data) == 1
+    assert res.data[0]["value"] == {"n": 1}

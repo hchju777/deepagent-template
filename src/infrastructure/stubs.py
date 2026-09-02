@@ -63,6 +63,9 @@ def _match(doc, filter):
                 if op == "$nin" and value in rhs: return False
                 if op == "$exists" and (field in doc) != bool(rhs): return False
                 if op == "$regex" and not (isinstance(value, str) and re.search(rhs, value)): return False
+                # $options는 query_rules의 allowlist에 있지만(표준 $regex 짝) 여기서는
+                # 평가하지 않는다 — re.search에 플래그를 안 넘겨도 매치 결과 자체는
+                # 안전 쪽(더 좁게 매치)이라 no-raise 계약을 깨지 않는다.
         elif doc.get(field) != cond:
             return False
     return True
@@ -78,11 +81,14 @@ class StubMongo(MongoReaderPort):
             return _err("; ".join(problems), self._clock)
         try:
             docs = [d for d in self._cols.get(collection, []) if _match(d, filter)]
+            # sort도 try 안에서: 정렬 필드가 문서마다 없거나 타입이 섞이면 None과
+            # 다른 타입 비교로 TypeError가 날 수 있다 — no-raise 계약(§5.4)을 지키려면
+            # 여기서 잡아 error 결과로 돌려야 한다.
+            if sort:
+                for field, direction in reversed(sort):
+                    docs.sort(key=lambda d: d.get(field), reverse=direction < 0)
         except Exception as exc:
             return _err(f"filter 구조 오류 — {type(exc).__name__}: {exc}", self._clock)
-        if sort:
-            for field, direction in reversed(sort):
-                docs.sort(key=lambda d: d.get(field), reverse=direction < 0)
         cap = min(limit, self._max_rows) if limit else self._max_rows
         truncated = len(docs) > cap
         env = Envelope(observed_at=self._clock(), complete=not truncated,

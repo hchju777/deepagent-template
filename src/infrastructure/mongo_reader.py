@@ -33,7 +33,12 @@ class RealMongo(MongoReaderPort):
 
         async def op():
             cap = min(limit, self._guards.max_rows) if limit else self._guards.max_rows
-            cursor = self._db[collection].find(filter, sort=sort, limit=cap + 1)
+            # 서버측 시간 상한(원칙 ③) — 클라이언트가 guarded_call 타임아웃으로 취소한
+            # 뒤에도 서버가 쿼리를 계속 도는 것을 막는다. find()는 Cursor 파라미터라
+            # snake_case(max_time_ms), count/aggregate는 커맨드 옵션이라 camelCase(maxTimeMS).
+            cursor = self._db[collection].find(
+                filter, sort=sort, limit=cap + 1,
+                max_time_ms=int(self._guards.timeout_s * 1000))
             docs = [d async for d in cursor]
             truncated = len(docs) > cap
             env = Envelope(observed_at=self._clock(), complete=not truncated,
@@ -47,7 +52,8 @@ class RealMongo(MongoReaderPort):
             return self._rule_violation("; ".join(problems))
 
         async def op():
-            n = await self._db[collection].count_documents(filter)
+            n = await self._db[collection].count_documents(
+                filter, maxTimeMS=int(self._guards.timeout_s * 1000))
             return n, Envelope(observed_at=self._clock())
         return await self._call(op)
 
@@ -59,7 +65,8 @@ class RealMongo(MongoReaderPort):
         async def op():
             cap = self._guards.max_rows
             docs = []
-            cursor = await self._db[collection].aggregate(pipeline)  # aggregate()는 코루틴 — await 필수
+            cursor = await self._db[collection].aggregate(
+                pipeline, maxTimeMS=int(self._guards.timeout_s * 1000))  # aggregate()는 코루틴 — await 필수
             async for doc in cursor:
                 docs.append(doc)
                 if len(docs) > cap:          # 상한+1에서 멈춰 무제한 결과 집합을 막는다

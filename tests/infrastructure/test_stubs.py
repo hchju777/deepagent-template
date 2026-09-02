@@ -62,3 +62,9 @@ async def test_mongo_스텁_잘못된_구조는_error_결과():
     stub = StubMongo({"c": [{"a": 1}]}, max_rows=10, clock=CLOCK)
     res = await stub.find("c", {"$and": {"a": 1}})
     assert res.status == "error" and "구조 오류" in res.error
+
+
+async def test_mongo_스텁_sort_필드_부재도_error_결과():
+    stub = StubMongo({"c": [{"a": 1}, {"b": 2}]}, max_rows=10, clock=CLOCK)
+    res = await stub.find("c", {}, sort=[("a", 1)])
+    assert res.status == "error"

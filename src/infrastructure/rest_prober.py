@@ -29,5 +29,10 @@ class RealRest(RestProberPort):
                 body = response.json()
             except ValueError:
                 body = response.text
-            return body, Envelope(observed_at=self._clock())
+            # status_code를 폐기하지 않는다 — 4xx/5xx도 status="ok"로 유지한 채
+            # status_code로 판별하게 한다. 이 프로버는 모니터링 목적이라 오류
+            # 응답 자체가 유효한 관측 증거이지, 어댑터 실패(guarded_call의 error)가
+            # 아니다.
+            data = {"status_code": response.status_code, "body": body}
+            return data, Envelope(observed_at=self._clock())
         return await self._call(op)
