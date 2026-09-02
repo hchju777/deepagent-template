@@ -4,6 +4,7 @@
 "위험 연산 거부·절단 마킹·as_of 폴백 명시"라는 계약 자체를 검증한다.
 """
 import fnmatch
+import re
 from datetime import datetime
 
 from src.domain.envelope import Envelope, ProbeResult
@@ -61,6 +62,7 @@ def _match(doc, filter):
                 if op == "$in" and value not in rhs: return False
                 if op == "$nin" and value in rhs: return False
                 if op == "$exists" and (field in doc) != bool(rhs): return False
+                if op == "$regex" and not (isinstance(value, str) and re.search(rhs, value)): return False
         elif doc.get(field) != cond:
             return False
     return True
@@ -74,7 +76,10 @@ class StubMongo(MongoReaderPort):
         problems = filter_problems(filter)
         if problems:
             return _err("; ".join(problems), self._clock)
-        docs = [d for d in self._cols.get(collection, []) if _match(d, filter)]
+        try:
+            docs = [d for d in self._cols.get(collection, []) if _match(d, filter)]
+        except Exception as exc:
+            return _err(f"filter 구조 오류 — {type(exc).__name__}: {exc}", self._clock)
         if sort:
             for field, direction in reversed(sort):
                 docs.sort(key=lambda d: d.get(field), reverse=direction < 0)
@@ -88,7 +93,10 @@ class StubMongo(MongoReaderPort):
         problems = filter_problems(filter)
         if problems:
             return _err("; ".join(problems), self._clock)
-        n = sum(1 for d in self._cols.get(collection, []) if _match(d, filter))
+        try:
+            n = sum(1 for d in self._cols.get(collection, []) if _match(d, filter))
+        except Exception as exc:
+            return _err(f"filter 구조 오류 — {type(exc).__name__}: {exc}", self._clock)
         return _ok(n, Envelope(observed_at=self._clock()))
 
     async def aggregate(self, collection, pipeline):
@@ -98,10 +106,16 @@ class StubMongo(MongoReaderPort):
         docs = list(self._cols.get(collection, []))
         for stage in pipeline:                      # 최소 평가: $match·$count만
             if "$match" in stage:
-                docs = [d for d in docs if _match(d, stage["$match"])]
+                try:
+                    docs = [d for d in docs if _match(d, stage["$match"])]
+                except Exception as exc:
+                    return _err(f"filter 구조 오류 — {type(exc).__name__}: {exc}", self._clock)
             elif "$count" in stage:
                 docs = [{stage["$count"]: len(docs)}]
-        return _ok(docs[: self._max_rows], Envelope(observed_at=self._clock()))
+        truncated = len(docs) > self._max_rows
+        env = Envelope(observed_at=self._clock(), complete=not truncated,
+                       truncated_reason="max_rows" if truncated else None)
+        return _ok(docs[: self._max_rows], env)
 
 
 class StubKafka(KafkaInspectorPort):
@@ -117,8 +131,8 @@ class StubKafka(KafkaInspectorPort):
         effective = None
         if msgs and start < msgs[0]["ts"]:          # 보존 밖 → earliest 폴백 명시
             effective = msgs[0]["ts"]
-        window = [m for m in msgs if start <= m["ts"] < end or
-                  (effective and m["ts"] < end)]
+        effective_start = effective or start
+        window = [m for m in msgs if effective_start <= m["ts"] < end]
         truncated = len(window) > self._max_rows
         env = Envelope(observed_at=self._clock(), complete=not truncated,
                        truncated_reason="max_rows" if truncated else None,
