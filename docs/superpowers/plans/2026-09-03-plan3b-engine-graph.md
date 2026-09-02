@@ -58,7 +58,9 @@ verify → (문제+첫 시도→conclude 재작성 | 통과·강등→END)
 - `Case.target_locator: str | None = None` — 증상의 토폴로지 끝점(순찰 Finding의 target/접수 시 해석). frame이 슬라이스 시작점으로 사용, None이면 빈 슬라이스.
 - `EngineDeps` (dataclass): `lead_llm`(ainvoke 표면), `subagent_llm`(BaseChatModel), `adapters: AdapterSet`, `store: CaseStorePort`, `topology: Topology`, `engine_cfg: EngineConfig`, `rules_text: str = ""`, `history_text: str = ""`, `docs_text: str = ""`.
 - `make_nodes(deps: EngineDeps) -> dict[str, Callable]` — 이 태스크에서는 `"frame"`만 구현(이후 태스크가 같은 dict에 추가). 반환 노드는 전부 `async def node(state: CaseState) -> dict`.
-- `frame(state)`: ① briefing 조립(`upstream_slice(deps.topology, case.target_locator)` — None이면 빈 Topology) ② lead_llm에 브리핑+지시(FrameOutput JSON, id 규약 h-*/t-*) ③ `parse_structured(FrameOutput)` 실패 시 오류를 붙여 재시도 1회 ④ 성공: `{"hypotheses": [...], "plan_tasks": [...]}` / 이중 실패: `{"verdict": Verdict(verdict_type="degraded", confidence="low", narrative="frame 출력 파싱 실패 — 조사 개시 불가", caveats=[원인])}`.
+- `frame(state)`: ① briefing 조립(`upstream_slice(deps.topology, case.target_locator)` — None이면 빈 Topology) ② lead_llm에 브리핑+지시(FrameOutput JSON, id 규약 h-*/t-*) ③ `parse_structured(FrameOutput)` 실패 시 오류를 붙여 재시도 1회 ④ 성공: `output.tasks` 전부 `_sanitize_new_task`로 소독한 뒤 `{"hypotheses": [...], "plan_tasks": [소독된 tasks]}` / 이중 실패: `{"verdict": Verdict(verdict_type="degraded", confidence="low", narrative="frame 출력 파싱 실패 — 조사 개시 불가", caveats=[원인])}`.
+- `_sanitize_new_task(task: PlanTask) -> PlanTask` (최종 리뷰 C1): LLM이 만든 태스크의 `status`/`result_summary`/`result_evidence_ids`/`error`를 각각 `"pending"`/`None`/`[]`/`None`으로 강제 초기화한다 — 수명주기 전이는 코드만 쥔다(§2.2). frame의 `output.tasks`(이 태스크)와 integrate(Task 3)의 `new_tasks` 양쪽에 적용한다. 소독 없이는 LLM이 `"status": "running"`을 실어 select 게이트·병렬 폭을 우회해 곧장 fan-out될 수 있었다(실증됨).
+- `_ask_llm(llm, prompt, schema)` (최종 리뷰 I4): 1차 `llm.ainvoke` 자체가 던지는 전송 예외(네트워크·게이트웨이 오류 등)도 잡는다 — 실패하면 재시도 없이 즉시 `(None, "LLM 호출 실패 — ...")`을 반환한다. 파싱 실패 후의 재시도 `ainvoke` 호출도 각자 try/except로 감싼다 — 어느 경로든 "노드는 raise하지 않는다"는 계약이 유지된다.
 - `route_after_frame(state) -> str`: `state.verdict`가 있으면 `"__end__"` 아니면 `"select"`. (graph.py에서 END 심볼로 매핑.)
 - frame 프롬프트(모듈 상수, 한국어): 브리핑을 주고 — "가설(h-1..)과 조사 태스크(t-1.., role은 data_prober/code_tracer/recompute_verifier 중 하나, 재계산 태스크는 input_evidence_ids에 의존 증거 id)를 세워라. 반드시 JSON 하나만: {\"hypotheses\": [...], \"tasks\": [...]}" + 필드 스키마 예시.
 
@@ -123,6 +125,43 @@ async def test_route_after_frame():
     deps = _deps(["x", "y"])
     failed = state.model_copy(update=await make_nodes(deps)["frame"](state))
     assert route_after_frame(failed) == "__end__"
+
+
+FRAME_JSON_INJECTED_STATUS = (
+    '{"hypotheses": [{"id": "h-1", "statement": "계산 이상"}], '
+    '"tasks": [{"id": "t-1", "goal": "twin_state 조회", "role": "data_prober", '
+    '"status": "running", "result_summary": "가짜 요약", '
+    '"result_evidence_ids": ["ev-x"], "error": "가짜 오류"}]}')
+
+
+async def test_frame은_LLM이_주입한_태스크_상태를_pending으로_강제한다():
+    # frame 각본이 status=running·result_evidence_ids를 실어 보내도(주입) select
+    # 게이트·폭을 우회해 곧장 fan-out되면 안 된다(C1) — State에는 pending·빈 결과로 들어가야 한다.
+    deps = _deps([FRAME_JSON_INJECTED_STATUS])
+    update = await make_nodes(deps)["frame"](_state())
+    task = update["plan_tasks"][0]
+    assert task.status == "pending"
+    assert task.result_summary is None
+    assert task.result_evidence_ids == []
+    assert task.error is None
+
+
+class _RaisingLLM:
+    """ainvoke 자체가 전송 예외를 던지는 가짜 — I4가 이를 잡는지 검증한다."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def ainvoke(self, messages, config=None, **kwargs):
+        self.calls.append(messages)
+        raise RuntimeError("네트워크 오류")
+
+
+async def test_LLM_호출_자체가_실패해도_raise없이_degraded로_강등한다():
+    deps = _deps([])
+    deps.lead_llm = _RaisingLLM()
+    update = await make_nodes(deps)["frame"](_state())      # raise되면 이 줄에서 테스트가 실패한다
+    assert update["verdict"].verdict_type == "degraded"
 ```
 
 - [ ] **Step 2: 실패 확인** — `.venv/bin/pytest tests/application/test_nodes_frame.py -v` → FAIL
@@ -219,6 +258,14 @@ def route_after_frame(state):
 git add src/domain/case.py src/application/deps.py src/application/nodes.py tests/application/test_nodes_frame.py
 git commit -m "Frame a case into hypotheses and a plan, degrading on parse failure"
 ```
+
+**최종 리뷰 수정 웨이브(C1·I4, 별도 커밋)**: 위 코드가 최종본이다. 최초 커밋(`abcc099`)은
+`frame`이 `output.tasks`를 소독 없이 그대로 `plan_tasks`에 실었다 — LLM 각본이
+`"status": "running"`을 실으면 select 게이트·병렬 폭을 우회해 곧장 fan-out됐다(C1, 실증됨).
+또 `_ask_llm`이 `llm.ainvoke` 자체의 전송 예외를 잡지 않아 실 LLM 네트워크 오류가 노드
+밖으로 raise될 수 있었다(I4). 신규 테스트는 `tests/application/test_nodes_frame.py`의
+`test_frame은_LLM이_주입한_태스크_상태를_pending으로_강제한다`·
+`test_LLM_호출_자체가_실패해도_raise없이_degraded로_강등한다` 참고.
 
 ---
 
@@ -337,10 +384,10 @@ git commit -m "Gate, fan out, and execute plan tasks into enveloped evidence"
 - Test: `tests/application/test_nodes_integrate.py`
 
 **Interfaces:**
-- `integrate(state)`: ① 프롬프트: 가설 보드, 태스크 현황(ok/error/pending 요약 + error 원인), 증거 목록(id·summary·complete·effective_as_of), 라운드 `{round+1}/{max_rounds}` ② `_ask_llm(IntegrateOutput)` ③ update 조립:
-  - `hypotheses`: 그대로 병합. `new_tasks`: **기존 id와 충돌하면 드롭하고 `qa_log`에 `{"kind": "task_id_collision", "id": ...}` 기록**(인계 노트 3). `cancel_task_ids`: pending인 것만 `status="cancelled"`로.
+- `integrate(state)`: ① 프롬프트: 가설 보드, 태스크 현황(ok/error/pending 요약 + error 원인), 증거 목록(id·summary·complete·effective_as_of), **`[질문·답변 로그]`**(`_format_qa_log` — qa_log 중 `human_answer`/`auto_answered`만 "Q: .../A: ..."로 렌더, 없으면 "없음". 최종 리뷰 C2), 라운드 `{round+1}/{max_rounds}` ② `_ask_llm(IntegrateOutput)` ③ update 조립:
+  - `hypotheses`: 그대로 병합. `new_tasks`: **기존 id와 충돌하면 드롭하고 `qa_log`에 `{"kind": "task_id_collision", "id": ...}` 기록**(인계 노트 3). 충돌하지 않는 것은 `_sanitize_new_task`로 소독(status→pending 등 강제 초기화 — 최종 리뷰 C1, Task 1 참고)한 뒤 담는다. `cancel_task_ids`: pending인 것만 `status="cancelled"`로.
   - `decision` 해석: LLM이 `ask`인데 `interaction_policy=="autonomous"`이고 `autonomous_question_policy=="default_and_log"`면 → `qa_log`에 `{"kind": "auto_answered", "question": ..., "answer": "보수적 기본값으로 진행"}` 추가하고 `decision="continue"`로 대체. (park이면 ask 유지.)
-  - **라운드 상한**: `round+1 >= engine_cfg.max_rounds`면 decision을 무조건 `"conclude"`로 덮어씀(qa_log에 `{"kind": "round_cap"}`).
+  - **라운드 상한**: `round+1 >= engine_cfg.max_rounds`면 decision을 무조건 `"conclude"`로 덮어씀(qa_log에 `{"kind": "round_cap"}`). 덮어쓰는 시점에 `decision`이 아직 `"ask"`로 살아있었으면(park 정책 등) 질문이 사람에게 닿지 못하고 사라지므로 먼저 `qa_log`에 `{"kind": "question_dropped_by_round_cap", "question": ...}`를 남긴다(최종 리뷰 M9b).
   - 파싱 이중 실패: `decision="conclude"` + qa_log `{"kind": "integrate_parse_failure", "error": ...}`.
   - 반환에 `round: round+1`, `decision`, `question`(ask 유지 시) 포함.
 - `route_after_integrate(state) -> str`: `"select"`(continue) / `"ask_human"`(ask) / `"conclude"`.
@@ -406,6 +453,42 @@ def test_route_after_integrate():
     assert route_after_integrate(_state(decision="continue")) == "select"
     assert route_after_integrate(_state(decision="ask")) == "ask_human"
     assert route_after_integrate(_state(decision="conclude")) == "conclude"
+
+
+async def test_라운드_상한이_ask를_삼키면_qa_log에_기록한다():
+    # park 정책이라 라운드 상한 검사 시점까지 decision이 "ask"로 살아있다 —
+    # 상한이 그걸 conclude로 덮어쓰면 질문이 사람에게 닿지 못하고 사라진다(M9b).
+    deps = _deps(['{"decision": "ask", "question": "확인 필요"}'])
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"max_rounds": 1})
+    state = _state(autonomous_question_policy="park")
+    update = await make_nodes(deps)["integrate"](state)
+    assert update["decision"] == "conclude" and update["question"] is None
+    dropped = [e for e in update["qa_log"] if e["kind"] == "question_dropped_by_round_cap"]
+    assert dropped == [{"kind": "question_dropped_by_round_cap", "question": "확인 필요"}]
+
+
+async def test_integrate는_new_tasks의_LLM_주입_상태를_pending으로_강제한다():
+    # new_tasks도 frame의 tasks와 같은 위험이 있다(C1) — LLM이 status=running을 실어도
+    # State에는 pending·빈 결과로 들어가야 한다.
+    deps = _deps(['{"new_tasks": [{"id": "t-9", "goal": "신규", "role": "data_prober", '
+                  '"status": "running", "result_evidence_ids": ["ev-x"], '
+                  '"error": "가짜 오류"}], "decision": "continue"}'])
+    update = await make_nodes(deps)["integrate"](_state())
+    task = [t for t in update["plan_tasks"] if t.id == "t-9"][0]
+    assert task.status == "pending"
+    assert task.result_evidence_ids == []
+    assert task.error is None
+
+
+async def test_integrate_프롬프트에_사람의_답변이_실린다():
+    # qa_log의 human_answer가 프롬프트에 없으면 재개 후 리드가 같은 질문을 또 던진다(C2).
+    deps = _deps(['{"decision": "continue"}'])
+    state = _state(qa_log=[{"kind": "human_answer", "question": "계획 변경이 있었나요?",
+                            "answer": "예, D-1로 하루 밀림"}])
+    await make_nodes(deps)["integrate"](state)
+    prompt_text = str(deps.lead_llm.calls[0])
+    assert "계획 변경이 있었나요?" in prompt_text
+    assert "예, D-1로 하루 밀림" in prompt_text
 ```
 
 - [ ] **Step 2~4**: FAIL 확인 → 계약대로 구현(프롬프트는 한국어 모듈 상수 `_INTEGRATE_PROMPT` — 증거의 `complete=False`·`effective_as_of` 표시 포함) → 전체 PASS → 커밋
@@ -414,6 +497,16 @@ def test_route_after_integrate():
 git add src/application/nodes.py tests/application/test_nodes_integrate.py
 git commit -m "Integrate rounds under a hard cap with policy-aware questions"
 ```
+
+**최종 리뷰 수정 웨이브(C1·C2·M9b, 별도 커밋)**: 위 코드가 최종본이다. 최초 커밋(`0503d15`)은
+`new_tasks`를 소독 없이 그대로 담아 Task 1과 같은 C1 결함이 있었다. 또 qa_log의
+`human_answer`/`auto_answered`가 `_INTEGRATE_PROMPT`(및 `_CONCLUDE_PROMPT`)에 렌더되지
+않아 재개 후 리드가 같은 질문을 또 던질 수 있었다(C2). 라운드 상한이 살아있는 `ask`
+결정을 조용히 `conclude`로 덮어써 질문이 흔적 없이 사라지는 문제도 있었다(M9b). 신규
+테스트는 `tests/application/test_nodes_integrate.py`의
+`test_integrate는_new_tasks의_LLM_주입_상태를_pending으로_강제한다`·
+`test_integrate_프롬프트에_사람의_답변이_실린다`·
+`test_라운드_상한이_ask를_삼키면_qa_log에_기록한다` 참고.
 
 ---
 
@@ -427,7 +520,7 @@ git commit -m "Integrate rounds under a hard cap with policy-aware questions"
 - `ask_human(state)`: **첫 줄이 interrupt** — `answer = interrupt({"question": state.question})` (`from langgraph.types import interrupt`). 반환: `{"qa_log": [{"kind": "human_answer", "question": state.question, "answer": answer}], "decision": None, "question": None}`. interactive/park 공용(파킹=interrupt로 스레드 대기, 재개는 integrate로 — 고정 엣지).
 - `conclude(state)`:
   - **결정론 degraded**: `state.evidence`가 비어 있으면 LLM 없이 `Verdict(verdict_type="degraded", confidence="low", narrative="증거 수집 전멸 — 조사 실패", caveats=[에러 태스크 원인 나열])` 반환.
-  - LLM 경로: 프롬프트에 가설 보드(supported 우선)·증거 목록(id/summary/complete/effective_as_of)·태스크 에러율·**재작성 시 `state.verify_problems`**("다음 문제를 고쳐 다시 작성하라") 포함. 지시: Verdict JSON — 모든 주장에 실재 증거 id 인용, complete=False 증거를 쓰면 caveats에 그 id 명시, 확신 없으면 inconclusive 허용(억지 결론 금지).
+  - LLM 경로: 프롬프트에 가설 보드(supported 우선)·증거 목록(id/summary/complete/effective_as_of)·태스크 에러율·**질문·답변 로그(qa_log의 human_answer/auto_answered — C2 픽스 웨이브)**·**재작성 시 `state.verify_problems`**("다음 문제를 고쳐 다시 작성하라") 포함. 지시: Verdict JSON — 모든 주장에 실재 증거 id 인용, complete=False 증거를 쓰면 caveats에 그 id 명시, 확신 없으면 inconclusive 허용(억지 결론 금지).
   - `_ask_llm(Verdict)` 이중 실패 → degraded verdict(파싱 실패 caveat).
   - 반환: `{"verdict": ...}`.
 
@@ -483,10 +576,19 @@ git commit -m "Conclude with cited causal chains, degrading when evidence died"
 - Test: `tests/application/test_nodes_conclude_verify.py` (verify 추가)
 
 **Interfaces:**
-- `verify(state)` (LLM 없음): `state.verdict`의 모든 CauseLink(root_cause + contributing)에 대해 —
+- `verify(state)` (LLM 없음): `state.verdict`가 `None`이면 방어적으로 `{"verify_problems": []}`를
+  즉시 반환한다(conclude가 항상 verdict를 만들지만, 그래프 변경·재개 엣지에 대한 방어 — 노드는
+  raise하지 않는다는 계약이 무조건적이므로). 그 외에는 `state.verdict`의 모든
+  CauseLink(root_cause + contributing)에 대해 —
   1. `evidence_ids`가 비어 있으면 문제("다리에 인용 없음: {component}"). (inconclusive/degraded는 root_cause 없음이 정상 — 있는 다리만 검사.)
-  2. 각 id가 `store.has_evidence(case_id, id)`로 실재하지 않으면 문제.
-  3. 인용된 id 중 state.evidence에서 `complete=False`인 것이 있는데 그 id가 verdict.caveats 문자열들 안에 등장하지 않으면 문제("불완전 증거 {id}가 caveat에 명시되지 않음").
+  2. 각 id가 `{e.id for e in state.evidence}`(`citable_ids`)에 없으면 문제("없는 id {id} 인용").
+     **`store.has_evidence`는 쓰지 않는다**(최종 리뷰 I3) — Store에는 error 태스크가 남긴
+     고아 본문도 그대로 남아있어(§2.4 인계 노트 2), store 기준으로 검사하면 리드가 실제로
+     본 적 없는 id를 인용해도 통과해버린다(실증됨). 규칙 2·3 모두 `citable_ids` 하나로 통일한다.
+  3. 인용된 id 중 state.evidence에서 `complete=False`인 것이 있는데 그 id가 verdict.caveats
+     문자열들 안에 **토큰 경계로**("ev-1"이 "ev-10"의 부분 문자열로 오인되지 않도록 —
+     `(?<![\w-]){id}(?![\w-])` 정규식) 등장하지 않으면 문제("불완전 증거 {id}가 caveat에
+     명시되지 않음").
   - 문제 없음 → `{"verify_problems": []}` (통과 — 라우터가 END).
   - 문제 있고 `verify_attempts == 0` → `{"verify_problems": [...], "verify_attempts": 1}` (재작성 경로).
   - 문제 있고 `verify_attempts >= 1` → **강등 통과**: `{"verdict": verdict.model_copy(update={"confidence": "low", "caveats": verdict.caveats + ["검증 미통과: " + "; ".join(problems)]}), "verify_problems": []}`.
@@ -533,6 +635,35 @@ async def test_불완전_증거는_caveat_명시를_요구한다():
     good = _state(evidence=[ok_ref], verdict=_verdict([eid], caveats=[f"불완전 증거 {eid} 기반"]))
     update2 = await make_nodes(deps)["verify"](good)
     assert update2["verify_problems"] == []
+
+
+async def test_불완전_증거_caveat은_토큰_경계로_매칭된다():
+    deps = _deps([])
+    for n in range(10):
+        deps.store.put_evidence("c-1", "kafka:edge.raw", [n], complete=(n != 0))
+    ref1 = EvidenceRef(id="ev-1", source="kafka:edge.raw", summary="s", complete=False)
+    # caveat이 ev-10만 언급 — ev-1 미명시로 판정되어야 한다
+    state = _state(evidence=[ref1], verdict=_verdict(["ev-1"], caveats=["불완전 증거 ev-10 기반"]))
+    update = await make_nodes(deps)["verify"](state)
+    assert update["verify_problems"]
+
+
+async def test_verdict_없이_verify에_들어와도_raise하지_않는다():
+    deps = _deps([])
+    update = await make_nodes(deps)["verify"](_state())
+    assert update["verify_problems"] == []
+
+
+async def test_store에만_있고_state_evidence에_없는_id_인용은_문제로_잡힌다():
+    # error 태스크가 Store에 남긴 고아 본문(§2.4 인계 노트 2)처럼, store엔 있지만
+    # state.evidence엔 없는 id를 store.has_evidence로 검사하면 통과해버렸다(I3) —
+    # 인용 가능 우주는 state.evidence로 한정해야 한다.
+    deps = _deps([])
+    orphan_id = deps.store.put_evidence("c-1", "mongo:twin_state", {"v": 1})
+    state = _state(evidence=[], verdict=_verdict([orphan_id]))
+    update = await make_nodes(deps)["verify"](state)
+    assert update["verify_problems"]
+    assert any(orphan_id in p for p in update["verify_problems"])
 ```
 
 - [ ] **Step 2~4**: FAIL → 구현 → 전체 PASS → 커밋
@@ -541,6 +672,14 @@ async def test_불완전_증거는_caveat_명시를_요구한다():
 git add src/application/nodes.py tests/application/test_nodes_conclude_verify.py
 git commit -m "Verify citations deterministically, demoting twice-failed verdicts"
 ```
+
+**최종 리뷰 수정 웨이브(I3, 별도 커밋)**: 위 코드가 최종본이다. 최초 커밋(`7447a88`)까지는
+규칙 2가 `store.has_evidence(case_id, id)`로 실재를 검사했다 — Store에는 error 태스크가
+남긴 고아 본문도 지워지지 않고 남아있어, 리드가 실제로 본 적 없는 id를 인용해도 검증을
+통과해버렸다(I3, 실증됨). 인용 가능 우주를 `{e.id for e in state.evidence}`로 통일해
+규칙 2·3이 같은 집합을 기준으로 삼도록 고쳤다. 신규 테스트는
+`tests/application/test_nodes_conclude_verify.py`의
+`test_store에만_있고_state_evidence에_없는_id_인용은_문제로_잡힌다` 참고.
 
 ---
 
@@ -552,15 +691,32 @@ git commit -m "Verify citations deterministically, demoting twice-failed verdict
 
 **Interfaces:**
 - `build_engine(deps: EngineDeps, *, checkpointer=None)` — StateGraph(CaseState) 배선(파일 상단 그래프 형태 그대로), `compile(checkpointer=checkpointer)`.
-- `investigate_case(case: Case, *, deps, checkpointer=None, thread_id=None, interaction_policy="autonomous", question_policy="default_and_log") -> dict` — 초기 CaseState 조립 후 `ainvoke`, config `{"configurable": {"thread_id": thread_id or case.id}}`. 반환은 최종 state dict.
+- `investigate_case(case: Case, *, deps, checkpointer=None, thread_id=None, interaction_policy="autonomous", question_policy=None) -> dict` — 초기 CaseState 조립 후 `ainvoke`, config `{"configurable": {"thread_id": thread_id or case.id}}`. 반환은 최종 state dict.
+  `question_policy`가 `None`이면 `deps.engine_cfg.autonomous_question_policy`를 쓴다(최종
+  리뷰 M7 — 이전엔 시그니처 기본값 `"default_and_log"`가 항상 이겨서 engine_cfg의 값이
+  죽은 config였다). 함수 서두에서 `interaction_policy != "autonomous"`이거나(해석된)
+  `question_policy == "park"`인데 `checkpointer is None`이면 `ValueError`로 기동 자체를
+  거부한다(최종 리뷰 M8 — 이 두 경우 ask_human에서 interrupt가 걸릴 수 있는데 checkpointer
+  없이 멈추면 그 조사는 영영 재개할 수 없다. 이 함수는 그래프 밖이므로 raise가 허용된다).
 - `resume_case(answer: str, *, deps, checkpointer, thread_id) -> dict` — `Command(resume=answer)`로 재개(§2.4 park 재개 → ask_human 반환 → integrate).
 - E2E 시나리오 (전부 `parallel_width=1`로 결정론 직렬화, ScriptedLLM(lead) + ToolFake(subagent)):
   1. **해피패스 미니 OEE**: 스텁 시드 mongo `twin_state=[{line:7, oee:5.12, planned_time:75}]`, redis `{"plan:6:today": "480"}`(plan:7 없음). 각본: frame(가설 2, 태스크 t-1 mongo·t-2 redis) → 라운드1 t-1 → integrate(continue) → 라운드2 t-2 → integrate(conclude) → conclude(Verdict: stale_data, root_cause plan-sync, evidence_ids ["ev-1","ev-2"]) → verify 통과. 단언: verdict.root_cause.component=="plan-sync", round==2, 태스크 전부 ok, evidence 2건에 봉투 메타.
   2. **ask→interrupt→resume**: `interaction_policy="interactive"` + 각본 integrate가 ask. `ainvoke` 결과에 `"__interrupt__"` 포함 확인 → `resume_case("계획 변경 없음")` → 이어서 conclude까지. 단언: qa_log에 human_answer, 최종 verdict 존재.
   3. **verify 재작성**: conclude 각본 1차가 ev-99(유령) 인용 → verify가 conclude 재진입 → 2차 각본이 실재 id 인용 → 통과. 단언: verify_attempts==1, 최종 verdict 정상 confidence.
+  4. **parallel_width=2, 브랜치 하나 에러**(최종 리뷰 I6): frame이 태스크 2개(둘 다
+     data_prober, 게이트 통과) → select가 폭 2로 둘 다 fan-out. 한 브랜치는 정상 보고,
+     한 브랜치는 파싱 실패(error) 각본. 공유 iterator인 `ToolFake`는 Send fan-out으로
+     execute 브랜치가 스레드 풀에서 동시에 돌 때 `next()` 순서가 스케줄링에 좌우돼
+     각본과 브랜치가 어긋날 수 있다 — `ToolFake`를 서브클래스해 태스크 goal의 키워드로
+     응답 시퀀스를 고르는 `KeyedToolFake`를 테스트 파일에 정의해 각 create_agent 실행이
+     자신의 시퀀스만 소비하게 한다. 단언: error 브랜치가 라운드를 죽이지 않고(성공
+     브랜치 evidence가 실림) conclude·verify까지 완주하며, 두 태스크가 각각 ok/error.
+  - usecase 가드레일(M7·M8): `question_policy=None`이 `engine_cfg.autonomous_question_policy`를
+    따르는지(park일 때 자동응답 없이 interrupt까지 가는지), interrupt 경로인데
+    checkpointer가 없으면 `ValueError`를 던지는지도 이 파일에서 함께 검증한다.
 - InMemorySaver: `from langgraph.checkpoint.memory import InMemorySaver` — 시나리오 2에서 필수(스레드 유지).
 
-- [ ] **Step 1: 실패하는 테스트 작성** — 위 시나리오 3개를 실제 시드·각본 JSON으로 구현 (frame/integrate/conclude 각본 문자열은 Task 1~5 테스트의 JSON 형식을 재사용해 조립).
+- [ ] **Step 1: 실패하는 테스트 작성** — 위 시나리오들을 실제 시드·각본 JSON으로 구현 (frame/integrate/conclude 각본 문자열은 Task 1~5 테스트의 JSON 형식을 재사용해 조립).
 - [ ] **Step 2: FAIL 확인** (graph 모듈 부재)
 - [ ] **Step 3: 구현** — build_engine·usecase. 라우터 매핑: `route_after_frame`의 `"__end__"` → `END`. conditional edge에 Send 리스트 반환(route_after_select).
 - [ ] **Step 4: 전체 스위트 PASS 후 커밋**
@@ -569,6 +725,18 @@ git commit -m "Verify citations deterministically, demoting twice-failed verdict
 git add src/application/graph.py src/application/usecase.py tests/application/test_graph_e2e.py
 git commit -m "Wire the engine graph end to end with interrupt and rewrite paths"
 ```
+
+**최종 리뷰 수정 웨이브(M7·M8·I6, 별도 커밋)**: 위 코드가 최종본이다. 최초 커밋(`3853356`)의
+`investigate_case`는 `question_policy` 기본값이 `"default_and_log"`로 하드코딩돼
+`deps.engine_cfg.autonomous_question_policy`가 죽은 config였다(M7). interaction_policy나
+question_policy가 interrupt 경로를 열 수 있는데 checkpointer가 없어도 기동을 막지 않아,
+그런 조사는 ask_human에서 영영 멈춘 채로 남을 수 있었다(M8). E2E도 전부
+`parallel_width=1`이라 Send fan-out(폭>=2)에서 한 브랜치의 에러가 다른 브랜치나 라운드
+전체를 죽이는지가 실증된 적이 없었다(I6). 신규 테스트는
+`tests/application/test_graph_e2e.py`의
+`test_parallel_width_2에서_한_브랜치_에러가_다른_브랜치를_죽이지_않는다`(및 그 안에 정의된
+`KeyedToolFake`)·`test_question_policy_None은_engine_cfg의_autonomous_question_policy를_따른다`·
+`test_interrupt_경로인데_checkpointer가_없으면_기동을_거부한다` 참고.
 
 ---
 
