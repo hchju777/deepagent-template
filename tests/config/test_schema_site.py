@@ -28,6 +28,8 @@ def test_schedule은_interval_xor_cron():
         Schedule.model_validate({})
     with pytest.raises(ValidationError):
         Schedule.model_validate({"interval": "5 minutes"})      # 형식 위반
+    with pytest.raises(ValidationError):
+        Schedule.model_validate({"interval": "0m"})              # 0은 간격이 아니다
 
 
 def test_전역_키가_사이트_계층에_오면_거부():

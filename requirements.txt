@@ -15,3 +15,6 @@ langgraph>=1.2,<2
 langchain>=1.3,<2
 langchain-core>=1.5,<2
 langchain-openai>=1.4,<2       # config llm.profiles가 가리키는 OpenAI 호환 게이트웨이용
+
+# ── 순찰 스케줄러 (계획 4) ──────────────────────────────────
+APScheduler>=3.11,<4           # 4.x는 알파, API 상이 — 3.x 고정

@@ -113,6 +113,16 @@ def test_deployment이_없으면_검사7은_건너뛴다(tmp_path):
     assert validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path) == []
 
 
+def test_해석_안되는_프로브는_기동_거부(tmp_path):
+    _tree(tmp_path)
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["patrol"]["checks"]["c1"]["probe"] = "ghost_probe"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("프로브" in e.problem for e in errors)
+
+
 def test_check_live에서_mongo_role_problems가_가짜_connection_status로_검사된다(tmp_path, monkeypatch):
     _tree(tmp_path)
     gbm = tmp_path / "config" / "gbm" / "mx.json"

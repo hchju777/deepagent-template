@@ -58,7 +58,8 @@ tests/patrol/__init__.py, test_probes.py, test_rules.py, test_llm_judge.py,
   - `scratch_case_id(gbm, fct, check) -> str` — `f"patrol:{gbm}:{fct}:{check}"`.
 - `src/domain/cases.py`:
   - `CaseStatus = Literal["open","investigating","awaiting_human","closed"]`, `OPEN_STATUSES = ("open","investigating","awaiting_human")`.
-  - `CaseRecord(StrictModel)`: `id, gbm, fct, fingerprint, status: CaseStatus="open", created_at: datetime, updated_at: datetime, finding_ids: list[str]=[], thread_ids: list[str]=[], owner: str|None=None, lease_until: datetime|None=None`.
+  - `CaseRecord(StrictModel)`: `id, gbm, fct, fingerprint, symptom: str, t0: datetime, target_locator: str|None=None, origin: Literal["human","patrol"]="patrol", status: CaseStatus="open", created_at: datetime, updated_at: datetime, finding_ids: list[str]=[], thread_ids: list[str]=[], owner: str|None=None, lease_until: datetime|None=None`. `symptom/t0/target_locator/origin`은 게이트가 opened 시점에 채운다 — 저장소에서 다시 읽었을 때 엔진용 Case를 재구성(`to_case`)하려면 이 넷이 레코드 안에 있어야 한다(계획 3 브리지).
+  - `CaseRecord.to_case() -> Case` — `Case(id, gbm, fct, origin, symptom, t0, target_locator)`로 재구성. `repo.get(case_id).to_case()`는 admit 시점에 돌려준 `AdmitResult.case`와 같아야 한다.
   - `CaseRepositoryPort(ABC)`: `save(record)`, `get(case_id) -> CaseRecord`(없으면 KeyError), `find_open_by_fingerprint(fp) -> CaseRecord | None`(OPEN_STATUSES만), `list_by_status(status) -> list[CaseRecord]`, `new_case_id() -> str`(`c-<n>` 증가).
   - `InMemoryCaseRepository`.
 
@@ -104,6 +105,7 @@ import pytest
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 
 T = datetime(2026, 9, 3, 8, 0)
+# CaseRecord는 symptom/t0(엔진용 Case 재구성에 필요)를 필수로 받는다.
 
 
 def test_열린_케이스만_지문으로_찾는다():
@@ -111,7 +113,7 @@ def test_열린_케이스만_지문으로_찾는다():
     cid = repo.new_case_id()
     assert cid == "c-1" and repo.new_case_id() == "c-2"
     repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint="fp-a",
-                         created_at=T, updated_at=T))
+                         symptom="OEE 512%", t0=T, created_at=T, updated_at=T))
     assert repo.find_open_by_fingerprint("fp-a").id == cid
     closed = repo.get(cid).model_copy(update={"status": "closed"})
     repo.save(closed)
@@ -243,11 +245,12 @@ git commit -m "Register patrol probes and refuse boot on unresolvable ones"
 **Interfaces:**
 - `RuleVerdict(StrictModel)`: `status: Literal["ok","finding"]`, `reason: str`.
 - `judge_by_rule(result: ProbeResult, params: dict, *, clock) -> RuleVerdict` — `params["rule"]` 종류:
-  - `range`: `field`(점 경로, 예 `"body.oee"`), `min`/`max` 중 하나 이상. 값이 범위 밖이면 finding. 값 부재/비수치면 **finding**(reason "필드 부재/비수치" — 룰이 기대한 형태가 아니라는 것 자체가 이상).
-  - `exists`: 데이터가 None/빈 컨테이너면 finding(reason "대상 부재").
-  - `freshness`: `field`(ISO 문자열 또는 datetime), `max_age_s` — `clock() - ts > max_age_s`면 finding. 필드 부재는 finding.
+  - `range`: `field`(점 경로, 예 `"body.oee"`), `min`/`max` 중 하나 이상. 값이 범위 밖이면 finding. **데이터 쪽** 값 부재/비수치면 finding(reason "필드 부재/비수치" — 룰이 기대한 형태가 아니라는 것 자체가 이상).
+  - `exists`: `field`는 선택(없으면 데이터 전체를 본다). 데이터가 None/빈 컨테이너면 finding(reason "대상 부재").
+  - `freshness`: `field`(ISO 문자열 또는 datetime), `max_age_s` — `clock() - ts > max_age_s`면 finding. **데이터 쪽** 필드 부재는 finding.
   - `max`: `field`, `max` — 값 > max면 finding(lag 등).
-  - 미지의 rule 이름(또는 `rule` 키 부재)은 config 오류다. 조용히 ok로 통과시키면 안 되므로 `judge_by_rule`은 `KnownRuleError(Exception)`를 던진다 — 판정기 중 **유일하게 허용되는 예외**이며, runner가 잡아 `error` 3상("rule 설정 오류 — ...")으로 레저에 남긴다.
+  - **`field` 자체가 params에 없는 것은 range/max/freshness에서는 config 오류다** — `_field_name(params, rule_name, *, required=True)`가 `KnownRuleError(f"rule {rule_name}에는 field가 필요하다")`를 던진다. `field` 없이는 무엇을 검사할지 정할 수 없는 설정 결함이지, "값이 이상하다"는 데이터 이상(finding)이 아니다 — 조용히 finding으로 삼키면 설정 실수가 매 패트롤마다 이상 탐지로 둔갑한다. `exists`만 `required=False`로 불러 field 부재를 정상 허용한다.
+  - 미지의 rule 이름(또는 `rule` 키 부재)도 config 오류다. 조용히 ok로 통과시키면 안 되므로 `judge_by_rule`은 `KnownRuleError(Exception)`를 던진다 — 판정기 중 **유일하게 허용되는 예외**이며, runner가 잡아 `error` 3상("rule 설정 오류 — ...")으로 레저에 남긴다.
 - `get_path(data, dotted) -> Any | None` — dict/list 점 경로 조회.
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/patrol/test_rules.py`
@@ -370,12 +373,13 @@ git commit -m "Judge snapshots with a budgeted LLM that can only cite real ids"
 - `run_check(gbm, fct, name, check: CheckConfig, *, adapters, store, clock, llm=None, budget: LlmBudget | None = None) -> CheckOutcome` — **절대 raise 금지**:
   1. 프로브 해석(`resolve_probe`)·실행 → `status=error`면 outcome error(원인 전달).
   2. 스냅샷 박제: `store.put_evidence(scratch_case_id(...), source=check.target or name, body=result.data, as_of=envelope.observed_at, complete=..., effective_as_of=...)` → `snap_id`.
-  3. 판정:
+  3. 판정 — `budget is None`(예산 자체가 주입되지 않음, 설정 오류)과 `budget.try_acquire()`
+     실패(예산 소진, 정상 운영 중 상태)는 서로 다른 3상으로 구분한다:
      - `rule`: `judge_by_rule(result, check.params, clock)`; `KnownRuleError` → error outcome("rule 설정 오류 — ..."). finding이면 Finding(evidence_ids=[snap_id], judge="rule").
-     - `llm`: `budget.try_acquire()` 실패 → `skipped`(reason "llm 예산 소진") — `on_budget_exhausted="escalate"`는 llm 단독엔 의미 없으므로 무시하고 skipped. 성공 시 `judge_by_llm([snap_id], {snap_id: repr(data)[:2000]}, ...)` → err면 error outcome; finding이면 Finding(judge="llm", evidence_ids=out.evidence_ids); `llm_calls=1`.
-     - `rule+llm`: 룰 먼저. 룰 ok → ok. 룰 finding → 예산 획득 시 LLM 2차: finding 확정이면 Finding(judge="rule+llm", summary=LLM 요약), ok면 ok(reason 기록 없음 — outcome ok). 예산 소진: `skip`→skipped, `escalate`→룰 결과만으로 Finding(judge="rule+llm", summary=룰 reason + " (LLM 미확인 — 예산 소진)").
-  4. Finding.id = `f"{name}@{observed_at.isoformat()}"`, observed_at = envelope.observed_at.
-  - `llm`/`rule+llm` 인데 `llm is None` → error outcome("LLM 미주입").
+     - `llm`: `budget is None` → error outcome("LLM 예산 미주입"). `budget.try_acquire()` 실패 → `skipped`(reason "llm 예산 소진") — `on_budget_exhausted="escalate"`는 llm 단독엔 의미 없으므로 무시하고 skipped. 성공 시 `judge_by_llm([snap_id], {snap_id: repr(data)[:2000]}, ...)` → err면 error outcome; finding이면 Finding(judge="llm", evidence_ids=out.evidence_ids); `llm_calls=1`.
+     - `rule+llm`: 룰 먼저. 룰 ok → ok. 룰 finding → `budget is None`이면 error outcome("LLM 예산 미주입"); 아니면 `try_acquire()` 시도 — 성공 시 LLM 2차(finding 확정이면 Finding(judge="rule+llm", summary=LLM 요약), ok면 ok), 실패(소진) 시 `skip`→skipped, `escalate`→룰 결과만으로 Finding(judge="rule+llm", summary=룰 reason + " (LLM 미확인 — 예산 소진)").
+  4. Finding.id = `f"{gbm}/{fct}/{name}@{observed_at.isoformat()}"`(사이트 접두 — 같은 시각에 서로 다른 사이트/점검의 id가 충돌하지 않도록), observed_at = envelope.observed_at.
+  - `llm`/`rule+llm` 인데(예산 확보 이후) `llm is None` → error outcome("LLM 미주입") — 예산 미주입 오류와는 별개다.
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/patrol/test_runner.py`
 
@@ -473,31 +477,39 @@ git commit -m "Run a check end to end: probe, snapshot, judge, budget, ledger"
 - `admit_finding(finding: Finding, *, repo: CaseRepositoryPort, store: CaseStorePort, clock) -> AdmitResult`:
   1. **가드레일**: `finding.evidence_ids` 각각 `store.has_evidence(finding.scratch_case_id, id)` — 하나라도 없으면 `rejected("인용 스냅샷 부재: ...")`. 빈 인용도 rejected.
   2. `fp = fingerprint(...)`; `existing = repo.find_open_by_fingerprint(fp)`.
-  3. existing → 스냅샷을 `existing.id`로 복사(`store.get_evidence_record`+`get_evidence` → `put_evidence(existing.id, ...)` 메타 보존), `finding_ids` 추가·`updated_at=clock()` 저장 → `attached`.
-  4. 없음 → `case_id = repo.new_case_id()`, 스냅샷 복사, `CaseRecord(status="open", ...)` 저장, `Case(id, gbm, fct, origin="patrol", symptom=finding.summary, t0=finding.observed_at, target_locator=finding.target)` → `opened`.
+  3. existing → **먼저 멱등 검사**: `finding.id in existing.finding_ids`면(같은 finding의 재수신 — 재시도·중복 전달) 스냅샷을 다시 복사하거나 `finding_ids`를 늘리지 않고 그대로 `attached`. 아니면 스냅샷을 `existing.id`로 복사(`store.get_evidence_record`+`get_evidence` → `put_evidence(existing.id, ...)` 메타 보존), `finding_ids` 추가·`updated_at=clock()` 저장 → `attached`.
+  4. 없음 → `case_id = repo.new_case_id()`, 스냅샷 복사, `CaseRecord(status="open", symptom=finding.summary, t0=finding.observed_at, target_locator=finding.target, origin="patrol", ...)` 저장 → `record.to_case()`로 재구성한 `Case`를 실어 `opened`(CaseRecord와 Case가 같은 값에서 나오므로 저장소 재조회(`repo.get(case_id).to_case()`)와 이 시점의 `case`가 항상 일치한다).
+- `evidence_refs_for_case(store: CaseStorePort, case_id: str) -> list[EvidenceRef]` — `store.list_evidence(case_id)`의 각 레코드를 execute 노드(application/nodes.py)와 같은 규약으로 `EvidenceRef(id, source, summary=repr(body)[:160], as_of, complete, effective_as_of)`로 바꾼다. opened 직후의 T0 스냅샷을 `investigate_case(..., initial_evidence=...)`에 넘길 때 쓴다(계획 3 브리지).
 - `interval_seconds(spec: str) -> int` — `"30s"/"5m"/"1h"`.
 - `build_trigger(schedule: Schedule)` — `IntervalTrigger(seconds=...)` | `CronTrigger.from_crontab(cron)`.
-- `build_scheduler(sites: list[tuple[str, str, SiteConfig]], *, run_one: Callable, heartbeat: Callable, heartbeat_seconds: int = 60, timezone: str) -> AsyncIOScheduler` — enabled 사이트의 점검마다 `add_job(run_one, trigger, args=[gbm, fct, name, check], id=f"{gbm}/{fct}/{name}", max_instances=1, coalesce=True)` + 하트비트 잡(`id="heartbeat"`). **시작하지 않는다**(start는 4b 데몬이). `run_one`/`heartbeat`는 async 콜러블.
+- `build_scheduler(sites: list[tuple[str, str, SiteConfig]], *, run_one: Callable, heartbeat: Callable, heartbeat_seconds: int = 60, timezone: str, on_missed: Callable[[str], Awaitable|None] | None = None) -> AsyncIOScheduler` — enabled 사이트의 점검마다 `add_job(run_one, trigger, args=[gbm, fct, name, check], id=f"{gbm}/{fct}/{name}", max_instances=1, coalesce=True, misfire_grace_time=None)` + 하트비트 잡(`id="heartbeat"`, 역시 `misfire_grace_time=None`). **시작하지 않는다**(start는 4b 데몬이). `run_one`/`heartbeat`는 async 콜러블. `misfire_grace_time=None`은 모든 잡에 강제한다 — APScheduler 기본 유한 grace_time은 밀린 틱을 조용히 misfire로 버리는데, 순찰에서는 "놓쳤다"는 사실 자체가 신호이므로 금지한다. `on_missed`가 주어지면 `EVENT_JOB_MISSED|EVENT_JOB_MAX_INSTANCES` 리스너를 붙여 `event.job_id`로 호출한다 — 4b 데몬이 이 훅에서 레저에 skipped를 남기는 자리(콜백이 코루틴을 돌려주면 실행 중인 이벤트 루프에 얹는다).
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
-`tests/patrol/test_gate.py`:
+`tests/patrol/test_gate.py`(리뷰 이후 최종본 — admit 멱등·`to_case`·`evidence_refs_for_case`·run_check→admit 사슬을 더한다):
 ```python
 from datetime import datetime, timezone
 
+from src.config.schema_site import CheckConfig
 from src.domain.cases import InMemoryCaseRepository
 from src.domain.patrol import Finding
 from src.domain.store import InMemoryCaseStore
-from src.patrol.gate import admit_finding
+from src.infrastructure.factory import StubSeeds
+from src.patrol.gate import admit_finding, evidence_refs_for_case
+from src.patrol.runner import run_check
+from tests.patrol.test_probes import _adapters
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
+T2 = datetime(2026, 9, 3, 8, 5, tzinfo=timezone.utc)
 
 
-def _finding(store, summary="OEE 512%"):
+def _finding(store, summary="OEE 512%", observed_at=T):
+    # observed_at을 바꾸면(두 번째 점검 실행 등) id도 함께 달라진다 — runner의
+    # make_finding처럼 id가 관찰 시각에 매인다는 전제를 지킨다.
     snap = store.put_evidence("patrol:mx:gumi:api.oee", "rest:/oee", {"oee": 512}, as_of=T)
-    return Finding(id=f"api.oee@{T.isoformat()}", gbm="mx", fct="gumi", check="api.oee",
+    return Finding(id=f"api.oee@{observed_at.isoformat()}", gbm="mx", fct="gumi", check="api.oee",
                    target="rest:/oee", summary=summary, evidence_ids=[snap],
-                   scratch_case_id="patrol:mx:gumi:api.oee", observed_at=T, judge="rule")
+                   scratch_case_id="patrol:mx:gumi:api.oee", observed_at=observed_at, judge="rule")
 
 
 def test_첫_finding은_케이스를_열고_스냅샷을_T0_증거로_복사한다():
@@ -508,13 +520,39 @@ def test_첫_finding은_케이스를_열고_스냅샷을_T0_증거로_복사한�
     assert store.list_evidence(result.case_id)[0].as_of == T       # 메타 보존 복사
 
 
+def test_저장된_레코드에서_재구성한_Case는_admit이_돌려준_Case와_같다():
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    result = admit_finding(_finding(store), repo=repo, store=store, clock=lambda: T)
+    assert repo.get(result.case_id).to_case() == result.case
+
+
+def test_evidence_refs_for_case는_opened_케이스의_T0_스냅샷을_돌려준다():
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    result = admit_finding(_finding(store), repo=repo, store=store, clock=lambda: T)
+    refs = evidence_refs_for_case(store, result.case_id)
+    assert len(refs) == 1
+    assert refs[0].as_of == T and refs[0].complete is True
+
+
 def test_같은_지문의_열린_케이스에는_첨부한다():
     store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
     first = admit_finding(_finding(store), repo=repo, store=store, clock=lambda: T)
-    second = admit_finding(_finding(store, "OEE 530%"), repo=repo, store=store, clock=lambda: T)
+    second = admit_finding(_finding(store, "OEE 530%", observed_at=T2), repo=repo, store=store,
+                           clock=lambda: T)
     assert second.action == "attached" and second.case_id == first.case_id
     assert len(repo.get(first.case_id).finding_ids) == 2
     assert len(store.list_evidence(first.case_id)) == 2
+
+
+def test_같은_finding_재수신은_복사나_추가_없이_멱등하게_첨부():
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    finding = _finding(store)
+    first = admit_finding(finding, repo=repo, store=store, clock=lambda: T)
+    before_evidence = len(store.list_evidence(first.case_id))
+    second = admit_finding(finding, repo=repo, store=store, clock=lambda: T)  # 동일 finding 재수신
+    assert second.action == "attached" and second.case_id == first.case_id
+    assert repo.get(first.case_id).finding_ids == [finding.id]               # 중복 추가 없음
+    assert len(store.list_evidence(first.case_id)) == before_evidence        # 재복사 없음
 
 
 def test_인용_스냅샷이_없으면_기각():
@@ -522,9 +560,28 @@ def test_인용_스냅샷이_없으면_기각():
     f = _finding(store).model_copy(update={"evidence_ids": ["ev-99"]})
     result = admit_finding(f, repo=repo, store=store, clock=lambda: T)
     assert result.action == "rejected" and repo.list_by_status("open") == []
+
+
+def _check(**kw):
+    base = {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/oee",
+            "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}}
+    base.update(kw)
+    return CheckConfig.model_validate(base)
+
+
+async def test_run_check에서_admit까지_사슬이_T0_증거를_엔진용으로_이어준다():
+    # 계획 3 브리지 사슬 전체: 프로브 → rule finding → 게이트 → engine EvidenceRef.
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    adapters = _adapters(StubSeeds(rest_responses={"/oee": {"oee": 512}}))
+    outcome = await run_check("mx", "gumi", "api.oee", _check(), adapters=adapters,
+                              store=store, clock=lambda: T)
+    result = admit_finding(outcome.finding, repo=repo, store=store, clock=lambda: T)
+    assert result.action == "opened" and result.case.target_locator == "rest:/oee"
+    refs = evidence_refs_for_case(store, result.case_id)
+    assert len(refs) == 1 and refs[0].as_of == T and refs[0].complete is True
 ```
 
-`tests/patrol/test_scheduler.py`:
+`tests/patrol/test_scheduler.py`(리뷰 이후 최종본 — misfire_grace_time·on_missed 리스너를 더한다):
 ```python
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -554,6 +611,36 @@ def test_점검마다_잡이_등록되고_하트비트가_붙는다():
     job = sched.get_job("mx/gumi/a")
     assert job.max_instances == 1 and job.coalesce is True
     assert not sched.running
+
+
+def test_모든_잡의_misfire_grace_time은_None_밀린_틱을_조용히_버리지_않는다():
+    site = SiteConfig.model_validate({"target": {"rest": {"base_url": "http://x"}}, "patrol": {"checks": {
+        "a": {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/oee"}}}})
+
+    async def run_one(gbm, fct, name, check): ...
+    async def heartbeat(): ...
+
+    sched = build_scheduler([("mx", "gumi", site)], run_one=run_one, heartbeat=heartbeat,
+                            timezone="Asia/Seoul")
+    assert sched.get_job("mx/gumi/a").misfire_grace_time is None
+    assert sched.get_job("heartbeat").misfire_grace_time is None
+
+
+def test_on_missed을_주면_미스_이벤트_리스너가_붙는다():
+    site = SiteConfig.model_validate({"target": {"rest": {"base_url": "http://x"}}, "patrol": {"checks": {
+        "a": {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/oee"}}}})
+
+    async def run_one(gbm, fct, name, check): ...
+    async def heartbeat(): ...
+    async def on_missed(job_id): ...
+
+    sched = build_scheduler([("mx", "gumi", site)], run_one=run_one, heartbeat=heartbeat,
+                            timezone="Asia/Seoul", on_missed=on_missed)
+    assert len(sched._listeners) == 1
+
+    no_hook = build_scheduler([("mx", "gumi", site)], run_one=run_one, heartbeat=heartbeat,
+                              timezone="Asia/Seoul")
+    assert len(no_hook._listeners) == 0
 ```
 
 - [ ] **Step 2~4**: FAIL → 구현 → 전체 PASS → 커밋

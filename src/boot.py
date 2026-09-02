@@ -17,6 +17,7 @@ from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
 from src.infrastructure.query_rules import mongo_role_problems
 from src.knowledge.deployment import load_deployment
 from src.knowledge.topology import load_topology, topology_problems
+from src.patrol.probes import PROBES, resolve_probe
 
 
 @dataclass
@@ -82,6 +83,13 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
             if check.target is not None and check.target not in known:
                 errors.append(BootError(
                     where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))
+
+        # 검사 9: 각 점검의 프로브가 레지스트리에서 해석되는가 (§4.6-9)
+        for name, check in cfg.patrol.checks.items():
+            probe_name = resolve_probe(check)
+            if probe_name is None or probe_name not in PROBES:
+                errors.append(BootError(
+                    where, f"점검 {name!r}의 프로브를 해석할 수 없다"))
 
         repo_names = {r.name for r in cfg.target.code.repos} if cfg.target.code else set()
         for svc_name, svc in topo.services.items():
