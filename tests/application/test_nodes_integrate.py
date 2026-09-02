@@ -45,6 +45,42 @@ async def test_라운드_상한은_강제_conclude():
     assert any(e["kind"] == "round_cap" for e in update["qa_log"])
 
 
+async def test_라운드_상한이_ask를_삼키면_qa_log에_기록한다():
+    # park 정책이라 라운드 상한 검사 시점까지 decision이 "ask"로 살아있다 —
+    # 상한이 그걸 conclude로 덮어쓰면 질문이 사람에게 닿지 못하고 사라진다(M9b).
+    deps = _deps(['{"decision": "ask", "question": "확인 필요"}'])
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"max_rounds": 1})
+    state = _state(autonomous_question_policy="park")
+    update = await make_nodes(deps)["integrate"](state)
+    assert update["decision"] == "conclude" and update["question"] is None
+    dropped = [e for e in update["qa_log"] if e["kind"] == "question_dropped_by_round_cap"]
+    assert dropped == [{"kind": "question_dropped_by_round_cap", "question": "확인 필요"}]
+
+
+async def test_integrate는_new_tasks의_LLM_주입_상태를_pending으로_강제한다():
+    # new_tasks도 frame의 tasks와 같은 위험이 있다(C1) — LLM이 status=running을 실어도
+    # State에는 pending·빈 결과로 들어가야 한다.
+    deps = _deps(['{"new_tasks": [{"id": "t-9", "goal": "신규", "role": "data_prober", '
+                  '"status": "running", "result_evidence_ids": ["ev-x"], '
+                  '"error": "가짜 오류"}], "decision": "continue"}'])
+    update = await make_nodes(deps)["integrate"](_state())
+    task = [t for t in update["plan_tasks"] if t.id == "t-9"][0]
+    assert task.status == "pending"
+    assert task.result_evidence_ids == []
+    assert task.error is None
+
+
+async def test_integrate_프롬프트에_사람의_답변이_실린다():
+    # qa_log의 human_answer가 프롬프트에 없으면 재개 후 리드가 같은 질문을 또 던진다(C2).
+    deps = _deps(['{"decision": "continue"}'])
+    state = _state(qa_log=[{"kind": "human_answer", "question": "계획 변경이 있었나요?",
+                            "answer": "예, D-1로 하루 밀림"}])
+    await make_nodes(deps)["integrate"](state)
+    prompt_text = str(deps.lead_llm.calls[0])
+    assert "계획 변경이 있었나요?" in prompt_text
+    assert "예, D-1로 하루 밀림" in prompt_text
+
+
 async def test_파싱_이중_실패는_강제_conclude():
     deps = _deps(["엉망", "또 엉망"])
     update = await make_nodes(deps)["integrate"](_state())

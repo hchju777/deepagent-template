@@ -36,6 +36,9 @@ _INTEGRATE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지�
 [증거 목록]
 {evidence}
 
+[질문·답변 로그]
+{qa_log}
+
 [라운드] {round}/{max_rounds}
 
 규칙:
@@ -43,7 +46,7 @@ _INTEGRATE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지�
 - new_tasks로 추가 조사가 필요하면 태스크를 제안한다(기존 계획에 없는 새 id를 쓴다).
 - cancel_task_ids로 더 이상 필요 없는 대기 중 태스크를 취소할 수 있다.
 - decision은 continue(다음 라운드 진행) / ask(사람에게 질문) / conclude(조사 종료) 중 하나.
-- ask를 고르면 question에 구체적인 질문을 적는다.
+- ask를 고르면 question에 구체적인 질문을 적는다. [질문·답변 로그]에 이미 답변된 질문은 다시 묻지 마라.
 - 반드시 JSON 하나만 출력한다:
 {{"hypotheses": [{{"id": "h-1", "statement": "...", "status": "open"}}], "new_tasks": [], "cancel_task_ids": [], "decision": "continue", "question": null}}"""
 
@@ -54,6 +57,9 @@ _CONCLUDE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지금
 
 [증거 목록]
 {evidence}
+
+[질문·답변 로그]
+{qa_log}
 
 [태스크 오류율]
 {error_rate}{rewrite_note}
@@ -118,6 +124,15 @@ def _format_rewrite_note(verify_problems):
     return f"\n\n[재작성 요청] 다음 문제를 고쳐 다시 작성하라:\n{problems}"
 
 
+def _format_qa_log(qa_log):
+    """qa_log 중 사람이 실제로 답한(human_answer) / 자동 응답된(auto_answered) 항목만
+    Q/A로 렌더한다 — 재개 후 리드가 같은 질문을 또 던지지 않도록(C2)."""
+    entries = [e for e in qa_log if e.get("kind") in ("human_answer", "auto_answered")]
+    if not entries:
+        return "없음"
+    return "\n".join(f"Q: {e.get('question')}\nA: {e.get('answer')}" for e in entries)
+
+
 def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
     """caveat 문자열들 안에 증거 id가 토큰 경계로 등장하는가 (ev-1 ⊄ ev-10)."""
     pattern = re.compile(rf"(?<![\w-]){re.escape(evidence_id)}(?![\w-])")
@@ -125,14 +140,36 @@ def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
 
 
 async def _ask_llm(llm, prompt, schema):
-    """파싱 재시도 1회 계약 — (obj, None) 또는 (None, 마지막 오류)."""
-    response = await llm.ainvoke([("user", prompt)])
+    """파싱 재시도 1회 계약 — (obj, None) 또는 (None, 마지막 오류).
+
+    ainvoke 자체가 던지는 전송 예외(네트워크·게이트웨이 오류 등)도 잡는다 — "노드는
+    절대 raise하지 않는다"는 계약은 파싱 실패뿐 아니라 호출 실패에도 적용된다(I4).
+    1차 전송이 실패하면 재시도 없이 즉시 (None, 원인)을 돌려준다.
+    """
+    try:
+        response = await llm.ainvoke([("user", prompt)])
+    except Exception as exc:
+        return None, f"LLM 호출 실패 — {type(exc).__name__}: {exc}"
     obj, err = parse_structured(response.content, schema)
     if obj is not None:
         return obj, None
-    retry = await llm.ainvoke([
-        ("user", f"{prompt}\n\n이전 응답은 다음 이유로 거부됐다: {err}\nJSON만 다시 출력하라.")])
+    try:
+        retry = await llm.ainvoke([
+            ("user", f"{prompt}\n\n이전 응답은 다음 이유로 거부됐다: {err}\nJSON만 다시 출력하라.")])
+    except Exception as exc:
+        return None, f"LLM 재시도 호출 실패 — {type(exc).__name__}: {exc}"
     return parse_structured(retry.content, schema)
+
+
+def _sanitize_new_task(task: PlanTask) -> PlanTask:
+    """LLM이 만든 태스크의 수명주기 필드를 강제 초기화한다 — 상태 전이는 코드만 쥔다(§2.2).
+
+    frame의 output.tasks와 integrate의 new_tasks는 LLM이 그대로 만들어낸 PlanTask라
+    "status": "running"처럼 조작된 값을 실을 수 있다 — 소독 없이 State에 들어가면
+    select 게이트(§2.4)와 병렬 폭을 우회해 곧장 fan-out된다(C1).
+    """
+    return task.model_copy(update={"status": "pending", "result_summary": None,
+                                   "result_evidence_ids": [], "error": None})
 
 
 def make_nodes(deps):
@@ -148,7 +185,8 @@ def make_nodes(deps):
             return {"verdict": Verdict(
                 verdict_type="degraded", confidence="low",
                 narrative="frame 출력 파싱 실패 — 조사 개시 불가", caveats=[err])}
-        return {"hypotheses": output.hypotheses, "plan_tasks": output.tasks}
+        sanitized_tasks = [_sanitize_new_task(task) for task in output.tasks]
+        return {"hypotheses": output.hypotheses, "plan_tasks": sanitized_tasks}
 
     async def select(state):
         # 실행 가능 게이트: pending이고 input_evidence_ids가 전부 state.evidence에 실재해야 한다.
@@ -197,6 +235,7 @@ def make_nodes(deps):
             hypotheses=_format_hypothesis_board(state.hypotheses),
             tasks=_format_task_status(state.plan_tasks),
             evidence=_format_evidence_list(state.evidence),
+            qa_log=_format_qa_log(state.qa_log),
             round=round_next, max_rounds=deps.engine_cfg.max_rounds)
         output, err = await _ask_llm(deps.lead_llm, prompt, IntegrateOutput)
         if output is None:
@@ -211,7 +250,8 @@ def make_nodes(deps):
             if task.id in existing_ids:
                 qa_log.append({"kind": "task_id_collision", "id": task.id})
             else:
-                kept_new_tasks.append(task)
+                # LLM이 status/result 필드를 실어 보내도 무시한다 — 수명주기는 코드만 쥔다(C1).
+                kept_new_tasks.append(_sanitize_new_task(task))
 
         cancellable = {task.id: task for task in state.plan_tasks if task.status == "pending"}
         cancelled_tasks = [cancellable[task_id].model_copy(update={"status": "cancelled"})
@@ -228,6 +268,10 @@ def make_nodes(deps):
             question = None
 
         if round_next >= deps.engine_cfg.max_rounds:
+            if decision == "ask":
+                # 라운드 상한이 ask를 짓눌러 질문이 사람에게 닿지 못하고 사라진다 — 조용히
+                # 버리지 않고 qa_log에 남긴다(M9b).
+                qa_log.append({"kind": "question_dropped_by_round_cap", "question": question})
             decision = "conclude"
             question = None
             qa_log.append({"kind": "round_cap"})
@@ -256,6 +300,7 @@ def make_nodes(deps):
         prompt = _CONCLUDE_PROMPT.format(
             hypotheses=_format_hypothesis_board(_supported_first(state.hypotheses)),
             evidence=_format_evidence_list(state.evidence),
+            qa_log=_format_qa_log(state.qa_log),
             error_rate=_format_task_error_rate(state.plan_tasks),
             rewrite_note=_format_rewrite_note(state.verify_problems))
         verdict, err = await _ask_llm(deps.lead_llm, prompt, Verdict)
@@ -271,7 +316,11 @@ def make_nodes(deps):
         if verdict is None:
             # conclude가 항상 verdict를 만들지만, 그래프 변경·재개 엣지에 대한 방어다
             return {"verify_problems": []}
-        case_id = state.case.id
+        # 인용 가능 우주는 State.evidence로 한정한다 — Store에는 error 태스크가 남긴
+        # 고아 본문도 그대로 남아있어(§2.4 인계 노트 2) store.has_evidence를 쓰면
+        # 리드가 실제로 본 적 없는 id를 인용해도 통과해버린다(I3). 규칙 2·3 모두 이
+        # 같은 집합을 기준으로 삼는다.
+        citable_ids = {e.id for e in state.evidence}
         incomplete_ids = {e.id for e in state.evidence if not e.complete}
         problems = []
 
@@ -282,7 +331,7 @@ def make_nodes(deps):
                 problems.append(f"다리에 인용 없음: {link.component}")
                 continue
             for evidence_id in link.evidence_ids:
-                if not deps.store.has_evidence(case_id, evidence_id):
+                if evidence_id not in citable_ids:
                     problems.append(f"없는 id {evidence_id} 인용")
                 elif (evidence_id in incomplete_ids
                       and not _id_mentioned(evidence_id, verdict.caveats)):

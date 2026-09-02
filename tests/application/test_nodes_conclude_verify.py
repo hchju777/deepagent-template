@@ -82,3 +82,15 @@ async def test_verdict_없이_verify에_들어와도_raise하지_않는다():
     deps = _deps([])
     update = await make_nodes(deps)["verify"](_state())
     assert update["verify_problems"] == []
+
+
+async def test_store에만_있고_state_evidence에_없는_id_인용은_문제로_잡힌다():
+    # error 태스크가 Store에 남긴 고아 본문(§2.4 인계 노트 2)처럼, store엔 있지만
+    # state.evidence엔 없는 id를 store.has_evidence로 검사하면 통과해버렸다(I3) —
+    # 인용 가능 우주는 state.evidence로 한정해야 한다.
+    deps = _deps([])
+    orphan_id = deps.store.put_evidence("c-1", "mongo:twin_state", {"v": 1})
+    state = _state(evidence=[], verdict=_verdict([orphan_id]))
+    update = await make_nodes(deps)["verify"](state)
+    assert update["verify_problems"]
+    assert any(orphan_id in p for p in update["verify_problems"])

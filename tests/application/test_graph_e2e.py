@@ -4,7 +4,9 @@ interrupt 재개, verify 재작성 경로를 스크립트 LLM·스텁만으로 �
 전부 parallel_width=1로 select→execute를 직렬화해 ScriptedLLM(lead) 각본과
 ToolFake(subagent) 각본이 라운드 순서와 정확히 대응하게 만든다.
 """
+import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 from src.application.deps import EngineDeps
@@ -154,3 +156,90 @@ async def test_verify_재작성은_실재_증거로_통과한다():
     assert result["verify_problems"] == []
     assert result["verdict"].root_cause.evidence_ids == ["ev-1"]
     assert result["verdict"].confidence == "high"       # 강등 없이 정상 통과
+
+
+# ── 시나리오 4: parallel_width=2 — 한 브랜치 에러가 다른 브랜치를 죽이지 않는다(I6) ──
+class KeyedToolFake(ToolFake):
+    """호출 순서가 아니라 태스크 goal의 키워드로 응답 시퀀스를 고르는 fake.
+
+    ToolFake(GenericFakeChatModel)는 공유 iterator를 소비한다 — parallel_width>=2로
+    execute 브랜치가 Send fan-out으로 동시에 돌면 create_agent가 스레드 풀에서
+    _generate를 병렬로 부르고, next() 호출 순서가 스케줄링에 좌우돼 각본과 브랜치가
+    어긋날 수 있다. 이 fake는 매 호출마다 메시지 본문에서 키워드를 찾아 그 브랜치
+    전용 큐에서만 소비한다 — 각 create_agent 실행(=각 태스크)이 자신의 시퀀스만 쓴다.
+    """
+    branches: dict[str, list[AIMessage]] = {}
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        text = " ".join(str(getattr(m, "content", "")) for m in messages)
+        for keyword, queue in self.branches.items():
+            if keyword in text and queue:
+                return ChatResult(generations=[ChatGeneration(message=queue.pop(0))])
+        raise RuntimeError(f"KeyedToolFake: 매칭되는 브랜치 없음 — {text[:200]!r}")
+
+
+FRAME_TWO_TASKS_PARALLEL_JSON = (
+    '{"hypotheses": [{"id": "h-1", "statement": "OEE 계산 이상"}], '
+    '"tasks": [{"id": "t-1", "goal": "twin_state 정상 조회", "role": "data_prober"}, '
+    '{"id": "t-2", "goal": "twin_state 실패 유도 조회", "role": "data_prober"}]}')
+
+
+async def test_parallel_width_2에서_한_브랜치_에러가_다른_브랜치를_죽이지_않는다():
+    seeds = StubSeeds(mongo_collections={"twin_state": [{"line": 7, "oee": 5.12}]})
+    deps = _deps(
+        lead_responses=[FRAME_TWO_TASKS_PARALLEL_JSON, INTEGRATE_CONCLUDE_JSON,
+                        ONE_EVIDENCE_VERDICT_JSON],
+        subagent_messages=[], seeds=seeds)
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"parallel_width": 2})
+    deps.subagent_llm = KeyedToolFake(messages=iter([]), branches={
+        "정상 조회": [_mongo_call("twin_state"), _report(["ev-1"])],
+        "실패 유도": [AIMessage(content="말로만 있고 JSON이 아님")],
+    })
+    case = Case(id="c-parallel-1", gbm="mx", fct="gumi", origin="patrol",
+               symptom="OEE 512%", t0=T)
+
+    result = await investigate_case(case, deps=deps)
+
+    assert "__interrupt__" not in result
+    tasks_by_id = {t.id: t for t in result["plan_tasks"]}
+    assert tasks_by_id["t-1"].status == "ok"
+    assert tasks_by_id["t-2"].status == "error" and tasks_by_id["t-2"].error
+    assert [e.id for e in result["evidence"]] == ["ev-1"]      # 성공 브랜치 증거만 실렸다
+    # error 브랜치가 라운드를 죽이지 않고 conclude·verify까지 정상 완주했다.
+    assert result["verdict"].root_cause.component == "plan-sync"
+    assert result["verify_problems"] == []
+
+
+# ── usecase 가드레일: question_policy 해석(M7), interrupt 경로 기동 거부(M8) ──────
+async def test_question_policy_None은_engine_cfg의_autonomous_question_policy를_따른다():
+    # M7: question_policy를 안 넘기면(None) deps.engine_cfg가 park면 ask가 그대로
+    # 살아남아 interrupt까지 가야 한다 — 예전 하드코딩 기본값("default_and_log")이면
+    # 자동응답으로 삼켜져 이 조사는 절대 멈추지 않는다.
+    seeds = StubSeeds(mongo_collections={"twin_state": [{"line": 7, "oee": 5.12}]})
+    deps = _deps(
+        lead_responses=[FRAME_ONE_TASK_JSON, ASK_JSON],
+        subagent_messages=[_mongo_call("twin_state"), _report(["ev-1"])],
+        seeds=seeds)
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"autonomous_question_policy": "park"})
+    checkpointer = InMemorySaver()
+    case = Case(id="c-park-1", gbm="mx", fct="gumi", origin="patrol", symptom="OEE 512%", t0=T)
+
+    paused = await investigate_case(case, deps=deps, checkpointer=checkpointer, thread_id=case.id)
+
+    assert "__interrupt__" in paused
+
+
+async def test_interrupt_경로인데_checkpointer가_없으면_기동을_거부한다():
+    # M8: interaction_policy가 autonomous가 아니거나 해석된 question_policy가 park면
+    # ask_human에서 멈출 수 있다 — checkpointer 없이 멈추면 그 조사는 영영 재개 불가능
+    # 하므로, 그래프를 돌리기 전에 이 함수 서두에서 거부한다.
+    deps = _deps(lead_responses=[], subagent_messages=[])
+    case = Case(id="c-guard-1", gbm="mx", fct="gumi", origin="patrol", symptom="s", t0=T)
+
+    with pytest.raises(ValueError):
+        await investigate_case(case, deps=deps, interaction_policy="interactive")
+
+    deps2 = _deps(lead_responses=[], subagent_messages=[])
+    deps2.engine_cfg = deps2.engine_cfg.model_copy(update={"autonomous_question_policy": "park"})
+    with pytest.raises(ValueError):
+        await investigate_case(case, deps=deps2)
