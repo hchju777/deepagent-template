@@ -617,7 +617,7 @@ git commit -m "Close the retention, traversal, and injection gaps the branch rev
   - `StubRedis(data: dict[str, str | dict], ttls: dict[str, int] = {}, *, max_rows: int, clock)` — get은 값 타입 그대로(str→string, dict→hash), scan은 fnmatch 패턴, max_rows 초과 시 절단+`complete=False`.
   - `StubMongo(collections: dict[str, list[dict]], *, max_rows: int, clock)` — find는 `$eq/$gt/$gte/$lt/$lte/$in` 지원 필터 평가 + filter_problems 검사(위반 시 error), count, aggregate는 `aggregate_problems` 검사만 하고 `$match`+`$count` 정도의 최소 평가.
   - `StubKafka(messages: dict[str, list[dict]], offsets: dict[str, dict[int, dict]] = {}, *, max_rows: int, clock)` — messages의 각 원소는 `{"ts": datetime, "value": ...}`. read는 [start, end) 필터+상한, 요청 start가 가장 이른 ts보다 과거면 earliest 폴백을 봉투에 명시. group_offsets는 offsets 시드 반환.
-  - `StubRest(responses: dict[str, Any], allowed: set[str], *, clock)` — endpoint_allowed 검사(위반 시 error "토폴로지 밖"), 등록된 응답 반환, 미등록이면 error "404".
+  - `StubRest(responses: dict[str, Any], allowed: set[str], *, clock)` — endpoint_allowed 검사(위반 시 error "토폴로지 밖"), 등록된 응답이면 `RealRest`와 동형인 `{"status_code": 200, "body": <등록된 응답>}`을 반환(status_code는 항상 200 고정), 미등록이면 error "404".
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/infrastructure/test_stubs.py`
 
@@ -665,7 +665,8 @@ async def test_kafka_스텁_보존밖_요청은_earliest_폴백_명시():
 async def test_rest_스텁_토폴로지_밖_끝점_거부():
     stub = StubRest({"/api/v1/lines/7/oee": {"oee": 5.12}},
                     allowed={"/api/v1/lines/{line}/oee"}, clock=CLOCK)
-    assert (await stub.get("/api/v1/lines/7/oee")).data == {"oee": 5.12}
+    ok = await stub.get("/api/v1/lines/7/oee")
+    assert ok.data == {"status_code": 200, "body": {"oee": 5.12}}
     outside = await stub.get("/admin/drop")
     assert outside.status == "error" and "토폴로지" in outside.error
 
@@ -858,7 +859,11 @@ class StubRest(RestProberPort):
             return _err(f"끝점 {endpoint!r}는 토폴로지에 등록돼 있지 않다", self._clock)
         if endpoint not in self._responses:
             return _err("404: 스텁에 등록되지 않은 끝점", self._clock)
-        return _ok(self._responses[endpoint], Envelope(observed_at=self._clock()))
+        # RealRest와 동형 — {"status_code", "body"} 구조로 반환한다(status_code를
+        # 폐기하지 않는다). 스텁은 등록된 성공 응답만 흉내 내므로 status_code는
+        # 항상 200으로 고정한다.
+        data = {"status_code": 200, "body": self._responses[endpoint]}
+        return _ok(data, Envelope(observed_at=self._clock()))
 ```
 
 - [ ] **Step 4: 통과 확인 후 커밋**
@@ -877,6 +882,15 @@ Run: `.venv/bin/pytest tests/infrastructure/test_stubs.py -v` → PASS, 전체 `
 ```bash
 git add src/infrastructure/stubs.py tests/infrastructure/test_stubs.py
 git commit -m "Close the retention, traversal, and injection gaps the branch review found"
+```
+
+**Fix round 2 (재리뷰 — 잔여 항목):** `StubRest.get`의 성공 경로가 `RealRest`와 형태가 달랐다 — `RealRest`는 이미 `{"status_code", "body"}` 구조를 반환하도록 고쳐졌는데(Task 6 Fix round 2) 스텁은 여전히 응답 본문을 그대로 돌려주고 있었다. 스텁이 실구현과 동형이어야 스텁으로 짠 그래프 로직이 실구현으로 바꿔도 그대로 동작한다 — `_ok({"status_code": 200, "body": self._responses[endpoint]}, ...)`로 맞췄다(스텁은 등록된 성공 응답만 흉내 내므로 status_code는 항상 200 고정).
+
+Run: `.venv/bin/pytest tests/infrastructure/test_stubs.py -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/stubs.py tests/infrastructure/test_stubs.py
+git commit -m "Report the latest fallback start and mirror the REST shape into the stub"
 ```
 
 ---
@@ -1092,6 +1106,44 @@ async def test_kafka_read는_None이_아닌_보존_밖_폴백도_감지한다(mo
         (start_ms + 5000) / 1000, tz=timezone.utc)
 
 
+# ---- 파티션마다 폴백 폭이 다르면 결과 집합 전체가 빠짐없이 완전한 시점은 그 중
+#      가장 늦은 파티션이 시작되는 때부터다 — min을 쓰면 아직 데이터가 없는
+#      파티션의 구간을 "이미 완전하다"고 축소 보고하게 된다. ----
+
+class _DivergentFallbackConsumer(_FakeConsumer):
+    def partitions_for_topic(self, topic):
+        return {0, 1} if self._topics_fetched else None
+
+    async def offsets_for_times(self, timestamps):
+        # 파티션 0은 얕게(+3000ms), 파티션 1은 깊게(+9000ms) 폴백한다 — 두 값이
+        # 다르면 min/max 차이가 effective_as_of에 그대로 드러난다.
+        out = {}
+        for tp, ts in timestamps.items():
+            delta = 3000 if tp.partition == 0 else 9000
+            out[tp] = _FakeOffsetAndTimestamp(offset=0, timestamp=ts + delta)
+        return out
+
+    async def getmany(self, *partitions, timeout_ms=0, max_records=None):
+        return {}   # 레코드 자체는 이 테스트의 관심사가 아니다 — 빈 배치로 곧장 종료
+
+
+async def test_kafka_read는_파티션별_폴백_중_가장_늦은_시각을_보고한다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer",
+                        _DivergentFallbackConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    assert res.status == "ok"
+    start_ms = int(T.timestamp() * 1000)
+    # min을 썼다면 start_ms+3000(파티션 0)이 나왔을 것이다 — 파티션 1이 아직
+    # 커버하지 못하는 [start_ms+3000, start_ms+9000) 구간을 "이미 완전하다"고
+    # 축소 보고하는 셈이라 틀렸다. 더 늦은 쪽(+9000ms, 파티션 1)이 맞다.
+    assert res.envelope.effective_as_of == datetime.fromtimestamp(
+        (start_ms + 9000) / 1000, tz=timezone.utc)
+
+
 # ---- 라이브 토픽은 end 이후 레코드를 계속 내놓을 수 있다 — 파티션별로 완료
 #      처리를 안 하면 empty_polls가 매번 리셋돼 수집 루프가 안 끝난다. ----
 
@@ -1197,7 +1249,7 @@ class RealRedis(RedisReaderPort):
 
 `src/infrastructure/kafka_inspector.py` — 같은 패턴으로:
 - `read`: `AIOKafkaConsumer(bootstrap_servers=..., group_id=None, enable_auto_commit=False)` 생성 시 **topic을 넘기지 않는다**(auto-subscribe가 이후 수동 `assign()`과 충돌). `consumer.start()` 직후 `partitions_for_topic`을 바로 호출하면 per-topic 메타데이터가 없어 항상 `None`이다 — **`await consumer.topics()`로 전체 클러스터 메타데이터를 먼저 강제 페치한 뒤** `partitions_for_topic` → `assign()` → 모든 파티션에 대해 `beginning_offsets`와 `offsets_for_times`를 함께 조회한다. `topics()` 이후에도 파티션이 비면 진짜 존재하지 않는 토픽이므로 빈 ok가 아니라 error ProbeResult("토픽 메타데이터 없음")로 구분한다. **commit 계열 호출 없음.**
-- **보존-폴백 판정(리뷰 수정)**: aiokafka의 `offsets_for_times`는 "start 이후 메시지가 없을 때"(빈 파티션·미래 시각)만 None을 준다 — start가 보존 범위보다 오래됐으면 None이 아니라 earliest 오프셋과 그 오프셋의(요청보다 나중인) 실제 타임스탬프를 정상 반환한다. 그래서 폴백 여부를 `resolved[tp] is None`으로 보면 안 되고 `resolved[tp].offset == beginning_offset(tp) and resolved[tp].timestamp > start_ms`로 판정해야 한다. 봉투 `effective_as_of`는 폴백 파티션들의 `resolved[tp].timestamp` 중 **최솟값(earliest)**을 `kafka_effective_start`에 넘겨 명시한다(수집된 레코드의 타임스탬프에서 역산하지 않는다 — max_rows 절단으로 폴백 파티션의 레코드가 아예 안 뽑힐 수도 있어서다).
+- **보존-폴백 판정(리뷰 수정)**: aiokafka의 `offsets_for_times`는 "start 이후 메시지가 없을 때"(빈 파티션·미래 시각)만 None을 준다 — start가 보존 범위보다 오래됐으면 None이 아니라 earliest 오프셋과 그 오프셋의(요청보다 나중인) 실제 타임스탬프를 정상 반환한다. 그래서 폴백 여부를 `resolved[tp] is None`으로 보면 안 되고 `resolved[tp].offset == beginning_offset(tp) and resolved[tp].timestamp > start_ms`로 판정해야 한다. 봉투 `effective_as_of`(코드상 `coverage_start_ts`)는 폴백 파티션들의 `resolved[tp].timestamp` 중 **최댓값(가장 늦은 달성-시작)**을 `kafka_effective_start`에 넘겨 명시한다(수집된 레코드의 타임스탬프에서 역산하지 않는다 — max_rows 절단으로 폴백 파티션의 레코드가 아예 안 뽑힐 수도 있어서다). max인 이유: 파티션마다 폴백 폭이 다르면 결과 집합 전체가 빠짐없이 완전한 시점은 그 중 가장 늦게 시작되는 파티션부터다 — min을 쓰면 아직 데이터가 없는 파티션의 구간을 "이미 완전하다"고 축소 보고하게 된다(2-파티션 픽스처로 실증됨, `tests/infrastructure/test_real_adapters_mocked.py::test_kafka_read는_파티션별_폴백_중_가장_늦은_시각을_보고한다`).
 - **수집 루프 종결(리뷰 수정)**: `getmany`로 end 시각/상한까지 수집하되, 파티션별로 end 이후 레코드를 처음 본 순간 그 파티션을 완료 처리해 다음 `getmany` 호출 대상에서 뺀다. 그냥 레코드를 버리기만 하면(`ts >= end_ms`) 살아있는 토픽에서 새 레코드가 계속 들어와 `empty_polls`가 매번 리셋되어 수집 루프가 결코 끝나지 않는다(실측: 모킹 테스트로 재현 시 이벤트 루프를 완전히 점유하는 tight loop가 되어 `guarded_call`의 타임아웃조차 못 걸린다). 전 파티션 완료 시, 또는 max_rows 도달 시(기존 동작 유지) 즉시 종료한다.
 - `group_offsets`: `AIOKafkaConsumer`의 admin 경유 없이 `AIOKafkaAdminClient.list_consumer_group_offsets(group)` + `end_offsets`로 파티션별 `{committed, end, lag}` 계산. **변경 API 미노출.**
 
@@ -1238,6 +1290,16 @@ git add src/infrastructure/kafka_inspector.py src/infrastructure/rest_prober.py 
         tests/infrastructure/test_code_repo.py tests/infrastructure/test_stubs.py \
         docs/superpowers/plans/2026-09-03-plan2-adapters.md
 git commit -m "Close the retention, traversal, and injection gaps the branch review found"
+```
+
+**Fix round 3 (재리뷰 — 잔여 항목):** Fix round 2에서 `effective_as_of`를 폴백 파티션들의 resolved 타임스탬프 중 **최솟값**으로 고쳤는데, 이 판단 자체가 틀렸다는 재리뷰 지적을 받았다. 파티션마다 폴백 폭이 다르면(예: 파티션 0은 요청+3000ms부터, 파티션 1은 요청+9000ms부터 데이터가 있음) 결과 집합 전체가 빠짐없이 완전한 시점은 그 중 **가장 늦게 시작되는 파티션부터**다 — min을 쓰면 아직 데이터가 없는 파티션의 구간([+3000ms, +9000ms) 구간의 파티션 1)을 "이미 완전하다"고 축소 보고하는 셈이라, 바로 이 함수가 막으려는 "조용한 폴백으로 오염된 evidence를 T0 evidence로 위장" 문제를 다른 형태로 재현하고 있었다. `min()` → `max()`로 교정하고 변수명을 `coverage_start_ts`로 바꿔 의미를 드러냈다. 재리뷰어가 제시한 2-파티션 픽스처를 그대로 회귀 테스트로 추가했다(`test_kafka_read는_파티션별_폴백_중_가장_늦은_시각을_보고한다`) — 단일 파티션 테스트로는 min/max 차이가 드러나지 않아 이전 라운드에서 놓쳤다.
+
+Run: `.venv/bin/pytest tests/infrastructure -v` → PASS, 전체 `.venv/bin/pytest` → PASS
+
+```bash
+git add src/infrastructure/kafka_inspector.py tests/infrastructure/test_real_adapters_mocked.py \
+        docs/superpowers/plans/2026-09-03-plan2-adapters.md
+git commit -m "Report the latest fallback start and mirror the REST shape into the stub"
 ```
 
 ---

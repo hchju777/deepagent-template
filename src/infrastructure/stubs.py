@@ -155,4 +155,8 @@ class StubRest(RestProberPort):
             return _err(f"끝점 {endpoint!r}는 토폴로지에 등록돼 있지 않다", self._clock)
         if endpoint not in self._responses:
             return _err("404: 스텁에 등록되지 않은 끝점", self._clock)
-        return _ok(self._responses[endpoint], Envelope(observed_at=self._clock()))
+        # RealRest와 동형 — {"status_code", "body"} 구조로 반환한다(status_code를
+        # 폐기하지 않는다). 스텁은 등록된 성공 응답만 흉내 내므로 status_code는
+        # 항상 200으로 고정한다.
+        data = {"status_code": 200, "body": self._responses[endpoint]}
+        return _ok(data, Envelope(observed_at=self._clock()))

@@ -175,6 +175,44 @@ async def test_kafka_read는_None이_아닌_보존_밖_폴백도_감지한다(mo
         (start_ms + 5000) / 1000, tz=timezone.utc)
 
 
+# ---- 파티션마다 폴백 폭이 다르면 결과 집합 전체가 빠짐없이 완전한 시점은 그 중
+#      가장 늦은 파티션이 시작되는 때부터다 — min을 쓰면 아직 데이터가 없는
+#      파티션의 구간을 "이미 완전하다"고 축소 보고하게 된다. ----
+
+class _DivergentFallbackConsumer(_FakeConsumer):
+    def partitions_for_topic(self, topic):
+        return {0, 1} if self._topics_fetched else None
+
+    async def offsets_for_times(self, timestamps):
+        # 파티션 0은 얕게(+3000ms), 파티션 1은 깊게(+9000ms) 폴백한다 — 두 값이
+        # 다르면 min/max 차이가 effective_as_of에 그대로 드러난다.
+        out = {}
+        for tp, ts in timestamps.items():
+            delta = 3000 if tp.partition == 0 else 9000
+            out[tp] = _FakeOffsetAndTimestamp(offset=0, timestamp=ts + delta)
+        return out
+
+    async def getmany(self, *partitions, timeout_ms=0, max_records=None):
+        return {}   # 레코드 자체는 이 테스트의 관심사가 아니다 — 빈 배치로 곧장 종료
+
+
+async def test_kafka_read는_파티션별_폴백_중_가장_늦은_시각을_보고한다(monkeypatch):
+    monkeypatch.setattr("src.infrastructure.kafka_inspector.AIOKafkaConsumer",
+                        _DivergentFallbackConsumer)
+    kafka = RealKafka("localhost:9092", guards=_Guards(),
+                      semaphore=asyncio.Semaphore(1), clock=CLOCK)
+
+    res = await kafka.read("edge.raw.7", start=T, end=datetime(2026, 9, 3, tzinfo=timezone.utc))
+
+    assert res.status == "ok"
+    start_ms = int(T.timestamp() * 1000)
+    # min을 썼다면 start_ms+3000(파티션 0)이 나왔을 것이다 — 파티션 1이 아직
+    # 커버하지 못하는 [start_ms+3000, start_ms+9000) 구간을 "이미 완전하다"고
+    # 축소 보고하는 셈이라 틀렸다. 더 늦은 쪽(+9000ms, 파티션 1)이 맞다.
+    assert res.envelope.effective_as_of == datetime.fromtimestamp(
+        (start_ms + 9000) / 1000, tz=timezone.utc)
+
+
 # ---- 라이브 토픽은 end 이후 레코드를 계속 내놓을 수 있다 — 파티션별로 완료
 #      처리를 안 하면 empty_polls가 매번 리셋돼 수집 루프가 안 끝난다. ----
 

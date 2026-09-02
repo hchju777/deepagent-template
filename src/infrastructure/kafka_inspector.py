@@ -7,7 +7,11 @@ offsets_for_times를 함께 조회한다. aiokafka의 offsets_for_times는 "star
 타임스탬프를 정상 반환한다. 그래서 폴백 여부는 None 체크가 아니라
 `resolved[tp].offset == beginning_offset(tp) and resolved[tp].timestamp > start_ms`
 로 판정하고, 봉투 effective_as_of는 폴백 파티션들의 resolved 타임스탬프 중
-최솟값(earliest)을 kafka_effective_start에 넘겨 명시한다(조용한 폴백 금지, §4.2).
+최댓값(가장 늦은 달성-시작)을 kafka_effective_start에 넘겨 명시한다(조용한 폴백
+금지, §4.2) — 파티션마다 폴백 폭이 다르면 전체 결과 집합이 빠짐없이 완전한
+시점은 그 중 가장 늦은 파티션이 시작되는 때부터다. min을 쓰면 아직 데이터가
+없는 파티션의 구간을 "이미 완전하다"고 축소 보고하게 된다(재리뷰에서 2-파티션
+픽스처로 실증).
 수집 루프는 파티션별로 end 이후 레코드를 처음 본 순간 그 파티션을 완료 처리해
 폴링 대상에서 뺀다 — 그래야 라이브 토픽에서도(계속 새 레코드가 들어와
 empty_polls가 리셋되는 상황) 전 파티션이 끝났을 때 확정적으로 종료한다.
@@ -106,8 +110,10 @@ class RealKafka(KafkaInspectorPort):
 
                 effective_as_of = None
                 if fallback_tps:
-                    earliest_ts = min(resolved[tp].timestamp for tp in fallback_tps)
-                    effective_as_of, _ = kafka_effective_start(start, None, earliest_ts)
+                    # 파티션별 폴백 시작이 다를 수 있어 max — 결과 집합 전체가 빠짐없이
+                    # 완전한 시점은 가장 늦게 시작되는 파티션부터다(위 독스트링).
+                    coverage_start_ts = max(resolved[tp].timestamp for tp in fallback_tps)
+                    effective_as_of, _ = kafka_effective_start(start, None, coverage_start_ts)
 
                 env = Envelope(observed_at=self._clock(), complete=not truncated,
                                truncated_reason="max_rows" if truncated else None,

@@ -41,7 +41,8 @@ async def test_kafka_스텁_보존밖_요청은_earliest_폴백_명시():
 async def test_rest_스텁_토폴로지_밖_끝점_거부():
     stub = StubRest({"/api/v1/lines/7/oee": {"oee": 5.12}},
                     allowed={"/api/v1/lines/{line}/oee"}, clock=CLOCK)
-    assert (await stub.get("/api/v1/lines/7/oee")).data == {"oee": 5.12}
+    ok = await stub.get("/api/v1/lines/7/oee")
+    assert ok.data == {"status_code": 200, "body": {"oee": 5.12}}
     outside = await stub.get("/admin/drop")
     assert outside.status == "error" and "토폴로지" in outside.error
 
