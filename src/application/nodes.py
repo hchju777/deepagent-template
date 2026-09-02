@@ -3,9 +3,12 @@
 모든 노드는 절대 raise하지 않고 부분 상태 update(dict)를 반환한다.
 LLM 파싱은 재시도 1회 후 노드별 안전 경로로 강등된다.
 """
+from langgraph.types import Send
+
 from src.application.briefing import build_briefing, upstream_slice
 from src.application.schemas import FrameOutput, parse_structured
-from src.domain.case import Verdict
+from src.application.subagents import run_subagent
+from src.domain.case import EvidenceRef, PlanTask, Verdict
 from src.knowledge.topology import Topology
 
 _FRAME_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 아래 브리핑을 읽고 초기 가설과 조사 계획을 세워라.
@@ -46,8 +49,59 @@ def make_nodes(deps):
                 narrative="frame 출력 파싱 실패 — 조사 개시 불가", caveats=[err])}
         return {"hypotheses": output.hypotheses, "plan_tasks": output.tasks}
 
-    return {"frame": frame}
+    async def select(state):
+        # 실행 가능 게이트: pending이고 input_evidence_ids가 전부 state.evidence에 실재해야 한다.
+        evidence_ids = {e.id for e in state.evidence}
+        eligible = [task for task in state.plan_tasks
+                   if task.status == "pending" and set(task.input_evidence_ids) <= evidence_ids]
+        # (priority, 계획 등재 순)으로 정렬 — enumerate가 plan_tasks 상의 원래 순서를 보존한다.
+        ordered = sorted(enumerate(eligible), key=lambda pair: (pair[1].priority, pair[0]))
+        width = deps.engine_cfg.parallel_width
+        chosen = [task for _, task in ordered[:width]]
+        running = [task.model_copy(update={"status": "running"}) for task in chosen]
+        return {"plan_tasks": running}
+
+    async def execute(payload):
+        # Send 페이로드에서 PlanTask 복원 — route_after_select가 만든 것이므로 형태는 신뢰한다.
+        task = PlanTask.model_validate(payload["task"])
+        case_id = payload["case_id"]
+        try:
+            budget = getattr(deps.engine_cfg.subagent_budgets, task.role)
+            report = await run_subagent(task, adapters=deps.adapters, store=deps.store,
+                                        llm=deps.subagent_llm, budget=budget, case_id=case_id)
+            if report.status == "error":
+                updated = task.model_copy(update={"status": "error", "error": report.error})
+                return {"plan_tasks": [updated]}
+            # ok — 도구가 실제로 만든 증거 id들을 Store 메타(봉투)와 함께 State로 승격한다.
+            evidence = []
+            for evidence_id in report.evidence_ids:
+                record = deps.store.get_evidence_record(case_id, evidence_id)
+                body = deps.store.get_evidence(case_id, evidence_id)
+                evidence.append(EvidenceRef(
+                    id=evidence_id, source=record.source, summary=repr(body)[:160],
+                    as_of=record.as_of, complete=record.complete,
+                    effective_as_of=record.effective_as_of))
+            updated = task.model_copy(update={
+                "status": "ok", "result_summary": report.summary,
+                "result_evidence_ids": report.evidence_ids})
+            return {"plan_tasks": [updated], "evidence": evidence}
+        except Exception as exc:   # 최외곽 방어망 — 노드는 어떤 예외도 raise하지 않는다(superstep 보호)
+            updated = task.model_copy(update={
+                "status": "error", "error": f"execute 실패 — {type(exc).__name__}: {exc}"})
+            return {"plan_tasks": [updated]}
+
+    return {"frame": frame, "select": select, "execute": execute}
 
 
 def route_after_frame(state):
     return "__end__" if state.verdict is not None else "select"
+
+
+def route_after_select(state):
+    # select가 방금 running으로 굴린 태스크만 Send로 fan out한다 — execute가 끝나면
+    # ok/error로 바뀌므로 이 조건은 이번 라운드 몫만 정확히 잡아낸다.
+    running = [task for task in state.plan_tasks if task.status == "running"]
+    if not running:
+        return "integrate"
+    return [Send("execute", {"task": task.model_dump(mode="json"), "case_id": state.case.id})
+            for task in running]
