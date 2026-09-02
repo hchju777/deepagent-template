@@ -520,7 +520,7 @@ git commit -m "Integrate rounds under a hard cap with policy-aware questions"
 - `ask_human(state)`: **첫 줄이 interrupt** — `answer = interrupt({"question": state.question})` (`from langgraph.types import interrupt`). 반환: `{"qa_log": [{"kind": "human_answer", "question": state.question, "answer": answer}], "decision": None, "question": None}`. interactive/park 공용(파킹=interrupt로 스레드 대기, 재개는 integrate로 — 고정 엣지).
 - `conclude(state)`:
   - **결정론 degraded**: `state.evidence`가 비어 있으면 LLM 없이 `Verdict(verdict_type="degraded", confidence="low", narrative="증거 수집 전멸 — 조사 실패", caveats=[에러 태스크 원인 나열])` 반환.
-  - LLM 경로: 프롬프트에 가설 보드(supported 우선)·증거 목록(id/summary/complete/effective_as_of)·태스크 에러율·**재작성 시 `state.verify_problems`**("다음 문제를 고쳐 다시 작성하라") 포함. 지시: Verdict JSON — 모든 주장에 실재 증거 id 인용, complete=False 증거를 쓰면 caveats에 그 id 명시, 확신 없으면 inconclusive 허용(억지 결론 금지).
+  - LLM 경로: 프롬프트에 가설 보드(supported 우선)·증거 목록(id/summary/complete/effective_as_of)·태스크 에러율·**질문·답변 로그(qa_log의 human_answer/auto_answered — C2 픽스 웨이브)**·**재작성 시 `state.verify_problems`**("다음 문제를 고쳐 다시 작성하라") 포함. 지시: Verdict JSON — 모든 주장에 실재 증거 id 인용, complete=False 증거를 쓰면 caveats에 그 id 명시, 확신 없으면 inconclusive 허용(억지 결론 금지).
   - `_ask_llm(Verdict)` 이중 실패 → degraded verdict(파싱 실패 caveat).
   - 반환: `{"verdict": ...}`.
 
