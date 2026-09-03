@@ -1,6 +1,6 @@
 """케이스 저장소 및 도메인 모델."""
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from src.config.schema_app import StrictModel
@@ -52,6 +52,17 @@ class CaseRecord(StrictModel):
                     symptom=self.symptom, t0=self.t0, target_locator=self.target_locator)
 
 
+def lease_is_free(record: CaseRecord, owner: str, now: datetime) -> bool:
+    """owner가 lease를 잡을 수 있는가 — 없거나, 자기 것이거나, 만료됐을 때.
+
+    이 규칙이 두 곳(application의 acquire_lease, 저장소의 claim)에 있으면 반드시
+    갈라진다. 도메인에 한 번만 둔다.
+    """
+    if record.owner is None or record.owner == owner:
+        return True
+    return record.lease_until is not None and record.lease_until < now
+
+
 class CaseRepositoryPort(ABC):
     """케이스 저장소 포트."""
 
@@ -85,6 +96,16 @@ class CaseRepositoryPort(ABC):
         """새 케이스 id 생성."""
         pass
 
+    @abstractmethod
+    def claim(self, case_id: str, owner: str, *, now: datetime,
+              ttl_s: float) -> CaseRecord | None:
+        """lease를 원자적으로 잡고 갱신된 레코드를 돌려준다. 못 잡으면 None.
+
+        get→save 사이에 다른 프로세스가 끼어들 수 있으므로 획득은 저장소가 한
+        동작으로 수행해야 한다 — 순수 함수 acquire_lease로는 표현할 수 없다.
+        """
+        pass
+
 
 class InMemoryCaseRepository(CaseRepositoryPort):
     """인메모리 케이스 저장소."""
@@ -102,6 +123,15 @@ class InMemoryCaseRepository(CaseRepositoryPort):
         if case_id not in self._cases:
             raise KeyError(case_id)
         return self._cases[case_id]
+
+    def claim(self, case_id, owner, *, now, ttl_s):
+        record = self.get(case_id)
+        if not lease_is_free(record, owner, now):
+            return None
+        claimed = record.model_copy(update={
+            "owner": owner, "lease_until": now + timedelta(seconds=ttl_s)})
+        self._cases[case_id] = claimed
+        return claimed
 
     def find_open_by_fingerprint(self, fp: str) -> CaseRecord | None:
         """열린 상태의 케이스를 지문으로 찾기."""

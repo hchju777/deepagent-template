@@ -27,3 +27,17 @@ def test_list_open은_열린_상태_전부():
         repo.save(CaseRecord(id=f"c-{i}", gbm="mx", fct="gumi", fingerprint=f"fp{i}",
                              symptom="s", t0=T, created_at=T, updated_at=T, status=status))
     assert sorted(r.id for r in repo.list_open()) == ["c-0", "c-1", "c-2"]
+
+
+def test_claim은_남의_살아있는_lease를_뺏지_않는다():
+    from datetime import timedelta
+
+    from src.domain.cases import InMemoryCaseRepository
+    repo = InMemoryCaseRepository()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T))
+    assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None
+    assert repo.claim("c-1", "w-2", now=T, ttl_s=60) is None          # 살아있는 남의 lease
+    assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None      # 같은 owner는 갱신
+    later = T + timedelta(seconds=120)
+    assert repo.claim("c-1", "w-2", now=later, ttl_s=60) is not None  # 만료됐으면 회수

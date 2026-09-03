@@ -15,14 +15,15 @@ ISO 문자열은 마이크로초 유무로 길이가 달라져 사전식 비교�
 어긋날 수 있기 때문이다.
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pymongo import ReturnDocument
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
-from src.domain.cases import CaseRecord, CaseRepositoryPort, OPEN_STATUSES
+from src.domain.cases import (CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
+                              lease_is_free)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
 from src.domain.store import CaseStorePort, EvidenceRecord
@@ -205,6 +206,23 @@ class MongoCaseRepository(CaseRepositoryPort):
         if doc is None:
             raise KeyError(case_id)
         return self._to_record(doc)
+
+    def claim(self, case_id, owner, *, now, ttl_s):
+        doc = self._db.cases.find_one({"id": case_id})
+        if doc is None:
+            raise KeyError(case_id)
+        record = self._to_record(doc)
+        if not lease_is_free(record, owner, now):
+            return None
+        claimed = record.model_copy(update={
+            "owner": owner, "lease_until": now + timedelta(seconds=ttl_s)})
+        # 읽은 시점의 owner/lease_until을 그대로 술어로 걸어, 그 사이 남이 잡았으면
+        # 진다(CAS). lease_until에 $lt 범위 비교를 쓰지 않는 이유는 ISO 문자열이라
+        # 마이크로초 유무로 사전식 순서가 시간 순서와 어긋나기 때문이다(모듈 docstring).
+        result = self._db.cases.update_one(
+            {"id": case_id, "owner": doc.get("owner"), "lease_until": doc.get("lease_until")},
+            {"$set": claimed.model_dump(mode="json")})
+        return claimed if result.modified_count else None
 
     def find_open_by_fingerprint(self, fp: str) -> CaseRecord | None:
         doc = self._db.cases.find_one(

@@ -9,7 +9,7 @@
 from datetime import datetime, timedelta
 from typing import Callable
 
-from src.domain.cases import CaseRecord, CaseStatus
+from src.domain.cases import CaseRecord, lease_is_free, CaseStatus
 
 ENGINE_SCHEMA_VERSION = 1
 
@@ -58,14 +58,11 @@ def acquire_lease(record: CaseRecord, owner: str, *, clock: Clock,
                    ttl_s: float) -> CaseRecord | None:
     """owner가 lease를 획득(또는 갱신)할 수 있으면 갱신된 레코드를, 아니면 None을 반환한다.
 
-    획득 가능 조건: 현재 lease가 없거나(owner is None), 이미 같은 owner가
-    쥐고 있거나(갱신), 기존 lease가 만료됐을 때(lease_until < clock()).
+    획득 조건은 도메인의 lease_is_free가 쥔다 — 저장소의 claim이 같은 규칙을
+    써야 하므로 여기서 다시 쓰지 않는다.
     """
     now = clock()
-    can_acquire = (record.owner is None
-                  or record.owner == owner
-                  or (record.lease_until is not None and record.lease_until < now))
-    if not can_acquire:
+    if not lease_is_free(record, owner, now):
         return None
     return record.model_copy(update={"owner": owner, "lease_until": now + timedelta(seconds=ttl_s)})
 

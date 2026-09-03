@@ -142,3 +142,24 @@ def test_mongo_이벤트_보존은_마이크로초_길이에_속지_않는다(db
     events.append(EngineEvent(event="round_started", case_id="c-1", at=T))
     assert events.prune_before(T - timedelta(days=1)) == 2
     assert [e.seq for e in events.since("c-1")] == [3]
+
+
+def test_mongo_claim은_그_사이_남이_잡았으면_진다(db):
+    repo = MongoCaseRepository(db)
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T))
+    assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None
+    assert repo.claim("c-1", "w-2", now=T, ttl_s=60) is None
+    assert repo.get("c-1").owner == "w-1"
+
+
+def test_mongo_claim은_ISO_길이_차이에_속지_않는다(db):
+    # lease_until을 DB $lt로 비교하면 마이크로초 유무로 길이가 달라 사전식 순서가
+    # 시간 순서와 어긋난다 — 만료 판정이 뒤집혀 살아있는 lease를 뺏는다.
+    from datetime import timedelta
+    repo = MongoCaseRepository(db)
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T))
+    holder = T.replace(microsecond=500000)
+    assert repo.claim("c-1", "w-1", now=holder, ttl_s=3600) is not None
+    assert repo.claim("c-1", "w-2", now=holder + timedelta(seconds=1), ttl_s=60) is None
