@@ -109,3 +109,27 @@ def test_항목이_전부_비dict면_없음을_낸다():
     text = render_report(RECORD, verdict=None, evidence=[], case_file=junk, clock=lambda: T)
     assert "## 5. 조사 경위" in text and "없음" in text
     assert "| t-" not in text                      # 빈 표 머리만 남지 않음
+
+
+def test_요약절에_단계_체크리스트가_기호로_나온다():
+    from src.domain.case import CauseLink, Verdict
+    verdict = Verdict(verdict_type="data_loss", confidence="high",
+                      root_cause=CauseLink(component="plan-sync", evidence_ids=["ev-1"]),
+                      narrative="계획 동기화 누락")
+    case_file = {"hypotheses": [{"id": "h1"}],
+                 "plan_tasks": [{"id": "t1", "role": "data_prober", "status": "ok"},
+                                {"id": "t2", "role": "code_tracer", "status": "error"}],
+                 "round": 2, "qa_log": [], "verify_problems": [], "verify_attempts": 0}
+    text = render_report(RECORD, verdict=verdict, evidence=[], case_file=case_file,
+                         clock=lambda: T)
+    assert "| 단계 | 상태 | 비고 |" in text
+    assert "| 가설 수립 | ✅ |" in text
+    assert "| 조사 실행 | ❌ |" in text          # error 태스크가 있다
+    # 표 앞에 빈 줄이 없으면 GFM이 앞 불릿의 계속으로 흡수해 평문이 된다.
+    assert "\n\n| 단계 | 상태 | 비고 |" in text
+
+
+def test_미도달_단계는_빈칸_기호로_구별된다():
+    text = render_report(RECORD, verdict=None, evidence=[], case_file={"round": 0},
+                         clock=lambda: T)
+    assert "| 판정 | ⬜ |" in text and "| 검증 | ⬜ |" in text

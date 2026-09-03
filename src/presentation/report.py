@@ -1,10 +1,8 @@
-"""보고서 렌더러 — 스펙 §5.1.
+"""보고서 마크다운 렌더러 — 스펙 §5.1.
 
-엔진은 도메인 객체(Verdict + 케이스 파일)만 내고, 5절 마크다운 조립은 여기
-(프레젠테이션 층)의 책임이다. case_file은 Store에 박제된 원시 dict라서
-(worker._case_file_snapshot, 계획 4b I6) 옛 스냅샷이거나 일부 키가 빠져도
-render_report는 절대 raise하지 않는다 — 보고서 조립 실패가 조사 종결을
-막아서는 안 된다("항상 파일 먼저" 원칙, §5.1).
+데이터 유도는 report_model.build_report_model이 한다 — 이 모듈은 그 결과를
+마크다운으로 옮기고 파일로 쓸 뿐이다. HTML 렌더러(report_html.py)가 같은 모델을
+보므로 두 렌더러가 다른 말을 할 수 없다.
 
 "무엇을 확인 안 했나"의 명시(§5)가 신뢰의 조건이다 — 조용한 생략 금지의
 보고서판. 그래서 각 하위 항목이 비면 값을 지우는 대신 "없음"을 적는다.
@@ -16,36 +14,59 @@ from pathlib import Path
 from src.domain.case import Verdict
 from src.domain.cases import CaseRecord
 from src.domain.store import EvidenceRecord
+from src.presentation.report_model import ReportModel, build_report_model
 
 Clock = Callable[[], datetime]
 
 _UNINVESTIGATED = {"pending", "cancelled"}   # §5: 미조사로 명시할 태스크 상태
+_MARKS = {"ok": "✅", "fail": "❌", "warn": "⚠", "skip": "⬜"}
 
 
 def render_report(record: CaseRecord, *, verdict: Verdict | None,
                    evidence: list[EvidenceRecord], case_file: dict | None,
                    clock: Clock, evidence_summaries: dict[str, str] | None = None) -> str:
-    """스펙 §5.1의 5절 보고서를 md로 조립한다.
+    """스펙 §5.1의 5절 보고서를 md로 조립한다(호출부 호환 유지).
 
     순수 함수 — case_file의 형태가 기대와 어긋나도 raise하지 않고
     "없음"으로 채운 보고서(또는 실패 시 최소 안내문)를 반환한다.
 
     evidence_summaries(증거 id → 요지 문자열)가 주어지면 §4 증거 표의 "요지" 열에
     그것을 쓴다 — 주지 않으면(None, 기본값) §4는 body_digest 앞 12자를 보여주되
-    열 이름을 "본문 digest"로 정직하게 표기한다(digest는 요지가 아니다). 호출부
-    (daemon._publish_report)가 store.get_evidence로 본문을 다시 읽어 채운다.
+    열 이름을 "본문 digest"로 정직하게 표기한다(digest는 요지가 아니다).
     """
     try:
-        return _render(record, verdict=verdict, evidence=evidence,
-                       case_file=case_file, clock=clock, evidence_summaries=evidence_summaries)
-    except Exception as exc:            # noqa: BLE001 — 최후의 그물: 컨테이너 타입 가드(_as_list)를
-        # 통과한 뒤에도 예상 못 한 형태가 있을 수 있다 — 그때도 조사 종결은 막지 않는다(계약)
+        model = build_report_model(record, verdict=verdict, evidence=evidence,
+                                   case_file=case_file, clock=clock,
+                                   evidence_summaries=evidence_summaries)
+        return render_md(model)
+    except Exception as exc:            # noqa: BLE001 — 최후의 그물: 유도와 렌더 어느
+        # 쪽이 예상 못 한 형태를 만나도 조사 종결은 막지 않는다(계약)
         return (f"# 케이스 {getattr(record, 'id', '?')} 보고서\n\n"
                 f"보고서 조립 실패: {type(exc).__name__}: {exc}\n")
 
 
-def write_report(text: str, *, output_dir: str, case_id: str) -> str:
-    """`{output_dir}/{case_id}.md`에 UTF-8로 쓰고 경로를 반환한다.
+def render_md(model: ReportModel) -> str:
+    """ReportModel에서 5절 마크다운을 조립한다."""
+    sections = [
+        f"# 케이스 {model.record.id} 보고서",
+        "",
+        f"작성 시각: {model.generated_at.isoformat()}",
+        "",
+        _section1(model),
+        "",
+        _section2(model.record, model.verdict),
+        "",
+        _section3(model.verdict),
+        "",
+        _section4(model.evidence, model.evidence_summaries),
+        "",
+        _section5(model),
+    ]
+    return "\n".join(sections) + "\n"
+
+
+def write_report(text: str, *, output_dir: str, case_id: str, suffix: str = "md") -> str:
+    """`{output_dir}/{case_id}.{suffix}`에 UTF-8로 쓰고 경로를 반환한다.
 
     디렉터리가 없으면 만든다. 실패(권한·경로 오류 등)는 raise 대신 빈
     문자열로 알린다 — 호출자(usecase)가 report_ready 대신 실패를 보고한다.
@@ -53,50 +74,11 @@ def write_report(text: str, *, output_dir: str, case_id: str) -> str:
     try:
         directory = Path(output_dir)
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{case_id}.md"
+        path = directory / f"{case_id}.{suffix}"
         path.write_text(text, encoding="utf-8")
         return str(path)
     except OSError:
         return ""
-
-
-def _as_list(value: object) -> list:
-    """스냅샷 필드가 리스트가 아니면 빈 리스트로 — 형태 이상에서도 5절 구조는 지킨다.
-
-    `value or []`는 falsy만 걸러내 5 같은 truthy 비-리스트를 그대로 통과시키고,
-    이후 리스트 컴프리헨션/순회에서 TypeError가 나 바깥 try/except까지 튀며
-    5절 헤딩 전체가 사라진다 — 컨테이너 레벨에서 막는다.
-    """
-    return value if isinstance(value, list) else []
-
-
-def _render(record: CaseRecord, *, verdict: Verdict | None,
-           evidence: list[EvidenceRecord], case_file: dict | None, clock: Clock,
-           evidence_summaries: dict[str, str] | None = None) -> str:
-    case_file = case_file if isinstance(case_file, dict) else {}
-    plan_tasks = _as_list(case_file.get("plan_tasks"))
-    hypotheses = _as_list(case_file.get("hypotheses"))
-    qa_log = _as_list(case_file.get("qa_log"))
-    verify_problems = _as_list(case_file.get("verify_problems"))
-    round_raw = case_file.get("round")
-    round_no = round_raw if isinstance(round_raw, int) else None
-
-    sections = [
-        f"# 케이스 {record.id} 보고서",
-        "",
-        f"작성 시각: {clock().isoformat()}",
-        "",
-        _section1(record, verdict, plan_tasks),
-        "",
-        _section2(record, verdict),
-        "",
-        _section3(verdict),
-        "",
-        _section4(evidence, evidence_summaries),
-        "",
-        _section5(round_no, plan_tasks, hypotheses, verify_problems, qa_log),
-    ]
-    return "\n".join(sections) + "\n"
 
 
 def _verdict_headline(record: CaseRecord, verdict: Verdict | None) -> str:
@@ -107,27 +89,35 @@ def _verdict_headline(record: CaseRecord, verdict: Verdict | None) -> str:
     return f"{verdict.verdict_type} — {first_line}"
 
 
-def _task_error_rate(plan_tasks: list) -> str:
-    if not plan_tasks:
-        return "없음"
-    total = len(plan_tasks)
-    errors = sum(1 for t in plan_tasks if isinstance(t, dict) and t.get("status") == "error")
-    return f"{errors}/{total}"
+def _stage_table(stages) -> list[str]:
+    """§1의 조사 단계 체크리스트.
+
+    표 앞뒤에 빈 줄을 둔다 — 빈 줄 없이 앞 불릿에 붙으면 GFM이 리스트 항목의
+    느슨한 계속으로 흡수해 표가 아니라 평문으로 렌더한다(§5 태스크 표에서 겪은
+    것과 같은 함정, mistune으로 실측 확인).
+    """
+    lines = ["", "| 단계 | 상태 | 비고 |", "|---|---|---|"]
+    for s in stages:
+        lines.append(f"| {s.label} | {_MARKS.get(s.mark, '?')} | {s.note or '없음'} |")
+    lines.append("")
+    return lines
 
 
-def _section1(record: CaseRecord, verdict: Verdict | None, plan_tasks: list) -> str:
-    confidence = verdict.confidence if verdict is not None else "없음"
+def _section1(model: ReportModel) -> str:
+    record = model.record
+    confidence = model.verdict.confidence if model.verdict is not None else "없음"
     rows = [
         f"- 케이스 id: {record.id}",
         f"- 스코프: {record.gbm}/{record.fct}",
         f"- 개설 경로: {record.origin}",
         f"- 증상: {record.symptom}",
         f"- T0: {record.t0.isoformat()}",
-        f"- 판정: {_verdict_headline(record, verdict)}",
+        f"- 판정: {_verdict_headline(record, model.verdict)}",
         f"- 신뢰도: {confidence}",
-        f"- 태스크 에러율: {_task_error_rate(plan_tasks)}",
+        f"- 태스크 에러율: {model.task_error_rate}",
+        "- 조사 단계:",
     ]
-    return "## 1. 요약\n" + "\n".join(rows)
+    return "## 1. 요약\n" + "\n".join(rows + _stage_table(model.stages))
 
 
 def _section2(record: CaseRecord, verdict: Verdict | None) -> str:
@@ -195,16 +185,13 @@ def _qa_entry_summary(entry: object) -> str:
     return str(entry)
 
 
-def _section5(round_no: int | None, plan_tasks: list, hypotheses: list,
-             verify_problems: list, qa_log: list) -> str:
+def _section5(model: ReportModel) -> str:
     lines = ["## 5. 조사 경위",
-             f"- 라운드: {round_no if round_no is not None else '없음'}",
+             f"- 라운드: {model.round_no if model.round_no is not None else '없음'}",
              "- 태스크 현황:"]
 
     task_rows = []
-    for t in plan_tasks:
-        if not isinstance(t, dict):
-            continue
+    for t in model.plan_tasks:
         status = t.get("status", "?")
         note = "미조사" if status in _UNINVESTIGATED else (t.get("error") or "")
         task_rows.append(f"| {t.get('id', '?')} | {t.get('role', '?')} | {status} | {note} |")
@@ -214,16 +201,15 @@ def _section5(round_no: int | None, plan_tasks: list, hypotheses: list,
         # M1/R2: 표를 앞의 "- 태스크 현황:" 불릿과 완전히 떼어낸다. 들여쓰기 제거만으론
         # 부족했다 — 빈 줄 없이 붙어 있으면 GFM이 이 표 줄들을 앞 리스트 항목의
         # "느슨한 계속(lazy continuation)" 텍스트로 흡수해 표가 아니라 평문으로 렌더한다
-        # (mistune(GFM 표 플러그인)으로 직접 렌더해 확인 — 빈 줄 없이는 <li> 안 평문,
-        # 빈 줄을 넣으면 독립된 <table>). 표 앞뒤로 빈 줄을 둬 리스트를 확실히 끊고
-        # 표를 최상위 블록으로 분리한다.
+        # (mistune(GFM 표 플러그인)으로 직접 렌더해 확인). 표 앞뒤로 빈 줄을 둬
+        # 리스트를 확실히 끊고 표를 최상위 블록으로 분리한다.
         lines.append("")
         lines.append("| id | 역할 | status | 비고 |")
         lines.append("|---|---|---|---|")
         lines.extend(task_rows)
         lines.append("")
 
-    refuted = [h for h in hypotheses if isinstance(h, dict) and h.get("status") == "refuted"]
+    refuted = [h for h in model.hypotheses if h.get("status") == "refuted"]
     lines.append("- 기각된 가설:")
     if not refuted:
         lines.append("  없음")
@@ -233,13 +219,13 @@ def _section5(round_no: int | None, plan_tasks: list, hypotheses: list,
             lines.append(f"  - {h.get('id', '?')}: {h.get('statement', '')} (반박 증거: {refuting})")
 
     lines.append("- 검증 문제:")
-    if not verify_problems:
+    if not model.verify_problems:
         lines.append("  없음")
     else:
-        for p in verify_problems:
+        for p in model.verify_problems:
             lines.append(f"  - {p}")
 
-    qa_summaries = [_qa_entry_summary(e) for e in qa_log]
+    qa_summaries = [_qa_entry_summary(e) for e in model.qa_log]
     lines.append("- QA 로그:")
     if not qa_summaries:
         lines.append("  없음")
