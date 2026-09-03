@@ -201,8 +201,8 @@ def test_chat_1왕복_대화형_흐름은_접수부터_보고서까지_완주한
     assert "케이스" in out and "접수" in out
     assert "계획 변경이 있었나요?" in out            # question_raised 이벤트 + ask() 프롬프트
     assert "보고서:" in out
-    written = list((tmp_path / "out").glob("*.md"))
-    assert len(written) == 1 and "## 2. 판정" in written[0].read_text(encoding="utf-8")
+    written = list((tmp_path / "out").glob("*.html"))
+    assert len(written) == 1 and "<h2>2. 판정</h2>" in written[0].read_text(encoding="utf-8")
     # I1: round_hint가 round_started.data까지 실제로 실려서 CLI가 "[라운드 N]"을
     # 찍는다 — 계획의 수용 예시("[라운드 2] …")가 자기 예시에서 깨지지 않는다.
     assert "[라운드 1]" in out
@@ -319,8 +319,8 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     assert "[상태] investigating" in out2 and "[상태] closed" in out2
     assert "[보고서 준비]" in out2
 
-    written = list((tmp_path / "out").glob("*.md"))
-    assert len(written) == 1 and "## 2. 판정" in written[0].read_text(encoding="utf-8")
+    written = list((tmp_path / "out").glob("*.html"))
+    assert len(written) == 1 and "<h2>2. 판정</h2>" in written[0].read_text(encoding="utf-8")
     assert repo.get(case_id).status == "closed"
 
 
@@ -347,7 +347,7 @@ def test_case_show_report는_저장된_보고서_파일을_그대로_보여준�
 
     report_dir = tmp_path / "myreports"
     report_dir.mkdir()
-    (report_dir / "c-1.md").write_text("# 저장된 보고서\n내용", encoding="utf-8")
+    (report_dir / "c-1.html").write_text("<h1>저장된 보고서</h1>", encoding="utf-8")
     app_path = tmp_path / "config" / "app.json"
     data = json.loads(app_path.read_text(encoding="utf-8"))
     data["report"] = {"output_dir": str(report_dir)}
@@ -356,7 +356,7 @@ def test_case_show_report는_저장된_보고서_파일을_그대로_보여준�
     code = main(["case", "show", "c-1", "--report", "--config-root", str(tmp_path / "config")])
 
     assert code == 0
-    assert capsys.readouterr().out == "# 저장된 보고서\n내용"
+    assert capsys.readouterr().out == "<h1>저장된 보고서</h1>"
 
 
 def test_case_show_report는_파일이_없으면_즉석_렌더한다(tmp_path, capsys, monkeypatch):
@@ -374,7 +374,7 @@ def test_case_show_report는_파일이_없으면_즉석_렌더한다(tmp_path, c
     out = capsys.readouterr().out
 
     assert code == 0
-    assert "# 케이스 c-2 보고서" in out and "## 5. 조사 경위" in out
+    assert "<h1>케이스 c-2 보고서</h1>" in out and "<h2>5. 조사 경위</h2>" in out
 
 
 def test_patrol_run은_이벤트_싱크를_daemon에_넘긴다(tmp_path, monkeypatch):

@@ -25,7 +25,7 @@ CHECK = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5
 def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=None, on_event=None):
     """report_cfg 기본값을 tmp_path 기반으로 만든다(테스트 위생) — 예전엔 기본
     ReportConfig()가 output_dir="output"(CWD 상대)을 써서, 보고서 발행을 다루지
-    않는 테스트들도 그때마다 레포 루트에 output/*.md를 남겼다. tmp_path를 필수
+    않는 테스트들도 그때마다 레포 루트에 output/*를 남겼다. tmp_path를 필수
     인자로 받아 매 테스트가 자기만의 임시 디렉터리에 쓰게 한다."""
     site = SiteConfig.model_validate({"target": {"rest": {"base_url": "http://x"}},
                                       "patrol": {"checks": {"api.oee": CHECK.model_dump()}}})
@@ -106,8 +106,8 @@ async def test_종결되면_보고서가_파일로_먼저_쓰이고_이벤트가
     daemon.build()
     await daemon.run_one("mx", "gumi", "api.oee", CHECK)
     assert await daemon.worker.run_once(await daemon.queue.get()) == "closed"
-    written = list((tmp_path / "out").glob("*.md"))
-    assert len(written) == 1 and "## 2. 판정" in written[0].read_text(encoding="utf-8")
+    written = list((tmp_path / "out").glob("*.html"))
+    assert len(written) == 1 and "<h2>2. 판정</h2>" in written[0].read_text(encoding="utf-8")
     assert [e.event for e in seen if e.event == "report_ready"]
 
 
@@ -133,7 +133,7 @@ async def test_실패_종결에서도_보고서가_먼저_쓰이고_이벤트가
 
     assert await daemon.worker.run_once(case_id) == "failed"
     assert repo.get(case_id).status == "closed"
-    written = list((tmp_path / "out").glob("*.md"))
+    written = list((tmp_path / "out").glob("*.html"))
     assert len(written) == 1
     text = written[0].read_text(encoding="utf-8")
     assert "판정 없음" in text

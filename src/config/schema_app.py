@@ -107,6 +107,7 @@ class MailConfig(StrictModel):
 
 class ReportConfig(StrictModel):
     output_dir: str = "output"
+    format: Literal["md", "html"] = "html"   # 기본 산출물은 HTML(스펙 §4.1)
     mail: MailConfig = MailConfig()
 
 

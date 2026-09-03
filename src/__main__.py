@@ -27,7 +27,9 @@ from src.infrastructure.llm import build_chat_model
 from src.patrol.daemon import PatrolDaemon, assemble_sites
 from src.patrol.llm_judge import LlmBudget
 from src.presentation.mail import SmtpSender
-from src.presentation.report import render_report
+from src.presentation.report import render_md
+from src.presentation.report_html import render_html
+from src.presentation.report_model import build_report_model
 
 _CASE_STATUSES = ("open", "investigating", "awaiting_human", "closed")
 
@@ -176,19 +178,22 @@ def _cmd_case_show(args, config_root: Path, env: dict) -> int:
         return 1
 
     if args.report:
-        # 저장된 보고서 파일을 그대로 보여준다. 파일이 없으면(발행 실패·retention
-        # 스윕 등) render_report로 즉석에서 다시 렌더한다 — write_report와 같은
-        # 소스(record/verdict/evidence/case_file)에서 조립하므로 결과는 동등하다.
-        path = Path(app.report.output_dir) / f"{args.case_id}.md"
-        if path.exists():
-            print(path.read_text(encoding="utf-8"), end="")
+        # 저장된 보고서 파일을 그대로 보여준다. 설정 포맷을 먼저 찾고, 없으면 다른
+        # 확장자도 본다 — report.format을 바꾼 뒤에도 예전 보고서를 읽을 수 있어야
+        # 한다. 둘 다 없으면(발행 실패·retention 스윕) 즉석에서 다시 렌더한다.
+        directory = Path(app.report.output_dir)
+        suffixes = [app.report.format] + [s for s in ("html", "md") if s != app.report.format]
+        found = next((directory / f"{args.case_id}.{s}" for s in suffixes
+                      if (directory / f"{args.case_id}.{s}").exists()), None)
+        if found is not None:
+            print(found.read_text(encoding="utf-8"), end="")
         else:
             clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
-            text = render_report(
+            model = build_report_model(
                 record, verdict=store.get_verdict(args.case_id),
                 evidence=store.list_evidence(args.case_id),
                 case_file=store.get_case_file(args.case_id), clock=clock)
-            print(text, end="")
+            print(render_html(model) if app.report.format == "html" else render_md(model), end="")
         return 0
 
     print(f"id: {record.id}")
@@ -420,7 +425,7 @@ async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, a
         result = await worker.resume_once(case_id, answer)
 
     if result == "closed":
-        path = Path(app.report.output_dir) / f"{case_id}.md"
+        path = Path(app.report.output_dir) / f"{case_id}.{app.report.format}"
         if path.exists():
             print(f"보고서: {path}")
         else:

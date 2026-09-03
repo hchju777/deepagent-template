@@ -57,7 +57,9 @@ from src.patrol.runner import run_check
 from src.patrol.scheduler import build_scheduler
 from src.patrol.selfcheck import scan_self_check
 from src.presentation.mail import MailSenderPort, NullSender, SmtpSender, retry_pending, send_report
-from src.presentation.report import render_report, write_report
+from src.presentation.report import render_md, write_report
+from src.presentation.report_html import render_html
+from src.presentation.report_model import build_report_model
 
 _IGNORED_JOB_IDS = {"heartbeat", "self_check", "sweep", "-/-/requeue"}
 
@@ -249,9 +251,10 @@ class PatrolDaemon:
                 evidence_summaries[r.id] = repr(self.store.get_evidence(case_id, r.id))[:120]
             except Exception:                                      # noqa: BLE001 — 개별 실패만 건너뛴다
                 pass
-        return render_report(record, verdict=verdict, evidence=evidence,
-                             case_file=case_file, clock=self.clock,
-                             evidence_summaries=evidence_summaries)
+        model = build_report_model(record, verdict=verdict, evidence=evidence,
+                                   case_file=case_file, clock=self.clock,
+                                   evidence_summaries=evidence_summaries)
+        return render_html(model) if self.report_cfg.format == "html" else render_md(model)
 
     def _render_pending(self, record: dict) -> tuple[str, str]:
         """retry_pending의 render 콜백 — send_id("report:{case_id}")에서 case_id를
@@ -283,7 +286,8 @@ class PatrolDaemon:
         """
         try:
             text = self._render_case_report(case_id)
-            path = write_report(text, output_dir=self.report_cfg.output_dir, case_id=case_id)
+            path = write_report(text, output_dir=self.report_cfg.output_dir, case_id=case_id,
+                                suffix=self.report_cfg.format)
             if not path:
                 return
             if self.on_event is not None:
