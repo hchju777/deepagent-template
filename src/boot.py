@@ -91,10 +91,23 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         errors += [BootError(where, p) for p in topology_problems(topo)]
 
         known = topo.locators()
+        entries = set(cfg.target.rest.entries) if cfg.target.rest else set()
         for name, check in cfg.patrol.checks.items():
-            if check.target is not None and check.target not in known:
-                errors.append(BootError(
-                    where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))
+            # rest:<이름>은 토폴로지가 아니라 등재 항목에서 해석된다 — 두 이름공간을
+            # 섞어 보면 정상 설정이 거부당한다. 미등재 참조를 기동 거부로 올리는
+            # 이유는 기동 거부 철학 그대로다: 오타나 삭제된 항목을 참조하면 매
+            # 순찰이 error를 내고 끝나는데, 밤에 조용히 틀리는 것보다 배포 시점에
+            # 시끄럽게 죽는 게 낫다.
+            if check.target is not None:
+                kind, _, rest = check.target.partition(":")
+                if kind == "rest" and not rest.startswith("/"):
+                    if rest not in entries:
+                        errors.append(BootError(
+                            where, f"점검 {name!r}의 target {check.target!r}이 "
+                                   f"target.rest.entries에 등재돼 있지 않다"))
+                elif check.target not in known:
+                    errors.append(BootError(
+                        where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))
             if check.judge in ("llm", "rule+llm"):
                 needs_judge_llm = True
 
