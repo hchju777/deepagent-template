@@ -68,6 +68,9 @@ class RetentionConfig(StrictModel):
     checkpoint_ttl_d: int = 14
     sends_d: int = 30           # 발송 레저(sends) 보존기한 — F6, 계획 5
     events_d: int = 30          # case_events 보존기한 — 저장을 시작했으니 상한도 같이 정한다
+    # 판정 스냅샷 보존기한. 다른 것들보다 훨씬 길다 — 사람 라벨은 몇 달 뒤에 오는데
+    # 그때 대조할 대상이 없으면 스냅샷을 남긴 의미가 사라진다.
+    snapshots_d: int = 730
 
 
 class StoreConfig(StrictModel):

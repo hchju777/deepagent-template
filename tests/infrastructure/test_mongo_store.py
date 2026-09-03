@@ -163,3 +163,19 @@ def test_mongo_claim은_ISO_길이_차이에_속지_않는다(db):
     holder = T.replace(microsecond=500000)
     assert repo.claim("c-1", "w-1", now=holder, ttl_s=3600) is not None
     assert repo.claim("c-1", "w-2", now=holder + timedelta(seconds=1), ttl_s=60) is None
+
+
+def test_mongo_스냅샷은_케이스당_하나다(db):
+    from src.domain.snapshot import VerdictSnapshot
+    from src.infrastructure.mongo_store import MongoVerdictSnapshotStore
+    store = MongoVerdictSnapshotStore(db)
+    base = dict(case_id="c-1", closed_at=T, gbm="mx", fct="gumi", fingerprint="fp",
+                origin="patrol", outcome="closed", verdict_type="data_loss",
+                root_cause_component="plan-sync", confidence="high", rounds=2,
+                evidence_count=3, task_error_rate="0/2", verify_demoted=False,
+                knowledge_digests={"topology": "d1"})
+    store.put(VerdictSnapshot(**base))
+    store.put(VerdictSnapshot(**{**base, "confidence": "low"}))
+    assert store.get("c-1").confidence == "low"
+    assert db.verdict_snapshots.count_documents({"case_id": "c-1"}) == 1
+    assert store.get("없는-케이스") is None

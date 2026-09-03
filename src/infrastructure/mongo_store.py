@@ -26,6 +26,7 @@ from src.domain.cases import (CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
                               lease_is_free)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
+from src.domain.snapshot import VerdictSnapshot, VerdictSnapshotPort
 from src.domain.store import CaseStorePort, EvidenceRecord
 from src.knowledge.digest import canonical_digest
 from src.patrol.ledger import LedgerPort
@@ -67,6 +68,7 @@ def ensure_indexes(db: Database) -> None:
     # (case_id, seq) unique: seq는 counters로 원자 증가하므로 중복이 나면 그 자체가
     # 카운터 손상 신호다 — 인덱스가 조용한 중복 대신 즉시 실패로 드러낸다.
     db.case_events.create_index([("case_id", 1), ("seq", 1)], unique=True)
+    db.verdict_snapshots.create_index("case_id", unique=True)
 
 
 class MongoCaseStore(CaseStorePort):
@@ -360,4 +362,32 @@ class MongoEventStore(EventStorePort):
                  if datetime.fromisoformat(doc["at"]) < before]
         if stale:
             self._db.case_events.delete_many({"_id": {"$in": stale}})
+        return len(stale)
+
+
+class MongoVerdictSnapshotStore(VerdictSnapshotPort):
+    """종결 판정 스냅샷 — purge_case가 건드리지 않는 별도 컬렉션이다."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    def put(self, snapshot: VerdictSnapshot) -> None:
+        doc = snapshot.model_dump(mode="json")
+        self._db.verdict_snapshots.update_one({"case_id": snapshot.case_id},
+                                              {"$set": doc}, upsert=True)
+
+    def get(self, case_id):
+        doc = self._db.verdict_snapshots.find_one({"case_id": case_id})
+        if doc is None:
+            return None
+        return VerdictSnapshot.model_validate({k: v for k, v in doc.items() if k != "_id"})
+
+    def prune_before(self, before):
+        # closed_at은 ISO 문자열이라 DB $lt로 거르면 마이크로초 유무로 순서가
+        # 어긋난다(모듈 docstring) — Python에서 판정한다.
+        stale = [doc["_id"] for doc in
+                 self._db.verdict_snapshots.find({}, {"_id": 1, "closed_at": 1})
+                 if datetime.fromisoformat(doc["closed_at"]) < before]
+        if stale:
+            self._db.verdict_snapshots.delete_many({"_id": {"$in": stale}})
         return len(stale)

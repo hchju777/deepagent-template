@@ -85,3 +85,18 @@ async def test_보존_스윕은_오래된_이벤트를_지운다():
                                    retention=RetentionConfig(events_d=30))
     assert counts["events"] == 1
     assert [e.seq for e in events.since("c-1")] == [2]
+
+
+async def test_보존_스윕은_오래된_판정_스냅샷을_지운다():
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore, VerdictSnapshot
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    base = dict(gbm="mx", fct="gumi", fingerprint="fp", origin="patrol", outcome="closed")
+    snapshots.put(VerdictSnapshot(case_id="c-old", closed_at=T - timedelta(days=800), **base))
+    snapshots.put(VerdictSnapshot(case_id="c-new", closed_at=T, **base))
+
+    counts = await sweep_retention(repo=repo, store=store, ledger=ledger, snapshots=snapshots,
+                                   checkpointer=None, clock=lambda: T,
+                                   retention=RetentionConfig(snapshots_d=730))
+    assert counts["snapshots"] == 1
+    assert snapshots.get("c-old") is None and snapshots.get("c-new") is not None

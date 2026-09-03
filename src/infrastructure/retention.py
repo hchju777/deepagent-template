@@ -38,6 +38,7 @@ from src.config.schema_app import RetentionConfig
 from src.domain.cases import CaseRepositoryPort
 from src.domain.store import CaseStorePort
 from src.domain.events import EventStorePort
+from src.domain.snapshot import VerdictSnapshotPort
 from src.patrol.ledger import LedgerPort
 
 Clock = Callable[[], datetime]
@@ -50,11 +51,12 @@ class _CheckpointerPort(Protocol):
 async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
                           ledger: LedgerPort, checkpointer: _CheckpointerPort | None,
                           clock: Clock, retention: RetentionConfig,
-                          events: EventStorePort | None = None) -> dict[str, int]:
+                          events: EventStorePort | None = None,
+                          snapshots: VerdictSnapshotPort | None = None) -> dict[str, int]:
     """다섯 가지 보존 규칙을 한 번에 훑고 항목별 처리 건수를 돌려준다."""
     now = clock()
     counts = {"closed_cases": 0, "ledger_runs": 0, "scratch_evidence": 0, "expired_threads": 0,
-             "sends": 0, "events": 0}
+             "sends": 0, "events": 0, "snapshots": 0}
 
     # ① 오래된 종결 케이스 — 증거+판정+케이스 파일 삭제, 스레드 폐기, purged_at 스탬프
     evidence_before = now - timedelta(days=retention.closed_case_evidence_d)
@@ -155,6 +157,15 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
     if events is not None:
         try:
             counts["events"] = events.prune_before(now - timedelta(days=retention.events_d))
+        except Exception:                                          # noqa: BLE001
+            pass
+
+    # ⑦ 오래된 판정 스냅샷 — snapshots가 주입되지 않은 호출부는 건너뛴다.
+    #    보존기한이 다른 것들보다 훨씬 긴 이유는 사람 라벨이 몇 달 뒤에 오기 때문이다.
+    if snapshots is not None:
+        try:
+            counts["snapshots"] = snapshots.prune_before(
+                now - timedelta(days=retention.snapshots_d))
         except Exception:                                          # noqa: BLE001
             pass
 
