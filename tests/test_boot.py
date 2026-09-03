@@ -142,3 +142,15 @@ def test_check_live에서_mongo_role_problems가_가짜_connection_status로_검
 
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path, check_live=True)
     assert any("dbOwner" in e.problem for e in errors)
+
+
+def test_llm_판정기가_있는데_judge_프로파일이_비면_기동_거부(tmp_path):
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    app.write_text(json.dumps({"llm": {"profiles": {"judge": "", "subagent": "b", "lead": "c"}}}), encoding="utf-8")
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["patrol"]["checks"]["c1"]["judge"] = "llm"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("judge" in e.problem for e in errors)
