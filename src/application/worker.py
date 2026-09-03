@@ -62,9 +62,10 @@ owner를 쥔 채 프로세스만 죽어) 고아로 남는 레코드가 생기지
 """
 import asyncio
 import contextlib
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from src.application.close import close_case
+from src.application.events import case_status_event
 from src.application.graph import build_engine
 from src.application.lifecycle import (ENGINE_SCHEMA_VERSION, acquire_lease, release_lease,
                                        transition)
@@ -134,7 +135,9 @@ class InvestigationWorker:
     def __init__(self, queue: CaseQueue, *, repo, store,
                 deps_for_site: Callable[[str, str], Any], checkpointer, clock,
                 owner: str, max_concurrent: int, lease_ttl_s: float, ledger,
-                knowledge_digests_for_site: Callable[[str, str], dict[str, str]]):
+                knowledge_digests_for_site: Callable[[str, str], dict[str, str]],
+                on_event: Callable[[Any], None] | None = None,
+                on_closed: Callable[[str], Awaitable] | None = None):
         self._queue = queue
         self._repo = repo
         self._store = store
@@ -146,7 +149,36 @@ class InvestigationWorker:
         self._lease_ttl_s = lease_ttl_s
         self._ledger = ledger
         self._knowledge_digests_for_site = knowledge_digests_for_site
+        self._on_event = on_event
+        self._on_closed = on_closed   # 계획 5 — 케이스가 닫힌 직후(성공/실패 종결 모두) 부르는 발행 훅
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
+
+    def _emit_status(self, case_id: str, status: str, *, reason: str | None = None) -> None:
+        """케이스 상태 전이(investigating/awaiting_human/closed)를 싱크에 낸다.
+
+        on_event가 None이면 아무것도 하지 않는다. 이벤트 발행 실패(싱크가 raise)가
+        조사·전이 자체를 죽이면 안 되므로 여기서 삼킨다 — case_status_event 생성
+        실패(예: clock 오류)까지 함께 방어한다.
+        """
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(case_status_event(case_id, status, clock=self._clock, reason=reason))
+        except Exception:                                          # noqa: BLE001
+            pass
+
+    async def _emit_closed(self, case_id: str) -> None:
+        """케이스를 닫은 직후(_finish의 closed 경로, _fail의 close_case 성공 뒤) 부르는
+        발행 훅(계획 5) — 보고서 발행은 여기 걸린다(daemon._publish_report). on_event(동기)와
+        달리 await로 완료를 기다릴 수 있어 "파일 먼저 쓰고 나서" 순서를 지킬 수 있다.
+        훅이 raise해도 이미 끝난 종결 결과는 뒤집지 않는다 — 여기서 삼킨다.
+        """
+        if self._on_closed is None:
+            return
+        try:
+            await self._on_closed(case_id)
+        except Exception:                                          # noqa: BLE001
+            pass
 
     def _engine_for(self, gbm: str, fct: str, deps) -> Any:
         key = (gbm, fct)
@@ -212,7 +244,7 @@ class InvestigationWorker:
 
     async def _run_with_f3(self, record, case, deps, engine, case_id: str,
                            first_thread_id: str, initial_evidence, *, resume=None,
-                           allow_restart: bool = True):
+                           allow_restart: bool = True, interaction_policy: str = "autonomous"):
         """첫 시도(신규 조사 또는 resume) 후 실패하면 스레드를 폐기하고 새 스레드로
         신규 조사를 한 번만 재시도한다(allow_restart=True일 때만 — resume_once의
         스레드 schema 버전 불일치 경로는 이미 "새 스레드"로 여는 첫 시도이므로
@@ -232,11 +264,14 @@ class InvestigationWorker:
         try:
             if resume is not None:
                 result = await resume_case(resume, deps=deps, checkpointer=self._checkpointer,
-                                           thread_id=first_thread_id, engine=engine)
+                                           thread_id=first_thread_id, engine=engine,
+                                           on_event=self._on_event, case_id=case_id,
+                                           clock=self._clock)
             else:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=first_thread_id,
-                    engine=engine, initial_evidence=initial_evidence)
+                    engine=engine, initial_evidence=initial_evidence, on_event=self._on_event,
+                    clock=self._clock, interaction_policy=interaction_policy)
             return record, result
         except Exception as first_exc:
             if not allow_restart:
@@ -261,7 +296,8 @@ class InvestigationWorker:
             try:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=retry_thread_id,
-                    engine=engine, initial_evidence=fresh_evidence)
+                    engine=engine, initial_evidence=fresh_evidence, on_event=self._on_event,
+                    clock=self._clock, interaction_policy=interaction_policy)
                 return record, result
             except Exception as second_exc:
                 raise RuntimeError(
@@ -276,6 +312,7 @@ class InvestigationWorker:
             question = interrupts[0].value.get("question") if interrupts else None
             waiting = transition(current, "awaiting_human", clock=self._clock)
             self._repo.save(waiting.model_copy(update={"question": question}))
+            self._emit_status(record.id, "awaiting_human")
             return "awaiting_human"
         verdict = result.get("verdict")
         if verdict is None:
@@ -289,6 +326,8 @@ class InvestigationWorker:
         self._repo.save(current.model_copy(update={"verdict_summary": summary, "question": None}))
         await close_case(record.id, repo=self._repo, checkpointer=self._checkpointer,
                          clock=self._clock, reason="조사 완료", discard_threads=False)
+        self._emit_status(record.id, "closed")
+        await self._emit_closed(record.id)
         return "closed"
 
     def _log_failure(self, record, case_id: str, exc: Exception) -> None:
@@ -311,12 +350,21 @@ class InvestigationWorker:
         고아를 남기지 않는다. 종결 자체가 실패하면(예: repo/checkpointer
         장애) 그 실패만 추가로 레저에 남기고 더 시도하지 않는다 — 워커는
         어떤 경로로도 raise하지 않는다.
+
+        run_once/resume_once의 반환값("failed")과 도메인 CaseStatus("closed")는
+        다른 축이다 — close_case가 실제로 상태를 closed로 전이시키므로, 성공하면
+        _finish의 두 종결 경로(awaiting_human/closed)와 동일하게 case_status_event를
+        낸다. 그래야 보고 채널(계획 5)이 실패 종결도 놓치지 않는다. close_case
+        자체가 실패한 경로는 상태가 실제로 안 바뀌었을 수 있으므로 이벤트를 내지
+        않는다.
         """
         self._log_failure(record, case_id, exc)
+        reason = f"워커 실패 — {type(exc).__name__}: {exc}"
         try:
             await close_case(case_id, repo=self._repo, checkpointer=self._checkpointer,
-                             clock=self._clock, reason=f"워커 실패 — {type(exc).__name__}: {exc}",
-                             discard_threads=True)
+                             clock=self._clock, reason=reason, discard_threads=True)
+            self._emit_status(case_id, "closed", reason=reason)
+            await self._emit_closed(case_id)
         except Exception as close_exc:                              # noqa: BLE001
             self._log_failure(record, case_id, close_exc)
         return "failed"
@@ -351,7 +399,8 @@ class InvestigationWorker:
 
     async def _invoke_with_keepalive(self, record, case, deps, engine, case_id: str,
                                      thread_id: str, initial_evidence, *, resume=None,
-                                     allow_restart: bool = True):
+                                     allow_restart: bool = True,
+                                     interaction_policy: str = "autonomous"):
         """_run_with_f3를 keepalive 태스크로 감싼다(I5) — 엔진 호출이 lease_ttl_s를
         넘게 걸려도 그 사이 lease가 만료돼 다른 워커에 넘어가지 않도록, 호출이
         끝날 때까지 lease_ttl_s/3 간격으로 lease를 갱신하고 finally에서 취소한다."""
@@ -359,17 +408,23 @@ class InvestigationWorker:
         try:
             return await self._run_with_f3(
                 record, case, deps, engine, case_id, thread_id, initial_evidence,
-                resume=resume, allow_restart=allow_restart)
+                resume=resume, allow_restart=allow_restart, interaction_policy=interaction_policy)
         finally:
             keepalive.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keepalive
 
-    async def run_once(self, case_id: str) -> str:
+    async def run_once(self, case_id: str, *, interaction_policy: str = "autonomous") -> str:
         """큐에서 꺼낸 케이스 하나를 lease 아래 조사하고 종결까지 시도한다.
 
         "closed"/"awaiting_human"/"busy"/"skipped"/"failed" 중 하나를
         돌려준다 — 어떤 경로로도 raise하지 않는다.
+
+        interaction_policy(계획 5): investigate_case로 그대로 패스스루한다 —
+        데몬 경로는 기본값 "autonomous"를 그대로 쓰고, CLI `chat`은
+        "interactive"를 넘겨 ask_human이 자동응답 대신 정말로 멈추게(interrupt)
+        한다. 기존 호출부(daemon 등)는 이 인자를 넘기지 않으므로 동작이
+        바뀌지 않는다.
         """
         record = None
         try:
@@ -379,11 +434,13 @@ class InvestigationWorker:
                 return "busy"                                       # 레저 이벤트 없음(경합은 정상)
             if leased.status == "open":
                 record = transition(leased, "investigating", clock=self._clock)
+                became_investigating = True
             else:
                 # requeue_open이 죽은 워커에게서 회수한 investigating 케이스 —
                 # 전이표에 investigating→investigating이 없으므로 재전이하지
                 # 않고 lease만(acquire_lease가 이미) 새로 잡은 채로 진행한다.
                 record = leased
+                became_investigating = False
 
             # deps_for_site를 스레드 등록보다 먼저 확인한다 — 미등록 사이트라
             # 아무것도 저장하지 않고 skip하면(레코드는 손대지 않은 채) 다음
@@ -396,13 +453,19 @@ class InvestigationWorker:
             thread_id = self._next_thread_id(record, case_id)
             record = self._register_thread(record, thread_id)
             self._repo.save(record)
+            # I2: 저장 뒤에야 emit한다 — 저장 전에 내면(미등록 사이트로 skip될 경우
+            # 등) 저장이 아예 안 일어난 record에 대해 "investigating" 이벤트만
+            # 나가는 유령 전이가 생긴다.
+            if became_investigating:
+                self._emit_status(case_id, "investigating")
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
             case = record.to_case().model_copy(update={"knowledge_digests": digests})
             initial_evidence = evidence_refs_for_case(self._store, case_id)
 
             record, result = await self._invoke_with_keepalive(
-                record, case, deps, engine, case_id, thread_id, initial_evidence)
+                record, case, deps, engine, case_id, thread_id, initial_evidence,
+                interaction_policy=interaction_policy)
             return await self._finish(record, result)
         except Exception as exc:
             return await self._fail(record, case_id, exc)
@@ -441,9 +504,13 @@ class InvestigationWorker:
                               and record.thread_versions.get(latest_thread_id)
                               == ENGINE_SCHEMA_VERSION)
 
+            # I2: 두 분기 모두 emit을 자기 repo.save 바로 뒤로 미룬다 — deps_for_site가
+            # None이면(위에서 이미 skip) 이 아래로 내려오지 않으므로 저장 없는
+            # "investigating" 유령 이벤트가 나가지 않는다.
             if version_matches:
                 initial_evidence = evidence_refs_for_case(self._store, case_id)
                 self._repo.save(record)
+                self._emit_status(case_id, "investigating")
                 record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, latest_thread_id, initial_evidence,
                     resume=answer)
@@ -457,6 +524,7 @@ class InvestigationWorker:
                 fresh_thread_id = self._next_thread_id(record, case_id)
                 record = self._register_thread(record, fresh_thread_id)
                 self._repo.save(record)
+                self._emit_status(case_id, "investigating")
                 initial_evidence = evidence_refs_for_case(self._store, case_id)
                 record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, fresh_thread_id, initial_evidence,

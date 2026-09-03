@@ -1,5 +1,6 @@
 """CLI 엔트리 — 계획 1: registry / config show / knowledge validate.
-계획 4b: patrol run/status, case list/show/resume 추가. 계획 5에서 chat이 더해진다.
+계획 4b: patrol run/status, case list/show/resume 추가.
+계획 5: chat(접수 대화형 조사) 추가, case show --report 추가.
 """
 import argparse
 import asyncio
@@ -9,16 +10,23 @@ import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from dotenv import load_dotenv
 
+from src.application.intake import intake
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
+from src.domain.cases import CaseRecord
+from src.domain.events import EngineEvent
+from src.domain.patrol import fingerprint
 from src.infrastructure.checkpointer import build_checkpointer, build_persistence
 from src.infrastructure.llm import build_chat_model
 from src.patrol.daemon import PatrolDaemon, assemble_sites
 from src.patrol.llm_judge import LlmBudget
+from src.presentation.mail import SmtpSender
+from src.presentation.report import render_report
 
 _CASE_STATUSES = ("open", "investigating", "awaiting_human", "closed")
 
@@ -86,9 +94,11 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
 
     budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
     owner = f"daemon-{socket.gethostname()}-{os.getpid()}"
+    mail_sender = SmtpSender(app.report.mail) if app.report.mail.enabled else None
     daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
                           checkpointer=checkpointer, clock=clock, judge_llm=judge_llm,
-                          budget=budget, owner=owner, timezone=app.timezone)
+                          budget=budget, owner=owner, timezone=app.timezone,
+                          report_cfg=app.report, mail_sender=mail_sender)
     asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
 
@@ -153,6 +163,22 @@ def _cmd_case_show(args, config_root: Path, env: dict) -> int:
     except KeyError:
         print(f"케이스 {args.case_id!r}를 찾을 수 없다", file=sys.stderr)
         return 1
+
+    if args.report:
+        # 저장된 보고서 파일을 그대로 보여준다. 파일이 없으면(발행 실패·retention
+        # 스윕 등) render_report로 즉석에서 다시 렌더한다 — write_report와 같은
+        # 소스(record/verdict/evidence/case_file)에서 조립하므로 결과는 동등하다.
+        path = Path(app.report.output_dir) / f"{args.case_id}.md"
+        if path.exists():
+            print(path.read_text(encoding="utf-8"), end="")
+        else:
+            clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+            text = render_report(
+                record, verdict=store.get_verdict(args.case_id),
+                evidence=store.list_evidence(args.case_id),
+                case_file=store.get_case_file(args.case_id), clock=clock)
+            print(text, end="")
+        return 0
 
     print(f"id: {record.id}")
     print(f"상태: {record.status}")
@@ -229,12 +255,17 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
 
     checkpointer = build_checkpointer(app.store)
     owner = f"cli-{socket.gethostname()}-{os.getpid()}"
+    # C1/M4: chat·데몬과 같은 발행 배선(on_event/on_closed)을 _build_publisher로
+    # 얻어 워커에 넘긴다 — 예전엔 여기가 빠져 있어 case resume만 보고서·메일·
+    # 이벤트 없이 케이스를 닫았다(§5.1 "파일 먼저"·§5.4 F6·§5.2 이벤트 구독 미충족).
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, checkpointer, clock)
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
         checkpointer=checkpointer, clock=clock, owner=owner,
         max_concurrent=app.investigations.max_concurrent,
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
-        knowledge_digests_for_site=digests_for_site)
+        knowledge_digests_for_site=digests_for_site,
+        on_event=on_event, on_closed=on_closed)
 
     result = asyncio.run(worker.resume_once(args.case_id, args.answer))
     if result == "busy":
@@ -244,6 +275,180 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         return 2
     print(f"재개 결과: {result}")
     return 0
+
+
+def _round_label(state: dict) -> str:
+    return f"라운드 {state['round']}" if state.get("round") is not None else "라운드"
+
+
+def _format_event(event: EngineEvent, state: dict) -> str:
+    """이벤트 봉투 하나를 사람이 읽을 한 줄로 바꾼다 — event/data(봉투 필드)만
+    쓴다. 그래프 내부 노드명은 여기 들어오지 않는다(application/events.py의
+    매핑 규칙 계약) — round_started/task_finished/question_raised/
+    case_status_changed/report_ready 5종 밖의 값은 CLI 출력에 나타나지 않는다.
+
+    task_finished는 자신의 round를 싣지 않는다(events.py _execute_events) —
+    그래서 직전 round_started가 낸 round를 state에 들고 있다가 접두어로 쓴다.
+    """
+    data = event.data or {}
+    if event.event == "round_started":
+        state["round"] = data.get("round")
+        dispatched = ", ".join(data.get("dispatched") or []) or "없음"
+        return f"[{_round_label(state)}] 태스크 시작: {dispatched}"
+    if event.event == "task_finished":
+        evidence = ", ".join(data.get("evidence_ids") or []) or "없음"
+        error = f" — {data['error']}" if data.get("error") else ""
+        return (f"[{_round_label(state)}] 태스크 {data.get('task_id', '?')} "
+               f"{data.get('status', '?')} (증거 {evidence}){error}")
+    if event.event == "question_raised":
+        return f"[질문] {data.get('question')}"
+    if event.event == "case_status_changed":
+        reason = f" ({data['reason']})" if data.get("reason") else ""
+        return f"[상태] {data.get('status')}{reason}"
+    if event.event == "report_ready":
+        return f"[보고서 준비] {data.get('path')}"
+    return f"[{event.event}]"
+
+
+def _make_event_printer(print_fn=print) -> Callable[[EngineEvent], None]:
+    state: dict = {}
+
+    def _sink(event: EngineEvent) -> None:
+        print_fn(_format_event(event, state))
+
+    return _sink
+
+
+def _build_publisher(app, sites, store, repo, ledger, checkpointer, clock
+                     ) -> tuple[Callable[[EngineEvent], None], Callable[[str], Awaitable[None]]]:
+    """발행용 PatrolDaemon 셸을 조립해 (on_event, on_closed) 쌍을 돌려준다(C1/M4).
+
+    데몬·chat·case resume 세 종결 경로 모두 "케이스가 닫히면 보고서(파일 먼저)·
+    report_ready 이벤트·메일이 나간다"는 계약을 똑같이 지켜야 한다(§5.1·§5.2·
+    §5.4). build()/run()은 절대 부르지 않는다 — 스케줄러를 기동하지 않고 그
+    인스턴스의 _publish_report 메서드만 워커의 on_closed로 재사용해, 발행
+    배선(예산·mail_sender 선택·render→write→이벤트→메일 순서)을 여기 한
+    곳에서만 조립한다. _run_chat과 _cmd_case_resume이 각자 이 조립을 따로
+    베끼면(예전 case_resume이 아예 빠뜨렸던 것처럼) 언젠가 또 하나가 놓친다.
+    """
+    print_event = _make_event_printer()
+    owner = f"cli-publisher-{socket.gethostname()}-{os.getpid()}"
+    budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
+    mail_sender = SmtpSender(app.report.mail) if app.report.mail.enabled else None
+    daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
+                          checkpointer=checkpointer, clock=clock, judge_llm=None,
+                          budget=budget, owner=owner, timezone=app.timezone,
+                          on_event=print_event, report_cfg=app.report, mail_sender=mail_sender)
+    return print_event, daemon._publish_report
+
+
+async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, app) -> int:
+    """접수(intake) → CaseRecord 개설 → interaction_policy="interactive"로 조사 →
+    awaiting_human 반복(stdin) → closed면 보고서 경로 출력. 어떤 경로로도 raise하지
+    않는다(워커·intake 둘 다 무raise 계약) — 여기서 새로 던질 것이 없다."""
+    intake_result = await intake(symptom, deps=rt.deps, topology=rt.deps.topology, clock=clock,
+                                 gbm=args.gbm, fct=args.fct, ask=ask)
+
+    case_id = repo.new_case_id()
+    now = clock()
+    record = CaseRecord(
+        id=case_id, gbm=intake_result.gbm, fct=intake_result.fct,
+        fingerprint=fingerprint(intake_result.gbm, intake_result.fct, "chat", case_id),
+        symptom=intake_result.symptom, t0=now, target_locator=intake_result.target_locator,
+        origin="human", status="open", created_at=now, updated_at=now)
+    repo.save(record)
+    if intake_result.qa:
+        # I3: 접수 문답(intake_result.qa)을 워커의 human:answer와 같은 형태로
+        # Store에 박제한다 — 안 하면 사람이 접수 때 답한 사실이 엔진에 전혀
+        # 전달되지 않는다(데이터 손실). evidence_refs_for_case(gate.py)가 이
+        # case_id의 저장본 전부를 그래프 초기 증거로 실어 나르므로, 여기 박아
+        # 두면 첫 라운드부터 리드가 볼 수 있다. qa가 비면(재질문 없이 한 번에
+        # 접수됐으면) 아무것도 남기지 않는다.
+        store.put_evidence(case_id, "human:intake", {"qa": intake_result.qa}, as_of=now)
+    print(f"케이스 {case_id} 접수 — 조사를 시작한다")
+
+    result = await worker.run_once(case_id, interaction_policy="interactive")
+    while result == "awaiting_human":
+        current = repo.get(case_id)
+        question = current.question or "(질문 없음)"
+        try:
+            answer = await ask(question)
+        except EOFError:
+            print(f"입력이 끊겼다 — 케이스 {case_id}는 파킹된 채로 남는다. "
+                 f"'python -m src case resume {case_id} --answer <답변>'으로 나중에 재개할 수 있다.")
+            return 0
+        result = await worker.resume_once(case_id, answer)
+
+    if result == "closed":
+        path = Path(app.report.output_dir) / f"{case_id}.md"
+        if path.exists():
+            print(f"보고서: {path}")
+        else:
+            print(f"케이스 {case_id} 종결 — 보고서 발행 실패, 저장소를 직접 확인하라",
+                 file=sys.stderr)
+        return 0
+    if result == "failed":
+        print(f"케이스 {case_id} 조사 실패", file=sys.stderr)
+        return 1
+    print(f"케이스 {case_id} — 조사 결과: {result}")
+    return 0
+
+
+def _run_chat(args, env: dict, *, llm_factory=None) -> int:
+    """접수 대화 CLI — 데몬을 띄우지 않고 사이트 하나(--gbm/--fct)에 대해 케이스를
+    열고 대화형으로 조사·재개까지 한 프로세스 안에서 완주한다.
+
+    발행(보고서·이벤트·메일)은 _build_publisher(C1/M4)가 조립한 (on_event,
+    on_closed)를 그대로 워커에 넘긴다 — 데몬 없이도 _publish_report 동등
+    경로를 이 CLI가 직접 타는 것이 목표라, `case resume`(_cmd_case_resume)과
+    이 조립을 중복해 베끼지 않는다.
+    """
+    config_root = Path(args.config_root)
+    repo_root = Path(args.repo_root)
+    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+    try:
+        app, sites = assemble_sites(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(problem, file=sys.stderr)
+        return 1
+
+    by_key = {(rt.gbm, rt.fct): rt for rt in sites}
+    rt = by_key.get((args.gbm, args.fct))
+    if rt is None:
+        print(f"사이트 {args.gbm}/{args.fct}가 등록돼 있지 않다(registry에서 비활성이거나 "
+             "삭제됨) — 접수할 수 없다", file=sys.stderr)
+        return 1
+
+    store, repo, ledger = build_persistence(app.store)
+    checkpointer = build_checkpointer(app.store)
+    for site_rt in sites:
+        site_rt.deps.store = store    # daemon.py 모듈 docstring과 동일한 불변식
+
+    def deps_for_site(gbm, fct):
+        found = by_key.get((gbm, fct))
+        return found.deps if found is not None else None
+
+    def digests_for_site(gbm, fct):
+        found = by_key.get((gbm, fct))
+        return found.digests if found is not None else {}
+
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, checkpointer, clock)
+    owner = f"chat-{socket.gethostname()}-{os.getpid()}"
+    worker = InvestigationWorker(
+        CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
+        checkpointer=checkpointer, clock=clock, owner=owner,
+        max_concurrent=app.investigations.max_concurrent,
+        lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
+        knowledge_digests_for_site=digests_for_site,
+        on_event=on_event, on_closed=on_closed)
+
+    symptom = args.symptom or input("증상을 설명해 주세요: ")
+
+    async def ask(question: str) -> str:
+        return input(f"[질문] {question}\n> ")
+
+    return asyncio.run(_drive_chat(args, rt, repo, store, worker, symptom, clock, ask, app))
 
 
 def main(argv=None) -> int:
@@ -289,6 +494,8 @@ def main(argv=None) -> int:
     _add_common(p_case_list)
     p_case_show = case_sub.add_parser("show", help="케이스 레코드 + 판정 요약 + 증거 수")
     p_case_show.add_argument("case_id")
+    p_case_show.add_argument("--report", action="store_true",
+                             help="요약 대신 저장된 보고서를 다시 렌더해 stdout에 출력")
     _add_common(p_case_show)
     _case_resume_note = ("awaiting_human 케이스에 사람의 답변을 넣어 재개한다. v1은 데몬 프로세스와 "
                          "통신할 명령 채널이 없어, lease가 비어 있거나 만료된 경우에만 이 CLI가 "
@@ -299,6 +506,13 @@ def main(argv=None) -> int:
     p_case_resume.add_argument("case_id")
     p_case_resume.add_argument("--answer", required=True)
     _add_common(p_case_resume)
+
+    p_chat = sub.add_parser(
+        "chat", help="접수 대화로 케이스를 열고 대화형(interactive)으로 조사를 완주한다")
+    p_chat.add_argument("--gbm", required=True)
+    p_chat.add_argument("--fct", required=True)
+    p_chat.add_argument("--symptom", default=None, help="미지정이면 stdin으로 받는다")
+    _add_common(p_chat)
 
     args = parser.parse_args(argv)
     config_root = Path(args.config_root)
@@ -343,6 +557,9 @@ def main(argv=None) -> int:
             return _run_patrol(args, env)
         if args.patrol_command == "status":
             return _cmd_patrol_status(config_root, env)
+
+    if args.command == "chat":
+        return _run_chat(args, env)
 
     if args.command == "case":
         if args.case_command == "list":

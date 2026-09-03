@@ -21,3 +21,6 @@ APScheduler>=3.11,<4           # 4.x는 알파, API 상이 — 3.x 고정
 
 # ── 케이스 큐·수명주기·영속화 (계획 4b) ──────────────────────
 langgraph-checkpoint-mongodb>=0.4,<1   # LangGraph 체크포인터의 Mongo 백엔드
+
+# ── 보고·채널 (계획 5) ────────────────────────────────────
+aiosmtplib>=3.0,<5              # report.mail.enabled일 때만 실제 로드(지연 import)

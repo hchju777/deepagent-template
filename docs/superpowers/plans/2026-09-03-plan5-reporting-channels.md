@@ -67,6 +67,21 @@ tests/test_cli.py                             # (추가) chat, --report
 - `case_status_event(case_id, status, *, clock, reason=None) -> EngineEvent` — 워커·CLI가 상태 전이를 알릴 때 쓰는 생성자.
 - `report_ready_event(case_id, path, *, clock) -> EngineEvent`.
 
+**업데이트 (최종 리뷰 I1, "Close every path the same way"):** `select` 노드 자체는
+부분상태에 `round`를 싣지 않는다는 게 실측 사실이었다(위 62행의 "생략" 분기가
+실제로는 유일한 분기) — `round_started.data`에 라운드 번호가 한 번도 실린 적이
+없었고, CLI(`[라운드 N]`)는 항상 캐리포워드 값만 찍었다. 고침:
+- `map_update_to_events(update, *, case_id, clock, round_hint: int | None = None)` —
+  `round_hint`를 추가로 받는다. `select` 청크 처리 시 `partial`에 `"round"`가
+  있으면 그걸 우선하고(현재는 없다), 없고 `round_hint`가 주어졌으면 그걸
+  `data["round"]`에 싣는다. 둘 다 없으면 지금처럼 생략(캐리포워드 없음).
+- `usecase._stream_and_collect`(Task 2)가 호출부다 — `select` 청크를 볼 때마다
+  +1 하는 라운드 카운터를 유지하다가 매 `map_update_to_events` 호출에
+  `round_hint=round_counter or None`으로 넘긴다. 노드(`nodes.py`)는 손대지
+  않았다.
+- 회귀 테스트: `tests/application/test_events_mapper.py::test_round_hint가_있으면_라운드_번호가_봉투에_실린다`,
+  `tests/test_cli.py`의 chat 1왕복 테스트에 `assert "[라운드 1]" in out` 추가.
+
 - [ ] **Step 1: 실패하는 테스트 작성**
 
 `tests/domain/test_events.py`:
@@ -441,6 +456,21 @@ git commit -m "Send reports once: record pending, deliver, then mark sent"
   - `sweep_job`에 `retry_pending` 추가.
 - `assemble_sites`는 그대로. `report_cfg`는 `app.report`.
 
+**업데이트 (최종 리뷰 I4·M2, "Close every path the same way"):**
+- `_render_case_report`가 `render_report`를 부를 때 **`evidence_summaries`**
+  (증거 id → 요지 문자열, 최대 120자)를 함께 넘긴다 —
+  `{r.id: repr(store.get_evidence(case_id, r.id))[:120] for r in evidence}`를
+  각 증거 조회마다 try/except로 감싸 개별 실패는 건너뛴다. §4 "요지" 열이
+  예전엔 `body_digest[:12]`였다(§5.1이 요구하는 요지가 아니었다) — 이제 실제
+  본문 요약이 실린다. `render_report`가 `evidence_summaries=None`을 받으면
+  (기본값, 기존 호출부는 그대로) 열 이름을 "본문 digest"로 정직하게 표기한다
+  (`src/presentation/report.py`, Task 3 인터페이스도 이 인자가 새로 늘었다).
+- `mail.retry_pending`이 서두에서 `if not cfg.enabled: return 0`으로 즉시
+  빠진다(M2) — 예전엔 이걸 안 봐서 메일을 끈 뒤에도 스윕이 NullSender로
+  "발송"하고 `mark_sent`를 찍어 "보낸 적 없는 발송"을 레저에 남겼다.
+- 회귀 테스트: `tests/presentation/test_report.py::test_evidence_summaries가_있으면_요지_열에_실리고_없으면_digest로_정직하게_표기한다`,
+  `tests/presentation/test_mail.py::test_비활성_상태의_스윕은_건드리지_않고_0을_돌려준다`.
+
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/patrol/test_daemon.py`에 추가
 
 ```python
@@ -495,6 +525,36 @@ git commit -m "Publish a report the moment a case closes"
   - A.2 멈춘 라인 → `component == "equip-sync"`, `verdict_type == "stale_data"`.
   - 각 시나리오는 `run_check → admit_finding → worker.run_once → 보고서 파일` 전 구간을 돈다(4b 파킹 항목인 resume 중 F3 경로는 A.2에 park→resume을 넣어 함께 커버).
   - 모듈 상단에 `# 평가 모드(실 LLM)는 CI에서 돌리지 않는다 — 스펙 §5.5-4` 주석과 실행 방법 한 줄.
+
+**업데이트 (최종 리뷰 C1·M4·I3·M11·M12, "Close every path the same way"):**
+`case resume`(계획 4b가 만든 `_cmd_case_resume`, `src/__main__.py`)이 `InvestigationWorker(...)`에
+`on_event`도 `on_closed`도 넘기지 않아, 세 종결 경로(데몬·chat·case resume) 중
+이 경로만 보고서·메일·이벤트 없이 케이스를 닫고 있었다(C1, 머지 차단).
+- **`_build_publisher(app, sites, store, repo, ledger, checkpointer, clock) -> tuple[on_event, on_closed]`**
+  (`src/__main__.py`, M4) — `_run_chat`과 `_cmd_case_resume`이 각자 "발행용
+  PatrolDaemon 셸(build()/run()은 부르지 않는다) + `_make_event_printer()`"를
+  따로 조립하던 걸 한 곳으로 모았다. 둘 다 이 헬퍼가 돌려준 `(on_event,
+  on_closed)`를 `InvestigationWorker(...)`에 그대로 넘긴다 — `on_closed`는
+  `daemon._publish_report`다.
+  `deps_for_site`/`digests_for_site`는 각 호출부가 이미 갖고 있던 `by_key` 기반
+  클로저를 그대로 쓴다(이 헬퍼가 대신하지 않는다 — `_cmd_case_resume`은 미등록
+  사이트를 CLI 단에서 먼저 걸러내는 자기만의 트리아지가 있다).
+- `_drive_chat`이 `repo.save(record)` 직후 `intake_result.qa`가 비어 있지 않으면
+  `store.put_evidence(case_id, "human:intake", {"qa": intake_result.qa}, as_of=now)`로
+  박제한다(I3) — 워커의 `human:answer`(`worker.py`)와 같은 형태라
+  `evidence_refs_for_case`가 그래프 초기 증거로 실어 나른다. 예전엔 접수
+  문답이 모아지기만 하고 버려져(데이터 손실) 엔진이 전혀 몰랐다.
+- 벤치(M11): `tests/test_bench_scenarios.py`가 `render_report`/`write_report`를
+  직접 다시 부르던 `_publish` 헬퍼를 걷어내고, `_publish_daemon(...)`이 조립한
+  최소 `PatrolDaemon`의 `_publish_report`를 `on_closed`로 워커에 붙인다 — 벤치도
+  실제 발행 배선을 탄다.
+- 벤치(M12): A.2가 `resume_case`를 항상 강제 실패시켜 정상 park→answer→resume을
+  한 번도 돌지 않던 문제를 고쳐, 정상 재개 1개(`test_A2_멈춘_라인은_정상_재개로도_...`)
+  + F3 강제 1개(`test_A2_멈춘_라인은_park_resume의_F3_경로를_거쳐_...`)로 나눴다.
+  A.1·A.2(양쪽 다) 모두 `verdict.confidence == "high"` 단언을 추가했다(verify
+  가드레일을 명시 술어로 못박는다).
+- 회귀 테스트: `tests/test_cli.py::test_case_resume도_보고서를_남기고_이벤트를_찍는다`,
+  `tests/test_cli.py::test_접수_문답은_human_intake_증거로_박제된다`.
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/application/test_intake.py`, `tests/test_bench_scenarios.py`, `tests/test_cli.py` 추가분(chat은 stdin monkeypatch로 1왕복만 검증)
 - [ ] **Step 2~4**: FAIL → 구현 → 전체 PASS → 커밋

@@ -38,11 +38,33 @@ class LedgerPort(ABC):
         """before 이전에 기록된 실행 이력을 전부 삭제하고 삭제 건수를 반환한다."""
         ...
 
+    @abstractmethod
+    def record_send(self, send_id: str, *, kind: str, target: str, at: datetime) -> bool:
+        """send_id를 pending으로 기록한다. 이미 있으면 아무것도 하지 않고 False(중복 억제)."""
+        ...
+
+    @abstractmethod
+    def mark_sent(self, send_id: str, at: datetime) -> None:
+        """send_id를 발송 완료로 표시해 pending 목록에서 뺀다."""
+        ...
+
+    @abstractmethod
+    def pending_sends(self, limit: int = 50) -> list[dict]:
+        """아직 mark_sent되지 않은 발송 기록을 반환한다. 각 항목은
+        {send_id, kind, target, at}."""
+        ...
+
+    @abstractmethod
+    def prune_sends_before(self, before: datetime) -> int:
+        """before 이전에 기록된 발송 이력(완료분 포함)을 전부 삭제하고 삭제 건수를 반환한다."""
+        ...
+
 
 class InMemoryLedger(LedgerPort):
     def __init__(self):
         self._runs: dict[tuple[str, str, str], list[CheckOutcome]] = defaultdict(list)
         self._heartbeat_at: datetime | None = None
+        self._sends: dict[str, dict] = {}          # send_id -> {send_id, kind, target, at, sent}
 
     def record_run(self, gbm, fct, check, outcome):
         self._runs[(gbm, fct, check)].append(outcome)
@@ -81,3 +103,29 @@ class InMemoryLedger(LedgerPort):
             deleted += len(history) - len(kept)
             self._runs[key] = kept
         return deleted
+
+    def record_send(self, send_id, *, kind, target, at):
+        if send_id in self._sends:                 # 이미 있으면 중복 억제 — False
+            return False
+        self._sends[send_id] = {"send_id": send_id, "kind": kind, "target": target,
+                                "at": at, "sent": False}
+        return True
+
+    def mark_sent(self, send_id, at):
+        record = self._sends.get(send_id)
+        if record is not None:
+            record["sent"] = True
+
+    def pending_sends(self, limit=50):
+        if limit <= 0:                              # limit=0은 "0개"(runs와 동일 관례)
+            return []
+        pending = [r for r in self._sends.values() if not r["sent"]]
+        return [{"send_id": r["send_id"], "kind": r["kind"], "target": r["target"],
+                 "at": r["at"]} for r in pending[:limit]]
+
+    def prune_sends_before(self, before):
+        """before 이전에 기록된 발송 이력(완료분 포함)을 전부 삭제하고 삭제 건수를 반환한다."""
+        stale = [sid for sid, r in self._sends.items() if r["at"] < before]
+        for sid in stale:
+            del self._sends[sid]
+        return len(stale)

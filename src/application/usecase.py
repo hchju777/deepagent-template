@@ -2,11 +2,22 @@
 
 그래프 배선(graph.py)을 감싸 호출 표면을 좁힌다: 초기 CaseState 조립과
 스레드 설정만 여기서 하고, 통제·판단 로직은 전부 노드에 있다.
+
+on_event(계획 5 — 보고·채널): 주어지면 ainvoke 대신 astream(stream_mode="updates")로
+돌며 각 덩어리를 map_update_to_events로 이벤트 봉투화해 싱크에 넘긴다. on_event가
+None이면(기본값) 지금까지와 동일하게 ainvoke 한 번으로 완주까지 기다린다 — 기존
+호출부·테스트는 아무것도 바뀌지 않는다. clock은 그 이벤트의 시각을 재는 데만
+쓰는 on_event의 짝 인자다(호출부가 결정론 clock을 넘기지 않으면 now()로 폴백).
 """
+from datetime import datetime, timezone
+from typing import Callable
+
 from langgraph.types import Command
 
+from src.application.events import map_update_to_events
 from src.application.graph import build_engine
 from src.domain.case import EvidenceRef
+from src.domain.events import EngineEvent
 
 
 def _initial_state(case, interaction_policy, question_policy,
@@ -29,11 +40,81 @@ def _initial_state(case, interaction_policy, question_policy,
     return state
 
 
+def _case_id_from_thread(thread_id: str) -> str:
+    """thread_id에서 case_id를 뽑는다 — 워커의 스레드 명명 규칙(f"{case_id}#{n}",
+    worker.py._next_thread_id)을 따른다. "#"이 없으면(신규 조사의 기본 thread_id는
+    case.id 그대로다) 통째로 case_id로 본다. resume_case가 명시적 case_id 없이
+    불릴 때만 쓰는 폴백이다 — 호출부가 case_id를 알고 있으면(워커 등) 그걸 직접
+    넘겨 이 파싱에 기대지 않는 편이 낫다."""
+    return thread_id.split("#", 1)[0]
+
+
+async def _stream_and_collect(graph, input_state, config, on_event: Callable[[EngineEvent], None],
+                              case_id: str, clock: Callable[[], datetime]) -> dict:
+    """astream(stream_mode="updates")으로 돌며 각 덩어리를 이벤트로 봉투화해 싱크에
+    넘기고, 최종 state를 aget_state로 얻어 ainvoke와 같은 dict로 돌려준다.
+
+    clock은 호출부(investigate_case/resume_case)가 이미 해석해 넘긴다 — 여기서는
+    now()를 직접 부르지 않는다(호출부 docstring 참고: 워커가 자신의 self._clock을
+    넘겨 결정론 테스트·타임존 정책을 일관되게 유지한다).
+
+    싱크 호출은 이벤트마다 try/except로 감싼다 — on_event는 부수효과일 뿐이라
+    싱크가 raise해도 조사(스트리밍 루프)는 계속된다.
+
+    interrupt로 멈춘 경우 ainvoke가 반환에 얹었던 "__interrupt__" 키를
+    StateSnapshot.interrupts(LangGraph가 이미 태스크별 interrupt를 모아 노출하는
+    필드)에서 복원한다. 이렇게 해야 워커의 `"__interrupt__" in result` 파킹
+    판정이 스트리밍 경로에서도 그대로 유지된다.
+
+    round_counter(I1/R1): select 노드는 자신의 부분상태에 round를 싣지 않으므로
+    (application/events.py 참고), 여기서 select 청크를 볼 때마다 +1 해 그
+    값을 round_hint로 map_update_to_events에 넘긴다 — round_started.data에
+    실제 라운드 번호가 실리게 하는 유일한 자리(스트리밍 루프)다.
+
+    카운터는 0이 아니라 "이 스레드가 재개 시점에 이미 지나온 round"에서
+    이어받는다(R1) — investigate_case/resume_case 호출 하나마다
+    _stream_and_collect도 새로 불리므로, park→resume처럼 스레드 하나가 여러
+    번의 호출로 나뉘어 도는 조사에서 로컬 카운터를 매번 0부터 시작하면
+    resume 이후의 라운드 번호가 실제보다 훨씬 작게(항상 1부터) 되돌아간다.
+    재개 직전 aget_state로 체크포인트에 남은 현재 round를 읽어 시작점으로
+    삼는다 — CaseRecord/case_file은 파킹 중엔 아직 갱신되지 않으므로(계획 4b
+    I6: worker._finish의 종결 분기에서만 쓴다) 믿을 수 없는 소스라 쓰지
+    않았다. 이 사전 조회 자체가 실패해도(신규 스레드라 체크포인트가 아직
+    없는 경우 등) 0으로 시작해 기존 동작을 그대로 유지한다.
+    """
+    round_counter = 0
+    try:
+        snapshot = await graph.aget_state(config)
+        values = getattr(snapshot, "values", None)
+        if isinstance(values, dict):
+            round_counter = values.get("round") or 0
+    except Exception:                                              # noqa: BLE001
+        round_counter = 0
+
+    async for update in graph.astream(input_state, config=config, stream_mode="updates"):
+        if "select" in update:
+            round_counter += 1
+        events = map_update_to_events(update, case_id=case_id, clock=clock,
+                                      round_hint=round_counter or None)
+        for event in events:
+            try:
+                on_event(event)
+            except Exception:                                          # noqa: BLE001
+                pass
+    state = await graph.aget_state(config)
+    result = dict(state.values)
+    interrupts = tuple(getattr(state, "interrupts", ()))
+    if interrupts:
+        result["__interrupt__"] = interrupts
+    return result
+
+
 async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
                            interaction_policy="autonomous",
                            question_policy=None,
                            initial_evidence: list[EvidenceRef] | None = None,
-                           engine=None) -> dict:
+                           engine=None, on_event: Callable[[EngineEvent], None] | None = None,
+                           clock: Callable[[], datetime] | None = None) -> dict:
     """새 조사를 연다 — 초기 CaseState를 조립해 그래프를 완주(또는 interrupt)까지 돌린다.
 
     question_policy가 None이면 deps.engine_cfg.autonomous_question_policy를 쓴다(M7) —
@@ -51,6 +132,14 @@ async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
     되돌릴 방법이 없어 그 조사는 영영 멈춘 채로 남는다. 그래프 안(노드)에서 이를
     거부하면 "노드는 raise하지 않는다"는 계약을 어기게 되므로, 그래프 밖인 이
     함수 서두에서 기동 자체를 거부한다(§기동 거부 철학).
+
+    clock은 on_event와 짝이다 — on_event가 주어졌을 때만 이벤트 시각을 재는 데
+    쓰인다. 호출부(워커 등)가 자신의 결정론 clock을 넘길 수 있게 하려는 것으로,
+    직접 넘기지 않으면(None) datetime.now(timezone.utc)로 폴백한다 — 이 함수가
+    이벤트 스트리밍이 실제로 관측되는 경계이기 때문이다(프로젝트 관례상 now()를
+    직접 부르는 자리는 CLI 경계와 부팅 기동 점검뿐이었는데, on_event 스트리밍
+    경계도 같은 성격이라 이 폴백만 예외로 남긴다 — 호출부가 clock을 넘기면 이
+    폴백 자체가 쓰이지 않는다).
     """
     resolved_question_policy = (question_policy if question_policy is not None
                                 else deps.engine_cfg.autonomous_question_policy)
@@ -63,14 +152,33 @@ async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
     initial_state = _initial_state(case, interaction_policy, resolved_question_policy,
                                    initial_evidence)
     config = {"configurable": {"thread_id": thread_id or case.id}}
-    return await graph.ainvoke(initial_state, config=config)
+    if on_event is None:
+        return await graph.ainvoke(initial_state, config=config)
+    resolved_clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
+    return await _stream_and_collect(graph, initial_state, config, on_event, case_id=case.id,
+                                     clock=resolved_clock)
 
 
-async def resume_case(answer, *, deps, checkpointer, thread_id, engine=None) -> dict:
+async def resume_case(answer, *, deps, checkpointer, thread_id, engine=None,
+                      on_event: Callable[[EngineEvent], None] | None = None,
+                      case_id: str | None = None,
+                      clock: Callable[[], datetime] | None = None) -> dict:
     """park된(§2.4) 조사를 사람의 답변으로 재개한다 — ask_human의 interrupt를 통과시킨다.
 
     engine이 주어지면 build_engine을 우회한다(investigate_case와 동일한 이유).
+    on_event·clock도 investigate_case와 동일하게 동작한다.
+
+    case_id는 이벤트 봉투에 실을 case_id를 명시적으로 정한다 — resume_case는
+    Case 객체 없이 thread_id만 받으므로, 호출부(워커 등)가 이미 case_id를 알고
+    있으면 그걸 그대로 넘기는 편이 워커의 사설 스레드 명명 규칙
+    (f"{case_id}#{n}")에 이 함수가 결합되는 것보다 낫다. None이면(호출부가
+    case_id를 모르는 경우) _case_id_from_thread로 thread_id를 파싱해 폴백한다.
     """
     graph = engine if engine is not None else build_engine(deps, checkpointer=checkpointer)
     config = {"configurable": {"thread_id": thread_id}}
-    return await graph.ainvoke(Command(resume=answer), config=config)
+    if on_event is None:
+        return await graph.ainvoke(Command(resume=answer), config=config)
+    resolved_clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
+    resolved_case_id = case_id if case_id is not None else _case_id_from_thread(thread_id)
+    return await _stream_and_collect(graph, Command(resume=answer), config, on_event,
+                                     case_id=resolved_case_id, clock=resolved_clock)

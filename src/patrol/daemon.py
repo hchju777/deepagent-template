@@ -37,9 +37,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from src.application.close import sweep_timeouts
 from src.application.deps import EngineDeps
+from src.application.events import report_ready_event
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.config.loader import load_app_config, load_registry, load_site_config
-from src.config.schema_app import AppConfig
+from src.config.schema_app import AppConfig, ReportConfig
 from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.patrol import CheckOutcome
 from src.domain.store import InMemoryCaseStore
@@ -55,6 +56,8 @@ from src.patrol.llm_judge import LlmBudget
 from src.patrol.runner import run_check
 from src.patrol.scheduler import build_scheduler
 from src.patrol.selfcheck import scan_self_check
+from src.presentation.mail import MailSenderPort, NullSender, SmtpSender, retry_pending, send_report
+from src.presentation.report import render_report, write_report
 
 _IGNORED_JOB_IDS = {"heartbeat", "self_check", "sweep"}
 
@@ -75,7 +78,8 @@ class PatrolDaemon:
 
     def __init__(self, *, app: AppConfig, sites: list[SiteRuntime], store, repo, ledger: LedgerPort,
                 checkpointer, clock: Callable, judge_llm, budget: LlmBudget, owner: str,
-                timezone: str):
+                timezone: str, on_event: Callable[[Any], None] | None = None,
+                report_cfg: ReportConfig = ReportConfig(), mail_sender: MailSenderPort | None = None):
         self.app = app
         self.sites = sites
         self.store = store
@@ -87,6 +91,10 @@ class PatrolDaemon:
         self.budget = budget
         self.owner = owner
         self.timezone = timezone
+        self.on_event = on_event   # 계획 5(보고·채널)의 발송 훅 — 워커에도 그대로 넘기고, 여기 자신의
+        # _publish_report도 report_ready 이벤트를 낼 때 같은 싱크를 쓴다
+        self.report_cfg = report_cfg
+        self.mail_sender = mail_sender   # None이면 report_cfg.mail.enabled로 SmtpSender/NullSender를 고른다
         self.queue = CaseQueue()
         self.worker: InvestigationWorker | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -184,7 +192,79 @@ class PatrolDaemon:
             await sweep_retention(repo=self.repo, store=self.store, ledger=self.ledger,
                                   checkpointer=self.checkpointer, clock=self.clock,
                                   retention=self.app.store.retention)
+            await retry_pending(sender=self._mail_sender(), ledger=self.ledger,
+                                cfg=self.report_cfg.mail, clock=self.clock,
+                                render=self._render_pending)
         except Exception:                                          # noqa: BLE001
+            pass
+
+    def _mail_sender(self) -> MailSenderPort:
+        """`mail_sender`가 주입됐으면(테스트 등) 그것을, 아니면 `report_cfg.mail.enabled`로
+        SmtpSender/NullSender 중 고른다 — 매번 다시 고르므로 런타임에 설정이 재로딩돼도
+        따라간다."""
+        if self.mail_sender is not None:
+            return self.mail_sender
+        return SmtpSender(self.report_cfg.mail) if self.report_cfg.mail.enabled else NullSender()
+
+    @staticmethod
+    def _report_subject(case_id: str) -> str:
+        return f"[순찰] 케이스 {case_id} 조사 보고서"
+
+    def _render_case_report(self, case_id: str) -> str:
+        """repo+store에서 케이스 판정·증거·케이스 파일을 다시 읽어 보고서 본문을 조립한다.
+        _publish_report와 재시도 스윕(_render_pending)이 공유한다 — 재시도 시점에는 파일이
+        아니라 이 함수로 다시 렌더링해 최신 상태를 반영한다(스펙 §5.4).
+
+        evidence_summaries(I4): §4 "요지" 열을 body_digest가 아니라 실제 본문에서
+        채우려고 store.get_evidence로 각 증거 본문을 다시 읽어 repr을 120자로
+        자른다. 개별 증거 하나가 조회에 실패해도(예: 저장소 이상) 그 id만
+        건너뛴다 — render_report는 딕셔너리에 없는 id를 digest로 폴백하므로
+        보고서 조립 자체를 막지 않는다.
+        """
+        record = self.repo.get(case_id)
+        verdict = self.store.get_verdict(case_id)
+        evidence = self.store.list_evidence(case_id)
+        case_file = self.store.get_case_file(case_id)
+        evidence_summaries: dict[str, str] = {}
+        for r in evidence:
+            try:
+                evidence_summaries[r.id] = repr(self.store.get_evidence(case_id, r.id))[:120]
+            except Exception:                                      # noqa: BLE001 — 개별 실패만 건너뛴다
+                pass
+        return render_report(record, verdict=verdict, evidence=evidence,
+                             case_file=case_file, clock=self.clock,
+                             evidence_summaries=evidence_summaries)
+
+    def _render_pending(self, record: dict) -> tuple[str, str]:
+        """retry_pending의 render 콜백 — send_id("report:{case_id}")에서 case_id를
+        복원해 보고서를 다시 렌더링한다. 여기서 raise해도 retry_pending이 그 레코드만
+        건너뛰므로(mail.py F2) 방어적으로 감싸지 않는다."""
+        case_id = record["send_id"].removeprefix("report:")
+        return self._report_subject(case_id), self._render_case_report(case_id)
+
+    async def _publish_report(self, case_id: str) -> None:
+        """워커가 케이스를 닫은 직후 InvestigationWorker.on_closed로 불린다(계획 5).
+
+        파일 먼저(render_report → write_report) → report_ready 이벤트를 on_event
+        싱크로 → send_report로 메일 발송(2상 레저) 순서를 지킨다. 전부 try/except다 —
+        발행이 실패해도 이미 끝난 종결 결과를 뒤집지 않는다(worker.py의 on_closed 계약과
+        동일한 이유). write_report가 실패(빈 문자열)하면 report_ready도 메일도 내지
+        않는다 — "항상 파일 먼저" 원칙(report.py 모듈 docstring)이 여기서도 그대로다.
+        """
+        try:
+            text = self._render_case_report(case_id)
+            path = write_report(text, output_dir=self.report_cfg.output_dir, case_id=case_id)
+            if not path:
+                return
+            if self.on_event is not None:
+                try:
+                    self.on_event(report_ready_event(case_id, path, clock=self.clock))
+                except Exception:                                  # noqa: BLE001
+                    pass
+            await send_report(case_id, self._report_subject(case_id), text,
+                              sender=self._mail_sender(), ledger=self.ledger,
+                              cfg=self.report_cfg.mail, clock=self.clock)
+        except Exception:                                          # noqa: BLE001 — 발행 실패가 종결을 뒤집지 않는다
             pass
 
     def build(self) -> AsyncIOScheduler:
@@ -211,7 +291,8 @@ class PatrolDaemon:
             checkpointer=self.checkpointer, clock=self.clock, owner=self.owner,
             max_concurrent=self.app.investigations.max_concurrent,
             lease_ttl_s=self.app.investigations.lease_ttl_s, ledger=self.ledger,
-            knowledge_digests_for_site=self._digests_for_site)
+            knowledge_digests_for_site=self._digests_for_site, on_event=self.on_event,
+            on_closed=self._publish_report)
         self.queue.requeue_open(self.repo, clock=self.clock)
 
         self.scheduler = scheduler

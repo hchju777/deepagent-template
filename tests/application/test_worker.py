@@ -213,6 +213,43 @@ async def test_미등록_사이트는_케이스를_닫지_않고_skipped를_남�
     assert outcome.status == "skipped" and "미등록 사이트" in outcome.skipped_reason
 
 
+async def test_미등록_사이트는_investigating_이벤트를_내지_않는다():
+    # I2: run_once/resume_once가 _emit_status(..., "investigating")를 repo.save
+    # 전에 부르면, 미등록 사이트라 저장 없이 "skipped"로 빠질 때도 이벤트는
+    # 이미 나가버려 UI가 유령 investigating을 영원히 들고 있게 된다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: None, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.run_once("c-1") == "skipped"
+    assert [e for e in seen if e.event == "case_status_changed"] == []
+    assert repo.get("c-1").status == "open"
+
+
+async def test_resume_once의_미등록_사이트도_investigating_이벤트를_내지_않는다():
+    # I2: resume_once도 같은 문제 — transition()은 순수 함수(저장 없음)라, 이걸
+    # 부른 직후 emit하면 저장이 안 된(skip으로 빠지는) 케이스에도 이벤트가 난다.
+    from src.application.lifecycle import transition
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    rec = transition(repo.get("c-1"), "investigating", clock=lambda: T)
+    rec = transition(rec, "awaiting_human", clock=lambda: T)
+    repo.save(rec)
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: None, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.resume_once("c-1", "답변") == "skipped"
+    assert [e for e in seen if e.event == "case_status_changed"] == []
+    assert repo.get("c-1").status == "awaiting_human"
+
+
 async def test_run_once는_엔진_호출_동안_lease를_keepalive로_갱신한다(monkeypatch):
     # I5: 엔진 호출이 lease_ttl_s보다 오래 걸리면(느린 조사) lease가 만료돼
     # requeue_open이 같은 케이스를 다른 워커에 또 내줄 수 있다 — keepalive가
@@ -241,3 +278,48 @@ async def test_run_once는_엔진_호출_동안_lease를_keepalive로_갱신한�
     await worker.run_once("c-1")
     assert seen["first"] is not None and seen["second"] is not None
     assert seen["second"] > seen["first"]                      # keepalive가 그 사이 갱신했다
+
+
+async def test_워커는_상태_전이_이벤트를_낸다():
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.run_once("c-1") == "closed"
+    statuses = [e.data["status"] for e in seen if e.event == "case_status_changed"]
+    assert statuses[0] == "investigating" and statuses[-1] == "closed"
+
+
+async def test_실패_종결도_closed_이벤트를_낸다():
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    def broken_deps(g, f):
+        raise RuntimeError("deps 조립 실패")
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=broken_deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.run_once("c-1") == "failed"
+    closed = [e for e in seen if e.event == "case_status_changed" and e.data["status"] == "closed"]
+    assert len(closed) == 1 and closed[0].case_id == "c-1"
+
+
+async def test_워커가_주입한_시계로_이벤트_시각이_찍힌다():
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.run_once("c-1") == "closed"
+    assert seen and all(e.at == T for e in seen)      # 스트리밍 이벤트 포함 전부 주입 시계

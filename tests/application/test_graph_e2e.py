@@ -162,6 +162,109 @@ async def test_ask는_interrupt로_멈추고_resume으로_conclude까지_이어�
     assert resumed["verdict"].root_cause.component == "plan-sync"
 
 
+# ── 계획 5 스모크: on_event를 준 실제 LangGraph 왕복 ─────────────────────────
+# tests/application/test_usecase_stream.py는 FakeStreamEngine으로 astream/aget_state
+# 계약(호출 시그니처·반환 형태)만 결정론으로 검증한다 — 실제 LangGraph의
+# StateSnapshot.interrupts(usecase._stream_and_collect가 getattr(state, "interrupts", ())로
+# 읽는 필드)에서 "__interrupt__"를 복원하는 부분은 그 가짜가 이 속성 자체를
+# 흉내내지 않으므로(tasks=()만 준다) 커버하지 못한다. 여기서는 build_engine이
+# 만든 진짜 컴파일 그래프로 ask→interrupt→resume 왕복을 on_event와 함께 돌려,
+# 스트리밍 경로가 ainvoke 경로와 같은 최종 dict(및 __interrupt__ 계약)를 내는지
+# 실증한다.
+async def test_on_event를_주면_실제_그래프에서도_ainvoke와_같은_결과를_스트리밍으로_낸다():
+    seeds = StubSeeds(mongo_collections={"twin_state": [{"line": 7, "oee": 5.12}]})
+    deps = _deps(
+        lead_responses=[FRAME_ONE_TASK_JSON, ASK_JSON, INTEGRATE_CONCLUDE_JSON,
+                        ONE_EVIDENCE_VERDICT_JSON],
+        subagent_messages=[_mongo_call("twin_state"), _report(["ev-1"])],
+        seeds=seeds)
+    checkpointer = InMemorySaver()
+    case = Case(id="c-stream-1", gbm="mx", fct="gumi", origin="patrol", symptom="OEE 512%", t0=T)
+    thread_id = case.id
+    seen = []
+
+    paused = await investigate_case(
+        case, deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        interaction_policy="interactive", on_event=seen.append)
+
+    assert "__interrupt__" in paused                   # 실 StateSnapshot.interrupts에서 복원됨
+    interrupts = paused["__interrupt__"]
+    assert interrupts[0].value.get("question") == "계획 변경이 있었나요?"
+    assert paused["qa_log"] == []
+    assert all(e.case_id == "c-stream-1" for e in seen)
+    kinds_before_resume = [e.event for e in seen]
+    assert "round_started" in kinds_before_resume and "task_finished" in kinds_before_resume
+
+    resumed = await resume_case(
+        "계획 변경 없음", deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        on_event=seen.append)
+
+    assert "__interrupt__" not in resumed
+    assert resumed["verdict"] is not None
+    assert resumed["verdict"].root_cause.component == "plan-sync"
+    # 스트리밍 경로가 ainvoke 경로와 같은 dict를 내는지 — 같은 각본으로 ainvoke 경로도
+    # 완주시켜(별도 스레드) 최종 verdict·qa_log가 동일함을 확인한다.
+    deps2 = _deps(
+        lead_responses=[FRAME_ONE_TASK_JSON, ASK_JSON, INTEGRATE_CONCLUDE_JSON,
+                        ONE_EVIDENCE_VERDICT_JSON],
+        subagent_messages=[_mongo_call("twin_state"), _report(["ev-1"])],
+        seeds=seeds)
+    checkpointer2 = InMemorySaver()
+    case2 = Case(id="c-stream-1", gbm="mx", fct="gumi", origin="patrol", symptom="OEE 512%", t0=T)
+    paused_ainvoke = await investigate_case(
+        case2, deps=deps2, checkpointer=checkpointer2, thread_id="c-stream-2",
+        interaction_policy="interactive")
+    resumed_ainvoke = await resume_case(
+        "계획 변경 없음", deps=deps2, checkpointer=checkpointer2, thread_id="c-stream-2")
+    assert resumed["verdict"] == resumed_ainvoke["verdict"]
+    assert resumed["qa_log"] == resumed_ainvoke["qa_log"]
+
+
+# ── R1 회귀: round_hint가 resume 경계를 넘어서도 이어서 증가한다 ─────────────
+# usecase._stream_and_collect의 round_counter가 investigate_case/resume_case
+# 호출마다(즉 park→resume 경계마다) 0에서 다시 시작하면, 재개 후 다음 select가
+# 내는 round_started.data["round"]가 실제 State.round보다 훨씬 작은 값(1)으로
+# 되돌아간다 — 고침 전에는 없던 라운드 값이 아예 안 실렸으니 "없던 오류를 새로
+# 만든" 셈이었다. park 전에 이미 3라운드(select만 3번, 매번 integrate가 이어감)를
+# 거치게 만들어 재개 시점 State.round가 3이 되게 하고, 재개 후 integrate가 다시
+# continue를 내 라운드가 한 번 더(4) 돌 때 그 select의 round_started가 4를
+# 내는지(1로 되돌아가지 않는지) 확인한다.
+async def test_round_hint은_resume_후에도_이어서_증가한다():
+    seeds = StubSeeds(mongo_collections={"twin_state": [{"line": 7, "oee": 5.12}]})
+    deps = _deps(
+        lead_responses=[FRAME_ONE_TASK_JSON, INTEGRATE_CONTINUE_JSON, INTEGRATE_CONTINUE_JSON,
+                        ASK_JSON, INTEGRATE_CONTINUE_JSON, INTEGRATE_CONCLUDE_JSON,
+                        ONE_EVIDENCE_VERDICT_JSON],
+        subagent_messages=[_mongo_call("twin_state"), _report(["ev-1"])],
+        seeds=seeds)
+    checkpointer = InMemorySaver()
+    case = Case(id="c-round-1", gbm="mx", fct="gumi", origin="patrol", symptom="OEE 512%", t0=T)
+    thread_id = case.id
+    seen_before: list = []
+
+    paused = await investigate_case(
+        case, deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        interaction_policy="interactive", on_event=seen_before.append)
+
+    assert "__interrupt__" in paused
+    assert paused["round"] == 3                          # 재리뷰가 실측한 정황과 동일한 셋업
+    rounds_before = [e.data["round"] for e in seen_before if e.event == "round_started"]
+    assert rounds_before == [1, 2, 3]                     # 파킹 전은 원래도 정상이었다(같은 호출 안)
+
+    seen_after: list = []
+    resumed = await resume_case(
+        "계획 변경 없음", deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        on_event=seen_after.append)
+
+    assert "__interrupt__" not in resumed
+    assert resumed["round"] == 5
+    rounds_after = [e.data["round"] for e in seen_after if e.event == "round_started"]
+    # R1 고침 전에는 여기가 [1]이었다(resume마다 카운터가 0부터 다시 시작) — 실제
+    # State.round(3)를 이어받아 4로 이어져야 한다.
+    assert rounds_after == [4]
+    assert rounds_after[0] > rounds_before[-1]            # 단조 증가
+
+
 # ── 시나리오 3: verify 재작성 ───────────────────────────────────────────────
 GHOST_VERDICT_JSON = (
     '{"verdict_type": "stale_data", "confidence": "high", "narrative": "1차", '
