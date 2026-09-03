@@ -74,3 +74,47 @@ def test_끝점_쿼리_프래그먼트_매트릭스_우회_차단():
     assert not endpoint_allowed("/api/v1/lines/L1?_method=DELETE&/oee", patterns)
     assert not endpoint_allowed("/api/v1/lines/L1#/oee", patterns)
     assert not endpoint_allowed("/api/v1/lines/L1;x=y/oee", patterns)
+
+
+def test_허용된_쿼리_키는_통과하고_나머지는_거부된다():
+    patterns = {"/api/v1/lines/{line}/oee"}
+    ok = "/api/v1/lines/L1/oee?date=2026-09-04"
+    assert not endpoint_allowed(ok, patterns)                       # 기본은 쿼리 불가
+    assert endpoint_allowed(ok, patterns, query_keys={"date"})
+    assert not endpoint_allowed(ok, patterns, query_keys={"line"})  # 미등록 키
+    assert endpoint_allowed("/api/v1/lines/L1/oee?date=x&date=y", patterns,
+                            query_keys={"date"})
+
+
+def test_퍼센트_인코딩은_쿼리_값에서만_허용된다():
+    patterns = {"/api/v1/lines/{line}/oee"}
+    # path의 %는 여전히 거부한다 — %2e%2e 경로 순회 우회로가 있다
+    assert not endpoint_allowed("/api/v1/lines/%2e%2e/oee", patterns, query_keys={"date"})
+    # 쿼리 값의 인코딩은 정상이다(ISO 시각의 콜론 등)
+    assert endpoint_allowed("/api/v1/lines/L1/oee?date=2026-09-04T00%3A00%3A00",
+                            patterns, query_keys={"date"})
+
+
+def test_프래그먼트는_쿼리를_허용해도_거부된다():
+    # #은 절단돼 등록되지 않은 끝점이 된다 — 쿼리 허용과 무관하게 막는다.
+    assert not endpoint_allowed("/api/v1/lines/L1#/oee", {"/api/v1/lines/{line}/oee"},
+                                query_keys={"date"})
+
+
+def test_기존_거부는_그대로_유지된다():
+    # 계획 6이 막은 우회로가 파싱 재작성 후에도 막혀 있어야 한다.
+    patterns = {"/api/v1/lines/{line}/oee"}
+    assert not endpoint_allowed("/api/v1/lines/L1?_method=DELETE&/oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/L1;x=y/oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/../oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/7/oee\n", patterns)
+    assert not endpoint_allowed("http://evil/api/v1/lines/7/oee", patterns)  # 절대 URL
+    assert endpoint_allowed("/api/v1/lines/7/oee", patterns)                 # 정상은 통과
+
+
+def test_제어문자는_파싱_전에_거부된다():
+    # urlsplit은 개행·탭을 조용히 제거한다(WHATWG URL 규약). 정규화된 것을 판정하고
+    # 원본을 보내면 "판정한 것과 보내는 것이 다르다"는 원래 버그가 재발한다.
+    patterns = {"/api/v1/lines/{line}/oee"}
+    for bad in ("/api/v1/lines/7/oee\n", "/api/v1/lines/7\t/oee", "/api/v1/lines/7/oee\r\n"):
+        assert not endpoint_allowed(bad, patterns)
