@@ -244,7 +244,7 @@ class InvestigationWorker:
 
     async def _run_with_f3(self, record, case, deps, engine, case_id: str,
                            first_thread_id: str, initial_evidence, *, resume=None,
-                           allow_restart: bool = True):
+                           allow_restart: bool = True, interaction_policy: str = "autonomous"):
         """첫 시도(신규 조사 또는 resume) 후 실패하면 스레드를 폐기하고 새 스레드로
         신규 조사를 한 번만 재시도한다(allow_restart=True일 때만 — resume_once의
         스레드 schema 버전 불일치 경로는 이미 "새 스레드"로 여는 첫 시도이므로
@@ -271,7 +271,7 @@ class InvestigationWorker:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=first_thread_id,
                     engine=engine, initial_evidence=initial_evidence, on_event=self._on_event,
-                    clock=self._clock)
+                    clock=self._clock, interaction_policy=interaction_policy)
             return record, result
         except Exception as first_exc:
             if not allow_restart:
@@ -297,7 +297,7 @@ class InvestigationWorker:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=retry_thread_id,
                     engine=engine, initial_evidence=fresh_evidence, on_event=self._on_event,
-                    clock=self._clock)
+                    clock=self._clock, interaction_policy=interaction_policy)
                 return record, result
             except Exception as second_exc:
                 raise RuntimeError(
@@ -399,7 +399,8 @@ class InvestigationWorker:
 
     async def _invoke_with_keepalive(self, record, case, deps, engine, case_id: str,
                                      thread_id: str, initial_evidence, *, resume=None,
-                                     allow_restart: bool = True):
+                                     allow_restart: bool = True,
+                                     interaction_policy: str = "autonomous"):
         """_run_with_f3를 keepalive 태스크로 감싼다(I5) — 엔진 호출이 lease_ttl_s를
         넘게 걸려도 그 사이 lease가 만료돼 다른 워커에 넘어가지 않도록, 호출이
         끝날 때까지 lease_ttl_s/3 간격으로 lease를 갱신하고 finally에서 취소한다."""
@@ -407,17 +408,23 @@ class InvestigationWorker:
         try:
             return await self._run_with_f3(
                 record, case, deps, engine, case_id, thread_id, initial_evidence,
-                resume=resume, allow_restart=allow_restart)
+                resume=resume, allow_restart=allow_restart, interaction_policy=interaction_policy)
         finally:
             keepalive.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keepalive
 
-    async def run_once(self, case_id: str) -> str:
+    async def run_once(self, case_id: str, *, interaction_policy: str = "autonomous") -> str:
         """큐에서 꺼낸 케이스 하나를 lease 아래 조사하고 종결까지 시도한다.
 
         "closed"/"awaiting_human"/"busy"/"skipped"/"failed" 중 하나를
         돌려준다 — 어떤 경로로도 raise하지 않는다.
+
+        interaction_policy(계획 5): investigate_case로 그대로 패스스루한다 —
+        데몬 경로는 기본값 "autonomous"를 그대로 쓰고, CLI `chat`은
+        "interactive"를 넘겨 ask_human이 자동응답 대신 정말로 멈추게(interrupt)
+        한다. 기존 호출부(daemon 등)는 이 인자를 넘기지 않으므로 동작이
+        바뀌지 않는다.
         """
         record = None
         try:
@@ -451,7 +458,8 @@ class InvestigationWorker:
             initial_evidence = evidence_refs_for_case(self._store, case_id)
 
             record, result = await self._invoke_with_keepalive(
-                record, case, deps, engine, case_id, thread_id, initial_evidence)
+                record, case, deps, engine, case_id, thread_id, initial_evidence,
+                interaction_policy=interaction_policy)
             return await self._finish(record, result)
         except Exception as exc:
             return await self._fail(record, case_id, exc)
