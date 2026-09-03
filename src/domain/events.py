@@ -1,8 +1,13 @@
 """엔진 이벤트 봉투 — 계획 5(보고·채널). §4.5-① StrictModel 계보를 따른다.
 
-이벤트 어휘는 정확히 5종으로 고정한다 — 봉투 밖(노드명·내부 상태 키)이 그대로
-새 나가면 구독자(리포터·채널)가 엔진 내부 구현에 결합돼버린다. data는 자유
-dict이지만 어떤 이벤트를 실을지는 application/events.py의 매핑 규칙이 정한다.
+이벤트 어휘는 좁게 유지한다 — 봉투 밖(노드명·내부 상태 키)이 그대로 새 나가면
+구독자(리포터·채널)가 엔진 내부 구현에 결합돼버린다. data는 자유 dict이지만 어떤
+이벤트를 실을지는 application/events.py의 매핑 규칙이 정한다.
+
+새 종류를 더할지 판단하는 시험은 개수가 아니라 성질이다: **"이 이름이 그래프를
+다시 배선해도 그대로 유효한가?"** verdict_formed는 도메인 사실(Verdict가 생겼다)을
+가리키므로 conclude/verify를 합치든 쪼개든 유효하다. node_entered·state_patch·
+select_gate_evaluated는 무효다 — 그래프 모양이 바뀌면 뜻이 사라진다.
 """
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -14,7 +19,7 @@ from src.config.schema_app import StrictModel
 EVENT_SCHEMA_VERSION = 1
 
 EventKind = Literal["case_status_changed", "round_started", "task_finished",
-                    "question_raised", "report_ready"]
+                    "question_raised", "report_ready", "verdict_formed"]
 
 
 class EngineEvent(StrictModel):

@@ -312,6 +312,9 @@ def _format_event(event: EngineEvent, state: dict) -> str:
     if event.event == "case_status_changed":
         reason = f" ({data['reason']})" if data.get("reason") else ""
         return f"[상태] {data.get('status')}{reason}"
+    if event.event == "verdict_formed":
+        rewritten = " (재작성)" if data.get("rewritten") else ""
+        return f"[판정] {data.get('verdict_type')} / 확신 {data.get('confidence')}{rewritten}"
     if event.event == "report_ready":
         return f"[보고서 준비] {data.get('path')}"
     return f"[{event.event}]"

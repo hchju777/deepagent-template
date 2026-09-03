@@ -23,7 +23,8 @@ def map_update_to_events(update: dict, *, case_id: str, clock: Clock,
     - select → round_started (dispatched: 이번에 running으로 굴린 태스크 id들)
     - execute → 태스크마다 task_finished
     - integrate → decision이 "ask"일 때만 question_raised
-    - 그 외(frame/ask_human/conclude/verify)·미지의 노드·형태 이상 → 이벤트 없음
+    - conclude/verify → verdict가 실렸으면 verdict_formed
+    - 그 외(frame/ask_human)·미지의 노드·형태 이상 → 이벤트 없음
 
     round_hint(I1): select 노드는 부분상태에 "round" 키를 싣지 않는다(엔진
     State의 round는 integrate가 갱신한다) — 그래서 round_started.data에는
@@ -43,7 +44,10 @@ def map_update_to_events(update: dict, *, case_id: str, clock: Clock,
                 events.extend(_execute_events(partial, case_id=case_id, clock=clock))
             elif node == "integrate":
                 events.extend(_integrate_events(partial, case_id=case_id, clock=clock))
-            # frame/ask_human/conclude/verify/미지의 노드 → 이 매핑 규칙에서는 이벤트 없음
+            elif node in ("conclude", "verify"):
+                events.extend(_verdict_events(partial, case_id=case_id, clock=clock,
+                                              rewritten=(node == "verify")))
+            # frame/ask_human/미지의 노드 → 이 매핑 규칙에서는 이벤트 없음
         return events
     except Exception:
         return []
@@ -74,6 +78,22 @@ def _integrate_events(partial: dict, *, case_id: str, clock: Clock) -> list[Engi
         return []
     return [EngineEvent(event="question_raised", case_id=case_id, at=clock(),
                         data={"question": partial.get("question")})]
+
+
+def _verdict_events(partial: dict, *, case_id: str, clock: Clock,
+                    rewritten: bool) -> list[EngineEvent]:
+    """판정이 실린 청크만 이벤트가 된다.
+
+    verify가 verdict를 싣는 경우는 강등 통과뿐이므로(재작성도 실패해 낮은 확신으로
+    통과시키는 경로) rewritten=True가 정확하다. verify_problems만 실은 청크는
+    판정이 아니라 conclude에 대한 재작성 요구라 이벤트가 없다.
+    """
+    verdict = partial.get("verdict")
+    if verdict is None:
+        return []
+    return [EngineEvent(event="verdict_formed", case_id=case_id, at=clock(), data={
+        "verdict_type": verdict.verdict_type, "confidence": verdict.confidence,
+        "rewritten": rewritten})]
 
 
 def case_status_event(case_id: str, status: CaseStatus, *, clock: Clock,

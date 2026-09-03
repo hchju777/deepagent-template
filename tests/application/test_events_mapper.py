@@ -56,3 +56,26 @@ def test_상태_전이와_보고서_준비_이벤트():
                                                            "reason": "질문 대기"}
     r = report_ready_event("c-1", "output/c-1.md", clock=CLOCK)
     assert r.event == "report_ready" and r.data["path"].endswith("c-1.md")
+
+
+def test_conclude와_verify는_판정_이벤트를_낸다():
+    from src.domain.case import CauseLink, Verdict
+    verdict = Verdict(verdict_type="data_loss", confidence="high",
+                      root_cause=CauseLink(component="plan-sync", evidence_ids=["ev-1"]),
+                      narrative="계획 동기화 누락")
+    fresh = map_update_to_events({"conclude": {"verdict": verdict}},
+                                 case_id="c-1", clock=lambda: T)
+    assert [e.event for e in fresh] == ["verdict_formed"]
+    assert fresh[0].data == {"verdict_type": "data_loss", "confidence": "high",
+                             "rewritten": False}
+
+    # verify가 verdict를 실을 때는 강등 통과뿐이다(재작성도 실패해 낮은 확신으로 통과).
+    demoted = map_update_to_events({"verify": {"verdict": verdict, "verify_problems": []}},
+                                   case_id="c-1", clock=lambda: T)
+    assert demoted[0].data["rewritten"] is True
+
+
+def test_verify가_문제만_실은_청크는_판정_이벤트가_아니다():
+    # verify_problems만 있는 청크는 판정이 아니라 conclude에 대한 재작성 요구다.
+    assert map_update_to_events({"verify": {"verify_problems": ["없는 id ev-9 인용"]}},
+                                case_id="c-1", clock=lambda: T) == []
