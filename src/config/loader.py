@@ -44,8 +44,21 @@ def _validation_problems(exc: ValidationError, where: str) -> list[str]:
             for e in exc.errors()]
 
 
-def load_app_config(config_root: Path) -> AppConfig:
+def load_app_config(config_root: Path, *, env=None) -> AppConfig:
+    """app.json을 읽어 검증한다.
+
+    env가 주어지면 사이트 config와 같은 규약으로 ${ENV_KEY} 참조를 해석한다
+    (store.mongo_url 등 — C1). env를 넘기지 않으면(기본 None) 해석을 건너뛴다 —
+    호출부가 모두 env를 넘기도록 고쳤지만(boot.py·__main__.py·daemon.py),
+    env 없이도 app.json을 그냥 읽고 싶은 자리(예: 직접 스키마만 확인)를 막지
+    않기 위해서다.
+    """
     data = _read_json(config_root / "app.json")
+    if env is not None:
+        data, missing = resolve_env_refs(data, env=env)
+        problems = [f"app.json: env 키 부재 또는 빈 값 — {k}" for k in sorted(set(missing))]
+        if problems:
+            raise ConfigError(problems)
     try:
         return AppConfig.model_validate(data)
     except ValidationError as exc:

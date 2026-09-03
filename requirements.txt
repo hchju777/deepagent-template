@@ -6,7 +6,7 @@ tzdata>=2024.1        # Windows에서 zoneinfo가 tz 데이터베이스를 찾�
 
 # ── 어댑터 실구현 (계획 2) ── target.adapters="real"일 때만 실제 사용
 redis>=5.0                 # redis.asyncio
-pymongo>=4.12              # AsyncMongoClient (motor는 deprecated)
+pymongo>=4.12,<4.17        # AsyncMongoClient (motor는 deprecated) — langgraph-checkpoint-mongodb 요구 상한
 aiokafka>=0.14             # group 미참여 assign() 읽기 전용
 httpx>=0.28,<1             # REST GET
 
@@ -18,3 +18,6 @@ langchain-openai>=1.4,<2       # config llm.profiles가 가리키는 OpenAI 호�
 
 # ── 순찰 스케줄러 (계획 4) ──────────────────────────────────
 APScheduler>=3.11,<4           # 4.x는 알파, API 상이 — 3.x 고정
+
+# ── 케이스 큐·수명주기·영속화 (계획 4b) ──────────────────────
+langgraph-checkpoint-mongodb>=0.4,<1   # LangGraph 체크포인터의 Mongo 백엔드

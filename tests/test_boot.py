@@ -2,7 +2,8 @@ import json
 
 from src.boot import validate_boot
 
-ENV = {"MX_REDIS_URL": "redis://g:6379"}
+# LLM_API_KEY: 검사 11(계획 4b, I8) — enabled 사이트+llm 프로파일이 있으면 필수.
+ENV = {"MX_REDIS_URL": "redis://g:6379", "LLM_API_KEY": "test-llm-key"}
 
 
 def _write(tmp_path, rel, text):
@@ -142,3 +143,31 @@ def test_check_live에서_mongo_role_problems가_가짜_connection_status로_검
 
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path, check_live=True)
     assert any("dbOwner" in e.problem for e in errors)
+
+
+def test_enabled_사이트가_있는데_LLM_API_KEY가_없으면_기동_거부(tmp_path):
+    _tree(tmp_path)
+    env_without_key = {k: v for k, v in ENV.items() if k != "LLM_API_KEY"}
+    errors = validate_boot(tmp_path / "config", env=env_without_key, repo_root=tmp_path)
+    assert any("LLM_API_KEY" in e.problem for e in errors)
+
+
+def test_app_json의_env_참조가_미치환이면_기동_거부(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/app.json", json.dumps(
+        {"store": {"backend": "mongo", "mongo_url": "${AGENT_MONGO_URL}"},
+         "llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}))
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("AGENT_MONGO_URL" in e.problem for e in errors)
+
+
+def test_llm_판정기가_있는데_judge_프로파일이_비면_기동_거부(tmp_path):
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    app.write_text(json.dumps({"llm": {"profiles": {"judge": "", "subagent": "b", "lead": "c"}}}), encoding="utf-8")
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["patrol"]["checks"]["c1"]["judge"] = "llm"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("judge" in e.problem for e in errors)

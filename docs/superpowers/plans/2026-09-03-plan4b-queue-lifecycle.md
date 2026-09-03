@@ -4,7 +4,7 @@
 
 **Goal:** 스펙 §1.1(수명주기·case:thread 1:N)·§1.3(케이스 큐·동시 상한)·§4.4(에이전트 저장소·보존)·§5.2-F2(owner/lease 단일 실행자)·§5.4-F3/F5(재개 정책·하트비트)·§5.3 CLI(`patrol`, `patrol status`, `case`) — 순찰(4a)이 연 케이스가 큐를 거쳐 워커에서 조사되고, 상태 전이·타임아웃 종결·재개 실패 복구가 코드로 강제되며, 모든 기록이 Mongo에 영속되는 데몬을 완성한다.
 
-**Architecture:** 수명주기 전이와 lease는 순수 함수(application/lifecycle.py)로 두고, 워커가 그것을 호출해 케이스를 조사한다. 케이스 종결(close_case)은 타임아웃 스윕과 재개 실패 정책이 공유하는 단일 유스케이스. 영속층은 sync `MongoClient` 기반 Store/Repo/Ledger(포트가 sync라 그대로) + `AsyncMongoDBSaver` 체크포인터(그래프는 async) — 두 클라이언트가 같은 인스턴스를 본다. 데몬은 4a의 `build_scheduler`에 `run_one`을 꽂고, 큐·워커·보존 스윕·자기 감시를 한 프로세스에서 돌린다.
+**Architecture:** 수명주기 전이와 lease는 순수 함수(application/lifecycle.py)로 두고, 워커가 그것을 호출해 케이스를 조사한다. 케이스 종결(close_case)은 타임아웃 스윕과 재개 실패 정책이 공유하는 단일 유스케이스. 영속층은 sync `MongoClient` 기반 Store/Repo/Ledger(포트가 sync라 그대로) + `MongoDBSaver` 체크포인터(langgraph-checkpoint-mongodb 0.4.0은 sync `MongoClient` 기반이며 비동기 메서드는 executor로 제공 — `AsyncMongoDBSaver`는 존재하지 않는다, 실행 중 확인) — 두 클라이언트가 같은 인스턴스를 본다. 데몬은 4a의 `build_scheduler`에 `run_one`을 꽂고, 큐·워커·보존 스윕·자기 감시를 한 프로세스에서 돌린다.
 
 **Tech Stack:** 계획 4a 위에 `langgraph-checkpoint-mongodb>=0.4`, `pymongo>=4.12,<4.17`(체크포인터 요구 핀 — 전작과 동일), dev: `mongomock>=4.1`.
 
@@ -74,6 +74,22 @@ tests/test_cli.py (추가)
   - `acquire_lease(record, owner, *, clock, ttl_s) -> CaseRecord | None` — `record.owner`가 None이거나 == owner이거나 `lease_until < clock()`(만료)이면 획득(owner·lease_until=clock()+ttl). 아니면 None.
   - `release_lease(record, owner, *, clock) -> CaseRecord` — 같은 owner만 해제(아니면 LifecycleError).
   - `is_timed_out(record, *, clock, timeout_h) -> bool` — status=="awaiting_human" and `clock() - updated_at > timeout_h`.
+
+> **업데이트(계획 4b 최종 리뷰 수정, 2026-09-03)** — 큐/워커(Task 3)가 실제로 돌면서
+> 드러난 갭을 메우려고 위 인터페이스에 다음을 더했다:
+> - `CaseRecord` 추가 필드: `status_since: datetime | None = None`(`transition`이 상태가
+>   바뀔 때마다 스탬프 — `is_timed_out`·retention ④는 이제 `updated_at`이 아니라
+>   `status_since or updated_at`을 본다. 게이트의 finding 첨부는 `updated_at`만 건드리므로
+>   더 이상 타임아웃을 무한 리셋하지 않는다), `question: str | None = None`(awaiting_human으로
+>   파킹된 질문 — `case show`가 출력), `purged_at: datetime | None = None`(retention ①이
+>   증거·판정을 비운 시각 — 스탬프된 레코드는 ①이 다시 고르지 않는다).
+> - `CaseStorePort` 추가: `put_case_file(case_id, snapshot: dict) -> None` /
+>   `get_case_file(case_id) -> dict | None` — 스레드 체크포인트는 TTL로 폐기되므로,
+>   계획 5의 보고서가 읽을 `{plan_tasks, hypotheses, round, qa_log, verify_problems}`
+>   스냅샷을 Store에 별도로 박제한다. `purge_case`가 케이스 파일도 함께 지우고
+>   삭제 건수에 포함한다.
+> - `InvestigationsConfig.lease_ttl_s`의 타입을 `int`에서 `float`로 바꿨다(조사 최대
+>   길이보다 길어야 하며, 워커의 keepalive가 `lease_ttl_s/3` 간격으로 갱신한다 — Task 3).
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -278,6 +294,34 @@ git commit -m "Close cases with their threads and let callers inject a compiled 
   - `async run_forever(stop: asyncio.Event)` — `Semaphore(max_concurrent)`로 `run_once`를 동시 소비, stop 시 종료.
   - 모든 경로 최외곽 try/except → 레저에 `record_run(gbm, fct, f"worker:{case_id}", CheckOutcome(error...))` 형태로 남기고 `"failed"`(레저를 "케이스 워커 이벤트"에도 재사용).
 
+> **업데이트(계획 4b 최종 리뷰 수정, 2026-09-03)**:
+> - **read-modify-write**: 엔진 호출(ainvoke) 이후의 모든 저장(`_finish`, F3 재시작 저장,
+>   awaiting 전이)은 저장 직전 `repo.get(case_id)`로 다시 읽어 워커가 바꿀 필드만 그 위에
+>   얹는다 — 그 사이 게이트의 `admit_finding`이 같은 케이스에 finding을 첨부했을 수 있고,
+>   호출 전 스냅샷을 그대로 wholesale 저장하면 그 갱신(`finding_ids`)을 잃는다.
+> - **lease keepalive**: `run_once`/`resume_once`가 엔진 호출을 감싸는 동안
+>   `lease_ttl_s/3` 간격으로 `repo.get → acquire_lease(같은 owner) → save`를 도는
+>   백그라운드 태스크를 돌리고, 엔진 호출이 끝나면(성공/실패 무관) `finally`에서 취소한다 —
+>   엔진 호출이 `lease_ttl_s`보다 오래 걸려도 `requeue_open`이 같은 케이스를 다른 워커에
+>   또 내주지 않는다.
+> - **F3 재시작 지점**: 레저에 `CheckOutcome(status="error", error=f"F3 재시작 — {first_exc}")`를
+>   남기고, 폐기한 thread_id를 `thread_ids`/`thread_versions`에서 그 자리에서 제거한다
+>   (TTL 스윕을 기다리지 않는다). `resume=answer`로 재시작하는 경우(F3 안·resume_once의
+>   버전 불일치 경로 둘 다)는 재시작 **전에** `store.put_evidence(case_id, "human:answer",
+>   {"question": record.question, "answer": answer}, as_of=clock())`로 답을 박제한다 — 새
+>   스레드는 `investigate_case`로 다시 시작해 resume 메커니즘이 없으므로, 그러지 않으면
+>   사람의 답이 그냥 사라진다.
+> - **미등록 사이트**: `deps_for_site(gbm, fct)`가 `None`을 돌려주면(daemon 쪽 계약 —
+>   사이트가 레지스트리에 없거나 disable됨) F1(그래프 밖 실패)로 오인해 케이스를 닫지
+>   않는다. 레저에 `status="skipped"` 이벤트만 남기고 `"skipped"`를 돌려준다(lease는
+>   `finally`가 풀어 다음 `requeue_open`이 다시 집어준다). `deps_for_site`가 예외를
+>   던지는 경우(진짜 조립 실패)는 기존과 같이 F1로 닫는다.
+> - `_finish`: `result["__interrupt__"][0].value["question"]`을 awaiting_human 전이 시
+>   `CaseRecord.question`에 저장한다(resume이 성공적으로 끝나 닫히면 다시 `None`으로).
+>   `verdict`가 `None`이면(있어선 안 되지만) `RuntimeError("verdict 없이 종료")`를 던져
+>   `_fail` 경로(F1과 동일)로 보낸다. 성공 종결 시 `store.put_case_file(case_id, {...})`로
+>   `{plan_tasks, hypotheses, round, qa_log, verify_problems}` 스냅샷을 박제한다.
+
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/application/test_worker.py`
 
 ```python
@@ -373,8 +417,17 @@ git commit -m "Investigate queued cases under a lease with one-shot thread recov
 **Interfaces:**
 - `MongoCaseStore(db)`, `MongoCaseRepository(db)`, `MongoLedger(db)` — `db`는 pymongo `Database`(sync). 컬렉션: `evidence`(case_id, id, source, body, digest, as_of, complete, effective_as_of, seq), `code_knowledge`, `verdicts`, `cases`, `ledger_runs`(gbm,fct,check,outcome,at), `ledger_meta`(heartbeat). 증거 id는 `counters` 컬렉션 `find_one_and_update($inc)`로 케이스별 원자 증가. 포트 메서드 전부 구현(Task 1 확장 포함). Verdict/CheckOutcome/CaseRecord는 `model_dump(mode="json")`로 저장, 읽을 때 `model_validate`.
 - `LedgerPort.prune_runs_before(before: datetime) -> int` 추가(InMemory·Mongo).
-- `build_checkpointer(cfg: StoreConfig)`: backend=memory → `InMemorySaver()`; mongo → 지연 import `from langgraph.checkpoint.mongodb.aio import AsyncMongoDBSaver` + `AsyncMongoClient(cfg.mongo_url)`로 생성. 테스트는 memory 경로 + mongo 경로의 import 가능성 스모크(`importlib.util.find_spec`).
+- `build_checkpointer(cfg: StoreConfig)`: backend=memory → `InMemorySaver()`; mongo → 지연 import `from langgraph.checkpoint.mongodb import MongoDBSaver` + `MongoClient(cfg.mongo_url)`, `db_name=cfg.mongo_db`로 생성(0.4.0 실제 API — 계획 초안의 `AsyncMongoDBSaver`는 오기). 테스트는 memory 경로 + mongo 경로의 import 가능성 스모크(`importlib.util.find_spec`).
 - `build_persistence(cfg: StoreConfig) -> tuple[store, repo, ledger]`: memory면 InMemory 3종, mongo면 `MongoClient(cfg.mongo_url)[cfg.mongo_db]`(db 이름은 `StoreConfig.mongo_db: str = "deepagent"` 추가)로 Mongo 3종.
+
+> **업데이트(계획 4b 최종 리뷰 수정, 2026-09-03)**:
+> - `MongoCaseStore`에 `put_case_file(case_id, snapshot)`/`get_case_file(case_id)` 추가 —
+>   `case_files` 컬렉션(case_id, snapshot)에 upsert. `purge_case`가 `case_files`도 지우고
+>   삭제 건수에 포함한다(Task 1 업데이트의 `CaseStorePort` 확장 참고).
+> - `ensure_indexes(db: Database) -> None` 추가: `cases.id`/`evidence(case_id,id)`/
+>   `verdicts.case_id`/`case_files.case_id`는 unique, `ledger_runs(gbm,fct,check,seq)`와
+>   `ledger_runs.at`은 비-unique. `create_index`는 멱등이라 여러 번 불러도 안전하다.
+>   `build_persistence`의 mongo 경로가 클라이언트를 만든 직후 호출한다.
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/infrastructure/test_mongo_store.py`
 
@@ -482,6 +535,28 @@ git commit -m "Persist cases, evidence, verdicts, and the ledger in MongoDB"
 - `scan_self_check(*, ledger, checks: list[tuple[str,str,str]], threshold: int, clock, store) -> list[Finding]` — `consecutive_errors >= threshold`인 (gbm,fct,check)마다 최근 runs 요약을 `store.put_evidence("patrol:self:{gbm}:{fct}", ...)`로 박제하고 `Finding(check=f"self.{check}", judge="rule", target=None, summary=f"점검 {check} 연속 error {n}회", ...)`. 게이트에 넣으면 지문이 `(gbm,fct,"self.<check>",None)`이라 자기 감시 케이스도 중복 억제된다.
 - 기동 검증 10: enabled 사이트에 `judge in ("llm","rule+llm")` 점검이 하나라도 있으면 app config `llm.profiles.judge`가 비어 있지 않아야 함(빈 문자열이면 BootError "judge LLM 프로파일 필요").
 
+> **업데이트(계획 4b 최종 리뷰 수정, 2026-09-03)**:
+> - `sweep_retention`의 ①은 처리한 레코드에 `purged_at=now`를 스탬프하고, 다음
+>   호출부터는 `purged_at is not None`인 레코드를 다시 고르지 않는다(재선택 방지 —
+>   `purged_at` 없이는 스레드가 이미 비어 있어도 매 스윕이 같은 조건에 다시 걸려
+>   `store.purge_case`를 반복 호출한다).
+> - ④(스레드만 폐기)가 이제 열린 케이스뿐 아니라 **닫힌 케이스도** 훑는다 — ①의 증거
+>   보존기한(`closed_case_evidence_d`, 보통 더 김)보다 스레드 보존기한
+>   (`checkpoint_ttl_d`, 보통 더 짧음)이 먼저 지나면 "증거는 남았지만 체크포인트만 죽은"
+>   구간이 생기기 때문이다. 나이 판단은(①은 여전히 `updated_at`, ④는) `status_since or
+>   updated_at` 기준이다(Task 1 업데이트 참고 — 게이트의 finding 첨부가 타임아웃/보존
+>   판단을 흔들지 않도록).
+> - `src/config/loader.py::load_app_config(config_root, *, env=None)`에 `env` 인자를
+>   추가했다(C1) — app.json도 사이트 config와 같은 `${ENV_KEY}` 참조 규약을 따르는데
+>   (예: `store.mongo_url`), env 없이 검증하면 미치환 리터럴이 그냥 통과했다. 미치환/빈
+>   값은 `ConfigError`("app.json: env 키 부재 또는 빈 값 — KEY")로 모아 거부한다.
+>   `validate_boot`가 이제 `load_app_config(config_root, env=env)`로 호출한다.
+> - 기동 검증 11: enabled 사이트가 하나라도 있고 `llm.profiles`(judge/subagent/lead)
+>   중 하나라도 값이 있으면 env `LLM_API_KEY`가 있어야 한다(빈 값이면 BootError
+>   "LLM_API_KEY 필요") — `assemble_sites`(Task 6)가 사이트마다 lead/subagent LLM을
+>   조건 없이 만들기 때문에, 키가 없으면 조립이 조용히 깨지거나 실LLM 호출 시점에야
+>   뒤늦게 실패한다.
+
 - [ ] **Step 1: 실패하는 테스트 작성**
 
 `tests/infrastructure/test_retention.py`:
@@ -582,6 +657,13 @@ git commit -m "Sweep retention, watch the patrol's own errors, and require a jud
   - `async run(stop: asyncio.Event)`: scheduler.start() + worker.run_forever(stop) → stop 시 scheduler.shutdown(wait=False).
 - `assemble_sites(config_root, repo_root, env, *, clock, stub_seeds=None) -> tuple[AppConfig, list[SiteRuntime]]`: registry의 enabled 사이트마다 site config·topology·deployment·digest(`canonical_digest`)·adapters·EngineDeps(lead/subagent llm은 `build_chat_model(profile, base_url=env LLM_BASE_URL, api_key=env LLM_API_KEY)`; **테스트에서는 `llm_factory` 인자로 ScriptedLLM/ToolFake 주입**). knowledge digests: `{"topology": digest, "rules": digest(checks), "deployment": digest or "absent"}`.
 
+> **업데이트(계획 4b 최종 리뷰 수정, 2026-09-03)**:
+> - `assemble_sites`의 `load_app_config(config_root)` 호출을 `load_app_config(config_root,
+>   env=env)`로 바꿨다(C1 — app.json도 env 참조를 쓸 수 있다).
+> - `PatrolDaemon._deps_for_site(gbm, fct)`가 미등록 사이트에 대해 `AttributeError`를
+>   던지는 대신 `None`을 돌려준다 — 이게 워커(Task 3)의 `deps_for_site` 계약이고,
+>   워커는 `None`을 "케이스를 닫지 않고 skipped로 넘어간다"로 해석한다.
+
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/patrol/test_daemon.py`
 
 ```python
@@ -676,6 +758,22 @@ git commit -m "Assemble the patrol daemon: checks, gate, queue, worker, sweeps"
 - `patrol status` — `ledger.last_heartbeat()`와 사이트·점검별 `last_run` 요약 표 출력. backend=memory면 "메모리 백엔드 — 프로세스 간 상태 없음" 안내 후 exit 0.
 - `case list [--status]` / `case show <id>`(레코드 + verdict 요약 + 증거 수) / `case resume <id> --answer TEXT` — F2: `case resume`은 실행자가 아니라 클라이언트… 단, v1은 데몬-프로세스 간 명령 채널이 없으므로 **lease가 비어 있을 때만 인라인으로 `worker.resume_once`** 실행(lease 점유 중이면 "데몬이 실행 중 — 잠시 후 재시도" exit 2). 이 제약을 도움말에 명시.
 - `.env` 로드는 기존 `load_dotenv()` 경로 재사용.
+
+> **업데이트(계획 4b 최종 리뷰 수정, 2026-09-03)**:
+> - `patrol run`의 본체를 `_run_patrol(args, env, *, llm_factory=None) -> int`로 분리했다
+>   (`_cmd_patrol_run` 대체) — `llm_factory`를 `assemble_sites`와 judge_llm 생성 둘 다에
+>   그대로 흘려보내, 테스트가 실LLM 없이 성공 경로("사이트 조립 → 데몬 기동 →
+>   `--for-seconds 0`으로 즉시 종료")를 스모크할 수 있다. 데몬을 실제로 돌리는 옛
+>   `_run_patrol(daemon, for_seconds)` 헬퍼는 `_drive_daemon`으로 이름을 바꿨다(이름 충돌
+>   회피).
+> - `_load_app`/`case list`/`case show`가 이제 `env`를 받아 `load_app_config(config_root,
+>   env=env)`로 넘긴다(C1). `case show`는 상태가 `awaiting_human`이고 `question`이 있으면
+>   "파킹된 질문: ..."을 출력한다(Task 1/3 업데이트의 `CaseRecord.question`).
+> - `case resume`이 `_load_app`과 `assemble_sites` 양쪽에서 app을 중복으로 읽던 것을
+>   고쳤다(트리아지 — 미사용 `_app2` 제거, `assemble_sites` 결과 하나로 통일). 그리고
+>   케이스의 (gbm, fct)가 조립된 사이트 목록(`by_key`)에 없으면 — 즉 레지스트리에서
+>   사이트가 비활성화·삭제됐으면 — 워커가 lease를 잡기 전에 여기서 exit 1로 끝낸다
+>   (트리아지 — 미등록 사이트).
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_cli.py`에 추가
 

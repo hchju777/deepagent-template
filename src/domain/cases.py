@@ -32,6 +32,14 @@ class CaseRecord(StrictModel):
     thread_ids: list[str] = []          # 스레드 id 목록
     owner: str | None = None            # 소유자
     lease_until: datetime | None = None # 임차 만료 시간
+    closed_reason: str | None = None    # 종결 사유 (status=="closed"일 때)
+    thread_versions: dict[str, int] = {}  # thread_id → 저장 시점 schema_version
+    verdict_summary: str | None = None  # 판정 요약 (목록/브리핑용)
+    status_since: datetime | None = None  # 현재 status로 전이된 시각(계획 4b I2) — updated_at은
+                                          # attach 등 status와 무관한 갱신에도 움직이므로 타임아웃·
+                                          # 보존 판단은 이 필드를 우선 본다(없으면 updated_at으로 대체)
+    question: str | None = None         # awaiting_human으로 파킹된 질문(계획 4b I6) — resume 후 None
+    purged_at: datetime | None = None   # retention ①이 증거+판정을 비운 시각(계획 4b I7) — 재선택 방지
 
     def to_case(self) -> Case:
         """저장된 레코드로부터 엔진에 넘길 도메인 Case를 재구성한다."""
@@ -60,6 +68,11 @@ class CaseRepositoryPort(ABC):
     @abstractmethod
     def list_by_status(self, status: CaseStatus) -> list[CaseRecord]:
         """상태별 케이스 목록."""
+        pass
+
+    @abstractmethod
+    def list_open(self) -> list[CaseRecord]:
+        """열린 상태(OPEN_STATUSES) 케이스 전부."""
         pass
 
     @abstractmethod
@@ -95,6 +108,10 @@ class InMemoryCaseRepository(CaseRepositoryPort):
     def list_by_status(self, status: CaseStatus) -> list[CaseRecord]:
         """상태별 케이스 목록."""
         return [r for r in self._cases.values() if r.status == status]
+
+    def list_open(self) -> list[CaseRecord]:
+        """열린 상태(OPEN_STATUSES) 케이스 전부."""
+        return [r for r in self._cases.values() if r.status in OPEN_STATUSES]
 
     def new_case_id(self) -> str:
         """새 케이스 id 생성."""

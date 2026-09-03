@@ -5,7 +5,7 @@
 """
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class StrictModel(BaseModel):
@@ -28,6 +28,13 @@ class EngineConfig(StrictModel):
 class InvestigationsConfig(StrictModel):
     max_concurrent: int = 2
     awaiting_human_timeout_h: int = 72
+    # 케이스 임차(lease) 유효 시간(초) — 계획 4b. 조사 한 라운드가 걸릴 수 있는
+    # 최대 시간보다 길어야 한다 — 워커(InvestigationWorker)가 엔진 호출 동안
+    # lease_ttl_s/3 간격의 keepalive로 계속 갱신하므로(계획 4b I5), 실제로
+    # 필요한 건 "keepalive 한 틱이 늦어져도 다른 워커가 뺏어가지 않을 여유"뿐이다.
+    # float를 허용하는 이유는 테스트가 아주 짧은 TTL로 keepalive 갱신 자체를
+    # 실시간에 관찰해야 하기 때문이다(정수로는 표현 불가한 해상도).
+    lease_ttl_s: float = 900
 
 
 class LlmProfiles(StrictModel):
@@ -46,6 +53,7 @@ class PatrolBudget(StrictModel):
 
 class AppPatrol(StrictModel):
     llm_budget: PatrolBudget = PatrolBudget()
+    self_check_errors: int = 3          # 자기 감시 연속 error 임계값 — 계획 4b
 
 
 class RetentionConfig(StrictModel):
@@ -56,6 +64,15 @@ class RetentionConfig(StrictModel):
 
 class StoreConfig(StrictModel):
     retention: RetentionConfig = RetentionConfig()
+    backend: Literal["memory", "mongo"] = "memory"     # 계획 4b: 영속화 백엔드 선택
+    mongo_url: str | None = None                       # 예: "${AGENT_MONGO_URL}" 참조
+    mongo_db: str = "deepagent"
+
+    @model_validator(mode="after")
+    def _mongo_backend_needs_url(self):
+        if self.backend == "mongo" and not self.mongo_url:
+            raise ValueError("store.backend=mongo면 store.mongo_url이 필요하다")
+        return self
 
 
 class AppConfig(StrictModel):
