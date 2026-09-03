@@ -67,3 +67,22 @@ def test_파일로_먼저_쓴다(tmp_path):
     from pathlib import Path
     assert Path(path).read_text(encoding="utf-8") == "본문"
     assert write_report("x", output_dir="/proc/불가/경로", case_id="c-1") == ""   # 실패는 빈 문자열
+
+
+def test_형태가_망가진_케이스파일에서도_5절_구조는_지킨다():
+    broken = {"plan_tasks": 5, "hypotheses": "이상", "round": "둘",
+              "qa_log": {"kind": "dict가 아님"}, "verify_problems": 7}
+    text = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE,
+                         case_file=broken, clock=lambda: T)
+    for heading in ("## 1. 요약", "## 2. 판정", "## 3. 조치 권고", "## 4. 증거", "## 5. 조사 경위"):
+        assert heading in text
+    assert "조립 실패" not in text
+    assert "plan-sync" in text                    # 판정은 정상 렌더
+
+
+def test_항목이_전부_비dict면_없음을_낸다():
+    junk = {"plan_tasks": [1, "x"], "hypotheses": [None], "round": 1,
+            "qa_log": [], "verify_problems": []}
+    text = render_report(RECORD, verdict=None, evidence=[], case_file=junk, clock=lambda: T)
+    assert "## 5. 조사 경위" in text and "없음" in text
+    assert "| t-" not in text                      # 빈 표 머리만 남지 않음

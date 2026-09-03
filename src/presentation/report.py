@@ -33,7 +33,8 @@ def render_report(record: CaseRecord, *, verdict: Verdict | None,
     try:
         return _render(record, verdict=verdict, evidence=evidence,
                        case_file=case_file, clock=clock)
-    except Exception as exc:            # noqa: BLE001 — 보고서 조립 실패가 조사 종결을 막지 않는다(계약)
+    except Exception as exc:            # noqa: BLE001 — 최후의 그물: 컨테이너 타입 가드(_as_list)를
+        # 통과한 뒤에도 예상 못 한 형태가 있을 수 있다 — 그때도 조사 종결은 막지 않는다(계약)
         return (f"# 케이스 {getattr(record, 'id', '?')} 보고서\n\n"
                 f"보고서 조립 실패: {type(exc).__name__}: {exc}\n")
 
@@ -54,14 +55,25 @@ def write_report(text: str, *, output_dir: str, case_id: str) -> str:
         return ""
 
 
+def _as_list(value: object) -> list:
+    """스냅샷 필드가 리스트가 아니면 빈 리스트로 — 형태 이상에서도 5절 구조는 지킨다.
+
+    `value or []`는 falsy만 걸러내 5 같은 truthy 비-리스트를 그대로 통과시키고,
+    이후 리스트 컴프리헨션/순회에서 TypeError가 나 바깥 try/except까지 튀며
+    5절 헤딩 전체가 사라진다 — 컨테이너 레벨에서 막는다.
+    """
+    return value if isinstance(value, list) else []
+
+
 def _render(record: CaseRecord, *, verdict: Verdict | None,
            evidence: list[EvidenceRecord], case_file: dict | None, clock: Clock) -> str:
     case_file = case_file if isinstance(case_file, dict) else {}
-    plan_tasks = case_file.get("plan_tasks") or []
-    hypotheses = case_file.get("hypotheses") or []
-    qa_log = case_file.get("qa_log") or []
-    verify_problems = case_file.get("verify_problems") or []
-    round_no = case_file.get("round")
+    plan_tasks = _as_list(case_file.get("plan_tasks"))
+    hypotheses = _as_list(case_file.get("hypotheses"))
+    qa_log = _as_list(case_file.get("qa_log"))
+    verify_problems = _as_list(case_file.get("verify_problems"))
+    round_raw = case_file.get("round")
+    round_no = round_raw if isinstance(round_raw, int) else None
 
     sections = [
         f"# 케이스 {record.id} 보고서",
@@ -172,23 +184,25 @@ def _qa_entry_summary(entry: object) -> str:
     return str(entry)
 
 
-def _section5(round_no: object, plan_tasks: list, hypotheses: list,
+def _section5(round_no: int | None, plan_tasks: list, hypotheses: list,
              verify_problems: list, qa_log: list) -> str:
     lines = ["## 5. 조사 경위",
              f"- 라운드: {round_no if round_no is not None else '없음'}",
              "- 태스크 현황:"]
 
-    if not plan_tasks:
+    task_rows = []
+    for t in plan_tasks:
+        if not isinstance(t, dict):
+            continue
+        status = t.get("status", "?")
+        note = "미조사" if status in _UNINVESTIGATED else (t.get("error") or "")
+        task_rows.append(f"  | {t.get('id', '?')} | {t.get('role', '?')} | {status} | {note} |")
+    if not task_rows:
         lines.append("  없음")
     else:
         lines.append("  | id | 역할 | status | 비고 |")
         lines.append("  |---|---|---|---|")
-        for t in plan_tasks:
-            if not isinstance(t, dict):
-                continue
-            status = t.get("status", "?")
-            note = "미조사" if status in _UNINVESTIGATED else (t.get("error") or "")
-            lines.append(f"  | {t.get('id', '?')} | {t.get('role', '?')} | {status} | {note} |")
+        lines.extend(task_rows)
 
     refuted = [h for h in hypotheses if isinstance(h, dict) and h.get("status") == "refuted"]
     lines.append("- 기각된 가설:")
@@ -206,10 +220,11 @@ def _section5(round_no: object, plan_tasks: list, hypotheses: list,
         for p in verify_problems:
             lines.append(f"  - {p}")
 
+    qa_summaries = [_qa_entry_summary(e) for e in qa_log]
     lines.append("- QA 로그:")
-    if not qa_log:
+    if not qa_summaries:
         lines.append("  없음")
     else:
-        lines.append("  " + ", ".join(_qa_entry_summary(e) for e in qa_log))
+        lines.append("  " + ", ".join(qa_summaries))
 
     return "\n".join(lines)
