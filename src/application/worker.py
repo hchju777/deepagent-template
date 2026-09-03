@@ -140,7 +140,8 @@ class InvestigationWorker:
                 owner: str, max_concurrent: int, lease_ttl_s: float, ledger,
                 knowledge_digests_for_site: Callable[[str, str], dict[str, str]],
                 on_event: Callable[[Any], None] | None = None,
-                on_closed: Callable[[str], Awaitable] | None = None):
+                on_closed: Callable[[str], Awaitable] | None = None,
+                max_wall_clock_s: float | None = None):
         self._queue = queue
         self._repo = repo
         self._store = store
@@ -153,6 +154,7 @@ class InvestigationWorker:
         self._ledger = ledger
         self._knowledge_digests_for_site = knowledge_digests_for_site
         self._on_event = on_event
+        self._max_wall_clock_s = max_wall_clock_s
         self._on_closed = on_closed   # 계획 5 — 케이스가 닫힌 직후(성공/실패 종결 모두) 부르는 발행 훅
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
 
@@ -408,9 +410,14 @@ class InvestigationWorker:
         끝날 때까지 lease_ttl_s/3 간격으로 lease를 갱신하고 finally에서 취소한다."""
         keepalive = asyncio.ensure_future(self._keepalive_loop(case_id))
         try:
-            return await self._run_with_f3(
+            call = self._run_with_f3(
                 record, case, deps, engine, case_id, thread_id, initial_evidence,
                 resume=resume, allow_restart=allow_restart, interaction_policy=interaction_policy)
+            if self._max_wall_clock_s is None:
+                return await call
+            # 상한 초과는 예외로 던져 최외곽 except가 F1과 동일하게 처리하게 한다 —
+            # 여기서 직접 케이스를 닫으면 종결 경로가 둘로 갈린다.
+            return await asyncio.wait_for(call, timeout=self._max_wall_clock_s)
         finally:
             keepalive.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -384,3 +384,25 @@ async def test_워커는_get_save가_아니라_claim으로_lease를_잡는다(mo
                                  ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
     assert await worker.run_once("c-1") == "closed"
     assert calls == ["w-1"]        # acquire_lease가 아니라 claim을 탔다
+
+
+async def test_wall_clock_상한을_넘긴_조사는_실패로_종결된다(monkeypatch):
+    # 멈춘 LLM 호출 하나가 lease와 동시 상한 슬롯을 영구 점유하는 것을 막는다.
+    import asyncio as _asyncio
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 max_wall_clock_s=0.05)
+    import src.application.worker as wk
+    async def hang(*a, **k):
+        await _asyncio.sleep(10)
+    monkeypatch.setattr(wk, "investigate_case", hang)
+
+    assert await worker.run_once("c-1") == "failed"
+    rec = repo.get("c-1")
+    assert rec.status == "closed" and rec.owner is None
+    assert "TimeoutError" in (rec.closed_reason or "")

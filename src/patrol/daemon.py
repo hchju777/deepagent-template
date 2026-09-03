@@ -322,6 +322,7 @@ class PatrolDaemon:
             checkpointer=self.checkpointer, clock=self.clock, owner=self.owner,
             max_concurrent=self.app.investigations.max_concurrent,
             lease_ttl_s=self.app.investigations.lease_ttl_s, ledger=self.ledger,
+            max_wall_clock_s=self.app.investigations.max_wall_clock_s,
             knowledge_digests_for_site=self._digests_for_site, on_event=self.on_event,
             on_closed=self._publish_report)
         self.queue.requeue_open(self.repo, clock=self.clock)

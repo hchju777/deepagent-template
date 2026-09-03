@@ -38,6 +38,9 @@ class InvestigationsConfig(StrictModel):
     # 다른 프로세스(api·다른 워커)가 연 케이스를 이 데몬이 보게 하는 재스캔 간격.
     # 기동 시 1회 스캔만으로는 나중에 생긴 케이스를 영원히 못 본다.
     requeue_interval_s: float = 30
+    # 조사 한 건의 벽시계 상한(초). keepalive가 lease를 무한 갱신하므로 이 상한이
+    # 없으면 멈춘 LLM 호출 하나가 lease와 동시 상한 슬롯을 영구 점유한다.
+    max_wall_clock_s: float = 1800
 
 
 class LlmProfiles(StrictModel):
