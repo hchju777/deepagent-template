@@ -1,22 +1,216 @@
-"""CLI 엔트리 — 계획 1 범위: registry / config show / knowledge validate.
-
-계획 4~5에서 patrol, chat, case 서브커맨드가 추가된다.
+"""CLI 엔트리 — 계획 1: registry / config show / knowledge validate.
+계획 4b: patrol run/status, case list/show/resume 추가. 계획 5에서 chat이 더해진다.
 """
 import argparse
+import asyncio
 import json
 import os
+import socket
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
-from src.config.loader import ConfigError, load_registry, load_site_config
+from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
+from src.infrastructure.checkpointer import build_checkpointer, build_persistence
+from src.infrastructure.llm import build_chat_model
+from src.patrol.daemon import PatrolDaemon, assemble_sites
+from src.patrol.llm_judge import LlmBudget
+
+_CASE_STATUSES = ("open", "investigating", "awaiting_human", "closed")
 
 
 def _add_common(parser):
     parser.add_argument("--config-root", default="config")
     parser.add_argument("--repo-root", default=".")
+
+
+def _load_app(config_root: Path):
+    """load_app_config를 감싸 ConfigError를 stderr에 나열한다. 실패하면 None."""
+    try:
+        return load_app_config(config_root)
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(problem, file=sys.stderr)
+        return None
+
+
+async def _run_patrol(daemon: PatrolDaemon, for_seconds: float | None) -> None:
+    """for_seconds가 있으면 그만큼 뒤(0이면 즉시) stop을 세팅하고 데몬을 돌린다."""
+    stop = asyncio.Event()
+    if for_seconds is not None:
+        if for_seconds <= 0:
+            stop.set()                                       # build 후 즉시 stop — 기동 스모크
+        else:
+            asyncio.get_running_loop().call_later(for_seconds, stop.set)
+    await daemon.run(stop)
+
+
+def _cmd_patrol_run(args, config_root: Path, env: dict) -> int:
+    repo_root = Path(args.repo_root)
+    errors = validate_boot(config_root, env=env, repo_root=repo_root, check_live=False)
+    if errors:
+        for e in errors:
+            print(f"[{e.where}] {e.problem}", file=sys.stderr)
+        return 1
+
+    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+    app, sites = assemble_sites(config_root, repo_root, env, clock=clock)
+    store, repo, ledger = build_persistence(app.store)
+    checkpointer = build_checkpointer(app.store)
+
+    needs_judge_llm = any(check.judge in ("llm", "rule+llm")
+                          for rt in sites for check in rt.cfg.patrol.checks.values())
+    judge_llm = None
+    if needs_judge_llm:
+        judge_llm = build_chat_model(app.llm.profiles.judge,
+                                     base_url=env.get("LLM_BASE_URL"), api_key=env.get("LLM_API_KEY"))
+
+    budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
+    owner = f"daemon-{socket.gethostname()}-{os.getpid()}"
+    daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
+                          checkpointer=checkpointer, clock=clock, judge_llm=judge_llm,
+                          budget=budget, owner=owner, timezone=app.timezone)
+    asyncio.run(_run_patrol(daemon, args.for_seconds))
+    return 0
+
+
+def _cmd_patrol_status(config_root: Path, env: dict) -> int:
+    app = _load_app(config_root)
+    if app is None:
+        return 1
+    if app.store.backend == "memory":
+        print("메모리 백엔드 — 프로세스 간 상태 없음")
+        return 0
+
+    _store, _repo, ledger = build_persistence(app.store)
+    hb = ledger.last_heartbeat()
+    print(f"하트비트: {hb.isoformat() if hb is not None else '없음'}")
+
+    try:
+        registry = load_registry(config_root)
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(problem, file=sys.stderr)
+        return 1
+
+    for site in registry.sites:
+        if not site.enabled:
+            continue
+        try:
+            cfg, _provenance = load_site_config(config_root, site.gbm, site.fct, env=env)
+        except ConfigError as exc:
+            for problem in exc.problems:
+                print(problem, file=sys.stderr)
+            continue
+        for name in cfg.patrol.checks:
+            outcome = ledger.last_run(site.gbm, site.fct, name)
+            if outcome is None:
+                print(f"{site.gbm}/{site.fct}  {name}  (실행 이력 없음)")
+            else:
+                print(f"{site.gbm}/{site.fct}  {name}  {outcome.status}  "
+                     f"{outcome.observed_at.isoformat()}")
+    return 0
+
+
+def _cmd_case_list(args, config_root: Path) -> int:
+    app = _load_app(config_root)
+    if app is None:
+        return 1
+    _store, repo, _ledger = build_persistence(app.store)
+    statuses = (args.status,) if args.status else _CASE_STATUSES
+    records = [r for status in statuses for r in repo.list_by_status(status)]
+    for r in records:
+        print(f"{r.id}  {r.status}  {r.gbm}/{r.fct}  {r.symptom[:60]}")
+    return 0
+
+
+def _cmd_case_show(args, config_root: Path) -> int:
+    app = _load_app(config_root)
+    if app is None:
+        return 1
+    store, repo, _ledger = build_persistence(app.store)
+    try:
+        record = repo.get(args.case_id)
+    except KeyError:
+        print(f"케이스 {args.case_id!r}를 찾을 수 없다", file=sys.stderr)
+        return 1
+
+    print(f"id: {record.id}")
+    print(f"상태: {record.status}")
+    print(f"사이트: {record.gbm}/{record.fct}")
+    print(f"증상: {record.symptom}")
+    print(f"생성: {record.created_at.isoformat()}  갱신: {record.updated_at.isoformat()}")
+    print(f"소유자: {record.owner or '-'}  "
+         f"임차 만료: {record.lease_until.isoformat() if record.lease_until else '-'}")
+    if record.closed_reason:
+        print(f"종결 사유: {record.closed_reason}")
+
+    verdict = store.get_verdict(args.case_id)
+    if verdict is None:
+        print("판정: 아직 없음")
+    else:
+        print(f"판정: {verdict.verdict_type}  신뢰도: {verdict.confidence}")
+        print(f"서술: {verdict.narrative[:200]}")
+    print(f"증거 수: {len(store.list_evidence(args.case_id))}")
+    return 0
+
+
+def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
+    app = _load_app(config_root)
+    if app is None:
+        return 1
+    store, repo, ledger = build_persistence(app.store)
+    try:
+        record = repo.get(args.case_id)
+    except KeyError:
+        print(f"케이스 {args.case_id!r}를 찾을 수 없다", file=sys.stderr)
+        return 1
+
+    now = datetime.now(timezone.utc)
+    lease_free = record.owner is None or (record.lease_until is not None
+                                          and record.lease_until < now)
+    if not lease_free:
+        print("데몬이 실행 중 — 잠시 후 재시도", file=sys.stderr)
+        return 2
+    if record.status != "awaiting_human":
+        print(f"케이스가 awaiting_human 상태가 아니다(현재: {record.status}) — 재개할 수 없다",
+             file=sys.stderr)
+        return 1
+
+    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+    try:
+        _app2, sites = assemble_sites(config_root, Path(args.repo_root), env, clock=clock)
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(problem, file=sys.stderr)
+        return 1
+    for rt in sites:
+        rt.deps.store = store          # daemon.py와 동일한 불변식: 워커·엔진이 같은 Store를 본다
+    by_key = {(rt.gbm, rt.fct): rt for rt in sites}
+
+    def deps_for_site(gbm, fct):
+        return by_key[(gbm, fct)].deps
+
+    def digests_for_site(gbm, fct):
+        rt = by_key.get((gbm, fct))
+        return rt.digests if rt is not None else {}
+
+    checkpointer = build_checkpointer(app.store)
+    owner = f"cli-{socket.gethostname()}-{os.getpid()}"
+    worker = InvestigationWorker(
+        CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
+        checkpointer=checkpointer, clock=clock, owner=owner,
+        max_concurrent=app.investigations.max_concurrent,
+        lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
+        knowledge_digests_for_site=digests_for_site)
+
+    result = asyncio.run(worker.resume_once(args.case_id, args.answer))
+    print(f"재개 결과: {result}")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -42,6 +236,36 @@ def main(argv=None) -> int:
     p_validate.add_argument("--live", action="store_true",
                             help="검사 8(Mongo readonly 롤)까지 live 접속으로 확인한다")
     _add_common(p_validate)
+
+    p_patrol = sub.add_parser("patrol")
+    patrol_sub = p_patrol.add_subparsers(dest="patrol_command", required=True)
+    p_patrol_run = patrol_sub.add_parser(
+        "run", help="기동 검증 → 사이트 조립 → 순찰 데몬 기동(포그라운드)")
+    p_patrol_run.add_argument(
+        "--for-seconds", type=float, default=None,
+        help="N초 뒤 데몬을 내린다(스모크·개발용). 0이면 기동만 확인하고 즉시 내린다")
+    _add_common(p_patrol_run)
+    p_patrol_status = patrol_sub.add_parser(
+        "status", help="하트비트와 사이트·점검별 최근 실행 요약. 메모리 백엔드는 안내만 한다")
+    _add_common(p_patrol_status)
+
+    p_case = sub.add_parser("case")
+    case_sub = p_case.add_subparsers(dest="case_command", required=True)
+    p_case_list = case_sub.add_parser("list", help="케이스 목록(기본: 전체 상태)")
+    p_case_list.add_argument("--status", choices=_CASE_STATUSES, default=None)
+    _add_common(p_case_list)
+    p_case_show = case_sub.add_parser("show", help="케이스 레코드 + 판정 요약 + 증거 수")
+    p_case_show.add_argument("case_id")
+    _add_common(p_case_show)
+    _case_resume_note = ("awaiting_human 케이스에 사람의 답변을 넣어 재개한다. v1은 데몬 프로세스와 "
+                         "통신할 명령 채널이 없어, lease가 비어 있거나 만료된 경우에만 이 CLI가 "
+                         "인라인으로 직접 조사를 재개한다 — 데몬이 lease를 쥐고 있으면 "
+                         "'데몬이 실행 중 — 잠시 후 재시도' 안내와 함께 exit 2로 끝난다")
+    p_case_resume = case_sub.add_parser(
+        "resume", help=_case_resume_note, description=_case_resume_note)
+    p_case_resume.add_argument("case_id")
+    p_case_resume.add_argument("--answer", required=True)
+    _add_common(p_case_resume)
 
     args = parser.parse_args(argv)
     config_root = Path(args.config_root)
@@ -80,6 +304,20 @@ def main(argv=None) -> int:
         for e in errors:
             print(f"[{e.where}] {e.problem}", file=sys.stderr)
         return 1
+
+    if args.command == "patrol":
+        if args.patrol_command == "run":
+            return _cmd_patrol_run(args, config_root, env)
+        if args.patrol_command == "status":
+            return _cmd_patrol_status(config_root, env)
+
+    if args.command == "case":
+        if args.case_command == "list":
+            return _cmd_case_list(args, config_root)
+        if args.case_command == "show":
+            return _cmd_case_show(args, config_root)
+        if args.case_command == "resume":
+            return _cmd_case_resume(args, config_root, env)
 
     return 2
 

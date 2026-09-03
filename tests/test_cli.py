@@ -47,3 +47,26 @@ def test_깨진_registry는_stderr와_exit_1(tmp_path, capsys, monkeypatch):
     code = main(["registry", "--config-root", str(tmp_path / "config")])
     assert code == 1
     assert "JSON 파싱 실패" in capsys.readouterr().err
+
+
+def test_patrol_status_memory_백엔드_안내(tmp_path, capsys, monkeypatch):
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    code = main(["patrol", "status", "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)])
+    assert code == 0 and "메모리 백엔드" in capsys.readouterr().out
+
+
+def test_patrol_run_은_기동_검증_실패면_exit_1(tmp_path, capsys, monkeypatch):
+    _tree(tmp_path, check_target="rest:/ghost")
+    monkeypatch.setattr("os.environ", dict(ENV))
+    code = main(["patrol", "run", "--for-seconds", "0",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1 and "rest:/ghost" in capsys.readouterr().err
+
+
+def test_case_list_는_빈_저장소에서_빈_출력(tmp_path, capsys, monkeypatch):
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    code = main(["case", "list", "--config-root", str(tmp_path / "config")])
+    assert code == 0
