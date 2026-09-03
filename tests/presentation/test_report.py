@@ -51,6 +51,12 @@ def test_보고서는_5절을_모두_담고_에러율과_불완전_증거를_드
     assert "t-3" in text and "pending" in text              # 미조사 명시
     assert "h-1" in text and "서빙 이상" in text            # 기각 가설
     assert "라운드" in text and "2" in text
+    # R2: §5 태스크 표가 빈 줄 없이 앞의 "- 태스크 현황:" 불릿에 바로 붙으면 GFM이
+    # 표가 아니라 그 불릿의 계속(paragraph continuation) 평문으로 흡수한다(mistune
+    # GFM 표 플러그인으로 직접 렌더해 실측 — 빈 줄이 있어야 <table>이 나온다).
+    # 표 바로 앞뒤에 빈 줄 + 열 0에서 시작하는 헤더가 실제로 있는지 못박는다.
+    assert "\n\n| id | 역할 | status | 비고 |\n" in text
+    assert "\n\n- 기각된 가설:" in text                    # 표 뒤에도 빈 줄로 끊긴다
 
 
 def test_판정도_케이스파일도_없으면_없음을_명시한다():

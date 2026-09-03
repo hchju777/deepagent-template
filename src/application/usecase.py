@@ -66,12 +66,31 @@ async def _stream_and_collect(graph, input_state, config, on_event: Callable[[En
     필드)에서 복원한다. 이렇게 해야 워커의 `"__interrupt__" in result` 파킹
     판정이 스트리밍 경로에서도 그대로 유지된다.
 
-    round_counter(I1): select 노드는 자신의 부분상태에 round를 싣지 않으므로
+    round_counter(I1/R1): select 노드는 자신의 부분상태에 round를 싣지 않으므로
     (application/events.py 참고), 여기서 select 청크를 볼 때마다 +1 해 그
     값을 round_hint로 map_update_to_events에 넘긴다 — round_started.data에
     실제 라운드 번호가 실리게 하는 유일한 자리(스트리밍 루프)다.
+
+    카운터는 0이 아니라 "이 스레드가 재개 시점에 이미 지나온 round"에서
+    이어받는다(R1) — investigate_case/resume_case 호출 하나마다
+    _stream_and_collect도 새로 불리므로, park→resume처럼 스레드 하나가 여러
+    번의 호출로 나뉘어 도는 조사에서 로컬 카운터를 매번 0부터 시작하면
+    resume 이후의 라운드 번호가 실제보다 훨씬 작게(항상 1부터) 되돌아간다.
+    재개 직전 aget_state로 체크포인트에 남은 현재 round를 읽어 시작점으로
+    삼는다 — CaseRecord/case_file은 파킹 중엔 아직 갱신되지 않으므로(계획 4b
+    I6: worker._finish의 종결 분기에서만 쓴다) 믿을 수 없는 소스라 쓰지
+    않았다. 이 사전 조회 자체가 실패해도(신규 스레드라 체크포인트가 아직
+    없는 경우 등) 0으로 시작해 기존 동작을 그대로 유지한다.
     """
     round_counter = 0
+    try:
+        snapshot = await graph.aget_state(config)
+        values = getattr(snapshot, "values", None)
+        if isinstance(values, dict):
+            round_counter = values.get("round") or 0
+    except Exception:                                              # noqa: BLE001
+        round_counter = 0
+
     async for update in graph.astream(input_state, config=config, stream_mode="updates"):
         if "select" in update:
             round_counter += 1

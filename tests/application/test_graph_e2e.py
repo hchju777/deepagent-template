@@ -220,6 +220,51 @@ async def test_on_event를_주면_실제_그래프에서도_ainvoke와_같은_�
     assert resumed["qa_log"] == resumed_ainvoke["qa_log"]
 
 
+# ── R1 회귀: round_hint가 resume 경계를 넘어서도 이어서 증가한다 ─────────────
+# usecase._stream_and_collect의 round_counter가 investigate_case/resume_case
+# 호출마다(즉 park→resume 경계마다) 0에서 다시 시작하면, 재개 후 다음 select가
+# 내는 round_started.data["round"]가 실제 State.round보다 훨씬 작은 값(1)으로
+# 되돌아간다 — 고침 전에는 없던 라운드 값이 아예 안 실렸으니 "없던 오류를 새로
+# 만든" 셈이었다. park 전에 이미 3라운드(select만 3번, 매번 integrate가 이어감)를
+# 거치게 만들어 재개 시점 State.round가 3이 되게 하고, 재개 후 integrate가 다시
+# continue를 내 라운드가 한 번 더(4) 돌 때 그 select의 round_started가 4를
+# 내는지(1로 되돌아가지 않는지) 확인한다.
+async def test_round_hint은_resume_후에도_이어서_증가한다():
+    seeds = StubSeeds(mongo_collections={"twin_state": [{"line": 7, "oee": 5.12}]})
+    deps = _deps(
+        lead_responses=[FRAME_ONE_TASK_JSON, INTEGRATE_CONTINUE_JSON, INTEGRATE_CONTINUE_JSON,
+                        ASK_JSON, INTEGRATE_CONTINUE_JSON, INTEGRATE_CONCLUDE_JSON,
+                        ONE_EVIDENCE_VERDICT_JSON],
+        subagent_messages=[_mongo_call("twin_state"), _report(["ev-1"])],
+        seeds=seeds)
+    checkpointer = InMemorySaver()
+    case = Case(id="c-round-1", gbm="mx", fct="gumi", origin="patrol", symptom="OEE 512%", t0=T)
+    thread_id = case.id
+    seen_before: list = []
+
+    paused = await investigate_case(
+        case, deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        interaction_policy="interactive", on_event=seen_before.append)
+
+    assert "__interrupt__" in paused
+    assert paused["round"] == 3                          # 재리뷰가 실측한 정황과 동일한 셋업
+    rounds_before = [e.data["round"] for e in seen_before if e.event == "round_started"]
+    assert rounds_before == [1, 2, 3]                     # 파킹 전은 원래도 정상이었다(같은 호출 안)
+
+    seen_after: list = []
+    resumed = await resume_case(
+        "계획 변경 없음", deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        on_event=seen_after.append)
+
+    assert "__interrupt__" not in resumed
+    assert resumed["round"] == 5
+    rounds_after = [e.data["round"] for e in seen_after if e.event == "round_started"]
+    # R1 고침 전에는 여기가 [1]이었다(resume마다 카운터가 0부터 다시 시작) — 실제
+    # State.round(3)를 이어받아 4로 이어져야 한다.
+    assert rounds_after == [4]
+    assert rounds_after[0] > rounds_before[-1]            # 단조 증가
+
+
 # ── 시나리오 3: verify 재작성 ───────────────────────────────────────────────
 GHOST_VERDICT_JSON = (
     '{"verdict_type": "stale_data", "confidence": "high", "narrative": "1차", '

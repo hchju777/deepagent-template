@@ -211,12 +211,17 @@ def _section5(round_no: int | None, plan_tasks: list, hypotheses: list,
     if not task_rows:
         lines.append("  없음")
     else:
-        # M1: 표를 앞의 "- 태스크 현황:" 불릿 아래 들여쓰지 않는다 — 2칸 들여쓰기는
-        # 리스트 항목의 계속(paragraph continuation)으로 파싱돼 GFM이 표로 렌더하지
-        # 않는다. 들여쓰기를 빼 독립된 최상위 블록으로 만든다.
+        # M1/R2: 표를 앞의 "- 태스크 현황:" 불릿과 완전히 떼어낸다. 들여쓰기 제거만으론
+        # 부족했다 — 빈 줄 없이 붙어 있으면 GFM이 이 표 줄들을 앞 리스트 항목의
+        # "느슨한 계속(lazy continuation)" 텍스트로 흡수해 표가 아니라 평문으로 렌더한다
+        # (mistune(GFM 표 플러그인)으로 직접 렌더해 확인 — 빈 줄 없이는 <li> 안 평문,
+        # 빈 줄을 넣으면 독립된 <table>). 표 앞뒤로 빈 줄을 둬 리스트를 확실히 끊고
+        # 표를 최상위 블록으로 분리한다.
+        lines.append("")
         lines.append("| id | 역할 | status | 비고 |")
         lines.append("|---|---|---|---|")
         lines.extend(task_rows)
+        lines.append("")
 
     refuted = [h for h in hypotheses if isinstance(h, dict) and h.get("status") == "refuted"]
     lines.append("- 기각된 가설:")
