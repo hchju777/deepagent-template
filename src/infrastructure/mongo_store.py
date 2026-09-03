@@ -48,6 +48,10 @@ def ensure_indexes(db: Database) -> None:
     여러 번 불러도 안전하다(멱등) — build_persistence가 mongo 경로마다 부른다.
     """
     db.cases.create_index("id", unique=True)
+    # find_open_by_fingerprint는 게이트가 finding마다 부르므로 인덱스 없이는 매 점검이
+    # cases 풀스캔이 된다. status를 앞에 둬서 열린 케이스 조회와 종결 케이스 이력 조회가
+    # 같은 인덱스를 쓴다.
+    db.cases.create_index([("status", 1), ("fingerprint", 1)])
     db.evidence.create_index([("case_id", 1), ("id", 1)], unique=True)
     db.verdicts.create_index("case_id", unique=True)
     db.case_files.create_index("case_id", unique=True)

@@ -103,3 +103,13 @@ def test_ensure_indexes는_unique_인덱스를_만든다(db):
     assert any(spec["key"] == [("at", 1)] for spec in ledger_idx.values())
     sends_idx = db.sends.index_information()
     assert any(spec["key"] == [("send_id", 1)] and spec.get("unique") for spec in sends_idx.values())
+
+
+def test_ensure_indexes는_지문_조회_인덱스를_만든다(db):
+    # find_open_by_fingerprint는 게이트가 finding마다 부르는데 인덱스가 없어
+    # cases 컬렉션 풀스캔이었다. 이력 검색(종결 케이스 지문 조회)이 같은 키를
+    # 쓰므로 status를 앞에 둔 복합 인덱스 하나로 둘을 같이 받친다.
+    ensure_indexes(db)
+    cases_idx = db.cases.index_information()
+    assert any(spec["key"] == [("status", 1), ("fingerprint", 1)]
+              for spec in cases_idx.values())
