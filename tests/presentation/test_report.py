@@ -133,3 +133,25 @@ def test_미도달_단계는_빈칸_기호로_구별된다():
     text = render_report(RECORD, verdict=None, evidence=[], case_file={"round": 0},
                          clock=lambda: T)
     assert "| 판정 | ⬜ |" in text and "| 검증 | ⬜ |" in text
+
+
+def test_실패_스냅샷은_조사_경위에_출처를_밝힌다():
+    text = render_report(RECORD, verdict=None, evidence=[],
+                         case_file={"partial": True, "round": 2,
+                                    "plan_tasks": [{"id": "t1", "role": "data_prober",
+                                                    "status": "running"}]},
+                         clock=lambda: T)
+    assert "실패 시점 부분 스냅샷" in text
+
+
+def test_구제_실패는_흔적_유실을_명시한다():
+    text = render_report(RECORD, verdict=None, evidence=[],
+                         case_file={"partial": True, "salvage_error": "RuntimeError: 엔진 없음"},
+                         clock=lambda: T)
+    assert "조사 흔적 구제 실패" in text and "RuntimeError" in text
+
+
+def test_정상_종결에는_출처_줄이_없다():
+    text = render_report(RECORD, verdict=None, evidence=[],
+                         case_file={"round": 1}, clock=lambda: T)
+    assert "부분 스냅샷" not in text

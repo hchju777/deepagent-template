@@ -186,9 +186,14 @@ def _qa_entry_summary(entry: object) -> str:
 
 
 def _section5(model: ReportModel) -> str:
-    lines = ["## 5. 조사 경위",
-             f"- 라운드: {model.round_no if model.round_no is not None else '없음'}",
-             "- 태스크 현황:"]
+    lines = ["## 5. 조사 경위"]
+    # 부분 스냅샷임을 숨기면 "라운드 2"가 완결된 조사처럼 읽힌다 — 조용한 생략이다.
+    if model.partial:
+        lines.append("- 스냅샷: 실패 시점 부분 스냅샷(조사 미완)")
+        if model.salvage_error:
+            lines.append(f"- 조사 흔적 구제 실패: {model.salvage_error}")
+    lines.append(f"- 라운드: {model.round_no if model.round_no is not None else '없음'}")
+    lines.append("- 태스크 현황:")
 
     task_rows = []
     for t in model.plan_tasks:
