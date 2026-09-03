@@ -5,9 +5,9 @@
 - extra="forbid"가 전역 키의 사이트 계층 침입(§4.5-①)도 함께 거부한다.
 """
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 
 from src.config.schema_app import StrictModel
 
@@ -165,6 +165,60 @@ class Schedule(StrictModel):
         return self
 
 
+_CARDINALITY = re.compile(r"^(all|first:[1-9][0-9]*|sample:[1-9][0-9]*)$")
+
+
+class _ResolverBase(StrictModel):
+    cardinality: str = "all"
+
+    @model_validator(mode="after")
+    def _cardinality_is_known(self):
+        if not _CARDINALITY.match(self.cardinality):
+            raise ValueError(
+                f"cardinality {self.cardinality!r}는 all·first:N·sample:N 중 하나여야 한다")
+        return self
+
+
+class RestResolver(_ResolverBase):
+    """형제 조회 항목을 불러 값을 얻는다 — 대상 시스템 자신이 인정한 목록이라 가장 강하다."""
+    from_: Literal["rest"] = Field(alias="from")
+    entry: str
+    field: str
+
+
+class MongoResolver(_ResolverBase):
+    from_: Literal["mongo"] = Field(alias="from")
+    collection: str
+    field: str
+    filter: dict[str, Any] = {}
+
+
+class RedisResolver(_ResolverBase):
+    from_: Literal["redis"] = Field(alias="from")
+    pattern: str
+
+
+class ClockResolver(StrictModel):
+    """주입된 시계로 값을 만든다 — datetime.now()를 직접 부르지 않는다(규율 2)."""
+    from_: Literal["clock"] = Field(alias="from")
+    expr: Literal["today", "yesterday", "now_iso"]
+
+
+class UnfilteredResolver(StrictModel):
+    """**의도한 전체 조회**를 명시한다(스펙 §2-N3).
+
+    해석 실패로 우연히 전체 조회에 도달하는 경로와 처음부터 전체를 보려는 의도를
+    코드가 구별할 수 있어야 한다 — 빈 필터는 endpoint에 따라 0/0/0(거짓 경보)이
+    되기도 하고 전체 조회(거짓 안심, 조용해서 더 위험)가 되기도 한다.
+    """
+    from_: Literal["unfiltered"] = Field(alias="from")
+
+
+ResolverSpec = Annotated[
+    RestResolver | MongoResolver | RedisResolver | ClockResolver | UnfilteredResolver,
+    Field(discriminator="from_")]
+
+
 class CheckConfig(StrictModel):
     judge: Literal["rule", "llm", "rule+llm"]
     schedule: Schedule
@@ -173,6 +227,17 @@ class CheckConfig(StrictModel):
     params: dict[str, Any] = {}
     sample: int | None = None
     on_budget_exhausted: Literal["skip", "escalate"] = "skip"
+    resolve: dict[str, ResolverSpec] = {}   # 값이 아니라 값이 어디서 오는지를 선언한다
+
+    @model_validator(mode="after")
+    def _static_and_resolved_keys_are_disjoint(self):
+        static = self.params.get("body") if isinstance(self.params, dict) else None
+        overlap = sorted(set(static or {}) & set(self.resolve))
+        if overlap:
+            raise ValueError(
+                f"params.body와 resolve에 같은 키가 있다: {overlap} — 어느 쪽이 이기는지 "
+                f"사람이 헷갈리면 안 되므로 한 곳에만 둔다")
+        return self
 
 
 class SitePatrol(StrictModel):
