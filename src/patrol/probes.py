@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from src.config.schema_site import CheckConfig
 from src.domain.envelope import Envelope, ProbeResult
 from src.infrastructure.factory import AdapterSet
+from src.patrol.resolvers import resolve_params
 
 ProbeFn = Callable[..., Awaitable[ProbeResult]]
 
@@ -90,10 +91,10 @@ async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock) -> Probe
 
 
 async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
-    """target "rest:<항목명>" → adapters.rest.query(항목명, params).
+    """target "rest:<항목명>" → 해석기로 params를 만들어 adapters.rest.query 호출.
 
-    보낼 params는 지금은 check.params["body"](정적 dict)다 — 값을 살아 있는
-    소스에서 해석하는 것은 계획 9의 몫이고, 그때 이 자리가 해석기 호출로 바뀐다.
+    해석 결과는 등재 스키마 검증을 **다시** 통과해야 소켓에 나간다(어댑터가 한다) —
+    계획 8의 불변식("판정한 것 = 보내는 것")이 해석 경로에도 그대로 적용된다.
     """
     try:
         if adapters.rest is None:
@@ -102,11 +103,25 @@ async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock) -> Prob
         if parts is None or parts[0] != "rest":
             return _error(f"target 형식 오류: {check.target!r}", clock)
         _, entry = parts
-        body = check.params.get("body", {})
-        if not isinstance(body, dict):
-            return _error(f"params.body는 dict여야 한다 (받은 타입: {type(body).__name__})",
+        static = check.params.get("body", {})
+        if not isinstance(static, dict):
+            return _error(f"params.body는 dict여야 한다 (받은 타입: {type(static).__name__})",
                           clock)
-        return await adapters.rest.query(entry, body)
+        resolved = await resolve_params(check.resolve, adapters=adapters, clock=clock)
+        if resolved.problems:
+            # 전부-또는-전무(§2-N3): 하나라도 못 내면 호출하지 않는다. finding이
+            # 아니라 error다 — 우리 쪽 실패가 "현장 이상"으로 둔갑하면 안 된다
+            # (KnownRuleError가 존재하는 이유와 같은 논리).
+            return _error("파라미터 해석 실패 — " + "; ".join(resolved.problems), clock)
+        result = await adapters.rest.query(entry, {**static, **resolved.params})
+        if resolved.truncated and result.status == "ok":
+            # 잘린 표본으로 "이상 없음"을 단정하는 것을 verify가 자동으로 막는다
+            # (불완전 증거의 부정 결론 금지) — 기존 메커니즘을 그대로 쓴다.
+            envelope = result.envelope.model_copy(update={
+                "complete": False,
+                "truncated_reason": "; ".join(resolved.truncated)})
+            return result.model_copy(update={"envelope": envelope})
+        return result
     except Exception as exc:
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 

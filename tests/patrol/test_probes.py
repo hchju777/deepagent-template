@@ -91,3 +91,75 @@ async def test_rest_query는_어댑터가_없어도_raise하지_않는다():
     result = await rest_query(AdapterSet(semaphore=asyncio.Semaphore(1)), check,
                               clock=lambda: T)
     assert result.status == "error" and "rest" in result.error
+
+
+async def test_rest_query가_해석된_값을_보낸다():
+    from src.config.schema_site import RestEntry
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubMongo, StubRest
+    from src.patrol.probes import rest_query
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"line_code": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /summary/prod": {"badge": [1]}}, set(), entries,
+                             clock=lambda: T)
+    adapters.mongo = StubMongo({"lines": [{"line_code": "L1"}, {"line_code": "L2"}]},
+                               max_rows=100, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+        "params": {"rule": "exists", "field": "body.badge"},
+        "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                  "field": "line_code"}}})
+    result = await rest_query(adapters, check, clock=lambda: T)
+    assert result.status == "ok"
+    assert result.data["request"]["params"] == {"line_code": ["L1", "L2"]}
+
+
+async def test_해석_실패면_대상을_호출하지_않는다():
+    from src.config.schema_site import RestEntry
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubMongo, StubRest
+    from src.patrol.probes import rest_query
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"line_code": "list[str]"})}
+    called = []
+
+    class SpyRest(StubRest):
+        async def query(self, entry, params):
+            called.append(params)
+            return await super().query(entry, params)
+
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = SpyRest({"POST /summary/prod": {"badge": [1]}}, set(), entries,
+                            clock=lambda: T)
+    adapters.mongo = StubMongo({"lines": []}, max_rows=100, clock=lambda: T)   # 빈 결과
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+        "params": {"rule": "exists", "field": "body.badge"},
+        "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                  "field": "line_code"}}})
+    result = await rest_query(adapters, check, clock=lambda: T)
+    assert result.status == "error" and "line_code" in result.error
+    assert called == [], "해석에 실패했는데 대상을 호출했다"
+
+
+async def test_잘라낸_표본은_불완전으로_표시된다():
+    from src.config.schema_site import RestEntry
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubMongo, StubRest
+    from src.patrol.probes import rest_query
+    entries = {"e": RestEntry(method="POST", path="/x",
+                              body_schema={"line_code": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /x": {"ok": 1}}, set(), entries, clock=lambda: T)
+    adapters.mongo = StubMongo({"lines": [{"line_code": f"L{i}"} for i in range(10)]},
+                               max_rows=100, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body.ok"},
+        "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                  "field": "line_code", "cardinality": "first:3"}}})
+    result = await rest_query(adapters, check, clock=lambda: T)
+    assert result.status == "ok"
+    assert result.envelope.complete is False
+    assert "10" in (result.envelope.truncated_reason or "")
