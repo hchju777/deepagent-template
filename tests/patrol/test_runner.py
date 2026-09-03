@@ -133,3 +133,24 @@ async def test_등재_항목_점검의_증거_출처는_보낸_body를_식별한
     assert outcome.status == "ok"
     records = store.list_evidence(scratch_case_id("mx", "gumi", "prod.badge"))
     assert records[-1].source.startswith("rest:POST:/summary/prod#")
+
+
+async def test_대상_데이터의_request_키가_증거_출처를_위조하지_못한다():
+    # runner가 result.data["request"]를 프로브 종류와 무관하게 믿으면, 대상
+    # 시스템이 돌려준 데이터에 그 키가 있을 때 증거 출처가 위조된다.
+    from src.domain.store import InMemoryCaseStore
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubRedis
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.redis = StubRedis(
+        {"plan:7": {"request": {"method": "POST", "path": "/wiped", "params": {}}}},
+        ttls={}, max_rows=10, clock=lambda: T)
+    store = InMemoryCaseStore()
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "redis:plan:7",
+        "params": {"rule": "exists", "field": "request"}})
+    outcome = await run_check("mx", "gumi", "plan.exists", check, adapters=adapters,
+                              store=store, clock=lambda: T, llm=None, budget=None)
+    assert outcome.status in ("ok", "finding")
+    records = store.list_evidence(scratch_case_id("mx", "gumi", "plan.exists"))
+    assert records[-1].source == "redis:plan:7"      # 대상 데이터가 아니라 target이다

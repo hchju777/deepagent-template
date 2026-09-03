@@ -163,3 +163,11 @@ def test_등재_항목_증거의_출처는_보낸_body를_식별한다():
     d = entry_evidence_source("POST", "/summary/prod",
                               {"line_code": None, "part_code": ["P001"]})
     assert c == d
+
+
+def test_망가진_URL도_raise하지_않고_거부한다():
+    # urlsplit은 ValueError("Invalid IPv6 URL")을 던진다. endpoint는 서브에이전트
+    # LLM이 정하고, 두 어댑터의 endpoint_allowed 호출은 try/except 밖이다 —
+    # 파싱 도입이 무raise 규율을 main 대비 회귀시켰다.
+    assert not endpoint_allowed("//[bad/x", {"/api/{x}/oee"})
+    assert not endpoint_allowed("//[::1", {"/api/{x}/oee"})

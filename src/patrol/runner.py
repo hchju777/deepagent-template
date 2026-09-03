@@ -51,9 +51,15 @@ async def run_check(
         case_id = scratch_case_id(gbm, fct, name)
         # 등재 항목 호출은 target(rest:<이름>)만으로 무엇을 물었는지 알 수 없다 —
         # 어댑터가 data.request에 실어 보낸 method/path/params로 출처를 만든다(§2-N4).
-        request = result.data.get("request") if isinstance(result.data, dict) else None
-        source = (entry_evidence_source(request["method"], request["path"], request["params"])
-                  if isinstance(request, dict) else (check.target or name))
+        # **프로브 종류를 먼저 본다**: 종류와 무관하게 "request" 키를 믿으면 대상
+        # 시스템이 돌려준 데이터가 증거 출처를 위조할 수 있다. 세 키를 .get()으로
+        # 확인하는 것도 같은 이유 — 어댑터 계약이 바뀌어도 KeyError로 점검이 죽지 않는다.
+        source = check.target or name
+        if probe_name == "rest_query" and isinstance(result.data, dict):
+            request = result.data.get("request")
+            if isinstance(request, dict) and {"method", "path", "params"} <= set(request):
+                source = entry_evidence_source(request["method"], request["path"],
+                                               request["params"])
         snap_id = store.put_evidence(
             case_id, source=source, body=result.data,
             as_of=result.envelope.observed_at, complete=result.envelope.complete,

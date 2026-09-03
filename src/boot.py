@@ -23,7 +23,7 @@ from pathlib import Path
 
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
 from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
-from src.infrastructure.query_rules import mongo_role_problems
+from src.infrastructure.query_rules import entry_call_problems, mongo_role_problems
 from src.knowledge.deployment import load_deployment
 from src.knowledge.topology import load_topology, topology_problems
 from src.patrol.probes import PROBES, resolve_probe
@@ -91,7 +91,7 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         errors += [BootError(where, p) for p in topology_problems(topo)]
 
         known = topo.locators()
-        entries = set(cfg.target.rest.entries) if cfg.target.rest else set()
+        entries = dict(cfg.target.rest.entries) if cfg.target.rest else {}
         for name, check in cfg.patrol.checks.items():
             # rest:<이름>은 토폴로지가 아니라 등재 항목에서 해석된다 — 두 이름공간을
             # 섞어 보면 정상 설정이 거부당한다. 미등재 참조를 기동 거부로 올리는
@@ -101,10 +101,19 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
             if check.target is not None:
                 kind, _, rest = check.target.partition(":")
                 if kind == "rest" and not rest.startswith("/"):
-                    if rest not in entries:
+                    entry = entries.get(rest)
+                    if entry is None:
                         errors.append(BootError(
                             where, f"점검 {name!r}의 target {check.target!r}이 "
                                    f"target.rest.entries에 등재돼 있지 않다"))
+                    else:
+                        # 어댑터와 같은 판정 함수를 쓴다 — query_rules가 "기동 검증도
+                        # 같은 규칙을 공유한다"고 밝힌 존재 이유가 여기서 성립한다.
+                        # body 오타가 매 순찰 error로만 드러나는 것은 미등재 참조를
+                        # 기동 거부로 올린 것과 같은 상황이다.
+                        body = check.params.get("body", {})
+                        for problem in entry_call_problems(entry, body):
+                            errors.append(BootError(where, f"점검 {name!r}: {problem}"))
                 elif check.target not in known:
                     errors.append(BootError(
                         where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))

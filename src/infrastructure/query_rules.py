@@ -82,7 +82,13 @@ def endpoint_allowed(endpoint, patterns, *, query_keys=frozenset()):
     # 다르다"는 원래 버그와 같은 구조가 된다. 파싱 전에 거부한다.
     if any(ch in endpoint for ch in "\r\n\t") or any(ord(ch) < 0x20 for ch in endpoint):
         return False
-    parts = urlsplit(endpoint)
+    try:
+        parts = urlsplit(endpoint)
+    except ValueError:
+        # urlsplit은 잘못된 IPv6 리터럴 등에 ValueError를 던진다. endpoint는
+        # 서브에이전트 LLM이 정하고 두 어댑터의 호출은 try/except 밖이라, 여기서
+        # 새면 무raise 규율이 깨진다 — 파싱 도입이 만든 회귀다.
+        return False
     if parts.scheme or parts.netloc or parts.fragment:
         return False
     path = parts.path
@@ -117,11 +123,16 @@ def _type_problem(name: str, value, want: str) -> str | None:
     if want.startswith("list["):
         if not isinstance(value, list):
             return f"body 필드 {name!r}는 {want}여야 한다 (받은 타입: {type(value).__name__})"
-        elem = _SCALARS[want[5:-1]]
+        elem = _SCALARS.get(want[5:-1])
+        if elem is None:                    # 계획 9가 OpenAPI 유래 스키마를 넘길 때 대비
+            return f"body 필드 {name!r}의 선언 타입 {want!r}을 알 수 없다"
         bad = [v for v in value if not _is_exact(v, elem)]
         return (f"body 필드 {name!r}의 원소 타입이 {want}와 다르다 (예: {bad[0]!r})"
                 if bad else None)
-    if not _is_exact(value, _SCALARS[want]):
+    scalar = _SCALARS.get(want)
+    if scalar is None:
+        return f"body 필드 {name!r}의 선언 타입 {want!r}을 알 수 없다"
+    if not _is_exact(value, scalar):
         return f"body 필드 {name!r}는 {want}여야 한다 (받은 타입: {type(value).__name__})"
     return None
 
@@ -155,6 +166,10 @@ def entry_call_problems(entry, params: dict) -> list[str]:
     두 어댑터가 이 함수를 공유해야 판정이 갈라지지 않는다. 계획 7에서 claim의
     두 구현이 갈라져 프로덕션 버그를 테스트가 못 잡은 일이 실제로 있었다.
     """
+    if not isinstance(params, dict):
+        # 포트 docstring이 "소켓에 나가기 전에 error로 거부한다"고 단정한다.
+        # 계획 9의 해석기가 실패 시 None을 돌려주면 즉시 이 경로다.
+        return [f"params는 dict여야 한다 (받은 타입: {type(params).__name__})"]
     if entry.method == "GET":
         unknown = sorted(set(params) - set(entry.query_keys))
         return [f"허용되지 않은 쿼리 키: {unknown}"] if unknown else []

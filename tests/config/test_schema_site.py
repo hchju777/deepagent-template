@@ -104,3 +104,23 @@ def test_인증_토큰은_SecretStr로_마스킹된다():
         "auth": {"header": "x-dep-ticket", "value": "비밀토큰"}})
     assert "비밀토큰" not in repr(target)
     assert target.auth.value.get_secret_value() == "비밀토큰"
+
+
+def test_등재_경로는_base_url을_벗어날_수_없다():
+    # path에 검증이 없으면 Task 1이 세운 방어(절대 URL·임베디드 쿼리·순회)가
+    # 통째로 비껴간다 — 실제로 http://evil/wipe가 base_url을 벗어나 나갔다.
+    from src.config.schema_site import RestTarget
+    for bad in ("http://evil.internal/wipe", "//evil.internal/wipe",
+                "/mes/plan?admin=1", "/a/../../admin", "/a/./b", "mes/plan",
+                "/a%2e%2e/b", "/a/b#frag", "/a;x=y/b", "/a\nb"):
+        with pytest.raises(ValidationError):
+            RestTarget.model_validate({"base_url": "http://x",
+                                       "entries": {"e": {"method": "POST", "path": bad}}})
+
+
+def test_정상_경로는_자리표시자를_포함해_통과한다():
+    from src.config.schema_site import RestTarget
+    for ok in ("/summary/prod", "/api/v1/lines/{line}/oee", "/mes/plan"):
+        target = RestTarget.model_validate({"base_url": "http://x",
+                                            "entries": {"e": {"method": "POST", "path": ok}}})
+        assert target.entries["e"].path == ok
