@@ -11,6 +11,7 @@ from src.domain.envelope import Envelope, ProbeResult
 from src.domain.ports import (KafkaInspectorPort, MongoReaderPort,
                               RedisReaderPort, RestProberPort)
 from src.infrastructure.query_rules import (aggregate_problems, endpoint_allowed,
+                                            entry_call_problems,
                                             filter_problems)
 
 
@@ -147,8 +148,26 @@ class StubKafka(KafkaInspectorPort):
 
 
 class StubRest(RestProberPort):
-    def __init__(self, responses, allowed, *, clock):
+    def __init__(self, responses, allowed, entries=None, *, clock):
         self._responses, self._allowed, self._clock = responses, allowed, clock
+        self._entries = entries or {}
+
+    async def query(self, entry, params):
+        # RealRest와 **같은 거부 규칙**을 쓴다(entry_call_problems 공유). 테스트가
+        # 전부 스텁이므로 여기서 느슨해지면 그 계약을 검증하는 테스트가 무의미해진다.
+        entry_spec = self._entries.get(entry)
+        if entry_spec is None:
+            return _err(f"항목 {entry!r}는 등재돼 있지 않다", self._clock)
+        problems = entry_call_problems(entry_spec, params)
+        if problems:
+            return _err("; ".join(problems), self._clock)
+        key = f"{entry_spec.method} {entry_spec.path}"
+        if key not in self._responses:
+            return _err("404: 스텁에 등록되지 않은 항목", self._clock)
+        data = {"status_code": 200, "body": self._responses[key],
+                "request": {"method": entry_spec.method, "path": entry_spec.path,
+                            "params": params}}
+        return _ok(data, Envelope(observed_at=self._clock()))
 
     async def get(self, endpoint):
         if not endpoint_allowed(endpoint, self._allowed):

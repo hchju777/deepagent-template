@@ -43,8 +43,27 @@ class KafkaInspectorPort(ABC):
 
 
 class RestProberPort(ABC):
+    """대상 REST API 읽기 전용 접근.
+
+    쓰기 메서드(post/put/patch/delete)를 **의도적으로 두지 않는다**. v1에서는
+    get 하나뿐이라 쓰기가 물리적으로 불가능했고, POST가 필요해진 뒤에도 그 성질을
+    잃지 않으려면 "임의의 메서드로 임의의 경로를 호출하라"가 표현 불가능해야 한다.
+    query는 **등재 항목 이름**만 받고, 어떤 HTTP 메서드로 나갈지는 어댑터가 그
+    항목의 선언(target.rest.entries)을 보고 정한다.
+    """
+
     @abstractmethod
     async def get(self, endpoint: str) -> ProbeResult: ...           # 토폴로지 등록 끝점만, GET 전용
+
+    @abstractmethod
+    async def query(self, entry: str, params: dict) -> ProbeResult:
+        """등재 항목을 호출한다. GET 항목이면 params가 쿼리 문자열, POST면 body다.
+
+        미등재 항목·스키마 밖 필드·허용되지 않은 쿼리 키는 소켓에 나가기 전에
+        error ProbeResult로 거부한다. 반환 data에는 무엇을 물었는지도 실어
+        (`request`) 호출부가 증거 출처를 만들 수 있게 한다(스펙 §2-N4).
+        """
+        ...
 
 
 class CodeRepoReaderPort(ABC):

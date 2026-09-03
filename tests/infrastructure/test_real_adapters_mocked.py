@@ -248,3 +248,88 @@ async def test_kafka_read는_라이브_토픽에서_파티션별로_확정_종�
     assert res.status == "ok"
     assert len(res.data) == 1
     assert res.data[0]["value"] == {"n": 1}
+
+
+async def test_real_query는_항목의_메서드로_나가고_인증_헤더를_붙인다():
+    # 메서드가 호출자 인자가 아니라 등재 항목에서 온다는 것을 실제 요청으로 확인한다.
+    # 이 파일에는 httpx 목킹이 없었지만("라이브러리 표면만 흉내 낸 페이크"라는
+    # 파일 철학은 같다) MockTransport가 그 역할을 정확히 한다.
+    import httpx
+    from pydantic import SecretStr
+
+    from src.config.schema_site import Guards, RestAuth, RestEntry
+    from src.infrastructure.rest_prober import RealRest
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["ticket"] = request.headers.get("x-dep-ticket")
+        seen["body"] = request.content
+        return httpx.Response(200, json={"badge": [0, 0, 0]})
+
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"part_code": "list[str]"})}
+    rest = RealRest("http://x", set(), entries,
+                    RestAuth(header="x-dep-ticket", value=SecretStr("t0ken")),
+                    guards=Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    rest._client = httpx.AsyncClient(base_url="http://x", headers={"x-dep-ticket": "t0ken"},
+                                     transport=httpx.MockTransport(handler))
+    result = await rest.query("summary_prod", {"part_code": ["P001"]})
+    assert result.status == "ok"
+    assert seen["method"] == "POST" and seen["url"] == "http://x/summary/prod"
+    assert seen["ticket"] == "t0ken"
+    assert b"P001" in seen["body"]
+    assert result.data["request"]["method"] == "POST"
+
+
+async def test_real과_stub이_같은_거부_사유를_돌려준다():
+    # 테스트가 전부 스텁이므로 두 구현이 갈라지면 프로덕션 버그를 못 잡는다
+    # (계획 7에서 claim의 두 구현이 갈라진 것을 실제로 겪었다).
+    from src.config.schema_site import Guards, RestEntry
+    from src.infrastructure.rest_prober import RealRest
+    from src.infrastructure.stubs import StubRest
+    entries = {"p": RestEntry(method="POST", path="/x",
+                              body_schema={"a": "str", "n": "int", "f": "float",
+                                           "b": "bool", "xs": "list[str]"}),
+                "g": RestEntry(method="GET", path="/g", query_schema={"date": "str"})}
+    real = RealRest("http://x", set(), entries, None,
+                    guards=Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    stub = StubRest({}, set(), entries, clock=CLOCK)
+    # POST 세 케이스만 보면 GET 분기(entry_call_problems의 절반)를 한 번도 대조하지
+    # 않는다 — 그건 대조가 아니라 표본이다. 타입 경계와 None까지 넓힌다.
+    for entry, params in [("없음", {}),
+                          ("p", {"b2": 1}), ("p", {"a": 1}), ("p", {"n": True}),
+                          ("p", {"f": "x"}), ("p", {"xs": ["ok", 2]}), ("p", {"xs": "ok"}),
+                          ("p", None), ("p", ["a"]),
+                          ("g", {"line": "L1"}), ("g", {"date": "d", "x": 1}),
+                          ("g", None)]:
+        r, s = await real.query(entry, params), await stub.query(entry, params)
+        assert r.status == s.status == "error"
+        assert r.error == s.error, f"{entry}/{params}: real={r.error!r} stub={s.error!r}"
+
+
+async def test_리다이렉트를_따라가지_않는다():
+    # 따라가면 인증 헤더가 다른 호스트로 나간다. httpx 기본값이 False지만
+    # 코드에 단정이 없으면 누군가 True로 바꿔도 아무도 모른다.
+    import httpx
+
+    from src.config.schema_site import Guards, RestEntry
+    from src.infrastructure.rest_prober import RealRest
+    hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "safe":
+            return httpx.Response(302, headers={"location": "http://evil/collect"})
+        return httpx.Response(200, json={})
+
+    entries = {"e": RestEntry(method="GET", path="/x")}
+    rest = RealRest("http://safe", set(), entries, None,
+                    guards=Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    rest._client = httpx.AsyncClient(base_url="http://safe",
+                                     transport=httpx.MockTransport(handler),
+                                     follow_redirects=rest._client.follow_redirects)
+    result = await rest.query("e", {})
+    assert hosts == ["safe"], f"리다이렉트를 따라갔다: {hosts}"
+    assert result.data["status_code"] == 302

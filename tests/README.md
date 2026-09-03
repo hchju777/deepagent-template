@@ -35,6 +35,7 @@ pytest tests/test_bench_scenarios.py   # 벤치 회귀
 
 `StubSeeds`(`src/infrastructure/factory.py`)로 스텁 어댑터에 미리 값을
 심는다 — `StubSeeds(rest_responses={"/oee": {"oee": 512}})`처럼. 실제
+  등재 항목(`target.rest.entries`) 호출은 같은 dict에 `"POST /summary/prod"`처럼 `"{method} {path}"` 키로 시드한다.
 시스템 없이 "이런 데이터가 관측됐다"를 재현하는 유일한 방법이다.
 
 ## 테스트 트리 구조

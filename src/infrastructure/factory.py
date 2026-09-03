@@ -61,7 +61,8 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
             out.kafka = StubKafka(seeds.kafka_messages, seeds.kafka_offsets,
                                   max_rows=guards.max_rows, clock=clock)
         if cfg.target.rest:
-            out.rest = StubRest(seeds.rest_responses, allowed, clock=clock)
+            out.rest = StubRest(seeds.rest_responses, allowed,
+                                cfg.target.rest.entries, clock=clock)
     else:
         if cfg.target.redis:
             pw = cfg.target.redis.password.get_secret_value() if cfg.target.redis.password else None
@@ -77,6 +78,7 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
                                   guards=guards, semaphore=sem, clock=clock)
         if cfg.target.rest:
             out.rest = RealRest(cfg.target.rest.base_url, allowed,
+                                cfg.target.rest.entries, cfg.target.rest.auth,
                                 guards=guards, semaphore=sem, clock=clock)
 
     if cfg.target.code:

@@ -1101,8 +1101,8 @@ EOF
 - [ ] **Step 2: 예시가 실제로 기동 검증을 통과하는지 확인한다**
 
 ```bash
-MX_GUMI_API_BASE=http://x MX_GUMI_MONGO_URL=mongodb://x MX_GUMI_REDIS_URL=redis://x \
-  .venv/bin/python -m src knowledge validate --config-root config.example --repo-root .
+set -a; source .env.example; set +a
+.venv/bin/python -m src knowledge validate --config-root config.example --repo-root .
 ```
 Expected: exit 0
 

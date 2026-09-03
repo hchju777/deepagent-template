@@ -134,6 +134,8 @@
 (`"rest:/api/v1/lines/{line}/oee"`, `"mongo:twin_state"`, `"redis:plan:6:today"`,
 `"kafka:edge.raw.{line}"`).
 
+점검의 `target`은 locator이거나 **등재 항목 이름**이다 — `rest:/path`는 토폴로지 locator, `rest:<이름>`은 `target.rest.entries`의 항목을 가리킨다(후자만 POST가 가능하다).
+
 **deployment.yaml** (`src/knowledge/deployment.py`) — 사이트별로 "이
 서비스가 지금 어떤 커밋으로 배포돼 있는가"를 기록한 매핑. 기동 검증이 그
 커밋이 로컬 체크아웃에 실재하는지 확인한다.

@@ -69,3 +69,39 @@ async def test_mongo_스텁_sort_필드_부재도_error_결과():
     stub = StubMongo({"c": [{"a": 1}, {"b": 2}]}, max_rows=10, clock=CLOCK)
     res = await stub.find("c", {}, sort=[("a", 1)])
     assert res.status == "error"
+
+
+def _entries():
+    from src.config.schema_site import RestEntry
+    return {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                      body_schema={"part_code": "list[str]"}),
+            "mes_plan": RestEntry(method="GET", path="/mes/plan", query_schema={"date": "str"})}
+
+
+async def test_스텁_query는_미등재_항목을_거부한다():
+    rest = StubRest({}, set(), _entries(), clock=CLOCK)
+    result = await rest.query("없는항목", {})
+    assert result.status == "error" and "등재" in result.error
+
+
+async def test_스텁_query는_스키마_밖_필드를_거부한다():
+    rest = StubRest({"POST /summary/prod": {"ok": 1}}, set(), _entries(), clock=CLOCK)
+    result = await rest.query("summary_prod", {"part_code": ["P001"], "save_as": "x"})
+    assert result.status == "error" and "save_as" in result.error
+
+
+async def test_스텁_query는_허용되지_않은_쿼리_키를_거부한다():
+    rest = StubRest({"GET /mes/plan": {"ok": 1}}, set(), _entries(), clock=CLOCK)
+    assert (await rest.query("mes_plan", {"date": "2026-09-04"})).status == "ok"
+    bad = await rest.query("mes_plan", {"line": "L1"})
+    assert bad.status == "error" and "line" in bad.error
+
+
+async def test_스텁_query는_무엇을_물었는지_함께_돌려준다():
+    rest = StubRest({"POST /summary/prod": {"badge": [0, 0, 0]}}, set(), _entries(),
+                    clock=CLOCK)
+    result = await rest.query("summary_prod", {"part_code": ["P001"]})
+    assert result.status == "ok"
+    assert result.data["body"] == {"badge": [0, 0, 0]}
+    assert result.data["request"] == {"method": "POST", "path": "/summary/prod",
+                                      "params": {"part_code": ["P001"]}}

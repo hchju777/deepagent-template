@@ -171,3 +171,55 @@ def test_llm_판정기가_있는데_judge_프로파일이_비면_기동_거부(t
     gbm.write_text(json.dumps(data), encoding="utf-8")
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
     assert any("judge" in e.problem for e in errors)
+
+
+def test_등재_항목_target은_토폴로지가_아니라_entries로_해석된다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {
+            "base_url": "http://x",
+            "entries": {"summary_prod": {"method": "POST", "path": "/summary/prod",
+                                         "body_schema": {"part_code": "list[str]"}}}}},
+        "patrol": {"checks": {"prod.badge": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "target": "rest:summary_prod",
+            "params": {"rule": "exists", "field": "body.badge"}}}},
+        "knowledge": {"root": "knowledge.example"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert not [e for e in errors if "summary_prod" in e.problem]
+
+
+def test_미등재_항목을_참조하는_점검은_기동을_거부한다(tmp_path):
+    # 오타나 삭제된 항목을 참조하면 매 순찰이 error를 내고 끝난다 — 밤에 조용히
+    # 틀리는 것보다 배포 시점에 시끄럽게 죽는 게 낫다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {"base_url": "http://x", "entries": {}}},
+        "patrol": {"checks": {"prod.badge": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "target": "rest:summary_prod",
+            "params": {"rule": "exists", "field": "body.badge"}}}},
+        "knowledge": {"root": "knowledge.example"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("summary_prod" in e.problem for e in errors)
+
+
+def test_점검의_body가_등재_스키마와_어긋나면_기동을_거부한다(tmp_path):
+    # query_rules 모듈 docstring이 "기동 검증도 같은 규칙을 공유한다"고 밝히는데
+    # boot이 entry_body_problems를 안 부르면 그 문장이 거짓이 된다. 오타 하나가
+    # 매 순찰 error로만 드러나는 것은 Task 7이 미등재 참조를 기동 거부로 올린
+    # 논거와 정확히 같은 상황이다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {
+            "base_url": "http://x",
+            "entries": {"summary_prod": {"method": "POST", "path": "/summary/prod",
+                                         "body_schema": {"part_code": "list[str]"}}}}},
+        "patrol": {"checks": {"prod.badge": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "target": "rest:summary_prod",
+            "params": {"rule": "exists", "field": "body.badge",
+                       "body": {"save_as": "x"}}}}},      # 스키마 밖 키
+        "knowledge": {"root": "knowledge.example"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("save_as" in e.problem for e in errors)

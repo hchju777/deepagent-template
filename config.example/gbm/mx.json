@@ -2,7 +2,17 @@
   "target": {
     "adapters": "stub",
     "rest": {
-      "base_url": "${MX_GUMI_API_BASE}"
+      "base_url": "${MX_GUMI_API_BASE}",
+      "entries": {
+        "summary_prod": {
+          "method": "POST",
+          "path": "/summary/prod",
+          "body_schema": {
+            "part_code": "list[str]",
+            "line_code": "str"
+          }
+        }
+      }
     },
     "mongo": {
       "url": "${MX_GUMI_MONGO_URL}"
@@ -32,6 +42,23 @@
           "field": "body.oee",
           "min": 0,
           "max": 100
+        }
+      },
+      "prod.badge_nonzero": {
+        "judge": "rule",
+        "schedule": {
+          "interval": "5m"
+        },
+        "target": "rest:summary_prod",
+        "params": {
+          "rule": "exists",
+          "field": "body.badge",
+          "body": {
+            "part_code": [
+              "P001"
+            ],
+            "line_code": "L1"
+          }
         }
       }
     }

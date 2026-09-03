@@ -83,3 +83,25 @@ def test_깨진_JSON은_트레이스백이_아니라_ConfigError다(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_site_config(tmp_path / "config", "mx", "gumi", env={})
     assert any("JSON 파싱 실패" in prob for prob in exc.value.problems)
+
+
+def test_점검_body의_env_참조는_거부된다(tmp_path):
+    # params.body는 증거에 평문으로 영속되고 보고서에 렌더되며 서브에이전트의
+    # get_evidence 도구로 LLM 프롬프트에도 실린다 — 비밀값이 그 경로로 새면
+    # SecretStr 마스킹이 아무 소용이 없다. 인증은 rest.auth의 몫이다.
+    import json
+
+    from src.config.loader import ConfigError, load_site_config
+    (tmp_path / "gbm").mkdir()
+    (tmp_path / "gbm" / "mx.json").write_text(json.dumps({
+        "target": {"adapters": "stub", "rest": {
+            "base_url": "http://x",
+            "entries": {"e": {"method": "POST", "path": "/x",
+                              "body_schema": {"api_key": "str"}}}}},
+        "patrol": {"checks": {"c": {"judge": "rule", "schedule": {"interval": "5m"},
+                                    "target": "rest:e",
+                                    "params": {"rule": "exists", "field": "body",
+                                               "body": {"api_key": "${MES_TOKEN}"}}}}}}))
+    with pytest.raises(ConfigError) as exc:
+        load_site_config(tmp_path, "mx", "gumi", env={"MES_TOKEN": "tok-SECRET"})
+    assert any("params.body" in p for p in exc.value.problems)

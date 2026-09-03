@@ -76,6 +76,32 @@ def load_registry(config_root: Path) -> Registry:
 _SITE_LAYERS = ("gbm/{gbm}.json", "factories/{fct}/common.json", "factories/{fct}/{gbm}.json")
 
 
+def _body_env_problems(merged: dict, where: str) -> list[str]:
+    """점검의 `params.body`에 든 `${ENV}` 참조를 거부한다(치환 **전에** 본다).
+
+    body는 증거에 평문으로 영속되고(§2-N4의 request.params), 보고서 §4에 렌더되며,
+    서브에이전트의 get_evidence 도구를 통해 LLM 프롬프트에도 실린다. 비밀값이 이
+    경로로 새면 SecretStr 마스킹이 아무 소용이 없다 — 인증은 `target.rest.auth`의
+    몫이고 거기서는 값이 마스킹된다.
+
+    치환 전에 보는 이유: 치환 뒤에는 토큰과 part code를 구별할 방법이 없다.
+    """
+    problems = []
+    checks = (merged.get("patrol") or {}).get("checks") or {}
+    if not isinstance(checks, dict):
+        return problems
+    for name, check in checks.items():
+        body = ((check or {}).get("params") or {}).get("body") if isinstance(check, dict) else None
+        if not isinstance(body, dict):
+            continue
+        for key, value in body.items():
+            if isinstance(value, str) and "${" in value:
+                problems.append(
+                    f"{where}: 점검 {name!r}의 params.body.{key}에 env 참조가 있다 — "
+                    f"body는 증거로 평문 영속되므로 비밀값은 target.rest.auth에 둔다")
+    return problems
+
+
 def load_site_config(config_root: Path, gbm: str, fct: str, *, env):
     merged: dict = {}
     provenance: dict[str, str] = {}
@@ -84,6 +110,10 @@ def load_site_config(config_root: Path, gbm: str, fct: str, *, env):
         layer = _read_json(config_root / rel)
         source = rel.removesuffix(".json")
         merged = deep_merge(merged, layer, source=source, provenance=provenance)
+
+    problems = _body_env_problems(merged, f"{gbm}/{fct}")
+    if problems:
+        raise ConfigError(problems)
 
     resolved, missing = resolve_env_refs(merged, env=env)
     problems = [f"{gbm}/{fct}: env 키 부재 또는 빈 값 — {k}" for k in sorted(set(missing))]
