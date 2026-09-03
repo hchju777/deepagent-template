@@ -118,3 +118,33 @@ def test_제어문자는_파싱_전에_거부된다():
     patterns = {"/api/v1/lines/{line}/oee"}
     for bad in ("/api/v1/lines/7/oee\n", "/api/v1/lines/7\t/oee", "/api/v1/lines/7/oee\r\n"):
         assert not endpoint_allowed(bad, patterns)
+
+
+def test_body는_선언된_키와_타입만_허용한다():
+    from src.infrastructure.query_rules import entry_body_problems
+    schema = {"part_code": "list[str]", "line_code": "str", "limit": "int"}
+    assert entry_body_problems({"part_code": ["P001"], "line_code": "L1", "limit": 10},
+                               schema) == []
+    # 스키마 밖 키 — 해석기가 실수로 실을 수 있고, 대상이 그걸 해석하면
+    # 우리가 의도하지 않은 동작이 된다
+    assert any("save_as" in p for p in
+               entry_body_problems({"line_code": "L1", "save_as": "x"}, schema))
+    assert any("part_code" in p for p in entry_body_problems({"part_code": "P001"}, schema))
+    assert any("limit" in p for p in entry_body_problems({"limit": "10"}, schema))
+    assert any("part_code" in p for p in
+               entry_body_problems({"part_code": ["P001", 2]}, schema))
+
+
+def test_body의_누락은_문제가_아니다():
+    # 어떤 필드가 필수인지는 대상 API가 정하고 우리는 모른다(계획 9의 OpenAPI가
+    # 답할 문제다). 여기서 강제하면 스키마를 우리 추측으로 좁히게 된다.
+    from src.infrastructure.query_rules import entry_body_problems
+    assert entry_body_problems({}, {"part_code": "list[str]"}) == []
+
+
+def test_bool은_int로_통과하지_않는다():
+    # 파이썬에서 bool은 int의 하위 타입이라 isinstance(True, int)가 참이다.
+    # 그대로 두면 {"limit": True}가 통과해 대상에 1로 나간다.
+    from src.infrastructure.query_rules import entry_body_problems
+    assert entry_body_problems({"limit": True}, {"limit": "int"}) != []
+    assert entry_body_problems({"flag": True}, {"flag": "bool"}) == []

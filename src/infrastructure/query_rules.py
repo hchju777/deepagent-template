@@ -98,6 +98,55 @@ def endpoint_allowed(endpoint, patterns, *, query_keys=frozenset()):
     return False
 
 
+_SCALARS = {"str": str, "int": int, "float": float, "bool": bool}
+
+
+def _is_exact(value, want: type) -> bool:
+    """bool을 int로 통과시키지 않는다 — 파이썬에서 bool은 int의 하위 타입이라
+    isinstance(True, int)가 참이고, 그대로 두면 {"limit": True}가 1로 나간다."""
+    if want is int and isinstance(value, bool):
+        return False
+    if want is float:                       # int는 float 자리에 허용한다(JSON 관례)
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, want)
+
+
+def _type_problem(name: str, value, want: str) -> str | None:
+    if want.startswith("list["):
+        if not isinstance(value, list):
+            return f"body 필드 {name!r}는 {want}여야 한다 (받은 타입: {type(value).__name__})"
+        elem = _SCALARS[want[5:-1]]
+        bad = [v for v in value if not _is_exact(v, elem)]
+        return (f"body 필드 {name!r}의 원소 타입이 {want}와 다르다 (예: {bad[0]!r})"
+                if bad else None)
+    if not _is_exact(value, _SCALARS[want]):
+        return f"body 필드 {name!r}는 {want}여야 한다 (받은 타입: {type(value).__name__})"
+    return None
+
+
+def entry_body_problems(body: dict, schema: dict) -> list[str]:
+    """등재 항목의 닫힌 body 스키마를 검증한다. 문제 목록을 돌려준다(빈 리스트면 통과).
+
+    메서드 수준에서 잃은 "쓰기가 불가능하다"는 성질의 정직한 대체물이다 —
+    "POST는 쓰기 가능한 동사다"를 "이 항목은 이 키들을 이 타입으로만 실을 수
+    있다"로 되돌린다.
+
+    필드 **누락**은 문제로 보지 않는다: 어떤 필드가 필수인지는 대상 API가 정하고
+    우리는 모른다(계획 9의 OpenAPI가 답할 문제). 여기서 강제하면 스키마를 우리
+    추측으로 좁히게 된다.
+    """
+    problems = []
+    for name, value in body.items():
+        want = schema.get(name)
+        if want is None:
+            problems.append(f"body 필드 {name!r}는 등재 스키마에 없다")
+            continue
+        problem = _type_problem(name, value, want)
+        if problem:
+            problems.append(problem)
+    return problems
+
+
 def kafka_effective_start(requested, resolved_ts, earliest_ts):
     """offsets_for_times 결과로 달성 시작 시각을 정한다.
 
