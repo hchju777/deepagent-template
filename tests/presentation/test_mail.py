@@ -12,7 +12,7 @@ class RecordingSender(NullSender):
     def __init__(self, fail_times=0):
         self.sent, self._fail = [], fail_times
 
-    async def send(self, subject, body, *, recipients):
+    async def send(self, subject, body, *, recipients, html=None):
         if self._fail > 0:
             self._fail -= 1
             raise RuntimeError("SMTP 거부")
@@ -32,7 +32,7 @@ async def test_발송_실패는_pending으로_남고_재시도가_비운다():
                              cfg=CFG, clock=lambda: T) == "failed"
     assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-1"]
     done = await retry_pending(sender=sender, ledger=ledger, cfg=CFG, clock=lambda: T,
-                               render=lambda rec: ("제목", "본문"))
+                               render=lambda rec: ("제목", "본문", None))
     assert done == 1 and ledger.pending_sends() == []
 
 
@@ -65,7 +65,7 @@ async def test_render_실패는_남은_pending을_막지_않는다():
     def render(rec):
         if rec["send_id"] == "report:c-1":
             raise ValueError("망가진 레코드")
-        return ("제목", "본문")
+        return ("제목", "본문", None)
     done = await retry_pending(sender=sender, ledger=ledger, cfg=CFG, clock=lambda: T,
                                render=render)
     assert done == 1                                   # c-2는 보내졌다
@@ -78,7 +78,7 @@ async def test_재발송은_기록된_수신자에게_간다():
                       cfg=CFG, clock=lambda: T)
     changed = MailConfig(enabled=True, host="smtp", sender="a@x", recipients=["새사람@z"])
     await retry_pending(sender=sender, ledger=ledger, cfg=changed, clock=lambda: T,
-                        render=lambda rec: ("제목", "본문"))
+                        render=lambda rec: ("제목", "본문", None))
     assert sender.sent[-1][1] == ["b@y"]                # 기록된 target 우선
 
 
@@ -90,7 +90,7 @@ async def test_비활성_상태의_스윕은_건드리지_않고_0을_돌려준�
     off = MailConfig()                                        # enabled=False(기본값)
     sender = RecordingSender()
     done = await retry_pending(sender=sender, ledger=ledger, cfg=off, clock=lambda: T,
-                               render=lambda rec: ("제목", "본문"))
+                               render=lambda rec: ("제목", "본문", None))
     assert done == 0
     assert sender.sent == []                                  # NullSender조차 "보내지" 않았다
     assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-1"]   # pending 그대로
@@ -104,3 +104,43 @@ def test_메일을_켜면_host와_recipients가_필요하다():
         MailConfig(enabled=True, host="", recipients=["a@x"])
     with pytest.raises(ValidationError):
         MailConfig(enabled=True, host="smtp", recipients=[])
+
+
+def _fake_aiosmtplib(monkeypatch, sink: dict):
+    import sys
+    import types
+
+    async def fake_send(message, **kw):
+        sink["message"] = message
+
+    module = types.ModuleType("aiosmtplib")
+    module.send = fake_send
+    monkeypatch.setitem(sys.modules, "aiosmtplib", module)
+
+
+def test_HTML_본문은_대체_파트로_실린다(monkeypatch):
+    # set_content만 쓰면 text/plain 하나뿐이라 수신자가 태그 원문을 본다.
+    import asyncio
+
+    from src.config.schema_app import MailConfig
+    from src.presentation.mail import SmtpSender
+    sink = {}
+    _fake_aiosmtplib(monkeypatch, sink)
+    cfg = MailConfig(enabled=True, host="smtp.x", sender="a@x", recipients=["b@x"])
+    asyncio.run(SmtpSender(cfg).send("제목", "평문 본문",
+                                     recipients=["b@x"], html="<p>본문</p>"))
+    types_seen = {part.get_content_type() for part in sink["message"].walk()}
+    assert "text/plain" in types_seen and "text/html" in types_seen
+
+
+def test_html이_없으면_평문만_보낸다(monkeypatch):
+    import asyncio
+
+    from src.config.schema_app import MailConfig
+    from src.presentation.mail import SmtpSender
+    sink = {}
+    _fake_aiosmtplib(monkeypatch, sink)
+    cfg = MailConfig(enabled=True, host="smtp.x", sender="a@x", recipients=["b@x"])
+    asyncio.run(SmtpSender(cfg).send("제목", "평문", recipients=["b@x"]))
+    types_seen = {part.get_content_type() for part in sink["message"].walk()}
+    assert "text/html" not in types_seen

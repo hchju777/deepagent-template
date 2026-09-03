@@ -230,7 +230,7 @@ class PatrolDaemon:
     def _report_subject(case_id: str) -> str:
         return f"[순찰] 케이스 {case_id} 조사 보고서"
 
-    def _render_case_report(self, case_id: str) -> str:
+    def _case_report_model(self, case_id: str):
         """repo+store에서 케이스 판정·증거·케이스 파일을 다시 읽어 보고서 본문을 조립한다.
         _publish_report와 재시도 스윕(_render_pending)이 공유한다 — 재시도 시점에는 파일이
         아니라 이 함수로 다시 렌더링해 최신 상태를 반영한다(스펙 §5.4).
@@ -251,17 +251,31 @@ class PatrolDaemon:
                 evidence_summaries[r.id] = repr(self.store.get_evidence(case_id, r.id))[:120]
             except Exception:                                      # noqa: BLE001 — 개별 실패만 건너뛴다
                 pass
-        model = build_report_model(record, verdict=verdict, evidence=evidence,
-                                   case_file=case_file, clock=self.clock,
-                                   evidence_summaries=evidence_summaries)
+        return build_report_model(record, verdict=verdict, evidence=evidence,
+                                  case_file=case_file, clock=self.clock,
+                                  evidence_summaries=evidence_summaries)
+
+    def _render_case_report(self, case_id: str) -> str:
+        """설정 포맷으로 보고서 본문을 렌더링한다(파일로 쓸 것)."""
+        model = self._case_report_model(case_id)
         return render_html(model) if self.report_cfg.format == "html" else render_md(model)
 
-    def _render_pending(self, record: dict) -> tuple[str, str]:
+    def _render_case_mail(self, case_id: str) -> tuple[str, str, str | None]:
+        """메일용 (제목, 평문, HTML) — 같은 모델에서 두 파트를 함께 만든다.
+
+        평문 자리에 안내문 대신 마크다운을 넣는 이유: 같은 모델에서 공짜로 나오고,
+        HTML을 못 읽는 클라이언트와 검색 인덱스가 진짜 내용을 읽을 수 있다.
+        """
+        model = self._case_report_model(case_id)
+        html = render_html(model) if self.report_cfg.format == "html" else None
+        return self._report_subject(case_id), render_md(model), html
+
+    def _render_pending(self, record: dict) -> tuple[str, str, str | None]:
         """retry_pending의 render 콜백 — send_id("report:{case_id}")에서 case_id를
-        복원해 보고서를 다시 렌더링한다. 여기서 raise해도 retry_pending이 그 레코드만
-        건너뛰므로(mail.py F2) 방어적으로 감싸지 않는다."""
-        case_id = record["send_id"].removeprefix("report:")
-        return self._report_subject(case_id), self._render_case_report(case_id)
+        복원해 보고서를 다시 렌더링한다. 첫 발송과 같은 함수를 쓰므로 재시도가
+        다른 것을 보내지 않는다(2상 멱등의 전제). 여기서 raise해도 retry_pending이
+        그 레코드만 건너뛰므로(mail.py F2) 방어적으로 감싸지 않는다."""
+        return self._render_case_mail(record["send_id"].removeprefix("report:"))
 
     def _emit_case_opened(self, case_id: str) -> None:
         """게이트가 케이스를 연 직후 부른다 — Timeline의 첫 항목이다.
@@ -295,9 +309,10 @@ class PatrolDaemon:
                     self.on_event(report_ready_event(case_id, path, clock=self.clock))
                 except Exception:                                  # noqa: BLE001
                     pass
-            await send_report(case_id, self._report_subject(case_id), text,
-                              sender=self._mail_sender(), ledger=self.ledger,
-                              cfg=self.report_cfg.mail, clock=self.clock)
+            subject, plain, html = self._render_case_mail(case_id)
+            await send_report(case_id, subject, plain, sender=self._mail_sender(),
+                              ledger=self.ledger, cfg=self.report_cfg.mail,
+                              clock=self.clock, html=html)
         except Exception:                                          # noqa: BLE001 — 발행 실패가 종결을 뒤집지 않는다
             pass
 

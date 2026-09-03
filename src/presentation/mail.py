@@ -42,20 +42,22 @@ from src.config.schema_app import MailConfig
 from src.patrol.ledger import SendLedgerPort
 
 Clock = Callable[[], datetime]
-Render = Callable[[dict], tuple[str, str]]
+Render = Callable[[dict], tuple[str, str, str | None]]  # (제목, 평문, HTML|None)
 
 logger = logging.getLogger(__name__)
 
 
 class MailSenderPort(ABC):
     @abstractmethod
-    async def send(self, subject: str, body: str, *, recipients: list[str]) -> None: ...
+    async def send(self, subject: str, body: str, *, recipients: list[str],
+                   html: str | None = None) -> None: ...
 
 
 class NullSender(MailSenderPort):
     """실제로 메일을 보내지 않는다 — mail.enabled=False 기본 배선이나 테스트용."""
 
-    async def send(self, subject: str, body: str, *, recipients: list[str]) -> None:
+    async def send(self, subject: str, body: str, *, recipients: list[str],
+                   html: str | None = None) -> None:
         logger.info("메일 발송 생략(NullSender): subject=%s recipients=%d건",
                     subject, len(recipients))
 
@@ -69,7 +71,8 @@ class SmtpSender(MailSenderPort):
     def __init__(self, cfg: MailConfig):
         self._cfg = cfg
 
-    async def send(self, subject: str, body: str, *, recipients: list[str]) -> None:
+    async def send(self, subject: str, body: str, *, recipients: list[str],
+                   html: str | None = None) -> None:
         import aiosmtplib          # 지연 import — checkpointer.py의 mongo saver와 같은 이유
         from email.message import EmailMessage
 
@@ -79,6 +82,11 @@ class SmtpSender(MailSenderPort):
         message["To"] = ", ".join(recipients)
         message["Subject"] = subject
         message.set_content(body)
+        # HTML은 대체 파트로 얹는다 — set_content만 쓰면 text/plain 하나뿐이라
+        # 수신자가 태그 원문을 본다. 평문 파트를 남겨 두는 이유는 HTML을 못 읽는
+        # 클라이언트와 검색 인덱스가 여전히 내용을 읽을 수 있어야 하기 때문이다.
+        if html is not None:
+            message.add_alternative(html, subtype="html")
 
         password = cfg.password.get_secret_value() if cfg.password is not None else None
         await aiosmtplib.send(
@@ -92,7 +100,8 @@ class SmtpSender(MailSenderPort):
 
 
 async def send_report(case_id: str, subject: str, body: str, *, sender: MailSenderPort,
-                      ledger: SendLedgerPort, cfg: MailConfig, clock: Clock) -> str:
+                      ledger: SendLedgerPort, cfg: MailConfig, clock: Clock,
+                      html: str | None = None) -> str:
     """케이스 보고서 메일을 pending 기록 → 발송 → sent 갱신 순으로 보낸다.
 
     반환값은 "sent"|"skipped"|"duplicate"|"failed" 중 하나다. cfg.enabled가
@@ -108,7 +117,7 @@ async def send_report(case_id: str, subject: str, body: str, *, sender: MailSend
         return "duplicate"
 
     try:
-        await sender.send(subject, body, recipients=cfg.recipients)
+        await sender.send(subject, body, recipients=cfg.recipients, html=html)
     except Exception as exc:                                    # noqa: BLE001 — raise 금지(계약)
         logger.warning("메일 발송 실패(재시도 대상으로 pending 유지): case_id=%s err=%s: %s",
                        case_id, type(exc).__name__, exc)
@@ -143,7 +152,7 @@ async def retry_pending(*, sender: MailSenderPort, ledger: SendLedgerPort, cfg: 
             continue
 
         try:
-            subject, body = render(record)
+            subject, body, html = render(record)
         except Exception as exc:                                # noqa: BLE001 — F2: 레코드
             # 하나가 망가져도 나머지 pending을 계속 처리한다 — 스윕 전체를 막지 않는다.
             logger.warning("재시도 렌더 실패(건너뜀): send_id=%s err=%s: %s",
@@ -155,7 +164,7 @@ async def retry_pending(*, sender: MailSenderPort, ledger: SendLedgerPort, cfg: 
         recipients = [r.strip() for r in record["target"].split(",") if r.strip()]
         recipients = recipients or cfg.recipients
         try:
-            await sender.send(subject, body, recipients=recipients)
+            await sender.send(subject, body, recipients=recipients, html=html)
         except Exception as exc:                                # noqa: BLE001 — raise 금지(계약)
             logger.warning("재시도 발송 실패(pending 유지): send_id=%s err=%s: %s",
                            record["send_id"], type(exc).__name__, exc)
