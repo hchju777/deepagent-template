@@ -63,3 +63,14 @@ def test_끝점_경로_순회와_퍼센트_인코딩_차단():
     assert not endpoint_allowed("/api/v1/lines/../oee", patterns)
     assert not endpoint_allowed("/api/v1/lines/./oee", patterns)
     assert not endpoint_allowed("/api/v1/lines/%2e%2e/oee", patterns)
+
+
+def test_끝점_쿼리_프래그먼트_매트릭스_우회_차단():
+    # `{자리표시자}`가 `[^/]+`로 컴파일돼 `?`·`#`·`;`까지 삼킨다 — allowlist는
+    # 통과시키는데 httpx는 등록되지 않은 `/api/v1/lines/L1`로 나간다(실증). 특히
+    # `_method=DELETE`는 실재하는 메서드 오버라이드 관례라, 대상이 그걸 존중하면
+    # "완전 읽기 전용"이 LLM이 쓴 문자열 하나로 깨진다.
+    patterns = {"/api/v1/lines/{line}/oee"}
+    assert not endpoint_allowed("/api/v1/lines/L1?_method=DELETE&/oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/L1#/oee", patterns)
+    assert not endpoint_allowed("/api/v1/lines/L1;x=y/oee", patterns)

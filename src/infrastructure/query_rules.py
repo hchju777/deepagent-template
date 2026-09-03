@@ -63,8 +63,22 @@ def endpoint_allowed(endpoint, patterns):
     `[^/]+`로 컴파일되므로 `/api/v1/lines/../oee`가 자리표시자 구간과 매치되어
     통과해버리는데, httpx가 이를 다시 `/api/v1/oee`로 정규화해 실제로는 비허용
     끝점에 도달한다(실증됨) — `%2e%2e` 같은 퍼센트 인코딩도 동일하게 우회로 쓰인다.
+
+    `?`/`#`/`;`도 같은 이유로 거부한다. `[^/]+`가 이 셋을 삼키므로
+    `/api/v1/lines/L1?_method=DELETE&/oee`가 패턴에 매치되는데, httpx는
+    `GET /api/v1/lines/L1` + query `_method=DELETE&/oee`로 나간다(실증됨) — 등록되지
+    않은 끝점에 도달하고, `_method` 오버라이드를 존중하는 대상이면 GET이 DELETE로
+    동작해 "완전 읽기 전용"이 깨진다. endpoint 문자열은 서브에이전트 LLM이 정하므로
+    (application/subagents.py의 rest_get 도구) 이 판정이 유일한 방어선이다.
+    `#`은 프래그먼트가 절단돼 다른 끝점이 되고, `;`은 매트릭스 파라미터로 새 나간다.
+
+    쿼리 파라미터가 정말 필요한 점검(MES API 등)은 이 함수를 우회하는 게 아니라
+    `(method, path, 허용 쿼리 키)` 항목을 config에 등재하는 형태로 열어야 한다 —
+    지금은 등재 스키마가 없으므로 전면 거부가 정직한 상태다.
     """
     if "%" in endpoint:
+        return False
+    if any(ch in endpoint for ch in "?#;"):
         return False
     if any(segment in (".", "..") for segment in endpoint.split("/")):
         return False
