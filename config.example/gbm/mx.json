@@ -1,0 +1,42 @@
+{
+  "target": {
+    "adapters": "stub",
+    "rest": {
+      "base_url": "${MX_GUMI_API_BASE}"
+    },
+    "mongo": {
+      "url": "${MX_GUMI_MONGO_URL}"
+    },
+    "redis": {
+      "url": "${MX_GUMI_REDIS_URL}"
+    },
+    "code": {
+      "repos": [
+        {
+          "name": "twin-services",
+          "path": "./ref"
+        }
+      ]
+    }
+  },
+  "patrol": {
+    "checks": {
+      "api.oee_range": {
+        "judge": "rule",
+        "schedule": {
+          "interval": "5m"
+        },
+        "target": "rest:/api/v1/lines/{line}/oee",
+        "params": {
+          "rule": "range",
+          "field": "body.oee",
+          "min": 0,
+          "max": 100
+        }
+      }
+    }
+  },
+  "knowledge": {
+    "root": "knowledge.example"
+  }
+}

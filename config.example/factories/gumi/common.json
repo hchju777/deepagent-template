@@ -1,0 +1,1 @@
+{ "target": { "guards": { "max_rows": 500 } } }

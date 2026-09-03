@@ -1,0 +1,17 @@
+services:
+  twin-aggregator:
+    code: { repo: twin-services, path: services/aggregator }
+    reads:  [ { kind: kafka, topic: "edge.raw.{line}" } ]
+    writes: [ { kind: mongo, collection: twin_state } ]
+  twin-api:
+    reads:  [ { kind: mongo, collection: twin_state } ]
+    writes: [ { kind: rest, endpoint: "/api/v1/lines/{line}/oee" } ]
+derivations:
+  "rest:/api/v1/lines/{line}/oee":
+    inputs: [ { kind: mongo, collection: twin_state } ]
+    via: twin-api
+    key: line
+  "mongo:twin_state":
+    inputs: [ { kind: kafka, topic: "edge.raw.{line}" } ]
+    via: twin-aggregator
+    key: line

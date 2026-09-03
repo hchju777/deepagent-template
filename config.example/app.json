@@ -1,0 +1,7 @@
+{
+  "llm": {
+    "profiles": { "judge": "gpt-4o-mini", "subagent": "gpt-4o-mini", "lead": "gpt-4o" }
+  },
+  "store": { "backend": "memory" },
+  "report": { "output_dir": "output" }
+}
