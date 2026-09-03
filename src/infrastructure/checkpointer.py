@@ -14,16 +14,20 @@ async 구현체를 없애고, 동기 `MongoClient`를 받는 `MongoDBSaver` 하�
 브리프의 AsyncMongoDBSaver/AsyncMongoClient 조합은 이 설치본에 존재하지 않는다
 (task-4-report.md에 근거를 남겼다).
 """
+from typing import NamedTuple
+
 from langgraph.checkpoint.memory import InMemorySaver
 from pymongo import MongoClient
 
 from src.config.schema_app import StoreConfig
-from src.domain.cases import InMemoryCaseRepository
-from src.domain.events import InMemoryEventStore
-from src.domain.store import InMemoryCaseStore
+from src.domain.cases import CaseRepositoryPort, InMemoryCaseRepository
+from src.domain.events import EventStorePort, InMemoryEventStore
+from src.domain.snapshot import InMemoryVerdictSnapshotStore, VerdictSnapshotPort
+from src.domain.store import CaseStorePort, InMemoryCaseStore
 from src.infrastructure.mongo_store import (MongoCaseRepository, MongoCaseStore,
-                                            MongoEventStore, MongoLedger, ensure_indexes)
-from src.patrol.ledger import InMemoryLedger
+                                            MongoEventStore, MongoLedger,
+                                            MongoVerdictSnapshotStore, ensure_indexes)
+from src.patrol.ledger import InMemoryLedger, LedgerPort
 
 
 def build_checkpointer(cfg: StoreConfig):
@@ -35,11 +39,26 @@ def build_checkpointer(cfg: StoreConfig):
     return MongoDBSaver(client, db_name=cfg.mongo_db)
 
 
-def build_persistence(cfg: StoreConfig):
-    """cfg.backend에 따라 (store, repo, ledger, events) 4종 세트를 만든다."""
+class Persistence(NamedTuple):
+    """영속 3종 + 이벤트 로그 + 판정 스냅샷.
+
+    NamedTuple인 이유: 필드를 더할 때마다 튜플 언패킹 호출부를 전부 고쳐야 했다
+    (계획 6에서 3→4로 늘리며 7곳을 손댔다). 이름으로 접근하면 추가가 호출부를
+    깨지 않는다.
+    """
+    store: CaseStorePort
+    repo: CaseRepositoryPort
+    ledger: LedgerPort
+    events: EventStorePort
+    snapshots: VerdictSnapshotPort
+
+
+def build_persistence(cfg: StoreConfig) -> Persistence:
+    """cfg.backend에 따라 영속 계층 일습을 만든다."""
     if cfg.backend == "memory":
-        return (InMemoryCaseStore(), InMemoryCaseRepository(),
-                InMemoryLedger(), InMemoryEventStore())
+        return Persistence(InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger(),
+                           InMemoryEventStore(), InMemoryVerdictSnapshotStore())
     db = MongoClient(cfg.mongo_url)[cfg.mongo_db]
     ensure_indexes(db)
-    return MongoCaseStore(db), MongoCaseRepository(db), MongoLedger(db), MongoEventStore(db)
+    return Persistence(MongoCaseStore(db), MongoCaseRepository(db), MongoLedger(db),
+                       MongoEventStore(db), MongoVerdictSnapshotStore(db))
