@@ -4,7 +4,7 @@
 
 **Goal:** 스펙 §1.1(수명주기·case:thread 1:N)·§1.3(케이스 큐·동시 상한)·§4.4(에이전트 저장소·보존)·§5.2-F2(owner/lease 단일 실행자)·§5.4-F3/F5(재개 정책·하트비트)·§5.3 CLI(`patrol`, `patrol status`, `case`) — 순찰(4a)이 연 케이스가 큐를 거쳐 워커에서 조사되고, 상태 전이·타임아웃 종결·재개 실패 복구가 코드로 강제되며, 모든 기록이 Mongo에 영속되는 데몬을 완성한다.
 
-**Architecture:** 수명주기 전이와 lease는 순수 함수(application/lifecycle.py)로 두고, 워커가 그것을 호출해 케이스를 조사한다. 케이스 종결(close_case)은 타임아웃 스윕과 재개 실패 정책이 공유하는 단일 유스케이스. 영속층은 sync `MongoClient` 기반 Store/Repo/Ledger(포트가 sync라 그대로) + `AsyncMongoDBSaver` 체크포인터(그래프는 async) — 두 클라이언트가 같은 인스턴스를 본다. 데몬은 4a의 `build_scheduler`에 `run_one`을 꽂고, 큐·워커·보존 스윕·자기 감시를 한 프로세스에서 돌린다.
+**Architecture:** 수명주기 전이와 lease는 순수 함수(application/lifecycle.py)로 두고, 워커가 그것을 호출해 케이스를 조사한다. 케이스 종결(close_case)은 타임아웃 스윕과 재개 실패 정책이 공유하는 단일 유스케이스. 영속층은 sync `MongoClient` 기반 Store/Repo/Ledger(포트가 sync라 그대로) + `MongoDBSaver` 체크포인터(langgraph-checkpoint-mongodb 0.4.0은 sync `MongoClient` 기반이며 비동기 메서드는 executor로 제공 — `AsyncMongoDBSaver`는 존재하지 않는다, 실행 중 확인) — 두 클라이언트가 같은 인스턴스를 본다. 데몬은 4a의 `build_scheduler`에 `run_one`을 꽂고, 큐·워커·보존 스윕·자기 감시를 한 프로세스에서 돌린다.
 
 **Tech Stack:** 계획 4a 위에 `langgraph-checkpoint-mongodb>=0.4`, `pymongo>=4.12,<4.17`(체크포인터 요구 핀 — 전작과 동일), dev: `mongomock>=4.1`.
 
@@ -373,7 +373,7 @@ git commit -m "Investigate queued cases under a lease with one-shot thread recov
 **Interfaces:**
 - `MongoCaseStore(db)`, `MongoCaseRepository(db)`, `MongoLedger(db)` — `db`는 pymongo `Database`(sync). 컬렉션: `evidence`(case_id, id, source, body, digest, as_of, complete, effective_as_of, seq), `code_knowledge`, `verdicts`, `cases`, `ledger_runs`(gbm,fct,check,outcome,at), `ledger_meta`(heartbeat). 증거 id는 `counters` 컬렉션 `find_one_and_update($inc)`로 케이스별 원자 증가. 포트 메서드 전부 구현(Task 1 확장 포함). Verdict/CheckOutcome/CaseRecord는 `model_dump(mode="json")`로 저장, 읽을 때 `model_validate`.
 - `LedgerPort.prune_runs_before(before: datetime) -> int` 추가(InMemory·Mongo).
-- `build_checkpointer(cfg: StoreConfig)`: backend=memory → `InMemorySaver()`; mongo → 지연 import `from langgraph.checkpoint.mongodb.aio import AsyncMongoDBSaver` + `AsyncMongoClient(cfg.mongo_url)`로 생성. 테스트는 memory 경로 + mongo 경로의 import 가능성 스모크(`importlib.util.find_spec`).
+- `build_checkpointer(cfg: StoreConfig)`: backend=memory → `InMemorySaver()`; mongo → 지연 import `from langgraph.checkpoint.mongodb import MongoDBSaver` + `MongoClient(cfg.mongo_url)`, `db_name=cfg.mongo_db`로 생성(0.4.0 실제 API — 계획 초안의 `AsyncMongoDBSaver`는 오기). 테스트는 memory 경로 + mongo 경로의 import 가능성 스모크(`importlib.util.find_spec`).
 - `build_persistence(cfg: StoreConfig) -> tuple[store, repo, ledger]`: memory면 InMemory 3종, mongo면 `MongoClient(cfg.mongo_url)[cfg.mongo_db]`(db 이름은 `StoreConfig.mongo_db: str = "deepagent"` 추가)로 Mongo 3종.
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/infrastructure/test_mongo_store.py`
