@@ -47,6 +47,7 @@ class PatrolBudget(StrictModel):
 
 class AppPatrol(StrictModel):
     llm_budget: PatrolBudget = PatrolBudget()
+    self_check_errors: int = 3          # 자기 감시 연속 error 임계값 — 계획 4b
 
 
 class RetentionConfig(StrictModel):
