@@ -13,9 +13,11 @@
      묵혀두지 않는다. thread_ids에서 제거해두면 다음 재개는 F3(스레드
      부재 시 새로 시작) 경로를 그대로 타 새 스레드가 열린다.
 
-절대 raise하지 않는다: 항목 하나(케이스 하나·스레드 하나)의 실패가 나머지
-정리를 막아서는 안 된다 — 실패는 건너뛰고 계속한다. 시계는 clock()으로만
-얻는다(결정론 테스트).
+절대 raise하지 않는다: 레코드 하나(케이스 하나·스레드 하나)의 실패뿐 아니라
+목록 조회 자체(list_by_status/list_case_ids/list_open)의 실패도 나머지
+정리를 막아서는 안 된다 — 실패한 항목은 건너뛰고 나머지 세 항목은 계속
+돈다(Mongo 구현이 문서 하나의 역직렬화 실패로 목록 조회 자체를 raise할
+수 있다). 시계는 clock()으로만 얻는다(결정론 테스트).
 """
 from datetime import datetime, timedelta
 from typing import Callable, Protocol
@@ -41,7 +43,11 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
 
     # ① 오래된 종결 케이스 — 증거+판정 삭제, 스레드 폐기
     evidence_before = now - timedelta(days=retention.closed_case_evidence_d)
-    for record in repo.list_by_status("closed"):
+    try:
+        closed_records = repo.list_by_status("closed")
+    except Exception:                                                  # noqa: BLE001
+        closed_records = []
+    for record in closed_records:
         if record.updated_at >= evidence_before:
             continue
         try:
@@ -49,12 +55,20 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
         except Exception:                                              # noqa: BLE001
             continue
         counts["closed_cases"] += 1
-        if checkpointer is not None:
+        if checkpointer is not None and record.thread_ids:
             for thread_id in record.thread_ids:
                 try:
                     await checkpointer.adelete_thread(thread_id)
                 except Exception:                                       # noqa: BLE001
                     pass
+            # 폐기 성공 여부와 무관하게 비운다 — 종결 케이스는 다시 재개되지
+            # 않으므로 다음 스윕이 같은 케이스를 반복 처리할 이유가 없다.
+            try:
+                repo.save(record.model_copy(update={
+                    "thread_ids": [], "thread_versions": {},
+                }))
+            except Exception:                                          # noqa: BLE001
+                pass
 
     # ② 레저 실행 이력 정리
     ledger_before = now - timedelta(days=retention.ledger_d)
@@ -64,7 +78,11 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
         pass
 
     # ③ 순찰 스크래치 케이스의 오래된 증거만 정리 (케이스 자체는 유지)
-    for case_id in store.list_case_ids("patrol:"):
+    try:
+        scratch_ids = store.list_case_ids("patrol:")
+    except Exception:                                                  # noqa: BLE001
+        scratch_ids = []
+    for case_id in scratch_ids:
         try:
             counts["scratch_evidence"] += store.purge_evidence_before(case_id, ledger_before)
         except Exception:                                              # noqa: BLE001
@@ -73,7 +91,11 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
     # ④ 오래 멈춘 열린 케이스의 스레드만 폐기 — 다음 재개는 F3로 새 스레드
     if checkpointer is not None:
         ttl_before = now - timedelta(days=retention.checkpoint_ttl_d)
-        for record in repo.list_open():
+        try:
+            open_records = repo.list_open()
+        except Exception:                                              # noqa: BLE001
+            open_records = []
+        for record in open_records:
             if record.updated_at >= ttl_before or not record.thread_ids:
                 continue
             discarded: list[str] = []

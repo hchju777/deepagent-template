@@ -28,3 +28,27 @@ async def test_스윕은_오래된_종결_케이스와_레저와_스크래치를
     assert counts["closed_cases"] == 1 and store.list_evidence("c-old") == [] and store.list_evidence("c-fresh")
     assert counts["ledger_runs"] == 1 and len(ledger.runs("mx", "gumi", "c")) == 1
     assert counts["scratch_evidence"] == 1 and len(store.list_evidence("patrol:mx:gumi:c")) == 1
+    assert repo.get("c-old").thread_ids == []
+
+
+async def test_오래된_열린_케이스의_스레드는_폐기되고_기록에서_제거된다():
+    from langgraph.checkpoint.base import empty_checkpoint
+    from src.application.lifecycle import transition
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    saver = InMemorySaver()
+    stale = T - timedelta(days=20)
+    rec = CaseRecord(id="c-wait", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                     created_at=stale, updated_at=stale, thread_ids=["c-wait#1"],
+                     thread_versions={"c-wait#1": 1})
+    rec = transition(rec, "investigating", clock=lambda: stale)
+    rec = transition(rec, "awaiting_human", clock=lambda: stale)
+    repo.save(rec)
+    saver.put({"configurable": {"thread_id": "c-wait#1", "checkpoint_ns": ""}},
+              empty_checkpoint(), {"source": "input", "step": -1, "parents": {}}, {})
+    counts = await sweep_retention(repo=repo, store=store, ledger=ledger, checkpointer=saver,
+                                   clock=lambda: T, retention=RetentionConfig())
+    assert counts["expired_threads"] == 1
+    after = repo.get("c-wait")
+    assert after.status == "awaiting_human"                       # 케이스는 그대로
+    assert after.thread_ids == [] and after.thread_versions == {}
+    assert saver.get({"configurable": {"thread_id": "c-wait#1"}}) is None
