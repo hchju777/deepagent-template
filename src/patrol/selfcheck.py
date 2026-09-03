@@ -17,10 +17,10 @@ from typing import Callable
 
 from src.domain.patrol import Finding
 from src.domain.store import CaseStorePort
-from src.patrol.ledger import LedgerPort
+from src.patrol.ledger import CheckLedgerPort
 
 
-def scan_self_check(*, ledger: LedgerPort, checks: list[tuple[str, str, str]],
+def scan_self_check(*, ledger: CheckLedgerPort, checks: list[tuple[str, str, str]],
                     threshold: int, clock: Callable, store: CaseStorePort) -> list[Finding]:
     """(gbm, fct, check)마다 연속 error 횟수를 세어 threshold 이상이면
     최근 실행 이력을 증거로 박제하고 자기 감시 Finding을 만든다."""

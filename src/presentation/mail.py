@@ -39,7 +39,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from src.config.schema_app import MailConfig
-from src.patrol.ledger import LedgerPort
+from src.patrol.ledger import SendLedgerPort
 
 Clock = Callable[[], datetime]
 Render = Callable[[dict], tuple[str, str]]
@@ -92,7 +92,7 @@ class SmtpSender(MailSenderPort):
 
 
 async def send_report(case_id: str, subject: str, body: str, *, sender: MailSenderPort,
-                      ledger: LedgerPort, cfg: MailConfig, clock: Clock) -> str:
+                      ledger: SendLedgerPort, cfg: MailConfig, clock: Clock) -> str:
     """케이스 보고서 메일을 pending 기록 → 발송 → sent 갱신 순으로 보낸다.
 
     반환값은 "sent"|"skipped"|"duplicate"|"failed" 중 하나다. cfg.enabled가
@@ -124,7 +124,7 @@ async def send_report(case_id: str, subject: str, body: str, *, sender: MailSend
     return "sent"
 
 
-async def retry_pending(*, sender: MailSenderPort, ledger: LedgerPort, cfg: MailConfig,
+async def retry_pending(*, sender: MailSenderPort, ledger: SendLedgerPort, cfg: MailConfig,
                         clock: Clock, render: Render) -> int:
     """pending 발송을 각각 재시도한다. 성공한 건수를 반환한다 — 데몬 스윕이 호출.
 

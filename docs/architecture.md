@@ -212,8 +212,12 @@ lease가 만료된 `investigating`만 큐에 넣는다(`awaiting_human`은 대�
   의도된 설계. 웹 UI 착수 시 어휘 확장을 검토해야 한다.
 - 그래프 밖 실패(`_fail` 경로)로 종결된 케이스는 §5(조사 경위) 절이 비어
   보고서에 나온다 — `case_file`이 만들어지지 않기 때문.
-- `LedgerPort`가 점검 이력과 발송 추적 두 책임을 함께 진다 — Slack/webhook 등
-  채널을 추가하게 되면 분리를 검토할 만하다.
+- 레저의 **포트는** `CheckLedgerPort`(점검 이력·하트비트)와 `SendLedgerPort`
+  (발송 2상 멱등)로 갈라져 있고 소비자는 자기가 쓰는 쪽만 의존한다. **구현은
+  아직 하나다**(`InMemoryLedger`/`MongoLedger`가 둘을 함께 상속) — Mongo 쪽은
+  컬렉션(`ledger_runs`/`sends`/`ledger_meta`)과 보존기한(`ledger_d`/`sends_d`)이
+  이미 갈라져 있어 저장은 분리돼 있고 인터페이스만 붙어 있던 상태였다. 실제
+  구현 분리는 다른 채널이 발송만 쓰거나 메트릭 sink가 붙을 때 한다.
 - "코드 수정·데이터 정합성 보정" 같은 능동적 개입을 하는 **개발 시스템**은
   범위 밖이다. `recompute_verifier`의 재계산-대조 프리미티브만 재사용 가능하게
   설계돼 있다.

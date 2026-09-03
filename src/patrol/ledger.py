@@ -14,7 +14,9 @@ from datetime import datetime
 from src.domain.patrol import CheckOutcome
 
 
-class LedgerPort(ABC):
+class CheckLedgerPort(ABC):
+    """점검 실행 이력과 데몬 하트비트. 소비자: runner·daemon·selfcheck·worker·patrol status."""
+
     @abstractmethod
     def record_run(self, gbm: str, fct: str, check: str, outcome: CheckOutcome) -> None: ...
 
@@ -38,6 +40,10 @@ class LedgerPort(ABC):
         """before 이전에 기록된 실행 이력을 전부 삭제하고 삭제 건수를 반환한다."""
         ...
 
+
+class SendLedgerPort(ABC):
+    """발송 2상 멱등 레저. 소비자: mail.send_report·retry_pending."""
+
     @abstractmethod
     def record_send(self, send_id: str, *, kind: str, target: str, at: datetime) -> bool:
         """send_id를 pending으로 기록한다. 이미 있으면 아무것도 하지 않고 False(중복 억제)."""
@@ -58,6 +64,16 @@ class LedgerPort(ABC):
     def prune_sends_before(self, before: datetime) -> int:
         """before 이전에 기록된 발송 이력(완료분 포함)을 전부 삭제하고 삭제 건수를 반환한다."""
         ...
+
+
+class LedgerPort(CheckLedgerPort, SendLedgerPort):
+    """두 책임을 다 쓰는 소비자(데몬 조립·retention 스윕)용 합집합.
+
+    구현을 쪼개지 않는 이유: MongoLedger는 이미 ledger_runs/sends/ledger_meta로
+    컬렉션이 갈라져 있고 retention knob도 ledger_d/sends_d로 분리돼 있다 —
+    저장은 이미 갈라졌고 인터페이스만 융착돼 있었다. 실제 분리가 필요해지는
+    시점(다른 채널이 발송만 쓰거나, 메트릭 sink가 붙을 때)에 구현을 나눈다.
+    """
 
 
 class InMemoryLedger(LedgerPort):
