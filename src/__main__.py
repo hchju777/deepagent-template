@@ -209,6 +209,11 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         knowledge_digests_for_site=digests_for_site)
 
     result = asyncio.run(worker.resume_once(args.case_id, args.answer))
+    if result == "busy":
+        # 위의 사전 점검과 실제 획득 사이의 경합(다른 프로세스가 그 사이 lease를 잡은 경우) —
+        # resume_once 내부의 acquire_lease가 최종 결정권을 가지므로 여기서도 같은 exit 2로 맞춘다.
+        print("데몬이 실행 중 — 잠시 후 재시도", file=sys.stderr)
+        return 2
     print(f"재개 결과: {result}")
     return 0
 
