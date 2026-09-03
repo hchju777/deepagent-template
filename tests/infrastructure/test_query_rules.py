@@ -148,3 +148,18 @@ def test_bool은_int로_통과하지_않는다():
     from src.infrastructure.query_rules import entry_body_problems
     assert entry_body_problems({"limit": True}, {"limit": "int"}) != []
     assert entry_body_problems({"flag": True}, {"flag": "bool"}) == []
+
+
+def test_등재_항목_증거의_출처는_보낸_body를_식별한다():
+    # 같은 끝점에 다른 필터를 보낸 두 증거가 §4 표에서 구별돼야 한다.
+    # 구별되지 않으면 0/0/0이 "멈췄다"인지 "잘못 물었다"인지 알 수 없다.
+    from src.infrastructure.query_rules import entry_evidence_source
+    a = entry_evidence_source("POST", "/summary/prod", {"part_code": ["P001"]})
+    b = entry_evidence_source("POST", "/summary/prod", {"part_code": ["P002"]})
+    assert a.startswith("rest:POST:/summary/prod#") and a != b
+    # 키 순서가 달라도 같은 질문이면 같은 출처여야 한다(canonical_digest 규약)
+    c = entry_evidence_source("POST", "/summary/prod",
+                              {"part_code": ["P001"], "line_code": None})
+    d = entry_evidence_source("POST", "/summary/prod",
+                              {"line_code": None, "part_code": ["P001"]})
+    assert c == d

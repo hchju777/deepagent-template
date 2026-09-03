@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 from src.config.schema_site import CheckConfig
@@ -7,6 +8,7 @@ from src.infrastructure.llm import ScriptedLLM
 from src.patrol.ledger import InMemoryLedger
 from src.patrol.llm_judge import LlmBudget
 from src.patrol.runner import run_check
+from src.domain.patrol import scratch_case_id
 from tests.patrol.test_probes import _adapters
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
@@ -107,3 +109,27 @@ def test_ledger_runs_limit_0은_빈_리스트():
     ledger.record_run("mx", "gumi", "c", CheckOutcome(status="ok", observed_at=T))
     assert ledger.runs("mx", "gumi", "c", limit=0) == []
     assert len(ledger.runs("mx", "gumi", "c", limit=5)) == 1
+
+
+async def test_등재_항목_점검의_증거_출처는_보낸_body를_식별한다():
+    # 어댑터만 항목의 method/path를 알므로 ProbeResult.data의 request를 읽어야
+    # runner가 출처를 만들 수 있다. 같은 끝점에 다른 필터를 보낸 두 증거가
+    # 구별되지 않으면 0/0/0이 "멈췄다"인지 "잘못 물었다"인지 알 수 없다.
+    from src.config.schema_site import RestEntry
+    from src.domain.store import InMemoryCaseStore
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubRest
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"part_code": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /summary/prod": {"badge": [1, 2, 3]}}, set(), entries,
+                             clock=lambda: T)
+    store = InMemoryCaseStore()
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+        "params": {"rule": "exists", "field": "body.badge", "body": {"part_code": ["P001"]}}})
+    outcome = await run_check("mx", "gumi", "prod.badge", check, adapters=adapters,
+                              store=store, clock=lambda: T, llm=None, budget=None)
+    assert outcome.status == "ok"
+    records = store.list_evidence(scratch_case_id("mx", "gumi", "prod.badge"))
+    assert records[-1].source.startswith("rest:POST:/summary/prod#")

@@ -13,6 +13,7 @@ from src.domain.envelope import ProbeResult
 from src.domain.patrol import CheckOutcome, Finding, scratch_case_id
 from src.infrastructure.factory import AdapterSet
 from src.patrol.llm_judge import LlmBudget, judge_by_llm
+from src.infrastructure.query_rules import entry_evidence_source
 from src.patrol.probes import PROBES, resolve_probe
 from src.patrol.rules import KnownRuleError, judge_by_rule
 
@@ -48,8 +49,13 @@ async def run_check(
             return _error(observed_at, result.error or "프로브 실행 실패")
 
         case_id = scratch_case_id(gbm, fct, name)
+        # 등재 항목 호출은 target(rest:<이름>)만으로 무엇을 물었는지 알 수 없다 —
+        # 어댑터가 data.request에 실어 보낸 method/path/params로 출처를 만든다(§2-N4).
+        request = result.data.get("request") if isinstance(result.data, dict) else None
+        source = (entry_evidence_source(request["method"], request["path"], request["params"])
+                  if isinstance(request, dict) else (check.target or name))
         snap_id = store.put_evidence(
-            case_id, source=check.target or name, body=result.data,
+            case_id, source=source, body=result.data,
             as_of=result.envelope.observed_at, complete=result.envelope.complete,
             effective_as_of=result.envelope.effective_as_of,
         )

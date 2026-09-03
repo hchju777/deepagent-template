@@ -4,6 +4,8 @@ I/O가 없어 실구현·스텁·기동 검증이 같은 규칙을 공유하고,
 """
 import re
 from urllib.parse import parse_qsl, urlsplit
+
+from src.knowledge.digest import canonical_digest
 from datetime import datetime, timezone
 
 _AGG_ALLOW = {"$match", "$project", "$group", "$sort", "$limit", "$skip", "$count", "$unwind"}
@@ -157,6 +159,19 @@ def entry_call_problems(entry, params: dict) -> list[str]:
         unknown = sorted(set(params) - set(entry.query_keys))
         return [f"허용되지 않은 쿼리 키: {unknown}"] if unknown else []
     return entry_body_problems(params, entry.body_schema)
+
+
+def entry_evidence_source(method: str, path: str, params: dict) -> str:
+    """등재 항목 호출의 증거 출처 문자열.
+
+    body digest를 붙이는 이유(스펙 §2-N4): 응답만 보관하면 "0/0/0"이 "현장이
+    멈췄다"인지 "질문을 잘못했다"인지 구별할 수 없다. GET은 URL이 곧 질문이라
+    이 문제가 없었고, POST를 열면서 처음 생기는 요구다.
+
+    canonical_digest를 쓰므로 키 순서가 달라도 같은 질문이면 같은 출처가 된다 —
+    증거가 질문 단위로 모이고 흩어지지 않는다.
+    """
+    return f"rest:{method}:{path}#{canonical_digest(params)[:8]}"
 
 
 def kafka_effective_start(requested, resolved_ts, earliest_ts):
