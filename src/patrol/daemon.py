@@ -59,7 +59,7 @@ from src.patrol.selfcheck import scan_self_check
 from src.presentation.mail import MailSenderPort, NullSender, SmtpSender, retry_pending, send_report
 from src.presentation.report import render_report, write_report
 
-_IGNORED_JOB_IDS = {"heartbeat", "self_check", "sweep"}
+_IGNORED_JOB_IDS = {"heartbeat", "self_check", "sweep", "-/-/requeue"}
 
 
 @dataclass
@@ -187,6 +187,18 @@ class PatrolDaemon:
         except Exception:                                          # noqa: BLE001
             pass
 
+    async def requeue_job(self) -> None:
+        """열린 케이스와 만료 lease를 다시 큐에 넣는다.
+
+        중복 투입은 해롭지 않다 — run_once가 claim에 실패하면 "busy"를 돌려주고
+        끝난다. 반대로 재스캔이 없으면 다른 프로세스가 연 케이스를 영원히 못 본다.
+        다른 잡과 같이 절대 raise하지 않는다.
+        """
+        try:
+            self.queue.requeue_open(self.repo, clock=self.clock)
+        except Exception:                                          # noqa: BLE001
+            pass
+
     async def sweep_job(self) -> None:
         try:
             await sweep_timeouts(repo=self.repo, checkpointer=self.checkpointer, clock=self.clock,
@@ -299,6 +311,11 @@ class PatrolDaemon:
                           misfire_grace_time=None)
         scheduler.add_job(self.sweep_job, IntervalTrigger(hours=1), id="sweep",
                           misfire_grace_time=None)
+        # 잡 id를 3세그먼트로 맞춘다 — on_missed가 split("/", 2)로 언팩하므로
+        # 2세그먼트면 ValueError가 except에 삼켜져 misfire가 기록 없이 사라진다.
+        scheduler.add_job(self.requeue_job,
+                          IntervalTrigger(seconds=self.app.investigations.requeue_interval_s),
+                          id="-/-/requeue", misfire_grace_time=None)
 
         self.worker = InvestigationWorker(
             self.queue, repo=self.repo, store=self.store, deps_for_site=self._deps_for_site,

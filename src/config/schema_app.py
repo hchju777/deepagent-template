@@ -35,6 +35,9 @@ class InvestigationsConfig(StrictModel):
     # float를 허용하는 이유는 테스트가 아주 짧은 TTL로 keepalive 갱신 자체를
     # 실시간에 관찰해야 하기 때문이다(정수로는 표현 불가한 해상도).
     lease_ttl_s: float = 900
+    # 다른 프로세스(api·다른 워커)가 연 케이스를 이 데몬이 보게 하는 재스캔 간격.
+    # 기동 시 1회 스캔만으로는 나중에 생긴 케이스를 영원히 못 본다.
+    requeue_interval_s: float = 30
 
 
 class LlmProfiles(StrictModel):

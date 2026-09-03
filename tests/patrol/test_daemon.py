@@ -5,7 +5,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from src.config.schema_app import AppConfig, ReportConfig
 from src.config.schema_site import CheckConfig, SiteConfig
-from src.domain.cases import InMemoryCaseRepository
+from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.store import InMemoryCaseStore
 from src.infrastructure.factory import StubSeeds, build_adapters
 from src.patrol.daemon import PatrolDaemon, SiteRuntime
@@ -152,3 +152,18 @@ async def test_게이트가_케이스를_열면_open_이벤트가_나간다(tmp_
     opened = [e for e in seen
               if e.event == "case_status_changed" and e.data["status"] == "open"]
     assert [e.case_id for e in opened] == ["c-1"]
+
+
+async def test_주기_재큐는_나중에_생긴_open_케이스를_집어온다(tmp_path):
+    # 기동 후에 다른 프로세스(api·다른 워커)가 연 케이스를 데몬이 보려면
+    # 재스캔이 주기적이어야 한다. build()의 1회 스캔만으로는 영원히 못 본다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path)
+    daemon.build()
+    assert daemon.queue.qsize() == 0
+
+    repo.save(CaseRecord(id="c-late", gbm="mx", fct="gumi", fingerprint="fp-late",
+                         symptom="다른 프로세스가 연 케이스", t0=T,
+                         created_at=T, updated_at=T))
+    await daemon.requeue_job()
+    assert daemon.queue.qsize() == 1

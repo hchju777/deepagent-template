@@ -46,8 +46,8 @@ resume_once의 버전 불일치 재시작(F3와 별개 경로)도 같은 이유�
 미등록 사이트(daemon._deps_for_site가 None을 돌려주는 경우 — deps_for_site의
 계약: 알 수 없는 (gbm, fct)면 None): 이건 "그래프 호출 밖 실패"(F1)와 달리
 설정이 일시적으로 어긋난 것뿐 케이스 자체의 문제가 아니므로 케이스를 닫지
-않는다 — 레저에 skipped를 남기고 "skipped"를 돌려준다. 다음 requeue_open이
-(lease가 풀렸으므로) 같은 케이스를 다시 집어 준다. deps_for_site가 예외를
+않는다 — 레저에 skipped를 남기고 "skipped"를 돌려준다. lease가 풀렸으므로
+다음 재큐 잡(daemon.requeue_job, 기본 30초)이 같은 케이스를 다시 집어 준다. deps_for_site가 예외를
 던지는 경우(진짜 조립 실패)는 기존과 같이 F1 경로로 케이스를 닫는다.
 
 lease 획득은 저장소의 claim이 한 동작으로 수행한다 — get→save로 나누면 그 사이에
@@ -375,7 +375,7 @@ class InvestigationWorker:
         """미등록 사이트(deps_for_site가 None) — 케이스를 닫지 않고 레저에만
         skipped를 남긴다(트리아지). 설정이 일시적으로 어긋난 것뿐 케이스의
         문제가 아니므로, F1과 달리 종결하지 않는다 — lease는 finally의
-        _release_safely가 풀어주므로 다음 requeue_open이 다시 집어 준다."""
+        _release_safely가 풀어주므로 다음 재큐 잡(daemon.requeue_job)이 다시 집어 준다."""
         try:
             self._ledger.record_run(gbm, fct, f"worker:{case_id}", CheckOutcome(
                 status="skipped", observed_at=self._clock(),
