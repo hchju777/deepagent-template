@@ -162,6 +162,62 @@ async def test_ask는_interrupt로_멈추고_resume으로_conclude까지_이어�
     assert resumed["verdict"].root_cause.component == "plan-sync"
 
 
+# ── 계획 5 스모크: on_event를 준 실제 LangGraph 왕복 ─────────────────────────
+# tests/application/test_usecase_stream.py는 FakeStreamEngine으로 astream/aget_state
+# 계약(호출 시그니처·반환 형태)만 결정론으로 검증한다 — 실제 LangGraph의
+# StateSnapshot.tasks[i].interrupts에서 "__interrupt__"를 복원하는 부분은 그 가짜가
+# tasks=()로만 흉내내므로 커버하지 못한다. 여기서는 build_engine이 만든 진짜
+# 컴파일 그래프로 ask→interrupt→resume 왕복을 on_event와 함께 돌려, 스트리밍 경로가
+# ainvoke 경로와 같은 최종 dict(및 __interrupt__ 계약)를 내는지 실증한다.
+async def test_on_event를_주면_실제_그래프에서도_ainvoke와_같은_결과를_스트리밍으로_낸다():
+    seeds = StubSeeds(mongo_collections={"twin_state": [{"line": 7, "oee": 5.12}]})
+    deps = _deps(
+        lead_responses=[FRAME_ONE_TASK_JSON, ASK_JSON, INTEGRATE_CONCLUDE_JSON,
+                        ONE_EVIDENCE_VERDICT_JSON],
+        subagent_messages=[_mongo_call("twin_state"), _report(["ev-1"])],
+        seeds=seeds)
+    checkpointer = InMemorySaver()
+    case = Case(id="c-stream-1", gbm="mx", fct="gumi", origin="patrol", symptom="OEE 512%", t0=T)
+    thread_id = case.id
+    seen = []
+
+    paused = await investigate_case(
+        case, deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        interaction_policy="interactive", on_event=seen.append)
+
+    assert "__interrupt__" in paused                   # 실 StateSnapshot.tasks에서 복원됨
+    interrupts = paused["__interrupt__"]
+    assert interrupts[0].value.get("question") == "계획 변경이 있었나요?"
+    assert paused["qa_log"] == []
+    assert all(e.case_id == "c-stream-1" for e in seen)
+    kinds_before_resume = [e.event for e in seen]
+    assert "round_started" in kinds_before_resume and "task_finished" in kinds_before_resume
+
+    resumed = await resume_case(
+        "계획 변경 없음", deps=deps, checkpointer=checkpointer, thread_id=thread_id,
+        on_event=seen.append)
+
+    assert "__interrupt__" not in resumed
+    assert resumed["verdict"] is not None
+    assert resumed["verdict"].root_cause.component == "plan-sync"
+    # 스트리밍 경로가 ainvoke 경로와 같은 dict를 내는지 — 같은 각본으로 ainvoke 경로도
+    # 완주시켜(별도 스레드) 최종 verdict·qa_log가 동일함을 확인한다.
+    deps2 = _deps(
+        lead_responses=[FRAME_ONE_TASK_JSON, ASK_JSON, INTEGRATE_CONCLUDE_JSON,
+                        ONE_EVIDENCE_VERDICT_JSON],
+        subagent_messages=[_mongo_call("twin_state"), _report(["ev-1"])],
+        seeds=seeds)
+    checkpointer2 = InMemorySaver()
+    case2 = Case(id="c-stream-1", gbm="mx", fct="gumi", origin="patrol", symptom="OEE 512%", t0=T)
+    paused_ainvoke = await investigate_case(
+        case2, deps=deps2, checkpointer=checkpointer2, thread_id="c-stream-2",
+        interaction_policy="interactive")
+    resumed_ainvoke = await resume_case(
+        "계획 변경 없음", deps=deps2, checkpointer=checkpointer2, thread_id="c-stream-2")
+    assert resumed["verdict"] == resumed_ainvoke["verdict"]
+    assert resumed["qa_log"] == resumed_ainvoke["qa_log"]
+
+
 # ── 시나리오 3: verify 재작성 ───────────────────────────────────────────────
 GHOST_VERDICT_JSON = (
     '{"verdict_type": "stale_data", "confidence": "high", "narrative": "1차", '

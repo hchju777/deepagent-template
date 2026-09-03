@@ -2,11 +2,21 @@
 
 그래프 배선(graph.py)을 감싸 호출 표면을 좁힌다: 초기 CaseState 조립과
 스레드 설정만 여기서 하고, 통제·판단 로직은 전부 노드에 있다.
+
+on_event(계획 5 — 보고·채널): 주어지면 ainvoke 대신 astream(stream_mode="updates")로
+돌며 각 덩어리를 map_update_to_events로 이벤트 봉투화해 싱크에 넘긴다. on_event가
+None이면(기본값) 지금까지와 동일하게 ainvoke 한 번으로 완주까지 기다린다 — 기존
+호출부·테스트는 아무것도 바뀌지 않는다.
 """
+from datetime import datetime, timezone
+from typing import Any, Callable
+
 from langgraph.types import Command
 
+from src.application.events import map_update_to_events
 from src.application.graph import build_engine
 from src.domain.case import EvidenceRef
+from src.domain.events import EngineEvent
 
 
 def _initial_state(case, interaction_policy, question_policy,
@@ -29,11 +39,47 @@ def _initial_state(case, interaction_policy, question_policy,
     return state
 
 
+def _case_id_from_thread(thread_id: str) -> str:
+    """thread_id에서 case_id를 뽑는다 — 워커의 스레드 명명 규칙(f"{case_id}#{n}",
+    worker.py._next_thread_id)을 따른다. "#"이 없으면(신규 조사의 기본 thread_id는
+    case.id 그대로다) 통째로 case_id로 본다."""
+    return thread_id.split("#", 1)[0]
+
+
+async def _stream_and_collect(graph, input_state, config, on_event: Callable[[EngineEvent], None],
+                              case_id: str) -> dict:
+    """astream(stream_mode="updates")으로 돌며 각 덩어리를 이벤트로 봉투화해 싱크에
+    넘기고, 최종 state를 aget_state로 얻어 ainvoke와 같은 dict로 돌려준다.
+
+    싱크 호출은 이벤트마다 try/except로 감싼다 — on_event는 부수효과일 뿐이라
+    싱크가 raise해도 조사(스트리밍 루프)는 계속된다.
+
+    interrupt로 멈춘 경우 ainvoke가 반환에 얹었던 "__interrupt__" 키를 aget_state가
+    돌려준 StateSnapshot.tasks에서 복원한다 — 각 PregelTask.interrupts를 모아 하나로
+    합친다(interrupt가 걸린 노드는 next 하나뿐이라 보통 tasks도 하나지만, 형태는
+    LangGraph가 정하므로 방어적으로 전부 모은다). 이렇게 해야 워커의
+    `"__interrupt__" in result` 파킹 판정이 스트리밍 경로에서도 그대로 유지된다.
+    """
+    clock = lambda: datetime.now(timezone.utc)   # 이벤트 시각은 여기(스트리밍 경계)에서 직접 잰다
+    async for update in graph.astream(input_state, config=config, stream_mode="updates"):
+        for event in map_update_to_events(update, case_id=case_id, clock=clock):
+            try:
+                on_event(event)
+            except Exception:                                          # noqa: BLE001
+                pass
+    state = await graph.aget_state(config)
+    result = dict(state.values)
+    interrupts = tuple(i for task in state.tasks for i in task.interrupts)
+    if interrupts:
+        result["__interrupt__"] = interrupts
+    return result
+
+
 async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
                            interaction_policy="autonomous",
                            question_policy=None,
                            initial_evidence: list[EvidenceRef] | None = None,
-                           engine=None) -> dict:
+                           engine=None, on_event: Callable[[EngineEvent], None] | None = None) -> dict:
     """새 조사를 연다 — 초기 CaseState를 조립해 그래프를 완주(또는 interrupt)까지 돌린다.
 
     question_policy가 None이면 deps.engine_cfg.autonomous_question_policy를 쓴다(M7) —
@@ -63,14 +109,23 @@ async def investigate_case(case, *, deps, checkpointer=None, thread_id=None,
     initial_state = _initial_state(case, interaction_policy, resolved_question_policy,
                                    initial_evidence)
     config = {"configurable": {"thread_id": thread_id or case.id}}
-    return await graph.ainvoke(initial_state, config=config)
+    if on_event is None:
+        return await graph.ainvoke(initial_state, config=config)
+    return await _stream_and_collect(graph, initial_state, config, on_event, case_id=case.id)
 
 
-async def resume_case(answer, *, deps, checkpointer, thread_id, engine=None) -> dict:
+async def resume_case(answer, *, deps, checkpointer, thread_id, engine=None,
+                      on_event: Callable[[EngineEvent], None] | None = None) -> dict:
     """park된(§2.4) 조사를 사람의 답변으로 재개한다 — ask_human의 interrupt를 통과시킨다.
 
     engine이 주어지면 build_engine을 우회한다(investigate_case와 동일한 이유).
+    on_event도 investigate_case와 동일하게 동작한다 — 이벤트 봉투의 case_id는
+    thread_id에서 뽑는다(_case_id_from_thread) — resume_case는 Case 객체 없이
+    thread_id만 받기 때문이다.
     """
     graph = engine if engine is not None else build_engine(deps, checkpointer=checkpointer)
     config = {"configurable": {"thread_id": thread_id}}
-    return await graph.ainvoke(Command(resume=answer), config=config)
+    if on_event is None:
+        return await graph.ainvoke(Command(resume=answer), config=config)
+    return await _stream_and_collect(graph, Command(resume=answer), config, on_event,
+                                     case_id=_case_id_from_thread(thread_id))

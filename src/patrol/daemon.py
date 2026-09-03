@@ -75,7 +75,7 @@ class PatrolDaemon:
 
     def __init__(self, *, app: AppConfig, sites: list[SiteRuntime], store, repo, ledger: LedgerPort,
                 checkpointer, clock: Callable, judge_llm, budget: LlmBudget, owner: str,
-                timezone: str):
+                timezone: str, on_event: Callable[[Any], None] | None = None):
         self.app = app
         self.sites = sites
         self.store = store
@@ -87,6 +87,7 @@ class PatrolDaemon:
         self.budget = budget
         self.owner = owner
         self.timezone = timezone
+        self.on_event = on_event   # 계획 5(보고·채널)의 발송 훅 — 워커에 그대로 넘긴다
         self.queue = CaseQueue()
         self.worker: InvestigationWorker | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -211,7 +212,7 @@ class PatrolDaemon:
             checkpointer=self.checkpointer, clock=self.clock, owner=self.owner,
             max_concurrent=self.app.investigations.max_concurrent,
             lease_ttl_s=self.app.investigations.lease_ttl_s, ledger=self.ledger,
-            knowledge_digests_for_site=self._digests_for_site)
+            knowledge_digests_for_site=self._digests_for_site, on_event=self.on_event)
         self.queue.requeue_open(self.repo, clock=self.clock)
 
         self.scheduler = scheduler

@@ -241,3 +241,18 @@ async def test_run_once는_엔진_호출_동안_lease를_keepalive로_갱신한�
     await worker.run_once("c-1")
     assert seen["first"] is not None and seen["second"] is not None
     assert seen["second"] > seen["first"]                      # keepalive가 그 사이 갱신했다
+
+
+async def test_워커는_상태_전이_이벤트를_낸다():
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.run_once("c-1") == "closed"
+    statuses = [e.data["status"] for e in seen if e.event == "case_status_changed"]
+    assert statuses[0] == "investigating" and statuses[-1] == "closed"

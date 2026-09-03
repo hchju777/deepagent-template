@@ -65,6 +65,7 @@ import contextlib
 from typing import Any, Callable
 
 from src.application.close import close_case
+from src.application.events import case_status_event
 from src.application.graph import build_engine
 from src.application.lifecycle import (ENGINE_SCHEMA_VERSION, acquire_lease, release_lease,
                                        transition)
@@ -134,7 +135,8 @@ class InvestigationWorker:
     def __init__(self, queue: CaseQueue, *, repo, store,
                 deps_for_site: Callable[[str, str], Any], checkpointer, clock,
                 owner: str, max_concurrent: int, lease_ttl_s: float, ledger,
-                knowledge_digests_for_site: Callable[[str, str], dict[str, str]]):
+                knowledge_digests_for_site: Callable[[str, str], dict[str, str]],
+                on_event: Callable[[Any], None] | None = None):
         self._queue = queue
         self._repo = repo
         self._store = store
@@ -146,7 +148,22 @@ class InvestigationWorker:
         self._lease_ttl_s = lease_ttl_s
         self._ledger = ledger
         self._knowledge_digests_for_site = knowledge_digests_for_site
+        self._on_event = on_event
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
+
+    def _emit_status(self, case_id: str, status: str) -> None:
+        """케이스 상태 전이(investigating/awaiting_human/closed)를 싱크에 낸다.
+
+        on_event가 None이면 아무것도 하지 않는다. 이벤트 발행 실패(싱크가 raise)가
+        조사·전이 자체를 죽이면 안 되므로 여기서 삼킨다 — case_status_event 생성
+        실패(예: clock 오류)까지 함께 방어한다.
+        """
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(case_status_event(case_id, status, clock=self._clock))
+        except Exception:                                          # noqa: BLE001
+            pass
 
     def _engine_for(self, gbm: str, fct: str, deps) -> Any:
         key = (gbm, fct)
@@ -232,11 +249,12 @@ class InvestigationWorker:
         try:
             if resume is not None:
                 result = await resume_case(resume, deps=deps, checkpointer=self._checkpointer,
-                                           thread_id=first_thread_id, engine=engine)
+                                           thread_id=first_thread_id, engine=engine,
+                                           on_event=self._on_event)
             else:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=first_thread_id,
-                    engine=engine, initial_evidence=initial_evidence)
+                    engine=engine, initial_evidence=initial_evidence, on_event=self._on_event)
             return record, result
         except Exception as first_exc:
             if not allow_restart:
@@ -261,7 +279,7 @@ class InvestigationWorker:
             try:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=retry_thread_id,
-                    engine=engine, initial_evidence=fresh_evidence)
+                    engine=engine, initial_evidence=fresh_evidence, on_event=self._on_event)
                 return record, result
             except Exception as second_exc:
                 raise RuntimeError(
@@ -276,6 +294,7 @@ class InvestigationWorker:
             question = interrupts[0].value.get("question") if interrupts else None
             waiting = transition(current, "awaiting_human", clock=self._clock)
             self._repo.save(waiting.model_copy(update={"question": question}))
+            self._emit_status(record.id, "awaiting_human")
             return "awaiting_human"
         verdict = result.get("verdict")
         if verdict is None:
@@ -289,6 +308,7 @@ class InvestigationWorker:
         self._repo.save(current.model_copy(update={"verdict_summary": summary, "question": None}))
         await close_case(record.id, repo=self._repo, checkpointer=self._checkpointer,
                          clock=self._clock, reason="조사 완료", discard_threads=False)
+        self._emit_status(record.id, "closed")
         return "closed"
 
     def _log_failure(self, record, case_id: str, exc: Exception) -> None:
@@ -379,6 +399,7 @@ class InvestigationWorker:
                 return "busy"                                       # 레저 이벤트 없음(경합은 정상)
             if leased.status == "open":
                 record = transition(leased, "investigating", clock=self._clock)
+                self._emit_status(case_id, "investigating")
             else:
                 # requeue_open이 죽은 워커에게서 회수한 investigating 케이스 —
                 # 전이표에 investigating→investigating이 없으므로 재전이하지
@@ -428,6 +449,7 @@ class InvestigationWorker:
             if leased is None:
                 return "busy"
             record = transition(leased, "investigating", clock=self._clock)
+            self._emit_status(case_id, "investigating")
 
             deps = self._deps_for_site(record.gbm, record.fct)
             if deps is None:
