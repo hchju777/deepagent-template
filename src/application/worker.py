@@ -50,6 +50,10 @@ resume_once의 버전 불일치 재시작(F3와 별개 경로)도 같은 이유�
 (lease가 풀렸으므로) 같은 케이스를 다시 집어 준다. deps_for_site가 예외를
 던지는 경우(진짜 조립 실패)는 기존과 같이 F1 경로로 케이스를 닫는다.
 
+lease 획득은 저장소의 claim이 한 동작으로 수행한다 — get→save로 나누면 그 사이에
+다른 프로세스가 끼어든다. 지금까지 안전했던 것은 그 사이에 await가 없어 협조적
+스케줄링이 직렬화해 준 우연이고, resume_once의 버전 불일치 분기는 이미 깨져 있었다.
+
 run_once/resume_once 최외곽의 단일 try/except가 나머지 모든 실패(F3
 소진뿐 아니라 deps_for_site 예외/build_engine/evidence_refs_for_case/_finish
 등 그래프 호출 "밖"에서 나는 예외까지)를 같은 방식으로 받는다: 레저에
@@ -67,8 +71,7 @@ from typing import Any, Awaitable, Callable
 from src.application.close import close_case
 from src.application.events import case_status_event
 from src.application.graph import build_engine
-from src.application.lifecycle import (ENGINE_SCHEMA_VERSION, acquire_lease, release_lease,
-                                       transition)
+from src.application.lifecycle import ENGINE_SCHEMA_VERSION, release_lease, transition
 from src.application.usecase import investigate_case, resume_case
 from src.domain.patrol import CheckOutcome
 from src.patrol.gate import evidence_refs_for_case
@@ -224,9 +227,9 @@ class InvestigationWorker:
     async def _keepalive_loop(self, case_id: str) -> None:
         """엔진 호출 동안 lease_ttl_s/3 간격으로 lease를 갱신한다(I5).
 
-        repo.get으로 최신 레코드를 읽고 acquire_lease(같은 owner)로 갱신해
-        저장한다 — 같은 owner의 재획득은 항상 허용되므로(lifecycle.acquire_lease)
-        이 사이 다른 워커가 끼어들 여지는 없다. 실패(레코드가 이미 종결됐거나
+        저장소의 claim으로 갱신한다 — 같은 owner의 재획득은 항상 허용되므로
+        (domain.cases.lease_is_free) 정상 경로에서는 늘 성공하고, None이 돌아오면
+        남이 가져갔다는 뜻이라 더 갱신하지 않는다. 실패(레코드가 이미 종결됐거나
         repo 장애 등)는 조용히 삼킨다 — keepalive는 최선노력이지 계약이 아니다.
         CancelledError는 그대로 전파한다(태스크 취소 계약).
         """
@@ -234,9 +237,8 @@ class InvestigationWorker:
         while True:
             await asyncio.sleep(interval)
             try:
-                current = self._repo.get(case_id)
-                renewed = acquire_lease(current, self._owner, clock=self._clock,
-                                        ttl_s=self._lease_ttl_s)
+                renewed = self._repo.claim(case_id, self._owner,
+                                           now=self._clock(), ttl_s=self._lease_ttl_s)
                 if renewed is not None:
                     self._repo.save(renewed)
             except Exception:                                      # noqa: BLE001
@@ -429,7 +431,8 @@ class InvestigationWorker:
         record = None
         try:
             record = self._repo.get(case_id)
-            leased = acquire_lease(record, self._owner, clock=self._clock, ttl_s=self._lease_ttl_s)
+            leased = self._repo.claim(case_id, self._owner,
+                                      now=self._clock(), ttl_s=self._lease_ttl_s)
             if leased is None:
                 return "busy"                                       # 레저 이벤트 없음(경합은 정상)
             if leased.status == "open":
@@ -438,7 +441,7 @@ class InvestigationWorker:
             else:
                 # requeue_open이 죽은 워커에게서 회수한 investigating 케이스 —
                 # 전이표에 investigating→investigating이 없으므로 재전이하지
-                # 않고 lease만(acquire_lease가 이미) 새로 잡은 채로 진행한다.
+                # 않고 lease만(claim이 이미) 새로 잡은 채로 진행한다.
                 record = leased
                 became_investigating = False
 
@@ -492,7 +495,8 @@ class InvestigationWorker:
         record = None
         try:
             record = self._repo.get(case_id)
-            leased = acquire_lease(record, self._owner, clock=self._clock, ttl_s=self._lease_ttl_s)
+            leased = self._repo.claim(case_id, self._owner,
+                                      now=self._clock(), ttl_s=self._lease_ttl_s)
             if leased is None:
                 return "busy"
             record = transition(leased, "investigating", clock=self._clock)

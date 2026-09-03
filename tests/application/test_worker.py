@@ -364,3 +364,23 @@ async def test_run_once는_interaction_policy를_레코드에_영속화한다():
                                  ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
     assert await worker.run_once("c-1", interaction_policy="interactive") == "closed"
     assert repo.get("c-1").interaction_policy == "interactive"
+
+
+async def test_워커는_get_save가_아니라_claim으로_lease를_잡는다(monkeypatch):
+    # get→save 사이에 남이 끼어드는 경합을 저장소가 한 동작으로 판정해야 한다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    calls = []
+    real_claim = repo.claim
+    def spy_claim(case_id, owner, *, now, ttl_s):
+        calls.append(owner)
+        return real_claim(case_id, owner, now=now, ttl_s=ttl_s)
+    monkeypatch.setattr(repo, "claim", spy_claim)
+
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "closed"
+    assert calls == ["w-1"]        # acquire_lease가 아니라 claim을 탔다
