@@ -403,3 +403,29 @@ def test_patrol_run은_이벤트_싱크를_daemon에_넘긴다(tmp_path, monkeyp
 
     assert code == 0
     assert callable(captured.get("on_event"))
+
+
+def test_이벤트_싱크는_저장한_뒤_downstream으로_넘긴다():
+    from src.__main__ import _make_event_sink
+    from src.domain.events import EngineEvent
+    events = InMemoryEventStore()
+    seen = []
+    sink = _make_event_sink(events, downstream=seen.append)
+    sink(EngineEvent(event="round_started", case_id="c-1", at=T))
+    assert [e.seq for e in events.since("c-1")] == [1]
+    assert seen[0].seq == 1          # downstream도 seq가 채워진 사본을 본다
+
+
+def test_이벤트_저장이_실패해도_싱크는_raise하지_않는다():
+    from src.__main__ import _make_event_sink
+    from src.domain.events import EngineEvent, EventStorePort
+
+    class BrokenStore(EventStorePort):
+        def append(self, event): raise RuntimeError("스토어 장애")
+        def since(self, case_id, after_seq=0, limit=200): return []
+        def prune_before(self, before): return 0
+
+    seen = []
+    sink = _make_event_sink(BrokenStore(), downstream=seen.append)
+    sink(EngineEvent(event="round_started", case_id="c-1", at=T))   # raise하면 실패
+    assert len(seen) == 1            # 저장이 죽어도 stdout 출력은 계속된다

@@ -19,7 +19,7 @@ from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
 from src.domain.cases import CaseRecord
-from src.domain.events import EngineEvent
+from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import fingerprint
 from src.infrastructure.checkpointer import build_checkpointer, build_persistence
 from src.infrastructure.llm import build_chat_model
@@ -103,7 +103,8 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
                           checkpointer=checkpointer, clock=clock, judge_llm=judge_llm,
                           budget=budget, owner=owner, timezone=app.timezone,
-                          on_event=_make_event_printer(), report_cfg=app.report,
+                          on_event=_make_event_sink(events, _make_event_printer()),
+                          report_cfg=app.report,
                           mail_sender=mail_sender)
     asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
@@ -264,7 +265,7 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     # C1/M4: chat·데몬과 같은 발행 배선(on_event/on_closed)을 _build_publisher로
     # 얻어 워커에 넘긴다 — 예전엔 여기가 빠져 있어 case resume만 보고서·메일·
     # 이벤트 없이 케이스를 닫았다(§5.1 "파일 먼저"·§5.4 F6·§5.2 이벤트 구독 미충족).
-    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, checkpointer, clock)
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
         checkpointer=checkpointer, clock=clock, owner=owner,
@@ -325,7 +326,27 @@ def _make_event_printer(print_fn=print) -> Callable[[EngineEvent], None]:
     return _sink
 
 
-def _build_publisher(app, sites, store, repo, ledger, checkpointer, clock
+def _make_event_sink(events: EventStorePort,
+                     downstream: Callable[[EngineEvent], None] | None = None
+                     ) -> Callable[[EngineEvent], None]:
+    """이벤트를 스토어에 적재한 뒤 downstream으로 넘긴다.
+
+    적재 실패를 삼키는 이유: on_event는 조사를 실패시킬 수 없는 부수효과로
+    설계돼 있다(worker._emit_status·daemon._publish_report·usecase의 세 군데가
+    독립적으로 삼킨다). 저장소 장애가 조사를 죽이면 그 방향이 뒤집힌다.
+    적재가 실패하면 seq 없는 원본이 그대로 downstream으로 간다.
+    """
+    def sink(event: EngineEvent) -> None:
+        try:
+            event = events.append(event)
+        except Exception:                                          # noqa: BLE001
+            pass
+        if downstream is not None:
+            downstream(event)
+    return sink
+
+
+def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock
                      ) -> tuple[Callable[[EngineEvent], None], Callable[[str], Awaitable[None]]]:
     """발행용 PatrolDaemon 셸을 조립해 (on_event, on_closed) 쌍을 돌려준다(C1/M4).
 
@@ -337,7 +358,7 @@ def _build_publisher(app, sites, store, repo, ledger, checkpointer, clock
     곳에서만 조립한다. _run_chat과 _cmd_case_resume이 각자 이 조립을 따로
     베끼면(예전 case_resume이 아예 빠뜨렸던 것처럼) 언젠가 또 하나가 놓친다.
     """
-    print_event = _make_event_printer()
+    print_event = _make_event_sink(events, _make_event_printer())
     owner = f"cli-publisher-{socket.gethostname()}-{os.getpid()}"
     budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
     mail_sender = SmtpSender(app.report.mail) if app.report.mail.enabled else None
@@ -439,7 +460,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
         found = by_key.get((gbm, fct))
         return found.digests if found is not None else {}
 
-    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, checkpointer, clock)
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
     owner = f"chat-{socket.gethostname()}-{os.getpid()}"
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
