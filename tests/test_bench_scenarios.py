@@ -19,7 +19,7 @@ judge llm만 build_chat_model로 바꿔 별도 스크립트에서 수동 실행�
 (output_dir="output", gitignore됨) 아래 시나리오별 하위 디렉터리에 남는다 —
 두 시나리오 모두 자기만의 InMemoryCaseRepository에서 첫 케이스가 "c-1"이
 되므로(카운터가 인스턴스별 1부터 시작), 하위 디렉터리를 안 나누면 나중에
-실행되는 시나리오가 먼저 실행된 시나리오의 output/c-1.md를 덮어써 "각각
+실행되는 시나리오가 먼저 실행된 시나리오의 output/c-1.*를 덮어써 "각각
 보고서 파일이 남는다"는 완료 기준을 어긴다. 완료 기준이 "보고서 파일이
 5절을 갖춘 채 output/에 남는다"를 요구한다.
 
@@ -56,7 +56,13 @@ from src.presentation.mail import NullSender
 from tests.application.test_subagents import ToolFake
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
-_REPORT_SECTIONS = ("## 1. 요약", "## 2. 판정", "## 3. 조치 권고", "## 4. 증거", "## 5. 조사 경위")
+# 절 제목은 포맷마다 표기가 다르다 — 벤치가 확인하는 것은 "5절이 다 있는가"이지
+# 마크다운 문법이 아니다. report.format 기본값이 바뀌어도 이 단정이 따라가야 한다.
+_SECTION_TITLES = ("1. 요약", "2. 판정", "3. 조치 권고", "4. 증거", "5. 조사 경위")
+
+
+def _report_headings(fmt: str) -> tuple[str, ...]:
+    return tuple(f"<h2>{s}</h2>" if fmt == "html" else f"## {s}" for s in _SECTION_TITLES)
 
 
 def _mongo_call(collection: str, call_id: str = "c1") -> AIMessage:
@@ -164,9 +170,10 @@ async def test_A1_OEE_512퍼센트는_plan_sync_stale_data로_귀결되고_보�
     assert verdict.verdict_type == "stale_data"
     assert verdict.confidence == "high"                # M12: verify 가드레일을 명시 술어로
 
-    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.md"
+    fmt = daemon.report_cfg.format
+    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}"
     text = path.read_text(encoding="utf-8")
-    for heading in _REPORT_SECTIONS:
+    for heading in _report_headings(fmt):
         assert heading in text
 
 
@@ -270,9 +277,10 @@ async def test_A2_멈춘_라인은_정상_재개로도_equip_sync_stale_data로_
     assert verdict.verdict_type == "stale_data"
     assert verdict.confidence == "high"                  # M12: verify 가드레일을 명시 술어로
 
-    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.md"
+    fmt = daemon.report_cfg.format
+    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}"
     text = path.read_text(encoding="utf-8")
-    for heading in _REPORT_SECTIONS:
+    for heading in _report_headings(fmt):
         assert heading in text
 
 
@@ -344,7 +352,8 @@ async def test_A2_멈춘_라인은_park_resume의_F3_경로를_거쳐_equip_sync
     assert verdict.verdict_type == "stale_data"
     assert verdict.confidence == "high"                  # M12: verify 가드레일을 명시 술어로
 
-    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.md"
+    fmt = daemon.report_cfg.format
+    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}"
     text = path.read_text(encoding="utf-8")
-    for heading in _REPORT_SECTIONS:
+    for heading in _report_headings(fmt):
         assert heading in text

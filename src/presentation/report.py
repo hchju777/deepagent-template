@@ -46,7 +46,22 @@ def render_report(record: CaseRecord, *, verdict: Verdict | None,
 
 
 def render_md(model: ReportModel) -> str:
-    """ReportModel에서 5절 마크다운을 조립한다."""
+    """ReportModel에서 5절 마크다운을 조립한다. 절대 raise하지 않는다.
+
+    render_report 래퍼를 거치지 않는 호출부가 있다(daemon._render_case_mail의 평문
+    파트, case show --report의 즉석 렌더). 여기가 무방비면 어긋난 case_file 하나가
+    메일 발송을 로그 한 줄 없이 삼킨다 — 발행 층의 except가 그것을 흡수하기 때문이다.
+    HTML 렌더러와 같은 계약을 진다.
+    """
+    try:
+        return _render_md(model)
+    except Exception as exc:            # noqa: BLE001 — 최후의 그물(계약)
+        case_id = getattr(getattr(model, "record", None), "id", "?")
+        return (f"# 케이스 {case_id} 보고서\n\n"
+                f"보고서 조립 실패: {type(exc).__name__}: {exc}\n")
+
+
+def _render_md(model: ReportModel) -> str:
     sections = [
         f"# 케이스 {model.record.id} 보고서",
         "",

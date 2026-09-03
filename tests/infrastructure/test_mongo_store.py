@@ -179,3 +179,14 @@ def test_mongo_스냅샷은_케이스당_하나다(db):
     assert store.get("c-1").confidence == "low"
     assert db.verdict_snapshots.count_documents({"case_id": "c-1"}) == 1
     assert store.get("없는-케이스") is None
+
+
+def test_mongo_claim은_같은_owner의_무변화_재획득도_성공이다(db):
+    # 테스트는 전부 인메모리라 두 구현이 갈라지면 프로덕션 버그를 못 잡는다.
+    # modified_count로 판정하면 같은 owner가 같은 now·ttl로 재획득할 때 문서가
+    # 한 글자도 안 바뀌어 실패로 보인다 — keepalive가 조용히 no-op된다.
+    repo = MongoCaseRepository(db)
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T))
+    assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None
+    assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None   # 무변화 재획득

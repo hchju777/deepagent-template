@@ -155,3 +155,19 @@ def test_정상_종결에는_출처_줄이_없다():
     text = render_report(RECORD, verdict=None, evidence=[],
                          case_file={"round": 1}, clock=lambda: T)
     assert "부분 스냅샷" not in text
+
+
+def test_render_md도_렌더링_실패에_최소_안내문을_돌려준다():
+    # daemon._render_case_mail이 render_report 래퍼를 거치지 않고 render_md를 직접
+    # 부른다. 무방비면 어긋난 case_file 하나가 메일 발송을 로그 한 줄 없이 삼킨다
+    # (_publish_report의 except Exception: pass).
+    from src.presentation.report import render_md
+    from src.presentation.report_model import build_report_model
+    model = build_report_model(
+        RECORD, verdict=None, evidence=[],
+        # refuting_ids가 리스트가 아니면 ", ".join이 TypeError를 낸다
+        case_file={"hypotheses": [{"id": "h1", "status": "refuted", "refuting_ids": 5}],
+                   "round": 1},
+        clock=lambda: T)
+    out = render_md(model)
+    assert "보고서 조립 실패" in out and "c-1" in out

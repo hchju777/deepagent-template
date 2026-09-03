@@ -224,7 +224,11 @@ class MongoCaseRepository(CaseRepositoryPort):
         result = self._db.cases.update_one(
             {"id": case_id, "owner": doc.get("owner"), "lease_until": doc.get("lease_until")},
             {"$set": claimed.model_dump(mode="json")})
-        return claimed if result.modified_count else None
+        # matched_count로 판정한다 — modified_count는 같은 owner가 같은 now·ttl로
+        # 재획득할 때(문서가 한 글자도 안 바뀜) 0이라, keepalive가 조용히 no-op되고
+        # 인메모리 구현과 판정이 갈라진다. 우리가 물은 것은 "그 사이 남이 잡았나"이고
+        # 그 답은 술어가 맞았는가(matched)이지 값이 달라졌는가(modified)가 아니다.
+        return claimed if result.matched_count else None
 
     def find_open_by_fingerprint(self, fp: str) -> CaseRecord | None:
         doc = self._db.cases.find_one(

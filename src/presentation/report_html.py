@@ -40,6 +40,18 @@ def _bullets(items: list[str]) -> str:
     return "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
 
 
+def _headline(record, verdict) -> str:
+    """마크다운의 _verdict_headline과 같은 규약 — narrative 첫 줄까지 싣는다.
+
+    HTML이 기본 산출물이므로 여기서 narrative를 빠뜨리면 리드의 서술이 사람에게
+    닿는 유일한 경로가 사라진다.
+    """
+    if verdict is None:
+        return f"판정 없음(종결 사유: {record.closed_reason or '미상'})"
+    first_line = verdict.narrative.splitlines()[0] if verdict.narrative else ""
+    return f"{verdict.verdict_type} — {first_line}"
+
+
 def render_html(model) -> str:
     """ReportModel에서 HTML 보고서를 조립한다. 절대 raise하지 않는다."""
     try:
@@ -61,8 +73,7 @@ def _render(model) -> str:
         ["개설 경로", _e(record.origin)],
         ["증상", _e(record.symptom)],
         ["T0", _e(record.t0.isoformat())],
-        ["판정", _e(f"{verdict.verdict_type}" if verdict
-                  else f"판정 없음(종결 사유: {record.closed_reason or '미상'})")],
+        ["판정", _e(_headline(record, verdict))],
         ["신뢰도", _e(verdict.confidence if verdict else "없음")],
         ["태스크 에러율", _e(model.task_error_rate)],
     ]
@@ -73,6 +84,9 @@ def _render(model) -> str:
     if verdict is not None and verdict.root_cause is not None:
         ids = ", ".join(verdict.root_cause.evidence_ids) or "없음"
         cause_items.append(f"근본 원인: {_e(verdict.root_cause.component)} (증거: {_e(ids)})")
+    elif verdict is not None:
+        # 항목을 지우면 "확인 안 했다"와 "없다"를 구별할 수 없다(마크다운과 같은 규약).
+        cause_items.append("근본 원인: 없음")
     for c in (verdict.contributing if verdict else []):
         ids = ", ".join(c.evidence_ids) or "없음"
         relation = f" — {_e(c.relation)}" if c.relation else ""
@@ -95,13 +109,18 @@ def _render(model) -> str:
                f"(반박 증거: {_e(', '.join(h.get('refuting_ids') or []) or '없음')})"
                for h in model.hypotheses if h.get("status") == "refuted"]
 
+    qa_items = [_e(e.get("kind", e)) if isinstance(e, dict) else _e(e) for e in model.qa_log]
+
     partial_note = ""
     if model.partial:
         extra = (f"<br>조사 흔적 구제 실패: {_e(model.salvage_error)}"
                  if model.salvage_error else "")
         partial_note = f"<p class='partial'>실패 시점 부분 스냅샷(조사 미완){extra}</p>"
 
-    evidence_block = (_table(["id", "출처", "as_of", "완전성", "effective_as_of", "요지"],
+    # evidence_summaries가 없으면 실제로 보여주는 것은 digest다 — 열 이름으로
+    # 정직하게 표기한다(§4 I4, 마크다운 렌더러와 같은 규약).
+    column = "요지" if model.evidence_summaries is not None else "본문 digest"
+    evidence_block = (_table(["id", "출처", "as_of", "완전성", "effective_as_of", column],
                              evidence_rows) if evidence_rows else "<p>없음</p>")
     task_block = (_table(["id", "역할", "status", "비고"], task_rows)
                   if task_rows else "<p>없음</p>")
@@ -131,5 +150,7 @@ def _render(model) -> str:
 {_bullets(refuted)}
 <h3>검증 문제</h3>
 {_bullets([_e(p) for p in model.verify_problems])}
+<h3>QA 로그</h3>
+{_bullets(qa_items)}
 </body></html>
 """
