@@ -114,6 +114,26 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                         body = check.params.get("body", {})
                         for problem in entry_call_problems(entry, body):
                             errors.append(BootError(where, f"점검 {name!r}: {problem}"))
+                        # 해석기가 없는 항목·스키마에 없는 키를 가리키면 매 순찰이
+                        # error를 내고 끝난다 — 배포 시점에 시끄럽게 죽는 편이 낫다.
+                        schema = entry.body_schema or entry.query_schema
+                        for key, spec in check.resolve.items():
+                            if key not in schema:
+                                errors.append(BootError(
+                                    where, f"점검 {name!r}의 resolve 키 {key!r}가 "
+                                           f"항목 {rest!r}의 스키마에 없다"))
+                            if spec.from_ != "rest":
+                                continue
+                            source = entries.get(spec.entry)
+                            if source is None:
+                                errors.append(BootError(
+                                    where, f"점검 {name!r}의 해석기 {key!r}가 가리키는 "
+                                           f"항목 {spec.entry!r}이 등재돼 있지 않다"))
+                            elif source.method != "GET":
+                                # 값을 얻으려고 부수효과 가능성이 있는 메서드를 쓰지 않는다.
+                                errors.append(BootError(
+                                    where, f"점검 {name!r}의 해석기 {key!r}가 가리키는 "
+                                           f"항목 {spec.entry!r}은 GET이어야 한다"))
                 elif check.target not in known:
                     errors.append(BootError(
                         where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))

@@ -223,3 +223,52 @@ def test_점검의_body가_등재_스키마와_어긋나면_기동을_거부한�
         "knowledge": {"root": "knowledge.example"}}))
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("save_as" in e.problem for e in errors)
+
+
+def _site_with_resolve(resolve, extra_entries=None):
+    entries = {"e": {"method": "POST", "path": "/x",
+                     "body_schema": {"part_code": "list[str]"}}}
+    entries.update(extra_entries or {})
+    return json.dumps({
+        "target": {"adapters": "stub", "rest": {"base_url": "http://x", "entries": entries}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+            "params": {"rule": "exists", "field": "body"}, "resolve": resolve}}},
+        "knowledge": {"root": "knowledge.example"}})
+
+
+def test_해석기가_없는_항목을_가리키면_기동을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "rest", "entry": "없는항목", "field": "part_code"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("없는항목" in e.problem for e in errors)
+
+
+def test_스키마에_없는_키를_해석하면_기동을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"없는키": {"from": "unfiltered"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("없는키" in e.problem for e in errors)
+
+
+def test_조회용_해석기_항목이_POST면_기동을_거부한다(tmp_path):
+    # 값을 얻으려고 부수효과 가능성이 있는 메서드를 쓰면 안 된다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "rest", "entry": "lister", "field": "part_code"}},
+        extra_entries={"lister": {"method": "POST", "path": "/list",
+                                  "body_schema": {"q": "str"}}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("lister" in e.problem and "GET" in e.problem for e in errors)
+
+
+def test_정상_해석기는_기동을_막지_않는다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "rest", "entry": "lister", "field": "part_code"}},
+        extra_entries={"lister": {"method": "GET", "path": "/list",
+                                  "query_schema": {"q": "str"}}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert not [e for e in errors if "part_code" in e.problem or "lister" in e.problem]
