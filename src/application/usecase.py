@@ -9,7 +9,7 @@ None이면(기본값) 지금까지와 동일하게 ainvoke 한 번으로 완주�
 호출부·테스트는 아무것도 바뀌지 않는다.
 """
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Callable
 
 from langgraph.types import Command
 
