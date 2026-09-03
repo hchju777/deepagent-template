@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from src.config.schema_app import AppConfig
+from src.config.schema_app import AppConfig, ReportConfig
 from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.cases import InMemoryCaseRepository
 from src.domain.store import InMemoryCaseStore
@@ -22,7 +22,7 @@ CHECK = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5
                                     "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}})
 
 
-def _daemon(store, repo, ledger, lead, clock=lambda: T):
+def _daemon(store, repo, ledger, lead, clock=lambda: T, report_cfg=None, on_event=None):
     site = SiteConfig.model_validate({"target": {"rest": {"base_url": "http://x"}},
                                       "patrol": {"checks": {"api.oee": CHECK.model_dump()}}})
     adapters = build_adapters(site, TOPO, clock=clock,
@@ -33,7 +33,9 @@ def _daemon(store, repo, ledger, lead, clock=lambda: T):
                      digests={"topology": "d-topo"})
     return PatrolDaemon(app=APP, sites=[rt], store=store, repo=repo, ledger=ledger,
                         checkpointer=InMemorySaver(), clock=clock, judge_llm=None,
-                        budget=LlmBudget(5, clock=clock), owner="daemon-test", timezone="Asia/Seoul")
+                        budget=LlmBudget(5, clock=clock), owner="daemon-test", timezone="Asia/Seoul",
+                        report_cfg=report_cfg if report_cfg is not None else ReportConfig(),
+                        on_event=on_event)
 
 
 async def test_run_one은_finding을_케이스로_열어_큐에_넣고_워커가_종결한다():
@@ -87,3 +89,19 @@ def test_on_missed는_skipped를_레저에_남기고_잡이_전부_등록된다(
     assert {"mx/gumi/api.oee", "heartbeat", "self_check", "sweep"} <= ids
     daemon.on_missed("mx/gumi/api.oee")
     assert ledger.last_run("mx", "gumi", "api.oee").status == "skipped"
+
+
+async def test_종결되면_보고서가_파일로_먼저_쓰이고_이벤트가_난다(tmp_path):
+    from src.config.schema_app import ReportConfig
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    seen = []
+    daemon = _daemon(store, repo, ledger, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON],
+                     report_cfg=ReportConfig(output_dir=str(tmp_path / "out")),
+                     on_event=seen.append)
+    daemon.build()
+    await daemon.run_one("mx", "gumi", "api.oee", CHECK)
+    assert await daemon.worker.run_once(await daemon.queue.get()) == "closed"
+    from pathlib import Path
+    written = list((tmp_path / "out").glob("*.md"))
+    assert len(written) == 1 and "## 2. 판정" in written[0].read_text(encoding="utf-8")
+    assert [e.event for e in seen if e.event == "report_ready"]

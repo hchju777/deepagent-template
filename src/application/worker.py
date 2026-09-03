@@ -62,7 +62,7 @@ owner를 쥔 채 프로세스만 죽어) 고아로 남는 레코드가 생기지
 """
 import asyncio
 import contextlib
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from src.application.close import close_case
 from src.application.events import case_status_event
@@ -136,7 +136,8 @@ class InvestigationWorker:
                 deps_for_site: Callable[[str, str], Any], checkpointer, clock,
                 owner: str, max_concurrent: int, lease_ttl_s: float, ledger,
                 knowledge_digests_for_site: Callable[[str, str], dict[str, str]],
-                on_event: Callable[[Any], None] | None = None):
+                on_event: Callable[[Any], None] | None = None,
+                on_closed: Callable[[str], Awaitable] | None = None):
         self._queue = queue
         self._repo = repo
         self._store = store
@@ -149,6 +150,7 @@ class InvestigationWorker:
         self._ledger = ledger
         self._knowledge_digests_for_site = knowledge_digests_for_site
         self._on_event = on_event
+        self._on_closed = on_closed   # 계획 5 — 케이스가 닫힌 직후(성공/실패 종결 모두) 부르는 발행 훅
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
 
     def _emit_status(self, case_id: str, status: str, *, reason: str | None = None) -> None:
@@ -162,6 +164,19 @@ class InvestigationWorker:
             return
         try:
             self._on_event(case_status_event(case_id, status, clock=self._clock, reason=reason))
+        except Exception:                                          # noqa: BLE001
+            pass
+
+    async def _emit_closed(self, case_id: str) -> None:
+        """케이스를 닫은 직후(_finish의 closed 경로, _fail의 close_case 성공 뒤) 부르는
+        발행 훅(계획 5) — 보고서 발행은 여기 걸린다(daemon._publish_report). on_event(동기)와
+        달리 await로 완료를 기다릴 수 있어 "파일 먼저 쓰고 나서" 순서를 지킬 수 있다.
+        훅이 raise해도 이미 끝난 종결 결과는 뒤집지 않는다 — 여기서 삼킨다.
+        """
+        if self._on_closed is None:
+            return
+        try:
+            await self._on_closed(case_id)
         except Exception:                                          # noqa: BLE001
             pass
 
@@ -312,6 +327,7 @@ class InvestigationWorker:
         await close_case(record.id, repo=self._repo, checkpointer=self._checkpointer,
                          clock=self._clock, reason="조사 완료", discard_threads=False)
         self._emit_status(record.id, "closed")
+        await self._emit_closed(record.id)
         return "closed"
 
     def _log_failure(self, record, case_id: str, exc: Exception) -> None:
@@ -348,6 +364,7 @@ class InvestigationWorker:
             await close_case(case_id, repo=self._repo, checkpointer=self._checkpointer,
                              clock=self._clock, reason=reason, discard_threads=True)
             self._emit_status(case_id, "closed", reason=reason)
+            await self._emit_closed(case_id)
         except Exception as close_exc:                              # noqa: BLE001
             self._log_failure(record, case_id, close_exc)
         return "failed"
