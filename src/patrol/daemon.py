@@ -59,7 +59,7 @@ from src.patrol.selfcheck import scan_self_check
 from src.presentation.mail import MailSenderPort, NullSender, SmtpSender, retry_pending, send_report
 from src.presentation.report import render_md, write_report
 from src.presentation.report_html import render_html
-from src.presentation.report_model import build_report_model
+from src.domain.report_model import build_report_model
 
 _IGNORED_JOB_IDS = {"heartbeat", "self_check", "sweep", "-/-/requeue"}
 
@@ -313,8 +313,16 @@ class PatrolDaemon:
             await send_report(case_id, subject, plain, sender=self._mail_sender(),
                               ledger=self.ledger, cfg=self.report_cfg.mail,
                               clock=self.clock, html=html)
-        except Exception:                                          # noqa: BLE001 — 발행 실패가 종결을 뒤집지 않는다
-            pass
+        except Exception as exc:                                   # noqa: BLE001 — 발행 실패가 종결을 뒤집지 않는다
+            # 그냥 pass하면 발행이 실패해도 어디에도 흔적이 없다(F4: 삼켜진 에러
+            # 보존). 레저 기록 자체가 실패해도 여기서 더 하지 않는다.
+            try:
+                record = self.repo.get(case_id)
+                self.ledger.record_run(record.gbm, record.fct, f"publish:{case_id}",
+                                       CheckOutcome(status="error", observed_at=self.clock(),
+                                                    error=f"{type(exc).__name__}: {exc}"))
+            except Exception:                                      # noqa: BLE001
+                pass
 
     def build(self) -> AsyncIOScheduler:
         """점검·하트비트·자기 감시·스윕 잡을 전부 등록하고 워커를 생성한다.

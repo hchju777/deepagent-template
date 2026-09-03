@@ -14,7 +14,7 @@ from pathlib import Path
 from src.domain.case import Verdict
 from src.domain.cases import CaseRecord
 from src.domain.store import EvidenceRecord
-from src.presentation.report_model import ReportModel, build_report_model
+from src.domain.report_model import ReportModel, build_report_model
 
 Clock = Callable[[], datetime]
 

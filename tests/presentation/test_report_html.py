@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from src.domain.case import CauseLink, Verdict
 from src.domain.cases import CaseRecord
 from src.presentation.report_html import render_html
-from src.presentation.report_model import build_report_model
+from src.domain.report_model import build_report_model
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 

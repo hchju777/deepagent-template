@@ -76,7 +76,10 @@ from src.application.usecase import investigate_case, resume_case
 from src.domain.patrol import CheckOutcome
 from src.domain.snapshot import VerdictSnapshot
 from src.patrol.gate import evidence_refs_for_case
-from src.presentation.report_model import build_report_model
+from src.domain.report_model import build_report_model
+
+
+_SALVAGE_TIMEOUT_S = 30   # 실패 종결의 흔적 구제 상한 — 최선노력이지 계약이 아니다
 
 
 def _dump_item(item):
@@ -403,17 +406,33 @@ class InvestigationWorker:
             engine = self._engines.get((record.gbm, record.fct)) if record is not None else None
             if engine is None:
                 raise RuntimeError("엔진이 조립되기 전에 실패해 체크포인트가 없다")
-            for thread_id in reversed(list(record.thread_ids)):
-                state = await engine.aget_state({"configurable": {"thread_id": thread_id}})
-                values = getattr(state, "values", None)
-                if isinstance(values, dict) and values:
-                    snapshot.update(_case_file_snapshot(values))
-                    break
+            # 상한을 건다 — keepalive는 이미 취소됐으므로 여기서 늘어지면 lease가
+            # 만료돼 재큐가 같은 케이스를 다시 내주는 동시에 동시 상한 슬롯은 계속
+            # 점유된다. 구제는 최선노력이지 계약이 아니다.
+            async def _read_latest():
+                for thread_id in reversed(list(record.thread_ids)):
+                    state = await engine.aget_state({"configurable": {"thread_id": thread_id}})
+                    values = getattr(state, "values", None)
+                    if isinstance(values, dict) and values:
+                        return values
+                return None
+
+            values = await asyncio.wait_for(_read_latest(), timeout=_SALVAGE_TIMEOUT_S)
+            if values is not None:
+                snapshot.update(_case_file_snapshot(values))
         except Exception as exc:                                   # noqa: BLE001
             snapshot["salvage_error"] = f"{type(exc).__name__}: {exc}"
         for key in ("plan_tasks", "hypotheses", "qa_log", "verify_problems"):
             snapshot.setdefault(key, [])
         try:
+            # 구제가 아무것도 못 건졌는데 기존 케이스 파일이 있으면 덮지 않는다.
+            # _finish가 완전본을 쓴 뒤 종결 과정에서 터지면 _fail이 도는데, 그때
+            # partial 빈 껍데기로 덮으면 체크포인트 TTL 이후 유일한 조사 기록이
+            # 사라진다 — 이 함수의 존재 이유 자체가 무너진다.
+            salvaged_nothing = not any(snapshot[k] for k in
+                                       ("plan_tasks", "hypotheses", "qa_log", "verify_problems"))
+            if salvaged_nothing and self._store.get_case_file(case_id) is not None:
+                return
             self._store.put_case_file(case_id, snapshot)
         except Exception:                                          # noqa: BLE001
             pass
@@ -528,6 +547,12 @@ class InvestigationWorker:
                                       now=self._clock(), ttl_s=self._lease_ttl_s)
             if leased is None:
                 return "busy"                                       # 레저 이벤트 없음(경합은 정상)
+            if leased.status == "closed":
+                # 주기 재큐가 같은 케이스를 여러 번 넣을 수 있고, lease_is_free는 같은
+                # owner(데몬은 프로세스당 문자열 하나다)의 재획득을 항상 허용한다.
+                # 가드가 없으면 닫힌 케이스를 처음부터 다시 조사해 판정과 케이스 파일을
+                # 덮고, close_case가 closed→closed로 터져 _fail이 흔적까지 지운다.
+                return "stale"
             if leased.status == "open":
                 record = transition(leased, "investigating", clock=self._clock)
                 became_investigating = True
@@ -592,6 +617,8 @@ class InvestigationWorker:
                                       now=self._clock(), ttl_s=self._lease_ttl_s)
             if leased is None:
                 return "busy"
+            if leased.status == "closed":
+                return "stale"                                      # run_once와 같은 이유
             record = transition(leased, "investigating", clock=self._clock)
 
             deps = self._deps_for_site(record.gbm, record.fct)

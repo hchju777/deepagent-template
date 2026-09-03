@@ -29,7 +29,7 @@ from src.patrol.llm_judge import LlmBudget
 from src.presentation.mail import SmtpSender
 from src.presentation.report import render_md
 from src.presentation.report_html import render_html
-from src.presentation.report_model import build_report_model
+from src.domain.report_model import build_report_model
 
 _CASE_STATUSES = ("open", "investigating", "awaiting_human", "closed")
 
@@ -304,7 +304,8 @@ def _format_event(event: EngineEvent, state: dict) -> str:
     """이벤트 봉투 하나를 사람이 읽을 한 줄로 바꾼다 — event/data(봉투 필드)만
     쓴다. 그래프 내부 노드명은 여기 들어오지 않는다(application/events.py의
     매핑 규칙 계약) — round_started/task_finished/question_raised/
-    case_status_changed/report_ready 5종 밖의 값은 CLI 출력에 나타나지 않는다.
+    case_status_changed/report_ready/verdict_formed 6종 밖의 값은 CLI 출력에
+    나타나지 않는다.
 
     task_finished는 자신의 round를 싣지 않는다(events.py _execute_events) —
     그래서 직전 round_started가 낸 round를 state에 들고 있다가 접두어로 쓴다.

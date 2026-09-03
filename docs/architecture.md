@@ -203,17 +203,20 @@ lease가 만료된 `investigating`만 큐에 넣는다(`awaiting_human`은 대�
   `confidence`(`high`/`medium`/`low`) + `recommendations`/`caveats`/`narrative`.
   `inconclusive`/`degraded`를 빼면 `root_cause`가 필수다(모델 검증자).
 - **EngineEvent**(`src/domain/events.py`) — 엔진이 밖으로 내보내는 이벤트는
-  정확히 5종(`case_status_changed`/`round_started`/`task_finished`/
-  `question_raised`/`report_ready`)으로 고정돼 있다. 그래프 내부 노드명이나
+  현재 6종(`case_status_changed`/`round_started`/`task_finished`/
+  `question_raised`/`report_ready`/`verdict_formed`)이다. 봉투에는 스토어가
+  부여하는 `seq`가 실려 구독자가 `since(seq)`로 재접속 재생을 할 수 있다.
+  새 종류를 더할지는 개수가 아니라 성질로 판단한다 — "이 이름이 그래프를 다시
+  배선해도 유효한가"(CLAUDE.md 규율 7). 그래프 내부 노드명이나
   State 키는 이 봉투 밖으로 절대 나가지 않는다 — 구독자(CLI 출력, 향후 웹 UI)가
   엔진 내부 구현에 결합되지 않도록 하는 어휘 경계다.
 
 ## 7. 알려진 한계 (v1 인계 노트)
 
-- `resume` 이후 구간(conclude/verify)은 이벤트를 내지 않는다 — 5종 어휘 밖으로
-  의도된 설계. 웹 UI 착수 시 어휘 확장을 검토해야 한다.
-- 그래프 밖 실패(`_fail` 경로)로 종결된 케이스는 §5(조사 경위) 절이 비어
-  보고서에 나온다 — `case_file`이 만들어지지 않기 때문.
+- `sweep_timeouts`(`awaiting_human` 타임아웃 종결)는 **네 번째 종결 경로**인데
+  보고서·`report_ready`·메일·`VerdictSnapshot`을 하나도 내지 않는다. 위의 "어떤
+  경로로 닫히든 동일한 발행 배선"은 이 경로에 아직 적용되지 않았다 — 스냅샷의
+  분모에 생존 편향이 생기는 자리다.
 - 레저의 **포트는** `CheckLedgerPort`(점검 이력·하트비트)와 `SendLedgerPort`
   (발송 2상 멱등)로 갈라져 있고 소비자는 자기가 쓰는 쪽만 의존한다. **구현은
   아직 하나다**(`InMemoryLedger`/`MongoLedger`가 둘을 함께 상속) — Mongo 쪽은

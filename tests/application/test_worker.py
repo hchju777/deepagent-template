@@ -515,3 +515,46 @@ async def test_스냅샷_스토어가_없어도_종결은_그대로_된다():
                                  clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
                                  ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
     assert await worker.run_once("c-1") == "closed"
+
+
+async def test_이미_닫힌_케이스는_다시_조사하지_않는다():
+    # 주기 재큐 잡이 같은 케이스를 여러 번 넣을 수 있고, lease_is_free는 같은
+    # owner의 재획득을 항상 허용한다(데몬 owner는 프로세스당 문자열 하나다).
+    # 가드가 없으면 닫힌 케이스를 처음부터 다시 조사해 판정과 케이스 파일을 덮는다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON,
+                                      FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="daemon-1", max_concurrent=2,
+                                 lease_ttl_s=600, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "closed"
+    verdict_before = store.get_verdict("c-1").verdict_type
+    case_file_before = store.get_case_file("c-1")
+
+    assert await worker.run_once("c-1") == "stale"        # 중복 항목은 조용히 흘린다
+    assert store.get_verdict("c-1").verdict_type == verdict_before
+    assert store.get_case_file("c-1") == case_file_before  # 흔적이 그대로다
+    assert repo.get("c-1").thread_ids == ["c-1#1"]         # 새 스레드를 열지 않았다
+
+
+async def test_구제가_아무것도_못_건지면_기존_케이스_파일을_지우지_않는다():
+    # _finish가 완전한 케이스 파일을 쓴 뒤 종결 과정에서 터지면 _fail이 돈다.
+    # 구제가 실패했다고 partial 빈 껍데기로 덮으면, 체크포인트가 TTL로 사라진 뒤
+    # 케이스 파일이 유일한 조사 기록이라는 전제가 무너진다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    store.put_case_file("c-1", {"plan_tasks": [{"id": "t1", "status": "ok"}],
+                                "hypotheses": [{"id": "h1"}], "round": 3})
+    def broken_deps(g, f):
+        raise RuntimeError("deps 조립 실패")   # 엔진 캐시 없음 → 구제 불가
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=broken_deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "failed"
+    case_file = store.get_case_file("c-1")
+    assert case_file["plan_tasks"] == [{"id": "t1", "status": "ok"}]   # 보존됐다
+    assert case_file["round"] == 3

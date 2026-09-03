@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from src.domain.case import CauseLink, Verdict
 from src.domain.cases import CaseRecord
-from src.presentation.report_model import build_report_model
+from src.domain.report_model import build_report_model
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 
@@ -114,3 +114,27 @@ def test_형태가_어긋난_케이스_파일에도_raise하지_않는다():
                                clock=lambda: T)
     assert model.plan_tasks == [] and model.round_no is None
     assert len(model.stages) == 6
+
+
+def test_verify가_돌지_않았으면_검증은_미도달이다():
+    # frame 파싱 실패는 frame → END다(verify를 거치지 않는다). 그런데 conclude가
+    # degraded verdict를 만들어 놓으므로 "verdict 있음 + 문제 없음"만 보면 ✅가 나온다
+    # — 아무것도 조사하지 않은 실패 케이스에 초록 체크가 붙는 조용한 오답이다.
+    model = build_report_model(
+        _record(), verdict=_verdict(verdict_type="degraded", confidence="low",
+                                    root_cause=None, narrative="frame 출력 파싱 실패"),
+        evidence=[], case_file={"round": 0}, clock=lambda: T)
+    assert _marks(model)["verify"] == "skip"
+
+
+def test_미완_태스크가_남으면_조사_실행은_경고다():
+    # 실패 시점 부분 스냅샷에서 running이 남은 채 끝났으면 "2 ok"만 보여주는 것은
+    # 끝내 못 돈 태스크를 표식에서 지우는 것이다.
+    case_file = {"hypotheses": [{"id": "h1"}],
+                 "plan_tasks": [{"id": "t1", "status": "ok"}, {"id": "t2", "status": "ok"},
+                                {"id": "t3", "status": "running"}],
+                 "round": 1, "qa_log": [], "verify_problems": [], "verify_attempts": 0}
+    model = build_report_model(_record(), verdict=_verdict(), evidence=[],
+                               case_file=case_file, clock=lambda: T)
+    stage = next(s for s in model.stages if s.stage == "execute")
+    assert stage.mark == "warn" and "미완" in stage.note

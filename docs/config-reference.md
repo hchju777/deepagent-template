@@ -53,6 +53,8 @@
 | `investigations.max_concurrent` | int | 2 | 워커가 동시에 붙잡을 수 있는 케이스 수 |
 | `investigations.awaiting_human_timeout_h` | int | 72 | 파킹된 케이스가 이 시간(시간 단위) 넘게 답을 못 받으면 타임아웃 종결 |
 | `investigations.lease_ttl_s` | float | 900 | 케이스 임차(lease) 유효 시간(초). 조사 한 라운드보다 충분히 길어야 함 |
+| `investigations.max_wall_clock_s` | float | 1800 | 조사 한 건의 벽시계 상한(초). keepalive가 lease를 무한 갱신하므로 이 상한이 없으면 멈춘 LLM 호출이 슬롯을 영구 점유한다 |
+| `investigations.requeue_interval_s` | float | 30 | 열린 케이스 재스캔 간격(초). 다른 프로세스가 연 케이스를 데몬이 보게 한다 |
 | `llm.profiles.judge` | str | **필수** | rule+llm/llm 판정에 쓰는 모델 이름 |
 | `llm.profiles.subagent` | str | **필수** | 서브에이전트(data_prober 등)가 쓰는 모델 이름 |
 | `llm.profiles.lead` | str | **필수** | frame/integrate/conclude(리드)가 쓰는 모델 이름 |
@@ -65,7 +67,10 @@
 | `store.retention.ledger_d` | int | 30 | 순찰 레저 보존 일수 |
 | `store.retention.checkpoint_ttl_d` | int | 14 | LangGraph 체크포인트 보존 일수 |
 | `store.retention.sends_d` | int | 30 | 메일 발송 레저(F6 멱등 기록) 보존 일수 |
-| `report.output_dir` | str | `"output"` | 렌더된 보고서(`{case_id}.md`)를 쓰는 디렉터리 |
+| `store.retention.events_d` | int | 30 | 이벤트 로그(`case_events`) 보존 일수 |
+| `store.retention.snapshots_d` | int | 730 | 종결 판정 스냅샷 보존 일수. 사람 라벨은 몇 달 뒤에 오므로 다른 것들보다 훨씬 길다 |
+| `report.output_dir` | str | `"output"` | 렌더된 보고서(`{case_id}.{format}`)를 쓰는 디렉터리 |
+| `report.format` | `"html"` \| `"md"` | `"html"` | 보고서 산출 포맷. 메일은 HTML일 때 평문(마크다운)과 HTML 두 파트를 함께 보낸다 |
 | `report.mail.enabled` | bool | `false` | 메일 발송 여부. `true`면 `host`/`recipients` 필수(검증자) |
 | `report.mail.host` | str | `""` | SMTP 호스트 |
 | `report.mail.port` | int | 25 | SMTP 포트 |

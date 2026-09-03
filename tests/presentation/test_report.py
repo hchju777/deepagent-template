@@ -162,7 +162,7 @@ def test_render_md도_렌더링_실패에_최소_안내문을_돌려준다():
     # 부른다. 무방비면 어긋난 case_file 하나가 메일 발송을 로그 한 줄 없이 삼킨다
     # (_publish_report의 except Exception: pass).
     from src.presentation.report import render_md
-    from src.presentation.report_model import build_report_model
+    from src.domain.report_model import build_report_model
     model = build_report_model(
         RECORD, verdict=None, evidence=[],
         # refuting_ids가 리스트가 아니면 ", ".join이 TypeError를 낸다

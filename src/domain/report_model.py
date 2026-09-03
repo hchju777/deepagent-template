@@ -89,10 +89,17 @@ def _execute_stage(plan_tasks) -> tuple[Mark, str]:
         return "skip", "미도달"
     errors = [t for t in plan_tasks if t.get("status") == "error"]
     done = [t for t in plan_tasks if t.get("status") == "ok"]
+    # 끝내 못 돈 태스크를 분모에서 빼면 "2 ok"가 완료처럼 읽힌다 — 실패 시점
+    # 부분 스냅샷에서는 running이 남은 채 끝나는 것이 정상이므로 반드시 드러내야 한다.
+    unfinished = [t for t in plan_tasks
+                  if t.get("status") not in ("ok", "error", "cancelled")]
     if errors:
-        return "fail", f"{len(done)} ok / {len(errors)} error"
+        tail = f" / {len(unfinished)} 미완" if unfinished else ""
+        return "fail", f"{len(done)} ok / {len(errors)} error{tail}"
     if not done:
         return "skip", "실행된 태스크 없음"
+    if unfinished:
+        return "warn", f"{len(done)} ok / {len(unfinished)} 미완"
     return "ok", f"{len(done)} ok"
 
 
@@ -112,8 +119,15 @@ def _conclude_stage(verdict) -> tuple[Mark, str]:
     return "ok", verdict.verdict_type
 
 
-def _verify_stage(verdict, verify_problems, verify_attempts) -> tuple[Mark, str]:
-    if verdict is None:
+def _verify_stage(verdict, verify_problems, verify_attempts, reached) -> tuple[Mark, str]:
+    """verdict 존재만으로 통과를 주면 안 된다.
+
+    frame 파싱 실패는 frame → END라 verify를 거치지 않는데, conclude가 degraded
+    verdict를 만들어 두므로 "verdict 있음 + 문제 없음"만 보면 ✅가 나온다 —
+    아무것도 조사하지 않은 케이스에 초록 체크가 붙는 조용한 오답이다. reached는
+    그래프가 실제로 verify까지 갔는지의 근사다(조사가 한 라운드라도 돌았는가).
+    """
+    if verdict is None or not reached:
         return "skip", "미도달"
     if verify_problems:
         return "fail", f"미해결 문제 {len(verify_problems)}건"
@@ -144,7 +158,10 @@ def build_report_model(record: CaseRecord, *, verdict: Verdict | None,
         "execute": _execute_stage(plan_tasks),
         "integrate": _integrate_stage(round_no, qa_log),
         "conclude": _conclude_stage(verdict),
-        "verify": _verify_stage(verdict, verify_problems, verify_attempts),
+        # verify는 conclude 뒤에만 돈다 — conclude는 select/execute/integrate를
+        # 거쳐야 도달하므로, 라운드가 한 번도 안 돌았으면 verify도 안 돌았다.
+        "verify": _verify_stage(verdict, verify_problems, verify_attempts,
+                                reached=isinstance(round_no, int) and round_no >= 1),
     }
     stages = [StageCheck(stage=key, label=label, mark=outcomes[key][0], note=outcomes[key][1])
               for key, label in _STAGE_LABELS]

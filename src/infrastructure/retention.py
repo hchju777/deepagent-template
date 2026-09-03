@@ -53,7 +53,7 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
                           clock: Clock, retention: RetentionConfig,
                           events: EventStorePort | None = None,
                           snapshots: VerdictSnapshotPort | None = None) -> dict[str, int]:
-    """다섯 가지 보존 규칙을 한 번에 훑고 항목별 처리 건수를 돌려준다."""
+    """일곱 가지 보존 규칙을 한 번에 훑고 항목별 처리 건수를 돌려준다."""
     now = clock()
     counts = {"closed_cases": 0, "ledger_runs": 0, "scratch_evidence": 0, "expired_threads": 0,
              "sends": 0, "events": 0, "snapshots": 0}

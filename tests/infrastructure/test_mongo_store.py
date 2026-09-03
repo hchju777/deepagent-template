@@ -190,3 +190,53 @@ def test_mongo_claim은_같은_owner의_무변화_재획득도_성공이다(db):
                          t0=T, created_at=T, updated_at=T))
     assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None
     assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None   # 무변화 재획득
+
+
+def test_mongo_claim은_읽기와_쓰기_사이의_갱신을_되돌리지_않는다(db, monkeypatch):
+    # CAS 술어는 owner/lease_until만 지킨다. $set이 문서 전체 덤프면, 그 사이 남이
+    # 바꾼 다른 필드(게이트가 붙인 finding_ids)를 자기가 읽은 옛 값으로 되돌리는데
+    # 술어는 그걸 감지하지 못한다 — 첨부된 finding이 조용히 사라진다.
+    repo = MongoCaseRepository(db)
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T))
+    assert repo.claim("c-1", "w-1", now=T, ttl_s=600) is not None
+
+    # claim이 문서를 읽은 직후, update 전에 게이트가 finding을 첨부한다.
+    real_find_one = db.cases.find_one
+    injected = []
+
+    def find_one_then_attach(*a, **kw):
+        doc = real_find_one(*a, **kw)
+        if not injected:
+            injected.append(True)
+            db.cases.update_one({"id": "c-1"}, {"$set": {"finding_ids": ["f-1"]}})
+        return doc
+
+    monkeypatch.setattr(db.cases, "find_one", find_one_then_attach)
+    assert repo.claim("c-1", "w-1", now=T, ttl_s=600) is not None
+    monkeypatch.undo()
+    assert repo.get("c-1").finding_ids == ["f-1"]
+
+
+def test_mongo_claim이_돌려주는_레코드는_DB의_최신값이다(db, monkeypatch):
+    # $set을 lease 필드로 좁히면 로컬에서 계산한 claimed는 다른 필드가 낡는다.
+    # 워커는 그 반환값을 그대로 들고 다니다 repo.save로 되쓰므로, 낡은 채로
+    # 돌려주면 유실이 claim에서 워커로 자리만 옮긴다.
+    repo = MongoCaseRepository(db)
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T))
+    real_find_one = db.cases.find_one
+    injected = []
+
+    def find_one_then_attach(*a, **kw):
+        doc = real_find_one(*a, **kw)
+        if not injected:
+            injected.append(True)
+            db.cases.update_one({"id": "c-1"}, {"$set": {"finding_ids": ["f-1"]}})
+        return doc
+
+    monkeypatch.setattr(db.cases, "find_one", find_one_then_attach)
+    claimed = repo.claim("c-1", "w-1", now=T, ttl_s=600)
+    monkeypatch.undo()
+    assert claimed.finding_ids == ["f-1"]      # 반환값이 DB와 일치한다
+    assert claimed.owner == "w-1"

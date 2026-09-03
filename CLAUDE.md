@@ -80,7 +80,7 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 
 - **코드가 정한다**: 그래프 구조, 라운드 상한(`max_rounds`), 병렬 폭
   (`parallel_width`), select 게이트 조건, interrupt 위치, verify 규칙,
-  이벤트 어휘(정확히 5종), 발행 배선.
+  이벤트 어휘(규율 7의 성질 시험), 발행 배선.
 - **LLM이 정한다**: 가설 내용, 태스크가 무엇을 조사할지, 라운드마다
   continue/ask/conclude 중 무엇을 고를지, 최종 판정의 서술.
 
@@ -89,14 +89,23 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 것**은 코드가 쥔다. 그 안에서 "무엇이 맞는 판단인가"를 요구하는 것만 LLM에게
 맡긴다.
 
-### 7. 이벤트 어휘는 정확히 5종
+### 7. 이벤트 어휘는 좁게 유지한다 (현재 6종)
 
 `EngineEvent.event`는 `case_status_changed`/`round_started`/`task_finished`/
-`question_raised`/`report_ready` 다섯 개뿐이다(`src/domain/events.py`). 그래프
-내부 노드명이나 State 키가 이 봉투 밖으로 새 나가면 안 된다 — 구독자(CLI,
-향후 웹 UI)가 엔진 내부 구현에 결합되기 때문이다. 새 이벤트가 필요하다고
-느껴진다면 먼저 기존 5종 중 하나로 표현할 수 없는지 검토하고, 정말
-필요하면 스펙 문서를 먼저 갱신한 뒤에 어휘를 늘려라.
+`question_raised`/`report_ready`/`verdict_formed` 여섯 개다(`src/domain/events.py`).
+그래프 내부 노드명이나 State 키가 이 봉투 밖으로 새 나가면 안 된다 —
+구독자(CLI, 향후 웹 UI)가 엔진 내부 구현에 결합되기 때문이다.
+
+새 종류를 더할지 판단하는 시험은 **개수가 아니라 성질**이다:
+
+> **"이 이름이 그래프를 다시 배선해도 그대로 유효한가?"**
+
+`verdict_formed`는 도메인 사실(Verdict가 생겼다)을 가리키므로 conclude/verify를
+합치든 쪼개든 유효하다. `node_entered`·`state_patch`·`select_gate_evaluated`·
+`stream_mode` 패스스루는 무효다 — 그래프 모양이 바뀌면 뜻이 사라진다.
+먼저 기존 어휘로 표현할 수 없는지 검토하고, 정말 필요하면 **스펙 문서를 먼저
+갱신한 뒤에** 늘려라. 기각한 예: `round_finished`(경계로 유도 가능),
+`evidence_added`(`task_finished.evidence_ids`에 이미 있다), `hypothesis_updated`.
 
 ### 8. 케이스 종결의 세 경로는 반드시 같은 발행 배선을 쓴다
 
@@ -136,10 +145,14 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | Mongo 케이스 저장소 | `src/infrastructure/mongo_store.py` |
 | 프로브 레지스트리 | `src/patrol/probes.py` |
 | rule 판정 4종 | `src/patrol/rules.py` |
+| 이벤트 로그 포트·인메모리 구현 | `src/domain/events.py` |
+| 종결 판정 스냅샷(retention보다 오래 산다) | `src/domain/snapshot.py` |
 | LLM 판정 | `src/patrol/llm_judge.py` |
 | 순찰 게이트(케이스 개설/첨부/억제) | `src/patrol/gate.py` |
 | 순찰 데몬 조립 | `src/patrol/daemon.py` |
-| 보고서 렌더링 | `src/presentation/report.py` |
+| 보고서 데이터 유도(단계 체크리스트) | `src/presentation/report_model.py` |
+| 보고서 렌더링(마크다운) | `src/presentation/report.py` |
+| 보고서 렌더링(HTML, 기본 포맷) | `src/presentation/report_html.py` |
 | 메일 발송(2단계 멱등) | `src/presentation/mail.py` |
 | 토폴로지·배포 지식 로더 | `src/knowledge/` |
 | config 스키마·로더·병합 | `src/config/` |

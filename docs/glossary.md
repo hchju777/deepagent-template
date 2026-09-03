@@ -145,8 +145,10 @@
 ## 이벤트·발행
 
 **EngineEvent** (`src/domain/events.py`) — 엔진이 밖으로 내보내는 이벤트
-봉투. `event`는 정확히 5종(`case_status_changed`/`round_started`/
-`task_finished`/`question_raised`/`report_ready`)으로 고정.
+봉투. `event`는 현재 6종(`case_status_changed`/`round_started`/
+`task_finished`/`question_raised`/`report_ready`/`verdict_formed`). 스토어가
+부여하는 `seq`로 전순서가 잡힌다 — 고정 시계 테스트에서 `at`이 같은 값을
+가지므로 `at`만으로는 순서가 나오지 않는다.
 
 **F1~F6** — v1 설계·구현 과정에서 명문화된 규율들의 줄임말(이월 항목 번호).
 이벤트 봉투(F1), 단일 실행자 보장(F2), 배포를 가로지르는 재개(F3), 삼켜진

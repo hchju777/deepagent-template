@@ -221,14 +221,24 @@ class MongoCaseRepository(CaseRepositoryPort):
         # 읽은 시점의 owner/lease_until을 그대로 술어로 걸어, 그 사이 남이 잡았으면
         # 진다(CAS). lease_until에 $lt 범위 비교를 쓰지 않는 이유는 ISO 문자열이라
         # 마이크로초 유무로 사전식 순서가 시간 순서와 어긋나기 때문이다(모듈 docstring).
+        # $set을 lease 필드로 좁힌다 — 문서 전체를 덤프하면 읽기와 쓰기 사이에 남이
+        # 바꾼 필드(게이트가 붙인 finding_ids 등)를 자기가 읽은 옛 값으로 되돌리는데,
+        # CAS 술어는 owner/lease_until만 지켜서 그 소실을 감지하지 못한다.
+        lease_fields = {k: claimed.model_dump(mode="json")[k]
+                        for k in ("owner", "lease_until", "updated_at")}
         result = self._db.cases.update_one(
             {"id": case_id, "owner": doc.get("owner"), "lease_until": doc.get("lease_until")},
-            {"$set": claimed.model_dump(mode="json")})
+            {"$set": lease_fields})
         # matched_count로 판정한다 — modified_count는 같은 owner가 같은 now·ttl로
         # 재획득할 때(문서가 한 글자도 안 바뀜) 0이라, keepalive가 조용히 no-op되고
         # 인메모리 구현과 판정이 갈라진다. 우리가 물은 것은 "그 사이 남이 잡았나"이고
         # 그 답은 술어가 맞았는가(matched)이지 값이 달라졌는가(modified)가 아니다.
-        return claimed if result.matched_count else None
+        if not result.matched_count:
+            return None
+        # 로컬에서 계산한 claimed는 lease 밖 필드가 낡았을 수 있다($set을 좁혔으므로).
+        # 워커가 이 반환값을 들고 다니다 repo.save로 되쓰므로, 낡은 채로 돌려주면
+        # 유실이 claim에서 워커로 자리만 옮긴다.
+        return self._to_record(self._db.cases.find_one({"id": case_id}))
 
     def find_open_by_fingerprint(self, fp: str) -> CaseRecord | None:
         doc = self._db.cases.find_one(
