@@ -348,6 +348,36 @@ class InvestigationWorker:
         await self._emit_closed(record.id)
         return "closed"
 
+    async def _salvage_case_file(self, record, case_id: str) -> None:
+        """close_case가 스레드를 지우기 전에 체크포인트에서 조사 흔적을 구제한다.
+
+        순서가 계약이다 — discard_threads=True로 스레드를 폐기한 뒤에는 읽을 것이
+        없다. 구제 실패도 케이스 파일에 남긴다: 보고서가 "조사한 게 없다"와
+        "흔적을 잃었다"를 구별할 수 있어야 조용한 생략이 되지 않는다.
+
+        스레드는 역순으로 훑는다 — F3 재시작 경로에서 첫 스레드는 이미 폐기됐고
+        재시작 스레드가 최신이다.
+        """
+        snapshot: dict = {"partial": True}
+        try:
+            engine = self._engines.get((record.gbm, record.fct)) if record is not None else None
+            if engine is None:
+                raise RuntimeError("엔진이 조립되기 전에 실패해 체크포인트가 없다")
+            for thread_id in reversed(list(record.thread_ids)):
+                state = await engine.aget_state({"configurable": {"thread_id": thread_id}})
+                values = getattr(state, "values", None)
+                if isinstance(values, dict) and values:
+                    snapshot.update(_case_file_snapshot(values))
+                    break
+        except Exception as exc:                                   # noqa: BLE001
+            snapshot["salvage_error"] = f"{type(exc).__name__}: {exc}"
+        for key in ("plan_tasks", "hypotheses", "qa_log", "verify_problems"):
+            snapshot.setdefault(key, [])
+        try:
+            self._store.put_case_file(case_id, snapshot)
+        except Exception:                                          # noqa: BLE001
+            pass
+
     def _log_failure(self, record, case_id: str, exc: Exception) -> None:
         try:
             gbm = record.gbm if record is not None else "unknown"
@@ -377,6 +407,7 @@ class InvestigationWorker:
         않는다.
         """
         self._log_failure(record, case_id, exc)
+        await self._salvage_case_file(record, case_id)   # close_case가 스레드를 지우기 전에
         reason = f"워커 실패 — {type(exc).__name__}: {exc}"
         try:
             await close_case(case_id, repo=self._repo, checkpointer=self._checkpointer,

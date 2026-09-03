@@ -424,3 +424,44 @@ def test_케이스_파일_스냅샷은_빠진_키를_기본값으로_채운다()
     from src.application.worker import _case_file_snapshot
     snap = _case_file_snapshot({})
     assert snap["verify_attempts"] == 0 and snap["round"] == 0 and snap["plan_tasks"] == []
+
+
+async def test_실패_종결도_조사_흔적을_케이스_파일로_남긴다(monkeypatch):
+    # _fail은 put_case_file을 부르지 않고 close_case가 스레드를 지워, 실패 종결
+    # 보고서의 §5가 통째로 "없음"이 됐다 — discard_threads=True와 겹쳐 완전 유실.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    # _finish에서 터뜨려 그래프는 정상 완주하되 종결만 실패시킨다 — 체크포인트에
+    # 진짜 조사 흔적이 남은 상태에서 _fail이 도는 유일한 방법이다.
+    async def boom(self, record, result):
+        raise RuntimeError("종결 실패")
+    monkeypatch.setattr(InvestigationWorker, "_finish", boom)
+
+    assert await worker.run_once("c-1") == "failed"
+    case_file = store.get_case_file("c-1")
+    assert case_file is not None
+    assert case_file["partial"] is True
+    assert case_file["plan_tasks"], "체크포인트에서 태스크를 구제했어야 한다"
+    assert repo.get("c-1").status == "closed"
+
+
+async def test_구제가_불가능해도_케이스_파일에_사유가_남고_워커는_raise하지_않는다():
+    # 엔진이 캐시에 없는 실패(build_engine 전에 터짐)는 읽을 체크포인트가 없다.
+    # "조사한 게 없다"와 "흔적을 잃었다"를 보고서가 구별할 수 있어야 한다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    def broken_deps(g, f):
+        raise RuntimeError("deps 조립 실패")
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=broken_deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "failed"
+    case_file = store.get_case_file("c-1")
+    assert case_file["partial"] is True and case_file["salvage_error"]
+    assert case_file["plan_tasks"] == []
