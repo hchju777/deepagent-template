@@ -23,6 +23,7 @@ class EvidenceRecord(StrictModel):
     body_digest: str            # canonical_digest(body)
     as_of: datetime | None = None
     complete: bool = True
+    truncated_reason: str | None = None   # complete=False면 왜 잘렸는지 — 조용한 생략 금지
     effective_as_of: datetime | None = None
 
 
@@ -30,6 +31,7 @@ class CaseStorePort(ABC):
     @abstractmethod
     def put_evidence(self, case_id: str, source: str, body: object, *,
                      as_of: datetime | None = None, complete: bool = True,
+                     truncated_reason: str | None = None,
                      effective_as_of: datetime | None = None) -> str: ...
 
     @abstractmethod
@@ -93,12 +95,14 @@ class InMemoryCaseStore(CaseStorePort):
         self._case_files: dict[str, dict] = {}
 
     def put_evidence(self, case_id, source, body, *,
-                     as_of=None, complete=True, effective_as_of=None):
+                     as_of=None, complete=True, truncated_reason=None,
+                     effective_as_of=None):
         self._counters[case_id] += 1
         evidence_id = f"ev-{self._counters[case_id]}"
         record = EvidenceRecord(id=evidence_id, source=source,
                                 body_digest=canonical_digest(body),
                                 as_of=as_of, complete=complete,
+                                truncated_reason=truncated_reason,
                                 effective_as_of=effective_as_of)
         self._evidence.setdefault(case_id, {})[evidence_id] = (body, record)
         return evidence_id

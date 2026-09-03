@@ -272,3 +272,30 @@ def test_정상_해석기는_기동을_막지_않는다(tmp_path):
                                   "query_schema": {"q": "str"}}}))
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert not [e for e in errors if "part_code" in e.problem or "lister" in e.problem]
+
+
+def test_등재_항목이_아닌_target에_해석기를_달면_기동을_거부한다(tmp_path):
+    # resolve는 rest_query에서만 실행된다. 다른 target에 달면 런타임이 조용히
+    # 무시해, 사람이 "범위를 좁혔다"고 믿는 점검이 무필터 전체 스캔을 돈다 —
+    # §2-N3이 "거짓 안심, 조용해서 더 위험"이라 지목한 경로다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x"},
+                   "rest": {"base_url": "http://x"}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "x"},
+            "resolve": {"k": {"from": "clock", "expr": "today"}}}}},
+        "knowledge": {"root": "knowledge.example"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("resolve" in e.problem and "rest_query" in e.problem for e in errors)
+
+
+def test_해석기가_쓰는_어댑터가_없으면_기동을_거부한다(tmp_path):
+    # 정적으로 알 수 있는데 매 순찰 "어댑터 미설정" error로만 드러나면 안 된다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "mongo", "collection": "lines", "field": "part_code"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("mongo" in e.problem and "part_code" in e.problem for e in errors)

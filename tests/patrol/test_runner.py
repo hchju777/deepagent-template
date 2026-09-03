@@ -154,3 +154,30 @@ async def test_대상_데이터의_request_키가_증거_출처를_위조하지_
     assert outcome.status in ("ok", "finding")
     records = store.list_evidence(scratch_case_id("mx", "gumi", "plan.exists"))
     assert records[-1].source == "redis:plan:7"      # 대상 데이터가 아니라 target이다
+
+
+async def test_잘린_이유가_증거까지_이어진다():
+    # 이유를 만들어 놓고 증거 직전에 버리면 "5,000개 중 50개만 확인"이 어디에도
+    # 안 남는다 — 조용한 생략 금지에 정면으로 걸린다.
+    from src.config.schema_site import RestEntry
+    from src.domain.store import InMemoryCaseStore
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubMongo, StubRest
+    entries = {"e": RestEntry(method="POST", path="/x",
+                              body_schema={"line_code": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /x": {"ok": 1}}, set(), entries, clock=lambda: T)
+    adapters.mongo = StubMongo({"lines": [{"line_code": f"L{i}"} for i in range(10)]},
+                               max_rows=100, clock=lambda: T)
+    store = InMemoryCaseStore()
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body.ok"},
+        "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                  "field": "line_code", "cardinality": "first:3"}}})
+    outcome = await run_check("mx", "gumi", "c", check, adapters=adapters, store=store,
+                              clock=lambda: T, llm=None, budget=None)
+    assert outcome.status == "ok"
+    rec = store.list_evidence(scratch_case_id("mx", "gumi", "c"))[-1]
+    assert rec.complete is False
+    assert "10" in (rec.truncated_reason or "")

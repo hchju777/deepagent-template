@@ -105,3 +105,26 @@ def test_점검_body의_env_참조는_거부된다(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_site_config(tmp_path, "mx", "gumi", env={"MES_TOKEN": "tok-SECRET"})
     assert any("params.body" in p for p in exc.value.problems)
+
+
+def test_해석기_스펙의_env_참조도_거부된다(tmp_path):
+    # resolve.filter 값은 대상 쿼리로 나가고 config show에 평문으로 찍힌다
+    # (SecretStr이 아니라 마스킹 대상이 아니다).
+    import json
+
+    from src.config.loader import ConfigError, load_site_config
+    (tmp_path / "gbm").mkdir()
+    (tmp_path / "gbm" / "mx.json").write_text(json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x"},
+                   "rest": {"base_url": "http://x", "entries": {
+                       "e": {"method": "POST", "path": "/x",
+                             "body_schema": {"line_code": "list[str]"}}}}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+            "params": {"rule": "exists", "field": "body"},
+            "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                      "field": "line_code",
+                                      "filter": {"token": "${MX_SECRET}"}}}}}}}))
+    with pytest.raises(ConfigError) as exc:
+        load_site_config(tmp_path, "mx", "gumi", env={"MX_SECRET": "super-secret"})
+    assert any("resolve" in p for p in exc.value.problems)

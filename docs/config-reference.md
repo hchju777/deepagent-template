@@ -122,6 +122,8 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `target.code.repos[].name` / `.path` | str / str | — | `code_tracer`가 읽을 로컬 git 체크아웃들. `name`은 토폴로지·deployment.yaml이 참조하는 식별자 |
 | `target.guards.timeout_s` | float | 10 | 어댑터 호출 타임아웃 |
 | `target.guards.max_rows` | int | 1000 | 조회 결과 상한(넘으면 `complete=False`) |
+| `target.stub_seeds.rest_responses` | dict | `{}` | `adapters="stub"`일 때 스텁이 돌려줄 REST 응답. 키는 endpoint 문자열(토폴로지 GET) 또는 `"{method} {path}"`(등재 항목) |
+| `target.stub_seeds.redis_data` / `.redis_ttls` / `.mongo_collections` / `.kafka_messages` / `.kafka_offsets` | dict | `{}` | 나머지 스텁 시드. 대상 시스템 없이 점검이 실제로 결과를 내게 한다 |
 | `target.guards.max_concurrent` | int | 4 | 이 사이트에 대한 **모든 어댑터가 공유하는** 동시 요청 상한(세마포어 하나) |
 
 인증 필드는 전부 선택이다 — 인증 없는 법인은 `url`만 채우고, 있는 법인만

@@ -435,3 +435,34 @@ def test_이벤트_저장이_실패해도_싱크는_raise하지_않는다():
     sink = _make_event_sink(BrokenStore(), downstream=seen.append)
     sink(EngineEvent(event="round_started", case_id="c-1", at=T))   # raise하면 실패
     assert len(seen) == 1            # 저장이 죽어도 stdout 출력은 계속된다
+
+
+def test_스텁_시드를_config로_넘길_수_있다(tmp_path, monkeypatch):
+    # CLI가 stub_seeds를 넘기는 경로가 없어 config.example의 점검이 한 번도 성공한
+    # 적이 없다("404: 스텁에 등록되지 않은 끝점"). README의 5분 빠른 시작이 걸린 자리다.
+    import asyncio
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from src.config.loader import load_site_config
+    from src.domain.store import InMemoryCaseStore
+    from src.knowledge.topology import load_topology
+    from src.patrol.daemon import assemble_sites
+    from src.patrol.runner import run_check
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {"base_url": "http://x"},
+                   "stub_seeds": {"rest_responses": {"/oee": {"oee": 512}}}},
+        "patrol": {"checks": {"api.oee": {
+            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/oee",
+            "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}}}},
+        "knowledge": {"root": str(tmp_path / "knowledge")}}))
+    T0 = datetime(2026, 9, 4, tzinfo=timezone.utc)
+    _app, sites = assemble_sites(tmp_path / "config", tmp_path, dict(ENV), clock=lambda: T0,
+                                 llm_factory=lambda name: object())
+    outcome = asyncio.run(run_check("mx", "gumi", "api.oee",
+                                    sites[0].cfg.patrol.checks["api.oee"],
+                                    adapters=sites[0].adapters, store=InMemoryCaseStore(),
+                                    clock=lambda: T0, llm=None, budget=None))
+    assert outcome.status == "finding", outcome.error

@@ -412,7 +412,13 @@ def assemble_sites(
                          else "absent",
         }
 
-        adapters = build_adapters(site_cfg, topology, clock=clock, stub_seeds=stub_seeds)
+        # config가 시드를 선언했으면 그것을 쓴다 — 인자로 받은 stub_seeds(테스트가
+        # 주는 것)가 우선이다. 이 경로가 없으면 예시 config의 점검이 전부
+        # "404: 스텁에 등록되지 않은 끝점"으로 끝난다.
+        seeds = stub_seeds
+        if seeds is None and site_cfg.target.stub_seeds is not None:
+            seeds = StubSeeds(**site_cfg.target.stub_seeds.model_dump())
+        adapters = build_adapters(site_cfg, topology, clock=clock, stub_seeds=seeds)
         deps = EngineDeps(
             lead_llm=make_llm(app.llm.profiles.lead),
             subagent_llm=make_llm(app.llm.profiles.subagent),

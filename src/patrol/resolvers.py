@@ -15,6 +15,7 @@ config는 **값이 어디서 오는지**만 선언하고, 실제 값은 점검 �
 """
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from src.config.schema_app import StrictModel
@@ -31,17 +32,24 @@ class ResolveResult(StrictModel):
 def _pluck(rows, field: str) -> list:
     """행 목록에서 field를 뽑아 중복을 없앤다(등장 순서 보존).
 
-    순서를 보존하는 이유: 같은 점검이 매번 다른 순서로 나가면 증거 출처 digest가
-    달라져(entry_evidence_source가 canonical_digest를 쓰지만 리스트 순서는 살아 있다)
-    같은 질문이 여러 증거로 흩어진다.
+    **정렬해서 돌려준다.** Mongo find는 자연 순서(불안정)라 등장 순서를 그대로
+    물려받으면 매 실행 다른 표본을 점검하고, 리스트 순서가 살아 있는
+    canonical_digest 탓에 같은 질문이 여러 증거로 흩어진다. 결정론은 이 리포의
+    최우선 규율이다.
     """
     seen, out = set(), []
     for row in rows if isinstance(rows, list) else []:
         value = row.get(field) if isinstance(row, dict) else None
-        if value is not None and value not in seen:
-            seen.add(value)
+        if value is None:
+            continue
+        # 집합 멤버십만 쓰면 0과 False, 1과 True, 1과 1.0이 병합된다 —
+        # 파이썬에서 그것들이 같은 해시·같은 값이기 때문이다.
+        key = (type(value).__name__, value)
+        if key not in seen:
+            seen.add(key)
             out.append(value)
-    return out
+    # 타입이 섞여도 안전하게 정렬한다(int와 str이 한 필드에 섞일 수 있다).
+    return sorted(out, key=lambda v: (type(v).__name__, str(v)))
 
 
 def _apply_cardinality(name: str, values: list, cardinality: str,
@@ -60,7 +68,8 @@ def _apply_cardinality(name: str, values: list, cardinality: str,
     return kept
 
 
-async def _read_values(name: str, spec, *, adapters: AdapterSet, problems: list) -> list | None:
+async def _read_values(name: str, spec, *, adapters: AdapterSet, problems: list,
+                       truncated: list) -> list | None:
     """어댑터에서 값을 읽는다. 어댑터 미설정·조회 실패는 problems에 남기고 None."""
     kind = spec.from_
     if kind == "rest":
@@ -81,19 +90,30 @@ async def _read_values(name: str, spec, *, adapters: AdapterSet, problems: list)
     if result.status == "error":
         problems.append(f"해석기 {name!r} 조회 실패 — {result.error}")
         return None
+    if not result.envelope.complete:
+        # 어댑터가 guards.max_rows로 잘랐다. 그 사실을 버리면 잘린 표본으로 물어본
+        # 결과가 "완전한 증거"로 박제된다 — 이 모듈이 막으려던 바로 그 형태다.
+        # 막지 않고 드러내는 것이 이 시스템의 방식이다(verify가 불완전 증거의
+        # 부정 결론을 이미 금지한다).
+        truncated.append(f"{name}: 소스가 잘림({result.envelope.truncated_reason})")
     data = result.data
     if kind == "redis":
         return list(data) if isinstance(data, list) else []
+    # rest 응답은 body가 곧 행 목록인 형태만 다룬다. {"items": [...]}처럼 감싸는
+    # 응답은 body 경로 지정이 필요하고, 그건 실제로 그런 API를 만난 뒤에 연다.
     rows = data.get("body") if kind == "rest" and isinstance(data, dict) else data
     return _pluck(rows, spec.field)
 
 
 async def resolve_params(specs: dict, *, adapters: AdapterSet,
-                         clock: Callable[[], datetime]) -> ResolveResult:
+                         clock: Callable[[], datetime],
+                         timezone_name: str = "UTC") -> ResolveResult:
     """해석기 스펙들을 실제 값으로 바꾼다. 절대 raise하지 않는다.
 
     첫 실패에서 멈추지 않고 전부를 훑어 problems에 모은다 — 기동 거부 철학과 같은
-    이유로, 사람이 한 번에 하나씩만 고치게 하지 않는다.
+    이유로, 사람이 한 번에 하나씩만 고치게 하지 않는다. 다만 하나라도 실패하면
+    **params를 비워 돌려준다**: 전부-또는-전무를 호출자 규율이 아니라 반환 타입이
+    지켜야 새 호출부가 부분 결과를 쓰는 일이 생기지 않는다.
     """
     params, omitted, problems, truncated = {}, [], [], []
     for name, spec in specs.items():
@@ -104,12 +124,16 @@ async def resolve_params(specs: dict, *, adapters: AdapterSet,
                 omitted.append(name)
                 continue
             if kind == "clock":
-                now = clock()
+                # 스케줄러는 app.timezone으로 도는데 clock은 UTC다. 그대로 두면
+                # 00:00~09:00 KST 사이에 today가 항상 어제가 되어, 아침 cron이
+                # 매일 100% 전날 날짜로 대상을 호출한다.
+                now = clock().astimezone(ZoneInfo(timezone_name))
                 params[name] = {"today": now.date().isoformat(),
                                 "yesterday": (now - timedelta(days=1)).date().isoformat(),
                                 "now_iso": now.isoformat()}[spec.expr]
                 continue
-            values = await _read_values(name, spec, adapters=adapters, problems=problems)
+            values = await _read_values(name, spec, adapters=adapters, problems=problems,
+                                        truncated=truncated)
             if values is None:
                 continue
             if not values:
@@ -119,5 +143,9 @@ async def resolve_params(specs: dict, *, adapters: AdapterSet,
             params[name] = _apply_cardinality(name, values, spec.cardinality, truncated)
         except Exception as exc:                                   # noqa: BLE001 — 무raise 계약
             problems.append(f"해석기 {name!r} 실패 — {type(exc).__name__}: {exc}")
+    if problems:
+        # 전부-또는-전무를 호출자 규율이 아니라 반환 타입이 지키게 한다 —
+        # 부분 결과를 돌려주면 새 호출부가 그것을 그대로 쓴다.
+        return ResolveResult(problems=problems)
     return ResolveResult(params=params, omitted=omitted, problems=problems,
                          truncated=truncated)

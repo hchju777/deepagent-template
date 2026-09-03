@@ -63,6 +63,7 @@ async def run_check(
         snap_id = store.put_evidence(
             case_id, source=source, body=result.data,
             as_of=result.envelope.observed_at, complete=result.envelope.complete,
+            truncated_reason=result.envelope.truncated_reason,
             effective_as_of=result.envelope.effective_as_of,
         )
 

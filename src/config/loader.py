@@ -91,15 +91,34 @@ def _body_env_problems(merged: dict, where: str) -> list[str]:
     if not isinstance(checks, dict):
         return problems
     for name, check in checks.items():
-        body = ((check or {}).get("params") or {}).get("body") if isinstance(check, dict) else None
-        if not isinstance(body, dict):
+        if not isinstance(check, dict):
             continue
-        for key, value in body.items():
-            if isinstance(value, str) and "${" in value:
-                problems.append(
-                    f"{where}: 점검 {name!r}의 params.body.{key}에 env 참조가 있다 — "
-                    f"body는 증거로 평문 영속되므로 비밀값은 target.rest.auth에 둔다")
+        body = ((check.get("params") or {}).get("body"))
+        for key in _env_refs(body):
+            problems.append(
+                f"{where}: 점검 {name!r}의 params.body.{key}에 env 참조가 있다 — "
+                f"body는 증거로 평문 영속되므로 비밀값은 target.rest.auth에 둔다")
+        # resolve 스펙도 같은 이유로 막는다: filter 값이 대상 쿼리로 나가고
+        # config show에 평문으로 찍힌다(SecretStr이 아니라 마스킹 대상이 아니다).
+        for key in _env_refs(check.get("resolve")):
+            problems.append(
+                f"{where}: 점검 {name!r}의 resolve.{key}에 env 참조가 있다 — "
+                f"해석기 스펙은 마스킹되지 않으므로 비밀값을 둘 수 없다")
     return problems
+
+
+def _env_refs(node, path: str = "") -> list[str]:
+    """중첩 구조를 훑어 `${...}`를 품은 값의 경로를 모은다."""
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found += _env_refs(value, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            found += _env_refs(value, f"{path}[{i}]")
+    elif isinstance(node, str) and "${" in node:
+        found.append(path or "?")
+    return found
 
 
 def load_site_config(config_root: Path, gbm: str, fct: str, *, env):

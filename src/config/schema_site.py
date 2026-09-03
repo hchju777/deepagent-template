@@ -137,6 +137,21 @@ class Guards(StrictModel):
     max_concurrent: int = 4
 
 
+class StubSeedsConfig(StrictModel):
+    """스텁 어댑터가 돌려줄 응답. `adapters="stub"`일 때만 쓰인다.
+
+    이게 없으면 config.example의 점검이 전부 "404: 스텁에 등록되지 않은 끝점"으로
+    끝난다 — 예시가 배선만 보여주고 한 번도 성공하지 못하는 상태였다. README의
+    "5분 빠른 시작"이 실제로 돌려면 대상 시스템 없이도 결과가 나와야 한다.
+    """
+    rest_responses: dict[str, Any] = {}      # "/oee" 또는 "POST /summary/prod"
+    redis_data: dict[str, Any] = {}
+    redis_ttls: dict[str, int] = {}
+    mongo_collections: dict[str, list[dict]] = {}
+    kafka_messages: dict[str, list[dict]] = {}
+    kafka_offsets: dict[str, dict] = {}
+
+
 class TargetConfig(StrictModel):
     adapters: Literal["stub", "real"] = "stub"  # 스텁 ↔ 실구현 전환 (전작 패턴)
     redis: RedisTarget | None = None
@@ -145,6 +160,7 @@ class TargetConfig(StrictModel):
     rest: RestTarget | None = None
     code: CodeTarget | None = None
     guards: Guards = Guards()
+    stub_seeds: StubSeedsConfig | None = None
 
 
 class Schedule(StrictModel):

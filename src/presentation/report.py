@@ -187,7 +187,9 @@ def _section4(evidence: list[EvidenceRecord], evidence_summaries: dict[str, str]
     for ev in evidence:
         as_of = ev.as_of.isoformat() if ev.as_of else "-"
         eff = ev.effective_as_of.isoformat() if ev.effective_as_of else "-"
-        complete = "완전" if ev.complete else "⚠ 불완전"
+        complete = ("완전" if ev.complete
+                    else f"⚠ 불완전({ev.truncated_reason})" if ev.truncated_reason
+                    else "⚠ 불완전")
         digest = (ev.body_digest or "")[:12]
         summary = (evidence_summaries or {}).get(ev.id, digest)
         lines.append(f"| {ev.id} | {ev.source} | {as_of} | {complete} | {eff} | {summary} |")

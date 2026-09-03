@@ -23,7 +23,8 @@ from pathlib import Path
 
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
 from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
-from src.infrastructure.query_rules import entry_call_problems, mongo_role_problems
+from src.infrastructure.query_rules import (entry_call_problems, filter_problems,
+                                            mongo_role_problems)
 from src.knowledge.deployment import load_deployment
 from src.knowledge.topology import load_topology, topology_problems
 from src.patrol.probes import PROBES, resolve_probe
@@ -137,6 +138,23 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                 elif check.target not in known:
                     errors.append(BootError(
                         where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))
+            if check.resolve and resolve_probe(check) != "rest_query":
+                # resolve는 rest_query에서만 실행된다. 다른 target에 달면 런타임이
+                # 조용히 무시해, 사람이 "범위를 좁혔다"고 믿는 점검이 무필터 전체
+                # 스캔을 돈다 — 사람이 쓴 제약이 아무 효과 없이 통과하는 형태다.
+                errors.append(BootError(
+                    where, f"점검 {name!r}에 resolve가 있는데 target {check.target!r}은 "
+                           f"등재 항목이 아니다 — resolve는 rest_query 프로브에서만 쓰인다"))
+            for key, spec in check.resolve.items():
+                needed = {"mongo": cfg.target.mongo, "redis": cfg.target.redis}.get(spec.from_)
+                if spec.from_ in ("mongo", "redis") and needed is None:
+                    errors.append(BootError(
+                        where, f"점검 {name!r}의 해석기 {key!r}가 {spec.from_}를 쓰는데 "
+                               f"target.{spec.from_}가 설정돼 있지 않다"))
+                if spec.from_ == "mongo":
+                    for problem in filter_problems(spec.filter):
+                        errors.append(BootError(
+                            where, f"점검 {name!r}의 해석기 {key!r} filter: {problem}"))
             if check.judge in ("llm", "rule+llm"):
                 needs_judge_llm = True
 

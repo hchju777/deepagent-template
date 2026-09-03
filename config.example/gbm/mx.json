@@ -16,9 +16,7 @@
         "list_lines": {
           "method": "GET",
           "path": "/lines",
-          "query_schema": {
-            "active": "bool"
-          }
+          "query_schema": {}
         }
       }
     },
@@ -35,6 +33,28 @@
           "path": "./ref"
         }
       ]
+    },
+    "stub_seeds": {
+      "rest_responses": {
+        "GET /lines": [
+          {
+            "line_code": "L1"
+          },
+          {
+            "line_code": "L2"
+          }
+        ],
+        "POST /summary/prod": {
+          "badge": [
+            0,
+            0,
+            0
+          ]
+        },
+        "/api/v1/lines/{line}/oee": {
+          "oee": 512
+        }
+      }
     }
   },
   "patrol": {
@@ -69,13 +89,9 @@
         },
         "resolve": {
           "line_code": {
-            "from": "mongo",
-            "collection": "lines",
-            "field": "line_code",
-            "filter": {
-              "active": true
-            },
-            "cardinality": "first:50"
+            "from": "rest",
+            "entry": "list_lines",
+            "field": "line_code"
           },
           "date": {
             "from": "clock",
