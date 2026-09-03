@@ -75,7 +75,7 @@ def _entries():
     from src.config.schema_site import RestEntry
     return {"summary_prod": RestEntry(method="POST", path="/summary/prod",
                                       body_schema={"part_code": "list[str]"}),
-            "mes_plan": RestEntry(method="GET", path="/mes/plan", query_keys=["date"])}
+            "mes_plan": RestEntry(method="GET", path="/mes/plan", query_schema={"date": "str"})}
 
 
 async def test_스텁_query는_미등재_항목을_거부한다():

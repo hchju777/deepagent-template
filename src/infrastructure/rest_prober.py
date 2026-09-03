@@ -11,7 +11,11 @@ class RealRest(RestProberPort):
     def __init__(self, base_url, allowed, entries=None, auth=None, *,
                  guards, semaphore, clock):
         headers = {auth.header: auth.value.get_secret_value()} if auth is not None else {}
-        self._client = httpx.AsyncClient(base_url=base_url, headers=headers)
+        # follow_redirects를 명시적으로 끈다 — 따라가면 인증 헤더가 리다이렉트
+        # 대상(다른 호스트일 수 있다)으로 나가고, 그 호스트는 등재 목록에 없다.
+        # httpx 기본값과 같지만 기본값에 기대면 누가 바꿔도 아무도 모른다.
+        self._client = httpx.AsyncClient(base_url=base_url, headers=headers,
+                                         follow_redirects=False)
         self._allowed = allowed
         self._entries = entries or {}
         self._guards, self._sem, self._clock = guards, semaphore, clock

@@ -289,11 +289,47 @@ async def test_real과_stub이_같은_거부_사유를_돌려준다():
     from src.config.schema_site import Guards, RestEntry
     from src.infrastructure.rest_prober import RealRest
     from src.infrastructure.stubs import StubRest
-    entries = {"e": RestEntry(method="POST", path="/x", body_schema={"a": "str"})}
+    entries = {"p": RestEntry(method="POST", path="/x",
+                              body_schema={"a": "str", "n": "int", "f": "float",
+                                           "b": "bool", "xs": "list[str]"}),
+                "g": RestEntry(method="GET", path="/g", query_schema={"date": "str"})}
     real = RealRest("http://x", set(), entries, None,
                     guards=Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
     stub = StubRest({}, set(), entries, clock=CLOCK)
-    for entry, params in [("없음", {}), ("e", {"b": 1}), ("e", {"a": 1})]:
+    # POST 세 케이스만 보면 GET 분기(entry_call_problems의 절반)를 한 번도 대조하지
+    # 않는다 — 그건 대조가 아니라 표본이다. 타입 경계와 None까지 넓힌다.
+    for entry, params in [("없음", {}),
+                          ("p", {"b2": 1}), ("p", {"a": 1}), ("p", {"n": True}),
+                          ("p", {"f": "x"}), ("p", {"xs": ["ok", 2]}), ("p", {"xs": "ok"}),
+                          ("p", None), ("p", ["a"]),
+                          ("g", {"line": "L1"}), ("g", {"date": "d", "x": 1}),
+                          ("g", None)]:
         r, s = await real.query(entry, params), await stub.query(entry, params)
         assert r.status == s.status == "error"
         assert r.error == s.error, f"{entry}/{params}: real={r.error!r} stub={s.error!r}"
+
+
+async def test_리다이렉트를_따라가지_않는다():
+    # 따라가면 인증 헤더가 다른 호스트로 나간다. httpx 기본값이 False지만
+    # 코드에 단정이 없으면 누군가 True로 바꿔도 아무도 모른다.
+    import httpx
+
+    from src.config.schema_site import Guards, RestEntry
+    from src.infrastructure.rest_prober import RealRest
+    hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "safe":
+            return httpx.Response(302, headers={"location": "http://evil/collect"})
+        return httpx.Response(200, json={})
+
+    entries = {"e": RestEntry(method="GET", path="/x")}
+    rest = RealRest("http://safe", set(), entries, None,
+                    guards=Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    rest._client = httpx.AsyncClient(base_url="http://safe",
+                                     transport=httpx.MockTransport(handler),
+                                     follow_redirects=rest._client.follow_redirects)
+    result = await rest.query("e", {})
+    assert hosts == ["safe"], f"리다이렉트를 따라갔다: {hosts}"
+    assert result.data["status_code"] == 302

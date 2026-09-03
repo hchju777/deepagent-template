@@ -76,29 +76,19 @@ def test_끝점_쿼리_프래그먼트_매트릭스_우회_차단():
     assert not endpoint_allowed("/api/v1/lines/L1;x=y/oee", patterns)
 
 
-def test_허용된_쿼리_키는_통과하고_나머지는_거부된다():
+def test_토폴로지_GET_경로는_쿼리를_쓸_수_없다():
+    # 이 판정은 토폴로지 locator 전용이고 locator에는 쿼리가 없다. 쿼리가 필요한
+    # 점검은 등재 항목으로 표현하고, 거기서는 entry_call_problems가 query_keys로
+    # 판정한다 — 두 곳에 갈라 두면 언젠가 다른 말을 한다.
     patterns = {"/api/v1/lines/{line}/oee"}
-    ok = "/api/v1/lines/L1/oee?date=2026-09-04"
-    assert not endpoint_allowed(ok, patterns)                       # 기본은 쿼리 불가
-    assert endpoint_allowed(ok, patterns, query_keys={"date"})
-    assert not endpoint_allowed(ok, patterns, query_keys={"line"})  # 미등록 키
-    assert endpoint_allowed("/api/v1/lines/L1/oee?date=x&date=y", patterns,
-                            query_keys={"date"})
+    assert not endpoint_allowed("/api/v1/lines/L1/oee?date=2026-09-04", patterns)
+    assert endpoint_allowed("/api/v1/lines/L1/oee", patterns)
 
 
-def test_퍼센트_인코딩은_쿼리_값에서만_허용된다():
+def test_퍼센트_인코딩과_프래그먼트는_거부된다():
     patterns = {"/api/v1/lines/{line}/oee"}
-    # path의 %는 여전히 거부한다 — %2e%2e 경로 순회 우회로가 있다
-    assert not endpoint_allowed("/api/v1/lines/%2e%2e/oee", patterns, query_keys={"date"})
-    # 쿼리 값의 인코딩은 정상이다(ISO 시각의 콜론 등)
-    assert endpoint_allowed("/api/v1/lines/L1/oee?date=2026-09-04T00%3A00%3A00",
-                            patterns, query_keys={"date"})
-
-
-def test_프래그먼트는_쿼리를_허용해도_거부된다():
-    # #은 절단돼 등록되지 않은 끝점이 된다 — 쿼리 허용과 무관하게 막는다.
-    assert not endpoint_allowed("/api/v1/lines/L1#/oee", {"/api/v1/lines/{line}/oee"},
-                                query_keys={"date"})
+    assert not endpoint_allowed("/api/v1/lines/%2e%2e/oee", patterns)   # 경로 순회
+    assert not endpoint_allowed("/api/v1/lines/L1#/oee", patterns)      # 절단돼 다른 끝점
 
 
 def test_기존_거부는_그대로_유지된다():
@@ -171,3 +161,26 @@ def test_망가진_URL도_raise하지_않고_거부한다():
     # 파싱 도입이 무raise 규율을 main 대비 회귀시켰다.
     assert not endpoint_allowed("//[bad/x", {"/api/{x}/oee"})
     assert not endpoint_allowed("//[::1", {"/api/{x}/oee"})
+
+
+def test_판정한_문자열이_곧_경로가_아니면_거부된다():
+    # 문자를 하나씩 열거하는 방식은 세 번 뚫렸다(.. → ?#; → 스페이스). urlsplit이
+    # 무엇을 벗겨내든 "판정한 것 = 보내는 것"이 깨지면 거부하는 것이 불변식이다.
+    patterns = {"/api/v1/lines/{line}/oee"}
+    bad = [
+        " /api/v1/lines/L1/oee",        # 선두 스페이스 — urlsplit이 lstrip한다(0x20)
+        "\x00/api/v1/lines/L1/oee",
+        "/api/v1/lines/L1/oee#",        # 빈 프래그먼트 — fragment가 falsy라 안 걸렸다
+        "/api/v1/lines/L1/oee?",        # 빈 쿼리
+        "/api/v1/lines/L1/oee?x=1",
+        "http://evil/api/v1/lines/L1/oee",
+    ]
+    for ep in bad:
+        assert not endpoint_allowed(ep, patterns), f"{ep!r}가 통과했다"
+    assert endpoint_allowed("/api/v1/lines/L1/oee", patterns)
+
+
+def test_역슬래시는_거부된다():
+    # 일부 리버스 프록시가 \를 /로 정규화하면 순회가 성립한다 — ..를 막은 논리와 같다.
+    assert not endpoint_allowed("/api/v1/lines/L1\\..\\..\\admin/oee",
+                                {"/api/v1/lines/{line}/oee"})

@@ -65,7 +65,7 @@ def test_등재_항목은_메서드와_닫힌_body_스키마를_요구한다():
                                      "body_schema": {"part_code": "list[str]",
                                                      "line_code": "str"}}}})
     entry = target.entries["summary_prod"]
-    assert entry.method == "POST" and entry.query_keys == []
+    assert entry.method == "POST" and entry.query_schema == {}
 
 
 def test_쓰기_메서드는_등재할_수_없다():
@@ -124,3 +124,23 @@ def test_정상_경로는_자리표시자를_포함해_통과한다():
         target = RestTarget.model_validate({"base_url": "http://x",
                                             "entries": {"e": {"method": "POST", "path": ok}}})
         assert target.entries["e"].path == ok
+
+
+def test_등재_항목_이름은_locator를_흉내낼_수_없다():
+    # 이름을 "/oee"로 두고 check.probe를 명시하면 resolve_probe의 슬래시 휴리스틱과
+    # boot의 이름공간 분기를 동시에 우회한다 — 리뷰어가 target: "rest:/oee"를
+    # v1식 읽기 전용 GET으로 읽는데 실제로는 POST가 나간다.
+    from src.config.schema_site import RestTarget
+    for bad in ("/oee", "a/b", "rest:x", "a:b", "", " x", "x ", "/"):
+        with pytest.raises(ValidationError):
+            RestTarget.model_validate({
+                "base_url": "http://x",
+                "entries": {bad: {"method": "POST", "path": "/x"}}})
+
+
+def test_정상_항목_이름은_통과한다():
+    from src.config.schema_site import RestTarget
+    for ok in ("summary_prod", "mes-plan", "badge2"):
+        t = RestTarget.model_validate({"base_url": "http://x",
+                                       "entries": {ok: {"method": "POST", "path": "/x"}}})
+        assert ok in t.entries

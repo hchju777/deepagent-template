@@ -2,8 +2,9 @@
 
 I/O가 없어 실구현·스텁·기동 검증이 같은 규칙을 공유하고, 단위 테스트가 전부를 덮는다.
 """
+import math
 import re
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
 from src.knowledge.digest import canonical_digest
 from datetime import datetime, timezone
@@ -59,45 +60,40 @@ def filter_problems(filter):
     return problems
 
 
-def endpoint_allowed(endpoint, patterns, *, query_keys=frozenset()):
-    """토폴로지/등재 패턴과의 전체 일치 판정.
+def endpoint_allowed(endpoint, patterns):
+    """토폴로지 등록 끝점(GET)과의 전체 일치 판정.
 
-    문자 단위 거부에서 URL 파싱으로 바꿨다. 이전에는 `?`/`#`/`;`를 통째로 막아
-    정상 쿼리 파라미터(MES 점검이 요구한다)까지 못 쓰게 됐다 — 파싱하면 path와
-    query를 갈라 각각에 맞는 규칙을 적용할 수 있다.
+    **불변식: 판정한 문자열 전체가 곧 경로여야 한다.** 문자를 하나씩 열거해 막는
+    방식은 이 자리에서 세 번 뚫렸다 — `..` 순회, `?`/`#`/`;` 삼킴, 그리고 선두
+    스페이스(urlsplit이 lstrip하는 집합은 `\x00`–`\x20`인데 가드는 `< 0x20`만
+    막았다). 매번 원인이 같았다: **정규화된 것을 판정하고 원본을 전송한다.**
 
-    거부 규칙:
-    - scheme/netloc이 있으면(절대 URL) 거부 — base_url을 우회한다.
-    - fragment는 무조건 거부 — 절단돼 등록되지 않은 끝점이 된다(실증됨).
-    - path에 `%`가 있으면 거부 — `%2e%2e` 경로 순회 우회로.
-    - path 세그먼트에 `.`/`..`/`;`가 있으면 거부 — 순회와 매트릭스 파라미터.
-    - query 키가 query_keys에 없으면 거부. 기본값이 빈 집합이라 **등재하지 않은
-      호출은 지금까지와 똑같이 쿼리를 쓸 수 없다.**
+    그래서 `urlsplit(endpoint).path == endpoint`를 요구한다. urlsplit이 무엇을
+    벗겨내든(공백·제어문자), 어디로 옮기든(쿼리·프래그먼트·netloc) 두 값이
+    달라지므로 한 번에 걸린다. 새 우회 문자를 알아낼 필요가 없다.
 
-    `{자리표시자}`는 `[^/?#;]+`로 컴파일한다 — `[^/]+`는 구분자를 삼켜서
-    `/lines/L1?_method=DELETE&/oee`가 패턴에 매치되는 우회로를 만든다.
+    쿼리 파라미터가 필요한 점검은 등재 항목(`target.rest.entries`)으로 표현하고,
+    그쪽은 entry_call_problems가 `query_schema`로 판정한다.
+
+    나머지 거부 규칙(경로 순회·퍼센트 인코딩·매트릭스 파라미터·역슬래시)은
+    urlsplit이 건드리지 않아 위 불변식만으로는 안 걸리는 것들이다.
+
+    `{자리표시자}`는 `[^/?#;]+`로 컴파일한다 — `[^/]+`는 구분자를 삼킨다.
     """
-    # urlsplit은 개행·탭을 조용히 제거한다(WHATWG URL 규약). 판정은 정규화된
-    # 문자열을 보는데 httpx는 원본을 받으므로, 그대로 두면 "판정한 것과 보내는 것이
-    # 다르다"는 원래 버그와 같은 구조가 된다. 파싱 전에 거부한다.
-    if any(ch in endpoint for ch in "\r\n\t") or any(ord(ch) < 0x20 for ch in endpoint):
-        return False
     try:
         parts = urlsplit(endpoint)
     except ValueError:
         # urlsplit은 잘못된 IPv6 리터럴 등에 ValueError를 던진다. endpoint는
         # 서브에이전트 LLM이 정하고 두 어댑터의 호출은 try/except 밖이라, 여기서
-        # 새면 무raise 규율이 깨진다 — 파싱 도입이 만든 회귀다.
-        return False
-    if parts.scheme or parts.netloc or parts.fragment:
+        # 새면 무raise 규율이 깨진다.
         return False
     path = parts.path
-    if "%" in path or any(seg in (".", "..") or ";" in seg for seg in path.split("/")):
+    if path != endpoint:            # 벗겨졌거나 옮겨졌다 — 판정과 전송이 갈린다
         return False
-    if parts.query:
-        keys = {k for k, _ in parse_qsl(parts.query, keep_blank_values=True)}
-        if not keys or not keys <= set(query_keys):
-            return False
+    if "%" in path or "\\" in path:
+        return False
+    if any(seg in (".", "..") or ";" in seg for seg in path.split("/")):
+        return False
     for pattern in patterns:
         segs = re.split(r"\{[^/}]+\}", pattern)
         regex = "[^/?#;]+".join(re.escape(seg) for seg in segs)
@@ -115,7 +111,10 @@ def _is_exact(value, want: type) -> bool:
     if want is int and isinstance(value, bool):
         return False
     if want is float:                       # int는 float 자리에 허용한다(JSON 관례)
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        # NaN·inf는 JSON 직렬화가 거부한다 — 여기서 안 막으면 실구현만 error가 되고
+        # 스텁은 통과해, 테스트가 전부 스텁인 이 리포에서 갈라짐이 안 잡힌다.
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value))
     return isinstance(value, want)
 
 
@@ -170,10 +169,11 @@ def entry_call_problems(entry, params: dict) -> list[str]:
         # 포트 docstring이 "소켓에 나가기 전에 error로 거부한다"고 단정한다.
         # 계획 9의 해석기가 실패 시 None을 돌려주면 즉시 이 경로다.
         return [f"params는 dict여야 한다 (받은 타입: {type(params).__name__})"]
-    if entry.method == "GET":
-        unknown = sorted(set(params) - set(entry.query_keys))
-        return [f"허용되지 않은 쿼리 키: {unknown}"] if unknown else []
-    return entry_body_problems(params, entry.body_schema)
+    # GET도 POST와 같은 닫힌 스키마를 쓴다. 키만 보고 값을 안 보면 dict·list가
+    # 그대로 쿼리에 실려(파이썬 repr, 파라미터 증식) 우리가 의도하지 않은 요청이
+    # 나간다 — "닫힌 스키마를 통과해야 소켓에 나간다"가 반만 성립하던 자리다.
+    schema = entry.query_schema if entry.method == "GET" else entry.body_schema
+    return entry_body_problems(params, schema)
 
 
 def entry_evidence_source(method: str, path: str, params: dict) -> str:

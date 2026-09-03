@@ -16,7 +16,17 @@
     "redis": { "url": "${MX_GUMI_REDIS_URL}" },
     "mongo": { "url": "${MX_GUMI_MONGO_URL}", "db": "twin" },
     "kafka": { "bootstrap": "${MX_GUMI_KAFKA_BOOTSTRAP}" },
-    "rest":  { "base_url": "${MX_GUMI_API_BASE}" },
+    "rest":  {
+      "base_url": "${MX_GUMI_API_BASE}",
+      "auth": { "header": "x-dep-ticket", "value": "${MX_GUMI_API_TOKEN}" },
+      "entries": {
+        "summary_prod": {
+          "method": "POST", "path": "/summary/prod",
+          "body_schema": { "part_code": "list[str]", "line_code": "str" }
+        },
+        "mes_plan": { "method": "GET", "path": "/mes/plan", "query_schema": {"date": "str"} }
+      }
+    },
     "code":  { "repos": [ { "name": "twin-services", "path": "/opt/repos/twin-services" } ] }
   }
 }
@@ -37,6 +47,7 @@ MX_GUMI_MONGO_USER=twin_reader
 MX_GUMI_MONGO_PASSWORD=<실제 비밀번호>
 MX_GUMI_KAFKA_BOOTSTRAP=prod-kafka.internal:9092
 MX_GUMI_API_BASE=https://prod-twin-api.internal
+MX_GUMI_API_TOKEN=<실제 토큰>          # rest.auth.value가 참조한다
 ```
 
 `target.code.repos[].path`는 로컬에 체크아웃된 실제 git 레포 경로다 —
@@ -66,8 +77,36 @@ python -m src knowledge validate --live --config-root config --repo-root .
 기동 자체를 막지 않도록). CI에 대상 시스템 접근 권한이 있을 때만 켜라.
 
 Kafka는 `assign()`으로 파티션에 직접 붙어 컨슈머 그룹에 참여하지 않는다 —
-운영 중인 컨슈머 그룹의 오프셋에 영향을 주지 않는다. REST는 토폴로지에
-등록된 끝점(allowlist)만, GET만 허용된다.
+운영 중인 컨슈머 그룹의 오프셋에 영향을 주지 않는다.
+
+### REST 등재 항목 승인 — 사람이 읽는 것이 안전의 근거다
+
+REST는 두 경로로만 나간다:
+
+1. **토폴로지에 등록된 끝점의 GET** — 서브에이전트가 조사 중 부른다. 쿼리
+   파라미터를 붙일 수 없다.
+2. **`target.rest.entries`에 등재된 항목** — 순찰 점검이 `target: "rest:<이름>"`으로
+   부른다. **POST가 가능한 유일한 경로다.**
+
+등재제가 "완전 읽기 전용"을 지키는 방식은 자동 판정이 아니라 **사람의 승인**이다.
+목록이 짧아서 실제로 읽히는 것이 안전의 근거이므로, 실운영 전환 시 다음을
+**한 항목씩 눈으로 확인**하라:
+
+- [ ] 이 항목의 `path`가 **정말 읽기 전용 끝점인가.** 대상 팀에 확인했는가?
+      HTTP 메서드는 그것을 말해주지 않는다 — `POST /summary/prod`는 읽기지만
+      `POST /plan/update`는 쓰기이고, 코드는 둘을 구별할 수 없다.
+- [ ] `body_schema`가 **실제로 보낼 키만** 담고 있는가. 여유분을 넣지 마라 —
+      스키마에 있는 키는 나갈 수 있는 키다.
+- [ ] `query_schema`도 마찬가지 — 키와 타입 둘 다. 목록에 없는 키는 소켓 전에 거부된다.
+- [ ] 이 항목을 **실제로 참조하는 점검이 있는가.** 아무도 안 쓰는 등재 항목은
+      "아무도 생각하지 않는 체크박스"와 같아서, 승인의 의미를 희석시킨다.
+
+`git diff`로 `entries` 변경을 리뷰하는 것이 이 승인의 형태다 — 등재 목록은
+코드가 아니라 **결정의 기록**이다.
+
+`path`는 `/`로 시작하는 상대 경로여야 하고 `?`·`#`·`%`·`..`·`;`를 쓸 수 없다.
+config 검증에서 거부되므로 절대 URL로 `base_url`을 벗어나거나 쿼리를 경로에
+숨기는 것은 불가능하다.
 
 ## 3. LLM 게이트웨이 연결
 
@@ -135,6 +174,9 @@ python -m src patrol run --config-root config --repo-root .
 - [ ] 사이트마다 필요한 대상만 `target`에 채우고 `adapters: "real"`
 - [ ] `.env`에 실제 값(URL·계정·비밀번호) — `config/*.json`에는 `${...}` 참조만
 - [ ] Mongo 계정을 readonly 롤로 생성하고 `knowledge validate --live`로 확인
+- [ ] **`target.rest.entries`의 항목을 한 개씩 사람이 읽고 승인** — 각각이 정말
+      읽기 전용 끝점인지 대상 팀에 확인했는가(§2의 승인 절차)
+- [ ] 인증이 필요하면 `rest.auth` + `.env`의 토큰 키
 - [ ] `LLM_BASE_URL`/`LLM_API_KEY` + `app.json`의 `llm.profiles` 3종
 - [ ] `store.backend: "mongo"` + `AGENT_MONGO_URL`(대상 시스템과 별도 DB)
 - [ ] 필요하면 `report.mail` 켜기

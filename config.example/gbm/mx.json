@@ -43,6 +43,23 @@
           "min": 0,
           "max": 100
         }
+      },
+      "prod.badge_nonzero": {
+        "judge": "rule",
+        "schedule": {
+          "interval": "5m"
+        },
+        "target": "rest:summary_prod",
+        "params": {
+          "rule": "exists",
+          "field": "body.badge",
+          "body": {
+            "part_code": [
+              "P001"
+            ],
+            "line_code": "L1"
+          }
+        }
       }
     }
   },
