@@ -168,9 +168,14 @@ open → investigating → awaiting_human → closed
 investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡도록
 `owner` + `lease_until`(`investigations.lease_ttl_s`, 기본 900초)로 임차한다
 — `InvestigationWorker`는 조사 도중 `lease_ttl_s/3` 간격으로 keepalive를
-갱신한다. `awaiting_human`으로 파킹된 케이스는 `case resume --answer`로
-사람이 답을 넣거나, 데몬이 다음 순찰 사이클에 자동으로 재개를 시도한다
-(`awaiting_human_timeout_h` 초과 시 타임아웃 종결).
+갱신한다. `awaiting_human`으로 파킹된 케이스를 재개하는 경로는 **`case resume --answer`
+하나뿐이다** — 데몬은 `resume_once`를 부르지 않고, `requeue_open`도 `open`과
+lease가 만료된 `investigating`만 큐에 넣는다(`awaiting_human`은 대상이 아니다).
+사람이 답을 넣지 않으면 `awaiting_human_timeout_h`를 넘겨 `sweep_timeouts`가
+미해결로 종결한다. 데몬이 파킹 케이스를 자동으로 재개하려면 주기적 재스캔과
+프로세스 밖 명령 채널이 필요하고, 둘 다 v1에 없다(스펙 §5.2-F2가 "`case resume`은
+실행자가 아니라 클라이언트"라고 규정해 뒀지만 v1은 명령 채널이 없어 인라인
+실행자로 구현했다).
 
 케이스가 어떤 경로로 닫히든(데몬 자동 진행 / `chat` / `case resume`) **동일한
 발행 배선**을 탄다 — 보고서 파일을 먼저 쓰고, `report_ready` 이벤트를 내고,
