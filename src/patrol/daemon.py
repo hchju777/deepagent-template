@@ -80,7 +80,7 @@ class PatrolDaemon:
                 checkpointer, clock: Callable, judge_llm, budget: LlmBudget, owner: str,
                 timezone: str, on_event: Callable[[Any], None] | None = None,
                 report_cfg: ReportConfig = ReportConfig(), mail_sender: MailSenderPort | None = None,
-                events=None):
+                events=None, snapshots=None):
         self.app = app
         self.sites = sites
         self.store = store
@@ -97,6 +97,7 @@ class PatrolDaemon:
         self.report_cfg = report_cfg
         self.mail_sender = mail_sender   # None이면 report_cfg.mail.enabled로 SmtpSender/NullSender를 고른다
         self.events = events             # EventStorePort | None — 보존 스윕이 case_events도 걷는다
+        self.snapshots = snapshots       # VerdictSnapshotPort | None — 종결 시 판정 박제
         self.queue = CaseQueue()
         self.worker: InvestigationWorker | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -207,7 +208,8 @@ class PatrolDaemon:
                                  timeout_h=self.app.investigations.awaiting_human_timeout_h)
             await sweep_retention(repo=self.repo, store=self.store, ledger=self.ledger,
                                   checkpointer=self.checkpointer, clock=self.clock,
-                                  retention=self.app.store.retention, events=self.events)
+                                  retention=self.app.store.retention, events=self.events,
+                                  snapshots=self.snapshots)
             await retry_pending(sender=self._mail_sender(), ledger=self.ledger,
                                 cfg=self.report_cfg.mail, clock=self.clock,
                                 render=self._render_pending)
@@ -325,6 +327,7 @@ class PatrolDaemon:
             max_concurrent=self.app.investigations.max_concurrent,
             lease_ttl_s=self.app.investigations.lease_ttl_s, ledger=self.ledger,
             max_wall_clock_s=self.app.investigations.max_wall_clock_s,
+            snapshots=self.snapshots,
             knowledge_digests_for_site=self._digests_for_site, on_event=self.on_event,
             on_closed=self._publish_report)
         self.queue.requeue_open(self.repo, clock=self.clock)

@@ -74,7 +74,9 @@ from src.application.graph import build_engine
 from src.application.lifecycle import ENGINE_SCHEMA_VERSION, release_lease, transition
 from src.application.usecase import investigate_case, resume_case
 from src.domain.patrol import CheckOutcome
+from src.domain.snapshot import VerdictSnapshot
 from src.patrol.gate import evidence_refs_for_case
+from src.presentation.report_model import build_report_model
 
 
 def _dump_item(item):
@@ -155,7 +157,8 @@ class InvestigationWorker:
                 knowledge_digests_for_site: Callable[[str, str], dict[str, str]],
                 on_event: Callable[[Any], None] | None = None,
                 on_closed: Callable[[str], Awaitable] | None = None,
-                max_wall_clock_s: float | None = None):
+                max_wall_clock_s: float | None = None,
+                snapshots=None):
         self._queue = queue
         self._repo = repo
         self._store = store
@@ -169,6 +172,7 @@ class InvestigationWorker:
         self._knowledge_digests_for_site = knowledge_digests_for_site
         self._on_event = on_event
         self._max_wall_clock_s = max_wall_clock_s
+        self._snapshots = snapshots      # VerdictSnapshotPort | None
         self._on_closed = on_closed   # 계획 5 — 케이스가 닫힌 직후(성공/실패 종결 모두) 부르는 발행 훅
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
 
@@ -345,8 +349,44 @@ class InvestigationWorker:
         await close_case(record.id, repo=self._repo, checkpointer=self._checkpointer,
                          clock=self._clock, reason="조사 완료", discard_threads=False)
         self._emit_status(record.id, "closed")
+        self._record_snapshot(record.id, outcome="closed")
         await self._emit_closed(record.id)
         return "closed"
+
+    def _record_snapshot(self, case_id: str, *, outcome: str) -> None:
+        """종결 시점의 기계 판정을 박제한다 — retention이 Verdict를 지운 뒤에도 남는다.
+
+        기록 실패가 이미 끝난 종결을 뒤집지 않는다(발행 훅과 같은 계약). 순서도
+        같은 이유로 종결 뒤다 — 스냅샷을 남기려다 케이스가 안 닫히면 본말전도다.
+
+        verify_demoted를 ReportModel의 단계 판정에서 가져오는 이유는 그 규칙이 이미
+        한 곳에 있기 때문이다 — 여기서 verify_attempts를 다시 해석하면 보고서와
+        스냅샷이 언젠가 다른 말을 한다.
+        """
+        if self._snapshots is None:
+            return
+        try:
+            record = self._repo.get(case_id)
+            verdict = self._store.get_verdict(case_id)
+            model = build_report_model(record, verdict=verdict,
+                                       evidence=self._store.list_evidence(case_id),
+                                       case_file=self._store.get_case_file(case_id),
+                                       clock=self._clock)
+            verify_stage = next((s for s in model.stages if s.stage == "verify"), None)
+            self._snapshots.put(VerdictSnapshot(
+                case_id=case_id, closed_at=self._clock(), gbm=record.gbm, fct=record.fct,
+                fingerprint=record.fingerprint, target_locator=record.target_locator,
+                origin=record.origin, outcome=outcome,
+                verdict_type=verdict.verdict_type if verdict else None,
+                root_cause_component=(verdict.root_cause.component
+                                      if verdict and verdict.root_cause else None),
+                confidence=verdict.confidence if verdict else None,
+                rounds=model.round_no or 0, evidence_count=len(model.evidence),
+                task_error_rate=model.task_error_rate,
+                verify_demoted=bool(verify_stage and verify_stage.mark == "warn"),
+                knowledge_digests=self._knowledge_digests_for_site(record.gbm, record.fct)))
+        except Exception:                                          # noqa: BLE001
+            pass
 
     async def _salvage_case_file(self, record, case_id: str) -> None:
         """close_case가 스레드를 지우기 전에 체크포인트에서 조사 흔적을 구제한다.
@@ -413,6 +453,7 @@ class InvestigationWorker:
             await close_case(case_id, repo=self._repo, checkpointer=self._checkpointer,
                              clock=self._clock, reason=reason, discard_threads=True)
             self._emit_status(case_id, "closed", reason=reason)
+            self._record_snapshot(case_id, outcome="failed")
             await self._emit_closed(case_id)
         except Exception as close_exc:                              # noqa: BLE001
             self._log_failure(record, case_id, close_exc)

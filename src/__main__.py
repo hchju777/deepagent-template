@@ -82,6 +82,7 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     app, sites = assemble_sites(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
     p = build_persistence(app.store)
     store, repo, ledger, events = p.store, p.repo, p.ledger, p.events
+    snapshots = p.snapshots
     checkpointer = build_checkpointer(app.store)
 
     needs_judge_llm = any(check.judge in ("llm", "rule+llm")
@@ -107,7 +108,7 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
                           budget=budget, owner=owner, timezone=app.timezone,
                           on_event=_make_event_sink(events, _make_event_printer()),
                           report_cfg=app.report,
-                          mail_sender=mail_sender, events=events)
+                          mail_sender=mail_sender, events=events, snapshots=snapshots)
     asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
 
@@ -227,6 +228,7 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
 
     p = build_persistence(app.store)
     store, repo, ledger, events = p.store, p.repo, p.ledger, p.events
+    snapshots = p.snapshots
     try:
         record = repo.get(args.case_id)
     except KeyError:
@@ -276,6 +278,7 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         max_concurrent=app.investigations.max_concurrent,
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
         knowledge_digests_for_site=digests_for_site,
+        max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
         on_event=on_event, on_closed=on_closed)
 
     result = asyncio.run(worker.resume_once(args.case_id, args.answer))
@@ -459,6 +462,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
 
     p = build_persistence(app.store)
     store, repo, ledger, events = p.store, p.repo, p.ledger, p.events
+    snapshots = p.snapshots
     checkpointer = build_checkpointer(app.store)
     for site_rt in sites:
         site_rt.deps.store = store    # daemon.py 모듈 docstring과 동일한 불변식
@@ -479,6 +483,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
         max_concurrent=app.investigations.max_concurrent,
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
         knowledge_digests_for_site=digests_for_site,
+        max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
         on_event=on_event, on_closed=on_closed)
 
     symptom = args.symptom or input("증상을 설명해 주세요: ")

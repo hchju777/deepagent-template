@@ -465,3 +465,53 @@ async def test_구제가_불가능해도_케이스_파일에_사유가_남고_�
     case_file = store.get_case_file("c-1")
     assert case_file["partial"] is True and case_file["salvage_error"]
     assert case_file["plan_tasks"] == []
+
+
+async def test_정상_종결은_판정_스냅샷을_남긴다():
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {"topology": "d1"},
+                                 snapshots=snapshots)
+    assert await worker.run_once("c-1") == "closed"
+    snap = snapshots.get("c-1")
+    assert snap is not None and snap.outcome == "closed"
+    assert snap.verdict_type and snap.root_cause_component
+    assert snap.knowledge_digests == {"topology": "d1"}
+    assert snap.history_shown == []          # P8 전까지는 비어 있다
+
+
+async def test_실패_종결도_판정_스냅샷을_남긴다():
+    # 실패 종결을 빼면 분모에 생존 편향이 생긴다.
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    def broken_deps(g, f):
+        raise RuntimeError("deps 조립 실패")
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=broken_deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots)
+    assert await worker.run_once("c-1") == "failed"
+    snap = snapshots.get("c-1")
+    assert snap is not None and snap.outcome == "failed" and snap.verdict_type is None
+
+
+async def test_스냅샷_스토어가_없어도_종결은_그대로_된다():
+    # snapshots=None인 호출부(옛 테스트·CLI 일부)가 깨지면 안 된다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "closed"
