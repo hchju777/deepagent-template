@@ -299,3 +299,14 @@ def test_해석기가_쓰는_어댑터가_없으면_기동을_거부한다(tmp_p
         {"part_code": {"from": "mongo", "collection": "lines", "field": "part_code"}}))
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("mongo" in e.problem and "part_code" in e.problem for e in errors)
+
+
+def test_알_수_없는_시간대는_기동을_거부한다(tmp_path):
+    # app.timezone은 스케줄러와 clock 해석기가 둘 다 쓴다. 오타 하나면 매 점검이
+    # 죽는데 기동은 통과하던 상태였다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/app.json", json.dumps(
+        {"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}},
+         "timezone": "Asia/서울"}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("timezone" in e.problem for e in errors)

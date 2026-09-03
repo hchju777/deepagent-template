@@ -17,6 +17,7 @@ LLM에 맡기는 점검이 있는데 그 LLM 프로파일이 빈 문자열이면
 조용히 깨지거나 실LLM 호출 시점에야 뒤늦게 실패한다.
 """
 import asyncio
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +65,14 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         app_config = load_app_config(config_root, env=env)
     except ConfigError as exc:
         errors += [BootError("app", p) for p in exc.problems]
+
+    if app_config is not None:
+        # 스케줄러와 clock 해석기가 둘 다 쓴다 — 오타 하나면 매 점검이 죽는데
+        # 기동은 통과하던 자리다.
+        try:
+            ZoneInfo(app_config.timezone)
+        except Exception:                                          # noqa: BLE001
+            errors.append(BootError("app", f"timezone {app_config.timezone!r}을 해석할 수 없다"))
 
     needs_judge_llm = False
 

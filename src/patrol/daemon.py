@@ -134,6 +134,7 @@ class PatrolDaemon:
             if rt is None:
                 return
             outcome = await run_check(gbm, fct, name, check, adapters=rt.adapters,
+                                      timezone_name=self.timezone,
                                       store=self.store, clock=self.clock,
                                       llm=self.judge_llm, budget=self.budget)
             self.ledger.record_run(gbm, fct, name, outcome)

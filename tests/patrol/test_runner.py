@@ -181,3 +181,28 @@ async def test_잘린_이유가_증거까지_이어진다():
     rec = store.list_evidence(scratch_case_id("mx", "gumi", "c"))[-1]
     assert rec.complete is False
     assert "10" in (rec.truncated_reason or "")
+
+
+async def test_사이트_시간대가_해석기까지_도달한다():
+    # 시간대를 resolve_params 인자로만 열어 두고 배선하지 않으면 프로덕션에서
+    # 기본값 UTC로 떨어져 픽스가 무효가 된다 — 함수 인자가 아니라 실제 경로를 본다.
+    from src.config.schema_site import RestEntry
+    from src.domain.store import InMemoryCaseStore
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubRest
+    entries = {"e": RestEntry(method="POST", path="/x", body_schema={"date": "str"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /x": {"ok": 1}}, set(), entries, clock=lambda: T)
+    kst_morning = datetime(2026, 9, 3, 23, 30, tzinfo=timezone.utc)   # 09-04 08:30 KST
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body.ok"},
+        "resolve": {"date": {"from": "clock", "expr": "today"}}})
+    store = InMemoryCaseStore()
+    outcome = await run_check("mx", "gumi", "c", check, adapters=adapters, store=store,
+                              clock=lambda: kst_morning, llm=None, budget=None,
+                              timezone_name="Asia/Seoul")
+    assert outcome.status == "ok"
+    body = store.get_evidence(scratch_case_id("mx", "gumi", "c"),
+                              store.list_evidence(scratch_case_id("mx", "gumi", "c"))[-1].id)
+    assert body["request"]["params"] == {"date": "2026-09-04"}

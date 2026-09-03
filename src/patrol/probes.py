@@ -33,7 +33,8 @@ def _split_target(target: str | None) -> tuple[str, str] | None:
     return kind, rest
 
 
-async def rest_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def rest_get(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str = "UTC") -> ProbeResult:
     """target "rest:/path" → adapters.rest.get(path)."""
     try:
         if adapters.rest is None:
@@ -47,7 +48,8 @@ async def rest_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeR
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def redis_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def redis_get(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str = "UTC") -> ProbeResult:
     """target "redis:key" → adapters.redis.get(key)."""
     try:
         if adapters.redis is None:
@@ -61,7 +63,8 @@ async def redis_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> Probe
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def mongo_recent(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def mongo_recent(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str = "UTC") -> ProbeResult:
     """target "mongo:coll" → 최근 문서 find(sort=ts_field desc, limit=sample or 20)."""
     try:
         if adapters.mongo is None:
@@ -77,7 +80,8 @@ async def mongo_recent(adapters: AdapterSet, check: CheckConfig, *, clock) -> Pr
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str = "UTC") -> ProbeResult:
     """params["group"] → adapters.kafka.group_offsets(group)."""
     try:
         if adapters.kafka is None:
@@ -90,7 +94,8 @@ async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock) -> Probe
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock,
+                     timezone_name: str = "UTC") -> ProbeResult:
     """target "rest:<항목명>" → 해석기로 params를 만들어 adapters.rest.query 호출.
 
     해석 결과는 등재 스키마 검증을 **다시** 통과해야 소켓에 나간다(어댑터가 한다) —
@@ -107,7 +112,8 @@ async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock) -> Prob
         if not isinstance(static, dict):
             return _error(f"params.body는 dict여야 한다 (받은 타입: {type(static).__name__})",
                           clock)
-        resolved = await resolve_params(check.resolve, adapters=adapters, clock=clock)
+        resolved = await resolve_params(check.resolve, adapters=adapters, clock=clock,
+                                        timezone_name=timezone_name)
         if resolved.problems:
             # 전부-또는-전무(§2-N3): 하나라도 못 내면 호출하지 않는다. finding이
             # 아니라 error다 — 우리 쪽 실패가 "현장 이상"으로 둔갑하면 안 된다

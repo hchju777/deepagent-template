@@ -29,6 +29,7 @@ def _error(observed_at, msg: str, *, llm_calls: int = 0) -> CheckOutcome:
 async def run_check(
     gbm: str, fct: str, name: str, check: CheckConfig, *,
     adapters: AdapterSet, store, clock, llm=None, budget: LlmBudget | None = None,
+    timezone_name: str = "UTC",
 ) -> CheckOutcome:
     """점검 하나를 실행하고 3상(ok/finding/skipped) + error를 돌려준다.
 
@@ -43,7 +44,10 @@ async def run_check(
         probe_name = resolve_probe(check)
         if probe_name is None:
             return _error(clock(), "프로브 해석 불가")
-        result: ProbeResult = await PROBES[probe_name](adapters, check, clock=clock)
+        # 시간대를 프로브까지 잇는다 — 여기서 끊기면 clock 해석기가 UTC로
+        # 떨어져 아침 cron이 매일 전날 날짜를 보낸다(실측된 버그).
+        result: ProbeResult = await PROBES[probe_name](
+            adapters, check, clock=clock, timezone_name=timezone_name)
         observed_at = result.envelope.observed_at
         if result.status == "error":
             return _error(observed_at, result.error or "프로브 실행 실패")
