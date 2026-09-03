@@ -65,9 +65,19 @@ async def _stream_and_collect(graph, input_state, config, on_event: Callable[[En
     StateSnapshot.interrupts(LangGraph가 이미 태스크별 interrupt를 모아 노출하는
     필드)에서 복원한다. 이렇게 해야 워커의 `"__interrupt__" in result` 파킹
     판정이 스트리밍 경로에서도 그대로 유지된다.
+
+    round_counter(I1): select 노드는 자신의 부분상태에 round를 싣지 않으므로
+    (application/events.py 참고), 여기서 select 청크를 볼 때마다 +1 해 그
+    값을 round_hint로 map_update_to_events에 넘긴다 — round_started.data에
+    실제 라운드 번호가 실리게 하는 유일한 자리(스트리밍 루프)다.
     """
+    round_counter = 0
     async for update in graph.astream(input_state, config=config, stream_mode="updates"):
-        for event in map_update_to_events(update, case_id=case_id, clock=clock):
+        if "select" in update:
+            round_counter += 1
+        events = map_update_to_events(update, case_id=case_id, clock=clock,
+                                      round_hint=round_counter or None)
+        for event in events:
             try:
                 on_event(event)
             except Exception:                                          # noqa: BLE001

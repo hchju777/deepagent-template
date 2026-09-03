@@ -10,7 +10,7 @@ import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
 from dotenv import load_dotenv
 
@@ -255,12 +255,17 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
 
     checkpointer = build_checkpointer(app.store)
     owner = f"cli-{socket.gethostname()}-{os.getpid()}"
+    # C1/M4: chat·데몬과 같은 발행 배선(on_event/on_closed)을 _build_publisher로
+    # 얻어 워커에 넘긴다 — 예전엔 여기가 빠져 있어 case resume만 보고서·메일·
+    # 이벤트 없이 케이스를 닫았다(§5.1 "파일 먼저"·§5.4 F6·§5.2 이벤트 구독 미충족).
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, checkpointer, clock)
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
         checkpointer=checkpointer, clock=clock, owner=owner,
         max_concurrent=app.investigations.max_concurrent,
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
-        knowledge_digests_for_site=digests_for_site)
+        knowledge_digests_for_site=digests_for_site,
+        on_event=on_event, on_closed=on_closed)
 
     result = asyncio.run(worker.resume_once(args.case_id, args.answer))
     if result == "busy":
@@ -314,7 +319,30 @@ def _make_event_printer(print_fn=print) -> Callable[[EngineEvent], None]:
     return _sink
 
 
-async def _drive_chat(args, rt, repo, worker, symptom: str, clock, ask, app) -> int:
+def _build_publisher(app, sites, store, repo, ledger, checkpointer, clock
+                     ) -> tuple[Callable[[EngineEvent], None], Callable[[str], Awaitable[None]]]:
+    """발행용 PatrolDaemon 셸을 조립해 (on_event, on_closed) 쌍을 돌려준다(C1/M4).
+
+    데몬·chat·case resume 세 종결 경로 모두 "케이스가 닫히면 보고서(파일 먼저)·
+    report_ready 이벤트·메일이 나간다"는 계약을 똑같이 지켜야 한다(§5.1·§5.2·
+    §5.4). build()/run()은 절대 부르지 않는다 — 스케줄러를 기동하지 않고 그
+    인스턴스의 _publish_report 메서드만 워커의 on_closed로 재사용해, 발행
+    배선(예산·mail_sender 선택·render→write→이벤트→메일 순서)을 여기 한
+    곳에서만 조립한다. _run_chat과 _cmd_case_resume이 각자 이 조립을 따로
+    베끼면(예전 case_resume이 아예 빠뜨렸던 것처럼) 언젠가 또 하나가 놓친다.
+    """
+    print_event = _make_event_printer()
+    owner = f"cli-publisher-{socket.gethostname()}-{os.getpid()}"
+    budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
+    mail_sender = SmtpSender(app.report.mail) if app.report.mail.enabled else None
+    daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
+                          checkpointer=checkpointer, clock=clock, judge_llm=None,
+                          budget=budget, owner=owner, timezone=app.timezone,
+                          on_event=print_event, report_cfg=app.report, mail_sender=mail_sender)
+    return print_event, daemon._publish_report
+
+
+async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, app) -> int:
     """접수(intake) → CaseRecord 개설 → interaction_policy="interactive"로 조사 →
     awaiting_human 반복(stdin) → closed면 보고서 경로 출력. 어떤 경로로도 raise하지
     않는다(워커·intake 둘 다 무raise 계약) — 여기서 새로 던질 것이 없다."""
@@ -329,6 +357,14 @@ async def _drive_chat(args, rt, repo, worker, symptom: str, clock, ask, app) -> 
         symptom=intake_result.symptom, t0=now, target_locator=intake_result.target_locator,
         origin="human", status="open", created_at=now, updated_at=now)
     repo.save(record)
+    if intake_result.qa:
+        # I3: 접수 문답(intake_result.qa)을 워커의 human:answer와 같은 형태로
+        # Store에 박제한다 — 안 하면 사람이 접수 때 답한 사실이 엔진에 전혀
+        # 전달되지 않는다(데이터 손실). evidence_refs_for_case(gate.py)가 이
+        # case_id의 저장본 전부를 그래프 초기 증거로 실어 나르므로, 여기 박아
+        # 두면 첫 라운드부터 리드가 볼 수 있다. qa가 비면(재질문 없이 한 번에
+        # 접수됐으면) 아무것도 남기지 않는다.
+        store.put_evidence(case_id, "human:intake", {"qa": intake_result.qa}, as_of=now)
     print(f"케이스 {case_id} 접수 — 조사를 시작한다")
 
     result = await worker.run_once(case_id, interaction_policy="interactive")
@@ -362,10 +398,10 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     """접수 대화 CLI — 데몬을 띄우지 않고 사이트 하나(--gbm/--fct)에 대해 케이스를
     열고 대화형으로 조사·재개까지 한 프로세스 안에서 완주한다.
 
-    PatrolDaemon을 하나 조립하되 build()/run()은 부르지 않는다(스케줄러가 절대
-    기동하지 않는다) — 그 인스턴스의 _deps_for_site/_digests_for_site/
-    _publish_report만 재사용해 사이트 조립·보고서 발행 로직을 여기서 다시
-    베끼지 않는다("데몬 없이도 _publish_report 동등 경로를 CLI가 직접 호출").
+    발행(보고서·이벤트·메일)은 _build_publisher(C1/M4)가 조립한 (on_event,
+    on_closed)를 그대로 워커에 넘긴다 — 데몬 없이도 _publish_report 동등
+    경로를 이 CLI가 직접 타는 것이 목표라, `case resume`(_cmd_case_resume)과
+    이 조립을 중복해 베끼지 않는다.
     """
     config_root = Path(args.config_root)
     repo_root = Path(args.repo_root)
@@ -389,29 +425,30 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     for site_rt in sites:
         site_rt.deps.store = store    # daemon.py 모듈 docstring과 동일한 불변식
 
-    print_event = _make_event_printer()
-    owner = f"chat-{socket.gethostname()}-{os.getpid()}"
-    budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
-    mail_sender = SmtpSender(app.report.mail) if app.report.mail.enabled else None
-    daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
-                          checkpointer=checkpointer, clock=clock, judge_llm=None,
-                          budget=budget, owner=owner, timezone=app.timezone,
-                          on_event=print_event, report_cfg=app.report, mail_sender=mail_sender)
+    def deps_for_site(gbm, fct):
+        found = by_key.get((gbm, fct))
+        return found.deps if found is not None else None
 
+    def digests_for_site(gbm, fct):
+        found = by_key.get((gbm, fct))
+        return found.digests if found is not None else {}
+
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, checkpointer, clock)
+    owner = f"chat-{socket.gethostname()}-{os.getpid()}"
     worker = InvestigationWorker(
-        CaseQueue(), repo=repo, store=store, deps_for_site=daemon._deps_for_site,
+        CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
         checkpointer=checkpointer, clock=clock, owner=owner,
         max_concurrent=app.investigations.max_concurrent,
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
-        knowledge_digests_for_site=daemon._digests_for_site,
-        on_event=print_event, on_closed=daemon._publish_report)
+        knowledge_digests_for_site=digests_for_site,
+        on_event=on_event, on_closed=on_closed)
 
     symptom = args.symptom or input("증상을 설명해 주세요: ")
 
     async def ask(question: str) -> str:
         return input(f"[질문] {question}\n> ")
 
-    return asyncio.run(_drive_chat(args, rt, repo, worker, symptom, clock, ask, app))
+    return asyncio.run(_drive_chat(args, rt, repo, store, worker, symptom, clock, ask, app))
 
 
 def main(argv=None) -> int:

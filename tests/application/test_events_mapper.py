@@ -38,6 +38,18 @@ def test_노드명은_봉투_밖으로_새지_않고_미지의_노드는_무시�
     assert all("select" not in str(e.model_dump()) for e in dumped)
 
 
+def test_round_hint가_있으면_라운드_번호가_봉투에_실린다():
+    # I1: select 노드 자체는 부분상태에 round를 싣지 않는다 — round_hint를
+    # 주면(usecase._stream_and_collect가 select 청크마다 세는 카운터) 그걸
+    # round_started.data["round"]에 싣고, 안 주면(기존 호출부) 지금처럼 생략된다.
+    running = PlanTask(id="t-1", goal="g", role="data_prober", status="running")
+    events = map_update_to_events({"select": {"plan_tasks": [running]}},
+                                  case_id="c-1", clock=CLOCK, round_hint=2)
+    assert events[0].data["round"] == 2
+    plain = map_update_to_events({"select": {"plan_tasks": [running]}}, case_id="c-1", clock=CLOCK)
+    assert "round" not in plain[0].data
+
+
 def test_상태_전이와_보고서_준비_이벤트():
     s = case_status_event("c-1", "awaiting_human", clock=CLOCK, reason="질문 대기")
     assert s.event == "case_status_changed" and s.data == {"status": "awaiting_human",

@@ -16,19 +16,29 @@ from src.domain.cases import CaseStatus
 from src.domain.events import EngineEvent
 
 
-def map_update_to_events(update: dict, *, case_id: str, clock: Clock) -> list[EngineEvent]:
+def map_update_to_events(update: dict, *, case_id: str, clock: Clock,
+                         round_hint: int | None = None) -> list[EngineEvent]:
     """update의 {노드명: 부분상태}를 이벤트 봉투 목록으로 바꾼다.
 
     - select → round_started (dispatched: 이번에 running으로 굴린 태스크 id들)
     - execute → 태스크마다 task_finished
     - integrate → decision이 "ask"일 때만 question_raised
     - 그 외(frame/ask_human/conclude/verify)·미지의 노드·형태 이상 → 이벤트 없음
+
+    round_hint(I1): select 노드는 부분상태에 "round" 키를 싣지 않는다(엔진
+    State의 round는 integrate가 갱신한다) — 그래서 round_started.data에는
+    round가 실린 적이 없었다. 이 노드 자체는 그대로 두고, 스트리밍 쪽
+    (usecase._stream_and_collect)이 select 청크를 볼 때마다 세는 라운드
+    카운터를 round_hint로 넘긴다. partial에 이미 "round"가 있으면(미래에
+    노드가 직접 실어 보내는 경우) 그걸 우선하고, 없고 round_hint도 없으면
+    지금처럼 생략한다(캐리포워드 없음 — 호출부가 모르면 봉투도 모른다).
     """
     try:
         events: list[EngineEvent] = []
         for node, partial in update.items():
             if node == "select":
-                events.extend(_select_events(partial, case_id=case_id, clock=clock))
+                events.extend(_select_events(partial, case_id=case_id, clock=clock,
+                                             round_hint=round_hint))
             elif node == "execute":
                 events.extend(_execute_events(partial, case_id=case_id, clock=clock))
             elif node == "integrate":
@@ -39,11 +49,14 @@ def map_update_to_events(update: dict, *, case_id: str, clock: Clock) -> list[En
         return []
 
 
-def _select_events(partial: dict, *, case_id: str, clock: Clock) -> list[EngineEvent]:
+def _select_events(partial: dict, *, case_id: str, clock: Clock,
+                   round_hint: int | None = None) -> list[EngineEvent]:
     tasks = partial["plan_tasks"]
     data = {"dispatched": [task.id for task in tasks if task.status == "running"]}
     if "round" in partial:
         data["round"] = partial["round"]
+    elif round_hint is not None:
+        data["round"] = round_hint
     return [EngineEvent(event="round_started", case_id=case_id, at=clock(), data=data)]
 
 

@@ -24,15 +24,20 @@ _UNINVESTIGATED = {"pending", "cancelled"}   # §5: 미조사로 명시할 태�
 
 def render_report(record: CaseRecord, *, verdict: Verdict | None,
                    evidence: list[EvidenceRecord], case_file: dict | None,
-                   clock: Clock) -> str:
+                   clock: Clock, evidence_summaries: dict[str, str] | None = None) -> str:
     """스펙 §5.1의 5절 보고서를 md로 조립한다.
 
     순수 함수 — case_file의 형태가 기대와 어긋나도 raise하지 않고
     "없음"으로 채운 보고서(또는 실패 시 최소 안내문)를 반환한다.
+
+    evidence_summaries(증거 id → 요지 문자열)가 주어지면 §4 증거 표의 "요지" 열에
+    그것을 쓴다 — 주지 않으면(None, 기본값) §4는 body_digest 앞 12자를 보여주되
+    열 이름을 "본문 digest"로 정직하게 표기한다(digest는 요지가 아니다). 호출부
+    (daemon._publish_report)가 store.get_evidence로 본문을 다시 읽어 채운다.
     """
     try:
         return _render(record, verdict=verdict, evidence=evidence,
-                       case_file=case_file, clock=clock)
+                       case_file=case_file, clock=clock, evidence_summaries=evidence_summaries)
     except Exception as exc:            # noqa: BLE001 — 최후의 그물: 컨테이너 타입 가드(_as_list)를
         # 통과한 뒤에도 예상 못 한 형태가 있을 수 있다 — 그때도 조사 종결은 막지 않는다(계약)
         return (f"# 케이스 {getattr(record, 'id', '?')} 보고서\n\n"
@@ -66,7 +71,8 @@ def _as_list(value: object) -> list:
 
 
 def _render(record: CaseRecord, *, verdict: Verdict | None,
-           evidence: list[EvidenceRecord], case_file: dict | None, clock: Clock) -> str:
+           evidence: list[EvidenceRecord], case_file: dict | None, clock: Clock,
+           evidence_summaries: dict[str, str] | None = None) -> str:
     case_file = case_file if isinstance(case_file, dict) else {}
     plan_tasks = _as_list(case_file.get("plan_tasks"))
     hypotheses = _as_list(case_file.get("hypotheses"))
@@ -86,7 +92,7 @@ def _render(record: CaseRecord, *, verdict: Verdict | None,
         "",
         _section3(verdict),
         "",
-        _section4(evidence),
+        _section4(evidence, evidence_summaries),
         "",
         _section5(round_no, plan_tasks, hypotheses, verify_problems, qa_log),
     ]
@@ -163,18 +169,23 @@ def _section3(verdict: Verdict | None) -> str:
     return "## 3. 조치 권고\n" + body
 
 
-def _section4(evidence: list[EvidenceRecord]) -> str:
+def _section4(evidence: list[EvidenceRecord], evidence_summaries: dict[str, str] | None) -> str:
     if not evidence:
         return "## 4. 증거\n없음"
+    # evidence_summaries가 주어지면(있는 id만) "요지" 열을 쓰고, 아예 안 주어졌으면
+    # digest뿐이라는 걸 열 이름으로 정직하게 표기한다(I4) — 개별 id가 요지 조회에
+    # 실패해(daemon._publish_report가 건너뛴 경우) 빠져 있으면 그 행만 digest로 폴백한다.
+    column = "요지" if evidence_summaries is not None else "본문 digest"
     lines = ["## 4. 증거",
-             "| id | 출처 | as_of | 완전성 | effective_as_of | 요지 |",
+             f"| id | 출처 | as_of | 완전성 | effective_as_of | {column} |",
              "|---|---|---|---|---|---|"]
     for ev in evidence:
         as_of = ev.as_of.isoformat() if ev.as_of else "-"
         eff = ev.effective_as_of.isoformat() if ev.effective_as_of else "-"
         complete = "완전" if ev.complete else "⚠ 불완전"
         digest = (ev.body_digest or "")[:12]
-        lines.append(f"| {ev.id} | {ev.source} | {as_of} | {complete} | {eff} | {digest} |")
+        summary = (evidence_summaries or {}).get(ev.id, digest)
+        lines.append(f"| {ev.id} | {ev.source} | {as_of} | {complete} | {eff} | {summary} |")
     return "\n".join(lines)
 
 
@@ -196,12 +207,15 @@ def _section5(round_no: int | None, plan_tasks: list, hypotheses: list,
             continue
         status = t.get("status", "?")
         note = "미조사" if status in _UNINVESTIGATED else (t.get("error") or "")
-        task_rows.append(f"  | {t.get('id', '?')} | {t.get('role', '?')} | {status} | {note} |")
+        task_rows.append(f"| {t.get('id', '?')} | {t.get('role', '?')} | {status} | {note} |")
     if not task_rows:
         lines.append("  없음")
     else:
-        lines.append("  | id | 역할 | status | 비고 |")
-        lines.append("  |---|---|---|---|")
+        # M1: 표를 앞의 "- 태스크 현황:" 불릿 아래 들여쓰지 않는다 — 2칸 들여쓰기는
+        # 리스트 항목의 계속(paragraph continuation)으로 파싱돼 GFM이 표로 렌더하지
+        # 않는다. 들여쓰기를 빼 독립된 최상위 블록으로 만든다.
+        lines.append("| id | 역할 | status | 비고 |")
+        lines.append("|---|---|---|---|")
         lines.extend(task_rows)
 
     refuted = [h for h in hypotheses if isinstance(h, dict) and h.get("status") == "refuted"]

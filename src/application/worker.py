@@ -434,12 +434,13 @@ class InvestigationWorker:
                 return "busy"                                       # 레저 이벤트 없음(경합은 정상)
             if leased.status == "open":
                 record = transition(leased, "investigating", clock=self._clock)
-                self._emit_status(case_id, "investigating")
+                became_investigating = True
             else:
                 # requeue_open이 죽은 워커에게서 회수한 investigating 케이스 —
                 # 전이표에 investigating→investigating이 없으므로 재전이하지
                 # 않고 lease만(acquire_lease가 이미) 새로 잡은 채로 진행한다.
                 record = leased
+                became_investigating = False
 
             # deps_for_site를 스레드 등록보다 먼저 확인한다 — 미등록 사이트라
             # 아무것도 저장하지 않고 skip하면(레코드는 손대지 않은 채) 다음
@@ -452,6 +453,11 @@ class InvestigationWorker:
             thread_id = self._next_thread_id(record, case_id)
             record = self._register_thread(record, thread_id)
             self._repo.save(record)
+            # I2: 저장 뒤에야 emit한다 — 저장 전에 내면(미등록 사이트로 skip될 경우
+            # 등) 저장이 아예 안 일어난 record에 대해 "investigating" 이벤트만
+            # 나가는 유령 전이가 생긴다.
+            if became_investigating:
+                self._emit_status(case_id, "investigating")
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
             case = record.to_case().model_copy(update={"knowledge_digests": digests})
@@ -485,7 +491,6 @@ class InvestigationWorker:
             if leased is None:
                 return "busy"
             record = transition(leased, "investigating", clock=self._clock)
-            self._emit_status(case_id, "investigating")
 
             deps = self._deps_for_site(record.gbm, record.fct)
             if deps is None:
@@ -499,9 +504,13 @@ class InvestigationWorker:
                               and record.thread_versions.get(latest_thread_id)
                               == ENGINE_SCHEMA_VERSION)
 
+            # I2: 두 분기 모두 emit을 자기 repo.save 바로 뒤로 미룬다 — deps_for_site가
+            # None이면(위에서 이미 skip) 이 아래로 내려오지 않으므로 저장 없는
+            # "investigating" 유령 이벤트가 나가지 않는다.
             if version_matches:
                 initial_evidence = evidence_refs_for_case(self._store, case_id)
                 self._repo.save(record)
+                self._emit_status(case_id, "investigating")
                 record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, latest_thread_id, initial_evidence,
                     resume=answer)
@@ -515,6 +524,7 @@ class InvestigationWorker:
                 fresh_thread_id = self._next_thread_id(record, case_id)
                 record = self._register_thread(record, fresh_thread_id)
                 self._repo.save(record)
+                self._emit_status(case_id, "investigating")
                 initial_evidence = evidence_refs_for_case(self._store, case_id)
                 record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, fresh_thread_id, initial_evidence,

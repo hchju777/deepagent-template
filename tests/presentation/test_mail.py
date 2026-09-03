@@ -82,6 +82,20 @@ async def test_재발송은_기록된_수신자에게_간다():
     assert sender.sent[-1][1] == ["b@y"]                # 기록된 target 우선
 
 
+async def test_비활성_상태의_스윕은_건드리지_않고_0을_돌려준다():
+    # M2: retry_pending이 cfg.enabled를 안 보면, 메일을 끈 뒤에도 스윕이
+    # NullSender로 "보내고" mark_sent를 찍어 "보낸 적 없는 발송"을 레저에 남긴다.
+    ledger = InMemoryLedger()
+    ledger.record_send("report:c-1", kind="report", target="b@y", at=T)   # 켜져 있을 때 남긴 pending
+    off = MailConfig()                                        # enabled=False(기본값)
+    sender = RecordingSender()
+    done = await retry_pending(sender=sender, ledger=ledger, cfg=off, clock=lambda: T,
+                               render=lambda rec: ("제목", "본문"))
+    assert done == 0
+    assert sender.sent == []                                  # NullSender조차 "보내지" 않았다
+    assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-1"]   # pending 그대로
+
+
 def test_메일을_켜면_host와_recipients가_필요하다():
     import pytest
     from pydantic import ValidationError

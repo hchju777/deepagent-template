@@ -10,11 +10,18 @@ verdict_type)만 — md 텍스트 매칭은 하지 않는다(템플릿을 고칠
 judge llm만 build_chat_model로 바꿔 별도 스크립트에서 수동 실행한다.
 
 두 시나리오 모두 run_check → admit_finding → worker.run_once(→resume_once) →
-render_report/write_report까지 전 구간을 돈다 — PatrolDaemon 없이 조각을
-직접 조립한다(브리프: "run_check → admit_finding → worker.run_once → 보고서
-파일"). 보고서는 ReportConfig() 기본값(output_dir="output", gitignore됨)으로
-실제 output/에 남는다 — 완료 기준이 "보고서 파일이 5절을 갖춘 채 output/에
-남는다"를 요구한다.
+실제 발행 배선(worker.on_closed=daemon._publish_report)까지 전 구간을 돈다
+(M11) — 예전엔 이 파일의 _publish 헬퍼가 render_report/write_report를 직접
+다시 불러 발행을 흉내냈을 뿐이라, "전 구간을 돈다"는 말이 실제로는 발행
+훅(on_closed)을 한 번도 태우지 않았다. _publish_daemon이 build()/run()은
+부르지 않는 최소 PatrolDaemon을 조립해 그 _publish_report만 워커에 붙인다 —
+데몬·chat·case resume과 같은 발행 경로다. 보고서는 ReportConfig() 기본값
+(output_dir="output", gitignore됨) 아래 시나리오별 하위 디렉터리에 남는다 —
+두 시나리오 모두 자기만의 InMemoryCaseRepository에서 첫 케이스가 "c-1"이
+되므로(카운터가 인스턴스별 1부터 시작), 하위 디렉터리를 안 나누면 나중에
+실행되는 시나리오가 먼저 실행된 시나리오의 output/c-1.md를 덮어써 "각각
+보고서 파일이 남는다"는 완료 기준을 어긴다. 완료 기준이 "보고서 파일이
+5절을 갖춘 채 output/에 남는다"를 요구한다.
 
 증거 id 예측: run_subagent은 서브에이전트가 스스로 적은 evidence_ids를
 신뢰하지 않고 도구가 실제로 store.put_evidence로 만든 id로 통째로 교체한다
@@ -33,18 +40,19 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from src.application.deps import EngineDeps
 from src.application.worker import CaseQueue, InvestigationWorker
-from src.config.schema_app import EngineConfig, ReportConfig
+from src.config.schema_app import AppConfig, EngineConfig, LlmConfig, LlmProfiles, ReportConfig
 from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.cases import InMemoryCaseRepository
 from src.domain.store import InMemoryCaseStore
 from src.infrastructure.factory import StubSeeds, build_adapters
 from src.infrastructure.llm import ScriptedLLM
 from src.knowledge.topology import Topology
+from src.patrol.daemon import PatrolDaemon
 from src.patrol.gate import admit_finding
 from src.patrol.ledger import InMemoryLedger
 from src.patrol.llm_judge import LlmBudget
 from src.patrol.runner import run_check
-from src.presentation.report import render_report, write_report
+from src.presentation.mail import NullSender
 from tests.application.test_subagents import ToolFake
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
@@ -69,23 +77,20 @@ def _report(evidence_ids: list[str], summary: str = "확인") -> AIMessage:
     return AIMessage(content=f'{{"status": "ok", "summary": "{summary}", "evidence_ids": [{ids}]}}')
 
 
-def _publish(repo, store, case_id: str, clock, *, file_stem: str) -> Path:
-    """render_report/write_report로 보고서를 낸다(daemon._publish_report와 같은
-    소스·순서 — 여기서는 PatrolDaemon 없이 직접 부른다). 파일 경로를 돌려준다.
+def _publish_daemon(repo, store, ledger, clock, *, output_dir: str, owner: str) -> PatrolDaemon:
+    """실제 발행 경로(render_report → write_report → 메일)를 쓰는 최소 PatrolDaemon(M11).
 
-    file_stem을 파일명에만 쓰고 case_id는 그대로 record 조회에 쓴다 — 두
-    시나리오 모두 자기만의 InMemoryCaseRepository에서 처음 여는 케이스라
-    둘 다 case_id가 "c-1"이 된다(카운터가 인스턴스별로 1부터 시작). 파일명이
-    case_id 그대로면 두 번째로 실행되는 시나리오가 첫 번째의 output/c-1.md를
-    덮어써 "각각 보고서 파일이 남는다"는 완료 기준을 어긴다.
+    build()/run()은 절대 부르지 않는다(스케줄러를 기동하지 않는다) — 이
+    인스턴스의 _publish_report만 워커의 on_closed로 재사용해, 벤치도 데몬·
+    chat·case resume과 똑같은 발행 배선을 타게 한다. sites=[]는 안전하다 —
+    _publish_report는 repo/store/report_cfg만 읽고 sites는 쓰지 않는다.
     """
-    record = repo.get(case_id)
-    verdict = store.get_verdict(case_id)
-    text = render_report(record, verdict=verdict, evidence=store.list_evidence(case_id),
-                         case_file=store.get_case_file(case_id), clock=clock)
-    path = write_report(text, output_dir=ReportConfig().output_dir, case_id=file_stem)
-    assert path, "보고서 발행 실패 — write_report가 빈 문자열을 돌려줬다"
-    return Path(path)
+    app = AppConfig(llm=LlmConfig(profiles=LlmProfiles(judge="j", subagent="s", lead="l")))
+    return PatrolDaemon(
+        app=app, sites=[], store=store, repo=repo, ledger=ledger, checkpointer=InMemorySaver(),
+        clock=clock, judge_llm=None, budget=LlmBudget(1000, clock=clock), owner=owner,
+        timezone="Asia/Seoul", report_cfg=ReportConfig(output_dir=output_dir),
+        mail_sender=NullSender())
 
 
 # ── A.1: 룰 탐지 — "OEE 512%"(있을 수 없는 값) ──────────────────────────────
@@ -142,10 +147,14 @@ async def test_A1_OEE_512퍼센트는_plan_sync_stale_data로_귀결되고_보�
             _mongo_call("twin_state"), _report(["ev-2"]),
             _redis_call("plan:6:today"), _report(["ev-3"])])),
         adapters=adapters, store=store, topology=_TOPO_A1, engine_cfg=EngineConfig(parallel_width=1))
+    daemon = _publish_daemon(repo, store, ledger, lambda: T,
+                             output_dir=str(Path(ReportConfig().output_dir) / "bench-a1"),
+                             owner="bench-a1-publish")
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=lambda g, f: deps,
         checkpointer=InMemorySaver(), clock=lambda: T, owner="bench-a1", max_concurrent=1,
-        lease_ttl_s=900, ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+        lease_ttl_s=900, ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+        on_closed=daemon._publish_report)
 
     result = await worker.run_once(case_id, interaction_policy="autonomous")
     assert result == "closed"
@@ -153,8 +162,9 @@ async def test_A1_OEE_512퍼센트는_plan_sync_stale_data로_귀결되고_보�
     verdict = store.get_verdict(case_id)
     assert verdict.root_cause.component == "plan-sync"
     assert verdict.verdict_type == "stale_data"
+    assert verdict.confidence == "high"                # M12: verify 가드레일을 명시 술어로
 
-    path = _publish(repo, store, case_id, lambda: T, file_stem="bench-a1-oee-512pct")
+    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.md"
     text = path.read_text(encoding="utf-8")
     for heading in _REPORT_SECTIONS:
         assert heading in text
@@ -163,15 +173,22 @@ async def test_A1_OEE_512퍼센트는_plan_sync_stale_data로_귀결되고_보�
 # ── A.2: LLM 탐지 — "멈춘 라인이 생산을 한다"(모든 값이 각자 정상) ────────────
 # 부록 A.2: twin.consistency(judge=llm)가 라인 12의 (상태 STOP, 생산량 증가)
 # 모순을 잡는다 → 조사는 equip-sync 파티션 12가 오프셋 정지해 상태 캐시가
-# 멎었다는 결론. park→resume 구간에서 resume_case 자체가 실패하는 상황을
-# 강제해(체크포인트 역직렬화 실패 등을 흉내) worker의 F3(재개 실패 복구, I4)
-# 경로 — 스레드 폐기 → 사람의 답을 evidence(human:answer)로 박제 → 새 스레드로
-# investigate_case 재시작 — 를 실제로 통과시킨다. 계획 4b가 이 경로를 손대지
-# 않고 파킹해뒀던 지점이다(worker.py 모듈 docstring 참고).
+# 멎었다는 결론. park→resume 구간은 테스트 둘로 나눈다(M12 — 예전엔 A.2가
+# resume_case를 항상 강제 실패시켜 "정상 재개"를 한 번도 돌지 않았다):
+#   1) 정상 재개(아래) — park → answer → resume_once가 그대로 성공해 conclude까지
+#      이어지는, F3 없는 해피패스.
+#   2) F3 강제(그 아래) — resume_case 자체가 실패하는 상황을 강제해(체크포인트
+#      역직렬화 실패 등을 흉내) worker의 F3(재개 실패 복구, I4) 경로 — 스레드
+#      폐기 → 사람의 답을 evidence(human:answer)로 박제 → 새 스레드로
+#      investigate_case 재시작 — 를 실제로 통과시킨다. 계획 4b가 이 경로를
+#      손대지 않고 파킹해뒀던 지점이다(worker.py 모듈 docstring 참고).
 #
-# 증거 순번: ev-1=admit_finding이 복사한 mongo:twin_state 스냅샷,
-# ev-2=1차 시도 라운드1 mongo_find, ev-3=F3 재시작이 박제한 human:answer,
-# ev-4=재시작된 조사(2차 시도) 라운드1 mongo_find — conclude가 인용한다.
+# 증거 순번(정상 재개): ev-1=admit_finding이 복사한 mongo:twin_state 스냅샷,
+# ev-2=라운드1 mongo_find — conclude가 인용한다(라운드2는 새 태스크 없이
+# 곧장 conclude라 추가 증거가 없다).
+# 증거 순번(F3 강제): ev-1=admit_finding이 복사한 스냅샷, ev-2=1차 시도
+# 라운드1 mongo_find, ev-3=F3 재시작이 박제한 human:answer, ev-4=재시작된
+# 조사(2차 시도) 라운드1 mongo_find — conclude가 인용한다.
 _CHECK_A2 = CheckConfig.model_validate({
     "judge": "llm", "schedule": {"interval": "12h"}, "target": "mongo:twin_state", "params": {}})
 _SITE_A2 = SiteConfig.model_validate({"target": {"mongo": {"url": "mongodb://x:27017"}}})
@@ -190,11 +207,73 @@ _FRAME_A2_2 = ('{"hypotheses": [{"id": "h-2", "statement": "equip-sync 파티션
               '"tasks": [{"id": "t-2", "goal": "equip-sync 파티션별 오프셋 확인", '
               '"role": "data_prober"}]}')
 _INTEGRATE_CONCLUDE_A2 = '{"decision": "conclude"}'
+_VERDICT_A2_NORMAL = ('{"verdict_type": "stale_data", "confidence": "high", '
+                      '"narrative": "equip-sync가 파티션 12 소비를 멈춰 설비 상태 캐시 갱신이 '
+                      '중단됐다 — since와 오프셋 정지 시각이 일치한다.", '
+                      '"root_cause": {"component": "equip-sync", "evidence_ids": ["ev-2"]}, '
+                      '"recommendations": ["파티션 재기동/재할당"]}')
 _VERDICT_A2 = ('{"verdict_type": "stale_data", "confidence": "high", '
               '"narrative": "equip-sync가 파티션 12 소비를 멈춰 설비 상태 캐시 갱신이 '
               '중단됐다 — since와 오프셋 정지 시각이 일치한다.", '
               '"root_cause": {"component": "equip-sync", "evidence_ids": ["ev-4"]}, '
               '"recommendations": ["파티션 재기동/재할당", "kafka.lag 룰에 파티션별 정체 검사 추가"]}')
+
+
+async def test_A2_멈춘_라인은_정상_재개로도_equip_sync_stale_data로_귀결된다():
+    # M12: 정상 park→answer→resume 1회 — resume_case가 강제 실패 없이 그대로
+    # 성공하는 해피패스를 실제로 돈다(F3 경로는 아래 테스트가 따로 유도한다).
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    seeds = StubSeeds(mongo_collections={
+        "twin_state": [{"line": 12, "status": "STOP", "since": "04:10", "qty_per_hour": 60}]})
+    adapters = build_adapters(_SITE_A2, _TOPO_A2, clock=lambda: T, stub_seeds=seeds)
+    judge_llm = ScriptedLLM([_JUDGE_A2])
+
+    outcome = await run_check("mx", "gumi", "twin.consistency", _CHECK_A2, adapters=adapters,
+                              store=store, clock=lambda: T, llm=judge_llm,
+                              budget=LlmBudget(1000, clock=lambda: T))
+    assert outcome.status == "finding"
+
+    admit = admit_finding(outcome.finding, repo=repo, store=store, clock=lambda: T)
+    assert admit.action == "opened"
+    case_id = admit.case_id
+
+    # 라운드1(t-1)이 ev-2를 남기고 ask → interrupt. resume하면 integrate가 새
+    # 태스크 없이 곧장 conclude를 낸다 — root_cause는 실제로 존재하는 ev-2를
+    # 인용한다(ev-1은 admit_finding이 복사한 finding 스냅샷).
+    deps = EngineDeps(
+        lead_llm=ScriptedLLM([_FRAME_A2_1, _ASK_A2, _INTEGRATE_CONCLUDE_A2, _VERDICT_A2_NORMAL]),
+        subagent_llm=ToolFake(messages=iter([_mongo_call("twin_state"), _report(["ev-2"])])),
+        adapters=adapters, store=store, topology=_TOPO_A2, engine_cfg=EngineConfig(parallel_width=1))
+    daemon = _publish_daemon(repo, store, ledger, lambda: T,
+                             output_dir=str(Path(ReportConfig().output_dir) / "bench-a2-normal"),
+                             owner="bench-a2-normal-publish")
+    worker = InvestigationWorker(
+        CaseQueue(), repo=repo, store=store, deps_for_site=lambda g, f: deps,
+        checkpointer=InMemorySaver(), clock=lambda: T, owner="bench-a2-normal", max_concurrent=1,
+        lease_ttl_s=900, ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+        on_closed=daemon._publish_report)
+
+    parked = await worker.run_once(case_id, interaction_policy="interactive")
+    assert parked == "awaiting_human"
+    question = repo.get(case_id).question
+    assert question == "라인 12가 계획된 점검 중인가요?"
+
+    resumed = await worker.resume_once(case_id, "계획된 점검 아님")
+    assert resumed == "closed"
+
+    restart_events = [o for o in ledger.runs("mx", "gumi", f"worker:{case_id}")
+                      if o.error and "F3 재시작" in o.error]
+    assert restart_events == []                          # 강제 실패 없이 정상 재개했다
+
+    verdict = store.get_verdict(case_id)
+    assert verdict.root_cause.component == "equip-sync"
+    assert verdict.verdict_type == "stale_data"
+    assert verdict.confidence == "high"                  # M12: verify 가드레일을 명시 술어로
+
+    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.md"
+    text = path.read_text(encoding="utf-8")
+    for heading in _REPORT_SECTIONS:
+        assert heading in text
 
 
 async def test_A2_멈춘_라인은_park_resume의_F3_경로를_거쳐_equip_sync_stale_data로_귀결된다(
@@ -221,10 +300,14 @@ async def test_A2_멈춘_라인은_park_resume의_F3_경로를_거쳐_equip_sync
             _mongo_call("twin_state"), _report(["ev-2"]),
             _mongo_call("twin_state"), _report(["ev-4"])])),
         adapters=adapters, store=store, topology=_TOPO_A2, engine_cfg=EngineConfig(parallel_width=1))
+    daemon = _publish_daemon(repo, store, ledger, lambda: T,
+                             output_dir=str(Path(ReportConfig().output_dir) / "bench-a2-f3"),
+                             owner="bench-a2-f3-publish")
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=lambda g, f: deps,
         checkpointer=InMemorySaver(), clock=lambda: T, owner="bench-a2", max_concurrent=1,
-        lease_ttl_s=900, ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+        lease_ttl_s=900, ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+        on_closed=daemon._publish_report)
 
     parked = await worker.run_once(case_id, interaction_policy="interactive")
     assert parked == "awaiting_human"
@@ -259,8 +342,9 @@ async def test_A2_멈춘_라인은_park_resume의_F3_경로를_거쳐_equip_sync
     verdict = store.get_verdict(case_id)
     assert verdict.root_cause.component == "equip-sync"
     assert verdict.verdict_type == "stale_data"
+    assert verdict.confidence == "high"                  # M12: verify 가드레일을 명시 술어로
 
-    path = _publish(repo, store, case_id, lambda: T, file_stem="bench-a2-stopped-line")
+    path = Path(daemon.report_cfg.output_dir) / f"{case_id}.md"
     text = path.read_text(encoding="utf-8")
     for heading in _REPORT_SECTIONS:
         assert heading in text

@@ -130,7 +130,13 @@ async def retry_pending(*, sender: MailSenderPort, ledger: LedgerPort, cfg: Mail
 
     실패한 건은 레저에 그대로 pending으로 남아 다음 스윕이 다시 집는다
     (record_send를 다시 부르지 않는다 — 이미 기록돼 있다).
+
+    cfg.enabled가 False면(M2) 곧장 0을 돌려주고 아무것도 건드리지 않는다 —
+    메일을 끈 뒤에도 이 스윕이 NullSender로 계속 "보내고" mark_sent를 찍으면
+    실제로는 아무도 받지 못한 발송이 레저엔 sent로 남는다.
     """
+    if not cfg.enabled:
+        return 0
     done = 0
     for record in ledger.pending_sends():
         if record["kind"] != "report":     # F3: 다른 채널(향후 확장분)이 SMTP로 새지 않게

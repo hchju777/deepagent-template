@@ -80,6 +80,23 @@ def test_형태가_망가진_케이스파일에서도_5절_구조는_지킨다()
     assert "plan-sync" in text                    # 판정은 정상 렌더
 
 
+def test_evidence_summaries가_있으면_요지_열에_실리고_없으면_digest로_정직하게_표기한다():
+    # I4: §4 "요지" 열은 원래 body_digest[:12]였다(요지가 아니다) — evidence_summaries가
+    # 주어지면 그걸 쓰고, id가 그 딕셔너리에 없으면(개별 조회 실패 등) digest로
+    # 폴백한다. 아예 안 주어지면 열 이름을 "본문 digest"로 정직하게 바꾼다.
+    with_summaries = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE,
+                                   case_file=CASE_FILE, clock=lambda: T,
+                                   evidence_summaries={"ev-1": "OEE 조회 응답 요약"})
+    assert "요지" in with_summaries and "본문 digest" not in with_summaries
+    assert "OEE 조회 응답 요약" in with_summaries
+    assert "b" * 12 in with_summaries          # ev-2는 딕셔너리에 없어 digest로 폴백
+
+    without_summaries = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE,
+                                      case_file=CASE_FILE, clock=lambda: T)
+    assert "본문 digest" in without_summaries and "요지" not in without_summaries
+    assert "a" * 12 in without_summaries and "b" * 12 in without_summaries
+
+
 def test_항목이_전부_비dict면_없음을_낸다():
     junk = {"plan_tasks": [1, "x"], "hypotheses": [None], "round": 1,
             "qa_log": [], "verify_problems": []}

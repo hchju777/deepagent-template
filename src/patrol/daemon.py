@@ -213,13 +213,27 @@ class PatrolDaemon:
     def _render_case_report(self, case_id: str) -> str:
         """repo+store에서 케이스 판정·증거·케이스 파일을 다시 읽어 보고서 본문을 조립한다.
         _publish_report와 재시도 스윕(_render_pending)이 공유한다 — 재시도 시점에는 파일이
-        아니라 이 함수로 다시 렌더링해 최신 상태를 반영한다(스펙 §5.4)."""
+        아니라 이 함수로 다시 렌더링해 최신 상태를 반영한다(스펙 §5.4).
+
+        evidence_summaries(I4): §4 "요지" 열을 body_digest가 아니라 실제 본문에서
+        채우려고 store.get_evidence로 각 증거 본문을 다시 읽어 repr을 120자로
+        자른다. 개별 증거 하나가 조회에 실패해도(예: 저장소 이상) 그 id만
+        건너뛴다 — render_report는 딕셔너리에 없는 id를 digest로 폴백하므로
+        보고서 조립 자체를 막지 않는다.
+        """
         record = self.repo.get(case_id)
         verdict = self.store.get_verdict(case_id)
         evidence = self.store.list_evidence(case_id)
         case_file = self.store.get_case_file(case_id)
+        evidence_summaries: dict[str, str] = {}
+        for r in evidence:
+            try:
+                evidence_summaries[r.id] = repr(self.store.get_evidence(case_id, r.id))[:120]
+            except Exception:                                      # noqa: BLE001 — 개별 실패만 건너뛴다
+                pass
         return render_report(record, verdict=verdict, evidence=evidence,
-                             case_file=case_file, clock=self.clock)
+                             case_file=case_file, clock=self.clock,
+                             evidence_summaries=evidence_summaries)
 
     def _render_pending(self, record: dict) -> tuple[str, str]:
         """retry_pending의 render 콜백 — send_id("report:{case_id}")에서 case_id를

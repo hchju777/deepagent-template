@@ -165,10 +165,12 @@ async def test_ask는_interrupt로_멈추고_resume으로_conclude까지_이어�
 # ── 계획 5 스모크: on_event를 준 실제 LangGraph 왕복 ─────────────────────────
 # tests/application/test_usecase_stream.py는 FakeStreamEngine으로 astream/aget_state
 # 계약(호출 시그니처·반환 형태)만 결정론으로 검증한다 — 실제 LangGraph의
-# StateSnapshot.tasks[i].interrupts에서 "__interrupt__"를 복원하는 부분은 그 가짜가
-# tasks=()로만 흉내내므로 커버하지 못한다. 여기서는 build_engine이 만든 진짜
-# 컴파일 그래프로 ask→interrupt→resume 왕복을 on_event와 함께 돌려, 스트리밍 경로가
-# ainvoke 경로와 같은 최종 dict(및 __interrupt__ 계약)를 내는지 실증한다.
+# StateSnapshot.interrupts(usecase._stream_and_collect가 getattr(state, "interrupts", ())로
+# 읽는 필드)에서 "__interrupt__"를 복원하는 부분은 그 가짜가 이 속성 자체를
+# 흉내내지 않으므로(tasks=()만 준다) 커버하지 못한다. 여기서는 build_engine이
+# 만든 진짜 컴파일 그래프로 ask→interrupt→resume 왕복을 on_event와 함께 돌려,
+# 스트리밍 경로가 ainvoke 경로와 같은 최종 dict(및 __interrupt__ 계약)를 내는지
+# 실증한다.
 async def test_on_event를_주면_실제_그래프에서도_ainvoke와_같은_결과를_스트리밍으로_낸다():
     seeds = StubSeeds(mongo_collections={"twin_state": [{"line": 7, "oee": 5.12}]})
     deps = _deps(
@@ -185,7 +187,7 @@ async def test_on_event를_주면_실제_그래프에서도_ainvoke와_같은_�
         case, deps=deps, checkpointer=checkpointer, thread_id=thread_id,
         interaction_policy="interactive", on_event=seen.append)
 
-    assert "__interrupt__" in paused                   # 실 StateSnapshot.tasks에서 복원됨
+    assert "__interrupt__" in paused                   # 실 StateSnapshot.interrupts에서 복원됨
     interrupts = paused["__interrupt__"]
     assert interrupts[0].value.get("question") == "계획 변경이 있었나요?"
     assert paused["qa_log"] == []
