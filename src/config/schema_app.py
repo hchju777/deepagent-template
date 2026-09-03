@@ -5,7 +5,7 @@
 """
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
 
 
 class StrictModel(BaseModel):
@@ -75,10 +75,27 @@ class StoreConfig(StrictModel):
         return self
 
 
+class MailConfig(StrictModel):
+    enabled: bool = False
+    host: str = ""
+    port: int = 25
+    sender: str = ""
+    recipients: list[str] = []
+    username: str | None = None
+    password: SecretStr | None = None
+    use_tls: bool = False
+
+
+class ReportConfig(StrictModel):
+    output_dir: str = "output"
+    mail: MailConfig = MailConfig()
+
+
 class AppConfig(StrictModel):
     engine: EngineConfig = EngineConfig()
     investigations: InvestigationsConfig = InvestigationsConfig()
     llm: LlmConfig
     patrol: AppPatrol = AppPatrol()
     store: StoreConfig = StoreConfig()
+    report: ReportConfig = ReportConfig()
     timezone: str = "Asia/Seoul"
