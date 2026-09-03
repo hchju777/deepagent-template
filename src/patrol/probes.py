@@ -89,8 +89,31 @@ async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock) -> Probe
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
+async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+    """target "rest:<항목명>" → adapters.rest.query(항목명, params).
+
+    보낼 params는 지금은 check.params["body"](정적 dict)다 — 값을 살아 있는
+    소스에서 해석하는 것은 계획 9의 몫이고, 그때 이 자리가 해석기 호출로 바뀐다.
+    """
+    try:
+        if adapters.rest is None:
+            return _error("어댑터 미설정: rest", clock)
+        parts = _split_target(check.target)
+        if parts is None or parts[0] != "rest":
+            return _error(f"target 형식 오류: {check.target!r}", clock)
+        _, entry = parts
+        body = check.params.get("body", {})
+        if not isinstance(body, dict):
+            return _error(f"params.body는 dict여야 한다 (받은 타입: {type(body).__name__})",
+                          clock)
+        return await adapters.rest.query(entry, body)
+    except Exception as exc:
+        return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
+
+
 PROBES: dict[str, ProbeFn] = {
     "rest_get": rest_get,
+    "rest_query": rest_query,
     "redis_get": redis_get,
     "mongo_recent": mongo_recent,
     "kafka_lag": kafka_lag,
@@ -98,11 +121,18 @@ PROBES: dict[str, ProbeFn] = {
 
 
 def resolve_probe(check: CheckConfig) -> str | None:
-    """check.probe가 있으면 그것, 없으면 target 접두사로 기본 프로브를 고른다."""
+    """check.probe가 있으면 그것, 없으면 target 접두사로 기본 프로브를 고른다.
+
+    rest는 접두사만으로 갈리지 않는다: `rest:/path`는 토폴로지 등록 끝점의 GET,
+    `rest:<이름>`은 등재 항목이다. 새 구분자를 만들지 않아 _split_target이 그대로
+    동작하고 기존 점검은 한 글자도 안 바뀐다.
+    """
     if check.probe is not None:
         return check.probe
     parts = _split_target(check.target)
     if parts is None:
         return None
-    kind, _ = parts
+    kind, rest = parts
+    if kind == "rest":
+        return "rest_get" if rest.startswith("/") else "rest_query"
     return _TARGET_PREFIX_TO_PROBE.get(kind)

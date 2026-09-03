@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 from src.config.schema_site import CheckConfig, SiteConfig
@@ -54,3 +55,39 @@ async def test_kafka_어댑터는_있어도_group_없으면_error():
     adapters = build_adapters(SITE_KAFKA, TOPO, clock=lambda: T, stub_seeds=StubSeeds())
     result = await PROBES["kafka_lag"](adapters, _check(), clock=lambda: T)
     assert result.status == "error" and "group" in result.error
+
+
+def test_경로가_아닌_target은_등재_항목_프로브로_간다():
+    def _check(target):
+        return CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5m"},
+                                           "target": target, "params": {"rule": "exists"}})
+    assert resolve_probe(_check("rest:/api/v1/oee")) == "rest_get"
+    assert resolve_probe(_check("rest:summary_prod")) == "rest_query"
+
+
+async def test_rest_query는_check의_body를_그대로_넘긴다():
+    from src.config.schema_site import RestEntry
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubRest
+    from src.patrol.probes import rest_query
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"part_code": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /summary/prod": {"badge": [0, 0, 0]}}, set(), entries,
+                             clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+        "params": {"rule": "exists", "field": "body.badge", "body": {"part_code": ["P001"]}}})
+    result = await rest_query(adapters, check, clock=lambda: T)
+    assert result.status == "ok" and result.data["body"] == {"badge": [0, 0, 0]}
+
+
+async def test_rest_query는_어댑터가_없어도_raise하지_않는다():
+    from src.infrastructure.factory import AdapterSet
+    from src.patrol.probes import rest_query
+    check = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5m"},
+                                        "target": "rest:summary_prod",
+                                        "params": {"rule": "exists"}})
+    result = await rest_query(AdapterSet(semaphore=asyncio.Semaphore(1)), check,
+                              clock=lambda: T)
+    assert result.status == "error" and "rest" in result.error
