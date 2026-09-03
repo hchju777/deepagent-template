@@ -71,3 +71,17 @@ async def test_오래된_열린_케이스의_스레드는_폐기되고_기록에
     assert after.status == "awaiting_human"                       # 케이스는 그대로
     assert after.thread_ids == [] and after.thread_versions == {}
     assert saver.get({"configurable": {"thread_id": "c-wait#1"}}) is None
+
+
+async def test_보존_스윕은_오래된_이벤트를_지운다():
+    from src.domain.events import EngineEvent, InMemoryEventStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    events = InMemoryEventStore()
+    events.append(EngineEvent(event="round_started", case_id="c-1", at=T - timedelta(days=40)))
+    events.append(EngineEvent(event="round_started", case_id="c-1", at=T))
+
+    counts = await sweep_retention(repo=repo, store=store, ledger=ledger, events=events,
+                                   checkpointer=None, clock=lambda: T,
+                                   retention=RetentionConfig(events_d=30))
+    assert counts["events"] == 1
+    assert [e.seq for e in events.since("c-1")] == [2]

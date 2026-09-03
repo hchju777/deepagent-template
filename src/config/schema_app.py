@@ -67,6 +67,7 @@ class RetentionConfig(StrictModel):
     ledger_d: int = 30
     checkpoint_ttl_d: int = 14
     sends_d: int = 30           # 발송 레저(sends) 보존기한 — F6, 계획 5
+    events_d: int = 30          # case_events 보존기한 — 저장을 시작했으니 상한도 같이 정한다
 
 
 class StoreConfig(StrictModel):

@@ -79,7 +79,8 @@ class PatrolDaemon:
     def __init__(self, *, app: AppConfig, sites: list[SiteRuntime], store, repo, ledger: LedgerPort,
                 checkpointer, clock: Callable, judge_llm, budget: LlmBudget, owner: str,
                 timezone: str, on_event: Callable[[Any], None] | None = None,
-                report_cfg: ReportConfig = ReportConfig(), mail_sender: MailSenderPort | None = None):
+                report_cfg: ReportConfig = ReportConfig(), mail_sender: MailSenderPort | None = None,
+                events=None):
         self.app = app
         self.sites = sites
         self.store = store
@@ -95,6 +96,7 @@ class PatrolDaemon:
         # _publish_report도 report_ready 이벤트를 낼 때 같은 싱크를 쓴다
         self.report_cfg = report_cfg
         self.mail_sender = mail_sender   # None이면 report_cfg.mail.enabled로 SmtpSender/NullSender를 고른다
+        self.events = events             # EventStorePort | None — 보존 스윕이 case_events도 걷는다
         self.queue = CaseQueue()
         self.worker: InvestigationWorker | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -205,7 +207,7 @@ class PatrolDaemon:
                                  timeout_h=self.app.investigations.awaiting_human_timeout_h)
             await sweep_retention(repo=self.repo, store=self.store, ledger=self.ledger,
                                   checkpointer=self.checkpointer, clock=self.clock,
-                                  retention=self.app.store.retention)
+                                  retention=self.app.store.retention, events=self.events)
             await retry_pending(sender=self._mail_sender(), ledger=self.ledger,
                                 cfg=self.report_cfg.mail, clock=self.clock,
                                 render=self._render_pending)

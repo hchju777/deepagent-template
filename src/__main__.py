@@ -106,7 +106,7 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
                           budget=budget, owner=owner, timezone=app.timezone,
                           on_event=_make_event_sink(events, _make_event_printer()),
                           report_cfg=app.report,
-                          mail_sender=mail_sender)
+                          mail_sender=mail_sender, events=events)
     asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
 
@@ -369,7 +369,8 @@ def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, cloc
     daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
                           checkpointer=checkpointer, clock=clock, judge_llm=None,
                           budget=budget, owner=owner, timezone=app.timezone,
-                          on_event=print_event, report_cfg=app.report, mail_sender=mail_sender)
+                          on_event=print_event, report_cfg=app.report, mail_sender=mail_sender,
+                          events=events)
     return print_event, daemon._publish_report
 
 

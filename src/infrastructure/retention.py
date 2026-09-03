@@ -37,6 +37,7 @@ from typing import Callable, Protocol
 from src.config.schema_app import RetentionConfig
 from src.domain.cases import CaseRepositoryPort
 from src.domain.store import CaseStorePort
+from src.domain.events import EventStorePort
 from src.patrol.ledger import LedgerPort
 
 Clock = Callable[[], datetime]
@@ -48,11 +49,12 @@ class _CheckpointerPort(Protocol):
 
 async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
                           ledger: LedgerPort, checkpointer: _CheckpointerPort | None,
-                          clock: Clock, retention: RetentionConfig) -> dict[str, int]:
+                          clock: Clock, retention: RetentionConfig,
+                          events: EventStorePort | None = None) -> dict[str, int]:
     """다섯 가지 보존 규칙을 한 번에 훑고 항목별 처리 건수를 돌려준다."""
     now = clock()
     counts = {"closed_cases": 0, "ledger_runs": 0, "scratch_evidence": 0, "expired_threads": 0,
-             "sends": 0}
+             "sends": 0, "events": 0}
 
     # ① 오래된 종결 케이스 — 증거+판정+케이스 파일 삭제, 스레드 폐기, purged_at 스탬프
     evidence_before = now - timedelta(days=retention.closed_case_evidence_d)
@@ -147,5 +149,13 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
         counts["sends"] = ledger.prune_sends_before(sends_before)
     except Exception:                                                  # noqa: BLE001
         pass
+
+    # ⑥ 오래된 이벤트 — events가 주입되지 않은 호출부(옛 테스트 등)는 건너뛴다.
+    #    개별 실패가 스윕 전체를 죽이지 않게 다른 규칙과 같은 방식으로 감싼다.
+    if events is not None:
+        try:
+            counts["events"] = events.prune_before(now - timedelta(days=retention.events_d))
+        except Exception:                                          # noqa: BLE001
+            pass
 
     return counts
