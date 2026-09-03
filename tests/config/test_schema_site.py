@@ -55,3 +55,52 @@ def test_adapters_모드는_stub이_기본이고_오타는_거부():
     assert cfg.target.adapters == "stub"
     with pytest.raises(ValidationError):
         SiteConfig.model_validate({**_site(), "target": {**_site()["target"], "adapters": "rael"}})
+
+
+def test_등재_항목은_메서드와_닫힌_body_스키마를_요구한다():
+    from src.config.schema_site import RestTarget
+    target = RestTarget.model_validate({
+        "base_url": "http://x",
+        "entries": {"summary_prod": {"method": "POST", "path": "/summary/prod",
+                                     "body_schema": {"part_code": "list[str]",
+                                                     "line_code": "str"}}}})
+    entry = target.entries["summary_prod"]
+    assert entry.method == "POST" and entry.query_keys == []
+
+
+def test_쓰기_메서드는_등재할_수_없다():
+    # 메서드를 등재 항목이 정하므로, 여기서 막지 않으면 config 한 줄로
+    # 대상 시스템에 쓰기를 할 수 있게 된다.
+    from src.config.schema_site import RestTarget
+    for method in ("PUT", "PATCH", "DELETE"):
+        with pytest.raises(ValidationError):
+            RestTarget.model_validate({"base_url": "http://x",
+                                       "entries": {"e": {"method": method, "path": "/x"}}})
+
+
+def test_body_타입_어휘_밖은_거부된다():
+    from src.config.schema_site import RestTarget
+    with pytest.raises(ValidationError):
+        RestTarget.model_validate({
+            "base_url": "http://x",
+            "entries": {"e": {"method": "POST", "path": "/x",
+                              "body_schema": {"f": "dict"}}}})
+
+
+def test_GET_항목은_body를_가질_수_없다():
+    # GET에 body를 실으면 프록시·서버마다 동작이 갈린다. 쿼리 키로 표현해야 한다.
+    from src.config.schema_site import RestTarget
+    with pytest.raises(ValidationError):
+        RestTarget.model_validate({
+            "base_url": "http://x",
+            "entries": {"e": {"method": "GET", "path": "/x",
+                              "body_schema": {"f": "str"}}}})
+
+
+def test_인증_토큰은_SecretStr로_마스킹된다():
+    from src.config.schema_site import RestTarget
+    target = RestTarget.model_validate({
+        "base_url": "http://x",
+        "auth": {"header": "x-dep-ticket", "value": "비밀토큰"}})
+    assert "비밀토큰" not in repr(target)
+    assert target.auth.value.get_secret_value() == "비밀토큰"

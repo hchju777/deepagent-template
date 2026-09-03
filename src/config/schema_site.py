@@ -30,8 +30,44 @@ class KafkaTarget(StrictModel):
     bootstrap: str
 
 
+# body 필드 타입 어휘. 좁게 닫는다 — 넓히면 검증이 느슨해지고, 느슨한 검증은
+# 없는 검증과 같다. 실제로 필요해지면 그때 하나씩 연다.
+BodyFieldType = Literal["str", "int", "float", "bool", "list[str]", "list[int]"]
+
+
+class RestAuth(StrictModel):
+    """대상 API가 요구하는 인증 헤더. 값은 반드시 ${ENV} 참조로 준다."""
+    header: str
+    value: SecretStr
+
+
+class RestEntry(StrictModel):
+    """호출을 허가받은 끝점 하나.
+
+    **메서드가 여기 있는 것이 이 설계의 핵심이다** — 호출자는 항목 이름만 대고,
+    어떤 HTTP 메서드로 나갈지는 어댑터가 이 값을 보고 정한다. 그래서 "임의의
+    POST를 수행하라"는 호출이 코드에 표현될 수 없다.
+
+    쓰기 메서드를 등재 어휘에서 빼는 이유: 메서드 결정권을 config로 옮긴 이상,
+    여기서 막지 않으면 config 한 줄로 대상 시스템에 쓰기를 할 수 있다.
+    """
+    method: Literal["GET", "POST"] = "GET"
+    path: str
+    body_schema: dict[str, BodyFieldType] = {}
+    query_keys: list[str] = []
+
+    @model_validator(mode="after")
+    def _get_has_no_body(self):
+        # GET에 body를 실으면 프록시·서버마다 동작이 갈린다 — 쿼리 키로 표현한다.
+        if self.method == "GET" and self.body_schema:
+            raise ValueError("GET 항목에는 body_schema를 둘 수 없다 — query_keys를 쓰라")
+        return self
+
+
 class RestTarget(StrictModel):
     base_url: str
+    auth: RestAuth | None = None
+    entries: dict[str, RestEntry] = {}
 
 
 class RepoRef(StrictModel):
