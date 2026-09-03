@@ -71,6 +71,7 @@ def test_ledger_계약(db):
 
 
 def test_ledger_발송_레저_계약(db):
+    ensure_indexes(db)          # record_send의 중복 억제는 sends.send_id unique 인덱스가 방어선(F4)
     ledger = MongoLedger(db)
     assert ledger.record_send("report:c-1", kind="report", target="a@x", at=T) is True
     assert ledger.record_send("report:c-1", kind="report", target="a@x", at=T) is False

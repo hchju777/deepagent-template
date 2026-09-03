@@ -1,8 +1,8 @@
-"""보존 스윕 — 스펙 §4.6, 계획 4b.
+"""보존 스윕 — 스펙 §4.6, 계획 4b·계획 5(F6).
 
-케이스가 닫혀도, 순찰이 매 회차 남기는 스크래치 증거·레저 실행 이력도,
-스레드 체크포인트도 영원히 쌓이면 안 된다. 이 모듈은 그 넷을 한 번의
-스윕으로 정리한다:
+케이스가 닫혀도, 순찰이 매 회차 남기는 스크래치 증거·레저 실행 이력·발송
+레저(sends)도, 스레드 체크포인트도 영원히 쌓이면 안 된다. 이 모듈은 그
+다섯을 한 번의 스윕으로 정리한다:
 
   ① 오래 닫혀 있던 케이스의 증거+판정+케이스 파일 삭제, 그 스레드도 폐기.
      처리한 레코드는 purged_at을 스탬프한다(계획 4b I7) — updated_at은 이
@@ -21,10 +21,13 @@
      finding 첨부 등 상태와 무관한 갱신에 흔들리지 않도록). thread_ids에서
      제거해두면 다음 재개는 F3(스레드 부재 시 새로 시작) 경로를 그대로 타
      새 스레드가 열린다.
+  ⑤ 오래된 발송 레저(sends) 삭제(F6, 계획 5) — retention.sends_d 이전 기록을
+     완료(sent)·미완료(pending) 구분 없이 정리한다. 그만큼 오래 pending으로
+     남은 시도는 사실상 죽은 시도로 보고 재시도 대상에서도 함께 뺀다.
 
 절대 raise하지 않는다: 레코드 하나(케이스 하나·스레드 하나)의 실패뿐 아니라
 목록 조회 자체(list_by_status/list_case_ids/list_open)의 실패도 나머지
-정리를 막아서는 안 된다 — 실패한 항목은 건너뛰고 나머지 세 항목은 계속
+정리를 막아서는 안 된다 — 실패한 항목은 건너뛰고 나머지 항목은 계속
 돈다(Mongo 구현이 문서 하나의 역직렬화 실패로 목록 조회 자체를 raise할
 수 있다). 시계는 clock()으로만 얻는다(결정론 테스트).
 """
@@ -46,9 +49,10 @@ class _CheckpointerPort(Protocol):
 async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
                           ledger: LedgerPort, checkpointer: _CheckpointerPort | None,
                           clock: Clock, retention: RetentionConfig) -> dict[str, int]:
-    """네 가지 보존 규칙을 한 번에 훑고 항목별 처리 건수를 돌려준다."""
+    """다섯 가지 보존 규칙을 한 번에 훑고 항목별 처리 건수를 돌려준다."""
     now = clock()
-    counts = {"closed_cases": 0, "ledger_runs": 0, "scratch_evidence": 0, "expired_threads": 0}
+    counts = {"closed_cases": 0, "ledger_runs": 0, "scratch_evidence": 0, "expired_threads": 0,
+             "sends": 0}
 
     # ① 오래된 종결 케이스 — 증거+판정+케이스 파일 삭제, 스레드 폐기, purged_at 스탬프
     evidence_before = now - timedelta(days=retention.closed_case_evidence_d)
@@ -136,5 +140,12 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
                 counts["expired_threads"] += len(discarded)
             except Exception:                                          # noqa: BLE001
                 continue
+
+    # ⑤ 발송 레저(sends) 정리(F6, 계획 5) — sent/pending 무관하게 sends_d 이전 기록 삭제
+    sends_before = now - timedelta(days=retention.sends_d)
+    try:
+        counts["sends"] = ledger.prune_sends_before(sends_before)
+    except Exception:                                                  # noqa: BLE001
+        pass
 
     return counts

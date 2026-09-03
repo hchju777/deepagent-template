@@ -19,6 +19,7 @@ from datetime import datetime
 
 from pymongo import ReturnDocument
 from pymongo.database import Database
+from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
 from src.domain.cases import CaseRecord, CaseRepositoryPort, OPEN_STATUSES
@@ -52,7 +53,11 @@ def ensure_indexes(db: Database) -> None:
     db.case_files.create_index("case_id", unique=True)
     db.ledger_runs.create_index([("gbm", 1), ("fct", 1), ("check", 1), ("seq", 1)])
     db.ledger_runs.create_index("at")
+    # sends.send_id unique: 발송 레저의 record_send가 사전 조회 없이 곧장 insert하고
+    # DuplicateKeyError만 잡는다(리뷰 F4) — 이 인덱스가 중복 억제의 유일한 방어선이다.
+    # (sent, seq) 복합 인덱스는 pending_sends의 filter({"sent": False})+sort("seq")를 그대로 받친다.
     db.sends.create_index("send_id", unique=True)
+    db.sends.create_index([("sent", 1), ("seq", 1)])
 
 
 class MongoCaseStore(CaseStorePort):
@@ -265,16 +270,20 @@ class MongoLedger(LedgerPort):
         return self._db.ledger_runs.delete_many({"_id": {"$in": stale_ids}}).deleted_count
 
     def record_send(self, send_id, *, kind, target, at) -> bool:
-        # 먼저 존재 여부를 확인해 명시적으로 False를 돌려준다 — ensure_indexes를
-        # 호출하지 않은 경로(예: 테스트)에서도 계약이 그대로 성립하도록. unique
-        # 인덱스(sends.send_id)는 동시 기록 경합에 대한 방어선으로 별도로 둔다.
-        if self._db.sends.find_one({"send_id": send_id}) is not None:
-            return False
+        # find_one 사전조회 없이 곧장 insert한다(리뷰 F4) — sends.send_id unique
+        # 인덱스(ensure_indexes)가 유일한 방어선이다. find_one을 앞에 두면 왕복이
+        # 3회로 늘고, 경합 상황에서는 어차피 DuplicateKeyError를 잡아야 해 이득이
+        # 없다. 인덱스가 없는 경로(예: ensure_indexes를 안 부른 호출자)에서는 이
+        # 계약이 성립하지 않는다 — 프로덕션 mongo 배선은 항상 ensure_indexes를
+        # 먼저 부른다(build_persistence).
         seq = _next_seq(self._db, "sends")
-        self._db.sends.insert_one({
-            "send_id": send_id, "kind": kind, "target": target,
-            "at": at.isoformat(), "sent": False, "seq": seq,
-        })
+        try:
+            self._db.sends.insert_one({
+                "send_id": send_id, "kind": kind, "target": target,
+                "at": at.isoformat(), "sent": False, "seq": seq,
+            })
+        except DuplicateKeyError:
+            return False
         return True
 
     def mark_sent(self, send_id, at) -> None:

@@ -30,11 +30,17 @@ async def test_스윕은_오래된_종결_케이스와_레저와_스크래치를
     ledger.record_run("mx", "gumi", "c", CheckOutcome(status="ok", observed_at=fresh))
     store.put_evidence("patrol:mx:gumi:c", "s", {"p": 1}, as_of=old)
     store.put_evidence("patrol:mx:gumi:c", "s", {"p": 2}, as_of=fresh)
+    # F6/F5: 발송 레저(sends)도 다른 항목들과 같은 스윕으로 정리돼야 한다 —
+    # 오래된 건(sent 여부 무관)은 지워지고, 최근 건은 pending으로 남는다.
+    ledger.record_send("report:c-old", kind="report", target="a@x", at=old)
+    ledger.record_send("report:c-fresh", kind="report", target="a@x", at=fresh)
     counts = await sweep_retention(repo=repo, store=store, ledger=ledger, checkpointer=InMemorySaver(),
                                    clock=lambda: T, retention=RetentionConfig())
     assert counts["closed_cases"] == 1 and store.list_evidence("c-old") == [] and store.list_evidence("c-fresh")
     assert counts["ledger_runs"] == 1 and len(ledger.runs("mx", "gumi", "c")) == 1
     assert counts["scratch_evidence"] == 1 and len(store.list_evidence("patrol:mx:gumi:c")) == 1
+    assert counts["sends"] == 1
+    assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-fresh"]
     assert repo.get("c-old").thread_ids == []
     assert repo.get("c-old").purged_at == T                       # I7: 재선택 방지 스탬프
     assert repo.get("c-fresh").purged_at is None                  # 아직 안 닫힌(최근) 건 안 건드림

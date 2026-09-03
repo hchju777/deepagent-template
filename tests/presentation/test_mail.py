@@ -45,3 +45,48 @@ async def test_중복_발송은_억제되고_비활성은_건너뛴다():
     off = MailConfig()
     assert await send_report("c-2", "제목", "본문", sender=sender, ledger=ledger,
                              cfg=off, clock=lambda: T) == "skipped"
+
+
+async def test_mark_sent_실패는_재발송을_부르지_않는다():
+    class FlakyLedger(InMemoryLedger):
+        def mark_sent(self, send_id, at):
+            raise RuntimeError("레저 블립")
+    ledger, sender = FlakyLedger(), RecordingSender()
+    assert await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
+                             cfg=CFG, clock=lambda: T) == "sent"
+    assert len(sender.sent) == 1                      # 발송은 됐고 raise도 없다
+
+
+async def test_render_실패는_남은_pending을_막지_않는다():
+    ledger, sender = InMemoryLedger(), RecordingSender(fail_times=2)
+    for cid in ("c-1", "c-2"):
+        await send_report(cid, "제목", "본문", sender=sender, ledger=ledger,
+                          cfg=CFG, clock=lambda: T)
+    def render(rec):
+        if rec["send_id"] == "report:c-1":
+            raise ValueError("망가진 레코드")
+        return ("제목", "본문")
+    done = await retry_pending(sender=sender, ledger=ledger, cfg=CFG, clock=lambda: T,
+                               render=render)
+    assert done == 1                                   # c-2는 보내졌다
+    assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-1"]
+
+
+async def test_재발송은_기록된_수신자에게_간다():
+    ledger, sender = InMemoryLedger(), RecordingSender(fail_times=1)
+    await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
+                      cfg=CFG, clock=lambda: T)
+    changed = MailConfig(enabled=True, host="smtp", sender="a@x", recipients=["새사람@z"])
+    await retry_pending(sender=sender, ledger=ledger, cfg=changed, clock=lambda: T,
+                        render=lambda rec: ("제목", "본문"))
+    assert sender.sent[-1][1] == ["b@y"]                # 기록된 target 우선
+
+
+def test_메일을_켜면_host와_recipients가_필요하다():
+    import pytest
+    from pydantic import ValidationError
+    MailConfig()                                        # 꺼져 있으면 빈 값 허용
+    with pytest.raises(ValidationError):
+        MailConfig(enabled=True, host="", recipients=["a@x"])
+    with pytest.raises(ValidationError):
+        MailConfig(enabled=True, host="smtp", recipients=[])

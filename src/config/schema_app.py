@@ -60,6 +60,7 @@ class RetentionConfig(StrictModel):
     closed_case_evidence_d: int = 90
     ledger_d: int = 30
     checkpoint_ttl_d: int = 14
+    sends_d: int = 30           # 발송 레저(sends) 보존기한 — F6, 계획 5
 
 
 class StoreConfig(StrictModel):
@@ -84,6 +85,14 @@ class MailConfig(StrictModel):
     username: str | None = None
     password: SecretStr | None = None
     use_tls: bool = False
+
+    @model_validator(mode="after")
+    def _enabled_needs_host_and_recipients(self):
+        # 조용히 실패하는 pending 무한 적재를 기동 시점에 막는다 — host/recipients가
+        # 비면 send_report는 매번 SMTP 연결에서 예외를 내고 pending만 계속 쌓는다.
+        if self.enabled and (not self.host or not self.recipients):
+            raise ValueError("메일을 켜려면 host와 recipients가 필요하다")
+        return self
 
 
 class ReportConfig(StrictModel):

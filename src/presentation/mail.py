@@ -15,6 +15,21 @@ SMTP 왕복(`sender.send`)에서 난 것만이다: 그 앞의 레저 기록 자�
 (예: DB 장애) 호출자에게 그대로 전파해 문제를 드러낸다 — 레저 없이 "성공"을
 가장하는 편이 더 위험하기 때문이다.
 
+발송이 성공한 뒤의 `mark_sent`도 `sender.send`와 **같은 try 안**에 있어야
+한다(리뷰 F1) — 밖에 두면 발송은 실제로 끝났는데 레저만 "블립"으로
+pending에 남고, 다음 스윕(`retry_pending`)이 이미 도착한 메일을 또 보낸다.
+2상 설계가 막으려던 바로 그 중복이다. 그래서 `mark_sent` 실패는 로그만
+남기고 "sent"를 그대로 반환한다 — 수신자 입장에서는 이미 성공한 발송이고,
+레저가 pending으로 착각해 재시도하는 편이 더 나쁘다.
+
+`retry_pending`은 레저에 적힌 `kind`/`target`을 그냥 장식으로 두지 않는다
+(리뷰 F3): `kind != "report"`인 레코드는 건너뛰어 다른 채널이 실수로 SMTP로
+새지 않게 하고, 수신자는 `cfg.recipients`(현재 설정)가 아니라 기록 당시의
+`target`을 우선한다 — 설정이 나중에 바뀌어도 "원래 보내려던 사람에게
+재발송"이라는 의미가 유지된다. `render()` 콜백이 레코드 하나에서 예외를
+내도(리뷰 F2) 그 레코드만 건너뛰고 로그를 남긴다 — 망가진 레코드 하나가
+스윕 전체를 막아서는 안 된다.
+
 비밀값(SMTP 비밀번호)은 `SecretStr.get_secret_value()`로만 꺼내 쓰고, 로그에는
 절대 남기지 않는다 — 예외 로그도 subject/case_id/오류 타입만 남긴다.
 """
@@ -99,7 +114,13 @@ async def send_report(case_id: str, subject: str, body: str, *, sender: MailSend
                        case_id, type(exc).__name__, exc)
         return "failed"
 
-    ledger.mark_sent(send_id, clock())
+    try:
+        ledger.mark_sent(send_id, clock())
+    except Exception as exc:                                    # noqa: BLE001 — F1: 발송은
+        # 이미 끝났다 — mark_sent만 깨졌다고 pending으로 남기면 다음 스윕이 이미
+        # 도착한 메일을 또 보낸다(2상 설계가 막으려던 바로 그 중복). 로그만 남기고 sent.
+        logger.warning("mark_sent 실패(발송은 완료됨, pending 유지 안 함): send_id=%s "
+                       "err=%s: %s", send_id, type(exc).__name__, exc)
     return "sent"
 
 
@@ -112,13 +133,33 @@ async def retry_pending(*, sender: MailSenderPort, ledger: LedgerPort, cfg: Mail
     """
     done = 0
     for record in ledger.pending_sends():
-        subject, body = render(record)
+        if record["kind"] != "report":     # F3: 다른 채널(향후 확장분)이 SMTP로 새지 않게
+            continue
+
         try:
-            await sender.send(subject, body, recipients=cfg.recipients)
+            subject, body = render(record)
+        except Exception as exc:                                # noqa: BLE001 — F2: 레코드
+            # 하나가 망가져도 나머지 pending을 계속 처리한다 — 스윕 전체를 막지 않는다.
+            logger.warning("재시도 렌더 실패(건너뜀): send_id=%s err=%s: %s",
+                           record["send_id"], type(exc).__name__, exc)
+            continue
+
+        # F3: 현재 cfg.recipients가 아니라 기록 당시의 target을 우선한다 — 설정이
+        # 바뀌어도 "원래 보내려던 사람에게 재발송"이라는 의미가 유지된다.
+        recipients = [r.strip() for r in record["target"].split(",") if r.strip()]
+        recipients = recipients or cfg.recipients
+        try:
+            await sender.send(subject, body, recipients=recipients)
         except Exception as exc:                                # noqa: BLE001 — raise 금지(계약)
             logger.warning("재시도 발송 실패(pending 유지): send_id=%s err=%s: %s",
                            record["send_id"], type(exc).__name__, exc)
             continue
-        ledger.mark_sent(record["send_id"], clock())
+
+        try:
+            ledger.mark_sent(record["send_id"], clock())
+        except Exception as exc:                                # noqa: BLE001 — F1과 동일 이유:
+            # 발송은 끝났다. mark_sent만 깨져도 성공으로 센다(pending에 남기지 않는다).
+            logger.warning("mark_sent 실패(발송은 완료됨, pending 유지 안 함): send_id=%s "
+                           "err=%s: %s", record["send_id"], type(exc).__name__, exc)
         done += 1
     return done
