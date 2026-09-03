@@ -147,6 +147,18 @@ def entry_body_problems(body: dict, schema: dict) -> list[str]:
     return problems
 
 
+def entry_call_problems(entry, params: dict) -> list[str]:
+    """등재 항목 호출의 params를 검증한다 — GET이면 쿼리 키, POST면 body 스키마.
+
+    두 어댑터가 이 함수를 공유해야 판정이 갈라지지 않는다. 계획 7에서 claim의
+    두 구현이 갈라져 프로덕션 버그를 테스트가 못 잡은 일이 실제로 있었다.
+    """
+    if entry.method == "GET":
+        unknown = sorted(set(params) - set(entry.query_keys))
+        return [f"허용되지 않은 쿼리 키: {unknown}"] if unknown else []
+    return entry_body_problems(params, entry.body_schema)
+
+
 def kafka_effective_start(requested, resolved_ts, earliest_ts):
     """offsets_for_times 결과로 달성 시작 시각을 정한다.
 

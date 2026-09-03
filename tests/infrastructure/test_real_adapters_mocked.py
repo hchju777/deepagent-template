@@ -248,3 +248,52 @@ async def test_kafka_read는_라이브_토픽에서_파티션별로_확정_종�
     assert res.status == "ok"
     assert len(res.data) == 1
     assert res.data[0]["value"] == {"n": 1}
+
+
+async def test_real_query는_항목의_메서드로_나가고_인증_헤더를_붙인다():
+    # 메서드가 호출자 인자가 아니라 등재 항목에서 온다는 것을 실제 요청으로 확인한다.
+    # 이 파일에는 httpx 목킹이 없었지만("라이브러리 표면만 흉내 낸 페이크"라는
+    # 파일 철학은 같다) MockTransport가 그 역할을 정확히 한다.
+    import httpx
+    from pydantic import SecretStr
+
+    from src.config.schema_site import Guards, RestAuth, RestEntry
+    from src.infrastructure.rest_prober import RealRest
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["ticket"] = request.headers.get("x-dep-ticket")
+        seen["body"] = request.content
+        return httpx.Response(200, json={"badge": [0, 0, 0]})
+
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"part_code": "list[str]"})}
+    rest = RealRest("http://x", set(), entries,
+                    RestAuth(header="x-dep-ticket", value=SecretStr("t0ken")),
+                    guards=Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    rest._client = httpx.AsyncClient(base_url="http://x", headers={"x-dep-ticket": "t0ken"},
+                                     transport=httpx.MockTransport(handler))
+    result = await rest.query("summary_prod", {"part_code": ["P001"]})
+    assert result.status == "ok"
+    assert seen["method"] == "POST" and seen["url"] == "http://x/summary/prod"
+    assert seen["ticket"] == "t0ken"
+    assert b"P001" in seen["body"]
+    assert result.data["request"]["method"] == "POST"
+
+
+async def test_real과_stub이_같은_거부_사유를_돌려준다():
+    # 테스트가 전부 스텁이므로 두 구현이 갈라지면 프로덕션 버그를 못 잡는다
+    # (계획 7에서 claim의 두 구현이 갈라진 것을 실제로 겪었다).
+    from src.config.schema_site import Guards, RestEntry
+    from src.infrastructure.rest_prober import RealRest
+    from src.infrastructure.stubs import StubRest
+    entries = {"e": RestEntry(method="POST", path="/x", body_schema={"a": "str"})}
+    real = RealRest("http://x", set(), entries, None,
+                    guards=Guards(), semaphore=asyncio.Semaphore(1), clock=CLOCK)
+    stub = StubRest({}, set(), entries, clock=CLOCK)
+    for entry, params in [("없음", {}), ("e", {"b": 1}), ("e", {"a": 1})]:
+        r, s = await real.query(entry, params), await stub.query(entry, params)
+        assert r.status == s.status == "error"
+        assert r.error == s.error, f"{entry}/{params}: real={r.error!r} stub={s.error!r}"

@@ -4,14 +4,21 @@ import httpx
 from src.domain.envelope import Envelope, ProbeResult
 from src.domain.ports import RestProberPort
 from src.infrastructure.guards import guarded_call
-from src.infrastructure.query_rules import endpoint_allowed
+from src.infrastructure.query_rules import endpoint_allowed, entry_call_problems
 
 
 class RealRest(RestProberPort):
-    def __init__(self, base_url, allowed, *, guards, semaphore, clock):
-        self._client = httpx.AsyncClient(base_url=base_url)
+    def __init__(self, base_url, allowed, entries=None, auth=None, *,
+                 guards, semaphore, clock):
+        headers = {auth.header: auth.value.get_secret_value()} if auth is not None else {}
+        self._client = httpx.AsyncClient(base_url=base_url, headers=headers)
         self._allowed = allowed
+        self._entries = entries or {}
         self._guards, self._sem, self._clock = guards, semaphore, clock
+
+    def _reject(self, message: str) -> ProbeResult:
+        return ProbeResult(status="error", envelope=Envelope(observed_at=self._clock()),
+                           error=message)
 
     def _call(self, op):
         return guarded_call(op, timeout_s=self._guards.timeout_s,
@@ -34,5 +41,31 @@ class RealRest(RestProberPort):
             # 응답 자체가 유효한 관측 증거이지, 어댑터 실패(guarded_call의 error)가
             # 아니다.
             data = {"status_code": response.status_code, "body": body}
+            return data, Envelope(observed_at=self._clock())
+        return await self._call(op)
+
+    async def query(self, entry, params):
+        entry_spec = self._entries.get(entry)
+        if entry_spec is None:
+            return self._reject(f"항목 {entry!r}는 등재돼 있지 않다")
+        problems = entry_call_problems(entry_spec, params)
+        if problems:
+            return self._reject("; ".join(problems))
+
+        async def op():
+            # 메서드는 항목이 정한다 — 호출자가 넘긴 값이 아니다.
+            if entry_spec.method == "GET":
+                response = await self._client.get(entry_spec.path, params=params)
+            else:
+                response = await self._client.post(entry_spec.path, json=params)
+            try:
+                body = response.json()
+            except ValueError:
+                body = response.text
+            # request를 함께 싣는다(§2-N4) — 응답만 남기면 0/0/0이 "멈췄다"인지
+            # "잘못 물었다"인지 보고서를 읽는 사람이 구별할 수 없다.
+            data = {"status_code": response.status_code, "body": body,
+                    "request": {"method": entry_spec.method, "path": entry_spec.path,
+                                "params": params}}
             return data, Envelope(observed_at=self._clock())
         return await self._call(op)
