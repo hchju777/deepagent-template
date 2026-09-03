@@ -8,8 +8,9 @@ datetime 필드는 전부 pydantic `model_dump(mode="json")`으로 ISO 문자열
 저장하고 `model_validate`로 복원한다. BSON datetime을 그대로 쓰지 않는 이유:
 mongomock·실제 MongoDB 둘 다 기본 설정에서는 저장한 datetime의 tzinfo를
 왕복시키지 않는다(naive UTC로 돌아온다) — ISO 문자열 왕복이라야 tz-aware가
-유지된다(브리프 계약). 범위 비교(purge_evidence_before·prune_runs_before)는
-같은 이유로 DB에 $lt를 맡기지 않고 문자열을 파싱해 Python에서 비교한다 —
+유지된다(브리프 계약). 범위 비교(purge_evidence_before·prune_runs_before·
+prune_sends_before)는 같은 이유로 DB에 $lt를 맡기지 않고 문자열을 파싱해
+Python에서 비교한다 —
 ISO 문자열은 마이크로초 유무로 길이가 달라져 사전식 비교가 시간 순서와
 어긋날 수 있기 때문이다.
 """
@@ -51,6 +52,7 @@ def ensure_indexes(db: Database) -> None:
     db.case_files.create_index("case_id", unique=True)
     db.ledger_runs.create_index([("gbm", 1), ("fct", 1), ("check", 1), ("seq", 1)])
     db.ledger_runs.create_index("at")
+    db.sends.create_index("send_id", unique=True)
 
 
 class MongoCaseStore(CaseStorePort):
@@ -261,3 +263,35 @@ class MongoLedger(LedgerPort):
         if not stale_ids:
             return 0
         return self._db.ledger_runs.delete_many({"_id": {"$in": stale_ids}}).deleted_count
+
+    def record_send(self, send_id, *, kind, target, at) -> bool:
+        # 먼저 존재 여부를 확인해 명시적으로 False를 돌려준다 — ensure_indexes를
+        # 호출하지 않은 경로(예: 테스트)에서도 계약이 그대로 성립하도록. unique
+        # 인덱스(sends.send_id)는 동시 기록 경합에 대한 방어선으로 별도로 둔다.
+        if self._db.sends.find_one({"send_id": send_id}) is not None:
+            return False
+        seq = _next_seq(self._db, "sends")
+        self._db.sends.insert_one({
+            "send_id": send_id, "kind": kind, "target": target,
+            "at": at.isoformat(), "sent": False, "seq": seq,
+        })
+        return True
+
+    def mark_sent(self, send_id, at) -> None:
+        self._db.sends.update_one(
+            {"send_id": send_id}, {"$set": {"sent": True, "sent_at": at.isoformat()}})
+
+    def pending_sends(self, limit=50) -> list[dict]:
+        if limit <= 0:                             # limit=0은 "0개"(runs와 동일 관례)
+            return []
+        cursor = self._db.sends.find({"sent": False}).sort("seq", 1).limit(limit)
+        return [{"send_id": d["send_id"], "kind": d["kind"], "target": d["target"],
+                "at": datetime.fromisoformat(d["at"])} for d in cursor]
+
+    def prune_sends_before(self, before) -> int:
+        """before 이전에 기록된 발송 이력(완료분 포함)을 전부 삭제하고 삭제 건수를 반환한다."""
+        stale_ids = [doc["_id"] for doc in self._db.sends.find({})
+                    if datetime.fromisoformat(doc["at"]) < before]
+        if not stale_ids:
+            return 0
+        return self._db.sends.delete_many({"_id": {"$in": stale_ids}}).deleted_count

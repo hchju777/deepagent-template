@@ -70,6 +70,20 @@ def test_ledger_계약(db):
     assert ledger.prune_runs_before(T.replace(year=2027)) == 3
 
 
+def test_ledger_발송_레저_계약(db):
+    ledger = MongoLedger(db)
+    assert ledger.record_send("report:c-1", kind="report", target="a@x", at=T) is True
+    assert ledger.record_send("report:c-1", kind="report", target="a@x", at=T) is False
+    assert ledger.record_send("report:c-2", kind="report", target="b@y", at=T) is True
+    pending = ledger.pending_sends()
+    assert [p["send_id"] for p in pending] == ["report:c-1", "report:c-2"]
+    assert pending[0] == {"send_id": "report:c-1", "kind": "report", "target": "a@x", "at": T}
+    ledger.mark_sent("report:c-1", T)
+    assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-2"]
+    assert ledger.prune_sends_before(T.replace(year=2027)) == 2
+    assert ledger.pending_sends() == []
+
+
 def test_ensure_indexes는_unique_인덱스를_만든다(db):
     ensure_indexes(db)
     cases_idx = db.cases.index_information()
@@ -86,3 +100,5 @@ def test_ensure_indexes는_unique_인덱스를_만든다(db):
     assert any(spec["key"] == [("gbm", 1), ("fct", 1), ("check", 1), ("seq", 1)]
               for spec in ledger_idx.values())
     assert any(spec["key"] == [("at", 1)] for spec in ledger_idx.values())
+    sends_idx = db.sends.index_information()
+    assert any(spec["key"] == [("send_id", 1)] and spec.get("unique") for spec in sends_idx.values())
