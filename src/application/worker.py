@@ -1,21 +1,34 @@
 """케이스 큐 + 조사 워커 — 스펙 §계획 4b F2·F3.
 
 CaseQueue는 asyncio.Queue를 얇게 감싼다: Mongo 등 영속 큐는 YAGNI다 — 재시작
-내구성은 워커 기동 시 repo.list_by_status("open")을 그대로 재큐잉하는
-requeue_open()으로 확보한다(그 케이스들은 이미 저장소에 살아 있다).
+내구성은 워커 기동 시 requeue_open()으로 확보한다. open 케이스뿐 아니라
+lease가 만료된 investigating 케이스도 다시 큐에 넣는다 — 워커 프로세스가
+그래프 실행 도중(엔진 호출 밖 포함) 죽으면 그 케이스는 investigating으로
+멈춘 채 lease만 만료되고, open도 awaiting_human도 아니라서 다른 어떤
+회수 경로에도 걸리지 않기 때문이다. lease가 아직 유효한 investigating은
+다른 워커가 지금 붙들고 있는 것이므로 회수하지 않는다.
 
 InvestigationWorker 한 번의 run_once/resume_once는 다음을 한 동작으로 묶는다:
-lease 획득 → investigating 전이 → 스레드 배정 → 엔진 실행 → 결과에 따른
-후속 전이(awaiting_human/closed) → lease 해제. 엔진(build_engine 결과)은
-(gbm, fct) 사이트 키로 캐시해 재사용한다 — 노드 배선은 deps에만 의존하고
-케이스마다 달라지지 않는다.
+lease 획득 → investigating 전이(이미 investigating이면 lease만 갱신) →
+스레드 배정 → 엔진 실행 → 결과에 따른 후속 전이(awaiting_human/closed) →
+lease 해제. 엔진(build_engine 결과)은 (gbm, fct) 사이트 키로 캐시해
+재사용한다 — 노드 배선은 deps에만 의존하고 케이스마다 달라지지 않는다.
 
 F3(재개 실패 복구): investigate_case/resume_case가 예외를 던지면(체크포인트
-역직렬화 실패 등) 그 스레드를 폐기하고 새 스레드로 한 번만 더 시도한다.
-그마저 실패하면 close_case(discard_threads=True)로 케이스를 종결하고
-예외를 다시 던진다 — 이 재던짐을 run_once/resume_once 최외곽의 단일
-try/except가 받아 레저에 "worker:{case_id}" error 이벤트로 남기고
-"failed"를 돌려준다. 이 워커는 어떤 경로로도 raise하지 않는다(§계약).
+역직렬화 실패 등) 그 스레드를 폐기하고 새 스레드로 한 번만 더 시도한다
+(resume_once가 스레드 schema 버전 불일치로 곧장 새 스레드를 여는 경로는
+예외다 — 이미 "새 스레드로 재시작"한 셈이라 실패해도 또 재시작하지
+않는다, allow_restart=False). _run_with_f3는 케이스를 직접 닫지 않는다 —
+재시도가 소진되면 사유를 담은 예외를 다시 던질 뿐이다.
+
+run_once/resume_once 최외곽의 단일 try/except가 모든 실패(F3 소진뿐
+아니라 deps_for_site/build_engine/evidence_refs_for_case/_finish 등
+그래프 호출 "밖"에서 나는 예외까지)를 같은 방식으로 받는다: 레저에
+"worker:{case_id}" error 이벤트를 남기고, close_case(discard_threads=True)
+로 케이스를 종결한 뒤 "failed"를 돌려준다 — 종결 자체가 실패하면 그
+실패도 레저에 남기고 더 시도하지 않는다. 어느 경로에서도 investigating
+상태로 owner 없이(또는 owner를 쥔 채 프로세스만 죽어) 고아로 남는 레코드가
+생기지 않는다. 이 워커는 어떤 경로로도 raise하지 않는다(§계약).
 """
 import asyncio
 from typing import Any, Callable
@@ -44,14 +57,25 @@ class CaseQueue:
     def qsize(self) -> int:
         return self._queue.qsize()
 
-    def requeue_open(self, repo) -> int:
-        """repo.list_by_status("open") 전부를 큐에 다시 넣는다(재시작 내구성).
+    def requeue_open(self, repo, *, clock) -> int:
+        """open 케이스 전부 + lease가 만료된 investigating 케이스를 큐에 넣는다.
+
+        재시작 내구성의 핵심: open은 아직 아무도 손대지 않은 케이스라
+        무조건 회수한다. investigating은 죽은 워커가 lease를 쥔 채
+        프로세스만 죽었을 수 있는 상태다 — lease_until이 없거나(비정상
+        레코드) clock() 이전으로 지났으면 그 워커는 더 이상 살아있지 않다고
+        보고 회수한다. lease가 아직 유효한 investigating은 다른(살아있는)
+        워커가 지금 붙들고 있는 것이므로 건드리지 않는다.
 
         투입한 케이스 수를 돌려준다. 큐는 무제한(maxsize=0)이므로 블로킹
         없이 put_nowait로 즉시 채운다 — 워커가 아직 돌기 전(이벤트 루프
         기동 이전)에도 호출할 수 있어야 하기 때문이다.
         """
-        records = repo.list_by_status("open")
+        now = clock()
+        records = list(repo.list_by_status("open"))
+        for record in repo.list_by_status("investigating"):
+            if record.lease_until is None or record.lease_until < now:
+                records.append(record)
         for record in records:
             self._queue.put_nowait(record.id)
         return len(records)
@@ -106,11 +130,17 @@ class InvestigationWorker:
             pass
 
     async def _run_with_f3(self, record, case, deps, engine, case_id: str,
-                           first_thread_id: str, initial_evidence, *, resume=None):
+                           first_thread_id: str, initial_evidence, *, resume=None,
+                           allow_restart: bool = True):
         """첫 시도(신규 조사 또는 resume) 후 실패하면 스레드를 폐기하고 새 스레드로
-        신규 조사를 한 번만 재시도한다. 그마저 실패하면 케이스를 종결하고
-        (discard_threads=True) 마지막 예외를 그대로 다시 던진다 — 레저 기록과
-        "failed" 반환은 run_once/resume_once의 최외곽 try/except 하나가 맡는다.
+        신규 조사를 한 번만 재시도한다(allow_restart=True일 때만 — resume_once의
+        스레드 schema 버전 불일치 경로는 이미 "새 스레드"로 여는 첫 시도이므로
+        allow_restart=False를 넘겨 추가 재시작을 막는다).
+
+        이 메서드는 케이스를 직접 닫지 않는다 — 재시도가 없거나 소진되면
+        "재개 실패 — ..." 사유를 담은 예외를 새로 던질 뿐이다. 레저 기록과
+        close_case(discard_threads=True)는 run_once/resume_once 최외곽의
+        단일 except 하나가 전담한다(F1: 그래프 호출 밖 실패와 동일하게).
         """
         try:
             if resume is not None:
@@ -121,7 +151,10 @@ class InvestigationWorker:
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=first_thread_id,
                     engine=engine, initial_evidence=initial_evidence)
             return record, result
-        except Exception:
+        except Exception as first_exc:
+            if not allow_restart:
+                raise RuntimeError(
+                    f"재개 실패 — 새 스레드 시도 실패: {first_exc}") from first_exc
             await self._discard_thread(first_thread_id)
             retry_thread_id = self._next_thread_id(record, case_id)
             record = self._register_thread(record, retry_thread_id)
@@ -136,11 +169,8 @@ class InvestigationWorker:
                     engine=engine, initial_evidence=fresh_evidence)
                 return record, result
             except Exception as second_exc:
-                await close_case(
-                    case_id, repo=self._repo, checkpointer=self._checkpointer, clock=self._clock,
-                    reason=f"재개 실패 — 스레드 재시작 후에도 실패: {second_exc}",
-                    discard_threads=True)
-                raise
+                raise RuntimeError(
+                    f"재개 실패 — 스레드 재시작 후에도 실패: {second_exc}") from second_exc
 
     async def _finish(self, record, result: dict) -> str:
         if "__interrupt__" in result:
@@ -159,6 +189,27 @@ class InvestigationWorker:
         fct = record.fct if record is not None else "unknown"
         self._ledger.record_run(gbm, fct, f"worker:{case_id}", CheckOutcome(
             status="error", observed_at=self._clock(), error=f"{type(exc).__name__}: {exc}"))
+
+    async def _fail(self, record, case_id: str, exc: Exception) -> str:
+        """실패 경로의 단일 합류점(F1·F3 공통) — 레저 기록 후 케이스를 종결한다.
+
+        F3 소진(_run_with_f3가 다시 던진 "재개 실패 — ..." 예외)이든,
+        deps_for_site/build_engine/evidence_refs_for_case/_finish처럼 그래프
+        호출 밖에서 난 예외든 구분하지 않는다 — 어느 쪽이든 이 시점에서
+        레코드는 아직 investigating이므로(닫힌 적이 없다) 그대로
+        close_case(discard_threads=True)로 닫아 owner 없는 investigating
+        고아를 남기지 않는다. 종결 자체가 실패하면(예: repo/checkpointer
+        장애) 그 실패만 추가로 레저에 남기고 더 시도하지 않는다 — 워커는
+        어떤 경로로도 raise하지 않는다.
+        """
+        self._log_failure(record, case_id, exc)
+        try:
+            await close_case(case_id, repo=self._repo, checkpointer=self._checkpointer,
+                             clock=self._clock, reason=f"워커 실패 — {type(exc).__name__}: {exc}",
+                             discard_threads=True)
+        except Exception as close_exc:                              # noqa: BLE001
+            self._log_failure(record, case_id, close_exc)
+        return "failed"
 
     async def _release_safely(self, case_id: str) -> None:
         # 닫힌 케이스는 transition(→closed)이 이미 lease를 해제했다 — 그런 레코드에
@@ -187,7 +238,13 @@ class InvestigationWorker:
             leased = acquire_lease(record, self._owner, clock=self._clock, ttl_s=self._lease_ttl_s)
             if leased is None:
                 return "busy"                                       # 레저 이벤트 없음(경합은 정상)
-            record = transition(leased, "investigating", clock=self._clock)
+            if leased.status == "open":
+                record = transition(leased, "investigating", clock=self._clock)
+            else:
+                # requeue_open이 죽은 워커에게서 회수한 investigating 케이스 —
+                # 전이표에 investigating→investigating이 없으므로 재전이하지
+                # 않고 lease만(acquire_lease가 이미) 새로 잡은 채로 진행한다.
+                record = leased
             thread_id = self._next_thread_id(record, case_id)
             record = self._register_thread(record, thread_id)
             self._repo.save(record)
@@ -202,8 +259,7 @@ class InvestigationWorker:
                 record, case, deps, engine, case_id, thread_id, initial_evidence)
             return await self._finish(record, result)
         except Exception as exc:
-            self._log_failure(record, case_id, exc)
-            return "failed"
+            return await self._fail(record, case_id, exc)
         finally:
             await self._release_safely(case_id)
 
@@ -211,9 +267,11 @@ class InvestigationWorker:
         """awaiting_human 케이스를 사람의 답변으로 재개한다.
 
         최신 스레드의 저장된 schema 버전이 지금 엔진과 다르면(엔진 배선이
-        바뀐 뒤 재개하려는 경우) resume을 시도하지 않고 F3 경로(스레드 폐기 +
-        새 스레드로 신규 조사)를 그대로 탄다 — 옛 체크포인트를 새 그래프
-        모양으로 재개하면 어떤 실패를 낼지 예측할 수 없기 때문이다.
+        바뀐 뒤 재개하려는 경우) resume을 시도하지 않고 새 스레드로 신규
+        조사를 연다 — 옛 체크포인트를 새 그래프 모양으로 재개하면 어떤
+        실패를 낼지 예측할 수 없기 때문이다. 이 경로는 이미 "새 스레드로
+        재시작"한 것이므로 실패해도 또 재시작하지 않는다(allow_restart=False)
+        — 그래야 총 재시작 횟수가 F3와 마찬가지로 최대 1회로 유지된다.
         """
         record = None
         try:
@@ -245,11 +303,11 @@ class InvestigationWorker:
                 record = self._register_thread(record, fresh_thread_id)
                 self._repo.save(record)
                 record, result = await self._run_with_f3(
-                    record, case, deps, engine, case_id, fresh_thread_id, initial_evidence)
+                    record, case, deps, engine, case_id, fresh_thread_id, initial_evidence,
+                    allow_restart=False)
             return await self._finish(record, result)
         except Exception as exc:
-            self._log_failure(record, case_id, exc)
-            return "failed"
+            return await self._fail(record, case_id, exc)
         finally:
             await self._release_safely(case_id)
 
