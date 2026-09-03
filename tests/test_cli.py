@@ -8,6 +8,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 import src.__main__ as main_module
 from src.__main__ import main
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
+from src.domain.events import InMemoryEventStore
 from src.domain.store import InMemoryCaseStore
 from src.infrastructure.llm import ScriptedLLM
 from src.patrol.ledger import InMemoryLedger
@@ -236,7 +237,8 @@ def test_접수_문답은_human_intake_증거로_박제된다(tmp_path, capsys, 
     monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
 
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
-    monkeypatch.setattr("src.__main__.build_persistence", lambda cfg: (store, repo, ledger))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: (store, repo, ledger, InMemoryEventStore()))
 
     code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "OEE가 이상하다",
                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
@@ -273,7 +275,8 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
 
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     checkpointer = InMemorySaver()
-    monkeypatch.setattr("src.__main__.build_persistence", lambda cfg: (store, repo, ledger))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: (store, repo, ledger, InMemoryEventStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: checkpointer)
 
     lead_llm = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON])
@@ -334,7 +337,8 @@ def test_case_show_report는_저장된_보고서_파일을_그대로_보여준�
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
                          origin="human", status="closed", created_at=T, updated_at=T))
-    monkeypatch.setattr("src.__main__.build_persistence", lambda cfg: (store, repo, ledger))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: (store, repo, ledger, InMemoryEventStore()))
 
     report_dir = tmp_path / "myreports"
     report_dir.mkdir()
@@ -357,7 +361,8 @@ def test_case_show_report는_파일이_없으면_즉석_렌더한다(tmp_path, c
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     repo.save(CaseRecord(id="c-2", gbm="mx", fct="gumi", fingerprint="fp", symptom="증상", t0=T,
                          origin="human", status="closed", created_at=T, updated_at=T))
-    monkeypatch.setattr("src.__main__.build_persistence", lambda cfg: (store, repo, ledger))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: (store, repo, ledger, InMemoryEventStore()))
 
     code = main(["case", "show", "c-2", "--report", "--config-root", str(tmp_path / "config")])
     out = capsys.readouterr().out

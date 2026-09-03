@@ -23,6 +23,7 @@ from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
 from src.domain.cases import CaseRecord, CaseRepositoryPort, OPEN_STATUSES
+from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
 from src.domain.store import CaseStorePort, EvidenceRecord
 from src.knowledge.digest import canonical_digest
@@ -62,6 +63,9 @@ def ensure_indexes(db: Database) -> None:
     # (sent, seq) 복합 인덱스는 pending_sends의 filter({"sent": False})+sort("seq")를 그대로 받친다.
     db.sends.create_index("send_id", unique=True)
     db.sends.create_index([("sent", 1), ("seq", 1)])
+    # (case_id, seq) unique: seq는 counters로 원자 증가하므로 중복이 나면 그 자체가
+    # 카운터 손상 신호다 — 인덱스가 조용한 중복 대신 즉시 실패로 드러낸다.
+    db.case_events.create_index([("case_id", 1), ("seq", 1)], unique=True)
 
 
 class MongoCaseStore(CaseStorePort):
@@ -308,3 +312,34 @@ class MongoLedger(LedgerPort):
         if not stale_ids:
             return 0
         return self._db.sends.delete_many({"_id": {"$in": stale_ids}}).deleted_count
+
+
+class MongoEventStore(EventStorePort):
+    """이벤트 로그를 담는 Mongo 스토어 — 프로세스 밖 구독자의 읽기 지점."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    def append(self, event: EngineEvent) -> EngineEvent:
+        seq = _next_seq(self._db, f"events:{event.case_id}")
+        stamped = event.model_copy(update={"seq": seq})
+        self._db.case_events.insert_one(stamped.model_dump(mode="json"))
+        return stamped
+
+    def since(self, case_id, after_seq=0, limit=200):
+        if limit <= 0:
+            return []
+        cursor = (self._db.case_events
+                  .find({"case_id": case_id, "seq": {"$gt": after_seq}})
+                  .sort("seq", 1).limit(limit))
+        return [EngineEvent.model_validate({k: v for k, v in doc.items() if k != "_id"})
+                for doc in cursor]
+
+    def prune_before(self, before):
+        # at은 ISO 문자열이라 DB의 $lt로 거르면 마이크로초 유무로 순서가 어긋난다
+        # (모듈 docstring). purge_evidence_before와 같은 방식으로 Python에서 판정한다.
+        stale = [doc["_id"] for doc in self._db.case_events.find({}, {"_id": 1, "at": 1})
+                 if datetime.fromisoformat(doc["at"]) < before]
+        if stale:
+            self._db.case_events.delete_many({"_id": {"$in": stale}})
+        return len(stale)

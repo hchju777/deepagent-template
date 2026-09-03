@@ -19,9 +19,10 @@ from pymongo import MongoClient
 
 from src.config.schema_app import StoreConfig
 from src.domain.cases import InMemoryCaseRepository
+from src.domain.events import InMemoryEventStore
 from src.domain.store import InMemoryCaseStore
-from src.infrastructure.mongo_store import (MongoCaseRepository, MongoCaseStore, MongoLedger,
-                                            ensure_indexes)
+from src.infrastructure.mongo_store import (MongoCaseRepository, MongoCaseStore,
+                                            MongoEventStore, MongoLedger, ensure_indexes)
 from src.patrol.ledger import InMemoryLedger
 
 
@@ -35,9 +36,10 @@ def build_checkpointer(cfg: StoreConfig):
 
 
 def build_persistence(cfg: StoreConfig):
-    """cfg.backend에 따라 (store, repo, ledger) 3종 세트를 만든다."""
+    """cfg.backend에 따라 (store, repo, ledger, events) 4종 세트를 만든다."""
     if cfg.backend == "memory":
-        return InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+        return (InMemoryCaseStore(), InMemoryCaseRepository(),
+                InMemoryLedger(), InMemoryEventStore())
     db = MongoClient(cfg.mongo_url)[cfg.mongo_db]
     ensure_indexes(db)
-    return MongoCaseStore(db), MongoCaseRepository(db), MongoLedger(db)
+    return MongoCaseStore(db), MongoCaseRepository(db), MongoLedger(db), MongoEventStore(db)

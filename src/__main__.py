@@ -79,7 +79,7 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
 
     clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
     app, sites = assemble_sites(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
-    store, repo, ledger = build_persistence(app.store)
+    store, repo, ledger, events = build_persistence(app.store)
     checkpointer = build_checkpointer(app.store)
 
     needs_judge_llm = any(check.judge in ("llm", "rule+llm")
@@ -117,7 +117,7 @@ def _cmd_patrol_status(config_root: Path, env: dict) -> int:
         print("메모리 백엔드 — 프로세스 간 상태 없음")
         return 0
 
-    _store, _repo, ledger = build_persistence(app.store)
+    _store, _repo, ledger, _events = build_persistence(app.store)
     hb = ledger.last_heartbeat()
     print(f"하트비트: {hb.isoformat() if hb is not None else '없음'}")
 
@@ -151,7 +151,7 @@ def _cmd_case_list(args, config_root: Path, env: dict) -> int:
     app = _load_app(config_root, env)
     if app is None:
         return 1
-    _store, repo, _ledger = build_persistence(app.store)
+    _store, repo, _ledger, _events = build_persistence(app.store)
     statuses = (args.status,) if args.status else _CASE_STATUSES
     records = [r for status in statuses for r in repo.list_by_status(status)]
     for r in records:
@@ -163,7 +163,7 @@ def _cmd_case_show(args, config_root: Path, env: dict) -> int:
     app = _load_app(config_root, env)
     if app is None:
         return 1
-    store, repo, _ledger = build_persistence(app.store)
+    store, repo, _ledger, _events = build_persistence(app.store)
     try:
         record = repo.get(args.case_id)
     except KeyError:
@@ -221,7 +221,7 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
             print(problem, file=sys.stderr)
         return 1
 
-    store, repo, ledger = build_persistence(app.store)
+    store, repo, ledger, events = build_persistence(app.store)
     try:
         record = repo.get(args.case_id)
     except KeyError:
@@ -426,7 +426,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
              "삭제됨) — 접수할 수 없다", file=sys.stderr)
         return 1
 
-    store, repo, ledger = build_persistence(app.store)
+    store, repo, ledger, events = build_persistence(app.store)
     checkpointer = build_checkpointer(app.store)
     for site_rt in sites:
         site_rt.deps.store = store    # daemon.py 모듈 docstring과 동일한 불변식

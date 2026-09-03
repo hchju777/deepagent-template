@@ -113,3 +113,32 @@ def test_ensure_indexes는_지문_조회_인덱스를_만든다(db):
     cases_idx = db.cases.index_information()
     assert any(spec["key"] == [("status", 1), ("fingerprint", 1)]
               for spec in cases_idx.values())
+
+
+def test_mongo_이벤트_스토어는_seq_순서로_돌려준다(db):
+    from src.domain.events import EngineEvent
+    from src.infrastructure.mongo_store import MongoEventStore
+    events = MongoEventStore(db)
+    a = events.append(EngineEvent(event="round_started", case_id="c-1", at=T))
+    b = events.append(EngineEvent(event="task_finished", case_id="c-1", at=T))
+    events.append(EngineEvent(event="round_started", case_id="c-2", at=T))
+    assert (a.seq, b.seq) == (1, 2)
+    assert [e.event for e in events.since("c-1")] == ["round_started", "task_finished"]
+    assert [e.seq for e in events.since("c-1", after_seq=1)] == [2]
+
+
+def test_mongo_이벤트_보존은_마이크로초_길이에_속지_않는다(db):
+    # at은 ISO 문자열로 저장된다. 마이크로초가 있는 값과 없는 값은 길이가 달라
+    # 사전식 비교가 시간 순서와 어긋난다 — DB $lt가 아니라 Python 파싱으로 걸러야 한다.
+    from datetime import timedelta
+
+    from src.domain.events import EngineEvent
+    from src.infrastructure.mongo_store import MongoEventStore
+    events = MongoEventStore(db)
+    old = T - timedelta(days=40)
+    events.append(EngineEvent(event="round_started", case_id="c-1", at=old))
+    events.append(EngineEvent(event="round_started", case_id="c-1",
+                              at=old.replace(microsecond=123456)))
+    events.append(EngineEvent(event="round_started", case_id="c-1", at=T))
+    assert events.prune_before(T - timedelta(days=1)) == 2
+    assert [e.seq for e in events.since("c-1")] == [3]

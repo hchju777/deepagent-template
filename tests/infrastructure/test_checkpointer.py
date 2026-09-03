@@ -15,7 +15,7 @@ def test_memory_백엔드와_mongo_모듈_존재():
 
 
 def test_build_persistence_memory_백엔드():
-    store, repo, ledger = build_persistence(StoreConfig(backend="memory"))
+    store, repo, ledger, events = build_persistence(StoreConfig(backend="memory"))
     assert isinstance(store, InMemoryCaseStore)
     assert isinstance(repo, InMemoryCaseRepository)
     assert isinstance(ledger, InMemoryLedger)
