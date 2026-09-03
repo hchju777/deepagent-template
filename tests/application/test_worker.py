@@ -256,3 +256,33 @@ async def test_워커는_상태_전이_이벤트를_낸다():
     assert await worker.run_once("c-1") == "closed"
     statuses = [e.data["status"] for e in seen if e.event == "case_status_changed"]
     assert statuses[0] == "investigating" and statuses[-1] == "closed"
+
+
+async def test_실패_종결도_closed_이벤트를_낸다():
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    def broken_deps(g, f):
+        raise RuntimeError("deps 조립 실패")
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=broken_deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.run_once("c-1") == "failed"
+    closed = [e for e in seen if e.event == "case_status_changed" and e.data["status"] == "closed"]
+    assert len(closed) == 1 and closed[0].case_id == "c-1"
+
+
+async def test_워커가_주입한_시계로_이벤트_시각이_찍힌다():
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    seen = []
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 on_event=seen.append)
+    assert await worker.run_once("c-1") == "closed"
+    assert seen and all(e.at == T for e in seen)      # 스트리밍 이벤트 포함 전부 주입 시계

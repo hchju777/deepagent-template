@@ -151,7 +151,7 @@ class InvestigationWorker:
         self._on_event = on_event
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
 
-    def _emit_status(self, case_id: str, status: str) -> None:
+    def _emit_status(self, case_id: str, status: str, *, reason: str | None = None) -> None:
         """케이스 상태 전이(investigating/awaiting_human/closed)를 싱크에 낸다.
 
         on_event가 None이면 아무것도 하지 않는다. 이벤트 발행 실패(싱크가 raise)가
@@ -161,7 +161,7 @@ class InvestigationWorker:
         if self._on_event is None:
             return
         try:
-            self._on_event(case_status_event(case_id, status, clock=self._clock))
+            self._on_event(case_status_event(case_id, status, clock=self._clock, reason=reason))
         except Exception:                                          # noqa: BLE001
             pass
 
@@ -250,11 +250,13 @@ class InvestigationWorker:
             if resume is not None:
                 result = await resume_case(resume, deps=deps, checkpointer=self._checkpointer,
                                            thread_id=first_thread_id, engine=engine,
-                                           on_event=self._on_event)
+                                           on_event=self._on_event, case_id=case_id,
+                                           clock=self._clock)
             else:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=first_thread_id,
-                    engine=engine, initial_evidence=initial_evidence, on_event=self._on_event)
+                    engine=engine, initial_evidence=initial_evidence, on_event=self._on_event,
+                    clock=self._clock)
             return record, result
         except Exception as first_exc:
             if not allow_restart:
@@ -279,7 +281,8 @@ class InvestigationWorker:
             try:
                 result = await investigate_case(
                     case, deps=deps, checkpointer=self._checkpointer, thread_id=retry_thread_id,
-                    engine=engine, initial_evidence=fresh_evidence, on_event=self._on_event)
+                    engine=engine, initial_evidence=fresh_evidence, on_event=self._on_event,
+                    clock=self._clock)
                 return record, result
             except Exception as second_exc:
                 raise RuntimeError(
@@ -331,12 +334,20 @@ class InvestigationWorker:
         고아를 남기지 않는다. 종결 자체가 실패하면(예: repo/checkpointer
         장애) 그 실패만 추가로 레저에 남기고 더 시도하지 않는다 — 워커는
         어떤 경로로도 raise하지 않는다.
+
+        run_once/resume_once의 반환값("failed")과 도메인 CaseStatus("closed")는
+        다른 축이다 — close_case가 실제로 상태를 closed로 전이시키므로, 성공하면
+        _finish의 두 종결 경로(awaiting_human/closed)와 동일하게 case_status_event를
+        낸다. 그래야 보고 채널(계획 5)이 실패 종결도 놓치지 않는다. close_case
+        자체가 실패한 경로는 상태가 실제로 안 바뀌었을 수 있으므로 이벤트를 내지
+        않는다.
         """
         self._log_failure(record, case_id, exc)
+        reason = f"워커 실패 — {type(exc).__name__}: {exc}"
         try:
             await close_case(case_id, repo=self._repo, checkpointer=self._checkpointer,
-                             clock=self._clock, reason=f"워커 실패 — {type(exc).__name__}: {exc}",
-                             discard_threads=True)
+                             clock=self._clock, reason=reason, discard_threads=True)
+            self._emit_status(case_id, "closed", reason=reason)
         except Exception as close_exc:                              # noqa: BLE001
             self._log_failure(record, case_id, close_exc)
         return "failed"
