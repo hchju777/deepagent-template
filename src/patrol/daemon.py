@@ -37,7 +37,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from src.application.close import sweep_timeouts
 from src.application.deps import EngineDeps
-from src.application.events import report_ready_event
+from src.application.events import case_status_event, report_ready_event
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.config.loader import load_app_config, load_registry, load_site_config
 from src.config.schema_app import AppConfig, ReportConfig
@@ -137,6 +137,7 @@ class PatrolDaemon:
 
             admit = admit_finding(outcome.finding, repo=self.repo, store=self.store, clock=self.clock)
             if admit.action == "opened":
+                self._emit_case_opened(admit.case_id)
                 await self.queue.put(admit.case_id)
             elif admit.action == "attached":
                 self.ledger.record_run(gbm, fct, f"gate:{name}", CheckOutcome(
@@ -181,6 +182,7 @@ class PatrolDaemon:
             for finding in findings:
                 admit = admit_finding(finding, repo=self.repo, store=self.store, clock=self.clock)
                 if admit.action == "opened":
+                    self._emit_case_opened(admit.case_id)
                     await self.queue.put(admit.case_id)
         except Exception:                                          # noqa: BLE001
             pass
@@ -241,6 +243,18 @@ class PatrolDaemon:
         건너뛰므로(mail.py F2) 방어적으로 감싸지 않는다."""
         case_id = record["send_id"].removeprefix("report:")
         return self._report_subject(case_id), self._render_case_report(case_id)
+
+    def _emit_case_opened(self, case_id: str) -> None:
+        """게이트가 케이스를 연 직후 부른다 — Timeline의 첫 항목이다.
+
+        싱크가 raise해도 순찰을 죽이지 않는다(worker._emit_status와 같은 계약).
+        """
+        if self.on_event is None:
+            return
+        try:
+            self.on_event(case_status_event(case_id, "open", clock=self.clock))
+        except Exception:                                          # noqa: BLE001
+            pass
 
     async def _publish_report(self, case_id: str) -> None:
         """워커가 케이스를 닫은 직후 InvestigationWorker.on_closed로 불린다(계획 5).

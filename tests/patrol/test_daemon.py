@@ -138,3 +138,17 @@ async def test_실패_종결에서도_보고서가_먼저_쓰이고_이벤트가
     text = written[0].read_text(encoding="utf-8")
     assert "판정 없음" in text
     assert [e.event for e in seen if e.event == "report_ready"]
+
+
+async def test_게이트가_케이스를_열면_open_이벤트가_나간다(tmp_path):
+    # Timeline의 첫 항목("이 케이스가 왜 열렸나")이 통째로 빠져 있었다.
+    # 어휘는 이미 있고 호출부만 없던 문제다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    seen = []
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path, on_event=seen.append)
+    daemon.build()
+    await daemon.run_one("mx", "gumi", "api.oee", CHECK)
+    assert repo.list_by_status("open")[0].id == "c-1"
+    opened = [e for e in seen
+              if e.event == "case_status_changed" and e.data["status"] == "open"]
+    assert [e.case_id for e in opened] == ["c-1"]
