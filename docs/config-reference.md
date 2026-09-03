@@ -69,6 +69,12 @@
 | `store.retention.sends_d` | int | 30 | 메일 발송 레저(F6 멱등 기록) 보존 일수 |
 | `store.retention.events_d` | int | 30 | 이벤트 로그(`case_events`) 보존 일수 |
 | `store.retention.snapshots_d` | int | 730 | 종결 판정 스냅샷 보존 일수. 사람 라벨은 몇 달 뒤에 오므로 다른 것들보다 훨씬 길다 |
+| `target.rest.auth.header` | str | — | 대상 API가 요구하는 인증 헤더 이름(예: `x-dep-ticket`) |
+| `target.rest.auth.value` | SecretStr | — | 그 헤더의 값. 반드시 `${ENV}` 참조로 준다 — 리터럴 금지 |
+| `target.rest.entries.<이름>.method` | `"GET"` \| `"POST"` | `"GET"` | 이 항목을 호출할 HTTP 메서드. **쓰기 메서드는 등재할 수 없다** |
+| `target.rest.entries.<이름>.path` | str | **필수** | base_url 기준 경로 |
+| `target.rest.entries.<이름>.body_schema` | dict[str, 타입] | `{}` | POST body의 닫힌 스키마. 타입은 `str`/`int`/`float`/`bool`/`list[str]`/`list[int]`. GET 항목에는 둘 수 없다 |
+| `target.rest.entries.<이름>.query_keys` | list[str] | `[]` | 허용할 쿼리 파라미터 키. 목록 밖 키는 소켓 전에 거부된다 |
 | `report.output_dir` | str | `"output"` | 렌더된 보고서(`{case_id}.{format}`)를 쓰는 디렉터리 |
 | `report.format` | `"html"` \| `"md"` | `"html"` | 보고서 산출 포맷. 메일은 HTML일 때 평문(마크다운)과 HTML 두 파트를 함께 보낸다 |
 | `report.mail.enabled` | bool | `false` | 메일 발송 여부. `true`면 `host`/`recipients` 필수(검증자) |

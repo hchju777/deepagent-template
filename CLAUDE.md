@@ -116,6 +116,29 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 `_build_publisher`가 조립하는 `(on_event, on_closed)` 쌍을 그대로 재사용하라
 — 새 종결 경로를 추가한다면 반드시 이 헬퍼를 거쳐야 한다.
 
+### 9. 대상 시스템 읽기 전용은 등재제로 강제한다
+
+`RestProberPort`에 `post`/`put`/`patch`/`delete`를 **만들지 않는다**. v1에서는
+`get` 하나뿐이라 쓰기가 물리적으로 불가능했고, POST가 필요해진 뒤에도 그 성질을
+잃지 않으려면 "임의의 메서드로 임의의 경로를 호출하라"가 표현 불가능해야 한다.
+
+호출자는 `query(entry, params)`로 **등재 항목 이름**만 대고, 어떤 HTTP 메서드로
+나갈지는 어댑터가 그 항목의 선언(`target.rest.entries`)을 보고 정한다. body는
+항목의 닫힌 스키마를 통과해야 소켓에 나간다 — 메서드 수준에서 잃은 메커니즘의
+정직한 대체물이 body 수준의 닫힌 스키마다.
+
+**config가 권한이고, 대상의 자기 서술(OpenAPI 등)은 증거일 뿐이다.** 런타임에
+명세를 읽어 등재 목록을 넓히는 코드를 만들지 마라 — 대상이 새 POST를 배포하면
+우리 허용 범위가 자동으로 넓어지는 fail-open이 된다.
+
+`read_only: true` 같은 플래그는 두지 않는다. 목록에 없으면 문이 안 열리므로
+플래그가 중복이고, 끝점 수십 개에 플래그를 적으라고 하면 사람은 기동 검증을
+통과시키려고 전부 `true`로 적는다 — 아무도 생각하지 않는 체크박스의 안전 가치는
+0이다.
+
+`tests/domain/test_ports.py`가 포트 표면을 단정한다. 산문 규율은 읽지 않으면
+무력하므로 테스트가 지킨다.
+
 ## 언어 관례
 
 - **코드 주석·문서(이 파일 포함)**: 한국어. WHY(비직관적 제약, 숨은 불변식,
@@ -145,6 +168,7 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | Mongo 케이스 저장소 | `src/infrastructure/mongo_store.py` |
 | 프로브 레지스트리 | `src/patrol/probes.py` |
 | rule 판정 4종 | `src/patrol/rules.py` |
+| 읽기 전용 순수 판정(끝점·body·집계) | `src/infrastructure/query_rules.py` |
 | 이벤트 로그 포트·인메모리 구현 | `src/domain/events.py` |
 | 종결 판정 스냅샷(retention보다 오래 산다) | `src/domain/snapshot.py` |
 | LLM 판정 | `src/patrol/llm_judge.py` |
