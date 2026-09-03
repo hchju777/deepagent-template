@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from src.config.loader import ConfigError, load_registry, load_site_config
+from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
 
 
 def _write(tmp_path, rel, data):
@@ -56,6 +56,24 @@ def test_앞_계층이_없어도_null_마커는_삭제로_동작한다(tmp_path)
     cfg, prov = load_site_config(tmp_path / "config", "mx", "gumi", env={})
     assert "api.freshness" not in cfg.patrol.checks
     assert not any(p.startswith("patrol.checks.api.freshness") for p in prov)
+
+
+def test_app_json의_env_참조는_env가_주어지면_치환된다(tmp_path):
+    _write(tmp_path, "config/app.json",
+           {"store": {"backend": "mongo", "mongo_url": "${AGENT_MONGO_URL}"},
+            "llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}})
+    cfg = load_app_config(tmp_path / "config", env={"AGENT_MONGO_URL": "mongodb://x/y"})
+    assert cfg.store.mongo_url == "mongodb://x/y"
+
+
+def test_app_json의_env_미주입시엔_치환을_건너뛴다(tmp_path):
+    # env를 아예 넘기지 않으면(기본 None) 해석을 건너뛴다 — literal "${...}"가
+    # 문자열 타입 검증은 통과하므로 여기서는 실패하지 않는다(호출부가 env를
+    # 반드시 넘기도록 고치는 게 C1의 실제 방어선이다).
+    _write(tmp_path, "config/app.json",
+           {"llm": {"profiles": {"judge": "${MISSING}", "subagent": "b", "lead": "c"}}})
+    cfg = load_app_config(tmp_path / "config")
+    assert cfg.llm.profiles.judge == "${MISSING}"
 
 
 def test_깨진_JSON은_트레이스백이_아니라_ConfigError다(tmp_path):

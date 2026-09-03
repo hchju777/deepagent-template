@@ -11,6 +11,10 @@
 LLM에 맡기는 점검이 있는데 그 LLM 프로파일이 빈 문자열이면 매 회차
 "LLM 미주입" error로만 채워질 뿐이니 기동 시점에 막는다. app config
 자체가 검사 1에서 이미 실패했으면(app_config is None) 이 검사는 건너뛴다.
+검사 11(계획 4b): enabled 사이트가 하나라도 있고 llm.profiles(judge/subagent/lead)
+중 하나라도 값이 있으면 env LLM_API_KEY가 있어야 한다 — assemble_sites가
+사이트마다 lead/subagent LLM을 조건 없이 만들기 때문에, 키가 없으면 조립이
+조용히 깨지거나 실LLM 호출 시점에야 뒤늦게 실패한다.
 """
 import asyncio
 from dataclasses import dataclass
@@ -56,7 +60,7 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
 
     app_config = None
     try:
-        app_config = load_app_config(config_root)
+        app_config = load_app_config(config_root, env=env)
     except ConfigError as exc:
         errors += [BootError("app", p) for p in exc.problems]
 
@@ -134,5 +138,13 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
     # 검사 10: llm/rule+llm 판정 점검이 하나라도 있으면 judge LLM 프로파일 필수 (계획 4b)
     if app_config is not None and needs_judge_llm and not app_config.llm.profiles.judge:
         errors.append(BootError("app", "judge LLM 프로파일 필요 — llm/rule+llm 점검이 있다"))
+
+    # 검사 11: enabled 사이트가 있고 llm.profiles 중 하나라도 쓰이면 LLM_API_KEY 필수 (계획 4b)
+    has_enabled_site = any(site.enabled for site in registry.sites)
+    if app_config is not None and has_enabled_site:
+        profiles = app_config.llm.profiles
+        profiles_used = bool(profiles.judge or profiles.subagent or profiles.lead)
+        if profiles_used and not env.get("LLM_API_KEY"):
+            errors.append(BootError("app", "LLM_API_KEY 필요 — llm 프로파일을 쓰는 활성 사이트가 있다"))
 
     return errors

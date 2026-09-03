@@ -19,6 +19,13 @@ async def test_스윕은_오래된_종결_케이스와_레저와_스크래치를
         repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint=cid, symptom="s", t0=T,
                              created_at=at, updated_at=at, status="closed", thread_ids=[f"{cid}#1"]))
         store.put_evidence(cid, "s", {"x": 1}, as_of=at)
+    # I7: closed_case_evidence_d(90d)보다 짧은 checkpoint_ttl_d(14d) 구간에 있는
+    # 닫힌 케이스 — 증거는 아직 살아있어야 하지만 스레드는 ④가 폐기해야 한다.
+    mid = T - timedelta(days=20)
+    repo.save(CaseRecord(id="c-mid", gbm="mx", fct="gumi", fingerprint="c-mid", symptom="s", t0=T,
+                         created_at=mid, updated_at=mid, status="closed", thread_ids=["c-mid#1"],
+                         status_since=mid))
+    store.put_evidence("c-mid", "s", {"x": 1}, as_of=mid)
     ledger.record_run("mx", "gumi", "c", CheckOutcome(status="ok", observed_at=old))
     ledger.record_run("mx", "gumi", "c", CheckOutcome(status="ok", observed_at=fresh))
     store.put_evidence("patrol:mx:gumi:c", "s", {"p": 1}, as_of=old)
@@ -29,6 +36,12 @@ async def test_스윕은_오래된_종결_케이스와_레저와_스크래치를
     assert counts["ledger_runs"] == 1 and len(ledger.runs("mx", "gumi", "c")) == 1
     assert counts["scratch_evidence"] == 1 and len(store.list_evidence("patrol:mx:gumi:c")) == 1
     assert repo.get("c-old").thread_ids == []
+    assert repo.get("c-old").purged_at == T                       # I7: 재선택 방지 스탬프
+    assert repo.get("c-fresh").purged_at is None                  # 아직 안 닫힌(최근) 건 안 건드림
+    # I7: c-mid는 90일이 안 지나 증거는 남지만(purge 대상 아님), 14일은 지나 스레드는 폐기된다
+    assert repo.get("c-mid").thread_ids == [] and store.list_evidence("c-mid")
+    assert repo.get("c-mid").purged_at is None
+    assert counts["expired_threads"] >= 1
 
 
 async def test_오래된_열린_케이스의_스레드는_폐기되고_기록에서_제거된다():

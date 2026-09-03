@@ -28,7 +28,13 @@ class EngineConfig(StrictModel):
 class InvestigationsConfig(StrictModel):
     max_concurrent: int = 2
     awaiting_human_timeout_h: int = 72
-    lease_ttl_s: int = 900              # 케이스 임차(lease) 유효 시간(초) — 계획 4b
+    # 케이스 임차(lease) 유효 시간(초) — 계획 4b. 조사 한 라운드가 걸릴 수 있는
+    # 최대 시간보다 길어야 한다 — 워커(InvestigationWorker)가 엔진 호출 동안
+    # lease_ttl_s/3 간격의 keepalive로 계속 갱신하므로(계획 4b I5), 실제로
+    # 필요한 건 "keepalive 한 틱이 늦어져도 다른 워커가 뺏어가지 않을 여유"뿐이다.
+    # float를 허용하는 이유는 테스트가 아주 짧은 TTL로 keepalive 갱신 자체를
+    # 실시간에 관찰해야 하기 때문이다(정수로는 표현 불가한 해상도).
+    lease_ttl_s: float = 900
 
 
 class LlmProfiles(StrictModel):

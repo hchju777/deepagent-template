@@ -10,27 +10,58 @@ lease가 만료된 investigating 케이스도 다시 큐에 넣는다 — 워커
 
 InvestigationWorker 한 번의 run_once/resume_once는 다음을 한 동작으로 묶는다:
 lease 획득 → investigating 전이(이미 investigating이면 lease만 갱신) →
-스레드 배정 → 엔진 실행 → 결과에 따른 후속 전이(awaiting_human/closed) →
-lease 해제. 엔진(build_engine 결과)은 (gbm, fct) 사이트 키로 캐시해
-재사용한다 — 노드 배선은 deps에만 의존하고 케이스마다 달라지지 않는다.
+스레드 배정 → 엔진 실행(keepalive로 lease 유지) → 결과에 따른 후속 전이
+(awaiting_human/closed) → lease 해제. 엔진(build_engine 결과)은 (gbm, fct)
+사이트 키로 캐시해 재사용한다 — 노드 배선은 deps에만 의존하고 케이스마다
+달라지지 않는다.
+
+read-modify-write(I1): 엔진 호출(ainvoke) 이후의 모든 저장은 그 사이 다른
+경로(게이트의 finding 첨부 등)가 같은 레코드를 바꿨을 수 있다는 전제로,
+record를 다시 읽어(repo.get) 워커가 바꿀 필드만 그 위에 얹어 저장한다 —
+엔진 호출 전에 들고 있던 스냅샷을 그대로 wholesale 저장하면 그 사이의
+동시 갱신(예: finding_ids)을 잃는다.
+
+lease keepalive(I5): 엔진 호출이 lease_ttl_s를 넘게 걸리면 lease가 만료돼
+requeue_open이 같은 케이스를 다른 워커에 또 내줄 수 있다 — run_once/resume_once는
+엔진 호출을 감싸는 동안 lease_ttl_s/3 간격으로 lease를 갱신하는 백그라운드
+태스크를 돌리고, 엔진 호출이 끝나면(성공이든 실패든) finally에서 취소한다.
 
 F3(재개 실패 복구): investigate_case/resume_case가 예외를 던지면(체크포인트
 역직렬화 실패 등) 그 스레드를 폐기하고 새 스레드로 한 번만 더 시도한다
 (resume_once가 스레드 schema 버전 불일치로 곧장 새 스레드를 여는 경로는
 예외다 — 이미 "새 스레드로 재시작"한 셈이라 실패해도 또 재시작하지
 않는다, allow_restart=False). _run_with_f3는 케이스를 직접 닫지 않는다 —
-재시도가 소진되면 사유를 담은 예외를 다시 던질 뿐이다.
+재시도가 소진되면 사유를 담은 예외를 다시 던질 뿐이다. 실제 재시작
+지점에서는(I3) 레저에 "F3 재시작" 사유를 남기고, 폐기한 thread_id를
+thread_ids/thread_versions에서 바로 제거한다 — TTL 스윕을 기다리지 않고
+죽은 스레드가 목록에 남지 않게 한다. resume=answer로 재시작하는 경우(I4)는
+새 스레드가 resume 메커니즘 없이 investigate_case로 다시 시작하므로, 그
+답변을 잃지 않도록 재시작 전에 evidence로 박제해 evidence_refs_for_case가
+새 스레드에 실어 나르게 한다.
 
-run_once/resume_once 최외곽의 단일 try/except가 모든 실패(F3 소진뿐
-아니라 deps_for_site/build_engine/evidence_refs_for_case/_finish 등
-그래프 호출 "밖"에서 나는 예외까지)를 같은 방식으로 받는다: 레저에
+resume_once의 버전 불일치 재시작(F3와 별개 경로)도 같은 이유로 재시작 전에
+답변을 evidence로 박제한다(I4) — 이 경로는 investigate_case를 새로 여는
+것이지 resume하는 게 아니므로, 사람의 답변이 자연히 사라진다.
+
+미등록 사이트(daemon._deps_for_site가 None을 돌려주는 경우 — deps_for_site의
+계약: 알 수 없는 (gbm, fct)면 None): 이건 "그래프 호출 밖 실패"(F1)와 달리
+설정이 일시적으로 어긋난 것뿐 케이스 자체의 문제가 아니므로 케이스를 닫지
+않는다 — 레저에 skipped를 남기고 "skipped"를 돌려준다. 다음 requeue_open이
+(lease가 풀렸으므로) 같은 케이스를 다시 집어 준다. deps_for_site가 예외를
+던지는 경우(진짜 조립 실패)는 기존과 같이 F1 경로로 케이스를 닫는다.
+
+run_once/resume_once 최외곽의 단일 try/except가 나머지 모든 실패(F3
+소진뿐 아니라 deps_for_site 예외/build_engine/evidence_refs_for_case/_finish
+등 그래프 호출 "밖"에서 나는 예외까지)를 같은 방식으로 받는다: 레저에
 "worker:{case_id}" error 이벤트를 남기고, close_case(discard_threads=True)
 로 케이스를 종결한 뒤 "failed"를 돌려준다 — 종결 자체가 실패하면 그
-실패도 레저에 남기고 더 시도하지 않는다. 어느 경로에서도 investigating
-상태로 owner 없이(또는 owner를 쥔 채 프로세스만 죽어) 고아로 남는 레코드가
-생기지 않는다. 이 워커는 어떤 경로로도 raise하지 않는다(§계약).
+실패도 레저에 남기고(레저 기록 자체가 실패해도 종결 시도는 계속한다)
+더 시도하지 않는다. 어느 경로에서도 investigating 상태로 owner 없이(또는
+owner를 쥔 채 프로세스만 죽어) 고아로 남는 레코드가 생기지 않는다. 이
+워커는 어떤 경로로도 raise하지 않는다(§계약).
 """
 import asyncio
+import contextlib
 from typing import Any, Callable
 
 from src.application.close import close_case
@@ -40,6 +71,22 @@ from src.application.lifecycle import (ENGINE_SCHEMA_VERSION, acquire_lease, rel
 from src.application.usecase import investigate_case, resume_case
 from src.domain.patrol import CheckOutcome
 from src.patrol.gate import evidence_refs_for_case
+
+
+def _case_file_snapshot(result: dict) -> dict:
+    """엔진 최종 State(dict)에서 계획 5가 읽을 케이스 파일 스냅샷을 뽑는다(I6).
+
+    스레드 체크포인트는 보존 TTL로 폐기될 수 있으므로(infrastructure/retention.py),
+    보고서 소스는 Store에 별도로 박제한다 — pydantic 모델은 model_dump(mode="json")로
+    평범한 JSON 값으로 내린다.
+    """
+    return {
+        "plan_tasks": [t.model_dump(mode="json") for t in result.get("plan_tasks", [])],
+        "hypotheses": [h.model_dump(mode="json") for h in result.get("hypotheses", [])],
+        "round": result.get("round", 0),
+        "qa_log": result.get("qa_log", []),
+        "verify_problems": result.get("verify_problems", []),
+    }
 
 
 class CaseQueue:
@@ -86,7 +133,7 @@ class InvestigationWorker:
 
     def __init__(self, queue: CaseQueue, *, repo, store,
                 deps_for_site: Callable[[str, str], Any], checkpointer, clock,
-                owner: str, max_concurrent: int, lease_ttl_s: int, ledger,
+                owner: str, max_concurrent: int, lease_ttl_s: float, ledger,
                 knowledge_digests_for_site: Callable[[str, str], dict[str, str]]):
         self._queue = queue
         self._repo = repo
@@ -121,6 +168,19 @@ class InvestigationWorker:
             "thread_versions": {**record.thread_versions, thread_id: ENGINE_SCHEMA_VERSION},
         })
 
+    @staticmethod
+    def _restart_thread(record, discarded_thread_id: str, new_thread_id: str):
+        """F3 재시작 지점 전용(I3) — _register_thread(단순 append)와 달리 폐기한
+        thread_id를 thread_ids/thread_versions에서 바로 걷어내고 새 것을 등록한다.
+        죽은 스레드가 TTL 스윕 전까지 목록에 남아있지 않게 한다."""
+        remaining_ids = [t for t in record.thread_ids if t != discarded_thread_id]
+        remaining_versions = {t: v for t, v in record.thread_versions.items()
+                              if t != discarded_thread_id}
+        return record.model_copy(update={
+            "thread_ids": remaining_ids + [new_thread_id],
+            "thread_versions": {**remaining_versions, new_thread_id: ENGINE_SCHEMA_VERSION},
+        })
+
     async def _discard_thread(self, thread_id: str | None) -> None:
         if thread_id is None or self._checkpointer is None:
             return
@@ -128,6 +188,27 @@ class InvestigationWorker:
             await self._checkpointer.adelete_thread(thread_id)
         except Exception:                                          # noqa: BLE001 — 정리 실패는 무시
             pass
+
+    async def _keepalive_loop(self, case_id: str) -> None:
+        """엔진 호출 동안 lease_ttl_s/3 간격으로 lease를 갱신한다(I5).
+
+        repo.get으로 최신 레코드를 읽고 acquire_lease(같은 owner)로 갱신해
+        저장한다 — 같은 owner의 재획득은 항상 허용되므로(lifecycle.acquire_lease)
+        이 사이 다른 워커가 끼어들 여지는 없다. 실패(레코드가 이미 종결됐거나
+        repo 장애 등)는 조용히 삼킨다 — keepalive는 최선노력이지 계약이 아니다.
+        CancelledError는 그대로 전파한다(태스크 취소 계약).
+        """
+        interval = max(self._lease_ttl_s / 3, 0.001)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                current = self._repo.get(case_id)
+                renewed = acquire_lease(current, self._owner, clock=self._clock,
+                                        ttl_s=self._lease_ttl_s)
+                if renewed is not None:
+                    self._repo.save(renewed)
+            except Exception:                                      # noqa: BLE001
+                pass
 
     async def _run_with_f3(self, record, case, deps, engine, case_id: str,
                            first_thread_id: str, initial_evidence, *, resume=None,
@@ -141,6 +222,12 @@ class InvestigationWorker:
         "재개 실패 — ..." 사유를 담은 예외를 새로 던질 뿐이다. 레저 기록과
         close_case(discard_threads=True)는 run_once/resume_once 최외곽의
         단일 except 하나가 전담한다(F1: 그래프 호출 밖 실패와 동일하게).
+
+        실제 재시작 지점(except 블록)은 I3·I4를 같이 처리한다: 레저에 "F3
+        재시작" 사유를 남기고, resume=answer였다면 그 답을 evidence로 먼저
+        박제한 뒤(I4 — 새 스레드는 investigate_case로 다시 시작하므로 resume
+        메커니즘이 없다), record를 다시 읽어(RMW) 폐기한 스레드를 제거하고
+        새 스레드를 등록한다.
         """
         try:
             if resume is not None:
@@ -157,11 +244,19 @@ class InvestigationWorker:
                     f"재개 실패 — 새 스레드 시도 실패: {first_exc}") from first_exc
             await self._discard_thread(first_thread_id)
             retry_thread_id = self._next_thread_id(record, case_id)
-            record = self._register_thread(record, retry_thread_id)
+            if resume is not None:
+                self._store.put_evidence(
+                    case_id, "human:answer", {"question": record.question, "answer": resume},
+                    as_of=self._clock())
+            self._ledger.record_run(record.gbm, record.fct, f"worker:{case_id}", CheckOutcome(
+                status="error", observed_at=self._clock(), error=f"F3 재시작 — {first_exc}"))
+            current = self._repo.get(case_id)                       # RMW(I1): finding_ids 등 보존
+            record = self._restart_thread(current, first_thread_id, retry_thread_id)
             self._repo.save(record)
             # 첫 시도(특히 resume)가 실패 전에 일부 라운드를 커밋했을 수 있으므로
             # Store에서 다시 읽는다 — 호출부가 넘긴 스냅샷을 그대로 재사용하면
-            # 그 사이 쌓인 증거를 재시작 스레드가 놓친다.
+            # 그 사이 쌓인 증거(및 위에서 박제한 human:answer)를 재시작 스레드가
+            # 놓친다.
             fresh_evidence = evidence_refs_for_case(self._store, case_id)
             try:
                 result = await investigate_case(
@@ -173,22 +268,37 @@ class InvestigationWorker:
                     f"재개 실패 — 스레드 재시작 후에도 실패: {second_exc}") from second_exc
 
     async def _finish(self, record, result: dict) -> str:
+        """엔진 호출 결과에 따라 후속 전이를 저장한다 — read-modify-write(I1):
+        record를 다시 읽어 워커가 바꿀 필드만 그 위에 얹는다."""
+        current = self._repo.get(record.id)
         if "__interrupt__" in result:
-            self._repo.save(transition(record, "awaiting_human", clock=self._clock))
+            interrupts = result["__interrupt__"]
+            question = interrupts[0].value.get("question") if interrupts else None
+            waiting = transition(current, "awaiting_human", clock=self._clock)
+            self._repo.save(waiting.model_copy(update={"question": question}))
             return "awaiting_human"
         verdict = result.get("verdict")
+        if verdict is None:
+            # conclude가 항상 verdict를 만들지만, 방어적으로 막는다(I6) — 여기서
+            # raise하면 run_once/resume_once의 최외곽 except가 F1과 동일하게
+            # 레저 기록 후 케이스를 닫는다(_fail 경로).
+            raise RuntimeError("verdict 없이 종료")
         self._store.put_verdict(record.id, verdict)
-        summary = verdict.narrative[:200] if verdict is not None else None
-        self._repo.save(record.model_copy(update={"verdict_summary": summary}))
+        self._store.put_case_file(record.id, _case_file_snapshot(result))
+        summary = verdict.narrative[:200]
+        self._repo.save(current.model_copy(update={"verdict_summary": summary, "question": None}))
         await close_case(record.id, repo=self._repo, checkpointer=self._checkpointer,
                          clock=self._clock, reason="조사 완료", discard_threads=False)
         return "closed"
 
     def _log_failure(self, record, case_id: str, exc: Exception) -> None:
-        gbm = record.gbm if record is not None else "unknown"
-        fct = record.fct if record is not None else "unknown"
-        self._ledger.record_run(gbm, fct, f"worker:{case_id}", CheckOutcome(
-            status="error", observed_at=self._clock(), error=f"{type(exc).__name__}: {exc}"))
+        try:
+            gbm = record.gbm if record is not None else "unknown"
+            fct = record.fct if record is not None else "unknown"
+            self._ledger.record_run(gbm, fct, f"worker:{case_id}", CheckOutcome(
+                status="error", observed_at=self._clock(), error=f"{type(exc).__name__}: {exc}"))
+        except Exception:                                          # noqa: BLE001 — 레저 장애로 종결을 막지 않는다(트리아지)
+            pass
 
     async def _fail(self, record, case_id: str, exc: Exception) -> str:
         """실패 경로의 단일 합류점(F1·F3 공통) — 레저 기록 후 케이스를 종결한다.
@@ -211,6 +321,19 @@ class InvestigationWorker:
             self._log_failure(record, case_id, close_exc)
         return "failed"
 
+    async def _skip_unregistered_site(self, record, case_id: str, gbm: str, fct: str) -> str:
+        """미등록 사이트(deps_for_site가 None) — 케이스를 닫지 않고 레저에만
+        skipped를 남긴다(트리아지). 설정이 일시적으로 어긋난 것뿐 케이스의
+        문제가 아니므로, F1과 달리 종결하지 않는다 — lease는 finally의
+        _release_safely가 풀어주므로 다음 requeue_open이 다시 집어 준다."""
+        try:
+            self._ledger.record_run(gbm, fct, f"worker:{case_id}", CheckOutcome(
+                status="skipped", observed_at=self._clock(),
+                skipped_reason=f"미등록 사이트 — {gbm}/{fct}"))
+        except Exception:                                          # noqa: BLE001
+            pass
+        return "skipped"
+
     async def _release_safely(self, case_id: str) -> None:
         # 닫힌 케이스는 transition(→closed)이 이미 lease를 해제했다 — 그런 레코드에
         # release_lease를 또 부르면 owner 불일치로 LifecycleError가 난다. 워커는
@@ -226,11 +349,27 @@ class InvestigationWorker:
         except Exception:                                          # noqa: BLE001
             pass
 
+    async def _invoke_with_keepalive(self, record, case, deps, engine, case_id: str,
+                                     thread_id: str, initial_evidence, *, resume=None,
+                                     allow_restart: bool = True):
+        """_run_with_f3를 keepalive 태스크로 감싼다(I5) — 엔진 호출이 lease_ttl_s를
+        넘게 걸려도 그 사이 lease가 만료돼 다른 워커에 넘어가지 않도록, 호출이
+        끝날 때까지 lease_ttl_s/3 간격으로 lease를 갱신하고 finally에서 취소한다."""
+        keepalive = asyncio.ensure_future(self._keepalive_loop(case_id))
+        try:
+            return await self._run_with_f3(
+                record, case, deps, engine, case_id, thread_id, initial_evidence,
+                resume=resume, allow_restart=allow_restart)
+        finally:
+            keepalive.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await keepalive
+
     async def run_once(self, case_id: str) -> str:
         """큐에서 꺼낸 케이스 하나를 lease 아래 조사하고 종결까지 시도한다.
 
-        "closed"/"awaiting_human"/"busy"/"failed" 중 하나를 돌려준다 — 어떤
-        경로로도 raise하지 않는다.
+        "closed"/"awaiting_human"/"busy"/"skipped"/"failed" 중 하나를
+        돌려준다 — 어떤 경로로도 raise하지 않는다.
         """
         record = None
         try:
@@ -245,17 +384,24 @@ class InvestigationWorker:
                 # 전이표에 investigating→investigating이 없으므로 재전이하지
                 # 않고 lease만(acquire_lease가 이미) 새로 잡은 채로 진행한다.
                 record = leased
+
+            # deps_for_site를 스레드 등록보다 먼저 확인한다 — 미등록 사이트라
+            # 아무것도 저장하지 않고 skip하면(레코드는 손대지 않은 채) 다음
+            # requeue_open이 그대로 다시 집어준다. 순서를 반대로 하면(등록부터)
+            # 실제로 열리지도 않은 스레드가 thread_ids에 phantom으로 쌓인다.
+            deps = self._deps_for_site(record.gbm, record.fct)
+            if deps is None:
+                return await self._skip_unregistered_site(record, case_id, record.gbm, record.fct)
+
             thread_id = self._next_thread_id(record, case_id)
             record = self._register_thread(record, thread_id)
             self._repo.save(record)
-
-            deps = self._deps_for_site(record.gbm, record.fct)
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
             case = record.to_case().model_copy(update={"knowledge_digests": digests})
             initial_evidence = evidence_refs_for_case(self._store, case_id)
 
-            record, result = await self._run_with_f3(
+            record, result = await self._invoke_with_keepalive(
                 record, case, deps, engine, case_id, thread_id, initial_evidence)
             return await self._finish(record, result)
         except Exception as exc:
@@ -272,6 +418,8 @@ class InvestigationWorker:
         실패를 낼지 예측할 수 없기 때문이다. 이 경로는 이미 "새 스레드로
         재시작"한 것이므로 실패해도 또 재시작하지 않는다(allow_restart=False)
         — 그래야 총 재시작 횟수가 F3와 마찬가지로 최대 1회로 유지된다.
+        이 경로도 새 스레드가 investigate_case로 시작해 resume 메커니즘이
+        없으므로, 재시작 전에 답변을 evidence로 박제한다(I4).
         """
         record = None
         try:
@@ -282,10 +430,11 @@ class InvestigationWorker:
             record = transition(leased, "investigating", clock=self._clock)
 
             deps = self._deps_for_site(record.gbm, record.fct)
+            if deps is None:
+                return await self._skip_unregistered_site(record, case_id, record.gbm, record.fct)
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
             case = record.to_case().model_copy(update={"knowledge_digests": digests})
-            initial_evidence = evidence_refs_for_case(self._store, case_id)
 
             latest_thread_id = record.thread_ids[-1] if record.thread_ids else None
             version_matches = (latest_thread_id is not None
@@ -293,16 +442,23 @@ class InvestigationWorker:
                               == ENGINE_SCHEMA_VERSION)
 
             if version_matches:
+                initial_evidence = evidence_refs_for_case(self._store, case_id)
                 self._repo.save(record)
-                record, result = await self._run_with_f3(
+                record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, latest_thread_id, initial_evidence,
                     resume=answer)
             else:
+                # 새 스레드로 신규 조사를 여는 재시작 — resume 메커니즘이 없으므로
+                # 답변이 자연히 사라진다. 재시작 전에 evidence로 박제한다(I4).
+                self._store.put_evidence(
+                    case_id, "human:answer", {"question": record.question, "answer": answer},
+                    as_of=self._clock())
                 await self._discard_thread(latest_thread_id)
                 fresh_thread_id = self._next_thread_id(record, case_id)
                 record = self._register_thread(record, fresh_thread_id)
                 self._repo.save(record)
-                record, result = await self._run_with_f3(
+                initial_evidence = evidence_refs_for_case(self._store, case_id)
+                record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, fresh_thread_id, initial_evidence,
                     allow_restart=False)
             return await self._finish(record, result)

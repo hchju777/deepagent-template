@@ -35,6 +35,24 @@ def _next_seq(db: Database, key: str) -> int:
     return doc["seq"]
 
 
+def ensure_indexes(db: Database) -> None:
+    """운영에 필요한 인덱스를 멱등하게 만든다(계획 4b I9).
+
+    cases.id/evidence(case_id,id)/verdicts.case_id/case_files.case_id는 각각
+    한 문서만 있어야 하는 자리라 unique로 막는다 — upsert 경합이 중복 문서를
+    만드는 사고를 인덱스 수준에서 방지한다. ledger_runs는 조회 패턴
+    (find({gbm,fct,check}).sort(seq))과 prune_runs_before(전체 스캔 후 at 비교)를
+    그대로 반영한 복합/단일 인덱스다. create_index는 이미 있으면 그대로 두므로
+    여러 번 불러도 안전하다(멱등) — build_persistence가 mongo 경로마다 부른다.
+    """
+    db.cases.create_index("id", unique=True)
+    db.evidence.create_index([("case_id", 1), ("id", 1)], unique=True)
+    db.verdicts.create_index("case_id", unique=True)
+    db.case_files.create_index("case_id", unique=True)
+    db.ledger_runs.create_index([("gbm", 1), ("fct", 1), ("check", 1), ("seq", 1)])
+    db.ledger_runs.create_index("at")
+
+
 class MongoCaseStore(CaseStorePort):
     """증거·코드 지식·판정을 담는 Mongo Store."""
 
@@ -115,10 +133,20 @@ class MongoCaseStore(CaseStorePort):
         fields = {k: v for k, v in doc.items() if k not in ("_id", "case_id")}
         return Verdict.model_validate(fields)
 
+    def put_case_file(self, case_id, snapshot):
+        self._db.case_files.update_one(
+            {"case_id": case_id}, {"$set": {"case_id": case_id, "snapshot": snapshot}},
+            upsert=True)
+
+    def get_case_file(self, case_id):
+        doc = self._db.case_files.find_one({"case_id": case_id})
+        return doc["snapshot"] if doc else None
+
     def purge_case(self, case_id):
-        """케이스의 증거+verdict를 전부 삭제하고 삭제 건수를 반환한다."""
+        """케이스의 증거+판정+케이스 파일을 전부 삭제하고 삭제 건수를 반환한다."""
         deleted = self._db.evidence.delete_many({"case_id": case_id}).deleted_count
         deleted += self._db.verdicts.delete_many({"case_id": case_id}).deleted_count
+        deleted += self._db.case_files.delete_many({"case_id": case_id}).deleted_count
         return deleted
 
     def purge_evidence_before(self, case_id, before):

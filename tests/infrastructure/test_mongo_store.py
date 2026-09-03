@@ -6,7 +6,8 @@ import pytest
 from src.domain.case import CauseLink, Verdict
 from src.domain.cases import CaseRecord
 from src.domain.patrol import CheckOutcome
-from src.infrastructure.mongo_store import MongoCaseRepository, MongoCaseStore, MongoLedger
+from src.infrastructure.mongo_store import (MongoCaseRepository, MongoCaseStore, MongoLedger,
+                                            ensure_indexes)
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 
@@ -34,7 +35,11 @@ def test_store_계약(db):
     store.put_verdict("c-1", v)
     assert store.get_verdict("c-1").root_cause.component == "plan-sync"
     assert store.list_case_ids("c-") == ["c-1", "c-2"]
-    assert store.purge_case("c-1") == 3 and store.list_evidence("c-1") == []
+    store.put_case_file("c-1", {"round": 3, "plan_tasks": []})
+    assert store.get_case_file("c-1") == {"round": 3, "plan_tasks": []}
+    assert store.get_case_file("c-9") is None
+    assert store.purge_case("c-1") == 4 and store.list_evidence("c-1") == []
+    assert store.get_case_file("c-1") is None
 
 
 def test_repo_계약(db):
@@ -63,3 +68,21 @@ def test_ledger_계약(db):
     ledger.heartbeat(T)
     assert ledger.last_heartbeat() == T
     assert ledger.prune_runs_before(T.replace(year=2027)) == 3
+
+
+def test_ensure_indexes는_unique_인덱스를_만든다(db):
+    ensure_indexes(db)
+    cases_idx = db.cases.index_information()
+    assert any(spec["key"] == [("id", 1)] and spec.get("unique") for spec in cases_idx.values())
+    evidence_idx = db.evidence.index_information()
+    assert any(spec["key"] == [("case_id", 1), ("id", 1)] and spec.get("unique")
+              for spec in evidence_idx.values())
+    verdicts_idx = db.verdicts.index_information()
+    assert any(spec["key"] == [("case_id", 1)] and spec.get("unique") for spec in verdicts_idx.values())
+    case_files_idx = db.case_files.index_information()
+    assert any(spec["key"] == [("case_id", 1)] and spec.get("unique")
+              for spec in case_files_idx.values())
+    ledger_idx = db.ledger_runs.index_information()
+    assert any(spec["key"] == [("gbm", 1), ("fct", 1), ("check", 1), ("seq", 1)]
+              for spec in ledger_idx.values())
+    assert any(spec["key"] == [("at", 1)] for spec in ledger_idx.values())

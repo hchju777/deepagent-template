@@ -96,7 +96,16 @@ class PatrolDaemon:
         return self._by_key.get((gbm, fct))
 
     def _deps_for_site(self, gbm: str, fct: str) -> Any:
-        return self._site(gbm, fct).deps
+        """워커의 deps_for_site 콜백 — 미등록 사이트는 None을 돌려준다(트리아지).
+
+        레지스트리에서 사이트가 disable/삭제된 뒤에도 그 사이트의 케이스가
+        큐에 남아있을 수 있다. 예전에는 여기서 AttributeError가 나 워커가
+        F1(그래프 밖 실패)로 오인해 케이스를 닫아버렸다 — None을 계약으로
+        명시해 워커가 "skipped"로 구분 처리하게 한다(닫지 않고 다음 회차에
+        다시 시도).
+        """
+        rt = self._site(gbm, fct)
+        return rt.deps if rt is not None else None
 
     def _digests_for_site(self, gbm: str, fct: str) -> dict[str, str]:
         rt = self._site(gbm, fct)
@@ -233,7 +242,7 @@ def assemble_sites(
     build_chat_model(profile, base_url=env["LLM_BASE_URL"], api_key=env["LLM_API_KEY"])로
     실LLM을 만든다.
     """
-    app = load_app_config(config_root)
+    app = load_app_config(config_root, env=env)
     registry = load_registry(config_root)
 
     def make_llm(profile: str) -> Any:

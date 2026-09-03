@@ -59,6 +59,26 @@ async def test_같은_지문의_재발은_첨부만_하고_큐에_안_넣는다(
     assert daemon.queue.qsize() == 1 and len(repo.get("c-1").finding_ids) == 2
 
 
+async def test_미등록_사이트_케이스는_워커가_닫지_않고_skipped를_남긴다():
+    # 트리아지: registry에 없는(또는 disable된) 사이트의 케이스가 큐에 있어도
+    # daemon._deps_for_site가 None을 돌려주면 워커는 F1로 오인해 닫지 않는다.
+    from datetime import timezone
+
+    from src.domain.cases import CaseRecord
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _daemon(store, repo, ledger, lead=[])
+    daemon.build()
+    repo.save(CaseRecord(id="c-ghost", gbm="mx", fct="ghost", fingerprint="fp", symptom="s",
+                         t0=datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc),
+                         created_at=T, updated_at=T))
+    result = await daemon.worker.run_once("c-ghost")
+    assert result == "skipped"
+    rec = repo.get("c-ghost")
+    # deps 확인이 lease 저장보다 먼저라 아무것도 안 건드린 채 open으로 남는다.
+    assert rec.status == "open" and rec.owner is None
+    assert ledger.last_run("mx", "ghost", "worker:c-ghost").status == "skipped"
+
+
 def test_on_missed는_skipped를_레저에_남기고_잡이_전부_등록된다():
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     daemon = _daemon(store, repo, ledger, lead=[])

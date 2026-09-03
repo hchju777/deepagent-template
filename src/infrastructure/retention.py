@@ -4,14 +4,23 @@
 스레드 체크포인트도 영원히 쌓이면 안 된다. 이 모듈은 그 넷을 한 번의
 스윕으로 정리한다:
 
-  ① 오래 닫혀 있던 케이스의 증거+판정 삭제, 그 스레드도 폐기
+  ① 오래 닫혀 있던 케이스의 증거+판정+케이스 파일 삭제, 그 스레드도 폐기.
+     처리한 레코드는 purged_at을 스탬프한다(계획 4b I7) — updated_at은 이
+     스윕이 손대지 않으므로(스레드만 비운다) purged_at 없이는 다음 스윕도
+     같은 조건(updated_at < evidence_before)에 다시 걸려 store.purge_case를
+     반복 호출한다. purged_at is not None인 레코드는 ①에서 다시 고르지 않는다.
   ② 오래된 레저 실행 이력 삭제
   ③ 순찰 스크래치 케이스(scratch_case_id, "patrol:" 접두)의 오래된 증거만 삭제
      (스크래치 케이스 자체는 다음 회차에도 계속 쓰이므로 지우지 않는다)
-  ④ 아직 열려 있어도 오래 멈춰 있는 케이스는 스레드만 폐기한다 — 케이스는
-     그대로 두되(사람이 언제든 돌아올 수 있다) 스레드는 죽은 체크포인트로
-     묵혀두지 않는다. thread_ids에서 제거해두면 다음 재개는 F3(스레드
-     부재 시 새로 시작) 경로를 그대로 타 새 스레드가 열린다.
+  ④ 스레드만 폐기하고 케이스 자체는 건드리지 않는다 — 아직 열려 있는
+     케이스(사람이 언제든 돌아올 수 있다)뿐 아니라 이미 닫힌 케이스도 대상이다
+     (계획 4b I7): ①의 증거 보존기한(closed_case_evidence_d, 보통 더 김)보다
+     스레드 보존기한(checkpoint_ttl_d, 보통 더 짧음)이 먼저 지나면 "증거는
+     아직 있지만 체크포인트만 죽은" 구간이 생기기 때문이다. 나이 판단은
+     status_since(없으면 updated_at) 기준이다(I2와 동일한 이유 — 게이트의
+     finding 첨부 등 상태와 무관한 갱신에 흔들리지 않도록). thread_ids에서
+     제거해두면 다음 재개는 F3(스레드 부재 시 새로 시작) 경로를 그대로 타
+     새 스레드가 열린다.
 
 절대 raise하지 않는다: 레코드 하나(케이스 하나·스레드 하나)의 실패뿐 아니라
 목록 조회 자체(list_by_status/list_case_ids/list_open)의 실패도 나머지
@@ -41,13 +50,15 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
     now = clock()
     counts = {"closed_cases": 0, "ledger_runs": 0, "scratch_evidence": 0, "expired_threads": 0}
 
-    # ① 오래된 종결 케이스 — 증거+판정 삭제, 스레드 폐기
+    # ① 오래된 종결 케이스 — 증거+판정+케이스 파일 삭제, 스레드 폐기, purged_at 스탬프
     evidence_before = now - timedelta(days=retention.closed_case_evidence_d)
     try:
         closed_records = repo.list_by_status("closed")
     except Exception:                                                  # noqa: BLE001
         closed_records = []
     for record in closed_records:
+        if record.purged_at is not None:            # 이미 처리됨 — 재선택 방지(I7)
+            continue
         if record.updated_at >= evidence_before:
             continue
         try:
@@ -55,6 +66,7 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
         except Exception:                                              # noqa: BLE001
             continue
         counts["closed_cases"] += 1
+        update: dict[str, object] = {"purged_at": now}
         if checkpointer is not None and record.thread_ids:
             for thread_id in record.thread_ids:
                 try:
@@ -63,12 +75,12 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
                     pass
             # 폐기 성공 여부와 무관하게 비운다 — 종결 케이스는 다시 재개되지
             # 않으므로 다음 스윕이 같은 케이스를 반복 처리할 이유가 없다.
-            try:
-                repo.save(record.model_copy(update={
-                    "thread_ids": [], "thread_versions": {},
-                }))
-            except Exception:                                          # noqa: BLE001
-                pass
+            update["thread_ids"] = []
+            update["thread_versions"] = {}
+        try:
+            repo.save(record.model_copy(update=update))
+        except Exception:                                              # noqa: BLE001
+            pass
 
     # ② 레저 실행 이력 정리
     ledger_before = now - timedelta(days=retention.ledger_d)
@@ -88,15 +100,22 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
         except Exception:                                              # noqa: BLE001
             continue
 
-    # ④ 오래 멈춘 열린 케이스의 스레드만 폐기 — 다음 재개는 F3로 새 스레드
+    # ④ 오래 멈춘 케이스의 스레드만 폐기(열린 케이스 + 닫힌 케이스 — I7) — 다음
+    # 재개(또는 다음 조사)는 F3로 새 스레드를 연다. 나이는 status_since(없으면
+    # updated_at) 기준.
     if checkpointer is not None:
         ttl_before = now - timedelta(days=retention.checkpoint_ttl_d)
         try:
             open_records = repo.list_open()
         except Exception:                                              # noqa: BLE001
             open_records = []
-        for record in open_records:
-            if record.updated_at >= ttl_before or not record.thread_ids:
+        try:
+            closed_for_ttl = repo.list_by_status("closed")   # ①과 별개로 다시 읽는다(위에서 비운 스레드 반영)
+        except Exception:                                              # noqa: BLE001
+            closed_for_ttl = []
+        for record in [*open_records, *closed_for_ttl]:
+            since = record.status_since or record.updated_at
+            if since >= ttl_before or not record.thread_ids:
                 continue
             discarded: list[str] = []
             for thread_id in record.thread_ids:

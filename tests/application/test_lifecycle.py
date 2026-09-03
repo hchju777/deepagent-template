@@ -49,3 +49,17 @@ def test_타임아웃은_awaiting_human에만_적용():
     assert is_timed_out(waiting, clock=lambda: T + timedelta(hours=73), timeout_h=72)
     assert not is_timed_out(_rec(), clock=lambda: T + timedelta(hours=100), timeout_h=72)
     assert ENGINE_SCHEMA_VERSION == 1
+
+
+def test_첨부가_status_since를_건드리지_않으면_타임아웃이_리셋되지_않는다():
+    # I2: 게이트의 finding 첨부는 updated_at만 갱신하고 status_since는 그대로 둔다
+    # (model_copy 직접 사용 — transition을 거치지 않는다. gate.py와 동일한 패턴).
+    # T+100h에 첨부(updated_at만 T+100h로 갱신)해도, status_since는 여전히 T다 —
+    # updated_at 기준이었다면 T+101h 시점엔 "1시간 전 갱신"이라 타임아웃이 아니어야
+    # 하겠지만, status_since(T) 기준이므로 101시간 경과로 여전히 타임아웃이다.
+    waiting = transition(transition(_rec(), "investigating", clock=lambda: T),
+                         "awaiting_human", clock=lambda: T)
+    assert waiting.status_since == T
+    attached = waiting.model_copy(update={"updated_at": T + timedelta(hours=100)})
+    assert attached.status_since == T                     # status_since는 안 움직인다
+    assert is_timed_out(attached, clock=lambda: T + timedelta(hours=101), timeout_h=72)

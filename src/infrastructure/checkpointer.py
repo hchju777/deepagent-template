@@ -20,7 +20,8 @@ from pymongo import MongoClient
 from src.config.schema_app import StoreConfig
 from src.domain.cases import InMemoryCaseRepository
 from src.domain.store import InMemoryCaseStore
-from src.infrastructure.mongo_store import MongoCaseRepository, MongoCaseStore, MongoLedger
+from src.infrastructure.mongo_store import (MongoCaseRepository, MongoCaseStore, MongoLedger,
+                                            ensure_indexes)
 from src.patrol.ledger import InMemoryLedger
 
 
@@ -38,4 +39,5 @@ def build_persistence(cfg: StoreConfig):
     if cfg.backend == "memory":
         return InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     db = MongoClient(cfg.mongo_url)[cfg.mongo_db]
+    ensure_indexes(db)
     return MongoCaseStore(db), MongoCaseRepository(db), MongoLedger(db)

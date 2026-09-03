@@ -57,8 +57,20 @@ class CaseStorePort(ABC):
     def get_verdict(self, case_id: str) -> Verdict | None: ...
 
     @abstractmethod
+    def put_case_file(self, case_id: str, snapshot: dict) -> None:
+        """케이스 파일 스냅샷(plan_tasks·hypotheses·round·qa_log·verify_problems)을
+        저장한다(계획 4b I6) — 스레드 체크포인트가 TTL로 폐기돼도 계획 5의
+        보고서가 읽을 소스가 남도록. 매번 덮어쓴다(케이스당 최신 스냅샷 하나)."""
+        ...
+
+    @abstractmethod
+    def get_case_file(self, case_id: str) -> dict | None:
+        """저장된 케이스 파일 스냅샷. 없으면 None."""
+        ...
+
+    @abstractmethod
     def purge_case(self, case_id: str) -> int:
-        """케이스의 증거+verdict를 전부 삭제하고 삭제 건수를 반환한다."""
+        """케이스의 증거+판정+케이스 파일을 전부 삭제하고 삭제 건수를 반환한다."""
         ...
 
     @abstractmethod
@@ -78,6 +90,7 @@ class InMemoryCaseStore(CaseStorePort):
         self._counters: dict[str, int] = defaultdict(int)
         self._code: dict[tuple[str, str], str] = {}
         self._verdicts: dict[str, Verdict] = {}
+        self._case_files: dict[str, dict] = {}
 
     def put_evidence(self, case_id, source, body, *,
                      as_of=None, complete=True, effective_as_of=None):
@@ -116,10 +129,18 @@ class InMemoryCaseStore(CaseStorePort):
     def get_verdict(self, case_id):
         return self._verdicts.get(case_id)
 
+    def put_case_file(self, case_id, snapshot):
+        self._case_files[case_id] = dict(snapshot)
+
+    def get_case_file(self, case_id):
+        return self._case_files.get(case_id)
+
     def purge_case(self, case_id):
-        """케이스의 증거+verdict를 전부 삭제하고 삭제 건수를 반환한다."""
+        """케이스의 증거+판정+케이스 파일을 전부 삭제하고 삭제 건수를 반환한다."""
         deleted = len(self._evidence.pop(case_id, {}))
         if self._verdicts.pop(case_id, None) is not None:
+            deleted += 1
+        if self._case_files.pop(case_id, None) is not None:
             deleted += 1
         return deleted
 

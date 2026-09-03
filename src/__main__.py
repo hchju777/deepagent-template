@@ -28,17 +28,21 @@ def _add_common(parser):
     parser.add_argument("--repo-root", default=".")
 
 
-def _load_app(config_root: Path):
-    """load_app_config를 감싸 ConfigError를 stderr에 나열한다. 실패하면 None."""
+def _load_app(config_root: Path, env: dict):
+    """load_app_config를 감싸 ConfigError를 stderr에 나열한다. 실패하면 None.
+
+    env를 넘겨 app.json의 ${ENV} 참조를 해석한다(C1) — 안 넘기면 store.mongo_url
+    같은 참조가 리터럴 문자열 "${...}"로 그냥 통과해버린다.
+    """
     try:
-        return load_app_config(config_root)
+        return load_app_config(config_root, env=env)
     except ConfigError as exc:
         for problem in exc.problems:
             print(problem, file=sys.stderr)
         return None
 
 
-async def _run_patrol(daemon: PatrolDaemon, for_seconds: float | None) -> None:
+async def _drive_daemon(daemon: PatrolDaemon, for_seconds: float | None) -> None:
     """for_seconds가 있으면 그만큼 뒤(0이면 즉시) stop을 세팅하고 데몬을 돌린다."""
     stop = asyncio.Event()
     if for_seconds is not None:
@@ -49,7 +53,15 @@ async def _run_patrol(daemon: PatrolDaemon, for_seconds: float | None) -> None:
     await daemon.run(stop)
 
 
-def _cmd_patrol_run(args, config_root: Path, env: dict) -> int:
+def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
+    """기동 검증 → 사이트 조립 → 순찰 데몬 기동(포그라운드) — patrol run의 본체.
+
+    llm_factory를 내부 함수로 분리해 받는 이유(I8): assemble_sites와 judge_llm
+    생성 둘 다에 그대로 흘려보내, 테스트가 실LLM(build_chat_model → ChatOpenAI)
+    없이도 patrol run의 성공 경로("사이트 조립 → 데몬 기동 → 종료")를 스모크할
+    수 있게 하기 위해서다.
+    """
+    config_root = Path(args.config_root)
     repo_root = Path(args.repo_root)
     errors = validate_boot(config_root, env=env, repo_root=repo_root, check_live=False)
     if errors:
@@ -58,7 +70,7 @@ def _cmd_patrol_run(args, config_root: Path, env: dict) -> int:
         return 1
 
     clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
-    app, sites = assemble_sites(config_root, repo_root, env, clock=clock)
+    app, sites = assemble_sites(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
     store, repo, ledger = build_persistence(app.store)
     checkpointer = build_checkpointer(app.store)
 
@@ -66,20 +78,23 @@ def _cmd_patrol_run(args, config_root: Path, env: dict) -> int:
                           for rt in sites for check in rt.cfg.patrol.checks.values())
     judge_llm = None
     if needs_judge_llm:
-        judge_llm = build_chat_model(app.llm.profiles.judge,
-                                     base_url=env.get("LLM_BASE_URL"), api_key=env.get("LLM_API_KEY"))
+        if llm_factory is not None:
+            judge_llm = llm_factory(app.llm.profiles.judge)
+        else:
+            judge_llm = build_chat_model(app.llm.profiles.judge,
+                                         base_url=env.get("LLM_BASE_URL"), api_key=env.get("LLM_API_KEY"))
 
     budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
     owner = f"daemon-{socket.gethostname()}-{os.getpid()}"
     daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
                           checkpointer=checkpointer, clock=clock, judge_llm=judge_llm,
                           budget=budget, owner=owner, timezone=app.timezone)
-    asyncio.run(_run_patrol(daemon, args.for_seconds))
+    asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
 
 
 def _cmd_patrol_status(config_root: Path, env: dict) -> int:
-    app = _load_app(config_root)
+    app = _load_app(config_root, env)
     if app is None:
         return 1
     if app.store.backend == "memory":
@@ -116,8 +131,8 @@ def _cmd_patrol_status(config_root: Path, env: dict) -> int:
     return 0
 
 
-def _cmd_case_list(args, config_root: Path) -> int:
-    app = _load_app(config_root)
+def _cmd_case_list(args, config_root: Path, env: dict) -> int:
+    app = _load_app(config_root, env)
     if app is None:
         return 1
     _store, repo, _ledger = build_persistence(app.store)
@@ -128,8 +143,8 @@ def _cmd_case_list(args, config_root: Path) -> int:
     return 0
 
 
-def _cmd_case_show(args, config_root: Path) -> int:
-    app = _load_app(config_root)
+def _cmd_case_show(args, config_root: Path, env: dict) -> int:
+    app = _load_app(config_root, env)
     if app is None:
         return 1
     store, repo, _ledger = build_persistence(app.store)
@@ -146,6 +161,8 @@ def _cmd_case_show(args, config_root: Path) -> int:
     print(f"생성: {record.created_at.isoformat()}  갱신: {record.updated_at.isoformat()}")
     print(f"소유자: {record.owner or '-'}  "
          f"임차 만료: {record.lease_until.isoformat() if record.lease_until else '-'}")
+    if record.status == "awaiting_human" and record.question:
+        print(f"파킹된 질문: {record.question}")
     if record.closed_reason:
         print(f"종결 사유: {record.closed_reason}")
 
@@ -160,9 +177,18 @@ def _cmd_case_show(args, config_root: Path) -> int:
 
 
 def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
-    app = _load_app(config_root)
-    if app is None:
+    # 트리아지: app을 두 번(여기서 한 번, assemble_sites 안에서 한 번) 읽지
+    # 않도록 assemble_sites 하나로 app과 sites를 함께 얻는다(_run_patrol과
+    # 동일한 패턴) — 예전엔 _load_app이 만든 app을 store/repo 조회에만 쓰고
+    # assemble_sites가 돌려준 app(_app2)은 쓰지 않고 버렸다.
+    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+    try:
+        app, sites = assemble_sites(config_root, Path(args.repo_root), env, clock=clock)
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(problem, file=sys.stderr)
         return 1
+
     store, repo, ledger = build_persistence(app.store)
     try:
         record = repo.get(args.case_id)
@@ -181,16 +207,18 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
              file=sys.stderr)
         return 1
 
-    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
-    try:
-        _app2, sites = assemble_sites(config_root, Path(args.repo_root), env, clock=clock)
-    except ConfigError as exc:
-        for problem in exc.problems:
-            print(problem, file=sys.stderr)
-        return 1
     for rt in sites:
         rt.deps.store = store          # daemon.py와 동일한 불변식: 워커·엔진이 같은 Store를 본다
     by_key = {(rt.gbm, rt.fct): rt for rt in sites}
+
+    if (record.gbm, record.fct) not in by_key:
+        # 트리아지: 미등록/비활성 사이트 — 워커(InvestigationWorker)가 lease를
+        # 잡기 전에 여기서 막는다. 그냥 진행하면 resume_once가 lease를 잡은
+        # 채로 deps_for_site(None)를 만나 "skipped"를 돌려주고 lease만 풀린
+        # 채 남는데, CLI는 그보다 더 명확한 exit 1로 즉시 끝내는 게 낫다.
+        print(f"사이트 {record.gbm}/{record.fct}가 등록돼 있지 않다(registry에서 비활성이거나 "
+             "삭제됨) — 재개할 수 없다", file=sys.stderr)
+        return 1
 
     def deps_for_site(gbm, fct):
         return by_key[(gbm, fct)].deps
@@ -312,15 +340,15 @@ def main(argv=None) -> int:
 
     if args.command == "patrol":
         if args.patrol_command == "run":
-            return _cmd_patrol_run(args, config_root, env)
+            return _run_patrol(args, env)
         if args.patrol_command == "status":
             return _cmd_patrol_status(config_root, env)
 
     if args.command == "case":
         if args.case_command == "list":
-            return _cmd_case_list(args, config_root)
+            return _cmd_case_list(args, config_root, env)
         if args.case_command == "show":
-            return _cmd_case_show(args, config_root)
+            return _cmd_case_show(args, config_root, env)
         if args.case_command == "resume":
             return _cmd_case_resume(args, config_root, env)
 
