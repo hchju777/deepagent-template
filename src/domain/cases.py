@@ -39,6 +39,11 @@ class CaseRecord(StrictModel):
                                           # attach 등 status와 무관한 갱신에도 움직이므로 타임아웃·
                                           # 보존 판단은 이 필드를 우선 본다(없으면 updated_at으로 대체)
     question: str | None = None         # awaiting_human으로 파킹된 질문(계획 4b I6) — resume 후 None
+    interaction_policy: Literal["interactive", "autonomous"] = "autonomous"
+                                        # 재개하는 프로세스가 케이스를 연 프로세스가 아닐 수 있으므로
+                                        # (CLI 두 경로, 향후 API 워커) 정책을 호출자 인수가 아니라
+                                        # 레코드에서 읽는다 — 스레드 재시작 경로가 조용히 autonomous로
+                                        # 강등되던 버그의 근원이 정책을 인수로만 들고 다닌 것이었다
     purged_at: datetime | None = None   # retention ①이 증거+판정을 비운 시각(계획 4b I7) — 재선택 방지
 
     def to_case(self) -> Case:

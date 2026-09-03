@@ -452,6 +452,11 @@ class InvestigationWorker:
 
             thread_id = self._next_thread_id(record, case_id)
             record = self._register_thread(record, thread_id)
+            # 정책을 레코드에 박제한다 — resume_once는 자기 호출부에서 정책을 받지
+            # 않고 여기 저장된 값을 읽는다(스레드 재시작이 조용히 autonomous로
+            # 강등되던 버그). 반드시 아래 repo.save 앞이어야 한다.
+            if record.interaction_policy != interaction_policy:
+                record = record.model_copy(update={"interaction_policy": interaction_policy})
             self._repo.save(record)
             # I2: 저장 뒤에야 emit한다 — 저장 전에 내면(미등록 사이트로 skip될 경우
             # 등) 저장이 아예 안 일어난 record에 대해 "investigating" 이벤트만
@@ -513,7 +518,7 @@ class InvestigationWorker:
                 self._emit_status(case_id, "investigating")
                 record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, latest_thread_id, initial_evidence,
-                    resume=answer)
+                    resume=answer, interaction_policy=record.interaction_policy)
             else:
                 # 새 스레드로 신규 조사를 여는 재시작 — resume 메커니즘이 없으므로
                 # 답변이 자연히 사라진다. 재시작 전에 evidence로 박제한다(I4).
@@ -528,7 +533,7 @@ class InvestigationWorker:
                 initial_evidence = evidence_refs_for_case(self._store, case_id)
                 record, result = await self._invoke_with_keepalive(
                     record, case, deps, engine, case_id, fresh_thread_id, initial_evidence,
-                    allow_restart=False)
+                    allow_restart=False, interaction_policy=record.interaction_policy)
             return await self._finish(record, result)
         except Exception as exc:
             return await self._fail(record, case_id, exc)

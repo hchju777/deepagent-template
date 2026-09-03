@@ -323,3 +323,44 @@ async def test_워커가_주입한_시계로_이벤트_시각이_찍힌다():
                                  on_event=seen.append)
     assert await worker.run_once("c-1") == "closed"
     assert seen and all(e.at == T for e in seen)      # 스트리밍 이벤트 포함 전부 주입 시계
+
+
+async def test_resume의_스레드_재시작은_레코드의_interaction_policy를_유지한다(monkeypatch):
+    # resume_once에는 interaction_policy 파라미터가 아예 없어서 두 재시작 경로가
+    # 모두 기본값 "autonomous"로 떨어졌다 — interactive로 열린 chat 케이스가 재시작
+    # 한 번에 조용히 강등돼 사람에게 묻기를 멈춘다. 정책은 호출자 인수가 아니라
+    # 레코드에서 읽어야 한다(재개하는 프로세스가 케이스를 연 프로세스가 아니다).
+    from src.application.lifecycle import transition
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    rec = transition(repo.get("c-1"), "investigating", clock=lambda: T)
+    rec = transition(rec, "awaiting_human", clock=lambda: T)
+    repo.save(rec.model_copy(update={"thread_ids": ["c-1#1"], "thread_versions": {"c-1#1": 0},
+                                     "interaction_policy": "interactive"}))
+    deps = make_e2e_deps(store, lead=[])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    import src.application.worker as wk
+    seen = []
+    async def boom(*a, **k):
+        seen.append(k.get("interaction_policy"))
+        raise RuntimeError("실패")
+    monkeypatch.setattr(wk, "investigate_case", boom)
+    assert await worker.resume_once("c-1", "답변") == "failed"
+    assert seen == ["interactive"]
+
+
+async def test_run_once는_interaction_policy를_레코드에_영속화한다():
+    # 정책을 레코드에서 읽으려면 먼저 레코드에 들어가 있어야 한다 — chat이 넘긴
+    # "interactive"가 영속되지 않으면 resume이 읽을 것이 기본값뿐이다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1", interaction_policy="interactive") == "closed"
+    assert repo.get("c-1").interaction_policy == "interactive"
