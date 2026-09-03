@@ -364,3 +364,37 @@ def test_case_show_report는_파일이_없으면_즉석_렌더한다(tmp_path, c
 
     assert code == 0
     assert "# 케이스 c-2 보고서" in out and "## 5. 조사 경위" in out
+
+
+def test_patrol_run은_이벤트_싱크를_daemon에_넘긴다(tmp_path, monkeypatch):
+    # _run_patrol이 on_event를 안 넘겨 프로덕션 데몬이 엔진 이벤트를 아예 내지
+    # 않았다. usecase에 `if on_event is None: ainvoke` 분기가 있어 _stream_and_collect
+    # (round_started/task_finished/question_raised를 내는 유일한 경로)이 죽고,
+    # daemon._publish_report의 `if self.on_event is not None` 때문에 report_ready도
+    # 안 나간다 — 규율 8이 요구하는 "파일·이벤트·메일" 셋 중 이벤트가 빠진 상태다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+
+    def fake_build_chat_model(model_name, *, base_url=None, api_key=None):
+        return object()
+
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
+    monkeypatch.setattr("src.__main__.build_chat_model", fake_build_chat_model)
+
+    captured = {}
+    real_daemon_cls = main_module.PatrolDaemon
+
+    class SpyDaemon(real_daemon_cls):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+
+        async def run(self, stop):
+            return None
+
+    monkeypatch.setattr("src.__main__.PatrolDaemon", SpyDaemon)
+    code = main(["patrol", "run", "--for-seconds", "0",
+                "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+
+    assert code == 0
+    assert callable(captured.get("on_event"))

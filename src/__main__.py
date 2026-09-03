@@ -95,10 +95,16 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
     owner = f"daemon-{socket.gethostname()}-{os.getpid()}"
     mail_sender = SmtpSender(app.report.mail) if app.report.mail.enabled else None
+    # on_event를 넘기지 않으면 usecase의 `if on_event is None: ainvoke` 분기 때문에
+    # _stream_and_collect(라운드 경계를 내는 유일한 경로)이 프로덕션에서 죽고,
+    # _publish_report의 이벤트 발행도 건너뛴다 — 규율 8이 요구하는 셋 중 이벤트만
+    # 빠진 상태가 된다. 데몬은 _build_publisher를 쓰지 않는다(자기 _publish_report를
+    # 워커의 on_closed로 이미 배선한다) — 그래서 여기서 필요한 것은 싱크 하나뿐이다.
     daemon = PatrolDaemon(app=app, sites=sites, store=store, repo=repo, ledger=ledger,
                           checkpointer=checkpointer, clock=clock, judge_llm=judge_llm,
                           budget=budget, owner=owner, timezone=app.timezone,
-                          report_cfg=app.report, mail_sender=mail_sender)
+                          on_event=_make_event_printer(), report_cfg=app.report,
+                          mail_sender=mail_sender)
     asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
 
