@@ -167,6 +167,7 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 어댑터 조립(stub↔real 전환점) | `src/infrastructure/factory.py` |
 | Mongo 케이스 저장소 | `src/infrastructure/mongo_store.py` |
 | 프로브 레지스트리 | `src/patrol/probes.py` |
+| 파라미터 값 해석기(전부-또는-전무) | `src/patrol/resolvers.py` |
 | rule 판정 4종 | `src/patrol/rules.py` |
 | 읽기 전용 순수 판정(끝점·body·집계) | `src/infrastructure/query_rules.py` |
 | 이벤트 로그 포트·인메모리 구현 | `src/domain/events.py` |

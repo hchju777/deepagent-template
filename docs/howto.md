@@ -101,3 +101,32 @@ exit 0이면 통과. `--live`를 추가하면 Mongo 계정이 실제로 readonly
 
 [CLAUDE.md](../CLAUDE.md) — 이 리포에서 지켜야 할 규율(무raise, 시계 주입,
 증거 인용 등)이 전부 정리돼 있다.
+
+## 값이 매일 바뀌는 파라미터로 점검하고 싶다
+
+`part_code`·`line_code`처럼 사업부/법인마다 다르고 매일 바뀌는 값은 config에
+적지 않는다 — 적는 순간 썩는다. `resolve`로 **어디서 읽을지**만 선언한다.
+
+```json
+"prod.badge_nonzero": {
+  "judge": "rule",
+  "schedule": { "interval": "5m" },
+  "target": "rest:summary_prod",
+  "params": { "rule": "exists", "field": "body.badge",
+              "body": { "part_code": ["P001"] } },
+  "resolve": {
+    "line_code": { "from": "mongo", "collection": "lines", "field": "line_code",
+                   "filter": { "active": true }, "cardinality": "first:50" },
+    "date": { "from": "clock", "expr": "today" }
+  }
+}
+```
+
+정적 값은 `params.body`에, 해석할 값은 `resolve`에 둔다(같은 키를 양쪽에 두면
+기동이 거부된다). 값 소스는 강한 순서로 **형제 조회 항목**(`from: "rest"` — 대상
+시스템 자신이 인정한 목록) > **Mongo/Redis 직접 조회** > **시계**다.
+
+해석기가 하나라도 값을 못 내면 **대상을 호출조차 하지 않고** `error`가 된다.
+빈 값을 보내면 endpoint에 따라 `0/0/0`(거짓 경보)이 되기도 하고 전체 조회(거짓
+안심)가 되기도 하는데 어느 쪽인지 알 방법이 없기 때문이다. 전체를 보려는
+**의도**라면 `{"from": "unfiltered"}`로 명시하라 — 그러면 그 키를 아예 안 보낸다.

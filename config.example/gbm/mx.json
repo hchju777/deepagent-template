@@ -9,7 +9,15 @@
           "path": "/summary/prod",
           "body_schema": {
             "part_code": "list[str]",
-            "line_code": "str"
+            "line_code": "list[str]",
+            "date": "str"
+          }
+        },
+        "list_lines": {
+          "method": "GET",
+          "path": "/lines",
+          "query_schema": {
+            "active": "bool"
           }
         }
       }
@@ -56,8 +64,22 @@
           "body": {
             "part_code": [
               "P001"
-            ],
-            "line_code": "L1"
+            ]
+          }
+        },
+        "resolve": {
+          "line_code": {
+            "from": "mongo",
+            "collection": "lines",
+            "field": "line_code",
+            "filter": {
+              "active": true
+            },
+            "cardinality": "first:50"
+          },
+          "date": {
+            "from": "clock",
+            "expr": "today"
           }
         }
       }

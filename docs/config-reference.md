@@ -134,11 +134,26 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `judge` | `"rule"` \| `"llm"` \| `"rule+llm"` | **필수** | 판정 방식 |
 | `schedule.interval` | str(`^\d+[smh]$`) | — | `interval`/`cron` 중 정확히 하나. 예: `"30s"`, `"5m"`, `"1h"`. 0은 불가 |
 | `schedule.cron` | str(5필드) | — | 표준 5필드 cron 표현식 |
-| `target` | str \| null | null | 토폴로지 locator(예: `"rest:/api/v1/lines/{line}/oee"`). 기동 검증이 토폴로지에서 해석 가능한지 확인 |
-| `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest→rest_get`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
+| `target` | str \| null | null | 토폴로지 locator(예: `"rest:/api/v1/lines/{line}/oee"`) 또는 등재 항목 이름(`"rest:summary_prod"`). 기동 검증이 각자의 이름공간에서 해석 가능한지 확인 |
+| `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest:/path→rest_get`, `rest:<이름>→rest_query`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
 | `params` | dict | `{}` | 프로브·rule 판정에 넘길 파라미터(아래 "rule 판정 4종" 참고) |
 | `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`의 `limit`) |
 | `on_budget_exhausted` | `"skip"` \| `"escalate"` | `"skip"` | llm/rule+llm 판정인데 `patrol.llm_budget`이 소진됐을 때 동작 |
+| `resolve.<키>.from` | `"rest"` \| `"mongo"` \| `"redis"` \| `"clock"` \| `"unfiltered"` | **필수** | 값을 어디서 읽을지. 값 자체를 config에 적으면 즉시 썩는다(사업부/법인마다 다르고 매일 바뀐다). `params.body`와 키가 겹치면 기동 거부 |
+| `resolve.<키>.entry` / `.field` | str / str | `from="rest"`일 때 필수 | 부를 등재 조회 항목(**GET이어야 한다** — 기동 검증이 강제)과 뽑을 필드 |
+| `resolve.<키>.collection` / `.field` / `.filter` | str / str / dict | `from="mongo"`일 때 앞 둘 필수 | 조회할 컬렉션·필드·필터 |
+| `resolve.<키>.pattern` | str | `from="redis"`일 때 필수 | scan 패턴. 값은 **키 목록**이다 |
+| `resolve.<키>.expr` | `"today"` \| `"yesterday"` \| `"now_iso"` | `from="clock"`일 때 필수 | 주입된 시계로 만든다(`datetime.now()`를 직접 부르지 않는다) |
+| `resolve.<키>.cardinality` | `"all"` \| `"first:N"` \| `"sample:N"` | `"all"` | 값이 많을 때 자를 방식. 자르면 증거가 `complete=False`로 나가 verify가 "불완전 증거의 부정 결론"을 막는다 |
+
+`from="unfiltered"`는 **의도한 전체 조회**를 명시한다 — 그 키를 아예 보내지 않는다.
+해석 실패로 우연히 전체 조회에 도달하는 경로와 구별하기 위한 어휘다.
+
+**전부-또는-전무**: 해석기가 하나라도 값을 못 내면 대상을 **호출조차 하지 않고**
+`CheckOutcome(status="error")`가 된다. finding이 아니다 — 우리 쪽 실패가 "현장 이상"으로
+둔갑하면 매 순찰이 거짓 경보가 된다. 빈 필터로 나간 요청은 endpoint에 따라 `0/0/0`(거짓
+경보)이 되기도 하고 전체 조회(거짓 안심)가 되기도 하는데, 어느 쪽인지 알 방법이 없다.
+
 
 **rule 판정 4종**(`src/patrol/rules.py`, `params.rule`로 선택):
 
