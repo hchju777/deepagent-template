@@ -406,3 +406,21 @@ async def test_wall_clock_상한을_넘긴_조사는_실패로_종결된다(monk
     rec = repo.get("c-1")
     assert rec.status == "closed" and rec.owner is None
     assert "TimeoutError" in (rec.closed_reason or "")
+
+
+def test_케이스_파일_스냅샷은_모델이_아닌_값에도_견딘다():
+    # 실패 종결 구제가 체크포인트에서 읽은 값을 그대로 먹인다 — 역직렬화 결과가
+    # pydantic 모델이 아닐 수 있는데, model_dump를 무조건 부르면 AttributeError로 터진다.
+    from src.application.worker import _case_file_snapshot
+    snap = _case_file_snapshot({
+        "plan_tasks": [{"id": "t1", "status": "ok"}],      # 모델이 아니라 dict
+        "hypotheses": [], "round": 2, "qa_log": [], "verify_problems": [],
+        "verify_attempts": 1})
+    assert snap["plan_tasks"] == [{"id": "t1", "status": "ok"}]
+    assert snap["round"] == 2 and snap["verify_attempts"] == 1
+
+
+def test_케이스_파일_스냅샷은_빠진_키를_기본값으로_채운다():
+    from src.application.worker import _case_file_snapshot
+    snap = _case_file_snapshot({})
+    assert snap["verify_attempts"] == 0 and snap["round"] == 0 and snap["plan_tasks"] == []

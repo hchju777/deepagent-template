@@ -77,19 +77,33 @@ from src.domain.patrol import CheckOutcome
 from src.patrol.gate import evidence_refs_for_case
 
 
+def _dump_item(item):
+    """pydantic 모델이면 JSON 값으로 내리고, 이미 평범한 값이면 그대로 둔다.
+
+    엔진의 최종 State는 모델을 주지만, 체크포인트에서 구제한 값(_salvage_case_file)은
+    역직렬화 방식에 따라 dict일 수 있다 — 무raise 규율상 여기서 터지면 안 된다.
+    """
+    dump = getattr(item, "model_dump", None)
+    return dump(mode="json") if callable(dump) else item
+
+
 def _case_file_snapshot(result: dict) -> dict:
     """엔진 최종 State(dict)에서 계획 5가 읽을 케이스 파일 스냅샷을 뽑는다(I6).
 
     스레드 체크포인트는 보존 TTL로 폐기될 수 있으므로(infrastructure/retention.py),
-    보고서 소스는 Store에 별도로 박제한다 — pydantic 모델은 model_dump(mode="json")로
-    평범한 JSON 값으로 내린다.
+    보고서 소스는 Store에 별도로 박제한다.
+
+    verify_attempts를 싣는 이유: 보고서 §1의 검증 단계가 "그냥 통과"와 "재작성 후
+    통과(강등)"를 구별하는 유일한 구조적 신호다 — caveat 문자열을 냄새 맡는 대신
+    이 값을 본다.
     """
     return {
-        "plan_tasks": [t.model_dump(mode="json") for t in result.get("plan_tasks", [])],
-        "hypotheses": [h.model_dump(mode="json") for h in result.get("hypotheses", [])],
+        "plan_tasks": [_dump_item(t) for t in result.get("plan_tasks", [])],
+        "hypotheses": [_dump_item(h) for h in result.get("hypotheses", [])],
         "round": result.get("round", 0),
         "qa_log": result.get("qa_log", []),
         "verify_problems": result.get("verify_problems", []),
+        "verify_attempts": result.get("verify_attempts", 0),
     }
 
 
