@@ -28,6 +28,8 @@ SiteRuntime.deps.store는 PatrolDaemon이 생성 직후 자신의 store로 덮�
 InMemoryCaseStore를 채워두고, 실제 배선(PatrolDaemon 생성)에서 덮어쓴다.
 """
 import asyncio
+import dataclasses
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -374,9 +376,53 @@ class PatrolDaemon:
             self.scheduler.shutdown(wait=False)
 
 
+def load_stub_seeds(path: Path) -> tuple[dict[str, StubSeeds], list[str]]:
+    """시드 파일을 읽어 (사이트키 → StubSeeds, 문제 목록)을 돌려준다. raise하지 않는다.
+
+    사이트 키는 `"{gbm}/{fct}"`. 알 수 없는 키를 그냥 `StubSeeds(**spec)`에 넘기면
+    TypeError가 조립 도중에 튀어 BootError가 아니라 스택트레이스로 죽는다 —
+    사람이 원인을 못 찾는 형태다. 그래서 필드 집합을 먼저 확인한다.
+    """
+    allowed = {f.name for f in dataclasses.fields(StubSeeds)}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {}, [f"시드 파일을 읽을 수 없다 ({path}): {exc}"]
+    if not isinstance(raw, dict):
+        return {}, [f"시드 파일의 최상위는 사이트 키 → 시드 매핑이어야 한다 ({path})"]
+    seeds, problems = {}, []
+    for site_key, spec in raw.items():
+        if not isinstance(spec, dict):
+            problems.append(f"시드 {site_key!r}가 dict가 아니다")
+            continue
+        unknown = sorted(set(spec) - allowed)
+        if unknown:
+            problems.append(f"시드 {site_key!r}의 알 수 없는 키: {unknown}")
+            continue
+        seeds[site_key] = StubSeeds(**spec)
+    return seeds, problems
+
+
+def seeds_problems(seeds: dict[str, StubSeeds], sites) -> list[str]:
+    """시드가 향한 사이트가 실제로 스텁을 쓰는지 확인한다.
+
+    조용히 무시하면 사람이 "가짜 데이터로 돌고 있다"고 믿는 채 실제 대상을 두드린다.
+    반대(스텁인데 시드가 없다)는 문제가 아니다 — 빈 응답도 유효한 관측이다.
+    """
+    known = {f"{rt.gbm}/{rt.fct}": rt.cfg.target.adapters for rt in sites}
+    problems = []
+    for key in sorted(seeds):
+        if key not in known:
+            problems.append(f"시드 {key!r}에 해당하는 활성 사이트가 없다")
+        elif known[key] == "real":
+            problems.append(f'시드 {key!r}: 이 사이트는 adapters="real"이라 시드가 무시된다')
+    return problems
+
+
 def assemble_sites(
     config_root: Path, repo_root: Path, env: dict, *, clock: Callable,
-    stub_seeds: StubSeeds | None = None, llm_factory: Callable[[str], Any] | None = None,
+    stub_seeds: "StubSeeds | dict[str, StubSeeds] | None" = None,
+    llm_factory: Callable[[str], Any] | None = None,
 ) -> tuple[AppConfig, list[SiteRuntime]]:
     """registry의 활성 사이트마다 config·topology·deployment·digest·어댑터·엔진
     의존을 조립한다.
@@ -413,12 +459,12 @@ def assemble_sites(
                          else "absent",
         }
 
-        # config가 시드를 선언했으면 그것을 쓴다 — 인자로 받은 stub_seeds(테스트가
-        # 주는 것)가 우선이다. 이 경로가 없으면 예시 config의 점검이 전부
-        # "404: 스텁에 등록되지 않은 끝점"으로 끝난다.
-        seeds = stub_seeds
-        if seeds is None and site_cfg.target.stub_seeds is not None:
-            seeds = StubSeeds(**site_cfg.target.stub_seeds.model_dump())
+        # dict면 사이트별 시드(CLI --stub-seeds), 단일 객체면 모든 사이트에 적용
+        # (테스트가 그렇게 쓴다). 시드가 config에 없는 이유는 계획 10 Task 1 —
+        # config는 권한이고 가짜 응답은 증거의 흉내라, 같은 파일에 두면 실전환 시
+        # "지우는 것을 잊지 마라"가 사람의 기억에 걸린다.
+        seeds = stub_seeds.get(f"{ref.gbm}/{ref.fct}") if isinstance(stub_seeds, dict) \
+            else stub_seeds
         adapters = build_adapters(site_cfg, topology, clock=clock, stub_seeds=seeds)
         deps = EngineDeps(
             lead_llm=make_llm(app.llm.profiles.lead),

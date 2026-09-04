@@ -350,3 +350,13 @@ def test_해석기_결과_모양이_스키마와_어긋나면_기동을_거부�
         {"part_code": {"from": "clock", "expr": "today"}}))   # 스키마는 list[str]
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("part_code" in e.problem and "clock" in e.problem for e in errors), errors
+
+
+def test_config에는_더_이상_stub_seeds를_쓸_수_없다():
+    # 표면 자체를 없앴으므로 StrictModel이 거부한다 — 검증할 것이 없으면 기동
+    # 검증 항목도 지운다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_site import SiteConfig
+    with pytest.raises(ValidationError):
+        SiteConfig.model_validate({"target": {"stub_seeds": {"rest_responses": {}}}})

@@ -42,18 +42,19 @@ python -m src knowledge validate --config-root config.example --repo-root .
 된다 — 기동 검증은 문제를 전부 모아서 한 번에 보여준다([config 레퍼런스](config-reference.md#기동-검증-항목-srcbootpy) 참고).
 
 ```bash
-python -m src patrol run --for-seconds 5 --config-root config.example --repo-root .
+python -m src patrol run --for-seconds 5 --stub-seeds stub-seeds.example.json \
+  --config-root config.example --repo-root .
 ```
 
-`config.example`은 `target.adapters: "stub"`을 쓰지만 `target.stub_seeds`가
-스텁 응답을 미리 심어 둬서, 이 명령은 실제로 끝까지 간다 — `api.oee_range`가
+`config.example`은 `target.adapters: "stub"`을 쓰고 `--stub-seeds`가 스텁 응답을
+미리 심어 줘서, 이 명령은 실제로 끝까지 간다 — `api.oee_range`가
 `oee=512`에서 finding을 내고(범위 `0~100` 초과), 케이스가 열리고, 조사가
 시작되고, `output/c-1.html`에 보고서가 쓰인다. 방금 추가한
 `twin_state.freshness`도 케이스를 하나 더 연다 — 시드에 `twin_state` 컬렉션이
 없어 `ts` 필드를 못 찾고 "필드 부재 — ts"라는 finding을 내기 때문이다. 데이터
 이상은 rule 설정 오류(`KnownRuleError`)가 아니라 finding으로 다루는 규율이 여기
-그대로 보인다. 실제 데이터를 넣어 보려면 `target.stub_seeds.mongo_collections`에
-`twin_state`를 추가하면 된다.
+그대로 보인다. 실제 데이터를 넣어 보려면 `stub-seeds.example.json`의 `"mx/gumi"` 아래
+`mongo_collections`에 `twin_state`를 추가하면 된다.
 
 다만 **조사는 첫 LLM 호출에서 멈춘다**: `.env.example`의 `LLM_BASE_URL`이
 실재하지 않는 예시 호스트라 연결 자체가 안 된다(키가 틀린 게 아니라 검증까지

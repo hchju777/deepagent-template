@@ -24,7 +24,8 @@ from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import fingerprint
 from src.infrastructure.checkpointer import build_checkpointer, build_persistence
 from src.infrastructure.llm import build_chat_model
-from src.patrol.daemon import PatrolDaemon, assemble_sites
+from src.patrol.daemon import (PatrolDaemon, assemble_sites, load_stub_seeds,
+                               seeds_problems)
 from src.patrol.llm_judge import LlmBudget
 from src.presentation.mail import SmtpSender
 from src.presentation.report import render_md
@@ -80,8 +81,24 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
             print(f"[{e.where}] {e.problem}", file=sys.stderr)
         return 1
 
+    # 시드는 config가 아니라 플래그다 — 프로덕션 명령줄에는 없고, 없으면 시드도
+    # 없다. 실전환 시 "지우는 것을 잊지 마라"를 메커니즘이 대신한다.
+    seeds, seed_problems = ({}, [])
+    if getattr(args, "stub_seeds", None):
+        seeds, seed_problems = load_stub_seeds(Path(args.stub_seeds))
+        if seed_problems:
+            for problem in seed_problems:
+                print(f"[stub-seeds] {problem}", file=sys.stderr)
+            return 1
+
     clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
-    app, sites = assemble_sites(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
+    app, sites = assemble_sites(config_root, repo_root, env, clock=clock,
+                                stub_seeds=seeds or None, llm_factory=llm_factory)
+    for problem in seeds_problems(seeds, sites):
+        print(f"[stub-seeds] {problem}", file=sys.stderr)
+    if seeds_problems(seeds, sites):
+        return 1
+
     p = build_persistence(app.store)
     store, repo, ledger, events = p.store, p.repo, p.ledger, p.events
     snapshots = p.snapshots
@@ -532,6 +549,10 @@ def main(argv=None) -> int:
     p_patrol_run.add_argument(
         "--for-seconds", type=float, default=None,
         help="N초 뒤 데몬을 내린다(스모크·개발용). 0이면 기동만 확인하고 즉시 내린다")
+    p_patrol_run.add_argument(
+        "--stub-seeds", default=None,
+        help="스텁 어댑터가 돌려줄 가짜 응답 파일(사이트키 → 시드). 예시 트리를 "
+             "대상 시스템 없이 돌릴 때만 쓴다 — 실전환 시에는 이 플래그를 뺀다")
     _add_common(p_patrol_run)
     p_patrol_status = patrol_sub.add_parser(
         "status", help="하트비트와 사이트·점검별 최근 실행 요약. 메모리 백엔드는 안내만 한다")

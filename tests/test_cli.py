@@ -458,45 +458,55 @@ def test_config_show_출력은_다시_읽힌다(tmp_path, capsys, monkeypatch):
     assert code == 0
     from src.config.schema_site import SiteConfig
     SiteConfig.model_validate(json.loads(printed))     # 되먹여도 통과해야 한다
+def test_실_어댑터_사이트에_시드를_주면_거부한다(tmp_path, monkeypatch, capsys):
+    # 시드는 스텁에서만 쓰인다. 조용히 무시하면 사람이 "가짜 데이터로 돌고 있다"고
+    # 믿는 채 실제 대상을 두드린다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["adapters"] = "real"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"mx/gumi": {"rest_responses": {}}}), encoding="utf-8")
+
+    code = main(["patrol", "run", "--for-seconds", "0", "--stub-seeds", str(seeds),
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1
+    assert "mx/gumi" in capsys.readouterr().err
 
 
-def test_patrol_run이_config_시드로_실제_점검을_성공시킨다(tmp_path, monkeypatch):
-    # config에 시드를 넣는 경로가 없어 config.example의 점검이 한 번도 성공한 적이
-    # 없었다("404: 스텁에 등록되지 않은 끝점"). 이전 회귀 테스트는 assemble_sites를
-    # 직접 불러서 argparse→validate_boot→_run_patrol 구간을 안 지났고, 그래서
-    # "5초 창 안에 아무것도 안 돈다"를 못 잡았다 — CLI를 그대로 태운다.
-    import asyncio
+def test_시드_파일이_점검을_실제로_성공시킨다(tmp_path, monkeypatch):
+    # 플래그가 하는 일이 있는지 본다 — 주면 finding, 안 주면 404 error.
     _tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
     gbm = tmp_path / "config" / "gbm" / "mx.json"
     data = json.loads(gbm.read_text(encoding="utf-8"))
     data["target"]["rest"] = {"base_url": "http://x"}
-    data["target"]["stub_seeds"] = {"rest_responses": {"/oee": {"oee": 512}}}
     data["patrol"] = {"checks": {"api.oee": {
         "judge": "rule", "schedule": {"interval": "3s"}, "target": "rest:/oee",
         "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}}}}
     gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"mx/gumi": {"rest_responses": {"/oee": {"oee": 512}}}}),
+                     encoding="utf-8")
 
     outcomes = []
-    real_daemon_cls = main_module.PatrolDaemon
 
-    class SpyDaemon(real_daemon_cls):
+    class SpyDaemon(main_module.PatrolDaemon):
         async def run(self, stop):
-            # 스케줄러 대신 점검을 직접 한 번 돌린다 — 데몬이 조립한 어댑터를
-            # 그대로 쓰므로 시드가 실제로 심겼는지가 결과에 나온다.
             self.build()
-            site = self.sites[0]
-            real_record = self.ledger.record_run
-            self.ledger.record_run = lambda g, f, n, o: (outcomes.append((n, o)),
-                                                         real_record(g, f, n, o))[1]
+            real = self.ledger.record_run
+            self.ledger.record_run = lambda g, f, n, o: (outcomes.append(o), real(g, f, n, o))[1]
             await self.run_one("mx", "gumi", "api.oee",
-                               site.cfg.patrol.checks["api.oee"])
+                               self.sites[0].cfg.patrol.checks["api.oee"])
 
     monkeypatch.setattr("src.__main__.PatrolDaemon", SpyDaemon)
-    code = main(["patrol", "run", "--for-seconds", "0",
-                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
-    assert code == 0
-    # 시드가 안 심겼으면 "404: 스텁에 등록되지 않은 끝점"으로 error가 된다.
-    assert outcomes, "점검이 아예 안 돌았다"
-    name, outcome = outcomes[0]
-    assert (name, outcome.status) == ("api.oee", "finding"), outcome.error
+    argv = ["patrol", "run", "--for-seconds", "0",
+            "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    assert main(argv + ["--stub-seeds", str(seeds)]) == 0
+    assert outcomes[0].status == "finding", outcomes[0].error
+
+    outcomes.clear()
+    assert main(argv) == 0
+    assert outcomes[0].status == "error"            # 시드 없이는 404

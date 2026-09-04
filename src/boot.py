@@ -100,12 +100,6 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
 
         errors += [BootError(where, p) for p in topology_problems(topo)]
 
-        if cfg.target.adapters == "real" and cfg.target.stub_seeds is not None:
-            # 조용히 무시되면 운영자가 "테스트용 값이 살아 있나?" 하고 헷갈린다.
-            errors.append(BootError(
-                where, "adapters=\"real\"인데 target.stub_seeds가 남아 있다 — "
-                       "시드는 스텁에서만 쓰이므로 지우거나 adapters를 stub으로 둔다"))
-
         known = topo.locators()
         entries = dict(cfg.target.rest.entries) if cfg.target.rest else {}
         for name, check in cfg.patrol.checks.items():
