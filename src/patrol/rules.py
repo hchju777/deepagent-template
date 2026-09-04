@@ -281,7 +281,66 @@ def _judge_all_zero(result: ProbeResult, params: dict) -> RuleVerdict:
     return RuleVerdict(status="ok", reason=f"0이 아닌 값이 있다 — {field}")
 
 
+def _when_guard(params: dict) -> tuple[str, Any] | None:
+    """`when` 절을 (필드, 기대값)으로 검증해 돌려준다. 없으면 None.
+
+    모양을 엄격히 닫는 이유: 오타난 키(`equal`)를 조용히 무시하면 가드가 항상
+    통과해 사람이 쓴 제약이 아무 효과 없이 지나간다 — 계획 9가 "resolve를 등재
+    아닌 target에 달면 기동 거부"로 올린 것과 같은 형태다.
+    """
+    when = params.get("when")
+    if when is None:
+        return None
+    if not isinstance(when, dict) or set(when) != {"field", "equals"}:
+        raise KnownRuleError(
+            f"rule expected_state의 when은 {{field, equals}} 두 키여야 한다 — {when!r}")
+    field = when["field"]
+    if not isinstance(field, str):
+        raise KnownRuleError(f"rule expected_state의 when.field는 문자열이어야 한다 — {field!r}")
+    return field, when["equals"]
+
+
+def _judge_expected_state(result: ProbeResult, params: dict) -> RuleVerdict:
+    """한 필드의 값이 다른 필드에 비추어 말이 되는가 — "생산중이어야 하는데 NO PLAN".
+
+    `expect`는 **값 목록이지 표현식이 아니다.** 비교 연산자·정규식·범위를 열면
+    rule이 작은 질의 언어가 되고, 그건 config가 코드가 되는 길이다(규율 6이
+    "재현·상한·감사"를 코드에 두라고 한 방향과 반대다). 필요해지면 새 rule을 연다.
+
+    `when`이 성립하지 않으면 ok다. 3상의 `skipped`를 쓰지 않는 이유: 그 값은
+    LLM 예산 소진 전용이고, 두 뜻을 한 칸에 넣으면 `patrol status`가 서로 다른
+    이유를 같게 보여준다.
+    """
+    field = _field_name(params, "expected_state")
+    expect = params.get("expect")
+    if not isinstance(expect, list) or not expect:
+        raise KnownRuleError(
+            f"rule expected_state의 expect는 비어 있지 않은 목록이어야 한다 — {expect!r}")
+    guard = _when_guard(params)
+    if guard is not None:
+        guard_field, wanted = guard
+        actual = get_path(result.data, guard_field)
+        if actual is None:
+            # ok로 삼키면 이 점검은 영영 아무것도 안 보면서 초록으로 남는다 —
+            # 측정하지 않은 것을 "이상 없음"으로 보고하는 형태다(스펙 §2-N7).
+            # 러너 경계에서 ok의 사유는 사라지므로, 구별을 남기려면 finding이어야
+            # 한다. all_zero의 "표본 부족"과 같은 판단이다.
+            return RuleVerdict(status="finding",
+                               reason=f"가드 필드 부재로 판정할 수 없다 — {guard_field}")
+        if actual != wanted:
+            return RuleVerdict(status="ok",
+                               reason=f"판정 대상 아님 — {guard_field}={actual!r}")
+    value = get_path(result.data, field) if field else None
+    if value is None:
+        return RuleVerdict(status="finding", reason=f"필드 부재 — {field}")
+    if value in expect:
+        return RuleVerdict(status="ok", reason=f"기대한 상태 — {field}={value!r}")
+    return RuleVerdict(status="finding",
+                       reason=f"기대와 다른 상태 — {field}={value!r}, 기대: {expect}")
+
+
 _RULES: dict[str, Callable] = {
+    "expected_state": lambda result, params, clock: _judge_expected_state(result, params),
     "all_zero": lambda result, params, clock: _judge_all_zero(result, params),
     "range": lambda result, params, clock: _judge_range(result, params),
     "exists": lambda result, params, clock: _judge_exists(result, params),

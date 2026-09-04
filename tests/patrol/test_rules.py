@@ -136,3 +136,66 @@ def test_all_zero의_설정_오류는_KnownRuleError다():
 def test_필드가_없으면_데이터_이상이다():
     v = _zero({}, field="body.badge")
     assert v.status == "finding" and "부재" in v.reason
+
+
+def _state(data, **params):
+    return judge_by_rule(_ok({"body": data}), {"rule": "expected_state", **params},
+                         clock=lambda: T)
+
+
+_WHEN = {"field": "body.plan_status", "equals": "생산중"}
+
+
+def test_기대한_상태가_아니면_finding이다():
+    v = _state({"plan_status": "생산중", "prod_status": "NO PLAN"},
+               field="body.prod_status", expect=["생산중", "대기"], when=_WHEN)
+    # 무엇을 기대했고 무엇을 봤는지 **둘 다** 적어야 보고서를 읽는 사람이
+    # 왜 그게 문제인지 안다.
+    assert v.status == "finding" and "NO PLAN" in v.reason and "생산중" in v.reason
+
+
+def test_기대한_상태면_ok다():
+    v = _state({"plan_status": "생산중", "prod_status": "대기"},
+               field="body.prod_status", expect=["생산중", "대기"], when=_WHEN)
+    assert v.status == "ok"
+
+
+def test_when이_안_맞으면_판정하지_않는다():
+    # 계획이 없는 라인이 NO PLAN인 것은 정상이다.
+    v = _state({"plan_status": "휴무", "prod_status": "NO PLAN"},
+               field="body.prod_status", expect=["생산중"], when=_WHEN)
+    assert v.status == "ok"
+
+
+def test_when_없이도_쓸_수_있다():
+    v = _state({"prod_status": "NO PLAN"}, field="body.prod_status", expect=["생산중"])
+    assert v.status == "finding"
+
+
+def test_상태_필드가_없으면_데이터_이상이다():
+    # 필드 부재는 finding이지 KnownRuleError가 아니다(규율 1).
+    v = _state({"prod_status": None}, field="body.prod_status", expect=["생산중"])
+    assert v.status == "finding" and "부재" in v.reason
+
+
+def test_when_필드가_없으면_판정_불가를_알린다():
+    # ok로 삼키면 그 점검은 영영 아무것도 안 보면서 초록으로 남는다 —
+    # 측정하지 않은 것을 "이상 없음"으로 보고하는 형태(스펙 §2-N7).
+    # all_zero의 "표본 부족"과 같은 자리다.
+    v = _state({"prod_status": "NO PLAN"}, field="body.prod_status",
+               expect=["생산중"], when=_WHEN)
+    assert v.status == "finding" and "가드" in v.reason and "plan_status" in v.reason
+
+
+def test_expect가_리스트가_아니면_설정_오류다():
+    for bad in (None, "생산중", [], {"a": 1}):
+        with pytest.raises(KnownRuleError):
+            _state({"prod_status": "x"}, field="body.prod_status", expect=bad)
+
+
+def test_when의_모양이_틀리면_설정_오류다():
+    for bad in ({"field": "body.x"}, {"equals": "y"}, {"field": 1, "equals": "y"},
+                "문자열", {"field": "body.x", "equals": "y", "군더더기": 1}):
+        with pytest.raises(KnownRuleError):
+            _state({"prod_status": "x"}, field="body.prod_status",
+                   expect=["생산중"], when=bad)
