@@ -36,7 +36,7 @@
 - **무raise**: 접수·해석·접근 판정 전부. 실패는 반환 타입의 상태로 흡수한다(`ScopeResult.status`, `IntakeTurn.status`). 접수 경로에서 예외가 새면 HTTP 500이 되고, 그 시점에 케이스가 이미 열려 있으면 고아가 된다.
 - **시계 주입**: `src/__main__.py` 밖에서 `datetime.now()` 금지.
 - **StrictModel**: 새 pydantic 모델은 `StrictModel` 상속.
-- **수명주기는 코드가 쥔다(규율 4)**: 접수 LLM이 돌려준 값으로 `status`를 정하지 않는다. 상태 전이는 기존 `ALLOWED` 전이표를 그대로 쓴다.
+- **수명주기는 코드가 쥔다(규율 4)**: 접수 LLM이 돌려준 값으로 `status`를 정하지 않는다. **전이표(`ALLOWED`)는 접수 되묻기를 위해 `open ↔ awaiting_human` 두 엣지를 연다** — 그 표는 그래프만 파킹하던 시절 것이고 그래프는 `investigating`에서만 돈다. 그래프가 파킹한 케이스가 `awaiting_human → open`을 타면 스레드를 잃으므로, `question_kind`가 그것을 막는다.
 - **통제 경계(규율 6)**: 사이트 해석에서 **후보 목록은 코드가 만든다**(registry의 활성 사이트). LLM은 그 안에서 고를 뿐이고, 목록 밖 값을 고르면 미확정으로 처리한다 — 대상 시스템 접근 권한이 걸린 축을 LLM 자유 서술로 정하게 두면 안 된다.
 - **한 경로만**: `chat`과 계획 13의 API가 **같은 함수**를 쓴다. 조립을 베끼면 언젠가 하나가 빠뜨린다(규율 8이 케이스 종결 세 경로에서 얻은 교훈).
 - **주석·문서는 한국어, WHY만.** **커밋 메시지는 영어**(CLAUDE.md 언어 관례). 끝에 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
@@ -69,7 +69,8 @@
 | `src/application/intake.py` | 접수 | 케이스가 **이미 열린 뒤** 도는 턴 단위로 재구성 |
 | `src/application/open_case.py` | **신설** — 케이스 개설 한 곳 | `open_case(...) -> CaseRecord` — CLI와 계획 13이 공유 |
 | `src/domain/cases.py` | 케이스 레코드 | `requested_by`, `question_kind` |
-| `src/domain/access.py` | **신설** — 접근 술어 | `AccessPolicy.can_access(subject, gbm, fct)` |
+| `src/config/schema_app.py` | 접근 술어 | `AccessPolicy.can_access(subject, gbm, fct)` — domain이 아닌 이유는 순환(모든 도메인 모델이 `StrictModel`에 의존한다) |
+| `src/application/answer.py` | **신설** — 답변 라우팅 | `answer_case`가 접수/조사 질문을 가른다. CLI와 계획 13이 공유 |
 | `src/config/schema_app.py` | app config | `access.allow` 테이블 |
 | `src/__main__.py` | CLI | `chat`이 새 순서를 쓴다, `--requested-by` |
 | `src/boot.py` | 기동 검증 | `access.allow`의 사이트 키가 registry에 실재하는가 |
@@ -386,7 +387,12 @@ python -m src case list --config-root config.example --repo-root .
 
 ## Self-Review
 
-**스펙 커버리지**: §3.5(필드 1개 + 술어 1개 + 접수 경계 한 곳 + 읽기 필터) → Task 5. §4.4의 "접수가 케이스보다 먼저" → Task 2·3. "사이트 해석 단계를 intake 앞에" → Task 1. 나머지 §4.4(엔드포인트·SSE)는 계획 13.
+**스펙 커버리지**: §3.5의 필드 1개 + 술어 1개 + 접수 경계 검사 → Task 5. **읽기
+필터는 미이행이다** — `AccessPolicy.sites_for`는 만들었으나 프로덕션 소비자가 없고
+(CLI의 `case list`/`case show`는 주체 개념이 없다), 스펙이 말한 "모든 읽기
+엔드포인트"가 계획 13에서 생긴다. **계획 13이 그것을 붙이지 않으면 접수만 막히고
+읽기는 열린 채로 남는다.** `sites_for`는 와일드카드에 `known`이 없으면 `ValueError`를
+던지므로 엔드포인트에 붙일 때 그 인자를 반드시 넘겨야 한다. §4.4의 "접수가 케이스보다 먼저" → Task 2·3. "사이트 해석 단계를 intake 앞에" → Task 1. 나머지 §4.4(엔드포인트·SSE)는 계획 13.
 
 **타입 일관성**: `ScopeResult`/`IntakeTurn` 둘 다 `status` 필드로 3상을 표현한다 — `CheckOutcome`·`AdmitResult`와 같은 형태라 무raise 규율이 반환 타입에 보인다. `AccessPolicy.sites_for`가 `None`을 "제한 없음"으로 쓰는 것은 `[]`("아무것도 못 봄")와 구별하기 위해서다 — 계획 10의 `response_props`가 같은 구별을 했다.
 
@@ -402,3 +408,31 @@ python -m src case list --config-root config.example --repo-root .
 | `chat` 지문에서 `case_id` 제거 | 개설 시점에 `target_locator`가 아직 없어 지금 고치면 더 나빠진다. P8이 이력 검색과 함께 |
 | 접수 문답을 그래프 첫 라운드로 흡수 | 접수는 "무엇을 조사할지"를 정하고 그래프는 "왜 그런지"를 찾는다. 합치면 `max_rounds` 상한이 두 일을 함께 세게 된다 |
 | `GET /digests/{scenario}` | P7이 만들 기록을 읽는다 — P6 범위 밖 |
+
+
+---
+
+## 계획 13 인계
+
+리뷰 세 라운드에서 남은 것들. **계획 13이 HTTP를 열면 전부 창이 넓어진다.**
+
+1. **`_save`의 TOCTOU는 닫히지 않았다.** `repo.get` → `_not_ours` 판정 → `repo.save`
+   사이는 원자적이 아니고 `repo.save`에 CAS가 없다(Mongo는 문서 전체 `$set`). 지금
+   원자 프리미티브는 `claim` 하나뿐이다. CLI는 프로세스 하나가 순차로 돌아 창이
+   좁지만, `api` 풀이 동시 요청을 받으면 넓어진다. **조건부 save를 열거나 접수도
+   lease를 잡거나** 둘 중 하나를 계획 13이 정해야 한다.
+2. **읽기 필터가 미배선이다.** `AccessPolicy.sites_for`에 프로덕션 소비자가 없다 —
+   스펙 §3.5의 "모든 읽기 엔드포인트를 같은 술어로 필터"가 계획 13의 몫이다. 안
+   붙이면 접수만 막히고 읽기는 열린 채로 남는다. 와일드카드 선언에는 `known` 인자가
+   필수다(없으면 `ValueError`).
+3. **`case resume`의 "케이스 존재" 오라클.** 접근 검사는 `repo.get` 뒤에 있을 수밖에
+   없다(gbm/fct를 알아야 판정한다). 그래서 미인가 주체가 "없는 케이스"와 "접근 불가
+   케이스"를 메시지로 구별할 수 있다. `POST /cases/{id}/answers`가 같은 순서를
+   베끼면 HTTP 404/403 차이로 그대로 노출된다 — **미인가 시 not-found와 같은 응답을
+   낼지** 정하라.
+4. **`answer_case`에 status 가드가 없다.** `question_kind`만 보고 분기한다. CLI는
+   `_cmd_case_resume`이 앞에서 `awaiting_human`을 확인하지만, API가 이 함수만 쓰면
+   `investigating` 케이스에 `resume_once`가 걸린다(워커의 `claim`이 "busy"로 막긴
+   한다).
+5. **`intake_turn`은 lease를 잡지 않는다.** 가드로 좁혔을 뿐이므로, 동시 요청이
+   가능한 전송에서는 1번과 함께 판단하라.

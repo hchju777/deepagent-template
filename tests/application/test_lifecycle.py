@@ -25,8 +25,12 @@ def test_허용_전이만_통과하고_종결은_사유와_lease_해제를_남�
     assert closed.closed_reason == "타임아웃" and closed.owner is None and closed.lease_until is None
     with pytest.raises(LifecycleError):
         transition(closed, "investigating", clock=lambda: T)
+    # open↔awaiting_human은 접수 되묻기 전용으로 열려 있다(계획 12) — 그래프
+    # 파킹은 여전히 investigating에서만 오고, 재개는 awaiting_human→investigating이다.
+    parked = transition(_rec(), "awaiting_human", clock=lambda: T)
+    assert transition(parked, "open", clock=lambda: T).status == "open"
     with pytest.raises(LifecycleError):
-        transition(_rec(), "awaiting_human", clock=lambda: T)     # open→awaiting 금지
+        transition(_rec(), "open", clock=lambda: T)                # open→open 없음
 
 
 def test_lease는_타인의_유효_lease를_존중하고_만료면_빼앗는다():

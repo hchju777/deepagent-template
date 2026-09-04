@@ -213,13 +213,11 @@ def test_chat_1왕복_대화형_흐름은_접수부터_보고서까지_완주한
         assert node not in out
 
 
-def test_접수_문답은_human_intake_증거로_박제된다(tmp_path, capsys, monkeypatch):
-    """I3 회귀: intake()가 모은 qa(재질문·답)가 store에 human:intake로 남아야
-    사람이 접수 때 답한 사실이 엔진에 전달된다 — 안 하면 데이터 손실이다.
+def test_접수_문답은_증거로_박제된다(tmp_path, capsys, monkeypatch):
+    """I3 회귀: 사람이 접수 때 답한 사실이 엔진에 전달돼야 한다 — 안 하면 데이터 손실.
 
-    intake 1차 호출이 missing 질문 하나를 내 재질문(ask)이 실제로 발생하게 하고,
-    그 답이 store.list_evidence(case_id)에 human:intake 소스로 남는지 확인한다.
-    (missing=[]인 기존 1왕복 chat 테스트는 qa가 비는 경로만 지나가므로 별도다.)
+    계획 12에서 접수가 턴으로 쪼개지며 소스가 human:intake_answer로 바뀌었고,
+    **마지막에 한 번이 아니라 턴마다** 박제된다 — 프로세스가 중간에 죽어도 남는다.
     """
     _chat_tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
@@ -255,13 +253,12 @@ def test_접수_문답은_human_intake_증거로_박제된다(tmp_path, capsys, 
     assert len(closed) == 1
     case_id = closed[0].id
 
-    intake_evidence = [r for r in store.list_evidence(case_id) if r.source == "human:intake"]
+    intake_evidence = [r for r in store.list_evidence(case_id)
+                       if r.source == "human:intake_answer"]
     assert len(intake_evidence) == 1
     body = store.get_evidence(case_id, intake_evidence[0].id)
-    # "at"은 intake() 내부의 실제 wall clock 호출이라 정확히 맞추지 않는다 —
-    # 질문·답이 human:intake로 그대로 실려 있는지만 확인한다.
-    assert body["qa"][0]["question"] == "최근 배포 이력이 있나요?"
-    assert body["qa"][0]["answer"] == "최근 배포 없음"
+    assert body["question"] == "최근 배포 이력이 있나요?"
+    assert body["answer"] == "최근 배포 없음"
 
 
 def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, capsys, monkeypatch):
@@ -317,6 +314,9 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     awaiting = repo.list_by_status("awaiting_human")
     assert len(awaiting) == 1
     case_id = awaiting[0].id
+    # 워커가 파킹할 때 종류를 붙여야 한다(계획 12) — 안 붙이면 접수/조사 구별이
+    # "라벨이 없다"에 기대게 되고, 접수 쪽 가드가 새로 파킹된 케이스에 무력하다.
+    assert awaiting[0].question_kind == "investigation"
 
     # 두 번째 프로세스를 흉내 — 새 스크립트로 남은 라운드(conclude·verify)를 완주시킨다.
     lead_llm2 = ScriptedLLM([INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
@@ -352,7 +352,9 @@ def test_chat는_등록되지_않은_사이트면_exit_1(tmp_path, capsys, monke
     code = main(["chat", "--gbm", "mx", "--fct", "ghost", "--symptom", "s",
                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 1
-    assert "등록" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    # 사이트 해석이 후보 밖 지정을 먼저 잡는다 — 후보를 함께 보여 다시 제출하게 한다.
+    assert "mx/ghost" in err and "mx/gumi" in err
 
 
 def test_case_show_report는_저장된_보고서_파일을_그대로_보여준다(tmp_path, capsys, monkeypatch):
@@ -683,3 +685,325 @@ def test_chat이_연_케이스도_concern을_정하고_수신자를_가른다(tm
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 0, capsys.readouterr().err
     assert sent == [["ops@y"]], sent
+
+
+def _park_intake(repo, case_id, question="어느 라인인가?"):
+    repo.save(repo.get(case_id).model_copy(update={
+        "status": "awaiting_human", "question": question, "question_kind": "intake"}))
+
+
+def test_접수_질문에_답하면_접수를_이어간다(tmp_path, capsys, monkeypatch):
+    # 그래프를 재개하려 들면 스레드가 없어 실패하고, F3가 그 실패를 조사 실패로
+    # 기록한다 — 사람 눈에는 "답했는데 조사가 깨졌다"로 보인다.
+    from src.application.open_case import open_case
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    record = open_case(repo=repo, store=store, symptom="OEE가 이상하다", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None,
+                       clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc),
+                       on_event=lambda e: None)
+    _park_intake(repo, record.id)
+
+    lead = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}'])
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        lead if profile == "l" else object())
+
+    code = main(["case", "resume", record.id, "--answer", "라인 7",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0, capsys.readouterr().err
+    after = repo.get(record.id)
+    assert after.question_kind is None and after.question is None
+    assert after.target_locator == "mongo:twin_state"
+    # 접수가 끝났으면 **그대로 조사가 시작돼야 한다** — open에 멈춰 있으면 사람이
+    # 답한 뒤 아무 반응이 없고, 그걸 움직이는 건 데몬의 주기 재큐뿐이다.
+    assert after.status != "open" and "재개 결과" in capsys.readouterr().out
+    # 답이 증거로 남았다 — 그래프가 첫 라운드부터 볼 수 있다.
+    assert any("라인 7" in repr(store.get_evidence(record.id, r.id))
+               for r in store.list_evidence(record.id))
+
+
+def test_조사_질문은_접수로_새지_않는다(tmp_path, capsys, monkeypatch):
+    # 반대 방향의 같은 사고 — 그래프가 파킹한 케이스를 접수로 보내면 스레드를
+    # 잃고 새 조사가 처음부터 시작된다. 워커가 파킹할 때 종류를 붙이는지까지 본다.
+    from src.application.open_case import open_case
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None,
+                       clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc),
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "계획 변경이 있었나?",
+        "question_kind": "investigation"}))
+
+    # 접수 LLM은 아무것도 안 준다 — 접수로 새면 이 대본이 소진되며 티가 난다.
+    lead = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}'])
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        lead if profile == "l" else object())
+
+    main(["case", "resume", record.id, "--answer", "없다",
+          "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    # 접수가 돌았다면 target_locator가 채워졌을 것이다 — 그래프 재개는 안 채운다.
+    assert repo.get(record.id).target_locator is None
+
+
+def test_허용되지_않은_주체는_케이스를_열지_못한다(tmp_path, capsys, monkeypatch):
+    # 인증 없는 접수는 실질적으로 "그 법인의 Redis/Mongo/소스 저장소를 읽는
+    # 에이전트를 돌려라"는 요청이다(스펙 §3.5). 검사는 접수 경계 한 곳이다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/gumi"]}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+
+    code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--requested-by", "bob",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "bob" in err and "mx/gumi" in err
+
+
+def test_주체를_안_주면_선언이_있을_때_거부된다(tmp_path, capsys, monkeypatch):
+    # 익명 요청이 선언된 테이블을 통과하면 인증이 없는 것과 같다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/gumi"]}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 1
+
+
+def test_주체가_레코드에_박제된다(tmp_path, monkeypatch):
+    # 판정을 나중에 읽을 때 "누가 이 조사를 요청했나"에 답할 수 있어야 한다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                        ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--requested-by", "alice",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert [r.requested_by for r in repo.list_by_status("closed")] == ["alice"]
+
+
+def test_chat이_스코프_없이도_돈다(tmp_path, monkeypatch):
+    # 웹 사용자와 같은 경로 — --gbm/--fct 없이 증상만 준다. 예시 트리는 활성
+    # 사이트가 하나라 LLM 없이 확정돼야 한다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                        ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+
+    code = main(["chat", "--symptom", "OEE가 이상하다",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0
+    assert [r.gbm for r in repo.list_by_status("closed")] == ["mx"]
+
+
+def test_스코프_미확정이면_후보를_보여주고_케이스를_안_연다(tmp_path, capsys, monkeypatch):
+    # 스코프 없는 케이스는 어떤 어댑터로 무엇을 조사할지가 정해지지 않는다 —
+    # 케이스를 만들고 되묻는 대신 후보를 주고 다시 제출하게 한다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    # 사이트를 둘로 늘려 지름길을 막고, 해석 LLM이 후보 밖 값을 준다.
+    reg = tmp_path / "config" / "registry.json"
+    data = json.loads(reg.read_text(encoding="utf-8"))
+    data["sites"].append({"gbm": "mx", "fct": "suwon"})
+    reg.write_text(json.dumps(data), encoding="utf-8")
+    (tmp_path / "config" / "fct").mkdir(exist_ok=True)
+    (tmp_path / "config" / "fct" / "suwon.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        ScriptedLLM(['{"gbm": "없는곳", "fct": "없는곳"}'])
+                        if profile == "l" else object())
+
+    code = main(["chat", "--symptom", "뭔가 이상하다",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "mx/gumi" in err and "mx/suwon" in err
+    assert repo.list_open() == []          # 케이스를 만들지 않았다
+
+
+def test_case_resume에도_접근_검사가_있다(tmp_path, capsys, monkeypatch):
+    # 개설만 막고 답변을 안 막으면 반쪽이다 — awaiting_human에 넣은 텍스트가
+    # 리드 프롬프트에 직행하고 evidence로 박제된다(스펙 §3.5).
+    from src.application.open_case import open_case
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    app_path = tmp_path / "config" / "app.json"
+    data = json.loads(app_path.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/gumi"]}}
+    app_path.write_text(json.dumps(data), encoding="utf-8")
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by="alice",
+                       clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc),
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "q", "question_kind": "intake"}))
+
+    code = main(["case", "resume", record.id, "--answer", "주입 시도",
+                 "--requested-by", "bob",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1 and "bob" in capsys.readouterr().err
+    # 거부된 답이 증거로 박제되지 않았다.
+    assert not any("주입 시도" in repr(store.get_evidence(record.id, r.id))
+                   for r in store.list_evidence(record.id))
+
+
+def test_접수_중_프로세스가_죽어도_문답이_남는다(tmp_path, capsys, monkeypatch):
+    """계획 12의 존재 이유다 — 접수 중 끊긴 뒤 별 호출이 이어받는다.
+
+    이전 구조에서는 intake()가 프로세스 안에서 되묻고 문답을 마지막에 한 번
+    돌려줬으므로, 여기서 끊기면 케이스도 문답도 존재하지 않았다.
+    """
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))          # 접수 질문에서 바로 EOF
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead1 = ScriptedLLM(['{"target_locator": null, "missing": ["어느 라인인가?"]}'])
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        lead1 if profile == "l" else object())
+
+    assert main(["chat", "--symptom", "OEE가 이상하다",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert "파킹된 채로 남는다" in capsys.readouterr().out
+    parked = repo.list_by_status("awaiting_human")
+    assert len(parked) == 1 and parked[0].question_kind == "intake"
+    case_id = parked[0].id
+
+    # 두 번째 프로세스가 이어받는다 — 접수를 끝내고 조사까지 완주한다.
+    lead2 = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}',
+                         FRAME_ONE_TASK, INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead2, "s": subagent}.get(profile, object()))
+    assert main(["case", "resume", case_id, "--answer", "라인 7이다",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    after = repo.get(case_id)
+    assert after.target_locator == "mongo:twin_state" and after.status == "closed"
+    assert any("라인 7이다" in repr(store.get_evidence(case_id, r.id))
+               for r in store.list_evidence(case_id))
+
+
+def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
+    # 이 세션에서 커밋 메시지가 "answer_case를 부른다"고 주장한 것이 거짓이었던
+    # 적이 있다. 코드만 고치고 테스트를 안 넣으면 조용히 되돌아간다 — CLI와
+    # 계획 13의 API가 같은 분기를 써야 한다는 것이 그 함수를 뺀 이유다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                        ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+
+    seen = []
+    real = main_module.answer_case
+
+    async def spy(*args, **kwargs):
+        seen.append(kwargs.get("interaction_policy"))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr("src.__main__.answer_case", spy)
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    # 조사 재개가 answer_case를 거쳤고, interactive 정책이 유지됐다.
+    assert seen == ["interactive"], seen
+    assert repo.list_by_status("closed")[0].interaction_policy == "interactive"
+
+
+def test_chat도_가로채인_케이스에는_조사를_걸지_않는다(tmp_path, capsys, monkeypatch):
+    # answer_case와 _drive_chat 둘 다 호출부다 — 한쪽만 고치면 나머지가 조용히
+    # 스레드를 버린다(계획 12 리뷰가 실제 CLI로 재현한 형태).
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+
+    class _Hijacks:
+        """접수 LLM 호출 도중 워커가 케이스를 가로챈다."""
+        async def ainvoke(self, messages):
+            open_cases = repo.list_open()
+            repo.save(open_cases[0].model_copy(update={
+                "status": "investigating", "owner": "w-1", "thread_ids": ["t-1"]}))
+            return AIMessage(content='{"target_locator": "rest:/oee", "missing": []}')
+
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        _Hijacks() if profile == "l" else object())
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert "다른 곳에서 처리 중" in capsys.readouterr().out
+    only = repo.list_open()[0]
+    # 새 스레드를 등록하지 않았고 워커의 소유도 그대로다.
+    assert only.thread_ids == ["t-1"] and only.owner == "w-1"
