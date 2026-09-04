@@ -192,3 +192,25 @@ def test_등재_항목이_아닌_target은_응답_판정에서_건너뛴다():
     # 토폴로지 locator(rest:/path)는 다른 이름공간이고 pin은 등재 항목만 덮는다.
     checks = {"c": _check("rest:/api/v1/oee", "body.oee"), "d": _check("mongo:x", "ts")}
     assert response_field_problems(checks, {}, parse_spec(RAW)) == []
+
+
+def test_깊은_중첩_pin_파일에도_raise하지_않는다(tmp_path):
+    # going-live가 `curl … > knowledge/target_api/…`를 지시하므로 파일 내용의
+    # 출처는 결국 대상이다. json.loads는 깊이 한계에서 RecursionError를 던지는데
+    # 그건 ValueError가 아니라, 잡지 않으면 BootError가 아니라 스택트레이스로 죽는다.
+    from src.knowledge.target_api import load_target_api
+    path = tmp_path / "target_api" / "mx"
+    path.mkdir(parents=True)
+    # 깊이 한계는 빌드마다 다르다 — 여기서는 raise가 새지 않는다는 계약만 본다.
+    depth = 20000
+    (path / "gumi.json").write_text("[" * depth + "]" * depth, encoding="utf-8")
+    api, problems = load_target_api(tmp_path, "mx", "gumi")
+    assert api is None and any("RecursionError" in p for p in problems), problems
+
+
+def test_digest_계산이_실패해도_raise하지_않는다():
+    # docstring이 "절대 raise하지 않는다"고 단언한다 — 계약은 절대형이다.
+    cyclic = {}
+    cyclic["self"] = cyclic
+    api = parse_spec(cyclic)
+    assert isinstance(api.problems, list) and api.problems

@@ -1,5 +1,7 @@
 import io
 import json
+
+import pytest
 from datetime import datetime, timezone
 
 from langchain_core.messages import AIMessage
@@ -538,3 +540,22 @@ def test_knowledge_validate가_라이브_드리프트를_실제로_알린다(tmp
     assert main(argv) == 0                                        # --live 없으면 정적만
     assert main(argv + ["--live", "--stub-seeds", str(seeds)]) == 1
     assert "'a'" in capsys.readouterr().err
+
+
+def test_사이트를_조립하는_명령은_모두_시드를_받는다(tmp_path, monkeypatch, capsys):
+    # assemble_sites 호출부가 셋(patrol run·chat·case resume)인데 하나만 배선하면
+    # 언젠가 나머지가 조용히 다르게 돈다 — 케이스 종결 세 경로가 같은 발행 배선을
+    # 써야 하는 것과 같은 이유(규율 8). 예시 트리로 chat을 돌리면 REST 프로브가
+    # 전부 404가 되던 회귀가 실제로 있었다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    missing = str(tmp_path / "없는파일.json")
+    common = ["--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    for argv in (["patrol", "run", "--for-seconds", "0"],
+                 ["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s"],
+                 ["case", "resume", "c-1", "--answer", "a"]):
+        code = main([*argv, "--stub-seeds", missing, *common])
+        assert code == 1, argv
+        # 플래그를 모르면 argparse가 SystemExit(2)를 낸다. 1이면서 시드 파일을
+        # 지목한다는 것은 세 경로가 같은 로더를 탔다는 뜻이다.
+        assert "시드 파일을 읽을 수 없다" in capsys.readouterr().err, argv

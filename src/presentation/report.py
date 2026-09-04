@@ -119,7 +119,7 @@ def _stage_table(stages) -> list[str]:
     return lines
 
 
-def _digests(digests: dict[str, str]) -> str:
+def digest_summary(digests: dict[str, str]) -> str:
     """조사 당시 본 지식 산출물의 digest — 앞 8자만 보인다.
 
     `absent`처럼 digest가 아닌 값은 그대로 둔다(deployment가 없을 때 쓰는 표시).
@@ -147,7 +147,7 @@ def _section1(model: ReportModel) -> str:
         f"- 판정: {_verdict_headline(record, model.verdict)}",
         f"- 신뢰도: {confidence}",
         f"- 태스크 에러율: {model.task_error_rate}",
-        f"- 지식 digest: {_digests(model.knowledge_digests)}",
+        f"- 지식 digest: {digest_summary(model.knowledge_digests)}",
         "- 조사 단계:",
     ]
     return "## 1. 요약\n" + "\n".join(rows + _stage_table(model.stages))

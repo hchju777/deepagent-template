@@ -462,16 +462,6 @@ def test_우리_항목_밖의_변화는_pin_갱신만_요구한다(tmp_path):
                            check_live=True, stub_seeds=seeds)
     assert len(errors) == 1 and "pin" in errors[0].problem, errors
     assert "/other" not in errors[0].problem       # 차이 전체를 쏟지 않는다
-
-
-def test_라이브_명세를_못_받아도_기동을_막지_않는다(tmp_path):
-    # "죽은 사이트가 기동을 막으면 역효과" — Mongo 롤 검사와 같은 자리의 원칙.
-    seeds = _live_tree(tmp_path, None)
-    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
-                           check_live=True, stub_seeds=seeds)
-    assert errors == [], errors
-
-
 def test_pin이_없으면_라이브_대조를_하지_않는다(tmp_path):
     # 견줄 대상이 없다. 명세를 받아 오는 것 자체가 목적이 아니다.
     _tree(tmp_path)
@@ -479,3 +469,58 @@ def test_pin이_없으면_라이브_대조를_하지_않는다(tmp_path):
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
                            check_live=True, stub_seeds={"mx/gumi": StubSeeds(rest_openapi=_SPEC)})
     assert errors == [], errors
+
+
+def test_명세_응답이_2xx가_아니면_드리프트로_오판하지_않는다():
+    # RealRest.fetch_spec은 get()과 같은 규칙으로 4xx/5xx도 status="ok"로 돌려주고
+    # body는 비JSON이면 None이다(실측). 그것을 그대로 명세로 파싱하면 "빈 명세"가
+    # 되어 **모든 등재 항목이 명세에 없다**로 기동이 막힌다 — 원인이 404인데
+    # 메시지는 오타를 가리킨다. 사람을 틀린 곳으로 보내는 것이 이 검사의 최악이다.
+    from datetime import datetime, timezone
+    from src.boot import _live_spec_body
+    from src.domain.envelope import Envelope, ProbeResult
+    T0 = datetime(2026, 9, 4, tzinfo=timezone.utc)
+
+    def _result(status, data):
+        return ProbeResult(status=status, envelope=Envelope(observed_at=T0), data=data,
+                           error=None if status == "ok" else "연결 실패")
+
+    body, problem = _live_spec_body(_result("ok", {"status_code": 404, "body": None}))
+    assert body is None and "404" in problem
+
+    body, problem = _live_spec_body(_result("ok", {"status_code": 200, "body": "Not Found"}))
+    assert body is None and problem and "JSON" in problem
+
+    body, problem = _live_spec_body(_result("error", None))
+    assert body is None and "연결 실패" in problem
+
+    body, problem = _live_spec_body(_result("ok", {"status_code": 200, "body": {"paths": {}}}))
+    assert body == {"paths": {}} and problem is None
+
+
+def test_명세를_못_받으면_그_사실을_말하지_등재_항목을_탓하지_않는다(tmp_path):
+    seeds = _live_tree(tmp_path, "Not Found")      # body가 JSON 객체가 아니다
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert len(errors) == 1, errors
+    assert "명세를 받을 수 없다" in errors[0].problem
+    assert "등재" not in errors[0].problem       # 오타를 가리키지 않는다
+
+
+def test_명세를_아예_못_받아도_침묵하지_않는다(tmp_path):
+    # 조용히 통과하면 운영자는 드리프트를 확인했다고 믿는다 — 확인 안 한 것이
+    # "이상 없음"으로 둔갑하는 형태다(조용한 생략 금지).
+    seeds = _live_tree(tmp_path, None)            # 스텁이 status="error"를 낸다
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert any("명세를 받을 수 없다" in e.problem for e in errors), errors
+
+
+def test_라이브_명세가_깨져_있으면_그_사실을_먼저_말한다(tmp_path):
+    # parse_spec의 problems를 버리면 "최상위가 객체가 아니다"가 사라지고
+    # "등재 항목이 명세에 없다"만 남아, 사람이 config를 뒤지게 된다.
+    seeds = _live_tree(tmp_path, {"paths": "객체가 아니다"})
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert any("paths" in e.problem for e in errors), errors
+    assert not any("오타이거나" in e.problem for e in errors), errors

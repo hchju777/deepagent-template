@@ -60,3 +60,14 @@ def test_시드_파일이_깨져도_raise하지_않는다(tmp_path):
         assert seeds == {} and problems
     seeds, problems = load_stub_seeds(tmp_path / "없는파일.json")
     assert seeds == {} and problems
+
+
+def test_config의_명세_경로가_어댑터까지_간다():
+    # 스키마 검증자와 어댑터 저장은 각각 테스트가 있는데 둘을 잇는 줄만 없었다 —
+    # "함수는 되는데 호출부가 안 넘긴다"의 교과서적 형태.
+    from src.config.schema_site import SiteConfig
+    cfg = SiteConfig.model_validate({"target": {
+        "adapters": "real",
+        "rest": {"base_url": "http://x", "openapi_path": "/v3/api-docs"}}})
+    adapters = build_adapters(cfg, TOPO, clock=CLOCK)
+    assert adapters.rest._openapi_path == "/v3/api-docs"

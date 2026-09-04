@@ -107,7 +107,11 @@ def _case_file_snapshot(result: dict) -> dict:
     (_salvage_case_file)에서는 case 자체가 없을 수 있어 방어적으로 읽는다.
     """
     case = result.get("case")
-    digests = getattr(case, "knowledge_digests", None)
+    # 구제 경로(_salvage_case_file)의 case는 역직렬화 방식에 따라 dict일 수 있다 —
+    # 바로 위 _dump_item docstring이 적어 둔 사실이다. getattr만 쓰면 그때 digest가
+    # 조용히 사라져 보고서가 "없음(기록되지 않음)"을 찍는다.
+    digests = case.get("knowledge_digests") if isinstance(case, dict) \
+        else getattr(case, "knowledge_digests", None)
     return {
         "knowledge_digests": dict(digests) if isinstance(digests, dict) else {},
         "plan_tasks": [_dump_item(t) for t in result.get("plan_tasks", [])],

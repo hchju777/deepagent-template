@@ -162,9 +162,15 @@ def parse_spec(raw) -> TargetApi:
     "우리 항목에 영향이 있는가"는 따로 판정한다 — 좁게 잡으면 대상이 우리 항목
     밖을 바꿨을 때 사람이 확인할 기회를 잃는다.
     """
-    digest = canonical_digest(raw)
     problems: list[str] = []
     operations: dict[str, OperationSpec] = {}
+    try:
+        # digest 계산도 try 안이다 — docstring의 "절대 raise하지 않는다"는 절대형
+        # 계약이고, 자기참조 dict 같은 입력이 json 직렬화를 깨뜨린다.
+        digest = canonical_digest(raw)
+    except Exception as exc:            # noqa: BLE001
+        return TargetApi(digest="", problems=[f"명세 digest 계산 실패 — "
+                                              f"{type(exc).__name__}: {exc}"])
     try:
         if not isinstance(raw, dict):
             return TargetApi(digest=digest,
@@ -209,8 +215,12 @@ def load_target_api(knowledge_root: Path, gbm: str, fct: str) -> tuple[TargetApi
         return None, []
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return None, [f"pinned 명세를 읽을 수 없다 ({path}): {exc}"]
+    except Exception as exc:            # noqa: BLE001 — 남의 파일(계약)
+        # ValueError만 잡던 자리다. going-live가 `curl … > …json`을 지시하므로
+        # 파일 내용의 출처는 결국 대상이고, json.loads는 깊은 중첩에서
+        # RecursionError를 던진다 — ValueError가 아니라 그대로 새어 나가
+        # BootError가 아닌 스택트레이스로 죽었다.
+        return None, [f"pinned 명세를 읽을 수 없다 ({path}): {type(exc).__name__}: {exc}"]
     api = parse_spec(raw)
     return api, [f"pinned 명세: {p}" for p in api.problems]
 

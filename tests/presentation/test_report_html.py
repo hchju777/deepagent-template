@@ -111,3 +111,12 @@ def test_요지가_없으면_HTML도_열_이름을_정직하게_적는다():
     assert "본문 digest" in html and "<th>요지</th>" not in html
     with_summaries = render_html(_rich_model(evidence_summaries={"ev-1": "OEE 512로 관측"}))
     assert "<th>요지</th>" in with_summaries and "OEE 512로 관측" in with_summaries
+
+
+def test_HTML도_지식_digest를_보여준다():
+    # HTML이 기본 포맷이다(schema_app.ReportConfig). 마크다운에만 테스트를 두면
+    # 정작 사람이 읽는 쪽이 무방비다 — 표 렌더링에서 실제로 겪은 자리다.
+    html = render_html(_model(case_file={
+        "round": 1,
+        "knowledge_digests": {"topology": "a" * 64, "target_api": "c" * 64}}))
+    assert "지식 digest" in html and "target_api=cccccccc" in html

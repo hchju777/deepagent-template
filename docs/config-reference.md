@@ -247,7 +247,7 @@ services:
 12. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
 13. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
 14. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
-15. 지금 대상이 내놓는 명세가 pin과 같은가 — `--live` 지정 시에만, pin이 있는 사이트만. 우리 등재 항목에 영향을 주는 차이만 보고하고, 명세를 못 받는 것은 기동을 막지 않는다
+15. 지금 대상이 내놓는 명세가 pin과 같은가 — `--live` 지정 시에만, pin이 있는 사이트만. 우리 등재 항목에 영향을 주는 차이만 보고한다. **명세를 못 받는 것(연결 실패·4xx·비JSON 응답)도 기동을 막는다** — `--live`를 켠 사람은 "지금 실제와 맞는가"를 묻고 있고, 못 물어본 것을 조용히 통과시키면 확인 안 한 것이 "이상 없음"으로 둔갑한다. 검사 14(Mongo 롤)가 같은 형태다
 16. 각 점검의 프로브가 레지스트리에서 해석 가능한가
 17. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
 18. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수

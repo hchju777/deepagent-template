@@ -74,6 +74,27 @@ async def _fetch_live_spec(cfg, topo, *, seeds):
     return await adapters.rest.fetch_spec()
 
 
+def _live_spec_body(result) -> tuple[dict | None, str | None]:
+    """fetch_spec 결과에서 명세 본문을 꺼낸다 — (본문, 문제) 중 하나만 채워진다.
+
+    이 가드가 없으면 404가 "빈 명세"로 파싱되어 **모든 등재 항목이 명세에 없다**로
+    기동이 막힌다(실측: RealRest.fetch_spec은 get()과 같은 규칙으로 4xx/5xx도
+    status="ok"로 돌려주고 body는 비JSON이면 None이다). 원인은 404인데 메시지는
+    오타를 가리키는 형태 — 사람을 틀린 곳으로 보내는 것이 이 검사의 최악이다.
+    """
+    if result is None or result.status != "ok":
+        return None, f"명세를 받을 수 없다 — {getattr(result, 'error', None) or '응답 없음'}"
+    data = result.data if isinstance(result.data, dict) else {}
+    code = data.get("status_code")
+    if not (isinstance(code, int) and 200 <= code < 300):
+        return None, f"명세를 받을 수 없다 — HTTP {code}"
+    body = data.get("body")
+    if not isinstance(body, dict):
+        return None, ("명세를 받을 수 없다 — 응답이 JSON 객체가 아니다 "
+                      f"(받은 타입: {type(body).__name__})")
+    return body, None
+
+
 def _drift_problems(entries: dict, pinned, live_raw) -> list[str]:
     """박제한 pin과 지금 받은 명세를 견준다.
 
@@ -83,6 +104,11 @@ def _drift_problems(entries: dict, pinned, live_raw) -> list[str]:
     "pin을 갱신하라" 한 줄로 끝낸다.
     """
     live = parse_spec(live_raw)
+    if live.problems:
+        # 파싱이 포기한 것을 버리고 대조로 넘어가면 진짜 원인("최상위가 객체가
+        # 아니다")이 사라지고 "등재 항목이 명세에 없다"만 남아, 사람이 멀쩡한
+        # config를 뒤지게 된다.
+        return [f"대상 명세를 읽을 수 없다 — {p}" for p in live.problems]
     if live.digest == pinned.digest:
         return []
     impact = spec_problems(entries, live)
@@ -273,18 +299,24 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         if check_live and target_api is not None:
             site_seeds = stub_seeds.get(f"{site.gbm}/{site.fct}") \
                 if isinstance(stub_seeds, dict) else stub_seeds
+            result, fetch_failed = None, False
             try:
                 result = asyncio.run(_fetch_live_spec(cfg, topo, seeds=site_seeds))
             except Exception as exc:            # noqa: BLE001 — 무raise 규율
-                result = None
-                errors.append(BootError(where, f"대상 명세 확인 불가 — {exc}"))
-            # 못 받은 것은 **경고에 그친다**: 대상이 죽어 있을 때 우리 배포를 막는
-            # 것은 "죽은 사이트가 기동을 막으면 역효과"라는 원칙에 어긋난다.
-            # 받았는데 다른 것은 사람이 확인해야 하므로 기동을 막는다.
-            if result is not None and result.status == "ok":
-                body = result.data.get("body") if isinstance(result.data, dict) else None
-                errors += [BootError(where, p) for p in
-                           _drift_problems(entries, target_api, body)]
+                errors.append(BootError(where, f"명세를 받을 수 없다 — {exc}"))
+                fetch_failed = True
+            if not fetch_failed:
+                # 못 받은 것도 **기동을 막는다.** `--live`를 켠 사람은 "지금 실제와
+                # 맞는가"를 묻고 있고, 못 물어본 것을 조용히 통과시키면 확인 안 한
+                # 것이 "이상 없음"으로 둔갑한다(조용한 생략 금지). "죽은 사이트가
+                # 기동을 막으면 역효과"라는 원칙은 --live를 opt-in으로 둔 것으로
+                # 이미 지켜진다 — Mongo 롤 검사가 같은 형태다.
+                body, problem = _live_spec_body(result)
+                if problem is not None:
+                    errors.append(BootError(where, problem))
+                else:
+                    errors += [BootError(where, p) for p in
+                               _drift_problems(entries, target_api, body)]
 
     # 검사 10: llm/rule+llm 판정 점검이 하나라도 있으면 judge LLM 프로파일 필수 (계획 4b)
     if app_config is not None and needs_judge_llm and not app_config.llm.profiles.judge:
