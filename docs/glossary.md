@@ -112,8 +112,15 @@ config에 적으면 사업부·법인마다 다르고 매일 바뀌어 즉시 �
 
 ## 판정 방식(judge)
 
-**rule** — `src/patrol/rules.py`의 4종 결정론 규칙(`range`/`exists`/
-`freshness`/`max`)으로만 판정. LLM 호출 없음.
+**concern** — 무엇이 이상한가의 축. `system`은 파이프라인 고장(Kafka lag, TTL
+만료, Mongo 미갱신, API 5xx), `operation`은 데이터는 흐르는데 현장 상태가 이상한
+경우(0/0/0, 생산중이어야 하는데 NO PLAN). `CheckConfig`에 사람이 적고,
+finding→`CaseRecord`→`Case`를 타고 흘러 **메일 수신자**·브리핑 방향·보고서 헤더를
+가른다. 응답 모양으로 추론하지 않는 이유는 라우팅 근거가 재현·감사 가능해야 하기
+때문이다 — "왜 이 메일이 나한테 왔나"에 답할 수 있어야 한다.
+
+**rule** — `src/patrol/rules.py`의 6종 결정론 규칙(`range`/`exists`/
+`freshness`/`max`/`all_zero`/`expected_state`)으로만 판정. LLM 호출 없음.
 
 **llm** — 매번 LLM에게 데이터를 보여주고 이상 여부를 묻는다(`llm_judge.py`).
 

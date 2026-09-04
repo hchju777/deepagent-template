@@ -57,7 +57,8 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 
 ## 벤치 시나리오(E2E 회귀)
 
-`tests/test_bench_scenarios.py`는 스펙 부록 A의 두 간판 시나리오를
+`tests/test_bench_scenarios.py`는 스펙 부록 A의 간판 시나리오와 계획 11이 연
+운영 이상(A.3)을
 "점검 실행 → finding → 게이트(케이스 개설) → 조사 엔진 전 라운드 →
 판정 → verify → 실제 발행 배선(데몬·chat·case resume과 동일한
 `on_closed`)"까지 전 구간으로 돈다. 이 파일이 실제로 어떻게 조립하는지는

@@ -1,6 +1,9 @@
 {
   "openapi": "3.0.0",
-  "info": {"title": "mx/gumi 운영 시스템 (예시)", "version": "1.0.0"},
+  "info": {
+    "title": "mx/gumi 운영 시스템 (예시)",
+    "version": "1.0.0"
+  },
   "paths": {
     "/summary/prod": {
       "post": {
@@ -10,11 +13,26 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["date"],
+                "required": [
+                  "date"
+                ],
                 "properties": {
-                  "part_code": {"type": "array", "items": {"type": "string"}},
-                  "line_code": {"type": "array", "items": {"type": "string"}},
-                  "date": {"type": "string", "format": "date"}
+                  "part_code": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "line_code": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "date": {
+                    "type": "string",
+                    "format": "date"
+                  }
                 }
               }
             }
@@ -27,7 +45,12 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "badge": {"type": "array", "items": {"type": "integer"}}
+                    "badge": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      }
+                    }
                   }
                 }
               }
@@ -47,7 +70,59 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "properties": {"line_code": {"type": "string"}}
+                    "properties": {
+                      "line_code": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/summary/prod_status": {
+      "post": {
+        "operationId": "get_prod_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "date"
+                ],
+                "properties": {
+                  "line_code": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "date": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plan_status": {
+                      "type": "string"
+                    },
+                    "prod_status": {
+                      "type": "string"
+                    }
                   }
                 }
               }

@@ -18,6 +18,10 @@
       },
       "/api/v1/lines/{line}/oee": {
         "oee": 512
+      },
+      "POST /summary/prod_status": {
+        "plan_status": "생산중",
+        "prod_status": "NO PLAN"
       }
     }
   }
