@@ -142,6 +142,7 @@ def _section1(model: ReportModel) -> str:
         f"- 케이스 id: {record.id}",
         f"- 스코프: {record.gbm}/{record.fct}",
         f"- 개설 경로: {record.origin}",
+        f"- concern: {record.concern}",
         f"- 증상: {record.symptom}",
         f"- T0: {record.t0.isoformat()}",
         f"- 판정: {_verdict_headline(record, model.verdict)}",

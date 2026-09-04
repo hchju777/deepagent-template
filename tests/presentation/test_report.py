@@ -213,3 +213,11 @@ def test_보고서가_지식_digest를_보여준다():
     for axis in ("topology", "rules", "deployment", "target_api"):
         assert axis in text, text
     assert "cccccccc" in text          # 짧게라도 값이 보여야 한다
+
+
+def test_보고서가_concern을_보여준다():
+    # 오분류가 조용하지 않게 하는 것이 기본값을 둔 대가다 — 잘못 분류된 점검이
+    # 첫 finding에서 사람 눈에 띄어야 한다.
+    record = RECORD.model_copy(update={"concern": "operation"})
+    text = render_report(record, verdict=None, evidence=[], case_file=None, clock=lambda: T)
+    assert "operation" in text
