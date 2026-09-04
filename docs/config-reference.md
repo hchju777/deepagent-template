@@ -82,9 +82,9 @@
 
 **기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
 `judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
-비어 있으면 안 되고(검사 16), 활성 사이트가 있고 `llm.profiles`(judge/
+비어 있으면 안 되고(검사 17), 활성 사이트가 있고 `llm.profiles`(judge/
 subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 반드시
-있어야 한다(검사 17) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
+있어야 한다(검사 18) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
 해당된다.
 
 ## `registry.json` — 사이트 목록
@@ -118,6 +118,7 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `target.rest.entries.<이름>.method` | `"GET"` \| `"POST"` | `"GET"` | 이 항목을 호출할 HTTP 메서드. **쓰기 메서드는 등재할 수 없다** |
 | `target.rest.entries.<이름>.path` | str | **필수** | base_url 기준 경로. `/`로 시작해야 하고 `?`·`#`·`%`·`..`·`;`·`\`를 쓸 수 없다(config 검증에서 거부) |
 | `target.rest.entries.<이름>.body_schema` | dict[str, 타입] | `{}` | POST body의 닫힌 스키마. 타입은 `str`/`int`/`float`/`bool`/`list[str]`/`list[int]`. GET 항목에는 둘 수 없다 |
+| `target.rest.openapi_path` | str | `"/openapi.json"` | `--live` 드리프트 점검이 명세를 받아 올 경로. 등재 항목 `path`와 같은 규칙(절대 경로·호스트 불가) — 아니면 인증 헤더가 다른 호스트로 나간다 |
 | `target.rest.entries.<이름>.query_schema` | dict[str, 타입] | `{}` | GET 항목의 쿼리 파라미터 닫힌 스키마(키+타입). body_schema와 같은 타입 어휘. 목록 밖 키·타입 불일치는 소켓 전에 거부된다. POST 항목에는 둘 수 없다 |
 | `target.code.repos[].name` / `.path` | str / str | — | `code_tracer`가 읽을 로컬 git 체크아웃들. `name`은 토폴로지·deployment.yaml이 참조하는 식별자 |
 | `target.guards.timeout_s` | float | 10 | 어댑터 호출 타임아웃 |
@@ -246,9 +247,10 @@ services:
 12. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
 13. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
 14. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
-15. 각 점검의 프로브가 레지스트리에서 해석 가능한가
-16. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
-17. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
+15. 지금 대상이 내놓는 명세가 pin과 같은가 — `--live` 지정 시에만, pin이 있는 사이트만. 우리 등재 항목에 영향을 주는 차이만 보고하고, 명세를 못 받는 것은 기동을 막지 않는다
+16. 각 점검의 프로브가 레지스트리에서 해석 가능한가
+17. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
+18. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
 
-검사 14만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
+검사 14·15만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

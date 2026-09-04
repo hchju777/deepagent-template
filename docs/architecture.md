@@ -20,6 +20,11 @@ presentation  →  application  →  domain  ←  infrastructure
   케이스 저장소 포트(`CaseRepositoryPort`, `CaseStorePort`)가 여기 있다.
   모든 모델은 `StrictModel`(`extra="forbid"`)을 상속한다.
 
+  포트 표면은 `get`/`query`/`fetch_spec` 셋뿐이다. `fetch_spec()`에 **인자가
+  없는 것**도 같은 계열의 설계다 — 경로가 인자면 호출자가 정하게 되어 "임의의
+  경로를 GET하라"가 다시 표현 가능해진다. 어느 경로로 나갈지는 어댑터가
+  `target.rest.openapi_path`를 보고 정한다.
+
   **`RestProberPort`에 쓰기 메서드가 없는 것은
   실수가 아니라 설계다** — v1은 `get` 하나뿐이라 쓰기가 물리적으로 불가능했고,
   POST가 필요해진 뒤에는 등재제가 그 자리를 대신한다: `query(entry, params)`가

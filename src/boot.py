@@ -27,8 +27,8 @@ from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
 from src.infrastructure.query_rules import (entry_call_problems, entry_schema, filter_problems,
                                             mongo_role_problems)
 from src.knowledge.deployment import load_deployment
-from src.knowledge.target_api import (load_target_api, response_field_problems,
-                                      spec_problems)
+from src.knowledge.target_api import (load_target_api, parse_spec,
+                                      response_field_problems, spec_problems)
 from src.knowledge.topology import load_topology, topology_problems
 from src.patrol.probes import PROBES, resolve_probe
 
@@ -58,8 +58,42 @@ async def _fetch_conn_status(cfg) -> dict:
     return await mongo.connection_status()
 
 
+async def _fetch_live_spec(cfg, topo, *, seeds):
+    """대상의 OpenAPI를 받아 온다. 어댑터를 통해서만 — 직접 HTTP를 치지 않는다.
+
+    stub_seeds가 주어지면 스텁 어댑터가 조립된다(테스트가 "지금 대상의 명세"를
+    심는 경로). 실운영에서는 adapters="real"이라 RealRest가 config의
+    openapi_path로 GET한다.
+    """
+    from src.infrastructure.factory import build_adapters
+
+    adapters = build_adapters(cfg, topo, clock=lambda: datetime.now(timezone.utc),
+                              stub_seeds=seeds)
+    if adapters.rest is None:
+        return None
+    return await adapters.rest.fetch_spec()
+
+
+def _drift_problems(entries: dict, pinned, live_raw) -> list[str]:
+    """박제한 pin과 지금 받은 명세를 견준다.
+
+    **차이 전체를 쏟지 않는다.** 대상 API에는 우리가 안 쓰는 끝점이 수백 개이고,
+    그것들의 변화를 전부 보고하면 아무도 읽지 않는다 — 경보 피로는 경보가 없는
+    것과 같다. 우리 등재 항목에 실제로 영향을 주는 것만 말하고, 영향이 없으면
+    "pin을 갱신하라" 한 줄로 끝낸다.
+    """
+    live = parse_spec(live_raw)
+    if live.digest == pinned.digest:
+        return []
+    impact = spec_problems(entries, live)
+    if impact:
+        return [f"대상 명세가 pin과 다르고 등재 항목에 영향이 있다 — {p}" for p in impact]
+    return ["대상 명세가 pin과 달라졌지만 등재 항목에는 영향이 없다 — "
+            "knowledge/target_api/의 pin을 갱신하고 커밋하라"]
+
+
 def validate_boot(config_root: Path, *, env, repo_root: Path,
-                  check_live: bool = False) -> list[BootError]:
+                  check_live: bool = False, stub_seeds=None) -> list[BootError]:
     errors: list[BootError] = []
 
     app_config = None
@@ -233,6 +267,24 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                 errors.extend(BootError(where, p) for p in mongo_role_problems(status))
             except Exception as exc:
                 errors.append(BootError(where, f"Mongo 롤 확인 불가 — {exc}"))
+
+        # pinned 명세와 지금 대상의 명세를 견준다 — live 접속이 필요해 opt-in.
+        # pin이 없으면 견줄 대상이 없다(명세를 받아 오는 것 자체가 목적이 아니다).
+        if check_live and target_api is not None:
+            site_seeds = stub_seeds.get(f"{site.gbm}/{site.fct}") \
+                if isinstance(stub_seeds, dict) else stub_seeds
+            try:
+                result = asyncio.run(_fetch_live_spec(cfg, topo, seeds=site_seeds))
+            except Exception as exc:            # noqa: BLE001 — 무raise 규율
+                result = None
+                errors.append(BootError(where, f"대상 명세 확인 불가 — {exc}"))
+            # 못 받은 것은 **경고에 그친다**: 대상이 죽어 있을 때 우리 배포를 막는
+            # 것은 "죽은 사이트가 기동을 막으면 역효과"라는 원칙에 어긋난다.
+            # 받았는데 다른 것은 사람이 확인해야 하므로 기동을 막는다.
+            if result is not None and result.status == "ok":
+                body = result.data.get("body") if isinstance(result.data, dict) else None
+                errors += [BootError(where, p) for p in
+                           _drift_problems(entries, target_api, body)]
 
     # 검사 10: llm/rule+llm 판정 점검이 하나라도 있으면 judge LLM 프로파일 필수 (계획 4b)
     if app_config is not None and needs_judge_llm and not app_config.llm.profiles.judge:

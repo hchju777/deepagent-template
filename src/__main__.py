@@ -538,6 +538,10 @@ def main(argv=None) -> int:
     p_knowledge = sub.add_parser("knowledge")
     knowledge_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)
     p_validate = knowledge_sub.add_parser("validate", help="기동 검증 단독 실행 (CI용)")
+    p_validate.add_argument(
+        "--stub-seeds", default=None,
+        help="스텁 어댑터가 돌려줄 응답 파일. --live 드리프트 점검을 실제 접속 "
+             "없이 예행할 때 쓴다(rest_openapi에 '지금 대상의 명세'를 심는다)")
     p_validate.add_argument("--live", action="store_true",
                             help="검사 8(Mongo readonly 롤)까지 live 접속으로 확인한다")
     _add_common(p_validate)
@@ -614,8 +618,18 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "knowledge":
+        # --stub-seeds로 "지금 대상의 명세"를 심으면 실제 접속 없이 드리프트 점검을
+        # 예행할 수 있다(스텁 어댑터 경로). 실운영에서는 플래그 없이 real 어댑터가
+        # config의 openapi_path로 받아 온다.
+        seeds = None
+        if args.stub_seeds:
+            seeds, seed_problems = load_stub_seeds(Path(args.stub_seeds))
+            if seed_problems:
+                for problem in seed_problems:
+                    print(f"[stub-seeds] {problem}", file=sys.stderr)
+                return 1
         errors = validate_boot(config_root, env=env, repo_root=Path(args.repo_root),
-                               check_live=args.live)
+                               check_live=args.live, stub_seeds=seeds)
         if not errors:
             print("OK")
             return 0

@@ -184,3 +184,15 @@ def test_역슬래시는_거부된다():
     # 일부 리버스 프록시가 \를 /로 정규화하면 순회가 성립한다 — ..를 막은 논리와 같다.
     assert not endpoint_allowed("/api/v1/lines/L1\\..\\..\\admin/oee",
                                 {"/api/v1/lines/{line}/oee"})
+
+
+def test_명세_경로도_등재_경로와_같은_규칙을_받는다():
+    # openapi_path는 config가 정하지만, 그렇다고 아무 문자열이나 되면 base_url을
+    # 벗어나 인증 헤더가 다른 호스트로 나간다 — 등재 항목 path와 같은 위험이다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_site import RestTarget
+    for bad in ("http://evil.internal/wipe", "//evil.internal/x", "openapi.json", "/a/../b"):
+        with pytest.raises(ValidationError):
+            RestTarget(base_url="http://x", openapi_path=bad)
+    assert RestTarget(base_url="http://x", openapi_path="/openapi.json")

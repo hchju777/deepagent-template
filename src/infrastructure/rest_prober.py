@@ -9,7 +9,7 @@ from src.infrastructure.query_rules import endpoint_allowed, entry_call_problems
 
 class RealRest(RestProberPort):
     def __init__(self, base_url, allowed, entries=None, auth=None, *,
-                 guards, semaphore, clock):
+                 guards, semaphore, clock, openapi_path="/openapi.json"):
         headers = {auth.header: auth.value.get_secret_value()} if auth is not None else {}
         # follow_redirects를 명시적으로 끈다 — 따라가면 인증 헤더가 리다이렉트
         # 대상(다른 호스트일 수 있다)으로 나가고, 그 호스트는 등재 목록에 없다.
@@ -19,6 +19,8 @@ class RealRest(RestProberPort):
         self._allowed = allowed
         self._entries = entries or {}
         self._guards, self._sem, self._clock = guards, semaphore, clock
+        # 경로는 config가 정한다 — fetch_spec()이 인자를 받지 않는 이유다(포트 참고).
+        self._openapi_path = openapi_path
 
     def _reject(self, message: str) -> ProbeResult:
         return ProbeResult(status="error", envelope=Envelope(observed_at=self._clock()),
@@ -72,4 +74,15 @@ class RealRest(RestProberPort):
                     "request": {"method": entry_spec.method, "path": entry_spec.path,
                                 "params": params}}
             return data, Envelope(observed_at=self._clock())
+        return await self._call(op)
+
+    async def fetch_spec(self):
+        async def op():
+            response = await self._client.get(self._openapi_path)
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            return {"status_code": response.status_code, "body": body}, \
+                Envelope(observed_at=self._clock())
         return await self._call(op)

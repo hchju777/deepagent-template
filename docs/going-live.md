@@ -175,6 +175,40 @@ python -m src patrol run --config-root config --repo-root .
 자동으로 먼저 도는지(기동 거부 철학) 확인하라 — `_run_patrol`이 데몬을
 띄우기 전에 항상 기동 검증부터 돈다.
 
+## 7. pinned 명세를 언제 갱신하는가
+
+`knowledge/target_api/{gbm}/{fct}.json`은 대상 API의 OpenAPI 사본이고, 기동 검증이
+등재 항목을 이것과 대조한다. `knowledge validate --live`는 한 걸음 더 가서 **지금
+대상이 내놓는 명세**를 받아 pin과 견준다(`target.rest.openapi_path`, 기본
+`/openapi.json`).
+
+```bash
+python -m src knowledge validate --live --config-root config --repo-root .
+```
+
+두 가지 결과가 있다:
+
+- **"등재 항목에 영향이 있다"** — 대상이 우리가 실제로 쓰는 것을 바꿨다. config를
+  먼저 고치고 pin을 갱신한다.
+- **"영향은 없지만 pin을 갱신하라"** — 대상이 우리가 안 쓰는 곳을 바꿨다. 차이
+  전체를 쏟지 않는 이유는 대상 API에 우리가 안 쓰는 끝점이 수백 개이고, 그것들의
+  변화를 전부 보고하면 아무도 읽지 않기 때문이다.
+
+갱신은 **사람이 커밋한다**:
+
+```bash
+curl -s "$API_BASE/openapi.json" > knowledge/target_api/mx/gumi.json
+git add knowledge/target_api && git commit
+```
+
+자동 갱신하는 코드를 만들지 마라. 대상이 새 POST를 배포했을 때 우리 pin이 조용히
+따라가면, 그다음 순간 우리 허용 범위도 따라 넓어진다 — 교과서적 fail-open이고,
+등재제 전체가 무의미해진다. **문서는 증거, config는 권한**(CLAUDE.md 규율 9).
+
+대상이 죽어 있어 명세를 못 받는 것은 기동을 막지 않는다 — "죽은 사이트가 기동을
+막으면 역효과"라는 원칙이 여기도 적용된다. 받았는데 다른 것은 사람이 확인해야
+하므로 막는다.
+
 ## 체크리스트
 
 - [ ] 사이트마다 필요한 대상만 `target`에 채우고 `adapters: "real"`
@@ -188,5 +222,6 @@ python -m src patrol run --config-root config --repo-root .
 - [ ] `LLM_BASE_URL`/`LLM_API_KEY` + `app.json`의 `llm.profiles` 3종
 - [ ] `store.backend: "mongo"` + `AGENT_MONGO_URL`(대상 시스템과 별도 DB)
 - [ ] 필요하면 `report.mail` 켜기
-- [ ] `knowledge validate`(정적) 후 `knowledge validate --live`(접속 확인) 둘 다 통과
+- [ ] `knowledge/target_api/{gbm}/{fct}.json`에 대상의 OpenAPI를 받아 두고 커밋
+- [ ] `knowledge validate`(정적) 후 `knowledge validate --live`(접속 확인 + 명세 드리프트) 둘 다 통과
 - [ ] `patrol run`을 상시 프로세스로 배포

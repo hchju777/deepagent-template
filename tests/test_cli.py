@@ -510,3 +510,31 @@ def test_시드_파일이_점검을_실제로_성공시킨다(tmp_path, monkeypa
     outcomes.clear()
     assert main(argv) == 0
     assert outcomes[0].status == "error"            # 시드 없이는 404
+
+
+def test_knowledge_validate가_라이브_드리프트를_실제로_알린다(tmp_path, monkeypatch, capsys):
+    # validate_boot(stub_seeds=...)가 테스트 전용 이음매로 남지 않게, CLI가 그
+    # 경로를 그대로 탄다. 계획 6~10에서 "함수는 되는데 배선이 안 된다"가 다섯 번
+    # 나왔다 — 배선을 지나는 테스트만이 그것을 잡는다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    spec = {"paths": {"/x": {"get": {"parameters": [
+        {"name": "a", "in": "query", "schema": {"type": "string"}}]}}}}
+    (tmp_path / "knowledge" / "target_api" / "mx").mkdir(parents=True)
+    (tmp_path / "knowledge" / "target_api" / "mx" / "gumi.json").write_text(
+        json.dumps(spec), encoding="utf-8")
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["rest"] = {"base_url": "http://x", "entries": {
+        "e": {"method": "GET", "path": "/x", "query_schema": {"a": "str"}}}}
+    data["patrol"] = {"checks": {}}
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+
+    drifted = {"paths": {"/x": {"get": {"parameters": []}}}}      # 대상이 a를 지웠다
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"mx/gumi": {"rest_openapi": drifted}}), encoding="utf-8")
+    argv = ["knowledge", "validate", "--config-root", str(tmp_path / "config"),
+            "--repo-root", str(tmp_path)]
+    assert main(argv) == 0                                        # --live 없으면 정적만
+    assert main(argv + ["--live", "--stub-seeds", str(seeds)]) == 1
+    assert "'a'" in capsys.readouterr().err

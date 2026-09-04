@@ -101,6 +101,17 @@ class RestTarget(StrictModel):
     base_url: str
     auth: RestAuth | None = None
     entries: dict[str, RestEntry] = {}
+    # 드리프트 점검이 받아 올 명세의 경로. 등재 항목 path와 **같은 규칙**을 받는다 —
+    # 절대 경로가 아니거나 호스트를 담으면 base_url을 벗어나 인증 헤더가 다른
+    # 호스트로 나간다(계획 8이 entry.path에서 막은 것과 같은 구멍).
+    openapi_path: str = "/openapi.json"
+
+    @model_validator(mode="after")
+    def _openapi_path_is_sound(self):
+        problem = entry_path_problem(self.openapi_path)
+        if problem is not None:
+            raise ValueError(f"openapi_path: {problem}")
+        return self
 
     @model_validator(mode="after")
     def _entry_names_cannot_mimic_locators(self):

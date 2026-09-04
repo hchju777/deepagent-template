@@ -1,5 +1,6 @@
 import json
 
+from src.infrastructure.factory import StubSeeds
 from src.boot import validate_boot
 
 # LLM_API_KEY: 검사 11(계획 4b, I8) — enabled 사이트+llm 프로파일이 있으면 필수.
@@ -425,3 +426,56 @@ def test_깨진_pinned_명세는_기동을_거부한다(tmp_path):
     _write(tmp_path, "knowledge/target_api/mx/gumi.json", "{ 망가진 json")
     assert any("명세" in e.problem for e in
                validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+
+
+def _live_tree(tmp_path, live_spec, *, body=None):
+    """--live 드리프트 점검용 트리 — 스텁 어댑터에 '지금 대상의 명세'를 심는다."""
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_entry(body or {"date": "str"}))
+    return {"mx/gumi": StubSeeds(rest_openapi=live_spec)} if live_spec is not None else {}
+
+
+def test_라이브_명세가_pin과_같으면_조용하다(tmp_path):
+    seeds = _live_tree(tmp_path, _SPEC)
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert errors == [], errors
+
+
+def test_라이브_명세가_등재_항목에_영향을_주면_잡는다(tmp_path):
+    # 대상이 date를 지웠다 — 우리 등재 스키마가 그 키를 보내고 있다.
+    live = {"paths": {"/summary/prod": {"post": {"requestBody": {"content": {
+        "application/json": {"schema": {"type": "object", "properties": {
+            "part_code": {"type": "array", "items": {"type": "string"}}}}}}}}}}}
+    seeds = _live_tree(tmp_path, live)
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert any("date" in e.problem for e in errors), errors
+
+
+def test_우리_항목_밖의_변화는_pin_갱신만_요구한다(tmp_path):
+    # 대상 API는 우리가 안 쓰는 끝점이 수백 개다. 전부 보고하면 아무도 안 읽는다.
+    live = {**_SPEC, "paths": {**_SPEC["paths"], "/other": {"get": {}}}}
+    seeds = _live_tree(tmp_path, live)
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert len(errors) == 1 and "pin" in errors[0].problem, errors
+    assert "/other" not in errors[0].problem       # 차이 전체를 쏟지 않는다
+
+
+def test_라이브_명세를_못_받아도_기동을_막지_않는다(tmp_path):
+    # "죽은 사이트가 기동을 막으면 역효과" — Mongo 롤 검사와 같은 자리의 원칙.
+    seeds = _live_tree(tmp_path, None)
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert errors == [], errors
+
+
+def test_pin이_없으면_라이브_대조를_하지_않는다(tmp_path):
+    # 견줄 대상이 없다. 명세를 받아 오는 것 자체가 목적이 아니다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_entry({"date": "str"}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds={"mx/gumi": StubSeeds(rest_openapi=_SPEC)})
+    assert errors == [], errors
