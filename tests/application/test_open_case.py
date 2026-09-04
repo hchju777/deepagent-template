@@ -64,3 +64,13 @@ def test_이벤트가_실패해도_케이스는_열린다():
                        symptom="s", gbm="mx", fct="gumi", concern="system",
                        requested_by=None)
     assert repo.get(record.id) is not None
+
+
+async def test_없는_케이스에_답해도_raise하지_않는다():
+    # repo.get은 포트 계약상 KeyError를 던진다. 계획 13의 POST /answers가 잘못된
+    # id를 받으면 500이 된다 — 접수 경로 전체가 무raise 계약이다.
+    from src.application.answer import answer_case
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    result = await answer_case("없는-id", "답", repo=repo, store=store, deps=None,
+                               topology=None, worker=None, clock=lambda: T)
+    assert result == "skipped"

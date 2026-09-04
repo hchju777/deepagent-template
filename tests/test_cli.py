@@ -867,3 +867,77 @@ def test_스코프_미확정이면_후보를_보여주고_케이스를_안_연�
     err = capsys.readouterr().err
     assert "mx/gumi" in err and "mx/suwon" in err
     assert repo.list_open() == []          # 케이스를 만들지 않았다
+
+
+def test_case_resume에도_접근_검사가_있다(tmp_path, capsys, monkeypatch):
+    # 개설만 막고 답변을 안 막으면 반쪽이다 — awaiting_human에 넣은 텍스트가
+    # 리드 프롬프트에 직행하고 evidence로 박제된다(스펙 §3.5).
+    from src.application.open_case import open_case
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    app_path = tmp_path / "config" / "app.json"
+    data = json.loads(app_path.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/gumi"]}}
+    app_path.write_text(json.dumps(data), encoding="utf-8")
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by="alice",
+                       clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc),
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "q", "question_kind": "intake"}))
+
+    code = main(["case", "resume", record.id, "--answer", "주입 시도",
+                 "--requested-by", "bob",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1 and "bob" in capsys.readouterr().err
+    # 거부된 답이 증거로 박제되지 않았다.
+    assert not any("주입 시도" in repr(store.get_evidence(record.id, r.id))
+                   for r in store.list_evidence(record.id))
+
+
+def test_접수_중_프로세스가_죽어도_문답이_남는다(tmp_path, capsys, monkeypatch):
+    """계획 12의 존재 이유다 — 접수 중 끊긴 뒤 별 호출이 이어받는다.
+
+    이전 구조에서는 intake()가 프로세스 안에서 되묻고 문답을 마지막에 한 번
+    돌려줬으므로, 여기서 끊기면 케이스도 문답도 존재하지 않았다.
+    """
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))          # 접수 질문에서 바로 EOF
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead1 = ScriptedLLM(['{"target_locator": null, "missing": ["어느 라인인가?"]}'])
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        lead1 if profile == "l" else object())
+
+    assert main(["chat", "--symptom", "OEE가 이상하다",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert "파킹된 채로 남는다" in capsys.readouterr().out
+    parked = repo.list_by_status("awaiting_human")
+    assert len(parked) == 1 and parked[0].question_kind == "intake"
+    case_id = parked[0].id
+
+    # 두 번째 프로세스가 이어받는다 — 접수를 끝내고 조사까지 완주한다.
+    lead2 = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}',
+                         FRAME_ONE_TASK, INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead2, "s": subagent}.get(profile, object()))
+    assert main(["case", "resume", case_id, "--answer", "라인 7이다",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    after = repo.get(case_id)
+    assert after.target_locator == "mongo:twin_state" and after.status == "closed"
+    assert any("라인 7이다" in repr(store.get_evidence(case_id, r.id))
+               for r in store.list_evidence(case_id))

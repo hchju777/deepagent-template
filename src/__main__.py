@@ -15,17 +15,14 @@ from typing import Awaitable, Callable
 from dotenv import load_dotenv
 
 from src.application.answer import answer_case
-from src.application.events import case_status_event
 from src.application.intake import intake_turn
 from src.application.open_case import open_case
 from src.application.scope import resolve_scope
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
-from src.domain.cases import CaseRecord
 from src.domain.concern import CONCERNS
 from src.domain.events import EngineEvent, EventStorePort
-from src.domain.patrol import fingerprint
 from src.infrastructure.checkpointer import build_checkpointer, build_persistence
 from src.infrastructure.llm import build_chat_model
 from src.patrol.daemon import (PatrolDaemon, assemble_sites, load_stub_seeds,
@@ -304,6 +301,14 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
              file=sys.stderr)
         return 1
 
+    # 개설만 막고 답변을 안 막으면 반쪽이다 — 답변 텍스트가 리드 프롬프트에
+    # 직행하고 evidence로 박제된다(스펙 §3.5).
+    subject = getattr(args, "requested_by", None)
+    if not app.access.can_access(subject, record.gbm, record.fct):
+        print(f"주체 {subject!r}는 {record.gbm}/{record.fct}에 접근할 수 없다 "
+              f"(app.json의 access.allow)", file=sys.stderr)
+        return 1
+
     for rt in sites:
         rt.deps.store = store          # daemon.py와 동일한 불변식: 워커·엔진이 같은 Store를 본다
     by_key = {(rt.gbm, rt.fct): rt for rt in sites}
@@ -487,7 +492,12 @@ async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, a
             print(f"입력이 끊겼다 — 케이스 {case_id}는 파킹된 채로 남는다. "
                  f"'python -m src case resume {case_id} --answer <답변>'으로 나중에 재개할 수 있다.")
             return 0
-        result = await worker.resume_once(case_id, answer)
+        # 조사 재개도 answer_case를 거친다 — 조사 도중 접수 질문이 다시 뜰 수 있고,
+        # 무엇보다 CLI와 계획 13의 API가 **같은 분기**를 써야 한다(규율 8).
+        result = await answer_case(case_id, answer, repo=repo, store=store, deps=rt.deps,
+                                   topology=rt.deps.topology, worker=worker, clock=clock,
+                                   max_intake_turns=app.engine.max_intake_turns,
+                                   interaction_policy="interactive")
 
     if result == "closed":
         path = Path(app.report.output_dir) / f"{case_id}.{app.report.format}"
@@ -536,7 +546,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     # 케이스를 만들지 않고 후보를 돌려준다(스코프 없는 케이스는 뜻이 없다).
     scope = asyncio.run(resolve_scope(
         symptom, sites=[(rt.gbm, rt.fct) for rt in sites],
-        deps=sites[0].deps if sites else None, clock=clock,
+        deps=sites[0].deps if sites else None,
         gbm=args.gbm, fct=args.fct))
     if scope.status != "resolved":
         for problem in scope.problems:
@@ -647,6 +657,10 @@ def main(argv=None) -> int:
         "resume", help=_case_resume_note, description=_case_resume_note)
     p_case_resume.add_argument("case_id")
     p_case_resume.add_argument("--answer", required=True)
+    p_case_resume.add_argument(
+        "--requested-by", default=None,
+        help="요청 주체 — access.allow가 비어 있지 않으면 필수. awaiting_human은 "
+             "답변 텍스트가 리드 프롬프트에 직행하는 주입구다(스펙 §3.5)")
     _add_stub_seeds(p_case_resume)
     _add_common(p_case_resume)
 

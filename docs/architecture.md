@@ -237,16 +237,26 @@ recompute_verifier=4`)의 `recursion_limit`으로 강제한다 — 서브에이�
 ## 5. 케이스 수명주기와 lease
 
 ```
-open → investigating → awaiting_human → closed
-         ↑___________________|
+        ┌──────────── 접수 되묻기(계획 12) ────────────┐
+        ↓                                             │
+      open ──────────→ investigating ──→ awaiting_human ──→ closed
+        │                    ↑________________|              ↑
+        └───────────────────────────────────────────────────-┘
 ```
+
+`open ↔ awaiting_human` 두 엣지는 **접수 되묻기 전용**이다. 그래프는
+`investigating`에서만 돌므로 그쪽 파킹은 여전히 `investigating → awaiting_human`이고,
+재개는 `awaiting_human → investigating`이다. 두 종류의 구별은
+`CaseRecord.question_kind`가 들고, `answer_case`(`src/application/answer.py`)가
+그것을 보고 접수를 이어갈지 그래프를 재개할지 가른다 — **그래프가 파킹한 케이스를
+`open`으로 보내면 `run_once`가 새 조사를 처음부터 시작해 스레드를 잃는다.**
 
 `CaseRecord`(`src/domain/cases.py`)가 상태를 쥔다. `OPEN_STATUSES = (open,
 investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡도록
 `owner` + `lease_until`(`investigations.lease_ttl_s`, 기본 900초)로 임차한다
 — `InvestigationWorker`는 조사 도중 `lease_ttl_s/3` 간격으로 keepalive를
-갱신한다. `awaiting_human`으로 파킹된 케이스를 재개하는 경로는 **`case resume --answer`
-하나뿐이다** — 데몬은 `resume_once`를 부르지 않고, `requeue_open`도 `open`과
+갱신한다. `awaiting_human`으로 파킹된 케이스에 답을 넣는 경로는 `case resume --answer`와
+`chat`의 인프로세스 루프 둘이고, **둘 다 `answer_case`를 거친다** — 데몬은 `resume_once`를 부르지 않고, `requeue_open`도 `open`과
 lease가 만료된 `investigating`만 큐에 넣는다(`awaiting_human`은 대상이 아니다).
 사람이 답을 넣지 않으면 `awaiting_human_timeout_h`를 넘겨 `sweep_timeouts`가
 미해결로 종결한다. 데몬이 파킹 케이스를 자동으로 재개하려면 **사람의 답을 실어

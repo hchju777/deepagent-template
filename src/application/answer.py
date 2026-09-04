@@ -27,7 +27,13 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
     - 접수가 또 물으면 `awaiting_human` — 호출자가 `repo.get(...).question`을 읽는다.
     - 조사 질문이었으면(또는 계획 12 이전 레코드라 종류가 없으면) 그래프를 재개한다.
     """
-    record = repo.get(case_id)
+    try:
+        record = repo.get(case_id)
+    except KeyError:
+        # repo.get은 포트 계약상 KeyError를 던진다. 계획 13의 POST /answers가
+        # 잘못된 id를 받으면 500이 되므로 여기서 흡수한다 — 워커의 "skipped"와
+        # 같은 뜻이다(대상이 없어 아무것도 하지 않았다).
+        return "skipped"
     if record is not None and record.question_kind == "intake":
         turn = await intake_turn(case_id, repo=repo, store=store, deps=deps,
                                  topology=topology, clock=clock, answer=answer,

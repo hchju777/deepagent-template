@@ -113,3 +113,49 @@ async def test_닫힌_케이스는_거부한다():
     repo.save(repo.get(case_id).model_copy(update={"status": "closed"}))
     turn = await _turn(case_id, repo, store, _deps(_RESOLVED))
     assert turn.status == "error"
+
+
+async def test_조사_중인_케이스는_접수가_건드리지_않는다():
+    # 데몬의 requeue_open이 접수 중인(open) 케이스를 집어 워커가 investigating으로
+    # 전이하고 스레드를 배정한 뒤, 접수가 **턴 시작 시 읽은 낡은 레코드**를 통째로
+    # 저장하면 lease·상태·thread_ids가 전부 되돌아간다 — 같은 케이스에 조사 둘,
+    # 그리고 등록 안 된 체크포인트가 close_case(discard_threads)에 안 걸려 영구 잔존.
+    case_id, repo, store = _case()
+    repo.save(repo.get(case_id).model_copy(update={
+        "status": "investigating", "owner": "w-1", "thread_ids": ["t-1"]}))
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED))
+    assert turn.status == "error" and any("조사 중" in p for p in turn.problems)
+    after = repo.get(case_id)
+    assert after.status == "investigating" and after.owner == "w-1"
+    assert after.thread_ids == ["t-1"]
+
+
+async def test_턴_도중_바뀐_필드를_덮어쓰지_않는다():
+    # 워커 모듈의 I1(read-modify-write) 규율 — 턴 시작 시 들고 있던 스냅샷을
+    # wholesale 저장하면 그 사이의 동시 갱신을 잃는다.
+    case_id, repo, store = _case()
+
+    class _Racing:
+        """LLM 호출 도중 다른 경로가 같은 레코드를 갱신하는 상황."""
+        async def ainvoke(self, messages):
+            repo.save(repo.get(case_id).model_copy(update={"finding_ids": ["f-9"]}))
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    assert turn.status == "done"
+    after = repo.get(case_id)
+    assert after.finding_ids == ["f-9"]                    # 잃지 않았다
+    assert after.target_locator == "rest:/oee"             # 우리 필드는 들어갔다
+
+
+async def test_레거시_파킹_레코드를_접수가_언파킹하지_않는다():
+    # question_kind가 None인 것은 계획 12 이전에 **그래프가** 파킹한 레코드다.
+    # 가드가 "investigation이 아니면 통과"면 그것들이 전부 새어 들어와 스레드를 잃는다.
+    case_id, repo, store = _case()
+    repo.save(repo.get(case_id).model_copy(update={
+        "status": "awaiting_human", "question": "계획 변경이 있었나?",
+        "thread_ids": ["t-1"]}))                           # question_kind는 None
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="없다")
+    assert turn.status == "error"
+    after = repo.get(case_id)
+    assert after.status == "awaiting_human" and after.question is not None

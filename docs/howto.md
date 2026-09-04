@@ -88,11 +88,16 @@ config가 아니라 플래그인 이유는 실전환 시 **빼는 것을 잊을 
 `app.json`의 `access.allow`가 비어 있지 않으면 `--requested-by`가 필수다 — 주체가
 없으면 거부한다(익명 요청이 통과하면 그 테이블이 장식이 된다).
 
-`--symptom`을 안 주면 stdin으로 증상을 묻는다. 질문에 답하며 접수(intake)가
-끝나면 케이스가 열리고, 조사 중 리드가 사람에게 물을 게 있으면 그 자리에서
-바로 되묻는다(`interaction_policy="interactive"`). 입력이 중간에 끊기면
-케이스는 `awaiting_human`으로 파킹되고, 안내된 `case resume` 명령으로 나중에
-이어서 답할 수 있다.
+`--symptom`을 안 주면 stdin으로 증상을 묻는다. **케이스는 접수보다 먼저 열린다** —
+증상과 사이트가 정해지는 즉시 열리고, 대상(`target_locator`)은 접수가 채운다.
+그래서 접수 도중 입력이 끊겨도 케이스와 지금까지의 문답이 남고, 안내된
+`case resume` 명령으로 나중에 이어서 답할 수 있다(그때 접수부터 다시 하지 않는다).
+조사 중 리드가 사람에게 물을 게 있으면 그 자리에서 바로 되묻는다
+(`interaction_policy="interactive"`).
+
+`case resume`에도 `--requested-by`가 있다 — `awaiting_human`에 넣은 답변 텍스트는
+리드 프롬프트에 직행하고 evidence로 박제되므로, 개설만 막고 답변을 안 막으면
+반쪽이다.
 
 ## 파킹된 케이스에 나중에 답하고 싶다
 

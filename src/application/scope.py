@@ -17,8 +17,7 @@ Redis/Mongo/Kafka와 소스 저장소를 읽을지를 정한다 — 증상 문�
 프로세스는 대상 시스템에 붙지 않으므로(스펙 §3.1) 어댑터가 달린 런타임을
 요구하면 그 성질이 깨진다.
 """
-from datetime import datetime
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from src.application.schemas import parse_structured
 from src.config.schema_app import StrictModel
@@ -65,7 +64,6 @@ def _prompt(symptom: str, sites: list[Site]) -> str:
 
 
 async def resolve_scope(symptom: str, *, sites: list[Site], deps: Any,
-                        clock: Callable[[], datetime],
                         gbm: str | None = None, fct: str | None = None) -> ScopeResult:
     """조사할 사이트를 정한다. 절대 raise하지 않는다.
 
@@ -76,10 +74,16 @@ async def resolve_scope(symptom: str, *, sites: list[Site], deps: Any,
     if not known:
         return _unresolved(known, problems=["활성 사이트가 없다 — registry를 확인하라"])
 
-    if gbm is not None and fct is not None:
-        if (gbm, fct) in known:
-            return ScopeResult(status="resolved", gbm=gbm, fct=fct)
-        return _unresolved(known, problems=[f"사이트 {gbm}/{fct}가 registry에 없다"])
+    # 호출자가 한쪽만 줘도 그것으로 후보를 **좁힌다.** 둘 다 있을 때만 존중하면
+    # `--gbm mx`만 준 사용자의 지정이 통째로 무시되고 LLM이 다른 법인을 고를 수
+    # 있다 — 이 모듈이 지키겠다고 선언한 바로 그 축이 새는 자리다.
+    given = [(g, f) for (g, f) in known
+             if (gbm is None or g == gbm) and (fct is None or f == fct)]
+    if (gbm is not None or fct is not None) and not given:
+        wanted = "/".join(x for x in (gbm, fct) if x is not None)
+        return _unresolved(known, problems=[f"지정한 {wanted!r}에 해당하는 사이트가 "
+                                            f"registry에 없다"])
+    known = given or known
 
     if len(known) == 1:
         # 사이트가 하나인 설치에서 매번 LLM을 부르는 것은 낭비이자 실패 지점이다.
