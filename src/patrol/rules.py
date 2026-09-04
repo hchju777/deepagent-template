@@ -21,7 +21,6 @@ KnownRuleError다(§C1/§I3). 데이터 쪽 이상(필드 부재, 비수치 값,
 "이상 탐지"로 둔갑해 원인 파악을 방해한다.
 """
 import math
-import math
 from datetime import datetime
 from numbers import Number
 from typing import Any, Callable, Literal
@@ -263,7 +262,8 @@ def _judge_all_zero(result: ProbeResult, params: dict) -> RuleVerdict:
     field = _field_name(params, "all_zero")
     raw_min = params.get("min_count", 1)
     min_count = _as_number(raw_min)
-    if min_count is None or min_count < 1 or min_count != int(min_count):
+    if min_count is None or not math.isfinite(min_count) or min_count < 1 \
+            or min_count != int(min_count):
         raise KnownRuleError(f"rule all_zero의 min_count는 1 이상의 정수여야 한다 — {raw_min!r}")
     raw = get_path(result.data, field) if field else None
     if raw is None:
@@ -310,6 +310,14 @@ def _judge_expected_state(result: ProbeResult, params: dict) -> RuleVerdict:
     `when`이 성립하지 않으면 ok다. 3상의 `skipped`를 쓰지 않는 이유: 그 값은
     LLM 예산 소진 전용이고, 두 뜻을 한 칸에 넣으면 `patrol status`가 서로 다른
     이유를 같게 보여준다.
+
+    **알려진 한계 — 상태 값은 문자열을 전제한다.** 비교가 `==`이라 파이썬의
+    `False == 0`·`True == 1`이 그대로 통한다(`expect=[0]`에 값 `False`면 ok).
+    `_zero_values`가 bool을 통째로 거부하는 것과 다른 선택인데, 저쪽은 **수치**를
+    다루므로 bool이 섞이면 반드시 오류인 반면 여기는 임의의 상태 어휘를 받기
+    때문이다. `null`도 표현할 수 없다 — `get_path`가 "필드 없음"과 "값이 null"을
+    합치므로 `expect=[None]`은 결코 만족되지 않는다. 상태 값을 boolean이나
+    null로 쓰는 API를 만나면 그때 별도 rule을 연다.
     """
     field = _field_name(params, "expected_state")
     expect = params.get("expect")

@@ -107,6 +107,12 @@ class MailConfig(StrictModel):
         # 오타("operations")면 그 목록이 영원히 안 쓰이고 아무도 모른다. boot이
         # 아니라 검증자로 잡는 이유: config 로드 시점에 걸리면 `config show`에도
         # 드러난다.
+        empty = sorted(k for k, v in self.recipients_by_concern.items() if not v)
+        if empty:
+            # 빈 목록을 "보내지 마라"로 읽을지 "기본으로 폴백"으로 읽을지 사람이
+            # 헷갈린다. 채널을 끄려면 그 키를 지우면 된다.
+            raise ValueError(f"recipients_by_concern의 빈 목록: {empty} — 기본 수신자로 "
+                             f"폴백시키려면 그 키를 지워라")
         unknown = sorted(set(self.recipients_by_concern) - set(CONCERNS))
         if unknown:
             raise ValueError(f"recipients_by_concern의 알 수 없는 concern: {unknown} "

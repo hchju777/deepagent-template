@@ -199,3 +199,11 @@ def test_when의_모양이_틀리면_설정_오류다():
         with pytest.raises(KnownRuleError):
             _state({"prod_status": "x"}, field="body.prod_status",
                    expect=["생산중"], when=bad)
+
+
+def test_무한대_min_count는_설정_오류로_착지한다():
+    # json.loads("1e400")이 inf라 config로 실제 도달 가능하다. int(inf)는
+    # OverflowError를 던지는데, 그건 KnownRuleError가 아니라 러너 최외곽에
+    # 잡혀 "러너 실행 실패"로 보고된다 — 설정 오류가 설정 오류로 안 보인다.
+    with pytest.raises(KnownRuleError):
+        _zero({"badge": [0]}, field="body.badge", min_count=float("inf"))

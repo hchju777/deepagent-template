@@ -14,9 +14,10 @@ from tests.application.test_graph_e2e import (ASK_JSON, FRAME_ONE_TASK, INTEGRAT
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 
 
-def _open_case(repo, store, cid="c-1"):
+def _open_case(repo, store, cid="c-1", concern="system"):
     repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="OEE 512%",
-                         t0=T, target_locator="rest:/oee", created_at=T, updated_at=T))
+                         t0=T, target_locator="rest:/oee", concern=concern,
+                         created_at=T, updated_at=T))
     store.put_evidence(cid, "rest:/oee", {"oee": 512}, as_of=T)
 
 
@@ -471,7 +472,7 @@ async def test_정상_종결은_판정_스냅샷을_남긴다():
     from src.domain.snapshot import InMemoryVerdictSnapshotStore
     repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
     snapshots = InMemoryVerdictSnapshotStore()
-    _open_case(repo, store)
+    _open_case(repo, store, concern="operation")
     deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
     worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
                                  deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
@@ -485,6 +486,9 @@ async def test_정상_종결은_판정_스냅샷을_남긴다():
     assert snap.verdict_type and snap.root_cause_component
     assert snap.knowledge_digests == {"topology": "d1"}
     assert snap.history_shown == []          # P8 전까지는 비어 있다
+    # 스냅샷은 retention(90일)보다 오래 살고 소급이 불가능하다 — concern이 없으면
+    # 나중에 "operation 판정이 더 자주 틀리는가"를 물을 수 없다.
+    assert snap.concern == "operation"
 
 
 async def test_실패_종결도_판정_스냅샷을_남긴다():

@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Literal
 
 from src.config.schema_app import StrictModel
+from src.domain.concern import Concern
 
 
 class VerdictSnapshot(StrictModel):
@@ -25,6 +26,10 @@ class VerdictSnapshot(StrictModel):
     fingerprint: str
     target_locator: str | None = None
     origin: Literal["human", "patrol"] = "patrol"
+    # 같은 성질의 라우팅 축이다. 스냅샷은 retention(90일)보다 오래 살고 소급이
+    # 불가능하므로, 나중에 "operation 판정이 더 자주 틀리는가"를 물으려면 지금
+    # 남겨야 한다.
+    concern: Concern = "system"
     outcome: Literal["closed", "failed"]     # failed도 남긴다 — 빼면 분모에 생존 편향
     verdict_type: str | None = None
     root_cause_component: str | None = None

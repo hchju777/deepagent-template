@@ -7,8 +7,9 @@
 
 ## Part A. config만으로 점검 추가하기
 
-`config.example/gbm/mx.json`의 `patrol.checks`에는 이미 `api.oee_range`와
-`prod.badge_nonzero` 둘이 있다. 같은 파일에 세 번째 점검을 추가해 보자 — MongoDB `twin_state`
+`config.example/gbm/mx.json`의 `patrol.checks`에는 이미 `api.oee_range`(파이프라인
+신호)와 `prod.badge_nonzero`·`prod.status_matches_plan`(현장 상태) 셋이 있다.
+같은 파일에 네 번째 점검을 추가해 보자 — MongoDB `twin_state`
 컬렉션이 너무 오래 갱신되지 않으면 잡아내는 신선도(freshness) 점검이다.
 
 ```json
@@ -18,6 +19,7 @@
     "checks": {
       "api.oee_range": { "...": "기존 내용 그대로" },
       "prod.badge_nonzero": { "...": "기존 내용 그대로" },
+      "prod.status_matches_plan": { "...": "기존 내용 그대로" },
       "twin_state.freshness": {
         "judge": "rule",
         "schedule": { "interval": "3s" },
@@ -50,7 +52,7 @@ python -m src patrol run --for-seconds 5 --stub-seeds stub-seeds.example.json \
 미리 심어 줘서, 이 명령은 실제로 끝까지 간다 — `api.oee_range`가
 `oee=512`에서 finding을 내고(범위 `0~100` 초과), 케이스가 열리고, 조사가
 시작되고, `output/c-1.html`에 보고서가 쓰인다. 방금 추가한
-`twin_state.freshness`도 케이스를 하나 더 연다 — 시드에 `twin_state` 컬렉션이
+`twin_state.freshness`도 케이스를 하나 더 연다(모두 셋) — 시드에 `twin_state` 컬렉션이
 없어 `ts` 필드를 못 찾고 "필드 부재 — ts"라는 finding을 내기 때문이다. 데이터
 이상은 rule 설정 오류(`KnownRuleError`)가 아니라 finding으로 다루는 규율이 여기
 그대로 보인다. 실제 데이터를 넣어 보려면 `stub-seeds.example.json`의 `"mx/gumi"` 아래

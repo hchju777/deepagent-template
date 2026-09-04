@@ -193,3 +193,31 @@ def test_정적_값과_해석_키가_겹치면_거부된다():
             "judge": "rule", "schedule": {"interval": "5m"},
             "params": {"body": {"part_code": ["P001"]}},
             "resolve": {"part_code": {"from": "unfiltered"}}})
+
+
+def test_운영_축_전용_rule은_concern을_명시해야_한다():
+    # 기본값 "system"을 둔 대가다. 원래 근거였던 "기존 rule은 전부 파이프라인
+    # 신호"는 거짓이었다 — max/defect_count는 기존 rule로 쓴 현장 이상이다.
+    # rule 이름으로 concern을 **추측하지는 않는다**: 큐 깊이가 전부 0인 것은
+    # 파이프라인 신호이므로 "system"이라고 적으면 통과한다. 요구하는 것은
+    # 사람이 한 번 답하는 것뿐이다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_site import CheckConfig
+    base = {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e"}
+    for rule_params in ({"rule": "all_zero", "field": "body.badge"},
+                        {"rule": "expected_state", "field": "body.s", "expect": ["x"]}):
+        with pytest.raises(ValidationError, match="concern"):
+            CheckConfig.model_validate({**base, "params": rule_params})
+        # 명시하면 어느 값이든 통과한다 — 우리가 대신 정하지 않는다.
+        for concern in ("system", "operation"):
+            assert CheckConfig.model_validate(
+                {**base, "concern": concern, "params": rule_params}).concern == concern
+
+
+def test_기존_rule은_concern_없이도_통과한다():
+    # ~100곳을 고치게 만들지 않는다는 결정은 그대로 유지한다.
+    from src.config.schema_site import CheckConfig
+    assert CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/x",
+        "params": {"rule": "max", "field": "body.oee", "max": 5}}).concern == "system"

@@ -106,7 +106,10 @@ def recipients_for(cfg: MailConfig, concern: Concern) -> list[str]:
     폴백을 두는 이유: 전부 적으라고 강제하면 사람이 같은 목록을 두 번 쓰게 되고,
     한쪽만 고치는 순간 조용히 갈라진다.
     """
-    return cfg.recipients_by_concern.get(concern) or cfg.recipients
+    # `or`를 쓰면 `{"operation": []}`("이 축은 보내지 마라")가 조용히 폴백한다 —
+    # 사람이 쓴 제약이 아무 효과 없이 통과하는 형태다. 빈 목록을 config 검증이
+    # 거부하므로 여기서는 키 존재만 본다.
+    return cfg.recipients_by_concern.get(concern, cfg.recipients)
 
 
 async def send_report(case_id: str, subject: str, body: str, *, sender: MailSenderPort,

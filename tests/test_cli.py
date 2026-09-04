@@ -628,3 +628,39 @@ def test_knowledge_validate도_실_어댑터에_시드를_주면_거부한다(tm
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 1
     assert 'adapters="real"' in capsys.readouterr().err
+
+
+def test_chat이_연_케이스도_concern을_정하고_수신자를_가른다(tmp_path, capsys, monkeypatch):
+    # 스펙 §3.4의 타깃 3("데이터는 있는데 운영 시스템에 안 나온다")이 바로 운영
+    # 이상 질문인데, 사람이 연 케이스에 축을 정할 방법이 없으면 그 질문은 영원히
+    # 플랫폼 담당에게 라우팅된다. 플래그가 파서에 있는 것과 발행까지 닿는 것은
+    # 다르므로 실제 수신자를 본다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    app_path = tmp_path / "config" / "app.json"
+    data = json.loads(app_path.read_text(encoding="utf-8"))
+    data["report"] = {"output_dir": str(tmp_path / "out"), "mail": {
+        "enabled": True, "host": "smtp", "sender": "a@x", "recipients": ["platform@y"],
+        "recipients_by_concern": {"operation": ["ops@y"]}}}
+    app_path.write_text(json.dumps(data), encoding="utf-8")
+
+    lead_llm = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                            ONE_EVIDENCE_VERDICT_JSON])
+    subagent_llm = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead_llm, "s": subagent_llm}.get(profile, object()))
+
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(recipients)
+
+    monkeypatch.setattr("src.__main__.SmtpSender", lambda cfg: _Spy())
+    code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "데이터가 안 보인다",
+                 "--concern", "operation",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0, capsys.readouterr().err
+    assert sent == [["ops@y"]], sent

@@ -75,7 +75,8 @@
 | `report.mail.host` | str | `""` | SMTP 호스트 |
 | `report.mail.port` | int | 25 | SMTP 포트 |
 | `report.mail.sender` | str | `""` | 발신자 주소 |
-| `report.mail.recipients` | list[str] | `[]` | 수신자 목록 |
+| `report.mail.recipients` | list[str] | `[]` | 기본 수신자 목록 |
+| `report.mail.recipients_by_concern` | dict | `{}` | concern별 수신자(`{"operation": ["ops@x"]}`). 선언되지 않은 concern은 `recipients`로 폴백한다 — 전부 적으라고 강제하면 같은 목록을 두 번 쓰게 되고 한쪽만 고치는 순간 갈라진다. 알 수 없는 키(`"operations"` 같은 오타)는 config 검증이 거부한다. **빈 목록은 "보내지 마라"가 아니다** — 폴백으로 간다 |
 | `report.mail.username` / `.password` | str \| null / SecretStr \| null | null | SMTP 인증(선택) |
 | `report.mail.use_tls` | bool | `false` | TLS 사용 여부 |
 | `timezone` | str | `"Asia/Seoul"` | 보고서·스케줄 표시, **그리고 `clock` 해석기의 날짜 경계**를 정하는 IANA 타임존. `today`가 어느 날인지가 이 값으로 갈린다 — 해석 실패면 기동을 거부한다 |
@@ -166,7 +167,7 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `freshness` | `field`, `max_age_s` | `field`의 타임스탬프가 `max_age_s`보다 오래됐으면 finding |
 | `max` | `field`, `max` | 값이 `max`를 넘으면 finding |
 | `all_zero` | `field`, (`min_count` 기본 1) | 값(리스트·dict·스칼라)이 **전부 0**이면 finding. 빈 표본과 `min_count` 미만은 **다른 사유**의 finding — "질문을 잘못했다"와 "현장이 멈췄다"를 섞지 않는다. bool·NaN은 수치가 아니므로 데이터 이상 |
-| `expected_state` | `field`, `expect`(목록), (`when` 선택) | `field` 값이 `expect`에 없으면 finding("생산중이어야 하는데 NO PLAN"). `when`(`{field, equals}` 두 키 고정)이 성립할 때만 판정하고, `when.field`가 없으면 **판정 불가 finding** — ok로 삼키면 그 점검은 영영 초록으로 남는다 |
+| `expected_state` | `field`, `expect`(목록), (`when` 선택) | `field` 값이 `expect`에 없으면 finding("생산중이어야 하는데 NO PLAN"). `when`(`{field, equals}` 두 키 고정)이 성립할 때만 판정하고, `when.field`가 없으면 **판정 불가 finding** — ok로 삼키면 그 점검은 영영 초록으로 남는다. 상태 값은 **문자열을 전제한다**: 비교가 `==`이라 `expect: [0]`은 `false`와도 맞고, `null`은 "필드 없음"과 구별되지 않아 표현할 수 없다 |
 
 앞 넷은 파이프라인 신호(`concern: "system"`)를, 뒤 둘은 현장 상태
 (`concern: "operation"`)를 본다. `expect`는 **값 목록이지 표현식이 아니다** —

@@ -443,3 +443,10 @@ async def test_A3_계획과_어긋난_현장상태는_operation_케이스로_열
     assert verdict.verdict_type == "data_loss"
     # 축이 발행까지 살아 있는가 — 이것이 계획 11이 실제로 낸 산출물이다.
     assert sent == [["ops@y"]], sent
+
+    # 파일 docstring의 완료 기준("보고서 파일이 5절을 갖춘 채 남는다")은 A.3에도
+    # 적용된다 — 하위 디렉터리를 나눠 놓고 단정을 빠뜨리면 그 기준이 반만 산다.
+    fmt = daemon.report_cfg.format
+    text = (Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}").read_text(encoding="utf-8")
+    for heading in _report_headings(fmt):
+        assert heading in text

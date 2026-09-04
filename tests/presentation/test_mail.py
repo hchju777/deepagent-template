@@ -183,3 +183,13 @@ def test_알_수_없는_concern_키는_config_검증이_거부한다():
     with pytest.raises(ValidationError):
         MailConfig(enabled=True, host="h", sender="s", recipients=["a@b"],
                    recipients_by_concern={"operations": ["x@y"]})
+
+
+def test_빈_수신자_목록은_config_검증이_거부한다():
+    # "이 축은 보내지 마라"인지 "기본으로 폴백"인지 사람이 헷갈린다. 채널을 끄려면
+    # 그 키를 지우면 된다 — 애매한 표기를 두지 않는다.
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="빈 목록"):
+        MailConfig(enabled=True, host="h", sender="s", recipients=["a@b"],
+                   recipients_by_concern={"operation": []})
