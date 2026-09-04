@@ -1,5 +1,6 @@
 import json
 
+from src.infrastructure.factory import StubSeeds
 from src.boot import validate_boot
 
 # LLM_API_KEY: 검사 11(계획 4b, I8) — enabled 사이트+llm 프로파일이 있으면 필수.
@@ -350,3 +351,176 @@ def test_해석기_결과_모양이_스키마와_어긋나면_기동을_거부�
         {"part_code": {"from": "clock", "expr": "today"}}))   # 스키마는 list[str]
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("part_code" in e.problem and "clock" in e.problem for e in errors), errors
+
+
+def test_config에는_더_이상_stub_seeds를_쓸_수_없다():
+    # 표면 자체를 없앴으므로 StrictModel이 거부한다 — 검증할 것이 없으면 기동
+    # 검증 항목도 지운다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_site import SiteConfig
+    with pytest.raises(ValidationError):
+        SiteConfig.model_validate({"target": {"stub_seeds": {"rest_responses": {}}}})
+
+
+def _pin(tmp_path, spec):
+    _write(tmp_path, "knowledge/target_api/mx/gumi.json", json.dumps(spec))
+
+
+_SPEC = {"paths": {"/summary/prod": {"post": {
+    "requestBody": {"content": {"application/json": {"schema": {
+        "type": "object", "required": ["date"],
+        "properties": {"part_code": {"type": "array", "items": {"type": "string"}},
+                       "date": {"type": "string"}}}}}},
+    "responses": {"200": {"content": {"application/json": {"schema": {
+        "type": "object", "properties": {"badge": {"type": "array",
+                                                   "items": {"type": "integer"}}}}}}}}}}}}
+
+
+def _site_with_entry(body, field="body.badge"):
+    return json.dumps({
+        "target": {"adapters": "stub", "code": {"repos": [{"name": "twin-services", "path": "/r"}]},
+                   "rest": {"base_url": "http://x", "entries": {"summary_prod": {
+                       "method": "POST", "path": "/summary/prod", "body_schema": body}}}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+            "params": {"rule": "exists", "field": field}}}},
+        "knowledge": {"root": "knowledge"}})
+
+
+def test_명세와_어긋난_등재_항목은_기동을_거부한다(tmp_path):
+    # 오타 하나가 매 순찰 404로만 드러나던 것을 배포 시점으로 당긴다.
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json",
+           _site_with_entry({"part_code": "list[str]", "save_as": "str", "date": "str"}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("save_as" in e.problem for e in errors), errors
+
+
+def test_명세가_말한_응답에_없는_필드를_보는_점검을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json",
+           _site_with_entry({"date": "str"}, field="body.badgee"))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("badgee" in e.problem for e in errors), errors
+
+
+def test_명세와_맞으면_통과한다(tmp_path):
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_entry({"date": "str"}))
+    assert validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path) == []
+
+
+def test_pinned_명세가_없으면_그것만으로는_기동을_막지_않는다(tmp_path):
+    # 명세를 못 얻는 대상도 있다. 없는 것은 오류가 아니다 — 깨진 것이 오류다.
+    _tree(tmp_path)
+    assert not any("명세" in e.problem for e in
+                   validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+
+
+def test_깨진_pinned_명세는_기동을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/target_api/mx/gumi.json", "{ 망가진 json")
+    assert any("명세" in e.problem for e in
+               validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+
+
+def _live_tree(tmp_path, live_spec, *, body=None):
+    """--live 드리프트 점검용 트리 — 스텁 어댑터에 '지금 대상의 명세'를 심는다."""
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_entry(body or {"date": "str"}))
+    return {"mx/gumi": StubSeeds(rest_openapi=live_spec)} if live_spec is not None else {}
+
+
+def test_라이브_명세가_pin과_같으면_조용하다(tmp_path):
+    seeds = _live_tree(tmp_path, _SPEC)
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert errors == [], errors
+
+
+def test_라이브_명세가_등재_항목에_영향을_주면_잡는다(tmp_path):
+    # 대상이 date를 지웠다 — 우리 등재 스키마가 그 키를 보내고 있다.
+    live = {"paths": {"/summary/prod": {"post": {"requestBody": {"content": {
+        "application/json": {"schema": {"type": "object", "properties": {
+            "part_code": {"type": "array", "items": {"type": "string"}}}}}}}}}}}
+    seeds = _live_tree(tmp_path, live)
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert any("date" in e.problem for e in errors), errors
+
+
+def test_우리_항목_밖의_변화는_pin_갱신만_요구한다(tmp_path):
+    # 대상 API는 우리가 안 쓰는 끝점이 수백 개다. 전부 보고하면 아무도 안 읽는다.
+    live = {**_SPEC, "paths": {**_SPEC["paths"], "/other": {"get": {}}}}
+    seeds = _live_tree(tmp_path, live)
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert len(errors) == 1 and "pin" in errors[0].problem, errors
+    assert "/other" not in errors[0].problem       # 차이 전체를 쏟지 않는다
+def test_pin이_없으면_라이브_대조를_하지_않는다(tmp_path):
+    # 견줄 대상이 없다. 명세를 받아 오는 것 자체가 목적이 아니다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_entry({"date": "str"}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds={"mx/gumi": StubSeeds(rest_openapi=_SPEC)})
+    assert errors == [], errors
+
+
+def test_명세_응답이_2xx가_아니면_드리프트로_오판하지_않는다():
+    # RealRest.fetch_spec은 get()과 같은 규칙으로 4xx/5xx도 status="ok"로 돌려주고
+    # body는 비JSON이면 None이다(실측). 그것을 그대로 명세로 파싱하면 "빈 명세"가
+    # 되어 **모든 등재 항목이 명세에 없다**로 기동이 막힌다 — 원인이 404인데
+    # 메시지는 오타를 가리킨다. 사람을 틀린 곳으로 보내는 것이 이 검사의 최악이다.
+    from datetime import datetime, timezone
+    from src.boot import _live_spec_body
+    from src.domain.envelope import Envelope, ProbeResult
+    T0 = datetime(2026, 9, 4, tzinfo=timezone.utc)
+
+    def _result(status, data):
+        return ProbeResult(status=status, envelope=Envelope(observed_at=T0), data=data,
+                           error=None if status == "ok" else "연결 실패")
+
+    body, problem = _live_spec_body(_result("ok", {"status_code": 404, "body": None}))
+    assert body is None and "404" in problem
+
+    body, problem = _live_spec_body(_result("ok", {"status_code": 200, "body": "Not Found"}))
+    assert body is None and problem and "JSON" in problem
+
+    body, problem = _live_spec_body(_result("error", None))
+    assert body is None and "연결 실패" in problem
+
+    body, problem = _live_spec_body(_result("ok", {"status_code": 200, "body": {"paths": {}}}))
+    assert body == {"paths": {}} and problem is None
+
+
+def test_명세를_못_받으면_그_사실을_말하지_등재_항목을_탓하지_않는다(tmp_path):
+    seeds = _live_tree(tmp_path, "Not Found")      # body가 JSON 객체가 아니다
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert len(errors) == 1, errors
+    assert "명세를 받을 수 없다" in errors[0].problem
+    assert "등재" not in errors[0].problem       # 오타를 가리키지 않는다
+
+
+def test_명세를_아예_못_받아도_침묵하지_않는다(tmp_path):
+    # 조용히 통과하면 운영자는 드리프트를 확인했다고 믿는다 — 확인 안 한 것이
+    # "이상 없음"으로 둔갑하는 형태다(조용한 생략 금지).
+    seeds = _live_tree(tmp_path, None)            # 스텁이 status="error"를 낸다
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert any("명세를 받을 수 없다" in e.problem for e in errors), errors
+
+
+def test_라이브_명세가_깨져_있으면_그_사실을_먼저_말한다(tmp_path):
+    # parse_spec의 problems를 버리면 "최상위가 객체가 아니다"가 사라지고
+    # "등재 항목이 명세에 없다"만 남아, 사람이 config를 뒤지게 된다.
+    seeds = _live_tree(tmp_path, {"paths": "객체가 아니다"})
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path,
+                           check_live=True, stub_seeds=seeds)
+    assert any("paths" in e.problem for e in errors), errors
+    assert not any("오타이거나" in e.problem for e in errors), errors

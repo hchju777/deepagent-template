@@ -199,3 +199,76 @@ async def test_데몬이_사이트_시간대를_해석기까지_넘긴다(tmp_pa
     expected = (kst_morning.astimezone(ZoneInfo(daemon.timezone))).date().isoformat()
     assert body["request"]["params"] == {"date": expected}
     assert expected != kst_morning.date().isoformat(), "UTC와 같으면 테스트가 무의미하다"
+
+
+def test_스키마에_기본값_필드를_더해도_규칙_digest가_안_바뀐다():
+    # 계획 9가 CheckConfig에 resolve를 더했을 때 손대지 않은 전 사이트의 rules
+    # digest가 바뀌었다. 지금은 아무도 비교하지 않아 무해하지만, 드리프트 판정이
+    # 이 값을 쓰는 순간 "설정을 안 바꿨는데 드리프트"가 뜬다 — 신호가 태어나자마자
+    # 소음이 된다. 그래서 미래의 필드 추가를 여기서 흉내 낸다.
+    from src.patrol.daemon import rules_digest
+    class CheckConfigPlus(CheckConfig):
+        훗날_생길_필드: str = "기본값"
+
+    raw = {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/x",
+           "params": {"rule": "exists", "field": "body"}}
+    assert (rules_digest({"c": CheckConfig.model_validate(raw)})
+            == rules_digest({"c": CheckConfigPlus.model_validate(raw)}))
+
+
+def test_규칙_digest는_실제_변경에는_반응한다():
+    # 기본값을 빼는 것이 "아무것도 구별 못 한다"가 되면 안 된다.
+    from src.patrol.daemon import rules_digest
+    raw = {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/x",
+           "params": {"rule": "exists", "field": "body"}}
+    one = CheckConfig.model_validate(raw)
+    two = CheckConfig.model_validate({**raw, "resolve": {"d": {"from": "clock",
+                                                               "expr": "today"}}})
+    assert rules_digest({"c": one}) != rules_digest({"c": two})
+
+
+def test_명세_digest가_사이트_조립에_실린다(tmp_path):
+    # as_of의 네 번째 축. 없으면 "그때 그 API가 어떤 모양이었나"를 사후에 알 수 없다.
+    import json
+    from src.patrol.daemon import assemble_sites
+    (tmp_path / "config" / "gbm").mkdir(parents=True)
+    (tmp_path / "knowledge" / "topology" / "gbm").mkdir(parents=True)
+    (tmp_path / "knowledge" / "target_api" / "gbm").mkdir(parents=True)
+    (tmp_path / "config" / "app.json").write_text(
+        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        encoding="utf-8")
+    (tmp_path / "config" / "registry.json").write_text(
+        json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")
+    (tmp_path / "config" / "gbm" / "gbm.json").write_text(
+        json.dumps({"target": {"adapters": "stub"},
+                    "knowledge": {"root": str(tmp_path / "knowledge")}}), encoding="utf-8")
+    (tmp_path / "knowledge" / "topology" / "common.yaml").write_text(
+        "services: {}\nderivations: {}\n", encoding="utf-8")
+    (tmp_path / "knowledge" / "target_api" / "gbm" / "gumi.json").write_text(
+        json.dumps({"paths": {}}), encoding="utf-8")
+
+    _app, sites = assemble_sites(tmp_path / "config", tmp_path, {"LLM_API_KEY": "k"},
+                                 clock=lambda: T, llm_factory=lambda name: object())
+    assert len(sites[0].digests["target_api"]) == 64      # 실제 digest가 실렸다
+
+
+def test_명세가_없으면_digest는_absent다(tmp_path):
+    # deployment가 쓰는 관례를 그대로 쓴다 — 빈 문자열이면 "없다"와 "계산 실패"가 같아진다.
+    import json
+    from src.patrol.daemon import assemble_sites
+    (tmp_path / "config" / "gbm").mkdir(parents=True)
+    (tmp_path / "knowledge" / "topology").mkdir(parents=True)
+    (tmp_path / "config" / "app.json").write_text(
+        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        encoding="utf-8")
+    (tmp_path / "config" / "registry.json").write_text(
+        json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")
+    (tmp_path / "config" / "gbm" / "gbm.json").write_text(
+        json.dumps({"target": {"adapters": "stub"},
+                    "knowledge": {"root": str(tmp_path / "knowledge")}}), encoding="utf-8")
+    (tmp_path / "knowledge" / "topology" / "common.yaml").write_text(
+        "services: {}\nderivations: {}\n", encoding="utf-8")
+
+    _app, sites = assemble_sites(tmp_path / "config", tmp_path, {"LLM_API_KEY": "k"},
+                                 clock=lambda: T, llm_factory=lambda name: object())
+    assert sites[0].digests["target_api"] == "absent"

@@ -10,6 +10,8 @@ ReportModel만 보고 문자열을 만든다(report.py의 마크다운 렌더러
 """
 from html import escape
 
+from src.presentation.report import digest_summary   # 두 렌더러가 같은 표기를 쓴다
+
 _MARKS = {"ok": "✅", "fail": "❌", "warn": "⚠", "skip": "⬜"}
 
 _STYLE = """
@@ -76,6 +78,7 @@ def _render(model) -> str:
         ["판정", _e(_headline(record, verdict))],
         ["신뢰도", _e(verdict.confidence if verdict else "없음")],
         ["태스크 에러율", _e(model.task_error_rate)],
+        ["지식 digest", _e(digest_summary(model.knowledge_digests))],
     ]
     stage_rows = [[_e(s.label), _MARKS.get(s.mark, "?"), _e(s.note or "없음")]
                   for s in model.stages]

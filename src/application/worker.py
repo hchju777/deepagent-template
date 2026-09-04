@@ -101,8 +101,19 @@ def _case_file_snapshot(result: dict) -> dict:
     verify_attempts를 싣는 이유: 보고서 §1의 검증 단계가 "그냥 통과"와 "재작성 후
     통과(강등)"를 구별하는 유일한 구조적 신호다 — caveat 문자열을 냄새 맡는 대신
     이 값을 본다.
+
+    knowledge_digests는 State의 Case가 들고 있다. 여기로 옮겨 두지 않으면 보고서가
+    "그때 어떤 토폴로지·규칙·API 명세를 보고 있었나"를 말할 수 없다 — 구제 경로
+    (_salvage_case_file)에서는 case 자체가 없을 수 있어 방어적으로 읽는다.
     """
+    case = result.get("case")
+    # 구제 경로(_salvage_case_file)의 case는 역직렬화 방식에 따라 dict일 수 있다 —
+    # 바로 위 _dump_item docstring이 적어 둔 사실이다. getattr만 쓰면 그때 digest가
+    # 조용히 사라져 보고서가 "없음(기록되지 않음)"을 찍는다.
+    digests = case.get("knowledge_digests") if isinstance(case, dict) \
+        else getattr(case, "knowledge_digests", None)
     return {
+        "knowledge_digests": dict(digests) if isinstance(digests, dict) else {},
         "plan_tasks": [_dump_item(t) for t in result.get("plan_tasks", [])],
         "hypotheses": [_dump_item(h) for h in result.get("hypotheses", [])],
         "round": result.get("round", 0),

@@ -1,0 +1,60 @@
+{
+  "openapi": "3.0.0",
+  "info": {"title": "mx/gumi 운영 시스템 (예시)", "version": "1.0.0"},
+  "paths": {
+    "/summary/prod": {
+      "post": {
+        "operationId": "get_prod_summary",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["date"],
+                "properties": {
+                  "part_code": {"type": "array", "items": {"type": "string"}},
+                  "line_code": {"type": "array", "items": {"type": "string"}},
+                  "date": {"type": "string", "format": "date"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "badge": {"type": "array", "items": {"type": "integer"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/lines": {
+      "get": {
+        "operationId": "list_lines",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {"line_code": {"type": "string"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

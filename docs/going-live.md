@@ -34,10 +34,10 @@
 
 `target.adapters`를 `"real"`로 바꾸는 것이 스텁↔실구현 전환의 스위치다
 (`src/infrastructure/factory.py`의 `build_adapters`). 예시 트리를 복사해
-시작했다면 `target.stub_seeds`(스텁이 돌려줄 가짜 응답)도 같이 지워라 —
-`adapters="real"`에서는 쓰이지 않으므로, 남겨 두면 기동 검증이 거부한다.
-**점검 간격도 같이 올려라** — 예시의 `interval: "3s"`는 빠른 시작이 5초 안에
-끝나라고 낮춰 둔 값이고, 그대로 실전환하면 운영 대상을 3초마다 두드린다. 비밀번호가
+시작했다면 **점검 간격도 같이 올려라** — 예시의 `interval: "3s"`는 빠른 시작이 5초 안에
+끝나라고 낮춰 둔 값이고, 그대로 실전환하면 운영 대상을 3초마다 두드린다.
+가짜 응답(`--stub-seeds`)은 지울 것이 없다 — config가 아니라 플래그라서,
+그냥 안 주면 된다. 비밀번호가
 있는 법인만 `redis.password`/`mongo.username`+`mongo.password`를 추가한다
 (둘 다 `${ENV_KEY}` 참조로).
 
@@ -77,8 +77,9 @@ MX_GUMI_API_TOKEN=<실제 토큰>          # rest.auth.value가 참조한다
 python -m src knowledge validate --live --config-root config --repo-root .
 ```
 
-`--live`는 실제 접속이 필요하므로 기본으로는 돌지 않는다(죽은 사이트가
-기동 자체를 막지 않도록). CI에 대상 시스템 접근 권한이 있을 때만 켜라.
+`--live`는 실제 접속이 필요하므로 기본으로는 돌지 않는다 — "죽은 사이트가 기동을
+막으면 역효과"라는 원칙은 **opt-in으로 둔 것**으로 지켜진다. 켠 뒤에는 확인하지
+못한 것도 기동을 막는다(§7). CI에 대상 시스템 접근 권한이 있을 때만 켜라.
 
 Kafka는 `assign()`으로 파티션에 직접 붙어 컨슈머 그룹에 참여하지 않는다 —
 운영 중인 컨슈머 그룹의 오프셋에 영향을 주지 않는다.
@@ -175,9 +176,50 @@ python -m src patrol run --config-root config --repo-root .
 자동으로 먼저 도는지(기동 거부 철학) 확인하라 — `_run_patrol`이 데몬을
 띄우기 전에 항상 기동 검증부터 돈다.
 
+## 7. pinned 명세를 언제 갱신하는가
+
+`knowledge/target_api/{gbm}/{fct}.json`은 대상 API의 OpenAPI 사본이고, 기동 검증이
+등재 항목을 이것과 대조한다. `knowledge validate --live`는 한 걸음 더 가서 **지금
+대상이 내놓는 명세**를 받아 pin과 견준다(`target.rest.openapi_path`, 기본
+`/openapi.json`).
+
+```bash
+python -m src knowledge validate --live --config-root config --repo-root .
+```
+
+세 가지 결과가 있다:
+
+- **"명세를 받을 수 없다 — HTTP 404"** 같은 줄 — `openapi_path`가 틀렸거나, 명세가
+  인증 벽 뒤에 있거나, 대상이 죽어 있다. 이것도 **기동을 막는다**: `--live`를 켠
+  사람은 "지금 실제와 맞는가"를 묻고 있고, 못 물어본 것을 조용히 통과시키면
+  확인 안 한 것이 "이상 없음"으로 둔갑한다. 명세를 받을 수 없는 환경이라면
+  `--live` 없이 정적 검증만 돌려라 — pin과의 대조는 그때도 돈다.
+
+- **"등재 항목에 영향이 있다"** — 대상이 우리가 실제로 쓰는 것을 바꿨다. config를
+  먼저 고치고 pin을 갱신한다.
+- **"영향은 없지만 pin을 갱신하라"** — 대상이 우리가 안 쓰는 곳을 바꿨다. 차이
+  전체를 쏟지 않는 이유는 대상 API에 우리가 안 쓰는 끝점이 수백 개이고, 그것들의
+  변화를 전부 보고하면 아무도 읽지 않기 때문이다.
+
+갱신은 **사람이 커밋한다**:
+
+```bash
+curl -s "$API_BASE/openapi.json" > knowledge/target_api/mx/gumi.json
+git add knowledge/target_api && git commit
+```
+
+자동 갱신하는 코드를 만들지 마라. 대상이 새 POST를 배포했을 때 우리 pin이 조용히
+따라가면, 그다음 순간 우리 허용 범위도 따라 넓어진다 — 교과서적 fail-open이고,
+등재제 전체가 무의미해진다. **문서는 증거, config는 권한**(CLAUDE.md 규율 9).
+
+"죽은 사이트가 기동을 막으면 역효과"라는 원칙은 **`--live`를 opt-in으로 둔 것**으로
+이미 지켜진다. 기본 검증(`knowledge validate`)은 대상에 접속하지 않으므로, 대상이
+죽어 있어도 배포는 막히지 않는다.
+
 ## 체크리스트
 
-- [ ] 사이트마다 필요한 대상만 `target`에 채우고 `adapters: "real"`, `target.stub_seeds`는 삭제
+- [ ] 사이트마다 필요한 대상만 `target`에 채우고 `adapters: "real"`
+- [ ] `patrol run`에 `--stub-seeds`를 **주지 않는다**(가짜 응답이 실제 관측을 가린다)
 - [ ] **점검 간격을 예시의 `3s`에서 운영 값(분 단위)으로 올렸는가** — 예시 트리를 복사해 왔다면 그대로 두면 대상을 3초마다 두드린다
 - [ ] `.env`에 실제 값(URL·계정·비밀번호) — `config/*.json`에는 `${...}` 참조만
 - [ ] Mongo 계정을 readonly 롤로 생성하고 `knowledge validate --live`로 확인
@@ -187,5 +229,7 @@ python -m src patrol run --config-root config --repo-root .
 - [ ] `LLM_BASE_URL`/`LLM_API_KEY` + `app.json`의 `llm.profiles` 3종
 - [ ] `store.backend: "mongo"` + `AGENT_MONGO_URL`(대상 시스템과 별도 DB)
 - [ ] 필요하면 `report.mail` 켜기
-- [ ] `knowledge validate`(정적) 후 `knowledge validate --live`(접속 확인) 둘 다 통과
+- [ ] `knowledge/target_api/{gbm}/{fct}.json`에 대상의 OpenAPI를 받아 두고 커밋
+- [ ] `knowledge validate`(정적) 통과
+- [ ] `knowledge validate --live`(Mongo 롤 + 명세 드리프트) 통과 — 대상이 명세를 안 내주는 환경이면 이 항목은 건너뛰고 정적 검증만 돌린다(§7). **건너뛴다는 결정을 팀이 알고 있어야 한다**
 - [ ] `patrol run`을 상시 프로세스로 배포

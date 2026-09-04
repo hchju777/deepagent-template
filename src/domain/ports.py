@@ -65,6 +65,21 @@ class RestProberPort(ABC):
         """
         ...
 
+    @abstractmethod
+    async def fetch_spec(self) -> ProbeResult:
+        """대상의 OpenAPI 문서를 받아 온다 — 드리프트 점검용(`knowledge validate --live`).
+
+        **인자가 없는 것이 이 메서드의 설계다.** 경로를 인자로 두면 호출자가 정하게
+        되고, "임의의 경로를 GET하라"가 다시 표현 가능해져 `get(endpoint)`의 토폴로지
+        등재 제약을 우회하는 문이 열린다. 어느 경로로 나갈지는 어댑터가
+        `target.rest.openapi_path`(config 선언)를 보고 정한다.
+
+        받아 온 문서는 **증거일 뿐 권한이 아니다** — 이것으로 등재 목록을 넓히는
+        코드를 만들면 안 된다(CLAUDE.md 규율 9). 용도는 박제해 둔 pin과 견주어
+        "사람이 확인해야 할 변화가 있었나"를 말하는 것뿐이다.
+        """
+        ...
+
 
 class CodeRepoReaderPort(ABC):
     """유일한 sync 포트 — git subprocess. 읽기 명령만 노출한다."""

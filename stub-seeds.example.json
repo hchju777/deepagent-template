@@ -1,0 +1,24 @@
+{
+  "mx/gumi": {
+    "rest_responses": {
+      "GET /lines": [
+        {
+          "line_code": "L1"
+        },
+        {
+          "line_code": "L2"
+        }
+      ],
+      "POST /summary/prod": {
+        "badge": [
+          0,
+          0,
+          0
+        ]
+      },
+      "/api/v1/lines/{line}/oee": {
+        "oee": 512
+      }
+    }
+  }
+}

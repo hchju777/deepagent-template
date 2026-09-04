@@ -179,7 +179,8 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 보고서 렌더링(마크다운) | `src/presentation/report.py` |
 | 보고서 렌더링(HTML, 기본 포맷) | `src/presentation/report_html.py` |
 | 메일 발송(2단계 멱등) | `src/presentation/mail.py` |
-| 토폴로지·배포 지식 로더 | `src/knowledge/` |
+| 토폴로지·배포·pinned OpenAPI 로더 | `src/knowledge/` |
+| 명세 대조 판정(등재 항목·응답 필드) | `src/knowledge/target_api.py` |
 | config 스키마·로더·병합 | `src/config/` |
 | 기동 검증 항목 | `src/boot.py` |
 | CLI | `src/__main__.py` |

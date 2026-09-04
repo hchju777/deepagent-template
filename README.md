@@ -86,15 +86,21 @@ python -m src knowledge validate --config-root config.example --repo-root .
 python -m src config show --gbm mx --fct gumi --config-root config.example --repo-root .
 
 # 순찰 데몬을 5초만 띄워본다 — 예시 점검은 3초 간격이라 그 안에 실제로 한 번 돈다
-python -m src patrol run --for-seconds 5 --config-root config.example --repo-root .
+python -m src patrol run --for-seconds 5 --stub-seeds stub-seeds.example.json \
+  --config-root config.example --repo-root .
 
 # 케이스 목록(메모리 백엔드는 프로세스가 끝나면 사라진다)
 python -m src case list --config-root config.example --repo-root .
 ```
 
 `patrol run`은 여기서 실제로 끝까지 간다 — `api.oee_range` 점검이 스텁 응답
-`oee=512`에서 finding을 내고(`config.example`의 `target.stub_seeds`가 심어 둔
-값이다), 케이스가 열리고, 조사가 시작되고, `output/c-1.html`에 보고서가 쓰인다.
+`oee=512`에서 finding을 내고(`--stub-seeds`가 심어 준 값이다), 케이스가 열리고,
+조사가 시작되고, `output/c-1.html`에 보고서가 쓰인다. 플래그를 빼고 쳐 보면
+아무 케이스도 안 열린다 — 스텁에 아무것도 없으면 점검이 404 error로 끝난다.
+
+**가짜 응답이 config가 아니라 플래그인 이유**: 실제 대상에 붙일 때는 플래그를
+빼면 되고, **빼는 것을 잊을 수 없다.** config에 남는 설정이면 "실전환 전에 지워라"를
+체크리스트에 적어야 하고, 그건 사람의 기억에 기대는 안전이다.
 `.env.example`의 `LLM_BASE_URL`은 실재하지 않는 예시 호스트라 조사는 첫 LLM
 호출에서 멈추고(키가 틀린 게 아니라 연결이 안 된다), 보고서는 그 사실을
 caveat(`LLM 호출 실패 — OpenAIConnectionError`)과 조사 단계 체크리스트로

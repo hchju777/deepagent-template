@@ -25,6 +25,7 @@ class StubSeeds:
     kafka_messages: dict[str, list[dict]] = field(default_factory=dict)
     kafka_offsets: dict[str, dict] = field(default_factory=dict)
     rest_responses: dict[str, Any] = field(default_factory=dict)
+    rest_openapi: Any = None            # fetch_spec()이 돌려줄 명세(드리프트 점검용)
 
 
 @dataclass
@@ -62,7 +63,8 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
                                   max_rows=guards.max_rows, clock=clock)
         if cfg.target.rest:
             out.rest = StubRest(seeds.rest_responses, allowed,
-                                cfg.target.rest.entries, clock=clock)
+                                cfg.target.rest.entries, clock=clock,
+                                openapi=seeds.rest_openapi)
     else:
         if cfg.target.redis:
             pw = cfg.target.redis.password.get_secret_value() if cfg.target.redis.password else None
@@ -79,7 +81,8 @@ def build_adapters(cfg: SiteConfig, topology: Topology, *, clock,
         if cfg.target.rest:
             out.rest = RealRest(cfg.target.rest.base_url, allowed,
                                 cfg.target.rest.entries, cfg.target.rest.auth,
-                                guards=guards, semaphore=sem, clock=clock)
+                                guards=guards, semaphore=sem, clock=clock,
+                                openapi_path=cfg.target.rest.openapi_path)
 
     if cfg.target.code:
         out.code = CodeRepoReader({r.name: r.path for r in cfg.target.code.repos})

@@ -82,9 +82,9 @@
 
 **기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
 `judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
-비어 있으면 안 되고(검사 15), 활성 사이트가 있고 `llm.profiles`(judge/
+비어 있으면 안 되고(검사 17), 활성 사이트가 있고 `llm.profiles`(judge/
 subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 반드시
-있어야 한다(검사 16) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
+있어야 한다(검사 18) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
 해당된다.
 
 ## `registry.json` — 사이트 목록
@@ -118,12 +118,11 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `target.rest.entries.<이름>.method` | `"GET"` \| `"POST"` | `"GET"` | 이 항목을 호출할 HTTP 메서드. **쓰기 메서드는 등재할 수 없다** |
 | `target.rest.entries.<이름>.path` | str | **필수** | base_url 기준 경로. `/`로 시작해야 하고 `?`·`#`·`%`·`..`·`;`·`\`를 쓸 수 없다(config 검증에서 거부) |
 | `target.rest.entries.<이름>.body_schema` | dict[str, 타입] | `{}` | POST body의 닫힌 스키마. 타입은 `str`/`int`/`float`/`bool`/`list[str]`/`list[int]`. GET 항목에는 둘 수 없다 |
+| `target.rest.openapi_path` | str | `"/openapi.json"` | `--live` 드리프트 점검이 명세를 받아 올 경로. 등재 항목 `path`와 같은 규칙(절대 경로·호스트 불가) — 아니면 인증 헤더가 다른 호스트로 나간다 |
 | `target.rest.entries.<이름>.query_schema` | dict[str, 타입] | `{}` | GET 항목의 쿼리 파라미터 닫힌 스키마(키+타입). body_schema와 같은 타입 어휘. 목록 밖 키·타입 불일치는 소켓 전에 거부된다. POST 항목에는 둘 수 없다 |
 | `target.code.repos[].name` / `.path` | str / str | — | `code_tracer`가 읽을 로컬 git 체크아웃들. `name`은 토폴로지·deployment.yaml이 참조하는 식별자 |
 | `target.guards.timeout_s` | float | 10 | 어댑터 호출 타임아웃 |
 | `target.guards.max_rows` | int | 1000 | 조회 결과 상한(넘으면 `complete=False`) |
-| `target.stub_seeds.rest_responses` | dict | `{}` | `adapters="stub"`일 때 스텁이 돌려줄 REST 응답. 키는 endpoint 문자열(토폴로지 GET) 또는 `"{method} {path}"`(등재 항목) |
-| `target.stub_seeds.redis_data` / `.redis_ttls` / `.mongo_collections` / `.kafka_messages` / `.kafka_offsets` | dict | `{}` | 나머지 스텁 시드. 대상 시스템 없이 점검이 실제로 결과를 내게 한다 |
 | `target.guards.max_concurrent` | int | 4 | 이 사이트에 대한 **모든 어댑터가 공유하는** 동시 요청 상한(세마포어 하나) |
 
 인증 필드는 전부 선택이다 — 인증 없는 법인은 `url`만 채우고, 있는 법인만
@@ -206,7 +205,7 @@ services:
   <service-name>: { repo: <name>, commit: <git commit hash> }
 ```
 
-기동 검증(검사 12)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
+기동 검증(검사 13)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
 실제로 존재하는지(`git cat-file`) 확인한다.
 
 ## `.env` — 비밀값
@@ -239,17 +238,19 @@ services:
 3. `registry.json` 파싱·스키마
 4. 활성 사이트별 config 3계층 병합 + env 참조 해석
 5. 토폴로지 내부 정합성(`topology_problems`)
-6. `adapters="real"`인데 `target.stub_seeds`가 남아 있지 않은가 — 시드는 스텁에서만 쓰여 실전환 시 조용히 무시된다
-7. 각 점검의 `target`이 해석되는가 — `rest:/path`·`redis:`·`mongo:`·`kafka:`는 토폴로지 locator로, `rest:<이름>`은 `target.rest.entries`로 해석하고, 등재 항목이면 `params.body`가 그 항목의 닫힌 스키마를 통과하는지까지 본다
-8. `resolve`가 있으면 target이 등재 항목인가 — 다른 target에 달면 런타임이 조용히 무시한다
-9. `resolve`의 각 키가 등재 항목 스키마에 있는가, 그리고 해석기 **모양**이 그 타입과 맞는가 — `clock`은 문자열 하나, 소스 해석기는 리스트다
-10. `from: "rest"` 해석기가 가리키는 항목이 실재하고 GET인가 / `mongo`·`redis` 해석기의 어댑터가 설정돼 있는가 / `mongo` 해석기의 `filter` 연산자가 허용 목록 안인가
-11. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
-12. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
-13. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
-14. 각 점검의 프로브가 레지스트리에서 해석 가능한가
-15. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
-16. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
+6. 각 점검의 `target`이 해석되는가 — `rest:/path`·`redis:`·`mongo:`·`kafka:`는 토폴로지 locator로, `rest:<이름>`은 `target.rest.entries`로 해석하고, 등재 항목이면 `params.body`가 그 항목의 닫힌 스키마를 통과하는지까지 본다
+7. `resolve`가 있으면 target이 등재 항목인가 — 다른 target에 달면 런타임이 조용히 무시한다
+8. `resolve`의 각 키가 등재 항목 스키마에 있는가, 그리고 해석기 **모양**이 그 타입과 맞는가 — `clock`은 문자열 하나, 소스 해석기는 리스트다
+9. `from: "rest"` 해석기가 가리키는 항목이 실재하고 GET인가 / `mongo`·`redis` 해석기의 어댑터가 설정돼 있는가 / `mongo` 해석기의 `filter` 연산자가 허용 목록 안인가
+10. 등재 항목이 pinned 명세(`knowledge/target_api/{gbm}/{fct}.json`)와 맞는가 — 항목 실재·스키마 키·타입·명세가 필수라 한 키. **명세는 검증만 하고 넓히지 않는다**(명세에만 있는 키는 문제가 아니다). 명세가 없는 것은 오류가 아니고, 있는데 깨진 것이 오류다
+11. rule 점검이 보는 `body.<키>`가 명세가 말한 응답에 있는가 — 명세가 응답 모양을 말하지 않았으면 아무 판정도 하지 않는다
+12. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
+13. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
+14. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
+15. 지금 대상이 내놓는 명세가 pin과 같은가 — `--live` 지정 시에만, pin이 있는 사이트만. 우리 등재 항목에 영향을 주는 차이만 보고한다. **명세를 못 받는 것(연결 실패·4xx·비JSON 응답)도 기동을 막는다** — `--live`를 켠 사람은 "지금 실제와 맞는가"를 묻고 있고, 못 물어본 것을 조용히 통과시키면 확인 안 한 것이 "이상 없음"으로 둔갑한다. 검사 14(Mongo 롤)가 같은 형태다
+16. 각 점검의 프로브가 레지스트리에서 해석 가능한가
+17. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
+18. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
 
-검사 13만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
+검사 14·15만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

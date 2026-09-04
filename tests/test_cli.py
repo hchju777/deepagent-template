@@ -1,5 +1,7 @@
 import io
 import json
+
+import pytest
 from datetime import datetime, timezone
 
 from langchain_core.messages import AIMessage
@@ -458,45 +460,171 @@ def test_config_show_출력은_다시_읽힌다(tmp_path, capsys, monkeypatch):
     assert code == 0
     from src.config.schema_site import SiteConfig
     SiteConfig.model_validate(json.loads(printed))     # 되먹여도 통과해야 한다
+def test_실_어댑터_사이트에_시드를_주면_거부한다(tmp_path, monkeypatch, capsys):
+    # 시드는 스텁에서만 쓰인다. 조용히 무시하면 사람이 "가짜 데이터로 돌고 있다"고
+    # 믿는 채 실제 대상을 두드린다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["adapters"] = "real"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"mx/gumi": {"rest_responses": {}}}), encoding="utf-8")
+
+    code = main(["patrol", "run", "--for-seconds", "0", "--stub-seeds", str(seeds),
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1
+    assert "mx/gumi" in capsys.readouterr().err
 
 
-def test_patrol_run이_config_시드로_실제_점검을_성공시킨다(tmp_path, monkeypatch):
-    # config에 시드를 넣는 경로가 없어 config.example의 점검이 한 번도 성공한 적이
-    # 없었다("404: 스텁에 등록되지 않은 끝점"). 이전 회귀 테스트는 assemble_sites를
-    # 직접 불러서 argparse→validate_boot→_run_patrol 구간을 안 지났고, 그래서
-    # "5초 창 안에 아무것도 안 돈다"를 못 잡았다 — CLI를 그대로 태운다.
-    import asyncio
+def test_시드_파일이_점검을_실제로_성공시킨다(tmp_path, monkeypatch):
+    # 플래그가 하는 일이 있는지 본다 — 주면 finding, 안 주면 404 error.
     _tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
     gbm = tmp_path / "config" / "gbm" / "mx.json"
     data = json.loads(gbm.read_text(encoding="utf-8"))
     data["target"]["rest"] = {"base_url": "http://x"}
-    data["target"]["stub_seeds"] = {"rest_responses": {"/oee": {"oee": 512}}}
     data["patrol"] = {"checks": {"api.oee": {
         "judge": "rule", "schedule": {"interval": "3s"}, "target": "rest:/oee",
         "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}}}}
     gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"mx/gumi": {"rest_responses": {"/oee": {"oee": 512}}}}),
+                     encoding="utf-8")
 
     outcomes = []
-    real_daemon_cls = main_module.PatrolDaemon
 
-    class SpyDaemon(real_daemon_cls):
+    class SpyDaemon(main_module.PatrolDaemon):
         async def run(self, stop):
-            # 스케줄러 대신 점검을 직접 한 번 돌린다 — 데몬이 조립한 어댑터를
-            # 그대로 쓰므로 시드가 실제로 심겼는지가 결과에 나온다.
             self.build()
-            site = self.sites[0]
-            real_record = self.ledger.record_run
-            self.ledger.record_run = lambda g, f, n, o: (outcomes.append((n, o)),
-                                                         real_record(g, f, n, o))[1]
+            real = self.ledger.record_run
+            self.ledger.record_run = lambda g, f, n, o: (outcomes.append(o), real(g, f, n, o))[1]
             await self.run_one("mx", "gumi", "api.oee",
-                               site.cfg.patrol.checks["api.oee"])
+                               self.sites[0].cfg.patrol.checks["api.oee"])
 
     monkeypatch.setattr("src.__main__.PatrolDaemon", SpyDaemon)
-    code = main(["patrol", "run", "--for-seconds", "0",
+    argv = ["patrol", "run", "--for-seconds", "0",
+            "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    assert main(argv + ["--stub-seeds", str(seeds)]) == 0
+    assert outcomes[0].status == "finding", outcomes[0].error
+
+    outcomes.clear()
+    assert main(argv) == 0
+    assert outcomes[0].status == "error"            # 시드 없이는 404
+
+
+def test_knowledge_validate가_라이브_드리프트를_실제로_알린다(tmp_path, monkeypatch, capsys):
+    # validate_boot(stub_seeds=...)가 테스트 전용 이음매로 남지 않게, CLI가 그
+    # 경로를 그대로 탄다. 계획 6~10에서 "함수는 되는데 배선이 안 된다"가 다섯 번
+    # 나왔다 — 배선을 지나는 테스트만이 그것을 잡는다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    spec = {"paths": {"/x": {"get": {"parameters": [
+        {"name": "a", "in": "query", "schema": {"type": "string"}}]}}}}
+    (tmp_path / "knowledge" / "target_api" / "mx").mkdir(parents=True)
+    (tmp_path / "knowledge" / "target_api" / "mx" / "gumi.json").write_text(
+        json.dumps(spec), encoding="utf-8")
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["rest"] = {"base_url": "http://x", "entries": {
+        "e": {"method": "GET", "path": "/x", "query_schema": {"a": "str"}}}}
+    data["patrol"] = {"checks": {}}
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+
+    drifted = {"paths": {"/x": {"get": {"parameters": []}}}}      # 대상이 a를 지웠다
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"mx/gumi": {"rest_openapi": drifted}}), encoding="utf-8")
+    argv = ["knowledge", "validate", "--config-root", str(tmp_path / "config"),
+            "--repo-root", str(tmp_path)]
+    assert main(argv) == 0                                        # --live 없으면 정적만
+    assert main(argv + ["--live", "--stub-seeds", str(seeds)]) == 1
+    assert "'a'" in capsys.readouterr().err
+
+
+def test_사이트를_조립하는_명령은_모두_시드를_받는다(tmp_path, monkeypatch, capsys):
+    # assemble_sites 호출부가 셋(patrol run·chat·case resume)인데 하나만 배선하면
+    # 언젠가 나머지가 조용히 다르게 돈다 — 케이스 종결 세 경로가 같은 발행 배선을
+    # 써야 하는 것과 같은 이유(규율 8). 예시 트리로 chat을 돌리면 REST 프로브가
+    # 전부 404가 되던 회귀가 실제로 있었다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    missing = str(tmp_path / "없는파일.json")
+    common = ["--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    for argv in (["patrol", "run", "--for-seconds", "0"],
+                 ["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s"],
+                 ["case", "resume", "c-1", "--answer", "a"]):
+        code = main([*argv, "--stub-seeds", missing, *common])
+        assert code == 1, argv
+        # 플래그를 모르면 argparse가 SystemExit(2)를 낸다. 1이면서 시드 파일을
+        # 지목한다는 것은 세 경로가 같은 로더를 탔다는 뜻이다.
+        assert "시드 파일을 읽을 수 없다" in capsys.readouterr().err, argv
+
+
+def test_세_명령_모두_읽은_시드를_assemble_sites까지_넘긴다(tmp_path, monkeypatch):
+    # 앞 테스트는 "시드 파일이 깨지면 셋 다 exit 1"만 본다 — 로더는 지키지만
+    # **인계는 안 지킨다.** chat의 stub_seeds= 인자만 지워도 전부 초록이었다.
+    # 이 리포가 반복해서 겪은 "테스트가 지키는 줄 알았던 규율"의 그 자리다.
+    from src.infrastructure.factory import StubSeeds
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    seeds_file = tmp_path / "seeds.json"
+    seeds_file.write_text(json.dumps({"mx/gumi": {"rest_responses": {"/oee": {"x": 1}}}}),
+                          encoding="utf-8")
+    expected = {"mx/gumi": StubSeeds(rest_responses={"/oee": {"x": 1}})}
+
+    seen = []
+    real = main_module.assemble_sites
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("stub_seeds"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("src.__main__.assemble_sites", spy)
+    common = ["--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    for argv in (["patrol", "run", "--for-seconds", "0"],
+                 ["chat", "--gbm", "mx", "--fct", "없는사이트", "--symptom", "s"],
+                 ["case", "resume", "c-1", "--answer", "a"]):
+        seen.clear()
+        main([*argv, "--stub-seeds", str(seeds_file), *common])
+        assert seen == [expected], (argv, seen)
+
+
+def test_세_명령_모두_실_어댑터에_시드를_주면_거부한다(tmp_path, monkeypatch, capsys):
+    # patrol run만 테스트가 있었다. 가드도 셋 다 있어야 한다 — 시드가 조용히
+    # 무시되면 사람이 "가짜 데이터로 돌고 있다"고 믿는 채 실제 대상을 두드린다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["adapters"] = "real"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds_file = tmp_path / "seeds.json"
+    seeds_file.write_text(json.dumps({"mx/gumi": {"rest_responses": {}}}), encoding="utf-8")
+
+    common = ["--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    for argv in (["patrol", "run", "--for-seconds", "0"],
+                 ["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s"],
+                 ["case", "resume", "c-1", "--answer", "a"]):
+        assert main([*argv, "--stub-seeds", str(seeds_file), *common]) == 1, argv
+        assert 'adapters="real"' in capsys.readouterr().err, argv
+
+
+def test_knowledge_validate도_실_어댑터에_시드를_주면_거부한다(tmp_path, monkeypatch, capsys):
+    # 시드를 받는 네 번째 경로다. 여기만 가드를 빼면 adapters="real" 사이트에서
+    # 시드가 조용히 무시되고 --live가 **실제 네트워크를 친다** — 사람은 예행이라고
+    # 믿는다. "세 경로를 하나의 로더로"라고 선언한 계약이 넷째에서 깨진 자리다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["adapters"] = "real"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds_file = tmp_path / "seeds.json"
+    seeds_file.write_text(json.dumps({"mx/gumi": {"rest_openapi": {"paths": {}}}}),
+                          encoding="utf-8")
+
+    code = main(["knowledge", "validate", "--live", "--stub-seeds", str(seeds_file),
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
-    assert code == 0
-    # 시드가 안 심겼으면 "404: 스텁에 등록되지 않은 끝점"으로 error가 된다.
-    assert outcomes, "점검이 아예 안 돌았다"
-    name, outcome = outcomes[0]
-    assert (name, outcome.status) == ("api.oee", "finding"), outcome.error
+    assert code == 1
+    assert 'adapters="real"' in capsys.readouterr().err

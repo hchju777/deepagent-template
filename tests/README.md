@@ -38,10 +38,11 @@ pytest tests/test_bench_scenarios.py   # 벤치 회귀
   등재 항목(`target.rest.entries`) 호출은 같은 dict에 `"POST /summary/prod"`처럼 `"{method} {path}"` 키로 시드한다.
 시스템 없이 "이런 데이터가 관측됐다"를 재현하는 유일한 방법이다.
 
-같은 시드를 **config에서도** 심을 수 있다 — 사이트 config의 `target.stub_seeds`
-(`adapters="stub"`일 때만 유효, `"real"`이면 기동 검증이 거부한다). `config.example`이
-그 방식으로 돌아 `patrol run`이 대상 시스템 없이 끝까지 간다. 테스트가 인자로 준
-`StubSeeds`가 config보다 우선한다(`daemon.assemble_sites`).
+CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
+`stub-seeds.example.json`이 예시다 — 사이트 키 `"{gbm}/{fct}"` → 시드). config가
+아니라 플래그인 이유는 실전환 시 "지우는 것을 잊을 수 없게" 하기 위해서다.
+`assemble_sites`는 dict를 받으면 사이트별로, 단일 `StubSeeds`를 받으면 모든
+사이트에 적용한다 — 후자가 테스트가 쓰는 형태다.
 
 ## 테스트 트리 구조
 

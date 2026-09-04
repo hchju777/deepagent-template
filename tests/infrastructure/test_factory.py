@@ -39,11 +39,35 @@ async def test_rest_allowlist는_토폴로지에서_온다():
     assert (await adapters.rest.get("/admin")).status == "error"
 
 
-def test_스텁_시드_config와_dataclass의_필드가_같다():
-    # daemon이 StubSeeds(**cfg.model_dump())로 잇는다 — 이름으로만 묶여 있어서
-    # 한쪽에 필드를 더하면 BootError가 아니라 TypeError가 assemble_sites 밖으로 튄다.
-    import dataclasses
-    from src.config.schema_site import StubSeedsConfig
-    from src.infrastructure.factory import StubSeeds
-    assert ({f.name for f in dataclasses.fields(StubSeeds)}
-            == set(StubSeedsConfig.model_fields))
+def test_시드_파일의_알_수_없는_키는_예외가_아니라_문제가_된다(tmp_path):
+    # load_stub_seeds가 StubSeeds(**spec)로 잇는다 — 이름으로만 묶여 있어서 오타
+    # 하나가 TypeError로 조립 도중에 튀면 BootError가 아니라 스택트레이스로 죽는다.
+    import json
+    from src.patrol.daemon import load_stub_seeds
+    path = tmp_path / "seeds.json"
+    path.write_text(json.dumps({"mx/gumi": {"rest_responses": {}, "오타": 1}}),
+                    encoding="utf-8")
+    seeds, problems = load_stub_seeds(path)
+    assert seeds == {} and any("오타" in p for p in problems)
+
+
+def test_시드_파일이_깨져도_raise하지_않는다(tmp_path):
+    from src.patrol.daemon import load_stub_seeds
+    for content in ("{ 망가진 json", "[]", '{"mx/gumi": 3}'):
+        path = tmp_path / "seeds.json"
+        path.write_text(content, encoding="utf-8")
+        seeds, problems = load_stub_seeds(path)
+        assert seeds == {} and problems
+    seeds, problems = load_stub_seeds(tmp_path / "없는파일.json")
+    assert seeds == {} and problems
+
+
+def test_config의_명세_경로가_어댑터까지_간다():
+    # 스키마 검증자와 어댑터 저장은 각각 테스트가 있는데 둘을 잇는 줄만 없었다 —
+    # "함수는 되는데 호출부가 안 넘긴다"의 교과서적 형태.
+    from src.config.schema_site import SiteConfig
+    cfg = SiteConfig.model_validate({"target": {
+        "adapters": "real",
+        "rest": {"base_url": "http://x", "openapi_path": "/v3/api-docs"}}})
+    adapters = build_adapters(cfg, TOPO, clock=CLOCK)
+    assert adapters.rest._openapi_path == "/v3/api-docs"

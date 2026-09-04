@@ -47,3 +47,12 @@ def test_튜토리얼이_추가하라는_점검도_같은_창_안에_발화한�
     for spec in intervals:
         assert interval_seconds(spec) < window, (
             f"튜토리얼이 적은 간격 {spec}이 README가 약속한 {window}초 창보다 크다")
+
+
+def test_README_빠른_시작이_시드_파일을_실제로_가리킨다():
+    # 시드를 플래그로 옮기면 README 명령이 플래그 없이는 아무것도 안 보여준다 —
+    # 그 결합을 테스트가 잡는다(전에는 간격이 그랬다).
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    match = re.search(r"patrol run [^\n]*--stub-seeds (\S+)", readme)
+    assert match, "README 빠른 시작에 --stub-seeds가 없다"
+    assert (ROOT / match.group(1)).exists(), match.group(1)

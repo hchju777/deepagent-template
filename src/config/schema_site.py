@@ -101,6 +101,17 @@ class RestTarget(StrictModel):
     base_url: str
     auth: RestAuth | None = None
     entries: dict[str, RestEntry] = {}
+    # 드리프트 점검이 받아 올 명세의 경로. 등재 항목 path와 **같은 규칙**을 받는다 —
+    # 절대 경로가 아니거나 호스트를 담으면 base_url을 벗어나 인증 헤더가 다른
+    # 호스트로 나간다(계획 8이 entry.path에서 막은 것과 같은 구멍).
+    openapi_path: str = "/openapi.json"
+
+    @model_validator(mode="after")
+    def _openapi_path_is_sound(self):
+        problem = entry_path_problem(self.openapi_path)
+        if problem is not None:
+            raise ValueError(f"openapi_path: {problem}")
+        return self
 
     @model_validator(mode="after")
     def _entry_names_cannot_mimic_locators(self):
@@ -137,21 +148,6 @@ class Guards(StrictModel):
     max_concurrent: int = 4
 
 
-class StubSeedsConfig(StrictModel):
-    """스텁 어댑터가 돌려줄 응답. `adapters="stub"`일 때만 쓰인다.
-
-    이게 없으면 config.example의 점검이 전부 "404: 스텁에 등록되지 않은 끝점"으로
-    끝난다 — 예시가 배선만 보여주고 한 번도 성공하지 못하는 상태였다. README의
-    "5분 빠른 시작"이 실제로 돌려면 대상 시스템 없이도 결과가 나와야 한다.
-    """
-    rest_responses: dict[str, Any] = {}      # "/oee" 또는 "POST /summary/prod"
-    redis_data: dict[str, Any] = {}
-    redis_ttls: dict[str, int] = {}
-    mongo_collections: dict[str, list[dict]] = {}
-    kafka_messages: dict[str, list[dict]] = {}
-    kafka_offsets: dict[str, dict] = {}
-
-
 class TargetConfig(StrictModel):
     adapters: Literal["stub", "real"] = "stub"  # 스텁 ↔ 실구현 전환 (전작 패턴)
     redis: RedisTarget | None = None
@@ -160,7 +156,6 @@ class TargetConfig(StrictModel):
     rest: RestTarget | None = None
     code: CodeTarget | None = None
     guards: Guards = Guards()
-    stub_seeds: StubSeedsConfig | None = None
 
 
 class Schedule(StrictModel):

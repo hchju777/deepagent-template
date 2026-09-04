@@ -148,9 +148,16 @@ class StubKafka(KafkaInspectorPort):
 
 
 class StubRest(RestProberPort):
-    def __init__(self, responses, allowed, entries=None, *, clock):
+    def __init__(self, responses, allowed, entries=None, *, clock, openapi=None):
         self._responses, self._allowed, self._clock = responses, allowed, clock
         self._entries = entries or {}
+        self._openapi = openapi        # 드리프트 테스트가 "지금 대상의 명세"를 심는다
+
+    async def fetch_spec(self):
+        if self._openapi is None:
+            return _err("스텁에 명세가 등록돼 있지 않다", self._clock)
+        return _ok({"status_code": 200, "body": self._openapi},
+                   Envelope(observed_at=self._clock()))
 
     async def query(self, entry, params):
         # RealRest와 **같은 거부 규칙**을 쓴다(entry_call_problems 공유). 테스트가

@@ -24,7 +24,8 @@ from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import fingerprint
 from src.infrastructure.checkpointer import build_checkpointer, build_persistence
 from src.infrastructure.llm import build_chat_model
-from src.patrol.daemon import PatrolDaemon, assemble_sites
+from src.patrol.daemon import (PatrolDaemon, assemble_sites, load_stub_seeds,
+                               seeds_problems)
 from src.patrol.llm_judge import LlmBudget
 from src.presentation.mail import SmtpSender
 from src.presentation.report import render_md
@@ -64,6 +65,38 @@ async def _drive_daemon(daemon: PatrolDaemon, for_seconds: float | None) -> None
     await daemon.run(stop)
 
 
+def _load_seeds(args) -> tuple[dict | None, bool]:
+    """`--stub-seeds` 파일을 읽는다 — (시드, 실패했는가).
+
+    사이트를 조립하는 명령이 셋(patrol run·chat·case resume)이라 여기로 묶는다.
+    하나만 배선하면 언젠가 나머지가 조용히 다르게 돈다 — 케이스 종결 세 경로가
+    같은 발행 배선을 써야 하는 것과 같은 이유(CLAUDE.md 규율 8).
+    """
+    path = getattr(args, "stub_seeds", None)
+    if not path:
+        return None, False
+    seeds, problems = load_stub_seeds(Path(path))
+    for problem in problems:
+        print(f"[stub-seeds] {problem}", file=sys.stderr)
+    return (None, True) if problems else (seeds, False)
+
+
+def _seeds_mismatch(seeds, sites) -> bool:
+    """시드가 향한 사이트가 실제로 스텁을 쓰는지 확인하고, 어긋나면 알린다."""
+    known = {f"{rt.gbm}/{rt.fct}": rt.cfg.target.adapters for rt in sites}
+    problems = seeds_problems(seeds or {}, known)
+    for problem in problems:
+        print(f"[stub-seeds] {problem}", file=sys.stderr)
+    return bool(problems)
+
+
+def _add_stub_seeds(parser) -> None:
+    parser.add_argument(
+        "--stub-seeds", default=None,
+        help="스텁 어댑터가 돌려줄 가짜 응답 파일(사이트키 → 시드). 예시 트리를 "
+             "대상 시스템 없이 돌릴 때만 쓴다 — 실전환 시에는 이 플래그를 뺀다")
+
+
 def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     """기동 검증 → 사이트 조립 → 순찰 데몬 기동(포그라운드) — patrol run의 본체.
 
@@ -80,8 +113,18 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
             print(f"[{e.where}] {e.problem}", file=sys.stderr)
         return 1
 
+    # 시드는 config가 아니라 플래그다 — 프로덕션 명령줄에는 없고, 없으면 시드도
+    # 없다. 실전환 시 "지우는 것을 잊지 마라"를 메커니즘이 대신한다.
+    seeds, failed = _load_seeds(args)
+    if failed:
+        return 1
+
     clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
-    app, sites = assemble_sites(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
+    app, sites = assemble_sites(config_root, repo_root, env, clock=clock,
+                                stub_seeds=seeds, llm_factory=llm_factory)
+    if _seeds_mismatch(seeds, sites):
+        return 1
+
     p = build_persistence(app.store)
     store, repo, ledger, events = p.store, p.repo, p.ledger, p.events
     snapshots = p.snapshots
@@ -223,12 +266,18 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     # 않도록 assemble_sites 하나로 app과 sites를 함께 얻는다(_run_patrol과
     # 동일한 패턴) — 예전엔 _load_app이 만든 app을 store/repo 조회에만 쓰고
     # assemble_sites가 돌려준 app(_app2)은 쓰지 않고 버렸다.
+    seeds, failed = _load_seeds(args)
+    if failed:
+        return 1
     clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
     try:
-        app, sites = assemble_sites(config_root, Path(args.repo_root), env, clock=clock)
+        app, sites = assemble_sites(config_root, Path(args.repo_root), env, clock=clock,
+                                    stub_seeds=seeds)
     except ConfigError as exc:
         for problem in exc.problems:
             print(problem, file=sys.stderr)
+        return 1
+    if _seeds_mismatch(seeds, sites):
         return 1
 
     p = build_persistence(app.store)
@@ -451,12 +500,18 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     """
     config_root = Path(args.config_root)
     repo_root = Path(args.repo_root)
+    seeds, failed = _load_seeds(args)
+    if failed:
+        return 1
     clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
     try:
-        app, sites = assemble_sites(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
+        app, sites = assemble_sites(config_root, repo_root, env, clock=clock,
+                                    stub_seeds=seeds, llm_factory=llm_factory)
     except ConfigError as exc:
         for problem in exc.problems:
             print(problem, file=sys.stderr)
+        return 1
+    if _seeds_mismatch(seeds, sites):
         return 1
 
     by_key = {(rt.gbm, rt.fct): rt for rt in sites}
@@ -521,8 +576,12 @@ def main(argv=None) -> int:
     p_knowledge = sub.add_parser("knowledge")
     knowledge_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)
     p_validate = knowledge_sub.add_parser("validate", help="기동 검증 단독 실행 (CI용)")
+    p_validate.add_argument(
+        "--stub-seeds", default=None,
+        help="스텁 어댑터가 돌려줄 응답 파일. --live 드리프트 점검을 실제 접속 "
+             "없이 예행할 때 쓴다(rest_openapi에 '지금 대상의 명세'를 심는다)")
     p_validate.add_argument("--live", action="store_true",
-                            help="검사 8(Mongo readonly 롤)까지 live 접속으로 확인한다")
+                            help="대상에 실제로 접속해 Mongo 계정 롤과 pinned 명세 드리프트까지 확인한다")
     _add_common(p_validate)
 
     p_patrol = sub.add_parser("patrol")
@@ -532,6 +591,7 @@ def main(argv=None) -> int:
     p_patrol_run.add_argument(
         "--for-seconds", type=float, default=None,
         help="N초 뒤 데몬을 내린다(스모크·개발용). 0이면 기동만 확인하고 즉시 내린다")
+    _add_stub_seeds(p_patrol_run)
     _add_common(p_patrol_run)
     p_patrol_status = patrol_sub.add_parser(
         "status", help="하트비트와 사이트·점검별 최근 실행 요약. 메모리 백엔드는 안내만 한다")
@@ -555,6 +615,7 @@ def main(argv=None) -> int:
         "resume", help=_case_resume_note, description=_case_resume_note)
     p_case_resume.add_argument("case_id")
     p_case_resume.add_argument("--answer", required=True)
+    _add_stub_seeds(p_case_resume)
     _add_common(p_case_resume)
 
     p_chat = sub.add_parser(
@@ -562,6 +623,7 @@ def main(argv=None) -> int:
     p_chat.add_argument("--gbm", required=True)
     p_chat.add_argument("--fct", required=True)
     p_chat.add_argument("--symptom", default=None, help="미지정이면 stdin으로 받는다")
+    _add_stub_seeds(p_chat)
     _add_common(p_chat)
 
     args = parser.parse_args(argv)
@@ -593,8 +655,18 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "knowledge":
+        # --stub-seeds로 "지금 대상의 명세"를 심으면 실제 접속 없이 드리프트 점검을
+        # 예행할 수 있다(스텁 어댑터 경로). 실운영에서는 플래그 없이 real 어댑터가
+        # config의 openapi_path로 받아 온다.
+        seeds = None
+        if args.stub_seeds:
+            seeds, seed_problems = load_stub_seeds(Path(args.stub_seeds))
+            if seed_problems:
+                for problem in seed_problems:
+                    print(f"[stub-seeds] {problem}", file=sys.stderr)
+                return 1
         errors = validate_boot(config_root, env=env, repo_root=Path(args.repo_root),
-                               check_live=args.live)
+                               check_live=args.live, stub_seeds=seeds)
         if not errors:
             print("OK")
             return 0
