@@ -16,7 +16,9 @@ from dotenv import load_dotenv
 
 from src.application.answer import answer_case
 from src.application.events import case_status_event
-from src.application.intake import intake
+from src.application.intake import intake_turn
+from src.application.open_case import open_case
+from src.application.scope import resolve_scope
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
@@ -444,33 +446,36 @@ def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, cloc
 
 
 async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, app,
-                      on_event) -> int:
-    """접수(intake) → CaseRecord 개설 → interaction_policy="interactive"로 조사 →
-    awaiting_human 반복(stdin) → closed면 보고서 경로 출력. 어떤 경로로도 raise하지
-    않는다(워커·intake 둘 다 무raise 계약) — 여기서 새로 던질 것이 없다."""
-    intake_result = await intake(symptom, deps=rt.deps, topology=rt.deps.topology, clock=clock,
-                                 gbm=args.gbm, fct=args.fct, ask=ask)
+                      on_event, scope) -> int:
+    """케이스 개설 → 접수 턴 반복 → 조사 → awaiting_human 반복 → 보고서 경로 출력.
 
-    case_id = repo.new_case_id()
-    now = clock()
-    record = CaseRecord(
-        id=case_id, gbm=intake_result.gbm, fct=intake_result.fct,
-        fingerprint=fingerprint(intake_result.gbm, intake_result.fct, "chat", case_id),
-        symptom=intake_result.symptom, t0=now, target_locator=intake_result.target_locator,
-        origin="human", concern=args.concern,
-        requested_by=getattr(args, "requested_by", None),
-        status="open", created_at=now, updated_at=now)
-    repo.save(record)
-    on_event(case_status_event(case_id, "open", clock=clock))
-    if intake_result.qa:
-        # I3: 접수 문답(intake_result.qa)을 워커의 human:answer와 같은 형태로
-        # Store에 박제한다 — 안 하면 사람이 접수 때 답한 사실이 엔진에 전혀
-        # 전달되지 않는다(데이터 손실). evidence_refs_for_case(gate.py)가 이
-        # case_id의 저장본 전부를 그래프 초기 증거로 실어 나르므로, 여기 박아
-        # 두면 첫 라운드부터 리드가 볼 수 있다. qa가 비면(재질문 없이 한 번에
-        # 접수됐으면) 아무것도 남기지 않는다.
-        store.put_evidence(case_id, "human:intake", {"qa": intake_result.qa}, as_of=now)
-    print(f"케이스 {case_id} 접수 — 조사를 시작한다")
+    **케이스가 접수보다 먼저 열린다**(계획 12) — CLI에서는 차이가 안 보이지만
+    계획 13의 API가 첫 응답에 case_id를 실으려면 이 순서여야 하고, 접수 문답이
+    프로세스 사망을 견디려면 담을 케이스가 있어야 한다. 조립을 여기서 베끼지 않는
+    이유도 같다: API가 같은 함수들을 쓴다(규율 8).
+    """
+    record = open_case(repo=repo, store=store, symptom=symptom,
+                       gbm=scope.gbm, fct=scope.fct, concern=args.concern,
+                       requested_by=getattr(args, "requested_by", None),
+                       clock=clock, on_event=on_event)
+    case_id = record.id
+    print(f"케이스 {case_id} 접수 — 대상을 확인한다")
+
+    answer = None
+    while True:
+        turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
+                                 topology=rt.deps.topology, clock=clock, answer=answer,
+                                 max_turns=app.engine.max_intake_turns)
+        if turn.status != "asking":
+            for problem in turn.problems:
+                print(f"접수: {problem}", file=sys.stderr)
+            break
+        try:
+            answer = await ask(turn.question)
+        except EOFError:
+            print(f"입력이 끊겼다 — 케이스 {case_id}는 파킹된 채로 남는다. "
+                 f"'python -m src case resume {case_id} --answer <답변>'으로 나중에 재개할 수 있다.")
+            return 0
 
     result = await worker.run_once(case_id, interaction_policy="interactive")
     while result == "awaiting_human":
@@ -524,20 +529,31 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     if _seeds_mismatch(seeds, sites):
         return 1
 
-    # 접수 경계 한 곳에서만 판정한다(스펙 §3.5). 사이트를 고르기 전에 막으면
-    # 존재 여부가 새어 나가고, 조사를 시작한 뒤 막으면 이미 늦다.
+    by_key = {(rt.gbm, rt.fct): rt for rt in sites}
+    symptom = args.symptom or input("증상을 설명해 주세요: ")
+
+    # 사이트 축을 먼저 정한다 — 웹 사용자는 --gbm/--fct를 주지 않는다. 미확정이면
+    # 케이스를 만들지 않고 후보를 돌려준다(스코프 없는 케이스는 뜻이 없다).
+    scope = asyncio.run(resolve_scope(
+        symptom, sites=[(rt.gbm, rt.fct) for rt in sites],
+        deps=sites[0].deps if sites else None, clock=clock,
+        gbm=args.gbm, fct=args.fct))
+    if scope.status != "resolved":
+        for problem in scope.problems:
+            print(problem, file=sys.stderr)
+        for question in scope.questions:
+            print(question, file=sys.stderr)
+        print("--gbm/--fct로 사이트를 지정해 다시 실행하라", file=sys.stderr)
+        return 1
+
+    # 접수 경계 한 곳에서만 판정한다(스펙 §3.5). 조사를 시작한 뒤 막으면 이미 늦다.
     subject = getattr(args, "requested_by", None)
-    if not app.access.can_access(subject, args.gbm, args.fct):
-        print(f"주체 {subject!r}는 {args.gbm}/{args.fct}에 접근할 수 없다 "
+    if not app.access.can_access(subject, scope.gbm, scope.fct):
+        print(f"주체 {subject!r}는 {scope.gbm}/{scope.fct}에 접근할 수 없다 "
               f"(app.json의 access.allow)", file=sys.stderr)
         return 1
 
-    by_key = {(rt.gbm, rt.fct): rt for rt in sites}
-    rt = by_key.get((args.gbm, args.fct))
-    if rt is None:
-        print(f"사이트 {args.gbm}/{args.fct}가 등록돼 있지 않다(registry에서 비활성이거나 "
-             "삭제됨) — 접수할 수 없다", file=sys.stderr)
-        return 1
+    rt = by_key[(scope.gbm, scope.fct)]
 
     p = build_persistence(app.store)
     store, repo, ledger, events = p.store, p.repo, p.ledger, p.events
@@ -565,13 +581,11 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
         max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
         on_event=on_event, on_closed=on_closed)
 
-    symptom = args.symptom or input("증상을 설명해 주세요: ")
-
     async def ask(question: str) -> str:
         return input(f"[질문] {question}\n> ")
 
     return asyncio.run(_drive_chat(args, rt, repo, store, worker, symptom, clock, ask, app,
-                                   on_event))
+                                   on_event, scope))
 
 
 def main(argv=None) -> int:
@@ -638,8 +652,9 @@ def main(argv=None) -> int:
 
     p_chat = sub.add_parser(
         "chat", help="접수 대화로 케이스를 열고 대화형(interactive)으로 조사를 완주한다")
-    p_chat.add_argument("--gbm", required=True)
-    p_chat.add_argument("--fct", required=True)
+    # 웹 사용자는 이 쌍을 주지 않는다 — 안 주면 증상에서 해석한다(계획 12).
+    p_chat.add_argument("--gbm", default=None)
+    p_chat.add_argument("--fct", default=None)
     p_chat.add_argument("--symptom", default=None, help="미지정이면 stdin으로 받는다")
     p_chat.add_argument(
         "--requested-by", default=None,

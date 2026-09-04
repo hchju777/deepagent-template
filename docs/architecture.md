@@ -64,17 +64,41 @@ presentation  →  application  →  domain  ←  infrastructure
 ### 모드 ①: 사람이 문제 제기 (`chat`)
 
 ```
-CLI(chat) → intake() → CaseRecord 개설(origin="human")
+CLI(chat) → resolve_scope()  ── 미확정이면 후보를 보여주고 끝(케이스 없음)
+          → access.can_access()  ── 접수 경계의 유일한 접근 검사
+          → open_case()  ── **케이스가 먼저 열린다**(origin="human")
+          → intake_turn() 반복 ── 되물을 때마다 awaiting_human으로 파킹
           → InvestigationWorker.run_once(interaction_policy="interactive")
-          → (awaiting_human이면 stdin으로 답을 받아 resume_once 반복)
+          → (awaiting_human이면 stdin으로 답을 받아 answer_case 반복)
           → closed → 보고서 경로 출력
 ```
 
-`src/__main__.py`의 `_run_chat`/`_drive_chat`이 이 경로를 조립한다. `intake()`
-(`src/application/intake.py`)가 증상 문장을 받아 필요하면 되묻고, 최종적으로
-`gbm`/`fct`/`symptom`/`target_locator`를 확정한다. 접수 중 오간 문답은
-`store.put_evidence(case_id, "human:intake", ...)`로 케이스 Store에 박제돼
-첫 라운드부터 리드(lead LLM)가 볼 수 있다.
+**케이스가 접수보다 먼저 열린다**(계획 12). CLI에서는 차이가 안 보이지만, HTTP에서는
+첫 요청이 돌려줄 `case_id`가 있어야 하고 접수 문답이 프로세스 사망을 견디려면
+담을 케이스가 있어야 한다. 그래서 조립이 함수 넷으로 쪼개져 있고, 계획 13의 API가
+**같은 함수들**을 붙인다 — `_run_chat`이 조립을 독점하면 API가 그것을 베끼게 되고,
+케이스 종결 세 경로가 발행 배선에서 겪은 일이 반복된다(규율 8).
+
+- `resolve_scope`(`src/application/scope.py`) — `--gbm/--fct`를 안 주면 registry의
+  활성 사이트를 후보로 해석한다. **후보는 코드가 만들고 LLM은 그 안에서만 고른다**:
+  이 축은 어느 법인의 Redis/Mongo와 소스 저장소를 읽을지를 정하므로 자유 서술로 두면
+  증상 텍스트가 다른 법인의 조사를 여는 통로가 된다. 미확정이면 케이스를 만들지
+  않고 후보를 돌려준다 — 스코프 없는 케이스는 어떤 어댑터로 무엇을 조사할지도,
+  누가 볼 수 있는지도 정해지지 않아 뜻이 없다.
+- `open_case`(`src/application/open_case.py`) — 확정된 스코프와 **원문 증상**만으로
+  연다. `target_locator`는 아직 비어 있고 접수가 채운다. 사람이 처음 쓴 문장은
+  `human:symptom` 증거로 박제된다.
+- `intake_turn`(`src/application/intake.py`) — 한 번에 LLM 한 번. 더 물어야 하면
+  `awaiting_human` + `question_kind="intake"`로 파킹한다. **답은 이어가기 전에 먼저**
+  `human:intake_answer` 증거로 박제된다 — 미루면 그 사이 프로세스가 죽었을 때
+  사람의 답이 사라진다.
+- `answer_case`(`src/application/answer.py`) — `question_kind`를 보고 접수를 이어갈지
+  그래프를 재개할지 가른다. 접수 질문에 그래프 재개를 걸면 아직 없는 스레드를
+  재개하려다 실패하고, 그 실패가 F3 복구 경로를 타 사람 눈에는 "답했는데 조사가
+  깨졌다"로 보인다.
+
+접수 턴 상한은 `engine.max_intake_turns`가 정하고 코드가 강제한다(규율 6) — 넘으면
+대상 없이 조사에 들어간다.
 
 ### 모드 ②: 에이전트 자체 순찰 (`patrol run`)
 

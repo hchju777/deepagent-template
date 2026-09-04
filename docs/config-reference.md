@@ -49,6 +49,7 @@
 | `engine.subagent_budgets.data_prober` | int | 8 | data_prober의 `recursion_limit` |
 | `engine.subagent_budgets.code_tracer` | int | 6 | code_tracer의 `recursion_limit` |
 | `engine.subagent_budgets.recompute_verifier` | int | 4 | recompute_verifier의 `recursion_limit` |
+| `engine.max_intake_turns` | int | `3` | 접수 되묻기 상한. 턴으로 쪼개면 호출자가 무한히 부를 수 있어 코드가 쥔다(규율 6). 넘으면 대상 없이 조사에 들어간다 |
 | `engine.autonomous_question_policy` | `"default_and_log"` \| `"park"` | `"default_and_log"` | 순찰이 연 케이스(autonomous)에서 리드가 질문할 때: 보수적 기본값으로 자동 답하고 로그만 남길지, 사람에게 파킹할지 |
 | `investigations.max_concurrent` | int | 2 | 워커가 동시에 붙잡을 수 있는 케이스 수 |
 | `investigations.awaiting_human_timeout_h` | int | 72 | 파킹된 케이스가 이 시간(시간 단위) 넘게 답을 못 받으면 타임아웃 종결 |
@@ -83,9 +84,9 @@
 
 **기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
 `judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
-비어 있으면 안 되고(검사 17), 활성 사이트가 있고 `llm.profiles`(judge/
+비어 있으면 안 되고(검사 18), 활성 사이트가 있고 `llm.profiles`(judge/
 subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 반드시
-있어야 한다(검사 18) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
+있어야 한다(검사 19) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
 해당된다.
 
 ## `registry.json` — 사이트 목록
@@ -243,6 +244,22 @@ services:
 명명 규약은 강제되는 스키마가 아니라 관례다 — 실제로 어떤 env 키를 참조하는지는
 각 사이트 config의 `${...}` 값이 결정한다.
 
+### `access` — 요청 주체별 사이트 허용
+
+| 키 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `access.allow` | dict | `{}` | 주체 → 사이트 목록(`{"alice": ["mx/gumi", "mx/*"]}`). **비어 있으면 제한 없음** — 단일 팀 설치에 설정을 강요하지 않는다. 비어 있지 않으면 선언된 주체만, 선언된 사이트만 접근한다. 주체가 없는(익명) 요청은 거부된다 — 통과시키면 이 테이블이 장식이 된다 |
+
+읽기 전용이라고 폭발 반경이 작지 않다. 케이스 하나는 실질적으로 "그 법인의
+Redis/Mongo/Kafka와 소스 저장소를 읽는 LLM 에이전트를 돌리고 결과를 메일로
+보내라"는 요청이고, `awaiting_human`에 답을 넣을 수 있는 누구든 그 텍스트가 리드
+프롬프트에 직행한다(스펙 §3.5).
+
+**최소형이다 — 필드 1개(`CaseRecord.requested_by`), 술어 1개, 검사 1곳(접수 경계).**
+역할·권한 등급·리소스별 ACL은 없다. 실제 인증(토큰 검증·세션)은 전송 계층의 몫이고
+여기는 주체가 주어졌을 때의 판정만 한다. 사업부 자리의 `*`는 쓸 수 없다 — 전 법인
+허용은 선언을 비우는 것으로 표현한다(읽는 사람에게 그쪽이 분명하다).
+
 ## 기동 검증 항목 (`src/boot.py`)
 
 `python -m src knowledge validate`(`--live` 옵션 포함)가 도는 전체 목록. 하나만
@@ -263,10 +280,11 @@ services:
 12. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
 13. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
 14. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
-15. 지금 대상이 내놓는 명세가 pin과 같은가 — `--live` 지정 시에만, pin이 있는 사이트만. 우리 등재 항목에 영향을 주는 차이만 보고한다. **명세를 못 받는 것(연결 실패·4xx·비JSON 응답)도 기동을 막는다** — `--live`를 켠 사람은 "지금 실제와 맞는가"를 묻고 있고, 못 물어본 것을 조용히 통과시키면 확인 안 한 것이 "이상 없음"으로 둔갑한다. 검사 14(Mongo 롤)가 같은 형태다
-16. 각 점검의 프로브가 레지스트리에서 해석 가능한가
-17. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
-18. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
+15. `access.allow`의 사이트 키가 registry에 실재하는가 — 오타(`mx/gumii`)면 그 주체가 영원히 아무것도 못 보는데 아무도 모른다. `mx/*`는 사업부 실재만 본다
+16. 지금 대상이 내놓는 명세가 pin과 같은가 — `--live` 지정 시에만, pin이 있는 사이트만. 우리 등재 항목에 영향을 주는 차이만 보고한다. **명세를 못 받는 것(연결 실패·4xx·비JSON 응답)도 기동을 막는다** — `--live`를 켠 사람은 "지금 실제와 맞는가"를 묻고 있고, 못 물어본 것을 조용히 통과시키면 확인 안 한 것이 "이상 없음"으로 둔갑한다. 검사 14(Mongo 롤)가 같은 형태다
+17. 각 점검의 프로브가 레지스트리에서 해석 가능한가
+18. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
+19. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
 
-검사 14·15만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
+검사 14·16만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

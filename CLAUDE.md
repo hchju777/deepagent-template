@@ -157,7 +157,10 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 노드 로직(frame/select/execute/integrate/ask_human/conclude/verify) | `src/application/nodes.py` |
 | State 정의 | `src/application/state.py` |
 | 서브에이전트 실행 | `src/application/subagents.py` |
-| 접수(intake) | `src/application/intake.py` |
+| 접수(intake, 턴 단위) | `src/application/intake.py` |
+| 사이트 축 해석 | `src/application/scope.py` |
+| 케이스 개설(사람 경로) | `src/application/open_case.py` |
+| 답변 라우팅(접수 vs 조사) | `src/application/answer.py` |
 | 케이스 큐·워커(lease, resume, keepalive) | `src/application/worker.py` |
 | 케이스 종결·정리 | `src/application/close.py` |
 | 이벤트 매핑(State 변화 → EngineEvent) | `src/application/events.py` |

@@ -213,13 +213,11 @@ def test_chat_1왕복_대화형_흐름은_접수부터_보고서까지_완주한
         assert node not in out
 
 
-def test_접수_문답은_human_intake_증거로_박제된다(tmp_path, capsys, monkeypatch):
-    """I3 회귀: intake()가 모은 qa(재질문·답)가 store에 human:intake로 남아야
-    사람이 접수 때 답한 사실이 엔진에 전달된다 — 안 하면 데이터 손실이다.
+def test_접수_문답은_증거로_박제된다(tmp_path, capsys, monkeypatch):
+    """I3 회귀: 사람이 접수 때 답한 사실이 엔진에 전달돼야 한다 — 안 하면 데이터 손실.
 
-    intake 1차 호출이 missing 질문 하나를 내 재질문(ask)이 실제로 발생하게 하고,
-    그 답이 store.list_evidence(case_id)에 human:intake 소스로 남는지 확인한다.
-    (missing=[]인 기존 1왕복 chat 테스트는 qa가 비는 경로만 지나가므로 별도다.)
+    계획 12에서 접수가 턴으로 쪼개지며 소스가 human:intake_answer로 바뀌었고,
+    **마지막에 한 번이 아니라 턴마다** 박제된다 — 프로세스가 중간에 죽어도 남는다.
     """
     _chat_tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
@@ -255,13 +253,12 @@ def test_접수_문답은_human_intake_증거로_박제된다(tmp_path, capsys, 
     assert len(closed) == 1
     case_id = closed[0].id
 
-    intake_evidence = [r for r in store.list_evidence(case_id) if r.source == "human:intake"]
+    intake_evidence = [r for r in store.list_evidence(case_id)
+                       if r.source == "human:intake_answer"]
     assert len(intake_evidence) == 1
     body = store.get_evidence(case_id, intake_evidence[0].id)
-    # "at"은 intake() 내부의 실제 wall clock 호출이라 정확히 맞추지 않는다 —
-    # 질문·답이 human:intake로 그대로 실려 있는지만 확인한다.
-    assert body["qa"][0]["question"] == "최근 배포 이력이 있나요?"
-    assert body["qa"][0]["answer"] == "최근 배포 없음"
+    assert body["question"] == "최근 배포 이력이 있나요?"
+    assert body["answer"] == "최근 배포 없음"
 
 
 def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, capsys, monkeypatch):
@@ -355,7 +352,9 @@ def test_chat는_등록되지_않은_사이트면_exit_1(tmp_path, capsys, monke
     code = main(["chat", "--gbm", "mx", "--fct", "ghost", "--symptom", "s",
                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 1
-    assert "등록" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    # 사이트 해석이 후보 밖 지정을 먼저 잡는다 — 후보를 함께 보여 다시 제출하게 한다.
+    assert "mx/ghost" in err and "mx/gumi" in err
 
 
 def test_case_show_report는_저장된_보고서_파일을_그대로_보여준다(tmp_path, capsys, monkeypatch):
@@ -814,3 +813,57 @@ def test_주체가_레코드에_박제된다(tmp_path, monkeypatch):
                  "--config-root", str(tmp_path / "config"),
                  "--repo-root", str(tmp_path)]) == 0
     assert [r.requested_by for r in repo.list_by_status("closed")] == ["alice"]
+
+
+def test_chat이_스코프_없이도_돈다(tmp_path, monkeypatch):
+    # 웹 사용자와 같은 경로 — --gbm/--fct 없이 증상만 준다. 예시 트리는 활성
+    # 사이트가 하나라 LLM 없이 확정돼야 한다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                        ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+
+    code = main(["chat", "--symptom", "OEE가 이상하다",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0
+    assert [r.gbm for r in repo.list_by_status("closed")] == ["mx"]
+
+
+def test_스코프_미확정이면_후보를_보여주고_케이스를_안_연다(tmp_path, capsys, monkeypatch):
+    # 스코프 없는 케이스는 어떤 어댑터로 무엇을 조사할지가 정해지지 않는다 —
+    # 케이스를 만들고 되묻는 대신 후보를 주고 다시 제출하게 한다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    # 사이트를 둘로 늘려 지름길을 막고, 해석 LLM이 후보 밖 값을 준다.
+    reg = tmp_path / "config" / "registry.json"
+    data = json.loads(reg.read_text(encoding="utf-8"))
+    data["sites"].append({"gbm": "mx", "fct": "suwon"})
+    reg.write_text(json.dumps(data), encoding="utf-8")
+    (tmp_path / "config" / "fct").mkdir(exist_ok=True)
+    (tmp_path / "config" / "fct" / "suwon.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        ScriptedLLM(['{"gbm": "없는곳", "fct": "없는곳"}'])
+                        if profile == "l" else object())
+
+    code = main(["chat", "--symptom", "뭔가 이상하다",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "mx/gumi" in err and "mx/suwon" in err
+    assert repo.list_open() == []          # 케이스를 만들지 않았다
