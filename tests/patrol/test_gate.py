@@ -89,3 +89,20 @@ async def test_run_check에서_admit까지_사슬이_T0_증거를_엔진용으�
     assert result.action == "opened" and result.case.target_locator == "rest:/oee"
     refs = evidence_refs_for_case(store, result.case_id)
     assert len(refs) == 1 and refs[0].as_of == T and refs[0].complete is True
+
+
+def test_케이스로_복사한_증거도_잘린_이유를_지킨다():
+    # 이유가 스크래치에만 남고 케이스로 안 넘어가면 보고서 §4는 "⚠ 불완전"만
+    # 보여준다 — 조용한 생략이다. 보고서가 읽는 것은 케이스 증거다.
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    snap = store.put_evidence("patrol:mx:gumi:c", "src", {"v": 1}, as_of=T,
+                              complete=False,
+                              truncated_reason="line_code: 10개 중 3개만 사용(first:3)")
+    finding = Finding(id="c@1", gbm="mx", fct="gumi", check="c", target="rest:/x",
+                      summary="s", evidence_ids=[snap],
+                      scratch_case_id="patrol:mx:gumi:c", observed_at=T, judge="rule")
+    admit = admit_finding(finding, repo=repo, store=store, clock=lambda: T)
+    assert admit.action == "opened"
+    copied = store.list_evidence(admit.case_id)[-1]
+    assert copied.complete is False
+    assert "10개 중 3개" in (copied.truncated_reason or "")

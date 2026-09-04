@@ -87,6 +87,14 @@ def _body_env_problems(merged: dict, where: str) -> list[str]:
     치환 전에 보는 이유: 치환 뒤에는 토큰과 part code를 구별할 방법이 없다.
     """
     problems = []
+    # 시드 값은 스텁 응답 → 증거 body → 보고서 §4 → 서브에이전트 프롬프트로
+    # 평문 이동한다 — resolve와 같은 이유로 막는다.
+    seeds = (merged.get("target") or {}).get("stub_seeds")
+    for key in _env_refs(seeds):
+        problems.append(
+            f"{where}: target.stub_seeds.{key}에 env 참조가 있다 — "
+            f"시드 값은 증거로 평문 영속되므로 비밀값을 둘 수 없다")
+
     checks = (merged.get("patrol") or {}).get("checks") or {}
     if not isinstance(checks, dict):
         return problems

@@ -78,7 +78,7 @@
 | `report.mail.recipients` | list[str] | `[]` | 수신자 목록 |
 | `report.mail.username` / `.password` | str \| null / SecretStr \| null | null | SMTP 인증(선택) |
 | `report.mail.use_tls` | bool | `false` | TLS 사용 여부 |
-| `timezone` | str | `"Asia/Seoul"` | 보고서·스케줄 표시에 쓰는 IANA 타임존 |
+| `timezone` | str | `"Asia/Seoul"` | 보고서·스케줄 표시, **그리고 `clock` 해석기의 날짜 경계**를 정하는 IANA 타임존. `today`가 어느 날인지가 이 값으로 갈린다 — 해석 실패면 기동을 거부한다 |
 
 **기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
 `judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
@@ -136,7 +136,7 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `judge` | `"rule"` \| `"llm"` \| `"rule+llm"` | **필수** | 판정 방식 |
 | `schedule.interval` | str(`^\d+[smh]$`) | — | `interval`/`cron` 중 정확히 하나. 예: `"30s"`, `"5m"`, `"1h"`. 0은 불가 |
 | `schedule.cron` | str(5필드) | — | 표준 5필드 cron 표현식 |
-| `target` | str \| null | null | 토폴로지 locator(예: `"rest:/api/v1/lines/{line}/oee"`) 또는 등재 항목 이름(`"rest:summary_prod"`). 기동 검증이 각자의 이름공간에서 해석 가능한지 확인 |
+| `target` | str \| null | null | 토폴로지 locator(예: `"rest:/api/v1/lines/{line}/oee"`) 또는 등재 항목 이름(`"rest:summary_prod"`). 기동 검증이 각자의 이름공간에서 해석 가능한지 확인. **`{자리표시자}`가 든 locator를 `rest_get` 점검의 target으로 쓰면 그 문자열이 그대로 전송된다** — 토폴로지 패턴은 "이 모양의 끝점이 허용된다"는 뜻이지 값을 채워 주지는 않는다. 실제 값이 필요하면 자리표시자 없는 구체 경로를 쓰거나, 등재 항목(`target.rest.entries`) + `resolve`로 표현한다 |
 | `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest:/path→rest_get`, `rest:<이름>→rest_query`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
 | `params` | dict | `{}` | 프로브·rule 판정에 넘길 파라미터(아래 "rule 판정 4종" 참고) |
 | `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`의 `limit`) |
@@ -206,7 +206,7 @@ services:
   <service-name>: { repo: <name>, commit: <git commit hash> }
 ```
 
-기동 검증(검사 7)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
+기동 검증(검사 12)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
 실제로 존재하는지(`git cat-file`) 확인한다.
 
 ## `.env` — 비밀값
@@ -228,22 +228,28 @@ services:
 명명 규약은 강제되는 스키마가 아니라 관례다 — 실제로 어떤 env 키를 참조하는지는
 각 사이트 config의 `${...}` 값이 결정한다.
 
-## 기동 검증 11개 항목 (`src/boot.py`)
+## 기동 검증 항목 (`src/boot.py`)
 
 `python -m src knowledge validate`(`--live` 옵션 포함)가 도는 전체 목록. 하나만
-잘못돼도 죽지 않고 **전부 모아서** 보고한다.
+잘못돼도 죽지 않고 **전부 모아서** 보고한다. (개수를 제목에 적지 않는 이유:
+항목이 늘 때마다 이 문서가 조용히 낡는다 — 실제로 그랬다.)
 
 1. `app.json` 파싱·스키마
-2. `registry.json` 파싱·스키마
-3. 활성 사이트별 config 3계층 병합 + env 참조 해석
-4. 토폴로지 내부 정합성(`topology_problems`)
-5. 각 점검의 `target`이 해석되는가 — `rest:/path`·`redis:`·`mongo:`·`kafka:`는 토폴로지 locator로, `rest:<이름>`은 `target.rest.entries`로 해석하고, 등재 항목이면 `params.body`가 그 항목의 닫힌 스키마를 통과하는지까지 본다
-6. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
-7. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
-8. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
-9. 각 점검의 프로브가 레지스트리에서 해석 가능한가
-10. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
-11. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
+2. `app.timezone`이 해석 가능한 IANA 타임존인가 — `clock` 해석기의 날짜 경계가 이 값으로 정해지므로 오타가 나면 매일 하루씩 어긋난 질문이 나간다
+3. `registry.json` 파싱·스키마
+4. 활성 사이트별 config 3계층 병합 + env 참조 해석
+5. 토폴로지 내부 정합성(`topology_problems`)
+6. `adapters="real"`인데 `target.stub_seeds`가 남아 있지 않은가 — 시드는 스텁에서만 쓰여 실전환 시 조용히 무시된다
+7. 각 점검의 `target`이 해석되는가 — `rest:/path`·`redis:`·`mongo:`·`kafka:`는 토폴로지 locator로, `rest:<이름>`은 `target.rest.entries`로 해석하고, 등재 항목이면 `params.body`가 그 항목의 닫힌 스키마를 통과하는지까지 본다
+8. `resolve`가 있으면 target이 등재 항목인가 — 다른 target에 달면 런타임이 조용히 무시한다
+9. `resolve`의 각 키가 등재 항목 스키마에 있는가, 그리고 해석기 **모양**이 그 타입과 맞는가 — `clock`은 문자열 하나, 소스 해석기는 리스트다
+10. `from: "rest"` 해석기가 가리키는 항목이 실재하고 GET인가 / `mongo`·`redis` 해석기의 어댑터가 설정돼 있는가 / `mongo` 해석기의 `filter` 연산자가 허용 목록 안인가
+11. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
+12. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
+13. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
+14. 각 점검의 프로브가 레지스트리에서 해석 가능한가
+15. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
+16. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
 
-검사 8만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
+검사 13만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

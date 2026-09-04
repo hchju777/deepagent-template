@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import datetime
 
+from pydantic import model_validator
+
 from src.config.schema_app import StrictModel
 from src.domain.case import Verdict
 from src.knowledge.digest import canonical_digest
@@ -25,6 +27,19 @@ class EvidenceRecord(StrictModel):
     complete: bool = True
     truncated_reason: str | None = None   # complete=False면 왜 잘렸는지 — 조용한 생략 금지
     effective_as_of: datetime | None = None
+
+    @model_validator(mode="after")
+    def _incomplete_says_why(self):
+        """Envelope과 같은 불변식을 지지되, **raise하지 않고 채운다.**
+
+        Envelope은 어댑터가 자기 코드로 만들어 raise가 계약이지만, EvidenceRecord는
+        put_evidence 안에서 만들어진다 — 프로브·서브에이전트 도구 경로다. 거기서
+        raise하면 무raise 규율이 깨진다. 그래서 "이유를 안 남겼다"는 사실 자체를
+        기록해 보고서가 그것을 말하게 한다.
+        """
+        if not self.complete and not self.truncated_reason:
+            object.__setattr__(self, "truncated_reason", "이유 미기재")
+        return self
 
 
 class CaseStorePort(ABC):

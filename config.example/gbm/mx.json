@@ -62,7 +62,7 @@
       "api.oee_range": {
         "judge": "rule",
         "schedule": {
-          "interval": "5m"
+          "interval": "3s"
         },
         "target": "rest:/api/v1/lines/{line}/oee",
         "params": {
@@ -75,7 +75,7 @@
       "prod.badge_nonzero": {
         "judge": "rule",
         "schedule": {
-          "interval": "5m"
+          "interval": "3s"
         },
         "target": "rest:summary_prod",
         "params": {

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
 from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
-from src.infrastructure.query_rules import (entry_call_problems, filter_problems,
+from src.infrastructure.query_rules import (entry_call_problems, entry_schema, filter_problems,
                                             mongo_role_problems)
 from src.knowledge.deployment import load_deployment
 from src.knowledge.topology import load_topology, topology_problems
@@ -100,6 +100,12 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
 
         errors += [BootError(where, p) for p in topology_problems(topo)]
 
+        if cfg.target.adapters == "real" and cfg.target.stub_seeds is not None:
+            # 조용히 무시되면 운영자가 "테스트용 값이 살아 있나?" 하고 헷갈린다.
+            errors.append(BootError(
+                where, "adapters=\"real\"인데 target.stub_seeds가 남아 있다 — "
+                       "시드는 스텁에서만 쓰이므로 지우거나 adapters를 stub으로 둔다"))
+
         known = topo.locators()
         entries = dict(cfg.target.rest.entries) if cfg.target.rest else {}
         for name, check in cfg.patrol.checks.items():
@@ -126,12 +132,26 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                             errors.append(BootError(where, f"점검 {name!r}: {problem}"))
                         # 해석기가 없는 항목·스키마에 없는 키를 가리키면 매 순찰이
                         # error를 내고 끝난다 — 배포 시점에 시끄럽게 죽는 편이 낫다.
-                        schema = entry.body_schema or entry.query_schema
+                        schema = entry_schema(entry)
                         for key, spec in check.resolve.items():
-                            if key not in schema:
+                            declared = schema.get(key)
+                            if declared is None:
                                 errors.append(BootError(
                                     where, f"점검 {name!r}의 resolve 키 {key!r}가 "
                                            f"항목 {rest!r}의 스키마에 없다"))
+                            elif spec.from_ != "unfiltered":
+                                # 해석기가 내는 모양은 종류가 정한다: clock은 항상
+                                # 문자열 하나, 소스 해석기는 항상 리스트. 스키마와
+                                # 어긋나면 매 순찰이 "list[str]여야 한다"로 끝나는데,
+                                # 그건 정적으로 알 수 있는 것을 런타임에 미룬 것이다.
+                                is_list = declared.startswith("list[")
+                                wants_list = spec.from_ != "clock"
+                                if is_list != wants_list:
+                                    shape = "리스트" if wants_list else "문자열 하나"
+                                    errors.append(BootError(
+                                        where, f"점검 {name!r}의 해석기 {key!r}는 "
+                                               f"{spec.from_}라 {shape}를 내는데 "
+                                               f"항목 {rest!r}의 스키마는 {declared!r}이다"))
                             if spec.from_ != "rest":
                                 continue
                             source = entries.get(spec.entry)
@@ -147,13 +167,18 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                 elif check.target not in known:
                     errors.append(BootError(
                         where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))
-            if check.resolve and resolve_probe(check) != "rest_query":
+            # target **모양**으로 판정한다 — resolve_probe는 check.probe를 그대로
+            # 돌려주므로 probe만 박으면 이 검사가 통째로 비껴간다(등재 항목 이름
+            # 위장을 막은 것과 같은 계열의 우회다).
+            t_kind, _, t_rest = (check.target or "").partition(":")
+            is_entry_target = t_kind == "rest" and t_rest and not t_rest.startswith("/")
+            if check.resolve and not is_entry_target:
                 # resolve는 rest_query에서만 실행된다. 다른 target에 달면 런타임이
                 # 조용히 무시해, 사람이 "범위를 좁혔다"고 믿는 점검이 무필터 전체
                 # 스캔을 돈다 — 사람이 쓴 제약이 아무 효과 없이 통과하는 형태다.
                 errors.append(BootError(
                     where, f"점검 {name!r}에 resolve가 있는데 target {check.target!r}은 "
-                           f"등재 항목이 아니다 — resolve는 rest_query 프로브에서만 쓰인다"))
+                           f"등재 항목이 아니다 — resolve는 등재 항목 호출에서만 쓰인다"))
             for key, spec in check.resolve.items():
                 needed = {"mongo": cfg.target.mongo, "redis": cfg.target.redis}.get(spec.from_)
                 if spec.from_ in ("mongo", "redis") and needed is None:

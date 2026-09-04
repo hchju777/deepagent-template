@@ -85,12 +85,23 @@ python -m src knowledge validate --config-root config.example --repo-root .
 # 병합된 사이트 config와 값의 출처(어느 계층에서 왔는지) 확인
 python -m src config show --gbm mx --fct gumi --config-root config.example --repo-root .
 
-# 순찰 데몬을 5초만 띄워본다 — 점검이 한 번 이상 돈다
+# 순찰 데몬을 5초만 띄워본다 — 예시 점검은 3초 간격이라 그 안에 실제로 한 번 돈다
 python -m src patrol run --for-seconds 5 --config-root config.example --repo-root .
 
 # 케이스 목록(메모리 백엔드는 프로세스가 끝나면 사라진다)
 python -m src case list --config-root config.example --repo-root .
 ```
+
+`patrol run`은 여기서 실제로 끝까지 간다 — `api.oee_range` 점검이 스텁 응답
+`oee=512`에서 finding을 내고(`config.example`의 `target.stub_seeds`가 심어 둔
+값이다), 케이스가 열리고, 조사가 시작되고, `output/c-1.html`에 보고서가 쓰인다.
+`.env.example`의 `LLM_API_KEY=sk-example`은 가짜 키라 조사는 첫 LLM 호출에서
+멈추고, 보고서는 그 사실을 caveat("LLM 호출 실패")과 조사 단계 체크리스트
+(가설 수립 ❌, 나머지 ⬜ 미도달)로 **그대로 적는다**. 조용히 성공한 척하지 않는
+것이 이 시스템의 기본 동작이다. 실제 키를 넣으면 그 뒤가 이어진다.
+
+예시 점검의 `interval: "3s"`는 빠른 시작이 5초 안에 끝나라고 낮춰 둔 값이다 —
+실제 운영 간격은 분 단위로 잡는다.
 
 여기까지 됐다면 [docs/tutorial.md](docs/tutorial.md)로 넘어가 실제로 이상을
 하나 만들어서 순찰이 잡아내고 조사해 보고서를 내는 과정을 끝까지 따라가 보라.
@@ -115,7 +126,7 @@ src/
   presentation/   보고서 렌더링, 메일 발송
   knowledge/      토폴로지·배포 지식 로더
   config/         config 스키마·로더·병합·env 해석
-  boot.py         기동 검증(11개 검사) — 시끄럽게 실패하는 철학
+  boot.py         기동 검증 — 문제를 전부 모아서 시끄럽게 실패하는 철학
   __main__.py     CLI 엔트리
 tests/            src/와 미러링된 테스트 트리 (계층별)
 config.example/   동작이 검증된 예시 config 트리
@@ -127,6 +138,7 @@ ref/              LangGraph/LangChain 참고 자료(설계 시 사용)
 
 ## 상태
 
-v1 스코프 완결 — 설계 스펙(§0~§7 + 부록 A)의 계획 1~5가 전부 `main`에
-머지됐고, 360개 테스트가 통과한다. "개발 시스템"(코드 수정·데이터 정합성
+v1 스코프 완결 후 v2(운영 모니터링 서비스화) 진행 중 — 설계 스펙(§0~§7 +
+부록 A)의 계획 1~5와 v2 방향 문서의 계획 6~9가 `main`에 머지됐고, 414개
+테스트가 통과한다. "개발 시스템"(코드 수정·데이터 정합성
 보정 등 능동적 개입)은 별도 설계로 유보돼 있다.

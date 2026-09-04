@@ -126,7 +126,7 @@ def test_body는_선언된_키와_타입만_허용한다():
 
 
 def test_body의_누락은_문제가_아니다():
-    # 어떤 필드가 필수인지는 대상 API가 정하고 우리는 모른다(계획 9의 OpenAPI가
+    # 어떤 필드가 필수인지는 대상 API가 정하고 우리는 모른다(계획 10의 OpenAPI가
     # 답할 문제다). 여기서 강제하면 스키마를 우리 추측으로 좁히게 된다.
     from src.infrastructure.query_rules import entry_body_problems
     assert entry_body_problems({}, {"part_code": "list[str]"}) == []

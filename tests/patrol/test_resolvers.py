@@ -167,3 +167,62 @@ async def test_해석_결과는_문서_순서에_흔들리지_않는다():
     out_a = await resolve_params(spec, adapters=a, clock=lambda: T)
     out_b = await resolve_params(spec, adapters=b, clock=lambda: T)
     assert out_a.params["k"] == out_b.params["k"] == ["L1", "L2"]
+
+
+async def test_숫자는_숫자로_정렬된다():
+    # 결정론을 얻으려고 str(v)로 정렬하면 [2,10,1]이 [1,10,2]가 된다 —
+    # "매번 같지만 틀린 표본"이고, 스키마 검증도 어댑터도 이걸 못 막는다.
+    adapters = _adapters()
+    adapters.mongo = StubMongo({"v": [{"x": n} for n in [2, 10, 1, 20, 3]]},
+                               max_rows=100, clock=lambda: T)
+    out = await resolve_params(
+        _specs(k={"from": "mongo", "collection": "v", "field": "x",
+                  "cardinality": "first:3"}),
+        adapters=adapters, clock=lambda: T)
+    assert out.params["k"] == [1, 2, 3]
+
+
+async def test_타입이_섞여도_정렬이_raise하지_않는다():
+    # 타입명으로 먼저 그룹을 가르면 그룹 안은 동종이라 자연 비교가 안전하다.
+    adapters = _adapters()
+    adapters.mongo = StubMongo({"v": [{"x": 2}, {"x": "L1"}, {"x": 1}, {"x": "L0"}]},
+                               max_rows=100, clock=lambda: T)
+    out = await resolve_params(_specs(k={"from": "mongo", "collection": "v", "field": "x"}),
+                               adapters=adapters, clock=lambda: T)
+    assert out.params["k"] == [1, 2, "L0", "L1"]
+
+
+async def test_필드가_없는_행은_조용히_버리지_않는다():
+    # "5,000개 중 50개만 봤다"를 truncated로 남기는 규율이, "500행 중 3행에만 그
+    # 필드가 있었다"에는 안 걸리면 반쪽이다 — 뽑은 값 3개가 완전한 목록처럼 보인다.
+    adapters = _adapters()
+    adapters.mongo = StubMongo({"lines": [{"line_code": "L1"}, {"other": 1}, {}]},
+                               max_rows=100, clock=lambda: T)
+    out = await resolve_params(
+        _specs(line={"from": "mongo", "collection": "lines", "field": "line_code"}),
+        adapters=adapters, clock=lambda: T)
+    assert out.params == {"line": ["L1"]}
+    assert any("3행 중 1행" in t and "line_code" in t for t in out.truncated), out.truncated
+
+
+async def test_카디널리티_한도를_소스에_밀지_않는다():
+    # 밀면 대상 부하는 줄지만 전체 개수를 잃어 "10개 중 3개만 봤다"를 못 적는다.
+    # 정직성이 부하보다 비싸다는 판단을 배선으로 고정한다.
+    seen = {}
+    adapters = _adapters()
+    stub = StubMongo({"lines": [{"line_code": f"L{i}"} for i in range(10)]},
+                     max_rows=100, clock=lambda: T)
+    original = stub.find
+
+    async def spy(collection, filter, *, sort=None, limit=None):
+        seen["limit"] = limit
+        return await original(collection, filter, sort=sort, limit=limit)
+
+    stub.find = spy
+    adapters.mongo = stub
+    out = await resolve_params(
+        _specs(line={"from": "mongo", "collection": "lines", "field": "line_code",
+                     "cardinality": "first:3"}),
+        adapters=adapters, clock=lambda: T)
+    assert seen["limit"] is None
+    assert any("10개 중 3개" in t for t in out.truncated), out.truncated

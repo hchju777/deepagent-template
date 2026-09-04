@@ -123,7 +123,7 @@ def _type_problem(name: str, value, want: str) -> str | None:
         if not isinstance(value, list):
             return f"body 필드 {name!r}는 {want}여야 한다 (받은 타입: {type(value).__name__})"
         elem = _SCALARS.get(want[5:-1])
-        if elem is None:                    # 계획 9가 OpenAPI 유래 스키마를 넘길 때 대비
+        if elem is None:                    # 계획 10이 OpenAPI 유래 스키마를 넘길 때 대비
             return f"body 필드 {name!r}의 선언 타입 {want!r}을 알 수 없다"
         bad = [v for v in value if not _is_exact(v, elem)]
         return (f"body 필드 {name!r}의 원소 타입이 {want}와 다르다 (예: {bad[0]!r})"
@@ -144,7 +144,7 @@ def entry_body_problems(body: dict, schema: dict) -> list[str]:
     있다"로 되돌린다.
 
     필드 **누락**은 문제로 보지 않는다: 어떤 필드가 필수인지는 대상 API가 정하고
-    우리는 모른다(계획 9의 OpenAPI가 답할 문제). 여기서 강제하면 스키마를 우리
+    우리는 모른다(계획 10의 OpenAPI가 답할 문제). 여기서 강제하면 스키마를 우리
     추측으로 좁히게 된다.
     """
     problems = []
@@ -159,6 +159,18 @@ def entry_body_problems(body: dict, schema: dict) -> list[str]:
     return problems
 
 
+def entry_schema(entry) -> dict:
+    """등재 항목이 실제로 검증에 쓰는 닫힌 스키마.
+
+    boot과 어댑터가 **같은 식**을 봐야 한다. 한때 boot은 `body_schema or
+    query_schema`, 어댑터는 `query_schema if GET else body_schema`였는데,
+    `RestEntry._shape_is_sound`가 한쪽을 비워 두게 강제한 덕에 우연히 일치했을
+    뿐이다 — 스키마 원천이 하나만 더 생기면 조용히 갈린다(계획 7에서 claim의 두
+    구현이 갈라져 프로덕션 버그를 테스트가 못 잡은 것과 같은 형태).
+    """
+    return entry.query_schema if entry.method == "GET" else entry.body_schema
+
+
 def entry_call_problems(entry, params: dict) -> list[str]:
     """등재 항목 호출의 params를 검증한다 — GET이면 쿼리 키, POST면 body 스키마.
 
@@ -167,13 +179,12 @@ def entry_call_problems(entry, params: dict) -> list[str]:
     """
     if not isinstance(params, dict):
         # 포트 docstring이 "소켓에 나가기 전에 error로 거부한다"고 단정한다.
-        # 계획 9의 해석기가 실패 시 None을 돌려주면 즉시 이 경로다.
+        # 해석기가 실패 시 None을 돌려주면 즉시 이 경로다.
         return [f"params는 dict여야 한다 (받은 타입: {type(params).__name__})"]
     # GET도 POST와 같은 닫힌 스키마를 쓴다. 키만 보고 값을 안 보면 dict·list가
     # 그대로 쿼리에 실려(파이썬 repr, 파라미터 증식) 우리가 의도하지 않은 요청이
     # 나간다 — "닫힌 스키마를 통과해야 소켓에 나간다"가 반만 성립하던 자리다.
-    schema = entry.query_schema if entry.method == "GET" else entry.body_schema
-    return entry_body_problems(params, schema)
+    return entry_body_problems(params, entry_schema(entry))
 
 
 def entry_evidence_source(method: str, path: str, params: dict) -> str:

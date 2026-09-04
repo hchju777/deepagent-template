@@ -29,27 +29,35 @@ class ResolveResult(StrictModel):
     truncated: list[str] = []     # 카디널리티로 잘라낸 사실(보고서가 적어야 한다)
 
 
-def _pluck(rows, field: str) -> list:
-    """행 목록에서 field를 뽑아 중복을 없앤다(등장 순서 보존).
+def _pluck(rows, field: str) -> tuple[list, int, int]:
+    """행 목록에서 field를 뽑아 중복 없이 정렬해 돌려준다 — (값, 총 행 수, 쓴 행 수).
 
     **정렬해서 돌려준다.** Mongo find는 자연 순서(불안정)라 등장 순서를 그대로
     물려받으면 매 실행 다른 표본을 점검하고, 리스트 순서가 살아 있는
     canonical_digest 탓에 같은 질문이 여러 증거로 흩어진다. 결정론은 이 리포의
     최우선 규율이다.
+
+    쓴 행 수를 같이 돌려주는 이유: 500행 중 3행에만 그 필드가 있어도 값 3개는
+    완벽하게 정상으로 보인다. 버린 행을 세지 않으면 "일부만 봤다"가 사라진다 —
+    카디널리티 절단을 truncated로 남기는 것과 같은 규율이다.
     """
-    seen, out = set(), []
-    for row in rows if isinstance(rows, list) else []:
+    seen, out, used = set(), [], 0
+    rows = rows if isinstance(rows, list) else []
+    for row in rows:
         value = row.get(field) if isinstance(row, dict) else None
         if value is None:
             continue
+        used += 1
         # 집합 멤버십만 쓰면 0과 False, 1과 True, 1과 1.0이 병합된다 —
         # 파이썬에서 그것들이 같은 해시·같은 값이기 때문이다.
         key = (type(value).__name__, value)
         if key not in seen:
             seen.add(key)
             out.append(value)
-    # 타입이 섞여도 안전하게 정렬한다(int와 str이 한 필드에 섞일 수 있다).
-    return sorted(out, key=lambda v: (type(v).__name__, str(v)))
+    # 타입명으로 먼저 그룹을 가르면 그룹 안은 동종이라 자연 비교가 안전하다.
+    # str(v)로 정렬하면 [2,10,1]이 [1,10,2]가 된다 — 결정론을 얻으려다 "매번 같지만
+    # 틀린 표본"을 만들고, 스키마 검증도 어댑터도 그걸 못 막는다.
+    return sorted(out, key=lambda v: (type(v).__name__, v)), len(rows), used
 
 
 def _apply_cardinality(name: str, values: list, cardinality: str,
@@ -81,6 +89,9 @@ async def _read_values(name: str, spec, *, adapters: AdapterSet, problems: list,
         if adapters.mongo is None:
             problems.append(f"해석기 {name!r}: mongo 어댑터 미설정")
             return None
+        # 카디널리티 한도를 소스에 밀지 **않는다**. limit을 밀면 대상 부하는 줄지만
+        # 전체 개수를 모르게 되어 "500개 중 50개만 봤다"를 못 적는다 — 이 시스템에서
+        # 그 문장이 부하보다 비싸다. 조회량은 guards.max_rows가 이미 막는다.
         result = await adapters.mongo.find(spec.collection, spec.filter)
     else:                                    # redis
         if adapters.redis is None:
@@ -102,7 +113,10 @@ async def _read_values(name: str, spec, *, adapters: AdapterSet, problems: list,
     # rest 응답은 body가 곧 행 목록인 형태만 다룬다. {"items": [...]}처럼 감싸는
     # 응답은 body 경로 지정이 필요하고, 그건 실제로 그런 API를 만난 뒤에 연다.
     rows = data.get("body") if kind == "rest" and isinstance(data, dict) else data
-    return _pluck(rows, spec.field)
+    values, total, used = _pluck(rows, spec.field)
+    if total and used < total:
+        truncated.append(f"{name}: {total}행 중 {used}행만 {spec.field!r}를 갖고 있다")
+    return values
 
 
 async def resolve_params(specs: dict, *, adapters: AdapterSet,

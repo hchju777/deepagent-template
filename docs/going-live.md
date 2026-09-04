@@ -32,8 +32,10 @@
 }
 ```
 
-`target.adapters`를 `"real"`로 바꾸는 것이 스텁↔실구현 전환의 **유일한
-스위치**다(`src/infrastructure/factory.py`의 `build_adapters`). 비밀번호가
+`target.adapters`를 `"real"`로 바꾸는 것이 스텁↔실구현 전환의 스위치다
+(`src/infrastructure/factory.py`의 `build_adapters`). 예시 트리를 복사해
+시작했다면 `target.stub_seeds`(스텁이 돌려줄 가짜 응답)도 같이 지워라 —
+`adapters="real"`에서는 쓰이지 않으므로, 남겨 두면 기동 검증이 거부한다. 비밀번호가
 있는 법인만 `redis.password`/`mongo.username`+`mongo.password`를 추가한다
 (둘 다 `${ENV_KEY}` 참조로).
 

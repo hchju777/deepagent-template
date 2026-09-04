@@ -128,3 +128,19 @@ def test_해석기_스펙의_env_참조도_거부된다(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_site_config(tmp_path, "mx", "gumi", env={"MX_SECRET": "super-secret"})
     assert any("resolve" in p for p in exc.value.problems)
+
+
+def test_스텁_시드의_env_참조도_거부된다(tmp_path):
+    # 시드 값은 스텁 응답 → 증거 body → 보고서 §4 → 서브에이전트 프롬프트로
+    # 평문 이동한다. 같은 커밋이 형제 표면(resolve)에는 이 차단을 걸었다.
+    import json
+
+    from src.config.loader import ConfigError, load_site_config
+    (tmp_path / "gbm").mkdir()
+    (tmp_path / "gbm" / "mx.json").write_text(json.dumps({
+        "target": {"adapters": "stub", "rest": {"base_url": "http://x"},
+                   "stub_seeds": {"rest_responses": {"/x": {"token": "${MX_SECRET}"}}}},
+        "patrol": {"checks": {}}}))
+    with pytest.raises(ConfigError) as exc:
+        load_site_config(tmp_path, "mx", "gumi", env={"MX_SECRET": "sk-live-DEADBEEF"})
+    assert any("stub_seeds" in p for p in exc.value.problems)

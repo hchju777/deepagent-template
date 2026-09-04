@@ -181,7 +181,7 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 메일 발송(2단계 멱등) | `src/presentation/mail.py` |
 | 토폴로지·배포 지식 로더 | `src/knowledge/` |
 | config 스키마·로더·병합 | `src/config/` |
-| 기동 검증 11개 항목 | `src/boot.py` |
+| 기동 검증 항목 | `src/boot.py` |
 | CLI | `src/__main__.py` |
 
 ## 테스트

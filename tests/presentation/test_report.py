@@ -171,3 +171,19 @@ def test_render_md도_렌더링_실패에_최소_안내문을_돌려준다():
         clock=lambda: T)
     out = render_md(model)
     assert "보고서 조립 실패" in out and "c-1" in out
+
+
+def test_증거표는_잘린_이유를_보여준다():
+    # "됐다"고 보고된 렌더링 픽스가 실제로는 안 됐던 사례가 이 리포에 있다 —
+    # 렌더 결과를 직접 본다. 파이프는 표를 깨므로 이스케이프까지 확인한다.
+    evidence = [EvidenceRecord(id="ev-1", source="rest:/x", body_digest="a" * 64, as_of=T,
+                               complete=False,
+                               truncated_reason="line: 500행 중 50개만 사용|first:50")]
+    text = render_report(RECORD, verdict=None, evidence=evidence, case_file=None,
+                         clock=lambda: T)
+    assert "500행 중 50개만 사용" in text
+    # GFM이 열을 가르는 기준은 **이스케이프되지 않은** 파이프다 — 그 기준으로 센다
+    # (mistune은 이 리포의 의존성이 아니라 테스트에 들일 수 없다).
+    import re
+    row = next(l for l in text.splitlines() if l.startswith("| ev-1 "))
+    assert len(re.findall(r"(?<!\\)\|", row)) == 7, row   # 6열 표

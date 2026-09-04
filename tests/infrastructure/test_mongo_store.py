@@ -19,11 +19,14 @@ def db():
 
 def test_store_계약(db):
     store = MongoCaseStore(db)
-    e1 = store.put_evidence("c-1", "rest:/oee", {"oee": 512}, as_of=T, complete=False)
+    e1 = store.put_evidence("c-1", "rest:/oee", {"oee": 512}, as_of=T, complete=False,
+                            truncated_reason="500행 중 50개만 사용")
     e2 = store.put_evidence("c-1", "mongo:x", [1, 2])
     assert (e1, e2) == ("ev-1", "ev-2") and store.put_evidence("c-2", "s", None) == "ev-1"
     rec = store.get_evidence_record("c-1", "ev-1")
     assert rec.complete is False and rec.as_of == T and store.get_evidence("c-1", "ev-1") == {"oee": 512}
+    # 왕복에서 이유가 사라지면 보고서 §4가 "⚠ 불완전"까지만 말한다.
+    assert rec.truncated_reason == "500행 중 50개만 사용"
     assert [r.id for r in store.list_evidence("c-1")] == ["ev-1", "ev-2"]
     assert store.has_evidence("c-1", "ev-2") and not store.has_evidence("c-1", "ev-9")
     with pytest.raises(KeyError):

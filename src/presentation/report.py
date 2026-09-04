@@ -174,6 +174,15 @@ def _section3(verdict: Verdict | None) -> str:
     return "## 3. 조치 권고\n" + body
 
 
+def _cell(text) -> str:
+    """표 칸에 넣을 문자열을 안전하게 만든다.
+
+    이유·출처·요지는 대상 시스템이나 LLM에서 온 문자열이라 파이프·개행이 섞일 수
+    있다. 그대로 넣으면 그 행만 열 수가 어긋나 표 전체가 깨진다.
+    """
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
 def _section4(evidence: list[EvidenceRecord], evidence_summaries: dict[str, str] | None) -> str:
     if not evidence:
         return "## 4. 증거\n없음"
@@ -188,11 +197,12 @@ def _section4(evidence: list[EvidenceRecord], evidence_summaries: dict[str, str]
         as_of = ev.as_of.isoformat() if ev.as_of else "-"
         eff = ev.effective_as_of.isoformat() if ev.effective_as_of else "-"
         complete = ("완전" if ev.complete
-                    else f"⚠ 불완전({ev.truncated_reason})" if ev.truncated_reason
+                    else f"⚠ 불완전({_cell(ev.truncated_reason)})" if ev.truncated_reason
                     else "⚠ 불완전")
         digest = (ev.body_digest or "")[:12]
         summary = (evidence_summaries or {}).get(ev.id, digest)
-        lines.append(f"| {ev.id} | {ev.source} | {as_of} | {complete} | {eff} | {summary} |")
+        lines.append(f"| {_cell(ev.id)} | {_cell(ev.source)} | {as_of} | {complete} "
+                     f"| {eff} | {_cell(summary)} |")
     return "\n".join(lines)
 
 
@@ -216,7 +226,8 @@ def _section5(model: ReportModel) -> str:
     for t in model.plan_tasks:
         status = t.get("status", "?")
         note = "미조사" if status in _UNINVESTIGATED else (t.get("error") or "")
-        task_rows.append(f"| {t.get('id', '?')} | {t.get('role', '?')} | {status} | {note} |")
+        task_rows.append(f"| {_cell(t.get('id', '?'))} | {_cell(t.get('role', '?'))} "
+                         f"| {_cell(status)} | {_cell(note)} |")
     if not task_rows:
         lines.append("  없음")
     else:

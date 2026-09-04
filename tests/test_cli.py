@@ -436,33 +436,67 @@ def test_이벤트_저장이_실패해도_싱크는_raise하지_않는다():
     sink(EngineEvent(event="round_started", case_id="c-1", at=T))   # raise하면 실패
     assert len(seen) == 1            # 저장이 죽어도 stdout 출력은 계속된다
 
-
-def test_스텁_시드를_config로_넘길_수_있다(tmp_path, monkeypatch):
-    # CLI가 stub_seeds를 넘기는 경로가 없어 config.example의 점검이 한 번도 성공한
-    # 적이 없다("404: 스텁에 등록되지 않은 끝점"). README의 5분 빠른 시작이 걸린 자리다.
-    import asyncio
-    from datetime import datetime, timezone
-    from pathlib import Path
-
-    from src.config.loader import load_site_config
-    from src.domain.store import InMemoryCaseStore
-    from src.knowledge.topology import load_topology
-    from src.patrol.daemon import assemble_sites
-    from src.patrol.runner import run_check
+def test_config_show_출력은_다시_읽힌다(tmp_path, capsys, monkeypatch):
+    # alias 필드(resolve의 `from`)를 파이썬 이름(`from_`)으로 찍으면 그 출력을
+    # config로 되먹일 때 StrictModel이 거부한다 — 사람이 그렇게 쓴다.
     _tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
-    _write(tmp_path, "config/gbm/mx.json", json.dumps({
-        "target": {"adapters": "stub", "rest": {"base_url": "http://x"},
-                   "stub_seeds": {"rest_responses": {"/oee": {"oee": 512}}}},
-        "patrol": {"checks": {"api.oee": {
-            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/oee",
-            "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}}}},
-        "knowledge": {"root": str(tmp_path / "knowledge")}}))
-    T0 = datetime(2026, 9, 4, tzinfo=timezone.utc)
-    _app, sites = assemble_sites(tmp_path / "config", tmp_path, dict(ENV), clock=lambda: T0,
-                                 llm_factory=lambda name: object())
-    outcome = asyncio.run(run_check("mx", "gumi", "api.oee",
-                                    sites[0].cfg.patrol.checks["api.oee"],
-                                    adapters=sites[0].adapters, store=InMemoryCaseStore(),
-                                    clock=lambda: T0, llm=None, budget=None))
-    assert outcome.status == "finding", outcome.error
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["rest"] = {
+        "base_url": "http://x",
+        "entries": {"e": {"method": "POST", "path": "/x", "body_schema": {"d": "str"}}}}
+    data["patrol"] = {"checks": {"c": {
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body"},
+        "resolve": {"d": {"from": "clock", "expr": "today"}}}}}
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+
+    code = main(["config", "show", "--gbm", "mx", "--fct", "gumi",
+                 "--config-root", str(tmp_path / "config")])
+    printed = capsys.readouterr().out.split("\n# 출처")[0]
+    assert code == 0
+    from src.config.schema_site import SiteConfig
+    SiteConfig.model_validate(json.loads(printed))     # 되먹여도 통과해야 한다
+
+
+def test_patrol_run이_config_시드로_실제_점검을_성공시킨다(tmp_path, monkeypatch):
+    # config에 시드를 넣는 경로가 없어 config.example의 점검이 한 번도 성공한 적이
+    # 없었다("404: 스텁에 등록되지 않은 끝점"). 이전 회귀 테스트는 assemble_sites를
+    # 직접 불러서 argparse→validate_boot→_run_patrol 구간을 안 지났고, 그래서
+    # "5초 창 안에 아무것도 안 돈다"를 못 잡았다 — CLI를 그대로 태운다.
+    import asyncio
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["rest"] = {"base_url": "http://x"}
+    data["target"]["stub_seeds"] = {"rest_responses": {"/oee": {"oee": 512}}}
+    data["patrol"] = {"checks": {"api.oee": {
+        "judge": "rule", "schedule": {"interval": "3s"}, "target": "rest:/oee",
+        "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}}}}
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+
+    outcomes = []
+    real_daemon_cls = main_module.PatrolDaemon
+
+    class SpyDaemon(real_daemon_cls):
+        async def run(self, stop):
+            # 스케줄러 대신 점검을 직접 한 번 돌린다 — 데몬이 조립한 어댑터를
+            # 그대로 쓰므로 시드가 실제로 심겼는지가 결과에 나온다.
+            self.build()
+            site = self.sites[0]
+            real_record = self.ledger.record_run
+            self.ledger.record_run = lambda g, f, n, o: (outcomes.append((n, o)),
+                                                         real_record(g, f, n, o))[1]
+            await self.run_one("mx", "gumi", "api.oee",
+                               site.cfg.patrol.checks["api.oee"])
+
+    monkeypatch.setattr("src.__main__.PatrolDaemon", SpyDaemon)
+    code = main(["patrol", "run", "--for-seconds", "0",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0
+    # 시드가 안 심겼으면 "404: 스텁에 등록되지 않은 끝점"으로 error가 된다.
+    assert outcomes, "점검이 아예 안 돌았다"
+    name, outcome = outcomes[0]
+    assert (name, outcome.status) == ("api.oee", "finding"), outcome.error

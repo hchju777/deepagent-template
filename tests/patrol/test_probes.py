@@ -1,8 +1,9 @@
 import asyncio
 from datetime import datetime, timezone
 
-from src.config.schema_site import CheckConfig, SiteConfig
-from src.infrastructure.factory import StubSeeds, build_adapters
+from src.config.schema_site import CheckConfig, RestEntry, SiteConfig
+from src.infrastructure.factory import AdapterSet, StubSeeds, build_adapters
+from src.infrastructure.stubs import StubMongo, StubRest
 from src.knowledge.topology import Topology
 from src.patrol.probes import PROBES, resolve_probe
 
@@ -163,3 +164,44 @@ async def test_잘라낸_표본은_불완전으로_표시된다():
     assert result.status == "ok"
     assert result.envelope.complete is False
     assert "10" in (result.envelope.truncated_reason or "")
+
+
+async def test_대상이_알려준_절단_이유를_덮어쓰지_않는다():
+    # 우리가 표본을 자른 사실을 적으면서 대상이 알려준 절단을 지우면, 두 절단 중
+    # 하나가 증거에서 사라진다 — 조용한 생략이다.
+    from src.domain.envelope import Envelope, ProbeResult
+    from src.config.schema_site import RestEntry
+
+    class _Rest:
+        async def query(self, entry, params):
+            return ProbeResult(status="ok", data={"body": [], "request": {}},
+                               envelope=Envelope(observed_at=T, complete=False,
+                                                 truncated_reason="서버가 1페이지만 줬다"))
+
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = _Rest()
+    adapters.mongo = StubMongo({"lines": [{"c": f"L{i}"} for i in range(10)]},
+                               max_rows=100, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body"},
+        "resolve": {"line": {"from": "mongo", "collection": "lines", "field": "c",
+                             "cardinality": "first:3"}}})
+    out = await PROBES["rest_query"](adapters, check, clock=lambda: T, timezone_name="UTC")
+    reason = out.envelope.truncated_reason or ""
+    assert "서버가 1페이지만 줬다" in reason and "10개 중 3개" in reason, reason
+
+
+async def test_의도한_전체조회는_증거에_남는다():
+    # unfiltered의 존재 이유는 "해석 실패로 우연히 전체를 본 것"과 "일부러 전체를
+    # 본 것"을 코드가 구별하는 것이다. 증거에 안 남으면 런타임에는 그 구별이 없다.
+    entries = {"e": RestEntry(method="POST", path="/x", body_schema={"line": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /x": {"ok": 1}}, set(), entries, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body"},
+        "resolve": {"line": {"from": "unfiltered"}}})
+    out = await PROBES["rest_query"](adapters, check, clock=lambda: T, timezone_name="UTC")
+    assert out.status == "ok"
+    assert out.data["request"].get("unfiltered") == ["line"], out.data["request"]

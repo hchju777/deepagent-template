@@ -120,12 +120,26 @@ async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock,
             # (KnownRuleError가 존재하는 이유와 같은 논리).
             return _error("파라미터 해석 실패 — " + "; ".join(resolved.problems), clock)
         result = await adapters.rest.query(entry, {**static, **resolved.params})
-        if resolved.truncated and result.status == "ok":
+        if result.status != "ok":
+            return result
+        if resolved.omitted and isinstance(result.data, dict):
+            # unfiltered의 존재 이유는 "해석이 실패해 우연히 전체를 봤다"와 "일부러
+            # 전체를 봤다"를 코드가 구별하는 것이다. 증거에 남기지 않으면 그 구별이
+            # 판정 시점에는 사라진다 — 나중에 서브에이전트가 전체 조회 결과를
+            # "범위를 좁혀 확인함"으로 읽는다.
+            request = result.data.get("request")
+            if isinstance(request, dict):
+                result = result.model_copy(update={"data": {
+                    **result.data, "request": {**request, "unfiltered": resolved.omitted}}})
+        if resolved.truncated:
             # 잘린 표본으로 "이상 없음"을 단정하는 것을 verify가 자동으로 막는다
             # (불완전 증거의 부정 결론 금지) — 기존 메커니즘을 그대로 쓴다.
+            # 대상이 이미 알려준 절단 이유가 있으면 **잇는다**. 덮어쓰면 두 절단 중
+            # 하나가 증거에서 사라진다.
+            reasons = ([result.envelope.truncated_reason] if result.envelope.truncated_reason
+                       else []) + resolved.truncated
             envelope = result.envelope.model_copy(update={
-                "complete": False,
-                "truncated_reason": "; ".join(resolved.truncated)})
+                "complete": False, "truncated_reason": "; ".join(reasons)})
             return result.model_copy(update={"envelope": envelope})
         return result
     except Exception as exc:

@@ -77,3 +77,12 @@ def test_verdict_저장과_케이스_정리():
     assert [r.id for r in store.list_evidence("c-1")] == ["ev-2", "ev-3"]
     assert store.list_case_ids("patrol:") == ["patrol:mx:gumi:x"]
     assert store.purge_case("c-1") == 3 and store.list_evidence("c-1") == []   # 증거 2 + verdict 1
+
+
+def test_이유_없는_불완전은_그_사실을_기록한다():
+    # Envelope은 "complete=False면 이유 필수"를 검증자로 지키는데 EvidenceRecord는
+    # 안 지켰다 — 증거 층에서 이유가 다시 조용히 사라질 수 있었다. 여기서 raise하면
+    # 무raise 규율이 깨지므로(put_evidence는 프로브 안에서 불린다) 채워서 드러낸다.
+    from src.domain.store import EvidenceRecord
+    rec = EvidenceRecord(id="ev-1", source="s", body_digest="d", complete=False)
+    assert rec.truncated_reason and "미기재" in rec.truncated_reason

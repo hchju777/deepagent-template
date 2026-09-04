@@ -73,10 +73,30 @@ PatrolDaemon(스케줄러) → 주기마다 run_check() → CheckOutcome
 `src/patrol/daemon.py`의 `PatrolDaemon`이 스케줄링(`scheduler.py`,
 APScheduler)부터 큐·워커·정리(retention sweep)까지 한 프로세스로 조립한다.
 점검 하나(`CheckConfig`)는 `resolve_probe()`로 프로브를 고르고
-(`src/patrol/probes.py` — `rest_get`/`redis_get`/`mongo_recent`/`kafka_lag`
-4종, `target`의 kind 접두사로 기본 선택되거나 `probe` 필드로 명시), 그 결과를
-`judge`(`"rule"`|`"llm"`|`"rule+llm"`)로 판정한다. rule 판정은
+(`src/patrol/probes.py` — `rest_get`/`rest_query`/`redis_get`/`mongo_recent`/
+`kafka_lag` 5종, `target`의 kind 접두사로 기본 선택되거나 `probe` 필드로 명시),
+그 결과를 `judge`(`"rule"`|`"llm"`|`"rule+llm"`)로 판정한다. rule 판정은
 `src/patrol/rules.py`의 `range`/`exists`/`freshness`/`max` 4종뿐이다.
+
+`rest_query`(등재 항목 호출, POST 포함)만 프로브 앞에 **해석 단계**가 하나 더
+붙는다(`src/patrol/resolvers.py`):
+
+```
+check.resolve ──▶ resolve_params()
+                   │  from: "rest"|"mongo"|"redis" → 살아 있는 소스에서 값을 읽는다
+                   │  from: "clock"                → app.timezone 기준 날짜
+                   │  from: "unfiltered"           → 그 키를 일부러 생략(증거에 기록)
+                   ▼
+                 전부-또는-전무 ── 하나라도 못 내면 params를 비우고 호출 자체를 안 한다
+                   │              (빈 필터 요청은 0/0/0인지 전체 조회인지 구별 불가)
+                   ▼
+                 {정적 params.body} + {해석된 값} ──▶ 어댑터가 등재 스키마로 **재검증**
+                                                      ──▶ 소켓
+```
+
+값을 config에 적으면 즉시 썩기 때문이다(사업부/법인마다 다르고 매일 바뀐다).
+config는 값이 **어디서 오는지**만 선언한다. 잘라낸 표본·필드 없는 행은
+`Envelope.complete=False` + `truncated_reason`으로 증거까지 따라간다.
 
 게이트(`src/patrol/gate.py`)는 같은 지문(`fingerprint(gbm, fct, check, target)`)의
 열린 케이스가 있으면 새로 열지 않고 기존 케이스에 증거로 붙인다 — 중복 케이스

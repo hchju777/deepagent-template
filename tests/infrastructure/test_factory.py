@@ -37,3 +37,13 @@ async def test_rest_allowlist는_토폴로지에서_온다():
     adapters = build_adapters(site, TOPO, clock=CLOCK, stub_seeds=seeds)
     assert (await adapters.rest.get("/api/v1/lines/7/oee")).status == "ok"
     assert (await adapters.rest.get("/admin")).status == "error"
+
+
+def test_스텁_시드_config와_dataclass의_필드가_같다():
+    # daemon이 StubSeeds(**cfg.model_dump())로 잇는다 — 이름으로만 묶여 있어서
+    # 한쪽에 필드를 더하면 BootError가 아니라 TypeError가 assemble_sites 밖으로 튄다.
+    import dataclasses
+    from src.config.schema_site import StubSeedsConfig
+    from src.infrastructure.factory import StubSeeds
+    assert ({f.name for f in dataclasses.fields(StubSeeds)}
+            == set(StubSeedsConfig.model_fields))
