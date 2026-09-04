@@ -1,3 +1,4 @@
+import functools
 import asyncio
 from datetime import datetime, timezone
 
@@ -5,7 +6,11 @@ from src.config.schema_site import CheckConfig, RestEntry, SiteConfig
 from src.infrastructure.factory import AdapterSet, StubSeeds, build_adapters
 from src.infrastructure.stubs import StubMongo, StubRest
 from src.knowledge.topology import Topology
-from src.patrol.probes import PROBES, resolve_probe
+from src.patrol.probes import PROBES as _PROBES, resolve_probe
+
+# timezone_name은 키워드 필수 — 그 기본값이 배선 누락을 조용히 가렸다.
+PROBES = {name: functools.partial(fn, timezone_name="UTC") for name, fn in _PROBES.items()}
+rest_query = PROBES["rest_query"]
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 TOPO = Topology.model_validate({
@@ -70,7 +75,6 @@ async def test_rest_query는_check의_body를_그대로_넘긴다():
     from src.config.schema_site import RestEntry
     from src.infrastructure.factory import AdapterSet
     from src.infrastructure.stubs import StubRest
-    from src.patrol.probes import rest_query
     entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
                                          body_schema={"part_code": "list[str]"})}
     adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
@@ -85,7 +89,6 @@ async def test_rest_query는_check의_body를_그대로_넘긴다():
 
 async def test_rest_query는_어댑터가_없어도_raise하지_않는다():
     from src.infrastructure.factory import AdapterSet
-    from src.patrol.probes import rest_query
     check = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5m"},
                                         "target": "rest:summary_prod",
                                         "params": {"rule": "exists"}})
@@ -98,7 +101,6 @@ async def test_rest_query가_해석된_값을_보낸다():
     from src.config.schema_site import RestEntry
     from src.infrastructure.factory import AdapterSet
     from src.infrastructure.stubs import StubMongo, StubRest
-    from src.patrol.probes import rest_query
     entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
                                          body_schema={"line_code": "list[str]"})}
     adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
@@ -120,7 +122,6 @@ async def test_해석_실패면_대상을_호출하지_않는다():
     from src.config.schema_site import RestEntry
     from src.infrastructure.factory import AdapterSet
     from src.infrastructure.stubs import StubMongo, StubRest
-    from src.patrol.probes import rest_query
     entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
                                          body_schema={"line_code": "list[str]"})}
     called = []
@@ -148,7 +149,6 @@ async def test_잘라낸_표본은_불완전으로_표시된다():
     from src.config.schema_site import RestEntry
     from src.infrastructure.factory import AdapterSet
     from src.infrastructure.stubs import StubMongo, StubRest
-    from src.patrol.probes import rest_query
     entries = {"e": RestEntry(method="POST", path="/x",
                               body_schema={"line_code": "list[str]"})}
     adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
@@ -187,7 +187,7 @@ async def test_대상이_알려준_절단_이유를_덮어쓰지_않는다():
         "params": {"rule": "exists", "field": "body"},
         "resolve": {"line": {"from": "mongo", "collection": "lines", "field": "c",
                              "cardinality": "first:3"}}})
-    out = await PROBES["rest_query"](adapters, check, clock=lambda: T, timezone_name="UTC")
+    out = await PROBES["rest_query"](adapters, check, clock=lambda: T)
     reason = out.envelope.truncated_reason or ""
     assert "서버가 1페이지만 줬다" in reason and "10개 중 3개" in reason, reason
 
@@ -202,6 +202,6 @@ async def test_의도한_전체조회는_증거에_남는다():
         "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
         "params": {"rule": "exists", "field": "body"},
         "resolve": {"line": {"from": "unfiltered"}}})
-    out = await PROBES["rest_query"](adapters, check, clock=lambda: T, timezone_name="UTC")
+    out = await PROBES["rest_query"](adapters, check, clock=lambda: T)
     assert out.status == "ok"
     assert out.data["request"].get("unfiltered") == ["line"], out.data["request"]

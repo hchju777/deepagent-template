@@ -70,8 +70,8 @@ cp .env.example .env
 등) 별도로 편집하지 않아도 아래 명령들이 바로 통과한다. 참고로
 `app.json`이 `llm.profiles`(judge/subagent/lead)를 지정하고 있으면, 실제로
 LLM을 호출하는 점검이 하나도 없어도 **기동 검증이 `LLM_API_KEY` 존재 자체를
-요구한다**(§4.6 검사 11 — "키가 없으면 나중에 조용히 깨지느니 기동 시점에
-막는다"는 철학). 예시 사이트(`config.example/gbm/mx.json`)의 점검은
+요구한다**([기동 검증 항목](docs/config-reference.md#기동-검증-항목-srcbootpy) —
+"키가 없으면 나중에 조용히 깨지느니 기동 시점에 막는다"는 철학). 예시 사이트(`config.example/gbm/mx.json`)의 점검은
 `judge: "rule"`이라 실제로 LLM을 부르지는 않는다. 자신의 사이트를 채울 때는
 이 값들을 실제 접속 정보로 바꾸면 된다.
 
@@ -95,10 +95,12 @@ python -m src case list --config-root config.example --repo-root .
 `patrol run`은 여기서 실제로 끝까지 간다 — `api.oee_range` 점검이 스텁 응답
 `oee=512`에서 finding을 내고(`config.example`의 `target.stub_seeds`가 심어 둔
 값이다), 케이스가 열리고, 조사가 시작되고, `output/c-1.html`에 보고서가 쓰인다.
-`.env.example`의 `LLM_API_KEY=sk-example`은 가짜 키라 조사는 첫 LLM 호출에서
-멈추고, 보고서는 그 사실을 caveat("LLM 호출 실패")과 조사 단계 체크리스트
-(가설 수립 ❌, 나머지 ⬜ 미도달)로 **그대로 적는다**. 조용히 성공한 척하지 않는
-것이 이 시스템의 기본 동작이다. 실제 키를 넣으면 그 뒤가 이어진다.
+`.env.example`의 `LLM_BASE_URL`은 실재하지 않는 예시 호스트라 조사는 첫 LLM
+호출에서 멈추고(키가 틀린 게 아니라 연결이 안 된다), 보고서는 그 사실을
+caveat(`LLM 호출 실패 — OpenAIConnectionError`)과 조사 단계 체크리스트로
+**그대로 적는다** — 가설 수립과 판정이 ❌, 도달하지 못한 네 단계가 ⬜다.
+조용히 성공한 척하지 않는 것이 이 시스템의 기본 동작이다. 실제 게이트웨이를
+가리키면 그 뒤가 이어진다.
 
 예시 점검의 `interval: "3s"`는 빠른 시작이 5초 안에 끝나라고 낮춰 둔 값이다 —
 실제 운영 간격은 분 단위로 잡는다.

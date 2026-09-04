@@ -52,7 +52,7 @@ def make_tools(role, *, adapters, store, case_id):
             evidence_id = store.put_evidence(case_id, source, body,
                                              as_of=envelope.observed_at,
                                              complete=envelope.complete,
-                                 truncated_reason=envelope.truncated_reason,
+                                             truncated_reason=envelope.truncated_reason,
                                              effective_as_of=envelope.effective_as_of)
         else:
             evidence_id = store.put_evidence(case_id, source, body)

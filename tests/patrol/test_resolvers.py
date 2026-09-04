@@ -20,14 +20,14 @@ def _adapters():
 
 async def test_clock_해석기는_주입된_시계를_쓴다():
     out = await resolve_params(_specs(d={"from": "clock", "expr": "today"}),
-                               adapters=_adapters(), clock=lambda: T)
+                               adapters=_adapters(), clock=lambda: T, timezone_name="UTC")
     assert out.problems == [] and out.params == {"d": "2026-09-04"}
 
 
 async def test_unfiltered는_키를_아예_생략한다():
     # 빈 리스트를 보내는 것과 키를 안 보내는 것은 대상에서 다르게 동작한다.
     out = await resolve_params(_specs(g={"from": "unfiltered"}),
-                               adapters=_adapters(), clock=lambda: T)
+                               adapters=_adapters(), clock=lambda: T, timezone_name="UTC")
     assert out.params == {} and out.omitted == ["g"] and out.problems == []
 
 
@@ -38,14 +38,14 @@ async def test_해석기가_비면_문제로_보고한다():
     adapters.mongo = StubMongo({"lines": []}, max_rows=100, clock=lambda: T)
     out = await resolve_params(
         _specs(line={"from": "mongo", "collection": "lines", "field": "line_code"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.params == {} and any("line" in p for p in out.problems)
 
 
 async def test_어댑터가_없으면_문제로_보고하고_raise하지_않는다():
     out = await resolve_params(
         _specs(line={"from": "mongo", "collection": "lines", "field": "line_code"}),
-        adapters=_adapters(), clock=lambda: T)
+        adapters=_adapters(), clock=lambda: T, timezone_name="UTC")
     assert out.params == {} and out.problems
 
 
@@ -57,7 +57,7 @@ async def test_카디널리티는_잘라내고_그_사실을_남긴다():
     out = await resolve_params(
         _specs(line={"from": "mongo", "collection": "lines", "field": "line_code",
                      "cardinality": "first:3"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.params["line"] == ["L0", "L1", "L2"]
     assert any("line" in t and "10" in t for t in out.truncated)
 
@@ -69,7 +69,7 @@ async def test_중복은_제거되고_결과는_정렬된다():
                                max_rows=100, clock=lambda: T)
     out = await resolve_params(
         _specs(line={"from": "mongo", "collection": "lines", "field": "line_code"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.params["line"] == ["L1", "L2"]   # 정렬 — 문서 순서에 안 흔들린다
 
 
@@ -78,7 +78,7 @@ async def test_redis_해석기는_키_목록을_돌려준다():
     adapters.redis = StubRedis({"plan:1": "a", "plan:2": "b"}, ttls={},
                                max_rows=100, clock=lambda: T)
     out = await resolve_params(_specs(k={"from": "redis", "pattern": "plan:*"}),
-                               adapters=adapters, clock=lambda: T)
+                               adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert sorted(out.params["k"]) == ["plan:1", "plan:2"]
 
 
@@ -90,7 +90,7 @@ async def test_한_해석기가_실패해도_나머지를_계속_보고_전부�
         _specs(a={"from": "mongo", "collection": "lines", "field": "x"},
                b={"from": "redis", "pattern": "p:*"},
                c={"from": "clock", "expr": "today"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert len(out.problems) == 2                 # a는 빈 결과, b는 어댑터 없음
     assert out.params == {}                       # 하나라도 실패하면 전부 버린다
 
@@ -125,7 +125,7 @@ async def test_소스가_max_rows로_잘렸으면_그_사실이_전파된다():
                                max_rows=3, clock=lambda: T)
     out = await resolve_params(
         _specs(line={"from": "mongo", "collection": "lines", "field": "line_code"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.params["line"] == ["L0", "L1", "L2"]
     assert any("max_rows" in t for t in out.truncated), out.truncated
 
@@ -138,7 +138,7 @@ async def test_해석_실패가_있으면_부분_결과를_돌려주지_않는�
     out = await resolve_params(
         _specs(a={"from": "mongo", "collection": "lines", "field": "x"},
                c={"from": "clock", "expr": "today"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.problems and out.params == {}
 
 
@@ -149,7 +149,7 @@ async def test_0과_False는_다른_값으로_유지된다():
                                max_rows=100, clock=lambda: T)
     out = await resolve_params(
         _specs(k={"from": "mongo", "collection": "v", "field": "x"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     # bool과 int가 각자 살아남는다(정렬은 타입명 우선이라 bool이 앞선다)
     assert sorted(map(repr, out.params["k"])) == ["0", "1", "False", "True"]
 
@@ -164,8 +164,8 @@ async def test_해석_결과는_문서_순서에_흔들리지_않는다():
                         max_rows=100, clock=lambda: T)
     spec = _specs(k={"from": "mongo", "collection": "lines", "field": "c",
                      "cardinality": "first:2"})
-    out_a = await resolve_params(spec, adapters=a, clock=lambda: T)
-    out_b = await resolve_params(spec, adapters=b, clock=lambda: T)
+    out_a = await resolve_params(spec, adapters=a, clock=lambda: T, timezone_name="UTC")
+    out_b = await resolve_params(spec, adapters=b, clock=lambda: T, timezone_name="UTC")
     assert out_a.params["k"] == out_b.params["k"] == ["L1", "L2"]
 
 
@@ -178,7 +178,7 @@ async def test_숫자는_숫자로_정렬된다():
     out = await resolve_params(
         _specs(k={"from": "mongo", "collection": "v", "field": "x",
                   "cardinality": "first:3"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.params["k"] == [1, 2, 3]
 
 
@@ -188,7 +188,7 @@ async def test_타입이_섞여도_정렬이_raise하지_않는다():
     adapters.mongo = StubMongo({"v": [{"x": 2}, {"x": "L1"}, {"x": 1}, {"x": "L0"}]},
                                max_rows=100, clock=lambda: T)
     out = await resolve_params(_specs(k={"from": "mongo", "collection": "v", "field": "x"}),
-                               adapters=adapters, clock=lambda: T)
+                               adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.params["k"] == [1, 2, "L0", "L1"]
 
 
@@ -200,7 +200,7 @@ async def test_필드가_없는_행은_조용히_버리지_않는다():
                                max_rows=100, clock=lambda: T)
     out = await resolve_params(
         _specs(line={"from": "mongo", "collection": "lines", "field": "line_code"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert out.params == {"line": ["L1"]}
     assert any("3행 중 1행" in t and "line_code" in t for t in out.truncated), out.truncated
 
@@ -223,6 +223,6 @@ async def test_카디널리티_한도를_소스에_밀지_않는다():
     out = await resolve_params(
         _specs(line={"from": "mongo", "collection": "lines", "field": "line_code",
                      "cardinality": "first:3"}),
-        adapters=adapters, clock=lambda: T)
+        adapters=adapters, clock=lambda: T, timezone_name="UTC")
     assert seen["limit"] is None
     assert any("10개 중 3개" in t for t in out.truncated), out.truncated

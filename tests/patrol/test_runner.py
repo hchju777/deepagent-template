@@ -1,3 +1,4 @@
+import functools
 import asyncio
 from datetime import datetime, timezone
 
@@ -7,9 +8,13 @@ from src.infrastructure.factory import StubSeeds
 from src.infrastructure.llm import ScriptedLLM
 from src.patrol.ledger import InMemoryLedger
 from src.patrol.llm_judge import LlmBudget
-from src.patrol.runner import run_check
+from src.patrol.runner import run_check as _run_check
 from src.domain.patrol import scratch_case_id
 from tests.patrol.test_probes import _adapters
+
+# timezone_name은 이제 키워드 필수다(기본값 "UTC"가 배선 누락을 조용히 가렸다).
+# 시간대를 실제로 보는 테스트는 호출 시 덮어쓴다.
+run_check = functools.partial(_run_check, timezone_name="UTC")
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 

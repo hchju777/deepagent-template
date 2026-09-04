@@ -175,7 +175,7 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | LLM 판정 | `src/patrol/llm_judge.py` |
 | 순찰 게이트(케이스 개설/첨부/억제) | `src/patrol/gate.py` |
 | 순찰 데몬 조립 | `src/patrol/daemon.py` |
-| 보고서 데이터 유도(단계 체크리스트) | `src/presentation/report_model.py` |
+| 보고서 데이터 유도(단계 체크리스트) | `src/domain/report_model.py` |
 | 보고서 렌더링(마크다운) | `src/presentation/report.py` |
 | 보고서 렌더링(HTML, 기본 포맷) | `src/presentation/report_html.py` |
 | 메일 발송(2단계 멱등) | `src/presentation/mail.py` |

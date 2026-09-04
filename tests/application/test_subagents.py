@@ -125,3 +125,21 @@ async def test_code_tracer_각본_code_show_호출_후_보고(tmp_path):
     assert report.status == "ok"
     assert report.evidence_ids == ["ev-1"]
     assert "planned_time" in store.get_evidence("c-1", "ev-1")
+
+
+async def test_서브에이전트_도구도_잘린_이유를_증거에_남긴다():
+    # 순찰 경로(gate·probes)에는 회귀 테스트가 있는데 도구 경로만 무방비였다.
+    # EvidenceRecord가 이유 없으면 "이유 미기재"로 채우므로, 존재 여부가 아니라
+    # **원문 그대로인지**를 봐야 회귀가 잡힌다.
+    store = InMemoryCaseStore()
+    site = SiteConfig.model_validate({"target": {"mongo": {"url": "mongodb://x:27017"},
+                                                 "guards": {"max_rows": 2}}})
+    seeds = StubSeeds(mongo_collections={"twin_state": [{"line": i} for i in range(5)]})
+    adapters = build_adapters(site, TOPO, clock=lambda: T, stub_seeds=seeds)
+    tools, _created = make_tools("data_prober", adapters=adapters, store=store, case_id="c-1")
+    find = next(t for t in tools if t.name == "mongo_find")
+    await find.ainvoke({"collection": "twin_state", "filter_json": "{}", "limit": 5})
+
+    rec = store.list_evidence("c-1")[-1]
+    assert rec.complete is False
+    assert rec.truncated_reason and "미기재" not in rec.truncated_reason, rec.truncated_reason

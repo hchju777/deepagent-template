@@ -82,9 +82,9 @@
 
 **기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
 `judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
-비어 있으면 안 되고(검사 10), 활성 사이트가 있고 `llm.profiles`(judge/
+비어 있으면 안 되고(검사 15), 활성 사이트가 있고 `llm.profiles`(judge/
 subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 반드시
-있어야 한다(검사 11) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
+있어야 한다(검사 16) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
 해당된다.
 
 ## `registry.json` — 사이트 목록

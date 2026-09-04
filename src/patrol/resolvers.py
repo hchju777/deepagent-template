@@ -121,7 +121,7 @@ async def _read_values(name: str, spec, *, adapters: AdapterSet, problems: list,
 
 async def resolve_params(specs: dict, *, adapters: AdapterSet,
                          clock: Callable[[], datetime],
-                         timezone_name: str = "UTC") -> ResolveResult:
+                         timezone_name: str) -> ResolveResult:
     """해석기 스펙들을 실제 값으로 바꾼다. 절대 raise하지 않는다.
 
     첫 실패에서 멈추지 않고 전부를 훑어 problems에 모은다 — 기동 거부 철학과 같은

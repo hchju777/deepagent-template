@@ -28,8 +28,8 @@ def _error(observed_at, msg: str, *, llm_calls: int = 0) -> CheckOutcome:
 
 async def run_check(
     gbm: str, fct: str, name: str, check: CheckConfig, *,
-    adapters: AdapterSet, store, clock, llm=None, budget: LlmBudget | None = None,
-    timezone_name: str = "UTC",
+    adapters: AdapterSet, store, clock, timezone_name: str, llm=None,
+    budget: LlmBudget | None = None,
 ) -> CheckOutcome:
     """점검 하나를 실행하고 3상(ok/finding/skipped) + error를 돌려준다.
 

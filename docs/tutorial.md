@@ -20,7 +20,7 @@
       "prod.badge_nonzero": { "...": "기존 내용 그대로" },
       "twin_state.freshness": {
         "judge": "rule",
-        "schedule": { "interval": "1m" },
+        "schedule": { "interval": "3s" },
         "target": "mongo:twin_state",
         "params": { "rule": "freshness", "field": "ts", "max_age_s": 300 }
       }
@@ -55,9 +55,11 @@ python -m src patrol run --for-seconds 5 --config-root config.example --repo-roo
 그대로 보인다. 실제 데이터를 넣어 보려면 `target.stub_seeds.mongo_collections`에
 `twin_state`를 추가하면 된다.
 
-다만 **조사는 첫 LLM 호출에서 멈춘다**: `.env.example`의 `LLM_API_KEY`가 가짜
-키이기 때문이다. 보고서는 그 사실을 caveat과 조사 단계 체크리스트로 그대로
-적는다(가설 수립 ❌, 나머지 ⬜ 미도달). 실제 시스템에 붙이는 방법은
+다만 **조사는 첫 LLM 호출에서 멈춘다**: `.env.example`의 `LLM_BASE_URL`이
+실재하지 않는 예시 호스트라 연결 자체가 안 된다(키가 틀린 게 아니라 검증까지
+가지도 못한다). 보고서는 그 사실을 caveat(`LLM 호출 실패 —
+OpenAIConnectionError`)과 조사 단계 체크리스트로 그대로 적는다 — 가설 수립과
+판정이 ❌, 도달하지 못한 네 단계가 ⬜다. 실제 시스템에 붙이는 방법은
 [docs/going-live.md](going-live.md)를 보라.
 
 그럼 "조사가 끝까지 가서 판정과 검증이 나오는 전체 과정"은 어떻게

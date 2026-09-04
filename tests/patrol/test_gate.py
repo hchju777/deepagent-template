@@ -84,7 +84,7 @@ async def test_run_check에서_admit까지_사슬이_T0_증거를_엔진용으�
     store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
     adapters = _adapters(StubSeeds(rest_responses={"/oee": {"oee": 512}}))
     outcome = await run_check("mx", "gumi", "api.oee", _check(), adapters=adapters,
-                              store=store, clock=lambda: T)
+                              store=store, clock=lambda: T, timezone_name="UTC")
     result = admit_finding(outcome.finding, repo=repo, store=store, clock=lambda: T)
     assert result.action == "opened" and result.case.target_locator == "rest:/oee"
     refs = evidence_refs_for_case(store, result.case_id)

@@ -35,7 +35,9 @@
 `target.adapters`를 `"real"`로 바꾸는 것이 스텁↔실구현 전환의 스위치다
 (`src/infrastructure/factory.py`의 `build_adapters`). 예시 트리를 복사해
 시작했다면 `target.stub_seeds`(스텁이 돌려줄 가짜 응답)도 같이 지워라 —
-`adapters="real"`에서는 쓰이지 않으므로, 남겨 두면 기동 검증이 거부한다. 비밀번호가
+`adapters="real"`에서는 쓰이지 않으므로, 남겨 두면 기동 검증이 거부한다.
+**점검 간격도 같이 올려라** — 예시의 `interval: "3s"`는 빠른 시작이 5초 안에
+끝나라고 낮춰 둔 값이고, 그대로 실전환하면 운영 대상을 3초마다 두드린다. 비밀번호가
 있는 법인만 `redis.password`/`mongo.username`+`mongo.password`를 추가한다
 (둘 다 `${ENV_KEY}` 참조로).
 
@@ -175,7 +177,8 @@ python -m src patrol run --config-root config --repo-root .
 
 ## 체크리스트
 
-- [ ] 사이트마다 필요한 대상만 `target`에 채우고 `adapters: "real"`
+- [ ] 사이트마다 필요한 대상만 `target`에 채우고 `adapters: "real"`, `target.stub_seeds`는 삭제
+- [ ] **점검 간격을 예시의 `3s`에서 운영 값(분 단위)으로 올렸는가** — 예시 트리를 복사해 왔다면 그대로 두면 대상을 3초마다 두드린다
 - [ ] `.env`에 실제 값(URL·계정·비밀번호) — `config/*.json`에는 `${...}` 참조만
 - [ ] Mongo 계정을 readonly 롤로 생성하고 `knowledge validate --live`로 확인
 - [ ] **`target.rest.entries`의 항목을 한 개씩 사람이 읽고 승인** — 각각이 정말
