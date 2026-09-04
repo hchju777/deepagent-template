@@ -42,6 +42,11 @@ class CaseRecord(StrictModel):
                                           # attach 등 status와 무관한 갱신에도 움직이므로 타임아웃·
                                           # 보존 판단은 이 필드를 우선 본다(없으면 updated_at으로 대체)
     question: str | None = None         # awaiting_human으로 파킹된 질문(계획 4b I6) — resume 후 None
+    question_kind: Literal["intake", "investigation"] | None = None
+                                        # 어느 종류의 질문인가(계획 12) — 재개하는 쪽이
+                                        # 접수를 이어갈지 그래프를 재개할지 갈라야 한다.
+                                        # None은 계획 12 이전에 파킹된 레코드이고, 그때는
+                                        # 그래프 파킹만 존재했으므로 investigation으로 읽는다
     interaction_policy: Literal["interactive", "autonomous"] = "autonomous"
                                         # 재개하는 프로세스가 케이스를 연 프로세스가 아닐 수 있으므로
                                         # (CLI 두 경로, 향후 API 워커) 정책을 호출자 인수가 아니라

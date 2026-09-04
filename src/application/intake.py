@@ -17,8 +17,10 @@ CLI에서 이미 확정한 사이트를 그대로 넘긴다). "파싱 이중 실
 접수 자체가 조사를 막아서는 안 된다 — target_locator=None으로 진행하고 qa에
 실패를 기록할 뿐 여기서 raise하지 않는다.
 """
-from typing import Awaitable, Callable
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Literal
 
+from src.application.lifecycle import LifecycleError, transition
 from src.application.schemas import parse_structured
 from src.config.schema_app import StrictModel
 
@@ -103,3 +105,113 @@ async def intake(symptom: str, *, deps, topology, clock, gbm: str, fct: str,
 
     return IntakeResult(symptom=symptom, gbm=gbm, fct=fct,
                         target_locator=out.target_locator, qa=qa)
+
+
+# ── 턴 단위 접수(계획 12) ─────────────────────────────────────────────────
+# intake()는 ask 콜백으로 **프로세스 안에서** 되묻고 문답을 마지막에 한 번 돌려준다.
+# 그 사이에 클라이언트가 끊기거나 서버가 재시작되면 전부 사라진다. 턴으로 쪼개면
+# 한 호출이 LLM을 한 번 부르고, 더 물어야 하면 케이스를 파킹하며 질문을 레코드에
+# 남긴다 — 다음 호출이 답을 들고 이어간다.
+
+
+class IntakeTurn(StrictModel):
+    status: Literal["done", "asking", "error"]
+    question: str | None = None
+    target_locator: str | None = None
+    problems: list[str] = []
+
+
+_ANSWER_SOURCE = "human:intake_answer"
+_TURN_SOURCE = "intake:llm"
+
+
+def _turn_prompt(record, locators: list[str], answers: list[str]) -> str:
+    prompt = _prompt(record.symptom, record.gbm, record.fct, locators)
+    if answers:
+        prompt += "\n\n[추가 답변]\n" + "\n".join(f"- {a}" for a in answers)
+    return prompt
+
+
+async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
+                      clock: Callable[[], datetime], answer: str | None = None,
+                      max_turns: int = 3) -> IntakeTurn:
+    """접수 한 턴 — LLM을 한 번 부르고 끝나거나 파킹한다. 절대 raise하지 않는다.
+
+    `answer`가 있으면 **이어가기 전에 먼저 증거로 박제한다.** 미루면 그 사이
+    프로세스가 죽었을 때 사람의 답이 사라진다 — 계획 4b의 F3 경로가 human:answer에서
+    같은 판단을 했다.
+
+    `max_turns`는 **코드가 쥐는 상한**이다(규율 6). 턴으로 바꾸면 호출자가 무한히
+    부를 수 있는데, 넘으면 대상 없이 조사에 들어간다 — 기존 "이중 실패"와 같은
+    착지점이라 새 실패 모양을 만들지 않는다.
+    """
+    try:
+        record = repo.get(case_id)
+        if record is None:
+            return IntakeTurn(status="error", problems=[f"케이스 {case_id}를 찾을 수 없다"])
+        if record.status == "closed":
+            return IntakeTurn(status="error", problems=["닫힌 케이스는 접수할 수 없다"])
+        if record.question_kind == "investigation":
+            # 그래프가 파킹한 케이스에 접수를 이어가면 스레드를 잃는다. 재개는
+            # awaiting_human→investigating이어야 하고, 그것은 호출부의 분기다.
+            return IntakeTurn(status="error",
+                              problems=["조사 질문에 파킹된 케이스다 — case resume으로 답하라"])
+
+        now = clock()
+        if answer is not None:
+            store.put_evidence(case_id, _ANSWER_SOURCE,
+                               {"question": record.question, "answer": answer}, as_of=now)
+
+        answers = [str(store.get_evidence(case_id, r.id).get("answer"))
+                   for r in store.list_evidence(case_id) if r.source == _ANSWER_SOURCE]
+        turns = sum(1 for r in store.list_evidence(case_id) if r.source == _TURN_SOURCE)
+        if turns >= max_turns:
+            return _give_up(record, repo, store, clock,
+                            [f"접수 턴 상한({max_turns})을 넘겼다 — 대상 없이 조사한다"])
+
+        locators = sorted(topology.locators()) if topology is not None else []
+        out, err = await _call(deps, _turn_prompt(record, locators, answers))
+        store.put_evidence(case_id, _TURN_SOURCE,
+                           {"missing": out.missing if out else None,
+                            "target_locator": out.target_locator if out else None,
+                            "error": err}, as_of=now)
+        if out is None:
+            return _give_up(record, repo, store, clock, [f"접수 응답 파싱 실패 — {err}"])
+
+        if out.missing:
+            question = out.missing[0]
+            parked = record if record.status == "awaiting_human" \
+                else transition(record, "awaiting_human", clock=clock)
+            repo.save(parked.model_copy(update={"question": question,
+                                                "question_kind": "intake"}))
+            return IntakeTurn(status="asking", question=question)
+
+        return _finish(record, repo, clock, out.target_locator)
+    except Exception as exc:                                # noqa: BLE001 — 무raise 계약
+        return IntakeTurn(status="error",
+                          problems=[f"접수 실패 — {type(exc).__name__}: {exc}"])
+
+
+def _unpark(record, clock):
+    """파킹돼 있으면 open으로 되돌리고 질문을 지운다."""
+    base = transition(record, "open", clock=clock) if record.status == "awaiting_human" \
+        else record
+    return base.model_copy(update={"question": None, "question_kind": None})
+
+
+def _finish(record, repo, clock, target_locator) -> IntakeTurn:
+    repo.save(_unpark(record, clock).model_copy(update={"target_locator": target_locator}))
+    return IntakeTurn(status="done", target_locator=target_locator)
+
+
+def _give_up(record, repo, store, clock, problems: list[str]) -> IntakeTurn:
+    """접수를 포기하고 케이스를 조사 가능한 상태로 되돌린다.
+
+    고아로 남기지 않는 것이 핵심이다 — 파킹된 채 질문만 있고 아무도 답할 수 없는
+    케이스는 타임아웃까지 아무 일도 일어나지 않는다.
+    """
+    try:
+        repo.save(_unpark(record, clock))
+    except LifecycleError as exc:                           # noqa: BLE001
+        problems = [*problems, f"상태 복구 실패 — {exc}"]
+    return IntakeTurn(status="error", problems=problems)

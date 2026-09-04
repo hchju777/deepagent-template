@@ -21,10 +21,19 @@ class LifecycleError(Exception):
 
 
 # 상태 전이표 — 각 상태에서 갈 수 있는 다음 상태의 집합.
+# open↔awaiting_human 두 엣지는 **접수 되묻기** 전용이다(계획 12). 이 표가 처음
+# 쓰였을 때는 그래프만 파킹할 수 있었고 그래프는 investigating에서만 돌았다.
+# 접수는 케이스가 열린 직후(open) 되물을 수 있으므로 그 방향이 필요하고, 답을
+# 받아 접수가 끝나면 다시 open으로 돌아와 조사가 시작된다.
+#
+# **그래프가 파킹한 케이스는 awaiting_human→open으로 보내면 안 된다** — run_once가
+# 새 조사를 처음부터 시작해 스레드를 잃는다. 그쪽은 awaiting_human→investigating
+# (resume)이다. 두 종류의 구별은 CaseRecord.question_kind가 들고, 그것을 보는
+# 것은 intake_turn과 재개 호출부의 책임이다.
 ALLOWED: dict[CaseStatus, set[CaseStatus]] = {
-    "open": {"investigating", "closed"},
+    "open": {"investigating", "awaiting_human", "closed"},
     "investigating": {"awaiting_human", "closed"},
-    "awaiting_human": {"investigating", "closed"},
+    "awaiting_human": {"investigating", "open", "closed"},
     "closed": set(),
 }
 
