@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, SecretStr, model_validator
 
 from src.config.schema_app import StrictModel
+from src.domain.concern import Concern
 
 _INTERVAL = re.compile(r"^\d+[smh]$")
 
@@ -230,8 +231,19 @@ ResolverSpec = Annotated[
     Field(discriminator="from_")]
 
 
+_AXIS_SPECIFIC_RULES = {"all_zero", "expected_state"}
+"""concern 축 위에서만 뜻이 있는 rule — 이것들을 쓰면 concern을 명시해야 한다.
+
+rule 이름과 concern을 묶는 것이 아니다(그건 추측이다). "이 rule을 골랐다면 축을
+생각했을 것"이라는 사실만 쓴다 — 우리가 그 축을 위해 만든 rule이기 때문이다.
+"""
+
+
 class CheckConfig(StrictModel):
     judge: Literal["rule", "llm", "rule+llm"]
+    # 이 점검이 무엇을 묻는가 — finding·케이스·보고서·수신자가 전부 이 값을 따른다.
+    # 기본값 근거는 domain/patrol.py의 Concern docstring에 있다.
+    concern: Concern = "system"
     schedule: Schedule
     target: str | None = None          # 토폴로지 locator 또는 등재 항목 이름(rest:<이름>) — 해석 검증은 boot에서
     probe: str | None = None           # 프로브 레지스트리 이름. None이면 target의 kind로 기본 프로브 선택
@@ -239,6 +251,29 @@ class CheckConfig(StrictModel):
     sample: int | None = None
     on_budget_exhausted: Literal["skip", "escalate"] = "skip"
     resolve: dict[str, ResolverSpec] = {}   # 값이 아니라 값이 어디서 오는지를 선언한다
+
+    @model_validator(mode="after")
+    def _axis_specific_rules_declare_concern(self):
+        """`all_zero`·`expected_state`를 쓰면서 concern을 안 적으면 거부한다.
+
+        기본값 `"system"`을 둔 대가다. 원래 근거였던 "지금 있는 rule은 전부
+        파이프라인 신호"는 **거짓이었다** — `max`를 불량 수에 걸면 기존 rule로 쓴
+        현장 이상이고, 그건 조용히 `system`으로 라우팅된다. 그 구멍을 전부 막으려면
+        concern을 필수로 올려야 하는데, 그러면 라우팅과 무관한 픽스처 ~90곳이
+        이 필드를 적게 된다.
+
+        그래서 **우리가 방금 그 축을 위해 만든 두 rule**에만 답을 요구한다. rule
+        이름으로 concern을 추측하지는 않는다 — 큐 깊이가 전부 0인 것은 파이프라인
+        신호이므로 `"system"`이라고 적으면 통과한다. 요구하는 것은 사람이 한 번
+        답하는 것뿐이다.
+        """
+        rule = self.params.get("rule") if isinstance(self.params, dict) else None
+        if rule in _AXIS_SPECIFIC_RULES and "concern" not in self.model_fields_set:
+            raise ValueError(
+                f"rule {rule!r}은 concern 축 위에서만 뜻이 있다 — concern을 "
+                f'"system" 또는 "operation"으로 명시하라(기본값에 기대면 운영 '
+                f"이상이 플랫폼 담당에게 조용히 간다)")
+        return self
 
     @model_validator(mode="after")
     def _static_and_resolved_keys_are_disjoint(self):

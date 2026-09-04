@@ -20,6 +20,7 @@ from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
 from src.domain.cases import CaseRecord
+from src.domain.concern import CONCERNS
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import fingerprint
 from src.infrastructure.checkpointer import build_checkpointer, build_persistence
@@ -449,7 +450,7 @@ async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, a
         id=case_id, gbm=intake_result.gbm, fct=intake_result.fct,
         fingerprint=fingerprint(intake_result.gbm, intake_result.fct, "chat", case_id),
         symptom=intake_result.symptom, t0=now, target_locator=intake_result.target_locator,
-        origin="human", status="open", created_at=now, updated_at=now)
+        origin="human", concern=args.concern, status="open", created_at=now, updated_at=now)
     repo.save(record)
     on_event(case_status_event(case_id, "open", clock=clock))
     if intake_result.qa:
@@ -623,6 +624,10 @@ def main(argv=None) -> int:
     p_chat.add_argument("--gbm", required=True)
     p_chat.add_argument("--fct", required=True)
     p_chat.add_argument("--symptom", default=None, help="미지정이면 stdin으로 받는다")
+    p_chat.add_argument(
+        "--concern", choices=CONCERNS, default="system",
+        help="무엇이 이상한가 — system(파이프라인 고장) 또는 operation(데이터는 "
+             "흐르는데 현장 상태가 이상). 메일 수신자와 리드의 조사 방향을 가른다")
     _add_stub_seeds(p_chat)
     _add_common(p_chat)
 

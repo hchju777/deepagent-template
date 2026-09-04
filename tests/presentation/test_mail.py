@@ -22,14 +22,14 @@ class RecordingSender(NullSender):
 async def test_기록_먼저_발송_그다음_sent():
     ledger, sender = InMemoryLedger(), RecordingSender()
     assert await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
-                             cfg=CFG, clock=lambda: T) == "sent"
+                             cfg=CFG, clock=lambda: T, concern="system") == "sent"
     assert sender.sent == [("제목", ["b@y"])] and ledger.pending_sends() == []
 
 
 async def test_발송_실패는_pending으로_남고_재시도가_비운다():
     ledger, sender = InMemoryLedger(), RecordingSender(fail_times=1)
     assert await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
-                             cfg=CFG, clock=lambda: T) == "failed"
+                             cfg=CFG, clock=lambda: T, concern="system") == "failed"
     assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-1"]
     done = await retry_pending(sender=sender, ledger=ledger, cfg=CFG, clock=lambda: T,
                                render=lambda rec: ("제목", "본문", None))
@@ -38,13 +38,13 @@ async def test_발송_실패는_pending으로_남고_재시도가_비운다():
 
 async def test_중복_발송은_억제되고_비활성은_건너뛴다():
     ledger, sender = InMemoryLedger(), RecordingSender()
-    await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger, cfg=CFG, clock=lambda: T)
+    await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger, cfg=CFG, clock=lambda: T, concern="system")
     assert await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
-                             cfg=CFG, clock=lambda: T) == "duplicate"
+                             cfg=CFG, clock=lambda: T, concern="system") == "duplicate"
     assert len(sender.sent) == 1
     off = MailConfig()
     assert await send_report("c-2", "제목", "본문", sender=sender, ledger=ledger,
-                             cfg=off, clock=lambda: T) == "skipped"
+                             cfg=off, clock=lambda: T, concern="system") == "skipped"
 
 
 async def test_mark_sent_실패는_재발송을_부르지_않는다():
@@ -53,7 +53,7 @@ async def test_mark_sent_실패는_재발송을_부르지_않는다():
             raise RuntimeError("레저 블립")
     ledger, sender = FlakyLedger(), RecordingSender()
     assert await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
-                             cfg=CFG, clock=lambda: T) == "sent"
+                             cfg=CFG, clock=lambda: T, concern="system") == "sent"
     assert len(sender.sent) == 1                      # 발송은 됐고 raise도 없다
 
 
@@ -61,7 +61,7 @@ async def test_render_실패는_남은_pending을_막지_않는다():
     ledger, sender = InMemoryLedger(), RecordingSender(fail_times=2)
     for cid in ("c-1", "c-2"):
         await send_report(cid, "제목", "본문", sender=sender, ledger=ledger,
-                          cfg=CFG, clock=lambda: T)
+                          cfg=CFG, clock=lambda: T, concern="system")
     def render(rec):
         if rec["send_id"] == "report:c-1":
             raise ValueError("망가진 레코드")
@@ -75,7 +75,7 @@ async def test_render_실패는_남은_pending을_막지_않는다():
 async def test_재발송은_기록된_수신자에게_간다():
     ledger, sender = InMemoryLedger(), RecordingSender(fail_times=1)
     await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
-                      cfg=CFG, clock=lambda: T)
+                      cfg=CFG, clock=lambda: T, concern="system")
     changed = MailConfig(enabled=True, host="smtp", sender="a@x", recipients=["새사람@z"])
     await retry_pending(sender=sender, ledger=ledger, cfg=changed, clock=lambda: T,
                         render=lambda rec: ("제목", "본문", None))
@@ -144,3 +144,64 @@ def test_html이_없으면_평문만_보낸다(monkeypatch):
     asyncio.run(SmtpSender(cfg).send("제목", "평문", recipients=["b@x"]))
     types_seen = {part.get_content_type() for part in sink["message"].walk()}
     assert "text/html" not in types_seen
+
+
+_ROUTED = MailConfig(enabled=True, host="smtp", sender="a@x", recipients=["platform@y"],
+                     recipients_by_concern={"operation": ["ops@y"]})
+
+
+async def test_operation_케이스는_다른_수신자에게_간다():
+    # concern 축의 존재 이유가 여기서 처음으로 실제 효과를 낸다 — 그 전까지는
+    # 필드가 실려 다니기만 한다.
+    ledger, sender = InMemoryLedger(), RecordingSender()
+    await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
+                      cfg=_ROUTED, clock=lambda: T, concern="operation")
+    assert sender.sent == [("제목", ["ops@y"])]
+
+
+async def test_선언되지_않은_concern은_기본_수신자로_간다():
+    # 전부 적으라고 강제하면 같은 목록을 두 번 쓰게 되고, 한쪽만 고치는 순간
+    # 조용히 갈라진다.
+    ledger, sender = InMemoryLedger(), RecordingSender()
+    await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
+                      cfg=_ROUTED, clock=lambda: T, concern="system")
+    assert sender.sent == [("제목", ["platform@y"])]
+
+
+async def test_레저의_수신자_기록도_concern을_따른다():
+    # target이 실제 수신자와 다르면 "누구에게 갔나"를 사후에 알 수 없다.
+    ledger, sender = InMemoryLedger(), RecordingSender(fail_times=1)
+    await send_report("c-1", "제목", "본문", sender=sender, ledger=ledger,
+                      cfg=_ROUTED, clock=lambda: T, concern="operation")
+    assert ledger.pending_sends()[0]["target"] == "ops@y"
+
+
+def test_알_수_없는_concern_키는_config_검증이_거부한다():
+    # 오타("operations")면 그 목록이 영원히 안 쓰이고 아무도 모른다.
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        MailConfig(enabled=True, host="h", sender="s", recipients=["a@b"],
+                   recipients_by_concern={"operations": ["x@y"]})
+
+
+def test_빈_수신자_목록은_config_검증이_거부한다():
+    # "이 축은 보내지 마라"인지 "기본으로 폴백"인지 사람이 헷갈린다. 채널을 끄려면
+    # 그 키를 지우면 된다 — 애매한 표기를 두지 않는다.
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="빈 목록"):
+        MailConfig(enabled=True, host="h", sender="s", recipients=["a@b"],
+                   recipients_by_concern={"operation": []})
+
+
+def test_빈_목록은_폴백이_아니라_침묵이다():
+    # config 검증이 빈 목록을 막지만, recipients_for가 `or` 폴백으로 돌아가면
+    # 그 검증이 사라지는 날 조용히 잘못된 수신자에게 간다 — 검증자에만 기대는
+    # 배선은 검증자가 사라지면 아무것도 안 지킨다.
+    from src.presentation.mail import recipients_for
+    cfg = MailConfig.model_construct(       # 검증을 우회해 그 상태를 직접 만든다
+        enabled=True, host="h", sender="s", recipients=["platform@y"],
+        recipients_by_concern={"operation": []})
+    assert recipients_for(cfg, "operation") == []
+    assert recipients_for(cfg, "system") == ["platform@y"]

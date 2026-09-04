@@ -5,6 +5,7 @@ from typing import Literal
 
 from src.config.schema_app import StrictModel
 from src.domain.case import Case
+from src.domain.concern import Concern
 
 CaseStatus = Literal["open", "investigating", "awaiting_human", "closed"]
 OPEN_STATUSES = ("open", "investigating", "awaiting_human")
@@ -25,6 +26,7 @@ class CaseRecord(StrictModel):
     t0: datetime                        # 최초 관찰 시각 — Case 재구성용
     target_locator: str | None = None   # 대상 locator — Case 재구성용
     origin: Literal["human", "patrol"] = "patrol"  # 케이스 개설 경로
+    concern: Concern = "system"         # 무엇이 이상한가 — 발행·브리핑 라우팅의 기반
     status: CaseStatus = "open"         # 상태
     created_at: datetime                # 생성 시간
     updated_at: datetime                # 갱신 시간
@@ -49,7 +51,8 @@ class CaseRecord(StrictModel):
     def to_case(self) -> Case:
         """저장된 레코드로부터 엔진에 넘길 도메인 Case를 재구성한다."""
         return Case(id=self.id, gbm=self.gbm, fct=self.fct, origin=self.origin,
-                    symptom=self.symptom, t0=self.t0, target_locator=self.target_locator)
+                    symptom=self.symptom, t0=self.t0, target_locator=self.target_locator,
+                    concern=self.concern)
 
 
 def lease_is_free(record: CaseRecord, owner: str, now: datetime) -> bool:

@@ -93,9 +93,11 @@ python -m src patrol run --for-seconds 5 --stub-seeds stub-seeds.example.json \
 python -m src case list --config-root config.example --repo-root .
 ```
 
-`patrol run`은 여기서 실제로 끝까지 간다 — `api.oee_range` 점검이 스텁 응답
-`oee=512`에서 finding을 내고(`--stub-seeds`가 심어 준 값이다), 케이스가 열리고,
-조사가 시작되고, `output/c-1.html`에 보고서가 쓰인다. 플래그를 빼고 쳐 보면
+`patrol run`은 여기서 실제로 끝까지 간다 — 케이스가 **둘** 열린다.
+`api.oee_range`가 `oee=512`에서 범위 초과를 잡고(`concern: system` — 파이프라인
+신호), `prod.status_matches_plan`이 "계획은 생산중인데 실제는 NO PLAN"을 잡는다
+(`concern: operation` — 현장 상태). 둘 다 조사가 시작되고 `output/`에 보고서가
+쓰인다. 플래그를 빼고 쳐 보면
 아무 케이스도 안 열린다 — 스텁에 아무것도 없으면 점검이 404 error로 끝난다.
 
 **가짜 응답이 config가 아니라 플래그인 이유**: 실제 대상에 붙일 때는 플래그를

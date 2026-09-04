@@ -17,6 +17,14 @@
           "method": "GET",
           "path": "/lines",
           "query_schema": {}
+        },
+        "prod_status": {
+          "method": "POST",
+          "path": "/summary/prod_status",
+          "body_schema": {
+            "line_code": "list[str]",
+            "date": "str"
+          }
         }
       }
     },
@@ -63,6 +71,37 @@
             "part_code": [
               "P001"
             ]
+          }
+        },
+        "resolve": {
+          "line_code": {
+            "from": "rest",
+            "entry": "list_lines",
+            "field": "line_code"
+          },
+          "date": {
+            "from": "clock",
+            "expr": "today"
+          }
+        }
+      },
+      "prod.status_matches_plan": {
+        "judge": "rule",
+        "schedule": {
+          "interval": "3s"
+        },
+        "target": "rest:prod_status",
+        "concern": "operation",
+        "params": {
+          "rule": "expected_state",
+          "field": "body.prod_status",
+          "expect": [
+            "생산중",
+            "대기"
+          ],
+          "when": {
+            "field": "body.plan_status",
+            "equals": "생산중"
           }
         },
         "resolve": {

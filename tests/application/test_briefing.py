@@ -39,3 +39,19 @@ def test_브리핑은_빈_섹션을_명시한다():
     text = build_briefing(case, upstream_slice(TOPO, "rest:/oee"))
     assert "OEE 512%" in text and "rest:/oee" in text and "twin-aggregator" in text
     assert "없음" in text            # rules/history/docs 미제공 → 명시
+
+
+def _case(concern):
+    return Case(id="c-1", gbm="mx", fct="gumi", origin="patrol", concern=concern,
+                symptom="OEE 512%", t0=datetime(2026, 9, 3, 8, 0),
+                target_locator="rest:/oee")
+
+
+def test_브리핑이_concern별로_다른_방향을_준다():
+    # 어디를 먼저 볼지를 말할 뿐 판정을 대신하지 않는다 — 힌트가 결론을 지시하면
+    # 그건 우리가 판정을 코드에 박은 것이다(규율 6).
+    sliced = upstream_slice(TOPO, "rest:/oee", max_depth=3)
+    system = build_briefing(_case("system"), sliced)
+    operation = build_briefing(_case("operation"), sliced)
+    assert system != operation
+    assert "현장" in operation and "현장" not in system

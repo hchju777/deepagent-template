@@ -211,3 +211,18 @@ async def test_사이트_시간대가_해석기까지_도달한다():
     body = store.get_evidence(scratch_case_id("mx", "gumi", "c"),
                               store.list_evidence(scratch_case_id("mx", "gumi", "c"))[-1].id)
     assert body["request"]["params"] == {"date": "2026-09-04"}
+
+
+async def test_점검의_concern이_finding에_실린다():
+    # 라우팅 근거는 사람이 config에 적은 값이어야 한다 — 데이터 모양으로 추론하면
+    # 재현도 감사도 안 된다(규율 6).
+    from src.domain.store import InMemoryCaseStore
+    from src.infrastructure.factory import StubSeeds
+    adapters = _adapters(StubSeeds(rest_responses={"/oee": {"oee": 512}}))
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/oee",
+        "concern": "operation",
+        "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}})
+    out = await run_check("mx", "gumi", "c", check, adapters=adapters,
+                          store=InMemoryCaseStore(), clock=lambda: T)
+    assert out.status == "finding" and out.finding.concern == "operation"

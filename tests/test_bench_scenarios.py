@@ -1,4 +1,8 @@
-"""벤치 — 스펙 부록 A의 두 간판 시나리오를 회귀 모드로 재현한다 (스펙 §5.5-4).
+"""벤치 — 스펙 부록 A의 간판 시나리오를 회귀 모드로 재현한다 (스펙 §5.5-4).
+
+A.1/A.2는 파이프라인 신호(concern="system"), A.3은 운영 이상
+(concern="operation")이다 — 계획 11이 연 축이 finding에서 발행까지
+살아 있는지를 A.3이 본다.
 
 회귀 모드(여기, CI): 스텁 LLM(ScriptedLLM/ToolFake) + 스텁 어댑터로 각본을
 결정론 검증한다. 채점 술어는 Verdict의 구조화 필드(root_cause.component,
@@ -9,7 +13,7 @@ verdict_type)만 — md 텍스트 매칭은 하지 않는다(템플릿을 고칠
 이 시나리오의 조립부(사이트·시드·finding)를 그대로 두고 lead_llm/subagent_llm/
 judge llm만 build_chat_model로 바꿔 별도 스크립트에서 수동 실행한다.
 
-두 시나리오 모두 run_check → admit_finding → worker.run_once(→resume_once) →
+세 시나리오 모두 run_check → admit_finding → worker.run_once(→resume_once) →
 실제 발행 배선(worker.on_closed=daemon._publish_report)까지 전 구간을 돈다
 (M11) — 예전엔 이 파일의 _publish 헬퍼가 render_report/write_report를 직접
 다시 불러 발행을 흉내냈을 뿐이라, "전 구간을 돈다"는 말이 실제로는 발행
@@ -17,7 +21,7 @@ judge llm만 build_chat_model로 바꿔 별도 스크립트에서 수동 실행�
 부르지 않는 최소 PatrolDaemon을 조립해 그 _publish_report만 워커에 붙인다 —
 데몬·chat·case resume과 같은 발행 경로다. 보고서는 ReportConfig() 기본값
 (output_dir="output", gitignore됨) 아래 시나리오별 하위 디렉터리에 남는다 —
-두 시나리오 모두 자기만의 InMemoryCaseRepository에서 첫 케이스가 "c-1"이
+세 시나리오 모두 자기만의 InMemoryCaseRepository에서 첫 케이스가 "c-1"이
 되므로(카운터가 인스턴스별 1부터 시작), 하위 디렉터리를 안 나누면 나중에
 실행되는 시나리오가 먼저 실행된 시나리오의 output/c-1.*를 덮어써 "각각
 보고서 파일이 남는다"는 완료 기준을 어긴다. 완료 기준이 "보고서 파일이
@@ -40,7 +44,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from src.application.deps import EngineDeps
 from src.application.worker import CaseQueue, InvestigationWorker
-from src.config.schema_app import AppConfig, EngineConfig, LlmConfig, LlmProfiles, ReportConfig
+from src.config.schema_app import (AppConfig, EngineConfig, LlmConfig, LlmProfiles,
+                                   MailConfig, ReportConfig)
 from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.cases import InMemoryCaseRepository
 from src.domain.store import InMemoryCaseStore
@@ -355,5 +360,93 @@ async def test_A2_멈춘_라인은_park_resume의_F3_경로를_거쳐_equip_sync
     fmt = daemon.report_cfg.format
     path = Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}"
     text = path.read_text(encoding="utf-8")
+    for heading in _report_headings(fmt):
+        assert heading in text
+
+
+# ── A.3: 운영 이상 — "계획은 생산중인데 현장은 NO PLAN" ────────────────────
+# 계획 11이 연 축. A.1/A.2가 전부 파이프라인 신호(concern="system")인 반면
+# 이것은 **배관이 멀쩡한데 현장이 이상한** 경우다 — 그 구별이 finding에서
+# 케이스·보고서·메일 수신자까지 흘러가는지가 채점 대상이다.
+#
+# 증거 순번: ev-1=admit_finding이 복사한 rest 스냅샷, ev-2=라운드1 mongo_find.
+_ENTRY_A3 = {"method": "POST", "path": "/summary/prod_status",
+             "body_schema": {"line_code": "list[str]"}}
+_CHECK_A3 = CheckConfig.model_validate({
+    "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:prod_status",
+    "concern": "operation",
+    "params": {"rule": "expected_state", "field": "body.prod_status",
+               "expect": ["생산중", "대기"], "body": {"line_code": ["L7"]},
+               "when": {"field": "body.plan_status", "equals": "생산중"}}})
+_SITE_A3 = SiteConfig.model_validate({"target": {
+    "rest": {"base_url": "http://x", "entries": {"prod_status": _ENTRY_A3}},
+    "mongo": {"url": "mongodb://x:27017"}}})
+_TOPO_A3 = Topology.model_validate({
+    "services": {"mes-api": {"writes": [{"kind": "mongo", "collection": "plan_state"}]}},
+    "derivations": {}})
+_FRAME_A3 = ('{"hypotheses": [{"id": "h-1", "statement": "계획 반영 누락"}], '
+             '"tasks": [{"id": "t-1", "goal": "plan_state 조회", "role": "data_prober"}]}')
+_VERDICT_A3 = ('{"verdict_type": "data_loss", "confidence": "high", '
+               '"narrative": "MES 계획이 L7에 내려갔으나 현장 단말이 수신하지 못해 '
+               'NO PLAN 상태로 남았다.", '
+               '"root_cause": {"component": "mes-dispatch", "evidence_ids": ["ev-2"]}, '
+               '"recommendations": ["L7 단말 계획 재전송 요청(조치는 사람 몫)"]}')
+
+
+async def test_A3_계획과_어긋난_현장상태는_operation_케이스로_열리고_수신자가_갈린다(tmp_path):
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    seeds = StubSeeds(
+        rest_responses={"POST /summary/prod_status": {"plan_status": "생산중",
+                                                      "prod_status": "NO PLAN"}},
+        mongo_collections={"plan_state": [{"line": "L7", "dispatched": True}]})
+    adapters = build_adapters(_SITE_A3, _TOPO_A3, clock=lambda: T, stub_seeds=seeds)
+
+    outcome = await run_check("mx", "gumi", "prod.status", _CHECK_A3, adapters=adapters,
+                              store=store, clock=lambda: T, timezone_name="UTC")
+    assert outcome.status == "finding" and outcome.finding.concern == "operation"
+
+    admit = admit_finding(outcome.finding, repo=repo, store=store, clock=lambda: T)
+    assert admit.action == "opened" and admit.case.concern == "operation"
+    case_id = admit.case_id
+
+    deps = EngineDeps(
+        lead_llm=ScriptedLLM([_FRAME_A3, _INTEGRATE_CONCLUDE, _VERDICT_A3]),
+        subagent_llm=ToolFake(messages=iter([_mongo_call("plan_state"), _report(["ev-2"])])),
+        adapters=adapters, store=store, topology=_TOPO_A3,
+        engine_cfg=EngineConfig(parallel_width=1))
+    daemon = _publish_daemon(repo, store, ledger, lambda: T,
+                             output_dir=str(Path(ReportConfig().output_dir) / "bench-a3"),
+                             owner="bench-a3-publish")
+    daemon.report_cfg = ReportConfig(
+        output_dir=daemon.report_cfg.output_dir,
+        mail=MailConfig(enabled=True, host="smtp", sender="a@x",
+                        recipients=["platform@y"],
+                        recipients_by_concern={"operation": ["ops@y"]}))
+    sent = []
+
+    class _Spy(NullSender):
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(recipients)
+
+    daemon._mail_sender = lambda: _Spy()
+    worker = InvestigationWorker(
+        CaseQueue(), repo=repo, store=store, deps_for_site=lambda g, f: deps,
+        checkpointer=InMemorySaver(), clock=lambda: T, owner="bench-a3", max_concurrent=1,
+        lease_ttl_s=900, ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+        on_closed=daemon._publish_report)
+
+    assert await worker.run_once(case_id, interaction_policy="autonomous") == "closed"
+
+    # 채점은 구조화 필드만 본다(보고서 텍스트 매칭 금지 — tests/README.md).
+    verdict = store.get_verdict(case_id)
+    assert verdict.root_cause.component == "mes-dispatch"
+    assert verdict.verdict_type == "data_loss"
+    # 축이 발행까지 살아 있는가 — 이것이 계획 11이 실제로 낸 산출물이다.
+    assert sent == [["ops@y"]], sent
+
+    # 파일 docstring의 완료 기준("보고서 파일이 5절을 갖춘 채 남는다")은 A.3에도
+    # 적용된다 — 하위 디렉터리를 나눠 놓고 단정을 빠뜨리면 그 기준이 반만 산다.
+    fmt = daemon.report_cfg.format
+    text = (Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}").read_text(encoding="utf-8")
     for heading in _report_headings(fmt):
         assert heading in text

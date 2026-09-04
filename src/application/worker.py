@@ -390,7 +390,7 @@ class InvestigationWorker:
             self._snapshots.put(VerdictSnapshot(
                 case_id=case_id, closed_at=self._clock(), gbm=record.gbm, fct=record.fct,
                 fingerprint=record.fingerprint, target_locator=record.target_locator,
-                origin=record.origin, outcome=outcome,
+                origin=record.origin, concern=record.concern, outcome=outcome,
                 verdict_type=verdict.verdict_type if verdict else None,
                 root_cause_component=(verdict.root_cause.component
                                       if verdict and verdict.root_cause else None),

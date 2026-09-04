@@ -225,7 +225,135 @@ def _judge_max(result: ProbeResult, params: dict) -> RuleVerdict:
     return RuleVerdict(status="ok", reason=f"상한 이내 — {field}={value}")
 
 
+def _zero_values(raw) -> tuple[list[float] | None, str | None]:
+    """판정 대상을 수치 목록으로 편다 — (값들, 데이터 이상 사유).
+
+    리스트·dict·스칼라를 모두 받는다. 대상 API가 `[0,0,0]`으로도 `{"a":0,"b":0}`
+    으로도 같은 사실을 표현하기 때문이고, 그 모양 차이는 우리 관심사가 아니다.
+
+    bool을 수치로 받지 않는 이유: 파이썬에서 `False == 0`이라 `{"ok": false}`가
+    "현장이 멈췄다"로 둔갑한다(query_rules._is_exact가 같은 함정을 다룬다).
+    NaN도 수치가 아니다 — 0과 비교 자체가 무의미하다.
+    """
+    if isinstance(raw, dict):
+        items = list(raw.values())
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = [raw]
+    values = []
+    for item in items:
+        if isinstance(item, bool) or not isinstance(item, (int, float)) \
+                or not math.isfinite(item):
+            return None, f"수치가 아닌 값이 섞여 있다 — {item!r}"
+        values.append(float(item))
+    return values, None
+
+
+def _judge_all_zero(result: ProbeResult, params: dict) -> RuleVerdict:
+    """모든 값이 0인가 — 운영 이상(0/0/0)의 판정.
+
+    **빈 것과 전부 0인 것을 구별한다.** `[]`는 "전부 0"이 아니라 "표본이 없다"이고,
+    둘을 같은 finding으로 묶으면 "질문을 잘못했다"와 "현장이 멈췄다"가 한 통에
+    섞인다 — 계획 9가 전부-또는-전무로 막으려던 바로 그 혼동이다. `min_count`
+    미만도 같은 이유로 다른 사유를 낸다: 라인 30개 중 2개만 돌아온 표본으로
+    "현장이 멈췄다"를 단정할 수 없다.
+    """
+    field = _field_name(params, "all_zero")
+    raw_min = params.get("min_count", 1)
+    min_count = _as_number(raw_min)
+    if min_count is None or not math.isfinite(min_count) or min_count < 1 \
+            or min_count != int(min_count):
+        raise KnownRuleError(f"rule all_zero의 min_count는 1 이상의 정수여야 한다 — {raw_min!r}")
+    raw = get_path(result.data, field) if field else None
+    if raw is None:
+        return RuleVerdict(status="finding", reason=f"필드 부재 — {field}")
+    values, bad_reason = _zero_values(raw)
+    if bad_reason is not None:
+        return RuleVerdict(status="finding", reason=f"{bad_reason} — {field}")
+    if len(values) < int(min_count):
+        return RuleVerdict(status="finding",
+                           reason=f"표본 부족 — {field}에 {len(values)}개뿐"
+                                  f"(min_count={int(min_count)}) — 전부 0인지 판정할 수 없다")
+    if all(v == 0 for v in values):
+        return RuleVerdict(status="finding",
+                           reason=f"전부 0 — {field}의 {len(values)}개 값이 모두 0이다")
+    return RuleVerdict(status="ok", reason=f"0이 아닌 값이 있다 — {field}")
+
+
+def _when_guard(params: dict) -> tuple[str, Any] | None:
+    """`when` 절을 (필드, 기대값)으로 검증해 돌려준다. 없으면 None.
+
+    모양을 엄격히 닫는 이유: 오타난 키(`equal`)를 조용히 무시하면 가드가 항상
+    통과해 사람이 쓴 제약이 아무 효과 없이 지나간다 — 계획 9가 "resolve를 등재
+    아닌 target에 달면 기동 거부"로 올린 것과 같은 형태다.
+    """
+    when = params.get("when")
+    if when is None:
+        return None
+    if not isinstance(when, dict) or set(when) != {"field", "equals"}:
+        raise KnownRuleError(
+            f"rule expected_state의 when은 {{field, equals}} 두 키여야 한다 — {when!r}")
+    field = when["field"]
+    if not isinstance(field, str):
+        raise KnownRuleError(f"rule expected_state의 when.field는 문자열이어야 한다 — {field!r}")
+    return field, when["equals"]
+
+
+def _judge_expected_state(result: ProbeResult, params: dict) -> RuleVerdict:
+    """한 필드의 값이 다른 필드에 비추어 말이 되는가 — "생산중이어야 하는데 NO PLAN".
+
+    `expect`는 **값 목록이지 표현식이 아니다.** 비교 연산자·정규식·범위를 열면
+    rule이 작은 질의 언어가 되고, 그건 config가 코드가 되는 길이다(규율 6이
+    "재현·상한·감사"를 코드에 두라고 한 방향과 반대다). 필요해지면 새 rule을 연다.
+
+    `when`이 성립하지 않으면 ok다. 3상의 `skipped`를 쓰지 않는 이유: 그 값은
+    LLM 예산 소진 전용이고, 두 뜻을 한 칸에 넣으면 `patrol status`가 서로 다른
+    이유를 같게 보여준다.
+
+    **알려진 한계 — 상태 값은 문자열을 전제한다.** 비교가 `==`이라 파이썬의
+    `False == 0`·`True == 1`이 그대로 통한다(`expect=[0]`에 값 `False`면 ok).
+    `_zero_values`가 bool을 통째로 거부하는 것과 다른 선택인데, 저쪽은 **수치**를
+    다루므로 bool이 섞이면 반드시 오류인 반면 여기는 임의의 상태 어휘를 받기
+    때문이다. `null`도 표현할 수 없다 — `get_path`가 "필드 없음"과 "값이 null"을
+    합치므로 `expect=[None]`은 결코 만족되지 않는다. 상태 값을 boolean이나
+    null로 쓰는 API를 만나면 그때 별도 rule을 연다.
+    """
+    field = _field_name(params, "expected_state")
+    expect = params.get("expect")
+    if not isinstance(expect, list) or not expect:
+        raise KnownRuleError(
+            f"rule expected_state의 expect는 비어 있지 않은 목록이어야 한다 — {expect!r}")
+    guard = _when_guard(params)
+    if guard is not None:
+        guard_field, wanted = guard
+        actual = get_path(result.data, guard_field)
+        if actual is None:
+            # ok로 삼키면 이 점검은 영영 아무것도 안 보면서 초록으로 남는다 —
+            # 측정하지 않은 것을 "이상 없음"으로 보고하는 형태다(스펙 §2-N7).
+            # 러너 경계에서 ok의 사유는 사라지므로, 구별을 남기려면 finding이어야
+            # 한다. all_zero의 "표본 부족"과 같은 판단이다.
+            return RuleVerdict(status="finding",
+                               reason=f"가드 필드 부재로 판정할 수 없다 — {guard_field}")
+        if actual != wanted:
+            return RuleVerdict(status="ok",
+                               reason=f"판정 대상 아님 — {guard_field}={actual!r}")
+    value = get_path(result.data, field) if field else None
+    if value is None:
+        return RuleVerdict(status="finding", reason=f"필드 부재 — {field}")
+    if value in expect:
+        return RuleVerdict(status="ok", reason=f"기대한 상태 — {field}={value!r}")
+    return RuleVerdict(status="finding",
+                       reason=f"기대와 다른 상태 — {field}={value!r}, 기대: {expect}")
+
+
+# 새 rule이 concern 축 위에서만 뜻이 있다면 schema_site._AXIS_SPECIFIC_RULES에도
+# 더해라 — 그래야 그 rule을 쓰는 점검이 concern을 명시하게 된다. 두 곳을 잇는
+# 것은 테스트뿐이므로(test_축_전용_rule_집합이_실재하는_rule만_담는다) 여기
+# 주석이 유일한 안내다.
 _RULES: dict[str, Callable] = {
+    "expected_state": lambda result, params, clock: _judge_expected_state(result, params),
+    "all_zero": lambda result, params, clock: _judge_all_zero(result, params),
     "range": lambda result, params, clock: _judge_range(result, params),
     "exists": lambda result, params, clock: _judge_exists(result, params),
     "freshness": lambda result, params, clock: _judge_freshness(result, params, clock=clock),

@@ -272,3 +272,28 @@ def test_명세가_없으면_digest는_absent다(tmp_path):
     _app, sites = assemble_sites(tmp_path / "config", tmp_path, {"LLM_API_KEY": "k"},
                                  clock=lambda: T, llm_factory=lambda name: object())
     assert sites[0].digests["target_api"] == "absent"
+
+
+async def test_데몬이_케이스의_concern으로_수신자를_고른다(tmp_path):
+    # send_report에 인자만 열어 두고 호출부가 안 넘기면 운영 이상이 플랫폼
+    # 담당에게 가고 아무도 눈치채지 못한다 — 계획 9의 시간대가 정확히 그랬다.
+    from src.config.schema_app import MailConfig, ReportConfig
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    report_cfg = ReportConfig(output_dir=str(tmp_path / "out"), mail=MailConfig(
+        enabled=True, host="smtp", sender="a@x", recipients=["platform@y"],
+        recipients_by_concern={"operation": ["ops@y"]}))
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path, report_cfg=report_cfg)
+    daemon.build()
+
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(recipients)
+
+    daemon._mail_sender = lambda: _Spy()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, concern="operation", created_at=T, updated_at=T,
+                         status="closed", closed_reason="조사 완료"))
+    await daemon._publish_report("c-1")
+    assert sent == [["ops@y"]], sent

@@ -152,6 +152,7 @@ LLM_API_KEY=<실제 키>
       "port": 587,
       "sender": "ops-agent@internal",
       "recipients": ["oncall@internal"],
+      "recipients_by_concern": { "operation": ["mes-ops@internal"] },
       "username": "${SMTP_USER}",
       "password": "${SMTP_PASSWORD}",
       "use_tls": true
@@ -228,7 +229,7 @@ git add knowledge/target_api && git commit
 - [ ] 인증이 필요하면 `rest.auth` + `.env`의 토큰 키
 - [ ] `LLM_BASE_URL`/`LLM_API_KEY` + `app.json`의 `llm.profiles` 3종
 - [ ] `store.backend: "mongo"` + `AGENT_MONGO_URL`(대상 시스템과 별도 DB)
-- [ ] 필요하면 `report.mail` 켜기
+- [ ] 필요하면 `report.mail` 켜기 — 현장 이상(`concern: "operation"`)을 다른 팀이 받아야 하면 `recipients_by_concern`도 함께
 - [ ] `knowledge/target_api/{gbm}/{fct}.json`에 대상의 OpenAPI를 받아 두고 커밋
 - [ ] `knowledge validate`(정적) 통과
 - [ ] `knowledge validate --live`(Mongo 롤 + 명세 드리프트) 통과 — 대상이 명세를 안 내주는 환경이면 이 항목은 건너뛰고 정적 검증만 돌린다(§7). **건너뛴다는 결정을 팀이 알고 있어야 한다**

@@ -49,6 +49,17 @@ def _or_none(text):
     return text.strip() if text and text.strip() else "없음"
 
 
+_CONCERN_HINT = {
+    "system": "파이프라인 고장을 의심하라 — 상류 서비스·큐·캐시·스키마 드리프트.",
+    "operation": "배관은 정상일 수 있다. 현장 상태와 계획 데이터의 불일치를 의심하라.",
+}
+"""어디를 **먼저** 볼지만 말한다.
+
+무엇이 맞는 판단인가는 여전히 LLM이 정한다(규율 6). 힌트가 결론을 지시하면 그건
+우리가 판정을 코드에 박아 놓고 LLM이 했다고 적는 것이다.
+"""
+
+
 def build_briefing(case, topo_slice, *, rules_text="", history_text="", docs_text=""):
     # 슬라이스의 각 derivation을 "출력 ← via ← inputs" 형식으로 표현
     chain_lines = [
@@ -60,6 +71,7 @@ def build_briefing(case, topo_slice, *, rules_text="", history_text="", docs_tex
     return "\n".join([
         f"[케이스] {case.id} — {case.gbm}/{case.fct}, 접수 경로: {case.origin}",
         f"[증상] {case.symptom}",
+        f"[관심사] {case.concern} — {_CONCERN_HINT.get(case.concern, '')}",
         f"[T0] {case.t0.isoformat()}",
         "[토폴로지 슬라이스 — 파생 사슬(상류 방향)]",
         *(chain_lines or ["없음"]),

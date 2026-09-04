@@ -73,6 +73,7 @@ def _render(model) -> str:
         ["케이스 id", _e(record.id)],
         ["스코프", _e(f"{record.gbm}/{record.fct}")],
         ["개설 경로", _e(record.origin)],
+        ["concern", _e(record.concern)],
         ["증상", _e(record.symptom)],
         ["T0", _e(record.t0.isoformat())],
         ["판정", _e(_headline(record, verdict))],

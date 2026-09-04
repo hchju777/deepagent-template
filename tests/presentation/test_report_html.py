@@ -120,3 +120,12 @@ def test_HTML도_지식_digest를_보여준다():
         "round": 1,
         "knowledge_digests": {"topology": "a" * 64, "target_api": "c" * 64}}))
     assert "지식 digest" in html and "target_api=cccccccc" in html
+
+
+def test_HTML도_concern을_보여준다():
+    # HTML이 기본 포맷이다 — 마크다운에만 두면 정작 사람이 읽는 쪽이 무방비다.
+    record = CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                        t0=T, concern="operation", created_at=T, updated_at=T)
+    html = render_html(build_report_model(record, verdict=None, evidence=[],
+                                          case_file={"round": 1}, clock=lambda: T))
+    assert "operation" in html

@@ -75,7 +75,8 @@
 | `report.mail.host` | str | `""` | SMTP 호스트 |
 | `report.mail.port` | int | 25 | SMTP 포트 |
 | `report.mail.sender` | str | `""` | 발신자 주소 |
-| `report.mail.recipients` | list[str] | `[]` | 수신자 목록 |
+| `report.mail.recipients` | list[str] | `[]` | 기본 수신자 목록 |
+| `report.mail.recipients_by_concern` | dict | `{}` | concern별 수신자(`{"operation": ["ops@x"]}`). 선언되지 않은 concern은 `recipients`로 폴백한다 — 전부 적으라고 강제하면 같은 목록을 두 번 쓰게 되고 한쪽만 고치는 순간 갈라진다. 알 수 없는 키(`"operations"` 같은 오타)와 **빈 목록**은 config 검증이 거부한다 — 빈 목록을 "보내지 마라"로 읽을지 "기본으로 폴백"으로 읽을지 사람이 헷갈리기 때문이다. 그 축을 끄려면 키를 지운다 |
 | `report.mail.username` / `.password` | str \| null / SecretStr \| null | null | SMTP 인증(선택) |
 | `report.mail.use_tls` | bool | `false` | TLS 사용 여부 |
 | `timezone` | str | `"Asia/Seoul"` | 보고서·스케줄 표시, **그리고 `clock` 해석기의 날짜 경계**를 정하는 IANA 타임존. `today`가 어느 날인지가 이 값으로 갈린다 — 해석 실패면 기동을 거부한다 |
@@ -137,7 +138,8 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `schedule.cron` | str(5필드) | — | 표준 5필드 cron 표현식 |
 | `target` | str \| null | null | 토폴로지 locator(예: `"rest:/api/v1/lines/{line}/oee"`) 또는 등재 항목 이름(`"rest:summary_prod"`). 기동 검증이 각자의 이름공간에서 해석 가능한지 확인. **`{자리표시자}`가 든 locator를 `rest_get` 점검의 target으로 쓰면 그 문자열이 그대로 전송된다** — 토폴로지 패턴은 "이 모양의 끝점이 허용된다"는 뜻이지 값을 채워 주지는 않는다. 실제 값이 필요하면 자리표시자 없는 구체 경로를 쓰거나, 등재 항목(`target.rest.entries`) + `resolve`로 표현한다 |
 | `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest:/path→rest_get`, `rest:<이름>→rest_query`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
-| `params` | dict | `{}` | 프로브·rule 판정에 넘길 파라미터(아래 "rule 판정 4종" 참고) |
+| `params` | dict | `{}` | 프로브·rule 판정에 넘길 파라미터(아래 "rule 판정 6종" 참고) |
+| `concern` | `"system"` \| `"operation"` | `"system"` | 무엇이 이상한가 — 메일 수신자·브리핑 방향·보고서 헤더가 이 값을 따른다. `system`은 파이프라인 고장(Kafka lag·TTL 만료·5xx), `operation`은 데이터는 흐르는데 현장이 이상한 경우(0/0/0·NO PLAN). **사람이 적는다**: 라우팅 근거는 재현·감사 가능해야 한다. rule에서 유도되지 않는다 — 다만 `all_zero`·`expected_state`는 이 축을 위해 만든 rule이라 명시하지 않으면 config 검증이 거부한다 |
 | `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`의 `limit`) |
 | `on_budget_exhausted` | `"skip"` \| `"escalate"` | `"skip"` | llm/rule+llm 판정인데 `patrol.llm_budget`이 소진됐을 때 동작 |
 | `resolve.<키>.from` | `"rest"` \| `"mongo"` \| `"redis"` \| `"clock"` \| `"unfiltered"` | **필수** | 값을 어디서 읽을지. 값 자체를 config에 적으면 즉시 썩는다(사업부/법인마다 다르고 매일 바뀐다). `params.body`와 키가 겹치면 기동 거부 |
@@ -156,7 +158,7 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 경보)이 되기도 하고 전체 조회(거짓 안심)가 되기도 하는데, 어느 쪽인지 알 방법이 없다.
 
 
-**rule 판정 4종**(`src/patrol/rules.py`, `params.rule`로 선택):
+**rule 판정 6종**(`src/patrol/rules.py`, `params.rule`로 선택):
 
 | rule | 필수 params | 동작 |
 |---|---|---|
@@ -164,6 +166,20 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `exists` | (`field` 선택 — 없으면 데이터 전체를 봄) | 값이 비었으면(`None`/빈 컨테이너) finding |
 | `freshness` | `field`, `max_age_s` | `field`의 타임스탬프가 `max_age_s`보다 오래됐으면 finding |
 | `max` | `field`, `max` | 값이 `max`를 넘으면 finding |
+| `all_zero` | `field`, (`min_count` 기본 1) | 값(리스트·dict·스칼라)이 **전부 0**이면 finding. 빈 표본과 `min_count` 미만은 **다른 사유**의 finding — "질문을 잘못했다"와 "현장이 멈췄다"를 섞지 않는다. bool·NaN은 수치가 아니므로 데이터 이상 |
+| `expected_state` | `field`, `expect`(목록), (`when` 선택) | `field` 값이 `expect`에 없으면 finding("생산중이어야 하는데 NO PLAN"). `when`(`{field, equals}` 두 키 고정)이 성립할 때만 판정하고, `when.field`가 없으면 **판정 불가 finding** — ok로 삼키면 그 점검은 영영 초록으로 남는다. 상태 값은 **문자열을 전제한다**: 비교가 `==`이라 `expect: [0]`은 `false`와도 맞고, `null`은 "필드 없음"과 구별되지 않아 표현할 수 없다 |
+
+**rule은 concern 축에 대해 중립이다.** 축을 정하는 것은 어떤 rule을 쓰는가가
+아니라 **점검이 무엇을 묻는가**다 — `max`를 불량 수에 걸면 기존 rule로 쓴 현장
+이상이고, `all_zero`를 큐 깊이에 걸면 새 rule로 쓴 파이프라인 신호다. 그래서
+`concern`은 rule에서 유도되지 않고 사람이 적는다.
+
+다만 `all_zero`·`expected_state`는 **그 축을 위해 만든 rule**이라, 이 둘을 쓰면서
+`concern`을 안 적으면 config 검증이 거부한다(어느 값이든 적기만 하면 통과한다 —
+우리가 대신 정하지 않는다).
+
+`expect`는 **값 목록이지 표현식이 아니다** — 비교 연산자·정규식을 열면 rule이
+작은 질의 언어가 되고 config가 코드가 된다.
 
 `field`는 점 표기(`"body.oee"`, `"items.0.name"`)로 중첩 dict/list를 가리킨다.
 `rule` 자체가 미지의 값이거나 필수 params가 없거나 타입이 안 맞으면(예:

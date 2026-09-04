@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import model_validator
 
 from src.config.schema_app import StrictModel
+from src.domain.concern import Concern
 
 
 class Finding(StrictModel):
@@ -20,6 +21,7 @@ class Finding(StrictModel):
     scratch_case_id: str               # 스냅샷이 저장된 순찰 스크래치 케이스 id
     observed_at: datetime              # 관찰 시간
     judge: Literal["rule", "llm", "rule+llm"]  # 판정 방식
+    concern: Concern = "system"        # 무엇이 이상한가 — 수신자·브리핑을 가른다
 
 
 class CheckOutcome(StrictModel):

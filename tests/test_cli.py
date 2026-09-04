@@ -277,6 +277,21 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     _chat_tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
     monkeypatch.setattr("sys.stdin", io.StringIO(""))       # 바로 EOF — 답하지 않고 파킹
+    # concern이 프로세스 경계를 넘는지도 여기서 본다 — 파킹은 chat이, 발송은
+    # case resume이 하므로 축이 레코드에 남아 있지 않으면 수신자가 갈린다.
+    app_path = tmp_path / "config" / "app.json"
+    app_data = json.loads(app_path.read_text(encoding="utf-8"))
+    app_data.setdefault("report", {})["mail"] = {
+        "enabled": True, "host": "smtp", "sender": "a@x", "recipients": ["platform@y"],
+        "recipients_by_concern": {"operation": ["ops@y"]}}
+    app_path.write_text(json.dumps(app_data), encoding="utf-8")
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(recipients)
+
+    monkeypatch.setattr("src.__main__.SmtpSender", lambda cfg: _Spy())
 
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     checkpointer = InMemorySaver()
@@ -294,6 +309,7 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
 
     code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "OEE가 이상하다",
+                "--concern", "operation",
                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 0
     assert "파킹된 채로 남는다" in capsys.readouterr().out
@@ -324,6 +340,9 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     written = list((tmp_path / "out").glob("*.html"))
     assert len(written) == 1 and "<h2>2. 판정</h2>" in written[0].read_text(encoding="utf-8")
     assert repo.get(case_id).status == "closed"
+    # 축이 파킹을 건너 발송까지 살아남았는가 — chat이 정한 값을 다른 호출이 읽는다.
+    assert repo.get(case_id).concern == "operation"
+    assert sent == [["ops@y"]], sent
 
 
 def test_chat는_등록되지_않은_사이트면_exit_1(tmp_path, capsys, monkeypatch):
@@ -628,3 +647,39 @@ def test_knowledge_validate도_실_어댑터에_시드를_주면_거부한다(tm
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 1
     assert 'adapters="real"' in capsys.readouterr().err
+
+
+def test_chat이_연_케이스도_concern을_정하고_수신자를_가른다(tmp_path, capsys, monkeypatch):
+    # 스펙 §3.4의 타깃 3("데이터는 있는데 운영 시스템에 안 나온다")이 바로 운영
+    # 이상 질문인데, 사람이 연 케이스에 축을 정할 방법이 없으면 그 질문은 영원히
+    # 플랫폼 담당에게 라우팅된다. 플래그가 파서에 있는 것과 발행까지 닿는 것은
+    # 다르므로 실제 수신자를 본다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    app_path = tmp_path / "config" / "app.json"
+    data = json.loads(app_path.read_text(encoding="utf-8"))
+    data["report"] = {"output_dir": str(tmp_path / "out"), "mail": {
+        "enabled": True, "host": "smtp", "sender": "a@x", "recipients": ["platform@y"],
+        "recipients_by_concern": {"operation": ["ops@y"]}}}
+    app_path.write_text(json.dumps(data), encoding="utf-8")
+
+    lead_llm = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                            ONE_EVIDENCE_VERDICT_JSON])
+    subagent_llm = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead_llm, "s": subagent_llm}.get(profile, object()))
+
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(recipients)
+
+    monkeypatch.setattr("src.__main__.SmtpSender", lambda cfg: _Spy())
+    code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "데이터가 안 보인다",
+                 "--concern", "operation",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0, capsys.readouterr().err
+    assert sent == [["ops@y"]], sent

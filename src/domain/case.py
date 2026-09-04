@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import model_validator
 
 from src.config.schema_app import StrictModel
+from src.domain.concern import Concern
 
 Role = Literal["data_prober", "code_tracer", "recompute_verifier"]
 VerdictType = Literal["logic_bug", "data_loss", "config_error", "stale_data",
@@ -73,6 +74,7 @@ class Case(StrictModel):
     gbm: str
     fct: str
     origin: Literal["human", "patrol"]
+    concern: Concern = "system"
     symptom: str
     t0: datetime
     target_locator: str | None = None

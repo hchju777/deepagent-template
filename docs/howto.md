@@ -15,10 +15,11 @@
 ## 새 순찰 점검을 추가하고 싶다
 
 `patrol.checks.<이름>`에 `judge`/`schedule`/`target`을 채운다. rule 판정
-4종(`range`/`exists`/`freshness`/`max`)이면 그걸로 끝이지만, 판정을 LLM에게
+6종(`range`/`exists`/`freshness`/`max`/`all_zero`/`expected_state`)이면 그걸로
+끝이지만, 판정을 LLM에게
 맡기고 싶으면(`judge: "llm"` 또는 `"rule+llm"`) `app.json`의
 `llm.profiles.judge`가 채워져 있어야 기동을 통과한다. → [tutorial.md](tutorial.md),
-[config-reference.md의 "rule 판정 4종"](config-reference.md#사이트-config-siteconfig-srcconfigschema_sitepy)
+[config-reference.md의 "rule 판정 6종"](config-reference.md#사이트-config-siteconfig-srcconfigschema_sitepy)
 
 ## rule이 아니라 LLM이 판정하게 하고 싶다
 
@@ -27,6 +28,47 @@ finding을 내면 그때만 LLM에게 2차 확인을 시키고, `patrol.llm_budg
 소진됐으면 `on_budget_exhausted`(`"skip"`|`"escalate"`)를 따른다)을 쓴다.
 판정 로직은 `src/patrol/llm_judge.py`. LLM이 원시 데이터를 함부로 보지
 않도록 프롬프트에 실리는 것은 코드가 골라준 값뿐이다.
+
+## 0/0/0 같은 **운영 이상**을 잡고 싶다
+
+"배관은 멀쩡한데 현장이 이상하다"는 기존 rule로 표현되지 않는다. `exists`는 값이
+있으니 통과하고, `max`는 0이 임계를 안 넘으니 통과하고, `range(min=1)`은 "하나라도
+0이면"이라 야간에 한 라인만 쉬어도 울린다.
+
+```json
+"prod.badge_all_zero": {
+  "judge": "rule", "schedule": { "interval": "5m" },
+  "target": "rest:summary_prod", "concern": "operation",
+  "params": { "rule": "all_zero", "field": "body.badge", "min_count": 3 }
+}
+```
+
+`min_count`는 **표본이 그만큼 안 되면 판정하지 않는다**는 뜻이다. 라인 30개 중
+2개만 돌아온 응답으로 "현장이 멈췄다"를 단정하면 안 되고, 그때는 "전부 0"이
+아니라 "표본 부족"이라는 다른 사유의 finding이 난다.
+
+"생산중이어야 하는데 NO PLAN"처럼 **한 값이 다른 값에 비추어 말이 되는가**를 보려면:
+
+```json
+"prod.status_matches_plan": {
+  "judge": "rule", "schedule": { "interval": "5m" },
+  "target": "rest:prod_status", "concern": "operation",
+  "params": {
+    "rule": "expected_state", "field": "body.prod_status",
+    "expect": ["생산중", "대기"],
+    "when": { "field": "body.plan_status", "equals": "생산중" }
+  }
+}
+```
+
+`when`이 성립할 때만 판정한다 — 계획이 없는 라인이 NO PLAN인 것은 정상이다.
+`when.field`가 응답에 없으면 **판정 불가 finding**이 난다: ok로 삼키면 그 점검은
+영영 아무것도 안 보면서 초록으로 남는다.
+
+`concern`은 **빼먹을 수 없다** — 이 두 rule은 축을 위해 만든 것이라 명시하지
+않으면 config 검증이 거부한다. 다만 값은 우리가 정하지 않는다: 큐 깊이가 전부 0인
+것은 파이프라인 신호이므로 `"system"`이라 적으면 통과한다. 기존 rule
+(`range`/`max` 등)로 현장 이상을 쓸 때는 이 강제가 없으니 직접 적어야 한다.
 
 ## `chat`으로 직접 조사를 시작하고 싶다
 
