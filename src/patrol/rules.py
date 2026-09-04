@@ -21,6 +21,7 @@ KnownRuleError다(§C1/§I3). 데이터 쪽 이상(필드 부재, 비수치 값,
 "이상 탐지"로 둔갑해 원인 파악을 방해한다.
 """
 import math
+import math
 from datetime import datetime
 from numbers import Number
 from typing import Any, Callable, Literal
@@ -225,7 +226,63 @@ def _judge_max(result: ProbeResult, params: dict) -> RuleVerdict:
     return RuleVerdict(status="ok", reason=f"상한 이내 — {field}={value}")
 
 
+def _zero_values(raw) -> tuple[list[float] | None, str | None]:
+    """판정 대상을 수치 목록으로 편다 — (값들, 데이터 이상 사유).
+
+    리스트·dict·스칼라를 모두 받는다. 대상 API가 `[0,0,0]`으로도 `{"a":0,"b":0}`
+    으로도 같은 사실을 표현하기 때문이고, 그 모양 차이는 우리 관심사가 아니다.
+
+    bool을 수치로 받지 않는 이유: 파이썬에서 `False == 0`이라 `{"ok": false}`가
+    "현장이 멈췄다"로 둔갑한다(query_rules._is_exact가 같은 함정을 다룬다).
+    NaN도 수치가 아니다 — 0과 비교 자체가 무의미하다.
+    """
+    if isinstance(raw, dict):
+        items = list(raw.values())
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = [raw]
+    values = []
+    for item in items:
+        if isinstance(item, bool) or not isinstance(item, (int, float)) \
+                or not math.isfinite(item):
+            return None, f"수치가 아닌 값이 섞여 있다 — {item!r}"
+        values.append(float(item))
+    return values, None
+
+
+def _judge_all_zero(result: ProbeResult, params: dict) -> RuleVerdict:
+    """모든 값이 0인가 — 운영 이상(0/0/0)의 판정.
+
+    **빈 것과 전부 0인 것을 구별한다.** `[]`는 "전부 0"이 아니라 "표본이 없다"이고,
+    둘을 같은 finding으로 묶으면 "질문을 잘못했다"와 "현장이 멈췄다"가 한 통에
+    섞인다 — 계획 9가 전부-또는-전무로 막으려던 바로 그 혼동이다. `min_count`
+    미만도 같은 이유로 다른 사유를 낸다: 라인 30개 중 2개만 돌아온 표본으로
+    "현장이 멈췄다"를 단정할 수 없다.
+    """
+    field = _field_name(params, "all_zero")
+    raw_min = params.get("min_count", 1)
+    min_count = _as_number(raw_min)
+    if min_count is None or min_count < 1 or min_count != int(min_count):
+        raise KnownRuleError(f"rule all_zero의 min_count는 1 이상의 정수여야 한다 — {raw_min!r}")
+    raw = get_path(result.data, field) if field else None
+    if raw is None:
+        return RuleVerdict(status="finding", reason=f"필드 부재 — {field}")
+    values, bad_reason = _zero_values(raw)
+    if bad_reason is not None:
+        return RuleVerdict(status="finding", reason=f"{bad_reason} — {field}")
+    if len(values) < int(min_count):
+        return RuleVerdict(status="finding",
+                           reason=f"표본 부족 — {field}에 {len(values)}개뿐"
+                                  f"(min_count={int(min_count)}) — 전부 0인지 판정할 수 없다")
+    if all(v == 0 for v in values):
+        return RuleVerdict(status="finding",
+                           reason=f"전부 0 — {field}의 {len(values)}개 값이 모두 0이다")
+    return RuleVerdict(status="ok", reason=f"0이 아닌 값이 있다 — {field}")
+
+
 _RULES: dict[str, Callable] = {
+    "all_zero": lambda result, params, clock: _judge_all_zero(result, params),
     "range": lambda result, params, clock: _judge_range(result, params),
     "exists": lambda result, params, clock: _judge_exists(result, params),
     "freshness": lambda result, params, clock: _judge_freshness(result, params, clock=clock),

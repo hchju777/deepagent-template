@@ -77,3 +77,62 @@ def test_range는_bound_하나는_있어야_하고_NaN_bound는_거부():
                       clock=lambda: T)
     assert judge_by_rule(_ok({"v": 1}), {"rule": "range", "field": "v", "min": 0},
                          clock=lambda: T).status == "ok"
+
+
+def _zero(data, **params):
+    return judge_by_rule(_ok({"body": data}), {"rule": "all_zero", **params}, clock=lambda: T)
+
+
+def test_all_zero는_전부_0일_때만_finding이다():
+    # exists로는 안 된다(값이 있으니 통과), max로도 안 된다(0은 임계를 안 넘는다),
+    # range(min=1)은 "하나라도 0이면"이라 야간에 한 라인만 쉬어도 울린다.
+    assert _zero({"badge": [0, 0, 0]}, field="body.badge").status == "finding"
+    assert _zero({"badge": [0, 3, 0]}, field="body.badge").status == "ok"
+    assert _zero({"badge": 0}, field="body.badge").status == "finding"          # 스칼라
+    assert _zero({"badge": {"a": 0, "b": 0.0}}, field="body.badge").status == "finding"  # dict
+    assert _zero({"badge": {"a": 0, "b": 2}}, field="body.badge").status == "ok"
+
+
+def test_빈_표본은_전부_0과_다른_사유다():
+    # "질문을 잘못했다"와 "현장이 멈췄다"를 한 통에 넣으면 구별할 수 없게 된다 —
+    # 계획 9가 전부-또는-전무로 막으려던 바로 그 혼동이다.
+    v = _zero({"badge": []}, field="body.badge")
+    assert v.status == "finding" and "표본" in v.reason
+    assert "모두 0이다" not in v.reason      # 전부 0이라고 **단정하지** 않는다
+
+
+def test_min_count_미만이면_전부_0을_단정하지_않는다():
+    # 라인 30개 중 2개만 돌아온 표본으로 "현장이 멈췄다"를 말할 수 없다.
+    v = _zero({"badge": [0, 0]}, field="body.badge", min_count=3)
+    assert v.status == "finding" and "표본" in v.reason
+
+
+def test_비수치가_섞이면_데이터_이상이지_설정_오류가_아니다():
+    # 값이 이상한 것과 설정이 잘못된 것은 다른 문제다(규율 1).
+    v = _zero({"badge": [0, "없음", 0]}, field="body.badge")
+    assert v.status == "finding" and "수치" in v.reason
+
+
+def test_bool은_0이_아니다():
+    # 파이썬에서 False == 0이다. 그대로 두면 {"ok": False}가 "현장이 멈췄다"가 된다.
+    v = _zero({"badge": [False, False]}, field="body.badge")
+    assert v.status == "finding" and "수치" in v.reason
+
+
+def test_NaN은_0도_수치도_아니다():
+    v = _zero({"badge": [0, float("nan")]}, field="body.badge")
+    assert v.status == "finding" and "수치" in v.reason
+
+
+def test_all_zero의_설정_오류는_KnownRuleError다():
+    with pytest.raises(KnownRuleError):
+        _zero({"badge": [0]})                                   # field 부재
+    with pytest.raises(KnownRuleError):
+        _zero({"badge": [0]}, field="body.badge", min_count="셋")
+    with pytest.raises(KnownRuleError):
+        _zero({"badge": [0]}, field="body.badge", min_count=0)   # 0개로는 판정 불가
+
+
+def test_필드가_없으면_데이터_이상이다():
+    v = _zero({}, field="body.badge")
+    assert v.status == "finding" and "부재" in v.reason
