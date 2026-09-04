@@ -417,13 +417,17 @@ def load_stub_seeds(path: Path) -> tuple[dict[str, StubSeeds], list[str]]:
     return seeds, problems
 
 
-def seeds_problems(seeds: dict[str, StubSeeds], sites) -> list[str]:
+def seeds_problems(seeds: dict[str, StubSeeds], known: dict[str, str]) -> list[str]:
     """시드가 향한 사이트가 실제로 스텁을 쓰는지 확인한다.
 
     조용히 무시하면 사람이 "가짜 데이터로 돌고 있다"고 믿는 채 실제 대상을 두드린다.
     반대(스텁인데 시드가 없다)는 문제가 아니다 — 빈 응답도 유효한 관측이다.
+
+    `known`은 사이트키 → `adapters` 값이다. `SiteRuntime`이 아니라 이 좁은 형태를
+    받는 이유: 기동 검증(`validate_boot`)은 사이트를 조립하지 않고 config만 읽는데,
+    같은 판정을 두 벌 만들면 언젠가 갈라진다(계획 7에서 claim의 두 구현이 갈라져
+    프로덕션 버그를 테스트가 못 잡은 일이 실제로 있었다).
     """
-    known = {f"{rt.gbm}/{rt.fct}": rt.cfg.target.adapters for rt in sites}
     problems = []
     for key in sorted(seeds):
         if key not in known:

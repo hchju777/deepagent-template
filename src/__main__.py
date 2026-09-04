@@ -83,7 +83,8 @@ def _load_seeds(args) -> tuple[dict | None, bool]:
 
 def _seeds_mismatch(seeds, sites) -> bool:
     """시드가 향한 사이트가 실제로 스텁을 쓰는지 확인하고, 어긋나면 알린다."""
-    problems = seeds_problems(seeds or {}, sites)
+    known = {f"{rt.gbm}/{rt.fct}": rt.cfg.target.adapters for rt in sites}
+    problems = seeds_problems(seeds or {}, known)
     for problem in problems:
         print(f"[stub-seeds] {problem}", file=sys.stderr)
     return bool(problems)

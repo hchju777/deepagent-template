@@ -34,6 +34,11 @@ finding을 내면 그때만 LLM에게 2차 확인을 시키고, `patrol.llm_budg
 python -m src chat --gbm mx --fct gumi --config-root config --repo-root .
 ```
 
+예시 트리(`config.example`)로 시험할 때는 `--stub-seeds stub-seeds.example.json`을
+붙여라 — 안 붙이면 스텁에 아무 응답도 없어 서브에이전트의 REST 프로브가 전부
+`404: 스텁에 등록되지 않은 끝점`으로 끝난다. `case resume`도 같다. 가짜 응답이
+config가 아니라 플래그인 이유는 실전환 시 **빼는 것을 잊을 수 없게** 하기 위해서다.
+
 `--symptom`을 안 주면 stdin으로 증상을 묻는다. 질문에 답하며 접수(intake)가
 끝나면 케이스가 열리고, 조사 중 리드가 사람에게 물을 게 있으면 그 자리에서
 바로 되묻는다(`interaction_policy="interactive"`). 입력이 중간에 끊기면
@@ -89,8 +94,14 @@ python -m src patrol status                     # 하트비트 + 점검별 최�
 python -m src knowledge validate --config-root config --repo-root .
 ```
 
-exit 0이면 통과. `--live`를 추가하면 Mongo 계정이 실제로 readonly 롤인지까지
-확인한다(실 접속 필요 — CI 파이프라인에 대상 시스템 접근이 있을 때만 켠다).
+exit 0이면 통과. `--live`를 추가하면 대상에 실제로 접속해 **Mongo 계정 롤**과
+**pinned 명세 드리프트**까지 확인한다(CI 파이프라인에 대상 시스템 접근이 있을 때만
+켠다). `--live`는 명세를 **못 받는 것도 기동을 막는다** — 못 물어본 것을 조용히
+통과시키면 확인 안 한 것이 "이상 없음"으로 둔갑하기 때문이다. 명세를 받을 수 없는
+환경이라면 `--live` 없이 돌려라(pin과의 정적 대조는 그때도 돈다).
+
+실 접속 없이 드리프트 판정을 예행하려면 `--stub-seeds` 파일의 `rest_openapi`에
+"지금 대상의 명세"를 심으면 된다.
 
 ## 새 점검이 실제로 이상을 잡아 케이스를 여는지 실 시스템 없이 확인하고 싶다
 

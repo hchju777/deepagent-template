@@ -577,3 +577,12 @@ def test_케이스가_없어도_스냅샷이_터지지_않는다():
     # _salvage_case_file은 체크포인트에서 부분 값을 긁어 오므로 case가 없을 수 있다.
     from src.application.worker import _case_file_snapshot
     assert _case_file_snapshot({})["knowledge_digests"] == {}
+
+
+def test_구제된_케이스가_dict여도_digest를_살린다():
+    # _dump_item의 docstring이 "구제한 값은 역직렬화 방식에 따라 dict일 수 있다"고
+    # 적어 뒀다. getattr만 쓰면 그때 digest가 조용히 사라져 보고서가 "없음"을 찍는다.
+    # LANGGRAPH_STRICT_MSGPACK=true가 실제로 그 모양을 만든다.
+    from src.application.worker import _case_file_snapshot
+    snapshot = _case_file_snapshot({"case": {"knowledge_digests": {"target_api": "c" * 64}}})
+    assert snapshot["knowledge_digests"] == {"target_api": "c" * 64}

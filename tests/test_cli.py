@@ -559,3 +559,72 @@ def test_사이트를_조립하는_명령은_모두_시드를_받는다(tmp_path
         # 플래그를 모르면 argparse가 SystemExit(2)를 낸다. 1이면서 시드 파일을
         # 지목한다는 것은 세 경로가 같은 로더를 탔다는 뜻이다.
         assert "시드 파일을 읽을 수 없다" in capsys.readouterr().err, argv
+
+
+def test_세_명령_모두_읽은_시드를_assemble_sites까지_넘긴다(tmp_path, monkeypatch):
+    # 앞 테스트는 "시드 파일이 깨지면 셋 다 exit 1"만 본다 — 로더는 지키지만
+    # **인계는 안 지킨다.** chat의 stub_seeds= 인자만 지워도 전부 초록이었다.
+    # 이 리포가 반복해서 겪은 "테스트가 지키는 줄 알았던 규율"의 그 자리다.
+    from src.infrastructure.factory import StubSeeds
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    seeds_file = tmp_path / "seeds.json"
+    seeds_file.write_text(json.dumps({"mx/gumi": {"rest_responses": {"/oee": {"x": 1}}}}),
+                          encoding="utf-8")
+    expected = {"mx/gumi": StubSeeds(rest_responses={"/oee": {"x": 1}})}
+
+    seen = []
+    real = main_module.assemble_sites
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("stub_seeds"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr("src.__main__.assemble_sites", spy)
+    common = ["--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    for argv in (["patrol", "run", "--for-seconds", "0"],
+                 ["chat", "--gbm", "mx", "--fct", "없는사이트", "--symptom", "s"],
+                 ["case", "resume", "c-1", "--answer", "a"]):
+        seen.clear()
+        main([*argv, "--stub-seeds", str(seeds_file), *common])
+        assert seen == [expected], (argv, seen)
+
+
+def test_세_명령_모두_실_어댑터에_시드를_주면_거부한다(tmp_path, monkeypatch, capsys):
+    # patrol run만 테스트가 있었다. 가드도 셋 다 있어야 한다 — 시드가 조용히
+    # 무시되면 사람이 "가짜 데이터로 돌고 있다"고 믿는 채 실제 대상을 두드린다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["adapters"] = "real"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds_file = tmp_path / "seeds.json"
+    seeds_file.write_text(json.dumps({"mx/gumi": {"rest_responses": {}}}), encoding="utf-8")
+
+    common = ["--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)]
+    for argv in (["patrol", "run", "--for-seconds", "0"],
+                 ["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s"],
+                 ["case", "resume", "c-1", "--answer", "a"]):
+        assert main([*argv, "--stub-seeds", str(seeds_file), *common]) == 1, argv
+        assert 'adapters="real"' in capsys.readouterr().err, argv
+
+
+def test_knowledge_validate도_실_어댑터에_시드를_주면_거부한다(tmp_path, monkeypatch, capsys):
+    # 시드를 받는 네 번째 경로다. 여기만 가드를 빼면 adapters="real" 사이트에서
+    # 시드가 조용히 무시되고 --live가 **실제 네트워크를 친다** — 사람은 예행이라고
+    # 믿는다. "세 경로를 하나의 로더로"라고 선언한 계약이 넷째에서 깨진 자리다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    gbm = tmp_path / "config" / "gbm" / "mx.json"
+    data = json.loads(gbm.read_text(encoding="utf-8"))
+    data["target"]["adapters"] = "real"
+    gbm.write_text(json.dumps(data), encoding="utf-8")
+    seeds_file = tmp_path / "seeds.json"
+    seeds_file.write_text(json.dumps({"mx/gumi": {"rest_openapi": {"paths": {}}}}),
+                          encoding="utf-8")
+
+    code = main(["knowledge", "validate", "--live", "--stub-seeds", str(seeds_file),
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1
+    assert 'adapters="real"' in capsys.readouterr().err

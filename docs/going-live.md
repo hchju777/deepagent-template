@@ -77,8 +77,9 @@ MX_GUMI_API_TOKEN=<실제 토큰>          # rest.auth.value가 참조한다
 python -m src knowledge validate --live --config-root config --repo-root .
 ```
 
-`--live`는 실제 접속이 필요하므로 기본으로는 돌지 않는다(죽은 사이트가
-기동 자체를 막지 않도록). CI에 대상 시스템 접근 권한이 있을 때만 켜라.
+`--live`는 실제 접속이 필요하므로 기본으로는 돌지 않는다 — "죽은 사이트가 기동을
+막으면 역효과"라는 원칙은 **opt-in으로 둔 것**으로 지켜진다. 켠 뒤에는 확인하지
+못한 것도 기동을 막는다(§7). CI에 대상 시스템 접근 권한이 있을 때만 켜라.
 
 Kafka는 `assign()`으로 파티션에 직접 붙어 컨슈머 그룹에 참여하지 않는다 —
 운영 중인 컨슈머 그룹의 오프셋에 영향을 주지 않는다.
@@ -229,5 +230,6 @@ git add knowledge/target_api && git commit
 - [ ] `store.backend: "mongo"` + `AGENT_MONGO_URL`(대상 시스템과 별도 DB)
 - [ ] 필요하면 `report.mail` 켜기
 - [ ] `knowledge/target_api/{gbm}/{fct}.json`에 대상의 OpenAPI를 받아 두고 커밋
-- [ ] `knowledge validate`(정적) 후 `knowledge validate --live`(접속 확인 + 명세 드리프트) 둘 다 통과
+- [ ] `knowledge validate`(정적) 통과
+- [ ] `knowledge validate --live`(Mongo 롤 + 명세 드리프트) 통과 — 대상이 명세를 안 내주는 환경이면 이 항목은 건너뛰고 정적 검증만 돌린다(§7). **건너뛴다는 결정을 팀이 알고 있어야 한다**
 - [ ] `patrol run`을 상시 프로세스로 배포
