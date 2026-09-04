@@ -7,8 +7,8 @@
 
 ## Part A. config만으로 점검 추가하기
 
-`config.example/gbm/mx.json`의 `patrol.checks`에는 이미 `api.oee_range`
-하나가 있다. 같은 파일에 두 번째 점검을 추가해 보자 — MongoDB `twin_state`
+`config.example/gbm/mx.json`의 `patrol.checks`에는 이미 `api.oee_range`와
+`prod.badge_nonzero` 둘이 있다. 같은 파일에 세 번째 점검을 추가해 보자 — MongoDB `twin_state`
 컬렉션이 너무 오래 갱신되지 않으면 잡아내는 신선도(freshness) 점검이다.
 
 ```json
@@ -17,9 +17,10 @@
   "patrol": {
     "checks": {
       "api.oee_range": { "...": "기존 내용 그대로" },
+      "prod.badge_nonzero": { "...": "기존 내용 그대로" },
       "twin_state.freshness": {
         "judge": "rule",
-        "schedule": { "interval": "1m" },
+        "schedule": { "interval": "3s" },
         "target": "mongo:twin_state",
         "params": { "rule": "freshness", "field": "ts", "max_age_s": 300 }
       }
@@ -38,24 +39,35 @@ python -m src knowledge validate --config-root config.example --repo-root .
 `OK`가 나오면 이 점검의 `target`(`mongo:twin_state`)이 토폴로지에서 해석되고,
 프로브(`mongo_recent` — target kind가 `mongo`라 기본 선택됨)도 정상이라는
 뜻이다. 실패한다면 각 에러 줄의 `[사이트]` 접두어와 메시지를 그대로 따라가면
-된다 — 기동 검증은 문제를 전부 모아서 한 번에 보여준다([config 레퍼런스](config-reference.md#기동-검증-11개-항목-srcbootpy) 참고).
+된다 — 기동 검증은 문제를 전부 모아서 한 번에 보여준다([config 레퍼런스](config-reference.md#기동-검증-항목-srcbootpy) 참고).
 
 ```bash
 python -m src patrol run --for-seconds 5 --config-root config.example --repo-root .
 ```
 
-이 시점에서 중요한 사실 하나: `config.example`은 `target.adapters: "stub"`을
-쓰고, CLI로 띄운 순찰은 스텁에 **아무 데이터도 미리 채워 넣지 않은 채로** 점검을
-돈다. 그래서 두 점검 모두 "값을 하나도 못 찾았다"는 의미로 처리되고(비어 있는
-스텁 응답), 진짜로 이상 케이스를 여는 것은 보지 못한다 — 이건 버그가 아니라
-스텁 어댑터에 아직 아무 데이터도 넣지 않았기 때문이다. 실제 시스템에 붙이는
-방법은 [docs/going-live.md](going-live.md)를 보라.
+`config.example`은 `target.adapters: "stub"`을 쓰지만 `target.stub_seeds`가
+스텁 응답을 미리 심어 둬서, 이 명령은 실제로 끝까지 간다 — `api.oee_range`가
+`oee=512`에서 finding을 내고(범위 `0~100` 초과), 케이스가 열리고, 조사가
+시작되고, `output/c-1.html`에 보고서가 쓰인다. 방금 추가한
+`twin_state.freshness`도 케이스를 하나 더 연다 — 시드에 `twin_state` 컬렉션이
+없어 `ts` 필드를 못 찾고 "필드 부재 — ts"라는 finding을 내기 때문이다. 데이터
+이상은 rule 설정 오류(`KnownRuleError`)가 아니라 finding으로 다루는 규율이 여기
+그대로 보인다. 실제 데이터를 넣어 보려면 `target.stub_seeds.mongo_collections`에
+`twin_state`를 추가하면 된다.
 
-그럼 "점검이 실제로 이상을 잡아서 케이스가 열리는 전체 과정"을 어떻게
-확인할 수 있을까? 두 가지 방법이 있다:
+다만 **조사는 첫 LLM 호출에서 멈춘다**: `.env.example`의 `LLM_BASE_URL`이
+실재하지 않는 예시 호스트라 연결 자체가 안 된다(키가 틀린 게 아니라 검증까지
+가지도 못한다). 보고서는 그 사실을 caveat(`LLM 호출 실패 —
+OpenAIConnectionError`)과 조사 단계 체크리스트로 그대로 적는다 — 가설 수립과
+판정이 ❌, 도달하지 못한 네 단계가 ⬜다. 실제 시스템에 붙이는 방법은
+[docs/going-live.md](going-live.md)를 보라.
 
-1. 실제 대상 시스템에 `adapters: "real"`로 붙인다(운영 환경, going-live.md).
-2. **오프라인으로 결정론 재현**한다 — Part B.
+그럼 "조사가 끝까지 가서 판정과 검증이 나오는 전체 과정"은 어떻게
+확인할까? LLM을 부르지 않고 결정론으로 재현하는 방법이 있다 — 두 가지다:
+
+1. 실제 LLM 키와 대상 시스템을 붙인다(운영 환경, going-live.md).
+2. **오프라인으로 결정론 재현**한다 — Part B. LLM을 대본(`ScriptedLLM`)으로
+   대신해 같은 경로를 매번 같은 결과로 돌린다.
 
 ## Part B. 오프라인으로 전체 조사를 재현하기
 

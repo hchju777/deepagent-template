@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from src.config.schema_site import Schedule, SiteConfig
+from src.config.schema_site import CheckConfig, Schedule, SiteConfig
 
 
 def _site(**patrol_checks):
@@ -144,3 +144,52 @@ def test_정상_항목_이름은_통과한다():
         t = RestTarget.model_validate({"base_url": "http://x",
                                        "entries": {ok: {"method": "POST", "path": "/x"}}})
         assert ok in t.entries
+
+
+def test_해석기_스펙은_종류별로_필요한_필드를_요구한다():
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+        "params": {"rule": "exists", "field": "body.badge"},
+        "resolve": {
+            "part_code": {"from": "rest", "entry": "list_parts", "field": "part_code",
+                          "cardinality": "all"},
+            "line_code": {"from": "mongo", "collection": "lines", "field": "line_code",
+                          "filter": {"active": True}, "cardinality": "first:10"},
+            "date": {"from": "clock", "expr": "today"},
+            "graph_type": {"from": "unfiltered"}}})
+    assert check.resolve["part_code"].entry == "list_parts"
+    assert check.resolve["line_code"].cardinality == "first:10"
+
+
+def test_알_수_없는_해석기_종류는_거부된다():
+    with pytest.raises(ValidationError):
+        CheckConfig.model_validate({
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "resolve": {"x": {"from": "s3", "bucket": "b"}}})
+
+
+def test_해석기_종류마다_필요한_필드가_강제된다():
+    for bad in ({"from": "rest", "field": "x"},              # entry 없음
+                {"from": "mongo", "field": "x"},             # collection 없음
+                {"from": "clock"},                           # expr 없음
+                {"from": "clock", "expr": "언젠가"}):         # 어휘 밖 expr
+        with pytest.raises(ValidationError):
+            CheckConfig.model_validate({
+                "judge": "rule", "schedule": {"interval": "5m"}, "resolve": {"x": bad}})
+
+
+def test_카디널리티_어휘_밖은_거부된다():
+    with pytest.raises(ValidationError):
+        CheckConfig.model_validate({
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "resolve": {"x": {"from": "rest", "entry": "e", "field": "f",
+                              "cardinality": "무제한"}}})
+
+
+def test_정적_값과_해석_키가_겹치면_거부된다():
+    # 어느 쪽이 이기는지 사람이 헷갈리면 안 된다.
+    with pytest.raises(ValidationError):
+        CheckConfig.model_validate({
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "params": {"body": {"part_code": ["P001"]}},
+            "resolve": {"part_code": {"from": "unfiltered"}}})

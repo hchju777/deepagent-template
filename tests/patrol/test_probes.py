@@ -1,10 +1,16 @@
+import functools
 import asyncio
 from datetime import datetime, timezone
 
-from src.config.schema_site import CheckConfig, SiteConfig
-from src.infrastructure.factory import StubSeeds, build_adapters
+from src.config.schema_site import CheckConfig, RestEntry, SiteConfig
+from src.infrastructure.factory import AdapterSet, StubSeeds, build_adapters
+from src.infrastructure.stubs import StubMongo, StubRest
 from src.knowledge.topology import Topology
-from src.patrol.probes import PROBES, resolve_probe
+from src.patrol.probes import PROBES as _PROBES, resolve_probe
+
+# timezone_name은 키워드 필수 — 그 기본값이 배선 누락을 조용히 가렸다.
+PROBES = {name: functools.partial(fn, timezone_name="UTC") for name, fn in _PROBES.items()}
+rest_query = PROBES["rest_query"]
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 TOPO = Topology.model_validate({
@@ -69,7 +75,6 @@ async def test_rest_query는_check의_body를_그대로_넘긴다():
     from src.config.schema_site import RestEntry
     from src.infrastructure.factory import AdapterSet
     from src.infrastructure.stubs import StubRest
-    from src.patrol.probes import rest_query
     entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
                                          body_schema={"part_code": "list[str]"})}
     adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
@@ -84,10 +89,119 @@ async def test_rest_query는_check의_body를_그대로_넘긴다():
 
 async def test_rest_query는_어댑터가_없어도_raise하지_않는다():
     from src.infrastructure.factory import AdapterSet
-    from src.patrol.probes import rest_query
     check = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5m"},
                                         "target": "rest:summary_prod",
                                         "params": {"rule": "exists"}})
     result = await rest_query(AdapterSet(semaphore=asyncio.Semaphore(1)), check,
                               clock=lambda: T)
     assert result.status == "error" and "rest" in result.error
+
+
+async def test_rest_query가_해석된_값을_보낸다():
+    from src.config.schema_site import RestEntry
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubMongo, StubRest
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"line_code": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /summary/prod": {"badge": [1]}}, set(), entries,
+                             clock=lambda: T)
+    adapters.mongo = StubMongo({"lines": [{"line_code": "L1"}, {"line_code": "L2"}]},
+                               max_rows=100, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+        "params": {"rule": "exists", "field": "body.badge"},
+        "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                  "field": "line_code"}}})
+    result = await rest_query(adapters, check, clock=lambda: T)
+    assert result.status == "ok"
+    assert result.data["request"]["params"] == {"line_code": ["L1", "L2"]}
+
+
+async def test_해석_실패면_대상을_호출하지_않는다():
+    from src.config.schema_site import RestEntry
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubMongo, StubRest
+    entries = {"summary_prod": RestEntry(method="POST", path="/summary/prod",
+                                         body_schema={"line_code": "list[str]"})}
+    called = []
+
+    class SpyRest(StubRest):
+        async def query(self, entry, params):
+            called.append(params)
+            return await super().query(entry, params)
+
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = SpyRest({"POST /summary/prod": {"badge": [1]}}, set(), entries,
+                            clock=lambda: T)
+    adapters.mongo = StubMongo({"lines": []}, max_rows=100, clock=lambda: T)   # 빈 결과
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+        "params": {"rule": "exists", "field": "body.badge"},
+        "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                  "field": "line_code"}}})
+    result = await rest_query(adapters, check, clock=lambda: T)
+    assert result.status == "error" and "line_code" in result.error
+    assert called == [], "해석에 실패했는데 대상을 호출했다"
+
+
+async def test_잘라낸_표본은_불완전으로_표시된다():
+    from src.config.schema_site import RestEntry
+    from src.infrastructure.factory import AdapterSet
+    from src.infrastructure.stubs import StubMongo, StubRest
+    entries = {"e": RestEntry(method="POST", path="/x",
+                              body_schema={"line_code": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /x": {"ok": 1}}, set(), entries, clock=lambda: T)
+    adapters.mongo = StubMongo({"lines": [{"line_code": f"L{i}"} for i in range(10)]},
+                               max_rows=100, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body.ok"},
+        "resolve": {"line_code": {"from": "mongo", "collection": "lines",
+                                  "field": "line_code", "cardinality": "first:3"}}})
+    result = await rest_query(adapters, check, clock=lambda: T)
+    assert result.status == "ok"
+    assert result.envelope.complete is False
+    assert "10" in (result.envelope.truncated_reason or "")
+
+
+async def test_대상이_알려준_절단_이유를_덮어쓰지_않는다():
+    # 우리가 표본을 자른 사실을 적으면서 대상이 알려준 절단을 지우면, 두 절단 중
+    # 하나가 증거에서 사라진다 — 조용한 생략이다.
+    from src.domain.envelope import Envelope, ProbeResult
+    from src.config.schema_site import RestEntry
+
+    class _Rest:
+        async def query(self, entry, params):
+            return ProbeResult(status="ok", data={"body": [], "request": {}},
+                               envelope=Envelope(observed_at=T, complete=False,
+                                                 truncated_reason="서버가 1페이지만 줬다"))
+
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = _Rest()
+    adapters.mongo = StubMongo({"lines": [{"c": f"L{i}"} for i in range(10)]},
+                               max_rows=100, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body"},
+        "resolve": {"line": {"from": "mongo", "collection": "lines", "field": "c",
+                             "cardinality": "first:3"}}})
+    out = await PROBES["rest_query"](adapters, check, clock=lambda: T)
+    reason = out.envelope.truncated_reason or ""
+    assert "서버가 1페이지만 줬다" in reason and "10개 중 3개" in reason, reason
+
+
+async def test_의도한_전체조회는_증거에_남는다():
+    # unfiltered의 존재 이유는 "해석 실패로 우연히 전체를 본 것"과 "일부러 전체를
+    # 본 것"을 코드가 구별하는 것이다. 증거에 안 남으면 런타임에는 그 구별이 없다.
+    entries = {"e": RestEntry(method="POST", path="/x", body_schema={"line": "list[str]"})}
+    adapters = AdapterSet(semaphore=asyncio.Semaphore(1))
+    adapters.rest = StubRest({"POST /x": {"ok": 1}}, set(), entries, clock=lambda: T)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body"},
+        "resolve": {"line": {"from": "unfiltered"}}})
+    out = await PROBES["rest_query"](adapters, check, clock=lambda: T)
+    assert out.status == "ok"
+    assert out.data["request"].get("unfiltered") == ["line"], out.data["request"]

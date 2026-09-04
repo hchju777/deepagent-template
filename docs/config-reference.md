@@ -78,13 +78,13 @@
 | `report.mail.recipients` | list[str] | `[]` | 수신자 목록 |
 | `report.mail.username` / `.password` | str \| null / SecretStr \| null | null | SMTP 인증(선택) |
 | `report.mail.use_tls` | bool | `false` | TLS 사용 여부 |
-| `timezone` | str | `"Asia/Seoul"` | 보고서·스케줄 표시에 쓰는 IANA 타임존 |
+| `timezone` | str | `"Asia/Seoul"` | 보고서·스케줄 표시, **그리고 `clock` 해석기의 날짜 경계**를 정하는 IANA 타임존. `today`가 어느 날인지가 이 값으로 갈린다 — 해석 실패면 기동을 거부한다 |
 
 **기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
 `judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
-비어 있으면 안 되고(검사 10), 활성 사이트가 있고 `llm.profiles`(judge/
+비어 있으면 안 되고(검사 15), 활성 사이트가 있고 `llm.profiles`(judge/
 subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 반드시
-있어야 한다(검사 11) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
+있어야 한다(검사 16) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
 해당된다.
 
 ## `registry.json` — 사이트 목록
@@ -122,6 +122,8 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `target.code.repos[].name` / `.path` | str / str | — | `code_tracer`가 읽을 로컬 git 체크아웃들. `name`은 토폴로지·deployment.yaml이 참조하는 식별자 |
 | `target.guards.timeout_s` | float | 10 | 어댑터 호출 타임아웃 |
 | `target.guards.max_rows` | int | 1000 | 조회 결과 상한(넘으면 `complete=False`) |
+| `target.stub_seeds.rest_responses` | dict | `{}` | `adapters="stub"`일 때 스텁이 돌려줄 REST 응답. 키는 endpoint 문자열(토폴로지 GET) 또는 `"{method} {path}"`(등재 항목) |
+| `target.stub_seeds.redis_data` / `.redis_ttls` / `.mongo_collections` / `.kafka_messages` / `.kafka_offsets` | dict | `{}` | 나머지 스텁 시드. 대상 시스템 없이 점검이 실제로 결과를 내게 한다 |
 | `target.guards.max_concurrent` | int | 4 | 이 사이트에 대한 **모든 어댑터가 공유하는** 동시 요청 상한(세마포어 하나) |
 
 인증 필드는 전부 선택이다 — 인증 없는 법인은 `url`만 채우고, 있는 법인만
@@ -134,11 +136,26 @@ subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 
 | `judge` | `"rule"` \| `"llm"` \| `"rule+llm"` | **필수** | 판정 방식 |
 | `schedule.interval` | str(`^\d+[smh]$`) | — | `interval`/`cron` 중 정확히 하나. 예: `"30s"`, `"5m"`, `"1h"`. 0은 불가 |
 | `schedule.cron` | str(5필드) | — | 표준 5필드 cron 표현식 |
-| `target` | str \| null | null | 토폴로지 locator(예: `"rest:/api/v1/lines/{line}/oee"`). 기동 검증이 토폴로지에서 해석 가능한지 확인 |
-| `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest→rest_get`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
+| `target` | str \| null | null | 토폴로지 locator(예: `"rest:/api/v1/lines/{line}/oee"`) 또는 등재 항목 이름(`"rest:summary_prod"`). 기동 검증이 각자의 이름공간에서 해석 가능한지 확인. **`{자리표시자}`가 든 locator를 `rest_get` 점검의 target으로 쓰면 그 문자열이 그대로 전송된다** — 토폴로지 패턴은 "이 모양의 끝점이 허용된다"는 뜻이지 값을 채워 주지는 않는다. 실제 값이 필요하면 자리표시자 없는 구체 경로를 쓰거나, 등재 항목(`target.rest.entries`) + `resolve`로 표현한다 |
+| `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest:/path→rest_get`, `rest:<이름>→rest_query`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
 | `params` | dict | `{}` | 프로브·rule 판정에 넘길 파라미터(아래 "rule 판정 4종" 참고) |
 | `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`의 `limit`) |
 | `on_budget_exhausted` | `"skip"` \| `"escalate"` | `"skip"` | llm/rule+llm 판정인데 `patrol.llm_budget`이 소진됐을 때 동작 |
+| `resolve.<키>.from` | `"rest"` \| `"mongo"` \| `"redis"` \| `"clock"` \| `"unfiltered"` | **필수** | 값을 어디서 읽을지. 값 자체를 config에 적으면 즉시 썩는다(사업부/법인마다 다르고 매일 바뀐다). `params.body`와 키가 겹치면 기동 거부 |
+| `resolve.<키>.entry` / `.field` | str / str | `from="rest"`일 때 필수 | 부를 등재 조회 항목(**GET이어야 한다** — 기동 검증이 강제)과 뽑을 필드 |
+| `resolve.<키>.collection` / `.field` / `.filter` | str / str / dict | `from="mongo"`일 때 앞 둘 필수 | 조회할 컬렉션·필드·필터 |
+| `resolve.<키>.pattern` | str | `from="redis"`일 때 필수 | scan 패턴. 값은 **키 목록**이다 |
+| `resolve.<키>.expr` | `"today"` \| `"yesterday"` \| `"now_iso"` | `from="clock"`일 때 필수 | 주입된 시계로 만든다(`datetime.now()`를 직접 부르지 않는다) |
+| `resolve.<키>.cardinality` | `"all"` \| `"first:N"` \| `"sample:N"` | `"all"` | 값이 많을 때 자를 방식. 자르면 증거가 `complete=False`로 나가 verify가 "불완전 증거의 부정 결론"을 막는다 |
+
+`from="unfiltered"`는 **의도한 전체 조회**를 명시한다 — 그 키를 아예 보내지 않는다.
+해석 실패로 우연히 전체 조회에 도달하는 경로와 구별하기 위한 어휘다.
+
+**전부-또는-전무**: 해석기가 하나라도 값을 못 내면 대상을 **호출조차 하지 않고**
+`CheckOutcome(status="error")`가 된다. finding이 아니다 — 우리 쪽 실패가 "현장 이상"으로
+둔갑하면 매 순찰이 거짓 경보가 된다. 빈 필터로 나간 요청은 endpoint에 따라 `0/0/0`(거짓
+경보)이 되기도 하고 전체 조회(거짓 안심)가 되기도 하는데, 어느 쪽인지 알 방법이 없다.
+
 
 **rule 판정 4종**(`src/patrol/rules.py`, `params.rule`로 선택):
 
@@ -189,7 +206,7 @@ services:
   <service-name>: { repo: <name>, commit: <git commit hash> }
 ```
 
-기동 검증(검사 7)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
+기동 검증(검사 12)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
 실제로 존재하는지(`git cat-file`) 확인한다.
 
 ## `.env` — 비밀값
@@ -211,22 +228,28 @@ services:
 명명 규약은 강제되는 스키마가 아니라 관례다 — 실제로 어떤 env 키를 참조하는지는
 각 사이트 config의 `${...}` 값이 결정한다.
 
-## 기동 검증 11개 항목 (`src/boot.py`)
+## 기동 검증 항목 (`src/boot.py`)
 
 `python -m src knowledge validate`(`--live` 옵션 포함)가 도는 전체 목록. 하나만
-잘못돼도 죽지 않고 **전부 모아서** 보고한다.
+잘못돼도 죽지 않고 **전부 모아서** 보고한다. (개수를 제목에 적지 않는 이유:
+항목이 늘 때마다 이 문서가 조용히 낡는다 — 실제로 그랬다.)
 
 1. `app.json` 파싱·스키마
-2. `registry.json` 파싱·스키마
-3. 활성 사이트별 config 3계층 병합 + env 참조 해석
-4. 토폴로지 내부 정합성(`topology_problems`)
-5. 각 점검의 `target`이 해석되는가 — `rest:/path`·`redis:`·`mongo:`·`kafka:`는 토폴로지 locator로, `rest:<이름>`은 `target.rest.entries`로 해석하고, 등재 항목이면 `params.body`가 그 항목의 닫힌 스키마를 통과하는지까지 본다
-6. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
-7. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
-8. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
-9. 각 점검의 프로브가 레지스트리에서 해석 가능한가
-10. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
-11. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
+2. `app.timezone`이 해석 가능한 IANA 타임존인가 — `clock` 해석기의 날짜 경계가 이 값으로 정해지므로 오타가 나면 매일 하루씩 어긋난 질문이 나간다
+3. `registry.json` 파싱·스키마
+4. 활성 사이트별 config 3계층 병합 + env 참조 해석
+5. 토폴로지 내부 정합성(`topology_problems`)
+6. `adapters="real"`인데 `target.stub_seeds`가 남아 있지 않은가 — 시드는 스텁에서만 쓰여 실전환 시 조용히 무시된다
+7. 각 점검의 `target`이 해석되는가 — `rest:/path`·`redis:`·`mongo:`·`kafka:`는 토폴로지 locator로, `rest:<이름>`은 `target.rest.entries`로 해석하고, 등재 항목이면 `params.body`가 그 항목의 닫힌 스키마를 통과하는지까지 본다
+8. `resolve`가 있으면 target이 등재 항목인가 — 다른 target에 달면 런타임이 조용히 무시한다
+9. `resolve`의 각 키가 등재 항목 스키마에 있는가, 그리고 해석기 **모양**이 그 타입과 맞는가 — `clock`은 문자열 하나, 소스 해석기는 리스트다
+10. `from: "rest"` 해석기가 가리키는 항목이 실재하고 GET인가 / `mongo`·`redis` 해석기의 어댑터가 설정돼 있는가 / `mongo` 해석기의 `filter` 연산자가 허용 목록 안인가
+11. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
+12. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
+13. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
+14. 각 점검의 프로브가 레지스트리에서 해석 가능한가
+15. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
+16. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
 
-검사 8만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
+검사 13만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

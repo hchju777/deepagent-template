@@ -167,6 +167,7 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 어댑터 조립(stub↔real 전환점) | `src/infrastructure/factory.py` |
 | Mongo 케이스 저장소 | `src/infrastructure/mongo_store.py` |
 | 프로브 레지스트리 | `src/patrol/probes.py` |
+| 파라미터 값 해석기(전부-또는-전무) | `src/patrol/resolvers.py` |
 | rule 판정 4종 | `src/patrol/rules.py` |
 | 읽기 전용 순수 판정(끝점·body·집계) | `src/infrastructure/query_rules.py` |
 | 이벤트 로그 포트·인메모리 구현 | `src/domain/events.py` |
@@ -174,13 +175,13 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | LLM 판정 | `src/patrol/llm_judge.py` |
 | 순찰 게이트(케이스 개설/첨부/억제) | `src/patrol/gate.py` |
 | 순찰 데몬 조립 | `src/patrol/daemon.py` |
-| 보고서 데이터 유도(단계 체크리스트) | `src/presentation/report_model.py` |
+| 보고서 데이터 유도(단계 체크리스트) | `src/domain/report_model.py` |
 | 보고서 렌더링(마크다운) | `src/presentation/report.py` |
 | 보고서 렌더링(HTML, 기본 포맷) | `src/presentation/report_html.py` |
 | 메일 발송(2단계 멱등) | `src/presentation/mail.py` |
 | 토폴로지·배포 지식 로더 | `src/knowledge/` |
 | config 스키마·로더·병합 | `src/config/` |
-| 기동 검증 11개 항목 | `src/boot.py` |
+| 기동 검증 항목 | `src/boot.py` |
 | CLI | `src/__main__.py` |
 
 ## 테스트

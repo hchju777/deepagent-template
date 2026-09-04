@@ -78,7 +78,8 @@ class MongoCaseStore(CaseStorePort):
         self._db = db
 
     def put_evidence(self, case_id, source, body, *,
-                     as_of=None, complete=True, effective_as_of=None):
+                     as_of=None, complete=True, truncated_reason=None,
+                     effective_as_of=None):
         seq = _next_seq(self._db, f"evidence:{case_id}")
         evidence_id = f"ev-{seq}"
         # EvidenceRecord를 거쳐 as_of/effective_as_of를 tz-aware 왕복 가능한
@@ -86,6 +87,7 @@ class MongoCaseStore(CaseStorePort):
         record = EvidenceRecord(id=evidence_id, source=source,
                                 body_digest=canonical_digest(body),
                                 as_of=as_of, complete=complete,
+                                truncated_reason=truncated_reason,
                                 effective_as_of=effective_as_of)
         dumped = record.model_dump(mode="json")
         self._db.evidence.insert_one({
@@ -96,6 +98,7 @@ class MongoCaseStore(CaseStorePort):
             "digest": dumped["body_digest"],
             "as_of": dumped["as_of"],
             "complete": dumped["complete"],
+            "truncated_reason": dumped["truncated_reason"],
             "effective_as_of": dumped["effective_as_of"],
             "seq": seq,
         })
@@ -112,6 +115,8 @@ class MongoCaseStore(CaseStorePort):
         return EvidenceRecord.model_validate({
             "id": doc["id"], "source": doc["source"], "body_digest": doc["digest"],
             "as_of": doc["as_of"], "complete": doc["complete"],
+            # 이 필드 이전에 쓰인 문서에는 키가 없다 — .get으로 읽어 옛 증거를 깨지 않는다.
+            "truncated_reason": doc.get("truncated_reason"),
             "effective_as_of": doc["effective_as_of"],
         })
 

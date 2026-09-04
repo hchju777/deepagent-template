@@ -7,6 +7,7 @@
 "무엇을 확인 안 했나"의 명시(§5)가 신뢰의 조건이다 — 조용한 생략 금지의
 보고서판. 그래서 각 하위 항목이 비면 값을 지우는 대신 "없음"을 적는다.
 """
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -174,6 +175,21 @@ def _section3(verdict: Verdict | None) -> str:
     return "## 3. 조치 권고\n" + body
 
 
+def _cell(text) -> str:
+    r"""표 칸에 넣을 문자열을 안전하게 만든다.
+
+    이유·출처·요지는 대상 시스템이나 LLM에서 온 문자열이라 파이프·개행·역슬래시가
+    섞일 수 있다. 그대로 넣으면 그 행만 열 수가 어긋나 표 전체가 깨진다.
+
+    순서가 중요하다: 역슬래시를 **먼저** 두 배로 만들지 않으면 원문의 `\|`가
+    `\\|`가 되어, GFM이 `\\`를 이스케이프된 역슬래시로 읽고 뒤의 파이프가 열을
+    가른다. `\r`도 지워야 한다 — 실제 GFM 렌더러에서 그 행이 통째로 사라진다
+    (조용한 생략). 둘 다 mistune으로 직접 렌더해 확인했다.
+    """
+    escaped = str(text).replace("\\", "\\\\").replace("|", "\\|")
+    return re.sub(r"[\r\n]+", " ", escaped)
+
+
 def _section4(evidence: list[EvidenceRecord], evidence_summaries: dict[str, str] | None) -> str:
     if not evidence:
         return "## 4. 증거\n없음"
@@ -187,10 +203,13 @@ def _section4(evidence: list[EvidenceRecord], evidence_summaries: dict[str, str]
     for ev in evidence:
         as_of = ev.as_of.isoformat() if ev.as_of else "-"
         eff = ev.effective_as_of.isoformat() if ev.effective_as_of else "-"
-        complete = "완전" if ev.complete else "⚠ 불완전"
+        complete = ("완전" if ev.complete
+                    else f"⚠ 불완전({_cell(ev.truncated_reason)})" if ev.truncated_reason
+                    else "⚠ 불완전")
         digest = (ev.body_digest or "")[:12]
         summary = (evidence_summaries or {}).get(ev.id, digest)
-        lines.append(f"| {ev.id} | {ev.source} | {as_of} | {complete} | {eff} | {summary} |")
+        lines.append(f"| {_cell(ev.id)} | {_cell(ev.source)} | {as_of} | {complete} "
+                     f"| {eff} | {_cell(summary)} |")
     return "\n".join(lines)
 
 
@@ -214,7 +233,8 @@ def _section5(model: ReportModel) -> str:
     for t in model.plan_tasks:
         status = t.get("status", "?")
         note = "미조사" if status in _UNINVESTIGATED else (t.get("error") or "")
-        task_rows.append(f"| {t.get('id', '?')} | {t.get('role', '?')} | {status} | {note} |")
+        task_rows.append(f"| {_cell(t.get('id', '?'))} | {_cell(t.get('role', '?'))} "
+                         f"| {_cell(status)} | {_cell(note)} |")
     if not task_rows:
         lines.append("  없음")
     else:

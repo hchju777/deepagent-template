@@ -38,12 +38,21 @@ pytest tests/test_bench_scenarios.py   # 벤치 회귀
   등재 항목(`target.rest.entries`) 호출은 같은 dict에 `"POST /summary/prod"`처럼 `"{method} {path}"` 키로 시드한다.
 시스템 없이 "이런 데이터가 관측됐다"를 재현하는 유일한 방법이다.
 
+같은 시드를 **config에서도** 심을 수 있다 — 사이트 config의 `target.stub_seeds`
+(`adapters="stub"`일 때만 유효, `"real"`이면 기동 검증이 거부한다). `config.example`이
+그 방식으로 돌아 `patrol run`이 대상 시스템 없이 끝까지 간다. 테스트가 인자로 준
+`StubSeeds`가 config보다 우선한다(`daemon.assemble_sites`).
+
 ## 테스트 트리 구조
 
 `tests/`는 `src/`와 계층별로 미러링돼 있다: `tests/domain/`,
 `tests/config/`, `tests/knowledge/`, `tests/infrastructure/`,
 `tests/patrol/`, `tests/application/`, `tests/presentation/`. 최상위에
 `test_boot.py`(기동 검증 통합)와 `test_bench_scenarios.py`(E2E 벤치)가 있다.
+`tests/patrol/test_resolvers.py`는 파라미터 해석기(전부-또는-전무·카디널리티·
+시간대)를 단위로 덮고, 그것이 **실제 데몬 경로까지 배선됐는지**는
+`tests/patrol/test_daemon.py`가 본다 — 함수 인자만 보는 테스트가 배선 누락을
+못 잡은 사례가 이 리포에 있다.
 
 ## 벤치 시나리오(E2E 회귀)
 

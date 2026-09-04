@@ -32,14 +32,19 @@ class AdmitResult(StrictModel):
 
 
 def _copy_snapshots(finding: Finding, target_case_id: str, store: CaseStorePort) -> None:
-    """finding이 인용한 스냅샷을 target_case_id로 복사한다 — 메타(as_of/
-    complete/effective_as_of) 보존. 스크래치 케이스의 원본은 그대로 둔다."""
+    """finding이 인용한 스냅샷을 target_case_id로 복사한다 — 메타(as_of/complete/
+    truncated_reason/effective_as_of) 보존. 스크래치 케이스의 원본은 그대로 둔다.
+
+    보고서가 읽는 것은 **케이스** 증거다. 여기서 메타를 하나라도 흘리면 스크래치에는
+    남아 있는데 보고서에는 안 나오는 상태가 된다 — truncated_reason이 실제로 그랬다.
+    """
     for evidence_id in finding.evidence_ids:
         record = store.get_evidence_record(finding.scratch_case_id, evidence_id)
         body = store.get_evidence(finding.scratch_case_id, evidence_id)
         store.put_evidence(
             target_case_id, record.source, body,
             as_of=record.as_of, complete=record.complete,
+            truncated_reason=record.truncated_reason,
             effective_as_of=record.effective_as_of,
         )
 

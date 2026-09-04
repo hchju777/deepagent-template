@@ -94,7 +94,9 @@ def _render(model) -> str:
 
     evidence_rows = [[_e(ev.id), _e(ev.source),
                       _e(ev.as_of.isoformat() if ev.as_of else "-"),
-                      "완전" if ev.complete else "⚠ 불완전",
+                      ("완전" if ev.complete
+                       else _e(f"⚠ 불완전({ev.truncated_reason})") if ev.truncated_reason
+                       else "⚠ 불완전"),
                       _e(ev.effective_as_of.isoformat() if ev.effective_as_of else "-"),
                       _e((model.evidence_summaries or {}).get(ev.id,
                                                               (ev.body_digest or "")[:12]))]

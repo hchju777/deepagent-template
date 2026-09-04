@@ -68,9 +68,26 @@
 
 **Envelope** (`src/domain/envelope.py`) — 대상 시스템 호출 하나의 메타
 정보. "요청한 것"과 "실제로 얻은 것"의 차이를 표현한다. `complete=False`면
-상한(`max_rows` 등)에 결과가 잘렸다는 뜻이고, 그때는 `truncated_reason`이
-필수다. `effective_as_of`는 요청한 시점(`requested_as_of`)과 실제로 달성한
+**우리가 본 것이 전부가 아니다**는 뜻이고, 그때는 `truncated_reason`이 필수다.
+두 갈래가 있다 — 상한(`max_rows` 등)에 결과가 잘렸거나, 해석기가 카디널리티로
+질문의 범위를 좁혀 물었거나(`line_code: 500개 중 50개만 사용`). 둘 다 "부정
+증거로 결론 금지"라는 같은 규율에 걸린다. `effective_as_of`는 요청한 시점(`requested_as_of`)과 실제로 달성한
 시점이 다를 때(예: Kafka 보존 밖이라 더 나중 데이터로 폴백) 명시된다.
+
+**해석기(resolver)** (`src/patrol/resolvers.py`) — 등재 항목 호출의 파라미터
+값을 실행 시점에 살아 있는 소스에서 읽어 채우는 것. config는 값이 아니라 값의
+**출처**만 선언한다(`from`: `rest`/`mongo`/`redis`/`clock`/`unfiltered`). 값을
+config에 적으면 사업부·법인마다 다르고 매일 바뀌어 즉시 썩기 때문이다.
+
+**전부-또는-전무(all-or-nothing)** — 해석기가 하나라도 값을 못 내면 대상을
+호출조차 하지 않는다. 빈 필터로 나간 요청은 endpoint에 따라 `0/0/0`(거짓 경보)이
+되기도 하고 전체 조회(거짓 안심)가 되기도 하는데, 응답만 봐서는 어느 쪽인지
+구별할 수 없다. 이 규율은 호출자 규율이 아니라 `ResolveResult`의 반환 타입이
+지킨다(실패하면 `params`가 비어서 나온다).
+
+**unfiltered** — "이 키를 일부러 안 보낸다"는 명시적 선언. 해석 실패로 우연히
+전체 조회에 도달한 것과 구별하기 위해 존재하며, 증거의 `request.unfiltered`에
+그 키 목록이 남는다.
 
 **ProbeResult** — `Envelope` + 실제 데이터(`data`)를 담은, 프로브 호출의
 전체 반환값. `status`(`ok`/`error`)가 `error`면 `error` 원인 문자열이 필수다.

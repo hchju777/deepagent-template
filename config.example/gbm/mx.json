@@ -9,8 +9,14 @@
           "path": "/summary/prod",
           "body_schema": {
             "part_code": "list[str]",
-            "line_code": "str"
+            "line_code": "list[str]",
+            "date": "str"
           }
+        },
+        "list_lines": {
+          "method": "GET",
+          "path": "/lines",
+          "query_schema": {}
         }
       }
     },
@@ -27,6 +33,28 @@
           "path": "./ref"
         }
       ]
+    },
+    "stub_seeds": {
+      "rest_responses": {
+        "GET /lines": [
+          {
+            "line_code": "L1"
+          },
+          {
+            "line_code": "L2"
+          }
+        ],
+        "POST /summary/prod": {
+          "badge": [
+            0,
+            0,
+            0
+          ]
+        },
+        "/api/v1/lines/{line}/oee": {
+          "oee": 512
+        }
+      }
     }
   },
   "patrol": {
@@ -34,7 +62,7 @@
       "api.oee_range": {
         "judge": "rule",
         "schedule": {
-          "interval": "5m"
+          "interval": "3s"
         },
         "target": "rest:/api/v1/lines/{line}/oee",
         "params": {
@@ -47,7 +75,7 @@
       "prod.badge_nonzero": {
         "judge": "rule",
         "schedule": {
-          "interval": "5m"
+          "interval": "3s"
         },
         "target": "rest:summary_prod",
         "params": {
@@ -56,8 +84,18 @@
           "body": {
             "part_code": [
               "P001"
-            ],
-            "line_code": "L1"
+            ]
+          }
+        },
+        "resolve": {
+          "line_code": {
+            "from": "rest",
+            "entry": "list_lines",
+            "field": "line_code"
+          },
+          "date": {
+            "from": "clock",
+            "expr": "today"
           }
         }
       }

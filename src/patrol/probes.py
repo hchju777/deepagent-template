@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from src.config.schema_site import CheckConfig
 from src.domain.envelope import Envelope, ProbeResult
 from src.infrastructure.factory import AdapterSet
+from src.patrol.resolvers import resolve_params
 
 ProbeFn = Callable[..., Awaitable[ProbeResult]]
 
@@ -32,7 +33,8 @@ def _split_target(target: str | None) -> tuple[str, str] | None:
     return kind, rest
 
 
-async def rest_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def rest_get(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str) -> ProbeResult:
     """target "rest:/path" → adapters.rest.get(path)."""
     try:
         if adapters.rest is None:
@@ -46,7 +48,8 @@ async def rest_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeR
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def redis_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def redis_get(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str) -> ProbeResult:
     """target "redis:key" → adapters.redis.get(key)."""
     try:
         if adapters.redis is None:
@@ -60,7 +63,8 @@ async def redis_get(adapters: AdapterSet, check: CheckConfig, *, clock) -> Probe
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def mongo_recent(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def mongo_recent(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str) -> ProbeResult:
     """target "mongo:coll" → 최근 문서 find(sort=ts_field desc, limit=sample or 20)."""
     try:
         if adapters.mongo is None:
@@ -76,7 +80,8 @@ async def mongo_recent(adapters: AdapterSet, check: CheckConfig, *, clock) -> Pr
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
+async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock,
+                    timezone_name: str) -> ProbeResult:
     """params["group"] → adapters.kafka.group_offsets(group)."""
     try:
         if adapters.kafka is None:
@@ -89,11 +94,12 @@ async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock) -> Probe
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
 
-async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock) -> ProbeResult:
-    """target "rest:<항목명>" → adapters.rest.query(항목명, params).
+async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock,
+                     timezone_name: str) -> ProbeResult:
+    """target "rest:<항목명>" → 해석기로 params를 만들어 adapters.rest.query 호출.
 
-    보낼 params는 지금은 check.params["body"](정적 dict)다 — 값을 살아 있는
-    소스에서 해석하는 것은 계획 9의 몫이고, 그때 이 자리가 해석기 호출로 바뀐다.
+    해석 결과는 등재 스키마 검증을 **다시** 통과해야 소켓에 나간다(어댑터가 한다) —
+    계획 8의 불변식("판정한 것 = 보내는 것")이 해석 경로에도 그대로 적용된다.
     """
     try:
         if adapters.rest is None:
@@ -102,11 +108,40 @@ async def rest_query(adapters: AdapterSet, check: CheckConfig, *, clock) -> Prob
         if parts is None or parts[0] != "rest":
             return _error(f"target 형식 오류: {check.target!r}", clock)
         _, entry = parts
-        body = check.params.get("body", {})
-        if not isinstance(body, dict):
-            return _error(f"params.body는 dict여야 한다 (받은 타입: {type(body).__name__})",
+        static = check.params.get("body", {})
+        if not isinstance(static, dict):
+            return _error(f"params.body는 dict여야 한다 (받은 타입: {type(static).__name__})",
                           clock)
-        return await adapters.rest.query(entry, body)
+        resolved = await resolve_params(check.resolve, adapters=adapters, clock=clock,
+                                        timezone_name=timezone_name)
+        if resolved.problems:
+            # 전부-또는-전무(§2-N3): 하나라도 못 내면 호출하지 않는다. finding이
+            # 아니라 error다 — 우리 쪽 실패가 "현장 이상"으로 둔갑하면 안 된다
+            # (KnownRuleError가 존재하는 이유와 같은 논리).
+            return _error("파라미터 해석 실패 — " + "; ".join(resolved.problems), clock)
+        result = await adapters.rest.query(entry, {**static, **resolved.params})
+        if result.status != "ok":
+            return result
+        if resolved.omitted and isinstance(result.data, dict):
+            # unfiltered의 존재 이유는 "해석이 실패해 우연히 전체를 봤다"와 "일부러
+            # 전체를 봤다"를 코드가 구별하는 것이다. 증거에 남기지 않으면 그 구별이
+            # 판정 시점에는 사라진다 — 나중에 서브에이전트가 전체 조회 결과를
+            # "범위를 좁혀 확인함"으로 읽는다.
+            request = result.data.get("request")
+            if isinstance(request, dict):
+                result = result.model_copy(update={"data": {
+                    **result.data, "request": {**request, "unfiltered": resolved.omitted}}})
+        if resolved.truncated:
+            # 잘린 표본으로 "이상 없음"을 단정하는 것을 verify가 자동으로 막는다
+            # (불완전 증거의 부정 결론 금지) — 기존 메커니즘을 그대로 쓴다.
+            # 대상이 이미 알려준 절단 이유가 있으면 **잇는다**. 덮어쓰면 두 절단 중
+            # 하나가 증거에서 사라진다.
+            reasons = ([result.envelope.truncated_reason] if result.envelope.truncated_reason
+                       else []) + resolved.truncated
+            envelope = result.envelope.model_copy(update={
+                "complete": False, "truncated_reason": "; ".join(reasons)})
+            return result.model_copy(update={"envelope": envelope})
+        return result
     except Exception as exc:
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 

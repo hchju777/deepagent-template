@@ -171,3 +171,33 @@ def test_render_md도_렌더링_실패에_최소_안내문을_돌려준다():
         clock=lambda: T)
     out = render_md(model)
     assert "보고서 조립 실패" in out and "c-1" in out
+
+
+def _bare_pipes(row: str) -> int:
+    """GFM이 열 구분자로 읽는(= 이스케이프되지 않은) 파이프 개수."""
+    count, i = 0, 0
+    while i < len(row):
+        if row[i] == "\\":
+            i += 2                            # 다음 문자를 소비 — 이스케이프됐다
+            continue
+        if row[i] == "|":
+            count += 1
+        i += 1
+    return count
+
+
+def test_증거표는_잘린_이유를_보여준다():
+    # "됐다"고 보고된 렌더링 픽스가 실제로는 안 됐던 사례가 이 리포에 있다 —
+    # 렌더 결과를 직접 본다. 파이프는 표를 깨므로 이스케이프까지 확인한다.
+    evidence = [EvidenceRecord(id="ev-1", source="rest:/x", body_digest="a" * 64, as_of=T,
+                               complete=False,
+                               truncated_reason="line: 500행\r중 50개만 사용|a\\|b")]
+    text = render_report(RECORD, verdict=None, evidence=evidence, case_file=None,
+                         clock=lambda: T)
+    assert "500행 중 50개만 사용" in text
+    # GFM이 열을 가르는 기준은 **이스케이프되지 않은** 파이프다. `(?<!\\)\|` 같은
+    # 정규식은 원문에 `\|`가 들어 있을 때 거짓 초록을 낸다(`\\|`가 되어 실제로는
+    # 열이 갈리는데 정규식은 안 갈렸다고 답한다) — 왼쪽부터 이스케이프를 소비하며
+    # 세야 한다. mistune으로 직접 렌더해 이 계산이 렌더러와 일치함을 확인했다.
+    row = next(l for l in text.splitlines() if l.startswith("| ev-1 "))
+    assert _bare_pipes(row) == 7, row        # 6열 표

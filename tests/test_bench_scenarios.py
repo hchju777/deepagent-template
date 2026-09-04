@@ -140,7 +140,7 @@ async def test_A1_OEE_512퍼센트는_plan_sync_stale_data로_귀결되고_보�
     adapters = build_adapters(_SITE_A1, _TOPO_A1, clock=lambda: T, stub_seeds=seeds)
 
     outcome = await run_check("mx", "gumi", "api.oee_range", _CHECK_A1, adapters=adapters,
-                              store=store, clock=lambda: T)
+                              store=store, clock=lambda: T, timezone_name="UTC")
     assert outcome.status == "finding"
 
     admit = admit_finding(outcome.finding, repo=repo, store=store, clock=lambda: T)
@@ -237,7 +237,7 @@ async def test_A2_멈춘_라인은_정상_재개로도_equip_sync_stale_data로_
 
     outcome = await run_check("mx", "gumi", "twin.consistency", _CHECK_A2, adapters=adapters,
                               store=store, clock=lambda: T, llm=judge_llm,
-                              budget=LlmBudget(1000, clock=lambda: T))
+                              budget=LlmBudget(1000, clock=lambda: T), timezone_name="UTC")
     assert outcome.status == "finding"
 
     admit = admit_finding(outcome.finding, repo=repo, store=store, clock=lambda: T)
@@ -294,7 +294,7 @@ async def test_A2_멈춘_라인은_park_resume의_F3_경로를_거쳐_equip_sync
 
     outcome = await run_check("mx", "gumi", "twin.consistency", _CHECK_A2, adapters=adapters,
                               store=store, clock=lambda: T, llm=judge_llm,
-                              budget=LlmBudget(1000, clock=lambda: T))
+                              budget=LlmBudget(1000, clock=lambda: T), timezone_name="UTC")
     assert outcome.status == "finding"
 
     admit = admit_finding(outcome.finding, repo=repo, store=store, clock=lambda: T)

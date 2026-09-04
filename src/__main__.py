@@ -586,7 +586,7 @@ def main(argv=None) -> int:
             for problem in exc.problems:
                 print(problem, file=sys.stderr)
             return 1
-        print(json.dumps(cfg.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        print(json.dumps(cfg.model_dump(mode="json", by_alias=True), ensure_ascii=False, indent=2))
         print("\n# 출처")
         for path, source in sorted(provenance.items()):
             print(f"{path} = {source}")

@@ -1,5 +1,6 @@
 """데몬의 run_one→게이트→큐→워커 사슬을 스텁 위에서 결정론 검증한다."""
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -167,3 +168,34 @@ async def test_주기_재큐는_나중에_생긴_open_케이스를_집어온다(
                          created_at=T, updated_at=T))
     await daemon.requeue_job()
     assert daemon.queue.qsize() == 1
+
+
+async def test_데몬이_사이트_시간대를_해석기까지_넘긴다(tmp_path):
+    # 이 배선이 없으면 clock 해석기가 UTC로 떨어져 아침 cron이 매일 전날 날짜를
+    # 보낸다. 함수 인자만 검증하는 테스트는 이 홉을 못 잡는다 — 실제로 한 번
+    # 그렇게 초록이었다.
+    from datetime import timedelta
+
+    from src.config.schema_site import RestEntry
+    from src.domain.patrol import scratch_case_id
+    from src.infrastructure.stubs import StubRest
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    kst_morning = T.replace(hour=23, minute=30) - timedelta(days=1)   # 다음날 08:30 KST
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path,
+                     clock=lambda: kst_morning)
+    entries = {"e": RestEntry(method="POST", path="/x", body_schema={"date": "str"})}
+    daemon.sites[0].adapters.rest = StubRest({"POST /x": {"ok": 1}}, set(), entries,
+                                             clock=lambda: kst_morning)
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+        "params": {"rule": "exists", "field": "body.ok"},
+        "resolve": {"date": {"from": "clock", "expr": "today"}}})
+    daemon.build()
+    await daemon.run_one("mx", "gumi", "tz.check", check)
+
+    cid = scratch_case_id("mx", "gumi", "tz.check")
+    rec = store.list_evidence(cid)[-1]
+    body = store.get_evidence(cid, rec.id)
+    expected = (kst_morning.astimezone(ZoneInfo(daemon.timezone))).date().isoformat()
+    assert body["request"]["params"] == {"date": expected}
+    assert expected != kst_morning.date().isoformat(), "UTC와 같으면 테스트가 무의미하다"

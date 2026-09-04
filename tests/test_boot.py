@@ -223,3 +223,130 @@ def test_점검의_body가_등재_스키마와_어긋나면_기동을_거부한�
         "knowledge": {"root": "knowledge.example"}}))
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("save_as" in e.problem for e in errors)
+
+
+def _site_with_resolve(resolve, extra_entries=None):
+    entries = {"e": {"method": "POST", "path": "/x",
+                     "body_schema": {"part_code": "list[str]"}}}
+    entries.update(extra_entries or {})
+    return json.dumps({
+        "target": {"adapters": "stub", "rest": {"base_url": "http://x", "entries": entries}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:e",
+            "params": {"rule": "exists", "field": "body"}, "resolve": resolve}}},
+        "knowledge": {"root": "knowledge.example"}})
+
+
+def test_해석기가_없는_항목을_가리키면_기동을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "rest", "entry": "없는항목", "field": "part_code"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("없는항목" in e.problem for e in errors)
+
+
+def test_스키마에_없는_키를_해석하면_기동을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"없는키": {"from": "unfiltered"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("없는키" in e.problem for e in errors)
+
+
+def test_조회용_해석기_항목이_POST면_기동을_거부한다(tmp_path):
+    # 값을 얻으려고 부수효과 가능성이 있는 메서드를 쓰면 안 된다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "rest", "entry": "lister", "field": "part_code"}},
+        extra_entries={"lister": {"method": "POST", "path": "/list",
+                                  "body_schema": {"q": "str"}}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("lister" in e.problem and "GET" in e.problem for e in errors)
+
+
+def test_정상_해석기는_기동을_막지_않는다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "rest", "entry": "lister", "field": "part_code"}},
+        extra_entries={"lister": {"method": "GET", "path": "/list",
+                                  "query_schema": {"q": "str"}}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert not [e for e in errors if "part_code" in e.problem or "lister" in e.problem]
+
+
+def test_등재_항목이_아닌_target에_해석기를_달면_기동을_거부한다(tmp_path):
+    # resolve는 rest_query에서만 실행된다. 다른 target에 달면 런타임이 조용히
+    # 무시해, 사람이 "범위를 좁혔다"고 믿는 점검이 무필터 전체 스캔을 돈다 —
+    # §2-N3이 "거짓 안심, 조용해서 더 위험"이라 지목한 경로다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x"},
+                   "rest": {"base_url": "http://x"}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "x"},
+            "resolve": {"k": {"from": "clock", "expr": "today"}}}}},
+        "knowledge": {"root": "knowledge.example"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("resolve" in e.problem and "등재 항목" in e.problem for e in errors)
+
+
+def test_해석기가_쓰는_어댑터가_없으면_기동을_거부한다(tmp_path):
+    # 정적으로 알 수 있는데 매 순찰 "어댑터 미설정" error로만 드러나면 안 된다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "mongo", "collection": "lines", "field": "part_code"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("mongo" in e.problem and "part_code" in e.problem for e in errors)
+
+
+def test_알_수_없는_시간대는_기동을_거부한다(tmp_path):
+    # app.timezone은 스케줄러와 clock 해석기가 둘 다 쓴다. 오타 하나면 매 점검이
+    # 죽는데 기동은 통과하던 상태였다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/app.json", json.dumps(
+        {"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}},
+         "timezone": "Asia/서울"}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("timezone" in e.problem for e in errors)
+
+
+def test_probe를_명시해도_해석기_검증을_우회할_수_없다(tmp_path):
+    # resolve_probe가 check.probe를 그대로 돌려주므로, probe만 박으면 target 모양
+    # 검사가 통째로 비껴간다 — 등재 항목 이름 위장을 막은 것과 같은 계열이다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x"},
+                   "rest": {"base_url": "http://x"}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "target": "mongo:twin_state", "probe": "rest_query",
+            "params": {"rule": "exists", "field": "x"},
+            "resolve": {"없는키": {"from": "unfiltered"}}}}},
+        "knowledge": {"root": "knowledge.example"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("resolve" in e.problem for e in errors)
+
+
+def test_real_어댑터에_스텁_시드가_남아있으면_기동을_거부한다(tmp_path):
+    # 조용히 무시되면 운영자가 "테스트용 값이 살아 있나?" 하고 헷갈린다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "real", "redis": {"url": "redis://x"},
+                   "stub_seeds": {"rest_responses": {"/x": {"a": 1}}}},
+        "patrol": {"checks": {}},
+        "knowledge": {"root": "knowledge.example"}}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("stub_seeds" in e.problem for e in errors)
+
+
+def test_해석기_결과_모양이_스키마와_어긋나면_기동을_거부한다(tmp_path):
+    # clock 해석기는 항상 문자열 하나, 소스 해석기는 항상 리스트다. 스키마와
+    # 어긋나면 매 순찰이 "body 필드 X는 list[str]여야 한다"로 끝난다 —
+    # 정적으로 알 수 있는 것을 런타임 반복 error로 미루지 않는다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_resolve(
+        {"part_code": {"from": "clock", "expr": "today"}}))   # 스키마는 list[str]
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("part_code" in e.problem and "clock" in e.problem for e in errors), errors
