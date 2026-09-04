@@ -558,3 +558,22 @@ async def test_구제가_아무것도_못_건지면_기존_케이스_파일을_�
     case_file = store.get_case_file("c-1")
     assert case_file["plan_tasks"] == [{"id": "t1", "status": "ok"}]   # 보존됐다
     assert case_file["round"] == 3
+
+
+def test_케이스_파일이_지식_digest를_실어_나른다():
+    # 보고서가 "그때 무엇을 보고 있었나"를 말하려면 State의 Case가 든 digest가
+    # 케이스 파일까지 와야 한다. 체크포인트는 retention이 지우므로 여기 박제한다.
+    from datetime import datetime, timezone
+    from src.application.worker import _case_file_snapshot
+    from src.domain.case import Case
+    case = Case(id="c-1", gbm="mx", fct="gumi", symptom="s", origin="patrol",
+                t0=datetime(2026, 9, 3, tzinfo=timezone.utc),
+                knowledge_digests={"topology": "a" * 64, "target_api": "c" * 64})
+    snapshot = _case_file_snapshot({"case": case, "plan_tasks": [], "hypotheses": []})
+    assert snapshot["knowledge_digests"] == {"topology": "a" * 64, "target_api": "c" * 64}
+
+
+def test_케이스가_없어도_스냅샷이_터지지_않는다():
+    # _salvage_case_file은 체크포인트에서 부분 값을 긁어 오므로 case가 없을 수 있다.
+    from src.application.worker import _case_file_snapshot
+    assert _case_file_snapshot({})["knowledge_digests"] == {}

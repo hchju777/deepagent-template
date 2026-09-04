@@ -225,3 +225,50 @@ def test_규칙_digest는_실제_변경에는_반응한다():
     two = CheckConfig.model_validate({**raw, "resolve": {"d": {"from": "clock",
                                                                "expr": "today"}}})
     assert rules_digest({"c": one}) != rules_digest({"c": two})
+
+
+def test_명세_digest가_사이트_조립에_실린다(tmp_path):
+    # as_of의 네 번째 축. 없으면 "그때 그 API가 어떤 모양이었나"를 사후에 알 수 없다.
+    import json
+    from src.patrol.daemon import assemble_sites
+    (tmp_path / "config" / "gbm").mkdir(parents=True)
+    (tmp_path / "knowledge" / "topology" / "gbm").mkdir(parents=True)
+    (tmp_path / "knowledge" / "target_api" / "gbm").mkdir(parents=True)
+    (tmp_path / "config" / "app.json").write_text(
+        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        encoding="utf-8")
+    (tmp_path / "config" / "registry.json").write_text(
+        json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")
+    (tmp_path / "config" / "gbm" / "gbm.json").write_text(
+        json.dumps({"target": {"adapters": "stub"},
+                    "knowledge": {"root": str(tmp_path / "knowledge")}}), encoding="utf-8")
+    (tmp_path / "knowledge" / "topology" / "common.yaml").write_text(
+        "services: {}\nderivations: {}\n", encoding="utf-8")
+    (tmp_path / "knowledge" / "target_api" / "gbm" / "gumi.json").write_text(
+        json.dumps({"paths": {}}), encoding="utf-8")
+
+    _app, sites = assemble_sites(tmp_path / "config", tmp_path, {"LLM_API_KEY": "k"},
+                                 clock=lambda: T, llm_factory=lambda name: object())
+    assert len(sites[0].digests["target_api"]) == 64      # 실제 digest가 실렸다
+
+
+def test_명세가_없으면_digest는_absent다(tmp_path):
+    # deployment가 쓰는 관례를 그대로 쓴다 — 빈 문자열이면 "없다"와 "계산 실패"가 같아진다.
+    import json
+    from src.patrol.daemon import assemble_sites
+    (tmp_path / "config" / "gbm").mkdir(parents=True)
+    (tmp_path / "knowledge" / "topology").mkdir(parents=True)
+    (tmp_path / "config" / "app.json").write_text(
+        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        encoding="utf-8")
+    (tmp_path / "config" / "registry.json").write_text(
+        json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")
+    (tmp_path / "config" / "gbm" / "gbm.json").write_text(
+        json.dumps({"target": {"adapters": "stub"},
+                    "knowledge": {"root": str(tmp_path / "knowledge")}}), encoding="utf-8")
+    (tmp_path / "knowledge" / "topology" / "common.yaml").write_text(
+        "services: {}\nderivations: {}\n", encoding="utf-8")
+
+    _app, sites = assemble_sites(tmp_path / "config", tmp_path, {"LLM_API_KEY": "k"},
+                                 clock=lambda: T, llm_factory=lambda name: object())
+    assert sites[0].digests["target_api"] == "absent"

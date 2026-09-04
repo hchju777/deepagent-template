@@ -119,6 +119,22 @@ def _stage_table(stages) -> list[str]:
     return lines
 
 
+def _digests(digests: dict[str, str]) -> str:
+    """조사 당시 본 지식 산출물의 digest — 앞 8자만 보인다.
+
+    `absent`처럼 digest가 아닌 값은 그대로 둔다(deployment가 없을 때 쓰는 표시).
+    비어 있으면 "없음"이 아니라 그렇게 적는다 — 옛 케이스는 digest가 없었다.
+    """
+    if not digests:
+        return "없음(기록되지 않음)"
+    return ", ".join(f"{k}={v if not _is_digest(v) else v[:8]}"
+                     for k, v in sorted(digests.items()))
+
+
+def _is_digest(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
 def _section1(model: ReportModel) -> str:
     record = model.record
     confidence = model.verdict.confidence if model.verdict is not None else "없음"
@@ -131,6 +147,7 @@ def _section1(model: ReportModel) -> str:
         f"- 판정: {_verdict_headline(record, model.verdict)}",
         f"- 신뢰도: {confidence}",
         f"- 태스크 에러율: {model.task_error_rate}",
+        f"- 지식 digest: {_digests(model.knowledge_digests)}",
         "- 조사 단계:",
     ]
     return "## 1. 요약\n" + "\n".join(rows + _stage_table(model.stages))

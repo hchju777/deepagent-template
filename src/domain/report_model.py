@@ -48,6 +48,9 @@ class ReportModel(StrictModel):
     verify_problems: list[str]
     qa_log: list[dict]
     task_error_rate: str
+    # 조사 당시 무엇을 보고 있었는가(topology·rules·deployment·target_api digest).
+    # 없으면 나중에 판정을 다시 읽을 때 "그때 그 API가 어떤 모양이었나"를 알 수 없다.
+    knowledge_digests: dict[str, str] = {}
     partial: bool = False             # 실패 시점 부분 스냅샷인가
     salvage_error: str | None = None  # 구제 자체가 실패했으면 그 사유
     generated_at: datetime
@@ -148,6 +151,9 @@ def build_report_model(record: CaseRecord, *, verdict: Verdict | None,
     hypotheses = _dicts(case_file.get("hypotheses"))
     qa_log = _dicts(case_file.get("qa_log"))
     verify_problems = [str(p) for p in _as_list(case_file.get("verify_problems"))]
+    raw_digests = case_file.get("knowledge_digests")
+    knowledge_digests = {str(k): str(v) for k, v in raw_digests.items()} \
+        if isinstance(raw_digests, dict) else {}
     round_raw = case_file.get("round")
     round_no = round_raw if isinstance(round_raw, int) else None
     verify_attempts = case_file.get("verify_attempts", 0)
@@ -172,6 +178,7 @@ def build_report_model(record: CaseRecord, *, verdict: Verdict | None,
         evidence_summaries=evidence_summaries, stages=stages, round_no=round_no,
         plan_tasks=plan_tasks, hypotheses=hypotheses, verify_problems=verify_problems,
         qa_log=qa_log, task_error_rate=_task_error_rate(plan_tasks),
+        knowledge_digests=knowledge_digests,
         partial=bool(case_file.get("partial")),
         salvage_error=str(salvage_error) if salvage_error else None,
         generated_at=clock())

@@ -74,6 +74,19 @@
 증거로 결론 금지"라는 같은 규율에 걸린다. `effective_as_of`는 요청한 시점(`requested_as_of`)과 실제로 달성한
 시점이 다를 때(예: Kafka 보존 밖이라 더 나중 데이터로 폴백) 명시된다.
 
+**pinned OpenAPI** (`knowledge/target_api/{gbm}/{fct}.json`) — 대상 API의 자기
+서술을 우리 쪽에 박제해 둔 사본. topology·deployment와 같은 성질이다: git에
+커밋되고, digest가 케이스에 박제되고, 사람이 갱신한다. **하는 일은 대조 하나다** —
+우리가 손으로 쓴 등재 항목이 실제 API와 어긋나면 기동을 거부한다. 반대 방향은
+없다: 명세에만 있는 키가 우리 스키마를 넓히는 일은 일어나지 않는다. 대상이 새
+POST를 배포했을 때 우리 허용 범위가 자동으로 따라 넓어지면 그것이 fail-open이고,
+등재제 전체가 무의미해진다. **문서는 증거, config는 권한**(CLAUDE.md 규율 9).
+
+**지식 digest** — 조사 당시 무엇을 보고 있었는지를 케이스에 박제한 값들
+(`topology`·`rules`·`deployment`·`target_api`). 보고서 §1에 앞 8자가 실린다.
+없으면 나중에 판정을 다시 읽을 때 "그때 그 API가 어떤 모양이었나"를 알 수 없다.
+`absent`는 그 산출물이 없었다는 뜻이지 계산에 실패했다는 뜻이 아니다.
+
 **해석기(resolver)** (`src/patrol/resolvers.py`) — 등재 항목 호출의 파라미터
 값을 실행 시점에 살아 있는 소스에서 읽어 채우는 것. config는 값이 아니라 값의
 **출처**만 선언한다(`from`: `rest`/`mongo`/`redis`/`clock`/`unfiltered`). 값을

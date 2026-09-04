@@ -63,6 +63,9 @@ def render_html(model) -> str:
                 "</body></html>")
 
 
+from src.presentation.report import _digests   # 두 렌더러가 같은 표기를 쓴다
+
+
 def _render(model) -> str:
     record = model.record
     verdict = model.verdict
@@ -76,6 +79,7 @@ def _render(model) -> str:
         ["판정", _e(_headline(record, verdict))],
         ["신뢰도", _e(verdict.confidence if verdict else "없음")],
         ["태스크 에러율", _e(model.task_error_rate)],
+        ["지식 digest", _e(_digests(model.knowledge_digests))],
     ]
     stage_rows = [[_e(s.label), _MARKS.get(s.mark, "?"), _e(s.note or "없음")]
                   for s in model.stages]

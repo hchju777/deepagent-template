@@ -27,6 +27,8 @@ from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
 from src.infrastructure.query_rules import (entry_call_problems, entry_schema, filter_problems,
                                             mongo_role_problems)
 from src.knowledge.deployment import load_deployment
+from src.knowledge.target_api import (load_target_api, response_field_problems,
+                                      spec_problems)
 from src.knowledge.topology import load_topology, topology_problems
 from src.patrol.probes import PROBES, resolve_probe
 
@@ -100,8 +102,17 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
 
         errors += [BootError(where, p) for p in topology_problems(topo)]
 
+        # pinned 명세와 대조한다. **명세는 우리 스키마를 검증할 뿐 넓히지 않는다**
+        # (규율 9) — spec_problems가 그 방향을 지킨다. 명세가 없는 것은 오류가
+        # 아니다(못 얻는 대상도 있다); 있는데 깨진 것이 오류다.
         known = topo.locators()
         entries = dict(cfg.target.rest.entries) if cfg.target.rest else {}
+        target_api, api_problems = load_target_api(knowledge_root, site.gbm, site.fct)
+        errors += [BootError(where, p) for p in api_problems]
+        if target_api is not None:
+            errors += [BootError(where, p) for p in spec_problems(entries, target_api)]
+            errors += [BootError(where, p) for p in
+                       response_field_problems(cfg.patrol.checks, entries, target_api)]
         for name, check in cfg.patrol.checks.items():
             # rest:<이름>은 토폴로지가 아니라 등재 항목에서 해석된다 — 두 이름공간을
             # 섞어 보면 정상 설정이 거부당한다. 미등재 참조를 기동 거부로 올리는

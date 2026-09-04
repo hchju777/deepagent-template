@@ -82,9 +82,9 @@
 
 **기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
 `judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
-비어 있으면 안 되고(검사 14), 활성 사이트가 있고 `llm.profiles`(judge/
+비어 있으면 안 되고(검사 16), 활성 사이트가 있고 `llm.profiles`(judge/
 subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 반드시
-있어야 한다(검사 15) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
+있어야 한다(검사 17) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
 해당된다.
 
 ## `registry.json` — 사이트 목록
@@ -204,7 +204,7 @@ services:
   <service-name>: { repo: <name>, commit: <git commit hash> }
 ```
 
-기동 검증(검사 11)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
+기동 검증(검사 13)이 이 커밋이 `target.code.repos`가 가리키는 로컬 체크아웃에
 실제로 존재하는지(`git cat-file`) 확인한다.
 
 ## `.env` — 비밀값
@@ -241,12 +241,14 @@ services:
 7. `resolve`가 있으면 target이 등재 항목인가 — 다른 target에 달면 런타임이 조용히 무시한다
 8. `resolve`의 각 키가 등재 항목 스키마에 있는가, 그리고 해석기 **모양**이 그 타입과 맞는가 — `clock`은 문자열 하나, 소스 해석기는 리스트다
 9. `from: "rest"` 해석기가 가리키는 항목이 실재하고 GET인가 / `mongo`·`redis` 해석기의 어댑터가 설정돼 있는가 / `mongo` 해석기의 `filter` 연산자가 허용 목록 안인가
-10. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
-11. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
-12. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
-13. 각 점검의 프로브가 레지스트리에서 해석 가능한가
-14. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
-15. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
+10. 등재 항목이 pinned 명세(`knowledge/target_api/{gbm}/{fct}.json`)와 맞는가 — 항목 실재·스키마 키·타입·명세가 필수라 한 키. **명세는 검증만 하고 넓히지 않는다**(명세에만 있는 키는 문제가 아니다). 명세가 없는 것은 오류가 아니고, 있는데 깨진 것이 오류다
+11. rule 점검이 보는 `body.<키>`가 명세가 말한 응답에 있는가 — 명세가 응답 모양을 말하지 않았으면 아무 판정도 하지 않는다
+12. 토폴로지가 참조하는 서비스 `code.repo`가 사이트 config의 `target.code.repos`에 있는가
+13. `deployment.yaml`의 `(repo, commit)`이 로컬 체크아웃에 실재하는가(정적, deployment 없으면 건너뜀)
+14. Mongo 계정이 readonly 롤인가 — `--live` 지정 시에만, `adapters="real"` + 계정 있는 사이트만
+15. 각 점검의 프로브가 레지스트리에서 해석 가능한가
+16. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
+17. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
 
-검사 12만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
+검사 14만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

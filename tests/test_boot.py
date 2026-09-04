@@ -360,3 +360,68 @@ def test_config에는_더_이상_stub_seeds를_쓸_수_없다():
     from src.config.schema_site import SiteConfig
     with pytest.raises(ValidationError):
         SiteConfig.model_validate({"target": {"stub_seeds": {"rest_responses": {}}}})
+
+
+def _pin(tmp_path, spec):
+    _write(tmp_path, "knowledge/target_api/mx/gumi.json", json.dumps(spec))
+
+
+_SPEC = {"paths": {"/summary/prod": {"post": {
+    "requestBody": {"content": {"application/json": {"schema": {
+        "type": "object", "required": ["date"],
+        "properties": {"part_code": {"type": "array", "items": {"type": "string"}},
+                       "date": {"type": "string"}}}}}},
+    "responses": {"200": {"content": {"application/json": {"schema": {
+        "type": "object", "properties": {"badge": {"type": "array",
+                                                   "items": {"type": "integer"}}}}}}}}}}}}
+
+
+def _site_with_entry(body, field="body.badge"):
+    return json.dumps({
+        "target": {"adapters": "stub", "code": {"repos": [{"name": "twin-services", "path": "/r"}]},
+                   "rest": {"base_url": "http://x", "entries": {"summary_prod": {
+                       "method": "POST", "path": "/summary/prod", "body_schema": body}}}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:summary_prod",
+            "params": {"rule": "exists", "field": field}}}},
+        "knowledge": {"root": "knowledge"}})
+
+
+def test_명세와_어긋난_등재_항목은_기동을_거부한다(tmp_path):
+    # 오타 하나가 매 순찰 404로만 드러나던 것을 배포 시점으로 당긴다.
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json",
+           _site_with_entry({"part_code": "list[str]", "save_as": "str", "date": "str"}))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("save_as" in e.problem for e in errors), errors
+
+
+def test_명세가_말한_응답에_없는_필드를_보는_점검을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json",
+           _site_with_entry({"date": "str"}, field="body.badgee"))
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("badgee" in e.problem for e in errors), errors
+
+
+def test_명세와_맞으면_통과한다(tmp_path):
+    _tree(tmp_path)
+    _pin(tmp_path, _SPEC)
+    _write(tmp_path, "config/gbm/mx.json", _site_with_entry({"date": "str"}))
+    assert validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path) == []
+
+
+def test_pinned_명세가_없으면_그것만으로는_기동을_막지_않는다(tmp_path):
+    # 명세를 못 얻는 대상도 있다. 없는 것은 오류가 아니다 — 깨진 것이 오류다.
+    _tree(tmp_path)
+    assert not any("명세" in e.problem for e in
+                   validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+
+
+def test_깨진_pinned_명세는_기동을_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/target_api/mx/gumi.json", "{ 망가진 json")
+    assert any("명세" in e.problem for e in
+               validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))

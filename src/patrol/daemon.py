@@ -51,6 +51,7 @@ from src.infrastructure.llm import build_chat_model
 from src.infrastructure.retention import sweep_retention
 from src.knowledge.deployment import load_deployment
 from src.knowledge.digest import canonical_digest
+from src.knowledge.target_api import load_target_api
 from src.knowledge.topology import load_topology
 from src.patrol.gate import admit_finding
 from src.patrol.ledger import LedgerPort
@@ -464,11 +465,16 @@ def assemble_sites(
         topology = load_topology(knowledge_root, ref.gbm, ref.fct)
         deployment = load_deployment(knowledge_root, ref.gbm, ref.fct)
 
+        # 명세 digest는 parse_spec이 원문 전체로 계산한 값을 그대로 쓴다 —
+        # 우리가 보는 부분집합만 해싱하면 대상이 우리 항목 밖을 바꿨을 때 사람이
+        # 확인할 기회를 잃는다. 깨진 명세는 기동 검증이 이미 거부했다.
+        target_api, _api_problems = load_target_api(knowledge_root, ref.gbm, ref.fct)
         digests = {
             "topology": canonical_digest(topology.model_dump(mode="json")),
             "rules": rules_digest(site_cfg.patrol.checks),
             "deployment": canonical_digest(deployment.model_dump(mode="json")) if deployment is not None
                          else "absent",
+            "target_api": target_api.digest if target_api is not None else "absent",
         }
 
         # dict면 사이트별 시드(CLI --stub-seeds), 단일 객체면 모든 사이트에 적용

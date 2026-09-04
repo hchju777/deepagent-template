@@ -201,3 +201,15 @@ def test_증거표는_잘린_이유를_보여준다():
     # 세야 한다. mistune으로 직접 렌더해 이 계산이 렌더러와 일치함을 확인했다.
     row = next(l for l in text.splitlines() if l.startswith("| ev-1 "))
     assert _bare_pipes(row) == 7, row        # 6열 표
+
+
+def test_보고서가_지식_digest를_보여준다():
+    # 조사 당시 어떤 토폴로지·규칙·명세를 보고 있었는지가 없으면, 나중에 판정을
+    # 다시 읽을 때 "그때 그 API가 어떤 모양이었나"를 알 수 없다.
+    case_file = {"knowledge_digests": {"topology": "a" * 64, "rules": "b" * 64,
+                                       "deployment": "absent", "target_api": "c" * 64}}
+    text = render_report(RECORD, verdict=None, evidence=[], case_file=case_file,
+                         clock=lambda: T)
+    for axis in ("topology", "rules", "deployment", "target_api"):
+        assert axis in text, text
+    assert "cccccccc" in text          # 짧게라도 값이 보여야 한다

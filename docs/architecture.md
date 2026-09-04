@@ -36,8 +36,21 @@ presentation  →  application  →  domain  ←  infrastructure
   값("stub"|"real")만 보고 어느 쪽을 조립할지 결정한다 — 이게 스텁↔실구현
   전환의 유일한 지점이다. 그 외 체크포인터(LangGraph용, `checkpointer.py`),
   Mongo 케이스 저장소(`mongo_store.py`), LLM 팩토리(`llm.py`)도 여기 있다.
-- **presentation** (`src/presentation/`) — 케이스 종결 후 산출물. 5절 마크다운
-  보고서 렌더링(`report.py`)과 2단계(pending→sent) 메일 발송(`mail.py`).
+- **knowledge** (`src/knowledge/`) — 사람이 쓰고 git에 커밋하는 산출물의 로더.
+  `topology/`(어떤 서비스가 무엇을 쓰는가), `deployment/`(지금 어떤 커밋이
+  배포돼 있는가), `target_api/`(대상 API의 pinned OpenAPI). 셋 다 content
+  digest가 케이스에 박제돼, 나중에 판정을 다시 읽을 때 "그때 무엇을 보고
+  있었나"를 알 수 있다.
+
+  **`config/`와 `knowledge/`의 차이가 이 시스템의 신뢰 구조다**: config는
+  권한(무엇을 불러도 되는가)이고 knowledge는 증거(대상이 어떻게 생겼다고
+  말하는가)다. pinned OpenAPI는 우리가 손으로 쓴 등재 항목이 실제 API와
+  어긋나면 기동을 거부하지만, **반대로 우리 허용 범위를 넓히지는 못한다** —
+  대상이 새 POST를 배포했을 때 우리가 자동으로 따라가면 fail-open이다
+  (CLAUDE.md 규율 9).
+- **presentation** (`src/presentation/`) — 케이스 종결 후 산출물. 보고서
+  렌더링(`report.py` 마크다운, `report_html.py` HTML)과 2단계(pending→sent)
+  메일 발송(`mail.py`).
 - **CLI**(`src/__main__.py`)는 presentation 바깥의 진입점으로 취급한다 — 여기서만
   `datetime.now()`를 직접 부르는 것이 허용된다(아래 "시계 주입" 참고).
 
