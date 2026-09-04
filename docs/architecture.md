@@ -94,13 +94,15 @@ APScheduler)부터 큐·워커·정리(retention sweep)까지 한 프로세스�
 (`src/patrol/probes.py` — `rest_get`/`rest_query`/`redis_get`/`mongo_recent`/
 `kafka_lag` 5종, `target`의 kind 접두사로 기본 선택되거나 `probe` 필드로 명시),
 그 결과를 `judge`(`"rule"`|`"llm"`|`"rule+llm"`)로 판정한다. rule 판정은
-`src/patrol/rules.py`의 6종이다 — `range`/`exists`/`freshness`/`max`는
-파이프라인 신호를, `all_zero`/`expected_state`는 현장 상태를 본다.
+`src/patrol/rules.py`의 6종이다 — `range`/`exists`/`freshness`/`max`에
+`all_zero`/`expected_state`가 더해졌다.
 
 점검마다 `concern`(`system`|`operation`)이 붙고, 그 값이 finding→케이스→보고서
 헤더→**메일 수신자**와 리드 브리핑의 방향까지 따라간다. 배관이 새는 것과 현장이
 이상한 것은 받을 사람도 볼 곳도 다르기 때문이다. 값은 **사람이 config에 적는다** —
 응답 모양으로 추론하면 "왜 이 메일이 나한테 왔나"에 답할 수 없다(규율 6).
+**rule에서도 유도하지 않는다**: `max`를 불량 수에 걸면 기존 rule로 쓴 현장
+이상이고, `all_zero`를 큐 깊이에 걸면 새 rule로 쓴 파이프라인 신호다.
 
 `rest_query`(등재 항목 호출, POST 포함)만 프로브 앞에 **해석 단계**가 하나 더
 붙는다(`src/patrol/resolvers.py`):

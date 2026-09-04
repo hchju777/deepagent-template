@@ -347,6 +347,10 @@ def _judge_expected_state(result: ProbeResult, params: dict) -> RuleVerdict:
                        reason=f"기대와 다른 상태 — {field}={value!r}, 기대: {expect}")
 
 
+# 새 rule이 concern 축 위에서만 뜻이 있다면 schema_site._AXIS_SPECIFIC_RULES에도
+# 더해라 — 그래야 그 rule을 쓰는 점검이 concern을 명시하게 된다. 두 곳을 잇는
+# 것은 테스트뿐이므로(test_축_전용_rule_집합이_실재하는_rule만_담는다) 여기
+# 주석이 유일한 안내다.
 _RULES: dict[str, Callable] = {
     "expected_state": lambda result, params, clock: _judge_expected_state(result, params),
     "all_zero": lambda result, params, clock: _judge_all_zero(result, params),

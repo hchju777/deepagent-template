@@ -221,3 +221,11 @@ def test_기존_rule은_concern_없이도_통과한다():
     assert CheckConfig.model_validate({
         "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/x",
         "params": {"rule": "max", "field": "body.oee", "max": 5}}).concern == "system"
+
+
+def test_축_전용_rule_집합이_실재하는_rule만_담는다():
+    # _AXIS_SPECIFIC_RULES와 _RULES를 잇는 것이 없다. 오타나 이름 변경으로
+    # 집합이 헛돌면 그 rule은 concern 명시 없이 통과하고, 그 망각이 조용하다.
+    from src.config.schema_site import _AXIS_SPECIFIC_RULES
+    from src.patrol.rules import _RULES
+    assert _AXIS_SPECIFIC_RULES <= set(_RULES), sorted(_AXIS_SPECIFIC_RULES - set(_RULES))

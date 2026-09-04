@@ -277,6 +277,21 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     _chat_tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
     monkeypatch.setattr("sys.stdin", io.StringIO(""))       # 바로 EOF — 답하지 않고 파킹
+    # concern이 프로세스 경계를 넘는지도 여기서 본다 — 파킹은 chat이, 발송은
+    # case resume이 하므로 축이 레코드에 남아 있지 않으면 수신자가 갈린다.
+    app_path = tmp_path / "config" / "app.json"
+    app_data = json.loads(app_path.read_text(encoding="utf-8"))
+    app_data.setdefault("report", {})["mail"] = {
+        "enabled": True, "host": "smtp", "sender": "a@x", "recipients": ["platform@y"],
+        "recipients_by_concern": {"operation": ["ops@y"]}}
+    app_path.write_text(json.dumps(app_data), encoding="utf-8")
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(recipients)
+
+    monkeypatch.setattr("src.__main__.SmtpSender", lambda cfg: _Spy())
 
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     checkpointer = InMemorySaver()
@@ -294,6 +309,7 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
 
     code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "OEE가 이상하다",
+                "--concern", "operation",
                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 0
     assert "파킹된 채로 남는다" in capsys.readouterr().out
@@ -324,6 +340,9 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     written = list((tmp_path / "out").glob("*.html"))
     assert len(written) == 1 and "<h2>2. 판정</h2>" in written[0].read_text(encoding="utf-8")
     assert repo.get(case_id).status == "closed"
+    # 축이 파킹을 건너 발송까지 살아남았는가 — chat이 정한 값을 다른 호출이 읽는다.
+    assert repo.get(case_id).concern == "operation"
+    assert sent == [["ops@y"]], sent
 
 
 def test_chat는_등록되지_않은_사이트면_exit_1(tmp_path, capsys, monkeypatch):

@@ -7,8 +7,10 @@
 
 ## Part A. config만으로 점검 추가하기
 
-`config.example/gbm/mx.json`의 `patrol.checks`에는 이미 `api.oee_range`(파이프라인
-신호)와 `prod.badge_nonzero`·`prod.status_matches_plan`(현장 상태) 셋이 있다.
+`config.example/gbm/mx.json`의 `patrol.checks`에는 이미 `api.oee_range`,
+`prod.badge_nonzero`, `prod.status_matches_plan` 셋이 있다(앞 둘은
+`concern: "system"`, 마지막은 `"operation"`이다 — 축은 rule이 아니라 점검이 무엇을
+묻는가가 정한다).
 같은 파일에 네 번째 점검을 추가해 보자 — MongoDB `twin_state`
 컬렉션이 너무 오래 갱신되지 않으면 잡아내는 신선도(freshness) 점검이다.
 

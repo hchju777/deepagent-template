@@ -193,3 +193,15 @@ def test_빈_수신자_목록은_config_검증이_거부한다():
     with pytest.raises(ValidationError, match="빈 목록"):
         MailConfig(enabled=True, host="h", sender="s", recipients=["a@b"],
                    recipients_by_concern={"operation": []})
+
+
+def test_빈_목록은_폴백이_아니라_침묵이다():
+    # config 검증이 빈 목록을 막지만, recipients_for가 `or` 폴백으로 돌아가면
+    # 그 검증이 사라지는 날 조용히 잘못된 수신자에게 간다 — 검증자에만 기대는
+    # 배선은 검증자가 사라지면 아무것도 안 지킨다.
+    from src.presentation.mail import recipients_for
+    cfg = MailConfig.model_construct(       # 검증을 우회해 그 상태를 직접 만든다
+        enabled=True, host="h", sender="s", recipients=["platform@y"],
+        recipients_by_concern={"operation": []})
+    assert recipients_for(cfg, "operation") == []
+    assert recipients_for(cfg, "system") == ["platform@y"]

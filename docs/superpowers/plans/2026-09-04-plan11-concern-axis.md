@@ -69,7 +69,7 @@
 | `src/presentation/mail.py` | 메일 발송 | concern으로 수신자를 고른다 |
 | `src/domain/report_model.py`·`report.py`·`report_html.py` | 보고서 | 헤더에 concern |
 | `src/patrol/rules.py` | rule 판정 | `all_zero`, `expected_state` |
-| `src/boot.py` | 기동 검증 | `recipients_by_concern` 키 검증 |
+| `src/config/schema_app.py` | app config | `recipients_by_concern` + 키·빈 목록 검증 |
 
 ---
 
@@ -285,7 +285,7 @@ finding 사유는 **무엇을 기대했고 무엇을 봤는지 둘 다** 적어�
 
 ## Task 4: 발행이 concern으로 갈린다
 
-**Files:** Modify `src/config/schema_app.py` · `src/presentation/mail.py` · `src/boot.py` · Test `tests/presentation/test_mail.py` · `tests/test_boot.py`
+**Files:** Modify `src/config/schema_app.py` · `src/presentation/mail.py` · Test `tests/presentation/test_mail.py`
 
 **Interfaces:**
 - Produces: `MailConfig.recipients_by_concern: dict[str, list[str]] = {}`
