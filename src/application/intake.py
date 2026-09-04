@@ -8,9 +8,11 @@
 지금은 한 호출이 끝나거나 케이스를 파킹하고, 다음 호출이 답을 들고 이어간다 —
 답은 **이어가기 전에 먼저** 증거로 박제된다.
 
-**동시성**: 접수는 lease를 잡지 않는다. 대신 `_not_ours`가 턴 시작과 저장 직전에
-같은 판정을 걸어, 그 사이 워커가 가로챈 레코드를 건드리지 않는다. 재읽기만으로는
-부족하다 — 그 이유는 `_not_ours` docstring에 있다.
+**동시성**: 접수는 lease를 잡지 않는다. 대신 `_not_ours`가 **턴 시작·파킹 직전·저장
+직전 세 지점**에서 같은 판정을 걸어, 그 사이 워커가 가로챈 레코드를 **되돌리지
+않는다**(증거 기록은 별개다 — 가드 통과 후 가로채이면 그 턴의 증거는 이미 써진다.
+증거는 append-only라 상태를 되돌리지 않으므로 해롭지 않다). 재읽기만으로는 부족한
+이유는 `_not_ours` docstring에 있고, **남은 창**은 `_save` docstring에 있다.
 
 무raise 규율: LLM 호출·파싱이 전부 실패해도 접수가 조사를 막아서는 안 된다 —
 `target_locator=None`으로 진행하고 실패를 `problems`에 남길 뿐 raise하지 않는다.
@@ -52,15 +54,13 @@ async def _call(deps, prompt: str) -> tuple[_IntakeLlmOutput | None, str | None]
     return parse_structured(response.content, _IntakeLlmOutput)
 
 
-# ── 턴 단위 접수(계획 12) ─────────────────────────────────────────────────
-# intake()는 ask 콜백으로 **프로세스 안에서** 되묻고 문답을 마지막에 한 번 돌려준다.
-# 그 사이에 클라이언트가 끊기거나 서버가 재시작되면 전부 사라진다. 턴으로 쪼개면
-# 한 호출이 LLM을 한 번 부르고, 더 물어야 하면 케이스를 파킹하며 질문을 레코드에
-# 남긴다 — 다음 호출이 답을 들고 이어간다.
-
-
 class IntakeTurn(StrictModel):
-    status: Literal["done", "asking", "error"]
+    # not_ours와 error를 가르는 이유: **호출부가 다르게 다뤄야 한다.** error는
+    # "접수를 포기했으니 대상 없이 조사하라"이고, not_ours는 "다른 주체가 이
+    # 레코드를 들고 있으니 아무것도 하지 마라"다. 둘을 뭉치면 호출부가 run_once를
+    # 걸고, 그래프가 파킹한 케이스라면 새 스레드로 처음부터 재조사돼 원래 스레드와
+    # 사람에게 물은 질문을 잃는다 — lifecycle.py가 금지한 그것이다.
+    status: Literal["done", "asking", "error", "not_ours"]
     question: str | None = None
     target_locator: str | None = None
     problems: list[str] = []
@@ -91,12 +91,13 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
     착지점이라 새 실패 모양을 만들지 않는다.
     """
     try:
-        record = repo.get(case_id)
-        if record is None:
+        try:
+            record = repo.get(case_id)
+        except KeyError:
             return IntakeTurn(status="error", problems=[f"케이스 {case_id}를 찾을 수 없다"])
         problem = _not_ours(record)
         if problem is not None:
-            return IntakeTurn(status="error", problems=[problem])
+            return IntakeTurn(status="not_ours", problems=[problem])
 
         now = clock()
         if answer is not None:
@@ -124,7 +125,7 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
             current = repo.get(case_id)
             problem = _not_ours(current)      # LLM 호출 동안 가로채였을 수 있다
             if problem is not None:
-                return IntakeTurn(status="error", problems=[problem])
+                return IntakeTurn(status="not_ours", problems=[problem])
             parked = current if current.status == "awaiting_human" \
                 else transition(current, "awaiting_human", clock=clock)
             repo.save(parked.model_copy(update={"question": question,
@@ -140,7 +141,8 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
 def _not_ours(record) -> str | None:
     """접수가 이 레코드를 만질 수 있는가 — **턴 시작과 저장 직전에 같은 판정**을 쓴다.
 
-    재읽기만 넣고 가드를 다시 적용하지 않으면 두 가지가 난다. LLM 호출 동안 워커가
+    턴 시작·파킹 직전·저장 직전 세 곳에서 부른다. 재읽기만 넣고 가드를 다시
+    적용하지 않으면 두 가지가 난다. LLM 호출 동안 워커가
     claim해 그래프가 파킹한 레코드를 접수가 `open`으로 되돌리면 **사람에게 물은
     질문이 소멸하고** requeue_open이 다시 집어 조사가 둘 붙는다. 그리고 아직
     `investigating`인 레코드를 접수가 파킹하면 워커의 `_finish`가
@@ -166,6 +168,12 @@ def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
     턴 시작 시 읽은 스냅샷을 wholesale 저장하면 LLM 호출 동안 다른 경로가 바꾼
     것(게이트의 finding 첨부 등)을 잃는다. 저장 직전에 다시 읽고, **그때 다시
     가드를 적용한다** — 재읽기만으로는 가로채인 레코드를 되돌리는 것을 못 막는다.
+
+    **이 창은 좁혔을 뿐 닫히지 않았다.** `repo.get` → 판정 → `repo.save` 사이는
+    원자적이 아니고 `repo.save`에는 CAS가 없다(Mongo 구현은 문서 전체 `$set`).
+    지금 원자 프리미티브는 `claim` 하나뿐이다. 닫으려면 조건부 save를 열거나 접수도
+    lease를 잡아야 하는데, 둘 다 계획 13이 HTTP 동시 요청을 열 때 결정할 문제다 —
+    CLI는 프로세스 하나가 순차로 돌아 창이 좁다.
     """
     current = repo.get(case_id)
     problem = _not_ours(current)
@@ -181,7 +189,7 @@ def _finish(record, repo, clock, target_locator) -> IntakeTurn:
     problem = _save(repo, record.id, clock, unpark=True, target_locator=target_locator,
                     question=None, question_kind=None)
     if problem is not None:
-        return IntakeTurn(status="error", problems=[problem])
+        return IntakeTurn(status="not_ours", problems=[problem])
     return IntakeTurn(status="done", target_locator=target_locator)
 
 
@@ -189,7 +197,11 @@ def _give_up(record, repo, clock, problems: list[str]) -> IntakeTurn:
     """접수를 포기하고 케이스를 조사 가능한 상태로 되돌린다.
 
     고아로 남기지 않는 것이 핵심이다 — 파킹된 채 질문만 있고 아무도 답할 수 없는
-    케이스는 타임아웃까지 아무 일도 일어나지 않는다.
+    케이스는 타임아웃까지 아무 일도 일어나지 않는다. 다만 그 사이 남이 레코드를
+    가져갔으면 되돌리지 않고 `not_ours`로 손을 뗀다.
     """
     problem = _save(repo, record.id, clock, unpark=True, question=None, question_kind=None)
-    return IntakeTurn(status="error", problems=[*problems, *( [problem] if problem else [] )])
+    if problem is not None:
+        # 포기하려 했으나 그 사이 남이 가져갔다 — 상태를 되돌리지 않고 손을 뗀다.
+        return IntakeTurn(status="not_ours", problems=[*problems, problem])
+    return IntakeTurn(status="error", problems=problems)

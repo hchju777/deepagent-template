@@ -408,3 +408,31 @@ python -m src case list --config-root config.example --repo-root .
 | `chat` 지문에서 `case_id` 제거 | 개설 시점에 `target_locator`가 아직 없어 지금 고치면 더 나빠진다. P8이 이력 검색과 함께 |
 | 접수 문답을 그래프 첫 라운드로 흡수 | 접수는 "무엇을 조사할지"를 정하고 그래프는 "왜 그런지"를 찾는다. 합치면 `max_rounds` 상한이 두 일을 함께 세게 된다 |
 | `GET /digests/{scenario}` | P7이 만들 기록을 읽는다 — P6 범위 밖 |
+
+
+---
+
+## 계획 13 인계
+
+리뷰 세 라운드에서 남은 것들. **계획 13이 HTTP를 열면 전부 창이 넓어진다.**
+
+1. **`_save`의 TOCTOU는 닫히지 않았다.** `repo.get` → `_not_ours` 판정 → `repo.save`
+   사이는 원자적이 아니고 `repo.save`에 CAS가 없다(Mongo는 문서 전체 `$set`). 지금
+   원자 프리미티브는 `claim` 하나뿐이다. CLI는 프로세스 하나가 순차로 돌아 창이
+   좁지만, `api` 풀이 동시 요청을 받으면 넓어진다. **조건부 save를 열거나 접수도
+   lease를 잡거나** 둘 중 하나를 계획 13이 정해야 한다.
+2. **읽기 필터가 미배선이다.** `AccessPolicy.sites_for`에 프로덕션 소비자가 없다 —
+   스펙 §3.5의 "모든 읽기 엔드포인트를 같은 술어로 필터"가 계획 13의 몫이다. 안
+   붙이면 접수만 막히고 읽기는 열린 채로 남는다. 와일드카드 선언에는 `known` 인자가
+   필수다(없으면 `ValueError`).
+3. **`case resume`의 "케이스 존재" 오라클.** 접근 검사는 `repo.get` 뒤에 있을 수밖에
+   없다(gbm/fct를 알아야 판정한다). 그래서 미인가 주체가 "없는 케이스"와 "접근 불가
+   케이스"를 메시지로 구별할 수 있다. `POST /cases/{id}/answers`가 같은 순서를
+   베끼면 HTTP 404/403 차이로 그대로 노출된다 — **미인가 시 not-found와 같은 응답을
+   낼지** 정하라.
+4. **`answer_case`에 status 가드가 없다.** `question_kind`만 보고 분기한다. CLI는
+   `_cmd_case_resume`이 앞에서 `awaiting_human`을 확인하지만, API가 이 함수만 쓰면
+   `investigating` 케이스에 `resume_once`가 걸린다(워커의 `claim`이 "busy"로 막긴
+   한다).
+5. **`intake_turn`은 lease를 잡지 않는다.** 가드로 좁혔을 뿐이므로, 동시 요청이
+   가능한 전송에서는 1번과 함께 판단하라.

@@ -104,15 +104,17 @@ async def test_조사_질문에_파킹된_케이스는_건드리지_않는다():
         "status": "awaiting_human", "question": "계획 변경이 있었나?",
         "question_kind": "investigation"}))
     turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="없다")
-    assert turn.status == "error" and any("조사 질문" in p for p in turn.problems)
+    assert turn.status == "not_ours" and any("조사 질문" in p for p in turn.problems)
     assert repo.get(case_id).status == "awaiting_human"
 
 
 async def test_닫힌_케이스는_거부한다():
+    # not_ours다 — 호출부가 취할 행동이 "아무것도 하지 마라"로 같다. 닫힌 케이스에
+    # run_once를 걸면 워커가 "stale"로 막긴 하지만 lease를 한 번 잡았다 놓는다.
     case_id, repo, store = _case()
     repo.save(repo.get(case_id).model_copy(update={"status": "closed"}))
     turn = await _turn(case_id, repo, store, _deps(_RESOLVED))
-    assert turn.status == "error"
+    assert turn.status == "not_ours"
 
 
 async def test_조사_중인_케이스는_접수가_건드리지_않는다():
@@ -124,7 +126,7 @@ async def test_조사_중인_케이스는_접수가_건드리지_않는다():
     repo.save(repo.get(case_id).model_copy(update={
         "status": "investigating", "owner": "w-1", "thread_ids": ["t-1"]}))
     turn = await _turn(case_id, repo, store, _deps(_RESOLVED))
-    assert turn.status == "error" and any("조사 중" in p for p in turn.problems)
+    assert turn.status == "not_ours" and any("조사 중" in p for p in turn.problems)
     after = repo.get(case_id)
     assert after.status == "investigating" and after.owner == "w-1"
     assert after.thread_ids == ["t-1"]
@@ -156,7 +158,7 @@ async def test_레거시_파킹_레코드를_접수가_언파킹하지_않는다
         "status": "awaiting_human", "question": "계획 변경이 있었나?",
         "thread_ids": ["t-1"]}))                           # question_kind는 None
     turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="없다")
-    assert turn.status == "error"
+    assert turn.status == "not_ours"
     after = repo.get(case_id)
     assert after.status == "awaiting_human" and after.question is not None
 
@@ -181,7 +183,7 @@ async def test_턴_도중_그래프가_파킹하면_그것을_지우지_않는�
         "status": "awaiting_human", "question": "계획 변경이 있었나?",
         "question_kind": "investigation", "owner": "w-1", "thread_ids": ["t-1"]})
     turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=llm))
-    assert turn.status == "error"
+    assert turn.status == "not_ours"
     after = repo.get(case_id)
     assert after.status == "awaiting_human" and after.question_kind == "investigation"
     assert after.question == "계획 변경이 있었나?" and after.owner == "w-1"
@@ -195,7 +197,7 @@ async def test_턴_도중_워커가_claim하면_파킹하지_않는다():
     llm = _ClaimsDuringCall(repo, case_id, {"status": "investigating", "owner": "w-1",
                                             "thread_ids": ["t-1"]}, reply=_MISSING)
     turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=llm))
-    assert turn.status == "error"
+    assert turn.status == "not_ours"
     after = repo.get(case_id)
     assert after.status == "investigating" and after.question_kind is None
 
@@ -205,5 +207,36 @@ async def test_턴_도중_가로채이면_포기_경로도_저장하지_않는�
     llm = _ClaimsDuringCall(repo, case_id, {"status": "investigating", "owner": "w-1"},
                             reply="파싱 불가")
     turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=llm))
-    assert turn.status == "error"
+    assert turn.status == "not_ours"
     assert repo.get(case_id).status == "investigating"
+
+
+async def test_가로채인_케이스는_error가_아니라_not_ours다():
+    # "포기했다"(케이스는 조사 가능)와 "못 만졌다"(남이 들고 있다)는 호출부가
+    # 다르게 다뤄야 한다. 둘을 error로 뭉치면 호출부가 run_once를 걸고, 그래프가
+    # 파킹한 케이스라면 새 조사가 처음부터 시작돼 스레드를 잃는다.
+    case_id, repo, store = _case()
+    repo.save(repo.get(case_id).model_copy(update={
+        "status": "awaiting_human", "question": "계획 변경이 있었나?",
+        "question_kind": "investigation", "thread_ids": ["t-1"]}))
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="없다")
+    assert turn.status == "not_ours"
+
+
+async def test_턴_시작_가드가_남의_케이스에_아무것도_안_쓴다():
+    # 가드가 없으면 LLM을 부르고 그 결과를 남의 케이스 store에 박제한다.
+    case_id, repo, store = _case()
+    before = len(store.list_evidence(case_id))
+    repo.save(repo.get(case_id).model_copy(update={"status": "investigating",
+                                                   "owner": "w-1"}))
+    calls = []
+
+    class _Spy:
+        async def ainvoke(self, messages):
+            calls.append(messages)
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Spy()), answer="답")
+    assert turn.status == "not_ours"
+    assert calls == []                                   # LLM을 안 불렀다
+    assert len(store.list_evidence(case_id)) == before    # 증거도 안 썼다

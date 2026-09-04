@@ -976,3 +976,34 @@ def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
     # 조사 재개가 answer_case를 거쳤고, interactive 정책이 유지됐다.
     assert seen == ["interactive"], seen
     assert repo.list_by_status("closed")[0].interaction_policy == "interactive"
+
+
+def test_chat도_가로채인_케이스에는_조사를_걸지_않는다(tmp_path, capsys, monkeypatch):
+    # answer_case와 _drive_chat 둘 다 호출부다 — 한쪽만 고치면 나머지가 조용히
+    # 스레드를 버린다(계획 12 리뷰가 실제 CLI로 재현한 형태).
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+
+    class _Hijacks:
+        """접수 LLM 호출 도중 워커가 케이스를 가로챈다."""
+        async def ainvoke(self, messages):
+            open_cases = repo.list_open()
+            repo.save(open_cases[0].model_copy(update={
+                "status": "investigating", "owner": "w-1", "thread_ids": ["t-1"]}))
+            return AIMessage(content='{"target_locator": "rest:/oee", "missing": []}')
+
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        _Hijacks() if profile == "l" else object())
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert "다른 곳에서 처리 중" in capsys.readouterr().out
+    only = repo.list_open()[0]
+    # 새 스레드를 등록하지 않았고 워커의 소유도 그대로다.
+    assert only.thread_ids == ["t-1"] and only.owner == "w-1"

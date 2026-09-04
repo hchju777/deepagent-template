@@ -18,7 +18,8 @@ from src.application.intake import intake_turn
 async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topology,
                       worker, clock: Callable[[], datetime],
                       max_intake_turns: int = 3,
-                      interaction_policy: str = "autonomous") -> str:
+                      interaction_policy: str = "autonomous",
+                      on_problem: Callable[[str], None] | None = None) -> str:
     """답을 넣고 다음 단계까지 진행한다. 워커와 같은 어휘를 돌려준다.
 
     - 접수 질문이었으면 접수를 이어간다. 접수가 끝나면 **그대로 조사를 시작한다** —
@@ -38,9 +39,20 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
         turn = await intake_turn(case_id, repo=repo, store=store, deps=deps,
                                  topology=topology, clock=clock, answer=answer,
                                  max_turns=max_intake_turns)
+        # 접수가 왜 실패했는지가 호출부에 안 닿으면 `case resume` 사용자는 절대
+        # 못 본다 — 반환값 한 단어에는 담기지 않는다.
+        for problem in turn.problems:
+            if on_problem is not None:
+                on_problem(problem)
         if turn.status == "asking":
             return "awaiting_human"
-        # done이든 error든 케이스는 조사 가능한 상태로 돌아와 있다(intake_turn 계약).
+        if turn.status == "not_ours":
+            # 접수가 손을 뗀 레코드다 — 여기서 run_once를 걸면 그래프가 파킹한
+            # 케이스가 **새 스레드로 처음부터 재조사**돼 원래 스레드와 사람에게 물은
+            # 질문을 잃는다(lifecycle.py가 금지한 그것). 워커의 어휘로 "다른 주체가
+            # 들고 있다"를 뜻하는 값을 돌려준다.
+            return "busy"
+        # done이든 error든 케이스는 조사 가능한 상태다(intake_turn 계약).
         # error도 조사에 넣는 이유: 대상 없이 조사하는 것이 기존 "이중 실패"의
         # 착지점이고, 여기서 멈추면 사람이 답한 케이스가 조용히 방치된다.
         return await worker.run_once(case_id, interaction_policy=interaction_policy)

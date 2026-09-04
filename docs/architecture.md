@@ -65,7 +65,7 @@ presentation  →  application  →  domain  ←  infrastructure
 
 ```
 CLI(chat) → resolve_scope()  ── 미확정이면 후보를 보여주고 끝(케이스 없음)
-          → access.can_access()  ── 접수 경계의 유일한 접근 검사
+          → access.can_access()  ── 접수 경계의 접근 검사(`case resume`에도 같은 검사가 있다)
           → open_case()  ── **케이스가 먼저 열린다**(origin="human")
           → intake_turn() 반복 ── 되물을 때마다 awaiting_human으로 파킹
           → InvestigationWorker.run_once(interaction_policy="interactive")
@@ -236,19 +236,24 @@ recompute_verifier=4`)의 `recursion_limit`으로 강제한다 — 서브에이�
 
 ## 5. 케이스 수명주기와 lease
 
-```
-                    ┌─── 접수 되묻기(계획 12) ───┐
-                    ↓                            │
-  open ─────────────────────────────────→ awaiting_human ─→ closed
-    │                                        ↑    │            ↑
-    └──→ investigating ──────────────────────┘    └────────────┤
-                    └─────────────────────────────────────────-┘
-```
+`ALLOWED`(`src/application/lifecycle.py`)가 허용하는 전이는 여덟 개다:
 
-`ALLOWED`(`src/application/lifecycle.py`)의 여덟 엣지 전부:
-`open → {investigating, awaiting_human, closed}`,
-`investigating → {awaiting_human, closed}`,
-`awaiting_human → {investigating, open, closed}`.
+| from | to |
+|---|---|
+| `open` | `investigating` · `awaiting_human` · `closed` |
+| `investigating` | `awaiting_human` · `closed` |
+| `awaiting_human` | `investigating` · `open` · `closed` |
+
+ASCII 다이어그램을 두지 않는 이유: 이 표를 그림으로 옮겼다가 엣지 둘을 잃은 채로
+커밋된 적이 있다. 여덟 줄을 세는 것이 화살표를 세는 것보다 안 틀린다.
+
+`open ↔ awaiting_human` 두 엣지는 **접수 되묻기 전용**이다. 그래프는
+`investigating`에서만 돌므로 그쪽 파킹은 여전히 `investigating → awaiting_human`이고,
+재개는 `awaiting_human → investigating`이다. 두 종류의 구별은
+`CaseRecord.question_kind`가 들고, `answer_case`(`src/application/answer.py`)가
+그것을 보고 접수를 이어갈지 그래프를 재개할지 가른다 — **그래프가 파킹한 케이스를
+`open`으로 보내면 `run_once`가 새 조사를 처음부터 시작해 스레드를 잃는다.**
+
 
 `open ↔ awaiting_human` 두 엣지는 **접수 되묻기 전용**이다. 그래프는
 `investigating`에서만 돌므로 그쪽 파킹은 여전히 `investigating → awaiting_human`이고,

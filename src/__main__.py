@@ -351,7 +351,8 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     result = asyncio.run(answer_case(
         args.case_id, args.answer, repo=repo, store=store, deps=rt.deps,
         topology=rt.deps.topology, worker=worker, clock=clock,
-        max_intake_turns=app.engine.max_intake_turns))
+        max_intake_turns=app.engine.max_intake_turns,
+        on_problem=lambda p: print(f"접수: {p}", file=sys.stderr)))
     if result == "busy":
         # 위의 사전 점검과 실제 획득 사이의 경합(다른 프로세스가 그 사이 lease를 잡은 경우) —
         # resume_once 내부의 repo.claim이 최종 결정권을 가지므로 여기서도 같은 exit 2로 맞춘다.
@@ -472,6 +473,12 @@ async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, a
         turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
                                  topology=rt.deps.topology, clock=clock, answer=answer,
                                  max_turns=app.engine.max_intake_turns)
+        if turn.status == "not_ours":
+            # 다른 주체가 이 레코드를 들고 있다 — 조사를 걸면 스레드를 잃는다.
+            for problem in turn.problems:
+                print(f"접수: {problem}", file=sys.stderr)
+            print(f"케이스 {case_id}는 다른 곳에서 처리 중이다 — 조사를 시작하지 않는다")
+            return 0
         if turn.status != "asking":
             for problem in turn.problems:
                 print(f"접수: {problem}", file=sys.stderr)
