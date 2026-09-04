@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, SecretStr, model_validator
 
 from src.config.schema_app import StrictModel
+from src.domain.patrol import Concern
 
 _INTERVAL = re.compile(r"^\d+[smh]$")
 
@@ -232,6 +233,9 @@ ResolverSpec = Annotated[
 
 class CheckConfig(StrictModel):
     judge: Literal["rule", "llm", "rule+llm"]
+    # 이 점검이 무엇을 묻는가 — finding·케이스·보고서·수신자가 전부 이 값을 따른다.
+    # 기본값 근거는 domain/patrol.py의 Concern docstring에 있다.
+    concern: Concern = "system"
     schedule: Schedule
     target: str | None = None          # 토폴로지 locator 또는 등재 항목 이름(rest:<이름>) — 해석 검증은 boot에서
     probe: str | None = None           # 프로브 레지스트리 이름. None이면 target의 kind로 기본 프로브 선택

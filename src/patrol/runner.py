@@ -75,6 +75,7 @@ async def run_check(
             return Finding(
                 id=f"{gbm}/{fct}/{name}@{observed_at.isoformat()}", gbm=gbm, fct=fct, check=name,
                 target=check.target, summary=summary, evidence_ids=evidence_ids,
+                concern=check.concern,
                 scratch_case_id=case_id, observed_at=observed_at, judge=judge,
             )
 

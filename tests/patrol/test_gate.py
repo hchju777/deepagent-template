@@ -106,3 +106,13 @@ def test_케이스로_복사한_증거도_잘린_이유를_지킨다():
     copied = store.list_evidence(admit.case_id)[-1]
     assert copied.complete is False
     assert "10개 중 3개" in (copied.truncated_reason or "")
+
+
+def test_게이트가_concern을_케이스에_옮긴다():
+    # 여기서 끊기면 보고서·메일이 전부 기본값으로 떨어진다 — 계획 9의 시간대
+    # 배선이 정확히 그렇게 끊겼고, 함수 인자만 보는 테스트는 그걸 못 잡았다.
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    finding = _finding(store).model_copy(update={"concern": "operation"})
+    result = admit_finding(finding, repo=repo, store=store, clock=lambda: T)
+    assert repo.get(result.case_id).concern == "operation"
+    assert result.case.concern == "operation"       # to_case까지 이어진다

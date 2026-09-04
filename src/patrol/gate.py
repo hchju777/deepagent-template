@@ -106,7 +106,8 @@ def admit_finding(
         record = CaseRecord(
             id=case_id, gbm=finding.gbm, fct=finding.fct, fingerprint=fp,
             symptom=finding.summary, t0=finding.observed_at, target_locator=finding.target,
-            origin="patrol", status="open", created_at=now, updated_at=now,
+            origin="patrol", concern=finding.concern,
+            status="open", created_at=now, updated_at=now,
             finding_ids=[finding.id],
         )
         repo.save(record)
