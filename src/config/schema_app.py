@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
 
+from src.domain.concern import CONCERNS
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -92,9 +94,24 @@ class MailConfig(StrictModel):
     port: int = 25
     sender: str = ""
     recipients: list[str] = []
+    # concern별 수신자. 선언되지 않은 concern은 recipients로 폴백한다 — 전부
+    # 적으라고 강제하면 같은 목록을 두 번 쓰게 되고, 한쪽만 고치는 순간 조용히
+    # 갈라진다.
+    recipients_by_concern: dict[str, list[str]] = {}
     username: str | None = None
     password: SecretStr | None = None
     use_tls: bool = False
+
+    @model_validator(mode="after")
+    def _concern_keys_are_known(self):
+        # 오타("operations")면 그 목록이 영원히 안 쓰이고 아무도 모른다. boot이
+        # 아니라 검증자로 잡는 이유: config 로드 시점에 걸리면 `config show`에도
+        # 드러난다.
+        unknown = sorted(set(self.recipients_by_concern) - set(CONCERNS))
+        if unknown:
+            raise ValueError(f"recipients_by_concern의 알 수 없는 concern: {unknown} "
+                             f"— {list(CONCERNS)} 중 하나여야 한다")
+        return self
 
     @model_validator(mode="after")
     def _enabled_needs_host_and_recipients(self):

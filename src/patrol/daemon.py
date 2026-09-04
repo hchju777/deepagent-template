@@ -314,9 +314,12 @@ class PatrolDaemon:
                 except Exception:                                  # noqa: BLE001
                     pass
             subject, plain, html = self._render_case_mail(case_id)
+            # 수신자는 케이스의 concern이 정한다 — 여기서 안 넘기면 운영 이상이
+            # 플랫폼 담당에게 가고 아무도 눈치채지 못한다.
             await send_report(case_id, subject, plain, sender=self._mail_sender(),
                               ledger=self.ledger, cfg=self.report_cfg.mail,
-                              clock=self.clock, html=html)
+                              clock=self.clock, concern=self.repo.get(case_id).concern,
+                              html=html)
         except Exception as exc:                                   # noqa: BLE001 — 발행 실패가 종결을 뒤집지 않는다
             # 그냥 pass하면 발행이 실패해도 어디에도 흔적이 없다(F4: 삼켜진 에러
             # 보존). 레저 기록 자체가 실패해도 여기서 더 하지 않는다.

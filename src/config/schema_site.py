@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, SecretStr, model_validator
 
 from src.config.schema_app import StrictModel
-from src.domain.patrol import Concern
+from src.domain.concern import Concern
 
 _INTERVAL = re.compile(r"^\d+[smh]$")
 

@@ -5,7 +5,7 @@ from typing import Literal
 
 from src.config.schema_app import StrictModel
 from src.domain.case import Case
-from src.domain.patrol import Concern
+from src.domain.concern import Concern
 
 CaseStatus = Literal["open", "investigating", "awaiting_human", "closed"]
 OPEN_STATUSES = ("open", "investigating", "awaiting_human")

@@ -6,22 +6,7 @@ from typing import Literal
 from pydantic import model_validator
 
 from src.config.schema_app import StrictModel
-
-
-Concern = Literal["system", "operation"]
-"""무엇이 이상한가의 축 — 라우팅의 기반(스펙 §3.4).
-
-- `system`: 파이프라인이 고장. Kafka lag, Redis TTL 만료, Mongo 미갱신, API 5xx.
-- `operation`: 데이터는 흐르는데 현장 상태가 이상. 0/0/0, 생산중이어야 하는데 NO PLAN.
-
-**사람이 config에 적는다.** 응답 모양으로 추론하지 않는 이유는 라우팅 근거가
-재현·감사 가능해야 하기 때문이다(규율 6) — "왜 이 메일이 나한테 왔나"에 답할 수
-있어야 한다. 기본값이 `"system"`인 것은 편의가 아니라 분류다: 지금 있는 rule
-4종(range·exists·freshness·max)은 전부 파이프라인 신호를 판정한다.
-
-값이 두 개인 이유도 이벤트 어휘와 같다(규율 7) — 두 개로 표현 불가능한 것을
-만나기 전엔 늘리지 않는다.
-"""
+from src.domain.concern import Concern
 
 
 class Finding(StrictModel):

@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import model_validator
 
 from src.config.schema_app import StrictModel
-from src.domain.patrol import Concern
+from src.domain.concern import Concern
 
 Role = Literal["data_prober", "code_tracer", "recompute_verifier"]
 VerdictType = Literal["logic_bug", "data_loss", "config_error", "stale_data",

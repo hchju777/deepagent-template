@@ -39,6 +39,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from src.config.schema_app import MailConfig
+from src.domain.concern import Concern
 from src.patrol.ledger import SendLedgerPort
 
 Clock = Callable[[], datetime]
@@ -99,9 +100,18 @@ class SmtpSender(MailSenderPort):
         )
 
 
+def recipients_for(cfg: MailConfig, concern: Concern) -> list[str]:
+    """concern에 맞는 수신자 목록. 선언이 없으면 기본 목록으로 폴백한다.
+
+    폴백을 두는 이유: 전부 적으라고 강제하면 사람이 같은 목록을 두 번 쓰게 되고,
+    한쪽만 고치는 순간 조용히 갈라진다.
+    """
+    return cfg.recipients_by_concern.get(concern) or cfg.recipients
+
+
 async def send_report(case_id: str, subject: str, body: str, *, sender: MailSenderPort,
                       ledger: SendLedgerPort, cfg: MailConfig, clock: Clock,
-                      html: str | None = None) -> str:
+                      concern: Concern, html: str | None = None) -> str:
     """케이스 보고서 메일을 pending 기록 → 발송 → sent 갱신 순으로 보낸다.
 
     반환값은 "sent"|"skipped"|"duplicate"|"failed" 중 하나다. cfg.enabled가
@@ -112,12 +122,14 @@ async def send_report(case_id: str, subject: str, body: str, *, sender: MailSend
         return "skipped"
 
     send_id = f"report:{case_id}"
-    target = ", ".join(cfg.recipients)
+    # 레저의 target이 실제 수신자와 다르면 "누구에게 갔나"를 사후에 알 수 없다.
+    recipients = recipients_for(cfg, concern)
+    target = ", ".join(recipients)
     if not ledger.record_send(send_id, kind="report", target=target, at=clock()):
         return "duplicate"
 
     try:
-        await sender.send(subject, body, recipients=cfg.recipients, html=html)
+        await sender.send(subject, body, recipients=recipients, html=html)
     except Exception as exc:                                    # noqa: BLE001 — raise 금지(계약)
         logger.warning("메일 발송 실패(재시도 대상으로 pending 유지): case_id=%s err=%s: %s",
                        case_id, type(exc).__name__, exc)
