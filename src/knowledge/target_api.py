@@ -213,3 +213,86 @@ def load_target_api(knowledge_root: Path, gbm: str, fct: str) -> tuple[TargetApi
         return None, [f"pinned 명세를 읽을 수 없다 ({path}): {exc}"]
     api = parse_spec(raw)
     return api, [f"pinned 명세: {p}" for p in api.problems]
+
+
+def _declared_schema(entry) -> dict:
+    """등재 항목이 실제로 검증에 쓰는 스키마. `query_rules.entry_schema`와 같은 식.
+
+    같은 판정을 두 곳에서 다르게 쓰면 갈라진다(계획 7에서 claim의 두 구현이 갈라져
+    프로덕션 버그를 테스트가 못 잡은 일이 실제로 있었다). 여기서 import하지 않는
+    이유는 방향뿐이다 — `query_rules`는 infrastructure이고 이 모듈은 knowledge다.
+    """
+    return entry.query_schema if entry.method == "GET" else entry.body_schema
+
+
+def spec_problems(entries: dict, api: TargetApi) -> list[str]:
+    """등재 항목을 pinned 명세와 대조한다. I/O 없는 순수 함수.
+
+    기동 검증과 `--live` 드리프트가 **같은 함수를 공유한다** — 판정이 두 곳에서
+    갈리면 프로덕션 버그를 테스트가 못 잡는다(계획 8의 `entry_call_problems`가
+    세운 형태).
+
+    **명세에만 있는 키는 문제가 아니다.** 우리는 필요한 것만 등재한다. 그것을
+    문제로 삼는 순간 명세가 우리 스키마를 넓히는 압력이 되고, 이 모듈의 방향이
+    통째로 뒤집힌다. 이 함수는 `entries`를 읽기만 하고 절대 수정하지 않는다.
+    """
+    problems: list[str] = []
+    for name in sorted(entries):
+        entry = entries[name]
+        key = f"{entry.method} {entry.path}"
+        op = api.operations.get(key)
+        if op is None:
+            problems.append(f"등재 항목 {name!r}({key})가 pinned 명세에 없다 — "
+                            f"오타이거나 대상이 제거했다")
+            continue
+        schema = _declared_schema(entry)
+        for field in sorted(schema):
+            if field in op.unknown_props:
+                # 명세가 우리 어휘 밖 타입을 썼다는 뜻이지 우리가 틀렸다는 뜻이
+                # 아니다. 검증을 건너뛸 뿐 사람을 탓하지 않는다.
+                continue
+            declared = op.props.get(field)
+            if declared is None:
+                problems.append(f"등재 항목 {name!r}의 스키마 키 {field!r}가 "
+                                f"명세({key})에 없다")
+            elif declared != schema[field]:
+                problems.append(f"등재 항목 {name!r}의 {field!r} 타입이 명세와 다르다 "
+                                f"(우리: {schema[field]}, 명세: {declared})")
+        for field in op.required:
+            if field not in schema:
+                problems.append(f"명세가 필수라고 한 {field!r}가 등재 항목 "
+                                f"{name!r}의 스키마에 없다 — 보낼 수단이 없다")
+    return problems
+
+
+def response_field_problems(checks: dict, entries: dict, api: TargetApi) -> list[str]:
+    """rule 점검이 보는 응답 필드가 명세에 실재하는지 확인한다.
+
+    **최상위 키만 본다.** `body.badge.0`처럼 깊이 들어가는 경로는 명세의 중첩
+    스키마를 다 따라가야 하고, 그 정확도를 확보하기 전에는 거짓 오류가 더 비싸다.
+
+    **명세가 침묵한 자리에서는 아무 말도 하지 않는다**(`response_props is None`).
+    필드가 런타임에 없는 것은 데이터 이상이라 finding이 맞고, 여기서 잡는 것은
+    **오타**다 — 명세가 "그런 필드는 원래 없다"고 말할 때만 config 오류로 올린다.
+    """
+    problems: list[str] = []
+    for name in sorted(checks):
+        check = checks[name]
+        target = check.target or ""
+        kind, _, rest = target.partition(":")
+        if kind != "rest" or not rest or rest.startswith("/"):
+            continue                      # 토폴로지 locator는 pin이 덮지 않는다
+        entry = entries.get(rest)
+        if entry is None:
+            continue                      # 미등재 참조는 boot의 다른 검사가 잡는다
+        op = api.operations.get(f"{entry.method} {entry.path}")
+        if op is None or op.response_props is None:
+            continue
+        field = check.params.get("field") if isinstance(check.params, dict) else None
+        if not isinstance(field, str) or not field.startswith("body."):
+            continue
+        top = field[len("body."):].split(".")[0]
+        if top and top not in op.response_props:
+            problems.append(f"점검 {name!r}이 보는 {field!r}가 명세의 응답에 없다 "
+                            f"(명세가 말한 최상위 키: {op.response_props})")
+    return problems

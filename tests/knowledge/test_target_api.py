@@ -111,3 +111,84 @@ def test_객체가_아닌_응답에는_아무_주장도_하지_않는다():
         "application/json": {"schema": {"type": "array", "items": {
             "type": "object", "properties": {"line_code": {"type": "string"}}}}}}}}}}}})
     assert api.operations["GET /lines"].response_props is None
+
+
+# ── 대조 판정 ────────────────────────────────────────────────────────────────
+from src.config.schema_site import CheckConfig, RestEntry          # noqa: E402
+from src.knowledge.target_api import response_field_problems, spec_problems   # noqa: E402
+
+
+def _entry(method, path, body=None, query=None):
+    return RestEntry(method=method, path=path, body_schema=body or {},
+                     query_schema=query or {})
+
+
+def _check(target, field):
+    return CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": target,
+        "params": {"rule": "exists", "field": field}})
+
+
+def test_명세에_없는_항목을_잡는다():
+    entries = {"ghost": _entry("POST", "/nowhere", body={"x": "str"})}
+    problems = spec_problems(entries, parse_spec(RAW))
+    assert any("ghost" in p and "/nowhere" in p for p in problems), problems
+
+
+def test_명세에_없는_키와_타입_불일치를_잡는다():
+    entries = {"summary_prod": _entry("POST", "/summary/prod",
+                                      body={"part_code": "str", "save_as": "str",
+                                            "date": "str"})}
+    problems = spec_problems(entries, parse_spec(RAW))
+    assert any("save_as" in p for p in problems), problems            # 명세에 없는 키
+    assert any("part_code" in p and "list[str]" in p for p in problems), problems
+
+
+def test_명세가_필수라_한_키가_없으면_잡는다():
+    entries = {"summary_prod": _entry("POST", "/summary/prod",
+                                      body={"part_code": "list[str]"})}
+    assert any("date" in p and "필수" in p
+               for p in spec_problems(entries, parse_spec(RAW)))
+
+
+def test_명세에만_있는_키는_문제가_아니다():
+    # 이것을 문제로 삼으면 명세가 우리 스키마를 넓히는 압력이 된다 — 방향이 뒤집힌다.
+    entries = {"summary_prod": _entry("POST", "/summary/prod", body={"date": "str"})}
+    problems = spec_problems(entries, parse_spec(RAW))
+    assert not any("line_code" in p or "graph_type" in p for p in problems), problems
+
+
+def test_대조는_등재_항목을_수정하지_않는다():
+    # "명세로 스키마를 넓히지 않는다"를 문장이 아니라 테스트로 못 박는다.
+    entries = {"summary_prod": _entry("POST", "/summary/prod", body={"date": "str"})}
+    before = {k: dict(v.body_schema) for k, v in entries.items()}
+    spec_problems(entries, parse_spec(RAW))
+    assert {k: dict(v.body_schema) for k, v in entries.items()} == before
+
+
+def test_명세가_타입을_모르는_필드는_우리를_탓하지_않는다():
+    # unknown_props는 "명세가 우리 어휘 밖 타입을 썼다"이지 "우리가 틀렸다"가 아니다.
+    api = parse_spec({"paths": {"/x": {"post": {"requestBody": {"content": {
+        "application/json": {"schema": {"type": "object", "properties": {
+            "blob": {"type": "object"}}}}}}}}}})
+    entries = {"e": _entry("POST", "/x", body={"blob": "str"})}
+    assert spec_problems(entries, api) == []
+
+
+def test_명세가_침묵한_응답_필드는_판정하지_않는다():
+    api = parse_spec({"paths": {"/x": {"get": {}}}})
+    checks = {"c": _check("rest:e", "body.무엇이든")}
+    assert response_field_problems(checks, {"e": _entry("GET", "/x")}, api) == []
+
+
+def test_명세가_말한_응답에_없는_필드를_보면_잡는다():
+    checks = {"c": _check("rest:summary_prod", "body.badgee")}       # 오타
+    entries = {"summary_prod": _entry("POST", "/summary/prod")}
+    assert any("badgee" in p for p in
+               response_field_problems(checks, entries, parse_spec(RAW)))
+
+
+def test_등재_항목이_아닌_target은_응답_판정에서_건너뛴다():
+    # 토폴로지 locator(rest:/path)는 다른 이름공간이고 pin은 등재 항목만 덮는다.
+    checks = {"c": _check("rest:/api/v1/oee", "body.oee"), "d": _check("mongo:x", "ts")}
+    assert response_field_problems(checks, {}, parse_spec(RAW)) == []
