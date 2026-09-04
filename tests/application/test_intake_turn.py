@@ -159,3 +159,51 @@ async def test_레거시_파킹_레코드를_접수가_언파킹하지_않는다
     assert turn.status == "error"
     after = repo.get(case_id)
     assert after.status == "awaiting_human" and after.question is not None
+
+
+class _ClaimsDuringCall:
+    """LLM 호출 도중 워커가 케이스를 가로채는 상황을 만든다."""
+
+    def __init__(self, repo, case_id, update, reply=_RESOLVED):
+        self._repo, self._case_id, self._update, self._reply = repo, case_id, update, reply
+
+    async def ainvoke(self, messages):
+        self._repo.save(self._repo.get(self._case_id).model_copy(update=self._update))
+        return SimpleNamespace(content=self._reply)
+
+
+async def test_턴_도중_그래프가_파킹하면_그것을_지우지_않는다():
+    # 가드를 턴 시작에만 걸면, LLM 호출 동안 워커가 claim하고 그래프가 파킹한
+    # 케이스를 접수가 open으로 되돌려 **사람에게 물은 질문이 소멸한다.**
+    # 그러면 requeue_open이 다시 집어 같은 케이스에 조사가 둘 붙는다.
+    case_id, repo, store = _case()
+    llm = _ClaimsDuringCall(repo, case_id, {
+        "status": "awaiting_human", "question": "계획 변경이 있었나?",
+        "question_kind": "investigation", "owner": "w-1", "thread_ids": ["t-1"]})
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=llm))
+    assert turn.status == "error"
+    after = repo.get(case_id)
+    assert after.status == "awaiting_human" and after.question_kind == "investigation"
+    assert after.question == "계획 변경이 있었나?" and after.owner == "w-1"
+
+
+async def test_턴_도중_워커가_claim하면_파킹하지_않는다():
+    # investigating 레코드를 접수가 awaiting_human으로 파킹하면, 워커의 _finish가
+    # awaiting_human→awaiting_human 전이에서 LifecycleError로 터져 케이스가
+    # 강제 종결된다 — 재읽기를 넣으면서 새로 생긴 실패 모양이다.
+    case_id, repo, store = _case()
+    llm = _ClaimsDuringCall(repo, case_id, {"status": "investigating", "owner": "w-1",
+                                            "thread_ids": ["t-1"]}, reply=_MISSING)
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=llm))
+    assert turn.status == "error"
+    after = repo.get(case_id)
+    assert after.status == "investigating" and after.question_kind is None
+
+
+async def test_턴_도중_가로채이면_포기_경로도_저장하지_않는다():
+    case_id, repo, store = _case()
+    llm = _ClaimsDuringCall(repo, case_id, {"status": "investigating", "owner": "w-1"},
+                            reply="파싱 불가")
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=llm))
+    assert turn.status == "error"
+    assert repo.get(case_id).status == "investigating"

@@ -237,12 +237,18 @@ recompute_verifier=4`)의 `recursion_limit`으로 강제한다 — 서브에이�
 ## 5. 케이스 수명주기와 lease
 
 ```
-        ┌──────────── 접수 되묻기(계획 12) ────────────┐
-        ↓                                             │
-      open ──────────→ investigating ──→ awaiting_human ──→ closed
-        │                    ↑________________|              ↑
-        └───────────────────────────────────────────────────-┘
+                    ┌─── 접수 되묻기(계획 12) ───┐
+                    ↓                            │
+  open ─────────────────────────────────→ awaiting_human ─→ closed
+    │                                        ↑    │            ↑
+    └──→ investigating ──────────────────────┘    └────────────┤
+                    └─────────────────────────────────────────-┘
 ```
+
+`ALLOWED`(`src/application/lifecycle.py`)의 여덟 엣지 전부:
+`open → {investigating, awaiting_human, closed}`,
+`investigating → {awaiting_human, closed}`,
+`awaiting_human → {investigating, open, closed}`.
 
 `open ↔ awaiting_human` 두 엣지는 **접수 되묻기 전용**이다. 그래프는
 `investigating`에서만 돌므로 그쪽 파킹은 여전히 `investigating → awaiting_human`이고,

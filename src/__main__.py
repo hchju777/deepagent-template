@@ -290,6 +290,15 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         print(f"케이스 {args.case_id!r}를 찾을 수 없다", file=sys.stderr)
         return 1
 
+    # 개설만 막고 답변을 안 막으면 반쪽이다 — 답변 텍스트가 리드 프롬프트에
+    # 직행하고 evidence로 박제된다(스펙 §3.5). lease·status 검사보다 **앞**이다:
+    # 뒤에 두면 미인가 주체가 케이스의 존재·상태·데몬 가동 여부를 캐낼 수 있다.
+    subject = getattr(args, "requested_by", None)
+    if not app.access.can_access(subject, record.gbm, record.fct):
+        print(f"주체 {subject!r}는 {record.gbm}/{record.fct}에 접근할 수 없다 "
+              f"(app.json의 access.allow)", file=sys.stderr)
+        return 1
+
     now = datetime.now(timezone.utc)
     lease_free = record.owner is None or (record.lease_until is not None
                                           and record.lease_until < now)
@@ -299,14 +308,6 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     if record.status != "awaiting_human":
         print(f"케이스가 awaiting_human 상태가 아니다(현재: {record.status}) — 재개할 수 없다",
              file=sys.stderr)
-        return 1
-
-    # 개설만 막고 답변을 안 막으면 반쪽이다 — 답변 텍스트가 리드 프롬프트에
-    # 직행하고 evidence로 박제된다(스펙 §3.5).
-    subject = getattr(args, "requested_by", None)
-    if not app.access.can_access(subject, record.gbm, record.fct):
-        print(f"주체 {subject!r}는 {record.gbm}/{record.fct}에 접근할 수 없다 "
-              f"(app.json의 access.allow)", file=sys.stderr)
         return 1
 
     for rt in sites:

@@ -36,7 +36,7 @@
 - **무raise**: 접수·해석·접근 판정 전부. 실패는 반환 타입의 상태로 흡수한다(`ScopeResult.status`, `IntakeTurn.status`). 접수 경로에서 예외가 새면 HTTP 500이 되고, 그 시점에 케이스가 이미 열려 있으면 고아가 된다.
 - **시계 주입**: `src/__main__.py` 밖에서 `datetime.now()` 금지.
 - **StrictModel**: 새 pydantic 모델은 `StrictModel` 상속.
-- **수명주기는 코드가 쥔다(규율 4)**: 접수 LLM이 돌려준 값으로 `status`를 정하지 않는다. 상태 전이는 기존 `ALLOWED` 전이표를 그대로 쓴다.
+- **수명주기는 코드가 쥔다(규율 4)**: 접수 LLM이 돌려준 값으로 `status`를 정하지 않는다. **전이표(`ALLOWED`)는 접수 되묻기를 위해 `open ↔ awaiting_human` 두 엣지를 연다** — 그 표는 그래프만 파킹하던 시절 것이고 그래프는 `investigating`에서만 돈다. 그래프가 파킹한 케이스가 `awaiting_human → open`을 타면 스레드를 잃으므로, `question_kind`가 그것을 막는다.
 - **통제 경계(규율 6)**: 사이트 해석에서 **후보 목록은 코드가 만든다**(registry의 활성 사이트). LLM은 그 안에서 고를 뿐이고, 목록 밖 값을 고르면 미확정으로 처리한다 — 대상 시스템 접근 권한이 걸린 축을 LLM 자유 서술로 정하게 두면 안 된다.
 - **한 경로만**: `chat`과 계획 13의 API가 **같은 함수**를 쓴다. 조립을 베끼면 언젠가 하나가 빠뜨린다(규율 8이 케이스 종결 세 경로에서 얻은 교훈).
 - **주석·문서는 한국어, WHY만.** **커밋 메시지는 영어**(CLAUDE.md 언어 관례). 끝에 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
@@ -69,7 +69,8 @@
 | `src/application/intake.py` | 접수 | 케이스가 **이미 열린 뒤** 도는 턴 단위로 재구성 |
 | `src/application/open_case.py` | **신설** — 케이스 개설 한 곳 | `open_case(...) -> CaseRecord` — CLI와 계획 13이 공유 |
 | `src/domain/cases.py` | 케이스 레코드 | `requested_by`, `question_kind` |
-| `src/domain/access.py` | **신설** — 접근 술어 | `AccessPolicy.can_access(subject, gbm, fct)` |
+| `src/config/schema_app.py` | 접근 술어 | `AccessPolicy.can_access(subject, gbm, fct)` — domain이 아닌 이유는 순환(모든 도메인 모델이 `StrictModel`에 의존한다) |
+| `src/application/answer.py` | **신설** — 답변 라우팅 | `answer_case`가 접수/조사 질문을 가른다. CLI와 계획 13이 공유 |
 | `src/config/schema_app.py` | app config | `access.allow` 테이블 |
 | `src/__main__.py` | CLI | `chat`이 새 순서를 쓴다, `--requested-by` |
 | `src/boot.py` | 기동 검증 | `access.allow`의 사이트 키가 registry에 실재하는가 |
@@ -386,7 +387,12 @@ python -m src case list --config-root config.example --repo-root .
 
 ## Self-Review
 
-**스펙 커버리지**: §3.5(필드 1개 + 술어 1개 + 접수 경계 한 곳 + 읽기 필터) → Task 5. §4.4의 "접수가 케이스보다 먼저" → Task 2·3. "사이트 해석 단계를 intake 앞에" → Task 1. 나머지 §4.4(엔드포인트·SSE)는 계획 13.
+**스펙 커버리지**: §3.5의 필드 1개 + 술어 1개 + 접수 경계 검사 → Task 5. **읽기
+필터는 미이행이다** — `AccessPolicy.sites_for`는 만들었으나 프로덕션 소비자가 없고
+(CLI의 `case list`/`case show`는 주체 개념이 없다), 스펙이 말한 "모든 읽기
+엔드포인트"가 계획 13에서 생긴다. **계획 13이 그것을 붙이지 않으면 접수만 막히고
+읽기는 열린 채로 남는다.** `sites_for`는 와일드카드에 `known`이 없으면 `ValueError`를
+던지므로 엔드포인트에 붙일 때 그 인자를 반드시 넘겨야 한다. §4.4의 "접수가 케이스보다 먼저" → Task 2·3. "사이트 해석 단계를 intake 앞에" → Task 1. 나머지 §4.4(엔드포인트·SSE)는 계획 13.
 
 **타입 일관성**: `ScopeResult`/`IntakeTurn` 둘 다 `status` 필드로 3상을 표현한다 — `CheckOutcome`·`AdmitResult`와 같은 형태라 무raise 규율이 반환 타입에 보인다. `AccessPolicy.sites_for`가 `None`을 "제한 없음"으로 쓰는 것은 `[]`("아무것도 못 봄")와 구별하기 위해서다 — 계획 10의 `response_props`가 같은 구별을 했다.
 

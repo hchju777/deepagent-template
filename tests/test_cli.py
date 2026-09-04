@@ -941,3 +941,38 @@ def test_접수_중_프로세스가_죽어도_문답이_남는다(tmp_path, caps
     assert after.target_locator == "mongo:twin_state" and after.status == "closed"
     assert any("라인 7이다" in repr(store.get_evidence(case_id, r.id))
                for r in store.list_evidence(case_id))
+
+
+def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
+    # 이 세션에서 커밋 메시지가 "answer_case를 부른다"고 주장한 것이 거짓이었던
+    # 적이 있다. 코드만 고치고 테스트를 안 넣으면 조용히 되돌아간다 — CLI와
+    # 계획 13의 API가 같은 분기를 써야 한다는 것이 그 함수를 뺀 이유다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                        ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+
+    seen = []
+    real = main_module.answer_case
+
+    async def spy(*args, **kwargs):
+        seen.append(kwargs.get("interaction_policy"))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr("src.__main__.answer_case", spy)
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    # 조사 재개가 answer_case를 거쳤고, interactive 정책이 유지됐다.
+    assert seen == ["interactive"], seen
+    assert repo.list_by_status("closed")[0].interaction_policy == "interactive"

@@ -1,20 +1,19 @@
-"""접수 — 케이스가 열린 뒤 턴 단위로 도는 대상 확정 (스펙 §2.4 interrupt 원칙의 CLI판).
+"""접수 — 케이스가 열린 뒤 대상(`target_locator`)을 턴 단위로 확정한다 (스펙 §4.4).
 
-케이스를 열기 전에 자연어 증상에서 target_locator를 뽑아낸다. 그래프 안의 frame
-노드처럼 다단계 조사·병렬 태스크를 벌이지 않는다 — 단발 LLM 호출 하나(+ 있으면
-사람에게 되물어 한 번 더)로 끝난다. 진짜 조사는 케이스가 열린 뒤 엔진이 한다.
+그래프 안의 frame 노드처럼 다단계 조사·병렬 태스크를 벌이지 않는다 — 한 턴이 LLM
+호출 하나다. 진짜 조사는 접수가 끝난 뒤 엔진이 한다.
 
-deps/gbm/fct(구현 결정): 브리프의 인터페이스 목록은 `deps, topology, clock, ask`
-넷만 적지만, IntakeResult가 요구하는 gbm/fct를 채울 근거가 EngineDeps에도
-Topology에도 없다(둘 다 site 식별자를 담지 않는다) — CLI의 `--gbm/--fct`가 유일한
-근거다. 그래서 이 함수는 gbm/fct를 필수 키워드 인자로 추가로 받는다(호출부가
-CLI에서 이미 확정한 사이트를 그대로 넘긴다). "파싱 이중 실패 → 첫 사이트로 진행"
-(브리프)은 이 구현에서 "유일하게 주어진 사이트로 진행"과 같다 — CLI가 매번
-정확히 한 사이트의 deps/topology만 넘기기 때문이다.
+**턴 단위인 이유**: 이전 구조는 `ask` 콜백으로 프로세스 안에서 되묻고 문답을
+마지막에 한 번 돌려줬다. 클라이언트가 끊기거나 서버가 재시작되면 전부 사라진다.
+지금은 한 호출이 끝나거나 케이스를 파킹하고, 다음 호출이 답을 들고 이어간다 —
+답은 **이어가기 전에 먼저** 증거로 박제된다.
 
-무raise 규율: LLM 호출·파싱이 전부 실패해도(네트워크 오류, 구조화 출력 불량 등)
-접수 자체가 조사를 막아서는 안 된다 — target_locator=None으로 진행하고 qa에
-실패를 기록할 뿐 여기서 raise하지 않는다.
+**동시성**: 접수는 lease를 잡지 않는다. 대신 `_not_ours`가 턴 시작과 저장 직전에
+같은 판정을 걸어, 그 사이 워커가 가로챈 레코드를 건드리지 않는다. 재읽기만으로는
+부족하다 — 그 이유는 `_not_ours` docstring에 있다.
+
+무raise 규율: LLM 호출·파싱이 전부 실패해도 접수가 조사를 막아서는 안 된다 —
+`target_locator=None`으로 진행하고 실패를 `problems`에 남길 뿐 raise하지 않는다.
 """
 from datetime import datetime
 from typing import Any, Callable, Literal
@@ -51,10 +50,6 @@ async def _call(deps, prompt: str) -> tuple[_IntakeLlmOutput | None, str | None]
     except Exception as exc:                                        # noqa: BLE001
         return None, f"LLM 호출 실패 — {type(exc).__name__}: {exc}"
     return parse_structured(response.content, _IntakeLlmOutput)
-
-
-def _format_answers(answers: list[dict]) -> str:
-    return "\n".join(f"- {a['question']}: {a['answer']}" for a in answers)
 
 
 # ── 턴 단위 접수(계획 12) ─────────────────────────────────────────────────
@@ -99,19 +94,9 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
         record = repo.get(case_id)
         if record is None:
             return IntakeTurn(status="error", problems=[f"케이스 {case_id}를 찾을 수 없다"])
-        if record.status == "closed":
-            return IntakeTurn(status="error", problems=["닫힌 케이스는 접수할 수 없다"])
-        if record.status == "investigating":
-            # 워커가 lease를 잡고 조사 중이다. 여기서 저장하면 그 lease·상태·스레드
-            # 배정을 되돌려 같은 케이스에 조사가 둘 붙고, 등록 안 된 체크포인트가
-            # close_case(discard_threads=True)에 안 걸려 영구히 남는다.
-            return IntakeTurn(status="error", problems=["조사 중인 케이스다 — 접수할 수 없다"])
-        if record.status == "awaiting_human" and record.question_kind != "intake":
-            # **부재가 아니라 존재를 요구한다.** question_kind가 None인 것은 계획 12
-            # 이전에 그래프가 파킹한 레코드다 — "investigation이 아니면 통과"로 두면
-            # 그것들이 전부 새어 들어와 언파킹되고 스레드가 재개 불가능해진다.
-            return IntakeTurn(status="error",
-                              problems=["조사 질문에 파킹된 케이스다 — case resume으로 답하라"])
+        problem = _not_ours(record)
+        if problem is not None:
+            return IntakeTurn(status="error", problems=[problem])
 
         now = clock()
         if answer is not None:
@@ -122,7 +107,7 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
                    for r in store.list_evidence(case_id) if r.source == _ANSWER_SOURCE]
         turns = sum(1 for r in store.list_evidence(case_id) if r.source == _TURN_SOURCE)
         if turns >= max_turns:
-            return _give_up(record, repo, store, clock,
+            return _give_up(record, repo, clock,
                             [f"접수 턴 상한({max_turns})을 넘겼다 — 대상 없이 조사한다"])
 
         locators = sorted(topology.locators()) if topology is not None else []
@@ -132,11 +117,14 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
                             "target_locator": out.target_locator if out else None,
                             "error": err}, as_of=now)
         if out is None:
-            return _give_up(record, repo, store, clock, [f"접수 응답 파싱 실패 — {err}"])
+            return _give_up(record, repo, clock, [f"접수 응답 파싱 실패 — {err}"])
 
         if out.missing:
             question = out.missing[0]
             current = repo.get(case_id)
+            problem = _not_ours(current)      # LLM 호출 동안 가로채였을 수 있다
+            if problem is not None:
+                return IntakeTurn(status="error", problems=[problem])
             parked = current if current.status == "awaiting_human" \
                 else transition(current, "awaiting_human", clock=clock)
             repo.save(parked.model_copy(update={"question": question,
@@ -149,29 +137,59 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
                           problems=[f"접수 실패 — {type(exc).__name__}: {exc}"])
 
 
-def _save(repo, case_id: str, clock, *, unpark: bool, **fields):
+def _not_ours(record) -> str | None:
+    """접수가 이 레코드를 만질 수 있는가 — **턴 시작과 저장 직전에 같은 판정**을 쓴다.
+
+    재읽기만 넣고 가드를 다시 적용하지 않으면 두 가지가 난다. LLM 호출 동안 워커가
+    claim해 그래프가 파킹한 레코드를 접수가 `open`으로 되돌리면 **사람에게 물은
+    질문이 소멸하고** requeue_open이 다시 집어 조사가 둘 붙는다. 그리고 아직
+    `investigating`인 레코드를 접수가 파킹하면 워커의 `_finish`가
+    awaiting_human→awaiting_human 전이에서 LifecycleError로 터져 케이스가 강제
+    종결된다. `requeue_interval_s` 기본이 30초라 이 창은 이론이 아니다.
+
+    `question_kind`는 **부재가 아니라 존재를 요구한다** — None은 계획 12 이전에
+    그래프가 파킹한 레코드이고, "investigation이 아니면 통과"로 두면 그것들이
+    전부 새어 들어와 스레드가 재개 불가능해진다.
+    """
+    if record.status == "closed":
+        return "닫힌 케이스는 접수할 수 없다"
+    if record.status == "investigating":
+        return "조사 중인 케이스다 — 접수할 수 없다"
+    if record.status == "awaiting_human" and record.question_kind != "intake":
+        return "조사 질문에 파킹된 케이스다 — case resume으로 답하라"
+    return None
+
+
+def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
     """접수가 소유한 필드만 얹어 저장한다 — read-modify-write(워커 모듈의 I1).
 
     턴 시작 시 읽은 스냅샷을 wholesale 저장하면 LLM 호출 동안 다른 경로가 바꾼
-    것(게이트의 finding 첨부 등)을 잃는다. 저장 직전에 다시 읽는다.
+    것(게이트의 finding 첨부 등)을 잃는다. 저장 직전에 다시 읽고, **그때 다시
+    가드를 적용한다** — 재읽기만으로는 가로채인 레코드를 되돌리는 것을 못 막는다.
     """
     current = repo.get(case_id)
+    problem = _not_ours(current)
+    if problem is not None:
+        return problem
     base = transition(current, "open", clock=clock) \
         if unpark and current.status == "awaiting_human" else current
     repo.save(base.model_copy(update=fields))
+    return None
 
 
 def _finish(record, repo, clock, target_locator) -> IntakeTurn:
-    _save(repo, record.id, clock, unpark=True, target_locator=target_locator,
-          question=None, question_kind=None)
+    problem = _save(repo, record.id, clock, unpark=True, target_locator=target_locator,
+                    question=None, question_kind=None)
+    if problem is not None:
+        return IntakeTurn(status="error", problems=[problem])
     return IntakeTurn(status="done", target_locator=target_locator)
 
 
-def _give_up(record, repo, store, clock, problems: list[str]) -> IntakeTurn:
+def _give_up(record, repo, clock, problems: list[str]) -> IntakeTurn:
     """접수를 포기하고 케이스를 조사 가능한 상태로 되돌린다.
 
     고아로 남기지 않는 것이 핵심이다 — 파킹된 채 질문만 있고 아무도 답할 수 없는
     케이스는 타임아웃까지 아무 일도 일어나지 않는다.
     """
-    _save(repo, record.id, clock, unpark=True, question=None, question_kind=None)
-    return IntakeTurn(status="error", problems=problems)
+    problem = _save(repo, record.id, clock, unpark=True, question=None, question_kind=None)
+    return IntakeTurn(status="error", problems=[*problems, *( [problem] if problem else [] )])
