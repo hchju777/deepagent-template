@@ -199,3 +199,29 @@ async def test_데몬이_사이트_시간대를_해석기까지_넘긴다(tmp_pa
     expected = (kst_morning.astimezone(ZoneInfo(daemon.timezone))).date().isoformat()
     assert body["request"]["params"] == {"date": expected}
     assert expected != kst_morning.date().isoformat(), "UTC와 같으면 테스트가 무의미하다"
+
+
+def test_스키마에_기본값_필드를_더해도_규칙_digest가_안_바뀐다():
+    # 계획 9가 CheckConfig에 resolve를 더했을 때 손대지 않은 전 사이트의 rules
+    # digest가 바뀌었다. 지금은 아무도 비교하지 않아 무해하지만, 드리프트 판정이
+    # 이 값을 쓰는 순간 "설정을 안 바꿨는데 드리프트"가 뜬다 — 신호가 태어나자마자
+    # 소음이 된다. 그래서 미래의 필드 추가를 여기서 흉내 낸다.
+    from src.patrol.daemon import rules_digest
+    class CheckConfigPlus(CheckConfig):
+        훗날_생길_필드: str = "기본값"
+
+    raw = {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/x",
+           "params": {"rule": "exists", "field": "body"}}
+    assert (rules_digest({"c": CheckConfig.model_validate(raw)})
+            == rules_digest({"c": CheckConfigPlus.model_validate(raw)}))
+
+
+def test_규칙_digest는_실제_변경에는_반응한다():
+    # 기본값을 빼는 것이 "아무것도 구별 못 한다"가 되면 안 된다.
+    from src.patrol.daemon import rules_digest
+    raw = {"judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:/x",
+           "params": {"rule": "exists", "field": "body"}}
+    one = CheckConfig.model_validate(raw)
+    two = CheckConfig.model_validate({**raw, "resolve": {"d": {"from": "clock",
+                                                               "expr": "today"}}})
+    assert rules_digest({"c": one}) != rules_digest({"c": two})

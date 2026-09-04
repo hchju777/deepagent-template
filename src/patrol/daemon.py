@@ -376,6 +376,19 @@ class PatrolDaemon:
             self.scheduler.shutdown(wait=False)
 
 
+def rules_digest(checks: dict) -> str:
+    """점검 설정의 content digest — 케이스 T0에 박제된다(스펙 §2.5-3).
+
+    `exclude_defaults=True`가 핵심이다. 미설정 기본값까지 덤프하면 스키마에 필드를
+    하나 더할 때마다 손대지 않은 사이트의 digest가 바뀐다 — 계획 9가 `resolve`를
+    더했을 때 실제로 전 사이트가 그랬다. 지금은 아무도 비교하지 않아 무해하지만,
+    드리프트 판정이 이 값을 쓰는 순간 "설정을 안 바꿨는데 드리프트"가 뜨고
+    경보가 통째로 소음이 된다.
+    """
+    return canonical_digest({name: chk.model_dump(mode="json", exclude_defaults=True)
+                             for name, chk in checks.items()})
+
+
 def load_stub_seeds(path: Path) -> tuple[dict[str, StubSeeds], list[str]]:
     """시드 파일을 읽어 (사이트키 → StubSeeds, 문제 목록)을 돌려준다. raise하지 않는다.
 
@@ -451,10 +464,9 @@ def assemble_sites(
         topology = load_topology(knowledge_root, ref.gbm, ref.fct)
         deployment = load_deployment(knowledge_root, ref.gbm, ref.fct)
 
-        checks_dump = {name: chk.model_dump(mode="json") for name, chk in site_cfg.patrol.checks.items()}
         digests = {
             "topology": canonical_digest(topology.model_dump(mode="json")),
-            "rules": canonical_digest(checks_dump),
+            "rules": rules_digest(site_cfg.patrol.checks),
             "deployment": canonical_digest(deployment.model_dump(mode="json")) if deployment is not None
                          else "absent",
         }
