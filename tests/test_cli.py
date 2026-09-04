@@ -317,6 +317,9 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     awaiting = repo.list_by_status("awaiting_human")
     assert len(awaiting) == 1
     case_id = awaiting[0].id
+    # 워커가 파킹할 때 종류를 붙여야 한다(계획 12) — 안 붙이면 접수/조사 구별이
+    # "라벨이 없다"에 기대게 되고, 접수 쪽 가드가 새로 파킹된 케이스에 무력하다.
+    assert awaiting[0].question_kind == "investigation"
 
     # 두 번째 프로세스를 흉내 — 새 스크립트로 남은 라운드(conclude·verify)를 완주시킨다.
     lead_llm2 = ScriptedLLM([INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
@@ -683,3 +686,75 @@ def test_chat이_연_케이스도_concern을_정하고_수신자를_가른다(tm
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 0, capsys.readouterr().err
     assert sent == [["ops@y"]], sent
+
+
+def _park_intake(repo, case_id, question="어느 라인인가?"):
+    repo.save(repo.get(case_id).model_copy(update={
+        "status": "awaiting_human", "question": question, "question_kind": "intake"}))
+
+
+def test_접수_질문에_답하면_접수를_이어간다(tmp_path, capsys, monkeypatch):
+    # 그래프를 재개하려 들면 스레드가 없어 실패하고, F3가 그 실패를 조사 실패로
+    # 기록한다 — 사람 눈에는 "답했는데 조사가 깨졌다"로 보인다.
+    from src.application.open_case import open_case
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    record = open_case(repo=repo, store=store, symptom="OEE가 이상하다", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None,
+                       clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc),
+                       on_event=lambda e: None)
+    _park_intake(repo, record.id)
+
+    lead = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}'])
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        lead if profile == "l" else object())
+
+    code = main(["case", "resume", record.id, "--answer", "라인 7",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0, capsys.readouterr().err
+    after = repo.get(record.id)
+    assert after.question_kind is None and after.question is None
+    assert after.target_locator == "mongo:twin_state"
+    # 접수가 끝났으면 **그대로 조사가 시작돼야 한다** — open에 멈춰 있으면 사람이
+    # 답한 뒤 아무 반응이 없고, 그걸 움직이는 건 데몬의 주기 재큐뿐이다.
+    assert after.status != "open" and "재개 결과" in capsys.readouterr().out
+    # 답이 증거로 남았다 — 그래프가 첫 라운드부터 볼 수 있다.
+    assert any("라인 7" in repr(store.get_evidence(record.id, r.id))
+               for r in store.list_evidence(record.id))
+
+
+def test_조사_질문은_접수로_새지_않는다(tmp_path, capsys, monkeypatch):
+    # 반대 방향의 같은 사고 — 그래프가 파킹한 케이스를 접수로 보내면 스레드를
+    # 잃고 새 조사가 처음부터 시작된다. 워커가 파킹할 때 종류를 붙이는지까지 본다.
+    from src.application.open_case import open_case
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None,
+                       clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc),
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "계획 변경이 있었나?",
+        "question_kind": "investigation"}))
+
+    # 접수 LLM은 아무것도 안 준다 — 접수로 새면 이 대본이 소진되며 티가 난다.
+    lead = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}'])
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        lead if profile == "l" else object())
+
+    main(["case", "resume", record.id, "--answer", "없다",
+          "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    # 접수가 돌았다면 target_locator가 채워졌을 것이다 — 그래프 재개는 안 채운다.
+    assert repo.get(record.id).target_locator is None

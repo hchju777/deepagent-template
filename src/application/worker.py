@@ -347,7 +347,11 @@ class InvestigationWorker:
             interrupts = result["__interrupt__"]
             question = interrupts[0].value.get("question") if interrupts else None
             waiting = transition(current, "awaiting_human", clock=self._clock)
-            self._repo.save(waiting.model_copy(update={"question": question}))
+            # 종류를 명시해 둔다(계획 12) — 안 붙이면 접수/조사 구별이 "라벨이
+            # 있다"가 아니라 "라벨이 없다"에 기대게 되고, 접수 쪽 가드가 새로
+            # 파킹된 케이스에는 아무 효과가 없다.
+            self._repo.save(waiting.model_copy(update={"question": question,
+                                                       "question_kind": "investigation"}))
             self._emit_status(record.id, "awaiting_human")
             return "awaiting_human"
         verdict = result.get("verdict")

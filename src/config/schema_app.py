@@ -25,6 +25,9 @@ class EngineConfig(StrictModel):
     parallel_width: int = 3
     subagent_budgets: SubagentBudgets = SubagentBudgets()
     autonomous_question_policy: Literal["default_and_log", "park"] = "default_and_log"
+    # 접수 되묻기 상한 — 턴으로 쪼개면 호출자가 무한히 부를 수 있다(규율 6).
+    # 넘으면 대상 없이 조사에 들어간다(기존 "이중 실패"와 같은 착지점).
+    max_intake_turns: int = 3
 
 
 class InvestigationsConfig(StrictModel):

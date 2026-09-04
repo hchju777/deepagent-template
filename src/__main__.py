@@ -14,6 +14,7 @@ from typing import Awaitable, Callable
 
 from dotenv import load_dotenv
 
+from src.application.answer import answer_case
 from src.application.events import case_status_event
 from src.application.intake import intake
 from src.application.worker import CaseQueue, InvestigationWorker
@@ -336,7 +337,13 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
         on_event=on_event, on_closed=on_closed)
 
-    result = asyncio.run(worker.resume_once(args.case_id, args.answer))
+    # 접수 질문과 조사 질문을 가르는 것은 answer_case 하나다 — CLI와 계획 13의
+    # API가 같은 함수를 쓴다(규율 8).
+    rt = by_key[(record.gbm, record.fct)]
+    result = asyncio.run(answer_case(
+        args.case_id, args.answer, repo=repo, store=store, deps=rt.deps,
+        topology=rt.deps.topology, worker=worker, clock=clock,
+        max_intake_turns=app.engine.max_intake_turns))
     if result == "busy":
         # 위의 사전 점검과 실제 획득 사이의 경합(다른 프로세스가 그 사이 lease를 잡은 경우) —
         # resume_once 내부의 repo.claim이 최종 결정권을 가지므로 여기서도 같은 exit 2로 맞춘다.
