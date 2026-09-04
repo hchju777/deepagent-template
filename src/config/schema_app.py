@@ -3,6 +3,7 @@
 전역 키가 사이트 계층에 섞이면 예산·상한이 사이트 수만큼 곱해진다.
 전역은 이 모델로만, 사이트는 schema_site로만 검증한다.
 """
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
@@ -137,8 +138,90 @@ class ReportConfig(StrictModel):
     mail: MailConfig = MailConfig()
 
 
+# ── 접근 술어(스펙 §3.5) ─────────────────────────────────────────────
+# domain이 아니라 여기 사는 이유: 모든 도메인 모델이 이 모듈의 StrictModel에
+# 의존하므로 schema_app이 domain을 import하면 순환이 닫힌다. Concern은 의존
+# 없는 leaf로 뺄 수 있었지만 이쪽은 pydantic 모델이라 그 길이 없다.
+# 접근 술어 — 어떤 주체가 어느 사이트를 조사·조회할 수 있는가 (스펙 §3.5).
+# 
+# **읽기 전용이라고 폭발 반경이 작지 않다.** 인증 없는
+# `POST /cases {gbm:"mx", fct:"suwon"}`은 실질적으로 "수원 법인의 Redis/Mongo/Kafka와
+# 소스 저장소에 읽기 권한을 가진 LLM 에이전트를 돌리고 결과를 메일로 보내라"는
+# 요청이다. 그리고 `awaiting_human`이 프롬프트 주입구가 된다 — 답을 넣을 수 있는
+# 누구든 그 텍스트가 리드 프롬프트에 직행하고 evidence로 박제된다.
+# 
+# **지금 넣는 이유**: `(gbm, fct)` 축이 이미 레코드·지문·레저 키·사이트 런타임 맵
+# 전체에 꿰여 있어 그 위에 주체를 얹는 건 싸다. 이벤트 스토어·read API·UI를 주체
+# 없이 다 만든 뒤 소급하면 그 셋을 전부 다시 만져야 한다.
+# 
+# **최소형을 지킨다 — 필드 1개(`CaseRecord.requested_by`), 술어 1개, 검사 1곳
+# (접수 경계).** 역할·권한 등급·리소스별 ACL은 만들지 않는다. 실제 인증(토큰 검증·
+# 세션)은 전송 계층의 몫이고, 여기는 **주체가 주어졌을 때의 판정**만 한다.
+
+Site = tuple[str, str]
+
+_ENTRY = re.compile(r"^[^/*\s]+/([^/*\s]+|\*)$")
+
+
+class AccessPolicy(StrictModel):
+    """주체 → 볼 수 있는 사이트 목록(`"mx/gumi"` 또는 `"mx/*"`)."""
+
+    allow: dict[str, list[str]] = {}
+
+    @model_validator(mode="after")
+    def _entries_are_sound(self):
+        # 오타(`mx`, `mx/gumi/extra`)를 조용히 두면 그 주체는 영원히 아무것도 못
+        # 보는데 아무도 모른다. 사업부 자리의 `*`도 막는다 — 전 법인 허용은
+        # 선언을 아예 비우는 것으로 표현한다(그쪽이 읽는 사람에게 분명하다).
+        for subject, entries in self.allow.items():
+            if not subject:
+                raise ValueError("access.allow의 주체 이름이 비어 있다")
+            for entry in entries:
+                if not _ENTRY.match(entry):
+                    raise ValueError(f"access.allow[{subject!r}]의 {entry!r}는 "
+                                     f'"gbm/fct" 또는 "gbm/*" 형태여야 한다')
+        return self
+
+    def can_access(self, subject: str | None, gbm: str, fct: str) -> bool:
+        """선언이 비어 있으면 전부 허용, 아니면 목록 안일 때만 허용한다.
+
+        선언이 있는데 주체가 없으면(익명) 거부한다 — 통과시키면 인증이 없는 것과
+        같아서 테이블 전체가 장식이 된다.
+        """
+        if not self.allow:
+            return True
+        if not subject:
+            return False
+        return any(entry in (f"{gbm}/{fct}", f"{gbm}/*")
+                   for entry in self.allow.get(subject, []))
+
+    def sites_for(self, subject: str | None,
+                  known: list[Site] | None = None) -> list[Site] | None:
+        """주체가 볼 수 있는 사이트 목록 — 목록 API의 필터 근거.
+
+        `None`은 "제한 없음"이고 `[]`는 "아무것도 못 봄"이다. 둘을 섞으면 선언
+        없는 주체가 전부를 보게 되거나 그 반대가 된다.
+
+        `mx/*`가 있으면 `known`이 필요하다 — 어떤 fct들이 실재하는지는 registry가
+        알고 이 계층은 모른다. 지어내지 않고 요구한다.
+        """
+        if not self.allow:
+            return None
+        entries = self.allow.get(subject, []) if subject else []
+        if any(e.endswith("/*") for e in entries) and known is None:
+            raise ValueError("와일드카드 선언을 펼치려면 known 사이트 목록이 필요하다")
+        out: list[Site] = []
+        for gbm, fct in (known or []):
+            if self.can_access(subject, gbm, fct):
+                out.append((gbm, fct))
+        if known is None:
+            out = [tuple(e.split("/")) for e in entries]
+        return out
+
+
 class AppConfig(StrictModel):
     engine: EngineConfig = EngineConfig()
+    access: AccessPolicy = AccessPolicy()
     investigations: InvestigationsConfig = InvestigationsConfig()
     llm: LlmConfig
     patrol: AppPatrol = AppPatrol()

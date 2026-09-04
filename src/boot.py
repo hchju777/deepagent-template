@@ -329,6 +329,19 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                     errors += [BootError(where, p) for p in
                                _drift_problems(entries, target_api, body)]
 
+    if app_config is not None and app_config.access.allow:
+        # 오타난 사이트 키는 그 주체를 영원히 눈멀게 하는데 아무도 모른다.
+        # 와일드카드(`mx/*`)는 사업부 실재만 본다 — fct는 아직 안 정해진 것이다.
+        known_sites = {f"{s.gbm}/{s.fct}" for s in registry.sites}
+        known_gbms = {s.gbm for s in registry.sites}
+        for subject, entries in app_config.access.allow.items():
+            for entry in entries:
+                gbm, _, fct = entry.partition("/")
+                ok = gbm in known_gbms if fct == "*" else entry in known_sites
+                if not ok:
+                    errors.append(BootError(
+                        "app", f"access.allow[{subject!r}]의 {entry!r}가 registry에 없다"))
+
     if stub_seeds:
         errors += [BootError("stub-seeds", p) for p in
                    seeds_problems(stub_seeds, adapters_by_site)]

@@ -758,3 +758,59 @@ def test_조사_질문은_접수로_새지_않는다(tmp_path, capsys, monkeypat
           "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     # 접수가 돌았다면 target_locator가 채워졌을 것이다 — 그래프 재개는 안 채운다.
     assert repo.get(record.id).target_locator is None
+
+
+def test_허용되지_않은_주체는_케이스를_열지_못한다(tmp_path, capsys, monkeypatch):
+    # 인증 없는 접수는 실질적으로 "그 법인의 Redis/Mongo/소스 저장소를 읽는
+    # 에이전트를 돌려라"는 요청이다(스펙 §3.5). 검사는 접수 경계 한 곳이다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/gumi"]}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+
+    code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--requested-by", "bob",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "bob" in err and "mx/gumi" in err
+
+
+def test_주체를_안_주면_선언이_있을_때_거부된다(tmp_path, capsys, monkeypatch):
+    # 익명 요청이 선언된 테이블을 통과하면 인증이 없는 것과 같다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/gumi"]}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 1
+
+
+def test_주체가_레코드에_박제된다(tmp_path, monkeypatch):
+    # 판정을 나중에 읽을 때 "누가 이 조사를 요청했나"에 답할 수 있어야 한다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                        ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--requested-by", "alice",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert [r.requested_by for r in repo.list_by_status("closed")] == ["alice"]

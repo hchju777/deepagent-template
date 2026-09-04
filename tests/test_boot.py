@@ -524,3 +524,26 @@ def test_라이브_명세가_깨져_있으면_그_사실을_먼저_말한다(tmp
                            check_live=True, stub_seeds=seeds)
     assert any("paths" in e.problem for e in errors), errors
     assert not any("오타이거나" in e.problem for e in errors), errors
+
+
+def test_access_allow의_없는_사이트는_기동을_거부한다(tmp_path):
+    # 오타(mx/gumii)면 그 주체는 영원히 아무것도 못 보는데 아무도 모른다 —
+    # 밤에 조용히 틀리는 것보다 배포 시점에 시끄럽게 죽는 게 낫다.
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/gumii"]}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("mx/gumii" in e.problem for e in errors), errors
+
+
+def test_access_allow의_와일드카드는_사업부_실재만_본다(tmp_path):
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"allow": {"alice": ["mx/*"], "bob": ["없는사업부/*"]}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("없는사업부" in e.problem for e in errors)
+    assert not any("mx/*" in e.problem for e in errors)

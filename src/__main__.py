@@ -457,7 +457,9 @@ async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, a
         id=case_id, gbm=intake_result.gbm, fct=intake_result.fct,
         fingerprint=fingerprint(intake_result.gbm, intake_result.fct, "chat", case_id),
         symptom=intake_result.symptom, t0=now, target_locator=intake_result.target_locator,
-        origin="human", concern=args.concern, status="open", created_at=now, updated_at=now)
+        origin="human", concern=args.concern,
+        requested_by=getattr(args, "requested_by", None),
+        status="open", created_at=now, updated_at=now)
     repo.save(record)
     on_event(case_status_event(case_id, "open", clock=clock))
     if intake_result.qa:
@@ -520,6 +522,14 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
             print(problem, file=sys.stderr)
         return 1
     if _seeds_mismatch(seeds, sites):
+        return 1
+
+    # 접수 경계 한 곳에서만 판정한다(스펙 §3.5). 사이트를 고르기 전에 막으면
+    # 존재 여부가 새어 나가고, 조사를 시작한 뒤 막으면 이미 늦다.
+    subject = getattr(args, "requested_by", None)
+    if not app.access.can_access(subject, args.gbm, args.fct):
+        print(f"주체 {subject!r}는 {args.gbm}/{args.fct}에 접근할 수 없다 "
+              f"(app.json의 access.allow)", file=sys.stderr)
         return 1
 
     by_key = {(rt.gbm, rt.fct): rt for rt in sites}
@@ -631,6 +641,10 @@ def main(argv=None) -> int:
     p_chat.add_argument("--gbm", required=True)
     p_chat.add_argument("--fct", required=True)
     p_chat.add_argument("--symptom", default=None, help="미지정이면 stdin으로 받는다")
+    p_chat.add_argument(
+        "--requested-by", default=None,
+        help="요청 주체 — app.json의 access.allow가 비어 있지 않으면 필수다. "
+             "레코드에 박제돼 감사의 근거가 된다")
     p_chat.add_argument(
         "--concern", choices=CONCERNS, default="system",
         help="무엇이 이상한가 — system(파이프라인 고장) 또는 operation(데이터는 "
