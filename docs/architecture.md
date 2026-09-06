@@ -177,7 +177,13 @@ config는 값이 **어디서 오는지**만 선언한다. 잘라낸 표본·필�
            → POST /cases/{id}/answers {answer, key} ─→ submit_answer() ── **기록만** (202)
            → 워커의 requeue가 pending_answer를 집어 answer_case() ── 실행은 여기서
            → GET /cases/{id}/report
+           → GET /cases/{id}  ── CaseDetail: 판정 + candidates(rank 1 = root_cause) + timeline
 ```
+
+보고서 §5의 **Timeline**은 저장된 이벤트 로그를 `ReportModel`이 한 번 유도한 것이다
+(`collect_events`가 `since` 페이지를 끝까지 읽는다). 새 이벤트 종류는 없다 — 6종을
+소비할 뿐이다. 이벤트 스토어가 없는 프로세스(예: 메모리 백엔드의 `case show`)는
+"이벤트 로그 없음"을 명시한다 — 빈 목록과 다른 말이다.
 
 두 프로세스가 **저장소로만** 만난다. `api`가 연 케이스는 레코드로, `api`가 받은 답은
 레코드의 `pending_answer`로 워커에 닿는다 — 그것이 v1 인계 노트가 없다고 적었던
@@ -232,9 +238,12 @@ flowchart TD
   앞에 부수효과가 있으면 재개마다 반복되기 때문이다.
 - **conclude** — 증거가 하나도 없으면(전 태스크 error) LLM 없이 즉시
   `degraded`/`low`로 판정한다. 그 외에는 리드에게 최종 판정(인과 사슬 —
-  `root_cause` + `contributing[]`)을 받는다.
+  `root_cause` + `alternates[]` + `contributing[]`)을 받는다. 후보(`alternates`)의
+  상한(`MAX_ALTERNATES=3`)과 중복 제거는 **코드**가 하고(`_sanitize_alternates`),
+  버린 것은 caveat에 남긴다 — validator로 거부하면 후보 하나 중복됐다고 조사
+  전체가 파싱 실패로 끝난다.
 - **verify** — **LLM 없는 순수 결정론 가드레일**. 판정이 인용한 모든
-  evidence id가 `state.evidence`(리드가 실제로 본 것)에 실재하는지, 불완전
+  evidence id(최상위·후보·기여 요인 전부)가 `state.evidence`(리드가 실제로 본 것)에 실재하는지, 불완전
   증거(`complete=False`)를 인용했다면 caveat에 명시했는지를 검사한다. 문제가
   있고 아직 재작성을 안 했으면(`verify_attempts==0`) `conclude`로 돌려보내
   한 번 재작성시킨다. 재작성 후에도 문제가 있으면 확신도를 `low`로 강등하고
@@ -335,9 +344,12 @@ investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡�
   남는다.
 - **Verdict** — `verdict_type`(`logic_bug`/`data_loss`/`config_error`/
   `stale_data`/`external`/`inconclusive`/`degraded`) + 인과 사슬
-  (`root_cause: CauseLink | None` + `contributing: list[CauseLink]`) +
-  `confidence`(`high`/`medium`/`low`) + `recommendations`/`caveats`/`narrative`.
-  `inconclusive`/`degraded`를 빼면 `root_cause`가 필수다(모델 검증자).
+  (`root_cause: CauseLink | None` + `alternates: list[CauseLink]` +
+  `contributing: list[CauseLink]`) + `confidence`(`high`/`medium`/`low`) +
+  `recommendations`/`caveats`/`narrative`. `inconclusive`/`degraded`를 빼면
+  `root_cause`가 필수다(모델 검증자). `alternates`는 최상위 다음의 후보들(유력한
+  순, 각자 `confidence`와 `relation`) — 결론 없는 판정도 후보는 들 수 있다(계획 14).
+  스냅샷(`VerdictSnapshot.alternates`)에는 컴포넌트 이름만 남는다.
 - **EngineEvent**(`src/domain/events.py`) — 엔진이 밖으로 내보내는 이벤트는
   현재 6종(`case_status_changed`/`round_started`/`task_finished`/
   `question_raised`/`report_ready`/`verdict_formed`)이다. 봉투에는 스토어가

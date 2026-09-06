@@ -53,7 +53,17 @@
 `inconclusive`/`degraded`가 아니면 `root_cause`가 필수다.
 
 **CauseLink** — 판정의 인과 사슬 한 마디. 토폴로지의 서비스/locator를
-가리키는 `component` + 그 주장을 뒷받침하는 `evidence_ids`.
+가리키는 `component` + 그 주장을 뒷받침하는 `evidence_ids`. 후보(아래)로 쓰일 때는
+자기 `confidence`와 `relation`(왜 후보이고 왜 최상위가 아닌가)을 더 갖는다.
+
+**후보(alternates)** — `Verdict.root_cause`(최상위) 다음의 근본 원인 후보들, 유력한
+순(계획 14). 상한 3과 중복 제거는 코드가 하고 버린 것은 caveat에 남긴다. 후보의
+인용도 verify가 최상위와 같은 우주로 검사한다. `GET /cases/{id}`의 `candidates`는
+rank 1 = 최상위(신뢰도는 판정의 것), 그 뒤가 후보다.
+
+**Timeline** — 보고서 §5의 첫 항목. 저장된 이벤트 로그(6종)를 `ReportModel`이
+seq 순으로 요약한 표다. "이벤트 로그 없음"(이 프로세스에 스토어가 없다)과
+"이벤트 없음"(로그는 있는데 비었다)은 다른 말이다.
 
 **EvidenceRef** — State(조사 엔진의 작업 메모리)에 남는 증거 참조. 본문은
 케이스 Store에 있고, 여기엔 id/출처(`source`)/요약/`as_of`/`complete`

@@ -56,6 +56,14 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 `tests/patrol/test_daemon.py`가 본다 — 함수 인자만 보는 테스트가 배선 누락을
 못 잡은 사례가 이 리포에 있다.
 
+## 돌연변이 검증의 함정 — 낡은 .pyc
+
+픽스를 되돌려 테스트가 빨개지는지 볼 때 `cp`로 백업하고 `mv`로 복원하면, 변형과 원본의
+**길이가 같고**(예: `503`↔`404`) 같은 초 안에 복원되면 Python이 변형된 바이트코드를
+그대로 쓴다(pyc 무효화는 초 단위 mtime + 크기). 계획 14에서 실제로 겪었다 — 소스는
+503인데 응답은 404였다. 복원 뒤 `find src tests -name __pycache__ -exec rm -rf {} +`를
+하거나 `python -B`로 돌려라.
+
 ## 벤치 시나리오(E2E 회귀)
 
 `tests/test_bench_scenarios.py`는 스펙 부록 A의 간판 시나리오와 계획 11이 연
@@ -72,7 +80,8 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 - 서브에이전트가 응답에 적은 evidence id는 실제 인용을 결정하지 않는다 —
   `run_subagent`이 도구가 실제로 만든 id로 통째로 교체하기 때문
   (`CLAUDE.md`의 "LLM이 인용한 evidence id를 신뢰하지 않는다" 참고). 실제로
-  맞아야 하는 건 `Verdict.root_cause.evidence_ids`뿐이고, `InMemoryCaseStore`는
+  맞아야 하는 건 `Verdict.root_cause.evidence_ids`(와 후보 `alternates[].evidence_ids` —
+  verify가 같은 우주로 검사한다)뿐이고, `InMemoryCaseStore`는
   케이스당 증거 id를 1부터 순번(`ev-1`, `ev-2`, ...)으로 매기므로 이 번호를
   미리 예측해서 시나리오에 적어 둔다.
 - 두 시나리오 모두 자기만의 `InMemoryCaseRepository`를 쓰므로 첫 케이스
