@@ -50,12 +50,16 @@ class PlanTask(StrictModel):
 class CauseLink(StrictModel):
     component: str                        # 토폴로지의 서비스/locator 참조
     evidence_ids: list[str]
-    relation: str | None = None           # 기여 요인의 경우: 근본 원인과의 관계 서술
+    relation: str | None = None           # 기여 요인: 근본 원인과의 관계 / 후보: 왜 후보이고 왜 최상위가 아닌가
+    # 후보(alternates) 전용 — 최상위 후보의 신뢰도는 Verdict.confidence다. root_cause·
+    # contributing에서는 None으로 둔다(둘을 한 필드로 합치면 보고서가 두 값을 보인다).
+    confidence: Literal["high", "medium", "low"] | None = None
 
 
 class Verdict(StrictModel):
     verdict_type: VerdictType
     root_cause: CauseLink | None = None
+    alternates: list[CauseLink] = []      # 최상위 다음의 후보들, 유력한 순(방향 문서 §307)
     contributing: list[CauseLink] = []
     confidence: Literal["high", "medium", "low"]
     recommendations: list[str] = []
