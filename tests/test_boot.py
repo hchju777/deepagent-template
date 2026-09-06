@@ -547,3 +547,25 @@ def test_access_allow의_와일드카드는_사업부_실재만_본다(tmp_path)
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("없는사업부" in e.problem for e in errors)
     assert not any("mx/*" in e.problem for e in errors)
+
+
+def test_빈_토큰의_주체는_기동을_거부한다(tmp_path):
+    # `${ENV}`가 미설정이면 조용히 빈 토큰이 되고, 그 주체는 "Bearer "만 보내면 누구나다.
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"subjects": {"alice": ""}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("alice" in e.problem and "토큰" in e.problem for e in errors), errors
+
+
+def test_같은_토큰을_가진_주체_둘은_기동을_거부한다(tmp_path):
+    # 역조회가 마지막 주체를 골라 requested_by가 오귀속된다(리뷰 S5-3).
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"subjects": {"alice": "same", "carol": "same"}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("alice" in e.problem and "carol" in e.problem for e in errors), errors

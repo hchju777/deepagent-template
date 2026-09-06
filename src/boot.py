@@ -329,6 +329,24 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                     errors += [BootError(where, p) for p in
                                _drift_problems(entries, target_api, body)]
 
+    if app_config is not None:
+        # `${ENV}`가 미설정이면 조용히 빈 토큰이 되고, 그 주체는 "Bearer "만 보내면
+        # 누구나다 — 그 토큰은 없는 것보다 나쁘다.
+        seen: dict[str, str] = {}
+        for subject, token in app_config.access.subjects.items():
+            value = token.get_secret_value()
+            if not value:
+                errors.append(BootError(
+                    "app", f"access.subjects[{subject!r}]의 토큰이 비어 있다 — "
+                           f".env의 참조 값을 확인하라"))
+            elif value in seen:
+                # 같은 토큰이 두 주체면 역조회가 마지막 주체를 골라 requested_by가
+                # 오귀속된다 — 두 참조가 같은 env 키를 가리키는 오타가 전형이다.
+                errors.append(BootError(
+                    "app", f"access.subjects[{subject!r}]와 [{seen[value]!r}]의 토큰이 같다"))
+            else:
+                seen[value] = subject
+
     if app_config is not None and app_config.access.allow:
         # 오타난 사이트 키는 그 주체를 영원히 눈멀게 하는데 아무도 모른다.
         # 와일드카드(`mx/*`)는 사업부 실재만 본다 — fct는 아직 안 정해진 것이다.

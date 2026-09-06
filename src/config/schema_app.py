@@ -167,6 +167,10 @@ class AccessPolicy(StrictModel):
     """주체 → 볼 수 있는 사이트 목록(`"mx/gumi"` 또는 `"mx/*"`)."""
 
     allow: dict[str, list[str]] = {}
+    # 주체 → 토큰(계획 13). `${ENV}` 참조로 적는다 — 평문 토큰이 config show에
+    # 찍히면 SecretStr 마스킹이 소용없다. 비어 있으면 모든 요청이 익명이고, 그때는
+    # allow가 비어 있을 때만 통과한다(계획 12 정책 그대로).
+    subjects: dict[str, SecretStr] = {}
 
     @model_validator(mode="after")
     def _entries_are_sound(self):
@@ -199,10 +203,9 @@ class AccessPolicy(StrictModel):
                   known: list[Site] | None = None) -> list[Site] | None:
         """주체가 볼 수 있는 사이트 목록 — 목록 API의 필터 근거.
 
-        **아직 프로덕션 소비자가 없다.** 스펙 §3.5는 "모든 읽기 엔드포인트를 같은
-        술어로 필터"를 요구하는데 그 엔드포인트가 계획 13에서 생긴다. CLI의
-        `case list`/`case show`는 주체 개념 자체가 없다 — 계획 13이 이 함수를
-        붙이지 않으면 접수만 막고 읽기는 열린 채로 남는다.
+        소비자는 `src/api/routes_reads.py`의 목록·점검 이력이다(계획 13). CLI의
+        `case list`/`case show`는 주체 개념이 없어 이 술어를 안 탄다 — CLI는 그
+        프로세스에 어댑터가 있는 운영자 도구이고, 웹 사용자는 api로만 들어온다.
 
         `None`은 "제한 없음"이고 `[]`는 "아무것도 못 봄"이다. 둘을 섞으면 선언
         없는 주체가 전부를 보게 되거나 그 반대가 된다.

@@ -327,6 +327,15 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
 
     monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model2)
 
+    # case resume도 answer_case에 발행 배선(on_event)을 넘겨야 한다 — 접수 질문을
+    # 이 명령으로 이어갈 때 파킹 해제 이벤트가 로그에 남는 유일한 길이다.
+    real_answer_case = main_module.answer_case
+
+    async def spy(*args, **kwargs):
+        assert kwargs.get("on_event") is not None
+        return await real_answer_case(*args, **kwargs)
+
+    monkeypatch.setattr("src.__main__.answer_case", spy)
     code2 = main(["case", "resume", case_id, "--answer", "계획 변경 없음",
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     out2 = capsys.readouterr().out
@@ -967,6 +976,9 @@ def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
 
     async def spy(*args, **kwargs):
         seen.append(kwargs.get("interaction_policy"))
+        # 발행 배선(on_event)도 같이 넘어가야 한다 — 함수는 받는데 호출부가 안 넘기는
+        # 것이 이 리포의 반복 실패 유형이다.
+        assert kwargs.get("on_event") is not None
         return await real(*args, **kwargs)
 
     monkeypatch.setattr("src.__main__.answer_case", spy)
@@ -1007,3 +1019,44 @@ def test_chat도_가로채인_케이스에는_조사를_걸지_않는다(tmp_pat
     only = repo.list_open()[0]
     # 새 스레드를 등록하지 않았고 워커의 소유도 그대로다.
     assert only.thread_ids == ["t-1"] and only.owner == "w-1"
+
+
+def test_api_명령은_기동_검증을_먼저_돈다(tmp_path, capsys, monkeypatch):
+    # patrol run과 같은 문 — 잘못된 config로 api가 떠서 케이스를 받기 시작하면
+    # 워커 쪽에서 나중에 조용히 틀린다.
+    _tree(tmp_path, check_target="rest:/ghost")
+    monkeypatch.setattr("os.environ", dict(ENV))
+    import uvicorn
+    # 검증이 사라지는 변이에서 실제 서버가 떠 pytest가 영원히 멈추지 않게
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    code = main(["api", "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1 and "ghost" in capsys.readouterr().err
+
+
+def test_api_명령은_어댑터_없이_앱을_조립한다(tmp_path, monkeypatch):
+    # uvicorn.run만 가로챈다 — 기동 검증·조립·앱 생성은 실제 경로를 그대로 탄다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("src.api.assembly.build_chat_model", lambda *a, **kw: object())
+    captured = {}
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+
+    code = main(["api", "--port", "9999",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0
+    runtime = captured["app"].state.runtime
+    assert not hasattr(runtime.sites[0], "adapters")
+    assert [(s.gbm, s.fct) for s in runtime.sites] == [("mx", "gumi")]
+    assert captured["host"] == "127.0.0.1" and captured["port"] == 9999   # 기본은 로컬 바인드
+
+
+def test_api_명령은_stub_seeds를_받지_않는다(tmp_path, monkeypatch, capsys):
+    # 어댑터가 없으니 시드가 갈 곳이 없다 — 받으면 "돌고 있다"는 착각만 준다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    import pytest
+    with pytest.raises(SystemExit):
+        main(["api", "--stub-seeds", "x.json",
+              "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert "unrecognized arguments" in capsys.readouterr().err

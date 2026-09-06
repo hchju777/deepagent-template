@@ -487,3 +487,59 @@ kill %1 %2
 | 다중 RCA 후보 payload | 계획 14. `GET /cases/{id}`는 지금의 `Verdict` 모양을 그대로 낸다 |
 | 페이지네이션·정렬·전문 검색 | `GET /cases`는 사이트 스코프 필터 + status만. 요구가 관측되기 전엔 안 늘린다 |
 | GraphQL·범용 쿼리 | 스펙 §6 기각 |
+
+---
+
+## 계획 14 인계
+
+리뷰 한 라운드 + 픽스 웨이브에서 남은 것들. 블로커 셋(`submit_answer`의 비원자
+save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_answer`/`take_answer`/
+`restore_answer` 프리미티브와 `question_seq`/`answered_seq` 짝으로 닫았다. 남은 것:
+
+1. **접수 `_save`의 TOCTOU** — 같은 케이스에 동시에 오는 두 `/intake-answers`가
+   증거를 중복 박제하고, 한 순서에서 `awaiting_human` + `intake_done=True` + 대상 설정이라는
+   모순 레코드를 남긴다(리뷰 S3 실증). `attach_answer`가 연 조건부 `$set` 형태를 `_save`에도
+   그대로 쓰면 닫힌다. requeue가 그 사이 못 집는 것만 지금 보장한다.
+2. **경계가 패키지 단위다** — `src/api/`의 전이 import 클로저는 깨끗하지만, `python -m src api`의
+   **프로세스**는 `src/__main__.py`를 거쳐 `daemon`·`worker`·`factory`·대상 리더 전부를 import한다
+   (인스턴스·소켓은 없음, 실측). `_run_api`를 얇은 별도 진입점으로 떼고 `boot.py`의 live 경로
+   import를 지연시키면 닫힌다. 그리고 `test_boundary.py`는 `ast.Import`만 보므로
+   `importlib.import_module("src.application.worker")`를 못 잡는다 — 프로세스 수준
+   `sys.modules` 단정을 추가할 것.
+3. **SSE 부하** — 저장소 호출을 스레드풀로 뺐지만(리뷰 S8: 시청자 3명이 무관한 GET을 50배
+   느리게 했다) `_SSE_POLL_S=0.2`로 케이스 100개×100명이면 초당 5만 조회다. 폴링 간격을
+   config로 빼거나 케이스별 마지막 seq 캐시.
+4. **입력 위생** — `symptom=""`·`key=""` 허용(빈 키가 accepted되면 진짜 키가 `pending`),
+   목록 정렬이 문자열(`c-1, c-10, c-2`), `status=bogus`→200 `[]`, 소문자 `bearer` 거부
+   (RFC 7235는 스킴 대소문자 무시), `--port`에 help 없음.
+5. **`GET /cases/{id}/report`** — `case show --report`와 달리 다른 확장자 폴백이 없다
+   (`report.format`을 바꾼 뒤 옛 보고서를 못 읽는다).
+6. **응답 모델이 dict** — 계획서는 StrictModel을 말했으나 응답은 dict다(요청만 StrictModel).
+   계획 14가 `GET /cases/{id}` payload를 바꿀 때 응답 모델을 세우면 그때 같이.
+7. **`config-reference.md`의 기동 검증 번호가 실행 순서가 아니다** — 목록은 종류별이고
+   `boot.py`는 사이트 루프 안팎으로 나뉜다. 번호를 없애고 이름으로 부르는 쪽이 낫다
+   (`boot.py` 주석은 이미 그렇게 했다).
+8. **계획 13 이전에 파킹된 레코드**는 `question_seq=0`이라 `attach_answer`가 `not_waiting`을
+   낸다 — CLI `case resume`은 그 필드를 안 보므로 그쪽으로는 답할 수 있다. 배포된 것이
+   없어 마이그레이션은 하지 않았다. 한다면 `question_seq`만 `$set`해도 된다 — Mongo
+   구현의 CAS 술어는 문서의 **원값**(부재는 `null`로 맞는다)을 쓰므로 `answered_seq`
+   부재는 안전하다(검증 리뷰가 잡은 "부재 필드 ≠ 기본값 0 → CAS가 영원히 져 무한
+   재귀"는 고쳤고, 재분류는 두 바퀴로 상한을 뒀다).
+9. **`POST /cases/{id}/answers`에 `question_seq` If-Match가 없다** — 클라이언트가 Q1을 보고
+   답하는 사이 그래프가 Q2로 파킹하면 그 답이 Q2에 실린다(요청에 `question_seq`를 실어
+   서버가 대조하면 막힌다). CLI `case resume`도 같다 — 사람이 Q1을 보고 쓰는 사이 데몬이
+   API 답으로 Q1을 소비해 Q2로 파킹하면 CLI의 답이 Q2에 실린다. seq 쌍은 **서버 안의**
+   옛 답 소비만 막는다.
+10. **혼용 경로의 우선순위는 코드가 정했다** — API로 실린 답이 있는데 CLI `case resume`이
+    먼저 오면 직접 답이 이기고 실린 답은 `human:answer_dropped`(reason=superseded)로
+    남는다. `resume_once`가 lease를 잡은 뒤에 가져가고, lease가 살아 있는 동안 attach는
+    `busy`라 창이 없다. 반대(실린 답 우선, CLI는 거절)가 맞다고 보면 그 분기 하나다.
+11. **`submit_answer`의 포괄 except**(`attach_answer`가 던지면 `not_found`)는 테스트가
+    없다 — 저장소 장애가 404로 보이는 것이 맞는지 계획 14에서 다시 본다.
+12. **같은 owner의 중복 큐 항목이 살아 있는 조사를 처음부터 재시작한다**(계획 4b 이래,
+    3차 검증 리뷰 W3). `CaseQueue`에 중복 제거가 없고 `requeue_job`(30초)이 소비 안 된 id를
+    또 넣으므로, 슬롯 포화 뒤 첫 항목이 `investigating`(자기 lease)으로 돌기 시작한 직후
+    둘째 항목이 소비되면 `run_once`→`claim`(같은 owner는 항상 재획득)→"회수한 investigating"
+    분기→새 스레드. `awaiting_human` 가드는 이것을 막지 않는다. 후속은 큐 중복 제거(진행
+    중인 id 집합) 또는 `run_once`가 claim 전에 "같은 owner의 lease가 아직 살아 있으면
+    busy"로 물러나기 — 후자는 재기동한 데몬의 자기 케이스 회수를 ttl만큼 늦춘다.

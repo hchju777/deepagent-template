@@ -240,3 +240,19 @@ async def test_턴_시작_가드가_남의_케이스에_아무것도_안_쓴다(
     assert turn.status == "not_ours"
     assert calls == []                                   # LLM을 안 불렀다
     assert len(store.list_evidence(case_id)) == before    # 증거도 안 썼다
+
+
+async def test_접수가_끝나면_intake_done이_True다():
+    case_id, repo, store = _case()
+    repo.save(repo.get(case_id).model_copy(update={"intake_done": False}))
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED))
+    assert turn.status == "done" and repo.get(case_id).intake_done is True
+
+
+async def test_접수를_포기해도_intake_done이_True다():
+    # 포기는 "대상 없이 조사한다"는 뜻이다 — 문을 안 열면 그 케이스는 영영 안 집힌다.
+    case_id, repo, store = _case()
+    repo.save(repo.get(case_id).model_copy(update={"intake_done": False}))
+    for _ in range(3):
+        await _turn(case_id, repo, store, _deps("파싱 불가"), max_turns=3)
+    assert repo.get(case_id).intake_done is True

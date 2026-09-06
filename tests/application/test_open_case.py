@@ -173,3 +173,36 @@ async def test_포기_사유가_호출부까지_전달된다():
                       topology=topo, worker=_Worker(), clock=lambda: T,
                       on_problem=logged.append)
     assert logged and any("파싱" in p for p in logged)
+
+
+def test_사람이_연_케이스는_접수_전이다():
+    # requeue가 이 문을 본다 — 접수 전인 케이스에 워커가 붙지 않는다.
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    assert record.intake_done is False
+
+
+async def test_접수_답의_상태_이벤트가_호출자의_on_event에_닿는다():
+    # answer_case가 on_event를 intake_turn에 안 넘기면 CLI `case resume`으로 접수를
+    # 이어갈 때 파킹 해제 이벤트가 이벤트 로그에 안 남는다 — 워커 경로만 남긴다.
+    from src.application.answer import answer_case
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "q", "question_kind": "intake"}))
+
+    class _Worker:
+        async def run_once(self, case_id, *, interaction_policy="autonomous"):
+            return "closed"
+
+    topo = type("T", (), {"locators": lambda self: []})()
+    deps = SimpleNamespace(lead_llm=type("L", (), {
+        "ainvoke": staticmethod(lambda m: _resolved())})())
+    seen = []
+    await answer_case(record.id, "답", repo=repo, store=store, deps=deps, topology=topo,
+                      worker=_Worker(), clock=lambda: T, on_event=seen.append)
+    assert [e.event for e in seen] == ["case_status_changed"]

@@ -139,6 +139,11 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 `tests/domain/test_ports.py`가 포트 표면을 단정한다. 산문 규율은 읽지 않으면
 무력하므로 테스트가 지킨다.
 
+같은 계열의 규율이 하나 더 있다: **`api` 프로세스(`src/api/`)는 대상 시스템에 붙지
+않고 조사를 시작하지 않는다.** 어댑터 팩토리·대상 리더·워커·그래프를 import하면
+`api` 풀 전체가 실행자가 되고 lease가 그 사이를 중재해야 한다.
+`tests/api/test_boundary.py`가 import 그래프로 지킨다.
+
 ## 언어 관례
 
 - **코드 주석·문서(이 파일 포함)**: 한국어. WHY(비직관적 제약, 숨은 불변식,
@@ -161,6 +166,8 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 사이트 축 해석 | `src/application/scope.py` |
 | 케이스 개설(사람 경로) | `src/application/open_case.py` |
 | 답변 라우팅(접수 vs 조사) | `src/application/answer.py` |
+| 케이스 제출·답 싣기(CLI와 API 공유) | `src/application/submit.py` |
+| HTTP 표면(`api` 프로세스 — 어댑터·워커 없음) | `src/api/` |
 | 케이스 큐·워커(lease, resume, keepalive) | `src/application/worker.py` |
 | 케이스 종결·정리 | `src/application/close.py` |
 | 이벤트 매핑(State 변화 → EngineEvent) | `src/application/events.py` |

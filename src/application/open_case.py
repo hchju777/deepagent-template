@@ -39,6 +39,7 @@ def open_case(*, repo: CaseRepositoryPort, store: CaseStorePort, symptom: str,
         fingerprint=fingerprint(gbm, fct, "chat", case_id),
         symptom=symptom, t0=now, target_locator=None,
         origin="human", concern=concern, requested_by=requested_by,
+        intake_done=False,          # 접수가 끝나기 전엔 워커가 집지 않는다
         status="open", created_at=now, updated_at=now)
     repo.save(record)
 
