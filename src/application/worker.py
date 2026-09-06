@@ -784,6 +784,10 @@ class InvestigationWorker:
                     {get_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
                 if stop_task in done:
                     get_task.cancel()
+                    if get_task.done() and not get_task.cancelled():
+                        # get도 같은 wait에서 끝났다 — id는 큐에서 빠졌고 cancel은 no-op.
+                        # 처리하지 않지만(새 프로세스의 requeue가 회수) held에는 안 남긴다.
+                        self._queue.done(get_task.result())
                     break
                 stop_task.cancel()
                 case_id = get_task.result()

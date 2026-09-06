@@ -961,3 +961,56 @@ async def test_소비가_끝난_케이스는_파킹_뒤_답이_실리면_다시_
     await asyncio.gather(worker.run_forever(stop), asyncio.wait_for(_stop_when_parked(), 5))
     assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "accepted"
     assert queue.requeue_open(repo, clock=lambda: T) == 1
+
+
+async def test_소비_중인_케이스는_저장_전_창에서도_다시_들어가지_않는다():
+    # 리뷰 L-a: held의 "소비 중" 절반. 큐에서 나온 뒤 investigating으로 save되기 전
+    # (deps_for_site가 불리는 자리 — DB는 아직 open) requeue_job이 뜨면 상태만 봐서는
+    # 회수 대상이다. done을 소비 앞으로 옮기면 W3가 그대로 돌아온다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    queue = CaseQueue()
+    seen = []
+
+    def deps_for_site(g, f):
+        seen.append((repo.get("c-1").status, queue.requeue_open(repo, clock=lambda: T)))
+        return deps
+
+    worker = InvestigationWorker(queue, repo=repo, store=store, deps_for_site=deps_for_site,
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="daemon",
+                                 max_concurrent=2, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    assert queue.requeue_open(repo, clock=lambda: T) == 1
+    stop = asyncio.Event()
+
+    async def _stop_soon():
+        while repo.get("c-1").status != "closed":
+            await asyncio.sleep(0.01)
+        stop.set()
+
+    await asyncio.gather(worker.run_forever(stop), asyncio.wait_for(_stop_soon(), 5))
+    assert seen == [("open", 0)], seen
+    assert repo.get("c-1").thread_ids == ["c-1#1"]
+
+
+async def test_stop과_get이_같이_끝나면_꺼낸_id를_놓아준다():
+    # 리뷰 L-c: get과 stop.wait가 둘 다 대기 중일 때 put과 stop.set이 같은 스텝에서
+    # 일어나면 asyncio.wait가 둘 다 완료로 돌려준다 — get은 이미 id를 꺼냈고 cancel은
+    # no-op이라 큐에서는 빠졌는데 held에만 남았다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    queue = CaseQueue()
+    worker = InvestigationWorker(queue, repo=repo, store=store, deps_for_site=lambda g, f: None,
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    stop = asyncio.Event()
+    run = asyncio.ensure_future(worker.run_forever(stop))
+    for _ in range(3):
+        await asyncio.sleep(0)              # run_forever가 wait에 들어가게
+    await queue.put("c-1")                  # put은 대기 없이 끝난다 — 같은 스텝에서
+    stop.set()
+    await asyncio.wait_for(run, 5)
+    assert queue.qsize() == 0               # get이 꺼냈다(처리는 안 한다 — 새 프로세스가 회수)
+    await queue.put("c-1")                  # 놓아줬으면 다시 들어간다
+    assert queue.qsize() == 1
