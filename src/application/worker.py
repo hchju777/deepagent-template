@@ -124,16 +124,36 @@ def _case_file_snapshot(result: dict) -> dict:
 
 
 class CaseQueue:
-    """asyncio.Queue[str] 래퍼 — put/get/qsize와 재시작 재큐잉만 안다."""
+    """asyncio.Queue[str] 래퍼 — put/get/qsize와 재시작 재큐잉, 그리고 중복 제거.
+
+    같은 id를 두 번 들고 있지 않는다(큐 안이든 소비 중이든). 둘째 항목이 첫째가
+    investigating(자기 lease)으로 도는 사이에 소비되면 run_once→claim(같은 owner는
+    항상 재획득)→"회수한 investigating" 분기→**새 스레드로 처음부터** 조사해 원래
+    스레드를 버린다(계획 13 3차 검증 리뷰 W3). requeue_job은 30초마다 돌므로 슬롯이
+    포화되면 중복은 정상 운영에서 난다. 소비자는 끝에 `done`을 불러야 한다 — 안 부르면
+    그 케이스는 이 프로세스에서 다시는 큐에 못 들어간다(파킹 뒤 답이 실려도).
+    """
 
     def __init__(self):
         self._queue: asyncio.Queue = asyncio.Queue()
+        self._held: set[str] = set()          # 큐 안 + 소비 중
+
+    def _offer(self, case_id: str) -> bool:
+        if case_id in self._held:
+            return False
+        self._held.add(case_id)
+        self._queue.put_nowait(case_id)
+        return True
 
     async def put(self, case_id: str) -> None:
-        await self._queue.put(case_id)
+        self._offer(case_id)                  # 큐는 무제한이라 대기하지 않는다
 
     async def get(self) -> str:
         return await self._queue.get()
+
+    def done(self, case_id: str) -> None:
+        """소비가 끝났다 — 결과와 무관하게. 이후의 put/requeue가 다시 넣을 수 있다."""
+        self._held.discard(case_id)
 
     def qsize(self) -> int:
         return self._queue.qsize()
@@ -151,9 +171,9 @@ class CaseQueue:
         워커가 지금 붙들고 있는 것이므로 건드리지 않는다. awaiting_human은
         `pending_answer`가 실린 것만 — 그것이 계획 13의 명령 채널이다.
 
-        투입한 케이스 수를 돌려준다. 큐는 무제한(maxsize=0)이므로 블로킹
-        없이 put_nowait로 즉시 채운다 — 워커가 아직 돌기 전(이벤트 루프
-        기동 이전)에도 호출할 수 있어야 하기 때문이다.
+        실제로 투입한 케이스 수를 돌려준다(이미 큐에 있거나 소비 중인 것은 제외).
+        큐는 무제한(maxsize=0)이므로 블로킹 없이 즉시 채운다 — 워커가 아직 돌기
+        전(이벤트 루프 기동 이전)에도 호출할 수 있어야 하기 때문이다.
         """
         now = clock()
         records = [r for r in repo.list_by_status("open") if r.intake_done]
@@ -164,9 +184,7 @@ class CaseQueue:
         for record in repo.list_by_status("investigating"):
             if record.lease_until is None or record.lease_until < now:
                 records.append(record)
-        for record in records:
-            self._queue.put_nowait(record.id)
-        return len(records)
+        return sum(self._offer(record.id) for record in records)
 
 
 class InvestigationWorker:
@@ -775,6 +793,7 @@ class InvestigationWorker:
                     try:
                         await self.consume(cid)
                     finally:
+                        self._queue.done(cid)         # 큐 중복 제거의 해제 — 결과 무관
                         semaphore.release()
 
                 task = asyncio.ensure_future(_consume(case_id))

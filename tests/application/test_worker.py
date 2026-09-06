@@ -875,3 +875,89 @@ def test_lease_is_held는_만료_순간까지_쥔_것으로_본다():
                          now=T) is False
     assert lease_is_held(CaseRecord(**base, owner="w-1"), now=T) is True       # 만료 없음 = 영원
     assert lease_is_held(CaseRecord(**base), now=T) is False
+
+
+# ---- 계획 13 인계 #12: 큐 중복 제거 -----------------------------------------------------
+async def test_큐는_같은_케이스를_두_번_들고_있지_않는다():
+    # 같은 id가 두 번 들어가면 첫 소비가 investigating(자기 lease)으로 도는 사이 둘째가
+    # run_once→claim(같은 owner는 항상 재획득)→"회수한 investigating" 분기→새 스레드로
+    # 처음부터 조사한다(3차 검증 리뷰 W3). 큐가 진행 중인 id를 기억해야 한다.
+    queue = CaseQueue()
+    await queue.put("c-1")
+    await queue.put("c-1")
+    assert queue.qsize() == 1
+    assert await queue.get() == "c-1"
+    await queue.put("c-1")                  # 아직 소비 중 — 안 들어간다
+    assert queue.qsize() == 0
+    queue.done("c-1")
+    await queue.put("c-1")                  # 소비가 끝났으면 다시 들어간다
+    assert queue.qsize() == 1
+
+
+def test_requeue는_진행_중인_케이스를_다시_넣지_않는다():
+    # requeue_job은 30초마다 돈다 — 슬롯 포화로 아직 큐에 있거나 소비 중인 케이스를
+    # 매번 또 넣으면 위 재시작이 CLI 없이도 난다.
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    _open_case(repo, store)
+    queue = CaseQueue()
+    assert queue.requeue_open(repo, clock=lambda: T) == 1
+    assert queue.requeue_open(repo, clock=lambda: T) == 0
+    assert queue.qsize() == 1
+
+
+async def test_같은_케이스가_두_번_큐에_들어가도_조사는_한_번만_시작한다(monkeypatch):
+    # W3 그대로: 슬롯이 둘이면 둘째 항목이 첫째가 investigating(자기 lease)으로 도는
+    # 사이에 소비돼 새 스레드로 처음부터 조사한다 — 원래 스레드는 버려진다.
+    import src.application.worker as wm
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    started, real = [], wm.investigate_case
+
+    async def spy(case, **kw):
+        started.append(kw.get("thread_id"))
+        return await real(case, **kw)
+    monkeypatch.setattr(wm, "investigate_case", spy)
+
+    queue = CaseQueue()
+    worker = InvestigationWorker(queue, repo=repo, store=store, deps_for_site=lambda g, f: deps,
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="daemon",
+                                 max_concurrent=2, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    await queue.put("c-1")
+    await queue.put("c-1")                  # requeue_job이 30초 뒤 또 넣은 것
+    stop = asyncio.Event()
+
+    async def _stop_soon():
+        while repo.get("c-1").status != "closed":
+            await asyncio.sleep(0.01)
+        stop.set()
+
+    await asyncio.gather(worker.run_forever(stop), asyncio.wait_for(_stop_soon(), 5))
+    assert started == ["c-1#1"], started
+    assert repo.get("c-1").thread_ids == ["c-1#1"]
+
+
+async def test_소비가_끝난_케이스는_파킹_뒤_답이_실리면_다시_큐에_들어간다():
+    # 중복 제거의 해제가 run_forever에 없으면 한 번 소비된 케이스는 이 프로세스에서
+    # 영원히 큐에 못 들어간다 — 파킹 뒤 답이 실려도 requeue가 0을 낸다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, ASK_JSON])
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"autonomous_question_policy": "park"})
+    queue = CaseQueue()
+    worker = InvestigationWorker(queue, repo=repo, store=store, deps_for_site=lambda g, f: deps,
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    assert queue.requeue_open(repo, clock=lambda: T) == 1
+    stop = asyncio.Event()
+
+    async def _stop_when_parked():
+        while repo.get("c-1").status != "awaiting_human":
+            await asyncio.sleep(0.01)
+        stop.set()
+
+    await asyncio.gather(worker.run_forever(stop), asyncio.wait_for(_stop_when_parked(), 5))
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "accepted"
+    assert queue.requeue_open(repo, clock=lambda: T) == 1
