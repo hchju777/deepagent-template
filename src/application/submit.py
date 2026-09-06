@@ -37,3 +37,48 @@ def submit_answer(case_id: str, answer: str, *, key: str, repo,
     repo.save(record.model_copy(update={"pending_answer": answer, "answer_key": key,
                                         "updated_at": clock()}))
     return "accepted"
+
+
+# ── 케이스 제출: 스코프 → 접근 → 개설 → 첫 접수 턴 ─────────────────────────────
+# CLI `chat`과 `POST /cases`가 **같은 함수**를 부른다. 순서를 각자 베끼면 언젠가
+# 하나가 접근 검사를 빠뜨린다 — 케이스 종결 세 경로가 발행 배선에서 겪은 것(규율 8).
+from src.application.intake import IntakeTurn, intake_turn          # noqa: E402
+from src.application.open_case import open_case                    # noqa: E402
+from src.application.scope import ScopeResult, resolve_scope        # noqa: E402
+from src.config.schema_app import StrictModel                       # noqa: E402
+
+
+class SubmitCaseResult(StrictModel):
+    status: Literal["opened", "unresolved", "forbidden"]
+    case_id: str | None = None
+    scope: ScopeResult
+    turn: IntakeTurn | None = None      # opened일 때 첫 접수 턴의 결과
+
+
+async def submit_case(symptom: str, *, gbm: str | None, fct: str | None, concern: str,
+                      subject: str | None, sites: dict, access, repo, store,
+                      clock: Callable[[], datetime], on_event: Callable,
+                      max_intake_turns: int) -> SubmitCaseResult:
+    """케이스 하나를 제출한다. 절대 raise하지 않는다.
+
+    `sites`는 `(gbm, fct) → 사이트`이고 사이트는 `.topology`와 `.lead_llm`만 있으면
+    된다 — `api`의 `ApiSite`도 데몬의 `SiteRuntime`도 그 둘을 갖는다(덕 타이핑).
+    `api`가 어댑터 달린 `SiteRuntime`을 요구받으면 대상 시스템에 붙는 프로세스가 된다.
+
+    첫 접수 턴까지 여기서 도는 이유: 되묻는 질문이 응답에 바로 실려야 클라이언트가
+    폴링하지 않는다. 접수는 조사가 아니다(LLM 호출 하나, 대상 접근 없음).
+    """
+    keys = sorted(sites)
+    first = sites[keys[0]] if keys else None
+    scope = await resolve_scope(symptom, sites=keys, deps=first, gbm=gbm, fct=fct)
+    if scope.status != "resolved":
+        return SubmitCaseResult(status="unresolved", scope=scope)
+    # 접수 경계 한 곳에서만 판정한다(스펙 §3.5). 조사를 시작한 뒤 막으면 이미 늦다.
+    if not access.can_access(subject, scope.gbm, scope.fct):
+        return SubmitCaseResult(status="forbidden", scope=scope)
+    site = sites[(scope.gbm, scope.fct)]
+    record = open_case(repo=repo, store=store, symptom=symptom, gbm=scope.gbm, fct=scope.fct,
+                       concern=concern, requested_by=subject, clock=clock, on_event=on_event)
+    turn = await intake_turn(record.id, repo=repo, store=store, deps=site,
+                             topology=site.topology, clock=clock, max_turns=max_intake_turns)
+    return SubmitCaseResult(status="opened", case_id=record.id, scope=scope, turn=turn)

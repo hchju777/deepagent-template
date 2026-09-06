@@ -18,6 +18,7 @@ from src.application.answer import answer_case
 from src.application.intake import intake_turn
 from src.application.open_case import open_case
 from src.application.scope import resolve_scope
+from src.application.submit import submit_case
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
 from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
@@ -453,27 +454,14 @@ def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, cloc
     return print_event, daemon._publish_report
 
 
-async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, app,
-                      on_event, scope) -> int:
-    """케이스 개설 → 접수 턴 반복 → 조사 → awaiting_human 반복 → 보고서 경로 출력.
+async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, turn) -> int:
+    """남은 접수 턴 → 조사 → awaiting_human 반복 → 보고서 경로 출력.
 
-    **케이스가 접수보다 먼저 열린다**(계획 12) — CLI에서는 차이가 안 보이지만
-    계획 13의 API가 첫 응답에 case_id를 실으려면 이 순서여야 하고, 접수 문답이
-    프로세스 사망을 견디려면 담을 케이스가 있어야 한다. 조립을 여기서 베끼지 않는
-    이유도 같다: API가 같은 함수들을 쓴다(규율 8).
+    개설과 첫 접수 턴은 `submit_case`가 이미 했다 — `POST /cases`와 같은 함수다.
+    여기는 CLI만의 부분(stdin으로 답을 받는 루프)만 남는다.
     """
-    record = open_case(repo=repo, store=store, symptom=symptom,
-                       gbm=scope.gbm, fct=scope.fct, concern=args.concern,
-                       requested_by=getattr(args, "requested_by", None),
-                       clock=clock, on_event=on_event)
-    case_id = record.id
     print(f"케이스 {case_id} 접수 — 대상을 확인한다")
-
-    answer = None
     while True:
-        turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
-                                 topology=rt.deps.topology, clock=clock, answer=answer,
-                                 max_turns=app.engine.max_intake_turns)
         if turn.status == "not_ours":
             # 다른 주체가 이 레코드를 들고 있다 — 조사를 걸면 스레드를 잃는다.
             for problem in turn.problems:
@@ -490,6 +478,9 @@ async def _drive_chat(args, rt, repo, store, worker, symptom: str, clock, ask, a
             print(f"입력이 끊겼다 — 케이스 {case_id}는 파킹된 채로 남는다. "
                  f"'python -m src case resume {case_id} --answer <답변>'으로 나중에 재개할 수 있다.")
             return 0
+        turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
+                                 topology=rt.deps.topology, clock=clock, answer=answer,
+                                 max_turns=app.engine.max_intake_turns)
 
     result = await worker.run_once(case_id, interaction_policy="interactive")
     while result == "awaiting_human":
@@ -551,35 +542,34 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     by_key = {(rt.gbm, rt.fct): rt for rt in sites}
     symptom = args.symptom or input("증상을 설명해 주세요: ")
 
-    # 사이트 축을 먼저 정한다 — 웹 사용자는 --gbm/--fct를 주지 않는다. 미확정이면
-    # 케이스를 만들지 않고 후보를 돌려준다(스코프 없는 케이스는 뜻이 없다).
-    scope = asyncio.run(resolve_scope(
-        symptom, sites=[(rt.gbm, rt.fct) for rt in sites],
-        deps=sites[0].deps if sites else None,
-        gbm=args.gbm, fct=args.fct))
-    if scope.status != "resolved":
-        for problem in scope.problems:
-            print(problem, file=sys.stderr)
-        for question in scope.questions:
-            print(question, file=sys.stderr)
-        print("--gbm/--fct로 사이트를 지정해 다시 실행하라", file=sys.stderr)
-        return 1
-
-    # 접수 경계 한 곳에서만 판정한다(스펙 §3.5). 조사를 시작한 뒤 막으면 이미 늦다.
-    subject = getattr(args, "requested_by", None)
-    if not app.access.can_access(subject, scope.gbm, scope.fct):
-        print(f"주체 {subject!r}는 {scope.gbm}/{scope.fct}에 접근할 수 없다 "
-              f"(app.json의 access.allow)", file=sys.stderr)
-        return 1
-
-    rt = by_key[(scope.gbm, scope.fct)]
-
+    # 스코프→접근→개설→첫 접수 턴은 submit_case 하나다 — POST /cases와 같은 함수다
+    # (규율 8: 순서를 각자 베끼면 언젠가 하나가 접근 검사를 빠뜨린다). 개설이 여기서
+    # 일어나므로 저장소·발행 배선이 먼저 서 있어야 한다.
     p = build_persistence(app.store)
     store, repo, ledger, events = p.store, p.repo, p.ledger, p.events
     snapshots = p.snapshots
     checkpointer = build_checkpointer(app.store)
     for site_rt in sites:
         site_rt.deps.store = store    # daemon.py 모듈 docstring과 동일한 불변식
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
+
+    submitted = asyncio.run(submit_case(
+        symptom, gbm=args.gbm, fct=args.fct, concern=args.concern,
+        subject=getattr(args, "requested_by", None),
+        sites={(s.gbm, s.fct): s.deps for s in sites}, access=app.access,
+        repo=repo, store=store, clock=clock, on_event=on_event,
+        max_intake_turns=app.engine.max_intake_turns))
+    if submitted.status == "unresolved":
+        for line in [*submitted.scope.problems, *submitted.scope.questions,
+                     "--gbm/--fct로 사이트를 지정해 다시 실행하라"]:
+            print(line, file=sys.stderr)
+        return 1
+    if submitted.status == "forbidden":
+        subject = getattr(args, "requested_by", None)
+        print(f"주체 {subject!r}는 {submitted.scope.gbm}/{submitted.scope.fct}에 접근할 수 없다 "
+              f"(app.json의 access.allow)", file=sys.stderr)
+        return 1
+    rt = by_key[(submitted.scope.gbm, submitted.scope.fct)]
 
     def deps_for_site(gbm, fct):
         found = by_key.get((gbm, fct))
@@ -589,7 +579,6 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
         found = by_key.get((gbm, fct))
         return found.digests if found is not None else {}
 
-    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
     owner = f"chat-{socket.gethostname()}-{os.getpid()}"
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
@@ -604,8 +593,8 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     async def ask(question: str) -> str:
         return input(f"[질문] {question}\n> ")
 
-    return asyncio.run(_drive_chat(args, rt, repo, store, worker, symptom, clock, ask, app,
-                                   on_event, scope))
+    return asyncio.run(_drive_chat(args, rt, repo, store, worker, clock, ask, app,
+                                   submitted.case_id, submitted.turn))
 
 
 def main(argv=None) -> int:

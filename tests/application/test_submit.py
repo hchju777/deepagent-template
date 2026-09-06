@@ -67,3 +67,69 @@ def test_실린_시각이_남는다():
     repo = InMemoryCaseRepository(); repo.save(_parked())
     submit_answer("c-1", "답", key="k-1", repo=repo, clock=lambda: T)
     assert repo.get("c-1").updated_at == T
+
+
+# ── submit_case: 스코프 → 접근 → 개설 → 첫 접수 턴 (CLI와 API가 공유) ──────────
+from types import SimpleNamespace                                  # noqa: E402
+
+from src.application.submit import submit_case                     # noqa: E402
+from src.config.schema_app import AccessPolicy                     # noqa: E402
+from src.domain.store import InMemoryCaseStore                     # noqa: E402
+from src.knowledge.topology import Topology                        # noqa: E402
+
+_TOPO = Topology.model_validate({
+    "services": {"twin-api": {"writes": [{"kind": "rest", "endpoint": "/oee"}]}},
+    "derivations": {}})
+
+
+def _llm(reply):
+    async def ainvoke(messages):
+        return SimpleNamespace(content=reply)
+    return SimpleNamespace(ainvoke=ainvoke)
+
+
+def _sites(reply='{"target_locator": "rest:/oee", "missing": []}'):
+    return {("mx", "gumi"): SimpleNamespace(gbm="mx", fct="gumi", topology=_TOPO,
+                                             lead_llm=_llm(reply))}
+
+
+async def test_케이스가_열리고_첫_턴까지_돈다():
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    out = await submit_case("OEE가 이상하다", gbm="mx", fct="gumi", concern="system",
+                            subject=None, sites=_sites(), access=AccessPolicy(),
+                            repo=repo, store=store, clock=lambda: T, on_event=lambda e: None,
+                            max_intake_turns=3)
+    assert out.status == "opened" and out.case_id
+    assert repo.get(out.case_id).target_locator == "rest:/oee"
+    assert out.turn.status == "done"
+
+
+async def test_되물을_것이_있으면_질문이_함께_온다():
+    # 첫 응답에 질문이 실려야 클라이언트가 폴링하지 않는다.
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    out = await submit_case("s", gbm="mx", fct="gumi", concern="system", subject=None,
+                            sites=_sites('{"target_locator": null, "missing": ["어느 라인?"]}'),
+                            access=AccessPolicy(), repo=repo, store=store, clock=lambda: T,
+                            on_event=lambda e: None, max_intake_turns=3)
+    assert out.status == "opened" and out.turn.status == "asking"
+    assert out.turn.question and repo.get(out.case_id).status == "awaiting_human"
+
+
+async def test_스코프_미확정은_케이스를_만들지_않는다():
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    sites = {**_sites(), ("mx", "suwon"): SimpleNamespace(
+        gbm="mx", fct="suwon", topology=_TOPO, lead_llm=_llm('{"gbm": "없음", "fct": "없음"}'))}
+    out = await submit_case("뭔가", gbm=None, fct=None, concern="system", subject=None,
+                            sites=sites, access=AccessPolicy(), repo=repo, store=store,
+                            clock=lambda: T, on_event=lambda e: None, max_intake_turns=3)
+    assert out.status == "unresolved" and ("mx", "gumi") in out.scope.candidates
+    assert repo.list_open() == []
+
+
+async def test_접근_거부는_케이스를_만들지_않는다():
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    out = await submit_case("s", gbm="mx", fct="gumi", concern="system", subject="bob",
+                            sites=_sites(), access=AccessPolicy(allow={"alice": ["mx/gumi"]}),
+                            repo=repo, store=store, clock=lambda: T, on_event=lambda e: None,
+                            max_intake_turns=3)
+    assert out.status == "forbidden" and repo.list_open() == []
