@@ -187,7 +187,7 @@ def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
 
 def _finish(record, repo, clock, target_locator) -> IntakeTurn:
     problem = _save(repo, record.id, clock, unpark=True, target_locator=target_locator,
-                    question=None, question_kind=None)
+                    question=None, question_kind=None, intake_done=True)
     if problem is not None:
         return IntakeTurn(status="not_ours", problems=[problem])
     return IntakeTurn(status="done", target_locator=target_locator)
@@ -200,7 +200,9 @@ def _give_up(record, repo, clock, problems: list[str]) -> IntakeTurn:
     케이스는 타임아웃까지 아무 일도 일어나지 않는다. 다만 그 사이 남이 레코드를
     가져갔으면 되돌리지 않고 `not_ours`로 손을 뗀다.
     """
-    problem = _save(repo, record.id, clock, unpark=True, question=None, question_kind=None)
+    # 포기도 문을 연다 — 대상 없이 조사하는 것이 착지점이고, 문을 안 열면 영영 안 집힌다.
+    problem = _save(repo, record.id, clock, unpark=True, question=None, question_kind=None,
+                    intake_done=True)
     if problem is not None:
         # 포기하려 했으나 그 사이 남이 가져갔다 — 상태를 되돌리지 않고 손을 뗀다.
         return IntakeTurn(status="not_ours", problems=[*problems, problem])

@@ -43,6 +43,12 @@ class CaseRecord(StrictModel):
                                           # 보존 판단은 이 필드를 우선 본다(없으면 updated_at으로 대체)
     question: str | None = None         # awaiting_human으로 파킹된 질문(계획 4b I6) — resume 후 None
     question_kind: Literal["intake", "investigation"] | None = None
+    # requeue의 문(계획 13). 접수 중인 케이스도 status는 open이라, 이 표시가 없으면
+    # 데몬이 그것을 집어 대상 없이 조사한다 — 계획 12의 F1 경합이 바로 그것이었고,
+    # 가드 셋으로 좁혔지만 repo.save에 CAS가 없어 닫지 못했다. 기본값이 True인
+    # 이유: 계획 13 이전 레코드는 전부 접수를 마친 것이다(그때는 접수가 끝나야
+    # 레코드가 생겼다).
+    intake_done: bool = True
                                         # 어느 종류의 질문인가(계획 12) — 재개하는 쪽이
                                         # 접수를 이어갈지 그래프를 재개할지 갈라야 한다.
                                         # None은 계획 12 이전에 파킹된 레코드이고, 그때는

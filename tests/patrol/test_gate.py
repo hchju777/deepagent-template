@@ -116,3 +116,11 @@ def test_게이트가_concern을_케이스에_옮긴다():
     result = admit_finding(finding, repo=repo, store=store, clock=lambda: T)
     assert repo.get(result.case_id).concern == "operation"
     assert result.case.concern == "operation"       # to_case까지 이어진다
+
+
+def test_순찰이_연_케이스는_접수를_마친_상태다():
+    # finding에서 target_locator가 오므로 접수할 것이 없다 — 문이 닫혀 있으면
+    # 순찰 케이스가 영영 큐에 안 들어간다.
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    result = admit_finding(_finding(store), repo=repo, store=store, clock=lambda: T)
+    assert repo.get(result.case_id).intake_done is True

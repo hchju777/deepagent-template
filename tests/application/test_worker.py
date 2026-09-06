@@ -590,3 +590,15 @@ def test_구제된_케이스가_dict여도_digest를_살린다():
     from src.application.worker import _case_file_snapshot
     snapshot = _case_file_snapshot({"case": {"knowledge_digests": {"target_api": "c" * 64}}})
     assert snapshot["knowledge_digests"] == {"target_api": "c" * 64}
+
+
+def test_접수_중인_케이스는_requeue가_집지_않는다():
+    # 계획 12의 F1 경합의 근본 원인 — 가드 셋으로 좁혔지만 repo.save에 CAS가 없어
+    # 닫지 못했다. requeue가 접수 중인 케이스를 구별하면 워커가 붙을 경로 자체가 없다.
+    repo = InMemoryCaseRepository()
+    for cid, done in (("c-1", False), ("c-2", True)):
+        repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                             t0=T, created_at=T, updated_at=T, intake_done=done))
+    queue = CaseQueue()
+    assert queue.requeue_open(repo, clock=lambda: T) == 1
+    assert queue._queue.get_nowait() == "c-2"

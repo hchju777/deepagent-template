@@ -173,3 +173,12 @@ async def test_포기_사유가_호출부까지_전달된다():
                       topology=topo, worker=_Worker(), clock=lambda: T,
                       on_problem=logged.append)
     assert logged and any("파싱" in p for p in logged)
+
+
+def test_사람이_연_케이스는_접수_전이다():
+    # requeue가 이 문을 본다 — 접수 전인 케이스에 워커가 붙지 않는다.
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    assert record.intake_done is False

@@ -107,6 +107,7 @@ def admit_finding(
             id=case_id, gbm=finding.gbm, fct=finding.fct, fingerprint=fp,
             symptom=finding.summary, t0=finding.observed_at, target_locator=finding.target,
             origin="patrol", concern=finding.concern,
+            intake_done=True,       # finding에서 target_locator가 온다 — 접수할 것이 없다
             status="open", created_at=now, updated_at=now,
             finding_ids=[finding.id],
         )

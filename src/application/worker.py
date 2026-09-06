@@ -139,10 +139,12 @@ class CaseQueue:
         return self._queue.qsize()
 
     def requeue_open(self, repo, *, clock) -> int:
-        """open 케이스 전부 + lease가 만료된 investigating 케이스를 큐에 넣는다.
+        """접수를 마친 open 케이스 + lease가 만료된 investigating 케이스를 큐에 넣는다.
 
-        재시작 내구성의 핵심: open은 아직 아무도 손대지 않은 케이스라
-        무조건 회수한다. investigating은 죽은 워커가 lease를 쥔 채
+        재시작 내구성의 핵심: open은 아직 아무도 손대지 않은 케이스라 회수한다 —
+        단 **접수가 끝난 것만**(`intake_done`). 접수 중인 케이스도 open이라 여기서
+        구별하지 않으면 워커가 그것을 집어 대상 없이 조사하고, 접수와 워커가 같은
+        레코드를 놓고 경합한다(계획 12 F1). investigating은 죽은 워커가 lease를 쥔 채
         프로세스만 죽었을 수 있는 상태다 — lease_until이 없거나(비정상
         레코드) clock() 이전으로 지났으면 그 워커는 더 이상 살아있지 않다고
         보고 회수한다. lease가 아직 유효한 investigating은 다른(살아있는)
@@ -153,7 +155,7 @@ class CaseQueue:
         기동 이전)에도 호출할 수 있어야 하기 때문이다.
         """
         now = clock()
-        records = list(repo.list_by_status("open"))
+        records = [r for r in repo.list_by_status("open") if r.intake_done]
         for record in repo.list_by_status("investigating"):
             if record.lease_until is None or record.lease_until < now:
                 records.append(record)
