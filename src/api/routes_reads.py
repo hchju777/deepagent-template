@@ -25,6 +25,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from src.api.app import current_subject, hidden, runtime_of, visible_record
+from src.application.events import collect_events
 from src.domain.report_model import build_report_model
 from src.presentation.report import render_md
 from src.presentation.report_html import render_html
@@ -82,7 +83,8 @@ def get_case(case_id: str, request: Request, subject: str | None = Depends(curre
     record = visible_record(rt, subject, case_id)
     verdict = rt.store.get_verdict(case_id)
     model = build_report_model(record, verdict=verdict, evidence=rt.store.list_evidence(case_id),
-                               case_file=rt.store.get_case_file(case_id), clock=rt.clock)
+                               case_file=rt.store.get_case_file(case_id), clock=rt.clock,
+                               events=collect_events(rt.events, case_id))
     return {**_summary(record),
             "question": record.question, "question_kind": record.question_kind,
             "requested_by": record.requested_by, "intake_done": record.intake_done,
@@ -142,7 +144,8 @@ def get_report(case_id: str, request: Request,
         return PlainTextResponse(path.read_text(encoding="utf-8"), media_type=media)
     model = build_report_model(record, verdict=rt.store.get_verdict(case_id),
                                evidence=rt.store.list_evidence(case_id),
-                               case_file=rt.store.get_case_file(case_id), clock=rt.clock)
+                               case_file=rt.store.get_case_file(case_id), clock=rt.clock,
+                               events=collect_events(rt.events, case_id))
     return PlainTextResponse(render_html(model) if fmt == "html" else render_md(model),
                              media_type=media)
 

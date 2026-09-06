@@ -207,3 +207,11 @@ def test_openapi_스키마는_공개하지_않는다(client):
 
 def test_since_상한(client):
     assert client.get("/cases/c-1/events?since=99999999999999999999").status_code == 422
+
+
+def test_즉석_보고서에_Timeline이_실린다(client, rt):
+    from src.domain.events import EngineEvent
+    rt.events.append(EngineEvent(event="case_status_changed", case_id="c-1", at=T,
+                                 data={"status": "open", "reason": "finding"}))
+    r = client.get("/cases/c-1/report?format=md")
+    assert "| 1 | " in r.text and "상태 → open (finding)" in r.text

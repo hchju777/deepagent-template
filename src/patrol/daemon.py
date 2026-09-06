@@ -39,7 +39,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from src.application.close import sweep_timeouts
 from src.application.deps import EngineDeps
-from src.application.events import case_status_event, report_ready_event
+from src.application.events import case_status_event, collect_events, report_ready_event
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.config.loader import load_app_config, load_registry, load_site_config
 from src.config.schema_app import AppConfig, ReportConfig
@@ -257,9 +257,12 @@ class PatrolDaemon:
                 evidence_summaries[r.id] = repr(self.store.get_evidence(case_id, r.id))[:120]
             except Exception:                                      # noqa: BLE001 — 개별 실패만 건너뛴다
                 pass
+        # 이벤트 스토어가 있는 프로세스만 Timeline을 싣는다 — 없으면 None을 넘겨 보고서가
+        # "이벤트 로그 없음"을 명시한다(빈 목록과 다른 말이다).
+        events = collect_events(self.events, case_id) if self.events is not None else None
         return build_report_model(record, verdict=verdict, evidence=evidence,
                                   case_file=case_file, clock=self.clock,
-                                  evidence_summaries=evidence_summaries)
+                                  evidence_summaries=evidence_summaries, events=events)
 
     def _render_case_report(self, case_id: str) -> str:
         """설정 포맷으로 보고서 본문을 렌더링한다(파일로 쓸 것)."""

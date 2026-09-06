@@ -233,3 +233,22 @@ def test_판정_절은_다른_후보를_신뢰도와_증거와_함께_낸다():
     assert md.index("- 근본 원인:") < md.index("- 다른 후보:") < md.index("- 기여 요인:")
     plain = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
     assert "- 다른 후보:\n  없음" in plain
+
+
+def test_조사_경위는_Timeline_표를_낸다():
+    # 계획 14: 이벤트 로그가 있으면 표, 로그를 못 읽는 프로세스면 그 사실을, 로그는 있는데
+    # 이벤트가 없으면 "이벤트 없음" — 셋은 다른 말이다(조용한 생략 금지).
+    from src.domain.events import EngineEvent
+    events = [EngineEvent(event="case_status_changed", case_id="c-1", at=T, seq=1,
+                          data={"status": "open", "reason": "finding"}),
+              EngineEvent(event="question_raised", case_id="c-1", at=T, seq=2, data={"question": "계획?"})]
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
+                       clock=lambda: T, events=events)
+    assert ("- Timeline:\n\n| seq | 시각 | 이벤트 | 요약 |\n|---|---|---|---|\n"
+            "| 1 | 2026-09-03T08:00:00+00:00 | case_status_changed | 상태 → open (finding) |\n"
+            "| 2 | 2026-09-03T08:00:00+00:00 | question_raised | 질문: 계획? |\n\n") in md
+    none = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
+    assert "- Timeline:\n  이벤트 로그 없음(이 프로세스에 이벤트 스토어가 없다)" in none
+    empty = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
+                          clock=lambda: T, events=[])
+    assert "- Timeline:\n  이벤트 없음" in empty

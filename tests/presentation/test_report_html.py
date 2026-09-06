@@ -140,3 +140,18 @@ def test_판정_절은_다른_후보를_낸다():
     assert "<li>다른 후보: twin-state (신뢰도 low, 증거: ev-7) — 갱신 &lt;b&gt;지연&lt;/b&gt;</li>" in html
     assert html.index("근본 원인:") < html.index("다른 후보:")
     assert "<li>다른 후보: 없음</li>" in render_html(_model(verdict=verdict.model_copy(update={"alternates": []})))
+
+
+def test_조사_경위는_Timeline_표를_낸다():
+    from src.domain.events import EngineEvent
+    record = CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                        created_at=T, updated_at=T)
+    events = [EngineEvent(event="question_raised", case_id="c-1", at=T, seq=1,
+                          data={"question": "<b>q</b>"})]
+    model = build_report_model(record, verdict=None, evidence=[], case_file={"round": 1},
+                               clock=lambda: T, events=events)
+    html = render_html(model)
+    assert "<h3>Timeline</h3>" in html
+    assert ("<tr><td>1</td><td>2026-09-03T08:00:00+00:00</td><td>question_raised</td>"
+            "<td>질문: &lt;b&gt;q&lt;/b&gt;</td></tr>") in html
+    assert "<p>이벤트 로그 없음(이 프로세스에 이벤트 스토어가 없다)</p>" in render_html(_model())
