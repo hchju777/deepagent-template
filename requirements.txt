@@ -24,3 +24,7 @@ langgraph-checkpoint-mongodb>=0.4,<1   # LangGraph 체크포인터의 Mongo 백�
 
 # ── 보고·채널 (계획 5) ────────────────────────────────────
 aiosmtplib>=3.0,<5              # report.mail.enabled일 때만 실제 로드(지연 import)
+
+# ── HTTP 표면 (계획 13) ── `python -m src api`에서만 실제 로드(지연 import)
+fastapi>=0.115,<1
+uvicorn>=0.30,<1               # TLS·인증 회전은 리버스 프록시가 — 여기는 평문 로컬 바인드

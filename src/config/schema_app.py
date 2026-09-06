@@ -167,6 +167,10 @@ class AccessPolicy(StrictModel):
     """주체 → 볼 수 있는 사이트 목록(`"mx/gumi"` 또는 `"mx/*"`)."""
 
     allow: dict[str, list[str]] = {}
+    # 주체 → 토큰(계획 13). `${ENV}` 참조로 적는다 — 평문 토큰이 config show에
+    # 찍히면 SecretStr 마스킹이 소용없다. 비어 있으면 모든 요청이 익명이고, 그때는
+    # allow가 비어 있을 때만 통과한다(계획 12 정책 그대로).
+    subjects: dict[str, SecretStr] = {}
 
     @model_validator(mode="after")
     def _entries_are_sound(self):
