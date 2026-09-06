@@ -99,6 +99,37 @@ def _add_stub_seeds(parser) -> None:
              "대상 시스템 없이 돌릴 때만 쓴다 — 실전환 시에는 이 플래그를 뺀다")
 
 
+def _run_api(args, env: dict, *, llm_factory=None) -> int:
+    """기동 검증 → api 조립(어댑터 없이) → uvicorn — `api` 프로세스의 본체.
+
+    `--stub-seeds`를 받지 않는다: 이 프로세스에는 어댑터가 없어 시드가 갈 곳이 없다.
+    fastapi/uvicorn은 여기서만 지연 import한다 — `patrol run`·`chat`은 그 의존을
+    필요로 하지 않는다.
+    """
+    config_root = Path(args.config_root)
+    repo_root = Path(args.repo_root)
+    errors = validate_boot(config_root, env=env, repo_root=repo_root, check_live=False)
+    if errors:
+        for e in errors:
+            print(f"[{e.where}] {e.problem}", file=sys.stderr)
+        return 1
+
+    from src.api.app import create_app
+    from src.api.assembly import assemble_api
+
+    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+    runtime = assemble_api(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
+    app = create_app(runtime)
+    if runtime.app.store.backend == "memory":
+        # 메모리 백엔드는 프로세스 간 공유가 없다 — api가 연 케이스를 워커(patrol run)가
+        # 절대 못 본다. 조용히 도는 것보다 시끄럽게 알리는 편이 낫다.
+        print("경고: store.backend가 memory다 — 이 api가 연 케이스는 다른 프로세스의 워커에 "
+              "닿지 않는다. 실운영은 mongo 백엔드가 필요하다", file=sys.stderr)
+    import uvicorn
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     """기동 검증 → 사이트 조립 → 순찰 데몬 기동(포그라운드) — patrol run의 본체.
 
@@ -638,6 +669,13 @@ def main(argv=None) -> int:
         "status", help="하트비트와 사이트·점검별 최근 실행 요약. 메모리 백엔드는 안내만 한다")
     _add_common(p_patrol_status)
 
+    p_api = sub.add_parser(
+        "api", help="HTTP 표면 — 케이스를 쓰고 이벤트를 읽는다. 조사는 patrol run(워커)이 한다")
+    p_api.add_argument("--host", default="127.0.0.1",
+                       help="바인드 주소. TLS와 인증 회전은 리버스 프록시가 — 기본은 로컬만")
+    p_api.add_argument("--port", type=int, default=8080)
+    _add_common(p_api)
+
     p_case = sub.add_parser("case")
     case_sub = p_case.add_subparsers(dest="case_command", required=True)
     p_case_list = case_sub.add_parser("list", help="케이스 목록(기본: 전체 상태)")
@@ -727,6 +765,9 @@ def main(argv=None) -> int:
         for e in errors:
             print(f"[{e.where}] {e.problem}", file=sys.stderr)
         return 1
+
+    if args.command == "api":
+        return _run_api(args, env)
 
     if args.command == "patrol":
         if args.patrol_command == "run":

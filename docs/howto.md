@@ -99,6 +99,44 @@ config가 아니라 플래그인 이유는 실전환 시 **빼는 것을 잊을 
 리드 프롬프트에 직행하고 evidence로 박제되므로, 개설만 막고 답변을 안 막으면
 반쪽이다.
 
+## 웹에서 케이스를 열고 싶다 (`api`)
+
+```bash
+python -m src api --port 8080 --config-root config --repo-root .
+```
+
+`api`는 **케이스를 쓰고 이벤트를 읽는 클라이언트**다 — 조사는 `patrol run`(워커)이
+한다. 그래서 두 프로세스가 저장소로 만나야 하고, **메모리 백엔드에서는 서로를 못
+본다**(`api`가 켜지며 경고한다). 실운영은 `store.backend: "mongo"`가 전제다.
+
+```bash
+# 케이스를 연다 — 스코프를 안 주면 증상에서 해석한다. 되물을 게 있으면 응답에 질문이 실린다
+curl -s -X POST localhost:8080/cases -H 'content-type: application/json' \
+  -d '{"symptom": "OEE가 이상하다", "concern": "system"}'
+# → 202 {"case_id": "c-1", "status": "open", "question": null,
+#         "intake": {"status": "done", "problems": []}}
+#   intake.status가 "error"면 접수가 포기한 것이다(LLM 실패 등) — 케이스는 대상 없이
+#   조사에 들어간다. 조용히 "정상 개설"처럼 보이지 않게 응답에 싣는다
+
+# 접수가 되물었으면 답한다(턴 하나 — 다음 질문 또는 완료가 응답에 온다)
+curl -s -X POST localhost:8080/cases/c-1/intake-answers -H 'content-type: application/json' \
+  -d '{"answer": "라인 7"}'
+
+# 조사 중 그래프가 되물었으면(GET /cases/c-1의 question) 답을 **싣는다** — 실행은 워커가
+curl -s -X POST localhost:8080/cases/c-1/answers -H 'content-type: application/json' \
+  -d '{"answer": "계획 변경 없음", "key": "2026-09-04T09:00-c-1"}'
+# → 202 {"result": "accepted"}. 같은 key로 다시 보내면 duplicate — 재시도가 안전하다
+
+curl -s localhost:8080/cases/c-1                                  # 상태·질문·판정·단계 체크리스트
+curl -s -N localhost:8080/cases/c-1/events -H 'accept: text/event-stream'   # 진행 스트림
+curl -s "localhost:8080/cases?gbm=mx&fct=gumi"                    # 목록 — 스코프 필수
+curl -s localhost:8080/cases/c-1/report                           # 보고서(HTML)
+```
+
+`app.json`의 `access.subjects`가 비어 있지 않으면 `Authorization: Bearer <토큰>`을
+보낸다. 틀린 토큰은 401이고, 볼 수 없는 케이스는 **없는 케이스와 같은 404**다 —
+403으로 구별하면 케이스 존재가 새어 나간다.
+
 ## 파킹된 케이스에 나중에 답하고 싶다
 
 ```bash
@@ -107,7 +145,7 @@ python -m src case resume <case-id> --answer "<답변>"
 
 데몬 프로세스가 그 케이스의 lease를 쥐고 있으면(실행 중이면) "데몬이 실행
 중 — 잠시 후 재시도"와 함께 exit 2로 끝난다 — v1에는 실행 중인 데몬과 통신할
-명령 채널이 없어서, lease가 비어 있거나 만료된 경우에만 CLI가 인라인으로
+CLI는 lease가 비어 있거나 만료된 경우에만 인라인으로
 직접 재개한다.
 
 ## 케이스 상태를 들여다보고 싶다

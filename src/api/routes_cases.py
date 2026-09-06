@@ -65,8 +65,12 @@ async def post_case(body: NewCase, request: Request,
         # 스코프가 요청에 이미 드러나 있으므로 숨길 것이 없다 — 여기서만 403이다.
         raise HTTPException(status_code=403, detail={"error": "이 사이트에 접근할 수 없다"})
     record = rt.repo.get(out.case_id)
+    # 접수 결과를 그대로 싣는다 — 포기(error)를 "정상 개설"처럼 보이면 클라이언트는
+    # 왜 조사가 대상 없이 도는지 모른다(조용한 생략 금지). 예시 트리(가짜 LLM
+    # 호스트)를 실제로 쳐 보니 question:null만 와서 구별이 안 됐다.
     return {"case_id": out.case_id, "status": record.status,
-            "question": out.turn.question if out.turn.status == "asking" else None}
+            "question": out.turn.question if out.turn.status == "asking" else None,
+            "intake": {"status": out.turn.status, "problems": out.turn.problems}}
 
 
 @router.post("/cases/{case_id}/intake-answers")

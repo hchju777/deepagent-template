@@ -56,6 +56,12 @@ presentation  →  application  →  domain  ←  infrastructure
 - **presentation** (`src/presentation/`) — 케이스 종결 후 산출물. 보고서
   렌더링(`report.py` 마크다운, `report_html.py` HTML)과 2단계(pending→sent)
   메일 발송(`mail.py`).
+- **api** (`src/api/`) — 세 프로세스(`api`/`worker`/`patrol`) 중 `api`의 진입점
+  (스펙 §3.1). presentation 아래가 아닌 이유는 **별도 프로세스**이기 때문이다.
+  **`api`는 실행자가 아니라 클라이언트다** — 케이스를 쓰고 이벤트를 읽을 뿐,
+  조사를 시작하지 않고 대상 시스템에 붙지 않는다. `tests/api/test_boundary.py`가
+  import 그래프로 그것을 지킨다: `src/api/` 아래 어느 파일이 어댑터 팩토리나
+  워커를 import하면 실패한다. 산문 규율은 읽지 않으면 무력하다.
 - **CLI**(`src/__main__.py`)는 presentation 바깥의 진입점으로 취급한다 — 여기서만
   `datetime.now()`를 직접 부르는 것이 허용된다(아래 "시계 주입" 참고).
 
@@ -99,6 +105,28 @@ CLI(chat) → resolve_scope()  ── 미확정이면 후보를 보여주고 끝
 
 접수 턴 상한은 `engine.max_intake_turns`가 정하고 코드가 강제한다(규율 6) — 넘으면
 대상 없이 조사에 들어간다.
+
+### 모드 ③: HTTP로 문제 제기 (`api` + `patrol run`)
+
+```
+클라이언트 → POST /cases ─→ submit_case()  ── chat과 같은 함수: 스코프→접근→개설→첫 접수 턴
+                              (되물을 게 있으면 202 응답에 질문이 실린다)
+           → POST /cases/{id}/intake-answers ─→ intake_turn()   ── 응답에 다음 질문 또는 완료
+           → (intake_done=True인 open 케이스를) 워커(patrol run)의 requeue가 집어 조사
+           → GET /cases/{id}/events?since=N  ── 저장된 이벤트 로그 (SSE도 같은 로그의 폴링)
+           → 그래프가 파킹하면 awaiting_human + question
+           → POST /cases/{id}/answers {answer, key} ─→ submit_answer() ── **기록만** (202)
+           → 워커의 requeue가 pending_answer를 집어 answer_case() ── 실행은 여기서
+           → GET /cases/{id}/report
+```
+
+두 프로세스가 **저장소로만** 만난다. `api`가 연 케이스는 레코드로, `api`가 받은 답은
+레코드의 `pending_answer`로 워커에 닿는다 — 그것이 v1 인계 노트가 없다고 적었던
+"사람의 답을 실어 나를 프로세스 밖 명령 채널"이다. 그래서 **메모리 백엔드에서는
+두 프로세스가 서로를 못 본다** — 실운영은 Mongo 백엔드가 전제다.
+
+`api`가 하는 LLM 호출은 접수(`intake_turn`)뿐이다. 접수는 조사가 아니고(호출 하나,
+대상 접근 없음), 되묻는 질문이 응답에 바로 실려야 클라이언트가 폴링하지 않는다.
 
 ### 모드 ②: 에이전트 자체 순찰 (`patrol run`)
 
@@ -270,12 +298,13 @@ investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡�
 `chat`의 인프로세스 루프 둘이고, **둘 다 `answer_case`를 거친다** — 데몬은 `resume_once`를 부르지 않고, `requeue_open`도 `open`과
 lease가 만료된 `investigating`만 큐에 넣는다(`awaiting_human`은 대상이 아니다).
 사람이 답을 넣지 않으면 `awaiting_human_timeout_h`를 넘겨 `sweep_timeouts`가
-미해결로 종결한다. 데몬이 파킹 케이스를 자동으로 재개하려면 **사람의 답을 실어
-나를 프로세스 밖 명령 채널**이 필요한데 그것이 아직 없다 — 큐에 넣어도 워커가
-재개할 재료가 없다. 주기적 재스캔(`requeue_job`, 기본 30초)은 이미 돌지만
-`awaiting_human`을 대상으로 삼지 않는 이유가 그것이다. 스펙 §5.2-F2는
-"`case resume`은 실행자가 아니라 클라이언트"라고 규정해 뒀는데, v1은 명령
-채널이 없어 인라인 실행자로 구현했다.
+미해결로 종결한다. **파킹 케이스의 자동 재개는 계획 13이 열었다** — `POST /answers`가
+답을 레코드의 `pending_answer`에 싣고, `requeue_job`(기본 30초)이 답이 실린
+`awaiting_human`을 큐에 넣으면 워커가 `answer_case`로 소비한다. 답이 **없는**
+파킹은 여전히 대상이 아니다(재개할 재료가 없다). 데몬은 지금도 `resume_once`를
+직접 부르지 않는다 — 워커가 `answer_case`를 거쳐 부른다. `case resume`은 v1 그대로
+인라인 실행자다(그 프로세스에는 어댑터가 있다); `api`만이 스펙 §5.2-F2가 말한
+"실행자가 아닌 클라이언트"다.
 
 케이스가 어떤 경로로 닫히든(데몬 자동 진행 / `chat` / `case resume`) **동일한
 발행 배선**을 탄다 — 보고서 파일을 먼저 쓰고, `report_ready` 이벤트를 내고,

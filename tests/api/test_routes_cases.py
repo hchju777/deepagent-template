@@ -179,3 +179,20 @@ def test_개설_이벤트가_저장된다(client, rt):
     # SSE가 읽을 로그다 — api가 낸 case_status_changed도 같은 저장소로 간다.
     cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
     assert [e.event for e in rt.events.since(cid)] == ["case_status_changed"]
+
+
+def test_접수가_포기하면_그_사실이_응답에_실린다():
+    # 조용한 생략 금지 — LLM 호출이 실패해 대상 없이 열린 케이스를 "정상 개설"처럼
+    # 보이면 클라이언트는 왜 조사가 대상 없이 도는지 모른다. 예시 트리(가짜 LLM
+    # 호스트)를 실제로 쳐 보니 202 {"question": null}만 와서 구별이 안 됐다.
+    rt = _runtime(replies=("파싱 불가",) * 5)
+    r = TestClient(create_app(rt)).post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"})
+    assert r.status_code == 202
+    assert r.json()["intake"]["status"] == "error"
+    assert r.json()["intake"]["problems"]
+    assert rt.repo.get(r.json()["case_id"]).intake_done is True    # 그래도 워커는 집는다
+
+
+def test_접수가_끝나면_intake_status가_done이다(client):
+    r = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"})
+    assert r.json()["intake"] == {"status": "done", "problems": []}

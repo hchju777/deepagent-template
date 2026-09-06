@@ -91,7 +91,17 @@ python -m src patrol run --for-seconds 5 --stub-seeds stub-seeds.example.json \
 
 # 케이스 목록(메모리 백엔드는 프로세스가 끝나면 사라진다)
 python -m src case list --config-root config.example --repo-root .
+
+# HTTP 표면 — 케이스를 쓰고 이벤트를 읽는다(조사는 patrol run이). Ctrl-C로 내린다
+python -m src api --port 8080 --config-root config.example --repo-root .
 ```
+
+`api`는 세 프로세스(`api` / 워커=`patrol run` / 순찰) 중 하나이고 **대상 시스템에
+붙지 않는다** — 어댑터가 없다. 그래서 `--stub-seeds`도 받지 않는다. 예시 트리는
+메모리 백엔드라 `api`가 연 케이스를 다른 터미널의 `patrol run`이 못 본다(켜지며
+경고한다) — `POST /cases`와 읽기 엔드포인트까지만 여기서 확인되고, 두 프로세스가
+저장소로 만나는 전 구간은 Mongo 백엔드에서 돈다. 같은 프로세스 안에서 그 전 구간을
+도는 통합 테스트는 `tests/api/`에 있다.
 
 `patrol run`은 여기서 실제로 끝까지 간다 — 케이스가 **둘** 열린다.
 `api.oee_range`가 `oee=512`에서 범위 초과를 잡고(`concern: system` — 파이프라인

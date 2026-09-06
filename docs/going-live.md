@@ -177,7 +177,24 @@ python -m src patrol run --config-root config --repo-root .
 자동으로 먼저 도는지(기동 거부 철학) 확인하라 — `_run_patrol`이 데몬을
 띄우기 전에 항상 기동 검증부터 돈다.
 
-## 7. pinned 명세를 언제 갱신하는가
+## 7. `api` 프로세스 배치
+
+```bash
+python -m src api --host 127.0.0.1 --port 8080 --config-root config --repo-root .
+```
+
+- **리버스 프록시 뒤에 둔다.** TLS 종단·인증 회전·요청 제한은 프록시의 몫이다.
+  `api`는 기본으로 로컬(`127.0.0.1`)에만 바인드한다.
+- **`store.backend: "mongo"`가 전제다.** `api`와 워커(`patrol run`)는 저장소로만 만난다
+  — 메모리 백엔드면 `api`가 연 케이스를 워커가 절대 못 본다(켜지며 경고한다).
+- **토큰은 `.env`에.** `app.json`의 `access.subjects: {"alice": "${ALICE_TOKEN}"}`로
+  참조만 적는다. `${ENV}`가 미설정이면 기동 검증이 거부한다 — 빈 토큰은 `Bearer `만
+  보내면 누구나인 주체를 만든다.
+- **`api`에는 `--stub-seeds`가 없다.** 어댑터가 없으므로 시드가 갈 곳이 없다.
+- 워커와 `api`의 `access.allow`는 같은 `app.json`이다 — 한쪽만 고치면 CLI와 HTTP의
+  판정이 갈린다.
+
+## 8. pinned 명세를 언제 갱신하는가
 
 `knowledge/target_api/{gbm}/{fct}.json`은 대상 API의 OpenAPI 사본이고, 기동 검증이
 등재 항목을 이것과 대조한다. `knowledge validate --live`는 한 걸음 더 가서 **지금
@@ -234,3 +251,4 @@ git add knowledge/target_api && git commit
 - [ ] `knowledge validate`(정적) 통과
 - [ ] `knowledge validate --live`(Mongo 롤 + 명세 드리프트) 통과 — 대상이 명세를 안 내주는 환경이면 이 항목은 건너뛰고 정적 검증만 돌린다(§7). **건너뛴다는 결정을 팀이 알고 있어야 한다**
 - [ ] `patrol run`을 상시 프로세스로 배포
+- [ ] 웹을 쓴다면 `api`를 리버스 프록시 뒤에 배포하고 `access.subjects`의 토큰을 `.env`에

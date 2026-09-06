@@ -1007,3 +1007,41 @@ def test_chat도_가로채인_케이스에는_조사를_걸지_않는다(tmp_pat
     only = repo.list_open()[0]
     # 새 스레드를 등록하지 않았고 워커의 소유도 그대로다.
     assert only.thread_ids == ["t-1"] and only.owner == "w-1"
+
+
+def test_api_명령은_기동_검증을_먼저_돈다(tmp_path, capsys, monkeypatch):
+    # patrol run과 같은 문 — 잘못된 config로 api가 떠서 케이스를 받기 시작하면
+    # 워커 쪽에서 나중에 조용히 틀린다.
+    _tree(tmp_path, check_target="rest:/ghost")
+    monkeypatch.setattr("os.environ", dict(ENV))
+    code = main(["api", "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 1 and "ghost" in capsys.readouterr().err
+
+
+def test_api_명령은_어댑터_없이_앱을_조립한다(tmp_path, monkeypatch):
+    # uvicorn.run만 가로챈다 — 기동 검증·조립·앱 생성은 실제 경로를 그대로 탄다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("src.api.assembly.build_chat_model", lambda *a, **kw: object())
+    captured = {}
+    import uvicorn
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+
+    code = main(["api", "--port", "9999",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 0
+    runtime = captured["app"].state.runtime
+    assert not hasattr(runtime.sites[0], "adapters")
+    assert [(s.gbm, s.fct) for s in runtime.sites] == [("mx", "gumi")]
+    assert captured["host"] == "127.0.0.1" and captured["port"] == 9999   # 기본은 로컬 바인드
+
+
+def test_api_명령은_stub_seeds를_받지_않는다(tmp_path, monkeypatch, capsys):
+    # 어댑터가 없으니 시드가 갈 곳이 없다 — 받으면 "돌고 있다"는 착각만 준다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    import pytest
+    with pytest.raises(SystemExit):
+        main(["api", "--stub-seeds", "x.json",
+              "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert "unrecognized arguments" in capsys.readouterr().err
