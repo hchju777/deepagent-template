@@ -91,6 +91,13 @@ def _render(model) -> str:
     elif verdict is not None:
         # 항목을 지우면 "확인 안 했다"와 "없다"를 구별할 수 없다(마크다운과 같은 규약).
         cause_items.append("근본 원인: 없음")
+    if verdict is not None and not verdict.alternates:
+        cause_items.append("다른 후보: 없음")
+    for a in (verdict.alternates if verdict else []):
+        ids = ", ".join(a.evidence_ids) or "없음"
+        conf = f"신뢰도 {_e(a.confidence)}, " if a.confidence else ""
+        relation = f" — {_e(a.relation)}" if a.relation else ""
+        cause_items.append(f"다른 후보: {_e(a.component)} ({conf}증거: {_e(ids)}){relation}")
     for c in (verdict.contributing if verdict else []):
         ids = ", ".join(c.evidence_ids) or "없음"
         relation = f" — {_e(c.relation)}" if c.relation else ""

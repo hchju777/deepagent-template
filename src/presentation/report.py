@@ -166,6 +166,17 @@ def _section2(record: CaseRecord, verdict: Verdict | None) -> str:
     else:
         lines.append("- 근본 원인: 없음")
 
+    # 후보는 최상위 다음, 기여 요인 앞 — "이것 아니면 저것"이 "이것에 더해 저것"보다 먼저다.
+    lines.append("- 다른 후보:")
+    if not verdict.alternates:
+        lines.append("  없음")
+    else:
+        for a in verdict.alternates:
+            ids = ", ".join(a.evidence_ids) or "없음"
+            conf = f"신뢰도 {a.confidence}, " if a.confidence else ""
+            relation = f" — {a.relation}" if a.relation else ""
+            lines.append(f"  - {a.component} ({conf}증거: {ids}){relation}")
+
     lines.append("- 기여 요인:")
     if not verdict.contributing:
         lines.append("  없음")

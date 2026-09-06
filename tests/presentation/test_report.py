@@ -221,3 +221,15 @@ def test_보고서가_concern을_보여준다():
     record = RECORD.model_copy(update={"concern": "operation"})
     text = render_report(record, verdict=None, evidence=[], case_file=None, clock=lambda: T)
     assert "operation" in text
+
+
+def test_판정_절은_다른_후보를_신뢰도와_증거와_함께_낸다():
+    # 계획 14: 후보는 최상위 다음에, 기여 요인 앞에. 없으면 "없음"(조용한 생략 금지).
+    verdict = VERDICT.model_copy(update={"alternates": [
+        CauseLink(component="twin-state", evidence_ids=["ev-7"], confidence="low", relation="갱신 지연"),
+        CauseLink(component="edge-collector", evidence_ids=[])]})
+    md = render_report(RECORD, verdict=verdict, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
+    assert "- 다른 후보:\n  - twin-state (신뢰도 low, 증거: ev-7) — 갱신 지연\n  - edge-collector (증거: 없음)" in md
+    assert md.index("- 근본 원인:") < md.index("- 다른 후보:") < md.index("- 기여 요인:")
+    plain = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
+    assert "- 다른 후보:\n  없음" in plain
