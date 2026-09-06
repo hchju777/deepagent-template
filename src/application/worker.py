@@ -426,6 +426,7 @@ class InvestigationWorker:
                 verdict_type=verdict.verdict_type if verdict else None,
                 root_cause_component=(verdict.root_cause.component
                                       if verdict and verdict.root_cause else None),
+                alternates=[a.component for a in verdict.alternates] if verdict else [],
                 confidence=verdict.confidence if verdict else None,
                 rounds=model.round_no or 0, evidence_count=len(model.evidence),
                 task_error_rate=model.task_error_rate,
