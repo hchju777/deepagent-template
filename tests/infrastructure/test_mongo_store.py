@@ -243,3 +243,61 @@ def test_mongo_claim이_돌려주는_레코드는_DB의_최신값이다(db, monk
     monkeypatch.undo()
     assert claimed.finding_ids == ["f-1"]      # 반환값이 DB와 일치한다
     assert claimed.owner == "w-1"
+
+
+# ── 명령 채널 프리미티브 (계획 13) — 인메모리와 같은 어휘·같은 판정 ─────────────
+def _parked_doc(repo, cid="c-1", **kw):
+    base = dict(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                created_at=T, updated_at=T, status="awaiting_human", question="q",
+                question_kind="investigation", question_seq=1)
+    base.update(kw)
+    repo.save(CaseRecord(**base))
+
+
+def test_attach는_필드_셋만_바꾸고_CAS로_진다(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo, owner="w-1", thread_ids=["t-1"])
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "accepted"
+    rec = repo.get("c-1")
+    assert rec.pending_answer == "답" and rec.answer_key == "k-1"
+    assert rec.owner == "w-1" and rec.thread_ids == ["t-1"]      # 남의 필드는 그대로
+    # 같은 키·다른 답 → duplicate / 소비 전 다른 키 → pending
+    assert repo.attach_answer("c-1", answer="x", key="k-1", now=T) == "duplicate"
+    assert repo.attach_answer("c-1", answer="x", key="k-2", now=T) == "pending"
+
+
+def test_attach는_워커가_claim한_뒤에는_진다(db):
+    # 리뷰 S7 — api가 읽은 뒤 워커가 investigating으로 옮기면 착지하면 안 된다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    db.cases.update_one({"id": "c-1"}, {"$set": {"status": "investigating", "owner": "w-1"}})
+    assert repo.attach_answer("c-1", answer="답", key="k", now=T) == "not_waiting"
+    assert db.cases.find_one({"id": "c-1"})["status"] == "investigating"
+
+
+def test_take_restore_왕복(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    repo.attach_answer("c-1", answer="답", key="k-1", now=T)
+    assert repo.take_answer("c-1", now=T) == "답"
+    rec = repo.get("c-1")
+    assert rec.pending_answer is None and rec.answered_seq == 1
+    assert repo.take_answer("c-1", now=T) is None                    # 두 번 못 가져간다
+    assert repo.attach_answer("c-1", answer="둘째", key="k-2", now=T) == "not_waiting"  # 답한 질문
+    assert repo.restore_answer("c-1", answer="답", now=T) is True
+    rec = repo.get("c-1")
+    assert rec.pending_answer == "답" and rec.answered_seq == 0
+    # 새 파킹 뒤에는 되돌리지 않는다
+    repo.take_answer("c-1", now=T)
+    db.cases.update_one({"id": "c-1"}, {"$set": {"question_seq": 2}})
+    assert repo.restore_answer("c-1", answer="답", now=T) is False
+
+
+def test_없는_케이스와_옛_문서(db):
+    repo = MongoCaseRepository(db)
+    assert repo.attach_answer("없음", answer="x", key="k", now=T) == "not_found"
+    # 계획 13 이전 문서에는 seq 필드가 없다 — 기본값(0/0)으로 읽혀 "답할 질문 없음"
+    _parked_doc(repo)
+    db.cases.update_one({"id": "c-1"}, {"$unset": {"question_seq": "", "answered_seq": ""}})
+    assert repo.get("c-1").question_seq == 0
+    assert repo.attach_answer("c-1", answer="x", key="k", now=T) == "not_waiting"

@@ -190,3 +190,20 @@ def test_점검_이력도_주체의_사이트로_좁혀진다(tmp_path):
     rt = _runtime(tmp_path, access=access)
     client = TestClient(create_app(rt))
     assert client.get("/checks?gbm=mx&fct=gumi", headers=BOB).status_code == 404
+
+
+def test_비활성_사이트의_케이스는_상세도_숨긴다(tmp_path):
+    # 목록은 sites_for로 안 보이는데 상세·이벤트·보고서가 보이면 갈린다(리뷰 S5-6).
+    rt = _runtime(tmp_path)
+    rt.repo.save(_record("c-9", fct="off"))              # registry에 없는 사이트
+    client = TestClient(create_app(rt))
+    assert client.get("/cases/c-9").status_code == 404
+    assert client.get("/cases/c-9/report").status_code == 404
+
+
+def test_openapi_스키마는_공개하지_않는다(client):
+    assert client.get("/openapi.json").status_code == 404
+
+
+def test_since_상한(client):
+    assert client.get("/cases/c-1/events?since=99999999999999999999").status_code == 422

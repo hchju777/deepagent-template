@@ -1014,6 +1014,9 @@ def test_api_명령은_기동_검증을_먼저_돈다(tmp_path, capsys, monkeypa
     # 워커 쪽에서 나중에 조용히 틀린다.
     _tree(tmp_path, check_target="rest:/ghost")
     monkeypatch.setattr("os.environ", dict(ENV))
+    import uvicorn
+    # 검증이 사라지는 변이에서 실제 서버가 떠 pytest가 영원히 멈추지 않게
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
     code = main(["api", "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 1 and "ghost" in capsys.readouterr().err
 

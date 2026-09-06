@@ -53,6 +53,13 @@ class CaseRecord(StrictModel):
     # 온 답이 워커에 닿는 유일한 길이다. answer_key는 소비 뒤에도 남긴다(멱등).
     pending_answer: str | None = None
     answer_key: str | None = None
+    # "어느 질문에 답했나"를 세는 짝(계획 13 리뷰 블로커 3). 파킹마다 question_seq가
+    # 오르고, 워커가 답을 가져가면 answered_seq를 그 값으로 맞춘다. attach는
+    # question_seq > answered_seq일 때만 — 워커가 답을 가져간 뒤 그래프가 새 질문으로
+    # 다시 파킹하기 전의 창에서 둘째 답이 실려 **옛 질문의 답이 새 질문에** 소비되는
+    # 것을 막는다.
+    question_seq: int = 0
+    answered_seq: int = 0
                                         # 어느 종류의 질문인가(계획 12) — 재개하는 쪽이
                                         # 접수를 이어갈지 그래프를 재개할지 갈라야 한다.
                                         # None은 계획 12 이전에 파킹된 레코드이고, 그때는
@@ -116,6 +123,31 @@ class CaseRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    def attach_answer(self, case_id: str, *, answer: str, key: str, now: datetime) -> str:
+        """답을 조건부로 싣는다 — 필드 셋(`pending_answer`·`answer_key`·`updated_at`)만.
+
+        조건: awaiting_human · 조사 질문 · pending 없음 · question_seq > answered_seq.
+        전체 레코드 save로 싣으면 그 사이 워커가 잡은 lease·상태·스레드를 되돌려
+        조사가 죽는다(리뷰 S7). `claim`처럼 저장소가 한 동작으로 판정해야 한다.
+        반환: accepted / duplicate / pending / not_waiting / not_found.
+        """
+        pass
+
+    @abstractmethod
+    def take_answer(self, case_id: str, *, now: datetime) -> str | None:
+        """실린 답을 가져가며 지우고 answered_seq를 맞춘다. 없으면 None."""
+        pass
+
+    @abstractmethod
+    def restore_answer(self, case_id: str, *, answer: str, now: datetime) -> bool:
+        """가져간 답을 되돌린다 — 소비가 실패했고 그 사이 새 파킹이 없을 때만.
+
+        새 파킹이 있었으면(question_seq가 올라감) 되돌리지 않고 False — 옛 답을
+        새 질문에 붙이는 것이 바로 막으려는 사고다. 호출자가 증거로 남긴다.
+        """
+        pass
+
+    @abstractmethod
     def claim(self, case_id: str, owner: str, *, now: datetime,
               ttl_s: float) -> CaseRecord | None:
         """lease를 원자적으로 잡고 갱신된 레코드를 돌려준다. 못 잡으면 None.
@@ -151,6 +183,42 @@ class InMemoryCaseRepository(CaseRepositoryPort):
             "owner": owner, "lease_until": now + timedelta(seconds=ttl_s)})
         self._cases[case_id] = claimed
         return claimed
+
+    # 인메모리는 단일 스레드·await 없음이라 아래 셋이 그 자체로 원자적이다. Mongo
+    # 구현이 같은 판정을 CAS로 옮긴다 — 두 구현의 결과 어휘가 갈리면 안 된다.
+    def attach_answer(self, case_id, *, answer, key, now):
+        try:
+            record = self.get(case_id)
+        except KeyError:
+            return "not_found"
+        if record.answer_key == key:
+            return "duplicate"
+        if record.status != "awaiting_human" or record.question_kind != "investigation" \
+                or record.question_seq <= record.answered_seq:
+            return "not_waiting"
+        if record.pending_answer is not None:
+            return "pending"
+        self._cases[case_id] = record.model_copy(update={
+            "pending_answer": answer, "answer_key": key, "updated_at": now})
+        return "accepted"
+
+    def take_answer(self, case_id, *, now):
+        record = self.get(case_id)
+        if record.pending_answer is None:
+            return None
+        self._cases[case_id] = record.model_copy(update={
+            "pending_answer": None, "answered_seq": record.question_seq, "updated_at": now})
+        return record.pending_answer
+
+    def restore_answer(self, case_id, *, answer, now):
+        record = self.get(case_id)
+        if record.status != "awaiting_human" or record.pending_answer is not None \
+                or record.question_seq != record.answered_seq:
+            return False
+        self._cases[case_id] = record.model_copy(update={
+            "pending_answer": answer, "answered_seq": record.question_seq - 1,
+            "updated_at": now})
+        return True
 
     def find_open_by_fingerprint(self, fp: str) -> CaseRecord | None:
         """열린 상태의 케이스를 지문으로 찾기."""

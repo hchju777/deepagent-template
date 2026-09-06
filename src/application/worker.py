@@ -359,8 +359,9 @@ class InvestigationWorker:
             # 종류를 명시해 둔다(계획 12) — 안 붙이면 접수/조사 구별이 "라벨이
             # 있다"가 아니라 "라벨이 없다"에 기대게 되고, 접수 쪽 가드가 새로
             # 파킹된 케이스에는 아무 효과가 없다.
-            self._repo.save(waiting.model_copy(update={"question": question,
-                                                       "question_kind": "investigation"}))
+            self._repo.save(waiting.model_copy(update={
+                "question": question, "question_kind": "investigation",
+                "question_seq": waiting.question_seq + 1}))     # 새 질문 — attach가 열린다
             self._emit_status(record.id, "awaiting_human")
             return "awaiting_human"
         verdict = result.get("verdict")
@@ -691,27 +692,43 @@ class InvestigationWorker:
     async def consume(self, case_id: str) -> str:
         """큐에서 나온 케이스 하나를 처리한다 — 실린 답이 있으면 그것부터.
 
-        **지운 뒤 실행한다.** 지우기 전에 실행하면 실패했을 때 다음 requeue가 같은
-        답을 또 넣는다. 지운 뒤 실패하면 답은 워커의 기존 동작대로 `human:answer`
-        증거로 박제돼 있으므로 잃지 않는다. `answer_key`는 남긴다 — 멱등의 근거다.
+        답은 `take_answer`로 **가져가며 지운다**(answered_seq를 맞춘다). 지운 뒤
+        소비가 busy/skipped/not_ours로 끝나면 `restore_answer`로 되돌린다 — 그 사이
+        그래프가 새 질문으로 파킹했으면 되돌리지 않고(옛 답이 새 질문에 붙는다)
+        `human:answer_dropped` 증거로 남긴다. "지운 뒤 실패해도 증거로 남아 잃지
+        않는다"는 전 커밋의 주장은 거짓이었다 — 그 경로들은 증거 박제 전에 끝난다.
 
-        분기는 `answer_case` 하나다(계획 12) — CLI `case resume`과 같은 함수를 쓴다.
+        분기는 `answer_case` 하나다(계획 12). run_once처럼 절대 raise하지 않는다.
         """
         from src.application.answer import answer_case      # 순환 회피: answer→intake
         try:
             record = self._repo.get(case_id)
         except KeyError:
             return "skipped"
-        if record.pending_answer is None:
-            return await self.run_once(case_id)
-        answer = record.pending_answer
-        self._repo.save(record.model_copy(update={"pending_answer": None}))
-        deps = self._deps_for_site(record.gbm, record.fct)
-        return await answer_case(
-            case_id, answer, repo=self._repo, store=self._store, deps=deps,
-            topology=getattr(deps, "topology", None), worker=self, clock=self._clock,
-            max_intake_turns=self._max_intake_turns,
-            interaction_policy=record.interaction_policy)
+        try:
+            answer = self._repo.take_answer(case_id, now=self._clock())
+            if answer is None:
+                return await self.run_once(case_id)
+            deps = self._deps_for_site(record.gbm, record.fct)
+            result = await answer_case(
+                case_id, answer, repo=self._repo, store=self._store, deps=deps,
+                topology=getattr(deps, "topology", None), worker=self, clock=self._clock,
+                max_intake_turns=self._max_intake_turns,
+                interaction_policy=record.interaction_policy)
+            if result in ("busy", "skipped", "not_ours"):
+                if not self._repo.restore_answer(case_id, answer=answer, now=self._clock()):
+                    self._store.put_evidence(case_id, "human:answer_dropped",
+                                             {"answer": answer, "reason": result},
+                                             as_of=self._clock())
+            return result
+        except Exception as exc:                                   # noqa: BLE001 — 무raise
+            try:
+                self._ledger.record_run(record.gbm, record.fct, f"worker:{case_id}", CheckOutcome(
+                    status="error", observed_at=self._clock(),
+                    error=f"답 소비 실패 — {type(exc).__name__}: {exc}"))
+            except Exception:                                      # noqa: BLE001
+                pass
+            return "failed"
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         """stop이 설정될 때까지 큐를 Semaphore(max_concurrent)로 동시 소비한다."""

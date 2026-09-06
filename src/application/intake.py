@@ -79,7 +79,7 @@ def _turn_prompt(record, locators: list[str], answers: list[str]) -> str:
 
 async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
                       clock: Callable[[], datetime], answer: str | None = None,
-                      max_turns: int = 3) -> IntakeTurn:
+                      max_turns: int = 3, on_event: Callable | None = None) -> IntakeTurn:
     """접수 한 턴 — LLM을 한 번 부르고 끝나거나 파킹한다. 절대 raise하지 않는다.
 
     `answer`가 있으면 **이어가기 전에 먼저 증거로 박제한다.** 미루면 그 사이
@@ -109,7 +109,7 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
         turns = sum(1 for r in store.list_evidence(case_id) if r.source == _TURN_SOURCE)
         if turns >= max_turns:
             return _give_up(record, repo, clock,
-                            [f"접수 턴 상한({max_turns})을 넘겼다 — 대상 없이 조사한다"])
+                            [f"접수 턴 상한({max_turns})을 넘겼다 — 대상 없이 조사한다"], on_event)
 
         locators = sorted(topology.locators()) if topology is not None else []
         out, err = await _call(deps, _turn_prompt(record, locators, answers))
@@ -118,7 +118,7 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
                             "target_locator": out.target_locator if out else None,
                             "error": err}, as_of=now)
         if out is None:
-            return _give_up(record, repo, clock, [f"접수 응답 파싱 실패 — {err}"])
+            return _give_up(record, repo, clock, [f"접수 응답 파싱 실패 — {err}"], on_event)
 
         if out.missing:
             question = out.missing[0]
@@ -129,10 +129,12 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
             parked = current if current.status == "awaiting_human" \
                 else transition(current, "awaiting_human", clock=clock)
             repo.save(parked.model_copy(update={"question": question,
-                                                "question_kind": "intake"}))
+                                                "question_kind": "intake",
+                                                "question_seq": parked.question_seq + 1}))
+            _emit(on_event, case_id, "awaiting_human", clock)
             return IntakeTurn(status="asking", question=question)
 
-        return _finish(record, repo, clock, out.target_locator)
+        return _finish(record, repo, clock, out.target_locator, on_event)
     except Exception as exc:                                # noqa: BLE001 — 무raise 계약
         return IntakeTurn(status="error",
                           problems=[f"접수 실패 — {type(exc).__name__}: {exc}"])
@@ -159,7 +161,23 @@ def _not_ours(record) -> str | None:
         return "조사 중인 케이스다 — 접수할 수 없다"
     if record.status == "awaiting_human" and record.question_kind != "intake":
         return "조사 질문에 파킹된 케이스다 — case resume으로 답하라"
+    if record.status == "open" and record.intake_done:
+        # 접수가 끝난 케이스에 또 턴을 돌면 워커가 집을 수 있는 케이스와 _save의
+        # TOCTOU 창이 다시 열린다 — intake_done 문이 최초 창에만 유효했다(리뷰).
+        return "접수가 이미 끝난 케이스다"
     return None
+
+
+def _emit(on_event, case_id: str, status: str, clock) -> None:
+    """파킹/언파킹을 이벤트로 낸다 — 없으면 SSE가 접수 진행을 전혀 못 본다(리뷰 S9).
+    어휘 밖의 새 종류가 아니라 case_status_changed다(규율 7)."""
+    if on_event is None:
+        return
+    try:
+        from src.application.events import case_status_event
+        on_event(case_status_event(case_id, status, clock=clock))
+    except Exception:                                              # noqa: BLE001
+        pass                    # 이벤트 실패가 접수를 막아서는 안 된다
 
 
 def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
@@ -170,10 +188,14 @@ def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
     가드를 적용한다** — 재읽기만으로는 가로채인 레코드를 되돌리는 것을 못 막는다.
 
     **이 창은 좁혔을 뿐 닫히지 않았다.** `repo.get` → 판정 → `repo.save` 사이는
-    원자적이 아니고 `repo.save`에는 CAS가 없다(Mongo 구현은 문서 전체 `$set`).
-    지금 원자 프리미티브는 `claim` 하나뿐이다. 닫으려면 조건부 save를 열거나 접수도
-    lease를 잡아야 하는데, 둘 다 계획 13이 HTTP 동시 요청을 열 때 결정할 문제다 —
-    CLI는 프로세스 하나가 순차로 돌아 창이 좁다.
+    원자적이 아니고 이 저장은 CAS가 없다(Mongo 구현은 문서 전체 `$set`). 계획 13은
+    **워커 쪽 경로를 없애는 것**으로 답했다 — `intake_done`이 False인 케이스는
+    requeue가 안 집고, 접수가 끝난 케이스에는 이 함수가 더 이상 턴을 돌지 않는다
+    (`_not_ours`). **남는 창은 같은 케이스에 동시에 오는 두 접수 요청**이다 — 계획 13
+    리뷰(S3)가 실증했다: 증거가 중복되고, 한 순서에서는 `awaiting_human`인데
+    `intake_done=True`이고 대상까지 설정된 모순 레코드가 남는다. 닫으려면 이 저장에도
+    CAS가 필요하고, 그것은 `attach_answer`가 연 조건부 `$set` 형태를 그대로 쓰면 된다
+    (계획 14 인계). 지금은 그 사이 requeue가 못 집는다는 것만 보장한다.
     """
     current = repo.get(case_id)
     problem = _not_ours(current)
@@ -185,15 +207,18 @@ def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
     return None
 
 
-def _finish(record, repo, clock, target_locator) -> IntakeTurn:
+def _finish(record, repo, clock, target_locator, on_event=None) -> IntakeTurn:
+    was_parked = record.status == "awaiting_human"
     problem = _save(repo, record.id, clock, unpark=True, target_locator=target_locator,
                     question=None, question_kind=None, intake_done=True)
     if problem is not None:
         return IntakeTurn(status="not_ours", problems=[problem])
+    if was_parked:
+        _emit(on_event, record.id, "open", clock)      # 언파킹도 진행이다
     return IntakeTurn(status="done", target_locator=target_locator)
 
 
-def _give_up(record, repo, clock, problems: list[str]) -> IntakeTurn:
+def _give_up(record, repo, clock, problems: list[str], on_event=None) -> IntakeTurn:
     """접수를 포기하고 케이스를 조사 가능한 상태로 되돌린다.
 
     고아로 남기지 않는 것이 핵심이다 — 파킹된 채 질문만 있고 아무도 답할 수 없는
@@ -206,4 +231,6 @@ def _give_up(record, repo, clock, problems: list[str]) -> IntakeTurn:
     if problem is not None:
         # 포기하려 했으나 그 사이 남이 가져갔다 — 상태를 되돌리지 않고 손을 뗀다.
         return IntakeTurn(status="not_ours", problems=[*problems, problem])
+    if record.status == "awaiting_human":
+        _emit(on_event, record.id, "open", clock)
     return IntakeTurn(status="error", problems=problems)

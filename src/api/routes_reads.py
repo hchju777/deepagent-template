@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from src.api.app import current_subject, hidden, runtime_of, visible_record
@@ -97,14 +98,16 @@ def _sse(rt, case_id: str, after: int):
     async def stream():
         cursor = after
         while True:
-            batch = rt.events.since(case_id, cursor)
+            # 저장소 호출은 sync(pymongo)다 — 이벤트 루프에서 직접 부르면 시청자 셋이
+            # 무관한 GET을 50배 느리게 만든다(리뷰 S8 실측). 스레드풀로 뺀다.
+            batch = await run_in_threadpool(rt.events.since, case_id, cursor)
             for event in batch:
                 cursor = event.seq
                 payload = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
                 yield f"id: {event.seq}\nevent: {event.event}\ndata: {payload}\n\n"
             if not batch:
                 try:
-                    if rt.repo.get(case_id).status == "closed":
+                    if (await run_in_threadpool(rt.repo.get, case_id)).status == "closed":
                         return
                 except KeyError:
                     return
@@ -114,7 +117,8 @@ def _sse(rt, case_id: str, after: int):
 
 
 @router.get("/cases/{case_id}/events")
-def get_events(case_id: str, request: Request, since: int = Query(0, ge=0),
+def get_events(case_id: str, request: Request,
+               since: int = Query(0, ge=0, le=2**53),   # bson int64 안·JS 안전 정수 안
                subject: str | None = Depends(current_subject)):
     rt = runtime_of(request)
     visible_record(rt, subject, case_id)

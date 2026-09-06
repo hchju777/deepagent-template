@@ -13,9 +13,11 @@ T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 
 
 def _parked(cid="c-1", **kw):
-    return CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
-                      created_at=T, updated_at=T, status="awaiting_human", question="q",
-                      question_kind="investigation", **kw)
+    base = dict(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                created_at=T, updated_at=T, status="awaiting_human", question="q",
+                question_kind="investigation", question_seq=1)
+    base.update(kw)
+    return CaseRecord(**base)
 
 
 def test_답은_레코드에_실리고_실행되지_않는다():
@@ -133,3 +135,62 @@ async def test_접근_거부는_케이스를_만들지_않는다():
                             repo=repo, store=store, clock=lambda: T, on_event=lambda e: None,
                             max_intake_turns=3)
     assert out.status == "forbidden" and repo.list_open() == []
+
+
+# ── 원자성 (계획 13 리뷰 블로커 1·2·3) ──────────────────────────────────────────
+def test_싣기는_상태_lease_스레드를_건드리지_않는다():
+    # 리뷰 S7: 워커가 pending을 지우고 claim(investigating)한 직후 api의 전체 레코드
+    # save가 착지 → status가 awaiting_human으로 되돌아감 → 워커 _finish가
+    # LifecycleError로 터져 케이스가 "워커 실패"로 종결. 싣기는 필드 셋만 조건부로.
+    repo = InMemoryCaseRepository()
+    repo.save(_parked(question_seq=1))
+    stale = repo.get("c-1")                                  # api가 읽은 시점의 레코드
+    repo.save(stale.model_copy(update={"status": "investigating", "owner": "w-1",
+                                       "thread_ids": ["t-1"], "pending_answer": None}))
+    # api가 stale 레코드로 싣기를 시도한다 — 조건(awaiting_human)이 깨졌으므로 거부
+    assert submit_answer("c-1", "답", key="k-1", repo=repo, clock=lambda: T) == "not_waiting"
+    after = repo.get("c-1")
+    assert after.status == "investigating" and after.owner == "w-1" and after.thread_ids == ["t-1"]
+
+
+def test_아직_파킹된_적_없는_질문에는_싣지_않는다():
+    # question_seq(파킹 횟수) > answered_seq(답한 파킹)일 때만 "답할 질문이 있다".
+    repo = InMemoryCaseRepository()
+    repo.save(_parked(question_seq=0, answered_seq=0))
+    assert submit_answer("c-1", "답", key="k", repo=repo, clock=lambda: T) == "not_waiting"
+
+
+def test_워커가_가져간_뒤_다음_파킹_전에는_싣지_않는다():
+    # 리뷰 S2-F: 워커가 pending을 지운 직후(아직 awaiting_human) 둘째 답이 accepted
+    # → 그래프가 새 질문으로 다시 파킹하면 **옛 질문의 답이 새 질문에** 소비된다.
+    repo = InMemoryCaseRepository()
+    repo.save(_parked(question_seq=1))
+    submit_answer("c-1", "첫 답", key="k-1", repo=repo, clock=lambda: T)
+    taken = repo.take_answer("c-1", now=T)
+    assert taken == "첫 답"
+    assert repo.get("c-1").answered_seq == 1                # 이 질문은 답했다
+    assert submit_answer("c-1", "둘째 답", key="k-2", repo=repo, clock=lambda: T) == "not_waiting"
+
+
+def test_접수_질문에는_answers로_싣지_않는다():
+    # 리뷰 S2-E: /answers가 접수 질문에도 실리면, /intake-answers가 접수를 끝낸 뒤
+    # pending이 남아 워커가 접수 답을 조사 답(human:answer)으로 재소비한다.
+    repo = InMemoryCaseRepository()
+    repo.save(_parked(question_kind="intake", question_seq=1))
+    assert submit_answer("c-1", "답", key="k", repo=repo, clock=lambda: T) == "not_waiting"
+
+
+def test_되돌리기는_다음_파킹이_없을_때만_된다():
+    # 소비 실패(busy/skipped/not_ours) 시 답을 되돌린다. 그 사이 그래프가 새 질문으로
+    # 파킹했으면(question_seq가 올라감) 옛 답은 되돌리지 않는다 — 새 질문에 붙는다.
+    repo = InMemoryCaseRepository()
+    repo.save(_parked(question_seq=1))
+    submit_answer("c-1", "답", key="k-1", repo=repo, clock=lambda: T)
+    repo.take_answer("c-1", now=T)
+    assert repo.restore_answer("c-1", answer="답", now=T) is True
+    assert repo.get("c-1").pending_answer == "답" and repo.get("c-1").answered_seq == 0
+    # 새 파킹 뒤에는 되돌리지 않는다
+    repo.take_answer("c-1", now=T)
+    repo.save(repo.get("c-1").model_copy(update={"question_seq": 2, "question": "새 질문"}))
+    assert repo.restore_answer("c-1", answer="답", now=T) is False
+    assert repo.get("c-1").pending_answer is None

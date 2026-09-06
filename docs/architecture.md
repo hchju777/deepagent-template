@@ -106,28 +106,6 @@ CLI(chat) → resolve_scope()  ── 미확정이면 후보를 보여주고 끝
 접수 턴 상한은 `engine.max_intake_turns`가 정하고 코드가 강제한다(규율 6) — 넘으면
 대상 없이 조사에 들어간다.
 
-### 모드 ③: HTTP로 문제 제기 (`api` + `patrol run`)
-
-```
-클라이언트 → POST /cases ─→ submit_case()  ── chat과 같은 함수: 스코프→접근→개설→첫 접수 턴
-                              (되물을 게 있으면 202 응답에 질문이 실린다)
-           → POST /cases/{id}/intake-answers ─→ intake_turn()   ── 응답에 다음 질문 또는 완료
-           → (intake_done=True인 open 케이스를) 워커(patrol run)의 requeue가 집어 조사
-           → GET /cases/{id}/events?since=N  ── 저장된 이벤트 로그 (SSE도 같은 로그의 폴링)
-           → 그래프가 파킹하면 awaiting_human + question
-           → POST /cases/{id}/answers {answer, key} ─→ submit_answer() ── **기록만** (202)
-           → 워커의 requeue가 pending_answer를 집어 answer_case() ── 실행은 여기서
-           → GET /cases/{id}/report
-```
-
-두 프로세스가 **저장소로만** 만난다. `api`가 연 케이스는 레코드로, `api`가 받은 답은
-레코드의 `pending_answer`로 워커에 닿는다 — 그것이 v1 인계 노트가 없다고 적었던
-"사람의 답을 실어 나를 프로세스 밖 명령 채널"이다. 그래서 **메모리 백엔드에서는
-두 프로세스가 서로를 못 본다** — 실운영은 Mongo 백엔드가 전제다.
-
-`api`가 하는 LLM 호출은 접수(`intake_turn`)뿐이다. 접수는 조사가 아니고(호출 하나,
-대상 접근 없음), 되묻는 질문이 응답에 바로 실려야 클라이언트가 폴링하지 않는다.
-
 ### 모드 ②: 에이전트 자체 순찰 (`patrol run`)
 
 ```
@@ -186,6 +164,28 @@ config는 값이 **어디서 오는지**만 선언한다. 잘라낸 표본·필�
 직접 묻는다), 순찰이 연 케이스는 기본 `"autonomous"`(질문이 생기면
 `engine.autonomous_question_policy`에 따라 보수적 기본값으로 답하고 로그만
 남기거나 — `"default_and_log"` — 사람에게 파킹한다 — `"park"`).
+
+### 모드 ③: HTTP로 문제 제기 (`api` + `patrol run`)
+
+```
+클라이언트 → POST /cases ─→ submit_case()  ── chat과 같은 함수: 스코프→접근→개설→첫 접수 턴
+                              (되물을 게 있으면 202 응답에 질문이 실린다)
+           → POST /cases/{id}/intake-answers ─→ intake_turn()   ── 응답에 다음 질문 또는 완료
+           → (intake_done=True인 open 케이스를) 워커(patrol run)의 requeue가 집어 조사
+           → GET /cases/{id}/events?since=N  ── 저장된 이벤트 로그 (SSE도 같은 로그의 폴링)
+           → 그래프가 파킹하면 awaiting_human + question
+           → POST /cases/{id}/answers {answer, key} ─→ submit_answer() ── **기록만** (202)
+           → 워커의 requeue가 pending_answer를 집어 answer_case() ── 실행은 여기서
+           → GET /cases/{id}/report
+```
+
+두 프로세스가 **저장소로만** 만난다. `api`가 연 케이스는 레코드로, `api`가 받은 답은
+레코드의 `pending_answer`로 워커에 닿는다 — 그것이 v1 인계 노트가 없다고 적었던
+"사람의 답을 실어 나를 프로세스 밖 명령 채널"이다. 그래서 **메모리 백엔드에서는
+두 프로세스가 서로를 못 본다** — 실운영은 Mongo 백엔드가 전제다.
+
+`api`가 하는 LLM 호출은 접수(`intake_turn`)뿐이다. 접수는 조사가 아니고(호출 하나,
+대상 접근 없음), 되묻는 질문이 응답에 바로 실려야 클라이언트가 폴링하지 않는다.
 
 ## 3. 조사 엔진 그래프
 
@@ -294,9 +294,11 @@ ASCII 다이어그램을 두지 않는 이유: 이 표를 그림으로 옮겼다
 investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡도록
 `owner` + `lease_until`(`investigations.lease_ttl_s`, 기본 900초)로 임차한다
 — `InvestigationWorker`는 조사 도중 `lease_ttl_s/3` 간격으로 keepalive를
-갱신한다. `awaiting_human`으로 파킹된 케이스에 답을 넣는 경로는 `case resume --answer`와
-`chat`의 인프로세스 루프 둘이고, **둘 다 `answer_case`를 거친다** — 데몬은 `resume_once`를 부르지 않고, `requeue_open`도 `open`과
-lease가 만료된 `investigating`만 큐에 넣는다(`awaiting_human`은 대상이 아니다).
+갱신한다. `awaiting_human`으로 파킹된 케이스에 답을 넣는 경로는 `case resume --answer`,
+`chat`의 인프로세스 루프, 그리고 `POST /cases/{id}/answers`(명령 채널) 셋이고,
+**셋 다 `answer_case`를 거친다.** `requeue_open`은 접수를 마친 `open`, lease가 만료된
+`investigating`, 그리고 **답이 실린 `awaiting_human`**을 큐에 넣는다 — 답 없는 파킹은
+여전히 대상이 아니다(재개할 재료가 없다).
 사람이 답을 넣지 않으면 `awaiting_human_timeout_h`를 넘겨 `sweep_timeouts`가
 미해결로 종결한다. **파킹 케이스의 자동 재개는 계획 13이 열었다** — `POST /answers`가
 답을 레코드의 `pending_answer`에 싣고, `requeue_job`(기본 30초)이 답이 실린

@@ -39,7 +39,7 @@ class ApiRuntime:
     events: Any
     ledger: Any
     clock: Callable[[], datetime]
-    by_key: dict[tuple[str, str], ApiSite] = field(default_factory=dict)
+    by_key: dict[tuple[str, str], ApiSite] = field(init=False)   # sites에서 유도
 
     def __post_init__(self):
         self.by_key = {(s.gbm, s.fct): s for s in self.sites}

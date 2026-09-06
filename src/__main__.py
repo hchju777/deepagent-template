@@ -16,8 +16,6 @@ from dotenv import load_dotenv
 
 from src.application.answer import answer_case
 from src.application.intake import intake_turn
-from src.application.open_case import open_case
-from src.application.scope import resolve_scope
 from src.application.submit import submit_case
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
@@ -99,7 +97,7 @@ def _add_stub_seeds(parser) -> None:
              "대상 시스템 없이 돌릴 때만 쓴다 — 실전환 시에는 이 플래그를 뺀다")
 
 
-def _run_api(args, env: dict, *, llm_factory=None) -> int:
+def _run_api(args, env: dict) -> int:
     """기동 검증 → api 조립(어댑터 없이) → uvicorn — `api` 프로세스의 본체.
 
     `--stub-seeds`를 받지 않는다: 이 프로세스에는 어댑터가 없어 시드가 갈 곳이 없다.
@@ -118,7 +116,7 @@ def _run_api(args, env: dict, *, llm_factory=None) -> int:
     from src.api.assembly import assemble_api
 
     clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
-    runtime = assemble_api(config_root, repo_root, env, clock=clock, llm_factory=llm_factory)
+    runtime = assemble_api(config_root, repo_root, env, clock=clock)
     app = create_app(runtime)
     if runtime.app.store.backend == "memory":
         # 메모리 백엔드는 프로세스 간 공유가 없다 — api가 연 케이스를 워커(patrol run)가
@@ -485,7 +483,8 @@ def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, cloc
     return print_event, daemon._publish_report
 
 
-async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, turn) -> int:
+async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, turn,
+                      on_event) -> int:
     """남은 접수 턴 → 조사 → awaiting_human 반복 → 보고서 경로 출력.
 
     개설과 첫 접수 턴은 `submit_case`가 이미 했다 — `POST /cases`와 같은 함수다.
@@ -511,7 +510,7 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
             return 0
         turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
                                  topology=rt.deps.topology, clock=clock, answer=answer,
-                                 max_turns=app.engine.max_intake_turns)
+                                 max_turns=app.engine.max_intake_turns, on_event=on_event)
 
     result = await worker.run_once(case_id, interaction_policy="interactive")
     while result == "awaiting_human":
@@ -625,7 +624,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
         return input(f"[질문] {question}\n> ")
 
     return asyncio.run(_drive_chat(args, rt, repo, store, worker, clock, ask, app,
-                                   submitted.case_id, submitted.turn))
+                                   submitted.case_id, submitted.turn, on_event))
 
 
 def main(argv=None) -> int:

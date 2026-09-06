@@ -214,6 +214,65 @@ class MongoCaseRepository(CaseRepositoryPort):
             raise KeyError(case_id)
         return self._to_record(doc)
 
+    def _cas(self, case_id: str, guard: dict, fields: dict) -> bool:
+        """읽은 값들을 그대로 술어로 걸어 $set — 그 사이 남이 바꿨으면 진다.
+
+        `$expr`·범위 비교를 쓰지 않는다: ISO 문자열 시각의 사전식 순서 문제(모듈
+        docstring)와 mongomock 호환 둘 다 이유다. 등식 CAS면 충분하다 — 우리가 묻는
+        것은 "읽은 뒤 바뀌었나"이지 값의 대소가 아니다.
+        """
+        return self._db.cases.update_one({"id": case_id, **guard}, {"$set": fields}).matched_count == 1
+
+    def attach_answer(self, case_id, *, answer, key, now):
+        doc = self._db.cases.find_one({"id": case_id})
+        if doc is None:
+            return "not_found"
+        record = self._to_record(doc)
+        if record.answer_key == key:
+            return "duplicate"
+        if record.status != "awaiting_human" or record.question_kind != "investigation" \
+                or record.question_seq <= record.answered_seq:
+            return "not_waiting"
+        if record.pending_answer is not None:
+            return "pending"
+        # 조건이 걸린 필드 전부를 읽은 값 그대로 술어에 — 워커가 그 사이 claim해
+        # investigating이 됐거나 take로 answered_seq를 올렸으면 진다(리뷰 S7·S2-F).
+        guard = {"status": "awaiting_human", "question_kind": "investigation",
+                 "pending_answer": None, "question_seq": record.question_seq,
+                 "answered_seq": record.answered_seq, "answer_key": doc.get("answer_key")}
+        if not self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,
+                                          "updated_at": now.isoformat()}):
+            # 졌다 — 다시 읽어 왜 졌는지로 분류한다(claim의 재읽기와 같은 패턴)
+            return self.attach_answer(case_id, answer=answer, key=key, now=now) \
+                if self._db.cases.find_one({"id": case_id}) else "not_found"
+        return "accepted"
+
+    def take_answer(self, case_id, *, now):
+        doc = self._db.cases.find_one({"id": case_id})
+        if doc is None:
+            raise KeyError(case_id)
+        answer = doc.get("pending_answer")
+        if answer is None:
+            return None
+        if not self._cas(case_id, {"pending_answer": answer},
+                         {"pending_answer": None, "answered_seq": doc.get("question_seq", 0),
+                          "updated_at": now.isoformat()}):
+            return None            # 그 사이 남이 가져갔다
+        return answer
+
+    def restore_answer(self, case_id, *, answer, now):
+        doc = self._db.cases.find_one({"id": case_id})
+        if doc is None:
+            return False
+        seq = doc.get("question_seq", 0)
+        if doc.get("status") != "awaiting_human" or doc.get("pending_answer") is not None \
+                or seq != doc.get("answered_seq", 0):
+            return False
+        return self._cas(case_id, {"status": "awaiting_human", "pending_answer": None,
+                                   "question_seq": seq, "answered_seq": seq},
+                         {"pending_answer": answer, "answered_seq": seq - 1,
+                          "updated_at": now.isoformat()})
+
     def claim(self, case_id, owner, *, now, ttl_s):
         doc = self._db.cases.find_one({"id": case_id})
         if doc is None:

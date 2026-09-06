@@ -48,7 +48,8 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 
 `tests/`는 `src/`와 계층별로 미러링돼 있다: `tests/domain/`,
 `tests/config/`, `tests/knowledge/`, `tests/infrastructure/`,
-`tests/patrol/`, `tests/application/`, `tests/presentation/`. 최상위에
+`tests/patrol/`, `tests/application/`, `tests/presentation/`, `tests/api/`(HTTP 표면 —
+`test_boundary.py`가 import 그래프로 "api는 어댑터·워커를 모른다"를 지킨다). 최상위에
 `test_boot.py`(기동 검증 통합)와 `test_bench_scenarios.py`(E2E 벤치)가 있다.
 `tests/patrol/test_resolvers.py`는 파라미터 해석기(전부-또는-전무·카디널리티·
 시간대)를 단위로 덮고, 그것이 **실제 데몬 경로까지 배선됐는지**는

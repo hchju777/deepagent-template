@@ -487,3 +487,38 @@ kill %1 %2
 | 다중 RCA 후보 payload | 계획 14. `GET /cases/{id}`는 지금의 `Verdict` 모양을 그대로 낸다 |
 | 페이지네이션·정렬·전문 검색 | `GET /cases`는 사이트 스코프 필터 + status만. 요구가 관측되기 전엔 안 늘린다 |
 | GraphQL·범용 쿼리 | 스펙 §6 기각 |
+
+---
+
+## 계획 14 인계
+
+리뷰 한 라운드 + 픽스 웨이브에서 남은 것들. 블로커 셋(`submit_answer`의 비원자
+save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_answer`/`take_answer`/
+`restore_answer` 프리미티브와 `question_seq`/`answered_seq` 짝으로 닫았다. 남은 것:
+
+1. **접수 `_save`의 TOCTOU** — 같은 케이스에 동시에 오는 두 `/intake-answers`가
+   증거를 중복 박제하고, 한 순서에서 `awaiting_human` + `intake_done=True` + 대상 설정이라는
+   모순 레코드를 남긴다(리뷰 S3 실증). `attach_answer`가 연 조건부 `$set` 형태를 `_save`에도
+   그대로 쓰면 닫힌다. requeue가 그 사이 못 집는 것만 지금 보장한다.
+2. **경계가 패키지 단위다** — `src/api/`의 전이 import 클로저는 깨끗하지만, `python -m src api`의
+   **프로세스**는 `src/__main__.py`를 거쳐 `daemon`·`worker`·`factory`·대상 리더 전부를 import한다
+   (인스턴스·소켓은 없음, 실측). `_run_api`를 얇은 별도 진입점으로 떼고 `boot.py`의 live 경로
+   import를 지연시키면 닫힌다. 그리고 `test_boundary.py`는 `ast.Import`만 보므로
+   `importlib.import_module("src.application.worker")`를 못 잡는다 — 프로세스 수준
+   `sys.modules` 단정을 추가할 것.
+3. **SSE 부하** — 저장소 호출을 스레드풀로 뺐지만(리뷰 S8: 시청자 3명이 무관한 GET을 50배
+   느리게 했다) `_SSE_POLL_S=0.2`로 케이스 100개×100명이면 초당 5만 조회다. 폴링 간격을
+   config로 빼거나 케이스별 마지막 seq 캐시.
+4. **입력 위생** — `symptom=""`·`key=""` 허용(빈 키가 accepted되면 진짜 키가 `pending`),
+   목록 정렬이 문자열(`c-1, c-10, c-2`), `status=bogus`→200 `[]`, 소문자 `bearer` 거부
+   (RFC 7235는 스킴 대소문자 무시), `--port`에 help 없음.
+5. **`GET /cases/{id}/report`** — `case show --report`와 달리 다른 확장자 폴백이 없다
+   (`report.format`을 바꾼 뒤 옛 보고서를 못 읽는다).
+6. **응답 모델이 dict** — 계획서는 StrictModel을 말했으나 응답은 dict다(요청만 StrictModel).
+   계획 14가 `GET /cases/{id}` payload를 바꿀 때 응답 모델을 세우면 그때 같이.
+7. **`config-reference.md`의 기동 검증 번호가 실행 순서가 아니다** — 목록은 종류별이고
+   `boot.py`는 사이트 루프 안팎으로 나뉜다. 번호를 없애고 이름으로 부르는 쪽이 낫다
+   (`boot.py` 주석은 이미 그렇게 했다).
+8. **계획 13 이전에 파킹된 레코드**는 `question_seq=0`이라 `attach_answer`가 `not_waiting`을
+   낸다 — CLI `case resume`은 그 필드를 안 보므로 그쪽으로는 답할 수 있다. 배포된 것이
+   없어 마이그레이션은 하지 않았다.

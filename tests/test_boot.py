@@ -558,3 +558,14 @@ def test_빈_토큰의_주체는_기동을_거부한다(tmp_path):
     app.write_text(json.dumps(data), encoding="utf-8")
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("alice" in e.problem and "토큰" in e.problem for e in errors), errors
+
+
+def test_같은_토큰을_가진_주체_둘은_기동을_거부한다(tmp_path):
+    # 역조회가 마지막 주체를 골라 requested_by가 오귀속된다(리뷰 S5-3).
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    data = json.loads(app.read_text(encoding="utf-8"))
+    data["access"] = {"subjects": {"alice": "same", "carol": "same"}}
+    app.write_text(json.dumps(data), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    assert any("alice" in e.problem and "carol" in e.problem for e in errors), errors

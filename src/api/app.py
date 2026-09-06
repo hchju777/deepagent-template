@@ -47,6 +47,10 @@ def visible_record(rt: ApiRuntime, subject: str | None, case_id: str) -> Any:
         raise hidden()
     if not rt.app.access.can_access(subject, record.gbm, record.fct):
         raise hidden()
+    if (record.gbm, record.fct) not in rt.by_key:
+        # 비활성 사이트의 케이스 — 목록(sites_for)은 안 보이는데 상세는 보이면 둘이
+        # 갈린다(리뷰 S5-6). 워커도 그 사이트가 없어 답을 소비 못 한다.
+        raise hidden()
     return record
 
 
@@ -54,7 +58,8 @@ def create_app(runtime: ApiRuntime) -> FastAPI:
     from src.api.routes_cases import router as cases_router
     from src.api.routes_reads import router as reads_router
 
-    app = FastAPI(title="deepagent api", docs_url=None, redoc_url=None)
+    # openapi_url까지 닫는다 — docs_url만 None이면 /openapi.json은 여전히 200이다.
+    app = FastAPI(title="deepagent api", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime = runtime
     app.include_router(cases_router, dependencies=[Depends(current_subject)])
     app.include_router(reads_router, dependencies=[Depends(current_subject)])

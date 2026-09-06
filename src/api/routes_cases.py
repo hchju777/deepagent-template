@@ -14,7 +14,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.api.app import current_subject, hidden, runtime_of, visible_record
-from src.application.events import case_status_event
 from src.application.intake import intake_turn
 from src.application.submit import submit_answer, submit_case
 from src.config.schema_app import StrictModel
@@ -83,7 +82,7 @@ async def post_intake_answer(case_id: str, body: IntakeAnswer, request: Request,
         raise hidden()              # 비활성 사이트의 케이스 — 존재 여부를 숨긴다
     turn = await intake_turn(case_id, repo=rt.repo, store=rt.store, deps=site,
                              topology=site.topology, clock=rt.clock, answer=body.answer,
-                             max_turns=rt.app.engine.max_intake_turns)
+                             max_turns=rt.app.engine.max_intake_turns, on_event=_event_sink(rt))
     if turn.status == "not_ours":
         raise HTTPException(status_code=409, detail={"problems": turn.problems})
     return {"status": turn.status, "question": turn.question,

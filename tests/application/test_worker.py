@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 """워커를 스크립트 LLM+스텁 어댑터+InMemorySaver로 결정론 검증한다."""
 from datetime import datetime, timezone
 
@@ -667,3 +668,82 @@ async def test_소비는_지운_뒤_실행한다():
     worker.resume_once = _spy
     await worker.consume("c-1")
     assert seen == [("답", None)]                          # 실행 시점에 이미 지워져 있다
+
+
+async def test_소비가_실패하면_답을_되돌린다():
+    # 리뷰 S2-A/C/D: answer_case가 busy/skipped/not_ours를 돌려주면 pending은 이미
+    # 지워졌고 증거도 없어 **답이 소실**되고 타임아웃까지 파킹된다. "human:answer
+    # 증거로 박제돼 있어 잃지 않는다"는 거짓이었다 — 되돌린다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q",
+                         question_kind="investigation", question_seq=1,
+                         pending_answer="답", answer_key="k-1"))
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: None,        # 미등록 사이트 → skipped
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    result = await worker.consume("c-1")
+    assert result == "skipped"
+    after = repo.get("c-1")
+    assert after.pending_answer == "답" and after.status == "awaiting_human"   # 잃지 않았다
+
+
+async def test_되돌릴_수_없으면_증거로_남긴다():
+    # 되돌리기가 실패하는 유일한 경우는 그 사이 그래프가 새 질문으로 파킹한 것 —
+    # 옛 답을 조용히 버리지 않고 human:answer_dropped로 남긴다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q",
+                         question_kind="investigation", question_seq=1,
+                         pending_answer="옛 답", answer_key="k-1"))
+
+    class _Reparks:
+        """소비 중 그래프가 새 질문으로 파킹하는 상황."""
+        async def __call__(self, case_id, answer):
+            repo.save(repo.get(case_id).model_copy(update={"question_seq": 2, "question": "새"}))
+            return "busy"
+
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: SimpleNamespace(topology=None),
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    worker.resume_once = _Reparks()
+    await worker.consume("c-1")
+    assert repo.get("c-1").pending_answer is None
+    assert any(r.source == "human:answer_dropped" for r in store.list_evidence("c-1"))
+
+
+async def test_소비는_raise하지_않는다():
+    # 리뷰: repo.save 실패가 consume 밖으로 새어 run_forever 태스크에 삼켜졌다 —
+    # 데몬은 안 죽지만 레저 흔적이 없다(규율 1).
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q",
+                         question_kind="investigation", question_seq=1,
+                         pending_answer="답", answer_key="k-1"))
+    def boom(*a, **kw):
+        raise RuntimeError("mongo down")
+    repo.take_answer = boom
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: None, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.consume("c-1") == "failed"
+    assert ledger.last_run("mx", "gumi", "worker:c-1").status == "error"
+
+
+async def test_파킹마다_question_seq가_오른다():
+    # attach_answer의 조건(question_seq > answered_seq)이 성립하려면 파킹이 세야 한다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, ASK_JSON])
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"autonomous_question_policy": "park"})
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "awaiting_human"
+    assert repo.get("c-1").question_seq == 1

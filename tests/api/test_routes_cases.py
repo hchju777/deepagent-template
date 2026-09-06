@@ -99,7 +99,8 @@ def test_접수_답은_턴_하나를_돈다():
 def test_접수_질문이_아닌_케이스에_접수_답은_409다(client, rt):
     cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
     rt.repo.save(rt.repo.get(cid).model_copy(update={
-        "status": "awaiting_human", "question": "q", "question_kind": "investigation"}))
+        "status": "awaiting_human", "question": "q", "question_kind": "investigation",
+        "question_seq": 1}))
     assert client.post(f"/cases/{cid}/intake-answers", json={"answer": "x"}).status_code == 409
 
 
@@ -107,7 +108,8 @@ def test_답은_기록되고_실행되지_않는다(client, rt):
     # api는 실행자가 아니다.
     cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
     rt.repo.save(rt.repo.get(cid).model_copy(update={
-        "status": "awaiting_human", "question": "q", "question_kind": "investigation"}))
+        "status": "awaiting_human", "question": "q", "question_kind": "investigation",
+        "question_seq": 1}))
     r = client.post(f"/cases/{cid}/answers", json={"answer": "없다", "key": "k-1"})
     assert r.status_code == 202 and r.json()["result"] == "accepted"
     after = rt.repo.get(cid)
@@ -117,7 +119,8 @@ def test_답은_기록되고_실행되지_않는다(client, rt):
 def test_같은_키는_duplicate다(client, rt):
     cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
     rt.repo.save(rt.repo.get(cid).model_copy(update={
-        "status": "awaiting_human", "question": "q", "question_kind": "investigation"}))
+        "status": "awaiting_human", "question": "q", "question_kind": "investigation",
+        "question_seq": 1}))
     client.post(f"/cases/{cid}/answers", json={"answer": "없다", "key": "k-1"})
     r = client.post(f"/cases/{cid}/answers", json={"answer": "다른", "key": "k-1"})
     assert r.status_code == 202 and r.json()["result"] == "duplicate"
@@ -196,3 +199,21 @@ def test_접수가_포기하면_그_사실이_응답에_실린다():
 def test_접수가_끝나면_intake_status가_done이다(client):
     r = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"})
     assert r.json()["intake"] == {"status": "done", "problems": []}
+
+
+def test_접수가_끝난_케이스에_접수_답은_409다(client, rt):
+    # intake_done 문이 최초 창에만 유효했다 — 끝난 접수에 또 턴을 돌면 워커가 집을 수
+    # 있는 케이스와 _save의 TOCTOU 창이 다시 열린다(리뷰 S1-P1b).
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+    assert rt.repo.get(cid).intake_done is True
+    assert client.post(f"/cases/{cid}/intake-answers", json={"answer": "x"}).status_code == 409
+
+
+def test_접수_파킹은_이벤트를_낸다():
+    # 문서가 SSE를 "진행 스트림"이라 부른다 — 접수 파킹이 안 실리면 거짓이다(리뷰 S9).
+    rt = _runtime(replies=(ASKING, RESOLVED))
+    client = TestClient(create_app(rt))
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+    client.post(f"/cases/{cid}/intake-answers", json={"answer": "라인 7"})
+    statuses = [e.data.get("status") for e in rt.events.since(cid)]
+    assert statuses == ["open", "awaiting_human", "open"]
