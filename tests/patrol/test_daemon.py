@@ -1,3 +1,4 @@
+import asyncio
 """데몬의 run_one→게이트→큐→워커 사슬을 스텁 위에서 결정론 검증한다."""
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -297,3 +298,33 @@ async def test_데몬이_케이스의_concern으로_수신자를_고른다(tmp_p
                          status="closed", closed_reason="조사 완료"))
     await daemon._publish_report("c-1")
     assert sent == [["ops@y"]], sent
+
+
+async def test_데몬이_실린_답으로_파킹_케이스를_재개한다(tmp_path):
+    # 스케줄러의 requeue_job → 큐 → 워커.consume. architecture.md의 "데몬은
+    # resume_once를 부르지 않는다"는 여전히 참이다 — 워커가 answer_case를 부른다.
+    # 그러나 "파킹 케이스를 자동으로 재개할 수 없다"는 이제 거짓이다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _daemon(store, repo, ledger,
+                     lead=['{"target_locator": "rest:/oee", "missing": []}',
+                           FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON],
+                     tmp_path=tmp_path)
+    daemon.build()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human",
+                         question="어느 라인?", question_kind="intake", intake_done=False,
+                         pending_answer="라인 7", answer_key="k-1"))
+    await daemon.requeue_job()
+    assert daemon.queue._queue.qsize() == 1
+
+    stop = asyncio.Event()
+
+    async def _until_closed():
+        while repo.get("c-1").status != "closed":
+            await asyncio.sleep(0.01)
+        stop.set()
+
+    await asyncio.gather(daemon.worker.run_forever(stop), asyncio.wait_for(_until_closed(), 5))
+    record = repo.get("c-1")
+    assert record.status == "closed" and record.pending_answer is None
+    assert (tmp_path / "output" / "c-1.html").exists()     # 발행 배선도 그대로 탄다

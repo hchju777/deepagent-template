@@ -148,7 +148,8 @@ class CaseQueue:
         프로세스만 죽었을 수 있는 상태다 — lease_until이 없거나(비정상
         레코드) clock() 이전으로 지났으면 그 워커는 더 이상 살아있지 않다고
         보고 회수한다. lease가 아직 유효한 investigating은 다른(살아있는)
-        워커가 지금 붙들고 있는 것이므로 건드리지 않는다.
+        워커가 지금 붙들고 있는 것이므로 건드리지 않는다. awaiting_human은
+        `pending_answer`가 실린 것만 — 그것이 계획 13의 명령 채널이다.
 
         투입한 케이스 수를 돌려준다. 큐는 무제한(maxsize=0)이므로 블로킹
         없이 put_nowait로 즉시 채운다 — 워커가 아직 돌기 전(이벤트 루프
@@ -156,6 +157,10 @@ class CaseQueue:
         """
         now = clock()
         records = [r for r in repo.list_by_status("open") if r.intake_done]
+        # 답이 실린 파킹 케이스도 대상이다(계획 13 명령 채널). 답 없는 파킹은 여전히
+        # 아니다 — 워커가 재개할 재료가 없다.
+        records += [r for r in repo.list_by_status("awaiting_human")
+                    if r.pending_answer is not None]
         for record in repo.list_by_status("investigating"):
             if record.lease_until is None or record.lease_until < now:
                 records.append(record)
@@ -173,6 +178,7 @@ class InvestigationWorker:
                 knowledge_digests_for_site: Callable[[str, str], dict[str, str]],
                 on_event: Callable[[Any], None] | None = None,
                 on_closed: Callable[[str], Awaitable] | None = None,
+                max_intake_turns: int = 3,
                 max_wall_clock_s: float | None = None,
                 snapshots=None):
         self._queue = queue
@@ -190,6 +196,7 @@ class InvestigationWorker:
         self._max_wall_clock_s = max_wall_clock_s
         self._snapshots = snapshots      # VerdictSnapshotPort | None
         self._on_closed = on_closed   # 계획 5 — 케이스가 닫힌 직후(성공/실패 종결 모두) 부르는 발행 훅
+        self._max_intake_turns = max_intake_turns
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
 
     def _emit_status(self, case_id: str, status: str, *, reason: str | None = None) -> None:
@@ -681,6 +688,31 @@ class InvestigationWorker:
         finally:
             await self._release_safely(case_id)
 
+    async def consume(self, case_id: str) -> str:
+        """큐에서 나온 케이스 하나를 처리한다 — 실린 답이 있으면 그것부터.
+
+        **지운 뒤 실행한다.** 지우기 전에 실행하면 실패했을 때 다음 requeue가 같은
+        답을 또 넣는다. 지운 뒤 실패하면 답은 워커의 기존 동작대로 `human:answer`
+        증거로 박제돼 있으므로 잃지 않는다. `answer_key`는 남긴다 — 멱등의 근거다.
+
+        분기는 `answer_case` 하나다(계획 12) — CLI `case resume`과 같은 함수를 쓴다.
+        """
+        from src.application.answer import answer_case      # 순환 회피: answer→intake
+        try:
+            record = self._repo.get(case_id)
+        except KeyError:
+            return "skipped"
+        if record.pending_answer is None:
+            return await self.run_once(case_id)
+        answer = record.pending_answer
+        self._repo.save(record.model_copy(update={"pending_answer": None}))
+        deps = self._deps_for_site(record.gbm, record.fct)
+        return await answer_case(
+            case_id, answer, repo=self._repo, store=self._store, deps=deps,
+            topology=getattr(deps, "topology", None), worker=self, clock=self._clock,
+            max_intake_turns=self._max_intake_turns,
+            interaction_policy=record.interaction_policy)
+
     async def run_forever(self, stop: asyncio.Event) -> None:
         """stop이 설정될 때까지 큐를 Semaphore(max_concurrent)로 동시 소비한다."""
         semaphore = asyncio.Semaphore(self._max_concurrent)
@@ -700,7 +732,7 @@ class InvestigationWorker:
 
                 async def _consume(cid: str) -> None:
                     try:
-                        await self.run_once(cid)
+                        await self.consume(cid)
                     finally:
                         semaphore.release()
 

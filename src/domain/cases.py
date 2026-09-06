@@ -49,6 +49,10 @@ class CaseRecord(StrictModel):
     # 이유: 계획 13 이전 레코드는 전부 접수를 마친 것이다(그때는 접수가 끝나야
     # 레코드가 생겼다).
     intake_done: bool = True
+    # 명령 채널(계획 13). api가 답을 여기 싣고 워커가 집어 간다 — 프로세스 밖에서
+    # 온 답이 워커에 닿는 유일한 길이다. answer_key는 소비 뒤에도 남긴다(멱등).
+    pending_answer: str | None = None
+    answer_key: str | None = None
                                         # 어느 종류의 질문인가(계획 12) — 재개하는 쪽이
                                         # 접수를 이어갈지 그래프를 재개할지 갈라야 한다.
                                         # None은 계획 12 이전에 파킹된 레코드이고, 그때는

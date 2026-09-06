@@ -361,6 +361,7 @@ class PatrolDaemon:
             max_concurrent=self.app.investigations.max_concurrent,
             lease_ttl_s=self.app.investigations.lease_ttl_s, ledger=self.ledger,
             max_wall_clock_s=self.app.investigations.max_wall_clock_s,
+            max_intake_turns=self.app.engine.max_intake_turns,
             snapshots=self.snapshots,
             knowledge_digests_for_site=self._digests_for_site, on_event=self.on_event,
             on_closed=self._publish_report)

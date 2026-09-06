@@ -1,3 +1,4 @@
+import asyncio
 """워커를 스크립트 LLM+스텁 어댑터+InMemorySaver로 결정론 검증한다."""
 from datetime import datetime, timezone
 
@@ -602,3 +603,67 @@ def test_접수_중인_케이스는_requeue가_집지_않는다():
     queue = CaseQueue()
     assert queue.requeue_open(repo, clock=lambda: T) == 1
     assert queue._queue.get_nowait() == "c-2"
+
+
+def test_실린_답이_있는_파킹_케이스를_requeue가_집는다():
+    repo = InMemoryCaseRepository()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q",
+                         question_kind="intake", pending_answer="답", answer_key="k"))
+    repo.save(CaseRecord(id="c-2", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q"))
+    queue = CaseQueue()
+    assert queue.requeue_open(repo, clock=lambda: T) == 1
+    assert queue._queue.get_nowait() == "c-1"          # 답 없는 파킹은 여전히 대상이 아니다
+
+
+async def test_워커가_실린_답을_소비해_접수를_이어간다():
+    # 명령 채널도 answer_case를 거친다 — 분기는 한 곳이다. 접수 질문에 파킹된
+    # 케이스로 확인한다(그래프 스레드가 필요 없어 채널 자체를 본다).
+    from src.infrastructure.llm import ScriptedLLM
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="어느 라인?",
+                         question_kind="intake", intake_done=False,
+                         pending_answer="라인 7", answer_key="k-1"))
+    deps = make_e2e_deps(store, lead=['{"target_locator": "rest:/oee", "missing": []}',
+                                      FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    queue = CaseQueue()
+    worker = InvestigationWorker(queue, repo=repo, store=store, deps_for_site=lambda g, f: deps,
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    queue.requeue_open(repo, clock=lambda: T)
+    stop = asyncio.Event()
+
+    async def _stop_soon():
+        while repo.get("c-1").status != "closed":
+            await asyncio.sleep(0.01)
+        stop.set()
+
+    await asyncio.gather(worker.run_forever(stop), asyncio.wait_for(_stop_soon(), 5))
+    record = repo.get("c-1")
+    assert record.status == "closed"
+    assert record.pending_answer is None and record.answer_key == "k-1"   # 키는 남긴다
+    assert record.target_locator == "rest:/oee"
+
+
+async def test_소비는_지운_뒤_실행한다():
+    # 지우기 전에 실행하면 실패 시 다음 requeue가 같은 답을 또 넣는다.
+    seen = []
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q",
+                         question_kind="investigation", pending_answer="답", answer_key="k-1"))
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: None, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+
+    async def _spy(case_id, answer):
+        seen.append((answer, repo.get(case_id).pending_answer))
+        return "failed"
+
+    worker.resume_once = _spy
+    await worker.consume("c-1")
+    assert seen == [("답", None)]                          # 실행 시점에 이미 지워져 있다

@@ -343,6 +343,7 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
         knowledge_digests_for_site=digests_for_site,
         max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
+        max_intake_turns=app.engine.max_intake_turns,
         on_event=on_event, on_closed=on_closed)
 
     # 접수 질문과 조사 질문을 가르는 것은 answer_case 하나다 — CLI와 계획 13의
@@ -597,6 +598,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
         knowledge_digests_for_site=digests_for_site,
         max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
+        max_intake_turns=app.engine.max_intake_turns,
         on_event=on_event, on_closed=on_closed)
 
     async def ask(question: str) -> str:
