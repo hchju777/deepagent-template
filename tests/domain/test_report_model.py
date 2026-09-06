@@ -138,3 +138,49 @@ def test_미완_태스크가_남으면_조사_실행은_경고다():
                                case_file=case_file, clock=lambda: T)
     stage = next(s for s in model.stages if s.stage == "execute")
     assert stage.mark == "warn" and "미완" in stage.note
+
+
+# ---- 계획 14: Timeline ------------------------------------------------------------------
+from src.domain.events import EngineEvent  # noqa: E402
+
+
+def _ev(seq, kind, **data):
+    return EngineEvent(event=kind, case_id="c-1", at=T, seq=seq, data=data)
+
+
+def test_Timeline은_이벤트_로그를_seq_순으로_요약한다():
+    # 요약 문구는 코드가 만든다 — 어휘 6종(규율 7)을 소비할 뿐 새 종류는 없다.
+    events = [_ev(1, "case_status_changed", status="open", reason="finding"),
+              _ev(2, "round_started", round=1, dispatched=["t-1"]),
+              _ev(3, "task_finished", task_id="t-1", role="data_prober", status="ok",
+                  evidence_ids=["ev-1"], error=None),
+              _ev(4, "question_raised", question="계획 변경?"),
+              _ev(5, "verdict_formed", verdict_type="stale_data", confidence="high", rewritten=False),
+              _ev(6, "report_ready", path="/r/c-1.html")]
+    model = build_report_model(_record(), verdict=None, evidence=[], case_file={},
+                               clock=lambda: T, events=list(reversed(events)))   # 순서를 섞어도
+    assert [e.seq for e in model.timeline] == [1, 2, 3, 4, 5, 6]
+    assert [e.summary for e in model.timeline] == [
+        "상태 → open (finding)", "라운드 1 시작 — 태스크 1개",
+        "태스크 t-1(data_prober) ok — 증거 1개", "질문: 계획 변경?",
+        "판정 stale_data (high)", "보고서 /r/c-1.html"]
+    assert model.timeline[0].at == T and model.timeline_source == "events"
+
+
+def test_이벤트_스토어가_없으면_Timeline_없음을_명시한다():
+    # 조용한 생략 금지 — 빈 목록과 "이 프로세스에는 로그가 없다"는 다른 말이다.
+    model = build_report_model(_record(), verdict=None, evidence=[], case_file={}, clock=lambda: T)
+    assert model.timeline == [] and model.timeline_source == "none"
+    model = build_report_model(_record(), verdict=None, evidence=[], case_file={},
+                               clock=lambda: T, events=[])
+    assert model.timeline == [] and model.timeline_source == "events"
+
+
+def test_모르는_data_형태에도_Timeline은_raise하지_않는다():
+    events = [_ev(1, "task_finished"),
+              _ev(2, "verdict_formed", verdict_type="stale_data", confidence="low", rewritten=True),
+              EngineEvent(event="round_started", case_id="c-1", at=T, data={"round": 2})]   # seq 없음
+    model = build_report_model(_record(), verdict=None, evidence=[], case_file={},
+                               clock=lambda: T, events=events)
+    assert [e.summary for e in model.timeline] == [
+        "라운드 2 시작 — 태스크 0개", "태스크 ?(?) ? — 증거 0개", "판정 stale_data (low) · 재작성 뒤 강등"]

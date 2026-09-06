@@ -79,3 +79,15 @@ def test_verify가_문제만_실은_청크는_판정_이벤트가_아니다():
     # verify_problems만 있는 청크는 판정이 아니라 conclude에 대한 재작성 요구다.
     assert map_update_to_events({"verify": {"verify_problems": ["없는 id ev-9 인용"]}},
                                 case_id="c-1", clock=lambda: T) == []
+
+
+def test_collect_events는_페이지를_끝까지_읽는다():
+    # 보고서는 부분 Timeline을 내면 안 된다 — since의 limit 한 페이지로 끝내면 200건
+    # 넘는 조사의 뒷부분이 조용히 빠진다.
+    from src.application.events import collect_events
+    from src.domain.events import EngineEvent, InMemoryEventStore
+    store = InMemoryEventStore()
+    for i in range(5):
+        store.append(EngineEvent(event="round_started", case_id="c-1", at=T, data={"round": i}))
+    assert [e.seq for e in collect_events(store, "c-1", page=2)] == [1, 2, 3, 4, 5]
+    assert collect_events(store, "없음") == []

@@ -13,7 +13,19 @@ stream_mode="updates"가 한 덩어리에 노드 하나만 담는 정상 동작�
 """
 from src.application.lifecycle import Clock
 from src.domain.cases import CaseStatus
-from src.domain.events import EngineEvent
+from src.domain.events import EngineEvent, EventStorePort
+
+
+def collect_events(store: EventStorePort, case_id: str, *, page: int = 200) -> list[EngineEvent]:
+    """since 페이지를 끝까지 읽는다 — 보고서는 부분 Timeline을 내면 안 된다(조용한 생략)."""
+    out: list[EngineEvent] = []
+    cursor = 0
+    while True:
+        chunk = store.since(case_id, after_seq=cursor, limit=page)
+        out.extend(chunk)
+        if len(chunk) < page:
+            return out
+        cursor = chunk[-1].seq
 
 
 def map_update_to_events(update: dict, *, case_id: str, clock: Clock,
