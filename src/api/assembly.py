@@ -27,6 +27,7 @@ class ApiSite:
     fct: str
     topology: Topology          # 접수의 locator 후보
     lead_llm: Any               # 접수 프롬프트용
+    check_names: list[str] = field(default_factory=list)   # GET /checks가 레저를 읽을 키
 
 
 @dataclass
@@ -68,7 +69,8 @@ def assemble_api(config_root: Path, repo_root: Path, env: dict, *, clock: Callab
         knowledge_root = repo_root / site_cfg.knowledge.root
         sites.append(ApiSite(gbm=ref.gbm, fct=ref.fct,
                              topology=load_topology(knowledge_root, ref.gbm, ref.fct),
-                             lead_llm=make_llm(app.llm.profiles.lead)))
+                             lead_llm=make_llm(app.llm.profiles.lead),
+                             check_names=sorted(site_cfg.patrol.checks)))
 
     p = build_persistence(app.store)
     return ApiRuntime(app=app, sites=sites, repo=p.repo, store=p.store, events=p.events,

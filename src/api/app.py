@@ -52,8 +52,10 @@ def visible_record(rt: ApiRuntime, subject: str | None, case_id: str) -> Any:
 
 def create_app(runtime: ApiRuntime) -> FastAPI:
     from src.api.routes_cases import router as cases_router
+    from src.api.routes_reads import router as reads_router
 
     app = FastAPI(title="deepagent api", docs_url=None, redoc_url=None)
     app.state.runtime = runtime
     app.include_router(cases_router, dependencies=[Depends(current_subject)])
+    app.include_router(reads_router, dependencies=[Depends(current_subject)])
     return app
