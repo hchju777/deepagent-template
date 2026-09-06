@@ -68,8 +68,9 @@ _CONCLUDE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지금
 - 모든 주장에는 실재하는 증거 id를 인용해야 한다 — 없는 id를 지어내면 안 된다.
 - complete=False인 증거를 근거로 쓰면 caveats에 그 증거 id를 명시한다.
 - 확신이 서지 않으면 verdict_type을 inconclusive로 남겨도 된다 — 억지 결론 금지.
+- 근본 원인 후보가 여럿이면 가장 유력한 것을 root_cause에, 나머지를 alternates에 유력한 순으로(최대 3) 적는다. 각 후보도 실재하는 증거 id를 인용하고, confidence(high/medium/low)와 relation(왜 후보인지, 왜 최상위가 아닌지)을 적는다. 확신이 없어도 후보는 적을 수 있다.
 - 반드시 JSON 하나만 출력한다:
-{{"verdict_type": "logic_bug", "root_cause": {{"component": "...", "evidence_ids": ["ev-1"]}}, "contributing": [], "confidence": "high", "recommendations": [], "caveats": [], "narrative": "..."}}"""
+{{"verdict_type": "logic_bug", "root_cause": {{"component": "...", "evidence_ids": ["ev-1"]}}, "alternates": [{{"component": "...", "evidence_ids": ["ev-2"], "confidence": "low", "relation": "..."}}], "contributing": [], "confidence": "high", "recommendations": [], "caveats": [], "narrative": "..."}}"""
 
 
 def _format_hypothesis_board(hypotheses):
@@ -137,6 +138,31 @@ def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
     """caveat 문자열들 안에 증거 id가 토큰 경계로 등장하는가 (ev-1 ⊄ ev-10)."""
     pattern = re.compile(rf"(?<![\w-]){re.escape(evidence_id)}(?![\w-])")
     return any(pattern.search(c) for c in caveats)
+
+
+MAX_ALTERNATES = 3     # 상한은 코드가 쥔다(규율 6) — 보고서 §2가 읽히는 길이의 한계
+
+
+def _sanitize_alternates(verdict: Verdict) -> Verdict:
+    """후보 목록의 상한·중복은 LLM이 아니라 코드가 정한다(규율 4·6). 버린 것은 caveat에.
+
+    validator로 거부하면 conclude의 파싱 실패 경로(degraded "조사 종료 불가")로 떨어져
+    후보 하나 중복됐다고 조사 전체가 실패한다 — 그래서 거부가 아니라 소독이다.
+    """
+    seen = {verdict.root_cause.component} if verdict.root_cause is not None else set()
+    kept, dropped = [], []
+    for link in verdict.alternates:
+        if link.component in seen or len(kept) >= MAX_ALTERNATES:
+            dropped.append(link.component)
+            continue
+        seen.add(link.component)
+        kept.append(link)
+    if not dropped:
+        return verdict
+    return verdict.model_copy(update={
+        "alternates": kept,
+        "caveats": verdict.caveats + [
+            f"후보 정리: {', '.join(dropped)} 제외(중복 또는 상한 {MAX_ALTERNATES} 초과)"]})
 
 
 async def _ask_llm(llm, prompt, schema):
@@ -308,7 +334,7 @@ def make_nodes(deps):
             return {"verdict": Verdict(
                 verdict_type="degraded", confidence="low",
                 narrative="conclude 출력 파싱 실패 — 조사 종료 불가", caveats=[err])}
-        return {"verdict": verdict}
+        return {"verdict": _sanitize_alternates(verdict)}
 
     async def verify(state):
         # LLM 없음 — 순수 결정론 가드레일(§2.4). 노드는 raise하지 않는다.
@@ -325,7 +351,9 @@ def make_nodes(deps):
         problems = []
 
         links = ([verdict.root_cause] if verdict.root_cause is not None else [])
-        links += list(verdict.contributing)
+        # 후보도 LLM이 인용한 id다(규율 3) — 최상위만 검사하면 후보가 환각 id를 실은 채
+        # 보고서 §2에 나간다.
+        links += list(verdict.alternates) + list(verdict.contributing)
         for link in links:
             if not link.evidence_ids:
                 problems.append(f"다리에 인용 없음: {link.component}")

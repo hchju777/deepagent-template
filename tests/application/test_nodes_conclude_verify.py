@@ -94,3 +94,47 @@ async def test_store에만_있고_state_evidence에_없는_id_인용은_문제�
     update = await make_nodes(deps)["verify"](state)
     assert update["verify_problems"]
     assert any(orphan_id in p for p in update["verify_problems"])
+
+
+# ---- 계획 14: 다중 RCA 후보 ---------------------------------------------------------------
+_VERDICT_WITH_ALTS = (
+    '{"verdict_type": "stale_data", "confidence": "high", "narrative": "n", '
+    '"root_cause": {"component": "plan-sync", "evidence_ids": ["ev-1"]}, '
+    '"alternates": [{"component": "plan-sync", "evidence_ids": ["ev-1"], "confidence": "low"}, '
+    '{"component": "twin-state", "evidence_ids": ["ev-1"], "confidence": "low", "relation": "갱신 지연"}]}')
+
+
+def test_후보는_코드가_상한과_중복을_쥔다():
+    # 규율 4·6: LLM이 5개를 내도 3개, 최상위와 같은 컴포넌트·서로 같은 컴포넌트는 버린다.
+    # 조용히 버리지 않는다 — caveat에 남긴다.
+    from src.application.nodes import _sanitize_alternates
+    v = Verdict(verdict_type="stale_data", confidence="high", narrative="n",
+                root_cause=CauseLink(component="plan-sync", evidence_ids=["ev-1"]),
+                alternates=[CauseLink(component=c, evidence_ids=["ev-1"])
+                            for c in ["plan-sync", "a", "a", "b", "c", "d"]])
+    out = _sanitize_alternates(v)
+    assert [a.component for a in out.alternates] == ["a", "b", "c"]
+    assert any("후보" in cv and "plan-sync" in cv and "d" in cv for cv in out.caveats)
+    assert _sanitize_alternates(out) is out            # 버릴 것이 없으면 그대로
+
+
+async def test_conclude는_후보를_소독해서_State에_올린다():
+    deps = _deps([_VERDICT_WITH_ALTS])
+    state = _state(evidence=[EvidenceRef(id="ev-1", source="mongo:twin_state", summary="s")])
+    update = await make_nodes(deps)["conclude"](state)
+    assert [a.component for a in update["verdict"].alternates] == ["twin-state"]
+    assert any("plan-sync" in c for c in update["verdict"].caveats)
+    # 프롬프트가 후보를 묻는다 — 규칙과 예시 둘 다.
+    assert "alternates" in str(deps.lead_llm.calls[0])
+
+
+async def test_후보의_인용도_같은_우주로_검사한다():
+    # 규율 3: 후보도 LLM이 인용한 id다. 최상위·기여 요인은 깨끗하고 후보만 더러운 형태 —
+    # 후보를 검사하지 않으면 통과해 §2에 환각 id가 나간다.
+    deps = _deps([])
+    state = _state(evidence=[EvidenceRef(id="ev-1", source="mongo:twin_state", summary="s")],
+                   verdict=Verdict(verdict_type="stale_data", confidence="high", narrative="n",
+                                   root_cause=CauseLink(component="plan-sync", evidence_ids=["ev-1"]),
+                                   alternates=[CauseLink(component="twin-state", evidence_ids=["ev-9"])]))
+    update = await make_nodes(deps)["verify"](state)
+    assert any("ev-9" in p for p in update["verify_problems"])
