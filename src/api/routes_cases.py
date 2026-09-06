@@ -3,7 +3,7 @@
 ```
 POST /cases                      202 {case_id, status, question?}   / 400 미확정 / 403 / 401
 POST /cases/{id}/intake-answers  200 {status, question?, target_locator?} / 409 / 404
-POST /cases/{id}/answers         202 {result} / 409 / 404
+POST /cases/{id}/answers         202 {result} / 409 / 404 / 503(저장소 장애)
 ```
 
 `api`는 실행자가 아니다 — `/answers`는 **기록만** 한다. 워커가 집어 간다.
@@ -95,5 +95,7 @@ async def post_answer(case_id: str, body: Answer, request: Request,
     rt = runtime_of(request)
     visible_record(rt, subject, case_id)
     result = submit_answer(case_id, body.answer, key=body.key, repo=rt.repo, clock=rt.clock)
-    status: Literal[202, 409] = 409 if result in ("not_waiting", "pending", "busy") else 202
+    status: Literal[202, 409, 503] = (503 if result == "error"
+                                      else 409 if result in ("not_waiting", "pending", "busy")
+                                      else 202)
     return JSONResponse(status_code=status, content={"result": result})

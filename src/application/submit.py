@@ -11,7 +11,8 @@ v1 인계 노트가 "데몬이 파킹 케이스를 자동으로 재개하려면 
 from datetime import datetime
 from typing import Callable, Literal
 
-SubmitResult = Literal["accepted", "duplicate", "pending", "busy", "not_waiting", "not_found"]
+SubmitResult = Literal["accepted", "duplicate", "pending", "busy", "not_waiting", "not_found",
+                       "error"]
 
 
 def submit_answer(case_id: str, answer: str, *, key: str, repo,
@@ -25,6 +26,8 @@ def submit_answer(case_id: str, answer: str, *, key: str, repo,
       두 번 넣어 F3 복구를 두 번 태우는 것을 막는다. `answer_key`를 소비 뒤에도
       지우지 않는 이유다.
     - `pending`: 아직 소비되지 않은 다른 답이 있다. 덮어쓰지 않는다.
+    - `error`: 저장소가 던졌다(장애). `not_found`로 보이면 클라이언트는 "케이스가 없다"고
+      믿고 재시도하지 않는다 — 장애는 장애라고 말한다(계획 13 인계 #11).
     - `busy`: 실행자(워커·`case resume`)가 lease를 쥐고 있다 — 잠시 뒤 다시 보내라.
       그 동안 실린 답은 실행자의 통째 save에 지워지거나 다음 질문에 소비된다.
     - `not_waiting`: 조사 질문에 파킹돼 있지 않거나, 이번 질문은 이미 답했다(워커가
@@ -34,7 +37,7 @@ def submit_answer(case_id: str, answer: str, *, key: str, repo,
     try:
         return repo.attach_answer(case_id, answer=answer, key=key, now=clock())
     except Exception:                                              # noqa: BLE001 — 무raise 계약
-        return "not_found"
+        return "error"
 
 
 # ── 케이스 제출: 스코프 → 접근 → 개설 → 첫 접수 턴 ─────────────────────────────

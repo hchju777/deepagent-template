@@ -194,3 +194,16 @@ def test_되돌리기는_다음_파킹이_없을_때만_된다():
     repo.save(repo.get("c-1").model_copy(update={"question_seq": 2, "question": "새 질문"}))
     assert repo.restore_answer("c-1", answer="답", now=T) is False
     assert repo.get("c-1").pending_answer is None
+
+
+def test_저장소_장애는_not_found가_아니라_error다():
+    # 계획 13 인계 #11: attach_answer가 던지면 not_found(404)로 보였다 — 클라이언트는
+    # "케이스가 없다"고 믿고 재시도하지 않는다. 장애는 장애라고 말한다.
+    from datetime import datetime, timezone
+    from src.application.submit import submit_answer
+
+    class _Boom:
+        def attach_answer(self, *a, **k):
+            raise RuntimeError("mongo down")
+    assert submit_answer("c-1", "a", key="k", repo=_Boom(),
+                         clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc)) == "error"
