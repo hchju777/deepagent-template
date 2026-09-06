@@ -4,7 +4,7 @@ api는 실행자가 아니다: 여기 어느 테스트도 워커를 만들지 �
 실리는 것까지만 본다.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -217,3 +217,14 @@ def test_접수_파킹은_이벤트를_낸다():
     client.post(f"/cases/{cid}/intake-answers", json={"answer": "라인 7"})
     statuses = [e.data.get("status") for e in rt.events.since(cid)]
     assert statuses == ["open", "awaiting_human", "open"]
+
+
+def test_실행자가_잡고_있는_동안의_답은_409_busy다(client, rt):
+    # 실행자(워커·case resume)가 lease를 쥔 동안 실린 답은 통째 덤프에 지워지거나 다음
+    # 질문에 소비된다 — 잠시 뒤 다시 보내라는 뜻의 busy. pending(덮지 않는다)과 다르다.
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+    rt.repo.save(rt.repo.get(cid).model_copy(update={
+        "status": "awaiting_human", "question": "q", "question_kind": "investigation",
+        "question_seq": 1, "owner": "w-1", "lease_until": T + timedelta(seconds=60)}))
+    r = client.post(f"/cases/{cid}/answers", json={"answer": "x", "key": "k"})
+    assert r.status_code == 409 and r.json()["result"] == "busy"

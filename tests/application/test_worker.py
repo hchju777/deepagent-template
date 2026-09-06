@@ -762,3 +762,103 @@ async def test_소비는_첫_읽기가_터져도_raise하지_않는다():
                                  clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
                                  ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
     assert await worker.consume("c-1") == "failed"
+
+
+# ---- 검증 리뷰 2차(계획 13): 답 채널의 supersede는 lease 아래에서만 -----------------------
+from tests.application.test_graph_e2e import INTEGRATE_CONCLUDE as _E2E_CONCLUDE  # noqa: E402
+from tests.application.test_graph_e2e import _mongo_call as _e2e_mongo_call, _report as _e2e_report  # noqa: E402
+
+_VERDICT_EV3 = ('{"verdict_type": "stale_data", "confidence": "high", "narrative": "n", '
+                '"root_cause": {"component": "plan-sync", "evidence_ids": ["ev-3"]}}')
+
+
+def _closing_worker(repo, store, deps_for_site=None):
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, ASK_JSON, _E2E_CONCLUDE, _VERDICT_EV3],
+                         subagent=[_e2e_mongo_call("twin_state"), _e2e_report(["ev-3"])])
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"autonomous_question_policy": "park"})
+    return InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                               deps_for_site=deps_for_site or (lambda g, f: deps),
+                               checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                               max_concurrent=1, lease_ttl_s=60, ledger=InMemoryLedger(),
+                               knowledge_digests_for_site=lambda g, f: {}), deps
+
+
+async def test_재개는_실린_답을_lease_아래에서_가져가_증거로_남긴다():
+    # 리뷰 L4: answer_case가 lease 없이 take하면 resume이 busy로 끝나도 API 답은 이미
+    # 버려져 있다. 가져가는 자리는 claim 뒤 — 거기서는 attach가 거절되므로 본 것이 전부다.
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    _open_case(repo, store)
+    worker, _ = _closing_worker(repo, store)
+    assert await worker.run_once("c-1") == "awaiting_human"
+    assert repo.attach_answer("c-1", answer="API의 Q1 답", key="k-1", now=T) == "accepted"
+    assert await worker.resume_once("c-1", "CLI의 Q1 답") == "closed"
+    after = repo.get("c-1")
+    assert after.pending_answer is None and after.answered_seq == 1
+    dropped = [r for r in store.list_evidence("c-1") if r.source == "human:answer_dropped"]
+    assert len(dropped) == 1 and store.get_evidence("c-1", dropped[0].id)["reason"] == "superseded"
+
+
+async def test_재개_중_창에_실리는_답은_busy로_거절된다():
+    # 리뷰 M1: claim 뒤·save 앞(deps_for_site가 불리는 자리)에 API 답이 착지하면
+    # 통째 덤프가 지우거나(b) 파킹을 넘어 살아남아 Q2에 소비됐다(a). lease가 살아
+    # 있는 동안 attach는 문을 안 연다.
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    _open_case(repo, store)
+    seen = []
+    holder = {}
+
+    def deps_for_site(g, f):
+        seen.append(repo.attach_answer("c-1", answer="창 안의 답", key="k-w", now=T))
+        return holder["deps"]
+
+    worker, deps = _closing_worker(repo, store, deps_for_site)
+    holder["deps"] = deps
+    assert await worker.run_once("c-1") == "awaiting_human"
+    assert await worker.resume_once("c-1", "CLI 답") == "closed"
+    assert seen[-1] == "busy", seen
+    after = repo.get("c-1")
+    assert after.pending_answer is None and after.answer_key is None
+    assert not any(r.source == "human:answer_dropped" for r in store.list_evidence("c-1"))
+
+
+async def test_소비는_답_없는_파킹을_처음부터_재조사하지_않는다():
+    # 리뷰 B1: 실린 답 때문에 큐에 들어간 항목이 (CLI가 답을 가져간 뒤) 소비되면
+    # take가 None → run_once → awaiting_human을 "회수한 investigating"으로 보고
+    # 새 스레드로 처음부터 조사했다. 답 없는 파킹은 재개할 재료가 없다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, ASK_JSON])
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"autonomous_question_policy": "park"})
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "awaiting_human"
+    threads_before = list(repo.get("c-1").thread_ids)
+    assert await worker.consume("c-1") == "stale"
+    after = repo.get("c-1")
+    assert after.status == "awaiting_human" and after.thread_ids == threads_before
+    assert after.owner is None                                  # lease는 돌려줬다
+
+
+async def test_재개가_stale이면_가져간_답을_증거로_남긴다():
+    # 리뷰 L6: restore 분기가 busy/skipped/not_ours만 봐서 stale(그 사이 닫힘)이면
+    # 가져간 답이 증거 없이 사라졌다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q",
+                         question_kind="investigation", question_seq=1,
+                         pending_answer="옛 답", answer_key="k-1"))
+
+    async def closed_meanwhile(case_id, answer):
+        repo.save(repo.get(case_id).model_copy(update={"status": "closed", "question": None}))
+        return "stale"
+
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: SimpleNamespace(topology=None),
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    worker.resume_once = closed_meanwhile
+    assert await worker.consume("c-1") == "stale"
+    assert any(r.source == "human:answer_dropped" for r in store.list_evidence("c-1"))

@@ -23,7 +23,7 @@ from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
 from src.domain.cases import (CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
-                              lease_is_free)
+                              lease_is_free, lease_is_held)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
 from src.domain.snapshot import VerdictSnapshot, VerdictSnapshotPort
@@ -227,11 +227,17 @@ class MongoCaseRepository(CaseRepositoryPort):
         # 두 바퀴: 첫 CAS가 지면 다시 읽어 **왜** 졌는지로 분류하고 한 번 더 시도한다.
         # 재귀로 두면 끝이 없다 — 술어가 문서와 영원히 안 맞는 경우(필드 부재를
         # 기본값으로 걸었던 버그)에 RecursionError였다. 두 번 다 지면 남이 계속 바꾸는
-        # 중이니 not_waiting으로 물러난다 — 쓴 것이 없으니 같은 key의 재시도가 안전하다.
+        # 중이니 busy(잠시 뒤 다시)로 물러난다 — 쓴 것이 없으니 같은 key의 재시도가 안전하다.
+        first_seq = None
         for _ in range(2):
             doc = self._db.cases.find_one({"id": case_id})
             if doc is None:
                 return "not_found"
+            if first_seq is not None and doc.get("question_seq") != first_seq:
+                # 첫 CAS가 진 이유가 파킹(질문이 바뀜)이면 둘째 바퀴가 같은 답을 새 질문에
+                # 싣는다 — 클라이언트는 옛 질문을 보고 썼다(리뷰 L2).
+                return "not_waiting"
+            first_seq = doc.get("question_seq")
             record = self._to_record(doc)
             if record.answer_key == key:
                 return "duplicate"
@@ -240,18 +246,21 @@ class MongoCaseRepository(CaseRepositoryPort):
                 return "not_waiting"
             if record.pending_answer is not None:
                 return "pending"
+            if lease_is_held(record, now):
+                return "busy"
             # 술어는 **문서에서 읽은 원값**(doc.get)이지 record의 기본값이 아니다 — 필드가
             # 없는 문서에 {"answered_seq": 0}은 안 맞고 {"answered_seq": None}은 부재에도
             # 맞는다(Mongo의 null 의미론). 인계 #8이 권하는 마이그레이션(question_seq만
-            # $set)이 정확히 그런 문서를 만든다. 워커가 그 사이 claim해 investigating이
-            # 됐거나 take로 answered_seq를 올렸으면 진다(리뷰 S7·S2-F).
+            # $set)이 정확히 그런 문서를 만든다. 워커가 그 사이 claim했거나(owner/lease_until —
+            # claim은 상태를 안 바꾼다) take로 answered_seq를 올렸으면 진다(리뷰 S7·S2-F).
             guard = {"status": "awaiting_human", "question_kind": "investigation",
                      "pending_answer": None, "question_seq": doc.get("question_seq"),
-                     "answered_seq": doc.get("answered_seq"), "answer_key": doc.get("answer_key")}
+                     "answered_seq": doc.get("answered_seq"), "answer_key": doc.get("answer_key"),
+                     "owner": doc.get("owner"), "lease_until": doc.get("lease_until")}
             if self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,
                                           "updated_at": now.isoformat()}):
                 return "accepted"
-        return "not_waiting"
+        return "busy"
 
     def take_answer(self, case_id, *, now):
         doc = self._db.cases.find_one({"id": case_id})

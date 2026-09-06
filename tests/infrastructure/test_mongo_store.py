@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import mongomock
 import pytest
@@ -256,7 +256,8 @@ def _parked_doc(repo, cid="c-1", **kw):
 
 def test_attach는_필드_셋만_바꾸고_CAS로_진다(db):
     repo = MongoCaseRepository(db)
-    _parked_doc(repo, owner="w-1", thread_ids=["t-1"])
+    # owner가 남아 있어도 lease가 만료됐으면 잡은 게 아니다 — 살아 있으면 busy(아래 테스트).
+    _parked_doc(repo, owner="w-1", lease_until=T - timedelta(seconds=1), thread_ids=["t-1"])
     assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "accepted"
     rec = repo.get("c-1")
     assert rec.pending_answer == "답" and rec.answer_key == "k-1"
@@ -363,3 +364,91 @@ def test_restore도_없는_케이스는_KeyError다(db):
     repo = MongoCaseRepository(db)
     with pytest.raises(KeyError):
         repo.restore_answer("없음", answer="x", now=T)
+
+
+# ---- 검증 리뷰 2차: lease가 살아 있는 동안 attach는 문을 안 연다 ---------------------------
+def _hold_lease(db, cid="c-1", *, until):
+    db.cases.update_one({"id": cid}, {"$set": {"owner": "w-1", "lease_until": until.isoformat()}})
+
+
+def test_lease가_살아_있으면_attach는_busy다(db):
+    # 실행자가 잡고 있는 동안 실린 답은 resume_once의 통째 덤프에 지워지거나(M1-b)
+    # 파킹을 넘어 살아남아 다음 질문에 소비된다(M1-a). 만료된 lease는 잡은 게 아니다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    _hold_lease(db, until=T + timedelta(seconds=60))
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "busy"
+    _hold_lease(db, until=T - timedelta(seconds=1))
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "accepted"
+
+
+def test_attach의_CAS는_읽기_뒤의_claim만으로도_진다(db):
+    # claim은 상태를 안 바꾼다(owner/lease_until만) — status만 걸면 이 경우를 못 본다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    _interleave(db, "c-1", before_cas={"owner": "w-1",
+                                       "lease_until": (T + timedelta(seconds=60)).isoformat()})
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "busy"
+    assert db.cases.find_one({"id": "c-1"}).get("pending_answer") is None
+
+
+def test_attach의_재분류는_두_바퀴에서_멈춘다(db):
+    # 리뷰 M2(b): 재귀를 루프로 바꿨다는 주장에 테스트가 없었다 — 매번 지게 만들면
+    # 재귀는 RecursionError, range(3)은 세 번 쓴다. 두 번 진 것은 남이 계속 바꾸는
+    # 중이라는 뜻이니 not_waiting(재시도 말라)이 아니라 busy(잠시 뒤 다시)다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    real, calls = db.cases.update_one, []
+
+    def always_lose(filter, update, *a, **kw):
+        if "$set" in update and "pending_answer" in update["$set"]:
+            calls.append(1)
+            real({"id": "c-1"}, {"$set": {"answer_key": f"k-other-{len(calls)}"}})
+        return real(filter, update, *a, **kw)
+
+    db.cases.update_one = always_lose
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "busy"
+    assert len(calls) == 2
+
+
+def test_attach는_그_사이_질문이_바뀌면_둘째_바퀴에서_싣지_않는다(db):
+    # 리뷰 L2: 첫 CAS가 Q1→Q2 파킹 때문에 졌는데 둘째 바퀴가 같은 답을 Q2에 실었다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    _interleave(db, "c-1", before_cas={"question_seq": 2, "question": "Q2"})
+    assert repo.attach_answer("c-1", answer="Q1을 보고 쓴 답", key="k-1", now=T) == "not_waiting"
+    assert db.cases.find_one({"id": "c-1"}).get("pending_answer") is None
+
+
+@pytest.mark.parametrize("write, expected", [
+    ({"question_kind": "intake"}, "not_waiting"),
+    ({"pending_answer": "남의 답", "answer_key": "k-other"}, "pending"),
+    ({"answered_seq": 1}, "not_waiting"),
+])
+def test_attach의_CAS는_술어_필드_하나만_바뀌어도_진다(db, write, expected):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    _interleave(db, "c-1", before_cas=write)
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == expected
+
+
+@pytest.mark.parametrize("write", [{"answer_key": "k-2"}, {"question_seq": 2, "question": "Q2"}])
+def test_take의_CAS는_key나_질문이_바뀌면_진다(db, write):
+    # 리뷰 M2: take 술어의 answer_key·question_seq(ABA)에 테스트가 없었다 — 같은 글자의
+    # 다른 답, 또는 새 질문에 실린 답을 옛 답으로 가져가면 answered_seq가 틀어진다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    repo.attach_answer("c-1", answer="답", key="k-1", now=T)
+    _interleave(db, "c-1", before_cas=write)
+    assert repo.take_answer("c-1", now=T) is None
+    assert db.cases.find_one({"id": "c-1"})["pending_answer"] == "답"     # 남의 것은 그대로
+
+
+@pytest.mark.parametrize("write", [{"status": "closed"}, {"pending_answer": "x"}])
+def test_restore의_CAS는_상태나_pending이_바뀌면_진다(db, write):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    repo.attach_answer("c-1", answer="답", key="k-1", now=T)
+    repo.take_answer("c-1", now=T)
+    _interleave(db, "c-1", before_cas=write)
+    assert repo.restore_answer("c-1", answer="답", now=T) is False

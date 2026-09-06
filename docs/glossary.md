@@ -120,7 +120,8 @@ config에 적으면 사업부·법인마다 다르고 매일 바뀌어 즉시 �
 `question_seq`/`answered_seq` 쌍이 "이 답이 **이** 질문의 답인가"를 지킨다 — 워커가
 가져간 뒤 그래프가 새 질문으로 파킹하기 전의 창에서 둘째 답이 들어와도 옛 질문의
 답으로 새 질문을 재개하지 않는다. 직접 답(`case resume`)이 실린 답보다 먼저 오면
-직접 답이 이기고 실린 답은 `human:answer_dropped`로 남는다.
+직접 답이 이기고 실린 답은 `human:answer_dropped`로 남는다 — 실행자가 lease를 잡은
+뒤에 가져가며, lease가 살아 있는 동안 `attach_answer`는 `busy`다.
 
 **intake_done** — requeue의 문. 접수 중인 케이스도 `open`이라 이 표시가 없으면
 데몬이 그것을 집어 대상 없이 조사한다(계획 12의 F1 경합이 그것이었다). 사람이

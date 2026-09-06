@@ -95,5 +95,5 @@ async def post_answer(case_id: str, body: Answer, request: Request,
     rt = runtime_of(request)
     visible_record(rt, subject, case_id)
     result = submit_answer(case_id, body.answer, key=body.key, repo=rt.repo, clock=rt.clock)
-    status: Literal[202, 409] = 409 if result in ("not_waiting", "pending") else 202
+    status: Literal[202, 409] = 409 if result in ("not_waiting", "pending", "busy") else 202
     return JSONResponse(status_code=status, content={"result": result})

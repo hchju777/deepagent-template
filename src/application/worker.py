@@ -578,6 +578,12 @@ class InvestigationWorker:
                 # 가드가 없으면 닫힌 케이스를 처음부터 다시 조사해 판정과 케이스 파일을
                 # 덮고, close_case가 closed→closed로 터져 _fail이 흔적까지 지운다.
                 return "stale"
+            if leased.status == "awaiting_human":
+                # 답 없는 파킹은 재개할 재료가 없다. 실린 답 때문에 큐에 들어간 항목이
+                # 소비되기 전에 다른 경로(case resume)가 그 답을 가져가면 여기로 오는데,
+                # 아래 else 분기는 이것을 "회수한 investigating"으로 보고 새 스레드로
+                # 처음부터 조사해 원래 스레드와 사람에게 물은 질문을 버린다(리뷰 B1).
+                return "stale"
             if leased.status == "open":
                 record = transition(leased, "investigating", clock=self._clock)
                 became_investigating = True
@@ -644,6 +650,20 @@ class InvestigationWorker:
                 return "busy"
             if leased.status == "closed":
                 return "stale"                                      # run_once와 같은 이유
+            if leased.pending_answer is not None:
+                # 채널에 실린 답이 있는데 직접 답(case resume)이 먼저 왔다. **lease 아래에서**
+                # 가져간다 — attach는 lease가 살아 있으면 busy로 거절하므로 여기서 본 것이
+                # 전부다. 두고 재개하면 그래프가 다음 질문으로 파킹했을 때 requeue가 옛
+                # 질문의 답을 새 질문에 소비하고(블로커 3의 혼용 경로), 아래 통째 save가
+                # 지우면 202를 받은 답이 증거 없이 사라진다. 직접 답이 이긴다(사람이 지금
+                # 보고 있는 쪽). lease 밖(answer_case)에서 하면 claim이 busy로 끝나도 답은
+                # 이미 버려진 뒤다(리뷰 L4).
+                superseded = self._repo.take_answer(case_id, now=self._clock())
+                if superseded is not None:
+                    self._store.put_evidence(
+                        case_id, "human:answer_dropped",
+                        {"answer": superseded, "reason": "superseded"}, as_of=self._clock())
+                leased = self._repo.get(case_id)    # take가 바꾼 필드를 들고 가야 save가 안 되돌린다
             record = transition(leased, "investigating", clock=self._clock)
 
             deps = self._deps_for_site(record.gbm, record.fct)
@@ -693,7 +713,7 @@ class InvestigationWorker:
         """큐에서 나온 케이스 하나를 처리한다 — 실린 답이 있으면 그것부터.
 
         답은 `take_answer`로 **가져가며 지운다**(answered_seq를 맞춘다). 지운 뒤
-        소비가 busy/skipped/not_ours로 끝나면 `restore_answer`로 되돌린다 — 그 사이
+        소비가 busy/skipped/not_ours/stale로 끝나면 `restore_answer`로 되돌린다 — 그 사이
         그래프가 새 질문으로 파킹했으면 되돌리지 않고(옛 답이 새 질문에 붙는다)
         `human:answer_dropped` 증거로 남긴다. "지운 뒤 실패해도 증거로 남아 잃지
         않는다"는 전 커밋의 주장은 거짓이었다 — 그 경로들은 증거 박제 전에 끝난다.
@@ -718,7 +738,7 @@ class InvestigationWorker:
                 topology=getattr(deps, "topology", None), worker=self, clock=self._clock,
                 max_intake_turns=self._max_intake_turns,
                 interaction_policy=record.interaction_policy, on_event=self._on_event)
-            if result in ("busy", "skipped", "not_ours"):
+            if result in ("busy", "skipped", "not_ours", "stale"):
                 if not self._repo.restore_answer(case_id, answer=answer, now=self._clock()):
                     self._store.put_evidence(case_id, "human:answer_dropped",
                                              {"answer": answer, "reason": result},

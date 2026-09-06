@@ -527,9 +527,12 @@ save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_
    재귀"는 고쳤고, 재분류는 두 바퀴로 상한을 뒀다).
 9. **`POST /cases/{id}/answers`에 `question_seq` If-Match가 없다** — 클라이언트가 Q1을 보고
    답하는 사이 그래프가 Q2로 파킹하면 그 답이 Q2에 실린다(요청에 `question_seq`를 실어
-   서버가 대조하면 막힌다). seq 쌍은 **워커 경로**의 옛 답 소비만 막는다.
+   서버가 대조하면 막힌다). CLI `case resume`도 같다 — 사람이 Q1을 보고 쓰는 사이 데몬이
+   API 답으로 Q1을 소비해 Q2로 파킹하면 CLI의 답이 Q2에 실린다. seq 쌍은 **서버 안의**
+   옛 답 소비만 막는다.
 10. **혼용 경로의 우선순위는 코드가 정했다** — API로 실린 답이 있는데 CLI `case resume`이
     먼저 오면 직접 답이 이기고 실린 답은 `human:answer_dropped`(reason=superseded)로
-    남는다. 반대(실린 답 우선, CLI는 409)가 맞다고 보면 `answer_case`의 분기 하나다.
+    남는다. `resume_once`가 lease를 잡은 뒤에 가져가고, lease가 살아 있는 동안 attach는
+    `busy`라 창이 없다. 반대(실린 답 우선, CLI는 거절)가 맞다고 보면 그 분기 하나다.
 11. **`submit_answer`의 포괄 except**(`attach_answer`가 던지면 `not_found`)는 테스트가
     없다 — 저장소 장애가 404로 보이는 것이 맞는지 계획 14에서 다시 본다.

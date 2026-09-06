@@ -11,7 +11,7 @@ v1 인계 노트가 "데몬이 파킹 케이스를 자동으로 재개하려면 
 from datetime import datetime
 from typing import Callable, Literal
 
-SubmitResult = Literal["accepted", "duplicate", "pending", "not_waiting", "not_found"]
+SubmitResult = Literal["accepted", "duplicate", "pending", "busy", "not_waiting", "not_found"]
 
 
 def submit_answer(case_id: str, answer: str, *, key: str, repo,
@@ -25,6 +25,8 @@ def submit_answer(case_id: str, answer: str, *, key: str, repo,
       두 번 넣어 F3 복구를 두 번 태우는 것을 막는다. `answer_key`를 소비 뒤에도
       지우지 않는 이유다.
     - `pending`: 아직 소비되지 않은 다른 답이 있다. 덮어쓰지 않는다.
+    - `busy`: 실행자(워커·`case resume`)가 lease를 쥐고 있다 — 잠시 뒤 다시 보내라.
+      그 동안 실린 답은 실행자의 통째 save에 지워지거나 다음 질문에 소비된다.
     - `not_waiting`: 조사 질문에 파킹돼 있지 않거나, 이번 질문은 이미 답했다(워커가
       가져간 뒤 새 파킹 전) — 옛 질문의 답이 새 질문에 붙지 않게. 접수 질문은
       `/intake-answers`로만 답한다(둘을 섞으면 워커가 접수 답을 조사 답으로 재소비한다).

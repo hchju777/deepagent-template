@@ -89,6 +89,19 @@ def lease_is_free(record: CaseRecord, owner: str, now: datetime) -> bool:
     return record.lease_until is not None and record.lease_until < now
 
 
+def lease_is_held(record: CaseRecord, now: datetime) -> bool:
+    """누군가 지금 lease를 쥐고 있는가 — owner가 있고 만료되지 않았을 때.
+
+    lease_is_free의 부정이 아니다: 그쪽은 "이 owner가 잡을 수 있는가"라 자기 것이면
+    True다. 답 채널(attach_answer)이 묻는 것은 "실행자가 붙어 있는가"이고 그 실행자가
+    누구든 상관없다 — 실행자가 쥔 동안 실린 답은 통째 save에 지워지거나(리뷰 M1-b)
+    파킹을 넘어 살아남아 다음 질문에 소비된다(M1-a).
+    """
+    if record.owner is None:
+        return False
+    return record.lease_until is None or record.lease_until >= now
+
+
 class CaseRepositoryPort(ABC):
     """케이스 저장소 포트."""
 
@@ -126,10 +139,11 @@ class CaseRepositoryPort(ABC):
     def attach_answer(self, case_id: str, *, answer: str, key: str, now: datetime) -> str:
         """답을 조건부로 싣는다 — 필드 셋(`pending_answer`·`answer_key`·`updated_at`)만.
 
-        조건: awaiting_human · 조사 질문 · pending 없음 · question_seq > answered_seq.
-        전체 레코드 save로 싣으면 그 사이 워커가 잡은 lease·상태·스레드를 되돌려
-        조사가 죽는다(리뷰 S7). `claim`처럼 저장소가 한 동작으로 판정해야 한다.
-        반환: accepted / duplicate / pending / not_waiting / not_found.
+        조건: awaiting_human · 조사 질문 · pending 없음 · question_seq > answered_seq ·
+        lease 없음. 전체 레코드 save로 싣으면 그 사이 워커가 잡은 lease·상태·스레드를
+        되돌려 조사가 죽는다(리뷰 S7). `claim`처럼 저장소가 한 동작으로 판정해야 한다.
+        반환: accepted / duplicate / pending / busy / not_waiting / not_found.
+        `busy`는 실행자가 lease를 쥔 동안 — 잠시 뒤 다시 보내라(`pending`은 덮지 않는다).
         """
         pass
 
@@ -198,6 +212,8 @@ class InMemoryCaseRepository(CaseRepositoryPort):
             return "not_waiting"
         if record.pending_answer is not None:
             return "pending"
+        if lease_is_held(record, now):
+            return "busy"
         self._cases[case_id] = record.model_copy(update={
             "pending_answer": answer, "answer_key": key, "updated_at": now})
         return "accepted"
