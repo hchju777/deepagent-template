@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 """워커를 스크립트 LLM+스텁 어댑터+InMemorySaver로 결정론 검증한다."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -862,3 +862,16 @@ async def test_재개가_stale이면_가져간_답을_증거로_남긴다():
     worker.resume_once = closed_meanwhile
     assert await worker.consume("c-1") == "stale"
     assert any(r.source == "human:answer_dropped" for r in store.list_evidence("c-1"))
+
+
+def test_lease_is_held는_만료_순간까지_쥔_것으로_본다():
+    # 리뷰 L-c: 경계(>= vs >)와 lease_until 없는 owner — 둘 다 lease_is_free와 정합해야
+    # 한다(그쪽은 lease_until < now일 때만 남의 것을 뺏는다).
+    from src.domain.cases import lease_is_held
+    base = dict(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                created_at=T, updated_at=T)
+    assert lease_is_held(CaseRecord(**base, owner="w-1", lease_until=T), now=T) is True
+    assert lease_is_held(CaseRecord(**base, owner="w-1", lease_until=T - timedelta(seconds=1)),
+                         now=T) is False
+    assert lease_is_held(CaseRecord(**base, owner="w-1"), now=T) is True       # 만료 없음 = 영원
+    assert lease_is_held(CaseRecord(**base), now=T) is False

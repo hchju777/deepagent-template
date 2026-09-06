@@ -421,9 +421,14 @@ def test_attach는_그_사이_질문이_바뀌면_둘째_바퀴에서_싣지_않
 
 
 @pytest.mark.parametrize("write, expected", [
+    # 각 쓰기는 술어 필드 **하나만** 바꾼다 — 짝 필드를 같이 바꾸면 나머지가 대신 잡아
+    # 그 필드를 술어에서 빼도 초록이다(리뷰 L-a). status는 중복이 아니다: sweep_timeouts→
+    # close_case는 lease 없이 상태만 바꾸므로, 빠지면 닫힌 케이스에 답이 착지한다.
+    ({"status": "closed"}, "not_waiting"),
     ({"question_kind": "intake"}, "not_waiting"),
-    ({"pending_answer": "남의 답", "answer_key": "k-other"}, "pending"),
+    ({"pending_answer": "남의 답"}, "pending"),
     ({"answered_seq": 1}, "not_waiting"),
+    ({"owner": "w-9"}, "busy"),
 ])
 def test_attach의_CAS는_술어_필드_하나만_바뀌어도_진다(db, write, expected):
     repo = MongoCaseRepository(db)

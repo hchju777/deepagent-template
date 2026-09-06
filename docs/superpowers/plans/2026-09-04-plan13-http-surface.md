@@ -536,3 +536,10 @@ save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_
     `busy`라 창이 없다. 반대(실린 답 우선, CLI는 거절)가 맞다고 보면 그 분기 하나다.
 11. **`submit_answer`의 포괄 except**(`attach_answer`가 던지면 `not_found`)는 테스트가
     없다 — 저장소 장애가 404로 보이는 것이 맞는지 계획 14에서 다시 본다.
+12. **같은 owner의 중복 큐 항목이 살아 있는 조사를 처음부터 재시작한다**(계획 4b 이래,
+    3차 검증 리뷰 W3). `CaseQueue`에 중복 제거가 없고 `requeue_job`(30초)이 소비 안 된 id를
+    또 넣으므로, 슬롯 포화 뒤 첫 항목이 `investigating`(자기 lease)으로 돌기 시작한 직후
+    둘째 항목이 소비되면 `run_once`→`claim`(같은 owner는 항상 재획득)→"회수한 investigating"
+    분기→새 스레드. `awaiting_human` 가드는 이것을 막지 않는다. 후속은 큐 중복 제거(진행
+    중인 id 집합) 또는 `run_once`가 claim 전에 "같은 owner의 lease가 아직 살아 있으면
+    busy"로 물러나기 — 후자는 재기동한 데몬의 자기 케이스 회수를 ttl만큼 늦춘다.
