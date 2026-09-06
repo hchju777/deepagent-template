@@ -304,7 +304,9 @@ investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡�
 답을 레코드의 `pending_answer`에 싣고, `requeue_job`(기본 30초)이 답이 실린
 `awaiting_human`을 큐에 넣으면 워커가 `answer_case`로 소비한다. 답이 **없는**
 파킹은 여전히 대상이 아니다(재개할 재료가 없다 — `run_once`는 답 없는 `awaiting_human`을
-`stale`로 돌려보낸다). 두 채널이 겹치면 — 실린 답이 있는데 `case resume`이 먼저 오면 —
+`stale`로 돌려보낸다). 큐는 같은 id를 두 번 들고 있지 않는다(큐 안이든 소비 중이든) —
+슬롯 포화 뒤 `requeue_job`의 중복 항목이 살아 있는 조사를 새 스레드로 처음부터 재시작하던
+결함(계획 4b 이래, 계획 13 3차 검증 리뷰 W3)의 픽스다. 소비자는 끝에 `CaseQueue.done`을 부른다. 두 채널이 겹치면 — 실린 답이 있는데 `case resume`이 먼저 오면 —
 `resume_once`가 **lease를 잡은 뒤** 실린 답을 가져가 `human:answer_dropped`(superseded)
 증거로 남기고 직접 답으로 재개한다. 실행자가 lease를 쥔 동안 `attach_answer`는 `busy`로
 거절한다 — 그 창에 실린 답은 실행자의 통째 save에 지워지거나 다음 질문에 소비된다.

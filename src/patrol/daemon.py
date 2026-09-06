@@ -199,9 +199,11 @@ class PatrolDaemon:
     async def requeue_job(self) -> None:
         """열린 케이스와 만료 lease를 다시 큐에 넣는다.
 
-        중복 투입은 해롭지 않다 — run_once가 claim에 실패하면 "busy"를 돌려주고
-        끝난다. 반대로 재스캔이 없으면 다른 프로세스가 연 케이스를 영원히 못 본다.
-        다른 잡과 같이 절대 raise하지 않는다.
+        중복 투입은 큐가 걸러낸다(`CaseQueue`가 큐 안·소비 중인 id를 기억한다). 예전
+        문장 "중복은 해롭지 않다, claim이 busy를 낸다"는 거짓이었다 — 같은 owner는 claim에
+        성공해 살아 있는 조사를 새 스레드로 재시작했다(계획 13 3차 검증 W3). 반대로
+        재스캔이 없으면 다른 프로세스가 연 케이스를 영원히 못 본다. 다른 잡과 같이
+        절대 raise하지 않는다.
         """
         try:
             self.queue.requeue_open(self.repo, clock=self.clock)

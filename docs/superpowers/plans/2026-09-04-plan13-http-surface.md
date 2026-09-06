@@ -542,4 +542,4 @@ save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_
     둘째 항목이 소비되면 `run_once`→`claim`(같은 owner는 항상 재획득)→"회수한 investigating"
     분기→새 스레드. `awaiting_human` 가드는 이것을 막지 않는다. 후속은 큐 중복 제거(진행
     중인 id 집합) 또는 `run_once`가 claim 전에 "같은 owner의 lease가 아직 살아 있으면
-    busy"로 물러나기 — 후자는 재기동한 데몬의 자기 케이스 회수를 ttl만큼 늦춘다.
+    busy"로 물러나기 — 후자는 재기동한 데몬의 자기 케이스 회수를 ttl만큼 늦춘다. **→ 머지 직후 큐 중복 제거로 갚았다**(`CaseQueue._held` + `run_forever`의 `done`).
