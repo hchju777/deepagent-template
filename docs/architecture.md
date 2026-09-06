@@ -303,7 +303,10 @@ investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡�
 미해결로 종결한다. **파킹 케이스의 자동 재개는 계획 13이 열었다** — `POST /answers`가
 답을 레코드의 `pending_answer`에 싣고, `requeue_job`(기본 30초)이 답이 실린
 `awaiting_human`을 큐에 넣으면 워커가 `answer_case`로 소비한다. 답이 **없는**
-파킹은 여전히 대상이 아니다(재개할 재료가 없다). 데몬은 지금도 `resume_once`를
+파킹은 여전히 대상이 아니다(재개할 재료가 없다). 두 채널이 겹치면 — 실린 답이
+있는데 `case resume`이 먼저 오면 — 직접 답이 이기고 실린 답은 `human:answer_dropped`
+증거로 남는다(`answer_case`가 가져간다; 그냥 두면 그래프가 다음 질문으로 파킹했을 때
+requeue가 옛 질문의 답을 새 질문에 소비한다). 데몬은 지금도 `resume_once`를
 직접 부르지 않는다 — 워커가 `answer_case`를 거쳐 부른다. `case resume`은 v1 그대로
 인라인 실행자다(그 프로세스에는 어댑터가 있다); `api`만이 스펙 §5.2-F2가 말한
 "실행자가 아닌 클라이언트"다.

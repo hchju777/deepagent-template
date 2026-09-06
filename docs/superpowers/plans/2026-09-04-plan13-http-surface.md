@@ -521,4 +521,15 @@ save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_
    (`boot.py` 주석은 이미 그렇게 했다).
 8. **계획 13 이전에 파킹된 레코드**는 `question_seq=0`이라 `attach_answer`가 `not_waiting`을
    낸다 — CLI `case resume`은 그 필드를 안 보므로 그쪽으로는 답할 수 있다. 배포된 것이
-   없어 마이그레이션은 하지 않았다.
+   없어 마이그레이션은 하지 않았다. 한다면 `question_seq`만 `$set`해도 된다 — Mongo
+   구현의 CAS 술어는 문서의 **원값**(부재는 `null`로 맞는다)을 쓰므로 `answered_seq`
+   부재는 안전하다(검증 리뷰가 잡은 "부재 필드 ≠ 기본값 0 → CAS가 영원히 져 무한
+   재귀"는 고쳤고, 재분류는 두 바퀴로 상한을 뒀다).
+9. **`POST /cases/{id}/answers`에 `question_seq` If-Match가 없다** — 클라이언트가 Q1을 보고
+   답하는 사이 그래프가 Q2로 파킹하면 그 답이 Q2에 실린다(요청에 `question_seq`를 실어
+   서버가 대조하면 막힌다). seq 쌍은 **워커 경로**의 옛 답 소비만 막는다.
+10. **혼용 경로의 우선순위는 코드가 정했다** — API로 실린 답이 있는데 CLI `case resume`이
+    먼저 오면 직접 답이 이기고 실린 답은 `human:answer_dropped`(reason=superseded)로
+    남는다. 반대(실린 답 우선, CLI는 409)가 맞다고 보면 `answer_case`의 분기 하나다.
+11. **`submit_answer`의 포괄 except**(`attach_answer`가 던지면 `not_found`)는 테스트가
+    없다 — 저장소 장애가 404로 보이는 것이 맞는지 계획 14에서 다시 본다.

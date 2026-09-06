@@ -19,7 +19,8 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
                       worker, clock: Callable[[], datetime],
                       max_intake_turns: int = 3,
                       interaction_policy: str = "autonomous",
-                      on_problem: Callable[[str], None] | None = None) -> str:
+                      on_problem: Callable[[str], None] | None = None,
+                      on_event: Callable[[Any], None] | None = None) -> str:
     """답을 넣고 다음 단계까지 진행한다. 워커와 같은 어휘를 돌려준다.
 
     - 접수 질문이었으면 접수를 이어간다. 접수가 끝나면 **그대로 조사를 시작한다** —
@@ -38,7 +39,7 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
     if record is not None and record.question_kind == "intake":
         turn = await intake_turn(case_id, repo=repo, store=store, deps=deps,
                                  topology=topology, clock=clock, answer=answer,
-                                 max_turns=max_intake_turns)
+                                 max_turns=max_intake_turns, on_event=on_event)
         # 접수가 왜 실패했는지가 호출부에 안 닿으면 `case resume` 사용자는 절대
         # 못 본다 — 반환값 한 단어에는 담기지 않는다.
         for problem in turn.problems:
@@ -56,4 +57,17 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
         # error도 조사에 넣는 이유: 대상 없이 조사하는 것이 기존 "이중 실패"의
         # 착지점이고, 여기서 멈추면 사람이 답한 케이스가 조용히 방치된다.
         return await worker.run_once(case_id, interaction_policy=interaction_policy)
+    if record is not None and record.pending_answer is not None:
+        # 채널(API)에 실린 답이 있는데 직접 답(CLI stdin)이 먼저 왔다. 실린 답을 두고
+        # 재개하면 그래프가 다음 질문으로 파킹했을 때 requeue가 집어 **옛 질문의 답을
+        # 새 질문에** 소비한다(블로커 3의 혼용 경로). 가져가서 증거로 남긴다 — 직접
+        # 답이 이긴다(사람이 지금 보고 있는 쪽이다). 워커의 consume은 take 뒤에
+        # 여기로 오므로 이 분기를 타지 않는다.
+        try:
+            stale = repo.take_answer(case_id, now=clock())
+        except Exception:                                          # noqa: BLE001 — 무raise
+            return "failed"
+        if stale is not None:
+            store.put_evidence(case_id, "human:answer_dropped",
+                               {"answer": stale, "reason": "superseded"}, as_of=clock())
     return await worker.resume_once(case_id, answer)

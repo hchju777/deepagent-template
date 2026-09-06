@@ -382,7 +382,7 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     result = asyncio.run(answer_case(
         args.case_id, args.answer, repo=repo, store=store, deps=rt.deps,
         topology=rt.deps.topology, worker=worker, clock=clock,
-        max_intake_turns=app.engine.max_intake_turns,
+        max_intake_turns=app.engine.max_intake_turns, on_event=on_event,
         on_problem=lambda p: print(f"접수: {p}", file=sys.stderr)))
     if result == "busy":
         # 위의 사전 점검과 실제 획득 사이의 경합(다른 프로세스가 그 사이 lease를 잡은 경우) —
@@ -527,7 +527,7 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
         result = await answer_case(case_id, answer, repo=repo, store=store, deps=rt.deps,
                                    topology=rt.deps.topology, worker=worker, clock=clock,
                                    max_intake_turns=app.engine.max_intake_turns,
-                                   interaction_policy="interactive")
+                                   interaction_policy="interactive", on_event=on_event)
 
     if result == "closed":
         path = Path(app.report.output_dir) / f"{case_id}.{app.report.format}"

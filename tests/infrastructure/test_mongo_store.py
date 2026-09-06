@@ -301,3 +301,65 @@ def test_없는_케이스와_옛_문서(db):
     db.cases.update_one({"id": "c-1"}, {"$unset": {"question_seq": "", "answered_seq": ""}})
     assert repo.get("c-1").question_seq == 0
     assert repo.attach_answer("c-1", answer="x", key="k", now=T) == "not_waiting"
+
+
+def test_seq_필드가_없는_문서에도_attach가_끝난다(db):
+    # 리뷰: 가드가 pydantic 기본값(answered_seq=0)을 술어로 걸었다 — 부재 필드는
+    # {"answered_seq": 0}과 안 맞아 CAS가 영원히 지고 재분류가 재귀해 RecursionError.
+    # 인계 #8이 권하는 마이그레이션(`$set question_seq:1`)이 정확히 이 문서를 만든다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    db.cases.update_one({"id": "c-1"}, {"$unset": {"answered_seq": ""}})
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "accepted"
+    assert repo.get("c-1").pending_answer == "답"
+
+
+def _interleave(db, cid, *, before_cas: dict):
+    """읽기와 CAS **사이**에 남의 쓰기를 끼워 넣는다 — 사전검사는 통과하고 CAS만 진다."""
+    real = db.cases.update_one
+    state = {"armed": True}
+
+    def hijacked(filter, update, *a, **kw):
+        if state["armed"] and "$set" in update and "pending_answer" in update["$set"]:
+            state["armed"] = False
+            real({"id": cid}, {"$set": before_cas})
+        return real(filter, update, *a, **kw)
+
+    db.cases.update_one = hijacked
+
+
+def test_attach의_CAS는_읽기_뒤의_claim에_진다(db):
+    # 리뷰 X1: 가드를 통째로 지워도 전부 초록이었다 — 사전검사가 막는 경우만 있었고
+    # CAS 자체가 지는 경로는 한 번도 안 지났다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    _interleave(db, "c-1", before_cas={"status": "investigating", "owner": "w-1"})
+    assert repo.attach_answer("c-1", answer="답", key="k-1", now=T) == "not_waiting"
+    doc = db.cases.find_one({"id": "c-1"})
+    assert doc["status"] == "investigating" and doc.get("pending_answer") is None
+
+
+def test_take의_CAS는_읽기_뒤의_다른_take에_진다(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    repo.attach_answer("c-1", answer="답", key="k-1", now=T)
+    _interleave(db, "c-1", before_cas={"pending_answer": None, "answered_seq": 1})
+    assert repo.take_answer("c-1", now=T) is None
+
+
+def test_restore의_CAS는_읽기_뒤의_새_파킹에_진다(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    repo.attach_answer("c-1", answer="답", key="k-1", now=T)
+    repo.take_answer("c-1", now=T)
+    _interleave(db, "c-1", before_cas={"question_seq": 2, "question": "새"})
+    assert repo.restore_answer("c-1", answer="답", now=T) is False
+    assert db.cases.find_one({"id": "c-1"}).get("pending_answer") is None
+
+
+def test_restore도_없는_케이스는_KeyError다(db):
+    # take는 KeyError, restore는 False였다 — 소비 중 케이스가 사라지면 두 구현의
+    # 결과(failed vs skipped+없는 케이스에 증거)가 갈렸다.
+    repo = MongoCaseRepository(db)
+    with pytest.raises(KeyError):
+        repo.restore_answer("없음", answer="x", now=T)

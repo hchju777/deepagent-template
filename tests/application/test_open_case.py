@@ -182,3 +182,54 @@ def test_사람이_연_케이스는_접수_전이다():
                        concern="system", requested_by=None, clock=lambda: T,
                        on_event=lambda e: None)
     assert record.intake_done is False
+
+
+async def test_직접_답은_채널에_실린_답을_증거로_남기고_대체한다():
+    # 리뷰(혼용 경로): chat이 Q1에서 stdin 대기 중 API가 답을 실음 → stdin 답으로
+    # resume → 그래프가 Q2로 파킹 → requeue가 집어 워커가 **Q1의 API 답을 Q2에**
+    # 소비했다. 직접 답이 오면 실린 답을 가져가 answer_dropped로 남긴다.
+    from src.application.answer import answer_case
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "Q1", "question_kind": "investigation",
+        "question_seq": 1, "pending_answer": "API의 Q1 답", "answer_key": "k-1"}))
+    seen = []
+
+    class _Worker:
+        async def resume_once(self, case_id, answer):
+            seen.append(answer)
+            return "awaiting_human"
+
+    await answer_case(record.id, "stdin 답", repo=repo, store=store, deps=None,
+                      topology=None, worker=_Worker(), clock=lambda: T)
+    assert seen == ["stdin 답"]
+    after = repo.get(record.id)
+    assert after.pending_answer is None and after.answered_seq == 1     # Q1은 답했다
+    assert any(r.source == "human:answer_dropped" for r in store.list_evidence(record.id))
+
+
+async def test_접수_답의_상태_이벤트가_호출자의_on_event에_닿는다():
+    # answer_case가 on_event를 intake_turn에 안 넘기면 CLI `case resume`으로 접수를
+    # 이어갈 때 파킹 해제 이벤트가 이벤트 로그에 안 남는다 — 워커 경로만 남긴다.
+    from src.application.answer import answer_case
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "q", "question_kind": "intake"}))
+
+    class _Worker:
+        async def run_once(self, case_id, *, interaction_policy="autonomous"):
+            return "closed"
+
+    topo = type("T", (), {"locators": lambda self: []})()
+    deps = SimpleNamespace(lead_llm=type("L", (), {
+        "ainvoke": staticmethod(lambda m: _resolved())})())
+    seen = []
+    await answer_case(record.id, "답", repo=repo, store=store, deps=deps, topology=topo,
+                      worker=_Worker(), clock=lambda: T, on_event=seen.append)
+    assert [e.event for e in seen] == ["case_status_changed"]

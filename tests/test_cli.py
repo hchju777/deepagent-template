@@ -327,6 +327,15 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
 
     monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model2)
 
+    # case resume도 answer_case에 발행 배선(on_event)을 넘겨야 한다 — 접수 질문을
+    # 이 명령으로 이어갈 때 파킹 해제 이벤트가 로그에 남는 유일한 길이다.
+    real_answer_case = main_module.answer_case
+
+    async def spy(*args, **kwargs):
+        assert kwargs.get("on_event") is not None
+        return await real_answer_case(*args, **kwargs)
+
+    monkeypatch.setattr("src.__main__.answer_case", spy)
     code2 = main(["case", "resume", case_id, "--answer", "계획 변경 없음",
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     out2 = capsys.readouterr().out
@@ -967,6 +976,9 @@ def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
 
     async def spy(*args, **kwargs):
         seen.append(kwargs.get("interaction_policy"))
+        # 발행 배선(on_event)도 같이 넘어가야 한다 — 함수는 받는데 호출부가 안 넘기는
+        # 것이 이 리포의 반복 실패 유형이다.
+        assert kwargs.get("on_event") is not None
         return await real(*args, **kwargs)
 
     monkeypatch.setattr("src.__main__.answer_case", spy)

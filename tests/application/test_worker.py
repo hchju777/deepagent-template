@@ -747,3 +747,18 @@ async def test_파킹마다_question_seq가_오른다():
                                  ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
     assert await worker.run_once("c-1") == "awaiting_human"
     assert repo.get("c-1").question_seq == 1
+
+
+async def test_소비는_첫_읽기가_터져도_raise하지_않는다():
+    # 리뷰 C3: 첫 repo.get은 KeyError만 잡았다 — "mongo down"이면 그대로 raise되어
+    # run_forever 태스크가 조용히 삼켰다(규율 1).
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+
+    def boom(cid):
+        raise RuntimeError("mongo down")
+    repo.get = boom
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: None, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.consume("c-1") == "failed"

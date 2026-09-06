@@ -701,11 +701,14 @@ class InvestigationWorker:
         분기는 `answer_case` 하나다(계획 12). run_once처럼 절대 raise하지 않는다.
         """
         from src.application.answer import answer_case      # 순환 회피: answer→intake
+        record = None
         try:
-            record = self._repo.get(case_id)
-        except KeyError:
-            return "skipped"
-        try:
+            # 첫 읽기도 try 안에 — KeyError만 잡으면 "mongo down"이 그대로 raise되어
+            # run_forever의 태스크가 조용히 삼킨다(규율 1). 사이트는 그때 모른다.
+            try:
+                record = self._repo.get(case_id)
+            except KeyError:
+                return "skipped"
             answer = self._repo.take_answer(case_id, now=self._clock())
             if answer is None:
                 return await self.run_once(case_id)
@@ -714,7 +717,7 @@ class InvestigationWorker:
                 case_id, answer, repo=self._repo, store=self._store, deps=deps,
                 topology=getattr(deps, "topology", None), worker=self, clock=self._clock,
                 max_intake_turns=self._max_intake_turns,
-                interaction_policy=record.interaction_policy)
+                interaction_policy=record.interaction_policy, on_event=self._on_event)
             if result in ("busy", "skipped", "not_ours"):
                 if not self._repo.restore_answer(case_id, answer=answer, now=self._clock()):
                     self._store.put_evidence(case_id, "human:answer_dropped",
@@ -723,7 +726,8 @@ class InvestigationWorker:
             return result
         except Exception as exc:                                   # noqa: BLE001 — 무raise
             try:
-                self._ledger.record_run(record.gbm, record.fct, f"worker:{case_id}", CheckOutcome(
+                gbm, fct = (record.gbm, record.fct) if record is not None else ("", "")
+                self._ledger.record_run(gbm, fct, f"worker:{case_id}", CheckOutcome(
                     status="error", observed_at=self._clock(),
                     error=f"답 소비 실패 — {type(exc).__name__}: {exc}"))
             except Exception:                                      # noqa: BLE001

@@ -224,28 +224,34 @@ class MongoCaseRepository(CaseRepositoryPort):
         return self._db.cases.update_one({"id": case_id, **guard}, {"$set": fields}).matched_count == 1
 
     def attach_answer(self, case_id, *, answer, key, now):
-        doc = self._db.cases.find_one({"id": case_id})
-        if doc is None:
-            return "not_found"
-        record = self._to_record(doc)
-        if record.answer_key == key:
-            return "duplicate"
-        if record.status != "awaiting_human" or record.question_kind != "investigation" \
-                or record.question_seq <= record.answered_seq:
-            return "not_waiting"
-        if record.pending_answer is not None:
-            return "pending"
-        # 조건이 걸린 필드 전부를 읽은 값 그대로 술어에 — 워커가 그 사이 claim해
-        # investigating이 됐거나 take로 answered_seq를 올렸으면 진다(리뷰 S7·S2-F).
-        guard = {"status": "awaiting_human", "question_kind": "investigation",
-                 "pending_answer": None, "question_seq": record.question_seq,
-                 "answered_seq": record.answered_seq, "answer_key": doc.get("answer_key")}
-        if not self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,
+        # 두 바퀴: 첫 CAS가 지면 다시 읽어 **왜** 졌는지로 분류하고 한 번 더 시도한다.
+        # 재귀로 두면 끝이 없다 — 술어가 문서와 영원히 안 맞는 경우(필드 부재를
+        # 기본값으로 걸었던 버그)에 RecursionError였다. 두 번 다 지면 남이 계속 바꾸는
+        # 중이니 not_waiting으로 물러난다 — 쓴 것이 없으니 같은 key의 재시도가 안전하다.
+        for _ in range(2):
+            doc = self._db.cases.find_one({"id": case_id})
+            if doc is None:
+                return "not_found"
+            record = self._to_record(doc)
+            if record.answer_key == key:
+                return "duplicate"
+            if record.status != "awaiting_human" or record.question_kind != "investigation" \
+                    or record.question_seq <= record.answered_seq:
+                return "not_waiting"
+            if record.pending_answer is not None:
+                return "pending"
+            # 술어는 **문서에서 읽은 원값**(doc.get)이지 record의 기본값이 아니다 — 필드가
+            # 없는 문서에 {"answered_seq": 0}은 안 맞고 {"answered_seq": None}은 부재에도
+            # 맞는다(Mongo의 null 의미론). 인계 #8이 권하는 마이그레이션(question_seq만
+            # $set)이 정확히 그런 문서를 만든다. 워커가 그 사이 claim해 investigating이
+            # 됐거나 take로 answered_seq를 올렸으면 진다(리뷰 S7·S2-F).
+            guard = {"status": "awaiting_human", "question_kind": "investigation",
+                     "pending_answer": None, "question_seq": doc.get("question_seq"),
+                     "answered_seq": doc.get("answered_seq"), "answer_key": doc.get("answer_key")}
+            if self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,
                                           "updated_at": now.isoformat()}):
-            # 졌다 — 다시 읽어 왜 졌는지로 분류한다(claim의 재읽기와 같은 패턴)
-            return self.attach_answer(case_id, answer=answer, key=key, now=now) \
-                if self._db.cases.find_one({"id": case_id}) else "not_found"
-        return "accepted"
+                return "accepted"
+        return "not_waiting"
 
     def take_answer(self, case_id, *, now):
         doc = self._db.cases.find_one({"id": case_id})
@@ -254,7 +260,10 @@ class MongoCaseRepository(CaseRepositoryPort):
         answer = doc.get("pending_answer")
         if answer is None:
             return None
-        if not self._cas(case_id, {"pending_answer": answer},
+        # 술어에 key·seq도 건다 — 같은 문자열의 다른 답(다른 key)이나 새 질문(seq가
+        # 오른 뒤)에 실린 답을 옛 답으로 가져가지 않는다(ABA).
+        if not self._cas(case_id, {"pending_answer": answer, "answer_key": doc.get("answer_key"),
+                                   "question_seq": doc.get("question_seq")},
                          {"pending_answer": None, "answered_seq": doc.get("question_seq", 0),
                           "updated_at": now.isoformat()}):
             return None            # 그 사이 남이 가져갔다
@@ -263,13 +272,15 @@ class MongoCaseRepository(CaseRepositoryPort):
     def restore_answer(self, case_id, *, answer, now):
         doc = self._db.cases.find_one({"id": case_id})
         if doc is None:
-            return False
+            raise KeyError(case_id)     # take와 같은 계약(인메모리 구현도 KeyError)
         seq = doc.get("question_seq", 0)
         if doc.get("status") != "awaiting_human" or doc.get("pending_answer") is not None \
                 or seq != doc.get("answered_seq", 0):
             return False
+        # 술어는 원값(doc.get) — attach와 같은 이유(필드 부재 ≠ 기본값 0)
         return self._cas(case_id, {"status": "awaiting_human", "pending_answer": None,
-                                   "question_seq": seq, "answered_seq": seq},
+                                   "question_seq": doc.get("question_seq"),
+                                   "answered_seq": doc.get("answered_seq")},
                          {"pending_answer": answer, "answered_seq": seq - 1,
                           "updated_at": now.isoformat()})
 
