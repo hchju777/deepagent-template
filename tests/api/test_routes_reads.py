@@ -215,3 +215,29 @@ def test_즉석_보고서에_Timeline이_실린다(client, rt):
                                  data={"status": "open", "reason": "finding"}))
     r = client.get("/cases/c-1/report?format=md")
     assert "| 1 | " in r.text and "상태 → open (finding)" in r.text
+
+
+def test_상세는_후보_목록과_Timeline을_응답_모델로_낸다(client, rt):
+    # 계획 14 + 계획 13 인계 #6: 응답이 dict가 아니라 CaseDetail이다 — 모르는 키가 섞이면
+    # 여기서 잡힌다. candidates는 rank 1 = root_cause(신뢰도는 판정의 것), 이후 alternates.
+    from src.api.models import CaseDetail
+    from src.domain.events import EngineEvent
+    rt.store.put_verdict("c-1", Verdict(
+        verdict_type="stale_data", confidence="high", narrative="n",
+        root_cause=CauseLink(component="plan-sync", evidence_ids=["ev-1"]),
+        alternates=[CauseLink(component="twin-state", evidence_ids=["ev-2"], confidence="low",
+                              relation="갱신 지연")]))
+    rt.events.append(EngineEvent(event="case_status_changed", case_id="c-1", at=T,
+                                 data={"status": "open", "reason": "finding"}))
+    body = client.get("/cases/c-1").json()
+    detail = CaseDetail.model_validate(body)
+    assert [(c.rank, c.component, c.confidence, c.evidence_ids, c.rationale)
+            for c in detail.candidates] == [(1, "plan-sync", "high", ["ev-1"], None),
+                                            (2, "twin-state", "low", ["ev-2"], "갱신 지연")]
+    assert detail.timeline[0]["seq"] == 1 and detail.timeline[0]["summary"] == "상태 → open (finding)"
+    assert detail.verdict["alternates"][0]["component"] == "twin-state"
+
+
+def test_판정_없는_상세의_후보는_빈_목록이다(client, rt):
+    body = client.get("/cases/c-1").json()
+    assert body["candidates"] == [] and body["verdict"] is None and body["timeline"] == []
