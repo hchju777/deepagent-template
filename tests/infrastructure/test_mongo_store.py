@@ -457,3 +457,19 @@ def test_restore의_CAS는_상태나_pending이_바뀌면_진다(db, write):
     repo.take_answer("c-1", now=T)
     _interleave(db, "c-1", before_cas=write)
     assert repo.restore_answer("c-1", answer="답", now=T) is False
+
+
+# ---- 계획 15(P8): 메트릭 sink -----------------------------------------------------------
+def test_메트릭은_이름별_최신순으로_읽히고_오래된_것만_걷힌다(db):
+    ledger = MongoLedger(db)
+    ledger.record_metric("investigation.duration_s", 3.5,
+                         tags={"gbm": "mx", "outcome": "closed"}, at=T - timedelta(days=40))
+    ledger.record_metric("investigation.duration_s", 9.0, tags={"gbm": "mx"}, at=T)
+    ledger.record_metric("other", 1.0, tags={}, at=T)
+    rows = ledger.metrics("investigation.duration_s")
+    assert [r["value"] for r in rows] == [9.0, 3.5]
+    assert rows[1]["tags"] == {"gbm": "mx", "outcome": "closed"} and rows[0]["at"] == T
+    assert ledger.metrics("investigation.duration_s", limit=1)[0]["value"] == 9.0
+    assert ledger.prune_metrics_before(T - timedelta(days=30)) == 1
+    assert [r["value"] for r in ledger.metrics("investigation.duration_s")] == [9.0]
+    assert ledger.metrics("other") != []            # 이름이 다른 것은 안 걷힌다

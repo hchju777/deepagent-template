@@ -68,6 +68,8 @@ def ensure_indexes(db: Database) -> None:
     # (case_id, seq) unique: seq는 counters로 원자 증가하므로 중복이 나면 그 자체가
     # 카운터 손상 신호다 — 인덱스가 조용한 중복 대신 즉시 실패로 드러낸다.
     db.case_events.create_index([("case_id", 1), ("seq", 1)], unique=True)
+    db.metrics.create_index([("name", 1), ("at", -1)])
+    db.metrics.create_index("at")
     db.verdict_snapshots.create_index("case_id", unique=True)
 
 
@@ -394,6 +396,24 @@ class MongoLedger(LedgerPort):
         if not stale_ids:
             return 0
         return self._db.ledger_runs.delete_many({"_id": {"$in": stale_ids}}).deleted_count
+
+    def record_metric(self, name, value, *, tags, at) -> None:
+        self._db.metrics.insert_one({"name": name, "value": float(value), "tags": dict(tags),
+                                     "at": at.isoformat()})
+
+    def metrics(self, name, *, limit=200) -> list[dict]:
+        if limit <= 0:
+            return []
+        cursor = self._db.metrics.find({"name": name}).sort("at", -1).limit(limit)
+        return [{"name": d["name"], "value": d["value"], "tags": d.get("tags", {}),
+                 "at": datetime.fromisoformat(d["at"])} for d in cursor]
+
+    def prune_metrics_before(self, before) -> int:
+        stale = [d["_id"] for d in self._db.metrics.find({})
+                 if datetime.fromisoformat(d["at"]) < before]
+        if not stale:
+            return 0
+        return self._db.metrics.delete_many({"_id": {"$in": stale}}).deleted_count
 
     def record_send(self, send_id, *, kind, target, at) -> bool:
         # find_one 사전조회 없이 곧장 insert한다(리뷰 F4) — sends.send_id unique

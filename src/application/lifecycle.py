@@ -14,6 +14,11 @@ from src.domain.cases import CaseRecord, lease_is_free, CaseStatus
 ENGINE_SCHEMA_VERSION = 1
 
 Clock = Callable[[], datetime]
+# 경과 시간의 소스. Clock과 **다른 양이다**(방향 문서 N6): `datetime.now()` 금지의
+# 목적은 *기록되는 시점*의 재현·감사인데, 경과는 재현 불가능한 것이 정상이고 단조여야
+# 한다(NTP 역점프에 음수가 나오면 안 된다). 둘을 한 포트로 섞으면 고정 시계 테스트에서
+# duration이 항상 0이 된다. 프로덕션은 time.perf_counter, 테스트는 고정 눈금.
+Ticker = Callable[[], float]
 
 
 class LifecycleError(Exception):

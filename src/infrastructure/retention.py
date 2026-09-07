@@ -56,7 +56,7 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
     """일곱 가지 보존 규칙을 한 번에 훑고 항목별 처리 건수를 돌려준다."""
     now = clock()
     counts = {"closed_cases": 0, "ledger_runs": 0, "scratch_evidence": 0, "expired_threads": 0,
-             "sends": 0, "events": 0, "snapshots": 0}
+             "sends": 0, "events": 0, "snapshots": 0, "metrics": 0}
 
     # ① 오래된 종결 케이스 — 증거+판정+케이스 파일 삭제, 스레드 폐기, purged_at 스탬프
     evidence_before = now - timedelta(days=retention.closed_case_evidence_d)
@@ -94,6 +94,9 @@ async def sweep_retention(*, repo: CaseRepositoryPort, store: CaseStorePort,
     ledger_before = now - timedelta(days=retention.ledger_d)
     try:
         counts["ledger_runs"] = ledger.prune_runs_before(ledger_before)
+        # 메트릭은 점검 이력과 같은 knob을 쓴다 — 둘 다 "관측 이력"이고, 별도 knob은
+        # 아무도 다르게 설정하지 않을 세 번째 숫자다(설정의 무게만 늘린다).
+        counts["metrics"] = ledger.prune_metrics_before(ledger_before)
     except Exception:                                                  # noqa: BLE001
         pass
 
