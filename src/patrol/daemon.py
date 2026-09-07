@@ -579,6 +579,8 @@ def assemble_sites(
             subagent_llm=make_llm(app.llm.profiles.subagent),
             adapters=adapters, store=InMemoryCaseStore(), topology=topology,
             engine_cfg=app.engine,
+            # 브리핑 재료 — 여기서 안 넘기면 리드는 매번 "적용 룰: 없음"을 읽는다.
+            checks=site_cfg.patrol.checks, deployment=deployment,
         )
         sites.append(SiteRuntime(gbm=ref.gbm, fct=ref.fct, cfg=site_cfg, adapters=adapters,
                                  deps=deps, digests=digests))

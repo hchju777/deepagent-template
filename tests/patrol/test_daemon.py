@@ -602,3 +602,40 @@ async def test_실행_기록_저장이_던져도_잡은_살아남는다(tmp_path
     daemon.build()
     await daemon.run_scenario_job("alarm_trend")          # raise하지 않는다
     assert ledger.runs("-", "-", "fleet:alarm_trend")[0].status == "ok"
+
+
+def test_조립이_사이트_점검과_배포를_엔진_의존에_넣는다(tmp_path):
+    # 함수는 되는데 호출부가 안 넘기는 것이 이 리포의 반복 실패 유형이다 —
+    # assemble_sites는 patrol run·chat·case resume 셋의 공통 조립점이라
+    # 여기 한 곳을 단정하면 셋이 함께 지켜진다.
+    import json
+
+    from src.patrol.daemon import assemble_sites
+    (tmp_path / "config" / "gbm").mkdir(parents=True)
+    (tmp_path / "knowledge" / "topology").mkdir(parents=True)
+    (tmp_path / "knowledge" / "deployment" / "gbm").mkdir(parents=True)
+    (tmp_path / "config" / "app.json").write_text(
+        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        encoding="utf-8")
+    (tmp_path / "config" / "registry.json").write_text(
+        json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")
+    (tmp_path / "config" / "gbm" / "gbm.json").write_text(
+        json.dumps({"target": {"adapters": "stub"},
+                    "knowledge": {"root": str(tmp_path / "knowledge")},
+                    "patrol": {"checks": {"api.oee_range": {
+                        "judge": "rule", "schedule": {"interval": "10m"},
+                        "target": "rest:/oee",
+                        "params": {"rule": "range", "min": 0, "max": 100}}}}}),
+        encoding="utf-8")
+    (tmp_path / "knowledge" / "topology" / "common.yaml").write_text(
+        "services: {}\nderivations: {}\n", encoding="utf-8")
+    (tmp_path / "knowledge" / "deployment" / "gbm" / "gumi.yaml").write_text(
+        "services:\n  twin-api:\n    repo: twin\n    commit: abc123\n", encoding="utf-8")
+
+    _app, sites = assemble_sites(tmp_path / "config", tmp_path, {"LLM_API_KEY": "k"},
+                                 clock=lambda: T, llm_factory=lambda name: object())
+    deps = sites[0].deps
+    assert deps.checks == sites[0].cfg.patrol.checks
+    assert "api.oee_range" in deps.checks
+    assert deps.deployment is not None
+    assert deps.deployment.services["twin-api"].commit == "abc123"
