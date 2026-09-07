@@ -127,7 +127,8 @@ curl -s -X POST localhost:8080/cases/c-1/answers -H 'content-type: application/j
   -d '{"answer": "계획 변경 없음", "key": "2026-09-04T09:00-c-1"}'
 # → 202 {"result": "accepted"}. 같은 key로 다시 보내면 duplicate — 재시도가 안전하다
 
-curl -s localhost:8080/cases/c-1                                  # 상태·질문·판정·단계 체크리스트
+curl -s localhost:8080/cases/c-1                                  # CaseDetail: 상태·질문·판정·candidates·단계·timeline(+timeline_source/error)
+curl -s localhost:8080/cases/c-1 | python -c 'import json,sys; [print(c["rank"], c["component"], c["confidence"]) for c in json.load(sys.stdin)["candidates"]]'
 curl -s -N localhost:8080/cases/c-1/events -H 'accept: text/event-stream'   # 진행 스트림
 curl -s "localhost:8080/cases?gbm=mx&fct=gumi"                    # 목록 — 스코프 필수
 curl -s localhost:8080/cases/c-1/report                           # 보고서(HTML)

@@ -15,6 +15,7 @@ from typing import Awaitable, Callable
 from dotenv import load_dotenv
 
 from src.application.answer import answer_case
+from src.application.events import collect_events
 from src.application.intake import intake_turn
 from src.application.submit import submit_case
 from src.application.worker import CaseQueue, InvestigationWorker
@@ -263,10 +264,12 @@ def _cmd_case_show(args, config_root: Path, env: dict) -> int:
             print(found.read_text(encoding="utf-8"), end="")
         else:
             clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+            log = collect_events(p.events, args.case_id)      # Persistence.events는 항상 있다
             model = build_report_model(
                 record, verdict=store.get_verdict(args.case_id),
                 evidence=store.list_evidence(args.case_id),
-                case_file=store.get_case_file(args.case_id), clock=clock)
+                case_file=store.get_case_file(args.case_id), clock=clock,
+                events=log.events, timeline_error=log.error)
             print(render_html(model) if app.report.format == "html" else render_md(model), end="")
         return 0
 

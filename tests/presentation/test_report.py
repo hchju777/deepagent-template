@@ -221,3 +221,53 @@ def test_보고서가_concern을_보여준다():
     record = RECORD.model_copy(update={"concern": "operation"})
     text = render_report(record, verdict=None, evidence=[], case_file=None, clock=lambda: T)
     assert "operation" in text
+
+
+def test_판정_절은_다른_후보를_신뢰도와_증거와_함께_낸다():
+    # 계획 14: 후보는 최상위 다음에, 기여 요인 앞에. 없으면 "없음"(조용한 생략 금지).
+    verdict = VERDICT.model_copy(update={"alternates": [
+        CauseLink(component="twin-state", evidence_ids=["ev-7"], confidence="low", relation="갱신 지연"),
+        CauseLink(component="edge-collector", evidence_ids=[])]})
+    md = render_report(RECORD, verdict=verdict, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
+    assert "- 다른 후보:\n  - twin-state (신뢰도 low, 증거: ev-7) — 갱신 지연\n  - edge-collector (증거: 없음)" in md
+    assert md.index("- 근본 원인:") < md.index("- 다른 후보:") < md.index("- 기여 요인:")
+    plain = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
+    assert "- 다른 후보:\n  없음" in plain
+
+
+def test_조사_경위는_Timeline_표를_낸다():
+    # 계획 14: 이벤트 로그가 있으면 표, 로그를 못 읽는 프로세스면 그 사실을, 로그는 있는데
+    # 이벤트가 없으면 "이벤트 없음" — 셋은 다른 말이다(조용한 생략 금지).
+    from src.domain.events import EngineEvent
+    events = [EngineEvent(event="case_status_changed", case_id="c-1", at=T, seq=1,
+                          data={"status": "open", "reason": "finding"}),
+              EngineEvent(event="question_raised", case_id="c-1", at=T, seq=2, data={"question": "계획?"})]
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
+                       clock=lambda: T, events=events)
+    assert ("- Timeline:\n\n| seq | 시각 | 이벤트 | 요약 |\n|---|---|---|---|\n"
+            "| 1 | 2026-09-03T08:00:00+00:00 | case_status_changed | 상태 → open (finding) |\n"
+            "| 2 | 2026-09-03T08:00:00+00:00 | question_raised | 질문: 계획? |\n\n") in md
+    none = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
+    assert "- Timeline:\n  이벤트 로그 없음(이 프로세스에 이벤트 스토어가 없다)" in none
+    empty = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
+                          clock=lambda: T, events=[])
+    assert "- Timeline:\n  이벤트 없음" in empty
+
+
+def test_Timeline_읽기_실패는_명시되고_요약_칸은_표를_깨지_않는다():
+    from src.domain.events import EngineEvent
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
+                       events=[], timeline_error="RuntimeError: down")
+    assert "- Timeline:\n  이벤트 로그 읽기 실패: RuntimeError: down" in md
+    events = [EngineEvent(event="question_raised", case_id="c-1", at=T, seq=1, data={"question": "a | b"})]
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
+                       events=events)
+    assert "| 1 | 2026-09-03T08:00:00+00:00 | question_raised | 질문: a \\| b |" in md
+
+
+def test_시각_없는_Timeline_행은_대시로_렌더된다():
+    from src.domain.events import EngineEvent
+    ev = EngineEvent.model_construct(event="report_ready", case_id="c-1", at=None, seq=1, data={"path": "p"})
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
+                       events=[ev])
+    assert "| 1 | - | report_ready | 보고서 p |" in md

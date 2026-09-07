@@ -15,6 +15,7 @@ from pathlib import Path
 from src.domain.case import Verdict
 from src.domain.cases import CaseRecord
 from src.domain.store import EvidenceRecord
+from src.domain.events import EngineEvent
 from src.domain.report_model import ReportModel, build_report_model
 
 Clock = Callable[[], datetime]
@@ -25,7 +26,9 @@ _MARKS = {"ok": "✅", "fail": "❌", "warn": "⚠", "skip": "⬜"}
 
 def render_report(record: CaseRecord, *, verdict: Verdict | None,
                    evidence: list[EvidenceRecord], case_file: dict | None,
-                   clock: Clock, evidence_summaries: dict[str, str] | None = None) -> str:
+                   clock: Clock, evidence_summaries: dict[str, str] | None = None,
+                   events: list[EngineEvent] | None = None,
+                   timeline_error: str | None = None) -> str:
     """스펙 §5.1의 5절 보고서를 md로 조립한다(호출부 호환 유지).
 
     순수 함수 — case_file의 형태가 기대와 어긋나도 raise하지 않고
@@ -38,7 +41,8 @@ def render_report(record: CaseRecord, *, verdict: Verdict | None,
     try:
         model = build_report_model(record, verdict=verdict, evidence=evidence,
                                    case_file=case_file, clock=clock,
-                                   evidence_summaries=evidence_summaries)
+                                   evidence_summaries=evidence_summaries, events=events,
+                                   timeline_error=timeline_error)
         return render_md(model)
     except Exception as exc:            # noqa: BLE001 — 최후의 그물: 유도와 렌더 어느
         # 쪽이 예상 못 한 형태를 만나도 조사 종결은 막지 않는다(계약)
@@ -166,6 +170,17 @@ def _section2(record: CaseRecord, verdict: Verdict | None) -> str:
     else:
         lines.append("- 근본 원인: 없음")
 
+    # 후보는 최상위 다음, 기여 요인 앞 — "이것 아니면 저것"이 "이것에 더해 저것"보다 먼저다.
+    lines.append("- 다른 후보:")
+    if not verdict.alternates:
+        lines.append("  없음")
+    else:
+        for a in verdict.alternates:
+            ids = ", ".join(a.evidence_ids) or "없음"
+            conf = f"신뢰도 {a.confidence}, " if a.confidence else ""
+            relation = f" — {a.relation}" if a.relation else ""
+            lines.append(f"  - {a.component} ({conf}증거: {ids}){relation}")
+
     lines.append("- 기여 요인:")
     if not verdict.contributing:
         lines.append("  없음")
@@ -245,6 +260,22 @@ def _section5(model: ReportModel) -> str:
         if model.salvage_error:
             lines.append(f"- 조사 흔적 구제 실패: {model.salvage_error}")
     lines.append(f"- 라운드: {model.round_no if model.round_no is not None else '없음'}")
+    # 셋은 다른 말이다: 로그를 못 읽는 프로세스 / 로그는 있는데 비었음 / 표(조용한 생략 금지)
+    lines.append("- Timeline:")
+    if model.timeline_source == "none":
+        lines.append("  이벤트 로그 없음(이 프로세스에 이벤트 스토어가 없다)")
+    elif model.timeline_source == "unavailable":
+        lines.append(f"  이벤트 로그 읽기 실패: {model.timeline_error}")
+    elif not model.timeline:
+        lines.append("  이벤트 없음")
+    else:
+        lines.append("")                    # 표 앞뒤 빈 줄 — GFM lazy continuation(태스크 표와 같은 이유)
+        lines.append("| seq | 시각 | 이벤트 | 요약 |")
+        lines.append("|---|---|---|---|")
+        for e in model.timeline:
+            at = e.at.isoformat() if e.at is not None else "-"
+            lines.append(f"| {e.seq} | {_cell(at)} | {_cell(e.event)} | {_cell(e.summary)} |")
+        lines.append("")
     lines.append("- 태스크 현황:")
 
     task_rows = []

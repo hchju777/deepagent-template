@@ -395,11 +395,15 @@ def test_case_show_report는_파일이_없으면_즉석_렌더한다(tmp_path, c
     _tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
 
+    from src.domain.events import EngineEvent
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     repo.save(CaseRecord(id="c-2", gbm="mx", fct="gumi", fingerprint="fp", symptom="증상", t0=T,
                          origin="human", status="closed", created_at=T, updated_at=T))
+    events = InMemoryEventStore()
+    events.append(EngineEvent(event="case_status_changed", case_id="c-2", at=T,
+                              data={"status": "open", "reason": None}))
     monkeypatch.setattr("src.__main__.build_persistence",
-                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                        lambda cfg: Persistence(store, repo, ledger, events,
                                                 InMemoryVerdictSnapshotStore()))
 
     code = main(["case", "show", "c-2", "--report", "--config-root", str(tmp_path / "config")])
@@ -407,6 +411,7 @@ def test_case_show_report는_파일이_없으면_즉석_렌더한다(tmp_path, c
 
     assert code == 0
     assert "<h1>케이스 c-2 보고서</h1>" in out and "<h2>5. 조사 경위</h2>" in out
+    assert "상태 → open" in out                  # 계획 14: case show 즉석 렌더도 Timeline을 싣는다
 
 
 def test_patrol_run은_이벤트_싱크를_daemon에_넘긴다(tmp_path, monkeypatch):
@@ -1060,3 +1065,22 @@ def test_api_명령은_stub_seeds를_받지_않는다(tmp_path, monkeypatch, cap
         main(["api", "--stub-seeds", "x.json",
               "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_case_show_report는_이벤트_로그_읽기_장애에도_렌더한다(tmp_path, capsys, monkeypatch):
+    # 리뷰 M2: collect_events의 예외가 try 밖이라 트레이스백으로 죽었다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+
+    class _Broken(InMemoryEventStore):
+        def since(self, *a, **k):
+            raise RuntimeError("case_events read failed")
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-2", gbm="mx", fct="gumi", fingerprint="fp", symptom="증상", t0=T,
+                         origin="human", status="closed", created_at=T, updated_at=T))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, _Broken(),
+                                                InMemoryVerdictSnapshotStore()))
+    code = main(["case", "show", "c-2", "--report", "--config-root", str(tmp_path / "config")])
+    out = capsys.readouterr().out
+    assert code == 0 and "이벤트 로그 읽기 실패" in out

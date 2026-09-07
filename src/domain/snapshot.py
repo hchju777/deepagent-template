@@ -33,7 +33,7 @@ class VerdictSnapshot(StrictModel):
     outcome: Literal["closed", "failed"]     # failed도 남긴다 — 빼면 분모에 생존 편향
     verdict_type: str | None = None
     root_cause_component: str | None = None
-    alternates: list[str] = []               # 다중 RCA 후보(P6에서 채운다)
+    alternates: list[str] = []               # 다중 RCA 후보의 컴포넌트(계획 14가 채운다)
     confidence: str | None = None
     rounds: int = 0
     evidence_count: int = 0

@@ -228,3 +228,13 @@ def test_실행자가_잡고_있는_동안의_답은_409_busy다(client, rt):
         "question_seq": 1, "owner": "w-1", "lease_until": T + timedelta(seconds=60)}))
     r = client.post(f"/cases/{cid}/answers", json={"answer": "x", "key": "k"})
     assert r.status_code == 409 and r.json()["result"] == "busy"
+
+
+def test_저장소_장애의_답은_503이다(client, rt):
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+
+    def boom(*a, **k):
+        raise RuntimeError("mongo down")
+    rt.repo.attach_answer = boom
+    r = client.post(f"/cases/{cid}/answers", json={"answer": "x", "key": "k"})
+    assert r.status_code == 503 and r.json()["result"] == "error"

@@ -1014,3 +1014,23 @@ async def test_stop과_get이_같이_끝나면_꺼낸_id를_놓아준다():
     assert queue.qsize() == 0               # get이 꺼냈다(처리는 안 한다 — 새 프로세스가 회수)
     await queue.put("c-1")                  # 놓아줬으면 다시 들어간다
     assert queue.qsize() == 1
+
+
+async def test_판정_스냅샷은_후보의_컴포넌트를_남긴다():
+    # 계획 7이 열어 둔 자리(VerdictSnapshot.alternates) — retention이 Verdict를 지운 뒤에도
+    # "후보에 정답이 있었나"를 라벨과 대조할 수 있어야 한다(P8 캘리브레이션).
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    verdict_json = ('{"verdict_type": "stale_data", "confidence": "high", "narrative": "n", '
+                    '"root_cause": {"component": "plan-sync", "evidence_ids": ["ev-2"]}, '
+                    '"alternates": [{"component": "twin-state", "evidence_ids": ["ev-2"], "confidence": "low"}]}')
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, verdict_json])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots)
+    assert await worker.run_once("c-1") == "closed"
+    assert snapshots.get("c-1").alternates == ["twin-state"]

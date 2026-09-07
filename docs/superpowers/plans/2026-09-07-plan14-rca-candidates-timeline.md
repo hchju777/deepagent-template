@@ -438,4 +438,22 @@ class CaseDetail(StrictModel):      # GET /cases/{id} — 계획 13 인계 #6
 
 ## 인계(계획 14 이후 — P7 Fleet / P8 관측성·라벨)
 
-(집행 뒤 채운다.)
+1. **후보의 정답 대조는 P8이다.** `VerdictSnapshot.alternates`에 컴포넌트 이름이 남으니
+   라벨(`POST /cases/{id}/label`)이 생기면 "정답이 최상위였나 / 후보 안에 있었나 / 없었나"
+   세 칸의 캘리브레이션이 가능하다. 지금은 채우기만 한다.
+2. **Timeline은 이벤트 로그가 살아 있는 동안만 완전하다.** retention 스윕이
+   `case_events`를 걷으면 옛 케이스의 보고서 즉석 렌더는 "이벤트 없음"을 낸다 — 파일로
+   발행된 보고서에는 발행 시점의 Timeline이 남아 있다. 스냅샷에 Timeline을 박제할지는
+   P8의 관측성 설계에서 정한다(지금은 소비자가 없다).
+3. **`candidates`의 `coverage`·`as_of` 블록**(방향 문서 §385)은 넣지 않았다 — §4 증거 표와
+   스냅샷이 이미 갖고 있고 웹 소비자가 아직 없다. 웹 UI가 생길 때 payload를 다시 본다.
+4. **`_sanitize_alternates`는 컴포넌트 이름의 문자열 동일성만 본다.** `plan-sync`와
+   `plan_sync`는 다른 후보다. 토폴로지 locator로 정규화하려면 conclude가 토폴로지를
+   받아야 한다(지금은 안 받는다).
+5. **`CaseDetail.stages/verdict/timeline`은 `list[dict]`/`dict`다** — 내부 모델을 그대로
+   dump한다. 웹 클라이언트가 생기면 그 셋도 응답 모델로 세운다.
+6. **후보가 기여 요인과 같은 컴포넌트여도 거르지 않는다** — "이것 대신"과 "이것에 더해"가
+   같은 컴포넌트를 가리키는 것이 모순인지는 설계 판단이다(검증 리뷰 L2). 지금은 둔다.
+7. **Timeline이 걷힌 뒤**: retention이 `case_events`를 걷으면 즉석 렌더는 "이벤트 없음"을
+   낸다 — "조사가 이벤트를 안 냈다"와 구별되지 않는다(리뷰 L6). 파일 보고서에는 발행 시점의
+   Timeline이 남는다. 스냅샷에 Timeline을 박제할지는 P8에서.

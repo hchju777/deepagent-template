@@ -24,7 +24,8 @@ CHECK = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5
                                     "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}})
 
 
-def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=None, on_event=None):
+def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=None, on_event=None,
+            events=None):
     """report_cfg 기본값을 tmp_path 기반으로 만든다(테스트 위생) — 예전엔 기본
     ReportConfig()가 output_dir="output"(CWD 상대)을 써서, 보고서 발행을 다루지
     않는 테스트들도 그때마다 레포 루트에 output/*를 남겼다. tmp_path를 필수
@@ -42,7 +43,7 @@ def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=
                         checkpointer=InMemorySaver(), clock=clock, judge_llm=None,
                         budget=LlmBudget(5, clock=clock), owner="daemon-test", timezone="Asia/Seoul",
                         report_cfg=report_cfg if report_cfg is not None else default_report_cfg,
-                        on_event=on_event)
+                        on_event=on_event, events=events)
 
 
 async def test_run_one은_finding을_케이스로_열어_큐에_넣고_워커가_종결한다(tmp_path):
@@ -328,3 +329,54 @@ async def test_데몬이_실린_답으로_파킹_케이스를_재개한다(tmp_p
     record = repo.get("c-1")
     assert record.status == "closed" and record.pending_answer is None
     assert (tmp_path / "output" / "c-1.html").exists()     # 발행 배선도 그대로 탄다
+
+
+async def test_발행_보고서는_이벤트_스토어의_Timeline을_싣는다(tmp_path, monkeypatch):
+    # 계획 14: 보고서를 만드는 세 호출부(데몬·case show·api) 중 데몬. 함수는 되는데
+    # 호출부가 안 넘기는 것이 이 리포의 반복 실패 유형이라 호출부마다 테스트를 둔다.
+    from src.domain.events import InMemoryEventStore
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    events = InMemoryEventStore()
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path,
+                     report_cfg=ReportConfig(output_dir=str(tmp_path / "out")),
+                     on_event=events.append, events=events)
+    daemon.build()
+    await daemon.run_one("mx", "gumi", "api.oee", CHECK)
+    case_id = await daemon.queue.get()
+
+    import src.application.worker as wk
+
+    async def boom(*a, **k):
+        raise RuntimeError("엔진 호출 실패")
+    monkeypatch.setattr(wk, "investigate_case", boom)
+    assert await daemon.worker.run_once(case_id) == "failed"
+    text = next((tmp_path / "out").glob("*.html")).read_text(encoding="utf-8")
+    assert "<h3>Timeline</h3>" in text and "상태 → open" in text and "이벤트 로그 없음" not in text
+
+
+async def test_이벤트_로그_읽기_장애에도_보고서는_발행된다(tmp_path, monkeypatch):
+    # 리뷰 M1(규율 1·8): collect_events가 raise해 _publish_report의 최외곽 except로 떨어지면
+    # 파일도 report_ready도 메일도 없다 — 계획 14 이전엔 없던 새 장애 지점이다.
+    from src.domain.events import InMemoryEventStore
+
+    class _Broken(InMemoryEventStore):
+        def since(self, *a, **k):
+            raise RuntimeError("case_events read failed")
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    events = _Broken()
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path,
+                     report_cfg=ReportConfig(output_dir=str(tmp_path / "out")),
+                     on_event=events.append, events=events)
+    daemon.build()
+    await daemon.run_one("mx", "gumi", "api.oee", CHECK)
+    case_id = await daemon.queue.get()
+
+    import src.application.worker as wk
+
+    async def boom(*a, **k):
+        raise RuntimeError("엔진 호출 실패")
+    monkeypatch.setattr(wk, "investigate_case", boom)
+    assert await daemon.worker.run_once(case_id) == "failed"
+    files = list((tmp_path / "out").glob("*.html"))
+    assert len(files) == 1, "읽기 장애가 발행을 막았다"
+    assert "이벤트 로그 읽기 실패: RuntimeError: case_events read failed" in files[0].read_text(encoding="utf-8")

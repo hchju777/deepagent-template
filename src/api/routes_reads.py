@@ -2,7 +2,7 @@
 
 ```
 GET /cases?gbm=&fct=&status=     sites_for로 좁힌다. 스코프 없는 전체 조회는 400
-GET /cases/{id}                  상태 · 질문 · 판정 · 단계 체크리스트
+GET /cases/{id}                  상태 · 질문 · 판정 · 후보(candidates) · 단계 체크리스트 · Timeline (CaseDetail)
 GET /cases/{id}/events?since=N   seq 오름차순 JSON — Accept: text/event-stream이면 SSE
 GET /cases/{id}/report?format=   저장된 파일, 없으면 즉석 렌더(case show와 같다)
 GET /checks?gbm=&fct=            레저 read
@@ -25,6 +25,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from src.api.app import current_subject, hidden, runtime_of, visible_record
+from src.api.models import CaseDetail, candidates_of
+from src.application.events import collect_events
 from src.domain.report_model import build_report_model
 from src.presentation.report import render_md
 from src.presentation.report_html import render_html
@@ -76,19 +78,25 @@ def list_cases(request: Request, gbm: str | None = None, fct: str | None = None,
     return {"cases": [_summary(r) for r in sorted(records, key=lambda r: r.id)]}
 
 
-@router.get("/cases/{case_id}")
+@router.get("/cases/{case_id}", response_model=CaseDetail)
 def get_case(case_id: str, request: Request, subject: str | None = Depends(current_subject)):
     rt = runtime_of(request)
     record = visible_record(rt, subject, case_id)
     verdict = rt.store.get_verdict(case_id)
+    log = collect_events(rt.events, case_id)
     model = build_report_model(record, verdict=verdict, evidence=rt.store.list_evidence(case_id),
-                               case_file=rt.store.get_case_file(case_id), clock=rt.clock)
+                               case_file=rt.store.get_case_file(case_id), clock=rt.clock,
+                               events=log.events, timeline_error=log.error)
     return {**_summary(record),
             "question": record.question, "question_kind": record.question_kind,
             "requested_by": record.requested_by, "intake_done": record.intake_done,
             "target_locator": record.target_locator,
             "stages": [s.model_dump() for s in model.stages],
             "verdict": verdict.model_dump(mode="json") if verdict else None,
+            "candidates": candidates_of(verdict),
+            "timeline": [e.model_dump(mode="json") for e in model.timeline],
+            "timeline_source": model.timeline_source,
+            "timeline_error": model.timeline_error,
             "task_error_rate": model.task_error_rate,
             "knowledge_digests": model.knowledge_digests}
 
@@ -140,9 +148,11 @@ def get_report(case_id: str, request: Request,
     path = Path(rt.app.report.output_dir) / f"{case_id}.{fmt}"
     if path.exists():
         return PlainTextResponse(path.read_text(encoding="utf-8"), media_type=media)
+    log = collect_events(rt.events, case_id)
     model = build_report_model(record, verdict=rt.store.get_verdict(case_id),
                                evidence=rt.store.list_evidence(case_id),
-                               case_file=rt.store.get_case_file(case_id), clock=rt.clock)
+                               case_file=rt.store.get_case_file(case_id), clock=rt.clock,
+                               events=log.events, timeline_error=log.error)
     return PlainTextResponse(render_html(model) if fmt == "html" else render_md(model),
                              media_type=media)
 

@@ -79,3 +79,69 @@ def test_verify가_문제만_실은_청크는_판정_이벤트가_아니다():
     # verify_problems만 있는 청크는 판정이 아니라 conclude에 대한 재작성 요구다.
     assert map_update_to_events({"verify": {"verify_problems": ["없는 id ev-9 인용"]}},
                                 case_id="c-1", clock=lambda: T) == []
+
+
+def test_collect_events는_페이지를_끝까지_읽는다():
+    # 보고서는 부분 Timeline을 내면 안 된다 — since의 limit 한 페이지로 끝내면 200건
+    # 넘는 조사의 뒷부분이 조용히 빠진다.
+    from src.application.events import collect_events
+    from src.domain.events import EngineEvent, InMemoryEventStore
+    store = InMemoryEventStore()
+    for i in range(5):
+        store.append(EngineEvent(event="round_started", case_id="c-1", at=T, data={"round": i}))
+    assert [e.seq for e in collect_events(store, "c-1", page=2).events] == [1, 2, 3, 4, 5]
+    assert collect_events(store, "없음").events == []
+
+
+def test_collect_events는_스토어_장애를_raise_대신_돌려준다():
+    # 리뷰 M1(규율 1·8): 읽기 장애 하나가 보고서 파일·report_ready·메일을 전부 막았다.
+    from src.application.events import collect_events
+    from src.domain.events import InMemoryEventStore
+
+    class _Broken(InMemoryEventStore):
+        def since(self, *a, **k):
+            raise RuntimeError("case_events read failed")
+    log = collect_events(_Broken(), "c-1")
+    assert log.events == [] and log.error == "RuntimeError: case_events read failed"
+
+
+def test_collect_events는_커서를_마지막_seq로_옮긴다():
+    # 리뷰 D1: seq가 연속이면 `cursor += page`도 맞아 보인다. prune 뒤 3부터 시작하면
+    # 그 변형은 같은 페이지를 영원히 읽는다 — 스토어가 11번째 호출에서 끊는다.
+    from datetime import timedelta
+    from src.application.events import collect_events
+    from src.domain.events import EngineEvent, InMemoryEventStore
+
+    class _Counting(InMemoryEventStore):
+        calls = 0
+
+        def since(self, *a, **k):
+            type(self).calls += 1
+            if type(self).calls > 10:
+                raise RuntimeError("페이지를 끝없이 읽는다")
+            return super().since(*a, **k)
+    store = _Counting()
+    for i in range(6):
+        at = T - timedelta(hours=1) if i < 2 else T
+        store.append(EngineEvent(event="round_started", case_id="c-1", at=at, data={"round": i}))
+    store.prune_before(T)                                   # seq 1·2가 걷혀 3부터 남는다
+    log = collect_events(store, "c-1", page=2)
+    assert log.error is None and [e.seq for e in log.events] == [3, 4, 5, 6]
+
+
+def test_collect_events는_부분_읽기를_버린다():
+    # 리뷰 D4: 반쯤 읽은 Timeline은 "완전한 Timeline"으로 읽힌다 — 둘째 페이지에서
+    # 죽으면 첫 페이지도 내지 않는다.
+    from src.application.events import collect_events
+    from src.domain.events import EngineEvent, InMemoryEventStore
+
+    class _SecondPageFails(InMemoryEventStore):
+        def since(self, case_id, after_seq=0, limit=200):
+            if after_seq:
+                raise RuntimeError("page 2 failed")
+            return super().since(case_id, after_seq, limit)
+    store = _SecondPageFails()
+    for i in range(4):
+        store.append(EngineEvent(event="round_started", case_id="c-1", at=T, data={"round": i}))
+    log = collect_events(store, "c-1", page=2)
+    assert log.events == [] and log.error == "RuntimeError: page 2 failed"

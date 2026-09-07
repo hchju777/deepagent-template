@@ -12,8 +12,38 @@ stream_mode="updates"가 한 덩어리에 노드 하나만 담는 정상 동작�
 않는다).
 """
 from src.application.lifecycle import Clock
+from src.config.schema_app import StrictModel
 from src.domain.cases import CaseStatus
-from src.domain.events import EngineEvent
+from src.domain.events import EngineEvent, EventStorePort
+
+
+class EventLogRead(StrictModel):
+    """이벤트 로그 읽기의 결과 — 실패는 raise가 아니라 error다(규율 1).
+
+    보고서 발행 경로가 이것을 부른다. raise하면 읽기 장애 하나가 보고서 파일·report_ready·
+    메일을 전부 막는다(계획 14 검증 리뷰 M1 — 규율 8 "파일 먼저"의 회귀).
+    """
+    events: list[EngineEvent] = []
+    error: str | None = None
+
+
+def collect_events(store: EventStorePort, case_id: str, *, page: int = 200) -> EventLogRead:
+    """since 페이지를 끝까지 읽는다 — 보고서는 부분 Timeline을 내면 안 된다(조용한 생략).
+
+    실패하면 부분 결과를 버리고 error만 돌려준다 — 반쯤 읽은 Timeline은 "완전한 Timeline"으로
+    읽히므로 그것도 조용한 생략이다.
+    """
+    out: list[EngineEvent] = []
+    cursor = 0
+    try:
+        while True:
+            chunk = store.since(case_id, after_seq=cursor, limit=page)
+            out.extend(chunk)
+            if len(chunk) < page:
+                return EventLogRead(events=out)
+            cursor = chunk[-1].seq
+    except Exception as exc:                                       # noqa: BLE001 — 무raise
+        return EventLogRead(error=f"{type(exc).__name__}: {exc}")
 
 
 def map_update_to_events(update: dict, *, case_id: str, clock: Clock,

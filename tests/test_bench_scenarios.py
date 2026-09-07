@@ -133,6 +133,8 @@ _VERDICT_A1 = ('{"verdict_type": "stale_data", "confidence": "high", '
               '"narrative": "plan-sync가 line 7의 plan:7:today 키를 못 써 aggregator가 '
               '옛 계획값을 폴백으로 썼다 — 분모가 축소돼 OEE가 폭등했다.", '
               '"root_cause": {"component": "plan-sync", "evidence_ids": ["ev-2", "ev-3"]}, '
+              '"alternates": [{"component": "twin-aggregator", "evidence_ids": ["ev-3"], '
+              '"confidence": "low", "relation": "폴백 로직 자체가 원인일 가능성 — 키가 있었으면 안 났다"}], '
               '"recommendations": ["plan:7:today 키 재생성", "plan-sync 실패 로그 확인(스코프 밖)"]}')
 
 
@@ -174,6 +176,8 @@ async def test_A1_OEE_512퍼센트는_plan_sync_stale_data로_귀결되고_보�
     assert verdict.root_cause.component == "plan-sync"
     assert verdict.verdict_type == "stale_data"
     assert verdict.confidence == "high"                # M12: verify 가드레일을 명시 술어로
+    # 계획 14: 후보도 구조화 필드로만 채점한다 — 후보의 인용(ev-3)도 verify를 통과했다.
+    assert [(a.component, a.confidence) for a in verdict.alternates] == [("twin-aggregator", "low")]
 
     fmt = daemon.report_cfg.format
     path = Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}"
