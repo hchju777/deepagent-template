@@ -25,7 +25,7 @@ CHECK = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5
 
 
 def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=None, on_event=None,
-            events=None, labels=None):
+            events=None, labels=None, ticker=None):
     """report_cfg 기본값을 tmp_path 기반으로 만든다(테스트 위생) — 예전엔 기본
     ReportConfig()가 output_dir="output"(CWD 상대)을 써서, 보고서 발행을 다루지
     않는 테스트들도 그때마다 레포 루트에 output/*를 남겼다. tmp_path를 필수
@@ -43,7 +43,7 @@ def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=
                         checkpointer=InMemorySaver(), clock=clock, judge_llm=None,
                         budget=LlmBudget(5, clock=clock), owner="daemon-test", timezone="Asia/Seoul",
                         report_cfg=report_cfg if report_cfg is not None else default_report_cfg,
-                        on_event=on_event, events=events, labels=labels)
+                        on_event=on_event, events=events, labels=labels, ticker=ticker)
 
 
 async def test_run_one은_finding을_케이스로_열어_큐에_넣고_워커가_종결한다(tmp_path):
@@ -401,3 +401,12 @@ async def test_발행_보고서_푸터가_라벨을_보인다(tmp_path, monkeypa
     assert await daemon.worker.run_once(case_id) == "failed"
     text = next((tmp_path / "out").glob("*.html")).read_text(encoding="utf-8")
     assert "라벨: wrong" in text
+
+
+def test_데몬은_ticker를_워커까지_전달한다(tmp_path):
+    # CLI가 데몬에 넘겨도 데몬이 워커에 안 넘기면 경과는 여전히 "미측정"이다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    ticks = iter([1.0, 2.0])
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path, ticker=lambda: next(ticks))
+    daemon.build()
+    assert daemon.worker._ticker is not None and daemon.worker._ticker() == 1.0
