@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from src.application.answer import answer_case
 from src.application.events import collect_events
-from src.application.labels import label_stats, label_texts, submit_label
+from src.application.labels import calibration, label_texts, submit_label
 from src.config.loader import load_scenarios
 from src.fleet.run import run_scenario, scenario_sites
 from src.presentation.fleet_report import render_fleet_html, render_fleet_md
@@ -303,12 +303,19 @@ def _cmd_case_label(args, config_root: Path, env: dict) -> int:
         return 1
     p = build_persistence(app.store)
     if args.stats:
-        stats = label_stats(repo=p.repo, labels=p.labels)
         # 게이트가 닫혀 있으면 퍼센트를 내지 않는다 — 12/40으로 낸 30%는 다음 주에
         # 뒤집힐 숫자이고, 한 번 보고되면 사람이 그것을 기억한다.
-        print(stats.why)
-        print("게이트: " + ("열림 — confidence별 적중을 계산할 수 있다" if stats.gate_open
-                          else "닫힘 — 건수만 보고한다"))
+        result = calibration(repo=p.repo, labels=p.labels, snapshots=p.snapshots)
+        print(result.why)
+        print("게이트: " + ("열림" if result.gate_open else "닫힘 — 건수만 보고한다"))
+        for bucket in result.buckets:
+            hit = f"{bucket.correct}/{bucket.n}" if bucket.n else "—"
+            # 앵커링 의심(`saw_report`)과 분모에서 뺀 수를 적중률 **옆에** 둔다.
+            # 따로 두면 사람이 적중률만 읽는다.
+            print(f"  confidence {bucket.confidence}: 적중 {hit}"
+                  f" (부분 {bucket.partially_correct} / 오답 {bucket.wrong}"
+                  f" / 모름 {bucket.excluded_unknown}건은 분모 제외"
+                  f" / 보고서 본 뒤 라벨 {bucket.saw_report}건)")
         return 0
     if not args.case_id or not args.agreement:
         print("case label <id> --agreement correct|partially_correct|wrong|unknown",

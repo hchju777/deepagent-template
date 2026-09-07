@@ -1473,3 +1473,44 @@ async def test_chat의_접수_루프도_질문이_바뀌면_다시_묻는다(tmp
     assert asked == ["Q1", "Q2"]           # 새 질문으로 다시 물었다
     assert seen == [1, 2]                   # 묻기 직전 읽은 번호를 매번 실어 보냈다
     assert "접수 질문이 바뀌었다" in capsys.readouterr().out
+
+
+def _labelled_tree(tmp_path, monkeypatch, *, labeled, confidence="high", agreement="correct"):
+    """게이트를 여는 최소 영속 세트 — 종결 `labeled*2-1`건 중 `labeled`건에 라벨."""
+    from src.application.labels import submit_label
+    from src.domain.snapshot import VerdictSnapshot
+
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    labels, snapshots = InMemoryLabelStore(), InMemoryVerdictSnapshotStore()
+    for i in range(labeled * 2 - 1):
+        repo.save(CaseRecord(id=f"c-{i}", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                             t0=T, created_at=T, updated_at=T, status="closed",
+                             closed_reason="조사 완료"))
+    for i in range(labeled):
+        snapshots.put(VerdictSnapshot(case_id=f"c-{i}", closed_at=T, gbm="mx", fct="gumi",
+                                      fingerprint="fp", outcome="closed", confidence=confidence))
+        submit_label(f"c-{i}", agreement=agreement, saw_report=True,
+                     repo=repo, labels=labels, clock=lambda: T)
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                snapshots, labels, InMemoryDigestStore()))
+    return ledger
+
+
+def test_case_label_stats는_게이트가_열리면_confidence별_적중을_찍는다(
+        tmp_path, capsys, monkeypatch):
+    # 게이트가 열렸다고 말만 하고 계산하지 않던 자리다.
+    _labelled_tree(tmp_path, monkeypatch, labeled=30)
+    assert main(["case", "label", "--stats", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "high" in out and "30" in out
+    assert "보고서 본 뒤" in out          # 앵커링 의심을 숫자 옆에 둔다
+
+
+def test_case_label_stats는_게이트가_닫혀_있으면_표를_안_찍는다(tmp_path, capsys, monkeypatch):
+    _labelled_tree(tmp_path, monkeypatch, labeled=3)
+    assert main(["case", "label", "--stats", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "confidence" not in out and "%" not in out
