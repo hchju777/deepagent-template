@@ -26,8 +26,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.config.loader import (ConfigError, load_app_config, load_registry,
-                               load_scenarios, load_site_config)
+from src.config.loader import (ConfigError, collect_scenarios, load_app_config,
+                               load_registry, load_site_config)
 from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
 from src.infrastructure.query_rules import (entry_call_problems, entry_schema, filter_problems,
                                             mongo_role_problems)
@@ -425,11 +425,10 @@ def _scenario_errors(config_root: Path, env, site_targets: dict,
     "N개 사이트 미확인"으로만 드러나면 커버리지 블록이 진짜 장애와 설정 실수를
     구별할 수 없게 된다.
     """
-    try:
-        scenarios = load_scenarios(config_root, env=env)
-    except ConfigError as exc:
-        return [BootError("scenarios", p) for p in exc.problems]
-    errors: list[BootError] = []
+    scenarios, schema_problems = collect_scenarios(config_root, env=env)
+    # 스키마에서 걸린 파일은 의미 검증을 못 받지만, **읽힌 나머지는 계속 본다** —
+    # 여기서 즉시 return하면 파일 하나의 오타가 다른 시나리오의 문제를 전부 가린다.
+    errors: list[BootError] = [BootError("scenarios", p) for p in schema_problems]
     for name, scenario in scenarios.items():
         where = f"scenarios/{name}"
         wanted = (list(site_targets) if scenario.scope.sites == "all" else scenario.scope.sites)

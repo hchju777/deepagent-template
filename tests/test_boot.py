@@ -906,3 +906,29 @@ def test_집계_지표의_body와_해석기_키가_겹치면_거부된다():
             "target": "rest:alarm_count", "extract": "0.n", "reduce": "sum",
             "params": {"body": {"line": ["A"]}},
             "resolve": {"line": {"from": "unfiltered"}}})
+
+
+def test_시나리오_스키마_오류가_다른_시나리오의_문제를_가리지_않는다(tmp_path):
+    # 기동 거부 철학은 "전부 모아서"다. 파일 하나가 스키마에서 걸리면 즉시 return하던
+    # 탓에, 다른 시나리오의 오타가 그 한 줄 뒤로 숨었다(검증 리뷰).
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "broken.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "스키마 오류",
+        "schedule": {"interval": "1h"},
+        "metrics": {"m": {"target": "mongo:twin_state", "extract": "0.n",
+                          "reduce": "sum", "sample": 0}}}), encoding="utf-8")
+    (scenarios / "typo.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "오타",
+        "schedule": {"interval": "1h"},
+        "metrics": {"m": {"target": "mongo:ghost_collection", "extract": "0.n",
+                          "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "greater than or equal to 1" in problems      # 스키마 오류
+    assert "ghost_collection" in problems                # 가려지던 의미 오류

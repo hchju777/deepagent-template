@@ -72,11 +72,23 @@ def load_scenarios(config_root: Path, *, env) -> dict[str, "ScenarioConfig"]:
     사이트마다 잡이 등록돼 같은 집계가 N번 돈다. 디렉터리가 없으면 빈 dict다: 집계는
     선택 기능이라 안 쓰는 배치가 기동에서 죽으면 안 된다.
     """
+    scenarios, problems = collect_scenarios(config_root, env=env)
+    if problems:
+        raise ConfigError(problems)
+    return scenarios
+
+
+def collect_scenarios(config_root: Path, *, env) -> tuple[dict, list[str]]:
+    """읽힌 것과 문제를 **함께** 돌려준다 — 기동 검증이 쓰는 형태.
+
+    `load_scenarios`처럼 던지면 파일 하나의 스키마 오류가 나머지 시나리오의 의미
+    검증(오타난 target 등)을 통째로 가린다. 기동 거부 철학은 "전부 모아서"다.
+    """
     from src.config.schema_scenario import ScenarioConfig
 
     directory = config_root / "scenarios"
     if not directory.is_dir():
-        return {}
+        return {}, []
     scenarios: dict[str, ScenarioConfig] = {}
     problems: list[str] = []
     for path in sorted(directory.glob("*.json")):
@@ -90,9 +102,7 @@ def load_scenarios(config_root: Path, *, env) -> dict[str, "ScenarioConfig"]:
             scenarios[path.stem] = ScenarioConfig.model_validate(resolved)
         except ValidationError as exc:
             problems += _validation_problems(exc, where)
-    if problems:
-        raise ConfigError(problems)
-    return scenarios
+    return scenarios, problems
 
 
 def load_registry(config_root: Path) -> Registry:
