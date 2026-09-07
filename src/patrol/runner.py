@@ -26,6 +26,20 @@ def _error(observed_at, msg: str, *, llm_calls: int = 0) -> CheckOutcome:
     return CheckOutcome(status="error", observed_at=observed_at, error=msg, llm_calls=llm_calls)
 
 
+MAX_SNAPSHOT_CHARS = 2000
+
+
+def snapshot_text(data) -> str:
+    """순찰 스냅샷을 LLM 판정 프롬프트의 `[증거 …]` 한 줄에 실을 텍스트로 만든다.
+
+    **필요한 성질은 "개행을 이스케이프한다"이지 `repr` 자체가 아니다** — 스냅샷은 대상
+    시스템 데이터라 여러 줄이 정상이고, 날것으로 실리면 `[증거 …]` 줄을 위조할 수 있다
+    (`domain.case.evidence_summary`와 같은 계약). 이름을 준 이유는 그 성질을 테스트가
+    직접 볼 수 있게 하려는 것이다 — 소스를 grep하면 구현 글자만 지킨다.
+    """
+    return repr(data)[:MAX_SNAPSHOT_CHARS]
+
+
 async def run_check(
     gbm: str, fct: str, name: str, check: CheckConfig, *,
     adapters: AdapterSet, store, clock, timezone_name: str, llm=None,
@@ -103,9 +117,7 @@ def _judge_rule(check, result, clock, observed_at, snap_id, make_finding: _MakeF
 
 async def _call_llm(name: str, check: CheckConfig, result: ProbeResult, snap_id: str, llm):
     question = check.params.get("question") or _DEFAULT_QUESTION
-    # `repr`이 개행을 이스케이프하는 것이 판정 프롬프트의 방어다 — 스냅샷은 대상
-    # 데이터라 여러 줄이 정상인데, 날것으로 실리면 `[증거 …]` 줄을 위조할 수 있다.
-    snapshot_texts = {snap_id: repr(result.data)[:2000]}
+    snapshot_texts = {snap_id: snapshot_text(result.data)}
     return await judge_by_llm([snap_id], snapshot_texts, name, question, llm=llm)
 
 

@@ -217,7 +217,10 @@ async def run_subagent(task: PlanTask, *, adapters, store, llm, budget, case_id)
     from langchain.agents import create_agent   # 지연 import
 
     tools, created = make_tools(task.role, adapters=adapters, store=store, case_id=case_id)
-    goal = task.goal
+    # 리드가 쓴 자유 텍스트가 서브에이전트의 user 메시지가 된다. 그 컨텍스트의 시스템
+    # 프롬프트가 `[증거 ev-N]` 어휘를 가르치고 도구 반환이 그 어휘를 쓰므로, 개행이
+    # 섞이면 가짜 도구 결과를 만들 수 있다.
+    goal = one_line(task.goal)
     if task.input_evidence_ids:
         goal += f"\n입력 증거 id: {', '.join(task.input_evidence_ids)}"
     try:
