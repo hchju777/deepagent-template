@@ -48,9 +48,11 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 
 `tests/`는 `src/`와 계층별로 미러링돼 있다: `tests/domain/`,
 `tests/config/`, `tests/knowledge/`, `tests/infrastructure/`,
-`tests/patrol/`, `tests/application/`, `tests/presentation/`, `tests/api/`(HTTP 표면 —
-`test_boundary.py`가 import 그래프로 "api는 어댑터·워커를 모른다"를 지킨다). 최상위에
-`test_boot.py`(기동 검증 통합)와 `test_bench_scenarios.py`(E2E 벤치)가 있다.
+`tests/patrol/`, `tests/application/`, `tests/fleet/`, `tests/presentation/`,
+`tests/api/`(HTTP 표면 — `test_boundary.py`가 import 그래프로 "api는 어댑터·워커를
+모른다"를 지킨다). 최상위에 `test_boot.py`(기동 검증 통합), `test_bench_scenarios.py`
+(E2E 벤치), `test_cli.py`(CLI 배선 — 호출부가 실제로 넘기는지), `test_examples.py`
+(예시 트리와 문서가 서로 어긋나지 않는지)가 있다.
 `tests/patrol/test_resolvers.py`는 파라미터 해석기(전부-또는-전무·카디널리티·
 시간대)를 단위로 덮고, 그것이 **실제 데몬 경로까지 배선됐는지**는
 `tests/patrol/test_daemon.py`가 본다 — 함수 인자만 보는 테스트가 배선 누락을
@@ -66,7 +68,7 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 
 ## 집계 테스트가 지키는 것
 
-`tests/domain/test_rollup.py`의 validator 넷과 `tests/presentation/test_fleet_report.py`의
+`tests/domain/test_rollup.py`의 validator들과 `tests/presentation/test_fleet_report.py`의
 **순서 테스트**(커버리지가 지표보다 먼저)가 계획 16의 방어선이다. 리포트를 손볼 때
 순서를 바꾸지 마라 — 숫자를 먼저 보여주고 커버리지를 각주로 다는 것이 이 기능이 막으려는
 사고의 형태다. 팬아웃 테스트는 동시 사이트 수의 **최대값을 실제로 재서** 상한을 확인한다.

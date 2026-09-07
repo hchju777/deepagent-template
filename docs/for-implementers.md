@@ -3,14 +3,20 @@
 [CLAUDE.md](../CLAUDE.md)가 **하지 말 것**(규율)을 적는다면, 이 문서는 **할 것**(절차)을
 적는다. [file-map.md](file-map.md)에서 파일을 찾고, 여기서 순서를 찾아라.
 
-각 레시피는 셋을 준다: **만질 파일과 순서**, **먼저 쓸 테스트**, **빠뜨리면 조용히
-깨지는 것**. 마지막 항목이 요점이다 — 여기 적힌 것들은 전부 실제로 깨졌던 자리다.
+각 레시피는 **만질 파일과 순서**와 **빠뜨리면 조용히 깨지는 것**을 준다(테스트 위치가
+자명하지 않은 곳은 함께 적는다). 마지막 항목이 요점이다 — 여기 적힌 것들은 전부 실제로
+깨졌던 자리다.
+
+**테스트 트리는 `src/`와 미러링돼 있다** — `src/patrol/rules.py`를 고치면
+`tests/patrol/test_rules.py`다. 스키마 검증은 `tests/config/`, 저장소 계약은
+`tests/infrastructure/`, CLI 배선은 `tests/test_cli.py`, 기동 검증은 `tests/test_boot.py`.
 
 ## 시작 전 30초
 
 ```bash
-rm -rf output/; .venv/bin/python -B -m pytest tests/ -q -p no:cacheprovider   # 1048 passed
+rm -rf output/; .venv/bin/python -B -m pytest tests/ -q -p no:cacheprovider
 ```
+전부 통과해야 시작이다(정확한 수는 여기 안 적는다 — 커밋마다 낡는다).
 
 돌연변이 확인이 필요하면 **반드시 `python -B`** 를 쓰거나 `__pycache__`를 지워라.
 같은 길이의 변조를 같은 초 안에 되돌리면 낡은 바이트코드가 남아 "안 잡혔다"는 거짓
@@ -43,8 +49,15 @@ rm -rf output/; .venv/bin/python -B -m pytest tests/ -q -p no:cacheprovider   # 
 1. `src/patrol/rules.py` — 판정 함수를 쓰고 `_RULES` dict에 등록한다.
 2. `src/config/schema_site.py` — 그 rule이 **concern 축 위에서만 뜻이 있으면**
    `_AXIS_SPECIFIC_RULES`에 더한다(그러면 사람이 concern을 명시해야 통과한다).
+3. **rule 종수를 적은 문서를 전부 고친다.** 지금 여섯이라 적힌 곳:
+   `CLAUDE.md`의 코드 지도, `docs/config-reference.md`(설명과 rule 표), `docs/glossary.md`,
+   `docs/howto.md`, `docs/architecture.md`, `docs/file-map.md`의 `rules.py` 행.
+   ```bash
+   grep -rn "rule 판정 6종\|6종" docs/ CLAUDE.md      # 고칠 자리를 먼저 센다
+   ```
 
 **먼저 쓸 테스트**: `tests/patrol/test_rules.py`에 ok/finding/error 세 갈래.
+`_AXIS_SPECIFIC_RULES`에 더했다면 `tests/config/test_schema_site.py`에도 한 건.
 
 **빠뜨리면 조용히 깨지는 것**
 - **`KnownRuleError`는 설정 오류 전용이다.** 데이터가 이상한 것(필드 부재, NaN)은
@@ -95,9 +108,14 @@ rm -rf output/; .venv/bin/python -B -m pytest tests/ -q -p no:cacheprovider   # 
 2. `src/api/models.py` — 응답 모델(dict로 돌려주지 않는다).
 3. `docs/howto.md` — curl 예시.
 
+**먼저 쓸 테스트**: `tests/api/test_routes_*.py`에 정상 1건 + **미인가 주체 1건**.
+
 **빠뜨리면 조용히 깨지는 것**
 - **`src/api/`는 어댑터·워커·그래프를 import하지 않는다.** `tests/api/test_boundary.py`가
   import 그래프로 지킨다.
+- **접근 좁히기를 직접 짜지 마라** — `app.py`의 `visible_record`·`hidden`과
+  `AccessPolicy.sites_for`를 쓴다. 이 리포가 실제로 겪은 사고가 "`sites_for`에 프로덕션
+  소비자가 0이었다"(읽기 필터를 안 붙여 접수만 막히고 읽기는 열렸다)다.
 - 미인가 주체에게는 **404**로 숨긴다(403은 존재 오라클이다).
 - 상태 코드를 정할 때 **본문 모양도 정하라** — 같은 409가 두 모양이면 클라이언트가
   두 벌을 짠다.

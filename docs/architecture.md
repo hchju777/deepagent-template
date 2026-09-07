@@ -122,7 +122,8 @@ PatrolDaemon(스케줄러) → 주기마다 run_check() → CheckOutcome
 APScheduler)부터 큐·워커·정리(retention sweep)까지 한 프로세스로 조립한다.
 점검 하나(`CheckConfig`)는 `resolve_probe()`로 프로브를 고르고
 (`src/patrol/probes.py` — `rest_get`/`rest_query`/`redis_get`/`mongo_recent`/
-`kafka_lag` 5종, `target`의 kind 접두사로 기본 선택되거나 `probe` 필드로 명시),
+`mongo_find`/`kafka_lag`, `target`의 kind 접두사로 기본 선택되거나 `probe` 필드로 명시.
+`mongo:`의 기본은 `mongo_recent`이고 `mongo_find`는 명시할 때만 쓰인다),
 그 결과를 `judge`(`"rule"`|`"llm"`|`"rule+llm"`)로 판정한다. rule 판정은
 `src/patrol/rules.py`의 6종이다 — `range`/`exists`/`freshness`/`max`에
 `all_zero`/`expected_state`가 더해졌다.
@@ -339,8 +340,10 @@ raise하지 않고 `error`를 돌려준다 — 읽기 장애 하나가 보고서
 "사람의 답을 실어 나를 프로세스 밖 명령 채널"이다. 그래서 **메모리 백엔드에서는
 두 프로세스가 서로를 못 본다** — 실운영은 Mongo 백엔드가 전제다.
 
-`api`가 하는 LLM 호출은 접수(`intake_turn`)뿐이다. 접수는 조사가 아니고(호출 하나,
-대상 접근 없음), 되묻는 질문이 응답에 바로 실려야 클라이언트가 폴링하지 않는다.
+`api`가 하는 LLM 호출은 **접수 계열 둘뿐이다** — 사이트 축 해석(`resolve_scope`)과
+접수 턴(`intake_turn`). 둘 다 조사가 아니고(호출 하나, **대상 시스템 접근 없음**),
+되묻는 질문이 응답에 바로 실려야 클라이언트가 폴링하지 않는다. 조사 LLM(리드·서브에이전트)은
+`api`가 만들지 않는다.
 
 ## 3. 조사 엔진 그래프
 
@@ -432,14 +435,6 @@ recompute_verifier=4`)의 `recursion_limit`으로 강제한다 — 서브에이�
 
 ASCII 다이어그램을 두지 않는 이유: 이 표를 그림으로 옮겼다가 엣지 둘을 잃은 채로
 커밋된 적이 있다. 여덟 줄을 세는 것이 화살표를 세는 것보다 안 틀린다.
-
-`open ↔ awaiting_human` 두 엣지는 **접수 되묻기 전용**이다. 그래프는
-`investigating`에서만 돌므로 그쪽 파킹은 여전히 `investigating → awaiting_human`이고,
-재개는 `awaiting_human → investigating`이다. 두 종류의 구별은
-`CaseRecord.question_kind`가 들고, `answer_case`(`src/application/answer.py`)가
-그것을 보고 접수를 이어갈지 그래프를 재개할지 가른다 — **그래프가 파킹한 케이스를
-`open`으로 보내면 `run_once`가 새 조사를 처음부터 시작해 스레드를 잃는다.**
-
 
 `open ↔ awaiting_human` 두 엣지는 **접수 되묻기 전용**이다. 그래프는
 `investigating`에서만 돌므로 그쪽 파킹은 여전히 `investigating → awaiting_human`이고,

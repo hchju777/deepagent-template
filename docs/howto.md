@@ -243,10 +243,15 @@ exit 0이면 통과. `--live`를 추가하면 대상에 실제로 접속해 **Mo
   "judge": "rule", "schedule": { "interval": "5m" },
   "probe": "mongo_find", "target": "mongo:twin_state",
   "params": { "rule": "exists", "field": "0.line",
-              "filter": { "state": "STOP" }, "sort": [["ts", -1]], "sample": 50 },
-  "resolve": { "line": { "from": "rest", "entry": "list_lines", "field": "code" } }
+              "filter": { "state": "STOP" }, "sort": [["ts", -1]] },
+  "sample": 50,
+  "resolve": { "line": { "from": "rest", "entry": "list_lines", "field": "line_code" } }
 }
 ```
+
+**`sample`은 `params` 안이 아니라 점검의 최상위 필드다.** `params`는 free-form dict라
+거기 적으면 `extra="forbid"`가 못 잡고 아무도 안 읽는다 — 상한을 적었다고 믿은 사람이
+사이트 기본값(`guards.max_rows`)을 받는다.
 
 읽기 전용은 여기서도 메커니즘이다 — 필터 연산자가 닫힌 허용 목록을 통과해야 하고
 `$where`처럼 서버측 JS를 도는 연산자는 표현할 수 없다. 해석기 값은 필터에 합쳐진다

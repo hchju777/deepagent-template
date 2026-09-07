@@ -71,3 +71,25 @@ def test_예시_트리는_기동_검증을_통과한다():
            "MX_GUMI_MONGO_URL": "mongodb://x:27017", "MX_GUMI_REDIS_URL": "redis://x"}
     errors = validate_boot(ROOT / "config.example", env=env, repo_root=ROOT)
     assert errors == [], "\n".join(f"[{e.where}] {e.problem}" for e in errors)
+
+
+def test_문서의_해석기가_시드가_실제로_내는_필드를_가리킨다():
+    """튜토리얼·howto의 `resolve`가 실제로 값을 내는가.
+
+    문서대로 따라 했는데 해석기가 빈 결과를 내면 점검이 `error`로 끝난다 — "문서대로
+    하면 아무 일도 안 일어난다"는 이 파일이 존재하는 이유 그대로다. 간격만 보던 기존
+    테스트는 필드 이름 오타를 못 봤다(실제로 `code` vs `line_code`로 틀렸다).
+    """
+    seeds = json.loads((ROOT / "stub-seeds.example.json").read_text(encoding="utf-8"))
+    # 시드는 사이트별 dict이고 REST 키는 "GET /lines"처럼 메서드를 앞에 단다.
+    available = {key for site in seeds.values()
+                 for path, rows in site.get("rest_responses", {}).items()
+                 if path.endswith("/lines") and isinstance(rows, list)
+                 for row in rows if isinstance(row, dict) for key in row}
+    assert available, "시드의 /lines 응답을 못 찾았다"
+    for name in ("tutorial", "howto"):
+        text = (ROOT / "docs" / f"{name}.md").read_text(encoding="utf-8")
+        for field in re.findall(r'"entry":\s*"list_lines",\s*"field":\s*"(\w+)"', text):
+            assert field in available, (
+                f"{name}.md가 list_lines의 필드로 {field!r}를 적었는데 "
+                f"시드가 내는 것은 {sorted(available)}다")

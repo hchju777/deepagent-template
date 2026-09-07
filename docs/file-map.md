@@ -21,7 +21,7 @@
 APScheduler 잡                      patrol/scheduler.py  build_scheduler·build_trigger
   → 점검 하나 실행                  patrol/runner.py     run_check
       → 파라미터 값 해석            patrol/resolvers.py  resolve_params
-      → 프로브 호출                 patrol/probes.py     rest_get·mongo_recent·mongo_find·kafka_lag·rest_query
+      → 프로브 호출                 patrol/probes.py     rest_get·rest_query·redis_get·mongo_recent·mongo_find·kafka_lag
           → 어댑터                  infrastructure/      stubs.py 또는 {redis,mongo,kafka,rest}_reader.py
       → 스냅샷 박제                 domain/store.py      CaseStorePort.put_evidence
       → 판정                        patrol/rules.py      judge_by_rule       (무료·결정론)
@@ -42,7 +42,9 @@ APScheduler 잡                      patrol/scheduler.py  build_scheduler·build
 ```
 워커                                application/worker.py InvestigationWorker.run_once
   → lease 획득(원자)                domain/cases.py       CaseRepositoryPort.claim
-  → 이력 검색(tier 1~4)             application/history.py find_history
+  → 이력 검색(tier 1~4)             application/history.py read_history
+                                    (`find_history`는 실패 사유를 버리는 얇은 겉면 —
+                                     워커는 브리핑이 "못 읽었다"를 말해야 해서 read를 쓴다)
   → 엔진 호출                       application/usecase.py investigate_case
       → 그래프                      application/graph.py   build_engine
         frame     브리핑 조립·가설·계획   application/nodes.py + briefing.py
@@ -54,8 +56,8 @@ APScheduler 잡                      patrol/scheduler.py  build_scheduler·build
         verify    인용 검사·강등
       → State                       application/state.py   CaseState
       → 이벤트 매핑                 application/events.py  map_update_to_events
+  → 판정 스냅샷 박제                application/worker.py  (close_case가 아니다 — 워커가 쓴다)
   → 종결                            application/close.py   close_case
-      → 판정 스냅샷 박제            domain/snapshot.py     VerdictSnapshotPort.put
   → 보고서 데이터 유도              domain/report_model.py build_report_model
   → 렌더·발행                       presentation/report.py·report_html.py·mail.py
 ```
@@ -88,9 +90,11 @@ HTTP POST /cases/{id}/answers       api/routes_cases.py
 HTTP POST /cases/{id}/intake-answers
   → 분기 한 곳                      application/answer.py  answer_case
       → 접수 질문이면               application/intake.py  intake_turn(expect_seq=…)
-      → 조사 질문이면               application/submit.py  submit_answer
-          → 명령 채널에 싣기        domain/cases.py        attach_answer(expect_seq=…)
-          → 워커가 집어 간다        application/worker.py  resume_once → take_answer
+      → 조사 질문이면 **표면마다 갈린다**
+          CLI:  워커를 직접 부른다  application/worker.py  resume_once → take_answer
+          HTTP: 명령 채널에 싣고 끝 application/submit.py  submit_answer
+                                    domain/cases.py        attach_answer(expect_seq=…)
+                → 워커가 나중에 집어 간다(`api`는 실행자가 아니다)
               → 그래프 재개         application/usecase.py resume_case
 ```
 
@@ -117,7 +121,7 @@ HTTP POST /cases/{id}/intake-answers
 ### 1.6 학습 루프
 
 ```
-종결 시                             application/close.py   → VerdictSnapshotPort.put
+종결 시                             application/worker.py  → VerdictSnapshotPort.put
   (retention이 90일에 Verdict를 지우므로 **여기서 안 남기면 영구 불가**)
 사람이 실제 원인 되먹임             __main__.py `case label` / POST /cases/{id}/label
   → 유입구 한 곳                    application/labels.py  submit_label
@@ -206,7 +210,7 @@ git에 커밋되고, digest가 케이스 T0에 박제되고, 런타임에 넓어
 | `rest_prober.py` | 88 | 등재 항목만. 메서드는 항목 선언이 정한다 — 호출자는 이름만 댄다. |
 | `code_repo.py` | 51 | git subprocess, 읽기 명령만. 유일한 sync 포트. |
 | `query_rules.py` | 241 | **읽기 전용을 메커니즘으로 만드는 순수 판정들.** `filter_problems`·`endpoint_allowed`·`entry_call_problems`를 어댑터·스텁·기동 검증이 **공유한다**. |
-| `guards.py` | 24 | 타임아웃·행 상한 — "아픈 시스템을 더 아프게 하지 않는다". |
+| `guards.py` | 24 | 타임아웃·동시성 세마포어 —(행 상한은 어댑터별로 `factory.py`가 주입한다) — "아픈 시스템을 더 아프게 하지 않는다". |
 | `mongo_store.py` | 702 | Store·Repo·Ledger·EventStore·Digest·Label·Snapshot 7종의 Mongo 구현. **시각은 ISO 문자열이라 DB 정렬 전에 `_fixed_width_iso`로 폭을 맞춰야 한다**(정각이 최신으로 뒤집힌다). |
 | `checkpointer.py` | 71 | 체크포인터와 `Persistence` 묶음 조립. `ensure_indexes` 호출부. |
 | `retention.py` | 175 | 보존 스윕 2단. **범위 비교는 DB에 `$lt`를 안 맡기고 파싱해서 비교한다**(같은 폭 함정). |
@@ -293,8 +297,8 @@ import 그래프로 지킨다 — 끌어오면 `api` 풀 전체가 실행자가 
 
 | 파일 | 줄 | 역할 · 언제 여는가 |
 |---|---|---|
-| `__main__.py` | 988 | CLI 전체. **`datetime.now()`가 허용되는 유일한 경계**(규율 2). `_build_publisher`가 종결 세 경로의 발행 배선을 조립한다(규율 8). |
-| `boot.py` | 503 | 기동 검증 22항목. **문제를 전부 모아서** `list[BootError]`로 돌려준다. |
+| `__main__.py` | 988 | CLI 전체. **규율 2의 주 경계**(`datetime.now()`) — 기동 검증(`boot.py`)과 `usecase.py`의 경과 측정에 문서화된 예외가 있다. `_build_publisher`가 `chat`·`case resume` 두 경로의 발행 배선을 조립한다 — **데몬은 자기 `_publish_report`를 워커의 `on_closed`로 배선한다**(같은 계약, 다른 조립). |
+| `boot.py` | 503 | 기동 검증. **문제를 전부 모아서** `list[BootError]`로 돌려준다. 항목 번호는 `docs/config-reference.md`가 단일 소스다 — **여기 개수를 적지 마라**(두 곳이 갈라진다). |
 | `__init__.py` | — | 빈 패키지 표식. |
 
 ---
@@ -302,10 +306,10 @@ import 그래프로 지킨다 — 끌어오면 `api` 풀 전체가 실행자가 
 ## 3. 이 지도를 최신으로 유지하려면
 
 ```bash
-# 파일 목록이 어긋났는지
-diff <(find src -name '*.py' ! -name '__init__.py' | sort) \
-     <(grep -oE '`[a-z_]+\.py`' docs/file-map.md | tr -d '`' | sort -u | sed 's|^|src/|') \
-  | head
+# 표에 있는 파일명 ↔ 실제 파일명 대조(패키지 경로는 절 헤더가 말하므로 이름만 본다)
+diff <(find src -name '*.py' ! -name '__init__.py' -printf '%f\n' | sort -u) \
+     <(grep -oE '^\| `[a-z_]+\.py`' docs/file-map.md | tr -d '|` ' | grep -v __init__ | sort -u)
 ```
-경로가 패키지 절에 묶여 있어 이 명령은 근사치다 — 파일을 추가하면 해당 절의 표에
-한 줄을 더하고 패키지 헤더의 개수를 고쳐라.
+
+동기화돼 있으면 **출력이 없다**. 파일을 추가하면 해당 절의 표에 한 줄을 더하고 패키지
+헤더의 개수를 고쳐라.

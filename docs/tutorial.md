@@ -221,7 +221,7 @@ python -m src scenario list --config-root config.example --repo-root .
   "probe": "mongo_find", "target": "mongo:twin_state",
   "params": {"rule": "exists", "field": "0.line",
              "filter": {"state": "STOP"}, "sort": [["ts", -1]]},
-  "resolve": {"line": {"from": "rest", "entry": "list_lines", "field": "code"}} }
+  "resolve": {"line": {"from": "rest", "entry": "list_lines", "field": "line_code"}} }
 ```
 
 읽기 전용은 여기서도 **메커니즘**이다: 필터 연산자가 닫힌 허용 목록을 통과해야 하고
@@ -232,6 +232,10 @@ config에 값을 적으면 즉시 썩는다.
 
 조사나 접수가 되물으면 케이스가 파킹되고 **질문 번호**가 오른다. 답할 때 그 번호를
 같이 보내면, 그 사이 질문이 바뀌었을 때 답이 엉뚱한 질문에 붙지 않는다.
+
+> `config.example`은 `store.backend: "memory"`다 — **프로세스가 끝나면 케이스가 사라진다.**
+> 아래 두 절의 명령을 실제로 돌려 보려면 `store.backend: "mongo"`로 바꾸고 `AGENT_MONGO_URL`을
+> 주거나, `chat` 한 세션 안에서 해야 한다. 여기서는 명령의 **모양**만 보면 된다.
 
 ```bash
 python -m src case show c-1 --config-root config.example      # 파킹된 질문(#2)
