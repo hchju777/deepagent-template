@@ -333,3 +333,24 @@ async def test_리다이렉트를_따라가지_않는다():
     result = await rest.query("e", {})
     assert hosts == ["safe"], f"리다이렉트를 따라갔다: {hosts}"
     assert result.data["status_code"] == 302
+
+
+async def test_RealMongo도_필터_허용_목록을_소켓_이전에_강제한다():
+    # 검증 리뷰 M15: "어댑터·스텁·기동 검증이 같은 함수를 쓴다"는 이 기능의 핵심 주장인데
+    # 셋 중 **실구현만** 테스트가 없었다. 프로덕션은 RealMongo로 돈다.
+    from datetime import datetime, timezone
+    from src.config.schema_site import Guards
+    from src.infrastructure.mongo_reader import RealMongo
+
+    class _Boom:
+        def __getitem__(self, name):
+            raise AssertionError("소켓에 닿으면 안 된다")
+
+    reader = RealMongo.__new__(RealMongo)
+    reader._db = _Boom()
+    reader._guards = Guards()
+    reader._clock = lambda: datetime(2026, 9, 3, tzinfo=timezone.utc)
+    result = await reader.find("c", {"$where": "sleep(1000)"})
+    assert result.status == "error" and "$where" in (result.error or "")
+    result = await reader.count("c", {"$function": {}})
+    assert result.status == "error"

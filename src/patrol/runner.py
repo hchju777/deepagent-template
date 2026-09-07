@@ -58,7 +58,8 @@ async def run_check(
         # **프로브 종류를 먼저 본다**: 종류와 무관하게 "request" 키를 믿으면 대상
         # 시스템이 돌려준 데이터가 증거 출처를 위조할 수 있다. 세 키를 .get()으로
         # 확인하는 것도 같은 이유 — 어댑터 계약이 바뀌어도 KeyError로 점검이 죽지 않는다.
-        source = check.target or name
+        # 프로브가 "무엇을 물었는지"를 채웠으면 그것이 출처다(§2-N4).
+        source = result.source or check.target or name
         if probe_name == "rest_query" and isinstance(result.data, dict):
             request = result.data.get("request")
             if isinstance(request, dict) and {"method", "path", "params"} <= set(request):

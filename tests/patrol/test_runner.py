@@ -226,3 +226,29 @@ async def test_점검의_concern이_finding에_실린다():
     out = await run_check("mx", "gumi", "c", check, adapters=adapters,
                           store=InMemoryCaseStore(), clock=lambda: T)
     assert out.status == "finding" and out.finding.concern == "operation"
+
+
+async def test_mongo_find_증거의_출처가_질문을_담는다():
+    # 프로브가 채운 출처를 러너가 실제로 쓰는지 — 함수는 되는데 호출부가 안 쓰면
+    # 증거 표에 "mongo:twin_state"만 남아 무엇을 물었는지 잃는다(§2-N4).
+    from src.config.schema_site import CheckConfig, SiteConfig
+    from src.domain.store import InMemoryCaseStore
+    from src.infrastructure.factory import StubSeeds, build_adapters
+    from src.knowledge.topology import Topology
+    topo = Topology.model_validate({
+        "services": {"twin": {"writes": [{"kind": "mongo", "collection": "twin_state"}]}},
+        "derivations": {}})
+    site = SiteConfig.model_validate({"target": {"mongo": {"url": "mongodb://x:27017"}}})
+    adapters = build_adapters(site, topo, clock=lambda: T, stub_seeds=StubSeeds(
+        mongo_collections={"twin_state": [{"line": 7, "state": "STOP"}]}))
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state",
+        "params": {"rule": "exists", "field": "0.line", "filter": {"state": "STOP"}}})
+    store = InMemoryCaseStore()
+    outcome = await run_check("mx", "gumi", "twin.stopped", check, adapters=adapters,
+                              store=store, clock=lambda: T, timezone_name="UTC")
+    from src.domain.patrol import scratch_case_id
+    assert outcome.status in ("ok", "finding")
+    sources = [r.source for r in store.list_evidence(scratch_case_id("mx", "gumi", "twin.stopped"))]
+    assert any(s.startswith("mongo:twin_state#") for s in sources), sources

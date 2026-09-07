@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from src.config.schema_site import CheckConfig
 from src.domain.envelope import Envelope, ProbeResult
 from src.infrastructure.factory import AdapterSet
+from src.infrastructure.query_rules import filter_problems, mongo_evidence_source
 from src.patrol.resolvers import resolve_params
 
 ProbeFn = Callable[..., Awaitable[ProbeResult]]
@@ -78,6 +79,111 @@ async def mongo_recent(adapters: AdapterSet, check: CheckConfig, *, clock,
         return await adapters.mongo.find(coll, {}, sort=[(ts_field, -1)], limit=limit)
     except Exception as exc:
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
+
+
+async def mongo_find(adapters: AdapterSet, check: CheckConfig, *, clock,
+                     timezone_name: str) -> ProbeResult:
+    """target "mongo:coll" → `params.filter`로 좁힌 find. 정렬은 `params.sort`, 상한은 sample.
+
+    `mongo_recent`가 `filter={}`를 못 박고 있어 config로는 "특정 컬렉션에 특정 질의"를
+    표현할 수 없었다. 포트(`MongoReaderPort.find`)는 처음부터 필터를 받았고, 어댑터와
+    스텁이 **같은 판정 함수**(`filter_problems`)로 연산자 허용 목록을 강제한다 —
+    `$where`·`$function`처럼 서버측 JS를 도는 연산자는 표현 불가능하다(규율 9: 읽기
+    전용은 문서가 아니라 메커니즘이다).
+
+    해석기(`resolve`)가 낸 값은 필터에 **합쳐진다** — 리스트는 `$in`, 단일 값은 동등
+    비교다. 값을 config에 적으면 즉시 썩기 때문이다(사업부마다 다르고 매일 바뀐다).
+    정적 필터와 키가 겹치면 거부한다: 어느 쪽이 이기는지 config만 봐서 알 수 없으면
+    사람이 값을 고쳤는데 안 바뀌는 형태로 조용히 고장 난다(`params.body`와 같은 규약).
+    """
+    try:
+        if adapters.mongo is None:
+            return _error("어댑터 미설정: mongo", clock)
+        parts = _split_target(check.target)
+        if parts is None or parts[0] != "mongo":
+            return _error(f"target 형식 오류: {check.target!r}", clock)
+        _, coll = parts
+        static = check.params.get("filter", {})
+        if not isinstance(static, dict):
+            return _error(f"params.filter는 dict여야 한다 (받은 타입: {type(static).__name__})",
+                          clock)
+        sort, problem = _mongo_sort(check.params.get("sort"))
+        if problem is not None:
+            return _error(problem, clock)
+
+        resolved = await resolve_params(check.resolve, adapters=adapters, clock=clock,
+                                        timezone_name=timezone_name)
+        if resolved.problems:
+            # 전부-또는-전무(§2-N3): 하나라도 못 내면 질의하지 않는다. 빈 필터로 전체를
+            # 긁으면 "거짓 안심"이 되고, 그건 조용해서 더 위험하다.
+            return _error("; ".join(resolved.problems), clock)
+        # 겹침은 **선언된 resolve 전체**로 본다 — resolved.params만 보면 unfiltered 키가
+        # 빠져 기동 검증과 판정이 갈린다(검증 리뷰 L1).
+        overlap = sorted(set(static) & set(check.resolve))
+        if overlap:
+            return _error(f"params.filter와 resolve에 같은 키가 있다: {overlap}", clock)
+        merged = dict(static)
+        for key, value in resolved.params.items():
+            merged[key] = {"$in": value} if isinstance(value, list) else value
+        result = await adapters.mongo.find(coll, merged, sort=sort,
+                                           limit=check.sample or None)
+        result = result.model_copy(update={
+            "source": mongo_evidence_source(coll, merged, resolved.omitted)})
+        if resolved.truncated:
+            # 해석기 소스가 잘렸으면 그 필터로 만든 결과도 불완전하다. 안 접으면 좁혀진
+            # 질의의 "이상 없음"이 완전한 증거로 박제되고, verify의 "불완전 증거로 부정
+            # 결론 금지" 가드가 통째로 비껴간다(검증 리뷰 B1 — rest_query가 하는 것과 같다).
+            reasons = ([result.envelope.truncated_reason]
+                       if result.envelope.truncated_reason else []) + resolved.truncated
+            envelope = result.envelope.model_copy(update={
+                "complete": False, "truncated_reason": "; ".join(reasons)})
+            result = result.model_copy(update={"envelope": envelope})
+        return result
+    except Exception as exc:
+        return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
+
+
+def mongo_find_problems(params: dict, resolve: dict) -> list[str]:
+    """mongo_find 설정의 정적 문제를 전부 모아 돌려준다(기동 검증용).
+
+    런타임에도 같은 판정이 돌지만(프로브·어댑터), 오타 하나가 매 순찰 error로만 드러나면
+    사람은 그것을 "대상 시스템이 이상하다"로 읽는다 — 기동 거부 철학 그대로다.
+    """
+    problems: list[str] = []
+    static = params.get("filter", {})
+    if not isinstance(static, dict):
+        problems.append(f"params.filter는 dict여야 한다 (받은 타입: {type(static).__name__})")
+    else:
+        problems += filter_problems(static)
+        overlap = sorted(set(static) & set(resolve or {}))
+        if overlap:
+            problems.append(f"params.filter와 resolve에 같은 키가 있다: {overlap}")
+    _, problem = _mongo_sort(params.get("sort"))
+    if problem is not None:
+        problems.append(problem)
+    if not params.get("filter") and not resolve:
+        # mongo_recent의 params를 복붙하고 probe만 바꾸면 조용한 전량 스캔이 된다.
+        # 의도한 전체 조회는 `resolve`의 unfiltered로 명시한다(전부-또는-전무와 같은 규약).
+        problems.append("filter도 resolve도 없다 — 전체 조회를 의도했다면 "
+                        "resolve에 {\"from\": \"unfiltered\"}로 명시하라")
+    return problems
+
+
+def _mongo_sort(spec) -> tuple[list[tuple[str, int]] | None, str | None]:
+    """JSON에는 튜플이 없다 — `[["ts", -1]]`을 포트가 받는 모양으로 바꾼다."""
+    if spec is None:
+        return None, None
+    if not isinstance(spec, list):
+        return None, f"params.sort는 리스트여야 한다 (받은 타입: {type(spec).__name__})"
+    out = []
+    for item in spec:
+        # `item[1] not in (1, -1)`은 파이썬 동등 비교라 -1.0과 True를 통과시키고,
+        # pymongo가 그때서야 TypeError를 낸다 — 기동은 통과하고 매 순찰이 실패한다.
+        if not isinstance(item, list) or len(item) != 2 or not isinstance(item[0], str) \
+                or type(item[1]) is not int or item[1] not in (1, -1):
+            return None, f"params.sort의 항목은 [필드, 1|-1]이어야 한다: {item!r}"
+        out.append((item[0], item[1]))
+    return out, None
 
 
 async def kafka_lag(adapters: AdapterSet, check: CheckConfig, *, clock,
@@ -151,6 +257,9 @@ PROBES: dict[str, ProbeFn] = {
     "rest_query": rest_query,
     "redis_get": redis_get,
     "mongo_recent": mongo_recent,
+    # mongo의 **기본** 프로브는 여전히 mongo_recent다 — mongo_find는 probe로 명시할
+    # 때만 쓰인다. 기존 점검은 한 글자도 안 바뀐다.
+    "mongo_find": mongo_find,
     "kafka_lag": kafka_lag,
 }
 

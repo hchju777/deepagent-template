@@ -248,7 +248,9 @@ class CheckConfig(StrictModel):
     target: str | None = None          # 토폴로지 locator 또는 등재 항목 이름(rest:<이름>) — 해석 검증은 boot에서
     probe: str | None = None           # 프로브 레지스트리 이름. None이면 target의 kind로 기본 프로브 선택
     params: dict[str, Any] = {}
-    sample: int | None = None
+    # 0·음수는 pymongo에서 "무제한"이 된다(cap+1 = 0) — 상한을 적었다고 믿은 사람이
+    # 전량 조회를 돌게 된다.
+    sample: int | None = Field(default=None, ge=1)
     on_budget_exhausted: Literal["skip", "escalate"] = "skip"
     resolve: dict[str, ResolverSpec] = {}   # 값이 아니라 값이 어디서 오는지를 선언한다
 

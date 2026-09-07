@@ -36,7 +36,7 @@ from src.knowledge.deployment import load_deployment
 from src.knowledge.target_api import (load_target_api, parse_spec,
                                       response_field_problems, spec_problems)
 from src.knowledge.topology import load_topology, topology_problems
-from src.patrol.probes import PROBES, resolve_probe
+from src.patrol.probes import PROBES, mongo_find_problems, resolve_probe
 
 
 @dataclass
@@ -249,12 +249,22 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                 elif check.target not in known:
                     errors.append(BootError(
                         where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))
+            # mongo_find의 필터·정렬도 배포 시점에 본다 — 매 순찰이 error를 내고
+            # 끝나는 것은 미등재 REST 항목을 기동 거부로 올린 것과 같은 상황이다.
+            if resolve_probe(check) == "mongo_find":
+                errors += [BootError(where, f"점검 {name!r}: {p}")
+                           for p in mongo_find_problems(check.params, check.resolve)]
+
             # target **모양**으로 판정한다 — resolve_probe는 check.probe를 그대로
             # 돌려주므로 probe만 박으면 이 검사가 통째로 비껴간다(등재 항목 이름
             # 위장을 막은 것과 같은 계열의 우회다).
             t_kind, _, t_rest = (check.target or "").partition(":")
             is_entry_target = t_kind == "rest" and t_rest and not t_rest.startswith("/")
-            if check.resolve and not is_entry_target:
+            # mongo_find도 resolve를 **실제로 실행한다**(계획 16 이후 추가). 이 목록에서
+            # 빠지면 정상 설정이 기동 거부되고, 반대로 실행하지 않는 프로브에 resolve를
+            # 허용하면 아래 주석의 사고가 난다.
+            runs_resolve = is_entry_target or resolve_probe(check) == "mongo_find"
+            if check.resolve and not runs_resolve:
                 # resolve는 rest_query에서만 실행된다. 다른 target에 달면 런타임이
                 # 조용히 무시해, 사람이 "범위를 좁혔다"고 믿는 점검이 무필터 전체
                 # 스캔을 돈다 — 사람이 쓴 제약이 아무 효과 없이 통과하는 형태다.

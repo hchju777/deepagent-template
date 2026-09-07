@@ -159,7 +159,9 @@ Redis/Mongo/Kafka와 소스 저장소를 읽는 LLM 에이전트를 돌리고 �
 | `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest:/path→rest_get`, `rest:<이름>→rest_query`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
 | `params` | dict | `{}` | 프로브·rule 판정에 넘길 파라미터(아래 "rule 판정 6종" 참고) |
 | `concern` | `"system"` \| `"operation"` | `"system"` | 무엇이 이상한가 — 메일 수신자·브리핑 방향·보고서 헤더가 이 값을 따른다. `system`은 파이프라인 고장(Kafka lag·TTL 만료·5xx), `operation`은 데이터는 흐르는데 현장이 이상한 경우(0/0/0·NO PLAN). **사람이 적는다**: 라우팅 근거는 재현·감사 가능해야 한다. rule에서 유도되지 않는다 — 다만 `all_zero`·`expected_state`는 이 축을 위해 만든 rule이라 명시하지 않으면 config 검증이 거부한다 |
-| `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`의 `limit`) |
+| `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`·`mongo_find`의 `limit`) |
+| `params.filter` | dict | `{}` | **`mongo_find` 전용** — 그 컬렉션에 낼 find 질의. 연산자는 허용 목록(`$eq $ne $gt $gte $lt $lte $in $nin $exists $regex $options $and $or`)만 통과하고 `$where`·`$function` 같은 서버측 JS는 기동 검증과 어댑터 양쪽에서 거부된다 |
+| `params.sort` | list \| null | null | **`mongo_find` 전용** — `[["ts", -1]]` 형태. JSON에 튜플이 없어 2원소 리스트로 적는다 |
 | `on_budget_exhausted` | `"skip"` \| `"escalate"` | `"skip"` | llm/rule+llm 판정인데 `patrol.llm_budget`이 소진됐을 때 동작 |
 | `resolve.<키>.from` | `"rest"` \| `"mongo"` \| `"redis"` \| `"clock"` \| `"unfiltered"` | **필수** | 값을 어디서 읽을지. 값 자체를 config에 적으면 즉시 썩는다(사업부/법인마다 다르고 매일 바뀐다). `params.body`와 키가 겹치면 기동 거부 |
 | `resolve.<키>.entry` / `.field` | str / str | `from="rest"`일 때 필수 | 부를 등재 조회 항목(**GET이어야 한다** — 기동 검증이 강제)과 뽑을 필드 |
@@ -274,7 +276,7 @@ services:
 4. 활성 사이트별 config 3계층 병합 + env 참조 해석
 5. 토폴로지 내부 정합성(`topology_problems`)
 6. 각 점검의 `target`이 해석되는가 — `rest:/path`·`redis:`·`mongo:`·`kafka:`는 토폴로지 locator로, `rest:<이름>`은 `target.rest.entries`로 해석하고, 등재 항목이면 `params.body`가 그 항목의 닫힌 스키마를 통과하는지까지 본다
-7. `resolve`가 있으면 target이 등재 항목인가 — 다른 target에 달면 런타임이 조용히 무시한다
+7. `resolve`가 있으면 그것을 **실제로 실행하는 프로브**인가 — 등재 항목 호출(`rest_query`)과 `mongo_find`만 해석기를 돌린다. 다른 target에 달면 런타임이 조용히 무시해, 사람이 "범위를 좁혔다"고 믿는 점검이 무필터 전체 스캔을 돈다
 8. `resolve`의 각 키가 등재 항목 스키마에 있는가, 그리고 해석기 **모양**이 그 타입과 맞는가 — `clock`은 문자열 하나, 소스 해석기는 리스트다
 9. `from: "rest"` 해석기가 가리키는 항목이 실재하고 GET인가 / `mongo`·`redis` 해석기의 어댑터가 설정돼 있는가 / `mongo` 해석기의 `filter` 연산자가 허용 목록 안인가
 10. 등재 항목이 pinned 명세(`knowledge/target_api/{gbm}/{fct}.json`)와 맞는가 — 항목 실재·스키마 키·타입·명세가 필수라 한 키. **명세는 검증만 하고 넓히지 않는다**(명세에만 있는 키는 문제가 아니다). 명세가 없는 것은 오류가 아니고, 있는데 깨진 것이 오류다
@@ -288,6 +290,7 @@ services:
 18. 각 점검의 프로브가 레지스트리에서 해석 가능한가
 19. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
 20. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
+21. `mongo_find` 점검의 `params.filter`가 dict이고 연산자가 허용 목록 안인가, `params.sort`가 `[[필드, 1|-1]]` 모양인가, 정적 필터와 `resolve`의 키가 겹치지 않는가, 그리고 **필터도 해석기도 없는 전량 스캔이 아닌가**(의도한 전체 조회는 `resolve`의 `unfiltered`로 명시한다)
 
 검사 14·17만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

@@ -668,3 +668,66 @@ def test_시나리오의_resolve_키도_등재_스키마로_대조한다(tmp_pat
     problems = " ".join(e.problem for e in
                         validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
     assert "없는키" in problems
+
+
+_MONGO_TOPO = """
+services:
+  twin-api:
+    writes: [ { kind: mongo, collection: twin_state } ]
+derivations: {}
+"""
+
+
+def test_mongo_find_점검의_필터와_정렬을_기동에서_검증한다(tmp_path):
+    # 매 순찰이 error를 내고 끝나는 것보다 배포 시점에 시끄럽게 죽는 게 낫다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {
+            "twin.stopped": {"judge": "rule", "schedule": {"interval": "5m"},
+                             "probe": "mongo_find", "target": "mongo:twin_state",
+                             "params": {"rule": "exists", "field": "0.line",
+                                        "filter": {"$where": "sleep(1)"},
+                                        "sort": [["ts", "내림차순"]]}},
+            "twin.overlap": {"judge": "rule", "schedule": {"interval": "5m"},
+                             "probe": "mongo_find", "target": "mongo:twin_state",
+                             "params": {"rule": "exists", "field": "0.line",
+                                        "filter": {"part": "Z"}},
+                             "resolve": {"part": {"from": "mongo", "collection": "parts",
+                                                  "field": "code"}}}}}}))
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "$where" in problems and "sort" in problems and "part" in problems
+
+
+def test_정상_mongo_find_점검은_기동을_막지_않는다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {"twin.stopped": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "probe": "mongo_find", "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "0.line",
+                       "filter": {"state": "STOP", "ts": {"$gte": 0}},
+                       "sort": [["ts", -1]]},
+            # mongo_find는 resolve를 실제로 실행한다 — 등재 항목이 아니라고 거부하면
+            # 정상 설정이 기동을 못 한다.
+            "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}}}}}))
+    assert validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path) == []
+
+
+def test_필터도_해석기도_없는_mongo_find는_전체_스캔이라_거부한다(tmp_path):
+    # 검증 리뷰 L3: mongo_recent의 params를 복붙하고 probe만 바꾸면 조용한 전량 스캔이 된다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {"twin.all": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "probe": "mongo_find", "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "0.line", "ts_field": "ts"}}}}}))
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "전체 조회" in problems
