@@ -13,6 +13,7 @@ error 3상으로 돌려준다(예산 절약이 재시도보다 우선).
 from datetime import datetime
 from typing import Literal
 
+from src.application.briefing import one_line
 from src.application.schemas import parse_structured
 from src.config.schema_app import StrictModel
 
@@ -69,8 +70,11 @@ def _build_prompt(snapshot_ids: list[str], snapshot_texts: dict[str, str],
     lines = [f"[증거 {sid}] {str(snapshot_texts.get(sid, ''))[:2000]}" for sid in snapshot_ids]
     evidence_block = "\n".join(lines) if lines else "(증거 없음)"
     return (
-        f"점검 이름: {check_name}\n"
-        f"질문: {question}\n\n"
+        # 점검 이름과 질문은 사람이 쓰는 config YAML에서 온다(`params.question`은 검증
+        # 없는 자유 텍스트고, 블록 스칼라 `question: |`는 흔한 작성 방식이다). 접지
+        # 않으면 `[증거 …]` 줄을 위조할 수 있고, 위조본이 진짜보다 **먼저** 온다.
+        f"점검 이름: {one_line(check_name)}\n"
+        f"질문: {one_line(question)}\n\n"
         f"{evidence_block}\n\n"
         f"{_INSTRUCTION}"
     )

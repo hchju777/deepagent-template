@@ -17,6 +17,23 @@ VerdictType = Literal["logic_bug", "data_loss", "config_error", "stale_data",
                       "external", "inconclusive", "degraded"]
 
 
+MAX_SUMMARY_CHARS = 160
+
+
+def evidence_summary(body) -> str:
+    """증거 본문을 `[증거 목록]` 한 줄에 실을 요약으로 만든다.
+
+    **필요한 성질은 "개행을 이스케이프한다"이지 `repr` 자체가 아니다.** 본문은 대상
+    시스템 데이터라 여러 줄이 정상인데, 날것으로 프롬프트에 실리면 `[증거 목록]` 블록에
+    가짜 항목이 붙는다(계획 21). `str`과 `json.dumps(indent=...)`는 뚫리고,
+    `json.dumps(ensure_ascii=False)`는 안전하다.
+
+    두 생산자(`nodes.execute`, `gate.evidence_refs_for_case`)가 같은 식을 각자 적고
+    있었다 — 한쪽만 바뀌면 조용히 갈린다.
+    """
+    return repr(body)[:MAX_SUMMARY_CHARS]
+
+
 class EvidenceRef(StrictModel):
     """State에 남는 증거 참조 — 본문은 케이스 Store에 있다(§2.3)."""
     id: str

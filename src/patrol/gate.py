@@ -17,7 +17,7 @@
 from typing import Callable, Literal
 
 from src.config.schema_app import StrictModel
-from src.domain.case import Case, EvidenceRef
+from src.domain.case import Case, EvidenceRef, evidence_summary
 from src.domain.cases import CaseRecord, CaseRepositoryPort
 from src.domain.patrol import Finding, fingerprint
 from src.domain.store import CaseStorePort
@@ -61,7 +61,7 @@ def evidence_refs_for_case(store: CaseStorePort, case_id: str) -> list[EvidenceR
     for record in store.list_evidence(case_id):
         body = store.get_evidence(case_id, record.id)
         refs.append(EvidenceRef(
-            id=record.id, source=record.source, summary=repr(body)[:160],
+            id=record.id, source=record.source, summary=evidence_summary(body),
             as_of=record.as_of, complete=record.complete,
             effective_as_of=record.effective_as_of))
     return refs
