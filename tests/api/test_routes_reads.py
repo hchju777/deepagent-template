@@ -291,3 +291,20 @@ def test_집계_실행_기록을_읽는다(client, rt):
     assert runs[0]["scenario_digest"] == "d1" and runs[0]["rollups"][0]["value"] == 12.0
     assert runs[0]["coverage"][0]["status"] == "covered"
     assert client.get("/digests/없음").json()["runs"] == []
+
+
+def test_시나리오가_닿은_사이트를_못_보면_실행_기록도_못_본다(tmp_path):
+    # 집계는 사이트를 가로지른다 — 사이트 단위 필터가 아니라 시나리오 단위로 막는다.
+    from src.domain.rollup import FleetReport, SiteCoverage
+    access = AccessPolicy(allow={"alice": ["mx/gumi"]},
+                          subjects={"alice": SecretStr("tok-a")})
+    rt = _runtime(tmp_path, access=access)      # 픽스처는 mx/gumi와 mx/suwon 둘을 만든다
+    rt.digests.put(FleetReport(
+        scenario="alarm_trend", title="알람", concern="operation", scenario_digest="d1",
+        window_from=T, window_to=T, generated_at=T,
+        coverage=[SiteCoverage(gbm="mx", fct="gumi", status="covered"),
+                  SiteCoverage(gbm="mx", fct="suwon", status="covered")]))
+    client = TestClient(create_app(rt))
+    assert client.get("/digests/alarm_trend",
+                      headers={"authorization": "Bearer tok-a"}).status_code == 404
+    assert client.get("/digests/alarm_trend").status_code == 200      # 인증 없으면 전체 허용
