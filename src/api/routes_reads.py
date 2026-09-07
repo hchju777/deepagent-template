@@ -83,9 +83,10 @@ def get_case(case_id: str, request: Request, subject: str | None = Depends(curre
     rt = runtime_of(request)
     record = visible_record(rt, subject, case_id)
     verdict = rt.store.get_verdict(case_id)
+    log = collect_events(rt.events, case_id)
     model = build_report_model(record, verdict=verdict, evidence=rt.store.list_evidence(case_id),
                                case_file=rt.store.get_case_file(case_id), clock=rt.clock,
-                               events=collect_events(rt.events, case_id))
+                               events=log.events, timeline_error=log.error)
     return {**_summary(record),
             "question": record.question, "question_kind": record.question_kind,
             "requested_by": record.requested_by, "intake_done": record.intake_done,
@@ -94,6 +95,8 @@ def get_case(case_id: str, request: Request, subject: str | None = Depends(curre
             "verdict": verdict.model_dump(mode="json") if verdict else None,
             "candidates": candidates_of(verdict),
             "timeline": [e.model_dump(mode="json") for e in model.timeline],
+            "timeline_source": model.timeline_source,
+            "timeline_error": model.timeline_error,
             "task_error_rate": model.task_error_rate,
             "knowledge_digests": model.knowledge_digests}
 
@@ -145,10 +148,11 @@ def get_report(case_id: str, request: Request,
     path = Path(rt.app.report.output_dir) / f"{case_id}.{fmt}"
     if path.exists():
         return PlainTextResponse(path.read_text(encoding="utf-8"), media_type=media)
+    log = collect_events(rt.events, case_id)
     model = build_report_model(record, verdict=rt.store.get_verdict(case_id),
                                evidence=rt.store.list_evidence(case_id),
                                case_file=rt.store.get_case_file(case_id), clock=rt.clock,
-                               events=collect_events(rt.events, case_id))
+                               events=log.events, timeline_error=log.error)
     return PlainTextResponse(render_html(model) if fmt == "html" else render_md(model),
                              media_type=media)
 

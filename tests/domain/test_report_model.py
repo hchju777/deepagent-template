@@ -184,3 +184,30 @@ def test_모르는_data_형태에도_Timeline은_raise하지_않는다():
                                clock=lambda: T, events=events)
     assert [e.summary for e in model.timeline] == [
         "라운드 2 시작 — 태스크 0개", "태스크 ?(?) ? — 증거 0개", "판정 stale_data (low) · 재작성 뒤 강등"]
+
+
+def test_이벤트_로그_읽기_실패는_없음과_다른_말이다():
+    model = build_report_model(_record(), verdict=None, evidence=[], case_file={}, clock=lambda: T,
+                               events=[_ev(1, "report_ready", path="p")],
+                               timeline_error="RuntimeError: case_events read failed")
+    assert model.timeline_source == "unavailable" and model.timeline == []
+    assert model.timeline_error == "RuntimeError: case_events read failed"
+
+
+def test_Timeline_요약은_비정형_data에서_행을_잃지_않는다():
+    # 리뷰 L4·L5: reason None에 "(None)", 비-리스트 dispatched/evidence_ids가 TypeError로
+    # except에 삼켜져 행이 조용히 사라짐, at None 항목이 조용히 빠짐, data가 dict가 아님.
+    events = [_ev(1, "case_status_changed", status="open", reason=None),
+              _ev(2, "round_started", round=1, dispatched="t-1"),
+              _ev(3, "task_finished", task_id="t-1", role="r", status="ok", evidence_ids="ev-1"),
+              EngineEvent.model_construct(event="question_raised", case_id="c-1", at=T, seq=4, data="x"),
+              EngineEvent.model_construct(event="report_ready", case_id="c-1", at=None, seq=5,
+                                          data={"path": "p"}),
+              EngineEvent.model_construct(event="report_ready", case_id="c-1", at="쓰레기", seq=6,
+                                          data={"path": "q"})]
+    model = build_report_model(_record(), verdict=None, evidence=[], case_file={}, clock=lambda: T,
+                               events=events)
+    assert [e.summary for e in model.timeline] == [
+        "상태 → open", "라운드 1 시작 — 태스크 0개", "태스크 t-1(r) ok — 증거 0개", "질문: ?", "보고서 p",
+        "보고서 q"]
+    assert model.timeline[4].at is None and model.timeline[5].at is None

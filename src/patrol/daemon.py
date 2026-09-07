@@ -259,10 +259,12 @@ class PatrolDaemon:
                 pass
         # 이벤트 스토어가 있는 프로세스만 Timeline을 싣는다 — 없으면 None을 넘겨 보고서가
         # "이벤트 로그 없음"을 명시한다(빈 목록과 다른 말이다).
-        events = collect_events(self.events, case_id) if self.events is not None else None
+        log = collect_events(self.events, case_id) if self.events is not None else None
         return build_report_model(record, verdict=verdict, evidence=evidence,
                                   case_file=case_file, clock=self.clock,
-                                  evidence_summaries=evidence_summaries, events=events)
+                                  evidence_summaries=evidence_summaries,
+                                  events=log.events if log is not None else None,
+                                  timeline_error=log.error if log is not None else None)
 
     def _render_case_report(self, case_id: str) -> str:
         """설정 포맷으로 보고서 본문을 렌더링한다(파일로 쓸 것)."""

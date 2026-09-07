@@ -452,3 +452,8 @@ class CaseDetail(StrictModel):      # GET /cases/{id} — 계획 13 인계 #6
    받아야 한다(지금은 안 받는다).
 5. **`CaseDetail.stages/verdict/timeline`은 `list[dict]`/`dict`다** — 내부 모델을 그대로
    dump한다. 웹 클라이언트가 생기면 그 셋도 응답 모델로 세운다.
+6. **후보가 기여 요인과 같은 컴포넌트여도 거르지 않는다** — "이것 대신"과 "이것에 더해"가
+   같은 컴포넌트를 가리키는 것이 모순인지는 설계 판단이다(검증 리뷰 L2). 지금은 둔다.
+7. **Timeline이 걷힌 뒤**: retention이 `case_events`를 걷으면 즉석 렌더는 "이벤트 없음"을
+   낸다 — "조사가 이벤트를 안 냈다"와 구별되지 않는다(리뷰 L6). 파일 보고서에는 발행 시점의
+   Timeline이 남는다. 스냅샷에 Timeline을 박제할지는 P8에서.

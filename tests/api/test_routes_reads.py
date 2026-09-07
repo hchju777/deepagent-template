@@ -241,3 +241,27 @@ def test_상세는_후보_목록과_Timeline을_응답_모델로_낸다(client, 
 def test_판정_없는_상세의_후보는_빈_목록이다(client, rt):
     body = client.get("/cases/c-1").json()
     assert body["candidates"] == [] and body["verdict"] is None and body["timeline"] == []
+
+
+def test_상세_라우트는_응답_모델을_선언한다(client):
+    # 리뷰 F7: response_model=을 지워도 초록이었다 — 내용 검증은 선언을 못 본다.
+    # FastAPI 자신이 읽는 선언(OpenAPI 스키마)으로 본다 — 라우트 객체는 지연 포함이라 안 보인다.
+    schema = client.app.openapi()["paths"]["/cases/{case_id}"]["get"]["responses"]["200"]
+    assert schema["content"]["application/json"]["schema"]["$ref"].endswith("/CaseDetail")
+
+
+def test_이벤트_로그_읽기_장애에도_상세와_보고서는_200이다(client, rt):
+    # 리뷰 M2: 500이었다. 상세는 timeline_source로 "읽기 실패"를 말한다 — 빈 목록과 다르다.
+    from src.domain.events import InMemoryEventStore
+
+    class _Broken(InMemoryEventStore):
+        def since(self, *a, **k):
+            raise RuntimeError("case_events read failed")
+    rt.events = _Broken()
+    r = client.get("/cases/c-1")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["timeline"] == [] and body["timeline_source"] == "unavailable"
+    assert body["timeline_error"] == "RuntimeError: case_events read failed"
+    r = client.get("/cases/c-1/report?format=md")
+    assert r.status_code == 200 and "이벤트 로그 읽기 실패" in r.text

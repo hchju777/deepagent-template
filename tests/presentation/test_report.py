@@ -252,3 +252,14 @@ def test_조사_경위는_Timeline_표를_낸다():
     empty = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
                           clock=lambda: T, events=[])
     assert "- Timeline:\n  이벤트 없음" in empty
+
+
+def test_Timeline_읽기_실패는_명시되고_요약_칸은_표를_깨지_않는다():
+    from src.domain.events import EngineEvent
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
+                       events=[], timeline_error="RuntimeError: down")
+    assert "- Timeline:\n  이벤트 로그 읽기 실패: RuntimeError: down" in md
+    events = [EngineEvent(event="question_raised", case_id="c-1", at=T, seq=1, data={"question": "a | b"})]
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
+                       events=events)
+    assert "| 1 | 2026-09-03T08:00:00+00:00 | question_raised | 질문: a \\| b |" in md

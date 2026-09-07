@@ -352,3 +352,31 @@ async def test_발행_보고서는_이벤트_스토어의_Timeline을_싣는다(
     assert await daemon.worker.run_once(case_id) == "failed"
     text = next((tmp_path / "out").glob("*.html")).read_text(encoding="utf-8")
     assert "<h3>Timeline</h3>" in text and "상태 → open" in text and "이벤트 로그 없음" not in text
+
+
+async def test_이벤트_로그_읽기_장애에도_보고서는_발행된다(tmp_path, monkeypatch):
+    # 리뷰 M1(규율 1·8): collect_events가 raise해 _publish_report의 최외곽 except로 떨어지면
+    # 파일도 report_ready도 메일도 없다 — 계획 14 이전엔 없던 새 장애 지점이다.
+    from src.domain.events import InMemoryEventStore
+
+    class _Broken(InMemoryEventStore):
+        def since(self, *a, **k):
+            raise RuntimeError("case_events read failed")
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    events = _Broken()
+    daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path,
+                     report_cfg=ReportConfig(output_dir=str(tmp_path / "out")),
+                     on_event=events.append, events=events)
+    daemon.build()
+    await daemon.run_one("mx", "gumi", "api.oee", CHECK)
+    case_id = await daemon.queue.get()
+
+    import src.application.worker as wk
+
+    async def boom(*a, **k):
+        raise RuntimeError("엔진 호출 실패")
+    monkeypatch.setattr(wk, "investigate_case", boom)
+    assert await daemon.worker.run_once(case_id) == "failed"
+    files = list((tmp_path / "out").glob("*.html"))
+    assert len(files) == 1, "읽기 장애가 발행을 막았다"
+    assert "이벤트 로그 읽기 실패: RuntimeError: case_events read failed" in files[0].read_text(encoding="utf-8")

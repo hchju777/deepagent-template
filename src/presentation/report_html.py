@@ -139,12 +139,14 @@ def _render(model) -> str:
                   if task_rows else "<p>없음</p>")
     if model.timeline_source == "none":
         timeline_block = "<p>이벤트 로그 없음(이 프로세스에 이벤트 스토어가 없다)</p>"
+    elif model.timeline_source == "unavailable":
+        timeline_block = f"<p>이벤트 로그 읽기 실패: {_e(model.timeline_error)}</p>"
     elif not model.timeline:
         timeline_block = "<p>이벤트 없음</p>"
     else:
         timeline_block = _table(["seq", "시각", "이벤트", "요약"],
-                                [[_e(e.seq), _e(e.at.isoformat()), _e(e.event), _e(e.summary)]
-                                 for e in model.timeline])
+                                [[_e(e.seq), _e(e.at.isoformat() if e.at is not None else "-"),
+                                  _e(e.event), _e(e.summary)] for e in model.timeline])
 
     return f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8">

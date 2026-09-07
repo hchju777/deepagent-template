@@ -15,6 +15,7 @@ from pathlib import Path
 from src.domain.case import Verdict
 from src.domain.cases import CaseRecord
 from src.domain.store import EvidenceRecord
+from src.domain.events import EngineEvent
 from src.domain.report_model import ReportModel, build_report_model
 
 Clock = Callable[[], datetime]
@@ -26,7 +27,8 @@ _MARKS = {"ok": "✅", "fail": "❌", "warn": "⚠", "skip": "⬜"}
 def render_report(record: CaseRecord, *, verdict: Verdict | None,
                    evidence: list[EvidenceRecord], case_file: dict | None,
                    clock: Clock, evidence_summaries: dict[str, str] | None = None,
-                   events=None) -> str:
+                   events: list[EngineEvent] | None = None,
+                   timeline_error: str | None = None) -> str:
     """스펙 §5.1의 5절 보고서를 md로 조립한다(호출부 호환 유지).
 
     순수 함수 — case_file의 형태가 기대와 어긋나도 raise하지 않고
@@ -39,7 +41,8 @@ def render_report(record: CaseRecord, *, verdict: Verdict | None,
     try:
         model = build_report_model(record, verdict=verdict, evidence=evidence,
                                    case_file=case_file, clock=clock,
-                                   evidence_summaries=evidence_summaries, events=events)
+                                   evidence_summaries=evidence_summaries, events=events,
+                                   timeline_error=timeline_error)
         return render_md(model)
     except Exception as exc:            # noqa: BLE001 — 최후의 그물: 유도와 렌더 어느
         # 쪽이 예상 못 한 형태를 만나도 조사 종결은 막지 않는다(계약)
@@ -261,6 +264,8 @@ def _section5(model: ReportModel) -> str:
     lines.append("- Timeline:")
     if model.timeline_source == "none":
         lines.append("  이벤트 로그 없음(이 프로세스에 이벤트 스토어가 없다)")
+    elif model.timeline_source == "unavailable":
+        lines.append(f"  이벤트 로그 읽기 실패: {model.timeline_error}")
     elif not model.timeline:
         lines.append("  이벤트 없음")
     else:
@@ -268,7 +273,8 @@ def _section5(model: ReportModel) -> str:
         lines.append("| seq | 시각 | 이벤트 | 요약 |")
         lines.append("|---|---|---|---|")
         for e in model.timeline:
-            lines.append(f"| {e.seq} | {_cell(e.at.isoformat())} | {_cell(e.event)} | {_cell(e.summary)} |")
+            at = e.at.isoformat() if e.at is not None else "-"
+            lines.append(f"| {e.seq} | {_cell(at)} | {_cell(e.event)} | {_cell(e.summary)} |")
         lines.append("")
     lines.append("- 태스크 현황:")
 

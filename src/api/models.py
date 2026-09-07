@@ -13,7 +13,8 @@ from src.domain.case import Verdict
 
 
 class Candidate(StrictModel):
-    rank: int                       # 1 = root_cause
+    rank: int                       # 1 = 가장 유력한 후보. 판정에 root_cause가 있으면 그것이고,
+                                    # inconclusive처럼 없으면 첫 후보다 — "결론인가"는 verdict.root_cause로 본다
     component: str
     confidence: str | None
     evidence_ids: list[str]
@@ -40,6 +41,8 @@ class CaseDetail(StrictModel):
     verdict: dict | None            # Verdict.model_dump(mode="json") 그대로 — alternates 포함
     candidates: list[Candidate]
     timeline: list[dict]            # TimelineEntry.model_dump(mode="json")
+    timeline_source: str            # events / none / unavailable — 빈 timeline의 세 가지 뜻
+    timeline_error: str | None
     task_error_rate: str
     knowledge_digests: dict[str, str]
 

@@ -10,7 +10,7 @@ from langgraph.types import Send, interrupt
 from src.application.briefing import build_briefing, upstream_slice
 from src.application.schemas import FrameOutput, IntegrateOutput, parse_structured
 from src.application.subagents import run_subagent
-from src.domain.case import EvidenceRef, PlanTask, Verdict
+from src.domain.case import CauseLink, EvidenceRef, PlanTask, Verdict
 from src.knowledge.topology import Topology
 
 _FRAME_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 아래 브리핑을 읽고 초기 가설과 조사 계획을 세워라.
@@ -140,29 +140,47 @@ def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
     return any(pattern.search(c) for c in caveats)
 
 
-MAX_ALTERNATES = 3     # 상한은 코드가 쥔다(규율 6) — 보고서 §2가 읽히는 길이의 한계
+MAX_ALTERNATES = 3        # 상한은 코드가 쥔다(규율 6) — 보고서 §2가 읽히는 길이의 한계
+MAX_RELATION_CHARS = 300  # LLM 산문에는 길이 상한이 없다 — §2 한 줄·API payload의 한계
 
 
-def _sanitize_alternates(verdict: Verdict) -> Verdict:
-    """후보 목록의 상한·중복은 LLM이 아니라 코드가 정한다(규율 4·6). 버린 것은 caveat에.
+def _clean_link(link: CauseLink, *, own_confidence: bool) -> CauseLink:
+    relation = link.relation
+    if relation is not None and len(relation) > MAX_RELATION_CHARS:
+        relation = relation[:MAX_RELATION_CHARS - 1] + "…"
+    # 최상위·기여 요인의 confidence는 항상 None — 최상위의 신뢰도는 Verdict.confidence다.
+    # LLM이 채운 값을 두면 API 덤프에 두 신뢰도가 나란히 나간다(case.py의 주석이 경고한 그것).
+    return link.model_copy(update={"component": link.component.strip(), "relation": relation,
+                                   "confidence": link.confidence if own_confidence else None})
 
-    validator로 거부하면 conclude의 파싱 실패 경로(degraded "조사 종료 불가")로 떨어져
-    후보 하나 중복됐다고 조사 전체가 실패한다 — 그래서 거부가 아니라 소독이다.
+
+def _sanitize_causes(verdict: Verdict) -> Verdict:
+    """인과 사슬(최상위·후보·기여 요인)의 형태는 LLM이 아니라 코드가 정한다(규율 4·6).
+
+    후보의 상한·중복·빈 컴포넌트, relation 길이, 최상위·기여 요인의 confidence를 정리한다.
+    버린 후보는 caveat에 남긴다. validator로 거부하면 conclude의 파싱 실패 경로(degraded
+    "조사 종료 불가")로 떨어져 후보 하나 중복됐다고 조사 전체가 실패한다 — 그래서 거부가
+    아니라 소독이다. 바뀐 것이 없으면 같은 객체를 돌려준다.
     """
-    seen = {verdict.root_cause.component} if verdict.root_cause is not None else set()
+    root = _clean_link(verdict.root_cause, own_confidence=False) if verdict.root_cause else None
+    contributing = [_clean_link(c, own_confidence=False) for c in verdict.contributing]
+    seen = {root.component} if root is not None else set()
     kept, dropped = [], []
     for link in verdict.alternates:
+        link = _clean_link(link, own_confidence=True)
+        if not link.component:
+            dropped.append("(빈 컴포넌트)")
+            continue
         if link.component in seen or len(kept) >= MAX_ALTERNATES:
             dropped.append(link.component)
             continue
         seen.add(link.component)
         kept.append(link)
-    if not dropped:
-        return verdict
-    return verdict.model_copy(update={
-        "alternates": kept,
-        "caveats": verdict.caveats + [
-            f"후보 정리: {', '.join(dropped)} 제외(중복 또는 상한 {MAX_ALTERNATES} 초과)"]})
+    caveats = verdict.caveats + ([f"후보 정리: {', '.join(dropped)} 제외(중복·빈 컴포넌트 또는 상한 "
+                                  f"{MAX_ALTERNATES} 초과)"] if dropped else [])
+    cleaned = verdict.model_copy(update={"root_cause": root, "contributing": contributing,
+                                         "alternates": kept, "caveats": caveats})
+    return verdict if cleaned == verdict else cleaned
 
 
 async def _ask_llm(llm, prompt, schema):
@@ -334,7 +352,7 @@ def make_nodes(deps):
             return {"verdict": Verdict(
                 verdict_type="degraded", confidence="low",
                 narrative="conclude 출력 파싱 실패 — 조사 종료 불가", caveats=[err])}
-        return {"verdict": _sanitize_alternates(verdict)}
+        return {"verdict": _sanitize_causes(verdict)}
 
     async def verify(state):
         # LLM 없음 — 순수 결정론 가드레일(§2.4). 노드는 raise하지 않는다.

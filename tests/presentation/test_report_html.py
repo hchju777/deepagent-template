@@ -155,3 +155,11 @@ def test_조사_경위는_Timeline_표를_낸다():
     assert ("<tr><td>1</td><td>2026-09-03T08:00:00+00:00</td><td>question_raised</td>"
             "<td>질문: &lt;b&gt;q&lt;/b&gt;</td></tr>") in html
     assert "<p>이벤트 로그 없음(이 프로세스에 이벤트 스토어가 없다)</p>" in render_html(_model())
+
+
+def test_Timeline_읽기_실패는_명시된다():
+    record = CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                        created_at=T, updated_at=T)
+    model = build_report_model(record, verdict=None, evidence=[], case_file={}, clock=lambda: T,
+                               events=[], timeline_error="RuntimeError: <down>")
+    assert "<p>이벤트 로그 읽기 실패: RuntimeError: &lt;down&gt;</p>" in render_html(model)

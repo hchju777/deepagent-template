@@ -38,7 +38,7 @@ class StageCheck(StrictModel):
 
 class TimelineEntry(StrictModel):
     seq: int
-    at: datetime
+    at: datetime | None       # 스토어를 안 거친 이벤트는 없을 수 있다 — 행을 버리는 것보다 낫다
     event: str            # EventKind 값 그대로 — 렌더러가 표의 한 열로 낸다
     summary: str          # 코드가 만든 한 줄(_timeline_summary)
 
@@ -62,8 +62,10 @@ class ReportModel(StrictModel):
     partial: bool = False             # 실패 시점 부분 스냅샷인가
     salvage_error: str | None = None  # 구제 자체가 실패했으면 그 사유
     timeline: list[TimelineEntry] = []
-    # "none"은 이 프로세스에 이벤트 스토어가 없어 못 읽은 것 — 빈 목록과 다른 말이다
-    timeline_source: Literal["events", "none"] = "none"
+    # 셋은 다른 말이다: events(읽었다 — 비어 있을 수 있다) / none(이 프로세스에 이벤트
+    # 스토어가 없다) / unavailable(읽기가 실패했다 — timeline_error에 사유)
+    timeline_source: Literal["events", "none", "unavailable"] = "none"
+    timeline_error: str | None = None
     generated_at: datetime
 
 
@@ -179,8 +181,9 @@ def _timeline(events: list[EngineEvent]) -> list[TimelineEntry]:
     # seq가 없는 이벤트(스토어를 안 거친 것)는 0으로 앞에 — 버리면 조용한 생략이다
     for e in sorted(events, key=lambda e: e.seq if isinstance(e.seq, int) else 0):
         try:
-            entries.append(TimelineEntry(seq=e.seq if isinstance(e.seq, int) else 0, at=e.at,
-                                         event=e.event, summary=_timeline_summary(e)))
+            at = e.at if isinstance(e.at, datetime) else None
+            entries.append(TimelineEntry(seq=e.seq if isinstance(e.seq, int) else 0, at=at,
+                                         event=str(e.event), summary=_timeline_summary(e)))
         except Exception:                                          # noqa: BLE001 — 순수·무raise
             continue
     return entries
@@ -190,11 +193,13 @@ def build_report_model(record: CaseRecord, *, verdict: Verdict | None,
                        evidence: list[EvidenceRecord], case_file: dict | None,
                        clock: Clock,
                        evidence_summaries: dict[str, str] | None = None,
-                       events: list[EngineEvent] | None = None) -> ReportModel:
+                       events: list[EngineEvent] | None = None,
+                       timeline_error: str | None = None) -> ReportModel:
     """보고서 데이터를 유도한다. 순수 함수이고 절대 raise하지 않는다.
 
-    events는 이벤트 로그 전체(`collect_events`)다. None은 "이 프로세스가 로그를 못
-    읽는다"이고 빈 목록은 "로그는 있는데 이벤트가 없다"다 — 렌더러가 다르게 말한다.
+    events는 이벤트 로그 전체(`collect_events(...).events`)다. None은 "이 프로세스에
+    이벤트 스토어가 없다", 빈 목록은 "로그는 있는데 이벤트가 없다", timeline_error는
+    "읽기가 실패했다"(그때 events는 무시한다 — 부분 로그를 완전한 것처럼 내지 않는다).
     """
     case_file = case_file if isinstance(case_file, dict) else {}
     plan_tasks = _dicts(case_file.get("plan_tasks"))
@@ -231,6 +236,8 @@ def build_report_model(record: CaseRecord, *, verdict: Verdict | None,
         knowledge_digests=knowledge_digests,
         partial=bool(case_file.get("partial")),
         salvage_error=str(salvage_error) if salvage_error else None,
-        timeline=_timeline(events) if events is not None else [],
-        timeline_source="events" if events is not None else "none",
+        timeline=_timeline(events) if events is not None and timeline_error is None else [],
+        timeline_source=("unavailable" if timeline_error is not None
+                         else "events" if events is not None else "none"),
+        timeline_error=timeline_error,
         generated_at=clock())

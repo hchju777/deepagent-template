@@ -89,5 +89,41 @@ def test_collect_events는_페이지를_끝까지_읽는다():
     store = InMemoryEventStore()
     for i in range(5):
         store.append(EngineEvent(event="round_started", case_id="c-1", at=T, data={"round": i}))
-    assert [e.seq for e in collect_events(store, "c-1", page=2)] == [1, 2, 3, 4, 5]
-    assert collect_events(store, "없음") == []
+    assert [e.seq for e in collect_events(store, "c-1", page=2).events] == [1, 2, 3, 4, 5]
+    assert collect_events(store, "없음").events == []
+
+
+def test_collect_events는_스토어_장애를_raise_대신_돌려준다():
+    # 리뷰 M1(규율 1·8): 읽기 장애 하나가 보고서 파일·report_ready·메일을 전부 막았다.
+    from src.application.events import collect_events
+    from src.domain.events import InMemoryEventStore
+
+    class _Broken(InMemoryEventStore):
+        def since(self, *a, **k):
+            raise RuntimeError("case_events read failed")
+    log = collect_events(_Broken(), "c-1")
+    assert log.events == [] and log.error == "RuntimeError: case_events read failed"
+
+
+def test_collect_events는_커서를_마지막_seq로_옮긴다():
+    # 리뷰 D1: seq가 연속이면 `cursor += page`도 맞아 보인다. prune 뒤 3부터 시작하면
+    # 그 변형은 같은 페이지를 영원히 읽는다 — 스토어가 11번째 호출에서 끊는다.
+    from datetime import timedelta
+    from src.application.events import collect_events
+    from src.domain.events import EngineEvent, InMemoryEventStore
+
+    class _Counting(InMemoryEventStore):
+        calls = 0
+
+        def since(self, *a, **k):
+            type(self).calls += 1
+            if type(self).calls > 10:
+                raise RuntimeError("페이지를 끝없이 읽는다")
+            return super().since(*a, **k)
+    store = _Counting()
+    for i in range(6):
+        at = T - timedelta(hours=1) if i < 2 else T
+        store.append(EngineEvent(event="round_started", case_id="c-1", at=at, data={"round": i}))
+    store.prune_before(T)                                   # seq 1·2가 걷혀 3부터 남는다
+    log = collect_events(store, "c-1", page=2)
+    assert log.error is None and [e.seq for e in log.events] == [3, 4, 5, 6]
