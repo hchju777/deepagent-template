@@ -569,3 +569,51 @@ def test_같은_토큰을_가진_주체_둘은_기동을_거부한다(tmp_path):
     app.write_text(json.dumps(data), encoding="utf-8")
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("alice" in e.problem and "carol" in e.problem for e in errors), errors
+
+
+_MONGO_TOPO = """
+services:
+  twin-api:
+    writes: [ { kind: mongo, collection: twin_state } ]
+derivations: {}
+"""
+
+
+def test_mongo_find_점검의_필터와_정렬을_기동에서_검증한다(tmp_path):
+    # 매 순찰이 error를 내고 끝나는 것보다 배포 시점에 시끄럽게 죽는 게 낫다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {
+            "twin.stopped": {"judge": "rule", "schedule": {"interval": "5m"},
+                             "probe": "mongo_find", "target": "mongo:twin_state",
+                             "params": {"rule": "exists", "field": "0.line",
+                                        "filter": {"$where": "sleep(1)"},
+                                        "sort": [["ts", "내림차순"]]}},
+            "twin.overlap": {"judge": "rule", "schedule": {"interval": "5m"},
+                             "probe": "mongo_find", "target": "mongo:twin_state",
+                             "params": {"rule": "exists", "field": "0.line",
+                                        "filter": {"part": "Z"}},
+                             "resolve": {"part": {"from": "mongo", "collection": "parts",
+                                                  "field": "code"}}}}}}))
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "$where" in problems and "sort" in problems and "part" in problems
+
+
+def test_정상_mongo_find_점검은_기동을_막지_않는다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {"twin.stopped": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "probe": "mongo_find", "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "0.line",
+                       "filter": {"state": "STOP", "ts": {"$gte": 0}},
+                       "sort": [["ts", -1]]},
+            # mongo_find는 resolve를 실제로 실행한다 — 등재 항목이 아니라고 거부하면
+            # 정상 설정이 기동을 못 한다.
+            "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}}}}}))
+    assert validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path) == []

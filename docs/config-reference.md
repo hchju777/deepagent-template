@@ -158,7 +158,9 @@ Redis/Mongo/Kafka와 소스 저장소를 읽는 LLM 에이전트를 돌리고 �
 | `probe` | str \| null | null | 프로브 레지스트리 이름을 명시. 없으면 `target`의 kind 접두사로 기본 선택(`rest:/path→rest_get`, `rest:<이름>→rest_query`, `redis→redis_get`, `mongo→mongo_recent`, `kafka→kafka_lag`) |
 | `params` | dict | `{}` | 프로브·rule 판정에 넘길 파라미터(아래 "rule 판정 6종" 참고) |
 | `concern` | `"system"` \| `"operation"` | `"system"` | 무엇이 이상한가 — 메일 수신자·브리핑 방향·보고서 헤더가 이 값을 따른다. `system`은 파이프라인 고장(Kafka lag·TTL 만료·5xx), `operation`은 데이터는 흐르는데 현장이 이상한 경우(0/0/0·NO PLAN). **사람이 적는다**: 라우팅 근거는 재현·감사 가능해야 한다. rule에서 유도되지 않는다 — 다만 `all_zero`·`expected_state`는 이 축을 위해 만든 rule이라 명시하지 않으면 config 검증이 거부한다 |
-| `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`의 `limit`) |
+| `sample` | int \| null | null | 조회 건수 상한(예: `mongo_recent`·`mongo_find`의 `limit`) |
+| `params.filter` | dict | `{}` | **`mongo_find` 전용** — 그 컬렉션에 낼 find 질의. 연산자는 허용 목록(`$eq $ne $gt $gte $lt $lte $in $nin $exists $regex $options $and $or`)만 통과하고 `$where`·`$function` 같은 서버측 JS는 기동 검증과 어댑터 양쪽에서 거부된다 |
+| `params.sort` | list \| null | null | **`mongo_find` 전용** — `[["ts", -1]]` 형태. JSON에 튜플이 없어 2원소 리스트로 적는다 |
 | `on_budget_exhausted` | `"skip"` \| `"escalate"` | `"skip"` | llm/rule+llm 판정인데 `patrol.llm_budget`이 소진됐을 때 동작 |
 | `resolve.<키>.from` | `"rest"` \| `"mongo"` \| `"redis"` \| `"clock"` \| `"unfiltered"` | **필수** | 값을 어디서 읽을지. 값 자체를 config에 적으면 즉시 썩는다(사업부/법인마다 다르고 매일 바뀐다). `params.body`와 키가 겹치면 기동 거부 |
 | `resolve.<키>.entry` / `.field` | str / str | `from="rest"`일 때 필수 | 부를 등재 조회 항목(**GET이어야 한다** — 기동 검증이 강제)과 뽑을 필드 |

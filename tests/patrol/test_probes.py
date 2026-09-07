@@ -205,3 +205,97 @@ async def test_의도한_전체조회는_증거에_남는다():
     out = await PROBES["rest_query"](adapters, check, clock=lambda: T)
     assert out.status == "ok"
     assert out.data["request"].get("unfiltered") == ["line"], out.data["request"]
+
+
+# ---- mongo_find: config가 특정 collection에 특정 find 질의를 낸다 ------------------------
+def _mongo_adapters(docs):
+    return build_adapters(SITE, TOPO, clock=lambda: T,
+                          stub_seeds=StubSeeds(mongo_collections={"twin_state": docs}))
+
+
+def _find_check(**params):
+    return CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state", "params": {"rule": "exists", "field": "0.line", **params}})
+
+
+async def test_mongo_find는_params의_필터로_문서를_좁힌다():
+    docs = [{"line": 7, "state": "RUN"}, {"line": 8, "state": "STOP"}, {"line": 9, "state": "RUN"}]
+    result = await PROBES["mongo_find"](_mongo_adapters(docs), _find_check(filter={"state": "STOP"}),
+                                        clock=lambda: T)
+    assert result.status == "ok" and [d["line"] for d in result.data] == [8]
+
+
+async def test_mongo_find는_정렬과_표본_상한을_따른다():
+    docs = [{"line": i, "ts": i} for i in range(5)]
+    check = _find_check(filter={}, sort=[["ts", -1]])
+    check = check.model_copy(update={"sample": 2})
+    result = await PROBES["mongo_find"](_mongo_adapters(docs), check, clock=lambda: T)
+    assert [d["line"] for d in result.data] == [4, 3]
+
+
+async def test_mongo_find의_필터는_연산자_허용_목록을_넘지_못한다():
+    # `$where`는 서버측 JS 실행이다 — 읽기 전용이 메커니즘으로 남으려면 표현 불가능해야
+    # 한다(규율 9). 어댑터와 스텁이 같은 판정 함수(filter_problems)를 쓴다.
+    result = await PROBES["mongo_find"](_mongo_adapters([]),
+                                        _find_check(filter={"$where": "sleep(1000)"}),
+                                        clock=lambda: T)
+    assert result.status == "error" and "$where" in (result.error or "")
+
+
+async def test_mongo_find의_필터가_dict가_아니면_error다():
+    result = await PROBES["mongo_find"](_mongo_adapters([]), _find_check(filter=[{"a": 1}]),
+                                        clock=lambda: T)
+    assert result.status == "error" and "filter" in (result.error or "")
+
+
+async def test_mongo_find는_해석기_값을_필터에_합친다():
+    # 값을 config에 적으면 즉시 썩는다(사업부마다 다르고 매일 바뀐다) — 값이 아니라
+    # 값이 어디서 오는지를 선언한다. 리스트는 $in, 단일 값은 동등 비교다.
+    docs = [{"part": "A", "n": 1}, {"part": "B", "n": 2}, {"part": "C", "n": 3}]
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state",
+        "params": {"rule": "exists", "field": "0.part", "filter": {"n": {"$gt": 0}}},
+        "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
+    adapters = build_adapters(SITE, TOPO, clock=lambda: T, stub_seeds=StubSeeds(
+        mongo_collections={"twin_state": docs, "parts": [{"code": "A"}, {"code": "C"}]}))
+    result = await PROBES["mongo_find"](adapters, check, clock=lambda: T)
+    assert result.status == "ok" and [d["part"] for d in result.data] == ["A", "C"]
+
+
+async def test_해석기가_값을_못_내면_질의하지_않는다():
+    # 전부-또는-전무(§2-N3): 빈 필터로 전체 조회하면 "거짓 안심"이 된다.
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state", "params": {"rule": "exists", "field": "0.part"},
+        "resolve": {"part": {"from": "mongo", "collection": "없는컬렉션", "field": "code"}}})
+    result = await PROBES["mongo_find"](_mongo_adapters([{"part": "A"}]), check, clock=lambda: T)
+    assert result.status == "error"
+
+
+async def test_해석기_키가_필터_키와_겹치면_error다():
+    # 어느 쪽이 이기는지 config만 봐서 알 수 없으면 사람이 값을 고쳤는데 안 바뀐다.
+    # 해석기 자체는 **성공**해야 이 가드를 실제로 지난다(안 그러면 전부-또는-전무가 먼저 잡는다).
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state",
+        "params": {"rule": "exists", "field": "0.part", "filter": {"part": "Z"}},
+        "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
+    adapters = build_adapters(SITE, TOPO, clock=lambda: T, stub_seeds=StubSeeds(
+        mongo_collections={"twin_state": [{"part": "A"}], "parts": [{"code": "A"}]}))
+    result = await PROBES["mongo_find"](adapters, check, clock=lambda: T)
+    assert result.status == "error" and "part" in (result.error or "")
+
+
+async def test_정렬_형식이_틀리면_질의하지_않는다():
+    result = await PROBES["mongo_find"](_mongo_adapters([{"line": 1}]),
+                                        _find_check(sort=[["ts", "내림차순"]]), clock=lambda: T)
+    assert result.status == "error" and "sort" in (result.error or "")
+
+
+async def test_mongo_기본_프로브는_그대로_recent다():
+    # 기존 점검은 한 글자도 안 바뀐다 — mongo_find는 probe로 명시할 때만 쓰인다.
+    assert resolve_probe(CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "target": "mongo:twin_state",
+        "params": {"rule": "exists", "field": "0.line"}})) == "mongo_recent"
