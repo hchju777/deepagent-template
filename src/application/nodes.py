@@ -8,7 +8,7 @@ import re
 from langgraph.types import Send, interrupt
 
 from src.application.history import render_history
-from src.application.briefing import (build_briefing, render_deployment,
+from src.application.briefing import (build_briefing, one_line, render_deployment,
                                       render_rules, upstream_slice)
 from src.application.schemas import FrameOutput, IntegrateOutput, parse_structured
 from src.application.subagents import run_subagent
@@ -75,10 +75,13 @@ _CONCLUDE_PROMPT = """너는 디지털 트윈 운영 조사의 리드다. 지금
 {{"verdict_type": "logic_bug", "root_cause": {{"component": "...", "evidence_ids": ["ev-1"]}}, "alternates": [{{"component": "...", "evidence_ids": ["ev-2"], "confidence": "low", "relation": "..."}}], "contributing": [], "confidence": "high", "recommendations": [], "caveats": [], "narrative": "..."}}"""
 
 
+# 리드 프롬프트도 `[...]` 섹션 어휘를 쓴다 — 한 줄이 쪼개지면 그 조각이 다음 섹션
+# 머리말처럼 보이고, 위조된 블록이 진짜보다 **먼저** 온다(계획 18과 같은 근거).
+# 접기는 **조립된 줄 전체**에 건다: 필드별로 걸면 언젠가 새 필드가 빠진다.
 def _format_hypothesis_board(hypotheses):
     if not hypotheses:
         return "없음"
-    return "\n".join(f"- {h.id} [{h.status}] {h.statement}" for h in hypotheses)
+    return "\n".join(one_line(f"- {h.id} [{h.status}] {h.statement}") for h in hypotheses)
 
 
 def _format_task_status(tasks):
@@ -89,7 +92,8 @@ def _format_task_status(tasks):
         counts[task.status] = counts.get(task.status, 0) + 1
     summary = ", ".join(f"{status}={count}" for status, count in counts.items())
     lines = [f"[요약] {summary}"]
-    errors = [f"- {task.id}: {task.error}" for task in tasks
+    # task.error는 서브에이전트·도구·대상 어댑터가 만든 문자열이다.
+    errors = [one_line(f"- {task.id}: {task.error}") for task in tasks
               if task.status == "error" and task.error]
     if errors:
         lines.append("[오류 원인]")
@@ -123,7 +127,8 @@ def _format_task_error_rate(tasks):
 def _format_rewrite_note(verify_problems):
     if not verify_problems:
         return ""
-    problems = "\n".join(f"- {p}" for p in verify_problems)
+    # verify의 problems에는 LLM이 쓴 `link.component`가 실린다.
+    problems = "\n".join(one_line(f"- {p}") for p in verify_problems)
     return f"\n\n[재작성 요청] 다음 문제를 고쳐 다시 작성하라:\n{problems}"
 
 
@@ -133,7 +138,10 @@ def _format_qa_log(qa_log):
     entries = [e for e in qa_log if e.get("kind") in ("human_answer", "auto_answered")]
     if not entries:
         return "없음"
-    return "\n".join(f"Q: {e.get('question')}\nA: {e.get('answer')}" for e in entries)
+    # Q/A 두 줄은 **의도된 구조**라 각 줄을 따로 접는다. answer는 HTTP로 들어온 사람의
+    # 문자열이고, 계획 18이 접수 프롬프트에서 접은 것과 같은 출처다.
+    return "\n".join(f"{one_line('Q: ' + str(e.get('question')))}\n"
+                     f"{one_line('A: ' + str(e.get('answer')))}" for e in entries)
 
 
 def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
