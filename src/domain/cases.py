@@ -207,10 +207,17 @@ class CaseRepositoryPort(ABC):
 
 
 def _newest_first(records: list[CaseRecord], limit: int) -> list[CaseRecord]:
-    """종결 시각(status_since, 없으면 updated_at) 내림차순으로 limit건."""
+    """종결 시각(status_since, 없으면 updated_at) 내림차순으로 limit건. 동점은 id 내림차순.
+
+    동점 키가 **계약**인 이유: 같은 시각에 닫힌 케이스는 흔한데(고정 시계, 한 배치에서
+    닫힌 것들) 키가 하나뿐이면 파이썬 `sorted`의 안정성(=dict 삽입 순서)이 답을 정한다.
+    Mongo에는 그런 순서가 없으므로 두 백엔드가 다른 이력을 리드에게 보이고, 그 차이는
+    프로덕션에서만 나타난다.
+    """
     if limit <= 0:
         return []
-    return sorted(records, key=lambda r: r.status_since or r.updated_at, reverse=True)[:limit]
+    return sorted(records, key=lambda r: (r.status_since or r.updated_at, r.id),
+                  reverse=True)[:limit]
 
 
 class InMemoryCaseRepository(CaseRepositoryPort):
