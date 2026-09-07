@@ -56,8 +56,9 @@ APScheduler 잡                      patrol/scheduler.py  build_scheduler·build
         verify    인용 검사·강등
       → State                       application/state.py   CaseState
       → 이벤트 매핑                 application/events.py  map_update_to_events
-  → 판정 스냅샷 박제                application/worker.py  (close_case가 아니다 — 워커가 쓴다)
   → 종결                            application/close.py   close_case
+  → 판정 스냅샷 박제                application/worker.py  _record_snapshot
+                                    (`close_case`가 아니다 — 종결 **뒤에** 워커가 쓴다)
   → 보고서 데이터 유도              domain/report_model.py build_report_model
   → 렌더·발행                       presentation/report.py·report_html.py·mail.py
 ```
@@ -82,21 +83,31 @@ CLI `chat` / HTTP POST /cases       __main__.py·api/routes_cases.py
 케이스가 접수보다 먼저 열리는 이유: 접수 중 프로세스가 죽어도 사람이 쓴 증상이 남는다.
 `intake_done`이 없으면 워커가 접수 중인 케이스를 대상 없이 조사한다.
 
-### 1.4 답변 (두 표면, 한 함수)
+### 1.4 답변 (두 표면이 **다른 자리에서** 갈린다)
+
+CLI는 답을 **즉시 실행**하고, HTTP는 **싣기만** 한다(`api`는 실행자가 아니다). 그래서
+분기 함수 `answer_case`를 CLI는 직접 부르고 HTTP는 워커를 통해 나중에 지난다.
 
 ```
-CLI `case resume --question-seq`    __main__.py
-HTTP POST /cases/{id}/answers       api/routes_cases.py
-HTTP POST /cases/{id}/intake-answers
-  → 분기 한 곳                      application/answer.py  answer_case
+CLI  `case resume --question-seq` / `chat`      __main__.py
+  → 분기                            application/answer.py  answer_case
       → 접수 질문이면               application/intake.py  intake_turn(expect_seq=…)
-      → 조사 질문이면 **표면마다 갈린다**
-          CLI:  워커를 직접 부른다  application/worker.py  resume_once → take_answer
-          HTTP: 명령 채널에 싣고 끝 application/submit.py  submit_answer
+      → 조사 질문이면               application/worker.py  resume_once
+                                    application/usecase.py resume_case (그래프 재개)
+
+HTTP POST /cases/{id}/intake-answers            api/routes_cases.py
+  → 라우트가 **직접** 부른다        application/intake.py  intake_turn(expect_seq=…)
+
+HTTP POST /cases/{id}/answers                   api/routes_cases.py
+  → 라우트가 **직접** 부른다        application/submit.py  submit_answer
                                     domain/cases.py        attach_answer(expect_seq=…)
-                → 워커가 나중에 집어 간다(`api`는 실행자가 아니다)
-              → 그래프 재개         application/usecase.py resume_case
+  → 여기서 끝난다. 나중에 워커가:   application/worker.py  consume → take_answer
+                                    application/answer.py  answer_case (여기서 합류)
 ```
+
+**`answer_case`의 호출부는 셋뿐이다**(`__main__.py` 둘, `worker.py` 하나) — HTTP 라우트는
+안 부른다. 새 답변 표면을 만든다면 이 갈래 중 어느 쪽인지 먼저 정하라: 실행자면 CLI 쪽,
+아니면 명령 채널에 싣고 끝내는 HTTP 쪽이다.
 
 **질문 번호 대조의 자리가 종류마다 다르다**: 조사 질문은 `resume_once`가 lease를 잡은
 뒤, 접수 질문은 `intake_turn`이 레코드를 읽은 직후(그 값이 곧 CAS 술어다).
@@ -297,7 +308,7 @@ import 그래프로 지킨다 — 끌어오면 `api` 풀 전체가 실행자가 
 
 | 파일 | 줄 | 역할 · 언제 여는가 |
 |---|---|---|
-| `__main__.py` | 988 | CLI 전체. **규율 2의 주 경계**(`datetime.now()`) — 기동 검증(`boot.py`)과 `usecase.py`의 경과 측정에 문서화된 예외가 있다. `_build_publisher`가 `chat`·`case resume` 두 경로의 발행 배선을 조립한다 — **데몬은 자기 `_publish_report`를 워커의 `on_closed`로 배선한다**(같은 계약, 다른 조립). |
+| `__main__.py` | 988 | CLI 전체. **규율 2의 주 경계**(`datetime.now()`) — 기동 검증(`boot.py`)과 `usecase.py`의 이벤트 시각 폴백에 문서화된 예외가 있다(경과는 시계와 다른 양이라 `Ticker`가 따로 잰다). `_build_publisher`가 `chat`·`case resume` 두 경로의 발행 배선을 조립한다 — **데몬은 자기 `_publish_report`를 워커의 `on_closed`로 배선한다**(같은 계약, 다른 조립). |
 | `boot.py` | 503 | 기동 검증. **문제를 전부 모아서** `list[BootError]`로 돌려준다. 항목 번호는 `docs/config-reference.md`가 단일 소스다 — **여기 개수를 적지 마라**(두 곳이 갈라진다). |
 | `__init__.py` | — | 빈 패키지 표식. |
 
