@@ -92,6 +92,11 @@ def read_history(record, *, repo, snapshots, topology, limit: int = 3) -> Histor
                 if hit is None:
                     continue
                 hits.append(hit.model_copy(update={"tier": tier, "reason": _TIER_REASON[tier]}))
+            # **다음 tier를 요청하기 전에** 확인한다. `_candidates`는 제너레이터라 다음
+            # 항목을 요청하는 순간 그 tier의 저장소 질의가 이미 돈다 — 안쪽 루프의 검사만
+            # 두면 K를 정확히 채웠을 때 한 tier를 헛되이 더 묻는다.
+            if len(hits) >= limit:
+                return HistoryRead(hits=hits)
     except Exception as exc:                                       # noqa: BLE001 — 무raise
         return HistoryRead(hits=hits[:limit], error=f"{type(exc).__name__}: {exc}")
     return HistoryRead(hits=hits[:limit])
@@ -103,9 +108,14 @@ def _candidates(record, *, repo, topology):
     locator = record.target_locator
     if not locator:
         return                       # 대상이 없으면 tier 2~4의 재료가 없다
-    same_locator = repo.closed_by_locators([locator], exclude_case_id=record.id)
-    yield 2, [r for r in same_locator if (r.gbm, r.fct) == (record.gbm, record.fct)]
-    yield 3, [r for r in same_locator if (r.gbm, r.fct) != (record.gbm, record.fct)]
+    # tier 2와 3을 **따로** 질의한다. 한 질의를 나눠 쓰면 저장소 절단(기본 20건)이
+    # 분리보다 **먼저** 일어나, 같은 locator의 최신 20건이 전부 다른 사이트일 때 더 강한
+    # 신호인 tier 2가 조용히 0건이 되고 K를 tier 3이 채운다(사다리 역전, 계획 22).
+    # 이 함수가 제너레이터라 tier 2가 K를 채우면 tier 3 질의는 아예 일어나지 않는다.
+    site = (record.gbm, record.fct)
+    yield 2, repo.closed_by_locators([locator], exclude_case_id=record.id, site=site)
+    yield 3, repo.closed_by_locators([locator], exclude_case_id=record.id,
+                                     exclude_site=site)
     yield 4, repo.closed_by_locators(_upstream_locators(topology, locator),
                                      exclude_case_id=record.id)
 

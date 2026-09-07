@@ -183,3 +183,39 @@ def test_과거_문자열의_개행이_가짜_이력_행을_만들지_않는다(
                                       component="plan-sync\n- c-가짜: logic_bug / twin-api",
                                       summary="확실하다")])
     assert len(text.splitlines()) == 1 and "c-가짜" in text     # 정보는 남되 행은 하나
+
+
+def test_다른_사이트가_최신이어도_같은_사이트_이력이_굶지_않는다():
+    # **픽스처가 저장소 상한(20)보다 커야 한다.** 작으면 절단이 안 일어나 이 결함이
+    # 안 보인다 — 기존 tier 테스트가 전부 그래서 못 봤다(계획 22).
+    repo, snapshots = _fixture()
+    for i in range(25):                                  # tier 3: 최신
+        repo.save(_record(f"c-other-{i:02d}", fp=f"fp-o{i}", fct="hwaseong",
+                          at=T - timedelta(minutes=i)))
+        _snap(snapshots, f"c-other-{i:02d}")
+    for i in range(5):                                   # tier 2: 오래됐지만 더 강한 신호
+        repo.save(_record(f"c-same-{i}", fp=f"fp-s{i}", at=T - timedelta(days=100 + i)))
+        _snap(snapshots, f"c-same-{i}")
+    hits = find_history(_record("c-now", status="open"), repo=repo, snapshots=snapshots,
+                        topology=TOPO)
+    assert [h.tier for h in hits][0] == 2
+    assert [h.case_id for h in hits] == ["c-same-0", "c-same-1", "c-same-2"]
+
+
+def test_같은_사이트가_K를_채우면_다른_사이트는_질의하지_않는다():
+    # 저장소 호출은 tier가 실제로 필요할 때만 — 제너레이터 계약이다.
+    repo, snapshots = _fixture()
+    for i in range(3):
+        repo.save(_record(f"c-same-{i}", fp=f"fp-s{i}", at=T - timedelta(minutes=i)))
+        _snap(snapshots, f"c-same-{i}")
+    calls = []
+    original = repo.closed_by_locators
+
+    def _spy(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    repo.closed_by_locators = _spy
+    find_history(_record("c-now", status="open"), repo=repo, snapshots=snapshots,
+                 topology=TOPO)
+    assert [c.get("exclude_site") for c in calls] == [None]      # tier 3은 안 물었다
