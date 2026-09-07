@@ -127,6 +127,14 @@ curl -s -X POST localhost:8080/cases/c-1/answers -H 'content-type: application/j
   -d '{"answer": "계획 변경 없음", "key": "2026-09-04T09:00-c-1"}'
 # → 202 {"result": "accepted"}. 같은 key로 다시 보내면 duplicate — 재시도가 안전하다
 
+# Fleet 집계 — 선언을 보고, 지금 한 번 돌린다(스케줄은 데몬이 시나리오당 1회 등록)
+python -m src scenario list
+python -m src scenario run alarm_trend        # 커버리지 수·digest와 리포트 경로를 낸다
+curl -s localhost:8080/digests/alarm_trend    # 실행 기록(추세 비교의 재료)
+
+# 리포트를 읽는 법: **커버리지가 먼저다.** "27/30 사이트"를 확인하기 전의 숫자는
+# 아직 주장이 아니다. 불완전한 지표에는 ⚠와 사유가 붙고, 값이 없으면 —(0이 아니다).
+
 # 조사가 끝난 뒤 실제 원인을 되먹인다(학습 루프 — 보고서 푸터가 이 명령을 안내한다)
 python -m src case label c-1 --agreement wrong --actual-component plan-sync \
     --resolution false_positive --saw-report --by "$USER"

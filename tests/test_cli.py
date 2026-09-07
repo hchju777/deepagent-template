@@ -12,6 +12,7 @@ from src.__main__ import main
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
 from src.domain.label import InMemoryLabelStore
+from src.domain.rollup import InMemoryDigestStore
 from src.domain.snapshot import InMemoryVerdictSnapshotStore
 from src.infrastructure.checkpointer import Persistence
 from src.domain.store import InMemoryCaseStore
@@ -242,7 +243,8 @@ def test_접수_문답은_증거로_박제된다(tmp_path, capsys, monkeypatch):
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
 
     code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "OEE가 이상하다",
                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
@@ -295,7 +297,8 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     checkpointer = InMemorySaver()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: checkpointer)
 
     lead_llm = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON])
@@ -376,7 +379,8 @@ def test_case_show_report는_저장된_보고서_파일을_그대로_보여준�
                          origin="human", status="closed", created_at=T, updated_at=T))
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
 
     report_dir = tmp_path / "myreports"
     report_dir.mkdir()
@@ -405,7 +409,8 @@ def test_case_show_report는_파일이_없으면_즉석_렌더한다(tmp_path, c
                               data={"status": "open", "reason": None}))
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, events,
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
 
     code = main(["case", "show", "c-2", "--report", "--config-root", str(tmp_path / "config")])
     out = capsys.readouterr().out
@@ -716,7 +721,8 @@ def test_접수_질문에_답하면_접수를_이어간다(tmp_path, capsys, mon
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     record = open_case(repo=repo, store=store, symptom="OEE가 이상하다", gbm="mx", fct="gumi",
                        concern="system", requested_by=None,
@@ -752,7 +758,8 @@ def test_조사_질문은_접수로_새지_않는다(tmp_path, capsys, monkeypat
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
                        concern="system", requested_by=None,
@@ -814,7 +821,8 @@ def test_주체가_레코드에_박제된다(tmp_path, monkeypatch):
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
@@ -839,7 +847,8 @@ def test_chat이_스코프_없이도_돈다(tmp_path, monkeypatch):
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
@@ -862,7 +871,8 @@ def test_스코프_미확정이면_후보를_보여주고_케이스를_안_연�
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     # 사이트를 둘로 늘려 지름길을 막고, 해석 LLM이 후보 밖 값을 준다.
     reg = tmp_path / "config" / "registry.json"
@@ -897,7 +907,8 @@ def test_case_resume에도_접근_검사가_있다(tmp_path, capsys, monkeypatch
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
                        concern="system", requested_by="alice",
@@ -927,7 +938,8 @@ def test_접수_중_프로세스가_죽어도_문답이_남는다(tmp_path, caps
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     lead1 = ScriptedLLM(['{"target_locator": null, "missing": ["어느 라인인가?"]}'])
     monkeypatch.setattr("src.patrol.daemon.build_chat_model",
@@ -968,7 +980,8 @@ def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
@@ -1004,7 +1017,8 @@ def test_chat도_가로채인_케이스에는_조사를_걸지_않는다(tmp_pat
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
 
     class _Hijacks:
@@ -1081,7 +1095,8 @@ def test_case_show_report는_이벤트_로그_읽기_장애에도_렌더한다(t
                          origin="human", status="closed", created_at=T, updated_at=T))
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, _Broken(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     code = main(["case", "show", "c-2", "--report", "--config-root", str(tmp_path / "config")])
     out = capsys.readouterr().out
     assert code == 0 and "이벤트 로그 읽기 실패" in out
@@ -1096,7 +1111,7 @@ def test_case_label은_실제_원인을_기록한다(tmp_path, capsys, monkeypat
                          created_at=T, updated_at=T, status="closed", closed_reason="조사 완료"))
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), labels))
+                                                InMemoryVerdictSnapshotStore(), labels, InMemoryDigestStore()))
     code = main(["case", "label", "c-1", "--agreement", "wrong", "--actual-component", "plan-sync",
                  "--resolution", "false_positive", "--saw-report", "--by", "hchju",
                  "--config-root", str(tmp_path / "config")])
@@ -1116,7 +1131,7 @@ def test_case_label_stats는_게이트가_닫혀_있으면_퍼센트를_내지_�
                          created_at=T, updated_at=T, status="closed", closed_reason="조사 완료"))
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), labels))
+                                                InMemoryVerdictSnapshotStore(), labels, InMemoryDigestStore()))
     assert main(["case", "label", "--stats", "--config-root", str(tmp_path / "config")]) == 0
     out = capsys.readouterr().out
     assert "종결 1건" in out and "%" not in out and "게이트" in out
@@ -1133,7 +1148,7 @@ def test_case_show_report_푸터가_라벨을_보인다(tmp_path, capsys, monkey
     labels.append(RootCauseLabel(case_id="c-2", agreement="correct", labeled_at=T))
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), labels))
+                                                InMemoryVerdictSnapshotStore(), labels, InMemoryDigestStore()))
     assert main(["case", "show", "c-2", "--report", "--config-root", str(tmp_path / "config")]) == 0
     assert "라벨: correct" in capsys.readouterr().out
 
@@ -1168,7 +1183,8 @@ def test_chat은_워커에_ticker를_넘긴다(tmp_path, monkeypatch):
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
@@ -1202,7 +1218,7 @@ def test_case_resume이_발행하는_보고서도_라벨을_보인다(tmp_path, 
     labels, checkpointer = InMemoryLabelStore(), InMemorySaver()
     monkeypatch.setattr("src.__main__.build_persistence",
                         lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
-                                                InMemoryVerdictSnapshotStore(), labels))
+                                                InMemoryVerdictSnapshotStore(), labels, InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: checkpointer)
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON])
     subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
@@ -1234,3 +1250,92 @@ def test_chat과_case_resume도_라벨_저장소와_ticker를_발행에_넘긴�
     resume_src = inspect.getsource(main_module._cmd_case_resume)
     assert "labels=p.labels" in chat_src and "ticker=time.perf_counter" in chat_src
     assert "labels=p.labels" in resume_src and "ticker=time.perf_counter" in resume_src
+
+
+def _scenario_tree(tmp_path):
+    _tree(tmp_path)
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "alarm_trend.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "알람 추세",
+        "schedule": {"interval": "1h"},
+        "output": {"format": "md", "output_dir": str(tmp_path / "fleet")},
+        "metrics": {"alarms": {"target": "rest:/oee", "extract": "body.oee", "reduce": "sum"}}}),
+        encoding="utf-8")
+
+
+def test_scenario_list는_시나리오를_보인다(tmp_path, capsys, monkeypatch):
+    _scenario_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    assert main(["scenario", "list", "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "alarm_trend" in out and "알람 추세" in out
+
+
+def test_scenario_run은_리포트를_남기고_경로를_출력한다(tmp_path, capsys, monkeypatch):
+    _scenario_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    assert main(["scenario", "run", "alarm_trend", "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    written = list((tmp_path / "fleet").glob("*.md"))
+    assert len(written) == 1 and str(written[0]) in out
+    assert "커버리지" in written[0].read_text(encoding="utf-8")
+
+
+def test_없는_시나리오는_exit_1이다(tmp_path, capsys, monkeypatch):
+    _scenario_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    assert main(["scenario", "run", "없음", "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 1
+
+
+def test_patrol_run은_시나리오와_실행_기록을_데몬에_넘긴다(tmp_path, monkeypatch):
+    # 검증 리뷰 B-1: 안 넘기면 fleet 잡이 하나도 등록되지 않아 집계가 프로덕션에서
+    # 한 번도 안 돈다 — CLAUDE.md가 이름 붙인 `resume_once` 유형의 재발이다.
+    _scenario_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    seen = {}
+    real = main_module.PatrolDaemon
+
+    class _Spy(real):
+        def __init__(self, **kw):
+            seen.update(kw)
+            super().__init__(**kw)
+
+    monkeypatch.setattr("src.__main__.PatrolDaemon", _Spy)
+    monkeypatch.setattr("src.__main__._drive_daemon", _noop_drive)
+    main(["patrol", "run", "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert list(seen.get("scenarios") or {}) == ["alarm_trend"]
+    assert seen.get("digests") is not None
+
+
+def test_scenario_run도_실행_기록을_남긴다(tmp_path, monkeypatch):
+    # 기록이 없으면 GET /digests는 영구히 빈 목록이고 추세 비교가 도달 불가 코드가 된다.
+    _scenario_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    digests = InMemoryDigestStore()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                digests))
+    assert main(["scenario", "run", "alarm_trend", "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert digests.latest("alarm_trend") is not None
+
+
+def test_scenario_run은_추세를_읽고_사이트_옵트아웃을_지킨다(tmp_path, monkeypatch):
+    # 재검증 N3b·N5c: CLI가 digests를 **읽는지**와 scenario_sites를 쓰는지가 무보장이었다.
+    import inspect
+    src = inspect.getsource(main_module._cmd_scenario)
+    assert "digests=persistence.digests" in src and "scenario_sites(" in src
+
+
+def test_scenario_run의_기본_출력은_보고서_디렉터리_아래다(tmp_path, monkeypatch):
+    # 재검증 P12: 위생 픽스의 CLI 절반이 무보장이었다 — 되돌리면 리포 루트에 output/이
+    # 되살아난다.
+    import inspect
+    src = inspect.getsource(main_module._cmd_scenario)
+    assert 'Path(app.report.output_dir) / "fleet"' in src

@@ -26,7 +26,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.config.loader import ConfigError, load_app_config, load_registry, load_site_config
+from src.config.loader import (ConfigError, load_app_config, load_registry,
+                               load_scenarios, load_site_config)
 from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
 from src.infrastructure.query_rules import (entry_call_problems, entry_schema, filter_problems,
                                             mongo_role_problems)
@@ -131,6 +132,9 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
     # 쓴다. `--live --stub-seeds`는 시드를 받는 네 번째 경로이고, 여기만 가드가
     # 없으면 real 사이트에서 시드가 조용히 무시된 채 실제 네트워크를 친다.
     adapters_by_site: dict[str, str] = {}
+    # 시나리오 검증에 쓸 사이트별 (토폴로지 locator, 등재 항목) — 사이트 루프에서 채운다.
+    site_targets: dict[str, tuple[set, set]] = {}
+    entry_specs: dict[str, dict] = {}
 
     app_config = None
     try:
@@ -178,6 +182,8 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         # 아니다(못 얻는 대상도 있다); 있는데 깨진 것이 오류다.
         known = topo.locators()
         entries = dict(cfg.target.rest.entries) if cfg.target.rest else {}
+        site_targets[f"{site.gbm}/{site.fct}"] = (set(known), set(entries))
+        entry_specs[f"{site.gbm}/{site.fct}"] = dict(entries)
         target_api, api_problems = load_target_api(knowledge_root, site.gbm, site.fct)
         errors += [BootError(where, p) for p in api_problems]
         if target_api is not None:
@@ -376,4 +382,68 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         if profiles_used and not env.get("LLM_API_KEY"):
             errors.append(BootError("app", "LLM_API_KEY 필요 — llm 프로파일을 쓰는 활성 사이트가 있다"))
 
+    errors += _scenario_errors(config_root, env, site_targets, entry_specs)
+    return errors
+
+
+def _scenario_errors(config_root: Path, env, site_targets: dict,
+                     entry_specs: dict) -> list[BootError]:
+    """시나리오 검증(계획 16) — 문제를 전부 모아서 돌려준다(기동 거부 철학).
+
+    집계는 사이트를 가로지르므로 scope의 사이트가 registry에 실재하는지, 각 지표의
+    target이 **scope의 모든 사이트에서** 해석되는지를 본다. 오타 하나가 매 집계에서
+    "N개 사이트 미확인"으로만 드러나면 커버리지 블록이 진짜 장애와 설정 실수를
+    구별할 수 없게 된다.
+    """
+    try:
+        scenarios = load_scenarios(config_root, env=env)
+    except ConfigError as exc:
+        return [BootError("scenarios", p) for p in exc.problems]
+    errors: list[BootError] = []
+    for name, scenario in scenarios.items():
+        where = f"scenarios/{name}"
+        wanted = (list(site_targets) if scenario.scope.sites == "all" else scenario.scope.sites)
+        in_scope = [key for key in wanted if key not in set(scenario.scope.exclude)]
+        for key in in_scope:
+            if key not in site_targets:
+                errors.append(BootError(where, f"scope의 사이트 {key!r}가 registry에 없다"))
+        for metric, spec in scenario.metrics.items():
+            if spec.probe is not None and spec.probe not in PROBES:
+                errors.append(BootError(where, f"지표 {metric!r}의 probe {spec.probe!r}가 "
+                                               f"프로브 레지스트리에 없다"))
+            if spec.target is None and spec.probe is None:
+                errors.append(BootError(where, f"지표 {metric!r}에 target도 probe도 없다 — "
+                                               f"매 집계가 '프로브 해석 불가'로 끝난다"))
+            if spec.target is None:
+                continue
+            kind, _, rest = spec.target.partition(":")
+            for key in in_scope:
+                targets = site_targets.get(key)
+                if targets is None:
+                    continue
+                known, entries = targets
+                if kind == "rest" and rest and not rest.startswith("/"):
+                    entry = entry_specs.get(key, {}).get(rest)
+                    if entry is None:
+                        errors.append(BootError(
+                            where, f"지표 {metric!r}의 target {spec.target!r}이 "
+                                   f"{key}의 target.rest.entries에 등재돼 있지 않다"))
+                    else:
+                        # 점검과 **같은 판정 함수**를 쓴다 — body 오타가 매 집계 error로만
+                        # 드러나는 것은 미등재 참조를 기동 거부로 올린 것과 같은 상황이다.
+                        body = spec.params.get("body", {}) if isinstance(spec.params, dict) else {}
+                        for problem in entry_call_problems(entry, body):
+                            errors.append(BootError(where, f"지표 {metric!r}: {problem}"))
+                        # 해석기 키도 점검과 **대칭으로** 본다 — 스키마에 없는 키를
+                        # 가리키면 매 집계가 error를 내고 끝난다.
+                        schema = entry_schema(entry)
+                        for key in spec.resolve:
+                            if key not in schema:
+                                errors.append(BootError(
+                                    where, f"지표 {metric!r}의 resolve 키 {key!r}가 "
+                                           f"항목 {rest!r}의 스키마에 없다"))
+                elif spec.target not in known:
+                    errors.append(BootError(
+                        where, f"지표 {metric!r}의 target {spec.target!r}이 "
+                               f"{key}의 토폴로지로 해석되지 않는다"))
     return errors

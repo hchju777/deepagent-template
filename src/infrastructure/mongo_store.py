@@ -27,6 +27,7 @@ from src.domain.cases import (_newest_first, CaseRecord, CaseRepositoryPort, OPE
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
 from src.domain.label import LabelStorePort, RootCauseLabel
+from src.domain.rollup import DigestStorePort, FleetReport
 from src.domain.snapshot import VerdictSnapshot, VerdictSnapshotPort
 from src.domain.store import CaseStorePort, EvidenceRecord
 from src.knowledge.digest import canonical_digest
@@ -74,6 +75,7 @@ def ensure_indexes(db: Database) -> None:
     db.metrics.create_index("at")
     db.verdict_snapshots.create_index("case_id", unique=True)
     db.labels.create_index([("case_id", 1), ("labeled_at", 1)])     # append-only(계획 15)
+    db.fleet_runs.create_index([("scenario", 1), ("generated_at", -1)])   # 집계 실행(계획 16)
 
 
 class MongoCaseStore(CaseStorePort):
@@ -496,6 +498,36 @@ class MongoEventStore(EventStorePort):
         if stale:
             self._db.case_events.delete_many({"_id": {"$in": stale}})
         return len(stale)
+
+
+class MongoDigestStore(DigestStorePort):
+    """집계 실행 기록 — 추세 비교의 유일한 재료다(계획 16)."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    def put(self, report: FleetReport) -> None:
+        self._db.fleet_runs.insert_one(report.model_dump(mode="json"))
+
+    def _rows(self, scenario: str, limit: int):
+        cursor = (self._db.fleet_runs.find({"scenario": scenario})
+                  .sort("generated_at", -1).limit(limit))
+        return [FleetReport.model_validate({k: v for k, v in d.items() if k != "_id"})
+                for d in cursor]
+
+    def latest(self, scenario):
+        rows = self._rows(scenario, 1)
+        return rows[0] if rows else None
+
+    def list(self, scenario, limit=20):
+        return self._rows(scenario, limit) if limit > 0 else []
+
+    def prune_before(self, before) -> int:
+        stale = [d["_id"] for d in self._db.fleet_runs.find({})
+                 if datetime.fromisoformat(d["generated_at"]) < before]
+        if not stale:
+            return 0
+        return self._db.fleet_runs.delete_many({"_id": {"$in": stale}}).deleted_count
 
 
 class MongoLabelStore(LabelStorePort):

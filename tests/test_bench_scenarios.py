@@ -454,3 +454,43 @@ async def test_A3_계획과_어긋난_현장상태는_operation_케이스로_열
     text = (Path(daemon.report_cfg.output_dir) / f"{case_id}.{fmt}").read_text(encoding="utf-8")
     for heading in _report_headings(fmt):
         assert heading in text
+
+
+async def test_A4_사이트_하나가_죽은_집계는_불완전으로_보고된다(tmp_path):
+    """방향 문서 타깃 (1) — Alarm Trend 전 법인 집계. 채점은 구조화 필드만 본다.
+
+    사이트 하나가 죽은 상태로 돌려, 숫자가 나머지 둘의 합이고 커버리지가 2/3이며
+    `complete=False`인지 본다 — "알람 12% 감소"가 실은 "1개 법인 누락"인 사고를
+    타입이 막는지가 이 벤치의 요점이다.
+    """
+    from src.config.schema_scenario import ScenarioConfig
+    from src.fleet.collect import SiteSample
+    from src.fleet.run import run_scenario
+    from src.presentation.fleet_report import render_fleet_html
+
+    scenario = ScenarioConfig.model_validate({
+        "kind": "aggregate", "concern": "operation", "title": "알람 추세",
+        "schedule": {"cron": "0 7 * * *"}, "group_by": ["gbm"],
+        "metrics": {"alarms": {"target": "rest:alarm_count", "extract": "body.summary.alarms",
+                               "reduce": "sum", "unit": "건"}}})
+    sites = [("mx", "gumi"), ("mx", "suwon"), ("ds", "xian")]
+    samples = {"mx/gumi": [7.0], "ds/xian": [5.0]}
+
+    async def collect(spec, *, gbm, fct, adapters, clock, timezone_name):
+        key = f"{gbm}/{fct}"
+        if key not in samples:
+            return SiteSample(gbm=gbm, fct=fct, status="missing", reason="REST 타임아웃")
+        return SiteSample(gbm=gbm, fct=fct, values=samples[key], status="covered")
+
+    report = await run_scenario("alarm_trend", scenario, sites=sites,
+                                adapters_for_site=lambda g, f: None, clock=lambda: T,
+                                timezone_name="UTC", collect=collect)
+    rollup = report.rollups[0]
+    assert rollup.value == 12.0 and rollup.covered_sites == 2 and rollup.expected_sites == 3
+    assert rollup.complete is False and "1개 사이트 미확인" in (rollup.coverage_note or "")
+    assert {c.fct: c.status for c in report.coverage}["suwon"] == "missing"
+    assert {axis: r[0].value for axis, r in report.groups.items()} == {"mx": 7.0, "ds": 5.0}
+    # 렌더까지 간다 — 커버리지가 숫자보다 앞에 있고 값이 0으로 둔갑하지 않는다.
+    html = render_fleet_html(report)
+    assert html.index("<h2>커버리지</h2>") < html.index("<h2>지표</h2>")
+    assert "2 / 3" in html and "REST 타임아웃" in html

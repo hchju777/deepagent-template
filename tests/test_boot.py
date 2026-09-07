@@ -569,3 +569,102 @@ def test_같은_토큰을_가진_주체_둘은_기동을_거부한다(tmp_path):
     app.write_text(json.dumps(data), encoding="utf-8")
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("alice" in e.problem and "carol" in e.problem for e in errors), errors
+
+
+def test_시나리오의_대상과_사이트를_기동에서_검증한다(tmp_path):
+    # 기동 거부 철학: 문제를 발견 즉시 죽지 않고 전부 모아서 돌려준다.
+    import json as _json
+    _tree(tmp_path)
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    def _scenario(name, **over):
+        (scenarios / f"{name}.json").write_text(_json.dumps({
+            "kind": "aggregate", "concern": "operation", "title": "나쁜 시나리오",
+            "schedule": {"interval": "1h"},
+            "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}},
+            **over}), encoding="utf-8")
+
+    _scenario("bad_site", scope={"sites": ["mx/없는공장"]})
+    _scenario("bad_target", metrics={"a": {"target": "rest:/없는끝점", "extract": "body.n",
+                                           "reduce": "sum"}})
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    problems = " ".join(e.problem for e in errors)
+    # 문제를 전부 모아서 돌려준다 — 하나 고치면 다음 것이 나오는 식이 아니다.
+    assert "없는공장" in problems and "없는끝점" in problems
+    assert {e.where for e in errors} >= {"scenarios/bad_site", "scenarios/bad_target"}
+
+
+def test_정상_시나리오는_기동을_막지_않는다(tmp_path):
+    import json as _json
+    _tree(tmp_path)
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "ok.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "정상",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}}}),
+        encoding="utf-8")
+    assert validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path) == []
+
+
+def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path):
+    # 리뷰 M-6: 점검은 등재 스키마까지 대조하는데(그 자리 주석이 이유를 적었다)
+    # 집계는 이름만 봤다 — 같은 오타가 매 집계 error로만 드러난다.
+    import json as _json
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {
+            "base_url": "http://x",
+            "entries": {"summary_prod": {"method": "POST", "path": "/summary/prod",
+                                         "body_schema": {"part_code": "list[str]"}}}}},
+        "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "bad_body.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "나쁜 body",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "rest:summary_prod", "params": {"body": {"없는키": 1}},
+                          "extract": "body.n", "reduce": "sum"},
+                    "b": {"target": "rest:summary_prod", "probe": "없는프로브",
+                          "extract": "body.n", "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "없는키" in problems and "없는프로브" in problems
+
+
+def test_target도_probe도_없는_지표는_기동을_거부한다(tmp_path):
+    # 재검증 N18b: 새 boot 항목 셋 중 하나가 무테스트였다.
+    import json as _json
+    _tree(tmp_path)
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "no_target.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "대상 없음",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"extract": "body.n", "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "target도 probe도 없다" in problems
+
+
+def test_시나리오의_resolve_키도_등재_스키마로_대조한다(tmp_path):
+    # 점검과 대칭 — 스키마에 없는 키를 가리키면 매 집계가 error를 내고 끝난다.
+    import json as _json
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {
+            "base_url": "http://x",
+            "entries": {"summary_prod": {"method": "POST", "path": "/summary/prod",
+                                         "body_schema": {"part_code": "list[str]"}}}}},
+        "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "bad_resolve.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "나쁜 resolve",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "rest:summary_prod", "extract": "body.n", "reduce": "sum",
+                          "resolve": {"없는키": {"from": "clock", "expr": "today"}}}}}),
+        encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "없는키" in problems

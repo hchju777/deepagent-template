@@ -159,6 +159,21 @@ def get_report(case_id: str, request: Request,
                              media_type=media)
 
 
+@router.get("/digests/{scenario}")
+def get_digests(scenario: str, request: Request, limit: int = Query(20, ge=1, le=100),
+                subject: str | None = Depends(current_subject)):
+    """집계 실행 기록(계획 16). 사이트를 가로지르므로 사이트 단위 필터가 아니라 **시나리오
+    단위**로 본다 — 주체가 시나리오 scope의 사이트를 하나라도 못 보면 아무것도 안 준다."""
+    rt = runtime_of(request)
+    allowed = rt.app.access.sites_for(subject, known=[(s.gbm, s.fct) for s in rt.sites])
+    runs = rt.digests.list(scenario, limit=limit)
+    if allowed is not None and runs:
+        touched = {(c.gbm, c.fct) for run in runs for c in run.coverage}
+        if not touched <= set(allowed):
+            raise hidden()
+    return {"runs": [r.model_dump(mode="json") for r in runs]}
+
+
 @router.get("/checks")
 def list_checks(request: Request, gbm: str | None = None, fct: str | None = None,
                 limit: int = Query(20, ge=1, le=200),

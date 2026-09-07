@@ -40,6 +40,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 from src.application.close import sweep_timeouts
 from src.application.deps import EngineDeps
 from src.application.events import case_status_event, collect_events, report_ready_event
+from src.fleet.run import run_scenario, scenario_sites
+from src.presentation.fleet_report import render_fleet_html, render_fleet_md
 from src.application.labels import label_texts
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.config.loader import load_app_config, load_registry, load_site_config
@@ -58,7 +60,7 @@ from src.patrol.gate import admit_finding
 from src.patrol.ledger import LedgerPort
 from src.patrol.llm_judge import LlmBudget
 from src.patrol.runner import run_check
-from src.patrol.scheduler import build_scheduler
+from src.patrol.scheduler import build_scheduler, build_trigger
 from src.patrol.selfcheck import scan_self_check
 from src.presentation.mail import MailSenderPort, NullSender, SmtpSender, retry_pending, send_report
 from src.presentation.report import render_md, write_report
@@ -86,7 +88,8 @@ class PatrolDaemon:
                 checkpointer, clock: Callable, judge_llm, budget: LlmBudget, owner: str,
                 timezone: str, on_event: Callable[[Any], None] | None = None,
                 report_cfg: ReportConfig = ReportConfig(), mail_sender: MailSenderPort | None = None,
-                events=None, snapshots=None, labels=None, ticker=None):
+                events=None, snapshots=None, labels=None, ticker=None,
+                scenarios=None, digests=None):
         self.app = app
         self.sites = sites
         self.store = store
@@ -106,6 +109,10 @@ class PatrolDaemon:
         self.snapshots = snapshots       # VerdictSnapshotPort | None — 종결 시 판정 박제
         self.labels = labels             # LabelStorePort | None — 푸터의 라벨 유입구(계획 15)
         self.ticker = ticker             # Ticker | None — None이면 경과가 "미측정"이다
+        # Fleet 집계(계획 16). 시나리오는 사이트 층이 아니라 config/scenarios/*.json에서
+        # 오고, 잡은 **사이트 수와 무관하게 시나리오당 하나** 등록된다.
+        self.scenarios = scenarios or {}
+        self.digests = digests           # DigestStorePort | None — 추세 비교의 재료
         self.queue = CaseQueue()
         self.worker: InvestigationWorker | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -305,6 +312,63 @@ class PatrolDaemon:
         except Exception:                                          # noqa: BLE001
             pass
 
+    async def run_scenario_job(self, name: str) -> None:
+        """시나리오 하나를 팬아웃해 리포트를 발행한다 — 파일 먼저, 그다음 메일.
+
+        집계는 엔진 산출물이 아니므로 `EngineEvent`를 내지 않는다(규율 7). 관측은
+        레저(`fleet:<이름>`)와 stdout이다. 다른 잡과 같이 절대 raise하지 않는다 —
+        스케줄러가 raise한 잡을 조용히 스케줄에서 빼면 집계가 죽은 줄 아무도 모른다.
+        """
+        scenario = self.scenarios.get(name)
+        if scenario is None:
+            return
+        try:
+            report = await run_scenario(
+                name, scenario, sites=scenario_sites(scenario, name, self.sites),
+                adapters_for_site=lambda g, f: getattr(self._site(g, f), "adapters", None),
+                clock=self.clock, timezone_name=self.timezone, digests=self.digests)
+            body = (render_fleet_html(report) if scenario.output.format == "html"
+                    else render_fleet_md(report))
+            # 시나리오가 말한 곳에 쓴다 — 데몬과 CLI가 다른 곳에 쓰면 config 필드가
+            # 프로덕션에서 no-op이 된다(검증 리뷰 M-4).
+            out_dir = scenario.output.output_dir or str(
+                Path(self.report_cfg.output_dir) / "fleet")
+            path = write_report(body, output_dir=out_dir,
+                                case_id=name, suffix=scenario.output.format)
+            self._record_fleet_run(name, "ok" if path else "error",
+                                   None if path else "리포트 파일 쓰기 실패")
+            if not path or not scenario.output.mail:
+                self._store_digest(report)
+                return
+            # send_id에 창을 넣는다 — 이름만 쓰면 2상 레저가 둘째 실행을 중복으로
+            # 억제해 매일 도는 집계가 첫날 이후 영영 안 나간다.
+            send_id = f"fleet:{name}:{report.window_from.isoformat()}"
+            await send_report(send_id, f"[{report.title}] 집계 리포트",
+                              render_fleet_md(report), sender=self._mail_sender(),
+                              ledger=self.ledger, cfg=self.report_cfg.mail, clock=self.clock,
+                              concern=scenario.concern, html=body)
+            self._store_digest(report)
+        except Exception as exc:                                   # noqa: BLE001 — 무raise
+            self._record_fleet_run(name, "error", f"{type(exc).__name__}: {exc}")
+
+    def _store_digest(self, report) -> None:
+        """실행 기록은 **발송 뒤**에 남긴다 — 앞에 두면 기록 저장 실패가 보고서를 쓰고도
+        아무도 못 받게 만든다(검증 리뷰 M-3, CLAUDE.md의 가드 순서 항목)."""
+        if self.digests is None:
+            return
+        try:
+            self.digests.put(report)
+        except Exception:                                          # noqa: BLE001
+            pass
+
+    def _record_fleet_run(self, name: str, status: str, error: str | None) -> None:
+        # 사이트를 가로지르는 실행이라 gbm/fct가 없다 — requeue 잡과 같은 "-" 관례를 쓴다.
+        try:
+            self.ledger.record_run("-", "-", f"fleet:{name}", CheckOutcome(
+                status=status, observed_at=self.clock(), error=error))
+        except Exception:                                          # noqa: BLE001
+            pass
+
     async def _publish_report(self, case_id: str) -> None:
         """워커가 케이스를 닫은 직후 InvestigationWorker.on_closed로 불린다(계획 5).
 
@@ -357,6 +421,12 @@ class PatrolDaemon:
         site_tuples = [(rt.gbm, rt.fct, rt.cfg) for rt in self.sites]
         scheduler = build_scheduler(site_tuples, run_one=self.run_one, heartbeat=self.heartbeat,
                                     on_missed=self.on_missed, timezone=self.timezone)
+        for name, scenario in self.scenarios.items():
+            if not scenario.enabled:
+                continue
+            scheduler.add_job(self.run_scenario_job, build_trigger(scenario.schedule,
+                                                       timezone=self.timezone),
+                              args=[name], id=f"fleet/{name}", misfire_grace_time=None)
         scheduler.add_job(self.self_check_job, IntervalTrigger(minutes=10), id="self_check",
                           misfire_grace_time=None)
         scheduler.add_job(self.sweep_job, IntervalTrigger(hours=1), id="sweep",
