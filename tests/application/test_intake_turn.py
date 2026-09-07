@@ -256,3 +256,31 @@ async def test_접수를_포기해도_intake_done이_True다():
     for _ in range(3):
         await _turn(case_id, repo, store, _deps("파싱 불가"), max_turns=3)
     assert repo.get(case_id).intake_done is True
+
+
+# ---- 계획 15(P8): chat 지문 정정 -----------------------------------------------------------
+async def test_접수가_끝나면_지문이_대상_기준으로_다시_계산된다():
+    # 계획 12가 남긴 알려진 결함: fingerprint(gbm, fct, "chat", case_id)라 사람이 연
+    # 케이스는 서로 절대 같은 지문을 갖지 않는다. 이대로 tier 1 이력 검색을 얹으면
+    # human 케이스는 영원히 안 맞는다.
+    from src.domain.patrol import fingerprint
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()      # 같은 repo — id가 갈린다
+    ids = []
+    for _ in range(2):
+        record = open_case(repo=repo, store=store, symptom="OEE가 이상하다", gbm="mx", fct="gumi",
+                           concern="system", requested_by=None, clock=lambda: T,
+                           on_event=lambda e: None)
+        assert (await _turn(record.id, repo, store, _deps(_RESOLVED))).status == "done"
+        ids.append(record.id)
+    assert len(set(ids)) == 2                                        # 서로 다른 케이스다
+    fps = {repo.get(cid).fingerprint for cid in ids}
+    assert fps == {fingerprint("mx", "gumi", "chat", "rest:/oee")}    # 같은 대상 → 같은 지문
+
+
+async def test_대상을_못_정한_접수는_지문을_그대로_둔다():
+    # _give_up 경로 — locator가 없으면 재계산의 재료가 없다. case_id 지문이 남는다.
+    case_id, repo, store = _case()
+    before = repo.get(case_id).fingerprint
+    turn = await _turn(case_id, repo, store, _deps(_MISSING), max_turns=0)
+    assert turn.status in ("error", "asking")
+    assert repo.get(case_id).fingerprint == before

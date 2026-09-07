@@ -20,6 +20,7 @@
 from datetime import datetime
 from typing import Any, Callable, Literal
 
+from src.domain.patrol import fingerprint
 from src.application.lifecycle import transition
 from src.application.schemas import parse_structured
 from src.config.schema_app import StrictModel
@@ -209,7 +210,14 @@ def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
 
 def _finish(record, repo, clock, target_locator, on_event=None) -> IntakeTurn:
     was_parked = record.status == "awaiting_human"
+    # 대상이 정해진 지금이 지문을 고칠 수 있는 첫 시점이다(계획 15/P8). 개설 시점의
+    # 지문은 case_id가 재료라 human 케이스끼리 절대 안 겹쳤고, 그대로 두면 tier 1
+    # 이력 검색이 human 케이스에서 영원히 빈손이다. "chat" 성분은 유지한다 — 순찰
+    # 지문은 점검 이름을 쓰므로 네임스페이스가 갈라져 있고, 게이트가 순찰 finding을
+    # 사람이 연 케이스에 붙이는 일이 생기지 않는다. 사람이 연 두 케이스가 같은 지문을
+    # 갖는 것은 이제 의도다(open_case는 지문 중복 억제를 하지 않는다).
     problem = _save(repo, record.id, clock, unpark=True, target_locator=target_locator,
+                    fingerprint=fingerprint(record.gbm, record.fct, "chat", target_locator),
                     question=None, question_kind=None, intake_done=True)
     if problem is not None:
         return IntakeTurn(status="not_ours", problems=[problem])
