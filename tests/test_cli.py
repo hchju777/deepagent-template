@@ -1514,3 +1514,53 @@ def test_case_label_stats는_게이트가_닫혀_있으면_표를_안_찍는다(
     assert main(["case", "label", "--stats", "--config-root", str(tmp_path / "config")]) == 0
     out = capsys.readouterr().out
     assert "confidence" not in out and "%" not in out
+
+
+def _status_tree(tmp_path, monkeypatch, ledger):
+    """`patrol status`가 도는 최소 트리 — mongo 백엔드로 가장한다."""
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(),
+                                                InMemoryLabelStore(), InMemoryDigestStore()))
+    original = main_module._load_app
+
+    def _mongo_app(config_root, env):
+        app = original(config_root, env)
+        return None if app is None else app.model_copy(
+            update={"store": app.store.model_copy(update={"backend": "mongo"})})
+
+    monkeypatch.setattr("src.__main__._load_app", _mongo_app)
+
+
+def test_patrol_status가_조사_지표를_찍는다(tmp_path, capsys, monkeypatch):
+    # 기록만 되고 아무도 안 읽던 자리다 — 프로덕션 소비자가 0이었다.
+    ledger = InMemoryLedger()
+    for value, outcome in ((10.0, "closed"), (20.0, "closed"), (30.0, "failed")):
+        ledger.record_metric("investigation.duration_s", value,
+                             tags={"gbm": "mx", "fct": "gumi", "outcome": outcome}, at=T)
+    _status_tree(tmp_path, monkeypatch, ledger)
+    assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "조사 3건" in out and "실패 1건" in out
+    assert "20.0" in out                      # 중앙값 — 평균은 파킹 한 건이 왜곡한다
+
+
+def test_지표가_없으면_없다고_말한다(tmp_path, capsys, monkeypatch):
+    _status_tree(tmp_path, monkeypatch, InMemoryLedger())
+    assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
+    assert "관측치 없음" in capsys.readouterr().out
+
+
+def test_레저가_던져도_status는_다른_정보를_계속_찍는다(tmp_path, capsys, monkeypatch):
+    # 규율 1 — 메트릭은 버려도 되는 관측치다. 관측성이 명령을 죽이면 안 된다.
+    class _Boom(InMemoryLedger):
+        def metrics(self, name, *, limit=200):
+            raise RuntimeError("mongo down")
+
+    _status_tree(tmp_path, monkeypatch, _Boom())
+    assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "하트비트" in out and "지표 읽기 실패" in out

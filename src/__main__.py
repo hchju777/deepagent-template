@@ -199,6 +199,34 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     return 0
 
 
+def _print_investigation_metrics(ledger) -> None:
+    """조사 소요의 요약 — 이 포트의 유일한 프로덕션 소비자다(계획 19).
+
+    **중앙값을 낸다.** 평균은 파킹 한 건이 며칠 걸리면 통째로 왜곡되고, 그 한 건이
+    바로 사람이 따로 봐야 하는 것이라 요약이 대신 말하면 안 된다.
+
+    **실패를 분모에서 빼지 않는다** — 스냅샷이 `failed`를 남기는 것과 같은 이유로,
+    빼면 생존 편향이 생긴다(오래 끌다 실패한 조사가 통계에서 사라진다).
+
+    레저 장애를 삼키는 이유(규율 1): 메트릭은 버려도 되는 관측치다. 관측성이 명령을
+    죽이면 관측성이 시스템을 더 나쁘게 만든 것이다.
+    """
+    try:
+        rows = ledger.metrics("investigation.duration_s")
+    except Exception as exc:                                       # noqa: BLE001 — 무raise
+        print(f"조사 지표: 지표 읽기 실패 — {type(exc).__name__}")
+        return
+    if not rows:
+        print("조사 지표: 관측치 없음")
+        return
+    values = sorted(float(row["value"]) for row in rows)
+    failed = sum(1 for row in rows if row.get("tags", {}).get("outcome") == "failed")
+    middle = values[len(values) // 2] if len(values) % 2 else (
+        (values[len(values) // 2 - 1] + values[len(values) // 2]) / 2)
+    print(f"조사 지표: 조사 {len(values)}건(실패 {failed}건), 소요 중앙값 {middle}초, "
+          f"최장 {values[-1]}초")
+
+
 def _cmd_patrol_status(config_root: Path, env: dict) -> int:
     app = _load_app(config_root, env)
     if app is None:
@@ -210,6 +238,7 @@ def _cmd_patrol_status(config_root: Path, env: dict) -> int:
     ledger = build_persistence(app.store).ledger
     hb = ledger.last_heartbeat()
     print(f"하트비트: {hb.isoformat() if hb is not None else '없음'}")
+    _print_investigation_metrics(ledger)
 
     try:
         registry = load_registry(config_root)
