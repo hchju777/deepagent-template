@@ -880,3 +880,29 @@ def test_전체_조회를_명시한_지표는_기동을_막지_않는다(tmp_pat
         "target": "mongo:twin_state", "probe": "mongo_find",
         "extract": "0.n", "reduce": "sum",
         "resolve": {"line": {"from": "unfiltered"}}}}) == ""
+
+
+def test_점검의_body와_해석기_키가_겹치면_거부된다():
+    # MetricSpec 쪽만 테스트가 있고 CheckConfig 쪽은 없었다 — 이 검증자는 두 스키마에
+    # 각각 있고, 한쪽만 지키면 나머지가 조용히 사라진다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_site import CheckConfig
+    with pytest.raises(ValidationError):
+        CheckConfig.model_validate({
+            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:make_thing",
+            "params": {"body": {"line": ["A"]}},
+            "resolve": {"line": {"from": "unfiltered"}}})
+
+
+def test_집계_지표의_body와_해석기_키가_겹치면_거부된다():
+    # 겹침 검증자가 두 키(body·filter)를 돌게 바뀐 뒤, filter 쪽만 테스트가 있어
+    # body 절반을 지우는 변조가 살아남았다(검증 리뷰 M7).
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_scenario import MetricSpec
+    with pytest.raises(ValidationError):
+        MetricSpec.model_validate({
+            "target": "rest:alarm_count", "extract": "0.n", "reduce": "sum",
+            "params": {"body": {"line": ["A"]}},
+            "resolve": {"line": {"from": "unfiltered"}}})
