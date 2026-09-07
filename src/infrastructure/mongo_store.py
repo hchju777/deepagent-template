@@ -12,7 +12,13 @@ mongomock·실제 MongoDB 둘 다 기본 설정에서는 저장한 datetime의 t
 prune_sends_before)는 같은 이유로 DB에 $lt를 맡기지 않고 문자열을 파싱해
 Python에서 비교한다 —
 ISO 문자열은 마이크로초 유무로 길이가 달라져 사전식 비교가 시간 순서와
-어긋날 수 있기 때문이다.
+어긋날 수 있기 때문이다(마이크로초가 0이면 pydantic이 소수부를 통째로 생략하고,
+'Z'가 '.'보다 커서 **정각이 그 초의 최신으로 뒤집힌다**).
+
+**정렬은 파싱으로 미룰 수 없다** — 그러려면 전량을 하이드레이션해야 하고 그것이
+바로 계획 20이 없앤 것이다. 그래서 정렬하는 세 곳(이력 조회·집계 리포트·라벨 목록)은
+파이프라인 안에서 `_fixed_width_iso`로 폭을 맞춘 뒤 정렬한다. **DB에 시각 정렬을
+새로 맡길 때는 반드시 그 헬퍼를 거쳐라.**
 """
 import re
 from datetime import datetime, timedelta
@@ -44,9 +50,11 @@ def _fixed_width_iso(expr):
     비교와 달리 파이썬으로 미룰 수 없다(그러려면 전량을 하이드레이션해야 하고, 그것이
     바로 없애려는 것이다). 그래서 DB 안에서 폭을 맞춘다.
 
-    `to_jsonable_python`이 내는 폭은 20(소수부 없음) 또는 27(정확히 6자리)뿐이고
-    `tests/infrastructure/test_mongo_store.py`가 그 성질을 못박는다 — 직렬화가 바뀌면
-    정렬이 조용히 썩는 대신 그 테스트가 깨진다.
+    **UTC-aware일 때** `to_jsonable_python`이 내는 폭은 20(소수부 없음) 또는 27(정확히
+    6자리)뿐이고 `tests/infrastructure/test_mongo_store.py`가 그 성질을 못박는다 —
+    직렬화가 바뀌면 정렬이 조용히 썩는 대신 그 테스트가 깨진다. 오프셋이 붙으면 25/32,
+    naive면 19/26이라 이 정규화가 조용히 틀린다. 그런 값이 안 생기는 근거는 시계가
+    전부 `datetime.now(timezone.utc)`라는 것이다(규율 2가 CLI 경계로 몰아 둔 덕이다).
 
     `$dateFromString`·`$toDate`를 안 쓰는 이유: mongomock이 둘 다 구현하지 않아
     오프라인으로 검증할 수 없다(테스트가 실제 시스템을 요구하지 않는다는 규약).
@@ -583,8 +591,17 @@ class MongoDigestStore(DigestStorePort):
         self._db.fleet_runs.insert_one(report.model_dump(mode="json"))
 
     def _rows(self, scenario: str, limit: int):
-        cursor = (self._db.fleet_runs.find({"scenario": scenario})
-                  .sort("generated_at", -1).limit(limit))
+        # 정렬 키의 폭을 맞춘다 — `_fixed_width_iso` docstring 참고. 여기서 틀리면
+        # `latest()`가 구버전을 돌려주고, 그것이 추세 비교의 유일한 재료다.
+        if limit <= 0:
+            return []
+        cursor = self._db.fleet_runs.aggregate([
+            {"$match": {"scenario": scenario}},
+            {"$addFields": {"_at": _fixed_width_iso("$generated_at")}},
+            {"$sort": {"_at": -1}},
+            {"$limit": limit},
+            {"$project": {"_at": 0}},
+        ])
         return [FleetReport.model_validate({k: v for k, v in d.items() if k != "_id"})
                 for d in cursor]
 
@@ -615,7 +632,16 @@ class MongoLabelStore(LabelStorePort):
     def list_for(self, case_id: str) -> list[RootCauseLabel]:
         # _id를 동점 키로 — 같은 시각의 두 라벨(고정 시계 테스트, 같은 초의 두 요청)의
         # 순서가 "단 순서대로"라는 append-only 계약을 지키려면 유일 키가 필요하다.
-        cursor = self._db.labels.find({"case_id": case_id}).sort([("labeled_at", 1), ("_id", 1)])
+        #
+        # 정렬 키의 폭도 맞춘다(`_fixed_width_iso`) — 캘리브레이션(계획 19)이 이 목록의
+        # **마지막 행**을 "사람의 최종 믿음"으로 읽으므로, 정각에 단 라벨이 뒤로 밀리면
+        # 정정 전 라벨이 세어진다.
+        cursor = self._db.labels.aggregate([
+            {"$match": {"case_id": case_id}},
+            {"$addFields": {"_at": _fixed_width_iso("$labeled_at")}},
+            {"$sort": {"_at": 1, "_id": 1}},
+            {"$project": {"_at": 0}},
+        ])
         return [RootCauseLabel.model_validate({k: v for k, v in d.items() if k != "_id"})
                 for d in cursor]
 

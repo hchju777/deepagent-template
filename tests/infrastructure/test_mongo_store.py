@@ -708,35 +708,39 @@ def test_정각에_닫힌_케이스가_최신으로_뒤집히지_않는다(db):
     # 시각은 ISO **문자열**로 저장되고 pydantic은 마이크로초가 0이면 소수부를 생략한다.
     # 'Z'(0x5A) > '.'(0x2E)라 사전순 정렬은 정각을 같은 초의 모든 시각보다 최신으로 본다 —
     # 이 파일 docstring이 범위 비교 세 곳에서 이미 금지한 함정이다.
+    # **더 최신인 쪽에 더 작은 id**를 준다 — 안 그러면 소수부를 통째로 버려도 id 동점
+    # 키가 우연히 같은 답을 내서, 결함을 되살리는 변조가 통과한다(검증 리뷰 M5b·M6).
     repo = MongoCaseRepository(db)
-    _closed_doc(repo, "c-1", at=T)                                    # 소수부 없음
-    _closed_doc(repo, "c-2", at=T + timedelta(microseconds=500000))
+    _closed_doc(repo, "c-2", at=T)                                    # 소수부 없음
+    _closed_doc(repo, "c-1", at=T + timedelta(microseconds=500000))
     assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
-        "c-2", "c-1"]
+        "c-1", "c-2"]
 
 
 def test_정각이_섞이면_DB_절단이_다른_집합을_고르지_않는다(db):
     # 순서만 어긋나는 게 아니다 — $limit이 더 최신인 케이스를 잘라낸다.
+    # 시간 역순으로 id를 준다 — 소수부가 뭉개지면 id 동점 키가 정확히 반대 답을 낸다.
     repo = MongoCaseRepository(db)
-    _closed_doc(repo, "c-a", at=T)                                    # 소수부 없음
+    _closed_doc(repo, "c-c", at=T)                                    # 소수부 없음
     _closed_doc(repo, "c-b", at=T + timedelta(microseconds=300000))
-    _closed_doc(repo, "c-c", at=T + timedelta(microseconds=600000))
+    _closed_doc(repo, "c-a", at=T + timedelta(microseconds=600000))
     assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x",
-                                                     limit=2)] == ["c-c", "c-b"]
+                                                     limit=2)] == ["c-a", "c-b"]
 
 
 def test_두_백엔드가_소수초가_섞여도_같은_순서를_낸다(db):
     from src.domain.cases import InMemoryCaseRepository
 
     mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
-    plan = [("c-1", T), ("c-2", T + timedelta(microseconds=1)),
-            ("c-3", T + timedelta(microseconds=999999)), ("c-4", T - timedelta(days=1))]
+    # 같은 초 안에서 id 순서와 시각 순서를 **반대로** 둔다.
+    plan = [("c-3", T), ("c-2", T + timedelta(microseconds=1)),
+            ("c-1", T + timedelta(microseconds=999999)), ("c-4", T - timedelta(days=1))]
     for cid, at in plan:
         _closed_doc(mongo, cid, at=at)
         _closed_doc(memory, cid, at=at)
     assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="x")]
             == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="x")]
-            == ["c-3", "c-2", "c-1", "c-4"])
+            == ["c-1", "c-2", "c-3", "c-4"])
 
 
 def test_저장되는_시각_문자열은_두_폭뿐이다():
@@ -746,6 +750,10 @@ def test_저장되는_시각_문자열은_두_폭뿐이다():
     widths = {len(to_jsonable_python(T.replace(microsecond=us)))
               for us in (0, 1, 500, 500000, 999999)}
     assert widths == {20, 27}
+    # 전제는 **UTC-aware**다 — 오프셋이 붙으면 25/32, naive면 19/26이라 정규화가
+    # 조용히 틀린다. 시계는 전부 `datetime.now(timezone.utc)`라 그 값이 안 생긴다.
+    assert len(to_jsonable_python(T.astimezone(timezone(timedelta(hours=9))))) == 25
+    assert len(to_jsonable_python(T.replace(tzinfo=None))) == 19
 
 
 def test_같은_분_안의_초도_구별한다(db):
@@ -782,3 +790,30 @@ def test_동점_id는_사전순이라_자릿수가_다르면_숫자순이_아니
     assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="x")]
             == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="x")]
             == ["c-99", "c-1000", "c-100"])
+
+
+def test_정각에_단_라벨이_뒤에_온_라벨을_앞지르지_않는다(db):
+    # 캘리브레이션(계획 19)이 `list_for`의 **마지막 행**을 "사람의 최종 믿음"으로 읽는다.
+    # 사전순 정렬이 정각을 뒤로 보내면 정정 전 라벨이 세어진다.
+    from src.domain.label import RootCauseLabel
+    from src.infrastructure.mongo_store import MongoLabelStore
+
+    store = MongoLabelStore(db)
+    store.append(RootCauseLabel(case_id="c-1", agreement="correct", labeled_at=T))
+    store.append(RootCauseLabel(case_id="c-1", agreement="wrong",
+                                labeled_at=T + timedelta(microseconds=500000)))
+    assert [r.agreement for r in store.list_for("c-1")] == ["correct", "wrong"]
+
+
+def test_정각에_생성된_집계_리포트가_최신으로_뒤집히지_않는다(db):
+    # `latest()`는 추세 비교의 유일한 재료다 — 구버전을 돌려주면 비교가 거꾸로 선다.
+    from src.domain.rollup import FleetReport
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    store = MongoDigestStore(db)
+    for at, digest in ((T, "old"), (T + timedelta(microseconds=500000), "new")):
+        store.put(FleetReport(scenario="s", title="t", concern="operation",
+                              scenario_digest=digest, window_from=T, window_to=T,
+                              generated_at=at))
+    assert store.latest("s").scenario_digest == "new"
+    assert [r.scenario_digest for r in store.list("s")] == ["new", "old"]
