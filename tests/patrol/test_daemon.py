@@ -25,7 +25,7 @@ CHECK = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5
 
 
 def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=None, on_event=None,
-            events=None, labels=None, ticker=None):
+            events=None, labels=None, ticker=None, scenarios=None, digests=None):
     """report_cfg 기본값을 tmp_path 기반으로 만든다(테스트 위생) — 예전엔 기본
     ReportConfig()가 output_dir="output"(CWD 상대)을 써서, 보고서 발행을 다루지
     않는 테스트들도 그때마다 레포 루트에 output/*를 남겼다. tmp_path를 필수
@@ -43,7 +43,8 @@ def _daemon(store, repo, ledger, lead, tmp_path, *, clock=lambda: T, report_cfg=
                         checkpointer=InMemorySaver(), clock=clock, judge_llm=None,
                         budget=LlmBudget(5, clock=clock), owner="daemon-test", timezone="Asia/Seoul",
                         report_cfg=report_cfg if report_cfg is not None else default_report_cfg,
-                        on_event=on_event, events=events, labels=labels, ticker=ticker)
+                        on_event=on_event, events=events, labels=labels, ticker=ticker,
+                        scenarios=scenarios, digests=digests)
 
 
 async def test_run_one은_finding을_케이스로_열어_큐에_넣고_워커가_종결한다(tmp_path):
@@ -410,3 +411,64 @@ def test_데몬은_ticker를_워커까지_전달한다(tmp_path):
     daemon = _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path, ticker=lambda: next(ticks))
     daemon.build()
     assert daemon.worker._ticker is not None and daemon.worker._ticker() == 1.0
+
+
+# ---- 계획 16(P7): Fleet 집계 ---------------------------------------------------------------
+_SCENARIO = {"kind": "aggregate", "concern": "operation", "title": "알람 추세",
+             "schedule": {"interval": "1h"},
+             "metrics": {"alarms": {"target": "rest:/oee", "extract": "body.oee",
+                                    "reduce": "sum"}}}
+
+
+def _with_scenarios(store, repo, ledger, tmp_path, **kw):
+    from src.config.schema_scenario import ScenarioConfig
+    scenarios = {name: ScenarioConfig.model_validate(data)
+                 for name, data in kw.pop("scenarios", {"alarm_trend": _SCENARIO}).items()}
+    return _daemon(store, repo, ledger, lead=[], tmp_path=tmp_path, scenarios=scenarios, **kw)
+
+
+def test_시나리오_잡은_사이트_수와_무관하게_한_번_등록된다(tmp_path):
+    # 방향 문서 §4.3의 근거: 사이트 층에 두면 같은 집계가 N번 돌고 메일도 N통 간다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _with_scenarios(store, repo, ledger, tmp_path)
+    scheduler = daemon.build()
+    fleet_jobs = [j for j in scheduler.get_jobs() if j.id.startswith("fleet/")]
+    assert [j.id for j in fleet_jobs] == ["fleet/alarm_trend"]
+
+
+def test_꺼진_시나리오는_잡이_없다(tmp_path):
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _with_scenarios(store, repo, ledger, tmp_path,
+                             scenarios={"off": {**_SCENARIO, "enabled": False}})
+    assert [j for j in daemon.build().get_jobs() if j.id.startswith("fleet/")] == []
+
+
+async def test_집계_실행은_파일을_먼저_쓰고_레저에_남긴다(tmp_path):
+    from src.domain.rollup import InMemoryDigestStore
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    digests = InMemoryDigestStore()
+    seen = []
+    daemon = _with_scenarios(store, repo, ledger, tmp_path, digests=digests,
+                             report_cfg=ReportConfig(output_dir=str(tmp_path / "out")),
+                             on_event=seen.append)
+    daemon.build()
+    await daemon.run_scenario_job("alarm_trend")
+    written = list((tmp_path / "out" / "fleet").glob("*.html"))
+    assert len(written) == 1 and "커버리지" in written[0].read_text(encoding="utf-8")
+    assert digests.latest("alarm_trend") is not None
+    # 집계는 엔진 산출물이 아니다 — EngineEvent를 내지 않는다(규율 7). 관측은 레저다.
+    assert seen == []
+    assert ledger.runs("-", "-", "fleet:alarm_trend")
+
+
+async def test_집계_실행이_던져도_데몬은_산다(tmp_path, monkeypatch):
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _with_scenarios(store, repo, ledger, tmp_path)
+    daemon.build()
+    import src.patrol.daemon as dm
+
+    async def boom(*a, **k):
+        raise RuntimeError("집계 폭발")
+    monkeypatch.setattr(dm, "run_scenario", boom)
+    await daemon.run_scenario_job("alarm_trend")          # raise하지 않는다
+    assert ledger.runs("-", "-", "fleet:alarm_trend")[0].status == "error"
