@@ -418,6 +418,11 @@ def _scenario_errors(config_root: Path, env, site_targets: dict,
             if key not in site_targets:
                 errors.append(BootError(where, f"scope의 사이트 {key!r}가 registry에 없다"))
         for metric, spec in scenario.metrics.items():
+            # 지표도 프로브에 그대로 실린다(`fleet/collect.py`) — 점검과 같은 검증을
+            # 받지 않으면 오타가 "매 집계 missing"으로만 드러난다(검증 리뷰 MG-1).
+            if resolve_probe(spec) == "mongo_find":
+                errors += [BootError(where, f"지표 {metric!r}: {p}")
+                           for p in mongo_find_problems(spec.params, spec.resolve)]
             if spec.probe is not None and spec.probe not in PROBES:
                 errors.append(BootError(where, f"지표 {metric!r}의 probe {spec.probe!r}가 "
                                                f"프로브 레지스트리에 없다"))

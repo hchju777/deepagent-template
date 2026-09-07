@@ -731,3 +731,53 @@ def test_필터도_해석기도_없는_mongo_find는_전체_스캔이라_거부�
     problems = " ".join(e.problem for e in
                         validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
     assert "전체 조회" in problems
+
+
+def test_집계_지표의_mongo_find도_기동에서_검증한다(tmp_path):
+    # 검증 리뷰 MG-1: MetricSpec이 프로브에 그대로 실리는데 `_scenario_errors`가
+    # mongo_find_problems를 안 불러, 오타가 "매 집계 missing"으로만 드러났다.
+    import json as _json
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "bad_metric.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "나쁜 지표",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "mongo:twin_state", "probe": "mongo_find",
+                          "extract": "0.n", "reduce": "sum",
+                          "params": {"filter": {"$where": "sleep(1)"},
+                                     "sort": [["ts", -1.0]]}},
+                    "b": {"target": "mongo:twin_state", "probe": "mongo_find",
+                          "extract": "0.n", "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "$where" in problems and "sort" in problems
+    assert "전체 조회" in problems          # 필터도 resolve도 없는 지표
+
+
+def test_집계_지표의_sample도_1_이상이어야_한다():
+    # 검증 리뷰 MG-2: 집계는 사이트 N개로 팬아웃하므로 무제한 커서가 N배로 열린다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_scenario import MetricSpec
+    base = {"target": "mongo:twin_state", "extract": "0.n", "reduce": "sum"}
+    assert MetricSpec.model_validate({**base, "sample": 1}).sample == 1
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            MetricSpec.model_validate({**base, "sample": bad})
+
+
+def test_집계_지표의_필터와_해석기_키가_겹치면_거부된다():
+    # 검증 리뷰 MG-3: MetricSpec의 검증자가 params.body만 보고 filter를 안 봤다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_scenario import MetricSpec
+    with pytest.raises(ValidationError):
+        MetricSpec.model_validate({
+            "target": "mongo:twin_state", "extract": "0.n", "reduce": "sum",
+            "params": {"filter": {"part": "Z"}},
+            "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
