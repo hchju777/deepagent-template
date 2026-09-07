@@ -173,7 +173,7 @@ def _timeline_summary(event: EngineEvent) -> str:
         return f"판정 {d.get('verdict_type', '?')} ({d.get('confidence', '?')}){tail}"
     if kind == "report_ready":
         return f"보고서 {d.get('path', '?')}"
-    return kind
+    return str(kind)        # 미지 종류 — 문자열이 아니면 TimelineEntry 검증에 걸려 행이 빠진다
 
 
 def _timeline(events: list[EngineEvent]) -> list[TimelineEntry]:

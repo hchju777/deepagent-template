@@ -242,7 +242,7 @@ flowchart TD
 - **conclude** — 증거가 하나도 없으면(전 태스크 error) LLM 없이 즉시
   `degraded`/`low`로 판정한다. 그 외에는 리드에게 최종 판정(인과 사슬 —
   `root_cause` + `alternates[]` + `contributing[]`)을 받는다. 후보(`alternates`)의
-  상한(`MAX_ALTERNATES=3`)과 중복 제거는 **코드**가 하고(`_sanitize_alternates`),
+  상한(`MAX_ALTERNATES=3`)과 중복 제거는 **코드**가 하고(`_sanitize_causes`),
   버린 것은 caveat에 남긴다 — validator로 거부하면 후보 하나 중복됐다고 조사
   전체가 파싱 실패로 끝난다.
 - **verify** — **LLM 없는 순수 결정론 가드레일**. 판정이 인용한 모든

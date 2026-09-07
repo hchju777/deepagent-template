@@ -173,3 +173,20 @@ async def test_conclude_프롬프트는_후보_규칙을_싣는다():
     state = _state(evidence=[EvidenceRef(id="ev-1", source="mongo:twin_state", summary="s")])
     await make_nodes(deps)["conclude"](state)
     assert "유력한 순" in str(deps.lead_llm.calls[0])
+
+
+async def test_conclude는_결론_없는_판정의_후보도_소독한다():
+    # 리뷰 A8: 함수 직접 호출 테스트는 노드 배선을 보증하지 않는다.
+    deps = _deps(['{"verdict_type": "inconclusive", "confidence": "low", "narrative": "n", '
+                  '"alternates": [{"component": "a", "evidence_ids": ["ev-1"]}, '
+                  '{"component": "a", "evidence_ids": ["ev-1"]}, {"component": "", "evidence_ids": []}]}'])
+    state = _state(evidence=[EvidenceRef(id="ev-1", source="mongo:twin_state", summary="s")])
+    update = await make_nodes(deps)["conclude"](state)
+    assert [a.component for a in update["verdict"].alternates] == ["a"]
+    assert any("빈 컴포넌트 ×1" in c and "a" in c for c in update["verdict"].caveats)
+
+
+def test_relation_상한은_300자다():
+    # 리뷰 A12: 상수를 상징적으로 쓰면 값이 바뀌어도 모른다 — 계획서가 300을 명시한다.
+    from src.application.nodes import MAX_ALTERNATES, MAX_RELATION_CHARS
+    assert (MAX_RELATION_CHARS, MAX_ALTERNATES) == (300, 3)

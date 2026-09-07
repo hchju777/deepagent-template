@@ -176,7 +176,9 @@ def _sanitize_causes(verdict: Verdict) -> Verdict:
             continue
         seen.add(link.component)
         kept.append(link)
-    caveats = verdict.caveats + ([f"후보 정리: {', '.join(dropped)} 제외(중복·빈 컴포넌트 또는 상한 "
+    empties = dropped.count("(빈 컴포넌트)")
+    named = [d for d in dropped if d != "(빈 컴포넌트)"] + ([f"(빈 컴포넌트 ×{empties})"] if empties else [])
+    caveats = verdict.caveats + ([f"후보 정리: {', '.join(named)} 제외(중복·빈 컴포넌트 또는 상한 "
                                   f"{MAX_ALTERNATES} 초과)"] if dropped else [])
     cleaned = verdict.model_copy(update={"root_cause": root, "contributing": contributing,
                                          "alternates": kept, "caveats": caveats})

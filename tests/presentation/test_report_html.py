@@ -163,3 +163,12 @@ def test_Timeline_읽기_실패는_명시된다():
     model = build_report_model(record, verdict=None, evidence=[], case_file={}, clock=lambda: T,
                                events=[], timeline_error="RuntimeError: <down>")
     assert "<p>이벤트 로그 읽기 실패: RuntimeError: &lt;down&gt;</p>" in render_html(model)
+
+
+def test_시각_없는_Timeline_행은_대시로_렌더된다():
+    from src.domain.events import EngineEvent
+    record = CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                        created_at=T, updated_at=T)
+    ev = EngineEvent.model_construct(event="report_ready", case_id="c-1", at=None, seq=1, data={"path": "p"})
+    model = build_report_model(record, verdict=None, evidence=[], case_file={}, clock=lambda: T, events=[ev])
+    assert "<tr><td>1</td><td>-</td><td>report_ready</td><td>보고서 p</td></tr>" in render_html(model)

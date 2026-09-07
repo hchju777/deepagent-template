@@ -127,3 +127,21 @@ def test_collect_events는_커서를_마지막_seq로_옮긴다():
     store.prune_before(T)                                   # seq 1·2가 걷혀 3부터 남는다
     log = collect_events(store, "c-1", page=2)
     assert log.error is None and [e.seq for e in log.events] == [3, 4, 5, 6]
+
+
+def test_collect_events는_부분_읽기를_버린다():
+    # 리뷰 D4: 반쯤 읽은 Timeline은 "완전한 Timeline"으로 읽힌다 — 둘째 페이지에서
+    # 죽으면 첫 페이지도 내지 않는다.
+    from src.application.events import collect_events
+    from src.domain.events import EngineEvent, InMemoryEventStore
+
+    class _SecondPageFails(InMemoryEventStore):
+        def since(self, case_id, after_seq=0, limit=200):
+            if after_seq:
+                raise RuntimeError("page 2 failed")
+            return super().since(case_id, after_seq, limit)
+    store = _SecondPageFails()
+    for i in range(4):
+        store.append(EngineEvent(event="round_started", case_id="c-1", at=T, data={"round": i}))
+    log = collect_events(store, "c-1", page=2)
+    assert log.events == [] and log.error == "RuntimeError: page 2 failed"

@@ -257,8 +257,9 @@ class PatrolDaemon:
                 evidence_summaries[r.id] = repr(self.store.get_evidence(case_id, r.id))[:120]
             except Exception:                                      # noqa: BLE001 — 개별 실패만 건너뛴다
                 pass
-        # 이벤트 스토어가 있는 프로세스만 Timeline을 싣는다 — 없으면 None을 넘겨 보고서가
-        # "이벤트 로그 없음"을 명시한다(빈 목록과 다른 말이다).
+        # Timeline의 세 상태를 보고서가 구별해 말한다: 읽었다(비어 있을 수 있다) / 이 데몬이
+        # 이벤트 스토어 없이 조립됐다(None — 테스트·벤치) / 읽기가 실패했다(error — 발행은
+        # 계속된다, 계획 14 검증 리뷰 M1).
         log = collect_events(self.events, case_id) if self.events is not None else None
         return build_report_model(record, verdict=verdict, evidence=evidence,
                                   case_file=case_file, clock=self.clock,

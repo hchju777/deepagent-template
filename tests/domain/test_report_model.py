@@ -211,3 +211,12 @@ def test_Timeline_요약은_비정형_data에서_행을_잃지_않는다():
         "상태 → open", "라운드 1 시작 — 태스크 0개", "태스크 t-1(r) ok — 증거 0개", "질문: ?", "보고서 p",
         "보고서 q"]
     assert model.timeline[4].at is None and model.timeline[5].at is None
+
+
+def test_이벤트_종류가_문자열이_아니어도_행을_잃지_않는다():
+    # 리뷰 L2(a): 미지 kind 폴백이 str()을 안 거쳐 TimelineEntry 검증에 걸리고 except가
+    # 삼켜 행이 조용히 빠졌다.
+    ev = EngineEvent.model_construct(event=123, case_id="c-1", at=T, seq=1, data={})
+    model = build_report_model(_record(), verdict=None, evidence=[], case_file={}, clock=lambda: T,
+                               events=[ev])
+    assert [(e.event, e.summary) for e in model.timeline] == [("123", "123")]

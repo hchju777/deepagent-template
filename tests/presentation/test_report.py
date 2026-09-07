@@ -263,3 +263,11 @@ def test_Timeline_읽기_실패는_명시되고_요약_칸은_표를_깨지_않�
     md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
                        events=events)
     assert "| 1 | 2026-09-03T08:00:00+00:00 | question_raised | 질문: a \\| b |" in md
+
+
+def test_시각_없는_Timeline_행은_대시로_렌더된다():
+    from src.domain.events import EngineEvent
+    ev = EngineEvent.model_construct(event="report_ready", case_id="c-1", at=None, seq=1, data={"path": "p"})
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
+                       events=[ev])
+    assert "| 1 | - | report_ready | 보고서 p |" in md
