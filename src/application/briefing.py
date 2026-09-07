@@ -110,7 +110,8 @@ _CONCERN_HINT = {
 """
 
 
-def build_briefing(case, topo_slice, *, rules_text="", history_text="", docs_text=""):
+def build_briefing(case, topo_slice, *, rules_text="", history_text="",
+                   deployment_text=""):
     # 슬라이스의 각 derivation을 "출력 ← via ← inputs" 형식으로 표현
     chain_lines = [
         f"- {output} ← via {deriv.via} ← inputs: "
@@ -128,5 +129,5 @@ def build_briefing(case, topo_slice, *, rules_text="", history_text="", docs_tex
         f"[관련 서비스] {services_line}",
         f"[적용 룰] {_or_none(rules_text)}",
         f"[유사 이력] {_or_none(history_text)}",
-        f"[관련 문서] {_or_none(docs_text)}",
+        f"[배포 버전] {_or_none(deployment_text)}",
     ])

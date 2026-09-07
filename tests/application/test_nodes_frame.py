@@ -4,11 +4,12 @@ from src.application.deps import EngineDeps
 from src.application.nodes import make_nodes, route_after_frame
 from src.application.state import CaseState
 from src.config.schema_app import EngineConfig
-from src.config.schema_site import SiteConfig
+from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.case import Case
 from src.domain.store import InMemoryCaseStore
 from src.infrastructure.factory import StubSeeds, build_adapters
 from src.infrastructure.llm import ScriptedLLM
+from src.knowledge.deployment import Deployment
 from src.knowledge.topology import Topology
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
@@ -22,11 +23,11 @@ FRAME_JSON = ('{"hypotheses": [{"id": "h-1", "statement": "계산 이상"}], '
               '"tasks": [{"id": "t-1", "goal": "twin_state 조회", "role": "data_prober"}]}')
 
 
-def _deps(lead_responses):
+def _deps(lead_responses, **extra):
     return EngineDeps(
         lead_llm=ScriptedLLM(lead_responses), subagent_llm=None,
         adapters=build_adapters(SITE, TOPO, clock=lambda: T, stub_seeds=StubSeeds()),
-        store=InMemoryCaseStore(), topology=TOPO, engine_cfg=EngineConfig())
+        store=InMemoryCaseStore(), topology=TOPO, engine_cfg=EngineConfig(), **extra)
 
 
 def _state():
@@ -108,3 +109,42 @@ async def test_frame은_케이스에_실린_이력을_브리핑에_싣는다():
     prompt = str(deps.lead_llm.calls[0])
     assert "c-old" in prompt and "tier 2" in prompt and "plan-sync" in prompt
     assert "ev-1" not in prompt                 # 과거 id는 브리핑에 나가지 않는다(규율 3)
+
+
+CHECKS = {
+    "api.oee_range": CheckConfig.model_validate(
+        {"judge": "rule", "schedule": {"interval": "10m"}, "target": "rest:/oee",
+         "params": {"rule": "range", "min": 0, "max": 100}}),
+    "redis.other": CheckConfig.model_validate(
+        {"judge": "rule", "schedule": {"interval": "10m"}, "target": "redis:other:*",
+         "params": {"rule": "exists"}}),
+}
+DEPLOY = Deployment.model_validate({"services": {
+    "twin-api": {"repo": "twin", "commit": "abc123"},
+    "unrelated": {"repo": "x", "commit": "def456"}}})
+
+
+async def test_frame이_슬라이스에_걸리는_룰만_브리핑에_싣는다():
+    deps = _deps([FRAME_JSON], checks=CHECKS)
+    await make_nodes(deps)["frame"](_state())
+    prompt_text = str(deps.lead_llm.calls[0])
+    assert "api.oee_range" in prompt_text
+    assert "redis.other" not in prompt_text
+
+
+async def test_frame이_슬라이스_서비스의_배포_커밋을_브리핑에_싣는다():
+    deps = _deps([FRAME_JSON], deployment=DEPLOY)
+    await make_nodes(deps)["frame"](_state())
+    prompt_text = str(deps.lead_llm.calls[0])
+    assert "abc123" in prompt_text
+    assert "def456" not in prompt_text
+
+
+def test_브리핑에_생산자_없는_문서_섹션이_남아_있지_않다():
+    # 자유 문서는 코퍼스도 선별기도 없다 — 매번 "없음"을 찍는 자리는 리드 프롬프트의
+    # 잡음이자, 다음 사람에게 "배선돼 있다"는 착각을 준다.
+    import inspect
+
+    from src.application import briefing, deps as deps_module
+    assert "docs_text" not in inspect.getsource(briefing)
+    assert "docs_text" not in inspect.getsource(deps_module)

@@ -8,7 +8,8 @@ import re
 from langgraph.types import Send, interrupt
 
 from src.application.history import render_history
-from src.application.briefing import build_briefing, upstream_slice
+from src.application.briefing import (build_briefing, render_deployment,
+                                      render_rules, upstream_slice)
 from src.application.schemas import FrameOutput, IntegrateOutput, parse_structured
 from src.application.subagents import run_subagent
 from src.domain.case import CauseLink, EvidenceRef, PlanTask, Verdict
@@ -228,8 +229,12 @@ def make_nodes(deps):
         # 그것이 없는 배치(테스트·구식 조립)의 폴백이다.
         history_text = (render_history(case.history, error=case.history_error)
                         if (case.history or case.history_error) else deps.history_text)
-        briefing = build_briefing(case, topo_slice, rules_text=deps.rules_text,
-                                  history_text=history_text, docs_text=deps.docs_text)
+        briefing = build_briefing(
+            case, topo_slice,
+            rules_text=render_rules(deps.checks, slice_=topo_slice,
+                                    target_locator=case.target_locator),
+            history_text=history_text,
+            deployment_text=render_deployment(deps.deployment, slice_=topo_slice))
         output, err = await _ask_llm(deps.lead_llm, _FRAME_PROMPT.format(briefing=briefing),
                                      FrameOutput)
         if output is None:
