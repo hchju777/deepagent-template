@@ -219,3 +219,4 @@ def test_같은_사이트가_K를_채우면_다른_사이트는_질의하지_않
     find_history(_record("c-now", status="open"), repo=repo, snapshots=snapshots,
                  topology=TOPO)
     assert [c.get("exclude_site") for c in calls] == [None]      # tier 3은 안 물었다
+    assert calls[0].get("site") == ("mx", "gumi")                # tier 2를 사이트로 물었다

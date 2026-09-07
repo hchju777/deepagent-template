@@ -927,3 +927,17 @@ def test_두_백엔드가_사이트_필터에도_같은_답을_낸다(db):
                                                    site=("mx", "gumi"))] == ["c-4", "c-1"]
     assert [r.id for r in mongo.closed_by_locators(["rest:/oee"], exclude_case_id="x",
                                                    exclude_site=("mx", "gumi"))] == ["c-2", "c-3"]
+
+
+def test_mongo도_사이트_분리를_절단보다_먼저_한다(db):
+    # **픽스처가 상한(20)보다 커야 한다.** 작으면 절단이 안 일어나, 사이트 필터를
+    # `$match`가 아니라 파이썬 후처리로 옮기는 변조가 통과한다 — 이 결함이 여덟 라운드를
+    # 숨어 있게 만든 바로 그 메커니즘이다. 인메모리 쌍둥이는 `tests/domain/test_cases.py`에.
+    repo = MongoCaseRepository(db)
+    for i in range(21):                                   # 다른 사이트, 최신
+        _closed_doc(repo, f"c-other-{i:02d}", locator="rest:/oee",
+                    at=T - timedelta(minutes=i))
+        db.cases.update_one({"id": f"c-other-{i:02d}"}, {"$set": {"fct": "hwaseong"}})
+    _closed_doc(repo, "c-same", locator="rest:/oee", at=T - timedelta(days=99))
+    assert [r.id for r in repo.closed_by_locators(["rest:/oee"], exclude_case_id="x",
+                                                  site=("mx", "gumi"))] == ["c-same"]
