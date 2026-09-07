@@ -702,3 +702,83 @@ def test_두_백엔드가_같은_이력_순서를_낸다(db):
     assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="c-9")]
             == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="c-9")]
             == ["c-5", "c-4", "c-3", "c-1", "c-2"])
+
+
+def test_정각에_닫힌_케이스가_최신으로_뒤집히지_않는다(db):
+    # 시각은 ISO **문자열**로 저장되고 pydantic은 마이크로초가 0이면 소수부를 생략한다.
+    # 'Z'(0x5A) > '.'(0x2E)라 사전순 정렬은 정각을 같은 초의 모든 시각보다 최신으로 본다 —
+    # 이 파일 docstring이 범위 비교 세 곳에서 이미 금지한 함정이다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-1", at=T)                                    # 소수부 없음
+    _closed_doc(repo, "c-2", at=T + timedelta(microseconds=500000))
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-2", "c-1"]
+
+
+def test_정각이_섞이면_DB_절단이_다른_집합을_고르지_않는다(db):
+    # 순서만 어긋나는 게 아니다 — $limit이 더 최신인 케이스를 잘라낸다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-a", at=T)                                    # 소수부 없음
+    _closed_doc(repo, "c-b", at=T + timedelta(microseconds=300000))
+    _closed_doc(repo, "c-c", at=T + timedelta(microseconds=600000))
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x",
+                                                     limit=2)] == ["c-c", "c-b"]
+
+
+def test_두_백엔드가_소수초가_섞여도_같은_순서를_낸다(db):
+    from src.domain.cases import InMemoryCaseRepository
+
+    mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
+    plan = [("c-1", T), ("c-2", T + timedelta(microseconds=1)),
+            ("c-3", T + timedelta(microseconds=999999)), ("c-4", T - timedelta(days=1))]
+    for cid, at in plan:
+        _closed_doc(mongo, cid, at=at)
+        _closed_doc(memory, cid, at=at)
+    assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == ["c-3", "c-2", "c-1", "c-4"])
+
+
+def test_저장되는_시각_문자열은_두_폭뿐이다():
+    # 정렬 키 정규화가 이 성질에 기댄다 — 소수부는 없거나 정확히 6자리다.
+    # 직렬화가 바뀌면 정렬이 조용히 썩는 대신 이 테스트가 깨져야 한다.
+    from pydantic_core import to_jsonable_python
+    widths = {len(to_jsonable_python(T.replace(microsecond=us)))
+              for us in (0, 1, 500, 500000, 999999)}
+    assert widths == {20, 27}
+
+
+def test_같은_분_안의_초도_구별한다(db):
+    # 정렬 키를 분 단위로 자르면 초가 뭉개진다 — 같은 분에 닫힌 케이스는 흔하다.
+    # **더 최신인 쪽에 더 작은 id**를 준다 — 안 그러면 초가 뭉개져도 id 동점 키가
+    # 우연히 같은 답을 내서 테스트가 통과한다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-1", at=T + timedelta(seconds=30))
+    _closed_doc(repo, "c-2", at=T)
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-1", "c-2"]
+
+
+def test_status_since가_명시적_null이어도_updated_at으로_정렬된다(db):
+    # 키 부재(옛 문서)와 명시적 null(save가 model_dump로 None을 그대로 쓴다)은 다른
+    # 모양이다 — $ifNull은 둘 다 잡아야 한다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-new", at=T)
+    _closed_doc(repo, "c-old", at=T - timedelta(days=1))
+    db.cases.update_many({}, {"$set": {"status_since": None}})
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-new", "c-old"]
+
+
+def test_동점_id는_사전순이라_자릿수가_다르면_숫자순이_아니다(db):
+    # 동점 키의 목적은 **두 백엔드의 합의**이지 "최신순"이 아니다. c-99 > c-1000이
+    # 되는 것은 의도이고, 두 구현이 같은 답을 내는 것이 계약이다.
+    from src.domain.cases import InMemoryCaseRepository
+
+    mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
+    for cid in ("c-99", "c-1000", "c-100"):
+        _closed_doc(mongo, cid)
+        _closed_doc(memory, cid)
+    assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == ["c-99", "c-1000", "c-100"])

@@ -35,6 +35,30 @@ from src.knowledge.digest import canonical_digest
 from src.patrol.ledger import LedgerPort
 
 
+def _fixed_width_iso(expr):
+    """ISO 문자열 식을 **폭이 고정된** 정렬 키로 만든다: `YYYY-MM-DDTHH:MM:SSffffff`.
+
+    이게 필요한 이유는 모듈 docstring이 범위 비교 세 곳에서 이미 적은 것과 같다 —
+    pydantic은 마이크로초가 0이면 소수부를 **생략**하고, `Z`(0x5A)가 `.`(0x2E)보다
+    크므로 사전순 정렬은 정각을 같은 초의 모든 시각보다 최신으로 본다. 정렬은 범위
+    비교와 달리 파이썬으로 미룰 수 없다(그러려면 전량을 하이드레이션해야 하고, 그것이
+    바로 없애려는 것이다). 그래서 DB 안에서 폭을 맞춘다.
+
+    `to_jsonable_python`이 내는 폭은 20(소수부 없음) 또는 27(정확히 6자리)뿐이고
+    `tests/infrastructure/test_mongo_store.py`가 그 성질을 못박는다 — 직렬화가 바뀌면
+    정렬이 조용히 썩는 대신 그 테스트가 깨진다.
+
+    `$dateFromString`·`$toDate`를 안 쓰는 이유: mongomock이 둘 다 구현하지 않아
+    오프라인으로 검증할 수 없다(테스트가 실제 시스템을 요구하지 않는다는 규약).
+    """
+    return {"$concat": [
+        {"$substr": [expr, 0, 19]},                       # YYYY-MM-DDTHH:MM:SS
+        {"$cond": [{"$eq": [{"$substr": [expr, 19, 1]}, "."]},
+                   {"$substr": [expr, 20, 6]},            # 6자리 소수부
+                   "000000"]},
+    ]}
+
+
 def _next_seq(db: Database, key: str) -> int:
     """counters 컬렉션에서 key의 seq를 원자적으로 1 증가시키고 반환한다."""
     doc = db.counters.find_one_and_update(
@@ -372,9 +396,13 @@ class MongoCaseRepository(CaseRepositoryPort):
         """
         if limit <= 0:
             return []
+        raw = {"$ifNull": ["$status_since", "$updated_at"]}
         pipeline = [
             {"$match": match},
-            {"$addFields": {"_closed_at": {"$ifNull": ["$status_since", "$updated_at"]}}},
+            {"$addFields": {"_closed_at": _fixed_width_iso(raw)}},
+            # $sort와 $limit은 **붙어 있어야** 한다 — 실제 Mongo가 둘을 top-k 정렬로
+            # 합쳐 메모리를 limit으로 묶는다. 사이에 스테이지를 끼우면 계산 필드 위의
+            # 정렬이 후보 전체를 인메모리에 올린다(기본 32MB).
             {"$sort": {"_closed_at": -1, "id": -1}},
             {"$limit": limit},
             # CaseRecord는 StrictModel이다 — 계산 필드를 남기면 검증 오류가 난다.
