@@ -291,6 +291,7 @@ services:
 19. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
 20. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
 21. `mongo_find` 점검의 `params.filter`가 dict이고 연산자가 허용 목록 안인가, `params.sort`가 `[[필드, 1|-1]]` 모양인가, 정적 필터와 `resolve`의 키가 겹치지 않는가, 그리고 **필터도 해석기도 없는 전량 스캔이 아닌가**(의도한 전체 조회는 `resolve`의 `unfiltered`로 명시한다)
+22. `config/scenarios/*.json`의 지표: `probe`가 레지스트리에 있는가, `target`이 scope의 **모든** 사이트에서 해석되는가, `mongo_find` 지표에 21번과 같은 검사가 도는가, 해석기가 점검과 **같은 검증**(스키마 키·모양, 가리키는 등재 항목의 실재와 GET, 쓰는 어댑터의 설정 여부, `from: mongo` 필터의 허용 목록)을 받는가. 스키마에서 걸린 시나리오 파일이 있어도 나머지 파일의 의미 검증은 계속 돈다
 
 검사 14·17만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

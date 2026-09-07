@@ -25,7 +25,9 @@ class MetricSpec(StrictModel):
     # `params.body`에 둔다 — 등재 항목의 닫힌 스키마 검증이 그 자리를 본다(규율 9).
     params: dict[str, Any] = {}
     resolve: dict[str, ResolverSpec] = {}
-    sample: int | None = None
+    # 점검과 같은 이유로 하한이 있다 — 0·음수는 pymongo에서 "무제한"이고, 집계는
+    # 사이트 N개로 팬아웃하므로 그 한 줄이 N개 법인에 동시에 무제한 커서를 연다.
+    sample: int | None = Field(default=None, ge=1)
     extract: str = Field(min_length=1)  # 점 경로 — 빈 문자열이면 무엇을 뽑는지가 없다
     reduce: Reduce
     window: str | None = None           # "24h" 등 — 표본이 무엇을 물었는지 보고서에 적는다
@@ -35,12 +37,16 @@ class MetricSpec(StrictModel):
     @model_validator(mode="after")
     def _body_and_resolve_do_not_overlap(self):
         """점검과 같은 함정을 같은 방식으로 막는다 — 어느 쪽이 이기는지 config만 봐서
-        알 수 없으면, 사람이 값을 고쳤는데 안 바뀌는 형태로 조용히 고장 난다."""
-        static = self.params.get("body") if isinstance(self.params, dict) else None
-        if isinstance(static, dict):
-            overlap = sorted(set(static) & set(self.resolve))
-            if overlap:
-                raise ValueError(f"params.body와 resolve에 같은 키가 있다: {overlap}")
+        알 수 없으면, 사람이 값을 고쳤는데 안 바뀌는 형태로 조용히 고장 난다.
+
+        `filter`도 같이 본다: `mongo_find` 지표는 런타임이 잡지만 그러면 "매 집계
+        error"로 끝나고, 점검 쪽은 boot이 덮는데 집계만 안 덮이는 비대칭이 남는다."""
+        for key in ("body", "filter"):
+            static = self.params.get(key) if isinstance(self.params, dict) else None
+            if isinstance(static, dict):
+                overlap = sorted(set(static) & set(self.resolve))
+                if overlap:
+                    raise ValueError(f"params.{key}와 resolve에 같은 키가 있다: {overlap}")
         return self
 
 

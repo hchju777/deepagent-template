@@ -7,9 +7,10 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from src.config.loader import ConfigError, load_scenarios
-from src.config.schema_scenario import ScenarioConfig
+from src.config.schema_scenario import MetricSpec, ScenarioConfig
 
 _MIN = {"kind": "aggregate", "concern": "operation", "title": "알람 추세",
         "schedule": {"cron": "0 7 * * *"},
@@ -87,3 +88,31 @@ def test_사이트는_시나리오를_옵트아웃할_수_있다():
     assert patrol.scenarios["alarm_trend"].enabled is False
     with pytest.raises(Exception):
         SitePatrol.model_validate({"scenarios": {"alarm_trend": {"metrics": {}}}})
+
+
+def test_집계_지표의_sample도_1_이상이어야_한다():
+    # 검증 리뷰 MG-2: 집계는 사이트 N개로 팬아웃하므로 무제한 커서가 N배로 열린다.
+    base = {"target": "mongo:twin_state", "extract": "0.n", "reduce": "sum"}
+    assert MetricSpec.model_validate({**base, "sample": 1}).sample == 1
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            MetricSpec.model_validate({**base, "sample": bad})
+
+
+def test_집계_지표의_필터와_해석기_키가_겹치면_거부된다():
+    # 검증 리뷰 MG-3: MetricSpec의 검증자가 params.body만 보고 filter를 안 봤다.
+    with pytest.raises(ValidationError):
+        MetricSpec.model_validate({
+            "target": "mongo:twin_state", "extract": "0.n", "reduce": "sum",
+            "params": {"filter": {"part": "Z"}},
+            "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
+
+
+def test_집계_지표의_body와_해석기_키가_겹치면_거부된다():
+    # 겹침 검증자가 두 키(body·filter)를 돌게 바뀐 뒤, filter 쪽만 테스트가 있어
+    # body 절반을 지우는 변조가 살아남았다(검증 리뷰 M7).
+    with pytest.raises(ValidationError):
+        MetricSpec.model_validate({
+            "target": "rest:alarm_count", "extract": "0.n", "reduce": "sum",
+            "params": {"body": {"line": ["A"]}},
+            "resolve": {"line": {"from": "unfiltered"}}})
