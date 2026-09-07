@@ -53,8 +53,8 @@ def evidence_refs_for_case(store: CaseStorePort, case_id: str) -> list[EvidenceR
     """case_id에 저장된 스냅샷 전체를 엔진 State용 EvidenceRef 목록으로 바꾼다.
 
     execute 노드(application/nodes.py)와 같은 규약으로 조립한다 — summary는
-    본문 repr을 160자로 자른 것, 메타(as_of/complete/effective_as_of)는
-    저장본을 그대로 보존한다. opened 직후의 T0 스냅샷을 investigate_case의
+    `domain.case.evidence_summary`가 만들고(두 생산자가 그 **한 함수**를 쓴다),
+    메타(as_of/complete/effective_as_of)는 저장본을 그대로 보존한다. opened 직후의 T0 스냅샷을 investigate_case의
     initial_evidence로 넘길 때 쓴다(§계획 3 브리지).
     """
     refs = []

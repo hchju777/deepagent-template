@@ -211,7 +211,12 @@ async def _ask_llm(llm, prompt, schema):
         return obj, None
     try:
         retry = await llm.ainvoke([
-            ("user", f"{prompt}\n\n이전 응답은 다음 이유로 거부됐다: {err}\nJSON만 다시 출력하라.")])
+            # `err`도 접는다. pydantic의 `extra="forbid"`는 LLM이 고른 **키 이름**을 loc
+            # 줄로 열 0에 그대로 찍어서 섹션 머리말을 위조할 수 있다. "블록 뒤에 오니
+            # 무해하다"는 논증은 진짜 블록이 "없음"일 때 성립하지 않는다 — 자리마다
+            # 면제를 따지는 대신 전부 접는다.
+            ("user", f"{prompt}\n\n이전 응답은 다음 이유로 거부됐다: {one_line(err)}\n"
+                     "JSON만 다시 출력하라.")])
     except Exception as exc:
         return None, f"LLM 재시도 호출 실패 — {type(exc).__name__}: {exc}"
     return parse_structured(retry.content, schema)

@@ -46,19 +46,15 @@ def upstream_slice(topology, start_locator, *, max_depth=3):
 
 def one_line(text):
     """개행을 접는다 — `[...]` 섹션 어휘를 쓰는 프롬프트가 이것을 **공유한다**:
-    브리핑(`build_briefing`·`render_rules`·`render_deployment`), 접수(`intake._prompt`),
+    브리핑(`build_briefing`·`render_rules`·`render_deployment`), 접수(`intake._prompt`·`_turn_prompt`),
     사이트 선택(`scope._prompt`), 리드의 integrate·conclude(`nodes.py`의 가설 보드·태스크
     현황·질문답변 로그·재작성 요청), 서브에이전트 도구 반환과 태스크 goal(`subagents.py`),
     순찰 LLM 판정(`llm_judge._build_prompt`의 점검 이름·질문). 한 벌만 있어야 한다 —
     두 벌이 생기면 언젠가 한쪽만 고쳐진다(실제로 그랬다).
 
     **여러 줄이 정상인 내용은 애초에 날것으로 안 들어온다**: 개행을 이스케이프하는 표현을
-    거친다 — 증거 요약은 `domain.case.evidence_summary`, 순찰 스냅샷은 `runner`의
-    `repr(...)`, 서브에이전트의 본문 반환은 `subagents.get_evidence`의 `json.dumps`다.
+    거친다 — 증거 요약은 `domain.case.evidence_summary`, 순찰 스냅샷은 `runner.snapshot_text`, 서브에이전트의 본문 반환은 `subagents.get_evidence`의 `json.dumps`다.
     그래서 남은 자리는 전부 "항목 하나가 한 줄"이고 접기가 정확한 방어다.
-
-    안 접는 자리가 하나 있다: `nodes._ask_llm`의 재시도가 붙이는 검증 오류 문자열은
-    섹션 블록 **뒤**에 오므로 "위조본이 먼저 온다"는 형태가 성립하지 않는다.
 
     `history._clean_line`은 evidence id 제거를 겸한 두 번째 접기 구현이다 — 언젠가 이
     함수 위에 얹을 수 있다. **그때 id 제거까지 끌고 오면 안 된다**: 이력이 지우는 것은
