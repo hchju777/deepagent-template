@@ -1136,3 +1136,25 @@ def test_case_show_report_푸터가_라벨을_보인다(tmp_path, capsys, monkey
                                                 InMemoryVerdictSnapshotStore(), labels))
     assert main(["case", "show", "c-2", "--report", "--config-root", str(tmp_path / "config")]) == 0
     assert "라벨: correct" in capsys.readouterr().out
+
+
+async def _noop_drive(daemon, seconds):
+    return None
+
+
+def test_patrol_run은_워커에_ticker와_라벨_저장소를_넘긴다(tmp_path, monkeypatch):
+    # 계획 15: 함수는 되는데 호출부가 안 넘기면 프로덕션의 경과가 전부 "미측정"이다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    seen = {}
+    real = main_module.PatrolDaemon
+
+    class _Spy(real):
+        def __init__(self, **kw):
+            seen.update(kw)
+            super().__init__(**kw)
+    monkeypatch.setattr("src.__main__.PatrolDaemon", _Spy)
+    monkeypatch.setattr("src.__main__._drive_daemon", _noop_drive)
+    main(["patrol", "run", "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert seen.get("ticker") is not None and seen.get("labels") is not None
+    assert seen["ticker"]() > 0                      # 단조 소스가 실제로 돈다

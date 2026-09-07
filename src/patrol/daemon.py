@@ -86,7 +86,7 @@ class PatrolDaemon:
                 checkpointer, clock: Callable, judge_llm, budget: LlmBudget, owner: str,
                 timezone: str, on_event: Callable[[Any], None] | None = None,
                 report_cfg: ReportConfig = ReportConfig(), mail_sender: MailSenderPort | None = None,
-                events=None, snapshots=None, labels=None):
+                events=None, snapshots=None, labels=None, ticker=None):
         self.app = app
         self.sites = sites
         self.store = store
@@ -105,6 +105,7 @@ class PatrolDaemon:
         self.events = events             # EventStorePort | None — 보존 스윕이 case_events도 걷는다
         self.snapshots = snapshots       # VerdictSnapshotPort | None — 종결 시 판정 박제
         self.labels = labels             # LabelStorePort | None — 푸터의 라벨 유입구(계획 15)
+        self.ticker = ticker             # Ticker | None — None이면 경과가 "미측정"이다
         self.queue = CaseQueue()
         self.worker: InvestigationWorker | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -373,7 +374,7 @@ class PatrolDaemon:
             lease_ttl_s=self.app.investigations.lease_ttl_s, ledger=self.ledger,
             max_wall_clock_s=self.app.investigations.max_wall_clock_s,
             max_intake_turns=self.app.engine.max_intake_turns,
-            snapshots=self.snapshots,
+            snapshots=self.snapshots, ticker=self.ticker,
             knowledge_digests_for_site=self._digests_for_site, on_event=self.on_event,
             on_closed=self._publish_report)
         self.queue.requeue_open(self.repo, clock=self.clock)
