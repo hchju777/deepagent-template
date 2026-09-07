@@ -42,7 +42,7 @@ class LabelStorePort(ABC):
 
     @abstractmethod
     def list_for(self, case_id: str) -> list[RootCauseLabel]:
-        """그 케이스의 라벨을 단 순서대로."""
+        """그 케이스의 라벨을 `labeled_at` 오름차순, 동점은 단 순서대로."""
         ...
 
     @abstractmethod

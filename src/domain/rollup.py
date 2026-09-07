@@ -115,8 +115,12 @@ class InMemoryDigestStore(DigestStorePort):
         self._reports.append(report)
 
     def _for(self, scenario):
-        return sorted((r for r in self._reports if r.scenario == scenario),
-                      key=lambda r: r.generated_at, reverse=True)
+        # 동점은 **삽입 역순**이다 — Mongo가 `_id` 내림차순으로 가르는 것과 같은 계약이고,
+        # `latest()`의 뜻("가장 마지막에 들어온 것")과도 맞는다. `reverse=True`만 걸면
+        # 파이썬 안정 정렬이 동점을 삽입 **정순**으로 남겨 두 백엔드가 정반대 답을 낸다.
+        rows = [(i, r) for i, r in enumerate(self._reports) if r.scenario == scenario]
+        return [r for _, r in sorted(rows, key=lambda pair: (pair[1].generated_at, pair[0]),
+                                     reverse=True)]
 
     def latest(self, scenario):
         rows = self._for(scenario)

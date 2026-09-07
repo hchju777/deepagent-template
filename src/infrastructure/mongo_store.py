@@ -507,9 +507,10 @@ class MongoLedger(LedgerPort):
         if limit <= 0:
             return []
         # **이 자리는 `_fixed_width_iso`를 안 거친다** — `record_metric`이 pydantic이
-        # 아니라 `at.isoformat()`으로 쓰고, 그것은 UTC에도 `+00:00`을 붙여 폭이 항상
-        # 고정된다. `+`(0x2B)가 `.`(0x2E)보다 작아 소수부 없는 값이 앞에 오는 것도 맞다.
-        # **우연이다**: 직렬화를 `to_jsonable_python`으로 바꾸면(`Z`) 즉시 뒤집힌다.
+        # 아니라 `at.isoformat()`으로 쓰기 때문이다. 폭이 고정이라서가 아니다(25/32로
+        # 갈린다): `+`(0x2B)가 `.`(0x2E)보다 작아 소수부 없는 값이 사전순으로 먼저 와서
+        # 시간순과 일치한다. **우연이다** — 직렬화를 `to_jsonable_python`으로 바꾸면
+        # (`Z`가 `.`보다 크다) 즉시 뒤집힌다.
         cursor = self._db.metrics.find({"name": name}).sort("at", -1).limit(limit)
         return [{"name": d["name"], "value": d["value"], "tags": d.get("tags", {}),
                  "at": datetime.fromisoformat(d["at"])} for d in cursor]
@@ -640,8 +641,9 @@ class MongoLabelStore(LabelStorePort):
         self._db.labels.insert_one(label.model_dump(mode="json"))
 
     def list_for(self, case_id: str) -> list[RootCauseLabel]:
-        # _id를 동점 키로 — 같은 시각의 두 라벨(고정 시계 테스트, 같은 초의 두 요청)의
-        # 순서가 "단 순서대로"라는 append-only 계약을 지키려면 유일 키가 필요하다.
+        # 1순위는 시각, 동점은 `_id`(삽입 순서)다. 되감긴 시계에서는 **단 순서가 아니다** —
+        # 시각을 1순위로 두는 쪽이 "사람의 최종 믿음"에 가깝다고 보고 고른 것이고,
+        # 인메모리 구현도 같은 계약을 쓴다(`domain/label.py`).
         #
         # 정렬 키의 폭도 맞춘다(`_fixed_width_iso`) — 캘리브레이션(계획 19)이 이 목록의
         # **마지막 행**을 "사람의 최종 믿음"으로 읽으므로, 정각에 단 라벨이 뒤로 밀리면

@@ -881,3 +881,24 @@ def test_지표는_소수초가_섞여도_최신순이다(db):
         ledger.record_metric("m", value, tags={},
                              at=T + timedelta(seconds=0, microseconds=us))
     assert [r["value"] for r in ledger.metrics("m")] == [3.0, 2.0, 1.0]
+
+
+def test_두_집계_저장소가_같은_순서를_낸다(db):
+    # 형제 둘(이력·라벨)에는 계약 테스트가 있고 digest에만 없어서, 동점 키를 더한
+    # 커밋이 없던 갈라짐을 만들고도 아무도 못 잡았다(검증 리뷰 MEDIUM 1).
+    from src.domain.rollup import FleetReport, InMemoryDigestStore
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    mongo, memory = MongoDigestStore(db), InMemoryDigestStore()
+    plan = [("first", T), ("second", T), ("third", T),          # 전부 동점
+            ("older", T - timedelta(days=1))]
+    for digest, at in plan:
+        report = FleetReport(scenario="s", title="t", concern="operation",
+                             scenario_digest=digest, window_from=T, window_to=T,
+                             generated_at=at)
+        mongo.put(report)
+        memory.put(report)
+    assert ([r.scenario_digest for r in mongo.list("s")]
+            == [r.scenario_digest for r in memory.list("s")]
+            == ["third", "second", "first", "older"])
+    assert mongo.latest("s").scenario_digest == memory.latest("s").scenario_digest == "third"
