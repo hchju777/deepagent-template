@@ -286,8 +286,15 @@ class CheckConfig(StrictModel):
         return self
 
 
+class SiteScenarioOverride(StrictModel):
+    """사이트의 시나리오 옵트아웃(계획 16). 정의는 `config/scenarios/*.json`에 있고,
+    사이트는 켜고 끄는 것만 말한다 — 여기서 지표를 재정의하면 집계가 무의미해진다."""
+    enabled: bool | None = None
+
+
 class SitePatrol(StrictModel):
     checks: dict[str, CheckConfig] = {}
+    scenarios: dict[str, SiteScenarioOverride] = {}
 
 
 class KnowledgeConfig(StrictModel):

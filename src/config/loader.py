@@ -65,6 +65,36 @@ def load_app_config(config_root: Path, *, env=None) -> AppConfig:
         raise ConfigError(_validation_problems(exc, "app.json")) from exc
 
 
+def load_scenarios(config_root: Path, *, env) -> dict[str, "ScenarioConfig"]:
+    """`config/scenarios/*.json`을 각각 **단독** 검증해 이름→시나리오로 돌려준다.
+
+    층 병합이 없다(`registry.json`과 같은 형태) — 집계는 전역이고, 사이트 층에 두면
+    사이트마다 잡이 등록돼 같은 집계가 N번 돈다. 디렉터리가 없으면 빈 dict다: 집계는
+    선택 기능이라 안 쓰는 배치가 기동에서 죽으면 안 된다.
+    """
+    from src.config.schema_scenario import ScenarioConfig
+
+    directory = config_root / "scenarios"
+    if not directory.is_dir():
+        return {}
+    scenarios: dict[str, ScenarioConfig] = {}
+    problems: list[str] = []
+    for path in sorted(directory.glob("*.json")):
+        where = f"scenarios/{path.name}"
+        data = _read_json(path)
+        resolved, missing = resolve_env_refs(data, env=env)
+        if missing:
+            problems += [f"{where}: env 키 부재 또는 빈 값 — {k}" for k in sorted(set(missing))]
+            continue
+        try:
+            scenarios[path.stem] = ScenarioConfig.model_validate(resolved)
+        except ValidationError as exc:
+            problems += _validation_problems(exc, where)
+    if problems:
+        raise ConfigError(problems)
+    return scenarios
+
+
 def load_registry(config_root: Path) -> Registry:
     data = _read_json(config_root / "registry.json")
     try:
