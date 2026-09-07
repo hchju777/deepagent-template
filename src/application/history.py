@@ -1,0 +1,115 @@
+"""과거 종결 케이스 검색 — 벡터 없이 결정론 tier로(계획 15/P8, 방향 문서 §4.5).
+
+포트가 아니라 평범한 함수인 이유: 두 기존 포트(케이스 저장소·판정 스냅샷) 위의 순수
+조합이고, `upstream_slice`·`evidence_refs_for_case`가 이미 그 모양이다.
+
+판정 재료를 `store.get_verdict`가 아니라 `VerdictSnapshot`에서 읽는 이유: retention이
+90일에 Verdict를 지우므로, Store를 보면 이력이 시간이 지나며 조용히 비어 간다. 스냅샷은
+그보다 오래 산다.
+
+**절대 규율**: 결과에도 렌더에도 evidence id가 없다. 과거 증거도 `ev-2` 형태이고 이번
+케이스에도 `ev-2`가 있어, 리드가 과거 id를 인용하면 verify의 인용 우주(state.evidence)를
+그대로 통과한다 — 결정론 가드레일이 무력화된다.
+"""
+from src.application.briefing import upstream_slice
+from src.domain.case import HistoryHit
+
+_TIER_REASON = {
+    1: "같은 점검이 같은 대상에서 전에도",
+    2: "다른 점검이 같은 대상을",
+    3: "같은 대상이 다른 공장에서",
+    4: "상류에서 전에",
+}
+
+
+def _upstream_locators(topology, locator: str) -> list[str]:
+    """이번 대상의 상류 locator들 — tier 4의 후보. 자기 자신은 뺀다(그건 tier 2·3이다)."""
+    sliced = upstream_slice(topology, locator)
+    found = set(sliced.derivations)
+    for deriv in sliced.derivations.values():
+        found.update(ref.locator for ref in deriv.inputs)
+    found.discard(locator)
+    return sorted(found)
+
+
+def _usable(record, snapshots) -> HistoryHit | None:
+    """이력으로 쓸 만한가 — 아니면 None.
+
+    degraded 판정과 요약 없는 케이스는 워커 실패로 닫힌 케이스의 잔해다. 그걸 이력으로
+    먹이면 리드가 남의 실패를 이번 조사의 단서로 읽는다(순수 잡음).
+    """
+    if not record.verdict_summary:
+        return None
+    snapshot = snapshots.get(record.id) if snapshots is not None else None
+    verdict_type = snapshot.verdict_type if snapshot is not None else None
+    if verdict_type in ("degraded", None):
+        return None
+    return HistoryHit(case_id=record.id, tier=0, reason="",
+                      verdict_type=verdict_type,
+                      component=snapshot.root_cause_component,
+                      summary=record.verdict_summary)
+
+
+def find_history(record, *, repo, snapshots, topology, limit: int = 3) -> list[HistoryHit]:
+    """tier 1→4 순으로 걸으며 최신순 K건에서 멈춘다. 절대 raise하지 않는다.
+
+    같은 케이스가 여러 tier에 걸리면 **가장 낮은 tier로 한 번만** 담는다 — 같은 케이스가
+    두 줄로 보이면 리드가 그 케이스를 두 배로 신뢰한다.
+    """
+    hits: list[HistoryHit] = []
+    seen = {record.id}
+    try:
+        for tier, records in _candidates(record, repo=repo, topology=topology):
+            for candidate in records:
+                if len(hits) >= limit:
+                    return hits
+                if candidate.id in seen:
+                    continue
+                seen.add(candidate.id)
+                hit = _usable(candidate, snapshots)
+                if hit is None:
+                    continue
+                hits.append(hit.model_copy(update={"tier": tier, "reason": _TIER_REASON[tier]}))
+    except Exception:                                              # noqa: BLE001 — 무raise
+        return hits[:limit]        # 부분 결과는 유지한다 — 이력은 힌트지 계약이 아니다
+    return hits[:limit]
+
+
+def _candidates(record, *, repo, topology):
+    """(tier, 후보 레코드들) 순서열. 저장소 호출은 tier가 실제로 필요할 때만 일어난다."""
+    yield 1, repo.closed_by_fingerprint(record.fingerprint, exclude_case_id=record.id)
+    locator = record.target_locator
+    if not locator:
+        return                       # 대상이 없으면 tier 2~4의 재료가 없다
+    same_locator = repo.closed_by_locators([locator], exclude_case_id=record.id)
+    yield 2, [r for r in same_locator if (r.gbm, r.fct) == (record.gbm, record.fct)]
+    yield 3, [r for r in same_locator if (r.gbm, r.fct) != (record.gbm, record.fct)]
+    yield 4, repo.closed_by_locators(_upstream_locators(topology, locator),
+                                     exclude_case_id=record.id)
+
+
+def render_history(hits: list[HistoryHit]) -> str:
+    """브리핑의 `[유사 이력]` 자리에 들어갈 문자열. evidence id는 나가지 않는다.
+
+    tier 사유를 행마다 싣는다 — 없으면 리드가 tier 4(상류에서 전에)를 tier 1(같은 점검이
+    같은 대상에서)처럼 과신하고, 스펙 §3.2가 이력을 사다리 최하위에 둔 이유가 무력해진다.
+    """
+    lines = []
+    for hit in hits:
+        cause = hit.component or "원인 미상"
+        summary = _strip_evidence_ids(hit.summary or "")
+        lines.append(f"- {hit.case_id}: {hit.verdict_type or '판정 미상'} / {cause}"
+                     f" (tier {hit.tier} — {hit.reason}) {summary}".rstrip())
+    return "\n".join(lines)
+
+
+def _strip_evidence_ids(text: str) -> str:
+    """요약에 섞인 과거 evidence id를 지운다.
+
+    요약은 LLM이 쓴 산문이라 `ev-2`가 들어 있을 수 있다. 모델에 필드를 안 뒀다고 안전한
+    게 아니다 — 문자열을 통해 새는 경로가 실재한다.
+    """
+    import re
+    # 끝에 \b를 쓰면 안 된다 — "ev-2와"의 "와"는 유니코드 단어 문자라 경계가 아니고,
+    # 한국어 산문에서 id가 조사에 붙어 나오는 것이 정상이다(실제로 이 테스트가 잡았다).
+    return re.sub(r"\bev-\d+", "(증거 생략)", text)

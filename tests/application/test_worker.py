@@ -1113,3 +1113,44 @@ async def test_메트릭_sink가_던져도_조사는_종결된다():
                                  ledger=_BrokenSink(), knowledge_digests_for_site=lambda g, f: {},
                                  ticker=_ticks(1.0, 2.0))
     assert await worker.run_once("c-1") == "closed"
+
+
+async def test_조사는_과거_케이스를_리드에게_먹이고_무엇을_먹였는지_남긴다():
+    # 계획 15: history_shown을 안 남기면 "이력이 도움이 됐나, 앵커링이었나"를 영원히 못 묻는다.
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore, VerdictSnapshot
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    now = repo.get("c-1")
+    repo.save(now.model_copy(update={"target_locator": "rest:/oee"}))
+    past = now.model_copy(update={"id": "c-old", "status": "closed", "status_since": T,
+                                  "target_locator": "rest:/oee", "verdict_summary": "plan-sync가 멈췄다",
+                                  "closed_reason": "조사 완료"})
+    repo.save(past)
+    snapshots.put(VerdictSnapshot(case_id="c-old", closed_at=T, gbm="mx", fct="gumi",
+                                  fingerprint=past.fingerprint, outcome="closed",
+                                  verdict_type="stale_data", root_cause_component="plan-sync"))
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots)
+    assert await worker.run_once("c-1") == "closed"
+    assert "c-old" in str(deps.lead_llm.calls[0])            # 리드가 실제로 봤다
+    assert snapshots.get("c-1").history_shown == [{"case_id": "c-old", "tier": 1}]
+
+
+async def test_이력이_없으면_보여준_것도_없다():
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots)
+    assert await worker.run_once("c-1") == "closed"
+    assert snapshots.get("c-1").history_shown == []

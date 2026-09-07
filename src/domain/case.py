@@ -73,6 +73,21 @@ class Verdict(StrictModel):
         return self
 
 
+class HistoryHit(StrictModel):
+    """리드에게 보여준 과거 케이스 한 건(계획 15/P8).
+
+    **evidence id를 담지 않는다.** 과거 증거도 `ev-2` 형태이고 이번 케이스에도 `ev-2`가
+    있어, 리드가 과거 id를 인용하면 verify의 인용 우주(state.evidence)를 그대로 통과한다.
+    담을 이유가 생기더라도 렌더러가 절대 내면 안 된다 — 필드를 아예 두지 않는 쪽이 싸다.
+    """
+    case_id: str
+    tier: int                             # 1~4, 낮을수록 강한 매칭
+    reason: str                           # 왜 매칭됐는지 — 없으면 리드가 tier 4를 tier 1처럼 믿는다
+    verdict_type: str | None = None
+    component: str | None = None
+    summary: str | None = None
+
+
 class Case(StrictModel):
     id: str
     gbm: str
@@ -83,3 +98,7 @@ class Case(StrictModel):
     t0: datetime
     target_locator: str | None = None
     knowledge_digests: dict[str, str] = {}   # 토폴로지·룰·deployment digest 박제(§2.5-3)
+    # 리드에게 실제로 보여준 과거 케이스. deps가 아니라 여기 실리는 이유: 엔진은 사이트당
+    # 한 번 조립돼 캐시되므로(worker._engine_for) deps의 정적 필드는 케이스마다 못 바꾼다.
+    # State에 실리면 체크포인트에도 남아 "무엇을 보여줬나"가 복구 가능해진다(스냅샷 재료).
+    history: list[HistoryHit] = []

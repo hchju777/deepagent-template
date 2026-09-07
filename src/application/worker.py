@@ -69,6 +69,7 @@ import contextlib
 from typing import Any, Awaitable, Callable
 
 from src.application.close import close_case
+from src.application.history import find_history
 from src.application.events import case_status_event
 from src.application.graph import build_engine
 from src.application.lifecycle import ENGINE_SCHEMA_VERSION, release_lease, transition
@@ -112,7 +113,14 @@ def _case_file_snapshot(result: dict) -> dict:
     # 조용히 사라져 보고서가 "없음(기록되지 않음)"을 찍는다.
     digests = case.get("knowledge_digests") if isinstance(case, dict) \
         else getattr(case, "knowledge_digests", None)
+    # 리드에게 실제로 보여준 이력. 여기 안 남기면 "이력이 도움이 됐나, 앵커링이었나"를
+    # 영원히 못 묻는다 — 지금은 공짜, 나중엔 복구 불가(방향 문서 §4.5).
+    shown = case.get("history") if isinstance(case, dict) else getattr(case, "history", None)
+    history_shown = [{"case_id": h["case_id"] if isinstance(h, dict) else h.case_id,
+                      "tier": h["tier"] if isinstance(h, dict) else h.tier}
+                     for h in (shown or [])]
     return {
+        "history_shown": history_shown,
         "knowledge_digests": dict(digests) if isinstance(digests, dict) else {},
         "plan_tasks": [_dump_item(t) for t in result.get("plan_tasks", [])],
         "hypotheses": [_dump_item(h) for h in result.get("hypotheses", [])],
@@ -247,6 +255,18 @@ class InvestigationWorker:
             await self._on_closed(case_id)
         except Exception:                                          # noqa: BLE001
             pass
+
+    def _case_for(self, record, deps, digests: dict):
+        """그래프에 넘길 Case — 지식 digest와 **이번 케이스의 이력**을 실어서.
+
+        이력이 deps가 아니라 Case에 실리는 이유: 엔진은 사이트당 한 번 조립돼 캐시되므로
+        (_engine_for) deps의 정적 필드는 케이스마다 바꿀 수 없다. State에 실리면
+        체크포인트에도 남아 "리드에게 무엇을 보여줬나"가 나중에 복구 가능해진다.
+        """
+        return record.to_case().model_copy(update={
+            "knowledge_digests": digests,
+            "history": find_history(record, repo=self._repo, snapshots=self._snapshots,
+                                    topology=getattr(deps, "topology", None))})
 
     def _engine_for(self, gbm: str, fct: str, deps) -> Any:
         key = (gbm, fct)
@@ -455,6 +475,8 @@ class InvestigationWorker:
                 evidence_count=len(model.evidence),
                 task_error_rate=model.task_error_rate,
                 verify_demoted=bool(verify_stage and verify_stage.mark == "warn"),
+                history_shown=[h for h in (self._store.get_case_file(case_id) or {})
+                               .get("history_shown", []) if isinstance(h, dict)],
                 knowledge_digests=self._knowledge_digests_for_site(record.gbm, record.fct)))
         except Exception:                                          # noqa: BLE001
             pass
@@ -668,7 +690,7 @@ class InvestigationWorker:
                 self._emit_status(case_id, "investigating")
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
-            case = record.to_case().model_copy(update={"knowledge_digests": digests})
+            case = self._case_for(record, deps, digests)
             initial_evidence = evidence_refs_for_case(self._store, case_id)
 
             record, result = await self._invoke_with_keepalive(
@@ -722,7 +744,7 @@ class InvestigationWorker:
                 return await self._skip_unregistered_site(record, case_id, record.gbm, record.fct)
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
-            case = record.to_case().model_copy(update={"knowledge_digests": digests})
+            case = self._case_for(record, deps, digests)
 
             latest_thread_id = record.thread_ids[-1] if record.thread_ids else None
             version_matches = (latest_thread_id is not None
