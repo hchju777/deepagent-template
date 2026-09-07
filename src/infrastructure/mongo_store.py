@@ -230,7 +230,7 @@ class MongoCaseRepository(CaseRepositoryPort):
         """
         return self._db.cases.update_one({"id": case_id, **guard}, {"$set": fields}).matched_count == 1
 
-    def attach_answer(self, case_id, *, answer, key, now):
+    def attach_answer(self, case_id, *, answer, key, now, expect_seq=None):
         # 두 바퀴: 첫 CAS가 지면 다시 읽어 **왜** 졌는지로 분류하고 한 번 더 시도한다.
         # 재귀로 두면 끝이 없다 — 술어가 문서와 영원히 안 맞는 경우(필드 부재를
         # 기본값으로 걸었던 버그)에 RecursionError였다. 두 번 다 지면 남이 계속 바꾸는
@@ -242,12 +242,15 @@ class MongoCaseRepository(CaseRepositoryPort):
                 return "not_found"
             if first_seq is not None and doc.get("question_seq") != first_seq:
                 # 첫 CAS가 진 이유가 파킹(질문이 바뀜)이면 둘째 바퀴가 같은 답을 새 질문에
-                # 싣는다 — 클라이언트는 옛 질문을 보고 썼다(리뷰 L2).
-                return "not_waiting"
+                # 싣는다 — 클라이언트는 옛 질문을 보고 썼다(리뷰 L2). 번호를 실어 보낸
+                # 클라이언트에게는 그 사실을 정확한 이름으로 돌려준다(계획 17).
+                return "stale_question" if expect_seq is not None else "not_waiting"
             first_seq = doc.get("question_seq")
             record = self._to_record(doc)
             if record.answer_key == key:
                 return "duplicate"
+            if expect_seq is not None and record.question_seq != expect_seq:
+                return "stale_question"
             if record.status != "awaiting_human" or record.question_kind != "investigation" \
                     or record.question_seq <= record.answered_seq:
                 return "not_waiting"
@@ -264,10 +267,21 @@ class MongoCaseRepository(CaseRepositoryPort):
                      "pending_answer": None, "question_seq": doc.get("question_seq"),
                      "answered_seq": doc.get("answered_seq"), "answer_key": doc.get("answer_key"),
                      "owner": doc.get("owner"), "lease_until": doc.get("lease_until")}
+            # 대조는 **술어에도** 건다. 사전검사만 두면 읽고 나서 파킹이 일어난 경우를
+            # 못 막고, 창이 좁아질 뿐 닫히지 않는다(계획 17).
+            if expect_seq is not None:
+                guard["question_seq"] = expect_seq
             if self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,
                                           "updated_at": now.isoformat()}):
                 return "accepted"
         return "busy"
+
+    def update_if_unchanged(self, case_id, *, expect_updated_at, fields, now) -> bool:
+        dumped = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in fields.items()}
+        result = self._db.cases.update_one(
+            {"id": case_id, "updated_at": expect_updated_at.isoformat()},
+            {"$set": {**dumped, "updated_at": now.isoformat()}})
+        return bool(result.matched_count)
 
     def take_answer(self, case_id, *, now):
         doc = self._db.cases.find_one({"id": case_id})

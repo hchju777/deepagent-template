@@ -148,7 +148,8 @@ class CaseRepositoryPort(ABC):
         pass
 
     @abstractmethod
-    def attach_answer(self, case_id: str, *, answer: str, key: str, now: datetime) -> str:
+    def attach_answer(self, case_id: str, *, answer: str, key: str, now: datetime,
+                      expect_seq: int | None = None) -> str:
         """답을 조건부로 싣는다 — 필드 셋(`pending_answer`·`answer_key`·`updated_at`)만.
 
         조건: awaiting_human · 조사 질문 · pending 없음 · question_seq > answered_seq ·
@@ -156,8 +157,24 @@ class CaseRepositoryPort(ABC):
         되돌려 조사가 죽는다(리뷰 S7). `claim`처럼 저장소가 한 동작으로 판정해야 한다.
         반환: accepted / duplicate / pending / busy / not_waiting / not_found.
         `busy`는 실행자가 lease를 쥔 동안 — 잠시 뒤 다시 보내라(`pending`은 덮지 않는다).
+
+        `expect_seq`는 클라이언트가 **본** 질문 번호다(If-Match). 레코드의 번호와 다르면
+        `stale_question` — 사람이 Q1을 읽고 답을 쓰는 사이 그래프가 Q2로 파킹했으면 그
+        답은 Q2의 답이 아니다. 대조를 미리 하고 저장소에 넘기면 그 사이가 다시 창이므로
+        **싣는 그 한 동작 안에서** 판정한다(계획 17).
         """
         pass
+
+    @abstractmethod
+    def update_if_unchanged(self, case_id: str, *, expect_updated_at: datetime,
+                            fields: dict, now: datetime) -> bool:
+        """읽은 시점의 `updated_at`을 술어로 걸어 조건부 저장한다. 이겼으면 True.
+
+        낙관적 동시성의 교과서 형태다 — 새 버전 필드를 만들지 않아도 `updated_at`이
+        이미 매 저장마다 바뀐다. 접수(`intake._save`)가 읽기와 쓰기 사이의 창을 닫는 데
+        쓴다(계획 13 인계 #1).
+        """
+        ...
 
     @abstractmethod
     def take_answer(self, case_id: str, *, now: datetime) -> str | None:
@@ -219,13 +236,15 @@ class InMemoryCaseRepository(CaseRepositoryPort):
 
     # 인메모리는 단일 스레드·await 없음이라 아래 셋이 그 자체로 원자적이다. Mongo
     # 구현이 같은 판정을 CAS로 옮긴다 — 두 구현의 결과 어휘가 갈리면 안 된다.
-    def attach_answer(self, case_id, *, answer, key, now):
+    def attach_answer(self, case_id, *, answer, key, now, expect_seq=None):
         try:
             record = self.get(case_id)
         except KeyError:
             return "not_found"
         if record.answer_key == key:
             return "duplicate"
+        if expect_seq is not None and record.question_seq != expect_seq:
+            return "stale_question"
         if record.status != "awaiting_human" or record.question_kind != "investigation" \
                 or record.question_seq <= record.answered_seq:
             return "not_waiting"
@@ -236,6 +255,13 @@ class InMemoryCaseRepository(CaseRepositoryPort):
         self._cases[case_id] = record.model_copy(update={
             "pending_answer": answer, "answer_key": key, "updated_at": now})
         return "accepted"
+
+    def update_if_unchanged(self, case_id, *, expect_updated_at, fields, now):
+        record = self._cases.get(case_id)
+        if record is None or record.updated_at != expect_updated_at:
+            return False
+        self._cases[case_id] = record.model_copy(update={**fields, "updated_at": now})
+        return True
 
     def take_answer(self, case_id, *, now):
         record = self.get(case_id)

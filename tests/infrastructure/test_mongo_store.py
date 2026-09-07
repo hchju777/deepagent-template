@@ -532,3 +532,40 @@ def test_Mongo_지문_조회도_자기_자신을_제외한다(db):
                          created_at=T, updated_at=T, status_since=T, status="closed",
                          closed_reason="조사 완료"))
     assert repo.closed_by_fingerprint("fp-a", exclude_case_id="c-1") == []
+
+
+# ---- 계획 17: 질문 대조와 접수 CAS(인메모리와 같은 계약) ---------------------------------
+def test_Mongo도_다른_질문의_답을_거절한다(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo, question_seq=2)
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=1) == "stale_question"
+    assert db.cases.find_one({"id": "c-1"}).get("pending_answer") is None
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=2) == "accepted"
+
+
+def test_대조는_CAS_술어에도_들어간다(db):
+    # 사전검사만 두면 읽고 나서 파킹이 일어난 경우를 못 막는다 — 창이 좁아질 뿐이다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo, question_seq=2)
+    _interleave(db, "c-1", before_cas={"question_seq": 3, "question": "Q3"})
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=2) == "stale_question"
+    assert db.cases.find_one({"id": "c-1"}).get("pending_answer") is None
+
+
+def test_Mongo의_조건부_저장은_읽은_뒤의_쓰기에_진다(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    stale = repo.get("c-1").updated_at
+    db.cases.update_one({"id": "c-1"}, {"$set": {"updated_at": (T + timedelta(minutes=1)).isoformat(),
+                                                 "question": "남이 바꿈"}})
+    assert repo.update_if_unchanged("c-1", expect_updated_at=stale,
+                                    fields={"question": "내 것"}, now=T) is False
+    assert db.cases.find_one({"id": "c-1"})["question"] == "남이 바꿈"
+    fresh = repo.get("c-1").updated_at
+    assert repo.update_if_unchanged("c-1", expect_updated_at=fresh,
+                                    fields={"question": "내 것", "intake_done": True},
+                                    now=T) is True
+    doc = db.cases.find_one({"id": "c-1"})
+    assert doc["question"] == "내 것" and doc["intake_done"] is True
+    assert repo.get("c-1").updated_at == T
+    assert repo.update_if_unchanged("없음", expect_updated_at=T, fields={}, now=T) is False

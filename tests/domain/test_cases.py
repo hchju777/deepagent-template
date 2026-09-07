@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
@@ -75,3 +75,56 @@ def test_locator로_종결_케이스를_찾되_빈_목록은_전체를_긁지_�
                                                   exclude_case_id="c-9")] == ["c-2", "c-1"]
     assert repo.closed_by_locators([], exclude_case_id="c-9") == []      # 전체 조회로 번지지 않는다
     assert [r.id for r in repo.closed_by_locators(["rest:/oee"], exclude_case_id="c-1")] == []
+
+
+# ---- 계획 17: 답이 어느 질문의 답인가 -----------------------------------------------------
+def _parked(repo, cid="c-1", **kw):
+    base = dict(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                created_at=T, updated_at=T, status="awaiting_human", question="q",
+                question_kind="investigation", question_seq=1)
+    base.update(kw)
+    repo.save(CaseRecord(**base))
+
+
+def test_다른_질문의_답은_거절되고_쓰이지_않는다():
+    # 사람이 Q1을 보고 답을 쓰는 사이 그래프가 Q2로 파킹했다 — 그 답이 Q2의 답으로
+    # 소비되면 리드가 엉뚱한 대답을 근거로 판정한다.
+    repo = InMemoryCaseRepository()
+    _parked(repo, question_seq=2, question="Q2")
+    assert repo.attach_answer("c-1", answer="Q1의 답", key="k-1", now=T,
+                              expect_seq=1) == "stale_question"
+    assert repo.get("c-1").pending_answer is None
+
+
+def test_번호가_맞으면_받는다():
+    repo = InMemoryCaseRepository()
+    _parked(repo, question_seq=2)
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=2) == "accepted"
+
+
+def test_번호를_안_주면_예전처럼_받는다():
+    # 하위 호환 — 기존 클라이언트를 깨지 않는다.
+    repo = InMemoryCaseRepository()
+    _parked(repo, question_seq=2)
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T) == "accepted"
+
+
+def test_읽은_시점_이후의_저장은_진다():
+    # 접수 저장의 CAS — 그 사이 남이 저장했으면 아무것도 안 바뀐다.
+    repo = InMemoryCaseRepository()
+    _parked(repo)
+    stale = repo.get("c-1").updated_at
+    repo.save(repo.get("c-1").model_copy(update={"updated_at": T + timedelta(minutes=1),
+                                                 "question": "남이 바꿈"}))
+    assert repo.update_if_unchanged("c-1", expect_updated_at=stale,
+                                    fields={"question": "내 것"}, now=T) is False
+    assert repo.get("c-1").question == "남이 바꿈"
+    fresh = repo.get("c-1").updated_at
+    assert repo.update_if_unchanged("c-1", expect_updated_at=fresh,
+                                    fields={"question": "내 것"}, now=T) is True
+    assert repo.get("c-1").question == "내 것" and repo.get("c-1").updated_at == T
+
+
+def test_없는_케이스의_조건부_저장은_False다():
+    assert InMemoryCaseRepository().update_if_unchanged(
+        "없음", expect_updated_at=T, fields={}, now=T) is False
