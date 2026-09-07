@@ -106,14 +106,16 @@ def test_대조는_CAS_술어에도_들어간다(db):
 
 **Files:** Modify `src/domain/cases.py`, `src/infrastructure/mongo_store.py`, `src/application/intake.py` · Test `tests/domain/test_cases.py`, `tests/infrastructure/test_mongo_store.py`, `tests/application/test_intake_turn.py`
 
-**Interfaces:** `update_if_unchanged(case_id, *, expect_updated_at: datetime, fields: dict, now: datetime) -> bool`. 읽은 시점의 `updated_at`을 술어로 건 조건부 저장.
+**Interfaces:** `update_if(case_id, *, expect: dict, fields: dict, now: datetime) -> bool`. 읽은
+시점의 값(시각 + 접수 소유 필드)을 술어로 건 조건부 저장. 집행 중 이름과 술어가 함께
+넓어졌다 — 시각 하나로는 고정 시계에서 두 턴이 모두 이긴다(인계 #3).
 
 - [ ] **Step 1: 실패하는 테스트**
   - 인메모리·Mongo: 그 사이 남이 저장했으면 `False`이고 **아무것도 안 바뀐다**.
   - `_interleave`로 읽기와 CAS 사이에 남의 쓰기를 끼워 넣어 실제로 지는 경로를 지난다.
   - 접수: 같은 케이스에 두 턴이 동시에 돌면 **둘째가 `not_ours`로 손을 뗀다**(증거 중복도 모순 레코드도 없다).
   - 접수가 이긴 쪽은 예전과 똑같이 진행한다.
-- [ ] **Step 2: RED** → **Step 3:** 구현. `_save`가 `repo.get` → 가드 → `update_if_unchanged` 순으로 가고, 지면 `not_ours` 문구를 돌려준다.
+- [ ] **Step 2: RED** → **Step 3:** 구현. `_save`가 `repo.get` → 가드 → `update_if` 순으로 가고, 지면 `not_ours` 문구를 돌려준다.
 - [ ] **Step 4: GREEN + 돌연변이**(CAS를 평범한 save로, 술어에서 `updated_at` 제거) → **Step 5: 커밋** `"Make the intake save conditional on what it read"`.
 
 ---

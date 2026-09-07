@@ -21,7 +21,7 @@ from src.application.labels import label_stats, label_texts, submit_label
 from src.config.loader import load_scenarios
 from src.fleet.run import run_scenario, scenario_sites
 from src.presentation.fleet_report import render_fleet_html, render_fleet_md
-from src.application.intake import intake_turn
+from src.application.intake import IntakeTurn, intake_turn
 from src.application.submit import submit_case
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
@@ -615,10 +615,11 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
                                  max_turns=app.engine.max_intake_turns, on_event=on_event,
                                  expect_seq=asked_seq)
         if turn.status == "stale_question":
+            # LLM을 다시 돌리지 않는다 — 새 질문은 이미 레코드에 있다. 다시 돌리면 턴
+            # 예산을 먹고 남이 방금 올린 질문을 또 다른 질문으로 덮는다(검증 리뷰 R-3).
             print("그 사이 접수 질문이 바뀌었다 — 새 질문으로 다시 묻는다.")
-            turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
-                                     topology=rt.deps.topology, clock=clock,
-                                     max_turns=app.engine.max_intake_turns, on_event=on_event)
+            current = repo.get(case_id)
+            turn = IntakeTurn(status="asking", question=current.question or "(질문 없음)")
 
     result = await worker.run_once(case_id, interaction_policy="interactive")
     while result == "awaiting_human":

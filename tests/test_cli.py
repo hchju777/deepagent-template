@@ -1429,3 +1429,47 @@ async def test_chat은_질문이_바뀌면_새_질문으로_다시_묻는다(tmp
         m.answer_case = real
     assert asked == ["Q1", "Q2"]                      # 새 질문으로 다시 물었다
     assert "질문이 바뀌었다" in capsys.readouterr().out
+
+
+async def test_chat의_접수_루프도_질문이_바뀌면_다시_묻는다(tmp_path, capsys):
+    # 검증 리뷰 R-2: 앞 테스트는 IntakeTurn(status="done")으로 들어가 접수 루프를 건너뛴다.
+    from types import SimpleNamespace
+    from src.application.intake import IntakeTurn
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="Q1",
+                         question_kind="intake", question_seq=1, intake_done=False))
+    asked, seen = [], []
+    turns = iter([IntakeTurn(status="stale_question", problems=["질문이 바뀌었다"]),
+                  IntakeTurn(status="done")])
+
+    async def ask(question):
+        asked.append(question)
+        if len(asked) == 1:      # 사람이 답을 쓰는 사이 새 질문이 올라온다
+            repo.save(repo.get("c-1").model_copy(update={"question": "Q2", "question_seq": 2}))
+        return "답"
+
+    async def fake_intake_turn(case_id, **kw):
+        seen.append(kw.get("expect_seq"))
+        return next(turns)
+
+    import src.__main__ as m
+    real = m.intake_turn
+    m.intake_turn = fake_intake_turn
+    try:
+        rt = SimpleNamespace(deps=SimpleNamespace(topology=None))
+        app = SimpleNamespace(engine=SimpleNamespace(max_intake_turns=3),
+                              report=SimpleNamespace(output_dir=str(tmp_path), format="md"))
+
+        class _Worker:
+            async def run_once(self, case_id, *, interaction_policy="autonomous"):
+                return "closed"
+
+        await m._drive_chat(SimpleNamespace(), rt, repo, store, _Worker(), lambda: T, ask,
+                            app, "c-1", IntakeTurn(status="asking", question="Q1"),
+                            lambda e: None)
+    finally:
+        m.intake_turn = real
+    assert asked == ["Q1", "Q2"]           # 새 질문으로 다시 물었다
+    assert seen == [1, 2]                   # 묻기 직전 읽은 번호를 매번 실어 보냈다
+    assert "접수 질문이 바뀌었다" in capsys.readouterr().out
