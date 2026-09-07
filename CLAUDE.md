@@ -173,14 +173,14 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 사이트 축 해석 | `src/application/scope.py` |
 | 케이스 개설(사람 경로) | `src/application/open_case.py` |
 | 답변 라우팅(접수 vs 조사) | `src/application/answer.py` |
-| 케이스 제출·답 싣기(CLI와 API 공유) | `src/application/submit.py` |
+| 케이스 제출(CLI·API 공유)·답 싣기(**API 전용**) | `src/application/submit.py` |
 | HTTP 표면(`api` 프로세스 — 어댑터·워커 없음) | `src/api/` |
 | 케이스 큐·워커(lease, resume, keepalive) | `src/application/worker.py` |
 | 케이스 종결·정리 | `src/application/close.py` |
 | 이벤트 매핑(State 변화 → EngineEvent) | `src/application/events.py` |
 | 도메인 모델(Case/Verdict/Envelope 등) | `src/domain/` |
 | 대상 시스템 포트(ABC) | `src/domain/ports.py` |
-| 실제/스텁 어댑터 | `src/infrastructure/{redis,mongo,kafka,rest}_reader.py`, `stubs.py` |
+| 실제/스텁 어댑터 | `src/infrastructure/{redis,mongo}_reader.py`·`kafka_inspector.py`·`rest_prober.py`, `stubs.py` |
 | 어댑터 조립(stub↔real 전환점) | `src/infrastructure/factory.py` |
 | Mongo 케이스 저장소 | `src/infrastructure/mongo_store.py` |
 | 프로브 레지스트리 | `src/patrol/probes.py` |

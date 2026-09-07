@@ -67,7 +67,7 @@ rm -rf output/; .venv/bin/python -B -m pytest tests/ -q -p no:cacheprovider
 ## 3. 새 REST 등재 항목 · 해석기 추가
 
 **만질 파일**
-1. `config/gbm/<사이트>.json`의 `target.rest.entries` — `method`·`path`·닫힌 스키마.
+1. `config/gbm/<gbm>.json`(또는 사이트 층 `config/factories/<fct>/<gbm>.json`)의 `target.rest.entries` — `method`·`path`·닫힌 스키마.
 2. `knowledge/target_api/<gbm>/<fct>.json` — pinned 명세에도 그 항목이 있어야 한다.
 3. 점검·지표의 `resolve`에 해석기를 선언한다.
 
@@ -194,3 +194,7 @@ rm -rf output/; .venv/bin/python -B -m pytest tests/ -q -p no:cacheprovider
 - [ ] **LLM이 만든 객체의 수명주기 필드를 소독했나?**(규율 4)
 - [ ] **문서를 고쳤다면 결과를 다시 읽었나?** 편집 스크립트가 앵커 하나가 안 맞아 중간에서
       죽고 앞부분만 반영된 적이 있다.
+- [ ] **"grep 0건"을 안전 주장으로 쓰고 있지 않나?** 범위와 패턴이 둘 다 맞아야 참이다.
+      실제로 있었던 일: 같은 거짓 문장의 사본 다섯을 지우면서 `docs/ src/`만 훑어
+      루트의 `CLAUDE.md`를 놓쳤고, 패턴에 조사(`이/가`)를 붙여 다른 표현을 놓쳤다.
+      **범위에 리포 루트를 넣고, 조사·어미를 뺀 최소 어간으로 찾아라.**

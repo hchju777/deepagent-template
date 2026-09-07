@@ -22,7 +22,7 @@ APScheduler 잡                      patrol/scheduler.py  build_scheduler·build
   → 점검 하나 실행                  patrol/runner.py     run_check
       → 파라미터 값 해석            patrol/resolvers.py  resolve_params
       → 프로브 호출                 patrol/probes.py     rest_get·rest_query·redis_get·mongo_recent·mongo_find·kafka_lag
-          → 어댑터                  infrastructure/      stubs.py 또는 {redis,mongo,kafka,rest}_reader.py
+          → 어댑터                  infrastructure/      stubs.py 또는 {redis,mongo}_reader.py·kafka_inspector.py·rest_prober.py
       → 스냅샷 박제                 domain/store.py      CaseStorePort.put_evidence
       → 판정                        patrol/rules.py      judge_by_rule       (무료·결정론)
                                     patrol/llm_judge.py  judge_by_llm        (유료·예산 상한)
@@ -181,7 +181,7 @@ HTTP POST /cases/{id}/answers                   api/routes_cases.py
 | `label.py` | 74 | `RootCauseLabel`·`LabelStorePort`. append-only, retention이 안 걷는다. |
 | `snapshot.py` | 78 | `VerdictSnapshot`·포트. **retention보다 오래 산다** — 종결 시점에 안 남기면 영구 불가(일방향 문). |
 | `report_model.py` | 271 | `build_report_model` — 보고서 데이터 유도(렌더와 2단 분리). 단계 체크리스트·Timeline·관측성. |
-| `rollup.py` | 136 | Fleet 집계 도메인. validator 다섯이 "누락을 숨긴 숫자"를 **표현 불가능**하게 만든다. |
+| `rollup.py` | 136 | Fleet 집계 도메인. validator 둘이 강제하는 불변식이 "누락을 숨긴 숫자"를 **표현 불가능**하게 만든다(`rollup.py` docstring이 그 목록을 든다). |
 | `__init__.py` | — | 빈 패키지 표식. |
 
 ### `src/config/` — 스키마와 로더 (7)
@@ -209,7 +209,7 @@ git에 커밋되고, digest가 케이스 T0에 박제되고, 런타임에 넓어
 | `target_api.py` | 308 | pinned OpenAPI를 우리 등재 항목과 **대조**한다. **명세는 증거이고 config가 권한이다** — 런타임에 명세로 허용 범위를 넓히지 마라(fail-open). |
 | `deployment.py` | 28 | 사이트×서비스 → 배포 커밋. 없으면 코드 증거가 "배포 버전 미검증"을 단다. |
 | `digest.py` | 12 | content digest — as_of 박제용. |
-| `__init__.py` | — | 빈 패키지 표식. |
+| `__init__.py` | 1 | 한 줄 docstring. |
 
 ### `src/infrastructure/` — 어댑터와 영속 (14)
 
@@ -318,31 +318,35 @@ import 그래프로 지킨다 — 끌어오면 `api` 풀 전체가 실행자가 
 
 ## 3. 이 지도를 최신으로 유지하려면
 
+이 검사는 **네 가지를 본다**: 표에 없는 파일, 표에만 있는 유령 행, 줄 수 드리프트,
+절 헤더의 개수. 앞의 둘만 보면 줄 수가 조용히 낡고(실제로 그랬다), 줄 수만 보면 지운
+파일의 행이 남는다. `__init__.py`도 센다 — 그중 둘은 빈 파일이 아니다.
+
 ```bash
-# 파일명과 **줄 수**를 절 헤더의 패키지와 함께 대조한다. 줄 수를 빼면 드리프트가 조용히
-# 남고(실제로 그렇게 낡았다), 패키지를 빼면 `events.py`처럼 이름이 겹치는 파일이 충돌한다.
 .venv/bin/python - <<'EOF'
 import pathlib, re
 doc = pathlib.Path("docs/file-map.md").read_text()
-listed, pkg = {}, None
+listed, counts, pkg = {}, {}, None
 for line in doc.splitlines():
-    header = re.match(r'### `src/([a-z]*)/?`', line)
+    header = re.match(r'### `src/([a-z]*)/?` .*?\((\d+)\)', line)
     if header:
         pkg = header.group(1)
-    row = re.match(r'\| `([a-z_]+\.py)` \| (\d+) \|', line)
+        counts[pkg] = int(header.group(2))
+    row = re.match(r'\| `([a-z_]+\.py)` \| ([0-9—-]+) \|', line)
     if row and pkg is not None:
-        listed[(pkg, row.group(1))] = int(row.group(2))
-bad = []
+        listed[(pkg, row.group(1))] = row.group(2)
+actual = {}
 for path in sorted(pathlib.Path("src").rglob("*.py")):
-    if path.name == "__init__.py":
-        continue
-    key = ("" if path.parent.name == "src" else path.parent.name, path.name)
-    real = len(path.read_text().splitlines())
-    if key not in listed:
-        bad.append(f"표에 없음: {path}")
-    elif listed[key] != real:
-        bad.append(f"줄 수 어긋남: {path} 표={listed[key]} 실제={real}")
-print("\n".join(bad) or "동기화됨")
+    pkg = "" if path.parent.name == "src" else path.parent.name
+    actual[(pkg, path.name)] = len(path.read_text().splitlines())
+bad = [f"표에 없음: src/{p}/{n}" for (p, n) in actual if (p, n) not in listed]
+bad += [f"유령 행: src/{p}/{n}" for (p, n) in listed if (p, n) not in actual]
+bad += [f"줄 수 어긋남: src/{p}/{n} 표={listed[(p, n)]} 실제={r}"
+        for (p, n), r in actual.items()
+        if (p, n) in listed and listed[(p, n)].isdigit() and int(listed[(p, n)]) != r]
+bad += [f"헤더 개수 어긋남: src/{p} 표={c} 실제={sum(1 for k in actual if k[0] == p)}"
+        for p, c in counts.items() if sum(1 for k in actual if k[0] == p) != c]
+print("\n".join(sorted(bad)) or "동기화됨")
 EOF
 ```
 

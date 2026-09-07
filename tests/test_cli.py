@@ -973,7 +973,8 @@ def test_접수_중_프로세스가_죽어도_문답이_남는다(tmp_path, caps
 def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
     # 이 세션에서 커밋 메시지가 "answer_case를 부른다"고 주장한 것이 거짓이었던
     # 적이 있다. 코드만 고치고 테스트를 안 넣으면 조용히 되돌아간다 — CLI와
-    # 계획 13의 API가 같은 분기를 써야 한다는 것이 그 함수를 뺀 이유다.
+    # **워커**가 같은 분기를 써야 한다는 것이 그 함수를 뺀 이유다(HTTP 라우트는
+    # `answer_case`를 안 부른다 — 명령 채널에 싣고 워커가 거친다).
     _chat_tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
     monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
