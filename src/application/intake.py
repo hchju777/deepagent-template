@@ -12,7 +12,7 @@
 직전 세 지점**에서 같은 판정을 걸어, 그 사이 워커가 가로챈 레코드를 **되돌리지
 않는다**(증거 기록은 별개다 — 가드 통과 후 가로채이면 그 턴의 증거는 이미 써진다.
 증거는 append-only라 상태를 되돌리지 않으므로 해롭지 않다). 재읽기만으로는 부족한
-이유는 `_not_ours` docstring에 있고, **남은 창**은 `_save` docstring에 있다.
+이유는 `_not_ours` docstring에 있고, 창을 닫은 방식은 `_save` docstring에 있다.
 
 무raise 규율: LLM 호출·파싱이 전부 실패해도 접수가 조사를 막아서는 안 된다 —
 `target_locator=None`으로 진행하고 실패를 `problems`에 남길 뿐 raise하지 않는다.
@@ -179,22 +179,20 @@ def _emit(on_event, case_id: str, status: str, clock) -> None:
         pass                    # 이벤트 실패가 접수를 막아서는 안 된다
 
 
-def _save(repo, case_id: str, clock, *, unpark: bool, expect_updated_at, **fields) -> str | None:
+def _save(repo, case_id: str, clock, *, unpark: bool, expect, **fields) -> str | None:
     """접수가 소유한 필드만 얹어 저장한다 — read-modify-write(워커 모듈의 I1).
 
     턴 시작 시 읽은 스냅샷을 wholesale 저장하면 LLM 호출 동안 다른 경로가 바꾼
     것(게이트의 finding 첨부 등)을 잃는다. 저장 직전에 다시 읽고, **그때 다시
     가드를 적용한다** — 재읽기만으로는 가로채인 레코드를 되돌리는 것을 못 막는다.
 
-    **이 창은 좁혔을 뿐 닫히지 않았다.** `repo.get` → 판정 → `repo.save` 사이는
-    원자적이 아니고 이 저장은 CAS가 없다(Mongo 구현은 문서 전체 `$set`). 계획 13은
-    **워커 쪽 경로를 없애는 것**으로 답했다 — `intake_done`이 False인 케이스는
-    requeue가 안 집고, 접수가 끝난 케이스에는 이 함수가 더 이상 턴을 돌지 않는다
-    (`_not_ours`). **남는 창은 같은 케이스에 동시에 오는 두 접수 요청**이다 — 계획 13
-    리뷰(S3)가 실증했다: 증거가 중복되고, 한 순서에서는 `awaiting_human`인데
-    `intake_done=True`이고 대상까지 설정된 모순 레코드가 남는다. 닫으려면 이 저장에도
-    CAS가 필요하고, 그것은 `attach_answer`가 연 조건부 `$set` 형태를 그대로 쓰면 된다
-    (계획 14 인계). 지금은 그 사이 requeue가 못 집는다는 것만 보장한다.
+    **이 창은 계획 17이 닫았다.** `repo.get` → 판정 → 저장 사이는 여전히 원자적이 아니지만,
+    저장이 **턴이 시작할 때 읽은 값**(시각 + 접수가 소유한 필드)을 술어로 건 조건부 쓰기라
+    그 사이 남이 바꿨으면 진다. 계획 13은 워커 쪽 경로를 없애는 것으로 절반을 답했고
+    (`intake_done`이 False면 requeue가 안 집는다), 남은 절반인 **동시에 오는 두 접수 요청**을
+    여기서 닫는다 — 그 형태는 계획 13 리뷰 S3이 실증했다(증거 중복 + `awaiting_human`인데
+    `intake_done=True`인 모순 레코드).
+
     """
     current = repo.get(case_id)
     problem = _not_ours(current)
@@ -210,14 +208,22 @@ def _save(repo, case_id: str, clock, *, unpark: bool, expect_updated_at, **field
               if k in _SAVED_FIELDS} | dict(fields)
     # 술어는 **턴이 시작할 때 읽은** 값이다. 재읽기 값으로 걸면 창이 좁아질 뿐 닫히지
     # 않는다 — 두 턴이 각자 읽고 각자 LLM을 돌린 뒤 각자 재읽고 쓰면 둘 다 이긴다.
-    if not repo.update_if_unchanged(case_id, expect_updated_at=expect_updated_at,
-                                    fields=merged, now=clock()):
+    # `updated_at` 하나로는 부족하다: 고정 시계면 이긴 턴이 쓴 값이 진 턴이 읽은 값과
+    # 같아 둘 다 이긴다 — 그래서 접수가 소유한 필드도 함께 건다(검증 리뷰 M-5).
+    if not repo.update_if(case_id, expect=expect, fields=merged, now=clock()):
         return "접수 중 다른 주체가 레코드를 바꿨다 — 이 턴은 손을 뗀다"
     return None
 
 
 # 접수가 소유한 필드. 전체 레코드를 쓰면 그 사이 남이 바꾼 것(게이트의 finding 첨부 등)을
 # 되돌린다 — CAS가 그것을 감지하지만, 애초에 우리 것만 쓰는 편이 낫다.
+def _expect(record) -> dict:
+    """접수가 소유한 필드 + 시각. 상대가 그중 하나라도 바꿨으면 이 턴은 진다."""
+    return {"updated_at": record.updated_at, "status": record.status,
+            "question": record.question, "question_kind": record.question_kind,
+            "intake_done": record.intake_done, "target_locator": record.target_locator}
+
+
 _SAVED_FIELDS = ("status", "status_since", "question", "question_kind", "question_seq",
                  "intake_done", "target_locator", "fingerprint")
 
@@ -234,7 +240,7 @@ def _park(record, repo, clock, question: str) -> str | None:
     parked = current if current.status == "awaiting_human" \
         else transition(current, "awaiting_human", clock=clock)
     return _save(repo, record.id, clock, unpark=False,
-                 expect_updated_at=record.updated_at,
+                 expect=_expect(record),
                  status=parked.status, status_since=parked.status_since,
                  question=question, question_kind="intake",
                  question_seq=parked.question_seq + 1)
@@ -249,7 +255,7 @@ def _finish(record, repo, clock, target_locator, on_event=None) -> IntakeTurn:
     # 사람이 연 케이스에 붙이는 일이 생기지 않는다. 사람이 연 두 케이스가 같은 지문을
     # 갖는 것은 이제 의도다(open_case는 지문 중복 억제를 하지 않는다).
     problem = _save(repo, record.id, clock, unpark=True,
-                    expect_updated_at=record.updated_at, target_locator=target_locator,
+                    expect=_expect(record), target_locator=target_locator,
                     fingerprint=fingerprint(record.gbm, record.fct, "chat", target_locator),
                     question=None, question_kind=None, intake_done=True)
     if problem is not None:
@@ -268,7 +274,7 @@ def _give_up(record, repo, clock, problems: list[str], on_event=None) -> IntakeT
     """
     # 포기도 문을 연다 — 대상 없이 조사하는 것이 착지점이고, 문을 안 열면 영영 안 집힌다.
     problem = _save(repo, record.id, clock, unpark=True,
-                    expect_updated_at=record.updated_at, question=None, question_kind=None,
+                    expect=_expect(record), question=None, question_kind=None,
                     intake_done=True)
     if problem is not None:
         # 포기하려 했으나 그 사이 남이 가져갔다 — 상태를 되돌리지 않고 손을 뗀다.

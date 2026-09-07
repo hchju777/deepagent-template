@@ -116,15 +116,27 @@ def test_읽은_시점_이후의_저장은_진다():
     stale = repo.get("c-1").updated_at
     repo.save(repo.get("c-1").model_copy(update={"updated_at": T + timedelta(minutes=1),
                                                  "question": "남이 바꿈"}))
-    assert repo.update_if_unchanged("c-1", expect_updated_at=stale,
-                                    fields={"question": "내 것"}, now=T) is False
+    assert repo.update_if("c-1", expect={"updated_at": stale},
+                          fields={"question": "내 것"}, now=T) is False
     assert repo.get("c-1").question == "남이 바꿈"
     fresh = repo.get("c-1").updated_at
-    assert repo.update_if_unchanged("c-1", expect_updated_at=fresh,
-                                    fields={"question": "내 것"}, now=T) is True
+    assert repo.update_if("c-1", expect={"updated_at": fresh},
+                          fields={"question": "내 것"}, now=T) is True
     assert repo.get("c-1").question == "내 것" and repo.get("c-1").updated_at == T
 
 
 def test_없는_케이스의_조건부_저장은_False다():
-    assert InMemoryCaseRepository().update_if_unchanged(
-        "없음", expect_updated_at=T, fields={}, now=T) is False
+    assert InMemoryCaseRepository().update_if(
+        "없음", expect={"updated_at": T}, fields={}, now=T) is False
+
+
+def test_소유_필드가_바뀌면_시각이_같아도_진다():
+    # 고정 시계에서 이긴 턴이 쓴 값이 진 턴이 읽은 값과 같으면 둘 다 이긴다(리뷰 M-5).
+    repo = InMemoryCaseRepository()
+    _parked(repo)
+    record = repo.get("c-1")
+    repo.save(record.model_copy(update={"question": "남이 바꿈"}))      # 시각은 그대로
+    assert repo.update_if("c-1", expect={"updated_at": record.updated_at,
+                                         "question": record.question},
+                          fields={"target_locator": "rest:/oee"}, now=T) is False
+    assert repo.get("c-1").target_locator is None       # 아무것도 안 바뀌었다

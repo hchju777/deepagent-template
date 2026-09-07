@@ -5,6 +5,7 @@
 """
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+import pytest
 
 from src.application.intake import IntakeTurn, intake_turn
 from src.application.open_case import open_case
@@ -341,3 +342,61 @@ async def test_되묻는_경로도_같은_술어로_보호된다():
     turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
     assert turn.status == "not_ours", turn
     assert repo.get(case_id).question == "남이 바꿈"
+
+
+# ---- 검증 리뷰 B1: Mongo 백엔드로도 접수가 돈다 -------------------------------------------
+@pytest.fixture
+def mongo_repo():
+    import mongomock
+    from src.infrastructure.mongo_store import MongoCaseRepository
+    return MongoCaseRepository(mongomock.MongoClient()["intake_test"])
+
+
+async def test_Mongo_백엔드에서도_접수가_완주한다(mongo_repo):
+    # 인메모리만 도는 테스트는 프로덕션 쓰기 경로(model_dump)를 한 번도 안 지난다.
+    store = InMemoryCaseStore()
+    record = open_case(repo=mongo_repo, store=store, symptom="OEE가 이상하다", gbm="mx",
+                       fct="gumi", concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    turn = await _turn(record.id, mongo_repo, store, _deps(_RESOLVED))
+    assert turn.status == "done", turn
+    after = mongo_repo.get(record.id)
+    assert after.intake_done is True and after.target_locator == "rest:/oee"
+    assert after.status == "open"
+
+
+async def test_Mongo_백엔드에서도_되묻기가_된다(mongo_repo):
+    store = InMemoryCaseStore()
+    record = open_case(repo=mongo_repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    turn = await _turn(record.id, mongo_repo, store, _deps(_MISSING))
+    assert turn.status == "asking", turn
+    after = mongo_repo.get(record.id)
+    assert after.status == "awaiting_human" and after.question == "어느 라인인가?"
+
+
+async def test_고정_시계에서도_두_턴이_모두_이기지_않는다():
+    # 검증 리뷰 M-5: 술어가 updated_at 하나면 이긴 턴이 쓴 값이 진 턴이 읽은 값과 같아
+    # 둘 다 이긴다. 이 리포의 시계는 항상 고정값이므로(규율 2) 그 조건이 상시다.
+    # A가 사람에게 물어 파킹하는 동안 B가 완료로 덮으면 질문이 답도 못 받고 사라진다.
+    case_id, repo, store = _case()
+
+    class _Racing:
+        """B의 LLM이 도는 사이 A(되묻기 턴)가 통째로 끝난다 — 인위적 시각 조작 없이."""
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                await intake_turn(case_id, repo=repo, store=store, deps=_deps(_MISSING),
+                                  topology=TOPO, clock=lambda: T)
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    after = repo.get(case_id)
+    assert turn.status == "not_ours", turn
+    # A가 물은 질문이 살아 있다 — B가 덮지 않았다.
+    assert after.status == "awaiting_human" and after.question == "어느 라인인가?"
+    assert after.intake_done is False and after.target_locator is None

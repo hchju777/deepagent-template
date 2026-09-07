@@ -6,6 +6,7 @@ from typing import Literal
 from src.config.schema_app import StrictModel
 from src.domain.case import Case
 from src.domain.concern import Concern
+from pydantic_core import to_jsonable_python
 
 CaseStatus = Literal["open", "investigating", "awaiting_human", "closed"]
 OPEN_STATUSES = ("open", "investigating", "awaiting_human")
@@ -166,13 +167,17 @@ class CaseRepositoryPort(ABC):
         pass
 
     @abstractmethod
-    def update_if_unchanged(self, case_id: str, *, expect_updated_at: datetime,
-                            fields: dict, now: datetime) -> bool:
-        """읽은 시점의 `updated_at`을 술어로 걸어 조건부 저장한다. 이겼으면 True.
+    def update_if(self, case_id: str, *, expect: dict, fields: dict, now: datetime) -> bool:
+        """`expect`의 필드가 **읽은 값 그대로**일 때만 저장한다. 이겼으면 True.
 
-        낙관적 동시성의 교과서 형태다 — 새 버전 필드를 만들지 않아도 `updated_at`이
-        이미 매 저장마다 바뀐다. 접수(`intake._save`)가 읽기와 쓰기 사이의 창을 닫는 데
-        쓴다(계획 13 인계 #1).
+        `updated_at` 하나만 걸면 부족하다: 고정 시계(테스트)나 같은 밀리초에 두 저장이
+        일어나면 이긴 턴이 쓴 값이 진 턴이 읽은 값과 같아 둘 다 이긴다. 그래서 호출부가
+        **자기가 소유한 필드**도 함께 건다 — 상대가 그중 하나라도 바꿨으면 진다
+        (계획 17, 검증 리뷰 M-5).
+
+        비교는 저장된 표현으로 한다 — `save`가 `model_dump(mode="json")`으로 쓰므로
+        술어도 같은 직렬화를 써야 한다. 이 둘이 갈리면 Mongo에서 **항상** 지고, 그 사실이
+        인메모리 테스트에는 전혀 안 보인다(검증 리뷰 B1이 실증했다).
         """
         ...
 
@@ -256,9 +261,12 @@ class InMemoryCaseRepository(CaseRepositoryPort):
             "pending_answer": answer, "answer_key": key, "updated_at": now})
         return "accepted"
 
-    def update_if_unchanged(self, case_id, *, expect_updated_at, fields, now):
+    def update_if(self, case_id, *, expect, fields, now):
         record = self._cases.get(case_id)
-        if record is None or record.updated_at != expect_updated_at:
+        if record is None:
+            return False
+        dumped = record.model_dump(mode="json")
+        if any(dumped.get(k) != to_jsonable_python(v) for k, v in expect.items()):
             return False
         self._cases[case_id] = record.model_copy(update={**fields, "updated_at": now})
         return True

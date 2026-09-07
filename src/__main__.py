@@ -427,13 +427,6 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     if not lease_free:
         print("데몬이 실행 중 — 잠시 후 재시도", file=sys.stderr)
         return 2
-    # 사람이 본 질문과 지금 질문이 다르면 그 답은 이 질문의 답이 아니다(계획 17).
-    # lease 검사 뒤에 둔다 — lease가 잡혀 있으면 어차피 재개하지 않으므로 번호를
-    # 대조할 것도 없고, 데몬 가동 여부가 더 유용한 안내다.
-    if args.question_seq is not None and record.question_seq != args.question_seq:
-        print(f"질문이 바뀌었다(#{args.question_seq} → #{record.question_seq}) — "
-              f"`case show {args.case_id}`로 다시 읽고 답하라", file=sys.stderr)
-        return 2
     if record.status != "awaiting_human":
         print(f"케이스가 awaiting_human 상태가 아니다(현재: {record.status}) — 재개할 수 없다",
              file=sys.stderr)
@@ -483,7 +476,13 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         args.case_id, args.answer, repo=repo, store=store, deps=rt.deps,
         topology=rt.deps.topology, worker=worker, clock=clock,
         max_intake_turns=app.engine.max_intake_turns, on_event=on_event,
+        expect_seq=args.question_seq,
         on_problem=lambda p: print(f"접수: {p}", file=sys.stderr)))
+    if result == "stale_question":
+        # lease를 잡은 뒤 대조한 결과다 — 사전검사와 달리 이 판정과 재개 사이에는 창이 없다.
+        print(f"질문이 바뀌었다 — `case show {args.case_id}`로 다시 읽고 답하라",
+              file=sys.stderr)
+        return 2
     if result == "busy":
         # 위의 사전 점검과 실제 획득 사이의 경합(다른 프로세스가 그 사이 lease를 잡은 경우) —
         # resume_once 내부의 repo.claim이 최종 결정권을 가지므로 여기서도 같은 exit 2로 맞춘다.
@@ -628,7 +627,8 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
         result = await answer_case(case_id, answer, repo=repo, store=store, deps=rt.deps,
                                    topology=rt.deps.topology, worker=worker, clock=clock,
                                    max_intake_turns=app.engine.max_intake_turns,
-                                   interaction_policy="interactive", on_event=on_event)
+                                   interaction_policy="interactive", on_event=on_event,
+                                   expect_seq=current.question_seq)
 
     if result == "closed":
         path = Path(app.report.output_dir) / f"{case_id}.{app.report.format}"

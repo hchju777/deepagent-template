@@ -1376,3 +1376,17 @@ def test_case_resume은_지나간_질문_번호를_거절한다(tmp_path, capsys
     assert code == 2
     assert "질문" in capsys.readouterr().err
     assert repo.get("c-1").status == "awaiting_human"        # 재개하지 않았다
+
+
+def test_chat도_방금_읽은_질문_번호를_실어_보낸다():
+    # 검증 리뷰 M-2: 파킹 중에는 lease가 풀려 있어 "사람이 3분간 답을 쓰는 사이 데몬이
+    # Q2로 파킹"이 정확히 여기서 일어난다. 방금 읽은 번호를 넘기기만 하면 된다.
+    import inspect
+    src = inspect.getsource(main_module._drive_chat)
+    assert "expect_seq=current.question_seq" in src
+
+
+def test_case_resume의_대조는_lease_아래에서_한다():
+    import inspect
+    src = inspect.getsource(main_module._cmd_case_resume)
+    assert "expect_seq=args.question_seq" in src

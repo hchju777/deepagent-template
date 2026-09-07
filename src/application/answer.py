@@ -20,7 +20,8 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
                       max_intake_turns: int = 3,
                       interaction_policy: str = "autonomous",
                       on_problem: Callable[[str], None] | None = None,
-                      on_event: Callable[[Any], None] | None = None) -> str:
+                      on_event: Callable[[Any], None] | None = None,
+                      expect_seq: int | None = None) -> str:
     """답을 넣고 다음 단계까지 진행한다. 워커와 같은 어휘를 돌려준다.
 
     - 접수 질문이었으면 접수를 이어간다. 접수가 끝나면 **그대로 조사를 시작한다** —
@@ -57,4 +58,4 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
         # error도 조사에 넣는 이유: 대상 없이 조사하는 것이 기존 "이중 실패"의
         # 착지점이고, 여기서 멈추면 사람이 답한 케이스가 조용히 방치된다.
         return await worker.run_once(case_id, interaction_policy=interaction_policy)
-    return await worker.resume_once(case_id, answer)
+    return await worker.resume_once(case_id, answer, expect_seq=expect_seq)

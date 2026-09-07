@@ -661,7 +661,7 @@ async def test_소비는_지운_뒤_실행한다():
                                  clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
                                  ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
 
-    async def _spy(case_id, answer):
+    async def _spy(case_id, answer, *, expect_seq=None):
         seen.append((answer, repo.get(case_id).pending_answer))
         return "failed"
 
@@ -701,7 +701,7 @@ async def test_되돌릴_수_없으면_증거로_남긴다():
 
     class _Reparks:
         """소비 중 그래프가 새 질문으로 파킹하는 상황."""
-        async def __call__(self, case_id, answer):
+        async def __call__(self, case_id, answer, *, expect_seq=None):
             repo.save(repo.get(case_id).model_copy(update={"question_seq": 2, "question": "새"}))
             return "busy"
 
@@ -850,7 +850,7 @@ async def test_재개가_stale이면_가져간_답을_증거로_남긴다():
                          question_kind="investigation", question_seq=1,
                          pending_answer="옛 답", answer_key="k-1"))
 
-    async def closed_meanwhile(case_id, answer):
+    async def closed_meanwhile(case_id, answer, *, expect_seq=None):
         repo.save(repo.get(case_id).model_copy(update={"status": "closed", "question": None}))
         return "stale"
 
@@ -1226,3 +1226,18 @@ async def test_이력을_못_읽은_케이스는_스냅샷에_그_사실이_남�
     assert await worker.run_once("c-1") == "closed"
     snap = snapshots.get("c-1")
     assert snap.history_shown == [] and "RuntimeError" in (snap.history_error or "")
+
+
+async def test_재개는_lease를_잡은_뒤_질문_번호를_대조한다():
+    # 검증 리뷰 M-1: 대조가 lease 밖 사전검사면 그 사이가 통째로 창이다. 계획이 지정한
+    # 자리는 claim 뒤다 — "판정과 쓰기는 한 동작이다"의 재개 판이다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    worker, _ = _closing_worker(repo, store)
+    assert await worker.run_once("c-1") == "awaiting_human"
+    parked = repo.get("c-1")
+    assert parked.question_seq == 1
+    assert await worker.resume_once("c-1", "옛 답", expect_seq=99) == "stale_question"
+    after = repo.get("c-1")
+    assert after.status == "awaiting_human" and after.owner is None    # lease를 돌려줬다
+    assert await worker.resume_once("c-1", "맞는 답", expect_seq=1) == "closed"

@@ -206,3 +206,25 @@ async def test_접수_답의_상태_이벤트가_호출자의_on_event에_닿는
     await answer_case(record.id, "답", repo=repo, store=store, deps=deps, topology=topo,
                       worker=_Worker(), clock=lambda: T, on_event=seen.append)
     assert [e.event for e in seen] == ["case_status_changed"]
+
+
+async def test_answer_case가_질문_번호를_재개까지_흘린다():
+    # 검증 리뷰 H2: CLI 소스 단정만으로는 answer_case의 전달이 무보장이다.
+    from src.application.answer import answer_case
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "Q2", "question_kind": "investigation",
+        "question_seq": 2}))
+    seen = []
+
+    class _Worker:
+        async def resume_once(self, case_id, answer, *, expect_seq=None):
+            seen.append(expect_seq)
+            return "stale_question"
+
+    result = await answer_case(record.id, "Q1의 답", repo=repo, store=store, deps=None,
+                               topology=None, worker=_Worker(), clock=lambda: T, expect_seq=1)
+    assert seen == [1] and result == "stale_question"

@@ -17,6 +17,7 @@ ISO 문자열은 마이크로초 유무로 길이가 달라져 사전식 비교�
 import re
 from datetime import datetime, timedelta
 
+from pydantic_core import to_jsonable_python
 from pymongo import ReturnDocument
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
@@ -272,15 +273,19 @@ class MongoCaseRepository(CaseRepositoryPort):
             if expect_seq is not None:
                 guard["question_seq"] = expect_seq
             if self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,
-                                          "updated_at": now.isoformat()}):
+                                          "updated_at": to_jsonable_python(now)}):
                 return "accepted"
         return "busy"
 
-    def update_if_unchanged(self, case_id, *, expect_updated_at, fields, now) -> bool:
-        dumped = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in fields.items()}
+    def update_if(self, case_id, *, expect, fields, now) -> bool:
+        # 술어도 저장도 `save`와 **같은 직렬화**를 쓴다. `.isoformat()`은 `+00:00`을 내고
+        # `model_dump(mode="json")`은 `Z`를 내므로, 둘을 섞으면 술어가 영원히 안 맞는다 —
+        # Mongo 배포에서 접수가 100% 실패했고 인메모리 테스트에는 안 보였다(검증 리뷰 B1).
+        guard = {k: to_jsonable_python(v) for k, v in expect.items()}
         result = self._db.cases.update_one(
-            {"id": case_id, "updated_at": expect_updated_at.isoformat()},
-            {"$set": {**dumped, "updated_at": now.isoformat()}})
+            {"id": case_id, **guard},
+            {"$set": {**{k: to_jsonable_python(v) for k, v in fields.items()},
+                      "updated_at": to_jsonable_python(now)}})
         return bool(result.matched_count)
 
     def take_answer(self, case_id, *, now):
@@ -295,7 +300,7 @@ class MongoCaseRepository(CaseRepositoryPort):
         if not self._cas(case_id, {"pending_answer": answer, "answer_key": doc.get("answer_key"),
                                    "question_seq": doc.get("question_seq")},
                          {"pending_answer": None, "answered_seq": doc.get("question_seq", 0),
-                          "updated_at": now.isoformat()}):
+                          "updated_at": to_jsonable_python(now)}):
             return None            # 그 사이 남이 가져갔다
         return answer
 
@@ -312,7 +317,7 @@ class MongoCaseRepository(CaseRepositoryPort):
                                    "question_seq": doc.get("question_seq"),
                                    "answered_seq": doc.get("answered_seq")},
                          {"pending_answer": answer, "answered_seq": seq - 1,
-                          "updated_at": now.isoformat()})
+                          "updated_at": to_jsonable_python(now)})
 
     def claim(self, case_id, owner, *, now, ttl_s):
         doc = self._db.cases.find_one({"id": case_id})

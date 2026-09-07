@@ -707,7 +707,7 @@ class InvestigationWorker:
         finally:
             await self._release_safely(case_id)
 
-    async def resume_once(self, case_id: str, answer) -> str:
+    async def resume_once(self, case_id: str, answer, *, expect_seq: int | None = None) -> str:
         """awaiting_human 케이스를 사람의 답변으로 재개한다.
 
         최신 스레드의 저장된 schema 버전이 지금 엔진과 다르면(엔진 배선이
@@ -718,6 +718,10 @@ class InvestigationWorker:
         — 그래야 총 재시작 횟수가 F3와 마찬가지로 최대 1회로 유지된다.
         이 경로도 새 스레드가 investigate_case로 시작해 resume 메커니즘이
         없으므로, 재시작 전에 답변을 evidence로 박제한다(I4).
+
+        `expect_seq`는 사람이 **본** 질문 번호다. 대조를 claim **뒤**에서 하는 이유는
+        `attach_answer`가 싣는 그 한 동작 안에서 대조하는 것과 같다 — lease 밖에서 미리
+        비교하면 그 사이에 파킹이 또 일어난다(계획 17, 검증 리뷰 M-1).
         """
         record = None
         try:
@@ -728,6 +732,10 @@ class InvestigationWorker:
                 return "busy"
             if leased.status == "closed":
                 return "stale"                                      # run_once와 같은 이유
+            if expect_seq is not None and leased.question_seq != expect_seq:
+                # 사람이 본 질문과 지금 질문이 다르다 — 그 답은 이 질문의 답이 아니다.
+                # 재개하지 않고 lease는 finally의 _release_safely가 돌려준다.
+                return "stale_question"
             if leased.pending_answer is not None:
                 # 채널에 실린 답이 있는데 직접 답(case resume)이 먼저 왔다. **lease 아래에서**
                 # 가져간다 — attach는 lease가 살아 있으면 busy로 거절하므로 여기서 본 것이
