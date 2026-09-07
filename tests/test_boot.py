@@ -876,3 +876,31 @@ def test_시나리오_스키마_오류가_다른_시나리오의_문제를_가�
                         validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
     assert "greater than or equal to 1" in problems      # 스키마 오류
     assert "ghost_collection" in problems                # 가려지던 의미 오류
+
+
+def test_표적이_없는_지표의_해석기도_검증한다(tmp_path):
+    # `probe`만 있고 `target`이 없는 지표를 건너뛰면, "해석기 검증은 표적 종류와
+    # 무관하게 돈다"는 주석이 문자 그대로 거짓이 된다(검증 리뷰 LOW-2).
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": {
+        "probe": "rest_query", "extract": "0.n", "reduce": "sum",
+        "resolve": {"line": {"from": "rest", "entry": "make_thing", "field": "c"}}}})
+    assert "GET이어야 한다" in problems
+
+
+def test_rest_자체가_없으면_오타가_아니라_미설정이라고_말한다(tmp_path):
+    # "항목이 등재돼 있지 않다"로 보고하면 사람이 없는 오타를 찾는다 —
+    # mongo·redis가 정확히 말하는 것과 같게 맞춘다(검증 리뷰 LOW-3).
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "probe": "mongo_find", "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "0.line", "filter": {"state": "STOP"}},
+            "resolve": {"line": {"from": "rest", "entry": "e", "field": "c"}}}}}}))
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "target.rest가 설정돼 있지 않다" in problems

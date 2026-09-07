@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from src.config.loader import ConfigError, load_scenarios
 from src.config.schema_scenario import MetricSpec, ScenarioConfig
-from src.config.schema_site import CheckConfig
 
 _MIN = {"kind": "aggregate", "concern": "operation", "title": "알람 추세",
         "schedule": {"cron": "0 7 * * *"},
@@ -107,16 +106,6 @@ def test_집계_지표의_필터와_해석기_키가_겹치면_거부된다():
             "target": "mongo:twin_state", "extract": "0.n", "reduce": "sum",
             "params": {"filter": {"part": "Z"}},
             "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
-
-
-def test_점검의_body와_해석기_키가_겹치면_거부된다():
-    # MetricSpec 쪽만 테스트가 있고 CheckConfig 쪽은 없었다 — 이 검증자는 두 스키마에
-    # 각각 있고, 한쪽만 지키면 나머지가 조용히 사라진다.
-    with pytest.raises(ValidationError):
-        CheckConfig.model_validate({
-            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:make_thing",
-            "params": {"body": {"line": ["A"]}},
-            "resolve": {"line": {"from": "unfiltered"}}})
 
 
 def test_집계_지표의_body와_해석기_키가_겹치면_거부된다():

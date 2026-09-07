@@ -134,7 +134,7 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
     adapters_by_site: dict[str, str] = {}
     # 시나리오 검증에 쓸 사이트별 (토폴로지 locator, 등재 항목) — 사이트 루프에서 채운다.
     # 집계 검증이 사이트마다 필요로 하는 사실 — locator 집합과 어댑터 유무.
-    site_targets: dict[str, tuple[set, bool, bool]] = {}
+    site_targets: dict[str, tuple[set, bool, bool, bool]] = {}
     entry_specs: dict[str, dict] = {}
 
     app_config = None
@@ -184,7 +184,8 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         known = topo.locators()
         entries = dict(cfg.target.rest.entries) if cfg.target.rest else {}
         site_targets[f"{site.gbm}/{site.fct}"] = (
-            set(known), cfg.target.mongo is not None, cfg.target.redis is not None)
+            set(known), cfg.target.mongo is not None, cfg.target.redis is not None,
+            cfg.target.rest is not None)
         entry_specs[f"{site.gbm}/{site.fct}"] = dict(entries)
         target_api, api_problems = load_target_api(knowledge_root, site.gbm, site.fct)
         errors += [BootError(where, p) for p in api_problems]
@@ -233,7 +234,8 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                 check.resolve, label=f"점검 {name!r}", entry_name=entry_name,
                 schema=schema, entries=entries,
                 has_mongo=cfg.target.mongo is not None,
-                has_redis=cfg.target.redis is not None)]
+                has_redis=cfg.target.redis is not None,
+                has_rest=cfg.target.rest is not None)]
             if check.judge in ("llm", "rule+llm"):
                 needs_judge_llm = True
 
@@ -350,7 +352,7 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
 
 
 def _resolver_problems(resolve, *, label, entry_name, schema, entries,
-                       has_mongo, has_redis):
+                       has_mongo, has_redis, has_rest):
     """해석기 선언의 정적 문제 — **점검과 집계 지표가 같은 함수를 쓴다**.
 
     두 경로가 각자 베끼면 하나가 빠뜨린다. 실제로 그랬다: 지표 경로에는 GET 강제가
@@ -382,7 +384,12 @@ def _resolver_problems(resolve, *, label, entry_name, schema, entries,
                                     f"{declared!r}이다")
         if spec.from_ == "rest":
             source = entries.get(spec.entry)
-            if source is None:
+            if not has_rest:
+                # 등재 목록 자체가 없는 것을 "그 항목이 없다"로 보고하면 사람이
+                # 오타를 찾는다 — mongo·redis가 정확히 말하는 것과 같게 맞춘다.
+                problems.append(f"{label}의 해석기 {key!r}가 rest를 쓰는데 "
+                                f"target.rest가 설정돼 있지 않다")
+            elif source is None:
                 problems.append(f"{label}의 해석기 {key!r}가 가리키는 "
                                 f"항목 {spec.entry!r}이 등재돼 있지 않다")
             elif source.method != "GET":
@@ -452,17 +459,17 @@ def _scenario_errors(config_root: Path, env, site_targets: dict,
             if spec.target is None and spec.probe is None:
                 errors.append(BootError(where, f"지표 {metric!r}에 target도 probe도 없다 — "
                                                f"매 집계가 '프로브 해석 불가'로 끝난다"))
-            if spec.target is None:
-                continue
-            kind, _, rest = spec.target.partition(":")
+            kind, _, rest = (spec.target or "").partition(":")
             for key in in_scope:
                 targets = site_targets.get(key)
                 if targets is None:
                     continue
-                known, has_mongo, has_redis = targets
+                known, has_mongo, has_redis, has_rest = targets
                 site_entries = entry_specs.get(key, {})
                 schema = entry_name = None
-                if kind == "rest" and rest and not rest.startswith("/"):
+                if spec.target is None:
+                    pass                    # 표적이 없어도 해석기는 아래에서 본다
+                elif kind == "rest" and rest and not rest.startswith("/"):
                     entry = site_entries.get(rest)
                     if entry is None:
                         errors.append(BootError(
@@ -480,8 +487,17 @@ def _scenario_errors(config_root: Path, env, site_targets: dict,
                         where, f"{label}의 target {spec.target!r}이 "
                                f"{key}의 토폴로지로 해석되지 않는다"))
                 # 해석기 검증은 표적 종류와 무관하게 돈다 — mongo_find 표적도 해석기를
-                # 실제로 실행한다. 점검과 **같은 함수**를 쓰는 것이 요점이다.
+                # 실제로 실행하고, 표적이 아예 없는 지표도 마찬가지다. 점검과 **같은
+                # 함수**를 쓰는 것이 요점이다.
+                #
+                # 여기 없는 것이 하나 있다: `response_field_problems`(pinned 명세와
+                # 응답 필드 대조)는 점검 전용으로 남는다. 그 함수는 `body.`로 시작하는
+                # 최상위 키만 보는데 지표의 `extract`는 리스트를 만나면 팬아웃하는 다른
+                # 접근자 계열이라(`"0.n"` 같은 모양) 그대로 재사용하면 정상 선언이
+                # 거짓 오류를 받는다. 지표 쪽 대조가 필요하면 접근자에 맞는 판정기를
+                # 따로 만들어야 한다.
                 errors += [BootError(where, p) for p in _resolver_problems(
                     spec.resolve, label=label, entry_name=entry_name, schema=schema,
-                    entries=site_entries, has_mongo=has_mongo, has_redis=has_redis)]
+                    entries=site_entries, has_mongo=has_mongo, has_redis=has_redis,
+                    has_rest=has_rest)]
     return errors
