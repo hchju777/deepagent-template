@@ -35,8 +35,7 @@ from src.knowledge.deployment import load_deployment
 from src.knowledge.target_api import (load_target_api, parse_spec,
                                       response_field_problems, spec_problems)
 from src.knowledge.topology import load_topology, topology_problems
-from src.patrol.probes import mongo_find_problems, resolve_probe
-from src.patrol.probes import PROBES, resolve_probe
+from src.patrol.probes import PROBES, mongo_find_problems, resolve_probe
 
 
 @dataclass

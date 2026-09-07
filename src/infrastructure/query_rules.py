@@ -200,6 +200,22 @@ def entry_evidence_source(method: str, path: str, params: dict) -> str:
     return f"rest:{method}:{path}#{canonical_digest(params)[:8]}"
 
 
+def mongo_evidence_source(collection: str, filter: dict,
+                          unfiltered: list[str] | None = None) -> str:
+    """mongo 질의의 증거 출처. `entry_evidence_source`와 같은 이유로 질문의 digest를 붙인다.
+
+    같은 컬렉션에 다른 필터를 내는 두 점검이 같은 출처를 가지면, 증거가 질문 단위로
+    모이지 않고 "0건"이 무엇에 대한 0건인지 알 수 없어진다.
+
+    `unfiltered`를 따로 적는 이유는 "해석이 실패해 우연히 전체를 봤다"와 "일부러 전체를
+    봤다"를 사람이 구별할 수 있어야 하기 때문이다(rest_query가 request에 싣는 것과 같다).
+    """
+    tail = f"#{canonical_digest(filter)[:8]}"
+    if unfiltered:
+        tail += "+unfiltered:" + ",".join(sorted(unfiltered))
+    return f"mongo:{collection}{tail}"
+
+
 def kafka_effective_start(requested, resolved_ts, earliest_ts):
     """offsets_for_times 결과로 달성 시작 시각을 정한다.
 

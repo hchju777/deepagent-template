@@ -229,3 +229,16 @@ def test_축_전용_rule_집합이_실재하는_rule만_담는다():
     from src.config.schema_site import _AXIS_SPECIFIC_RULES
     from src.patrol.rules import _RULES
     assert _AXIS_SPECIFIC_RULES <= set(_RULES), sorted(_AXIS_SPECIFIC_RULES - set(_RULES))
+
+
+def test_sample은_1_이상이어야_한다():
+    # 0·음수는 pymongo에서 "무제한"이 된다 — 상한을 적었다고 믿은 사람이 전량 조회를 돈다.
+    import pytest
+    from pydantic import ValidationError
+    from src.config.schema_site import CheckConfig
+    base = {"judge": "rule", "schedule": {"interval": "5m"}, "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "0.line"}}
+    assert CheckConfig.model_validate({**base, "sample": 1}).sample == 1
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            CheckConfig.model_validate({**base, "sample": bad})

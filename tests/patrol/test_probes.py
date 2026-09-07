@@ -299,3 +299,53 @@ async def test_mongo_기본_프로브는_그대로_recent다():
     assert resolve_probe(CheckConfig.model_validate({
         "judge": "rule", "schedule": {"interval": "5m"}, "target": "mongo:twin_state",
         "params": {"rule": "exists", "field": "0.line"}})) == "mongo_recent"
+
+
+async def test_해석기_표본이_잘리면_증거가_불완전이다():
+    # 검증 리뷰 B1: 잘린 표본으로 좁힌 질의의 결과가 "완전한 증거"로 박제되면
+    # verify의 "불완전 증거로 부정 결론 금지" 가드가 통째로 비껴간다.
+    site = SiteConfig.model_validate({"target": {
+        "mongo": {"url": "mongodb://x:27017"}, "guards": {"max_rows": 2}}})
+    adapters = build_adapters(site, TOPO, clock=lambda: T, stub_seeds=StubSeeds(
+        mongo_collections={"twin_state": [{"part": "A"}],
+                           "parts": [{"code": c} for c in "ABCDE"]}))
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state", "params": {"rule": "exists", "field": "0.part"},
+        "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
+    result = await PROBES["mongo_find"](adapters, check, clock=lambda: T)
+    assert result.status == "ok"
+    assert result.envelope.complete is False and result.envelope.truncated_reason
+
+
+async def test_증거_출처가_무엇을_물었는지_담는다():
+    # §2-N4: 응답만 보관하면 "0건"이 "현장이 멈췄다"인지 "질문을 잘못했다"인지 모른다.
+    # 같은 컬렉션에 다른 필터를 내는 두 점검이 같은 출처를 가지면 안 된다.
+    a = await PROBES["mongo_find"](_mongo_adapters([]), _find_check(filter={"state": "STOP"}),
+                                   clock=lambda: T)
+    b = await PROBES["mongo_find"](_mongo_adapters([]), _find_check(filter={"state": "RUN"}),
+                                   clock=lambda: T)
+    assert a.source and a.source.startswith("mongo:twin_state#") and a.source != b.source
+    same = await PROBES["mongo_find"](_mongo_adapters([]), _find_check(filter={"state": "STOP"}),
+                                      clock=lambda: T)
+    assert a.source == same.source          # 같은 질문이면 같은 출처로 모인다
+
+
+async def test_일부러_전체를_본_것은_출처에_남는다():
+    # "해석이 실패해 우연히 전체를 봤다"와 "일부러 전체를 봤다"를 코드가 구별한다.
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state", "params": {"rule": "exists", "field": "0.part"},
+        "resolve": {"part": {"from": "unfiltered"}}})
+    result = await PROBES["mongo_find"](_mongo_adapters([{"part": "A"}]), check, clock=lambda: T)
+    assert result.status == "ok" and "unfiltered:part" in (result.source or "")
+
+
+async def test_정렬_방향은_정수_1_또는_마이너스1이어야_한다():
+    # 검증 리뷰 M3: `-1.0`은 JSON에 자연스럽고 파이썬 동등 비교를 통과하지만
+    # pymongo가 TypeError를 낸다 — 기동은 통과하고 매 순찰이 실패한다.
+    result = await PROBES["mongo_find"](_mongo_adapters([]), _find_check(sort=[["ts", -1.0]]),
+                                        clock=lambda: T)
+    assert result.status == "error" and "sort" in (result.error or "")
+    from src.patrol.probes import mongo_find_problems
+    assert mongo_find_problems({"sort": [["ts", True]]}, {})

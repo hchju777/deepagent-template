@@ -9,7 +9,7 @@ from typing import Awaitable, Callable
 from src.config.schema_site import CheckConfig
 from src.domain.envelope import Envelope, ProbeResult
 from src.infrastructure.factory import AdapterSet
-from src.infrastructure.query_rules import filter_problems
+from src.infrastructure.query_rules import filter_problems, mongo_evidence_source
 from src.patrol.resolvers import resolve_params
 
 ProbeFn = Callable[..., Awaitable[ProbeResult]]
@@ -117,14 +117,28 @@ async def mongo_find(adapters: AdapterSet, check: CheckConfig, *, clock,
             # 전부-또는-전무(§2-N3): 하나라도 못 내면 질의하지 않는다. 빈 필터로 전체를
             # 긁으면 "거짓 안심"이 되고, 그건 조용해서 더 위험하다.
             return _error("; ".join(resolved.problems), clock)
-        overlap = sorted(set(static) & set(resolved.params))
+        # 겹침은 **선언된 resolve 전체**로 본다 — resolved.params만 보면 unfiltered 키가
+        # 빠져 기동 검증과 판정이 갈린다(검증 리뷰 L1).
+        overlap = sorted(set(static) & set(check.resolve))
         if overlap:
             return _error(f"params.filter와 resolve에 같은 키가 있다: {overlap}", clock)
         merged = dict(static)
         for key, value in resolved.params.items():
             merged[key] = {"$in": value} if isinstance(value, list) else value
-        return await adapters.mongo.find(coll, merged, sort=sort,
-                                         limit=check.sample or None)
+        result = await adapters.mongo.find(coll, merged, sort=sort,
+                                           limit=check.sample or None)
+        result = result.model_copy(update={
+            "source": mongo_evidence_source(coll, merged, resolved.omitted)})
+        if resolved.truncated:
+            # 해석기 소스가 잘렸으면 그 필터로 만든 결과도 불완전하다. 안 접으면 좁혀진
+            # 질의의 "이상 없음"이 완전한 증거로 박제되고, verify의 "불완전 증거로 부정
+            # 결론 금지" 가드가 통째로 비껴간다(검증 리뷰 B1 — rest_query가 하는 것과 같다).
+            reasons = ([result.envelope.truncated_reason]
+                       if result.envelope.truncated_reason else []) + resolved.truncated
+            envelope = result.envelope.model_copy(update={
+                "complete": False, "truncated_reason": "; ".join(reasons)})
+            result = result.model_copy(update={"envelope": envelope})
+        return result
     except Exception as exc:
         return _error(f"프로브 실행 실패 — {type(exc).__name__}: {exc}", clock)
 
@@ -147,6 +161,11 @@ def mongo_find_problems(params: dict, resolve: dict) -> list[str]:
     _, problem = _mongo_sort(params.get("sort"))
     if problem is not None:
         problems.append(problem)
+    if not params.get("filter") and not resolve:
+        # mongo_recent의 params를 복붙하고 probe만 바꾸면 조용한 전량 스캔이 된다.
+        # 의도한 전체 조회는 `resolve`의 unfiltered로 명시한다(전부-또는-전무와 같은 규약).
+        problems.append("filter도 resolve도 없다 — 전체 조회를 의도했다면 "
+                        "resolve에 {\"from\": \"unfiltered\"}로 명시하라")
     return problems
 
 
@@ -158,8 +177,10 @@ def _mongo_sort(spec) -> tuple[list[tuple[str, int]] | None, str | None]:
         return None, f"params.sort는 리스트여야 한다 (받은 타입: {type(spec).__name__})"
     out = []
     for item in spec:
+        # `item[1] not in (1, -1)`은 파이썬 동등 비교라 -1.0과 True를 통과시키고,
+        # pymongo가 그때서야 TypeError를 낸다 — 기동은 통과하고 매 순찰이 실패한다.
         if not isinstance(item, list) or len(item) != 2 or not isinstance(item[0], str) \
-                or item[1] not in (1, -1):
+                or type(item[1]) is not int or item[1] not in (1, -1):
             return None, f"params.sort의 항목은 [필드, 1|-1]이어야 한다: {item!r}"
         out.append((item[0], item[1]))
     return out, None

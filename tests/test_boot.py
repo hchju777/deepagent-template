@@ -617,3 +617,18 @@ def test_정상_mongo_find_점검은_기동을_막지_않는다(tmp_path):
             # 정상 설정이 기동을 못 한다.
             "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}}}}}))
     assert validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path) == []
+
+
+def test_필터도_해석기도_없는_mongo_find는_전체_스캔이라_거부한다(tmp_path):
+    # 검증 리뷰 L3: mongo_recent의 params를 복붙하고 probe만 바꾸면 조용한 전량 스캔이 된다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {"twin.all": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "probe": "mongo_find", "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "0.line", "ts_field": "ts"}}}}}))
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "전체 조회" in problems

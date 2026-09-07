@@ -31,6 +31,9 @@ class ProbeResult(StrictModel):
     envelope: Envelope
     data: Any = None
     error: str | None = None
+    # 이 결과가 **무엇을 물었는가**(§2-N4). 응답만 보관하면 "0건"이 "현장이 멈췄다"인지
+    # "질문을 잘못했다"인지 구별할 수 없다. 프로브가 채우면 증거 출처가 그것을 쓴다.
+    source: str | None = None
 
     @model_validator(mode="after")
     def _error_needs_cause(self):
