@@ -7,6 +7,10 @@ POST /cases/{id}/answers         202 {result} / 409(pending·busy·not_waiting·
 POST /cases/{id}/label           202 {result} / 404 — 실제 원인 되먹임(append-only)
 ```
 
+`/intake-answers`의 409는 본문이 두 모양이다 — `stale_question`은 턴 모양
+(`{status, question, target_locator, problems}`), `not_ours`는 `{detail: {problems}}`.
+클라이언트가 한 벌로 처리할 수 없으니 상태 코드만 보고 본문 모양을 가정하지 마라.
+
 `api`는 실행자가 아니다 — `/answers`는 **기록만** 한다. 워커가 집어 간다.
 """
 from typing import Literal

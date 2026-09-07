@@ -119,8 +119,9 @@ curl -s -X POST localhost:8080/cases -H 'content-type: application/json' \
 #   조사에 들어간다. 조용히 "정상 개설"처럼 보이지 않게 응답에 싣는다
 
 # 접수가 되물었으면 답한다(턴 하나 — 다음 질문 또는 완료가 응답에 온다)
+# question_seq(GET /cases/c-1에 실려 온다)를 함께 보내면 그 사이 질문이 바뀌었을 때 409다
 curl -s -X POST localhost:8080/cases/c-1/intake-answers -H 'content-type: application/json' \
-  -d '{"answer": "라인 7"}'
+  -d '{"answer": "라인 7", "question_seq": 1}'
 
 # 조사 중 그래프가 되물었으면(GET /cases/c-1의 question) 답을 **싣는다** — 실행은 워커가
 # question_seq를 실으면 그 사이 조사가 다음 질문으로 넘어갔을 때 409로 거절한다
