@@ -1582,3 +1582,26 @@ def test_지표가_창보다_많으면_잘렸다고_말한다(tmp_path, capsys, 
     assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
     out = capsys.readouterr().out
     assert "최근 200건" in out and "더 있을 수 있다" in out
+
+
+def test_지표_행이_기형이어도_status는_살아남는다(tmp_path, capsys, monkeypatch):
+    # 계산이 `try` 밖에 있으면 행 하나가 명령을 죽인다. 지금 두 구현은 항상 온전한
+    # 행을 내지만, 방어를 되돌려도 스위트가 몰랐다(검증 리뷰 LOW-A).
+    class _Malformed(InMemoryLedger):
+        def metrics(self, name, *, limit=200):
+            return [{"name": name, "tags": None, "at": T}]        # value 키가 없다
+
+    _status_tree(tmp_path, monkeypatch, _Malformed())
+    assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "하트비트" in out and "지표 읽기 실패" in out
+
+
+def test_tags가_None인_행도_요약을_막지_않는다(tmp_path, capsys, monkeypatch):
+    class _NoTags(InMemoryLedger):
+        def metrics(self, name, *, limit=200):
+            return [{"name": name, "value": 10.0, "tags": None, "at": T}]
+
+    _status_tree(tmp_path, monkeypatch, _NoTags())
+    assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
+    assert "조사 1건(실패 0건)" in capsys.readouterr().out

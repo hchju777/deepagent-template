@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from src.application.labels import calibration, label_stats, submit_label
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
-from src.domain.label import InMemoryLabelStore
+from src.domain.label import InMemoryLabelStore, RootCauseLabel
 from src.domain.snapshot import InMemoryVerdictSnapshotStore, VerdictSnapshot
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
@@ -97,17 +97,16 @@ def test_라벨률은_절반_초과여야_한다():
     assert label_stats(repo=repo, labels=labels).gate_open is False
 
 
-def test_집계는_저장소가_두_번째_호출에서_죽어도_raise하지_않는다():
-    class _Flaky(InMemoryCaseRepository):
-        calls = 0
-
+def test_집계는_저장소가_죽어도_raise하지_않는다():
+    # 이 테스트는 한동안 `list_by_status`의 **두 번째** 호출에서 죽는 저장소를 썼는데,
+    # `label_stats`는 한 번만 부른다 — 예외가 한 번도 발화하지 않아 핸들러를 지우는
+    # 변조가 통과했다(검증 리뷰 LOW-B). 첫 호출에서 죽여야 실제로 방어를 지난다.
+    class _Boom(InMemoryCaseRepository):
         def list_by_status(self, status):
-            type(self).calls += 1
-            if type(self).calls > 1:
-                raise RuntimeError("mongo down")
-            return super().list_by_status(status)
-    stats = label_stats(repo=_Flaky(), labels=InMemoryLabelStore())
-    assert stats.gate_open is False
+            raise RuntimeError("mongo down")
+
+    stats = label_stats(repo=_Boom(), labels=InMemoryLabelStore())
+    assert stats.gate_open is False and "실패" in stats.why
 
 
 def test_라벨_표현은_저장소_장애에도_빈_목록이다():
@@ -239,3 +238,25 @@ def test_버킷_순서는_결정론적이다():
         snapshots.put(_snap(f"c-{i}", confidence))
     result = calibration(repo=repo, labels=labels, snapshots=snapshots)
     assert [b.confidence for b in result.buckets] == ["high", "medium", "low", "미상"]
+
+
+def test_라벨_유입구도_저장소_장애를_error로_돌려준다():
+    # `KeyError`(없는 케이스) 경로만 테스트가 있었고, 저장소 장애 경로는 무검증이라
+    # 그 핸들러를 지워도 스위트가 몰랐다(검증 리뷰 LOW-C).
+    class _Boom(InMemoryCaseRepository):
+        def get(self, case_id):
+            raise RuntimeError("mongo down")
+
+    assert submit_label("c-0", agreement="correct", repo=_Boom(),
+                        labels=InMemoryLabelStore(), clock=lambda: T) == "error"
+
+
+def test_저장소에서_사라진_케이스의_라벨은_세지_않는다():
+    # 스냅샷과 라벨은 retention보다 오래 산다(`domain/snapshot.py`) — 그래서 케이스가
+    # 이미 purge된 라벨이 존재할 수 있다. 종결 목록 교집합이 그것을 거르는데, 그 필터를
+    # 지켜 주는 테스트가 없었다(검증 리뷰 LOW-D).
+    repo, labels, snapshots = _open_gate(labeled=30)
+    snapshots.put(_snap("c-사라짐", "low"))
+    labels.append(RootCauseLabel(case_id="c-사라짐", agreement="wrong", labeled_at=T))
+    result = calibration(repo=repo, labels=labels, snapshots=snapshots)
+    assert [b.confidence for b in result.buckets] == ["high"]
