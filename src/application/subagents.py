@@ -11,6 +11,7 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
+from src.application.briefing import one_line
 from src.application.schemas import SubagentReport, parse_structured
 from src.domain.case import PlanTask
 from src.infrastructure.code_repo import CodeRepoError
@@ -32,15 +33,20 @@ _PROMPTS = {
 }
 
 
+# 도구 반환 문자열은 모델의 컨텍스트에 **그대로** 들어가고 `[증거 …]`·`[오류]`라는
+# 줄 머리말을 쓴다. 개행이 섞이면 그 조각이 새 항목처럼 보이므로 전부 접는다
+# (`briefing.one_line` — 계획 18과 같은 근거). 실제 벡터는 `result.error`다: 대상
+# 어댑터가 만든 문자열이라 대상 응답이나 예외 메시지가 그대로 실린다.
 def _evidence_line(evidence_id, summary, envelope):
     eff = envelope.effective_as_of.isoformat() if envelope.effective_as_of else "-"
-    return f"[증거 {evidence_id}] {summary} (complete={envelope.complete}, effective_as_of={eff})"
+    return one_line(f"[증거 {evidence_id}] {summary} "
+                    f"(complete={envelope.complete}, effective_as_of={eff})")
 
 
 def _code_evidence_line(evidence_id, summary):
     # 코드 리더는 ProbeResult/Envelope가 없다(유일한 sync 포트) — complete·
     # effective_as_of를 논할 대상 자체가 없어 간략한 형식을 쓴다.
-    return f"[증거 {evidence_id}] {summary}"
+    return one_line(f"[증거 {evidence_id}] {summary}")
 
 
 def make_tools(role, *, adapters, store, case_id):
@@ -66,10 +72,10 @@ def make_tools(role, *, adapters, store, case_id):
             try:
                 filter = json.loads(filter_json)
             except json.JSONDecodeError as exc:
-                return f"[오류] filter_json 파싱 실패 — {exc}"
+                return one_line(f"[오류] filter_json 파싱 실패 — {exc}")
             result = await adapters.mongo.find(collection, filter, limit=limit)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"mongo:{collection}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{collection} {len(result.data)}건", result.envelope)
         tools.append(mongo_find)
@@ -80,10 +86,10 @@ def make_tools(role, *, adapters, store, case_id):
             try:
                 filter = json.loads(filter_json)
             except json.JSONDecodeError as exc:
-                return f"[오류] filter_json 파싱 실패 — {exc}"
+                return one_line(f"[오류] filter_json 파싱 실패 — {exc}")
             result = await adapters.mongo.count(collection, filter)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"mongo:{collection}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{collection} {result.data}건", result.envelope)
         tools.append(mongo_count)
@@ -94,7 +100,7 @@ def make_tools(role, *, adapters, store, case_id):
             """Redis 키 하나를 조회한다(string은 값, hash는 필드 dict)."""
             result = await adapters.redis.get(key)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"redis:{key}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{key} 조회", result.envelope)
         tools.append(redis_get)
@@ -104,7 +110,7 @@ def make_tools(role, *, adapters, store, case_id):
             """glob 패턴에 매칭하는 Redis 키 목록을 조회한다(예: 'twin:*')."""
             result = await adapters.redis.scan(pattern)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"redis-scan:{pattern}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{pattern} {len(result.data)}건", result.envelope)
         tools.append(redis_scan)
@@ -114,7 +120,7 @@ def make_tools(role, *, adapters, store, case_id):
             """Redis 키의 남은 TTL(초)을 조회한다(-1: 무제한, -2: 없음)."""
             result = await adapters.redis.ttl(key)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"redis-ttl:{key}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{key} ttl={result.data}", result.envelope)
         tools.append(redis_ttl)
@@ -127,10 +133,10 @@ def make_tools(role, *, adapters, store, case_id):
                 start = datetime.fromisoformat(start_iso)
                 end = datetime.fromisoformat(end_iso)
             except ValueError as exc:
-                return f"[오류] 시각 파싱 실패 — {exc}"
+                return one_line(f"[오류] 시각 파싱 실패 — {exc}")
             result = await adapters.kafka.read(topic, start=start, end=end)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"kafka:{topic}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{topic} {len(result.data)}건", result.envelope)
         tools.append(kafka_read)
@@ -140,7 +146,7 @@ def make_tools(role, *, adapters, store, case_id):
             """Kafka 컨슈머 그룹의 파티션별 커밋 오프셋·lag를 조회한다."""
             result = await adapters.kafka.group_offsets(group)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"kafka-offsets:{group}", result.data, result.envelope)
             return _evidence_line(evidence_id, f"{group} 오프셋 조회", result.envelope)
         tools.append(kafka_group_offsets)
@@ -151,7 +157,7 @@ def make_tools(role, *, adapters, store, case_id):
             """REST 끝점을 GET으로 조회한다(토폴로지에 등록된 끝점만 허용)."""
             result = await adapters.rest.get(endpoint)
             if result.status == "error":
-                return f"[오류] {result.error}"
+                return one_line(f"[오류] {result.error}")
             evidence_id = _put(f"rest:{endpoint}", result.data, result.envelope)
             status_code = result.data.get("status_code") if isinstance(result.data, dict) else "-"
             return _evidence_line(evidence_id, f"{endpoint} status={status_code}", result.envelope)
@@ -164,7 +170,7 @@ def make_tools(role, *, adapters, store, case_id):
             try:
                 body = adapters.code.show(repo, commit, path)
             except CodeRepoError as exc:
-                return f"[오류] {exc}"
+                return one_line(f"[오류] {exc}")
             evidence_id = _put(f"code:{repo}@{commit}:{path}", body)
             return _code_evidence_line(evidence_id, f"{repo}@{commit[:7]}:{path} ({len(body.splitlines())}줄)")
         tools.append(code_show)
@@ -175,7 +181,7 @@ def make_tools(role, *, adapters, store, case_id):
             try:
                 lines = adapters.code.grep(repo, commit, pattern)
             except CodeRepoError as exc:
-                return f"[오류] {exc}"
+                return one_line(f"[오류] {exc}")
             evidence_id = _put(f"code-grep:{repo}@{commit}:{pattern}", lines)
             return _code_evidence_line(evidence_id, f"{pattern!r} {len(lines)}건 매치")
         tools.append(code_grep)
@@ -186,7 +192,7 @@ def make_tools(role, *, adapters, store, case_id):
             try:
                 commit = adapters.code.head(repo)
             except CodeRepoError as exc:
-                return f"[오류] {exc}"
+                return one_line(f"[오류] {exc}")
             evidence_id = _put(f"code-head:{repo}", commit)
             return _code_evidence_line(evidence_id, f"{repo} HEAD={commit[:7]}")
         tools.append(code_head)
@@ -200,7 +206,7 @@ def make_tools(role, *, adapters, store, case_id):
         try:
             body = store.get_evidence(case_id, evidence_id)
         except KeyError:
-            return f"[오류] 없는 증거 id — {evidence_id}"
+            return one_line(f"[오류] 없는 증거 id — {evidence_id}")
         return json.dumps(body, ensure_ascii=False, default=str)
     tools.append(get_evidence)
 
