@@ -140,7 +140,10 @@ curl -s localhost:8080/digests/alarm_trend    # 실행 기록(추세 비교의 �
 # 조사가 끝난 뒤 실제 원인을 되먹인다(학습 루프 — 보고서 푸터가 이 명령을 안내한다)
 python -m src case label c-1 --agreement wrong --actual-component plan-sync \
     --resolution false_positive --saw-report --by "$USER"
-python -m src case label --stats            # 건수와 게이트 상태(퍼센트는 게이트 전엔 안 낸다)
+python -m src case label --stats            # 게이트가 닫혀 있으면 건수만, 열리면 confidence별 적중
+# 적중 줄은 "모름 N건 분모 제외"와 "보고서 본 뒤 라벨 N건"을 함께 낸다 — 적중률만 읽지 않게.
+
+python -m src patrol status                # 하트비트 + 조사 지표(건수·실패·소요 중앙값) + 점검별 최근 실행
 curl -s -X POST localhost:8080/cases/c-1/label -H 'content-type: application/json' \
     -d '{"agreement": "correct", "resolution": "fixed"}'
 
