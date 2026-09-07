@@ -176,7 +176,7 @@ def _render(model) -> str:
 {_bullets(refuted)}
 <h3>검증 문제</h3>
 {_bullets([_e(p) for p in model.verify_problems])}
-<h3>QA 로그</h3>{{qa_placeholder}}
+<h3>QA 로그</h3>
 {_bullets(qa_items)}
 <p class="footer">{_e(observability_line(model))}</p>
 <p class="footer">{_e(label_line(model))}</p>

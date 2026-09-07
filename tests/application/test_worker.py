@@ -1154,3 +1154,53 @@ async def test_이력이_없으면_보여준_것도_없다():
                                  snapshots=snapshots)
     assert await worker.run_once("c-1") == "closed"
     assert snapshots.get("c-1").history_shown == []
+
+
+async def test_경과는_파킹과_재개를_가로질러_합산된다():
+    # 리뷰 돌연변이 #13: 누적을 대입으로 바꿔도 초록이었다.
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    deps.engine_cfg = deps.engine_cfg.model_copy(update={"autonomous_question_policy": "park"})
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots, ticker=_ticks(0.0, 1.0, 10.0, 12.5))
+    assert await worker.run_once("c-1") == "awaiting_human"
+    assert await worker.resume_once("c-1", "없다") == "closed"
+    assert snapshots.get("c-1").duration_s == 3.5           # 1.0 + 2.5
+
+
+async def test_메트릭은_스냅샷_저장소가_없어도_남는다():
+    # 리뷰 돌연변이 #12: 커밋이 "가드보다 앞에 둔다"고 주장한 성질에 테스트가 없었다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=None, ticker=_ticks(1.0, 3.0))
+    assert await worker.run_once("c-1") == "closed"
+    assert [r["value"] for r in ledger.metrics("investigation.duration_s")] == [2.0]
+
+
+async def test_이력_조회_실패는_리드의_브리핑에_보인다():
+    # 리뷰 M4 + 돌연변이 R5·R6: 코드를 고쳐도 배선 테스트가 없으면 조용히 되돌아간다.
+    # "이력이 없다"와 "이력을 못 읽었다"는 다른 말이다(조용한 생략 금지).
+    class _Broken(InMemoryCaseRepository):
+        def closed_by_fingerprint(self, *a, **k):
+            raise RuntimeError("mongo down")
+    repo, store, ledger = _Broken(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "closed"
+    prompt = str(deps.lead_llm.calls[0])
+    assert "이력 조회 실패" in prompt and "RuntimeError" in prompt

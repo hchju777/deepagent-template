@@ -74,3 +74,47 @@ def test_게이트는_건수와_라벨률을_둘_다_요구한다():
 
 def test_종결_케이스가_없으면_라벨률은_0이고_게이트는_닫힌다():
     assert label_stats(repo=_repo(), labels=InMemoryLabelStore()).gate_open is False
+
+
+def test_게이트의_n은_종결_케이스의_라벨만_센다():
+    # 리뷰 M2: 진행 중 케이스 27건을 라벨한 것만으로 게이트가 열렸다 — 그때 대조 가능한
+    # 데이터는 종결 3건뿐이다.
+    repo, labels = _repo(closed=4, open_=27), InMemoryLabelStore()
+    for i in range(3):
+        submit_label(f"c-{i}", agreement="correct", repo=repo, labels=labels, clock=lambda: T)
+    for i in range(27):
+        submit_label(f"o-{i}", agreement="correct", repo=repo, labels=labels, clock=lambda: T)
+    stats = label_stats(repo=repo, labels=labels)
+    assert stats.labeled_cases == 30 and stats.gate_open is False
+
+
+def test_라벨률은_절반_초과여야_한다():
+    # 리뷰 돌연변이 #9: 경계(정확히 절반)가 미검증이었다.
+    repo, labels = _repo(closed=60), InMemoryLabelStore()
+    for i in range(30):                       # 정확히 50% — 초과가 아니다
+        submit_label(f"c-{i}", agreement="correct", repo=repo, labels=labels, clock=lambda: T)
+    assert label_stats(repo=repo, labels=labels).gate_open is False
+
+
+def test_집계는_저장소가_두_번째_호출에서_죽어도_raise하지_않는다():
+    class _Flaky(InMemoryCaseRepository):
+        calls = 0
+
+        def list_by_status(self, status):
+            type(self).calls += 1
+            if type(self).calls > 1:
+                raise RuntimeError("mongo down")
+            return super().list_by_status(status)
+    stats = label_stats(repo=_Flaky(), labels=InMemoryLabelStore())
+    assert stats.gate_open is False
+
+
+def test_라벨_표현은_저장소_장애에도_빈_목록이다():
+    # 리뷰 돌연변이 #10·#11: try/except와 None 가드 둘 다 테스트가 없었다.
+    from src.application.labels import label_texts
+
+    class _Boom(InMemoryLabelStore):
+        def list_for(self, case_id):
+            raise RuntimeError("mongo down")
+    assert label_texts(_Boom(), "c-1") == []
+    assert label_texts(None, "c-1") == []

@@ -184,3 +184,11 @@ def test_푸터는_관측성을_낸다():
 def test_푸터는_라벨_유입구를_낸다():
     html = render_html(_model())
     assert "case label c-1 --agreement" in html
+
+
+def test_렌더된_HTML에_치환되지_않은_자리표시자가_없다():
+    # 리뷰 M1: f-string의 {{...}}가 리터럴로 남아 모든 발행 보고서와 메일에 찍혔다.
+    import re
+    html = render_html(_model(case_file={"round": 1, "qa_log": [{"kind": "round_cap"}]}))
+    leftovers = re.findall(r"\{[a-z_]+\}", html)
+    assert leftovers == [], leftovers

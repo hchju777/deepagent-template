@@ -69,7 +69,7 @@ import contextlib
 from typing import Any, Awaitable, Callable
 
 from src.application.close import close_case
-from src.application.history import find_history
+from src.application.history import read_history
 from src.application.events import case_status_event
 from src.application.graph import build_engine
 from src.application.lifecycle import ENGINE_SCHEMA_VERSION, release_lease, transition
@@ -263,10 +263,11 @@ class InvestigationWorker:
         (_engine_for) deps의 정적 필드는 케이스마다 바꿀 수 없다. State에 실리면
         체크포인트에도 남아 "리드에게 무엇을 보여줬나"가 나중에 복구 가능해진다.
         """
+        read = read_history(record, repo=self._repo, snapshots=self._snapshots,
+                            topology=getattr(deps, "topology", None))
         return record.to_case().model_copy(update={
-            "knowledge_digests": digests,
-            "history": find_history(record, repo=self._repo, snapshots=self._snapshots,
-                                    topology=getattr(deps, "topology", None))})
+            "knowledge_digests": digests, "history": read.hits,
+            "history_error": read.error})
 
     def _engine_for(self, gbm: str, fct: str, deps) -> Any:
         key = (gbm, fct)

@@ -1158,3 +1158,69 @@ def test_patrol_run은_워커에_ticker와_라벨_저장소를_넘긴다(tmp_pat
     main(["patrol", "run", "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert seen.get("ticker") is not None and seen.get("labels") is not None
     assert seen["ticker"]() > 0                      # 단조 소스가 실제로 돈다
+
+
+def test_chat은_워커에_ticker를_넘긴다(tmp_path, monkeypatch):
+    # 리뷰 돌연변이 #15·#16: patrol run만 검증돼 있었다. 인계 #3은 세 곳 전부를 주장한다.
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO("계획 변경 없음\n"))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore()))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
+                        ONE_EVIDENCE_VERDICT_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+    seen = {}
+    real = main_module.InvestigationWorker
+
+    class _Spy(real):
+        def __init__(self, *a, **kw):
+            seen.update(kw)
+            super().__init__(*a, **kw)
+
+    monkeypatch.setattr("src.__main__.InvestigationWorker", _Spy)
+    assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert seen.get("ticker") is not None and seen["ticker"]() > 0
+
+
+def test_case_resume이_발행하는_보고서도_라벨을_보인다(tmp_path, capsys, monkeypatch):
+    # 리뷰 M3: 발행 셸(_build_publisher)이 labels를 안 넘겨 chat·case resume 경로의
+    # 보고서가 "라벨 없음"이라고 거짓말했다 — 규율 8이 경고하는 갈라짐이다.
+    from src.domain.label import RootCauseLabel
+    _chat_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))       # 답하지 않고 파킹
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    labels, checkpointer = InMemoryLabelStore(), InMemorySaver()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), labels))
+    monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: checkpointer)
+    lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON])
+    subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead, "s": subagent}.get(profile, object()))
+    main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
+          "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    case_id = repo.list_by_status("awaiting_human")[0].id
+    labels.append(RootCauseLabel(case_id=case_id, agreement="wrong", labeled_at=T))
+    capsys.readouterr()
+    # 둘째 프로세스를 흉내 — 새 스크립트로 남은 라운드를 완주시킨다(위 테스트와 같은 패턴).
+    lead2 = ScriptedLLM([INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
+    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
+                        lambda profile, *, base_url=None, api_key=None:
+                        {"l": lead2, "s": ToolFake(messages=iter([]))}.get(profile, object()))
+    assert main(["case", "resume", case_id, "--answer", "계획 변경 없음",
+                 "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    report = next((tmp_path / "out").glob(f"{case_id}.*")).read_text(encoding="utf-8")
+    assert "라벨: wrong" in report

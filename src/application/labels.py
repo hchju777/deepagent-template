@@ -56,16 +56,21 @@ def submit_label(case_id: str, *, agreement: Agreement, resolution: Resolution |
 def label_stats(*, repo, labels) -> LabelStats:
     """건수와 게이트 상태. 정확도는 여기서도, 어디서도 계산하지 않는다."""
     try:
-        closed_total = len(repo.list_by_status("closed"))
-        labeled_ids = labels.labeled_case_ids()
-    except Exception:                                              # noqa: BLE001
+        closed_ids = {r.id for r in repo.list_by_status("closed")}   # 한 번만 읽는다
+        labeled_ids = set(labels.labeled_case_ids())
+    except Exception:                                              # noqa: BLE001 — 무raise
         return LabelStats(closed_total=0, labeled_cases=0, gate_open=False,
                           why="라벨 집계 실패")
-    labeled = len({cid for cid in labeled_ids})
-    labeled_closed = len({r.id for r in repo.list_by_status("closed")} & set(labeled_ids))
-    gate_open = labeled >= MIN_LABELS and closed_total > 0 and labeled_closed > closed_total * MIN_RATE
+    closed_total = len(closed_ids)
+    labeled = len(labeled_ids)
+    # 건수 조건도 **종결 케이스의 라벨**에 건다. 전체 라벨에 걸면 진행 중인 케이스 27건을
+    # 라벨한 것만으로 게이트가 열리는데, 그때 대조 가능한 데이터는 종결 3건뿐이다
+    # (검증 리뷰 M2). 캘리브레이션에 쓸 수 있는 라벨만 n으로 센다.
+    labeled_closed = len(closed_ids & labeled_ids)
+    gate_open = (labeled_closed >= MIN_LABELS and closed_total > 0
+                 and labeled_closed > closed_total * MIN_RATE)
     why = (f"라벨 {labeled}건 / 종결 {closed_total}건 (그중 라벨됨 {labeled_closed}건) — "
-           f"게이트: {MIN_LABELS}건 이상 그리고 종결의 절반 초과")
+           f"게이트: 종결 라벨 {MIN_LABELS}건 이상 그리고 종결의 절반 초과")
     return LabelStats(closed_total=closed_total, labeled_cases=labeled,
                       gate_open=gate_open, why=why)
 

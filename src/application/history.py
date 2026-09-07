@@ -11,8 +11,22 @@
 케이스에도 `ev-2`가 있어, 리드가 과거 id를 인용하면 verify의 인용 우주(state.evidence)를
 그대로 통과한다 — 결정론 가드레일이 무력화된다.
 """
+import re
+
 from src.application.briefing import upstream_slice
+from src.config.schema_app import StrictModel
 from src.domain.case import HistoryHit
+
+
+class HistoryRead(StrictModel):
+    """이력 조회의 결과 — 실패는 raise가 아니라 error다(규율 1).
+
+    부분 결과는 유지한다: tier는 강한 순으로 걷고 실패는 뒤쪽 tier에서 나므로, 부분
+    결과는 정답의 **접두사**이지 오염이 아니다. 다만 부분성이 보여야 한다 — 안 보이면
+    리드가 그것을 전부로 읽는다(조용한 생략).
+    """
+    hits: list[HistoryHit] = []
+    error: str | None = None
 
 _TIER_REASON = {
     1: "같은 점검이 같은 대상에서 전에도",
@@ -56,13 +70,19 @@ def find_history(record, *, repo, snapshots, topology, limit: int = 3) -> list[H
     같은 케이스가 여러 tier에 걸리면 **가장 낮은 tier로 한 번만** 담는다 — 같은 케이스가
     두 줄로 보이면 리드가 그 케이스를 두 배로 신뢰한다.
     """
+    return read_history(record, repo=repo, snapshots=snapshots, topology=topology,
+                        limit=limit).hits
+
+
+def read_history(record, *, repo, snapshots, topology, limit: int = 3) -> HistoryRead:
+    """find_history와 같되 실패 사유까지 돌려준다 — 브리핑이 "못 읽었다"를 말할 수 있게."""
     hits: list[HistoryHit] = []
     seen = {record.id}
     try:
         for tier, records in _candidates(record, repo=repo, topology=topology):
             for candidate in records:
                 if len(hits) >= limit:
-                    return hits
+                    return HistoryRead(hits=hits)
                 if candidate.id in seen:
                     continue
                 seen.add(candidate.id)
@@ -70,9 +90,9 @@ def find_history(record, *, repo, snapshots, topology, limit: int = 3) -> list[H
                 if hit is None:
                     continue
                 hits.append(hit.model_copy(update={"tier": tier, "reason": _TIER_REASON[tier]}))
-    except Exception:                                              # noqa: BLE001 — 무raise
-        return hits[:limit]        # 부분 결과는 유지한다 — 이력은 힌트지 계약이 아니다
-    return hits[:limit]
+    except Exception as exc:                                       # noqa: BLE001 — 무raise
+        return HistoryRead(hits=hits[:limit], error=f"{type(exc).__name__}: {exc}")
+    return HistoryRead(hits=hits[:limit])
 
 
 def _candidates(record, *, repo, topology):
@@ -88,7 +108,7 @@ def _candidates(record, *, repo, topology):
                                      exclude_case_id=record.id)
 
 
-def render_history(hits: list[HistoryHit]) -> str:
+def render_history(hits: list[HistoryHit], *, error: str | None = None) -> str:
     """브리핑의 `[유사 이력]` 자리에 들어갈 문자열. evidence id는 나가지 않는다.
 
     tier 사유를 행마다 싣는다 — 없으면 리드가 tier 4(상류에서 전에)를 tier 1(같은 점검이
@@ -97,19 +117,25 @@ def render_history(hits: list[HistoryHit]) -> str:
     lines = []
     for hit in hits:
         cause = hit.component or "원인 미상"
-        summary = _strip_evidence_ids(hit.summary or "")
-        lines.append(f"- {hit.case_id}: {hit.verdict_type or '판정 미상'} / {cause}"
-                     f" (tier {hit.tier} — {hit.reason}) {summary}".rstrip())
+        # 세척은 **조립된 줄 전체**에 건다. 필드별로 걸면 언젠가 새 필드가 빠진다 —
+        # 실제로 그랬다(검증 리뷰 B1: component는 LLM이 쓴 자유 문자열이 스냅샷을 거쳐
+        # 온 것이라 `plan-sync (ev-2 참조)`가 그대로 리드 프롬프트에 실렸다).
+        line = (f"- {hit.case_id}: {hit.verdict_type or '판정 미상'} / {cause}"
+                f" (tier {hit.tier} — {hit.reason}) {hit.summary or ''}").rstrip()
+        lines.append(_strip_evidence_ids(line))
+    if error:
+        lines.append(f"- (이력 조회 실패: {error} — 아래 목록이 전부가 아닐 수 있다)")
     return "\n".join(lines)
 
 
 def _strip_evidence_ids(text: str) -> str:
-    """요약에 섞인 과거 evidence id를 지운다.
+    """과거 evidence id를 지운다 — 어느 필드에서 왔든.
 
-    요약은 LLM이 쓴 산문이라 `ev-2`가 들어 있을 수 있다. 모델에 필드를 안 뒀다고 안전한
-    게 아니다 — 문자열을 통해 새는 경로가 실재한다.
+    모델에 필드를 안 뒀다고 안전한 게 아니다: `component`·`verdict_type`·`summary`가 전부
+    LLM이 쓴 자유 문자열이고, 문자열을 통해 새는 경로가 실재한다(검증 리뷰 B1).
+
+    끝에 \b를 쓰면 안 된다 — "ev-2와"의 "와"는 유니코드 단어 문자라 경계가 아니고,
+    한국어 산문에서 id가 조사에 붙어 나오는 것이 정상이다. 대소문자를 무시하는 이유는
+    리드가 브리핑의 `EV-2`를 보고 판정에 `ev-2`라 적을 수 있기 때문이다.
     """
-    import re
-    # 끝에 \b를 쓰면 안 된다 — "ev-2와"의 "와"는 유니코드 단어 문자라 경계가 아니고,
-    # 한국어 산문에서 id가 조사에 붙어 나오는 것이 정상이다(실제로 이 테스트가 잡았다).
-    return re.sub(r"\bev-\d+", "(증거 생략)", text)
+    return re.sub(r"(?i)\bev-\d+", "(증거 생략)", text)

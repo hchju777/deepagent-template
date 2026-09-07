@@ -508,7 +508,9 @@ class MongoLabelStore(LabelStorePort):
         self._db.labels.insert_one(label.model_dump(mode="json"))
 
     def list_for(self, case_id: str) -> list[RootCauseLabel]:
-        cursor = self._db.labels.find({"case_id": case_id}).sort("labeled_at", 1)
+        # _id를 동점 키로 — 같은 시각의 두 라벨(고정 시계 테스트, 같은 초의 두 요청)의
+        # 순서가 "단 순서대로"라는 append-only 계약을 지키려면 유일 키가 필요하다.
+        cursor = self._db.labels.find({"case_id": case_id}).sort([("labeled_at", 1), ("_id", 1)])
         return [RootCauseLabel.model_validate({k: v for k, v in d.items() if k != "_id"})
                 for d in cursor]
 

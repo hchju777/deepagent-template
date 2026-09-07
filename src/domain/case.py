@@ -102,3 +102,5 @@ class Case(StrictModel):
     # 한 번 조립돼 캐시되므로(worker._engine_for) deps의 정적 필드는 케이스마다 못 바꾼다.
     # State에 실리면 체크포인트에도 남아 "무엇을 보여줬나"가 복구 가능해진다(스냅샷 재료).
     history: list[HistoryHit] = []
+    # 이력 조회가 실패했으면 그 사유. "이력이 없다"와 "못 읽었다"는 다른 말이다.
+    history_error: str | None = None

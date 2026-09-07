@@ -250,3 +250,27 @@ def test_라벨은_기록되고_없는_케이스는_404다(client, rt):
     assert row.agreement == "wrong" and row.actual_root_cause_component == "plan-sync"
     assert client.post("/cases/없음/label", json={"agreement": "correct"}).status_code == 404
     assert client.post(f"/cases/{cid}/label", json={"agreement": "아마도"}).status_code == 422
+
+
+def test_미인가_주체는_라벨도_쓸_수_없다():
+    # 리뷰 돌연변이 #17: visible_record를 지워도 초록이었다.
+    from src.domain.label import InMemoryLabelStore
+    access = AccessPolicy(allow={"alice": ["mx/gumi"]},
+                          subjects={"alice": SecretStr("tok-a"), "bob": SecretStr("tok-b")})
+    rt = _runtime(access=access)
+    client = TestClient(create_app(rt))
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"},
+                      headers={"authorization": "Bearer tok-a"}).json()["case_id"]
+    r = client.post(f"/cases/{cid}/label", json={"agreement": "correct"},
+                    headers={"authorization": "Bearer tok-b"})
+    assert r.status_code == 404 and rt.labels.list_for(cid) == []
+
+
+def test_라벨_저장소_장애는_503이다(client, rt):
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+
+    def boom(label):
+        raise RuntimeError("mongo down")
+    rt.labels.append = boom
+    r = client.post(f"/cases/{cid}/label", json={"agreement": "correct"})
+    assert r.status_code == 503 and r.json()["result"] == "error"

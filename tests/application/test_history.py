@@ -108,3 +108,46 @@ def test_렌더는_evidence_id를_절대_내지_않는다():
     assert "ev-" not in text and "c-old" in text and "plan-sync" in text
     assert "같은 점검이 같은 대상에서 전에도" in text          # tier 사유가 행마다
     assert render_history([]) == ""
+
+
+def test_렌더는_어느_필드에_섞였든_evidence_id를_지운다():
+    # 검증 리뷰 B1: 세척이 summary에만 걸려 component의 id가 리드 프롬프트까지 나갔다.
+    # component는 LLM이 쓴 자유 문자열(CauseLink.component)이 스냅샷을 거쳐 온 것이다.
+    from src.domain.case import HistoryHit
+    text = render_history([
+        HistoryHit(case_id="c-old", tier=1, reason="ev-7 때문에 매칭", verdict_type="ev-5",
+                   component="plan-sync (ev-2 참조)", summary="ev-9가 근거다"),
+        HistoryHit(case_id="ev-3", tier=2, reason="r", component="EV-4 대문자", summary="s")])
+    assert "ev-" not in text.lower()               # 대소문자 어느 쪽도
+    assert "plan-sync" in text and "c-old" in text  # 나머지 정보는 살아 있다
+
+
+def test_이력_조회_실패는_브리핑에_보인다():
+    # 계획의 Global Constraint: 실패는 보고서/브리핑에 보여야 한다(조용한 생략 금지).
+    # "이력이 없다"와 "이력을 못 읽었다"는 다른 말이다.
+    class _Broken(InMemoryCaseRepository):
+        def closed_by_fingerprint(self, *a, **k):
+            raise RuntimeError("mongo down")
+    from src.application.history import read_history
+    assert find_history(_record("now"), repo=_Broken(),
+                        snapshots=InMemoryVerdictSnapshotStore(), topology=TOPO) == []
+    got = read_history(_record("now"), repo=_Broken(), snapshots=InMemoryVerdictSnapshotStore(),
+                       topology=TOPO)
+    assert got.hits == [] and "RuntimeError" in (got.error or "")
+    assert "이력 조회 실패" in render_history(got.hits, error=got.error)
+
+
+def test_대상이_없는_케이스끼리는_tier2로_엮이지_않는다():
+    # 리뷰 돌연변이 #4: locator=None 가드를 지워도 초록이었다 — 상대도 locator가 없어야 잡힌다.
+    repo, snapshots = _fixture()
+    repo.save(_record("old", fp="fp-other", locator=None))
+    _snap(snapshots, "old")
+    assert find_history(_record("now", locator=None), repo=repo, snapshots=snapshots,
+                        topology=TOPO) == []
+
+
+def test_스냅샷이_없는_종결_케이스는_이력에서_빠진다():
+    # 리뷰 돌연변이 #2. 판정 재료가 없으면 리드에게 줄 것이 "옛날에도 뭔가 있었다"뿐이다.
+    repo, snapshots = _fixture()
+    repo.save(_record("old"))                      # 스냅샷을 안 남긴다
+    assert find_history(_record("now"), repo=repo, snapshots=snapshots, topology=TOPO) == []

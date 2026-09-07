@@ -403,7 +403,8 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     # C1/M4: chat·데몬과 같은 발행 배선(on_event/on_closed)을 _build_publisher로
     # 얻어 워커에 넘긴다 — 예전엔 여기가 빠져 있어 case resume만 보고서·메일·
     # 이벤트 없이 케이스를 닫았다(§5.1 "파일 먼저"·§5.4 F6·§5.2 이벤트 구독 미충족).
-    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock,
+                                          labels=p.labels)
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
         checkpointer=checkpointer, clock=clock, owner=owner,
@@ -497,7 +498,8 @@ def _make_event_sink(events: EventStorePort,
     return sink
 
 
-def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock
+def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock,
+                     labels=None
                      ) -> tuple[Callable[[EngineEvent], None], Callable[[str], Awaitable[None]]]:
     """발행용 PatrolDaemon 셸을 조립해 (on_event, on_closed) 쌍을 돌려준다(C1/M4).
 
@@ -517,7 +519,7 @@ def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, cloc
                           checkpointer=checkpointer, clock=clock, judge_llm=None,
                           budget=budget, owner=owner, timezone=app.timezone,
                           on_event=print_event, report_cfg=app.report, mail_sender=mail_sender,
-                          events=events)
+                          events=events, labels=labels)
     return print_event, daemon._publish_report
 
 
@@ -619,7 +621,8 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     checkpointer = build_checkpointer(app.store)
     for site_rt in sites:
         site_rt.deps.store = store    # daemon.py 모듈 docstring과 동일한 불변식
-    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock,
+                                          labels=p.labels)
 
     submitted = asyncio.run(submit_case(
         symptom, gbm=args.gbm, fct=args.fct, concern=args.concern,

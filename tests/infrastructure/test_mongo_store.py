@@ -509,3 +509,26 @@ def test_Mongo_라벨은_쌓이고_케이스별로_읽힌다(db):
     assert rows[1].saw_report is True and rows[1].labeled_by == "hchju"
     assert labels.count() == 3 and labels.labeled_case_ids() == {"c-1", "c-2"}
     assert "case_id_1_labeled_at_1" in db.labels.index_information()
+
+
+def test_ensure_indexes는_메트릭_인덱스도_만든다(db):
+    # 리뷰 돌연변이 #7: 계획이 명시한 인덱스가 미검증이었다.
+    from src.infrastructure.mongo_store import ensure_indexes
+    ensure_indexes(db)
+    assert "name_1_at_-1" in db.metrics.index_information()
+
+
+def test_Mongo_메트릭_prune의_경계는_남긴다(db):
+    # 리뷰 돌연변이 #8: <를 <=로 바꿔도 초록이었다(InMemory엔 경계 테스트가 있다).
+    ledger = MongoLedger(db)
+    ledger.record_metric("m", 1.0, tags={}, at=T)
+    assert ledger.prune_metrics_before(T) == 0 and len(ledger.metrics("m")) == 1
+
+
+def test_Mongo_지문_조회도_자기_자신을_제외한다(db):
+    # 리뷰 돌연변이 #6: Mongo 쪽 지문 exclude가 미검증이었다.
+    repo = MongoCaseRepository(db)
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp-a", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status_since=T, status="closed",
+                         closed_reason="조사 완료"))
+    assert repo.closed_by_fingerprint("fp-a", exclude_case_id="c-1") == []
