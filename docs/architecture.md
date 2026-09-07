@@ -177,8 +177,41 @@ config는 값이 **어디서 오는지**만 선언한다. 잘라낸 표본·필�
            → POST /cases/{id}/answers {answer, key} ─→ submit_answer() ── **기록만** (202)
            → 워커의 requeue가 pending_answer를 집어 answer_case() ── 실행은 여기서
            → GET /cases/{id}/report
+           → POST /cases/{id}/label ─→ submit_label()  ── 실제 원인 되먹임(append-only)
            → GET /cases/{id}  ── CaseDetail: 판정 + candidates(rank 1 = root_cause) + timeline
 ```
+
+## 학습 루프(P8 — 계획 15)
+
+두 기록이 짝이다: `VerdictSnapshot`(기계가 뭐라 했나)과 `RootCauseLabel`(실제로 뭐였나).
+어느 쪽도 나중에 복구할 수 없다 — retention이 90일에 `Verdict`·증거·case_file을 지우고,
+라벨은 사람이 그때 안 주면 영영 없다. 그래서 종결 시점에 남기는 것이 전부다.
+
+- **`Ticker`(`src/application/lifecycle.py`)** — 경과 시간의 소스. `Clock`과 다른 양이고
+  (`datetime.now()` 금지의 목적은 *기록 시점*의 감사, 경과는 재현 불가능한 것이 정상),
+  CLI 경계에서 `time.perf_counter`로 주입한다. 워커가 엔진 구간을 재서 케이스 파일·
+  `VerdictSnapshot.duration_s`·`MetricsSinkPort`에 남긴다(실패 종결 포함 — 빼면 분모에
+  생존 편향). 안 잰 것(토큰)은 **0이 아니라 "미측정"**으로 보고서 푸터에 적는다.
+- **`MetricsSinkPort`(`src/patrol/ledger.py`)** — `LedgerPort` 3분할의 마지막 조각.
+  점검 이력·발송과 달리 **버려도 되는 관측치**라, 호출부가 실패를 삼켜도 되는 유일한
+  레저다(관측성이 조사를 죽이면 안 된다). retention은 `ledger_d`로 같이 걷는다.
+- **이력 tier 검색(`src/application/history.py`)** — 벡터 없이 결정론 사다리로 과거
+  종결 케이스를 찾는다: ①같은 지문 ②같은 대상·같은 사이트 ③같은 대상·다른 사이트
+  ④상류 대상. 낮은 tier로 한 번만, K=3, `degraded`·요약 없는 케이스 제외(워커 실패의
+  잔해는 순수 잡음). 판정 재료는 Store가 아니라 스냅샷에서 읽는다(retention이 Store를
+  비운다). **렌더된 줄 전체에서 evidence id를 지운다** — 과거 id를 리드가 인용하면
+  `verify`의 인용 우주(`state.evidence`)에 이번 케이스의 같은 id가 실재해 그대로
+  통과한다. 조회가 실패하면 브리핑이 그 사실을 말한다("없음"과 다른 말이다).
+  이력은 `Case.history`로 State에 실려 흐른다 — 엔진은 사이트당 한 번 조립돼 캐시되므로
+  `EngineDeps`의 정적 필드로는 케이스마다 바꿀 수 없다.
+- **`RootCauseLabel`·`case label`·`POST /cases/{id}/label`** — append-only, 케이스당 복수.
+  `agreement` 4분류가 component 문자열 비교보다 믿을 만하다(자유 문자열은 절대 일치하지
+  않고, 자동 비교는 우리 정규화기를 측정한다). 보고서 푸터가 라벨 명령을 안내하고 이미
+  달린 라벨을 보인다 — 세 발행 경로 전부.
+- **캘리브레이션 게이트(`src/application/labels.py`)** — 종결 케이스의 라벨 30건 **그리고**
+  종결의 절반 초과 전에는 어떤 정확도도 계산하지 않는다. 임계는 코드가 쥔다(config로 빼면
+  게이트가 협상 대상이 된다). 열려도 낼 것은 상관계수가 아니라 `confidence`별 적중이다 —
+  대상이 범주형이라 Pearson r은 범주 오류다.
 
 보고서 §5의 **Timeline**은 저장된 이벤트 로그를 `ReportModel`이 한 번 유도한 것이다
 (`collect_events`가 `since` 페이지를 끝까지 읽는다). 새 이벤트 종류는 없다 — 6종을

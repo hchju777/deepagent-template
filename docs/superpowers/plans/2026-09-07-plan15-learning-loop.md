@@ -311,6 +311,15 @@ def label_stats(*, repo, labels) -> LabelStats   # closed_total, labeled, rate, 
    없다. P7 Fleet 집계나 관측 대시보드가 첫 소비자가 된다.
 5. **tier 4의 상류는 `upstream_slice(max_depth=3)`에 묶인다** — 더 먼 상류는 안 본다.
    깊이를 늘리면 tier 4가 사실상 "이 사이트의 아무 케이스나"가 된다.
-6. **`_strip_evidence_ids`는 `ev-\d+` 형태만 지운다** — 증거 id 형식이 바뀌면 이 정규식도
-   같이 바뀌어야 한다(`InMemoryCaseStore`가 `ev-N`을 만든다).
+6. **`_strip_evidence_ids`는 `ev-\d+` 형태만 지운다**(대소문자 무시, 조립된 줄 전체에 적용).
+   증거 id 형식이 바뀌면 이 정규식도 같이 바뀌어야 한다(`InMemoryCaseStore`가 `ev-N`을 만든다).
+   검증 리뷰가 잡았듯 필드별로 걸면 새 필드가 언젠가 빠진다.
+8. **Mongo `closed_by_*`가 DB에서 정렬·limit을 안 한다** — `find()`로 전부 끌어와 파이썬에서
+   자른다. 종결 케이스가 쌓이면 tier 조회가 매 케이스 전량 로드다. `status_since`가 없는
+   옛 문서 때문에 DB 정렬이 단순하지 않다(폴백이 `updated_at`).
+9. **resume 경로가 이력을 계산하고 버린다** — `resume_case`는 `Command(resume=...)`뿐이라
+   `case`를 안 받는다. 재개마다 저장소 질의 1~3회가 헛돈다(동작은 옳다 — 체크포인트의 옛
+   이력이 유지되고, 그것이 리드가 실제로 본 것이다).
+10. **`_elapsed`가 파킹 케이스에 대해 샌다** — `_finish`(closed)와 `_fail`만 pop한다. 영영
+    재개되지 않는 파킹 케이스의 항목은 워커 수명 내내 남는다(항목당 float 하나).
 7. **접수 `_save`의 TOCTOU는 그대로다**(계획 13 인계 #1). 지문 재계산도 그 저장을 탄다.
