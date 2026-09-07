@@ -412,9 +412,14 @@ git commit -m "Say which of the five briefing materials actually exist"
 8. **`one_line`은 세 프롬프트를 덮는다 — 브리핑·접수·사이트 선택.** 셋 다 사람이나 HTTP에서
    온 문자열을 `[...]` 섹션 어휘와 함께 싣는다. 가장 무거운 것은 사이트 선택이다: 그 답이
    접근 술어와 조사 대상을 정하는데 증상이 HTTP 원문 그대로 들어간다.
-   **아직 안 덮은 것**: 조사 그래프 내부 프롬프트(`nodes.py`·`subagents.py`·`llm_judge.py`)는
-   대상 시스템 데이터와 LLM 출력을 싣는데 감사되지 않았다. 같은 벡터가 있을 수 있고,
-   그것은 별개 계획이다 — 접기만으로 될지(도구 결과는 여러 줄이 정상이다) 먼저 따져야 한다.
+   **아직 안 덮은 것 — 가설이 아니라 실재한다**(검증 리뷰가 넷 다 실측했다):
+   `nodes.py`의 `_format_qa_log`가 싣는 **사람 답변**(HTTP 원문 — 우리가 방금 접은 것과
+   같은 출처 계열이고 가장 무겁다), `_format_hypothesis_board`의 `statement`(LLM 출력),
+   `_format_task_status`의 `task.error`(서브에이전트·도구), `llm_judge`의 스냅샷 텍스트.
+   evidence summary만 `repr(body)`가 **우연히** 막고 있다(의도된 방어가 아니다).
+   별개 계획이다 — 접기만으로 될지 먼저 따져야 한다(도구 결과는 여러 줄이 정상이다).
+   `render_history`의 `_clean_line`이 이미 두 번째 접기 구현인 것도 함께 정리하라:
+   evidence id 제거를 겸해서 갈라진 것이고, `one_line` 위에 얹는 형태가 맞다.
 9. **`docs_text` 부재 테스트는 그 이름만 지킨다** — 다른 이름으로 같은 섹션을 되살리면
    통과한다. 되돌림 방지에는 충분하고, "생산자 없는 섹션을 두지 않는다"는 성질은 사람이
    리뷰에서 본다(검증 리뷰 F6).
