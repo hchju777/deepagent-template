@@ -6,10 +6,17 @@
 깨졌던 지점들에서 나왔다 — "이렇게 하면 더 안전하다"는 추상적 권고가 아니라,
 "이걸 안 지켜서 실제로 버그가 났었다"는 기록이다.
 
-먼저 읽어야 할 것: [docs/architecture.md](docs/architecture.md)(시스템이
-어떻게 배선돼 있는지)와
-[docs/superpowers/specs/2026-09-02-ops-monitoring-design.md](docs/superpowers/specs/2026-09-02-ops-monitoring-design.md)
-(왜 이렇게 설계됐는지, 단일 진실 소스).
+먼저 읽어야 할 것:
+
+| 문서 | 답하는 질문 |
+|---|---|
+| 이 파일 | **하지 말 것** — 규율과 그것을 어겼을 때 실제로 난 사고 |
+| [docs/file-map.md](docs/file-map.md) | **어느 파일인가** — 파일별 역할과 데이터 흐름 |
+| [docs/for-implementers.md](docs/for-implementers.md) | **어떤 순서인가** — "X를 추가하려면" 레시피와 집행 전 점검표 |
+| [docs/architecture.md](docs/architecture.md) | 어떻게 배선돼 있는가 |
+| [설계 스펙](docs/superpowers/specs/2026-09-02-ops-monitoring-design.md) | 왜 이렇게 설계됐는가(단일 진실 소스) |
+
+작업이 작으면 이 파일과 `for-implementers.md`만으로 충분하다. 큰 기능이면 스펙까지.
 
 ## 절대 규율
 
@@ -200,6 +207,9 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | config 스키마·로더·병합 | `src/config/` |
 | 기동 검증 항목 | `src/boot.py` |
 | CLI | `src/__main__.py` |
+
+파일 89개 전부의 역할과 데이터 흐름은 [docs/file-map.md](docs/file-map.md)에 있다 —
+위 표는 자주 찾는 것만 추린 것이다.
 
 ## 테스트
 
