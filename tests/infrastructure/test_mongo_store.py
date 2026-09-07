@@ -614,7 +614,7 @@ def test_저장소의_모든_쓰기가_같은_직렬화를_쓴다(db):
                           fields={"question": "더 새"}, now=T + timedelta(minutes=3)) is True
 
 
-def test_mongo_라벨도_단_순서를_돌려준다(db):
+def test_같은_프로세스가_단_mongo_라벨은_단_순서를_돌려준다(db):
     # 캘리브레이션이 "케이스당 마지막 라벨"을 `list_for`의 **마지막 행**으로 읽는다 —
     # 두 구현이 같은 순서를 내야 그 규칙이 백엔드에 무관해진다.
     from src.domain.label import RootCauseLabel

@@ -86,7 +86,10 @@ class ConfidenceBucket(StrictModel):
     partially_correct: int = 0
     wrong: int = 0
     excluded_unknown: int = 0   # 분모에서 뺀 수 — 숨기면 n이 작은 이유를 모른다
-    saw_report: int = 0         # 보고서를 보고 라벨한 수(앵커링 의심)
+    # **세어진 라벨이** 보고서를 봤나 — 케이스가 앵커링됐나가 아니다. 마지막 라벨
+    # 한 행에서 agreement와 함께 뽑으므로, 눈감고 달았다가 보고서를 보고 정정한
+    # 케이스는 앵커링으로 세어지고 그 반대는 표시를 잃는다.
+    saw_report: int = 0
 
 
 class Calibration(StrictModel):
@@ -127,8 +130,10 @@ def calibration(*, repo, labels, snapshots) -> Calibration:
             if not history:
                 continue
             # 시각으로 최댓값을 고르면 **같은 시각의 두 라벨**에서 먼저 온 것이 이긴다
-            # (고정 시계 테스트, 같은 초의 두 요청). 저장소가 이미 단 순서를 보장한다 —
-            # `MongoLabelStore.list_for`가 `(labeled_at, _id)`로 정렬하는 이유가 그것이다.
+            # (고정 시계 테스트, 같은 초의 두 요청). 저장소가 단 순서를 보장한다 —
+            # `MongoLabelStore.list_for`가 `(labeled_at, _id)`로 정렬하는 이유다.
+            # ObjectId의 중간 5바이트가 프로세스별 난수라 **같은 초에 다른 프로세스가**
+            # 단 두 라벨은 도착 순서와 어긋날 수 있다(그때는 정정 순서 자체가 모호하다).
             last = history[-1]
             key = snapshot.confidence or "미상"
             bucket = rows.setdefault(key, {"correct": 0, "partially_correct": 0,

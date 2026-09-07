@@ -199,6 +199,12 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     return 0
 
 
+_METRIC_WINDOW = 200
+"""요약이 보는 최근 관측치 수. 전량을 읽지 않는 이유는 이것이 사람이 손으로 치는
+명령이고 보존기간 전체를 하이드레이션할 이유가 없기 때문이다 — 대신 창이 꽉 차면
+출력이 그렇게 말한다."""
+
+
 def _print_investigation_metrics(ledger) -> None:
     """조사 소요의 요약 — 이 포트의 유일한 프로덕션 소비자다(계획 19).
 
@@ -211,20 +217,27 @@ def _print_investigation_metrics(ledger) -> None:
     레저 장애를 삼키는 이유(규율 1): 메트릭은 버려도 되는 관측치다. 관측성이 명령을
     죽이면 관측성이 시스템을 더 나쁘게 만든 것이다.
     """
+    # 계산까지 통째로 감싼다 — 레저 행의 모양이 어긋나도(값이 문자열, tags가 None)
+    # 이 요약 하나 때문에 `patrol status`가 죽으면 안 된다(규율 1의 최외곽 방어).
     try:
-        rows = ledger.metrics("investigation.duration_s")
+        rows = ledger.metrics("investigation.duration_s", limit=_METRIC_WINDOW)
+        if not rows:
+            print("조사 지표: 관측치 없음")
+            return
+        values = sorted(float(row["value"]) for row in rows)
+        failed = sum(1 for row in rows
+                     if (row.get("tags") or {}).get("outcome") == "failed")
+        middle = values[len(values) // 2] if len(values) % 2 else (
+            (values[len(values) // 2 - 1] + values[len(values) // 2]) / 2)
     except Exception as exc:                                       # noqa: BLE001 — 무raise
         print(f"조사 지표: 지표 읽기 실패 — {type(exc).__name__}")
         return
-    if not rows:
-        print("조사 지표: 관측치 없음")
-        return
-    values = sorted(float(row["value"]) for row in rows)
-    failed = sum(1 for row in rows if row.get("tags", {}).get("outcome") == "failed")
-    middle = values[len(values) // 2] if len(values) % 2 else (
-        (values[len(values) // 2 - 1] + values[len(values) // 2]) / 2)
+    # 창이 꽉 찼으면 그렇게 말한다. 안 그러면 사람이 "조사 200건"을 **총계**로 읽는데,
+    # 메트릭 보존이 30일이라 하루 일곱 건이면 넘는다.
+    window = (f" (최근 {_METRIC_WINDOW}건만 봤다 — 더 있을 수 있다)"
+              if len(values) >= _METRIC_WINDOW else "")
     print(f"조사 지표: 조사 {len(values)}건(실패 {failed}건), 소요 중앙값 {middle}초, "
-          f"최장 {values[-1]}초")
+          f"최장 {values[-1]}초{window}")
 
 
 def _cmd_patrol_status(config_root: Path, env: dict) -> int:

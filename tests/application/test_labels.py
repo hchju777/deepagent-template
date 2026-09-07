@@ -174,7 +174,10 @@ def test_unknown_라벨은_분모에서_빠지고_수는_보고된다():
     bucket = next(b for b in calibration(repo=repo, labels=labels,
                                          snapshots=snapshots).buckets
                   if b.confidence == "high")
-    assert bucket.n == bucket.correct + bucket.partially_correct + bucket.wrong
+    # `n == correct + partially + wrong`은 n의 **정의**라 어떤 구현에서도 참이다 —
+    # 항진명제로는 unknown을 wrong에 더하는 변조를 못 잡는다(검증 리뷰 M2a).
+    assert bucket.n == 30 and bucket.correct == 30
+    assert bucket.wrong == 0 and bucket.partially_correct == 0
     assert bucket.excluded_unknown == 1
 
 
@@ -226,3 +229,13 @@ def test_저장소가_던져도_캘리브레이션은_상태로_돌려준다():
     repo, labels, _ = _open_gate(labeled=30)
     result = calibration(repo=repo, labels=labels, snapshots=_Boom())
     assert result.buckets == [] and "실패" in result.why
+
+
+def test_버킷_순서는_결정론적이다():
+    # "표시 순서는 코드가 쥔다"는 주석을 지키는 테스트가 없었다 — 정렬을 없애도,
+    # 역순으로 뒤집어도 통과했다(검증 리뷰 LOW-1).
+    repo, labels, snapshots = _open_gate(labeled=30)
+    for i, confidence in enumerate((None, "low", "medium")):
+        snapshots.put(_snap(f"c-{i}", confidence))
+    result = calibration(repo=repo, labels=labels, snapshots=snapshots)
+    assert [b.confidence for b in result.buckets] == ["high", "medium", "low", "미상"]

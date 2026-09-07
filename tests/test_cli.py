@@ -1537,15 +1537,20 @@ def _status_tree(tmp_path, monkeypatch, ledger):
 
 def test_patrol_status가_조사_지표를_찍는다(tmp_path, capsys, monkeypatch):
     # 기록만 되고 아무도 안 읽던 자리다 — 프로덕션 소비자가 0이었다.
+    # 데이터가 대칭이면 평균과 중앙값이 같아져 "중앙값을 낸다"는 주장을 못 지킨다 —
+    # (10,20,30)은 둘 다 20.0이라 평균으로 바꾸는 변조가 통과했다(검증 리뷰 M11).
+    # 파킹 한 건(1000초)을 섞은 짝수 개수라야 셋(중앙값 공식·평균·최장)이 다 갈린다.
     ledger = InMemoryLedger()
-    for value, outcome in ((10.0, "closed"), (20.0, "closed"), (30.0, "failed")):
+    for value, outcome in ((10.0, "closed"), (20.0, "closed"),
+                           (30.0, "failed"), (1000.0, "closed")):
         ledger.record_metric("investigation.duration_s", value,
                              tags={"gbm": "mx", "fct": "gumi", "outcome": outcome}, at=T)
     _status_tree(tmp_path, monkeypatch, ledger)
     assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
     out = capsys.readouterr().out
-    assert "조사 3건" in out and "실패 1건" in out
-    assert "20.0" in out                      # 중앙값 — 평균은 파킹 한 건이 왜곡한다
+    assert "조사 4건" in out and "실패 1건" in out
+    assert "중앙값 25.0초" in out             # 평균은 265.0 — 파킹 한 건이 통째로 왜곡한다
+    assert "최장 1000.0초" in out             # 그 한 건은 요약이 가리지 말고 이름을 대야 한다
 
 
 def test_지표가_없으면_없다고_말한다(tmp_path, capsys, monkeypatch):
@@ -1564,3 +1569,16 @@ def test_레저가_던져도_status는_다른_정보를_계속_찍는다(tmp_pat
     assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
     out = capsys.readouterr().out
     assert "하트비트" in out and "지표 읽기 실패" in out
+
+
+def test_지표가_창보다_많으면_잘렸다고_말한다(tmp_path, capsys, monkeypatch):
+    # "조사 200건"을 사람은 총계로 읽는다. 실제로는 최근 200건만 본 것이다
+    # (검증 리뷰 MEDIUM-2) — 메트릭 보존이 30일이라 프로덕션에서 쉽게 도달한다.
+    ledger = InMemoryLedger()
+    for i in range(201):
+        ledger.record_metric("investigation.duration_s", float(i),
+                             tags={"gbm": "mx", "fct": "gumi", "outcome": "closed"}, at=T)
+    _status_tree(tmp_path, monkeypatch, ledger)
+    assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "최근 200건" in out and "더 있을 수 있다" in out
