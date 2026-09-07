@@ -35,9 +35,9 @@ class _IntakeLlmOutput(StrictModel):
 
 
 def _prompt(symptom: str, gbm: str, fct: str, locators: list[str]) -> str:
-    locator_list = ", ".join(locators) if locators else "없음"
+    locator_list = one_line(", ".join(locators)) if locators else "없음"
     return (
-        f"[사이트 목록] {gbm}/{fct}\n"
+        f"[사이트 목록] {one_line(f'{gbm}/{fct}')}\n"
         # 브리핑과 같은 이유로 접는다(`briefing.one_line`) — 이 프롬프트도 `[...]`
         # 섹션 어휘를 쓰고, 증상·답변은 HTTP로도 들어온다. 개행 하나면 `[추가 답변]`을
         # 위조해 대상 선택을 흔들 수 있다.

@@ -19,6 +19,7 @@ Redis/Mongo/Kafka와 소스 저장소를 읽을지를 정한다 — 증상 문�
 """
 from typing import Any, Literal
 
+from src.application.briefing import one_line
 from src.application.schemas import parse_structured
 from src.config.schema_app import StrictModel
 
@@ -52,9 +53,12 @@ def _unresolved(sites: list[Site], *, problems: list[str]) -> ScopeResult:
 
 
 def _prompt(symptom: str, sites: list[Site]) -> str:
-    listing = "\n".join(f"- {_label(s)}" for s in sites)
+    # 개행을 접는다(`briefing.one_line`). 이 프롬프트가 정하는 것은 **어느 사이트의
+    # 케이스인가**이고 그 답이 접근 술어와 조사 대상을 결정한다 — 증상은 HTTP로 들어온
+    # 원문이라, 개행 하나면 위조된 `[사이트 후보]`가 진짜 목록보다 먼저 온다.
+    listing = "\n".join(one_line(f"- {_label(s)}") for s in sites)
     return (
-        f"[증상] {symptom}\n"
+        f"[증상] {one_line(symptom)}\n"
         f"[사이트 후보]\n{listing}\n\n"
         "위 증상이 어느 사이트의 문제인지 후보 중에서 정확히 하나를 골라라. "
         "후보 목록에 없는 값을 지어내지 마라 — 확신이 없으면 아무거나 고르지 말고 "
