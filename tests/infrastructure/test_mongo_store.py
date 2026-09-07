@@ -625,3 +625,280 @@ def test_같은_프로세스가_단_mongo_라벨은_단_순서를_돌려준다(d
         store.append(RootCauseLabel(case_id="c-1", agreement=agreement, labeled_at=T))
     assert [row.agreement for row in store.list_for("c-1")] == [
         "wrong", "partially_correct", "correct"]
+
+
+def _closed_doc(repo, cid, *, fp="fp-a", locator=None, at=None):
+    at = at or T
+    repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint=fp, symptom="s", t0=at,
+                         created_at=at, updated_at=at, status_since=at, status="closed",
+                         target_locator=locator, closed_reason="조사 완료"))
+
+
+def test_이력은_DB에서_잘려_온다(db, monkeypatch):
+    # 상한만 단정하면 파이썬 절단으로도 통과한다 — 하이드레이션 건수를 세야 실제로
+    # DB가 잘랐는지 안다.
+    repo = MongoCaseRepository(db)
+    for i in range(25):
+        _closed_doc(repo, f"c-{i:02d}", at=T + timedelta(minutes=i))
+    seen = []
+    original = MongoCaseRepository._to_record
+    monkeypatch.setattr(MongoCaseRepository, "_to_record",
+                        staticmethod(lambda doc: (seen.append(doc), original(doc))[1]))
+    rows = repo.closed_by_fingerprint("fp-a", exclude_case_id="x", limit=10)
+    assert [r.id for r in rows] == [f"c-{i:02d}" for i in range(24, 14, -1)]
+    assert len(seen) == 10               # 25건을 다 만들지 않았다
+
+
+def test_locator_이력도_DB에서_잘려_온다(db, monkeypatch):
+    repo = MongoCaseRepository(db)
+    for i in range(25):
+        _closed_doc(repo, f"c-{i:02d}", locator="rest:/oee", at=T + timedelta(minutes=i))
+    seen = []
+    original = MongoCaseRepository._to_record
+    monkeypatch.setattr(MongoCaseRepository, "_to_record",
+                        staticmethod(lambda doc: (seen.append(doc), original(doc))[1]))
+    rows = repo.closed_by_locators(["rest:/oee"], exclude_case_id="x", limit=5)
+    assert [r.id for r in rows] == [f"c-{i:02d}" for i in range(24, 19, -1)]
+    assert len(seen) == 5
+
+
+def test_정렬용_계산_필드가_레코드로_새지_않는다(db):
+    # CaseRecord는 StrictModel이라 파이프라인이 더한 필드가 남으면 검증 오류다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-1")
+    assert repo.closed_by_fingerprint("fp-a", exclude_case_id="x")[0].id == "c-1"
+
+
+def test_status_since가_없는_옛_레코드도_updated_at으로_정렬된다(db):
+    # status_since는 계획 4b 이후에 생긴 필드다 — 옛 문서에는 없다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-new", at=T)
+    db.cases.update_one({"id": "c-new"}, {"$unset": {"status_since": ""}})
+    _closed_doc(repo, "c-old", at=T - timedelta(days=1))
+    db.cases.update_one({"id": "c-old"}, {"$unset": {"status_since": ""}})
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-new", "c-old"]
+
+
+def test_limit_0은_DB에_안_간다(db, monkeypatch):
+    # $limit: 0은 Mongo가 거부한다 — 인메모리 계약(빈 목록)과 같으려면 앞에서 막아야 한다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-1")
+    monkeypatch.setattr(db.cases, "aggregate",
+                        lambda *a, **k: pytest.fail("limit<=0에 DB를 쳤다"))
+    assert repo.closed_by_fingerprint("fp-a", exclude_case_id="x", limit=0) == []
+    assert repo.closed_by_locators(["rest:/oee"], exclude_case_id="x", limit=0) == []
+
+
+def test_두_백엔드가_같은_이력_순서를_낸다(db):
+    # 동점(같은 시각)을 섞는다 — 여기서 갈리면 프로덕션에서만 드러난다.
+    from src.domain.cases import InMemoryCaseRepository
+
+    mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
+    plan = [("c-1", T), ("c-3", T), ("c-2", T - timedelta(days=1)), ("c-5", T), ("c-4", T)]
+    for cid, at in plan:
+        _closed_doc(mongo, cid, at=at)
+        _closed_doc(memory, cid, at=at)
+    assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="c-9")]
+            == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="c-9")]
+            == ["c-5", "c-4", "c-3", "c-1", "c-2"])
+
+
+def test_정각에_닫힌_케이스가_최신으로_뒤집히지_않는다(db):
+    # 시각은 ISO **문자열**로 저장되고 pydantic은 마이크로초가 0이면 소수부를 생략한다.
+    # 'Z'(0x5A) > '.'(0x2E)라 사전순 정렬은 정각을 같은 초의 모든 시각보다 최신으로 본다 —
+    # 이 파일 docstring이 범위 비교 세 곳에서 이미 금지한 함정이다.
+    # **더 최신인 쪽에 더 작은 id**를 준다 — 안 그러면 소수부를 통째로 버려도 id 동점
+    # 키가 우연히 같은 답을 내서, 결함을 되살리는 변조가 통과한다(검증 리뷰 M5b·M6).
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-2", at=T)                                    # 소수부 없음
+    _closed_doc(repo, "c-1", at=T + timedelta(microseconds=500000))
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-1", "c-2"]
+
+
+def test_정각이_섞이면_DB_절단이_다른_집합을_고르지_않는다(db):
+    # 순서만 어긋나는 게 아니다 — $limit이 더 최신인 케이스를 잘라낸다.
+    # 시간 역순으로 id를 준다 — 소수부가 뭉개지면 id 동점 키가 정확히 반대 답을 낸다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-c", at=T)                                    # 소수부 없음
+    _closed_doc(repo, "c-b", at=T + timedelta(microseconds=300000))
+    _closed_doc(repo, "c-a", at=T + timedelta(microseconds=600000))
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x",
+                                                     limit=2)] == ["c-a", "c-b"]
+
+
+def test_두_백엔드가_소수초가_섞여도_같은_순서를_낸다(db):
+    from src.domain.cases import InMemoryCaseRepository
+
+    mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
+    # 같은 초 안에서 id 순서와 시각 순서를 **반대로** 둔다.
+    plan = [("c-3", T), ("c-2", T + timedelta(microseconds=1)),
+            ("c-1", T + timedelta(microseconds=999999)), ("c-4", T - timedelta(days=1))]
+    for cid, at in plan:
+        _closed_doc(mongo, cid, at=at)
+        _closed_doc(memory, cid, at=at)
+    assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == ["c-1", "c-2", "c-3", "c-4"])
+
+
+def test_저장되는_시각_문자열은_두_폭뿐이다():
+    # 정렬 키 정규화가 이 성질에 기댄다 — 소수부는 없거나 정확히 6자리다.
+    # 직렬화가 바뀌면 정렬이 조용히 썩는 대신 이 테스트가 깨져야 한다.
+    from pydantic_core import to_jsonable_python
+    widths = {len(to_jsonable_python(T.replace(microsecond=us)))
+              for us in (0, 1, 500, 500000, 999999)}
+    assert widths == {20, 27}
+    # 전제는 **UTC-aware**다 — 오프셋이 붙으면 25/32, naive면 19/26이라 정규화가
+    # 조용히 틀린다. 시계는 전부 `datetime.now(timezone.utc)`라 그 값이 안 생긴다.
+    assert len(to_jsonable_python(T.astimezone(timezone(timedelta(hours=9))))) == 25
+    assert len(to_jsonable_python(T.replace(tzinfo=None))) == 19
+
+
+def test_같은_분_안의_초도_구별한다(db):
+    # 정렬 키를 분 단위로 자르면 초가 뭉개진다 — 같은 분에 닫힌 케이스는 흔하다.
+    # **더 최신인 쪽에 더 작은 id**를 준다 — 안 그러면 초가 뭉개져도 id 동점 키가
+    # 우연히 같은 답을 내서 테스트가 통과한다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-1", at=T + timedelta(seconds=30))
+    _closed_doc(repo, "c-2", at=T)
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-1", "c-2"]
+
+
+def test_status_since가_명시적_null이어도_updated_at으로_정렬된다(db):
+    # 키 부재(옛 문서)와 명시적 null(save가 model_dump로 None을 그대로 쓴다)은 다른
+    # 모양이다 — $ifNull은 둘 다 잡아야 한다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-new", at=T)
+    _closed_doc(repo, "c-old", at=T - timedelta(days=1))
+    db.cases.update_many({}, {"$set": {"status_since": None}})
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-new", "c-old"]
+
+
+def test_동점_id는_사전순이라_자릿수가_다르면_숫자순이_아니다(db):
+    # 동점 키의 목적은 **두 백엔드의 합의**이지 "최신순"이 아니다. c-99 > c-1000이
+    # 되는 것은 의도이고, 두 구현이 같은 답을 내는 것이 계약이다.
+    from src.domain.cases import InMemoryCaseRepository
+
+    mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
+    for cid in ("c-99", "c-1000", "c-100"):
+        _closed_doc(mongo, cid)
+        _closed_doc(memory, cid)
+    assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="x")]
+            == ["c-99", "c-1000", "c-100"])
+
+
+def test_정각에_단_라벨이_뒤에_온_라벨을_앞지르지_않는다(db):
+    # 캘리브레이션(계획 19)이 `list_for`의 **마지막 행**을 "사람의 최종 믿음"으로 읽는다.
+    # 사전순 정렬이 정각을 뒤로 보내면 정정 전 라벨이 세어진다.
+    from src.domain.label import RootCauseLabel
+    from src.infrastructure.mongo_store import MongoLabelStore
+
+    # 삽입 순서와 시간 순서를 **어긋나게** 둔다 — 같게 두면 소수부가 뭉개져도 `_id`
+    # 동점 키가 우연히 정답을 낸다(검증 리뷰 MEDIUM 1: 다른 세 건에 적용한 교정을
+    # 이 테스트에는 안 했다).
+    store = MongoLabelStore(db)
+    for agreement, at in (("wrong", T + timedelta(microseconds=500000)),
+                          ("correct", T),
+                          ("unknown", T + timedelta(seconds=1))):
+        store.append(RootCauseLabel(case_id="c-1", agreement=agreement, labeled_at=at))
+    assert [r.agreement for r in store.list_for("c-1")] == ["correct", "wrong", "unknown"]
+
+
+def test_정각에_생성된_집계_리포트가_최신으로_뒤집히지_않는다(db):
+    # `latest()`는 추세 비교의 유일한 재료다 — 구버전을 돌려주면 비교가 거꾸로 선다.
+    from src.domain.rollup import FleetReport
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    # **최신을 먼저** 넣는다 — 삽입 순서가 시간 순서와 같으면 `_id` 동점 키가 소수부
+    # 없이도 우연히 정답을 낸다(같은 함정을 형제 테스트에서 세 번 밟았다).
+    store = MongoDigestStore(db)
+    for at, digest in ((T + timedelta(microseconds=500000), "new"), (T, "old")):
+        store.put(FleetReport(scenario="s", title="t", concern="operation",
+                              scenario_digest=digest, window_from=T, window_to=T,
+                              generated_at=at))
+    assert store.latest("s").scenario_digest == "new"
+    assert [r.scenario_digest for r in store.list("s")] == ["new", "old"]
+
+
+def test_두_라벨_저장소가_같은_순서를_낸다(db):
+    # 캘리브레이션이 "마지막 행 = 사람의 최종 믿음"으로 읽으므로, 백엔드가 갈리면
+    # 같은 데이터에서 다른 라벨이 세어진다. 인메모리는 정렬을 아예 안 했었다.
+    from src.domain.label import InMemoryLabelStore, RootCauseLabel
+    from src.infrastructure.mongo_store import MongoLabelStore
+
+    mongo, memory = MongoLabelStore(db), InMemoryLabelStore()
+    plan = [("correct", T), ("wrong", T + timedelta(microseconds=1)),
+            ("unknown", T - timedelta(seconds=1)),
+            ("partially_correct", T + timedelta(microseconds=1))]
+    for agreement, at in plan:
+        label = RootCauseLabel(case_id="c-1", agreement=agreement, labeled_at=at)
+        mongo.append(label)
+        memory.append(label)
+    assert ([r.agreement for r in mongo.list_for("c-1")]
+            == [r.agreement for r in memory.list_for("c-1")]
+            == ["unknown", "correct", "wrong", "partially_correct"])
+
+
+def test_집계_리포트는_시나리오별로만_돌려준다(db):
+    # `$match`의 scenario 필터가 무방비였다 — latest()가 다른 시나리오 것을 돌려주면
+    # 추세 비교가 조용히 남의 숫자와 선다(검증 리뷰 MEDIUM 2).
+    from src.domain.rollup import FleetReport
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    store = MongoDigestStore(db)
+    for scenario, at in (("s1", T), ("s2", T + timedelta(days=1))):
+        store.put(FleetReport(scenario=scenario, title="t", concern="operation",
+                              scenario_digest=scenario, window_from=T, window_to=T,
+                              generated_at=at))
+    assert store.latest("s1").scenario_digest == "s1"
+    assert [r.scenario_digest for r in store.list("s1")] == ["s1"]
+    assert store.latest("없음") is None
+
+
+def test_집계_리포트_목록의_상한(db):
+    from src.domain.rollup import FleetReport
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    store = MongoDigestStore(db)
+    for i in range(25):
+        store.put(FleetReport(scenario="s", title="t", concern="operation",
+                              scenario_digest=f"d{i:02d}", window_from=T, window_to=T,
+                              generated_at=T + timedelta(minutes=i)))
+    assert len(store.list("s")) == 20                     # 기본 상한
+    assert [r.scenario_digest for r in store.list("s", limit=2)] == ["d24", "d23"]
+    assert store.list("s", limit=0) == []
+
+
+def test_지표는_소수초가_섞여도_최신순이다(db):
+    # `record_metric`이 `isoformat()`을 쓰는 덕에 우연히 안전하다 — 그 우연을 지킨다.
+    ledger = MongoLedger(db)
+    for value, us in ((1.0, 0), (2.0, 1), (3.0, 999999)):
+        ledger.record_metric("m", value, tags={},
+                             at=T + timedelta(seconds=0, microseconds=us))
+    assert [r["value"] for r in ledger.metrics("m")] == [3.0, 2.0, 1.0]
+
+
+def test_두_집계_저장소가_같은_순서를_낸다(db):
+    # 형제 둘(이력·라벨)에는 계약 테스트가 있고 digest에만 없어서, 동점 키를 더한
+    # 커밋이 없던 갈라짐을 만들고도 아무도 못 잡았다(검증 리뷰 MEDIUM 1).
+    from src.domain.rollup import FleetReport, InMemoryDigestStore
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    mongo, memory = MongoDigestStore(db), InMemoryDigestStore()
+    plan = [("first", T), ("second", T), ("third", T),          # 전부 동점
+            ("older", T - timedelta(days=1))]
+    for digest, at in plan:
+        report = FleetReport(scenario="s", title="t", concern="operation",
+                             scenario_digest=digest, window_from=T, window_to=T,
+                             generated_at=at)
+        mongo.put(report)
+        memory.put(report)
+    assert ([r.scenario_digest for r in mongo.list("s")]
+            == [r.scenario_digest for r in memory.list("s")]
+            == ["third", "second", "first", "older"])
+    assert mongo.latest("s").scenario_digest == memory.latest("s").scenario_digest == "third"

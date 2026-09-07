@@ -12,7 +12,20 @@ mongomock·실제 MongoDB 둘 다 기본 설정에서는 저장한 datetime의 t
 prune_sends_before)는 같은 이유로 DB에 $lt를 맡기지 않고 문자열을 파싱해
 Python에서 비교한다 —
 ISO 문자열은 마이크로초 유무로 길이가 달라져 사전식 비교가 시간 순서와
-어긋날 수 있기 때문이다.
+어긋날 수 있기 때문이다(마이크로초가 0이면 pydantic이 소수부를 통째로 생략하고,
+'Z'가 '.'보다 커서 **정각이 그 초의 최신으로 뒤집힌다**).
+
+**정렬은 파싱으로 미룰 수 없다** — 그러려면 전량을 하이드레이션해야 하고 그것이
+바로 계획 20이 없앤 것이다. 그래서 pydantic 직렬화를 정렬하는 세 곳(이력 조회·집계
+리포트·라벨 목록)은 파이프라인 안에서 `_fixed_width_iso`로 폭을 맞춘 뒤 정렬한다.
+
+시각 정렬을 DB에 맡기는 자리는 **넷**이고 네 번째(MongoLedger.metrics)만 헬퍼를 안
+거친다 — 거기는 `at.isoformat()`으로 쓰는데, 그 접미사 `+00:00`의 `+`가 소수부의 `.`보다
+작아 사전순이 시간순과 **우연히** 맞기 때문이다(폭이 고정이라서가 아니다 — 25/32로
+갈린다). 그 자리에 주석으로 적어 뒀다.
+
+**새로 맡길 때 던질 질문은 "폭이 고정인가"가 아니라 "사전순이 시간순과 맞는가"다.**
+나머지 `.sort(...)`는 전부 정수 seq다.
 """
 import re
 from datetime import datetime, timedelta
@@ -23,7 +36,7 @@ from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
-from src.domain.cases import (_newest_first, CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
+from src.domain.cases import (CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
                               lease_is_free, lease_is_held)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
@@ -33,6 +46,32 @@ from src.domain.snapshot import VerdictSnapshot, VerdictSnapshotPort
 from src.domain.store import CaseStorePort, EvidenceRecord
 from src.knowledge.digest import canonical_digest
 from src.patrol.ledger import LedgerPort
+
+
+def _fixed_width_iso(expr):
+    """ISO 문자열 식을 **폭이 고정된** 정렬 키로 만든다: `YYYY-MM-DDTHH:MM:SSffffff`.
+
+    이게 필요한 이유는 모듈 docstring이 범위 비교 세 곳에서 이미 적은 것과 같다 —
+    pydantic은 마이크로초가 0이면 소수부를 **생략**하고, `Z`(0x5A)가 `.`(0x2E)보다
+    크므로 사전순 정렬은 정각을 같은 초의 모든 시각보다 최신으로 본다. 정렬은 범위
+    비교와 달리 파이썬으로 미룰 수 없다(그러려면 전량을 하이드레이션해야 하고, 그것이
+    바로 없애려는 것이다). 그래서 DB 안에서 폭을 맞춘다.
+
+    **UTC-aware일 때** `to_jsonable_python`이 내는 폭은 20(소수부 없음) 또는 27(정확히
+    6자리)뿐이고 `tests/infrastructure/test_mongo_store.py`가 그 성질을 못박는다 —
+    직렬화가 바뀌면 정렬이 조용히 썩는 대신 그 테스트가 깨진다. 오프셋이 붙으면 25/32,
+    naive면 19/26이라 이 정규화가 조용히 틀린다. 그런 값이 안 생기는 근거는 시계가
+    전부 `datetime.now(timezone.utc)`라는 것이다(규율 2가 CLI 경계로 몰아 둔 덕이다).
+
+    `$dateFromString`·`$toDate`를 안 쓰는 이유: mongomock이 둘 다 구현하지 않아
+    오프라인으로 검증할 수 없다(테스트가 실제 시스템을 요구하지 않는다는 규약).
+    """
+    return {"$concat": [
+        {"$substr": [expr, 0, 19]},                       # YYYY-MM-DDTHH:MM:SS
+        {"$cond": [{"$eq": [{"$substr": [expr, 19, 1]}, "."]},
+                   {"$substr": [expr, 20, 6]},            # 6자리 소수부
+                   "000000"]},
+    ]}
 
 
 def _next_seq(db: Database, key: str) -> int:
@@ -357,17 +396,45 @@ class MongoCaseRepository(CaseRepositoryPort):
             {"fingerprint": fp, "status": {"$in": list(OPEN_STATUSES)}})
         return self._to_record(doc) if doc else None
 
+    def _closed_newest_first(self, match: dict, limit: int) -> list[CaseRecord]:
+        """정렬과 절단을 **DB가** 한다 — 10건을 얻으려고 수천 건을 검증하지 않는다.
+
+        `find().sort()`를 못 쓰는 이유: 정렬 키가 `status_since or updated_at`이라
+        coalesce다(`status_since`는 계획 4b 이후에 생겨 옛 문서에는 없다). 그래서
+        집계의 `$ifNull`로 계산 필드를 만든다.
+
+        동점을 `id`로 가르는 것은 인메모리 `_newest_first`와 같은 계약이다 — 두 백엔드가
+        다른 이력을 리드에게 보이면 그 차이는 프로덕션에서만 드러난다.
+
+        `$limit: 0`은 Mongo가 거부하므로 상한이 0 이하면 DB에 가지 않는다(인메모리도
+        빈 목록을 낸다).
+        """
+        if limit <= 0:
+            return []
+        raw = {"$ifNull": ["$status_since", "$updated_at"]}
+        pipeline = [
+            {"$match": match},
+            {"$addFields": {"_closed_at": _fixed_width_iso(raw)}},
+            # $sort와 $limit은 **붙어 있어야** 한다 — 실제 Mongo가 둘을 top-k 정렬로
+            # 합쳐 메모리를 limit으로 묶는다. 사이에 스테이지를 끼우면 계산 필드 위의
+            # 정렬이 후보 전체를 인메모리에 올린다(기본 32MB).
+            {"$sort": {"_closed_at": -1, "id": -1}},
+            {"$limit": limit},
+            # CaseRecord는 StrictModel이다 — 계산 필드를 남기면 검증 오류가 난다.
+            {"$project": {"_closed_at": 0}},
+        ]
+        return [self._to_record(doc) for doc in self._db.cases.aggregate(pipeline)]
+
     def closed_by_fingerprint(self, fp, *, exclude_case_id, limit=10) -> list[CaseRecord]:
-        docs = self._db.cases.find({"status": "closed", "fingerprint": fp,
-                                    "id": {"$ne": exclude_case_id}})
-        return _newest_first([self._to_record(d) for d in docs], limit)
+        return self._closed_newest_first(
+            {"status": "closed", "fingerprint": fp, "id": {"$ne": exclude_case_id}}, limit)
 
     def closed_by_locators(self, locators, *, exclude_case_id, limit=20) -> list[CaseRecord]:
         if not locators:                # 빈 $in도 0건이지만, 의도를 코드로 못박는다
             return []
-        docs = self._db.cases.find({"status": "closed", "target_locator": {"$in": list(locators)},
-                                    "id": {"$ne": exclude_case_id}})
-        return _newest_first([self._to_record(d) for d in docs], limit)
+        return self._closed_newest_first(
+            {"status": "closed", "target_locator": {"$in": list(locators)},
+             "id": {"$ne": exclude_case_id}}, limit)
 
     def list_by_status(self, status) -> list[CaseRecord]:
         return [self._to_record(d) for d in self._db.cases.find({"status": status})]
@@ -442,6 +509,11 @@ class MongoLedger(LedgerPort):
     def metrics(self, name, *, limit=200) -> list[dict]:
         if limit <= 0:
             return []
+        # **이 자리는 `_fixed_width_iso`를 안 거친다** — `record_metric`이 pydantic이
+        # 아니라 `at.isoformat()`으로 쓰기 때문이다. 폭이 고정이라서가 아니다(25/32로
+        # 갈린다): `+`(0x2B)가 `.`(0x2E)보다 작아 소수부 없는 값이 사전순으로 먼저 와서
+        # 시간순과 일치한다. **우연이다** — 직렬화를 `to_jsonable_python`으로 바꾸면
+        # (`Z`가 `.`보다 크다) 즉시 뒤집힌다.
         cursor = self._db.metrics.find({"name": name}).sort("at", -1).limit(limit)
         return [{"name": d["name"], "value": d["value"], "tags": d.get("tags", {}),
                  "at": datetime.fromisoformat(d["at"])} for d in cursor]
@@ -531,8 +603,19 @@ class MongoDigestStore(DigestStorePort):
         self._db.fleet_runs.insert_one(report.model_dump(mode="json"))
 
     def _rows(self, scenario: str, limit: int):
-        cursor = (self._db.fleet_runs.find({"scenario": scenario})
-                  .sort("generated_at", -1).limit(limit))
+        # 정렬 키의 폭을 맞춘다 — `_fixed_width_iso` docstring 참고. 여기서 틀리면
+        # `latest()`가 구버전을 돌려주고, 그것이 추세 비교의 유일한 재료다.
+        if limit <= 0:
+            return []
+        cursor = self._db.fleet_runs.aggregate([
+            {"$match": {"scenario": scenario}},
+            {"$addFields": {"_at": _fixed_width_iso("$generated_at")}},
+            # 동점 키는 형제 둘(이력 `id`, 라벨 `_id`)과 같은 근거다 — 실제 Mongo는
+            # 동점 순서를 규정하지 않아 두 백엔드가 갈린다.
+            {"$sort": {"_at": -1, "_id": -1}},
+            {"$limit": limit},
+            {"$project": {"_at": 0}},
+        ])
         return [FleetReport.model_validate({k: v for k, v in d.items() if k != "_id"})
                 for d in cursor]
 
@@ -561,9 +644,19 @@ class MongoLabelStore(LabelStorePort):
         self._db.labels.insert_one(label.model_dump(mode="json"))
 
     def list_for(self, case_id: str) -> list[RootCauseLabel]:
-        # _id를 동점 키로 — 같은 시각의 두 라벨(고정 시계 테스트, 같은 초의 두 요청)의
-        # 순서가 "단 순서대로"라는 append-only 계약을 지키려면 유일 키가 필요하다.
-        cursor = self._db.labels.find({"case_id": case_id}).sort([("labeled_at", 1), ("_id", 1)])
+        # 1순위는 시각, 동점은 `_id`(삽입 순서)다. 되감긴 시계에서는 **단 순서가 아니다** —
+        # 시각을 1순위로 두는 쪽이 "사람의 최종 믿음"에 가깝다고 보고 고른 것이고,
+        # 인메모리 구현도 같은 계약을 쓴다(`domain/label.py`).
+        #
+        # 정렬 키의 폭도 맞춘다(`_fixed_width_iso`) — 캘리브레이션(계획 19)이 이 목록의
+        # **마지막 행**을 "사람의 최종 믿음"으로 읽으므로, 정각에 단 라벨이 뒤로 밀리면
+        # 정정 전 라벨이 세어진다.
+        cursor = self._db.labels.aggregate([
+            {"$match": {"case_id": case_id}},
+            {"$addFields": {"_at": _fixed_width_iso("$labeled_at")}},
+            {"$sort": {"_at": 1, "_id": 1}},
+            {"$project": {"_at": 0}},
+        ])
         return [RootCauseLabel.model_validate({k: v for k, v in d.items() if k != "_id"})
                 for d in cursor]
 
