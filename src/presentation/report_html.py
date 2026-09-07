@@ -10,7 +10,8 @@ ReportModel만 보고 문자열을 만든다(report.py의 마크다운 렌더러
 """
 from html import escape
 
-from src.presentation.report import digest_summary   # 두 렌더러가 같은 표기를 쓴다
+from src.presentation.report import (digest_summary,   # 두 렌더러가 같은 표기를 쓴다
+                                     observability_line)
 
 _MARKS = {"ok": "✅", "fail": "❌", "warn": "⚠", "skip": "⬜"}
 
@@ -175,7 +176,8 @@ def _render(model) -> str:
 {_bullets(refuted)}
 <h3>검증 문제</h3>
 {_bullets([_e(p) for p in model.verify_problems])}
-<h3>QA 로그</h3>
+<h3>QA 로그</h3>{{qa_placeholder}}
 {_bullets(qa_items)}
+<p class="footer">{_e(observability_line(model))}</p>
 </body></html>
 """

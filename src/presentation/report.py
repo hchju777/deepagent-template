@@ -81,8 +81,28 @@ def _render_md(model: ReportModel) -> str:
         _section4(model.evidence, model.evidence_summaries),
         "",
         _section5(model),
+        "",
+        _footer(model),
     ]
     return "\n".join(sections) + "\n"
+
+
+def observability_line(model) -> str:
+    """푸터 한 줄 — 잰 것과 **못 잰 것**을 같이 말한다(계획 15/P8).
+
+    md·html이 같은 문자열을 쓴다. 여기서 갈리면 두 보고서가 다른 관측치를 말한다.
+    """
+    o = model.observability
+    duration = f"경과 {o.duration_s}s" if o.duration_s is not None else "경과 미측정"
+    rounds = o.rounds if o.rounds is not None else "미상"
+    parts = [duration, f"라운드 {rounds}", f"도구 실패 {o.tool_failures}"]
+    if o.unmeasured:
+        parts.append("미측정: " + ", ".join(o.unmeasured))
+    return "관측성: " + " · ".join(parts)
+
+
+def _footer(model) -> str:
+    return observability_line(model)
 
 
 def write_report(text: str, *, output_dir: str, case_id: str, suffix: str = "md") -> str:

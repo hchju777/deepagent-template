@@ -271,3 +271,12 @@ def test_시각_없는_Timeline_행은_대시로_렌더된다():
     md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T,
                        events=[ev])
     assert "| 1 | - | report_ready | 보고서 p |" in md
+
+
+def test_푸터는_관측성을_잰_것만_말한다():
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, clock=lambda: T,
+                       case_file={**CASE_FILE, "duration_s": 3.5})
+    assert "관측성: 경과 3.5s · 라운드 2 · 도구 실패 1 · 미측정: 토큰" in md
+    unmeasured = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
+                               clock=lambda: T)
+    assert "경과 미측정" in unmeasured and "경과 0" not in unmeasured

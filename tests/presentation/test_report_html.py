@@ -172,3 +172,10 @@ def test_시각_없는_Timeline_행은_대시로_렌더된다():
     ev = EngineEvent.model_construct(event="report_ready", case_id="c-1", at=None, seq=1, data={"path": "p"})
     model = build_report_model(record, verdict=None, evidence=[], case_file={}, clock=lambda: T, events=[ev])
     assert "<tr><td>1</td><td>-</td><td>report_ready</td><td>보고서 p</td></tr>" in render_html(model)
+
+
+def test_푸터는_관측성을_낸다():
+    model = _model(case_file={"round": 2, "duration_s": 3.5,
+                              "plan_tasks": [{"id": "t-1", "status": "error"}]})
+    html = render_html(model)
+    assert "관측성: 경과 3.5s · 라운드 2 · 도구 실패 1 · 미측정: 토큰" in html

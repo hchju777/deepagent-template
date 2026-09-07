@@ -1034,3 +1034,82 @@ async def test_판정_스냅샷은_후보의_컴포넌트를_남긴다():
                                  snapshots=snapshots)
     assert await worker.run_once("c-1") == "closed"
     assert snapshots.get("c-1").alternates == ["twin-state"]
+
+
+# ---- 계획 15(P8): 관측성 ------------------------------------------------------------------
+def _ticks(*values):
+    it = iter(values)
+    return lambda: next(it)                 # 더 불리면 StopIteration — 호출 횟수까지 고정된다
+
+
+async def test_조사는_경과를_재서_케이스_파일과_스냅샷과_sink에_남긴다():
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots, ticker=_ticks(100.0, 103.5))
+    assert await worker.run_once("c-1") == "closed"
+    assert store.get_case_file("c-1")["duration_s"] == 3.5
+    assert snapshots.get("c-1").duration_s == 3.5
+    rows = ledger.metrics("investigation.duration_s")
+    assert [r["value"] for r in rows] == [3.5]
+    assert rows[0]["tags"] == {"gbm": "mx", "fct": "gumi", "outcome": "closed"}
+    assert rows[0]["at"] == T
+
+
+async def test_ticker가_없으면_경과는_미측정이다():
+    # 0으로 적으면 나중에 분모가 거짓이 된다 — 안 잰 것은 안 쟀다고 말한다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {})
+    assert await worker.run_once("c-1") == "closed"
+    assert store.get_case_file("c-1").get("duration_s") is None
+    assert ledger.metrics("investigation.duration_s") == []
+
+
+async def test_실패_종결도_경과를_남긴다(monkeypatch):
+    # 실패한 조사가 분모에서 빠지면 "느린 조사가 더 틀리나"에 생존 편향이 생긴다.
+    import src.application.worker as wm
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+
+    async def boom(*a, **k):
+        raise RuntimeError("엔진 실패")
+    monkeypatch.setattr(wm, "investigate_case", boom)
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: make_e2e_deps(store, lead=[]),
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots, ticker=_ticks(10.0, 11.25))
+    assert await worker.run_once("c-1") == "failed"
+    assert snapshots.get("c-1").duration_s == 1.25
+    assert ledger.metrics("investigation.duration_s")[0]["tags"]["outcome"] == "failed"
+
+
+async def test_메트릭_sink가_던져도_조사는_종결된다():
+    # 관측성이 시스템을 더 나쁘게 만들면 안 된다(규율 1).
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+
+    class _BrokenSink(InMemoryLedger):
+        def record_metric(self, *a, **k):
+            raise RuntimeError("sink down")
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=_BrokenSink(), knowledge_digests_for_site=lambda g, f: {},
+                                 ticker=_ticks(1.0, 2.0))
+    assert await worker.run_once("c-1") == "closed"

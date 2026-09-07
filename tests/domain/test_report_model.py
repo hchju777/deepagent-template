@@ -220,3 +220,15 @@ def test_이벤트_종류가_문자열이_아니어도_행을_잃지_않는다()
     model = build_report_model(_record(), verdict=None, evidence=[], case_file={}, clock=lambda: T,
                                events=[ev])
     assert [(e.event, e.summary) for e in model.timeline] == [("123", "123")]
+
+
+def test_관측성은_잰_것과_못_잰_것을_구별한다():
+    # 토큰은 못 잰다(LLM 콜백 배선 없음). 0으로 적으면 나중에 분모가 거짓이 된다.
+    model = build_report_model(_record(), verdict=_verdict(), evidence=[], clock=lambda: T,
+                               case_file={"round": 2, "duration_s": 3.5, "plan_tasks": [
+                                   {"id": "t-1", "status": "ok"}, {"id": "t-2", "status": "error"}]})
+    assert model.observability.duration_s == 3.5 and model.observability.rounds == 2
+    assert model.observability.tool_failures == 1 and model.observability.unmeasured == ["토큰"]
+    old = build_report_model(_record(), verdict=None, evidence=[], case_file={}, clock=lambda: T)
+    assert old.observability.duration_s is None and old.observability.tool_failures == 0
+    assert "경과" in str(old.observability.unmeasured) or "토큰" in old.observability.unmeasured
