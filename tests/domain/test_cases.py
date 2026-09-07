@@ -77,6 +77,17 @@ def test_locator로_종결_케이스를_찾되_빈_목록은_전체를_긁지_�
     assert [r.id for r in repo.closed_by_locators(["rest:/oee"], exclude_case_id="c-1")] == []
 
 
+def test_같은_시각에_닫힌_케이스는_id_내림차순이다():
+    # 같은 시각의 두 케이스는 흔하다(고정 시계, 한 배치에서 닫힌 것들). 동점 키가 없으면
+    # 파이썬 정렬의 안정성(=삽입 순서)에 기대게 되는데, Mongo에는 그 순서가 없다 —
+    # 두 백엔드가 다른 답을 내고 그 차이는 프로덕션에서만 보인다.
+    repo = InMemoryCaseRepository()
+    for cid in ("c-1", "c-3", "c-2"):
+        _closed(repo, cid, fp="fp-a")
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-3", "c-2", "c-1"]
+
+
 # ---- 계획 17: 답이 어느 질문의 답인가 -----------------------------------------------------
 def _parked(repo, cid="c-1", **kw):
     base = dict(id=cid, gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,

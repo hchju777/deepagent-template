@@ -42,7 +42,7 @@ class LabelStorePort(ABC):
 
     @abstractmethod
     def list_for(self, case_id: str) -> list[RootCauseLabel]:
-        """그 케이스의 라벨을 단 순서대로."""
+        """그 케이스의 라벨을 `labeled_at` 오름차순, 동점은 단 순서대로."""
         ...
 
     @abstractmethod
@@ -60,7 +60,12 @@ class InMemoryLabelStore(LabelStorePort):
         self._labels.append(label)
 
     def list_for(self, case_id):
-        return [l for l in self._labels if l.case_id == case_id]
+        # 시각으로 정렬한 뒤 삽입 순서로 동점을 가른다 — Mongo가 `(labeled_at, _id)`로
+        # 하는 것과 같은 계약이다. 정렬을 안 하면(순수 삽입 순서) 시계가 되감긴 경우에
+        # 두 백엔드가 다른 "마지막 라벨"을 내고, 캘리브레이션(계획 19)이 그것을 사람의
+        # 최종 믿음으로 읽는다.
+        rows = [(i, l) for i, l in enumerate(self._labels) if l.case_id == case_id]
+        return [l for _, l in sorted(rows, key=lambda pair: (pair[1].labeled_at, pair[0]))]
 
     def count(self):
         return len(self._labels)
