@@ -1,0 +1,159 @@
+# 이력 조회를 DB에서 자르기 구현 계획
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** `closed_by_fingerprint`·`closed_by_locators`가 조건에 맞는 종결 케이스를
+**전부 하이드레이션한 뒤** 파이썬에서 정렬·절단하는 것을 멈추고, 정렬과 상한을 Mongo가
+하게 한다.
+
+**Architecture:** 이력 검색(tier 1~4)은 케이스마다 최대 네 번 돈다. 지금 Mongo 구현은
+`find()`가 낸 커서를 통째로 `CaseRecord`로 만들고(`_to_record`가 문서마다 pydantic 검증을
+돈다) `_newest_first`가 파이썬에서 정렬한 뒤 `[:limit]`한다. 같은 지문이나 같은 locator의
+종결 케이스가 수천 건이면 10건을 얻으려고 수천 건을 검증한다. 정렬 키가
+`status_since or updated_at`이라 `find().sort()`로는 표현이 안 되므로 집계 파이프라인의
+`$ifNull`을 쓴다.
+
+**Tech Stack:** Python 3.12, pymongo(동기), mongomock, pytest.
+
+## Global Constraints
+
+- 규율 1(무raise): 이 층은 저장소 계약이라 예외가 정상이다 — 새 예외를 만들지 않는다.
+- 규율 5: `CaseRecord`는 `StrictModel`이다 — **파이프라인이 만든 계산 필드를 그대로
+  넘기면 검증 오류**다. 반드시 `$project`로 지운다.
+- 두 백엔드(인메모리·Mongo)가 **같은 순서**를 내야 한다. 지금 계약 테스트가 없다.
+- 주석·문서는 한국어 WHY, 커밋 메시지는 영어.
+- 테스트: `rm -rf output/; .venv/bin/python -B -m pytest tests/ -q -p no:cacheprovider`
+
+## 지금 사실(구현 전 실측)
+
+```
+src/infrastructure/mongo_store.py:360  closed_by_fingerprint → find() 전량 → _newest_first
+src/infrastructure/mongo_store.py:365  closed_by_locators    → find() 전량 → _newest_first
+src/domain/cases.py:209                _newest_first(records, limit)  # 파이썬 정렬
+```
+
+- `$match`가 쓸 인덱스는 이미 있다(`(status, fingerprint)`, `(status, target_locator)`).
+  없는 것은 **정렬과 절단**이다.
+- `_newest_first`의 동점 처리는 파이썬 `sorted`의 안정성에 기댄 dict 삽입 순서다 —
+  Mongo의 동점 순서는 규정돼 있지 않으므로 **두 백엔드가 갈린다**. 지금은 그것을
+  잡는 테스트가 없다.
+
+## File Structure
+
+| 파일 | 책임 |
+|---|---|
+| `src/domain/cases.py` (수정) | `_newest_first`의 동점 키를 명시 |
+| `src/infrastructure/mongo_store.py` (수정) | 두 질의를 집계로, 정렬·절단을 DB에서 |
+| `tests/domain/test_cases.py` (수정) | 동점 순서 |
+| `tests/infrastructure/test_mongo_store.py` (수정) | DB 절단·계약 일치 |
+
+---
+
+### Task 1: 동점 순서를 두 백엔드가 합의하게 한다
+
+**Files:**
+- Modify: `src/domain/cases.py`
+- Test: `tests/domain/test_cases.py`
+
+**Interfaces:**
+- Produces: `_newest_first(records, limit)` — 정렬 키가 `(종결 시각 내림, id 내림)`
+
+같은 시각의 두 케이스는 실제로 흔하다(고정 시계 테스트, 같은 배치에서 닫힌 케이스).
+동점 키가 없으면 Mongo와 인메모리가 다른 답을 내고, 그 차이는 프로덕션에서만 보인다.
+
+- [ ] **Step 1: 실패하는 테스트를 쓴다**
+
+```python
+def test_같은_시각의_종결_케이스는_id_내림차순이다():
+    repo = InMemoryCaseRepository()
+    for cid in ("c-1", "c-3", "c-2"):
+        repo.save(CaseRecord(id=cid, ..., status="closed", status_since=T))
+    assert [r.id for r in repo.closed_by_fingerprint("fp", exclude_case_id="x")] == \
+        ["c-3", "c-2", "c-1"]
+```
+
+- [ ] **Step 2: 실패를 확인한다** (지금은 삽입 순서라 `["c-1","c-3","c-2"]`)
+
+- [ ] **Step 3: 구현** — `key=lambda r: (r.status_since or r.updated_at, r.id)`
+
+- [ ] **Step 4: 전체 스위트** — 기존 테스트가 옛 동점 순서에 기대는지 확인한다.
+
+- [ ] **Step 5: 커밋**
+
+---
+
+### Task 2: Mongo가 정렬하고 자른다
+
+**Files:**
+- Modify: `src/infrastructure/mongo_store.py`
+- Test: `tests/infrastructure/test_mongo_store.py`
+
+**Interfaces:**
+- Produces: `_history_pipeline(match: dict, limit: int) -> list[dict]` (모듈 수준 헬퍼)
+
+```python
+def _history_pipeline(match, limit):
+    return [
+        {"$match": match},
+        # 정렬 키가 coalesce라 find().sort()로는 표현이 안 된다. status_since는 계획 4b
+        # 이후에 생긴 필드라 옛 레코드에는 없다.
+        {"$addFields": {"_closed_at": {"$ifNull": ["$status_since", "$updated_at"]}}},
+        {"$sort": {"_closed_at": -1, "id": -1}},
+        {"$limit": limit},
+        # CaseRecord는 StrictModel이다 — 계산 필드를 남기면 검증 오류가 난다.
+        {"$project": {"_closed_at": 0}},
+    ]
+```
+
+`limit <= 0`은 DB에 가기 전에 빈 목록이다 — `$limit: 0`은 Mongo가 거부한다.
+
+- [ ] **Step 1: 실패하는 테스트를 쓴다**
+
+```python
+def test_이력은_DB에서_잘려_온다(db, monkeypatch):
+    # 상한만 단정하면 파이썬 절단으로도 통과한다 — 하이드레이션 건수를 센다.
+    repo = MongoCaseRepository(db)
+    for i in range(25):
+        repo.save(CaseRecord(id=f"c-{i}", ..., status="closed", fingerprint="fp",
+                             status_since=T + timedelta(minutes=i)))
+    seen = []
+    original = MongoCaseRepository._to_record
+    monkeypatch.setattr(MongoCaseRepository, "_to_record",
+                        staticmethod(lambda doc: seen.append(doc) or original(doc)))
+    rows = repo.closed_by_fingerprint("fp", exclude_case_id="x", limit=10)
+    assert [r.id for r in rows] == [f"c-{i}" for i in range(24, 14, -1)]
+    assert len(seen) == 10                      # 전량 하이드레이션이 아니다
+
+
+def test_계산_필드가_레코드로_새지_않는다(db): ...
+def test_limit_0은_DB에_안_간다(db): ...
+def test_두_백엔드가_같은_순서를_낸다(db): ...   # 동점 포함
+```
+
+- [ ] **Step 2~4: RED → 구현 → GREEN**
+
+- [ ] **Step 5: 커밋**
+
+---
+
+### Task 3: 문서
+
+**Files:**
+- Modify: `docs/architecture.md`
+
+- [ ] **Step 1: 이력 검색 절에 절단 지점을 적는다** — 정렬 키가 coalesce라 집계를 쓴다는
+  것과, 동점을 `id`로 가르는 이유(두 백엔드 합의)를 적는다.
+
+- [ ] **Step 2: 커밋**
+
+---
+
+## 인계(계획 20 이후)
+
+1. **`$sort`가 계산 필드 위에서 도므로 인덱스를 못 쓴다** — `$match`가 인덱스로 후보를
+   좁힌 뒤의 인메모리 정렬이다(기본 32MB 한도). 같은 지문·같은 locator의 종결 케이스가
+   그 한도를 넘길 규모가 되면 `status_since`를 쓰기 시점에 항상 채우고 그 필드로 직접
+   정렬해야 한다 — 그건 데이터 마이그레이션이다.
+2. **`list_by_status`는 여전히 전량 하이드레이션이다** — `label_stats`·`calibration`이
+   종결 케이스 전부를 `CaseRecord`로 만들어 id만 쓴다(계획 19 인계 4번). 같은 계열의
+   부채이고, id만 내는 포트 메서드가 답이다.
