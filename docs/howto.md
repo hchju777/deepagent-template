@@ -119,12 +119,14 @@ curl -s -X POST localhost:8080/cases -H 'content-type: application/json' \
 #   조사에 들어간다. 조용히 "정상 개설"처럼 보이지 않게 응답에 싣는다
 
 # 접수가 되물었으면 답한다(턴 하나 — 다음 질문 또는 완료가 응답에 온다)
+# question_seq(GET /cases/c-1에 실려 온다)를 함께 보내면 그 사이 질문이 바뀌었을 때 409다
 curl -s -X POST localhost:8080/cases/c-1/intake-answers -H 'content-type: application/json' \
-  -d '{"answer": "라인 7"}'
+  -d '{"answer": "라인 7", "question_seq": 1}'
 
 # 조사 중 그래프가 되물었으면(GET /cases/c-1의 question) 답을 **싣는다** — 실행은 워커가
+# question_seq를 실으면 그 사이 조사가 다음 질문으로 넘어갔을 때 409로 거절한다
 curl -s -X POST localhost:8080/cases/c-1/answers -H 'content-type: application/json' \
-  -d '{"answer": "계획 변경 없음", "key": "2026-09-04T09:00-c-1"}'
+  -d '{"answer": "계획 변경 없음", "key": "2026-09-04T09:00-c-1", "question_seq": 1}'
 # → 202 {"result": "accepted"}. 같은 key로 다시 보내면 duplicate — 재시도가 안전하다
 
 # Fleet 집계 — 선언을 보고, 지금 한 번 돌린다(스케줄은 데몬이 시나리오당 1회 등록)

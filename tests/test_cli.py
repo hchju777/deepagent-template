@@ -1339,3 +1339,137 @@ def test_scenario_run의_기본_출력은_보고서_디렉터리_아래다(tmp_p
     import inspect
     src = inspect.getsource(main_module._cmd_scenario)
     assert 'Path(app.report.output_dir) / "fleet"' in src
+
+
+def test_case_show가_질문_번호를_보인다(tmp_path, capsys, monkeypatch):
+    # 사람이 `case resume --question-seq`에 되돌려 적을 재료다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human",
+                         question="계획 변경이 있었나?", question_kind="investigation",
+                         question_seq=3))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
+    assert main(["case", "show", "c-1", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "계획 변경이 있었나?" in out and "#3" in out      # 날짜의 3이 아니라 번호
+
+
+def test_case_resume은_지나간_질문_번호를_거절한다(tmp_path, capsys, monkeypatch):
+    # 사람이 Q1을 보고 답을 쓰는 사이 조사가 Q2로 넘어갔으면 그 답은 Q2의 답이 아니다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="Q2",
+                         question_kind="investigation", question_seq=2))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
+    code = main(["case", "resume", "c-1", "--answer", "Q1의 답", "--question-seq", "1",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 2
+    assert "질문" in capsys.readouterr().err
+    assert repo.get("c-1").status == "awaiting_human"        # 재개하지 않았다
+
+
+def test_chat도_방금_읽은_질문_번호를_실어_보낸다():
+    # 검증 리뷰 M-2: 파킹 중에는 lease가 풀려 있어 "사람이 3분간 답을 쓰는 사이 데몬이
+    # Q2로 파킹"이 정확히 여기서 일어난다. 방금 읽은 번호를 넘기기만 하면 된다.
+    import inspect
+    src = inspect.getsource(main_module._drive_chat)
+    assert "expect_seq=current.question_seq" in src
+
+
+def test_case_resume의_대조는_lease_아래에서_한다():
+    import inspect
+    src = inspect.getsource(main_module._cmd_case_resume)
+    assert "expect_seq=args.question_seq" in src
+
+
+async def test_chat은_질문이_바뀌면_새_질문으로_다시_묻는다(tmp_path, capsys):
+    # 검증 리뷰 N-2: 답을 버리고 영문 토큰만 보이면 사람은 무슨 일인지 알 수 없다.
+    from types import SimpleNamespace
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="Q1",
+                         question_kind="investigation", question_seq=1))
+    asked, results = [], iter(["stale_question", "closed"])
+
+    async def ask(question):
+        asked.append(question)
+        if len(asked) == 1:      # 사람이 답을 쓰는 사이 질문이 바뀐다
+            repo.save(repo.get("c-1").model_copy(update={"question": "Q2", "question_seq": 2}))
+        return "답"
+
+    async def fake_answer_case(*a, **kw):
+        return next(results)
+
+    import src.__main__ as m
+    real = m.answer_case
+    m.answer_case = fake_answer_case
+    try:
+        rt = SimpleNamespace(deps=SimpleNamespace(topology=None))
+        app = SimpleNamespace(engine=SimpleNamespace(max_intake_turns=3),
+                              report=SimpleNamespace(output_dir=str(tmp_path), format="md"))
+        from src.application.intake import IntakeTurn
+
+        class _Worker:
+            async def run_once(self, case_id, *, interaction_policy="autonomous"):
+                return "awaiting_human"
+
+        code = await m._drive_chat(SimpleNamespace(), rt, repo, store, _Worker(), lambda: T, ask,
+                                   app, "c-1", IntakeTurn(status="done"), lambda e: None)
+    finally:
+        m.answer_case = real
+    assert asked == ["Q1", "Q2"]                      # 새 질문으로 다시 물었다
+    assert "질문이 바뀌었다" in capsys.readouterr().out
+
+
+async def test_chat의_접수_루프도_질문이_바뀌면_다시_묻는다(tmp_path, capsys):
+    # 검증 리뷰 R-2: 앞 테스트는 IntakeTurn(status="done")으로 들어가 접수 루프를 건너뛴다.
+    from types import SimpleNamespace
+    from src.application.intake import IntakeTurn
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="Q1",
+                         question_kind="intake", question_seq=1, intake_done=False))
+    asked, seen = [], []
+    turns = iter([IntakeTurn(status="stale_question", problems=["질문이 바뀌었다"]),
+                  IntakeTurn(status="done")])
+
+    async def ask(question):
+        asked.append(question)
+        if len(asked) == 1:      # 사람이 답을 쓰는 사이 새 질문이 올라온다
+            repo.save(repo.get("c-1").model_copy(update={"question": "Q2", "question_seq": 2}))
+        return "답"
+
+    async def fake_intake_turn(case_id, **kw):
+        seen.append(kw.get("expect_seq"))
+        return next(turns)
+
+    import src.__main__ as m
+    real = m.intake_turn
+    m.intake_turn = fake_intake_turn
+    try:
+        rt = SimpleNamespace(deps=SimpleNamespace(topology=None))
+        app = SimpleNamespace(engine=SimpleNamespace(max_intake_turns=3),
+                              report=SimpleNamespace(output_dir=str(tmp_path), format="md"))
+
+        class _Worker:
+            async def run_once(self, case_id, *, interaction_policy="autonomous"):
+                return "closed"
+
+        await m._drive_chat(SimpleNamespace(), rt, repo, store, _Worker(), lambda: T, ask,
+                            app, "c-1", IntakeTurn(status="asking", question="Q1"),
+                            lambda e: None)
+    finally:
+        m.intake_turn = real
+    assert asked == ["Q1", "Q2"]           # 새 질문으로 다시 물었다
+    assert seen == [1, 2]                   # 묻기 직전 읽은 번호를 매번 실어 보냈다
+    assert "접수 질문이 바뀌었다" in capsys.readouterr().out

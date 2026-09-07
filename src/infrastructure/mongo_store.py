@@ -17,6 +17,7 @@ ISO 문자열은 마이크로초 유무로 길이가 달라져 사전식 비교�
 import re
 from datetime import datetime, timedelta
 
+from pydantic_core import to_jsonable_python
 from pymongo import ReturnDocument
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
@@ -230,7 +231,7 @@ class MongoCaseRepository(CaseRepositoryPort):
         """
         return self._db.cases.update_one({"id": case_id, **guard}, {"$set": fields}).matched_count == 1
 
-    def attach_answer(self, case_id, *, answer, key, now):
+    def attach_answer(self, case_id, *, answer, key, now, expect_seq=None):
         # 두 바퀴: 첫 CAS가 지면 다시 읽어 **왜** 졌는지로 분류하고 한 번 더 시도한다.
         # 재귀로 두면 끝이 없다 — 술어가 문서와 영원히 안 맞는 경우(필드 부재를
         # 기본값으로 걸었던 버그)에 RecursionError였다. 두 번 다 지면 남이 계속 바꾸는
@@ -242,12 +243,15 @@ class MongoCaseRepository(CaseRepositoryPort):
                 return "not_found"
             if first_seq is not None and doc.get("question_seq") != first_seq:
                 # 첫 CAS가 진 이유가 파킹(질문이 바뀜)이면 둘째 바퀴가 같은 답을 새 질문에
-                # 싣는다 — 클라이언트는 옛 질문을 보고 썼다(리뷰 L2).
-                return "not_waiting"
+                # 싣는다 — 클라이언트는 옛 질문을 보고 썼다(리뷰 L2). 번호를 실어 보낸
+                # 클라이언트에게는 그 사실을 정확한 이름으로 돌려준다(계획 17).
+                return "stale_question" if expect_seq is not None else "not_waiting"
             first_seq = doc.get("question_seq")
             record = self._to_record(doc)
             if record.answer_key == key:
                 return "duplicate"
+            if expect_seq is not None and record.question_seq != expect_seq:
+                return "stale_question"
             if record.status != "awaiting_human" or record.question_kind != "investigation" \
                     or record.question_seq <= record.answered_seq:
                 return "not_waiting"
@@ -264,10 +268,27 @@ class MongoCaseRepository(CaseRepositoryPort):
                      "pending_answer": None, "question_seq": doc.get("question_seq"),
                      "answered_seq": doc.get("answered_seq"), "answer_key": doc.get("answer_key"),
                      "owner": doc.get("owner"), "lease_until": doc.get("lease_until")}
+            # 불변식을 명시적으로 남긴다: 사전검사를 지난 이상 `expect_seq`는 읽은 값과
+            # 같으므로 바로 위 `"question_seq": doc.get(...)`와 **중복**이다(검증 리뷰 M2).
+            # 읽고 나서 파킹이 일어난 경우를 실제로 잡는 것은 이 줄이 아니라 재분류
+            # 두 바퀴다 — 테스트가 방어한다고 주장하지 않도록 여기 적어 둔다.
+            if expect_seq is not None:
+                guard["question_seq"] = expect_seq
             if self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,
-                                          "updated_at": now.isoformat()}):
+                                          "updated_at": to_jsonable_python(now)}):
                 return "accepted"
         return "busy"
+
+    def update_if(self, case_id, *, expect, fields, now) -> bool:
+        # 술어도 저장도 `save`와 **같은 직렬화**를 쓴다. `.isoformat()`은 `+00:00`을 내고
+        # `model_dump(mode="json")`은 `Z`를 내므로, 둘을 섞으면 술어가 영원히 안 맞는다 —
+        # Mongo 배포에서 접수가 100% 실패했고 인메모리 테스트에는 안 보였다(검증 리뷰 B1).
+        guard = {k: to_jsonable_python(v) for k, v in expect.items()}
+        result = self._db.cases.update_one(
+            {"id": case_id, **guard},
+            {"$set": {**{k: to_jsonable_python(v) for k, v in fields.items()},
+                      "updated_at": to_jsonable_python(now)}})
+        return bool(result.matched_count)
 
     def take_answer(self, case_id, *, now):
         doc = self._db.cases.find_one({"id": case_id})
@@ -281,7 +302,7 @@ class MongoCaseRepository(CaseRepositoryPort):
         if not self._cas(case_id, {"pending_answer": answer, "answer_key": doc.get("answer_key"),
                                    "question_seq": doc.get("question_seq")},
                          {"pending_answer": None, "answered_seq": doc.get("question_seq", 0),
-                          "updated_at": now.isoformat()}):
+                          "updated_at": to_jsonable_python(now)}):
             return None            # 그 사이 남이 가져갔다
         return answer
 
@@ -298,7 +319,7 @@ class MongoCaseRepository(CaseRepositoryPort):
                                    "question_seq": doc.get("question_seq"),
                                    "answered_seq": doc.get("answered_seq")},
                          {"pending_answer": answer, "answered_seq": seq - 1,
-                          "updated_at": now.isoformat()})
+                          "updated_at": to_jsonable_python(now)})
 
     def claim(self, case_id, owner, *, now, ttl_s):
         doc = self._db.cases.find_one({"id": case_id})

@@ -2,10 +2,14 @@
 
 ```
 POST /cases                      202 {case_id, status, question?}   / 400 미확정 / 403 / 401
-POST /cases/{id}/intake-answers  200 {status, question?, target_locator?} / 409 / 404
-POST /cases/{id}/answers         202 {result} / 409 / 404 / 503(저장소 장애)
+POST /cases/{id}/intake-answers  200 {status, question?, target_locator?} / 409(not_ours·stale_question) / 404
+POST /cases/{id}/answers         202 {result} / 409(pending·busy·not_waiting·stale_question) / 404 / 503
 POST /cases/{id}/label           202 {result} / 404 — 실제 원인 되먹임(append-only)
 ```
+
+`/intake-answers`의 409는 본문이 두 모양이다 — `stale_question`은 턴 모양
+(`{status, question, target_locator, problems}`), `not_ours`는 `{detail: {problems}}`.
+클라이언트가 한 벌로 처리할 수 없으니 상태 코드만 보고 본문 모양을 가정하지 마라.
 
 `api`는 실행자가 아니다 — `/answers`는 **기록만** 한다. 워커가 집어 간다.
 """
@@ -34,11 +38,17 @@ class NewCase(StrictModel):
 
 class IntakeAnswer(StrictModel):
     answer: str
+    # 조사 답변(`Answer`)과 대칭이다 — 읽기 표면이 접수 질문의 번호를 내주는데 쓰기
+    # 표면이 거부하면 웹 UI가 접수 되묻기에 답하는 순간 그대로 경합에 노출된다.
+    question_seq: int | None = None
 
 
 class Answer(StrictModel):
     answer: str
     key: str
+    # 클라이언트가 **본** 질문 번호(If-Match). 안 보내면 예전처럼 받는다 — 기존
+    # 클라이언트를 깨지 않는다. 보내면 그 사이 질문이 바뀌었을 때 409로 거절한다.
+    question_seq: int | None = None
 
 
 def _event_sink(rt):
@@ -85,11 +95,17 @@ async def post_intake_answer(case_id: str, body: IntakeAnswer, request: Request,
         raise hidden()              # 비활성 사이트의 케이스 — 존재 여부를 숨긴다
     turn = await intake_turn(case_id, repo=rt.repo, store=rt.store, deps=site,
                              topology=site.topology, clock=rt.clock, answer=body.answer,
-                             max_turns=rt.app.engine.max_intake_turns, on_event=_event_sink(rt))
+                             max_turns=rt.app.engine.max_intake_turns, on_event=_event_sink(rt),
+                             expect_seq=body.question_seq)
     if turn.status == "not_ours":
         raise HTTPException(status_code=409, detail={"problems": turn.problems})
-    return {"status": turn.status, "question": turn.question,
-            "target_locator": turn.target_locator, "problems": turn.problems}
+    body_out = {"status": turn.status, "question": turn.question,
+                "target_locator": turn.target_locator, "problems": turn.problems}
+    if turn.status == "stale_question":
+        # `POST /answers`의 `stale_question`과 같은 코드를 쓴다 — 두 표면이 같은 사실을
+        # 다른 코드로 말하면 클라이언트가 두 벌의 처리를 짠다.
+        return JSONResponse(status_code=409, content=body_out)
+    return body_out
 
 
 @router.post("/cases/{case_id}/answers", status_code=202)
@@ -97,9 +113,11 @@ async def post_answer(case_id: str, body: Answer, request: Request,
                       subject: str | None = Depends(current_subject)):
     rt = runtime_of(request)
     visible_record(rt, subject, case_id)
-    result = submit_answer(case_id, body.answer, key=body.key, repo=rt.repo, clock=rt.clock)
+    result = submit_answer(case_id, body.answer, key=body.key, repo=rt.repo, clock=rt.clock,
+                           expect_seq=body.question_seq)
     status: Literal[202, 409, 503] = (503 if result == "error"
-                                      else 409 if result in ("not_waiting", "pending", "busy")
+                                      else 409 if result in ("not_waiting", "pending", "busy",
+                                                            "stale_question")
                                       else 202)
     return JSONResponse(status_code=status, content={"result": result})
 

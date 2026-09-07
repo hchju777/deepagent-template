@@ -20,7 +20,8 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
                       max_intake_turns: int = 3,
                       interaction_policy: str = "autonomous",
                       on_problem: Callable[[str], None] | None = None,
-                      on_event: Callable[[Any], None] | None = None) -> str:
+                      on_event: Callable[[Any], None] | None = None,
+                      expect_seq: int | None = None) -> str:
     """답을 넣고 다음 단계까지 진행한다. 워커와 같은 어휘를 돌려준다.
 
     - 접수 질문이었으면 접수를 이어간다. 접수가 끝나면 **그대로 조사를 시작한다** —
@@ -39,12 +40,17 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
     if record is not None and record.question_kind == "intake":
         turn = await intake_turn(case_id, repo=repo, store=store, deps=deps,
                                  topology=topology, clock=clock, answer=answer,
-                                 max_turns=max_intake_turns, on_event=on_event)
+                                 max_turns=max_intake_turns, on_event=on_event,
+                                 expect_seq=expect_seq)
         # 접수가 왜 실패했는지가 호출부에 안 닿으면 `case resume` 사용자는 절대
         # 못 본다 — 반환값 한 단어에는 담기지 않는다.
         for problem in turn.problems:
             if on_problem is not None:
                 on_problem(problem)
+        if turn.status == "stale_question":
+            # 접수 질문도 조사 질문과 같은 어휘로 돌려준다 — 호출부가 두 종류를
+            # 구별해 다룰 이유가 없다(둘 다 "다시 읽고 다시 답하라"다).
+            return "stale_question"
         if turn.status == "asking":
             return "awaiting_human"
         if turn.status == "not_ours":
@@ -57,4 +63,4 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
         # error도 조사에 넣는 이유: 대상 없이 조사하는 것이 기존 "이중 실패"의
         # 착지점이고, 여기서 멈추면 사람이 답한 케이스가 조용히 방치된다.
         return await worker.run_once(case_id, interaction_policy=interaction_policy)
-    return await worker.resume_once(case_id, answer)
+    return await worker.resume_once(case_id, answer, expect_seq=expect_seq)

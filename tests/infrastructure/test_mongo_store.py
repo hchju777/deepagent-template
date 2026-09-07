@@ -532,3 +532,83 @@ def test_Mongo_지문_조회도_자기_자신을_제외한다(db):
                          created_at=T, updated_at=T, status_since=T, status="closed",
                          closed_reason="조사 완료"))
     assert repo.closed_by_fingerprint("fp-a", exclude_case_id="c-1") == []
+
+
+# ---- 계획 17: 질문 대조와 접수 CAS(인메모리와 같은 계약) ---------------------------------
+def test_Mongo도_다른_질문의_답을_거절한다(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo, question_seq=2)
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=1) == "stale_question"
+    assert db.cases.find_one({"id": "c-1"}).get("pending_answer") is None
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=2) == "accepted"
+
+
+def test_읽은_뒤의_파킹은_재분류에서_잡힌다(db):
+    # 사전검사를 지난 뒤 파킹이 일어나면 첫 CAS가 지고, 둘째 바퀴가 번호가 바뀐 것을
+    # 보고 stale_question으로 분류한다. (술어의 `question_seq` 줄은 읽은 값 술어와
+    # 중복이라 이 경로를 잡는 것은 재분류다 — 검증 리뷰 M2.)
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo, question_seq=2)
+    _interleave(db, "c-1", before_cas={"question_seq": 3, "question": "Q3"})
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=2) == "stale_question"
+    assert db.cases.find_one({"id": "c-1"}).get("pending_answer") is None
+
+
+def test_Mongo의_조건부_저장은_읽은_뒤의_쓰기에_진다(db):
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    stale = repo.get("c-1").updated_at
+    # 남의 쓰기도 **프로덕션 경로**(repo.save)로 낸다 — 테스트가 직접 타임스탬프를 써 넣으면
+    # 우리 직렬화를 한 번도 안 지나 술어가 우연히 맞거나 우연히 틀린다(검증 리뷰 B1).
+    repo.save(repo.get("c-1").model_copy(update={"updated_at": T + timedelta(minutes=1),
+                                                 "question": "남이 바꿈"}))
+    assert repo.update_if("c-1", expect={"updated_at": stale},
+                          fields={"question": "내 것"}, now=T) is False
+    assert db.cases.find_one({"id": "c-1"})["question"] == "남이 바꿈"
+    fresh = repo.get("c-1").updated_at
+    assert repo.update_if("c-1", expect={"updated_at": fresh},
+                          fields={"question": "내 것", "intake_done": True},
+                          now=T) is True
+    doc = db.cases.find_one({"id": "c-1"})
+    assert doc["question"] == "내 것" and doc["intake_done"] is True
+    assert repo.get("c-1").updated_at == T
+    assert repo.update_if("없음", expect={"updated_at": T}, fields={}, now=T) is False
+
+
+def test_조건부_저장은_save가_쓴_형식과_맞는다(db):
+    # 검증 리뷰 B1: 술어를 `.isoformat()`으로 만들면 `save`의 model_dump(mode="json")가
+    # 쓴 `...Z`와 영원히 안 맞아 Mongo 배포에서 접수가 100% 실패했다. 테스트가 직접
+    # 타임스탬프를 써 넣으면 프로덕션 쓰기 경로를 한 번도 안 지난다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)                        # repo.save로 만든다 — 프로덕션과 같은 경로
+    record = repo.get("c-1")
+    assert repo.update_if(
+        "c-1", expect={"updated_at": record.updated_at}, fields={"question": "새"},
+        now=T + timedelta(minutes=1)) is True
+    assert db.cases.find_one({"id": "c-1"})["question"] == "새"
+
+
+def test_조건부_저장은_소유_필드가_바뀌어도_진다(db):
+    # 검증 리뷰 M-5: 술어가 updated_at 하나면 고정 시계에서 진 턴도 이긴다.
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    record = repo.get("c-1")
+    repo.save(repo.get("c-1").model_copy(update={"question": "남이 바꿈"}))   # 시각은 그대로
+    assert repo.update_if("c-1", expect={"updated_at": record.updated_at,
+                                         "question": record.question},
+                          fields={"target_locator": "rest:/oee"}, now=T) is False
+    assert db.cases.find_one({"id": "c-1"}).get("target_locator") is None
+
+
+def test_저장소의_모든_쓰기가_같은_직렬화를_쓴다(db):
+    # 검증 리뷰 N19: attach_answer가 쓴 updated_at 위에서 update_if의 술어가 도는지 —
+    # 한 곳만 `.isoformat()`으로 돌아가도 CAS가 조용히 영원히 진다(B1의 형태).
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T + timedelta(minutes=1)) == "accepted"
+    record = repo.get("c-1")
+    assert repo.update_if("c-1", expect={"updated_at": record.updated_at},
+                          fields={"question": "새"}, now=T + timedelta(minutes=2)) is True
+    after = repo.get("c-1")
+    assert repo.update_if("c-1", expect={"updated_at": after.updated_at},
+                          fields={"question": "더 새"}, now=T + timedelta(minutes=3)) is True

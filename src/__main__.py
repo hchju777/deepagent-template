@@ -21,7 +21,7 @@ from src.application.labels import label_stats, label_texts, submit_label
 from src.config.loader import load_scenarios
 from src.fleet.run import run_scenario, scenario_sites
 from src.presentation.fleet_report import render_fleet_html, render_fleet_md
-from src.application.intake import intake_turn
+from src.application.intake import IntakeTurn, intake_turn
 from src.application.submit import submit_case
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.boot import validate_boot
@@ -369,7 +369,8 @@ def _cmd_case_show(args, config_root: Path, env: dict) -> int:
     print(f"소유자: {record.owner or '-'}  "
          f"임차 만료: {record.lease_until.isoformat() if record.lease_until else '-'}")
     if record.status == "awaiting_human" and record.question:
-        print(f"파킹된 질문: {record.question}")
+        # 번호를 같이 보인다 — `case resume --question-seq`에 되돌려 적을 재료다(계획 17).
+        print(f"파킹된 질문(#{record.question_seq}): {record.question}")
     if record.closed_reason:
         print(f"종결 사유: {record.closed_reason}")
 
@@ -475,7 +476,13 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         args.case_id, args.answer, repo=repo, store=store, deps=rt.deps,
         topology=rt.deps.topology, worker=worker, clock=clock,
         max_intake_turns=app.engine.max_intake_turns, on_event=on_event,
+        expect_seq=args.question_seq,
         on_problem=lambda p: print(f"접수: {p}", file=sys.stderr)))
+    if result == "stale_question":
+        # lease를 잡은 뒤 대조한 결과다 — 사전검사와 달리 이 판정과 재개 사이에는 창이 없다.
+        print(f"질문이 바뀌었다 — `case show {args.case_id}`로 다시 읽고 답하라",
+              file=sys.stderr)
+        return 2
     if result == "busy":
         # 위의 사전 점검과 실제 획득 사이의 경합(다른 프로세스가 그 사이 lease를 잡은 경우) —
         # resume_once 내부의 repo.claim이 최종 결정권을 가지므로 여기서도 같은 exit 2로 맞춘다.
@@ -595,6 +602,8 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
             for problem in turn.problems:
                 print(f"접수: {problem}", file=sys.stderr)
             break
+        # 사람이 답을 쓰는 사이 접수 질문도 바뀔 수 있다 — 조사 질문과 같은 대조를 건다.
+        asked_seq = repo.get(case_id).question_seq
         try:
             answer = await ask(turn.question)
         except EOFError:
@@ -603,7 +612,14 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
             return 0
         turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
                                  topology=rt.deps.topology, clock=clock, answer=answer,
-                                 max_turns=app.engine.max_intake_turns, on_event=on_event)
+                                 max_turns=app.engine.max_intake_turns, on_event=on_event,
+                                 expect_seq=asked_seq)
+        if turn.status == "stale_question":
+            # LLM을 다시 돌리지 않는다 — 새 질문은 이미 레코드에 있다. 다시 돌리면 턴
+            # 예산을 먹고 남이 방금 올린 질문을 또 다른 질문으로 덮는다(검증 리뷰 R-3).
+            print("그 사이 접수 질문이 바뀌었다 — 새 질문으로 다시 묻는다.")
+            current = repo.get(case_id)
+            turn = IntakeTurn(status="asking", question=current.question or "(질문 없음)")
 
     result = await worker.run_once(case_id, interaction_policy="interactive")
     while result == "awaiting_human":
@@ -620,7 +636,14 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
         result = await answer_case(case_id, answer, repo=repo, store=store, deps=rt.deps,
                                    topology=rt.deps.topology, worker=worker, clock=clock,
                                    max_intake_turns=app.engine.max_intake_turns,
-                                   interaction_policy="interactive", on_event=on_event)
+                                   interaction_policy="interactive", on_event=on_event,
+                                   expect_seq=current.question_seq)
+        if result == "stale_question":
+            # 그 사이 질문이 바뀌었다 — 대화형 루프이므로 새 질문을 다시 읽어 한 번 더
+            # 묻는다. 답을 버리고 영문 토큰만 보이면 사람은 무슨 일인지 알 수 없다.
+            print("그 사이 질문이 바뀌었다 — 새 질문으로 다시 묻는다.")
+            result = "awaiting_human"
+            continue
 
     if result == "closed":
         path = Path(app.report.output_dir) / f"{case_id}.{app.report.format}"
@@ -808,6 +831,10 @@ def main(argv=None) -> int:
         "resume", help=_case_resume_note, description=_case_resume_note)
     p_case_resume.add_argument("case_id")
     p_case_resume.add_argument("--answer", required=True)
+    p_case_resume.add_argument(
+        "--question-seq", type=int, default=None,
+        help="답하려는 질문의 번호(case show가 보인다). 그 사이 조사가 다음 질문으로 "
+             "넘어갔으면 거절한다 — 옛 질문의 답이 새 질문에 붙지 않게")
     p_case_resume.add_argument(
         "--requested-by", default=None,
         help="요청 주체 — access.allow가 비어 있지 않으면 필수. awaiting_human은 "

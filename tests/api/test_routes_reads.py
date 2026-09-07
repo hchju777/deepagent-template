@@ -309,3 +309,13 @@ def test_시나리오가_닿은_사이트를_못_보면_실행_기록도_못_본
                       headers={"authorization": "Bearer tok-a"}).status_code == 404
     assert client.get("/digests/alarm_trend",
                       headers={"authorization": "Bearer tok-b"}).status_code == 200
+
+
+def test_상세가_질문_번호를_낸다(client, rt):
+    # 클라이언트가 되돌려 보낼 재료가 응답에 없으면 If-Match가 쓸모없다.
+    from src.api.models import CaseDetail
+    rt.repo.save(_record("c-1", status="awaiting_human", closed_reason=None,
+                         question="계획 변경이 있었나?", question_kind="investigation",
+                         question_seq=3))
+    body = client.get("/cases/c-1").json()
+    assert CaseDetail.model_validate(body).question_seq == 3

@@ -707,7 +707,7 @@ class InvestigationWorker:
         finally:
             await self._release_safely(case_id)
 
-    async def resume_once(self, case_id: str, answer) -> str:
+    async def resume_once(self, case_id: str, answer, *, expect_seq: int | None = None) -> str:
         """awaiting_human 케이스를 사람의 답변으로 재개한다.
 
         최신 스레드의 저장된 schema 버전이 지금 엔진과 다르면(엔진 배선이
@@ -718,6 +718,10 @@ class InvestigationWorker:
         — 그래야 총 재시작 횟수가 F3와 마찬가지로 최대 1회로 유지된다.
         이 경로도 새 스레드가 investigate_case로 시작해 resume 메커니즘이
         없으므로, 재시작 전에 답변을 evidence로 박제한다(I4).
+
+        `expect_seq`는 사람이 **본** 질문 번호다. 대조를 claim **뒤**에서 하는 이유는
+        `attach_answer`가 싣는 그 한 동작 안에서 대조하는 것과 같다 — lease 밖에서 미리
+        비교하면 그 사이에 파킹이 또 일어난다(계획 17, 검증 리뷰 M-1).
         """
         record = None
         try:
@@ -728,6 +732,10 @@ class InvestigationWorker:
                 return "busy"
             if leased.status == "closed":
                 return "stale"                                      # run_once와 같은 이유
+            if expect_seq is not None and leased.question_seq != expect_seq:
+                # 사람이 본 질문과 지금 질문이 다르다 — 그 답은 이 질문의 답이 아니다.
+                # 재개하지 않고 lease는 finally의 _release_safely가 돌려준다.
+                return "stale_question"
             if leased.pending_answer is not None:
                 # 채널에 실린 답이 있는데 직접 답(case resume)이 먼저 왔다. **lease 아래에서**
                 # 가져간다 — attach는 lease가 살아 있으면 busy로 거절하므로 여기서 본 것이
@@ -791,7 +799,7 @@ class InvestigationWorker:
         """큐에서 나온 케이스 하나를 처리한다 — 실린 답이 있으면 그것부터.
 
         답은 `take_answer`로 **가져가며 지운다**(answered_seq를 맞춘다). 지운 뒤
-        소비가 busy/skipped/not_ours/stale로 끝나면 `restore_answer`로 되돌린다 — 그 사이
+        소비가 busy/skipped/not_ours/stale/stale_question으로 끝나면 `restore_answer`로 되돌린다 — 그 사이
         그래프가 새 질문으로 파킹했으면 되돌리지 않고(옛 답이 새 질문에 붙는다)
         `human:answer_dropped` 증거로 남긴다. "지운 뒤 실패해도 증거로 남아 잃지
         않는다"는 전 커밋의 주장은 거짓이었다 — 그 경로들은 증거 박제 전에 끝난다.
@@ -816,7 +824,9 @@ class InvestigationWorker:
                 topology=getattr(deps, "topology", None), worker=self, clock=self._clock,
                 max_intake_turns=self._max_intake_turns,
                 interaction_policy=record.interaction_policy, on_event=self._on_event)
-            if result in ("busy", "skipped", "not_ours", "stale"):
+            # stale_question도 여기 든다 — 어휘를 넓히면서 이 목록을 안 보면 가져간 답이
+            # restore도 증거도 없이 증발한다(계획 17 검증 리뷰 N-3).
+            if result in ("busy", "skipped", "not_ours", "stale", "stale_question"):
                 if not self._repo.restore_answer(case_id, answer=answer, now=self._clock()):
                     self._store.put_evidence(case_id, "human:answer_dropped",
                                              {"answer": answer, "reason": result},

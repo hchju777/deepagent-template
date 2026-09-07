@@ -3,8 +3,9 @@
 지금 `intake()`는 `ask` 콜백으로 프로세스 안에서 되묻고 문답을 마지막에 한 번
 돌려준다. 그 사이에 클라이언트가 끊기거나 서버가 재시작되면 전부 사라진다.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+import pytest
 
 from src.application.intake import IntakeTurn, intake_turn
 from src.application.open_case import open_case
@@ -284,3 +285,196 @@ async def test_대상을_못_정한_접수는_지문을_그대로_둔다():
     turn = await _turn(case_id, repo, store, _deps(_MISSING), max_turns=0)
     assert turn.status in ("error", "asking")
     assert repo.get(case_id).fingerprint == before
+
+
+# ---- 계획 17: 접수 저장의 CAS -------------------------------------------------------------
+async def test_동시에_온_두_접수_턴은_하나만_이긴다():
+    # 계획 13 리뷰 S3이 실증한 형태: 증거가 중복되고, `awaiting_human`인데
+    # `intake_done=True`이고 대상까지 설정된 모순 레코드가 남았다.
+    case_id, repo, store = _case()
+    seen = []
+    real_save = repo.save
+
+    class _Racing:
+        """LLM이 도는 사이 남이 저장한다 — 읽기와 쓰기 사이의 창을 정확히 재현한다."""
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                current = repo.get(case_id)
+                real_save(current.model_copy(update={"question": "남이 바꿈",
+                                                     "updated_at": T + timedelta(minutes=1)}))
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    assert turn.status == "not_ours", turn
+    after = repo.get(case_id)
+    assert after.question == "남이 바꿈" and after.intake_done is False
+    assert after.target_locator is None          # 모순 레코드가 남지 않는다
+
+
+async def test_아무도_끼어들지_않으면_예전처럼_끝난다():
+    case_id, repo, store = _case()
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED))
+    assert turn.status == "done" and repo.get(case_id).intake_done is True
+
+
+async def test_되묻는_경로도_같은_술어로_보호된다():
+    # 파킹(_park)도 접수가 소유한 필드를 쓴다 — 여기만 CAS가 빠지면 되묻기 턴에서
+    # 같은 모순 레코드가 생긴다.
+    case_id, repo, store = _case()
+    real_save = repo.save
+
+    class _Racing:
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                current = repo.get(case_id)
+                real_save(current.model_copy(update={"question": "남이 바꿈",
+                                                     "updated_at": T + timedelta(minutes=1)}))
+            return SimpleNamespace(content=_MISSING)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    assert turn.status == "not_ours", turn
+    assert repo.get(case_id).question == "남이 바꿈"
+
+
+# ---- 검증 리뷰 B1: Mongo 백엔드로도 접수가 돈다 -------------------------------------------
+@pytest.fixture
+def mongo_repo():
+    import mongomock
+    from src.infrastructure.mongo_store import MongoCaseRepository
+    return MongoCaseRepository(mongomock.MongoClient()["intake_test"])
+
+
+async def test_Mongo_백엔드에서도_접수가_완주한다(mongo_repo):
+    # 인메모리만 도는 테스트는 프로덕션 쓰기 경로(model_dump)를 한 번도 안 지난다.
+    store = InMemoryCaseStore()
+    record = open_case(repo=mongo_repo, store=store, symptom="OEE가 이상하다", gbm="mx",
+                       fct="gumi", concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    turn = await _turn(record.id, mongo_repo, store, _deps(_RESOLVED))
+    assert turn.status == "done", turn
+    after = mongo_repo.get(record.id)
+    assert after.intake_done is True and after.target_locator == "rest:/oee"
+    assert after.status == "open"
+
+
+async def test_Mongo_백엔드에서도_되묻기가_된다(mongo_repo):
+    store = InMemoryCaseStore()
+    record = open_case(repo=mongo_repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    turn = await _turn(record.id, mongo_repo, store, _deps(_MISSING))
+    assert turn.status == "asking", turn
+    after = mongo_repo.get(record.id)
+    assert after.status == "awaiting_human" and after.question == "어느 라인인가?"
+
+
+async def test_고정_시계에서도_두_턴이_모두_이기지_않는다():
+    # 검증 리뷰 M-5: 술어가 updated_at 하나면 이긴 턴이 쓴 값이 진 턴이 읽은 값과 같아
+    # 둘 다 이긴다. 이 리포의 시계는 항상 고정값이므로(규율 2) 그 조건이 상시다.
+    # A가 사람에게 물어 파킹하는 동안 B가 완료로 덮으면 질문이 답도 못 받고 사라진다.
+    case_id, repo, store = _case()
+
+    class _Racing:
+        """B의 LLM이 도는 사이 A(되묻기 턴)가 통째로 끝난다 — 인위적 시각 조작 없이."""
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                await intake_turn(case_id, repo=repo, store=store, deps=_deps(_MISSING),
+                                  topology=TOPO, clock=lambda: T)
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    after = repo.get(case_id)
+    assert turn.status == "not_ours", turn
+    # A가 물은 질문이 살아 있다 — B가 덮지 않았다.
+    assert after.status == "awaiting_human" and after.question == "어느 라인인가?"
+    assert after.intake_done is False and after.target_locator is None
+
+
+async def test_접수가_소유하지_않은_필드가_바뀌어도_진다():
+    # 술어의 시각이 그것을 잡는다 — 게이트가 finding을 붙이는 등 남의 쓰기가 있었으면
+    # 이 턴이 읽은 스냅샷은 이미 낡았다.
+    case_id, repo, store = _case()
+
+    class _Racing:
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                current = repo.get(case_id)
+                repo.save(current.model_copy(update={
+                    "finding_ids": ["f-1"], "updated_at": T + timedelta(minutes=1)}))
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    assert turn.status == "not_ours", turn
+    assert repo.get(case_id).finding_ids == ["f-1"]      # 남의 쓰기가 살아 있다
+
+
+async def test_접수_질문도_번호를_대조한다():
+    # 검증 리뷰 N-1: 이 웨이브의 회귀. 접수 분기가 expect_seq를 통째로 버려, Q1을 보고
+    # 쓴 답이 Q2의 답으로 박제되고 접수가 그대로 완주했다.
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+    parked = repo.get(case_id)
+    assert parked.question_seq == 1
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="Q1의 답", expect_seq=99)
+    assert turn.status == "stale_question", turn
+    after = repo.get(case_id)
+    assert after.status == "awaiting_human" and after.intake_done is False
+    assert [r for r in store.list_evidence(case_id) if r.source == "human:answer"] == []
+
+
+async def test_번호가_맞으면_접수는_그대로_이어진다():
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="라인 7", expect_seq=1)
+    assert turn.status == "done" and repo.get(case_id).intake_done is True
+
+
+async def test_같은_문구로_다시_묻는_두_턴이_모두_이기지_않는다():
+    # 검증 리뷰 N-4: 질문 문구가 같으면 소유 필드가 하나도 안 바뀌어 술어가 통과했다.
+    # 유령 파킹이 번호를 부풀리면 #1을 읽고 답한 사람이 거짓 stale_question을 받는다.
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+
+    class _Racing:
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                await intake_turn(case_id, repo=repo, store=store, deps=_deps(_MISSING),
+                                  topology=TOPO, clock=lambda: T, answer="답")
+            return SimpleNamespace(content=_MISSING)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()), answer="답")
+    assert turn.status == "not_ours", turn
+    assert repo.get(case_id).question_seq == 2      # 1→2, 3으로 뛰지 않는다
+
+
+async def test_언파킹은_전이_시각을_찍는다():
+    # 검증 리뷰 M16: `_SAVED_FIELDS`에서 status_since를 빼도 초록이었다.
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+    parked_since = repo.get(case_id).status_since
+    later = T + timedelta(hours=1)
+    turn = await intake_turn(case_id, repo=repo, store=store, deps=_deps(_RESOLVED),
+                             topology=TOPO, clock=lambda: later, answer="라인 7")
+    assert turn.status == "done"
+    after = repo.get(case_id)
+    assert after.status == "open" and after.status_since == later != parked_since

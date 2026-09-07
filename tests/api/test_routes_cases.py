@@ -275,3 +275,42 @@ def test_라벨_저장소_장애는_503이다(client, rt):
     rt.labels.append = boom
     r = client.post(f"/cases/{cid}/label", json={"agreement": "correct"})
     assert r.status_code == 503 and r.json()["result"] == "error"
+
+
+def test_지나간_질문에_대한_답은_409_stale_question이다(client, rt):
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+    rt.repo.save(rt.repo.get(cid).model_copy(update={
+        "status": "awaiting_human", "question": "Q2", "question_kind": "investigation",
+        "question_seq": 2}))
+    r = client.post(f"/cases/{cid}/answers",
+                    json={"answer": "Q1의 답", "key": "k-1", "question_seq": 1})
+    assert r.status_code == 409 and r.json()["result"] == "stale_question"
+    assert rt.repo.get(cid).pending_answer is None
+    ok = client.post(f"/cases/{cid}/answers",
+                     json={"answer": "Q2의 답", "key": "k-1", "question_seq": 2})
+    assert ok.status_code == 202 and ok.json()["result"] == "accepted"
+
+
+def test_번호를_안_보내면_예전처럼_받는다(client, rt):
+    # 하위 호환 — 기존 클라이언트를 깨지 않는다.
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+    rt.repo.save(rt.repo.get(cid).model_copy(update={
+        "status": "awaiting_human", "question": "q", "question_kind": "investigation",
+        "question_seq": 2}))
+    assert client.post(f"/cases/{cid}/answers",
+                       json={"answer": "a", "key": "k"}).json()["result"] == "accepted"
+
+
+def test_접수_답변도_질문_번호를_대조한다(client, rt):
+    # 검증 리뷰 R-1: 읽기 표면은 접수 질문의 번호를 내주는데 쓰기 표면이 거부했다 —
+    # 웹 UI가 접수 되묻기에 답하는 순간 그대로 노출된다.
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+    rt.repo.save(rt.repo.get(cid).model_copy(update={
+        "status": "awaiting_human", "question": "Q2", "question_kind": "intake",
+        "question_seq": 2, "intake_done": False}))
+    r = client.post(f"/cases/{cid}/intake-answers",
+                    json={"answer": "Q1의 답", "question_seq": 1})
+    assert r.status_code == 409 and r.json()["status"] == "stale_question"
+    assert rt.repo.get(cid).intake_done is False
+    ok = client.post(f"/cases/{cid}/intake-answers", json={"answer": "라인 7", "question_seq": 2})
+    assert ok.status_code == 200

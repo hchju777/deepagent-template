@@ -106,14 +106,16 @@ def test_대조는_CAS_술어에도_들어간다(db):
 
 **Files:** Modify `src/domain/cases.py`, `src/infrastructure/mongo_store.py`, `src/application/intake.py` · Test `tests/domain/test_cases.py`, `tests/infrastructure/test_mongo_store.py`, `tests/application/test_intake_turn.py`
 
-**Interfaces:** `update_if_unchanged(case_id, *, expect_updated_at: datetime, fields: dict, now: datetime) -> bool`. 읽은 시점의 `updated_at`을 술어로 건 조건부 저장.
+**Interfaces:** `update_if(case_id, *, expect: dict, fields: dict, now: datetime) -> bool`. 읽은
+시점의 값(시각 + 접수 소유 필드)을 술어로 건 조건부 저장. 집행 중 이름과 술어가 함께
+넓어졌다 — 시각 하나로는 고정 시계에서 두 턴이 모두 이긴다(인계 #3).
 
 - [ ] **Step 1: 실패하는 테스트**
   - 인메모리·Mongo: 그 사이 남이 저장했으면 `False`이고 **아무것도 안 바뀐다**.
   - `_interleave`로 읽기와 CAS 사이에 남의 쓰기를 끼워 넣어 실제로 지는 경로를 지난다.
   - 접수: 같은 케이스에 두 턴이 동시에 돌면 **둘째가 `not_ours`로 손을 뗀다**(증거 중복도 모순 레코드도 없다).
   - 접수가 이긴 쪽은 예전과 똑같이 진행한다.
-- [ ] **Step 2: RED** → **Step 3:** 구현. `_save`가 `repo.get` → 가드 → `update_if_unchanged` 순으로 가고, 지면 `not_ours` 문구를 돌려준다.
+- [ ] **Step 2: RED** → **Step 3:** 구현. `_save`가 `repo.get` → 가드 → `update_if` 순으로 가고, 지면 `not_ours` 문구를 돌려준다.
 - [ ] **Step 4: GREEN + 돌연변이**(CAS를 평범한 save로, 술어에서 `updated_at` 제거) → **Step 5: 커밋** `"Make the intake save conditional on what it read"`.
 
 ---
@@ -134,4 +136,37 @@ def test_대조는_CAS_술어에도_들어간다(db):
 
 ## 인계(계획 17 이후)
 
-(집행 뒤 채운다.)
+1. **번호는 선택이다** — 안 보내는 클라이언트는 예전 경합에 그대로 노출된다. 강제하려면
+   `Answer.question_seq`를 필수로 올리고 기존 클라이언트를 깨야 한다. 웹 UI가 생기면 결정한다.
+2. **`stale_question`은 답을 보관하지 않는다** — 사람이 쓴 답이 버려진다. 큐잉(늦은 답을
+   다음 질문에 이월)은 의도적으로 안 했다: 사람이 무엇에 답했는지 모르는 채 옮기는 것이
+   문제의 원인이다.
+3. **접수 CAS의 술어는 시각 + 접수 소유 필드다** — 시각 하나로는 고정 시계에서 둘 다
+   이긴다(검증 리뷰 M-5). 소유 필드를 함께 걸어 닫았고 단조 카운터를 새로 만들지 않았다.
+   접수가 새 필드를 쓰게 되면 `_expect`와 `_SAVED_FIELDS` **둘 다** 갱신해야 한다.
+4. **`_SAVED_FIELDS`가 접수 소유 필드의 유일한 목록이다** — 접수가 새 필드를 쓰게 되면
+   여기 더해야 하고, 안 더하면 그 필드가 조용히 저장되지 않는다.
+5. **대조의 자리는 질문의 종류가 정한다** — 조사 질문은 `resume_once`가 lease를 잡은
+   뒤에(사전검사로 두면 그 판정과 재개 사이가 통째로 창이다 — 검증 리뷰 M-1), 접수
+   질문은 `intake_turn`이 레코드를 읽은 직후에(그 `record`가 곧 CAS 술어가 된다)
+   비교한다. CLI·chat·HTTP **세 표면 전부** 번호를 그리로 흘린다 — HTTP 접수는 뒤늦게
+   붙었다(검증 리뷰 R-1).
+6. **저장소 술어의 직렬화는 `save`와 같아야 한다** — `.isoformat()`은 `+00:00`, pydantic의
+   `model_dump(mode="json")`은 `Z`다. 이 둘을 섞어 Mongo 접수가 100% 실패했고 인메모리
+   테스트에는 전혀 안 보였다(검증 리뷰 B1). `to_jsonable_python`으로 통일했다 —
+   **저장소에 새 술어를 걸 때 이 함정을 먼저 확인하라.**
+7. **`intake_turn`은 이제 Mongo repo로도 돈다**(테스트 2건). 저장소 계약을 바꾸는 변경을
+   인메모리만으로 검증하면 프로덕션 쓰기 경로를 한 번도 안 지난다.
+8. **Mongo `attach_answer` 술어의 `question_seq` 줄은 중복이다** — 사전검사를 지난 이상
+   읽은 값 술어와 같은 값이라, 읽고 나서 파킹이 일어난 경우를 실제로 잡는 것은 재분류
+   두 바퀴다(검증 리뷰 M2). 불변식을 명시하려고 남겼고 주석에 그렇게 적었다.
+9. **`_expect`와 `_SAVED_FIELDS`는 같이 움직인다** — 전자는 "무엇이 안 바뀌었어야 하는가",
+   후자는 "무엇을 쓰는가"다. 접수가 새 필드를 쓰면 둘 다 갱신해야 하고, 안 하면 각각
+   조용한 실패(거짓 승리 / 저장 누락)가 된다.
+10. **chat 접수 루프의 재질문에는 코드가 쥔 상한이 없다** — 재질문이 LLM을 다시 안
+    부르게 바꾸면서(R-3) `max_turns` 예산을 안 먹게 됐다. 매 턴 다른 곳에서 새 질문이
+    올라오는 적대적 상황에서는 루프가 안 끝난다. 사람 입력으로 게이트되므로 스핀은
+    아니지만, 규율 6("상한은 코드가 쥔다")에 비추면 재질문 횟수 상한이 있어야 한다.
+11. **질문이 `None`인 레코드에 재질문하면 `"(질문 없음)"`을 한 번 묻는다** — 그 답은
+    다음 턴의 `_not_ours`로 버려지고 루프는 정상 종료한다. 사람에게 무의미한 프롬프트를
+    한 번 보이는 것이 남은 흠이다.
