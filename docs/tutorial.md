@@ -190,6 +190,75 @@ assert result == "closed"
 보고서 5절 구조(요약/판정/조치 권고/증거/조사 경위)는 모든 케이스에서
 고정이다 — 자세한 필드 의미는 [docs/glossary.md](glossary.md)를 보라.
 
+## Part C. v2가 더한 것들 — 5분 훑기
+
+여기까지가 v1의 흐름(점검 → finding → 케이스 → 조사 → 보고서)이다. v2는 그 위에
+네 가지를 얹었다. 전부 스텁으로 지금 돌려볼 수 있다.
+
+### C-1. 사이트를 가로지르는 집계 (Fleet)
+
+집계는 **케이스가 아니다** — 증상도 조사도 판정도 없다. 그래서 `patrol.checks`가 아니라
+`config/scenarios/*.json`에 따로 산다.
+
+```bash
+python -m src scenario list --config-root config.example --repo-root .
+# alarm_trend  알람 추세 — 전 법인/사업부  [0 7 * * *]  지표 1개
+```
+
+리포트를 읽는 법: **커버리지가 먼저다.** "27/30 사이트"를 확인하기 전의 숫자는 아직
+주장이 아니다. 불완전한 지표에는 ⚠와 사유가 붙고, 값이 없으면 `—`(0이 아니다).
+
+### C-2. 특정 컬렉션에 특정 질의 (`mongo_find`)
+
+`mongo_recent`는 항상 `filter={}`라 "언제나 최근 N건"뿐이었다. `probe: "mongo_find"`를
+**명시하면** 필터를 config로 쓸 수 있다.
+
+튜토리얼의 다른 예시처럼 간격을 `3s`로 둔다 — 그래야 `--for-seconds 5` 창 안에 발화한다
+(운영에서는 분 단위다).
+
+```json
+{ "judge": "rule", "schedule": {"interval": "3s"},
+  "probe": "mongo_find", "target": "mongo:twin_state",
+  "params": {"rule": "exists", "field": "0.line",
+             "filter": {"state": "STOP"}, "sort": [["ts", -1]]},
+  "resolve": {"line": {"from": "rest", "entry": "list_lines", "field": "code"}} }
+```
+
+읽기 전용은 여기서도 **메커니즘**이다: 필터 연산자가 닫힌 허용 목록을 통과해야 하고
+`$where` 같은 서버측 JS는 표현할 수 없다. 값은 `resolve`가 실행 시점에 해석한다 —
+config에 값을 적으면 즉시 썩는다.
+
+### C-3. 답이 어느 질문의 답인지 (`question_seq`)
+
+조사나 접수가 되물으면 케이스가 파킹되고 **질문 번호**가 오른다. 답할 때 그 번호를
+같이 보내면, 그 사이 질문이 바뀌었을 때 답이 엉뚱한 질문에 붙지 않는다.
+
+```bash
+python -m src case show c-1 --config-root config.example      # 파킹된 질문(#2)
+python -m src case resume c-1 --answer "라인 7" --question-seq 2 --config-root config.example
+```
+
+번호를 안 보내면 예전 동작이다(하위 호환). HTTP도 같은 필드를 받고, 번호가 어긋나면
+409다.
+
+### C-4. 실제 원인 되먹임과 캘리브레이션
+
+조사가 끝난 뒤 사람이 실제 원인을 알려주면 그게 학습 루프의 나머지 절반이다.
+
+```bash
+python -m src case label c-1 --agreement wrong --actual-component plan-sync     --resolution false_positive --saw-report --by "$USER" --config-root config.example
+python -m src case label --stats --config-root config.example
+# 라벨 0건 / 종결 0건 (그중 라벨됨 0건) — 게이트: 종결 라벨 30건 이상 그리고 종결의 절반 초과
+# 게이트: 닫힘 — 건수만 보고한다
+```
+
+**게이트가 닫혀 있는 동안 퍼센트를 안 내는 것이 요점이다.** 12/40으로 낸 30%는 다음 주에
+뒤집힐 숫자이고, 한 번 보고되면 사람이 그것을 기억한다. 열리면 `confidence`별 적중을
+내는데, "모름 N건은 분모 제외"와 "보고서 본 뒤 라벨 N건"을 **같은 줄에** 적는다 —
+따로 두면 사람이 적중률만 읽는다.
+
+조사 소요는 `patrol status`가 요약한다(중앙값 — 파킹 한 건이 평균을 통째로 왜곡한다).
+
 ## 다음 단계
 
 - 새 사이트를 통째로 추가하거나, `chat`으로 직접 조사를 시작해 보려면
@@ -197,3 +266,5 @@ assert result == "closed"
 - 스텁을 실제 Redis/Mongo/Kafka/REST/LLM에 연결하려면
   [docs/going-live.md](going-live.md).
 - 모든 config 키의 의미는 [docs/config-reference.md](config-reference.md).
+- 코드를 고치려면 [docs/file-map.md](file-map.md)(어느 파일인가)와
+  [docs/for-implementers.md](for-implementers.md)(어떤 순서인가).
