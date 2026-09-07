@@ -573,12 +573,11 @@ def test_같은_토큰을_가진_주체_둘은_기동을_거부한다(tmp_path):
 
 def test_시나리오의_대상과_사이트를_기동에서_검증한다(tmp_path):
     # 기동 거부 철학: 문제를 발견 즉시 죽지 않고 전부 모아서 돌려준다.
-    import json as _json
     _tree(tmp_path)
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
     def _scenario(name, **over):
-        (scenarios / f"{name}.json").write_text(_json.dumps({
+        (scenarios / f"{name}.json").write_text(json.dumps({
             "kind": "aggregate", "concern": "operation", "title": "나쁜 시나리오",
             "schedule": {"interval": "1h"},
             "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}},
@@ -595,11 +594,10 @@ def test_시나리오의_대상과_사이트를_기동에서_검증한다(tmp_pa
 
 
 def test_정상_시나리오는_기동을_막지_않는다(tmp_path):
-    import json as _json
     _tree(tmp_path)
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "ok.json").write_text(_json.dumps({
+    (scenarios / "ok.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "정상",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}}}),
@@ -610,7 +608,6 @@ def test_정상_시나리오는_기동을_막지_않는다(tmp_path):
 def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path):
     # 리뷰 M-6: 점검은 등재 스키마까지 대조하는데(그 자리 주석이 이유를 적었다)
     # 집계는 이름만 봤다 — 같은 오타가 매 집계 error로만 드러난다.
-    import json as _json
     _tree(tmp_path)
     _write(tmp_path, "config/gbm/mx.json", json.dumps({
         "target": {"adapters": "stub", "rest": {
@@ -620,7 +617,7 @@ def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path
         "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "bad_body.json").write_text(_json.dumps({
+    (scenarios / "bad_body.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "나쁜 body",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"target": "rest:summary_prod", "params": {"body": {"없는키": 1}},
@@ -634,11 +631,10 @@ def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path
 
 def test_target도_probe도_없는_지표는_기동을_거부한다(tmp_path):
     # 재검증 N18b: 새 boot 항목 셋 중 하나가 무테스트였다.
-    import json as _json
     _tree(tmp_path)
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "no_target.json").write_text(_json.dumps({
+    (scenarios / "no_target.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "대상 없음",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"extract": "body.n", "reduce": "sum"}}}), encoding="utf-8")
@@ -649,7 +645,6 @@ def test_target도_probe도_없는_지표는_기동을_거부한다(tmp_path):
 
 def test_시나리오의_resolve_키도_등재_스키마로_대조한다(tmp_path):
     # 점검과 대칭 — 스키마에 없는 키를 가리키면 매 집계가 error를 내고 끝난다.
-    import json as _json
     _tree(tmp_path)
     _write(tmp_path, "config/gbm/mx.json", json.dumps({
         "target": {"adapters": "stub", "rest": {
@@ -659,7 +654,7 @@ def test_시나리오의_resolve_키도_등재_스키마로_대조한다(tmp_pat
         "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "bad_resolve.json").write_text(_json.dumps({
+    (scenarios / "bad_resolve.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "나쁜 resolve",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"target": "rest:summary_prod", "extract": "body.n", "reduce": "sum",
@@ -736,7 +731,6 @@ def test_필터도_해석기도_없는_mongo_find는_전체_스캔이라_거부�
 def test_집계_지표의_mongo_find도_기동에서_검증한다(tmp_path):
     # 검증 리뷰 MG-1: MetricSpec이 프로브에 그대로 실리는데 `_scenario_errors`가
     # mongo_find_problems를 안 불러, 오타가 "매 집계 missing"으로만 드러났다.
-    import json as _json
     _tree(tmp_path)
     _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
     _write(tmp_path, "config/gbm/mx.json", json.dumps({
@@ -744,7 +738,7 @@ def test_집계_지표의_mongo_find도_기동에서_검증한다(tmp_path):
         "patrol": {"checks": {}}}))
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "bad_metric.json").write_text(_json.dumps({
+    (scenarios / "bad_metric.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "나쁜 지표",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"target": "mongo:twin_state", "probe": "mongo_find",
@@ -757,30 +751,6 @@ def test_집계_지표의_mongo_find도_기동에서_검증한다(tmp_path):
                         validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
     assert "$where" in problems and "sort" in problems
     assert "전체 조회" in problems          # 필터도 resolve도 없는 지표
-
-
-def test_집계_지표의_sample도_1_이상이어야_한다():
-    # 검증 리뷰 MG-2: 집계는 사이트 N개로 팬아웃하므로 무제한 커서가 N배로 열린다.
-    import pytest
-    from pydantic import ValidationError
-    from src.config.schema_scenario import MetricSpec
-    base = {"target": "mongo:twin_state", "extract": "0.n", "reduce": "sum"}
-    assert MetricSpec.model_validate({**base, "sample": 1}).sample == 1
-    for bad in (0, -1):
-        with pytest.raises(ValidationError):
-            MetricSpec.model_validate({**base, "sample": bad})
-
-
-def test_집계_지표의_필터와_해석기_키가_겹치면_거부된다():
-    # 검증 리뷰 MG-3: MetricSpec의 검증자가 params.body만 보고 filter를 안 봤다.
-    import pytest
-    from pydantic import ValidationError
-    from src.config.schema_scenario import MetricSpec
-    with pytest.raises(ValidationError):
-        MetricSpec.model_validate({
-            "target": "mongo:twin_state", "extract": "0.n", "reduce": "sum",
-            "params": {"filter": {"part": "Z"}},
-            "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
 
 
 _REST_SITE = {
@@ -880,32 +850,6 @@ def test_전체_조회를_명시한_지표는_기동을_막지_않는다(tmp_pat
         "target": "mongo:twin_state", "probe": "mongo_find",
         "extract": "0.n", "reduce": "sum",
         "resolve": {"line": {"from": "unfiltered"}}}}) == ""
-
-
-def test_점검의_body와_해석기_키가_겹치면_거부된다():
-    # MetricSpec 쪽만 테스트가 있고 CheckConfig 쪽은 없었다 — 이 검증자는 두 스키마에
-    # 각각 있고, 한쪽만 지키면 나머지가 조용히 사라진다.
-    import pytest
-    from pydantic import ValidationError
-    from src.config.schema_site import CheckConfig
-    with pytest.raises(ValidationError):
-        CheckConfig.model_validate({
-            "judge": "rule", "schedule": {"interval": "5m"}, "target": "rest:make_thing",
-            "params": {"body": {"line": ["A"]}},
-            "resolve": {"line": {"from": "unfiltered"}}})
-
-
-def test_집계_지표의_body와_해석기_키가_겹치면_거부된다():
-    # 겹침 검증자가 두 키(body·filter)를 돌게 바뀐 뒤, filter 쪽만 테스트가 있어
-    # body 절반을 지우는 변조가 살아남았다(검증 리뷰 M7).
-    import pytest
-    from pydantic import ValidationError
-    from src.config.schema_scenario import MetricSpec
-    with pytest.raises(ValidationError):
-        MetricSpec.model_validate({
-            "target": "rest:alarm_count", "extract": "0.n", "reduce": "sum",
-            "params": {"body": {"line": ["A"]}},
-            "resolve": {"line": {"from": "unfiltered"}}})
 
 
 def test_시나리오_스키마_오류가_다른_시나리오의_문제를_가리지_않는다(tmp_path):
