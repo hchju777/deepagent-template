@@ -42,6 +42,8 @@ class VerdictSnapshot(StrictModel):
     verify_demoted: bool = False
     knowledge_digests: dict[str, str] = {}
     history_shown: list[dict] = []           # [{"case_id": ..., "tier": ...}] — P8이 채운다
+    # 이력이 **비었던** 케이스와 **못 읽은** 케이스를 나중에 구별하려면 지금 남겨야 한다.
+    history_error: str | None = None
 
 
 class VerdictSnapshotPort(ABC):

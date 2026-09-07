@@ -118,3 +118,14 @@ def test_라벨_표현은_저장소_장애에도_빈_목록이다():
             raise RuntimeError("mongo down")
     assert label_texts(_Boom(), "c-1") == []
     assert label_texts(None, "c-1") == []
+
+
+def test_집계는_게이트를_모는_숫자를_따로_낸다():
+    # 재검증 low: labeled_cases는 전체 라벨이라 게이트를 모는 숫자가 아니다.
+    repo, labels = _repo(closed=2, open_=5), InMemoryLabelStore()
+    submit_label("c-0", agreement="correct", repo=repo, labels=labels, clock=lambda: T)
+    for i in range(5):
+        submit_label(f"o-{i}", agreement="correct", repo=repo, labels=labels, clock=lambda: T)
+    stats = label_stats(repo=repo, labels=labels)
+    assert stats.labeled_cases == 6 and stats.labeled_closed == 1
+    assert "그중 라벨됨 1건" in stats.why

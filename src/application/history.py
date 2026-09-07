@@ -28,6 +28,8 @@ class HistoryRead(StrictModel):
     hits: list[HistoryHit] = []
     error: str | None = None
 
+_MAX_ERROR_CHARS = 160    # 검증 오류 하나가 [유사 이력] 블록을 차지하지 않게
+
 _TIER_REASON = {
     1: "같은 점검이 같은 대상에서 전에도",
     2: "다른 점검이 같은 대상을",
@@ -121,11 +123,26 @@ def render_history(hits: list[HistoryHit], *, error: str | None = None) -> str:
         # 실제로 그랬다(검증 리뷰 B1: component는 LLM이 쓴 자유 문자열이 스냅샷을 거쳐
         # 온 것이라 `plan-sync (ev-2 참조)`가 그대로 리드 프롬프트에 실렸다).
         line = (f"- {hit.case_id}: {hit.verdict_type or '판정 미상'} / {cause}"
-                f" (tier {hit.tier} — {hit.reason}) {hit.summary or ''}").rstrip()
-        lines.append(_strip_evidence_ids(line))
+                f" (tier {hit.tier} — {hit.reason}) {hit.summary or ''}")
+        lines.append(_clean_line(line))
     if error:
-        lines.append(f"- (이력 조회 실패: {error} — 아래 목록이 전부가 아닐 수 있다)")
+        # 오류 줄도 같은 처리를 받는다 — pydantic ValidationError는 input_value를 그대로
+        # 싣고 `root_cause_component`가 정확히 그 자리다(재검증 N1). 길이도 자른다:
+        # 네 줄짜리 검증 오류가 [유사 이력] 블록을 통째로 차지하면 안 된다.
+        lines.append(_clean_line(f"- (이력 조회 실패: {error[:_MAX_ERROR_CHARS]}"
+                                 " — 아래 목록이 전부가 아닐 수 있다)"))
     return "\n".join(lines)
+
+
+def _clean_line(text: str) -> str:
+    """한 줄로 접고 evidence id를 지운다.
+
+    개행을 접는 이유: 과거 케이스의 `component`·`summary`는 LLM이 쓴 자유 문자열이라
+    개행이 들어올 수 있고, 그러면 조립된 줄이 쪼개져 브리핑의 [유사 이력] 블록에 **새
+    항목처럼** 붙는다 — 리드가 tier 4 케이스의 문자열을 tier 1 매칭으로 읽는다(재검증 N2).
+    id가 안 새더라도 구조가 새는 것은 같은 문제다(규율 3·6).
+    """
+    return _strip_evidence_ids(" ".join(text.split()))
 
 
 def _strip_evidence_ids(text: str) -> str:
@@ -138,4 +155,7 @@ def _strip_evidence_ids(text: str) -> str:
     한국어 산문에서 id가 조사에 붙어 나오는 것이 정상이다. 대소문자를 무시하는 이유는
     리드가 브리핑의 `EV-2`를 보고 판정에 `ev-2`라 적을 수 있기 때문이다.
     """
-    return re.sub(r"(?i)\bev-\d+", "(증거 생략)", text)
+    # 앞뒤 모두 \b를 쓰면 안 된다: 한글은 유니코드 단어 문자라 "증거ev-2"·"ev-2와" 어느
+    # 쪽에도 경계가 없고, 한국어 LLM 산문은 명사 뒤 라틴 토큰의 공백을 자주 생략한다.
+    # 앞쪽은 라틴·숫자만 부정 후방탐색해 `rev-2`·`preview-3` 오탐을 피한다.
+    return re.sub(r"(?i)(?<![A-Za-z0-9])ev-\d+", "(증거 생략)", text)

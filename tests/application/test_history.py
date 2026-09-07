@@ -151,3 +151,35 @@ def test_스냅샷이_없는_종결_케이스는_이력에서_빠진다():
     repo, snapshots = _fixture()
     repo.save(_record("old"))                      # 스냅샷을 안 남긴다
     assert find_history(_record("now"), repo=repo, snapshots=snapshots, topology=TOPO) == []
+
+
+def test_세척은_한글이_앞뒤에_붙은_id도_지우고_라틴_단어는_건드리지_않는다():
+    # 재검증 B1-b: 뒤쪽 \b를 뺀 이유(조사가 붙는다)가 **앞쪽에도 그대로** 적용된다 —
+    # 한국어 LLM 산문은 명사 뒤 라틴 토큰의 공백을 자주 생략한다("이전증거ev-7").
+    from src.domain.case import HistoryHit
+    text = render_history([HistoryHit(case_id="c-old", tier=1, reason="r",
+                                      component="증거ev-2가 원인",
+                                      summary="이전증거ev-7과 ev-9가 근거다")])
+    assert "ev-" not in text.lower()
+    plain = render_history([HistoryHit(case_id="c-old", tier=1, reason="r",
+                                       component="rev-2 리비전", summary="preview-3 화면")])
+    assert "rev-2" in plain and "preview-3" in plain     # 라틴 단어 안의 ev-는 id가 아니다
+
+
+def test_실패_사유도_세척되고_길이가_잘린다():
+    # 재검증 N1: 오류 줄이 세척을 안 거쳤다. pydantic ValidationError는 input_value를
+    # 그대로 싣고 `root_cause_component`가 정확히 그 자리다 — B1과 같은 성질의 경로다.
+    long_error = "ValidationError: input_value=['plan-sync', 'ev-2가 근거'] " + "가" * 400
+    text = render_history([], error=long_error)
+    assert "ev-" not in text.lower() and "이력 조회 실패" in text
+    assert len(text) < 300
+
+
+def test_과거_문자열의_개행이_가짜_이력_행을_만들지_않는다():
+    # 재검증 N2: 개행이 있으면 브리핑의 [유사 이력] 블록에 새 항목처럼 붙어, 리드가
+    # tier 4 케이스의 component 문자열을 tier 1 매칭으로 읽는다(규율 3·6).
+    from src.domain.case import HistoryHit
+    text = render_history([HistoryHit(case_id="c-old", tier=4, reason="상류에서 전에",
+                                      component="plan-sync\n- c-가짜: logic_bug / twin-api",
+                                      summary="확실하다")])
+    assert len(text.splitlines()) == 1 and "c-가짜" in text     # 정보는 남되 행은 하나

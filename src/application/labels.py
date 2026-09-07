@@ -23,7 +23,8 @@ MIN_RATE = 0.5
 
 class LabelStats(StrictModel):
     closed_total: int
-    labeled_cases: int
+    labeled_cases: int          # 전체 라벨(진행 중 케이스 포함)
+    labeled_closed: int         # 게이트를 모는 숫자 — 대조 가능한 라벨만
     gate_open: bool
     why: str             # 왜 닫혔는지(또는 열렸는지) — 건수로만 말한다
 
@@ -59,8 +60,8 @@ def label_stats(*, repo, labels) -> LabelStats:
         closed_ids = {r.id for r in repo.list_by_status("closed")}   # 한 번만 읽는다
         labeled_ids = set(labels.labeled_case_ids())
     except Exception:                                              # noqa: BLE001 — 무raise
-        return LabelStats(closed_total=0, labeled_cases=0, gate_open=False,
-                          why="라벨 집계 실패")
+        return LabelStats(closed_total=0, labeled_cases=0, labeled_closed=0,
+                          gate_open=False, why="라벨 집계 실패")
     closed_total = len(closed_ids)
     labeled = len(labeled_ids)
     # 건수 조건도 **종결 케이스의 라벨**에 건다. 전체 라벨에 걸면 진행 중인 케이스 27건을
@@ -72,7 +73,7 @@ def label_stats(*, repo, labels) -> LabelStats:
     why = (f"라벨 {labeled}건 / 종결 {closed_total}건 (그중 라벨됨 {labeled_closed}건) — "
            f"게이트: 종결 라벨 {MIN_LABELS}건 이상 그리고 종결의 절반 초과")
     return LabelStats(closed_total=closed_total, labeled_cases=labeled,
-                      gate_open=gate_open, why=why)
+                      labeled_closed=labeled_closed, gate_open=gate_open, why=why)
 
 
 def label_texts(labels, case_id: str) -> list[str]:

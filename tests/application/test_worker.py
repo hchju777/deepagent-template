@@ -1204,3 +1204,25 @@ async def test_이력_조회_실패는_리드의_브리핑에_보인다():
     assert await worker.run_once("c-1") == "closed"
     prompt = str(deps.lead_llm.calls[0])
     assert "이력 조회 실패" in prompt and "RuntimeError" in prompt
+
+
+async def test_이력을_못_읽은_케이스는_스냅샷에_그_사실이_남는다():
+    # 재검증 low: 이력이 **비었던** 케이스와 **못 읽은** 케이스를 나중에 구별하려면
+    # 지금 남겨야 한다(지금은 공짜, 나중엔 복구 불가).
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+
+    class _Broken(InMemoryCaseRepository):
+        def closed_by_fingerprint(self, *a, **k):
+            raise RuntimeError("mongo down")
+    repo, store, ledger = _Broken(), InMemoryCaseStore(), InMemoryLedger()
+    snapshots = InMemoryVerdictSnapshotStore()
+    _open_case(repo, store)
+    deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, INTEGRATE_CONCLUDE, VERDICT_JSON])
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: deps, checkpointer=InMemorySaver(),
+                                 clock=lambda: T, owner="w-1", max_concurrent=1, lease_ttl_s=60,
+                                 ledger=ledger, knowledge_digests_for_site=lambda g, f: {},
+                                 snapshots=snapshots)
+    assert await worker.run_once("c-1") == "closed"
+    snap = snapshots.get("c-1")
+    assert snap.history_shown == [] and "RuntimeError" in (snap.history_error or "")

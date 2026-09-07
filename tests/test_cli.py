@@ -1224,3 +1224,13 @@ def test_case_resume이_발행하는_보고서도_라벨을_보인다(tmp_path, 
                  "--repo-root", str(tmp_path)]) == 0
     report = next((tmp_path / "out").glob(f"{case_id}.*")).read_text(encoding="utf-8")
     assert "라벨: wrong" in report
+
+
+def test_chat과_case_resume도_라벨_저장소와_ticker를_발행에_넘긴다(tmp_path, monkeypatch):
+    # 재검증 R16·R18: chat의 labels와 case resume의 ticker가 미검증이었다.
+    # "함수는 되는데 호출부가 안 넘긴다"가 이 리포의 반복 실패 유형이다.
+    import inspect
+    chat_src = inspect.getsource(main_module._run_chat)
+    resume_src = inspect.getsource(main_module._cmd_case_resume)
+    assert "labels=p.labels" in chat_src and "ticker=time.perf_counter" in chat_src
+    assert "labels=p.labels" in resume_src and "ticker=time.perf_counter" in resume_src

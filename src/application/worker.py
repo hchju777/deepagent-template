@@ -119,8 +119,11 @@ def _case_file_snapshot(result: dict) -> dict:
     history_shown = [{"case_id": h["case_id"] if isinstance(h, dict) else h.case_id,
                       "tier": h["tier"] if isinstance(h, dict) else h.tier}
                      for h in (shown or [])]
+    history_error = case.get("history_error") if isinstance(case, dict) \
+        else getattr(case, "history_error", None)
     return {
         "history_shown": history_shown,
+        "history_error": history_error,
         "knowledge_digests": dict(digests) if isinstance(digests, dict) else {},
         "plan_tasks": [_dump_item(t) for t in result.get("plan_tasks", [])],
         "hypotheses": [_dump_item(h) for h in result.get("hypotheses", [])],
@@ -478,6 +481,7 @@ class InvestigationWorker:
                 verify_demoted=bool(verify_stage and verify_stage.mark == "warn"),
                 history_shown=[h for h in (self._store.get_case_file(case_id) or {})
                                .get("history_shown", []) if isinstance(h, dict)],
+                history_error=(self._store.get_case_file(case_id) or {}).get("history_error"),
                 knowledge_digests=self._knowledge_digests_for_site(record.gbm, record.fct)))
         except Exception:                                          # noqa: BLE001
             pass
