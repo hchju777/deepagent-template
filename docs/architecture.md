@@ -353,6 +353,12 @@ investigating, awaiting_human)`. 동시에 한 조사자만 케이스를 붙잡�
   `root_cause`가 필수다(모델 검증자). `alternates`는 최상위 다음의 후보들(유력한
   순, 각자 `confidence`와 `relation`) — 결론 없는 판정도 후보는 들 수 있다(계획 14).
   스냅샷(`VerdictSnapshot.alternates`)에는 컴포넌트 이름만 남는다.
+- **HistoryHit**(`src/domain/case.py`) — 리드에게 보여준 과거 케이스 한 건
+  (`case_id`·`tier`·`reason`·`verdict_type`·`component`·`summary`). `Case.history`로
+  State에 실려 그래프에 들어가고, 종결 시 `VerdictSnapshot.history_shown`에 남는다.
+  **evidence id를 담지 않는다**(규율 3의 가드레일을 우회하게 되므로).
+- **RootCauseLabel**(`src/domain/label.py`) — 사람이 되먹인 실제 원인. 스냅샷과 짝이고
+  retention이 걷지 않는다.
 - **EngineEvent**(`src/domain/events.py`) — 엔진이 밖으로 내보내는 이벤트는
   현재 6종(`case_status_changed`/`round_started`/`task_finished`/
   `question_raised`/`report_ready`/`verdict_formed`)이다. 봉투에는 스토어가

@@ -64,6 +64,13 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 503인데 응답은 404였다. 복원 뒤 `find src tests -name __pycache__ -exec rm -rf {} +`를
 하거나 `python -B`로 돌려라.
 
+## 학습 루프 테스트의 안전 앵커
+
+`tests/application/test_history.py`의 `test_렌더는_evidence_id를_절대_내지_않는다`가
+계획 15에서 가장 중요한 테스트다: 과거 증거도 `ev-2` 형태이고 이번 케이스에도 `ev-2`가
+있어, 리드가 과거 id를 인용하면 `verify`의 결정론 가드레일(인용 우주 = `state.evidence`)을
+그대로 통과한다. 이력 렌더러를 고칠 때 이 테스트를 먼저 읽어라.
+
 ## 벤치 시나리오(E2E 회귀)
 
 `tests/test_bench_scenarios.py`는 스펙 부록 A의 간판 시나리오와 계획 11이 연
