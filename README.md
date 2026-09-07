@@ -34,6 +34,18 @@ LangGraph 템플릿)의 후속작으로, LangGraph의 "개발자가 control flow
 `recompute_verifier`가 코드를 따라 값을 재계산해 관측치와 대조하는 방식으로
 접근한다.
 
+케이스를 여는 세 번째 길이 있다. **HTTP 표면**(`python -m src api`)이 케이스를 쓰고
+이벤트를 읽는다 — 조사는 하지 않는다(어댑터도 워커도 import하지 않고, 그 경계를 테스트가
+import 그래프로 지킨다). 웹 UI가 붙을 자리다.
+
+그리고 조사와 **모양이 다른** 기능이 하나 있다. **Fleet 집계**는 사이트를 가로질러 지표
+하나를 모아 리포트를 낸다 — 증상도 조사도 판정도 없으므로 케이스가 아니고, `config/scenarios/`에
+따로 산다. 리포트는 **커버리지를 숫자보다 먼저** 보인다.
+
+조사가 끝난 뒤 사람이 실제 원인을 되먹이면(`case label`) 그것이 **학습 루프**다. 종결
+라벨이 30건을 넘고 종결의 절반을 넘기 전에는 어떤 정확도도 계산하지 않는다 — 12/40으로
+낸 30%는 다음 주에 뒤집힐 숫자이기 때문이다.
+
 ## 문서 지도
 
 | 문서 | 무엇을 위한 것인가 |
@@ -44,6 +56,8 @@ LangGraph 템플릿)의 후속작으로, LangGraph의 "개발자가 control flow
 | [docs/howto.md](docs/howto.md) | "~하고 싶다"로 찾아가는 작업별 색인 |
 | [docs/glossary.md](docs/glossary.md) | Case, Verdict, Envelope 등 용어집 |
 | [docs/going-live.md](docs/going-live.md) | 스텁 어댑터 → 실제 시스템 연결 전환 가이드 |
+| [docs/file-map.md](docs/file-map.md) | 파일별 역할과 데이터 흐름 — **어느 파일을 열어야 하는가** |
+| [docs/for-implementers.md](docs/for-implementers.md) | "X를 추가하려면" 레시피 — **무엇을 어떤 순서로 만지는가** |
 | [tests/README.md](tests/README.md) | 테스트 철학과 실행법 |
 | [CLAUDE.md](CLAUDE.md) | 이 코드베이스에서 작업하는 AI 에이전트를 위한 규율 |
 | [docs/superpowers/specs/2026-09-02-ops-monitoring-design.md](docs/superpowers/specs/2026-09-02-ops-monitoring-design.md) | 승인된 시스템 설계 스펙 원본(단일 진실 소스) |
@@ -148,6 +162,8 @@ src/
   config/         config 스키마·로더·병합·env 해석
   boot.py         기동 검증 — 문제를 전부 모아서 시끄럽게 실패하는 철학
   __main__.py     CLI 엔트리
+  api/            HTTP 표면 — 케이스를 쓰고 이벤트를 읽는다(조사는 안 한다)
+  fleet/          사이트를 가로지르는 집계
 tests/            src/와 미러링된 테스트 트리 (계층별)
 config.example/   동작이 검증된 예시 config 트리
 knowledge.example/ 그 예시의 토폴로지
@@ -158,8 +174,14 @@ ref/              LangGraph/LangChain 참고 자료(설계 시 사용)
 
 ## 상태
 
-v1 스코프 완결 후 v2(운영 모니터링 서비스화) 진행 중 — 설계 스펙(§0~§7 +
-부록 A)의 계획 1~5와 v2 방향 문서의 계획 6~9가 `main`에 머지됐고, 400건이
-넘는 테스트가 통과한다(정확한 수는 `pytest tests/`가 말해 준다 — 여기 숫자를
-박아 두면 커밋마다 낡는다). "개발 시스템"(코드 수정·데이터 정합성
-보정 등 능동적 개입)은 별도 설계로 유보돼 있다.
+**v2 완결.** 설계 스펙(§0~§7 + 부록 A)의 계획 1~5와 v2 방향 문서의 계획 6~22가
+`main`에 머지됐고 1000건이 넘는 테스트가 통과한다(정확한 수는 `pytest tests/`가 말해
+준다 — 여기 숫자를 박아 두면 커밋마다 낡는다). 집행된 계획 문서는 전부
+`docs/superpowers/plans/`에 남아 있다.
+
+v2가 더한 것: 프로세스 경계(내구성 큐·원자 lease), 보고서 2단 렌더와 HTML, REST 등재
+항목 레지스트리와 파라미터 해석기, pinned OpenAPI 대조, concern 축, 접수 경계, HTTP 표면,
+다중 RCA 후보와 Timeline, 학습 루프(라벨·캘리브레이션), Fleet 집계.
+
+"개발 시스템"(코드 수정·데이터 정합성 보정 등 능동적 개입)은 여전히 범위 밖이다 —
+이 시스템은 대상에 대해 완전 읽기 전용이고 조치 실행은 사람의 몫이다.
