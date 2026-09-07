@@ -103,6 +103,8 @@ def _judge_rule(check, result, clock, observed_at, snap_id, make_finding: _MakeF
 
 async def _call_llm(name: str, check: CheckConfig, result: ProbeResult, snap_id: str, llm):
     question = check.params.get("question") or _DEFAULT_QUESTION
+    # `repr`이 개행을 이스케이프하는 것이 판정 프롬프트의 방어다 — 스냅샷은 대상
+    # 데이터라 여러 줄이 정상인데, 날것으로 실리면 `[증거 …]` 줄을 위조할 수 있다.
     snapshot_texts = {snap_id: repr(result.data)[:2000]}
     return await judge_by_llm([snap_id], snapshot_texts, name, question, llm=llm)
 

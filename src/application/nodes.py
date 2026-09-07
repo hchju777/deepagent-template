@@ -281,6 +281,10 @@ def make_nodes(deps):
                 record = deps.store.get_evidence_record(case_id, evidence_id)
                 body = deps.store.get_evidence(case_id, evidence_id)
                 evidence.append(EvidenceRef(
+                    # `repr`이 개행을 이스케이프하는 것이 이 자리의 방어다 — 본문은
+                    # 대상 시스템 데이터라 여러 줄이 정상인데, 그대로 프롬프트에 실리면
+                    # `[증거 목록]` 블록에 가짜 항목이 붙는다. `str`이나 `json.dumps`로
+                    # 바꾸면 조용히 뚫린다(테스트가 그 성질을 못박는다).
                     id=evidence_id, source=record.source, summary=repr(body)[:160],
                     as_of=record.as_of, complete=record.complete,
                     effective_as_of=record.effective_as_of))
