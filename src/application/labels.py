@@ -3,11 +3,13 @@
 CLI(`case label`)와 API(`POST /cases/{id}/label`)가 **이 함수 하나**를 쓴다 — 분기를
 각자 베끼면 언젠가 하나가 빠뜨린다(규율 8이 발행 배선에서 겪은 그것).
 
-**계산은 여기 없다.** 라벨 n >= 30 그리고 라벨률 > 50%(선택 편향이 유계) 전에는 어떤
-정확도도 내지 않는다. 열린 뒤에도 낼 것은 상관계수가 아니라 `confidence`별 적중이다 —
-대상이 범주형이라 Pearson r은 범주 오류다. 게이트가 닫혀 있는 동안 **맨 퍼센트를 내지
-않는 것**이 요점이다: 12/40으로 낸 30%는 다음 주에 뒤집힐 숫자이고, 한 번 보고되면
-사람이 그것을 기억한다.
+**게이트가 열리기 전에는 아무것도 계산하지 않는다.** 종결 라벨 n >= 30 그리고
+종결의 절반 초과(선택 편향이 유계) 전에는 어떤 정확도도 내지 않는다 — 12/40으로 낸
+30%는 다음 주에 뒤집힐 숫자이고, 한 번 보고되면 사람이 그것을 기억한다.
+
+열린 뒤에 내는 것은 상관계수가 아니라 `confidence`별 적중이다(`calibration`) — 대상이
+범주형이라 Pearson r은 범주 오류다. 분모 규칙은 그 함수의 docstring에 있고, **코드가
+쥔다**: 어느 라벨을 셀지 사람이 고르게 하면 숫자가 원하는 대로 나온다.
 """
 from datetime import datetime
 from typing import Callable, Literal
@@ -55,7 +57,7 @@ def submit_label(case_id: str, *, agreement: Agreement, resolution: Resolution |
 
 
 def label_stats(*, repo, labels) -> LabelStats:
-    """건수와 게이트 상태. 정확도는 여기서도, 어디서도 계산하지 않는다."""
+    """건수와 게이트 상태만. 적중 계산은 `calibration`이 하고, 이 게이트를 먼저 본다."""
     try:
         closed_ids = {r.id for r in repo.list_by_status("closed")}   # 한 번만 읽는다
         labeled_ids = set(labels.labeled_case_ids())
@@ -74,6 +76,82 @@ def label_stats(*, repo, labels) -> LabelStats:
            f"게이트: 종결 라벨 {MIN_LABELS}건 이상 그리고 종결의 절반 초과")
     return LabelStats(closed_total=closed_total, labeled_cases=labeled,
                       labeled_closed=labeled_closed, gate_open=gate_open, why=why)
+
+
+class ConfidenceBucket(StrictModel):
+    """한 confidence 값의 적중. 퍼센트는 여기 없다 — 표시는 호출부가 정한다."""
+    confidence: str             # "high"/"medium"/"low"/"미상"
+    n: int                      # 분모(unknown 라벨 제외)
+    correct: int = 0
+    partially_correct: int = 0
+    wrong: int = 0
+    excluded_unknown: int = 0   # 분모에서 뺀 수 — 숨기면 n이 작은 이유를 모른다
+    saw_report: int = 0         # 보고서를 보고 라벨한 수(앵커링 의심)
+
+
+class Calibration(StrictModel):
+    gate_open: bool
+    why: str
+    buckets: list[ConfidenceBucket] = []   # 게이트가 닫혀 있으면 비어 있다
+
+
+# 표시 순서는 코드가 쥔다 — dict 순서에 맡기면 실행마다 표가 흔들린다.
+_CONFIDENCE_ORDER = ("high", "medium", "low", "미상")
+
+
+def calibration(*, repo, labels, snapshots) -> Calibration:
+    """게이트가 열렸을 때만 `confidence`별 적중을 낸다. 절대 raise하지 않는다.
+
+    분모 규칙은 **코드가 쥔다**(규율 6) — 어느 라벨을 셀지 사람이 고르게 하면 숫자가
+    원하는 대로 나온다:
+
+    - `unknown` 라벨은 분모에서 뺀다("모르겠다"는 틀렸다는 증거가 아니다). 뺀 수를
+      `excluded_unknown`으로 **함께** 보고한다 — 조용히 빼면 n이 왜 작은지 모른다.
+    - 케이스당 **마지막 라벨만** 센다. append-only라 한 케이스에 여럿 붙고, 전부 세면
+      여러 번 고친 케이스가 분모를 지배한다.
+    - `confidence`가 없는 스냅샷은 버리지 않고 `"미상"` 버킷에 넣는다 — 버리면 분모에
+      생존 편향이 생긴다(confidence를 못 낸 판정이 곧 어려운 케이스다).
+    - 스냅샷이 없는 라벨은 대조 대상이 없으므로 세지 않는다.
+    """
+    stats = label_stats(repo=repo, labels=labels)
+    if not stats.gate_open:
+        return Calibration(gate_open=False, why=stats.why)
+    try:
+        closed_ids = {r.id for r in repo.list_by_status("closed")}
+        rows: dict[str, dict] = {}
+        for case_id in sorted(closed_ids & set(labels.labeled_case_ids())):
+            snapshot = snapshots.get(case_id)
+            if snapshot is None:
+                continue
+            history = labels.list_for(case_id)
+            if not history:
+                continue
+            # 시각으로 최댓값을 고르면 **같은 시각의 두 라벨**에서 먼저 온 것이 이긴다
+            # (고정 시계 테스트, 같은 초의 두 요청). 저장소가 이미 단 순서를 보장한다 —
+            # `MongoLabelStore.list_for`가 `(labeled_at, _id)`로 정렬하는 이유가 그것이다.
+            last = history[-1]
+            key = snapshot.confidence or "미상"
+            bucket = rows.setdefault(key, {"correct": 0, "partially_correct": 0,
+                                           "wrong": 0, "excluded_unknown": 0,
+                                           "saw_report": 0})
+            if last.saw_report:
+                bucket["saw_report"] += 1
+            if last.agreement == "unknown":
+                bucket["excluded_unknown"] += 1
+            else:
+                bucket[last.agreement] += 1
+    except Exception as exc:                                       # noqa: BLE001 — 무raise
+        return Calibration(gate_open=stats.gate_open,
+                           why=f"{stats.why} / 캘리브레이션 집계 실패: {type(exc).__name__}")
+    buckets = [
+        ConfidenceBucket(
+            confidence=key,
+            n=rows[key]["correct"] + rows[key]["partially_correct"] + rows[key]["wrong"],
+            **rows[key])
+        for key in sorted(rows, key=lambda k: (_CONFIDENCE_ORDER.index(k)
+                                               if k in _CONFIDENCE_ORDER else len(_CONFIDENCE_ORDER),
+                                               k))]
+    return Calibration(gate_open=True, why=stats.why, buckets=buckets)
 
 
 def label_texts(labels, case_id: str) -> list[str]:

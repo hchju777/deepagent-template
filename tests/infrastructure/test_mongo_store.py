@@ -612,3 +612,16 @@ def test_저장소의_모든_쓰기가_같은_직렬화를_쓴다(db):
     after = repo.get("c-1")
     assert repo.update_if("c-1", expect={"updated_at": after.updated_at},
                           fields={"question": "더 새"}, now=T + timedelta(minutes=3)) is True
+
+
+def test_mongo_라벨도_단_순서를_돌려준다(db):
+    # 캘리브레이션이 "케이스당 마지막 라벨"을 `list_for`의 **마지막 행**으로 읽는다 —
+    # 두 구현이 같은 순서를 내야 그 규칙이 백엔드에 무관해진다.
+    from src.domain.label import RootCauseLabel
+    from src.infrastructure.mongo_store import MongoLabelStore
+
+    store = MongoLabelStore(db)
+    for agreement in ("wrong", "partially_correct", "correct"):
+        store.append(RootCauseLabel(case_id="c-1", agreement=agreement, labeled_at=T))
+    assert [row.agreement for row in store.list_for("c-1")] == [
+        "wrong", "partially_correct", "correct"]

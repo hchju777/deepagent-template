@@ -1,9 +1,10 @@
 """라벨 유입구와 게이트(계획 15/P8)."""
 from datetime import datetime, timezone
 
-from src.application.labels import label_stats, submit_label
+from src.application.labels import calibration, label_stats, submit_label
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.label import InMemoryLabelStore
+from src.domain.snapshot import InMemoryVerdictSnapshotStore, VerdictSnapshot
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
 
@@ -129,3 +130,99 @@ def test_집계는_게이트를_모는_숫자를_따로_낸다():
     stats = label_stats(repo=repo, labels=labels)
     assert stats.labeled_cases == 6 and stats.labeled_closed == 1
     assert "그중 라벨됨 1건" in stats.why
+
+
+def _snap(case_id, confidence, *, outcome="closed"):
+    return VerdictSnapshot(case_id=case_id, closed_at=T, gbm="mx", fct="gumi",
+                           fingerprint="fp", outcome=outcome, confidence=confidence)
+
+
+def _open_gate(*, labeled, confidence="high", agreement="correct", saw_report=False):
+    """게이트를 여는 최소 트리 — 종결 `labeled*2`건 중 `labeled`건에 라벨."""
+    repo = _repo(closed=labeled * 2 - 1)          # 라벨 수가 종결의 절반을 넘게
+    labels, snapshots = InMemoryLabelStore(), InMemoryVerdictSnapshotStore()
+    for i in range(labeled):
+        snapshots.put(_snap(f"c-{i}", confidence))
+        submit_label(f"c-{i}", agreement=agreement, saw_report=saw_report,
+                     repo=repo, labels=labels, clock=lambda: T)
+    return repo, labels, snapshots
+
+
+def test_게이트가_닫혀_있으면_버킷을_내지_않는다():
+    # 12/40으로 낸 30%는 다음 주에 뒤집힐 숫자이고, 한 번 보고되면 사람이 기억한다.
+    repo, labels, snapshots = _open_gate(labeled=3)
+    result = calibration(repo=repo, labels=labels, snapshots=snapshots)
+    assert result.gate_open is False and result.buckets == []
+
+
+def test_게이트가_열리면_confidence별_적중을_낸다():
+    repo, labels, snapshots = _open_gate(labeled=30)
+    result = calibration(repo=repo, labels=labels, snapshots=snapshots)
+    assert result.gate_open is True
+    bucket = next(b for b in result.buckets if b.confidence == "high")
+    assert bucket.n == 30 and bucket.correct == 30
+
+
+def test_unknown_라벨은_분모에서_빠지고_수는_보고된다():
+    # "모르겠다"는 틀렸다는 증거가 아니다. 다만 조용히 빼면 n이 왜 작은지 모른다.
+    repo, labels, snapshots = _open_gate(labeled=30)
+    snapshots.put(_snap("c-40", "high"))
+    repo.save(CaseRecord(id="c-40", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T, status="closed",
+                         closed_reason="조사 완료"))
+    submit_label("c-40", agreement="unknown", repo=repo, labels=labels, clock=lambda: T)
+    bucket = next(b for b in calibration(repo=repo, labels=labels,
+                                         snapshots=snapshots).buckets
+                  if b.confidence == "high")
+    assert bucket.n == bucket.correct + bucket.partially_correct + bucket.wrong
+    assert bucket.excluded_unknown == 1
+
+
+def test_케이스당_마지막_라벨만_센다():
+    # 라벨은 append-only라 한 케이스에 여럿 붙는다. 전부 세면 여러 번 고친 케이스가
+    # 분모를 지배한다.
+    repo, labels, snapshots = _open_gate(labeled=30)
+    submit_label("c-0", agreement="wrong", repo=repo, labels=labels, clock=lambda: T)
+    bucket = next(b for b in calibration(repo=repo, labels=labels,
+                                         snapshots=snapshots).buckets
+                  if b.confidence == "high")
+    assert bucket.n == 30 and bucket.wrong == 1 and bucket.correct == 29
+
+
+def test_confidence가_없으면_미상_버킷이다():
+    # 버리면 분모에 생존 편향이 생긴다 — confidence를 못 낸 판정이 곧 어려운 케이스다.
+    repo, labels, snapshots = _open_gate(labeled=30)
+    snapshots.put(_snap("c-0", None))
+    buckets = {b.confidence: b for b in calibration(repo=repo, labels=labels,
+                                                    snapshots=snapshots).buckets}
+    assert buckets["미상"].n == 1 and buckets["high"].n == 29
+
+
+def test_스냅샷이_없는_라벨은_세지_않는다():
+    repo, labels, snapshots = _open_gate(labeled=30)
+    repo.save(CaseRecord(id="c-41", gbm="mx", fct="gumi", fingerprint="fp", symptom="s",
+                         t0=T, created_at=T, updated_at=T, status="closed",
+                         closed_reason="조사 완료"))
+    submit_label("c-41", agreement="wrong", repo=repo, labels=labels, clock=lambda: T)
+    assert sum(b.n for b in calibration(repo=repo, labels=labels,
+                                        snapshots=snapshots).buckets) == 30
+
+
+def test_보고서를_보고_단_라벨의_수를_함께_낸다():
+    # 앵커링 의심을 숫자 옆에 두지 않으면 사람이 적중률만 읽는다.
+    repo, labels, snapshots = _open_gate(labeled=30, saw_report=True)
+    bucket = next(b for b in calibration(repo=repo, labels=labels,
+                                         snapshots=snapshots).buckets
+                  if b.confidence == "high")
+    assert bucket.saw_report == 30
+
+
+def test_저장소가_던져도_캘리브레이션은_상태로_돌려준다():
+    # 규율 1 — 관측성이 명령을 죽이면 안 된다.
+    class _Boom(InMemoryVerdictSnapshotStore):
+        def get(self, case_id):
+            raise RuntimeError("mongo down")
+
+    repo, labels, _ = _open_gate(labeled=30)
+    result = calibration(repo=repo, labels=labels, snapshots=_Boom())
+    assert result.buckets == [] and "실패" in result.why
