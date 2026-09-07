@@ -75,7 +75,7 @@ _INSTRUCTION = (
 
 def _build_prompt(snapshot_ids: list[str], snapshot_texts: dict[str, str],
                    check_name: str, question: str) -> str:
-    # 상한은 `runner.MAX_SNAPSHOT_CHARS` 하나다 — 리터럴을 다시 적으면 두 벌이 되고
+    # 상한은 이 모듈의 `MAX_SNAPSHOT_CHARS` 하나다 — 리터럴을 다시 적으면 두 벌이 되고
     # 언젠가 한쪽만 고쳐진다(이 계획이 접기에서 겪은 그것).
     lines = [f"[증거 {sid}] {str(snapshot_texts.get(sid, ''))[:MAX_SNAPSHOT_CHARS]}"
              for sid in snapshot_ids]

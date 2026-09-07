@@ -221,6 +221,10 @@ async def run_subagent(task: PlanTask, *, adapters, store, llm, budget, case_id)
     # 프롬프트가 `[증거 ev-N]` 어휘를 가르치고 도구 반환이 그 어휘를 쓰므로, 개행이
     # 섞이면 가짜 도구 결과를 만들 수 있다.
     goal = one_line(task.goal)
+    # 이 줄은 접기 **뒤**에 개행과 함께 붙는다. 안전한 근거가 다른 자리와 다르다 —
+    # select 게이트(`nodes.py`)가 `input_evidence_ids`를 `state.evidence`의 부분집합으로
+    # 요구하고 그 id는 코드가 만든 `ev-N`이라, 위조 값을 실은 태스크는 애초에 실행에
+    # 못 든다. **게이트를 느슨하게 하면 여기가 열린다.**
     if task.input_evidence_ids:
         goal += f"\n입력 증거 id: {', '.join(task.input_evidence_ids)}"
     try:
