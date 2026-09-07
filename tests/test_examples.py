@@ -56,3 +56,18 @@ def test_README_빠른_시작이_시드_파일을_실제로_가리킨다():
     match = re.search(r"patrol run [^\n]*--stub-seeds (\S+)", readme)
     assert match, "README 빠른 시작에 --stub-seeds가 없다"
     assert (ROOT / match.group(1)).exists(), match.group(1)
+
+
+def test_예시_트리는_기동_검증을_통과한다():
+    """`config.example`을 그대로 복사한 사람이 첫 명령에서 막히면 안 된다.
+
+    실제로 막혀 있었다: 계획 16이 예시 시나리오를 추가하면서 그 지표가 가리키는 등재
+    항목을 사이트 config에도, pinned 명세에도 안 넣었다. 어떤 테스트도 예시 트리를
+    boot에 태우지 않아 아무도 몰랐다.
+    """
+    from src.boot import validate_boot
+
+    env = {"LLM_API_KEY": "k", "MX_GUMI_API_BASE": "http://target",
+           "MX_GUMI_MONGO_URL": "mongodb://x:27017", "MX_GUMI_REDIS_URL": "redis://x"}
+    errors = validate_boot(ROOT / "config.example", env=env, repo_root=ROOT)
+    assert errors == [], "\n".join(f"[{e.where}] {e.problem}" for e in errors)

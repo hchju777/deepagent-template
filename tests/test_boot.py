@@ -573,12 +573,11 @@ def test_같은_토큰을_가진_주체_둘은_기동을_거부한다(tmp_path):
 
 def test_시나리오의_대상과_사이트를_기동에서_검증한다(tmp_path):
     # 기동 거부 철학: 문제를 발견 즉시 죽지 않고 전부 모아서 돌려준다.
-    import json as _json
     _tree(tmp_path)
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
     def _scenario(name, **over):
-        (scenarios / f"{name}.json").write_text(_json.dumps({
+        (scenarios / f"{name}.json").write_text(json.dumps({
             "kind": "aggregate", "concern": "operation", "title": "나쁜 시나리오",
             "schedule": {"interval": "1h"},
             "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}},
@@ -595,11 +594,10 @@ def test_시나리오의_대상과_사이트를_기동에서_검증한다(tmp_pa
 
 
 def test_정상_시나리오는_기동을_막지_않는다(tmp_path):
-    import json as _json
     _tree(tmp_path)
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "ok.json").write_text(_json.dumps({
+    (scenarios / "ok.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "정상",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}}}),
@@ -610,7 +608,6 @@ def test_정상_시나리오는_기동을_막지_않는다(tmp_path):
 def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path):
     # 리뷰 M-6: 점검은 등재 스키마까지 대조하는데(그 자리 주석이 이유를 적었다)
     # 집계는 이름만 봤다 — 같은 오타가 매 집계 error로만 드러난다.
-    import json as _json
     _tree(tmp_path)
     _write(tmp_path, "config/gbm/mx.json", json.dumps({
         "target": {"adapters": "stub", "rest": {
@@ -620,7 +617,7 @@ def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path
         "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "bad_body.json").write_text(_json.dumps({
+    (scenarios / "bad_body.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "나쁜 body",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"target": "rest:summary_prod", "params": {"body": {"없는키": 1}},
@@ -634,11 +631,10 @@ def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path
 
 def test_target도_probe도_없는_지표는_기동을_거부한다(tmp_path):
     # 재검증 N18b: 새 boot 항목 셋 중 하나가 무테스트였다.
-    import json as _json
     _tree(tmp_path)
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "no_target.json").write_text(_json.dumps({
+    (scenarios / "no_target.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "대상 없음",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"extract": "body.n", "reduce": "sum"}}}), encoding="utf-8")
@@ -649,7 +645,6 @@ def test_target도_probe도_없는_지표는_기동을_거부한다(tmp_path):
 
 def test_시나리오의_resolve_키도_등재_스키마로_대조한다(tmp_path):
     # 점검과 대칭 — 스키마에 없는 키를 가리키면 매 집계가 error를 내고 끝난다.
-    import json as _json
     _tree(tmp_path)
     _write(tmp_path, "config/gbm/mx.json", json.dumps({
         "target": {"adapters": "stub", "rest": {
@@ -659,7 +654,7 @@ def test_시나리오의_resolve_키도_등재_스키마로_대조한다(tmp_pat
         "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
     scenarios = tmp_path / "config" / "scenarios"
     scenarios.mkdir(parents=True, exist_ok=True)
-    (scenarios / "bad_resolve.json").write_text(_json.dumps({
+    (scenarios / "bad_resolve.json").write_text(json.dumps({
         "kind": "aggregate", "concern": "operation", "title": "나쁜 resolve",
         "schedule": {"interval": "1h"},
         "metrics": {"a": {"target": "rest:summary_prod", "extract": "body.n", "reduce": "sum",
@@ -731,3 +726,181 @@ def test_필터도_해석기도_없는_mongo_find는_전체_스캔이라_거부�
     problems = " ".join(e.problem for e in
                         validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
     assert "전체 조회" in problems
+
+
+def test_집계_지표의_mongo_find도_기동에서_검증한다(tmp_path):
+    # 검증 리뷰 MG-1: MetricSpec이 프로브에 그대로 실리는데 `_scenario_errors`가
+    # mongo_find_problems를 안 불러, 오타가 "매 집계 missing"으로만 드러났다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "bad_metric.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "나쁜 지표",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "mongo:twin_state", "probe": "mongo_find",
+                          "extract": "0.n", "reduce": "sum",
+                          "params": {"filter": {"$where": "sleep(1)"},
+                                     "sort": [["ts", -1.0]]}},
+                    "b": {"target": "mongo:twin_state", "probe": "mongo_find",
+                          "extract": "0.n", "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "$where" in problems and "sort" in problems
+    assert "전체 조회" in problems          # 필터도 resolve도 없는 지표
+
+
+_REST_SITE = {
+    "target": {"adapters": "stub",
+               "rest": {"base_url": "http://t", "entries": {
+                   "alarm_count": {"method": "GET", "path": "/alarms",
+                                   "query_schema": {"line": "list[str]", "day": "str"}},
+                   "make_thing":  {"method": "POST", "path": "/make",
+                                   "body_schema": {"line": "list[str]"}}}}},
+    "patrol": {"checks": {}}}
+
+
+def _scenario(tmp_path, metrics):
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "agg.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "집계",
+        "schedule": {"interval": "1h"}, "metrics": metrics}), encoding="utf-8")
+    return " ".join(e.problem for e in
+                    validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+
+
+def _rest_metric(**over):
+    base = {"target": "rest:alarm_count", "extract": "0.n", "reduce": "sum"}
+    return {**base, **over}
+
+
+def test_지표의_rest_해석기도_GET_항목만_가리킬_수_있다(tmp_path):
+    # 해석기는 `adapters.rest.query(spec.entry, {})`를 부르고 어댑터가 항목 선언의
+    # 메서드로 나간다 — POST 항목을 가리키면 실제로 POST가 나가고, 집계는 사이트
+    # 수만큼 팬아웃하므로 그 한 줄이 N개 법인에 동시에 나간다(규율 9).
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "rest", "entry": "make_thing", "field": "code"}})})
+    assert "GET이어야 한다" in problems
+
+
+def test_지표의_rest_해석기가_없는_항목을_가리키면_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "rest", "entry": "ghost", "field": "code"}})})
+    assert "등재돼 있지 않다" in problems
+
+
+def test_지표의_해석기_모양이_스키마와_어긋나면_거부한다(tmp_path):
+    # clock은 문자열 하나를 내는데 스키마가 list[str]이면 매 집계가 그 오류로 끝난다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "clock", "expr": "today"}})})
+    assert "문자열 하나" in problems
+
+
+def test_지표의_mongo_해석기_filter도_허용목록을_통과해야_한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(
+        {**_REST_SITE, "target": {**_REST_SITE["target"],
+                                  "mongo": {"url": "mongodb://x:27017"}}}))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "mongo", "collection": "parts", "field": "code",
+                 "filter": {"$where": "sleep(1)"}}})})
+    assert "$where" in problems
+
+
+def test_지표의_해석기가_쓰는_어댑터가_없으면_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))   # mongo 미설정
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "mongo", "collection": "parts", "field": "code"}})})
+    assert "target.mongo가 설정돼 있지 않다" in problems
+
+
+def test_resolve를_실행하지_않는_프로브의_지표는_거부한다(tmp_path):
+    # 사람이 "범위를 좁혔다"고 믿는 지표가 런타임에는 해석기를 조용히 무시한다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    problems = _scenario(tmp_path, {"m": {
+        "target": "mongo:twin_state", "probe": "mongo_recent",
+        "extract": "0.n", "reduce": "sum",
+        "resolve": {"line": {"from": "clock", "expr": "today"}}}})
+    assert "등재 항목이 아니다" in problems
+
+
+def test_전체_조회를_명시한_지표는_기동을_막지_않는다(tmp_path):
+    # mongo_find_problems에 resolve를 안 넘기면 이 정상 설정이 "전체 조회"로 거부된다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    assert _scenario(tmp_path, {"m": {
+        "target": "mongo:twin_state", "probe": "mongo_find",
+        "extract": "0.n", "reduce": "sum",
+        "resolve": {"line": {"from": "unfiltered"}}}}) == ""
+
+
+def test_시나리오_스키마_오류가_다른_시나리오의_문제를_가리지_않는다(tmp_path):
+    # 기동 거부 철학은 "전부 모아서"다. 파일 하나가 스키마에서 걸리면 즉시 return하던
+    # 탓에, 다른 시나리오의 오타가 그 한 줄 뒤로 숨었다(검증 리뷰).
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "broken.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "스키마 오류",
+        "schedule": {"interval": "1h"},
+        "metrics": {"m": {"target": "mongo:twin_state", "extract": "0.n",
+                          "reduce": "sum", "sample": 0}}}), encoding="utf-8")
+    (scenarios / "typo.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "오타",
+        "schedule": {"interval": "1h"},
+        "metrics": {"m": {"target": "mongo:ghost_collection", "extract": "0.n",
+                          "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "greater than or equal to 1" in problems      # 스키마 오류
+    assert "ghost_collection" in problems                # 가려지던 의미 오류
+
+
+def test_표적이_없는_지표의_해석기도_검증한다(tmp_path):
+    # `probe`만 있고 `target`이 없는 지표를 건너뛰면, "해석기 검증은 표적 종류와
+    # 무관하게 돈다"는 주석이 문자 그대로 거짓이 된다(검증 리뷰 LOW-2).
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": {
+        "probe": "rest_query", "extract": "0.n", "reduce": "sum",
+        "resolve": {"line": {"from": "rest", "entry": "make_thing", "field": "c"}}}})
+    assert "GET이어야 한다" in problems
+
+
+def test_rest_자체가_없으면_오타가_아니라_미설정이라고_말한다(tmp_path):
+    # "항목이 등재돼 있지 않다"로 보고하면 사람이 없는 오타를 찾는다 —
+    # mongo·redis가 정확히 말하는 것과 같게 맞춘다(검증 리뷰 LOW-3).
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {"c": {
+            "judge": "rule", "schedule": {"interval": "5m"},
+            "probe": "mongo_find", "target": "mongo:twin_state",
+            "params": {"rule": "exists", "field": "0.line", "filter": {"state": "STOP"}},
+            "resolve": {"line": {"from": "rest", "entry": "e", "field": "c"}}}}}}))
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "target.rest가 설정돼 있지 않다" in problems

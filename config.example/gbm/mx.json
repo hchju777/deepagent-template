@@ -25,6 +25,13 @@
             "line_code": "list[str]",
             "date": "str"
           }
+        },
+        "alarm_count": {
+          "method": "POST",
+          "path": "/summary/alarms",
+          "body_schema": {
+            "window": "str"
+          }
         }
       }
     },
