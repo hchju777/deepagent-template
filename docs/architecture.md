@@ -273,6 +273,10 @@ JS를 도는 연산자는 표현할 수 없다. 값은 `resolve`로 해석해 �
   얻으려고 수천 건을 pydantic으로 검증하지 않는다. `find().sort()`가 아닌 이유는 정렬 키가
   `status_since or updated_at` coalesce이기 때문이고(`status_since`는 계획 4b 이후 필드라
   옛 문서에 없다), 계산 필드는 `$project`로 지운다(`CaseRecord`가 `extra="forbid"`다).
+  정렬 키는 **폭을 맞춰서** 만든다(`_fixed_width_iso`) — pydantic이 마이크로초 0일 때
+  소수부를 생략하는데 `Z`가 `.`보다 커서, 날것으로 정렬하면 정각이 같은 초의 최신으로
+  뒤집히고 `$limit`이 더 최신인 케이스를 잘라낸다(모듈 docstring이 범위 비교 세 곳에서
+  이미 적은 함정이다).
   **동점은 `id` 내림차순**으로 가른다 — 두 백엔드의 계약이다. 키가 하나뿐이면 인메모리는
   파이썬 정렬의 삽입 순서를, Mongo는 아무 순서나 내고, 같은 시각에 닫힌 케이스는 흔하다.
 - **브리핑 재료(`src/application/briefing.py`)** — 스펙 §3.6은 다섯을 열거하지만
