@@ -34,6 +34,7 @@ class CaseDetail(StrictModel):
     verdict_summary: str | None
     question: str | None
     question_kind: str | None
+    question_seq: int          # 답을 보낼 때 되돌려 실어야 하는 번호(계획 17)
     requested_by: str | None
     intake_done: bool
     target_locator: str | None

@@ -207,3 +207,16 @@ def test_저장소_장애는_not_found가_아니라_error다():
             raise RuntimeError("mongo down")
     assert submit_answer("c-1", "a", key="k", repo=_Boom(),
                          clock=lambda: datetime(2026, 9, 3, tzinfo=timezone.utc)) == "error"
+
+
+def test_다른_질문의_답은_stale_question이다():
+    from src.domain.cases import CaseRecord, InMemoryCaseRepository
+    repo = InMemoryCaseRepository()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="Q2",
+                         question_kind="investigation", question_seq=2))
+    assert submit_answer("c-1", "Q1의 답", key="k-1", repo=repo, clock=lambda: T,
+                         expect_seq=1) == "stale_question"
+    assert repo.get("c-1").pending_answer is None
+    assert submit_answer("c-1", "Q2의 답", key="k-1", repo=repo, clock=lambda: T,
+                         expect_seq=2) == "accepted"

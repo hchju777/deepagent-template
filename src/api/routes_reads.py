@@ -90,6 +90,7 @@ def get_case(case_id: str, request: Request, subject: str | None = Depends(curre
                                events=log.events, timeline_error=log.error)
     return {**_summary(record),
             "question": record.question, "question_kind": record.question_kind,
+            "question_seq": record.question_seq,
             "requested_by": record.requested_by, "intake_done": record.intake_done,
             "target_locator": record.target_locator,
             "stages": [s.model_dump() for s in model.stages],

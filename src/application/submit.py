@@ -12,11 +12,12 @@ from datetime import datetime
 from typing import Callable, Literal
 
 SubmitResult = Literal["accepted", "duplicate", "pending", "busy", "not_waiting", "not_found",
-                       "error"]
+                       "stale_question", "error"]
 
 
 def submit_answer(case_id: str, answer: str, *, key: str, repo,
-                  clock: Callable[[], datetime]) -> SubmitResult:
+                  clock: Callable[[], datetime],
+                  expect_seq: int | None = None) -> SubmitResult:
     """답을 싣는다. 절대 raise하지 않는다.
 
     판정과 쓰기를 저장소의 한 동작(`attach_answer`)에 맡긴다 — 여기서 get→save로
@@ -26,6 +27,9 @@ def submit_answer(case_id: str, answer: str, *, key: str, repo,
       두 번 넣어 F3 복구를 두 번 태우는 것을 막는다. `answer_key`를 소비 뒤에도
       지우지 않는 이유다.
     - `pending`: 아직 소비되지 않은 다른 답이 있다. 덮어쓰지 않는다.
+    - `stale_question`: 클라이언트가 답한 질문이 더 이상 현재 질문이 아니다. 사람이 Q1을
+      읽고 답을 쓰는 사이 그래프가 Q2로 파킹했으면 그 답은 Q2의 답이 아니다 —
+      **다시 읽고 다시 답하라**는 뜻이다(계획 17).
     - `error`: 저장소가 던졌다(장애). `not_found`로 보이면 클라이언트는 "케이스가 없다"고
       믿고 재시도하지 않는다 — 장애는 장애라고 말한다(계획 13 인계 #11).
     - `busy`: 실행자(워커·`case resume`)가 lease를 쥐고 있다 — 잠시 뒤 다시 보내라.
@@ -35,7 +39,8 @@ def submit_answer(case_id: str, answer: str, *, key: str, repo,
       `/intake-answers`로만 답한다(둘을 섞으면 워커가 접수 답을 조사 답으로 재소비한다).
     """
     try:
-        return repo.attach_answer(case_id, answer=answer, key=key, now=clock())
+        return repo.attach_answer(case_id, answer=answer, key=key, now=clock(),
+                                  expect_seq=expect_seq)
     except Exception:                                              # noqa: BLE001 — 무raise 계약
         return "error"
 

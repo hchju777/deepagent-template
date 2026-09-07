@@ -127,11 +127,9 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
             problem = _not_ours(current)      # LLM 호출 동안 가로채였을 수 있다
             if problem is not None:
                 return IntakeTurn(status="not_ours", problems=[problem])
-            parked = current if current.status == "awaiting_human" \
-                else transition(current, "awaiting_human", clock=clock)
-            repo.save(parked.model_copy(update={"question": question,
-                                                "question_kind": "intake",
-                                                "question_seq": parked.question_seq + 1}))
+            problem = _park(record, repo, clock, question)
+            if problem is not None:
+                return IntakeTurn(status="not_ours", problems=[problem])
             _emit(on_event, case_id, "awaiting_human", clock)
             return IntakeTurn(status="asking", question=question)
 
@@ -181,7 +179,7 @@ def _emit(on_event, case_id: str, status: str, clock) -> None:
         pass                    # 이벤트 실패가 접수를 막아서는 안 된다
 
 
-def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
+def _save(repo, case_id: str, clock, *, unpark: bool, expect_updated_at, **fields) -> str | None:
     """접수가 소유한 필드만 얹어 저장한다 — read-modify-write(워커 모듈의 I1).
 
     턴 시작 시 읽은 스냅샷을 wholesale 저장하면 LLM 호출 동안 다른 경로가 바꾼
@@ -204,8 +202,42 @@ def _save(repo, case_id: str, clock, *, unpark: bool, **fields) -> str | None:
         return problem
     base = transition(current, "open", clock=clock) \
         if unpark and current.status == "awaiting_human" else current
-    repo.save(base.model_copy(update=fields))
+    # 읽은 시점의 updated_at을 술어로 걸어 조건부로 쓴다(계획 17). 재읽기만으로는
+    # 창이 좁아질 뿐 닫히지 않았다 — 같은 케이스에 동시에 온 두 접수 요청이 증거를
+    # 중복시키고, 한 순서에서는 `awaiting_human`인데 `intake_done=True`이고 대상까지
+    # 설정된 모순 레코드를 남겼다(계획 13 리뷰 S3이 실증했다).
+    merged = {k: v for k, v in base.model_dump(mode="python").items()
+              if k in _SAVED_FIELDS} | dict(fields)
+    # 술어는 **턴이 시작할 때 읽은** 값이다. 재읽기 값으로 걸면 창이 좁아질 뿐 닫히지
+    # 않는다 — 두 턴이 각자 읽고 각자 LLM을 돌린 뒤 각자 재읽고 쓰면 둘 다 이긴다.
+    if not repo.update_if_unchanged(case_id, expect_updated_at=expect_updated_at,
+                                    fields=merged, now=clock()):
+        return "접수 중 다른 주체가 레코드를 바꿨다 — 이 턴은 손을 뗀다"
     return None
+
+
+# 접수가 소유한 필드. 전체 레코드를 쓰면 그 사이 남이 바꾼 것(게이트의 finding 첨부 등)을
+# 되돌린다 — CAS가 그것을 감지하지만, 애초에 우리 것만 쓰는 편이 낫다.
+_SAVED_FIELDS = ("status", "status_since", "question", "question_kind", "question_seq",
+                 "intake_done", "target_locator", "fingerprint")
+
+
+def _park(record, repo, clock, question: str) -> str | None:
+    """되묻기도 접수가 소유한 필드를 쓴다 — `_save`와 같은 술어로 보호한다(계획 17).
+
+    여기만 CAS가 빠지면 되묻기 턴에서 같은 모순 레코드가 생긴다.
+    """
+    current = repo.get(record.id)
+    problem = _not_ours(current)
+    if problem is not None:
+        return problem
+    parked = current if current.status == "awaiting_human" \
+        else transition(current, "awaiting_human", clock=clock)
+    return _save(repo, record.id, clock, unpark=False,
+                 expect_updated_at=record.updated_at,
+                 status=parked.status, status_since=parked.status_since,
+                 question=question, question_kind="intake",
+                 question_seq=parked.question_seq + 1)
 
 
 def _finish(record, repo, clock, target_locator, on_event=None) -> IntakeTurn:
@@ -216,7 +248,8 @@ def _finish(record, repo, clock, target_locator, on_event=None) -> IntakeTurn:
     # 지문은 점검 이름을 쓰므로 네임스페이스가 갈라져 있고, 게이트가 순찰 finding을
     # 사람이 연 케이스에 붙이는 일이 생기지 않는다. 사람이 연 두 케이스가 같은 지문을
     # 갖는 것은 이제 의도다(open_case는 지문 중복 억제를 하지 않는다).
-    problem = _save(repo, record.id, clock, unpark=True, target_locator=target_locator,
+    problem = _save(repo, record.id, clock, unpark=True,
+                    expect_updated_at=record.updated_at, target_locator=target_locator,
                     fingerprint=fingerprint(record.gbm, record.fct, "chat", target_locator),
                     question=None, question_kind=None, intake_done=True)
     if problem is not None:
@@ -234,7 +267,8 @@ def _give_up(record, repo, clock, problems: list[str], on_event=None) -> IntakeT
     가져갔으면 되돌리지 않고 `not_ours`로 손을 뗀다.
     """
     # 포기도 문을 연다 — 대상 없이 조사하는 것이 착지점이고, 문을 안 열면 영영 안 집힌다.
-    problem = _save(repo, record.id, clock, unpark=True, question=None, question_kind=None,
+    problem = _save(repo, record.id, clock, unpark=True,
+                    expect_updated_at=record.updated_at, question=None, question_kind=None,
                     intake_done=True)
     if problem is not None:
         # 포기하려 했으나 그 사이 남이 가져갔다 — 상태를 되돌리지 않고 손을 뗀다.

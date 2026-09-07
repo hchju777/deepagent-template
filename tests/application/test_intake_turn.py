@@ -3,7 +3,7 @@
 지금 `intake()`는 `ask` 콜백으로 프로세스 안에서 되묻고 문답을 마지막에 한 번
 돌려준다. 그 사이에 클라이언트가 끊기거나 서버가 재시작되면 전부 사라진다.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from src.application.intake import IntakeTurn, intake_turn
@@ -284,3 +284,60 @@ async def test_대상을_못_정한_접수는_지문을_그대로_둔다():
     turn = await _turn(case_id, repo, store, _deps(_MISSING), max_turns=0)
     assert turn.status in ("error", "asking")
     assert repo.get(case_id).fingerprint == before
+
+
+# ---- 계획 17: 접수 저장의 CAS -------------------------------------------------------------
+async def test_동시에_온_두_접수_턴은_하나만_이긴다():
+    # 계획 13 리뷰 S3이 실증한 형태: 증거가 중복되고, `awaiting_human`인데
+    # `intake_done=True`이고 대상까지 설정된 모순 레코드가 남았다.
+    case_id, repo, store = _case()
+    seen = []
+    real_save = repo.save
+
+    class _Racing:
+        """LLM이 도는 사이 남이 저장한다 — 읽기와 쓰기 사이의 창을 정확히 재현한다."""
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                current = repo.get(case_id)
+                real_save(current.model_copy(update={"question": "남이 바꿈",
+                                                     "updated_at": T + timedelta(minutes=1)}))
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    assert turn.status == "not_ours", turn
+    after = repo.get(case_id)
+    assert after.question == "남이 바꿈" and after.intake_done is False
+    assert after.target_locator is None          # 모순 레코드가 남지 않는다
+
+
+async def test_아무도_끼어들지_않으면_예전처럼_끝난다():
+    case_id, repo, store = _case()
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED))
+    assert turn.status == "done" and repo.get(case_id).intake_done is True
+
+
+async def test_되묻는_경로도_같은_술어로_보호된다():
+    # 파킹(_park)도 접수가 소유한 필드를 쓴다 — 여기만 CAS가 빠지면 되묻기 턴에서
+    # 같은 모순 레코드가 생긴다.
+    case_id, repo, store = _case()
+    real_save = repo.save
+
+    class _Racing:
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                current = repo.get(case_id)
+                real_save(current.model_copy(update={"question": "남이 바꿈",
+                                                     "updated_at": T + timedelta(minutes=1)}))
+            return SimpleNamespace(content=_MISSING)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    assert turn.status == "not_ours", turn
+    assert repo.get(case_id).question == "남이 바꿈"

@@ -1339,3 +1339,40 @@ def test_scenario_run의_기본_출력은_보고서_디렉터리_아래다(tmp_p
     import inspect
     src = inspect.getsource(main_module._cmd_scenario)
     assert 'Path(app.report.output_dir) / "fleet"' in src
+
+
+def test_case_show가_질문_번호를_보인다(tmp_path, capsys, monkeypatch):
+    # 사람이 `case resume --question-seq`에 되돌려 적을 재료다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human",
+                         question="계획 변경이 있었나?", question_kind="investigation",
+                         question_seq=3))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
+    assert main(["case", "show", "c-1", "--config-root", str(tmp_path / "config")]) == 0
+    out = capsys.readouterr().out
+    assert "계획 변경이 있었나?" in out and "#3" in out      # 날짜의 3이 아니라 번호
+
+
+def test_case_resume은_지나간_질문_번호를_거절한다(tmp_path, capsys, monkeypatch):
+    # 사람이 Q1을 보고 답을 쓰는 사이 조사가 Q2로 넘어갔으면 그 답은 Q2의 답이 아니다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="Q2",
+                         question_kind="investigation", question_seq=2))
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                InMemoryDigestStore()))
+    code = main(["case", "resume", "c-1", "--answer", "Q1의 답", "--question-seq", "1",
+                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert code == 2
+    assert "질문" in capsys.readouterr().err
+    assert repo.get("c-1").status == "awaiting_human"        # 재개하지 않았다

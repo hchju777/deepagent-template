@@ -369,7 +369,8 @@ def _cmd_case_show(args, config_root: Path, env: dict) -> int:
     print(f"소유자: {record.owner or '-'}  "
          f"임차 만료: {record.lease_until.isoformat() if record.lease_until else '-'}")
     if record.status == "awaiting_human" and record.question:
-        print(f"파킹된 질문: {record.question}")
+        # 번호를 같이 보인다 — `case resume --question-seq`에 되돌려 적을 재료다(계획 17).
+        print(f"파킹된 질문(#{record.question_seq}): {record.question}")
     if record.closed_reason:
         print(f"종결 사유: {record.closed_reason}")
 
@@ -425,6 +426,13 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
                                           and record.lease_until < now)
     if not lease_free:
         print("데몬이 실행 중 — 잠시 후 재시도", file=sys.stderr)
+        return 2
+    # 사람이 본 질문과 지금 질문이 다르면 그 답은 이 질문의 답이 아니다(계획 17).
+    # lease 검사 뒤에 둔다 — lease가 잡혀 있으면 어차피 재개하지 않으므로 번호를
+    # 대조할 것도 없고, 데몬 가동 여부가 더 유용한 안내다.
+    if args.question_seq is not None and record.question_seq != args.question_seq:
+        print(f"질문이 바뀌었다(#{args.question_seq} → #{record.question_seq}) — "
+              f"`case show {args.case_id}`로 다시 읽고 답하라", file=sys.stderr)
         return 2
     if record.status != "awaiting_human":
         print(f"케이스가 awaiting_human 상태가 아니다(현재: {record.status}) — 재개할 수 없다",
@@ -808,6 +816,10 @@ def main(argv=None) -> int:
         "resume", help=_case_resume_note, description=_case_resume_note)
     p_case_resume.add_argument("case_id")
     p_case_resume.add_argument("--answer", required=True)
+    p_case_resume.add_argument(
+        "--question-seq", type=int, default=None,
+        help="답하려는 질문의 번호(case show가 보인다). 그 사이 조사가 다음 질문으로 "
+             "넘어갔으면 거절한다 — 옛 질문의 답이 새 질문에 붙지 않게")
     p_case_resume.add_argument(
         "--requested-by", default=None,
         help="요청 주체 — access.allow가 비어 있지 않으면 필수. awaiting_human은 "

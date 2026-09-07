@@ -3,7 +3,7 @@
 ```
 POST /cases                      202 {case_id, status, question?}   / 400 미확정 / 403 / 401
 POST /cases/{id}/intake-answers  200 {status, question?, target_locator?} / 409 / 404
-POST /cases/{id}/answers         202 {result} / 409 / 404 / 503(저장소 장애)
+POST /cases/{id}/answers         202 {result} / 409(pending·busy·not_waiting·stale_question) / 404 / 503
 POST /cases/{id}/label           202 {result} / 404 — 실제 원인 되먹임(append-only)
 ```
 
@@ -39,6 +39,9 @@ class IntakeAnswer(StrictModel):
 class Answer(StrictModel):
     answer: str
     key: str
+    # 클라이언트가 **본** 질문 번호(If-Match). 안 보내면 예전처럼 받는다 — 기존
+    # 클라이언트를 깨지 않는다. 보내면 그 사이 질문이 바뀌었을 때 409로 거절한다.
+    question_seq: int | None = None
 
 
 def _event_sink(rt):
@@ -97,9 +100,11 @@ async def post_answer(case_id: str, body: Answer, request: Request,
                       subject: str | None = Depends(current_subject)):
     rt = runtime_of(request)
     visible_record(rt, subject, case_id)
-    result = submit_answer(case_id, body.answer, key=body.key, repo=rt.repo, clock=rt.clock)
+    result = submit_answer(case_id, body.answer, key=body.key, repo=rt.repo, clock=rt.clock,
+                           expect_seq=body.question_seq)
     status: Literal[202, 409, 503] = (503 if result == "error"
-                                      else 409 if result in ("not_waiting", "pending", "busy")
+                                      else 409 if result in ("not_waiting", "pending", "busy",
+                                                            "stale_question")
                                       else 202)
     return JSONResponse(status_code=status, content={"result": result})
 
