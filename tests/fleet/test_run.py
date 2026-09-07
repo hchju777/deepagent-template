@@ -256,3 +256,34 @@ async def test_건너뛴_항목이_없으면_완전하다():
     # M12의 짝 — skipped가 불완전 판정에 닿는다는 것을 양방향으로 고정한다.
     results = {f"{g}/{f}": _covered(g, f, [1.0]) for g, f in SITES}
     assert (await _run(_scenario(), results)).rollups[0].complete is True
+
+
+async def test_경로가_아무것도_못_맞추면_0이_아니라_모름이다():
+    # 재검증 M-11: _ZERO_ON_EMPTY가 "관측된 0"과 "경로가 안 맞았다"를 뭉갰다.
+    # 값 16이 실재하는 데이터에서 0이 나왔다 — 이 기능이 막으려던 사고 그 자체다.
+    results = {f"{g}/{f}": SiteSample(gbm=g, fct=f, values=[], skipped=3, status="covered")
+               for g, f in SITES}
+    report = await _run(_scenario(metrics={"alarms": {"target": "rest:/alarms",
+                                                      "extract": "rows.2024.n", "reduce": "sum"}}),
+                        results)
+    rollup = report.rollups[0]
+    assert rollup.value is None and rollup.complete is False
+    assert "맞추지 못했다" in (rollup.coverage_note or "")
+
+
+async def test_전부_선택_지표여도_커버리지가_지표와_모순되지_않는다():
+    # 재검증 M-1b: `required or samples` 폴백이 원래 버그를 그대로 재현했다.
+    scenario = _scenario(metrics={
+        "a": {"target": "rest:/a", "extract": "body.n", "reduce": "sum", "required": False},
+        "b": {"target": "rest:/b", "extract": "body.n", "reduce": "sum", "required": False}})
+
+    async def collect(spec, *, gbm, fct, adapters, clock, timezone_name):
+        if spec.target == "rest:/b":
+            return _missing(gbm, fct, "미배포")
+        return _covered(gbm, fct, [1.0])
+
+    report = await run_scenario("s", scenario, sites=SITES,
+                                adapters_for_site=lambda g, f: object(), clock=lambda: T,
+                                timezone_name="UTC", collect=collect)
+    # 필수 지표가 없으면 누락이라 부를 것이 없다 — 커버리지가 "0/3"이라고 말하면 안 된다.
+    assert [c.status for c in report.coverage] == ["covered"] * 3

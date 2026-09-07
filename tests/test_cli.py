@@ -1324,3 +1324,10 @@ def test_scenario_run도_실행_기록을_남긴다(tmp_path, monkeypatch):
     assert main(["scenario", "run", "alarm_trend", "--config-root", str(tmp_path / "config"),
                  "--repo-root", str(tmp_path)]) == 0
     assert digests.latest("alarm_trend") is not None
+
+
+def test_scenario_run은_추세를_읽고_사이트_옵트아웃을_지킨다(tmp_path, monkeypatch):
+    # 재검증 N3b·N5c: CLI가 digests를 **읽는지**와 scenario_sites를 쓰는지가 무보장이었다.
+    import inspect
+    src = inspect.getsource(main_module._cmd_scenario)
+    assert "digests=persistence.digests" in src and "scenario_sites(" in src

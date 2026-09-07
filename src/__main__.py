@@ -284,7 +284,8 @@ def _cmd_scenario(args, env: dict) -> int:
         pass
     body = (render_fleet_html(report) if scenario.output.format == "html"
             else render_fleet_md(report))
-    path = write_report(body, output_dir=scenario.output.output_dir, case_id=args.name,
+    out_dir = scenario.output.output_dir or str(Path(app.report.output_dir) / "fleet")
+    path = write_report(body, output_dir=out_dir, case_id=args.name,
                         suffix=scenario.output.format)
     if not path:
         print("리포트 파일 쓰기 실패", file=sys.stderr)

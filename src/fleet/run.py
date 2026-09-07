@@ -86,7 +86,8 @@ async def run_scenario(name: str, scenario, *, sites: list[tuple[str, str]],
     # 하나가 사이트 전체를 missing으로 낙인찍어, 한 리포트가 "커버리지 0/3"과
     # "지표 3/3 완전"을 동시에 말한다(검증 리뷰 M-1).
     required = {m: rows for m, rows in samples.items() if scenario.metrics[m].required}
-    coverage = _coverage(required or samples, scope)
+    coverage = _coverage(required, scope) if required else [
+        SiteCoverage(gbm=g, fct=f, status="covered") for g, f in scope]
     rollups = [_rollup(metric, scenario.metrics[metric], samples[metric], len(scope))
                for metric in scenario.metrics]
     groups = _groups(scenario, samples, scope)
@@ -139,14 +140,19 @@ def _rollup(metric: str, spec, rows: list, expected: int) -> MetricRollup:
     usable = [s for s in rows if s.status != "missing"]
     values = [v for s in usable for v in s.values]
     covered = len(usable)
+    skipped = sum(s.skipped for s in rows)
     if not covered:
         value = None
     elif values:
         value = reduce_values(values, spec.reduce)
+    elif skipped:
+        # 경로가 아무것도 못 맞췄다(오타·스키마 변경) — **0이 아니라 모름**이다.
+        # 그 둘을 뭉개면 값이 실재하는 데이터에서 0이 나가고, 그게 이 기능이 막으려던
+        # "알람 12% 감소" 사고의 형태다(검증 리뷰 M-11).
+        value = None
     else:
         value = 0.0 if spec.reduce in _ZERO_ON_EMPTY else None
     gaps = [s for s in rows if s.status != "covered"]
-    skipped = sum(s.skipped for s in rows)
     complete = fold_complete([s.status == "covered" for s in rows]) and skipped == 0 \
         and covered == expected
     note = None
@@ -162,7 +168,9 @@ def _rollup(metric: str, spec, rows: list, expected: int) -> MetricRollup:
         if any(s.status == "fallback" for s in gaps):
             parts.append("폴백 표본 포함")
         if skipped:
-            parts.append(f"숫자가 아닌 항목 {skipped}건 제외")
+            # 사유가 데이터를 탓하면 안 된다 — 값이 하나도 안 나왔으면 경로 쪽이다.
+            parts.append(f"경로가 {skipped}건을 맞추지 못했다" if not values
+                         else f"숫자가 아닌 항목 {skipped}건 제외")
         note = " · ".join(parts) or "표본 없음"
     return MetricRollup(metric=metric, value=value, reduce=spec.reduce, expected_sites=expected,
                         covered_sites=covered, complete=complete, coverage_note=note,

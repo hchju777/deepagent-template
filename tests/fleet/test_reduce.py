@@ -42,5 +42,14 @@ def test_인덱스_세그먼트로_리스트에_접근한다():
     rows = {"rows": [{"n": 1}, {"n": 2}, {"n": 3}]}
     assert extract(rows, "rows.0.n") == ([1.0], 0)
     assert extract(rows, "rows.2.n") == ([3.0], 0)
-    assert extract(rows, "rows.9.n") == ([], 1)      # 범위 밖은 한 건만 센다
+    # 범위 밖 인덱스는 팬아웃으로 폴백한다(숫자 dict 키를 살리려고) — 아무것도 못 맞추면
+    # 항목 수만큼 센다. 값이 하나도 안 나온 사실은 롤업이 "모름"으로 옮긴다.
+    assert extract(rows, "rows.9.n") == ([], 3)
     assert extract(rows, "rows.n") == ([1.0, 2.0, 3.0], 0)   # 인덱스가 없으면 팬아웃
+
+
+def test_리스트_원소의_숫자_키도_읽는다():
+    # 재검증 M-12: 인덱스 우선 해석이 연도·에러코드 같은 숫자 dict 키를 조용히 삼켰다.
+    rows = {"rows": [{"2024": {"n": 7}}, {"2024": {"n": 9}}]}
+    assert extract(rows, "rows.2024.n") == ([7.0, 9.0], 0)      # 범위 밖 인덱스 → 팬아웃
+    assert extract({"rows": [{"n": 1}, {"n": 2}]}, "rows.1.n") == ([2.0], 0)   # 유효 인덱스 우선

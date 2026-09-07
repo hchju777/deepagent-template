@@ -434,6 +434,14 @@ def _scenario_errors(config_root: Path, env, site_targets: dict,
                         body = spec.params.get("body", {}) if isinstance(spec.params, dict) else {}
                         for problem in entry_call_problems(entry, body):
                             errors.append(BootError(where, f"지표 {metric!r}: {problem}"))
+                        # 해석기 키도 점검과 **대칭으로** 본다 — 스키마에 없는 키를
+                        # 가리키면 매 집계가 error를 내고 끝난다.
+                        schema = entry_schema(entry)
+                        for key in spec.resolve:
+                            if key not in schema:
+                                errors.append(BootError(
+                                    where, f"지표 {metric!r}의 resolve 키 {key!r}가 "
+                                           f"항목 {rest!r}의 스키마에 없다"))
                 elif spec.target not in known:
                     errors.append(BootError(
                         where, f"지표 {metric!r}의 target {spec.target!r}이 "

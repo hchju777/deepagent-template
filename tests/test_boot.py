@@ -630,3 +630,41 @@ def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path
     problems = " ".join(e.problem for e in
                         validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
     assert "없는키" in problems and "없는프로브" in problems
+
+
+def test_target도_probe도_없는_지표는_기동을_거부한다(tmp_path):
+    # 재검증 N18b: 새 boot 항목 셋 중 하나가 무테스트였다.
+    import json as _json
+    _tree(tmp_path)
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "no_target.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "대상 없음",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"extract": "body.n", "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "target도 probe도 없다" in problems
+
+
+def test_시나리오의_resolve_키도_등재_스키마로_대조한다(tmp_path):
+    # 점검과 대칭 — 스키마에 없는 키를 가리키면 매 집계가 error를 내고 끝난다.
+    import json as _json
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {
+            "base_url": "http://x",
+            "entries": {"summary_prod": {"method": "POST", "path": "/summary/prod",
+                                         "body_schema": {"part_code": "list[str]"}}}}},
+        "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "bad_resolve.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "나쁜 resolve",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "rest:summary_prod", "extract": "body.n", "reduce": "sum",
+                          "resolve": {"없는키": {"from": "clock", "expr": "today"}}}}}),
+        encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "없는키" in problems

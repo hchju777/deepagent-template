@@ -331,7 +331,9 @@ class PatrolDaemon:
                     else render_fleet_md(report))
             # 시나리오가 말한 곳에 쓴다 — 데몬과 CLI가 다른 곳에 쓰면 config 필드가
             # 프로덕션에서 no-op이 된다(검증 리뷰 M-4).
-            path = write_report(body, output_dir=scenario.output.output_dir,
+            out_dir = scenario.output.output_dir or str(
+                Path(self.report_cfg.output_dir) / "fleet")
+            path = write_report(body, output_dir=out_dir,
                                 case_id=name, suffix=scenario.output.format)
             self._record_fleet_run(name, "ok" if path else "error",
                                    None if path else "리포트 파일 쓰기 실패")

@@ -574,3 +574,31 @@ async def test_파일을_못_쓰면_메일도_안_나간다(tmp_path):
     await daemon.run_scenario_job("alarm_trend")
     assert sent == []
     assert ledger.runs("-", "-", "fleet:alarm_trend")[0].status == "error"
+
+
+async def test_출력_경로를_안_적으면_보고서_디렉터리_아래에_쓴다(tmp_path):
+    # 재검증 위생: 기본값이 CWD 상대 "output/fleet"이라 리포 루트에 남았고, 프로덕션에서
+    # 케이스 보고서와 fleet 리포트가 서로 다른 곳에 흩어졌다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _with_scenarios(store, repo, ledger, tmp_path,
+                             report_cfg=ReportConfig(output_dir=str(tmp_path / "reports")),
+                             scenarios={"alarm_trend": {**_SCENARIO,
+                                                        "output": {"format": "md"}}})
+    daemon.build()
+    await daemon.run_scenario_job("alarm_trend")
+    assert list((tmp_path / "reports" / "fleet").glob("*.md"))
+
+
+async def test_실행_기록_저장이_던져도_잡은_살아남는다(tmp_path):
+    # 재검증 N20: _store_digest의 무raise가 무테스트였다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+
+    class _Boom(InMemoryDigestStore):
+        def put(self, report):
+            raise RuntimeError("mongo write failed")
+    daemon = _with_scenarios(store, repo, ledger, tmp_path, digests=_Boom(),
+                             scenarios={"alarm_trend": {**_SCENARIO, "output": {
+                                 "format": "md", "output_dir": str(tmp_path / "fleet")}}})
+    daemon.build()
+    await daemon.run_scenario_job("alarm_trend")          # raise하지 않는다
+    assert ledger.runs("-", "-", "fleet:alarm_trend")[0].status == "ok"

@@ -54,7 +54,9 @@ class ScenarioScope(StrictModel):
 
 class OutputSpec(StrictModel):
     format: Literal["html", "md"] = "html"
-    output_dir: str = "output/fleet"
+    # None이면 `report.output_dir/fleet`을 쓴다. 기본값을 CWD 상대 문자열로 두면 케이스
+    # 보고서와 집계 리포트가 서로 다른 곳에 흩어지고 리포 루트에 output/이 생긴다.
+    output_dir: str | None = None
     mail: bool = False
 
 
