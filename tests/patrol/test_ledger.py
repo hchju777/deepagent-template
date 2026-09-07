@@ -37,9 +37,10 @@ def test_메트릭_조회는_limit을_지킨다(ledger):
 
 def test_오래된_메트릭만_걷힌다(ledger):
     ledger.record_metric("m", 1.0, tags={}, at=T - timedelta(days=40))
-    ledger.record_metric("m", 2.0, tags={}, at=T)
+    ledger.record_metric("m", 2.0, tags={}, at=T - timedelta(days=30))   # 경계 = 남는다
+    ledger.record_metric("m", 3.0, tags={}, at=T)
     assert ledger.prune_metrics_before(T - timedelta(days=30)) == 1
-    assert [r["value"] for r in ledger.metrics("m")] == [2.0]
+    assert [r["value"] for r in ledger.metrics("m")] == [3.0, 2.0]
 
 
 def test_LedgerPort는_세_책임의_합집합이다():
