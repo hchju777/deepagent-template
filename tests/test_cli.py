@@ -1331,3 +1331,11 @@ def test_scenario_run은_추세를_읽고_사이트_옵트아웃을_지킨다(tm
     import inspect
     src = inspect.getsource(main_module._cmd_scenario)
     assert "digests=persistence.digests" in src and "scenario_sites(" in src
+
+
+def test_scenario_run의_기본_출력은_보고서_디렉터리_아래다(tmp_path, monkeypatch):
+    # 재검증 P12: 위생 픽스의 CLI 절반이 무보장이었다 — 되돌리면 리포 루트에 output/이
+    # 되살아난다.
+    import inspect
+    src = inspect.getsource(main_module._cmd_scenario)
+    assert 'Path(app.report.output_dir) / "fleet"' in src

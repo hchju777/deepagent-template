@@ -295,6 +295,13 @@ class SiteScenarioOverride(StrictModel):
    `adapters_for_site`뿐이다(`collect_site`는 이미 무raise).
 8. **`MongoDigestStore.prune_before`는 naive datetime에 `TypeError`다** — 호출부가 없어
    지금은 도달 불가.
+9. **`extract`의 숫자 세그먼트는 리스트 길이에 따라 의미가 바뀐다** — 유효 범위면
+   인덱스, 아니면 dict 키 팬아웃이다. 실 config에 숫자 경로가 없어 지금은 도달 불가지만,
+   쓰기 시작하면 행 수가 다른 두 사이트가 **같은 경로를 다르게 계산**하고 리포트가 그
+   사실을 말하지 않는다. 정직한 종착점은 명시 문법(`rows[0].n`)이거나 인덱스 지원 제거다.
+10. **전부-선택 시나리오에서 죽은 사이트가 `covered`로 렌더된다** — "필수가 없으면 gap이라
+    부를 것이 없다"는 논리는 맞지만 "전 사이트 확인됨"은 도달 가능성 주장으로 읽힌다.
+    `required`의 기본값이 `true`라 모든 지표를 명시적으로 꺼야 도달한다.
 
 ## 집행 중 검증 리뷰가 잡은 것(기록)
 

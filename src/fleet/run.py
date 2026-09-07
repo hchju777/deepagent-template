@@ -168,9 +168,15 @@ def _rollup(metric: str, spec, rows: list, expected: int) -> MetricRollup:
         if any(s.status == "fallback" for s in gaps):
             parts.append("폴백 표본 포함")
         if skipped:
-            # 사유가 데이터를 탓하면 안 된다 — 값이 하나도 안 나왔으면 경로 쪽이다.
-            parts.append(f"경로가 {skipped}건을 맞추지 못했다" if not values
-                         else f"숫자가 아닌 항목 {skipped}건 제외")
+            # 사유는 **사이트별로** 판정한다 — 전역으로 보면 한 사이트가 값을 냈다는
+            # 이유로 나머지의 경로 실패가 "불량 행"으로 읽힌다(검증 리뷰 low2).
+            blank = sum(1 for s in usable if not s.values)
+            if not values:
+                parts.append(f"경로가 {skipped}건을 맞추지 못했다")
+            elif blank:
+                parts.append(f"{blank}개 사이트에서 경로가 맞지 않았다")
+            else:
+                parts.append(f"숫자가 아닌 항목 {skipped}건 제외")
         note = " · ".join(parts) or "표본 없음"
     return MetricRollup(metric=metric, value=value, reduce=spec.reduce, expected_sites=expected,
                         covered_sites=covered, complete=complete, coverage_note=note,

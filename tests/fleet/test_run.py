@@ -287,3 +287,15 @@ async def test_전부_선택_지표여도_커버리지가_지표와_모순되지
                                 timezone_name="UTC", collect=collect)
     # 필수 지표가 없으면 누락이라 부를 것이 없다 — 커버리지가 "0/3"이라고 말하면 안 된다.
     assert [c.status for c in report.coverage] == ["covered"] * 3
+
+
+async def test_경로_실패_사유는_사이트별로_판정한다():
+    # 재검증 low2: `not values`가 전역이라 한 사이트라도 값을 내면 나머지의 경로 실패가
+    # "숫자가 아닌 항목"으로 적혔다 — 운영자가 "불량 행 N개"로 읽는다.
+    results = {"mx/gumi": SiteSample(gbm="mx", fct="gumi", values=[1000.0], status="covered"),
+               "mx/suwon": SiteSample(gbm="mx", fct="suwon", values=[], skipped=1, status="covered"),
+               "ds/xian": SiteSample(gbm="ds", fct="xian", values=[], skipped=1, status="covered")}
+    report = await _run(_scenario(), results)
+    note = report.rollups[0].coverage_note or ""
+    assert "2개 사이트에서 경로가 맞지 않았다" in note
+    assert report.rollups[0].value == 1000.0        # 숫자 자체는 참인 부분합이다

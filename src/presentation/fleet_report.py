@@ -64,7 +64,7 @@ def _md(report: FleetReport) -> str:
         "",
         "## 커버리지",                     # 숫자보다 **먼저**
         "",
-        f"{covered} / {total} 사이트",
+        f"{covered} / {total} 사이트 (필수 지표 기준)",
         "",
     ]
     gaps = [c for c in report.coverage if c.status != "covered"]
@@ -153,7 +153,7 @@ def _html(report: FleetReport) -> str:
  (최대 편차 {_e(_window_span(report))})</p>
 <p>시나리오 digest: {_e(report.scenario_digest)}</p>
 <h2>커버리지</h2>
-<p>{covered} / {total} 사이트</p>
+<p>{covered} / {total} 사이트 (필수 지표 기준)</p>
 {coverage_block}
 <h2>지표</h2>
 {_rows(["metric", "value", "reduce", "커버리지", "완전성"], metric_rows)}

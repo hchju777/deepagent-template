@@ -87,3 +87,11 @@ def test_렌더는_형태가_망가진_보고서에도_raise하지_않는다():
     broken = _report().model_copy(update={"rollups": ["이상한 값"]})
     assert "알람 추세" in render_fleet_md(broken) or "실패" in render_fleet_md(broken)
     assert render_fleet_html(broken)
+
+
+def test_커버리지가_무엇의_기준인지_말한다():
+    # 재검증 low4: 커버리지 헤더와 지표 행의 분모가 다른 경우(선택 지표·fallback)가
+    # 설명 없이 나란히 섰다.
+    md = render_fleet_md(_report())
+    assert "필수 지표 기준" in md
+    assert "필수 지표 기준" in render_fleet_html(_report())
