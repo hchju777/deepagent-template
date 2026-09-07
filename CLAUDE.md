@@ -14,6 +14,7 @@
 | [docs/file-map.md](docs/file-map.md) | **어느 파일인가** — 파일별 역할과 데이터 흐름 |
 | [docs/for-implementers.md](docs/for-implementers.md) | **어떤 순서인가** — "X를 추가하려면" 레시피와 집행 전 점검표 |
 | [docs/architecture.md](docs/architecture.md) | 어떻게 배선돼 있는가 |
+| [docs/backlog.md](docs/backlog.md) | **무엇이 아직 열려 있는가** — 손대기 전에 여기부터 |
 | [설계 스펙](docs/superpowers/specs/2026-09-02-ops-monitoring-design.md) | 왜 이렇게 설계됐는가(단일 진실 소스) |
 
 작업이 작으면 이 파일과 `for-implementers.md`만으로 충분하다. 큰 기능이면 스펙까지.

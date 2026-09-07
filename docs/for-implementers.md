@@ -11,6 +11,10 @@
 `tests/patrol/test_rules.py`다. 스키마 검증은 `tests/config/`, 저장소 계약은
 `tests/infrastructure/`, CLI 배선은 `tests/test_cli.py`, 기동 검증은 `tests/test_boot.py`.
 
+건드리려는 자리가 이미 알려진 부채인지 [backlog.md](backlog.md)에서 먼저 확인하라 —
+계획 문서 25건에 흩어져 있던 인계 97개를 거기 모아 두었고, 그중 8개는 **이미 갚혔는데
+계획 문서에는 열린 것처럼 남아 있다**.
+
 ## 시작 전 30초
 
 ```bash

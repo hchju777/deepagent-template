@@ -58,6 +58,7 @@ import 그래프로 지킨다). 웹 UI가 붙을 자리다.
 | [docs/going-live.md](docs/going-live.md) | 스텁 어댑터 → 실제 시스템 연결 전환 가이드 |
 | [docs/file-map.md](docs/file-map.md) | 파일별 역할과 데이터 흐름 — **어느 파일을 열어야 하는가** |
 | [docs/for-implementers.md](docs/for-implementers.md) | "X를 추가하려면" 레시피 — **무엇을 어떤 순서로 만지는가** |
+| [docs/backlog.md](docs/backlog.md) | 남은 부채 — **무엇이 열려 있고 왜 아직 안 갚았는가** |
 | [tests/README.md](tests/README.md) | 테스트 철학과 실행법 |
 | [CLAUDE.md](CLAUDE.md) | 이 코드베이스에서 작업하는 AI 에이전트를 위한 규율 |
 | [docs/superpowers/specs/2026-09-02-ops-monitoring-design.md](docs/superpowers/specs/2026-09-02-ops-monitoring-design.md) | 승인된 시스템 설계 스펙 원본(단일 진실 소스) |
