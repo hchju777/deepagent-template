@@ -32,12 +32,16 @@ async def test_스윕은_오래된_종결_케이스와_레저와_스크래치를
     store.put_evidence("patrol:mx:gumi:c", "s", {"p": 2}, as_of=fresh)
     # F6/F5: 발송 레저(sends)도 다른 항목들과 같은 스윕으로 정리돼야 한다 —
     # 오래된 건(sent 여부 무관)은 지워지고, 최근 건은 pending으로 남는다.
+    ledger.record_metric("investigation.duration_s", 1.0, tags={}, at=old)
+    ledger.record_metric("investigation.duration_s", 2.0, tags={}, at=fresh)
     ledger.record_send("report:c-old", kind="report", target="a@x", at=old)
     ledger.record_send("report:c-fresh", kind="report", target="a@x", at=fresh)
     counts = await sweep_retention(repo=repo, store=store, ledger=ledger, checkpointer=InMemorySaver(),
                                    clock=lambda: T, retention=RetentionConfig())
     assert counts["closed_cases"] == 1 and store.list_evidence("c-old") == [] and store.list_evidence("c-fresh")
     assert counts["ledger_runs"] == 1 and len(ledger.runs("mx", "gumi", "c")) == 1
+    # 메트릭은 점검 이력과 같은 knob을 쓴다(계획 15) — 스윕에서 빠지면 무한히 쌓인다.
+    assert counts["metrics"] == 1 and len(ledger.metrics("investigation.duration_s")) == 1
     assert counts["scratch_evidence"] == 1 and len(store.list_evidence("patrol:mx:gumi:c")) == 1
     assert counts["sends"] == 1
     assert [p["send_id"] for p in ledger.pending_sends()] == ["report:c-fresh"]
@@ -100,3 +104,17 @@ async def test_보존_스윕은_오래된_판정_스냅샷을_지운다():
                                    retention=RetentionConfig(snapshots_d=730))
     assert counts["snapshots"] == 1
     assert snapshots.get("c-old") is None and snapshots.get("c-new") is not None
+
+
+async def test_라벨은_보존_스윕이_지우지_않는다():
+    # 스냅샷과 짝이다 — 한쪽만 남으면 대조가 불가능해진다(계획 15/P8).
+    from datetime import timedelta
+    from src.domain.label import InMemoryLabelStore, RootCauseLabel
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    labels, snapshots = InMemoryLabelStore(), InMemoryVerdictSnapshotStore()
+    old = T - timedelta(days=400)
+    labels.append(RootCauseLabel(case_id="c-old", agreement="correct", labeled_at=old))
+    await sweep_retention(repo=repo, store=store, ledger=ledger, checkpointer=InMemorySaver(),
+                          clock=lambda: T, retention=RetentionConfig(), snapshots=snapshots)
+    assert labels.count() == 1

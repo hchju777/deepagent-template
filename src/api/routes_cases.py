@@ -4,6 +4,7 @@
 POST /cases                      202 {case_id, status, question?}   / 400 미확정 / 403 / 401
 POST /cases/{id}/intake-answers  200 {status, question?, target_locator?} / 409 / 404
 POST /cases/{id}/answers         202 {result} / 409 / 404 / 503(저장소 장애)
+POST /cases/{id}/label           202 {result} / 404 — 실제 원인 되먹임(append-only)
 ```
 
 `api`는 실행자가 아니다 — `/answers`는 **기록만** 한다. 워커가 집어 간다.
@@ -15,6 +16,8 @@ from fastapi.responses import JSONResponse
 
 from src.api.app import current_subject, hidden, runtime_of, visible_record
 from src.application.intake import intake_turn
+from src.application.labels import submit_label
+from src.domain.label import Agreement, Resolution
 from src.application.submit import submit_answer, submit_case
 from src.config.schema_app import StrictModel
 from src.domain.concern import Concern
@@ -98,4 +101,30 @@ async def post_answer(case_id: str, body: Answer, request: Request,
     status: Literal[202, 409, 503] = (503 if result == "error"
                                       else 409 if result in ("not_waiting", "pending", "busy")
                                       else 202)
+    return JSONResponse(status_code=status, content={"result": result})
+
+
+class Label(StrictModel):
+    """실제 원인 되먹임. 4분류를 Literal로 강제한다 — 자유 문자열이면 나중에 집계가
+    우리 정규화기를 측정하게 된다(계획 15/P8)."""
+    agreement: Agreement
+    resolution: Resolution | None = None
+    actual_component: str | None = None
+    actual_verdict_type: str | None = None
+    saw_report: bool = False
+    labeled_by: str | None = None
+
+
+@router.post("/cases/{case_id}/label", status_code=202)
+async def post_label(case_id: str, body: Label, request: Request,
+                     subject: str | None = Depends(current_subject)):
+    rt = runtime_of(request)
+    visible_record(rt, subject, case_id)        # 다른 쓰기와 같은 접근 검사
+    result = submit_label(case_id, agreement=body.agreement, resolution=body.resolution,
+                          actual_component=body.actual_component,
+                          actual_verdict_type=body.actual_verdict_type,
+                          saw_report=body.saw_report, labeled_by=body.labeled_by or subject,
+                          repo=rt.repo, labels=rt.labels, clock=rt.clock)
+    status: Literal[202, 404, 503] = (404 if result == "not_found"
+                                      else 503 if result == "error" else 202)
     return JSONResponse(status_code=status, content={"result": result})

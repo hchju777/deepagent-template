@@ -22,10 +22,11 @@ from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
-from src.domain.cases import (CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
+from src.domain.cases import (_newest_first, CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
                               lease_is_free, lease_is_held)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
+from src.domain.label import LabelStorePort, RootCauseLabel
 from src.domain.snapshot import VerdictSnapshot, VerdictSnapshotPort
 from src.domain.store import CaseStorePort, EvidenceRecord
 from src.knowledge.digest import canonical_digest
@@ -55,6 +56,7 @@ def ensure_indexes(db: Database) -> None:
     # cases 풀스캔이 된다. status를 앞에 둬서 열린 케이스 조회와 종결 케이스 이력 조회가
     # 같은 인덱스를 쓴다.
     db.cases.create_index([("status", 1), ("fingerprint", 1)])
+    db.cases.create_index([("status", 1), ("target_locator", 1)])   # 이력 tier 2~4(계획 15)
     db.evidence.create_index([("case_id", 1), ("id", 1)], unique=True)
     db.verdicts.create_index("case_id", unique=True)
     db.case_files.create_index("case_id", unique=True)
@@ -68,7 +70,10 @@ def ensure_indexes(db: Database) -> None:
     # (case_id, seq) unique: seq는 counters로 원자 증가하므로 중복이 나면 그 자체가
     # 카운터 손상 신호다 — 인덱스가 조용한 중복 대신 즉시 실패로 드러낸다.
     db.case_events.create_index([("case_id", 1), ("seq", 1)], unique=True)
+    db.metrics.create_index([("name", 1), ("at", -1)])
+    db.metrics.create_index("at")
     db.verdict_snapshots.create_index("case_id", unique=True)
+    db.labels.create_index([("case_id", 1), ("labeled_at", 1)])     # append-only(계획 15)
 
 
 class MongoCaseStore(CaseStorePort):
@@ -329,6 +334,18 @@ class MongoCaseRepository(CaseRepositoryPort):
             {"fingerprint": fp, "status": {"$in": list(OPEN_STATUSES)}})
         return self._to_record(doc) if doc else None
 
+    def closed_by_fingerprint(self, fp, *, exclude_case_id, limit=10) -> list[CaseRecord]:
+        docs = self._db.cases.find({"status": "closed", "fingerprint": fp,
+                                    "id": {"$ne": exclude_case_id}})
+        return _newest_first([self._to_record(d) for d in docs], limit)
+
+    def closed_by_locators(self, locators, *, exclude_case_id, limit=20) -> list[CaseRecord]:
+        if not locators:                # 빈 $in도 0건이지만, 의도를 코드로 못박는다
+            return []
+        docs = self._db.cases.find({"status": "closed", "target_locator": {"$in": list(locators)},
+                                    "id": {"$ne": exclude_case_id}})
+        return _newest_first([self._to_record(d) for d in docs], limit)
+
     def list_by_status(self, status) -> list[CaseRecord]:
         return [self._to_record(d) for d in self._db.cases.find({"status": status})]
 
@@ -394,6 +411,24 @@ class MongoLedger(LedgerPort):
         if not stale_ids:
             return 0
         return self._db.ledger_runs.delete_many({"_id": {"$in": stale_ids}}).deleted_count
+
+    def record_metric(self, name, value, *, tags, at) -> None:
+        self._db.metrics.insert_one({"name": name, "value": float(value), "tags": dict(tags),
+                                     "at": at.isoformat()})
+
+    def metrics(self, name, *, limit=200) -> list[dict]:
+        if limit <= 0:
+            return []
+        cursor = self._db.metrics.find({"name": name}).sort("at", -1).limit(limit)
+        return [{"name": d["name"], "value": d["value"], "tags": d.get("tags", {}),
+                 "at": datetime.fromisoformat(d["at"])} for d in cursor]
+
+    def prune_metrics_before(self, before) -> int:
+        stale = [d["_id"] for d in self._db.metrics.find({})
+                 if datetime.fromisoformat(d["at"]) < before]
+        if not stale:
+            return 0
+        return self._db.metrics.delete_many({"_id": {"$in": stale}}).deleted_count
 
     def record_send(self, send_id, *, kind, target, at) -> bool:
         # find_one 사전조회 없이 곧장 insert한다(리뷰 F4) — sends.send_id unique
@@ -461,6 +496,29 @@ class MongoEventStore(EventStorePort):
         if stale:
             self._db.case_events.delete_many({"_id": {"$in": stale}})
         return len(stale)
+
+
+class MongoLabelStore(LabelStorePort):
+    """append-only — 덮어쓰지 않는다. retention도 걷지 않는다(스냅샷과 짝이다)."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    def append(self, label: RootCauseLabel) -> None:
+        self._db.labels.insert_one(label.model_dump(mode="json"))
+
+    def list_for(self, case_id: str) -> list[RootCauseLabel]:
+        # _id를 동점 키로 — 같은 시각의 두 라벨(고정 시계 테스트, 같은 초의 두 요청)의
+        # 순서가 "단 순서대로"라는 append-only 계약을 지키려면 유일 키가 필요하다.
+        cursor = self._db.labels.find({"case_id": case_id}).sort([("labeled_at", 1), ("_id", 1)])
+        return [RootCauseLabel.model_validate({k: v for k, v in d.items() if k != "_id"})
+                for d in cursor]
+
+    def count(self) -> int:
+        return self._db.labels.count_documents({})
+
+    def labeled_case_ids(self) -> set[str]:
+        return set(self._db.labels.distinct("case_id"))
 
 
 class MongoVerdictSnapshotStore(VerdictSnapshotPort):

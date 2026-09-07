@@ -66,13 +66,36 @@ class SendLedgerPort(ABC):
         ...
 
 
-class LedgerPort(CheckLedgerPort, SendLedgerPort):
-    """두 책임을 다 쓰는 소비자(데몬 조립·retention 스윕)용 합집합.
+class MetricsSinkPort(ABC):
+    """수치 관측치의 적재구(계획 15/P8) — 판정에도 수명주기에도 관여하지 않는다.
 
-    구현을 쪼개지 않는 이유: MongoLedger는 이미 ledger_runs/sends/ledger_meta로
-    컬렉션이 갈라져 있고 retention knob도 ledger_d/sends_d로 분리돼 있다 —
-    저장은 이미 갈라졌고 인터페이스만 융착돼 있었다. 실제 분리가 필요해지는
-    시점(다른 채널이 발송만 쓰거나, 메트릭 sink가 붙을 때)에 구현을 나눈다.
+    레저의 세 번째 책임으로 갈라 둔 이유는 성질이 다르기 때문이다: 점검 이력은
+    "이 점검이 뭐라 했나"(판정 재료), 발송은 2상 멱등(부작용의 원장), 메트릭은
+    **버려도 되는 관측치**다. 그래서 호출부가 이 포트의 실패를 삼켜도 되는 유일한
+    레저다 — 조사가 sink 장애로 죽으면 관측성이 시스템을 더 나쁘게 만든 것이다.
+    포트 자신은 정직하게 던지고, 감싸는 것은 워커의 책임이다.
+    """
+
+    @abstractmethod
+    def record_metric(self, name: str, value: float, *, tags: dict[str, str],
+                      at: datetime) -> None: ...
+
+    @abstractmethod
+    def metrics(self, name: str, *, limit: int = 200) -> list[dict]:
+        """이름이 같은 관측치를 최신순으로. 각 행은 {name, value, tags, at}."""
+        ...
+
+    @abstractmethod
+    def prune_metrics_before(self, before: datetime) -> int: ...
+
+
+class LedgerPort(CheckLedgerPort, SendLedgerPort, MetricsSinkPort):
+    """세 책임을 다 쓰는 소비자(데몬 조립·retention 스윕)용 합집합.
+
+    구현을 쪼개지 않는 이유: MongoLedger는 이미 ledger_runs/sends/ledger_meta/metrics로
+    컬렉션이 갈라져 있고 retention knob도 분리돼 있다 — 저장은 이미 갈라졌고
+    인터페이스만 융착돼 있었다. ABC가 갈라져 있으면 새 소비자(메트릭만 쓰는 것)가
+    합집합을 요구하지 않아도 된다.
     """
 
 
@@ -81,6 +104,7 @@ class InMemoryLedger(LedgerPort):
         self._runs: dict[tuple[str, str, str], list[CheckOutcome]] = defaultdict(list)
         self._heartbeat_at: datetime | None = None
         self._sends: dict[str, dict] = {}          # send_id -> {send_id, kind, target, at, sent}
+        self._metrics: list[dict] = []
 
     def record_run(self, gbm, fct, check, outcome):
         self._runs[(gbm, fct, check)].append(outcome)
@@ -118,6 +142,21 @@ class InMemoryLedger(LedgerPort):
             kept = [o for o in history if o.observed_at >= before]
             deleted += len(history) - len(kept)
             self._runs[key] = kept
+        return deleted
+
+    def record_metric(self, name, value, *, tags, at):
+        self._metrics.append({"name": name, "value": float(value), "tags": dict(tags), "at": at})
+
+    def metrics(self, name, *, limit=200):
+        if limit <= 0:                             # runs와 같은 규약 — -0 슬라이스 함정
+            return []
+        rows = [m for m in self._metrics if m["name"] == name]
+        return list(reversed(rows[-limit:]))
+
+    def prune_metrics_before(self, before):
+        kept = [m for m in self._metrics if m["at"] >= before]
+        deleted = len(self._metrics) - len(kept)
+        self._metrics = kept
         return deleted
 
     def record_send(self, send_id, *, kind, target, at):

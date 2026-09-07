@@ -127,6 +127,13 @@ curl -s -X POST localhost:8080/cases/c-1/answers -H 'content-type: application/j
   -d '{"answer": "계획 변경 없음", "key": "2026-09-04T09:00-c-1"}'
 # → 202 {"result": "accepted"}. 같은 key로 다시 보내면 duplicate — 재시도가 안전하다
 
+# 조사가 끝난 뒤 실제 원인을 되먹인다(학습 루프 — 보고서 푸터가 이 명령을 안내한다)
+python -m src case label c-1 --agreement wrong --actual-component plan-sync \
+    --resolution false_positive --saw-report --by "$USER"
+python -m src case label --stats            # 건수와 게이트 상태(퍼센트는 게이트 전엔 안 낸다)
+curl -s -X POST localhost:8080/cases/c-1/label -H 'content-type: application/json' \
+    -d '{"agreement": "correct", "resolution": "fixed"}'
+
 curl -s localhost:8080/cases/c-1                                  # CaseDetail: 상태·질문·판정·candidates·단계·timeline(+timeline_source/error)
 curl -s localhost:8080/cases/c-1 | python -c 'import json,sys; [print(c["rank"], c["component"], c["confidence"]) for c in json.load(sys.stdin)["candidates"]]'
 curl -s -N localhost:8080/cases/c-1/events -H 'accept: text/event-stream'   # 진행 스트림

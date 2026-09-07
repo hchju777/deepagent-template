@@ -16,6 +16,7 @@ from src.config.schema_app import AppConfig
 from src.domain.cases import InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
 from src.domain.report_model import build_report_model
+from src.domain.label import InMemoryLabelStore
 from src.domain.store import InMemoryCaseStore
 from src.knowledge.topology import Topology
 from src.patrol.ledger import InMemoryLedger
@@ -47,7 +48,7 @@ def test_api와_워커가_같은_저장소로_전_구간을_완주한다(tmp_pat
                                    InMemoryEventStore(), InMemoryLedger())
     rt = ApiRuntime(app=app, sites=[ApiSite(gbm="mx", fct="gumi", topology=TOPO,
                                             lead_llm=_intake_llm(RESOLVED))],
-                    repo=repo, store=store, events=events, ledger=ledger, clock=lambda: T)
+                    repo=repo, store=store, events=events, ledger=ledger, labels=InMemoryLabelStore(), clock=lambda: T)
     client = TestClient(create_app(rt))
 
     deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE, VERDICT_EV3],
@@ -117,7 +118,7 @@ def test_워커가_가져간_뒤_새_파킹_전의_창은_닫혀_있다():
     repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
     rt = ApiRuntime(app=app, sites=[ApiSite(gbm="mx", fct="gumi", topology=TOPO,
                                             lead_llm=_intake_llm(RESOLVED))],
-                    repo=repo, store=store, events=InMemoryEventStore(), ledger=InMemoryLedger(),
+                    repo=repo, store=store, events=InMemoryEventStore(), ledger=InMemoryLedger(), labels=InMemoryLabelStore(),
                     clock=lambda: T)
     client = TestClient(create_app(rt))
     deps = make_e2e_deps(store, lead=[FRAME_ONE_TASK, ASK_JSON])

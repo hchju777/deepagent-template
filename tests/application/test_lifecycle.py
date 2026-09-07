@@ -67,3 +67,13 @@ def test_첨부가_status_since를_건드리지_않으면_타임아웃이_리셋
     attached = waiting.model_copy(update={"updated_at": T + timedelta(hours=100)})
     assert attached.status_since == T                     # status_since는 안 움직인다
     assert is_timed_out(attached, clock=lambda: T + timedelta(hours=101), timeout_h=72)
+
+
+def test_Ticker는_시계와_다른_양이다():
+    # 방향 문서 N6: 고정 시계에서 duration이 0으로 나오는 것은 둘을 한 포트로 섞었기
+    # 때문이다. 경과는 단조 소스에서 오고(재현 불가가 정상), 기록 시점은 시계에서 온다.
+    from src.application.lifecycle import Ticker
+    ticks = iter([10.0, 12.5])
+    tick: Ticker = lambda: next(ticks)
+    start = tick()
+    assert round(tick() - start, 1) == 2.5

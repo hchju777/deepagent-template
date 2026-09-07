@@ -69,6 +69,7 @@ import contextlib
 from typing import Any, Awaitable, Callable
 
 from src.application.close import close_case
+from src.application.history import read_history
 from src.application.events import case_status_event
 from src.application.graph import build_engine
 from src.application.lifecycle import ENGINE_SCHEMA_VERSION, release_lease, transition
@@ -112,7 +113,17 @@ def _case_file_snapshot(result: dict) -> dict:
     # 조용히 사라져 보고서가 "없음(기록되지 않음)"을 찍는다.
     digests = case.get("knowledge_digests") if isinstance(case, dict) \
         else getattr(case, "knowledge_digests", None)
+    # 리드에게 실제로 보여준 이력. 여기 안 남기면 "이력이 도움이 됐나, 앵커링이었나"를
+    # 영원히 못 묻는다 — 지금은 공짜, 나중엔 복구 불가(방향 문서 §4.5).
+    shown = case.get("history") if isinstance(case, dict) else getattr(case, "history", None)
+    history_shown = [{"case_id": h["case_id"] if isinstance(h, dict) else h.case_id,
+                      "tier": h["tier"] if isinstance(h, dict) else h.tier}
+                     for h in (shown or [])]
+    history_error = case.get("history_error") if isinstance(case, dict) \
+        else getattr(case, "history_error", None)
     return {
+        "history_shown": history_shown,
+        "history_error": history_error,
         "knowledge_digests": dict(digests) if isinstance(digests, dict) else {},
         "plan_tasks": [_dump_item(t) for t in result.get("plan_tasks", [])],
         "hypotheses": [_dump_item(h) for h in result.get("hypotheses", [])],
@@ -198,7 +209,7 @@ class InvestigationWorker:
                 on_closed: Callable[[str], Awaitable] | None = None,
                 max_intake_turns: int = 3,
                 max_wall_clock_s: float | None = None,
-                snapshots=None):
+                snapshots=None, ticker=None):
         self._queue = queue
         self._repo = repo
         self._store = store
@@ -213,6 +224,10 @@ class InvestigationWorker:
         self._on_event = on_event
         self._max_wall_clock_s = max_wall_clock_s
         self._snapshots = snapshots      # VerdictSnapshotPort | None
+        self._ticker = ticker            # Ticker | None — None이면 경과는 "미측정"이다
+        # 케이스별 엔진 경과의 누적. 재시작(F3)이 같은 케이스에 두 구간을 만들 수 있어
+        # 더한다. 큐가 케이스당 한 번만 소비하므로(계획 13 인계 #12의 픽스) 섞이지 않는다.
+        self._elapsed: dict[str, float] = {}
         self._on_closed = on_closed   # 계획 5 — 케이스가 닫힌 직후(성공/실패 종결 모두) 부르는 발행 훅
         self._max_intake_turns = max_intake_turns
         self._engines: dict[tuple[str, str], Any] = {}   # 사이트 키(gbm, fct) → 컴파일된 그래프
@@ -243,6 +258,19 @@ class InvestigationWorker:
             await self._on_closed(case_id)
         except Exception:                                          # noqa: BLE001
             pass
+
+    def _case_for(self, record, deps, digests: dict):
+        """그래프에 넘길 Case — 지식 digest와 **이번 케이스의 이력**을 실어서.
+
+        이력이 deps가 아니라 Case에 실리는 이유: 엔진은 사이트당 한 번 조립돼 캐시되므로
+        (_engine_for) deps의 정적 필드는 케이스마다 바꿀 수 없다. State에 실리면
+        체크포인트에도 남아 "리드에게 무엇을 보여줬나"가 나중에 복구 가능해진다.
+        """
+        read = read_history(record, repo=self._repo, snapshots=self._snapshots,
+                            topology=getattr(deps, "topology", None))
+        return record.to_case().model_copy(update={
+            "knowledge_digests": digests, "history": read.hits,
+            "history_error": read.error})
 
     def _engine_for(self, gbm: str, fct: str, deps) -> Any:
         key = (gbm, fct)
@@ -389,15 +417,34 @@ class InvestigationWorker:
             # 레저 기록 후 케이스를 닫는다(_fail 경로).
             raise RuntimeError("verdict 없이 종료")
         self._store.put_verdict(record.id, verdict)
-        self._store.put_case_file(record.id, _case_file_snapshot(result))
+        elapsed = self._elapsed.pop(record.id, None)
+        self._store.put_case_file(record.id, {**_case_file_snapshot(result),
+                                              "duration_s": elapsed})
         summary = verdict.narrative[:200]
         self._repo.save(current.model_copy(update={"verdict_summary": summary, "question": None}))
         await close_case(record.id, repo=self._repo, checkpointer=self._checkpointer,
                          clock=self._clock, reason="조사 완료", discard_threads=False)
         self._emit_status(record.id, "closed")
+        self._record_metrics(record.gbm, record.fct, outcome="closed", elapsed=elapsed)
         self._record_snapshot(record.id, outcome="closed")
         await self._emit_closed(record.id)
         return "closed"
+
+    def _record_metrics(self, gbm: str, fct: str, *, outcome: str, elapsed: float | None) -> None:
+        """관측치를 sink에 남긴다 — 실패해도 조사에 영향이 없다(규율 1).
+
+        스냅샷 기록보다 **앞에** 둔다: `_record_snapshot`은 snapshots가 없으면 즉시
+        돌아가므로, 그 안에 넣으면 스냅샷 저장소를 안 쓰는 배치에서 메트릭이 조용히
+        사라진다(CLAUDE.md "판정 로직보다 먼저 실행되는 가드").
+        """
+        if elapsed is None:
+            return                        # 안 잰 것을 0으로 적지 않는다
+        try:
+            self._ledger.record_metric("investigation.duration_s", elapsed,
+                                       tags={"gbm": gbm, "fct": fct, "outcome": outcome},
+                                       at=self._clock())
+        except Exception:                                          # noqa: BLE001 — 무raise
+            pass
 
     def _record_snapshot(self, case_id: str, *, outcome: str) -> None:
         """종결 시점의 기계 판정을 박제한다 — retention이 Verdict를 지운 뒤에도 남는다.
@@ -428,14 +475,18 @@ class InvestigationWorker:
                                       if verdict and verdict.root_cause else None),
                 alternates=[a.component for a in verdict.alternates] if verdict else [],
                 confidence=verdict.confidence if verdict else None,
-                rounds=model.round_no or 0, evidence_count=len(model.evidence),
+                rounds=model.round_no or 0, duration_s=model.observability.duration_s,
+                evidence_count=len(model.evidence),
                 task_error_rate=model.task_error_rate,
                 verify_demoted=bool(verify_stage and verify_stage.mark == "warn"),
+                history_shown=[h for h in (self._store.get_case_file(case_id) or {})
+                               .get("history_shown", []) if isinstance(h, dict)],
+                history_error=(self._store.get_case_file(case_id) or {}).get("history_error"),
                 knowledge_digests=self._knowledge_digests_for_site(record.gbm, record.fct)))
         except Exception:                                          # noqa: BLE001
             pass
 
-    async def _salvage_case_file(self, record, case_id: str) -> None:
+    async def _salvage_case_file(self, record, case_id: str, *, elapsed=None) -> None:
         """close_case가 스레드를 지우기 전에 체크포인트에서 조사 흔적을 구제한다.
 
         순서가 계약이다 — discard_threads=True로 스레드를 폐기한 뒤에는 읽을 것이
@@ -468,6 +519,8 @@ class InvestigationWorker:
             snapshot["salvage_error"] = f"{type(exc).__name__}: {exc}"
         for key in ("plan_tasks", "hypotheses", "qa_log", "verify_problems"):
             snapshot.setdefault(key, [])
+        # 실패한 조사가 분모에서 빠지면 "느린 조사가 더 틀리나"에 생존 편향이 생긴다.
+        snapshot["duration_s"] = elapsed
         try:
             # 구제가 아무것도 못 건졌는데 기존 케이스 파일이 있으면 덮지 않는다.
             # _finish가 완전본을 쓴 뒤 종결 과정에서 터지면 _fail이 도는데, 그때
@@ -510,7 +563,10 @@ class InvestigationWorker:
         않는다.
         """
         self._log_failure(record, case_id, exc)
-        await self._salvage_case_file(record, case_id)   # close_case가 스레드를 지우기 전에
+        elapsed = self._elapsed.pop(case_id, None)
+        await self._salvage_case_file(record, case_id, elapsed=elapsed)  # close_case가 스레드를 지우기 전에
+        if record is not None:
+            self._record_metrics(record.gbm, record.fct, outcome="failed", elapsed=elapsed)
         reason = f"워커 실패 — {type(exc).__name__}: {exc}"
         try:
             await close_case(case_id, repo=self._repo, checkpointer=self._checkpointer,
@@ -558,6 +614,7 @@ class InvestigationWorker:
         넘게 걸려도 그 사이 lease가 만료돼 다른 워커에 넘어가지 않도록, 호출이
         끝날 때까지 lease_ttl_s/3 간격으로 lease를 갱신하고 finally에서 취소한다."""
         keepalive = asyncio.ensure_future(self._keepalive_loop(case_id))
+        started = self._ticker() if self._ticker is not None else None
         try:
             call = self._run_with_f3(
                 record, case, deps, engine, case_id, thread_id, initial_evidence,
@@ -568,6 +625,8 @@ class InvestigationWorker:
             # 여기서 직접 케이스를 닫으면 종결 경로가 둘로 갈린다.
             return await asyncio.wait_for(call, timeout=self._max_wall_clock_s)
         finally:
+            if started is not None:
+                self._elapsed[case_id] = self._elapsed.get(case_id, 0.0) + (self._ticker() - started)
             keepalive.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keepalive
@@ -636,7 +695,7 @@ class InvestigationWorker:
                 self._emit_status(case_id, "investigating")
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
-            case = record.to_case().model_copy(update={"knowledge_digests": digests})
+            case = self._case_for(record, deps, digests)
             initial_evidence = evidence_refs_for_case(self._store, case_id)
 
             record, result = await self._invoke_with_keepalive(
@@ -690,7 +749,7 @@ class InvestigationWorker:
                 return await self._skip_unregistered_site(record, case_id, record.gbm, record.fct)
             engine = self._engine_for(record.gbm, record.fct, deps)
             digests = self._knowledge_digests_for_site(record.gbm, record.fct)
-            case = record.to_case().model_copy(update={"knowledge_digests": digests})
+            case = self._case_for(record, deps, digests)
 
             latest_thread_id = record.thread_ids[-1] if record.thread_ids else None
             version_matches = (latest_thread_id is not None

@@ -41,3 +41,37 @@ def test_claim은_남의_살아있는_lease를_뺏지_않는다():
     assert repo.claim("c-1", "w-1", now=T, ttl_s=60) is not None      # 같은 owner는 갱신
     later = T + timedelta(seconds=120)
     assert repo.claim("c-1", "w-2", now=later, ttl_s=60) is not None  # 만료됐으면 회수
+
+
+# ---- 계획 15(P8): 이력 조회 표면 -------------------------------------------------------
+def _closed(repo, cid, *, fp="fp", locator=None, gbm="mx", fct="gumi", at=None):
+    at = at or T
+    repo.save(CaseRecord(id=cid, gbm=gbm, fct=fct, fingerprint=fp, symptom="s", t0=at,
+                         created_at=at, updated_at=at, status_since=at, status="closed",
+                         target_locator=locator, closed_reason="조사 완료"))
+
+
+def test_지문으로_종결_케이스를_최신순으로_찾는다():
+    from datetime import timedelta
+    repo = InMemoryCaseRepository()
+    _closed(repo, "c-1", fp="fp-a", at=T - timedelta(days=2))
+    _closed(repo, "c-2", fp="fp-a", at=T)
+    _closed(repo, "c-3", fp="fp-b")
+    repo.save(CaseRecord(id="c-4", gbm="mx", fct="gumi", fingerprint="fp-a", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="investigating"))   # 안 닫혔다
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="c-9")] == ["c-2", "c-1"]
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="c-2")] == ["c-1"]
+    assert repo.closed_by_fingerprint("fp-a", exclude_case_id="c-9", limit=1)[0].id == "c-2"
+    assert repo.closed_by_fingerprint("없음", exclude_case_id="c-9") == []
+
+
+def test_locator로_종결_케이스를_찾되_빈_목록은_전체를_긁지_않는다():
+    from datetime import timedelta
+    repo = InMemoryCaseRepository()
+    _closed(repo, "c-1", locator="rest:/oee", at=T - timedelta(days=1))
+    _closed(repo, "c-2", locator="mongo:twin_state", at=T)
+    _closed(repo, "c-3", locator=None)
+    assert [r.id for r in repo.closed_by_locators(["rest:/oee", "mongo:twin_state"],
+                                                  exclude_case_id="c-9")] == ["c-2", "c-1"]
+    assert repo.closed_by_locators([], exclude_case_id="c-9") == []      # 전체 조회로 번지지 않는다
+    assert [r.id for r in repo.closed_by_locators(["rest:/oee"], exclude_case_id="c-1")] == []

@@ -457,3 +457,78 @@ def test_restore의_CAS는_상태나_pending이_바뀌면_진다(db, write):
     repo.take_answer("c-1", now=T)
     _interleave(db, "c-1", before_cas=write)
     assert repo.restore_answer("c-1", answer="답", now=T) is False
+
+
+# ---- 계획 15(P8): 메트릭 sink -----------------------------------------------------------
+def test_메트릭은_이름별_최신순으로_읽히고_오래된_것만_걷힌다(db):
+    ledger = MongoLedger(db)
+    ledger.record_metric("investigation.duration_s", 3.5,
+                         tags={"gbm": "mx", "outcome": "closed"}, at=T - timedelta(days=40))
+    ledger.record_metric("investigation.duration_s", 9.0, tags={"gbm": "mx"}, at=T)
+    ledger.record_metric("other", 1.0, tags={}, at=T)
+    rows = ledger.metrics("investigation.duration_s")
+    assert [r["value"] for r in rows] == [9.0, 3.5]
+    assert rows[1]["tags"] == {"gbm": "mx", "outcome": "closed"} and rows[0]["at"] == T
+    assert ledger.metrics("investigation.duration_s", limit=1)[0]["value"] == 9.0
+    assert ledger.prune_metrics_before(T - timedelta(days=30)) == 1
+    assert [r["value"] for r in ledger.metrics("investigation.duration_s")] == [9.0]
+    assert ledger.metrics("other") != []            # 이름이 다른 것은 안 걷힌다
+
+
+# ---- 계획 15(P8): 이력 조회 표면(인메모리와 같은 계약) -----------------------------------
+def test_Mongo도_지문과_locator로_종결_케이스를_최신순으로_찾는다(db):
+    repo = MongoCaseRepository(db)
+    def _closed(cid, *, fp, locator, at):
+        repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint=fp, symptom="s", t0=at,
+                             created_at=at, updated_at=at, status_since=at, status="closed",
+                             target_locator=locator, closed_reason="조사 완료"))
+    _closed("c-1", fp="fp-a", locator="rest:/oee", at=T - timedelta(days=2))
+    _closed("c-2", fp="fp-a", locator="rest:/oee", at=T)
+    repo.save(CaseRecord(id="c-3", gbm="mx", fct="gumi", fingerprint="fp-a", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="open", target_locator="rest:/oee"))
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="c-9")] == ["c-2", "c-1"]
+    assert [r.id for r in repo.closed_by_locators(["rest:/oee"], exclude_case_id="c-2")] == ["c-1"]
+    assert repo.closed_by_locators([], exclude_case_id="c-9") == []
+    from src.infrastructure.mongo_store import ensure_indexes
+    ensure_indexes(db)          # tier 2~4가 풀스캔이 되지 않게(계획 15)
+    assert "status_1_target_locator_1" in db.cases.index_information()
+
+
+# ---- 계획 15(P8): 라벨 저장소 ------------------------------------------------------------
+def test_Mongo_라벨은_쌓이고_케이스별로_읽힌다(db):
+    from src.domain.label import RootCauseLabel
+    from src.infrastructure.mongo_store import MongoLabelStore, ensure_indexes
+    ensure_indexes(db)
+    labels = MongoLabelStore(db)
+    labels.append(RootCauseLabel(case_id="c-1", agreement="correct", labeled_at=T))
+    labels.append(RootCauseLabel(case_id="c-1", agreement="wrong", labeled_at=T + timedelta(hours=1),
+                                 resolution="false_positive", saw_report=True, labeled_by="hchju"))
+    labels.append(RootCauseLabel(case_id="c-2", agreement="unknown", labeled_at=T))
+    rows = labels.list_for("c-1")
+    assert [r.agreement for r in rows] == ["correct", "wrong"]      # 단 순서대로
+    assert rows[1].saw_report is True and rows[1].labeled_by == "hchju"
+    assert labels.count() == 3 and labels.labeled_case_ids() == {"c-1", "c-2"}
+    assert "case_id_1_labeled_at_1" in db.labels.index_information()
+
+
+def test_ensure_indexes는_메트릭_인덱스도_만든다(db):
+    # 리뷰 돌연변이 #7: 계획이 명시한 인덱스가 미검증이었다.
+    from src.infrastructure.mongo_store import ensure_indexes
+    ensure_indexes(db)
+    assert "name_1_at_-1" in db.metrics.index_information()
+
+
+def test_Mongo_메트릭_prune의_경계는_남긴다(db):
+    # 리뷰 돌연변이 #8: <를 <=로 바꿔도 초록이었다(InMemory엔 경계 테스트가 있다).
+    ledger = MongoLedger(db)
+    ledger.record_metric("m", 1.0, tags={}, at=T)
+    assert ledger.prune_metrics_before(T) == 0 and len(ledger.metrics("m")) == 1
+
+
+def test_Mongo_지문_조회도_자기_자신을_제외한다(db):
+    # 리뷰 돌연변이 #6: Mongo 쪽 지문 exclude가 미검증이었다.
+    repo = MongoCaseRepository(db)
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp-a", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status_since=T, status="closed",
+                         closed_reason="조사 완료"))
+    assert repo.closed_by_fingerprint("fp-a", exclude_case_id="c-1") == []

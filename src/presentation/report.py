@@ -28,7 +28,8 @@ def render_report(record: CaseRecord, *, verdict: Verdict | None,
                    evidence: list[EvidenceRecord], case_file: dict | None,
                    clock: Clock, evidence_summaries: dict[str, str] | None = None,
                    events: list[EngineEvent] | None = None,
-                   timeline_error: str | None = None) -> str:
+                   timeline_error: str | None = None,
+                   labels: list[str] | None = None) -> str:
     """스펙 §5.1의 5절 보고서를 md로 조립한다(호출부 호환 유지).
 
     순수 함수 — case_file의 형태가 기대와 어긋나도 raise하지 않고
@@ -42,7 +43,7 @@ def render_report(record: CaseRecord, *, verdict: Verdict | None,
         model = build_report_model(record, verdict=verdict, evidence=evidence,
                                    case_file=case_file, clock=clock,
                                    evidence_summaries=evidence_summaries, events=events,
-                                   timeline_error=timeline_error)
+                                   timeline_error=timeline_error, labels=labels)
         return render_md(model)
     except Exception as exc:            # noqa: BLE001 — 최후의 그물: 유도와 렌더 어느
         # 쪽이 예상 못 한 형태를 만나도 조사 종결은 막지 않는다(계약)
@@ -81,8 +82,40 @@ def _render_md(model: ReportModel) -> str:
         _section4(model.evidence, model.evidence_summaries),
         "",
         _section5(model),
+        "",
+        _footer(model),
     ]
     return "\n".join(sections) + "\n"
+
+
+def observability_line(model) -> str:
+    """푸터 한 줄 — 잰 것과 **못 잰 것**을 같이 말한다(계획 15/P8).
+
+    md·html이 같은 문자열을 쓴다. 여기서 갈리면 두 보고서가 다른 관측치를 말한다.
+    """
+    o = model.observability
+    duration = f"경과 {o.duration_s}s" if o.duration_s is not None else "경과 미측정"
+    rounds = o.rounds if o.rounds is not None else "미상"
+    parts = [duration, f"라운드 {rounds}", f"도구 실패 {o.tool_failures}"]
+    if o.unmeasured:
+        parts.append("미측정: " + ", ".join(o.unmeasured))
+    return "관측성: " + " · ".join(parts)
+
+
+def label_line(model) -> str:
+    """라벨 유입구 한 줄 — 이미 라벨됐으면 그 사실을, 아니면 명령을 보인다.
+
+    스펙 §5가 정직성 장치로 꼽은 셋 중 하나다: 라벨률은 나중에 어떤 정확도든 계산할 수
+    있는지의 상한이고, 사람이 보고서를 읽는 그 자리가 라벨을 받을 유일한 순간이다.
+    """
+    if model.labels:
+        return "라벨: " + " · ".join(model.labels)
+    return (f"라벨: 없음 — `case label {model.record.id} --agreement correct|partially_correct|"
+            "wrong|unknown [--actual-component ...]`")
+
+
+def _footer(model) -> str:
+    return observability_line(model) + "\n" + label_line(model)
 
 
 def write_report(text: str, *, output_dir: str, case_id: str, suffix: str = "md") -> str:

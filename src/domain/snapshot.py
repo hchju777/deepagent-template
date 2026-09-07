@@ -36,11 +36,14 @@ class VerdictSnapshot(StrictModel):
     alternates: list[str] = []               # 다중 RCA 후보의 컴포넌트(계획 14가 채운다)
     confidence: str | None = None
     rounds: int = 0
+    duration_s: float | None = None          # 조사 경과(초) — None은 미측정(계획 15)
     evidence_count: int = 0
     task_error_rate: str = "없음"
     verify_demoted: bool = False
     knowledge_digests: dict[str, str] = {}
     history_shown: list[dict] = []           # [{"case_id": ..., "tier": ...}] — P8이 채운다
+    # 이력이 **비었던** 케이스와 **못 읽은** 케이스를 나중에 구별하려면 지금 남겨야 한다.
+    history_error: str | None = None
 
 
 class VerdictSnapshotPort(ABC):

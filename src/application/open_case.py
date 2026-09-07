@@ -29,8 +29,10 @@ def open_case(*, repo: CaseRepositoryPort, store: CaseStorePort, symptom: str,
     지문에 `case_id`가 들어가 **사람이 연 케이스는 서로 절대 같은 지문을 갖지
     않는다** — 이력 매칭·중복 억제가 human 케이스에는 사실상 동작하지 않는다는 뜻이고,
     알려진 결함이다. 여기서 고치려면 개설 시점에 아직 없는 `target_locator`를 재료로
-    써야 해서 더 나빠진다. P8(이력 검색)이 함께 갚는다 — **그 전에 이력 매칭을 얹으면
-    조용히 안 맞는다.**
+    써야 해서 더 나빠진다. **계획 15(P8)가 갚았다** — `intake_turn`의 `_finish`가 대상이
+    정해지는 순간 `fingerprint(gbm, fct, "chat", target_locator)`로 다시 계산한다. 여기
+    개설 시점의 지문은 그때까지의 임시값이고, 접수가 대상을 못 정하면(포기 경로) 그대로
+    남는다.
     """
     case_id = repo.new_case_id()
     now = clock()

@@ -26,6 +26,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from src.api.app import current_subject, hidden, runtime_of, visible_record
 from src.api.models import CaseDetail, candidates_of
+from src.application.labels import label_texts
 from src.application.events import collect_events
 from src.domain.report_model import build_report_model
 from src.presentation.report import render_md
@@ -152,7 +153,8 @@ def get_report(case_id: str, request: Request,
     model = build_report_model(record, verdict=rt.store.get_verdict(case_id),
                                evidence=rt.store.list_evidence(case_id),
                                case_file=rt.store.get_case_file(case_id), clock=rt.clock,
-                               events=log.events, timeline_error=log.error)
+                               events=log.events, timeline_error=log.error,
+                               labels=label_texts(rt.labels, case_id))
     return PlainTextResponse(render_html(model) if fmt == "html" else render_md(model),
                              media_type=media)
 

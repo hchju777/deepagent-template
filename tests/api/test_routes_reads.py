@@ -19,6 +19,7 @@ from src.domain.case import CauseLink, Verdict
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
 from src.domain.patrol import CheckOutcome
+from src.domain.label import InMemoryLabelStore
 from src.domain.store import InMemoryCaseStore
 from src.knowledge.topology import Topology
 from src.patrol.ledger import InMemoryLedger
@@ -47,7 +48,7 @@ def _runtime(tmp_path, *, access=None):
                      check_names=[])]
     return ApiRuntime(app=app, sites=sites, repo=InMemoryCaseRepository(),
                       store=InMemoryCaseStore(), events=InMemoryEventStore(),
-                      ledger=InMemoryLedger(), clock=lambda: T)
+                      ledger=InMemoryLedger(), labels=InMemoryLabelStore(), clock=lambda: T)
 
 
 @pytest.fixture
@@ -265,3 +266,11 @@ def test_이벤트_로그_읽기_장애에도_상세와_보고서는_200이다(c
     assert body["timeline_error"] == "RuntimeError: case_events read failed"
     r = client.get("/cases/c-1/report?format=md")
     assert r.status_code == 200 and "이벤트 로그 읽기 실패" in r.text
+
+
+def test_보고서_푸터가_이미_달린_라벨을_보인다(client, rt):
+    from src.domain.label import RootCauseLabel
+    rt.labels.append(RootCauseLabel(case_id="c-1", agreement="wrong", resolution="false_positive",
+                                    labeled_at=T))
+    r = client.get("/cases/c-1/report?format=md")
+    assert "라벨: wrong (false_positive)" in r.text

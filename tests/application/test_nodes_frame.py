@@ -93,3 +93,18 @@ async def test_LLM_호출_자체가_실패해도_raise없이_degraded로_강등�
     deps.lead_llm = _RaisingLLM()
     update = await make_nodes(deps)["frame"](_state())      # raise되면 이 줄에서 테스트가 실패한다
     assert update["verdict"].verdict_type == "degraded"
+
+
+async def test_frame은_케이스에_실린_이력을_브리핑에_싣는다():
+    # 이력은 deps가 아니라 Case로 흐른다 — 엔진은 사이트당 한 번 조립돼 캐시되므로
+    # deps의 정적 필드는 케이스마다 못 바꾼다(worker._engine_for).
+    from src.domain.case import HistoryHit
+    deps = _deps(['{"hypotheses": [], "tasks": []}'])
+    case = Case(id="c-1", gbm="mx", fct="gumi", origin="patrol", symptom="s", t0=T,
+                history=[HistoryHit(case_id="c-old", tier=2, reason="다른 점검이 같은 대상을",
+                                    verdict_type="stale_data", component="plan-sync",
+                                    summary="ev-1을 보면 멈췄다")])
+    await make_nodes(deps)["frame"](CaseState(case=case))
+    prompt = str(deps.lead_llm.calls[0])
+    assert "c-old" in prompt and "tier 2" in prompt and "plan-sync" in prompt
+    assert "ev-1" not in prompt                 # 과거 id는 브리핑에 나가지 않는다(규율 3)

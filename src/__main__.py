@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 
 from src.application.answer import answer_case
 from src.application.events import collect_events
+from src.application.labels import label_stats, label_texts, submit_label
 from src.application.intake import intake_turn
 from src.application.submit import submit_case
 from src.application.worker import CaseQueue, InvestigationWorker
@@ -185,7 +187,8 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
                           budget=budget, owner=owner, timezone=app.timezone,
                           on_event=_make_event_sink(events, _make_event_printer()),
                           report_cfg=app.report,
-                          mail_sender=mail_sender, events=events, snapshots=snapshots)
+                          mail_sender=mail_sender, events=events, snapshots=snapshots,
+                          labels=p.labels, ticker=time.perf_counter)
     asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
 
@@ -240,6 +243,37 @@ def _cmd_case_list(args, config_root: Path, env: dict) -> int:
     return 0
 
 
+def _cmd_case_label(args, config_root: Path, env: dict) -> int:
+    """실제 원인 되먹임 — 학습 루프의 나머지 절반(계획 15/P8)."""
+    app = _load_app(config_root, env)
+    if app is None:
+        return 1
+    p = build_persistence(app.store)
+    if args.stats:
+        stats = label_stats(repo=p.repo, labels=p.labels)
+        # 게이트가 닫혀 있으면 퍼센트를 내지 않는다 — 12/40으로 낸 30%는 다음 주에
+        # 뒤집힐 숫자이고, 한 번 보고되면 사람이 그것을 기억한다.
+        print(stats.why)
+        print("게이트: " + ("열림 — confidence별 적중을 계산할 수 있다" if stats.gate_open
+                          else "닫힘 — 건수만 보고한다"))
+        return 0
+    if not args.case_id or not args.agreement:
+        print("case label <id> --agreement correct|partially_correct|wrong|unknown",
+              file=sys.stderr)
+        return 2
+    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+    result = submit_label(args.case_id, agreement=args.agreement, resolution=args.resolution,
+                          actual_component=args.actual_component,
+                          actual_verdict_type=args.actual_verdict_type,
+                          saw_report=args.saw_report, labeled_by=args.by,
+                          repo=p.repo, labels=p.labels, clock=clock)
+    if result != "recorded":
+        print(f"라벨 실패: {result}", file=sys.stderr)
+        return 1
+    print(f"{args.case_id} 라벨 기록: {args.agreement}")
+    return 0
+
+
 def _cmd_case_show(args, config_root: Path, env: dict) -> int:
     app = _load_app(config_root, env)
     if app is None:
@@ -269,7 +303,8 @@ def _cmd_case_show(args, config_root: Path, env: dict) -> int:
                 record, verdict=store.get_verdict(args.case_id),
                 evidence=store.list_evidence(args.case_id),
                 case_file=store.get_case_file(args.case_id), clock=clock,
-                events=log.events, timeline_error=log.error)
+                events=log.events, timeline_error=log.error,
+                labels=label_texts(p.labels, args.case_id))
             print(render_html(model) if app.report.format == "html" else render_md(model), end="")
         return 0
 
@@ -368,7 +403,8 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
     # C1/M4: chat·데몬과 같은 발행 배선(on_event/on_closed)을 _build_publisher로
     # 얻어 워커에 넘긴다 — 예전엔 여기가 빠져 있어 case resume만 보고서·메일·
     # 이벤트 없이 케이스를 닫았다(§5.1 "파일 먼저"·§5.4 F6·§5.2 이벤트 구독 미충족).
-    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock,
+                                          labels=p.labels)
     worker = InvestigationWorker(
         CaseQueue(), repo=repo, store=store, deps_for_site=deps_for_site,
         checkpointer=checkpointer, clock=clock, owner=owner,
@@ -376,7 +412,7 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
         knowledge_digests_for_site=digests_for_site,
         max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
-        max_intake_turns=app.engine.max_intake_turns,
+        max_intake_turns=app.engine.max_intake_turns, ticker=time.perf_counter,
         on_event=on_event, on_closed=on_closed)
 
     # 접수 질문과 조사 질문을 가르는 것은 answer_case 하나다 — CLI와 계획 13의
@@ -462,7 +498,8 @@ def _make_event_sink(events: EventStorePort,
     return sink
 
 
-def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock
+def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock,
+                     labels=None
                      ) -> tuple[Callable[[EngineEvent], None], Callable[[str], Awaitable[None]]]:
     """발행용 PatrolDaemon 셸을 조립해 (on_event, on_closed) 쌍을 돌려준다(C1/M4).
 
@@ -482,7 +519,7 @@ def _build_publisher(app, sites, store, repo, ledger, events, checkpointer, cloc
                           checkpointer=checkpointer, clock=clock, judge_llm=None,
                           budget=budget, owner=owner, timezone=app.timezone,
                           on_event=print_event, report_cfg=app.report, mail_sender=mail_sender,
-                          events=events)
+                          events=events, labels=labels)
     return print_event, daemon._publish_report
 
 
@@ -584,7 +621,8 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
     checkpointer = build_checkpointer(app.store)
     for site_rt in sites:
         site_rt.deps.store = store    # daemon.py 모듈 docstring과 동일한 불변식
-    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock)
+    on_event, on_closed = _build_publisher(app, sites, store, repo, ledger, events, checkpointer, clock,
+                                          labels=p.labels)
 
     submitted = asyncio.run(submit_case(
         symptom, gbm=args.gbm, fct=args.fct, concern=args.concern,
@@ -620,7 +658,7 @@ def _run_chat(args, env: dict, *, llm_factory=None) -> int:
         lease_ttl_s=app.investigations.lease_ttl_s, ledger=ledger,
         knowledge_digests_for_site=digests_for_site,
         max_wall_clock_s=app.investigations.max_wall_clock_s, snapshots=snapshots,
-        max_intake_turns=app.engine.max_intake_turns,
+        max_intake_turns=app.engine.max_intake_turns, ticker=time.perf_counter,
         on_event=on_event, on_closed=on_closed)
 
     async def ask(question: str) -> str:
@@ -692,6 +730,19 @@ def main(argv=None) -> int:
                          "통신할 명령 채널이 없어, lease가 비어 있거나 만료된 경우에만 이 CLI가 "
                          "인라인으로 직접 조사를 재개한다 — 데몬이 lease를 쥐고 있으면 "
                          "'데몬이 실행 중 — 잠시 후 재시도' 안내와 함께 exit 2로 끝난다")
+    p_case_label = case_sub.add_parser(
+        "label", help="실제 원인을 되먹인다(append-only). --stats는 건수와 게이트 상태만 낸다")
+    p_case_label.add_argument("case_id", nargs="?")
+    p_case_label.add_argument("--agreement", choices=["correct", "partially_correct", "wrong", "unknown"])
+    p_case_label.add_argument("--resolution",
+                              choices=["fixed", "not_reproducible", "wont_fix", "false_positive"])
+    p_case_label.add_argument("--actual-component", default=None)
+    p_case_label.add_argument("--actual-verdict-type", default=None)
+    p_case_label.add_argument("--saw-report", action="store_true",
+                              help="보고서를 보고 라벨했다 — 앵커링 탐지용")
+    p_case_label.add_argument("--by", default=None)
+    p_case_label.add_argument("--stats", action="store_true", help="건수와 게이트 상태")
+    _add_common(p_case_label)
     p_case_resume = case_sub.add_parser(
         "resume", help=_case_resume_note, description=_case_resume_note)
     p_case_resume.add_argument("case_id")
@@ -785,6 +836,8 @@ def main(argv=None) -> int:
             return _cmd_case_list(args, config_root, env)
         if args.case_command == "show":
             return _cmd_case_show(args, config_root, env)
+        if args.case_command == "label":
+            return _cmd_case_label(args, config_root, env)
         if args.case_command == "resume":
             return _cmd_case_resume(args, config_root, env)
 

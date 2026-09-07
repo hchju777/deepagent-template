@@ -172,3 +172,23 @@ def test_시각_없는_Timeline_행은_대시로_렌더된다():
     ev = EngineEvent.model_construct(event="report_ready", case_id="c-1", at=None, seq=1, data={"path": "p"})
     model = build_report_model(record, verdict=None, evidence=[], case_file={}, clock=lambda: T, events=[ev])
     assert "<tr><td>1</td><td>-</td><td>report_ready</td><td>보고서 p</td></tr>" in render_html(model)
+
+
+def test_푸터는_관측성을_낸다():
+    model = _model(case_file={"round": 2, "duration_s": 3.5,
+                              "plan_tasks": [{"id": "t-1", "status": "error"}]})
+    html = render_html(model)
+    assert "관측성: 경과 3.5s · 라운드 2 · 도구 실패 1 · 미측정: 토큰" in html
+
+
+def test_푸터는_라벨_유입구를_낸다():
+    html = render_html(_model())
+    assert "case label c-1 --agreement" in html
+
+
+def test_렌더된_HTML에_치환되지_않은_자리표시자가_없다():
+    # 리뷰 M1: f-string의 {{...}}가 리터럴로 남아 모든 발행 보고서와 메일에 찍혔다.
+    import re
+    html = render_html(_model(case_file={"round": 1, "qa_log": [{"kind": "round_cap"}]}))
+    leftovers = re.findall(r"\{[a-z_]+\}", html)
+    assert leftovers == [], leftovers
