@@ -10,9 +10,9 @@
 
 | 종류 | 수 | 어디 있어야 하는가 |
 |---|---|---|
-| **A. 미해결 부채** | 51 | 여기(§1~§3의 항목 31개 — 여러 인계가 한 항목으로 합쳐진다) |
-| **B. 이미 갚음** | 11 | 여기(§4) |
-| **C. 설계 판단 기록** | 27 | [architecture.md](architecture.md)·[file-map.md](file-map.md)·코드 주석 (§6에 열거) |
+| **A. 미해결 부채** | 50 | 여기 — §1~§3에 **전부** 적었다(절로 쓴 것 31개 + §3.23의 한 줄짜리 22개, 일부는 합쳐진다) |
+| **B. 이미 갚음** | 14 | 여기(§4) |
+| **C. 설계 판단 기록** | 25 | [architecture.md](architecture.md)·[file-map.md](file-map.md)·코드 주석 (§6에 열거) |
 | **D. 교훈** | 10 | [for-implementers.md](for-implementers.md)의 집행 전 점검표 (§6에 열거) |
 
 C와 D는 부채가 아니다 — "왜 이렇게 했는가"와 "다음엔 이걸 먼저 의심하라"이지 "할 일"이
@@ -34,7 +34,7 @@ retention ①은 종결 케이스의 **증거·판정·케이스 파일**을 지
 찍는다 — `mongo_store.py`에 `cases.delete_*`가 **없다**. 그 위에서 `list_by_status`가
 무제한·무프로젝션 `find`로 전건을 `CaseRecord`로 만든다.
 
-**지워지지 않는 컬렉션은 `cases` 하나가 아니라 다섯이다**(13개 중): `cases`·`labels`·
+**지워지지 않는 컬렉션은 `cases` 하나가 아니라 다섯이다**(14개 중): `cases`·`labels`·
 `counters`·`code_knowledge`·`ledger_meta`. `labels`는 의도적이고(스냅샷과 짝이라 한쪽만
 지우면 대조가 불가능하다), 나머지 셋은 그냥 안 걷힌다 — 특히 **`counters`는 케이스마다
 둘씩**(`evidence:{id}`·`events:{id}`) 무한히 자란다.
@@ -60,13 +60,14 @@ retention ①은 종결 케이스의 **증거·판정·케이스 파일**을 지
 `ledger_runs`는 retention이 걷지만 `ledger_d`(기본 30일) 안에서는 자란다 — 60초 주기면
 점검 하나당 43,200건이다.
 
-**주기적으로 도는 소비자는 self-check다**(`selfcheck.py`): `consecutive_errors`와 `runs`가
-점검마다 `_history`를 탄다. `last_run`은 `patrol status` CLI **한 곳**에서만 불린다 —
+**주기적으로 도는 소비자는 self-check다**(`selfcheck.py`): `consecutive_errors`가 **점검마다**
+`_history`를 탄다(`runs`는 스트릭이 임계를 넘은 점검에서만 돈다 — 뜨거운 경로는 앞의 하나다). `last_run`은 `patrol status` CLI **한 곳**에서만 불린다 —
 데몬은 안 부른다(그래서 `last_run`만 고치면 뜨거운 경로가 그대로다).
 
-**처방**: `consecutive_errors`는 첫 비-error에서 멈추므로 **내림차순 커서**면 충분하다.
-`runs(limit=N)`도 내림차순+`limit`이면 된다. `last_run`은 `sort(-1).limit(1)`이지만
-그건 CLI라 급하지 않다.
+**처방**: `consecutive_errors`는 첫 비-error에서 멈추므로 **내림차순 커서를 스트리밍하며
+조기 종료**하면 된다. **고정 `limit(N)`은 안 된다** — `skipped`가 스트릭을 안 끊고 투명하게
+지나가므로 몇 건을 읽어야 하는지 미리 알 수 없다. `last_run`은 `sort(-1).limit(1)`이지만
+CLI 전용이라 급하지 않다.
 
 ### 1.3 `calibration`이 라벨된 종결 케이스마다 저장소를 두 번 친다
 
@@ -111,7 +112,7 @@ retention ①은 종결 케이스의 **증거·판정·케이스 파일**을 지
 경계 테스트(`tests/api/test_boundary.py`)는 `src/api/`의 **패키지** import 그래프를
 AST로 본다. 그건 깨끗하다. 그런데 `python -m src api`가 실행하는 **프로세스**는
 `src/__main__.py`가 모듈 수준에서 `InvestigationWorker`(`:26`)와 `PatrolDaemon`(`:33`)을
-import한다 — `src/api/app`만 `:121`에서 지연 import다.
+import한다 — `src/api/app`·`assembly`는 `:121-122`에서 지연 import다.
 
 지금 실해는 없다(라우트가 워커를 안 부른다). 다만 규율 9가 "`api`는 대상에 붙지 않고
 조사를 시작하지 않는다"를 **메커니즘으로** 지키자는 것인데, 그 메커니즘이 패키지에만
@@ -138,7 +139,7 @@ import한다 — `src/api/app`만 `:121`에서 지연 import다.
 | 3.4 | **메트릭이 하나뿐** | `investigation.duration_s`. 토큰은 여전히 미측정이고 보고서 푸터가 그렇게 적는다 |
 | 3.5 | **`group_by`가 `["gbm"]`만** | 다른 값은 **조용히 빈 dict**를 낸다(`fleet/run.py`). 거부하거나 지원해야 한다 |
 | 3.6 | **retention이 `fleet_runs`를 안 걷는다** | `DigestStorePort.prune_before`는 있는데 스윕이 안 부른다 — 집계 실행 기록이 영원히 자란다. **고치기 전에 3.6b를 먼저 보라** |
-| 3.6b | **`MongoDigestStore.prune_before`가 naive datetime에 `TypeError`다** | `datetime.fromisoformat(...) < before` 비교. 호출부가 없어 지금은 도달 불가 — **3.6을 고치는 사람이 반드시 밟는 지뢰다** |
+| 3.6b | **`MongoDigestStore.prune_before`가 naive datetime에 `TypeError`다** | `datetime.fromisoformat(...) < before` 비교. 호출부가 없어 지금은 도달 불가. 형제 둘(`MongoEventStore`·`MongoVerdictSnapshotStore`)은 같은 비교를 쓰고도 무사한데, 프로덕션 시계가 전부 aware이기 때문이다 — **naive를 넘기는 픽스처에서만 문다** |
 | 3.7 | **`GET /scenarios`가 없다** | 웹 UI가 시나리오 목록을 그릴 수 없다 |
 | 3.8 | **`scenario run`이 기동 검증을 안 탄다** | scope의 오타난 사이트가 분모를 조용히 줄인다(`patrol run`·`api`는 boot이 막는다) |
 | 3.9 | **chat 접수 재질문에 코드가 쥔 상한이 없다** | 재질문이 LLM을 다시 안 부르게 되면서 `max_turns` 예산을 안 먹는다. 사람 입력으로 게이트되므로 폭주는 아니지만 규율 6에 어긋난다 |
@@ -156,6 +157,37 @@ import한다 — `src/api/app`만 `:121`에서 지연 import다.
 | 3.21 | **`rollup.py` docstring의 "validator 넷"** | 실제 `@model_validator`는 둘이다(강제 불변식은 다섯) — 문서와 코드가 다른 수를 말한다 |
 | 3.22 | **`ref/README.md`가 전작을 설명한다** | 서브그래프 4슬롯·`--show-checkpoints` 등 현재 코드에 없는 것을 "이 저장소에서 보게 되는 것"으로 나열한다. LangGraph 참고 자료 자체는 유효하다 |
 
+### 3.23 나머지 — 한 줄로 족한 것들
+
+위에 절을 따로 둘 만큼은 아니지만 **A로 분류한 이상 여기 적어야 한다**. 개수만 세고
+기록을 안 하면 이 문서가 막겠다고 선언한 실패가 그대로 일어난다. 원문은 각 계획 문서
+끝의 인계 절이다.
+
+| 출처 | 항목 |
+|---|---|
+| P12-3 | `case resume`의 "케이스 존재" 오라클 — 접근 검사가 `repo.get` 뒤라 미인가 주체가 404/403으로 존재를 구별할 수 있다 |
+| P12-4 | `answer_case`에 status 가드가 없다 — `question_kind`만 보고 분기한다 |
+| P13-5 | `GET /cases/{id}/report`에 다른 확장자 폴백이 없다(`case show --report`와 다르다) |
+| P13-6 | 응답 모델이 dict인 곳이 남았다 — 계획 14가 `CaseDetail`만 모델로 올렸다 |
+| P13-7 | `config-reference.md`의 기동 검증 번호가 실행 순서가 아니다(종류별이다) |
+| P13-10 | 혼용 경로의 우선순위를 코드가 정했다 — API로 실린 답이 있는데 CLI가 먼저 오면 직접 답이 이긴다 |
+| P14-4 | `_sanitize_alternates`가 컴포넌트 이름의 **문자열 동일성**만 본다 — `plan-sync`와 `plan_sync`가 다른 후보다 |
+| P14-5 | `CaseDetail.stages/verdict/timeline`이 `list[dict]`/`dict`다 — 내부 모델을 그대로 dump한다 |
+| P14-6 | 후보가 기여 요인과 같은 컴포넌트여도 안 거른다 — "이것 대신"과 "이것에 더해"가 같은 것을 가리키는 것이 모순인지는 설계 판단 |
+| P15-2 | `history_shown`의 소비자가 없다 — "이력이 도움이었나 앵커링이었나"를 물으려면 필요하다 |
+| P15-5 | tier 4의 상류가 `upstream_slice(max_depth=3)`에 묶인다 — 더 먼 상류는 안 본다 |
+| P15-6 | `_strip_evidence_ids`가 `ev-\d+` 형태만 지운다 — 증거 id 형식이 바뀌면 이 정규식도 바뀌어야 한다 |
+| P15-9 | resume 경로가 이력을 계산하고 버린다 — `resume_case`가 `case`를 안 받는다 |
+| P17-1 | `question_seq`는 **선택**이다 — 안 보내는 클라이언트는 예전 경합에 그대로 노출된다 |
+| P17-2 | `stale_question`은 답을 보관하지 않는다 — 사람이 쓴 답이 버려진다(큐잉은 의도적으로 안 했다) |
+| P17-11 | 질문이 `None`인 레코드에 재질문하면 `"(질문 없음)"`을 한 번 묻고 그 답이 버려진다 |
+| P18-2 | `rest:<이름>` 표적의 관련성이 케이스 locator와의 **문자열 일치**로만 걸린다 |
+| P20-4 | `$sort`가 계산 필드 위에서 돌아 인덱스를 못 쓴다 — 인메모리 정렬 32MB 한도를 넘으면 `status_since` 백필(데이터 마이그레이션)이 필요하다 |
+| P20-11 | `_id`를 동점 키로 쓰는 것은 **한 프로세스 안에서만** "삽입 순서"다(ObjectId 중간 5바이트가 프로세스별 난수) |
+| P20-12 | 저장소 포트 docstring이 동점 계약을 안 적는다(`DigestStorePort.list`·`CaseRepositoryPort.closed_by_*`) |
+| P21-4 | `repr`에 기대는 자리 둘 — 여러 줄 본문을 사람이 읽기 좋게 보이려는 요구가 생기면 접기가 아니라 **들여쓰기**가 답이다 |
+| P14-1 | 후보의 정답 대조가 없다 — `VerdictSnapshot.alternates`와 라벨을 잇는 캘리브레이션(계획 19가 `confidence` 축만 했다) |
+
 ---
 
 ## 4. 이미 갚은 것
@@ -171,6 +203,9 @@ import한다 — `src/api/app`만 `:121`에서 지연 import다.
 | P15-1 캘리브레이션 계산 없음 | 계획 19 | `labels.calibration` |
 | P15-4 `MetricsSinkPort` 소비자 없음 | 계획 19 | `patrol status` |
 | P15-8 Mongo `closed_by_*` DB 정렬·limit | 계획 20 | `_closed_newest_first` |
+| P13-11 `submit_answer`의 포괄 except가 저장소 장애를 404로 | 계획 14 | `submit.py`가 `"error"`(503)를 낸다 |
+| P18-8 그래프 내부 프롬프트가 안 접힌다 | 계획 21 | `nodes.py`의 네 렌더러·`llm_judge`가 `one_line`을 탄다 |
+| P12-5 `intake_turn`이 lease를 안 잡는다 | 계획 17 | CAS(`update_if`)가 lease 없이 닫았다 |
 
 **계획 문서에 이미 갚음 표시가 있는 것**(취소선이나 "→ 갚았다") — 헛수고 위험은 없다.
 
@@ -189,10 +224,11 @@ import한다 — `src/api/app`만 `:121`에서 지연 import다.
 1. **§2.1 `_next_seq` 재시도** — 유일하게 프로덕션에서 예외를 던지는 자리다. 한 줄이면
    `DuplicateKeyError`를 잡고 재시도할 수 있고, 같은 파일의 `record_send`가 이미 그
    패턴을 쓴다.
-2. **§1.2 `last_run`의 전량 검증** — 한 줄(`sort(-1).limit(1)`)이고 효과가 즉시 크다.
+2. **§1.2 `consecutive_errors`의 전량 검증** — self-check가 점검마다 타는 유일한 뜨거운
+   경로다. `last_run`(CLI 전용)이 아니라 **이쪽**이다.
 3. **§1.1 id만 내는 포트 메서드** — 셋 중 제일 크지만, 이 기능이 실제로 쓰이기 시작하는
    시점이 정확히 아픈 시점이다.
-4. **§2.4 접기 통합** — 위험은 낮으나 계획 21의 논거가 스스로를 가리킨다.
+4. **§2.5 접기 통합** — 위험은 낮으나 계획 21의 논거가 스스로를 가리킨다.
 5. 나머지는 필요해질 때.
 
 **§2.2(mongomock 사각)는 갚을 수 있는 부채가 아니다** — 실제 Mongo를 요구하는 테스트를
@@ -208,19 +244,19 @@ import한다 — `src/api/app`만 `:121`에서 지연 import다.
 
 | 계획 | 항목 수 | A(부채) | B(갚음) | C(설계 판단) | D(교훈) |
 |---|---|---|---|---|---|
-| P12 접수 경계 | 5 | 3·4 | 1·2 | 5 | — |
-| P13 HTTP 표면 | 12 | 2·3·4·5·6·7·8·10·11 | 1·9·12 | — | — |
+| P12 접수 경계 | 5 | 3·4 | 1·2·5 | — | — |
+| P13 HTTP 표면 | 12 | 2·3·4·5·6·7·8·10 | 1·9·11·12 | — | — |
 | P14 RCA 후보·Timeline | 7 | 2·4·5·6·7 | — | 1·3 | — |
 | P15 학습 루프 | 10 | 2·5·6·9·10 | 1·4·7·8 | 3 | — |
 | P16 Fleet 집계 | 11 | 1·2·3·4·5·6·7·8·9·10 | 11 | — | — |
 | P17 답-질문 대조 | 11 | 1·2·10·11 | — | 3·4·5·6·8·9 | 7 |
-| P18 브리핑 지식 | 10 | 1·2·10 | — | 5·6·7·8·9 | 3·4 |
+| P18 브리핑 지식 | 10 | 1·2·10 | 8 | 5·6·7·9 | 3·4 |
 | P19 되먹임 소비자 | 8 | 1·4·5·8 | — | 2·3·6·7 | — |
 | P20 이력 DB 절단 | 12 | 4·9·10·11·12 | 5 | 1·2·3·8 | 6·7 |
 | P21 그래프 프롬프트 | 9 | 3·4·5 | — | 1·2·9 | 6·7·8 |
 | P22 tier 사다리 | 2 | 2 | — | 1 | — |
 | P23 문서화 | 2 | — | — | — | 1·2 |
-| **합계** | **99** | **51** | **11** | **27** | **10** |
+| **합계** | **99** | **50** | **14** | **25** | **10** |
 
 **C(설계 판단)로 분류한 근거**: "왜 이렇게 했는가"를 적은 것들이다 — 접수 CAS의 술어가
 왜 시각 하나가 아닌지(P17-3), 배포가 왜 "없음"을 안 쓰는지(P18-7), 동점 키가 왜
