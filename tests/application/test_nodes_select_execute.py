@@ -5,7 +5,7 @@ from langgraph.types import Send
 
 from src.application.nodes import make_nodes, route_after_select
 from src.application.state import CaseState
-from src.domain.case import Case, EvidenceRef, PlanTask
+from src.domain.case import Case, EvidenceRef, PlanTask, evidence_summary
 from tests.application.test_nodes_frame import SITE, TOPO, T, _deps
 
 REDIS_SITE = SITE.model_copy(update={
@@ -100,3 +100,7 @@ async def test_execute가_만드는_증거_요약도_개행을_이스케이프�
     body = deps.store.get_evidence("c-1", update["evidence"][0].id)
     assert isinstance(body, str) and "\n" in body      # 픽스처가 실제로 문자열 본문이다
     assert "\n" not in update["evidence"][0].summary
+    # 값 비교도 함께 둔다. 문자열 본문 하나만으로는 `json.dumps(indent=...)`처럼
+    # **컨테이너에만** 개행을 넣는 표현이 등가로 보인다 — 이 단정은 소스 grep이 아니라
+    # 성질이고(같은 값이 나오는가), 등가 리팩터를 오탐하지 않는다.
+    assert update["evidence"][0].summary == evidence_summary(body)

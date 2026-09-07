@@ -47,8 +47,9 @@ def upstream_slice(topology, start_locator, *, max_depth=3):
 def one_line(text):
     """개행을 접는다 — `[...]` 섹션 어휘를 쓰는 프롬프트가 이것을 **공유한다**:
     브리핑(`build_briefing`·`render_rules`·`render_deployment`), 접수(`intake._prompt`·`_turn_prompt`),
-    사이트 선택(`scope._prompt`), 리드의 integrate·conclude(`nodes.py`의 가설 보드·태스크
-    현황·질문답변 로그·재작성 요청), 서브에이전트 도구 반환과 태스크 goal(`subagents.py`),
+    사이트 선택(`scope._prompt`), 리드의 frame·integrate·conclude(`nodes.py`의 가설 보드·태스크
+    현황·질문답변 로그·재작성 요청, 그리고 `_ask_llm` 재시도가 붙이는 검증 오류 —
+    `extra="forbid"`가 LLM이 고른 **키 이름**을 열 0에 찍는다), 서브에이전트 도구 반환과 태스크 goal(`subagents.py`),
     순찰 LLM 판정(`llm_judge._build_prompt`의 점검 이름·질문). 한 벌만 있어야 한다 —
     두 벌이 생기면 언젠가 한쪽만 고쳐진다(실제로 그랬다).
 

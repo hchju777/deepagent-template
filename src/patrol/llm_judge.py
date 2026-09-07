@@ -58,6 +58,14 @@ class LlmJudgeOutput(StrictModel):
     evidence_ids: list[str] = []
 
 
+MAX_SNAPSHOT_CHARS = 2000
+"""스냅샷 하나가 판정 프롬프트를 통째로 차지하지 못하게 하는 상한.
+
+`runner.snapshot_text`가 만들 때와 여기서 렌더할 때 **같은 값**을 써야 한다 —
+리터럴을 두 벌 적으면 언젠가 한쪽만 고쳐진다. runner가 llm_judge를 import하므로
+상수는 이쪽에 둔다(반대로 두면 순환 import다)."""
+
+
 _INSTRUCTION = (
     'finding이면 근거로 쓴 증거 id를 evidence_ids에 그대로 적어라. '
     'JSON만 출력하라: {"status": "ok 또는 finding", "summary": "...", '
@@ -67,7 +75,10 @@ _INSTRUCTION = (
 
 def _build_prompt(snapshot_ids: list[str], snapshot_texts: dict[str, str],
                    check_name: str, question: str) -> str:
-    lines = [f"[증거 {sid}] {str(snapshot_texts.get(sid, ''))[:2000]}" for sid in snapshot_ids]
+    # 상한은 `runner.MAX_SNAPSHOT_CHARS` 하나다 — 리터럴을 다시 적으면 두 벌이 되고
+    # 언젠가 한쪽만 고쳐진다(이 계획이 접기에서 겪은 그것).
+    lines = [f"[증거 {sid}] {str(snapshot_texts.get(sid, ''))[:MAX_SNAPSHOT_CHARS]}"
+             for sid in snapshot_ids]
     evidence_block = "\n".join(lines) if lines else "(증거 없음)"
     return (
         # 점검 이름과 질문은 사람이 쓰는 config YAML에서 온다(`params.question`은 검증

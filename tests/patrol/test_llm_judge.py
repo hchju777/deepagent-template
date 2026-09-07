@@ -55,6 +55,24 @@ def test_스냅샷_텍스트는_개행이_이스케이프된_채로_프롬프트
 def test_스냅샷_텍스트에도_길이_상한이_있다():
     # 증거 요약 쪽에는 상한 테스트가 있는데 이쪽만 없었다 — 상한이 없으면 스냅샷
     # 하나가 판정 프롬프트를 통째로 차지한다.
-    from src.patrol.runner import MAX_SNAPSHOT_CHARS, snapshot_text
+    from src.patrol.llm_judge import MAX_SNAPSHOT_CHARS
+    from src.patrol.runner import snapshot_text
 
     assert len(snapshot_text("x" * 100_000)) == MAX_SNAPSHOT_CHARS
+
+
+def test_스냅샷_상한은_한_벌이다():
+    # 만들 때와 렌더할 때가 갈리면 상수를 올려도 프롬프트는 안 늘어난다 — 그 갈라짐을
+    # 상수를 되읽는 테스트로는 못 본다(검증 리뷰 LOW-2).
+    from src.patrol import llm_judge
+    from src.patrol.llm_judge import _build_prompt
+    from src.patrol.runner import snapshot_text
+
+    original = llm_judge.MAX_SNAPSHOT_CHARS
+    llm_judge.MAX_SNAPSHOT_CHARS = 50
+    try:
+        prompt = _build_prompt(["s-1"], {"s-1": snapshot_text("x" * 10_000)}, "c", "q")
+        line = next(l for l in prompt.splitlines() if l.startswith("[증거 s-1]"))
+        assert len(line) < 100          # 두 벌이면 2000자가 그대로 실린다
+    finally:
+        llm_judge.MAX_SNAPSHOT_CHARS = original

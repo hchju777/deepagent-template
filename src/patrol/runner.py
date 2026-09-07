@@ -12,7 +12,7 @@ from src.config.schema_site import CheckConfig
 from src.domain.envelope import ProbeResult
 from src.domain.patrol import CheckOutcome, Finding, scratch_case_id
 from src.infrastructure.factory import AdapterSet
-from src.patrol.llm_judge import LlmBudget, judge_by_llm
+from src.patrol.llm_judge import MAX_SNAPSHOT_CHARS, LlmBudget, judge_by_llm
 from src.infrastructure.query_rules import entry_evidence_source
 from src.patrol.probes import PROBES, resolve_probe
 from src.patrol.rules import KnownRuleError, judge_by_rule
@@ -24,9 +24,6 @@ _MakeFinding = Callable[[str, str, list[str]], Finding]
 
 def _error(observed_at, msg: str, *, llm_calls: int = 0) -> CheckOutcome:
     return CheckOutcome(status="error", observed_at=observed_at, error=msg, llm_calls=llm_calls)
-
-
-MAX_SNAPSHOT_CHARS = 2000
 
 
 def snapshot_text(data) -> str:
