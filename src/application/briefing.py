@@ -44,6 +44,19 @@ def upstream_slice(topology, start_locator, *, max_depth=3):
     return Topology(services=services, derivations=derivations)
 
 
+def _one_line(text):
+    """개행을 접는다 — 브리핑의 모든 줄이 이것을 지나야 한다.
+
+    한 줄이 쪼개지면 그 조각이 다음 섹션 머리말처럼 보인다: 위조된 `[적용 룰]`이
+    진짜보다 **먼저** 오고, 리드는 먼저 읽은 임계값을 정상 기준으로 삼는다. 가장 강한
+    벡터는 `[증상]`이다 — `Finding.summary`가 `Case.symptom`이 되고, `judge="llm"`
+    점검에서 그것은 LLM이 쓴 무검증 자유 문자열이다. 토폴로지의 서비스 이름·locator·
+    `via`도 사람이 쓰는 YAML이라 같은 처리를 받는다(`history.py`의 `_clean_line`과
+    같은 근거: id가 안 새더라도 구조가 새는 것은 같은 문제다).
+    """
+    return " ".join(str(text).split())
+
+
 def _slice_locators(slice_, target_locator):
     """슬라이스가 다루는 locator 전부 — derivation의 출력과 입력, 그리고 케이스 대상."""
     locators = {target_locator} if target_locator else set()
@@ -73,35 +86,41 @@ def render_rules(checks, *, slice_, target_locator):
         if check.target not in relevant:
             continue
         params = ", ".join(f"{key}={value!r}" for key, value in sorted(check.params.items()))
-        line = f"- {name}: judge={check.judge}, target={check.target}, {params}"
-        # 한 줄로 접는다 — params 값에 개행이 있으면 [적용 룰] 블록에 가짜 항목처럼
-        # 붙는다(history의 _clean_line과 같은 이유: id가 안 새도 구조가 새면 같은 문제다).
-        lines.append(" ".join(line.split()))
+        # 한 줄로 접는다 — 점검 이름이나 target에 개행이 있으면 [적용 룰] 블록에 가짜
+        # 항목처럼 붙는다(params 값은 `!r`가 이미 이스케이프한다).
+        lines.append(_one_line(
+            f"- {name}: judge={check.judge}, target={check.target}, {params}"))
     return "\n".join(lines)
 
 
 def render_deployment(deployment, *, slice_):
-    """브리핑의 `[배포 버전]` — 슬라이스 서비스만.
+    """브리핑의 `[배포 버전]` — 슬라이스 서비스만. **"없음"은 절대 안 쓴다.**
 
-    없을 때 "없음"이 아니라 "미검증"이라고 적는다: 배포 매핑의 부재는 "배포가 없다"가
-    아니라 "무엇이 돌고 있는지 우리가 모른다"이다. 로컬 체크아웃의 HEAD는 배포 진실이
-    아니므로(knowledge/deployment.py) 리드가 코드 증거를 그만큼 깎아 읽어야 한다.
+    세 상태를 가른다. ①매핑 자체가 없다 → 사이트 전체가 미검증(슬라이스보다 먼저 답한다:
+    이건 서비스에 대한 진술이 아니라 사이트에 대한 진술이라 슬라이스가 비어도 참이다).
+    ②슬라이스에 서비스가 없다 → "대상 서비스 없음". ③슬라이스 서비스가 매핑에 빠져 있다
+    → **그 이름을 대고** 미검증.
+
+    하나로 뭉개면 안 되는 이유: 부재는 "배포가 없다"가 아니라 "무엇이 돌고 있는지 우리가
+    모른다"이고(로컬 체크아웃의 HEAD는 배포 진실이 아니다 — knowledge/deployment.py),
+    리드가 코드 증거를 그만큼 깎아 읽어야 한다. 사람이 연 케이스는 `target_locator`가
+    없어 **항상** ②에 걸리므로, ②를 "없음"으로 찍으면 대부분의 케이스가 뭉개진다.
     """
     if deployment is None:
         return "배포 매핑 없음 — 이 사이트의 코드 증거는 배포 버전 미검증이다"
     if not slice_.services:
         return "대상 서비스 없음 — 슬라이스가 비어 있다"
-    # 룰과 같은 이유로 한 줄씩 접는다. repo·commit·서비스 이름 모두 검증 없는 str이라
+    # 나가는 줄은 **전부** 접는다. repo·commit·서비스 이름 모두 검증 없는 str이라
     # 개행 하나가 이 블록 뒤에 가짜 `[유사 이력]` 항목을 만들 수 있고, 이 블록이
     # 브리핑의 마지막이라 주입된 내용이 프롬프트의 꼬리를 차지한다(검증 리뷰 F3).
-    lines = [" ".join(f"- {name}: {version.repo}@{version.commit}".split())
+    lines = [_one_line(f"- {name}: {version.repo}@{version.commit}")
              for name, version in sorted(deployment.services.items())
              if name in slice_.services]
     # 빠진 서비스를 조용히 생략하면 "없음"과 구별이 안 된다. 무엇이 미검증인지 이름을
     # 대야 리드가 "이 서비스는 조사 범위인데 배포가 없다"로 오독하지 않는다(검증 리뷰 F5).
     missing = sorted(set(slice_.services) - set(deployment.services))
     if missing:
-        lines.append(f"- {', '.join(missing)}: 배포 매핑에 없다 — 배포 버전 미검증")
+        lines.append(_one_line(f"- {', '.join(missing)}: 배포 매핑에 없다 — 배포 버전 미검증"))
     return "\n".join(lines)
 
 
@@ -119,19 +138,6 @@ _CONCERN_HINT = {
 무엇이 맞는 판단인가는 여전히 LLM이 정한다(규율 6). 힌트가 결론을 지시하면 그건
 우리가 판정을 코드에 박아 놓고 LLM이 했다고 적는 것이다.
 """
-
-
-def _one_line(text):
-    """개행을 접는다 — 브리핑의 모든 줄이 이것을 지나야 한다.
-
-    한 줄이 쪼개지면 그 조각이 다음 섹션 머리말처럼 보인다: 위조된 `[적용 룰]`이
-    진짜보다 **먼저** 오고, 리드는 먼저 읽은 임계값을 정상 기준으로 삼는다. 가장 강한
-    벡터는 `[증상]`이다 — `Finding.summary`가 `Case.symptom`이 되고, `judge="llm"`
-    점검에서 그것은 LLM이 쓴 무검증 자유 문자열이다. 토폴로지의 서비스 이름·locator·
-    `via`도 사람이 쓰는 YAML이라 같은 처리를 받는다(`history.py`의 `_clean_line`과
-    같은 근거: id가 안 새더라도 구조가 새는 것은 같은 문제다).
-    """
-    return " ".join(str(text).split())
 
 
 def build_briefing(case, topo_slice, *, rules_text="", history_text="",
