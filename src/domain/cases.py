@@ -129,8 +129,19 @@ class CaseRepositoryPort(ABC):
 
     @abstractmethod
     def closed_by_locators(self, locators: list[str], *, exclude_case_id: str,
-                           limit: int = 20) -> list[CaseRecord]:
-        """target_locator가 목록에 있는 종결 케이스를 최신순으로(tier 2~4). 빈 목록 → 빈 결과."""
+                           limit: int = 20,
+                           site: tuple[str, str] | None = None,
+                           exclude_site: tuple[str, str] | None = None) -> list[CaseRecord]:
+        """target_locator가 목록에 있는 종결 케이스를 최신순으로(tier 2~4). 빈 목록 → 빈 결과.
+
+        `site`는 "그 (gbm, fct)만", `exclude_site`는 "그 사이트를 뺀 것만"이다. 둘이
+        **독립된 선택 인자**인 이유: 한 인자에 모드를 섞으면(`site` 없이 `same_site=True`
+        같은) 뜻 없는 조합이 표현 가능해진다.
+
+        이 필터가 필요한 이유는 tier 2(같은 사이트)와 tier 3(다른 사이트)이 **각자
+        상한을 가져야** 하기 때문이다 — 한 질의를 나눠 쓰면 절단이 분리보다 먼저 일어나
+        사다리가 뒤집힌다(계획 22).
+        """
         pass
 
     @abstractmethod
@@ -308,15 +319,21 @@ class InMemoryCaseRepository(CaseRepositoryPort):
                               if r.status == "closed" and r.fingerprint == fp
                               and r.id != exclude_case_id], limit)
 
-    def closed_by_locators(self, locators, *, exclude_case_id, limit=20):
+    def closed_by_locators(self, locators, *, exclude_case_id, limit=20,
+                           site=None, exclude_site=None):
         # 빈 목록은 빈 결과다 — "필터 없음"으로 읽어 전체를 긁으면 이력이 아무 케이스나
         # 물어온다(전부-또는-전무와 같은 성질의 함정).
         if not locators:
             return []
         wanted = set(locators)
+
+        def _site_ok(record):
+            here = (record.gbm, record.fct)
+            return (site is None or here == site) and (exclude_site is None
+                                                       or here != exclude_site)
         return _newest_first([r for r in self._cases.values()
                               if r.status == "closed" and r.target_locator in wanted
-                              and r.id != exclude_case_id], limit)
+                              and r.id != exclude_case_id and _site_ok(r)], limit)
 
     def list_by_status(self, status: CaseStatus) -> list[CaseRecord]:
         """상태별 케이스 목록."""

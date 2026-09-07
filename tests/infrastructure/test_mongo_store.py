@@ -902,3 +902,28 @@ def test_두_집계_저장소가_같은_순서를_낸다(db):
             == [r.scenario_digest for r in memory.list("s")]
             == ["third", "second", "first", "older"])
     assert mongo.latest("s").scenario_digest == memory.latest("s").scenario_digest == "third"
+
+
+def test_두_백엔드가_사이트_필터에도_같은_답을_낸다(db):
+    # 계획 20에서 저장소 순서 계약이 세 번 갈라졌다 — 새 필터에도 같은 대조를 붙인다.
+    from src.domain.cases import InMemoryCaseRepository
+
+    mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
+    plan = [("c-1", "mx", "gumi", T), ("c-2", "mx", "hwaseong", T - timedelta(days=1)),
+            ("c-3", "ss", "gumi", T - timedelta(days=2)), ("c-4", "mx", "gumi", T)]
+    for cid, gbm, fct, at in plan:
+        for repo in (mongo, memory):
+            repo.save(CaseRecord(id=cid, gbm=gbm, fct=fct, fingerprint="fp", symptom="s",
+                                 t0=at, created_at=at, updated_at=at, status_since=at,
+                                 status="closed", target_locator="rest:/oee",
+                                 closed_reason="완료"))
+    for kwargs in ({"site": ("mx", "gumi")}, {"exclude_site": ("mx", "gumi")},
+                   {"site": ("mx", "gumi"), "exclude_site": ("ss", "gumi")}, {}):
+        assert ([r.id for r in mongo.closed_by_locators(["rest:/oee"],
+                                                        exclude_case_id="x", **kwargs)]
+                == [r.id for r in memory.closed_by_locators(["rest:/oee"],
+                                                            exclude_case_id="x", **kwargs)]), kwargs
+    assert [r.id for r in mongo.closed_by_locators(["rest:/oee"], exclude_case_id="x",
+                                                   site=("mx", "gumi"))] == ["c-4", "c-1"]
+    assert [r.id for r in mongo.closed_by_locators(["rest:/oee"], exclude_case_id="x",
+                                                   exclude_site=("mx", "gumi"))] == ["c-2", "c-3"]

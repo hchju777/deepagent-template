@@ -429,12 +429,19 @@ class MongoCaseRepository(CaseRepositoryPort):
         return self._closed_newest_first(
             {"status": "closed", "fingerprint": fp, "id": {"$ne": exclude_case_id}}, limit)
 
-    def closed_by_locators(self, locators, *, exclude_case_id, limit=20) -> list[CaseRecord]:
+    def closed_by_locators(self, locators, *, exclude_case_id, limit=20,
+                           site=None, exclude_site=None) -> list[CaseRecord]:
         if not locators:                # 빈 $in도 0건이지만, 의도를 코드로 못박는다
             return []
-        return self._closed_newest_first(
-            {"status": "closed", "target_locator": {"$in": list(locators)},
-             "id": {"$ne": exclude_case_id}}, limit)
+        match = {"status": "closed", "target_locator": {"$in": list(locators)},
+                 "id": {"$ne": exclude_case_id}}
+        if site is not None:
+            match["gbm"], match["fct"] = site
+        if exclude_site is not None:
+            # `$nor` 대신 `$or`+`$ne` — mongomock 지원이 확실하고 뜻이 같다.
+            match["$or"] = [{"gbm": {"$ne": exclude_site[0]}},
+                            {"fct": {"$ne": exclude_site[1]}}]
+        return self._closed_newest_first(match, limit)
 
     def list_by_status(self, status) -> list[CaseRecord]:
         return [self._to_record(d) for d in self._db.cases.find({"status": status})]

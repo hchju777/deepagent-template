@@ -151,3 +151,27 @@ def test_소유_필드가_바뀌면_시각이_같아도_진다():
                                          "question": record.question},
                           fields={"target_locator": "rest:/oee"}, now=T) is False
     assert repo.get("c-1").target_locator is None       # 아무것도 안 바뀌었다
+
+
+def test_사이트로_거른_종결_케이스만_돌려준다():
+    # tier 2(같은 사이트)와 tier 3(다른 사이트)이 **각자** 질의하려면 저장소가 걸러야 한다.
+    repo = InMemoryCaseRepository()
+    _closed(repo, "c-1", locator="rest:/oee", at=T)
+    _closed(repo, "c-2", locator="rest:/oee", at=T, fct="hwaseong")
+    _closed(repo, "c-3", locator="rest:/oee", at=T, gbm="ss")
+    same = repo.closed_by_locators(["rest:/oee"], exclude_case_id="x", site=("mx", "gumi"))
+    other = repo.closed_by_locators(["rest:/oee"], exclude_case_id="x",
+                                    exclude_site=("mx", "gumi"))
+    assert [r.id for r in same] == ["c-1"]
+    assert [r.id for r in other] == ["c-3", "c-2"]      # 동점은 id 내림차순
+
+
+def test_사이트_필터도_tier마다_자기_상한을_받는다():
+    # 한 질의를 나눠 쓰면 상한이 tier 사이에 공유돼 사다리가 뒤집힌다.
+    repo = InMemoryCaseRepository()
+    for i in range(25):
+        _closed(repo, f"c-other-{i:02d}", locator="rest:/oee", fct="hwaseong",
+                at=T - timedelta(minutes=i))
+    _closed(repo, "c-same", locator="rest:/oee", at=T - timedelta(days=99))
+    same = repo.closed_by_locators(["rest:/oee"], exclude_case_id="x", site=("mx", "gumi"))
+    assert [r.id for r in same] == ["c-same"]          # 상한 20에 밀려나지 않는다
