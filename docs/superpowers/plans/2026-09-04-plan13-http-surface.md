@@ -496,7 +496,7 @@ kill %1 %2
 save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_answer`/`take_answer`/
 `restore_answer` 프리미티브와 `question_seq`/`answered_seq` 짝으로 닫았다. 남은 것:
 
-1. **접수 `_save`의 TOCTOU** — 같은 케이스에 동시에 오는 두 `/intake-answers`가
+1. ~~**접수 `_save`의 TOCTOU**~~ — **계획 17이 갚았다**(`update_if_unchanged`). — 같은 케이스에 동시에 오는 두 `/intake-answers`가
    증거를 중복 박제하고, 한 순서에서 `awaiting_human` + `intake_done=True` + 대상 설정이라는
    모순 레코드를 남긴다(리뷰 S3 실증). `attach_answer`가 연 조건부 `$set` 형태를 `_save`에도
    그대로 쓰면 닫힌다. requeue가 그 사이 못 집는 것만 지금 보장한다.
@@ -525,7 +525,7 @@ save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_
    구현의 CAS 술어는 문서의 **원값**(부재는 `null`로 맞는다)을 쓰므로 `answered_seq`
    부재는 안전하다(검증 리뷰가 잡은 "부재 필드 ≠ 기본값 0 → CAS가 영원히 져 무한
    재귀"는 고쳤고, 재분류는 두 바퀴로 상한을 뒀다).
-9. **`POST /cases/{id}/answers`에 `question_seq` If-Match가 없다** — 클라이언트가 Q1을 보고
+9. ~~**`POST /cases/{id}/answers`에 `question_seq` If-Match가 없다**~~ — **계획 17이 갚았다.** — 클라이언트가 Q1을 보고
    답하는 사이 그래프가 Q2로 파킹하면 그 답이 Q2에 실린다(요청에 `question_seq`를 실어
    서버가 대조하면 막힌다). CLI `case resume`도 같다 — 사람이 Q1을 보고 쓰는 사이 데몬이
    API 답으로 Q1을 소비해 Q2로 파킹하면 CLI의 답이 Q2에 실린다. seq 쌍은 **서버 안의**

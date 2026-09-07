@@ -123,6 +123,7 @@ curl -s -X POST localhost:8080/cases/c-1/intake-answers -H 'content-type: applic
   -d '{"answer": "라인 7"}'
 
 # 조사 중 그래프가 되물었으면(GET /cases/c-1의 question) 답을 **싣는다** — 실행은 워커가
+# question_seq를 실으면 그 사이 조사가 다음 질문으로 넘어갔을 때 409로 거절한다
 curl -s -X POST localhost:8080/cases/c-1/answers -H 'content-type: application/json' \
   -d '{"answer": "계획 변경 없음", "key": "2026-09-04T09:00-c-1"}'
 # → 202 {"result": "accepted"}. 같은 key로 다시 보내면 duplicate — 재시도가 안전하다
