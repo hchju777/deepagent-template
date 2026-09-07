@@ -24,22 +24,35 @@ def extract(payload: Any, dotted: str) -> tuple[list[float], int]:
     30개를 봤다"고 말하면서 실제로는 12개만 센 집계가 된다. 호출부가 이 수를 보고
     불완전으로 판정한다.
 
-    리스트가 경로 중간에 있으면 각 항목에서 나머지 경로를 뽑는다(사이트 응답이
-    `{"rows": [...]}` 모양인 것이 보통이다).
+    경로 **어디에서든** 리스트를 만나면 각 항목으로 갈라져 나머지 경로를 뽑는다 —
+    응답이 `{"body": {"rows": [...]}}`처럼 중첩되는 것이 보통이라, 첫 세그먼트만
+    갈라지면 실전 경로를 못 읽는다(테스트가 실제로 잡았다).
     """
     if not isinstance(dotted, str) or not dotted:
         return [], 1
-    head, _, tail = dotted.partition(".")
-    container = payload.get(head) if isinstance(payload, dict) else None
-    if isinstance(container, list) and tail:
+    return _walk(payload, dotted.split("."))
+
+
+def _walk(node: Any, segments: list[str]) -> tuple[list[float], int]:
+    if isinstance(node, list):
         values, skipped = [], 0
-        for item in container:
-            got, miss = extract(item, tail)
+        for item in node:
+            got, miss = _walk(item, segments)
             values.extend(got)
             skipped += miss
         return values, skipped
-    number = _as_number(get_path(payload, dotted))
-    return ([number], 0) if number is not None else ([], 1)
+    if not segments:
+        number = _as_number(node)
+        return ([number], 0) if number is not None else ([], 1)
+    head, rest = segments[0], segments[1:]
+    if isinstance(node, dict) and head in node:
+        return _walk(node[head], rest)
+    if isinstance(node, list) or (isinstance(node, dict) and head.isdigit()):
+        return [], 1
+    # 인덱스 세그먼트로 리스트에 접근하는 기존 관례(get_path)도 지원한다.
+    if isinstance(node, (list, tuple)) and head.isdigit() and int(head) < len(node):
+        return _walk(node[int(head)], rest)
+    return [], 1
 
 
 def reduce_values(values: list[float], how: str) -> float | None:

@@ -20,8 +20,10 @@ class MetricSpec(StrictModel):
     """지표 하나가 **무엇을 묻고 어떻게 접는가**. 값이 아니라 값이 어디서 오는지다."""
     target: str | None = None          # 토폴로지 locator 또는 등재 항목(rest:<이름>)
     probe: str | None = None
+    # 점검과 **같은 모양**이다: 프로브는 target/probe/params/sample/resolve만 읽으므로
+    # MetricSpec이 그 계약을 그대로 만족한다(어댑터 객체를 만들지 않는다). body도
+    # `params.body`에 둔다 — 등재 항목의 닫힌 스키마 검증이 그 자리를 본다(규율 9).
     params: dict[str, Any] = {}
-    body: dict[str, Any] = {}
     resolve: dict[str, ResolverSpec] = {}
     sample: int | None = None
     extract: str = Field(min_length=1)  # 점 경로 — 빈 문자열이면 무엇을 뽑는지가 없다
@@ -29,6 +31,17 @@ class MetricSpec(StrictModel):
     window: str | None = None           # "24h" 등 — 표본이 무엇을 물었는지 보고서에 적는다
     required: bool = True               # False면 이 지표의 누락은 커버리지에서 빠진다
     unit: str | None = None
+
+    @model_validator(mode="after")
+    def _body_and_resolve_do_not_overlap(self):
+        """점검과 같은 함정을 같은 방식으로 막는다 — 어느 쪽이 이기는지 config만 봐서
+        알 수 없으면, 사람이 값을 고쳤는데 안 바뀌는 형태로 조용히 고장 난다."""
+        static = self.params.get("body") if isinstance(self.params, dict) else None
+        if isinstance(static, dict):
+            overlap = sorted(set(static) & set(self.resolve))
+            if overlap:
+                raise ValueError(f"params.body와 resolve에 같은 키가 있다: {overlap}")
+        return self
 
 
 class ScenarioScope(StrictModel):

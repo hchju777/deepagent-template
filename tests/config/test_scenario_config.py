@@ -51,6 +51,13 @@ def test_알_수_없는_키와_빈_지표는_거부된다(tmp_path):
         ScenarioConfig.model_validate({**_MIN, "metrics": {}})
 
 
+def test_빈_extract는_거부된다():
+    # 무엇을 뽑는지가 없으면 지표가 아니다 — 런타임에 조용히 빈 표본이 된다.
+    with pytest.raises(Exception):
+        ScenarioConfig.model_validate({**_MIN, "metrics": {
+            "a": {"target": "rest:x", "extract": "", "reduce": "sum"}}})
+
+
 def test_병렬_상한은_양수여야_한다(tmp_path):
     # 상한이 있어야 하는 것은 코드가 쥔다(규율 6) — 0이면 팬아웃이 영원히 멈춘다.
     with pytest.raises(Exception):
