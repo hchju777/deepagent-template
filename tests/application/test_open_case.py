@@ -228,3 +228,28 @@ async def test_answer_case가_질문_번호를_재개까지_흘린다():
     result = await answer_case(record.id, "Q1의 답", repo=repo, store=store, deps=None,
                                topology=None, worker=_Worker(), clock=lambda: T, expect_seq=1)
     assert seen == [1] and result == "stale_question"
+
+
+async def test_answer_case가_접수_질문에도_번호를_흘린다():
+    # 검증 리뷰 J2: 조사 분기만 테스트하면 접수 분기의 전달이 무보장이다 —
+    # 그 회귀가 바로 직전 웨이브에서 실제로 났다.
+    from src.application.answer import answer_case
+    from src.knowledge.topology import Topology
+    repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
+    record = open_case(repo=repo, store=store, symptom="s", gbm="mx", fct="gumi",
+                       concern="system", requested_by=None, clock=lambda: T,
+                       on_event=lambda e: None)
+    repo.save(repo.get(record.id).model_copy(update={
+        "status": "awaiting_human", "question": "어느 라인인가?", "question_kind": "intake",
+        "question_seq": 2}))
+    deps = SimpleNamespace(lead_llm=type("L", (), {"ainvoke": staticmethod(lambda m: _resolved())})())
+    topo = Topology.model_validate({"services": {}, "derivations": {}})
+
+    class _Worker:
+        async def run_once(self, case_id, *, interaction_policy="autonomous"):
+            raise AssertionError("번호가 안 맞으면 조사를 걸면 안 된다")
+
+    result = await answer_case(record.id, "Q1의 답", repo=repo, store=store, deps=deps,
+                               topology=topo, worker=_Worker(), clock=lambda: T, expect_seq=1)
+    assert result == "stale_question"
+    assert repo.get(record.id).intake_done is False

@@ -422,3 +422,59 @@ async def test_접수가_소유하지_않은_필드가_바뀌어도_진다():
     turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
     assert turn.status == "not_ours", turn
     assert repo.get(case_id).finding_ids == ["f-1"]      # 남의 쓰기가 살아 있다
+
+
+async def test_접수_질문도_번호를_대조한다():
+    # 검증 리뷰 N-1: 이 웨이브의 회귀. 접수 분기가 expect_seq를 통째로 버려, Q1을 보고
+    # 쓴 답이 Q2의 답으로 박제되고 접수가 그대로 완주했다.
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+    parked = repo.get(case_id)
+    assert parked.question_seq == 1
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="Q1의 답", expect_seq=99)
+    assert turn.status == "stale_question", turn
+    after = repo.get(case_id)
+    assert after.status == "awaiting_human" and after.intake_done is False
+    assert [r for r in store.list_evidence(case_id) if r.source == "human:answer"] == []
+
+
+async def test_번호가_맞으면_접수는_그대로_이어진다():
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+    turn = await _turn(case_id, repo, store, _deps(_RESOLVED), answer="라인 7", expect_seq=1)
+    assert turn.status == "done" and repo.get(case_id).intake_done is True
+
+
+async def test_같은_문구로_다시_묻는_두_턴이_모두_이기지_않는다():
+    # 검증 리뷰 N-4: 질문 문구가 같으면 소유 필드가 하나도 안 바뀌어 술어가 통과했다.
+    # 유령 파킹이 번호를 부풀리면 #1을 읽고 답한 사람이 거짓 stale_question을 받는다.
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+
+    class _Racing:
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                await intake_turn(case_id, repo=repo, store=store, deps=_deps(_MISSING),
+                                  topology=TOPO, clock=lambda: T, answer="답")
+            return SimpleNamespace(content=_MISSING)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()), answer="답")
+    assert turn.status == "not_ours", turn
+    assert repo.get(case_id).question_seq == 2      # 1→2, 3으로 뛰지 않는다
+
+
+async def test_언파킹은_전이_시각을_찍는다():
+    # 검증 리뷰 M16: `_SAVED_FIELDS`에서 status_since를 빼도 초록이었다.
+    case_id, repo, store = _case()
+    assert (await _turn(case_id, repo, store, _deps(_MISSING))).status == "asking"
+    parked_since = repo.get(case_id).status_since
+    later = T + timedelta(hours=1)
+    turn = await intake_turn(case_id, repo=repo, store=store, deps=_deps(_RESOLVED),
+                             topology=TOPO, clock=lambda: later, answer="라인 7")
+    assert turn.status == "done"
+    after = repo.get(case_id)
+    assert after.status == "open" and after.status_since == later != parked_since

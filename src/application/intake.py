@@ -61,7 +61,9 @@ class IntakeTurn(StrictModel):
     # 레코드를 들고 있으니 아무것도 하지 마라"다. 둘을 뭉치면 호출부가 run_once를
     # 걸고, 그래프가 파킹한 케이스라면 새 스레드로 처음부터 재조사돼 원래 스레드와
     # 사람에게 물은 질문을 잃는다 — lifecycle.py가 금지한 그것이다.
-    status: Literal["done", "asking", "error", "not_ours"]
+    # stale_question: 사람이 답한 질문이 더 이상 현재 질문이 아니다(계획 17). not_ours와
+    # 가르는 이유도 같다 — 호출부가 "다시 읽고 다시 답하라"를 사람에게 말해야 한다.
+    status: Literal["done", "asking", "error", "not_ours", "stale_question"]
     question: str | None = None
     target_locator: str | None = None
     problems: list[str] = []
@@ -80,7 +82,8 @@ def _turn_prompt(record, locators: list[str], answers: list[str]) -> str:
 
 async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
                       clock: Callable[[], datetime], answer: str | None = None,
-                      max_turns: int = 3, on_event: Callable | None = None) -> IntakeTurn:
+                      max_turns: int = 3, on_event: Callable | None = None,
+                      expect_seq: int | None = None) -> IntakeTurn:
     """접수 한 턴 — LLM을 한 번 부르고 끝나거나 파킹한다. 절대 raise하지 않는다.
 
     `answer`가 있으면 **이어가기 전에 먼저 증거로 박제한다.** 미루면 그 사이
@@ -96,6 +99,12 @@ async def intake_turn(case_id: str, *, repo, store, deps: Any, topology,
             record = repo.get(case_id)
         except KeyError:
             return IntakeTurn(status="error", problems=[f"케이스 {case_id}를 찾을 수 없다"])
+        # 사람이 본 질문과 지금 질문이 다르면 그 답은 이 질문의 답이 아니다(계획 17).
+        # 이 자리에서 보는 이유: 아래 CAS 술어가 같은 `question_seq`를 걸므로, 읽은 뒤
+        # 파킹이 또 일어나면 저장에서 진다 — 사전검사만 두는 것과 다르다.
+        if expect_seq is not None and record.question_seq != expect_seq:
+            return IntakeTurn(status="stale_question",
+                              problems=[f"질문이 바뀌었다(#{expect_seq} → #{record.question_seq})"])
         problem = _not_ours(record)
         if problem is not None:
             return IntakeTurn(status="not_ours", problems=[problem])
@@ -219,7 +228,8 @@ def _save(repo, case_id: str, clock, *, unpark: bool, expect, **fields) -> str |
 # 되돌린다 — CAS가 그것을 감지하지만, 애초에 우리 것만 쓰는 편이 낫다.
 def _expect(record) -> dict:
     """접수가 소유한 필드 + 시각. 상대가 그중 하나라도 바꿨으면 이 턴은 진다."""
-    return {"updated_at": record.updated_at, "status": record.status,
+    return {"updated_at": record.updated_at, "question_seq": record.question_seq,
+            "status": record.status,
             "question": record.question, "question_kind": record.question_kind,
             "intake_done": record.intake_done, "target_locator": record.target_locator}
 

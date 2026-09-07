@@ -268,8 +268,10 @@ class MongoCaseRepository(CaseRepositoryPort):
                      "pending_answer": None, "question_seq": doc.get("question_seq"),
                      "answered_seq": doc.get("answered_seq"), "answer_key": doc.get("answer_key"),
                      "owner": doc.get("owner"), "lease_until": doc.get("lease_until")}
-            # 대조는 **술어에도** 건다. 사전검사만 두면 읽고 나서 파킹이 일어난 경우를
-            # 못 막고, 창이 좁아질 뿐 닫히지 않는다(계획 17).
+            # 불변식을 명시적으로 남긴다: 사전검사를 지난 이상 `expect_seq`는 읽은 값과
+            # 같으므로 바로 위 `"question_seq": doc.get(...)`와 **중복**이다(검증 리뷰 M2).
+            # 읽고 나서 파킹이 일어난 경우를 실제로 잡는 것은 이 줄이 아니라 재분류
+            # 두 바퀴다 — 테스트가 방어한다고 주장하지 않도록 여기 적어 둔다.
             if expect_seq is not None:
                 guard["question_seq"] = expect_seq
             if self._cas(case_id, guard, {"pending_answer": answer, "answer_key": key,

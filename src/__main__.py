@@ -602,6 +602,8 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
             for problem in turn.problems:
                 print(f"접수: {problem}", file=sys.stderr)
             break
+        # 사람이 답을 쓰는 사이 접수 질문도 바뀔 수 있다 — 조사 질문과 같은 대조를 건다.
+        asked_seq = repo.get(case_id).question_seq
         try:
             answer = await ask(turn.question)
         except EOFError:
@@ -610,7 +612,13 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
             return 0
         turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
                                  topology=rt.deps.topology, clock=clock, answer=answer,
-                                 max_turns=app.engine.max_intake_turns, on_event=on_event)
+                                 max_turns=app.engine.max_intake_turns, on_event=on_event,
+                                 expect_seq=asked_seq)
+        if turn.status == "stale_question":
+            print("그 사이 접수 질문이 바뀌었다 — 새 질문으로 다시 묻는다.")
+            turn = await intake_turn(case_id, repo=repo, store=store, deps=rt.deps,
+                                     topology=rt.deps.topology, clock=clock,
+                                     max_turns=app.engine.max_intake_turns, on_event=on_event)
 
     result = await worker.run_once(case_id, interaction_policy="interactive")
     while result == "awaiting_human":
@@ -629,6 +637,12 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
                                    max_intake_turns=app.engine.max_intake_turns,
                                    interaction_policy="interactive", on_event=on_event,
                                    expect_seq=current.question_seq)
+        if result == "stale_question":
+            # 그 사이 질문이 바뀌었다 — 대화형 루프이므로 새 질문을 다시 읽어 한 번 더
+            # 묻는다. 답을 버리고 영문 토큰만 보이면 사람은 무슨 일인지 알 수 없다.
+            print("그 사이 질문이 바뀌었다 — 새 질문으로 다시 묻는다.")
+            result = "awaiting_human"
+            continue
 
     if result == "closed":
         path = Path(app.report.output_dir) / f"{case_id}.{app.report.format}"

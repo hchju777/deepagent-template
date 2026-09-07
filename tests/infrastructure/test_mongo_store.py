@@ -543,8 +543,10 @@ def test_Mongo도_다른_질문의_답을_거절한다(db):
     assert repo.attach_answer("c-1", answer="a", key="k", now=T, expect_seq=2) == "accepted"
 
 
-def test_대조는_CAS_술어에도_들어간다(db):
-    # 사전검사만 두면 읽고 나서 파킹이 일어난 경우를 못 막는다 — 창이 좁아질 뿐이다.
+def test_읽은_뒤의_파킹은_재분류에서_잡힌다(db):
+    # 사전검사를 지난 뒤 파킹이 일어나면 첫 CAS가 지고, 둘째 바퀴가 번호가 바뀐 것을
+    # 보고 stale_question으로 분류한다. (술어의 `question_seq` 줄은 읽은 값 술어와
+    # 중복이라 이 경로를 잡는 것은 재분류다 — 검증 리뷰 M2.)
     repo = MongoCaseRepository(db)
     _parked_doc(repo, question_seq=2)
     _interleave(db, "c-1", before_cas={"question_seq": 3, "question": "Q3"})
@@ -596,3 +598,17 @@ def test_조건부_저장은_소유_필드가_바뀌어도_진다(db):
                                          "question": record.question},
                           fields={"target_locator": "rest:/oee"}, now=T) is False
     assert db.cases.find_one({"id": "c-1"}).get("target_locator") is None
+
+
+def test_저장소의_모든_쓰기가_같은_직렬화를_쓴다(db):
+    # 검증 리뷰 N19: attach_answer가 쓴 updated_at 위에서 update_if의 술어가 도는지 —
+    # 한 곳만 `.isoformat()`으로 돌아가도 CAS가 조용히 영원히 진다(B1의 형태).
+    repo = MongoCaseRepository(db)
+    _parked_doc(repo)
+    assert repo.attach_answer("c-1", answer="a", key="k", now=T + timedelta(minutes=1)) == "accepted"
+    record = repo.get("c-1")
+    assert repo.update_if("c-1", expect={"updated_at": record.updated_at},
+                          fields={"question": "새"}, now=T + timedelta(minutes=2)) is True
+    after = repo.get("c-1")
+    assert repo.update_if("c-1", expect={"updated_at": after.updated_at},
+                          fields={"question": "더 새"}, now=T + timedelta(minutes=3)) is True

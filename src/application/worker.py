@@ -799,7 +799,7 @@ class InvestigationWorker:
         """큐에서 나온 케이스 하나를 처리한다 — 실린 답이 있으면 그것부터.
 
         답은 `take_answer`로 **가져가며 지운다**(answered_seq를 맞춘다). 지운 뒤
-        소비가 busy/skipped/not_ours/stale로 끝나면 `restore_answer`로 되돌린다 — 그 사이
+        소비가 busy/skipped/not_ours/stale/stale_question으로 끝나면 `restore_answer`로 되돌린다 — 그 사이
         그래프가 새 질문으로 파킹했으면 되돌리지 않고(옛 답이 새 질문에 붙는다)
         `human:answer_dropped` 증거로 남긴다. "지운 뒤 실패해도 증거로 남아 잃지
         않는다"는 전 커밋의 주장은 거짓이었다 — 그 경로들은 증거 박제 전에 끝난다.
@@ -824,7 +824,9 @@ class InvestigationWorker:
                 topology=getattr(deps, "topology", None), worker=self, clock=self._clock,
                 max_intake_turns=self._max_intake_turns,
                 interaction_policy=record.interaction_policy, on_event=self._on_event)
-            if result in ("busy", "skipped", "not_ours", "stale"):
+            # stale_question도 여기 든다 — 어휘를 넓히면서 이 목록을 안 보면 가져간 답이
+            # restore도 증거도 없이 증발한다(계획 17 검증 리뷰 N-3).
+            if result in ("busy", "skipped", "not_ours", "stale", "stale_question"):
                 if not self._repo.restore_answer(case_id, answer=answer, now=self._clock()):
                     self._store.put_evidence(case_id, "human:answer_dropped",
                                              {"answer": answer, "reason": result},

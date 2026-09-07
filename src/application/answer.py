@@ -40,12 +40,17 @@ async def answer_case(case_id: str, answer: str, *, repo, store, deps: Any, topo
     if record is not None and record.question_kind == "intake":
         turn = await intake_turn(case_id, repo=repo, store=store, deps=deps,
                                  topology=topology, clock=clock, answer=answer,
-                                 max_turns=max_intake_turns, on_event=on_event)
+                                 max_turns=max_intake_turns, on_event=on_event,
+                                 expect_seq=expect_seq)
         # 접수가 왜 실패했는지가 호출부에 안 닿으면 `case resume` 사용자는 절대
         # 못 본다 — 반환값 한 단어에는 담기지 않는다.
         for problem in turn.problems:
             if on_problem is not None:
                 on_problem(problem)
+        if turn.status == "stale_question":
+            # 접수 질문도 조사 질문과 같은 어휘로 돌려준다 — 호출부가 두 종류를
+            # 구별해 다룰 이유가 없다(둘 다 "다시 읽고 다시 답하라"다).
+            return "stale_question"
         if turn.status == "asking":
             return "awaiting_human"
         if turn.status == "not_ours":

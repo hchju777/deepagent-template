@@ -1390,3 +1390,42 @@ def test_case_resume의_대조는_lease_아래에서_한다():
     import inspect
     src = inspect.getsource(main_module._cmd_case_resume)
     assert "expect_seq=args.question_seq" in src
+
+
+async def test_chat은_질문이_바뀌면_새_질문으로_다시_묻는다(tmp_path, capsys):
+    # 검증 리뷰 N-2: 답을 버리고 영문 토큰만 보이면 사람은 무슨 일인지 알 수 없다.
+    from types import SimpleNamespace
+    store, repo = InMemoryCaseStore(), InMemoryCaseRepository()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="Q1",
+                         question_kind="investigation", question_seq=1))
+    asked, results = [], iter(["stale_question", "closed"])
+
+    async def ask(question):
+        asked.append(question)
+        if len(asked) == 1:      # 사람이 답을 쓰는 사이 질문이 바뀐다
+            repo.save(repo.get("c-1").model_copy(update={"question": "Q2", "question_seq": 2}))
+        return "답"
+
+    async def fake_answer_case(*a, **kw):
+        return next(results)
+
+    import src.__main__ as m
+    real = m.answer_case
+    m.answer_case = fake_answer_case
+    try:
+        rt = SimpleNamespace(deps=SimpleNamespace(topology=None))
+        app = SimpleNamespace(engine=SimpleNamespace(max_intake_turns=3),
+                              report=SimpleNamespace(output_dir=str(tmp_path), format="md"))
+        from src.application.intake import IntakeTurn
+
+        class _Worker:
+            async def run_once(self, case_id, *, interaction_policy="autonomous"):
+                return "awaiting_human"
+
+        code = await m._drive_chat(SimpleNamespace(), rt, repo, store, _Worker(), lambda: T, ask,
+                                   app, "c-1", IntakeTurn(status="done"), lambda e: None)
+    finally:
+        m.answer_case = real
+    assert asked == ["Q1", "Q2"]                      # 새 질문으로 다시 물었다
+    assert "질문이 바뀌었다" in capsys.readouterr().out

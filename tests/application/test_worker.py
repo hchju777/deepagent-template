@@ -1241,3 +1241,37 @@ async def test_재개는_lease를_잡은_뒤_질문_번호를_대조한다():
     after = repo.get("c-1")
     assert after.status == "awaiting_human" and after.owner is None    # lease를 돌려줬다
     assert await worker.resume_once("c-1", "맞는 답", expect_seq=1) == "closed"
+
+
+async def test_대조는_실린_답을_가져가기_전에_한다():
+    # 검증 리뷰 N22: 순서가 뒤집히면 지나간 직접 답이 seq 검증을 통과한 실린 답을
+    # 파괴한다(가져간 뒤 stale로 끝나므로 되돌릴 것도 없다).
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    _open_case(repo, store)
+    worker, _ = _closing_worker(repo, store)
+    assert await worker.run_once("c-1") == "awaiting_human"
+    assert repo.attach_answer("c-1", answer="API의 답", key="k-1", now=T, expect_seq=1) == "accepted"
+    assert await worker.resume_once("c-1", "지나간 직접 답", expect_seq=99) == "stale_question"
+    assert repo.get("c-1").pending_answer == "API의 답"        # 파괴되지 않았다
+
+
+async def test_소비가_stale_question이면_가져간_답을_되돌린다():
+    # 검증 리뷰 N-3: 어휘를 넓혔으면 복구 목록도 같이 봐야 한다 — 안 그러면 가져간 답이
+    # restore도 증거도 없이 증발한다.
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    repo.save(CaseRecord(id="c-1", gbm="mx", fct="gumi", fingerprint="fp", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="awaiting_human", question="q",
+                         question_kind="investigation", question_seq=1,
+                         pending_answer="답", answer_key="k-1"))
+
+    async def stale(case_id, answer, *, expect_seq=None):
+        return "stale_question"
+
+    worker = InvestigationWorker(CaseQueue(), repo=repo, store=store,
+                                 deps_for_site=lambda g, f: SimpleNamespace(topology=None),
+                                 checkpointer=InMemorySaver(), clock=lambda: T, owner="w-1",
+                                 max_concurrent=1, lease_ttl_s=60, ledger=ledger,
+                                 knowledge_digests_for_site=lambda g, f: {})
+    worker.resume_once = stale
+    assert await worker.consume("c-1") == "stale_question"
+    assert repo.get("c-1").pending_answer == "답"           # 되돌렸다
