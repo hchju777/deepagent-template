@@ -16,6 +16,7 @@ from src.api.assembly import ApiRuntime, ApiSite
 from src.config.schema_app import AccessPolicy, AppConfig, LlmConfig, LlmProfiles
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
+from src.domain.label import InMemoryLabelStore
 from src.domain.store import InMemoryCaseStore
 from src.knowledge.topology import Topology
 from src.patrol.ledger import InMemoryLedger
@@ -43,7 +44,7 @@ def _runtime(*, sites=(("mx", "gumi"),), replies=(RESOLVED,), access=None):
                     sites=[ApiSite(gbm=g, fct=f, topology=TOPO, lead_llm=_llm(*replies))
                            for g, f in sites],
                     repo=InMemoryCaseRepository(), store=InMemoryCaseStore(),
-                    events=InMemoryEventStore(), ledger=InMemoryLedger(), clock=lambda: T)
+                    events=InMemoryEventStore(), ledger=InMemoryLedger(), labels=InMemoryLabelStore(), clock=lambda: T)
     return rt
 
 
@@ -238,3 +239,14 @@ def test_저장소_장애의_답은_503이다(client, rt):
     rt.repo.attach_answer = boom
     r = client.post(f"/cases/{cid}/answers", json={"answer": "x", "key": "k"})
     assert r.status_code == 503 and r.json()["result"] == "error"
+
+
+def test_라벨은_기록되고_없는_케이스는_404다(client, rt):
+    cid = client.post("/cases", json={"symptom": "s", "gbm": "mx", "fct": "gumi"}).json()["case_id"]
+    r = client.post(f"/cases/{cid}/label", json={"agreement": "wrong", "resolution": "fixed",
+                                                 "actual_component": "plan-sync", "saw_report": True})
+    assert r.status_code == 202 and r.json()["result"] == "recorded"
+    row = rt.labels.list_for(cid)[0]
+    assert row.agreement == "wrong" and row.actual_root_cause_component == "plan-sync"
+    assert client.post("/cases/없음/label", json={"agreement": "correct"}).status_code == 404
+    assert client.post(f"/cases/{cid}/label", json={"agreement": "아마도"}).status_code == 422

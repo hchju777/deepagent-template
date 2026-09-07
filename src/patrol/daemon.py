@@ -40,6 +40,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from src.application.close import sweep_timeouts
 from src.application.deps import EngineDeps
 from src.application.events import case_status_event, collect_events, report_ready_event
+from src.application.labels import label_texts
 from src.application.worker import CaseQueue, InvestigationWorker
 from src.config.loader import load_app_config, load_registry, load_site_config
 from src.config.schema_app import AppConfig, ReportConfig
@@ -85,7 +86,7 @@ class PatrolDaemon:
                 checkpointer, clock: Callable, judge_llm, budget: LlmBudget, owner: str,
                 timezone: str, on_event: Callable[[Any], None] | None = None,
                 report_cfg: ReportConfig = ReportConfig(), mail_sender: MailSenderPort | None = None,
-                events=None, snapshots=None):
+                events=None, snapshots=None, labels=None):
         self.app = app
         self.sites = sites
         self.store = store
@@ -103,6 +104,7 @@ class PatrolDaemon:
         self.mail_sender = mail_sender   # None이면 report_cfg.mail.enabled로 SmtpSender/NullSender를 고른다
         self.events = events             # EventStorePort | None — 보존 스윕이 case_events도 걷는다
         self.snapshots = snapshots       # VerdictSnapshotPort | None — 종결 시 판정 박제
+        self.labels = labels             # LabelStorePort | None — 푸터의 라벨 유입구(계획 15)
         self.queue = CaseQueue()
         self.worker: InvestigationWorker | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -265,7 +267,8 @@ class PatrolDaemon:
                                   case_file=case_file, clock=self.clock,
                                   evidence_summaries=evidence_summaries,
                                   events=log.events if log is not None else None,
-                                  timeline_error=log.error if log is not None else None)
+                                  timeline_error=log.error if log is not None else None,
+                                  labels=label_texts(self.labels, case_id))
 
     def _render_case_report(self, case_id: str) -> str:
         """설정 포맷으로 보고서 본문을 렌더링한다(파일로 쓸 것)."""

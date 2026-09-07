@@ -179,3 +179,8 @@ def test_푸터는_관측성을_낸다():
                               "plan_tasks": [{"id": "t-1", "status": "error"}]})
     html = render_html(model)
     assert "관측성: 경과 3.5s · 라운드 2 · 도구 실패 1 · 미측정: 토큰" in html
+
+
+def test_푸터는_라벨_유입구를_낸다():
+    html = render_html(_model())
+    assert "case label c-1 --agreement" in html

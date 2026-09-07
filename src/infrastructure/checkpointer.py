@@ -22,9 +22,10 @@ from pymongo import MongoClient
 from src.config.schema_app import StoreConfig
 from src.domain.cases import CaseRepositoryPort, InMemoryCaseRepository
 from src.domain.events import EventStorePort, InMemoryEventStore
+from src.domain.label import InMemoryLabelStore, LabelStorePort
 from src.domain.snapshot import InMemoryVerdictSnapshotStore, VerdictSnapshotPort
 from src.domain.store import CaseStorePort, InMemoryCaseStore
-from src.infrastructure.mongo_store import (MongoCaseRepository, MongoCaseStore,
+from src.infrastructure.mongo_store import (MongoLabelStore, MongoCaseRepository, MongoCaseStore,
                                             MongoEventStore, MongoLedger,
                                             MongoVerdictSnapshotStore, ensure_indexes)
 from src.patrol.ledger import InMemoryLedger, LedgerPort
@@ -51,14 +52,16 @@ class Persistence(NamedTuple):
     ledger: LedgerPort
     events: EventStorePort
     snapshots: VerdictSnapshotPort
+    labels: LabelStorePort
 
 
 def build_persistence(cfg: StoreConfig) -> Persistence:
     """cfg.backend에 따라 영속 계층 일습을 만든다."""
     if cfg.backend == "memory":
         return Persistence(InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger(),
-                           InMemoryEventStore(), InMemoryVerdictSnapshotStore())
+                           InMemoryEventStore(), InMemoryVerdictSnapshotStore(),
+                           InMemoryLabelStore())
     db = MongoClient(cfg.mongo_url)[cfg.mongo_db]
     ensure_indexes(db)
     return Persistence(MongoCaseStore(db), MongoCaseRepository(db), MongoLedger(db),
-                       MongoEventStore(db), MongoVerdictSnapshotStore(db))
+                       MongoEventStore(db), MongoVerdictSnapshotStore(db), MongoLabelStore(db))

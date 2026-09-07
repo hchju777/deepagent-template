@@ -26,6 +26,7 @@ from src.domain.cases import (_newest_first, CaseRecord, CaseRepositoryPort, OPE
                               lease_is_free, lease_is_held)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
+from src.domain.label import LabelStorePort, RootCauseLabel
 from src.domain.snapshot import VerdictSnapshot, VerdictSnapshotPort
 from src.domain.store import CaseStorePort, EvidenceRecord
 from src.knowledge.digest import canonical_digest
@@ -72,6 +73,7 @@ def ensure_indexes(db: Database) -> None:
     db.metrics.create_index([("name", 1), ("at", -1)])
     db.metrics.create_index("at")
     db.verdict_snapshots.create_index("case_id", unique=True)
+    db.labels.create_index([("case_id", 1), ("labeled_at", 1)])     # append-only(계획 15)
 
 
 class MongoCaseStore(CaseStorePort):
@@ -494,6 +496,27 @@ class MongoEventStore(EventStorePort):
         if stale:
             self._db.case_events.delete_many({"_id": {"$in": stale}})
         return len(stale)
+
+
+class MongoLabelStore(LabelStorePort):
+    """append-only — 덮어쓰지 않는다. retention도 걷지 않는다(스냅샷과 짝이다)."""
+
+    def __init__(self, db: Database):
+        self._db = db
+
+    def append(self, label: RootCauseLabel) -> None:
+        self._db.labels.insert_one(label.model_dump(mode="json"))
+
+    def list_for(self, case_id: str) -> list[RootCauseLabel]:
+        cursor = self._db.labels.find({"case_id": case_id}).sort("labeled_at", 1)
+        return [RootCauseLabel.model_validate({k: v for k, v in d.items() if k != "_id"})
+                for d in cursor]
+
+    def count(self) -> int:
+        return self._db.labels.count_documents({})
+
+    def labeled_case_ids(self) -> set[str]:
+        return set(self._db.labels.distinct("case_id"))
 
 
 class MongoVerdictSnapshotStore(VerdictSnapshotPort):

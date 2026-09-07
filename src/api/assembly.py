@@ -38,6 +38,7 @@ class ApiRuntime:
     store: Any
     events: Any
     ledger: Any
+    labels: Any
     clock: Callable[[], datetime]
     by_key: dict[tuple[str, str], ApiSite] = field(init=False)   # sites에서 유도
 
@@ -74,4 +75,4 @@ def assemble_api(config_root: Path, repo_root: Path, env: dict, *, clock: Callab
 
     p = build_persistence(app.store)
     return ApiRuntime(app=app, sites=sites, repo=p.repo, store=p.store, events=p.events,
-                      ledger=p.ledger, clock=clock)
+                      ledger=p.ledger, labels=p.labels, clock=clock)

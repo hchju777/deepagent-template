@@ -76,6 +76,9 @@ class ReportModel(StrictModel):
     salvage_error: str | None = None  # 구제 자체가 실패했으면 그 사유
     observability: Observability = Observability(duration_s=None, rounds=None, tool_failures=0,
                                                 unmeasured=["토큰"])
+    # 이 케이스에 달린 라벨의 사람이 읽는 표현. 비어 있으면 푸터가 라벨 명령을 안내한다 —
+    # 라벨률이 나중에 어떤 정확도든 계산할 수 있는지의 상한이라, 이 한 줄의 레버리지가 크다.
+    labels: list[str] = []
     timeline: list[TimelineEntry] = []
     # 셋은 다른 말이다: events(읽었다 — 비어 있을 수 있다) / none(이 프로세스에 이벤트
     # 스토어가 없다) / unavailable(읽기가 실패했다 — timeline_error에 사유)
@@ -209,7 +212,8 @@ def build_report_model(record: CaseRecord, *, verdict: Verdict | None,
                        clock: Clock,
                        evidence_summaries: dict[str, str] | None = None,
                        events: list[EngineEvent] | None = None,
-                       timeline_error: str | None = None) -> ReportModel:
+                       timeline_error: str | None = None,
+                       labels: list[str] | None = None) -> ReportModel:
     """보고서 데이터를 유도한다. 순수 함수이고 절대 raise하지 않는다.
 
     events는 이벤트 로그 전체(`collect_events(...).events`)다. None은 "이 프로세스에
@@ -252,6 +256,7 @@ def build_report_model(record: CaseRecord, *, verdict: Verdict | None,
     salvage_error = case_file.get("salvage_error")
     return ReportModel(
         observability=observability,
+        labels=list(labels or []),
         record=record, verdict=verdict, evidence=evidence,
         evidence_summaries=evidence_summaries, stages=stages, round_no=round_no,
         plan_tasks=plan_tasks, hypotheses=hypotheses, verify_problems=verify_problems,

@@ -492,3 +492,20 @@ def test_Mongo도_지문과_locator로_종결_케이스를_최신순으로_찾�
     from src.infrastructure.mongo_store import ensure_indexes
     ensure_indexes(db)          # tier 2~4가 풀스캔이 되지 않게(계획 15)
     assert "status_1_target_locator_1" in db.cases.index_information()
+
+
+# ---- 계획 15(P8): 라벨 저장소 ------------------------------------------------------------
+def test_Mongo_라벨은_쌓이고_케이스별로_읽힌다(db):
+    from src.domain.label import RootCauseLabel
+    from src.infrastructure.mongo_store import MongoLabelStore, ensure_indexes
+    ensure_indexes(db)
+    labels = MongoLabelStore(db)
+    labels.append(RootCauseLabel(case_id="c-1", agreement="correct", labeled_at=T))
+    labels.append(RootCauseLabel(case_id="c-1", agreement="wrong", labeled_at=T + timedelta(hours=1),
+                                 resolution="false_positive", saw_report=True, labeled_by="hchju"))
+    labels.append(RootCauseLabel(case_id="c-2", agreement="unknown", labeled_at=T))
+    rows = labels.list_for("c-1")
+    assert [r.agreement for r in rows] == ["correct", "wrong"]      # 단 순서대로
+    assert rows[1].saw_report is True and rows[1].labeled_by == "hchju"
+    assert labels.count() == 3 and labels.labeled_case_ids() == {"c-1", "c-2"}
+    assert "case_id_1_labeled_at_1" in db.labels.index_information()

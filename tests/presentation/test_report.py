@@ -280,3 +280,11 @@ def test_푸터는_관측성을_잰_것만_말한다():
     unmeasured = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
                                clock=lambda: T)
     assert "경과 미측정" in unmeasured and "경과 0" not in unmeasured
+
+
+def test_푸터는_라벨_유입구를_보이고_이미_라벨된_것은_그_사실을_보인다():
+    md = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE, clock=lambda: T)
+    assert "case label c-1 --agreement" in md          # 라벨률에 가장 레버리지가 큰 한 줄
+    labeled = render_report(RECORD, verdict=VERDICT, evidence=EVIDENCE, case_file=CASE_FILE,
+                            clock=lambda: T, labels=["wrong (false_positive)"])
+    assert "라벨: wrong (false_positive)" in labeled

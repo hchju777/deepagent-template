@@ -104,3 +104,17 @@ async def test_보존_스윕은_오래된_판정_스냅샷을_지운다():
                                    retention=RetentionConfig(snapshots_d=730))
     assert counts["snapshots"] == 1
     assert snapshots.get("c-old") is None and snapshots.get("c-new") is not None
+
+
+async def test_라벨은_보존_스윕이_지우지_않는다():
+    # 스냅샷과 짝이다 — 한쪽만 남으면 대조가 불가능해진다(계획 15/P8).
+    from datetime import timedelta
+    from src.domain.label import InMemoryLabelStore, RootCauseLabel
+    from src.domain.snapshot import InMemoryVerdictSnapshotStore
+    repo, store, ledger = InMemoryCaseRepository(), InMemoryCaseStore(), InMemoryLedger()
+    labels, snapshots = InMemoryLabelStore(), InMemoryVerdictSnapshotStore()
+    old = T - timedelta(days=400)
+    labels.append(RootCauseLabel(case_id="c-old", agreement="correct", labeled_at=old))
+    await sweep_retention(repo=repo, store=store, ledger=ledger, checkpointer=InMemorySaver(),
+                          clock=lambda: T, retention=RetentionConfig(), snapshots=snapshots)
+    assert labels.count() == 1
