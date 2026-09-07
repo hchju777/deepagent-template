@@ -224,8 +224,59 @@ exit 0이면 통과. `--live`를 추가하면 대상에 실제로 접속해 **Mo
 
 ## 이 코드베이스에서 AI에게 작업을 시키고 싶다
 
-[CLAUDE.md](../CLAUDE.md) — 이 리포에서 지켜야 할 규율(무raise, 시계 주입,
-증거 인용 등)이 전부 정리돼 있다.
+세 문서를 이 순서로 준다.
+
+1. [CLAUDE.md](../CLAUDE.md) — 지켜야 할 규율(무raise, 시계 주입, 증거 인용 등).
+   **하지 말 것**이 여기 있다.
+2. [docs/file-map.md](file-map.md) — 파일별 역할과 데이터 흐름. **어느 파일을 열어야
+   하는가**가 여기 있다.
+3. [docs/for-implementers.md](for-implementers.md) — "X를 추가하려면" 레시피.
+   **무엇을 어떤 순서로 만지고, 빠뜨리면 무엇이 조용히 깨지는가**가 여기 있다.
+
+## 특정 컬렉션에 특정 질의를 날리고 싶다
+
+`mongo_recent`는 항상 `filter={}`라 "최근 N건"뿐이다. `probe: "mongo_find"`를 **명시하면**
+필터·정렬을 config로 쓸 수 있다.
+
+```json
+"twin.stopped": {
+  "judge": "rule", "schedule": { "interval": "5m" },
+  "probe": "mongo_find", "target": "mongo:twin_state",
+  "params": { "rule": "exists", "field": "0.line",
+              "filter": { "state": "STOP" }, "sort": [["ts", -1]], "sample": 50 },
+  "resolve": { "line": { "from": "rest", "entry": "list_lines", "field": "code" } }
+}
+```
+
+읽기 전용은 여기서도 메커니즘이다 — 필터 연산자가 닫힌 허용 목록을 통과해야 하고
+`$where`처럼 서버측 JS를 도는 연산자는 표현할 수 없다. 해석기 값은 필터에 합쳐진다
+(리스트는 `$in`, 스칼라는 동등 비교). 정적 필터와 `resolve`의 키가 겹치면 기동이 거부한다.
+
+**표현할 수 없는 것**: 시간 범위 질의(`{"ts": {"$gte": <어제>}}`). 해석기는 값 하나를 내고
+정적 필터가 그 값을 참조할 문법이 없다 — 참조 문법을 만들면 그것이 곧 표현식 DSL이고
+규율 6이 금지한 것이다.
+
+## 조사 정확도를 재고 싶다
+
+되먹임이 먼저다. 조사가 끝난 뒤 사람이 실제 원인을 알려준다.
+
+```bash
+python -m src case label c-1 --agreement wrong --actual-component plan-sync \
+    --resolution false_positive --saw-report --by "$USER"
+python -m src case label --stats
+```
+
+게이트는 **종결 라벨 30건 그리고 종결의 절반 초과**다. 그전에는 어떤 퍼센트도 안 낸다 —
+12/40으로 낸 30%는 다음 주에 뒤집힐 숫자이고, 한 번 보고되면 사람이 그것을 기억한다.
+
+열리면 `confidence`별 적중을 낸다. 분모 규칙은 **코드가 쥔다**(어느 라벨을 셀지 사람이
+고르면 숫자가 원하는 대로 나온다): `unknown`은 분모에서 빼되 뺀 수를 같은 줄에 적고,
+케이스당 마지막 라벨만 세고, `confidence`가 없는 판정은 버리지 않고 "미상" 버킷에 넣는다
+(버리면 분모에 생존 편향이 생긴다 — confidence를 못 낸 판정이 곧 어려운 케이스다).
+
+조사 소요는 `python -m src patrol status`가 요약한다 — 건수·실패 수·**중앙값**·최장.
+평균이 아닌 이유는 파킹 한 건이 며칠 걸리면 통째로 왜곡하고, 그 한 건이 바로 사람이
+따로 봐야 하는 것이기 때문이다.
 
 ## 값이 매일 바뀌는 파라미터로 점검하고 싶다
 
