@@ -143,3 +143,24 @@ async def test_같은_digest면_전회_대비를_낸다():
     results2 = {f"{g}/{f}": _covered(g, f, [2.0]) for g, f in SITES}
     second = await _run(_scenario(), results2, digests=digests)
     assert second.trend == {"alarms": 3.0} and second.trend_caveat is None
+
+
+async def test_지표_하나가_실패한_사이트는_covered로_적히지_않는다():
+    # 커버리지 블록 자신이 거짓말하면 이 기능의 존재 이유가 무너진다.
+    scenario = _scenario(metrics={
+        "alarms": {"target": "rest:/alarms", "extract": "body.n", "reduce": "sum"},
+        "downtime": {"target": "rest:/down", "extract": "body.n", "reduce": "sum"}})
+    calls = {"n": 0}
+
+    async def collect(spec, *, gbm, fct, adapters, clock, timezone_name):
+        calls["n"] += 1
+        if (gbm, fct) == ("mx", "suwon") and spec.target == "rest:/down":
+            return _missing(gbm, fct, "다운타임 끝점 타임아웃")
+        return _covered(gbm, fct, [1.0])
+
+    report = await run_scenario("alarm_trend", scenario, sites=SITES,
+                                adapters_for_site=lambda g, f: object(), clock=lambda: T,
+                                timezone_name="UTC", collect=collect)
+    suwon = next(c for c in report.coverage if c.fct == "suwon")
+    assert suwon.status == "missing" and "다운타임" in (suwon.reason or "")
+    assert next(c for c in report.coverage if c.fct == "gumi").status == "covered"
