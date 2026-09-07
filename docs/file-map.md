@@ -85,8 +85,10 @@ CLI `chat` / HTTP POST /cases       __main__.py·api/routes_cases.py
 
 ### 1.4 답변 (두 표면이 **다른 자리에서** 갈린다)
 
-CLI는 답을 **즉시 실행**하고, HTTP는 **싣기만** 한다(`api`는 실행자가 아니다). 그래서
-분기 함수 `answer_case`를 CLI는 직접 부르고 HTTP는 워커를 통해 나중에 지난다.
+CLI는 답을 **즉시 실행**한다. HTTP는 **조사 답변만** 싣고 끝낸다(`api`는 실행자가
+아니다) — 접수 답변은 LLM 턴 하나라 대상 접근이 없어서 라우트가 동기로 돌리고 다음
+질문을 바로 응답에 싣는다. 그래서 분기 함수 `answer_case`를 CLI는 직접 부르고, HTTP의
+조사 답변은 워커를 통해 나중에 지난다.
 
 ```
 CLI  `case resume --question-seq` / `chat`      __main__.py
@@ -261,8 +263,8 @@ git에 커밋되고, digest가 케이스 T0에 박제되고, 런타임에 넓어
 | `open_case.py` | 56 | 사람 경로의 케이스 개설 — **접수보다 먼저.** |
 | `intake.py` | 298 | 접수 턴. `_SAVED_FIELDS`와 `_expect`가 **같이 움직인다**(전자는 무엇을 쓰는가, 후자는 무엇이 안 바뀌었어야 하는가). |
 | `scope.py` | 107 | 사이트 축 해석 — 후보는 코드가 registry에서, LLM은 그 안에서만 고른다. |
-| `answer.py` | 66 | 접수 답변 vs 조사 답변을 가르는 **한 곳**. CLI와 API가 공유한다. |
-| `submit.py` | 91 | 케이스 제출·답 싣기 — CLI와 API 공유. |
+| `answer.py` | 71 | 접수 답변 vs 조사 답변을 가르는 **한 곳**. 호출부는 셋(CLI 둘, 워커 하나) — **HTTP 라우트는 안 부른다**(§1.4). |
+| `submit.py` | 91 | 케이스 제출(`submit_case` — CLI와 API 공유)과 답 싣기(`submit_answer` — **API 전용**, 명령 채널에 싣고 끝난다). |
 | `history.py` | 171 | tier 1~4 결정론 검색과 렌더. **tier마다 저장소를 따로 질의한다**(안 그러면 사다리가 뒤집힌다). 렌더된 줄에서 **과거 evidence id를 지운다**(규율 3). |
 | `labels.py` | 170 | 라벨 유입구·게이트·캘리브레이션. 분모 규칙은 코드가 쥔다. |
 | `events.py` | 138 | State 변화 → `EngineEvent` 매핑과 이벤트 로그 읽기(`collect_events`는 raise하지 않는다). |
@@ -302,13 +304,13 @@ import 그래프로 지킨다 — 끌어오면 `api` 풀 전체가 실행자가 
 | `routes_cases.py` | 148 | 쓰기 — 접수·답·라벨. 두 409의 **본문 모양이 다르다**(주석 참고). |
 | `routes_reads.py` | 190 | 읽기 — 목록·상세·이벤트(SSE)·보고서·집계·점검. |
 | `models.py` | 63 | 응답 모델(`CaseDetail` 등) — dict로 돌려주지 않는다. |
-| `__init__.py` | — | 빈 패키지 표식. |
+| `__init__.py` | 11 | **빈 파일이 아니다** — "api는 실행자가 아니다" 규율을 담은 docstring. |
 
 ### `src/` 최상위 (3)
 
 | 파일 | 줄 | 역할 · 언제 여는가 |
 |---|---|---|
-| `__main__.py` | 988 | CLI 전체. **규율 2의 주 경계**(`datetime.now()`) — 기동 검증(`boot.py`)과 `usecase.py`의 이벤트 시각 폴백에 문서화된 예외가 있다(경과는 시계와 다른 양이라 `Ticker`가 따로 잰다). `_build_publisher`가 `chat`·`case resume` 두 경로의 발행 배선을 조립한다 — **데몬은 자기 `_publish_report`를 워커의 `on_closed`로 배선한다**(같은 계약, 다른 조립). |
+| `__main__.py` | 989 | CLI 전체. **규율 2의 주 경계**(`datetime.now()`) — 기동 검증(`boot.py`)과 `usecase.py`의 이벤트 시각 폴백에 문서화된 예외가 있다(경과는 시계와 다른 양이라 `Ticker`가 따로 잰다). `_build_publisher`가 `chat`·`case resume` 두 경로의 발행 배선을 조립한다 — **데몬은 자기 `_publish_report`를 워커의 `on_closed`로 배선한다**(같은 계약, 다른 조립). |
 | `boot.py` | 503 | 기동 검증. **문제를 전부 모아서** `list[BootError]`로 돌려준다. 항목 번호는 `docs/config-reference.md`가 단일 소스다 — **여기 개수를 적지 마라**(두 곳이 갈라진다). |
 | `__init__.py` | — | 빈 패키지 표식. |
 
@@ -317,10 +319,31 @@ import 그래프로 지킨다 — 끌어오면 `api` 풀 전체가 실행자가 
 ## 3. 이 지도를 최신으로 유지하려면
 
 ```bash
-# 표에 있는 파일명 ↔ 실제 파일명 대조(패키지 경로는 절 헤더가 말하므로 이름만 본다)
-diff <(find src -name '*.py' ! -name '__init__.py' -printf '%f\n' | sort -u) \
-     <(grep -oE '^\| `[a-z_]+\.py`' docs/file-map.md | tr -d '|` ' | grep -v __init__ | sort -u)
+# 파일명과 **줄 수**를 절 헤더의 패키지와 함께 대조한다. 줄 수를 빼면 드리프트가 조용히
+# 남고(실제로 그렇게 낡았다), 패키지를 빼면 `events.py`처럼 이름이 겹치는 파일이 충돌한다.
+.venv/bin/python - <<'EOF'
+import pathlib, re
+doc = pathlib.Path("docs/file-map.md").read_text()
+listed, pkg = {}, None
+for line in doc.splitlines():
+    header = re.match(r'### `src/([a-z]*)/?`', line)
+    if header:
+        pkg = header.group(1)
+    row = re.match(r'\| `([a-z_]+\.py)` \| (\d+) \|', line)
+    if row and pkg is not None:
+        listed[(pkg, row.group(1))] = int(row.group(2))
+bad = []
+for path in sorted(pathlib.Path("src").rglob("*.py")):
+    if path.name == "__init__.py":
+        continue
+    key = ("" if path.parent.name == "src" else path.parent.name, path.name)
+    real = len(path.read_text().splitlines())
+    if key not in listed:
+        bad.append(f"표에 없음: {path}")
+    elif listed[key] != real:
+        bad.append(f"줄 수 어긋남: {path} 표={listed[key]} 실제={real}")
+print("\n".join(bad) or "동기화됨")
+EOF
 ```
 
-동기화돼 있으면 **출력이 없다**. 파일을 추가하면 해당 절의 표에 한 줄을 더하고 패키지
-헤더의 개수를 고쳐라.
+파일을 추가하면 해당 절의 표에 한 줄을 더하고 패키지 헤더의 개수를 고쳐라.

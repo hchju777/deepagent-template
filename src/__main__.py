@@ -518,8 +518,9 @@ def _cmd_case_resume(args, config_root: Path, env: dict) -> int:
         max_intake_turns=app.engine.max_intake_turns, ticker=time.perf_counter,
         on_event=on_event, on_closed=on_closed)
 
-    # 접수 질문과 조사 질문을 가르는 것은 answer_case 하나다 — CLI와 계획 13의
-    # API가 같은 함수를 쓴다(규율 8).
+    # 접수 질문과 조사 질문을 가르는 것은 answer_case 하나다. HTTP 라우트는 이 함수를
+    # 안 부르고(`api`는 실행자가 아니다) 명령 채널에 실은 답을 워커가 집어 갈 때 거친다 —
+    # 분기가 CLI와 워커 두 곳에서 일어나므로 함수를 하나로 둔다(규율 8).
     rt = by_key[(record.gbm, record.fct)]
     result = asyncio.run(answer_case(
         args.case_id, args.answer, repo=repo, store=store, deps=rt.deps,
@@ -681,7 +682,7 @@ async def _drive_chat(args, rt, repo, store, worker, clock, ask, app, case_id, t
                  f"'python -m src case resume {case_id} --answer <답변>'으로 나중에 재개할 수 있다.")
             return 0
         # 조사 재개도 answer_case를 거친다 — 조사 도중 접수 질문이 다시 뜰 수 있고,
-        # 무엇보다 CLI와 계획 13의 API가 **같은 분기**를 써야 한다(규율 8).
+        # CLI와 워커가 **같은 분기**를 써야 한다(규율 8).
         result = await answer_case(case_id, answer, repo=repo, store=store, deps=rt.deps,
                                    topology=rt.deps.topology, worker=worker, clock=clock,
                                    max_intake_turns=app.engine.max_intake_turns,
