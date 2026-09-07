@@ -781,3 +781,102 @@ def test_집계_지표의_필터와_해석기_키가_겹치면_거부된다():
             "target": "mongo:twin_state", "extract": "0.n", "reduce": "sum",
             "params": {"filter": {"part": "Z"}},
             "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code"}}})
+
+
+_REST_SITE = {
+    "target": {"adapters": "stub",
+               "rest": {"base_url": "http://t", "entries": {
+                   "alarm_count": {"method": "GET", "path": "/alarms",
+                                   "query_schema": {"line": "list[str]", "day": "str"}},
+                   "make_thing":  {"method": "POST", "path": "/make",
+                                   "body_schema": {"line": "list[str]"}}}}},
+    "patrol": {"checks": {}}}
+
+
+def _scenario(tmp_path, metrics):
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "agg.json").write_text(json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "집계",
+        "schedule": {"interval": "1h"}, "metrics": metrics}), encoding="utf-8")
+    return " ".join(e.problem for e in
+                    validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+
+
+def _rest_metric(**over):
+    base = {"target": "rest:alarm_count", "extract": "0.n", "reduce": "sum"}
+    return {**base, **over}
+
+
+def test_지표의_rest_해석기도_GET_항목만_가리킬_수_있다(tmp_path):
+    # 해석기는 `adapters.rest.query(spec.entry, {})`를 부르고 어댑터가 항목 선언의
+    # 메서드로 나간다 — POST 항목을 가리키면 실제로 POST가 나가고, 집계는 사이트
+    # 수만큼 팬아웃하므로 그 한 줄이 N개 법인에 동시에 나간다(규율 9).
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "rest", "entry": "make_thing", "field": "code"}})})
+    assert "GET이어야 한다" in problems
+
+
+def test_지표의_rest_해석기가_없는_항목을_가리키면_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "rest", "entry": "ghost", "field": "code"}})})
+    assert "등재돼 있지 않다" in problems
+
+
+def test_지표의_해석기_모양이_스키마와_어긋나면_거부한다(tmp_path):
+    # clock은 문자열 하나를 내는데 스키마가 list[str]이면 매 집계가 그 오류로 끝난다.
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "clock", "expr": "today"}})})
+    assert "문자열 하나" in problems
+
+
+def test_지표의_mongo_해석기_filter도_허용목록을_통과해야_한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(
+        {**_REST_SITE, "target": {**_REST_SITE["target"],
+                                  "mongo": {"url": "mongodb://x:27017"}}}))
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "mongo", "collection": "parts", "field": "code",
+                 "filter": {"$where": "sleep(1)"}}})})
+    assert "$where" in problems
+
+
+def test_지표의_해석기가_쓰는_어댑터가_없으면_거부한다(tmp_path):
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps(_REST_SITE))   # mongo 미설정
+    problems = _scenario(tmp_path, {"m": _rest_metric(resolve={
+        "line": {"from": "mongo", "collection": "parts", "field": "code"}})})
+    assert "target.mongo가 설정돼 있지 않다" in problems
+
+
+def test_resolve를_실행하지_않는_프로브의_지표는_거부한다(tmp_path):
+    # 사람이 "범위를 좁혔다"고 믿는 지표가 런타임에는 해석기를 조용히 무시한다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    problems = _scenario(tmp_path, {"m": {
+        "target": "mongo:twin_state", "probe": "mongo_recent",
+        "extract": "0.n", "reduce": "sum",
+        "resolve": {"line": {"from": "clock", "expr": "today"}}}})
+    assert "등재 항목이 아니다" in problems
+
+
+def test_전체_조회를_명시한_지표는_기동을_막지_않는다(tmp_path):
+    # mongo_find_problems에 resolve를 안 넘기면 이 정상 설정이 "전체 조회"로 거부된다.
+    _tree(tmp_path)
+    _write(tmp_path, "knowledge/topology/common.yaml", _MONGO_TOPO)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "mongo": {"url": "mongodb://x:27017"}},
+        "patrol": {"checks": {}}}))
+    assert _scenario(tmp_path, {"m": {
+        "target": "mongo:twin_state", "probe": "mongo_find",
+        "extract": "0.n", "reduce": "sum",
+        "resolve": {"line": {"from": "unfiltered"}}}}) == ""

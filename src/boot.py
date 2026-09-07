@@ -133,7 +133,8 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
     # 없으면 real 사이트에서 시드가 조용히 무시된 채 실제 네트워크를 친다.
     adapters_by_site: dict[str, str] = {}
     # 시나리오 검증에 쓸 사이트별 (토폴로지 locator, 등재 항목) — 사이트 루프에서 채운다.
-    site_targets: dict[str, tuple[set, set]] = {}
+    # 집계 검증이 사이트마다 필요로 하는 사실 — locator 집합과 어댑터 유무.
+    site_targets: dict[str, tuple[set, bool, bool]] = {}
     entry_specs: dict[str, dict] = {}
 
     app_config = None
@@ -182,7 +183,8 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         # 아니다(못 얻는 대상도 있다); 있는데 깨진 것이 오류다.
         known = topo.locators()
         entries = dict(cfg.target.rest.entries) if cfg.target.rest else {}
-        site_targets[f"{site.gbm}/{site.fct}"] = (set(known), set(entries))
+        site_targets[f"{site.gbm}/{site.fct}"] = (
+            set(known), cfg.target.mongo is not None, cfg.target.redis is not None)
         entry_specs[f"{site.gbm}/{site.fct}"] = dict(entries)
         target_api, api_problems = load_target_api(knowledge_root, site.gbm, site.fct)
         errors += [BootError(where, p) for p in api_problems]
@@ -190,6 +192,7 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
             errors += [BootError(where, p) for p in spec_problems(entries, target_api)]
             errors += [BootError(where, p) for p in
                        response_field_problems(cfg.patrol.checks, entries, target_api)]
+        entry_schema_of: dict[str, tuple[dict, str]] = {}
         for name, check in cfg.patrol.checks.items():
             # rest:<이름>은 토폴로지가 아니라 등재 항목에서 해석된다 — 두 이름공간을
             # 섞어 보면 정상 설정이 거부당한다. 미등재 참조를 기동 거부로 올리는
@@ -212,40 +215,7 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                         body = check.params.get("body", {})
                         for problem in entry_call_problems(entry, body):
                             errors.append(BootError(where, f"점검 {name!r}: {problem}"))
-                        # 해석기가 없는 항목·스키마에 없는 키를 가리키면 매 순찰이
-                        # error를 내고 끝난다 — 배포 시점에 시끄럽게 죽는 편이 낫다.
-                        schema = entry_schema(entry)
-                        for key, spec in check.resolve.items():
-                            declared = schema.get(key)
-                            if declared is None:
-                                errors.append(BootError(
-                                    where, f"점검 {name!r}의 resolve 키 {key!r}가 "
-                                           f"항목 {rest!r}의 스키마에 없다"))
-                            elif spec.from_ != "unfiltered":
-                                # 해석기가 내는 모양은 종류가 정한다: clock은 항상
-                                # 문자열 하나, 소스 해석기는 항상 리스트. 스키마와
-                                # 어긋나면 매 순찰이 "list[str]여야 한다"로 끝나는데,
-                                # 그건 정적으로 알 수 있는 것을 런타임에 미룬 것이다.
-                                is_list = declared.startswith("list[")
-                                wants_list = spec.from_ != "clock"
-                                if is_list != wants_list:
-                                    shape = "리스트" if wants_list else "문자열 하나"
-                                    errors.append(BootError(
-                                        where, f"점검 {name!r}의 해석기 {key!r}는 "
-                                               f"{spec.from_}라 {shape}를 내는데 "
-                                               f"항목 {rest!r}의 스키마는 {declared!r}이다"))
-                            if spec.from_ != "rest":
-                                continue
-                            source = entries.get(spec.entry)
-                            if source is None:
-                                errors.append(BootError(
-                                    where, f"점검 {name!r}의 해석기 {key!r}가 가리키는 "
-                                           f"항목 {spec.entry!r}이 등재돼 있지 않다"))
-                            elif source.method != "GET":
-                                # 값을 얻으려고 부수효과 가능성이 있는 메서드를 쓰지 않는다.
-                                errors.append(BootError(
-                                    where, f"점검 {name!r}의 해석기 {key!r}가 가리키는 "
-                                           f"항목 {spec.entry!r}은 GET이어야 한다"))
+                        entry_schema_of[name] = (entry_schema(entry), rest)
                 elif check.target not in known:
                     errors.append(BootError(
                         where, f"점검 {name!r}의 target {check.target!r}이 토폴로지로 해석되지 않는다"))
@@ -255,32 +225,15 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                 errors += [BootError(where, f"점검 {name!r}: {p}")
                            for p in mongo_find_problems(check.params, check.resolve)]
 
-            # target **모양**으로 판정한다 — resolve_probe는 check.probe를 그대로
-            # 돌려주므로 probe만 박으면 이 검사가 통째로 비껴간다(등재 항목 이름
-            # 위장을 막은 것과 같은 계열의 우회다).
-            t_kind, _, t_rest = (check.target or "").partition(":")
-            is_entry_target = t_kind == "rest" and t_rest and not t_rest.startswith("/")
-            # mongo_find도 resolve를 **실제로 실행한다**(계획 16 이후 추가). 이 목록에서
-            # 빠지면 정상 설정이 기동 거부되고, 반대로 실행하지 않는 프로브에 resolve를
-            # 허용하면 아래 주석의 사고가 난다.
-            runs_resolve = is_entry_target or resolve_probe(check) == "mongo_find"
-            if check.resolve and not runs_resolve:
-                # resolve는 rest_query에서만 실행된다. 다른 target에 달면 런타임이
-                # 조용히 무시해, 사람이 "범위를 좁혔다"고 믿는 점검이 무필터 전체
-                # 스캔을 돈다 — 사람이 쓴 제약이 아무 효과 없이 통과하는 형태다.
-                errors.append(BootError(
-                    where, f"점검 {name!r}에 resolve가 있는데 target {check.target!r}은 "
-                           f"등재 항목이 아니다 — resolve는 등재 항목 호출에서만 쓰인다"))
-            for key, spec in check.resolve.items():
-                needed = {"mongo": cfg.target.mongo, "redis": cfg.target.redis}.get(spec.from_)
-                if spec.from_ in ("mongo", "redis") and needed is None:
-                    errors.append(BootError(
-                        where, f"점검 {name!r}의 해석기 {key!r}가 {spec.from_}를 쓰는데 "
-                               f"target.{spec.from_}가 설정돼 있지 않다"))
-                if spec.from_ == "mongo":
-                    for problem in filter_problems(spec.filter):
-                        errors.append(BootError(
-                            where, f"점검 {name!r}의 해석기 {key!r} filter: {problem}"))
+            unused = _resolve_unused_problem(check, f"점검 {name!r}")
+            if unused is not None:
+                errors.append(BootError(where, unused))
+            schema, entry_name = entry_schema_of.get(name, (None, None))
+            errors += [BootError(where, p) for p in _resolver_problems(
+                check.resolve, label=f"점검 {name!r}", entry_name=entry_name,
+                schema=schema, entries=entries,
+                has_mongo=cfg.target.mongo is not None,
+                has_redis=cfg.target.redis is not None)]
             if check.judge in ("llm", "rule+llm"):
                 needs_judge_llm = True
 
@@ -396,6 +349,73 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
     return errors
 
 
+def _resolver_problems(resolve, *, label, entry_name, schema, entries,
+                       has_mongo, has_redis):
+    """해석기 선언의 정적 문제 — **점검과 집계 지표가 같은 함수를 쓴다**.
+
+    두 경로가 각자 베끼면 하나가 빠뜨린다. 실제로 그랬다: 지표 경로에는 GET 강제가
+    없어서, 등재된 POST 항목을 가리키는 해석기가 기동을 통과하고 런타임에 실제로
+    POST를 냈다(검증 리뷰). 집계는 사이트 수만큼 팬아웃하므로 그 한 줄이 여러 법인에
+    동시에 나간다 — 규율 9가 메커니즘으로 막으려던 바로 그 형태다.
+
+    `schema`가 None이면 표적이 등재 항목이 아니라는 뜻이라 키·모양 검사를 건너뛴다.
+    나머지(항목 실재·GET 강제·어댑터 유무·mongo 필터)는 표적 종류와 무관하게 돈다 —
+    해석기는 mongo_find 표적에서도 실행되기 때문이다.
+    """
+    problems = []
+    for key, spec in resolve.items():
+        if schema is not None:
+            declared = schema.get(key)
+            if declared is None:
+                problems.append(f"{label}의 resolve 키 {key!r}가 "
+                                f"항목 {entry_name!r}의 스키마에 없다")
+            elif spec.from_ != "unfiltered":
+                # 해석기가 내는 모양은 종류가 정한다: clock은 항상 문자열 하나,
+                # 소스 해석기는 항상 리스트. 스키마와 어긋나면 매 실행이 "list[str]여야
+                # 한다"로 끝나는데, 그건 정적으로 알 수 있는 것을 런타임에 미룬 것이다.
+                is_list = declared.startswith("list[")
+                wants_list = spec.from_ != "clock"
+                if is_list != wants_list:
+                    shape = "리스트" if wants_list else "문자열 하나"
+                    problems.append(f"{label}의 해석기 {key!r}는 {spec.from_}라 "
+                                    f"{shape}를 내는데 항목 {entry_name!r}의 스키마는 "
+                                    f"{declared!r}이다")
+        if spec.from_ == "rest":
+            source = entries.get(spec.entry)
+            if source is None:
+                problems.append(f"{label}의 해석기 {key!r}가 가리키는 "
+                                f"항목 {spec.entry!r}이 등재돼 있지 않다")
+            elif source.method != "GET":
+                # 값을 얻으려고 부수효과 가능성이 있는 메서드를 쓰지 않는다.
+                problems.append(f"{label}의 해석기 {key!r}가 가리키는 "
+                                f"항목 {spec.entry!r}은 GET이어야 한다")
+        if spec.from_ in ("mongo", "redis") and not {"mongo": has_mongo,
+                                                     "redis": has_redis}[spec.from_]:
+            problems.append(f"{label}의 해석기 {key!r}가 {spec.from_}를 쓰는데 "
+                            f"target.{spec.from_}가 설정돼 있지 않다")
+        if spec.from_ == "mongo":
+            problems += [f"{label}의 해석기 {key!r} filter: {p}"
+                         for p in filter_problems(spec.filter)]
+    return problems
+
+
+def _resolve_unused_problem(spec, label):
+    """resolve를 실제로 실행하지 않는 표적에 해석기를 달았는가.
+
+    런타임이 조용히 무시해, 사람이 "범위를 좁혔다"고 믿는 것이 무필터 전체 조회를
+    돈다 — 사람이 쓴 제약이 아무 효과 없이 통과하는 형태다.
+
+    target **모양**으로 판정한다 — resolve_probe는 선언된 probe를 그대로 돌려주므로
+    probe만 박으면 이 검사가 통째로 비껴간다(등재 항목 이름 위장과 같은 계열의 우회).
+    """
+    kind, _, rest = (spec.target or "").partition(":")
+    is_entry_target = kind == "rest" and rest and not rest.startswith("/")
+    if is_entry_target or resolve_probe(spec) == "mongo_find" or not spec.resolve:
+        return None
+    return (f"{label}에 resolve가 있는데 target {spec.target!r}은 "
+            f"등재 항목이 아니다 — resolve는 등재 항목 호출에서만 쓰인다")
+
+
 def _scenario_errors(config_root: Path, env, site_targets: dict,
                      entry_specs: dict) -> list[BootError]:
     """시나리오 검증(계획 16) — 문제를 전부 모아서 돌려준다(기동 거부 철학).
@@ -418,11 +438,15 @@ def _scenario_errors(config_root: Path, env, site_targets: dict,
             if key not in site_targets:
                 errors.append(BootError(where, f"scope의 사이트 {key!r}가 registry에 없다"))
         for metric, spec in scenario.metrics.items():
+            label = f"지표 {metric!r}"
             # 지표도 프로브에 그대로 실린다(`fleet/collect.py`) — 점검과 같은 검증을
             # 받지 않으면 오타가 "매 집계 missing"으로만 드러난다(검증 리뷰 MG-1).
             if resolve_probe(spec) == "mongo_find":
-                errors += [BootError(where, f"지표 {metric!r}: {p}")
+                errors += [BootError(where, f"{label}: {p}")
                            for p in mongo_find_problems(spec.params, spec.resolve)]
+            unused = _resolve_unused_problem(spec, label)
+            if unused is not None:
+                errors.append(BootError(where, unused))
             if spec.probe is not None and spec.probe not in PROBES:
                 errors.append(BootError(where, f"지표 {metric!r}의 probe {spec.probe!r}가 "
                                                f"프로브 레지스트리에 없다"))
@@ -436,29 +460,29 @@ def _scenario_errors(config_root: Path, env, site_targets: dict,
                 targets = site_targets.get(key)
                 if targets is None:
                     continue
-                known, entries = targets
+                known, has_mongo, has_redis = targets
+                site_entries = entry_specs.get(key, {})
+                schema = entry_name = None
                 if kind == "rest" and rest and not rest.startswith("/"):
-                    entry = entry_specs.get(key, {}).get(rest)
+                    entry = site_entries.get(rest)
                     if entry is None:
                         errors.append(BootError(
-                            where, f"지표 {metric!r}의 target {spec.target!r}이 "
+                            where, f"{label}의 target {spec.target!r}이 "
                                    f"{key}의 target.rest.entries에 등재돼 있지 않다"))
                     else:
                         # 점검과 **같은 판정 함수**를 쓴다 — body 오타가 매 집계 error로만
                         # 드러나는 것은 미등재 참조를 기동 거부로 올린 것과 같은 상황이다.
                         body = spec.params.get("body", {}) if isinstance(spec.params, dict) else {}
                         for problem in entry_call_problems(entry, body):
-                            errors.append(BootError(where, f"지표 {metric!r}: {problem}"))
-                        # 해석기 키도 점검과 **대칭으로** 본다 — 스키마에 없는 키를
-                        # 가리키면 매 집계가 error를 내고 끝난다.
-                        schema = entry_schema(entry)
-                        for key in spec.resolve:
-                            if key not in schema:
-                                errors.append(BootError(
-                                    where, f"지표 {metric!r}의 resolve 키 {key!r}가 "
-                                           f"항목 {rest!r}의 스키마에 없다"))
+                            errors.append(BootError(where, f"{label}: {problem}"))
+                        schema, entry_name = entry_schema(entry), rest
                 elif spec.target not in known:
                     errors.append(BootError(
-                        where, f"지표 {metric!r}의 target {spec.target!r}이 "
+                        where, f"{label}의 target {spec.target!r}이 "
                                f"{key}의 토폴로지로 해석되지 않는다"))
+                # 해석기 검증은 표적 종류와 무관하게 돈다 — mongo_find 표적도 해석기를
+                # 실제로 실행한다. 점검과 **같은 함수**를 쓰는 것이 요점이다.
+                errors += [BootError(where, p) for p in _resolver_problems(
+                    spec.resolve, label=label, entry_name=entry_name, schema=schema,
+                    entries=site_entries, has_mongo=has_mongo, has_redis=has_redis)]
     return errors
