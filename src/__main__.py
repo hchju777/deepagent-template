@@ -18,6 +18,9 @@ from dotenv import load_dotenv
 from src.application.answer import answer_case
 from src.application.events import collect_events
 from src.application.labels import label_stats, label_texts, submit_label
+from src.config.loader import load_scenarios
+from src.fleet.run import run_scenario
+from src.presentation.fleet_report import render_fleet_html, render_fleet_md
 from src.application.intake import intake_turn
 from src.application.submit import submit_case
 from src.application.worker import CaseQueue, InvestigationWorker
@@ -31,7 +34,7 @@ from src.patrol.daemon import (PatrolDaemon, assemble_sites, load_stub_seeds,
                                seeds_problems)
 from src.patrol.llm_judge import LlmBudget
 from src.presentation.mail import SmtpSender
-from src.presentation.report import render_md
+from src.presentation.report import render_md, write_report
 from src.presentation.report_html import render_html
 from src.domain.report_model import build_report_model
 
@@ -240,6 +243,47 @@ def _cmd_case_list(args, config_root: Path, env: dict) -> int:
     records = [r for status in statuses for r in repo.list_by_status(status)]
     for r in records:
         print(f"{r.id}  {r.status}  {r.gbm}/{r.fct}  {r.symptom[:60]}")
+    return 0
+
+
+def _cmd_scenario(args, env: dict) -> int:
+    """Fleet 집계 — `list`는 선언을, `run`은 지금 한 번 돌린 결과를 낸다(계획 16)."""
+    config_root, repo_root = Path(args.config_root), Path(args.repo_root)
+    try:
+        scenarios = load_scenarios(config_root, env=env)
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(problem, file=sys.stderr)
+        return 1
+    if args.scenario_command == "list":
+        for name, scenario in sorted(scenarios.items()):
+            schedule = scenario.schedule.interval or scenario.schedule.cron
+            state = "" if scenario.enabled else " (꺼짐)"
+            print(f"{name}  {scenario.title}  [{schedule}]  지표 {len(scenario.metrics)}개{state}")
+        return 0
+
+    scenario = scenarios.get(args.name)
+    if scenario is None:
+        print(f"시나리오 {args.name!r}를 찾을 수 없다", file=sys.stderr)
+        return 1
+    clock = lambda: datetime.now(timezone.utc)   # CLI 경계에서만 now()를 직접 부른다
+    app, sites = assemble_sites(config_root, repo_root, env, clock=clock,
+                                llm_factory=lambda *a, **k: None)
+    by_key = {(rt.gbm, rt.fct): rt for rt in sites}
+    report = asyncio.run(run_scenario(
+        args.name, scenario, sites=[(rt.gbm, rt.fct) for rt in sites],
+        adapters_for_site=lambda g, f: getattr(by_key.get((g, f)), "adapters", None),
+        clock=clock, timezone_name=app.timezone))
+    body = (render_fleet_html(report) if scenario.output.format == "html"
+            else render_fleet_md(report))
+    path = write_report(body, output_dir=scenario.output.output_dir, case_id=args.name,
+                        suffix=scenario.output.format)
+    if not path:
+        print("리포트 파일 쓰기 실패", file=sys.stderr)
+        return 1
+    covered = sum(1 for c in report.coverage if c.status == "covered")
+    print(f"{covered}/{len(report.coverage)} 사이트 · digest {report.scenario_digest}")
+    print(path)
     return 0
 
 
@@ -716,6 +760,14 @@ def main(argv=None) -> int:
     p_api.add_argument("--port", type=int, default=8080)
     _add_common(p_api)
 
+    p_scenario = sub.add_parser("scenario", help="Fleet 집계 시나리오(계획 16)")
+    scenario_sub = p_scenario.add_subparsers(dest="scenario_command", required=True)
+    p_scenario_list = scenario_sub.add_parser("list", help="시나리오 목록")
+    _add_common(p_scenario_list)
+    p_scenario_run = scenario_sub.add_parser("run", help="시나리오 하나를 지금 한 번 돌린다")
+    p_scenario_run.add_argument("name")
+    _add_common(p_scenario_run)
+
     p_case = sub.add_parser("case")
     case_sub = p_case.add_subparsers(dest="case_command", required=True)
     p_case_list = case_sub.add_parser("list", help="케이스 목록(기본: 전체 상태)")
@@ -830,6 +882,9 @@ def main(argv=None) -> int:
 
     if args.command == "chat":
         return _run_chat(args, env)
+
+    if args.command == "scenario":
+        return _cmd_scenario(args, env)
 
     if args.command == "case":
         if args.case_command == "list":

@@ -17,6 +17,7 @@ from src.config.schema_app import AccessPolicy, AppConfig, LlmConfig, LlmProfile
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
 from src.domain.label import InMemoryLabelStore
+from src.domain.rollup import InMemoryDigestStore
 from src.domain.store import InMemoryCaseStore
 from src.knowledge.topology import Topology
 from src.patrol.ledger import InMemoryLedger
@@ -44,7 +45,7 @@ def _runtime(*, sites=(("mx", "gumi"),), replies=(RESOLVED,), access=None):
                     sites=[ApiSite(gbm=g, fct=f, topology=TOPO, lead_llm=_llm(*replies))
                            for g, f in sites],
                     repo=InMemoryCaseRepository(), store=InMemoryCaseStore(),
-                    events=InMemoryEventStore(), ledger=InMemoryLedger(), labels=InMemoryLabelStore(), clock=lambda: T)
+                    events=InMemoryEventStore(), ledger=InMemoryLedger(), labels=InMemoryLabelStore(), digests=InMemoryDigestStore(), clock=lambda: T)
     return rt
 
 

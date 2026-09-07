@@ -20,6 +20,7 @@ from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
 from src.domain.patrol import CheckOutcome
 from src.domain.label import InMemoryLabelStore
+from src.domain.rollup import InMemoryDigestStore
 from src.domain.store import InMemoryCaseStore
 from src.knowledge.topology import Topology
 from src.patrol.ledger import InMemoryLedger
@@ -48,7 +49,7 @@ def _runtime(tmp_path, *, access=None):
                      check_names=[])]
     return ApiRuntime(app=app, sites=sites, repo=InMemoryCaseRepository(),
                       store=InMemoryCaseStore(), events=InMemoryEventStore(),
-                      ledger=InMemoryLedger(), labels=InMemoryLabelStore(), clock=lambda: T)
+                      ledger=InMemoryLedger(), labels=InMemoryLabelStore(), digests=InMemoryDigestStore(), clock=lambda: T)
 
 
 @pytest.fixture
@@ -274,3 +275,19 @@ def test_보고서_푸터가_이미_달린_라벨을_보인다(client, rt):
                                     labeled_at=T))
     r = client.get("/cases/c-1/report?format=md")
     assert "라벨: wrong (false_positive)" in r.text
+
+
+def test_집계_실행_기록을_읽는다(client, rt):
+    from src.domain.rollup import FleetReport, MetricRollup, SiteCoverage
+    rt.digests.put(FleetReport(
+        scenario="alarm_trend", title="알람 추세", concern="operation", scenario_digest="d1",
+        window_from=T, window_to=T, generated_at=T,
+        coverage=[SiteCoverage(gbm="mx", fct="gumi", status="covered")],
+        rollups=[MetricRollup(metric="alarms", value=12.0, reduce="sum", expected_sites=1,
+                              covered_sites=1, complete=True)]))
+    r = client.get("/digests/alarm_trend")
+    assert r.status_code == 200
+    runs = r.json()["runs"]
+    assert runs[0]["scenario_digest"] == "d1" and runs[0]["rollups"][0]["value"] == 12.0
+    assert runs[0]["coverage"][0]["status"] == "covered"
+    assert client.get("/digests/없음").json()["runs"] == []

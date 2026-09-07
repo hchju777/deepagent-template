@@ -569,3 +569,39 @@ def test_같은_토큰을_가진_주체_둘은_기동을_거부한다(tmp_path):
     app.write_text(json.dumps(data), encoding="utf-8")
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("alice" in e.problem and "carol" in e.problem for e in errors), errors
+
+
+def test_시나리오의_대상과_사이트를_기동에서_검증한다(tmp_path):
+    # 기동 거부 철학: 문제를 발견 즉시 죽지 않고 전부 모아서 돌려준다.
+    import json as _json
+    _tree(tmp_path)
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    def _scenario(name, **over):
+        (scenarios / f"{name}.json").write_text(_json.dumps({
+            "kind": "aggregate", "concern": "operation", "title": "나쁜 시나리오",
+            "schedule": {"interval": "1h"},
+            "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}},
+            **over}), encoding="utf-8")
+
+    _scenario("bad_site", scope={"sites": ["mx/없는공장"]})
+    _scenario("bad_target", metrics={"a": {"target": "rest:/없는끝점", "extract": "body.n",
+                                           "reduce": "sum"}})
+    errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
+    problems = " ".join(e.problem for e in errors)
+    # 문제를 전부 모아서 돌려준다 — 하나 고치면 다음 것이 나오는 식이 아니다.
+    assert "없는공장" in problems and "없는끝점" in problems
+    assert {e.where for e in errors} >= {"scenarios/bad_site", "scenarios/bad_target"}
+
+
+def test_정상_시나리오는_기동을_막지_않는다(tmp_path):
+    import json as _json
+    _tree(tmp_path)
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "ok.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "정상",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}}}),
+        encoding="utf-8")
+    assert validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path) == []
