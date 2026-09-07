@@ -84,8 +84,10 @@ from src.knowledge.topology import DataRef, Derivation, Service, Topology
 
 
 def _check(target, **kw):
-    return CheckConfig(judge="rule", schedule={"every": "10m"}, target=target,
-                       params={"rule": "range", "min": 0, "max": 100}, **kw)
+    # Schedule은 interval/cron 중 하나다 — `every`는 StrictModel이 튕긴다.
+    return CheckConfig.model_validate(
+        {"judge": "rule", "schedule": {"interval": "10m"}, "target": target,
+         "params": {"rule": "range", "min": 0, "max": 100}, **kw})
 
 
 def test_슬라이스_밖의_점검은_브리핑에_안_실린다():
@@ -112,8 +114,9 @@ def test_상류_입력_locator를_보는_점검도_실린다():
 
 def test_적용_룰은_한_줄로_접힌다():
     # params 값에 개행이 있으면 브리핑의 [적용 룰] 블록에 가짜 항목처럼 붙는다
-    check = CheckConfig(judge="rule", schedule={"every": "10m"}, target="a:b",
-                        params={"rule": "range", "note": "line1\nline2"})
+    check = CheckConfig.model_validate(
+        {"judge": "rule", "schedule": {"interval": "10m"}, "target": "a:b",
+         "params": {"rule": "range", "note": "line1\nline2"}})
     text = render_rules({"c": check}, slice_=Topology(), target_locator="a:b")
     assert len(text.splitlines()) == 1
 
@@ -388,6 +391,19 @@ git commit -m "Say which of the five briefing materials actually exist"
 2. **`rest:<이름>` 표적의 관련성은 케이스 locator와의 문자열 일치로만 걸린다** — 등재 항목이
    어느 locator를 만드는지는 토폴로지가 말하지 않는다. 필요해지면 토폴로지에 그 연결을 넣어야
    하고, 그건 지식 스키마 변경이다.
-3. **배포 매핑은 여전히 코드 어댑터에 안 간다** — `build_adapters`는 `deployment`를 안 받고,
+3. **필터의 제외 대상은 "토폴로지 안, 슬라이스 밖"이어야 한다** — 토폴로지에 아예 없는
+   locator를 픽스처의 제외 대상으로 고르면 "슬라이스로 걸렀다"와 "토폴로지 전체로 걸렀다"가
+   같은 결과를 내고, 전자를 후자로 바꾸는 변조가 테스트를 통과한다(검증 리뷰 F1). 스펙
+   §3.6이 금지한 코퍼스 덤프로 되돌아가는 바로 그 변조다.
+4. **`params` 값에 개행을 넣어 접기를 시험할 수 없다** — `{value!r}`로 렌더돼 개행이 이미
+   이스케이프된다. 접기가 실제로 막는 자리는 `!r`를 안 거치는 **점검 이름**과 `target`이다
+   (검증 리뷰 F2).
+5. **배포 매핑이 있는데 슬라이스 서비스가 비면 "없음"이다** — "미검증"은 매핑 자체가 없을
+   때만이다. 대상이 없는 케이스나 등재 항목 표적은 슬라이스가 비어 흔히 여기 걸린다.
+   설계 의도("부재는 모른다는 뜻")가 더 흔한 경로에서는 반쪽이다(검증 리뷰 F5).
+6. **`docs_text` 부재 테스트는 그 이름만 지킨다** — 다른 이름으로 같은 섹션을 되살리면
+   통과한다. 되돌림 방지에는 충분하고, "생산자 없는 섹션을 두지 않는다"는 성질은 사람이
+   리뷰에서 본다(검증 리뷰 F6).
+7. **배포 매핑은 여전히 코드 어댑터에 안 간다** — `build_adapters`는 `deployment`를 안 받고,
    `code_repo.py`의 docstring이 주장하는 "배포 hash로 읽는다"는 배선이 아직 없다. 브리핑에
    커밋이 실리는 것과 어댑터가 그 커밋으로 읽는 것은 다른 문제다.

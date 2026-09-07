@@ -89,9 +89,13 @@ def render_deployment(deployment, *, slice_):
     """
     if deployment is None:
         return "배포 매핑 없음 — 이 사이트의 코드 증거는 배포 버전 미검증이다"
-    return "\n".join(f"- {name}: {version.repo}@{version.commit}"
-                     for name, version in sorted(deployment.services.items())
-                     if name in slice_.services)
+    # 룰과 같은 이유로 한 줄씩 접는다. repo·commit·서비스 이름 모두 검증 없는 str이라
+    # 개행 하나가 이 블록 뒤에 가짜 `[유사 이력]` 항목을 만들 수 있고, 이 블록이
+    # 브리핑의 마지막이라 주입된 내용이 프롬프트의 꼬리를 차지한다(검증 리뷰 F3).
+    return "\n".join(
+        " ".join(f"- {name}: {version.repo}@{version.commit}".split())
+        for name, version in sorted(deployment.services.items())
+        if name in slice_.services)
 
 
 def _or_none(text):

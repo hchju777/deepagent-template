@@ -13,10 +13,16 @@ from src.knowledge.deployment import Deployment
 from src.knowledge.topology import Topology
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
+# 제외 대상(`mongo:quality`·`qc-service`)은 **토폴로지 안에 있고 슬라이스 밖**이다 —
+# 토폴로지 밖의 것을 고르면 `slice_=deps.topology`로 바꾸는 변조가 통과한다(검증 리뷰 F1).
 TOPO = Topology.model_validate({
-    "services": {"twin-api": {"writes": [{"kind": "rest", "endpoint": "/oee"}]}},
+    "services": {"twin-api": {"writes": [{"kind": "rest", "endpoint": "/oee"}]},
+                 "qc-service": {"reads": [{"kind": "mongo", "collection": "qc_raw"}],
+                                "writes": [{"kind": "mongo", "collection": "quality"}]}},
     "derivations": {"rest:/oee": {"inputs": [{"kind": "mongo", "collection": "twin_state"}],
-                                  "via": "twin-api"}}})
+                                  "via": "twin-api"},
+                    "mongo:quality": {"inputs": [{"kind": "mongo", "collection": "qc_raw"}],
+                                      "via": "qc-service"}}})
 SITE = SiteConfig.model_validate({"target": {"mongo": {"url": "mongodb://x:27017"}}})
 
 FRAME_JSON = ('{"hypotheses": [{"id": "h-1", "statement": "계산 이상"}], '
@@ -115,13 +121,14 @@ CHECKS = {
     "api.oee_range": CheckConfig.model_validate(
         {"judge": "rule", "schedule": {"interval": "10m"}, "target": "rest:/oee",
          "params": {"rule": "range", "min": 0, "max": 100}}),
-    "redis.other": CheckConfig.model_validate(
-        {"judge": "rule", "schedule": {"interval": "10m"}, "target": "redis:other:*",
+    "quality.range": CheckConfig.model_validate(
+        {"judge": "rule", "schedule": {"interval": "10m"}, "target": "mongo:quality",
          "params": {"rule": "exists"}}),
 }
 DEPLOY = Deployment.model_validate({"services": {
     "twin-api": {"repo": "twin", "commit": "abc123"},
-    "unrelated": {"repo": "x", "commit": "def456"}}})
+    # 토폴로지에는 있고 슬라이스에는 없는 서비스 — 같은 이유로 여기가 제외 대상이다
+    "qc-service": {"repo": "x", "commit": "def456"}}})
 
 
 async def test_frame이_슬라이스에_걸리는_룰만_브리핑에_싣는다():
@@ -129,7 +136,7 @@ async def test_frame이_슬라이스에_걸리는_룰만_브리핑에_싣는다(
     await make_nodes(deps)["frame"](_state())
     prompt_text = str(deps.lead_llm.calls[0])
     assert "api.oee_range" in prompt_text
-    assert "redis.other" not in prompt_text
+    assert "quality.range" not in prompt_text
 
 
 async def test_frame이_슬라이스_서비스의_배포_커밋을_브리핑에_싣는다():
@@ -140,9 +147,13 @@ async def test_frame이_슬라이스_서비스의_배포_커밋을_브리핑에_
     assert "def456" not in prompt_text
 
 
-def test_브리핑에_생산자_없는_문서_섹션이_남아_있지_않다():
+def test_docs_text라는_이름이_두_모듈에서_사라졌다():
     # 자유 문서는 코퍼스도 선별기도 없다 — 매번 "없음"을 찍는 자리는 리드 프롬프트의
     # 잡음이자, 다음 사람에게 "배선돼 있다"는 착각을 준다.
+    #
+    # 이 테스트가 지키는 것은 **그 이름의 부재**이지 "생산자 없는 섹션이 없다"는
+    # 성질이 아니다 — 다른 이름으로 같은 것을 되살리면 통과한다(검증 리뷰 F6).
+    # 되돌림 방지에는 충분하고, 성질 자체는 사람이 리뷰에서 본다.
     import inspect
 
     from src.application import briefing, deps as deps_module

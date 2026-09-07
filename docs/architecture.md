@@ -278,7 +278,7 @@ JS를 도는 연산자는 표현할 수 없다. 값은 `resolve`로 해석해 �
   관련성은 코드가 쥔다(규율 6): 점검은 표적이 슬라이스 locator일 때, 배포는 서비스가
   슬라이스 안일 때만 실린다. 배포 매핑이 없으면 "없음"이 아니라 **"미검증"**이다 —
   부재는 "배포가 없다"가 아니라 "무엇이 도는지 모른다"이고, 코드 증거가 그 사실을 달아야
-  한다. 조립은 `assemble_sites` 한 곳이라 `patrol run`·`chat`·`case resume`이 함께 얻는다.
+  한다. 조립은 `assemble_sites` 한 곳이라 그것을 부르는 네 명령(`patrol run`·`chat`·`case resume`·`scenario`)이 함께 얻는다.
 - **`RootCauseLabel`·`case label`·`POST /cases/{id}/label`** — append-only, 케이스당 복수.
   `agreement` 4분류가 component 문자열 비교보다 믿을 만하다(자유 문자열은 절대 일치하지
   않고, 자동 비교는 우리 정규화기를 측정한다). 보고서 푸터가 라벨 명령을 안내하고 이미
