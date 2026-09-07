@@ -44,6 +44,42 @@ def upstream_slice(topology, start_locator, *, max_depth=3):
     return Topology(services=services, derivations=derivations)
 
 
+def _slice_locators(slice_, target_locator):
+    """슬라이스가 다루는 locator 전부 — derivation의 출력과 입력, 그리고 케이스 대상."""
+    locators = {target_locator} if target_locator else set()
+    for output, deriv in slice_.derivations.items():
+        locators.add(output)
+        locators.update(ref.locator for ref in deriv.inputs)
+    return locators
+
+
+def render_rules(checks, *, slice_, target_locator):
+    """브리핑의 `[적용 룰]` — 슬라이스에 걸리는 점검만.
+
+    전부 싣지 않는 이유는 스펙 §3.6("전체 코퍼스 덤프 금지, 유계 슬라이스만")이다.
+    점검이 수십 개인 사이트에서 전량을 실으면 리드가 자기 케이스와 무관한 임계값을
+    "정상 기준"으로 읽는다.
+
+    무엇이 관련 있는지는 **코드가 정한다**(규율 6) — 목록을 통째로 주고 LLM에게
+    고르라고 하면 그 판단이 재현되지도, 상한이 있지도 않다.
+
+    `rest:<이름>` 표적(등재 항목 이름)은 locator가 아니라서 케이스 locator와 문자열이
+    같을 때만 걸린다. 등재 항목이 어느 locator를 만드는지는 토폴로지가 말하지 않는다.
+    """
+    relevant = _slice_locators(slice_, target_locator)
+    lines = []
+    for name in sorted(checks):
+        check = checks[name]
+        if check.target not in relevant:
+            continue
+        params = ", ".join(f"{key}={value!r}" for key, value in sorted(check.params.items()))
+        line = f"- {name}: judge={check.judge}, target={check.target}, {params}"
+        # 한 줄로 접는다 — params 값에 개행이 있으면 [적용 룰] 블록에 가짜 항목처럼
+        # 붙는다(history의 _clean_line과 같은 이유: id가 안 새도 구조가 새면 같은 문제다).
+        lines.append(" ".join(line.split()))
+    return "\n".join(lines)
+
+
 def _or_none(text):
     # 텍스트가 없거나 공백이면 "없음"을 반환, 그렇지 않으면 정제된 텍스트
     return text.strip() if text and text.strip() else "없음"

@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from src.application.briefing import build_briefing, upstream_slice
+from src.application.briefing import build_briefing, render_rules, upstream_slice
+from src.config.schema_site import CheckConfig
 from src.domain.case import Case
 from src.knowledge.topology import Topology
 
@@ -55,3 +56,37 @@ def test_브리핑이_concern별로_다른_방향을_준다():
     operation = build_briefing(_case("operation"), sliced)
     assert system != operation
     assert "현장" in operation and "현장" not in system
+
+
+def _check(target, **kw):
+    return CheckConfig.model_validate(
+        {"judge": "rule", "schedule": {"interval": "10m"}, "target": target,
+         "params": {"rule": "range", "min": 0, "max": 100}, **kw})
+
+
+def test_슬라이스_밖의_점검은_브리핑에_안_실린다():
+    sliced = upstream_slice(TOPO, "rest:/oee", max_depth=3)
+    text = render_rules({"api.oee_range": _check("rest:/oee"),
+                         "redis.other": _check("redis:other:*")},
+                        slice_=sliced, target_locator="rest:/oee")
+    assert "api.oee_range" in text
+    assert "redis.other" not in text
+
+
+def test_상류_입력_locator를_보는_점검도_실린다():
+    sliced = upstream_slice(TOPO, "rest:/oee", max_depth=3)
+    text = render_rules({"raw.freshness": _check("kafka:edge.raw")},
+                        slice_=sliced, target_locator="rest:/oee")
+    assert "raw.freshness" in text
+
+
+def test_적용_룰은_점검마다_한_줄로_접힌다():
+    check = CheckConfig.model_validate(
+        {"judge": "rule", "schedule": {"interval": "10m"}, "target": "rest:/oee",
+         "params": {"rule": "range", "note": "line1\nline2"}})
+    text = render_rules({"c": check}, slice_=Topology(), target_locator="rest:/oee")
+    assert len(text.splitlines()) == 1
+
+
+def test_걸리는_점검이_없으면_빈_문자열이다():
+    assert render_rules({}, slice_=Topology(), target_locator=None) == ""
