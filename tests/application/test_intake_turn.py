@@ -400,3 +400,25 @@ async def test_고정_시계에서도_두_턴이_모두_이기지_않는다():
     # A가 물은 질문이 살아 있다 — B가 덮지 않았다.
     assert after.status == "awaiting_human" and after.question == "어느 라인인가?"
     assert after.intake_done is False and after.target_locator is None
+
+
+async def test_접수가_소유하지_않은_필드가_바뀌어도_진다():
+    # 술어의 시각이 그것을 잡는다 — 게이트가 finding을 붙이는 등 남의 쓰기가 있었으면
+    # 이 턴이 읽은 스냅샷은 이미 낡았다.
+    case_id, repo, store = _case()
+
+    class _Racing:
+        def __init__(self):
+            self.fired = False
+
+        async def ainvoke(self, messages):
+            if not self.fired:
+                self.fired = True
+                current = repo.get(case_id)
+                repo.save(current.model_copy(update={
+                    "finding_ids": ["f-1"], "updated_at": T + timedelta(minutes=1)}))
+            return SimpleNamespace(content=_RESOLVED)
+
+    turn = await _turn(case_id, repo, store, SimpleNamespace(lead_llm=_Racing()))
+    assert turn.status == "not_ours", turn
+    assert repo.get(case_id).finding_ids == ["f-1"]      # 남의 쓰기가 살아 있다

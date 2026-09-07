@@ -526,6 +526,7 @@ save·소비 실패 시 답 소실·옛 답이 새 질문에 붙음)은 `attach_
    부재는 안전하다(검증 리뷰가 잡은 "부재 필드 ≠ 기본값 0 → CAS가 영원히 져 무한
    재귀"는 고쳤고, 재분류는 두 바퀴로 상한을 뒀다).
 9. ~~**`POST /cases/{id}/answers`에 `question_seq` If-Match가 없다**~~ — **계획 17이 갚았다**
+   (HTTP·CLI·chat 세 경로 전부. 대조는 lease를 잡은 뒤 `resume_once` 안에서 한다.)
    (HTTP·CLI·chat 세 경로 전부, 대조는 lease를 잡은 뒤 `resume_once` 안에서 한다). — 클라이언트가 Q1을 보고
    답하는 사이 그래프가 Q2로 파킹하면 그 답이 Q2에 실린다(요청에 `question_seq`를 실어
    서버가 대조하면 막힌다). CLI `case resume`도 같다 — 사람이 Q1을 보고 쓰는 사이 데몬이
