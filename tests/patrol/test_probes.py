@@ -349,3 +349,41 @@ async def test_정렬_방향은_정수_1_또는_마이너스1이어야_한다():
     assert result.status == "error" and "sort" in (result.error or "")
     from src.patrol.probes import mongo_find_problems
     assert mongo_find_problems({"sort": [["ts", True]]}, {})
+
+
+async def test_겹침_판정은_선언된_해석기_전체를_본다():
+    # 검증 리뷰 N7: `resolved.params`로 보면 unfiltered 키가 빠져 기동 검증과 갈린다.
+    from src.patrol.probes import mongo_find_problems
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state",
+        "params": {"rule": "exists", "field": "0.part", "filter": {"part": "Z"}},
+        "resolve": {"part": {"from": "unfiltered"}}})
+    result = await PROBES["mongo_find"](_mongo_adapters([]), check, clock=lambda: T)
+    assert result.status == "error" and "part" in (result.error or "")
+    # 기동 검증도 같은 판정을 한다 — 갈리면 "기동은 통과했는데 매 순찰 error"가 된다.
+    assert any("part" in p for p in mongo_find_problems(check.params, check.resolve))
+
+
+async def test_두_절단이_함께_나면_이유가_둘_다_남는다():
+    # 검증 리뷰 N12: 덮어쓰면 두 절단 중 하나가 증거에서 사라진다(rest_query와 같은 규약).
+    from src.domain.envelope import Envelope, ProbeResult
+    adapters = build_adapters(SITE, TOPO, clock=lambda: T, stub_seeds=StubSeeds(
+        mongo_collections={"parts": [{"code": "A"}, {"code": "B"}]}))
+    real_find = adapters.mongo.find
+
+    async def truncated_find(collection, filter, *, sort=None, limit=None):
+        if collection == "parts":
+            return await real_find(collection, filter, sort=sort, limit=limit)
+        return ProbeResult(status="ok", data=[],
+                           envelope=Envelope(observed_at=T, complete=False,
+                                             truncated_reason="max_rows"))
+    adapters.mongo.find = truncated_find
+    check = CheckConfig.model_validate({
+        "judge": "rule", "schedule": {"interval": "5m"}, "probe": "mongo_find",
+        "target": "mongo:twin_state", "params": {"rule": "exists", "field": "0.part"},
+        "resolve": {"part": {"from": "mongo", "collection": "parts", "field": "code",
+                             "cardinality": "first:1"}}})
+    result = await PROBES["mongo_find"](adapters, check, clock=lambda: T)
+    reason = result.envelope.truncated_reason or ""
+    assert "max_rows" in reason and "part" in reason
