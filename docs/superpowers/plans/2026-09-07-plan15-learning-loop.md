@@ -304,10 +304,9 @@ def label_stats(*, repo, labels) -> LabelStats   # closed_total, labeled, rate, 
    조인이다. 항상 건수와 함께, 맨 퍼센트 금지.
 2. **`history_shown`의 소비자가 아직 없다** — "이력을 보여준 케이스가 더 정확했나(도움)
    vs 보여준 후보로만 답했나(앵커링)"는 (1)과 같은 조인에서 나온다.
-3. **Ticker가 CLI·데몬에 아직 안 꽂혔다** — 워커가 받지만 프로덕션 조립이 `None`을
-   넘겨 실제 배치의 경과는 전부 "미측정"이다. `time.perf_counter`를 `_run_patrol`·
-   `_drive_chat`의 워커 생성부에 넘기면 끝난다(1~2줄). 테스트가 결정론을 요구하므로
-   주입 지점은 CLI 경계여야 한다.
+3. **Ticker는 CLI 경계에서 주입한다** — `patrol run`·`chat`·`case resume`이
+   `time.perf_counter`를 넘기고 데몬이 워커까지 전달한다(집행 중 배선 완료). `api`는
+   조사를 하지 않으므로 대상이 아니다.
 4. **`MetricsSinkPort`의 소비자가 sink뿐이다** — 읽는 쪽(`metrics()`)을 쓰는 코드가
    없다. P7 Fleet 집계나 관측 대시보드가 첫 소비자가 된다.
 5. **tier 4의 상류는 `upstream_slice(max_depth=3)`에 묶인다** — 더 먼 상류는 안 본다.
