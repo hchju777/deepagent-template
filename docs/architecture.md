@@ -181,6 +181,20 @@ config는 값이 **어디서 오는지**만 선언한다. 잘라낸 표본·필�
            → GET /cases/{id}  ── CaseDetail: 판정 + candidates(rank 1 = root_cause) + timeline
 ```
 
+### Mongo 질의를 config로 표현하기
+
+`MongoReaderPort.find`는 처음부터 `filter`를 받았지만 순찰 경로에는 `mongo_recent`
+(항상 `filter={}`)뿐이라 "특정 컬렉션에 특정 질의"를 config로 쓸 수 없었다. `mongo_find`
+프로브가 그 자리를 연다 — `probe: "mongo_find"`로 **명시할 때만** 쓰이므로 기존 점검은
+그대로다.
+
+읽기 전용은 여기서도 메커니즘이다(규율 9): 필터 연산자는 닫힌 허용 목록을 통과해야 하고
+(`filter_problems` — 어댑터·스텁·기동 검증이 **같은 함수**를 쓴다), `$where`처럼 서버측
+JS를 도는 연산자는 표현할 수 없다. 값은 `resolve`로 해석해 필터에 합친다(리스트는 `$in`)
+— config에 값을 적으면 즉시 썩고, 해석기가 하나라도 못 내면 질의 자체를 안 한다
+(전부-또는-전무: 빈 필터로 전체를 긁으면 "거짓 안심"이 되고 그건 조용해서 더 위험하다).
+정적 필터와 `resolve`의 키가 겹치면 기동에서 거부한다.
+
 ## 학습 루프(P8 — 계획 15)
 
 두 기록이 짝이다: `VerdictSnapshot`(기계가 뭐라 했나)과 `RootCauseLabel`(실제로 뭐였나).
