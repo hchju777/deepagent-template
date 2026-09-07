@@ -199,8 +199,9 @@ config는 값이 **어디서 오는지**만 선언한다. 잘라낸 표본·필�
   사이트 하나의 실패는 그 사이트의 커버리지 항목이지 집계의 죽음이 아니다.
 - **감축**(`src/fleet/reduce.py`) — `sum`/`avg`/`max`/`min`/`count`/`count_nonzero` 6종
   Literal뿐이다. 범용 DSL은 감사 불가능하다. 빈 표본은 **0이 아니라 None**이다.
-- **정직성**(`src/domain/rollup.py`) — 위 glossary의 validator 넷. 리포트는 커버리지를
-  숫자보다 먼저 렌더한다.
+- **정직성**(`src/domain/rollup.py`) — 위 glossary의 validator들. 리포트는 커버리지를
+  숫자보다 먼저 렌더한다. 선택 지표(`required: false`)의 누락은 커버리지에서 빠진다 —
+  안 그러면 미배포 지표 하나가 사이트 전체를 미확인으로 낙인찍는다.
 - **관측** — 집계는 `EngineEvent`를 내지 않는다(규율 7 — 엔진 산출물이 아니다). 레저의
   `fleet:<이름>` 행과 `DigestStorePort`의 실행 기록이 관측 지점이고, 후자가 추세 비교의
   유일한 재료다(`GET /digests/{scenario}`).

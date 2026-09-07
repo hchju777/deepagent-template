@@ -5,7 +5,6 @@
 """
 from typing import Any
 
-from src.patrol.rules import get_path
 
 REDUCERS = ("sum", "avg", "max", "min", "count", "count_nonzero")
 
@@ -34,6 +33,14 @@ def extract(payload: Any, dotted: str) -> tuple[list[float], int]:
 
 
 def _walk(node: Any, segments: list[str]) -> tuple[list[float], int]:
+    # 인덱스 세그먼트를 **팬아웃보다 먼저** 본다 — 순서를 반대로 두면 리스트가 먼저
+    # 소진돼 인덱스 분기가 죽은 코드가 되고, 오타난 인덱스 경로가 skipped를 부풀려
+    # 불완전 사유를 조작한다(검증 리뷰 M-10).
+    if isinstance(node, list) and segments and segments[0].isdigit():
+        index = int(segments[0])
+        if index >= len(node):
+            return [], 1
+        return _walk(node[index], segments[1:])
     if isinstance(node, list):
         values, skipped = [], 0
         for item in node:
@@ -47,11 +54,6 @@ def _walk(node: Any, segments: list[str]) -> tuple[list[float], int]:
     head, rest = segments[0], segments[1:]
     if isinstance(node, dict) and head in node:
         return _walk(node[head], rest)
-    if isinstance(node, list) or (isinstance(node, dict) and head.isdigit()):
-        return [], 1
-    # 인덱스 세그먼트로 리스트에 접근하는 기존 관례(get_path)도 지원한다.
-    if isinstance(node, (list, tuple)) and head.isdigit() and int(head) < len(node):
-        return _walk(node[int(head)], rest)
     return [], 1
 
 

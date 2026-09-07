@@ -164,3 +164,95 @@ async def test_지표_하나가_실패한_사이트는_covered로_적히지_않�
     suwon = next(c for c in report.coverage if c.fct == "suwon")
     assert suwon.status == "missing" and "다운타임" in (suwon.reason or "")
     assert next(c for c in report.coverage if c.fct == "gumi").status == "covered"
+
+
+async def test_선택_지표의_누락은_커버리지에서_빠진다():
+    # 리뷰 M-1: 선택 지표 하나가 사이트 전체를 missing으로 낙인찍어, 한 리포트가
+    # "커버리지 0/3"과 "지표 3/3 완전"을 동시에 말했다.
+    scenario = _scenario(metrics={
+        "alarms": {"target": "rest:/alarms", "extract": "body.n", "reduce": "sum"},
+        "optional": {"target": "rest:/opt", "extract": "body.n", "reduce": "sum",
+                     "required": False}})
+
+    async def collect(spec, *, gbm, fct, adapters, clock, timezone_name):
+        if spec.target == "rest:/opt":
+            return _missing(gbm, fct, "선택 지표 미배포")
+        return _covered(gbm, fct, [4.0])
+
+    report = await run_scenario("alarm_trend", scenario, sites=SITES,
+                                adapters_for_site=lambda g, f: object(), clock=lambda: T,
+                                timezone_name="UTC", collect=collect)
+    assert [c.status for c in report.coverage] == ["covered"] * 3
+    alarms = next(r for r in report.rollups if r.metric == "alarms")
+    assert alarms.complete is True and alarms.value == 12.0
+
+
+async def test_전_사이트가_답했는데_표본이_비면_0이고_그_사실을_적는다():
+    # 리뷰 M-8: "완전"과 "—"가 나란히 서고 대시를 설명하는 문장이 없었다.
+    # 사이트가 답했고 행이 0건이면 그것은 **관측된 0**이다.
+    results = {f"{g}/{f}": _covered(g, f, []) for g, f in SITES}
+    report = await _run(_scenario(metrics={"alarms": {"target": "rest:/alarms",
+                                                      "extract": "body.n", "reduce": "count"}}),
+                        results)
+    rollup = report.rollups[0]
+    assert rollup.value == 0.0 and rollup.covered_sites == 3 and rollup.complete is True
+    assert "0건" in (rollup.coverage_note or "")
+
+
+async def test_평균은_빈_표본에서_값이_없고_사유가_붙는다():
+    # 합·건수와 달리 평균·최대·최소는 빈 표본에서 정의되지 않는다 — 0으로 적지 않는다.
+    results = {f"{g}/{f}": _covered(g, f, []) for g, f in SITES}
+    report = await _run(_scenario(metrics={"alarms": {"target": "rest:/alarms",
+                                                      "extract": "body.n", "reduce": "avg"}}),
+                        results)
+    rollup = report.rollups[0]
+    assert rollup.value is None and rollup.coverage_note
+
+
+async def test_건너뛴_항목이_불완전으로_흘러간다():
+    # 리뷰 M12: extract의 skipped가 불완전 판정에 닿는지가 e2e로 무보장이었다.
+    results = {"mx/gumi": SiteSample(gbm="mx", fct="gumi", values=[1.0], skipped=2,
+                                     status="covered"),
+               "mx/suwon": _covered("mx", "suwon", [2.0]), "ds/xian": _covered("ds", "xian", [3.0])}
+    report = await _run(_scenario(), results)
+    assert report.rollups[0].complete is False
+    assert "2건" in (report.rollups[0].coverage_note or "")
+
+
+def test_digest는_병렬도에는_반응하지_않고_사이트_목록에는_반응한다():
+    # 리뷰 M-5·M38: 부하 knob을 올린 운영자가 영구히 "추세 비교 불가"를 받으면 안 된다.
+    base = _scenario()
+    assert scenario_digest(base) == scenario_digest(_scenario(scope={"max_parallel_sites": 8}))
+    assert scenario_digest(base) != scenario_digest(_scenario(scope={"sites": ["mx/gumi"]}))
+    assert scenario_digest(base) != scenario_digest(_scenario(scope={"exclude": ["ds/xian"]}))
+
+
+async def test_추세_조회가_던져도_집계는_완주한다():
+    # 리뷰 M-2: run_scenario가 자기 docstring("절대 raise하지 않는다")을 어겼다.
+    class _Broken:
+        def latest(self, scenario):
+            raise RuntimeError("mongo down")
+    results = {f"{g}/{f}": _covered(g, f, [1.0]) for g, f in SITES}
+    report = await _run(_scenario(), results, digests=_Broken())
+    assert report.rollups[0].value == 3.0 and "조회 실패" in (report.trend_caveat or "")
+
+
+def test_사이트가_끈_시나리오는_대상에서_빠진다():
+    # 리뷰 M-7: patrol.scenarios 옵트아웃이 파싱만 되고 소비자가 0이었다.
+    from types import SimpleNamespace
+    from src.config.schema_site import SiteScenarioOverride
+    from src.fleet.run import scenario_sites
+
+    def _rt(gbm, fct, scenarios):
+        return SimpleNamespace(gbm=gbm, fct=fct,
+                               cfg=SimpleNamespace(patrol=SimpleNamespace(scenarios=scenarios)))
+    runtimes = [_rt("mx", "gumi", {}),
+                _rt("mx", "suwon", {"alarm_trend": SiteScenarioOverride(enabled=False)}),
+                _rt("ds", "xian", {"other": SiteScenarioOverride(enabled=False)})]
+    assert scenario_sites(None, "alarm_trend", runtimes) == [("mx", "gumi"), ("ds", "xian")]
+
+
+async def test_건너뛴_항목이_없으면_완전하다():
+    # M12의 짝 — skipped가 불완전 판정에 닿는다는 것을 양방향으로 고정한다.
+    results = {f"{g}/{f}": _covered(g, f, [1.0]) for g, f in SITES}
+    assert (await _run(_scenario(), results)).rollups[0].complete is True

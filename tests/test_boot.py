@@ -605,3 +605,28 @@ def test_정상_시나리오는_기동을_막지_않는다(tmp_path):
         "metrics": {"a": {"target": "rest:/oee", "extract": "body.n", "reduce": "sum"}}}),
         encoding="utf-8")
     assert validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path) == []
+
+
+def test_시나리오의_body와_프로브도_기동에서_대조한다(tmp_path):
+    # 리뷰 M-6: 점검은 등재 스키마까지 대조하는데(그 자리 주석이 이유를 적었다)
+    # 집계는 이름만 봤다 — 같은 오타가 매 집계 error로만 드러난다.
+    import json as _json
+    _tree(tmp_path)
+    _write(tmp_path, "config/gbm/mx.json", json.dumps({
+        "target": {"adapters": "stub", "rest": {
+            "base_url": "http://x",
+            "entries": {"summary_prod": {"method": "POST", "path": "/summary/prod",
+                                         "body_schema": {"part_code": "list[str]"}}}}},
+        "patrol": {"checks": {}}, "knowledge": {"root": "knowledge.example"}}))
+    scenarios = tmp_path / "config" / "scenarios"
+    scenarios.mkdir(parents=True, exist_ok=True)
+    (scenarios / "bad_body.json").write_text(_json.dumps({
+        "kind": "aggregate", "concern": "operation", "title": "나쁜 body",
+        "schedule": {"interval": "1h"},
+        "metrics": {"a": {"target": "rest:summary_prod", "params": {"body": {"없는키": 1}},
+                          "extract": "body.n", "reduce": "sum"},
+                    "b": {"target": "rest:summary_prod", "probe": "없는프로브",
+                          "extract": "body.n", "reduce": "sum"}}}), encoding="utf-8")
+    problems = " ".join(e.problem for e in
+                        validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path))
+    assert "없는키" in problems and "없는프로브" in problems

@@ -40,7 +40,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from src.application.close import sweep_timeouts
 from src.application.deps import EngineDeps
 from src.application.events import case_status_event, collect_events, report_ready_event
-from src.fleet.run import run_scenario
+from src.fleet.run import run_scenario, scenario_sites
 from src.presentation.fleet_report import render_fleet_html, render_fleet_md
 from src.application.labels import label_texts
 from src.application.worker import CaseQueue, InvestigationWorker
@@ -324,18 +324,19 @@ class PatrolDaemon:
             return
         try:
             report = await run_scenario(
-                name, scenario, sites=[(rt.gbm, rt.fct) for rt in self.sites],
+                name, scenario, sites=scenario_sites(scenario, name, self.sites),
                 adapters_for_site=lambda g, f: getattr(self._site(g, f), "adapters", None),
                 clock=self.clock, timezone_name=self.timezone, digests=self.digests)
             body = (render_fleet_html(report) if scenario.output.format == "html"
                     else render_fleet_md(report))
-            path = write_report(body, output_dir=str(Path(self.report_cfg.output_dir) / "fleet"),
+            # 시나리오가 말한 곳에 쓴다 — 데몬과 CLI가 다른 곳에 쓰면 config 필드가
+            # 프로덕션에서 no-op이 된다(검증 리뷰 M-4).
+            path = write_report(body, output_dir=scenario.output.output_dir,
                                 case_id=name, suffix=scenario.output.format)
-            if self.digests is not None:
-                self.digests.put(report)
             self._record_fleet_run(name, "ok" if path else "error",
                                    None if path else "리포트 파일 쓰기 실패")
             if not path or not scenario.output.mail:
+                self._store_digest(report)
                 return
             # send_id에 창을 넣는다 — 이름만 쓰면 2상 레저가 둘째 실행을 중복으로
             # 억제해 매일 도는 집계가 첫날 이후 영영 안 나간다.
@@ -344,8 +345,19 @@ class PatrolDaemon:
                               render_fleet_md(report), sender=self._mail_sender(),
                               ledger=self.ledger, cfg=self.report_cfg.mail, clock=self.clock,
                               concern=scenario.concern, html=body)
+            self._store_digest(report)
         except Exception as exc:                                   # noqa: BLE001 — 무raise
             self._record_fleet_run(name, "error", f"{type(exc).__name__}: {exc}")
+
+    def _store_digest(self, report) -> None:
+        """실행 기록은 **발송 뒤**에 남긴다 — 앞에 두면 기록 저장 실패가 보고서를 쓰고도
+        아무도 못 받게 만든다(검증 리뷰 M-3, CLAUDE.md의 가드 순서 항목)."""
+        if self.digests is None:
+            return
+        try:
+            self.digests.put(report)
+        except Exception:                                          # noqa: BLE001
+            pass
 
     def _record_fleet_run(self, name: str, status: str, error: str | None) -> None:
         # 사이트를 가로지르는 실행이라 gbm/fct가 없다 — requeue 잡과 같은 "-" 관례를 쓴다.

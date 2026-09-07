@@ -34,3 +34,13 @@ def test_빈_표본은_0이_아니라_None이다():
 
 def test_알_수_없는_감축은_None이다():
     assert reduce_values([1.0], "median") is None      # DSL 금지 — 6종뿐이다
+
+
+def test_인덱스_세그먼트로_리스트에_접근한다():
+    # 리뷰 M-10: 리스트 팬아웃이 먼저 소진해 인덱스 분기가 죽은 코드였고, 오타난
+    # 인덱스 경로가 skipped를 부풀려 불완전 사유를 조작했다.
+    rows = {"rows": [{"n": 1}, {"n": 2}, {"n": 3}]}
+    assert extract(rows, "rows.0.n") == ([1.0], 0)
+    assert extract(rows, "rows.2.n") == ([3.0], 0)
+    assert extract(rows, "rows.9.n") == ([], 1)      # 범위 밖은 한 건만 센다
+    assert extract(rows, "rows.n") == ([1.0, 2.0, 3.0], 0)   # 인덱스가 없으면 팬아웃

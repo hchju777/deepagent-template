@@ -8,6 +8,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from src.config.schema_app import AppConfig, ReportConfig
 from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
+from src.domain.rollup import InMemoryDigestStore
 from src.domain.store import InMemoryCaseStore
 from src.infrastructure.factory import StubSeeds, build_adapters
 from src.patrol.daemon import PatrolDaemon, SiteRuntime
@@ -449,7 +450,8 @@ async def test_집계_실행은_파일을_먼저_쓰고_레저에_남긴다(tmp_
     digests = InMemoryDigestStore()
     seen = []
     daemon = _with_scenarios(store, repo, ledger, tmp_path, digests=digests,
-                             report_cfg=ReportConfig(output_dir=str(tmp_path / "out")),
+                             scenarios={"alarm_trend": {**_SCENARIO, "output": {
+                                 "output_dir": str(tmp_path / "out" / "fleet")}}},
                              on_event=seen.append)
     daemon.build()
     await daemon.run_scenario_job("alarm_trend")
@@ -499,3 +501,76 @@ async def test_집계_메일은_실행마다_따로_나간다(tmp_path):
     await daemon.run_scenario_job("alarm_trend")
     await daemon.run_scenario_job("alarm_trend")
     assert len(sent) == 2, sent
+
+
+async def test_집계는_시나리오가_말한_곳에_쓴다(tmp_path):
+    # 리뷰 M-4: 데몬은 report_cfg를, CLI는 scenario.output을 썼다 — 같은 시나리오가
+    # 실행 주체에 따라 다른 곳에 쓰이고 config 필드가 프로덕션에서 no-op였다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    daemon = _with_scenarios(store, repo, ledger, tmp_path,
+                             report_cfg=ReportConfig(output_dir=str(tmp_path / "cases")),
+                             scenarios={"alarm_trend": {**_SCENARIO, "output": {
+                                 "format": "md", "output_dir": str(tmp_path / "fleet")}}})
+    daemon.build()
+    await daemon.run_scenario_job("alarm_trend")
+    assert list((tmp_path / "fleet").glob("*.md"))
+    assert not (tmp_path / "cases").exists()
+
+
+async def test_실행_기록_저장이_실패해도_메일은_나간다(tmp_path):
+    # 리뷰 M-3: 보고서는 디스크에 있는데 아무도 못 받는 상태가 됐다 — "항상 일어나야
+    # 하는 일"(발송) 앞에 실패 가능 지점을 뒀다(CLAUDE.md의 가드 순서 항목).
+    from src.config.schema_app import MailConfig
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(subject)
+
+    class _BrokenDigests(InMemoryDigestStore):
+        def put(self, report):
+            raise RuntimeError("mongo write failed")
+
+    cfg = ReportConfig(output_dir=str(tmp_path / "out"),
+                       mail=MailConfig(enabled=True, host="smtp", sender="a@x",
+                                       recipients=["ops@y"]))
+    daemon = _with_scenarios(store, repo, ledger, tmp_path, report_cfg=cfg,
+                             digests=_BrokenDigests(),
+                             scenarios={"alarm_trend": {**_SCENARIO, "output": {"mail": True}}})
+    daemon.mail_sender = _Spy()
+    daemon.build()
+    await daemon.run_scenario_job("alarm_trend")
+    assert len(sent) == 1
+
+
+def test_사이트가_끈_시나리오는_데몬의_대상에서도_빠진다(tmp_path):
+    # scenario_sites를 데몬이 실제로 쓰는가 — 함수만 있고 호출부가 없으면 죽은 config다.
+    import inspect
+    from src.patrol import daemon as dm
+    assert "scenario_sites(" in inspect.getsource(dm.PatrolDaemon.run_scenario_job)
+
+
+async def test_파일을_못_쓰면_메일도_안_나간다(tmp_path):
+    # 리뷰 M21: "파일 먼저 → 메일" 순서의 절반(파일 실패 시 억제)이 무테스트였다.
+    from src.config.schema_app import MailConfig
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(subject)
+
+    cfg = ReportConfig(output_dir=str(tmp_path / "out"),
+                       mail=MailConfig(enabled=True, host="smtp", sender="a@x",
+                                       recipients=["ops@y"]))
+    daemon = _with_scenarios(
+        store, repo, ledger, tmp_path, report_cfg=cfg,
+        scenarios={"alarm_trend": {**_SCENARIO, "output": {
+            "mail": True, "output_dir": str(tmp_path / "파일" / "쓸수없음")}}})
+    (tmp_path / "파일").write_text("디렉터리가 아니다", encoding="utf-8")   # mkdir 실패를 만든다
+    daemon.mail_sender = _Spy()
+    daemon.build()
+    await daemon.run_scenario_job("alarm_trend")
+    assert sent == []
+    assert ledger.runs("-", "-", "fleet:alarm_trend")[0].status == "error"

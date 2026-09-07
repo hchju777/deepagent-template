@@ -76,11 +76,3 @@ class ScenarioConfig(StrictModel):
         return self
 
 
-class SiteScenarioOverride(StrictModel):
-    """사이트가 시나리오에 대해 말할 수 있는 것은 **켜고 끄는 것뿐**이다.
-
-    지표를 사이트마다 재정의하면 "같은 시나리오"가 사이트마다 다른 것을 재고 집계가
-    무의미해진다. dict인 이유는 리스트 deep-merge가 통째 대체 아니면 append라 사이트별
-    편집에 틀린 의미가 되기 때문이다(리포에 이미 문서화된 근거).
-    """
-    enabled: bool | None = None

@@ -19,7 +19,7 @@ from src.application.answer import answer_case
 from src.application.events import collect_events
 from src.application.labels import label_stats, label_texts, submit_label
 from src.config.loader import load_scenarios
-from src.fleet.run import run_scenario
+from src.fleet.run import run_scenario, scenario_sites
 from src.presentation.fleet_report import render_fleet_html, render_fleet_md
 from src.application.intake import intake_turn
 from src.application.submit import submit_case
@@ -191,7 +191,10 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
                           on_event=_make_event_sink(events, _make_event_printer()),
                           report_cfg=app.report,
                           mail_sender=mail_sender, events=events, snapshots=snapshots,
-                          labels=p.labels, ticker=time.perf_counter)
+                          labels=p.labels, ticker=time.perf_counter,
+                          # 안 넘기면 fleet 잡이 하나도 등록되지 않아 집계가 프로덕션에서
+                          # 한 번도 안 돈다(검증 리뷰 B-1). 기동 검증이 이미 같은 파일을 읽는다.
+                          scenarios=load_scenarios(config_root, env=env), digests=p.digests)
     asyncio.run(_drive_daemon(daemon, args.for_seconds))
     return 0
 
@@ -270,10 +273,15 @@ def _cmd_scenario(args, env: dict) -> int:
     app, sites = assemble_sites(config_root, repo_root, env, clock=clock,
                                 llm_factory=lambda *a, **k: None)
     by_key = {(rt.gbm, rt.fct): rt for rt in sites}
+    persistence = build_persistence(app.store)
     report = asyncio.run(run_scenario(
-        args.name, scenario, sites=[(rt.gbm, rt.fct) for rt in sites],
+        args.name, scenario, sites=scenario_sites(scenario, args.name, sites),
         adapters_for_site=lambda g, f: getattr(by_key.get((g, f)), "adapters", None),
-        clock=clock, timezone_name=app.timezone))
+        clock=clock, timezone_name=app.timezone, digests=persistence.digests))
+    try:
+        persistence.digests.put(report)      # CLI 실행도 추세에 기여한다
+    except Exception:                                              # noqa: BLE001 — 무raise
+        pass
     body = (render_fleet_html(report) if scenario.output.format == "html"
             else render_fleet_md(report))
     path = write_report(body, output_dir=scenario.output.output_dir, case_id=args.name,

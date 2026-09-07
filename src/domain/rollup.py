@@ -56,7 +56,8 @@ class MetricRollup(StrictModel):
     @model_validator(mode="after")
     def _honesty(self):
         # ① 누락이 있으면 complete는 False다 — 호출부가 True를 넣어도 강제한다.
-        if self.covered_sites < self.expected_sites and self.complete:
+        # `<`가 아니라 `!=`다 — 5/3도 정직한 상태가 아니다(사이트 중복 등).
+        if self.covered_sites != self.expected_sites and self.complete:
             object.__setattr__(self, "complete", False)
         # ③ 아무 데서도 못 읽었으면 값이 없다. 0은 "전부 0이었다"는 다른 주장이다.
         if self.covered_sites == 0:
@@ -66,6 +67,9 @@ class MetricRollup(StrictModel):
         # ② 불완전은 사유를 요구한다 — 이유 없는 불완전은 읽는 사람이 무시한다.
         if not self.complete and not self.coverage_note:
             raise ValueError("complete=False면 coverage_note가 필요하다")
+        # ⑤ "완전"과 "—"가 나란히 서면 대시를 설명할 문장이 없다(검증 리뷰 M-8).
+        if self.complete and self.value is None and not self.coverage_note:
+            raise ValueError("값이 없는 완전한 집계에는 coverage_note가 필요하다")
         return self
 
 

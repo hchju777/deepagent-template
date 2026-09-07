@@ -1289,3 +1289,38 @@ def test_없는_시나리오는_exit_1이다(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr("os.environ", dict(ENV))
     assert main(["scenario", "run", "없음", "--config-root", str(tmp_path / "config"),
                  "--repo-root", str(tmp_path)]) == 1
+
+
+def test_patrol_run은_시나리오와_실행_기록을_데몬에_넘긴다(tmp_path, monkeypatch):
+    # 검증 리뷰 B-1: 안 넘기면 fleet 잡이 하나도 등록되지 않아 집계가 프로덕션에서
+    # 한 번도 안 돈다 — CLAUDE.md가 이름 붙인 `resume_once` 유형의 재발이다.
+    _scenario_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    seen = {}
+    real = main_module.PatrolDaemon
+
+    class _Spy(real):
+        def __init__(self, **kw):
+            seen.update(kw)
+            super().__init__(**kw)
+
+    monkeypatch.setattr("src.__main__.PatrolDaemon", _Spy)
+    monkeypatch.setattr("src.__main__._drive_daemon", _noop_drive)
+    main(["patrol", "run", "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
+    assert list(seen.get("scenarios") or {}) == ["alarm_trend"]
+    assert seen.get("digests") is not None
+
+
+def test_scenario_run도_실행_기록을_남긴다(tmp_path, monkeypatch):
+    # 기록이 없으면 GET /digests는 영구히 빈 목록이고 추세 비교가 도달 불가 코드가 된다.
+    _scenario_tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    digests = InMemoryDigestStore()
+    monkeypatch.setattr("src.__main__.build_persistence",
+                        lambda cfg: Persistence(store, repo, ledger, InMemoryEventStore(),
+                                                InMemoryVerdictSnapshotStore(), InMemoryLabelStore(),
+                                                digests))
+    assert main(["scenario", "run", "alarm_trend", "--config-root", str(tmp_path / "config"),
+                 "--repo-root", str(tmp_path)]) == 0
+    assert digests.latest("alarm_trend") is not None

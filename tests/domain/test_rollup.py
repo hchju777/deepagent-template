@@ -67,3 +67,16 @@ def test_실행_기록은_시나리오별로_최신순이다():
     assert [r.scenario_digest for r in store.list("alarm")] == ["d2", "d1"]
     assert store.latest("alarm").scenario_digest == "d2"
     assert store.latest("없음") is None
+
+
+def test_커버가_기대보다_많아도_불완전이다():
+    # 리뷰 low: `<`가 아니라 `!=`여야 한다 — 5/3은 정직한 상태가 아니다.
+    r = _rollup(expected_sites=3, covered_sites=5, complete=True, coverage_note="중복 사이트")
+    assert r.complete is False
+
+
+def test_완전한데_값이_없으면_사유를_요구한다():
+    # "완전"과 "—"가 나란히 서고 대시를 설명하는 문장이 없으면 읽는 사람이 못 읽는다.
+    with pytest.raises(ValidationError):
+        _rollup(value=None, coverage_note=None)
+    assert _rollup(value=None, coverage_note="표본이 비었다").coverage_note

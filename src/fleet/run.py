@@ -19,13 +19,36 @@ from src.fleet.reduce import reduce_values
 
 # digest가 반응해야 하는 것은 **무엇을 어떻게 재는가**뿐이다. title·enabled 같은 표현
 # 필드가 섞이면 제목만 고쳐도 어제 숫자와 비교 불가가 돼 추세가 무의미해진다.
-_DIGEST_FIELDS = ("kind", "concern", "metrics", "group_by", "scope")
+_DIGEST_FIELDS = ("kind", "concern", "metrics", "group_by")
+# scope 중 **무엇을 재는가**에 속하는 것만 digest에 넣는다. max_parallel_sites는 부하
+# knob이라, 4→8로 올린 운영자가 그날부터 영구히 "추세 비교 불가"를 받으면 안 된다
+# (검증 리뷰 M-5). sites/exclude는 분모를 바꾸므로 들어간다.
+_DIGEST_SCOPE_FIELDS = ("sites", "exclude")
 
 
 def scenario_digest(scenario) -> str:
-    payload = {f: scenario.model_dump(mode="json")[f] for f in _DIGEST_FIELDS}
+    dumped = scenario.model_dump(mode="json")
+    payload = {f: dumped[f] for f in _DIGEST_FIELDS}
+    payload["scope"] = {f: dumped["scope"][f] for f in _DIGEST_SCOPE_FIELDS}
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def scenario_sites(scenario, name: str, runtimes) -> list[tuple[str, str]]:
+    """사이트가 `patrol.scenarios.{이름}.enabled: false`로 끈 곳을 뺀 목록.
+
+    사이트가 시나리오에 대해 말할 수 있는 것은 켜고 끄는 것뿐이다(schema_scenario의
+    근거). 이 함수가 없으면 그 config는 파싱만 되고 아무 일도 안 하는 죽은 필드다
+    (검증 리뷰 M-7).
+    """
+    out = []
+    for rt in runtimes:
+        override = getattr(getattr(getattr(rt, "cfg", None), "patrol", None), "scenarios", {})
+        entry = override.get(name) if isinstance(override, dict) else None
+        if entry is not None and entry.enabled is False:
+            continue
+        out.append((rt.gbm, rt.fct))
+    return out
 
 
 def _in_scope(scenario, sites: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -59,12 +82,24 @@ async def run_scenario(name: str, scenario, *, sites: list[tuple[str, str]],
     await asyncio.gather(*(one_site(g, f) for g, f in scope), return_exceptions=True)
     finished = clock()
 
-    coverage = _coverage(samples, scope)
+    # 선택 지표(required=False)의 누락은 커버리지에서 뺀다 — 안 그러면 미배포 지표
+    # 하나가 사이트 전체를 missing으로 낙인찍어, 한 리포트가 "커버리지 0/3"과
+    # "지표 3/3 완전"을 동시에 말한다(검증 리뷰 M-1).
+    required = {m: rows for m, rows in samples.items() if scenario.metrics[m].required}
+    coverage = _coverage(required or samples, scope)
     rollups = [_rollup(metric, scenario.metrics[metric], samples[metric], len(scope))
                for metric in scenario.metrics]
     groups = _groups(scenario, samples, scope)
-    previous = digests.latest(name) if digests is not None else None
+    # 추세 조회 실패가 집계 전체를 날리면 안 된다 — 이 함수는 raise하지 않는다고
+    # docstring이 약속한다(검증 리뷰 M-2).
+    previous, read_error = None, None
+    if digests is not None:
+        try:
+            previous = digests.latest(name)
+        except Exception as exc:                                   # noqa: BLE001
+            read_error = f"이전 실행 조회 실패: {type(exc).__name__}: {exc}"
     trend, caveat = _trend(rollups, previous, digest)
+    caveat = caveat or read_error
     return FleetReport(scenario=name, title=scenario.title, concern=scenario.concern,
                        scenario_digest=digest, window_from=started, window_to=finished,
                        coverage=coverage, rollups=rollups, groups=groups,
@@ -95,16 +130,31 @@ def _coverage(samples: dict[str, list], scope) -> list[SiteCoverage]:
     return out
 
 
+# 표본이 비어도 답이 있는 감축 — 사이트가 답했고 행이 0건이면 그것은 **관측된 0**이다.
+# 평균·최대·최소는 빈 표본에서 정의되지 않으므로 None으로 두고 사유를 적는다.
+_ZERO_ON_EMPTY = {"sum", "count", "count_nonzero"}
+
+
 def _rollup(metric: str, spec, rows: list, expected: int) -> MetricRollup:
     usable = [s for s in rows if s.status != "missing"]
     values = [v for s in usable for v in s.values]
     covered = len(usable)
-    value = reduce_values(values, spec.reduce) if covered else None
+    if not covered:
+        value = None
+    elif values:
+        value = reduce_values(values, spec.reduce)
+    else:
+        value = 0.0 if spec.reduce in _ZERO_ON_EMPTY else None
     gaps = [s for s in rows if s.status != "covered"]
     skipped = sum(s.skipped for s in rows)
     complete = fold_complete([s.status == "covered" for s in rows]) and skipped == 0 \
         and covered == expected
     note = None
+    if complete and value is None:
+        # "완전"과 "—"가 나란히 서면 읽는 사람이 대시를 설명할 방법이 없다(리뷰 M-8).
+        note = f"전 사이트가 답했으나 표본이 비어 {spec.reduce}를 낼 수 없다"
+    elif complete and not values:
+        note = "전 사이트가 답했고 관측된 항목은 0건이다"
     if not complete:
         parts = []
         if covered < expected:
