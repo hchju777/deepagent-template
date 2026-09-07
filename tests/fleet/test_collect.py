@@ -48,11 +48,15 @@ async def test_프로브_오류는_missing과_사유다():
     assert sample.reason and sample.fct == "suwon"
 
 
-async def test_어댑터가_던져도_raise하지_않는다():
-    class _Boom:
-        def __getattr__(self, name):
-            raise RuntimeError("어댑터 폭발")
-    sample = await _collect(_spec(), _Boom())
+async def test_프로브가_던져도_raise하지_않는다(monkeypatch):
+    # 프로브 자신은 무raise지만(규율 1) 그 계약이 깨져도 집계는 살아야 한다 —
+    # 어댑터를 폭발시키는 것으로는 이 경로를 못 지난다(프로브가 먼저 흡수한다).
+    import src.patrol.probes as probes
+
+    async def boom(adapters, spec, *, clock, timezone_name):
+        raise RuntimeError("프로브 폭발")
+    monkeypatch.setitem(probes.PROBES, "rest_get", boom)
+    sample = await _collect(_spec(), _adapters())
     assert sample.status == "missing" and "RuntimeError" in (sample.reason or "")
 
 
