@@ -10,9 +10,9 @@
 
 | 종류 | 수 | 어디 있어야 하는가 |
 |---|---|---|
-| **A. 미해결 부채** | 50 | 여기 — §1~§3에 **전부** 적었다(절로 쓴 것 31개 + §3.23의 한 줄짜리 22개, 일부는 합쳐진다) |
+| **A. 미해결 부채** | 51 | 여기 — §1~§3에 **전부** 적었다(절로 쓴 것 + §3.23의 한 줄짜리 23개, 일부는 한 항목으로 합쳐진다) |
 | **B. 이미 갚음** | 14 | 여기(§4) |
-| **C. 설계 판단 기록** | 25 | [architecture.md](architecture.md)·[file-map.md](file-map.md)·코드 주석 (§6에 열거) |
+| **C. 설계 판단 기록** | 24 | [architecture.md](architecture.md)·[file-map.md](file-map.md)·코드 주석 (§6에 열거) |
 | **D. 교훈** | 10 | [for-implementers.md](for-implementers.md)의 집행 전 점검표 (§6에 열거) |
 
 C와 D는 부채가 아니다 — "왜 이렇게 했는가"와 "다음엔 이걸 먼저 의심하라"이지 "할 일"이
@@ -165,13 +165,13 @@ import한다 — `src/api/app`·`assembly`는 `:121-122`에서 지연 import다.
 
 | 출처 | 항목 |
 |---|---|
-| P12-3 | `case resume`의 "케이스 존재" 오라클 — 접근 검사가 `repo.get` 뒤라 미인가 주체가 404/403으로 존재를 구별할 수 있다 |
+| P12-3 | **CLI** `case resume`의 "케이스 존재" 오라클 — 접근 검사가 `repo.get` 뒤라 stderr 메시지가 "찾을 수 없다"와 "접근할 수 없다"로 갈린다(HTTP는 계획 13의 `visible_record`가 셋 다 404로 통일했다) |
 | P12-4 | `answer_case`에 status 가드가 없다 — `question_kind`만 보고 분기한다 |
 | P13-5 | `GET /cases/{id}/report`에 다른 확장자 폴백이 없다(`case show --report`와 다르다) |
 | P13-6 | 응답 모델이 dict인 곳이 남았다 — 계획 14가 `CaseDetail`만 모델로 올렸다 |
 | P13-7 | `config-reference.md`의 기동 검증 번호가 실행 순서가 아니다(종류별이다) |
 | P13-10 | 혼용 경로의 우선순위를 코드가 정했다 — API로 실린 답이 있는데 CLI가 먼저 오면 직접 답이 이긴다 |
-| P14-4 | `_sanitize_alternates`가 컴포넌트 이름의 **문자열 동일성**만 본다 — `plan-sync`와 `plan_sync`가 다른 후보다 |
+| P14-4 | `_sanitize_causes`(`nodes.py`)의 중복 제거가 컴포넌트 이름의 **문자열 동일성**만 본다 — `plan-sync`와 `plan_sync`가 다른 후보다 |
 | P14-5 | `CaseDetail.stages/verdict/timeline`이 `list[dict]`/`dict`다 — 내부 모델을 그대로 dump한다 |
 | P14-6 | 후보가 기여 요인과 같은 컴포넌트여도 안 거른다 — "이것 대신"과 "이것에 더해"가 같은 것을 가리키는 것이 모순인지는 설계 판단 |
 | P15-2 | `history_shown`의 소비자가 없다 — "이력이 도움이었나 앵커링이었나"를 물으려면 필요하다 |
@@ -186,6 +186,7 @@ import한다 — `src/api/app`·`assembly`는 `:121-122`에서 지연 import다.
 | P20-11 | `_id`를 동점 키로 쓰는 것은 **한 프로세스 안에서만** "삽입 순서"다(ObjectId 중간 5바이트가 프로세스별 난수) |
 | P20-12 | 저장소 포트 docstring이 동점 계약을 안 적는다(`DigestStorePort.list`·`CaseRepositoryPort.closed_by_*`) |
 | P21-4 | `repr`에 기대는 자리 둘 — 여러 줄 본문을 사람이 읽기 좋게 보이려는 요구가 생기면 접기가 아니라 **들여쓰기**가 답이다 |
+| P19-5 | 여러 사람이 같은 케이스를 다르게 라벨하면 마지막이 이긴다 — 합의가 아니라 최신성이다(`labeled_by`가 이미 남아 있다) |
 | P14-1 | 후보의 정답 대조가 없다 — `VerdictSnapshot.alternates`와 라벨을 잇는 캘리브레이션(계획 19가 `confidence` 축만 했다) |
 
 ---
@@ -198,14 +199,15 @@ import한다 — `src/api/app`·`assembly`는 `:121-122`에서 지연 import다.
 
 | 계획 문서의 인계 | 갚은 곳 | 확인 |
 |---|---|---|
-| P12-1·P15-7 접수 `_save` TOCTOU | 계획 17 | `intake.py`가 `update_if`(CAS)를 쓴다. **다만 증거 쓰기는 여전히 CAS 밖이다** |
+| P12-1·P13-1·P15-7 접수 `_save` TOCTOU | 계획 17 | `intake.py`가 `update_if`(CAS)를 쓴다. **다만 증거 쓰기는 여전히 CAS 밖이다** |
 | P12-2 `sites_for` 프로덕션 소비자 0 | 계획 13 이후 | `routes_reads.py`가 세 곳에서 쓴다 |
 | P15-1 캘리브레이션 계산 없음 | 계획 19 | `labels.calibration` |
 | P15-4 `MetricsSinkPort` 소비자 없음 | 계획 19 | `patrol status` |
 | P15-8 Mongo `closed_by_*` DB 정렬·limit | 계획 20 | `_closed_newest_first` |
 | P13-11 `submit_answer`의 포괄 except가 저장소 장애를 404로 | 계획 14 | `submit.py`가 `"error"`(503)를 낸다 |
 | P18-8 그래프 내부 프롬프트가 안 접힌다 | 계획 21 | `nodes.py`의 네 렌더러·`llm_judge`가 `one_line`을 탄다 |
-| P12-5 `intake_turn`이 lease를 안 잡는다 | 계획 17 | CAS(`update_if`)가 lease 없이 닫았다 |
+| P12-5 `intake_turn`이 lease를 안 잡는다 | 계획 17 | CAS(`update_if`)가 lease 없이 닫았다 — 부채의 내용이 "lease를 잡아라"가 아니라 "동시 요청이 레코드를 망가뜨린다"였다 |
+| P20-5 같은 폭 함정이 형제 둘에 살아 있다 | 계획 20 | `MongoDigestStore._rows`·`MongoLabelStore.list_for`가 `_fixed_width_iso`를 탄다 |
 
 **계획 문서에 이미 갚음 표시가 있는 것**(취소선이나 "→ 갚았다") — 헛수고 위험은 없다.
 
@@ -246,7 +248,7 @@ import한다 — `src/api/app`·`assembly`는 `:121-122`에서 지연 import다.
 |---|---|---|---|---|---|
 | P12 접수 경계 | 5 | 3·4 | 1·2·5 | — | — |
 | P13 HTTP 표면 | 12 | 2·3·4·5·6·7·8·10 | 1·9·11·12 | — | — |
-| P14 RCA 후보·Timeline | 7 | 2·4·5·6·7 | — | 1·3 | — |
+| P14 RCA 후보·Timeline | 7 | 1·2·4·5·6·7 | — | 3 | — |
 | P15 학습 루프 | 10 | 2·5·6·9·10 | 1·4·7·8 | 3 | — |
 | P16 Fleet 집계 | 11 | 1·2·3·4·5·6·7·8·9·10 | 11 | — | — |
 | P17 답-질문 대조 | 11 | 1·2·10·11 | — | 3·4·5·6·8·9 | 7 |
@@ -256,7 +258,7 @@ import한다 — `src/api/app`·`assembly`는 `:121-122`에서 지연 import다.
 | P21 그래프 프롬프트 | 9 | 3·4·5 | — | 1·2·9 | 6·7·8 |
 | P22 tier 사다리 | 2 | 2 | — | 1 | — |
 | P23 문서화 | 2 | — | — | — | 1·2 |
-| **합계** | **99** | **50** | **14** | **25** | **10** |
+| **합계** | **99** | **51** | **14** | **24** | **10** |
 
 **C(설계 판단)로 분류한 근거**: "왜 이렇게 했는가"를 적은 것들이다 — 접수 CAS의 술어가
 왜 시각 하나가 아닌지(P17-3), 배포가 왜 "없음"을 안 쓰는지(P18-7), 동점 키가 왜
