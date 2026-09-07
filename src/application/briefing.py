@@ -80,6 +80,20 @@ def render_rules(checks, *, slice_, target_locator):
     return "\n".join(lines)
 
 
+def render_deployment(deployment, *, slice_):
+    """브리핑의 `[배포 버전]` — 슬라이스 서비스만.
+
+    없을 때 "없음"이 아니라 "미검증"이라고 적는다: 배포 매핑의 부재는 "배포가 없다"가
+    아니라 "무엇이 돌고 있는지 우리가 모른다"이다. 로컬 체크아웃의 HEAD는 배포 진실이
+    아니므로(knowledge/deployment.py) 리드가 코드 증거를 그만큼 깎아 읽어야 한다.
+    """
+    if deployment is None:
+        return "배포 매핑 없음 — 이 사이트의 코드 증거는 배포 버전 미검증이다"
+    return "\n".join(f"- {name}: {version.repo}@{version.commit}"
+                     for name, version in sorted(deployment.services.items())
+                     if name in slice_.services)
+
+
 def _or_none(text):
     # 텍스트가 없거나 공백이면 "없음"을 반환, 그렇지 않으면 정제된 텍스트
     return text.strip() if text and text.strip() else "없음"

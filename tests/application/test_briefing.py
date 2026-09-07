@@ -1,8 +1,10 @@
 from datetime import datetime
 
-from src.application.briefing import build_briefing, render_rules, upstream_slice
+from src.application.briefing import (build_briefing, render_deployment,
+                                      render_rules, upstream_slice)
 from src.config.schema_site import CheckConfig
 from src.domain.case import Case
+from src.knowledge.deployment import Deployment
 from src.knowledge.topology import Topology
 
 TOPO = Topology.model_validate({
@@ -90,3 +92,18 @@ def test_적용_룰은_점검마다_한_줄로_접힌다():
 
 def test_걸리는_점검이_없으면_빈_문자열이다():
     assert render_rules({}, slice_=Topology(), target_locator=None) == ""
+
+
+def test_슬라이스_서비스의_배포_커밋만_싣는다():
+    dep = Deployment.model_validate({"services": {
+        "twin-api": {"repo": "twin", "commit": "abc123"},
+        "unrelated": {"repo": "x", "commit": "def456"}}})
+    sliced = upstream_slice(TOPO, "rest:/oee", max_depth=3)
+    text = render_deployment(dep, slice_=sliced)
+    assert "abc123" in text
+    assert "def456" not in text
+
+
+def test_배포_매핑이_없으면_없음이_아니라_미검증이다():
+    text = render_deployment(None, slice_=Topology())
+    assert "미검증" in text
