@@ -27,8 +27,10 @@ def _report(**kw):
 def test_커버리지가_지표보다_먼저_나온다():
     # 숫자를 먼저 보여주고 아래에 각주로 커버리지를 다는 것이 "12% 감소"가 실은
     # "3개 법인 누락"인 사고의 형태다. 순서 자체가 방어선이다.
-    for text in (render_fleet_md(_report()), render_fleet_html(_report())):
-        assert text.index("커버리지") < text.index("alarms")
+    md = render_fleet_md(_report())
+    assert md.index("## 커버리지") < md.index("## 지표") < md.index("alarms")
+    html = render_fleet_html(_report())
+    assert html.index("<h2>커버리지</h2>") < html.index("<h2>지표</h2>") < html.index("alarms")
 
 
 def test_미확인_사이트가_사유와_마지막_성공과_함께_나온다():
@@ -68,6 +70,8 @@ def test_HTML은_대상_문자열을_이스케이프한다():
     html = render_fleet_html(_report(coverage=[
         SiteCoverage(gbm="mx", fct="gumi", status="missing", reason="<script>x</script>")]))
     assert "&lt;script&gt;" in html and "<script>x" not in html
+    full = render_fleet_html(_report())
+    assert "2026-08-31" in full          # 미확인 사이트의 마지막 성공 시각도 HTML에 있다
 
 
 def test_축_분해가_있으면_표로_나온다():
