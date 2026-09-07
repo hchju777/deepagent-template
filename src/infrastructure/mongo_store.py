@@ -16,9 +16,13 @@ ISO 문자열은 마이크로초 유무로 길이가 달라져 사전식 비교�
 'Z'가 '.'보다 커서 **정각이 그 초의 최신으로 뒤집힌다**).
 
 **정렬은 파싱으로 미룰 수 없다** — 그러려면 전량을 하이드레이션해야 하고 그것이
-바로 계획 20이 없앤 것이다. 그래서 정렬하는 세 곳(이력 조회·집계 리포트·라벨 목록)은
-파이프라인 안에서 `_fixed_width_iso`로 폭을 맞춘 뒤 정렬한다. **DB에 시각 정렬을
-새로 맡길 때는 반드시 그 헬퍼를 거쳐라.**
+바로 계획 20이 없앤 것이다. 그래서 pydantic 직렬화를 정렬하는 세 곳(이력 조회·집계
+리포트·라벨 목록)은 파이프라인 안에서 `_fixed_width_iso`로 폭을 맞춘 뒤 정렬한다.
+
+시각 정렬을 DB에 맡기는 자리는 **넷**이고 네 번째(MongoLedger.metrics)만 헬퍼를 안
+거친다 — 거기는 `at.isoformat()`으로 써서 폭이 이미 고정이기 때문이고, 그 사실은
+우연이라 그 자리에 주석으로 적어 뒀다. **새로 맡길 때는 그 넷 중 어느 쪽인지 먼저
+정하라.** 나머지 `.sort(...)`는 전부 정수 seq다.
 """
 import re
 from datetime import datetime, timedelta
@@ -502,6 +506,10 @@ class MongoLedger(LedgerPort):
     def metrics(self, name, *, limit=200) -> list[dict]:
         if limit <= 0:
             return []
+        # **이 자리는 `_fixed_width_iso`를 안 거친다** — `record_metric`이 pydantic이
+        # 아니라 `at.isoformat()`으로 쓰고, 그것은 UTC에도 `+00:00`을 붙여 폭이 항상
+        # 고정된다. `+`(0x2B)가 `.`(0x2E)보다 작아 소수부 없는 값이 앞에 오는 것도 맞다.
+        # **우연이다**: 직렬화를 `to_jsonable_python`으로 바꾸면(`Z`) 즉시 뒤집힌다.
         cursor = self._db.metrics.find({"name": name}).sort("at", -1).limit(limit)
         return [{"name": d["name"], "value": d["value"], "tags": d.get("tags", {}),
                  "at": datetime.fromisoformat(d["at"])} for d in cursor]
@@ -598,7 +606,9 @@ class MongoDigestStore(DigestStorePort):
         cursor = self._db.fleet_runs.aggregate([
             {"$match": {"scenario": scenario}},
             {"$addFields": {"_at": _fixed_width_iso("$generated_at")}},
-            {"$sort": {"_at": -1}},
+            # 동점 키는 형제 둘(이력 `id`, 라벨 `_id`)과 같은 근거다 — 실제 Mongo는
+            # 동점 순서를 규정하지 않아 두 백엔드가 갈린다.
+            {"$sort": {"_at": -1, "_id": -1}},
             {"$limit": limit},
             {"$project": {"_at": 0}},
         ])

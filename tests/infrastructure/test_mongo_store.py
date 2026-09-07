@@ -798,11 +798,15 @@ def test_정각에_단_라벨이_뒤에_온_라벨을_앞지르지_않는다(db)
     from src.domain.label import RootCauseLabel
     from src.infrastructure.mongo_store import MongoLabelStore
 
+    # 삽입 순서와 시간 순서를 **어긋나게** 둔다 — 같게 두면 소수부가 뭉개져도 `_id`
+    # 동점 키가 우연히 정답을 낸다(검증 리뷰 MEDIUM 1: 다른 세 건에 적용한 교정을
+    # 이 테스트에는 안 했다).
     store = MongoLabelStore(db)
-    store.append(RootCauseLabel(case_id="c-1", agreement="correct", labeled_at=T))
-    store.append(RootCauseLabel(case_id="c-1", agreement="wrong",
-                                labeled_at=T + timedelta(microseconds=500000)))
-    assert [r.agreement for r in store.list_for("c-1")] == ["correct", "wrong"]
+    for agreement, at in (("wrong", T + timedelta(microseconds=500000)),
+                          ("correct", T),
+                          ("unknown", T + timedelta(seconds=1))):
+        store.append(RootCauseLabel(case_id="c-1", agreement=agreement, labeled_at=at))
+    assert [r.agreement for r in store.list_for("c-1")] == ["correct", "wrong", "unknown"]
 
 
 def test_정각에_생성된_집계_리포트가_최신으로_뒤집히지_않는다(db):
@@ -810,10 +814,70 @@ def test_정각에_생성된_집계_리포트가_최신으로_뒤집히지_않�
     from src.domain.rollup import FleetReport
     from src.infrastructure.mongo_store import MongoDigestStore
 
+    # **최신을 먼저** 넣는다 — 삽입 순서가 시간 순서와 같으면 `_id` 동점 키가 소수부
+    # 없이도 우연히 정답을 낸다(같은 함정을 형제 테스트에서 세 번 밟았다).
     store = MongoDigestStore(db)
-    for at, digest in ((T, "old"), (T + timedelta(microseconds=500000), "new")):
+    for at, digest in ((T + timedelta(microseconds=500000), "new"), (T, "old")):
         store.put(FleetReport(scenario="s", title="t", concern="operation",
                               scenario_digest=digest, window_from=T, window_to=T,
                               generated_at=at))
     assert store.latest("s").scenario_digest == "new"
     assert [r.scenario_digest for r in store.list("s")] == ["new", "old"]
+
+
+def test_두_라벨_저장소가_같은_순서를_낸다(db):
+    # 캘리브레이션이 "마지막 행 = 사람의 최종 믿음"으로 읽으므로, 백엔드가 갈리면
+    # 같은 데이터에서 다른 라벨이 세어진다. 인메모리는 정렬을 아예 안 했었다.
+    from src.domain.label import InMemoryLabelStore, RootCauseLabel
+    from src.infrastructure.mongo_store import MongoLabelStore
+
+    mongo, memory = MongoLabelStore(db), InMemoryLabelStore()
+    plan = [("correct", T), ("wrong", T + timedelta(microseconds=1)),
+            ("unknown", T - timedelta(seconds=1)),
+            ("partially_correct", T + timedelta(microseconds=1))]
+    for agreement, at in plan:
+        label = RootCauseLabel(case_id="c-1", agreement=agreement, labeled_at=at)
+        mongo.append(label)
+        memory.append(label)
+    assert ([r.agreement for r in mongo.list_for("c-1")]
+            == [r.agreement for r in memory.list_for("c-1")]
+            == ["unknown", "correct", "wrong", "partially_correct"])
+
+
+def test_집계_리포트는_시나리오별로만_돌려준다(db):
+    # `$match`의 scenario 필터가 무방비였다 — latest()가 다른 시나리오 것을 돌려주면
+    # 추세 비교가 조용히 남의 숫자와 선다(검증 리뷰 MEDIUM 2).
+    from src.domain.rollup import FleetReport
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    store = MongoDigestStore(db)
+    for scenario, at in (("s1", T), ("s2", T + timedelta(days=1))):
+        store.put(FleetReport(scenario=scenario, title="t", concern="operation",
+                              scenario_digest=scenario, window_from=T, window_to=T,
+                              generated_at=at))
+    assert store.latest("s1").scenario_digest == "s1"
+    assert [r.scenario_digest for r in store.list("s1")] == ["s1"]
+    assert store.latest("없음") is None
+
+
+def test_집계_리포트_목록의_상한(db):
+    from src.domain.rollup import FleetReport
+    from src.infrastructure.mongo_store import MongoDigestStore
+
+    store = MongoDigestStore(db)
+    for i in range(25):
+        store.put(FleetReport(scenario="s", title="t", concern="operation",
+                              scenario_digest=f"d{i:02d}", window_from=T, window_to=T,
+                              generated_at=T + timedelta(minutes=i)))
+    assert len(store.list("s")) == 20                     # 기본 상한
+    assert [r.scenario_digest for r in store.list("s", limit=2)] == ["d24", "d23"]
+    assert store.list("s", limit=0) == []
+
+
+def test_지표는_소수초가_섞여도_최신순이다(db):
+    # `record_metric`이 `isoformat()`을 쓰는 덕에 우연히 안전하다 — 그 우연을 지킨다.
+    ledger = MongoLedger(db)
+    for value, us in ((1.0, 0), (2.0, 1), (3.0, 999999)):
+        ledger.record_metric("m", value, tags={},
+                             at=T + timedelta(seconds=0, microseconds=us))
+    assert [r["value"] for r in ledger.metrics("m")] == [3.0, 2.0, 1.0]
