@@ -337,7 +337,10 @@ class PatrolDaemon:
                                    None if path else "리포트 파일 쓰기 실패")
             if not path or not scenario.output.mail:
                 return
-            await send_report(f"fleet:{name}", f"[{report.title}] 집계 리포트",
+            # send_id에 창을 넣는다 — 이름만 쓰면 2상 레저가 둘째 실행을 중복으로
+            # 억제해 매일 도는 집계가 첫날 이후 영영 안 나간다.
+            send_id = f"fleet:{name}:{report.window_from.isoformat()}"
+            await send_report(send_id, f"[{report.title}] 집계 리포트",
                               render_fleet_md(report), sender=self._mail_sender(),
                               ledger=self.ledger, cfg=self.report_cfg.mail, clock=self.clock,
                               concern=scenario.concern, html=body)

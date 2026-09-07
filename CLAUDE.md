@@ -183,6 +183,9 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 읽기 전용 순수 판정(끝점·body·집계) | `src/infrastructure/query_rules.py` |
 | 이벤트 로그 포트·인메모리 구현 | `src/domain/events.py` |
 | 과거 케이스 검색(tier 1~4)·렌더 | `src/application/history.py` |
+| Fleet 집계(시나리오·팬아웃·감축) | `src/fleet/`, `src/config/schema_scenario.py` |
+| 집계 롤업·커버리지·실행 기록 포트 | `src/domain/rollup.py` |
+| 집계 리포트 렌더링 | `src/presentation/fleet_report.py` |
 | 실제 원인 라벨(도메인)·유입구 | `src/domain/label.py`, `src/application/labels.py` |
 | 종결 판정 스냅샷(retention보다 오래 산다) | `src/domain/snapshot.py` |
 | LLM 판정 | `src/patrol/llm_judge.py` |

@@ -65,6 +65,7 @@
 | `store.mongo_url` | str \| null | null | `backend="mongo"`일 때 필수. 보통 `${AGENT_MONGO_URL}` 참조 |
 | `store.mongo_db` | str | `"deepagent"` | Mongo 백엔드일 때 사용할 DB 이름 |
 | `store.retention.closed_case_evidence_d` | int | 90 | 닫힌 케이스의 증거/판정을 이 일수 후 비움 |
+| `scenarios/*.json` | 파일 | — | Fleet 집계 시나리오(계획 16). `kind`(aggregate)·`concern`·`enabled`·`title`·`schedule`(점검과 같은 interval xor cron)·`scope`(`sites`/`exclude`/`max_parallel_sites`)·`metrics`(이름→`target`·`probe`·`params`(`body` 포함)·`resolve`·`sample`·`extract`(점 경로)·`reduce`(6종)·`window`·`required`·`unit`)·`group_by`·`output`(`format`/`output_dir`/`mail`). 층 병합 없이 파일마다 단독 검증되고, 사이트는 `patrol.scenarios.{이름}.enabled`로 끄기만 한다 |
 | `store.retention.ledger_d` | int | 30 | 순찰 레저 보존 일수 — 관측 메트릭(`metrics`)도 같은 knob으로 걷힌다(계획 15). 별도 knob은 아무도 다르게 설정하지 않을 세 번째 숫자다 |
 | `store.retention.checkpoint_ttl_d` | int | 14 | LangGraph 체크포인트 보존 일수 |
 | `store.retention.sends_d` | int | 30 | 메일 발송 레저(F6 멱등 기록) 보존 일수 |

@@ -1,0 +1,19 @@
+{
+  "kind": "aggregate",
+  "concern": "operation",
+  "title": "알람 추세 — 전 법인/사업부",
+  "schedule": {"cron": "0 7 * * *"},
+  "scope": {"sites": "all", "max_parallel_sites": 4},
+  "group_by": ["gbm"],
+  "metrics": {
+    "alarms": {
+      "target": "rest:alarm_count",
+      "params": {"body": {"window": "24h"}},
+      "extract": "body.summary.alarms",
+      "reduce": "sum",
+      "window": "24h",
+      "unit": "건"
+    }
+  },
+  "output": {"format": "html", "output_dir": "output/fleet", "mail": false}
+}

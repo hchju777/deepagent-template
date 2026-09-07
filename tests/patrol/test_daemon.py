@@ -1,6 +1,6 @@
 import asyncio
 """데몬의 run_one→게이트→큐→워커 사슬을 스텁 위에서 결정론 검증한다."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -472,3 +472,30 @@ async def test_집계_실행이_던져도_데몬은_산다(tmp_path, monkeypatch
     monkeypatch.setattr(dm, "run_scenario", boom)
     await daemon.run_scenario_job("alarm_trend")          # raise하지 않는다
     assert ledger.runs("-", "-", "fleet:alarm_trend")[0].status == "error"
+
+
+async def test_집계_메일은_실행마다_따로_나간다(tmp_path):
+    # send_id가 시나리오 이름뿐이면 둘째 실행이 2상 레저에서 중복으로 억제된다 —
+    # 매일 도는 집계가 첫날 이후 영영 안 나간다.
+    store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
+    sent = []
+
+    class _Spy:
+        async def send(self, subject, body, *, recipients, html=None):
+            sent.append(subject)
+
+    from src.config.schema_app import MailConfig
+    cfg = ReportConfig(output_dir=str(tmp_path / "out"),
+                       mail=MailConfig(enabled=True, host="smtp", sender="a@x",
+                                       recipients=["ops@y"]))
+    ticks = iter([T, T, T, T, T + timedelta(hours=1), T + timedelta(hours=1),
+                  T + timedelta(hours=1), T + timedelta(hours=1)])
+    daemon = _with_scenarios(store, repo, ledger, tmp_path, report_cfg=cfg,
+                             scenarios={"alarm_trend": {**_SCENARIO,
+                                                        "output": {"mail": True}}},
+                             clock=lambda: next(ticks, T + timedelta(hours=2)))
+    daemon.mail_sender = _Spy()
+    daemon.build()
+    await daemon.run_scenario_job("alarm_trend")
+    await daemon.run_scenario_job("alarm_trend")
+    assert len(sent) == 2, sent

@@ -64,6 +64,13 @@ CLI에서는 같은 시드를 `--stub-seeds <파일>`로 준다(리포 루트의
 503인데 응답은 404였다. 복원 뒤 `find src tests -name __pycache__ -exec rm -rf {} +`를
 하거나 `python -B`로 돌려라.
 
+## 집계 테스트가 지키는 것
+
+`tests/domain/test_rollup.py`의 validator 넷과 `tests/presentation/test_fleet_report.py`의
+**순서 테스트**(커버리지가 지표보다 먼저)가 계획 16의 방어선이다. 리포트를 손볼 때
+순서를 바꾸지 마라 — 숫자를 먼저 보여주고 커버리지를 각주로 다는 것이 이 기능이 막으려는
+사고의 형태다. 팬아웃 테스트는 동시 사이트 수의 **최대값을 실제로 재서** 상한을 확인한다.
+
 ## 학습 루프 테스트의 안전 앵커
 
 `tests/application/test_history.py`의 `test_렌더는_evidence_id를_절대_내지_않는다`가

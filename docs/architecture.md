@@ -181,6 +181,30 @@ config는 값이 **어디서 오는지**만 선언한다. 잘라낸 표본·필�
            → GET /cases/{id}  ── CaseDetail: 판정 + candidates(rank 1 = root_cause) + timeline
 ```
 
+## Fleet 집계(P7 — 계획 16)
+
+집계는 **케이스가 아니다.** `Case`에 밀어넣으면 requeue가 집계 레코드마다 LLM 그래프를
+돌리고, `Verdict`가 전부 "조사 실패" 낙인을 찍고, `symptom`/`t0`/`fingerprint`에 정직한
+값이 없어 발명해야 하며, 사이트 없는 지문이 실제 finding과 충돌한다. 그래서 별도 1급
+개념이다.
+
+- **선언**(`config/scenarios/{name}.json`, `src/config/schema_scenario.py`) — 사이트 층이
+  아니라 자기 파일에서 **단독 검증**된다. 사이트 층에 두면 사이트마다 잡이 등록돼 같은
+  집계가 N번 돌고 메일도 N통 간다. 사이트는 켜고 끄는 것만 말한다(`patrol.scenarios`).
+- **팬아웃**(`src/fleet/run.py`) — `max_parallel_sites`가 **사이트를 가로지르는** 전역
+  세마포어다. 기존 `guards.max_concurrent`는 사이트당 하나라 30 사이트면 120 in-flight가
+  조사 트래픽과 함께 나간다(규율 6: 상한은 코드가 쥔다).
+- **수집**(`src/fleet/collect.py`) — 기존 프로브를 그대로 쓴다. `MetricSpec`이 프로브가
+  읽는 계약(target·probe·params·sample·resolve)을 그대로 만족한다(규율 9: 새 포트 없음).
+  사이트 하나의 실패는 그 사이트의 커버리지 항목이지 집계의 죽음이 아니다.
+- **감축**(`src/fleet/reduce.py`) — `sum`/`avg`/`max`/`min`/`count`/`count_nonzero` 6종
+  Literal뿐이다. 범용 DSL은 감사 불가능하다. 빈 표본은 **0이 아니라 None**이다.
+- **정직성**(`src/domain/rollup.py`) — 위 glossary의 validator 넷. 리포트는 커버리지를
+  숫자보다 먼저 렌더한다.
+- **관측** — 집계는 `EngineEvent`를 내지 않는다(규율 7 — 엔진 산출물이 아니다). 레저의
+  `fleet:<이름>` 행과 `DigestStorePort`의 실행 기록이 관측 지점이고, 후자가 추세 비교의
+  유일한 재료다(`GET /digests/{scenario}`).
+
 ## 학습 루프(P8 — 계획 15)
 
 두 기록이 짝이다: `VerdictSnapshot`(기계가 뭐라 했나)과 `RootCauseLabel`(실제로 뭐였나).
