@@ -625,3 +625,80 @@ def test_같은_프로세스가_단_mongo_라벨은_단_순서를_돌려준다(d
         store.append(RootCauseLabel(case_id="c-1", agreement=agreement, labeled_at=T))
     assert [row.agreement for row in store.list_for("c-1")] == [
         "wrong", "partially_correct", "correct"]
+
+
+def _closed_doc(repo, cid, *, fp="fp-a", locator=None, at=None):
+    at = at or T
+    repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint=fp, symptom="s", t0=at,
+                         created_at=at, updated_at=at, status_since=at, status="closed",
+                         target_locator=locator, closed_reason="조사 완료"))
+
+
+def test_이력은_DB에서_잘려_온다(db, monkeypatch):
+    # 상한만 단정하면 파이썬 절단으로도 통과한다 — 하이드레이션 건수를 세야 실제로
+    # DB가 잘랐는지 안다.
+    repo = MongoCaseRepository(db)
+    for i in range(25):
+        _closed_doc(repo, f"c-{i:02d}", at=T + timedelta(minutes=i))
+    seen = []
+    original = MongoCaseRepository._to_record
+    monkeypatch.setattr(MongoCaseRepository, "_to_record",
+                        staticmethod(lambda doc: (seen.append(doc), original(doc))[1]))
+    rows = repo.closed_by_fingerprint("fp-a", exclude_case_id="x", limit=10)
+    assert [r.id for r in rows] == [f"c-{i:02d}" for i in range(24, 14, -1)]
+    assert len(seen) == 10               # 25건을 다 만들지 않았다
+
+
+def test_locator_이력도_DB에서_잘려_온다(db, monkeypatch):
+    repo = MongoCaseRepository(db)
+    for i in range(25):
+        _closed_doc(repo, f"c-{i:02d}", locator="rest:/oee", at=T + timedelta(minutes=i))
+    seen = []
+    original = MongoCaseRepository._to_record
+    monkeypatch.setattr(MongoCaseRepository, "_to_record",
+                        staticmethod(lambda doc: (seen.append(doc), original(doc))[1]))
+    rows = repo.closed_by_locators(["rest:/oee"], exclude_case_id="x", limit=5)
+    assert [r.id for r in rows] == [f"c-{i:02d}" for i in range(24, 19, -1)]
+    assert len(seen) == 5
+
+
+def test_정렬용_계산_필드가_레코드로_새지_않는다(db):
+    # CaseRecord는 StrictModel이라 파이프라인이 더한 필드가 남으면 검증 오류다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-1")
+    assert repo.closed_by_fingerprint("fp-a", exclude_case_id="x")[0].id == "c-1"
+
+
+def test_status_since가_없는_옛_레코드도_updated_at으로_정렬된다(db):
+    # status_since는 계획 4b 이후에 생긴 필드다 — 옛 문서에는 없다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-new", at=T)
+    db.cases.update_one({"id": "c-new"}, {"$unset": {"status_since": ""}})
+    _closed_doc(repo, "c-old", at=T - timedelta(days=1))
+    db.cases.update_one({"id": "c-old"}, {"$unset": {"status_since": ""}})
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="x")] == [
+        "c-new", "c-old"]
+
+
+def test_limit_0은_DB에_안_간다(db, monkeypatch):
+    # $limit: 0은 Mongo가 거부한다 — 인메모리 계약(빈 목록)과 같으려면 앞에서 막아야 한다.
+    repo = MongoCaseRepository(db)
+    _closed_doc(repo, "c-1")
+    monkeypatch.setattr(db.cases, "aggregate",
+                        lambda *a, **k: pytest.fail("limit<=0에 DB를 쳤다"))
+    assert repo.closed_by_fingerprint("fp-a", exclude_case_id="x", limit=0) == []
+    assert repo.closed_by_locators(["rest:/oee"], exclude_case_id="x", limit=0) == []
+
+
+def test_두_백엔드가_같은_이력_순서를_낸다(db):
+    # 동점(같은 시각)을 섞는다 — 여기서 갈리면 프로덕션에서만 드러난다.
+    from src.domain.cases import InMemoryCaseRepository
+
+    mongo, memory = MongoCaseRepository(db), InMemoryCaseRepository()
+    plan = [("c-1", T), ("c-3", T), ("c-2", T - timedelta(days=1)), ("c-5", T), ("c-4", T)]
+    for cid, at in plan:
+        _closed_doc(mongo, cid, at=at)
+        _closed_doc(memory, cid, at=at)
+    assert ([r.id for r in mongo.closed_by_fingerprint("fp-a", exclude_case_id="c-9")]
+            == [r.id for r in memory.closed_by_fingerprint("fp-a", exclude_case_id="c-9")]
+            == ["c-5", "c-4", "c-3", "c-1", "c-2"])

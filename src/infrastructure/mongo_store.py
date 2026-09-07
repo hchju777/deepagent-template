@@ -23,7 +23,7 @@ from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
-from src.domain.cases import (_newest_first, CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
+from src.domain.cases import (CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
                               lease_is_free, lease_is_held)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
@@ -357,17 +357,41 @@ class MongoCaseRepository(CaseRepositoryPort):
             {"fingerprint": fp, "status": {"$in": list(OPEN_STATUSES)}})
         return self._to_record(doc) if doc else None
 
+    def _closed_newest_first(self, match: dict, limit: int) -> list[CaseRecord]:
+        """정렬과 절단을 **DB가** 한다 — 10건을 얻으려고 수천 건을 검증하지 않는다.
+
+        `find().sort()`를 못 쓰는 이유: 정렬 키가 `status_since or updated_at`이라
+        coalesce다(`status_since`는 계획 4b 이후에 생겨 옛 문서에는 없다). 그래서
+        집계의 `$ifNull`로 계산 필드를 만든다.
+
+        동점을 `id`로 가르는 것은 인메모리 `_newest_first`와 같은 계약이다 — 두 백엔드가
+        다른 이력을 리드에게 보이면 그 차이는 프로덕션에서만 드러난다.
+
+        `$limit: 0`은 Mongo가 거부하므로 상한이 0 이하면 DB에 가지 않는다(인메모리도
+        빈 목록을 낸다).
+        """
+        if limit <= 0:
+            return []
+        pipeline = [
+            {"$match": match},
+            {"$addFields": {"_closed_at": {"$ifNull": ["$status_since", "$updated_at"]}}},
+            {"$sort": {"_closed_at": -1, "id": -1}},
+            {"$limit": limit},
+            # CaseRecord는 StrictModel이다 — 계산 필드를 남기면 검증 오류가 난다.
+            {"$project": {"_closed_at": 0}},
+        ]
+        return [self._to_record(doc) for doc in self._db.cases.aggregate(pipeline)]
+
     def closed_by_fingerprint(self, fp, *, exclude_case_id, limit=10) -> list[CaseRecord]:
-        docs = self._db.cases.find({"status": "closed", "fingerprint": fp,
-                                    "id": {"$ne": exclude_case_id}})
-        return _newest_first([self._to_record(d) for d in docs], limit)
+        return self._closed_newest_first(
+            {"status": "closed", "fingerprint": fp, "id": {"$ne": exclude_case_id}}, limit)
 
     def closed_by_locators(self, locators, *, exclude_case_id, limit=20) -> list[CaseRecord]:
         if not locators:                # 빈 $in도 0건이지만, 의도를 코드로 못박는다
             return []
-        docs = self._db.cases.find({"status": "closed", "target_locator": {"$in": list(locators)},
-                                    "id": {"$ne": exclude_case_id}})
-        return _newest_first([self._to_record(d) for d in docs], limit)
+        return self._closed_newest_first(
+            {"status": "closed", "target_locator": {"$in": list(locators)},
+             "id": {"$ne": exclude_case_id}}, limit)
 
     def list_by_status(self, status) -> list[CaseRecord]:
         return [self._to_record(d) for d in self._db.cases.find({"status": status})]
