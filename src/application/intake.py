@@ -20,10 +20,11 @@
 from datetime import datetime
 from typing import Any, Callable, Literal
 
-from src.domain.patrol import fingerprint
+from src.application.briefing import one_line
 from src.application.lifecycle import transition
 from src.application.schemas import parse_structured
 from src.config.schema_app import StrictModel
+from src.domain.patrol import fingerprint
 
 
 class _IntakeLlmOutput(StrictModel):
@@ -37,7 +38,10 @@ def _prompt(symptom: str, gbm: str, fct: str, locators: list[str]) -> str:
     locator_list = ", ".join(locators) if locators else "없음"
     return (
         f"[사이트 목록] {gbm}/{fct}\n"
-        f"[증상] {symptom}\n"
+        # 브리핑과 같은 이유로 접는다(`briefing.one_line`) — 이 프롬프트도 `[...]`
+        # 섹션 어휘를 쓰고, 증상·답변은 HTTP로도 들어온다. 개행 하나면 `[추가 답변]`을
+        # 위조해 대상 선택을 흔들 수 있다.
+        f"[증상] {one_line(symptom)}\n"
         f"[토폴로지 locator 목록] {locator_list}\n\n"
         "위 증상을 조사하기 위한 대상 target_locator를 locator 목록 중에서 고르거나, "
         "목록에 없으면 가장 근접한 값을 적어라. 확신이 없거나 추가로 필요한 정보가 "
@@ -76,7 +80,7 @@ _TURN_SOURCE = "intake:llm"
 def _turn_prompt(record, locators: list[str], answers: list[str]) -> str:
     prompt = _prompt(record.symptom, record.gbm, record.fct, locators)
     if answers:
-        prompt += "\n\n[추가 답변]\n" + "\n".join(f"- {a}" for a in answers)
+        prompt += "\n\n[추가 답변]\n" + "\n".join(f"- {one_line(a)}" for a in answers)
     return prompt
 
 

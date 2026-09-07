@@ -44,8 +44,11 @@ def upstream_slice(topology, start_locator, *, max_depth=3):
     return Topology(services=services, derivations=derivations)
 
 
-def _one_line(text):
-    """개행을 접는다 — 브리핑의 모든 줄이 이것을 지나야 한다.
+def one_line(text):
+    """개행을 접는다 — 프롬프트에 실리는 모든 가변 문자열이 이것을 지나야 한다.
+
+    이름에 밑줄이 없는 이유: 접수 프롬프트(`intake.py`)도 같은 `[...]` 섹션 어휘를
+    쓰므로 이 함수를 공유한다. 두 벌의 접기가 생기면 언젠가 한쪽만 고쳐진다.
 
     한 줄이 쪼개지면 그 조각이 다음 섹션 머리말처럼 보인다: 위조된 `[적용 룰]`이
     진짜보다 **먼저** 오고, 리드는 먼저 읽은 임계값을 정상 기준으로 삼는다. 가장 강한
@@ -88,7 +91,7 @@ def render_rules(checks, *, slice_, target_locator):
         params = ", ".join(f"{key}={value!r}" for key, value in sorted(check.params.items()))
         # 한 줄로 접는다 — 점검 이름이나 target에 개행이 있으면 [적용 룰] 블록에 가짜
         # 항목처럼 붙는다(params 값은 `!r`가 이미 이스케이프한다).
-        lines.append(_one_line(
+        lines.append(one_line(
             f"- {name}: judge={check.judge}, target={check.target}, {params}"))
     return "\n".join(lines)
 
@@ -113,14 +116,14 @@ def render_deployment(deployment, *, slice_):
     # 나가는 줄은 **전부** 접는다. repo·commit·서비스 이름 모두 검증 없는 str이라
     # 개행 하나가 이 블록 뒤에 가짜 `[유사 이력]` 항목을 만들 수 있고, 이 블록이
     # 브리핑의 마지막이라 주입된 내용이 프롬프트의 꼬리를 차지한다(검증 리뷰 F3).
-    lines = [_one_line(f"- {name}: {version.repo}@{version.commit}")
+    lines = [one_line(f"- {name}: {version.repo}@{version.commit}")
              for name, version in sorted(deployment.services.items())
              if name in slice_.services]
     # 빠진 서비스를 조용히 생략하면 "없음"과 구별이 안 된다. 무엇이 미검증인지 이름을
     # 대야 리드가 "이 서비스는 조사 범위인데 배포가 없다"로 오독하지 않는다(검증 리뷰 F5).
     missing = sorted(set(slice_.services) - set(deployment.services))
     if missing:
-        lines.append(_one_line(f"- {', '.join(missing)}: 배포 매핑에 없다 — 배포 버전 미검증"))
+        lines.append(one_line(f"- {', '.join(missing)}: 배포 매핑에 없다 — 배포 버전 미검증"))
     return "\n".join(lines)
 
 
@@ -144,16 +147,16 @@ def build_briefing(case, topo_slice, *, rules_text="", history_text="",
                    deployment_text=""):
     # 슬라이스의 각 derivation을 "출력 ← via ← inputs" 형식으로 표현
     chain_lines = [
-        _one_line(
+        one_line(
             f"- {output} ← via {deriv.via} ← inputs: "
             + ", ".join(ref.locator for ref in deriv.inputs)
             + (f" (key: {deriv.key})" if deriv.key != "fan-in" else " (fan-in)"))
         for output, deriv in topo_slice.derivations.items()]
-    services_line = _one_line(", ".join(sorted(topo_slice.services))) or "없음"
+    services_line = one_line(", ".join(sorted(topo_slice.services))) or "없음"
     return "\n".join([
-        _one_line(f"[케이스] {case.id} — {case.gbm}/{case.fct}, "
+        one_line(f"[케이스] {case.id} — {case.gbm}/{case.fct}, "
                   f"접수 경로: {case.origin}"),
-        f"[증상] {_one_line(case.symptom)}",
+        f"[증상] {one_line(case.symptom)}",
         f"[관심사] {case.concern} — {_CONCERN_HINT.get(case.concern, '')}",
         f"[T0] {case.t0.isoformat()}",
         "[토폴로지 슬라이스 — 파생 사슬(상류 방향)]",
