@@ -473,3 +473,22 @@ def test_메트릭은_이름별_최신순으로_읽히고_오래된_것만_걷�
     assert ledger.prune_metrics_before(T - timedelta(days=30)) == 1
     assert [r["value"] for r in ledger.metrics("investigation.duration_s")] == [9.0]
     assert ledger.metrics("other") != []            # 이름이 다른 것은 안 걷힌다
+
+
+# ---- 계획 15(P8): 이력 조회 표면(인메모리와 같은 계약) -----------------------------------
+def test_Mongo도_지문과_locator로_종결_케이스를_최신순으로_찾는다(db):
+    repo = MongoCaseRepository(db)
+    def _closed(cid, *, fp, locator, at):
+        repo.save(CaseRecord(id=cid, gbm="mx", fct="gumi", fingerprint=fp, symptom="s", t0=at,
+                             created_at=at, updated_at=at, status_since=at, status="closed",
+                             target_locator=locator, closed_reason="조사 완료"))
+    _closed("c-1", fp="fp-a", locator="rest:/oee", at=T - timedelta(days=2))
+    _closed("c-2", fp="fp-a", locator="rest:/oee", at=T)
+    repo.save(CaseRecord(id="c-3", gbm="mx", fct="gumi", fingerprint="fp-a", symptom="s", t0=T,
+                         created_at=T, updated_at=T, status="open", target_locator="rest:/oee"))
+    assert [r.id for r in repo.closed_by_fingerprint("fp-a", exclude_case_id="c-9")] == ["c-2", "c-1"]
+    assert [r.id for r in repo.closed_by_locators(["rest:/oee"], exclude_case_id="c-2")] == ["c-1"]
+    assert repo.closed_by_locators([], exclude_case_id="c-9") == []
+    from src.infrastructure.mongo_store import ensure_indexes
+    ensure_indexes(db)          # tier 2~4가 풀스캔이 되지 않게(계획 15)
+    assert "status_1_target_locator_1" in db.cases.index_information()

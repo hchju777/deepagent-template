@@ -22,7 +22,7 @@ from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
 from src.domain.case import Verdict
-from src.domain.cases import (CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
+from src.domain.cases import (_newest_first, CaseRecord, CaseRepositoryPort, OPEN_STATUSES,
                               lease_is_free, lease_is_held)
 from src.domain.events import EngineEvent, EventStorePort
 from src.domain.patrol import CheckOutcome
@@ -55,6 +55,7 @@ def ensure_indexes(db: Database) -> None:
     # cases 풀스캔이 된다. status를 앞에 둬서 열린 케이스 조회와 종결 케이스 이력 조회가
     # 같은 인덱스를 쓴다.
     db.cases.create_index([("status", 1), ("fingerprint", 1)])
+    db.cases.create_index([("status", 1), ("target_locator", 1)])   # 이력 tier 2~4(계획 15)
     db.evidence.create_index([("case_id", 1), ("id", 1)], unique=True)
     db.verdicts.create_index("case_id", unique=True)
     db.case_files.create_index("case_id", unique=True)
@@ -330,6 +331,18 @@ class MongoCaseRepository(CaseRepositoryPort):
         doc = self._db.cases.find_one(
             {"fingerprint": fp, "status": {"$in": list(OPEN_STATUSES)}})
         return self._to_record(doc) if doc else None
+
+    def closed_by_fingerprint(self, fp, *, exclude_case_id, limit=10) -> list[CaseRecord]:
+        docs = self._db.cases.find({"status": "closed", "fingerprint": fp,
+                                    "id": {"$ne": exclude_case_id}})
+        return _newest_first([self._to_record(d) for d in docs], limit)
+
+    def closed_by_locators(self, locators, *, exclude_case_id, limit=20) -> list[CaseRecord]:
+        if not locators:                # 빈 $in도 0건이지만, 의도를 코드로 못박는다
+            return []
+        docs = self._db.cases.find({"status": "closed", "target_locator": {"$in": list(locators)},
+                                    "id": {"$ne": exclude_case_id}})
+        return _newest_first([self._to_record(d) for d in docs], limit)
 
     def list_by_status(self, status) -> list[CaseRecord]:
         return [self._to_record(d) for d in self._db.cases.find({"status": status})]

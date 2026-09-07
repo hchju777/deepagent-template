@@ -121,6 +121,18 @@ class CaseRepositoryPort(ABC):
         pass
 
     @abstractmethod
+    def closed_by_fingerprint(self, fp: str, *, exclude_case_id: str,
+                              limit: int = 10) -> list[CaseRecord]:
+        """같은 지문의 종결 케이스를 최신순으로(이력 tier 1, 계획 15)."""
+        pass
+
+    @abstractmethod
+    def closed_by_locators(self, locators: list[str], *, exclude_case_id: str,
+                           limit: int = 20) -> list[CaseRecord]:
+        """target_locator가 목록에 있는 종결 케이스를 최신순으로(tier 2~4). 빈 목록 → 빈 결과."""
+        pass
+
+    @abstractmethod
     def list_by_status(self, status: CaseStatus) -> list[CaseRecord]:
         """상태별 케이스 목록."""
         pass
@@ -170,6 +182,13 @@ class CaseRepositoryPort(ABC):
         동작으로 수행해야 한다 — 순수 함수 acquire_lease로는 표현할 수 없다.
         """
         pass
+
+
+def _newest_first(records: list[CaseRecord], limit: int) -> list[CaseRecord]:
+    """종결 시각(status_since, 없으면 updated_at) 내림차순으로 limit건."""
+    if limit <= 0:
+        return []
+    return sorted(records, key=lambda r: r.status_since or r.updated_at, reverse=True)[:limit]
 
 
 class InMemoryCaseRepository(CaseRepositoryPort):
@@ -242,6 +261,21 @@ class InMemoryCaseRepository(CaseRepositoryPort):
             if record.fingerprint == fp and record.status in OPEN_STATUSES:
                 return record
         return None
+
+    def closed_by_fingerprint(self, fp, *, exclude_case_id, limit=10):
+        return _newest_first([r for r in self._cases.values()
+                              if r.status == "closed" and r.fingerprint == fp
+                              and r.id != exclude_case_id], limit)
+
+    def closed_by_locators(self, locators, *, exclude_case_id, limit=20):
+        # 빈 목록은 빈 결과다 — "필터 없음"으로 읽어 전체를 긁으면 이력이 아무 케이스나
+        # 물어온다(전부-또는-전무와 같은 성질의 함정).
+        if not locators:
+            return []
+        wanted = set(locators)
+        return _newest_first([r for r in self._cases.values()
+                              if r.status == "closed" and r.target_locator in wanted
+                              and r.id != exclude_case_id], limit)
 
     def list_by_status(self, status: CaseStatus) -> list[CaseRecord]:
         """상태별 케이스 목록."""
