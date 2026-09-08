@@ -61,7 +61,7 @@ def test_앞_계층이_없어도_null_마커는_삭제로_동작한다(tmp_path)
 def test_app_json의_env_참조는_env가_주어지면_치환된다(tmp_path):
     _write(tmp_path, "config/app.json",
            {"store": {"backend": "mongo", "mongo_url": "${AGENT_MONGO_URL}"},
-            "llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}})
+            "llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}})
     cfg = load_app_config(tmp_path / "config", env={"AGENT_MONGO_URL": "mongodb://x/y"})
     assert cfg.store.mongo_url == "mongodb://x/y"
 
@@ -71,9 +71,10 @@ def test_app_json의_env_미주입시엔_치환을_건너뛴다(tmp_path):
     # 문자열 타입 검증은 통과하므로 여기서는 실패하지 않는다(호출부가 env를
     # 반드시 넘기도록 고치는 게 C1의 실제 방어선이다).
     _write(tmp_path, "config/app.json",
-           {"llm": {"profiles": {"judge": "${MISSING}", "subagent": "b", "lead": "c"}}})
+           {"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p",
+                                "client_key": "c", "model_id": "${MISSING}"}}})
     cfg = load_app_config(tmp_path / "config")
-    assert cfg.llm.profiles.judge == "${MISSING}"
+    assert cfg.llm.gateway.model_id == "${MISSING}"
 
 
 def test_깨진_JSON은_트레이스백이_아니라_ConfigError다(tmp_path):

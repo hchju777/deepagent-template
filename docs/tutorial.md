@@ -60,9 +60,9 @@ python -m src patrol run --for-seconds 5 --stub-seeds stub-seeds.example.json \
 그대로 보인다. 실제 데이터를 넣어 보려면 `stub-seeds.example.json`의 `"mx/gumi"` 아래
 `mongo_collections`에 `twin_state`를 추가하면 된다.
 
-다만 **조사는 첫 LLM 호출에서 멈춘다**: `.env.example`의 `LLM_BASE_URL`이
-실재하지 않는 예시 호스트라 연결 자체가 안 된다(키가 틀린 게 아니라 검증까지
-가지도 못한다). 보고서는 그 사실을 caveat(`LLM 호출 실패 —
+다만 **조사는 첫 LLM 호출에서 멈춘다**: `.env.example`의 `GAUSS_LLM_*`가
+`change-me` 자리표시자라 사내망 밖에서는 연결 자체가 안 된다(키가 틀린 게
+아니라 검증까지 가지도 못한다). 보고서는 그 사실을 caveat(`LLM 호출 실패 —
 OpenAIConnectionError`)과 조사 단계 체크리스트로 그대로 적는다 — 가설 수립과
 판정이 ❌, 도달하지 못한 네 단계가 ⬜다. 실제 시스템에 붙이는 방법은
 [docs/going-live.md](going-live.md)를 보라.

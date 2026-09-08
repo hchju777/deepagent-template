@@ -1,6 +1,11 @@
 {
   "llm": {
-    "profiles": { "judge": "gpt-4o-mini", "subagent": "gpt-4o-mini", "lead": "gpt-4o" }
+    "gateway": {
+      "base_url": "${GAUSS_LLM_BASE_URL}",
+      "pass_key": "${GAUSS_LLM_PASS_KEY}",
+      "client_key": "${GAUSS_LLM_CLIENT_KEY}",
+      "model_id": "${GAUSS_LLM_MODEL_ID}"
+    }
   },
   "store": { "backend": "memory" },
   "report": { "output_dir": "output" }

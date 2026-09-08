@@ -56,9 +56,12 @@
 | `investigations.lease_ttl_s` | float | 900 | 케이스 임차(lease) 유효 시간(초). 조사 한 라운드보다 충분히 길어야 함 |
 | `investigations.max_wall_clock_s` | float | 1800 | 조사 한 건의 벽시계 상한(초). keepalive가 lease를 무한 갱신하므로 이 상한이 없으면 멈춘 LLM 호출이 슬롯을 영구 점유한다 |
 | `investigations.requeue_interval_s` | float | 30 | 열린 케이스 재스캔 간격(초). 다른 프로세스가 연 케이스를 데몬이 보게 한다 |
-| `llm.profiles.judge` | str | **필수** | rule+llm/llm 판정에 쓰는 모델 이름 |
-| `llm.profiles.subagent` | str | **필수** | 서브에이전트(data_prober 등)가 쓰는 모델 이름 |
-| `llm.profiles.lead` | str | **필수** | frame/integrate/conclude(리드)가 쓰는 모델 이름 |
+| `llm.gateway.base_url` | str | **필수** | 사내 LLM 게이트웨이(FabriX)의 OpenAI 호환 엔드포인트. 보통 `${GAUSS_LLM_BASE_URL}` 참조 |
+| `llm.gateway.pass_key` | SecretStr | **필수** | `X-FABRIX-CLIENT` 헤더로 나가는 키. 보통 `${GAUSS_LLM_PASS_KEY}` 참조 |
+| `llm.gateway.client_key` | SecretStr | **필수** | `X-OPENAPI-TOKEN` 헤더로 나가는 키. 보통 `${GAUSS_LLM_CLIENT_KEY}` 참조 |
+| `llm.gateway.model_id` | str | **필수** | 모델 식별자. `X-LLM-MODEL-ID` 헤더와 요청 body의 `model` 양쪽에 실린다. **모델은 하나**이고 judge/subagent/lead가 전부 이걸 쓴다 |
+| `llm.gateway.ca_bundle` | str \| null | null | 사내 루트 CA의 PEM 경로. 주면 이 커넥션이 그 번들로 검증한다 |
+| `llm.gateway.tls_verify` | bool | `true` | 끄면 게이트웨이 인증서를 검증하지 않는다. **`ca_bundle`과 함께 쓸 수 없다**(어느 쪽이 의도인지 읽는 사람이 알 수 없으므로 스키마가 거부). 끈 채로 뜨면 기동 시 stderr에 경고 한 줄 |
 | `patrol.llm_budget.max_calls_per_hour` | int | 30 | 순찰이 시간당 쓸 수 있는 LLM 호출 상한(llm/rule+llm 판정용) |
 | `patrol.self_check_errors` | int | 3 | 같은 점검이 연속 이 횟수 이상 error를 내면 자기 감시가 이상으로 인지 |
 | `store.backend` | `"memory"` \| `"mongo"` | `"memory"` | 케이스/레저/체크포인트 영속화 백엔드. `memory`는 프로세스 종료 시 전부 사라짐 |
@@ -83,12 +86,12 @@
 | `report.mail.use_tls` | bool | `false` | TLS 사용 여부 |
 | `timezone` | str | `"Asia/Seoul"` | 보고서·스케줄 표시, **그리고 `clock` 해석기의 날짜 경계**를 정하는 IANA 타임존. `today`가 어느 날인지가 이 값으로 갈린다 — 해석 실패면 기동을 거부한다 |
 
-**기동 검증이 추가로 강제하는 것**(§4.6, `src/boot.py`): 활성 사이트 중
-`judge`가 `"llm"`/`"rule+llm"`인 점검이 하나라도 있으면 `llm.profiles.judge`가
-비어 있으면 안 되고(검사 19), 활성 사이트가 있고 `llm.profiles`(judge/
-subagent/lead 중 하나라도)가 값을 갖고 있으면 env `LLM_API_KEY`가 반드시
-있어야 한다(검사 20) — `LlmProfiles`의 세 필드가 전부 필수라 사실상 항상
-해당된다.
+**LLM 설정에 별도 기동 검사가 없는 이유**: `llm.gateway`가 필수 절이라 절이
+없거나 `model_id`가 비면 스키마가, `${GAUSS_LLM_*}` 참조가 비면
+`resolve_env_refs`가 **app.json 로딩 단계에서** 이미 거부한다(대상 시스템의
+Mongo/Redis URL과 같은 경로다). 같은 규칙을 `boot.py`에 또 적으면 두 곳으로
+갈라진다. 예외가 하나뿐이라 검사로 남았다: `ca_bundle`은 문자열 타입은 맞고
+파일만 없을 수 있어 로딩이 못 잡는다(검사 19).
 
 ### `access` — 요청 주체별 사이트 허용
 
@@ -254,8 +257,10 @@ services:
 | 키 | 용도 |
 |---|---|
 | `AGENT_MONGO_URL` | 에이전트 자신의 저장소(`store.backend="mongo"`일 때) |
-| `LLM_BASE_URL` | OpenAI 호환 LLM 게이트웨이 |
-| `LLM_API_KEY` | 위 게이트웨이 인증키 — `llm.profiles`를 쓰는 활성 사이트가 있으면 기동 검증이 필수로 요구 |
+| `GAUSS_LLM_BASE_URL` | 사내 LLM 게이트웨이(FabriX)의 OpenAI 호환 엔드포인트 |
+| `GAUSS_LLM_PASS_KEY` | `X-FABRIX-CLIENT` 헤더 값 |
+| `GAUSS_LLM_CLIENT_KEY` | `X-OPENAPI-TOKEN` 헤더 값 |
+| `GAUSS_LLM_MODEL_ID` | `X-LLM-MODEL-ID` 헤더 값이자 요청 body의 `model` |
 | `{GBM}_{FCT}_REDIS_URL` / `_REDIS_PASSWORD` | 사이트별 Redis. 인증 없으면 URL만 |
 | `{GBM}_{FCT}_MONGO_URL` / `_MONGO_USER` / `_MONGO_PASSWORD` | 사이트별 Mongo. 읽기 전용 계정 권장 |
 | `{GBM}_{FCT}_KAFKA_BOOTSTRAP` | 사이트별 Kafka |
@@ -288,10 +293,9 @@ services:
 16. `access.allow`의 사이트 키가 registry에 실재하는가 — 오타(`mx/gumii`)면 그 주체가 영원히 아무것도 못 보는데 아무도 모른다. `mx/*`는 사업부 실재만 본다
 17. 지금 대상이 내놓는 명세가 pin과 같은가 — `--live` 지정 시에만, pin이 있는 사이트만. 우리 등재 항목에 영향을 주는 차이만 보고한다. **명세를 못 받는 것(연결 실패·4xx·비JSON 응답)도 기동을 막는다** — `--live`를 켠 사람은 "지금 실제와 맞는가"를 묻고 있고, 못 물어본 것을 조용히 통과시키면 확인 안 한 것이 "이상 없음"으로 둔갑한다. 검사 14(Mongo 롤)가 같은 형태다
 18. 각 점검의 프로브가 레지스트리에서 해석 가능한가
-19. llm/rule+llm 판정 점검이 있으면 `llm.profiles.judge` 필수
-20. `llm.profiles`를 쓰는 활성 사이트가 있으면 env `LLM_API_KEY` 필수
-21. `mongo_find` 점검의 `params.filter`가 dict이고 연산자가 허용 목록 안인가, `params.sort`가 `[[필드, 1|-1]]` 모양인가, 정적 필터와 `resolve`의 키가 겹치지 않는가, 그리고 **필터도 해석기도 없는 전량 스캔이 아닌가**(의도한 전체 조회는 `resolve`의 `unfiltered`로 명시한다)
-22. `config/scenarios/*.json`의 지표: `probe`가 레지스트리에 있는가, `target`이 scope의 **모든** 사이트에서 해석되는가, `mongo_find` 지표에 21번과 같은 검사가 도는가, 해석기가 점검과 **같은 검증**(스키마 키·모양, 가리키는 등재 항목의 실재와 GET, 쓰는 어댑터의 설정 여부, `from: mongo` 필터의 허용 목록)을 받는가. 스키마에서 걸린 시나리오 파일이 있어도 나머지 파일의 의미 검증은 계속 돈다
+19. `llm.gateway.ca_bundle`이 지정됐으면 그 경로가 실재하고 PEM으로 읽히는가 — 오타를 런타임까지 미루면 밤에 첫 조사가 TLS로 죽는다. LLM 설정의 나머지(필수 키·env 참조)는 app.json 로딩이 더 앞에서 거부하므로 여기 검사가 없다
+20. `mongo_find` 점검의 `params.filter`가 dict이고 연산자가 허용 목록 안인가, `params.sort`가 `[[필드, 1|-1]]` 모양인가, 정적 필터와 `resolve`의 키가 겹치지 않는가, 그리고 **필터도 해석기도 없는 전량 스캔이 아닌가**(의도한 전체 조회는 `resolve`의 `unfiltered`로 명시한다)
+21. `config/scenarios/*.json`의 지표: `probe`가 레지스트리에 있는가, `target`이 scope의 **모든** 사이트에서 해석되는가, `mongo_find` 지표에 20번과 같은 검사가 도는가, 해석기가 점검과 **같은 검증**(스키마 키·모양, 가리키는 등재 항목의 실재와 GET, 쓰는 어댑터의 설정 여부, `from: mongo` 필터의 허용 목록)을 받는가. 스키마에서 걸린 시나리오 파일이 있어도 나머지 파일의 의미 검증은 계속 돈다
 
 검사 14·17만 `--live`(실제 접속) 필요, 나머지는 전부 정적 — "죽은 사이트가 기동을
 막으면 역효과"라는 원칙과 양립하기 위해 기본은 정적 검사만 돈다.

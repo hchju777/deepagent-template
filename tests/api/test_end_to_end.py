@@ -43,7 +43,7 @@ def _intake_llm(*replies):
 
 def test_api와_워커가_같은_저장소로_전_구간을_완주한다(tmp_path):
     app = AppConfig.model_validate({
-        "llm": {"profiles": {"judge": "j", "subagent": "s", "lead": "l"}},
+        "llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}},
         "report": {"output_dir": str(tmp_path)}})
     repo, store, events, ledger = (InMemoryCaseRepository(), InMemoryCaseStore(),
                                    InMemoryEventStore(), InMemoryLedger())
@@ -115,7 +115,7 @@ def test_api와_워커가_같은_저장소로_전_구간을_완주한다(tmp_pat
 def test_워커가_가져간_뒤_새_파킹_전의_창은_닫혀_있다():
     # take 직후(아직 awaiting_human, pending 없음)에 오는 둘째 답이 accepted되면 그래프가
     # 다음 질문으로 파킹했을 때 옛 질문의 답이 새 질문에 소비된다. seq 쌍이 막는다.
-    app = AppConfig.model_validate({"llm": {"profiles": {"judge": "j", "subagent": "s", "lead": "l"}}})
+    app = AppConfig.model_validate({"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}})
     repo, store = InMemoryCaseRepository(), InMemoryCaseStore()
     rt = ApiRuntime(app=app, sites=[ApiSite(gbm="mx", fct="gumi", topology=TOPO,
                                             lead_llm=_intake_llm(RESOLVED))],

@@ -14,7 +14,7 @@ from pydantic import SecretStr
 from src.api.app import create_app
 from src.api.assembly import ApiRuntime, ApiSite
 from src.application.events import case_status_event
-from src.config.schema_app import AccessPolicy, AppConfig, LlmConfig, LlmProfiles, ReportConfig
+from src.config.schema_app import AccessPolicy, AppConfig, LlmConfig, LlmGateway, ReportConfig
 from src.domain.case import CauseLink, Verdict
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
@@ -40,7 +40,7 @@ def _record(cid, gbm="mx", fct="gumi", **kw):
 
 
 def _runtime(tmp_path, *, access=None):
-    app = AppConfig(llm=LlmConfig(profiles=LlmProfiles(judge="j", subagent="s", lead="l")),
+    app = AppConfig(llm=LlmConfig(gateway=LlmGateway(base_url="https://llm.test/v1", pass_key="p", client_key="c", model_id="m")),
                     access=access or AccessPolicy(),
                     report=ReportConfig(output_dir=str(tmp_path / "out")))
     sites = [ApiSite(gbm="mx", fct="gumi", topology=TOPO, lead_llm=SimpleNamespace(),

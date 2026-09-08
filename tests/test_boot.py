@@ -4,7 +4,7 @@ from src.infrastructure.factory import StubSeeds
 from src.boot import validate_boot
 
 # LLM_API_KEY: 검사 11(계획 4b, I8) — enabled 사이트+llm 프로파일이 있으면 필수.
-ENV = {"MX_REDIS_URL": "redis://g:6379", "LLM_API_KEY": "test-llm-key"}
+ENV = {"MX_REDIS_URL": "redis://g:6379"}
 
 
 def _write(tmp_path, rel, text):
@@ -15,7 +15,7 @@ def _write(tmp_path, rel, text):
 
 def _tree(tmp_path, *, check_target="rest:/oee", repo_name="twin-services"):
     _write(tmp_path, "config/app.json", json.dumps(
-        {"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}))
+        {"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}}))
     _write(tmp_path, "config/registry.json", json.dumps(
         {"sites": [{"gbm": "mx", "fct": "gumi"},
                    {"gbm": "mx", "fct": "off", "enabled": False}]}))
@@ -146,32 +146,46 @@ def test_check_live에서_mongo_role_problems가_가짜_connection_status로_검
     assert any("dbOwner" in e.problem for e in errors)
 
 
-def test_enabled_사이트가_있는데_LLM_API_KEY가_없으면_기동_거부(tmp_path):
-    _tree(tmp_path)
-    env_without_key = {k: v for k, v in ENV.items() if k != "LLM_API_KEY"}
-    errors = validate_boot(tmp_path / "config", env=env_without_key, repo_root=tmp_path)
-    assert any("LLM_API_KEY" in e.problem for e in errors)
-
-
 def test_app_json의_env_참조가_미치환이면_기동_거부(tmp_path):
     _tree(tmp_path)
     _write(tmp_path, "config/app.json", json.dumps(
         {"store": {"backend": "mongo", "mongo_url": "${AGENT_MONGO_URL}"},
-         "llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}))
+         "llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}}))
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
     assert any("AGENT_MONGO_URL" in e.problem for e in errors)
 
 
-def test_llm_판정기가_있는데_judge_프로파일이_비면_기동_거부(tmp_path):
+def test_llm_게이트웨이_절이_없으면_기동_거부(tmp_path):
+    # 계획 4b의 "judge 프로파일이 비었나" 검사를 대신하는 계약이다. boot.py에
+    # 전용 검사가 없어도 막혀야 한다 — llm.gateway가 AppConfig의 필수 절이라
+    # app.json 로딩 단계에서 거부된다.
     _tree(tmp_path)
     app = tmp_path / "config" / "app.json"
-    app.write_text(json.dumps({"llm": {"profiles": {"judge": "", "subagent": "b", "lead": "c"}}}), encoding="utf-8")
-    gbm = tmp_path / "config" / "gbm" / "mx.json"
-    data = json.loads(gbm.read_text(encoding="utf-8"))
-    data["patrol"]["checks"]["c1"]["judge"] = "llm"
-    gbm.write_text(json.dumps(data), encoding="utf-8")
+    app.write_text(json.dumps({"store": {"backend": "memory"}}), encoding="utf-8")
     errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
-    assert any("judge" in e.problem for e in errors)
+    assert any("llm" in e.problem for e in errors)
+
+
+def test_게이트웨이_model_id가_비면_기동_거부(tmp_path):
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    app.write_text(json.dumps({"llm": {"gateway": {
+        "base_url": "https://llm.test/v1", "pass_key": "p",
+        "client_key": "c", "model_id": "  "}}}), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("model_id" in e.problem for e in errors)
+
+
+def test_게이트웨이_env_참조가_비면_키_이름이_찍힌다(tmp_path):
+    # 사내에서 제일 흔한 사고: .env에 키를 안 넣고 띄운다. 첫 조사에서 401이
+    # 나는 게 아니라 기동이 거부되고 어느 키가 빈지 이름이 나와야 한다.
+    _tree(tmp_path)
+    app = tmp_path / "config" / "app.json"
+    app.write_text(json.dumps({"llm": {"gateway": {
+        "base_url": "https://llm.test/v1", "pass_key": "${GAUSS_LLM_PASS_KEY}",
+        "client_key": "c", "model_id": "m"}}}), encoding="utf-8")
+    errors = validate_boot(tmp_path / "config", env=ENV, repo_root=tmp_path)
+    assert any("GAUSS_LLM_PASS_KEY" in e.problem for e in errors)
 
 
 def test_등재_항목_target은_토폴로지가_아니라_entries로_해석된다(tmp_path):
@@ -307,7 +321,7 @@ def test_알_수_없는_시간대는_기동을_거부한다(tmp_path):
     # 죽는데 기동은 통과하던 상태였다.
     _tree(tmp_path)
     _write(tmp_path, "config/app.json", json.dumps(
-        {"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}},
+        {"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}},
          "timezone": "Asia/서울"}))
     errors = validate_boot(tmp_path / "config", env=dict(ENV), repo_root=tmp_path)
     assert any("timezone" in e.problem for e in errors)

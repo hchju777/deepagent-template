@@ -10,15 +10,10 @@ deployment hash 실재는 정적 — repo_root의 로컬 체크아웃만 본다.
 live 접속이 필요한 둘(Mongo readonly 롤 · pinned 명세 드리프트)은
 check_live=True일 때만 돈다("죽은 사이트가 기동을 막으면 역효과" 원칙은
 opt-in으로 지켜지고, 켠 뒤에는 확인하지 못한 것도 막는다).
-judge LLM 프로파일(계획 4b): enabled 사이트 어딘가에 judge="llm"/"rule+llm" 점검이
-있으면 app config의 llm.profiles.judge가 비어 있으면 안 된다 — 판정을
-LLM에 맡기는 점검이 있는데 그 LLM 프로파일이 빈 문자열이면 매 회차
-"LLM 미주입" error로만 채워질 뿐이니 기동 시점에 막는다. app config
-자체가 app.json 파싱에서 이미 실패했으면(app_config is None) 이 검사는 건너뛴다.
-LLM_API_KEY(계획 4b): enabled 사이트가 하나라도 있고 llm.profiles(judge/subagent/lead)
-중 하나라도 값이 있으면 env LLM_API_KEY가 있어야 한다 — assemble_sites가
-사이트마다 lead/subagent LLM을 조건 없이 만들기 때문에, 키가 없으면 조립이
-조용히 깨지거나 실LLM 호출 시점에야 뒤늦게 실패한다.
+LLM(사내 게이트웨이): 여기에 전용 검사가 없다. llm.gateway가 app config의 필수
+절이라 model_id가 비면 스키마가, ${GAUSS_LLM_*} 참조가 비면 resolve_env_refs가
+app.json 로딩 단계에서 이미 거부한다 — 대상 시스템의 Mongo/Redis URL과 같은
+경로다. 검사를 여기 또 적으면 같은 규칙이 두 곳으로 갈라진다.
 """
 import asyncio
 from zoneinfo import ZoneInfo
@@ -29,6 +24,7 @@ from pathlib import Path
 from src.config.loader import (ConfigError, collect_scenarios, load_app_config,
                                load_registry, load_site_config)
 from src.infrastructure.code_repo import CodeRepoError, CodeRepoReader
+from src.infrastructure.llm import ca_bundle_problems
 from src.infrastructure.query_rules import (entry_call_problems, entry_schema, filter_problems,
                                             mongo_role_problems)
 from src.patrol.daemon import seeds_problems
@@ -151,8 +147,6 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         except Exception:                                          # noqa: BLE001
             errors.append(BootError("app", f"timezone {app_config.timezone!r}을 해석할 수 없다"))
 
-    needs_judge_llm = False
-
     try:
         registry = load_registry(config_root)
     except ConfigError as exc:
@@ -236,8 +230,6 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
                 has_mongo=cfg.target.mongo is not None,
                 has_redis=cfg.target.redis is not None,
                 has_rest=cfg.target.rest is not None)]
-            if check.judge in ("llm", "rule+llm"):
-                needs_judge_llm = True
 
         # 각 점검의 프로브가 레지스트리에서 해석되는가 (§4.6-9)
         for name, check in cfg.patrol.checks.items():
@@ -335,17 +327,16 @@ def validate_boot(config_root: Path, *, env, repo_root: Path,
         errors += [BootError("stub-seeds", p) for p in
                    seeds_problems(stub_seeds, adapters_by_site)]
 
-    # llm/rule+llm 판정 점검이 하나라도 있으면 judge LLM 프로파일 필수 (계획 4b)
-    if app_config is not None and needs_judge_llm and not app_config.llm.profiles.judge:
-        errors.append(BootError("app", "judge LLM 프로파일 필요 — llm/rule+llm 점검이 있다"))
+    # CA 번들 경로는 config 로딩이 못 잡는다 — 문자열 타입은 맞고 파일만 없다.
+    # 오타를 런타임까지 미루면 밤에 첫 조사가 TLS로 죽는다.
+    if app_config is not None:
+        errors += [BootError("app", p) for p in ca_bundle_problems(app_config.llm.gateway)]
 
-    # enabled 사이트가 있고 llm.profiles 중 하나라도 쓰이면 LLM_API_KEY 필수 (계획 4b)
-    has_enabled_site = any(site.enabled for site in registry.sites)
-    if app_config is not None and has_enabled_site:
-        profiles = app_config.llm.profiles
-        profiles_used = bool(profiles.judge or profiles.subagent or profiles.lead)
-        if profiles_used and not env.get("LLM_API_KEY"):
-            errors.append(BootError("app", "LLM_API_KEY 필요 — llm 프로파일을 쓰는 활성 사이트가 있다"))
+    # 계획 4b의 검사 둘(judge 프로파일 비었나 / LLM_API_KEY 있나)은 여기 없다.
+    # llm.gateway가 AppConfig의 필수 필드가 되면서 load_app_config가 더 앞에서
+    # 같은 것을 막기 때문이다: model_id가 비면 스키마가 거부하고, ${GAUSS_LLM_*}
+    # 참조가 비면 resolve_env_refs가 키 이름을 나열해 ConfigError를 던진다.
+    # 여기 다시 적으면 같은 규칙이 두 곳에 갈라져 산다.
 
     errors += _scenario_errors(config_root, env, site_targets, entry_specs)
     return errors

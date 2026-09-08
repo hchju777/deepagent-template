@@ -16,7 +16,7 @@ from typing import Any, Callable
 from src.config.loader import load_app_config, load_registry, load_site_config
 from src.config.schema_app import AppConfig
 from src.infrastructure.checkpointer import build_persistence
-from src.infrastructure.llm import build_chat_model
+from src.infrastructure.llm import build_llm_factory
 from src.knowledge.topology import Topology, load_topology
 
 
@@ -57,11 +57,7 @@ def assemble_api(config_root: Path, repo_root: Path, env: dict, *, clock: Callab
     app = load_app_config(config_root, env=env)
     registry = load_registry(config_root)
 
-    def make_llm(profile: str) -> Any:
-        if llm_factory is not None:
-            return llm_factory(profile)
-        return build_chat_model(profile, base_url=env.get("LLM_BASE_URL"),
-                                api_key=env.get("LLM_API_KEY"))
+    make_llm = llm_factory if llm_factory is not None else build_llm_factory(app.llm.gateway)
 
     sites: list[ApiSite] = []
     for ref in registry.sites:
@@ -71,7 +67,7 @@ def assemble_api(config_root: Path, repo_root: Path, env: dict, *, clock: Callab
         knowledge_root = repo_root / site_cfg.knowledge.root
         sites.append(ApiSite(gbm=ref.gbm, fct=ref.fct,
                              topology=load_topology(knowledge_root, ref.gbm, ref.fct),
-                             lead_llm=make_llm(app.llm.profiles.lead),
+                             lead_llm=make_llm("lead"),
                              check_names=sorted(site_cfg.patrol.checks)))
 
     p = build_persistence(app.store)

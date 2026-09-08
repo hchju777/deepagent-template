@@ -81,14 +81,14 @@ cp .env.example .env
 ```
 
 `.env.example`은 예시 트리(`config.example`/`knowledge.example`)가 그대로
-참조할 수 있는 값들로 이미 채워져 있어(가짜 호스트명·`LLM_API_KEY=sk-example`
+참조할 수 있는 값들로 이미 채워져 있어(가짜 호스트명·`GAUSS_LLM_*=change-me`
 등) 별도로 편집하지 않아도 아래 명령들이 바로 통과한다. 참고로
-`app.json`이 `llm.profiles`(judge/subagent/lead)를 지정하고 있으면, 실제로
-LLM을 호출하는 점검이 하나도 없어도 **기동 검증이 `LLM_API_KEY` 존재 자체를
-요구한다**([기동 검증 항목](docs/config-reference.md#기동-검증-항목-srcbootpy) —
-"키가 없으면 나중에 조용히 깨지느니 기동 시점에 막는다"는 철학). 예시 사이트(`config.example/gbm/mx.json`)의 점검은
-`judge: "rule"`이라 실제로 LLM을 부르지는 않는다. 자신의 사이트를 채울 때는
-이 값들을 실제 접속 정보로 바꾸면 된다.
+`app.json`의 `llm.gateway`는 **필수 절**이라, 실제로 LLM을 호출하는 점검이
+하나도 없어도 네 키가 다 있어야 기동이 통과한다("키가 없으면 나중에 조용히
+깨지느니 기동 시점에 막는다"는 철학 — 비면 어느 키가 빈지 이름이 찍힌다).
+예시 사이트(`config.example/gbm/mx.json`)의 점검은 `judge: "rule"`이라 실제로
+LLM을 부르지는 않는다. 자신의 사이트를 채울 때는 이 값들을 실제 접속 정보로
+바꾸면 된다.
 
 ```bash
 # 사이트 목록
@@ -96,6 +96,9 @@ python -m src registry --config-root config.example --repo-root .
 
 # 기동 검증 단독 실행 — config·토폴로지·룰 타깃 정합성을 전부 확인
 python -m src knowledge validate --config-root config.example --repo-root .
+
+# 사내 LLM 게이트웨이에 실제로 한 번 물어본다 — 사내망에서만 통과한다
+python -m src llm check --config-root config.example --repo-root .
 
 # 병합된 사이트 config와 값의 출처(어느 계층에서 왔는지) 확인
 python -m src config show --gbm mx --fct gumi --config-root config.example --repo-root .
@@ -128,8 +131,8 @@ python -m src api --port 8080 --config-root config.example --repo-root .
 **가짜 응답이 config가 아니라 플래그인 이유**: 실제 대상에 붙일 때는 플래그를
 빼면 되고, **빼는 것을 잊을 수 없다.** config에 남는 설정이면 "실전환 전에 지워라"를
 체크리스트에 적어야 하고, 그건 사람의 기억에 기대는 안전이다.
-`.env.example`의 `LLM_BASE_URL`은 실재하지 않는 예시 호스트라 조사는 첫 LLM
-호출에서 멈추고(키가 틀린 게 아니라 연결이 안 된다), 보고서는 그 사실을
+`.env.example`의 `GAUSS_LLM_*`는 `change-me` 자리표시자라 사내망 밖에서는 조사가
+첫 LLM 호출에서 멈추고(키가 틀린 게 아니라 연결이 안 된다), 보고서는 그 사실을
 caveat(`LLM 호출 실패 — OpenAIConnectionError`)과 조사 단계 체크리스트로
 **그대로 적는다** — 가설 수립과 판정이 ❌, 도달하지 못한 네 단계가 ⬜다.
 조용히 성공한 척하지 않는 것이 이 시스템의 기본 동작이다. 실제 게이트웨이를

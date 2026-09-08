@@ -18,7 +18,7 @@
 6종(`range`/`exists`/`freshness`/`max`/`all_zero`/`expected_state`)이면 그걸로
 끝이지만, 판정을 LLM에게
 맡기고 싶으면(`judge: "llm"` 또는 `"rule+llm"`) `app.json`의
-`llm.profiles.judge`가 채워져 있어야 기동을 통과한다. → [tutorial.md](tutorial.md),
+`llm.gateway`가 채워져 있어야 하는데, 그 절은 항상 필수라 따로 할 일은 없다. → [tutorial.md](tutorial.md),
 [config-reference.md의 "rule 판정 6종"](config-reference.md#사이트-config-siteconfig-srcconfigschema_sitepy)
 
 ## rule이 아니라 LLM이 판정하게 하고 싶다

@@ -213,11 +213,11 @@ finding→`CaseRecord`→`Case`를 타고 흘러 **메일 수신자**·브리핑
 
 ## 조사 엔진
 
-**리드(lead)** — frame/integrate/conclude 노드가 부르는 LLM(`llm.profiles.lead`).
+**리드(lead)** — frame/integrate/conclude 노드가 부르는 LLM(`build_llm_factory("lead")`).
 가설·계획·다음 결정(continue/ask/conclude)·최종 판정을 만든다.
 
 **서브에이전트(subagent)** — `data_prober`/`code_tracer`/`recompute_verifier`
-3종. `llm.profiles.subagent`를 쓰는 유계 ReAct 루프(`create_agent` 기반).
+3종. `build_llm_factory("subagent")`를 쓰는 유계 ReAct 루프(`create_agent` 기반).
 → [architecture.md §4](architecture.md#4-서브에이전트-3종)
 
 **라운드(round)** — frame 이후 select→execute→integrate 한 바퀴.

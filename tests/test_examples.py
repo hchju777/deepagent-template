@@ -67,7 +67,9 @@ def test_예시_트리는_기동_검증을_통과한다():
     """
     from src.boot import validate_boot
 
-    env = {"LLM_API_KEY": "k", "MX_GUMI_API_BASE": "http://target",
+    env = {"GAUSS_LLM_BASE_URL": "https://llm.test/v1", "GAUSS_LLM_PASS_KEY": "p",
+           "GAUSS_LLM_CLIENT_KEY": "c", "GAUSS_LLM_MODEL_ID": "m",
+           "MX_GUMI_API_BASE": "http://target",
            "MX_GUMI_MONGO_URL": "mongodb://x:27017", "MX_GUMI_REDIS_URL": "redis://x"}
     errors = validate_boot(ROOT / "config.example", env=env, repo_root=ROOT)
     assert errors == [], "\n".join(f"[{e.where}] {e.problem}" for e in errors)

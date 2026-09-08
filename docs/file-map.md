@@ -227,7 +227,7 @@ git에 커밋되고, digest가 케이스 T0에 박제되고, 런타임에 넓어
 | `mongo_store.py` | 702 | Store·Repo·Ledger·EventStore·Digest·Label·Snapshot 7종의 Mongo 구현. **시각은 ISO 문자열이라 DB 정렬 전에 `_fixed_width_iso`로 폭을 맞춰야 한다**(정각이 최신으로 뒤집힌다). |
 | `checkpointer.py` | 71 | 체크포인터와 `Persistence` 묶음 조립. `ensure_indexes` 호출부. |
 | `retention.py` | 175 | 보존 스윕 2단. **범위 비교는 DB에 `$lt`를 안 맡기고 파싱해서 비교한다**(같은 폭 함정). |
-| `llm.py` | 24 | `build_chat_model`(실)·`ScriptedLLM`(테스트). 노드가 요구하는 표면은 `ainvoke`뿐. |
+| `llm.py` | 131 | `build_llm_factory`(사내 게이트웨이)·`ScriptedLLM`(테스트). **LLM 조립의 유일한 자리** — daemon·api/assembly·`__main__`이 전부 여기를 탄다. TLS는 이 커넥션 전용 httpx 클라이언트로만 조정한다(전역 오염 없음). 노드가 요구하는 표면은 `ainvoke`뿐. |
 | `__init__.py` | — | 빈 패키지 표식. |
 
 ### `src/patrol/` — 순찰 (11)

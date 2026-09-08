@@ -49,14 +49,43 @@ class InvestigationsConfig(StrictModel):
     max_wall_clock_s: float = 1800
 
 
-class LlmProfiles(StrictModel):
-    judge: str
-    subagent: str
-    lead: str
+class LlmGateway(StrictModel):
+    """사내 LLM 게이트웨이(FabriX) 접속 정보.
+
+    인증은 OpenAI 규약의 Authorization이 아니라 헤더 셋이 한다 — 그래서
+    api_key 자리에는 sentinel이 들어가고(llm.py), 진짜 비밀은 pass_key/
+    client_key다. SecretStr이라 `config show`와 로그에서 자동 마스킹된다.
+
+    모델은 하나뿐이다. judge/subagent/lead가 서로 다른 모델을 쓸 수 있다는
+    전제로 profiles 세 칸을 두면, 값이 항상 같아서 "바꾸면 바뀐다"는 거짓말이
+    config에 남는다 — 게이트웨이가 여러 모델을 열면 그때 늘린다.
+
+    ca_bundle은 사내 루트 CA의 PEM 경로다. 기본 신뢰 저장소에 사내 CA가 없어
+    번들을 아직 못 구했다면 tls_verify=false로 **명시해야만** 뜬다 — 검증이
+    꺼진 채로 조용히 도는 것을 막기 위해 기본값은 켬이다.
+    """
+    base_url: str
+    pass_key: SecretStr
+    client_key: SecretStr
+    model_id: str
+    ca_bundle: str | None = None
+    tls_verify: bool = True
+
+    @model_validator(mode="after")
+    def _check(self):
+        if not self.base_url.strip():
+            raise ValueError("llm.gateway.base_url이 비었다")
+        if not self.model_id.strip():
+            raise ValueError("llm.gateway.model_id가 비었다")
+        # 번들을 줬으면 검증을 끌 이유가 없다. 둘 다 적힌 config는 둘 중 어느
+        # 쪽이 의도인지 읽는 사람이 알 수 없으므로 쓰기 자체를 막는다.
+        if self.ca_bundle and not self.tls_verify:
+            raise ValueError("llm.gateway: ca_bundle과 tls_verify=false를 함께 쓸 수 없다")
+        return self
 
 
 class LlmConfig(StrictModel):
-    profiles: LlmProfiles
+    gateway: LlmGateway
 
 
 class PatrolBudget(StrictModel):

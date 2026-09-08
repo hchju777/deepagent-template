@@ -115,17 +115,71 @@ REST는 두 경로로만 나간다:
 config 검증에서 거부되므로 절대 URL로 `base_url`을 벗어나거나 쿼리를 경로에
 숨기는 것은 불가능하다.
 
-## 3. LLM 게이트웨이 연결
+## 3. 사내 LLM 게이트웨이 연결
+
+`.env`에 넷:
 
 ```bash
-LLM_BASE_URL=https://your-gateway.internal/v1
-LLM_API_KEY=<실제 키>
+GAUSS_LLM_BASE_URL=https://genai-openapi.sec.samsung.net/dxhq/trial/api-llm/openapi/llm
+GAUSS_LLM_PASS_KEY=<실제 키>
+GAUSS_LLM_CLIENT_KEY=<실제 키>
+GAUSS_LLM_MODEL_ID=<모델 식별자>
 ```
 
-`app.json`의 `llm.profiles.judge`/`subagent`/`lead`에 실제 모델 이름을
-채운다(OpenAI 호환 게이트웨이 기준, `src/infrastructure/llm.py`의
-`build_chat_model` → `ChatOpenAI`). 세 프로파일 다 필수이므로, 게이트웨이가
-모델별로 다른 이름을 쓴다면 여기서 매핑한다.
+`app.json`의 `llm.gateway`가 이 넷을 `${...}`로 참조한다(`config.example/app.json`
+그대로). 하나라도 비면 **기동이 거부되고 어느 키가 빈지 이름이 찍힌다** — 첫
+조사에서 401을 보는 일이 없다.
+
+인증은 OpenAI 규약의 `Authorization`이 아니라 헤더 셋(`X-FABRIX-CLIENT` /
+`X-OPENAPI-TOKEN` / `X-LLM-MODEL-ID`)이 한다. `api_key` 자리에는 뜻 없는
+sentinel이 들어간다 — `ChatOpenAI`가 그 자리가 비면 `OPENAI_API_KEY` env를
+뒤지다 죽기 때문이다(`src/infrastructure/llm.py`).
+
+**모델은 하나다.** judge·subagent·lead 세 자리가 전부 `model_id`를 쓴다.
+게이트웨이가 모델을 더 열면 `build_llm_factory`가 받는 `role`로 갈라진다.
+
+### TLS — 사내 루트 CA
+
+사내 게이트웨이 인증서가 기본 신뢰 저장소에 없으면 첫 호출이 TLS로 실패한다.
+`app.json`의 `llm.gateway`에 둘 중 하나를 적는다(env가 아니라 config다):
+
+```json
+"ca_bundle": "/etc/ssl/certs/samsung-root-ca.pem"
+```
+
+번들을 아직 못 구했다면 임시로:
+
+```json
+"tls_verify": false
+```
+
+둘을 함께 적으면 스키마가 거부한다. `tls_verify: false`로 뜨면 기동 시 stderr에
+경고가 한 줄 남는다.
+
+### 붙는지 확인
+
+```bash
+python -m src llm check
+```
+
+한 번 물어보고, 실패하면 **무엇이 틀렸는지**를 갈라 준다(TLS / 인증 / 모델 /
+연결 — 처방이 전부 다르다). 더 깊게 보려면 사내망에서:
+
+```bash
+pytest tests/live -m live_llm -v
+```
+
+게이트웨이 응답·틀린 키의 거부·**모델이 JSON만 낼 수 있는가**·한국어 지시
+준수·`temperature=0`의 결정론까지 본다. 세 번째가 제일 중요하다 — 노드와 접수가
+전부 응답을 `json.loads`하므로, 거기가 깨지면 증상은 "조사가 도중에 조용히
+멈춘다"로 나타난다. 이 테스트들은 기본 `pytest` 실행에서 빠진다.
+
+**범위는 LLM 커넥션 하나로 닫혀 있다.** 흔히 쓰는
+`ssl._create_default_https_context = ssl._create_unverified_context`는
+프로세스 전체의 검증을 끄기 때문에 여기서는 쓰지 않는다 — 그러면 Mongo·Redis·
+Kafka·대상 REST 프로버·SMTP의 인증서 검증까지 같이 꺼진다. 대상 시스템 접속의
+검증은 `tls_verify: false`와 무관하게 그대로다
+(`tests/infrastructure/test_llm.py`가 이 성질을 단정한다).
 
 ## 4. 영속화를 메모리에서 Mongo로
 
@@ -269,7 +323,7 @@ git add knowledge/target_api && git commit
 - [ ] **`target.rest.entries`의 항목을 한 개씩 사람이 읽고 승인** — 각각이 정말
       읽기 전용 끝점인지 대상 팀에 확인했는가(§2의 승인 절차)
 - [ ] 인증이 필요하면 `rest.auth` + `.env`의 토큰 키
-- [ ] `LLM_BASE_URL`/`LLM_API_KEY` + `app.json`의 `llm.profiles` 3종
+- [ ] `GAUSS_LLM_*` 4종 + 사내 CA면 `app.json`의 `llm.gateway.ca_bundle`
 - [ ] `store.backend: "mongo"` + `AGENT_MONGO_URL`(대상 시스템과 별도 DB)
 - [ ] 필요하면 `report.mail` 켜기 — 현장 이상(`concern: "operation"`)을 다른 팀이 받아야 하면 `recipients_by_concern`도 함께
 - [ ] `knowledge/target_api/{gbm}/{fct}.json`에 대상의 OpenAPI를 받아 두고 커밋

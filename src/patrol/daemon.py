@@ -50,7 +50,7 @@ from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.patrol import CheckOutcome
 from src.domain.store import InMemoryCaseStore
 from src.infrastructure.factory import AdapterSet, StubSeeds, build_adapters
-from src.infrastructure.llm import build_chat_model
+from src.infrastructure.llm import build_llm_factory
 from src.infrastructure.retention import sweep_retention
 from src.knowledge.deployment import load_deployment
 from src.knowledge.digest import canonical_digest
@@ -535,16 +535,12 @@ def assemble_sites(
     InMemoryCaseStore로만 채워 dataclass 필수 필드를 만족시키고, 운영 Store는
     PatrolDaemon.build()가 덮어쓴다. llm_factory가 주어지면(테스트의
     ScriptedLLM/ToolFake 등) 그것으로 lead/subagent를 만들고, 아니면
-    build_chat_model(profile, base_url=env["LLM_BASE_URL"], api_key=env["LLM_API_KEY"])로
-    실LLM을 만든다.
+    build_llm_factory(app.llm.gateway)로 사내 게이트웨이에 붙는 실LLM을 만든다.
     """
     app = load_app_config(config_root, env=env)
     registry = load_registry(config_root)
 
-    def make_llm(profile: str) -> Any:
-        if llm_factory is not None:
-            return llm_factory(profile)
-        return build_chat_model(profile, base_url=env.get("LLM_BASE_URL"), api_key=env.get("LLM_API_KEY"))
+    make_llm = llm_factory if llm_factory is not None else build_llm_factory(app.llm.gateway)
 
     sites: list[SiteRuntime] = []
     for ref in registry.sites:
@@ -575,8 +571,8 @@ def assemble_sites(
             else stub_seeds
         adapters = build_adapters(site_cfg, topology, clock=clock, stub_seeds=seeds)
         deps = EngineDeps(
-            lead_llm=make_llm(app.llm.profiles.lead),
-            subagent_llm=make_llm(app.llm.profiles.subagent),
+            lead_llm=make_llm("lead"),
+            subagent_llm=make_llm("subagent"),
             adapters=adapters, store=InMemoryCaseStore(), topology=topology,
             engine_cfg=app.engine,
             # 브리핑 재료 — 여기서 안 넘기면 리드는 매번 "적용 룰: 없음"을 읽는다.

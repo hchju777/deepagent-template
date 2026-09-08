@@ -88,18 +88,18 @@ def test_patrol_run_은_기동_검증_실패면_exit_1(tmp_path, capsys, monkeyp
 
 
 def test_patrol_run_성공_경로는_exit_0(tmp_path, capsys, monkeypatch):
-    # I8: build_chat_model을 monkeypatch해 실LLM 없이도 patrol run(기동 검증 →
+    # I8: build_llm_factory를 monkeypatch해 실LLM 없이도 patrol run(기동 검증 →
     # 사이트 조립 → 데몬 기동 → --for-seconds 0으로 즉시 종료)이 성공 경로를
-    # 끝까지 탄다는 걸 스모크한다. ENV는 test_boot.ENV를 재사용하므로
-    # LLM_API_KEY가 이미 들어있다(검사 11).
+    # 끝까지 탄다는 걸 스모크한다. 게이트웨이 설정은 _tree의 app.json이
+    # 리터럴로 들고 있어 env 참조 해석이 걸리지 않는다.
     _tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
 
-    def fake_build_chat_model(model_name, *, base_url=None, api_key=None):
-        return object()   # 이 트리의 점검은 judge=rule이라 실제로 호출되지 않는다
+    def fake_llm_factory(cfg):
+        return lambda role: object()   # 이 트리의 점검은 judge=rule이라 실제로 호출되지 않는다
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
-    monkeypatch.setattr("src.__main__.build_chat_model", fake_build_chat_model)
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory", fake_llm_factory)
+    monkeypatch.setattr("src.__main__.build_llm_factory", fake_llm_factory)
     code = main(["patrol", "run", "--for-seconds", "0",
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     assert code == 0
@@ -123,11 +123,11 @@ def test_patrol_run은_report_cfg와_mail_sender를_daemon에_넘긴다(tmp_path
     data["report"] = {"output_dir": str(tmp_path / "custom-out")}
     app_path.write_text(json.dumps(data), encoding="utf-8")
 
-    def fake_build_chat_model(model_name, *, base_url=None, api_key=None):
-        return object()
+    def fake_llm_factory(cfg):
+        return lambda role: object()
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
-    monkeypatch.setattr("src.__main__.build_chat_model", fake_build_chat_model)
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory", fake_llm_factory)
+    monkeypatch.setattr("src.__main__.build_llm_factory", fake_llm_factory)
 
     captured = {}
     real_daemon_cls = main_module.PatrolDaemon
@@ -151,7 +151,7 @@ def test_patrol_run은_report_cfg와_mail_sender를_daemon에_넘긴다(tmp_path
 
 def _chat_tree(tmp_path):
     _write(tmp_path, "config/app.json", json.dumps(
-        {"llm": {"profiles": {"judge": "j", "subagent": "s", "lead": "l"}},
+        {"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}},
          "report": {"output_dir": str(tmp_path / "out")}}))
     _write(tmp_path, "config/registry.json", json.dumps(
         {"sites": [{"gbm": "mx", "fct": "gumi"}]}))
@@ -192,10 +192,10 @@ def test_chat_1왕복_대화형_흐름은_접수부터_보고서까지_완주한
                             ONE_EVIDENCE_VERDICT_JSON])
     subagent_llm = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
 
-    def fake_build_chat_model(profile, *, base_url=None, api_key=None):
-        return {"l": lead_llm, "s": subagent_llm}.get(profile, object())
+    def fake_llm_factory(cfg):
+        return lambda role: {"lead": lead_llm, "subagent": subagent_llm}.get(role, object())
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory", fake_llm_factory)
 
     code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "OEE가 이상하다",
                 "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
@@ -235,10 +235,10 @@ def test_접수_문답은_증거로_박제된다(tmp_path, capsys, monkeypatch):
                             INTEGRATE_CONCLUDE, verdict_cites_ev2])
     subagent_llm = ToolFake(messages=iter([_mongo_call(), _report(["ev-2"])]))
 
-    def fake_build_chat_model(profile, *, base_url=None, api_key=None):
-        return {"l": lead_llm, "s": subagent_llm}.get(profile, object())
+    def fake_llm_factory(cfg):
+        return lambda role: {"lead": lead_llm, "subagent": subagent_llm}.get(role, object())
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory", fake_llm_factory)
 
     store, repo, ledger = InMemoryCaseStore(), InMemoryCaseRepository(), InMemoryLedger()
     monkeypatch.setattr("src.__main__.build_persistence",
@@ -304,10 +304,10 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     lead_llm = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON])
     subagent_llm = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
 
-    def fake_build_chat_model(profile, *, base_url=None, api_key=None):
-        return {"l": lead_llm, "s": subagent_llm}.get(profile, object())
+    def fake_llm_factory(cfg):
+        return lambda role: {"lead": lead_llm, "subagent": subagent_llm}.get(role, object())
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory", fake_llm_factory)
 
     code = main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "OEE가 이상하다",
                 "--concern", "operation",
@@ -326,10 +326,10 @@ def test_case_resume도_보고서를_남기고_이벤트를_찍는다(tmp_path, 
     lead_llm2 = ScriptedLLM([INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
     subagent_llm2 = ToolFake(messages=iter([]))
 
-    def fake_build_chat_model2(profile, *, base_url=None, api_key=None):
-        return {"l": lead_llm2, "s": subagent_llm2}.get(profile, object())
+    def fake_llm_factory2(cfg):
+        return lambda role: {"lead": lead_llm2, "subagent": subagent_llm2}.get(role, object())
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model2)
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory", fake_llm_factory2)
 
     # case resume도 answer_case에 발행 배선(on_event)을 넘겨야 한다 — 접수 질문을
     # 이 명령으로 이어갈 때 파킹 해제 이벤트가 로그에 남는 유일한 길이다.
@@ -429,11 +429,11 @@ def test_patrol_run은_이벤트_싱크를_daemon에_넘긴다(tmp_path, monkeyp
     _tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
 
-    def fake_build_chat_model(model_name, *, base_url=None, api_key=None):
-        return object()
+    def fake_llm_factory(cfg):
+        return lambda role: object()
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model", fake_build_chat_model)
-    monkeypatch.setattr("src.__main__.build_chat_model", fake_build_chat_model)
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory", fake_llm_factory)
+    monkeypatch.setattr("src.__main__.build_llm_factory", fake_llm_factory)
 
     captured = {}
     real_daemon_cls = main_module.PatrolDaemon
@@ -689,9 +689,9 @@ def test_chat이_연_케이스도_concern을_정하고_수신자를_가른다(tm
     lead_llm = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                             ONE_EVIDENCE_VERDICT_JSON])
     subagent_llm = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead_llm, "s": subagent_llm}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead_llm, "subagent": subagent_llm}.get(role, object()))
 
     sent = []
 
@@ -731,9 +731,9 @@ def test_접수_질문에_답하면_접수를_이어간다(tmp_path, capsys, mon
     _park_intake(repo, record.id)
 
     lead = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}'])
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        lead if profile == "l" else object())
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        lead if role == "lead" else object())
 
     code = main(["case", "resume", record.id, "--answer", "라인 7",
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
@@ -771,9 +771,9 @@ def test_조사_질문은_접수로_새지_않는다(tmp_path, capsys, monkeypat
 
     # 접수 LLM은 아무것도 안 준다 — 접수로 새면 이 대본이 소진되며 티가 난다.
     lead = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}'])
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        lead if profile == "l" else object())
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        lead if role == "lead" else object())
 
     main(["case", "resume", record.id, "--answer", "없다",
           "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
@@ -827,9 +827,9 @@ def test_주체가_레코드에_박제된다(tmp_path, monkeypatch):
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
     subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead, "s": subagent}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead, "subagent": subagent}.get(role, object()))
 
     assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
                  "--requested-by", "alice",
@@ -853,9 +853,9 @@ def test_chat이_스코프_없이도_돈다(tmp_path, monkeypatch):
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
     subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead, "s": subagent}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead, "subagent": subagent}.get(role, object()))
 
     code = main(["chat", "--symptom", "OEE가 이상하다",
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
@@ -881,10 +881,10 @@ def test_스코프_미확정이면_후보를_보여주고_케이스를_안_연�
     reg.write_text(json.dumps(data), encoding="utf-8")
     (tmp_path / "config" / "fct").mkdir(exist_ok=True)
     (tmp_path / "config" / "fct" / "suwon.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
                         ScriptedLLM(['{"gbm": "없는곳", "fct": "없는곳"}'])
-                        if profile == "l" else object())
+                        if role == "lead" else object())
 
     code = main(["chat", "--symptom", "뭔가 이상하다",
                  "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
@@ -942,9 +942,9 @@ def test_접수_중_프로세스가_죽어도_문답이_남는다(tmp_path, caps
                                                 InMemoryDigestStore()))
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: InMemorySaver())
     lead1 = ScriptedLLM(['{"target_locator": null, "missing": ["어느 라인인가?"]}'])
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        lead1 if profile == "l" else object())
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        lead1 if role == "lead" else object())
 
     assert main(["chat", "--symptom", "OEE가 이상하다",
                  "--config-root", str(tmp_path / "config"),
@@ -958,9 +958,9 @@ def test_접수_중_프로세스가_죽어도_문답이_남는다(tmp_path, caps
     lead2 = ScriptedLLM(['{"target_locator": "mongo:twin_state", "missing": []}',
                          FRAME_ONE_TASK, INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
     subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead2, "s": subagent}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead2, "subagent": subagent}.get(role, object()))
     assert main(["case", "resume", case_id, "--answer", "라인 7이다",
                  "--config-root", str(tmp_path / "config"),
                  "--repo-root", str(tmp_path)]) == 0
@@ -987,9 +987,9 @@ def test_chat의_재개도_answer_case를_거친다(tmp_path, monkeypatch):
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
     subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead, "s": subagent}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead, "subagent": subagent}.get(role, object()))
 
     seen = []
     real = main_module.answer_case
@@ -1030,9 +1030,9 @@ def test_chat도_가로채인_케이스에는_조사를_걸지_않는다(tmp_pat
                 "status": "investigating", "owner": "w-1", "thread_ids": ["t-1"]}))
             return AIMessage(content='{"target_locator": "rest:/oee", "missing": []}')
 
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        _Hijacks() if profile == "l" else object())
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        _Hijacks() if role == "lead" else object())
     assert main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
                  "--config-root", str(tmp_path / "config"),
                  "--repo-root", str(tmp_path)]) == 0
@@ -1058,7 +1058,7 @@ def test_api_명령은_어댑터_없이_앱을_조립한다(tmp_path, monkeypatc
     # uvicorn.run만 가로챈다 — 기동 검증·조립·앱 생성은 실제 경로를 그대로 탄다.
     _tree(tmp_path)
     monkeypatch.setattr("os.environ", dict(ENV))
-    monkeypatch.setattr("src.api.assembly.build_chat_model", lambda *a, **kw: object())
+    monkeypatch.setattr("src.api.assembly.build_llm_factory", lambda *a, **kw: (lambda role: object()))
     captured = {}
     import uvicorn
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
@@ -1190,9 +1190,9 @@ def test_chat은_워커에_ticker를_넘긴다(tmp_path, monkeypatch):
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON, INTEGRATE_CONCLUDE,
                         ONE_EVIDENCE_VERDICT_JSON])
     subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead, "s": subagent}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead, "subagent": subagent}.get(role, object()))
     seen = {}
     real = main_module.InvestigationWorker
 
@@ -1223,9 +1223,9 @@ def test_case_resume이_발행하는_보고서도_라벨을_보인다(tmp_path, 
     monkeypatch.setattr("src.__main__.build_checkpointer", lambda cfg: checkpointer)
     lead = ScriptedLLM([_INTAKE_JSON, FRAME_ONE_TASK, ASK_JSON])
     subagent = ToolFake(messages=iter([_mongo_call(), _report(["ev-1"])]))
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead, "s": subagent}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead, "subagent": subagent}.get(role, object()))
     main(["chat", "--gbm", "mx", "--fct", "gumi", "--symptom", "s",
           "--config-root", str(tmp_path / "config"), "--repo-root", str(tmp_path)])
     case_id = repo.list_by_status("awaiting_human")[0].id
@@ -1233,9 +1233,9 @@ def test_case_resume이_발행하는_보고서도_라벨을_보인다(tmp_path, 
     capsys.readouterr()
     # 둘째 프로세스를 흉내 — 새 스크립트로 남은 라운드를 완주시킨다(위 테스트와 같은 패턴).
     lead2 = ScriptedLLM([INTEGRATE_CONCLUDE, ONE_EVIDENCE_VERDICT_JSON])
-    monkeypatch.setattr("src.patrol.daemon.build_chat_model",
-                        lambda profile, *, base_url=None, api_key=None:
-                        {"l": lead2, "s": ToolFake(messages=iter([]))}.get(profile, object()))
+    monkeypatch.setattr("src.patrol.daemon.build_llm_factory",
+                        lambda cfg: lambda role:
+                        {"lead": lead2, "subagent": ToolFake(messages=iter([]))}.get(role, object()))
     assert main(["case", "resume", case_id, "--answer", "계획 변경 없음",
                  "--config-root", str(tmp_path / "config"),
                  "--repo-root", str(tmp_path)]) == 0
@@ -1606,3 +1606,59 @@ def test_tags가_None인_행도_요약을_막지_않는다(tmp_path, capsys, mon
     _status_tree(tmp_path, monkeypatch, _NoTags())
     assert main(["patrol", "status", "--config-root", str(tmp_path / "config")]) == 0
     assert "조사 1건(실패 0건)" in capsys.readouterr().out
+
+
+# ── llm check — 사내에서만 완결되는 확인의 오프라인 계약 ──────────────
+# 이 명령이 실제로 게이트웨이에 붙는지는 사내에서만 알 수 있다. 여기서 잠그는
+# 것은 그 주변, 즉 "사람이 무엇을 고쳐야 하는지 알 수 있게 실패하는가"다.
+
+def test_llm_check는_설정이_비면_키_이름을_찍고_실패한다(tmp_path, capsys, monkeypatch):
+    _tree(tmp_path)
+    _write(tmp_path, "config/app.json", json.dumps({"llm": {"gateway": {
+        "base_url": "${GAUSS_LLM_BASE_URL}", "pass_key": "p",
+        "client_key": "c", "model_id": "m"}}}))
+    monkeypatch.setattr("os.environ", dict(ENV))
+    code = main(["llm", "check", "--config-root", str(tmp_path / "config")])
+    err = capsys.readouterr().err
+    assert code == 1 and "GAUSS_LLM_BASE_URL" in err
+
+
+def test_llm_check_성공_경로는_응답을_보여준다(tmp_path, capsys, monkeypatch):
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+    monkeypatch.setattr("src.__main__.build_llm_factory",
+                        lambda cfg: lambda role: ScriptedLLM(["pong"]))
+    code = main(["llm", "check", "--config-root", str(tmp_path / "config")])
+    out = capsys.readouterr().out
+    assert code == 0 and "pong" in out and "OK" in out
+    assert "https://llm.test/v1" in out and "gauss-x" not in out   # _tree의 model_id는 m
+
+
+def test_llm_check는_실패_원인별로_처방을_가른다(tmp_path, capsys, monkeypatch):
+    # 스택트레이스만 보고는 TLS·인증·모델·연결을 구분할 수 없다. 처방이 전부
+    # 다르므로 이 갈래가 이 명령의 값이다.
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+
+    class _Boom:
+        async def ainvoke(self, *a, **kw):
+            raise RuntimeError("certificate verify failed: unable to get local issuer")
+
+    monkeypatch.setattr("src.__main__.build_llm_factory", lambda cfg: lambda role: _Boom())
+    code = main(["llm", "check", "--config-root", str(tmp_path / "config")])
+    err = capsys.readouterr().err
+    assert code == 1 and "ca_bundle" in err
+
+
+def test_llm_check는_모르는_실패에_엉뚱한_처방을_내지_않는다(tmp_path, capsys, monkeypatch):
+    _tree(tmp_path)
+    monkeypatch.setattr("os.environ", dict(ENV))
+
+    class _Boom:
+        async def ainvoke(self, *a, **kw):
+            raise RuntimeError("무언가 알 수 없는 일")
+
+    monkeypatch.setattr("src.__main__.build_llm_factory", lambda cfg: lambda role: _Boom())
+    code = main(["llm", "check", "--config-root", str(tmp_path / "config")])
+    err = capsys.readouterr().err
+    assert code == 1 and "→" not in err       # 확신 없는 처방보다 침묵이 낫다

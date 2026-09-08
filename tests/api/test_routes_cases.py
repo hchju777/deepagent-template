@@ -13,7 +13,7 @@ from pydantic import SecretStr
 
 from src.api.app import create_app
 from src.api.assembly import ApiRuntime, ApiSite
-from src.config.schema_app import AccessPolicy, AppConfig, LlmConfig, LlmProfiles
+from src.config.schema_app import AccessPolicy, AppConfig, LlmConfig, LlmGateway
 from src.domain.cases import CaseRecord, InMemoryCaseRepository
 from src.domain.events import InMemoryEventStore
 from src.domain.label import InMemoryLabelStore
@@ -39,7 +39,7 @@ def _llm(*replies):
 
 
 def _runtime(*, sites=(("mx", "gumi"),), replies=(RESOLVED,), access=None):
-    app = AppConfig(llm=LlmConfig(profiles=LlmProfiles(judge="j", subagent="s", lead="l")),
+    app = AppConfig(llm=LlmConfig(gateway=LlmGateway(base_url="https://llm.test/v1", pass_key="p", client_key="c", model_id="m")),
                     access=access or AccessPolicy())
     rt = ApiRuntime(app=app,
                     sites=[ApiSite(gbm=g, fct=f, topology=TOPO, lead_llm=_llm(*replies))

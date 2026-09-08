@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from src.config.schema_app import AppConfig
 
-MINIMAL = {"llm": {"profiles": {"judge": "m-s", "subagent": "m-m", "lead": "m-l"}}}
+MINIMAL = {"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}}
 
 
 def test_최소_config로_기본값이_채워진다():

@@ -19,7 +19,7 @@ from tests.application.test_graph_e2e import (FRAME_ONE_TASK, INTEGRATE_CONCLUDE
 from tests.patrol.test_probes import TOPO
 
 T = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
-APP = AppConfig.model_validate({"llm": {"profiles": {"judge": "j", "subagent": "s", "lead": "l"}}})
+APP = AppConfig.model_validate({"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}})
 CHECK = CheckConfig.model_validate({"judge": "rule", "schedule": {"interval": "5m"},
                                     "target": "rest:/oee",
                                     "params": {"rule": "range", "field": "body.oee", "min": 0, "max": 100}})
@@ -239,7 +239,7 @@ def test_명세_digest가_사이트_조립에_실린다(tmp_path):
     (tmp_path / "knowledge" / "topology" / "gbm").mkdir(parents=True)
     (tmp_path / "knowledge" / "target_api" / "gbm").mkdir(parents=True)
     (tmp_path / "config" / "app.json").write_text(
-        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        json.dumps({"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}}),
         encoding="utf-8")
     (tmp_path / "config" / "registry.json").write_text(
         json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")
@@ -263,7 +263,7 @@ def test_명세가_없으면_digest는_absent다(tmp_path):
     (tmp_path / "config" / "gbm").mkdir(parents=True)
     (tmp_path / "knowledge" / "topology").mkdir(parents=True)
     (tmp_path / "config" / "app.json").write_text(
-        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        json.dumps({"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}}),
         encoding="utf-8")
     (tmp_path / "config" / "registry.json").write_text(
         json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")
@@ -615,7 +615,7 @@ def test_조립이_사이트_점검과_배포를_엔진_의존에_넣는다(tmp_
     (tmp_path / "knowledge" / "topology").mkdir(parents=True)
     (tmp_path / "knowledge" / "deployment" / "gbm").mkdir(parents=True)
     (tmp_path / "config" / "app.json").write_text(
-        json.dumps({"llm": {"profiles": {"judge": "a", "subagent": "b", "lead": "c"}}}),
+        json.dumps({"llm": {"gateway": {"base_url": "https://llm.test/v1", "pass_key": "p", "client_key": "c", "model_id": "m"}}}),
         encoding="utf-8")
     (tmp_path / "config" / "registry.json").write_text(
         json.dumps({"sites": [{"gbm": "gbm", "fct": "gumi"}]}), encoding="utf-8")

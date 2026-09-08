@@ -196,6 +196,7 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
 | 집계 리포트 렌더링 | `src/presentation/fleet_report.py` |
 | 실제 원인 라벨(도메인)·유입구 | `src/domain/label.py`, `src/application/labels.py` |
 | 종결 판정 스냅샷(retention보다 오래 산다) | `src/domain/snapshot.py` |
+| LLM 조립(사내 게이트웨이 — **유일한 자리**) | `src/infrastructure/llm.py` |
 | LLM 판정 | `src/patrol/llm_judge.py` |
 | 순찰 게이트(케이스 개설/첨부/억제) | `src/patrol/gate.py` |
 | 순찰 데몬 조립 | `src/patrol/daemon.py` |
@@ -223,6 +224,11 @@ config나 도메인 객체에 조용히 섞여 들어가는 것을 pydantic이 �
   `src/infrastructure/stubs.py`의 `Stub*`, Mongo 백엔드 계약 테스트만
   `mongomock`을 쓴다. LLM은 `ScriptedLLM`(예약된 응답을 순서대로 재생)이나
   `GenericFakeChatModel`로 대체한다.
+  **예외는 `tests/live/` 하나**다 — 사내 LLM 게이트웨이에 실제로 질의하며,
+  `pytest.ini`가 `addopts = -m "not live_llm"`으로 기본 실행에서 뺀다.
+  사내에서 `pytest tests/live -m live_llm`으로만 돈다. 새 live 테스트를
+  추가한다면 반드시 `live_llm` 마커를 달아라 — 안 그러면 사내망 밖의 CI가
+  빨개지고, 그때 사람이 하는 일은 원인을 찾는 게 아니라 테스트를 지우는 것이다.
 - **결정론이 최우선이다.** 시계는 항상 고정값을 주입하고, LLM 응답은
   대본으로 미리 정한다.
 - **벤치 시나리오**(`tests/test_bench_scenarios.py`)는 스펙 부록 A의

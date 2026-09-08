@@ -29,7 +29,7 @@ from src.config.loader import ConfigError, load_app_config, load_registry, load_
 from src.domain.concern import CONCERNS
 from src.domain.events import EngineEvent, EventStorePort
 from src.infrastructure.checkpointer import build_checkpointer, build_persistence
-from src.infrastructure.llm import build_chat_model
+from src.infrastructure.llm import build_llm_factory, ca_bundle_problems
 from src.patrol.daemon import (PatrolDaemon, assemble_sites, load_stub_seeds,
                                seeds_problems)
 from src.patrol.llm_judge import LlmBudget
@@ -134,11 +134,72 @@ def _run_api(args, env: dict) -> int:
     return 0
 
 
+def _run_llm_check(args, env: dict) -> int:
+    """사내 게이트웨이에 실제로 한 번 물어본다 — 오프라인 테스트가 못 하는 확인.
+
+    `knowledge validate`의 형제다: 저쪽은 정적 검증, 이쪽은 "실제로 붙는가".
+    실패했을 때 **무엇이 틀렸는지**를 갈라 주는 것이 이 명령의 값이다 —
+    TLS·인증·모델·연결은 처방이 전부 다르고, 스택트레이스만 보고는 구분이 안 된다.
+    """
+    config_root = Path(args.config_root)
+    try:
+        app = load_app_config(config_root, env=env)
+    except ConfigError as exc:
+        for problem in exc.problems:
+            print(f"[config] {problem}", file=sys.stderr)
+        return 1
+
+    cfg = app.llm.gateway
+    print(f"게이트웨이 : {cfg.base_url}")
+    print(f"모델       : {cfg.model_id}")
+    print(f"TLS        : " + (f"ca_bundle={cfg.ca_bundle}" if cfg.ca_bundle
+                              else ("검증 켬(기본 신뢰 저장소)" if cfg.tls_verify else "검증 끔")))
+
+    problems = ca_bundle_problems(cfg)
+    if problems:
+        for problem in problems:
+            print(f"[config] {problem}", file=sys.stderr)
+        return 1
+
+    sys.stdout.flush()      # 진단이 stderr로 나가므로 순서가 뒤집히지 않게
+    model = build_llm_factory(cfg)("lead")
+    try:
+        reply = asyncio.run(model.ainvoke(args.prompt))
+    except Exception as exc:                                    # noqa: BLE001
+        print("실패 —", type(exc).__name__, file=sys.stderr)
+        print(f"  {exc}", file=sys.stderr)
+        for line in _llm_check_hint(exc):
+            print(f"  → {line}", file=sys.stderr)
+        return 1
+
+    text = getattr(reply, "content", reply)
+    print(f"응답       : {str(text).strip()[:200]}")
+    print("OK")
+    return 0
+
+
+def _llm_check_hint(exc: Exception) -> list[str]:
+    """실패 원인별 처방. 문자열 매칭이라 완전하지 않고, 틀리면 아무 힌트도 안 준다
+    — 잘못된 처방을 확신 있게 내미는 것보다 침묵이 낫다."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "certificate" in text or "ssl" in text or "tls" in text:
+        return ["사내 루트 CA 문제다. app.json의 llm.gateway에 ca_bundle 경로를 적어라",
+                "번들이 아직 없으면 임시로 tls_verify: false (경고가 한 줄 남는다)"]
+    if "401" in text or "403" in text or "unauthorized" in text or "forbidden" in text:
+        return ["인증 실패 — .env의 GAUSS_LLM_PASS_KEY / GAUSS_LLM_CLIENT_KEY를 확인하라",
+                "이 게이트웨이는 Authorization이 아니라 헤더 셋으로 인증한다"]
+    if "404" in text or "not found" in text:
+        return ["base_url 경로 또는 model_id를 확인하라 — 게이트웨이가 그 모델을 안 연다"]
+    if "connect" in text or "timeout" in text or "resolve" in text:
+        return ["연결 자체가 안 된다 — 사내망인지, base_url 호스트가 맞는지 확인하라"]
+    return []
+
+
 def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
     """기동 검증 → 사이트 조립 → 순찰 데몬 기동(포그라운드) — patrol run의 본체.
 
     llm_factory를 내부 함수로 분리해 받는 이유(I8): assemble_sites와 judge_llm
-    생성 둘 다에 그대로 흘려보내, 테스트가 실LLM(build_chat_model → ChatOpenAI)
+    생성 둘 다에 그대로 흘려보내, 테스트가 실LLM(build_llm_factory → ChatOpenAI)
     없이도 patrol run의 성공 경로("사이트 조립 → 데몬 기동 → 종료")를 스모크할
     수 있게 하기 위해서다.
     """
@@ -171,11 +232,10 @@ def _run_patrol(args, env: dict, *, llm_factory=None) -> int:
                           for rt in sites for check in rt.cfg.patrol.checks.values())
     judge_llm = None
     if needs_judge_llm:
-        if llm_factory is not None:
-            judge_llm = llm_factory(app.llm.profiles.judge)
-        else:
-            judge_llm = build_chat_model(app.llm.profiles.judge,
-                                         base_url=env.get("LLM_BASE_URL"), api_key=env.get("LLM_API_KEY"))
+        # assemble_sites와 같은 팩토리를 탄다 — 예전에는 여기만 별도로 조립해서
+        # judge가 다른 배선을 쓸 여지가 있었다(규율 8이 발행에 대해 말하는 함정).
+        make_llm = llm_factory if llm_factory is not None else build_llm_factory(app.llm.gateway)
+        judge_llm = make_llm("judge")
 
     budget = LlmBudget(app.patrol.llm_budget.max_calls_per_hour, clock=clock)
     owner = f"daemon-{socket.gethostname()}-{os.getpid()}"
@@ -822,6 +882,14 @@ def main(argv=None) -> int:
                             help="대상에 실제로 접속해 Mongo 계정 롤과 pinned 명세 드리프트까지 확인한다")
     _add_common(p_validate)
 
+    p_llm = sub.add_parser("llm", help="사내 LLM 게이트웨이")
+    llm_sub = p_llm.add_subparsers(dest="llm_command", required=True)
+    p_llm_check = llm_sub.add_parser(
+        "check", help="게이트웨이에 실제로 한 번 물어본다 — 오프라인 테스트가 못 하는 확인")
+    p_llm_check.add_argument("--prompt", default="ping",
+                             help="보낼 프롬프트(기본: ping). 토큰을 아끼려고 짧게 잡혀 있다")
+    _add_common(p_llm_check)
+
     p_patrol = sub.add_parser("patrol")
     patrol_sub = p_patrol.add_subparsers(dest="patrol_command", required=True)
     p_patrol_run = patrol_sub.add_parser(
@@ -956,6 +1024,9 @@ def main(argv=None) -> int:
         for e in errors:
             print(f"[{e.where}] {e.problem}", file=sys.stderr)
         return 1
+
+    if args.command == "llm":
+        return _run_llm_check(args, env)
 
     if args.command == "api":
         return _run_api(args, env)

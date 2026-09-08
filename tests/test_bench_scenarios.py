@@ -44,7 +44,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from src.application.deps import EngineDeps
 from src.application.worker import CaseQueue, InvestigationWorker
-from src.config.schema_app import (AppConfig, EngineConfig, LlmConfig, LlmProfiles,
+from src.config.schema_app import (AppConfig, EngineConfig, LlmConfig, LlmGateway,
                                    MailConfig, ReportConfig)
 from src.config.schema_site import CheckConfig, SiteConfig
 from src.domain.cases import InMemoryCaseRepository
@@ -96,7 +96,7 @@ def _publish_daemon(repo, store, ledger, clock, *, output_dir: str, owner: str) 
     chat·case resume과 똑같은 발행 배선을 타게 한다. sites=[]는 안전하다 —
     _publish_report는 repo/store/report_cfg만 읽고 sites는 쓰지 않는다.
     """
-    app = AppConfig(llm=LlmConfig(profiles=LlmProfiles(judge="j", subagent="s", lead="l")))
+    app = AppConfig(llm=LlmConfig(gateway=LlmGateway(base_url="https://llm.test/v1", pass_key="p", client_key="c", model_id="m")))
     return PatrolDaemon(
         app=app, sites=[], store=store, repo=repo, ledger=ledger, checkpointer=InMemorySaver(),
         clock=clock, judge_llm=None, budget=LlmBudget(1000, clock=clock), owner=owner,
