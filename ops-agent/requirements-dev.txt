@@ -1,0 +1,2 @@
+pytest>=8.0,<9
+pytest-asyncio>=0.24,<2    # asyncio_mode=auto — async def test_*를 그대로
