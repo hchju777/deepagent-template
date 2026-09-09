@@ -1,0 +1,20 @@
+{
+  "infra": {
+    "mongodb": { "user": "dmfReadOnly" },
+    "kafka": { "consumer": { "topic": { "topic1": "GUMI_TOPIC" } } },
+    "rest": {
+      "timeout_s": 10,
+      "entries": {
+        "oee_summary": {
+          "method": "POST",
+          "path": "/api/v1/oee/summary",
+          "params": {
+            "line": { "type": "str", "required": true },
+            "date": { "type": "str", "required": false }
+          }
+        },
+        "lines": { "method": "GET", "path": "/api/v1/lines" }
+      }
+    }
+  }
+}

@@ -15,21 +15,78 @@
 `kafka.consumer` — 사내에서 이미 쓰는 형태 그대로다. 바꾸면 기존 config를
 복사해 올 때마다 사람이 손으로 번역해야 하고, **번역은 언젠가 틀린다.**
 
-```json
-{
-  "site": { "gbm": "mx", "fct": "gumi" },
-  "infra": {
-    "redis":   { "url": "redis://...", "db": 0,
-                 "password": "${MX_GUMI_REDIS_PASSWORD}" },
-    "mongodb": { "url": "mongodb://...", "database": "data",
-                 "user": "dmfReadOnly", "password": "${MX_GUMI_MONGO_PASSWORD}",
-                 "auth_source": "admin" },
-    "kafka":   { "consumer": { "bootstrap_server": ["b1:9092","b2:9092","b3:9092"],
-                               "group_id": "GUMI_DMF_CONSUMER",
-                               "topic": { "topic1": "GUMI_TOPIC" } } }
-  }
-}
+## 계층 — 같은 것을 두 번 적지 않는다
+
+법인이 늘어나면 접속 정보만 다르고 나머지는 같다. REST 등재 항목, Kafka 토픽
+이름, Mongo 계정 이름은 **사업부 단위로 같고**, url과 비밀번호만 법인마다 다르다.
+한 파일에 다 적으면 법인이 열 개일 때 같은 REST 스펙을 열 번 적게 되고,
+스펙이 바뀌면 열 곳을 고쳐야 한다. 아홉 곳만 고치는 날이 반드시 온다.
+
 ```
+config/
+  app.json                전역 (시간대, 출력 경로)
+  registry.json           어느 (gbm, fct) 조합이 실재하는가
+  gbm/
+    common.json           전 사업부·전 법인 공통          ← 제일 약함
+    mx.json               mx 사업부 공통
+  fct/
+    gumi/
+      common.json         구미 법인 공통 (전 사업부)
+      mx.json             구미 × mx                      ← 제일 강함
+```
+
+아래로 갈수록 이긴다. 무엇을 어디에 적는가:
+
+| 층 | 적는 것 | 예 |
+|---|---|---|
+| `gbm/common.json` | 전사 규약 | `redis.db`, `mongodb.database`, `auth_source` |
+| `gbm/mx.json` | 사업부 공통 | REST 등재 항목, Kafka 토픽 매핑, Mongo 계정 이름 |
+| `fct/gumi/common.json` | 법인 공통 | 그 공장 망의 타임아웃 |
+| `fct/gumi/mx.json` | 법인 × 사업부 | **url, 비밀번호 참조, 브로커 목록** |
+
+### 병합 규칙
+
+- dict끼리는 **재귀 병합** — 아래 층이 `url`만 말해도 위 층의 `db`가 남는다.
+- 리스트는 이어붙이지 않고 **교체**한다. "하나 추가"와 "이걸로 교체"를 구별할
+  문법이 없고, 그 둘을 헷갈리면 다른 법인의 브로커에 붙는다.
+- **`null`은 "이 키를 지워라"는 마커다.** 사업부 공통으로 켠 Kafka를 특정
+  법인에서 `"kafka": null`로 끌 수 있다.
+
+> **흔한 함정**: "앞 층이 비어 있으면 재귀를 건너뛴다"는 최적화를 넣으면
+> **중첩된 null 마커를 못 지우고 지나간다.** deep-merge는 항상 전체 경로를 탄다.
+> `tests/config/test_merge.py::test_빈_층_위에서도_중첩_null이_처리된다`가 지킨다.
+
+### 검증은 층별이 아니라 **병합 결과**에 한다
+
+`gbm/mx.json`이 `mongodb.user`를, `fct/gumi/mx.json`이 `password`를 말한다.
+층마다 검증하면 둘 다 "짝이 없다"고 실패한다 — **각 층은 원래 불완전하다.**
+합친 뒤에 봐야 하고, 합쳤는데도 짝이 안 맞으면 그건 진짜 오류다.
+
+### 값의 출처를 추적한다
+
+층이 넷이면 "분명히 바꿨는데 안 먹는다"가 반드시 생긴다. 답은 거의 항상
+"아래 층이 덮고 있다"이고, 출처가 없으면 네 파일을 다 열어 봐야 안다.
+
+```console
+$ python -m src config show
+값의 출처 (어느 층이 이겼는가):
+  infra.kafka.consumer.bootstrap_server        fct/gumi/mx
+  infra.kafka.consumer.topic.topic1            gbm/mx
+  infra.mongodb.auth_source                    gbm/common
+  infra.mongodb.user                           gbm/mx
+  infra.redis.db                               gbm/common
+  infra.redis.url                              fct/gumi/mx
+  infra.rest.timeout_s                         fct/gumi/common
+```
+
+### 사이트 정체성은 파일이 말하지 않는다
+
+층 파일에 `"site": {...}`를 적으면 **거부한다.** 정체성은 `registry.json`과
+파일 경로가 정한다. 두 곳에서 오면 어긋났을 때 어느 쪽이 맞는지 아무도 모른다.
+
+`registry.json`이 따로 있는 이유: 디렉터리를 훑어서 유추할 수 없다.
+`gbm/mx.json`과 `fct/gumi/`가 있다고 해서 mx가 구미에 있다는 뜻은 아니다.
+조합은 사람이 명시한다. `enabled: false`로 아직 개설 안 한 사이트를 적어 둘 수도 있다.
 
 ### `auth_source`가 왜 `admin`인가
 
@@ -69,10 +126,11 @@ SecretStr('**********')
 필요한지" 알 수 없다. `${MX_GUMI_REDIS_PASSWORD}`라고 적혀 있으면 **기동 검증이
 그 키가 비어 있다고 미리 말해 줄 수 있다.**
 
-```
-$ python -c "from src.boot import validate_boot; ..."
-[sites/mx-gumi.json] config.example/sites/mx-gumi.json가 참조하는 env가 비어 있다
-  — MX_GUMI_MONGO_PASSWORD, MX_GUMI_REDIS_PASSWORD. .env에 값을 넣어라(빈 값도 없는 것으로 친다)
+```console
+$ python -m src boot
+❌ 문제 1건:
+  [mx/gumi] mx/gumi가 참조하는 env가 비어 있다 — MX_GUMI_MONGO_PASSWORD,
+  MX_GUMI_REDIS_PASSWORD, MX_GUMI_REST_KEY. .env에 값을 넣어라(빈 값도 없는 것으로 친다)
 ```
 
 ---
@@ -119,13 +177,14 @@ _REFERENCE = re.compile(r"\$\{([^{}]+)\}")
 
 ---
 
-## 테스트 63개 통과
+## 테스트
 
 ```
 tests/config/test_envresolve.py    8   ${} 치환, 누락 수집, 이상한 이름
+tests/config/test_merge.py        11   층 병합, null 마커, 출처 추적
 tests/config/test_schema_site.py  13   오타·모순·SecretStr·Kafka 형식
-tests/config/test_loader.py       10   파일 없음/JSON 깨짐/스키마/한글/env 필수
-tests/config/test_boot.py          7   전부 모아 보고, 중복 사이트, 자기 생존
+tests/config/test_loader.py       15   4층 병합·site 거부·JSON/스키마/한글/env
+tests/config/test_boot.py          9   전부 모아 보고, registry 중복, 비활성 건너뛰기
 ```
 
 `test_loader.py`의 마지막 테스트를 보라:

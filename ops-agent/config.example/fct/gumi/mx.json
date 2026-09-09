@@ -1,17 +1,12 @@
 {
-  "site": { "gbm": "mx", "fct": "gumi" },
   "infra": {
     "redis": {
       "url": "redis://gumi-redis.example.net:6379",
-      "db": 0,
       "password": "${MX_GUMI_REDIS_PASSWORD}"
     },
     "mongodb": {
       "url": "mongodb://gumi-mongo.example.net:27017",
-      "database": "data",
-      "user": "dmfReadOnly",
-      "password": "${MX_GUMI_MONGO_PASSWORD}",
-      "auth_source": "admin"
+      "password": "${MX_GUMI_MONGO_PASSWORD}"
     },
     "kafka": {
       "consumer": {
@@ -20,9 +15,12 @@
           "gumi-kafka-2.example.net:9092",
           "gumi-kafka-3.example.net:9092"
         ],
-        "group_id": "GUMI_DMF_CONSUMER",
-        "topic": { "topic1": "GUMI_TOPIC" }
+        "group_id": "GUMI_DMF_CONSUMER"
       }
+    },
+    "rest": {
+      "base_url": "http://gumi-twin-api.example.net:8080",
+      "headers": { "X-API-KEY": "${MX_GUMI_REST_KEY}" }
     }
   }
 }

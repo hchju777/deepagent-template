@@ -4,5 +4,12 @@
 pydantic>=2.13,<3          # StrictModel(extra="forbid")의 근거
 tzdata>=2024.1            # Windows엔 tz 데이터베이스가 없다 — zoneinfo가 이걸 찾는다
 
-# ── 3단계: config와 접속 ────────────────────────────────────
+# ── 3a단계: config ─────────────────────────────────────────
 python-dotenv>=1.0,<2     # .env를 os.environ으로 (CLI 경계에서만 부른다)
+
+# ── 3b단계: 실제 어댑터 ─────────────────────────────────────
+# 전부 지연 import다 — 스텁만 쓰는 환경에서는 설치돼 있어도 로드되지 않는다.
+redis>=5.0                # redis.asyncio
+pymongo>=4.13,<5          # AsyncMongoClient (motor는 deprecated)
+aiokafka>=0.12            # 그룹 미참여 assign() 읽기
+httpx>=0.28,<1            # REST

@@ -88,3 +88,27 @@ class KafkaInspectorPort(ABC):
     @abstractmethod
     async def tail(self, topic: str, *, limit: int) -> ProbeResult:
         """토픽 끝에서 최근 메시지를 읽는다(그룹 미참여, 오프셋 커밋 없음)."""
+
+
+class RestProberPort(ABC):
+    """대상 REST API 읽기.
+
+    **경로를 인자로 받지 않는다.** `get(path)`를 두면 호출자가 임의의 경로를
+    부를 수 있게 되고, 그 순간 "우리가 어디에 요청을 보내는가"가 config에서
+    코드로, 결국은 LLM의 판단으로 흘러간다.
+
+    대신 `query`는 **config에 등재된 항목 이름**만 받는다. 어떤 HTTP 메서드로
+    어느 경로에 나갈지는 어댑터가 `infra.rest.entries`의 선언을 보고 정하고,
+    params는 그 항목의 닫힌 스키마를 통과해야 소켓에 나간다.
+
+    POST가 필요해도 이 성질이 유지되는 이유가 여기 있다 — POST를 허용하는 것과
+    "임의의 body로 임의의 경로에 POST하라"를 허용하는 것은 다르다.
+    """
+
+    @abstractmethod
+    async def query(self, entry: str, params: dict) -> ProbeResult:
+        """등재 항목을 호출한다. GET이면 params가 쿼리 문자열, POST면 JSON body.
+
+        미등재 항목·스키마 밖 키·타입 불일치는 **소켓에 나가기 전에**
+        error ProbeResult로 거부한다.
+        """

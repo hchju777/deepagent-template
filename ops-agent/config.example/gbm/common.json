@@ -1,0 +1,6 @@
+{
+  "infra": {
+    "redis": { "db": 0 },
+    "mongodb": { "database": "data", "auth_source": "admin" }
+  }
+}

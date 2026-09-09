@@ -17,6 +17,8 @@
 무엇이 필요한지" 알 수 없다. `${MX_GUMI_REDIS_PASSWORD}`라고 적혀 있으면
 **기동 검증이 그 키가 비어 있다고 미리 말해 줄 수 있다.**
 """
+from typing import Literal
+
 from pydantic import SecretStr, field_validator, model_validator
 
 from src.domain.base import StrictModel
@@ -107,15 +109,65 @@ class KafkaConfig(StrictModel):
     consumer: KafkaConsumerConfig
 
 
+class RestParam(StrictModel):
+    """등재 항목이 받는 파라미터 하나의 선언."""
+    type: Literal["str", "int", "float", "bool"] = "str"
+    required: bool = False
+
+
+class RestEntry(StrictModel):
+    """호출해도 되는 API 하나. **여기 없는 경로는 부를 수 없다.**"""
+    method: Literal["GET", "POST"]
+    path: str
+    params: dict[str, RestParam] = {}
+
+    @field_validator("path")
+    @classmethod
+    def _absolute(cls, v: str) -> str:
+        if not v.startswith("/"):
+            raise ValueError(f"path는 /로 시작해야 한다 — {v}")
+        if "://" in v:
+            raise ValueError(f"path에 호스트가 들어 있다 — {v}. 호스트는 base_url이 정한다")
+        return v
+
+
+class RestConfig(StrictModel):
+    """대상 REST API. 등재된 항목만 호출할 수 있다(CLAUDE.md 규율 9와 같은 계열).
+
+    `read_only: true` 같은 플래그를 두지 않는 이유: 목록에 없으면 문이 안 열리므로
+    플래그가 중복이고, 끝점 수십 개에 플래그를 적으라고 하면 사람은 기동 검증을
+    통과시키려고 전부 true로 적는다. 아무도 생각하지 않는 체크박스의 안전 가치는 0이다.
+    """
+    base_url: str
+    timeout_s: float = 10.0
+    headers: dict[str, str] = {}          # ${...}로 API 키를 참조할 수 있다
+    entries: dict[str, RestEntry] = {}
+
+    @field_validator("base_url")
+    @classmethod
+    def _scheme(cls, v: str) -> str:
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(f"base_url은 http:// 또는 https://로 시작해야 한다 — {v}")
+        return v.rstrip("/")
+
+    @field_validator("timeout_s")
+    @classmethod
+    def _positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"timeout_s는 양수다 — {v}")
+        return v
+
+
 class InfraConfig(StrictModel):
-    """셋 다 선택이다 — Kafka가 없는 사이트도 있을 수 있다."""
+    """전부 선택이다 — Kafka가 없는 사이트도 있을 수 있다."""
     redis: RedisConfig | None = None
     mongodb: MongoConfig | None = None
     kafka: KafkaConfig | None = None
+    rest: RestConfig | None = None
 
     @model_validator(mode="after")
     def _at_least_one_system(self):
-        if not (self.redis or self.mongodb or self.kafka):
+        if not (self.redis or self.mongodb or self.kafka or self.rest):
             raise ValueError("infra에 대상 시스템이 하나도 없다 — 무엇을 조사하라는 것인가")
         return self
 
@@ -131,3 +183,24 @@ class SiteRef(StrictModel):
 class SiteConfig(StrictModel):
     site: SiteRef
     infra: InfraConfig
+
+
+class RegistryEntry(StrictModel):
+    """registry.json의 한 줄 — 이 (gbm, fct) 조합이 실재하는가.
+
+    디렉터리를 훑어서 유추하지 않는 이유: `gbm/mx.json`과 `fct/gumi/`가 있다고
+    해서 mx가 구미에 있다는 뜻은 아니다. 조합은 **사람이 명시**한다.
+    """
+    gbm: str
+    fct: str
+    enabled: bool = True
+
+    def __str__(self) -> str:
+        return f"{self.gbm}/{self.fct}"
+
+
+class Registry(StrictModel):
+    sites: list[RegistryEntry] = []
+
+    def active(self) -> list[RegistryEntry]:
+        return [s for s in self.sites if s.enabled]
