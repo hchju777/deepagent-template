@@ -3,3 +3,6 @@
 # ── 1단계: 모델과 config의 뼈대 ──────────────────────────────
 pydantic>=2.13,<3          # StrictModel(extra="forbid")의 근거
 tzdata>=2024.1            # Windows엔 tz 데이터베이스가 없다 — zoneinfo가 이걸 찾는다
+
+# ── 3단계: config와 접속 ────────────────────────────────────
+python-dotenv>=1.0,<2     # .env를 os.environ으로 (CLI 경계에서만 부른다)

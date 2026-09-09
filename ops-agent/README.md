@@ -32,7 +32,8 @@ Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 
 |---|---|
 | 1. 뼈대와 규율 | ✅ |
 | 2. 도메인 모델과 포트 | ✅ |
-| 3. config와 실제 DB 연결 | ⬜ |
+| 3a. config와 기동 검증 | ✅ |
+| 3b. 실제 어댑터와 접속 | ⬜ |
 | 4. 순찰 프로브 | ⬜ |
 | 5. rule 판정과 finding | ⬜ |
 | 6. 케이스 저장소와 게이트 | ⬜ |
