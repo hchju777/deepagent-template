@@ -76,6 +76,9 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -v
 ```
 
+Windows는 `.venv\Scripts\python.exe -m pytest -v` — 활성화 없이 직접 부른다.
+[STEPS/windows.md](windows.md) 참고.
+
 ```
 tests/domain/test_base.py::test_모르는_키는_조용히_버려지지_않고_거부된다 PASSED
 tests/domain/test_base.py::test_선언한_키는_평소처럼_받는다 PASSED
@@ -89,5 +92,15 @@ tests/domain/test_base.py::test_같은_함수를_실제_시계로_불러도_같�
 이 두 개는 나중에 넣을 수 없다. 모델을 200개 만들고 나서 `extra="forbid"`를
 켜면 그날 하루가 사라지고, 시계를 30군데서 부른 뒤에 주입으로 바꾸면 그건
 리팩터링이 아니라 재작성이다. **처음 10분에 넣으면 공짜고, 나중에 넣으면 비싸다.**
+
+## 덧붙임: 이식성 규율 (Windows 대응으로 추가)
+
+운영이 Windows라는 것이 확인돼 규율 하나를 더 넣었다 — **텍스트 파일 접근에는
+`encoding="utf-8"`을 명시한다.** Windows 기본 인코딩이 `cp949`라, 빠뜨리면
+Linux에서는 초록이고 사내에서만 깨진다.
+
+`tests/test_portability.py`가 `src/`와 `tests/`를 AST로 훑어 이 규율을 강제한다.
+①②의 규율은 pydantic과 타입이 지켰지만 이건 지켜 줄 라이브러리가 없어서,
+**테스트가 직접 소스를 읽는다.** 자세한 것은 [STEPS/windows.md](windows.md).
 
 → 다음: [2단계 — 도메인 모델과 포트](step-02-domain.md)

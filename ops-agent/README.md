@@ -7,11 +7,24 @@
 
 ## 실행
 
+Linux/macOS:
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python -m pytest -v
 ```
+
+Windows(사내):
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest -v
+```
+
+Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 모아 뒀다 —
+인코딩, tz 데이터베이스, 사내 CA와 TLS. **읽고 시작하는 편이 빠르다.**
 
 ## 진행 상황
 
