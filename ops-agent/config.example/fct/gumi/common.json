@@ -1,5 +1,3 @@
 {
-  "infra": {
-    "rest": { "timeout_s": 20 }
-  }
+  "infra": { "rest": { "timeout_s": 20 } }
 }

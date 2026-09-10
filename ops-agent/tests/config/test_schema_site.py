@@ -67,20 +67,33 @@ def test_auth_source_기본값은_admin이다():
 
 def test_브로커_주소_형식을_검사한다():
     with pytest.raises(ValidationError, match="host:port"):
-        KafkaConsumerConfig(bootstrap_server=["gumi-kafka-1"], group_id="g",
-                            topic={"topic1": "T"})
+        KafkaConsumerConfig(bootstrap_server=["gumi-kafka-1"], group_ids=["g"])
 
 
 def test_브로커가_비면_거부한다():
     with pytest.raises(ValidationError, match="비어 있다"):
-        KafkaConsumerConfig(bootstrap_server=[], group_id="g", topic={"topic1": "T"})
+        KafkaConsumerConfig(bootstrap_server=[], group_ids=["g"])
 
 
-def test_토픽이_비면_거부한다():
+def test_감시할_것이_없으면_거부한다():
+    # 그룹도 토픽도 없는 kafka 설정은 "붙기만 하고 아무것도 안 본다"는 뜻이다.
     with pytest.raises(ValidationError, match="무의미하다"):
-        KafkaConsumerConfig(bootstrap_server=["h:9092"], group_id="g", topic={})
+        KafkaConsumerConfig(bootstrap_server=["h:9092"])
 
 
-def test_group_id는_감시_대상이라는_뜻이_문서에_있다():
+def test_감시_그룹을_여러_개_받는다():
+    # 한 법인의 같은 Kafka에 서비스가 여러 개 붙어 있고 각자 자기 그룹을 쓴다.
+    cfg = KafkaConsumerConfig(bootstrap_server=["h:9092"],
+                              group_ids=["dt-processor-mx-gumi", "dt-sink-mx-gumi"])
+    assert len(cfg.group_ids) == 2
+
+
+def test_group_ids의_중복을_거부한다():
+    # 같은 그룹이 두 번 있으면 lag 합계가 두 번 더해진다.
+    with pytest.raises(ValidationError, match="중복이 있다"):
+        KafkaConsumerConfig(bootstrap_server=["h:9092"], group_ids=["dt-sink", "dt-sink"])
+
+
+def test_group_ids는_감시_대상이라는_뜻이_문서에_있다():
     # 이 뜻을 놓치면 모니터링이 운영 컨슈머의 파티션을 빼앗는다.
-    assert "감시할 그룹" in KafkaConsumerConfig.__doc__
+    assert "감시할 그룹들" in KafkaConsumerConfig.__doc__

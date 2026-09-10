@@ -13,7 +13,7 @@ from src.domain.envelope import ProbeResult
 from src.domain.ports import (KafkaInspectorPort, MongoReaderPort, RedisReaderPort,
                               RestProberPort)
 from src.infrastructure.mongo_reader import filter_problems, to_jsonable
-from src.infrastructure.rest_prober import param_problems
+from src.infrastructure.rest_prober import prepare_params
 
 
 class StubRedisReader(RedisReaderPort):
@@ -101,7 +101,7 @@ class StubRestProber(RestProberPort):
         if spec is None:
             return ProbeResult.failed(f"등재되지 않은 항목 — {entry}",
                                       source=source, clock=self._clock)
-        problems = param_problems(spec, params)
+        params, problems, _ = prepare_params(spec, params)
         if problems:
             return ProbeResult.failed("파라미터 거부 — " + "; ".join(problems),
                                       source=source, clock=self._clock)

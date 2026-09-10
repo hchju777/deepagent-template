@@ -4,7 +4,8 @@
 `python -m src peek rest`가 사내에서 확인한다.
 """
 from src.config.schema_site import RestConfig
-from src.infrastructure.rest_prober import RealRestProber, param_problems
+from src.infrastructure.rest_prober import (RealRestProber, param_problems,
+                                            prepare_params)
 
 CFG = RestConfig(
     base_url="http://twin.example.net:8080",
@@ -66,3 +67,74 @@ def test_포트에_get_path가_없다():
     from src.domain.ports import RestProberPort
     surface = {n for n in dir(RestProberPort) if not n.startswith("_")}
     assert surface == {"query"}, f"REST 포트 표면이 넓어졌다 — {surface}"
+
+
+# ── list 타입과 스칼라 정규화 ──────────────────────────────────────────
+
+BADGE_CFG = RestConfig(
+    base_url="http://twin.example.net:8080",
+    entries={"summary_badge": {"method": "POST", "path": "/summary/badge",
+                               "params": {"part_code": {"type": "list", "required": False},
+                                          "line_code": {"type": "list", "required": False}}}})
+BADGE = BADGE_CFG.entries["summary_badge"]
+
+
+def test_리스트를_주면_그대로_간다():
+    normalized, problems, wrapped = prepare_params(BADGE, {"line_code": ["P222", "P223"]})
+    assert normalized == {"line_code": ["P222", "P223"]}
+    assert problems == [] and wrapped == []
+
+
+def test_스칼라를_주면_리스트로_감싼다():
+    """거부보다 감싸는 편이 안전하다.
+
+    `"P222"`를 문자열로 그냥 보내면 서버가 그 필터를 **무시하고 전체를 돌려줄**
+    수 있고, 그러면 "조건에 맞는 것이 이만큼 있다"는 거짓 안심이 된다.
+    """
+    normalized, problems, wrapped = prepare_params(BADGE, {"line_code": "P222"})
+    assert normalized == {"line_code": ["P222"]}
+    assert problems == []
+    assert wrapped == ["line_code"], "감싼 사실이 기록돼야 한다"
+
+
+def test_감싼_값이_기록되는_요청이다(clock):
+    # 사람이 준 것과 소켓에 나간 것이 다르면, 증거에 남는 것은 **나간 것**이어야 한다.
+    normalized, _, _ = prepare_params(BADGE, {"line_code": "P222"})
+    assert normalized["line_code"] == ["P222"]
+
+
+def test_빈_리스트는_감싸지_않는다():
+    normalized, problems, wrapped = prepare_params(BADGE, {"line_code": []})
+    assert normalized == {"line_code": []} and problems == [] and wrapped == []
+
+
+def test_중첩_리스트를_거부한다():
+    # 원소에 리스트나 dict를 허용하면 body 모양이 사실상 자유가 되고,
+    # "닫힌 스키마"라는 말의 뜻이 사라진다.
+    _, problems, _ = prepare_params(BADGE, {"line_code": [["P222"]]})
+    assert problems == ["line_code[0]은 스칼라여야 한다 — list이 왔다"]
+
+
+def test_list_자리에_bool을_주면_거부한다():
+    _, problems, _ = prepare_params(BADGE, {"line_code": True})
+    assert problems == ["line_code은 list인데 bool이 왔다"]
+
+
+def test_숫자_스칼라도_감싼다():
+    _, problems, wrapped = prepare_params(BADGE, {"part_code": 12345})
+    assert problems == [] and wrapped == ["part_code"]
+
+
+def test_선언되지_않은_키는_감싸기_전에_거부된다():
+    _, problems, _ = prepare_params(BADGE, {"drop_table": "x"})
+    assert problems == ["선언되지 않은 파라미터 — drop_table"]
+
+
+async def test_스텁도_같은_정규화를_거친다(clock):
+    from src.infrastructure.stubs import StubRestProber
+
+    stub = StubRestProber(BADGE_CFG, {"summary_badge": {"total": 2}}, clock=clock)
+    result = await stub.query("summary_badge", {"line_code": "P222"})
+    assert result.status == "ok"
+    assert result.data["request"]["params"] == {"line_code": ["P222"]}, (
+        "스텁과 실구현의 계약이 갈라지면 테스트는 통과하는데 사내에서 깨진다")

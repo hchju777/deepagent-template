@@ -73,7 +73,7 @@ class MongoConfig(StrictModel):
 
 
 class KafkaConsumerConfig(StrictModel):
-    """**주의: group_id는 우리가 참여할 그룹이 아니라 우리가 감시할 그룹이다.**
+    """**주의: group_ids는 우리가 참여할 그룹이 아니라 우리가 감시할 그룹들이다.**
 
     이 에이전트는 컨슈머 그룹에 절대 들어가지 않는다. 들어가면 브로커가
     리밸런스를 돌리고 `__consumer_offsets`에 커밋이 남으며, 같은 group_id를
@@ -81,11 +81,20 @@ class KafkaConsumerConfig(StrictModel):
 
     lag은 AdminClient로 밖에서 조회하고, 메시지는 `assign()`으로 그룹 밖에서
     직접 읽는다(`KafkaInspectorPort` 참고).
+
+    **복수인 이유**: 한 법인의 같은 Kafka에 여러 서비스가 붙어 있고 각자 자기
+    그룹을 쓴다(`dt-processor-mx-gumi`, `dt-sink-mx-gumi`, ...). 하나만 볼 수
+    있게 만들면 나머지가 밀려도 모른다. 그리고 서비스는 **늘어난다.**
+
+    그룹 이름에 법인이 박혀 있으므로(`-mx-gumi`) 이 값은 `gbm/` 층이 아니라
+    `fct/{fct}/{gbm}.json`에 적는다. `"dt-processor-{gbm}-{fct}"` 같은 템플릿
+    문법을 만들지 않는 이유: 오타 난 템플릿은 **존재하지 않는 그룹을 조용히
+    감시한다**(lag 0으로 보이고, 그건 "정상"과 구별되지 않는다). 명시가 낫다.
     """
 
     bootstrap_server: list[str]
-    group_id: str
-    topic: dict[str, str]        # 논리 이름 → 실제 토픽 이름 ("topic1": "GUMI_TOPIC")
+    group_ids: list[str] = []
+    topic: dict[str, str] = {}    # 논리 이름 → 실제 토픽 이름 ("topic1": "GUMI_TOPIC")
 
     @field_validator("bootstrap_server")
     @classmethod
@@ -97,12 +106,20 @@ class KafkaConsumerConfig(StrictModel):
                 raise ValueError(f"bootstrap_server는 host:port 형식이다 — {entry}")
         return v
 
-    @field_validator("topic")
+    @field_validator("group_ids")
     @classmethod
-    def _not_empty(cls, v: dict[str, str]) -> dict[str, str]:
-        if not v:
-            raise ValueError("topic이 비어 있다 — 감시할 토픽이 없으면 kafka 설정이 무의미하다")
+    def _no_duplicate_groups(cls, v: list[str]) -> list[str]:
+        # 같은 그룹이 두 번 있으면 lag 합계가 두 번 더해진다.
+        duplicates = sorted({g for g in v if v.count(g) > 1})
+        if duplicates:
+            raise ValueError(f"group_ids에 중복이 있다 — {', '.join(duplicates)}")
         return v
+
+    @model_validator(mode="after")
+    def _something_to_watch(self):
+        if not self.group_ids and not self.topic:
+            raise ValueError("group_ids도 topic도 없다 — 감시할 것이 없으면 kafka 설정이 무의미하다")
+        return self
 
 
 class KafkaConfig(StrictModel):
@@ -110,8 +127,12 @@ class KafkaConfig(StrictModel):
 
 
 class RestParam(StrictModel):
-    """등재 항목이 받는 파라미터 하나의 선언."""
-    type: Literal["str", "int", "float", "bool"] = "str"
+    """등재 항목이 받는 파라미터 하나의 선언.
+
+    `list`는 스칼라(str/int/float)들의 리스트다. 중첩 리스트나 dict는 받지 않는다 —
+    그걸 허용하면 body 모양이 사실상 자유가 되고, 닫힌 스키마의 뜻이 사라진다.
+    """
+    type: Literal["str", "int", "float", "bool", "list"] = "str"
     required: bool = False
 
 

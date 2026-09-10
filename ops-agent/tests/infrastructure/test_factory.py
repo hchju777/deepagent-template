@@ -7,7 +7,7 @@ SITE = SiteConfig.model_validate({
     "infra": {
         "redis": {"url": "redis://h:6379"},
         "mongodb": {"url": "mongodb://h:27017", "database": "data"},
-        "kafka": {"consumer": {"bootstrap_server": ["h:9092"], "group_id": "g",
+        "kafka": {"consumer": {"bootstrap_server": ["h:9092"], "group_ids": ["g"],
                                "topic": {"topic1": "GUMI_TOPIC"}}},
         "rest": {"base_url": "http://h:8080",
                  "entries": {"lines": {"method": "GET", "path": "/lines"}}},

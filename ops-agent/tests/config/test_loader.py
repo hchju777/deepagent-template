@@ -90,7 +90,7 @@ def test_아래_층이_위_층을_지울_수_있다(tmp_path):
     root = _tree(tmp_path / "c", layers={
         "gbm/mx.json": {"infra": {"redis": {"url": "redis://공통:6379"},
                                   "kafka": {"consumer": {"bootstrap_server": ["b:9092"],
-                                                         "group_id": "g",
+                                                         "group_ids": ["g"],
                                                          "topic": {"t": "T"}}}}},
         "fct/gumi/mx.json": {"infra": {"kafka": None}}})
     site, _ = load_site_config(root, "mx", "gumi", env=ENV)

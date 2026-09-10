@@ -105,6 +105,42 @@ $ python -m src peek rest --entry oee_summary --params '{"line":"L4","drop_table
 
 두 경우 모두 **소켓에 나가기 전에** 거부된다.
 
+### 리스트 파라미터와, 스칼라를 감싸는 이유
+
+실제 API의 필터는 리스트를 받는다:
+
+```json
+"summary_badge": { "method": "POST", "path": "/summary/badge",
+                   "params": { "part_code": { "type": "list", "required": false },
+                               "line_code": { "type": "list", "required": false } } }
+```
+
+사람이 CLI에서 쓰기 자연스러운 것은 스칼라다. 그래서 **1개짜리 리스트로 감싼다**:
+
+```console
+$ python -m src peek rest --entry summary_badge --params '{"line_code": "P222"}'
+"request": { "params": { "line_code": ["P222"] },
+             "wrapped_as_list": ["line_code"] },
+"response": { "filters": { "line_code": ["P222"] }, "total": 2 }
+```
+
+**거부하는 것보다 감싸는 편이 안전하다.** `"P222"`를 문자열로 그냥 보내면 서버가
+그 필터를 **무시하고 전체를 돌려줄** 수 있고, 그러면 "조건에 맞는 것이 이만큼
+있다"는 **거짓 안심**이 된다. 조용한 실패가 시끄러운 실패보다 항상 나쁘다.
+
+감싼 사실은 `wrapped_as_list`로 남는다 — 사람이 준 것과 소켓에 나간 것이 다르면
+말해야 하고, 증거에 기록되는 `request`는 **나간 것**이어야 한다.
+
+원소는 스칼라만 받는다:
+
+```console
+$ python -m src peek rest --entry summary_badge --params '{"line_code":[["중첩"]]}'
+"error": "파라미터 거부 — line_code[0]은 스칼라여야 한다 — list이 왔다"
+```
+
+중첩 리스트나 dict를 허용하면 body 모양이 사실상 자유가 되고, **"닫힌 스키마"라는
+말의 뜻이 사라진다.**
+
 **POST를 열어도 읽기 전용인 이유**: POST를 허용하는 것과 "임의의 body로 임의의
 경로에 POST하라"를 허용하는 것은 다르다. 메서드 수준에서 잃은 안전장치를 **body
 수준의 닫힌 스키마**가 대신한다.
@@ -154,13 +190,29 @@ consumer.assign(tps)                                   # ← subscribe가 아니
 파티션 메타데이터가 아직 비어 있어 **"데이터 없음"이라는 조용한 거짓말**을 돌려준다.
 에러가 아니라 정상적인 0건으로 보이기 때문에 제일 위험한 실패 모드다.
 
-lag은 `AIOKafkaAdminClient`로 밖에서 조회한다:
+lag은 `AIOKafkaAdminClient`로 밖에서 조회한다. 감시 그룹은 **법인마다 여러 개**다 —
+같은 Kafka에 서비스가 여럿 붙어 각자 자기 그룹을 쓰고, 그 수는 늘어난다:
 
 ```console
-$ python -m src peek kafka --lag
-"data": { "group": "GUMI_DMF_CONSUMER", "total_lag": 42,
-          "partitions": [ { "partition": 0, "committed": 1580, "end": 1622, "lag": 42 } ] }
+$ python -m src peek kafka --lag            # config의 group_ids 전부
+"group": "dt-processor-mx-gumi",  "total_lag": 2
+"group": "dt-sink-mx-gumi",       "total_lag": 5
+
+$ python -m src doctor
+  kafka  ✅ dt-processor-mx-gumi lag 2
+  kafka  ✅ dt-sink-mx-gumi lag 5
 ```
+
+위 숫자는 진짜 브로커에서 나온 것이다 — 6건을 넣고 한 그룹은 4건, 다른 그룹은
+1건까지 소비시킨 뒤 조회했다.
+
+하나만 볼 수 있게 만들면 **나머지가 밀려도 모른다.** `--group`으로 하나만 지정할
+수도 있지만 기본은 전부다.
+
+그룹 이름에 법인이 박혀 있으므로(`-mx-gumi`) `group_ids`는 `gbm/` 층이 아니라
+`fct/{fct}/{gbm}.json`에 적는다. `"dt-processor-{gbm}-{fct}"` 같은 템플릿 문법을
+만들지 않는 이유: 오타 난 템플릿은 **존재하지 않는 그룹을 조용히 감시하고**,
+그 결과는 lag 0 — "정상"과 구별되지 않는다.
 
 ---
 
@@ -191,7 +243,7 @@ python -m src peek redis --key oee:L3 --stub-seeds fake.json # 가짜 데이터
 |---|---|---|
 | Redis | ✅ 진짜 서버로 전 구간 | `doctor` |
 | REST | ✅ 진짜 HTTP 서버(POST 포함) | `peek rest` |
-| Kafka | ✅ 진짜 브로커(그룹 미생성까지 확인) | `peek kafka --lag` |
+| Kafka | ✅ 진짜 브로커(복수 그룹 lag·그룹 미생성까지 확인) | `peek kafka --lag` |
 | Mongo | ⚠️ 로직만(필터·잘림·변환) — 실서버 바이너리를 구할 수 없었다 | **`doctor`로 꼭 확인** |
 
 `tests/live/`가 실제 시스템에 붙는 테스트를 담고 있고, 기본 실행에서는 빠진다:

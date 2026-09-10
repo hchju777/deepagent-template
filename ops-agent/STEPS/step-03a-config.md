@@ -39,10 +39,23 @@ config/
 
 | 층 | 적는 것 | 예 |
 |---|---|---|
-| `gbm/common.json` | 전사 규약 | `redis.db`, `mongodb.database`, `auth_source` |
+| `gbm/common.json` | 전사 규약 | `redis.db`, `mongodb.database`, `auth_source`, **비밀번호 참조** |
 | `gbm/mx.json` | 사업부 공통 | REST 등재 항목, Kafka 토픽 매핑, Mongo 계정 이름 |
 | `fct/gumi/common.json` | 법인 공통 | 그 공장 망의 타임아웃 |
-| `fct/gumi/mx.json` | 법인 × 사업부 | **url, 비밀번호 참조, 브로커 목록** |
+| `fct/gumi/mx.json` | 법인 × 사업부 | **url, 브로커 목록, 감시 그룹 목록** |
+
+### 비밀번호 참조가 왜 제일 위층에 있는가
+
+Redis·Mongo 비밀번호는 **전 법인이 같다.** 그러니 env 키에 사이트 접두사를 붙일
+이유가 없고(`MX_GUMI_REDIS_PASSWORD`가 아니라 `REDIS_PASSWORD`), 참조도 법인마다
+적을 이유가 없다 — `gbm/common.json`에 한 번 적으면 모든 사이트가 물려받는다.
+
+법인이 스무 개여도 비밀번호 참조는 **한 줄**이다. 법인별로 적게 만들면 비밀번호를
+바꾸는 날 스무 곳을 고쳐야 하고, 열아홉 곳만 고치는 날이 반드시 온다.
+
+비밀번호 자체가 법인마다 다른 사이트가 생기면? 그 사이트의 `fct/{fct}/{gbm}.json`에서
+`"password": "${SEVT_REDIS_PASSWORD}"`로 **덮으면 된다.** 계층의 요점이 이것이다 —
+기본은 위에, 예외는 아래에.
 
 ### 병합 규칙
 
@@ -197,5 +210,66 @@ def test_env는_기본값이_없어_반드시_넘겨야_한다(tmp_path):
 
 `env=os.environ`을 기본값으로 두면 편하지만, **한 군데서 안 넘기는 사고**가
 그때부터 가능해진다. 그 경로만 치환이 안 된 채로 돌고 아무도 모른다.
+
+---
+
+## 법인을 추가하려면 — `mx sevt`를 예로
+
+파일 **하나**와 registry 한 줄이면 된다. 사업부 공통(REST 등재 항목, 토픽 매핑,
+Mongo 계정)과 전사 공통(비밀번호 참조, db 번호)은 이미 위층에 있으므로 다시 적지 않는다.
+
+**① `config/fct/sevt/mx.json`** — 그 법인에서만 다른 것만 적는다
+
+```json
+{
+  "infra": {
+    "redis":   { "url": "redis://sevt-redis:6379" },
+    "mongodb": { "url": "mongodb://sevt-mongo:27017" },
+    "kafka": {
+      "consumer": {
+        "bootstrap_server": ["sevt-kafka-1:9092"],
+        "group_ids": ["dt-processor-mx-sevt", "dt-sink-mx-sevt"]
+      }
+    },
+    "rest": { "base_url": "http://sevt-twin-api:8080" }
+  }
+}
+```
+
+**② `config/registry.json`에 한 줄**
+
+```json
+{ "sites": [
+    { "gbm": "mx", "fct": "gumi", "enabled": true },
+    { "gbm": "mx", "fct": "sevt", "enabled": true }
+] }
+```
+
+**③ 확인**
+
+```console
+$ python -m src boot
+✅ 기동 검증 통과
+
+$ python -m src sites
+  ✅ mx/gumi          [redis, mongodb, kafka, rest]
+  ✅ mx/sevt          [redis, mongodb, kafka, rest]
+
+$ python -m src --gbm mx --fct sevt doctor
+```
+
+사이트가 둘 이상이면 **`--gbm`/`--fct`를 반드시 줘야 한다.** 생략하면 임의로
+첫 번째를 고르지 않고 "골라라"고 말한다 — 임의로 골랐다가 다른 법인의 Redis를
+들여다보는 일이 생기면 안 된다.
+
+### 자주 쓰는 변형
+
+| 하고 싶은 것 | 어디에 |
+|---|---|
+| 그 법인만 Kafka가 없다 | `fct/sevt/mx.json`에 `"kafka": null` (삭제 마커) |
+| 그 법인만 비밀번호가 다르다 | `fct/sevt/mx.json`에 `"password": "${SEVT_REDIS_PASSWORD}"` |
+| 그 법인만 REST 타임아웃이 길다 | `fct/sevt/common.json`에 `"rest": {"timeout_s": 30}` |
+| 아직 개설 전이라 등록만 해 둔다 | registry에 `"enabled": false` — 기동 검증이 건너뛴다 |
+| 새 사업부(`dt` 등)를 추가한다 | `gbm/dt.json` + `fct/{법인}/dt.json` + registry |
 
 → 다음: [3b단계 — 실제 어댑터와 접속 확인](step-03b-adapters.md)

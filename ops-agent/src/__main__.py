@@ -128,9 +128,13 @@ async def _doctor(site, clock) -> int:
             result = await adapters.mongo.count("__none__", {})
             failed += _report("mongo", result, lambda r: "인증·접속 정상")
         if adapters.kafka:
-            result = await adapters.kafka.group_offsets(site.infra.kafka.consumer.group_id)
-            failed += _report("kafka", result,
-                              lambda r: f"감시 그룹 lag {r.data.get('total_lag', '?')}")
+            groups = site.infra.kafka.consumer.group_ids
+            if not groups:
+                print("  kafka  ⏸  감시할 그룹이 없다 — group_ids가 비어 있다")
+            for group in groups:
+                result = await adapters.kafka.group_offsets(group)
+                failed += _report("kafka", result,
+                                  lambda r, g=group: f"{g} lag {r.data.get('total_lag', '?')}")
         if adapters.rest:
             entries = ", ".join(sorted(site.infra.rest.entries)) or "(등재 항목 없음)"
             print(f"  rest   ⏸  붙어 보지 않음 — 등재 항목: {entries}")
@@ -158,60 +162,67 @@ async def _peek(site, args, clock) -> int:
         if args.stub_seeds else None
     adapters = build_adapters(site, clock=clock, seeds=seeds)
     try:
-        result = await _dispatch(adapters, site, args)
+        results = await _dispatch(adapters, site, args)
     finally:
         await adapters.close()
-    if result is None:
-        return 0
-    _out(_render(result))
-    return 1 if result.status == "error" else 0
+    for result in results:
+        _out(_render(result))
+    return 1 if any(r.status == "error" for r in results) else 0
 
 
-async def _dispatch(adapters, site, args):
+async def _dispatch(adapters, site, args) -> list:
+    """ProbeResult **리스트**를 돌려준다 — `--lag`이 그룹 여러 개를 볼 수 있다."""
     if args.system == "redis":
         if adapters.redis is None:
             raise SystemExit("이 사이트에 redis 설정이 없다")
         if args.scan:
-            return await adapters.redis.scan(args.scan)
+            return [await adapters.redis.scan(args.scan)]
         if args.ttl:
-            return await adapters.redis.ttl(args.ttl)
+            return [await adapters.redis.ttl(args.ttl)]
         if not args.key:
             raise SystemExit("--key / --scan / --ttl 중 하나가 필요하다")
-        return await adapters.redis.get(args.key)
+        return [await adapters.redis.get(args.key)]
 
     if args.system == "mongo":
         if adapters.mongo is None:
             raise SystemExit("이 사이트에 mongodb 설정이 없다")
         filter_ = json.loads(args.filter) if args.filter else {}
         if args.count:
-            return await adapters.mongo.count(args.collection, filter_)
-        return await adapters.mongo.find(args.collection, filter_,
-                                         sort=[(args.sort, -1)] if args.sort else None,
-                                         limit=args.limit)
+            return [await adapters.mongo.count(args.collection, filter_)]
+        return [await adapters.mongo.find(args.collection, filter_,
+                                          sort=[(args.sort, -1)] if args.sort else None,
+                                          limit=args.limit)]
 
     if args.system == "kafka":
         if adapters.kafka is None:
             raise SystemExit("이 사이트에 kafka 설정이 없다")
         if args.lag:
-            group = args.group or site.infra.kafka.consumer.group_id
-            return await adapters.kafka.group_offsets(group)
+            # --group을 안 주면 config의 **모든** 감시 그룹을 본다. 하나만 보게
+            # 만들면 나머지가 밀려도 모른다(법인마다 서비스가 여러 개다).
+            groups = [args.group] if args.group else site.infra.kafka.consumer.group_ids
+            if not groups:
+                raise SystemExit("감시할 그룹이 없다 — config의 group_ids가 비어 있다")
+            return [await adapters.kafka.group_offsets(g) for g in groups]
         if not args.topic:
             raise SystemExit("--topic 또는 --lag 이 필요하다")
-        return await adapters.kafka.tail(args.topic, limit=args.limit)
+        return [await adapters.kafka.tail(args.topic, limit=args.limit)]
 
     # rest
     if adapters.rest is None:
         raise SystemExit("이 사이트에 rest 설정이 없다")
     if args.list:
         for name, entry in sorted(site.infra.rest.entries.items()):
-            required = [k for k, v in entry.params.items() if v.required]
-            optional = [k for k, v in entry.params.items() if not v.required]
             print(f"  {name:<24} {entry.method:<5} {entry.path}")
-            print(f"  {'':<24} 필수: {required or '없음'}  선택: {optional or '없음'}")
-        return None
+            for key, spec in entry.params.items():
+                mark = "필수" if spec.required else "선택"
+                print(f"  {'':<24}   {key:<14} {spec.type:<6} {mark}")
+            if not entry.params:
+                print(f"  {'':<24}   (파라미터 없음)")
+        return []
     if not args.entry:
         raise SystemExit("--entry 또는 --list 가 필요하다")
-    return await adapters.rest.query(args.entry, json.loads(args.params) if args.params else {})
+    return [await adapters.rest.query(args.entry,
+                                      json.loads(args.params) if args.params else {})]
 
 
 def cmd_peek(args, env) -> int:
@@ -258,7 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     # kafka
     peek.add_argument("--topic", help="config의 논리 이름(topic1) 또는 실제 토픽 이름")
     peek.add_argument("--lag", action="store_true", help="감시 그룹의 lag")
-    peek.add_argument("--group", help="lag을 볼 그룹(생략하면 config의 group_id)")
+    peek.add_argument("--group", help="lag을 볼 그룹 하나(생략하면 config의 group_ids 전부)")
     # rest
     peek.add_argument("--entry"), peek.add_argument("--params")
     peek.add_argument("--list", action="store_true", help="등재 항목 목록")

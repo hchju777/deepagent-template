@@ -107,9 +107,10 @@ def kafka_inspector(clock):
     # `.get(key, "{}") or 기본값`으로 쓰면 "{}"가 truthy라 기본값이 안 먹는다 —
     # 실제로 여기서 한 번 틀렸다.
     topics = json.loads(os.environ.get("OPS_TEST_KAFKA_TOPICS") or json.dumps({"topic1": topic}))
-    cfg = KafkaConsumerConfig(bootstrap_server=brokers.split(","),
-                              group_id=os.environ.get("OPS_TEST_KAFKA_GROUP", "ops-agent-none"),
-                              topic=topics)
+    cfg = KafkaConsumerConfig(
+        bootstrap_server=brokers.split(","),
+        group_ids=[g for g in os.environ.get("OPS_TEST_KAFKA_GROUP", "").split(",") if g],
+        topic=topics)
     return RealKafkaInspector(cfg, clock=clock)
 
 
