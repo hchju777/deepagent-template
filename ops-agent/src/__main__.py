@@ -368,6 +368,9 @@ def cmd_mail_send(args, env) -> int:
 
     result = asyncio.run(sender.send(subject, body))
     _out(json.loads(result.model_dump_json()))
+    for warning in result.warnings:
+        # 성공 판정이 HTTP 200뿐이므로, Agent가 낸 경고가 유일한 추가 신호다.
+        print(f"\n  ⚠  Agent 경고 — {warning}", file=sys.stderr)
     if result.neutralized_lines:
         print(f"\n  ⚠  본문에서 필드 머리글처럼 보이는 줄 "
               f"{result.neutralized_lines}개를 인용 표시(| )로 무력화했다", file=sys.stderr)

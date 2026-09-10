@@ -34,6 +34,9 @@ class MailResult(StrictModel):
     # Agent가 돌려준 응답. 성공 판정 규약을 모르므로 **그대로 남긴다** —
     # 200인데 내부적으로 실패했을 가능성을 우리가 삼키지 않기 위해서다.
     response: Any = None
+    # Agent가 응답에 실은 경고. 지금 우리의 성공 판정은 HTTP 200뿐이라
+    # **이것이 유일한 추가 신호**다 — 200인데 문제가 있었던 경우를 여기서 본다.
+    warnings: list[str] = []
     reason: str | None = None    # skipped일 때 왜 건너뛰었는가
 
     @model_validator(mode="after")

@@ -185,3 +185,56 @@ def test_기록만_하는_대역이_같은_문자열을_만든다(clock):
     asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
         recorder.send("제목", INJECTION))
     assert recorder.sent[0]["input_value"] == expected
+
+
+# ── 응답에서 무엇을 보관하는가 ─────────────────────────────────────────
+
+def test_되돌아온_메아리를_보관하지_않는다():
+    """Agent는 `outputs[*].inputs`에 **우리가 보낸 것을 통째로** 되돌려준다.
+
+    그대로 보관하면 보고서 전체가 두 번 저장된다 — 케이스 파일이 두 배가 되고,
+    본문에 든 것이 한 번 더 복제된다. 우리는 무엇을 보냈는지 이미 안다.
+    """
+    from src.infrastructure.mail_agent import summarize_agent_response
+
+    본문 = "보고서 본문 " * 500
+    kept, _ = summarize_agent_response({
+        "session_id": "s1",
+        "outputs": [{"inputs": {"input_value": f"to_email : a@x\nbody : \n{본문}"},
+                     "outputs": [{"results": {"message": {"text": "보냈습니다"}}}],
+                     "legacy_components": [], "warning": None}]})
+    assert 본문[:20] not in str(kept)
+    assert kept["session_id"] == "s1"
+    assert kept["outputs"][0]["outputs"][0]["results"]["message"]["text"] == "보냈습니다"
+
+
+def test_Agent의_경고를_뽑아낸다():
+    """성공 판정이 HTTP 200뿐이라 **이것이 유일한 추가 신호**다."""
+    from src.infrastructure.mail_agent import summarize_agent_response
+
+    _, warnings = summarize_agent_response(
+        {"outputs": [{"inputs": {}, "warning": "수신자 일부 실패"}]})
+    assert warnings == ["수신자 일부 실패"]
+
+
+async def test_경고가_결과에_실린다(mail_agent, clock):
+    api_base, recorder = mail_agent
+    recorder.warning = "일부 수신자에게 전달하지 못했습니다"
+    result = await AgentMailSender(_cfg(api_base), clock=clock).send("제목", "본문")
+    assert result.status == "sent"
+    assert result.warnings == ["일부 수신자에게 전달하지 못했습니다"]
+
+
+async def test_경고가_없으면_비어_있다(mail_agent, clock):
+    api_base, _ = mail_agent
+    result = await AgentMailSender(_cfg(api_base), clock=clock).send("제목", "본문")
+    assert result.warnings == []
+
+
+async def test_실제_응답에서_본문이_두_번_저장되지_않는다(mail_agent, clock):
+    """가짜 Agent가 실제와 같은 모양(메아리 포함)으로 답한다."""
+    api_base, _ = mail_agent
+    본문 = "구미 3라인 OEE 512 관측. " * 200
+    result = await AgentMailSender(_cfg(api_base), clock=clock).send("제목", 본문)
+    assert result.status == "sent"
+    assert "OEE 512" not in str(result.response), "응답에 본문이 되돌아와 저장됐다"

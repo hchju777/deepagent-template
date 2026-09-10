@@ -158,24 +158,67 @@ class AgentMailSender(MailPort):
                               neutralized_lines=changed,
                               error=f"{type(exc).__name__}: {exc}")
 
-        payload = _decode(response)
+        payload, warnings = _decode(response)
         if response.status_code >= 400:
             return MailResult(status="error", sent_at=self._clock(),
                               recipients=list(self._cfg.recipients), subject=subject,
                               neutralized_lines=changed, response=payload,
-                              error=f"HTTP {response.status_code}")
+                              warnings=warnings, error=f"HTTP {response.status_code}")
         # 200이면 "보냈다"로 본다. Agent가 내부적으로 실패했을 때의 응답 규약을
         # 우리가 모르므로 **응답을 그대로 남긴다** — 삼키지 않는 것이 최선이다.
         return MailResult(status="sent", sent_at=self._clock(),
                           recipients=list(self._cfg.recipients), subject=subject,
-                          neutralized_lines=changed, response=payload)
+                          neutralized_lines=changed, response=payload, warnings=warnings)
 
 
-def _decode(response: Any) -> Any:
+def summarize_agent_response(payload: Any) -> tuple[Any, list[str]]:
+    """보관할 것만 남기고, Agent가 낸 경고를 뽑아낸다.
+
+    실제 응답은 이런 모양이다(Langflow 계열):
+
+    ```
+    {"session_id": "...",
+     "outputs": [{"inputs": {"input_value": "to_email : ...\nsubject : ...\nbody : <본문 전체>"},
+                  "outputs": [...], "legacy_components": [], "warning": None}]}
+    ```
+
+    **`outputs[*].inputs`는 우리가 보낸 것을 그대로 되돌려준다.** 그대로 보관하면
+    보고서 전체가 **두 번** 저장된다 — 케이스 파일이 두 배가 되고, 본문에 든 것이
+    한 번 더 복제된다. 우리는 무엇을 보냈는지 이미 알고 있으므로 이 메아리는
+    버린다.
+
+    `warning`은 남긴다. Agent가 문제를 말하는 자리로 보이고, 지금 우리의 성공
+    판정은 HTTP 200뿐이라 **이 필드가 유일한 추가 신호**다.
+    """
+    if not isinstance(payload, dict):
+        return payload, []
+
+    warnings: list[str] = []
+    kept = {key: value for key, value in payload.items() if key != "outputs"}
+    outputs = payload.get("outputs")
+    if isinstance(outputs, list):
+        slim = []
+        for item in outputs:
+            if not isinstance(item, dict):
+                slim.append(item)
+                continue
+            # inputs(메아리)와 legacy_components(빈 목록)는 보관 가치가 없다.
+            entry = {k: v for k, v in item.items()
+                     if k not in ("inputs", "legacy_components")}
+            if entry.get("warning"):
+                warnings.append(str(entry["warning"]))
+            slim.append(entry)
+        kept["outputs"] = slim
+
+    text = str(kept)
+    if len(text) > 4000:
+        kept = {"_잘린응답": text[:4000]}
+    return kept, warnings
+
+
+def _decode(response: Any) -> tuple[Any, list[str]]:
     try:
         payload = response.json()
     except Exception:                                              # noqa: BLE001
-        return {"_비JSON응답": response.text[:1000]}
-    # 응답이 클 수 있다 — 결과에 통째로 실으면 로그와 케이스 파일이 부푼다.
-    text = str(payload)
-    return payload if len(text) <= 4000 else {"_잘린응답": text[:4000]}
+        return {"_비JSON응답": response.text[:1000]}, []
+    return summarize_agent_response(payload)

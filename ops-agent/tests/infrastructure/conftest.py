@@ -85,6 +85,7 @@ class _AgentRecorder:
     def __init__(self):
         self.requests: list[dict] = []
         self.status = 200
+        self.warning = None
 
 
 def _agent_handler_for(recorder: "_AgentRecorder"):
@@ -117,10 +118,19 @@ def _agent_handler_for(recorder: "_AgentRecorder"):
                     parsed[match.group(1).lower()] = match.group(2).strip()
             recipients = [a.strip() for a in parsed.get("to_email", "").split(",")
                           if a.strip()]
-            self._send(200, {"session_id": "sess-fake",
-                             "outputs": [{"results": {"message": {"text": "보냈습니다"}}}],
-                             "delivered_to": recipients,
-                             "read_subject": parsed.get("subject", "")})
+            # **실제 Agent와 같은 모양**으로 돌려준다(Langflow 계열):
+            # outputs[*].inputs 가 우리가 보낸 것을 통째로 되돌려준다.
+            self._send(200, {
+                "session_id": "sess-fake",
+                "outputs": [{
+                    "inputs": {"input_value": body.get("input_value", "")},
+                    "outputs": [{"results": {"message": {"text": "보냈습니다"}}}],
+                    "legacy_components": [],
+                    "warning": recorder.warning,
+                }],
+                "delivered_to": recipients,
+                "read_subject": parsed.get("subject", ""),
+            })
     return Handler
 
 
