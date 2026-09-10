@@ -39,7 +39,7 @@ CONFIG_ROOT = Path(os.environ.get("OPS_CONFIG_ROOT", "config"))
 
 
 @pytest.fixture(scope="module")
-def llm():
+def llm_config():
     from dotenv import load_dotenv
     load_dotenv()
     try:
@@ -52,7 +52,12 @@ def llm():
     if problems:
         pytest.skip(f"TLS 설정 문제 — {problems[0]}")
     print(f"\n  {app.llm.describe()}")
-    return build_llm(app.llm, clock=lambda: datetime.now().astimezone(), warn=print)
+    return app.llm
+
+
+@pytest.fixture(scope="module")
+def llm(llm_config):
+    return build_llm(llm_config, clock=lambda: datetime.now().astimezone(), warn=print)
 
 
 # ── 붙는가 ────────────────────────────────────────────────────────────
@@ -70,17 +75,20 @@ async def test_한국어로_답한다(llm):
         f"한국어가 안 나왔다 — 보고서가 영어로 나올 수 있다: {reply.text[:200]}")
 
 
-async def test_설정한_모델이_실제로_쓰인다(llm):
-    """게이트웨이가 응답에 모델 이름을 실어 주면, 그게 우리가 요청한 것이어야 한다.
+async def test_기대한_모델이_실제로_답한다(llm, llm_config):
+    """응답에 실려 온 모델 이름이 config에 박제한 것과 같은가.
 
-    다르면 "config가 안 먹었다"는 뜻인데 **답은 오므로 아무도 알아채지 못한다.**
+    사내 게이트웨이는 `GET /models`에 405를 준다 — 어느 model_id가 어느 모델인지
+    **런타임에 알아낼 방법이 없다.** 확인할 수 있는 유일한 경로가 이 이름이고,
+    그래서 사람이 한 번 확인해 `expect_reported_model`에 적어 둔다.
+
+    적어 두면 게이트웨이가 나중에 모델을 **조용히 바꿨을 때** 여기서 드러난다.
+    답은 계속 오므로 다른 방법으로는 알 수 없다.
     """
     reply = await llm.ask("hi")
     assert reply.status == "ok", reply.error
-    if not reply.reported_model:
-        pytest.skip("게이트웨이가 응답에 모델 이름을 안 싣는다")
-    assert reply.model in reply.reported_model, (
-        f"config는 {reply.model}을 요청했는데 게이트웨이는 {reply.reported_model}로 응답했다")
+    problem = llm_config.reported_model_problem(reply.reported_model)
+    assert problem is None, problem
 
 
 # ── 엔진이 요구하는 것을 낼 수 있는가 ──────────────────────────────────

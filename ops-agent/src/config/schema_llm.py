@@ -85,8 +85,26 @@ class TlsConfig(StrictModel):
 class LlmConfig(StrictModel):
     adapter: Literal["chat_model", "http", "echo"] = "chat_model"
     provider: Literal["openai_compatible"] = "openai_compatible"
+    # 요청 body의 `model` 필드에 실린다.
+    #
+    # **주의: 게이트웨이에 따라 이 값이 아무 일도 안 한다.** 사내 게이트웨이는
+    # `X-LLM-MODEL-ID` 헤더로 모델을 고르고 body의 model은 검증조차 하지 않는다
+    # (없는 이름을 적어도 정상 응답이 온다). 그런 게이트웨이에서 이 필드는
+    # **사람이 읽는 이름표**일 뿐이고, 실제로 무엇이 답했는지는
+    # `expect_reported_model`로 확인한다.
     model: str
-    model_id: str = ""                     # X-LLM-MODEL-ID (사내 게이트웨이)
+    # X-LLM-MODEL-ID 헤더. 사내 게이트웨이에서는 **이것이 진짜 선택자다** —
+    # 값을 바꾸면 호출 자체가 실패한다(그게 라우팅한다는 증거다).
+    model_id: str = ""
+    # 게이트웨이가 응답에 실어 주는 모델 이름. **사람이 확인해서 적는다.**
+    #
+    # 왜 필요한가: 사내 게이트웨이는 `GET /models`에 405를 준다 — 어느 ID가 어느
+    # 모델인지 **런타임에 알아낼 방법이 없다.** 확인할 수 있는 유일한 경로가
+    # 응답에 실려 오는 이름이고, 그것을 여기 박제해 두면 게이트웨이가 나중에
+    # 모델을 조용히 바꿨을 때 즉시 드러난다.
+    #
+    # 비워 두면 `model`과 같기를 기대한다(요청한 이름으로 답하는 보통의 게이트웨이).
+    expect_reported_model: str | None = None
     temperature: float = 0.0
     base_url: str = ""
     timeout_s: float = 60.0
@@ -168,11 +186,45 @@ class LlmConfig(StrictModel):
             headers["X-LLM-MODEL-ID"] = self.model_id
         return headers
 
+    def expected_model_name(self) -> str:
+        """응답에 실려 오기를 기대하는 이름."""
+        return self.expect_reported_model or self.model
+
+    def reported_model_problem(self, reported: str | None) -> str | None:
+        """게이트웨이가 답한 모델이 기대와 다른가. **비교는 여기 한 곳뿐이다.**
+
+        CLI와 live 테스트가 각자 비교하면 관용 범위가 갈라지고, 느슨한 쪽이
+        "통과했다"고 말한다.
+
+        부분 일치로 보는 이유: 게이트웨이가 접두사를 붙이는 일이 흔하다
+        (`gpt-oss-120b`를 요청하면 `openai/gpt-oss-120b`로 답한다). 그건 같은
+        모델이므로 실패로 칠 이유가 없다.
+
+        `reported`가 없으면 None이다 — 게이트웨이가 이름을 안 실어 주면 확인할
+        방법이 없고, **확인할 수 없는 것을 실패로 만들면 그 신호는 곧 무시된다.**
+        """
+        if not reported:
+            return None
+        expected = self.expected_model_name()
+        if expected in reported:
+            return None
+        if self.expect_reported_model:
+            return (f"게이트웨이가 모델을 바꿨다 — config는 "
+                    f"{self.expect_reported_model}를 박제했는데 {reported}로 응답했다. "
+                    f"의도한 변경이면 config를 갱신하고, 아니면 사내에 확인하라")
+        return (f"요청한 이름({self.model})과 응답한 이름({reported})이 다르다. "
+                f"이 게이트웨이는 body의 model을 안 볼 수 있다 — 실제로 무엇이 "
+                f"답하는지 확인한 뒤 config의 llm에 다음을 적어라:\n"
+                f'    "expect_reported_model": "{reported}"')
+
     def describe(self) -> str:
         """사람이 읽을 한 줄 — 비밀값은 담지 않는다."""
         auth = "헤더 셋(사내 게이트웨이)" if self.pass_key else "api_key"
         tls = ("시스템 저장소" if self.tls.use_system_store
                else self.tls.ca_bundle or ("검증 켬" if self.tls.verify else "⚠ 검증 끔"))
+        served = (f" 실제={self.expect_reported_model}"
+                  if self.expect_reported_model and
+                  self.expect_reported_model != self.model else "")
         return (f"{self.adapter}/{self.provider} {self.model}"
-                f"{f'(id={self.model_id})' if self.model_id else ''} "
+                f"{f'(id={self.model_id})' if self.model_id else ''}{served} "
                 f"→ {self.base_url or '(네트워크 없음)'} [인증: {auth}, TLS: {tls}]")

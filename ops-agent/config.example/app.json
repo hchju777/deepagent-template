@@ -12,6 +12,7 @@
     "client_key": "${LLM_CLIENT_KEY}",
     "tls": {
       "use_system_store": true
-    }
+    },
+    "expect_reported_model": "openai/gpt-oss-120b"
   }
 }

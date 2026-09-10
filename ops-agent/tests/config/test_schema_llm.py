@@ -82,3 +82,57 @@ def test_describe에_비밀값이_없다():
     described = LlmConfig(**GATEWAY).describe()
     assert "pass-123" not in described
     assert "gauss-o-flash" in described and "339" in described
+
+
+# ── 게이트웨이가 실제로 어느 모델로 답하는가 ───────────────────────────
+#
+# 사내 게이트웨이는 `GET /models`에 405를 준다 — 어느 model_id가 어느 모델인지
+# 런타임에 알아낼 방법이 없다. 그리고 body의 `model`은 검증조차 안 된다(없는
+# 이름을 적어도 정상 응답이 온다). 확인할 수 있는 유일한 경로가 응답에 실려 오는
+# 이름이고, 그것을 사람이 한 번 확인해 config에 박제한다.
+
+def test_박제한_이름과_일치하면_문제없다():
+    cfg = LlmConfig(**GATEWAY, expect_reported_model="openai/gpt-oss-120b")
+    assert cfg.reported_model_problem("openai/gpt-oss-120b") is None
+
+
+def test_박제한_뒤_게이트웨이가_모델을_바꾸면_잡는다():
+    """이게 이 필드의 존재 이유다 — 답은 계속 오므로 다른 방법으로는 모른다."""
+    cfg = LlmConfig(**GATEWAY, expect_reported_model="openai/gpt-oss-120b")
+    problem = cfg.reported_model_problem("meta/llama-3-70b")
+    assert problem and "게이트웨이가 모델을 바꿨다" in problem
+
+
+def test_박제_전에_불일치면_적어야_할_줄을_알려준다():
+    # 실패 메시지가 "틀렸다"로 끝나면 사람은 무엇을 해야 할지 모른다.
+    problem = LlmConfig(**GATEWAY).reported_model_problem("openai/gpt-oss-120b")
+    assert problem
+    assert '"expect_reported_model": "openai/gpt-oss-120b"' in problem
+
+
+def test_요청한_이름으로_답하면_박제가_필요없다():
+    # 보통의 게이트웨이 — body의 model을 존중한다.
+    cfg = LlmConfig(model="gpt-4o-mini", base_url="https://api.example/v1")
+    assert cfg.reported_model_problem("gpt-4o-mini") is None
+
+
+def test_접두사만_다르면_같은_모델로_본다():
+    # `gpt-oss-120b`를 요청하면 `openai/gpt-oss-120b`로 답하는 게이트웨이가 흔하다.
+    cfg = LlmConfig(model="gpt-oss-120b", base_url="https://g/v1")
+    assert cfg.reported_model_problem("openai/gpt-oss-120b") is None
+
+
+def test_이름을_안_실어_주면_확인하지_않는다():
+    """확인할 수 없는 것을 실패로 만들면 그 신호는 곧 무시된다."""
+    assert LlmConfig(**GATEWAY).reported_model_problem(None) is None
+    assert LlmConfig(**GATEWAY).reported_model_problem("") is None
+
+
+def test_describe가_실제_모델을_같이_보인다():
+    described = LlmConfig(**GATEWAY, expect_reported_model="openai/gpt-oss-120b").describe()
+    assert "gauss-o-flash" in described and "실제=openai/gpt-oss-120b" in described
+
+
+def test_박제가_요청_이름과_같으면_describe를_어지럽히지_않는다():
+    described = LlmConfig(model="m", base_url="https://g", expect_reported_model="m").describe()
+    assert "실제=" not in described

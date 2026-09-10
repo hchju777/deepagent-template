@@ -303,8 +303,10 @@ def cmd_llm_check(args, env) -> int:
     llm = build_llm(cfg, clock=_clock())
     print(f"  {cfg.describe()}\n")
     failed = 0
+    reported = None
     for name, prompt, ok in _CHECKS:
         reply = asyncio.run(llm.ask(prompt))
+        reported = reported or reply.reported_model
         if reply.status == "error":
             print(f"  {name:<8} ❌ {reply.error}")
             failed += 1
@@ -312,10 +314,17 @@ def cmd_llm_check(args, env) -> int:
         mark = "✅" if ok(reply.text) else "⚠ "
         failed += 0 if ok(reply.text) else 1
         print(f"  {name:<8} {mark} ({reply.latency_s}s) {reply.text.strip()[:110]}")
-        if reply.reported_model and cfg.model not in reply.reported_model:
-            # 요청한 모델과 응답한 모델이 다르면 "설정이 안 먹었다"는 뜻이고,
-            # 그건 조용한 실패다 — 답은 오므로 아무도 알아채지 못한다.
-            print(f"  {'':<8} ⚠  요청={cfg.model} 응답={reply.reported_model}")
+
+    # 모델 확인은 **한 번만** 찍는다. 항목마다 같은 경고를 반복하면 읽는 사람이
+    # 세 줄을 하나로 뭉뚱그려 넘기고, 그러면 진짜 경고도 같이 넘어간다.
+    problem = cfg.reported_model_problem(reported)
+    if problem:
+        print(f"\n  ⚠  {problem}")
+        failed += 1
+    elif reported:
+        print(f"\n  모델     ✅ {reported} (게이트웨이가 응답에 실어 준 이름)")
+    else:
+        print("\n  모델     ⏸  게이트웨이가 응답에 모델 이름을 안 싣는다 — 확인할 방법이 없다")
     return 1 if failed else 0
 
 
