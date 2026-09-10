@@ -107,8 +107,6 @@ python -m src report window --today 2026-09-07
 
 ## 검토 포인트
 
-0. `config.example/scenarios/`를 **`config/scenarios/`로 복사**했는가 — 명령은
-   `--config-root` 기본값인 `config/`를 본다. 예제 트리는 본보기일 뿐이다.
 1. `report window --today`를 월/화/토요일로 각각 돌려 날짜 목록이 상식과 맞는가.
 2. 사내 `occ_date` 형식이 정말 `%Y-%m-%d %H:%M:%S`인가 — 다르면
    `scenarios/daily-alarm.json`의 `date_format`만 바꾸면 된다.

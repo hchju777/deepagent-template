@@ -187,41 +187,74 @@ def test_시나리오가_없어도_기동은_통과한다(config_root):
 
 # cwd가 아니라 파일 위치 기준 — 다른 디렉터리에서 pytest를 돌려도 같아야 한다.
 REPO = Path(__file__).resolve().parents[2]
-
-# 예제 트리의 `${...}`를 채우는 가짜 값. 접속은 하지 않으므로 형식만 맞으면 된다.
-EXAMPLE_ENV = {"LLM_BASE_URL": "https://x", "LLM_PASS_KEY": "a", "LLM_CLIENT_KEY": "b",
-               "MAIL_AGENT_ID": "c", "MAIL_AGENT_API_KEY": "d",
-               "REDIS_PASSWORD": "e", "MONGO_PASSWORD": "f"}
+CONFIG = REPO / "config"
 
 
-def test_예제_config가_실제로_통과한다():
-    """리포에 든 예제가 스스로 깨져 있으면 아무도 그것을 본보기로 못 쓴다.
+def env_references(root: Path) -> set[str]:
+    """config 트리가 `${...}`로 참조하는 env 이름 전부.
 
-    `config.example`을 보는 이유: 리포에 **들어 있는** 트리라 갓 클론한 곳에서도
-    돈다. 실제로 쓰는 `config/`는 사람이 만들고 리포에 없으므로, 이 단정을
-    거기로 옮기면 클론 직후 pytest가 빨갛게 뜬다.
+    로더와 **같은 정규식**을 쓴다 — 여기서 따로 패턴을 베끼면 로더가 인식하는
+    참조를 테스트는 못 보는 상태가 생긴다(`${MY-KEY}`를 놓쳤던 적이 있다).
     """
-    assert (REPO / "config.example").is_dir(), "예제 트리가 사라졌다"
-    assert validate_boot(REPO / "config.example", env=EXAMPLE_ENV) == []
+    from src.config.envresolve import _REFERENCE
+
+    names: set[str] = set()
+    for path in sorted(root.rglob("*.json")):
+        names |= set(_REFERENCE.findall(path.read_text(encoding="utf-8")))
+    return names
 
 
-def test_실제_config가_있으면_그것도_통과한다():
-    """`config/`가 있으면 그것도 본다 — 사내에서 pytest가 곧 기동 전 점검이 된다.
+def placeholder_env(names: set[str]) -> dict[str, str]:
+    """이름에서 형식만 맞는 가짜 값을 만든다. 접속은 하지 않으므로 모양만 맞으면 된다.
 
-    env는 CLI와 같은 출처(`.env`)를 쓴다. 가짜 값으로 보면 "사내 트리는 통과했다"가
-    거짓이 된다 — 실제로 비어 있는 env 참조를 못 잡기 때문이다.
-    `.env`를 읽기만 하고 `os.environ`에 심지는 않는다(테스트가 전역을 오염시키면
-    순서에 따라 다른 테스트 결과가 바뀐다).
+    이름을 손으로 적은 목록을 두지 않는 이유: config에 새 참조가 생기면 그 목록이
+    조용히 낡고, 테스트는 "env가 비어 있다"로 실패해 **새 참조가 문제인지 설정이
+    문제인지** 구분이 안 된다.
     """
-    root = REPO / "config"
-    if not root.is_dir():
-        pytest.skip("config/는 사람이 만든다 — 리포에는 config.example만 들어 있다")
+    return {name: ("https://x" if name.endswith("_URL") else "dummy") for name in names}
 
-    env = dict(os.environ)
+
+def real_env() -> dict[str, str] | None:
+    """`.env`가 있으면 그 값. CLI와 같은 출처여야 "통과했다"가 거짓이 아니다.
+
+    `os.environ`에 심지 않는다 — 테스트가 전역을 오염시키면 실행 순서에 따라
+    다른 테스트의 결과가 바뀐다.
+    """
     env_file = REPO / ".env"
-    if env_file.exists():
-        from dotenv import dotenv_values
-        env = {**{k: v for k, v in dotenv_values(env_file).items() if v}, **env}
+    if not env_file.exists():
+        return None
+    from dotenv import dotenv_values
+    return {**{k: v for k, v in dotenv_values(env_file).items() if v}, **os.environ}
 
-    errors = validate_boot(root, env=env)
+
+def test_config_트리가_실제로_통과한다():
+    """리포에 든 설정이 스스로 깨져 있으면 아무도 그것을 본보기로 못 쓴다.
+
+    `.env`가 있으면 **그것으로** 본다 — 사내에서 pytest가 곧 기동 전 점검이 된다.
+    없으면(갓 클론한 트리, CI) 가짜 값으로 형식만 본다.
+    """
+    env = real_env() or placeholder_env(env_references(CONFIG))
+    errors = validate_boot(CONFIG, env=env)
     assert errors == [], "config/ 기동 검증 실패:\n" + "\n".join(str(e) for e in errors)
+
+
+def test_env_참조와_env_example이_어긋나지_않는다():
+    """`.env.example`은 "어떤 키가 필요한가"의 문서다. 문서가 낡으면 사내에서
+    배포할 때 **어떤 키를 채워야 하는지** 알 방법이 없다(config 전체를 grep하는
+    수밖에 없다).
+    """
+    from dotenv import dotenv_values
+
+    documented = set(dotenv_values(REPO / ".env.example"))
+    referenced = env_references(CONFIG)
+    assert referenced - documented == set(), \
+        f"config가 참조하는데 .env.example에 없다 — {sorted(referenced - documented)}"
+    assert documented - referenced == set(), \
+        f".env.example에 있는데 config가 안 쓴다 — {sorted(documented - referenced)}"
+
+
+def test_시나리오_파일이_리포에_들어_있다():
+    """`report window`가 "시나리오가 없다"로 막히던 적이 있다 — 예제 트리에만
+    넣고 실제 트리에는 없었기 때문이다. 트리가 하나가 된 뒤에도 그 파일이
+    사라지지 않는지 본다."""
+    assert load_scenarios(CONFIG), f"{CONFIG / 'scenarios'}가 비어 있다"

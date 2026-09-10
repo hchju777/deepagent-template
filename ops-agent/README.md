@@ -31,16 +31,31 @@ Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 
 
 ## 설정 트리
 
-리포에 들어 있는 것은 **`config.example/`(본보기)**뿐이다. 실제로 쓰는 것은
-`config/`이고, 모든 명령의 `--config-root` 기본값이 그것이다. 처음 한 번 복사한다:
+설정은 `config/` **하나**다. 리포에 들어 있고, 모든 명령의 `--config-root`
+기본값이 그것이다. 복사할 예제 트리를 따로 두지 않는다 — 예제에만 파일을 넣고
+실제 트리에는 안 넣는 사고가 실제로 났다(`report window`가 "시나리오가 없다"로
+막혔다).
 
-```bash
-cp -r config.example config        # Windows: xcopy /E /I config.example config
+```
+config/
+  app.json                  시간대·출력 경로·LLM·메일 (사이트를 가로지르는 것)
+  registry.json             어느 (gbm, fct) 조합이 실재하는가
+  gbm/common.json           전 사업부·전 법인 공통
+  gbm/<gbm>.json            사업부 공통 — redis 키 규칙, REST 등재 항목
+  fct/<fct>/common.json     법인 공통
+  fct/<fct>/<gbm>.json      법인 × 사업부 — 실제 접속 url
+  scenarios/<이름>.json      운영 리포트 (층 병합을 타지 않는다)
 ```
 
-비밀은 `config/`에 적지 않는다 — `${REDIS_PASSWORD}`처럼 참조만 두고 값은
-`.env`에 둔다(`.env`는 gitignore). 새 파일을 `config.example/`에만 추가하면
-`config/`에는 없으니 명령이 "없다"고 한다 — **양쪽에 넣어라.**
+**비밀은 `config/`에 적지 않는다** — `${REDIS_PASSWORD}`처럼 참조만 두고 값은
+`.env`에 둔다(`.env`는 gitignore, 필요한 키는 [`.env.example`](.env.example)).
+비밀이 **아닌** 것(url, 모델 ID, 수신자 목록)은 `config/`에 둔다 — git에 있어야
+리뷰가 된다.
+
+리포에 든 값은 접속이 안 되는 자리표시자(`redis://h:6379`)다. 사내에서는 그 값을
+실제 값으로 고쳐 쓰고 커밋한다. `pytest`가 `config/`를 검증하므로 — `.env`가
+있으면 그 값으로, 없으면 형식만 — 설정을 고친 뒤 `pytest` 한 번이 기동 전
+점검이다.
 
 ## 데이터를 하나 꺼내 보기
 
