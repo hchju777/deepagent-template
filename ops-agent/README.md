@@ -35,8 +35,10 @@ python -m src doctor                                  # 실제로 붙는가
 python -m src peek redis --key oee:L3
 python -m src peek mongo --collection oee --filter '{"line":"L3"}' --limit 5
 python -m src peek kafka --lag
-python -m src peek rest --entry oee_summary --params '{"line":"L3"}'
+python -m src peek rest --entry summary_badge --params '{"line_code":"P222"}'
 ```
+
+사이트가 여러 개면 `--gbm mx --fct gumi`를 붙인다 — **하위 명령 앞뒤 아무 데나** 된다.
 
 자세한 것은 [3b단계 문서](STEPS/step-03b-adapters.md).
 

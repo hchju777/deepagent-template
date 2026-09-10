@@ -13,8 +13,37 @@ python -m src doctor                    # 실제로 붙는가
 python -m src peek redis --key oee:L3   # 무엇이 보이는가
 ```
 
-사이트가 둘 이상이면 `--gbm mx --fct gumi`로 고른다. 하나뿐이면 생략해도 된다 —
-**임의로 첫 번째를 고르지는 않는다.** 그러면 다른 법인의 Redis를 들여다보게 된다.
+### 어느 사이트를 볼 것인가
+
+`--gbm`/`--fct`는 **하위 명령 앞뒤 어디에 써도 된다**:
+
+```bash
+python -m src --gbm mx --fct gumi peek redis --key oee:L3
+python -m src peek redis --key oee:L3 --gbm mx --fct gumi     # 같다
+```
+
+argparse의 전역 옵션은 원래 하위 명령 **앞**에만 오지만, 사람은 뒤에 쓰는 쪽이
+자연스럽다. 그래서 양쪽에 달아 뒀다(하위 파서 쪽 기본값을 `SUPPRESS`로 두지
+않으면 "안 줬음"이 앞의 값을 덮어쓴다).
+
+한쪽만 줘도 **후보가 하나로 좁혀지면** 통한다:
+
+```bash
+python -m src peek redis --key oee:L3 --fct sevt     # 사업부가 mx뿐이면 충분
+```
+
+활성 사이트가 하나뿐이면 아예 생략해도 된다. 좁혀지지 않으면 **묻는다** —
+임의로 첫 번째를 고르지 않는다. 그건 다른 법인의 Redis를 들여다보는 길이고,
+에러가 아니라 조용히 잘못된 답이라 알아채기까지 오래 걸린다:
+
+```console
+$ python -m src peek rest --list
+사이트가 여러 개다 — mx/gumi, mx/sevt
+  --gbm/--fct로 하나를 골라라. 예:
+    python -m src --gbm mx --fct gumi peek ...
+  하위 명령 뒤에 써도 된다:
+    python -m src peek ... --gbm mx --fct gumi
+```
 
 ---
 

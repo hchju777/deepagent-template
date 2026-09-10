@@ -8,7 +8,8 @@
     python -m src sites                 registry의 사이트 목록
     python -m src config show           병합된 설정 + 값의 출처(비밀번호는 가려진다)
     python -m src doctor                네 시스템에 실제로 붙어 본다
-    python -m src peek redis  --key oee:L3
+    python -m src --gbm mx --fct gumi peek redis --key oee:L3
+    python -m src peek redis --key oee:L3 --gbm mx --fct gumi   (뒤에 써도 된다)
     python -m src peek mongo  --collection oee --filter '{"line":"L3"}' --limit 5
     python -m src peek kafka  --topic topic1 --limit 5
     python -m src peek rest   --entry oee_summary --params '{"line":"L3"}'
@@ -39,24 +40,37 @@ def _load_env(env_file: Path) -> dict[str, str]:
 
 
 def _resolve_site(config_root: Path, args, env: dict[str, str]):
-    """--gbm/--fct를 안 주면 활성 사이트가 하나일 때만 그것을 쓴다.
+    """registry에서 대상 사이트 하나를 고른다.
 
-    둘 이상인데 안 골랐으면 **묻는다.** 임의로 첫 번째를 고르면 다른 법인의
-    Redis를 들여다보게 된다.
+    - 둘 다 주면 그 조합. 한쪽만 줘도 **후보가 하나로 좁혀지면** 그것을 쓴다
+      (사업부가 mx뿐이면 `--fct sevt`만으로 충분하다).
+    - 아무것도 안 줬는데 활성 사이트가 하나면 그것.
+    - 좁혀지지 않으면 **묻는다.** 임의로 첫 번째를 고르면 다른 법인의 Redis를
+      들여다보게 되고, 그건 조용히 잘못된 답을 내는 형태다.
     """
     registry = load_registry(config_root)
-    active = registry.active()
-    if args.gbm and args.fct:
-        gbm, fct = args.gbm, args.fct
-        if not any(e.gbm == gbm and e.fct == fct for e in registry.sites):
-            names = ", ".join(str(e) for e in registry.sites) or "(없음)"
-            raise SystemExit(f"registry에 없는 사이트 — {gbm}/{fct}. 등록된 것: {names}")
-    elif len(active) == 1:
-        gbm, fct = active[0].gbm, active[0].fct
-    else:
-        names = ", ".join(str(e) for e in active) or "(활성 사이트 없음)"
-        raise SystemExit(f"--gbm/--fct로 하나를 골라라 — {names}")
-    return load_site_config(config_root, gbm, fct, env=env)
+    candidates = [e for e in registry.sites
+                  if (not args.gbm or e.gbm == args.gbm)
+                  and (not args.fct or e.fct == args.fct)]
+    if not args.gbm and not args.fct:
+        candidates = registry.active()
+
+    if len(candidates) == 1:
+        picked = candidates[0]
+        return load_site_config(config_root, picked.gbm, picked.fct, env=env)
+
+    asked = "/".join(filter(None, (args.gbm, args.fct)))
+    known = ", ".join(str(e) for e in registry.sites) or "(registry가 비어 있다)"
+    if not candidates:
+        raise SystemExit(f"registry에 없는 사이트 — {asked}. 등록된 것: {known}")
+    raise SystemExit(
+        f"사이트가 여러 개다 — {', '.join(str(e) for e in candidates)}\n"
+        f"  --gbm/--fct로 하나를 골라라. 예:\n"
+        f"    python -m src --gbm {candidates[0].gbm} --fct {candidates[0].fct} "
+        f"{args.command} ...\n"
+        f"  하위 명령 뒤에 써도 된다:\n"
+        f"    python -m src {args.command} ... --gbm {candidates[0].gbm} "
+        f"--fct {candidates[0].fct}")
 
 
 def _render(result) -> dict:
@@ -237,12 +251,24 @@ def _clock():
 
 # ── 파서 ──────────────────────────────────────────────────────────────
 
+def _add_site_options(target, *, sub: bool) -> None:
+    """`--gbm/--fct`를 전역과 하위 명령 **양쪽**에 단다.
+
+    argparse의 전역 옵션은 하위 명령 **앞**에만 올 수 있다. 그런데 사람은
+    `peek redis --key x --gbm mx`처럼 뒤에 쓰는 쪽이 자연스럽다. 양쪽에 달되
+    하위 명령 쪽은 `SUPPRESS`를 기본값으로 둔다 — 그러지 않으면 하위 파서가
+    "안 줬음(None)"으로 전역에서 받은 값을 덮어써 버린다.
+    """
+    extra = {"default": argparse.SUPPRESS} if sub else {}
+    target.add_argument("--gbm", help="사업부 (예: mx). 후보가 하나면 생략 가능", **extra)
+    target.add_argument("--fct", help="법인/공장 (예: gumi)", **extra)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m src", description="운영 모니터링 에이전트")
     parser.add_argument("--config-root", type=Path, default=Path("config"))
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
-    parser.add_argument("--gbm", help="사업부 (예: mx). 활성 사이트가 하나면 생략 가능")
-    parser.add_argument("--fct", help="법인/공장 (예: gumi)")
+    _add_site_options(parser, sub=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("boot", help="기동 검증").set_defaults(run=cmd_boot)
@@ -252,13 +278,17 @@ def build_parser() -> argparse.ArgumentParser:
     config_sub = config.add_subparsers(dest="what", required=True)
     show = config_sub.add_parser("show")
     show.add_argument("--no-provenance", action="store_true", help="출처 표를 숨긴다")
+    _add_site_options(show, sub=True)
     show.set_defaults(run=cmd_config_show)
 
-    sub.add_parser("doctor", help="네 시스템에 실제로 붙어 본다").set_defaults(run=cmd_doctor)
+    doctor = sub.add_parser("doctor", help="네 시스템에 실제로 붙어 본다")
+    _add_site_options(doctor, sub=True)
+    doctor.set_defaults(run=cmd_doctor)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)
     peek.add_argument("system", choices=["redis", "mongo", "kafka", "rest"])
+    _add_site_options(peek, sub=True)
     peek.add_argument("--stub-seeds", help="이 파일이 있으면 실접속 대신 가짜 데이터를 쓴다")
     # redis
     peek.add_argument("--key"), peek.add_argument("--scan"), peek.add_argument("--ttl")
