@@ -14,7 +14,7 @@
 그래서 이 단계의 산출물은 코드가 아니라 **`report window` 명령의 출력**이다.
 
 ```bash
-python -m src --config-root config.example report window --today 2026-09-07
+python -m src report window --today 2026-09-07
 ```
 
 ```json
@@ -107,9 +107,12 @@ python -m src --config-root config.example report window --today 2026-09-07
 
 ## 검토 포인트
 
+0. `config.example/scenarios/`를 **`config/scenarios/`로 복사**했는가 — 명령은
+   `--config-root` 기본값인 `config/`를 본다. 예제 트리는 본보기일 뿐이다.
 1. `report window --today`를 월/화/토요일로 각각 돌려 날짜 목록이 상식과 맞는가.
 2. 사내 `occ_date` 형식이 정말 `%Y-%m-%d %H:%M:%S`인가 — 다르면
    `scenarios/daily-alarm.json`의 `date_format`만 바꾸면 된다.
 3. `unresolved_status`(0·10·1)와 필드 이름 매핑이 실제 문서와 맞는가.
-4. **`occ_date`에 인덱스가 있는가.** 없으면 16일치 범위 스캔이 컬렉션 전체를
-   훑는다 — 대상 시스템에 영향을 주지 않는다는 전제가 깨진다.
+4. ~~`occ_date`에 인덱스가 있는가~~ → **있다**(2026-09 확인). 16일치 범위 스캔이
+   인덱스를 타므로 9b는 한 번에 긁는 설계 그대로 간다. 인덱스가 없었다면 하루씩
+   쪼개 던지거나 `sample`을 더 조여야 했다.

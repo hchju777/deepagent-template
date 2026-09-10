@@ -29,6 +29,19 @@ Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 
 
 검증된 파이썬: 3.11.3(사내 Windows), 3.11.15(개발).
 
+## 설정 트리
+
+리포에 들어 있는 것은 **`config.example/`(본보기)**뿐이다. 실제로 쓰는 것은
+`config/`이고, 모든 명령의 `--config-root` 기본값이 그것이다. 처음 한 번 복사한다:
+
+```bash
+cp -r config.example config        # Windows: xcopy /E /I config.example config
+```
+
+비밀은 `config/`에 적지 않는다 — `${REDIS_PASSWORD}`처럼 참조만 두고 값은
+`.env`에 둔다(`.env`는 gitignore). 새 파일을 `config.example/`에만 추가하면
+`config/`에는 없으니 명령이 "없다"고 한다 — **양쪽에 넣어라.**
+
 ## 데이터를 하나 꺼내 보기
 
 ```bash

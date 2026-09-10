@@ -5,6 +5,7 @@ GBM 목록에 없는 법인, 법인이 하나도 없는 GBM, 중복된 사이트
 분모를 바꾸는데 아무 예외도 안 낸다.
 """
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -184,11 +185,43 @@ def test_시나리오가_없어도_기동은_통과한다(config_root):
     assert messages(config_root) == ""
 
 
+# cwd가 아니라 파일 위치 기준 — 다른 디렉터리에서 pytest를 돌려도 같아야 한다.
+REPO = Path(__file__).resolve().parents[2]
+
+# 예제 트리의 `${...}`를 채우는 가짜 값. 접속은 하지 않으므로 형식만 맞으면 된다.
+EXAMPLE_ENV = {"LLM_BASE_URL": "https://x", "LLM_PASS_KEY": "a", "LLM_CLIENT_KEY": "b",
+               "MAIL_AGENT_ID": "c", "MAIL_AGENT_API_KEY": "d",
+               "REDIS_PASSWORD": "e", "MONGO_PASSWORD": "f"}
+
+
 def test_예제_config가_실제로_통과한다():
-    """리포에 든 예제가 스스로 깨져 있으면 아무도 그것을 본보기로 못 쓴다."""
-    env = {"LLM_BASE_URL": "https://x", "LLM_PASS_KEY": "a", "LLM_CLIENT_KEY": "b",
-           "MAIL_AGENT_ID": "c", "MAIL_AGENT_API_KEY": "d",
-           "REDIS_PASSWORD": "e", "MONGO_PASSWORD": "f"}
-    # cwd가 아니라 파일 위치 기준 — 다른 디렉터리에서 pytest를 돌려도 같아야 한다.
-    example = Path(__file__).resolve().parents[2] / "config.example"
-    assert validate_boot(example, env=env) == []
+    """리포에 든 예제가 스스로 깨져 있으면 아무도 그것을 본보기로 못 쓴다.
+
+    `config.example`을 보는 이유: 리포에 **들어 있는** 트리라 갓 클론한 곳에서도
+    돈다. 실제로 쓰는 `config/`는 사람이 만들고 리포에 없으므로, 이 단정을
+    거기로 옮기면 클론 직후 pytest가 빨갛게 뜬다.
+    """
+    assert (REPO / "config.example").is_dir(), "예제 트리가 사라졌다"
+    assert validate_boot(REPO / "config.example", env=EXAMPLE_ENV) == []
+
+
+def test_실제_config가_있으면_그것도_통과한다():
+    """`config/`가 있으면 그것도 본다 — 사내에서 pytest가 곧 기동 전 점검이 된다.
+
+    env는 CLI와 같은 출처(`.env`)를 쓴다. 가짜 값으로 보면 "사내 트리는 통과했다"가
+    거짓이 된다 — 실제로 비어 있는 env 참조를 못 잡기 때문이다.
+    `.env`를 읽기만 하고 `os.environ`에 심지는 않는다(테스트가 전역을 오염시키면
+    순서에 따라 다른 테스트 결과가 바뀐다).
+    """
+    root = REPO / "config"
+    if not root.is_dir():
+        pytest.skip("config/는 사람이 만든다 — 리포에는 config.example만 들어 있다")
+
+    env = dict(os.environ)
+    env_file = REPO / ".env"
+    if env_file.exists():
+        from dotenv import dotenv_values
+        env = {**{k: v for k, v in dotenv_values(env_file).items() if v}, **env}
+
+    errors = validate_boot(root, env=env)
+    assert errors == [], "config/ 기동 검증 실패:\n" + "\n".join(str(e) for e in errors)

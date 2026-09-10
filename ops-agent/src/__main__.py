@@ -388,7 +388,8 @@ def _pick_scenario(args):
     """
     scenarios = load_scenarios(args.config_root)
     if not scenarios:
-        raise ConfigError(f"{args.config_root / 'scenarios'}에 시나리오가 없다")
+        raise ConfigError(f"{args.config_root / 'scenarios'}에 시나리오가 없다 — "
+                          f"config.example/scenarios/를 그 아래로 복사해라")
     if args.scenario:
         if args.scenario not in scenarios:
             raise ConfigError(f"모르는 시나리오 — {args.scenario}. "
@@ -403,7 +404,8 @@ def _pick_scenario(args):
 def cmd_report_scenarios(args, env) -> int:
     scenarios = load_scenarios(args.config_root)
     if not scenarios:
-        print(f"  {args.config_root / 'scenarios'}에 시나리오가 없다")
+        print(f"  {args.config_root / 'scenarios'}에 시나리오가 없다 — "
+              f"config.example/scenarios/를 그 아래로 복사해라")
         return 0
     for name, scenario in scenarios.items():
         mark = "on " if scenario.enabled else "off"
