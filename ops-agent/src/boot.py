@@ -36,17 +36,23 @@ def validate_boot(config_root: Path, *, env: dict[str, str]) -> list[BootError]:
 
 
 def _check_llm(config_root: Path, *, env: dict[str, str]) -> list[BootError]:
-    """CA 번들 경로 오타를 런타임까지 미루지 않는다 — 밤에 첫 조사가 TLS로 죽는다."""
+    """LLM·메일의 CA 번들 경로 오타를 런타임까지 미루지 않는다.
+
+    미루면 밤에 첫 조사가 TLS로 죽고, 메일 쪽은 **보고서가 다 나온 뒤**에 죽어
+    "조사는 됐는데 아무도 못 봤다"가 된다.
+    """
     from src.infrastructure.tls import tls_problems
 
     try:
         app = load_app_config(config_root, env=env)
     except Exception:                                              # noqa: BLE001
         return []          # app.json 자체의 문제는 위에서 이미 보고됐다
+    problems = [BootError(where="app.json mail.tls", message=problem)
+                for problem in tls_problems(app.mail.tls)] if app.mail.enabled else []
     if app.llm is None:
-        return []
-    return [BootError(where="app.json llm.tls", message=problem)
-            for problem in tls_problems(app.llm.tls)]
+        return problems
+    return problems + [BootError(where="app.json llm.tls", message=problem)
+                       for problem in tls_problems(app.llm.tls)]
 
 
 def _check(config_root: Path, where: str, action) -> list[BootError]:

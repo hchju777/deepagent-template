@@ -180,6 +180,8 @@ def echo_config(tmp_path):
 @pytest.mark.parametrize("argv", [
     ["boot"], ["sites"], ["config", "show"], ["config", "show", "--no-provenance"],
     ["llm", "describe"], ["llm", "ask", "안녕"], ["llm", "check"],
+    ["mail", "describe"], ["mail", "send", "--subject", "테스트", "--dry-run"],
+    ["mail", "send", "--subject", "테스트"],
     ["peek", "rest", "--list"],
 ])
 def test_명령이_끝까지_돌아간다(echo_config, argv, capsys):

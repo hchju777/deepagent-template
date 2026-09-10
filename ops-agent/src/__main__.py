@@ -16,6 +16,9 @@
     python -m src llm describe          무엇에 붙어 있는지(호출은 안 한다)
     python -m src llm ask "질문"         한 번 묻고 한 번 받는다
     python -m src llm check             간단한 질문 묶음 — 붙는가·한국어·JSON
+    python -m src mail describe         누구에게 보내게 돼 있는지(발송 안 함)
+    python -m src mail send --subject "연결 테스트" --dry-run   나갈 요청만 보여준다
+    python -m src mail send --subject "연결 테스트"             실제로 보낸다
 """
 import argparse
 import asyncio
@@ -328,6 +331,49 @@ def cmd_llm_check(args, env) -> int:
     return 1 if failed else 0
 
 
+# ── mail ─────────────────────────────────────────────────────────────
+
+_TEST_BODY = """이 메일은 운영 모니터링 에이전트의 발송 경로 확인용입니다.
+
+- 보낸 것: `python -m src mail send`
+- 수신자는 config의 mail.recipients가 정합니다(본문이 바꿀 수 없습니다).
+
+받으셨다면 Agent API 연결이 정상입니다."""
+
+
+def cmd_mail_describe(args, env) -> int:
+    app = load_app_config(args.config_root, env=env)
+    print(" ", app.mail.describe())
+    for address in app.mail.recipients:
+        print(f"    → {address}")
+    return 0
+
+
+def cmd_mail_send(args, env) -> int:
+    from src.infrastructure.mail_factory import build_mail
+
+    app = load_app_config(args.config_root, env=env)
+    body = Path(args.file).read_text(encoding="utf-8") if args.file else (
+        args.body or _TEST_BODY)
+    sender = build_mail(app.mail, clock=_clock())
+    subject = sender.full_subject(args.subject)
+
+    if args.dry_run:
+        # 보내기 **전에** 눈으로 확인할 수 있어야 한다 — 수신자가 맞는지,
+        # 본문의 어느 줄이 무력화됐는지.
+        if not app.mail.enabled:
+            print("  mail.enabled=false — 실제 발송은 건너뛴다. 아래는 켰을 때 나갈 요청이다.\n")
+        _out(sender.preview(subject, body))
+        return 0
+
+    result = asyncio.run(sender.send(subject, body))
+    _out(json.loads(result.model_dump_json()))
+    if result.neutralized_lines:
+        print(f"\n  ⚠  본문에서 필드 머리글처럼 보이는 줄 "
+              f"{result.neutralized_lines}개를 인용 표시(| )로 무력화했다", file=sys.stderr)
+    return 1 if result.status == "error" else 0
+
+
 def _clock():
     """진짜 시계는 여기서만 만들어진다."""
     return lambda: datetime.now().astimezone()
@@ -403,6 +449,19 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("prompt")
     ask.set_defaults(run=cmd_llm_ask)
     llm_sub.add_parser("check", help="간단한 질문 묶음").set_defaults(run=cmd_llm_check)
+
+    mail = sub.add_parser("mail", help="보고서를 메일로 보낸다")
+    mail_sub = mail.add_subparsers(dest="what", required=True)
+    mail_sub.add_parser("describe", help="누구에게 보내게 돼 있는지").set_defaults(
+        run=cmd_mail_describe)
+    send = mail_sub.add_parser("send", help="보낸다")
+    send.add_argument("--subject", default="연결 테스트",
+                      help="제목(앞에 mail.subject_prefix가 붙는다)")
+    send.add_argument("--body", help="본문. 생략하면 확인용 본문")
+    send.add_argument("--file", help="본문을 파일에서 읽는다")
+    send.add_argument("--dry-run", action="store_true",
+                      help="나갈 요청만 보여주고 보내지 않는다")
+    send.set_defaults(run=cmd_mail_send)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)

@@ -72,3 +72,68 @@ def gateway():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ── 메일 Agent 대역 ───────────────────────────────────────────────────
+
+MAIL_API_KEY = "mail-key-789"
+_FIELD = __import__("re").compile(r"^\s*(to_email|subject)\s*:\s*(.*)$",
+                                  __import__("re").IGNORECASE)
+
+
+class _AgentRecorder:
+    def __init__(self):
+        self.requests: list[dict] = []
+        self.status = 200
+
+
+def _agent_handler_for(recorder: "_AgentRecorder"):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def _send(self, code, body):
+            raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_POST(self):
+            if self.headers.get("x-api-key") != MAIL_API_KEY:
+                return self._send(401, {"detail": "invalid api key"})
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                              or b"{}")
+            recorder.requests.append({"path": self.path, "body": body})
+            if recorder.status >= 400:
+                return self._send(recorder.status, {"detail": "boom"})
+
+            # **일부러 제일 취약한 파서**: 줄 앵커로 찾고 여러 개면 마지막이 이긴다.
+            # 본문 주입이 통하면 여기서 수신자가 바뀌어 보인다.
+            parsed = {}
+            for line in body.get("input_value", "").split("\n"):
+                match = _FIELD.match(line)
+                if match:
+                    parsed[match.group(1).lower()] = match.group(2).strip()
+            recipients = [a.strip() for a in parsed.get("to_email", "").split(",")
+                          if a.strip()]
+            self._send(200, {"session_id": "sess-fake",
+                             "outputs": [{"results": {"message": {"text": "보냈습니다"}}}],
+                             "delivered_to": recipients,
+                             "read_subject": parsed.get("subject", "")})
+    return Handler
+
+
+@pytest.fixture
+def mail_agent():
+    """(api_base, recorder)를 돌려준다."""
+    recorder = _AgentRecorder()
+    server = HTTPServer(("127.0.0.1", 0), _agent_handler_for(recorder))
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01},
+                              daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/api/v1/run", recorder
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -54,6 +54,18 @@ python -m src llm ask "질문"
 사내 게이트웨이 접속은 [7단계 문서](STEPS/step-07-llm.md). 실제로 붙는지는
 사내에서 `pytest tests/live -m live_llm -v`가 확인한다.
 
+## 메일 보내기
+
+```bash
+python -m src mail describe                          # 누구에게 보내게 돼 있는지
+python -m src mail send --subject "연결 테스트" --dry-run   # 나갈 요청만 확인
+python -m src mail send --subject "연결 테스트"             # 실제 발송
+python -m src mail send --subject "mx/gumi" --file output/report.md
+```
+
+**수신자는 config가 정한다** — 본문이 바꿀 수 없다. 왜 그게 중요한지는
+[8단계 문서](STEPS/step-08-mail.md).
+
 자세한 것은 [3b단계 문서](STEPS/step-03b-adapters.md).
 
 ## 진행 상황
@@ -72,7 +84,7 @@ python -m src llm ask "질문"
 | 9. 서브에이전트 | ⬜ |
 | 10. conclude와 verify | ⬜ |
 | 11. 사람 개입 | ⬜ |
-| 8. 메일 발송 Agent API | ⬜ |
+| 8. 메일 발송 Agent API | ✅ |
 | 12. 보고서와 이벤트 | ⬜ |
 | 13. 데몬·워커·CLI | ⬜ |
 | 14. 실데이터 E2E | ⬜ |

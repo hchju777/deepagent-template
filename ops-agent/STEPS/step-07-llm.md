@@ -344,5 +344,4 @@ tests/live/test_live_llm.py               6   사내에서만 (live_llm 마커)
 → 다음: [8단계 — 메일 발송 Agent API](step-08-mail.md)
 
 메일 Agent는 한 텍스트 필드(`input_value`)에 수신자·제목·본문을 담아 보내고
-Agent가 그것을 파싱해 메일로 보낸다. 그 모양은 사내 규약이라 그대로 따르고,
-본문에 섞여 들어온 글자가 수신자 지시로 읽히지 않게 하는 것은 8단계에서 다룬다.
+Agent가 그것을 파싱해 메일로 보낸다.

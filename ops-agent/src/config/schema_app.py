@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import field_validator
 
 from src.config.schema_llm import LlmConfig
+from src.config.schema_mail import MailConfig
 from src.domain.base import StrictModel
 
 
@@ -18,6 +19,8 @@ class AppConfig(StrictModel):
     # LLM은 사이트를 가로질러 하나다 — 법인마다 다른 모델을 쓸 이유가 없고,
     # 사이트마다 두면 같은 게이트웨이를 향한 커넥션 풀이 사이트 수만큼 생긴다.
     llm: LlmConfig | None = None
+    # 메일도 사이트를 가로질러 하나다 — 보고서 수신자는 법인이 아니라 조직이 정한다.
+    mail: MailConfig = MailConfig()
 
     @field_validator("timezone")
     @classmethod
