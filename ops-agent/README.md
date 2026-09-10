@@ -66,6 +66,18 @@ python -m src mail send --subject "mx/gumi" --file output/report.md
 **수신자는 config가 정한다** — 본문이 바꿀 수 없다. 왜 그게 중요한지는
 [8단계 문서](STEPS/step-08-mail.md).
 
+## 운영 리포트
+
+```bash
+python -m src report scenarios                      # 시나리오 목록
+python -m src report window                         # 집계 대상 날짜와 나갈 Mongo 필터
+python -m src report window --today 2026-09-07      # 그날 돌았다면 어떻게 되는가
+```
+
+시나리오는 `config/scenarios/<이름>.json` 한 파일이 하나다 — 리포트는 사이트를
+가로지르므로 사이트 층 병합을 타지 않는다. 기간 계산이 왜 따로 떨어져 있고
+날짜 형식을 왜 기동에서 거부하는지는 [9a단계 문서](STEPS/step-09a-window.md).
+
 자세한 것은 [3b단계 문서](STEPS/step-03b-adapters.md).
 
 ## 진행 상황
@@ -80,12 +92,16 @@ python -m src mail send --subject "mx/gumi" --file output/report.md
 | 5. rule 판정과 finding | ⬜ |
 | 6. 케이스 저장소와 게이트 | ⬜ |
 | 7. 사내 LLM 연결 | ✅ |
-| 8. 조사 그래프 | ⬜ |
-| 9. 서브에이전트 | ⬜ |
-| 10. conclude와 verify | ⬜ |
-| 11. 사람 개입 | ⬜ |
 | 8. 메일 발송 Agent API | ✅ |
-| 12. 보고서와 이벤트 | ⬜ |
-| 13. 데몬·워커·CLI | ⬜ |
-| 14. 실데이터 E2E | ⬜ |
-| 15. 운영 | ⬜ |
+| 9a. 리포트 기간과 시나리오 | ✅ |
+| 9b. 집계 | ⬜ |
+| 9c. 블록 렌더링(HTML) | ⬜ |
+| 9d. 차트 이미지(base64) | ⬜ |
+| 9e. LLM 코멘트 | ⬜ |
+| 9f. `report run` + 메일 배선 | ⬜ |
+| 10. 조사 그래프 | ⬜ |
+| 11. 서브에이전트 | ⬜ |
+| 12. conclude와 verify | ⬜ |
+| 13. 사람 개입 | ⬜ |
+| 14. 데몬·워커 | ⬜ |
+| 15. 실데이터 E2E·운영 | ⬜ |

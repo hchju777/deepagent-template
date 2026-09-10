@@ -174,6 +174,11 @@ def echo_config(tmp_path):
         json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")
     (root / "fct" / "gumi" / "mx.json").write_text(
         json.dumps({"infra": {"redis": {"url": "redis://h:6379"}}}), encoding="utf-8")
+    (root / "scenarios").mkdir()
+    (root / "scenarios" / "daily-alarm.json").write_text(json.dumps({
+        "kind": "alarm_daily", "title": "일일 알람 리포트",
+        "source": {"collection": "alarm", "date_field": "occ_date"},
+        "scope": {"gbms": ["mx"], "sites": ["mx/gumi"]}}), encoding="utf-8")
     return root
 
 
@@ -183,6 +188,8 @@ def echo_config(tmp_path):
     ["mail", "describe"], ["mail", "send", "--subject", "테스트", "--dry-run"],
     ["mail", "send", "--subject", "테스트"],
     ["peek", "rest", "--list"],
+    ["report", "scenarios"], ["report", "window"],
+    ["report", "window", "--today", "2026-09-07"],
 ])
 def test_명령이_끝까지_돌아간다(echo_config, argv, capsys):
     """`llm describe`가 import 누락으로 죽은 적이 있다 — 스키마 테스트로는 안 잡힌다.

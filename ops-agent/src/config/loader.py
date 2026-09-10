@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from src.config.envresolve import resolve_env
 from src.config.merge import deep_merge
 from src.config.schema_app import AppConfig
+from src.config.schema_report import ReportScenario
 from src.config.schema_site import Registry, SiteConfig
 
 # 아래로 갈수록 이긴다. 사내 config 배치 규약이 곧 이 순서다.
@@ -105,3 +106,28 @@ def load_site_config(config_root: Path, gbm: str, fct: str,
     merged["site"] = {"gbm": gbm, "fct": fct}
     resolved = _resolve_or_fail(merged, env=env, where=where)
     return _build(SiteConfig, resolved, where=where), provenance
+
+
+# 리포트 시나리오는 사이트 계층을 타지 않는다 — 사이트마다 병합하면 같은
+# 리포트가 사이트 수만큼 돌고 메일도 그만큼 간다(schema_report.py 참고).
+# 그래서 층 없이 `scenarios/*.json` 한 파일 = 시나리오 하나다.
+SCENARIO_DIR = "scenarios"
+
+
+def load_scenarios(config_root: Path) -> dict[str, ReportScenario]:
+    """`config/scenarios/*.json`을 전부 읽는다. 이름은 **파일 이름**이 정한다.
+
+    파일 안에 name을 또 적게 하지 않는 이유는 site config와 같다 — 파일 경로와
+    파일 내용이 어긋났을 때 어느 쪽이 맞는지 아무도 모른다.
+
+    디렉터리가 없으면 빈 dict다. 리포트를 안 쓰는 배포도 있다.
+    """
+    directory = config_root / SCENARIO_DIR
+    if not directory.is_dir():
+        return {}
+    scenarios: dict[str, ReportScenario] = {}
+    for path in sorted(directory.glob("*.json")):     # 정렬: 출력 순서를 결정론으로
+        where = f"{SCENARIO_DIR}/{path.name}"
+        scenarios[path.stem] = _build(ReportScenario, _read_json(path, required=True),
+                                      where=where)
+    return scenarios

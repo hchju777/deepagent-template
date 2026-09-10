@@ -19,6 +19,9 @@
     python -m src mail describe         누구에게 보내게 돼 있는지(발송 안 함)
     python -m src mail send --subject "연결 테스트" --dry-run   나갈 요청만 보여준다
     python -m src mail send --subject "연결 테스트"             실제로 보낸다
+    python -m src report scenarios      리포트 시나리오 목록
+    python -m src report window         집계 대상 날짜와 실제로 나갈 Mongo 필터
+    python -m src report window --today 2026-09-07   그날 돌았다면 어떻게 되는가
 """
 import argparse
 import asyncio
@@ -30,7 +33,7 @@ from pathlib import Path
 
 from src.boot import validate_boot
 from src.config.loader import (ConfigError, load_app_config, load_registry,
-                               load_site_config)
+                               load_scenarios, load_site_config)
 from src.infrastructure.factory import build_adapters
 
 
@@ -377,6 +380,60 @@ def cmd_mail_send(args, env) -> int:
     return 1 if result.status == "error" else 0
 
 
+def _pick_scenario(args):
+    """이름을 안 주면 **하나일 때만** 그것을 쓴다.
+
+    `_resolve_site`와 같은 규율이다 — 여러 개 중 임의로 첫 번째를 고르면
+    다른 리포트의 기간을 보고 "맞네" 하고 넘어간다.
+    """
+    scenarios = load_scenarios(args.config_root)
+    if not scenarios:
+        raise ConfigError(f"{args.config_root / 'scenarios'}에 시나리오가 없다")
+    if args.scenario:
+        if args.scenario not in scenarios:
+            raise ConfigError(f"모르는 시나리오 — {args.scenario}. "
+                              f"있는 것: {', '.join(scenarios)}")
+        return args.scenario, scenarios[args.scenario]
+    if len(scenarios) == 1:
+        return next(iter(scenarios.items()))
+    raise ConfigError(f"시나리오가 여럿이다 — --scenario로 하나를 골라라: "
+                      f"{', '.join(scenarios)}")
+
+
+def cmd_report_scenarios(args, env) -> int:
+    scenarios = load_scenarios(args.config_root)
+    if not scenarios:
+        print(f"  {args.config_root / 'scenarios'}에 시나리오가 없다")
+        return 0
+    for name, scenario in scenarios.items():
+        mark = "on " if scenario.enabled else "off"
+        print(f"  [{mark}] {name}  {scenario.title}  ({scenario.kind})")
+        print(f"        읽는 곳: {scenario.source.collection}."
+              f"{scenario.source.date_field}  형식 {scenario.source.date_format!r}")
+        print(f"        기간   : 직전 {scenario.window.business_days} 평일"
+              f"{' + 전주 동요일 비교' if scenario.window.compare_previous_week else ''}")
+        for gbm in scenario.scope.gbms:
+            print(f"        {gbm}: {', '.join(scenario.scope.sites_of(gbm))}")
+    return 0
+
+
+def cmd_report_window(args, env) -> int:
+    from src.report.window import build_window, describe
+
+    name, scenario = _pick_scenario(args)
+    if args.today:
+        try:
+            today = datetime.strptime(args.today, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"❌ --today는 YYYY-MM-DD 형식이다 — {args.today!r}", file=sys.stderr)
+            return 1
+    else:
+        today = _clock()().date()
+    print(f"  시나리오: {name}  ({scenario.title})\n")
+    _out(describe(build_window(scenario.window, today=today), scenario.source))
+    return 0
+
+
 def _clock():
     """진짜 시계는 여기서만 만들어진다."""
     return lambda: datetime.now().astimezone()
@@ -465,6 +522,16 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--dry-run", action="store_true",
                       help="나갈 요청만 보여주고 보내지 않는다")
     send.set_defaults(run=cmd_mail_send)
+
+    report = sub.add_parser("report", help="운영 리포트")
+    report_sub = report.add_subparsers(dest="what", required=True)
+    scenarios_cmd = report_sub.add_parser("scenarios", help="시나리오 목록")
+    scenarios_cmd.set_defaults(run=cmd_report_scenarios)
+    window = report_sub.add_parser("window", help="집계 대상 날짜와 나갈 Mongo 필터")
+    window.add_argument("--scenario", default=None, help="시나리오 이름(하나뿐이면 생략 가능)")
+    window.add_argument("--today", default=None,
+                        help="이 날 돌았다고 치고 계산한다(YYYY-MM-DD). 검토용")
+    window.set_defaults(run=cmd_report_window)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)
