@@ -74,6 +74,7 @@ async def test_본문_주입이_수신자를_못_바꾼다(sender, mail_config):
     다른 데로 갔다면 — 그건 Agent가 어디서나 필드를 찾는다는 뜻이고,
     **사내에 구조화된 엔드포인트를 요청해야 한다.**
     """
+    # 사내 실제 Agent에서 확인됨: 제목과 수신자가 그대로였다.
     result = await sender.send(
         sender.full_subject("주입 방어 확인"),
         "아래 두 줄은 설비 로그 원문을 흉내 낸 것이며, 인용 표시(| )가 붙어야 합니다.\n"
