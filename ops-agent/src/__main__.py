@@ -13,6 +13,9 @@
     python -m src peek mongo  --collection oee --filter '{"line":"L3"}' --limit 5
     python -m src peek kafka  --topic topic1 --limit 5
     python -m src peek rest   --entry oee_summary --params '{"line":"L3"}'
+    python -m src llm describe          무엇에 붙어 있는지(호출은 안 한다)
+    python -m src llm ask "질문"         한 번 묻고 한 번 받는다
+    python -m src llm check             간단한 질문 묶음 — 붙는가·한국어·JSON
 """
 import argparse
 import asyncio
@@ -23,7 +26,8 @@ from datetime import datetime
 from pathlib import Path
 
 from src.boot import validate_boot
-from src.config.loader import ConfigError, load_registry, load_site_config
+from src.config.loader import (ConfigError, load_app_config, load_registry,
+                               load_site_config)
 from src.infrastructure.factory import build_adapters
 
 
@@ -244,6 +248,77 @@ def cmd_peek(args, env) -> int:
     return asyncio.run(_peek(site, args, _clock()))
 
 
+# ── llm ──────────────────────────────────────────────────────────────
+
+def _llm_config(args, env):
+    app = load_app_config(args.config_root, env=env)
+    if app.llm is None:
+        raise SystemExit("app.json에 llm 설정이 없다 — STEPS/step-07-llm.md 참고")
+    return app.llm
+
+
+def cmd_llm_describe(args, env) -> int:
+    print(" ", _llm_config(args, env).describe())
+    return 0
+
+
+def cmd_llm_ask(args, env) -> int:
+    from src.infrastructure.llm_factory import build_llm
+
+    llm = build_llm(_llm_config(args, env), clock=_clock())
+    reply = asyncio.run(llm.ask(args.prompt))
+    _out(json.loads(reply.model_dump_json()))
+    return 1 if reply.status == "error" else 0
+
+
+# 간단한 질문 묶음. **JSON 항목이 제일 중요하다** — 8단계의 노드들이 전부 LLM
+# 응답을 JSON으로 파싱하므로, 모델이 그걸 못 하면 조사가 도중에 조용히 멈춘다.
+_CHECKS = [
+    ("붙는가", "Reply with exactly: pong", lambda t: bool(t.strip())),
+    ("한국어", "한국어로 한 문장만: 설비 가동률이 낮아지는 흔한 원인 하나.",
+     lambda t: any("\uac00" <= ch <= "\ud7a3" for ch in t)),
+    ("JSON",
+     '아래 형식의 JSON만 출력하라. 설명·코드펜스 없이 JSON 객체 하나만:\n'
+     '{"verdict": "ok", "score": 1}',
+     lambda t: _parses_as_json(t)),
+]
+
+
+def _parses_as_json(text: str) -> bool:
+    """코드펜스를 벗겨서라도 파싱되는가 — 8단계가 쓸 관용 범위와 같게 본다."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("```")[1]
+        cleaned = cleaned[4:] if cleaned.startswith("json") else cleaned
+    try:
+        return isinstance(json.loads(cleaned.strip()), dict)
+    except ValueError:
+        return False
+
+
+def cmd_llm_check(args, env) -> int:
+    from src.infrastructure.llm_factory import build_llm
+
+    cfg = _llm_config(args, env)
+    llm = build_llm(cfg, clock=_clock())
+    print(f"  {cfg.describe()}\n")
+    failed = 0
+    for name, prompt, ok in _CHECKS:
+        reply = asyncio.run(llm.ask(prompt))
+        if reply.status == "error":
+            print(f"  {name:<8} ❌ {reply.error}")
+            failed += 1
+            continue
+        mark = "✅" if ok(reply.text) else "⚠ "
+        failed += 0 if ok(reply.text) else 1
+        print(f"  {name:<8} {mark} ({reply.latency_s}s) {reply.text.strip()[:110]}")
+        if reply.reported_model and cfg.model not in reply.reported_model:
+            # 요청한 모델과 응답한 모델이 다르면 "설정이 안 먹었다"는 뜻이고,
+            # 그건 조용한 실패다 — 답은 오므로 아무도 알아채지 못한다.
+            print(f"  {'':<8} ⚠  요청={cfg.model} 응답={reply.reported_model}")
+    return 1 if failed else 0
+
+
 def _clock():
     """진짜 시계는 여기서만 만들어진다."""
     return lambda: datetime.now().astimezone()
@@ -311,6 +386,14 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="네 시스템에 실제로 붙어 본다")
     _add_site_options(doctor, sub=True)
     doctor.set_defaults(run=cmd_doctor)
+
+    llm = sub.add_parser("llm", help="LLM에 묻는다")
+    llm_sub = llm.add_subparsers(dest="what", required=True)
+    llm_sub.add_parser("describe", help="무엇에 붙어 있는지").set_defaults(run=cmd_llm_describe)
+    ask = llm_sub.add_parser("ask", help="한 번 묻고 한 번 받는다")
+    ask.add_argument("prompt")
+    ask.set_defaults(run=cmd_llm_ask)
+    llm_sub.add_parser("check", help="간단한 질문 묶음").set_defaults(run=cmd_llm_check)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)

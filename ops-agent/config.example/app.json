@@ -1,4 +1,17 @@
 {
   "timezone": "Asia/Seoul",
-  "output_dir": "output"
+  "output_dir": "output",
+  "llm": {
+    "adapter": "chat_model",
+    "provider": "openai_compatible",
+    "model": "gauss-o-flash",
+    "model_id": "339",
+    "temperature": 0.0,
+    "base_url": "${LLM_BASE_URL}",
+    "pass_key": "${LLM_PASS_KEY}",
+    "client_key": "${LLM_CLIENT_KEY}",
+    "tls": {
+      "use_system_store": true
+    }
+  }
 }

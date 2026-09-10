@@ -157,3 +157,51 @@ def test_사이트_옵션은_앞뒤_양쪽에서_받아들여진다():
     assert _parse("doctor", "--fct", "gumi").fct == "gumi"
     assert _parse("--gbm", "mx", "peek", "redis", "--key", "k").gbm == "mx"
     assert _parse("peek", "redis", "--key", "k", "--gbm", "mx").gbm == "mx"
+
+
+# ── 명령이 실제로 돌아가는가 (import 누락류를 잡는다) ────────────────────
+
+@pytest.fixture
+def echo_config(tmp_path):
+    """네트워크를 안 타는 llm 설정 — 명령 배선만 본다."""
+    root = tmp_path / "config"
+    (root / "gbm").mkdir(parents=True)
+    (root / "fct" / "gumi").mkdir(parents=True)
+    (root / "app.json").write_text(json.dumps({
+        "timezone": "Asia/Seoul",
+        "llm": {"adapter": "echo", "model": "dev"}}), encoding="utf-8")
+    (root / "registry.json").write_text(
+        json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")
+    (root / "fct" / "gumi" / "mx.json").write_text(
+        json.dumps({"infra": {"redis": {"url": "redis://h:6379"}}}), encoding="utf-8")
+    return root
+
+
+@pytest.mark.parametrize("argv", [
+    ["boot"], ["sites"], ["config", "show"], ["config", "show", "--no-provenance"],
+    ["llm", "describe"], ["llm", "ask", "안녕"], ["llm", "check"],
+    ["peek", "rest", "--list"],
+])
+def test_명령이_끝까지_돌아간다(echo_config, argv, capsys):
+    """`llm describe`가 import 누락으로 죽은 적이 있다 — 스키마 테스트로는 안 잡힌다.
+
+    `peek rest --list`는 rest 설정이 없으므로 SystemExit이 정상이다. 그 경우에도
+    **NameError나 AttributeError가 아니어야** 한다.
+    """
+    from src.__main__ import main
+
+    try:
+        code = main(["--config-root", str(echo_config), "--env-file", "/dev/null", *argv])
+        assert code in (0, 1)
+    except SystemExit as exit_:
+        assert isinstance(exit_.code, (int, str)), f"예상 밖 종료 — {exit_.code!r}"
+    out = capsys.readouterr().out
+    assert out or argv[0] in ("peek",)
+
+
+def test_llm_check가_echo로도_결과를_낸다(echo_config, capsys):
+    from src.__main__ import main
+
+    main(["--config-root", str(echo_config), "--env-file", "/dev/null", "llm", "check"])
+    out = capsys.readouterr().out
+    assert "붙는가" in out and "JSON" in out

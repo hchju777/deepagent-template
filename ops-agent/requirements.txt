@@ -13,3 +13,10 @@ redis>=5.0                # redis.asyncio
 pymongo>=4.13,<5          # AsyncMongoClient (motor는 deprecated)
 aiokafka>=0.12            # 그룹 미참여 assign() 읽기
 httpx>=0.28,<1            # REST
+
+# ── 7단계: LLM ─────────────────────────────────────────────────
+# adapter="http"만 쓸 거면 langchain 두 줄은 없어도 된다(httpx로 같은 규약을 말한다).
+# 사내 PyPI에 langchain 계열이 없는 경우의 탈출구다.
+langchain-openai>=1.4,<2   # ChatOpenAI — 8단계 그래프 노드가 받는 모델 객체
+langchain-core>=1.5,<2
+truststore>=0.10           # OS 신뢰 저장소(Windows CryptoAPI) — 사내 CA를 그대로

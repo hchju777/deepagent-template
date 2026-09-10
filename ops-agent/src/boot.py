@@ -31,7 +31,22 @@ class BootError(StrictModel):
 def validate_boot(config_root: Path, *, env: dict[str, str]) -> list[BootError]:
     """config 트리 전체를 검증한다. 문제가 없으면 빈 리스트."""
     return _check(config_root, "app.json", lambda: load_app_config(config_root, env=env)) \
+        + _check_llm(config_root, env=env) \
         + _check_sites(config_root, env=env)
+
+
+def _check_llm(config_root: Path, *, env: dict[str, str]) -> list[BootError]:
+    """CA 번들 경로 오타를 런타임까지 미루지 않는다 — 밤에 첫 조사가 TLS로 죽는다."""
+    from src.infrastructure.tls import tls_problems
+
+    try:
+        app = load_app_config(config_root, env=env)
+    except Exception:                                              # noqa: BLE001
+        return []          # app.json 자체의 문제는 위에서 이미 보고됐다
+    if app.llm is None:
+        return []
+    return [BootError(where="app.json llm.tls", message=problem)
+            for problem in tls_problems(app.llm.tls)]
 
 
 def _check(config_root: Path, where: str, action) -> list[BootError]:

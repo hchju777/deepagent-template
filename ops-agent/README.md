@@ -43,6 +43,17 @@ python -m src peek rest --entry summary_badge --params '{"line_code":"P222"}'
 
 사이트가 여러 개면 `--gbm mx --fct gumi`를 붙인다 — **하위 명령 앞뒤 아무 데나** 된다.
 
+## LLM에 물어보기
+
+```bash
+python -m src llm describe            # 무엇에 붙어 있는지 (호출은 안 한다)
+python -m src llm check               # 붙는가 · 한국어 · JSON
+python -m src llm ask "질문"
+```
+
+사내 게이트웨이 접속은 [7단계 문서](STEPS/step-07-llm.md). 실제로 붙는지는
+사내에서 `pytest tests/live -m live_llm -v`가 확인한다.
+
 자세한 것은 [3b단계 문서](STEPS/step-03b-adapters.md).
 
 ## 진행 상황
@@ -56,11 +67,12 @@ python -m src peek rest --entry summary_badge --params '{"line_code":"P222"}'
 | 4. 순찰 프로브 | ⬜ |
 | 5. rule 판정과 finding | ⬜ |
 | 6. 케이스 저장소와 게이트 | ⬜ |
-| 7. 사내 LLM 연결 | ⬜ |
+| 7. 사내 LLM 연결 | ✅ |
 | 8. 조사 그래프 | ⬜ |
 | 9. 서브에이전트 | ⬜ |
 | 10. conclude와 verify | ⬜ |
 | 11. 사람 개입 | ⬜ |
+| 8. 메일 발송 Agent API | ⬜ |
 | 12. 보고서와 이벤트 | ⬜ |
 | 13. 데몬·워커·CLI | ⬜ |
 | 14. 실데이터 E2E | ⬜ |
