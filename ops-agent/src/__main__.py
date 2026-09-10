@@ -255,13 +255,40 @@ def _add_site_options(target, *, sub: bool) -> None:
     """`--gbm/--fct`를 전역과 하위 명령 **양쪽**에 단다.
 
     argparse의 전역 옵션은 하위 명령 **앞**에만 올 수 있다. 그런데 사람은
-    `peek redis --key x --gbm mx`처럼 뒤에 쓰는 쪽이 자연스럽다. 양쪽에 달되
-    하위 명령 쪽은 `SUPPRESS`를 기본값으로 둔다 — 그러지 않으면 하위 파서가
-    "안 줬음(None)"으로 전역에서 받은 값을 덮어써 버린다.
+    `peek redis --key x --gbm mx`처럼 뒤에 쓰는 쪽이 자연스럽다.
+
+    **같은 dest를 양쪽에 달지 않는다.** 하위 파서가 결과를 부모 namespace에
+    합치는 방식이 파이썬 버전 사이에서 바뀌었고(별도 namespace에 파싱해 복사하는
+    버전과 부모에 직접 파싱하는 버전이 있다), 그래서 `default=SUPPRESS` 트릭이
+    어떤 버전에서는 듣고 어떤 버전에서는 하위 파서의 "안 줬음"이 전역 값을
+    덮어쓴다. 실제로 이 리포에서 Linux는 통과하고 Windows(다른 파이썬)에서는
+    깨지는 형태로 드러났다.
+
+    그래서 dest를 `gbm_sub`/`fct_sub`로 분리하고 `_merge_site_options`가
+    **명시적으로** 합친다. argparse의 내부 동작에 기대지 않으면 버전에
+    상관없이 같게 동작한다.
     """
-    extra = {"default": argparse.SUPPRESS} if sub else {}
-    target.add_argument("--gbm", help="사업부 (예: mx). 후보가 하나면 생략 가능", **extra)
-    target.add_argument("--fct", help="법인/공장 (예: gumi)", **extra)
+    suffix = "_sub" if sub else ""
+    target.add_argument("--gbm", dest=f"gbm{suffix}", default=None,
+                        help="사업부 (예: mx). 후보가 하나면 생략 가능")
+    target.add_argument("--fct", dest=f"fct{suffix}", default=None,
+                        help="법인/공장 (예: gumi)")
+
+
+def _merge_site_options(args):
+    """하위 명령 뒤에 쓴 값이 있으면 그것이 이긴다."""
+    args.gbm = getattr(args, "gbm_sub", None) or args.gbm
+    args.fct = getattr(args, "fct_sub", None) or args.fct
+    return args
+
+
+def parse_args(argv: list[str] | None = None):
+    """**명령줄 해석의 단일 입구.** main과 테스트가 같은 경로를 탄다.
+
+    테스트가 `build_parser().parse_args()`를 직접 부르면 병합 단계를 건너뛰어,
+    프로덕션에서 깨지는 조합이 테스트에서는 통과한다.
+    """
+    return _merge_site_options(build_parser().parse_args(argv))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -309,7 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = parse_args(argv)
     env = _load_env(args.env_file)
     try:
         return args.run(args, env)

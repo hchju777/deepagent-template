@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from src.__main__ import _resolve_site, build_parser
+from src.__main__ import _resolve_site, parse_args
 
 ENV = {"REDIS_PASSWORD": "hunter2"}
 
@@ -31,7 +31,9 @@ def config_root(tmp_path):
 
 
 def _parse(*argv):
-    return build_parser().parse_args(list(argv))
+    """프로덕션과 **같은 입구**를 쓴다 — build_parser를 직접 부르면 병합 단계를
+    건너뛰어, 실제로 깨지는 조합이 테스트에서는 통과한다."""
+    return parse_args(list(argv))
 
 
 # ── --gbm/--fct의 위치 ────────────────────────────────────────────────
@@ -50,9 +52,26 @@ def test_하위_명령_뒤에_써도_된다(config_root):
 
 
 def test_뒤에_안_쓰면_앞의_값이_살아_있다(config_root):
-    # 하위 파서의 기본값이 None이면 전역에서 받은 값을 덮어써 버린다(SUPPRESS로 막는다).
+    # 같은 dest를 양쪽에 달면 하위 파서의 "안 줬음"이 전역 값을 덮어쓰는 파이썬
+    # 버전이 있다 — Linux는 통과하고 Windows에서 깨졌던 지점이다.
     args = _parse("--gbm", "mx", "--fct", "gumi", "peek", "redis", "--key", "k")
     assert (args.gbm, args.fct) == ("mx", "gumi")
+
+
+def test_양쪽에_다_쓰면_뒤가_이긴다(config_root):
+    args = _parse("--fct", "gumi", "peek", "redis", "--key", "k", "--fct", "sevt")
+    assert args.fct == "sevt"
+    site, _ = _resolve_site(config_root, args, ENV)
+    assert str(site.site) == "mx/sevt"
+
+
+def test_어느_위치든_같은_결과다(config_root):
+    """argparse 내부 동작에 기대지 않는다는 것을 양쪽으로 확인한다."""
+    before, _ = _resolve_site(config_root,
+                              _parse("--fct", "sevt", "peek", "redis", "--key", "k"), ENV)
+    after, _ = _resolve_site(config_root,
+                             _parse("peek", "redis", "--key", "k", "--fct", "sevt"), ENV)
+    assert str(before.site) == str(after.site) == "mx/sevt"
 
 
 def test_doctor와_config_show에도_붙는다(config_root):
@@ -98,3 +117,43 @@ def test_고른_사이트의_설정이_실제로_다르다(config_root):
     sevt, _ = _resolve_site(config_root, _parse("peek", "redis", "--fct", "sevt"), ENV)
     assert gumi.infra.redis.url != sevt.infra.redis.url
     assert gumi.infra.redis.db == sevt.infra.redis.db == 0   # 공통 층은 같다
+
+
+# ── 구조 불변식: argparse 내부 동작에 기대지 않는다 ─────────────────────
+
+def _subparser_actions():
+    from src.__main__ import build_parser
+    parser = build_parser()
+    choices = {}
+    for action in parser._actions:                              # noqa: SLF001
+        if hasattr(action, "choices") and isinstance(action.choices, dict):
+            choices.update(action.choices)
+    return choices
+
+
+def test_하위_명령의_사이트_옵션은_전역과_dest를_공유하지_않는다():
+    """dest를 공유하면 값을 합치는 일이 **argparse 내부 동작**에 달린다.
+
+    하위 파서의 결과를 부모 namespace에 합치는 방식이 파이썬 버전 사이에서
+    바뀌었고, 그래서 같은 dest를 쓰면 어떤 버전에서는 하위 파서의 "안 줬음"이
+    전역에서 받은 값을 덮어쓴다. 실제로 Linux는 통과하고 Windows(다른 파이썬)에서
+    다섯 개가 깨졌다.
+
+    "나중에 누가 단순화하려고 dest를 합치는 것"을 막기 위해 구조로 못 박는다.
+    """
+    offenders = []
+    for name, sub in _subparser_actions().items():
+        for action in sub._actions:                              # noqa: SLF001
+            if action.dest in ("gbm", "fct"):
+                offenders.append(f"{name}.{action.dest}")
+    assert not offenders, (
+        f"하위 명령이 전역과 같은 dest를 쓴다 — {offenders}. "
+        "gbm_sub/fct_sub로 분리하고 _merge_site_options가 합쳐야 한다")
+
+
+def test_사이트_옵션은_앞뒤_양쪽에서_받아들여진다():
+    """파싱만 본다 — config가 없어도 도는 테스트라 원인 구분에 쓸 수 있다."""
+    assert _parse("--fct", "gumi", "doctor").fct == "gumi"
+    assert _parse("doctor", "--fct", "gumi").fct == "gumi"
+    assert _parse("--gbm", "mx", "peek", "redis", "--key", "k").gbm == "mx"
+    assert _parse("peek", "redis", "--key", "k", "--gbm", "mx").gbm == "mx"
