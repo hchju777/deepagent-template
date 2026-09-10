@@ -117,6 +117,33 @@ httpx.AsyncClient(verify=ctx)                          # 이 커넥션 하나에
 `ca_bundle`(.pem 경로) / `tls_verify: false`(번들을 구하기 전 임시, 켜지면
 경고를 찍는다).
 
+## 함정 ⑥: 같은 3.11인데 동작이 다르다
+
+사내가 **3.11.3**, 개발 환경이 **3.11.15**였고 argparse가 서로 다르게 동작했다.
+하위 파서(`peek`)에 단 옵션이 전역 옵션의 값을 덮어쓰는지가 갈려서, 여기서는
+통과하는 테스트 다섯 개가 사내에서 깨졌다.
+
+교훈은 argparse에 한정되지 않는다: **표준 라이브러리의 "이렇게 하면 되는" 트릭은
+마이너 버전이 같아도 믿을 수 없다.** 의도를 코드로 명시하면 버전에 상관없이
+같게 동작한다.
+
+```python
+# 믿지 않는다 — argparse가 하위 파서 결과를 합치는 방식에 기댄다
+target.add_argument("--gbm", default=argparse.SUPPRESS)
+
+# 명시한다 — dest를 분리하고 직접 합친다
+target.add_argument("--gbm", dest="gbm_sub", default=None)
+args.gbm = args.gbm_sub or args.gbm
+```
+
+`tests/test_cli.py`가 "하위 명령이 전역과 같은 dest를 쓰지 않는다"를 구조로
+단정한다 — 나중에 누가 "단순화"하려고 되돌리는 것을 막는다.
+
+> 이 사고가 드러난 방식도 기록해 둔다. 테스트가 `build_parser().parse_args()`를
+> 직접 불러서 **프로덕션의 병합 단계를 건너뛰고 있었다.** 그래서 실제 명령줄이
+> 깨지는 조합이 테스트에서는 통과했다. 지금은 `parse_args()` 하나가 유일한
+> 입구이고 테스트도 그것을 쓴다 — **테스트는 프로덕션과 같은 문을 지나야 한다.**
+
 ## 걸리지 않는 것
 
 Redis·MongoDB **서버**를 Windows에 설치할 필요는 없다. 우리에게 필요한 것은
