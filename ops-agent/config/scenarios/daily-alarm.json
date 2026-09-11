@@ -16,17 +16,36 @@
       "scenario_name": "scen_name",
       "status": "status"
     },
-    "unresolved_status": [0, 10, 1],
+    "unresolved_status": [
+      0,
+      10,
+      1
+    ],
     "sample": 50000
   },
   "window": {
     "business_days": 7,
     "compare_previous_week": true,
-    "exclude_weekdays": ["sat", "sun"]
+    "exclude_weekdays": [
+      "sat",
+      "sun"
+    ]
   },
   "scope": {
-    "gbms": ["mx"],
-    "sites": ["mx/gumi", "mx/sevt"],
+    "gbms": [
+      "mx"
+    ],
+    "sites": [
+      "mx/gumi",
+      "mx/sevt"
+    ],
     "max_parallel_sites": 4
+  },
+  "thresholds": {
+    "spike_ratio": 2.0,
+    "spike_min_count": 10,
+    "repeat_min_count": 5,
+    "repeat_min_days": 3,
+    "top_n": 10
   }
 }

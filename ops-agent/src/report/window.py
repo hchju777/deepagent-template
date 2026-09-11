@@ -148,6 +148,15 @@ class ReportWindow:
         """집계에 실제로 쓸 날들. 범위로 긁어 온 문서를 이걸로 거른다."""
         return frozenset(self.days)
 
+    @property
+    def wanted(self) -> frozenset[date]:
+        """버리지 않을 날들 — 집계 대상 **더하기** 전주 비교용.
+
+        `selected`만으로 거르면 전주 비교값이 통째로 버려진다. 둘은 다른
+        질문에 답한다: `selected`는 "리포트에 그릴 날", `wanted`는 "들고 있을 날".
+        """
+        return frozenset(self.days) | frozenset(self.previous_week)
+
     def covers(self, day: date) -> bool:
         return self.query_from <= day < self.query_to
 
@@ -201,22 +210,30 @@ def date_filter(source: SourceSpec, window: ReportWindow) -> dict:
                                 "$lt": format_boundary(source, window.query_to)}}
 
 
-def parse_day(source: SourceSpec, raw) -> date | None:
-    """문서의 날짜 필드 값을 날짜로. 못 읽으면 None — **던지지 않는다.**
+def parse_moment(source: SourceSpec, raw) -> datetime | None:
+    """문서의 날짜 필드 값을 시각으로. 못 읽으면 None — **던지지 않는다.**
 
     문서 한 건의 형식이 어긋났다고 리포트 전체가 죽으면 안 된다. 못 읽은 건수는
-    호출부가 세어서 "데이터 신선도/품질" 이슈로 올린다.
+    호출부가 세어서 데이터 품질 이슈로 올린다.
+
+    날짜가 아니라 **시각**까지 보존하는 이유: "어제 마지막 알람이 몇 시인가"가
+    데이터가 끊겼는지 보는 신호다. 날짜로 잘라 버리면 그 신호가 사라진다.
     """
     if isinstance(raw, datetime):       # 나중에 date 타입으로 바뀌어도 그대로 돈다
-        return raw.date()
-    if isinstance(raw, date):
         return raw
+    if isinstance(raw, date):
+        return datetime.combine(raw, time.min)
     if not isinstance(raw, str):
         return None
     try:
-        return datetime.strptime(raw, source.date_format).date()
+        return datetime.strptime(raw, source.date_format)
     except (ValueError, TypeError):
         return None
+
+
+def parse_day(source: SourceSpec, raw) -> date | None:
+    moment = parse_moment(source, raw)
+    return moment.date() if moment is not None else None
 
 
 def describe(window: ReportWindow, source: SourceSpec) -> dict:

@@ -190,6 +190,7 @@ def echo_config(tmp_path):
     ["peek", "rest", "--list"],
     ["report", "scenarios"], ["report", "window"],
     ["report", "window", "--today", "2026-09-07"],
+    ["report", "aggregate", "--today", "2026-09-07"],
 ])
 def test_명령이_끝까지_돌아간다(echo_config, argv, capsys):
     """`llm describe`가 import 누락으로 죽은 적이 있다 — 스키마 테스트로는 안 잡힌다.

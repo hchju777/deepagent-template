@@ -95,14 +95,19 @@ class RealMongoReader(MongoReaderPort):
 
     async def find(self, collection: str, filter: dict, *,
                    sort: list[tuple[str, int]] | None = None,
-                   limit: int | None = None) -> ProbeResult:
+                   limit: int | None = None,
+                   projection: list[str] | None = None) -> ProbeResult:
         limit = limit or self._default_limit
         source = f"mongo:{self._cfg.database}.{collection} find={filter} limit={limit}"
+        if projection:
+            source += f" fields={sorted(projection)}"
         problems = filter_problems(filter)
         if problems:
             return ProbeResult.failed("; ".join(problems), source=source, clock=self._clock)
         try:
-            cursor = self._database()[collection].find(filter)
+            # _id를 빼는 이유: 쓰지 않는데 문서마다 12바이트 + 디코딩이 붙는다.
+            fields = {name: 1 for name in projection} | {"_id": 0} if projection else None
+            cursor = self._database()[collection].find(filter, fields)
             if sort:
                 cursor = cursor.sort(sort)
             cursor = cursor.limit(limit + 1)          # 잘렸는지 알기 위해 하나 더

@@ -61,9 +61,21 @@ class _FakeCursor:
 
 
 class _FakeCollection:
+    """pymongo의 `find(filter, projection)` 자리 인자를 그대로 받는다.
+
+    투영을 받기만 하고 **적용하지 않으면** 필드를 좁히는 코드가 여기서는 통과하고
+    실서버에서만 "없는 필드"로 깨진다.
+    """
+
     def __init__(self, docs): self._docs = docs
-    def find(self, filter): return _FakeCursor([d for d in self._docs
-                                                if all(d.get(k) == v for k, v in filter.items())])
+
+    def find(self, filter, projection=None):
+        rows = [d for d in self._docs if all(d.get(k) == v for k, v in filter.items())]
+        if projection:
+            keep = {k for k, v in projection.items() if v}
+            rows = [{k: v for k, v in row.items() if k in keep} for row in rows]
+        return _FakeCursor(rows)
+
     async def count_documents(self, filter): return len(self._docs)
 
 
@@ -102,3 +114,26 @@ async def test_필터가_거부되면_소켓에_안_나간다(clock):
     reader = RealMongoReader(CFG, clock=clock, database_factory=_boom)
     result = await reader.find("oee", {"$where": "1"})
     assert result.status == "error" and "$where" in result.error
+
+
+async def test_투영은_요청한_필드만_돌려준다(clock):
+    """리포트는 필드 8개만 쓴다 — 문서 전체를 5만 건 끌어오면 대상의 네트워크와
+    디코딩을 그만큼 더 쓴다. 읽기 전용은 성능에 개입하지 않는 것까지 포함한다."""
+    docs = [{"_id": "x1", "occ_date": "2026-08-21 00:00:00", "line_code": "P222",
+             "payload": "쓰지 않는 큰 값"}]
+    result = await _reader(docs, clock).find("alarm", {}, limit=5,
+                                            projection=["occ_date", "line_code"])
+    assert result.status == "ok"
+    assert result.data == [{"occ_date": "2026-08-21 00:00:00", "line_code": "P222"}]
+
+
+async def test_투영하면_무엇을_물었는지_source에_남는다(clock):
+    """`source`가 "무엇을 물었는가"를 남기지 않으면, 필드가 빈 것이 "데이터가
+    없어서"인지 "투영에서 빠져서"인지 구별할 수 없다."""
+    result = await _reader([{"a": 1}], clock).find("alarm", {}, projection=["b", "a"])
+    assert "fields=['a', 'b']" in result.source
+
+
+async def test_투영을_안_주면_문서_전체가_온다(clock):
+    result = await _reader([{"_id": "x1", "a": 1}], clock).find("alarm", {})
+    assert result.data == [{"_id": "x1", "a": 1}]

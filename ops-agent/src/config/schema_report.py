@@ -46,6 +46,10 @@ class SourceSpec(StrictModel):
     # 미해제로 보는 status 값. 사내 규약: 0 발생 · 10 접수 · 1 조치시작.
     # 2(조치완료 수동)와 40(조치완료 자동)이 해제다.
     unresolved_status: list[int] = [0, 10, 1]
+    # status 값 → 사람이 읽는 이름. 리포트에 `status=40`이라고 적히면 읽는 사람이
+    # 매번 규약 문서를 찾아야 한다. 값의 뜻은 대상 시스템이 정하므로 config가 안다.
+    status_labels: dict[int, str] = {0: "발생", 10: "접수", 1: "조치시작",
+                                     2: "조치완료(수동)", 40: "조치완료(자동)"}
     # 법인 하나에서 읽어 올 문서 수 상한. 하한이 있는 이유: 0·음수는 pymongo에서
     # "무제한"이고, 리포트는 법인 N개로 팬아웃하므로 그 한 줄이 N개 법인에
     # 동시에 무제한 커서를 연다.
@@ -55,7 +59,18 @@ class SourceSpec(StrictModel):
     def _status_values_are_distinct(self):
         if len(set(self.unresolved_status)) != len(self.unresolved_status):
             raise ValueError("unresolved_status에 중복이 있다")
+        # 미해제로 세는 값에 이름이 없으면 "미해제 3건(status=7)"처럼 찍힌다 —
+        # 이름을 빼먹은 것과 값을 잘못 적은 것이 구별되지 않는다.
+        unnamed = [v for v in self.unresolved_status if v not in self.status_labels]
+        if unnamed:
+            raise ValueError(f"status_labels에 이름이 없는 unresolved_status — "
+                             f"{', '.join(str(v) for v in unnamed)}")
         return self
+
+    def status_label(self, value: int | None) -> str:
+        if value is None:
+            return "(읽을 수 없음)"
+        return self.status_labels.get(value, f"(모르는 값 {value})")
 
 
 class WindowSpec(StrictModel):
@@ -79,6 +94,38 @@ class WindowSpec(StrictModel):
 
     def excluded(self) -> set[int]:
         return {_WEEKDAY_NAMES[d.lower()] for d in self.exclude_weekdays}
+
+
+class Thresholds(StrictModel):
+    """"이건 이상하다"의 경계. **config에 있어야 하는 이유**: 법인마다 알람
+    밀도가 다르고, 운영이 돌면서 "이 정도는 평소"의 감각이 바뀐다. 코드에 박으면
+    그 감각이 바뀔 때마다 배포가 필요하다.
+    """
+    # 전주 동요일 대비 이 배수 이상이면 급증으로 본다.
+    spike_ratio: float = Field(default=2.0, gt=1.0)
+    # 단, 건수가 이보다 적으면 급증으로 보지 않는다. 1건 → 3건은 3배지만
+    # 그걸 급증이라 부르면 리포트가 매일 급증으로 가득 찬다(경보 피로).
+    spike_min_count: int = Field(default=10, ge=1)
+    # 같은 (법인·라인·알람항목)이 기간 내 이 횟수 이상이면 반복 알람 후보다.
+    repeat_min_count: int = Field(default=5, ge=2)
+    # 그리고 **며칠에 걸쳐** 있어야 하는가. 건수만 보면 알람이 많은 큰 라인이
+    # 항상 걸려서 목록이 "큰 라인 순위"가 된다. 하루에 30번 터진 것(순간 장애)과
+    # 7일 내내 매일 터진 것(방치된 만성 문제)은 다른 문제이고, 리포트가 찾아야
+    # 하는 것은 후자다.
+    repeat_min_days: int = Field(default=3, ge=1)
+    # TOP 목록의 길이.
+    top_n: int = Field(default=10, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _repeat_days_fit_in_window(self):
+        # 이 검증은 WindowSpec을 알아야 완전하지만(평일 7일짜리 창에 min_days=10을
+        # 적으면 목록이 영원히 빈다) 여기서는 자체 모순만 본다 — 창과의 대조는
+        # ReportScenario가 한다.
+        if self.repeat_min_days > self.repeat_min_count:
+            raise ValueError(f"repeat_min_days({self.repeat_min_days})가 "
+                             f"repeat_min_count({self.repeat_min_count})보다 클 수 없다 "
+                             f"— 3일에 걸쳐 2건일 수는 없다")
+        return self
 
 
 class ReportScope(StrictModel):
@@ -118,3 +165,16 @@ class ReportScenario(StrictModel):
     source: SourceSpec
     window: WindowSpec = WindowSpec()
     scope: ReportScope
+    thresholds: Thresholds = Thresholds()
+
+    @model_validator(mode="after")
+    def _thresholds_fit_the_window(self):
+        # 평일 7일짜리 창에 repeat_min_days=10을 적으면 반복 알람 섹션이 **영원히
+        # 빈다.** 그런데 화면에는 "반복 알람 없음"으로 보여서, 설정 실수가
+        # "문제가 없다"는 좋은 소식으로 둔갑한다.
+        if self.thresholds.repeat_min_days > self.window.business_days:
+            raise ValueError(
+                f"repeat_min_days({self.thresholds.repeat_min_days})가 "
+                f"business_days({self.window.business_days})보다 크다 — "
+                f"반복 알람이 영원히 빈 목록이 된다")
+        return self

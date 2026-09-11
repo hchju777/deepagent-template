@@ -58,8 +58,21 @@ class MongoReaderPort(ABC):
     @abstractmethod
     async def find(self, collection: str, filter: dict, *,
                    sort: list[tuple[str, int]] | None = None,
-                   limit: int | None = None) -> ProbeResult:
-        """문서를 읽는다. limit에 걸려 잘리면 봉투가 complete=False로 말한다."""
+                   limit: int | None = None,
+                   projection: list[str] | None = None) -> ProbeResult:
+        """문서를 읽는다. limit에 걸려 잘리면 봉투가 complete=False로 말한다.
+
+        `projection`은 받아 올 필드 목록이다. **읽기를 좁히는 것이므로 쓰기
+        표면이 아니다** — 리포트는 필드 8개만 쓰는데 문서 전체를 5만 건
+        끌어오면 대상의 네트워크와 BSON 디코딩을 그만큼 더 쓴다. 읽기
+        전용이라는 말은 "성능에도 개입하지 않는다"까지 포함한다.
+        """
+
+    # 집계 파이프라인(`aggregate`)을 두지 않는 이유는 이 포트의 성질 그 자체다.
+    # 파이프라인에는 `$out`과 `$merge`가 있고, 둘은 **컬렉션에 쓴다.** 즉
+    # "aggregate 하나만 허용"은 쓰기 문을 다시 여는 것이고, 막으려면 단계
+    # 화이트리스트를 또 만들어야 한다(rest 어댑터의 등재제와 같은 무게다).
+    # 리포트는 행을 받아 파이썬에서 센다 — 느려도 그 대가로 **쓸 방법이 없다**.
 
     @abstractmethod
     async def count(self, collection: str, filter: dict) -> ProbeResult:

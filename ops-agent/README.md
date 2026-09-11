@@ -100,11 +100,15 @@ python -m src mail send --subject "mx/gumi" --file output/report.md
 python -m src report scenarios                      # 시나리오 목록
 python -m src report window                         # 집계 대상 날짜와 나갈 Mongo 필터
 python -m src report window --today 2026-09-07      # 그날 돌았다면 어떻게 되는가
+python -m src report aggregate                      # 읽어서 숫자를 낸다(팩트시트)
+python -m src report aggregate --stub-seeds s.json  # 대상에 안 붙고 돌려 본다
 ```
 
 시나리오는 `config/scenarios/<이름>.json` 한 파일이 하나다 — 리포트는 사이트를
 가로지르므로 사이트 층 병합을 타지 않는다. 기간 계산이 왜 따로 떨어져 있고
 날짜 형식을 왜 기동에서 거부하는지는 [9a단계 문서](STEPS/step-09a-window.md).
+숫자를 어떻게 세고 실패한 법인을 어떻게 다루는지는
+[9b단계 문서](STEPS/step-09b-aggregate.md) — **LLM은 숫자에 관여하지 않는다.**
 
 자세한 것은 [3b단계 문서](STEPS/step-03b-adapters.md).
 
@@ -122,7 +126,7 @@ python -m src report window --today 2026-09-07      # 그날 돌았다면 어떻
 | 7. 사내 LLM 연결 | ✅ |
 | 8. 메일 발송 Agent API | ✅ |
 | 9a. 리포트 기간과 시나리오 | ✅ |
-| 9b. 집계 | ⬜ |
+| 9b. 수집과 집계 | ✅ |
 | 9c. 블록 렌더링(HTML) | ⬜ |
 | 9d. 차트 이미지(base64) | ⬜ |
 | 9e. LLM 코멘트 | ⬜ |

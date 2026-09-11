@@ -36,23 +36,68 @@ class StubRedisReader(RedisReaderPort):
         return ProbeResult.succeeded(value, source=f"stub-redis:TTL {key}", clock=self._clock)
 
 
+class _UnsupportedOperator(Exception):
+    """스텁 내부 신호 — 밖으로 나가기 전에 error ProbeResult로 바뀐다."""
+
+
 class StubMongoReader(MongoReaderPort):
     def __init__(self, collections: dict[str, list[dict]] | None = None, *, clock: Clock):
         self._collections = {k: list(v) for k, v in (collections or {}).items()}
         self._clock = clock
 
-    def _match(self, doc: dict, filter: dict) -> bool:
-        # 동등 비교만 지원한다. 스텁이 Mongo 질의 엔진을 흉내내기 시작하면
-        # 그 흉내가 틀린 곳에서 테스트가 거짓 초록을 낸다.
-        return all(doc.get(k) == v for k, v in filter.items())
+    # 스텁이 흉내내는 연산자. **여기 없는 연산자는 조용히 무시하지 않고 거부한다** —
+    # 무시하면 필터가 안 걸린 채 전부 돌려주고, 테스트는 초록인데 실서버에서만
+    # 다른 결과가 나온다. 거짓 초록은 스텁이 낼 수 있는 최악의 실패다.
+    _OPERATORS = {
+        "$eq": lambda v, want: v == want,
+        "$ne": lambda v, want: v != want,
+        "$gt": lambda v, want: v is not None and v > want,
+        "$gte": lambda v, want: v is not None and v >= want,
+        "$lt": lambda v, want: v is not None and v < want,
+        "$lte": lambda v, want: v is not None and v <= want,
+        "$in": lambda v, want: v in want,
+        "$nin": lambda v, want: v not in want,
+        "$exists": lambda v, want: (v is not None) == bool(want),
+    }
 
-    async def find(self, collection: str, filter: dict, *, sort=None, limit=None) -> ProbeResult:
+    def _match_one(self, value, condition) -> bool:
+        if not isinstance(condition, dict) or not any(
+                isinstance(k, str) and k.startswith("$") for k in condition):
+            return value == condition
+        for operator, want in condition.items():
+            handler = self._OPERATORS.get(operator)
+            if handler is None:
+                raise _UnsupportedOperator(operator)
+            try:
+                if not handler(value, want):
+                    return False
+            except TypeError:
+                # 문자열과 숫자를 비교하는 등 — 실서버라면 타입별 순서 규칙이
+                # 있지만 스텁은 흉내내지 않는다. 안 맞는 것으로 본다.
+                return False
+        return True
+
+    def _match(self, doc: dict, filter: dict) -> bool:
+        return all(self._match_one(doc.get(k), v) for k, v in filter.items())
+
+    async def find(self, collection: str, filter: dict, *, sort=None, limit=None,
+                   projection=None) -> ProbeResult:
         source = f"stub-mongo:{collection} find={filter}"
         problems = filter_problems(filter)
         if problems:
             return ProbeResult.failed("; ".join(problems), source=source, clock=self._clock)
-        rows = [to_jsonable(d) for d in self._collections.get(collection, [])
-                if self._match(d, filter)]
+        try:
+            rows = [to_jsonable(d) for d in self._collections.get(collection, [])
+                    if self._match(d, filter)]
+        except _UnsupportedOperator as exc:
+            return ProbeResult.failed(f"스텁이 흉내내지 않는 연산자 — {exc}. "
+                                      f"이 질의는 실서버로만 검증할 수 있다",
+                                      source=source, clock=self._clock)
+        if projection:
+            # 실구현이 필드를 좁히는데 스텁이 전부 돌려주면, 투영에서 빠진 필드를
+            # 읽는 코드가 스텁으로는 통과하고 실서버에서만 깨진다.
+            keep = set(projection)
+            rows = [{k: v for k, v in row.items() if k in keep} for row in rows]
         truncated = None
         if limit is not None and len(rows) > limit:
             rows, truncated = rows[:limit], f"limit={limit}에 걸림 — 더 있다"
@@ -64,7 +109,13 @@ class StubMongoReader(MongoReaderPort):
         problems = filter_problems(filter)
         if problems:
             return ProbeResult.failed("; ".join(problems), source=source, clock=self._clock)
-        total = sum(1 for d in self._collections.get(collection, []) if self._match(d, filter))
+        try:
+            total = sum(1 for d in self._collections.get(collection, [])
+                        if self._match(d, filter))
+        except _UnsupportedOperator as exc:
+            return ProbeResult.failed(f"스텁이 흉내내지 않는 연산자 — {exc}. "
+                                      f"이 질의는 실서버로만 검증할 수 있다",
+                                      source=source, clock=self._clock)
         return ProbeResult.succeeded(total, source=source, clock=self._clock)
 
 
