@@ -403,3 +403,61 @@ def test_제목의_건수는_생략된_것까지_센다(source, window):
     counted = int(block.hint.removesuffix("건"))
     assert counted > visible, f"보이는 {visible}줄만 세고 있다 — {block.hint}"
     assert counted == visible + 3, "생략한 신규 3건이 빠졌다"
+
+
+# ── 꺾은선 차트 ─────────────────────────────────────────────────────
+
+def trend_chart(facts):
+    return next(b for b in build_blocks(facts) if b.key == "trend").chart
+
+
+def test_일별_추이가_차트와_표를_둘_다_낸다(source, window):
+    """차트는 모양을, 표는 정확한 값을 말한다 — 차트만 두면 GBM별 숫자를 못 읽는다."""
+    facts = two_gbm(source, window, mx=30, da=10)
+    trend = next(b for b in build_blocks(facts) if b.key == "trend")
+    assert trend.chart is not None and trend.table is not None
+    assert trend.table.rows and len(trend.chart.axis) == len(window.days)
+
+
+def test_GBM마다_판이_하나다(source, window):
+    """전사 판은 두지 않는다 — 표의 합계 열이 같은 수열을 보여 주고, 판을 하나 더
+    두면 "GBM별 추세"라는 초점이 흐려진다."""
+    facts = two_gbm(source, window, mx=30, da=10)
+    chart = trend_chart(facts)
+    assert [p.title for p in chart.panels] == ["MX", "DA"]
+    assert chart.panels[0].series == 0 and chart.panels[1].series == 1
+
+
+def test_판마다_자기_y축을_쓴다(source, window):
+    """건수 차가 20배면 공유 y축에서 작은 GBM의 추세가 사라진다 — 그게 이 차트의
+    목적이므로 판을 나눈다."""
+    facts = two_gbm(source, window, mx=100, da=5)
+    assert {p.title: p.scale for p in trend_chart(facts).panels} == {"MX": 100, "DA": 5}
+
+
+def test_y축이_다르다는_경고가_붙는다(source, window):
+    """안 적으면 읽는 사람이 판 사이의 높이로 비교한다."""
+    chart = trend_chart(two_gbm(source, window, mx=100, da=5))
+    assert chart.warning and "비교하면 안 된다" in chart.warning
+    assert "표로" in chart.warning, "어디서 비교해야 하는지 말해야 한다"
+
+
+def test_x축_라벨은_판들이_공유한다(source, window):
+    """판마다 반복하면 날짜가 네 번 찍혀서 선보다 글자가 많아진다."""
+    chart = trend_chart(two_gbm(source, window, mx=30, da=10))
+    assert len(chart.axis) == len(window.days)
+    assert all(len(p.columns) == len(chart.axis) for p in chart.panels)
+
+
+def test_판의_값이_일별_건수와_같다(source, window):
+    """차트와 표가 다른 숫자를 말하면 둘 다 못 믿는다."""
+    facts = two_gbm(source, window, mx=30, da=10)
+    chart = trend_chart(facts)
+    for panel, gbm in zip(chart.panels, ("mx", "da")):
+        values = [bar.value for column in panel.columns for bar in column.bars]
+        assert values == [facts.total(day=day, gbm=gbm) for day in window.days]
+
+
+def test_어제_칸이_표시된다(source, window):
+    chart = trend_chart(two_gbm(source, window, mx=30, da=10))
+    assert [c.emphasis for c in chart.panels[0].columns] == [False] * 6 + [True]

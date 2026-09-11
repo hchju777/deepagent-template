@@ -265,3 +265,92 @@ def test_줄바꿈_금지_공백이_그대로_살아_나간다(source, window):
     html = html_of(build(documents, source=source, window=window))
     assert "\u00a0" in html, "줄바꿈 금지 공백이 사라졌다"
     assert "&nbsp;amp;" not in html and "&amp;nbsp;" not in html
+
+
+# ── 차트가 이미지로 나가는가 ────────────────────────────────────────
+
+def chart_html(source, window):
+    from src.report.facts import SiteOutcome as SO
+
+    mx, _ = normalize([doc(YESTERDAY, plant="gumi")] * 30, source=source,
+                      window=window, gbm="mx", fct="gumi")
+    da, _ = normalize([doc(YESTERDAY, plant="gwangju")] * 3, source=source,
+                      window=window, gbm="da", fct="gwangju")
+    facts = facts_from(mx + da, window=window, source=source,
+                       sites=(SO(gbm="mx", fct="gumi", status="ok"),
+                              SO(gbm="da", fct="gwangju", status="ok")),
+                       gbms=("mx", "da"))
+    return html_of(facts)
+
+
+def test_차트가_base64_PNG로_들어간다(source, window):
+    """인라인 SVG는 Outlook에서 안 보이고, 외부 이미지는 차단된다 — data URI는
+    사내 메일 경로에서 동작하는 것이 확인됐다."""
+    import base64
+    import re
+
+    html = chart_html(source, window)
+    found = re.findall(r'src="data:image/png;base64,([A-Za-z0-9+/=]+)"', html)
+    assert len(found) == 2, f"판 2개에 이미지 2개가 나와야 한다 — {len(found)}개"
+    for encoded in found:
+        raw = base64.b64decode(encoded)
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n", "PNG 서명이 아니다"
+
+
+def test_이미지_크기를_속성으로도_준다(source, window):
+    """Word 엔진은 CSS 크기를 무시할 때가 있다 — 그러면 2배로 그린 그림이
+    2배 크기로 표시돼서 본문을 밀어낸다."""
+    from src.presentation.report_html import PLOT_W
+
+    html = chart_html(source, window)
+    assert f'width="{PLOT_W}"' in html and f"width:{PLOT_W}px" in html
+    assert 'height="92"' in html and "height:92px" in html
+
+
+def test_이미지가_막혀도_읽을_것이_남는다(source, window):
+    """alt와 바로 아래 숫자 표가 남는다. alt가 비면 차단된 자리에 아무것도 없다."""
+    html = chart_html(source, window)
+    assert 'alt="MX 일별 추이' in html
+    assert "30" in html, "같은 숫자가 표에도 있어야 한다"
+
+
+def test_판마다_최댓값이_찍힌다(source, window):
+    """y축이 판마다 다르므로, 최댓값이 없으면 높이를 읽을 근거가 없다."""
+    html = chart_html(source, window)
+    assert "최대 30" in html and "최대 3" in html
+
+
+def test_y축_경고가_본문에_실린다(source, window):
+    assert "비교하면 안 된다" in chart_html(source, window)
+
+
+def test_차트가_있어도_태그_짝이_맞는다(source, window):
+    checker = Balance()
+    checker.feed(chart_html(source, window))
+    assert checker.problems == [] and checker.stack == []
+
+
+def test_이미지에_테두리가_안_생긴다(source, window):
+    """일부 클라이언트는 img에 파란 테두리를 붙인다 — 링크처럼 보인다."""
+    html = chart_html(source, window)
+    assert "border:0;outline:none;text-decoration:none;" in html
+
+
+def test_본문에_들어가는_차트는_투명하다(source, window):
+    """불투명이면 클라이언트가 강제하는 다크모드에서 어두운 본문 위에 **흰 판**이
+    뜬다 — 이미지는 반전되지 않기 때문이다."""
+    import base64
+    import re
+
+    html = chart_html(source, window)
+    for encoded in re.findall(r'src="data:image/png;base64,([A-Za-z0-9+/=]+)"', html):
+        png = base64.b64decode(encoded)
+        assert png[25] == 6, "알파 트루컬러(6)가 아니다 — 배경이 불투명하다"
+
+
+def test_차트_색은_본문_색을_그대로_쓰지_않는다():
+    """본문 색은 라이트 바탕만 보고 고른 것이라 다크에서 무너진다 —
+    #5b6270은 라이트 6.08 / 다크 2.90이다."""
+    from src.presentation.report_html import CHART_LABEL, DIM, FAINT, HEAD_RULE
+
+    assert CHART_LABEL != DIM and CHART_LABEL not in (FAINT, HEAD_RULE)

@@ -35,7 +35,7 @@ Outlook 데스크톱은 CSS로 막을 수 없다. `prefers-color-scheme` 미디�
 """
 from html import escape
 
-from src.report.blocks import Banner, Block, Cell, Table, Tile
+from src.report.blocks import Banner, Block, Cell, Chart, ChartPanel, Table, Tile
 
 # ── 팔레트 ──────────────────────────────────────────────────────────
 # 검증된 값들이다(라이트 모드 대비 기준 통과). 계열색 넷은 GBM 구분용.
@@ -59,6 +59,17 @@ WARN, WARN_BG = "#b54708", "#fff3e6"
 # MX가 VD와 **다른 색**이라는 사실만 유지되면 되고, 이름 글자가 정체성을 함께 말한다.
 # 네 개를 넘으면 돌려 쓴다(같은 색을 쓰는 두 GBM은 이름으로 구별된다).
 SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#7a5af8", "#0d9488")
+
+# 차트 이미지 전용 색. 본문 색을 그대로 쓰지 않는 이유: 차트는 **투명 배경**이라
+# 라이트(#fefefe)와 다크(#16181d) 양쪽 바탕 위에 얹힌다. 본문 색은 라이트만 보고
+# 고른 것이라 다크에서 무너진다(#5b6270은 라이트 6.08 / 다크 2.90).
+#
+# 측정해 보면 **양쪽에서 작은 글자 기준(4.5:1)을 넘는 색은 없다** — 순수 회색 최적이
+# #7b7b7b의 4.20:1이다. 그래서 이 값들은 "양쪽에서 같은 정도로 읽히는" 타협점이고,
+# 라이트에서만 보면 본문 글씨보다 연하게 느껴지는 것이 정상이다.
+CHART_LABEL = "#7b7b7b"      # 점 위의 숫자 — 양쪽 4.20:1
+CHART_GRID = "#9a9a9a"       # 점선 격자 — 격자는 낮은 대비가 맞다
+CHART_BASELINE = "#7b7b7b"   # 0 기준선
 
 WIDTH = 720
 PAD = "28px"
@@ -144,6 +155,104 @@ def _tiles(tiles: tuple[Tile, ...]) -> str:
             + "".join(f"<tr>{row}</tr>" for row in rows) + "</table>")
 
 
+# 차트 치수. 픽셀로 고정하는 이유: Word 엔진은 이미지의 `%` 폭을 제대로 안 다루고,
+# 메일 본문 폭(720px)이 고정이라 상대 단위의 이점이 없다.
+AXIS_W = 46          # 왼쪽 GBM 이름 칸
+MAX_W = 52           # 오른쪽 최댓값 칸
+PLOT_W = 560         # 꺾은선 그림의 표시 폭
+
+
+def _chart_style(color: str) -> "LineChartStyle":
+    """차트 이미지는 **투명 배경**이다.
+
+    불투명(거의 흰색)으로 두면 클라이언트가 강제하는 다크모드에서 이미지만 반전되지
+    않아서 어두운 본문 위에 **흰 판 네 개**가 뜬다 — 읽는 사람에게는 깨진 것으로
+    보인다. 그 대가로 글자·격자 대비가 내려가는 것은 `CHART_LABEL` 주석에 적혀 있다.
+    """
+    from src.presentation.line_chart import LineChartStyle
+
+    return LineChartStyle(background=None, line=color, grid=CHART_GRID,
+                          label=CHART_LABEL, baseline=CHART_BASELINE)
+
+
+def _panel(panel: ChartPanel) -> str:
+    """GBM 한 판: 이름 | 꺾은선 그림 | 최댓값.
+
+    그림 안에는 **숫자만** 들어간다. 이름·최댓값·날짜는 HTML이 그리므로 PNG 폰트가
+    글리프 11개로 끝난다(`png.py` 참고). 한글을 그림에 넣는 순간 그 구조가 무너진다.
+
+    `alt`를 채우는 이유: 이미지를 막는 클라이언트가 있고, 그때 남는 것이 이 문장과
+    바로 아래 숫자 표다.
+    """
+    import base64
+
+    from src.presentation.line_chart import render_line_chart
+
+    values = [bar.value for column in panel.columns for bar in column.bars]
+    color = series_color(panel.series) or INK
+    png = render_line_chart(values, scale=panel.scale, width=PLOT_W,
+                            height=panel.height, style=_chart_style(color))
+    encoded = base64.b64encode(png).decode("ascii")
+    alt = f"{panel.title or ''} 일별 추이 {', '.join(f'{v:,}' for v in values)}".strip()
+
+    title = ""
+    if panel.title:
+        title = (f'<span style="color:{color};font-weight:700;font-size:13px;">'
+                 f'{e(panel.title)}</span>')
+    return (f'<tr>'
+            f'<td width="{AXIS_W}" valign="middle" '
+            f'style="padding:0 6px 0 0;vertical-align:middle;">{title}</td>'
+            f'<td style="padding:0;line-height:0;">'
+            f'<img src="data:image/png;base64,{encoded}" width="{PLOT_W}" '
+            f'height="{panel.height}" alt="{e(alt)}" '
+            f'style="display:block;width:{PLOT_W}px;height:{panel.height}px;'
+            f'border:0;outline:none;text-decoration:none;"></td>'
+            f'<td width="{MAX_W}" align="right" valign="middle" '
+            f'style="padding:0 0 0 8px;font-size:11px;color:{FAINT};'
+            f'vertical-align:middle;white-space:nowrap;">'
+            f'{e(f"최대 {panel.scale:,}")}</td>'
+            f'</tr>'
+            f'<tr><td colspan="3" style="font-size:0;line-height:0;height:8px;">'
+            f'&nbsp;</td></tr>')
+
+
+def _chart(chart: Chart) -> str:
+    """꺾은선 판들 + 공유 x축 라벨.
+
+    x축 라벨을 **판마다 반복하지 않고 맨 아래 한 번만** 둔다 — 판이 네 개면 날짜가
+    네 번 찍혀서 정작 선보다 글자가 많아진다. 같은 시간축을 공유한다는 사실도 그
+    배치가 말해 준다.
+
+    라벨 칸의 좌우 여백(10px)은 `line_chart`의 `pad_side`와 같은 값이다. 안 맞으면
+    날짜가 점과 어긋나서 "그날이 아닌 날"을 가리킨다.
+    """
+    panels = "".join(_panel(panel) for panel in chart.panels)
+
+    labels = ""
+    if chart.axis:
+        cells = "".join(
+            f'<td align="center" style="font-size:10.5px;color:{DIM};'
+            f'white-space:nowrap;">{e(label)}</td>' for label in chart.axis)
+        labels = (f'<tr><td width="{AXIS_W}" style="font-size:0;line-height:0;">'
+                  f'&nbsp;</td>'
+                  f'<td style="padding:2px 10px 0;">'
+                  f'<table role="presentation" cellpadding="0" cellspacing="0" '
+                  f'border="0" width="100%" style="width:100%;'
+                  f'border-collapse:collapse;table-layout:fixed;">'
+                  f'<tr>{cells}</tr></table></td>'
+                  f'<td width="{MAX_W}" style="font-size:0;line-height:0;">'
+                  f'&nbsp;</td></tr>')
+
+    warning = ""
+    if chart.warning:
+        warning = (f'<div style="font-size:11px;color:{FAINT};line-height:1.6;'
+                   f'padding:8px 0 0;{WRAP}">{e(chart.warning)}</div>')
+
+    return (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+            f'width="100%" style="width:100%;border-collapse:collapse;">'
+            f'{panels}{labels}</table>{warning}')
+
+
 def _cell(cell: Cell, *, last: bool, total: bool = False,
           group_start: bool = False) -> str:
     border = "" if last or total else f"border-bottom:1px solid {ROW_RULE};"
@@ -213,6 +322,8 @@ def _block(block: Block) -> str:
         parts.append(_row(_banner(banner), pad=f"0 {PAD}"))
     if block.tiles:
         parts.append(_row(_tiles(block.tiles), pad=f"16px {PAD} 0"))
+    if block.chart is not None and block.chart.has_panels:
+        parts.append(_row(_chart(block.chart), pad=f"14px {PAD} 0"))
     if block.table is not None:
         parts.append(_row(_table(block.table), pad=f"0 {PAD}"))
     elif not block.has_content and block.empty:

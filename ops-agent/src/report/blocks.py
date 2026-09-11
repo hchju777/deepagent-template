@@ -98,6 +98,57 @@ class Table:
 
 
 @dataclass(frozen=True)
+class ChartBar:
+    label: str            # 계열 이름(GBM)
+    value: int
+    series: int | None    # 계열색 번호. None이면 중립색
+
+
+@dataclass(frozen=True)
+class ChartColumn:
+    label: str            # x축 — 날짜
+    bars: tuple[ChartBar, ...]
+    emphasis: bool = False
+
+
+@dataclass(frozen=True)
+class ChartPanel:
+    """세로 막대 한 판. x축은 시간, y축은 건수.
+
+    `scale`(y축 최댓값)을 **판마다** 갖는 이유: GBM 간 건수 차가 20배쯤 되면
+    (MX 177 · NW 8) 공유 y축에서는 작은 GBM이 전부 바닥에 깔려 추세가 보이지
+    않는다. 판마다 자기 최댓값을 쓰면 모든 GBM의 모양이 읽힌다.
+
+    그 대가로 **판 사이의 높이를 비교할 수 없다.** 그래서 판마다 최댓값을 적고
+    차트 전체에 경고를 붙인다 — 안 적으면 읽는 사람이 높이로 비교한다.
+    """
+    columns: tuple[ChartColumn, ...]
+    scale: int
+    title: str | None = None          # small multiples면 GBM 이름
+    series: int | None = None         # 제목 색
+    height: int = 92                  # 플롯 표시 높이(px). PNG는 2배로 그린다
+
+
+@dataclass(frozen=True)
+class Chart:
+    """세로 막대 차트. **이미지가 아니라 표다.**
+
+    왜 이미지가 아닌가: 인라인 SVG는 Outlook(Word 엔진)에서 아예 안 보이고, PNG를
+    만들려면 차트 라이브러리와 **한글 폰트**가 필요하다 — 개발(Linux)에 그 폰트가
+    없으면 플랫폼마다 다른 그림이 나오고 테스트가 그걸 못 잡는다. 배경색을 칠한
+    `<td>`는 어디서나 칠해진다.
+    """
+    panels: tuple[ChartPanel, ...]
+    axis: tuple[str, ...] = ()        # x축 라벨 — 판들이 공유한다
+    legend: tuple[ChartBar, ...] = ()
+    warning: str | None = None        # "판 사이 높이를 비교하지 말라"
+
+    @property
+    def has_panels(self) -> bool:
+        return any(panel.columns for panel in self.panels)
+
+
+@dataclass(frozen=True)
 class Tile:
     label: str
     value: str
@@ -121,6 +172,7 @@ class Block:
     hint: str | None = None       # 제목 옆 작은 글씨
     lead: str | None = None       # 제목 아래 한 줄 설명
     tiles: tuple[Tile, ...] = ()
+    chart: Chart | None = None
     table: Table | None = None
     bullets: tuple[str, ...] = ()
     banners: tuple[Banner, ...] = ()
@@ -130,7 +182,8 @@ class Block:
 
     @property
     def has_content(self) -> bool:
-        return bool(self.tiles or self.table or self.bullets or self.banners)
+        return bool(self.tiles or self.chart or self.table or self.bullets
+                    or self.banners)
 
     @property
     def visible(self) -> bool:
@@ -358,25 +411,68 @@ def _gbm_summary(facts: Facts) -> Block:
         empty="어제 알람이 한 건도 없습니다.")
 
 
-def _daily_trend(facts: Facts) -> Block:
-    """일별 추이 — **표로도** 남긴다.
+def _trend_chart(facts: Facts, gbms: list[str], daily: dict) -> Chart:
+    """GBM마다 꺾은선 한 판. 판마다 자기 y축을 쓴다.
 
-    9d에서 차트 이미지가 붙지만 이 표는 남는다. 메일 클라이언트가 이미지를 막는
-    일이 흔하고, 그때 그림만 있으면 읽을 것이 없어진다.
+    왜 한 판에 GBM을 겹치지 않는가: 건수 차가 20배쯤 되면(MX 177 · NW 8) 공유
+    y축에서 작은 GBM이 전부 바닥에 깔려 **추세가 사라진다.** 추세를 보는 것이
+    이 차트의 목적이므로 판을 나눈다.
+
+    전사 합계 판은 두지 않는다 — 바로 아래 표의 `합계` 열이 같은 수열을 보여 주고,
+    어제 총계는 KPI 타일이 말한다. 판을 하나 더 두면 "GBM별 추세"라는 이 절의
+    초점이 흐려진다.
+    """
+    yesterday = facts.window.yesterday
+    panels = tuple(
+        ChartPanel(
+            title=upper(gbm),
+            series=facts.series_of(gbm),
+            columns=tuple(ChartColumn(label=day_label(day, weekday=False),
+                                      bars=(ChartBar(label=upper(gbm),
+                                                     value=counts[index],
+                                                     series=facts.series_of(gbm)),),
+                                      emphasis=day == yesterday)
+                          for day, counts in daily.items()),
+            scale=max((counts[index] for counts in daily.values()), default=0))
+        for index, gbm in enumerate(gbms))
+
+    return Chart(panels=panels,
+                 axis=tuple(day_label(day, weekday=False) for day in facts.window.days),
+                 warning=tight("판마다 y축이 다르다(오른쪽 최댓값 참고) — ")
+                         + "줄 사이의 높이를 비교하면 안 된다. "
+                         + tight("GBM 간 크기 비교는 아래 표로."))
+
+
+def _daily_trend(facts: Facts) -> Block:
+    """일별 추이 — 차트와 표를 **둘 다** 낸다.
+
+    둘은 다른 질문에 답하므로 중복이 아니다: 차트는 **모양**(어느 날 솟았나,
+    GBM마다 어떻게 움직였나)을, 표는 **정확한 값**을 말한다. 차트만 두면 GBM별
+    숫자를 읽을 수 없고, 표만 두면 일곱 줄 숫자에서 추세를 눈으로 못 잡는다.
     """
     gbms = [g for g in facts.gbm_order() if any(r.gbm == g for r in facts.rows)]
+    if not gbms:
+        return Block(key="trend", title="일별 알람 추이", hint="평일만",
+                     empty="기간 안에 알람이 없습니다.")
+
+    daily = {day: [facts.total(day=day, gbm=g) for g in gbms]
+             for day in facts.window.days}
+
     columns = (Column("날짜"),
-               *(Column(g.upper(), "right", series=facts.series_of(g)) for g in gbms),
+               *(Column(upper(g), "right", series=facts.series_of(g)) for g in gbms),
                Column("합계", "right"))
-    rows = []
-    for day in facts.window.days:
-        counts = [facts.total(day=day, gbm=g) for g in gbms]
-        emphasis = "strong" if day == facts.window.yesterday else "plain"
-        rows.append((Cell(day_label(day), tone=emphasis),
-                     *(Cell(n(c), "right", emphasis) for c in counts),
-                     Cell(n(sum(counts)), "right", "strong")))
+    rows = tuple(
+        (Cell(day_label(day),
+              tone="strong" if day == facts.window.yesterday else "plain"),
+         *(Cell(n(c), "right",
+                "strong" if day == facts.window.yesterday else "plain")
+           for c in counts),
+         Cell(n(sum(counts)), "right", "strong"))
+        for day, counts in daily.items())
+
     return Block(key="trend", title="일별 알람 추이", hint="평일만",
-                 table=Table(columns=columns, rows=tuple(rows)) if gbms else None,
+                 chart=_trend_chart(facts, gbms, daily),
+                 table=Table(columns=columns, rows=rows),
                  empty="기간 안에 알람이 없습니다.")
 
 
