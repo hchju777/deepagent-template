@@ -73,10 +73,12 @@ def fact_sheet(facts: Facts) -> dict:
             "법인": [{"GBM": s.key[0], "법인": s.key[1], "건수": s.count,
                     "기준값": round(s.baseline, 1), "배수": round(s.ratio, 2)}
                    for s in spikes(facts, lambda r: (r.gbm, r.plant), day=yesterday)],
-            "GBM·법인·항목": [{"GBM": s.key[0], "법인": s.key[1], "항목": s.key[2],
+            "GBM·법인·항목": [{"GBM": s.key[0], "법인": s.key[1],
+                          "항목": f"{s.key[3]}({s.key[2]})",
                           "건수": s.count, "기준값": round(s.baseline, 1),
                           "배수": round(s.ratio, 2)}
                          for s in spikes(facts, lambda r: (r.gbm, r.plant,
+                                                          r.scenario_id,
                                                           r.scenario_name),
                                          day=yesterday)],
         },
@@ -85,7 +87,8 @@ def fact_sheet(facts: Facts) -> dict:
                   f"{facts.thresholds.repeat_min_days}일 이상에 걸쳐",
             "목록": [{"GBM": r.gbm, "법인": r.plant,
                    "라인": f"{r.line_code} {r.line_name}",
-                   "항목": r.scenario_name, "건수": r.count, "발생일수": r.days}
+                   "항목": f"{r.scenario_name}({r.scenario_id})",
+                   "건수": r.count, "발생일수": r.days}
                   for r in repeats(facts, limit=top_n)],
         },
         "⑫ 알람 항목 신규·소멸": {

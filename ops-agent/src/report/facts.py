@@ -260,7 +260,7 @@ def ranking_by_gbm(facts: Facts, key: Callable[[AlarmRow], K], *, day: date,
 
 @dataclass(frozen=True)
 class Spike:
-    key: tuple[str, ...]          # (gbm, plant, 항목명) — 이슈 표의 세 열이 된다
+    key: tuple[str, ...]          # 호출부가 정한다. 이슈 표는 (gbm, plant, 항목id, 항목명)
     count: int
     baseline: float          # 직전 평일 평균이므로 정수가 아니다
     baseline_days: int
@@ -308,6 +308,9 @@ class Repeat:
     plant: str
     line_code: str
     line_name: str
+    # 이름과 **id를 함께** 들고 다닌다. 이름은 사람이 읽고 id는 대상 시스템에서
+    # 찾는 키다 — 리포트를 받은 사람이 다음에 하는 일이 그 id로 조회하는 것이다.
+    scenario_id: str
     scenario_name: str
     count: int
     days: int            # 며칠에 걸쳐 있었는가
@@ -323,9 +326,10 @@ def repeats(facts: Facts, *, limit: int | None = None) -> list[Repeat]:
     grouped: dict[tuple, list[date]] = defaultdict(list)
     for row in facts.select(days=facts.window.selected):
         grouped[(row.gbm, row.plant, row.line_code, row.line_name,
-                 row.scenario_name)].append(row.day)
+                 row.scenario_id, row.scenario_name)].append(row.day)
     found = [Repeat(gbm=k[0], plant=k[1], line_code=k[2], line_name=k[3],
-                    scenario_name=k[4], count=len(days), days=len(set(days)))
+                    scenario_id=k[4], scenario_name=k[5],
+                    count=len(days), days=len(set(days)))
              for k, days in grouped.items()
              if len(days) >= facts.thresholds.repeat_min_count
              and len(set(days)) >= facts.thresholds.repeat_min_days]

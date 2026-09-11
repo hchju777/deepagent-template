@@ -386,7 +386,10 @@ def _spike_rows(facts: Facts, day):
     항목만으로 보면 "설비 신호 끊김이 늘었다"까지만 알고 어디를 봐야 하는지 모른다.
     이슈 표가 GBM·법인 열을 채울 수 있어야 그 표가 조치의 출발점이 된다.
     """
-    return spikes(facts, lambda r: (r.gbm, r.plant, r.scenario_name), day=day)
+    # 항목 **id까지** 키에 넣는다. 이름만으로 묶으면 id가 다른 두 항목이 같은 이름을
+    # 쓸 때 한 줄로 합쳐지고, 리포트를 받은 사람이 조회할 키가 사라진다.
+    return spikes(facts, lambda r: (r.gbm, r.plant, r.scenario_id, r.scenario_name),
+                  day=day)
 
 
 def _grouped_table(facts: Facts, groups, *, columns, make_row) -> Table | None:
@@ -423,9 +426,13 @@ def _issues(facts: Facts) -> Block:
     """
     yesterday = facts.window.yesterday
     earlier_days = max(len(facts.window.days) - 1, 1)
+    cap = facts.thresholds.top_n
     columns = (Column("유형"), Column("GBM"), Column("법인"), Column("대상"),
                Column("어제", "right"), Column("평균", "right"), Column("증감", "right"))
     rows: list[tuple[Cell, ...]] = []
+    # 유형별로 몇 건을 생략했는가. **0이 아니면 제목 아래에 적는다** — 조용히
+    # 자르면 "이슈가 이것뿐"이라는 거짓이 된다.
+    omitted: dict[str, int] = {}
 
     for stalled in (f for f in freshness(facts) if f.stalled):
         last = stalled.last_seen.strftime("%m/%d %H:%M") if stalled.last_seen else EMDASH
@@ -437,23 +444,28 @@ def _issues(facts: Facts) -> Block:
                      Cell(n(stalled.window_count / earlier_days), "right", "muted"),
                      Cell("▼ 100.0%", "right", "bad")))
 
-    for spike in _spike_rows(facts, yesterday):
-        gbm, plant, name = spike.key
+    found_spikes = _spike_rows(facts, yesterday)
+    omitted["급증"] = max(len(found_spikes) - cap, 0)
+    for spike in found_spikes[:cap]:
+        gbm, plant, scenario_id, name = spike.key
         change, tone = delta(spike.count, spike.baseline)
         rows.append((Cell("급증", tone="bad", chip=True),
-                     _gbm_cell(facts, gbm), Cell(upper(plant)), Cell(name),
+                     _gbm_cell(facts, gbm), Cell(upper(plant)),
+                     Cell(name, hint=scenario_id),
                      Cell(n(spike.count), "right", "strong"),
                      Cell(n(spike.baseline), "right", "muted"),
                      Cell(change, "right", tone)))
 
     lifecycle = scenario_lifecycle(facts)
-    for item in lifecycle.appeared:
+    omitted["신규"] = max(len(lifecycle.appeared) - cap, 0)
+    omitted["소멸"] = max(len(lifecycle.vanished) - cap, 0)
+    for item in lifecycle.appeared[:cap]:
         rows.append((Cell("신규", tone="warn", chip=True),
                      _gbm_cell(facts, item.gbm), Cell(_plants_label(item.plants)),
                      Cell(item.name, hint=item.scenario_id),
                      Cell(n(item.count), "right", "strong"),
                      Cell(EMDASH, "right", "muted"), Cell("신규", "right", "bad")))
-    for item in lifecycle.vanished:
+    for item in lifecycle.vanished[:cap]:
         rows.append((Cell("소멸", tone="good", chip=True),
                      _gbm_cell(facts, item.gbm), Cell(_plants_label(item.plants)),
                      Cell(item.name, hint=item.scenario_id),
@@ -461,14 +473,26 @@ def _issues(facts: Facts) -> Block:
                      Cell(n(item.count / earlier_days), "right", "muted"),
                      Cell("소멸", "right", "good")))
 
-    for repeat in repeats(facts, limit=facts.thresholds.top_n):
+    found_repeats = repeats(facts)
+    omitted["반복"] = max(len(found_repeats) - cap, 0)
+    for repeat in found_repeats[:cap]:
         rows.append((Cell("반복", tone="muted", chip=True),
                      _gbm_cell(facts, repeat.gbm), Cell(upper(repeat.plant)),
                      Cell(f"{_line_label(repeat.line_code, repeat.line_name)} · "
                           f"{repeat.scenario_name}",
-                          hint=tight(f"{repeat.days} 평일에 걸쳐")),
+                          # 항목 id를 먼저 — 모든 행의 hint가 같은 모양으로 시작해야
+                          # 눈이 그 자리를 학습한다.
+                          hint=f"{repeat.scenario_id} · "
+                               f"{tight(f'{repeat.days} 평일에 걸쳐')}"),
                      Cell(n(repeat.count), "right", "strong"),
                      Cell(EMDASH, "right", "muted"), Cell(EMDASH, "right", "muted")))
+
+    hidden = {kind: count for kind, count in omitted.items() if count}
+    lead = None
+    if hidden:
+        detail = " · ".join(f"{kind} {count}건" for kind, count in hidden.items())
+        lead = (f"유형별 상위 {cap}건만 보입니다 — {detail}을 생략했습니다. "
+                f"전체 목록은 report aggregate의 팩트시트에 있습니다.")
 
     t = facts.thresholds
     footnote = (f"급증 어제가 직전 평일 평균의 {t.spike_ratio}배 이상 & "
@@ -478,8 +502,10 @@ def _issues(facts: Facts) -> Block:
                 f"반복 같은 라인·항목이 {t.repeat_min_count}건 이상 & "
                 f"{t.repeat_min_days} 평일 이상 · 데이터 기간 중에는 있었는데 어제 0건 "
                 f"— 임계값 전부 시나리오 config")
+    total_found = len(rows) + sum(hidden.values())
     return Block(key="issues", title="이슈 감지",
-                 hint=f"{len(rows)}건" if rows else None,
+                 hint=f"{total_found}건" if rows else None,
+                 lead=lead,
                  table=Table(columns=columns, rows=tuple(rows)) if rows else None,
                  footnote=footnote,
                  empty="임계값을 넘은 이슈가 없습니다.")

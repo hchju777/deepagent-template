@@ -290,7 +290,8 @@ def test_반복_행이_GBM_법인_대상으로_나뉜다(source, window):
     row = next(r for r in table.rows if r[0].text == "반복")
     assert row[1].text == "MX" and row[2].text == "GUMI"
     assert "P222" in row[3].text and "재고 불일치" in row[3].text
-    assert row[3].hint == f"7{NBSP}평일에{NBSP}걸쳐", "짧은 구절이 갈라지면 안 된다"
+    assert row[3].hint == f"S01 · 7{NBSP}평일에{NBSP}걸쳐", \
+        "항목 id가 먼저 오고, 짧은 구절은 갈라지지 않는다"
 
 
 def test_급증_행이_GBM_법인_항목을_갖는다(source, window):
@@ -303,3 +304,102 @@ def test_급증_행이_GBM_법인_항목을_갖는다(source, window):
     row = next(r for r in table.rows if r[0].text == "급증")
     assert row[1].text == "MX" and row[2].text == "GUMI"
     assert row[3].text == "설비 신호 끊김"
+    assert row[3].hint == "S01", "리포트를 받은 사람이 다음에 하는 일이 이 id로 조회다"
+
+
+# ── 항목 id와 유형별 상한 ───────────────────────────────────────────
+
+def issue_table(facts):
+    return next(b for b in build_blocks(facts) if b.key == "issues")
+
+
+def test_이슈_표의_모든_항목_행이_항목_id를_갖는다(source, window):
+    """이름만 있으면 받은 사람이 대상 시스템에서 찾을 키가 없다. 이름이 같고 id가
+    다른 두 항목이 한 줄로 합쳐지는 것도 막는다."""
+    from src.config.schema_report import Thresholds
+
+    earlier = [d for d in window.days if d != YESTERDAY]
+    documents = (
+        [doc(YESTERDAY, scen="S02", scen_name="급증항목")] * 40          # 급증
+        + [doc(d, scen="S02", scen_name="급증항목") for d in earlier]
+        + [doc(YESTERDAY, scen="S09", scen_name="신규항목")]             # 신규
+        + [doc(d, scen="S08", scen_name="소멸항목") for d in earlier]     # 소멸
+        + [doc(d, scen="S03", scen_name="반복항목", line="P9",
+               line_name="9라인") for d in window.days for _ in range(2)])
+    rows, _ = normalize(documents, source=source, window=window, gbm="mx", fct="gumi")
+    facts = facts_from(rows, window=window, source=source, gbms=("mx",),
+                       thresholds=Thresholds(repeat_min_count=5, repeat_min_days=3))
+    table = issue_table(facts).table
+
+    for row in table.rows:
+        kind = row[0].text
+        if kind == "데이터":
+            continue          # 시나리오가 없는 유형이다
+        assert row[3].hint, f"{kind} 행에 항목 id가 없다 — {row[3].text!r}"
+        assert row[3].hint.startswith("S"), f"{kind}: {row[3].hint!r}"
+
+
+def test_유형별로_상한을_넘으면_생략하고_그_사실을_말한다(source, window):
+    """조용히 자르면 "이슈가 이것뿐"이라는 거짓이 된다."""
+    from src.config.schema_report import Thresholds
+
+    earlier = [d for d in window.days if d != YESTERDAY]
+    documents = []
+    for index in range(9):                     # 신규 항목 9개 — 상한 5를 넘긴다
+        documents.append(doc(YESTERDAY, scen=f"S{index + 20}", scen_name=f"신규{index}"))
+    documents += [doc(d) for d in earlier]
+    rows, _ = normalize(documents, source=source, window=window, gbm="mx", fct="gumi")
+    facts = facts_from(rows, window=window, source=source, gbms=("mx",),
+                       thresholds=Thresholds(top_n=5))
+    block = issue_table(facts)
+
+    shown = [r for r in block.table.rows if r[0].text == "신규"]
+    assert len(shown) == 5, "유형별 상한이 안 걸렸다"
+    assert block.lead and "신규 4건" in block.lead and "생략" in block.lead
+    assert "report aggregate" in block.lead, "전체를 어디서 보는지 말해야 한다"
+
+
+def test_한_유형이_표를_독차지하지_않는다(source, window):
+    """법인이 늘면 반복 행이 법인 수에 비례해 불어난다 — 그것이 급증·신규를
+    밀어내면 "오늘 뭐가 이상한가"의 답이 한쪽으로 기울어진다."""
+    from src.config.schema_report import Thresholds
+
+    earlier = [d for d in window.days if d != YESTERDAY]
+    documents = [doc(YESTERDAY, scen="S02", scen_name="급증항목")] * 40
+    documents += [doc(d, scen="S02", scen_name="급증항목") for d in earlier]
+    for index in range(12):                    # 반복 후보 12개
+        documents += [doc(d, line=f"L{index}", line_name=f"{index}라인",
+                          scen="S03", scen_name="반복항목")
+                      for d in window.days for _ in range(2)]
+    rows, _ = normalize(documents, source=source, window=window, gbm="mx", fct="gumi")
+    facts = facts_from(rows, window=window, source=source, gbms=("mx",),
+                       thresholds=Thresholds(top_n=5, repeat_min_count=5,
+                                             repeat_min_days=3))
+    table = issue_table(facts).table
+    kinds = [r[0].text for r in table.rows]
+    assert kinds.count("반복") == 5
+    assert "급증" in kinds, "반복이 표를 독차지했다"
+
+
+def test_상한_안에_들어오면_생략_문구가_없다(source, window):
+    facts = two_gbm(source, window, mx=3, da=2)
+    assert issue_table(facts).lead is None
+
+
+def test_제목의_건수는_생략된_것까지_센다(source, window):
+    """표에 보이는 줄 수만 적으면 "5건"으로 보여서 생략을 못 알아챈다."""
+    from src.config.schema_report import Thresholds
+
+    earlier = [d for d in window.days if d != YESTERDAY]
+    documents = [doc(YESTERDAY, scen=f"S{i + 30}", scen_name=f"신규{i}") for i in range(8)]
+    documents += [doc(d) for d in earlier]
+    rows, _ = normalize(documents, source=source, window=window, gbm="mx", fct="gumi")
+    facts = facts_from(rows, window=window, source=source, gbms=("mx",),
+                       thresholds=Thresholds(top_n=5))
+    block = issue_table(facts)
+    # 손으로 센 숫자를 박지 않는다 — 임계값을 건드리면 그 숫자가 낡고, 테스트가
+    # 무엇을 지키려 했는지 알 수 없게 된다. 성질만 단정한다.
+    visible = len(block.table.rows)
+    counted = int(block.hint.removesuffix("건"))
+    assert counted > visible, f"보이는 {visible}줄만 세고 있다 — {block.hint}"
+    assert counted == visible + 3, "생략한 신규 3건이 빠졌다"

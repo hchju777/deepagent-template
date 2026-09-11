@@ -45,10 +45,10 @@
     "max_parallel_sites": 4
   },
   "thresholds": {
-    "spike_ratio": 2.0,
+    "spike_ratio": 1.5,
     "spike_min_count": 10,
     "repeat_min_count": 5,
     "repeat_min_days": 3,
-    "top_n": 10
+    "top_n": 5
   }
 }
