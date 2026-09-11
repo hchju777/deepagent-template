@@ -8,7 +8,7 @@ from src.report.facts import SiteOutcome
 from src.report.rows import RowProblems, normalize
 from src.report.sheet import fact_sheet
 
-from .conftest import YESTERDAY, doc, facts_from
+from tests.support import YESTERDAY, doc, facts_from
 
 SECTIONS = ["① 총 알람", "② 미해제", "③ GBM별", "④ 법인별", "⑤ 일별 추세",
             "⑥ 법인 TOP", "⑦ 라인 TOP", "⑧ 알람 항목 TOP", "⑨ status 분포",

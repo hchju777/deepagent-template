@@ -1,7 +1,10 @@
-"""집계 쪽 fixture를 그대로 빌려 쓴다.
+"""픽스처는 디렉터리를 넘지 않으므로 여기서 다시 노출시킨다.
 
-pytest의 fixture는 디렉터리를 넘지 않으므로 여기서 다시 노출시킨다. **복사하지
-않는 이유**: 같은 창·같은 문서 모양을 두 벌 정의하면, 한쪽을 고칠 때 렌더링
-테스트가 집계 테스트와 다른 데이터를 보면서 둘 다 초록이 된다.
+정의는 `tests/support.py` 한 곳에만 있다 — 두 벌로 두면 한쪽을 고칠 때
+다른 디렉터리의 테스트가 다른 데이터를 보면서 둘 다 초록이 된다.
+
+**절대 import여야 한다.** 상대 import(`from ..support import`)는
+`tests/__init__.py`가 없는 환경에서 수집 자체를 실패시킨다 —
+`tests/support.py` 첫머리 참고.
 """
-from ..report.conftest import clock, source, window       # noqa: F401
+from tests.support import clock, source, window       # noqa: F401

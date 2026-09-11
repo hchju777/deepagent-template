@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from src.report.rows import MISSING, normalize, projection
 
-from .conftest import YESTERDAY, doc
+from tests.support import YESTERDAY, doc
 
 
 def run(documents, *, source, window, gbm="mx", fct="gumi"):

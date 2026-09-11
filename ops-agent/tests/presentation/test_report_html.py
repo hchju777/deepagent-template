@@ -15,7 +15,7 @@ from src.report.blocks import (Banner, Block, Cell, Column, Table, Tile, build_b
 from src.report.facts import SiteOutcome
 from src.report.rows import normalize
 
-from ..report.conftest import YESTERDAY, doc, facts_from
+from tests.support import YESTERDAY, doc, facts_from
 
 VOID = {"meta", "br", "img", "hr", "input", "link"}
 

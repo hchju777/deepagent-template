@@ -14,7 +14,7 @@ from src.report.collect import collect
 from src.report.rows import projection
 from src.report.window import build_window, date_filter
 
-from .conftest import TODAY, YESTERDAY, FakeMongo, doc, scenario
+from tests.support import TODAY, YESTERDAY, FakeMongo, doc, scenario
 
 
 @pytest.fixture

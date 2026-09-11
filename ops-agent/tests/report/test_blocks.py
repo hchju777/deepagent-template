@@ -15,7 +15,7 @@ from src.report.blocks import (BLOCKS, Block, Cell, Column, EMDASH, Table, build
 from src.report.facts import SiteOutcome
 from src.report.rows import normalize
 
-from .conftest import YESTERDAY, doc, facts_from
+from tests.support import YESTERDAY, doc, facts_from
 
 # 항상 남아야 하는 섹션. 사라지면 읽는 사람은 "그 항목은 원래 없는 리포트"로 읽는다.
 STANDING = {"header", "tiles", "comment", "gbm", "trend", "issues",

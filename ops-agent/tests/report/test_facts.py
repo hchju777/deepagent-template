@@ -12,7 +12,7 @@ from src.report.facts import (Facts, SiteOutcome, freshness, line_ranking, repea
                               scenario_lifecycle, spikes, status_breakdown)
 from src.report.rows import normalize
 
-from .conftest import YESTERDAY, doc, facts_from
+from tests.support import YESTERDAY, doc, facts_from
 
 LAST_WEEK = date(2026, 8, 28)        # 어제의 전주 동요일(금)
 DAY_BEFORE = date(2026, 9, 3)        # 어제의 직전 평일(목)
