@@ -65,6 +65,16 @@ PAD = "28px"
 FONT = ("'Malgun Gothic','맑은 고딕',-apple-system,'Segoe UI',"
         "Roboto,'Helvetica Neue',sans-serif")
 
+# 한국어 줄바꿈. 브라우저의 기본값은 한글을 **음절 단위로** 끊어서 "7 평일에 걸쳐"가
+# "7 평" / "일에 걸쳐"로 갈라진다. `keep-all`은 공백에서만 끊게 해서 한국어 조판을
+# 맞추고, `break-word`는 공백 없는 아주 긴 낱말(`설비정지5분초과`)이 칸을 넘치는 것을
+# 막는다 — keep-all만 쓰면 그 낱말이 표를 밀어낸다.
+#
+# Outlook의 Word 엔진은 이 속성들을 무시할 수 있다. 그래서 **끊기면 안 되는 짧은
+# 구절은 blocks.py가 줄바꿈 금지 공백(U+00A0)으로 붙여 둔다** — CSS는 개선이고
+# 그 문자가 보장이다.
+WRAP = "word-break:keep-all;overflow-wrap:break-word;"
+
 _TONE_COLOR = {"plain": INK, "strong": INK, "muted": DIM,
                "bad": BAD, "good": GOOD, "warn": WARN}
 _CHIP_BG = {"plain": HEAD_BG, "strong": HEAD_BG, "muted": HEAD_BG,
@@ -106,7 +116,7 @@ def _banner(banner: Banner) -> str:
             f'width="100%" style="border-collapse:collapse;margin-top:14px;">'
             f'<tr><td width="4" style="background:{bar};font-size:0;line-height:0;">&nbsp;</td>'
             f'<td style="background:{background};padding:11px 14px;font-size:13px;'
-            f'color:{text};line-height:1.55;">{body}</td></tr></table>')
+            f'color:{text};line-height:1.55;{WRAP}">{body}</td></tr></table>')
 
 
 def _tiles(tiles: tuple[Tile, ...]) -> str:
@@ -155,7 +165,7 @@ def _cell(cell: Cell, *, last: bool, total: bool = False,
     hint = (f'<span style="font-size:11px;color:{FAINT};"> · {e(cell.hint)}</span>'
             if cell.hint else "")
     return (f'<td align="{cell.align}" style="padding:9px 10px;{border}'
-            f'color:{color};{weight}vertical-align:top;">{inner}{hint}</td>')
+            f'color:{color};{weight}vertical-align:top;{WRAP}">{inner}{hint}</td>')
 
 
 def _table(table: Table) -> str:
@@ -185,8 +195,8 @@ def _bullets(lines: tuple[str, ...]) -> str:
     items = "".join(
         f'<tr><td width="12" style="font-size:13px;color:{FAINT};vertical-align:top;'
         f'padding:3px 0;">·</td>'
-        f'<td style="font-size:12.5px;color:{BODY};line-height:1.65;padding:3px 0;">'
-        f'{e(line)}</td></tr>' for line in lines)
+        f'<td style="font-size:12.5px;color:{BODY};line-height:1.65;padding:3px 0;'
+        f'{WRAP}">{e(line)}</td></tr>' for line in lines)
     return (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
             f'width="100%" style="border-collapse:collapse;margin-top:10px;">'
             f'{items}</table>')
@@ -213,7 +223,8 @@ def _block(block: Block) -> str:
         parts.append(_row(_bullets(block.bullets), pad=f"0 {PAD}"))
     if block.footnote:
         parts.append(_row(f'<div style="font-size:11.5px;color:{FAINT};line-height:1.6;'
-                          f'margin-top:8px;">{e(block.footnote)}</div>', pad=f"0 {PAD}"))
+                          f'margin-top:8px;{WRAP}">{e(block.footnote)}</div>',
+                          pad=f"0 {PAD}"))
     return "".join(parts)
 
 

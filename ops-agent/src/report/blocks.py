@@ -45,6 +45,15 @@ Align = Literal["left", "right"]
 
 EMDASH = "—"          # 값이 없음(0이 아니라 "모른다")
 
+# 줄바꿈 금지 공백(U+00A0). `&nbsp;` 엔티티가 아니라 **문자**를 쓰는 이유: 텍스트가
+# `html.escape`를 지나므로 엔티티를 미리 넣으면 `&amp;nbsp;`가 된다. 문자는 그대로 통과한다.
+#
+# 왜 필요한가: 한국어는 단어 사이 공백이 있어도 브라우저가 **음절 단위로** 끊는다.
+# 그래서 "7 평일에 걸쳐"가 "7 평" / "일에 걸쳐"로 갈라진다. CSS(`word-break:keep-all`)로도
+# 되지만 Outlook의 Word 엔진이 무시할 수 있어서, 끊기면 안 되는 짧은 구절은
+# **문자 수준에서** 붙여 둔다.
+NBSP = "\u00a0"
+
 
 # ── 구조 ────────────────────────────────────────────────────────────
 
@@ -130,6 +139,25 @@ class Block:
 
 # ── 서식 ────────────────────────────────────────────────────────────
 
+def tight(text: str) -> str:
+    """이 구절은 통째로 한 줄에 — 공백을 줄바꿈 금지 공백으로 바꾼다.
+
+    짧고 **쪼개지면 뜻이 흐려지는** 것에만 쓴다(`▲ 29.3%`, `7 평일에 걸쳐`).
+    긴 문장에 쓰면 칸을 넘쳐서 표가 밀린다.
+    """
+    return text.replace(" ", NBSP)
+
+
+def upper(name: str) -> str:
+    """법인·GBM 이름은 대문자로.
+
+    문서의 값은 `gumi`처럼 소문자로 들어오는데 GBM은 `MX`로 쓰므로, 한 표 안에서
+    두 층의 표기가 어긋난다. 한국어 법인명에는 `upper()`가 아무 영향이 없어서
+    영문·한글이 섞여 있어도 안전하다.
+    """
+    return str(name).upper()
+
+
 def n(value: int | float | None) -> str:
     """천 단위 구분. None은 `—`(0과 구별해야 한다)."""
     if value is None:
@@ -158,7 +186,9 @@ def delta(now: int, before: int | float | None) -> tuple[str, Tone]:
     if abs(change) < 0.05:
         return "0.0%", "muted"
     arrow = "▲" if change > 0 else "▼"
-    return f"{arrow} {abs(change):.1f}%", ("bad" if change > 0 else "good")
+    # 화살표와 숫자가 줄바꿈으로 갈라지면 방향을 읽을 수 없다 — 색이 반전되는
+    # 다크모드에서는 그 화살표가 유일한 신호다.
+    return tight(f"{arrow} {abs(change):.1f}%"), ("bad" if change > 0 else "good")
 
 
 def day_label(value: date, *, weekday: bool = True) -> str:
@@ -179,16 +209,18 @@ def _gbm_cell(facts: Facts, gbm: str, *, blank: bool = False, hint: str | None =
     """
     if blank:
         return Cell("", series=facts.series_of(gbm))
-    return Cell(str(gbm).upper(), tone="strong", series=facts.series_of(gbm), hint=hint)
+    return Cell(upper(gbm), tone="strong", series=facts.series_of(gbm),
+                hint=tight(hint) if hint else None)
 
 
 def _plants_label(plants: tuple[str, ...], *, limit: int = 2) -> str:
     """법인이 여럿이면 앞 몇 개만. 전부 적으면 한 칸이 줄을 여러 개 먹는다."""
     if not plants:
         return EMDASH
-    if len(plants) <= limit:
-        return ", ".join(plants)
-    return f"{', '.join(plants[:limit])} 외 {len(plants) - limit}"
+    names = [upper(p) for p in plants]
+    if len(names) <= limit:
+        return ", ".join(names)
+    return f"{', '.join(names[:limit])}{NBSP}외{NBSP}{len(names) - limit}"
 
 
 # ── 블록들 ──────────────────────────────────────────────────────────
@@ -213,7 +245,7 @@ def _coverage(facts: Facts) -> Block:
     missing = facts.unavailable
     if missing:
         total = len(facts.sites)
-        names = ", ".join(s.site for s in missing)
+        names = ", ".join(upper(s.site) for s in missing)
         banners.append(Banner(
             tone="bad",
             text=f"법인 {len(missing)}곳의 데이터를 읽지 못했습니다. 아래 숫자는 "
@@ -224,7 +256,7 @@ def _coverage(facts: Facts) -> Block:
         banners.append(Banner(
             tone="warn",
             text=f"법인 {len(truncated)}곳에서 표본 상한에 걸렸습니다 "
-                 f"({', '.join(s.site for s in truncated)}). 아래 건수는 "
+                 f"({', '.join(upper(s.site) for s in truncated)}). 아래 건수는 "
                  f"실제보다 **작습니다** — 하한으로 읽어야 합니다."))
     return Block(key="coverage", banners=tuple(banners), required=False)
 
@@ -246,14 +278,16 @@ def _summary_tiles(facts: Facts) -> Block:
     ok = len(facts.ok_sites)
     return Block(key="tiles", tiles=(
         Tile(label="총 알람", hint="어제", value=n(total), unit="건",
-             note=f"직전 {len(facts.window.days) - 1} 평일 평균 {n(base)}건 · {change}",
+             note=f"{tight(f'직전 {len(facts.window.days) - 1} 평일 평균')} "
+                  f"{tight(n(base) + '건')} · {change}",
              tone=tone),
         Tile(label="미해제", hint=f"status {'·'.join(str(v) for v in facts.source.unresolved_status)}",
              value=n(unresolved), unit="건",
-             note=f"미해제율 {pct(unresolved, total)}",
+             note=tight(f"미해제율 {pct(unresolved, total)}"),
              tone="bad" if unresolved else "plain"),
-        Tile(label="최다 발생 GBM", value=str(top_gbm).upper(),
-             note=f"{n(top_count)}건 · 전체의 {pct(top_count, total)}",
+        Tile(label="최다 발생 GBM", value=upper(top_gbm),
+             note=f"{tight(n(top_count) + '건')} · "
+                  f"{tight('전체의 ' + pct(top_count, total))}",
              series=facts.series_of(top_gbm) if gbm_ranking else None),
         Tile(label="이슈 감지", value=n(issue_count), unit="건",
              note="급증·신규·반복·데이터 합계",
@@ -262,8 +296,9 @@ def _summary_tiles(facts: Facts) -> Block:
              unit="GBM", note=f"법인 {ok} / {len(facts.sites)}",
              tone="bad" if ok < len(facts.sites) else "plain"),
         Tile(label="조회 기간", value=n(len(facts.window.days)), unit="평일",
-             note=f"{day_label(facts.window.days[0], weekday=False)} – "
-                  f"{day_label(facts.window.yesterday, weekday=False)} (주말 제외)"),
+             note=tight(f"{day_label(facts.window.days[0], weekday=False)} – "
+                        f"{day_label(facts.window.yesterday, weekday=False)}")
+                  + f" {tight('(주말 제외)')}"),
     ))
 
 
@@ -395,8 +430,9 @@ def _issues(facts: Facts) -> Block:
     for stalled in (f for f in freshness(facts) if f.stalled):
         last = stalled.last_seen.strftime("%m/%d %H:%M") if stalled.last_seen else EMDASH
         rows.append((Cell("데이터", tone="bad", chip=True),
-                     _gbm_cell(facts, stalled.gbm), Cell(stalled.fct),
-                     Cell(f"어제 0건 — 마지막 알람 {last}"),
+                     _gbm_cell(facts, stalled.gbm), Cell(upper(stalled.fct)),
+                     Cell(f"{tight('어제 0건')} — "
+                          f"{tight('마지막 알람')} {tight(last)}"),
                      Cell("0", "right"),
                      Cell(n(stalled.window_count / earlier_days), "right", "muted"),
                      Cell("▼ 100.0%", "right", "bad")))
@@ -405,7 +441,7 @@ def _issues(facts: Facts) -> Block:
         gbm, plant, name = spike.key
         change, tone = delta(spike.count, spike.baseline)
         rows.append((Cell("급증", tone="bad", chip=True),
-                     _gbm_cell(facts, gbm), Cell(plant), Cell(name),
+                     _gbm_cell(facts, gbm), Cell(upper(plant)), Cell(name),
                      Cell(n(spike.count), "right", "strong"),
                      Cell(n(spike.baseline), "right", "muted"),
                      Cell(change, "right", tone)))
@@ -427,10 +463,10 @@ def _issues(facts: Facts) -> Block:
 
     for repeat in repeats(facts, limit=facts.thresholds.top_n):
         rows.append((Cell("반복", tone="muted", chip=True),
-                     _gbm_cell(facts, repeat.gbm), Cell(repeat.plant),
+                     _gbm_cell(facts, repeat.gbm), Cell(upper(repeat.plant)),
                      Cell(f"{_line_label(repeat.line_code, repeat.line_name)} · "
                           f"{repeat.scenario_name}",
-                          hint=f"{repeat.days} 평일에 걸쳐"),
+                          hint=tight(f"{repeat.days} 평일에 걸쳐")),
                      Cell(n(repeat.count), "right", "strong"),
                      Cell(EMDASH, "right", "muted"), Cell(EMDASH, "right", "muted")))
 
@@ -457,7 +493,7 @@ def _plant_top(facts: Facts) -> Block:
     def row(group, share, first):
         plant = share.key[0]
         return (_gbm_cell(facts, group.gbm, blank=not first),
-                Cell(plant),
+                Cell(upper(plant)),
                 Cell(n(share.count), "right", "strong"),
                 Cell(f"{share.ratio * 100:.1f}%", "right", "muted"),
                 Cell(n(_unresolved_in(facts, gbm=group.gbm,
@@ -515,7 +551,7 @@ def _line_top(facts: Facts) -> Block:
                      Column("어제 건수", "right"), Column("GBM 내 비중", "right")),
                      make_row=lambda group, share, first: (
                          _gbm_cell(facts, group.gbm, blank=not first),
-                         Cell(share.key[0]),
+                         Cell(upper(share.key[0])),
                          Cell(_line_label(share.key[1], share.key[2])),
                          Cell(n(share.count), "right", "strong"),
                          Cell(f"{share.ratio * 100:.1f}%", "right", "muted"))),
@@ -537,7 +573,7 @@ def _coverage_detail(facts: Facts) -> Block:
         else:
             note = outcome.error or outcome.reason or "원인 불명"
             tone = "bad"
-        rows.append((Cell(outcome.site, tone="strong"),
+        rows.append((Cell(upper(outcome.site), tone="strong"),
                      Cell({"ok": "읽음", "error": "실패", "skipped": "제외"}[outcome.status],
                           tone=tone, chip=outcome.status != "ok"),
                      Cell(n(outcome.fetched) if outcome.status == "ok" else EMDASH, "right"),

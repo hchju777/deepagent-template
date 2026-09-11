@@ -152,7 +152,7 @@ def test_읽지_못한_법인이_본문에_이름으로_실린다(source, window
         SiteOutcome(gbm="mx", fct="gumi", status="ok"),
         SiteOutcome(gbm="mx", fct="sevt", status="error", error="연결 거부")))
     html = html_of(facts)
-    assert "mx/sevt" in html and "연결 거부" in html
+    assert "MX/SEVT" in html and "연결 거부" in html
     assert "1 / 2 법인" in html
 
 
@@ -244,3 +244,24 @@ def test_계열색이_의미색을_이긴다():
     table = Table(columns=(Column("a"),), rows=((Cell("MX", tone="bad", series=0),),))
     html = render([Block(key="x", title="x", table=table)], title="t", generated_at="x")
     assert f"color:{SERIES[0]};" in html and f"color:{BAD};" not in html
+
+
+# ── 한국어 줄바꿈 ───────────────────────────────────────────────────
+
+def test_칸에_한국어_줄바꿈_규칙이_붙는다(source, window):
+    """브라우저 기본값은 한글을 음절 단위로 끊어서 "7 평일에 걸쳐"가 "7 평"/"일에
+    걸쳐"로 갈라진다. `keep-all`로 공백에서만 끊고, `break-word`로 공백 없는 아주
+    긴 낱말이 칸을 넘치는 것을 막는다."""
+    html = html_of(build([doc(YESTERDAY)], source=source, window=window))
+    assert "word-break:keep-all" in html
+    assert "overflow-wrap:break-word" in html
+
+
+def test_줄바꿈_금지_공백이_그대로_살아_나간다(source, window):
+    """`html.escape`가 U+00A0을 건드리면 `&amp;nbsp;`가 되거나 보통 공백으로 뭉개진다.
+    Outlook의 Word 엔진은 CSS를 무시할 수 있으므로 이 문자가 유일한 보장이다."""
+    earlier = [d for d in window.days if d != YESTERDAY]
+    documents = [doc(YESTERDAY)] * 30 + [doc(d) for d in earlier for _ in range(5)]
+    html = html_of(build(documents, source=source, window=window))
+    assert "\u00a0" in html, "줄바꿈 금지 공백이 사라졌다"
+    assert "&nbsp;amp;" not in html and "&amp;nbsp;" not in html

@@ -10,8 +10,8 @@ from datetime import date
 import pytest
 
 from src.config.schema_report import Thresholds
-from src.report.blocks import (BLOCKS, Block, Cell, Column, EMDASH, Table, build_blocks,
-                               delta, n, pct)
+from src.report.blocks import (BLOCKS, NBSP, Block, Cell, Column, EMDASH, Table,
+                               build_blocks, delta, n, pct, tight, upper)
 from src.report.facts import SiteOutcome
 from src.report.rows import normalize
 
@@ -102,7 +102,7 @@ def test_읽지_못한_법인이_있으면_맨_위에_경고가_붙는다(source
     produced = keys(facts)
     assert produced[1] == "coverage", "머리말 바로 다음이어야 한다"
     banner = build_blocks(facts)[1].banners[0]
-    assert "1 / 2 법인" in banner.text and "mx/sevt" in banner.text
+    assert "1 / 2 법인" in banner.text and "MX/SEVT" in banner.text
 
 
 def test_표본이_잘리면_하한이라고_경고한다(source, window):
@@ -126,9 +126,22 @@ def test_조회_범위_표는_정상일_때도_남는다(source, window):
 def test_증감에_화살표가_붙는다():
     """메일 다크모드는 색을 강제로 반전시킨다 — 화살표는 반전돼도 화살표다."""
     up, tone = delta(150, 100)
-    assert up == "▲ 50.0%" and tone == "bad"
+    assert up == f"▲{NBSP}50.0%" and tone == "bad"
     down, tone = delta(50, 100)
-    assert down == "▼ 50.0%" and tone == "good"
+    assert down == f"▼{NBSP}50.0%" and tone == "good"
+
+
+def test_화살표와_숫자가_줄바꿈으로_갈라지지_않는다():
+    """갈라지면 방향을 읽을 수 없고, 색이 반전되는 다크모드에서는 화살표가
+    유일한 신호다. 한국어 줄바꿈은 기본적으로 아무 데서나 끊긴다."""
+    text, _ = delta(150, 100)
+    assert " " not in text, f"보통 공백이 남아 있다 — {text!r}"
+    assert NBSP in text
+
+
+def test_끊기면_안_되는_구절만_붙인다():
+    assert tight("7 평일에 걸쳐") == f"7{NBSP}평일에{NBSP}걸쳐"
+    assert tight("단어") == "단어"
 
 
 def test_기준이_0이면_배수_대신_신규다():
@@ -145,6 +158,13 @@ def test_기준이_없으면_0이_아니라_모른다다():
 
 def test_변화가_없으면_화살표를_붙이지_않는다():
     assert delta(100, 100) == ("0.0%", "muted")
+
+
+def test_법인_이름은_대문자다():
+    """문서의 값은 `gumi`처럼 소문자인데 GBM은 `MX`로 쓰므로, 한 표 안에서 두 층의
+    표기가 어긋난다. 한국어 법인명에는 영향이 없다."""
+    assert upper("gumi") == "GUMI" and upper("mx/sevt") == "MX/SEVT"
+    assert upper("구미") == "구미"
 
 
 def test_천단위_구분과_소수():
@@ -213,7 +233,7 @@ def test_라인_TOP에_작은_GBM의_법인이_나온다(source, window):
     """전사 TOP 10이었을 때 gwangju가 11위 밖으로 밀려 한 줄도 못 나왔다."""
     facts = two_gbm(source, window, mx=100, da=2)
     table = next(b for b in build_blocks(facts) if b.key == "line").table
-    assert any("gwangju" in row[1].text for row in table.rows)
+    assert any("GWANGJU" in row[1].text for row in table.rows)
 
 
 def test_GBM_이름에만_계열색이_붙는다(source, window):
@@ -233,6 +253,7 @@ def test_같은_GBM의_둘째_행부터는_이름을_비운다(source, window):
     facts = facts_from(rows, window=window, source=source, gbms=("mx",))
     table = next(b for b in build_blocks(facts) if b.key == "plant").table
     assert table.rows[0][0].text == "MX" and table.rows[1][0].text == ""
+    assert [r[1].text for r in table.rows] == ["GUMI", "SEVT"]
     assert 0 in table.group_starts, "묶음 경계를 표시해야 빈 칸이 '값 없음'으로 안 읽힌다"
 
 
@@ -267,8 +288,9 @@ def test_반복_행이_GBM_법인_대상으로_나뉜다(source, window):
                        thresholds=Thresholds(repeat_min_count=5, repeat_min_days=3))
     table = next(b for b in build_blocks(facts) if b.key == "issues").table
     row = next(r for r in table.rows if r[0].text == "반복")
-    assert row[1].text == "MX" and row[2].text == "gumi"
+    assert row[1].text == "MX" and row[2].text == "GUMI"
     assert "P222" in row[3].text and "재고 불일치" in row[3].text
+    assert row[3].hint == f"7{NBSP}평일에{NBSP}걸쳐", "짧은 구절이 갈라지면 안 된다"
 
 
 def test_급증_행이_GBM_법인_항목을_갖는다(source, window):
@@ -279,5 +301,5 @@ def test_급증_행이_GBM_법인_항목을_갖는다(source, window):
     facts = facts_from(rows, window=window, source=source, gbms=("mx",))
     table = next(b for b in build_blocks(facts) if b.key == "issues").table
     row = next(r for r in table.rows if r[0].text == "급증")
-    assert row[1].text == "MX" and row[2].text == "gumi"
+    assert row[1].text == "MX" and row[2].text == "GUMI"
     assert row[3].text == "설비 신호 끊김"
