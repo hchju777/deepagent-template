@@ -102,10 +102,18 @@ def scenario(**overrides) -> ReportScenario:
     return ReportScenario.model_validate(body)
 
 
-def facts_from(rows, *, window, source, thresholds=None, sites=()):
+def facts_from(rows, *, window, source, thresholds=None, sites=(), gbms=None):
     from src.report.facts import Facts, SiteOutcome
     if not sites:
         sites = (SiteOutcome(gbm="mx", fct="gumi", status="ok", kept=len(rows)),)
+    if gbms is None:
+        # 선언하지 않으면 사이트에서 뽑는다 — 테스트가 매번 적지 않아도 되게.
+        # 프로덕션에서는 config가 선언한다(`collect`가 scope.gbms를 싣는다).
+        seen = []
+        for site in sites:
+            if site.gbm not in seen:
+                seen.append(site.gbm)
+        gbms = tuple(seen)
     return Facts(window=window, source=source,
                  thresholds=thresholds or Thresholds(),
-                 rows=tuple(rows), sites=tuple(sites))
+                 rows=tuple(rows), sites=tuple(sites), gbms=tuple(gbms))

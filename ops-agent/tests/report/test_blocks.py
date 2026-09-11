@@ -18,8 +18,10 @@ from src.report.rows import normalize
 from tests.support import YESTERDAY, doc, facts_from
 
 # 항상 남아야 하는 섹션. 사라지면 읽는 사람은 "그 항목은 원래 없는 리포트"로 읽는다.
+# 처리 상태 분포는 뺐다 — 미해제율은 KPI 타일이 이미 말하고, 같은 숫자를 두 번
+# 보여 주면 읽는 사람이 어느 쪽을 봐야 하는지 고민한다.
 STANDING = {"header", "tiles", "comment", "gbm", "trend", "issues",
-            "plant", "scenario", "line", "status", "sites"}
+            "plant", "scenario", "line", "sites"}
 
 
 def build(documents, *, source, window, thresholds=None, sites=()):
@@ -183,3 +185,99 @@ def test_데이터_품질은_조회_범위_섹션의_목록으로_간다(source,
     facts = build([doc(YESTERDAY, status="?")], source=source, window=window)
     sites = next(b for b in build_blocks(facts) if b.key == "sites")
     assert any("status" in line for line in sites.bullets)
+
+
+# ── GBM별 TOP과 정체성 색 ───────────────────────────────────────────
+
+def two_gbm(source, window, *, mx: int, da: int):
+    """MX가 압도적으로 많은 상황. 전사 TOP이면 DA가 한 줄도 안 들어왔다."""
+    mx_rows, _ = normalize([doc(YESTERDAY, plant="gumi", line="P1", line_name="조립1")] * mx,
+                           source=source, window=window, gbm="mx", fct="gumi")
+    da_rows, _ = normalize([doc(YESTERDAY, plant="gwangju", line="G1",
+                                line_name="냉장1")] * da,
+                           source=source, window=window, gbm="da", fct="gwangju")
+    return facts_from(mx_rows + da_rows, window=window, source=source, sites=(
+        SiteOutcome(gbm="mx", fct="gumi", status="ok"),
+        SiteOutcome(gbm="da", fct="gwangju", status="ok")), gbms=("mx", "da"))
+
+
+@pytest.mark.parametrize("key", ["plant", "scenario", "line"])
+def test_TOP_표에_모든_GBM이_들어온다(key, source, window):
+    facts = two_gbm(source, window, mx=100, da=2)
+    table = next(b for b in build_blocks(facts) if b.key == key).table
+    shown = [c.text for row in table.rows for c in row[:1] if c.text]
+    assert shown == ["MX", "DA"], f"{key}: 적은 GBM이 밀려났다 — {shown}"
+
+
+def test_라인_TOP에_작은_GBM의_법인이_나온다(source, window):
+    """전사 TOP 10이었을 때 gwangju가 11위 밖으로 밀려 한 줄도 못 나왔다."""
+    facts = two_gbm(source, window, mx=100, da=2)
+    table = next(b for b in build_blocks(facts) if b.key == "line").table
+    assert any("gwangju" in row[1].text for row in table.rows)
+
+
+def test_GBM_이름에만_계열색이_붙는다(source, window):
+    """색은 정체성(어느 GBM)을 나타내고 의미(증감)를 나타내지 않는다."""
+    facts = two_gbm(source, window, mx=3, da=2)
+    table = next(b for b in build_blocks(facts) if b.key == "plant").table
+    first, second = table.rows[0], table.rows[1]
+    assert first[0].series == 0 and second[0].series == 1
+    assert all(cell.series is None for cell in first[1:]), "숫자 칸에는 색을 붙이지 않는다"
+
+
+def test_같은_GBM의_둘째_행부터는_이름을_비운다(source, window):
+    """같은 이름을 다섯 번 반복하면 눈이 그걸 읽느라 다른 열의 차이를 못 본다."""
+    rows, _ = normalize([doc(YESTERDAY, plant="gumi")] * 3
+                        + [doc(YESTERDAY, plant="sevt")] * 2,
+                        source=source, window=window, gbm="mx", fct="gumi")
+    facts = facts_from(rows, window=window, source=source, gbms=("mx",))
+    table = next(b for b in build_blocks(facts) if b.key == "plant").table
+    assert table.rows[0][0].text == "MX" and table.rows[1][0].text == ""
+    assert 0 in table.group_starts, "묶음 경계를 표시해야 빈 칸이 '값 없음'으로 안 읽힌다"
+
+
+def test_묶음_경계가_GBM이_바뀌는_자리다(source, window):
+    facts = two_gbm(source, window, mx=3, da=2)
+    table = next(b for b in build_blocks(facts) if b.key == "plant").table
+    assert table.group_starts == frozenset({0, 1}), "GBM이 둘이고 각 1행"
+
+
+def test_처리_상태_분포_블록은_없다(source, window):
+    facts = two_gbm(source, window, mx=3, da=2)
+    assert "status" not in keys(facts)
+
+
+# ── 이슈 표의 열 ────────────────────────────────────────────────────
+
+def test_이슈_표가_GBM과_법인을_따로_갖는다(source, window):
+    """한 칸에 "gumi · P222 조립2라인"처럼 합쳐 넣으면 GBM이 안 보인다."""
+    facts = two_gbm(source, window, mx=3, da=2)
+    issues = next(b for b in build_blocks(facts) if b.key == "issues")
+    assert [c.label for c in issues.table.columns] == [
+        "유형", "GBM", "법인", "대상", "어제", "평균", "증감"]
+
+
+def test_반복_행이_GBM_법인_대상으로_나뉜다(source, window):
+    from src.config.schema_report import Thresholds
+
+    rows, _ = normalize([doc(d, plant="gumi", line="P222", line_name="조립2라인")
+                         for d in window.days for _ in range(2)],
+                        source=source, window=window, gbm="mx", fct="gumi")
+    facts = facts_from(rows, window=window, source=source, gbms=("mx",),
+                       thresholds=Thresholds(repeat_min_count=5, repeat_min_days=3))
+    table = next(b for b in build_blocks(facts) if b.key == "issues").table
+    row = next(r for r in table.rows if r[0].text == "반복")
+    assert row[1].text == "MX" and row[2].text == "gumi"
+    assert "P222" in row[3].text and "재고 불일치" in row[3].text
+
+
+def test_급증_행이_GBM_법인_항목을_갖는다(source, window):
+    earlier = [d for d in window.days if d != YESTERDAY]
+    documents = ([doc(YESTERDAY, plant="gumi", scen_name="설비 신호 끊김")] * 40
+                 + [doc(d, plant="gumi", scen_name="설비 신호 끊김") for d in earlier])
+    rows, _ = normalize(documents, source=source, window=window, gbm="mx", fct="gumi")
+    facts = facts_from(rows, window=window, source=source, gbms=("mx",))
+    table = next(b for b in build_blocks(facts) if b.key == "issues").table
+    row = next(r for r in table.rows if r[0].text == "급증")
+    assert row[1].text == "MX" and row[2].text == "gumi"
+    assert row[3].text == "설비 신호 끊김"

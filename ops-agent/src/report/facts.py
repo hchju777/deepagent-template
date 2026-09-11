@@ -67,6 +67,9 @@ class Facts:
     thresholds: Thresholds
     rows: tuple[AlarmRow, ...]
     sites: tuple[SiteOutcome, ...]
+    # config가 선언한 GBM 순서(`scope.gbms`). 데이터에서 유추하지 않는 이유는
+    # 9a와 같다 — 유추하면 분모와 순서가 조용히 바뀐다.
+    gbms: tuple[str, ...] = ()
 
     # ── 상태 ────────────────────────────────────────────────────────
 
@@ -83,6 +86,25 @@ class Facts:
     def unavailable(self) -> tuple[SiteOutcome, ...]:
         """읽지 못한 법인 — 방화벽·타임아웃·설정 없음. 리포트 하단에 실린다."""
         return tuple(s for s in self.sites if s.status != "ok")
+
+    def gbm_order(self) -> tuple[str, ...]:
+        """표시 순서. **건수 순으로 정렬하지 않는다.**
+
+        색이 GBM의 정체성을 나타내므로, 순서가 매일 바뀌면 읽는 사람이 위치로
+        기억할 수 없고 "어제는 두 번째였는데" 같은 혼동이 생긴다. config가 선언한
+        순서가 곧 표시 순서다.
+
+        config에 없는데 데이터에 있는 GBM은 **버리지 않고 뒤에 붙인다** — 설정
+        누락을 데이터 누락으로 바꾸지 않는다.
+        """
+        declared = list(self.gbms)
+        extra = sorted({r.gbm for r in self.rows} - set(declared))
+        return tuple(declared + extra)
+
+    def series_of(self, gbm: str) -> int:
+        """계열색 번호. 색 값 자체는 렌더러가 안다 — 여기는 HTML을 모른다."""
+        order = self.gbm_order()
+        return order.index(gbm) if gbm in order else len(order)
 
     @property
     def problems(self) -> RowProblems:
@@ -200,25 +222,45 @@ class Share:
         return self.count / self.parent_total if self.parent_total else 0.0
 
 
-def line_ranking(facts: Facts, *, day: date, limit: int | None = None) -> list[Share]:
-    """라인 TOP. 비중의 분모는 **그 라인이 속한 GBM**이다(전사가 아니다).
+@dataclass(frozen=True)
+class GroupTop:
+    gbm: str
+    total: int                  # 그 GBM의 그날 전체 건수(비중의 분모)
+    items: tuple[Share, ...]
 
-    전사 분모로 계산하면 법인이 많은 GBM의 라인은 영원히 비중이 작게 나와서,
-    "그 GBM 안에서 이 라인이 문제다"라는 신호가 사라진다.
+
+def ranking_by_gbm(facts: Facts, key: Callable[[AlarmRow], K], *, day: date,
+                   limit: int) -> list[GroupTop]:
+    """**GBM별로** 상위 N개. 전사 TOP N이 아니다.
+
+    전사 하나로 줄을 세우면 알람이 많은 GBM이 목록을 통째로 차지하고, 작은 GBM은
+    영원히 안 보인다(실제로 상위 10칸이 전부 MX였고 DA의 법인은 한 줄도 못 들어왔다).
+    "어디가 제일 많은가"는 KPI가 이미 답하고, 이 표가 답해야 하는 것은 **"각
+    GBM 안에서 무엇이 문제인가"**다.
+
+    비중의 분모도 그 GBM이다. 전사 분모로 계산하면 법인이 많은 GBM의 항목은
+    영원히 비중이 작게 나와서 그 신호가 사라진다.
     """
-    per_gbm = Counter(r.gbm for r in facts.select(day=day))
-    counts: Counter = Counter()
+    grouped: dict[str, list[AlarmRow]] = defaultdict(list)
     for row in facts.select(day=day):
-        counts[(row.gbm, row.plant, row.line_code, row.line_name)] += 1
-    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], _sortable(kv[0])))
-    shares = [Share(key=key, count=count, parent=key[0], parent_total=per_gbm[key[0]])
-              for key, count in ranked]
-    return shares[:limit] if limit else shares
+        grouped[row.gbm].append(row)
+
+    groups = []
+    for gbm in facts.gbm_order():
+        rows = grouped.get(gbm, [])
+        if not rows:
+            continue          # 건수 0인 GBM은 표에 빈 줄을 만들지 않는다
+        counts = Counter(key(r) for r in rows)
+        ranked = sorted(counts.items(), key=lambda kv: (-kv[1], _sortable(kv[0])))[:limit]
+        groups.append(GroupTop(gbm=gbm, total=len(rows), items=tuple(
+            Share(key=_as_tuple(item), count=count, parent=gbm, parent_total=len(rows))
+            for item, count in ranked)))
+    return groups
 
 
 @dataclass(frozen=True)
 class Spike:
-    key: tuple[str, ...]
+    key: tuple[str, ...]          # (gbm, plant, 항목명) — 이슈 표의 세 열이 된다
     count: int
     baseline: float          # 직전 평일 평균이므로 정수가 아니다
     baseline_days: int
@@ -262,6 +304,7 @@ def spikes(facts: Facts, key: Callable[[AlarmRow], K], *, day: date) -> list[Spi
 
 @dataclass(frozen=True)
 class Repeat:
+    gbm: str
     plant: str
     line_code: str
     line_name: str
@@ -279,40 +322,72 @@ def repeats(facts: Facts, *, limit: int | None = None) -> list[Repeat]:
     """
     grouped: dict[tuple, list[date]] = defaultdict(list)
     for row in facts.select(days=facts.window.selected):
-        grouped[(row.plant, row.line_code, row.line_name, row.scenario_name)].append(row.day)
-    found = [Repeat(plant=k[0], line_code=k[1], line_name=k[2], scenario_name=k[3],
-                    count=len(days), days=len(set(days)))
+        grouped[(row.gbm, row.plant, row.line_code, row.line_name,
+                 row.scenario_name)].append(row.day)
+    found = [Repeat(gbm=k[0], plant=k[1], line_code=k[2], line_name=k[3],
+                    scenario_name=k[4], count=len(days), days=len(set(days)))
              for k, days in grouped.items()
              if len(days) >= facts.thresholds.repeat_min_count
              and len(set(days)) >= facts.thresholds.repeat_min_days]
     # 발생일수가 1급 정렬 키다 — "매일 나는 것"이 위로 와야 만성 문제가 보인다.
-    ranked = sorted(found, key=lambda r: (-r.days, -r.count, r.plant, r.line_code))
+    ranked = sorted(found, key=lambda r: (-r.days, -r.count, r.gbm, r.plant, r.line_code))
     return ranked[:limit] if limit else ranked
 
 
 @dataclass(frozen=True)
+class LifecycleItem:
+    gbm: str
+    scenario_id: str
+    name: str
+    count: int                  # 신규면 어제 건수, 소멸이면 사라지기 전 건수
+    plants: tuple[str, ...]     # 어느 법인에서
+
+
+@dataclass(frozen=True)
 class Lifecycle:
-    appeared: list[tuple[str, str]]      # 어제 처음 나타난 알람 항목
-    vanished: list[tuple[str, str]]      # 그 전에는 있었는데 어제 없는 항목
+    appeared: list[LifecycleItem]
+    vanished: list[LifecycleItem]
 
 
 def scenario_lifecycle(facts: Facts) -> Lifecycle:
-    """알람 항목의 신규·소멸.
+    """알람 항목의 신규·소멸을 **GBM별로** 본다.
+
+    전사 기준으로 보면 "DA에서 처음 나타난 항목"이 MX에 이미 있던 항목이면
+    안 잡힌다 — 그런데 조치는 GBM 단위로 이뤄지므로 그게 더 중요한 신호다.
+
+    법인 단위까지 쪼개지 않는 이유: 법인 수만큼 행이 늘어 표가 신규로 가득 찬다.
+    어느 법인인지는 `plants`로 함께 싣는다.
 
     "신규"는 **창 안에서** 처음이라는 뜻일 뿐 영구적 신규가 아니다. 과거 데이터는
     보존 기간(TTL) 밖이면 없으므로, 이 시스템이 단정할 수 있는 것은 창 안의 사실뿐이다.
     """
     yesterday = facts.window.yesterday
     earlier = frozenset(d for d in facts.window.selected if d < yesterday)
-    today_set = {r.scenario for r in facts.select(day=yesterday)}
-    earlier_set = {r.scenario for r in facts.select(days=earlier)} if earlier else set()
-    return Lifecycle(appeared=sorted(today_set - earlier_set),
-                     vanished=sorted(earlier_set - today_set))
+    appeared: list[LifecycleItem] = []
+    vanished: list[LifecycleItem] = []
+
+    for gbm in facts.gbm_order():
+        today_rows = facts.select(day=yesterday, gbm=gbm)
+        earlier_rows = facts.select(days=earlier, gbm=gbm) if earlier else []
+        today_set = {r.scenario for r in today_rows}
+        earlier_set = {r.scenario for r in earlier_rows}
+        for scenario in sorted(today_set - earlier_set):
+            hits = [r for r in today_rows if r.scenario == scenario]
+            appeared.append(LifecycleItem(
+                gbm=gbm, scenario_id=scenario[0], name=scenario[1], count=len(hits),
+                plants=tuple(sorted({r.plant for r in hits}))))
+        for scenario in sorted(earlier_set - today_set):
+            hits = [r for r in earlier_rows if r.scenario == scenario]
+            vanished.append(LifecycleItem(
+                gbm=gbm, scenario_id=scenario[0], name=scenario[1], count=len(hits),
+                plants=tuple(sorted({r.plant for r in hits}))))
+    return Lifecycle(appeared=appeared, vanished=vanished)
 
 
 @dataclass(frozen=True)
 class Freshness:
-    site: str
+    gbm: str
+    fct: str
     last_seen: datetime | None
     yesterday_count: int
     window_count: int
@@ -327,6 +402,10 @@ class Freshness:
         """
         return self.yesterday_count == 0 and self.window_count > 0
 
+    @property
+    def site(self) -> str:
+        return f"{self.gbm}/{self.fct}"
+
 
 def freshness(facts: Facts) -> list[Freshness]:
     """법인별 최신성. 어제 데이터가 끊긴 곳을 찾는다."""
@@ -335,7 +414,7 @@ def freshness(facts: Facts) -> list[Freshness]:
         site_rows = facts.select(site=outcome.site)
         moments = [r.occurred_at for r in site_rows]
         result.append(Freshness(
-            site=outcome.site,
+            gbm=outcome.gbm, fct=outcome.fct,
             last_seen=max(moments) if moments else None,
             yesterday_count=facts.total(site=outcome.site, day=facts.window.yesterday),
             window_count=len([r for r in site_rows if r.day in facts.window.selected])))
@@ -358,5 +437,6 @@ def _as_tuple(key) -> tuple[str, ...]:
 # `same_weekday_previous_week`를 여기서 다시 내보낸다 — 섹션 코드가 window를
 # 따로 import하지 않게 해서, 기간 규칙이 한 곳에만 있다는 것을 분명히 한다.
 __all__ = ["Facts", "SiteOutcome", "Change", "Share", "Spike", "Repeat", "Lifecycle",
-           "Freshness", "line_ranking", "spikes", "repeats", "scenario_lifecycle",
-           "freshness", "status_breakdown", "same_weekday_previous_week"]
+           "LifecycleItem", "GroupTop", "Freshness", "ranking_by_gbm", "spikes",
+           "repeats", "scenario_lifecycle", "freshness", "status_breakdown",
+           "same_weekday_previous_week"]

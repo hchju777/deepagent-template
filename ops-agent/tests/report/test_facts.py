@@ -8,8 +8,8 @@ from datetime import date
 import pytest
 
 from src.config.schema_report import Thresholds
-from src.report.facts import (Facts, SiteOutcome, freshness, line_ranking, repeats,
-                              scenario_lifecycle, spikes, status_breakdown)
+from src.report.facts import (Facts, SiteOutcome, freshness, ranking_by_gbm,
+                              repeats, scenario_lifecycle, spikes, status_breakdown)
 from src.report.rows import normalize
 
 from tests.support import YESTERDAY, doc, facts_from
@@ -88,18 +88,50 @@ def test_문서_순서가_달라도_결과가_같다(source, window):
 
 # ── 라인 비중 ───────────────────────────────────────────────────────
 
-def test_라인_비중의_분모는_그_GBM이다(source, window):
-    """전사 분모로 계산하면 법인이 많은 GBM의 라인은 영원히 비중이 작게 나온다."""
-    mx_rows, _ = normalize([doc(YESTERDAY, line="P111")] * 3, source=source,
-                           window=window, gbm="mx", fct="gumi")
-    vd_rows, _ = normalize([doc(YESTERDAY, line="V1")] * 7, source=source,
-                           window=window, gbm="vd", fct="suwon")
-    facts = facts_from(mx_rows + vd_rows, window=window, source=source, sites=(
+def two_gbm_facts(source, window, *, mx: int, vd: int):
+    mx_rows, _ = normalize([doc(YESTERDAY, line="P111", line_name="mx라인")] * mx,
+                           source=source, window=window, gbm="mx", fct="gumi")
+    vd_rows, _ = normalize([doc(YESTERDAY, line="V1", line_name="vd라인")] * vd,
+                           source=source, window=window, gbm="vd", fct="suwon")
+    return facts_from(mx_rows + vd_rows, window=window, source=source, sites=(
         SiteOutcome(gbm="mx", fct="gumi", status="ok"),
-        SiteOutcome(gbm="vd", fct="suwon", status="ok")))
-    shares = {s.key[0]: s for s in line_ranking(facts, day=YESTERDAY)}
-    assert shares["mx"].ratio == 1.0, "mx 안에서는 그 라인이 전부다"
-    assert shares["vd"].ratio == 1.0
+        SiteOutcome(gbm="vd", fct="suwon", status="ok")), gbms=("mx", "vd"))
+
+
+def test_비중의_분모는_그_GBM이다(source, window):
+    """전사 분모로 계산하면 법인이 많은 GBM의 라인은 영원히 비중이 작게 나온다."""
+    facts = two_gbm_facts(source, window, mx=3, vd=7)
+    groups = {g.gbm: g for g in ranking_by_gbm(
+        facts, lambda r: (r.plant, r.line_code, r.line_name), day=YESTERDAY, limit=5)}
+    assert groups["mx"].items[0].ratio == 1.0, "mx 안에서는 그 라인이 전부다"
+    assert groups["vd"].items[0].ratio == 1.0
+
+
+def test_알람이_많은_GBM이_목록을_독차지하지_않는다(source, window):
+    """전사 TOP N이었을 때 상위 10칸이 전부 MX였고 DA의 법인은 한 줄도 못 들어왔다."""
+    facts = two_gbm_facts(source, window, mx=100, vd=2)
+    groups = ranking_by_gbm(facts, lambda r: r.plant, day=YESTERDAY, limit=5)
+    assert [g.gbm for g in groups] == ["mx", "vd"], "적은 GBM도 자기 묶음을 갖는다"
+    assert groups[1].items[0].count == 2
+
+
+def test_GBM_순서는_config가_정한다(source, window):
+    """건수 순으로 정렬하면 색과 위치가 매일 바뀌어 위치로 기억할 수 없다."""
+    facts = two_gbm_facts(source, window, mx=2, vd=50)
+    assert facts.gbm_order() == ("mx", "vd"), "건수가 적은 mx가 먼저 선언됐으므로 먼저다"
+    assert [g.gbm for g in ranking_by_gbm(facts, lambda r: r.plant,
+                                          day=YESTERDAY, limit=5)] == ["mx", "vd"]
+    assert facts.series_of("mx") == 0 and facts.series_of("vd") == 1
+
+
+def test_config에_없는_GBM도_버리지_않는다(source, window):
+    """설정 누락을 데이터 누락으로 바꾸지 않는다."""
+    rows, _ = normalize([doc(YESTERDAY)], source=source, window=window,
+                        gbm="zz", fct="unknown")
+    facts = facts_from(rows, window=window, source=source, sites=(
+        SiteOutcome(gbm="mx", fct="gumi", status="ok"),), gbms=("mx",))
+    assert facts.gbm_order() == ("mx", "zz")
+    assert facts.series_of("zz") == 1
 
 
 # ── 급증 ────────────────────────────────────────────────────────────
@@ -159,6 +191,7 @@ def test_반복은_건수와_발생일수를_둘_다_넘겨야_한다(source, wi
     facts = build(burst + chronic, source=source, window=window, thresholds=thresholds)
     found = repeats(facts)
     assert [r.line_code for r in found] == ["P222"], "하루에 몰린 20건은 만성이 아니다"
+    assert found[0].gbm == "mx", "이슈 표의 GBM 열을 채우려면 필요하다"
     assert found[0].days == 7 and found[0].count == 14
 
 
@@ -179,8 +212,25 @@ def test_어제_처음_나타난_항목이_신규다(source, window):
                    doc(YESTERDAY, scen="S02", scen_name="새것")],
                   source=source, window=window)
     life = scenario_lifecycle(facts)
-    assert life.appeared == [("S02", "새것")]
-    assert life.vanished == [("S01", "옛것")]
+    assert [(i.gbm, i.name, i.count) for i in life.appeared] == [("mx", "새것", 1)]
+    assert [(i.gbm, i.name) for i in life.vanished] == [("mx", "옛것")]
+    assert life.appeared[0].plants == ("gumi",)
+
+
+def test_신규는_GBM별로_본다(source, window):
+    """전사로 보면 "DA에서 처음 나타난 항목"이 MX에 이미 있으면 안 잡힌다 —
+    그런데 조치는 GBM 단위로 이뤄지므로 그게 더 중요한 신호다."""
+    mx_rows, _ = normalize([doc(DAY_BEFORE, scen="S07", scen_name="공통항목"),
+                            doc(YESTERDAY, scen="S07", scen_name="공통항목")],
+                           source=source, window=window, gbm="mx", fct="gumi")
+    da_rows, _ = normalize([doc(YESTERDAY, scen="S07", scen_name="공통항목")],
+                           source=source, window=window, gbm="da", fct="gwangju")
+    facts = facts_from(mx_rows + da_rows, window=window, source=source, sites=(
+        SiteOutcome(gbm="mx", fct="gumi", status="ok"),
+        SiteOutcome(gbm="da", fct="gwangju", status="ok")), gbms=("mx", "da"))
+    appeared = scenario_lifecycle(facts).appeared
+    assert [(i.gbm, i.name) for i in appeared] == [("da", "공통항목")], \
+        "mx에는 이미 있었지만 da에는 어제 처음이다"
 
 
 def test_전주_데이터는_신규_판정에_끼어들지_않는다(source, window):
@@ -189,7 +239,7 @@ def test_전주_데이터는_신규_판정에_끼어들지_않는다(source, win
     facts = build([doc(date(2026, 8, 20), scen="S09", scen_name="전주만"),
                    doc(YESTERDAY, scen="S09", scen_name="전주만")],
                   source=source, window=window)
-    assert scenario_lifecycle(facts).appeared == [("S09", "전주만")]
+    assert [i.name for i in scenario_lifecycle(facts).appeared] == ["전주만"]
 
 
 # ── 표본과 가용성 ───────────────────────────────────────────────────
@@ -216,7 +266,8 @@ def test_어제만_데이터가_끊긴_법인을_찾는다(source, window):
     facts = facts_from(rows, window=window, source=source, sites=(
         SiteOutcome(gbm="mx", fct="gumi", status="ok"),))
     stalled = [f for f in freshness(facts) if f.stalled]
-    assert [f.site for f in stalled] == ["mx/gumi"]
+    assert [(f.gbm, f.fct) for f in stalled] == [("mx", "gumi")]
+    assert stalled[0].site == "mx/gumi"
 
 
 def test_원래_조용한_법인은_끊긴_것이_아니다(source, window):

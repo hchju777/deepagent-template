@@ -194,3 +194,53 @@ def test_배너_문구의_별표를_벗긴다():
     block = Block(key="b", banners=(Banner(tone="bad", text="이건 **중요**합니다"),))
     html = render([block], title="t", generated_at="x")
     assert "**" not in html and "이건 중요합니다" in html
+
+
+# ── GBM 정체성 색 ───────────────────────────────────────────────────
+
+def test_GBM_글씨에_계열색이_나간다(source, window):
+    """색은 **정체성**이다 — 다크모드로 반전돼도 "MX가 VD와 다른 색"만 유지되면 된다."""
+    from src.presentation.report_html import SERIES
+    from src.report.facts import SiteOutcome as SO
+
+    mx, _ = normalize([doc(YESTERDAY, plant="gumi")] * 3, source=source,
+                      window=window, gbm="mx", fct="gumi")
+    da, _ = normalize([doc(YESTERDAY, plant="gwangju")] * 2, source=source,
+                      window=window, gbm="da", fct="gwangju")
+    facts = facts_from(mx + da, window=window, source=source,
+                       sites=(SO(gbm="mx", fct="gumi", status="ok"),
+                              SO(gbm="da", fct="gwangju", status="ok")),
+                       gbms=("mx", "da"))
+    html = html_of(facts)
+    assert f"color:{SERIES[0]};" in html and f"color:{SERIES[1]};" in html
+    assert re_search(html, SERIES[0], "MX"), "MX 글씨에 첫 계열색이 붙어야 한다"
+    assert re_search(html, SERIES[1], "DA")
+
+
+def re_search(html: str, color: str, label: str) -> bool:
+    import re
+    return bool(re.search(rf"color:{re.escape(color)};[^>]*>{label}<", html))
+
+
+def test_묶음_경계에_윗선이_그어진다(source, window):
+    """GBM 이름을 둘째 행부터 비우므로, 선이 없으면 빈 칸이 "값 없음"으로 읽힌다."""
+    from src.report.blocks import Block, Cell, Column, Table
+    from src.presentation.report_html import HEAD_RULE
+
+    table = Table(columns=(Column("a"), Column("b")),
+                  rows=((Cell("MX"), Cell("1")), (Cell(""), Cell("2")),
+                        (Cell("DA"), Cell("3"))),
+                  group_starts=frozenset({0, 2}))
+    html = render([Block(key="x", title="x", table=table)], title="t", generated_at="x")
+    assert html.count(f"border-top:2px solid {HEAD_RULE}") == 2, \
+        "첫 행은 머리글 아래라 선이 필요 없고, 둘째 묶음에만 그어진다"
+
+
+def test_계열색이_의미색을_이긴다():
+    """GBM 이름 칸은 정체성이 의미보다 앞선다 — tone과 겹치면 series가 이긴다."""
+    from src.report.blocks import Block, Cell, Column, Table
+    from src.presentation.report_html import BAD, SERIES
+
+    table = Table(columns=(Column("a"),), rows=((Cell("MX", tone="bad", series=0),),))
+    html = render([Block(key="x", title="x", table=table)], title="t", generated_at="x")
+    assert f"color:{SERIES[0]};" in html and f"color:{BAD};" not in html

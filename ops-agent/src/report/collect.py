@@ -60,7 +60,8 @@ async def collect(scenario: ReportScenario, *, config_root: Path, env: dict[str,
     # 자연 순서(삽입 순서)에 따라 달라지지 않게 한다. 집계 자체는 순서에 무관하다.
     rows.sort(key=lambda r: (r.gbm, r.fct, r.occurred_at, r.line_code, r.scenario_id))
     return Facts(window=window, source=scenario.source, thresholds=scenario.thresholds,
-                 rows=tuple(rows), sites=tuple(outcome for outcome, _ in results))
+                 rows=tuple(rows), sites=tuple(outcome for outcome, _ in results),
+                 gbms=tuple(scenario.scope.gbms))
 
 
 def _seed_picker(seeds: dict[str, Any] | None):

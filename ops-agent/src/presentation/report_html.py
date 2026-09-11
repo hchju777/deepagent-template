@@ -54,7 +54,11 @@ BAD, BAD_BG = "#b42318", "#fef3f2"
 GOOD, GOOD_BG = "#067647", "#eef7f1"
 WARN, WARN_BG = "#b54708", "#fff3e6"
 
-SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
+# GBM 구분용 계열색. **정체성**을 나타내는 색이고 의미(증감)를 나타내지 않는다 —
+# 그래서 클라이언트가 다크모드로 색을 반전시켜 파랑이 주황이 돼도 문제가 없다.
+# MX가 VD와 **다른 색**이라는 사실만 유지되면 되고, 이름 글자가 정체성을 함께 말한다.
+# 네 개를 넘으면 돌려 쓴다(같은 색을 쓰는 두 GBM은 이름으로 구별된다).
+SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#7a5af8", "#0d9488")
 
 WIDTH = 720
 PAD = "28px"
@@ -68,6 +72,11 @@ _CHIP_BG = {"plain": HEAD_BG, "strong": HEAD_BG, "muted": HEAD_BG,
 _BANNER = {"bad": (BAD, BAD_BG, "#7a271a"),
            "warn": (WARN, WARN_BG, "#7a3a07"),
            "good": (GOOD, GOOD_BG, "#054f30")}
+
+
+def series_color(index: int | None) -> str | None:
+    """계열색 번호 → 색. 블록은 번호만 알고 색 값은 여기만 안다."""
+    return SERIES[index % len(SERIES)] if index is not None else None
 
 
 def e(text) -> str:
@@ -117,19 +126,26 @@ def _tiles(tiles: tuple[Tile, ...]) -> str:
             f'<div style="font-size:11px;color:{DIM};letter-spacing:.4px;">'
             f'{e(tile.label)}{hint}</div>'
             f'<div style="font-size:26px;font-weight:700;line-height:1.15;margin-top:5px;'
-            f'color:{_TONE_COLOR[tile.tone]};">{e(tile.value)}{unit}</div>{note}</td>')
+            f'color:{series_color(tile.series) or _TONE_COLOR[tile.tone]};">'
+            f'{e(tile.value)}{unit}</div>{note}</td>')
     rows = ["".join(cells[i:i + 3]) for i in range(0, len(cells), 3)]
     return (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
             f'width="100%" style="border-collapse:separate;border-spacing:8px 8px;">'
             + "".join(f"<tr>{row}</tr>" for row in rows) + "</table>")
 
 
-def _cell(cell: Cell, *, last: bool, total: bool = False) -> str:
+def _cell(cell: Cell, *, last: bool, total: bool = False,
+          group_start: bool = False) -> str:
     border = "" if last or total else f"border-bottom:1px solid {ROW_RULE};"
+    if group_start:
+        # 묶음 경계를 **선으로** 긋는다. GBM 이름을 둘째 행부터 비워 두므로,
+        # 선이 없으면 빈 칸이 "값이 없다"로 읽힌다.
+        border += f"border-top:2px solid {HEAD_RULE};"
     weight = "font-weight:600;" if cell.tone == "strong" or total else ""
     if total:
         weight = "font-weight:700;"
-    color = _TONE_COLOR[cell.tone]
+    # 계열색이 tone을 이긴다 — GBM 이름 칸은 정체성이 의미보다 앞선다.
+    color = series_color(cell.series) or _TONE_COLOR[cell.tone]
     if cell.chip:
         inner = (f'<span style="background:{_CHIP_BG[cell.tone]};color:{color};'
                  f'font-size:10.5px;padding:2px 7px;font-weight:600;white-space:nowrap;">'
@@ -145,13 +161,16 @@ def _cell(cell: Cell, *, last: bool, total: bool = False) -> str:
 def _table(table: Table) -> str:
     header = "".join(
         f'<th align="{column.align}" style="padding:9px 10px;'
-        f'border-bottom:1px solid {HEAD_RULE};font-size:11px;color:{DIM};'
+        f'border-bottom:1px solid {HEAD_RULE};font-size:11px;'
+        f'color:{series_color(column.series) or DIM};'
         f'font-weight:600;letter-spacing:.3px;white-space:nowrap;">{e(column.label)}</th>'
         for column in table.columns)
     body = []
     for index, row in enumerate(table.rows):
         last = index == len(table.rows) - 1 and table.total is None
-        body.append("<tr>" + "".join(_cell(c, last=last) for c in row) + "</tr>")
+        start = index in table.group_starts and index != 0
+        body.append("<tr>" + "".join(_cell(c, last=last, group_start=start)
+                                     for c in row) + "</tr>")
     if table.total is not None:
         body.append(f'<tr style="background:{PANEL};">'
                     + "".join(_cell(c, last=True, total=True) for c in table.total)

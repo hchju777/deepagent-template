@@ -12,7 +12,8 @@ from tests.support import YESTERDAY, doc, facts_from
 
 SECTIONS = ["① 총 알람", "② 미해제", "③ GBM별", "④ 법인별", "⑤ 일별 추세",
             "⑥ 법인 TOP", "⑦ 라인 TOP", "⑧ 알람 항목 TOP", "⑨ status 분포",
-            "⑩ 급증(전주 동요일 대비)", "⑪ 반복 알람", "⑫ 알람 항목 신규·소멸", "⑬ 이슈"]
+            "⑩ 급증(직전 평일 평균 대비)", "⑪ 반복 알람", "⑫ 알람 항목 신규·소멸",
+            "⑬ 이슈"]
 
 
 def build(documents, *, source, window, sites=()):

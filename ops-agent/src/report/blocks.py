@@ -36,8 +36,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Literal
 
-from src.report.facts import (Facts, freshness, line_ranking, repeats,
-                              scenario_lifecycle, spikes, status_breakdown)
+from src.report.facts import (Facts, freshness, ranking_by_gbm, repeats,
+                              scenario_lifecycle, spikes)
 from src.report.window import WEEKDAY_LABEL
 
 Tone = Literal["plain", "strong", "muted", "bad", "good", "warn"]
@@ -55,12 +55,17 @@ class Cell:
     tone: Tone = "plain"
     chip: bool = False            # 유형 배지처럼 배경을 칠할 것인가
     hint: str | None = None       # 같은 칸의 작은 회색 글씨
+    # 계열색 번호. GBM 이름처럼 **정체성**을 나타내는 글씨에만 쓴다.
+    # 색 값 자체는 렌더러가 안다 — 여기에 hex를 쓰면 블록이 HTML을 알게 된다.
+    # `tone`과 겹치면 series가 이긴다(정체성이 의미보다 앞서는 칸이기 때문이다).
+    series: int | None = None
 
 
 @dataclass(frozen=True)
 class Column:
     label: str
     align: Align = "left"
+    series: int | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,10 @@ class Table:
     columns: tuple[Column, ...]
     rows: tuple[tuple[Cell, ...], ...]
     total: tuple[Cell, ...] | None = None
+    # 이 행부터 새 묶음이 시작된다(GBM이 바뀌는 자리). 렌더러가 윗선을 굵게 그어
+    # **묶음 경계를 눈에 보이게** 한다 — 그러지 않으면 GBM별 TOP 표가 한 덩어리로
+    # 읽혀서 "MX 5개 + DA 5개"가 "10개 순위"로 보인다.
+    group_starts: frozenset[int] = frozenset()
 
     def __post_init__(self):
         # 열 수가 어긋나면 표가 조용히 밀려서 **다른 열의 숫자**로 읽힌다.
@@ -87,6 +96,7 @@ class Tile:
     note: str | None = None
     hint: str | None = None       # 라벨 옆 작은 글씨
     tone: Tone = "plain"          # 값의 색
+    series: int | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +170,27 @@ def _line_label(code: str, name: str) -> str:
     return f"{code} {name}" if code != name else code
 
 
+def _gbm_cell(facts: Facts, gbm: str, *, blank: bool = False, hint: str | None = None) -> Cell:
+    """GBM 이름 칸. **색은 이 한 곳에서만 붙는다.**
+
+    `blank`는 같은 묶음의 둘째 행부터다 — 같은 이름을 다섯 번 반복하면 눈이
+    그걸 읽느라 정작 다른 열의 차이를 못 본다. 묶음 경계는 `group_starts`가
+    윗선으로 표시한다.
+    """
+    if blank:
+        return Cell("", series=facts.series_of(gbm))
+    return Cell(str(gbm).upper(), tone="strong", series=facts.series_of(gbm), hint=hint)
+
+
+def _plants_label(plants: tuple[str, ...], *, limit: int = 2) -> str:
+    """법인이 여럿이면 앞 몇 개만. 전부 적으면 한 칸이 줄을 여러 개 먹는다."""
+    if not plants:
+        return EMDASH
+    if len(plants) <= limit:
+        return ", ".join(plants)
+    return f"{', '.join(plants[:limit])} 외 {len(plants) - limit}"
+
+
 # ── 블록들 ──────────────────────────────────────────────────────────
 
 def _header(facts: Facts) -> Block:
@@ -208,7 +239,7 @@ def _summary_tiles(facts: Facts) -> Block:
     gbm_ranking = facts.tally(lambda r: r.gbm, day=yesterday, limit=1)
     top_gbm, top_count = gbm_ranking[0] if gbm_ranking else (EMDASH, 0)
 
-    issue_count = (len(spikes(facts, lambda r: r.scenario, day=yesterday))
+    issue_count = (len(_spike_rows(facts, yesterday))
                    + len(scenario_lifecycle(facts).appeared)
                    + len(repeats(facts))
                    + len([f for f in freshness(facts) if f.stalled]))
@@ -222,7 +253,8 @@ def _summary_tiles(facts: Facts) -> Block:
              note=f"미해제율 {pct(unresolved, total)}",
              tone="bad" if unresolved else "plain"),
         Tile(label="최다 발생 GBM", value=str(top_gbm).upper(),
-             note=f"{n(top_count)}건 · 전체의 {pct(top_count, total)}"),
+             note=f"{n(top_count)}건 · 전체의 {pct(top_count, total)}",
+             series=facts.series_of(top_gbm) if gbm_ranking else None),
         Tile(label="이슈 감지", value=n(issue_count), unit="건",
              note="급증·신규·반복·데이터 합계",
              tone="warn" if issue_count else "plain"),
@@ -253,7 +285,12 @@ def _gbm_summary(facts: Facts) -> Block:
                Column(f"직전 {len(facts.window.days) - 1} 평일 평균", "right"),
                Column("증감", "right"), Column("전주 동요일", "right"))
     rows = []
-    for gbm, count in facts.tally(lambda r: r.gbm, day=yesterday):
+    # **config 순서**로 늘어놓는다. 건수 순으로 정렬하면 색과 위치가 매일 바뀌어서
+    # "어제는 두 번째였는데"라는 혼동이 생긴다 — 누가 제일 많은지는 건수 열이 말한다.
+    for gbm in facts.gbm_order():
+        count = facts.total(day=yesterday, gbm=gbm)
+        if not count and not any(s.gbm == gbm for s in facts.sites):
+            continue
         unresolved = facts.total(day=yesterday, gbm=gbm, unresolved=True)
         base = facts.baseline(yesterday, gbm=gbm)
         change, tone = delta(count, base)
@@ -262,8 +299,8 @@ def _gbm_summary(facts: Facts) -> Block:
         week_text, week_tone = delta(count, week)
         missing = [s for s in facts.unavailable if s.gbm == gbm]
         rows.append((
-            Cell(str(gbm).upper(), tone="strong",
-                 hint=f"{len(missing)}곳 누락" if missing else None),
+            _gbm_cell(facts, gbm,
+                      hint=f"{len(missing)}곳 누락" if missing else None),
             Cell(n(count), "right", "strong"), Cell(n(unresolved), "right"),
             Cell(pct(unresolved, count), "right"),
             Cell(n(base), "right", "muted"),
@@ -292,8 +329,9 @@ def _daily_trend(facts: Facts) -> Block:
     9d에서 차트 이미지가 붙지만 이 표는 남는다. 메일 클라이언트가 이미지를 막는
     일이 흔하고, 그때 그림만 있으면 읽을 것이 없어진다.
     """
-    gbms = sorted({r.gbm for r in facts.rows})
-    columns = (Column("날짜"), *(Column(g.upper(), "right") for g in gbms),
+    gbms = [g for g in facts.gbm_order() if any(r.gbm == g for r in facts.rows)]
+    columns = (Column("날짜"),
+               *(Column(g.upper(), "right", series=facts.series_of(g)) for g in gbms),
                Column("합계", "right"))
     rows = []
     for day in facts.window.days:
@@ -307,59 +345,99 @@ def _daily_trend(facts: Facts) -> Block:
                  empty="기간 안에 알람이 없습니다.")
 
 
+def _spike_rows(facts: Facts, day):
+    """급증을 **(GBM·법인·항목)** 단위로 본다.
+
+    항목만으로 보면 "설비 신호 끊김이 늘었다"까지만 알고 어디를 봐야 하는지 모른다.
+    이슈 표가 GBM·법인 열을 채울 수 있어야 그 표가 조치의 출발점이 된다.
+    """
+    return spikes(facts, lambda r: (r.gbm, r.plant, r.scenario_name), day=day)
+
+
+def _grouped_table(facts: Facts, groups, *, columns, make_row) -> Table | None:
+    """GBM별 묶음을 한 표로. 묶음이 바뀌는 행을 `group_starts`에 적어 둔다.
+
+    묶음 경계를 표시하지 않으면 "MX 5개 + DA 5개"가 "10개 순위"로 읽힌다.
+    """
+    rows: list[tuple[Cell, ...]] = []
+    starts: set[int] = set()
+    for group in groups:
+        for index, share in enumerate(group.items):
+            if index == 0:
+                starts.add(len(rows))
+            rows.append(make_row(group, share, index == 0))
+    if not rows:
+        return None
+    return Table(columns=columns, rows=tuple(rows), group_starts=frozenset(starts))
+
+
+def _unresolved_in(facts: Facts, *, gbm: str, match) -> int:
+    """그 GBM의 어제 미해제 중 `match`를 만족하는 건수."""
+    return len([r for r in facts.select(day=facts.window.yesterday, gbm=gbm,
+                                        unresolved=True) if match(r)])
+
+
 def _issues(facts: Facts) -> Block:
     """급증·신규·소멸·반복·데이터를 **한 표에** 모은다.
 
     종류별로 표를 쪼개면 각 표가 비어 있기 쉽고, 읽는 사람은 다섯 군데를 확인해야
     한다. "오늘 뭐가 이상한가"는 한 군데서 답이 나와야 한다.
+
+    GBM·법인을 **별개 열**로 두는 이유: 한 칸에 "gumi · P222 조립2라인"처럼 합쳐
+    넣으면 GBM이 어디인지 아예 안 보이고, 눈으로 훑을 때 비교가 안 된다.
     """
     yesterday = facts.window.yesterday
-    columns = (Column("유형"), Column("대상"), Column("알람 항목"),
+    earlier_days = max(len(facts.window.days) - 1, 1)
+    columns = (Column("유형"), Column("GBM"), Column("법인"), Column("대상"),
                Column("어제", "right"), Column("평균", "right"), Column("증감", "right"))
     rows: list[tuple[Cell, ...]] = []
 
     for stalled in (f for f in freshness(facts) if f.stalled):
         last = stalled.last_seen.strftime("%m/%d %H:%M") if stalled.last_seen else EMDASH
         rows.append((Cell("데이터", tone="bad", chip=True),
-                     Cell(stalled.site, tone="strong"),
+                     _gbm_cell(facts, stalled.gbm), Cell(stalled.fct),
                      Cell(f"어제 0건 — 마지막 알람 {last}"),
-                     Cell("0", "right"), Cell(n(stalled.window_count / max(
-                         len(facts.window.days) - 1, 1)), "right", "muted"),
+                     Cell("0", "right"),
+                     Cell(n(stalled.window_count / earlier_days), "right", "muted"),
                      Cell("▼ 100.0%", "right", "bad")))
 
-    for spike in spikes(facts, lambda r: r.scenario, day=yesterday):
+    for spike in _spike_rows(facts, yesterday):
+        gbm, plant, name = spike.key
         change, tone = delta(spike.count, spike.baseline)
         rows.append((Cell("급증", tone="bad", chip=True),
-                     Cell(EMDASH, tone="muted"), Cell(spike.key[1]),
+                     _gbm_cell(facts, gbm), Cell(plant), Cell(name),
                      Cell(n(spike.count), "right", "strong"),
                      Cell(n(spike.baseline), "right", "muted"),
                      Cell(change, "right", tone)))
 
     lifecycle = scenario_lifecycle(facts)
-    for scenario_id, name in lifecycle.appeared:
-        appeared = len([r for r in facts.select(day=yesterday)
-                        if r.scenario == (scenario_id, name)])
+    for item in lifecycle.appeared:
         rows.append((Cell("신규", tone="warn", chip=True),
-                     Cell(EMDASH, tone="muted"), Cell(name),
-                     Cell(n(appeared), "right", "strong"),
+                     _gbm_cell(facts, item.gbm), Cell(_plants_label(item.plants)),
+                     Cell(item.name, hint=item.scenario_id),
+                     Cell(n(item.count), "right", "strong"),
                      Cell(EMDASH, "right", "muted"), Cell("신규", "right", "bad")))
-    for scenario_id, name in lifecycle.vanished:
+    for item in lifecycle.vanished:
         rows.append((Cell("소멸", tone="good", chip=True),
-                     Cell(EMDASH, tone="muted"), Cell(name),
-                     Cell("0", "right"), Cell(EMDASH, "right", "muted"),
+                     _gbm_cell(facts, item.gbm), Cell(_plants_label(item.plants)),
+                     Cell(item.name, hint=item.scenario_id),
+                     Cell("0", "right"),
+                     Cell(n(item.count / earlier_days), "right", "muted"),
                      Cell("소멸", "right", "good")))
 
     for repeat in repeats(facts, limit=facts.thresholds.top_n):
         rows.append((Cell("반복", tone="muted", chip=True),
-                     Cell(f"{repeat.plant} · {_line_label(repeat.line_code, repeat.line_name)}"),
-                     Cell(repeat.scenario_name,
+                     _gbm_cell(facts, repeat.gbm), Cell(repeat.plant),
+                     Cell(f"{_line_label(repeat.line_code, repeat.line_name)} · "
+                          f"{repeat.scenario_name}",
                           hint=f"{repeat.days} 평일에 걸쳐"),
                      Cell(n(repeat.count), "right", "strong"),
                      Cell(EMDASH, "right", "muted"), Cell(EMDASH, "right", "muted")))
 
     t = facts.thresholds
     footnote = (f"급증 어제가 직전 평일 평균의 {t.spike_ratio}배 이상 & "
-                f"{t.spike_min_count}건 이상 · 신규 집계 구간 안에서 어제 처음 · "
+                f"{t.spike_min_count}건 이상(GBM·법인·항목 단위) · "
+                f"신규 집계 구간 안에서 그 GBM에 어제 처음 · "
                 f"소멸 이전에는 있었는데 어제 0건 · "
                 f"반복 같은 라인·항목이 {t.repeat_min_count}건 이상 & "
                 f"{t.repeat_min_days} 평일 이상 · 데이터 기간 중에는 있었는데 어제 0건 "
@@ -372,71 +450,75 @@ def _issues(facts: Facts) -> Block:
 
 
 def _plant_top(facts: Facts) -> Block:
-    yesterday = facts.window.yesterday
-    total = facts.total(day=yesterday)
-    rows = []
-    for (gbm, plant), count in facts.tally(lambda r: (r.gbm, r.plant), day=yesterday,
-                                           limit=facts.thresholds.top_n):
-        rows.append((Cell(str(gbm).upper(), tone="strong"), Cell(plant),
-                     Cell(n(count), "right", "strong"),
-                     Cell(pct(count, total), "right", "muted")))
+    """법인 TOP — **GBM별로** 상위 N개."""
+    groups = ranking_by_gbm(facts, lambda r: r.plant, day=facts.window.yesterday,
+                            limit=facts.thresholds.top_per_gbm)
+
+    def row(group, share, first):
+        plant = share.key[0]
+        return (_gbm_cell(facts, group.gbm, blank=not first),
+                Cell(plant),
+                Cell(n(share.count), "right", "strong"),
+                Cell(f"{share.ratio * 100:.1f}%", "right", "muted"),
+                Cell(n(_unresolved_in(facts, gbm=group.gbm,
+                                      match=lambda r: r.plant == plant)), "right"))
+
     return Block(key="plant", title="법인 TOP",
-                 hint=f"상위 {facts.thresholds.top_n}",
-                 table=Table(columns=(Column("GBM"), Column("법인"),
-                                      Column("어제 건수", "right"),
-                                      Column("전체 비중", "right")),
-                             rows=tuple(rows)) if rows else None,
+                 hint=f"GBM별 상위 {facts.thresholds.top_per_gbm}",
+                 table=_grouped_table(facts, groups, columns=(
+                     Column("GBM"), Column("법인"), Column("어제 건수", "right"),
+                     Column("GBM 내 비중", "right"), Column("미해제", "right")),
+                     make_row=row),
                  empty="어제 알람이 없습니다.")
 
 
 def _scenario_top(facts: Facts) -> Block:
-    yesterday = facts.window.yesterday
-    total = facts.total(day=yesterday)
-    rows = []
-    for (scenario_id, name), count in facts.tally(lambda r: r.scenario, day=yesterday,
-                                                  limit=facts.thresholds.top_n):
-        unresolved = len([r for r in facts.select(day=yesterday, unresolved=True)
-                          if r.scenario == (scenario_id, name)])
-        rows.append((Cell(name, tone="strong", hint=str(scenario_id)),
-                     Cell(n(count), "right", "strong"),
-                     Cell(pct(count, total), "right", "muted"),
-                     Cell(n(unresolved), "right")))
+    """알람 항목 TOP — **GBM별로** 상위 N개.
+
+    전사 하나로 줄을 세우면 알람이 많은 GBM의 항목이 목록을 차지하고, 다른 GBM에서
+    무엇이 문제인지는 영원히 안 보인다.
+    """
+    groups = ranking_by_gbm(facts, lambda r: r.scenario, day=facts.window.yesterday,
+                            limit=facts.thresholds.top_per_gbm)
+
+    def row(group, share, first):
+        scenario = (share.key[0], share.key[1])
+        return (_gbm_cell(facts, group.gbm, blank=not first),
+                Cell(share.key[1], hint=share.key[0]),
+                Cell(n(share.count), "right", "strong"),
+                Cell(f"{share.ratio * 100:.1f}%", "right", "muted"),
+                Cell(n(_unresolved_in(facts, gbm=group.gbm,
+                                      match=lambda r: r.scenario == scenario)), "right"))
+
     return Block(key="scenario", title="알람 항목 TOP",
-                 hint=f"상위 {facts.thresholds.top_n}",
-                 table=Table(columns=(Column("알람 항목"), Column("어제 건수", "right"),
-                                      Column("전체 비중", "right"),
-                                      Column("미해제", "right")),
-                             rows=tuple(rows)) if rows else None,
+                 hint=f"GBM별 상위 {facts.thresholds.top_per_gbm}",
+                 table=_grouped_table(facts, groups, columns=(
+                     Column("GBM"), Column("알람 항목"), Column("어제 건수", "right"),
+                     Column("GBM 내 비중", "right"), Column("미해제", "right")),
+                     make_row=row),
                  empty="어제 알람이 없습니다.")
 
 
 def _line_top(facts: Facts) -> Block:
-    rows = []
-    for share in line_ranking(facts, day=facts.window.yesterday,
-                              limit=facts.thresholds.top_n):
-        gbm, plant, code, name = share.key
-        rows.append((Cell(str(gbm).upper(), tone="strong"), Cell(plant),
-                     Cell(_line_label(code, name)),
-                     Cell(n(share.count), "right", "strong"),
-                     Cell(f"{share.ratio * 100:.1f}%", "right", "muted")))
-    return Block(key="line", title="라인 TOP", hint="비중은 그 GBM 안에서",
-                 table=Table(columns=(Column("GBM"), Column("법인"), Column("라인"),
-                                      Column("어제 건수", "right"),
-                                      Column("GBM 내 비중", "right")),
-                             rows=tuple(rows)) if rows else None,
-                 empty="어제 알람이 없습니다.")
+    """라인 TOP — **GBM별로** 상위 N개.
 
-
-def _status_mix(facts: Facts) -> Block:
-    yesterday = facts.window.yesterday
-    total = facts.total(day=yesterday)
-    rows = [(Cell(label), Cell(n(count), "right", "strong"),
-             Cell(pct(count, total), "right", "muted"))
-            for label, count in status_breakdown(facts, day=yesterday)]
-    return Block(key="status", title="처리 상태 분포", hint="어제",
-                 table=Table(columns=(Column("상태"), Column("건수", "right"),
-                                      Column("비중", "right")),
-                             rows=tuple(rows)) if rows else None,
+    전사 TOP N이었을 때 상위 10칸이 전부 한 GBM으로 채워져 다른 GBM의 법인은 한
+    줄도 들어오지 못했다. 그게 이 표를 GBM별로 바꾼 이유다.
+    """
+    groups = ranking_by_gbm(facts, lambda r: (r.plant, r.line_code, r.line_name),
+                            day=facts.window.yesterday,
+                            limit=facts.thresholds.top_per_gbm)
+    return Block(key="line", title="라인 TOP",
+                 hint=f"GBM별 상위 {facts.thresholds.top_per_gbm} · 비중은 그 GBM 안에서",
+                 table=_grouped_table(facts, groups, columns=(
+                     Column("GBM"), Column("법인"), Column("라인"),
+                     Column("어제 건수", "right"), Column("GBM 내 비중", "right")),
+                     make_row=lambda group, share, first: (
+                         _gbm_cell(facts, group.gbm, blank=not first),
+                         Cell(share.key[0]),
+                         Cell(_line_label(share.key[1], share.key[2])),
+                         Cell(n(share.count), "right", "strong"),
+                         Cell(f"{share.ratio * 100:.1f}%", "right", "muted"))),
                  empty="어제 알람이 없습니다.")
 
 
@@ -475,7 +557,7 @@ def _coverage_detail(facts: Facts) -> Block:
 # **단일 진실 소스.** 순서가 곧 리포트의 순서다.
 BLOCKS: tuple[Callable[[Facts], Block], ...] = (
     _header, _coverage, _summary_tiles, _llm_comment, _gbm_summary, _daily_trend,
-    _issues, _plant_top, _scenario_top, _line_top, _status_mix, _coverage_detail,
+    _issues, _plant_top, _scenario_top, _line_top, _coverage_detail,
 )
 
 

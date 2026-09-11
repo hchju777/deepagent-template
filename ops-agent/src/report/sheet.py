@@ -9,7 +9,7 @@ dict로 평탄화한 것을 렌더러가 다시 읽으면, 화면에 틀린 숫�
 """
 from datetime import date
 
-from src.report.facts import (Facts, freshness, line_ranking, repeats,
+from src.report.facts import (Facts, freshness, ranking_by_gbm, repeats,
                               scenario_lifecycle, spikes, status_breakdown)
 from src.report.window import WEEKDAY_LABEL
 
@@ -54,33 +54,46 @@ def fact_sheet(facts: Facts) -> dict:
         "⑤ 일별 추세": {_day(d): n for d, n in facts.daily().items()},
         "⑥ 법인 TOP": [{"법인": k, "건수": n}
                     for k, n in facts.tally(lambda r: r.plant, day=yesterday, limit=top_n)],
-        "⑦ 라인 TOP": [{"GBM": s.key[0], "법인": s.key[1], "라인": f"{s.key[2]} {s.key[3]}",
-                     "건수": s.count, "GBM 내 비중": f"{s.ratio * 100:.1f}%"}
-                    for s in line_ranking(facts, day=yesterday, limit=top_n)],
-        "⑧ 알람 항목 TOP": [{"항목": f"{k[1]}({k[0]})", "건수": n}
-                       for k, n in facts.tally(lambda r: r.scenario,
-                                               day=yesterday, limit=top_n)],
+        # GBM별로 나눠 보여 준다 — 전사 하나로 줄을 세우면 알람이 많은 GBM이
+        # 목록을 통째로 차지해서 다른 GBM의 문제가 안 보인다(실제로 그랬다).
+        "⑦ 라인 TOP": {
+            g.gbm: [{"법인": s.key[0], "라인": f"{s.key[1]} {s.key[2]}", "건수": s.count,
+                     "GBM 내 비중": f"{s.ratio * 100:.1f}%"} for s in g.items]
+            for g in ranking_by_gbm(facts, lambda r: (r.plant, r.line_code, r.line_name),
+                                    day=yesterday, limit=facts.thresholds.top_per_gbm)},
+        "⑧ 알람 항목 TOP": {
+            g.gbm: [{"항목": f"{s.key[1]}({s.key[0]})", "건수": s.count,
+                     "GBM 내 비중": f"{s.ratio * 100:.1f}%"} for s in g.items]
+            for g in ranking_by_gbm(facts, lambda r: r.scenario, day=yesterday,
+                                    limit=facts.thresholds.top_per_gbm)},
         "⑨ status 분포": dict(status_breakdown(facts, day=yesterday)),
-        "⑩ 급증(전주 동요일 대비)": {
+        "⑩ 급증(직전 평일 평균 대비)": {
             "임계": f"{facts.thresholds.spike_ratio}배 이상 · "
                   f"최소 {facts.thresholds.spike_min_count}건",
-            "법인": [{"법인": s.key[0], "건수": s.count, "기준값": s.baseline,
-                    "배수": round(s.ratio, 2)}
-                   for s in spikes(facts, lambda r: r.plant, day=yesterday)],
-            "알람 항목": [{"항목": s.key[1], "건수": s.count, "기준값": s.baseline,
-                       "배수": round(s.ratio, 2)}
-                      for s in spikes(facts, lambda r: r.scenario, day=yesterday)],
+            "법인": [{"GBM": s.key[0], "법인": s.key[1], "건수": s.count,
+                    "기준값": round(s.baseline, 1), "배수": round(s.ratio, 2)}
+                   for s in spikes(facts, lambda r: (r.gbm, r.plant), day=yesterday)],
+            "GBM·법인·항목": [{"GBM": s.key[0], "법인": s.key[1], "항목": s.key[2],
+                          "건수": s.count, "기준값": round(s.baseline, 1),
+                          "배수": round(s.ratio, 2)}
+                         for s in spikes(facts, lambda r: (r.gbm, r.plant,
+                                                          r.scenario_name),
+                                         day=yesterday)],
         },
         "⑪ 반복 알람": {
             "임계": f"기간 내 {facts.thresholds.repeat_min_count}회 이상 · "
                   f"{facts.thresholds.repeat_min_days}일 이상에 걸쳐",
-            "목록": [{"법인": r.plant, "라인": f"{r.line_code} {r.line_name}",
+            "목록": [{"GBM": r.gbm, "법인": r.plant,
+                   "라인": f"{r.line_code} {r.line_name}",
                    "항목": r.scenario_name, "건수": r.count, "발생일수": r.days}
                   for r in repeats(facts, limit=top_n)],
         },
         "⑫ 알람 항목 신규·소멸": {
-            "신규": [f"{name}({sid})" for sid, name in lifecycle.appeared],
-            "소멸": [f"{name}({sid})" for sid, name in lifecycle.vanished],
+            "신규": [{"GBM": i.gbm, "항목": f"{i.name}({i.scenario_id})",
+                   "건수": i.count, "법인": list(i.plants)} for i in lifecycle.appeared],
+            "소멸": [{"GBM": i.gbm, "항목": f"{i.name}({i.scenario_id})",
+                   "이전 건수": i.count, "법인": list(i.plants)}
+                  for i in lifecycle.vanished],
         },
         "⑬ 이슈": _issues(facts),
     }

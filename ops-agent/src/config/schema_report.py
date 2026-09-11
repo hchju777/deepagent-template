@@ -131,8 +131,11 @@ class Thresholds(StrictModel):
     # 7일 내내 매일 터진 것(방치된 만성 문제)은 다른 문제이고, 리포트가 찾아야
     # 하는 것은 후자다.
     repeat_min_days: int = Field(default=3, ge=1)
-    # TOP 목록의 길이.
+    # 반복 알람 목록의 길이.
     top_n: int = Field(default=10, ge=1, le=100)
+    # TOP 표에서 **GBM 하나당** 몇 개를 보일 것인가. 전사 TOP N이 아닌 이유는
+    # `ranking_by_gbm`에 적혀 있다 — 알람이 많은 GBM이 목록을 통째로 차지한다.
+    top_per_gbm: int = Field(default=5, ge=1, le=50)
 
     @model_validator(mode="after")
     def _repeat_days_fit_in_window(self):
