@@ -13,7 +13,8 @@ import pytest
 from src.config.schema_report import SourceSpec, WindowSpec
 from src.report.window import (build_window, business_days_back, date_filter,
                                date_format_problem, format_boundary, parse_day,
-                               previous_business_day, same_weekday_previous_week)
+                               parse_moment, previous_business_day,
+                               same_weekday_previous_week)
 
 WEEKEND = frozenset({5, 6})
 
@@ -198,3 +199,68 @@ def test_같은_날이면_같은_결과다():
     first = build_window(WindowSpec(), today=date(2026, 9, 7))
     second = build_window(WindowSpec(), today=date(2026, 9, 7))
     assert first == second
+
+
+# ── 사내 실데이터에서 실제로 나온 값들 ──────────────────────────────
+
+# 2026-09 사내 첫 실행에서 54,001건 중 44,705건이 여기서 걸렸다. 전부 소수점 초가
+# 붙어 있고, **자릿수가 섞여 있다**(.000과 .545776). 그리고 한 건은 분이 한 자리였다.
+REAL_VALUES = ("2026-08-26 00:00:00.000", "2026-08-26 00:0:00.011",
+               "2026-08-26 00:00:00.545776", "2026-08-26 00:00:00.549790")
+
+
+def test_사내_실데이터의_날짜가_읽힌다():
+    """회귀 — 이 값들이 다시 안 읽히면 리포트의 82%가 조용히 사라진다."""
+    spec = source(parse_formats=["%Y-%m-%d %H:%M:%S.%f"])
+    for raw in REAL_VALUES:
+        assert parse_day(spec, raw) == date(2026, 8, 26), f"{raw!r}를 못 읽는다"
+
+
+def test_소수점이_없는_값도_같이_읽힌다():
+    """18%는 소수점이 없었다 — 한 형식만 두면 그쪽이 사라진다."""
+    spec = source(parse_formats=["%Y-%m-%d %H:%M:%S.%f"])
+    assert parse_day(spec, "2026-08-26 00:00:00") == date(2026, 8, 26)
+    assert parse_day(spec, "2026-08-26 00:00:00.123") == date(2026, 8, 26)
+
+
+def test_소수점_자릿수가_몇이든_읽힌다():
+    """%f는 1~6자리를 받는다. 밀리초(3자리)와 마이크로초(6자리)가 섞여 있었다."""
+    spec = source(parse_formats=["%Y-%m-%d %H:%M:%S.%f"])
+    for digits in range(1, 7):
+        raw = "2026-08-26 12:34:56." + "1" * digits
+        assert parse_day(spec, raw) == date(2026, 8, 26), f"{digits}자리를 못 읽는다"
+
+
+def test_소수점_초가_있어도_하루_경계가_정확하다():
+    """경계는 `date_format` 하나가 정하고 소수점이 없다. 그래도 맞는 이유:
+    `YYYY-MM-DD`가 고정폭이라 뒤쪽 시각 형식이 어떻든 **날짜 경계** 기준
+    사전순이 성립한다.
+    """
+    spec = source(parse_formats=["%Y-%m-%d %H:%M:%S.%f"])
+    window = build_window(WindowSpec(), today=date(2026, 9, 7))
+    bounds = date_filter(spec, window)["occ_date"]
+    lo, hi = bounds["$gte"], bounds["$lt"]
+
+    assert lo <= "2026-08-20 00:00:00.000" < hi, "하한 당일 0시 정각"
+    assert lo <= "2026-08-20 00:0:00.011" < hi, "분이 한 자리여도 들어온다"
+    assert lo <= "2026-09-04 23:59:59.999999" < hi, "어제 마지막 마이크로초"
+    assert not (lo <= "2026-08-19 23:59:59.999" < hi), "하루 전은 빠진다"
+    assert not (lo <= "2026-09-05 00:00:00.000" < hi), "오늘은 빠진다"
+
+
+def test_경계는_parse_formats가_아니라_date_format이_정한다():
+    """읽는 형식이 여러 개여도 **자를 때는 하나**다 — 둘이면 어디서 자를지 모른다."""
+    spec = source(parse_formats=["%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"])
+    window = build_window(WindowSpec(), today=date(2026, 9, 7))
+    assert date_filter(spec, window)["occ_date"]["$gte"] == "2026-08-20 00:00:00"
+
+
+def test_첫_번째로_성공한_형식을_쓴다():
+    """순서가 의미를 바꾸지 않는지 — 소수점 있는 값과 없는 값이 서로 간섭하면 안 된다."""
+    a = source(parse_formats=["%Y-%m-%d %H:%M:%S.%f"])
+    b = source(date_format="%Y-%m-%d %H:%M:%S.%f",
+               parse_formats=["%Y-%m-%d %H:%M:%S"])
+    for spec in (a, b):
+        assert parse_moment(spec, "2026-08-26 01:02:03") == datetime(2026, 8, 26, 1, 2, 3)
+        assert parse_moment(spec, "2026-08-26 01:02:03.5") == \
+            datetime(2026, 8, 26, 1, 2, 3, 500000)

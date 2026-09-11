@@ -6,6 +6,9 @@
     "collection": "alarm",
     "date_field": "occ_date",
     "date_format": "%Y-%m-%d %H:%M:%S",
+    "parse_formats": [
+      "%Y-%m-%d %H:%M:%S.%f"
+    ],
     "fields": {
       "gbm": "gbm",
       "plant": "plant",
