@@ -62,8 +62,29 @@ def test_읽지_못한_법인이_이름으로_남는다(source, window):
 
 
 def test_데이터_품질_문제가_이슈로_올라간다(source, window):
+    """건수만이 아니라 **실제 값**이 함께 실려야 다음 행동이 정해진다."""
     facts = build([doc(YESTERDAY, status="?")], source=source, window=window)
-    assert "status가 정수가 아닌 문서 1건" in fact_sheet(facts)["⑬ 이슈"]["데이터 품질"]
+    quality = fact_sheet(facts)["⑬ 이슈"]["데이터 품질"]
+    assert quality == ["status가 정수가 아닌 문서 1건 — 실제 값: '?'"]
+
+
+def test_읽은_양에_버린_이유가_붙는다(source, window):
+    """"받아온 13,179 − 쓴 973"의 차이를 사람이 직접 맞춰 볼 수 있어야 한다."""
+    facts = build([doc(YESTERDAY), {"occ_date": "2026-09-04T09:00:00"}],
+                  source=source, window=window)
+    volume = fact_sheet(facts)["⑬ 이슈"]["읽은 양"][0]
+    assert volume["받아온 문서"] == 2 and volume["집계에 쓴 행"] == 1
+    assert volume["버린 이유"] == {"날짜 형식이 안 맞음": 1}
+    assert "설명되지 않은 차이" not in volume
+
+
+def test_설명되지_않는_차이는_숨기지_않는다(source, window):
+    """세지 않는 탈락 경로가 생기면 드러나야 다음 사람이 그것을 찾는다."""
+    facts = build([doc(YESTERDAY)], source=source, window=window, sites=(
+        SiteOutcome(gbm="mx", fct="gumi", status="ok", fetched=100, kept=1,
+                    problems=RowProblems(unreadable_date=5, date_samples=("'x'",))),))
+    volume = fact_sheet(facts)["⑬ 이슈"]["읽은 양"][0]
+    assert volume["설명되지 않은 차이"] == 94
 
 
 def test_읽은_양은_항상_남는다(source, window):

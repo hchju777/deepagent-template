@@ -72,9 +72,26 @@ class RowProblems:
     unreadable_status: int = 0        # status가 정수가 아니었다
     missing_fields: Counter = field(default_factory=Counter)
     gbm_mismatch: int = 0             # 문서의 gbm이 사이트의 gbm과 달랐다
+    # **실제로 실패한 값들.** 건수만 있으면 "44,507건이 형식에 안 맞는다"까지만
+    # 알고, 그 다음에 할 수 있는 일이 대상 DB를 직접 뒤지는 것밖에 없다. 값을
+    # 몇 개만 보여 주면 "아, T가 들어 있구나"로 5초에 끝난다.
+    date_samples: tuple[str, ...] = ()
+    status_samples: tuple[str, ...] = ()
 
     def total_dropped(self) -> int:
         return self.unreadable_date + self.missing_date + self.outside_range + self.not_wanted
+
+    def dropped_breakdown(self) -> dict[str, int]:
+        """버린 이유별 건수. **0인 항목은 넣지 않는다** — 0으로 가득한 표는 안 읽힌다.
+
+        "받아온 13,179건 − 집계에 쓴 973건"의 차이를 사람이 직접 맞춰 볼 수 있어야
+        한다. 합이 안 맞으면 이 층에 세지 않는 탈락 경로가 있다는 뜻이다.
+        """
+        named = {"날짜 형식이 안 맞음": self.unreadable_date,
+                 "날짜 필드 없음": self.missing_date,
+                 "조회 범위 밖": self.outside_range,
+                 "집계 대상 날이 아님(주말 등)": self.not_wanted}
+        return {name: count for name, count in named.items() if count}
 
     def merge(self, other: "RowProblems") -> "RowProblems":
         return RowProblems(
@@ -84,7 +101,9 @@ class RowProblems:
             not_wanted=self.not_wanted + other.not_wanted,
             unreadable_status=self.unreadable_status + other.unreadable_status,
             missing_fields=self.missing_fields + other.missing_fields,
-            gbm_mismatch=self.gbm_mismatch + other.gbm_mismatch)
+            gbm_mismatch=self.gbm_mismatch + other.gbm_mismatch,
+            date_samples=_merge_samples(self.date_samples, other.date_samples),
+            status_samples=_merge_samples(self.status_samples, other.status_samples))
 
     def describe(self) -> list[str]:
         """사람이 읽을 한 줄짜리 설명들. 문제가 없으면 빈 목록."""
@@ -93,17 +112,27 @@ class RowProblems:
             lines.append(f"날짜 필드가 없는 문서 {self.missing_date}건")
         if self.unreadable_date:
             lines.append(f"날짜 형식이 맞지 않는 문서 {self.unreadable_date}건 "
-                         f"— date_format 설정을 확인해야 한다")
+                         f"— 실제 값: {_show(self.date_samples)}. "
+                         f"date_format을 이 값에 맞추거나 parse_formats에 더해라")
         if self.outside_range:
             lines.append(f"조회 범위 밖 문서 {self.outside_range}건 "
                          f"— 문자열 날짜 비교가 의도대로 안 되고 있다는 신호다")
         if self.unreadable_status:
-            lines.append(f"status가 정수가 아닌 문서 {self.unreadable_status}건")
+            lines.append(f"status가 정수가 아닌 문서 {self.unreadable_status}건 "
+                         f"— 실제 값: {_show(self.status_samples)}")
         for name, count in sorted(self.missing_fields.items()):
             lines.append(f"{name} 필드가 없는 문서 {count}건")
         if self.gbm_mismatch:
             lines.append(f"문서의 gbm이 사이트와 다른 문서 {self.gbm_mismatch}건")
         return lines
+
+
+# 예시를 몇 개까지 들고 있을 것인가. 상한이 있는 이유: 5만 건이 전부 다른 형태면
+# 그 5만 개를 전부 들고 리포트에 싣게 된다. 3~5개면 형태는 이미 드러난다.
+SAMPLE_LIMIT = 5
+
+# 값을 그대로 싣기 전에 자른다 — 날짜 필드에 문서 전체가 들어 있는 사고도 있다.
+SAMPLE_MAX_LEN = 60
 
 
 class _Tally:
@@ -114,13 +143,37 @@ class _Tally:
         self.unreadable_date = self.missing_date = self.outside_range = 0
         self.not_wanted = self.unreadable_status = self.gbm_mismatch = 0
         self.missing_fields: Counter = Counter()
+        self.date_samples: list[str] = []
+        self.status_samples: list[str] = []
+
+    def sample(self, bucket: list[str], raw) -> None:
+        """서로 **다른** 값만 모은다. 같은 값 5개를 보여 주면 아무것도 안 알려준다."""
+        if len(bucket) >= SAMPLE_LIMIT:
+            return
+        text = repr(raw)[:SAMPLE_MAX_LEN]
+        if text not in bucket:
+            bucket.append(text)
 
     def freeze(self) -> RowProblems:
         return RowProblems(
             unreadable_date=self.unreadable_date, missing_date=self.missing_date,
             outside_range=self.outside_range, not_wanted=self.not_wanted,
             unreadable_status=self.unreadable_status,
-            missing_fields=self.missing_fields, gbm_mismatch=self.gbm_mismatch)
+            missing_fields=self.missing_fields, gbm_mismatch=self.gbm_mismatch,
+            date_samples=tuple(self.date_samples),
+            status_samples=tuple(self.status_samples))
+
+
+def _merge_samples(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
+    merged = list(left)
+    for value in right:
+        if value not in merged and len(merged) < SAMPLE_LIMIT:
+            merged.append(value)
+    return tuple(merged)
+
+
+def _show(samples: tuple[str, ...]) -> str:
+    return ", ".join(samples) if samples else "(예시 없음)"
 
 
 def _text(doc: dict, key: str, tally: _Tally) -> str:
@@ -138,6 +191,7 @@ def _status(doc: dict, key: str, tally: _Tally) -> int | None:
         return None
     if isinstance(raw, bool):          # bool은 int의 하위형이다 — 먼저 걸러야 한다
         tally.unreadable_status += 1
+        tally.sample(tally.status_samples, raw)
         return None
     if isinstance(raw, int):
         return raw
@@ -145,6 +199,7 @@ def _status(doc: dict, key: str, tally: _Tally) -> int | None:
         return int(str(raw).strip())   # 문서에 "0"처럼 문자열로 들어온 경우
     except (ValueError, TypeError):
         tally.unreadable_status += 1
+        tally.sample(tally.status_samples, raw)
         return None
 
 
@@ -173,6 +228,7 @@ def normalize(documents: list[dict], *, source: SourceSpec, window: ReportWindow
         moment = parse_moment(source, raw_date)
         if moment is None:
             tally.unreadable_date += 1
+            tally.sample(tally.date_samples, raw_date)
             continue
         day = moment.date()
         if not window.covers(day):

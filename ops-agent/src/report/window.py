@@ -225,10 +225,12 @@ def parse_moment(source: SourceSpec, raw) -> datetime | None:
         return datetime.combine(raw, time.min)
     if not isinstance(raw, str):
         return None
-    try:
-        return datetime.strptime(raw, source.date_format)
-    except (ValueError, TypeError):
-        return None
+    for fmt in source.formats():
+        try:
+            return datetime.strptime(raw, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
 def parse_day(source: SourceSpec, raw) -> date | None:

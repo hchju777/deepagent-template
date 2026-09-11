@@ -42,6 +42,14 @@ class SourceSpec(StrictModel):
     # 읽는다(`%d/%m/%Y`면 "01/12/2025" < "02/01/2026"이 사전순으로 참이 아니다).
     # `window.py`의 `date_format_problem`이 기동에서 그것을 막는다.
     date_format: str = "%Y-%m-%d %H:%M:%S"
+    # 읽을 때 추가로 시도할 형식들. **쓰는 형식은 하나뿐인데 읽는 형식은 여러 개**인
+    # 비대칭이 의도적이다:
+    #   · 질의 경계는 하나여야 한다 — 두 개면 어느 쪽으로 범위를 자를지 모른다.
+    #   · 저장된 값은 섞여 있을 수 있다. 같은 컬렉션에 "2026-09-04 09:00:00"과
+    #     "2026-09-04T09:00:00"이 함께 있어도, 앞 10글자가 고정폭이면 사전순
+    #     범위 비교는 둘 다에 대해 성립한다. 그런데 strptime은 하나만 통과시킨다.
+    # 순서대로 시도하고 처음 성공한 것을 쓴다.
+    parse_formats: list[str] = []
     fields: FieldMap = FieldMap()
     # 미해제로 보는 status 값. 사내 규약: 0 발생 · 10 접수 · 1 조치시작.
     # 2(조치완료 수동)와 40(조치완료 자동)이 해제다.
@@ -66,6 +74,15 @@ class SourceSpec(StrictModel):
             raise ValueError(f"status_labels에 이름이 없는 unresolved_status — "
                              f"{', '.join(str(v) for v in unnamed)}")
         return self
+
+    def formats(self) -> tuple[str, ...]:
+        """읽을 때 시도할 형식 전부. 경계 형식이 항상 첫 번째다."""
+        seen, ordered = set(), []
+        for fmt in (self.date_format, *self.parse_formats):
+            if fmt not in seen:
+                seen.add(fmt)
+                ordered.append(fmt)
+        return tuple(ordered)
 
     def status_label(self, value: int | None) -> str:
         if value is None:

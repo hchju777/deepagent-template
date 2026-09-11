@@ -113,7 +113,19 @@ def _issues(facts: Facts) -> dict:
     if quality:
         issues["데이터 품질"] = quality
 
-    read = [{"사이트": o.site, "받아온 문서": o.fetched, "집계에 쓴 행": o.kept}
-            for o in facts.ok_sites]
-    issues["읽은 양"] = read
+    issues["읽은 양"] = [_read_volume(o) for o in facts.ok_sites]
     return issues
+
+
+def _read_volume(outcome) -> dict:
+    volume = {"사이트": outcome.site, "받아온 문서": outcome.fetched,
+              "집계에 쓴 행": outcome.kept}
+    dropped = outcome.problems.dropped_breakdown()
+    if dropped:
+        volume["버린 이유"] = dropped
+        # 합이 안 맞으면 이 층에 세지 않는 탈락 경로가 있다는 뜻이다. 숨기지 않고
+        # 드러내야 다음 사람이 그 경로를 찾는다.
+        unexplained = outcome.fetched - outcome.kept - sum(dropped.values())
+        if unexplained:
+            volume["설명되지 않은 차이"] = unexplained
+    return volume

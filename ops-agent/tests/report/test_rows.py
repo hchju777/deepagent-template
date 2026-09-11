@@ -126,3 +126,85 @@ def test_필드_이름을_바꾸면_그대로_따라간다(window):
         source=other, window=window, gbm="mx", fct="gumi")
     assert rows[0].scenario_name == "신호 끊김" and rows[0].line_code == "EQ7"
     assert "created_at" in projection(other)
+
+
+# ── 실패한 값을 보여 준다 ────────────────────────────────────────────
+
+def test_못_읽은_날짜의_실제_값을_보여_준다(source, window):
+    """건수만 있으면 "44,507건이 형식에 안 맞는다"까지만 알고, 그 다음에 할 수
+    있는 일이 대상 DB를 직접 뒤지는 것밖에 없다."""
+    docs = [{"occ_date": "2026-09-04T09:00:00"}, {"occ_date": "2026-09-04 09:00:00.123"}]
+    _, problems = run(docs, source=source, window=window)
+    assert problems.date_samples == ("'2026-09-04T09:00:00'", "'2026-09-04 09:00:00.123'")
+    assert "2026-09-04T09:00:00" in problems.describe()[0]
+
+
+def test_같은_값은_한_번만_예시로_남는다(source, window):
+    """같은 값 5개를 보여 주면 아무것도 안 알려준다."""
+    _, problems = run([{"occ_date": "2026-09-04T09:00:00"}] * 20,
+                      source=source, window=window)
+    assert problems.date_samples == ("'2026-09-04T09:00:00'",)
+    assert problems.unreadable_date == 20
+
+
+def test_예시_개수에_상한이_있다(source, window):
+    from src.report.rows import SAMPLE_LIMIT
+
+    docs = [{"occ_date": f"2026-09-04T{h:02d}:00:00"} for h in range(20)]
+    _, problems = run(docs, source=source, window=window)
+    assert len(problems.date_samples) == SAMPLE_LIMIT
+
+
+def test_아주_긴_값은_잘라서_싣는다(source, window):
+    """날짜 필드에 문서 전체가 들어 있는 사고도 있다."""
+    from src.report.rows import SAMPLE_MAX_LEN
+
+    _, problems = run([{"occ_date": "2026-" + "x" * 5000}], source=source, window=window)
+    assert len(problems.date_samples[0]) <= SAMPLE_MAX_LEN
+
+
+def test_status_실패값도_보여_준다(source, window):
+    _, problems = run([doc(YESTERDAY, status="정상"), doc(YESTERDAY, status=True)],
+                      source=source, window=window)
+    assert problems.status_samples == ("True", "'정상'") or \
+           problems.status_samples == ("'정상'", "True")
+
+
+def test_형식을_더하면_읽힌다(window):
+    """섞여 있는 형식은 `parse_formats`로 해결한다 — 경계 형식은 여전히 하나다."""
+    from src.config.schema_report import SourceSpec
+
+    mixed = [{"occ_date": "2026-09-04 09:00:00"}, {"occ_date": "2026-09-04T10:00:00"},
+             {"occ_date": "2026-09-04"}]
+    strict = SourceSpec(collection="alarm", date_field="occ_date")
+    rows, problems = run(mixed, source=strict, window=window)
+    assert len(rows) == 1 and problems.unreadable_date == 2
+
+    tolerant = SourceSpec(collection="alarm", date_field="occ_date",
+                          parse_formats=["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"])
+    rows, problems = run(mixed, source=tolerant, window=window)
+    assert len(rows) == 3 and problems.unreadable_date == 0
+
+
+def test_경계_형식은_여전히_하나다(window):
+    """질의 범위를 두 형식으로 자를 수는 없다 — 어느 쪽으로 자를지 모른다."""
+    from src.config.schema_report import SourceSpec
+    from src.report.window import date_filter
+
+    source = SourceSpec(collection="alarm", date_field="occ_date",
+                        parse_formats=["%Y-%m-%dT%H:%M:%S"])
+    bounds = date_filter(source, window)["occ_date"]
+    assert bounds["$gte"] == "2026-08-20 00:00:00", "경계는 date_format 하나가 정한다"
+
+
+def test_버린_이유의_합이_맞는다(source, window):
+    """받아온 수 − 쓴 수 = 버린 이유의 합. 안 맞으면 세지 않는 탈락 경로가 있다."""
+    from datetime import date as _date
+
+    docs = [doc(YESTERDAY), {"occ_date": "2026-09-04T09:00:00"},
+            {"status": 0}, doc(_date(2026, 8, 29)), doc(_date(2026, 1, 5))]
+    rows, problems = run(docs, source=source, window=window)
+    assert len(docs) - len(rows) == sum(problems.dropped_breakdown().values())
+    assert problems.dropped_breakdown() == {
+        "날짜 형식이 안 맞음": 1, "날짜 필드 없음": 1,
+        "조회 범위 밖": 1, "집계 대상 날이 아님(주말 등)": 1}

@@ -128,9 +128,11 @@ def _check_scenarios(config_root: Path) -> list[BootError]:
     errors: list[BootError] = []
     for name, scenario in scenarios.items():
         where = f"scenarios/{name}.json"
-        problem = date_format_problem(scenario.source.date_format)
-        if problem:
-            errors.append(BootError(where=f"{where} source.date_format", message=problem))
+        for index, fmt in enumerate(scenario.source.formats()):
+            problem = date_format_problem(fmt)
+            if problem:
+                field = "source.date_format" if index == 0 else "source.parse_formats"
+                errors.append(BootError(where=f"{where} {field}", message=problem))
         if known is None:
             continue
         for site in scenario.scope.sites:
