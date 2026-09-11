@@ -24,6 +24,7 @@
     python -m src report window --today 2026-09-07   그날 돌았다면 어떻게 되는가
     python -m src report aggregate                   실제로 읽어서 숫자를 낸다
     python -m src report aggregate --stub-seeds seeds.json   대상에 안 붙고 돌려 본다
+    python -m src report render --out output/report.html     메일 본문 HTML을 만든다
 """
 import argparse
 import asyncio
@@ -445,24 +446,15 @@ def _report_today(args) -> "date | None":
 
 
 def cmd_report_aggregate(args, env) -> int:
-    from src.report.collect import collect
     from src.report.sheet import fact_sheet
-    from src.report.window import build_window
 
     name, scenario = _pick_scenario(args)
     today = _report_today(args)
     if today is None:
         return 1
+    args._today = today
 
-    seeds = None
-    if args.stub_seeds:
-        # 대상에 안 붙고 집계·렌더링을 끝까지 돌려 보는 길. 사내에서 처음 돌릴 때
-        # "숫자가 이상한 것"과 "못 붙은 것"을 구별하려면 이게 있어야 한다.
-        seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8"))
-
-    window = build_window(scenario.window, today=today)
-    facts = asyncio.run(collect(scenario, config_root=args.config_root, env=env,
-                                window=window, clock=_clock(), seeds=seeds))
+    facts = asyncio.run(_collect_facts(args, env, scenario))
     print(f"  시나리오: {name}  ({scenario.title})")
     if not facts.complete:
         print("  ⚠  표본이 잘렸다 — 아래 건수는 전부 **하한**이다", file=sys.stderr)
@@ -472,6 +464,51 @@ def cmd_report_aggregate(args, env) -> int:
     _out(fact_sheet(facts))
     # 읽지 못한 법인이 있으면 종료 코드로도 말한다 — 스케줄러가 조용한 실패를
     # 알아챌 수 있는 유일한 신호다.
+    return 1 if facts.unavailable else 0
+
+
+async def _collect_facts(args, env, scenario):
+    from src.report.collect import collect
+    from src.report.window import build_window
+
+    seeds = None
+    if args.stub_seeds:
+        seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8"))
+    window = build_window(scenario.window, today=args._today)
+    return await collect(scenario, config_root=args.config_root, env=env,
+                         window=window, clock=_clock(), seeds=seeds)
+
+
+def cmd_report_render(args, env) -> int:
+    from src.presentation.report_html import render
+    from src.report.blocks import build_blocks
+
+    name, scenario = _pick_scenario(args)
+    today = _report_today(args)
+    if today is None:
+        return 1
+    args._today = today
+
+    facts = asyncio.run(_collect_facts(args, env, scenario))
+    blocks = build_blocks(facts)
+    html = render(blocks, title=scenario.title,
+                  generated_at=_clock()().strftime("%Y-%m-%d %H:%M"))
+
+    destination = Path(args.out)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(html, encoding="utf-8")
+
+    print(f"  시나리오: {name}  ({scenario.title})")
+    print(f"  블록 {len(blocks)}개 · {len(html):,}바이트 → {destination}")
+    for block in blocks:
+        mark = "·" if block.has_content else "○"
+        rows = len(block.table.rows) if block.table else 0
+        print(f"    {mark} {block.key:10} {block.title or '(머리말)':14} "
+              f"{'행 ' + str(rows) if rows else ''}")
+    for outcome in facts.unavailable:
+        print(f"  ⚠  {outcome.site}: {outcome.error or outcome.reason}", file=sys.stderr)
+    if not facts.complete:
+        print("  ⚠  표본이 잘렸다 — 본문 숫자는 하한이다", file=sys.stderr)
     return 1 if facts.unavailable else 0
 
 
@@ -578,6 +615,12 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--today", default=None, help="이 날 돌았다고 치고(YYYY-MM-DD)")
     aggregate.add_argument("--stub-seeds", help="이 파일이 있으면 실접속 대신 가짜 데이터를 쓴다")
     aggregate.set_defaults(run=cmd_report_aggregate)
+    render_cmd = report_sub.add_parser("render", help="메일 본문 HTML을 만든다")
+    render_cmd.add_argument("--scenario", default=None)
+    render_cmd.add_argument("--today", default=None, help="이 날 돌았다고 치고(YYYY-MM-DD)")
+    render_cmd.add_argument("--stub-seeds", help="이 파일이 있으면 실접속 대신 가짜 데이터를 쓴다")
+    render_cmd.add_argument("--out", default="output/report.html", help="쓸 파일 경로")
+    render_cmd.set_defaults(run=cmd_report_render)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)

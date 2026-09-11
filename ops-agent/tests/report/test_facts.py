@@ -104,30 +104,49 @@ def test_라인_비중의_분모는_그_GBM이다(source, window):
 
 # ── 급증 ────────────────────────────────────────────────────────────
 
+def test_기준은_어제를_제외한_평일_평균이다(source, window):
+    """검사 대상인 날을 기준에 넣으면 그날이 튈수록 기준도 올라가 신호가 둔해진다."""
+    earlier = [d for d in window.days if d != YESTERDAY]          # 6일
+    facts = build([doc(YESTERDAY)] * 60 + [doc(d) for d in earlier for _ in range(10)],
+                  source=source, window=window)
+    assert facts.baseline(YESTERDAY) == 10.0, "어제 60건이 기준을 끌어올리면 안 된다"
+    assert facts.total(day=YESTERDAY) == 60
+
+
 def test_급증은_배수와_최소_건수를_둘_다_넘겨야_한다(source, window):
     thresholds = Thresholds(spike_ratio=2.0, spike_min_count=10)
-    facts = build([doc(YESTERDAY, plant="gumi")] * 30 + [doc(LAST_WEEK, plant="gumi")] * 10
-                  + [doc(YESTERDAY, plant="sevt")] * 3 + [doc(LAST_WEEK, plant="sevt")],
-                  source=source, window=window, thresholds=thresholds)
+    earlier = [d for d in window.days if d != YESTERDAY]
+    documents = ([doc(YESTERDAY, plant="gumi")] * 30
+                 + [doc(d, plant="gumi") for d in earlier for _ in range(10)]
+                 + [doc(YESTERDAY, plant="sevt")] * 3
+                 + [doc(earlier[0], plant="sevt")])
+    facts = build(documents, source=source, window=window, thresholds=thresholds)
     found = {s.key[0]: s for s in spikes(facts, lambda r: r.plant, day=YESTERDAY)}
-    assert "gumi" in found and found["gumi"].ratio == 3.0
+    assert "gumi" in found and found["gumi"].ratio == 3.0, "30건 vs 평균 10건"
     assert "sevt" not in found, "1건 → 3건은 3배지만 급증이라 부르면 경보 피로가 된다"
 
 
-def test_전주에_없던_것도_건수가_충분하면_급증이다(source, window):
+def test_기준_구간에_없던_것은_신규로_표시된다(source, window):
+    """0 대비 20건은 무한 배다 — 배수 대신 "신규"로 말해야 한다."""
     facts = build([doc(YESTERDAY, plant="gumi")] * 20, source=source, window=window)
     found = spikes(facts, lambda r: r.plant, day=YESTERDAY)
-    assert len(found) == 1 and found[0].baseline == 0
+    assert len(found) == 1
+    assert found[0].baseline == 0.0 and found[0].brand_new is True
+    assert found[0].ratio == 0.0, "무한 배를 숫자로 내놓지 않는다"
 
 
-def test_비교를_끄면_급증을_계산하지_않는다(source):
-    """기준이 없는데 급증을 주장하면 그건 추측이다."""
+def test_급증_기준은_전주_비교_설정과_무관하다(source):
+    """기준이 전주 동요일 하루가 아니라 창 안의 평균이므로, 전주 비교를 꺼도
+    급증은 계산된다 — 둘은 다른 질문에 답한다."""
     from src.config.schema_report import WindowSpec
     from src.report.window import build_window
 
-    window = build_window(WindowSpec(compare_previous_week=False), today=date(2026, 9, 7))
-    facts = build([doc(YESTERDAY)] * 50, source=source, window=window)
-    assert spikes(facts, lambda r: r.plant, day=YESTERDAY) == []
+    off = build_window(WindowSpec(compare_previous_week=False), today=date(2026, 9, 7))
+    earlier = [d for d in off.days if d != YESTERDAY]
+    facts = build([doc(YESTERDAY)] * 50 + [doc(d) for d in earlier for _ in range(5)],
+                  source=source, window=off)
+    found = spikes(facts, lambda r: r.plant, day=YESTERDAY)
+    assert len(found) == 1 and found[0].baseline == 5.0
 
 
 # ── 반복 ────────────────────────────────────────────────────────────

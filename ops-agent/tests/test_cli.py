@@ -215,3 +215,18 @@ def test_llm_check가_echo로도_결과를_낸다(echo_config, capsys):
     main(["--config-root", str(echo_config), "--env-file", "/dev/null", "llm", "check"])
     out = capsys.readouterr().out
     assert "붙는가" in out and "JSON" in out
+
+
+def test_report_render가_파일을_쓴다(echo_config, tmp_path, capsys):
+    """`--out`이 없는 디렉터리를 가리켜도 만들어져야 한다 — 첫 실행이 그 상황이다."""
+    from src.__main__ import main
+
+    out = tmp_path / "없던" / "디렉터리" / "report.html"
+    code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
+                 "report", "render", "--today", "2026-09-07", "--out", str(out)])
+    assert code in (0, 1)
+    assert out.exists(), "파일이 안 만들어졌다"
+    html = out.read_text(encoding="utf-8")
+    assert html.startswith("<!DOCTYPE html>") and html.rstrip().endswith("</html>")
+    assert "일일 알람 리포트" in html
+    assert "블록" in capsys.readouterr().out

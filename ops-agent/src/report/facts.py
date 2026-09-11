@@ -124,6 +124,21 @@ class Facts:
 
     # ── 비교 ─────────────────────────────────────────────────────────
 
+    def baseline(self, day: date, **filters) -> float | None:
+        """`day`를 **제외한** 집계 대상 날들의 평균. "평소 수준"이 이것이다.
+
+        제외하는 이유: 검사 대상인 날을 기준에 넣으면 그날이 튈수록 기준도 같이
+        올라가서 신호가 둔해진다(어제 3배가 터졌는데 기준이 1.3배 올라가 버린다).
+
+        전주 동요일 **한 날**과 비교하는 것보다 이쪽이 기준으로 더 안전하다 —
+        전주 그 하루가 마침 이상했으면 비교가 통째로 거짓이 된다. 전주 동요일은
+        비교 값으로 **함께 보여 주되** 급증 판정의 기준으로는 쓰지 않는다.
+        """
+        others = [d for d in self.window.days if d != day]
+        if not others:
+            return None
+        return sum(self.total(day=d, **filters) for d in others) / len(others)
+
     def compare(self, day: date, **filters) -> "Change":
         """어제 대비 / 전주 동요일 대비. 비교 대상이 조회 범위 밖이면 None."""
         previous_day = next((d for d in reversed(self.window.days) if d < day), None)
@@ -205,29 +220,43 @@ def line_ranking(facts: Facts, *, day: date, limit: int | None = None) -> list[S
 class Spike:
     key: tuple[str, ...]
     count: int
-    baseline: int
-    baseline_day: date
+    baseline: float          # 직전 평일 평균이므로 정수가 아니다
+    baseline_days: int
 
     @property
     def ratio(self) -> float:
+        """기준이 0이면 배수를 내지 않는다 — 0 대비 20건은 무한 배다."""
         return self.count / self.baseline if self.baseline else 0.0
+
+    @property
+    def brand_new(self) -> bool:
+        """기준 구간에 아예 없던 것. "몇 배"가 아니라 "신규"로 표시해야 한다."""
+        return self.baseline == 0
 
 
 def spikes(facts: Facts, key: Callable[[AlarmRow], K], *, day: date) -> list[Spike]:
-    """전주 동요일 대비 급증. 임계값은 config(`thresholds`)가 정한다.
+    """**직전 평일 평균 대비** 급증. 임계값은 config(`thresholds`)가 정한다.
+
+    기준이 전주 동요일 하루가 아닌 이유는 `Facts.baseline`에 적혀 있다 — 그 하루가
+    마침 이상했으면 비교가 통째로 거짓이 된다.
 
     건수 하한(`spike_min_count`)이 있는 이유: 1건 → 3건은 3배지만 그걸 급증이라
     부르면 리포트가 매일 급증으로 가득 차고, 사람은 그 섹션을 안 보게 된다.
     """
-    partner = facts.window.previous_of(day)
-    if partner is None:
+    others = [d for d in facts.window.days if d != day]
+    if not others:
         return []
     now = Counter(key(r) for r in facts.select(day=day))
-    before = Counter(key(r) for r in facts.select(day=partner))
-    found = [Spike(key=_as_tuple(k), count=c, baseline=before.get(k, 0), baseline_day=partner)
-             for k, c in now.items()
-             if c >= facts.thresholds.spike_min_count
-             and c >= before.get(k, 0) * facts.thresholds.spike_ratio]
+    before = Counter(key(r) for r in facts.select(days=frozenset(others)))
+    found = []
+    for item, count in now.items():
+        mean = before.get(item, 0) / len(others)
+        if count < facts.thresholds.spike_min_count:
+            continue
+        if count < mean * facts.thresholds.spike_ratio:
+            continue
+        found.append(Spike(key=_as_tuple(item), count=count, baseline=mean,
+                           baseline_days=len(others)))
     return sorted(found, key=lambda s: (-s.ratio, -s.count, s.key))
 
 

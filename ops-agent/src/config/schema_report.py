@@ -118,8 +118,9 @@ class Thresholds(StrictModel):
     밀도가 다르고, 운영이 돌면서 "이 정도는 평소"의 감각이 바뀐다. 코드에 박으면
     그 감각이 바뀔 때마다 배포가 필요하다.
     """
-    # 전주 동요일 대비 이 배수 이상이면 급증으로 본다.
-    spike_ratio: float = Field(default=2.0, gt=1.0)
+    # **직전 평일 평균** 대비 이 배수 이상이면 급증으로 본다. 기준이 전주 동요일
+    # 하루가 아닌 이유는 `Facts.baseline`에 적혀 있다.
+    spike_ratio: float = Field(default=1.5, gt=1.0)
     # 단, 건수가 이보다 적으면 급증으로 보지 않는다. 1건 → 3건은 3배지만
     # 그걸 급증이라 부르면 리포트가 매일 급증으로 가득 찬다(경보 피로).
     spike_min_count: int = Field(default=10, ge=1)
