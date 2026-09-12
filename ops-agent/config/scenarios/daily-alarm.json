@@ -1,0 +1,54 @@
+{
+  "kind": "alarm_daily",
+  "title": "일일 알람 리포트",
+  "enabled": true,
+  "source": {
+    "collection": "alarm",
+    "date_field": "occ_date",
+    "date_format": "%Y-%m-%d %H:%M:%S",
+    "parse_formats": [
+      "%Y-%m-%d %H:%M:%S.%f"
+    ],
+    "fields": {
+      "gbm": "gbm",
+      "plant": "plant",
+      "part_code": "part_code",
+      "line_code": "line_code",
+      "line_name": "line_name",
+      "scenario_id": "scen_id",
+      "scenario_name": "scen_name",
+      "status": "status"
+    },
+    "unresolved_status": [
+      0,
+      10,
+      1
+    ],
+    "sample": 120000
+  },
+  "window": {
+    "business_days": 7,
+    "compare_previous_week": true,
+    "exclude_weekdays": [
+      "sat",
+      "sun"
+    ]
+  },
+  "scope": {
+    "gbms": [
+      "mx"
+    ],
+    "sites": [
+      "mx/gumi",
+      "mx/sevt"
+    ],
+    "max_parallel_sites": 4
+  },
+  "thresholds": {
+    "spike_ratio": 1.5,
+    "spike_min_count": 10,
+    "repeat_min_count": 5,
+    "repeat_min_days": 3,
+    "top_n": 5
+  }
+}

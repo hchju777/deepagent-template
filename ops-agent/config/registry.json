@@ -1,0 +1,6 @@
+{
+  "sites": [
+    { "gbm": "mx", "fct": "gumi", "enabled": true },
+    { "gbm": "mx", "fct": "sevt", "enabled": true }
+  ]
+}

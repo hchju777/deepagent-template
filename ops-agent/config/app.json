@@ -1,0 +1,32 @@
+{
+  "timezone": "Asia/Seoul",
+  "output_dir": "output",
+  "llm": {
+    "adapter": "chat_model",
+    "provider": "openai_compatible",
+    "model": "gauss-o-flash",
+    "model_id": "339",
+    "temperature": 0.0,
+    "base_url": "${LLM_BASE_URL}",
+    "pass_key": "${LLM_PASS_KEY}",
+    "client_key": "${LLM_CLIENT_KEY}",
+    "tls": {
+      "use_system_store": true
+    },
+    "expect_reported_model": "openai/gpt-oss-120b"
+  },
+  "mail": {
+    "enabled": true,
+    "recipients": [
+      "ops-mx-gumi@example.com",
+      "line-lead@example.com"
+    ],
+    "api_base": "https://agent.example.net/api/v1/run",
+    "agent_id": "${MAIL_AGENT_ID}",
+    "api_key": "${MAIL_AGENT_API_KEY}",
+    "subject_prefix": "[운영리포트]",
+    "tls": {
+      "use_system_store": true
+    }
+  }
+}
