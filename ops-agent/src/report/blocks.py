@@ -11,7 +11,7 @@
 함수 하나를 쓰고 `BLOCKS`에 넣는다. 그게 전부다 —
 
 ```python
-def _my_section(facts: Facts) -> Block:
+def _my_section(facts: Facts, comments) -> Block:
     return Block(key="내_섹션", title="내 섹션",
                  table=Table(columns=(...), rows=(...)))
 BLOCKS = (..., _my_section)
@@ -278,7 +278,7 @@ def _plants_label(plants: tuple[str, ...], *, limit: int = 2) -> str:
 
 # ── 블록들 ──────────────────────────────────────────────────────────
 
-def _header(facts: Facts) -> Block:
+def _header(facts: Facts, comments) -> Block:
     window = facts.window
     span = f"{day_label(window.days[0])}–{day_label(window.yesterday)}"
     return Block(
@@ -288,7 +288,7 @@ def _header(facts: Facts) -> Block:
              f"비교 구간 {span} 중 평일 {len(window.days)}일")
 
 
-def _coverage(facts: Facts) -> Block:
+def _coverage(facts: Facts, comments) -> Block:
     """읽지 못한 법인이 있을 때만 나타난다 — 있을 때만 의미가 있는 경고다.
 
     맨 위에 두는 이유: 아래 모든 숫자가 **일부 법인만의 합**이라는 사실을 숫자보다
@@ -314,7 +314,7 @@ def _coverage(facts: Facts) -> Block:
     return Block(key="coverage", banners=tuple(banners), required=False)
 
 
-def _summary_tiles(facts: Facts) -> Block:
+def _summary_tiles(facts: Facts, comments) -> Block:
     yesterday = facts.window.yesterday
     total = facts.total(day=yesterday)
     unresolved = facts.total(day=yesterday, unresolved=True)
@@ -355,18 +355,41 @@ def _summary_tiles(facts: Facts) -> Block:
     ))
 
 
-def _llm_comment(facts: Facts) -> Block:
-    """9e에서 LLM 서술이 들어올 자리. 지금은 자리만 잡아 둔다.
+def _llm_comment(facts: Facts, comments) -> Block:
+    """LLM 서술. **실패한 GBM도 이름과 이유로 남는다.**
 
-    비어 있어도 섹션을 남기는 이유: 9e를 붙였을 때 "여기에 들어간다"가 이미
-    정해져 있어야 렌더러를 다시 고치지 않는다.
+    조용히 빼면 읽는 사람은 "그 GBM은 특별할 게 없었다"로 읽는다 — 실제로는 답을
+    못 받았거나 거부한 것이다. 리포트가 낼 수 있는 조용한 거짓말이다.
     """
-    return Block(key="comment", title="주요 이슈 분석",
-                 lead="숫자는 집계 코드가 확정했고, 서술은 그 숫자만 보고 작성됩니다.",
-                 empty="(LLM 코멘트는 아직 붙지 않았습니다 — 9e)")
+    rows: list[tuple[Cell, ...]] = []
+    for comment in comments:
+        if comment.status == "ok":
+            body, tone = comment.text, "plain"
+        else:
+            label = {"rejected": "서술을 폐기했습니다", "error": "LLM 오류",
+                     "skipped": "건너뜀"}[comment.status]
+            body = f"({label} — {comment.reason})"
+            tone = "muted"
+        rows.append((_gbm_cell(facts, comment.gbm), Cell(body, tone=tone)))
+
+    models = sorted({c.model for c in comments if c.model})
+    lead = "숫자는 집계 코드가 확정했고, 서술은 그 숫자만 보고 작성됐습니다."
+    if models:
+        lead += f" 모델 {', '.join(models)}."
+    rejected = [c for c in comments if c.status == "rejected"]
+    if rejected:
+        # 폐기 사실을 제목 아래에 적는다. 이건 모델이 사실에 없는 숫자를 썼다는
+        # 뜻이고, 프롬프트나 모델을 손봐야 한다는 신호다.
+        lead += (f" {len(rejected)}개 GBM의 서술이 사실 검증에서 폐기됐습니다 — "
+                 f"사실에 없는 숫자가 들어갔습니다.")
+
+    return Block(key="comment", title="주요 이슈 분석", lead=lead,
+                 table=Table(columns=(Column("GBM"), Column("분석")),
+                             rows=tuple(rows)) if rows else None,
+                 empty="LLM 서술이 꺼져 있습니다(시나리오 config의 comment.enabled).")
 
 
-def _gbm_summary(facts: Facts) -> Block:
+def _gbm_summary(facts: Facts, comments) -> Block:
     yesterday = facts.window.yesterday
     columns = (Column("GBM"), Column("어제 건수", "right"), Column("미해제", "right"),
                Column("미해제율", "right"),
@@ -443,7 +466,7 @@ def _trend_chart(facts: Facts, gbms: list[str], daily: dict) -> Chart:
                          + tight("GBM 간 크기 비교는 아래 표로."))
 
 
-def _daily_trend(facts: Facts) -> Block:
+def _daily_trend(facts: Facts, comments) -> Block:
     """일별 추이 — 차트와 표를 **둘 다** 낸다.
 
     둘은 다른 질문에 답하므로 중복이 아니다: 차트는 **모양**(어느 날 솟았나,
@@ -511,7 +534,7 @@ def _unresolved_in(facts: Facts, *, gbm: str, match) -> int:
                                         unresolved=True) if match(r)])
 
 
-def _issues(facts: Facts) -> Block:
+def _issues(facts: Facts, comments) -> Block:
     """급증·신규·소멸·반복·데이터를 **한 표에** 모은다.
 
     종류별로 표를 쪼개면 각 표가 비어 있기 쉽고, 읽는 사람은 다섯 군데를 확인해야
@@ -607,7 +630,7 @@ def _issues(facts: Facts) -> Block:
                  empty="임계값을 넘은 이슈가 없습니다.")
 
 
-def _plant_top(facts: Facts) -> Block:
+def _plant_top(facts: Facts, comments) -> Block:
     """법인 TOP — **GBM별로** 상위 N개."""
     groups = ranking_by_gbm(facts, lambda r: r.plant, day=facts.window.yesterday,
                             limit=facts.thresholds.top_per_gbm)
@@ -630,7 +653,7 @@ def _plant_top(facts: Facts) -> Block:
                  empty="어제 알람이 없습니다.")
 
 
-def _scenario_top(facts: Facts) -> Block:
+def _scenario_top(facts: Facts, comments) -> Block:
     """알람 항목 TOP — **GBM별로** 상위 N개.
 
     전사 하나로 줄을 세우면 알람이 많은 GBM의 항목이 목록을 차지하고, 다른 GBM에서
@@ -657,7 +680,7 @@ def _scenario_top(facts: Facts) -> Block:
                  empty="어제 알람이 없습니다.")
 
 
-def _line_top(facts: Facts) -> Block:
+def _line_top(facts: Facts, comments) -> Block:
     """라인 TOP — **GBM별로** 상위 N개.
 
     전사 TOP N이었을 때 상위 10칸이 전부 한 GBM으로 채워져 다른 GBM의 법인은 한
@@ -680,7 +703,7 @@ def _line_top(facts: Facts) -> Block:
                  empty="어제 알람이 없습니다.")
 
 
-def _coverage_detail(facts: Facts) -> Block:
+def _coverage_detail(facts: Facts, comments) -> Block:
     """맨 아래 — 무엇을 읽었고 무엇을 못 읽었는가.
 
     `required=True`인 이유: 전부 정상이어도 "12 / 12 법인을 읽었다"가 찍혀야
@@ -713,16 +736,18 @@ def _coverage_detail(facts: Facts) -> Block:
 
 
 # **단일 진실 소스.** 순서가 곧 리포트의 순서다.
-BLOCKS: tuple[Callable[[Facts], Block], ...] = (
+# 모든 빌더가 `(facts, comments)`를 받는다. 대부분 comments를 쓰지 않지만 서명이
+# 균일해야 렌더러가 순회만으로 끝난다 — 예외를 두면 그 예외를 아는 코드가 생긴다.
+BLOCKS: tuple[Callable[[Facts, tuple], Block], ...] = (
     _header, _coverage, _summary_tiles, _llm_comment, _gbm_summary, _daily_trend,
     _issues, _plant_top, _scenario_top, _line_top, _coverage_detail,
 )
 
 
-def build_blocks(facts: Facts) -> list[Block]:
+def build_blocks(facts: Facts, comments: tuple = ()) -> list[Block]:
     """전부 만들어서 보일 것만 돌려준다. 키가 겹치면 바로 실패한다 —
     겹친 키는 렌더러가 둘 중 하나만 그리거나 두 번 그리게 만든다."""
-    blocks = [builder(facts) for builder in BLOCKS]
+    blocks = [builder(facts, comments) for builder in BLOCKS]
     keys = [b.key for b in blocks]
     duplicated = {k for k in keys if keys.count(k) > 1}
     if duplicated:

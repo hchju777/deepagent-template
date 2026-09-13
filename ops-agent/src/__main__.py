@@ -25,6 +25,7 @@
     python -m src report aggregate                   실제로 읽어서 숫자를 낸다
     python -m src report aggregate --stub-seeds seeds.json   대상에 안 붙고 돌려 본다
     python -m src report render --out output/report.html     메일 본문 HTML을 만든다
+    python -m src report prompt --gbm-only mx    LLM에게 나갈 프롬프트를 그대로 본다
 """
 import argparse
 import asyncio
@@ -35,8 +36,8 @@ from datetime import datetime
 from pathlib import Path
 
 from src.boot import validate_boot
-from src.config.loader import (ConfigError, load_app_config, load_registry,
-                               load_scenarios, load_site_config)
+from src.config.loader import (ConfigError, load_app_config, load_prompt,
+                               load_registry, load_scenarios, load_site_config)
 from src.infrastructure.factory import build_adapters
 
 
@@ -479,6 +480,61 @@ async def _collect_facts(args, env, scenario):
                          window=window, clock=_clock(), seeds=seeds)
 
 
+async def _comments(args, env, scenario, facts):
+    """LLM 서술. **LLM이 없거나 죽어도 빈 튜플을 돌려주고 리포트는 나간다.**"""
+    from src.report.comment import comment_on
+
+    if not scenario.comment.enabled:
+        return ()
+    app = load_app_config(args.config_root, env=env)
+    llm = None
+    if app.llm is not None:
+        from src.infrastructure.llm_factory import build_llm
+        llm = build_llm(app.llm, clock=_clock())
+    return await comment_on(facts, llm=llm, spec=scenario.comment,
+                            template=load_prompt(args.config_root, scenario),
+                            clock=_clock())
+
+
+def cmd_report_prompt(args, env) -> int:
+    """나갈 프롬프트를 그대로 찍는다.
+
+    `report window`·`report aggregate`와 같은 성격의 검토 도구다. 사내 게이트웨이로
+    무엇이 나가는지 **사람이 읽어 보고** 판단할 수 있어야 한다 — 프롬프트에 접속
+    정보나 예상 밖의 데이터가 섞여 있으면 여기서 드러난다.
+    """
+    from src.report.comment import allowed_numbers, build_prompt, facts_block
+
+    name, scenario = _pick_scenario(args)
+    today = _report_today(args)
+    if today is None:
+        return 1
+    args._today = today
+    facts = asyncio.run(_collect_facts(args, env, scenario))
+
+    try:
+        template = load_prompt(args.config_root, scenario)
+    except ConfigError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
+
+    targets = [args.gbm_only] if args.gbm_only else list(facts.gbm_order())
+    print(f"  시나리오: {name}  ({scenario.title})")
+    print(f"  프롬프트: {scenario.comment.prompt_file}  "
+          f"· 상한 {scenario.comment.max_chars}자  "
+          f"· enabled={scenario.comment.enabled}\n")
+    for gbm in targets:
+        prompt = build_prompt(template, facts, gbm)
+        allowed = sorted(allowed_numbers(facts_block(facts, gbm)))
+        print("─" * 78)
+        print(prompt)
+        print("─" * 78)
+        print(f"  {gbm}: {len(prompt):,}자 · 허용 숫자 {len(allowed)}개 "
+              f"→ {', '.join(f'{v:g}' for v in allowed[:20])}"
+              f"{' …' if len(allowed) > 20 else ''}\n")
+    return 0
+
+
 def cmd_report_render(args, env) -> int:
     from src.presentation.report_html import render
     from src.report.blocks import build_blocks
@@ -490,7 +546,8 @@ def cmd_report_render(args, env) -> int:
     args._today = today
 
     facts = asyncio.run(_collect_facts(args, env, scenario))
-    blocks = build_blocks(facts)
+    comments = asyncio.run(_comments(args, env, scenario, facts))
+    blocks = build_blocks(facts, comments)
     html = render(blocks, title=scenario.title,
                   generated_at=_clock()().strftime("%Y-%m-%d %H:%M"))
 
@@ -505,6 +562,10 @@ def cmd_report_render(args, env) -> int:
         rows = len(block.table.rows) if block.table else 0
         print(f"    {mark} {block.key:10} {block.title or '(머리말)':14} "
               f"{'행 ' + str(rows) if rows else ''}")
+    for comment in comments:
+        if comment.failed:
+            print(f"  ⚠  코멘트 {comment.gbm}: {comment.status} — {comment.reason}",
+                  file=sys.stderr)
     for outcome in facts.unavailable:
         print(f"  ⚠  {outcome.site}: {outcome.error or outcome.reason}", file=sys.stderr)
     if not facts.complete:
@@ -621,6 +682,12 @@ def build_parser() -> argparse.ArgumentParser:
     render_cmd.add_argument("--stub-seeds", help="이 파일이 있으면 실접속 대신 가짜 데이터를 쓴다")
     render_cmd.add_argument("--out", default="output/report.html", help="쓸 파일 경로")
     render_cmd.set_defaults(run=cmd_report_render)
+    prompt_cmd = report_sub.add_parser("prompt", help="LLM에게 나갈 프롬프트를 본다")
+    prompt_cmd.add_argument("--scenario", default=None)
+    prompt_cmd.add_argument("--today", default=None, help="이 날 돌았다고 치고(YYYY-MM-DD)")
+    prompt_cmd.add_argument("--stub-seeds", help="실접속 대신 가짜 데이터를 쓴다")
+    prompt_cmd.add_argument("--gbm-only", default=None, help="이 GBM 하나만")
+    prompt_cmd.set_defaults(run=cmd_report_prompt)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)

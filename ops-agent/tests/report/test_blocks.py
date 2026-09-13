@@ -47,7 +47,7 @@ def test_블록_키가_겹치지_않는다(source, window):
 def test_순서가_BLOCKS의_순서다(source, window):
     """렌더러는 순회만 한다 — 순서를 따로 들고 있으면 둘이 어긋난다."""
     facts = build([doc(YESTERDAY)], source=source, window=window)
-    declared = [b(facts).key for b in BLOCKS]
+    declared = [b(facts, ()).key for b in BLOCKS]
     assert keys(facts) == [k for k in declared if k != "coverage"]
 
 
@@ -55,7 +55,7 @@ def test_순서가_BLOCKS의_순서다(source, window):
 def test_블록은_혼자서도_만들어진다(builder, source, window):
     """블록 하나를 빼도 나머지가 안 깨지려면 서로를 모르고 있어야 한다."""
     facts = build([doc(YESTERDAY)] * 3, source=source, window=window)
-    block = builder(facts)
+    block = builder(facts, ())
     assert isinstance(block, Block) and block.key
 
 

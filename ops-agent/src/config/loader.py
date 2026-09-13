@@ -131,3 +131,23 @@ def load_scenarios(config_root: Path) -> dict[str, ReportScenario]:
         scenarios[path.stem] = _build(ReportScenario, _read_json(path, required=True),
                                       where=where)
     return scenarios
+
+
+def load_prompt(config_root: Path, scenario: ReportScenario) -> str:
+    """시나리오의 프롬프트 파일. **`{facts}` 자리가 없으면 거부한다.**
+
+    없으면 LLM이 숫자를 하나도 못 받고, 그러면 쓴 것이 전부 추측이 되어 검증에서
+    통째로 폐기된다 — "코멘트가 항상 비어 있다"는 증상으로 나타나고 원인을 찾기
+    어렵다. 기동에서 막는 편이 낫다.
+    """
+    path = config_root / scenario.comment.prompt_file
+    if not path.exists():
+        raise ConfigError(f"프롬프트 파일이 없다 — {path}")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"프롬프트 파일을 읽을 수 없다 — {path}: {exc}") from exc
+    if "{facts}" not in text:
+        raise ConfigError(f"{scenario.comment.prompt_file}에 {{facts}} 자리가 없다 — "
+                          f"LLM이 숫자를 하나도 못 받고 전부 폐기된다")
+    return text

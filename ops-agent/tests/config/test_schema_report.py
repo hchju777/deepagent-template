@@ -258,3 +258,60 @@ def test_시나리오_파일이_리포에_들어_있다():
     넣고 실제 트리에는 없었기 때문이다. 트리가 하나가 된 뒤에도 그 파일이
     사라지지 않는지 본다."""
     assert load_scenarios(CONFIG), f"{CONFIG / 'scenarios'}가 비어 있다"
+
+
+# ── LLM 코멘트 설정 ─────────────────────────────────────────────────
+
+def test_프롬프트_경로는_config_안이어야_한다():
+    """사람이 적는 config 값으로 config 트리 밖 파일을 읽게 하면 안 된다."""
+    from src.config.schema_report import CommentSpec
+
+    for bad in ("/etc/passwd", "../secret.txt", "a/../../b"):
+        with pytest.raises(ValidationError, match="상대 경로"):
+            CommentSpec(prompt_file=bad)
+
+
+def test_코멘트는_기본으로_꺼져_있다():
+    """LLM 호출은 돈과 시간을 쓴다 — 켜는 것이 명시적 선택이어야 한다."""
+    from src.config.schema_report import CommentSpec
+
+    assert CommentSpec().enabled is False
+
+
+def write_prompt(root: Path, text: str, name: str = "prompts/alarm-daily.txt") -> None:
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_프롬프트_파일을_읽는다(tmp_path):
+    from src.config.loader import load_prompt
+
+    write(tmp_path, "daily-alarm.json", scenario(comment={"enabled": True}))
+    write_prompt(tmp_path, "사실:\n{facts}\n")
+    loaded = load_scenarios(tmp_path)["daily-alarm"]
+    assert "{facts}" in load_prompt(tmp_path, loaded)
+
+
+def test_facts_자리가_없으면_거부한다(tmp_path):
+    """없으면 LLM이 숫자를 하나도 못 받고 전부 폐기된다 — "코멘트가 항상 비어
+    있다"는 증상으로만 드러나서 원인을 찾기 어렵다."""
+    from src.config.loader import load_prompt
+
+    write(tmp_path, "daily-alarm.json", scenario(comment={"enabled": True}))
+    write_prompt(tmp_path, "숫자 없이 잘 써 봐라")
+    loaded = load_scenarios(tmp_path)["daily-alarm"]
+    with pytest.raises(ConfigError, match="자리가 없다"):
+        load_prompt(tmp_path, loaded)
+
+
+def test_프롬프트_파일이_없으면_기동에서_막힌다(config_root):
+    """밤에 "코멘트가 비어 있다"로만 드러나는 종류다."""
+    write(config_root, "daily-alarm.json", scenario(comment={"enabled": True}))
+    assert "프롬프트 파일이 없다" in messages(config_root)
+
+
+def test_코멘트가_꺼져_있으면_프롬프트를_따지지_않는다(config_root):
+    """안 쓰는 파일 때문에 기동이 막히면 안 된다."""
+    write(config_root, "daily-alarm.json", scenario(comment={"enabled": False}))
+    assert messages(config_root) == ""

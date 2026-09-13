@@ -16,8 +16,8 @@ config에 오류가 3개 있을 때 하나씩 던지면 사람은 이 짓을 3�
 """
 from pathlib import Path
 
-from src.config.loader import (ConfigError, load_app_config, load_registry,
-                               load_scenarios, load_site_config)
+from src.config.loader import (ConfigError, load_app_config, load_prompt,
+                               load_registry, load_scenarios, load_site_config)
 from src.domain.base import StrictModel
 
 
@@ -133,6 +133,10 @@ def _check_scenarios(config_root: Path) -> list[BootError]:
             if problem:
                 field = "source.date_format" if index == 0 else "source.parse_formats"
                 errors.append(BootError(where=f"{where} {field}", message=problem))
+        if scenario.comment.enabled:
+            # 프롬프트가 깨진 것은 밤에 "코멘트가 비어 있다"로만 드러난다.
+            errors += _check(config_root, f"{where} comment",
+                             lambda sc=scenario: load_prompt(config_root, sc))
         if known is None:
             continue
         for site in scenario.scope.sites:

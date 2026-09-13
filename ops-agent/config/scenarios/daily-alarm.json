@@ -50,5 +50,11 @@
     "repeat_min_count": 5,
     "repeat_min_days": 3,
     "top_n": 5
+  },
+  "comment": {
+    "enabled": true,
+    "prompt_file": "prompts/alarm-daily.txt",
+    "max_chars": 700,
+    "per_gbm": true
   }
 }

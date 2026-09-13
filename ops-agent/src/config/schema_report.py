@@ -12,6 +12,7 @@
 법인마다 다를 때 손댈 곳이 코드가 된다. **코드는 "어떻게 집계하는가"만 알고,
 "무엇을 읽는가"는 config가 안다.**
 """
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -156,6 +157,38 @@ class Thresholds(StrictModel):
         return self
 
 
+class CommentSpec(StrictModel):
+    """LLM 서술. **숫자는 여기서 만들지 않는다** — 코드가 센 숫자에 말을 붙일 뿐이다.
+
+    ## 왜 프롬프트가 별도 파일인가
+
+    긴 한국어 프롬프트를 JSON 문자열에 넣으면 줄바꿈이 `\n`으로 이스케이프돼서
+    사람이 읽고 고칠 수 없게 된다. 프롬프트는 운영하면서 가장 자주 손대는 것이므로
+    **읽고 고치기 쉬운 형태**여야 한다.
+
+    경로는 config_root 기준 상대 경로다. 시나리오마다 다른 파일을 가리킬 수 있어서,
+    리포트 종류가 늘어도 프롬프트가 섞이지 않는다.
+    """
+    enabled: bool = False
+    prompt_file: str = Field(default="prompts/alarm-daily.txt", min_length=1)
+    # 답의 길이 상한. 넘으면 **자르지 않고 거부한다** — 자르면 문장이 중간에 끊겨서
+    # "무슨 말인지 모를 코멘트"가 리포트에 실린다. 없는 것이 낫다.
+    max_chars: int = Field(default=700, ge=50, le=5000)
+    # GBM별로 따로 물을 것인가. 하나로 묶어 물으면 GBM이 늘어날 때 프롬프트가
+    # 길어지고, 한 GBM의 서술이 다른 GBM의 숫자를 끌어다 쓰기 쉬워진다.
+    per_gbm: bool = True
+
+    @model_validator(mode="after")
+    def _path_stays_inside_config(self):
+        # `../../etc/passwd` 같은 경로를 막는다. 프롬프트 경로는 사람이 적는
+        # config 값이고, 그 값으로 config 트리 밖 파일을 읽게 하면 안 된다.
+        if self.prompt_file.startswith(("/", "\\")) or ".." in Path(
+                self.prompt_file).parts:
+            raise ValueError(f"prompt_file은 config 안의 상대 경로여야 한다 — "
+                             f"{self.prompt_file}")
+        return self
+
+
 class ReportScope(StrictModel):
     # GBM 목록과 각 GBM의 대상 법인은 **사람이 적는다.** registry에서 유추하면
     # 새 사이트를 등록하는 순간 리포트 분모가 조용히 바뀐다.
@@ -194,6 +227,7 @@ class ReportScenario(StrictModel):
     window: WindowSpec = WindowSpec()
     scope: ReportScope
     thresholds: Thresholds = Thresholds()
+    comment: CommentSpec = CommentSpec()
 
     @model_validator(mode="after")
     def _thresholds_fit_the_window(self):
