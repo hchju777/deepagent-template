@@ -68,6 +68,10 @@ class Cell:
     # 색 값 자체는 렌더러가 안다 — 여기에 hex를 쓰면 블록이 HTML을 알게 된다.
     # `tone`과 겹치면 series가 이긴다(정체성이 의미보다 앞서는 칸이기 때문이다).
     series: int | None = None
+    # 여러 문장을 **글머리 기호로 줄바꿈해서** 담는다. 서술 세 문장이 한 덩어리로
+    # 붙어 있으면 읽는 사람이 어디서 끊어야 할지 몰라 눈이 미끄러진다.
+    # 있으면 `text`보다 이것이 그려진다.
+    lines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -364,13 +368,15 @@ def _llm_comment(facts: Facts, comments) -> Block:
     rows: list[tuple[Cell, ...]] = []
     for comment in comments:
         if comment.status == "ok":
-            body, tone = comment.text, "plain"
-        else:
-            label = {"rejected": "서술을 폐기했습니다", "error": "LLM 오류",
-                     "skipped": "건너뜀"}[comment.status]
-            body = f"({label} — {comment.reason})"
-            tone = "muted"
-        rows.append((_gbm_cell(facts, comment.gbm), Cell(body, tone=tone)))
+            # 문장별로 쪼개서 글머리 기호로 준다 — 세 문장이 한 덩어리면 눈이
+            # 미끄러진다. 쪼개는 것은 코드가 하므로 모델이 줄바꿈을 안 지켜도 된다.
+            rows.append((_gbm_cell(facts, comment.gbm),
+                         Cell("", lines=comment.lines)))
+            continue
+        label = {"rejected": "서술을 폐기했습니다", "error": "LLM 오류",
+                 "skipped": "건너뜀"}[comment.status]
+        rows.append((_gbm_cell(facts, comment.gbm),
+                     Cell(f"({label} — {comment.reason})", tone="muted")))
 
     models = sorted({c.model for c in comments if c.model})
     lead = "숫자는 집계 코드가 확정했고, 서술은 그 숫자만 보고 작성됐습니다."

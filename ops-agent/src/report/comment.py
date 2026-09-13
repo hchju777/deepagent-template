@@ -31,10 +31,14 @@ from src.domain.llm import LlmPort
 from src.report.blocks import EMDASH, delta, n, pct, upper
 from src.report.facts import (Facts, freshness, ranking_by_gbm, repeats,
                               scenario_lifecycle, spikes)
+from src.report.rows import MISSING
 from src.report.window import WEEKDAY_LABEL
 
 # 사실 블록에서 숫자를 긁는 패턴. 천 단위 쉼표와 소수점을 함께 받는다.
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+# 문장 끝. 한국어 종결어미와 마침표·물음표를 함께 본다.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[다요])\.\s*")
 
 # 답에 들어오면 안 되는 것들. 링크와 태그는 렌더러가 이스케이프하지만, 애초에
 # 들어오면 프롬프트를 무시했다는 신호이므로 그 코멘트 전체를 믿지 않는다.
@@ -53,6 +57,39 @@ class GbmComment:
     @property
     def failed(self) -> bool:
         return self.status != "ok"
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        """문장별로 쪼갠 것. 글머리 기호 한 줄에 한 문장이 들어간다."""
+        return split_sentences(self.text)
+
+
+def split_sentences(text: str) -> tuple[str, ...]:
+    """문장별로 쪼갠다. **줄바꿈이 있으면 그것을 먼저 믿는다.**
+
+    프롬프트가 "한 줄에 한 문장"을 요청하지만 모델이 지킬 것이라고 가정하지 않는다 —
+    지키면 줄바꿈으로 쪼개고, 안 지키면 종결어미로 쪼갠다. 결과 모양을 **코드가**
+    보장해야 가독성이 모델의 기분에 달리지 않는다.
+
+    글머리 기호(`-`, `*`, `•`)로 시작하는 줄은 그 기호를 벗긴다. 렌더러가 다시
+    붙이므로 남겨 두면 `• - 문장`이 된다.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ()
+    parts = [part.strip() for part in stripped.splitlines() if part.strip()]
+    if len(parts) == 1:
+        parts = [part.strip() for part in _SENTENCE_END.split(stripped) if part.strip()]
+    cleaned = []
+    for part in parts:
+        part = part.lstrip("-*•·").strip()
+        if not part:
+            continue
+        # 종결어미로 쪼개면 마침표가 떨어진다 — 다시 붙여야 문장으로 읽힌다.
+        if part[-1] not in ".!?":
+            part += "."
+        cleaned.append(part)
+    return tuple(cleaned)
 
 
 def _numbers(text: str) -> list[float]:
@@ -94,6 +131,16 @@ def problems(text: str, *, allowed: set[float], max_chars: int) -> list[str]:
         found.append("사실에 없는 숫자 — "
                      + ", ".join(f"{v:g}" for v in unknown[:5]))
     return found
+
+
+def _nameless(parts) -> bool:
+    """이름이 비어 있는 항목인가.
+
+    `(없음)`이 이름인 항목을 LLM에게 주면 `"(없음)((없음)) 12건, 평균 0건의 0.0배"`
+    같은 문장이 프롬프트에 들어가고, 모델은 그것에 대해 뭐라도 쓴다. 그 서술은
+    숫자 검증을 통과하지만 **뜻이 없다.** 목록에서 빼고 건수만 따로 알린다.
+    """
+    return any(str(part) == MISSING for part in parts)
 
 
 def facts_block(facts: Facts, gbm: str) -> str:
@@ -139,18 +186,21 @@ def facts_block(facts: Facts, gbm: str) -> str:
         if groups:
             items = " / ".join(
                 f"{formatter(share)} {n(share.count)}건"
-                f"({share.ratio * 100:.1f}%)" for share in groups[0].items)
-            lines.append(f"{label}: {items}")
+                f"({share.ratio * 100:.1f}%)" for share in groups[0].items
+                if not _nameless(share.key))
+            if items:
+                lines.append(f"{label}: {items}")
 
     found = [s for s in spikes(facts, lambda r: (r.gbm, r.plant, r.scenario_id,
                                                  r.scenario_name), day=yesterday)
-             if s.key[0] == gbm]
+             if s.key[0] == gbm and not _nameless(s.key)]
     if found:
         lines.append("급증(직전 평일 평균 대비): " + " / ".join(
             f"{upper(s.key[1])} {s.key[3]}({s.key[2]}) {n(s.count)}건, "
             f"평균 {n(s.baseline)}건의 {s.ratio:.1f}배" for s in found[:5]))
 
-    chronic = [r for r in repeats(facts) if r.gbm == gbm]
+    chronic = [r for r in repeats(facts) if r.gbm == gbm
+               and not _nameless((r.scenario_name, r.line_code))]
     if chronic:
         lines.append("반복: " + " / ".join(
             f"{upper(r.plant)} {r.line_code} {r.line_name} — {r.scenario_name}"
@@ -158,12 +208,14 @@ def facts_block(facts: Facts, gbm: str) -> str:
             for r in chronic[:5]))
 
     lifecycle = scenario_lifecycle(facts)
-    fresh = [i for i in lifecycle.appeared if i.gbm == gbm]
+    fresh = [i for i in lifecycle.appeared if i.gbm == gbm
+             and not _nameless((i.name,))]
     if fresh:
         lines.append("어제 처음 나타난 항목: " + " / ".join(
             f"{i.name}({i.scenario_id}) {n(i.count)}건, {', '.join(upper(p) for p in i.plants)}"
             for i in fresh[:5]))
-    gone = [i for i in lifecycle.vanished if i.gbm == gbm]
+    gone = [i for i in lifecycle.vanished if i.gbm == gbm
+            and not _nameless((i.name,))]
     if gone:
         lines.append("어제 사라진 항목: " + " / ".join(
             f"{i.name}({i.scenario_id}) — 그전 {n(i.count)}건" for i in gone[:5]))
@@ -172,6 +224,14 @@ def facts_block(facts: Facts, gbm: str) -> str:
     if stalled:
         lines.append("어제 데이터가 없는 법인: "
                      + ", ".join(upper(f.fct) for f in stalled))
+
+    nameless = len([r for r in facts.select(day=yesterday, gbm=gbm)
+                    if MISSING in (r.scenario_name, r.line_code, r.plant)])
+    if nameless:
+        # 목록에서 빼기만 하면 합계가 안 맞는 이유를 LLM이 모른다. 세어서 알려 주면
+        # "이름을 알 수 없는 문서가 있다"고 쓸 수 있고, 그건 사실이다.
+        lines.append(f"이름(항목·라인·법인)이 비어 있어 위 목록에서 제외한 문서: "
+                     f"{n(nameless)}건")
 
     missing = [s for s in facts.unavailable if s.gbm == gbm]
     if missing:
@@ -184,14 +244,22 @@ def facts_block(facts: Facts, gbm: str) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(template: str, facts: Facts, gbm: str) -> str:
-    """템플릿의 `{facts}`·`{gbm}`만 채운다.
+def build_prompt(template: str, facts: Facts, gbm: str, *,
+                 max_chars: int | None = None) -> str:
+    """템플릿의 자리를 채운다.
+
+    `{max_chars}`를 넣어 주는 이유: **상한을 모르면 모델이 넘길 수밖에 없고**, 넘기면
+    우리는 폐기한다 — 호출 한 번과 코멘트 한 칸을 버리는 것이다. 알려 주면 지킬
+    기회가 생긴다. (그래도 안 지키면 그때 폐기한다.)
 
     `str.format`을 쓰지 않는 이유: 프롬프트에 `{`가 들어 있으면(JSON 예시 등)
-    KeyError로 죽는다. 치환은 두 자리뿐이므로 replace가 맞다.
+    KeyError로 죽는다. 치환 자리가 몇 개뿐이므로 replace가 맞다.
     """
-    return (template.replace("{facts}", facts_block(facts, gbm))
+    text = (template.replace("{facts}", facts_block(facts, gbm))
             .replace("{gbm}", upper(gbm)))
+    if max_chars is not None:
+        text = text.replace("{max_chars}", str(max_chars))
+    return text
 
 
 async def comment_on(facts: Facts, *, llm: LlmPort | None, spec: CommentSpec,
@@ -212,7 +280,8 @@ async def comment_on(facts: Facts, *, llm: LlmPort | None, spec: CommentSpec,
             continue
         block = facts_block(facts, gbm)
         try:
-            reply = await llm.ask(build_prompt(template, facts, gbm))
+            reply = await llm.ask(build_prompt(template, facts, gbm,
+                                               max_chars=spec.max_chars))
         except Exception as exc:                                   # noqa: BLE001
             # 최외곽 방어선. 어댑터가 던지면 그 GBM만 비고 나머지는 계속 간다.
             results.append(GbmComment(gbm=gbm, status="error",

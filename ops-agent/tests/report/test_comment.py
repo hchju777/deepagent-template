@@ -300,3 +300,114 @@ def test_모델_이름이_본문에_적힌다(source, window):
     comments, _ = run(facts, ["정상이다.", "정상이다."])
     block = next(b for b in build_blocks(facts, comments) if b.key == "comment")
     assert "scripted" in block.lead
+
+
+# ── 프롬프트가 제약을 실제로 알려 주는가 ────────────────────────────
+
+def test_글자수_상한이_프롬프트에_들어간다(source, window):
+    """상한을 모르면 모델이 넘길 수밖에 없고, 넘기면 우리는 폐기한다 —
+    호출 한 번과 코멘트 한 칸을 버리는 것이다."""
+    facts = two_gbm(source, window)
+    spec = CommentSpec(enabled=True, max_chars=420)
+    _, llm = run(facts, ["가", "나"], spec=spec,
+                 template="{max_chars}자 이내\n{facts}\n{gbm}")
+    assert "420자 이내" in llm.prompts[0]
+    assert "{max_chars}" not in llm.prompts[0], "자리가 치환되지 않았다"
+
+
+def test_실제_프롬프트_파일이_상한_자리를_갖는다():
+    """운영이 프롬프트를 고치다 `{max_chars}`를 지우면 모델이 상한을 모른다."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2]
+            / "config/prompts/alarm-daily.txt").read_text(encoding="utf-8")
+    assert "{max_chars}" in text and "{facts}" in text and "{gbm}" in text
+
+
+def test_프롬프트가_없다는_문장을_요구하지_않는다():
+    """"근거가 없으면 없다고 쓰라"고 하면 모델이 그 문장으로 줄을 채운다 —
+    실제로 MX 코멘트 끝에 "없다."가 붙어서 나왔다."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2]
+            / "config/prompts/alarm-daily.txt").read_text(encoding="utf-8")
+    assert "없다고 쓰십시오" not in text
+    assert "채우지 마십시오" in text, "줄을 채우지 말라는 지시가 있어야 한다"
+
+
+# ── 이름이 비어 있는 항목 ───────────────────────────────────────────
+
+def nameless_facts(source, window, *, blanks=12, named=5):
+    """필드가 빠진 문서가 섞인 팩트. 사내 실데이터에 실제로 있었다."""
+    documents = [{"occ_date": f"{window.yesterday} 09:00:00", "plant": "gumi"}
+                 for _ in range(blanks)]
+    documents += [{"occ_date": f"{day} 09:00:00", "plant": "gumi", "line_code": "P1",
+                   "line_name": "1라인", "scen_id": "S01", "scen_name": "재고 불일치"}
+                  for day in window.days for _ in range(named)]
+    rows, problems = normalize(documents, source=source, window=window,
+                               gbm="mx", fct="gumi")
+    return facts_from(rows, window=window, source=source, gbms=("mx",), sites=(
+        SiteOutcome(gbm="mx", fct="gumi", status="ok", problems=problems),))
+
+
+def test_이름이_비어_있는_항목은_사실에서_제외한다(source, window):
+    """`(없음)((없음)) 12건, 평균 0건의 0.0배` 같은 문장이 프롬프트에 들어가면
+    모델은 그것에 대해 뭐라도 쓴다. 그 서술은 숫자 검증을 통과하지만 **뜻이 없다.**"""
+    from src.report.rows import MISSING
+
+    block = facts_block(nameless_facts(source, window), "mx")
+    offenders = [line for line in block.splitlines() if MISSING in line]
+    assert offenders == [], f"이름 없는 항목이 프롬프트에 남았다 — {offenders}"
+
+
+def test_제외한_건수는_따로_알린다(source, window):
+    """빼기만 하면 합계가 안 맞는 이유를 LLM이 모른다 — 세어서 알려 주면
+    "이름을 알 수 없는 문서가 있다"고 쓸 수 있고, 그건 사실이다."""
+    block = facts_block(nameless_facts(source, window, blanks=12), "mx")
+    line = next(l for l in block.splitlines() if "이름" in l and "제외" in l)
+    assert "12건" in line
+
+
+def test_이름_없는_문서가_없으면_그_줄도_없다(source, window):
+    block = facts_block(two_gbm(source, window), "mx")
+    assert not any("제외한 문서" in line for line in block.splitlines())
+
+
+# ── 문장별 글머리 기호 ──────────────────────────────────────────────
+
+def test_문장별로_쪼갠다():
+    from src.report.comment import split_sentences
+
+    assert split_sentences("어제 141건이다. 미해제가 70건 남았다.") == (
+        "어제 141건이다.", "미해제가 70건 남았다.")
+
+
+def test_모델이_줄바꿈을_주면_그것을_먼저_믿는다():
+    """프롬프트가 "한 줄에 한 문장"을 요청하지만 지킬 것이라고 가정하지 않는다."""
+    from src.report.comment import split_sentences
+
+    assert split_sentences("어제 141건\n미해제 70건") == ("어제 141건.", "미해제 70건.")
+
+
+def test_모델이_붙인_글머리_기호를_벗긴다():
+    """남겨 두면 `• - 문장`이 된다 — 기호는 리포트가 붙인다."""
+    from src.report.comment import split_sentences
+
+    assert split_sentences("- 첫째\n* 둘째\n• 셋째") == ("첫째.", "둘째.", "셋째.")
+
+
+def test_코멘트가_글머리_기호_줄로_렌더된다(source, window):
+    facts = two_gbm(source, window)
+    comments, _ = run(facts, ["어제 30건이다. 확인이 필요하다.", "평소 수준이다."])
+    block = next(b for b in build_blocks(facts, comments) if b.key == "comment")
+    cell = block.table.rows[0][1]
+    assert cell.lines == ("어제 30건이다.", "확인이 필요하다.")
+
+
+def test_실패한_GBM은_글머리_기호가_아니다(source, window):
+    """실패 이유는 서술이 아니다 — 한 줄로 붙어 있어야 서술과 구별된다."""
+    facts = two_gbm(source, window)
+    comments, _ = run(facts, ["어제 9999건이다.", "평소 수준이다."])
+    block = next(b for b in build_blocks(facts, comments) if b.key == "comment")
+    assert block.table.rows[0][1].lines == ()
+    assert "폐기" in block.table.rows[0][1].text

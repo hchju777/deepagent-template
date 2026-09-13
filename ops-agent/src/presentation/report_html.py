@@ -265,7 +265,19 @@ def _cell(cell: Cell, *, last: bool, total: bool = False,
         weight = "font-weight:700;"
     # 계열색이 tone을 이긴다 — GBM 이름 칸은 정체성이 의미보다 앞선다.
     color = series_color(cell.series) or _TONE_COLOR[cell.tone]
-    if cell.chip:
+    if cell.lines:
+        # `<ul>`을 쓰지 않는 이유: Outlook의 Word 엔진이 목록 여백을 제멋대로 잡아서
+        # 들여쓰기가 칸을 넘치거나 사라진다. 중첩 표는 어디서나 같게 그려진다.
+        # `•`는 문자이므로 배경·테두리 없이도 반전에 견딘다.
+        items = "".join(
+            f'<tr><td width="11" valign="top" style="vertical-align:top;'
+            f'font-size:12.5px;line-height:1.7;color:{FAINT};">•</td>'
+            f'<td style="font-size:12.5px;line-height:1.7;color:{color};{WRAP}">'
+            f'{e(line)}</td></tr>' for line in cell.lines)
+        inner = (f'<table role="presentation" cellpadding="0" cellspacing="0" '
+                 f'border="0" width="100%" style="width:100%;'
+                 f'border-collapse:collapse;">{items}</table>')
+    elif cell.chip:
         inner = (f'<span style="background:{_CHIP_BG[cell.tone]};color:{color};'
                  f'font-size:10.5px;padding:2px 7px;font-weight:600;white-space:nowrap;">'
                  f'{e(cell.text)}</span>')

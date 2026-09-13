@@ -230,3 +230,27 @@ def test_report_render가_파일을_쓴다(echo_config, tmp_path, capsys):
     assert html.startswith("<!DOCTYPE html>") and html.rstrip().endswith("</html>")
     assert "일일 알람 리포트" in html
     assert "블록" in capsys.readouterr().out
+
+
+def test_report_prompt이_실제로_나갈_프롬프트를_찍는다(echo_config, capsys):
+    """검토 도구가 실제와 다른 글을 보여 주면 검토가 무의미하다 — `{max_chars}`가
+    그대로 찍히면 치환 누락을 이 도구가 숨긴다."""
+    from src.__main__ import main
+
+    (echo_config / "prompts").mkdir()
+    (echo_config / "prompts" / "p.txt").write_text(
+        "{max_chars}자 이내\n{facts}\n{gbm}", encoding="utf-8")
+    body = json.loads(
+        (echo_config / "scenarios" / "daily-alarm.json").read_text(encoding="utf-8"))
+    body["comment"] = {"enabled": True, "prompt_file": "prompts/p.txt",
+                       "max_chars": 333}
+    (echo_config / "scenarios" / "daily-alarm.json").write_text(
+        json.dumps(body), encoding="utf-8")
+
+    code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
+                 "report", "prompt", "--today", "2026-09-07"])
+    assert code in (0, 1)
+    out = capsys.readouterr().out
+    assert "{max_chars}" not in out, "치환되지 않은 자리가 찍혔다"
+    assert "333자 이내" in out
+    assert "허용 숫자" in out, "허용 목록을 함께 보여야 한다"

@@ -354,3 +354,26 @@ def test_차트_색은_본문_색을_그대로_쓰지_않는다():
     from src.presentation.report_html import CHART_LABEL, DIM, FAINT, HEAD_RULE
 
     assert CHART_LABEL != DIM and CHART_LABEL not in (FAINT, HEAD_RULE)
+
+
+def test_글머리_기호가_원형_점이다(source, window):
+    """`<ul>`을 쓰지 않는 이유: Word 엔진이 목록 여백을 제멋대로 잡아서 들여쓰기가
+    칸을 넘치거나 사라진다. `•`는 문자이므로 배경 없이도 반전에 견딘다."""
+    from src.report.blocks import Block, Cell, Column, Table
+
+    table = Table(columns=(Column("a"),),
+                  rows=((Cell("", lines=("첫 문장.", "둘째 문장.")),),))
+    html = render([Block(key="x", title="x", table=table)], title="t", generated_at="x")
+    assert html.count(">•</td>") == 2
+    assert "<ul" not in html and "<li" not in html
+    assert "첫 문장." in html and "둘째 문장." in html
+
+
+def test_글머리_줄도_이스케이프된다(source, window):
+    """LLM 답은 우리가 통제하지 않는 문자열이다."""
+    from src.report.blocks import Block, Cell, Column, Table
+
+    table = Table(columns=(Column("a"),),
+                  rows=((Cell("", lines=('<script>x</script>"',)),),))
+    html = render([Block(key="x", title="x", table=table)], title="t", generated_at="x")
+    assert "<script>" not in html and "&lt;script&gt;" in html

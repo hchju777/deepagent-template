@@ -524,7 +524,10 @@ def cmd_report_prompt(args, env) -> int:
           f"· 상한 {scenario.comment.max_chars}자  "
           f"· enabled={scenario.comment.enabled}\n")
     for gbm in targets:
-        prompt = build_prompt(template, facts, gbm)
+        # `max_chars`를 넘겨야 실제로 나가는 것과 같은 글을 본다. 안 넘기면
+        # `{max_chars}`가 그대로 찍혀서 "치환이 안 되네"를 검토 도구가 숨긴다.
+        prompt = build_prompt(template, facts, gbm,
+                              max_chars=scenario.comment.max_chars)
         allowed = sorted(allowed_numbers(facts_block(facts, gbm)))
         print("─" * 78)
         print(prompt)
