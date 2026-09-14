@@ -244,22 +244,28 @@ def facts_block(facts: Facts, gbm: str) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(template: str, facts: Facts, gbm: str, *,
-                 max_chars: int | None = None) -> str:
+def build_prompt(template: str, facts: Facts, gbm: str, *, max_chars: int) -> str:
     """템플릿의 자리를 채운다.
 
     `{max_chars}`를 넣어 주는 이유: **상한을 모르면 모델이 넘길 수밖에 없고**, 넘기면
     우리는 폐기한다 — 호출 한 번과 코멘트 한 칸을 버리는 것이다. 알려 주면 지킬
     기회가 생긴다. (그래도 안 지키면 그때 폐기한다.)
 
+    ## `max_chars`에 기본값이 없는 이유
+
+    처음에는 `max_chars: int | None = None`이었다. 그래서 CLI가 안 넘긴 채로 돌았고,
+    프롬프트에 `{max_chars}자 이내`가 **그대로 찍혀서** LLM에게 나갔다. 자리가 남은 것을
+    아무도 못 봤다 — 리포트는 정상으로 보였기 때문이다.
+
+    필수 인자로 만들면 빠뜨린 호출부가 `TypeError`로 즉시 드러난다. "빠뜨릴 수 있는
+    선택 인자인데 항상 넘겨야 하는 것"은 기본값을 둘 자리가 아니다.
+
     `str.format`을 쓰지 않는 이유: 프롬프트에 `{`가 들어 있으면(JSON 예시 등)
     KeyError로 죽는다. 치환 자리가 몇 개뿐이므로 replace가 맞다.
     """
-    text = (template.replace("{facts}", facts_block(facts, gbm))
-            .replace("{gbm}", upper(gbm)))
-    if max_chars is not None:
-        text = text.replace("{max_chars}", str(max_chars))
-    return text
+    return (template.replace("{facts}", facts_block(facts, gbm))
+            .replace("{gbm}", upper(gbm))
+            .replace("{max_chars}", str(max_chars)))
 
 
 async def comment_on(facts: Facts, *, llm: LlmPort | None, spec: CommentSpec,

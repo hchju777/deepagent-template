@@ -74,7 +74,7 @@ def test_프롬프트에_중괄호가_있어도_죽지_않는다(source, window)
 
 def test_프롬프트에_접속_정보가_섞이지_않는다(source, window):
     """프롬프트는 사내 게이트웨이로 **나간다.** url·비밀번호가 실리면 유출이다."""
-    prompt = build_prompt(TEMPLATE, two_gbm(source, window), "mx")
+    prompt = build_prompt(TEMPLATE, two_gbm(source, window), "mx", max_chars=700)
     for secret in ("mongodb://", "redis://", "password", "api_key", "Bearer"):
         assert secret not in prompt, f"{secret}가 프롬프트에 있다"
 
@@ -251,7 +251,7 @@ def test_알람_항목_이름이_울타리_안에_들어간다(source, window):
     rows, _ = normalize([doc(YESTERDAY, scen_name=attack)] * 20, source=source,
                         window=window, gbm="mx", fct="gumi")
     facts = facts_from(rows, window=window, source=source, gbms=("mx",))
-    prompt = build_prompt(TEMPLATE, facts, "mx")
+    prompt = build_prompt(TEMPLATE, facts, "mx", max_chars=700)
     body = prompt[prompt.index("<사실>"):prompt.index("</사실>")]
     assert attack in body, "데이터가 울타리 밖에 있다"
 
@@ -423,12 +423,15 @@ def test_치환되지_않은_자리가_남지_않는다(source, window):
     assert "500자 · MX" in prompt
 
 
-def test_max_chars를_안_넘기면_자리가_남는다(source, window):
-    """남는 것이 **기본 동작**이다 — 몰래 지우면 "상한이 없는 프롬프트"가 나가고
-    아무도 모른다. 자리가 남아 있으면 CLI 테스트가 그것을 잡는다."""
+def test_max_chars를_빠뜨릴_수_없다(source, window):
+    """기본값을 두면 안 넘긴 호출부가 `{max_chars}자 이내`를 **그대로 LLM에게**
+    보내고, 리포트는 정상으로 보여서 아무도 못 본다. 실제로 사내에서 그렇게 났다.
+
+    필수 인자면 빠뜨린 곳이 즉시 TypeError로 드러난다.
+    """
     facts = two_gbm(source, window)
-    prompt = build_prompt("{max_chars}자\n{facts}", facts, "mx")
-    assert "{max_chars}" in prompt
+    with pytest.raises(TypeError):
+        build_prompt("{max_chars}자\n{facts}", facts, "mx")
 
 
 def test_실제_프롬프트_파일에_다른_치환_자리가_없다():
