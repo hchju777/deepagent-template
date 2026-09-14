@@ -278,8 +278,19 @@ def test_코멘트는_기본으로_꺼져_있다():
     assert CommentSpec().enabled is False
 
 
-def write_prompt(root: Path, text: str, name: str = "prompts/alarm-daily.txt") -> None:
-    path = root / name
+def write_prompt(root: Path, text: str, name: str | None = None) -> None:
+    """이름을 안 주면 **스키마의 기본값 자리**에 쓴다.
+
+    여기에 파일 이름을 또 적으면 스키마 기본값과 조용히 어긋난다 — `.txt`를 `.md`로
+    바꿀 때 실제로 그럴 뻔했다.
+
+    단, 이것만으로는 **둘이 같이 틀리는 것**을 못 잡는다(자기가 쓴 파일을 자기가
+    읽으니까). 기본값이 배포되는 config의 실재 파일을 가리키는지는
+    `test_스키마_기본_프롬프트가_배포되는_config에_있다`가 본다.
+    """
+    from src.config.schema_report import CommentSpec
+
+    path = root / (name or CommentSpec().prompt_file)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
@@ -315,3 +326,17 @@ def test_코멘트가_꺼져_있으면_프롬프트를_따지지_않는다(confi
     """안 쓰는 파일 때문에 기동이 막히면 안 된다."""
     write(config_root, "daily-alarm.json", scenario(comment={"enabled": False}))
     assert messages(config_root) == ""
+
+
+def test_스키마_기본_프롬프트가_배포되는_config에_있다():
+    """`prompt_file`을 생략한 시나리오가 없는 파일을 가리키게 되는 것을 막는다.
+
+    기동이 거부하므로 조용한 실패는 아니다 — 그래도 프롬프트 파일 이름을 바꾸는 날
+    여기서 걸리는 편이, 새 시나리오를 추가하는 사람이 기동 오류로 만나는 것보다 낫다.
+    """
+    from src.config.schema_report import CommentSpec
+
+    shipped = Path(__file__).resolve().parent.parent.parent / "config"
+
+    assert (shipped / CommentSpec().prompt_file).exists(), (
+        f"스키마 기본값({CommentSpec().prompt_file})이 가리키는 파일이 config에 없다")

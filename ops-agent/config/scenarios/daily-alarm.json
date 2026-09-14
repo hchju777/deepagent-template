@@ -53,7 +53,7 @@
   },
   "comment": {
     "enabled": true,
-    "prompt_file": "prompts/alarm-daily.txt",
+    "prompt_file": "prompts/alarm-daily.md",
     "max_chars": 700,
     "per_gbm": true
   }

@@ -323,7 +323,7 @@ def test_실제_프롬프트_파일이_상한_자리를_갖는다():
     from pathlib import Path
 
     text = (Path(__file__).resolve().parents[2]
-            / "config/prompts/alarm-daily.txt").read_text(encoding="utf-8")
+            / "config/prompts/alarm-daily.md").read_text(encoding="utf-8")
     assert "{max_chars}" in text and "{facts}" in text and "{gbm}" in text
 
 
@@ -333,7 +333,7 @@ def test_프롬프트가_없다는_문장을_요구하지_않는다():
     from pathlib import Path
 
     text = (Path(__file__).resolve().parents[2]
-            / "config/prompts/alarm-daily.txt").read_text(encoding="utf-8")
+            / "config/prompts/alarm-daily.md").read_text(encoding="utf-8")
     assert "없다고 쓰십시오" not in text
     assert "채우지 마십시오" in text, "줄을 채우지 말라는 지시가 있어야 한다"
 
@@ -443,7 +443,7 @@ def test_실제_프롬프트_파일에_다른_치환_자리가_없다():
     from pathlib import Path
 
     text = (Path(__file__).resolve().parents[2]
-            / "config/prompts/alarm-daily.txt").read_text(encoding="utf-8")
+            / "config/prompts/alarm-daily.md").read_text(encoding="utf-8")
     found = set(re.findall(r"\{[^}\s]*\}", text))
     assert found <= {"{facts}", "{gbm}", "{max_chars}"}, \
         f"모르는 치환 자리 — {found - {'{facts}', '{gbm}', '{max_chars}'}}"
