@@ -62,5 +62,19 @@ class MailPort(ABC):
         """
 
     @abstractmethod
+    def full_subject(self, key: str) -> str:
+        """config의 접두사를 붙인 최종 제목. **발행 경로가 접두사를 직접 붙이지
+        않게** 하기 위해 포트에 있다 — 직접 붙이면 경로마다 접두사가 달라진다."""
+
+    @abstractmethod
+    def preview(self, subject: str, body: str) -> dict:
+        """보내지 않고 **나갈 요청**만 돌려준다(`--dry-run`).
+
+        포트에 있는 이유: 발행 경로가 `hasattr`로 구현을 넘겨다보면, 그 분기를 안
+        타는 대역이 생겼을 때 dry-run이 조용히 아무것도 안 보여 준다.
+        **키는 담지 않는다.**
+        """
+
+    @abstractmethod
     def describe(self) -> str:
         """사람이 읽을 한 줄 — 비밀값은 담지 않는다."""

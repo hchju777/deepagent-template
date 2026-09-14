@@ -26,6 +26,8 @@
     python -m src report aggregate --stub-seeds seeds.json   대상에 안 붙고 돌려 본다
     python -m src report render --out output/report.html     메일 본문 HTML을 만든다
     python -m src report prompt --gbm-only mx    LLM에게 나갈 프롬프트를 그대로 본다
+    python -m src report run            집계→HTML→파일→메일. **스케줄에 거는 명령**
+    python -m src report run --dry-run  나갈 메일만 보여주고 보내지 않는다
 """
 import argparse
 import asyncio
@@ -559,7 +561,8 @@ def cmd_report_render(args, env) -> int:
     destination.write_text(html, encoding="utf-8")
 
     print(f"  시나리오: {name}  ({scenario.title})")
-    print(f"  블록 {len(blocks)}개 · {len(html):,}바이트 → {destination}")
+    print(f"  블록 {len(blocks)}개 · {len(html.encode('utf-8')):,}바이트 "
+          f"→ {destination}")
     for block in blocks:
         mark = "·" if block.has_content else "○"
         rows = len(block.table.rows) if block.table else 0
@@ -574,6 +577,94 @@ def cmd_report_render(args, env) -> int:
     if not facts.complete:
         print("  ⚠  표본이 잘렸다 — 본문 숫자는 하한이다", file=sys.stderr)
     return 1 if facts.unavailable else 0
+
+
+def _preview_head(preview: dict) -> dict:
+    """dry-run 미리보기에서 **본문을 잘라낸다.**
+
+    본문은 HTML 리포트 전체(수만 자)라서 그대로 찍으면 정작 봐야 할 수신자와
+    제목이 화면 위로 밀려 올라간다. 본문은 같은 실행이 이미 파일로 써 뒀으므로
+    그것을 열어 보면 된다 — 여기서 봐야 하는 것은 **어디로 나가는가**다.
+    """
+    marker = "\nbody : \n"
+    body = dict(preview.get("body") or {})
+    value = str(body.get("input_value", ""))
+    cut = value.find(marker)
+    if cut >= 0:
+        body["input_value"] = (
+            value[:cut + len(marker)]
+            + f"…(본문 {len(value) - cut - len(marker):,}자는 파일에서 본다)")
+    return {**preview, "body": body}
+
+
+def cmd_report_run(args, env) -> int:
+    """**스케줄에 걸리는 명령.** 집계 → 서술 → HTML → 파일 → 메일을 한 번에.
+
+    `render` 다음에 `mail send --file`을 부르는 두 단계로도 같은 일이 되지만,
+    스케줄러에 두 줄을 걸면 **앞줄이 실패해도 뒷줄이 돈다** — 어제 파일을 오늘
+    제목으로 다시 보내는 사고가 거기서 나온다. 한 명령이면 그 틈이 없다.
+
+    조립은 `publish()`가 한다(규율 8과 같은 이유). 여기는 CLI 경계일 뿐이다.
+    """
+    from src.presentation.report_html import render
+    from src.report.blocks import build_blocks
+    from src.report.publish import publish
+
+    name, scenario = _pick_scenario(args)
+    today = _report_today(args)
+    if today is None:
+        return 1
+    args._today = today
+
+    facts = asyncio.run(_collect_facts(args, env, scenario))
+    comments = asyncio.run(_comments(args, env, scenario, facts))
+    html = render(build_blocks(facts, comments), title=scenario.title,
+                  generated_at=_clock()().strftime("%Y-%m-%d %H:%M"))
+
+    mail = None
+    if not args.no_mail:
+        from src.infrastructure.mail_factory import build_mail
+        mail = build_mail(load_app_config(args.config_root, env=env).mail,
+                          clock=_clock())
+
+    # 기간은 `facts`가 들고 있는 것을 쓴다 — 여기서 다시 계산하면 집계한 날과
+    # 제목의 날이 갈라질 수 있다(자정 직전에 돌면 실제로 갈라진다).
+    published = asyncio.run(publish(
+        html, scenario=scenario, scenario_name=name, window=facts.window,
+        output_dir=Path(args.out_dir), mail=mail, clock=_clock(),
+        dry_run=args.dry_run))
+
+    print(f"  시나리오: {name}  ({scenario.title})")
+    print(f"  제목: {published.subject}")
+    # 글자가 아니라 **바이트**를 센다 — 한국어 본문은 글자 수의 두세 배라서,
+    # 글자로 세면 게이트웨이 크기 제한에 걸릴지를 판단할 수 없다.
+    print(f"  {len(html.encode('utf-8')):,}바이트")
+    for line in published.describe():
+        print(f"  {line}")
+    if published.preview is not None:
+        print()
+        _out(_preview_head(published.preview))
+    if published.mail is not None:
+        for warning in published.mail.warnings:
+            print(f"\n  ⚠  Agent 경고 — {warning}", file=sys.stderr)
+        if published.mail.neutralized_lines:
+            print(f"\n  ⚠  본문에서 필드 머리글처럼 보이는 줄 "
+                  f"{published.mail.neutralized_lines}개를 인용 표시(| )로 "
+                  f"무력화했다", file=sys.stderr)
+    for comment in comments:
+        if comment.failed:
+            print(f"  ⚠  코멘트 {comment.gbm}: {comment.status} — {comment.reason}",
+                  file=sys.stderr)
+    for outcome in facts.unavailable:
+        print(f"  ⚠  {outcome.site}: {outcome.error or outcome.reason}", file=sys.stderr)
+    if not facts.complete:
+        print("  ⚠  표본이 잘렸다 — 본문 숫자는 하한이다", file=sys.stderr)
+
+    # 종료 코드는 스케줄러가 **조용한 실패**를 알아챌 유일한 신호다. 무엇을 1로
+    # 셀지는 "사람이 오늘 봐야 하는가"로 가른다: 파일·발송 실패와 못 읽은 법인은
+    # 리포트 자체가 반쪽이므로 1. 코멘트 실패는 리포트가 이미 나갔고 본문에 그
+    # 자리가 비어 보이므로 경고까지만 — 경보가 잦아지면 아무도 안 본다.
+    return 1 if (published.failed or facts.unavailable) else 0
 
 
 def _clock():
@@ -691,6 +782,17 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_cmd.add_argument("--stub-seeds", help="실접속 대신 가짜 데이터를 쓴다")
     prompt_cmd.add_argument("--gbm-only", default=None, help="이 GBM 하나만")
     prompt_cmd.set_defaults(run=cmd_report_prompt)
+    run_cmd = report_sub.add_parser("run", help="집계·서술·파일·메일을 한 번에")
+    run_cmd.add_argument("--scenario", default=None)
+    run_cmd.add_argument("--today", default=None, help="이 날 돌았다고 치고(YYYY-MM-DD)")
+    run_cmd.add_argument("--stub-seeds", help="이 파일이 있으면 실접속 대신 가짜 데이터를 쓴다")
+    run_cmd.add_argument("--out-dir", default="output",
+                         help="리포트 파일을 둘 디렉터리(이름은 기준일로 정해진다)")
+    run_cmd.add_argument("--dry-run", action="store_true",
+                         help="나갈 요청만 보여주고 보내지 않는다(파일은 쓴다)")
+    run_cmd.add_argument("--no-mail", action="store_true",
+                         help="메일을 아예 조립하지 않는다 — 파일만 만든다")
+    run_cmd.set_defaults(run=cmd_report_run)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)

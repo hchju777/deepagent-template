@@ -20,6 +20,20 @@ class RecordingMailSender(MailPort):
     def describe(self) -> str:
         return f"(기록만) {self._cfg.describe()}"
 
+    def full_subject(self, key: str) -> str:
+        # 실구현과 **같은 규칙**이어야 테스트가 검증하는 제목이 실제 제목과 같다.
+        prefix = self._cfg.subject_prefix
+        return f"{prefix} {key}".strip() if prefix else key
+
+    def preview(self, subject: str, body: str) -> dict:
+        input_value, changed = compose_input_value(self._cfg, subject, body)
+        return {"url": f"{self._cfg.api_base}/{self._cfg.agent_id}?stream=false",
+                "headers": {"Content-Type": "application/json", "x-api-key": "***"},
+                "body": {"input_type": "chat", "output_type": "chat",
+                         "input_value": input_value},
+                "recipients": list(self._cfg.recipients),
+                "neutralized_lines": changed}
+
     async def send(self, subject: str, body: str) -> MailResult:
         if not self._cfg.enabled:
             return MailResult(status="skipped", sent_at=self._clock(), recipients=[],

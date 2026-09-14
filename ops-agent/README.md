@@ -132,9 +132,14 @@ python -m src report window --today 2026-09-07      # 그날 돌았다면 어떻
 python -m src report aggregate                      # 읽어서 숫자를 낸다(팩트시트)
 python -m src report aggregate --stub-seeds s.json  # 대상에 안 붙고 돌려 본다
 python -m src report prompt --gbm-only mx               # LLM에게 나갈 프롬프트
-python -m src report render --out output/report.html   # 메일 본문 HTML
-python -m src mail send --subject "일일 알람" --file output/report.html
+python -m src report render --out output/report.html   # 메일 본문 HTML만
+python -m src report run                            # 집계→HTML→파일→메일 (스케줄용)
+python -m src report run --dry-run                  # 나갈 메일만 보여준다
+python -m src report run --no-mail                  # 파일만 만든다
 ```
+
+평일 아침 스케줄에 거는 것은 **`report run` 하나**다. `render`와 `mail send`를 두 줄로
+걸면 앞줄이 실패해도 뒷줄이 돌아서 **어제 파일이 오늘 제목으로** 나간다.
 
 시나리오는 `config/scenarios/<이름>.json` 한 파일이 하나다 — 리포트는 사이트를
 가로지르므로 사이트 층 병합을 타지 않는다. 기간 계산이 왜 따로 떨어져 있고
@@ -142,9 +147,11 @@ python -m src mail send --subject "일일 알람" --file output/report.html
 숫자를 어떻게 세고 실패한 법인을 어떻게 다루는지는
 [9b단계 문서](STEPS/step-09b-aggregate.md) — **LLM은 숫자에 관여하지 않는다.**
 왜 table 레이아웃과 인라인 스타일만 쓰고 다크모드를 지원하지 않는지는
-[9c단계 문서](STEPS/step-09c-render.md). 추이 차트가 왜 이미지가 아니라
-`<td>`로 만든 막대인지는 [9d단계 문서](STEPS/step-09d-chart.md).
+[9c단계 문서](STEPS/step-09c-render.md). 차트가 왜 라이브러리 없이
+직접 만든 PNG인지는 [9d단계 문서](STEPS/step-09d-chart.md).
 LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](STEPS/step-09e-comment.md).
+왜 파일을 메일보다 먼저 쓰고 종료 코드로 실패를 말하는지는
+[9f단계 문서](STEPS/step-09f-run.md).
 
 자세한 것은 [3b단계 문서](STEPS/step-03b-adapters.md).
 
@@ -166,7 +173,7 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 | 9c. 블록 렌더링(HTML) | ✅ |
 | 9d. 추이 차트(표 막대) | ✅ |
 | 9e. LLM 서술 | ✅ |
-| 9f. `report run` + 메일 배선 | ⬜ |
+| 9f. `report run` + 메일 배선 | ✅ |
 | 10. 조사 그래프 | ⬜ |
 | 11. 서브에이전트 | ⬜ |
 | 12. conclude와 verify | ⬜ |
