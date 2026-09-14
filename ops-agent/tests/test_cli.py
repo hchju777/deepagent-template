@@ -249,8 +249,17 @@ def test_report_prompt이_실제로_나갈_프롬프트를_찍는다(echo_config
 
     code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
                  "report", "prompt", "--today", "2026-09-07"])
-    assert code in (0, 1)
-    out = capsys.readouterr().out
-    assert "{max_chars}" not in out, "치환되지 않은 자리가 찍혔다"
-    assert "333자 이내" in out
-    assert "허용 숫자" in out, "허용 목록을 함께 보여야 한다"
+    captured = capsys.readouterr()
+    assert code in (0, 1), captured.err
+
+    # 실패했을 때 **무엇이 찍혔는지** 보여 준다. "치환되지 않았다"만 말하면 다음에
+    # 할 수 있는 일이 추측뿐이다 — 사내에서 이 테스트가 깨졌을 때 실제로 그랬다.
+    def report(reason: str) -> str:
+        return (f"{reason}\n"
+                f"--- stdout ({len(captured.out)}자) ---\n{captured.out}\n"
+                f"--- stderr ---\n{captured.err}")
+
+    leftovers = [line for line in captured.out.splitlines() if "{" in line and "}" in line]
+    assert not leftovers, report(f"치환되지 않은 자리가 찍혔다 — {leftovers}")
+    assert "333자 이내" in captured.out, report("상한이 프롬프트에 안 들어갔다")
+    assert "허용 숫자" in captured.out, report("허용 목록을 함께 보여야 한다")

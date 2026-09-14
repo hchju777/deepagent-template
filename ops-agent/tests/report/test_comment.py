@@ -411,3 +411,33 @@ def test_실패한_GBM은_글머리_기호가_아니다(source, window):
     block = next(b for b in build_blocks(facts, comments) if b.key == "comment")
     assert block.table.rows[0][1].lines == ()
     assert "폐기" in block.table.rows[0][1].text
+
+
+def test_치환되지_않은_자리가_남지_않는다(source, window):
+    """CLI 배선과 무관하게 `build_prompt` 자체를 본다. 이 테스트가 통과하고
+    CLI 테스트가 깨지면 문제는 **인자를 안 넘긴 쪽**이다."""
+    facts = two_gbm(source, window)
+    prompt = build_prompt("{max_chars}자 · {gbm}\n{facts}", facts, "mx", max_chars=500)
+    assert "{max_chars}" not in prompt and "{gbm}" not in prompt
+    assert "{facts}" not in prompt
+    assert "500자 · MX" in prompt
+
+
+def test_max_chars를_안_넘기면_자리가_남는다(source, window):
+    """남는 것이 **기본 동작**이다 — 몰래 지우면 "상한이 없는 프롬프트"가 나가고
+    아무도 모른다. 자리가 남아 있으면 CLI 테스트가 그것을 잡는다."""
+    facts = two_gbm(source, window)
+    prompt = build_prompt("{max_chars}자\n{facts}", facts, "mx")
+    assert "{max_chars}" in prompt
+
+
+def test_실제_프롬프트_파일에_다른_치환_자리가_없다():
+    """`{facts}`·`{gbm}`·`{max_chars}` 외의 `{...}`가 있으면 그대로 LLM에게 나간다."""
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2]
+            / "config/prompts/alarm-daily.txt").read_text(encoding="utf-8")
+    found = set(re.findall(r"\{[^}\s]*\}", text))
+    assert found <= {"{facts}", "{gbm}", "{max_chars}"}, \
+        f"모르는 치환 자리 — {found - {'{facts}', '{gbm}', '{max_chars}'}}"
