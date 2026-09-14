@@ -60,7 +60,7 @@
   "schedule": {
     "enabled": true,
     "kind": "cron",
-    "cron": "0 8 * * *",
+    "cron": "0 8 * * 1-5",
     "interval_seconds": 60,
     "run_on_start": false
   }
