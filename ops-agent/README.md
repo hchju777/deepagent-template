@@ -144,6 +144,17 @@ python -m src report run --no-mail                  # 파일만 만든다
 한 번 돌리는 것은 **`report run` 하나**다. `render`와 `mail send`를 두 줄로 걸면
 앞줄이 실패해도 뒷줄이 돌아서 **어제 파일이 오늘 제목으로** 나간다.
 
+## 조사 엔진
+
+```bash
+python -m src case dryrun --plan plan.json --stub-seeds seeds.json
+```
+
+**LLM 없이** 라운드를 돌려 본다. 대본 파일이 `frame`·`integrate` 자리를 대신하고,
+보는 것은 조사의 내용이 아니라 **울타리**다 — 라운드가 상한에서 멈추는가, 한 라운드에
+병렬 폭만큼만 도는가, 입력 증거가 없는 태스크가 걸러지는가. 왜 그 셋을 코드가 쥐는지는
+[10a단계 문서](STEPS/step-10a-graph.md).
+
 ```bash
 python -m src schedule --list       # 무엇이 언제 도는지 (돌리지는 않는다)
 python -m src schedule              # 스케줄대로 계속 돈다 (상주 프로세스)
@@ -193,7 +204,7 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 | 9e | LLM 서술 | ✅ |
 | 9f | `report run` + 메일 배선 | ✅ |
 | 9g | 스케줄러(cron·interval) | ✅ |
-| 10a | 조사 State와 그래프 배선 | ⬜ |
+| 10a | 조사 State와 그래프 배선 | ✅ |
 | 10b | frame·integrate (리드 LLM) | ⬜ |
 | 11a | 코드 레포 확보와 지식 층 | ⬜ |
 | 11b | 서브에이전트 3종 | ⬜ |

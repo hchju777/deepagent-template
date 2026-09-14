@@ -15,6 +15,11 @@
     },
     "expect_reported_model": "openai/gpt-oss-120b"
   },
+  "investigation": {
+    "max_rounds": 4,
+    "parallel_width": 3,
+    "max_tasks": 24
+  },
   "mail": {
     "enabled": true,
     "recipients": [

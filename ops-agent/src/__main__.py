@@ -583,6 +583,57 @@ def cmd_report_render(args, env) -> int:
     return 1 if facts.unavailable else 0
 
 
+# ── case ─────────────────────────────────────────────────────────────
+
+def cmd_case_dryrun(args, env) -> int:
+    """**LLM 없이** 조사 루프를 한 번 돌려 본다.
+
+    대본 파일이 `frame`·`integrate` 자리를 대신한다. 보는 것은 조사의 내용이 아니라
+    **울타리**다 — 라운드가 상한에서 멈추는가, 한 라운드에 병렬 폭만큼만 도는가,
+    입력 증거가 없는 태스크가 걸러지는가.
+    """
+    from src.application.dryrun import build_deps, initial_state, load_script
+    from src.application.graph import build_engine
+    from src.application.runner_probe import ProbeRunner
+
+    site, _ = _resolve_site(args.config_root, args, env)
+    app = load_app_config(args.config_root, env=env)
+    script = load_script(Path(args.plan))
+    clock = _clock(args, env)
+    seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8")) \
+        if args.stub_seeds else None
+
+    async def go() -> dict:
+        adapters = build_adapters(site, clock=clock, seeds=seeds)
+        try:
+            deps = build_deps(script, runner=ProbeRunner(adapters),
+                              investigation=app.investigation)
+            engine = build_engine(deps)
+            state = initial_state(script, case_id=args.case_id, gbm=site.site.gbm,
+                                  fct=site.site.fct, clock=clock)
+            return await engine.ainvoke(state)
+        finally:
+            await adapters.close()
+
+    final = asyncio.run(go())
+    cfg = app.investigation
+    print(f"  {site.site} — {final['case'].symptom}")
+    print(f"  울타리: max_rounds={cfg.max_rounds} parallel_width={cfg.parallel_width} "
+          f"max_tasks={cfg.max_tasks}")
+    print(f"  라운드 {final['round']} — 끝난 이유: {final['stopped_by']}")
+    for task in final["plan_tasks"]:
+        mark = {"ok": "✅", "error": "❌", "pending": "⬜", "running": "…"}.get(task.status, "?")
+        detail = task.error or task.result_summary or "(실행 안 됨)"
+        print(f"    {mark} {task.id} [{task.role}] {task.goal} — {detail}")
+    if final["evidence"]:
+        print(f"  증거 {len(final['evidence'])}건")
+        for ref in final["evidence"]:
+            partial = "" if ref.complete else "  ⚠ 표본이 잘렸다"
+            print(f"    {ref.id}  {ref.source}{partial}")
+    # 실행된 태스크가 하나도 없으면 배선을 확인해 볼 일이다 — 0을 주면 그게 묻힌다.
+    return 0 if any(t.status == "ok" for t in final["plan_tasks"]) else 1
+
+
 # ── schedule ─────────────────────────────────────────────────────────
 
 def cmd_schedule(args, env) -> int:
@@ -975,6 +1026,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--no-mail", action="store_true",
                          help="메일을 아예 조립하지 않는다 — 파일만 만든다")
     run_cmd.set_defaults(run=cmd_report_run)
+
+    case = sub.add_parser("case", help="조사 엔진")
+    case_sub = case.add_subparsers(dest="what", required=True)
+    dryrun = case_sub.add_parser("dryrun", help="대본으로 라운드를 돌려 본다(LLM 없음)")
+    dryrun.add_argument("--plan", required=True, help="대본 JSON")
+    dryrun.add_argument("--case-id", default="case-dryrun")
+    dryrun.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
+    _add_site_options(dryrun, sub=True)
+    dryrun.set_defaults(run=cmd_case_dryrun)
 
     schedule = sub.add_parser("schedule", help="스케줄대로 계속 돈다(상주 프로세스)")
     schedule.add_argument("--scenario", default=None, help="이 시나리오 하나만")

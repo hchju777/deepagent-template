@@ -51,9 +51,22 @@ def _models() -> list[type[pydantic.BaseModel]]:
 
 
 def _is_read(field: str) -> bool:
-    return subprocess.run(
-        ["grep", "-rqE", rf"\.{re.escape(field)}\b", "src/", "--include=*.py"],
-        cwd=PROJECT_ROOT).returncode == 0
+    """`src/` 어딘가에서 `.필드명`으로 읽는가. **import 줄은 빼고 본다.**
+
+    빼지 않으면 모듈 이름과 같은 필드가 자기도 모르게 통과한다. `AppConfig.investigation`을
+    추가했을 때 실제로 그랬다 — 읽는 코드가 하나도 없는데 `from src.domain.investigation
+    import ...` 세 줄이 매치해서 초록이었다. **죽은 칸을 잡는 테스트가 죽은 칸을
+    놓치는 것**이라 그냥 버그보다 나쁘다(이 테스트가 있다는 이유로 아무도 다시 안 본다).
+    """
+    found = subprocess.run(
+        ["grep", "-rnE", rf"\.{re.escape(field)}\b", "src/", "--include=*.py"],
+        cwd=PROJECT_ROOT, capture_output=True, text=True)
+    for line in found.stdout.splitlines():
+        code = line.split(":", 2)[-1].lstrip()
+        if code.startswith(("import ", "from ")):
+            continue
+        return True
+    return False
 
 
 def test_읽는_곳이_없는_설정_항목은_없다():
