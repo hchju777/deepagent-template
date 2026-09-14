@@ -17,6 +17,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
+from src.config.schema_schedule import ScheduleSpec
 from src.domain.base import StrictModel
 
 # Python의 weekday(): 월=0 … 토=5, 일=6
@@ -228,6 +229,7 @@ class ReportScenario(StrictModel):
     scope: ReportScope
     thresholds: Thresholds = Thresholds()
     comment: CommentSpec = CommentSpec()
+    schedule: ScheduleSpec = ScheduleSpec()
 
     @model_validator(mode="after")
     def _thresholds_fit_the_window(self):

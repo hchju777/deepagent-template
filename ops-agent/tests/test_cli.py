@@ -232,6 +232,14 @@ def test_report_render가_파일을_쓴다(echo_config, tmp_path, capsys):
     assert "블록" in capsys.readouterr().out
 
 
+def _set_scenario(config_root, **fields):
+    """시나리오 JSON에 항목을 얹는다. 픽스처가 만든 것을 그대로 쓰되 일부만 바꾼다."""
+    path = config_root / "scenarios" / "daily-alarm.json"
+    body = json.loads(path.read_text(encoding="utf-8"))
+    body.update(fields)
+    path.write_text(json.dumps(body), encoding="utf-8")
+
+
 @pytest.fixture
 def seeded_config(echo_config, tmp_path):
     """대상에 **안 붙고** 끝까지 도는 설정.
@@ -358,6 +366,78 @@ def test_report_run이_실패를_종료_코드로_말한다(seeded_config, tmp_p
 
     assert code == 1, f"파일을 못 썼는데 0을 돌려줬다\n{captured.out}"
     assert "파일을 쓰지 못했다" in captured.out
+
+
+def test_schedule_list가_다음_발사_시각을_찍는다(seeded_config, capsys):
+    """cron 식은 사람이 자주 틀린다. **돌리기 전에** 언제 도는지 볼 수 있어야 한다."""
+    from src.__main__ import main
+
+    echo_config, _ = seeded_config
+    _set_scenario(echo_config, schedule={"enabled": True, "kind": "cron",
+                                         "cron": "0 8 * * 1-5"})
+
+    code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
+                 "schedule", "--list", "--list-count", "3"])
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "cron 0 8 * * 1-5" in out
+    assert out.count("08:00") == 3, out
+    for weekend in ("Sat", "Sun"):
+        assert weekend not in out, f"평일만인데 주말이 찍혔다\n{out}"
+
+
+def test_schedule이_시나리오의_설정을_실제로_쓴다(seeded_config, tmp_path, capsys):
+    """config에 적은 주기가 배선까지 닿는지 본다. 끊겨 있어도 프로세스는 멀쩡히
+    떠 있고, 리포트만 안 나온다 — 제일 알아채기 어려운 고장이다."""
+    from src.__main__ import main
+
+    echo_config, seeds = seeded_config
+    _set_scenario(echo_config, schedule={"enabled": True, "kind": "interval",
+                                         "interval_seconds": 1, "run_on_start": True})
+
+    code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
+                 "schedule", "--stub-seeds", seeds, "--out-dir", str(tmp_path / "out"),
+                 "--no-mail", "--max-runs", "1"])
+    out = capsys.readouterr().out
+
+    assert code == 0, out
+    assert "1초마다" in out, out
+    assert list((tmp_path / "out").glob("*.html")), f"리포트가 안 나왔다\n{out}"
+    assert "발사 1회, 실패 0회" in out
+
+
+def test_schedule이_꺼져_있으면_말하고_끝낸다(seeded_config, capsys):
+    """조용히 0을 돌려주면 "떠 있는데 아무것도 안 하는" 프로세스가 된다."""
+    from src.__main__ import main
+
+    echo_config, _ = seeded_config
+    _set_scenario(echo_config, schedule={"enabled": False})
+
+    code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
+                 "schedule"])
+    captured = capsys.readouterr()
+
+    assert code == 1
+    assert "돌릴 것이 없다" in captured.err
+
+
+def test_schedule은_config_시간대로_돈다(seeded_config, capsys):
+    """`0 8 * * *`이 **어느 8시**인가. 기계의 TZ를 따르면 UTC 파드에서 오후 5시다."""
+    from src.__main__ import main
+
+    echo_config, _ = seeded_config
+    app = json.loads((echo_config / "app.json").read_text(encoding="utf-8"))
+    app["timezone"] = "Asia/Seoul"
+    (echo_config / "app.json").write_text(json.dumps(app), encoding="utf-8")
+    _set_scenario(echo_config, schedule={"enabled": True, "cron": "0 8 * * *"})
+
+    main(["--config-root", str(echo_config), "--env-file", "/dev/null",
+          "schedule", "--list", "--list-count", "1"])
+    out = capsys.readouterr().out
+
+    assert "KST" in out, f"시계가 config 시간대가 아니다\n{out}"
+    assert "(Asia/Seoul)" in out
 
 
 def test_report_prompt이_실제로_나갈_프롬프트를_찍는다(echo_config, capsys):

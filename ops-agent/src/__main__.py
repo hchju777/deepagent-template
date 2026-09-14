@@ -2,6 +2,7 @@
 
 **여기가 `datetime.now()`를 직접 부르는 유일한 곳이다.** 안쪽은 전부 주입받은
 `clock`을 쓴다(1단계 규율 ②). 진짜 시계는 여기서 한 번 만들어져 아래로 흐른다.
+그 시계의 **시간대는 `app.json`이 정한다** — 기계의 시스템 TZ가 아니다(`_clock` 참고).
 
 명령:
     python -m src boot                  기동 검증 — 설정이 온전한가
@@ -28,6 +29,8 @@
     python -m src report prompt --gbm-only mx    LLM에게 나갈 프롬프트를 그대로 본다
     python -m src report run            집계→HTML→파일→메일. **스케줄에 거는 명령**
     python -m src report run --dry-run  나갈 메일만 보여주고 보내지 않는다
+    python -m src schedule --list       무엇이 언제 도는지 (돌리지는 않는다)
+    python -m src schedule              스케줄대로 계속 돈다 (상주 프로세스)
 """
 import argparse
 import asyncio
@@ -36,6 +39,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.boot import validate_boot
 from src.config.loader import (ConfigError, load_app_config, load_prompt,
@@ -184,7 +188,7 @@ def _report(name: str, result, summarize) -> int:
 
 def cmd_doctor(args, env) -> int:
     site, _ = _resolve_site(args.config_root, args, env)
-    return asyncio.run(_doctor(site, _clock()))
+    return asyncio.run(_doctor(site, _clock(args, env)))
 
 
 async def _peek(site, args, clock) -> int:
@@ -257,7 +261,7 @@ async def _dispatch(adapters, site, args) -> list:
 
 def cmd_peek(args, env) -> int:
     site, _ = _resolve_site(args.config_root, args, env)
-    return asyncio.run(_peek(site, args, _clock()))
+    return asyncio.run(_peek(site, args, _clock(args, env)))
 
 
 # ── llm ──────────────────────────────────────────────────────────────
@@ -277,7 +281,7 @@ def cmd_llm_describe(args, env) -> int:
 def cmd_llm_ask(args, env) -> int:
     from src.infrastructure.llm_factory import build_llm
 
-    llm = build_llm(_llm_config(args, env), clock=_clock())
+    llm = build_llm(_llm_config(args, env), clock=_clock(args, env))
     reply = asyncio.run(llm.ask(args.prompt))
     _out(json.loads(reply.model_dump_json()))
     return 1 if reply.status == "error" else 0
@@ -312,7 +316,7 @@ def cmd_llm_check(args, env) -> int:
     from src.infrastructure.llm_factory import build_llm
 
     cfg = _llm_config(args, env)
-    llm = build_llm(cfg, clock=_clock())
+    llm = build_llm(cfg, clock=_clock(args, env))
     print(f"  {cfg.describe()}\n")
     failed = 0
     reported = None
@@ -364,7 +368,7 @@ def cmd_mail_send(args, env) -> int:
     app = load_app_config(args.config_root, env=env)
     body = Path(args.file).read_text(encoding="utf-8") if args.file else (
         args.body or _TEST_BODY)
-    sender = build_mail(app.mail, clock=_clock())
+    sender = build_mail(app.mail, clock=_clock(args, env))
     subject = sender.full_subject(args.subject)
 
     if args.dry_run:
@@ -429,7 +433,7 @@ def cmd_report_window(args, env) -> int:
     from src.report.window import build_window, describe
 
     name, scenario = _pick_scenario(args)
-    today = _report_today(args)
+    today = _report_today(args, env)
     if today is None:
         return 1
     print(f"  시나리오: {name}  ({scenario.title})\n")
@@ -437,10 +441,10 @@ def cmd_report_window(args, env) -> int:
     return 0
 
 
-def _report_today(args) -> "date | None":
+def _report_today(args, env) -> "date | None":
     """`--today`를 날짜로. 형식이 틀리면 None(호출부가 1을 돌려준다)."""
     if not args.today:
-        return _clock()().date()
+        return _clock(args, env)().date()
     try:
         return datetime.strptime(args.today, "%Y-%m-%d").date()
     except ValueError:
@@ -452,7 +456,7 @@ def cmd_report_aggregate(args, env) -> int:
     from src.report.sheet import fact_sheet
 
     name, scenario = _pick_scenario(args)
-    today = _report_today(args)
+    today = _report_today(args, env)
     if today is None:
         return 1
     args._today = today
@@ -479,7 +483,7 @@ async def _collect_facts(args, env, scenario):
         seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8"))
     window = build_window(scenario.window, today=args._today)
     return await collect(scenario, config_root=args.config_root, env=env,
-                         window=window, clock=_clock(), seeds=seeds)
+                         window=window, clock=_clock(args, env), seeds=seeds)
 
 
 async def _comments(args, env, scenario, facts):
@@ -492,10 +496,10 @@ async def _comments(args, env, scenario, facts):
     llm = None
     if app.llm is not None:
         from src.infrastructure.llm_factory import build_llm
-        llm = build_llm(app.llm, clock=_clock())
+        llm = build_llm(app.llm, clock=_clock(args, env))
     return await comment_on(facts, llm=llm, spec=scenario.comment,
                             template=load_prompt(args.config_root, scenario),
-                            clock=_clock())
+                            clock=_clock(args, env))
 
 
 def cmd_report_prompt(args, env) -> int:
@@ -508,7 +512,7 @@ def cmd_report_prompt(args, env) -> int:
     from src.report.comment import allowed_numbers, build_prompt, facts_block
 
     name, scenario = _pick_scenario(args)
-    today = _report_today(args)
+    today = _report_today(args, env)
     if today is None:
         return 1
     args._today = today
@@ -545,7 +549,7 @@ def cmd_report_render(args, env) -> int:
     from src.report.blocks import build_blocks
 
     name, scenario = _pick_scenario(args)
-    today = _report_today(args)
+    today = _report_today(args, env)
     if today is None:
         return 1
     args._today = today
@@ -554,7 +558,7 @@ def cmd_report_render(args, env) -> int:
     comments = asyncio.run(_comments(args, env, scenario, facts))
     blocks = build_blocks(facts, comments)
     html = render(blocks, title=scenario.title,
-                  generated_at=_clock()().strftime("%Y-%m-%d %H:%M"))
+                  generated_at=_clock(args, env)().strftime("%Y-%m-%d %H:%M"))
 
     destination = Path(args.out)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -577,6 +581,154 @@ def cmd_report_render(args, env) -> int:
     if not facts.complete:
         print("  ⚠  표본이 잘렸다 — 본문 숫자는 하한이다", file=sys.stderr)
     return 1 if facts.unavailable else 0
+
+
+# ── schedule ─────────────────────────────────────────────────────────
+
+def cmd_schedule(args, env) -> int:
+    """**항상 떠 있으면서 스스로 시간을 재는 프로세스.**
+
+    바깥 스케줄러(cron·작업 스케줄러·CronJob)에 거는 것과 다른 선택이다. 대신
+    "언제 도는가"가 config에 있어서 git에 남고, 배포 환경이 바뀌어도 같은 파일을 본다.
+    """
+    from src.schedule.loop import install_fast_loop
+    from src.schedule.runner import Fire, Job, run_all
+
+    scenarios = load_scenarios(args.config_root)
+    if args.scenario:
+        if args.scenario not in scenarios:
+            raise ConfigError(f"모르는 시나리오 — {args.scenario}. "
+                              f"있는 것: {', '.join(scenarios)}")
+        scenarios = {args.scenario: scenarios[args.scenario]}
+
+    clock = _clock(args, env)
+    wanted = {name: sc for name, sc in scenarios.items()
+              if sc.enabled and sc.schedule.enabled}
+    print(f"  시계: {clock():%Y-%m-%d %H:%M:%S %Z} "
+          f"({load_app_config(args.config_root, env=env).timezone})")
+    for name, scenario in scenarios.items():
+        mark = "on " if name in wanted else "off"
+        print(f"  [{mark}] {name:14} {scenario.schedule.describe()}")
+    if not wanted:
+        print("\n  돌릴 것이 없다 — 시나리오나 schedule이 전부 꺼져 있다",
+              file=sys.stderr)
+        return 1
+
+    if args.list:
+        _print_next_fires(wanted, clock=clock, count=args.list_count)
+        return 0
+
+    print(f"  루프: {install_fast_loop()}")
+    print(f"  {'(dry-run — 메일을 보내지 않는다)' if args.dry_run else ''}\n"
+          f"  Ctrl+C로 멈춘다.\n")
+    return asyncio.run(_schedule_forever(wanted, args, env, clock))
+
+
+def _print_next_fires(scenarios, *, clock, count: int) -> None:
+    """언제 도는지 **눈으로 확인**할 수 있어야 한다. cron 식은 사람이 자주 틀린다."""
+    now = clock()
+    print()
+    for name, scenario in scenarios.items():
+        moment, anchor = now, now
+        print(f"  {name} ({scenario.schedule.describe()})")
+        for _ in range(count):
+            moment = scenario.schedule.next_after(moment, anchor=anchor)
+            gap = moment - now
+            print(f"    {moment:%Y-%m-%d(%a) %H:%M}  (지금부터 {_gap(gap)})")
+        print()
+
+
+def _gap(delta) -> str:
+    total = int(delta.total_seconds())
+    if total < 3600:
+        return f"{total // 60}분"
+    if total < 86400:
+        return f"{total // 3600}시간 {total % 3600 // 60}분"
+    return f"{total // 86400}일 {total % 86400 // 3600}시간"
+
+
+async def _schedule_forever(scenarios, args, env, clock) -> int:
+    from src.schedule.runner import Job, run_all
+
+    stop = asyncio.Event()
+    _install_signal_handlers(stop)
+
+    def announce(fire) -> None:
+        mark = "✅" if fire.ok else "❌"
+        print(f"  {fire.started:%Y-%m-%d %H:%M:%S} {mark} {fire.job} — {fire.detail}"
+              f"  ({fire.took_seconds:.1f}초"
+              f"{f', {fire.late_seconds:.0f}초 늦게 시작' if fire.late_seconds > 30 else ''})",
+              flush=True)          # 로그로 넘길 때 버퍼에 갇히지 않게
+
+    jobs = [Job(name=name, spec=scenario.schedule,
+                run=_job_for(name, scenario, args, env, clock))
+            for name, scenario in scenarios.items()]
+    fires = await run_all(jobs, clock=clock, stop=stop, on_fire=announce,
+                          max_fires=args.max_runs)
+
+    failed = sum(1 for fire in fires if not fire.ok)
+    print(f"\n  멈춘다 — 발사 {len(fires)}회, 실패 {failed}회")
+    # 한 번이라도 실패했으면 0이 아니다. 프로세스가 조용히 사라지는 것과, 실패를
+    # 안고 끝난 것을 바깥(파드 재시작 정책·감시)이 구별할 수 있어야 한다.
+    return 1 if failed else 0
+
+
+def _job_for(name, scenario, args, env, clock):
+    """한 시나리오를 한 번 돌리는 코루틴. **던지지 않는 것이 계약**이다."""
+    from src.presentation.report_html import render
+    from src.report.blocks import build_blocks
+    from src.report.publish import publish
+
+    async def run() -> tuple[bool, str]:
+        today = clock().date()
+        facts = await _collect_facts_at(args, env, scenario, today)
+        comments = await _comments(args, env, scenario, facts)
+        html = render(build_blocks(facts, comments), title=scenario.title,
+                      generated_at=clock().strftime("%Y-%m-%d %H:%M"))
+
+        mail = None
+        if not args.no_mail:
+            from src.infrastructure.mail_factory import build_mail
+            mail = build_mail(load_app_config(args.config_root, env=env).mail,
+                              clock=clock)
+        published = await publish(html, scenario=scenario, scenario_name=name,
+                                  window=facts.window, output_dir=Path(args.out_dir),
+                                  mail=mail, clock=clock, dry_run=args.dry_run)
+        detail = " · ".join(published.describe())
+        if facts.unavailable:
+            detail += f" · 못 읽은 법인 {len(facts.unavailable)}개"
+        return not (published.failed or facts.unavailable), detail
+
+    return run
+
+
+async def _collect_facts_at(args, env, scenario, today):
+    """`_collect_facts`와 같은 일을 하되 **날짜를 인자로 받는다.**
+
+    CLI 경로는 `args._today`에 날짜를 실어 나르는데, 스케줄러는 매 발사마다 날짜가
+    달라지므로 그 자리를 재사용하면 첫 발사의 날짜가 굳는다.
+    """
+    args._today = today
+    return await _collect_facts(args, env, scenario)
+
+
+def _install_signal_handlers(stop: asyncio.Event) -> None:
+    """SIGTERM/SIGINT를 받으면 **자는 중이라도** 깨서 정리하고 끝낸다.
+
+    Windows에는 `add_signal_handler`가 없다(NotImplementedError). 그쪽에서는 Ctrl+C가
+    KeyboardInterrupt로 올라오므로 그대로 둔다 — 못 하는 일을 하려다 죽는 것보다 낫다.
+    """
+    import signal
+
+    loop = asyncio.get_running_loop()
+    for name in ("SIGINT", "SIGTERM"):
+        received = getattr(signal, name, None)
+        if received is None:
+            continue
+        try:
+            loop.add_signal_handler(received, stop.set)
+        except NotImplementedError:
+            pass
 
 
 def _preview_head(preview: dict) -> dict:
@@ -611,7 +763,7 @@ def cmd_report_run(args, env) -> int:
     from src.report.publish import publish
 
     name, scenario = _pick_scenario(args)
-    today = _report_today(args)
+    today = _report_today(args, env)
     if today is None:
         return 1
     args._today = today
@@ -619,19 +771,19 @@ def cmd_report_run(args, env) -> int:
     facts = asyncio.run(_collect_facts(args, env, scenario))
     comments = asyncio.run(_comments(args, env, scenario, facts))
     html = render(build_blocks(facts, comments), title=scenario.title,
-                  generated_at=_clock()().strftime("%Y-%m-%d %H:%M"))
+                  generated_at=_clock(args, env)().strftime("%Y-%m-%d %H:%M"))
 
     mail = None
     if not args.no_mail:
         from src.infrastructure.mail_factory import build_mail
         mail = build_mail(load_app_config(args.config_root, env=env).mail,
-                          clock=_clock())
+                          clock=_clock(args, env))
 
     # 기간은 `facts`가 들고 있는 것을 쓴다 — 여기서 다시 계산하면 집계한 날과
     # 제목의 날이 갈라질 수 있다(자정 직전에 돌면 실제로 갈라진다).
     published = asyncio.run(publish(
         html, scenario=scenario, scenario_name=name, window=facts.window,
-        output_dir=Path(args.out_dir), mail=mail, clock=_clock(),
+        output_dir=Path(args.out_dir), mail=mail, clock=_clock(args, env),
         dry_run=args.dry_run))
 
     print(f"  시나리오: {name}  ({scenario.title})")
@@ -667,9 +819,29 @@ def cmd_report_run(args, env) -> int:
     return 1 if (published.failed or facts.unavailable) else 0
 
 
-def _clock():
-    """진짜 시계는 여기서만 만들어진다."""
-    return lambda: datetime.now().astimezone()
+def _clock(args, env):
+    """진짜 시계는 여기서만 만들어진다. **시간대는 배포 환경이 아니라 config가 정한다.**
+
+    `datetime.now().astimezone()`은 그 기계의 시스템 TZ를 따른다. 컨테이너의 기본
+    TZ는 UTC이고, 그러면 `0 8 * * *`이 **UTC 8시**에 돈다 — 한국 시각 오후 5시다.
+    스케줄러가 생긴 지금 이건 배포 환경의 문제가 아니라 기능의 핵심이다.
+
+    집계 쪽에도 같은 문제가 있다: 화요일 08:00 KST(= 월요일 23:00 UTC)에 돌면 로컬
+    날짜가 월요일이라 "어제(직전 평일)"가 월요일이 아니라 **금요일**로 계산된다.
+    매일 한 평일씩 밀린 리포트가 나가는데 제목의 날짜도 같이 밀려서 **정상으로
+    보인다.** 사내 Windows가 KST라 우연히 맞았을 뿐이다.
+
+    그래서 `app.json`의 `timezone`을 쓴다(기동이 이미 검증하는 값이다).
+
+    `args`에 한 번만 만들어 둔다 — 한 실행 안에서 시계가 두 종류면 그것 자체가
+    버그의 씨앗이다.
+    """
+    made = getattr(args, "_clock_cached", None)
+    if made is None:
+        zone = ZoneInfo(load_app_config(args.config_root, env=env).timezone)
+        made = lambda: datetime.now(zone)                          # noqa: E731
+        args._clock_cached = made
+    return made
 
 
 # ── 파서 ──────────────────────────────────────────────────────────────
@@ -793,6 +965,21 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--no-mail", action="store_true",
                          help="메일을 아예 조립하지 않는다 — 파일만 만든다")
     run_cmd.set_defaults(run=cmd_report_run)
+
+    schedule = sub.add_parser("schedule", help="스케줄대로 계속 돈다(상주 프로세스)")
+    schedule.add_argument("--scenario", default=None, help="이 시나리오 하나만")
+    schedule.add_argument("--list", action="store_true",
+                          help="다음 발사 시각만 보여주고 끝낸다")
+    schedule.add_argument("--list-count", type=int, default=5,
+                          help="--list가 보여줄 횟수")
+    schedule.add_argument("--stub-seeds", help="실접속 대신 가짜 데이터를 쓴다")
+    schedule.add_argument("--out-dir", default="output", help="리포트 파일을 둘 디렉터리")
+    schedule.add_argument("--dry-run", action="store_true",
+                          help="나갈 요청만 보여주고 보내지 않는다")
+    schedule.add_argument("--no-mail", action="store_true", help="파일만 만든다")
+    schedule.add_argument("--max-runs", type=int, default=None,
+                          help="이 횟수만 돌고 끝낸다(확인용)")
+    schedule.set_defaults(run=cmd_schedule)
 
     peek = sub.add_parser("peek", help="데이터를 하나 꺼내 본다")
     peek.set_defaults(run=cmd_peek)

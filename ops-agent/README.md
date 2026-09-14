@@ -138,8 +138,17 @@ python -m src report run --dry-run                  # 나갈 메일만 보여준
 python -m src report run --no-mail                  # 파일만 만든다
 ```
 
-평일 아침 스케줄에 거는 것은 **`report run` 하나**다. `render`와 `mail send`를 두 줄로
-걸면 앞줄이 실패해도 뒷줄이 돌아서 **어제 파일이 오늘 제목으로** 나간다.
+한 번 돌리는 것은 **`report run` 하나**다. `render`와 `mail send`를 두 줄로 걸면
+앞줄이 실패해도 뒷줄이 돌아서 **어제 파일이 오늘 제목으로** 나간다.
+
+```bash
+python -m src schedule --list       # 무엇이 언제 도는지 (돌리지는 않는다)
+python -m src schedule              # 스케줄대로 계속 돈다 (상주 프로세스)
+```
+
+주기는 시나리오의 `schedule`이 정한다 — `cron`(기본 `0 8 * * *`)과 `interval` 둘 다
+쓸 수 있고, **"8시"는 `app.json`의 `timezone` 기준**이다(기계의 TZ가 아니다).
+왜 그렇게 나눴는지는 [9g단계 문서](STEPS/step-09g-schedule.md).
 
 시나리오는 `config/scenarios/<이름>.json` 한 파일이 하나다 — 리포트는 사이트를
 가로지르므로 사이트 층 병합을 타지 않는다. 기간 계산이 왜 따로 떨어져 있고
@@ -174,6 +183,7 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 | 9d. 추이 차트(표 막대) | ✅ |
 | 9e. LLM 서술 | ✅ |
 | 9f. `report run` + 메일 배선 | ✅ |
+| 9g. 스케줄러(cron·interval) | ✅ |
 | 10. 조사 그래프 | ⬜ |
 | 11. 서브에이전트 | ⬜ |
 | 12. conclude와 verify | ⬜ |
