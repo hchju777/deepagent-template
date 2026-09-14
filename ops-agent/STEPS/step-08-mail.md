@@ -281,4 +281,4 @@ tests/live/test_live_mail.py              2   사내에서만 (live_mail 마커)
 남는다 — 실수로 도는 테스트가 운영 배포 목록에 메일을 뿌리면 그 테스트는 곧
 삭제된다.
 
-→ 다음: [4단계 — 순찰 프로브](step-04-probes.md)
+→ 다음: [9a단계 — 리포트 기간과 시나리오](step-09a-window.md)

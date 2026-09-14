@@ -323,4 +323,5 @@ notepad .env      # MX_GUMI_REDIS_PASSWORD, MX_GUMI_MONGO_PASSWORD
 4번에서 보이는 **실제 데이터의 모양**이 다음 단계(순찰 프로브)의 입력이다.
 키 이름과 필드 이름이 확정돼야 "무엇이 이상인가"를 config로 쓸 수 있다.
 
-→ 다음: [4단계 — 순찰 프로브](step-04-probes.md)
+→ 다음: [7단계 — 사내 LLM 연결](step-07-llm.md)
+(4·5·6단계는 아직 없다 — 실행 순서는 [로드맵](step-00-overview.md)을 보라)

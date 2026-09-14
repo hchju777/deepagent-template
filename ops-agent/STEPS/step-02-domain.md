@@ -143,4 +143,4 @@ tests/test_portability.py          3   인코딩(Windows)
   "실제로 얻은 시점"이 다르다는 것을 말해야 하는데, 그 상황이 아직 없다.
 - `RestProberPort` — 대상 REST API가 있는지 확인 후.
 
-→ 다음: [3단계 — config와 실제 DB 연결](step-03-config-and-adapters.md)
+→ 다음: [3a단계 — config와 기동 검증](step-03a-config.md)
