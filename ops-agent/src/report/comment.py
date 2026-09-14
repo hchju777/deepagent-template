@@ -37,6 +37,14 @@ from src.report.window import WEEKDAY_LABEL
 # 사실 블록에서 숫자를 긁는 패턴. 천 단위 쉼표와 소수점을 함께 받는다.
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
+# 답이 한국어인지 보는 자. 한글 음절 하나도 없는 답은 "한국어 평서문"이 아니다.
+_HANGUL = re.compile(r"[가-힣]")
+
+# 데이터가 프롬프트의 울타리를 닫고 나오는 것을 막는 치환. 템플릿이 어떤 태그로
+# 울타리를 치는지 코드는 모르므로(`<사실>`은 config가 정한다) **꺾쇠 자체**를 전각으로
+# 바꾼다. 사람 눈에는 거의 같고, 어떤 태그든 닫을 수 없게 된다.
+_ANGLE = {"<": "＜", ">": "＞"}
+
 # 문장 끝. 한국어 종결어미와 마침표·물음표를 함께 본다.
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[다요])\.\s*")
 
@@ -130,6 +138,18 @@ def problems(text: str, *, allowed: set[float], max_chars: int) -> list[str]:
     if unknown:
         found.append("사실에 없는 숫자 — "
                      + ", ".join(f"{v:g}" for v in unknown[:5]))
+
+    # **데이터 구역의 지시를 따랐을 때 나오는 답**을 막는 마지막 층. 프롬프트로 모델을
+    # 설득하는 것은 확률이고 여기는 결정적이다. 다만 막을 수 있는 범위는 정직하게
+    # 좁다 — "숫자를 하나도 인용하지 않으면 거부"도 넣어 봤지만, 그러면
+    # "DA는 평소 수준이다"처럼 **정상적인 코멘트가 거부된다.** 근거가 다툼의 여지 없이
+    # 분명한 것만 여기 둔다.
+    if not _HANGUL.search(stripped):
+        # 프롬프트 규칙 3("한국어 평서문")의 코드판이다. 임의의 글자 수 기준을 두지
+        # 않는 이유: 근거 없는 상수는 언젠가 정상 코멘트를 거부한다. "한글이 하나도
+        # 없다"는 다툼의 여지가 없고, 주입이 성공했을 때 나오는 답('HACKED')이
+        # 정확히 그 모양이다.
+        found.append("한국어 서술이 아니다")
     return found
 
 
@@ -263,9 +283,22 @@ def build_prompt(template: str, facts: Facts, gbm: str, *, max_chars: int) -> st
     `str.format`을 쓰지 않는 이유: 프롬프트에 `{`가 들어 있으면(JSON 예시 등)
     KeyError로 죽는다. 치환 자리가 몇 개뿐이므로 replace가 맞다.
     """
-    return (template.replace("{facts}", facts_block(facts, gbm))
+    return (template.replace("{facts}", fenced(facts_block(facts, gbm)))
             .replace("{gbm}", upper(gbm))
             .replace("{max_chars}", str(max_chars)))
+
+
+def fenced(block: str) -> str:
+    """사실 블록을 프롬프트에 넣기 전에 **울타리를 닫을 수 없게** 만든다.
+
+    알람 항목 이름은 대상 시스템의 데이터다. 거기에 `</사실>` 같은 문자열이 들어 있으면
+    울타리가 그 자리에서 닫히고, 뒤따르는 글이 **지시 구역에 들어앉는다.** 설비가 낸
+    메시지 한 줄이 우연히 그 모양일 수도 있다 — 공격이 아니어도 일어난다.
+
+    지우지 않고 전각으로 바꾸는 이유는 `neutralize_field_lines`와 같다: 그 이름이
+    **증거일 수 있으므로** 사람이 읽을 것은 남긴다.
+    """
+    return block.translate(str.maketrans(_ANGLE))
 
 
 async def comment_on(facts: Facts, *, llm: LlmPort | None, spec: CommentSpec,
