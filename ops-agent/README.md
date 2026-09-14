@@ -5,6 +5,9 @@
 
 단계별 문서가 [STEPS/](STEPS/)에 있다. [0단계 — 무엇을 만드는가](STEPS/step-00-overview.md)부터.
 
+**이어서 작업한다면 [STEPS/handover.md](STEPS/handover.md)를 먼저 읽어라** — 어디까지
+왔는지, 어떤 방식으로 일하기로 했는지, 그리고 이 프로젝트에서 실제로 깨졌던 것들.
+
 ## 실행
 
 Linux/macOS:
