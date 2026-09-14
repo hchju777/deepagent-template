@@ -692,7 +692,7 @@ def _job_for(name, scenario, args, env, clock):
             mail = build_mail(load_app_config(args.config_root, env=env).mail,
                               clock=clock)
         published = await publish(html, scenario=scenario, scenario_name=name,
-                                  window=facts.window, output_dir=Path(args.out_dir),
+                                  window=facts.window, output_dir=_output_dir(args, env),
                                   mail=mail, clock=clock, dry_run=args.dry_run)
         detail = " · ".join(published.describe())
         if facts.unavailable:
@@ -783,7 +783,7 @@ def cmd_report_run(args, env) -> int:
     # 제목의 날이 갈라질 수 있다(자정 직전에 돌면 실제로 갈라진다).
     published = asyncio.run(publish(
         html, scenario=scenario, scenario_name=name, window=facts.window,
-        output_dir=Path(args.out_dir), mail=mail, clock=_clock(args, env),
+        output_dir=_output_dir(args, env), mail=mail, clock=_clock(args, env),
         dry_run=args.dry_run))
 
     print(f"  시나리오: {name}  ({scenario.title})")
@@ -817,6 +817,16 @@ def cmd_report_run(args, env) -> int:
     # 리포트 자체가 반쪽이므로 1. 코멘트 실패는 리포트가 이미 나갔고 본문에 그
     # 자리가 비어 보이므로 경고까지만 — 경보가 잦아지면 아무도 안 본다.
     return 1 if (published.failed or facts.unavailable) else 0
+
+
+def _output_dir(args, env) -> Path:
+    """리포트 파일을 둘 곳. **config가 정하고 CLI가 덮어쓴다.**
+
+    기본값을 코드에 박아 두면 `app.json`의 `output_dir`이 선언만 되고 아무도 안 읽는
+    칸이 된다 — 사람이 거기 적어도 아무 일이 안 일어나는데, 그 실패는 조용하다.
+    실제로 `timezone`이 한동안 그랬다.
+    """
+    return Path(args.out_dir or load_app_config(args.config_root, env=env).output_dir)
 
 
 def _clock(args, env):
@@ -958,8 +968,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--scenario", default=None)
     run_cmd.add_argument("--today", default=None, help="이 날 돌았다고 치고(YYYY-MM-DD)")
     run_cmd.add_argument("--stub-seeds", help="이 파일이 있으면 실접속 대신 가짜 데이터를 쓴다")
-    run_cmd.add_argument("--out-dir", default="output",
-                         help="리포트 파일을 둘 디렉터리(이름은 기준일로 정해진다)")
+    run_cmd.add_argument("--out-dir", default=None,
+                         help="app.json의 output_dir을 덮어쓴다(이름은 기준일로 정해진다)")
     run_cmd.add_argument("--dry-run", action="store_true",
                          help="나갈 요청만 보여주고 보내지 않는다(파일은 쓴다)")
     run_cmd.add_argument("--no-mail", action="store_true",
@@ -973,7 +983,8 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--list-count", type=int, default=5,
                           help="--list가 보여줄 횟수")
     schedule.add_argument("--stub-seeds", help="실접속 대신 가짜 데이터를 쓴다")
-    schedule.add_argument("--out-dir", default="output", help="리포트 파일을 둘 디렉터리")
+    schedule.add_argument("--out-dir", default=None,
+                          help="app.json의 output_dir을 덮어쓴다")
     schedule.add_argument("--dry-run", action="store_true",
                           help="나갈 요청만 보여주고 보내지 않는다")
     schedule.add_argument("--no-mail", action="store_true", help="파일만 만든다")

@@ -54,8 +54,7 @@
   "comment": {
     "enabled": true,
     "prompt_file": "prompts/alarm-daily.md",
-    "max_chars": 700,
-    "per_gbm": true
+    "max_chars": 700
   },
   "schedule": {
     "enabled": true,

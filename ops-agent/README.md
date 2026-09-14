@@ -164,6 +164,8 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 
 자세한 것은 [3b단계 문서](STEPS/step-03b-adapters.md).
 
+열려 있는 것과 **왜 지금은 괜찮은지**는 [STEPS/backlog.md](STEPS/backlog.md).
+
 ## 진행 상황
 
 | 단계 | 상태 |

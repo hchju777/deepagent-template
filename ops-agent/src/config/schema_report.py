@@ -175,9 +175,6 @@ class CommentSpec(StrictModel):
     # 답의 길이 상한. 넘으면 **자르지 않고 거부한다** — 자르면 문장이 중간에 끊겨서
     # "무슨 말인지 모를 코멘트"가 리포트에 실린다. 없는 것이 낫다.
     max_chars: int = Field(default=700, ge=50, le=5000)
-    # GBM별로 따로 물을 것인가. 하나로 묶어 물으면 GBM이 늘어날 때 프롬프트가
-    # 길어지고, 한 GBM의 서술이 다른 GBM의 숫자를 끌어다 쓰기 쉬워진다.
-    per_gbm: bool = True
 
     @model_validator(mode="after")
     def _path_stays_inside_config(self):

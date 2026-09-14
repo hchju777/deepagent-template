@@ -440,6 +440,30 @@ def test_schedule은_config_시간대로_돈다(seeded_config, capsys):
     assert "(Asia/Seoul)" in out
 
 
+def test_app의_output_dir이_실제로_쓰인다(seeded_config, tmp_path, capsys):
+    """`--out-dir` 없이 돌리면 **config가 정한 곳**에 쓴다.
+
+    코드에 "output"을 박아 두면 `app.json`의 `output_dir`이 선언만 되고 아무도 안
+    읽는 칸이 된다 — 사람이 적어도 아무 일이 안 일어나는데 그 실패는 조용하다.
+    `timezone`이 실제로 그랬다.
+    """
+    from src.__main__ import main
+
+    echo_config, seeds = seeded_config
+    declared = tmp_path / "선언한곳"
+    app = json.loads((echo_config / "app.json").read_text(encoding="utf-8"))
+    app["output_dir"] = str(declared)
+    (echo_config / "app.json").write_text(json.dumps(app), encoding="utf-8")
+
+    code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
+                 "report", "run", "--today", "2026-09-07", "--stub-seeds", seeds,
+                 "--no-mail"])
+    captured = capsys.readouterr()
+
+    assert code == 0, captured.err
+    assert (declared / "daily-alarm-2026-09-04.html").exists(), captured.out
+
+
 def test_report_prompt이_실제로_나갈_프롬프트를_찍는다(echo_config, capsys):
     """검토 도구가 실제와 다른 글을 보여 주면 검토가 무의미하다 — `{max_chars}`가
     그대로 찍히면 치환 누락을 이 도구가 숨긴다."""
