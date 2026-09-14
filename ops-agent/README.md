@@ -57,6 +57,35 @@ config/
 있으면 그 값으로, 없으면 형식만 — 설정을 고친 뒤 `pytest` 한 번이 기동 전
 점검이다.
 
+## 사내로 옮기기 — 파일 단위로 복사하지 않는다
+
+이 리포를 사내 git으로 옮길 때 **파일을 골라 복사하면 반드시 빠진다.** 실제로 두 번
+났고, 둘 다 증상이 원인을 가렸다:
+
+| 빠진 것 | 증상 | 왜 원인을 못 찾았나 |
+|---|---|---|
+| `tests/__init__.py` (빈 파일) | `ImportError: attempted relative import beyond top-level package` | 수집 자체가 실패해서 어느 파일 때문인지 안 보였다 |
+| `src/__main__.py` 한 줄 | 프롬프트에 `{max_chars}`가 그대로 찍혀 LLM에게 나감 | **리포트는 정상으로 보였다.** 테스트가 잡아서야 드러났다 |
+
+빈 파일은 눈에 안 띄고, 소스와 테스트가 **파일 단위로 섞이면** 커밋 하나만 봐서는
+판단이 안 된다. 그래서 트리를 통째로 바꾼다:
+
+```bash
+# 이 리포에서 — git이 추적하는 것만, __pycache__·.venv 없이
+git archive --format=zip --prefix=ops-agent/ HEAD:ops-agent -o ops-agent.zip
+```
+
+```bash
+# 사내에서 — config와 .env는 사내 값이므로 먼저 빼 둔다
+mv ops-agent/config ../config-backup && cp ops-agent/.env ../
+rm -rf ops-agent && unzip ops-agent.zip
+cp -r ../config-backup/* ops-agent/config/ && cp ../.env ops-agent/
+pytest -q
+```
+
+`pytest`가 전부 통과하면 트리가 맞은 것이다 — **그게 이 테스트 묶음의 또 하나의
+용도**다.
+
 ## 데이터를 하나 꺼내 보기
 
 ```bash
