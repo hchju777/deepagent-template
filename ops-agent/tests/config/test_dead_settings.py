@@ -25,7 +25,6 @@
 """
 import inspect
 import re
-import subprocess
 from pathlib import Path
 
 import pydantic
@@ -50,6 +49,28 @@ def _models() -> list[type[pydantic.BaseModel]]:
     return sorted(set(found), key=lambda m: m.__name__)
 
 
+_source_cache: list[str] | None = None
+
+
+def _source_lines() -> list[str]:
+    """`src/`의 모든 .py 줄. 한 번 읽어 재사용한다.
+
+    **`grep`을 부르지 않는 이유**: 사내는 Windows이고 거기엔 `grep`이 없다. git-bash가
+    PATH에 있으면 우연히 돌고 없으면 `FileNotFoundError`로 죽는데, 둘 다 "이 테스트가
+    무엇을 지키는가"와 아무 상관이 없다. 그리고 `subprocess.run`은 기본이
+    `stdout=None`이라 `capture_output`을 빠뜨리면 `'NoneType' object has no attribute
+    'splitlines'`로 죽는다 — 실제로 그렇게 죽은 복사본이 있었다.
+
+    파이썬으로 읽으면 셋 다 사라진다. 트리가 작아서 비용도 없다.
+    """
+    global _source_cache
+    if _source_cache is None:
+        _source_cache = [line
+                         for path in sorted((PROJECT_ROOT / "src").rglob("*.py"))
+                         for line in path.read_text(encoding="utf-8").splitlines()]
+    return _source_cache
+
+
 def _is_read(field: str) -> bool:
     """`src/` 어딘가에서 `.필드명`으로 읽는가. **import 줄은 빼고 본다.**
 
@@ -58,14 +79,13 @@ def _is_read(field: str) -> bool:
     import ...` 세 줄이 매치해서 초록이었다. **죽은 칸을 잡는 테스트가 죽은 칸을
     놓치는 것**이라 그냥 버그보다 나쁘다(이 테스트가 있다는 이유로 아무도 다시 안 본다).
     """
-    found = subprocess.run(
-        ["grep", "-rnE", rf"\.{re.escape(field)}\b", "src/", "--include=*.py"],
-        cwd=PROJECT_ROOT, capture_output=True, text=True)
-    for line in found.stdout.splitlines():
-        code = line.split(":", 2)[-1].lstrip()
+    pattern = re.compile(rf"\.{re.escape(field)}\b")
+    for line in _source_lines():
+        code = line.lstrip()
         if code.startswith(("import ", "from ")):
             continue
-        return True
+        if pattern.search(code):
+            return True
     return False
 
 

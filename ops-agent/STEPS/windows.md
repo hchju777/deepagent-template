@@ -144,6 +144,29 @@ args.gbm = args.gbm_sub or args.gbm
 > 깨지는 조합이 테스트에서는 통과했다. 지금은 `parse_args()` 하나가 유일한
 > 입구이고 테스트도 그것을 쓴다 — **테스트는 프로덕션과 같은 문을 지나야 한다.**
 
+## 함정 ⑥-b: 테스트가 유닉스 도구를 부른다
+
+`tests/config/test_dead_settings.py`가 `subprocess.run(["grep", ...])`로 `src/`를
+훑고 있었다. **Windows에는 `grep`이 없다.** git-bash가 PATH에 있으면 우연히 돌고
+없으면 `FileNotFoundError`로 죽는데, 둘 다 그 테스트가 무엇을 지키는가와 상관없다.
+
+거기에 `subprocess.run`은 기본이 `stdout=None`이라 `capture_output=True`를
+빠뜨리면 이렇게 죽는다:
+
+```
+AttributeError: 'NoneType' object has no attribute 'splitlines'
+```
+
+증상이 원인을 전혀 안 가리킨다 — 죽은 config 칸을 잡는 테스트인데 메시지는 `None`
+얘기를 한다. 실제로 이 형태로 보고됐다.
+
+**막은 방법**: 파이썬으로 파일을 읽는다. 함정 ①의 `test_portability.py`가 `grep`이
+아니라 AST를 쓰는 것과 같은 이유이고, 거기서 이미 정한 방침을 이 테스트만
+안 따르고 있었던 것이다. 트리가 작아서 비용도 없다.
+
+> 새 테스트를 쓸 때: **`grep`·`sed`·`find`·`wc`를 부르지 마라.** 개발 기계에서는
+> 돌고 사내에서만 죽는다.
+
 ## 함정 ⑦: 상주 스케줄러를 Windows에서 띄울 때
 
 9g단계의 `python -m src schedule`은 **떠 있는 프로세스**다. Windows에서 네 가지가 걸린다.
