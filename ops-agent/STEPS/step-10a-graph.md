@@ -4,7 +4,8 @@
 > 폭·게이트)가 지켜지는지를 LLM의 답과 섞지 않고 보기 위해서다.
 
 ```bash
-python -m src case dryrun --plan plan.json --stub-seeds seeds.json
+python -m src case dryrun --plan examples/case-dryrun.json \\
+                          --stub-seeds examples/stub-seeds.json
 ```
 
 ```
@@ -18,6 +19,11 @@ python -m src case dryrun --plan plan.json --stub-seeds seeds.json
 
 **`t-9`를 보라.** 우선순위가 제일 앞(5)인데 1라운드에 안 돌고 2라운드에 돌았다.
 `t-1`이 증거를 만들 때까지 게이트가 붙잡은 것이다 — 이 단계가 만든 것의 요약이다.
+
+대본은 `examples/case-dryrun.json`을 고쳐 쓴다. **모르는 키는 거부한다** — 손으로
+쓰는 파일이라 `"round"`(s 빠짐)가 조용히 무시되면 사람은 대본대로 돌았다고 믿는다
+(`app.json`의 `timezone`이 그 형태로 한동안 거짓말을 했다). 설명은 `_`로 시작하는
+키에 적으면 주석으로 걷힌다 — JSON에 주석이 없어서 둔 관례다.
 
 ## 그래프
 

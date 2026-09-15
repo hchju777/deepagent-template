@@ -147,13 +147,27 @@ python -m src report run --no-mail                  # 파일만 만든다
 ## 조사 엔진
 
 ```bash
-python -m src case dryrun --plan plan.json --stub-seeds seeds.json
+python -m src case dryrun --plan examples/case-dryrun.json --stub-seeds examples/stub-seeds.json
 ```
 
 **LLM 없이** 라운드를 돌려 본다. 대본 파일이 `frame`·`integrate` 자리를 대신하고,
 보는 것은 조사의 내용이 아니라 **울타리**다 — 라운드가 상한에서 멈추는가, 한 라운드에
-병렬 폭만큼만 도는가, 입력 증거가 없는 태스크가 걸러지는가. 왜 그 셋을 코드가 쥐는지는
-[10a단계 문서](STEPS/step-10a-graph.md).
+병렬 폭만큼만 도는가, 입력 증거가 없는 태스크가 걸러지는가.
+
+```
+  라운드 2 — 끝난 이유: no_runnable
+    ✅ t-1 [data_prober] 파생값(현재 OEE)을 읽는다 — redis.get key='oee:L3' → …
+    ❌ t-3 [data_prober] 집계 파이프라인을 돌려 본다 — 미등재 action — mongo.aggregate
+    ✅ t-9 [recompute_verifier] 재계산 대조 — t-1의 증거를 입력으로 받는다 — …
+```
+
+**`t-9`를 보라.** 우선순위가 제일 앞인데 1라운드에 안 돌고 2라운드에 돌았다 —
+`t-1`이 증거를 만들 때까지 select 게이트가 붙잡은 것이다.
+
+대본은 [`examples/case-dryrun.json`](examples/case-dryrun.json)을 고쳐 쓴다. 손으로
+쓰는 파일이라 **모르는 키는 거부한다**(`"round"`처럼 s가 빠지면 조용히 무시되는 대신
+시끄럽게 죽는다). 설명을 적고 싶으면 키 이름을 `_`로 시작하라 — 주석으로 걷어 낸다.
+왜 울타리를 코드가 쥐는지는 [10a단계 문서](STEPS/step-10a-graph.md).
 
 ```bash
 python -m src schedule --list       # 무엇이 언제 도는지 (돌리지는 않는다)
