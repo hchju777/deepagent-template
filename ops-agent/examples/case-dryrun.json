@@ -1,0 +1,47 @@
+{
+  "_설명": [
+    "`python -m src case dryrun`의 대본. LLM 자리를 대신한다 —",
+    "`tasks`가 frame의 출력이고, `rounds[i]`가 i번째 integrate의 출력이다.",
+    "대본이 떨어지면 계속 continue를 내므로, 멈추는 것은 코드의 울타리뿐이다.",
+    "10b에서 이 자리에 실제 LLM이 들어온다."
+  ],
+  "symptom": "구미 3라인 OEE가 512다 (정상 범위 0~100)",
+  "hypotheses": [
+    { "id": "h-1", "statement": "원천 센서값이 이미 이상하다" },
+    { "id": "h-2", "statement": "집계 서비스의 계산이 틀렸다" }
+  ],
+  "tasks": [
+    {
+      "id": "t-1", "goal": "파생값(현재 OEE)을 읽는다",
+      "role": "data_prober", "priority": 10,
+      "action": "redis.get", "params": { "key": "oee:L3" }
+    },
+    {
+      "id": "t-2", "goal": "원천 카운트를 읽는다",
+      "role": "data_prober", "priority": 20,
+      "action": "mongo.find",
+      "params": { "collection": "twin_state", "filter": {}, "limit": 5 }
+    },
+    {
+      "_설명": "등재되지 않은 읽기 — 포트에 닿기 전에 거부된다(등재제).",
+      "id": "t-3", "goal": "집계 파이프라인을 돌려 본다",
+      "role": "data_prober", "priority": 30,
+      "action": "mongo.aggregate", "params": { "pipeline": [] }
+    },
+    {
+      "_설명": [
+        "우선순위가 제일 앞(5)인데도 1라운드에 안 돈다 —",
+        "t-1이 t-1.e1을 만들 때까지 select 게이트가 붙잡는다.",
+        "이게 10a가 만든 것의 요약이다."
+      ],
+      "id": "t-9", "goal": "재계산 대조 — t-1의 증거를 입력으로 받는다",
+      "role": "recompute_verifier", "priority": 5,
+      "action": "redis.get", "params": { "key": "oee:L3" },
+      "input_evidence_ids": ["t-1.e1"]
+    }
+  ],
+  "rounds": [
+    { "decision": "continue" },
+    { "decision": "continue" }
+  ]
+}
