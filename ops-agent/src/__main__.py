@@ -583,6 +583,53 @@ def cmd_report_render(args, env) -> int:
     return 1 if facts.unavailable else 0
 
 
+# ── patrol ───────────────────────────────────────────────────────────
+
+def cmd_patrol_probe(args, env) -> int:
+    """점검이 **무엇을 읽는가**를 실제로 읽어서 보여 준다. 판정은 안 한다(5단계).
+
+    rule을 쓰기 전에 응답 실물을 봐야 한다 — 필드 이름 하나가 틀리면 판정이 조용히
+    엉뚱해진다(`caution`을 `cuation`으로 적은 응답을 실제로 만났다).
+    """
+    from src.patrol.probes import run_probes
+
+    site, _ = _resolve_site(args.config_root, args, env)
+    clock = _clock(args, env)
+    seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8")) \
+        if args.stub_seeds else None
+
+    checks = site.patrol.active()
+    if args.check:
+        if args.check not in site.patrol.checks:
+            raise SystemExit(f"모르는 점검 — {args.check}. "
+                             f"있는 것: {', '.join(sorted(site.patrol.checks)) or '(없음)'}")
+        checks = {args.check: site.patrol.checks[args.check]}
+    if not checks:
+        print("  활성 점검이 없다 — config의 patrol.checks를 보라", file=sys.stderr)
+        return 1
+
+    async def go():
+        adapters = build_adapters(site, clock=clock, seeds=seeds)
+        try:
+            return [await run_probes(name, check, adapters=adapters,
+                                     site=str(site.site), clock=clock)
+                    for name, check in checks.items()]
+        finally:
+            await adapters.close()
+
+    probe_sets = asyncio.run(go())
+    for probes in probe_sets:
+        check = checks[probes.check]
+        mark = "✅" if probes.status == "ok" else "⚠"
+        print(f"{mark} {probes.site}  {probes.check} [{check.concern}] — {probes.reason()}")
+        for name, result in probes.results.items():
+            print(f"    {name}: {result.source}")
+            _out(_render(result))
+    # 하나라도 못 읽었으면 0을 주지 않는다 — 판정할 수 없는 것을 "이상 없음"으로
+    # 접으면 감시가 자기 실패를 숨긴다.
+    return 0 if all(p.status == "ok" for p in probe_sets) else 1
+
+
 # ── case ─────────────────────────────────────────────────────────────
 
 def cmd_case_dryrun(args, env) -> int:
@@ -606,7 +653,7 @@ def cmd_case_dryrun(args, env) -> int:
     async def go() -> dict:
         adapters = build_adapters(site, clock=clock, seeds=seeds)
         try:
-            deps = build_deps(script, runner=ProbeRunner(adapters),
+            deps = build_deps(script, runner=ProbeRunner(adapters, clock=clock),
                               investigation=app.investigation)
             engine = build_engine(deps)
             state = initial_state(script, case_id=args.case_id, gbm=site.site.gbm,
@@ -1026,6 +1073,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument("--no-mail", action="store_true",
                          help="메일을 아예 조립하지 않는다 — 파일만 만든다")
     run_cmd.set_defaults(run=cmd_report_run)
+
+    patrol = sub.add_parser("patrol", help="순찰")
+    patrol_sub = patrol.add_subparsers(dest="what", required=True)
+    probe_cmd = patrol_sub.add_parser("probe", help="점검이 읽는 것을 실제로 읽어 본다")
+    probe_cmd.add_argument("--check", help="점검 하나만. 생략하면 활성 점검 전부")
+    probe_cmd.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
+    _add_site_options(probe_cmd, sub=True)
+    probe_cmd.set_defaults(run=cmd_patrol_probe)
 
     case = sub.add_parser("case", help="조사 엔진")
     case_sub = case.add_subparsers(dest="what", required=True)

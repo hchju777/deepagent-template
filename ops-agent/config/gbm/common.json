@@ -1,10 +1,37 @@
 {
   "infra": {
-    "redis": { "db": 0, "password": "${REDIS_PASSWORD}" },
+    "redis": {
+      "db": 0,
+      "password": "${REDIS_PASSWORD}"
+    },
     "mongodb": {
       "database": "data",
       "auth_source": "admin",
       "password": "${MONGO_PASSWORD}"
+    }
+  },
+  "patrol": {
+    "checks": {
+      "badge_all_zero": {
+        "enabled": true,
+        "concern": "operation",
+        "probes": {
+          "badge": {
+            "action": "rest.query",
+            "params": {
+              "entry": "summary_badge",
+              "params": {}
+            }
+          },
+          "status": {
+            "action": "rest.query",
+            "params": {
+              "entry": "prod_status",
+              "params": {}
+            }
+          }
+        }
+      }
     }
   }
 }

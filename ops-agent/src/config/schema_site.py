@@ -21,6 +21,7 @@ from typing import Literal
 
 from pydantic import SecretStr, field_validator, model_validator
 
+from src.config.schema_patrol import PatrolConfig
 from src.domain.base import StrictModel
 
 
@@ -204,6 +205,9 @@ class SiteRef(StrictModel):
 class SiteConfig(StrictModel):
     site: SiteRef
     infra: InfraConfig
+    # 점검 선언. 층 병합을 타므로 `gbm/common.json`에 한 번 쓰고 사이트마다 다른
+    # 것만 아래 층이 덮는다 — 28개 사이트에 같은 임계값을 28번 적지 않는다.
+    patrol: PatrolConfig = PatrolConfig()
 
 
 class RegistryEntry(StrictModel):

@@ -91,8 +91,45 @@ def _check_sites(config_root: Path, *, env: dict[str, str]) -> list[BootError]:
         seen.add(key)
 
     for entry in registry.active():
-        errors += _check(config_root, str(entry),
-                         lambda e=entry: load_site_config(config_root, e.gbm, e.fct, env=env))
+        where = str(entry)
+        problems = _check(config_root, where,
+                          lambda e=entry: load_site_config(config_root, e.gbm, e.fct, env=env))
+        errors += problems
+        if problems:
+            continue          # 로드가 실패했으면 점검을 볼 수 없다
+        site, _ = load_site_config(config_root, entry.gbm, entry.fct, env=env)
+        errors += _check_patrol(site, where=where)
+    return errors
+
+
+def _check_patrol(site, *, where: str) -> list[BootError]:
+    """점검이 가리키는 REST 등재 항목이 실재하고 params가 그 스키마를 통과하는가.
+
+    **오타는 런타임에 고칠 수 없다.** `summary_badge`를 `summary_bagde`라고 적으면
+    매 순찰마다 실패하는데, 그 실패는 `unreachable`로 흡수되어 "대상이 안 붙는다"처럼
+    보인다. 진짜 장애와 구별이 안 되고, 28사이트에서는 그런 줄 하나가 묻힌다.
+
+    `action` 자체의 등재 검사는 `ProbeSpec`이 로드 시점에 이미 한다. 여기서 보는 것은
+    **그다음 층** — rest 등재 항목과 그 닫힌 스키마다.
+    """
+    from src.infrastructure.rest_prober import param_problems
+
+    errors: list[BootError] = []
+    entries = site.infra.rest.entries if site.infra.rest else {}
+    for name, check in site.patrol.checks.items():
+        for probe_name, spec in check.probes.items():
+            if spec.action != "rest.query":
+                continue
+            at = f"{where} patrol.checks.{name}.probes.{probe_name}"
+            entry_name = spec.params.get("entry")
+            entry = entries.get(entry_name)
+            if entry is None:
+                errors.append(BootError(where=at, message=(
+                    f"등재되지 않은 REST 항목 — {entry_name!r}. "
+                    f"등재된 것: {', '.join(sorted(entries)) or '(없음)'}")))
+                continue
+            for problem in param_problems(entry, spec.params.get("params") or {}):
+                errors.append(BootError(where=at, message=problem))
     return errors
 
 

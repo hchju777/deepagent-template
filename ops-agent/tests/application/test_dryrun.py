@@ -80,3 +80,32 @@ def test_리포에_든_예제가_실제로_로드된다():
     assert script.tasks and script.symptom
     seeds = json.loads((root / "examples" / "stub-seeds.json").read_text(encoding="utf-8"))
     assert "redis" in seeds
+
+
+def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
+    """**`case dryrun` 명령 자체를** 부른다 — 부품만 테스트하면 배선이 안 보인다.
+
+    실제로 그랬다: `ProbeRunner`에 `clock`을 필수로 올렸는데 `__main__`의 호출부가
+    안 따라갔고, **776개가 전부 통과했다.** 명령을 돌려 보고서야 `TypeError`가 나왔다.
+    handover가 적어 둔 그 함정이다 — 시그니처를 바꾸면 전수 확인이 필요하고,
+    초록불은 증거가 아니다.
+    """
+    from pathlib import Path
+
+    from src.__main__ import main
+
+    root = Path(__file__).resolve().parent.parent.parent
+    for key in ("REDIS_PASSWORD", "MONGO_PASSWORD", "LLM_BASE_URL", "LLM_CLIENT_KEY",
+                "LLM_PASS_KEY", "MAIL_AGENT_API_KEY", "MAIL_AGENT_ID"):
+        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(root / "config"), "--env-file", str(tmp_path / "none"),
+        "case", "dryrun", "--gbm", "mx", "--fct", "gumi",
+        "--plan", str(root / "examples" / "case-dryrun.json"),
+        "--stub-seeds", str(root / "examples" / "stub-seeds.json")])
+
+    assert main() == 0
+    out = capsys.readouterr().out
+    assert "끝난 이유: no_runnable" in out
+    # 게이트가 붙잡았다가 2라운드에 푼 것 — 이 단계가 만든 것의 요약이다.
+    assert "t-9" in out and "미등재 action" in out

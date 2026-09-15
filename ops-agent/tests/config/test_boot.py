@@ -87,3 +87,53 @@ def test_기동_검증은_스스로_죽지_않는다(tmp_path):
 def test_보고_문자열이_사람이_읽을_수_있다(tmp_path):
     root = _default(tmp_path / "c", layers={"fct/gumi/mx.json": {"infra": {}}})
     assert str(validate_boot(root, env=ENV)[0]).startswith("[mx/gumi]")
+
+
+# ── 순찰 점검 ────────────────────────────────────────────────────────
+
+REST_LAYER = {
+    "gbm/common.json": {"infra": {"redis": {"db": 0}}},
+    "gbm/mx.json": {"infra": {"rest": {"entries": {
+        "summary_badge": {"method": "POST", "path": "/summary/badge",
+                          "params": {"line_code": {"type": "list", "required": False}}}}}}},
+    "fct/gumi/mx.json": {"infra": {
+        "redis": {"url": "redis://gumi:6379", "password": "${MX_GUMI_REDIS_PASSWORD}"},
+        "rest": {"base_url": "http://gumi:8080"}}},
+}
+
+
+def _with_patrol(root, probes):
+    layers = dict(REST_LAYER)
+    layers["gbm/common.json"] = {
+        **REST_LAYER["gbm/common.json"],
+        "patrol": {"checks": {"badge_all_zero": {
+            "concern": "operation", "probes": probes}}}}
+    return _default(root, layers=layers)
+
+
+def test_점검이_가리키는_REST_등재_항목이_없으면_기동이_막는다(tmp_path):
+    """**오타는 런타임에 고칠 수 없다.**
+
+    `summary_badge`를 `summary_bagde`로 적으면 매 순찰마다 실패하는데, 그 실패는
+    `unreachable`로 흡수되어 "대상이 안 붙는다"처럼 보인다. 진짜 장애와 구별이 안 되고,
+    28사이트에서는 그런 줄 하나가 묻힌다.
+    """
+    root = _with_patrol(tmp_path / "c", {"badge": {
+        "action": "rest.query", "params": {"entry": "summary_bagde", "params": {}}}})
+    errors = validate_boot(root, env=ENV)
+    assert [e for e in errors if "등재되지 않은 REST 항목" in e.message], errors
+
+
+def test_점검의_params가_등재_스키마를_벗어나면_기동이_막는다(tmp_path):
+    root = _with_patrol(tmp_path / "c", {"badge": {
+        "action": "rest.query",
+        "params": {"entry": "summary_badge", "params": {"line_codes": ["P222"]}}}})
+    errors = validate_boot(root, env=ENV)
+    assert [e for e in errors if "line_codes" in e.message], errors
+
+
+def test_올바른_점검은_기동을_통과한다(tmp_path):
+    root = _with_patrol(tmp_path / "c", {"badge": {
+        "action": "rest.query",
+        "params": {"entry": "summary_badge", "params": {"line_code": ["P222"]}}}})
+    assert validate_boot(root, env=ENV) == []
