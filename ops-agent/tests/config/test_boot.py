@@ -107,7 +107,11 @@ def _with_patrol(root, probes):
     layers["gbm/common.json"] = {
         **REST_LAYER["gbm/common.json"],
         "patrol": {"checks": {"badge_all_zero": {
-            "concern": "operation", "probes": probes}}}}
+            "concern": "operation", "probes": probes,
+            "rule": "items_all_zero",
+            "params": {"items": {"probe": "badge", "path": "response"},
+                       "identity": ["group", "title"],
+                       "counts": ["alarm", "caution", "normal"]}}}}}
     return _default(root, layers=layers)
 
 

@@ -46,3 +46,61 @@ def test_모르는_키는_거부된다():
     with pytest.raises(ValidationError):
         CheckConfig.model_validate({"concern": "operation", "probes": PROBES,
                                     "rule": "items_all_zero"})
+
+
+# ── rule과 params ────────────────────────────────────────────────────
+
+RULE = {"rule": "items_all_zero",
+        "params": {"items": {"probe": "badge", "path": "response"},
+                   "identity": ["group", "title"],
+                   "counts": ["alarm", "caution", "normal"]}}
+
+
+def full(**overrides) -> dict:
+    body = {"concern": "operation", "probes": PROBES, **RULE}
+    body.update(overrides)
+    return body
+
+
+def test_모르는_rule_이름은_거부된다():
+    with pytest.raises(ValidationError):
+        CheckConfig.model_validate(full(rule="all_zero"))
+
+
+def test_rule이_선언되지_않은_프로브를_가리키면_거부된다():
+    """`"items": {"probe": "badges"}`처럼 이름이 틀리면 매 순찰마다 실패하는데,
+    그 실패는 `unreachable`로 흡수되어 "대상이 안 붙는다"처럼 보인다."""
+    with pytest.raises(ValidationError) as caught:
+        CheckConfig.model_validate(full(params={**RULE["params"],
+                                                "items": {"probe": "badges"}}))
+    assert "선언되지 않은 프로브" in str(caught.value)
+
+
+def test_가드도_선언되지_않은_프로브를_가리키면_거부된다():
+    with pytest.raises(ValidationError) as caught:
+        CheckConfig.model_validate(full(params={
+            **RULE["params"],
+            "only_when": {"probe": "prod", "path": "response.status",
+                          "equals": "In Production"}}))
+    assert "선언되지 않은 프로브" in str(caught.value)
+
+
+def test_identity와_counts는_비어_있을_수_없다():
+    """식별자가 없으면 finding이 어느 항목인지 못 말하고, counts가 없으면
+    "전부 0"이 공집합에 대해 항상 참이 된다."""
+    for field in ("identity", "counts"):
+        with pytest.raises(ValidationError):
+            CheckConfig.model_validate(full(params={**RULE["params"], field: []}))
+
+
+def test_가드의_기대값은_문자열만_받는다():
+    """숫자·bool을 열면 `False == 0` 같은 비교가 조용히 통과하는 길이 생긴다."""
+    with pytest.raises(ValidationError):
+        CheckConfig.model_validate(full(params={
+            **RULE["params"],
+            "only_when": {"probe": "badge", "path": "x", "equals": {"a": 1}}}))
+
+
+def test_rule_params의_모르는_키도_거부된다():
+    with pytest.raises(ValidationError):
+        CheckConfig.model_validate(full(params={**RULE["params"], "min_count": 3}))

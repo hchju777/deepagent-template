@@ -156,8 +156,26 @@ python -m src patrol probe --check badge_all_zero   # 하나만
 **동시에** 읽는다: 시점이 벌어지면 "생산 중이었는데 그 사이에 멈춤"이 "생산 중인데
 0/0/0"으로 보인다.
 
-판정은 아직 없다(5단계). 왜 `concern`이 원인이 아니라 "먼저 물어볼 곳"인지,
-왜 오타를 기동이 막는지는 [4단계 문서](STEPS/step-04-probes.md).
+```bash
+python -m src patrol check              # 판정까지 — 지금 뭐가 걸리나
+python -m src patrol check --all-sites  # 28사이트 전부 (하나가 터져도 나머지가 돈다)
+```
+
+```
+❌ mx/gumi  badge_all_zero [operation] — 5개 중 2건
+    Line/Defect     전부 0 — alarm·caution·normal이 모두 0이다
+    Line/Downtime   필드 부재 — caution
+⬜ mx/sevt  badge_all_zero [operation] — 판정 안 함 — status가 'Idle'다
+```
+
+`ok`가 아닌 값이 셋이다 — `finding`(이상) · `skipped`(생산 중이 아니라 **안** 함) ·
+`unreachable`(**못** 함). 못 한 것을 "이상 없음"으로 접으면 감시가 자기 실패를 숨긴다.
+
+왜 `concern`이 원인이 아니라 "먼저 물어볼 곳"인지, 왜 오타를 기동이 막는지는
+[4단계 문서](STEPS/step-04-probes.md). 판정 규칙 전부와 왜 화이트리스트를 안 두는지는
+[5단계 문서](STEPS/step-05-rules.md).
+
+N회 연속·중복 케이스 방지·케이스 개설은 아직 없다(6단계).
 
 ## 조사 엔진
 
@@ -222,7 +240,7 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 | 3a | config 스키마·로더·기동 검증 | ✅ |
 | 3b | 어댑터 (스텁 + 실구현) | ✅ |
 | 4 | 순찰 프로브 | ✅ |
-| 5 | rule 판정과 finding | ⬜ |
+| 5 | rule 판정과 finding | ✅ |
 | 6 | 케이스 저장소와 게이트 | ⬜ |
 | 7 | **사내 LLM 게이트웨이 연결** | ✅ |
 | 8 | 메일 발송 Agent API | ✅ |

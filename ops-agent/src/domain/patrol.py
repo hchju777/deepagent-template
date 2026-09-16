@@ -9,9 +9,11 @@
 사이트가 28개라 이건 예외가 아니라 **일상 경로**다. 하루에 하나쯤은 안 붙는다.
 그래서 `ok`와 대비되는 값이 `finding` 하나가 아니라 `unreachable`이 하나 더 있다.
 """
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from src.domain.base import StrictModel
+from src.domain.concern import Concern
 from src.domain.envelope import ProbeResult
 
 
@@ -40,3 +42,45 @@ class ProbeSet(StrictModel):
             return f"{len(self.results)}개 프로브 전부 읽었다"
         detail = "; ".join(f"{name}: {self.results[name].error}" for name in self.failed)
         return f"못 읽은 프로브 — {detail}"
+
+
+class Finding(StrictModel):
+    """이상 하나. **항목 하나에 하나다.**
+
+    badge 세 개가 0/0/0이면 finding도 셋이다. 하나로 묶지 않는 이유가 셋 있다:
+
+    - **조사가 찍을 데를 갖는다.** "어딘가 0/0/0"이면 조사의 대상이 빈다.
+    - **6단계가 대상별로 연속을 센다.** 묶으면 "A는 3회째, B는 1회째"를 못 가른다.
+    - **중복 케이스 방지도 대상 단위**여야 맞다.
+    """
+
+    check: str
+    site: str
+    concern: Concern
+    # 무엇이 이상한가 — identity 필드를 이어 붙인 것("Line/Target Rate").
+    target: str
+    reason: str
+    # 판정의 근거가 된 값. 보고서와 케이스 설명이 이걸 그대로 쓴다.
+    observed: dict[str, Any] = {}
+    observed_at: datetime
+
+
+class CheckOutcome(StrictModel):
+    """점검 하나를 판정한 결과.
+
+    `ok`와 대비되는 값이 `finding` 하나가 아니라 **`unreachable`이 하나 더 있다.**
+    못 읽은 것을 `ok`로 접으면 감시가 자기 실패를 숨긴다 — 사이트가 28개라 하루에
+    하나쯤은 안 붙고, 그건 예외가 아니라 일상 경로다.
+
+    `skipped`는 판정을 **안 한** 것이다(생산 중이 아니라서). 못 한 것과 다르다.
+    """
+
+    check: str
+    site: str
+    concern: Concern
+    status: Literal["ok", "finding", "skipped", "unreachable"]
+    reason: str
+    findings: list[Finding] = []
+    # 판정 대상이 몇 개였는가. "이상 없음"이 0개를 본 결과인지 12개를 본 결과인지
+    # 구별되어야 한다 — 전자는 사실 아무것도 확인 못 한 것이다.
+    examined: int = 0

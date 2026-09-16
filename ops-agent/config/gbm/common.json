@@ -30,6 +30,27 @@
               "params": {}
             }
           }
+        },
+        "rule": "items_all_zero",
+        "params": {
+          "items": {
+            "probe": "badge",
+            "path": "response"
+          },
+          "identity": [
+            "group",
+            "title"
+          ],
+          "counts": [
+            "alarm",
+            "caution",
+            "normal"
+          ],
+          "only_when": {
+            "probe": "status",
+            "path": "response.status",
+            "equals": "In Production"
+          }
         }
       }
     }

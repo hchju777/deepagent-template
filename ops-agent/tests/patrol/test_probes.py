@@ -36,7 +36,13 @@ def check(**overrides) -> CheckConfig:
         "badge":  {"action": "rest.query",
                    "params": {"entry": "summary_badge", "params": {}}},
         "status": {"action": "rest.query",
-                   "params": {"entry": "prod_status", "params": {}}}}}
+                   "params": {"entry": "prod_status", "params": {}}}},
+        "rule": "items_all_zero",
+        "params": {"items": {"probe": "badge", "path": "response"},
+                   "identity": ["group", "title"],
+                   "counts": ["alarm", "caution", "normal"],
+                   "only_when": {"probe": "status", "path": "response.status",
+                                 "equals": "In Production"}}}
     body.update(overrides)
     return CheckConfig.model_validate(body)
 
@@ -122,7 +128,7 @@ async def test_동시에_읽는다():
 
 def test_활성_점검만_돈다():
     from src.config.schema_patrol import PatrolConfig
+    base = check().model_dump()
     cfg = PatrolConfig.model_validate({"checks": {
-        "on": {"concern": "operation", "probes": check().probes},
-        "off": {"enabled": False, "concern": "system", "probes": check().probes}}})
+        "on": base, "off": {**base, "enabled": False}}})
     assert sorted(cfg.active()) == ["on"]

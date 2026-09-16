@@ -630,6 +630,53 @@ def cmd_patrol_probe(args, env) -> int:
     return 0 if all(p.status == "ok" for p in probe_sets) else 1
 
 
+def cmd_patrol_check(args, env) -> int:
+    """점검을 돌려 **지금 무엇이 걸리는가**를 보여 준다.
+
+    N회 연속이나 케이스 개설은 안 한다(6단계) — 여기까지가 "이상인가"다.
+    """
+    from src.patrol.runner import run_sites
+
+    clock = _clock(args, env)
+    seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8")) \
+        if args.stub_seeds else None
+
+    if args.all_sites:
+        entries = load_registry(args.config_root).active()
+    else:
+        site, _ = _resolve_site(args.config_root, args, env)
+        entries = [site.site]
+
+    def load(entry):
+        cfg, _ = load_site_config(args.config_root, entry.gbm, entry.fct, env=env)
+        return cfg
+
+    outcomes = asyncio.run(run_sites(
+        entries, load=load,
+        build=lambda cfg: build_adapters(cfg, clock=clock, seeds=seeds),
+        clock=clock, only=args.check))
+
+    if not outcomes:
+        print("  활성 점검이 없다 — config의 patrol.checks를 보라", file=sys.stderr)
+        return 1
+
+    MARK = {"ok": "✅", "finding": "❌", "skipped": "⬜", "unreachable": "⚠"}
+    for outcome in outcomes:
+        print(f"{MARK[outcome.status]} {outcome.site}  {outcome.check} "
+              f"[{outcome.concern}] — {outcome.reason}")
+        for item in outcome.findings:
+            observed = json.dumps(item.observed, ensure_ascii=False) if item.observed else ""
+            print(f"    {item.target}  {item.reason}  {observed}")
+
+    findings = sum(len(o.findings) for o in outcomes)
+    unreachable = [o for o in outcomes if o.status == "unreachable"]
+    if findings or unreachable:
+        print(f"\n  finding {findings}건 · 판정 못 한 점검 {len(unreachable)}개",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
 # ── case ─────────────────────────────────────────────────────────────
 
 def cmd_case_dryrun(args, env) -> int:
@@ -1081,6 +1128,14 @@ def build_parser() -> argparse.ArgumentParser:
     probe_cmd.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
     _add_site_options(probe_cmd, sub=True)
     probe_cmd.set_defaults(run=cmd_patrol_probe)
+
+    check_cmd = patrol_sub.add_parser("check", help="판정까지 — 지금 뭐가 걸리나")
+    check_cmd.add_argument("--check", help="점검 하나만. 생략하면 활성 점검 전부")
+    check_cmd.add_argument("--all-sites", action="store_true",
+                           help="registry의 활성 사이트 전부 (한 사이트가 터져도 나머지가 돈다)")
+    check_cmd.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
+    _add_site_options(check_cmd, sub=True)
+    check_cmd.set_defaults(run=cmd_patrol_check)
 
     case = sub.add_parser("case", help="조사 엔진")
     case_sub = case.add_subparsers(dest="what", required=True)
