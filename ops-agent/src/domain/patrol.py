@@ -81,6 +81,17 @@ class CheckOutcome(StrictModel):
     status: Literal["ok", "finding", "skipped", "unreachable"]
     reason: str
     findings: list[Finding] = []
-    # 판정 대상이 몇 개였는가. "이상 없음"이 0개를 본 결과인지 12개를 본 결과인지
-    # 구별되어야 한다 — 전자는 사실 아무것도 확인 못 한 것이다.
-    examined: int = 0
+    # 판정한 대상들. **개수가 아니라 목록인 이유**: 6a의 게이트가 "이 대상이 정상으로
+    # 관측됐다"를 알아야 하는데, finding 목록만으로는 "정상이었다"와 "응답에 아예
+    # 없었다"를 못 가른다. 후자는 "빠진 것은 검사 대상이 아니다"라 정상이 아니고,
+    # 그걸 정상으로 치면 닫힌 케이스가 잘못 되살아난다.
+    targets: list[str] = []
+
+    @property
+    def examined(self) -> int:
+        return len(self.targets)
+
+    def cleared(self) -> list[str]:
+        """판정했고 이상이 없던 대상들."""
+        bad = {f.target for f in self.findings}
+        return [t for t in self.targets if t not in bad]

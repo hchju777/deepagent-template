@@ -85,6 +85,9 @@ class ItemsAllZeroParams(StrictModel):
 
 class CheckConfig(StrictModel):
     enabled: bool = True
+    # **점검마다** 주기를 갖는다. 전역 하나로 두면 무거운 점검이 생겼을 때 전체를
+    # 그것에 맞춰 늦추게 되고, 가벼우면서 중요한 점검까지 같이 느려진다.
+    interval_minutes: int = Field(default=180, ge=1)
     # **기본값을 두지 않는다.** 0/0/0은 operation인데 기본값이 있으면 안 적었을 때
     # 조용히 system으로 인프라팀에 간다. 뜻은 domain/concern.py — 원인이 아니라
     # "먼저 물어볼 곳"이다.

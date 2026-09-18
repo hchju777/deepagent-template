@@ -35,6 +35,9 @@ class AppConfig(StrictModel):
     # 순찰 주기·보고서 시각 표시의 기준. UTC로 저장하고 사람에게 보일 때만 이걸 쓴다.
     timezone: str = "Asia/Seoul"
     output_dir: str = "output"
+    # 순찰이 연 케이스가 사는 곳. 파일인 이유와 한계는
+    # `infrastructure/case_store_file.py` 맨 위에 있다.
+    case_store: str = "output/cases.json"
     # LLM은 사이트를 가로질러 하나다 — 법인마다 다른 모델을 쓸 이유가 없고,
     # 사이트마다 두면 같은 게이트웨이를 향한 커넥션 풀이 사이트 수만큼 생긴다.
     llm: LlmConfig | None = None

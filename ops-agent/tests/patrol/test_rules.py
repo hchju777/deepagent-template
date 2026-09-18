@@ -181,6 +181,25 @@ def test_경로가_없으면_finding이다():
     assert out.status == "finding" and "경로가 응답에 없다" in out.reason
 
 
-def test_판정한_항목_수가_남는다():
-    """"이상 없음"이 0개를 본 결과인지 12개를 본 결과인지 구별되어야 한다."""
-    assert verdict([badge(normal=1) for _ in range(12)]).examined == 12
+def test_판정한_대상_목록이_남는다():
+    """"이상 없음"이 0개를 본 결과인지 12개를 본 결과인지 구별되어야 한다.
+
+    개수가 아니라 **목록**인 이유: 6a의 게이트가 "이 대상이 정상으로 관측됐다"를
+    알아야 하는데, finding 목록만으로는 "정상이었다"와 "응답에 아예 없었다"를 못 가른다.
+    """
+    out = verdict([badge(title=f"T{i}", normal=1) for i in range(12)])
+    assert out.examined == 12
+    assert out.targets[:2] == ["Line/T0", "Line/T1"]
+    assert out.cleared() == out.targets          # 전부 정상
+
+
+def test_이상인_대상은_cleared에서_빠진다():
+    out = verdict([badge(title="A"), badge(title="B", normal=3)])
+    assert out.targets == ["Line/A", "Line/B"]
+    assert out.cleared() == ["Line/B"]
+
+
+def test_중복된_항목은_판정한_것으로_안_센다():
+    """12개가 왔는데 식별자가 하나면 실제로 판정한 것은 하나다."""
+    out = verdict([badge(title="X", normal=1) for _ in range(12)])
+    assert out.targets == ["Line/X"]

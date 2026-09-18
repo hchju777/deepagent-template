@@ -677,6 +677,120 @@ def cmd_patrol_check(args, env) -> int:
     return 0
 
 
+def _case_repo(args, env):
+    from src.infrastructure.case_store_file import FileCaseRepository
+    return FileCaseRepository(Path(load_app_config(args.config_root, env=env).case_store))
+
+
+def cmd_patrol_list(args, env) -> int:
+    """어느 점검이 **어느 주기로** 도는가. 돌리지는 않는다."""
+    site, _ = _resolve_site(args.config_root, args, env)
+    checks = site.patrol.checks
+    if not checks:
+        print("  선언된 점검이 없다 — config의 patrol.checks를 보라", file=sys.stderr)
+        return 1
+    for name, check in sorted(checks.items()):
+        mark = "✅" if check.enabled else "⬜"
+        hours = check.interval_minutes / 60
+        every = (f"{check.interval_minutes}분" if check.interval_minutes < 60
+                 else f"{hours:g}시간")
+        print(f"  {mark} {name} [{check.concern}] — {every}마다 · "
+              f"rule={check.rule} · 프로브 {len(check.probes)}개")
+    # 아직 이 주기로 도는 것은 없다(6b). 값이 config에 있고 확인만 된다.
+    print("\n  (아직 스케줄에 올라가 있지 않다 — 6b에서 붙는다)", file=sys.stderr)
+    return 0
+
+
+def cmd_patrol_open(args, env) -> int:
+    """점검을 돌리고, 걸린 것을 케이스로 만든다(또는 이미 있는 케이스에 첨부)."""
+    from src.patrol.gate import process
+    from src.patrol.runner import run_sites
+
+    clock = _clock(args, env)
+    seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8")) \
+        if args.stub_seeds else None
+
+    if args.all_sites:
+        entries = load_registry(args.config_root).active()
+    else:
+        site, _ = _resolve_site(args.config_root, args, env)
+        entries = [site.site]
+
+    outcomes = asyncio.run(run_sites(
+        entries,
+        load=lambda e: load_site_config(args.config_root, e.gbm, e.fct, env=env)[0],
+        build=lambda cfg: build_adapters(cfg, clock=clock, seeds=seeds),
+        clock=clock, only=args.check))
+
+    repo = _DryRunRepo(_case_repo(args, env)) if args.dry_run else _case_repo(args, env)
+    MARK = {"opened": "🆕", "attached": "↻ ", "suppressed": "⬛", "rejected": "❌"}
+    results = []
+    for outcome in outcomes:
+        if outcome.status in ("skipped", "unreachable"):
+            print(f"⚠ {outcome.site}  {outcome.check} — {outcome.reason}")
+            continue
+        for result in process(outcome, repo=repo, clock=clock):
+            results.append(result)
+            print(f"{MARK[result.action]} {result.case_id or '-':6} {outcome.site}  "
+                  f"{result.target}  {result.reason}")
+    if not results:
+        print("  케이스로 만들 것이 없다")
+    if args.dry_run:
+        print("\n  (--dry-run — 저장하지 않았다)", file=sys.stderr)
+    return 1 if any(r.action == "rejected" for r in results) else 0
+
+
+class _DryRunRepo:
+    """읽기는 진짜 저장소에서, 쓰기는 버린다.
+
+    쓰기만 막으면 `next_id`가 진짜 저장소를 증가시킨다 — dry-run을 돌릴 때마다
+    케이스 번호가 건너뛴다. 사람이 "c-5가 어디 갔지"를 묻게 되는 자리다.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+        self._fake = 0
+
+    def latest(self, key):
+        return self._inner.latest(key)
+
+    def all(self):
+        return self._inner.all()
+
+    def add(self, record):
+        pass
+
+    def update(self, record):
+        pass
+
+    def next_id(self) -> str:
+        self._fake += 1
+        return f"(새 케이스 {self._fake})"
+
+
+def cmd_case_list(args, env) -> int:
+    repo = _case_repo(args, env)
+    now = _clock(args, env)()
+    cases = [c for c in repo.all() if args.all or c.status == "open"]
+    if not cases:
+        print("  케이스가 없다")
+        return 0
+    for case in cases:
+        mark = "🔴" if case.status == "open" else "⚪"
+        print(f"  {mark} {case.id:6} {case.site:10} {case.target:24} "
+              f"{case.observations}회 · {case.sustained_for(now)}")
+        print(f"        {case.symptom}")
+    return 0
+
+
+def cmd_case_show(args, env) -> int:
+    found = [c for c in _case_repo(args, env).all() if c.id == args.case_id]
+    if not found:
+        raise SystemExit(f"없는 케이스 — {args.case_id}")
+    _out(json.loads(found[0].model_dump_json()))
+    return 0
+
+
 # ── case ─────────────────────────────────────────────────────────────
 
 def cmd_case_dryrun(args, env) -> int:
@@ -1137,6 +1251,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_site_options(check_cmd, sub=True)
     check_cmd.set_defaults(run=cmd_patrol_check)
 
+    list_cmd = patrol_sub.add_parser("list", help="어느 점검이 어느 주기로 도는가")
+    _add_site_options(list_cmd, sub=True)
+    list_cmd.set_defaults(run=cmd_patrol_list)
+
+    open_cmd = patrol_sub.add_parser("open", help="걸린 것을 케이스로 만든다")
+    open_cmd.add_argument("--check", help="점검 하나만")
+    open_cmd.add_argument("--all-sites", action="store_true")
+    open_cmd.add_argument("--stub-seeds")
+    open_cmd.add_argument("--dry-run", action="store_true",
+                          help="열릴 케이스를 보여만 준다 (저장 안 함)")
+    _add_site_options(open_cmd, sub=True)
+    open_cmd.set_defaults(run=cmd_patrol_open)
+
     case = sub.add_parser("case", help="조사 엔진")
     case_sub = case.add_subparsers(dest="what", required=True)
     dryrun = case_sub.add_parser("dryrun", help="대본으로 라운드를 돌려 본다(LLM 없음)")
@@ -1145,6 +1272,14 @@ def build_parser() -> argparse.ArgumentParser:
     dryrun.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
     _add_site_options(dryrun, sub=True)
     dryrun.set_defaults(run=cmd_case_dryrun)
+
+    list_cases = case_sub.add_parser("list", help="케이스 목록")
+    list_cases.add_argument("--all", action="store_true", help="닫힌 것까지")
+    list_cases.set_defaults(run=cmd_case_list)
+
+    show_case = case_sub.add_parser("show", help="케이스 한 건")
+    show_case.add_argument("case_id")
+    show_case.set_defaults(run=cmd_case_show)
 
     schedule = sub.add_parser("schedule", help="스케줄대로 계속 돈다(상주 프로세스)")
     schedule.add_argument("--scenario", default=None, help="이 시나리오 하나만")

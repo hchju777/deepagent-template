@@ -84,10 +84,10 @@ def judge_items_all_zero(probes: ProbeSet, check: CheckConfig, *,
     params: ItemsAllZeroParams = check.params
     now = clock()
 
-    def outcome(status: str, reason: str, findings=(), examined: int = 0) -> CheckOutcome:
+    def outcome(status: str, reason: str, findings=(), targets=()) -> CheckOutcome:
         return CheckOutcome(check=probes.check, site=probes.site, concern=check.concern,
                             status=status, reason=reason, findings=list(findings),
-                            examined=examined)
+                            targets=list(targets))
 
     def finding(target: str, reason: str, observed: dict | None = None) -> Finding:
         return Finding(check=probes.check, site=probes.site, concern=check.concern,
@@ -123,6 +123,7 @@ def judge_items_all_zero(probes: ProbeSet, check: CheckConfig, *,
         return outcome("ok", f"{where}에 판정할 항목이 없다")
 
     findings: list[Finding] = []
+    judged: list[str] = []
     seen: dict[str, int] = {}
     for index, item in enumerate(items):
         label = f"{where}#{index}"
@@ -141,6 +142,7 @@ def judge_items_all_zero(probes: ProbeSet, check: CheckConfig, *,
                 target, f"식별자가 중복이다 — #{seen[target]}과 #{index}가 같다"))
             continue
         seen[target] = index
+        judged.append(target)
 
         observed = {f: item.get(f, MISSING) for f in params.counts}
         missing_counts = [f for f in params.counts if f not in item]
@@ -165,8 +167,8 @@ def judge_items_all_zero(probes: ProbeSet, check: CheckConfig, *,
 
     if findings:
         return outcome("finding", f"{len(items)}개 중 {len(findings)}건",
-                       findings, examined=len(items))
-    return outcome("ok", f"이상 없음 ({len(items)}개 항목)", examined=len(items))
+                       findings, targets=judged)
+    return outcome("ok", f"이상 없음 ({len(items)}개 항목)", targets=judged)
 
 
 RULES = {"items_all_zero": judge_items_all_zero}

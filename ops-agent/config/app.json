@@ -33,5 +33,6 @@
     "tls": {
       "use_system_store": true
     }
-  }
+  },
+  "case_store": "output/cases.json"
 }

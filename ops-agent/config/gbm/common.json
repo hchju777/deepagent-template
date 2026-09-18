@@ -51,7 +51,8 @@
             "path": "response.status",
             "equals": "In Production"
           }
-        }
+        },
+        "interval_minutes": 180
       }
     }
   }
