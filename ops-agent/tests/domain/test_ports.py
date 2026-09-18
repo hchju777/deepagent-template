@@ -74,3 +74,29 @@ def test_검사기가_쓰기_메서드를_실제로_잡는다():
         async def set(self, key: str, value: str): ...   # ← 이게 잡혀야 한다
 
     assert _public_methods(_BadPort) & WRITE_VERBS == {"set"}
+
+
+# ── 발견용 읽기 ──────────────────────────────────────────────────────
+
+def test_이름을_모르고도_찾을_수_있다():
+    """**이게 없으면 조사가 우리가 적어 준 곳만 본다.**
+
+    `find(collection, ...)`는 컬렉션 이름을 미리 알아야 부를 수 있다. 그 이름이
+    프롬프트나 config에 박히면, 리드는 사람이 알려 준 곳만 뒤지고 새 사이트·새 대상
+    에서는 아무것도 못 찾는다 — "우리가 아는 만큼만 조사하는" 에이전트가 된다.
+
+    찾을 수 있으면 어느 사이트에서도 같은 방법이 통하고, **무엇을 찾아 무엇을
+    골랐는지가 증거로 남는다.**
+    """
+    assert "scan" in _public_methods(RedisReaderPort)              # 키
+    assert "list_collections" in _public_methods(MongoReaderPort)  # 컬렉션
+    assert "list_topics" in _public_methods(KafkaInspectorPort)    # 토픽
+
+
+def test_발견용도_쓰기가_아니다():
+    """`list_*`는 목록을 **읽는다.** 이름에 write 동사가 없다는 위 테스트와 별개로,
+    실수로 `create_*`류가 발견용인 척 들어오는 것을 막는다."""
+    for port in ALL_PORTS:
+        for name in _public_methods(port):
+            assert not name.startswith(("create", "make", "ensure")), \
+                f"{port.__name__}.{name} — 발견용이라도 만드는 동사는 안 된다"

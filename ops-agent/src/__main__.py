@@ -220,6 +220,8 @@ async def _dispatch(adapters, site, args) -> list:
     if args.system == "mongo":
         if adapters.mongo is None:
             raise SystemExit("이 사이트에 mongodb 설정이 없다")
+        if args.collections:
+            return [await adapters.mongo.list_collections()]
         filter_ = json.loads(args.filter) if args.filter else {}
         if args.count:
             return [await adapters.mongo.count(args.collection, filter_)]
@@ -230,6 +232,8 @@ async def _dispatch(adapters, site, args) -> list:
     if args.system == "kafka":
         if adapters.kafka is None:
             raise SystemExit("이 사이트에 kafka 설정이 없다")
+        if args.topics:
+            return [await adapters.kafka.list_topics()]
         if args.lag:
             # --group을 안 주면 config의 **모든** 감시 그룹을 본다. 하나만 보게
             # 만들면 나머지가 밀려도 모른다(법인마다 서비스가 여러 개다).
@@ -1306,10 +1310,13 @@ def build_parser() -> argparse.ArgumentParser:
     peek.add_argument("--key"), peek.add_argument("--scan"), peek.add_argument("--ttl")
     # mongo
     peek.add_argument("--collection"), peek.add_argument("--filter")
+    # 발견용 — 이름을 미리 알아야 읽을 수 있는 것에 "무엇이 있나"를 연다.
+    peek.add_argument("--collections", action="store_true", help="컬렉션 목록")
     peek.add_argument("--sort", help="이 필드로 내림차순")
     peek.add_argument("--count", action="store_true")
     # kafka
     peek.add_argument("--topic", help="config의 논리 이름(topic1) 또는 실제 토픽 이름")
+    peek.add_argument("--topics", action="store_true", help="토픽 목록")
     peek.add_argument("--lag", action="store_true", help="감시 그룹의 lag")
     peek.add_argument("--group", help="lag을 볼 그룹 하나(생략하면 config의 group_ids 전부)")
     # rest

@@ -97,9 +97,15 @@ python -m src config show                             # 병합 결과 + 값의 �
 python -m src doctor                                  # 실제로 붙는가
 python -m src peek redis --key oee:L3
 python -m src peek mongo --collection oee --filter '{"line":"L3"}' --limit 5
+python -m src peek mongo --collections          # 이 DB에 무슨 컬렉션이 있나
+python -m src peek kafka --topics               # 이 브로커에 무슨 토픽이 있나
 python -m src peek kafka --lag
 python -m src peek rest --entry summary_badge --params '{"line_code":"P222"}'
 ```
+
+`--collections`·`--topics`는 **이름을 모르고도 찾기 위한 것**이다. 이게 없으면
+`--collection`을 부르려면 이름을 미리 알아야 하고, 조사(10b~)는 우리가 적어 준 곳만
+본다 — "우리가 아는 만큼만 조사하는" 에이전트가 된다.
 
 사이트가 여러 개면 `--gbm mx --fct gumi`를 붙인다 — **하위 명령 앞뒤 아무 데나** 된다.
 

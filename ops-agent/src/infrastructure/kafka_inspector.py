@@ -117,6 +117,35 @@ class RealKafkaInspector(KafkaInspectorPort):
             except Exception:                                      # noqa: BLE001
                 pass
 
+    async def list_topics(self) -> ProbeResult:
+        """브로커의 토픽 이름들. **AdminClient에게 묻는다.**
+
+        `consumer.topics()`를 쓰지 않는 이유는 `_partitions_of`와 같다 — 컨슈머
+        캐시는 구독/assign 전에 비어 있고, 그 메서드가 캐시를 갱신하지도 않는다.
+        내부 토픽(`__consumer_offsets` 등)은 뺀다: 우리 관심사가 아니고, 목록에
+        섞이면 리드가 그걸 데이터 토픽으로 착각한다.
+        """
+        source = "kafka:topics"
+        admin = None
+        try:
+            from aiokafka.admin import AIOKafkaAdminClient
+
+            admin = AIOKafkaAdminClient(bootstrap_servers=self._brokers)
+            await admin.start()
+            names = await admin.list_topics()
+            return ProbeResult.succeeded(
+                sorted(n for n in names if not n.startswith("__")),
+                source=source, clock=self._clock)
+        except Exception as exc:                                   # noqa: BLE001
+            return ProbeResult.failed(f"{type(exc).__name__}: {exc}",
+                                      source=source, clock=self._clock)
+        finally:
+            if admin is not None:
+                try:
+                    await admin.close()
+                except Exception:                                  # noqa: BLE001
+                    pass
+
     async def tail(self, topic: str, *, limit: int = DEFAULT_TAIL) -> ProbeResult:
         """토픽 끝에서 최근 메시지를 읽는다. 그룹 미참여, 오프셋 커밋 없음."""
         actual = self.resolve_topic(topic)

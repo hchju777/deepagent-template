@@ -122,6 +122,17 @@ class RealMongoReader(MongoReaderPort):
             return ProbeResult.failed(f"{type(exc).__name__}: {exc}",
                                       source=source, clock=self._clock)
 
+    async def list_collections(self) -> ProbeResult:
+        """이 DB의 컬렉션 이름들. 계정 권한이 없으면 error로 흡수된다 — 그때는
+        그 길이 막힌 것이고, 조사 기록에 "못 찾았다"가 남는다."""
+        source = f"mongo:{self._cfg.database} collections"
+        try:
+            names = await self._database().list_collection_names()
+            return ProbeResult.succeeded(sorted(names), source=source, clock=self._clock)
+        except Exception as exc:                                   # noqa: BLE001
+            return ProbeResult.failed(f"{type(exc).__name__}: {exc}",
+                                      source=source, clock=self._clock)
+
     async def count(self, collection: str, filter: dict) -> ProbeResult:
         source = f"mongo:{self._cfg.database}.{collection} count={filter}"
         problems = filter_problems(filter)

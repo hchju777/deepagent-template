@@ -89,6 +89,10 @@ class FakeMongo(MongoReaderPort):
         return ProbeResult.succeeded(rows, source=source, clock=self._clock,
                                      truncated_reason=self.truncated)
 
+    async def list_collections(self):
+        return ProbeResult.succeeded(sorted(self.documents and ["alarm"] or []),
+                                     source="fake-mongo:collections", clock=self._clock)
+
     async def count(self, collection, filter):
         return ProbeResult.succeeded(len(self.documents), source="fake-mongo",
                                      clock=self._clock)

@@ -104,6 +104,10 @@ class StubMongoReader(MongoReaderPort):
         return ProbeResult.succeeded(rows, source=source, clock=self._clock,
                                      truncated_reason=truncated)
 
+    async def list_collections(self) -> ProbeResult:
+        return ProbeResult.succeeded(sorted(self._collections),
+                                     source="stub-mongo:collections", clock=self._clock)
+
     async def count(self, collection: str, filter: dict) -> ProbeResult:
         source = f"stub-mongo:{collection} count={filter}"
         problems = filter_problems(filter)
@@ -125,6 +129,10 @@ class StubKafkaInspector(KafkaInspectorPort):
         self._topics = {k: list(v) for k, v in (topics or {}).items()}
         self._lags = dict(lags or {})
         self._clock = clock
+
+    async def list_topics(self) -> ProbeResult:
+        return ProbeResult.succeeded(sorted(self._topics),
+                                     source="stub-kafka:topics", clock=self._clock)
 
     async def group_offsets(self, group: str) -> ProbeResult:
         lag = self._lags.get(group, 0)

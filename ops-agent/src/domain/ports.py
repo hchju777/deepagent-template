@@ -78,6 +78,18 @@ class MongoReaderPort(ABC):
     async def count(self, collection: str, filter: dict) -> ProbeResult:
         """조건에 맞는 문서 수. find로 세면 상한에 걸려 틀린 수가 나온다."""
 
+    @abstractmethod
+    async def list_collections(self) -> ProbeResult:
+        """이 DB에 무슨 컬렉션이 있는가. **발견(discovery)용 읽기다.**
+
+        이게 없으면 `find`를 부르려면 컬렉션 이름을 **미리 알아야** 한다. 그러면
+        그 이름이 프롬프트나 config에 박히고, 조사는 우리가 적어 준 곳만 본다 —
+        "우리가 아는 만큼만 조사하는" 에이전트가 된다.
+
+        찾을 수 있으면 어느 사이트에서도 같은 방법이 통하고, **무엇을 찾아 무엇을
+        골랐는지가 증거로 남는다.**
+        """
+
 
 class KafkaInspectorPort(ABC):
     """Kafka 관찰. **컨슈머 그룹에 참여하지 않는다.**
@@ -101,6 +113,10 @@ class KafkaInspectorPort(ABC):
     @abstractmethod
     async def tail(self, topic: str, *, limit: int) -> ProbeResult:
         """토픽 끝에서 최근 메시지를 읽는다(그룹 미참여, 오프셋 커밋 없음)."""
+
+    @abstractmethod
+    async def list_topics(self) -> ProbeResult:
+        """이 브로커에 무슨 토픽이 있는가. `MongoReaderPort.list_collections`와 같은 이유다."""
 
 
 class RestProberPort(ABC):

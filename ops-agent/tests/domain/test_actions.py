@@ -7,7 +7,8 @@ from datetime import datetime
 
 import pytest
 
-from src.domain.actions import ACTIONS, action_problem, describe, run_action
+from src.domain.actions import (ACTIONS, NO_ARGS, action_problem, describe,
+                                run_action)
 from src.domain.envelope import ProbeResult
 
 T0 = datetime(2026, 9, 15, 9, 0, 0)
@@ -125,7 +126,32 @@ async def test_포트가_던져도_흡수한다():
 
 
 @pytest.mark.parametrize("action", sorted(ACTIONS))
-def test_등재된_전부에_필수_인자_검사가_붙어_있다(action):
-    """인자가 하나도 필수가 아닌 action은 "아무 인자 없이 불러도 된다"는 뜻이다."""
+def test_인자가_없는_action은_목록에_적혀_있다(action):
+    """인자가 하나도 필수가 아니면 "아무 인자 없이 불러도 된다"는 뜻이다.
+
+    발견용(`list_collections`·`list_topics`)이 실제로 그렇다 — "이 DB에 무엇이 있나"에는
+    물을 것이 없다. 그래서 금지가 아니라 **명시**로 막는다: `NO_ARGS`에 적혀 있으면
+    의도이고, 안 적혀 있는데 필수 인자가 없으면 선언을 빠뜨린 것이다.
+    """
     _, _, required, _ = ACTIONS[action]
-    assert required, f"{action}에 필수 인자 선언이 없다"
+    if action in NO_ARGS:
+        assert not required, f"{action}은 NO_ARGS인데 필수 인자가 있다"
+    else:
+        assert required, f"{action}에 필수 인자 선언이 없다 — 의도면 NO_ARGS에 적어라"
+
+
+def test_발견용_읽기가_등재돼_있다():
+    """이게 없으면 `find`를 부르려면 컬렉션 이름을 **미리 알아야** 한다.
+
+    그러면 그 이름이 프롬프트나 config에 박히고, 조사는 우리가 적어 준 곳만 본다 —
+    "우리가 아는 만큼만 조사하는" 에이전트가 된다.
+    """
+    assert {"mongo.list_collections", "kafka.list_topics"} <= set(ACTIONS)
+
+
+async def test_발견용_읽기도_인자를_검사한다():
+    mongo = Recorder()
+    result = await run_action(Bundle(mongo=mongo), "mongo.list_collections",
+                              {"collection": "x"}, clock=CLOCK)
+    assert result.status == "error" and "모르는 인자" in result.error
+    assert mongo.calls == []

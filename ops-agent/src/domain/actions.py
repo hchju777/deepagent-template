@@ -40,12 +40,20 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     "mongo.find":          ("mongo", "find",          ("collection", "filter"),
                             ("sort", "limit", "projection")),
     "mongo.count":         ("mongo", "count",         ("collection", "filter"), ()),
+    # 발견용. 인자가 없는 것이 정상이다 — "이 DB에 무엇이 있나"에는 물을 것이 없다.
+    "mongo.list_collections": ("mongo", "list_collections", (), ()),
+    "kafka.list_topics":      ("kafka", "list_topics",      (), ()),
     "kafka.group_offsets": ("kafka", "group_offsets", ("group",),              ()),
     "kafka.tail":          ("kafka", "tail",          ("topic",),              ("limit",)),
     # `params`가 두 번 나오는 것은 포트 시그니처 그대로다 — `query(entry, params)`.
     # 이름을 바꾸면 표와 포트가 갈라지고, 갈라진 것을 아무도 안 본다.
     "rest.query":          ("rest",  "query",         ("entry", "params"),     ()),
 }
+
+
+# 인자를 받지 않는 action들 — "이 DB에 무엇이 있나"에는 물을 것이 없다.
+# 목록으로 두는 이유: "필수 인자가 없다"가 실수인지 의도인지 표가 말해야 한다.
+NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics"})
 
 
 def action_problem(action: str, params: dict) -> str | None:

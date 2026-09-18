@@ -137,3 +137,38 @@ async def test_투영하면_무엇을_물었는지_source에_남는다(clock):
 async def test_투영을_안_주면_문서_전체가_온다(clock):
     result = await _reader([{"_id": "x1", "a": 1}], clock).find("alarm", {})
     assert result.data == [{"_id": "x1", "a": 1}]
+
+
+# ── 발견용 읽기 ──────────────────────────────────────────────────────
+
+async def test_컬렉션_목록을_못_읽어도_던지지_않는다(monkeypatch):
+    """`dmfReadOnly` 계정에 권한이 없을 수 있다. **그때는 그 길이 막힌 것이고**,
+    error로 흡수돼 조사 기록에 "못 찾았다"가 남아야 한다 — 순찰이 죽으면 안 된다.
+
+    실접속 대신 `_database`가 던지게 한다. 못 붙는 주소를 쓰면
+    `serverSelectionTimeoutMS`(5초)를 그대로 기다린다 — 테스트 묶음에 5초를 더할
+    이유가 없고, 여기서 보려는 것은 **예외를 흡수하는가**뿐이다.
+    """
+    reader = RealMongoReader(CFG, clock=lambda: datetime(2026, 9, 18, tzinfo=UTC))
+    monkeypatch.setattr(reader, "_database",
+                        lambda: (_ for _ in ()).throw(RuntimeError("권한이 없다")))
+    result = await reader.list_collections()
+    assert result.status == "error" and "권한이 없다" in result.error
+    assert "collections" in result.source          # 무엇을 물었는지가 남는다
+
+
+def test_스텁도_같은_표면을_갖는다():
+    """스텁이 포트를 다 구현했는지는 ABC가 강제한다 — 인스턴스가 만들어지면 통과다."""
+    from src.infrastructure.stubs import StubMongoReader
+
+    StubMongoReader({"alarm": []}, clock=lambda: datetime(2026, 9, 18, tzinfo=UTC))
+
+
+async def test_스텁이_컬렉션_이름을_정렬해_돌려준다():
+    """순서가 흔들리면 같은 입력에 리드가 다른 컬렉션을 먼저 본다 — 재현이 안 된다."""
+    from src.infrastructure.stubs import StubMongoReader
+
+    stub = StubMongoReader({"zeta": [], "alpha": [], "mid": []},
+                           clock=lambda: datetime(2026, 9, 18, tzinfo=UTC))
+    result = await stub.list_collections()
+    assert result.data == ["alpha", "mid", "zeta"]
