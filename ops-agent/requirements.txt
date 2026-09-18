@@ -1,0 +1,33 @@
+# 단계별로 자란다. 각 줄 뒤의 주석이 "몇 단계에서 왜 들어왔는지"를 말한다.
+
+# ── 1단계: 모델과 config의 뼈대 ──────────────────────────────
+pydantic>=2.13,<3          # StrictModel(extra="forbid")의 근거
+tzdata>=2024.1            # Windows엔 tz 데이터베이스가 없다 — zoneinfo가 이걸 찾는다
+
+# ── 3a단계: config ─────────────────────────────────────────
+python-dotenv>=1.0,<2     # .env를 os.environ으로 (CLI 경계에서만 부른다)
+
+# ── 3b단계: 실제 어댑터 ─────────────────────────────────────
+# 전부 지연 import다 — 스텁만 쓰는 환경에서는 설치돼 있어도 로드되지 않는다.
+redis>=5.0                # redis.asyncio
+pymongo>=4.13,<5          # AsyncMongoClient (motor는 deprecated)
+aiokafka>=0.12            # 그룹 미참여 assign() 읽기
+httpx>=0.28,<1            # REST
+
+# ── 7단계: LLM ─────────────────────────────────────────────────
+# adapter="http"만 쓸 거면 langchain 두 줄은 없어도 된다(httpx로 같은 규약을 말한다).
+# 사내 PyPI에 langchain 계열이 없는 경우의 탈출구다.
+langchain-openai>=1.4,<2   # ChatOpenAI — 8단계 그래프 노드가 받는 모델 객체
+langchain-core>=1.5,<2
+truststore>=0.10           # OS 신뢰 저장소(Windows CryptoAPI) — 사내 CA를 그대로
+
+# ── 9g단계: 스케줄러 ────────────────────────────────────────────
+# 없어도 돈다(asyncio로 떨어진다). Windows는 uvloop 빌드가 없으므로 표시로 건너뛴다 —
+# 표시가 없으면 Windows에서 `pip install -r`이 통째로 실패한다.
+uvloop>=0.19; sys_platform != "win32"
+
+# ── 10a단계: 조사 그래프 ─────────────────────────────────────────
+# 라운드 루프·Send 팬아웃·체크포인터·interrupt. 직접 만드는 안을 기각한 이유와
+# 사내 PyPI에 없을 때의 탈출구는 STEPS/decisions.md ①.
+# langchain-core는 7단계에서 이미 들어와 있고, ormsgpack·xxhash가 네이티브 휠이다.
+langgraph>=1.2,<2

@@ -1,0 +1,10 @@
+{
+  "_설명": "대상 시스템에 안 붙고 돌려 보기 위한 가짜 응답. --stub-seeds로 준다.",
+  "redis": { "oee:L3": "512" },
+  "mongo": {
+    "twin_state": [
+      { "line": "L3", "run_time_min": 480, "planned_min": 480,
+        "total_count": 4551, "good_count": 4460, "ideal_cycle_sec": 6.0 }
+    ]
+  }
+}
