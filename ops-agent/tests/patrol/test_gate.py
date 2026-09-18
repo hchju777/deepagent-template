@@ -216,13 +216,16 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
             {"group": "Operator", "title": "Check", "alarm": 0, "caution": 0, "normal": 0},
             {"group": "Line", "title": "Target Rate", "alarm": 0, "caution": 0, "normal": 9}],
         "prod_status": {"status": "In Production"}}}), encoding="utf-8")
+    # **심볼릭 링크를 쓰지 않는다.** Windows에서 `symlink_to`는 관리자 권한이나
+    # 개발자 모드가 있어야 되고, 없으면 `OSError [WinError 1314]`로 죽는다 —
+    # 사내가 Windows라 개발 기계에서만 도는 테스트가 된다(windows.md 함정 ⑥-b와
+    # 같은 계열: 개발 기계에서는 돌고 사내에서만 죽는다).
+    import shutil
+
     app = json.loads((root / "config" / "app.json").read_text(encoding="utf-8"))
     app["case_store"] = str(tmp_path / "cases.json")
     config_root = tmp_path / "config"
-    config_root.mkdir()
-    for child in (root / "config").iterdir():
-        if child.name != "app.json":
-            (config_root / child.name).symlink_to(child)
+    shutil.copytree(root / "config", config_root)
     (config_root / "app.json").write_text(json.dumps(app, ensure_ascii=False),
                                           encoding="utf-8")
     for key in ("REDIS_PASSWORD", "MONGO_PASSWORD", "LLM_BASE_URL", "LLM_CLIENT_KEY",

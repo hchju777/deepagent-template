@@ -157,3 +157,48 @@ def test_테스트_디렉터리마다_init이_있다():
         if not (directory / "__init__.py").exists():
             missing.append(str(directory.relative_to(PROJECT_ROOT)))
     assert not missing, f"__init__.py가 없는 테스트 디렉터리 — {missing}"
+
+
+# ── 심볼릭 링크 ──────────────────────────────────────────────────────
+
+_SYMLINK_CALLS = {"symlink_to", "symlink", "hardlink_to", "link"}
+
+
+def symlink_violations(path: Path) -> list[str]:
+    """`symlink_to`/`os.symlink` 호출을 찾는다.
+
+    **Windows에서 심볼릭 링크는 관리자 권한이나 개발자 모드가 있어야 만들어진다.**
+    없으면 `OSError [WinError 1314] 클라이언트에게 필요한 권한이 없습니다`로 죽는다.
+    개발 기계(Linux/macOS)에서는 아무 문제 없으므로 **사내에서만 깨진다** — 이 파일이
+    막으려는 바로 그 모양이다.
+
+    실제로 났다: `test_gate.py`가 config 트리를 흉내내려고 `symlink_to`를 썼고,
+    Linux에서는 전부 초록이었다. `shutil.copytree`면 어디서나 된다.
+    """
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+        if isinstance(node, ast.Call) and _called_name(node) in _SYMLINK_CALLS:
+            found.append(f"{_label(path)}:{node.lineno} — {_called_name(node)}()")
+    return found
+
+
+def test_심볼릭_링크를_만들지_않는다():
+    violations = [v for path in _python_files() for v in symlink_violations(path)]
+    assert not violations, (
+        "Windows에서는 관리자 권한 없이 심볼릭 링크를 못 만든다 — "
+        "shutil.copytree/copy2를 써라:\n  " + "\n  ".join(violations))
+
+
+def test_검사기가_심볼릭_링크를_실제로_잡는다(tmp_path):
+    bad = tmp_path / "bad.py"
+    bad.write_text("from pathlib import Path\nPath('a').symlink_to(Path('b'))\n",
+                   encoding="utf-8")
+    # 경로는 프로젝트 밖이라 절대 경로로 나온다(_label 설명 참고) — 줄과 이름만 본다.
+    assert [v.split(" — ")[-1] for v in symlink_violations(bad)] == ["symlink_to()"]
+    assert symlink_violations(bad)[0].endswith("bad.py:2 — symlink_to()")
+
+
+def test_검사기가_정상_코드를_심볼릭_링크로_오탐하지_않는다(tmp_path):
+    good = tmp_path / "good.py"
+    good.write_text("import shutil\nshutil.copytree('a', 'b')\n", encoding="utf-8")
+    assert symlink_violations(good) == []

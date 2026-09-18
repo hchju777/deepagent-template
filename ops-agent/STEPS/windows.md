@@ -167,6 +167,21 @@ AttributeError: 'NoneType' object has no attribute 'splitlines'
 > 새 테스트를 쓸 때: **`grep`·`sed`·`find`·`wc`를 부르지 마라.** 개발 기계에서는
 > 돌고 사내에서만 죽는다.
 
+## 함정 ⑥-c: 심볼릭 링크는 관리자 권한이 필요하다
+
+`test_gate.py`가 config 트리를 흉내내려고 `Path.symlink_to`를 썼다. Linux/macOS에서는
+아무 문제 없고, Windows에서는 **관리자 권한이나 개발자 모드가 없으면** 이렇게 죽는다:
+
+```
+OSError: [WinError 1314] 클라이언트에게 필요한 권한이 없습니다
+```
+
+함정 ⑥-b와 같은 모양이다 — **개발 기계에서는 돌고 사내에서만 죽는다.**
+
+**막은 방법**: `test_portability.py`가 `symlink_to`/`os.symlink`/`hardlink_to`/`os.link`
+호출을 AST로 찾아 실패시킨다. 대신 `shutil.copytree`·`shutil.copy2`를 쓴다 — 어디서나
+된다.
+
 ## 함정 ⑦: 상주 스케줄러를 Windows에서 띄울 때
 
 9g단계의 `python -m src schedule`은 **떠 있는 프로세스**다. Windows에서 네 가지가 걸린다.
