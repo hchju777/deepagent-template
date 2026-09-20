@@ -29,6 +29,13 @@ class InvestigationConfig(StrictModel):
     # 케이스 하나가 가질 수 있는 태스크 총수. 이게 없으면 라운드마다 태스크를
     # 쌓기만 하는 계획이 상한 없이 자란다.
     max_tasks: int = Field(default=24, ge=1)
+    # 증거 하나를 리드에게 보여 줄 때 쓸 글자 예산. **줄이면 조사가 눈이 먼다** —
+    # 문서 한 건이 안 들어가면 리드는 필드 이름만 보고 값은 못 봐서, 같은 질의를
+    # 말만 바꿔 다시 낸다(실제로 4라운드 중 셋이 그랬다). 늘리면 프롬프트가 커진다.
+    evidence_chars: int = Field(default=1200, ge=200)
+    # 증거 블록 전체 예산. 넘으면 **오래된 것부터 한 줄 요약만** 남긴다 — id와
+    # 출처는 끝까지 남으므로 인용은 계속 유효하다.
+    evidence_total_chars: int = Field(default=12000, ge=1000)
     # 리드 프롬프트. config 안의 상대 경로다 — 운영이 직접 고치는 파일이라
     # 코드에 박아 두면 고치려고 배포를 해야 한다.
     frame_prompt: str = Field(default="prompts/investigate-frame.md", min_length=1)

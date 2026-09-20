@@ -14,6 +14,7 @@
 | LLM 출력 소독 | `_sanitize_task` — 수명주기 필드를 코드가 덮어쓴다 |
 | 증거 인용 검사 | `_accept_hypotheses` — 실재하지 않는 id를 걷어낸다 |
 | 태스크 id 재사용 | `_accept_tasks` — 이미 있는 id는 안 받는다 |
+| **같은 질의 반복** | `_accept_tasks` — `action`+`params`가 같으면 안 받는다 |
 | 예외 흡수 | `execute` 최외곽 |
 
 ## 노드는 `(state) -> dict`다
@@ -28,11 +29,12 @@ LangGraph 타입을 아는 것은 `graph.py` 하나뿐이고, 여기는 State를
 남는다. 노드가 고른 것을 `running`으로 굴려 State에 적으면 체크포인트에 남고,
 라우터는 그걸 읽기만 한다 — 판단과 배선이 갈린다.
 """
+import json
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from src.application.state import CaseState, merge_by_id
-from src.domain.actions import DISCOVERED_ARGS
+from src.domain.actions import DISCOVERED_ARGS, describe
 from src.domain.case import Case, Hypothesis, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
@@ -108,6 +110,10 @@ def _taken(state: CaseState) -> frozenset:
     return frozenset(t.id for t in state.plan_tasks)
 
 
+def _done(state: CaseState) -> frozenset:
+    return frozenset(_query(t) for t in state.plan_tasks if t.action)
+
+
 def runnable_tasks(state: CaseState) -> list[PlanTask]:
     """지금 실행할 수 있는 태스크 — 우선순위 오름차순, 동률이면 FIFO.
 
@@ -124,8 +130,19 @@ def runnable_tasks(state: CaseState) -> list[PlanTask]:
     return sorted(ready, key=lambda t: t.priority)
 
 
+def _query(task: PlanTask) -> str:
+    """이 태스크가 **실제로 나갈 질의**. id도 goal도 아니다.
+
+    리드는 `goal` 문장만 바꿔 같은 질의를 다시 낸다 — "데이터가 있나" → "값이
+    정상인가" → "값이 진짜 0인가"가 전부 `mongo.find collection='alarm' filter={}
+    limit=5`였다. **말이 아니라 나가는 것으로 세야** 중복이 보인다.
+    """
+    return f"{task.action}|{json.dumps(task.params, sort_keys=True, ensure_ascii=False)}"
+
+
 def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
-                  taken: frozenset = frozenset()) -> tuple[list[PlanTask], list[str]]:
+                  taken: frozenset = frozenset(),
+                  done: frozenset = frozenset()) -> tuple[list[PlanTask], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
     상한을 리듀서가 아니라 여기서 거는 이유는 `state.py` 맨 위에 있다 — 리듀서에서
@@ -142,6 +159,15 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     사내에서 실제로 났다: 리드가 예시의 `t-4`·`t-5`를 매 라운드 그대로 베껴서
     같은 읽기가 세 번씩 돌았고, 라운드 4개 중 둘이 통째로 반복이었다.
 
+    ## `done` — **같은 질의는 한 번만**
+
+    id를 막아도 리드는 새 id로 **같은 질의**를 다시 낸다(실제로 4라운드 중 셋이
+    그랬다). 대상은 읽기 전용이고 라운드 간격은 초 단위라 재조회에 새 정보가 없다 —
+    라운드만 태운다. 그래서 `action`+`params`가 같으면 받지 않는다.
+
+    낼 것이 없어지면 `no_runnable`로 **정직하게 끝난다.** 상한까지 같은 것을 세 번
+    더 읽고 "4라운드 조사했다"고 적는 것보다 낫다.
+
     ## `seen` — 찾지 않고 댄 이름을 **기록한다**
 
     `None`이면 검사하지 않는다(`EngineDeps.check_discovery`). 아니면 지금까지 본
@@ -150,12 +176,18 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     증상 자체가 이름을 담고 있는 정당한 경우가 있고, 무엇보다 ⑮ 설계가 실제로
     먹히는지를 **빈도로 알아야** 막을지 정할 수 있다.
     """
-    kept, reused, used = [], [], set(taken)
+    kept, reused, used, asked = [], [], set(taken), set(done)
     for task in patch.get("plan_tasks", []):
         if task.id in used:
             reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")
             continue
+        query = _query(task)
+        if task.action and query in asked:
+            reused.append(f"{task.id}: 이미 한 읽기를 또 냈다 — 받지 않는다 "
+                          f"({describe(task.action, task.params)})")
+            continue
         used.add(task.id)
+        asked.add(query)
         kept.append(_sanitize_task(task))
     kept = kept[:max(0, room)]
     if seen is None:
@@ -177,7 +209,7 @@ def make_nodes(deps: EngineDeps) -> dict:
         # frame 시점엔 증거가 없으므로 `seen`이 비어 있다 — 이름을 대면 전부 기록된다.
         # 그게 맞다: 아직 아무것도 안 봤는데 이름을 안다면 찍은 것이다.
         tasks, guessed = _accept_tasks(
-            patch, room=deps.max_tasks, taken=_taken(state),
+            patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             seen=_seen(state) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -215,7 +247,7 @@ def make_nodes(deps: EngineDeps) -> dict:
         patch = await deps.integrate(state)
         room = deps.max_tasks - len(state.plan_tasks)
         fresh, guessed = _accept_tasks(
-            patch, room=room, taken=_taken(state),
+            patch, room=room, taken=_taken(state), done=_done(state),
             seen=_seen(state) if deps.check_discovery else None)
         hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
         patch = {**patch, "plan_tasks": fresh, "hypotheses": hypotheses,

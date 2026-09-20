@@ -840,6 +840,7 @@ def cmd_case_investigate(args, env) -> int:
     정한다"이다.
     """
     from src.application import briefing
+    from src.application.diagnose import diagnose
     from src.application.graph import build_engine
     from src.application.lead import make_lead
     from src.application.nodes import EngineDeps
@@ -878,10 +879,14 @@ def cmd_case_investigate(args, env) -> int:
         built["llm"] = llm.describe()     # config가 뭐라고 적혔는지가 아니라 실제로 붙은 것
         adapters = build_adapters(site, clock=clock, seeds=seeds)
         try:
-            frame, integrate = make_lead(llm, site_config=site, prompts=prompts,
-                                         max_rounds=app.investigation.max_rounds,
-                                         trace=tracer)
-            deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock),
+            frame, integrate = make_lead(
+                llm, site_config=site, prompts=prompts,
+                max_rounds=app.investigation.max_rounds,
+                evidence_budget=app.investigation.evidence_total_chars,
+                trace=tracer)
+            deps = EngineDeps(runner=ProbeRunner(
+                adapters, clock=clock,
+                detail_chars=app.investigation.evidence_chars),
                               frame=frame, integrate=integrate,
                               max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width,
@@ -918,8 +923,14 @@ def cmd_case_investigate(args, env) -> int:
     # 리드가 없는 증거를 인용한 것은 같은 사실이 아니다. 둘 다 시끄럽게 알리되
     # 종료 코드는 전자에만 준다 — 후자까지 1로 주면 "빨간불이 원래 그렇다"가 되고,
     # 그러면 진짜 빨간불도 안 보이게 된다.
+    report = diagnose(CaseState.model_validate(final))
+    print("\n" + "\n".join(report))
     if traced:
-        print(f"\n  트레이스 {len(traced)}건 — {traced[0].parent}")
+        # 진단도 파일로 남긴다 — 사람이 터미널에서 옮겨 적지 않아도 되게.
+        summary = traced[0].parent / "summary.md"
+        summary.write_text("# " + record.id + "\n\n```\n"
+                           + "\n".join(report) + "\n```\n", encoding="utf-8")
+        print(f"\n  트레이스 {len(traced)}건 · 진단 {summary} — {traced[0].parent}")
 
     broken = final["stopped_by"] == "llm_error"
     if final["llm_errors"]:

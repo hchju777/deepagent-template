@@ -56,8 +56,11 @@ def case() -> Case:
 
 
 def task(task_id: str, **overrides) -> PlanTask:
+    # 키를 태스크마다 다르게 준다. 전부 `key="k"`면 **질의가 같아서** 중복 차단
+    # (`_accept_tasks`의 `done`)에 걸린다 — 실제 조사에서 태스크 둘이 완전히 같은
+    # 읽기를 하는 일은 없으므로, 같게 두면 픽스처가 현실과 달라진다.
     body = {"id": task_id, "goal": f"목표 {task_id}", "role": "data_prober",
-            "action": "redis.get", "params": {"key": "k"}}
+            "action": "redis.get", "params": {"key": f"k-{task_id}"}}
     body.update(overrides)
     return PlanTask.model_validate(body)
 

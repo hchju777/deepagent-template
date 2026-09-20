@@ -74,23 +74,49 @@ def hypotheses_block(state: CaseState) -> str:
         f"- {h.id} [{h.status}] {_oneline(h.statement)}" for h in state.hypotheses)
 
 
-def evidence_block(state: CaseState) -> str:
+def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
     """**리드가 실제로 본 것**만. 이게 나중에 판정이 인용할 수 있는 우주다(12a).
 
-    **한 줄이 한 증거다.** 대상 데이터는 여러 줄이 정상인데 그게 날것으로 실리면
-    이 블록에 **가짜 항목**이 생기고, 리드는 있지도 않은 증거 id를 인용한다.
+    ## 왜 `summary`가 아니라 `body`인가
 
-    `runner_probe._summarize`가 `repr`로 이미 이스케이프하지만 여기서 한 번 더
-    막는다 — `EvidenceRef`는 어디서나 만들 수 있고(11b의 서브에이전트가 곧 만든다),
-    **"생산자가 다 지킨다"는 가정은 생산자가 늘어나면 깨진다.**
+    `summary`는 사람이 볼 한 줄(160자)이다. 그걸 리드의 판단 재료로 그대로 쓰니
+    제조 문서(258자) 한 건이 반쯤 잘려서, 리드가 **필드 이름은 보고 값은 못 보는**
+    상태가 됐다. 그래서 올바른 후속 질문을 하고도 같은 질의를 반복했다.
+
+    ## 예산을 넘으면 오래된 것부터 한 줄만 남긴다
+
+    `- id | 출처 | 요약` 줄은 **모든 증거에 대해 끝까지 남는다** — 그래야 인용이
+    계속 유효하다. 줄어드는 것은 내용(`body`)뿐이고, 줄어든 사실을 적는다.
+
+    ## 개행은 우리가 만든 것만 있다
+
+    대상 데이터는 여러 줄이 정상인데 날것으로 실리면 이 블록에 **가짜 항목**이 생기고,
+    리드는 있지도 않은 증거 id를 인용한다. 생산자(`runner_probe.detail`)가 이미
+    눕히지만 여기서 한 번 더 막는다 — `EvidenceRef`는 어디서나 만들 수 있고
+    (11b의 서브에이전트가 곧 만든다), **"생산자가 다 지킨다"는 가정은 생산자가
+    늘어나면 깨진다.**
     """
     if not state.evidence:
         return "(아직 없다)"
+
+    # 뒤에서부터 예산을 채운다 — 최근 증거가 지금 판단에 쓰인다.
+    detailed, used = set(), 0
+    for ref in reversed(state.evidence):
+        used += len(ref.body or ref.summary)
+        if used > budget and detailed:
+            break
+        detailed.add(ref.id)
+
     lines = []
     for ref in state.evidence:
         cut = "" if ref.complete else "  ⚠ 표본이 잘렸다 — '없다'를 주장할 수 없다"
         lines.append(f"- {_oneline(ref.id)} | {_oneline(ref.source)} | "
                      f"{_oneline(ref.summary)}{cut}")
+        if ref.id not in detailed:
+            lines.append("    (내용은 예산에서 빠졌다 — 필요하면 다시 읽어라)")
+            continue
+        for row in (ref.body or "").splitlines():
+            lines.append(f"    {_oneline(row)}")
     return "\n".join(lines)
 
 
@@ -223,13 +249,14 @@ def frame_fields(state: CaseState, *, site_config) -> dict[str, str]:
                                      start=next_task_number(state))}
 
 
-def integrate_fields(state: CaseState, *, site_config, max_rounds: int) -> dict[str, str]:
+def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
+                     evidence_budget: int = 12000) -> dict[str, str]:
     return {"case": case_block(state),
             "actions": action_catalog(site_config),
             "example": example_block(site_config, phase="integrate",
                                      start=next_task_number(state)),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
-            "evidence": evidence_block(state),
+            "evidence": evidence_block(state, budget=evidence_budget),
             "round": str(state.round),
             "max_rounds": str(max_rounds)}

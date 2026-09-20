@@ -38,7 +38,15 @@ class EvidenceRef(StrictModel):
 
     id: str
     source: str                       # 무엇을 물었는가 — "redis.get key=oee:L3"
+    # 사람이 볼 **한 줄**. CLI의 태스크 행과 증거 행이 이걸 쓴다.
     summary: str
+    # 리드가 **판단할 재료**. 둘을 한 필드로 쓰면 안 된다 — 적정 길이가 10배 다르고,
+    # 짧은 쪽에 맞추면 리드가 자기가 읽은 것의 내용을 못 본다.
+    #
+    # 실제로 그랬다: 요약 160자에 제조 문서 한 건이 258자라, `alarm`·`caution`·
+    # `normal`(조사가 확인하려던 바로 그 필드)이 잘려 나갔다. 리드는 매 라운드
+    # 올바른 후속 질문을 했는데 **매번 같은 못 읽을 답**을 받아 같은 질의를 반복했다.
+    body: str = ""
     as_of: datetime | None = None
     # 표본이 잘렸는가. 잘린 표본으로는 "없다"를 주장할 수 없다 — 12a의 verify가 본다.
     complete: bool = True

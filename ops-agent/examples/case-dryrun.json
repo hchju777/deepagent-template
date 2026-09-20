@@ -32,11 +32,12 @@
       "_설명": [
         "우선순위가 제일 앞(5)인데도 1라운드에 안 돈다 —",
         "t-1이 t-1.e1을 만들 때까지 select 게이트가 붙잡는다.",
-        "이게 10a가 만든 것의 요약이다."
+        "이게 10a가 만든 것의 요약이다.",
+        "t-1과 **다른 읽기**여야 한다 — 같은 질의는 받지 않는다(라운드만 태운다)."
       ],
-      "id": "t-9", "goal": "재계산 대조 — t-1의 증거를 입력으로 받는다",
+      "id": "t-9", "goal": "재계산 대조 — 그 파생값이 언제 갱신된 것인가",
       "role": "recompute_verifier", "priority": 5,
-      "action": "redis.get", "params": { "key": "oee:L3" },
+      "action": "redis.ttl", "params": { "key": "oee:L3" },
       "input_evidence_ids": ["t-1.e1"]
     }
   ],

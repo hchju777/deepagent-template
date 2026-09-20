@@ -346,6 +346,65 @@ async def test_같은_읽기가_라운드마다_반복되지_않는다(case):
     assert final["stopped_by"] == "no_runnable"       # 낼 것이 없으면 정직하게 끝난다
 
 
+# ── 같은 질의 반복 (사내에서 실제로 난 것) ─────────────────────────
+
+async def test_goal만_바꾼_같은_질의는_받지_않는다(case):
+    """**사내에서 실제로 났다.** id를 막았더니 새 id로 같은 질의를 다시 냈다 —
+    `goal`만 "데이터가 있나" → "값이 정상인가" → "값이 진짜 0인가"로 바뀌고
+    나가는 것은 전부 `mongo.find collection='alarm' filter={} limit=5`였다.
+
+    **말이 아니라 나가는 것으로 세야** 중복이 보인다.
+    """
+    read = {"action": "mongo.find", "params": {"collection": "alarm", "filter": {}}}
+    _, integrate, _ = leads(reply(decision="continue", tasks=[
+        {"id": "t-9", "goal": "값이 진짜 0인지 확인한다", "role": "data_prober", **read}]))
+    nodes = make_nodes(_deps(integrate, check_discovery=False))
+
+    done = task("t-4", goal="데이터가 있는지 확인한다", status="ok", **read)
+    patch = await nodes["integrate"](CaseState(case=case, round=1, plan_tasks=[done]))
+
+    assert patch["plan_tasks"] == []
+    assert "이미 한 읽기를 또 냈다" in patch["llm_errors"][0]
+
+
+async def test_인자가_하나라도_다르면_받는다(case):
+    """`limit`이 다르면 다른 질문이다 — 너무 넓게 막으면 정당한 후속 읽기가 막힌다."""
+    _, integrate, _ = leads(reply(decision="continue", tasks=[
+        {"id": "t-9", "goal": "더 본다", "role": "data_prober", "action": "mongo.find",
+         "params": {"collection": "alarm", "filter": {}, "limit": 50}}]))
+    nodes = make_nodes(_deps(integrate, check_discovery=False))
+    done = task("t-4", status="ok", action="mongo.find",
+                params={"collection": "alarm", "filter": {}, "limit": 5})
+    patch = await nodes["integrate"](CaseState(case=case, round=1, plan_tasks=[done]))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-9"]
+
+
+async def test_같은_질의로는_라운드를_태우지_않는다(case):
+    """**소비자로 확인한다** — 그래프를 끝까지 돌려 실행기가 몇 번 돌았는지 본다.
+
+    고치기 전: 4라운드 중 셋이 같은 두 질의의 반복이었다.
+    """
+    from src.application.fakes import ScriptedRunner
+    from src.domain.investigation import TaskOutcome
+
+    read = {"action": "mongo.find",
+            "params": {"collection": "alarm", "filter": {}}, "role": "data_prober"}
+    frame, _, _ = leads(reply(tasks=[{"id": "t-1", "goal": "읽는다", **read}]))
+    _, integrate, _ = leads(*[reply(decision="continue", tasks=[
+        {"id": f"t-{n}", "goal": f"다시 읽는다 {n}", **read}]) for n in range(2, 8)])
+    runner = ScriptedRunner({"t-1": TaskOutcome(
+        task_id="t-1", status="ok", summary="5건",
+        evidence=[EvidenceRef(id="t-1.e1", source="mongo.find", summary="5건")])})
+    deps = EngineDeps(runner=runner, frame=frame, integrate=integrate, max_rounds=4,
+                      parallel_width=3, max_tasks=24, check_discovery=False)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+
+    assert runner.ran == ["t-1"]
+    # 고치기 전이면 여기서 4라운드를 돌며 같은 질의를 네 번 실행했다.
+    assert final["round"] == 1
+    assert final["stopped_by"] == "no_runnable"
+
+
 # ── 프롬프트 ───────────────────────────────────────────────────────
 
 async def test_프롬프트의_등재_목록이_config에서_나온다(case):
@@ -696,8 +755,11 @@ def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path
         "--trace", str(tmp_path / "traces")])
     assert main() == 0
 
-    files = sorted((tmp_path / "traces" / "c-1").glob("*.md"))
+    folder = tmp_path / "traces" / "c-1"
+    files = sorted(f for f in folder.glob("*.md") if f.name != "summary.md")
     assert len(files) == 3                       # frame 2회(재시도) + integrate 1회
+    # 진단도 파일로 남는다 — 사람이 터미널에서 옮겨 적지 않아도 되게.
+    assert "진단" in (folder / "summary.md").read_text(encoding="utf-8")
     first = files[0].read_text(encoding="utf-8")
     assert "설명을 먼저 드리자면" in first          # 날것이 남는다
     assert "못 읽었다" in first
