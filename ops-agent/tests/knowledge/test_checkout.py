@@ -10,8 +10,8 @@ import subprocess
 import pytest
 
 from src.config.schema_site import RepoConfig
-from tests.support import (git, local_submodules_allowed,  # noqa: F401
-                           make_git_repo, needs_local_submodules)
+from tests.support import (declare_submodule_at, git,  # noqa: F401
+                           local_submodules_allowed, make_git_repo, populate_submodule)
 from src.knowledge.checkout import (auth_args, config_layers, has_commit,
                                     parse_gitmodules, plan_for, stale, status_of,
                                     submodules_at, sync, unpopulated)
@@ -224,20 +224,21 @@ def test_실패에는_반드시_이유가_붙는다(monkeypatch, tmp_path):
 # ── submodule: git이 조용히 거짓말하는 자리 ──────────────────────────
 
 def _make_parent_with_submodule(tmp_path):
-    """부모 레포 하나 + 그 안에 진짜 submodule 하나.
+    """부모 레포 하나 + 그 안에 **진짜 gitlink** 하나.
 
-    가짜 `.gitmodules`를 적어 두는 것으로는 증명이 안 된다 — 우리가 잡으려는 것은
-    **git이 실제로 하는 행동**(gitlink를 남기고, 안 채워진 자리를 조용히 건너뛰는
-    것)이지 우리가 파일에 뭘 적었는가가 아니다.
+    `git submodule add`를 안 쓴다. 그건 로컬 경로에 대해 git 2.38.1부터 막혀 있고,
+    그걸 우회하려다 이 파일이 두 번 환경에 끌려다녔다. `.gitmodules`는 파일이고
+    gitlink는 트리 항목이라 손으로 만들면 되고, **우리 코드가 읽는 것도 정확히
+    그 둘뿐이다** — 가짜를 적어 두는 것이 아니라 git이 남기는 것과 같은 것을 남긴다.
     """
     lib = _make_repo(tmp_path / "libs", origin="https://git.example.com/team/libs")
     (lib / "kafka.json").write_text('{"topic": "ALARM_EVENT"}\n', encoding="utf-8")
     git("add", "-A", cwd=lib)
     git("commit", "-qm", "topic", cwd=lib)
+    head = git("rev-parse", "HEAD", cwd=lib).stdout.strip()
 
     parent = _make_repo(tmp_path / "parent")
-    git("submodule", "add", "-q", str(lib), "vendor/libs", cwd=parent)
-    git("commit", "-qm", "add submodule", cwd=parent)
+    declare_submodule_at(parent, lib, head, path="vendor/libs")
     return parent
 
 
@@ -269,12 +270,12 @@ def test_submodule이_없으면_빈_목록이다(tmp_path):
     assert submodules_at(repo, "main") == []
 
 
-def test_커밋이_선언한_submodule을_찾는다(tmp_path, needs_local_submodules):
+def test_커밋이_선언한_submodule을_찾는다(tmp_path):
     parent = _make_parent_with_submodule(tmp_path)
     assert submodules_at(repo_at(parent), "main") == ["vendor/libs"]
 
 
-def test_안_채워진_submodule을_찾아낸다(tmp_path, needs_local_submodules):
+def test_안_채워진_submodule을_찾아낸다(tmp_path):
     """**이 파일의 두 번째 자물쇠다.**
 
     안 채워진 채로 두면 `git grep`이 종료코드 1에 출력 없이 끝난다 — 우리는 그걸
@@ -291,12 +292,28 @@ def test_안_채워진_submodule을_찾아낸다(tmp_path, needs_local_submodule
     assert list((flat / "vendor" / "libs").iterdir()) == []
 
 
-def test_채워졌으면_신고하지_않는다(tmp_path, needs_local_submodules):
+def test_채워졌으면_신고하지_않는다(tmp_path):
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
-    git("submodule", "update", "--init", "--recursive", cwd=flat)
+    populate_submodule(flat, tmp_path / "libs", "vendor/libs")
     repo = repo_at(flat)
     assert unpopulated(repo, submodules_at(repo, "main")) == []
+
+
+def test_채워도_등록이_안_되면_여전히_못_본다(tmp_path):
+    """**`.git`이 있나로 보면 안 된다.**
+
+    디렉터리를 직접 클론해 넣으면 `.git`이 생긴다. 그런데 로컬 등록이 없으면
+    `git grep --recurse-submodules`는 그 안을 **조용히 건너뛴다**(측정함).
+    `.git` 존재로 판정하면 "채워졌다"고 말하면서 grep은 계속 못 보는 상태가 된다.
+    """
+    parent = _make_parent_with_submodule(tmp_path)
+    flat = _flat_clone(tmp_path, parent)
+    git("clone", "-q", str(tmp_path / "libs"), str(flat / "vendor" / "libs"), cwd=flat)
+    assert (flat / "vendor" / "libs" / ".git").exists()      # 겉보기엔 채워졌다
+
+    repo = repo_at(flat)
+    assert unpopulated(repo, submodules_at(repo, "main")) == ["vendor/libs"]
 
 
 def test_plan이_submodule_채우는_줄까지_준다(tmp_path):
@@ -307,13 +324,9 @@ def test_plan이_submodule_채우는_줄까지_준다(tmp_path):
     assert any("submodule update --init" in line for line in lines), lines
 
 
-def test_sync가_안_채워진_submodule을_채운다(tmp_path, local_submodules_allowed, needs_local_submodules):
+def test_sync가_안_채워진_submodule을_채운다(tmp_path, local_submodules_allowed):
     """`fetch`는 안 채워진 submodule을 절대 안 채운다. `code sync`를 돌리고도
     트리가 반쪽이면, 사람은 "동기화했다"고 믿은 채로 못 보는 코드를 갖게 된다.
-
-    `local_submodules_allowed`가 필요한 이유: 여기서 도는 것은 **제품 코드**라
-    `-c`를 끼워 넣을 자리가 없다. 로컬 경로를 submodule로 받는 것은 git
-    2.38.1부터 막혀 있어서, 그 허락을 환경으로 넘겨야 한다.
     """
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
@@ -330,7 +343,7 @@ def _commit_in(root, message="more"):
     git("commit", "-qm", message, cwd=root)
 
 
-def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, needs_local_submodules):
+def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path):
     """**측정으로 잡은 오진이다.**
 
     `git cat-file -e <커밋>:<서브>/…`는 submodule이 **채워져 있어도** 실패한다
@@ -340,23 +353,25 @@ def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, nee
     """
     parent = _make_parent_with_submodule(tmp_path)
     full = tmp_path / "full"
-    git("clone", "-q", "--recurse-submodules", str(parent), str(full), cwd=tmp_path)
+    git("clone", "-q", str(parent), str(full), cwd=tmp_path)
+    populate_submodule(full, tmp_path / "libs", "vendor/libs")
     repo = repo_at(full)
     here, gone = config_layers(repo, "main", ["a.py", "vendor/libs/kafka.json"])
     assert gone == [], f"submodule 안의 층을 없다고 했다: {gone}"
     assert here == ["a.py", "vendor/libs/kafka.json"]
 
 
-def test_진짜로_없는_경로는_여전히_없다고_한다(tmp_path, needs_local_submodules):
+def test_진짜로_없는_경로는_여전히_없다고_한다(tmp_path):
     """경계를 넘게 만들면서 검사가 **아무거나 통과시키게** 되면 안 된다."""
     parent = _make_parent_with_submodule(tmp_path)
     full = tmp_path / "full"
-    git("clone", "-q", "--recurse-submodules", str(parent), str(full), cwd=tmp_path)
+    git("clone", "-q", str(parent), str(full), cwd=tmp_path)
+    populate_submodule(full, tmp_path / "libs", "vendor/libs")
     _, gone = config_layers(repo_at(full), "main", ["vendor/libs/없는파일.json"])
     assert gone == ["vendor/libs/없는파일.json"]
 
 
-def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path, needs_local_submodules):
+def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path):
     """**세 번째 상태다.** `.git`이 있으니 `unpopulated`는 "채워졌다"고 말한다.
 
     부모만 fetch되고 submodule은 안 당겨진 트리에서 실제로 생긴다. 이걸 못 보면
@@ -365,7 +380,7 @@ def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path
     """
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
-    git("submodule", "update", "--init", "--recursive", cwd=flat)
+    populate_submodule(flat, tmp_path / "libs", "vendor/libs")
     repo = repo_at(flat)
     assert unpopulated(repo, submodules_at(repo, "main")) == []   # 채워는 졌다
     assert stale(repo, "main", submodules_at(repo, "main")) == []
@@ -374,9 +389,8 @@ def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path
     lib = tmp_path / "libs"
     (lib / "kafka.json").write_text('{"topic": "NEW"}\n', encoding="utf-8")
     _commit_in(lib, "v2")
-    git("fetch", "-q", "origin", cwd=parent / "vendor" / "libs")
-    git("checkout", "-q", "FETCH_HEAD", cwd=parent / "vendor" / "libs")
-    _commit_in(parent, "sub moved")
+    moved = git("rev-parse", "HEAD", cwd=lib).stdout.strip()
+    declare_submodule_at(parent, lib, moved, path="vendor/libs", message="sub moved")
     # **부모만** 당긴다 — submodule은 그대로 둔다. 체크아웃된 브랜치로는 직접
     # fetch가 안 되므로 받아서 ff-merge한다(작업 트리의 submodule은 안 움직인다).
     git("-c", "fetch.recurseSubmodules=no", "fetch", "-q", "origin", "main", cwd=flat)
@@ -403,3 +417,28 @@ def test_ssh_url에는_토큰_헤더를_안_붙인다(tmp_path):
     repo = RepoConfig(name="dt-core", url="git@git.example.com:team/dt-core",
                       path=str(tmp_path / "x"), token="ghp_secret_token_value")
     assert auth_args(repo) == []
+
+
+def test_submodule_픽스처가_file_프로토콜_허락을_안_탄다(tmp_path, monkeypatch):
+    """**이 파일에서 제일 중요한 자물쇠다 — 내가 실제로 여기서 틀렸다.**
+
+    처음엔 `git submodule add <로컬 경로>`로 픽스처를 만들었다. 그건 git
+    2.38.1부터 막힌 명령이라 `protocol.file.allow=always`가 필요했고, 나는 그걸
+    **전역 설정으로 켜 놓은 기계에서** 전부 통과시켰다. 그래서 내 트리는 늘
+    초록이고 남의 기계에서만 깨졌으며, 원인을 찾는 데 두 라운드가 갔다.
+
+    그래서 검사 자체를 테스트로 만든다: **git의 기본값(`user`)** 을 명시적으로
+    박아 두고도 픽스처가 세워져야 한다. `user`는 사람이 직접 하는 로컬 클론은
+    허용하고 **submodule 전송만** 막는 값이라, `submodule add`로 되돌리는 순간
+    여기가 먼저 빨개진다. (`never`로 하면 평범한 로컬 클론까지 막혀서 이 리포의
+    다른 픽스처가 전부 죽는다 — 그건 이 테스트가 재려는 것이 아니다.)
+    """
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "user")
+
+    parent = _make_parent_with_submodule(tmp_path)
+    flat = _flat_clone(tmp_path, parent)
+    repo = repo_at(flat)
+    assert submodules_at(repo, "main") == ["vendor/libs"]
+    assert unpopulated(repo, submodules_at(repo, "main")) == ["vendor/libs"]

@@ -108,12 +108,27 @@ class RealCodeReader(CodeReaderPort):
                                    else parse_gitmodules(got.data))
         return self._declared[key]
 
-    def _blind(self, repo: str, subs: list[str]) -> list[str]:
-        """선언은 됐는데 **로컬에 안 채워진** 것들 — 우리가 못 보는 구석."""
-        root = self._repos.get(repo)
-        if root is None:
+    async def _blind(self, repo: str, subs: list[str]) -> list[str]:
+        """git이 **안 들여다보는** submodule들 — 우리가 못 보는 구석.
+
+        `.git`이 있나로 보면 안 된다. 디렉터리가 채워져 있어도 로컬 등록이
+        안 돼 있으면 `grep --recurse-submodules`가 조용히 건너뛴다(측정함).
+        `git submodule status`의 `-` 접두사가 그 상태를 정확히 가리킨다.
+        """
+        if not subs:
             return []
-        return [sub for sub in subs if not (root / sub / ".git").exists()]
+        got = await self._git(repo, ["submodule", "status"],
+                              source=f"code.submodule-status {repo}")
+        if got.status == "error":
+            return list(subs)             # 모르는 것을 괜찮은 것으로 적지 않는다
+        marks = {}
+        for line in got.data.splitlines():
+            if not line.strip():
+                continue
+            parts = line[1:].split()      # `<앞글자><sha> <경로> (설명)`
+            if len(parts) >= 2:
+                marks[parts[1]] = line[0]
+        return [sub for sub in subs if marks.get(sub, "-") == "-"]
 
     async def _stale(self, repo: str, commit: str, subs: list[str]) -> list[str]:
         """채워져는 있는데 **그 커밋이 박은 버전**의 객체가 없는 것들.
@@ -121,10 +136,10 @@ class RealCodeReader(CodeReaderPort):
         부모만 fetch되고 submodule은 안 당겨진 트리에서 생긴다. `.git`이 있으므로
         `_blind`는 "채워졌다"고 말한다 — 그래서 상태가 셋이다.
         """
-        root = self._repos.get(repo)
+        blind = set(await self._blind(repo, subs))
         behind = []
         for sub in subs:
-            if root is None or not (root / sub / ".git").exists():
+            if sub in blind:
                 continue                       # 그건 `_blind`가 센다
             sha = await self._gitlink(repo, commit, sub)
             if not sha:
@@ -170,7 +185,7 @@ class RealCodeReader(CodeReaderPort):
         직접 풀어서 그 레포 안에서 다시 읽는다. **최신이 아니라 배포가 쓴 버전**이다.
         """
         rest = path[len(sub):].lstrip("/")
-        if self._blind(repo, [sub]):
+        if await self._blind(repo, [sub]):
             return ProbeResult.failed(
                 f"{sub}은 submodule인데 로컬에 안 채워져 있다 — git은 이걸 "
                 f"\"경로가 없다\"고 말한다. 파일이 없는 것이 아니라 **우리가 못 보는 것**이다. "
@@ -219,7 +234,8 @@ class RealCodeReader(CodeReaderPort):
         got = await self._git(repo, args, source=source)
         if got.status == "error":
             return got
-        return _clip(got, source, clock=self._clock, unseen=self._blind(repo, subs))
+        return _clip(got, source, clock=self._clock,
+                     unseen=await self._blind(repo, subs))
 
     async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
         source = f"code.ls {repo}@{commit}" + (f":{path}" if path else "")
@@ -236,7 +252,8 @@ class RealCodeReader(CodeReaderPort):
             reasons.append(f"{_MAX_LINES}개에서 끊음")
         # `ls-tree -r`는 submodule 안으로 안 들어간다 — 경로가 이름 하나로만
         # 나온다. 그걸 "그 밑에 파일이 없다"로 읽으면 안 된다.
-        reasons += _unseen_reasons(self._blind(repo, await self._declared_subs(repo, commit)))
+        reasons += _unseen_reasons(
+            await self._blind(repo, await self._declared_subs(repo, commit)))
         return ProbeResult.succeeded(
             names, source=source, clock=self._clock,
             truncated_reason=" · ".join(reasons) + " — 더 있을 수 있다" if reasons else None)

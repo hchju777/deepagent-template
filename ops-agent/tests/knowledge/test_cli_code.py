@@ -9,8 +9,8 @@ import subprocess
 
 import pytest
 
-from tests.support import (git, make_git_repo,  # noqa: F401
-                           needs_local_submodules, set_real_config_env)
+from tests.support import (declare_submodule_at, git, make_git_repo,
+                           populate_submodule, set_real_config_env)
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git이 없다")
 
@@ -351,16 +351,19 @@ def _with_submodule(tmp_path, url, *, populate: bool):
     (lib / "kafka.json").write_text('{"topic": "X"}\n', encoding="utf-8")
     git("add", "-A", cwd=lib)
     git("commit", "-qm", "topic", cwd=lib)
-    git("submodule", "add", "-q", str(lib), "vendor/libs", cwd=origin)
-    git("commit", "-qm", "sub", cwd=origin)
+    head = git("rev-parse", "HEAD", cwd=lib).stdout.strip()
+    # `git submodule add`를 안 쓴다 — 로컬 경로에 대해 막혀 있고, 우리 코드가
+    # 읽는 것은 `.gitmodules`와 gitlink 둘뿐이다.
+    declare_submodule_at(origin, lib, head, path="vendor/libs")
     checkout = tmp_path / "checkout"
-    recurse = ["--recurse-submodules"] if populate else []
-    git("clone", "-q", *recurse, str(origin), str(checkout), cwd=tmp_path)
+    git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
+    if populate:
+        populate_submodule(checkout, lib, "vendor/libs")
     git("remote", "set-url", "origin", url, cwd=checkout)
     return checkout
 
 
-def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, capsys, needs_local_submodules):
+def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, capsys):
     """**이걸 여기서 안 말하면 아무 데서도 안 보인다.**
 
     git 자신이 조용하다: 안 채워진 submodule을 두고 `git grep`은 종료코드 1에
@@ -377,7 +380,7 @@ def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, c
     assert "submodule update --init" in captured.out
 
 
-def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, monkeypatch, capsys, needs_local_submodules):
+def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, monkeypatch, capsys):
     """**측정으로 잡은 오진이다.** `git cat-file -e <커밋>:<서브>/…`는 채워져
     있어도 실패한다. 그대로 두면 공용 라이브러리에 사는 층을 "없다"로 신고하고
     "config_paths를 고쳐라"라는 틀린 처방이 나온다 — 경로는 맞았는데.
@@ -393,7 +396,7 @@ def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, mon
     assert "config 층 1/1개" in captured.out
 
 
-def test_submodule이_안_읽히면_config_경로를_탓하지_않는다(tmp_path, monkeypatch, capsys, needs_local_submodules):
+def test_submodule이_안_읽히면_config_경로를_탓하지_않는다(tmp_path, monkeypatch, capsys):
     """둘 다 빨간불이지만 **처방이 달라야 한다.** 안 채워진 submodule 때문에
     그 안의 층이 안 보이는 것인데 "경로를 고쳐라"라고 하면, 사람은 맞는 경로를
     고치다가 진짜 원인을 영영 못 본다.

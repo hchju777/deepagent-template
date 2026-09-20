@@ -167,6 +167,39 @@ python -m src code read --service processor --path config/common.json --gbm mx
 `code.show p@main:vendor/libs/x.json (submodule vendor/libs@444be98067a7)`이다.
 나중에 "어느 코드를 본 거냐"를 되짚을 수 있어야 판정이 검증 가능하다.
 
+## 내가 여기서 실제로 틀린 것 — 검증 환경을 내가 고쳐 놓았다
+
+submodule 작업을 시작하면서 **첫 명령으로 `git config --global
+protocol.file.allow always`를 켰다.** 로컬 경로를 submodule로 붙이려면 필요한
+설정이고, 그래야 픽스처가 세워졌다. 그리고 그 기계 위에서 전부 통과시켰다.
+
+그러면 **내 트리는 항상 초록이고 남의 기계에서만 깨진다.** 두 라운드 동안
+원인을 못 찾고 `GIT_CONFIG_*`·능력 검사 같은 장치를 덧댔는데, 전부 내가 만든
+문제를 내가 막는 코드였다.
+
+보통 버그보다 나쁘다. 코드가 틀린 것이 아니라 **검증이 무의미해진 것**이고,
+그동안 내가 "1073 통과"라고 보고한 것들이 전부 그 위에서 나온 숫자다.
+
+### 그래서 픽스처가 허락을 아예 안 타게 바꿨다
+
+`.gitmodules`는 그냥 파일이고 gitlink는 트리 항목(mode 160000)이다. 둘 다 손으로
+만들 수 있고 **전송이 일어나지 않으므로 어떤 허락도 필요 없다.** 채우는 것도
+평범한 `git clone` + `git submodule init`이면 된다 — 막히는 것은 submodule
+전송이지 사람이 직접 하는 로컬 클론이 아니다.
+
+`git submodule add`가 필요한 자리는 이제 **한 테스트뿐**이다(`sync`가 진짜로
+채우는지 보는 것 — 거기서 도는 것이 제품 코드라 우회할 자리가 없다).
+
+그리고 그 규율을 테스트로 박아 뒀다:
+`test_submodule_픽스처가_file_프로토콜_허락을_안_탄다`가 git의 **기본값(`user`)**
+을 명시적으로 박고 픽스처를 세운다. 누가 `submodule add`로 되돌리면 거기가 먼저
+빨개진다 — 되돌려서 실제로 빨개지는 것까지 확인했다.
+
+### 남는 규율
+
+> **환경을 고쳐서 초록을 만들었다면, 그 초록은 증거가 아니다.**
+> 전역 설정·환경변수·`~/.gitconfig`를 건드렸다면 원래대로 돌려놓고 다시 재라.
+
 ## 사내가 실제로 submodule을 쓴다 — 측정한 것들
 
 "실제로 쓴다"는 답을 받고 git 2.43에 대고 일곱 가지를 직접 재 봤다. 추측으로 적었으면
@@ -181,6 +214,7 @@ python -m src code read --service processor --path config/common.json --gbm mx
 | 5 | 객체가 진짜 없을 때 | `show`는 128, `grep`은 128 + `unable to read tree` — **조용하진 않지만 말이 오해를 부른다** |
 | 6 | 지금 `sync` 순서가 5를 고치나 | **고친다**(fetch → `submodule update --init --recursive`) |
 | 7 | `http.<url>.extraHeader` 문법 | git이 받고, **다른 호스트엔 안 붙는다** |
+| 8 | `grep --recurse-submodules`가 보는 범위 | **등록된 것만.** `.git`이 있어도 등록이 없으면 조용히 건너뛴다 |
 
 2번이 실제 오진을 만들고 있었다. 이름이 사는 config 층이 공용 라이브러리 submodule에
 있으면 `code status`가 "config_paths가 그 커밋에 하나도 없다 → 경로를 고쳐라"라고 한다.
@@ -192,7 +226,7 @@ submodule이 안 읽히는 상태면 "먼저 위의 submodule부터"라고 말�
 
 | 상태 | 어떻게 보이나 |
 |---|---|
-| 안 채워짐 | `grep`이 **조용히** 0건 |
+| 등록 안 됨(`git submodule status`가 `-`) | `grep`이 **조용히** 0건 — `.git`이 있어도 그렇다 |
 | 채워졌지만 그 버전이 없음 | 128 + `unable to read tree` — 시끄럽지만 말이 틀리게 읽힌다 |
 | 읽을 수 있음 | 옛 커밋까지 정상 |
 
@@ -290,7 +324,9 @@ python -m src code sync --gbm mx && python -m src ...
 
 ## 검증
 
-`pytest tests/` — 1073개. 11a 1차가 더한 것은 91개.
+`pytest tests/` — 1075개. 11a 1차가 더한 것은 93개.
+
+**전역 `protocol.file.allow`를 걷어낸 뒤(= git 기본값)** 다시 재서 나온 숫자다.
 
 **사내 트리에는 `.env.example`이 없다.** 그 상태로도 돈다 — 지우고 돌려서
 확인했다(1039 통과 1 스킵).

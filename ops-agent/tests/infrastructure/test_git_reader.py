@@ -14,7 +14,7 @@ import pytest
 
 from src.config.schema_site import RepoConfig
 from src.infrastructure.git_reader import RealCodeReader
-from tests.support import git
+from tests.support import declare_submodule_at, git, populate_submodule
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git이 없다")
 
@@ -160,14 +160,14 @@ def nested(tmp_path):
     (parent / "app.py").write_text("import libs\n", encoding="utf-8")
     _run("git", "add", "-A", cwd=parent)
     _run("git", "commit", "-qm", "first", cwd=parent)
-    _run("git", "submodule", "add", "-q", str(lib), "vendor/libs", cwd=parent)
-    _run("git", "commit", "-qm", "add submodule", cwd=parent)
+    head = git("rev-parse", "HEAD", cwd=lib).stdout.strip()
+    declare_submodule_at(parent, lib, head, path="vendor/libs")
 
     blind = tmp_path / "blind"
     _run("git", "clone", "-q", str(parent), str(blind), cwd=tmp_path)
     full = tmp_path / "full"
-    _run("git", "clone", "-q", "--recurse-submodules", str(parent), str(full),
-         cwd=tmp_path)
+    _run("git", "clone", "-q", str(parent), str(full), cwd=tmp_path)
+    populate_submodule(full, lib, "vendor/libs")
     return blind, full
 
 
@@ -257,10 +257,8 @@ def behind(nested, tmp_path):
     _run("git", "add", "-A", cwd=lib)
     _run("git", "commit", "-qm", "v2", cwd=lib)
     parent = tmp_path / "parent"
-    _run("git", "fetch", "-q", "origin", cwd=parent / "vendor" / "libs")
-    _run("git", "checkout", "-q", "FETCH_HEAD", cwd=parent / "vendor" / "libs")
-    _run("git", "add", "-A", cwd=parent)
-    _run("git", "commit", "-qm", "sub moved", cwd=parent)
+    moved = git("rev-parse", "HEAD", cwd=lib).stdout.strip()
+    declare_submodule_at(parent, lib, moved, path="vendor/libs", message="sub moved")
     _run("git", "-c", "fetch.recurseSubmodules=no", "fetch", "-q", "origin", "main",
          cwd=full)
     _run("git", "-c", "submodule.recurse=false", "merge", "--ff-only", "-q",

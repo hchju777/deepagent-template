@@ -22,7 +22,6 @@ import가 필요하고, 그 import를 상대 경로(`from ..report.conftest impo
 from datetime import date, datetime
 import functools
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -196,26 +195,27 @@ def running_source(obj, *, marker: str = "") -> str:
         head += f"  '{marker}' 있는가: {marker in source}\n"
     return head + "\n".join(f"    {line}" for line in source.splitlines())
 
-# ── 진짜 submodule을 만드는 픽스처 ────────────────────────────────────
-#
-# 로컬 경로를 submodule로 붙이는 것은 git 2.38.1부터 **기본으로 막혀 있다**
-# (CVE-2022-39253). 그래서 `-c protocol.file.allow=always`가 필요한데, 이게
-# 빠지면 실패 메시지가 `fatal: transport 'file' not allowed`라 **테스트가 뭘
-# 검증하다 실패했는지 안 보인다.** 그래서 한 군데서만 만든다 — 세 파일이 각자
-# 베끼면 언젠가 한 곳만 고쳐지고, 그때 그 파일만 사내에서 빨개진다.
 
-GIT_LOCAL_SUBMODULE = ("-c", "protocol.file.allow=always")
+# ── submodule 픽스처 — **허락이 필요 없게** 만든다 ─────────────────────
+#
+# 처음엔 `git submodule add <로컬 경로>`로 만들었다. 그건 git 2.38.1부터 막힌
+# 유일한 명령이고(CVE-2022-39253), 그래서 `-c protocol.file.allow=always`·
+# `GIT_CONFIG_*`·능력 검사를 차례로 덧대게 됐다 — **내가 만든 문제를 내가 막는
+# 코드**였다. 더 나쁜 것은 그걸 전역 `protocol.file.allow=always`가 켜진 기계에서
+# 검증했다는 점이다. 그러면 여기선 늘 초록이고 남의 기계에서만 깨진다.
+#
+# `.gitmodules`는 그냥 파일이고 gitlink는 트리 항목(mode 160000)이다. 둘 다 손으로
+# 만들 수 있고, 그러면 **어떤 허락도 필요 없다.** 채우는 것도 평범한 `git clone`이면
+# 된다 — 막히는 것은 submodule 전송이지 사람이 직접 하는 클론이 아니다.
 
 
 def git(*args, cwd, check: bool = True) -> subprocess.CompletedProcess:
     """테스트용 git 호출. **실패하면 git이 한 말을 그대로 들고 죽는다.**
 
-    `check=True`의 `CalledProcessError`는 종료코드만 말하고 stderr는 삼킨다.
-    사내에서 실패했을 때 "왜"가 안 보이면 사람이 그걸 타이핑해 옮겨야 한다 —
-    이 리포가 이미 두 번 그렇게 시간을 썼다.
+    `check=True`의 `CalledProcessError`는 종료코드만 말하고 stderr를 삼킨다.
+    남의 기계에서 실패했을 때 "왜"가 안 보이면 사람이 그걸 타이핑해 옮겨야 한다.
     """
-    done = subprocess.run(["git", *GIT_LOCAL_SUBMODULE, *args], cwd=str(cwd),
-                          capture_output=True, text=True)
+    done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
     if check and done.returncode != 0:
         raise AssertionError(
             f"git {' '.join(args)} (cwd={cwd}) 가 {done.returncode}로 실패했다\n"
@@ -231,49 +231,9 @@ def _git_version() -> str:
     return (done.stdout or "").strip() or "git --version이 아무 말도 안 했다"
 
 
-@functools.lru_cache(maxsize=1)
-def local_submodule_support() -> str:
-    """이 환경이 **로컬 경로를 submodule로 붙일 수 있나.** 되면 빈 문자열.
-
-    되는지 자체가 환경의 능력이지 우리 코드의 성질이 아니다. 못 하는 환경에서
-    빨간불을 내면 사람은 "내 코드가 깨졌나"를 먼저 의심하고, 그게 정확히 이번에
-    일어난 일이다. 그래서 **건너뛰되 이유를 들고** 건너뛴다.
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        try:
-            lib = make_git_repo(root / "lib")
-            parent = make_git_repo(root / "parent")
-            git("submodule", "add", "-q", str(lib), "vendor/lib", cwd=parent)
-        except AssertionError as exc:
-            return str(exc)
-    return ""
-
-
-@pytest.fixture
-def needs_local_submodules():
-    """로컬 submodule을 못 만드는 환경에서는 **이유를 찍고** 건너뛴다."""
-    why = local_submodule_support()
-    if why:
-        pytest.skip(f"이 환경은 로컬 경로를 submodule로 못 붙인다 —\n{why}")
-
-
-@pytest.fixture
-def local_submodules_allowed(monkeypatch):
-    """제품 코드가 부르는 git에도 같은 허락을 넘긴다.
-
-    `sync()`는 `-c`를 받을 자리가 없다(제품 코드에 테스트 사정을 넣을 수는 없다).
-    `GIT_CONFIG_COUNT`/`KEY`/`VALUE`는 **하위 프로세스까지 따라가는** 설정이라
-    이 자리에 맞는다 — 클론 안에 `git config`를 써 두는 것보다 환경에 덜 기댄다.
-    """
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
-
-
 def make_git_repo(root: Path, *, origin: str = "") -> Path:
     """커밋 하나짜리 레포. 사용자 이름은 **로컬로** 박는다 — 전역 설정이 없는
-    CI/사내 PC에서 `git commit`이 그냥 죽는다."""
+    기계에서 `git commit`이 그냥 죽는다."""
     root.mkdir(parents=True, exist_ok=True)
     git("init", "-q", "-b", "main", cwd=root)
     git("config", "user.email", "t@t", cwd=root)
@@ -284,3 +244,46 @@ def make_git_repo(root: Path, *, origin: str = "") -> Path:
     git("add", "-A", cwd=root)
     git("commit", "-qm", "first", cwd=root)
     return root
+
+
+def declare_submodule_at(parent: Path, sub: Path, at: str, *, path: str,
+                         message: str = "add submodule") -> str:
+    """`.gitmodules` + gitlink를 **손으로** 만들어 커밋한다.
+
+    `git submodule add`가 하는 일이 정확히 이 둘이고, 우리 코드가 읽는 것도 이
+    둘뿐이다(`git show <커밋>:.gitmodules`, `git ls-tree <커밋> -- <경로>`).
+    전송이 일어나지 않으므로 file 프로토콜 허락이 필요 없다.
+    """
+    (parent / ".gitmodules").write_text(
+        f'[submodule "{path}"]\n\tpath = {path}\n\turl = {sub}\n', encoding="utf-8")
+    git("add", ".gitmodules", cwd=parent)
+    git("update-index", "--add", "--cacheinfo", f"160000,{at},{path}", cwd=parent)
+    git("commit", "-qm", message, cwd=parent)
+    return path
+
+
+def populate_submodule(checkout: Path, sub: Path, path: str) -> None:
+    """submodule 자리를 실제로 채운다 — 평범한 clone + 로컬 등록.
+
+    **등록(`git submodule init`)이 빠지면 안 된다.** `git grep --recurse-submodules`는
+    등록된 것만 들여다보고, 안 된 것은 `.git`이 있어도 **조용히 건너뛴다**(측정함).
+    """
+    git("clone", "-q", str(sub), str(checkout / path), cwd=checkout)
+    git("submodule", "init", cwd=checkout)
+
+
+@pytest.fixture
+def local_submodules_allowed(monkeypatch):
+    """**딱 한 테스트만** 이게 필요하다 — `sync`가 진짜로 채우는지 보는 것.
+
+    거기서 도는 것은 제품 코드라 `-c`를 끼울 자리가 없고, 픽스처의 submodule url이
+    로컬 경로라 2.38.1의 기본 거부에 걸린다. `GIT_CONFIG_COUNT/KEY/VALUE`는
+    **하위 프로세스까지 따라가는** 설정이라 이 자리에 맞는다.
+
+    나머지 submodule 테스트는 이게 필요 없다 — `declare_submodule_at`이 전송을
+    일으키지 않기 때문이다. **이 픽스처가 다른 테스트로 번지면 그때부터 그
+    테스트들은 우리 코드가 아니라 환경을 검사하는 것이 된다.**
+    """
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")

@@ -216,13 +216,34 @@ def submodules_at(repo: RepoConfig, commit: str) -> list[str]:
 
 
 def unpopulated(repo: RepoConfig, paths: list[str]) -> list[str]:
-    """선언은 됐는데 **로컬에 내용이 없는** submodule들.
+    """git이 **안 들여다보는** submodule들.
 
-    `--recurse-submodules` 없이 클론하면 빈 디렉터리로 남는 것이 기본 동작이다.
-    그 상태를 모르고 읽으면 위 표의 조용한 거짓말을 그대로 믿게 된다.
+    처음엔 `(경로/.git)이 있나`로 봤다. **틀렸다.** 디렉터리를 사람이 직접 클론해
+    넣어 `.git`이 멀쩡히 있어도, 로컬에 *등록*(`git submodule init`)이 안 돼 있으면
+    `git grep --recurse-submodules`는 그 안을 **조용히 건너뛴다**(측정: 종료코드 1,
+    출력 없음). 즉 "채워졌다"고 말하면서 grep은 계속 못 보는 상태가 존재한다.
+
+    `git submodule status`의 앞 글자가 정확히 그 신호다:
+
+    | 앞 글자 | 뜻 | grep이 보나 |
+    |---|---|---|
+    | `-` | 등록 안 됨 | ❌ 조용히 0건 |
+    | (공백) | 정상 | ✅ |
+    | `+` | 박힌 SHA와 체크아웃이 다름 | ✅ (트리의 SHA로 읽는다) |
     """
-    return [path for path in paths
-            if not (Path(repo.path) / path / ".git").exists()]
+    code, out, _ = _git(Path(repo.path), "submodule", "status")
+    if code != 0:
+        # 못 물어봤으면 **"읽을 수 있다"고 말하지 않는다.** 모르는 것을
+        # 괜찮은 것으로 적는 것이 이 리포가 제일 싫어하는 실패다.
+        return list(paths)
+    marks = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        parts = line[1:].split()          # `<앞글자><sha> <경로> (설명)`
+        if len(parts) >= 2:
+            marks[parts[1]] = line[0]
+    return [path for path in paths if marks.get(path, "-") == "-"]
 
 
 def auth_args(repo: RepoConfig) -> list[str]:
