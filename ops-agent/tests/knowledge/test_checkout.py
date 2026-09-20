@@ -10,7 +10,8 @@ import subprocess
 import pytest
 
 from src.config.schema_site import RepoConfig
-from src.knowledge.checkout import has_commit, plan_for, status_of, sync
+from src.knowledge.checkout import (has_commit, parse_gitmodules, plan_for,
+                                    status_of, submodules_at, sync, unpopulated)
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git이 없다")
 
@@ -221,3 +222,112 @@ def test_실패에는_반드시_이유가_붙는다(monkeypatch, tmp_path):
     assert outcome == "failed"
     assert why.strip(), "실패했는데 이유가 비어 있다"
     assert "128" in why
+
+
+# ── submodule: git이 조용히 거짓말하는 자리 ──────────────────────────
+
+def _make_parent_with_submodule(tmp_path):
+    """부모 레포 하나 + 그 안에 진짜 submodule 하나.
+
+    가짜 `.gitmodules`를 적어 두는 것으로는 증명이 안 된다 — 우리가 잡으려는 것은
+    **git이 실제로 하는 행동**(gitlink를 남기고, 안 채워진 자리를 조용히 건너뛰는
+    것)이지 우리가 파일에 뭘 적었는가가 아니다.
+    """
+    lib = _make_repo(tmp_path / "libs", origin="https://git.example.com/team/libs")
+    (lib / "kafka.json").write_text('{"topic": "ALARM_EVENT"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=lib, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "topic"], cwd=lib, check=True,
+                   capture_output=True)
+
+    parent = _make_repo(tmp_path / "parent")
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "submodule", "add",
+                    "-q", str(lib), "vendor/libs"], cwd=parent, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "add submodule"], cwd=parent, check=True,
+                   capture_output=True)
+    return parent
+
+
+def _flat_clone(tmp_path, parent):
+    """`--recurse-submodules` **없이** 클론한다 — 사내에서 기본으로 일어나는 모양."""
+    target = tmp_path / "flat"
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
+                    str(parent), str(target)], check=True, capture_output=True)
+    # 로컬 경로 submodule을 채우려면 git이 file 프로토콜을 허락해야 한다.
+    # 테스트 픽스처의 사정이지 제품 코드의 사정이 아니라 여기서만 켠다.
+    subprocess.run(["git", "config", "protocol.file.allow", "always"], cwd=target,
+                   check=True, capture_output=True)
+    return target
+
+
+def test_gitmodules에서_경로만_뽑는다():
+    text = ('[submodule "vendor/libs"]\n'
+            '\tpath = vendor/libs\n'
+            '\turl = https://git.example.com/team/libs\n'
+            '[submodule "x"]\n'
+            '\tpath = third_party/x\n')
+    assert parse_gitmodules(text) == ["third_party/x", "vendor/libs"]
+
+
+def test_path로_시작하는_다른_키를_안_먹는다():
+    """`startswith("path")`만 보면 `pathspec`도 경로로 읽힌다 — 그러면 있지도 않은
+    submodule을 "안 채워졌다"고 신고해서, 진짜 경고가 묻힌다."""
+    assert parse_gitmodules("\tpathspec = vendor/x\n") == []
+
+
+def test_submodule이_없으면_빈_목록이다(tmp_path):
+    """`.gitmodules`가 없는 것은 **정상**이다 — 오류로 만들면 대부분의 레포가 빨개진다."""
+    repo = repo_at(_make_repo(tmp_path / "dt-core"))
+    assert submodules_at(repo, "main") == []
+
+
+def test_커밋이_선언한_submodule을_찾는다(tmp_path):
+    parent = _make_parent_with_submodule(tmp_path)
+    assert submodules_at(repo_at(parent), "main") == ["vendor/libs"]
+
+
+def test_안_채워진_submodule을_찾아낸다(tmp_path):
+    """**이 파일의 두 번째 자물쇠다.**
+
+    안 채워진 채로 두면 `git grep`이 종료코드 1에 출력 없이 끝난다 — 우리는 그걸
+    "결과 없음"으로 읽고, 2차의 판정은 "코드에 그런 게 없다"가 된다.
+    origin 대조와 같은 종류의 사고다: 조용하고, 확신에 차 있고, 틀렸다.
+    """
+    parent = _make_parent_with_submodule(tmp_path)
+    flat = _flat_clone(tmp_path, parent)
+    repo = repo_at(flat)
+    subs = submodules_at(repo, "main")
+    assert subs == ["vendor/libs"]
+    assert unpopulated(repo, subs) == ["vendor/libs"]
+    # 그 자리가 실제로 비어 있는지 — 우리 판단이 아니라 디스크를 본다.
+    assert list((flat / "vendor" / "libs").iterdir()) == []
+
+
+def test_채워졌으면_신고하지_않는다(tmp_path):
+    parent = _make_parent_with_submodule(tmp_path)
+    flat = _flat_clone(tmp_path, parent)
+    subprocess.run(["git", "submodule", "update", "--init", "--recursive"], cwd=flat,
+                   check=True, capture_output=True)
+    repo = repo_at(flat)
+    assert unpopulated(repo, submodules_at(repo, "main")) == []
+
+
+def test_plan이_submodule_채우는_줄까지_준다(tmp_path):
+    """fetch만 적어 주면 사람이 그대로 따라 해도 트리가 반쪽으로 남는다 —
+    `fetch --recurse-submodules`는 **이미 채워진** 것만 갱신한다."""
+    repo = repo_at(_make_repo(tmp_path / "dt-core"))
+    lines = plan_for(repo, status_of(repo))
+    assert any("submodule update --init" in line for line in lines), lines
+
+
+def test_sync가_안_채워진_submodule을_채운다(tmp_path):
+    """`fetch`는 안 채워진 submodule을 절대 안 채운다. `code sync`를 돌리고도
+    트리가 반쪽이면, 사람은 "동기화했다"고 믿은 채로 못 보는 코드를 갖게 된다."""
+    parent = _make_parent_with_submodule(tmp_path)
+    flat = _flat_clone(tmp_path, parent)
+    repo = RepoConfig.model_construct(name="dt-core", url=str(parent),
+                                      path=str(flat), token=None)
+    outcome, where = sync(repo, status_of(repo))
+    assert outcome == "fetched", where
+    assert (flat / "vendor" / "libs" / "kafka.json").exists()
+    assert unpopulated(repo, submodules_at(repo, "main")) == []

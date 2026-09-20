@@ -112,7 +112,7 @@ python -m src code read --service processor --path config/common.json --gbm mx
 무관하게 GBM 전체를 본다 — 고른 사이트만 보면 갈릴 리가 없어 검사가 아무 일도 안 한다
 (처음에 그렇게 썼고, RED 확인에서 드러났다).
 
-## 자물쇠 넷 (`code status`가 보는 것)
+## 자물쇠 여섯 (`code status`가 보는 것)
 
 1. **경로가 있나**
 2. **`.git`이 있나** — 작업 트리만 복사되면 `git show <커밋>:경로`가 통째로 안 된다.
@@ -128,10 +128,41 @@ python -m src code read --service processor --path config/common.json --gbm mx
    **층은 선택이다** — 우리 `SITE_LAYERS`와 같다. `fct/{fct}/common.json`이 없는
    법인이 정상이듯 대상도 그렇다. 그래서 없는 층은 적어만 주고, **하나도 없을 때만**
    빨간불이다. 없는 층마다 빨간불을 켜면 사람이 검사를 끈다
+6. **그 커밋의 submodule이 채워져 있나** — 안 채워진 submodule을 두고 `git grep`은
+   **종료코드 1에 출력 없이** 끝난다. 우리는 그걸 "결과 없음"으로 읽으므로, 여기서
+   말하지 않으면 2차의 판정이 "코드에 그런 게 없다"를 단정한다. git 자신이 조용해서
+   **아무 데서도 안 보이는** 실패다(decisions ②-2)
 
 3번은 `.git` 꼬리와 끝 슬래시만 봐준다. **호스트가 다르면 같게 안 본다** — 관대함이
 거기까지 오면 자물쇠가 아니다. 반대로 `.git` 유무로 실패하면 사람이 자물쇠를 끄고
 싶어진다. **끌 수 있는 자물쇠는 잠기지 않는다.**
+
+## 대상 레포가 submodule을 품고 있으면
+
+"클론해 둔 코드가 submodule을 포함하면 그것도 최신이 맞다고 하는 거냐"는 물음에서
+나왔다. **답은 "최신이라고 가정하지 않는다"가 아니라 "가정할 필요가 없다"다** —
+부모의 배포 커밋이 submodule의 SHA를 박아 두기 때문이다(gitlink). 전체 논거는
+[decisions ②-2](decisions.md).
+
+위험한 것은 버전이 아니라 **침묵**이었다. 측정해 보니 안 채워진 submodule을 두고
+`git grep`은 종료코드 1에 stdout도 stderr도 비어 있다 — 우리가 "결과 없음"으로
+읽는 바로 그 모양이다. 2차의 `code.grep`이 그걸 받으면 **"코드에 그런 게 없다"**가
+된다. `--recurse-submodules`를 붙여도 똑같이 조용하다.
+
+그래서 방어를 세 층에 나눠 뒀다:
+
+| 층 | 하는 일 |
+|---|---|
+| `checkout.sync` | clone에 `--recurse-submodules`, 기존 트리엔 `submodule update --init --recursive`. 채우다 실패하면 fetch가 됐어도 `failed` |
+| `checkout.submodules_at` / `unpopulated` | `code status`가 신고할 사실 |
+| `git_reader` | `show`는 gitlink를 풀어 **박힌 SHA로** 읽고, 못 채워졌으면 "없다"가 아니라 "못 본다"로 실패. `grep`/`ls`는 `complete=False`로 돌아온다 |
+
+세 번째가 핵심이다. **2차의 action이 쓰는 것은 CLI가 아니라 이 포트**라서,
+방어를 CLI에만 두면 리드는 그대로 조용한 0건을 받는다.
+
+읽은 버전은 증거에 남는다 — `source`가
+`code.show p@main:vendor/libs/x.json (submodule vendor/libs@444be98067a7)`이다.
+나중에 "어느 코드를 본 거냐"를 되짚을 수 있어야 판정이 검증 가능하다.
 
 ## 토큰은 디스크에 안 남는다
 
@@ -215,7 +246,7 @@ python -m src code sync --gbm mx && python -m src ...
 
 ## 검증
 
-`pytest tests/` — 1048개. 11a 1차가 더한 것은 66개.
+`pytest tests/` — 1064개. 11a 1차가 더한 것은 82개.
 
 **사내 트리에는 `.env.example`이 없다.** 그 상태로도 돈다 — 지우고 돌려서
 확인했다(1039 통과 1 스킵).
@@ -224,7 +255,7 @@ python -m src code sync --gbm mx && python -m src ...
 그렇게 답하도록 우리가 정해 놓고 "된다"고 확인하는 꼴이 된다 — `ScriptedAdapter`로
 이미 당한 거짓 초록이다. git이 없는 환경에서는 skip하고 **사유가 찍힌다.**
 
-방어를 하나씩 지워 **29가지 전부 RED를 봤다**:
+방어를 하나씩 지워 **38가지 전부 RED를 봤다**:
 
 | 지운 것 | |
 |---|---|
@@ -243,6 +274,12 @@ python -m src code sync --gbm mx && python -m src ...
 | 코드 명령이 `--fct` 요구 / GBM 안 레포 분기를 안 알림 | 1 / 1 failed |
 | 층 하나만 없어도 실패 / 하나도 없어도 통과 / 없는 층을 조용히 | 1 / 1 / 1 failed |
 | 포트에 `fetch` 추가 | 1 failed |
+| `show`가 submodule 경계를 안 넘음 | 3 failed |
+| `grep`이 못 본 구석을 안 말함 / submodule로 안 들어감 | 1 / 1 failed |
+| `ls`가 못 본 구석을 안 말함 / 봉투가 늘 불완전하다고 우김 | 1 / 1 failed |
+| `.gitmodules`에서 `path`로 시작하는 키를 다 먹음 | 1 failed |
+| `sync`가 submodule을 안 채움 / `plan`이 fetch 한 줄만 | 1 / 1 failed |
+| `status`가 submodule을 안 봄 | 1 failed |
 
 ### 거짓 초록 셋이 나왔다
 

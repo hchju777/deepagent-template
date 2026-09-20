@@ -122,3 +122,117 @@ async def test_git이_아닌_디렉터리는_이유를_말한다(tmp_path, clock
 async def test_파일_목록을_돌려준다(reader):
     got = await reader.ls("dt-core", "main")
     assert got.status == "ok" and "app.py" in got.data
+
+
+# ── submodule 경계 ────────────────────────────────────────────────
+
+@pytest.fixture
+def nested(tmp_path):
+    """부모 + 진짜 submodule. **안 채워진 클론**과 채워진 클론을 둘 다 준다.
+
+    사내에서 기본으로 나오는 모양이 안 채워진 쪽이다(`git clone`에
+    `--recurse-submodules`가 없으면). 그 상태에서 git이 하는 말을 목으로 흉내 내면
+    이 테스트는 아무것도 증명하지 못한다 — 우리가 잡으려는 것이 정확히
+    **git의 실제 행동**이기 때문이다.
+    """
+    lib = tmp_path / "libs"
+    lib.mkdir()
+    _run("git", "init", "-q", "-b", "main", cwd=lib)
+    _run("git", "config", "user.email", "t@t", cwd=lib)
+    _run("git", "config", "user.name", "t", cwd=lib)
+    (lib / "kafka.json").write_text('{"topic": "ALARM_EVENT"}\n', encoding="utf-8")
+    _run("git", "add", "-A", cwd=lib)
+    _run("git", "commit", "-qm", "topic", cwd=lib)
+
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    _run("git", "init", "-q", "-b", "main", cwd=parent)
+    _run("git", "config", "user.email", "t@t", cwd=parent)
+    _run("git", "config", "user.name", "t", cwd=parent)
+    (parent / "app.py").write_text("import libs\n", encoding="utf-8")
+    _run("git", "add", "-A", cwd=parent)
+    _run("git", "commit", "-qm", "first", cwd=parent)
+    _run("git", "-c", "protocol.file.allow=always", "submodule", "add", "-q",
+         str(lib), "vendor/libs", cwd=parent)
+    _run("git", "commit", "-qm", "add submodule", cwd=parent)
+
+    blind = tmp_path / "blind"
+    _run("git", "-c", "protocol.file.allow=always", "clone", "-q", str(parent),
+         str(blind), cwd=tmp_path)
+    full = tmp_path / "full"
+    _run("git", "-c", "protocol.file.allow=always", "clone", "-q",
+         "--recurse-submodules", str(parent), str(full), cwd=tmp_path)
+    return blind, full
+
+
+def _reader_at(path, clock):
+    return RealCodeReader([RepoConfig(name="dt-core", url="https://git.example.com/dt-core",
+                                      path=str(path))], clock=clock)
+
+
+async def test_안_채워진_submodule의_파일은_없다고_하지_않는다(nested, clock):
+    """git은 여기서 `does not exist in 'main'`이라고 한다 — **거짓말이다.** 있다.
+
+    그 말을 그대로 흘리면 리드는 "그 파일은 없다"를 사실로 삼는다. 우리는
+    "**우리가 못 보는 것**"이라고 말해야 한다(5단계의 `unreachable`과 같은 구별).
+    """
+    blind, _ = nested
+    got = await _reader_at(blind, clock).show("dt-core", "main", "vendor/libs/kafka.json")
+    assert got.status == "error"
+    assert "submodule" in got.error and "안 채워져" in got.error
+
+
+async def test_안_채워진_submodule이면_grep이_조용히_0건을_안_준다(nested, clock):
+    """**이 파일에서 제일 위험한 자리다.**
+
+    측정한 사실(git 2.43): 안 채워진 submodule을 두고 `git grep`은 종료코드 1에
+    stdout도 stderr도 비어 있다. `--recurse-submodules`를 붙여도 똑같이 조용하다.
+    우리 `_git`은 grep의 1을 "결과 없음"으로 읽으므로, 봉투가 말하지 않으면
+    2차의 판정이 **"코드에 그런 게 없다"**를 단정하게 된다.
+    """
+    blind, _ = nested
+    got = await _reader_at(blind, clock).grep("dt-core", "main", ["ALARM_EVENT"])
+    assert got.status == "ok"
+    assert got.data.strip() == ""          # git은 실제로 아무것도 안 준다
+    assert not got.envelope.complete       # 그러나 "없다"고 주장할 수는 없다
+    assert "submodule" in got.envelope.truncated_reason
+
+
+async def test_채워진_submodule_안을_실제로_읽는다(nested, clock):
+    """`git show <부모커밋>:서브/경로`는 채워져 있어도 안 들어간다 —
+    gitlink를 직접 풀어야 한다. 그게 되는지 **내용으로** 확인한다."""
+    _, full = nested
+    got = await _reader_at(full, clock).show("dt-core", "main", "vendor/libs/kafka.json")
+    assert got.status == "ok", got.error
+    assert "ALARM_EVENT" in got.data
+
+
+async def test_읽은_submodule_버전이_증거에_남는다(nested, clock):
+    """**최신이 아니라 그 배포가 쓴 버전**을 읽었다는 것이 증거에 있어야 한다.
+    `source`가 안 말하면 나중에 아무도 어느 코드를 본 건지 되짚을 수 없다."""
+    _, full = nested
+    got = await _reader_at(full, clock).show("dt-core", "main", "vendor/libs/kafka.json")
+    assert "submodule vendor/libs@" in got.source
+
+
+async def test_채워진_submodule_안까지_grep한다(nested, clock):
+    _, full = nested
+    got = await _reader_at(full, clock).grep("dt-core", "main", ["ALARM_EVENT"])
+    assert got.status == "ok", got.error
+    assert "vendor/libs/kafka.json" in got.data
+    assert got.envelope.complete
+
+
+async def test_submodule이_없으면_봉투가_멀쩡하다(reader):
+    """경고를 오탐으로 남발하면 **진짜 경고가 묻힌다.** 대부분의 레포가 이 경우다."""
+    got = await reader.grep("dt-core", "main", ["NEW_NAME"])
+    assert got.envelope.complete and got.envelope.truncated_reason is None
+
+
+async def test_목록도_submodule_안은_못_봤다고_말한다(nested, clock):
+    """`ls-tree -r`는 submodule 안으로 안 들어간다 — 이름 하나만 나온다.
+    그걸 "그 밑에 파일이 없다"로 읽으면 안 된다."""
+    blind, _ = nested
+    got = await _reader_at(blind, clock).ls("dt-core", "main")
+    assert "vendor/libs" in got.data
+    assert not got.envelope.complete and "submodule" in got.envelope.truncated_reason

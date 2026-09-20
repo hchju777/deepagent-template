@@ -24,6 +24,7 @@
 명령에도 토큰을 찍지 않는다 — 사람이 그걸 복사해 붙이면 셸 히스토리에 남는다.
 """
 import base64
+import re
 import subprocess
 from pathlib import Path
 from typing import Literal
@@ -32,6 +33,7 @@ from src.config.schema_site import RepoConfig
 from src.domain.base import StrictModel
 
 _TIMEOUT_S = 120
+_PATH_LINE = re.compile(r"path\s*=\s*(.+)$")
 
 
 class RepoStatus(StrictModel):
@@ -145,17 +147,75 @@ def config_layers(repo: RepoConfig, commit: str, paths: list[str]) -> tuple[list
     return [p for p in paths if p not in missing], missing
 
 
+def parse_gitmodules(text: str) -> list[str]:
+    """`.gitmodules`에서 submodule 경로만 뽑는다.
+
+    ini 파서를 안 쓰는 이유: 섹션 이름이 `[submodule "a/b"]`처럼 따옴표와 슬래시를
+    달고 오고 사람이 손으로도 고치는 파일이라, 필요한 키 하나만 줄 단위로 보는
+    편이 덜 깨진다. `path`로 시작하는 다른 키(`pathspec` 같은)를 안 먹으려고
+    `=`까지 붙여서 본다.
+    """
+    found = set()
+    for line in text.splitlines():
+        match = _PATH_LINE.match(line.strip())
+        if match:
+            found.add(match.group(1).strip())
+    return sorted(found)
+
+
+def submodules_at(repo: RepoConfig, commit: str) -> list[str]:
+    """그 커밋이 선언한 submodule 경로들.
+
+    ## 왜 이걸 봐야 하는가 — 측정한 사실
+
+    안 채워진 submodule을 두고 git이 실제로 하는 말(git 2.43에서 직접 확인):
+
+    | 명령 | 결과 |
+    |---|---|
+    | `git show <커밋>:서브/경로` | `does not exist in '<커밋>'` — **거짓말이다.** 있다 |
+    | `git grep <패턴> <커밋>` | 종료코드 1, stdout 비어 있음, **stderr도 비어 있음** |
+    | `git grep --recurse-submodules …` | 똑같이 조용한 0건 |
+
+    두 번째가 위험하다. 2차의 `code.grep`이 0건을 "코드에 그런 게 없다"로 읽는데
+    실제로는 **우리가 못 본 것**이다. 5단계의 `unreachable`을 `ok`로 적는 것과
+    같은 종류의 거짓이고, 조용하다는 점에서 더 나쁘다.
+
+    ## 버전은 가정하지 않는다
+
+    부모 레포의 배포 커밋이 submodule의 커밋 SHA를 박아 둔다(gitlink). 그래서
+    "최신이 맞겠지"가 아니라 **그 배포가 실제로 쓴 버전**을 안다 —
+    `Pin.how="declared"`와 같은 성질이다.
+    """
+    code, out, _ = _git(Path(repo.path), "show", f"{commit}:.gitmodules")
+    if code != 0:
+        return []                       # `.gitmodules`가 없다 = submodule이 없다
+    return parse_gitmodules(out)
+
+
+def unpopulated(repo: RepoConfig, paths: list[str]) -> list[str]:
+    """선언은 됐는데 **로컬에 내용이 없는** submodule들.
+
+    `--recurse-submodules` 없이 클론하면 빈 디렉터리로 남는 것이 기본 동작이다.
+    그 상태를 모르고 읽으면 위 표의 조용한 거짓말을 그대로 믿게 된다.
+    """
+    return [path for path in paths
+            if not (Path(repo.path) / path / ".git").exists()]
+
+
 def plan_for(repo: RepoConfig, state: RepoStatus) -> list[str]:
     """사람이 직접 칠 명령. **토큰은 안 찍는다** — 셸 히스토리에 남는다."""
     if not state.exists:
-        return [f"git clone {repo.url} {repo.path}    # 인증은 자격 증명 도우미에 맡겨라"]
+        return [f"git clone --recurse-submodules {repo.url} {repo.path}"
+                f"    # 인증은 자격 증명 도우미에 맡겨라"]
     if not state.is_git:
         return [f"# {repo.path}에 .git이 없다 — 지우고 다시 클론하거나 올바른 경로를 config에 적어라",
-                f"git clone {repo.url} {repo.path}"]
+                f"git clone --recurse-submodules {repo.url} {repo.path}"]
     if not state.origin_matches:
         return [f"# origin이 다르다 ({state.origin}). 의도한 것이 아니면:",
                 f"git -C {repo.path} remote set-url origin {repo.url}"]
-    return [f"git -C {repo.path} fetch --all --prune"]
+    # fetch는 **안 채워진** submodule을 채우지 않는다 — 두 줄이어야 트리가 읽힌다.
+    return [f"git -C {repo.path} fetch --all --prune --recurse-submodules",
+            f"git -C {repo.path} submodule update --init --recursive"]
 
 
 Outcome = Literal["cloned", "fetched", "failed", "skipped"]
@@ -180,7 +240,10 @@ def sync(repo: RepoConfig, state: RepoStatus) -> tuple[Outcome, str]:
     if not state.exists:
         try:
             done = subprocess.run(
-                ["git", *header, "clone", repo.url, repo.path],
+                # **submodule까지 가져온다.** 안 그러면 그 자리가 빈 디렉터리로
+                # 남고, `git show`·`git grep`이 조용히 아무것도 못 찾는다.
+                ["git", *header, "clone", "--recurse-submodules",
+                 repo.url, repo.path],
                 capture_output=True, text=True, timeout=_TIMEOUT_S)
         except Exception as exc:                                    # noqa: BLE001
             return "failed", f"{type(exc).__name__}: {exc}"
@@ -192,14 +255,28 @@ def sync(repo: RepoConfig, state: RepoStatus) -> tuple[Outcome, str]:
             return "failed", _scrub(
                 _text(done.stderr) or _text(done.stdout)
                 or f"git clone이 {done.returncode}로 끝났다(출력 없음)", repo)
-        return "cloned", repo.path
+        outcome: Outcome = "cloned"
+    else:
+        code, out, err = _git(Path(repo.path), *header, "fetch", "--all", "--prune",
+                              "--recurse-submodules", timeout=_TIMEOUT_S)
+        if code != 0:
+            return "failed", _scrub(
+                err or out or f"git fetch가 {code}로 끝났다(출력 없음)", repo)
+        outcome = "fetched"
 
-    code, out, err = _git(Path(repo.path), *header, "fetch", "--all", "--prune",
-                          timeout=_TIMEOUT_S)
+    # **fetch는 submodule을 채우지 않는다.** `--recurse-submodules`는 이미 채워진
+    # 것을 갱신할 뿐이라, 예전에 평평하게 클론된 트리는 fetch를 몇 번 돌려도
+    # 계속 빈 디렉터리다. 그 상태로 두면 grep이 조용히 0건을 돌려준다.
+    # submodule이 없으면 이 명령은 아무 일도 안 한다.
+    code, out, err = _git(Path(repo.path), *header, "submodule", "update",
+                          "--init", "--recursive", timeout=_TIMEOUT_S)
     if code != 0:
+        # fetch 자체는 됐지만 **반쪽짜리 트리를 성공이라고 부르지 않는다** —
+        # 읽을 수 없는 구석이 남은 채로 조사가 돌면 "코드에 없다"가 나온다.
         return "failed", _scrub(
-            err or out or f"git fetch가 {code}로 끝났다(출력 없음)", repo)
-    return "fetched", repo.path
+            f"{outcome}는 됐는데 submodule을 못 채웠다 — "
+            + (err or out or f"git submodule update가 {code}로 끝났다(출력 없음)"), repo)
+    return outcome, repo.path
 
 
 def _scrub(message: str, repo: RepoConfig) -> str:

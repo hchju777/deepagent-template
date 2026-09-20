@@ -347,3 +347,34 @@ def test_선언이_같으면_경고하지_않는다(tmp_path, monkeypatch, capsy
 
     _, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert "레포 선언이 다르다" not in captured.err
+
+
+def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, capsys):
+    """**이걸 여기서 안 말하면 아무 데서도 안 보인다.**
+
+    git 자신이 조용하다: 안 채워진 submodule을 두고 `git grep`은 종료코드 1에
+    출력이 없다. 사람이 `code status`를 초록으로 보고 조사를 돌리면, 2차의 판정이
+    "코드에 그런 게 없다"를 확신에 차서 단정한다.
+    """
+    url = "https://git.example.com/team/dt-core"
+    origin = tmp_path / "origin"
+    _make_repo(origin, origin=url)
+    lib = tmp_path / "libs"
+    _make_repo(lib, origin="https://git.example.com/team/libs")
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "submodule", "add",
+                    "-q", str(lib), "vendor/libs"], cwd=origin, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "sub"], cwd=origin, check=True,
+                   capture_output=True)
+    # `--recurse-submodules` 없이 — 사내에서 기본으로 나오는 모양이다.
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
+                    str(origin), str(checkout)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "set-url", "origin", url], cwd=checkout,
+                   check=True, capture_output=True)
+    config_root = _tree(tmp_path, repo_path=str(checkout), url=url)
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 1, captured.out + captured.err
+    assert "vendor/libs" in captured.out
+    assert "submodule update --init" in captured.out

@@ -1001,11 +1001,34 @@ def _divergent_repos(args, env, gbm: str, fcts: list[str]) -> list[str]:
     return [f"{', '.join(fcts_)}: {key or '(선언 없음)'}" for key, fcts_ in seen.items()]
 
 
+def _report_submodules(repo, commit: str) -> int:
+    """그 커밋의 submodule이 **읽을 수 있는 상태인가.** 문제 수를 돌려준다.
+
+    안 채워진 submodule은 `code status`가 말해 주지 않으면 아무 데서도 안 보인다 —
+    git 자신이 조용하기 때문이다(`git grep`은 종료코드 1에 출력이 없다).
+    """
+    from src.knowledge.checkout import submodules_at, unpopulated
+
+    subs = submodules_at(repo, commit)
+    if not subs:
+        return 0
+    blind = unpopulated(repo, subs)
+    print(f"          submodule {len(subs)}개: {', '.join(subs)}"
+          + (f" · 안 채워짐: {', '.join(blind)}" if blind else ""))
+    if not blind:
+        return 0
+    print(f"       ⚠ 안 채워진 submodule은 **조용히** 안 보인다 — "
+          f"`git show`는 \"경로가 없다\"고 하고 `git grep`은 0건을 돌려준다")
+    print(f"       → git -C {repo.path} submodule update --init --recursive")
+    return 1
+
+
 def cmd_code_status(args, env) -> int:
     """**네트워크를 안 탄다.** 어디서든 돈다 — 진단 전용이다(decisions ⑤).
 
-    보는 넷: 경로가 있나 · `.git`이 있나 · `origin`이 config와 같나 ·
-    배포가 가리키는 커밋이 로컬에 실재하나.
+    보는 것: 경로가 있나 · `.git`이 있나 · `origin`이 config와 같나 ·
+    배포가 가리키는 커밋이 로컬에 실재하나 · 그 커밋의 submodule이 채워져 있나 ·
+    이름이 사는 config 층이 그 커밋에 있나.
     """
     from src.knowledge.checkout import config_layers, has_commit, plan_for, status_of
     from src.knowledge.loader import load_deployment, load_topology
@@ -1042,6 +1065,9 @@ def cmd_code_status(args, env) -> int:
                 print(f"       → {line}")
             continue
         # 배포가 가리키는 커밋이 실재하는가(⑤-4).
+        # submodule은 **커밋마다** 답이 다르지만 서비스마다 다르지는 않다 —
+        # 같은 커밋을 여러 서비스가 가리키면 한 번만 본다.
+        checked: set[str] = set()
         for name, service in sorted(topology.services.items()):
             if service.repo != repo.name:
                 continue
@@ -1054,6 +1080,9 @@ def cmd_code_status(args, env) -> int:
                 bad += 1
                 print(f"       → git -C {repo.path} fetch --all --prune")
                 continue
+            if pin.commit not in checked:
+                checked.add(pin.commit)
+                bad += _report_submodules(repo, pin.commit)
             # 이름이 사는 곳이 실재하는가. 층은 선택이지만 **하나도 없으면**
             # 경로 앞머리가 통째로 틀린 것이고, 리드는 이름을 영영 못 찾는다.
             wanted = topology.resolved_config_paths(gbm, site_fct)
