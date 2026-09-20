@@ -1007,18 +1007,33 @@ def _report_submodules(repo, commit: str) -> int:
     안 채워진 submodule은 `code status`가 말해 주지 않으면 아무 데서도 안 보인다 —
     git 자신이 조용하기 때문이다(`git grep`은 종료코드 1에 출력이 없다).
     """
-    from src.knowledge.checkout import submodules_at, unpopulated
+    from src.knowledge.checkout import stale, submodules_at, unpopulated
 
     subs = submodules_at(repo, commit)
     if not subs:
         return 0
     blind = unpopulated(repo, subs)
-    print(f"          submodule {len(subs)}개: {', '.join(subs)}"
-          + (f" · 안 채워짐: {', '.join(blind)}" if blind else ""))
-    if not blind:
+    behind = stale(repo, commit, subs)
+    note = [f"submodule {len(subs)}개: {', '.join(subs)}"]
+    if blind:
+        note.append(f"안 채워짐: {', '.join(blind)}")
+    if behind:
+        note.append(f"그 커밋의 버전이 없음: {', '.join(behind)}")
+    print("          " + " · ".join(note))
+    if not blind and not behind:
         return 0
-    print(f"       ⚠ 안 채워진 submodule은 **조용히** 안 보인다 — "
-          f"`git show`는 \"경로가 없다\"고 하고 `git grep`은 0건을 돌려준다")
+    if blind:
+        # git 자신이 조용하다 — 여기서 안 말하면 아무 데서도 안 보인다.
+        print(f"       ⚠ 안 채워진 submodule은 **조용히** 안 보인다 — "
+              f"`git show`는 \"경로가 없다\"고 하고 `git grep`은 0건을 돌려준다")
+    if behind:
+        # 이쪽은 시끄럽게 실패하지만 **말이 오해를 부른다**
+        # ("exists on disk, but not in …" = 파일이 없다는 뜻이 아니다).
+        print(f"       ⚠ 그 배포가 쓴 submodule 버전이 로컬에 없다 — "
+              f"파일이 없는 것이 아니라 우리가 그 버전을 안 가진 것이다")
+    # 둘 다 필요하다. fetch만으로는 **안 채워진** submodule이 안 채워지고,
+    # update만으로는 부모가 새로 가리키는 버전의 객체가 안 온다(측정함).
+    print(f"       → git -C {repo.path} fetch --all --prune --recurse-submodules")
     print(f"       → git -C {repo.path} submodule update --init --recursive")
     return 1
 
@@ -1080,9 +1095,11 @@ def cmd_code_status(args, env) -> int:
                 bad += 1
                 print(f"       → git -C {repo.path} fetch --all --prune")
                 continue
+            blocked = 0
             if pin.commit not in checked:
                 checked.add(pin.commit)
-                bad += _report_submodules(repo, pin.commit)
+                blocked = _report_submodules(repo, pin.commit)
+                bad += blocked
             # 이름이 사는 곳이 실재하는가. 층은 선택이지만 **하나도 없으면**
             # 경로 앞머리가 통째로 틀린 것이고, 리드는 이름을 영영 못 찾는다.
             wanted = topology.resolved_config_paths(gbm, site_fct)
@@ -1094,7 +1111,12 @@ def cmd_code_status(args, env) -> int:
             if not here:
                 bad += 1
                 print(f"       ⚠ config_paths가 그 커밋에 **하나도** 없다")
-                print(f"       → knowledge/topology/{gbm}.json의 config_paths를 고쳐라")
+                # submodule이 안 읽히면 그 안의 층도 전부 "없다"로 나온다.
+                # 그 상태에서 "경로를 고쳐라"는 **틀린 처방**이다 — 경로는 맞았다.
+                if blocked:
+                    print(f"       (먼저 위의 submodule부터 — 그 안의 층은 지금 안 읽힌다)")
+                else:
+                    print(f"       → knowledge/topology/{gbm}.json의 config_paths를 고쳐라")
     return 1 if bad else 0
 
 

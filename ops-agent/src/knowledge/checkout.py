@@ -17,11 +17,17 @@
 로직 명세를 만들고 그럴듯한 재계산을 한다 — **전부 틀린 채로.** "코드를 못 읽었다"
 보다 훨씬 나쁘다. 실패가 조용하고 판정은 확신에 차 있다.
 
-## 토큰은 URL에 안 들어간다
+## 토큰은 URL에 안 들어간다 — 그리고 호스트에 묶인다
 
 `https://<토큰>@호스트/…`로 클론하면 git이 **`.git/config`에 평문으로 저장한다.**
 그래서 remote는 깨끗한 url로 두고 인증은 명령마다 헤더로 넘긴다. `plan`이 출력하는
 명령에도 토큰을 찍지 않는다 — 사람이 그걸 복사해 붙이면 셸 히스토리에 남는다.
+
+헤더는 `http.extraHeader`가 아니라 **`http.<스킴://호스트>/.extraHeader`**로 준다.
+측정해 보니 `-c`로 준 설정이 **submodule 하위 클론까지 전파된다**(`-c
+protocol.file.allow=never`로 확인: submodule 클론이 막혔다). 그래서 묶지 않은
+헤더를 쓰면 `.gitmodules`가 가리키는 **아무 호스트에나 우리 토큰이 날아간다.**
+호스트로 묶으면 사내 호스트의 submodule은 여전히 인증되고 밖으로는 안 나간다.
 """
 import base64
 import re
@@ -34,6 +40,7 @@ from src.domain.base import StrictModel
 
 _TIMEOUT_S = 120
 _PATH_LINE = re.compile(r"path\s*=\s*(.+)$")
+_HTTP_HOST = re.compile(r"(https?://[^/]+)")
 
 
 class RepoStatus(StrictModel):
@@ -126,12 +133,28 @@ def missing_paths(repo: RepoConfig, commit: str, paths: list[str]) -> list[str]:
     사람이 손으로 적는 칸이라 오타가 정상적으로 일어난다 — 기동이 아니라 여기서
     잡는 이유는 커밋마다 답이 다르기 때문이다.
     """
-    gone = []
-    for path in paths:
+    subs = submodules_at(repo, commit)
+    return [path for path in paths if not _path_exists(repo, commit, path, subs)]
+
+
+def _path_exists(repo: RepoConfig, commit: str, path: str, subs: list[str]) -> bool:
+    """**submodule 경계를 넘어서** 실재 여부를 본다.
+
+    `git cat-file -e <커밋>:<서브>/…`는 submodule이 **채워져 있어도** 실패한다
+    (측정: `exists on disk, but not in 'main'`). 그대로 두면 공용 라이브러리
+    submodule에 사는 config 층을 전부 "없다"로 신고하고, `code status`가
+    "config_paths를 고쳐라"라는 **틀린 처방**을 내놓는다 — 경로는 맞았는데.
+    """
+    sub = containing_submodule(subs, path)
+    if not sub:
         code, _, _ = _git(Path(repo.path), "cat-file", "-e", f"{commit}:{path}")
-        if code != 0:
-            gone.append(path)
-    return gone
+        return code == 0
+    sha = gitlink_at(repo, commit, sub)
+    rest = path[len(sub):].lstrip("/")
+    if not sha or not rest:
+        return False
+    code, _, _ = _git(Path(repo.path) / sub, "cat-file", "-e", f"{sha}:{rest}")
+    return code == 0
 
 
 def config_layers(repo: RepoConfig, commit: str, paths: list[str]) -> tuple[list[str], list[str]]:
@@ -202,6 +225,75 @@ def unpopulated(repo: RepoConfig, paths: list[str]) -> list[str]:
             if not (Path(repo.path) / path / ".git").exists()]
 
 
+def auth_args(repo: RepoConfig) -> list[str]:
+    """이 명령에만 붙일 인증 설정. **호스트로 묶는다.**
+
+    `-c`로 준 설정은 submodule 하위 클론까지 전파된다(측정함). 묶지 않은
+    `http.extraHeader`를 쓰면 `.gitmodules`가 가리키는 아무 호스트에나 토큰이
+    날아간다 — 공용 라이브러리가 다른 호스트에 있는 것은 흔한 일이다.
+
+    ssh url에는 아무것도 안 붙인다. 헤더는 http(s)에서만 뜻이 있고, ssh는 키로
+    인증한다 — 거기에 토큰을 얹으면 **되는 줄 알고 안 되는** 설정이 된다.
+    """
+    if repo.token is None:
+        return []
+    host = _HTTP_HOST.match(repo.url)
+    if not host:
+        return []
+    # GitHub fine-grained token은 basic 인증의 비밀번호 자리에 온다.
+    raw = f"x-access-token:{repo.token.get_secret_value()}".encode()
+    return ["-c", f"http.{host.group(1)}/.extraHeader=Authorization: Basic "
+                  f"{base64.b64encode(raw).decode()}"]
+
+
+def containing_submodule(subs: list[str], path: str) -> str:
+    """그 경로를 품고 있는 submodule. 중첩이면 **가장 깊은 것**을 고른다."""
+    hits = [sub for sub in subs
+            if path == sub or path.startswith(sub.rstrip("/") + "/")]
+    return max(hits, key=len) if hits else ""
+
+
+def gitlink_at(repo: RepoConfig, commit: str, sub: str) -> str:
+    """그 커밋이 submodule에 박아 둔 SHA. 못 읽으면 빈 문자열."""
+    code, out, _ = _git(Path(repo.path), "ls-tree", commit, "--", sub)
+    if code != 0:
+        return ""
+    for line in out.splitlines():
+        parts = line.split(" ", 2)            # `160000 commit <sha>\t<경로>`
+        if len(parts) == 3 and parts[1] == "commit":
+            return parts[2].split("\t")[0].strip()
+    return ""
+
+
+def stale(repo: RepoConfig, commit: str, paths: list[str]) -> list[str]:
+    """**세 번째 상태**: 채워져는 있는데 그 커밋이 박은 버전의 객체가 없다.
+
+    `.git`이 있으니 `unpopulated`는 "채워졌다"고 말한다. 그런데 부모만 fetch되고
+    submodule은 안 당겨진 트리에서 git은 이렇게 답한다(측정):
+
+    | | |
+    |---|---|
+    | `git -C <서브> show <SHA>:경로` | `exists on disk, but not in '<SHA>'` |
+    | `git grep --recurse-submodules <커밋>` | 종료코드 128 · `unable to read tree` |
+
+    조용하지는 않다는 것이 다행이다. 그러나 저 말을 그대로 사람이나 리드에게
+    넘기면 "파일이 없다"로 읽힌다 — 실제로는 **우리가 그 버전을 안 가진 것**이다.
+    `code sync`가 실제로 고친다는 것도 확인했다.
+    """
+    behind = []
+    for sub in paths:
+        root = Path(repo.path) / sub
+        if not (root / ".git").exists():
+            continue                          # 그건 `unpopulated`가 센다
+        sha = gitlink_at(repo, commit, sub)
+        if not sha:
+            continue
+        code, _, _ = _git(root, "cat-file", "-e", f"{sha}^{{commit}}")
+        if code != 0:
+            behind.append(sub)
+    return behind
+
+
 def plan_for(repo: RepoConfig, state: RepoStatus) -> list[str]:
     """사람이 직접 칠 명령. **토큰은 안 찍는다** — 셸 히스토리에 남는다."""
     if not state.exists:
@@ -227,12 +319,7 @@ def sync(repo: RepoConfig, state: RepoStatus) -> tuple[Outcome, str]:
     토큰은 `http.extraHeader`로 **이 명령에만** 넘긴다. remote URL에 박으면
     `.git/config`에 평문으로 남는다.
     """
-    header = []
-    if repo.token is not None:
-        # GitHub fine-grained token은 basic 인증의 비밀번호 자리에 온다.
-        raw = f"x-access-token:{repo.token.get_secret_value()}".encode()
-        header = ["-c", f"http.extraHeader=Authorization: Basic "
-                        f"{base64.b64encode(raw).decode()}"]
+    header = auth_args(repo)
 
     if state.is_git and not state.origin_matches:
         return "skipped", "origin이 config와 달라 건드리지 않는다 — 사람이 확인해야 한다"

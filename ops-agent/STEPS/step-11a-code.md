@@ -128,10 +128,13 @@ python -m src code read --service processor --path config/common.json --gbm mx
    **층은 선택이다** — 우리 `SITE_LAYERS`와 같다. `fct/{fct}/common.json`이 없는
    법인이 정상이듯 대상도 그렇다. 그래서 없는 층은 적어만 주고, **하나도 없을 때만**
    빨간불이다. 없는 층마다 빨간불을 켜면 사람이 검사를 끈다
-6. **그 커밋의 submodule이 채워져 있나** — 안 채워진 submodule을 두고 `git grep`은
+6. **그 커밋의 submodule을 읽을 수 있나** — 안 채워진 submodule을 두고 `git grep`은
    **종료코드 1에 출력 없이** 끝난다. 우리는 그걸 "결과 없음"으로 읽으므로, 여기서
    말하지 않으면 2차의 판정이 "코드에 그런 게 없다"를 단정한다. git 자신이 조용해서
-   **아무 데서도 안 보이는** 실패다(decisions ②-2)
+   **아무 데서도 안 보이는** 실패다(decisions ②-2).
+
+   "채워졌다"로는 부족하다 — **그 커밋이 박은 버전의 객체가 있나**까지 본다.
+   부모만 당겨진 트리가 정확히 그 상태이고, `.git`이 있어서 겉보기엔 정상이다
 
 3번은 `.git` 꼬리와 끝 슬래시만 봐준다. **호스트가 다르면 같게 안 본다** — 관대함이
 거기까지 오면 자물쇠가 아니다. 반대로 `.git` 유무로 실패하면 사람이 자물쇠를 끄고
@@ -164,6 +167,35 @@ python -m src code read --service processor --path config/common.json --gbm mx
 `code.show p@main:vendor/libs/x.json (submodule vendor/libs@444be98067a7)`이다.
 나중에 "어느 코드를 본 거냐"를 되짚을 수 있어야 판정이 검증 가능하다.
 
+## 사내가 실제로 submodule을 쓴다 — 측정한 것들
+
+"실제로 쓴다"는 답을 받고 git 2.43에 대고 일곱 가지를 직접 재 봤다. 추측으로 적었으면
+두 개는 틀렸을 것이다.
+
+| # | 잰 것 | 결과 |
+|---|---|---|
+| 1 | `-c` 설정이 submodule 하위 프로세스로 가나 | **간다.** 인증 헤더도 따라 내려간다 → 호스트로 묶어야 한다 |
+| 2 | `cat-file -e <커밋>:<서브>/경로` | **채워져 있어도 실패**(`exists on disk, but not in 'main'`) |
+| 3 | 옛 부모 커밋의 submodule 읽기 | **된다.** gitlink를 풀면 그 시점 내용이 나온다 |
+| 4 | `fetch`의 기본값 | `fetch.recurseSubmodules=on-demand`가 기본이라 대개 알아서 따라온다 |
+| 5 | 객체가 진짜 없을 때 | `show`는 128, `grep`은 128 + `unable to read tree` — **조용하진 않지만 말이 오해를 부른다** |
+| 6 | 지금 `sync` 순서가 5를 고치나 | **고친다**(fetch → `submodule update --init --recursive`) |
+| 7 | `http.<url>.extraHeader` 문법 | git이 받고, **다른 호스트엔 안 붙는다** |
+
+2번이 실제 오진을 만들고 있었다. 이름이 사는 config 층이 공용 라이브러리 submodule에
+있으면 `code status`가 "config_paths가 그 커밋에 하나도 없다 → 경로를 고쳐라"라고 한다.
+**경로는 맞았는데** 사람은 맞는 경로를 고치게 된다. 지금은 경계를 넘어서 확인하고,
+submodule이 안 읽히는 상태면 "먼저 위의 submodule부터"라고 말한다.
+
+5번이 **세 번째 상태**를 드러냈다. `.git`이 있으니 `unpopulated`는 "채워졌다"고
+말하는데, 그 커밋이 박은 버전의 객체가 없다. 상태가 셋이다:
+
+| 상태 | 어떻게 보이나 |
+|---|---|
+| 안 채워짐 | `grep`이 **조용히** 0건 |
+| 채워졌지만 그 버전이 없음 | 128 + `unable to read tree` — 시끄럽지만 말이 틀리게 읽힌다 |
+| 읽을 수 있음 | 옛 커밋까지 정상 |
+
 ## 토큰은 디스크에 안 남는다
 
 `https://<토큰>@호스트/…`로 클론하면 git이 그 URL을 **`.git/config`에 평문으로
@@ -193,6 +225,18 @@ fine-grained token에 필요한 것은 **둘뿐이다.**
 발급할 때 틀리기 쉬운 것: Resource owner를 **조직**으로 골라야 org 레포가 보인다 ·
 Repository access는 `Only select repositories`(등재제와 같은 성질) · 많은 org가
 **관리자 승인**을 요구해서 승인 전까지 403이다 · SAML SSO면 토큰에 SSO 승인이 따로 필요하다.
+
+**submodule을 쓰면 그 레포들도 토큰 범위에 넣어야 한다.** `Only select repositories`에
+부모만 골라 두면 submodule 클론이 403으로 죽고, `code sync`는 (지금은) `failed`로
+말하지만 그 전까지는 "부모만 받아지고 조용히 반쪽"이 될 수 있었다.
+
+그리고 **헤더를 호스트로 묶었다**: `http.extraHeader`가 아니라
+`http.<스킴://호스트>/.extraHeader`다. 측정해 보니 `-c`로 준 설정이 **submodule
+하위 클론까지 전파된다**(`-c protocol.file.allow=never`를 주니 submodule 클론이
+막혔다 — 즉 우리 인증 헤더도 똑같이 내려간다). 묶지 않으면 `.gitmodules`가 가리키는
+**아무 호스트에나 우리 토큰이 날아간다.** 공용 라이브러리가 다른 호스트에 있는 것은
+흔한 일이다. ssh url에는 헤더를 아예 안 붙인다 — 거기선 뜻이 없고, 얹으면 "되는 줄
+알고 안 되는" 설정이 된다.
 
 **만료가 조용한 실패를 만든다.** 토큰이 만료되면 `code sync`는 403으로 실패하지만
 **`code status`는 못 잡는다** — 네트워크를 안 타기 때문이다. 이미 클론된 레포는 계속
@@ -246,7 +290,7 @@ python -m src code sync --gbm mx && python -m src ...
 
 ## 검증
 
-`pytest tests/` — 1064개. 11a 1차가 더한 것은 82개.
+`pytest tests/` — 1073개. 11a 1차가 더한 것은 91개.
 
 **사내 트리에는 `.env.example`이 없다.** 그 상태로도 돈다 — 지우고 돌려서
 확인했다(1039 통과 1 스킵).
@@ -255,7 +299,7 @@ python -m src code sync --gbm mx && python -m src ...
 그렇게 답하도록 우리가 정해 놓고 "된다"고 확인하는 꼴이 된다 — `ScriptedAdapter`로
 이미 당한 거짓 초록이다. git이 없는 환경에서는 skip하고 **사유가 찍힌다.**
 
-방어를 하나씩 지워 **38가지 전부 RED를 봤다**:
+방어를 하나씩 지워 **46가지 전부 RED를 봤다**:
 
 | 지운 것 | |
 |---|---|
@@ -280,6 +324,11 @@ python -m src code sync --gbm mx && python -m src ...
 | `.gitmodules`에서 `path`로 시작하는 키를 다 먹음 | 1 failed |
 | `sync`가 submodule을 안 채움 / `plan`이 fetch 한 줄만 | 1 / 1 failed |
 | `status`가 submodule을 안 봄 | 1 failed |
+| 경로 검사가 submodule 경계를 안 넘음 / 넘으면서 아무거나 통과 | 2 / 1 failed |
+| `stale`(그 커밋의 버전 없음)을 안 봄 | 1 failed |
+| 토큰 헤더를 호스트에 안 묶음 / ssh url에도 붙임 | 1 / 1 failed |
+| `show`·`grep`이 stale에 git 원문을 흘림 | 1 / 1 failed |
+| `status`가 submodule 탓을 `config_paths`에 돌림 | 1 failed |
 
 ### 거짓 초록 셋이 나왔다
 

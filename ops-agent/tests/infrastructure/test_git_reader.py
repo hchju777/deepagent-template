@@ -236,3 +236,46 @@ async def test_목록도_submodule_안은_못_봤다고_말한다(nested, clock)
     got = await _reader_at(blind, clock).ls("dt-core", "main")
     assert "vendor/libs" in got.data
     assert not got.envelope.complete and "submodule" in got.envelope.truncated_reason
+
+
+@pytest.fixture
+def behind(nested, tmp_path):
+    """**채워졌지만 그 커밋의 버전이 없는** 트리 — 세 번째 상태.
+
+    부모만 당겨지고 submodule은 안 당겨진 모양이다. `.git`이 있으므로 겉보기엔
+    정상이고, `code status`가 이걸 안 보면 초록으로 나온다.
+    """
+    _, full = nested
+    lib = tmp_path / "libs"
+    (lib / "kafka.json").write_text('{"topic": "MOVED"}\n', encoding="utf-8")
+    _run("git", "add", "-A", cwd=lib)
+    _run("git", "commit", "-qm", "v2", cwd=lib)
+    parent = tmp_path / "parent"
+    _run("git", "fetch", "-q", "origin", cwd=parent / "vendor" / "libs")
+    _run("git", "checkout", "-q", "FETCH_HEAD", cwd=parent / "vendor" / "libs")
+    _run("git", "add", "-A", cwd=parent)
+    _run("git", "commit", "-qm", "sub moved", cwd=parent)
+    _run("git", "-c", "fetch.recurseSubmodules=no", "fetch", "-q", "origin", "main",
+         cwd=full)
+    _run("git", "-c", "submodule.recurse=false", "merge", "--ff-only", "-q",
+         "FETCH_HEAD", cwd=full)
+    return full
+
+
+async def test_그_커밋의_submodule_버전이_없으면_우리_말로_실패한다(behind, clock):
+    """git은 `exists on disk, but not in '<SHA>'`이라고 한다 — 사람도 리드도
+    그걸 "파일이 없다"로 읽는다. 실제로는 **우리가 그 버전을 안 가진 것**이다."""
+    got = await _reader_at(behind, clock).show("dt-core", "main", "vendor/libs/kafka.json")
+    assert got.status == "error"
+    assert "code sync" in got.error
+    assert "exists on disk" not in got.error or "안 가진" in got.error
+
+
+async def test_버전이_없으면_grep이_git의_원문을_안_흘린다(behind, clock):
+    """측정: 이 상태의 `git grep --recurse-submodules`는 종료코드 128에
+    `unable to read tree`만 남기고 **부모 쪽 결과까지 통째로** 잃는다.
+    그 원문을 흘리면 리드가 무엇을 해야 할지 알 수 없다."""
+    got = await _reader_at(behind, clock).grep("dt-core", "main", ["import"])
+    assert got.status == "error"
+    assert "unable to read tree" not in got.error
+    assert "code sync" in got.error

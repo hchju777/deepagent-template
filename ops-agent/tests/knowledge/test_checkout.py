@@ -10,8 +10,9 @@ import subprocess
 import pytest
 
 from src.config.schema_site import RepoConfig
-from src.knowledge.checkout import (has_commit, parse_gitmodules, plan_for,
-                                    status_of, submodules_at, sync, unpopulated)
+from src.knowledge.checkout import (auth_args, config_layers, has_commit,
+                                    parse_gitmodules, plan_for, stale, status_of,
+                                    submodules_at, sync, unpopulated)
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git이 없다")
 
@@ -331,3 +332,92 @@ def test_sync가_안_채워진_submodule을_채운다(tmp_path):
     assert outcome == "fetched", where
     assert (flat / "vendor" / "libs" / "kafka.json").exists()
     assert unpopulated(repo, submodules_at(repo, "main")) == []
+
+
+def _commit_in(root, message="more"):
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", message], cwd=root, check=True,
+                   capture_output=True)
+
+
+def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path):
+    """**측정으로 잡은 오진이다.**
+
+    `git cat-file -e <커밋>:<서브>/…`는 submodule이 **채워져 있어도** 실패한다
+    (`exists on disk, but not in 'main'`). 그대로 두면 공용 라이브러리에 사는
+    config 층을 전부 "없다"로 신고하고, `code status`가 "config_paths를 고쳐라"라는
+    **틀린 처방**을 내놓는다 — 경로는 맞았는데 사람은 맞는 경로를 고치게 된다.
+    """
+    parent = _make_parent_with_submodule(tmp_path)
+    full = tmp_path / "full"
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
+                    "--recurse-submodules", str(parent), str(full)],
+                   check=True, capture_output=True)
+    repo = repo_at(full)
+    here, gone = config_layers(repo, "main", ["a.py", "vendor/libs/kafka.json"])
+    assert gone == [], f"submodule 안의 층을 없다고 했다: {gone}"
+    assert here == ["a.py", "vendor/libs/kafka.json"]
+
+
+def test_진짜로_없는_경로는_여전히_없다고_한다(tmp_path):
+    """경계를 넘게 만들면서 검사가 **아무거나 통과시키게** 되면 안 된다."""
+    parent = _make_parent_with_submodule(tmp_path)
+    full = tmp_path / "full"
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
+                    "--recurse-submodules", str(parent), str(full)],
+                   check=True, capture_output=True)
+    _, gone = config_layers(repo_at(full), "main", ["vendor/libs/없는파일.json"])
+    assert gone == ["vendor/libs/없는파일.json"]
+
+
+def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path):
+    """**세 번째 상태다.** `.git`이 있으니 `unpopulated`는 "채워졌다"고 말한다.
+
+    부모만 fetch되고 submodule은 안 당겨진 트리에서 실제로 생긴다. 이걸 못 보면
+    `code status`는 초록인데 읽기는 `exists on disk, but not in …`으로 실패한다 —
+    사람은 그 말을 "파일이 없다"로 읽는다.
+    """
+    parent = _make_parent_with_submodule(tmp_path)
+    flat = _flat_clone(tmp_path, parent)
+    subprocess.run(["git", "submodule", "update", "--init", "--recursive"], cwd=flat,
+                   check=True, capture_output=True)
+    repo = repo_at(flat)
+    assert unpopulated(repo, submodules_at(repo, "main")) == []   # 채워는 졌다
+    assert stale(repo, "main", submodules_at(repo, "main")) == []
+
+    # 원본 submodule이 앞서 나가고, 부모가 그걸 가리키게 된다.
+    lib = tmp_path / "libs"
+    (lib / "kafka.json").write_text('{"topic": "NEW"}\n', encoding="utf-8")
+    _commit_in(lib, "v2")
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=parent / "vendor" / "libs",
+                   check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=parent / "vendor" / "libs",
+                   check=True, capture_output=True)
+    _commit_in(parent, "sub moved")
+    # **부모만** 당긴다 — submodule은 그대로 둔다. 체크아웃된 브랜치로는 직접
+    # fetch가 안 되므로 받아서 ff-merge한다(작업 트리의 submodule은 안 움직인다).
+    subprocess.run(["git", "-c", "fetch.recurseSubmodules=no", "fetch", "-q", "origin",
+                    "main"], cwd=flat, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "submodule.recurse=false", "merge", "--ff-only", "-q",
+                    "FETCH_HEAD"], cwd=flat, check=True, capture_output=True)
+
+    subs = submodules_at(repo, "main")
+    assert unpopulated(repo, subs) == []        # 여전히 "채워짐"으로 보인다
+    assert stale(repo, "main", subs) == ["vendor/libs"]
+
+
+def test_토큰_헤더는_호스트에_묶인다(tmp_path):
+    """`-c`는 **submodule 하위 클론까지 전파된다**(측정). 묶지 않은 헤더를 쓰면
+    `.gitmodules`가 가리키는 아무 호스트에나 우리 토큰이 날아간다."""
+    repo = RepoConfig(name="dt-core", url="https://git.example.com/team/dt-core",
+                      path=str(tmp_path / "x"), token="ghp_secret_token_value")
+    args = auth_args(repo)
+    assert args[0] == "-c"
+    assert args[1].startswith("http.https://git.example.com/.extraHeader=")
+
+
+def test_ssh_url에는_토큰_헤더를_안_붙인다(tmp_path):
+    """헤더는 http(s)에서만 뜻이 있다. ssh에 얹으면 **되는 줄 알고 안 되는** 설정이 된다."""
+    repo = RepoConfig(name="dt-core", url="git@git.example.com:team/dt-core",
+                      path=str(tmp_path / "x"), token="ghp_secret_token_value")
+    assert auth_args(repo) == []

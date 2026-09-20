@@ -39,7 +39,7 @@ from src.domain.ports import CodeReaderPort
 # 순수 파서 하나만 빌려 온다. 같은 `.gitmodules`를 두 계층이 따로 해석하면
 # 언젠가 한쪽만 고쳐지고, 그때 `code status`는 "정상"이라 말하는데 읽기는
 # 비어서 돌아온다 — 규율 8이 막는 그 실패다.
-from src.knowledge.checkout import parse_gitmodules
+from src.knowledge.checkout import containing_submodule, parse_gitmodules
 
 # 한 번에 실어 오는 상한. 코드 파일 하나가 이보다 크면 잘라서 주고 봉투가 말한다.
 _MAX_CHARS = 20000
@@ -115,6 +115,31 @@ class RealCodeReader(CodeReaderPort):
             return []
         return [sub for sub in subs if not (root / sub / ".git").exists()]
 
+    async def _stale(self, repo: str, commit: str, subs: list[str]) -> list[str]:
+        """채워져는 있는데 **그 커밋이 박은 버전**의 객체가 없는 것들.
+
+        부모만 fetch되고 submodule은 안 당겨진 트리에서 생긴다. `.git`이 있으므로
+        `_blind`는 "채워졌다"고 말한다 — 그래서 상태가 셋이다.
+        """
+        root = self._repos.get(repo)
+        behind = []
+        for sub in subs:
+            if root is None or not (root / sub / ".git").exists():
+                continue                       # 그건 `_blind`가 센다
+            sha = await self._gitlink(repo, commit, sub)
+            if not sha:
+                continue
+            got = await self._git(repo, ["cat-file", "-e", f"{sha}^{{commit}}"],
+                                  source=f"code.have {repo}:{sub}@{sha[:12]}", inside=sub)
+            if got.status == "error":
+                behind.append(sub)
+        return behind
+
+    def _stale_error(self, subs: list[str]) -> str:
+        return (f"submodule {', '.join(subs)}의 **그 커밋이 쓴 버전**이 로컬에 없다 — "
+                f"git은 이걸 \"exists on disk, but not in …\"이라고 말하지만 파일이 없는 "
+                f"것이 아니라 우리가 그 버전을 안 가진 것이다. `code sync`가 고친다")
+
     async def _gitlink(self, repo: str, commit: str, sub: str) -> str:
         """부모 커밋이 그 submodule에 박아 둔 SHA. 못 읽으면 빈 문자열."""
         got = await self._git(repo, ["ls-tree", commit, "--", sub],
@@ -130,7 +155,7 @@ class RealCodeReader(CodeReaderPort):
 
     async def show(self, repo: str, commit: str, path: str) -> ProbeResult:
         source = f"code.show {repo}@{commit}:{path}"
-        sub = _containing(await self._declared_subs(repo, commit), path)
+        sub = containing_submodule(await self._declared_subs(repo, commit), path)
         if sub:
             return await self._show_across(repo, commit, sub, path, source=source)
         got = await self._git(repo, ["show", f"{commit}:{path}"], source=source)
@@ -156,6 +181,9 @@ class RealCodeReader(CodeReaderPort):
             return ProbeResult.failed(
                 f"{sub}의 gitlink를 읽을 수 없다 — {commit}이 그 submodule을 가리키지 않는다",
                 source=source, clock=self._clock)
+        if await self._stale(repo, commit, [sub]):
+            return ProbeResult.failed(self._stale_error([sub]), source=source,
+                                      clock=self._clock)
         if not rest:
             # 경로가 submodule 자체다. 파일이 아니므로 내용 대신 **어느 버전인가**를 준다.
             return ProbeResult.succeeded(
@@ -180,11 +208,18 @@ class RealCodeReader(CodeReaderPort):
         args.append(commit)
         if path:
             args += ["--", path]
+        subs = await self._declared_subs(repo, commit)
+        # 객체가 없으면 git grep은 **종료코드 128로 통째로** 죽고
+        # `unable to read tree`만 남긴다(측정). 부모 쪽 결과까지 같이 잃으므로,
+        # 그 말을 그대로 흘리는 대신 무엇을 해야 하는지 우리가 말한다.
+        behind = await self._stale(repo, commit, subs)
+        if behind:
+            return ProbeResult.failed(self._stale_error(behind), source=source,
+                                      clock=self._clock)
         got = await self._git(repo, args, source=source)
         if got.status == "error":
             return got
-        blind = self._blind(repo, await self._declared_subs(repo, commit))
-        return _clip(got, source, clock=self._clock, unseen=blind)
+        return _clip(got, source, clock=self._clock, unseen=self._blind(repo, subs))
 
     async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
         source = f"code.ls {repo}@{commit}" + (f":{path}" if path else "")
@@ -205,13 +240,6 @@ class RealCodeReader(CodeReaderPort):
         return ProbeResult.succeeded(
             names, source=source, clock=self._clock,
             truncated_reason=" · ".join(reasons) + " — 더 있을 수 있다" if reasons else None)
-
-
-def _containing(subs: list[str], path: str) -> str:
-    """그 경로를 품고 있는 submodule. 중첩이면 **가장 깊은 것**을 고른다."""
-    hits = [sub for sub in subs
-            if path == sub or path.startswith(sub.rstrip("/") + "/")]
-    return max(hits, key=len) if hits else ""
 
 
 def _unseen_reasons(blind: list[str]) -> list[str]:
