@@ -9,7 +9,8 @@ import subprocess
 
 import pytest
 
-from tests.support import set_real_config_env
+from tests.support import (git, make_git_repo,  # noqa: F401
+                           needs_local_submodules, set_real_config_env)
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git이 없다")
 
@@ -48,15 +49,7 @@ def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/
 
 
 def _make_repo(root, *, origin):
-    root.mkdir(parents=True, exist_ok=True)
-    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)  # noqa: E731
-    run("git", "init", "-q", "-b", "main")
-    run("git", "config", "user.email", "t@t")
-    run("git", "config", "user.name", "t")
-    run("git", "remote", "add", "origin", origin)
-    (root / "a.py").write_text("x\n", encoding="utf-8")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "first")
+    make_git_repo(root, origin=origin)
 
 
 def _run(config_root, tmp_path, monkeypatch, capsys, *argv):
@@ -349,7 +342,25 @@ def test_선언이_같으면_경고하지_않는다(tmp_path, monkeypatch, capsy
     assert "레포 선언이 다르다" not in captured.err
 
 
-def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, capsys):
+def _with_submodule(tmp_path, url, *, populate: bool):
+    """부모 + submodule 하나를 만들고, 채우거나 안 채운 체크아웃을 돌려준다."""
+    origin = tmp_path / "origin"
+    _make_repo(origin, origin=url)
+    lib = tmp_path / "libs"
+    _make_repo(lib, origin="https://git.example.com/team/libs")
+    (lib / "kafka.json").write_text('{"topic": "X"}\n', encoding="utf-8")
+    git("add", "-A", cwd=lib)
+    git("commit", "-qm", "topic", cwd=lib)
+    git("submodule", "add", "-q", str(lib), "vendor/libs", cwd=origin)
+    git("commit", "-qm", "sub", cwd=origin)
+    checkout = tmp_path / "checkout"
+    recurse = ["--recurse-submodules"] if populate else []
+    git("clone", "-q", *recurse, str(origin), str(checkout), cwd=tmp_path)
+    git("remote", "set-url", "origin", url, cwd=checkout)
+    return checkout
+
+
+def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, capsys, needs_local_submodules):
     """**이걸 여기서 안 말하면 아무 데서도 안 보인다.**
 
     git 자신이 조용하다: 안 채워진 submodule을 두고 `git grep`은 종료코드 1에
@@ -357,21 +368,7 @@ def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, c
     "코드에 그런 게 없다"를 확신에 차서 단정한다.
     """
     url = "https://git.example.com/team/dt-core"
-    origin = tmp_path / "origin"
-    _make_repo(origin, origin=url)
-    lib = tmp_path / "libs"
-    _make_repo(lib, origin="https://git.example.com/team/libs")
-    subprocess.run(["git", "-c", "protocol.file.allow=always", "submodule", "add",
-                    "-q", str(lib), "vendor/libs"], cwd=origin, check=True,
-                   capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "sub"], cwd=origin, check=True,
-                   capture_output=True)
-    # `--recurse-submodules` 없이 — 사내에서 기본으로 나오는 모양이다.
-    checkout = tmp_path / "checkout"
-    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
-                    str(origin), str(checkout)], check=True, capture_output=True)
-    subprocess.run(["git", "remote", "set-url", "origin", url], cwd=checkout,
-                   check=True, capture_output=True)
+    checkout = _with_submodule(tmp_path, url, populate=False)
     config_root = _tree(tmp_path, repo_path=str(checkout), url=url)
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
@@ -380,32 +377,7 @@ def test_안_채워진_submodule을_status가_말한다(tmp_path, monkeypatch, c
     assert "submodule update --init" in captured.out
 
 
-def _with_submodule(tmp_path, url, *, populate: bool):
-    """부모 + submodule 하나를 만들고, 채우거나 안 채운 체크아웃을 돌려준다."""
-    origin = tmp_path / "origin"
-    _make_repo(origin, origin=url)
-    lib = tmp_path / "libs"
-    _make_repo(lib, origin="https://git.example.com/team/libs")
-    (lib / "kafka.json").write_text('{"topic": "X"}\n', encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=lib, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "topic"], cwd=lib, check=True,
-                   capture_output=True)
-    subprocess.run(["git", "-c", "protocol.file.allow=always", "submodule", "add",
-                    "-q", str(lib), "vendor/libs"], cwd=origin, check=True,
-                   capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "sub"], cwd=origin, check=True,
-                   capture_output=True)
-    checkout = tmp_path / "checkout"
-    args = ["git", "-c", "protocol.file.allow=always", "clone", "-q"]
-    if populate:
-        args.append("--recurse-submodules")
-    subprocess.run([*args, str(origin), str(checkout)], check=True, capture_output=True)
-    subprocess.run(["git", "remote", "set-url", "origin", url], cwd=checkout,
-                   check=True, capture_output=True)
-    return checkout
-
-
-def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, monkeypatch, capsys):
+def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, monkeypatch, capsys, needs_local_submodules):
     """**측정으로 잡은 오진이다.** `git cat-file -e <커밋>:<서브>/…`는 채워져
     있어도 실패한다. 그대로 두면 공용 라이브러리에 사는 층을 "없다"로 신고하고
     "config_paths를 고쳐라"라는 틀린 처방이 나온다 — 경로는 맞았는데.
@@ -421,7 +393,7 @@ def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, mon
     assert "config 층 1/1개" in captured.out
 
 
-def test_submodule이_안_읽히면_config_경로를_탓하지_않는다(tmp_path, monkeypatch, capsys):
+def test_submodule이_안_읽히면_config_경로를_탓하지_않는다(tmp_path, monkeypatch, capsys, needs_local_submodules):
     """둘 다 빨간불이지만 **처방이 달라야 한다.** 안 채워진 submodule 때문에
     그 안의 층이 안 보이는 것인데 "경로를 고쳐라"라고 하면, 사람은 맞는 경로를
     고치다가 진짜 원인을 영영 못 본다.

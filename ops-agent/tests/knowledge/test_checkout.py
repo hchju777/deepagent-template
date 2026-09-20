@@ -10,6 +10,8 @@ import subprocess
 import pytest
 
 from src.config.schema_site import RepoConfig
+from tests.support import (git, local_submodules_allowed,  # noqa: F401
+                           make_git_repo, needs_local_submodules)
 from src.knowledge.checkout import (auth_args, config_layers, has_commit,
                                     parse_gitmodules, plan_for, stale, status_of,
                                     submodules_at, sync, unpopulated)
@@ -20,19 +22,13 @@ URL = "https://git.example.com/team/dt-core"
 
 
 def _make_repo(root, *, origin: str = URL):
-    root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True,
-                   capture_output=True)
-    for key, value in (("user.email", "t@t"), ("user.name", "t")):
-        subprocess.run(["git", "config", key, value], cwd=root, check=True,
-                       capture_output=True)
-    subprocess.run(["git", "remote", "add", "origin", origin], cwd=root, check=True,
-                   capture_output=True)
-    (root / "a.py").write_text("x\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "first"], cwd=root, check=True,
-                   capture_output=True)
-    return root
+    """`tests/support.make_git_repo`를 쓴다 — 실패하면 **git이 한 말을 들고 죽는다.**
+
+    예전엔 여기서 `check=True`로 돌렸고, 사내에서 깨졌을 때 종료코드만 남아
+    사람이 원인을 직접 캐야 했다. 같은 실수를 세 파일이 각자 반복하지 않도록
+    한 군데로 옮겼다.
+    """
+    return make_git_repo(root, origin=origin)
 
 
 def repo_at(path, *, url: str = URL) -> RepoConfig:
@@ -236,28 +232,19 @@ def _make_parent_with_submodule(tmp_path):
     """
     lib = _make_repo(tmp_path / "libs", origin="https://git.example.com/team/libs")
     (lib / "kafka.json").write_text('{"topic": "ALARM_EVENT"}\n', encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=lib, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "topic"], cwd=lib, check=True,
-                   capture_output=True)
+    git("add", "-A", cwd=lib)
+    git("commit", "-qm", "topic", cwd=lib)
 
     parent = _make_repo(tmp_path / "parent")
-    subprocess.run(["git", "-c", "protocol.file.allow=always", "submodule", "add",
-                    "-q", str(lib), "vendor/libs"], cwd=parent, check=True,
-                   capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "add submodule"], cwd=parent, check=True,
-                   capture_output=True)
+    git("submodule", "add", "-q", str(lib), "vendor/libs", cwd=parent)
+    git("commit", "-qm", "add submodule", cwd=parent)
     return parent
 
 
 def _flat_clone(tmp_path, parent):
     """`--recurse-submodules` **없이** 클론한다 — 사내에서 기본으로 일어나는 모양."""
     target = tmp_path / "flat"
-    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
-                    str(parent), str(target)], check=True, capture_output=True)
-    # 로컬 경로 submodule을 채우려면 git이 file 프로토콜을 허락해야 한다.
-    # 테스트 픽스처의 사정이지 제품 코드의 사정이 아니라 여기서만 켠다.
-    subprocess.run(["git", "config", "protocol.file.allow", "always"], cwd=target,
-                   check=True, capture_output=True)
+    git("clone", "-q", str(parent), str(target), cwd=tmp_path)
     return target
 
 
@@ -282,12 +269,12 @@ def test_submodule이_없으면_빈_목록이다(tmp_path):
     assert submodules_at(repo, "main") == []
 
 
-def test_커밋이_선언한_submodule을_찾는다(tmp_path):
+def test_커밋이_선언한_submodule을_찾는다(tmp_path, needs_local_submodules):
     parent = _make_parent_with_submodule(tmp_path)
     assert submodules_at(repo_at(parent), "main") == ["vendor/libs"]
 
 
-def test_안_채워진_submodule을_찾아낸다(tmp_path):
+def test_안_채워진_submodule을_찾아낸다(tmp_path, needs_local_submodules):
     """**이 파일의 두 번째 자물쇠다.**
 
     안 채워진 채로 두면 `git grep`이 종료코드 1에 출력 없이 끝난다 — 우리는 그걸
@@ -304,11 +291,10 @@ def test_안_채워진_submodule을_찾아낸다(tmp_path):
     assert list((flat / "vendor" / "libs").iterdir()) == []
 
 
-def test_채워졌으면_신고하지_않는다(tmp_path):
+def test_채워졌으면_신고하지_않는다(tmp_path, needs_local_submodules):
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
-    subprocess.run(["git", "submodule", "update", "--init", "--recursive"], cwd=flat,
-                   check=True, capture_output=True)
+    git("submodule", "update", "--init", "--recursive", cwd=flat)
     repo = repo_at(flat)
     assert unpopulated(repo, submodules_at(repo, "main")) == []
 
@@ -321,9 +307,14 @@ def test_plan이_submodule_채우는_줄까지_준다(tmp_path):
     assert any("submodule update --init" in line for line in lines), lines
 
 
-def test_sync가_안_채워진_submodule을_채운다(tmp_path):
+def test_sync가_안_채워진_submodule을_채운다(tmp_path, local_submodules_allowed, needs_local_submodules):
     """`fetch`는 안 채워진 submodule을 절대 안 채운다. `code sync`를 돌리고도
-    트리가 반쪽이면, 사람은 "동기화했다"고 믿은 채로 못 보는 코드를 갖게 된다."""
+    트리가 반쪽이면, 사람은 "동기화했다"고 믿은 채로 못 보는 코드를 갖게 된다.
+
+    `local_submodules_allowed`가 필요한 이유: 여기서 도는 것은 **제품 코드**라
+    `-c`를 끼워 넣을 자리가 없다. 로컬 경로를 submodule로 받는 것은 git
+    2.38.1부터 막혀 있어서, 그 허락을 환경으로 넘겨야 한다.
+    """
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
     repo = RepoConfig.model_construct(name="dt-core", url=str(parent),
@@ -335,12 +326,11 @@ def test_sync가_안_채워진_submodule을_채운다(tmp_path):
 
 
 def _commit_in(root, message="more"):
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", message], cwd=root, check=True,
-                   capture_output=True)
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", message, cwd=root)
 
 
-def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path):
+def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path, needs_local_submodules):
     """**측정으로 잡은 오진이다.**
 
     `git cat-file -e <커밋>:<서브>/…`는 submodule이 **채워져 있어도** 실패한다
@@ -350,27 +340,23 @@ def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path):
     """
     parent = _make_parent_with_submodule(tmp_path)
     full = tmp_path / "full"
-    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
-                    "--recurse-submodules", str(parent), str(full)],
-                   check=True, capture_output=True)
+    git("clone", "-q", "--recurse-submodules", str(parent), str(full), cwd=tmp_path)
     repo = repo_at(full)
     here, gone = config_layers(repo, "main", ["a.py", "vendor/libs/kafka.json"])
     assert gone == [], f"submodule 안의 층을 없다고 했다: {gone}"
     assert here == ["a.py", "vendor/libs/kafka.json"]
 
 
-def test_진짜로_없는_경로는_여전히_없다고_한다(tmp_path):
+def test_진짜로_없는_경로는_여전히_없다고_한다(tmp_path, needs_local_submodules):
     """경계를 넘게 만들면서 검사가 **아무거나 통과시키게** 되면 안 된다."""
     parent = _make_parent_with_submodule(tmp_path)
     full = tmp_path / "full"
-    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q",
-                    "--recurse-submodules", str(parent), str(full)],
-                   check=True, capture_output=True)
+    git("clone", "-q", "--recurse-submodules", str(parent), str(full), cwd=tmp_path)
     _, gone = config_layers(repo_at(full), "main", ["vendor/libs/없는파일.json"])
     assert gone == ["vendor/libs/없는파일.json"]
 
 
-def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path):
+def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path, needs_local_submodules):
     """**세 번째 상태다.** `.git`이 있으니 `unpopulated`는 "채워졌다"고 말한다.
 
     부모만 fetch되고 submodule은 안 당겨진 트리에서 실제로 생긴다. 이걸 못 보면
@@ -379,8 +365,7 @@ def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path
     """
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
-    subprocess.run(["git", "submodule", "update", "--init", "--recursive"], cwd=flat,
-                   check=True, capture_output=True)
+    git("submodule", "update", "--init", "--recursive", cwd=flat)
     repo = repo_at(flat)
     assert unpopulated(repo, submodules_at(repo, "main")) == []   # 채워는 졌다
     assert stale(repo, "main", submodules_at(repo, "main")) == []
@@ -389,17 +374,14 @@ def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path
     lib = tmp_path / "libs"
     (lib / "kafka.json").write_text('{"topic": "NEW"}\n', encoding="utf-8")
     _commit_in(lib, "v2")
-    subprocess.run(["git", "fetch", "-q", "origin"], cwd=parent / "vendor" / "libs",
-                   check=True, capture_output=True)
-    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=parent / "vendor" / "libs",
-                   check=True, capture_output=True)
+    git("fetch", "-q", "origin", cwd=parent / "vendor" / "libs")
+    git("checkout", "-q", "FETCH_HEAD", cwd=parent / "vendor" / "libs")
     _commit_in(parent, "sub moved")
     # **부모만** 당긴다 — submodule은 그대로 둔다. 체크아웃된 브랜치로는 직접
     # fetch가 안 되므로 받아서 ff-merge한다(작업 트리의 submodule은 안 움직인다).
-    subprocess.run(["git", "-c", "fetch.recurseSubmodules=no", "fetch", "-q", "origin",
-                    "main"], cwd=flat, check=True, capture_output=True)
-    subprocess.run(["git", "-c", "submodule.recurse=false", "merge", "--ff-only", "-q",
-                    "FETCH_HEAD"], cwd=flat, check=True, capture_output=True)
+    git("-c", "fetch.recurseSubmodules=no", "fetch", "-q", "origin", "main", cwd=flat)
+    git("-c", "submodule.recurse=false", "merge", "--ff-only", "-q", "FETCH_HEAD",
+        cwd=flat)
 
     subs = submodules_at(repo, "main")
     assert unpopulated(repo, subs) == []        # 여전히 "채워짐"으로 보인다

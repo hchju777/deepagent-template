@@ -20,6 +20,9 @@ import가 필요하고, 그 import를 상대 경로(`from ..report.conftest impo
 `tests/test_portability.py`가 테스트 트리에 상대 import가 다시 생기지 않는지 지킨다.
 """
 from datetime import date, datetime
+import functools
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -192,3 +195,92 @@ def running_source(obj, *, marker: str = "") -> str:
     if marker:
         head += f"  '{marker}' 있는가: {marker in source}\n"
     return head + "\n".join(f"    {line}" for line in source.splitlines())
+
+# ── 진짜 submodule을 만드는 픽스처 ────────────────────────────────────
+#
+# 로컬 경로를 submodule로 붙이는 것은 git 2.38.1부터 **기본으로 막혀 있다**
+# (CVE-2022-39253). 그래서 `-c protocol.file.allow=always`가 필요한데, 이게
+# 빠지면 실패 메시지가 `fatal: transport 'file' not allowed`라 **테스트가 뭘
+# 검증하다 실패했는지 안 보인다.** 그래서 한 군데서만 만든다 — 세 파일이 각자
+# 베끼면 언젠가 한 곳만 고쳐지고, 그때 그 파일만 사내에서 빨개진다.
+
+GIT_LOCAL_SUBMODULE = ("-c", "protocol.file.allow=always")
+
+
+def git(*args, cwd, check: bool = True) -> subprocess.CompletedProcess:
+    """테스트용 git 호출. **실패하면 git이 한 말을 그대로 들고 죽는다.**
+
+    `check=True`의 `CalledProcessError`는 종료코드만 말하고 stderr는 삼킨다.
+    사내에서 실패했을 때 "왜"가 안 보이면 사람이 그걸 타이핑해 옮겨야 한다 —
+    이 리포가 이미 두 번 그렇게 시간을 썼다.
+    """
+    done = subprocess.run(["git", *GIT_LOCAL_SUBMODULE, *args], cwd=str(cwd),
+                          capture_output=True, text=True)
+    if check and done.returncode != 0:
+        raise AssertionError(
+            f"git {' '.join(args)} (cwd={cwd}) 가 {done.returncode}로 실패했다\n"
+            f"  stderr: {(done.stderr or '').strip() or '(없음)'}\n"
+            f"  stdout: {(done.stdout or '').strip() or '(없음)'}\n"
+            f"  {_git_version()}")
+    return done
+
+
+@functools.lru_cache(maxsize=1)
+def _git_version() -> str:
+    done = subprocess.run(["git", "--version"], capture_output=True, text=True)
+    return (done.stdout or "").strip() or "git --version이 아무 말도 안 했다"
+
+
+@functools.lru_cache(maxsize=1)
+def local_submodule_support() -> str:
+    """이 환경이 **로컬 경로를 submodule로 붙일 수 있나.** 되면 빈 문자열.
+
+    되는지 자체가 환경의 능력이지 우리 코드의 성질이 아니다. 못 하는 환경에서
+    빨간불을 내면 사람은 "내 코드가 깨졌나"를 먼저 의심하고, 그게 정확히 이번에
+    일어난 일이다. 그래서 **건너뛰되 이유를 들고** 건너뛴다.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        try:
+            lib = make_git_repo(root / "lib")
+            parent = make_git_repo(root / "parent")
+            git("submodule", "add", "-q", str(lib), "vendor/lib", cwd=parent)
+        except AssertionError as exc:
+            return str(exc)
+    return ""
+
+
+@pytest.fixture
+def needs_local_submodules():
+    """로컬 submodule을 못 만드는 환경에서는 **이유를 찍고** 건너뛴다."""
+    why = local_submodule_support()
+    if why:
+        pytest.skip(f"이 환경은 로컬 경로를 submodule로 못 붙인다 —\n{why}")
+
+
+@pytest.fixture
+def local_submodules_allowed(monkeypatch):
+    """제품 코드가 부르는 git에도 같은 허락을 넘긴다.
+
+    `sync()`는 `-c`를 받을 자리가 없다(제품 코드에 테스트 사정을 넣을 수는 없다).
+    `GIT_CONFIG_COUNT`/`KEY`/`VALUE`는 **하위 프로세스까지 따라가는** 설정이라
+    이 자리에 맞는다 — 클론 안에 `git config`를 써 두는 것보다 환경에 덜 기댄다.
+    """
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+
+
+def make_git_repo(root: Path, *, origin: str = "") -> Path:
+    """커밋 하나짜리 레포. 사용자 이름은 **로컬로** 박는다 — 전역 설정이 없는
+    CI/사내 PC에서 `git commit`이 그냥 죽는다."""
+    root.mkdir(parents=True, exist_ok=True)
+    git("init", "-q", "-b", "main", cwd=root)
+    git("config", "user.email", "t@t", cwd=root)
+    git("config", "user.name", "t", cwd=root)
+    if origin:
+        git("remote", "add", "origin", origin, cwd=root)
+    (root / "a.py").write_text("x\n", encoding="utf-8")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "first", cwd=root)
+    return root

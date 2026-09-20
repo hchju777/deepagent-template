@@ -14,12 +14,20 @@ import pytest
 
 from src.config.schema_site import RepoConfig
 from src.infrastructure.git_reader import RealCodeReader
+from tests.support import git
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git이 없다")
 
 
 def _run(*args, cwd):
-    subprocess.run(args, cwd=cwd, check=True, capture_output=True)
+    """`tests/support.git`로 돌린다 — 실패하면 **git이 한 말을 들고 죽는다.**
+
+    로컬 경로 submodule 허용(`-c protocol.file.allow=always`)도 거기서 붙는다.
+    빠지면 `fatal: transport 'file' not allowed`만 남고 무엇을 검증하다 실패한
+    것인지 안 보인다.
+    """
+    assert args and args[0] == "git", args
+    return git(*args[1:], cwd=cwd)
 
 
 @pytest.fixture
@@ -152,16 +160,14 @@ def nested(tmp_path):
     (parent / "app.py").write_text("import libs\n", encoding="utf-8")
     _run("git", "add", "-A", cwd=parent)
     _run("git", "commit", "-qm", "first", cwd=parent)
-    _run("git", "-c", "protocol.file.allow=always", "submodule", "add", "-q",
-         str(lib), "vendor/libs", cwd=parent)
+    _run("git", "submodule", "add", "-q", str(lib), "vendor/libs", cwd=parent)
     _run("git", "commit", "-qm", "add submodule", cwd=parent)
 
     blind = tmp_path / "blind"
-    _run("git", "-c", "protocol.file.allow=always", "clone", "-q", str(parent),
-         str(blind), cwd=tmp_path)
+    _run("git", "clone", "-q", str(parent), str(blind), cwd=tmp_path)
     full = tmp_path / "full"
-    _run("git", "-c", "protocol.file.allow=always", "clone", "-q",
-         "--recurse-submodules", str(parent), str(full), cwd=tmp_path)
+    _run("git", "clone", "-q", "--recurse-submodules", str(parent), str(full),
+         cwd=tmp_path)
     return blind, full
 
 
