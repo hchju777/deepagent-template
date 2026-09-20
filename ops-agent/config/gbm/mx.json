@@ -61,5 +61,21 @@
         }
       }
     }
+  },
+  "code": {
+    "repos": [
+      {
+        "name": "dt-core",
+        "url": "https://git.example.com/team/dt-core",
+        "path": "../target-code/dt-core",
+        "token": "${GIT_TOKEN}"
+      },
+      {
+        "name": "dt-api",
+        "url": "https://git.example.com/team/dt-api",
+        "path": "../target-code/dt-api",
+        "token": "${GIT_TOKEN}"
+      }
+    ]
   }
 }

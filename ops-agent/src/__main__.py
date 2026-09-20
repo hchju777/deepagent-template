@@ -113,7 +113,7 @@ def _render(result) -> dict:
 # ── 명령들 ────────────────────────────────────────────────────────────
 
 def cmd_boot(args, env) -> int:
-    errors = validate_boot(args.config_root, env=env)
+    errors = validate_boot(args.config_root, env=env, knowledge_root=_knowledge_root(args))
     if not errors:
         print(f"✅ 기동 검증 통과 — {args.config_root}")
         return 0
@@ -943,6 +943,114 @@ def cmd_case_investigate(args, env) -> int:
     return 1 if broken else 0
 
 
+# ── 대상 코드 (11a) ────────────────────────────────────────────────
+
+def _knowledge_root(args) -> Path:
+    """지식은 **config 트리 옆에** 산다. 같이 옮겨 다녀야 짝이 안 어긋난다."""
+    return args.knowledge_root or args.config_root.parent / "knowledge"
+
+
+def _repos_of(args, env) -> tuple[str, list]:
+    """이 GBM의 레포 목록. 코드는 **GBM 단위로 같다** — 사이트마다 안 다르다.
+
+    그래도 사이트를 골라 읽는 이유: 레포 선언이 `gbm/{gbm}.json`에 있어도 층 병합을
+    타므로, 병합된 결과를 봐야 "이 사이트에서 실제로 무엇이 보이는가"가 나온다.
+    """
+    site, _ = _resolve_site(args.config_root, args, env)
+    return site.site.gbm, list(site.code.repos)
+
+
+def cmd_code_status(args, env) -> int:
+    """**네트워크를 안 탄다.** 어디서든 돈다 — 진단 전용이다(decisions ⑤).
+
+    보는 넷: 경로가 있나 · `.git`이 있나 · `origin`이 config와 같나 ·
+    배포가 가리키는 커밋이 로컬에 실재하나.
+    """
+    from src.knowledge.checkout import has_commit, missing_paths, plan_for, status_of
+    from src.knowledge.loader import load_deployment, load_topology
+
+    site, _ = _resolve_site(args.config_root, args, env)
+    gbm, site_fct, repos = site.site.gbm, site.site.fct, list(site.code.repos)
+    if not repos:
+        print(f"  {gbm}: config에 target 코드 레포가 없다 — code.repos를 적어라")
+        return 1
+
+    try:
+        root = _knowledge_root(args)
+        topology = load_topology(root, gbm)
+        deployment = load_deployment(root, gbm)
+    except (ConfigError, FileNotFoundError) as exc:
+        print(f"  지식 층을 읽을 수 없다 — {exc}", file=sys.stderr)
+        return 1
+
+    print(f"  {gbm} — 레포 {len(repos)}개 · 서비스 {len(topology.services)}개")
+    bad = 0
+    for repo in repos:
+        state = status_of(repo)
+        mark = "✅" if state.ready else "❌"
+        print(f"\n  {mark} {repo.name}  {repo.path}")
+        if state.origin:
+            print(f"       origin {state.origin}")
+        for problem in state.problems:
+            print(f"       ⚠ {problem}")
+        if not state.ready:
+            bad += 1
+            for line in plan_for(repo, state):
+                print(f"       → {line}")
+            continue
+        # 배포가 가리키는 커밋이 실재하는가(⑤-4).
+        for name, service in sorted(topology.services.items()):
+            if service.repo != repo.name:
+                continue
+            pin = deployment.pin_for(name, fct=site_fct)
+            here = has_commit(repo, pin.commit)
+            note = "" if pin.how == "declared" else "  (가정)"
+            when = f"  배포 {pin.deployed_at}" if pin.deployed_at else ""
+            print(f"       {'✅' if here else '❌'} {name} @ {pin.commit}{note}{when}")
+            if not here:
+                bad += 1
+                print(f"       → git -C {repo.path} fetch --all --prune")
+                continue
+            # 이름이 사는 곳이 실재하는가. 틀리면 리드는 아무것도 못 찾고,
+            # 증상은 "조사가 빈손"이라 원인이 안 보인다.
+            gone = missing_paths(repo, pin.commit, topology.config_paths)
+            if gone:
+                bad += 1
+                print(f"       ⚠ config_paths가 그 커밋에 없다 — {', '.join(gone)}")
+                print(f"       → knowledge/topology/{gbm}.json의 config_paths를 고쳐라")
+    return 1 if bad else 0
+
+
+def cmd_code_plan(args, env) -> int:
+    """사람이 직접 칠 git 명령을 출력한다. **토큰은 안 찍는다.**"""
+    from src.knowledge.checkout import plan_for, status_of
+
+    gbm, repos = _repos_of(args, env)
+    print(f"  # {gbm} — 아래를 직접 실행하라 (이 명령은 네트워크를 안 탄다)")
+    for repo in repos:
+        for line in plan_for(repo, status_of(repo)):
+            print(f"  {line}")
+    return 0
+
+
+def cmd_code_sync(args, env) -> int:
+    """**여기서만 네트워크를 탄다.** 사내 밖에서는 실패하고, `code plan`을 안내한다."""
+    from src.knowledge.checkout import status_of, sync
+
+    gbm, repos = _repos_of(args, env)
+    failed = 0
+    for repo in repos:
+        outcome, detail = sync(repo, status_of(repo))
+        mark = {"cloned": "🆕", "fetched": "✅", "skipped": "⏭", "failed": "❌"}[outcome]
+        print(f"  {mark} {repo.name}  {outcome} — {detail}")
+        if outcome == "failed":
+            failed += 1
+    if failed:
+        print("\n  붙을 수 없으면 `python -m src code plan`이 직접 칠 명령을 알려 준다",
+              file=sys.stderr)
+    return 1 if failed else 0
+
+
 def cmd_case_list(args, env) -> int:
     repo = _case_repo(args, env)
     now = _clock(args, env)()
@@ -1334,6 +1442,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m src", description="운영 모니터링 에이전트")
     parser.add_argument("--config-root", type=Path, default=Path("config"))
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
+    # 대상 시스템의 **구조** 지식. `config/`(접속 정보)와 고치는 사람도 주기도 다르다.
+    # 기본값을 고정 경로로 두지 않는다 — `--config-root`만 바꿔 쓰는 호출부(테스트·
+    # 사내 이관 트리)가 **엉뚱한 knowledge를 읽는다.** 실제로 그렇게 깨졌다.
+    parser.add_argument("--knowledge-root", type=Path, default=None,
+                        help="기본: --config-root 옆의 knowledge/")
     _add_site_options(parser, sub=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1451,6 +1564,16 @@ def build_parser() -> argparse.ArgumentParser:
     list_cases = case_sub.add_parser("list", help="케이스 목록")
     list_cases.add_argument("--all", action="store_true", help="닫힌 것까지")
     list_cases.set_defaults(run=cmd_case_list)
+
+    code = sub.add_parser("code", help="대상 코드 체크아웃")
+    code_sub = code.add_subparsers(dest="what", required=True)
+    for name, helptext, fn in (
+            ("status", "읽을 수 있는 상태인가 (네트워크 없음)", cmd_code_status),
+            ("plan", "사람이 직접 칠 git 명령 (네트워크 없음)", cmd_code_plan),
+            ("sync", "clone/fetch — **사내에서만**", cmd_code_sync)):
+        command = code_sub.add_parser(name, help=helptext)
+        _add_site_options(command, sub=True)
+        command.set_defaults(run=fn)
 
     investigate = case_sub.add_parser("investigate", help="리드 LLM으로 조사한다")
     investigate.add_argument("case_id")

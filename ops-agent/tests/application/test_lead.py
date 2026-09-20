@@ -21,6 +21,7 @@ from src.application.state import CaseState
 from src.domain.case import EvidenceRef
 from src.infrastructure.llm_fakes import ExplodingAdapter, ScriptedAdapter
 
+from tests.support import set_real_config_env
 from tests.application.conftest import SECRET, T0, ok, site_config, task
 
 FRAME_PROMPT = "케이스:\n{case}\n부를 수 있는 것:\n{actions}\n"
@@ -601,9 +602,7 @@ def _cli_tree(tmp_path, monkeypatch):
     app["case_store"] = str(tmp_path / "cases.json")
     (config_root / "app.json").write_text(json.dumps(app, ensure_ascii=False),
                                           encoding="utf-8")
-    for key in ("REDIS_PASSWORD", "MONGO_PASSWORD", "LLM_BASE_URL", "LLM_CLIENT_KEY",
-                "LLM_PASS_KEY", "MAIL_AGENT_API_KEY", "MAIL_AGENT_ID"):
-        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
+    set_real_config_env(monkeypatch)
     return config_root
 
 

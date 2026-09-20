@@ -1,0 +1,35 @@
+{
+  "_설명": [
+    "이 GBM의 서비스 지도. **사이트 단위가 아니다** — 코드는 GBM별로 같다.",
+    "서비스는 (레포, 선택자)다. 한 레포에 여러 서비스면 디렉터리가 아니라",
+    "`.env`의 값이 역할을 고르므로, `selects`가 그 값을 적는다.",
+    "config_paths는 **대상 레포 안에서 컬렉션·토픽 이름이 사는 파일들**이다.",
+    "층 순서대로 적는다(앞이 밑바닥). 글자 그대로 쓴다 — ${...} 치환은 없다.",
+    "`code status`가 배포 커밋에 그 파일이 실재하는지 확인한다.",
+    "여기 값은 **자리표시자다.** 실제 이름은 사내에서 채운다."
+  ],
+  "services": {
+    "processor": {
+      "repo": "dt-core",
+      "role": "원천 이벤트를 받아 가공한다",
+      "selects": {
+        "SERVICE_ROLE": "processor"
+      }
+    },
+    "sink": {
+      "repo": "dt-core",
+      "role": "가공된 결과를 저장한다",
+      "selects": {
+        "SERVICE_ROLE": "sink"
+      }
+    },
+    "api": {
+      "repo": "dt-api",
+      "role": "저장된 것을 API 응답으로 바꾼다"
+    }
+  },
+  "config_paths": [
+    "config/common.json",
+    "config/mx.json"
+  ]
+}

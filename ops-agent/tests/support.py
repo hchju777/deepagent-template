@@ -20,6 +20,7 @@ import가 필요하고, 그 import를 상대 경로(`from ..report.conftest impo
 `tests/test_portability.py`가 테스트 트리에 상대 import가 다시 생기지 않는지 지킨다.
 """
 from datetime import date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +30,23 @@ from src.domain.ports import MongoReaderPort
 from src.report.window import build_window
 
 TODAY = date(2026, 9, 7)          # 월요일 — 어제가 금요일(2026-09-04)이 되도록
+
+
+def set_real_config_env(monkeypatch) -> None:
+    """리포의 **실제 `config/`** 로 CLI를 돌릴 때 필요한 env를 전부 채운다.
+
+    한 곳에 모은 이유: 이 목록이 네 파일에 복사돼 있었고, `config/`에 참조가 하나
+    늘자 **네 군데가 동시에 깨졌다.** 그리고 실패 모양이 "설정이 안 치환됐다"가
+    아니라 "관계없는 CLI 테스트가 1을 돌려준다"여서 원인이 안 보였다.
+
+    값은 `.env.example`의 키에서 만든다 — 그래야 config가 참조를 늘릴 때
+    **자동으로 따라온다.** (`.env.example`이 낡으면 그건 따로 테스트가 잡는다.)
+    """
+    from dotenv import dotenv_values
+
+    repo = Path(__file__).resolve().parent.parent
+    for key in dotenv_values(repo / ".env.example"):
+        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
 YESTERDAY = date(2026, 9, 4)
 
 

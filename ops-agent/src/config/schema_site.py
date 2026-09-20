@@ -19,7 +19,7 @@
 """
 from typing import Literal
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from src.config.schema_patrol import PatrolConfig
 from src.domain.base import StrictModel
@@ -180,6 +180,58 @@ class RestConfig(StrictModel):
         return v
 
 
+class RepoConfig(StrictModel):
+    """조사 대상 코드 레포 하나. **우리 리포 밖에 체크아웃한다**(decisions ②).
+
+    ## 토큰을 url에 넣지 않는다
+
+    `https://<토큰>@호스트/레포`로 클론하면 git이 그 URL을 **`.git/config`에 평문으로
+    저장한다.** 토큰이 디스크에 남고, 그 파일은 백업·이미지·로그 어디로든 따라간다.
+
+    그래서 remote는 **깨끗한 url**로 두고 인증은 명령마다 헤더로 넘긴다. 덤으로
+    `code status`의 origin 대조(⑤-3)가 비밀값 비교가 되지 않는다.
+
+    ## url이 문서가 아니라 자물쇠인 이유
+
+    누가 포크나 다른 레포를 그 경로에 클론하면 우리는 그럴듯한 코드를 읽고 그럴듯한
+    로직 명세를 만들고 그럴듯한 재계산을 한다 — **전부 틀린 채로.** "코드를 못
+    읽었다"보다 훨씬 나쁘다. 실패가 조용하고 판정은 확신에 차 있다.
+    """
+
+    name: str = Field(min_length=1)          # 토폴로지의 `Service.repo`가 가리키는 이름
+    url: str                                 # **토큰 없는** 깨끗한 주소
+    path: str                                # 로컬 체크아웃 위치
+    # fine-grained token. `${GIT_TOKEN}`처럼 참조로 적는다 — 평문으로 두면
+    # config를 읽는 모든 경로(로그·예외·`config show`)로 샌다.
+    token: SecretStr | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        if not v.startswith(("https://", "ssh://", "git@")):
+            raise ValueError(f"url은 https://·ssh://·git@로 시작해야 한다 — {v}")
+        if "@" in v.split("://")[-1].split("/")[0] and not v.startswith("git@"):
+            raise ValueError(
+                "url에 인증 정보가 섞여 있다 — git이 .git/config에 평문으로 저장한다. "
+                "url은 깨끗하게 두고 token 칸을 써라")
+        return v.rstrip("/").removesuffix(".git")
+
+
+class CodeConfig(StrictModel):
+    """대상 코드를 어디서 받아 어디에 두는가(decisions ③의 가운데 층)."""
+
+    repos: list[RepoConfig] = []
+
+    @model_validator(mode="after")
+    def _no_duplicate_names(self):
+        names = [r.name for r in self.repos]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"레포 이름이 중복이다 — {', '.join(dupes)}. "
+                             f"토폴로지가 어느 쪽을 가리키는지 알 수 없다")
+        return self
+
+
 class InfraConfig(StrictModel):
     """전부 선택이다 — Kafka가 없는 사이트도 있을 수 있다."""
     redis: RedisConfig | None = None
@@ -205,6 +257,8 @@ class SiteRef(StrictModel):
 class SiteConfig(StrictModel):
     site: SiteRef
     infra: InfraConfig
+    # 대상 코드. **GBM 단위로 같으므로** `gbm/{gbm}.json`에 한 번 적고 층 병합을 탄다.
+    code: CodeConfig = CodeConfig()
     # 점검 선언. 층 병합을 타므로 `gbm/common.json`에 한 번 쓰고 사이트마다 다른
     # 것만 아래 층이 덮는다 — 28개 사이트에 같은 임계값을 28번 적지 않는다.
     patrol: PatrolConfig = PatrolConfig()

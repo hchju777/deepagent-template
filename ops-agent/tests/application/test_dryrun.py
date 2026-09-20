@@ -6,6 +6,7 @@ import pytest
 from src.application.dryrun import Script, ScriptedPlan, load_script, strip_comments
 from src.application.state import CaseState
 
+from tests.support import set_real_config_env
 from tests.application.conftest import task
 
 
@@ -95,9 +96,7 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     from src.__main__ import main
 
     root = Path(__file__).resolve().parent.parent.parent
-    for key in ("REDIS_PASSWORD", "MONGO_PASSWORD", "LLM_BASE_URL", "LLM_CLIENT_KEY",
-                "LLM_PASS_KEY", "MAIL_AGENT_API_KEY", "MAIL_AGENT_ID"):
-        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
+    set_real_config_env(monkeypatch)
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(root / "config"), "--env-file", str(tmp_path / "none"),
         "case", "dryrun", "--gbm", "mx", "--fct", "gumi",

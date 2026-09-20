@@ -228,9 +228,9 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     shutil.copytree(root / "config", config_root)
     (config_root / "app.json").write_text(json.dumps(app, ensure_ascii=False),
                                           encoding="utf-8")
-    for key in ("REDIS_PASSWORD", "MONGO_PASSWORD", "LLM_BASE_URL", "LLM_CLIENT_KEY",
-                "LLM_PASS_KEY", "MAIL_AGENT_API_KEY", "MAIL_AGENT_ID"):
-        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
+    from tests.support import set_real_config_env
+
+    set_real_config_env(monkeypatch)
 
     def run(*extra):
         monkeypatch.setattr("sys.argv", [

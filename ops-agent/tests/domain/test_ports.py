@@ -6,9 +6,10 @@
 """
 import inspect
 
-from src.domain.ports import KafkaInspectorPort, MongoReaderPort, RedisReaderPort
+from src.domain.ports import (CodeReaderPort, KafkaInspectorPort, MongoReaderPort,
+                              RedisReaderPort)
 
-ALL_PORTS = (RedisReaderPort, MongoReaderPort, KafkaInspectorPort)
+ALL_PORTS = (RedisReaderPort, MongoReaderPort, KafkaInspectorPort, CodeReaderPort)
 
 # 대상 시스템의 상태를 바꾸는 동사들. 이름만으로도 표면에 나타나선 안 된다.
 WRITE_VERBS = {
@@ -16,6 +17,9 @@ WRITE_VERBS = {
     "update", "update_one", "update_many", "replace", "remove", "drop", "create",
     "write", "save", "append", "push", "produce", "send", "commit", "flush",
     "expire", "rename", "incr", "decr", "lpush", "rpush", "setex",
+    # 코드 레포를 움직이는 것들. 조사 중에 레포가 움직이면 라운드끼리
+    # 증거가 모순되는데 원인을 못 찾는다(decisions ⑥).
+    "fetch", "pull", "clone", "checkout", "reset", "sync", "apply", "merge",
 }
 
 

@@ -97,3 +97,45 @@ def test_group_ids의_중복을_거부한다():
 def test_group_ids는_감시_대상이라는_뜻이_문서에_있다():
     # 이 뜻을 놓치면 모니터링이 운영 컨슈머의 파티션을 빼앗는다.
     assert "감시할 그룹들" in KafkaConsumerConfig.__doc__
+
+
+# ── 대상 코드 레포 (11a) ───────────────────────────────────────────
+
+def test_url에_토큰이_섞이면_거부한다():
+    """`https://<토큰>@호스트/…`로 클론하면 git이 그 URL을 **`.git/config`에 평문으로
+    저장한다.** 토큰이 디스크에 남고, 그 파일은 백업·이미지·로그 어디로든 따라간다.
+
+    그래서 url은 깨끗하게 두고 인증은 명령마다 헤더로 넘긴다.
+    """
+    import pytest
+
+    from src.config.schema_site import RepoConfig
+
+    with pytest.raises(ValueError, match="인증 정보가 섞여"):
+        RepoConfig(name="dt-core", url="https://ghp_tok@git.example.com/team/dt-core",
+                   path="/srv/dt-core")
+
+
+def test_ssh_형식은_받는다():
+    from src.config.schema_site import RepoConfig
+
+    assert RepoConfig(name="x", url="git@git.example.com:team/dt-core.git",
+                      path="/srv/x").url.endswith("dt-core")
+
+
+def test_git_꼬리를_떼어_보관한다():
+    """`code status`의 origin 대조가 `.git` 유무로 실패하면 사람이 자물쇠를 끈다."""
+    from src.config.schema_site import RepoConfig
+
+    assert RepoConfig(name="x", url="https://g/team/x.git", path="/p").url == "https://g/team/x"
+
+
+def test_레포_이름이_중복이면_거부한다():
+    """토폴로지의 `Service.repo`가 어느 쪽을 가리키는지 알 수 없게 된다."""
+    import pytest
+
+    from src.config.schema_site import CodeConfig
+
+    with pytest.raises(ValueError, match="중복"):
+        CodeConfig(repos=[{"name": "a", "url": "https://g/a", "path": "/1"},
+                          {"name": "a", "url": "https://g/b", "path": "/2"}])

@@ -141,3 +141,37 @@ class RestProberPort(ABC):
         미등재 항목·스키마 밖 키·타입 불일치는 **소켓에 나가기 전에**
         error ProbeResult로 거부한다.
         """
+
+
+class CodeReaderPort(ABC):
+    """대상 **코드**를 읽는다. 읽기만 한다.
+
+    ## 왜 fetch·checkout·pull이 없는가
+
+    서브에이전트가 fetch할 수 있으면 **조사 도중에 레포가 움직인다.** 라운드 1에서
+    읽은 코드와 라운드 3에서 읽은 코드가 달라지고, 그러면 증거끼리 모순되는데
+    원인을 못 찾는다(decisions ⑥). 조사 중 코드는 정지해 있어야 한다 — 잘린 표본에
+    `complete=False`를 붙이는 것과 같은 계열의 규율이다.
+
+    `sync`는 포트 밖, CLI 경계의 별도 명령이다.
+
+    ## 왜 커밋을 항상 받는가
+
+    "지금 체크아웃된 것"을 읽으면 **그 사이트에 떠 있는 코드가 아닌 것**을 읽을 수
+    있다. 사이트가 뒤처져 있을 때 최신 코드를 읽고 확신에 찬 오답을 내는 것이
+    여기서 막아야 할 사고다. 커밋은 호출부가 명시한다.
+    """
+
+    @abstractmethod
+    async def show(self, repo: str, commit: str, path: str) -> ProbeResult:
+        """그 커밋의 파일 하나. 대상의 config 파일도 이걸로 읽는다."""
+
+    @abstractmethod
+    async def grep(self, repo: str, commit: str, patterns: list[str], *,
+                   path: str = "") -> ProbeResult:
+        """그 커밋에서 패턴을 찾는다. 패턴은 `-e`로 넘긴다(decisions ⑨) —
+        `-`로 시작하는 패턴이 옵션으로 읽히는 것을 막는다."""
+
+    @abstractmethod
+    async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
+        """그 커밋의 파일 목록. 이름을 모를 때 먼저 찾는 용도다(⑮와 같은 이유)."""

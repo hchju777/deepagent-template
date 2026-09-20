@@ -175,9 +175,9 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     seeds.write_text(json.dumps({"rest": {
         "summary_badge": [zero("Defect"), {**zero("OK"), "normal": 9}],
         "prod_status": {"status": "In Production"}}}), encoding="utf-8")
-    for key in ("REDIS_PASSWORD", "MONGO_PASSWORD", "LLM_BASE_URL", "LLM_CLIENT_KEY",
-                "LLM_PASS_KEY", "MAIL_AGENT_API_KEY", "MAIL_AGENT_ID"):
-        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
+    from tests.support import set_real_config_env
+
+    set_real_config_env(monkeypatch)
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(root / "config"), "--env-file", str(tmp_path / "none"),
         "patrol", "check", "--all-sites", "--stub-seeds", str(seeds)])

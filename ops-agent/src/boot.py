@@ -29,12 +29,90 @@ class BootError(StrictModel):
         return f"[{self.where}] {self.message}"
 
 
-def validate_boot(config_root: Path, *, env: dict[str, str]) -> list[BootError]:
+def validate_boot(config_root: Path, *, env: dict[str, str],
+                  knowledge_root: Path | None = None) -> list[BootError]:
     """config 트리 전체를 검증한다. 문제가 없으면 빈 리스트."""
     return _check(config_root, "app.json", lambda: load_app_config(config_root, env=env)) \
         + _check_llm(config_root, env=env) \
         + _check_sites(config_root, env=env) \
-        + _check_scenarios(config_root)
+        + _check_scenarios(config_root) \
+        + _check_code(config_root,
+                      # **config 트리 옆을 본다.** 고정 경로를 쓰면 테스트가 tmp에
+                      # 세운 트리를 검증하면서 리포의 진짜 knowledge를 읽는다 —
+                      # 실제로 그랬고, 관계없는 검증이 8개 깨졌다.
+                      knowledge_root or config_root.parent / "knowledge", env=env)
+
+
+def _repos_declared(config_root: Path, registry, gbm: str, *,
+                    env: dict[str, str]) -> bool:
+    site = next((e for e in registry.active() if e.gbm == gbm), None)
+    if site is None:
+        return False
+    try:
+        config, _ = load_site_config(config_root, site.gbm, site.fct, env=env)
+    except Exception:                                              # noqa: BLE001
+        return False
+    return bool(config.code.repos)
+
+
+def _check_code(config_root: Path, knowledge_root: Path, *,
+                env: dict[str, str]) -> list[BootError]:
+    """지식 층과 config가 **서로를 가리키는가.**
+
+    디스크 상태(체크아웃이 실제로 있는가)는 **여기서 안 본다** — 그건 `code status`의
+    일이고, 개발 환경에는 체크아웃이 없는 것이 정상이다. 기동이 거기서 막히면
+    사람이 기동 검증을 통째로 끄게 된다.
+
+    여기서 보는 것은 **선언끼리의 어긋남**이다. 토폴로지가 없는 레포를 가리키거나
+    배포가 없는 서비스를 가리키면, 증상은 런타임에 "코드 증거가 조용히 안 나온다"로
+    나타난다 — 조용한 실패라 제일 비싸다.
+    """
+    from src.knowledge.loader import load_deployment, load_topology
+
+    try:
+        registry = load_registry(config_root)
+    except Exception:                                              # noqa: BLE001
+        return []          # 위의 _check_sites가 이미 보고했다
+
+    errors: list[BootError] = []
+    for gbm in sorted({e.gbm for e in registry.active()}):
+        where = f"knowledge/{gbm}"
+        try:
+            topology = load_topology(knowledge_root, gbm)
+            deployment = load_deployment(knowledge_root, gbm)
+        except ConfigError as exc:
+            if not _repos_declared(config_root, registry, gbm, env=env):
+                continue       # 11a를 아직 안 쓰는 트리다 — 조용히 넘어간다
+            errors.append(BootError(where=where, message=(
+                f"{exc}. config에 code.repos를 선언해 놓고 토폴로지가 없으면 "
+                f"**코드를 한 줄도 못 읽는다**")))
+            continue
+        except Exception as exc:                                   # noqa: BLE001
+            errors.append(BootError(where=where,
+                                    message=f"예상 밖 오류 — {type(exc).__name__}: {exc}"))
+            continue
+
+        site = next(e for e in registry.active() if e.gbm == gbm)
+        try:
+            config, _ = load_site_config(config_root, site.gbm, site.fct, env=env)
+        except Exception:                                          # noqa: BLE001
+            continue           # 위에서 이미 보고했다
+        known = {r.name for r in config.code.repos}
+        if not topology.services and not known:
+            continue           # 11a를 아직 안 쓰는 트리다
+
+        for name, service in sorted(topology.services.items()):
+            if service.repo not in known:
+                errors.append(BootError(where=f"{where} topology", message=(
+                    f"서비스 {name}이 없는 레포를 가리킨다 — {service.repo}. "
+                    f"config의 code.repos에 있는 것: {', '.join(sorted(known)) or '없음'}")))
+        for name in sorted(set(deployment.pins) |
+                           {s for site_pins in deployment.sites.values() for s in site_pins}):
+            if name not in topology.services:
+                errors.append(BootError(where=f"{where} deployment", message=(
+                    f"배포가 토폴로지에 없는 서비스를 가리킨다 — {name}. "
+                    f"이름이 바뀌었으면 양쪽을 같이 고쳐라")))
+    return errors
 
 
 def _check_llm(config_root: Path, *, env: dict[str, str]) -> list[BootError]:

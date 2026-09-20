@@ -196,6 +196,28 @@ python -m src case list
 
 열린 케이스는 `case investigate`로 조사한다(아래). 판정과 보고서는 아직 없다(12).
 
+## 대상 코드
+
+```bash
+python -m src code status     # 읽을 수 있는 상태인가 (네트워크 없음)
+python -m src code plan       # 사람이 직접 칠 git 명령 (네트워크 없음)
+python -m src code sync       # clone/fetch — **사내에서만**
+```
+
+조사가 "데이터가 이상하다"를 넘어 "왜 그런가"로 가려면 대상 서비스의 코드를 읽어야
+한다. 코드는 **GBM 단위로 같고**, 어느 커밋이 떠 있는지는
+`knowledge/deployment/<gbm>.json`이 말한다. 선언이 없으면 `main` 최신이라고
+**가정**하고, 그렇게 읽었다는 사실이 출력에 `(가정)`으로 남는다 — 확인한 것과
+가정한 것을 같은 모양으로 찍으면 뒤처진 사이트에서 떠 있지도 않은 코드를 읽는다.
+
+`code status`는 넷을 본다: 경로가 있나 · `.git`이 있나 · **`origin`이 config와 같나** ·
+배포가 가리키는 커밋이 로컬에 실재하나. 세 번째가 자물쇠다 — 누가 포크를 그 경로에
+클론하면 우리는 그럴듯한 코드를 읽고 **그럴듯하게 틀린 판정**을 낸다.
+
+토큰은 `url`이 아니라 `token` 칸에 적는다(`${GIT_TOKEN}`). url에 넣으면 git이
+`.git/config`에 평문으로 저장한다. 자세한 것은
+[11a단계 문서](STEPS/step-11a-code.md).
+
 ## 조사 엔진
 
 ```bash
