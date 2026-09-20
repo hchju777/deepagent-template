@@ -268,6 +268,44 @@ async def test_증거에서_본_이름이면_안_남는다(case):
     assert patch["llm_errors"] == []
 
 
+async def test_리드가_본_이름을_찍었다고_적지_않는다(case):
+    """**사내에서 실제로 난 거짓 양성이다.**
+
+    `summary`/`body`를 나눌 때 `_seen`을 안 고쳤다. 리드는 `body`에 실린 토픽 78개를
+    보고 골랐는데, 우리는 `summary`(9개)로 판정해서 "찾지 않고 댔다"고 적었다.
+
+    계측기가 거짓 양성을 내면 그 숫자로 **"막을지 말지"를 정할 수 없다** — ④를
+    기록만 하기로 한 이유가 통째로 사라진다.
+    """
+    from src.application.runner_probe import _summarize, detail
+
+    topics = [f"GUMI_TOPIC_{i:03d}" for i in range(179)]
+    topics[49] = "GUMI_ALARM_EVENT_MAIN"
+    ref = EvidenceRef(id="t-2.e1", source="kafka.list_topics",
+                      summary=_summarize(topics),
+                      body="\n".join(detail(topics, limit=1200)))
+    assert "GUMI_ALARM_EVENT_MAIN" in ref.body          # 리드는 봤다
+    assert "GUMI_ALARM_EVENT_MAIN" not in ref.summary   # 요약에는 없다
+
+    _, integrate, _ = leads(reply(decision="continue", tasks=[
+        {"id": "t-5", "goal": "읽는다", "role": "data_prober", "action": "kafka.tail",
+         "params": {"topic": "GUMI_ALARM_EVENT_MAIN", "limit": 10}}]))
+    patch = await make_nodes(_deps(integrate))["integrate"](
+        CaseState(case=case, round=1, evidence=[ref]))
+    assert patch["llm_errors"] == []
+
+
+async def test_body가_없는_증거는_summary로_본다(case):
+    """`EvidenceRef`는 어디서나 만들 수 있다 — 11b의 서브에이전트가 곧 만든다."""
+    _, integrate, _ = leads(reply(decision="continue", tasks=[
+        {"id": "t-5", "goal": "읽는다", "role": "data_prober", "action": "mongo.find",
+         "params": {"collection": "bb_state", "filter": {}}}]))
+    patch = await make_nodes(_deps(integrate))["integrate"](CaseState(
+        case=case, round=1, evidence=[EvidenceRef(
+            id="t-1.e1", source="mongo.list_collections", summary="2건 ['bb_state']")]))
+    assert patch["llm_errors"] == []
+
+
 async def test_이름이_안_들어가는_읽기는_검사하지_않는다(case):
     """`pattern="*"`·`entry=...`는 찾을 것이 없다 — REST 항목은 config가 선언한다."""
     frame, _, _ = leads(reply(tasks=[

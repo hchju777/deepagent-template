@@ -99,11 +99,17 @@ def _accept_hypotheses(patch: dict, *, have: set[str]) -> tuple[list[Hypothesis]
 def _seen(state: CaseState) -> str:
     """지금까지 본 증거를 이어 붙인 것 — "이 이름을 실제로 찾았는가"의 근거.
 
-    요약 문자열을 그대로 훑는다. `list_collections`의 결과가 `['aa', 'bb']`처럼 실려
-    있으므로 부분 문자열로 충분하고, **덜 잡는 쪽이 낫다** — 기록이 목적이라
-    거짓 양성(멀쩡한데 찍었다고 적는 것)이 거짓 음성보다 비싸다.
+    **`body`를 본다. `summary`가 아니다.** 리드가 읽는 것이 `body`이므로, 우리가
+    `summary`(160자)로 판정하면 **리드가 실제로 본 이름을 "찍었다"고 적는다.**
+
+    사내에서 실제로 났다: 토픽 179개 중 리드는 `body`에 실린 78개를 보고 골랐는데,
+    `summary`에는 9개만 들어가 있어 거짓 양성이 기록됐다. 계측기가 거짓 양성을 내면
+    그 숫자로 "막을지 말지"를 정할 수 없다 — 계측기의 존재 이유가 사라진다.
+
+    `summary`로 떨어지는 것은 `body`가 없는 증거(다른 생산자)를 위해서다.
     """
-    return "\n".join(f"{ref.source} {ref.summary}" for ref in state.evidence)
+    return "\n".join(f"{ref.source} {ref.body or ref.summary}"
+                     for ref in state.evidence)
 
 
 def _taken(state: CaseState) -> frozenset:
