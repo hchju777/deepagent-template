@@ -106,14 +106,34 @@ def test_url에_토큰이_섞이면_거부한다():
     저장한다.** 토큰이 디스크에 남고, 그 파일은 백업·이미지·로그 어디로든 따라간다.
 
     그래서 url은 깨끗하게 두고 인증은 명령마다 헤더로 넘긴다.
+
+    **실패하면 스스로 원인을 말한다.** 이 테스트가 사내에서 `DID NOT RAISE`로 깨졌는데
+    개발 기계에서는 재현이 안 됐다. "안 걸렸다"만으로는 트리가 낡은 것인지 환경이
+    다른 것인지 구분할 수 없어서, 한 번 더 물어봐야 했다 — 그 왕복이 낭비다.
     """
+    import inspect
+
     import pytest
 
     from src.config.schema_site import RepoConfig
 
-    with pytest.raises(ValueError, match="인증 정보가 섞여"):
-        RepoConfig(name="dt-core", url="https://ghp_tok@git.example.com/team/dt-core",
-                   path="/srv/dt-core")
+    dirty = "https://ghp_tok@git.example.com/team/dt-core"
+    try:
+        passed = RepoConfig(name="dt-core", url=dirty, path="/srv/dt-core")
+    except ValueError as exc:
+        assert "인증 정보가 섞여" in str(exc), str(exc)
+        return
+
+    # **validator 본문을 그대로 보여 준다.** 처음엔 "메시지 문자열이 소스에 있나"로
+    # 봤는데, 검사를 꺼도 그 문자열은 raise 본문에 남아 있어서 **항상 "있다"가 나왔다.**
+    # 검사기가 검사를 못 하는 것이 여기서 고치려던 바로 그 문제다.
+    lines = inspect.getsource(RepoConfig).splitlines()
+    start = next((i for i, l in enumerate(lines) if "def _clean" in l), None)
+    body = "\n".join(lines[start:start + 12]) if start is not None else "(_clean이 없다)"
+    pytest.fail(
+        f"토큰이 섞인 url이 통과했다 — {passed.url!r}\n"
+        f"  파일: {inspect.getfile(RepoConfig)}\n"
+        f"  지금 돌고 있는 validator:\n{body}")
 
 
 def test_ssh_형식은_받는다():

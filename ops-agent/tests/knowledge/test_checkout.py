@@ -121,11 +121,17 @@ def test_origin이_다르면_sync가_건드리지_않는다(tmp_path):
 
 
 def test_붙을_수_없으면_값으로_실패한다(tmp_path):
-    """사내 밖에서는 **늘** 실패한다 — 던지면 CLI가 죽는다."""
+    """사내 밖에서는 **늘** 실패한다 — 던지면 CLI가 죽는다.
+
+    **실패하면 무엇이 왔는지 그대로 보여 준다.** `outcome == "failed" and why`처럼
+    묶어서 단정하면 어느 쪽이 틀렸는지 안 보이고, 사내에서 이 테스트가 깨졌을 때
+    실제로 그래서 한 번 더 물어봐야 했다.
+    """
     repo = RepoConfig(name="dt-core", url="https://127.0.0.1:1/없는/레포",
                       path=str(tmp_path / "없음"))
     outcome, why = sync(repo, status_of(repo))
-    assert outcome == "failed" and why
+    assert outcome == "failed", f"outcome={outcome!r} why={why!r}"
+    assert why.strip(), "실패했는데 이유가 비어 있다 — 왜인지 아무도 모르는 상태다"
 
 
 def test_실패_메시지에_토큰이_안_샌다(tmp_path):
