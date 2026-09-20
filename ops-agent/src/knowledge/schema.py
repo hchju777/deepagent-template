@@ -21,6 +21,7 @@
 **우리가 그 층을 합쳐서 답을 주지는 않는다.** 대상의 병합 규칙이 우리와 같다는
 보장이 없고, 추측으로 합친 값은 틀려도 그럴듯해 보인다. 층을 그대로 보여 준다.
 """
+import re
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -47,11 +48,23 @@ class Service(StrictModel):
         return v
 
 
+_SLOT = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+_KNOWN_SLOTS = frozenset({"gbm", "fct"})
+
+
 class Topology(StrictModel):
     """GBM 하나의 서비스 지도. **사이트 단위가 아니다** — 코드는 GBM별로 같다."""
 
     services: dict[str, Service] = {}
     # 대상 레포 안에서 **이름이 사는 곳**. 층 순서대로 적는다(앞이 밑바닥).
+    #
+    # `{gbm}`·`{fct}`를 쓸 수 있다 — 대상의 config가 법인별로도 갈리기 때문이다
+    # (`config/factories/{fct}/{gbm}.json`). 우리 `SITE_LAYERS`와 같은 문법이다.
+    #
+    # **KafkaConsumerConfig에서 템플릿을 기각한 것과 다른 경우다.** 거기서 문제는
+    # 오타 난 템플릿이 **존재하지 않는 그룹을 조용히 감시**하는 것이었다 — lag 0이
+    # 정상과 구별되지 않는다. 여기는 오타가 "그 커밋에 그 파일이 없다"로 **시끄럽게**
+    # 드러나고(`code status`), 게다가 아는 자리 이름만 허용한다.
     config_paths: list[str] = []
 
     @model_validator(mode="after")
@@ -59,6 +72,23 @@ class Topology(StrictModel):
         if not self.services:
             raise ValueError("services가 비어 있다 — 조사할 서비스가 없으면 토폴로지가 무의미하다")
         return self
+
+    @field_validator("config_paths")
+    @classmethod
+    def _known_slots_only(cls, paths: list[str]) -> list[str]:
+        """모르는 자리는 **치환되지 않은 채** 경로가 된다. 그러면 영원히 못 찾는다."""
+        for path in paths:
+            unknown = sorted(set(_SLOT.findall(path)) - _KNOWN_SLOTS)
+            if unknown:
+                raise ValueError(
+                    f"{path}에 모르는 자리가 있다 — {', '.join(unknown)}. "
+                    f"쓸 수 있는 것: {', '.join(sorted(_KNOWN_SLOTS))}")
+        return paths
+
+    def resolved_config_paths(self, gbm: str, fct: str) -> list[str]:
+        """이 사이트에서 실제로 볼 경로들."""
+        return [path.replace("{gbm}", gbm).replace("{fct}", fct)
+                for path in self.config_paths]
 
 
 class Pin(StrictModel):

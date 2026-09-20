@@ -71,9 +71,9 @@ def test_준비된_체크아웃은_통과한다(tmp_path, monkeypatch, capsys):
     assert "(가정)" in captured.out
 
 
-def test_이름이_사는_파일이_없으면_말한다(tmp_path, monkeypatch, capsys):
-    """**이름은 대상의 config 파일에 산다**(decisions ③-2). 이 경로가 틀리면 리드는
-    아무것도 못 찾는데, 증상은 "조사가 빈손"이라 원인이 안 보인다.
+def test_이름이_사는_파일이_하나도_없으면_말한다(tmp_path, monkeypatch, capsys):
+    """**이름은 대상의 config 파일에 산다**(decisions ③-2). 경로 앞머리가 틀리면
+    리드는 아무것도 못 찾는데, 증상은 "조사가 빈손"이라 원인이 안 보인다.
 
     사람이 손으로 적는 칸이라 오타가 정상적으로 일어난다.
     """
@@ -88,7 +88,7 @@ def test_이름이_사는_파일이_없으면_말한다(tmp_path, monkeypatch, c
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 1
-    assert "config_paths가 그 커밋에 없다" in captured.out
+    assert "하나도" in captured.out
     assert "없는파일.json" in captured.out
 
 
@@ -160,3 +160,45 @@ def test_체크아웃이_없어도_기동은_막지_않는다(tmp_path, monkeypa
     monkeypatch.setattr("sys.argv", ["src", "--config-root", str(config_root),
                                      "--env-file", str(tmp_path / "none"), "boot"])
     assert main() == 0, capsys.readouterr().err
+
+
+def test_법인별로_갈린_config_경로를_해석한다(tmp_path, monkeypatch, capsys):
+    """대상의 config가 **법인별로도 갈린다**(`config/factories/{fct}/{gbm}.json`).
+    토폴로지는 GBM 단위라 자리표시자로만 표현할 수 있다 — 우리 `SITE_LAYERS`와 같다.
+    """
+    url = "https://git.example.com/team/dt-core"
+    root = tmp_path / "checkout"
+    _make_repo(root, origin=url)
+    # 이 사이트(mx/gumi)의 층만 만든다.
+    (root / "config" / "factories" / "gumi").mkdir(parents=True)
+    (root / "config" / "factories" / "gumi" / "mx.json").write_text("{}", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "layers"], cwd=root, check=True, capture_output=True)
+
+    config_root = _tree(tmp_path, repo_path=str(root), url=url)
+    topology = tmp_path / "knowledge" / "topology" / "mx.json"
+    body = json.loads(topology.read_text(encoding="utf-8"))
+    body["config_paths"] = ["config/factories/{fct}/{gbm}.json"]
+    topology.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0, captured.out + captured.err
+    assert "config 층 1/1개" in captured.out
+
+
+def test_없는_층은_오류가_아니다(tmp_path, monkeypatch, capsys):
+    """**층은 선택이다** — 우리 `SITE_LAYERS`와 같다. `fct/{fct}/common.json`이 없는
+    법인이 정상이듯 대상도 그렇다. 없는 층마다 빨간불을 켜면 사람이 검사를 끈다."""
+    url = "https://git.example.com/team/dt-core"
+    _make_repo(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+
+    topology = tmp_path / "knowledge" / "topology" / "mx.json"
+    body = json.loads(topology.read_text(encoding="utf-8"))
+    body["config_paths"] = ["a.py", "config/{fct}/없는층.json"]   # 하나는 실재한다
+    topology.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0, captured.out + captured.err
+    assert "config 층 1/2개" in captured.out
+    assert "없음:" in captured.out            # 조용히 넘어가지도 않는다

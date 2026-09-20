@@ -119,6 +119,19 @@ def missing_paths(repo: RepoConfig, commit: str, paths: list[str]) -> list[str]:
     return gone
 
 
+def config_layers(repo: RepoConfig, commit: str, paths: list[str]) -> tuple[list[str], list[str]]:
+    """그 커밋에 **있는 층과 없는 층**을 나눠 돌려준다.
+
+    층은 **선택이다** — 우리 `SITE_LAYERS`와 같다. `fct/{fct}/common.json`이 없는
+    법인이 정상이듯, 대상도 그렇다. 그래서 "몇 개가 없다"는 오류가 아니다.
+
+    **하나도 없는 것**이 오류다. 그건 경로 앞머리가 통째로 틀렸다는 뜻이고
+    (`config/`인데 `conf/`라고 적었다든가), 그러면 리드는 이름을 영영 못 찾는다.
+    """
+    missing = missing_paths(repo, commit, paths)
+    return [p for p in paths if p not in missing], missing
+
+
 def plan_for(repo: RepoConfig, state: RepoStatus) -> list[str]:
     """사람이 직접 칠 명령. **토큰은 안 찍는다** — 셸 히스토리에 남는다."""
     if not state.exists:

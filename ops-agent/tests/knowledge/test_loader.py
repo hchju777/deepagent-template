@@ -108,3 +108,23 @@ def test_레포_밖을_가리키는_경로는_거부한다():
     with pytest.raises(ValueError, match="상대 경로"):
         Topology.model_validate({"services": {
             "x": {"repo": "r", "path": "../../etc/passwd"}}})
+
+
+# ── 대상 config가 법인별로도 갈린다 ───────────────────────────────
+
+def test_config_경로가_자리표시자를_받는다():
+    """토폴로지는 GBM 단위인데 대상 config는 법인별로도 갈린다. 자리표시자로만
+    표현할 수 있고, 문법은 우리 `SITE_LAYERS`와 같게 맞췄다."""
+    topology = Topology.model_validate({
+        "services": {"x": {"repo": "r"}},
+        "config_paths": ["config/common.json", "config/factories/{fct}/{gbm}.json"]})
+    assert topology.resolved_config_paths("mx", "gumi") == [
+        "config/common.json", "config/factories/gumi/mx.json"]
+
+
+def test_모르는_자리는_거부한다():
+    """모르는 자리는 **치환되지 않은 채** 경로가 된다 — 그러면 영원히 못 찾는다.
+    프롬프트의 `{max_chars}`가 그대로 나갔던 것과 같은 함정이다."""
+    with pytest.raises(ValueError, match="모르는 자리"):
+        Topology.model_validate({"services": {"x": {"repo": "r"}},
+                                 "config_paths": ["config/{corp}.json"]})

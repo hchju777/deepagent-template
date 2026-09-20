@@ -966,7 +966,7 @@ def cmd_code_status(args, env) -> int:
     보는 넷: 경로가 있나 · `.git`이 있나 · `origin`이 config와 같나 ·
     배포가 가리키는 커밋이 로컬에 실재하나.
     """
-    from src.knowledge.checkout import has_commit, missing_paths, plan_for, status_of
+    from src.knowledge.checkout import config_layers, has_commit, plan_for, status_of
     from src.knowledge.loader import load_deployment, load_topology
 
     site, _ = _resolve_site(args.config_root, args, env)
@@ -1011,12 +1011,17 @@ def cmd_code_status(args, env) -> int:
                 bad += 1
                 print(f"       → git -C {repo.path} fetch --all --prune")
                 continue
-            # 이름이 사는 곳이 실재하는가. 틀리면 리드는 아무것도 못 찾고,
-            # 증상은 "조사가 빈손"이라 원인이 안 보인다.
-            gone = missing_paths(repo, pin.commit, topology.config_paths)
-            if gone:
+            # 이름이 사는 곳이 실재하는가. 층은 선택이지만 **하나도 없으면**
+            # 경로 앞머리가 통째로 틀린 것이고, 리드는 이름을 영영 못 찾는다.
+            wanted = topology.resolved_config_paths(gbm, site_fct)
+            if not wanted:
+                continue
+            here, gone = config_layers(repo, pin.commit, wanted)
+            print(f"          config 층 {len(here)}/{len(wanted)}개"
+                  + (f" · 없음: {', '.join(gone)}" if gone else ""))
+            if not here:
                 bad += 1
-                print(f"       ⚠ config_paths가 그 커밋에 없다 — {', '.join(gone)}")
+                print(f"       ⚠ config_paths가 그 커밋에 **하나도** 없다")
                 print(f"       → knowledge/topology/{gbm}.json의 config_paths를 고쳐라")
     return 1 if bad else 0
 
