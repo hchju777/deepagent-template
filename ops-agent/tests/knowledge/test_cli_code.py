@@ -13,27 +13,38 @@ from tests.support import set_real_config_env
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git이 없다")
 
+# 이 파일 안에서만 쓰는 이름이다. **리포의 config/knowledge와 무관해야 한다** —
+# 운영이 거기에 진짜 이름을 적어도 이 테스트는 그대로 돌아야 한다.
+REPO = "테스트레포"
 
-def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/dt-core"):
-    """리포의 실제 `config/`·`knowledge/`를 복사하고 레포 경로만 바꾼다."""
-    from pathlib import Path
 
-    root = Path(__file__).resolve().parent.parent.parent
-    shutil.copytree(root / "config", tmp_path / "config")
-    shutil.copytree(root / "knowledge", tmp_path / "knowledge")
+def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/dt-core",
+          services=None, config_paths=()):
+    """**테스트가 자기 트리를 세운다.** 리포의 `config/`·`knowledge/`를 베끼지 않는다.
 
-    mx = tmp_path / "config" / "gbm" / "mx.json"
-    body = json.loads(mx.read_text(encoding="utf-8"))
-    body["code"]["repos"] = [{"name": "dt-core", "url": url, "path": repo_path}]
-    mx.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    처음엔 베꼈고, 그 파일들이 **운영이 채우는 칸**이라 사내에서 실제 레포 이름을
+    적자마자 테스트가 깨졌다(`repo == "dt-core"`로 거르고 있었다). 운영이 자기 값을
+    적는 것 때문에 우리 테스트가 빨간불이면, 사람은 그 테스트를 믿지 않게 된다.
 
-    topology = tmp_path / "knowledge" / "topology" / "mx.json"
-    shape = json.loads(topology.read_text(encoding="utf-8"))
-    shape["services"] = {k: v for k, v in shape["services"].items()
-                         if v["repo"] == "dt-core"}
-    shape["config_paths"] = []        # 테스트마다 따로 세운다
-    topology.write_text(json.dumps(shape, ensure_ascii=False), encoding="utf-8")
-    return tmp_path / "config"
+    그리고 여기서 보려는 것은 `code status`의 **배선**이지 리포 설정의 내용이 아니다.
+    설정이 온전한지는 `boot`과 `test_env_참조와_env_example이_어긋나지_않는다`가 본다.
+    """
+    config = tmp_path / "config"
+    (config / "gbm").mkdir(parents=True)
+    (config / "app.json").write_text(json.dumps({"timezone": "Asia/Seoul"}), encoding="utf-8")
+    (config / "registry.json").write_text(
+        json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")
+    (config / "gbm" / "mx.json").write_text(json.dumps({
+        "infra": {"redis": {"url": "redis://h:6379"}},
+        "code": {"repos": [{"name": REPO, "url": url, "path": repo_path}]}},
+        ensure_ascii=False), encoding="utf-8")
+
+    knowledge = tmp_path / "knowledge"
+    (knowledge / "topology").mkdir(parents=True)
+    (knowledge / "topology" / "mx.json").write_text(json.dumps({
+        "services": services or {"processor": {"repo": REPO, "role": "가공한다"}},
+        "config_paths": list(config_paths)}, ensure_ascii=False), encoding="utf-8")
+    return config
 
 
 def _make_repo(root, *, origin):
@@ -66,7 +77,7 @@ def test_준비된_체크아웃은_통과한다(tmp_path, monkeypatch, capsys):
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0, captured.out + captured.err
-    assert "✅ dt-core" in captured.out
+    assert f"✅ {REPO}" in captured.out
     # 배포 선언이 없으므로 `main` 최신을 **가정**했다고 적혀야 한다.
     assert "(가정)" in captured.out
 
@@ -79,12 +90,8 @@ def test_이름이_사는_파일이_하나도_없으면_말한다(tmp_path, monk
     """
     url = "https://git.example.com/team/dt-core"
     _make_repo(tmp_path / "checkout", origin=url)
-    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
-
-    topology = tmp_path / "knowledge" / "topology" / "mx.json"
-    body = json.loads(topology.read_text(encoding="utf-8"))
-    body["config_paths"] = ["config/없는파일.json"]
-    topology.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url,
+                        config_paths=["config/없는파일.json"])
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 1
@@ -95,12 +102,8 @@ def test_이름이_사는_파일이_하나도_없으면_말한다(tmp_path, monk
 def test_실재하는_config_경로는_통과한다(tmp_path, monkeypatch, capsys):
     url = "https://git.example.com/team/dt-core"
     _make_repo(tmp_path / "checkout", origin=url)
-    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
-
-    topology = tmp_path / "knowledge" / "topology" / "mx.json"
-    body = json.loads(topology.read_text(encoding="utf-8"))
-    body["config_paths"] = ["a.py"]              # 픽스처가 만든 실재 파일
-    topology.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url,
+                        config_paths=["a.py"])   # 픽스처가 만든 실재 파일
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0, captured.out + captured.err
@@ -135,11 +138,8 @@ def test_sync는_붙을_수_없으면_값으로_실패하고_plan을_안내한�
 def test_기동이_선언끼리의_어긋남을_잡는다(tmp_path, monkeypatch, capsys):
     """토폴로지가 없는 레포를 가리키면 런타임 증상은 **"코드 증거가 조용히 안
     나온다"**가 된다. 조용한 실패라 기동에서 잡는다."""
-    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"))
-    topology = tmp_path / "knowledge" / "topology" / "mx.json"
-    body = json.loads(topology.read_text(encoding="utf-8"))
-    body["services"]["processor"]["repo"] = "없는레포"
-    topology.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"),
+                        services={"processor": {"repo": "없는레포"}})
 
     from src.__main__ import main
 
@@ -175,11 +175,8 @@ def test_법인별로_갈린_config_경로를_해석한다(tmp_path, monkeypatch
     subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-qm", "layers"], cwd=root, check=True, capture_output=True)
 
-    config_root = _tree(tmp_path, repo_path=str(root), url=url)
-    topology = tmp_path / "knowledge" / "topology" / "mx.json"
-    body = json.loads(topology.read_text(encoding="utf-8"))
-    body["config_paths"] = ["config/factories/{fct}/{gbm}.json"]
-    topology.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    config_root = _tree(tmp_path, repo_path=str(root), url=url,
+                        config_paths=["config/factories/{fct}/{gbm}.json"])
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0, captured.out + captured.err
@@ -191,12 +188,9 @@ def test_없는_층은_오류가_아니다(tmp_path, monkeypatch, capsys):
     법인이 정상이듯 대상도 그렇다. 없는 층마다 빨간불을 켜면 사람이 검사를 끈다."""
     url = "https://git.example.com/team/dt-core"
     _make_repo(tmp_path / "checkout", origin=url)
-    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
-
-    topology = tmp_path / "knowledge" / "topology" / "mx.json"
-    body = json.loads(topology.read_text(encoding="utf-8"))
-    body["config_paths"] = ["a.py", "config/{fct}/없는층.json"]   # 하나는 실재한다
-    topology.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url,
+                        # 하나는 실재한다
+                        config_paths=["a.py", "config/{fct}/없는층.json"])
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0, captured.out + captured.err

@@ -202,3 +202,56 @@ def test_검사기가_정상_코드를_심볼릭_링크로_오탐하지_않는�
     good = tmp_path / "good.py"
     good.write_text("import shutil\nshutil.copytree('a', 'b')\n", encoding="utf-8")
     assert symlink_violations(good) == []
+
+
+
+# ── 운영이 채우는 칸을 테스트가 붙잡지 않는다 ───────────────────────
+
+def _mentions_knowledge(node) -> bool:
+    return any(isinstance(n, ast.Constant) and n.value == "knowledge"
+               for n in ast.walk(node))
+
+
+def knowledge_copies(path) -> list[str]:
+    """리포의 `knowledge/`를 통째로 베끼는 곳.
+
+    `knowledge/topology/*.json`은 **운영이 자기 서비스 이름으로 채우는 파일**이다.
+    테스트가 그 내용에 의존하면 사내에서 진짜 이름을 적는 순간 우리 테스트가
+    빨간불이 된다 — 실제로 났다(`repo == "dt-core"`로 거르고 있었다).
+
+    **운영이 자기 값을 적었다고 테스트가 깨지면 사람은 그 테스트를 안 믿는다.**
+    필요한 트리는 테스트가 직접 세운다(`tests/knowledge/test_cli_code.py::_tree`).
+
+    `copytree`만 본다 — 베끼는 것이 실제로 문제를 만든 기제이고, 문자열로 훑으면
+    이 설명문 자체가 걸린다(처음에 그렇게 썼다).
+    """
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if (isinstance(node, ast.Call) and _called_name(node) == "copytree"
+                and node.args and _mentions_knowledge(node.args[0])):
+            found.append(f"{_label(path)}:{node.lineno} — copytree(… knowledge …)")
+    return found
+
+
+def test_테스트가_리포의_knowledge를_베끼지_않는다():
+    violations = [v for path in _python_files() if "tests" in path.parts
+                  for v in knowledge_copies(path)]
+    assert not violations, (
+        "테스트가 리포의 knowledge/를 베낀다 — 운영이 채우는 칸이다. "
+        "필요한 트리는 테스트가 직접 세워라:\n  " + "\n  ".join(violations))
+
+
+def test_검사기가_knowledge_베끼기를_실제로_잡는다(tmp_path):
+    bad = tmp_path / "bad.py"
+    bad.write_text('import shutil\nshutil.copytree(root / "knowledge", dst)\n',
+                   encoding="utf-8")
+    assert knowledge_copies(bad)[0].endswith("bad.py:2 — copytree(… knowledge …)")
+
+
+def test_검사기가_config_베끼기는_오탐하지_않는다(tmp_path):
+    """`config/`는 베껴도 된다 — 내용을 안 읽으면 그만이다. 실제로 CLI 테스트 넷이
+    그렇게 쓰고 있고, 그것까지 막으면 검사가 과하다."""
+    good = tmp_path / "good.py"
+    good.write_text('import shutil\nshutil.copytree(root / "config", dst)\n',
+                    encoding="utf-8")
+    assert knowledge_copies(good) == []
