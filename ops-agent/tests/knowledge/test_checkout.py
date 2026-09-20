@@ -129,9 +129,15 @@ def test_붙을_수_없으면_값으로_실패한다(tmp_path):
     """
     repo = RepoConfig(name="dt-core", url="https://127.0.0.1:1/없는/레포",
                       path=str(tmp_path / "없음"))
+    from tests.support import running_source
+
     outcome, why = sync(repo, status_of(repo))
     assert outcome == "failed", f"outcome={outcome!r} why={why!r}"
-    assert why.strip(), "실패했는데 이유가 비어 있다 — 왜인지 아무도 모르는 상태다"
+    assert why.strip(), (
+        "실패했는데 이유가 비어 있다 — 왜인지 아무도 모르는 상태다.\n"
+        "지금 코드는 출력이 없어도 종료 코드를 적게 돼 있다. 비어 있다면 "
+        "**src/가 tests/보다 낡은 것**이다. 지금 돌고 있는 sync:\n"
+        + running_source(sync))
 
 
 def test_실패_메시지에_토큰이_안_샌다(tmp_path):

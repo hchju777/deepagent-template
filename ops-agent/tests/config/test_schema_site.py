@@ -111,8 +111,6 @@ def test_url에_토큰이_섞이면_거부한다():
     개발 기계에서는 재현이 안 됐다. "안 걸렸다"만으로는 트리가 낡은 것인지 환경이
     다른 것인지 구분할 수 없어서, 한 번 더 물어봐야 했다 — 그 왕복이 낭비다.
     """
-    import inspect
-
     import pytest
 
     from src.config.schema_site import RepoConfig
@@ -124,16 +122,13 @@ def test_url에_토큰이_섞이면_거부한다():
         assert "인증 정보가 섞여" in str(exc), str(exc)
         return
 
-    # **validator 본문을 그대로 보여 준다.** 처음엔 "메시지 문자열이 소스에 있나"로
-    # 봤는데, 검사를 꺼도 그 문자열은 raise 본문에 남아 있어서 **항상 "있다"가 나왔다.**
-    # 검사기가 검사를 못 하는 것이 여기서 고치려던 바로 그 문제다.
-    lines = inspect.getsource(RepoConfig).splitlines()
-    start = next((i for i, l in enumerate(lines) if "def _clean" in l), None)
-    body = "\n".join(lines[start:start + 12]) if start is not None else "(_clean이 없다)"
-    pytest.fail(
-        f"토큰이 섞인 url이 통과했다 — {passed.url!r}\n"
-        f"  파일: {inspect.getfile(RepoConfig)}\n"
-        f"  지금 돌고 있는 validator:\n{body}")
+    # **소스를 그대로 보여 준다.** 처음엔 "오류 메시지 문자열이 소스에 있나"로 봤는데,
+    # 검사를 꺼도 그 문자열은 raise 본문에 남아 있어서 **항상 "있다"가 나왔다.**
+    # 그래서 marker는 검사 자체를 가리키는 표현이어야 한다.
+    from tests.support import running_source
+
+    pytest.fail(f"토큰이 섞인 url이 통과했다 — {passed.url!r}\n"
+                + running_source(RepoConfig, marker='v.split("://")'))
 
 
 def test_ssh_형식은_받는다():

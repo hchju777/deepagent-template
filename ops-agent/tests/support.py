@@ -164,3 +164,31 @@ def facts_from(rows, *, window, source, thresholds=None, sites=(), gbms=None):
     return Facts(window=window, source=source,
                  thresholds=thresholds or Thresholds(),
                  rows=tuple(rows), sites=tuple(sites), gbms=tuple(gbms))
+
+
+def running_source(obj, *, marker: str = "") -> str:
+    """**그 트리에서 실제로 돌고 있는** 코드를 보여 준다.
+
+    재현이 안 되는 실패에서 "안 걸렸다"만으로는 **트리가 낡은 것인지 환경이 다른
+    것인지** 구분할 수 없다. 그러면 사람이 출력을 손으로 옮겨 오고 한 번 더 묻는
+    왕복이 생기는데, 이 리포에서 그게 반복됐다.
+
+    `marker`를 주면 그 문자열이 소스에 있는지도 함께 적는다. **marker는 검사 자체를
+    가리키는 표현이어야 한다** — 두 번 틀렸다:
+
+    - `raise` 본문의 메시지 문자열을 썼더니, 검사를 꺼도 문자열은 남아서 항상 "있다"
+    - 함수 안 다른 분기에도 있는 말을 썼더니, 고쳐야 할 분기가 낡아도 "있다"
+
+    확신이 없으면 marker를 주지 마라. **소스 전문이 이미 답을 담고 있다.**
+    """
+    import inspect
+
+    try:
+        source = inspect.getsource(obj)
+        where = inspect.getfile(obj)
+    except (OSError, TypeError) as exc:
+        return f"(소스를 읽을 수 없다 — {exc})"
+    head = f"  파일: {where}\n"
+    if marker:
+        head += f"  '{marker}' 있는가: {marker in source}\n"
+    return head + "\n".join(f"    {line}" for line in source.splitlines())
