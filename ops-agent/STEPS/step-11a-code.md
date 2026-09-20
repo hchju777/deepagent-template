@@ -167,6 +167,52 @@ python -m src code read --service processor --path config/common.json --gbm mx
 `code.show p@main:vendor/libs/x.json (submodule vendor/libs@444be98067a7)`이다.
 나중에 "어느 코드를 본 거냐"를 되짚을 수 있어야 판정이 검증 가능하다.
 
+## 사내(Windows)에서만 터진 것 둘 — 둘 다 재현해서 잡았다
+
+`cwd=C:\...`가 단서였다. Linux에서는 절대 안 나는 실패가 둘 있었다.
+
+### ① `text=True`는 로캘로 디코딩한다 — git은 UTF-8로 뱉는다
+
+한국어 Windows의 ANSI 코드 페이지는 cp949다. `tmp_path`에 한글이 들어간
+디렉터리에서 `git show main:.gitmodules`를 부르면:
+
+```
+UnicodeDecodeError: 'cp949' codec can't decode byte 0xec ...
+```
+
+그리고 `_git`의 `except Exception`이 그걸 **`code=1`로 흡수한다.** 결과:
+
+| 부른 것 | 나온 답 | 진짜 |
+|---|---|---|
+| `submodules_at` | `[]` | "이 커밋엔 submodule이 없다" ← 거짓 |
+| `status_of` | origin을 못 읽음 | "origin이 config와 다르다" ← 거짓 |
+
+**제품 코드 버그다.** 대상 레포에 한글 경로·브랜치·커밋 메시지가 하나라도 있으면
+사내에서 `code status`가 조용히 틀린 답을 낸다. `encoding="utf-8"`로 고정했다.
+
+`tests/test_portability.py`가 이미 **똑같은 함정을 `open()`에 대해** 막고 있었는데
+(`Windows의 기본 인코딩은 로케일이다`), `subprocess`에는 그 규율이 없었다. AST
+검사기를 하나 더 넣어서 `text=True`인데 `encoding`이 없는 호출을 전부 잡는다 —
+새로 생기는 호출부까지 같이 지킨다.
+
+### ② `.gitmodules`의 `\`는 이스케이프 문자다
+
+픽스처가 submodule url로 `str(Path)`를 적었는데, Windows에서는
+`C:\Users\t\libs`다. git config는 `\`를 이스케이프로 읽어서 `\t`가 **탭**이 되고:
+
+```
+fatal: bad config line 3 in file .gitmodules
+```
+
+증상은 `git submodule init` 실패라 원인이 그 한 줄에 있다는 게 안 보인다.
+구분자를 `/`로 바꾼다(git은 Windows에서도 `/`를 받는다).
+
+### 남는 규율
+
+> **Linux에서 초록인 것은 Windows에 대해 아무것도 증명하지 않는다.**
+> 자식 프로세스의 출력도 파일과 똑같이 인코딩을 명시하고, git config에 들어가는
+> 값은 경로라도 그냥 적지 마라.
+
 ## 내가 여기서 실제로 틀린 것 — 검증 환경을 내가 고쳐 놓았다
 
 submodule 작업을 시작하면서 **첫 명령으로 `git config --global
@@ -324,7 +370,7 @@ python -m src code sync --gbm mx && python -m src ...
 
 ## 검증
 
-`pytest tests/` — 1075개. 11a 1차가 더한 것은 93개.
+`pytest tests/` — 1079개. 11a 1차가 더한 것은 97개.
 
 **전역 `protocol.file.allow`를 걷어낸 뒤(= git 기본값)** 다시 재서 나온 숫자다.
 
@@ -335,7 +381,7 @@ python -m src code sync --gbm mx && python -m src ...
 그렇게 답하도록 우리가 정해 놓고 "된다"고 확인하는 꼴이 된다 — `ScriptedAdapter`로
 이미 당한 거짓 초록이다. git이 없는 환경에서는 skip하고 **사유가 찍힌다.**
 
-방어를 하나씩 지워 **46가지 전부 RED를 봤다**:
+방어를 하나씩 지워 **49가지 전부 RED를 봤다**:
 
 | 지운 것 | |
 |---|---|
@@ -365,6 +411,7 @@ python -m src code sync --gbm mx && python -m src ...
 | 토큰 헤더를 호스트에 안 묶음 / ssh url에도 붙임 | 1 / 1 failed |
 | `show`·`grep`이 stale에 git 원문을 흘림 | 1 / 1 failed |
 | `status`가 submodule 탓을 `config_paths`에 돌림 | 1 failed |
+| `_git`·`sync`가 로캘로 디코딩 / 윈도우 경로를 그대로 config에 | 2 / 1 failed |
 
 ### 거짓 초록 셋이 나왔다
 

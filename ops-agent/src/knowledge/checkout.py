@@ -17,6 +17,16 @@
 로직 명세를 만들고 그럴듯한 재계산을 한다 — **전부 틀린 채로.** "코드를 못 읽었다"
 보다 훨씬 나쁘다. 실패가 조용하고 판정은 확신에 차 있다.
 
+## git 출력은 **로캘이 아니라 UTF-8**로 읽는다
+
+`subprocess.run(..., text=True)`는 로캘 인코딩으로 디코딩한다. 한국어 Windows의
+ANSI 코드 페이지는 cp949이고, git은 **UTF-8로 뱉는다.** 그래서 경로·브랜치명·
+커밋 메시지에 한글이 하나라도 있으면 `UnicodeDecodeError`가 난다(재현함).
+
+그게 여기서 특히 나쁜 이유: 아래 `_git`의 `except Exception`이 그걸 먹고
+`code=1`을 돌려준다. 그러면 `submodules_at`는 **"이 커밋엔 submodule이 없다"**,
+`status_of`는 **"origin을 읽을 수 없다"**가 된다 — 조용하고, 그럴듯하고, 틀렸다.
+
 ## 토큰은 URL에 안 들어간다 — 그리고 호스트에 묶인다
 
 `https://<토큰>@호스트/…`로 클론하면 git이 **`.git/config`에 평문으로 저장한다.**
@@ -75,7 +85,8 @@ def _text(value) -> str:
 def _git(root: Path, *args, timeout: int = 10) -> tuple[int, str, str]:
     try:
         done = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
         return done.returncode, _text(done.stdout), _text(done.stderr)
     except FileNotFoundError:
         return 127, "", "git 실행 파일이 없다"
@@ -352,7 +363,8 @@ def sync(repo: RepoConfig, state: RepoStatus) -> tuple[Outcome, str]:
                 # 남고, `git show`·`git grep`이 조용히 아무것도 못 찾는다.
                 ["git", *header, "clone", "--recurse-submodules",
                  repo.url, repo.path],
-                capture_output=True, text=True, timeout=_TIMEOUT_S)
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=_TIMEOUT_S)
         except Exception as exc:                                    # noqa: BLE001
             return "failed", f"{type(exc).__name__}: {exc}"
         if done.returncode != 0:

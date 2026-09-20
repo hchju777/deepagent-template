@@ -82,8 +82,7 @@ def test_호스트가_다르면_같게_안_본다(tmp_path):
 def test_커밋이_로컬에_있는지_본다(tmp_path):
     """배포 커밋 선언이 로컬보다 앞서면 `git show`가 실패한다 — 미리 안다(⑤-4)."""
     root = _make_repo(tmp_path / "dt-core")
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
-                          capture_output=True, text=True).stdout.strip()
+    head = git("rev-parse", "HEAD", cwd=root).stdout.strip()
     repo = repo_at(root)
     assert has_commit(repo, head)
     assert not has_commit(repo, "0" * 40)
@@ -442,3 +441,24 @@ def test_submodule_픽스처가_file_프로토콜_허락을_안_탄다(tmp_path,
     repo = repo_at(flat)
     assert submodules_at(repo, "main") == ["vendor/libs"]
     assert unpopulated(repo, submodules_at(repo, "main")) == ["vendor/libs"]
+
+
+def test_윈도우_경로가_gitmodules에서_깨지지_않는다(tmp_path):
+    """**`\\`는 git config의 이스케이프 문자다.**
+
+    `url = C:\\Users\\t\\libs`를 그대로 적으면 `\\t`가 탭이 되고 git이
+    `fatal: bad config line`으로 죽는다(재현함). 증상은 `git submodule init` 실패라
+    원인이 `.gitmodules` 한 줄에 있다는 게 안 보인다 — 사내에서 정확히 그렇게 터졌다.
+
+    이 리포는 Linux에서 개발하고 Windows에서 돌리므로, **여기서만 잡을 수 있다.**
+    """
+    from tests.support import git_config_value
+
+    value = git_config_value(r"C:\Users\t\libs")
+    modules = tmp_path / ".gitmodules"
+    modules.write_text(f'[submodule "vendor/libs"]\n\tpath = vendor/libs\n'
+                       f'\turl = {value}\n', encoding="utf-8")
+    got = git("config", "-f", str(modules), "--get", "submodule.vendor/libs.url",
+              cwd=tmp_path)
+    # git이 읽을 수 있어야 하고, **경로가 원형 그대로** 돌아와야 한다.
+    assert got.stdout.strip() == "C:/Users/t/libs"

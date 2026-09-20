@@ -8,6 +8,12 @@ Windows에서 파이썬의 `open()` 기본 인코딩은 **로케일**이다 — 
 Windows에서 하는 이 프로젝트에서, 그 실패는 "Linux CI는 전부 초록인데 사내에
 배포하면 UnicodeDecodeError"라는 제일 나쁜 모양으로 나타난다.
 
+**같은 함정이 `subprocess`에도 있다.** `text=True`는 자식 프로세스의 출력을
+로케일 인코딩으로 디코딩하는데, git은 **UTF-8로 뱉는다.** 경로에 한글이 하나만
+있어도 `UnicodeDecodeError`가 나고, 우리 `_git`의 `except Exception`이 그걸 먹어
+**"submodule이 없다" · "origin을 읽을 수 없다"** 같은 조용한 오답으로 바뀐다.
+실제로 사내에서 그렇게 터졌고, Linux에서는 전부 초록이었다.
+
 "인코딩을 명시하자"는 산문 규율은 읽지 않으면 무력하다. 그래서 테스트가 지킨다.
 
 ## 왜 문자열 검색이 아니라 AST인가
@@ -22,6 +28,52 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # 인코딩을 명시해야 하는 호출들. read_bytes/write_bytes는 텍스트가 아니므로 제외.
 _TEXT_IO = {"open", "read_text", "write_text"}
+
+
+def subprocess_violations(path: Path) -> list[str]:
+    """`text=True`인데 `encoding`을 안 준 `subprocess` 호출.
+
+    로케일로 디코딩하면 한국어 Windows(cp949)에서 git의 UTF-8 출력이 못 읽힌다.
+    `open()`과 **정확히 같은 함정**인데, 이 파일이 오랫동안 `open()`만 보고 있었다.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _called_name(node)
+        if name not in {"run", "check_output", "Popen"}:
+            continue
+        keys = {kw.arg for kw in node.keywords}
+        if not {"text", "universal_newlines"} & keys:
+            continue
+        if "encoding" in keys or "errors" in keys:
+            continue
+        bad.append(f"{_label(path)}:{node.lineno}")
+    return bad
+
+
+def test_자식_프로세스_출력도_인코딩을_명시한다():
+    violations = [v for path in _python_files() for v in subprocess_violations(path)]
+    assert not violations, (
+        "text=True인데 encoding이 없다 — 한국어 Windows는 cp949로 디코딩하고 git은 "
+        "UTF-8로 뱉는다. 그 예외가 '실패'로 흡수되면 조용한 오답이 된다:\n  "
+        + "\n  ".join(violations))
+
+
+def test_검사기가_subprocess_누락을_실제로_잡는다(tmp_path):
+    bad = tmp_path / "bad.py"
+    bad.write_text("import subprocess\nsubprocess.run(['git'], text=True)\n",
+                   encoding="utf-8")
+    assert subprocess_violations(bad) == [f"{_label(bad)}:2"]
+
+
+def test_검사기가_정상_subprocess를_오탐하지_않는다(tmp_path):
+    good = tmp_path / "good.py"
+    good.write_text("import subprocess\n"
+                    "subprocess.run(['git'], text=True, encoding='utf-8')\n"
+                    "subprocess.run(['git'])\n", encoding="utf-8")
+    assert subprocess_violations(good) == []
 
 
 def _python_files():

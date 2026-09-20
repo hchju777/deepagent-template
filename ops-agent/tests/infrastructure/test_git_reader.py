@@ -47,8 +47,7 @@ def repo(tmp_path):
     (root / "app.py").write_text("def handle():\n    pass\n", encoding="utf-8")
     _run("git", "add", "-A", cwd=root)
     _run("git", "commit", "-qm", "first", cwd=root)
-    old = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
-                         capture_output=True, text=True).stdout.strip()
+    old = git("rev-parse", "HEAD", cwd=root).stdout.strip()
 
     (root / "config" / "common.json").write_text(
         '{"mongo": {"source": "NEW_NAME"}}\n', encoding="utf-8")

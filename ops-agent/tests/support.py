@@ -215,7 +215,10 @@ def git(*args, cwd, check: bool = True) -> subprocess.CompletedProcess:
     `check=True`의 `CalledProcessError`는 종료코드만 말하고 stderr를 삼킨다.
     남의 기계에서 실패했을 때 "왜"가 안 보이면 사람이 그걸 타이핑해 옮겨야 한다.
     """
-    done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
+    # 로캘이 아니라 **UTF-8**로 읽는다. 한국어 Windows는 cp949로 디코딩하는데
+    # git은 UTF-8로 뱉어서, 경로에 한글이 있으면 여기가 먼저 죽는다(재현함).
+    done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
     if check and done.returncode != 0:
         raise AssertionError(
             f"git {' '.join(args)} (cwd={cwd}) 가 {done.returncode}로 실패했다\n"
@@ -227,7 +230,8 @@ def git(*args, cwd, check: bool = True) -> subprocess.CompletedProcess:
 
 @functools.lru_cache(maxsize=1)
 def _git_version() -> str:
-    done = subprocess.run(["git", "--version"], capture_output=True, text=True)
+    done = subprocess.run(["git", "--version"], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     return (done.stdout or "").strip() or "git --version이 아무 말도 안 했다"
 
 
@@ -246,6 +250,17 @@ def make_git_repo(root: Path, *, origin: str = "") -> Path:
     return root
 
 
+def git_config_value(path) -> str:
+    """git config 값에 넣을 수 있는 모양으로. **`\\`는 이스케이프 문자다.**
+
+    Windows 경로를 그대로 적으면 `C:\\Users\\t\\libs`의 `\\t`가 탭이 되고
+    git이 `fatal: bad config line`으로 죽는다(재현함). 증상은 `git submodule init`
+    실패다 — 원인이 `.gitmodules` 한 줄에 있다는 게 안 보인다.
+    git은 Windows에서도 `/`를 받으므로 구분자를 바꾼다.
+    """
+    return str(path).replace("\\", "/")
+
+
 def declare_submodule_at(parent: Path, sub: Path, at: str, *, path: str,
                          message: str = "add submodule") -> str:
     """`.gitmodules` + gitlink를 **손으로** 만들어 커밋한다.
@@ -255,7 +270,8 @@ def declare_submodule_at(parent: Path, sub: Path, at: str, *, path: str,
     전송이 일어나지 않으므로 file 프로토콜 허락이 필요 없다.
     """
     (parent / ".gitmodules").write_text(
-        f'[submodule "{path}"]\n\tpath = {path}\n\turl = {sub}\n', encoding="utf-8")
+        f'[submodule "{path}"]\n\tpath = {path}\n\turl = {git_config_value(sub)}\n',
+        encoding="utf-8")
     git("add", ".gitmodules", cwd=parent)
     git("update-index", "--add", "--cacheinfo", f"160000,{at},{path}", cwd=parent)
     git("commit", "-qm", message, cwd=parent)

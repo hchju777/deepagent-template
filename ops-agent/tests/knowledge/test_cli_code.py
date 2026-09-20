@@ -204,8 +204,7 @@ def _repo_with_two_commits(root, *, origin):
     (root / "config" / "common.json").write_text('{"name": "OLD"}\n', encoding="utf-8")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "first")
-    old = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
-                         capture_output=True, text=True).stdout.strip()
+    old = git("rev-parse", "HEAD", cwd=root).stdout.strip()
     (root / "config" / "common.json").write_text('{"name": "NEW"}\n', encoding="utf-8")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "second")
