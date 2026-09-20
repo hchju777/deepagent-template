@@ -1,7 +1,9 @@
 """노드 하나하나가 하는 일과, **코드가 쥐는 통제 경계**.
 
-10a에서 LLM이 정하는 것은 하나도 없다. `frame`·`integrate`는 주입받는 함수이고
-(10b에서 LLM 노드로 바뀐다), 여기 있는 것은 전부 코드가 고정한 규율이다:
+`frame`·`integrate`는 **주입받는 함수**다 — 10b부터 그 자리에 리드 LLM이 들어온다
+(`lead.py`). 그래서 이 파일은 LLM을 모르고, 여기 있는 것은 전부 코드가 고정한 규율이다.
+**LLM이 오기 전에 경계가 먼저 있었다**는 것이 중요하다: 나중에 얹은 소독은 "그때는
+필요 없던 것"이 아니라 "그동안 뚫려 있던 것"이다.
 
 | 무엇 | 어디 |
 |---|---|
@@ -10,6 +12,7 @@
 | 실행 가능 판정 | `runnable_tasks` — 입력 증거가 **전부** 실재해야 |
 | 태스크 개수 상한 | `frame`·`integrate` |
 | LLM 출력 소독 | `_sanitize_task` — 수명주기 필드를 코드가 덮어쓴다 |
+| 증거 인용 검사 | `_accept_hypotheses` — 실재하지 않는 id를 걷어낸다 |
 | 예외 흡수 | `execute` 최외곽 |
 
 ## 노드는 `(state) -> dict`다
@@ -28,10 +31,10 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from src.application.state import CaseState, merge_by_id
-from src.domain.case import Case, PlanTask
+from src.domain.case import Case, Hypothesis, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
-# 10b에서 LLM 노드가 이 자리에 들어온다. 지금은 테스트가 대본을 넣는다.
+# 이 자리에 리드 LLM(`lead.make_lead`)이나 테스트의 대본이 들어온다.
 NodeFn = Callable[[CaseState], Awaitable[dict]]
 
 
@@ -48,13 +51,41 @@ class EngineDeps:
 def _sanitize_task(task: PlanTask) -> PlanTask:
     """만들어진 태스크의 수명주기 필드를 **코드가 강제로 초기화한다**(규율 4).
 
-    10a의 frame은 주입된 함수라 악의가 없지만, 10b에서 이 자리에 LLM이 들어온다.
-    `{"status": "ok", "result_evidence_ids": ["ev-9"]}`를 실어 보내면 그 태스크는
-    실행되지 않은 채 끝난 것이 되고 select 게이트를 통째로 우회한다. 그때 가서
-    소독을 얹으면 늦다 — **경계는 LLM이 오기 전에 있어야 한다.**
+    리드 LLM이 `{"status": "ok", "result_evidence_ids": ["ev-9"]}`를 실어 보내면
+    그 태스크는 실행되지 않은 채 끝난 것이 되고 select 게이트를 통째로 우회한다.
+    10a에서 LLM이 오기 **전에** 이 경계를 먼저 세운 이유다.
     """
     return task.model_copy(update={"status": "pending", "result_summary": None,
                                    "result_evidence_ids": [], "error": None})
+
+
+def _accept_hypotheses(patch: dict, *, have: set[str]) -> tuple[list[Hypothesis], list[str]]:
+    """리드가 만든 가설에서 **실재하지 않는 증거 인용을 걷어낸다**(규율 3).
+
+    리드가 적은 증거 id는 환각일 수 있다. 그냥 들이면 다음 라운드의 브리핑이
+    `<가설>` 블록에 그 id를 실어 보내고, 리드는 **자기가 지어낸 id를 근거로 다시
+    추론한다.** 라운드마다 복리로 불어나는 종류의 오류라 루프가 있는 지금 막아야 한다.
+
+    인용이 하나도 안 남으면 판정을 `open`으로 되돌린다 — 근거가 전부 사라진
+    "supported"는 근거 없는 단정이고, 그게 12a의 최종 판정 재료가 된다.
+
+    걷어낸 사실은 `llm_errors`에 남긴다. 조용히 고치면 프롬프트가 안 먹히고 있다는
+    것을 아무도 모른다.
+    """
+    kept, complaints = [], []
+    for h in patch.get("hypotheses", []):
+        ghosts = [e for e in h.supporting_ids + h.refuting_ids if e not in have]
+        if not ghosts:
+            kept.append(h)
+            continue
+        supporting = [e for e in h.supporting_ids if e in have]
+        refuting = [e for e in h.refuting_ids if e in have]
+        demoted = h.status if (supporting or refuting) else "open"
+        complaints.append(f"{h.id}: 없는 증거를 인용했다 — {', '.join(ghosts)}"
+                          + ("" if demoted == h.status else f" (판정을 {h.status}→open으로 되돌렸다)"))
+        kept.append(h.model_copy(update={"supporting_ids": supporting,
+                                         "refuting_ids": refuting, "status": demoted}))
+    return kept, complaints
 
 
 def runnable_tasks(state: CaseState) -> list[PlanTask]:
@@ -85,8 +116,13 @@ def _accept_tasks(patch: dict, *, room: int) -> list[PlanTask]:
 def make_nodes(deps: EngineDeps) -> dict:
     async def frame(state: CaseState) -> dict:
         patch = await deps.frame(state)
+        # frame 시점에는 증거가 하나도 없다 — 그래서 여기서 인용을 단 가설은
+        # 전부 `open`으로 돌아간다. 그게 맞다: 아직 아무것도 안 봤다.
+        hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
         return {**patch,
+                "hypotheses": hypotheses,
                 "plan_tasks": _accept_tasks(patch, room=deps.max_tasks),
+                "llm_errors": list(patch.get("llm_errors", [])) + complaints,
                 "round": 1}
 
     async def select(state: CaseState) -> dict:
@@ -119,7 +155,15 @@ def make_nodes(deps: EngineDeps) -> dict:
         patch = await deps.integrate(state)
         room = deps.max_tasks - len(state.plan_tasks)
         fresh = _accept_tasks(patch, room=room)
-        patch = {**patch, "plan_tasks": fresh}
+        hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
+        patch = {**patch, "plan_tasks": fresh, "hypotheses": hypotheses,
+                 "llm_errors": list(patch.get("llm_errors", [])) + complaints}
+
+        # 리드가 이미 끝낸 이유를 댔으면(LLM 실패 등) 그것이 이긴다. 아래 규칙들이
+        # 덮어쓰면 "LLM이 죽어서"가 "상한에 걸려서"로 둔갑한다 — 12a가 "미확정"과
+        # "조사 실패"를 가르는 근거가 바로 이 값이다.
+        if patch.get("stopped_by"):
+            return {**patch, "decision": "conclude"}
 
         # 상한은 **결정을 본 뒤에** 본다. 먼저 보면 "계속하자"가 상한을 넘긴다.
         if state.round >= deps.max_rounds:
@@ -137,6 +181,16 @@ def make_nodes(deps: EngineDeps) -> dict:
         return {**patch, "decision": "continue", "round": state.round + 1}
 
     return {"frame": frame, "select": select, "execute": execute, "integrate": integrate}
+
+
+def route_after_frame(state: CaseState) -> str:
+    """frame이 끝낸 이유를 댔으면(리드 LLM이 죽었다) 라운드를 시작하지 않는다.
+
+    흘려보내면 select가 0건 → integrate가 LLM을 **또** 부르고, 또 죽고, 끝난 이유가
+    `no_runnable`로 덮여 "조사할 게 없었다"가 된다. LLM이 안 붙은 것과 볼 게 없는
+    것은 완전히 다른 사실이고, 12a가 그 둘을 갈라 적는다.
+    """
+    return "__end__" if state.stopped_by else "select"
 
 
 def route_after_select(state: CaseState):

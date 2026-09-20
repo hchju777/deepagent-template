@@ -772,6 +772,128 @@ class _DryRunRepo:
         return f"(새 케이스 {self._fake})"
 
 
+def _load_lead_prompt(config_root: Path, relative: str, *, slots: frozenset) -> str:
+    """리드 프롬프트 하나. **자리가 안 맞으면 기동을 막는다.**
+
+    두 방향 다 조용히 틀린다:
+
+    - `{actions}`가 **없으면** LLM은 무엇을 부를 수 있는지 모르고 있지도 않은 것을
+      계속 지어낸다. 증상은 "조사가 항상 빈손"이고 원인은 안 보인다.
+    - 오타 난 `{max_round}`처럼 **우리가 안 채우는 자리**가 있으면 그 `{...}`가
+      치환되지 않은 채 LLM에게 나간다. 9e에서 `{max_chars}`가 실제로 그랬고,
+      리포트는 정상으로 보여서 아무도 못 봤다.
+
+    기동 검증 철학(`boot.py`)대로 **발견한 것을 전부 모아서** 한 번에 알린다.
+    """
+    from src.application.lead import slots_in
+
+    path = config_root / relative
+    if not path.exists():
+        raise SystemExit(f"프롬프트 파일이 없다 — {path}")
+    text = path.read_text(encoding="utf-8")
+
+    problems = [f"{{{name}}} 자리가 없다 — 리드가 그 재료를 못 받는다"
+                for name in ("case", "actions") if f"{{{name}}}" not in text]
+    problems += [f"{{{name}}}는 우리가 채우지 않는 자리다 — 그대로 LLM에게 나간다. "
+                 f"쓸 수 있는 것: {', '.join(sorted(slots))}"
+                 for name in sorted(slots_in(text) - slots)]
+    if problems:
+        raise SystemExit(f"{relative}:\n  " + "\n  ".join(problems))
+    return text
+
+
+def cmd_case_investigate(args, env) -> int:
+    """케이스 하나를 **리드 LLM으로** 조사한다.
+
+    판정은 아직 없다(12a) — 여기까지는 "무엇을 볼지 LLM이 정하고, 보고, 다시
+    정한다"이다.
+    """
+    from src.application import briefing
+    from src.application.graph import build_engine
+    from src.application.lead import make_lead
+    from src.application.nodes import EngineDeps
+    from src.application.runner_probe import ProbeRunner
+    from src.application.state import CaseState
+    from src.domain.case import Case
+    from src.infrastructure.llm_factory import build_llm
+
+    app = load_app_config(args.config_root, env=env)
+    if app.llm is None:
+        raise SystemExit("app.json에 llm 설정이 없다 — STEPS/step-07-llm.md 참고")
+
+    found = [c for c in _case_repo(args, env).all() if c.id == args.case_id]
+    if not found:
+        raise SystemExit(f"없는 케이스 — {args.case_id}")
+    record = found[0]
+
+    gbm, fct = record.site.split("/", 1)
+    site, _ = load_site_config(args.config_root, gbm, fct, env=env)
+    clock = _clock(args, env)
+    seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8")) \
+        if args.stub_seeds else None
+    prompts = {"frame": _load_lead_prompt(args.config_root, app.investigation.frame_prompt,
+                                         slots=briefing.FRAME_SLOTS),
+               "integrate": _load_lead_prompt(args.config_root,
+                                              app.investigation.integrate_prompt,
+                                              slots=briefing.INTEGRATE_SLOTS)}
+
+    built = {}
+
+    async def go() -> dict:
+        llm = build_llm(app.llm, clock=clock)
+        built["llm"] = llm.describe()     # config가 뭐라고 적혔는지가 아니라 실제로 붙은 것
+        adapters = build_adapters(site, clock=clock, seeds=seeds)
+        try:
+            frame, integrate = make_lead(llm, site_config=site, prompts=prompts,
+                                         max_rounds=app.investigation.max_rounds)
+            deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock),
+                              frame=frame, integrate=integrate,
+                              max_rounds=app.investigation.max_rounds,
+                              parallel_width=app.investigation.parallel_width,
+                              max_tasks=app.investigation.max_tasks)
+            state = CaseState(case=Case(
+                id=record.id, gbm=gbm, fct=fct, origin="patrol",
+                symptom=record.symptom, t0=record.opened_at))
+            return await build_engine(deps).ainvoke(state)
+        finally:
+            await adapters.close()
+
+    final = asyncio.run(go())
+    print(f"  {record.site}  {record.id} — {record.symptom}")
+    print(f"  {built['llm']}")
+    print(f"  라운드 {final['round']} — 끝난 이유: {final['stopped_by']}\n")
+
+    if final["hypotheses"]:
+        print("  가설")
+        for h in final["hypotheses"]:
+            cited = " ".join(h.supporting_ids + h.refuting_ids)
+            print(f"    {h.id} [{h.status}] {h.statement}"
+                  + (f"  ({cited})" if cited else ""))
+    print("\n  태스크" + ("" if final["plan_tasks"] else " — 없다(계획이 안 세워졌다)"))
+    for task in final["plan_tasks"]:
+        mark = {"ok": "✅", "error": "❌", "pending": "⬜", "running": "…"}.get(task.status, "?")
+        detail = task.error or task.result_summary or "(실행 안 됨)"
+        print(f"    {mark} {task.id} {task.goal} — {detail}")
+    if final["evidence"]:
+        print(f"\n  증거 {len(final['evidence'])}건")
+        for ref in final["evidence"]:
+            cut = "" if ref.complete else "  ⚠ 잘림"
+            print(f"    {ref.id}  {ref.source}{cut}")
+    # 두 가지는 **등급이 다르다.** 조사가 아예 못 돈 것(`llm_error`)과, 돌긴 했는데
+    # 리드가 없는 증거를 인용한 것은 같은 사실이 아니다. 둘 다 시끄럽게 알리되
+    # 종료 코드는 전자에만 준다 — 후자까지 1로 주면 "빨간불이 원래 그렇다"가 되고,
+    # 그러면 진짜 빨간불도 안 보이게 된다.
+    broken = final["stopped_by"] == "llm_error"
+    if final["llm_errors"]:
+        print(f"\n  ⚠ LLM 오류 {len(final['llm_errors'])}건 — "
+              + ("**이 조사는 안 돌았다**" if broken else "**리드가 계약을 어겼다**"),
+              file=sys.stderr)
+        for problem in final["llm_errors"]:
+            print(f"    {problem}", file=sys.stderr)
+    # 조용히 성공한 척하면 아무도 안 본다.
+    return 1 if broken else 0
+
+
 def cmd_case_list(args, env) -> int:
     repo = _case_repo(args, env)
     now = _clock(args, env)()
@@ -1280,6 +1402,11 @@ def build_parser() -> argparse.ArgumentParser:
     list_cases = case_sub.add_parser("list", help="케이스 목록")
     list_cases.add_argument("--all", action="store_true", help="닫힌 것까지")
     list_cases.set_defaults(run=cmd_case_list)
+
+    investigate = case_sub.add_parser("investigate", help="리드 LLM으로 조사한다")
+    investigate.add_argument("case_id")
+    investigate.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
+    investigate.set_defaults(run=cmd_case_investigate)
 
     show_case = case_sub.add_parser("show", help="케이스 한 건")
     show_case.add_argument("case_id")

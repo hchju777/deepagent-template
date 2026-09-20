@@ -29,6 +29,11 @@ class InvestigationConfig(StrictModel):
     # 케이스 하나가 가질 수 있는 태스크 총수. 이게 없으면 라운드마다 태스크를
     # 쌓기만 하는 계획이 상한 없이 자란다.
     max_tasks: int = Field(default=24, ge=1)
+    # 리드 프롬프트. config 안의 상대 경로다 — 운영이 직접 고치는 파일이라
+    # 코드에 박아 두면 고치려고 배포를 해야 한다.
+    frame_prompt: str = Field(default="prompts/investigate-frame.md", min_length=1)
+    integrate_prompt: str = Field(default="prompts/investigate-integrate.md",
+                                  min_length=1)
 
 
 class AppConfig(StrictModel):

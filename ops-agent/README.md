@@ -104,8 +104,9 @@ python -m src peek rest --entry summary_badge --params '{"line_code":"P222"}'
 ```
 
 `--collections`·`--topics`는 **이름을 모르고도 찾기 위한 것**이다. 이게 없으면
-`--collection`을 부르려면 이름을 미리 알아야 하고, 조사(10b~)는 우리가 적어 준 곳만
-본다 — "우리가 아는 만큼만 조사하는" 에이전트가 된다.
+`--collection`을 부르려면 이름을 미리 알아야 하고, 그러면 조사는 우리가 적어 준 곳만
+본다 — "우리가 아는 만큼만 조사하는" 에이전트가 된다. 리드 LLM도 같은 읽기로
+이름을 **스스로 찾는다**(`mongo.list_collections`·`kafka.list_topics`·`redis.scan`).
 
 사이트가 여러 개면 `--gbm mx --fct gumi`를 붙인다 — **하위 명령 앞뒤 아무 데나** 된다.
 
@@ -193,7 +194,7 @@ python -m src case list
 정상으로 관측돼야** 다시 열린다 — 안 그러면 안 고쳐진 문제로 3시간마다 케이스가 쌓인다.
 자세한 것은 [6a단계 문서](STEPS/step-06a-gate.md).
 
-케이스가 열릴 뿐 **아직 조사되지 않는다**(10b~12).
+열린 케이스는 `case investigate`로 조사한다(아래). 판정과 보고서는 아직 없다(12).
 
 ## 조사 엔진
 
@@ -219,6 +220,36 @@ python -m src case dryrun --plan examples/case-dryrun.json --stub-seeds examples
 쓰는 파일이라 **모르는 키는 거부한다**(`"round"`처럼 s가 빠지면 조용히 무시되는 대신
 시끄럽게 죽는다). 설명을 적고 싶으면 키 이름을 `_`로 시작하라 — 주석으로 걷어 낸다.
 왜 울타리를 코드가 쥐는지는 [10a단계 문서](STEPS/step-10a-graph.md).
+
+### 리드 LLM으로 실제 조사
+
+```bash
+python -m src case investigate c-1                    # 대상에 붙는다
+python -m src case investigate c-1 --stub-seeds examples/stub-seeds.json
+```
+
+같은 울타리 안에서 `frame`·`integrate` 자리만 LLM으로 바뀐다.
+
+```
+  라운드 2 — 끝난 이유: decision
+  가설
+    h-1 [refuted] 파생 집계가 비어 있다  (t-2.e1)
+  태스크
+    ✅ t-1 어떤 컬렉션이 있는지 본다 — mongo.list_collections → 1건 ['bb_state']
+    ✅ t-2 찾은 컬렉션을 읽는다 — mongo.find collection='bb_state' filter={} limit=3 → …
+```
+
+**리드는 컬렉션 이름을 모르는 채로 시작한다.** 먼저 목록을 찾고, 찾은 것을 읽는다 —
+우리가 이름을 적어 주면 조사는 우리가 아는 곳만 보기 때문이다.
+
+부를 수 있는 목록은 **config에서 생성한다**(손으로 적으면 config와 갈라지고, 갈라진
+쪽이 곧 LLM이 믿는 세계가 된다). 프롬프트에 접속 정보는 안 섞이고, 리드가 적은 증거
+id는 **State에 실재하는 것만** 남는다 — 환각한 인용을 그냥 들이면 다음 라운드가 그걸
+근거로 다시 추론한다. LLM이 죽으면 `stopped_by="llm_error"`로 끝나고 종료 코드 1이다
+("조사할 게 없었다"와 절대 같은 모양이 되면 안 된다).
+
+프롬프트는 `config/prompts/investigate-{frame,integrate}.md`에 있다 — 운영이 직접
+고치는 파일이라 코드에 안 박았다. 자세한 것은 [10b단계 문서](STEPS/step-10b-lead.md).
 
 ```bash
 python -m src schedule --list       # 무엇이 언제 도는지 (돌리지는 않는다)
@@ -271,7 +302,7 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 | 9f | `report run` + 메일 배선 | ✅ |
 | 9g | 스케줄러(cron·interval) | ✅ |
 | 10a | 조사 State와 그래프 배선 | ✅ |
-| 10b | frame·integrate (리드 LLM) | ⬜ |
+| 10b | frame·integrate (리드 LLM) | ✅ |
 | 11a | 코드 레포 확보와 지식 층 | ⬜ |
 | 11b | 서브에이전트 3종 | ⬜ |
 | 11c | 코드 지식 그래프 (graphify) | ⬜ |

@@ -50,3 +50,24 @@ class ScriptedAdapter(LlmPort):
             return LlmReply(status="error", asked_at=self._clock(), model=self._model,
                             error=f"{type(reply).__name__}: {reply}")
         return LlmReply(status="ok", asked_at=self._clock(), model=self._model, text=reply)
+
+
+class ExplodingAdapter(LlmPort):
+    """**실제로 던진다.** 무raise 방어를 검사하는 유일한 방법이다.
+
+    `ScriptedAdapter`에 예외를 예약하면 그건 `status="error"` 응답으로 바뀌어 나온다 —
+    "어댑터가 계약대로 실패를 값으로 돌려준 것"이다. 그것만으로 테스트하면
+    `ask_json`의 최외곽 try/except를 **지워도 전부 통과한다**. 9e에서 실제로 그랬다
+    (`fakes.py`의 `ExplodingRunner`가 같은 이유로 있다).
+    """
+
+    def __init__(self, message: str = "게이트웨이 폭발"):
+        self._message = message
+        self.prompts: list[str] = []
+
+    def describe(self) -> str:
+        return "exploding(항상 던진다)"
+
+    async def ask(self, prompt: str) -> LlmReply:
+        self.prompts.append(prompt)
+        raise RuntimeError(self._message)

@@ -10,10 +10,38 @@ import pytest
 
 from src.application.nodes import EngineDeps
 from src.application.state import CaseState
+from src.config.schema_site import SiteConfig
 from src.domain.case import Case, PlanTask
 from src.domain.investigation import TaskOutcome
 
 T0 = datetime(2026, 9, 14, 9, 0, 0)
+
+# 프롬프트에 새면 안 되는 것들. 값이 여기 한 곳에 있어야 "안 샌다"는 단정이
+# 실제로 그 값을 가리킨다 — 테스트마다 다른 문자열을 쓰면 하나만 고쳐도 통과한다.
+SECRET = "s3cr3t-pw"
+TOPIC = "GUMI_PRODUCTION_EVENTS"       # 대상 데이터의 이름(decisions ⑮)
+DATABASE = "dt_gumi"
+
+
+def site_config(**infra_overrides) -> SiteConfig:
+    """네 시스템이 전부 붙어 있는 사이트. `kafka=None`으로 하나씩 뗄 수 있다."""
+    infra = {
+        "redis": {"url": "redis://h:6379", "password": SECRET},
+        "mongodb": {"url": "mongodb://h:27017", "database": DATABASE,
+                    "user": "dmfReadOnly", "password": SECRET},
+        "kafka": {"consumer": {"bootstrap_server": ["h:9092"],
+                               "group_ids": ["dt-processor-mx-gumi"],
+                               "topic": {"topic1": TOPIC}}},
+        "rest": {"base_url": "https://h/api", "headers": {"X-KEY": SECRET},
+                 "entries": {"summary_badge": {
+                     "method": "POST", "path": "/summary/badge",
+                     "params": {"line_code": {"type": "list"},
+                                "part_code": {"type": "list"}}}}},
+    }
+    infra.update(infra_overrides)
+    infra = {k: v for k, v in infra.items() if v is not None}
+    return SiteConfig.model_validate(
+        {"site": {"gbm": "mx", "fct": "gumi"}, "infra": infra})
 
 
 @pytest.fixture

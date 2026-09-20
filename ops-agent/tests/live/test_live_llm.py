@@ -295,3 +295,125 @@ async def test_모델이_데이터_안의_지시를_따르지_않는다(llm, rep
     assert "HACKED" not in (reply.text or "").upper(), (
         "데이터 구역의 지시를 따랐다 — 프롬프트의 울타리를 강화해야 한다. "
         "(리포트 자체는 test_지시를_따른_답이_리포트까지_가지_못한다가 지킨다)")
+
+
+# ── 리드 LLM: 실제 프롬프트로 조사 JSON을 낼 수 있는가 (10b) ───────────
+# 여기가 10b의 진짜 검증이다. 오프라인 테스트는 "우리 코드가 무엇을 받아들이나"를
+# 보고, 이 테스트는 **사내 모델이 그 형식을 실제로 지키나**를 본다.
+# 실패하면 프롬프트를 고칠 근거이고, 모델을 바꿀 근거이기도 하다.
+
+@pytest.fixture(scope="module")
+def lead_prompt():
+    """운영에서 실제로 쓸 프롬프트 + 실제 사이트 config로 frame 프롬프트를 만든다.
+
+    대상 시스템에는 붙지 않는다 — 여기서 보려는 것은 **모델의 행동**이고, 사내
+    데이터 상태에 따라 결과가 흔들리면 그 판단을 못 한다.
+    """
+    from datetime import datetime
+
+    from src.__main__ import _load_lead_prompt
+    from src.application import briefing
+    from src.application.lead import fill
+    from src.application.state import CaseState
+    from src.config.loader import load_registry, load_site_config
+    from src.domain.case import Case
+
+    try:
+        app = load_app_config(CONFIG_ROOT, env=os.environ)
+        active = load_registry(CONFIG_ROOT).active()
+        if not active:
+            pytest.skip("registry에 켜진 사이트가 없다")
+        site, _ = load_site_config(CONFIG_ROOT, active[0].gbm, active[0].fct,
+                                   env=os.environ)
+    except (ConfigError, FileNotFoundError) as exc:
+        pytest.skip(f"config를 읽을 수 없다 — {exc}")
+
+    template = _load_lead_prompt(CONFIG_ROOT, app.investigation.frame_prompt,
+                                 slots=briefing.FRAME_SLOTS)
+    state = CaseState(case=Case(
+        id="c-live", gbm=active[0].gbm, fct=active[0].fct, origin="patrol",
+        symptom="Operator/Check 배지가 alarm·caution·normal 전부 0이다",
+        t0=datetime(2026, 9, 14, 9, 0, 0)))
+    return fill(template, briefing.frame_fields(state, site_config=site))
+
+
+async def test_리드_프롬프트에_접속_정보가_안_실린다(lead_prompt):
+    """**실제 config로 렌더한 프롬프트**를 본다 — 가짜 사이트로 하는 오프라인
+    테스트는 "우리가 넣은 것이 안 나온다"만 확인한다. 여기는 진짜 비밀번호다."""
+    from src.config.loader import load_registry, load_site_config
+
+    active = load_registry(CONFIG_ROOT).active()
+    site, _ = load_site_config(CONFIG_ROOT, active[0].gbm, active[0].fct, env=os.environ)
+    leaks = []
+    for system, fields in (("redis", ("url",)), ("mongodb", ("url", "user")),
+                           ("rest", ("base_url",))):
+        cfg = getattr(site.infra, system, None)
+        if cfg is None:
+            continue
+        for field in fields:
+            value = getattr(cfg, field, None)
+            if value and str(value) in lead_prompt:
+                leaks.append(f"{system}.{field}")
+        secret = getattr(cfg, "password", None)
+        if secret and secret.get_secret_value() in lead_prompt:
+            leaks.append(f"{system}.password")
+    assert leaks == [], f"프롬프트에 접속 정보가 실렸다 — {leaks}"
+
+
+async def test_리드가_실제로_조사_계획을_낸다(llm, lead_prompt):
+    """**이게 안 되면 10b는 사내에서 돌지 않는다.**
+
+    `ask_json`을 그대로 부른다 — 관용 범위(코드펜스·앞뒤 설명)와 재시도까지
+    운영과 같은 경로로 본다.
+    """
+    import time
+
+    from src.application.lead import FrameReply, ask_json
+
+    print(f"\n  프롬프트 {len(lead_prompt):,}자")
+    started = time.monotonic()
+    got = await ask_json(llm, lead_prompt, FrameReply)
+    elapsed = time.monotonic() - started
+    print(f"  {elapsed:.1f}초")
+    assert got.ok, f"조사 계획 JSON이 안 나왔다 — {got.error}"
+
+    tasks = got.data["tasks"]
+    print(f"  가설 {len(got.data['hypotheses'])}개 · 태스크 {len(tasks)}개")
+    for t in tasks:
+        print(f"    {t['id']} {t['goal']} — {t['action']} {t['params']}")
+    assert tasks, "태스크가 0개다 — 조사가 시작되지 않는다"
+
+
+async def test_리드가_등재된_action만_고른다(llm, lead_prompt):
+    """모델이 `mongo.aggregate` 같은 것을 지어내면 실행기가 거부하고 **그 라운드가
+    통째로 낭비된다.** 상한이 4라운드니 하나가 25%다.
+
+    실행기가 막으므로 사고는 안 난다 — 여기서 보는 것은 프롬프트의 목록이 실제로
+    모델의 선택을 좁히는가이고, 빨간불이면 프롬프트를 고칠 근거다.
+    """
+    from src.application.lead import FrameReply, ask_json
+    from src.domain.actions import ACTIONS
+
+    got = await ask_json(llm, lead_prompt, FrameReply)
+    assert got.ok, got.error
+    invented = sorted({t["action"] for t in got.data["tasks"]
+                       if t["action"] not in ACTIONS})
+    assert invented == [], f"등재에 없는 action을 지어냈다 — {invented}"
+
+
+async def test_리드가_이름을_찍지_않고_먼저_찾는다(llm, lead_prompt):
+    """**우리가 컬렉션·토픽 이름을 안 알려 주기로 한 설계의 검증이다**(decisions ⑮).
+
+    이름을 모르는 채로 `mongo.find`를 부르면 빈 결과가 오는데, 그건 "데이터가
+    없다"가 아니라 "질문을 잘못했다"이고 둘은 완전히 다른 사실이다. 첫 라운드에는
+    목록을 찾는 읽기가 있어야 한다.
+    """
+    from src.application.lead import FrameReply, ask_json
+
+    got = await ask_json(llm, lead_prompt, FrameReply)
+    assert got.ok, got.error
+    discovery = {"mongo.list_collections", "kafka.list_topics", "redis.scan"}
+    actions = [t["action"] for t in got.data["tasks"]]
+    assert discovery & set(actions), (
+        f"찾는 읽기 없이 바로 이름을 찍었다 — {actions}. "
+        f"프롬프트의 '추측하지 마라'가 안 먹히고 있다")

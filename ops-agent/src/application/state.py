@@ -28,6 +28,7 @@ ids] + update`. 짧고 맞아 보이는데 **교체된 항목이 맨 뒤로 밀�
 문제없이 돌았다.** 강제가 아니었으므로 규율 5를 지킨다. 모르는 키가 State에 조용히
 섞이는 쪽이 훨씬 비싸다.
 """
+import operator
 from typing import Annotated, Literal
 
 from src.domain.base import StrictModel
@@ -59,9 +60,12 @@ class CaseState(StrictModel):
     # 진짜 현재 값은 언제나 State(체크포인트)에 있다.
     round: int = 0
     decision: Decision | None = None
-    # 라운드 상한에 걸려 코드가 끝낸 것인가. "답을 찾아서 끝났다"와 구별해야
-    # 12a가 "미확정"을 정직하게 적을 수 있다.
-    stopped_by: Literal["decision", "max_rounds", "no_runnable"] | None = None
+    # 왜 끝났는가. "답을 찾아서"와 "상한에 걸려서"와 "LLM이 죽어서"는 전부 다른
+    # 사실이고, 12a가 "미확정"과 "조사 실패(degraded)"를 가르는 근거가 된다.
+    stopped_by: Literal["decision", "max_rounds", "no_runnable", "llm_error"] | None = None
+    # LLM이 죽거나 형식을 못 지킨 기록. **비어 있지 않으면 그 조사는 반쪽이다.**
+    # 없으면 "아무것도 안 했다"가 "조사할 게 없었다"와 같은 모양이 된다.
+    llm_errors: Annotated[list[str], operator.add] = []
 
     def evidence_ids(self) -> set[str]:
         """select 게이트가 보는 우주 — **리드가 실제로 본 것**뿐이다."""

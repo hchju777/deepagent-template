@@ -1,0 +1,450 @@
+"""리드 LLM — **LLM이 정하는 것과 코드가 쥐는 것의 경계가 실제로 서 있는가.**
+
+10a는 `frame`·`integrate` 자리에 대본을 넣어 울타리를 검증했다. 여기서는 그 자리에
+진짜 리드가 들어왔을 때 세 가지를 본다:
+
+1. **실패가 조용하지 않은가** — LLM이 죽으면 `llm_error`로 끝나고 기록이 남는가.
+2. **소독이 여전히 서 있는가** — 리드가 만든 태스크·가설이 State를 우회하지 않는가.
+3. **프롬프트가 config에서 나오는가** — 손으로 적은 목록과 갈라지지 않는가.
+
+대본 LLM(`ScriptedAdapter`)과 **던지는** LLM(`ExplodingAdapter`)이 둘 다 필요하다.
+대본은 예외를 `status="error"` 응답으로 바꿔 주므로, 그것만으로는 `ask_json`의
+최외곽 try/except를 지워도 전부 통과한다.
+"""
+import json
+
+from src.application import lead
+from src.application.fakes import ScriptedRunner
+from src.application.graph import build_engine
+from src.application.nodes import EngineDeps, make_nodes
+from src.application.state import CaseState
+from src.domain.case import EvidenceRef
+from src.infrastructure.llm_fakes import ExplodingAdapter, ScriptedAdapter
+
+from tests.application.conftest import SECRET, T0, ok, site_config
+
+FRAME_PROMPT = "케이스:\n{case}\n부를 수 있는 것:\n{actions}\n"
+INTEGRATE_PROMPT = ("케이스:\n{case}\n가설:\n{hypotheses}\n태스크:\n{tasks}\n"
+                    "증거:\n{evidence}\n목록:\n{actions}\n라운드 {round}/{max_rounds}\n")
+PROMPTS = {"frame": FRAME_PROMPT, "integrate": INTEGRATE_PROMPT}
+
+
+def leads(*replies, max_rounds=3, llm=None, site=None):
+    """대본 LLM을 물린 `(frame, integrate)`와 그 LLM을 함께 돌려준다."""
+    llm = llm or ScriptedAdapter(list(replies), clock=lambda: T0)
+    frame, integrate = lead.make_lead(llm, site_config=site or site_config(),
+                                      prompts=PROMPTS, max_rounds=max_rounds)
+    return frame, integrate, llm
+
+
+def reply(**body) -> str:
+    return json.dumps(body, ensure_ascii=False)
+
+
+TASK = {"id": "t-1", "goal": "어떤 컬렉션이 있는지 본다", "role": "data_prober",
+        "action": "mongo.list_collections", "params": {}}
+
+
+# ── 정상 ───────────────────────────────────────────────────────────
+
+async def test_리드가_가설과_태스크를_낸다(case):
+    frame, _, _ = leads(reply(hypotheses=[{"id": "h-1", "statement": "집계가 비었다"}],
+                              tasks=[TASK]))
+    patch = await frame(CaseState(case=case))
+    assert [h.id for h in patch["hypotheses"]] == ["h-1"]
+    assert [t.action for t in patch["plan_tasks"]] == ["mongo.list_collections"]
+    assert "stopped_by" not in patch
+
+
+async def test_코드펜스로_감싸도_읽는다(case):
+    frame, _, _ = leads("```json\n" + reply(tasks=[TASK]) + "\n```")
+    patch = await frame(CaseState(case=case))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-1"]
+
+
+async def test_integrate가_결정을_낸다(case):
+    _, integrate, _ = leads(reply(decision="conclude", note="충분히 봤다"))
+    patch = await integrate(CaseState(case=case))
+    assert patch["decision"] == "conclude"
+    assert "note" not in patch          # State에 안 들어가는 자리다
+
+
+# ── 실패가 조용하지 않다 ──────────────────────────────────────────
+
+async def test_LLM이_던져도_흡수하고_llm_error로_끝낸다(case):
+    """**`ask_json`의 최외곽 try/except를 지우면 이 테스트가 실패한다.**
+
+    LangGraph 노드에서 던지면 superstep이 죽고, 그 케이스는 `investigating`
+    상태로 영원히 남는다(고아 상태).
+    """
+    frame, _, llm = leads(llm=ExplodingAdapter("ConnectTimeout"))
+    patch = await frame(CaseState(case=case))
+    assert patch["stopped_by"] == "llm_error"
+    assert patch["decision"] == "conclude"
+    assert "ConnectTimeout" in patch["llm_errors"][0]
+    assert len(llm.prompts) == lead.RETRIES + 1     # 던져도 재시도는 한다
+
+
+async def test_어댑터가_오류를_값으로_줘도_llm_error다(case):
+    frame, _, _ = leads(RuntimeError("429 Too Many Requests"),
+                        RuntimeError("429 Too Many Requests"))
+    patch = await frame(CaseState(case=case))
+    assert patch["stopped_by"] == "llm_error"
+    assert "429" in patch["llm_errors"][0]
+
+
+async def test_쓰레기_응답은_재시도_한_번_뒤에_포기한다(case):
+    """재시도가 **있다**는 것과 **한 번뿐**이라는 것을 같이 본다.
+
+    대본이 두 개뿐이라 세 번째 호출은 `ScriptedAdapter`가 던진다 — 재시도를 늘리면
+    "대본 소진"으로 실패하고, 재시도를 지우면 호출 수가 1이 되어 실패한다.
+    """
+    frame, _, llm = leads("그건 제가 알 수 없습니다.", "역시 모르겠습니다.")
+    patch = await frame(CaseState(case=case))
+    assert len(llm.prompts) == 2
+    assert patch["stopped_by"] == "llm_error"
+    assert "2회 시도 실패" in patch["llm_errors"][0]
+
+
+async def test_첫_응답이_쓰레기여도_둘째가_맞으면_통과한다(case):
+    """재시도가 실제로 쓸모가 있다는 것 — 없으면 멀쩡한 라운드가 버려진다."""
+    frame, _, llm = leads("네, 아래와 같습니다.", reply(tasks=[TASK]))
+    patch = await frame(CaseState(case=case))
+    assert len(llm.prompts) == 2
+    assert [t.id for t in patch["plan_tasks"]] == ["t-1"]
+    assert "stopped_by" not in patch
+
+
+async def test_모델이_지어낸_필드는_응답_전체를_거부한다(case):
+    """규율 5. 받아 주면 아무도 안 쓰는 값이 State에 섞인다."""
+    frame, _, _ = leads(reply(tasks=[TASK], confidence=0.9),
+                        reply(tasks=[TASK], confidence=0.9))
+    patch = await frame(CaseState(case=case))
+    assert patch["stopped_by"] == "llm_error"
+    assert "confidence" in patch["llm_errors"][0]
+
+
+# ── 소독 (규율 3·4) ───────────────────────────────────────────────
+
+async def test_리드가_실은_status_ok가_pending으로_소독된다(case):
+    """**`_sanitize_task`를 지우면 이 테스트가 실패한다.**
+
+    `{"status": "ok", "result_evidence_ids": ["ev-9"]}`를 실어 보내면 그 태스크는
+    실행되지 않은 채 끝난 것이 되어 select 게이트를 통째로 우회하고, 지어낸
+    증거 id가 State에 들어간다.
+    """
+    frame, _, _ = leads(reply(tasks=[{**TASK, "status": "ok",
+                                      "result_summary": "확인했다",
+                                      "result_evidence_ids": ["ev-9"]}]))
+    nodes = make_nodes(EngineDeps(runner=ScriptedRunner(), frame=frame,
+                                  integrate=frame, max_rounds=3, parallel_width=2,
+                                  max_tasks=20))
+    patch = await nodes["frame"](CaseState(case=case))
+    done = patch["plan_tasks"][0]
+    assert done.status == "pending"
+    assert done.result_summary is None and done.result_evidence_ids == []
+
+
+async def test_없는_증거를_인용한_가설은_인용이_걷히고_기록이_남는다(case):
+    """**규율 3.** 그냥 들이면 다음 라운드 브리핑이 그 id를 실어 보내고,
+    리드는 자기가 지어낸 id를 근거로 다시 추론한다 — 복리로 불어난다."""
+    _, integrate, _ = leads(reply(decision="continue", hypotheses=[
+        {"id": "h-1", "statement": "집계가 비었다", "status": "supported",
+         "supporting_ids": ["t-1.e1", "t-9.e1"]}]))
+    nodes = make_nodes(EngineDeps(runner=ScriptedRunner(), frame=integrate,
+                                  integrate=integrate, max_rounds=3,
+                                  parallel_width=2, max_tasks=20))
+    state = CaseState(case=case, round=1, evidence=[
+        EvidenceRef(id="t-1.e1", source="mongo.find", summary="0건")])
+    patch = await nodes["integrate"](state)
+
+    kept = patch["hypotheses"][0]
+    assert kept.supporting_ids == ["t-1.e1"]        # 실재하는 것만 남는다
+    assert kept.status == "supported"               # 근거가 남았으므로 판정은 유지
+    assert "t-9.e1" in patch["llm_errors"][0]       # 조용히 고치지 않는다
+
+
+async def test_근거가_전부_환각이면_판정이_open으로_되돌아간다(case):
+    """근거가 하나도 안 남은 "supported"는 근거 없는 단정이고, 그게 12a의 재료다."""
+    _, integrate, _ = leads(reply(decision="continue", hypotheses=[
+        {"id": "h-1", "statement": "집계가 비었다", "status": "refuted",
+         "refuting_ids": ["t-9.e1"]}]))
+    nodes = make_nodes(EngineDeps(runner=ScriptedRunner(), frame=integrate,
+                                  integrate=integrate, max_rounds=3,
+                                  parallel_width=2, max_tasks=20))
+    patch = await nodes["integrate"](CaseState(case=case, round=1))
+    assert patch["hypotheses"][0].status == "open"
+    assert "open으로 되돌렸다" in patch["llm_errors"][0]
+
+
+# ── 프롬프트 ───────────────────────────────────────────────────────
+
+async def test_프롬프트의_등재_목록이_config에서_나온다(case):
+    """**손으로 적은 목록이면 실패한다** — config에 항목을 더해도 안 따라온다."""
+    site = site_config(rest={"base_url": "https://h/api", "entries": {
+        "summary_prod_status": {"method": "POST", "path": "/summary/prod_status"}}})
+    frame, _, llm = leads(reply(tasks=[TASK]), site=site)
+    await frame(CaseState(case=case))
+    assert 'entry="summary_prod_status"' in llm.prompts[0]
+
+
+async def test_프롬프트에_접속_정보가_안_섞인다(case):
+    frame, _, llm = leads(reply(tasks=[TASK]))
+    await frame(CaseState(case=case))
+    for leak in (SECRET, "redis://h:6379", "mongodb://h:27017", "dmfReadOnly",
+                 "https://h/api", "h:9092"):
+        assert leak not in llm.prompts[0], f"접속 정보가 샜다 — {leak}"
+
+
+async def test_치환되지_않은_자리가_남지_않는다(case):
+    """`{max_chars}`가 그대로 LLM에게 나간 9e의 사고. 응답은 그럴듯해 보인다."""
+    _, integrate, llm = leads(reply(decision="conclude"))
+    await integrate(CaseState(case=case, round=2))
+    assert lead.slots_in(llm.prompts[0]) == set()
+
+
+def test_JSON_예시의_중괄호는_자리로_안_센다():
+    """`str.format`이 여기서 `KeyError`로 죽었다. 자리는 **식별자 모양**만이다."""
+    example = '{\n  "decision": "continue",\n  "params": {}\n}\n라운드 {round}'
+    assert lead.slots_in(example) == {"round"}
+
+
+def test_fill은_같은_자리를_여러_번_채운다():
+    assert lead.fill("{a}와 {a}", {"a": "x"}) == "x와 x"
+
+
+# ── 그래프까지 합쳐서 ──────────────────────────────────────────────
+
+async def test_frame이_죽으면_라운드를_시작하지_않는다(case):
+    """**`route_after_frame`을 지우면 이 테스트가 실패한다.**
+
+    흘려보내면 integrate가 LLM을 **또** 부르고(대본이 없어 던진다), 끝난 이유가
+    `no_runnable`로 덮여 "조사할 게 없었다"가 된다 — LLM이 안 붙은 것과 볼 게
+    없는 것은 완전히 다른 사실이다.
+    """
+    frame, integrate, llm = leads(llm=ExplodingAdapter())
+    deps = EngineDeps(runner=ScriptedRunner(), frame=frame, integrate=integrate,
+                      max_rounds=3, parallel_width=2, max_tasks=20)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+
+    assert final["stopped_by"] == "llm_error"
+    assert final["round"] == 1 and final["plan_tasks"] == []
+    # frame 두 번(재시도)뿐 — integrate는 아예 안 불렸다.
+    assert len(llm.prompts) == lead.RETRIES + 1
+
+
+async def test_integrate가_죽으면_상한이_그_이유를_덮지_않는다(case):
+    """`stopped_by`가 `max_rounds`로 둔갑하면 12a가 "미확정"과 "조사 실패"를
+    구별할 근거를 잃는다."""
+    frame, _, _ = leads(reply(tasks=[TASK]))
+    _, integrate, _ = leads(llm=ExplodingAdapter())
+    deps = EngineDeps(runner=ScriptedRunner({"t-1": ok("t-1")}), frame=frame,
+                      integrate=integrate, max_rounds=1, parallel_width=2,
+                      max_tasks=20)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert final["stopped_by"] == "llm_error"
+    assert final["llm_errors"]
+
+
+async def test_리드가_찾고_읽는_두_라운드가_돈다(case):
+    """**10b가 만든 것의 요약이다.**
+
+    1라운드: 무엇이 있는지 찾는다 → 2라운드: 찾은 것을 읽는다. 두 번째 태스크는
+    `input_evidence_ids`로 첫 증거를 기다리므로, 게이트가 라운드 경계를 만든다.
+    """
+    from src.domain.investigation import TaskOutcome
+
+    frame, _, _ = leads(reply(tasks=[TASK]))
+    _, integrate, _ = leads(
+        reply(decision="continue", tasks=[
+            {"id": "t-2", "goal": "찾은 컬렉션을 읽는다", "role": "data_prober",
+             "action": "mongo.find", "params": {"collection": "bb_state", "filter": {}},
+             "input_evidence_ids": ["t-1.e1"]}]),
+        reply(decision="conclude", hypotheses=[
+            {"id": "h-1", "statement": "집계가 비었다", "status": "refuted",
+             "refuting_ids": ["t-2.e1"]}]))
+
+    runner = ScriptedRunner({
+        "t-1": TaskOutcome(task_id="t-1", status="ok", summary="2건",
+                           evidence=[EvidenceRef(id="t-1.e1", source="mongo.list_collections",
+                                                 summary="['aa_events', 'bb_state']")]),
+        "t-2": TaskOutcome(task_id="t-2", status="ok", summary="1건",
+                           evidence=[EvidenceRef(id="t-2.e1", source="mongo.find",
+                                                 summary="[{'m': 'x'}]")])})
+    deps = EngineDeps(runner=runner, frame=frame, integrate=integrate,
+                      max_rounds=4, parallel_width=3, max_tasks=20)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+
+    assert runner.ran == ["t-1", "t-2"]
+    assert final["stopped_by"] == "decision"
+    assert final["llm_errors"] == []
+    assert final["hypotheses"][0].status == "refuted"      # 인용이 실재하므로 유지
+    assert [e.id for e in final["evidence"]] == ["t-1.e1", "t-2.e1"]
+
+
+# ── CLI ────────────────────────────────────────────────────────────
+
+def _cli_tree(tmp_path, monkeypatch):
+    """실제 `config/`를 복사하고 케이스 저장소만 tmp로 돌린다.
+
+    **심볼릭 링크를 쓰지 않는다** — Windows에서 `symlink_to`는 관리자 권한이
+    필요하고, 없으면 개발 기계에서만 도는 테스트가 된다(windows.md 함정 ⑥-c).
+    """
+    import shutil
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent.parent
+    config_root = tmp_path / "config"
+    shutil.copytree(root / "config", config_root)
+    app = json.loads((root / "config" / "app.json").read_text(encoding="utf-8"))
+    app["case_store"] = str(tmp_path / "cases.json")
+    (config_root / "app.json").write_text(json.dumps(app, ensure_ascii=False),
+                                          encoding="utf-8")
+    for key in ("REDIS_PASSWORD", "MONGO_PASSWORD", "LLM_BASE_URL", "LLM_CLIENT_KEY",
+                "LLM_PASS_KEY", "MAIL_AGENT_API_KEY", "MAIL_AGENT_ID"):
+        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
+    return config_root
+
+
+def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
+    """**`patrol open` → `case investigate` 배선 전체를 부른다.**
+
+    부품만 테스트하면 배선이 안 보인다 — 이 리포에서 실제로 났다: `ProbeRunner`에
+    `clock`을 필수로 올렸는데 `__main__`의 호출부가 안 따라갔고, **776개가 전부
+    통과했다.** 명령을 돌려 보고서야 `TypeError`가 나왔다.
+
+    LLM만 대본으로 갈아끼운다. 그 위(인자 파싱·config·프롬프트 검사·케이스 조회·
+    어댑터 조립·엔진·출력)는 전부 진짜다.
+    """
+    from src.__main__ import main
+
+    config_root = _cli_tree(tmp_path, monkeypatch)
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({
+        "rest": {"summary_badge": [
+            {"group": "Operator", "title": "Check", "alarm": 0, "caution": 0, "normal": 0}],
+            "prod_status": {"status": "In Production"}},
+        "mongo": {"bb_state": [{"m": "x"}]}}), encoding="utf-8")
+
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
+    assert main() == 0
+    case_id = "c-1"
+    assert case_id in capsys.readouterr().out
+
+    replies = [reply(hypotheses=[{"id": "h-1", "statement": "파생 집계가 비어 있다"}],
+                     tasks=[TASK]),
+               reply(decision="conclude", hypotheses=[
+                   {"id": "h-1", "statement": "파생 집계가 비어 있다",
+                    "status": "refuted", "refuting_ids": ["t-1.e1"]}])]
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
+                        lambda cfg, *, clock, warn=None: ScriptedAdapter(
+                            replies, clock=clock))
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "case", "investigate", case_id, "--stub-seeds", str(seeds)])
+
+    assert main() == 0                       # LLM 오류가 없으면 0
+    out = capsys.readouterr().out
+    assert "끝난 이유: decision" in out
+    assert "h-1 [refuted]" in out
+    assert "t-1" in out and "t-1.e1" in out
+
+
+def test_CLI가_돈_조사와_못_돈_조사를_같은_등급으로_보지_않는다(tmp_path, capsys, monkeypatch):
+    """리드가 없는 증거를 인용했지만 조사 자체는 끝까지 돌았다.
+
+    이것까지 종료 코드 1로 주면 "빨간불이 원래 그렇다"가 되고, 그러면 **진짜
+    빨간불도 안 보이게 된다.** 알리되 등급은 나눈다.
+    """
+    from src.__main__ import main
+
+    config_root = _cli_tree(tmp_path, monkeypatch)
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"rest": {"summary_badge": [
+        {"group": "Operator", "title": "Check", "alarm": 0, "caution": 0, "normal": 0}],
+        "prod_status": {"status": "In Production"}}}), encoding="utf-8")
+
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
+    assert main() == 0
+    capsys.readouterr()
+
+    replies = [reply(tasks=[TASK]),
+               reply(decision="conclude", hypotheses=[
+                   {"id": "h-1", "statement": "집계가 비었다", "status": "refuted",
+                    "refuting_ids": ["t-1.e1", "없는-증거.e1"]}])]
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
+                        lambda cfg, *, clock, warn=None: ScriptedAdapter(replies, clock=clock))
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "case", "investigate", "c-1", "--stub-seeds", str(seeds)])
+
+    assert main() == 0                       # 조사는 돌았다
+    captured = capsys.readouterr()
+    assert "끝난 이유: decision" in captured.out
+    assert "h-1 [refuted]" in captured.out   # 남은 근거가 있으므로 판정은 유지
+    assert "계약을 어겼다" in captured.err    # 그래도 조용히 넘어가지 않는다
+    assert "없는-증거.e1" in captured.err
+
+
+def test_CLI가_LLM_실패를_0으로_숨기지_않는다(tmp_path, capsys, monkeypatch):
+    """조용히 성공한 척하면 아무도 안 본다 — `no_runnable`과 같은 모양이 된다."""
+    from src.__main__ import main
+
+    config_root = _cli_tree(tmp_path, monkeypatch)
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"rest": {"summary_badge": [
+        {"group": "Operator", "title": "Check", "alarm": 0, "caution": 0, "normal": 0}],
+        "prod_status": {"status": "In Production"}}}), encoding="utf-8")
+
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
+    assert main() == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
+                        lambda cfg, *, clock, warn=None: ExplodingAdapter("ConnectTimeout"))
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "case", "investigate", "c-1", "--stub-seeds", str(seeds)])
+
+    assert main() == 1
+    captured = capsys.readouterr()
+    assert "끝난 이유: llm_error" in captured.out
+    assert "ConnectTimeout" in captured.err        # 사유는 stderr에 그대로 남는다
+    assert "안 돌았다" in captured.err
+
+
+def test_우리가_안_채우는_자리가_있으면_기동을_막는다(tmp_path, monkeypatch):
+    """**이 검사를 지우면 `{max_round}`가 치환 안 된 채 LLM에게 나간다.**
+
+    9e에서 실제로 났고, 리포트는 정상으로 보여서 아무도 못 봤다.
+    """
+    import pytest
+
+    from src.__main__ import _load_lead_prompt
+    from src.application import briefing
+
+    bad = tmp_path / "p.md"
+    bad.write_text("{case}\n{actions}\n라운드 {max_round}\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _load_lead_prompt(tmp_path, "p.md", slots=briefing.INTEGRATE_SLOTS)
+    assert "max_round" in str(caught.value) and "max_rounds" in str(caught.value)
+
+
+def test_필요한_자리가_없으면_기동을_막는다(tmp_path):
+    """`{actions}`가 없으면 리드는 있지도 않은 것을 계속 지어낸다."""
+    import pytest
+
+    from src.__main__ import _load_lead_prompt
+    from src.application import briefing
+
+    bad = tmp_path / "p.md"
+    bad.write_text("무엇이든 조사하라.\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _load_lead_prompt(tmp_path, "p.md", slots=briefing.FRAME_SLOTS)
+    assert "{case}" in str(caught.value) and "{actions}" in str(caught.value)

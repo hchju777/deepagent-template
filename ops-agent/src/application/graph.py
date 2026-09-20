@@ -1,7 +1,8 @@
 """그래프 배선. **LangGraph를 아는 유일한 파일이다.**
 
 ```
-START → frame → select → (Send로 execute×N  |  0건이면 integrate)
+START → frame → (실패면 END | select)
+                  select → (Send로 execute×N  |  0건이면 integrate)
                   ↑                ↓
                   │            integrate → continue면 select, 아니면 END
                   └────────────────┘
@@ -16,8 +17,8 @@ START → frame → select → (Send로 execute×N  |  0건이면 integrate)
 """
 from langgraph.graph import END, START, StateGraph
 
-from src.application.nodes import (EngineDeps, make_nodes, route_after_integrate,
-                                   route_after_select)
+from src.application.nodes import (EngineDeps, make_nodes, route_after_frame,
+                                   route_after_integrate, route_after_select)
 from src.application.state import CaseState
 
 
@@ -28,7 +29,10 @@ def build_engine(deps: EngineDeps, *, checkpointer=None):
         builder.add_node(name, nodes[name])
 
     builder.add_edge(START, "frame")
-    builder.add_edge("frame", "select")
+    # frame이 실패하면(리드 LLM이 죽었다) 라운드를 시작하지 않고 끝낸다 —
+    # 흘려보내면 integrate가 LLM을 또 부르고, 끝난 이유가 덮인다.
+    builder.add_conditional_edges("frame", route_after_frame,
+                                  {"select": "select", "__end__": END})
     # route_after_select는 Send 리스트(execute×N) 또는 "integrate" 문자열을 돌려준다.
     builder.add_conditional_edges("select", route_after_select, ["execute", "integrate"])
     builder.add_edge("execute", "integrate")       # Send 전부가 수렴하는 barrier
