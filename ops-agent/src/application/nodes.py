@@ -13,6 +13,7 @@
 | 태스크 개수 상한 | `frame`·`integrate` |
 | LLM 출력 소독 | `_sanitize_task` — 수명주기 필드를 코드가 덮어쓴다 |
 | 증거 인용 검사 | `_accept_hypotheses` — 실재하지 않는 id를 걷어낸다 |
+| 태스크 id 재사용 | `_accept_tasks` — 이미 있는 id는 안 받는다 |
 | 예외 흡수 | `execute` 최외곽 |
 
 ## 노드는 `(state) -> dict`다
@@ -103,6 +104,10 @@ def _seen(state: CaseState) -> str:
     return "\n".join(f"{ref.source} {ref.summary}" for ref in state.evidence)
 
 
+def _taken(state: CaseState) -> frozenset:
+    return frozenset(t.id for t in state.plan_tasks)
+
+
 def runnable_tasks(state: CaseState) -> list[PlanTask]:
     """지금 실행할 수 있는 태스크 — 우선순위 오름차순, 동률이면 FIFO.
 
@@ -119,24 +124,43 @@ def runnable_tasks(state: CaseState) -> list[PlanTask]:
     return sorted(ready, key=lambda t: t.priority)
 
 
-def _accept_tasks(patch: dict, *, room: int,
-                  seen: str | None = "") -> tuple[list[PlanTask], list[str]]:
-    """만들어진 태스크를 소독하고 개수 상한으로 자른다. **찾지 않고 댄 이름을 기록한다.**
+def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
+                  taken: frozenset = frozenset()) -> tuple[list[PlanTask], list[str]]:
+    """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
     상한을 리듀서가 아니라 여기서 거는 이유는 `state.py` 맨 위에 있다 — 리듀서에서
     raise하면 superstep이 통째로 죽는다.
 
-    `seen`이 `None`이면 검사하지 않는다(`EngineDeps.check_discovery`).
-    아니면 지금까지 본 증거를 이어 붙인 텍스트다. 태스크가 `collection`·`topic` 같은
-    **찾아야 아는 이름**(`DISCOVERED_ARGS`)에 거기 없는 값을 대면 기록한다 —
-    **막지는 않는다.** 증상 자체가 이름을 담고 있는 정당한 경우가 있고, 무엇보다
-    ⑮ 설계("이름은 리드가 찾는다")가 실제로 먹히는지를 **빈도로 알아야** 막을지
-    정할 수 있다. 자주 차면 그때 거부로 올린다.
+    ## `taken` — **이미 있는 id는 다시 받지 않는다**
+
+    소독(`_sanitize_task`)은 **새 태스크**에는 맞지만 이미 끝난 id에는 재앙이다.
+    같은 id가 다시 들어오면 리듀서가 완료된 태스크를 `pending`으로 덮어쓰고, 그
+    읽기가 **또** 실행된다. 증거는 따로 쌓이므로 살아남아서, 최종 State에
+    "실행 안 됐는데 증거가 있는" 모순이 남는다 — 12b의 보고서가 그걸 그대로 쓰면
+    **안 한 일을 했다고, 한 일을 안 했다고** 적는다.
+
+    사내에서 실제로 났다: 리드가 예시의 `t-4`·`t-5`를 매 라운드 그대로 베껴서
+    같은 읽기가 세 번씩 돌았고, 라운드 4개 중 둘이 통째로 반복이었다.
+
+    ## `seen` — 찾지 않고 댄 이름을 **기록한다**
+
+    `None`이면 검사하지 않는다(`EngineDeps.check_discovery`). 아니면 지금까지 본
+    증거를 이어 붙인 텍스트다. 태스크가 `collection`·`topic` 같은 **찾아야 아는
+    이름**(`DISCOVERED_ARGS`)에 거기 없는 값을 대면 기록한다 — **막지는 않는다.**
+    증상 자체가 이름을 담고 있는 정당한 경우가 있고, 무엇보다 ⑮ 설계가 실제로
+    먹히는지를 **빈도로 알아야** 막을지 정할 수 있다.
     """
-    kept = [_sanitize_task(t) for t in patch.get("plan_tasks", [])][:max(0, room)]
+    kept, reused, used = [], [], set(taken)
+    for task in patch.get("plan_tasks", []):
+        if task.id in used:
+            reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")
+            continue
+        used.add(task.id)
+        kept.append(_sanitize_task(task))
+    kept = kept[:max(0, room)]
     if seen is None:
-        return kept, []
-    guessed = []
+        return kept, reused
+    guessed = list(reused)
     for task in kept:
         for name, value in sorted(task.params.items()):
             if name in DISCOVERED_ARGS and isinstance(value, str) and value not in seen:
@@ -152,8 +176,9 @@ def make_nodes(deps: EngineDeps) -> dict:
         hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
         # frame 시점엔 증거가 없으므로 `seen`이 비어 있다 — 이름을 대면 전부 기록된다.
         # 그게 맞다: 아직 아무것도 안 봤는데 이름을 안다면 찍은 것이다.
-        tasks, guessed = _accept_tasks(patch, room=deps.max_tasks,
-                                       seen=_seen(state) if deps.check_discovery else None)
+        tasks, guessed = _accept_tasks(
+            patch, room=deps.max_tasks, taken=_taken(state),
+            seen=_seen(state) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
                 "plan_tasks": tasks,
@@ -190,7 +215,8 @@ def make_nodes(deps: EngineDeps) -> dict:
         patch = await deps.integrate(state)
         room = deps.max_tasks - len(state.plan_tasks)
         fresh, guessed = _accept_tasks(
-            patch, room=room, seen=_seen(state) if deps.check_discovery else None)
+            patch, room=room, taken=_taken(state),
+            seen=_seen(state) if deps.check_discovery else None)
         hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
         patch = {**patch, "plan_tasks": fresh, "hypotheses": hypotheses,
                  "llm_errors": list(patch.get("llm_errors", [])) + complaints + guessed}

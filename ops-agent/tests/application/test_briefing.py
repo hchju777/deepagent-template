@@ -252,3 +252,56 @@ def test_생성한_예시는_반드시_JSON으로_읽힌다():
                     site(redis=None, kafka=None, mongodb=None)):
             body = _example(cfg, phase)
             assert body["tasks"] and isinstance(body["tasks"], list)
+
+
+def test_예시의_id가_다음_빈_번호부터_나온다(case):
+    """**베끼는 성질과 싸우지 말고 이용한다.**
+
+    예시의 id까지 그대로 베끼므로, 예시가 이미 쓴 번호를 보여 주면 완료된 태스크가
+    같은 id로 다시 들어온다(사내에서 실제로 났다). `_accept_tasks`가 그걸 막지만,
+    막기만 하면 3라운드부터 새 태스크가 0이 되어 조사가 얕아진다.
+    """
+    from src.domain.case import PlanTask
+
+    def state_with(n):
+        return CaseState(case=case, plan_tasks=[
+            PlanTask(id=f"t-{i}", goal="g", role="data_prober") for i in range(1, n + 1)])
+
+    assert briefing.next_task_number(state_with(0)) == 1
+    assert briefing.next_task_number(state_with(5)) == 6
+
+    ids = [t["id"] for t in json.loads(briefing.example_block(
+        site(), phase="integrate", start=briefing.next_task_number(state_with(5))))["tasks"]]
+    assert ids == ["t-6", "t-7"]
+
+
+def test_번호가_안_이어져도_최대값_다음을_쓴다(case):
+    """리드가 `t-9`를 내면 다음은 `t-10`이다 — 빈 번호를 메우면 지운 id와 충돌한다."""
+    from src.domain.case import PlanTask
+
+    state = CaseState(case=case, plan_tasks=[
+        PlanTask(id="t-1", goal="g", role="data_prober"),
+        PlanTask(id="t-9", goal="g", role="data_prober")])
+    assert briefing.next_task_number(state) == 10
+
+
+def test_priority는_번호가_아니라_라운드_안의_순서다():
+    """번호를 곱하면 라운드가 깊어질수록 우선순위가 커져(늦어져) 앞 라운드의 잔여
+    태스크에 계속 밀린다 — 지금 제일 궁금한 읽기가 제일 나중이 된다."""
+    late = json.loads(briefing.example_block(site(), phase="integrate", start=20))
+    assert [t["priority"] for t in late["tasks"]] == [10, 20]
+
+
+def test_integrate_프롬프트가_결정_지침을_예시_뒤에_둔다():
+    """**모델은 마지막에 읽은 지시를 더 따른다.**
+
+    사내 모델은 예시의 `"decision": "continue"`를 그대로 베껴서 **스스로 끝내지
+    않았다** — 조사가 매번 `max_rounds`로 끝났다. 지침이 예시보다 앞에 있으면
+    베낀 값이 마지막 말이 된다.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent.parent
+    text = (root / "config" / "prompts" / "investigate-integrate.md").read_text(
+        encoding="utf-8")
+    assert text.index("{example}") < text.index("`decision`을 정하라")

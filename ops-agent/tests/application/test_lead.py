@@ -21,7 +21,7 @@ from src.application.state import CaseState
 from src.domain.case import EvidenceRef
 from src.infrastructure.llm_fakes import ExplodingAdapter, ScriptedAdapter
 
-from tests.application.conftest import SECRET, T0, ok, site_config
+from tests.application.conftest import SECRET, T0, ok, site_config, task
 
 FRAME_PROMPT = "케이스:\n{case}\n부를 수 있는 것:\n{actions}\n"
 INTEGRATE_PROMPT = ("케이스:\n{case}\n가설:\n{hypotheses}\n태스크:\n{tasks}\n"
@@ -289,6 +289,61 @@ async def test_사람이_쓴_대본에는_이_검사를_안_건다(case):
     patch = await make_nodes(_deps(frame, check_discovery=False))["frame"](
         CaseState(case=case))
     assert patch["llm_errors"] == []
+
+
+# ── 태스크 id 재사용 (사내에서 실제로 난 버그) ─────────────────────
+
+async def test_완료된_태스크가_같은_id로_되살아나지_않는다(case):
+    """**사내에서 실제로 났다.**
+
+    리드가 예시의 `t-4`를 매 라운드 그대로 베꼈고, 소독이 수명주기를 초기화한 뒤
+    리듀서가 완료된 태스크를 덮어써서 같은 읽기가 **세 번** 돌았다. 증거는 따로
+    쌓이므로 살아남아, 최종 State에 **"실행 안 됐는데 증거가 있는"** 모순이 남았다.
+
+    12b의 보고서가 그 State를 그대로 쓰면 **안 한 일을 했다고, 한 일을 안 했다고**
+    적는다.
+    """
+    _, integrate, _ = leads(reply(decision="continue", tasks=[
+        {"id": "t-1", "goal": "또 읽는다", "role": "data_prober",
+         "action": "mongo.find", "params": {"collection": "bb_state", "filter": {}}}]))
+    nodes = make_nodes(_deps(integrate, check_discovery=False))
+
+    done = task("t-1", status="ok", result_summary="이미 읽었다",
+                result_evidence_ids=["t-1.e1"])
+    patch = await nodes["integrate"](CaseState(case=case, round=1, plan_tasks=[done]))
+
+    assert patch["plan_tasks"] == []                  # 안 받는다
+    assert "이미 있는 태스크 id" in patch["llm_errors"][0]
+
+
+async def test_한_응답_안의_중복_id도_하나만_받는다(case):
+    frame, _, _ = leads(reply(tasks=[TASK, {**TASK, "goal": "다른 목표"}]))
+    patch = await make_nodes(_deps(frame))["frame"](CaseState(case=case))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-1"]
+    assert "이미 있는 태스크 id" in patch["llm_errors"][0]
+
+
+async def test_같은_읽기가_라운드마다_반복되지_않는다(case):
+    """**소비자로 직접 확인한다** — 그래프를 끝까지 돌려서 실행기가 무엇을 돌렸는지 본다.
+
+    노드 단위로만 보면 "id를 안 받는다"까지밖에 안 보이고, 정작 아팠던 것은
+    **같은 읽기가 세 번 실행된 것**이었다.
+    """
+    from src.application.fakes import ScriptedRunner
+    from src.domain.investigation import TaskOutcome
+
+    frame, _, _ = leads(reply(tasks=[TASK]))
+    _, integrate, _ = leads(*[reply(decision="continue", tasks=[TASK])] * 6)
+    runner = ScriptedRunner({"t-1": TaskOutcome(
+        task_id="t-1", status="ok", summary="읽었다",
+        evidence=[EvidenceRef(id="t-1.e1", source="mongo.list_collections", summary="…")])})
+    deps = EngineDeps(runner=runner, frame=frame, integrate=integrate, max_rounds=4,
+                      parallel_width=3, max_tasks=24, check_discovery=False)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+
+    assert runner.ran == ["t-1"]                      # 딱 한 번
+    assert final["plan_tasks"][0].status == "ok"      # 되살아나지 않았다
+    assert final["stopped_by"] == "no_runnable"       # 낼 것이 없으면 정직하게 끝난다
 
 
 # ── 프롬프트 ───────────────────────────────────────────────────────

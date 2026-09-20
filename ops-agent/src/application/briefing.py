@@ -22,6 +22,7 @@ url·비밀번호·계정은 프롬프트에 들어가지 않는다. 리드가 �
 `tests/application/test_briefing.py`가 지킨다.
 """
 import json
+import re
 
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS
@@ -154,12 +155,34 @@ def _free_rest_entry(site_config) -> tuple[str, dict] | None:
     return None
 
 
-def _task(index: int, action: str, params: dict, **extra) -> dict:
+def _task(index: int, action: str, params: dict, *, rank: int = 1, **extra) -> dict:
+    # `priority`는 번호가 아니라 **이 라운드 안의 순서**를 따른다. 번호를 곱하면
+    # 라운드가 깊어질수록 우선순위가 커져(늦어져) 앞 라운드의 잔여 태스크에 계속
+    # 밀린다 — 정작 지금 제일 궁금한 읽기가 제일 나중이 된다.
     return {"id": f"t-{index}", "goal": _GOAL, "role": "data_prober",
-            "action": action, "params": params, "priority": index * 10, **extra}
+            "action": action, "params": params, "priority": rank * 10, **extra}
 
 
-def example_block(site_config, *, phase: str) -> str:
+_TASK_NUMBER = re.compile(r"^t-(\d+)$")
+
+
+def next_task_number(state: CaseState) -> int:
+    """리드가 써야 할 **다음 빈 태스크 번호**.
+
+    예시의 id까지 그대로 베끼는 모델이므로, 예시가 **이미 쓴 번호**를 보여 주면
+    완료된 태스크가 같은 id로 다시 들어온다. 사내에서 실제로 났다 — 예시의
+    `t-4`·`t-5`를 매 라운드 베껴서 같은 읽기가 세 번씩 돌았다.
+
+    `_accept_tasks`의 `taken`이 그걸 막지만, 막기만 하면 3라운드부터 새 태스크가
+    0이 되어 조사가 얕아진다. **베끼는 성질과 싸우지 말고 이용한다** — 매 라운드
+    다음 번호를 보여 주면 베껴도 새 id가 된다.
+    """
+    used = [int(m.group(1)) for t in state.plan_tasks
+            if (m := _TASK_NUMBER.match(t.id))]
+    return max(used, default=0) + 1
+
+
+def example_block(site_config, *, phase: str, start: int = 1) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**"""
     if phase == "frame":
         shapes = _available(site_config, _DISCOVERY, 3)
@@ -171,7 +194,8 @@ def example_block(site_config, *, phase: str) -> str:
                 "entry": "등재 목록의 항목 이름", "params": {}})]
         body = {"hypotheses": [{"id": "h-1", "statement": "원인 가설 하나 (한국어 한 문장)"},
                                {"id": "h-2", "statement": "다른 가능성 (한국어 한 문장)"}],
-                "tasks": [_task(i, a, p) for i, (a, p) in enumerate(shapes, start=1)]}
+                "tasks": [_task(start + n, a, p, rank=n + 1)
+                          for n, (a, p) in enumerate(shapes)]}
     else:
         shapes = _available(site_config, _NAMED_READ, 2) or [("rest.query", {
             "entry": "등재 목록의 항목 이름", "params": {}})]
@@ -180,8 +204,8 @@ def example_block(site_config, *, phase: str) -> str:
                                 "status": "supported",
                                 "supporting_ids": ["위 <모은 증거>에 실제로 있는 id"],
                                 "refuting_ids": []}],
-                "tasks": [_task(i, a, p, input_evidence_ids=[])
-                          for i, (a, p) in enumerate(shapes, start=4)]}
+                "tasks": [_task(start + n, a, p, rank=n + 1, input_evidence_ids=[])
+                          for n, (a, p) in enumerate(shapes)]}
     return json.dumps(body, ensure_ascii=False, indent=2)
 
 
@@ -195,13 +219,15 @@ INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round", "ma
 
 def frame_fields(state: CaseState, *, site_config) -> dict[str, str]:
     return {"case": case_block(state), "actions": action_catalog(site_config),
-            "example": example_block(site_config, phase="frame")}
+            "example": example_block(site_config, phase="frame",
+                                     start=next_task_number(state))}
 
 
 def integrate_fields(state: CaseState, *, site_config, max_rounds: int) -> dict[str, str]:
     return {"case": case_block(state),
             "actions": action_catalog(site_config),
-            "example": example_block(site_config, phase="integrate"),
+            "example": example_block(site_config, phase="integrate",
+                                     start=next_task_number(state)),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state),
