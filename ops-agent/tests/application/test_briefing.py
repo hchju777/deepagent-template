@@ -9,6 +9,8 @@
 3. **대상 데이터의 이름을 우리가 안 적는다**(decisions ⑮) — 적어 주면 조사는
    우리가 아는 만큼만 본다.
 """
+import json
+
 import pytest
 
 from src.application import briefing
@@ -174,3 +176,79 @@ def test_선언한_자리와_실제로_채우는_것이_같다(state):
     assert set(briefing.frame_fields(state, site_config=cfg)) == set(briefing.FRAME_SLOTS)
     assert set(briefing.integrate_fields(state, site_config=cfg, max_rounds=4)) \
         == set(briefing.INTEGRATE_SLOTS)
+
+
+# ── 예시 (`{example}`) — **이게 곧 다음 출력이다** ─────────────────────
+# 사내 모델로 재 보니 리드는 판단해서 고르는 게 아니라 예시의 틀을 채운다.
+# `id`·`action`·`params`를 그대로 베끼고 `goal`만 자기 말로 바꿨다. 그래서 예시는
+# "모양을 보여 주는 것"이 아니라 **우리가 원하는 첫 수 그 자체**여야 한다.
+
+def _example(cfg, phase) -> dict:
+    return json.loads(briefing.example_block(cfg, phase=phase))
+
+
+def test_frame_예시에는_이름을_받는_읽기가_없다():
+    """**제일 중요한 성질이다.**
+
+    모델은 `params` 값도 그대로 베낀다. 예시에 `"collection": "..."` 같은 값이
+    있으면 **진짜로 그 이름을 조회하고**, 빈 결과가 "데이터가 없다"로 읽힌다 —
+    ⑮가 경고하는 바로 그 오독이고, 판정이 없는 이상을 보고하게 된다.
+
+    그래서 frame 예시는 **인자에 대상 이름이 안 들어가는 읽기만** 쓴다.
+    """
+    from src.domain.actions import DISCOVERED_ARGS
+
+    for task in _example(site(), "frame")["tasks"]:
+        named = set(task["params"]) & DISCOVERED_ARGS
+        assert not named, f"{task['action']}가 찾아야 아는 이름을 받는다 — {named}"
+
+
+def test_integrate_예시의_이름_자리는_지시문_모양이다():
+    """integrate 시점엔 증거 블록에 진짜 이름이 있으므로 이름을 받는 읽기를 보여 준다.
+
+    단 그 값은 **바꿔 넣으라는 지시로 읽혀야** 한다. `"..."`처럼 완결된 값을 두면
+    모델이 그대로 베낀다 — frame에서 `params: {}`를 그대로 베낀 것과 같은 이유다.
+    """
+    from src.domain.actions import DISCOVERED_ARGS
+
+    placeholders = [v for task in _example(site(), "integrate")["tasks"]
+                    for k, v in task["params"].items() if k in DISCOVERED_ARGS]
+    assert placeholders, "이름을 받는 읽기가 하나도 없다 — 2라운드가 뭘 하라는 것인가"
+    for value in placeholders:
+        # 진짜 이름에는 공백이 없다. 공백 + 한국어면 "바꿔 넣어라"로 읽힌다.
+        assert " " in value and any("가" <= ch <= "힣" for ch in value), value
+
+
+def test_예시가_이_사이트에_없는_시스템을_안_쓴다():
+    """**예시를 손으로 적으면 이 테스트가 실패한다.**
+
+    Kafka 없는 사이트에 `kafka.list_topics`가 예시로 박혀 있으면 모델은 그걸
+    **그대로 부른다.** 실행기가 거부하므로 사고는 안 나지만 라운드가 낭비되고,
+    상한이 4라운드면 하나가 25%다.
+    """
+    lean = site(kafka=None, mongodb=None)
+    for phase in ("frame", "integrate"):
+        actions = [t["action"] for t in _example(lean, phase)["tasks"]]
+        assert actions, f"{phase} 예시에 태스크가 하나도 없다"
+        assert not any(a.startswith(("kafka.", "mongo.")) for a in actions), actions
+
+
+def test_frame_예시가_가설을_둘_이상_세운다():
+    """하나면 모델도 하나만 낸다 — 그러면 그것만 확인하고 조사가 끝난다.
+    경쟁 가설이 있어야 조사가 갈라진다."""
+    assert len(_example(site(), "frame")["hypotheses"]) >= 2
+
+
+def test_예시가_실제로_프롬프트_재료에_실린다(state):
+    """`{example}` 자리가 채워지는지 — 안 실리면 약한 모델은 베낄 것이 없다."""
+    fields = briefing.frame_fields(state, site_config=site())
+    assert "mongo.list_collections" in fields["example"]
+
+
+def test_생성한_예시는_반드시_JSON으로_읽힌다():
+    """예시가 깨진 JSON이면 모델이 그 모양을 베낀다 — 매 라운드 파싱이 실패한다."""
+    for phase in ("frame", "integrate"):
+        for cfg in (site(), site(kafka=None), site(kafka=None, mongodb=None),
+                    site(redis=None, kafka=None, mongodb=None)):
+            body = _example(cfg, phase)
+            assert body["tasks"] and isinstance(body["tasks"], list)

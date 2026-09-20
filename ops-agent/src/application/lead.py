@@ -84,28 +84,60 @@ class IntegrateReply(StrictModel):
     note: str = Field(default="", max_length=2000)
 
 
-async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel]) -> Parsed:
-    """묻고, JSON을 꺼내고, 모델로 검증한다. **절대 raise하지 않는다.**"""
+def repair_prompt(prompt: str, reason: str) -> str:
+    """재시도 프롬프트 — **무엇이 틀렸는지 붙여서** 다시 묻는다.
+
+    같은 프롬프트를 한 번 더 보내는 것은 약한 모델에겐 재시도가 아니다. 사내 모델은
+    판단해서 답을 고르는 게 아니라 **주어진 틀을 채운다** — 같은 틀을 주면 같은 답이
+    온다. 사유를 붙여야 그게 새 입력이 된다.
+
+    사유를 **맨 뒤에** 붙이는 이유: 모델은 마지막에 읽은 지시를 더 따른다(9e의 울타리가
+    <사실> 뒤에도 한 겹 있는 것과 같은 이유).
+    """
+    return (f"{prompt}\n\n---\n\n## 다시\n\n앞의 답을 읽을 수 없었다: **{reason}**\n\n"
+            f"위 형식 그대로, **JSON 객체 하나만** 내라. 설명도 코드펜스도 붙이지 마라.")
+
+
+async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
+                   on_exchange=None) -> Parsed:
+    """묻고, JSON을 꺼내고, 모델로 검증한다. **절대 raise하지 않는다.**
+
+    `on_exchange(prompt, reply_text, error)`는 시도마다 불린다 — `--trace`가 여기서
+    날것을 건진다. **트레이스가 던져도 조사는 계속돼야 한다**(아래 흡수).
+    """
     last = Parsed(False, error="시도하지 않았다")
+    asked = prompt
     for attempt in range(RETRIES + 1):
+        if attempt:
+            # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
+            asked = repair_prompt(prompt, last.error or "알 수 없음")
+        text, failure = None, None
         try:
-            reply = await llm.ask(prompt)
+            reply = await llm.ask(asked)
         except Exception as exc:                                    # noqa: BLE001
             # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
             last = Parsed(False, error=f"{type(exc).__name__}: {exc}")
-            continue
-        if reply.status == "error":
-            last = Parsed(False, error=reply.error or "알 수 없는 LLM 오류")
-            continue
-        parsed = parse_object(reply.text or "")
-        if not parsed.ok:
-            last = parsed
-            continue
-        checked = validate(parsed.data, model)
-        if checked.ok:
-            return checked
-        last = checked
+        else:
+            if reply.status == "error":
+                last = Parsed(False, error=reply.error or "알 수 없는 LLM 오류")
+            else:
+                text = reply.text or ""
+                parsed = parse_object(text)
+                last = validate(parsed.data, model) if parsed.ok else parsed
+        failure = None if last.ok else last.error
+        _tell(on_exchange, asked, text, failure)
+        if last.ok:
+            return last
     return Parsed(False, error=f"{RETRIES + 1}회 시도 실패 — {last.error}")
+
+
+def _tell(on_exchange, prompt: str, text, error) -> None:
+    if on_exchange is None:
+        return
+    try:
+        on_exchange(prompt, text, error)
+    except Exception:                                               # noqa: BLE001
+        pass          # 트레이스는 편의다. 이것 때문에 조사가 멈추면 안 된다
 
 
 def _failure(where: str, reason: str) -> dict:
@@ -113,27 +145,48 @@ def _failure(where: str, reason: str) -> dict:
             "decision": "conclude", "stopped_by": "llm_error"}
 
 
-def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds: int):
-    """`EngineDeps`의 `frame`·`integrate` 자리에 꽂을 두 함수를 만든다."""
+def _dropped_note(where: str, got: Parsed) -> list[str]:
+    """걷어낸 곁다리 키를 `llm_errors`에 남길 한 줄. 조용히 고치지 않는다."""
+    if not got.dropped:
+        return []
+    return [f"{where}: 스키마에 없는 키를 걷어냈다 — {', '.join(got.dropped)}"]
+
+
+def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds: int,
+              trace=None):
+    """`EngineDeps`의 `frame`·`integrate` 자리에 꽂을 두 함수를 만든다.
+
+    `trace(node, round, prompt, reply_text, error)`를 주면 매 시도가 그대로 흘러간다.
+    **프롬프트를 고치려면 모델이 뭐라 했는지 봐야 한다** — 10b를 끝낼 때 이게 없어서
+    프롬프트 설계가 전부 추측 위에 있었다.
+    """
+
+    def _hook(node: str, state: CaseState):
+        if trace is None:
+            return None
+        return lambda prompt, text, error: trace(node, state.round, prompt, text, error)
 
     async def frame(state: CaseState) -> dict:
         prompt = fill(prompts["frame"],
                       briefing.frame_fields(state, site_config=site_config))
-        got = await ask_json(llm, prompt, FrameReply)
+        got = await ask_json(llm, prompt, FrameReply, on_exchange=_hook("frame", state))
         if not got.ok:
             return _failure("frame", got.error)
         return {"hypotheses": [Hypothesis.model_validate(h) for h in got.data["hypotheses"]],
-                "plan_tasks": [PlanTask.model_validate(t) for t in got.data["tasks"]]}
+                "plan_tasks": [PlanTask.model_validate(t) for t in got.data["tasks"]],
+                "llm_errors": _dropped_note("frame", got)}
 
     async def integrate(state: CaseState) -> dict:
         prompt = fill(prompts["integrate"],
                       briefing.integrate_fields(state, site_config=site_config,
                                                 max_rounds=max_rounds))
-        got = await ask_json(llm, prompt, IntegrateReply)
+        got = await ask_json(llm, prompt, IntegrateReply,
+                             on_exchange=_hook("integrate", state))
         if not got.ok:
             return _failure("integrate", got.error)
         return {"decision": got.data["decision"],
                 "hypotheses": [Hypothesis.model_validate(h) for h in got.data["hypotheses"]],
-                "plan_tasks": [PlanTask.model_validate(t) for t in got.data["tasks"]]}
+                "plan_tasks": [PlanTask.model_validate(t) for t in got.data["tasks"]],
+                "llm_errors": _dropped_note("integrate", got)}
 
     return frame, integrate

@@ -55,6 +55,17 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
 # 목록으로 두는 이유: "필수 인자가 없다"가 실수인지 의도인지 표가 말해야 한다.
 NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics"})
 
+# **대상에서 찾아야 아는 이름**이 들어가는 인자. 여기 적힌 인자에 값을 대려면
+# 먼저 `list_collections`·`list_topics`·`scan`으로 찾았어야 한다([decisions ⑮]).
+#
+# 안 찾고 찍으면 빈 결과가 오는데, 그건 "데이터가 없다"가 아니라 "질문을 잘못했다"다.
+# 둘은 완전히 다른 사실이고 **판정이 둘을 구별 못 하면 없는 이상을 보고한다.**
+# `nodes._accept_tasks`가 이 목록으로 "찾지 않고 댄 이름"을 기록한다.
+#
+# `entry`가 빠진 것은 우연이 아니다 — REST 등재 항목은 **config가 선언**하므로
+# 찾을 것이 없다. `pattern`도 빠진다 — `*`가 정상적인 값이라 "찾았는가"를 물을 수 없다.
+DISCOVERED_ARGS = frozenset({"collection", "topic", "key", "group"})
+
 
 def action_problem(action: str, params: dict) -> str | None:
     """등재·인자 검사. 통과하면 None. **소켓에 나가기 전에 부른다.**"""

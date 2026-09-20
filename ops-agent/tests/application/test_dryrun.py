@@ -109,3 +109,37 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     assert "끝난 이유: no_runnable" in out
     # 게이트가 붙잡았다가 2라운드에 푼 것 — 이 단계가 만든 것의 요약이다.
     assert "t-9" in out and "미등재 action" in out
+
+
+def test_대본_경로는_이름_추측_검사를_끈다():
+    """**`dryrun.build_deps`가 실제로 끄는지**를 본다.
+
+    `EngineDeps(check_discovery=False)`가 동작하는지만 보면 배선이 안 보인다 —
+    RED 확인에서 `build_deps`를 True로 바꿔도 테스트가 통과했다. 대본은 시스템을
+    아는 사람이 이름을 알고 적은 것이라, 켜 두면 기록이 거짓 양성으로만 찬다.
+    """
+    from src.application.dryrun import build_deps
+    from src.config.schema_app import InvestigationConfig
+
+    deps = build_deps(Script(symptom="증상", tasks=[]), runner=None,
+                      investigation=InvestigationConfig())
+    assert deps.check_discovery is False
+
+
+async def test_대본으로_돈_조사에는_이름_기록이_안_남는다(tmp_path):
+    """소비자로 직접 확인한다 — 예제 계획은 `redis.get key='oee:L3'`처럼 이름을 댄다."""
+    from pathlib import Path as _Path
+
+    from src.application.dryrun import build_deps, initial_state
+    from src.application.fakes import ScriptedRunner
+    from src.application.graph import build_engine
+    from src.config.schema_app import InvestigationConfig
+
+    root = _Path(__file__).resolve().parent.parent.parent
+    script = load_script(root / "examples" / "case-dryrun.json")
+    deps = build_deps(script, runner=ScriptedRunner(),
+                      investigation=InvestigationConfig())
+    final = await build_engine(deps).ainvoke(
+        initial_state(script, case_id="c-1", gbm="mx", fct="gumi",
+                      clock=lambda: __import__("datetime").datetime(2026, 9, 14, 9)))
+    assert final["llm_errors"] == []

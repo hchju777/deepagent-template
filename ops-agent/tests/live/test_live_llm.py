@@ -401,6 +401,42 @@ async def test_리드가_등재된_action만_고른다(llm, lead_prompt):
     assert invented == [], f"등재에 없는 action을 지어냈다 — {invented}"
 
 
+async def test_리드가_라운드_하나에_여러_시스템을_본다(llm, lead_prompt):
+    """**①(예시 개선)이 실제로 먹혔는가.**
+
+    처음 재 봤을 때 리드는 태스크를 **하나**만 냈다 — 예시에 하나뿐이었기 때문이다.
+    라운드당 1개 × 상한 4라운드면 총 4번 읽고 조사가 끝난다. 예시를 찾기 2~3개로
+    바꿨으니 여기서 그 수가 따라와야 한다. 안 따라오면 예시 말고 다른 것이 문제다.
+    """
+    from src.application.lead import FrameReply, ask_json
+
+    got = await ask_json(llm, lead_prompt, FrameReply)
+    assert got.ok, got.error
+    tasks, hypotheses = got.data["tasks"], got.data["hypotheses"]
+    print(f"\n  가설 {len(hypotheses)}개 · 태스크 {len(tasks)}개")
+    for t in tasks:
+        print(f"    {t['id']} p{t['priority']} {t['action']} {t['params']}")
+    assert len(tasks) >= 2, "라운드 하나에 하나만 본다 — 예시를 따라오지 않았다"
+    assert len(hypotheses) >= 2, "가설이 하나뿐이면 그것만 확인하고 조사가 끝난다"
+
+
+async def test_리드가_예시의_자리표시자를_그대로_베끼지_않는다(llm, lead_prompt):
+    """**`params` 값까지 그대로 베끼는 모델이다.**
+
+    frame 예시는 이름을 받는 읽기를 아예 안 쓰므로 여기서 걸릴 것이 없어야 한다.
+    걸린다면 모델이 예시 밖에서 이름을 지어냈다는 뜻이고, 그건 ⑮ 설계가 흔들린다는
+    신호다(`nodes._accept_tasks`의 기록이 같은 것을 런타임에 잰다).
+    """
+    from src.application.lead import FrameReply, ask_json
+    from src.domain.actions import DISCOVERED_ARGS
+
+    got = await ask_json(llm, lead_prompt, FrameReply)
+    assert got.ok, got.error
+    named = [(t["id"], k, v) for t in got.data["tasks"]
+             for k, v in t["params"].items() if k in DISCOVERED_ARGS]
+    assert named == [], f"1라운드에 이름을 댔다 — {named}"
+
+
 async def test_리드가_이름을_찍지_않고_먼저_찾는다(llm, lead_prompt):
     """**우리가 컬렉션·토픽 이름을 안 알려 주기로 한 설계의 검증이다**(decisions ⑮).
 

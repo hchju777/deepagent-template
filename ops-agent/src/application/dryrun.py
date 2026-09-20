@@ -102,7 +102,10 @@ def build_deps(script: Script, *, runner, investigation) -> EngineDeps:
     return EngineDeps(runner=runner, frame=plan.frame, integrate=plan.integrate,
                       max_rounds=investigation.max_rounds,
                       parallel_width=investigation.parallel_width,
-                      max_tasks=investigation.max_tasks)
+                      max_tasks=investigation.max_tasks,
+                      # 대본은 **시스템을 아는 사람이 이름을 알고 적은 것**이다.
+                      # "찾지 않고 댔다" 검사를 켜 두면 기록이 거짓 양성으로만 찬다.
+                      check_discovery=False)
 
 
 def initial_state(script: Script, *, case_id: str, gbm: str, fct: str,

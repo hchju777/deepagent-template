@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from src.application.state import CaseState, merge_by_id
+from src.domain.actions import DISCOVERED_ARGS
 from src.domain.case import Case, Hypothesis, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
@@ -46,6 +47,10 @@ class EngineDeps:
     max_rounds: int
     parallel_width: int
     max_tasks: int
+    # 태스크가 댄 이름을 "실제로 찾았는가"로 검사할지. **사람이 쓴 대본은 끈다** —
+    # `case dryrun`의 계획 파일은 시스템을 아는 사람이 이름을 알고 적은 것이라,
+    # 켜 두면 기록이 거짓 양성으로만 찬다. 리드 LLM 경로에서만 뜻이 있다.
+    check_discovery: bool = True
 
 
 def _sanitize_task(task: PlanTask) -> PlanTask:
@@ -88,6 +93,16 @@ def _accept_hypotheses(patch: dict, *, have: set[str]) -> tuple[list[Hypothesis]
     return kept, complaints
 
 
+def _seen(state: CaseState) -> str:
+    """지금까지 본 증거를 이어 붙인 것 — "이 이름을 실제로 찾았는가"의 근거.
+
+    요약 문자열을 그대로 훑는다. `list_collections`의 결과가 `['aa', 'bb']`처럼 실려
+    있으므로 부분 문자열로 충분하고, **덜 잡는 쪽이 낫다** — 기록이 목적이라
+    거짓 양성(멀쩡한데 찍었다고 적는 것)이 거짓 음성보다 비싸다.
+    """
+    return "\n".join(f"{ref.source} {ref.summary}" for ref in state.evidence)
+
+
 def runnable_tasks(state: CaseState) -> list[PlanTask]:
     """지금 실행할 수 있는 태스크 — 우선순위 오름차순, 동률이면 FIFO.
 
@@ -104,13 +119,29 @@ def runnable_tasks(state: CaseState) -> list[PlanTask]:
     return sorted(ready, key=lambda t: t.priority)
 
 
-def _accept_tasks(patch: dict, *, room: int) -> list[PlanTask]:
-    """만들어진 태스크를 소독하고 개수 상한으로 자른다.
+def _accept_tasks(patch: dict, *, room: int,
+                  seen: str | None = "") -> tuple[list[PlanTask], list[str]]:
+    """만들어진 태스크를 소독하고 개수 상한으로 자른다. **찾지 않고 댄 이름을 기록한다.**
 
     상한을 리듀서가 아니라 여기서 거는 이유는 `state.py` 맨 위에 있다 — 리듀서에서
     raise하면 superstep이 통째로 죽는다.
+
+    `seen`이 `None`이면 검사하지 않는다(`EngineDeps.check_discovery`).
+    아니면 지금까지 본 증거를 이어 붙인 텍스트다. 태스크가 `collection`·`topic` 같은
+    **찾아야 아는 이름**(`DISCOVERED_ARGS`)에 거기 없는 값을 대면 기록한다 —
+    **막지는 않는다.** 증상 자체가 이름을 담고 있는 정당한 경우가 있고, 무엇보다
+    ⑮ 설계("이름은 리드가 찾는다")가 실제로 먹히는지를 **빈도로 알아야** 막을지
+    정할 수 있다. 자주 차면 그때 거부로 올린다.
     """
-    return [_sanitize_task(t) for t in patch.get("plan_tasks", [])][:max(0, room)]
+    kept = [_sanitize_task(t) for t in patch.get("plan_tasks", [])][:max(0, room)]
+    if seen is None:
+        return kept, []
+    guessed = []
+    for task in kept:
+        for name, value in sorted(task.params.items()):
+            if name in DISCOVERED_ARGS and isinstance(value, str) and value not in seen:
+                guessed.append(f"{task.id}: 찾지 않고 이름을 댔다 — {name}={value!r}")
+    return kept, guessed
 
 
 def make_nodes(deps: EngineDeps) -> dict:
@@ -119,10 +150,14 @@ def make_nodes(deps: EngineDeps) -> dict:
         # frame 시점에는 증거가 하나도 없다 — 그래서 여기서 인용을 단 가설은
         # 전부 `open`으로 돌아간다. 그게 맞다: 아직 아무것도 안 봤다.
         hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
+        # frame 시점엔 증거가 없으므로 `seen`이 비어 있다 — 이름을 대면 전부 기록된다.
+        # 그게 맞다: 아직 아무것도 안 봤는데 이름을 안다면 찍은 것이다.
+        tasks, guessed = _accept_tasks(patch, room=deps.max_tasks,
+                                       seen=_seen(state) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
-                "plan_tasks": _accept_tasks(patch, room=deps.max_tasks),
-                "llm_errors": list(patch.get("llm_errors", [])) + complaints,
+                "plan_tasks": tasks,
+                "llm_errors": list(patch.get("llm_errors", [])) + complaints + guessed,
                 "round": 1}
 
     async def select(state: CaseState) -> dict:
@@ -154,10 +189,11 @@ def make_nodes(deps: EngineDeps) -> dict:
     async def integrate(state: CaseState) -> dict:
         patch = await deps.integrate(state)
         room = deps.max_tasks - len(state.plan_tasks)
-        fresh = _accept_tasks(patch, room=room)
+        fresh, guessed = _accept_tasks(
+            patch, room=room, seen=_seen(state) if deps.check_discovery else None)
         hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
         patch = {**patch, "plan_tasks": fresh, "hypotheses": hypotheses,
-                 "llm_errors": list(patch.get("llm_errors", [])) + complaints}
+                 "llm_errors": list(patch.get("llm_errors", [])) + complaints + guessed}
 
         # 리드가 이미 끝낸 이유를 댔으면(LLM 실패 등) 그것이 이긴다. 아래 규칙들이
         # 덮어쓰면 "LLM이 죽어서"가 "상한에 걸려서"로 둔갑한다 — 12a가 "미확정"과

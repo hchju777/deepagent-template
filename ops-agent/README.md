@@ -225,6 +225,7 @@ python -m src case dryrun --plan examples/case-dryrun.json --stub-seeds examples
 
 ```bash
 python -m src case investigate c-1                    # 대상에 붙는다
+python -m src case investigate c-1 --trace            # 프롬프트·날것 응답을 남긴다
 python -m src case investigate c-1 --stub-seeds examples/stub-seeds.json
 ```
 
@@ -249,7 +250,14 @@ id는 **State에 실재하는 것만** 남는다 — 환각한 인용을 그냥 
 ("조사할 게 없었다"와 절대 같은 모양이 되면 안 된다).
 
 프롬프트는 `config/prompts/investigate-{frame,integrate}.md`에 있다 — 운영이 직접
-고치는 파일이라 코드에 안 박았다. 자세한 것은 [10b단계 문서](STEPS/step-10b-lead.md).
+고치는 파일이라 코드에 안 박았다. **`{example}` 자리의 예시는 코드가 만든다** —
+사내 모델로 재 보니 리드는 판단해서 고르는 게 아니라 **예시의 틀을 채운다**(`id`·
+`action`·`params`를 그대로 베끼고 `goal`만 바꿨다). 그러면 예시가 곧 출력이므로,
+Kafka 없는 사이트에 `kafka.list_topics`가 예시로 박혀 있으면 그걸 그대로 부른다.
+
+`--trace`는 라운드마다 **프롬프트·날것 응답·결과**를 `output/traces/<케이스>/`에
+남긴다. 파싱된 결과만 봐서는 모델이 무엇을 했는지 안 보인다 — 위 사실도 트레이스를
+보고서야 알았다. 자세한 것은 [10b단계 문서](STEPS/step-10b-lead.md).
 
 ```bash
 python -m src schedule --list       # 무엇이 언제 도는지 (돌리지는 않는다)

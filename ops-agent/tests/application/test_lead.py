@@ -115,13 +115,62 @@ async def test_첫_응답이_쓰레기여도_둘째가_맞으면_통과한다(ca
     assert "stopped_by" not in patch
 
 
-async def test_모델이_지어낸_필드는_응답_전체를_거부한다(case):
-    """규율 5. 받아 주면 아무도 안 쓰는 값이 State에 섞인다."""
-    frame, _, _ = leads(reply(tasks=[TASK], confidence=0.9),
-                        reply(tasks=[TASK], confidence=0.9))
+async def test_재시도_프롬프트가_실패_사유를_실어_보낸다(case):
+    """**같은 프롬프트를 한 번 더 보내는 것은 약한 모델에겐 재시도가 아니다.**
+
+    사내 모델은 판단해서 고르는 게 아니라 주어진 틀을 채운다 — 같은 틀을 주면
+    같은 답이 온다. 사유가 실려야 그게 새 입력이 된다.
+    """
+    _, integrate, llm = leads(reply(decision="maybe"), reply(decision="conclude"))
+    await integrate(CaseState(case=case))
+
+    first, second = llm.prompts
+    assert "다시" not in first                       # 1차는 원본 그대로
+    assert second.startswith(first)                 # 2차는 원본 + 사유
+    assert "decision" in second and "continue" in second.split("## 다시")[1]
+
+
+async def test_재시도_사유가_이미_걷어낸_키를_다시_탓하지_않는다(case):
+    """수리 프롬프트는 **진짜 문제만** 말해야 한다.
+
+    `confidence`는 우리가 조용히 걷어낼 것이므로 모델에게 그걸 고치라고 하면
+    엉뚱한 곳을 보게 된다. 약한 모델일수록 마지막에 읽은 지시를 그대로 따른다.
+    """
+    _, integrate, llm = leads(reply(decision="maybe", confidence=0.9),
+                              reply(decision="conclude"))
+    await integrate(CaseState(case=case))
+
+    repair = llm.prompts[1].split("## 다시")[1]
+    assert "decision" in repair
+    assert "confidence" not in repair
+
+
+async def test_재시도_사유가_맨_뒤에_붙는다(case):
+    """모델은 마지막에 읽은 지시를 더 따른다 — 9e의 울타리가 <사실> 뒤에도
+    한 겹 있는 것과 같은 이유다."""
+    from src.application.lead import repair_prompt
+
+    made = repair_prompt("원래 프롬프트", "무엇이 틀렸는지")
+    assert made.index("원래 프롬프트") < made.index("무엇이 틀렸는지")
+
+
+async def test_곁다리_필드_하나로_계획이_통째로_날아가지_않는다(case):
+    """약한 모델은 `"confidence"` 같은 것을 자주 붙인다. 응답을 통째로 버리면
+    **멀쩡한 계획이 라운드째 날아간다.** 걷어내되 기록은 남긴다."""
+    frame, _, llm = leads(reply(tasks=[TASK], confidence=0.9))
     patch = await frame(CaseState(case=case))
-    assert patch["stopped_by"] == "llm_error"
+    assert len(llm.prompts) == 1                 # 재시도조차 안 했다
+    assert [t.id for t in patch["plan_tasks"]] == ["t-1"]
+    assert "stopped_by" not in patch
     assert "confidence" in patch["llm_errors"][0]
+
+
+async def test_값이_틀리면_수리_재시도로_간다(case):
+    """`"decision": "maybe"`는 걷어낼 수 없다 — 모델이 우리 어휘를 안 따른 것이다."""
+    _, integrate, llm = leads(reply(decision="maybe"), reply(decision="conclude"))
+    patch = await integrate(CaseState(case=case))
+    assert len(llm.prompts) == 2
+    assert patch["decision"] == "conclude"
 
 
 # ── 소독 (규율 3·4) ───────────────────────────────────────────────
@@ -177,6 +226,71 @@ async def test_근거가_전부_환각이면_판정이_open으로_되돌아간�
     assert "open으로 되돌렸다" in patch["llm_errors"][0]
 
 
+# ── 찾지 않고 댄 이름 (decisions ⑮ 계측) ──────────────────────────
+
+def _deps(frame, integrate=None, **extra):
+    from src.application.fakes import ScriptedRunner
+    body = {"runner": ScriptedRunner(), "frame": frame, "integrate": integrate or frame,
+            "max_rounds": 3, "parallel_width": 2, "max_tasks": 20}
+    body.update(extra)
+    return EngineDeps(**body)
+
+
+async def test_증거에_없는_이름을_대면_기록된다(case):
+    """**⑮ 설계가 실제로 먹히는지 재는 계측기다.**
+
+    안 찾고 찍으면 빈 결과가 오는데, 그건 "데이터가 없다"가 아니라 "질문을
+    잘못했다"다. 둘을 구별 못 하면 판정이 **없는 이상을 보고한다.**
+    """
+    _, integrate, _ = leads(reply(decision="continue", tasks=[
+        {"id": "t-5", "goal": "읽는다", "role": "data_prober", "action": "mongo.find",
+         "params": {"collection": "안_찾아본_이름", "filter": {}}}]))
+    nodes = make_nodes(_deps(integrate))
+    patch = await nodes["integrate"](CaseState(case=case, round=1, evidence=[
+        EvidenceRef(id="t-1.e1", source="mongo.list_collections",
+                    summary="2건 ['aa_events', 'bb_state']")]))
+
+    assert "찾지 않고 이름을 댔다" in patch["llm_errors"][0]
+    assert "안_찾아본_이름" in patch["llm_errors"][0]
+    # **막지는 않는다** — 빈도를 봐야 막을지 정할 수 있고, 증상이 이름을 담은
+    # 정당한 경우도 있다.
+    assert [t.id for t in patch["plan_tasks"]] == ["t-5"]
+
+
+async def test_증거에서_본_이름이면_안_남는다(case):
+    _, integrate, _ = leads(reply(decision="continue", tasks=[
+        {"id": "t-5", "goal": "읽는다", "role": "data_prober", "action": "mongo.find",
+         "params": {"collection": "bb_state", "filter": {}}}]))
+    nodes = make_nodes(_deps(integrate))
+    patch = await nodes["integrate"](CaseState(case=case, round=1, evidence=[
+        EvidenceRef(id="t-1.e1", source="mongo.list_collections",
+                    summary="2건 ['aa_events', 'bb_state']")]))
+    assert patch["llm_errors"] == []
+
+
+async def test_이름이_안_들어가는_읽기는_검사하지_않는다(case):
+    """`pattern="*"`·`entry=...`는 찾을 것이 없다 — REST 항목은 config가 선언한다."""
+    frame, _, _ = leads(reply(tasks=[
+        TASK,
+        {"id": "t-2", "goal": "훑는다", "role": "data_prober", "action": "redis.scan",
+         "params": {"pattern": "*"}},
+        {"id": "t-3", "goal": "부른다", "role": "data_prober", "action": "rest.query",
+         "params": {"entry": "summary_badge", "params": {}}}]))
+    patch = await make_nodes(_deps(frame))["frame"](CaseState(case=case))
+    assert patch["llm_errors"] == []
+
+
+async def test_사람이_쓴_대본에는_이_검사를_안_건다(case):
+    """`case dryrun`의 계획 파일은 **시스템을 아는 사람이 이름을 알고 적은 것**이다.
+    켜 두면 기록이 거짓 양성으로만 차고, 그러면 아무도 그 필드를 안 본다."""
+    frame, _, _ = leads(reply(tasks=[
+        {"id": "t-1", "goal": "읽는다", "role": "data_prober", "action": "redis.get",
+         "params": {"key": "oee:L3"}}]))
+    patch = await make_nodes(_deps(frame, check_discovery=False))["frame"](
+        CaseState(case=case))
+    assert patch["llm_errors"] == []
+
+
 # ── 프롬프트 ───────────────────────────────────────────────────────
 
 async def test_프롬프트의_등재_목록이_config에서_나온다(case):
@@ -211,6 +325,41 @@ def test_JSON_예시의_중괄호는_자리로_안_센다():
 
 def test_fill은_같은_자리를_여러_번_채운다():
     assert lead.fill("{a}와 {a}", {"a": "x"}) == "x와 x"
+
+
+# ── 트레이스 ───────────────────────────────────────────────────────
+
+async def test_트레이스가_시도마다_날것을_건넨다(case):
+    """**파싱된 결과만 봐서는 모델이 무엇을 했는지 안 보인다.**
+
+    사내에서 "모델이 예시를 그대로 베낀다"는 것을 알아낸 경로가 이것이고, 그건 최종
+    State에는 흔적이 없는 사실이었다. 실패한 시도도 남아야 한다 — 고칠 근거가 거기 있다.
+    """
+    seen = []
+    llm = ScriptedAdapter(["쓰레기", reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS,
+                              max_rounds=3,
+                              trace=lambda *row: seen.append(row))
+    await frame(CaseState(case=case, round=2))
+
+    assert len(seen) == 2                       # 실패한 1차도 남는다
+    (node, round_no, prompt, text, error) = seen[0]
+    assert (node, round_no, text) == ("frame", 2, "쓰레기")
+    assert error and "JSON" in error
+    assert "다시" in seen[1][2]                  # 2차는 수리 프롬프트
+    assert seen[1][4] is None                   # 2차는 성공
+
+
+async def test_트레이스가_던져도_조사는_계속된다(case):
+    """트레이스는 편의다. 디스크가 차서 못 쓰는 것 때문에 조사가 멈추면 안 된다."""
+    def explode(*_):
+        raise OSError("No space left on device")
+
+    frame, _ = lead.make_lead(
+        ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0),
+        site_config=site_config(), prompts=PROMPTS, max_rounds=3, trace=explode)
+    patch = await frame(CaseState(case=case))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-1"]
 
 
 # ── 그래프까지 합쳐서 ──────────────────────────────────────────────
@@ -448,3 +597,54 @@ def test_필요한_자리가_없으면_기동을_막는다(tmp_path):
     with pytest.raises(SystemExit) as caught:
         _load_lead_prompt(tmp_path, "p.md", slots=briefing.FRAME_SLOTS)
     assert "{case}" in str(caught.value) and "{actions}" in str(caught.value)
+
+
+def test_예시_자리가_없으면_기동을_막는다(tmp_path):
+    """**사내 모델은 예시의 틀을 채우는 식으로 답한다** — 예시가 없으면 베낄 것이
+    없어 형식이 매번 달라지고, 그건 매 라운드 파싱 실패로 나타난다."""
+    import pytest
+
+    from src.__main__ import _load_lead_prompt
+    from src.application import briefing
+
+    (tmp_path / "p.md").write_text("{case}\n{actions}\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _load_lead_prompt(tmp_path, "p.md", slots=briefing.FRAME_SLOTS)
+    assert "{example}" in str(caught.value)
+
+
+def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path, capsys, monkeypatch):
+    """**최종 State만 봐서는 모델이 예시를 베꼈는지 알 수 없다.**
+
+    10b를 끝낼 때 이게 없어서 프롬프트 설계가 전부 추측 위에 있었다.
+    """
+    from src.__main__ import main
+
+    config_root = _cli_tree(tmp_path, monkeypatch)
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"rest": {"summary_badge": [
+        {"group": "Operator", "title": "Check", "alarm": 0, "caution": 0, "normal": 0}],
+        "prod_status": {"status": "In Production"}}}), encoding="utf-8")
+
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
+    assert main() == 0
+    capsys.readouterr()
+
+    replies = ["설명을 먼저 드리자면", reply(tasks=[TASK]), reply(decision="conclude")]
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
+                        lambda cfg, *, clock, warn=None: ScriptedAdapter(replies, clock=clock))
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "case", "investigate", "c-1", "--stub-seeds", str(seeds),
+        "--trace", str(tmp_path / "traces")])
+    assert main() == 0
+
+    files = sorted((tmp_path / "traces" / "c-1").glob("*.md"))
+    assert len(files) == 3                       # frame 2회(재시도) + integrate 1회
+    first = files[0].read_text(encoding="utf-8")
+    assert "설명을 먼저 드리자면" in first          # 날것이 남는다
+    assert "못 읽었다" in first
+    assert "mongo.list_collections" in first     # 물어본 프롬프트도 통째로
+    assert "트레이스 3건" in capsys.readouterr().out

@@ -3,13 +3,24 @@
 관용이 너무 좁으면 멀쩡한 답이 "형식 오류"로 버려지고, 너무 넓으면 모델이 지어낸
 필드가 State에 조용히 들어간다. 그 선이 여기 적혀 있다.
 """
+from typing import Literal
+
 from src.application.schemas import parse_object, strip_fence, validate
 from src.domain.base import StrictModel
 
 
 class Reply(StrictModel):
-    decision: str
+    decision: Literal["continue", "conclude"]
     count: int = 0
+
+
+class Item(StrictModel):
+    name: str
+
+
+class Nested(StrictModel):
+    decision: str
+    items: list[Item] = []
 
 
 # ── 울타리 ────────────────────────────────────────────────────────
@@ -67,14 +78,40 @@ def test_객체가_아닌_JSON은_거부한다():
 
 # ── 검증 ──────────────────────────────────────────────────────────
 
-def test_모델이_지어낸_필드는_거부된다():
-    """`extra="forbid"`가 여기서 값을 한다(규율 5).
+def test_모델이_지어낸_필드는_걷히고_나머지는_산다():
+    """규율 5의 **좁은 예외**다 — LLM 응답 봉투만.
 
-    받아 주면 `{"decision": "continue", "confidence": 0.9}`의 `confidence`가
-    State에 섞여 들어가고, 아무도 안 쓰는데 보고서에는 실릴 수 있다.
+    약한 모델은 `"confidence": 0.9` 같은 곁다리를 자주 붙인다. 응답 전체를 버리면
+    **멀쩡한 조사 계획이 라운드째 날아간다.** 곁다리는 형식 실수이지 계획이 틀린
+    것이 아니다. config·도메인 모델의 `extra="forbid"`는 그대로다.
     """
     checked = validate({"decision": "continue", "confidence": 0.9}, Reply)
-    assert not checked.ok and "confidence" in checked.error
+    assert checked.ok and checked.data == {"decision": "continue", "count": 0}
+    assert checked.dropped == ("confidence",)      # 조용히 고치지 않는다
+
+
+def test_중첩된_곁다리도_걷힌다():
+    """태스크 하나에 `"reason"`을 붙이는 것이 실제로 흔한 모양이다."""
+    checked = validate({"decision": "continue",
+                        "items": [{"name": "t-1", "reason": "왜냐하면"}]}, Nested)
+    assert checked.ok and checked.dropped == ("items.0.reason",)
+    assert checked.data["items"] == [{"name": "t-1"}]
+
+
+def test_값이_틀린_것은_여전히_거부한다():
+    """**걷어내기가 여기까지 넓어지면 안 된다.**
+
+    `"decision": "maybe"`는 형식 실수가 아니라 모델이 우리 어휘를 안 따른 것이고,
+    걷어낼 수도 없다. 그 실패는 수리 재시도로 가야 한다.
+    """
+    checked = validate({"decision": "maybe"}, Reply)
+    assert not checked.ok and "continue" in checked.error
+
+
+def test_곁다리와_값_오류가_섞이면_거부한다():
+    """걷어내기로 구할 수 있는 응답이 아니다 — 하나라도 다른 오류가 있으면 전부 거부."""
+    checked = validate({"decision": "maybe", "confidence": 1}, Reply)
+    assert not checked.ok
 
 
 def test_검증_실패는_예외가_아니라_값이다():

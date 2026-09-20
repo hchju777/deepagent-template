@@ -34,6 +34,7 @@
 """
 import argparse
 import asyncio
+import itertools
 import json
 import os
 import sys
@@ -792,14 +793,44 @@ def _load_lead_prompt(config_root: Path, relative: str, *, slots: frozenset) -> 
         raise SystemExit(f"프롬프트 파일이 없다 — {path}")
     text = path.read_text(encoding="utf-8")
 
+    # `{example}`도 필수다. 사내 모델은 **예시의 틀을 채우는** 식으로 답하므로,
+    # 예시가 없으면 베낄 것이 없어 형식이 매번 달라진다.
     problems = [f"{{{name}}} 자리가 없다 — 리드가 그 재료를 못 받는다"
-                for name in ("case", "actions") if f"{{{name}}}" not in text]
+                for name in ("case", "actions", "example") if f"{{{name}}}" not in text]
     problems += [f"{{{name}}}는 우리가 채우지 않는 자리다 — 그대로 LLM에게 나간다. "
                  f"쓸 수 있는 것: {', '.join(sorted(slots))}"
                  for name in sorted(slots_in(text) - slots)]
     if problems:
         raise SystemExit(f"{relative}:\n  " + "\n  ".join(problems))
     return text
+
+
+def _make_tracer(case_id: str, *, folder: Path):
+    """리드에게 **무엇을 물었고 무엇이 왔는지**를 그대로 파일에 남긴다.
+
+    왜 필요한가: 10b를 끝낼 때 이게 없었고, 그래서 프롬프트 설계가 전부 추측 위에
+    있었다. 사내에서 한 번 돌려 보고서야 "모델이 예시를 그대로 베낀다"는 것을 알았고,
+    그건 **최종 State만 봐서는 절대 안 보이는 사실**이었다(파싱된 결과는 멀쩡해 보인다).
+
+    날것 응답에는 대상 데이터가 실릴 수 있다. `output/`은 `.gitignore`에 있으므로
+    리포에 들어가지 않는다 — 옮길 때도 이 폴더는 빼라.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    seq = itertools.count(1)
+    written: list[Path] = []
+
+    def trace(node: str, round_no: int, prompt: str, text, error) -> None:
+        path = folder / f"{next(seq):02d}-r{round_no}-{node}.md"
+        verdict = "읽었다" if error is None else f"**못 읽었다** — {error}"
+        path.write_text(
+            f"# {case_id} · {node} · 라운드 {round_no}\n\n"
+            f"결과: {verdict}\n\n"
+            f"## 물어본 것 ({len(prompt):,}자)\n\n````\n{prompt}\n````\n\n"
+            f"## 날것 응답\n\n````\n{'(응답 없음 — 호출 자체가 실패했다)' if text is None else text}\n````\n",
+            encoding="utf-8")
+        written.append(path)
+
+    return trace, written
 
 
 def cmd_case_investigate(args, env) -> int:
@@ -838,6 +869,9 @@ def cmd_case_investigate(args, env) -> int:
                                               slots=briefing.INTEGRATE_SLOTS)}
 
     built = {}
+    tracer, traced = (None, [])
+    if args.trace:
+        tracer, traced = _make_tracer(record.id, folder=Path(args.trace) / record.id)
 
     async def go() -> dict:
         llm = build_llm(app.llm, clock=clock)
@@ -845,7 +879,8 @@ def cmd_case_investigate(args, env) -> int:
         adapters = build_adapters(site, clock=clock, seeds=seeds)
         try:
             frame, integrate = make_lead(llm, site_config=site, prompts=prompts,
-                                         max_rounds=app.investigation.max_rounds)
+                                         max_rounds=app.investigation.max_rounds,
+                                         trace=tracer)
             deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock),
                               frame=frame, integrate=integrate,
                               max_rounds=app.investigation.max_rounds,
@@ -883,6 +918,9 @@ def cmd_case_investigate(args, env) -> int:
     # 리드가 없는 증거를 인용한 것은 같은 사실이 아니다. 둘 다 시끄럽게 알리되
     # 종료 코드는 전자에만 준다 — 후자까지 1로 주면 "빨간불이 원래 그렇다"가 되고,
     # 그러면 진짜 빨간불도 안 보이게 된다.
+    if traced:
+        print(f"\n  트레이스 {len(traced)}건 — {traced[0].parent}")
+
     broken = final["stopped_by"] == "llm_error"
     if final["llm_errors"]:
         print(f"\n  ⚠ LLM 오류 {len(final['llm_errors'])}건 — "
@@ -1406,6 +1444,8 @@ def build_parser() -> argparse.ArgumentParser:
     investigate = case_sub.add_parser("investigate", help="리드 LLM으로 조사한다")
     investigate.add_argument("case_id")
     investigate.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
+    investigate.add_argument("--trace", nargs="?", const="output/traces",
+                             help="프롬프트와 날것 응답을 남긴다 (기본 output/traces)")
     investigate.set_defaults(run=cmd_case_investigate)
 
     show_case = case_sub.add_parser("show", help="케이스 한 건")

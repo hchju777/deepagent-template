@@ -21,6 +21,8 @@ url·비밀번호·계정은 프롬프트에 들어가지 않는다. 리드가 �
 부를 수 있는가"이지 "어디에 붙어 있는가"가 아니다 — 후자는 어댑터의 일이다.
 `tests/application/test_briefing.py`가 지킨다.
 """
+import json
+
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS
 
@@ -108,21 +110,98 @@ def tasks_block(state: CaseState) -> str:
     return "\n".join(lines)
 
 
+# ── 예시 (`{example}`) ────────────────────────────────────────────────
+#
+# **예시가 곧 출력이다.** 사내 모델(Haiku·낮은 effort 급)로 재 보니 리드는 판단해서
+# 고르는 게 아니라 **예시의 틀을 채운다** — `id`·`action`·`params`를 그대로 베끼고
+# `goal` 문장만 자기 말로 바꿨다. 예시에 태스크가 하나였으므로 하나를 냈고,
+# `input_evidence_ids`가 없었으므로 안 썼다. 산문 규칙은 아무 효과도 못 냈다.
+#
+# 그래서 예시는 "모양을 보여 주는 것"이 아니라 **우리가 원하는 첫 수 그 자체**여야 한다.
+# 그리고 여기서도 코드가 만든다 — Kafka가 없는 사이트에 `kafka.list_topics`가 예시로
+# 박혀 있으면 모델은 그걸 **그대로 부른다.**
+
+# frame이 쓸 읽기 — 인자에 대상 이름이 안 들어간다. **베껴도 안전하다.**
+_DISCOVERY = (("mongo.list_collections", {}),
+              ("kafka.list_topics", {}),
+              ("redis.scan", {"pattern": "*"}))
+
+# integrate가 쓸 읽기 — 찾은 이름으로 부른다. 값이 **지시문 모양**이어야 모델이
+# 바꿔 넣는다. `"collection": "..."`처럼 완결된 값을 두면 진짜로 `"..."`를 조회하고,
+# 빈 결과가 "데이터가 없다"로 읽힌다 — ⑮가 경고하는 바로 그 오독이다.
+_NAMED_READ = (("mongo.find", {"collection": "위 증거에서 본 컬렉션 이름",
+                               "filter": {}, "limit": 5}),
+               ("kafka.tail", {"topic": "위 증거에서 본 토픽 이름", "limit": 10}),
+               ("redis.get", {"key": "위 증거에서 본 키 이름"}))
+
+_GOAL = "무엇을 확인하는가 (한국어)"
+
+
+def _available(site_config, shapes, limit: int) -> list[tuple[str, dict]]:
+    picked = [(action, params) for action, params in shapes
+              if getattr(site_config.infra,
+                         _INFRA_FIELD[ACTIONS[action][0]], None) is not None]
+    return picked[:limit]
+
+
+def _free_rest_entry(site_config) -> tuple[str, dict] | None:
+    """필수 인자가 없는 등재 항목 하나. 있으면 frame 예시에 끼운다 —
+    REST는 이름을 찾을 필요가 없는(config가 선언한) 읽기다."""
+    rest = site_config.infra.rest
+    for name, entry in sorted((rest.entries if rest else {}).items()):
+        if not any(spec.required for spec in entry.params.values()):
+            return ("rest.query", {"entry": name, "params": {}})
+    return None
+
+
+def _task(index: int, action: str, params: dict, **extra) -> dict:
+    return {"id": f"t-{index}", "goal": _GOAL, "role": "data_prober",
+            "action": action, "params": params, "priority": index * 10, **extra}
+
+
+def example_block(site_config, *, phase: str) -> str:
+    """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**"""
+    if phase == "frame":
+        shapes = _available(site_config, _DISCOVERY, 3)
+        free = _free_rest_entry(site_config)
+        if free and len(shapes) < 3:
+            shapes.append(free)
+        if not shapes:
+            shapes = _available(site_config, _NAMED_READ, 1) or [("rest.query", {
+                "entry": "등재 목록의 항목 이름", "params": {}})]
+        body = {"hypotheses": [{"id": "h-1", "statement": "원인 가설 하나 (한국어 한 문장)"},
+                               {"id": "h-2", "statement": "다른 가능성 (한국어 한 문장)"}],
+                "tasks": [_task(i, a, p) for i, (a, p) in enumerate(shapes, start=1)]}
+    else:
+        shapes = _available(site_config, _NAMED_READ, 2) or [("rest.query", {
+            "entry": "등재 목록의 항목 이름", "params": {}})]
+        body = {"decision": "continue",
+                "hypotheses": [{"id": "h-1", "statement": "갱신한 가설 (한국어 한 문장)",
+                                "status": "supported",
+                                "supporting_ids": ["위 <모은 증거>에 실제로 있는 id"],
+                                "refuting_ids": []}],
+                "tasks": [_task(i, a, p, input_evidence_ids=[])
+                          for i, (a, p) in enumerate(shapes, start=4)]}
+    return json.dumps(body, ensure_ascii=False, indent=2)
+
+
 # 프롬프트 템플릿이 쓸 수 있는 자리 이름. **기동 검증이 이 목록으로 템플릿을
 # 검사한다**(`__main__._load_lead_prompt`) — 여기 없는 이름을 적으면 그 `{...}`는
 # 치환되지 않은 채 LLM에게 나가고, 응답은 그럴듯해 보여서 아무도 못 본다.
 # 9e에서 `{max_chars}`가 실제로 그렇게 새 나갔다.
-FRAME_SLOTS = frozenset({"case", "actions"})
+FRAME_SLOTS = frozenset({"case", "actions", "example"})
 INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round", "max_rounds"}
 
 
 def frame_fields(state: CaseState, *, site_config) -> dict[str, str]:
-    return {"case": case_block(state), "actions": action_catalog(site_config)}
+    return {"case": case_block(state), "actions": action_catalog(site_config),
+            "example": example_block(site_config, phase="frame")}
 
 
 def integrate_fields(state: CaseState, *, site_config, max_rounds: int) -> dict[str, str]:
     return {"case": case_block(state),
             "actions": action_catalog(site_config),
+            "example": example_block(site_config, phase="integrate"),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state),
