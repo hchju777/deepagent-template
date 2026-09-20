@@ -189,3 +189,23 @@ def test_clone이_실패해도_출력이_None이면_안_죽는다(monkeypatch, t
     repo = repo_at(tmp_path / "없음")
     outcome, why = sync(repo, status_of(repo))
     assert outcome == "failed" and isinstance(why, str)
+
+
+def test_실패에는_반드시_이유가_붙는다(monkeypatch, tmp_path):
+    """**이유 없는 실패를 만들지 않는다.**
+
+    git이 아무 말도 안 하고 끝나는 경우가 있다(환경에 따라 stdout으로만 뱉기도 한다).
+    그때 빈 문자열을 돌려주면 "실패했는데 왜인지 아무도 모른다"가 되고, 그건
+    `unreachable`을 `ok`로 적는 것과 같은 종류의 거짓말이다.
+    """
+    import subprocess as sp
+
+    class Silent:
+        returncode, stdout, stderr = 128, "", ""
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: Silent())
+    repo = repo_at(tmp_path / "없음")
+    outcome, why = sync(repo, status_of(repo))
+    assert outcome == "failed"
+    assert why.strip(), "실패했는데 이유가 비어 있다"
+    assert "128" in why

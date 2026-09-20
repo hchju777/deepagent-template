@@ -190,28 +190,9 @@ REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config"
 
 
-def env_references(root: Path) -> set[str]:
-    """config 트리가 `${...}`로 참조하는 env 이름 전부.
-
-    로더와 **같은 정규식**을 쓴다 — 여기서 따로 패턴을 베끼면 로더가 인식하는
-    참조를 테스트는 못 보는 상태가 생긴다(`${MY-KEY}`를 놓쳤던 적이 있다).
-    """
-    from src.config.envresolve import _REFERENCE
-
-    names: set[str] = set()
-    for path in sorted(root.rglob("*.json")):
-        names |= set(_REFERENCE.findall(path.read_text(encoding="utf-8")))
-    return names
-
-
-def placeholder_env(names: set[str]) -> dict[str, str]:
-    """이름에서 형식만 맞는 가짜 값을 만든다. 접속은 하지 않으므로 모양만 맞으면 된다.
-
-    이름을 손으로 적은 목록을 두지 않는 이유: config에 새 참조가 생기면 그 목록이
-    조용히 낡고, 테스트는 "env가 비어 있다"로 실패해 **새 참조가 문제인지 설정이
-    문제인지** 구분이 안 된다.
-    """
-    return {name: ("https://x" if name.endswith("_URL") else "dummy") for name in names}
+# `tests/support.py`가 갖는다 — CLI 테스트들도 같은 것을 쓴다. 두 벌이면 한쪽만
+# 고쳐지고, 그 차이가 "관계없는 테스트가 깨진다"로 나타난다.
+from tests.support import env_references, placeholder_env  # noqa: E402
 
 
 def real_env() -> dict[str, str] | None:
@@ -243,7 +224,13 @@ def test_env_참조와_env_example이_어긋나지_않는다():
     배포할 때 **어떤 키를 채워야 하는지** 알 방법이 없다(config 전체를 grep하는
     수밖에 없다).
     """
+    import pytest
     from dotenv import dotenv_values
+
+    if not (REPO / ".env.example").exists():
+        # 사내 트리에는 `.env.example`이 없다 — 운영은 `.env`만 둔다. 이건
+        # **템플릿 리포의 문서가 낡았는지** 보는 검사라, 없으면 볼 것이 없다.
+        pytest.skip(".env.example이 없다 — 템플릿 리포에서만 도는 검사다")
 
     documented = set(dotenv_values(REPO / ".env.example"))
     referenced = env_references(CONFIG)

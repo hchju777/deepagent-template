@@ -18,6 +18,10 @@ import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# **템플릿 리포에만 있는 파일.** 사내 트리는 지워도 된다 — 운영은 `.env`만 둔다.
+# 없다고 빨간불을 켜면 사람이 테스트를 고쳐 쓰게 되고, 그러면 그 테스트는 죽는다.
+TEMPLATE_ONLY = {".env.example"}
 README = PROJECT_ROOT / "README.md"
 OVERVIEW = PROJECT_ROOT / "STEPS" / "step-00-overview.md"
 
@@ -90,6 +94,8 @@ def test_문서의_내부_링크가_실재한다():
         for text, target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)",
                                        md.read_text(encoding="utf-8")):
             if target.startswith(("http://", "https://", "#")):
+                continue
+            if target.split("#")[0] in TEMPLATE_ONLY:
                 continue
             if not (md.parent / target.split("#")[0]).resolve().exists():
                 broken.append(f"{md.name}: [{text}]({target})")

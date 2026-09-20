@@ -32,21 +32,46 @@ from src.report.window import build_window
 TODAY = date(2026, 9, 7)          # 월요일 — 어제가 금요일(2026-09-04)이 되도록
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def env_references(root: Path) -> set[str]:
+    """config 트리가 `${...}`로 참조하는 env 이름 전부.
+
+    로더와 **같은 정규식**을 쓴다 — 여기서 패턴을 베끼면 로더가 인식하는 참조를
+    테스트는 못 보는 상태가 생긴다(`${MY-KEY}`를 놓쳤던 적이 있다).
+    """
+    from src.config.envresolve import _REFERENCE
+
+    names: set[str] = set()
+    for path in sorted(root.rglob("*.json")):
+        names |= set(_REFERENCE.findall(path.read_text(encoding="utf-8")))
+    return names
+
+
+def placeholder_env(names) -> dict[str, str]:
+    """이름에서 형식만 맞는 가짜 값. 접속은 하지 않으므로 모양만 맞으면 된다."""
+    return {name: ("https://x/v1" if name.endswith(("_URL", "URL")) else "x")
+            for name in names}
+
+
 def set_real_config_env(monkeypatch) -> None:
     """리포의 **실제 `config/`** 로 CLI를 돌릴 때 필요한 env를 전부 채운다.
 
-    한 곳에 모은 이유: 이 목록이 네 파일에 복사돼 있었고, `config/`에 참조가 하나
-    늘자 **네 군데가 동시에 깨졌다.** 그리고 실패 모양이 "설정이 안 치환됐다"가
-    아니라 "관계없는 CLI 테스트가 1을 돌려준다"여서 원인이 안 보였다.
+    한 곳에 모은 이유: 이 목록이 네 파일에 복사돼 있었고, config에 참조가 하나 늘자
+    **네 군데가 동시에 깨졌다.** 실패 모양이 "설정이 안 치환됐다"가 아니라
+    "관계없는 CLI 테스트가 1을 돌려준다"여서 원인이 안 보였다.
 
-    값은 `.env.example`의 키에서 만든다 — 그래야 config가 참조를 늘릴 때
-    **자동으로 따라온다.** (`.env.example`이 낡으면 그건 따로 테스트가 잡는다.)
+    **키는 `config/`에서 뽑는다. `.env.example`이 아니다.**
+    처음엔 `.env.example`을 읽었는데, 사내 트리에는 **그 파일이 없다** — 운영은
+    `.env`만 둔다. 그래서 사내에서 CLI 테스트가 무더기로 깨졌고, 사람이 매번 테스트
+    코드를 고쳐 쓰고 있었다.
+
+    config가 유일한 진실 소스다. 거기 있는 참조는 거기서 읽으면 되고, 그러면
+    **어떤 트리에서도 같게 돈다.**
     """
-    from dotenv import dotenv_values
-
-    repo = Path(__file__).resolve().parent.parent
-    for key in dotenv_values(repo / ".env.example"):
-        monkeypatch.setenv(key, "https://x/v1" if key.endswith("URL") else "x")
+    for key, value in placeholder_env(env_references(REPO_ROOT / "config")).items():
+        monkeypatch.setenv(key, value)
 YESTERDAY = date(2026, 9, 4)
 
 

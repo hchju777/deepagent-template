@@ -185,13 +185,20 @@ def sync(repo: RepoConfig, state: RepoStatus) -> tuple[Outcome, str]:
         except Exception as exc:                                    # noqa: BLE001
             return "failed", f"{type(exc).__name__}: {exc}"
         if done.returncode != 0:
-            return "failed", _scrub(_text(done.stderr), repo)
+            # **이유 없는 실패를 만들지 않는다.** git이 아무 말도 안 하고 끝나는
+            # 경우가 있고(환경에 따라 stdout으로만 뱉기도 한다), 빈 문자열을 돌려주면
+            # "실패했는데 왜인지 아무도 모른다"가 된다 — `unreachable`을 `ok`로
+            # 적는 것과 같은 종류의 거짓말이다.
+            return "failed", _scrub(
+                _text(done.stderr) or _text(done.stdout)
+                or f"git clone이 {done.returncode}로 끝났다(출력 없음)", repo)
         return "cloned", repo.path
 
-    code, _, err = _git(Path(repo.path), *header, "fetch", "--all", "--prune",
-                        timeout=_TIMEOUT_S)
+    code, out, err = _git(Path(repo.path), *header, "fetch", "--all", "--prune",
+                          timeout=_TIMEOUT_S)
     if code != 0:
-        return "failed", _scrub(err, repo)
+        return "failed", _scrub(
+            err or out or f"git fetch가 {code}로 끝났다(출력 없음)", repo)
     return "fetched", repo.path
 
 
