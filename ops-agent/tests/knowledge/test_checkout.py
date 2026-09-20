@@ -158,3 +158,34 @@ def test_로컬_레포를_실제로_클론한다(tmp_path):
     outcome, where = sync(repo, status_of(repo))
     assert outcome == "cloned", where
     assert (target / ".git").exists() and (target / "a.py").exists()
+
+
+def test_subprocess_출력이_None이어도_안_죽는다(monkeypatch, tmp_path):
+    """**진단 코드가 자기가 먼저 죽으면 안 된다.**
+
+    `capture_output=True`가 빠진 채로 돌면 `stdout`/`stderr`가 `None`이고
+    `.strip()`이 `AttributeError`로 죽는다 — handover의 Windows 함정이고 이 리포가
+    이미 한 번 물렸다. 그 순간 "왜 실패했나"를 말해 줄 함수가 사라진다.
+    """
+    import subprocess as sp
+
+    from src.knowledge.checkout import _git
+
+    class Dead:
+        returncode, stdout, stderr = 1, None, None
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: Dead())
+    code, out, err = _git(tmp_path, "remote", "get-url", "origin")
+    assert (code, out, err) == (1, "", "")
+
+
+def test_clone이_실패해도_출력이_None이면_안_죽는다(monkeypatch, tmp_path):
+    import subprocess as sp
+
+    class Dead:
+        returncode, stdout, stderr = 128, None, None
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: Dead())
+    repo = repo_at(tmp_path / "없음")
+    outcome, why = sync(repo, status_of(repo))
+    assert outcome == "failed" and isinstance(why, str)

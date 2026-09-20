@@ -65,9 +65,10 @@ class RealCodeReader(CodeReaderPort):
                                       clock=self._clock)
         if proc.returncode not in (0, 1):      # grep은 결과 없음이 1이다
             return ProbeResult.failed(
-                err.decode("utf-8", "replace").strip() or f"git이 {proc.returncode}로 끝났다",
+                (err or b"").decode("utf-8", "replace").strip()
+                or f"git이 {proc.returncode}로 끝났다",
                 source=source, clock=self._clock)
-        return ProbeResult.succeeded(out.decode("utf-8", "replace"), source=source,
+        return ProbeResult.succeeded((out or b"").decode("utf-8", "replace"), source=source,
                                      clock=self._clock)
 
     async def show(self, repo: str, commit: str, path: str) -> ProbeResult:

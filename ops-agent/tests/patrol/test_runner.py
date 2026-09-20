@@ -183,6 +183,8 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
         "patrol", "check", "--all-sites", "--stub-seeds", str(seeds)])
 
     assert main() == 1                      # finding이 있으면 0이 아니다
-    out = capsys.readouterr().out
-    assert "Line/Defect" in out and "전부 0" in out
+    captured = capsys.readouterr()
+    out = captured.out
+    # 빈 stdout이면 명령이 일찍 죽은 것이다 — 이유는 stderr에 있다.
+    assert "Line/Defect" in out and "전부 0" in out, captured.err or out
     assert "mx/gumi" in out and "mx/sevt" in out      # --all-sites가 둘 다 돌았다

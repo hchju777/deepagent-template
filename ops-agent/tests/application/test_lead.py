@@ -629,7 +629,7 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
-    assert main() == 0
+    assert main() == 0, capsys.readouterr().err
     case_id = "c-1"
     assert case_id in capsys.readouterr().out
 
@@ -669,7 +669,7 @@ def test_CLI가_돈_조사와_못_돈_조사를_같은_등급으로_보지_않�
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
-    assert main() == 0
+    assert main() == 0, capsys.readouterr().err
     capsys.readouterr()
 
     replies = [reply(tasks=[TASK]),
@@ -703,7 +703,7 @@ def test_CLI가_LLM_실패를_0으로_숨기지_않는다(tmp_path, capsys, monk
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
-    assert main() == 0
+    assert main() == 0, capsys.readouterr().err
     capsys.readouterr()
 
     monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
@@ -712,7 +712,7 @@ def test_CLI가_LLM_실패를_0으로_숨기지_않는다(tmp_path, capsys, monk
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "case", "investigate", "c-1", "--stub-seeds", str(seeds)])
 
-    assert main() == 1
+    assert main() == 1, capsys.readouterr().err
     captured = capsys.readouterr()
     assert "끝난 이유: llm_error" in captured.out
     assert "ConnectTimeout" in captured.err        # 사유는 stderr에 그대로 남는다
@@ -780,7 +780,7 @@ def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
-    assert main() == 0
+    assert main() == 0, capsys.readouterr().err
     capsys.readouterr()
 
     replies = ["설명을 먼저 드리자면", reply(tasks=[TASK]), reply(decision="conclude")]
@@ -790,7 +790,7 @@ def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "case", "investigate", "c-1", "--stub-seeds", str(seeds),
         "--trace", str(tmp_path / "traces")])
-    assert main() == 0
+    assert main() == 0, capsys.readouterr().err
 
     folder = tmp_path / "traces" / "c-1"
     files = sorted(f for f in folder.glob("*.md") if f.name != "summary.md")

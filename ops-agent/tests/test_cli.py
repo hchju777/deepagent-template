@@ -380,7 +380,7 @@ def test_schedule_list가_다음_발사_시각을_찍는다(seeded_config, capsy
                  "schedule", "--list", "--list-count", "3"])
     out = capsys.readouterr().out
 
-    assert code == 0
+    assert code == 0, capsys.readouterr().err
     assert "cron 0 8 * * 1-5" in out
     assert out.count("08:00") == 3, out
     for weekend in ("Sat", "Sun"):
@@ -418,7 +418,7 @@ def test_schedule이_꺼져_있으면_말하고_끝낸다(seeded_config, capsys)
                  "schedule"])
     captured = capsys.readouterr()
 
-    assert code == 1
+    assert code == 1, capsys.readouterr().err
     assert "돌릴 것이 없다" in captured.err
 
 

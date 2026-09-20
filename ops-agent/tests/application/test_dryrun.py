@@ -103,7 +103,7 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
         "--plan", str(root / "examples" / "case-dryrun.json"),
         "--stub-seeds", str(root / "examples" / "stub-seeds.json")])
 
-    assert main() == 0
+    assert main() == 0, capsys.readouterr().err
     out = capsys.readouterr().out
     assert "끝난 이유: no_runnable" in out
     # 게이트가 붙잡았다가 2라운드에 푼 것 — 이 단계가 만든 것의 요약이다.

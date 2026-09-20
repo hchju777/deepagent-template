@@ -237,13 +237,19 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
             "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
             "patrol", "open", "--gbm", "mx", "--fct", "gumi",
             "--stub-seeds", str(seeds), *extra])
-        return main(), capsys.readouterr().out
+        # **stderr도 돌려준다.** 안 그러면 실패가 "assert 1 == 0"으로만 보이고
+        # 진짜 이유(설정이 안 읽혔다 등)는 버려진다.
+        code = main()
+        captured = capsys.readouterr()
+        return code, captured.out, captured.err
 
-    code, out = run("--dry-run")
-    assert code == 0 and "Operator/Check" in out
+    code, out, err = run("--dry-run")
+    assert code == 0, err
+    assert "Operator/Check" in out
     assert not (tmp_path / "cases.json").exists()     # dry-run은 저장하지 않는다
 
-    code, out = run()
-    assert code == 0 and "c-1" in out
-    code, out = run()
+    code, out, err = run()
+    assert code == 0, err
+    assert "c-1" in out
+    code, out, err = run()
     assert "c-1" in out and "2회째" in out             # 두 번째는 첨부다

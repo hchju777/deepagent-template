@@ -94,7 +94,7 @@ def test_이름이_사는_파일이_하나도_없으면_말한다(tmp_path, monk
                         config_paths=["config/없는파일.json"])
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
-    assert code == 1
+    assert code == 1, capsys.readouterr().err
     assert "하나도" in captured.out
     assert "없는파일.json" in captured.out
 
@@ -115,7 +115,7 @@ def test_다른_레포가_클론돼_있으면_막는다(tmp_path, monkeypatch, c
     config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"))
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
-    assert code == 1
+    assert code == 1, capsys.readouterr().err
     assert "origin이 config와 다르다" in captured.out
 
 
@@ -130,7 +130,7 @@ def test_sync는_붙을_수_없으면_값으로_실패하고_plan을_안내한�
     config_root = _tree(tmp_path, repo_path=str(tmp_path / "없음"),
                         url="https://127.0.0.1:1/없는/레포")
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "sync")
-    assert code == 1
+    assert code == 1, capsys.readouterr().err
     assert "failed" in captured.out
     assert "code plan" in captured.err
 
@@ -146,7 +146,7 @@ def test_기동이_선언끼리의_어긋남을_잡는다(tmp_path, monkeypatch,
     set_real_config_env(monkeypatch)
     monkeypatch.setattr("sys.argv", ["src", "--config-root", str(config_root),
                                      "--env-file", str(tmp_path / "none"), "boot"])
-    assert main() == 1
+    assert main() == 1, capsys.readouterr().err
     assert "없는레포" in capsys.readouterr().err
 
 

@@ -50,11 +50,24 @@ class RepoStatus(StrictModel):
         return self.exists and self.is_git and self.origin_matches and not self.problems
 
 
+def _text(value) -> str:
+    """`subprocess`의 출력은 **None일 수 있다.**
+
+    `capture_output=True`면 문자열이지만, 그 인자가 빠진 채로 돌면 `None`이 오고
+    `.strip()`이 `AttributeError`로 죽는다. handover의 Windows 함정이 정확히 이것이고,
+    이 리포에서 이미 한 번 물렸다(`test_dead_settings`의 grep 호출).
+
+    **죽는 자리가 진단 코드라는 것이 제일 나쁘다** — 왜 실패했는지 말해 줘야 할
+    함수가 자기가 먼저 죽으면 사람은 원인을 못 본다.
+    """
+    return (value or "").strip()
+
+
 def _git(root: Path, *args, timeout: int = 10) -> tuple[int, str, str]:
     try:
         done = subprocess.run(["git", "-C", str(root), *args], capture_output=True,
                               text=True, timeout=timeout)
-        return done.returncode, done.stdout.strip(), done.stderr.strip()
+        return done.returncode, _text(done.stdout), _text(done.stderr)
     except FileNotFoundError:
         return 127, "", "git 실행 파일이 없다"
     except subprocess.TimeoutExpired:
@@ -172,7 +185,7 @@ def sync(repo: RepoConfig, state: RepoStatus) -> tuple[Outcome, str]:
         except Exception as exc:                                    # noqa: BLE001
             return "failed", f"{type(exc).__name__}: {exc}"
         if done.returncode != 0:
-            return "failed", _scrub(done.stderr.strip(), repo)
+            return "failed", _scrub(_text(done.stderr), repo)
         return "cloned", repo.path
 
     code, _, err = _git(Path(repo.path), *header, "fetch", "--all", "--prune",
