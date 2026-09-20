@@ -196,3 +196,154 @@ def test_없는_층은_오류가_아니다(tmp_path, monkeypatch, capsys):
     assert code == 0, captured.out + captured.err
     assert "config 층 1/2개" in captured.out
     assert "없음:" in captured.out            # 조용히 넘어가지도 않는다
+
+
+# ── code read — 배포 커밋의 파일을 **실제로** 읽는다 ────────────────
+
+def _repo_with_two_commits(root, *, origin):
+    """옛 커밋과 새 커밋의 내용이 다른 레포. **그 차이가 요점이다.**"""
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)  # noqa: E731
+    (root / "config").mkdir(parents=True)
+    run("git", "init", "-q", "-b", "main")
+    run("git", "config", "user.email", "t@t")
+    run("git", "config", "user.name", "t")
+    run("git", "remote", "add", "origin", origin)
+    (root / "config" / "common.json").write_text('{"name": "OLD"}\n', encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "first")
+    old = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                         capture_output=True, text=True).stdout.strip()
+    (root / "config" / "common.json").write_text('{"name": "NEW"}\n', encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "second")
+    return old
+
+
+def test_배포_커밋의_내용을_읽는다(tmp_path, monkeypatch, capsys):
+    """**11a의 핵심 계약이다.** `code status`는 파일이 *있는지*만 본다 —
+    `git show <배포커밋>:경로`가 실제로 내용을 돌려주는지는 이 명령만 확인한다.
+
+    사이트가 뒤처져 있는데 최신 코드를 읽으면 **떠 있지도 않은 코드로 확신에 찬
+    오답**을 낸다. 배포 커밋을 박아 두고 옛 내용이 나오는지 본다.
+    """
+    url = "https://git.example.com/team/dt-core"
+    old = _repo_with_two_commits(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+    deployment = tmp_path / "knowledge" / "deployment"
+    deployment.mkdir(parents=True, exist_ok=True)
+    (deployment / "mx.json").write_text(json.dumps({"pins": {
+        "processor": {"commit": old, "how": "declared"}}}), encoding="utf-8")
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "read",
+                          "--service", "processor", "--path", "config/common.json")
+    assert code == 0, captured.out + captured.err
+    assert "OLD" in captured.out and "NEW" not in captured.out
+
+
+def test_선언이_없으면_가정했다고_적는다(tmp_path, monkeypatch, capsys):
+    """확인한 것과 가정한 것을 같은 모양으로 찍으면 사람이 구별을 못 한다."""
+    url = "https://git.example.com/team/dt-core"
+    _repo_with_two_commits(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "read",
+                          "--service", "processor", "--path", "config/common.json")
+    assert code == 0, captured.out + captured.err
+    assert "가정했다" in captured.out
+    assert "NEW" in captured.out              # 선언이 없으면 main 최신이다
+
+
+def test_없는_서비스는_아는_것을_알려준다(tmp_path, monkeypatch, capsys):
+    url = "https://git.example.com/team/dt-core"
+    _repo_with_two_commits(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+
+    with pytest.raises(SystemExit) as caught:
+        _run(config_root, tmp_path, monkeypatch, capsys, "code", "read",
+             "--service", "없는서비스", "--path", "a.json")
+    assert "processor" in str(caught.value)
+
+
+def test_없는_파일은_값으로_실패한다(tmp_path, monkeypatch, capsys):
+    """배포 커밋 선언이 오래되면 **일상적으로** 일어난다 — 죽으면 안 된다."""
+    url = "https://git.example.com/team/dt-core"
+    _repo_with_two_commits(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "read",
+                          "--service", "processor", "--path", "없는/파일.json")
+    assert code == 1
+    assert captured.err.strip()
+
+
+def test_경로의_자리표시자가_치환된다(tmp_path, monkeypatch, capsys):
+    """`config_paths`와 같은 문법이어야 사람이 거기서 복사해 붙일 수 있다."""
+    url = "https://git.example.com/team/dt-core"
+    root = tmp_path / "checkout"
+    _repo_with_two_commits(root, origin=url)
+    (root / "config" / "gumi").mkdir()
+    (root / "config" / "gumi" / "mx.json").write_text('{"층": "법인"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "layer"], cwd=root, check=True,
+                   capture_output=True)
+    config_root = _tree(tmp_path, repo_path=str(root), url=url)
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "read",
+                          "--service", "processor", "--path", "config/{fct}/{gbm}.json")
+    assert code == 0, captured.out + captured.err
+    assert "법인" in captured.out
+
+
+def test_fct_없이도_코드_명령이_돈다(tmp_path, monkeypatch, capsys):
+    """**코드는 GBM 단위로 같다.** "어느 법인이냐"는 답이 뜻이 없는 질문이고,
+    사람에게 그걸 물으면 매번 의미 없는 값을 타이핑하게 된다."""
+    url = "https://git.example.com/team/dt-core"
+    _make_repo(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+
+    from src.__main__ import main
+
+    set_real_config_env(monkeypatch)
+    for what in ("plan", "status"):
+        monkeypatch.setattr("sys.argv", [
+            "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+            "code", what, "--gbm", "mx"])          # --fct 없음
+        assert main() in (0, 1), what
+        assert capsys.readouterr().out, f"{what}가 아무것도 안 찍었다"
+
+
+def test_같은_GBM인데_레포_선언이_갈리면_말한다(tmp_path, monkeypatch, capsys):
+    """**"코드는 GBM 단위로 같다"가 이 설계의 전제다**(decisions ③).
+
+    누가 `fct/` 층에 `code.repos`를 적으면 그 전제가 조용히 깨지고, 우리는
+    **사이트마다 다른 코드를 읽으면서도 같은 것을 읽는 줄 안다.** 그 상태로 낸
+    판정은 "구미에서는 맞고 SEVT에서는 틀린" 답이 되는데, 원인이 안 보인다.
+    """
+    url = "https://git.example.com/team/dt-core"
+    _make_repo(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+
+    # 사이트를 둘로 늘리고, 한쪽 fct 층이 레포를 덮어쓰게 한다.
+    (config_root / "registry.json").write_text(json.dumps({"sites": [
+        {"gbm": "mx", "fct": "gumi"}, {"gbm": "mx", "fct": "sevt"}]}), encoding="utf-8")
+    layer = config_root / "fct" / "sevt"
+    layer.mkdir(parents=True)
+    (layer / "mx.json").write_text(json.dumps({"code": {"repos": [
+        {"name": REPO, "url": "https://git.example.com/team/다른레포",
+         "path": str(tmp_path / "checkout")}]}}, ensure_ascii=False), encoding="utf-8")
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert "사이트마다 레포 선언이 다르다" in captured.err, captured.out + captured.err
+    assert "다른레포" in captured.err
+
+
+def test_선언이_같으면_경고하지_않는다(tmp_path, monkeypatch, capsys):
+    """모든 사이트를 볼 때마다 경고가 뜨면 사람이 그 경고를 안 읽게 된다."""
+    url = "https://git.example.com/team/dt-core"
+    _make_repo(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url)
+    (config_root / "registry.json").write_text(json.dumps({"sites": [
+        {"gbm": "mx", "fct": "gumi"}, {"gbm": "mx", "fct": "sevt"}]}), encoding="utf-8")
+
+    _, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert "레포 선언이 다르다" not in captured.err

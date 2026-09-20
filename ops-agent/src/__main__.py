@@ -950,14 +950,55 @@ def _knowledge_root(args) -> Path:
     return args.knowledge_root or args.config_root.parent / "knowledge"
 
 
-def _repos_of(args, env) -> tuple[str, list]:
-    """이 GBM의 레포 목록. 코드는 **GBM 단위로 같다** — 사이트마다 안 다르다.
+def _code_site(args, env):
+    """코드 명령이 볼 사이트 하나. **`--fct`를 요구하지 않는다.**
 
-    그래도 사이트를 골라 읽는 이유: 레포 선언이 `gbm/{gbm}.json`에 있어도 층 병합을
-    타므로, 병합된 결과를 봐야 "이 사이트에서 실제로 무엇이 보이는가"가 나온다.
+    코드는 GBM 단위로 같다(decisions ③). 그런데 레포 선언이 층 병합을 타므로 병합된
+    결과를 보려면 사이트가 하나 필요하다 — 그래서 **그 GBM의 활성 사이트 중 하나를
+    코드가 고른다.** 사람에게 "어느 법인이냐"고 묻는 것은 답이 뜻이 없는 질문이다.
+
+    `--fct`를 주면 그것을 쓴다. `config_paths`의 `{fct}` 해석이 달라지므로 특정
+    법인의 층을 보고 싶을 때가 있다.
     """
-    site, _ = _resolve_site(args.config_root, args, env)
-    return site.site.gbm, list(site.code.repos)
+    registry = load_registry(args.config_root)
+    active = registry.active()
+    gbm = args.gbm or ({e.gbm for e in active} == {a.gbm for a in active}
+                       and len({e.gbm for e in active}) == 1
+                       and next(iter({e.gbm for e in active})) or None)
+    if not gbm:
+        known = ", ".join(sorted({e.gbm for e in active})) or "(없음)"
+        raise SystemExit(f"--gbm이 필요하다. registry의 사업부: {known}")
+
+    sites = [e for e in active if e.gbm == gbm
+             and (not args.fct or e.fct == args.fct)]
+    if not sites:
+        raise SystemExit(f"{gbm}에 활성 사이트가 없다"
+                         + (f" — fct={args.fct}" if args.fct else ""))
+    picked = sites[0]
+    site, _ = load_site_config(args.config_root, picked.gbm, picked.fct, env=env)
+    # 분기 검사는 **`--fct`와 무관하게 GBM 전체**를 본다. 고른 사이트만 보면
+    # "한 법인만 보고 있으니 갈릴 리가 없다"가 되어 검사가 아무 일도 안 한다.
+    return site, gbm, picked.fct, [e.fct for e in active if e.gbm == gbm]
+
+
+def _divergent_repos(args, env, gbm: str, fcts: list[str]) -> list[str]:
+    """같은 GBM의 사이트들이 **다른 레포를 선언하고 있지 않은가.**
+
+    코드는 GBM 단위로 같다는 것이 이 설계의 전제다. 누가 `fct/` 층에 `code.repos`를
+    적으면 그 전제가 조용히 깨지고, 우리는 **사이트마다 다른 코드를 읽으면서도
+    같은 것을 읽는 줄 안다.**
+    """
+    seen: dict[str, list[str]] = {}
+    for fct in fcts:
+        try:
+            site, _ = load_site_config(args.config_root, gbm, fct, env=env)
+        except Exception:                                          # noqa: BLE001
+            continue
+        key = " ".join(sorted(f"{r.name}={r.url}" for r in site.code.repos))
+        seen.setdefault(key, []).append(fct)
+    if len(seen) <= 1:
+        return []
+    return [f"{', '.join(fcts_)}: {key or '(선언 없음)'}" for key, fcts_ in seen.items()]
 
 
 def cmd_code_status(args, env) -> int:
@@ -969,8 +1010,10 @@ def cmd_code_status(args, env) -> int:
     from src.knowledge.checkout import config_layers, has_commit, plan_for, status_of
     from src.knowledge.loader import load_deployment, load_topology
 
-    site, _ = _resolve_site(args.config_root, args, env)
-    gbm, site_fct, repos = site.site.gbm, site.site.fct, list(site.code.repos)
+    site, gbm, site_fct, fcts = _code_site(args, env)
+    repos = list(site.code.repos)
+    for problem in _divergent_repos(args, env, gbm, fcts):
+        print(f"  ⚠ 같은 GBM인데 사이트마다 레포 선언이 다르다 — {problem}", file=sys.stderr)
     if not repos:
         print(f"  {gbm}: config에 target 코드 레포가 없다 — code.repos를 적어라")
         return 1
@@ -983,7 +1026,7 @@ def cmd_code_status(args, env) -> int:
         print(f"  지식 층을 읽을 수 없다 — {exc}", file=sys.stderr)
         return 1
 
-    print(f"  {gbm} — 레포 {len(repos)}개 · 서비스 {len(topology.services)}개")
+    print(f"  {gbm} — 레포 {len(repos)}개 · 서비스 {len(topology.services)}개 · config 층은 {site_fct} 기준")
     bad = 0
     for repo in repos:
         state = status_of(repo)
@@ -1030,7 +1073,8 @@ def cmd_code_plan(args, env) -> int:
     """사람이 직접 칠 git 명령을 출력한다. **토큰은 안 찍는다.**"""
     from src.knowledge.checkout import plan_for, status_of
 
-    gbm, repos = _repos_of(args, env)
+    site, gbm, _, _ = _code_site(args, env)
+    repos = list(site.code.repos)
     print(f"  # {gbm} — 아래를 직접 실행하라 (이 명령은 네트워크를 안 탄다)")
     for repo in repos:
         for line in plan_for(repo, status_of(repo)):
@@ -1042,7 +1086,8 @@ def cmd_code_sync(args, env) -> int:
     """**여기서만 네트워크를 탄다.** 사내 밖에서는 실패하고, `code plan`을 안내한다."""
     from src.knowledge.checkout import status_of, sync
 
-    gbm, repos = _repos_of(args, env)
+    site, gbm, _, _ = _code_site(args, env)
+    repos = list(site.code.repos)
     failed = 0
     for repo in repos:
         outcome, detail = sync(repo, status_of(repo))
@@ -1054,6 +1099,49 @@ def cmd_code_sync(args, env) -> int:
         print("\n  붙을 수 없으면 `python -m src code plan`이 직접 칠 명령을 알려 준다",
               file=sys.stderr)
     return 1 if failed else 0
+
+
+def cmd_code_read(args, env) -> int:
+    """**배포된 커밋의 파일 하나를 실제로 읽는다.**
+
+    `code status`는 파일이 *있는지*만 본다(`git cat-file -e`). 이 명령이 없으면
+    "`git show <배포커밋>:경로`가 실제로 내용을 돌려주는가" — 11a의 핵심 계약 —
+    를 확인할 방법이 없고, 2차에서 문제가 나면 1차 탓인지 2차 탓인지 섞인다.
+
+    3b의 `peek redis`가 한 역할과 같다. 2차의 `code.read` action이 같은 포트를 쓴다.
+    """
+    from src.infrastructure.git_reader import RealCodeReader
+    from src.knowledge.loader import load_deployment, load_topology
+
+    site, gbm, site_fct, _ = _code_site(args, env)
+    root = _knowledge_root(args)
+    try:
+        topology = load_topology(root, gbm)
+        deployment = load_deployment(root, gbm)
+    except (ConfigError, FileNotFoundError) as exc:
+        raise SystemExit(f"지식 층을 읽을 수 없다 — {exc}")
+
+    service = topology.services.get(args.service)
+    if service is None:
+        raise SystemExit(f"없는 서비스 — {args.service}. "
+                         f"아는 것: {', '.join(sorted(topology.services)) or '없음'}")
+    pin = deployment.pin_for(args.service, fct=site_fct)
+    path = args.path.replace("{gbm}", gbm).replace("{fct}", site_fct)
+
+    reader = RealCodeReader(list(site.code.repos), clock=_clock(args, env))
+    result = asyncio.run(reader.show(service.repo, pin.commit, path))
+
+    note = "" if pin.how == "declared" else "  (배포 커밋을 가정했다)"
+    print(f"  {args.service} → {service.repo} @ {pin.commit}{note}")
+    print(f"  {path}\n")
+    if result.status == "error":
+        print(f"  ❌ {result.error}", file=sys.stderr)
+        return 1
+    print(result.data)
+    if not result.envelope.complete:
+        # 잘린 것을 조용히 두면 "그 파일에 그 문자열이 없다"를 단정하게 된다.
+        print(f"\n  ⚠ 잘렸다: {result.envelope.truncated_reason}", file=sys.stderr)
+    return 0
 
 
 def cmd_case_list(args, env) -> int:
@@ -1579,6 +1667,13 @@ def build_parser() -> argparse.ArgumentParser:
         command = code_sub.add_parser(name, help=helptext)
         _add_site_options(command, sub=True)
         command.set_defaults(run=fn)
+
+    read = code_sub.add_parser("read", help="배포된 커밋의 파일 하나를 실제로 읽는다")
+    read.add_argument("--service", required=True, help="토폴로지의 서비스 이름")
+    read.add_argument("--path", required=True,
+                      help="레포 안의 경로. {gbm}·{fct}를 쓸 수 있다")
+    _add_site_options(read, sub=True)
+    read.set_defaults(run=cmd_code_read)
 
     investigate = case_sub.add_parser("investigate", help="리드 LLM으로 조사한다")
     investigate.add_argument("case_id")

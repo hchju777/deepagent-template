@@ -75,6 +75,43 @@ python -m src code sync       # clone/fetch — 사내에서만
 **우리가 그 층을 합쳐서 답을 주지는 않는다.** 대상의 병합 규칙이 우리와 같다는
 보장이 없고, 추측으로 합친 값은 틀려도 그럴듯해 보인다.
 
+## `code read` — **읽기가 실제로 되는가**
+
+```bash
+python -m src code read --service processor --path config/common.json --gbm mx
+```
+
+```
+  processor → dt-core @ a3f9c2
+  config/common.json
+
+  {"name": "…"}
+```
+
+`code status`는 파일이 **있는지**만 본다(`git cat-file -e`). 이 명령이 없으면
+**`git show <배포커밋>:경로`가 실제로 내용을 돌려주는가** — 11a의 핵심 계약 — 를
+확인할 방법이 없고, 2차에서 문제가 나면 1차 탓인지 2차 탓인지 섞인다.
+3b의 `peek redis`가 한 역할과 같고, 2차의 `code.read` action이 같은 포트를 쓴다.
+
+`--path`는 `config_paths`와 **같은 자리표시자**를 받는다(`{gbm}`·`{fct}`) — 그래야
+사람이 토폴로지에서 복사해 붙일 수 있다. 배포 선언이 없으면 `(배포 커밋을 가정했다)`가
+붙는다.
+
+## 코드 명령은 `--fct`를 요구하지 않는다
+
+코드는 GBM 단위로 같다. 그런데 처음엔 `_resolve_site`를 그대로 써서 **법인을
+요구했다** — 답이 뜻이 없는 질문이고, 사람은 매번 의미 없는 값을 타이핑하게 된다.
+
+이제 그 GBM의 활성 사이트 중 하나를 코드가 고른다. `--fct`를 주면 그것을 쓴다 —
+`config_paths`의 `{fct}` 해석이 달라지므로 특정 법인의 층을 보고 싶을 때가 있다.
+`code status`가 **어느 법인 기준인지 출력에 적는다.**
+
+그리고 같은 GBM의 사이트들이 **다른 레포를 선언하면 경고한다.** 누가 `fct/` 층에
+`code.repos`를 적으면 "코드는 GBM 단위로 같다"는 전제가 조용히 깨지고, 우리는
+**사이트마다 다른 코드를 읽으면서 같은 것을 읽는 줄 안다.** 그 검사는 `--fct`와
+무관하게 GBM 전체를 본다 — 고른 사이트만 보면 갈릴 리가 없어 검사가 아무 일도 안 한다
+(처음에 그렇게 썼고, RED 확인에서 드러났다).
+
 ## 자물쇠 넷 (`code status`가 보는 것)
 
 1. **경로가 있나**
@@ -178,7 +215,7 @@ python -m src code sync --gbm mx && python -m src ...
 
 ## 검증
 
-`pytest tests/` — 1040개. 11a 1차가 더한 것은 58개.
+`pytest tests/` — 1048개. 11a 1차가 더한 것은 66개.
 
 **사내 트리에는 `.env.example`이 없다.** 그 상태로도 돈다 — 지우고 돌려서
 확인했다(1039 통과 1 스킵).
@@ -187,7 +224,7 @@ python -m src code sync --gbm mx && python -m src ...
 그렇게 답하도록 우리가 정해 놓고 "된다"고 확인하는 꼴이 된다 — `ScriptedAdapter`로
 이미 당한 거짓 초록이다. git이 없는 환경에서는 skip하고 **사유가 찍힌다.**
 
-방어를 하나씩 지워 **23가지 전부 RED를 봤다**:
+방어를 하나씩 지워 **29가지 전부 RED를 봤다**:
 
 | 지운 것 | |
 |---|---|
@@ -201,6 +238,9 @@ python -m src code sync --gbm mx && python -m src ...
 | 기동이 어긋남을 안 봄 / 기동이 디스크까지 봄 | 1 / 1 failed |
 | `config_paths` 실재 확인 / 확인이 너무 넓음 | 1 / 1 failed |
 | 자리표시자 치환 / 모르는 자리 허용 | 2 / 1 failed |
+| `read`가 배포 커밋 무시 / 가정 표시 생략 / 자리표시자 미치환 | 1 / 1 / 1 failed |
+| `read`가 없는 파일에 0 반환 | 1 failed |
+| 코드 명령이 `--fct` 요구 / GBM 안 레포 분기를 안 알림 | 1 / 1 failed |
 | 층 하나만 없어도 실패 / 하나도 없어도 통과 / 없는 층을 조용히 | 1 / 1 / 1 failed |
 | 포트에 `fetch` 추가 | 1 failed |
 
