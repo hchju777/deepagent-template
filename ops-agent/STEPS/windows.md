@@ -50,6 +50,56 @@ AssertionError: Windows(cp949)에서만 깨질 파일 접근이 있다 — encod
 줄바꿈으로 이어진 호출은 놓친다. 바이너리 모드(`open(p, "rb")`)와
 `read_bytes()`는 인코딩 개념이 없으므로 검사에서 빠진다.
 
+## 함정 ①-b: `subprocess`도 똑같다 — 11a에서 실제로 터졌다
+
+`text=True`는 **자식 프로세스의 출력을 로케일 인코딩으로 디코딩한다.** ①과 같은
+함정인데, `tests/test_portability.py`가 오랫동안 `open()`만 보고 있었다.
+
+git은 UTF-8로 뱉는다. 경로·브랜치명·커밋 메시지에 한글이 하나라도 있으면:
+
+```
+UnicodeDecodeError: 'cp949' codec can't decode byte 0xec ...
+```
+
+**여기서 진짜 나쁜 것은 그다음이다.** `checkout.py`의 `_git`은 무raise 규율에 따라
+최외곽에서 `except Exception`으로 흡수한다. 그래서 디코딩 실패가 **`code=1`**로
+바뀌고:
+
+| 부른 것 | 나온 답 | 진짜 |
+|---|---|---|
+| `submodules_at` | `[]` | "이 커밋엔 submodule이 없다" ← 거짓 |
+| `status_of` | origin 못 읽음 | "origin이 config와 다르다" ← 거짓 |
+| `code status` | 문제 없음 | "config_paths를 고쳐라" ← **틀린 처방** |
+
+조용하고, 그럴듯하고, 틀렸다. 무raise가 나쁜 게 아니라 **흡수하는 층 아래에서
+인코딩을 안 정한 것**이 나쁘다.
+
+```python
+subprocess.run([...], text=True)                              # 사내에서만 터진다
+subprocess.run([...], text=True, encoding="utf-8", errors="replace")   # 어디서나
+```
+
+**막은 방법**: `tests/test_portability.py`의 `subprocess_violations`가 `run`·
+`check_output`·`Popen` 호출에 `text=True`(또는 `universal_newlines`)가 있는데
+`encoding`이 없으면 실패시킨다. ①과 같은 AST 검사다.
+
+## 함정 ①-c: git config 값의 `\`는 이스케이프 문자다
+
+`.gitmodules`·`.git/config`에 Windows 경로를 **그대로** 적으면 안 된다:
+
+```
+[submodule "vendor/libs"]
+	url = C:\Users\t\libs          ← \t 가 탭이 된다
+```
+
+```
+fatal: bad config line 3 in file .gitmodules
+```
+
+증상은 `git submodule init` 실패로 나타나서, 원인이 저 한 줄에 있다는 게 **안
+보인다.** git은 Windows에서도 `/`를 받으므로 구분자를 바꿔서 적는다 — 함정 ④와
+같은 처방이다(`C:/Users/t/libs`).
+
 ## 함정 ②: 콘솔 리다이렉트
 
 콘솔에 직접 출력하는 것은 괜찮지만(파이썬이 `WriteConsoleW`를 쓴다), 파일로

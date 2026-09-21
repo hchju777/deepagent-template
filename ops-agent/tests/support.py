@@ -21,6 +21,7 @@ import가 필요하고, 그 import를 상대 경로(`from ..report.conftest impo
 """
 from datetime import date, datetime
 import functools
+import os
 import subprocess
 from pathlib import Path
 
@@ -300,6 +301,21 @@ def populate_submodule(checkout: Path, path: str) -> None:
         f"  이 상태에서는 `git grep --recurse-submodules`가 조용히 0건을 준다")
 
 
+def add_git_config(monkeypatch, key: str, value: str) -> None:
+    """`GIT_CONFIG_COUNT/KEY/VALUE`에 **한 줄 덧붙인다.**
+
+    이 방식은 하위 프로세스까지 따라가서 제품 코드가 부르는 git에도 닿는다.
+    그런데 `COUNT`를 각자 `1`로 덮어쓰면 **먼저 건 설정이 조용히 사라진다** —
+    실제로 그렇게 자물쇠 하나를 풀어 버렸다. 그래서 세지 말고 **더한다.**
+    """
+    count = int(monkeypatch.getenv("GIT_CONFIG_COUNT", "0")
+                if hasattr(monkeypatch, "getenv") else
+                os.environ.get("GIT_CONFIG_COUNT", "0") or "0")
+    monkeypatch.setenv(f"GIT_CONFIG_KEY_{count}", key)
+    monkeypatch.setenv(f"GIT_CONFIG_VALUE_{count}", value)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", str(count + 1))
+
+
 @pytest.fixture
 def local_submodules_allowed(monkeypatch):
     """제품 코드가 부르는 git에도 같은 허락을 넘긴다.
@@ -308,6 +324,4 @@ def local_submodules_allowed(monkeypatch):
     기본 거부에 걸린다. `GIT_CONFIG_COUNT/KEY/VALUE`는 **하위 프로세스까지 따라가는**
     설정이라 이 자리에 맞는다.
     """
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+    add_git_config(monkeypatch, "protocol.file.allow", "always")
