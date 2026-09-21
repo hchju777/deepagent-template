@@ -54,6 +54,18 @@ class EngineDeps:
     # `case dryrun`의 계획 파일은 시스템을 아는 사람이 이름을 알고 적은 것이라,
     # 켜 두면 기록이 거짓 양성으로만 찬다. 리드 LLM 경로에서만 뜻이 있다.
     check_discovery: bool = True
+    # 리드가 낸 것을 코드가 **거부**했을 때 같은 라운드에서 한 번 되묻는가. 두 번째 전체
+    # 트레이스에서 리드가 질의를 좁힌 유일한 계기는 `<버려진 태스크>`에서 자기 질의가
+    # 그 값 그대로 버려진 것을 본 일이었고, 그게 늘 **한 라운드 뒤**였다. 대본 경로
+    # (`dryrun`)는 끈다 — 되물으면 대본의 다음 라운드를 당겨 먹는다.
+    redo_on_rejection: bool = True
+
+
+# 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
+# 트레이스 요약에는 "이 파일은 JSON 재시도가 아니라 거부 뒤 되물음"이라는 표식이다.
+REDO_MARK = "방금 낸 답의 "
+# 되물은 뒤 State에 남는 첫 답의 거부 기록에 붙는 꼬리 — 진단이 되물음 횟수를 셀 수 있다.
+REDO_NOTE = " (그 자리에서 다시 물었다)"
 
 
 def _sanitize_task(task: PlanTask) -> PlanTask:
@@ -153,8 +165,13 @@ def _query(task: PlanTask) -> str:
 
 def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   taken: frozenset = frozenset(),
-                  done: frozenset = frozenset()) -> tuple[list[PlanTask], list[str]]:
+                  done: frozenset = frozenset()
+                  ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
+
+    `(받은 것, 거부 기록, 찍은 이름 기록)`. 둘째와 셋째를 가르는 이유: **거부**는 그
+    태스크가 안 돌아간다는 뜻이라 리드에게 되물을 근거가 되지만, "찾지 않고 이름을
+    댔다"는 받았다는 기록일 뿐이다 — 그걸로 되물으면 "받았는데 왜 다시 묻나"가 된다.
 
     상한을 리듀서가 아니라 여기서 거는 이유는 `state.py` 맨 위에 있다 — 리듀서에서
     raise하면 superstep이 통째로 죽는다.
@@ -202,13 +219,13 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
         kept.append(_sanitize_task(task))
     kept = kept[:max(0, room)]
     if seen is None:
-        return kept, reused
-    guessed = list(reused)
+        return kept, reused, []
+    guessed = []
     for task in kept:
         for name, value in sorted(task.params.items()):
             if name in DISCOVERED_ARGS and isinstance(value, str) and value not in seen:
                 guessed.append(f"{task.id}: 찾지 않고 이름을 댔다 — {name}={value!r}")
-    return kept, guessed
+    return kept, reused, guessed
 
 
 def make_nodes(deps: EngineDeps) -> dict:
@@ -219,13 +236,14 @@ def make_nodes(deps: EngineDeps) -> dict:
         hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
         # frame 시점엔 증거가 없으므로 `seen`이 비어 있다 — 이름을 대면 전부 기록된다.
         # 그게 맞다: 아직 아무것도 안 봤는데 이름을 안다면 찍은 것이다.
-        tasks, guessed = _accept_tasks(
+        tasks, rejected, guessed = _accept_tasks(
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             seen=_seen(state) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
                 "plan_tasks": tasks,
-                "llm_errors": list(patch.get("llm_errors", [])) + complaints + guessed,
+                "llm_errors": (list(patch.get("llm_errors", []))
+                               + complaints + rejected + guessed),
                 "round": 1}
 
     async def select(state: CaseState) -> dict:
@@ -255,14 +273,38 @@ def make_nodes(deps: EngineDeps) -> dict:
         return {"plan_tasks": [done], "evidence": list(outcome.evidence)}
 
     async def integrate(state: CaseState) -> dict:
+        def accept(reply: dict):
+            """`(받은 태스크, 받은 가설, 거부 기록, 찍은 이름 기록)`."""
+            fresh, rejected, guessed = _accept_tasks(
+                reply, room=deps.max_tasks - len(state.plan_tasks),
+                taken=_taken(state), done=_done(state),
+                seen=_seen(state) if deps.check_discovery else None)
+            hypotheses, ghosts = _accept_hypotheses(reply, have=state.evidence_ids())
+            return fresh, hypotheses, ghosts + rejected, guessed
+
         patch = await deps.integrate(state)
-        room = deps.max_tasks - len(state.plan_tasks)
-        fresh, guessed = _accept_tasks(
-            patch, room=room, taken=_taken(state), done=_done(state),
-            seen=_seen(state) if deps.check_discovery else None)
-        hypotheses, complaints = _accept_hypotheses(patch, have=state.evidence_ids())
+        fresh, hypotheses, refused, guessed = accept(patch)
+        # **거부가 있으면 그 자리에서 한 번 되묻는다.** 버려진 것을 다음 라운드의
+        # `<버려진 태스크>`로만 돌려주면 리드는 한 라운드 뒤에야 좁힌다 — 두 번째 전체
+        # 트레이스에서 두 번 그랬고, 매번 실행 한 사이클을 태웠다. 먹힌다고 증명된
+        # 유일한 신호(자기 질의가 그 값 그대로 버려졌다)를 프롬프트가 아직 뜨거울 때
+        # 준다. 되물은 답이 첫 답을 **통째로 대신한다** — JSON 재시도와 같은 규칙이다.
+        # 마지막 라운드에는 안 한다(어차피 상한으로 끝난다). 되묻기 자체가 실패하면
+        # 첫 답으로 간다 — 한 번 더 물어본 것이 라운드를 죽이면 안 된다.
+        if (refused and deps.redo_on_rejection and not patch.get("stopped_by")
+                and state.round < deps.max_rounds):
+            again = state.model_copy(update={
+                "llm_errors": state.llm_errors + [REDO_MARK + c for c in refused]})
+            second = await deps.integrate(again)
+            refused = [c + REDO_NOTE for c in refused]
+            if second.get("stopped_by"):
+                refused += list(second.get("llm_errors", []))
+            else:
+                patch = second
+                fresh, hypotheses, later, guessed = accept(second)
+                refused += later
         patch = {**patch, "plan_tasks": fresh, "hypotheses": hypotheses,
-                 "llm_errors": list(patch.get("llm_errors", [])) + complaints + guessed}
+                 "llm_errors": list(patch.get("llm_errors", [])) + refused + guessed}
 
         # 리드가 이미 끝낸 이유를 댔으면(LLM 실패 등) 그것이 이긴다. 아래 규칙들이
         # 덮어쓰면 "LLM이 죽어서"가 "상한에 걸려서"로 둔갑한다 — 12a가 "미확정"과

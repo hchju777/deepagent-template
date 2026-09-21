@@ -125,6 +125,17 @@ def test_대본_경로는_이름_추측_검사를_끈다():
     assert deps.check_discovery is False
 
 
+def test_대본_경로는_되묻지_않는다():
+    """대본에는 "되물음"이 없다 — 켜 두면 거부 하나에 대본의 다음 라운드를 당겨 먹는다.
+    위 검사와 같은 이유로 `build_deps`를 직접 본다."""
+    from src.application.dryrun import build_deps
+    from src.config.schema_app import InvestigationConfig
+
+    deps = build_deps(Script(symptom="증상", tasks=[]), runner=None,
+                      investigation=InvestigationConfig())
+    assert deps.redo_on_rejection is False
+
+
 async def test_대본으로_돈_조사에는_이름_기록이_안_남는다(tmp_path):
     """소비자로 직접 확인한다 — 예제 계획은 `redis.get key='oee:L3'`처럼 이름을 댄다."""
     from pathlib import Path as _Path

@@ -10,10 +10,11 @@ from src.application.trace_digest import digest
 from src.domain.actions import describe
 
 
-def _file(prompt: str, reply: str) -> list[tuple[str, str]]:
+def _file(prompt: str, reply: str, *, name: str = "01-r2-integrate.md",
+          verdict: str = "읽었다") -> list[tuple[str, str]]:
     """`_make_tracer`가 쓰는 형식 그대로. **형식이 갈리면 이 도구가 조용히 빈다.**"""
-    return [("01-r2-integrate.md",
-             f"# c-1 · integrate · 라운드 2\n\n결과: 읽었다\n\n"
+    return [(name,
+             f"# c-1 · integrate · 라운드 2\n\n결과: {verdict}\n\n"
              f"## 물어본 것 ({len(prompt):,}자)\n\n````\n{prompt}\n````\n\n"
              f"## 날것 응답\n\n````\n{reply}\n````\n")]
 
@@ -140,3 +141,35 @@ def test_못_읽은_응답의_앞머리를_보여준다():
     text = "\n".join(digest(_file(_prompt(), "{\"decision\": \"continue\", \"hyp" + "x" * 500)))
     assert "시작:" in text and "x" * 200 not in text
     assert "빈 응답" in "\n".join(digest(_file(_prompt(), "   ")))
+
+
+def test_우리_판정을_시도마다_찍는다():
+    """스키마가 거부한 답도 JSON으로는 읽힌다. 요약이 제 눈으로만 보면 **거부된 답이
+    결론처럼 찍힌다** — 두 번째 전체 트레이스의 r3가 `decision=conclude`로 보였지만
+    실제로는 거부됐고, 되물은 답이 `continue`였다. 왜 거부됐는지는 이 줄에만 있다."""
+    reply = json.dumps({"decision": "conclude", "hypotheses": [], "tasks": []})
+    refused = _file(_prompt(), reply,
+                    verdict="**못 읽었다** — status는 supported|refuted|open 중 하나다")
+    text = "\n".join(digest(refused))
+    assert "못 읽었다" in text and "supported|refuted|open" in text
+    assert "결과: 읽었다" in "\n".join(digest(_file(_prompt(), reply)))
+
+
+def test_frame_가설은_status를_안_찍는다():
+    reply = json.dumps({"hypotheses": [{"id": "h-1", "statement": "s"},
+                                       {"id": "h-2", "statement": "s"}], "tasks": []})
+    text = "\n".join(digest(_file(_prompt(), reply, name="01-r0-frame.md")))
+    line = next(l for l in text.splitlines() if l.strip().startswith("가설"))
+    assert "h-1" in line and "h-2" in line and "?" not in line
+
+
+def test_거부_뒤_되물은_것을_재시도와_가른다():
+    """같은 라운드의 두 번째 파일은 둘 중 하나다. JSON을 못 읽어 다시 물은 것과 거부
+    뒤 되물은 것을 같은 이름으로 찍으면, 되물음이 "모델이 JSON을 못 냈다"로 읽힌다."""
+    from src.application.nodes import REDO_MARK
+
+    first = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    redo = _prompt(rejected=f"- {REDO_MARK}t-6: 이미 한 읽기를 또 냈다 — 받지 않는다")
+    second = _file(redo, json.dumps({"tasks": []}), name="02-r2-integrate.md")[0]
+    text = "\n".join(digest([first, second]))
+    assert "거부 뒤 다시 물음" in text and "재시도" not in text

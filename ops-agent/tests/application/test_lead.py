@@ -802,3 +802,36 @@ def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path
     assert "못 읽었다" in first
     assert "mongo.list_collections" in first     # 물어본 프롬프트도 통째로
     assert "트레이스 3건" in capsys.readouterr().out
+
+
+# ── 거부 뒤 되묻기 — 배선 ────────────────────────────────────────────
+
+async def test_거부되면_같은_프롬프트에_사유를_얹어_되묻는다(case):
+    """**배선을 본다.** 노드 테스트는 `deps.integrate`를 가짜로 둔다. 실제 리드는 되물을
+    때 받은 State로 프롬프트를 **다시 만들어야** 거부 사유가 `<버려진 태스크>`에 실린다 —
+    첫 프롬프트를 재사용하면 리드는 같은 것을 보고 같은 답을 낸다."""
+    from pathlib import Path
+
+    from src.application.nodes import REDO_MARK
+    from src.domain.case import PlanTask
+
+    # **배포되는 템플릿으로 본다.** 이 파일의 `PROMPTS`는 `{rejected}` 자리가 없는
+    # 최소 템플릿이라, 그걸로는 사유가 실리는지 안 실리는지 보이지 않는다.
+    prompts_dir = Path(__file__).resolve().parents[2] / "config" / "prompts"
+    shipped = {name: (prompts_dir / f"investigate-{name}.md").read_text(encoding="utf-8")
+               for name in ("frame", "integrate")}
+    dup = {**TASK, "id": "t-2"}                                   # t-1과 같은 질의
+    other = {**TASK, "id": "t-2", "action": "kafka.list_topics"}
+    llm = ScriptedAdapter([reply(decision="continue", tasks=[dup]),
+                           reply(decision="continue", tasks=[other])], clock=lambda: T0)
+    _, integrate = lead.make_lead(llm, site_config=site_config(), prompts=shipped,
+                                  max_rounds=5)
+    nodes = make_nodes(_deps(integrate, max_rounds=5))
+    done = PlanTask.model_validate({**TASK, "status": "ok"})
+    patch = await nodes["integrate"](CaseState(case=case, round=1, plan_tasks=[done]))
+
+    assert len(llm.prompts) == 2
+    assert REDO_MARK not in llm.prompts[0]
+    assert REDO_MARK in llm.prompts[1] and "t-2" in llm.prompts[1]
+    assert [t.action for t in patch["plan_tasks"]] == ["kafka.list_topics"]
+

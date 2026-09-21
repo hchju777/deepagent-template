@@ -31,10 +31,13 @@
 import json
 import re
 
+from src.application.nodes import REDO_MARK
 from src.application.schemas import parse_object
 from src.domain.actions import DISCOVERED_ARGS, describe
 
 _FILE = re.compile(r"^(\d+)-r(\d+)-(\w+)\.md$")
+_VERDICT = re.compile(r"^결과: (.+)$", re.M)
+_REASON_CHARS = 160
 _SECRETISH = re.compile(r"pass|secret|token|credential|pwd", re.I)
 _VALUE_CHARS = 40
 
@@ -53,15 +56,30 @@ def digest(entries: list[tuple[str, str]]) -> list[str]:
         prompt = _section(text, "물어본 것")
         reply = _section(text, "날것 응답")
         lines += _round(round_no, node, prompt, reply, asked,
-                        attempt=attempts[(round_no, node)])
+                        attempt=attempts[(round_no, node)], verdict=_verdict(text))
     if len(lines) == 1:
         lines.append("  (읽을 수 있는 트레이스 파일이 없다)")
     return lines
 
 
+def _verdict(text: str) -> str:
+    """트레이스 파일 머리의 **우리 판정** — `읽었다` / `못 읽었다 — 사유`.
+
+    요약이 제 눈으로 JSON을 다시 읽는 것과는 다르다. 스키마가 거부한 답도 JSON으로는
+    읽히므로, 이 줄이 없으면 **거부된 답이 결론처럼 찍힌다** — 두 번째 전체 트레이스의
+    r3가 `decision=conclude`로 보였지만 실제로는 거부됐고, 되물은 답이 `continue`였다.
+    """
+    match = _VERDICT.search(text)
+    if match is None:
+        return ""
+    verdict = match.group(1).strip()
+    return verdict if len(verdict) <= _REASON_CHARS else verdict[:_REASON_CHARS] + "…"
+
+
 def _round(round_no: str, node: str, prompt: str, reply: str,
-           asked: dict[str, str], *, attempt: int = 1) -> list[str]:
+           asked: dict[str, str], *, attempt: int = 1, verdict: str = "") -> list[str]:
     evidence = _block(prompt, "모은 증거")
+    rejected = _block(prompt, "버려진 태스크")
     seen_names = evidence                       # 이름이 증거에 있나 — 문자열로 본다
     # 증거 줄의 `source`가 곧 그 질의다. `describe`가 만든 문자열이므로
     # 우리도 같은 함수로 만들어서 **정확히** 대조한다.
@@ -71,12 +89,22 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
     shown = _tasks(_example(prompt))
     made = _tasks(parse_object(reply).data if parse_object(reply).ok else None)
 
-    retry = f" (재시도 {attempt}회째)" if attempt > 1 else ""
-    out = [f"\nr{round_no} {node}{retry} · 프롬프트 {len(prompt):,}자"
-           f" = {_sizes(prompt, evidence)}"]
+    # 같은 라운드의 두 번째 파일은 둘 중 하나다 — JSON을 못 읽어 다시 물은 것, 또는
+    # 거부 뒤 **되물은** 것. 후자는 `<버려진 태스크>`의 머리말로 안다.
+    labels = []
+    if REDO_MARK in rejected:
+        labels.append("거부 뒤 다시 물음")
+        if attempt > 2:
+            labels.append(f"재시도 {attempt}회째")
+    elif attempt > 1:
+        labels.append(f"재시도 {attempt}회째")
+    label = f" ({' · '.join(labels)})" if labels else ""
+    out = [f"\nr{round_no} {node}{label} · 프롬프트 {len(prompt):,}자"
+           f" = {_sizes(prompt, evidence)}"
+           + (f" · 결과: {verdict}" if verdict else "")]
     out.append(f"  리드가 본 것 : 태스크 {_count(_block(prompt, '지금까지의 태스크'))}"
                f" · 증거 {_count(evidence)}(잘림 {evidence.count('⚠ 표본이 잘렸다')})"
-               f" · 버려진 것 {_count(_block(prompt, '버려진 태스크'))}")
+               f" · 버려진 것 {_count(rejected)}")
     out.append("  이미 물은 것(증거에 보임) : "
                + ("  ".join(sorted(_clip(q) for q in visible)) or "(없음)"))
     out.append("  예시가 보여준 것 : "
@@ -88,11 +116,15 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
         return out
     body = parsed.data if isinstance(parsed.data, dict) else {}
     hyps = [h for h in body.get("hypotheses", []) if isinstance(h, dict)]
-    out.append("  가설 : " + ("  ".join(
+    if node == "frame":
+        # frame의 가설엔 아직 판정도 인용도 없다 — `?(인용 0)`은 없는 결함처럼 읽힌다.
+        out.append("  가설 : " + ("  ".join(str(h.get("id", "?")) for h in hyps) or "(없음)"))
+    else:
+        out.append("  가설 : " + ("  ".join(
         f"{h.get('id', '?')} {h.get('status', '?')}"
         f"(인용 {len(h.get('supporting_ids') or []) + len(h.get('refuting_ids') or [])})"
-        for h in hyps) or "(없음)")
-        + (f" · decision={body['decision']}" if body.get("decision") else ""))
+            for h in hyps) or "(없음)")
+            + (f" · decision={body['decision']}" if body.get("decision") else ""))
     if not made:
         out.append("  리드가 낸 것 : (없음)")
         return out
