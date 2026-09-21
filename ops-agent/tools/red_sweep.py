@@ -25,6 +25,7 @@ R, C, M, S = (ROOT/"src/infrastructure/git_reader.py", ROOT/"src/knowledge/check
 T = ROOT / "src/knowledge/target_config.py"
 D = ROOT / "src/infrastructure/deployed_code.py"
 B = ROOT / "src/application/briefing.py"
+GR = ROOT / "src/infrastructure/git_reader.py"
 K = "tests/knowledge/test_checkout.py"
 K2 = "tests/knowledge/test_target_config.py"
 K3 = "tests/infrastructure/test_deployed_code.py"
@@ -173,6 +174,23 @@ CASES = [
  ("모르는 어댑터를 통과시킨다", B,
   '    field = _INFRA_FIELD.get(adapter)\n    return field is not None and getattr(site_config.infra, field, None) is not None',
   '    return True', [f"{K4}::test_모르는_어댑터는_목록에_안_샌다"]),
+ # ── 잘린 층을 대상 탓으로 돌리지 않는다 ─────────────────────────────
+ ("config를 400줄에서 자른다", D,
+  'got = await self._reader.show(known.repo, commit, path, whole=True)',
+  'got = await self._reader.show(known.repo, commit, path)',
+  [f"{K3}::test_400줄이_넘는_층도_통째로_읽는다"]),
+ ("whole인데도 줄 수로 자른다", GR,
+  '    if not whole:\n        lines = text.splitlines()',
+  '    if True:\n        lines = text.splitlines()',
+  [f"{K3}::test_400줄이_넘는_층도_통째로_읽는다"]),
+ ("잘린 층을 그냥 파싱한다", D,
+  '            if not got.envelope.complete:\n                # **파싱하기 전에** 본다. 우리가 자른 것을 대상 탓으로 돌리지 않는다.',
+  '            if False:\n                # **파싱하기 전에** 본다. 우리가 자른 것을 대상 탓으로 돌리지 않는다.',
+  [f"{K3}::test_우리가_자른_것을_대상_탓으로_돌리지_않는다"]),
+ ("층이 없는 이유를 안 말한다", D,
+  '            why = (" · ".join(broken) if broken\n                   else f"찾은 자리: {\', \'.join(wanted)}. `code status`를 보라")',
+  '            why = f"찾은 자리: {\', \'.join(wanted)}. `code status`를 보라"',
+  [f"{K3}::test_우리가_자른_것을_대상_탓으로_돌리지_않는다"]),
 ]
 bad = []
 for label, path, old, new, tests in CASES:

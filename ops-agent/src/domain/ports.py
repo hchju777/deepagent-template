@@ -163,7 +163,8 @@ class CodeReaderPort(ABC):
     """
 
     @abstractmethod
-    async def show(self, repo: str, commit: str, path: str) -> ProbeResult:
+    async def show(self, repo: str, commit: str, path: str, *,
+                   whole: bool = False) -> ProbeResult:
         """그 커밋의 파일 하나. 대상의 config 파일도 이걸로 읽는다."""
 
     @abstractmethod

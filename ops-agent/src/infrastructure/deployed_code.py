@@ -98,21 +98,30 @@ class DeployedCode(DeployedCodePort):
 
         layers, broken = [], []
         for path in wanted:
-            got = await self._reader.show(known.repo, commit, path)
+            # **통째로 읽는다.** 잘린 JSON은 못 쓴다 — 400줄 상한에 걸린 층을
+            # 그냥 파싱하면 "JSON이 아니다"가 나오고, 그 말은 **대상 파일이
+            # 깨졌다**는 뜻으로 읽힌다. 사내에서 실제로 그랬다.
+            got = await self._reader.show(known.repo, commit, path, whole=True)
             if got.status == "error":
                 continue                    # 없는 층은 **정상이다**(층은 선택)
+            if not got.envelope.complete:
+                # **파싱하기 전에** 본다. 우리가 자른 것을 대상 탓으로 돌리지 않는다.
+                broken.append(f"{path}: 우리가 잘라서 읽었다 — "
+                              f"{got.envelope.truncated_reason}. 이 층은 안 썼다")
+                continue
             value, why = parse_layer(path, got.data)
             if value is None:
                 broken.append(why)
                 continue
-            if not got.envelope.complete:
-                broken.append(f"{path}: 잘려서 읽었다 — {got.envelope.truncated_reason}")
             layers.append((path, value))
 
         if not layers:
+            # **왜 없는지까지 말한다.** 읽다가 실패한 층이 있으면 그게 원인이고,
+            # 그걸 빼면 "경로가 틀렸다"로 읽혀서 사람이 맞는 경로를 고치러 간다.
+            why = (" · ".join(broken) if broken
+                   else f"찾은 자리: {', '.join(wanted)}. `code status`를 보라")
             return ProbeResult.failed(
-                f"config 층이 그 커밋에 **하나도** 없다 — 찾은 자리: {', '.join(wanted)}. "
-                f"`code status`를 보라",
+                f"쓸 수 있는 config 층이 하나도 없다 — {why}",
                 source=source, clock=self._clock)
 
         read = " → ".join(path for path, _ in layers)

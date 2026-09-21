@@ -45,6 +45,9 @@ from src.knowledge.checkout import (_REGISTERED, containing_submodule,
 # 한 번에 실어 오는 상한. 코드 파일 하나가 이보다 크면 잘라서 주고 봉투가 말한다.
 _MAX_CHARS = 20000
 _MAX_LINES = 400
+# `whole=True`용 상한. **무한 읽기는 안 만든다** — 실수로 거대한 파일을 물면
+# 조사 한 라운드가 그것만으로 끝난다. 다만 config 한 층은 여기 한참 못 미친다.
+_WHOLE_MAX_CHARS = 1_000_000
 _TIMEOUT_S = 20
 
 
@@ -180,16 +183,27 @@ class RealCodeReader(CodeReaderPort):
                 return parts[2].split("\t")[0].strip()
         return ""
 
-    async def show(self, repo: str, commit: str, path: str) -> ProbeResult:
+    async def show(self, repo: str, commit: str, path: str, *,
+                   whole: bool = False) -> ProbeResult:
+        """`whole=True`면 **줄 수로 자르지 않는다.**
+
+        기본 상한(400줄)은 리드의 컨텍스트를 지키려는 것이고, 소스 파일은 앞부분만
+        봐도 쓸모가 있다. **config는 다르다** — 잘린 JSON은 쓸모가 0이 아니라
+        마이너스다. 파싱이 실패하고, 그 실패가 "대상 파일이 깨졌다"로 읽힌다.
+        실제로 사내에서 그렇게 났다: 400줄 넘는 층이 잘렸는데 메시지는
+        "JSON이 아니다"였고, 사람을 **멀쩡한 파일** 고치러 보낼 뻔했다.
+        """
         source = f"code.show {repo}@{commit}:{path}"
         sub = containing_submodule(await self._declared_subs(repo, commit), path)
         if sub:
-            return await self._show_across(repo, commit, sub, path, source=source)
+            return await self._show_across(repo, commit, sub, path, source=source,
+                                           whole=whole)
         got = await self._git(repo, ["show", f"{commit}:{path}"], source=source)
-        return got if got.status == "error" else _clip(got, source, clock=self._clock)
+        return (got if got.status == "error"
+                else _clip(got, source, clock=self._clock, whole=whole))
 
     async def _show_across(self, repo: str, commit: str, sub: str, path: str, *,
-                           source: str) -> ProbeResult:
+                           source: str, whole: bool = False) -> ProbeResult:
         """submodule 안의 파일을 **부모가 박아 둔 SHA로** 읽는다.
 
         `git show <부모커밋>:서브/경로`는 submodule 안으로 안 들어간다 — 채워져
@@ -218,7 +232,8 @@ class RealCodeReader(CodeReaderPort):
                 source=source, clock=self._clock)
         pinned = f"{source} (submodule {sub}@{sha[:12]})"
         got = await self._git(repo, ["show", f"{sha}:{rest}"], source=pinned, inside=sub)
-        return got if got.status == "error" else _clip(got, pinned, clock=self._clock)
+        return (got if got.status == "error"
+                else _clip(got, pinned, clock=self._clock, whole=whole))
 
     async def grep(self, repo: str, commit: str, patterns: list[str], *,
                    path: str = "") -> ProbeResult:
@@ -279,21 +294,23 @@ def _unseen_reasons(blind: list[str]) -> list[str]:
 
 
 def _clip(got: ProbeResult, source: str, *, clock: Clock,
-          unseen: list[str] | tuple = ()) -> ProbeResult:
+          unseen: list[str] | tuple = (), whole: bool = False) -> ProbeResult:
     """상한에 걸리면 **잘렸다고 봉투가 말한다.**
 
     조용히 자르면 리드가 "그 파일에 그 문자열이 없다"를 단정한다 — 잘린 뒤쪽에
     있었을 뿐인데. 5단계의 `unreachable`, 증거의 `complete=False`와 같은 규율이다.
     """
     text, reasons = got.data, _unseen_reasons(list(unseen))
-    lines = text.splitlines()
-    if len(lines) > _MAX_LINES:
-        lines = lines[:_MAX_LINES]
-        reasons.append(f"{_MAX_LINES}줄에서 끊음")
-    text = "\n".join(lines)
-    if len(text) > _MAX_CHARS:
-        text = text[:_MAX_CHARS]
-        reasons.append(f"{_MAX_CHARS}자에서 끊음")
+    if not whole:
+        lines = text.splitlines()
+        if len(lines) > _MAX_LINES:
+            lines = lines[:_MAX_LINES]
+            reasons.append(f"{_MAX_LINES}줄에서 끊음")
+        text = "\n".join(lines)
+    cap = _WHOLE_MAX_CHARS if whole else _MAX_CHARS
+    if len(text) > cap:
+        text = text[:cap]
+        reasons.append(f"{cap}자에서 끊음")
     return ProbeResult.succeeded(
         text, source=source, clock=clock,
         truncated_reason=" · ".join(reasons) + " — 더 있을 수 있다" if reasons else None)

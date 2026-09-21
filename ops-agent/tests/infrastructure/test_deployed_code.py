@@ -129,3 +129,67 @@ async def test_서비스_목록에_역할과_커밋이_있다(code):
     row = got.data[0]
     assert row["service"] == "processor" and row["repo"] == "dt-core"
     assert row["role"] == "가공한다" and row["commit"]
+
+
+async def test_400줄이_넘는_층도_통째로_읽는다(tmp_path, clock, code):
+    """**사내에서 실제로 난 일이다.**
+
+    리더의 기본 상한은 400줄이다. 소스 파일은 앞부분만 봐도 쓸모가 있지만
+    **config는 다르다** — 잘린 JSON은 파싱이 실패하고, 그 실패가
+    "대상 파일이 깨졌다"로 읽힌다. 사람을 **멀쩡한 파일** 고치러 보낸다.
+    """
+    root = tmp_path / "dt-core"
+    big = {"kafka": {"topic": "BASE_TOPIC", "group": "G"},
+           "mongo": {"collection": "base_docs"},
+           "rules": {f"r{i}": {"threshold": i} for i in range(300)}}
+    (root / "config" / "gbm" / "mx.json").write_text(
+        json.dumps(big, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert len((root / "config" / "gbm" / "mx.json")
+               .read_text(encoding="utf-8").splitlines()) > 400
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "big", cwd=root)
+
+    got = await code("gumi").config("processor")
+    assert got.status == "ok", got.error
+    assert got.envelope.complete, got.envelope.truncated_reason
+    assert got.data["rules"]["r299"] == {"threshold": 299}   # 끝까지 읽었다
+    assert got.data["kafka"]["topic"] == "GUMI_ALARM_EVENT"  # 덮어쓰기도 그대로
+
+
+class _Truncating:
+    """**항상 잘라서** 돌려주는 리더. 잘린 층을 만나면 어떻게 말하는지만 본다.
+
+    여기서 진짜 git을 쓸 수 없다 — `whole=True`의 상한(1MB)을 넘기려면 그만한
+    파일을 만들어야 하고, 그건 이 테스트가 재려는 것이 아니다. 재려는 것은
+    **봉투가 불완전하다고 할 때 우리가 어떻게 분기하는가**다.
+    """
+
+    def __init__(self, clock):
+        self._clock = clock
+
+    async def show(self, repo, commit, path, *, whole=False):
+        from src.domain.envelope import ProbeResult
+        return ProbeResult.succeeded('{"kafka": {"topic": "GUMI', source=f"x:{path}",
+                                     clock=self._clock, truncated_reason="400줄에서 끊음")
+
+
+async def test_우리가_자른_것을_대상_탓으로_돌리지_않는다(clock):
+    """**이게 이번 버그의 핵심이다.**
+
+    봉투가 "불완전하다"고 말하는데 그걸 안 보고 파싱하면 `JSONDecodeError`가 나고,
+    메시지가 "JSON이 아니다"가 된다. 원인은 우리인데 대상이 지목된다 —
+    `unreachable`을 `finding`으로 적는 것과 같은 종류의 거짓말이다(⑪).
+    """
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    topology = Topology(services={"processor": Service(repo="dt-core")},
+                        config_paths=["config/gbm/{gbm}.json"])
+    code = DeployedCode(_Truncating(clock), topology, Deployment(), gbm="mx",
+                        fct="gumi", clock=clock)
+    got = await code.config("processor")
+
+    assert got.status == "error"          # 쓸 수 있는 층이 하나도 없다
+    assert "JSON이 아니다" not in got.error, "우리가 자른 것을 대상 탓으로 돌렸다"
+    assert "잘라서" in got.error, "왜 못 읽었는지가 안 적혀 있다"
+    assert "경로" not in got.error, "경로를 고치라고 하면 맞는 경로를 고치러 간다"
