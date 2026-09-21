@@ -27,6 +27,7 @@ D = ROOT / "src/infrastructure/deployed_code.py"
 B = ROOT / "src/application/briefing.py"
 GR = ROOT / "src/infrastructure/git_reader.py"
 MN = ROOT / "src/__main__.py"
+RP = ROOT / "src/application/runner_probe.py"
 K = "tests/knowledge/test_checkout.py"
 K2 = "tests/knowledge/test_target_config.py"
 K3 = "tests/infrastructure/test_deployed_code.py"
@@ -215,6 +216,28 @@ CASES = [
  ("지식이 있어도 비어 있다고 한다", MN,
   '    return code, code.service_names()', '    return None, ()',
   [f"{K5}::test_지식이_있으면_서비스_이름이_나온다"]),
+ # ── 우리가 자른 것도 잘린 것이다 ───────────────────────────────────
+ ("우리가 자른 것을 완전하다고 적는다", RP,
+  '            complete=result.envelope.complete and not ours)',
+  '            complete=result.envelope.complete)',
+  ["tests/application/test_runner_probe.py::test_예산에서_자르면_완전하다고_안_한다"]),
+ ("늘 불완전하다고 우긴다", RP,
+  '            complete=result.envelope.complete and not ours)',
+  '            complete=False)',
+  ["tests/application/test_runner_probe.py::test_안_자르면_완전하다고_한다"]),
+ ("무엇이 잘렸는지 안 말한다", ROOT / "src/application/diagnose.py",
+  '        *[f"    ✂ {ref.source}" for ref in state.evidence if not ref.complete],',
+  '        *[],',
+  ["tests/application/test_diagnose.py::test_무엇이_잘렸는지_말한다"]),
+ ("_line이 자르고도 안 알린다", RP,
+  '    return flat[:limit] + " …(잘림)", True', '    return flat[:limit] + " …(잘림)", False',
+  [f"{K4}::test_예산에서_자른_것을_호출부에_알린다"]),
+ ("dict에 키 목록을 안 준다", RP,
+  '    return [f"키 {len(mapping)}개: {head}"] + rows, cut_head or cut_rows',
+  '    return rows, cut_head or cut_rows', [f"{K4}::test_dict는_키_목록이_먼저_나온다"]),
+ ("큰 키에서 멈춘다", RP,
+  '            skipped += 1\n            continue', '            break',
+  [f"{K4}::test_큰_키_하나가_뒤의_키를_가리지_않는다"]),
 ]
 bad = []
 for label, path, old, new, tests in CASES:

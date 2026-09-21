@@ -77,3 +77,19 @@ def test_질의_목록이_goal이_아니라_나간_것을_적는다(case):
     text = block(state)
     assert "mongo.find collection='alarm' filter={} limit=5" in text
     assert "전체 레코드 수를 센다" not in text
+
+
+def test_무엇이_잘렸는지_말한다(case):
+    """**"잘린 것 2건"만으로는 다음 라운드가 짐작이 된다.**
+
+    사내 실행에서 실제로 그랬다 — 리드가 이름을 못 본 건지 아닌지 알 수 없어서,
+    무엇이 잘렸는지 확인하는 데 왕복이 한 번 더 들었다.
+    """
+    state = CaseState(case=case, evidence=[
+        EvidenceRef(id="t-1.e1", source="code.config api", summary="…", complete=False),
+        EvidenceRef(id="t-2.e1", source="mongo.find collection='alarm'", summary="…"),
+    ])
+    text = "\n".join(diagnose(state))
+    assert "잘린 것 1건" in text
+    assert "✂ code.config api" in text
+    assert text.count("✂") == 1, "안 잘린 것까지 적으면 신호가 뜻을 잃는다"

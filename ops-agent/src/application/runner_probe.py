@@ -50,15 +50,21 @@ class ProbeRunner(TaskRunnerPort):
             return TaskOutcome(task_id=task.id, status="error",
                                error=f"{source} — {result.error}")
 
+        body, ours = detail(result.data, limit=self._detail_chars)
         ref = EvidenceRef(
             id=EvidenceRef.make_id(task.id, 1),
             source=source,
             summary=_summarize(result.data),
-            body="\n".join(detail(result.data, limit=self._detail_chars)),
+            body="\n".join(body),
             as_of=result.envelope.observed_at,
-            complete=result.envelope.complete)
+            # **우리가 자른 것도 잘린 것이다.** 예전엔 봉투만 봤고, 예산에서
+            # 잘라 놓고 `complete=True`라고 적었다. 그러면 리드는 자기가 본 것이
+            # 전부인 줄 알고 "없다"를 단정한다 — 10b에서 겪은 그 실패다.
+            complete=result.envelope.complete and not ours)
         note = ("" if result.envelope.complete
                 else f" (표본이 잘렸다: {result.envelope.truncated_reason})")
+        if result.envelope.complete and ours:
+            note = " (예산에서 잘렸다 — 없는 것이 아니다)"
         return TaskOutcome(task_id=task.id, status="ok",
                            summary=f"{source} → {ref.summary}{note}", evidence=[ref])
 
@@ -74,7 +80,7 @@ def _summarize(data: Any) -> str:
     return repr(data)[:_SUMMARY_CHARS]
 
 
-def detail(data: Any, *, limit: int = _DETAIL_CHARS) -> list[str]:
+def detail(data: Any, *, limit: int = _DETAIL_CHARS) -> tuple[list[str], bool]:
     """리드가 읽을 여러 줄. **개행은 우리가 만든 것만 있다.**
 
     `repr`을 그냥 자르지 않고 모양을 본다:
@@ -85,15 +91,59 @@ def detail(data: Any, *, limit: int = _DETAIL_CHARS) -> list[str]:
 
     필드 목록이 먼저인 이유: "이 컬렉션에 뭐가 들어 있나"가 조사의 실제 질문이고,
     그건 문서 한 건을 다 보기 전에 답할 수 있다. 예산이 모자라도 그건 남는다.
+
+    **둘째 값은 "우리가 잘랐나"다.** 호출부가 그걸 봉투에 실어야 한다 — 자른 사실을
+    안 실으면 리드가 조각을 전부로 착각한다.
     """
+    if isinstance(data, dict):
+        return _dict_detail(data, limit=limit)
     if isinstance(data, list):
         return _list_detail(data, limit=limit)
-    return [_line(repr(data), limit)]
+    line, cut = _line(repr(data), limit)
+    return [line], cut
 
 
-def _list_detail(rows: list, *, limit: int) -> list[str]:
+def _dict_detail(mapping: dict, *, limit: int) -> tuple[list[str], bool]:
+    """**키 먼저.** 목록에서 필드를 먼저 보여 주는 것과 같은 이유다.
+
+    중첩 config를 `repr`로 눕혀 그냥 자르면 **뒤쪽 키가 통째로 사라진다.** 사내
+    측정에서 실제로 그랬다: `rules`가 예산을 다 먹고 `mongo.collection`이 잘려
+    나갔는데, 그게 바로 조사가 찾던 이름이었다.
+    """
+    if not mapping:
+        return ["비어 있다"], False
+    head, cut_head = _line(", ".join(str(key) for key in mapping), limit)
+    rows, cut_rows = _entries(mapping, limit=limit)
+    return [f"키 {len(mapping)}개: {head}"] + rows, cut_head or cut_rows
+
+
+def _entries(mapping: dict, *, limit: int) -> tuple[list[str], bool]:
+    """값을 싣되, **안 들어가는 키는 건너뛰고 계속한다.**
+
+    목록(`_fill`)은 첫 예산 초과에서 멈춘다 — 문서 `[1]` 다음에 `[5]`가 나오면
+    읽는 사람이 헷갈리기 때문이다. dict는 반대다: config는 거대한 하위 트리
+    하나(`rules` 같은)와 작고 중요한 키 여럿으로 돼 있는 것이 보통이라, 거기서
+    멈추면 **뒤의 키가 통째로 안 보인다.** 사내 측정에서 `mongo.collection`이
+    정확히 그렇게 사라졌다.
+    """
+    taken, used, skipped, cut = [], 0, 0, False
+    for key, value in mapping.items():
+        flat, cut_row = _line(f"{key}: {value!r}", limit)
+        if taken and used + len(flat) > limit:
+            skipped += 1
+            continue
+        taken.append(flat)
+        used += len(flat)
+        cut = cut or cut_row
+    if skipped:
+        taken.append(f"… {skipped}개 키는 예산에서 빠졌다 (위 키 목록에는 있다)")
+        cut = True
+    return taken, cut
+
+
+def _list_detail(rows: list, *, limit: int) -> tuple[list[str], bool]:
     if not rows:
-        return ["0건 — 비어 있다"]
+        return ["0건 — 비어 있다"], False
     if all(isinstance(row, dict) for row in rows):
         fields, seen = [], set()
         for row in rows:
@@ -101,22 +151,24 @@ def _list_detail(rows: list, *, limit: int) -> list[str]:
                 if key not in seen:
                     seen.add(key)
                     fields.append(str(key))
-        lines = [f"{len(rows)}건 · 필드: {_line(', '.join(fields), limit)}"]
-        return lines + _fill([f"[{i}] {repr(row)}" for i, row in enumerate(rows, 1)],
-                             limit=limit, total=len(rows))
+        head, cut_head = _line(", ".join(fields), limit)
+        body, cut_body = _fill([f"[{i}] {repr(row)}" for i, row in enumerate(rows, 1)],
+                               limit=limit, total=len(rows))
+        return [f"{len(rows)}건 · 필드: {head}"] + body, cut_head or cut_body
     # 이름 목록은 **한 줄에 여러 개**로 채운다. 한 줄에 하나씩 쓰면 같은 예산에
     # 훨씬 적게 보이는데, 여기서 리드가 하려는 일이 바로 "179개 중에 고르기"다 —
     # 이름이 더 보일수록 고를 수 있는 폭이 넓어진다.
-    return [f"{len(rows)}건"] + _pack([str(row) for row in rows], limit=limit)
+    packed, cut = _pack([str(row) for row in rows], limit=limit)
+    return [f"{len(rows)}건"] + packed, cut
 
 
 _PACK_WIDTH = 100
 
 
-def _pack(names: list[str], *, limit: int) -> list[str]:
+def _pack(names: list[str], *, limit: int) -> tuple[list[str], bool]:
     lines, row, used = [], [], 0
     for name in names:
-        flat = _line(name, _PACK_WIDTH)
+        flat, _ = _line(name, _PACK_WIDTH)
         if row and len(", ".join(row)) + len(flat) + 2 > _PACK_WIDTH:
             lines.append(", ".join(row))
             used += len(lines[-1])
@@ -129,28 +181,37 @@ def _pack(names: list[str], *, limit: int) -> list[str]:
     shown = sum(line.count(", ") + 1 for line in lines)
     if shown < len(names):
         lines.append(f"… {len(names) - shown}건 더 있다 (예산에서 잘림 — 없는 것이 아니다)")
-    return lines
+        return lines, True
+    return lines, False
 
 
-def _fill(candidates: list[str], *, limit: int, total: int) -> list[str]:
+def _fill(candidates: list[str], *, limit: int, total: int) -> tuple[list[str], bool]:
     """예산이 닿는 데까지 싣고, **못 실은 것이 있으면 말한다.**
 
     조용히 자르면 리드는 그게 전부인 줄 알고 "없다"를 단정한다 — `complete=False`와
     같은 이유로, 안 보인 것이 예산 밖이었을 뿐인지 실제로 없는지를 구별해야 한다.
     """
-    taken, used = [], 0
+    taken, used, cut = [], 0, False
     for row in candidates:
-        flat = _line(row, limit)
+        flat, cut_row = _line(row, limit)
+        cut = cut or cut_row
         if taken and used + len(flat) > limit:
             break
         taken.append(flat)
         used += len(flat)
     if len(taken) < total:
         taken.append(f"… {total - len(taken)}건 더 있다 (예산에서 잘림 — 없는 것이 아니다)")
-    return taken
+        cut = True
+    return taken, cut
 
 
-def _line(text: str, limit: int) -> str:
-    """한 줄로 눕히고 예산에 맞춘다. **데이터의 개행이 줄을 만들지 못하게** 한다."""
+def _line(text: str, limit: int) -> tuple[str, bool]:
+    """한 줄로 눕히고 예산에 맞춘다. **데이터의 개행이 줄을 만들지 못하게** 한다.
+
+    둘째 값이 "잘랐나"다. 예전엔 `…(잘림)` 표시만 붙이고 호출부에 안 알려 줘서,
+    봉투는 `complete=True`인 채로 나갔다.
+    """
     flat = text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
-    return flat if len(flat) <= limit else flat[:limit] + " …(잘림)"
+    if len(flat) <= limit:
+        return flat, False
+    return flat[:limit] + " …(잘림)", True

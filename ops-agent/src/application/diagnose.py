@@ -44,6 +44,9 @@ def diagnose(state: CaseState) -> list[str]:
         + (f" · **중복 {repeats}회**" if repeats else " · 중복 없음"),
         f"  증거 {len(state.evidence)}건"
         + (f" · 잘린 것 {cut}건" if cut else " · 잘린 것 없음"),
+        # **무엇이** 잘렸는지 안 말하면 다음 라운드가 짐작이 된다. 실제로 그랬다:
+        # "잘린 것 2건"만 보고는 리드가 이름을 못 본 건지 아닌지 알 수 없었다.
+        *[f"    ✂ {ref.source}" for ref in state.evidence if not ref.complete],
         f"  가설 {len(state.hypotheses)}개"
         + (f" ({' · '.join(f'{k} {v}' for k, v in sorted(status.items()))})"
            if status else ""),

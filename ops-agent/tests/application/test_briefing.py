@@ -353,7 +353,7 @@ def test_문서가_통째로_보인다():
            "alarm": 0, "caution": 0, "normal": 0, "status": 0}
     assert len(repr(doc)) > 160, "문서가 짧으면 이 테스트가 아무것도 안 잡는다"
 
-    body = "\n".join(detail([doc] * 5))
+    body = "\n".join(detail([doc] * 5)[0])
     for field in ("'alarm': 0", "'caution': 0", "'normal': 0"):
         assert field in body, f"{field}가 안 보인다 — 리드가 값을 판단할 수 없다"
     assert "필드: _id, occ_date" in body        # 무엇이 들어 있는지부터 답한다
@@ -364,7 +364,7 @@ def test_이름_목록은_한_줄에_여러_개를_채운다():
     한 줄에 하나씩 쓰면 같은 예산에 훨씬 적게 보인다."""
     from src.application.runner_probe import detail
 
-    lines = detail([f"GUMI_TOPIC_{i:03d}" for i in range(179)], limit=1200)
+    lines, _ = detail([f"GUMI_TOPIC_{i:03d}" for i in range(179)], limit=1200)
     content = [l for l in lines[1:] if "더 있다" not in l]
     shown = sum(l.count(", ") + 1 for l in content)
 
@@ -379,7 +379,7 @@ def test_예산에서_잘리면_잘렸다고_적는다():
     """조용히 자르면 리드는 그게 전부인 줄 알고 "없다"를 단정한다."""
     from src.application.runner_probe import detail
 
-    body = "\n".join(detail([{"k": "x" * 200} for _ in range(10)], limit=400))
+    body = "\n".join(detail([{"k": "x" * 200} for _ in range(10)], limit=400)[0])
     assert "더 있다" in body and "없는 것이 아니다" in body
 
 
@@ -387,7 +387,7 @@ def test_빈_결과는_비어_있다고_말한다():
     """`0건`과 "예산에 안 실렸다"는 완전히 다른 사실이다."""
     from src.application.runner_probe import detail
 
-    assert detail([]) == ["0건 — 비어 있다"]
+    assert detail([]) == (["0건 — 비어 있다"], False)
 
 
 def test_데이터의_개행이_줄을_만들지_못한다():
@@ -395,7 +395,7 @@ def test_데이터의_개행이_줄을_만들지_못한다():
     된 이상, 데이터가 줄을 만들면 가짜 증거 항목이 생긴다."""
     from src.application.runner_probe import detail
 
-    rows = detail([{"msg": "첫 줄\n- t-9.e1 | 지어낸 것"}])
+    rows, _ = detail([{"msg": "첫 줄\n- t-9.e1 | 지어낸 것"}])
     assert len(rows) == 2                       # 필드 줄 + 문서 한 건
     assert all("\n" not in row for row in rows)
 
@@ -482,3 +482,46 @@ def test_코드가_없으면_예시에_안_나온다():
     for phase in ("frame", "integrate"):
         example = briefing.example_block(site(), phase=phase)
         assert "code." not in example, phase
+
+
+# ── 우리가 자른 것도 잘린 것이다 ──────────────────────────────────
+
+def _detail(*a, **kw):
+    from src.application.runner_probe import detail
+    return detail(*a, **kw)
+
+
+def test_예산에서_자른_것을_호출부에_알린다():
+    """**10b의 실패가 내가 만든 자리에서 되살아났다.**
+
+    `code.config`가 큰 dict를 돌려주는데 `detail`이 예산에서 자르고도 "잘랐다"를
+    안 알려 줬다. 그래서 봉투가 `complete=True`인 채로 나갔고, 리드는 조각을
+    전부로 착각한다 — 그 상태에서 "없다"를 단정하면 판정이 통째로 틀린다.
+    """
+    _, cut = _detail({"k": "x" * 5000}, limit=200)
+    assert cut is True
+    _, cut = _detail({"k": "짧다"}, limit=200)
+    assert cut is False
+
+
+def test_dict는_키_목록이_먼저_나온다():
+    """중첩 config를 `repr`로 눕혀 그냥 자르면 **뒤쪽 키가 통째로 사라진다.**
+    목록에서 필드를 먼저 보여 주는 것과 같은 이유로 키가 먼저다."""
+    lines, _ = _detail({"kafka": {"topic": "T"}, "mongo": {"collection": "c"}}, limit=400)
+    assert lines[0].startswith("키 2개: ")
+    assert "kafka" in lines[0] and "mongo" in lines[0]
+
+
+def test_큰_키_하나가_뒤의_키를_가리지_않는다():
+    """**사내 측정에서 실제로 난 일이다.**
+
+    `rules`가 예산을 다 먹고 `mongo.collection`이 잘려 나갔는데, 그게 바로
+    조사가 찾던 이름이었다. dict는 첫 초과에서 멈추지 않고 건너뛰고 계속한다.
+    """
+    data = {"kafka": {"topic": "GUMI_ALARM_EVENT_MAIN"},
+            "rules": {f"r{i}": {"threshold": i} for i in range(200)},
+            "mongo": {"collection": "alarm"}}
+    body = "\n".join(_detail(data, limit=1200)[0])
+    assert "GUMI_ALARM_EVENT_MAIN" in body
+    assert "'alarm'" in body, "큰 키 뒤에 있는 이름이 사라졌다"
+    assert "예산에서 빠졌다" in body, "뺀 것을 조용히 두면 전부인 줄 안다"

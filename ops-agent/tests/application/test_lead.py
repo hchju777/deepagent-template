@@ -284,7 +284,7 @@ async def test_리드가_본_이름을_찍었다고_적지_않는다(case):
     topics[49] = "GUMI_ALARM_EVENT_MAIN"
     ref = EvidenceRef(id="t-2.e1", source="kafka.list_topics",
                       summary=_summarize(topics),
-                      body="\n".join(detail(topics, limit=1200)))
+                      body="\n".join(detail(topics, limit=1200)[0]))
     assert "GUMI_ALARM_EVENT_MAIN" in ref.body          # 리드는 봤다
     assert "GUMI_ALARM_EVENT_MAIN" not in ref.summary   # 요약에는 없다
 

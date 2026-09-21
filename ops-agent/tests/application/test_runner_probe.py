@@ -30,14 +30,16 @@ class Recorder:
         return call
 
 
+_NAMES = ("redis", "mongo", "kafka", "rest", "code")
+
+
 class Bundle:
     def __init__(self, **adapters):
-        for name in ("redis", "mongo", "kafka", "rest"):
+        for name in _NAMES:
             setattr(self, name, adapters.get(name))
 
     def available(self):
-        return [n for n in ("redis", "mongo", "kafka", "rest")
-                if getattr(self, n) is not None]
+        return [n for n in _NAMES if getattr(self, n) is not None]
 
 
 @pytest.fixture
@@ -163,3 +165,38 @@ async def test_증거_요약이_개행을_이스케이프한다(case):
     out = await runner.run(task("t-1", action="redis.get", params={"key": "k"}),
                            case=case)
     assert "\n" not in out.evidence[0].summary
+
+
+# ── 우리가 자른 것도 잘린 것이다 ──────────────────────────────────
+
+async def test_예산에서_자르면_완전하다고_안_한다(case):
+    """**10b의 실패가 11a에서 되살아났고, 사내 실행에서 잡혔다.**
+
+    봉투는 멀쩡한데 우리가 예산에서 잘랐다. 예전엔 `complete`가 봉투만 봐서
+    `True`로 나갔고, 리드는 조각을 전부로 착각한다. 그 상태에서 "없다"를
+    단정하면 판정이 통째로 틀리고, 12a의 verify도 그걸 못 잡는다.
+    """
+    big = {"kafka": {"topic": "T"},
+           "rules": {f"r{i}": {"threshold": i} for i in range(200)},
+           "mongo": {"collection": "alarm"}}
+    code = Recorder(result=ProbeResult.succeeded(big, source="code.config api",
+                                                 clock=lambda: T0))
+    out = await ProbeRunner(Bundle(code=code), clock=lambda: T0).run(
+        task("t-1", action="code.config", params={"service": "api"}), case=case)
+
+    assert out.status == "ok"
+    ref = out.evidence[0]
+    assert not ref.complete, "우리가 잘라 놓고 완전하다고 적었다"
+    assert "예산에서 잘렸다" in out.summary
+    # 그리고 **자르고도 조사가 찾는 이름은 남아야** 한다.
+    assert "T" in ref.body and "'alarm'" in ref.body
+
+
+async def test_안_자르면_완전하다고_한다(case):
+    """늘 불완전하다고 적으면 그 신호가 뜻을 잃는다 — 12a의 verify가 이걸 본다."""
+    code = Recorder(result=ProbeResult.succeeded({"kafka": {"topic": "T"}},
+                                                 source="code.config api",
+                                                 clock=lambda: T0))
+    out = await ProbeRunner(Bundle(code=code), clock=lambda: T0).run(
+        task("t-1", action="code.config", params={"service": "api"}), case=case)
+    assert out.evidence[0].complete and "잘렸다" not in out.summary
