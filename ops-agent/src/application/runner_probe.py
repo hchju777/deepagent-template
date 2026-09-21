@@ -22,7 +22,7 @@ from src.domain.investigation import TaskOutcome, TaskRunnerPort
 _SUMMARY_CHARS = 160
 # 한 건이라도 **통째로** 보이게 하는 것이 요점이다. 문서를 반쯤 자르면 리드는
 # 필드 이름은 보고 값은 못 봐서, 같은 질의를 말만 바꿔 다시 낸다.
-_DETAIL_CHARS = 1200
+_DETAIL_CHARS = 2400
 
 
 class ProbeRunner(TaskRunnerPort):

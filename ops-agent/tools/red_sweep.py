@@ -28,6 +28,7 @@ B = ROOT / "src/application/briefing.py"
 GR = ROOT / "src/infrastructure/git_reader.py"
 MN = ROOT / "src/__main__.py"
 RP = ROOT / "src/application/runner_probe.py"
+SA = ROOT / "src/config/schema_app.py"
 K = "tests/knowledge/test_checkout.py"
 K2 = "tests/knowledge/test_target_config.py"
 K3 = "tests/infrastructure/test_deployed_code.py"
@@ -253,6 +254,15 @@ CASES = [
  ("프롬프트가 거부 자리를 안 쓴다", ROOT / "config/prompts/investigate-integrate.md",
   '<버려진 태스크>\n{rejected}\n</버려진 태스크>\n\n', '',
   [f"{K4}::test_프롬프트가_모든_자리를_실제로_쓴다"]),
+ # ── 증거 예산 ─────────────────────────────────────────────────────
+ ("개별 상한이 총 예산을 놀린다", SA,
+  '    evidence_chars: int = Field(default=2400, ge=200)',
+  '    evidence_chars: int = Field(default=1200, ge=200)',
+  ["tests/config/test_schema_app.py::test_개별_상한이_총_예산을_놀리지_않는다"]),
+ ("예시가 읽을 수 없는 건수를 낸다", B,
+  '                               "filter": {}, "limit": 3}),',
+  '                               "filter": {}, "limit": 9}),',
+  ["tests/config/test_schema_app.py::test_예시의_건수가_읽을_수_있는_크기다"]),
 ]
 bad = []
 for label, path, old, new, tests in CASES:
