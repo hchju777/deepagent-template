@@ -7,7 +7,10 @@
     "층 순서대로 적는다(앞이 밑바닥). `{gbm}`·`{fct}`를 쓸 수 있다 —",
     "대상 config가 법인별로도 갈리기 때문이다. 우리 SITE_LAYERS와 같은 문법이다.",
     "층은 **선택이다** — 없는 층이 있어도 정상이고, 하나도 없을 때만 오류다.",
-    "여기 값은 **자리표시자다.** 실제 이름은 사내에서 채운다."
+    "층 모양은 사내 확인을 반영했다 — gumi는 gbm/mx.json → factories/gumi/common.json →",
+    "factories/gumi/mx.json 셋을 보고, sevt는 같은 자리에 sevt가 들어간다.",
+    "합치는 규칙은 **나중 층이 덮는다**(src/knowledge/target_config.py).",
+    "여기 서비스 이름·레포 이름은 **자리표시자다.** 실제 값은 사내에서 채운다."
   ],
   "services": {
     "processor": {
@@ -30,8 +33,8 @@
     }
   },
   "config_paths": [
-    "config/common.json",
-    "config/{gbm}.json",
+    "config/gbm/{gbm}.json",
+    "config/factories/{fct}/common.json",
     "config/factories/{fct}/{gbm}.json"
   ]
 }

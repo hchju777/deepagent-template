@@ -22,7 +22,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 R, C, M, S = (ROOT/"src/infrastructure/git_reader.py", ROOT/"src/knowledge/checkout.py",
               ROOT/"src/__main__.py", ROOT/"tests/support.py")
-K = "tests/knowledge/test_checkout.py"; G = "tests/infrastructure/test_git_reader.py"
+T = ROOT / "src/knowledge/target_config.py"
+K = "tests/knowledge/test_checkout.py"
+K2 = "tests/knowledge/test_target_config.py"; G = "tests/infrastructure/test_git_reader.py"
 L = "tests/knowledge/test_cli_code.py"; P = "tests/test_portability.py"
 CASES = [
  ("show가 경계를 안 넘는다", R,
@@ -109,6 +111,32 @@ CASES = [
   '    git("update-index", "--add", "--cacheinfo", f"160000,{at},{path}", cwd=parent)',
   '    git("submodule", "add", "-q", str(sub), path, cwd=parent)',
   [f"{K}::test_submodule_픽스처가_file_프로토콜_허락을_안_탄다"]),
+ # ── 대상 config 층 병합 (11a 2차) ──────────────────────────────────
+ ("나중 층이 안 덮는다(앞이 이긴다)", T,
+  '    for _, layer in layers:\n        _overlay(merged, layer)',
+  '    for _, layer in reversed(layers):\n        _overlay(merged, layer)',
+  [f"{K2}::test_나중_층이_덮는다"]),
+ ("dict를 재귀 안 하고 통째로 교체", T,
+  '        if isinstance(value, dict) and isinstance(into.get(key), dict):\n            _overlay(into[key], value)\n        else:',
+  '        if False:\n            pass\n        else:', [f"{K2}::test_dict는_재귀로_합친다"]),
+ ("결과가 입력을 그대로 가리킨다(deepcopy 제거)", T,
+  '            into[key] = deepcopy(value) if isinstance(value, (dict, list)) else value',
+  '            into[key] = value', [f"{K2}::test_층이_하나뿐이어도_입력과_공유하지_않는다"]),
+ ("null을 우리 규칙(삭제)으로 처리", T,
+  '            into[key] = deepcopy(value) if isinstance(value, (dict, list)) else value',
+  '            if value is None:\n                into.pop(key, None)\n                continue\n            into[key] = deepcopy(value) if isinstance(value, (dict, list)) else value',
+  [f"{K2}::test_null은_값이다_우리_로더와_다르다"]),
+ ("리스트를 이어붙인다", T,
+  '            into[key] = deepcopy(value) if isinstance(value, (dict, list)) else value',
+  '            if isinstance(value, list) and isinstance(into.get(key), list):\n                into[key] = into[key] + value\n                continue\n            into[key] = deepcopy(value) if isinstance(value, (dict, list)) else value',
+  [f"{K2}::test_리스트는_교체다"]),
+ ("파싱 실패에 파일 이름을 안 적는다", T,
+  '        return None, f"{path}: JSON이 아니다 — {type(exc).__name__}: {exc}"',
+  '        return None, f"JSON이 아니다 — {type(exc).__name__}: {exc}"',
+  [f"{K2}::test_json이_아니면_이유를_돌려준다"]),
+ ("최상위 객체 검사를 뺀다", T,
+  '    if not isinstance(value, dict):\n        return None, f"{path}: 최상위가 객체가 아니다 — {type(value).__name__}"',
+  '    if False:\n        pass', [f"{K2}::test_최상위가_객체가_아니면_거부한다"]),
 ]
 bad = []
 for label, path, old, new, tests in CASES:
