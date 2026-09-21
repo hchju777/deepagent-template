@@ -1274,6 +1274,25 @@ def cmd_code_config(args, env) -> int:
     return _show_probe(asyncio.run(code.config(args.service)))
 
 
+def cmd_case_trace(args, env) -> int:
+    """트레이스를 **붙여넣을 수 있는 크기**로 줄인다.
+
+    사내에서 돌리는 사람과 고치는 사람이 다르고 그 사이가 손으로 옮기는 대화라,
+    프롬프트 전문은 건너올 수가 없다. 그래서 지금까지 "리드가 무엇을 보고 무엇을
+    뱉었는지"가 한 번도 안 건너왔고, 매번 코드에서 역추적했다.
+    """
+    from src.application.trace_digest import digest
+
+    folder = Path(args.trace) / args.case_id
+    if not folder.is_dir():
+        raise SystemExit(f"트레이스 폴더가 없다 — {folder}. "
+                         f"`case investigate {args.case_id} --trace {args.trace}`로 남긴다")
+    entries = [(path.name, path.read_text(encoding="utf-8"))
+               for path in sorted(folder.glob("*.md"))]
+    print("\n".join(digest(entries)))
+    return 0
+
+
 def cmd_case_list(args, env) -> int:
     repo = _case_repo(args, env)
     now = _clock(args, env)()
@@ -1821,6 +1840,12 @@ def build_parser() -> argparse.ArgumentParser:
     investigate.add_argument("--trace", nargs="?", const="output/traces",
                              help="프롬프트와 날것 응답을 남긴다 (기본 output/traces)")
     investigate.set_defaults(run=cmd_case_investigate)
+
+    trace = case_sub.add_parser(
+        "trace", help="트레이스를 붙여넣을 수 있는 크기로 줄인다")
+    trace.add_argument("case_id")
+    trace.add_argument("--trace", default="trace", help="`investigate --trace`에 준 폴더")
+    trace.set_defaults(run=cmd_case_trace)
 
     show_case = case_sub.add_parser("show", help="케이스 한 건")
     show_case.add_argument("case_id")

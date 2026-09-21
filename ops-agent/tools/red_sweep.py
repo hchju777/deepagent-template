@@ -49,6 +49,7 @@ MN = ROOT / "src/__main__.py"
 ND = ROOT / "src/application/nodes.py"
 RP = ROOT / "src/application/runner_probe.py"
 SA = ROOT / "src/config/schema_app.py"
+TD = ROOT / "src/application/trace_digest.py"
 K = "tests/knowledge/test_checkout.py"
 K2 = "tests/knowledge/test_target_config.py"
 K3 = "tests/infrastructure/test_deployed_code.py"
@@ -308,6 +309,32 @@ CASES = [
   '            entry = _free_rest_entry(site_config)\n            shapes = [entry] if entry else []',
   '            shapes = [("rest.query", {"entry": "등재 목록의 항목 이름", "params": {}})]',
   [f"{K4}::test_마지막_수단도_실재하는_것을_보여준다"]),
+ # ── 트레이스 요약 ─────────────────────────────────────────────────
+ ("예시를 안 찍는다", TD,
+  '    out.append("  예시가 보여준 것 : "',
+  '    out.append("  (예시 생략) : "',
+  ["tests/application/test_trace_digest.py::test_예시와_리드가_낸_것을_나란히_놓는다"]),
+ ("증거에 없는 이름을 안 짚는다", TD,
+  '        if ghosts:\n            marks.append(f"증거에 없는 이름 {\', \'.join(ghosts)}")',
+  '        if False:\n            marks.append("")',
+  ["tests/application/test_trace_digest.py::test_증거에_없는_이름을_표시한다"]),
+ ("보이는 반복과 안 보이는 반복을 안 가른다", TD,
+  '        if spoken in visible:\n            marks.append("**이미 한 질의 — 증거에 보이는데도 또 냈다**")',
+  '        if False:\n            marks.append("")',
+  ["tests/application/test_trace_digest.py::test_증거에_보이는_질의를_또_내면_구별한다"]),
+ ("증거 내용을 찍는다", TD,
+  '    return sum(1 for line in block.splitlines() if line.startswith("- "))',
+  '    return block',
+  ["tests/application/test_trace_digest.py::test_증거_내용은_안_찍는다"]),
+ ("비밀처럼 생긴 인자를 안 가린다", TD,
+  '        f"{k}:{\'***\' if _SECRETISH.search(str(k)) else _clip(v)}"',
+  '        f"{k}:{_clip(v)}"',
+  ["tests/application/test_trace_digest.py::test_비밀처럼_생긴_인자는_가린다",
+   "tests/application/test_trace_digest.py::test_키_이름은_안_가린다"]),
+ ("못 읽는 응답에 죽는다", TD,
+  '    if not made:\n        out.append("  리드가 낸 것 : (응답을 JSON으로 못 읽었다)")\n        return out',
+  '    if not made:\n        raise ValueError("못 읽었다")',
+  ["tests/application/test_trace_digest.py::test_못_읽는_응답에도_안_죽는다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -335,7 +362,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 69, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 75, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
