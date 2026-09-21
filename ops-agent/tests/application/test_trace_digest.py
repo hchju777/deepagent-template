@@ -101,3 +101,42 @@ def test_못_읽는_응답에도_안_죽는다():
 
 def test_트레이스가_없으면_그렇게_말한다():
     assert "트레이스 파일이 없다" in "\n".join(digest([]))
+
+
+def test_프롬프트가_어디로_가는지_블록별로_센다():
+    """첫 전체 트레이스에서 r4 응답이 13.6K 프롬프트 뒤에 깨졌다. **총량만으로는
+    어느 예산을 줄일지 알 수 없다** — 증거인지, 태스크 목록인지, 예시인지."""
+    prompt = _prompt(evidence="- t-1.e1 | mongo.find c | 1건\n" * 20,
+                     tasks="- t-1 done\n" * 5)
+    text = "\n".join(digest(_file(prompt, json.dumps({"tasks": []}))))
+    head = next(line for line in text.splitlines() if line.startswith("r2 "))
+    assert "프롬프트" in head and "= 증거" in head and "태스크" in head
+    assert "나머지" in head
+
+
+def test_가설과_결정을_찍는다():
+    """가설이 전부 refuted인데 conclude인지, 인용이 몇 건인지 — 12a로 넘긴 질문의
+    데이터가 여기서 나온다."""
+    reply = json.dumps({"decision": "conclude", "hypotheses": [
+        {"id": "h-1", "status": "refuted", "supporting_ids": [], "refuting_ids": ["t-1.e1"]},
+        {"id": "h-2", "status": "refuted"}], "tasks": []})
+    text = "\n".join(digest(_file(_prompt(), reply)))
+    assert "h-1 refuted(인용 1)" in text and "h-2 refuted(인용 0)" in text
+    assert "decision=conclude" in text
+
+
+def test_같은_라운드가_두_번이면_재시도라고_적는다():
+    """첫 답을 못 읽어 다시 물은 것을 새 라운드처럼 찍으면 "라운드가 하나 더
+    돌았다"로 읽힌다."""
+    one = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    two = ("02-r2-integrate.md", one[1])
+    text = "\n".join(digest([one, two]))
+    assert "재시도 2회째" in text and text.count("r2 integrate") == 2
+
+
+def test_못_읽은_응답의_앞머리를_보여준다():
+    """빈 답인지, 산문인지, 잘린 JSON인지가 앞머리에서 갈린다. 내용 전체는 안
+    찍는다 — 증거를 되뇌었을 수 있다."""
+    text = "\n".join(digest(_file(_prompt(), "{\"decision\": \"continue\", \"hyp" + "x" * 500)))
+    assert "시작:" in text and "x" * 200 not in text
+    assert "빈 응답" in "\n".join(digest(_file(_prompt(), "   ")))

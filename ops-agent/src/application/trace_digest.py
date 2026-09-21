@@ -41,22 +41,26 @@ _VALUE_CHARS = 40
 
 def digest(entries: list[tuple[str, str]]) -> list[str]:
     """`(파일명, 내용)` 목록 → 붙여넣을 줄들. **파일명 순서가 곧 라운드 순서다.**"""
-    lines, asked = ["트레이스 요약"], {}
+    lines, asked, attempts = ["트레이스 요약"], {}, {}
     for name, text in sorted(entries):
         match = _FILE.match(name)
         if match is None:
             continue
         _, round_no, node = match.groups()
+        # 같은 라운드가 두 번이면 **재시도**다 — 첫 답을 못 읽어서 다시 물은 것.
+        # 그걸 새 라운드처럼 찍으면 "라운드가 하나 더 돌았다"로 읽힌다.
+        attempts[(round_no, node)] = attempts.get((round_no, node), 0) + 1
         prompt = _section(text, "물어본 것")
         reply = _section(text, "날것 응답")
-        lines += _round(round_no, node, prompt, reply, asked)
+        lines += _round(round_no, node, prompt, reply, asked,
+                        attempt=attempts[(round_no, node)])
     if len(lines) == 1:
         lines.append("  (읽을 수 있는 트레이스 파일이 없다)")
     return lines
 
 
 def _round(round_no: str, node: str, prompt: str, reply: str,
-           asked: dict[str, str]) -> list[str]:
+           asked: dict[str, str], *, attempt: int = 1) -> list[str]:
     evidence = _block(prompt, "모은 증거")
     seen_names = evidence                       # 이름이 증거에 있나 — 문자열로 본다
     # 증거 줄의 `source`가 곧 그 질의다. `describe`가 만든 문자열이므로
@@ -67,7 +71,9 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
     shown = _tasks(_example(prompt))
     made = _tasks(parse_object(reply).data if parse_object(reply).ok else None)
 
-    out = [f"\nr{round_no} {node} · 프롬프트 {len(prompt):,}자"]
+    retry = f" (재시도 {attempt}회째)" if attempt > 1 else ""
+    out = [f"\nr{round_no} {node}{retry} · 프롬프트 {len(prompt):,}자"
+           f" = {_sizes(prompt, evidence)}"]
     out.append(f"  리드가 본 것 : 태스크 {_count(_block(prompt, '지금까지의 태스크'))}"
                f" · 증거 {_count(evidence)}(잘림 {evidence.count('⚠ 표본이 잘렸다')})"
                f" · 버려진 것 {_count(_block(prompt, '버려진 태스크'))}")
@@ -75,8 +81,20 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
                + ("  ".join(sorted(_clip(q) for q in visible)) or "(없음)"))
     out.append("  예시가 보여준 것 : "
                + ("  ".join(_shape(a, p) for _, a, p in shown) or "(없음)"))
+    parsed = parse_object(reply)
+    if not parsed.ok:
+        out.append("  리드가 낸 것 : (응답을 JSON으로 못 읽었다 — "
+                   f"{len(reply):,}자, {_peek(reply)})")
+        return out
+    body = parsed.data if isinstance(parsed.data, dict) else {}
+    hyps = [h for h in body.get("hypotheses", []) if isinstance(h, dict)]
+    out.append("  가설 : " + ("  ".join(
+        f"{h.get('id', '?')} {h.get('status', '?')}"
+        f"(인용 {len(h.get('supporting_ids') or []) + len(h.get('refuting_ids') or [])})"
+        for h in hyps) or "(없음)")
+        + (f" · decision={body['decision']}" if body.get("decision") else ""))
     if not made:
-        out.append("  리드가 낸 것 : (응답을 JSON으로 못 읽었다)")
+        out.append("  리드가 낸 것 : (없음)")
         return out
     out.append("  리드가 낸 것 :")
     for task_id, action, params in made:
@@ -98,6 +116,24 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
         out.append(f"    {task_id} {query}"
                    + (f"   ← {' · '.join(marks)}" if marks else ""))
     return out
+
+
+def _sizes(prompt: str, evidence: str) -> str:
+    """**13K가 어디로 가는지.** 총량만 보면 예산을 어디서 줄일지 알 수 없다."""
+    parts = {"증거": len(evidence),
+             "태스크": len(_block(prompt, "지금까지의 태스크")),
+             "가설": len(_block(prompt, "가설")),
+             "버려진": len(_block(prompt, "버려진 태스크"))}
+    example = _example_text(prompt)
+    parts["예시"] = len(example)
+    parts["나머지"] = max(0, len(prompt) - sum(parts.values()))
+    return " + ".join(f"{k} {v:,}" for k, v in parts.items() if v)
+
+
+def _peek(reply: str) -> str:
+    """못 읽은 응답의 **앞머리** — 빈 답인지, 산문인지, 잘린 JSON인지가 여기서 갈린다."""
+    head = reply.strip().replace("\n", " ")[:60]
+    return f"시작: {head!r}" if head else "빈 응답"
 
 
 def _tasks(body) -> list[tuple[str, str, dict]]:
@@ -124,22 +160,28 @@ def _clip(value) -> str:
     return text if len(text) <= _VALUE_CHARS else text[:_VALUE_CHARS] + "…"
 
 
-def _example(prompt: str):
-    """프롬프트 안에 박힌 예시 JSON. **중괄호를 세어서** 찾는다 — 예시는 코드펜스
-    없이 들어가므로 정규식으로는 끝을 못 찾는다."""
+def _example_text(prompt: str) -> str:
+    """프롬프트 안에 박힌 예시 JSON의 **원문**. **중괄호를 세어서** 찾는다 — 예시는
+    코드펜스 없이 들어가므로 정규식으로는 끝을 못 찾는다."""
     for start in (i for i, ch in enumerate(prompt) if ch == "{"):
         depth = 0
         for end in range(start, len(prompt)):
             depth += (prompt[end] == "{") - (prompt[end] == "}")
             if depth == 0:
+                chunk = prompt[start:end + 1]
                 try:
-                    body = json.loads(prompt[start:end + 1])
+                    body = json.loads(chunk)
                 except ValueError:
                     break
                 if isinstance(body, dict) and "tasks" in body:
-                    return body
+                    return chunk
                 break
-    return None
+    return ""
+
+
+def _example(prompt: str):
+    text = _example_text(prompt)
+    return json.loads(text) if text else None
 
 
 def _section(text: str, head: str) -> str:

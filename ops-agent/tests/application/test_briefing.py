@@ -615,8 +615,33 @@ def test_예시가_이미_한_읽기를_다시_보여주지_않는다():
     done = tuple(t["action"] for t in first["tasks"])
     later = json.loads(briefing.example_block(site(), phase="integrate",
                                               services=("api",), used=done))
-    assert not (set(t["action"] for t in later["tasks"]) & set(done)), (
-        f"이미 한 {done}를 또 보여 준다")
+    # 좁힐 축이 없는 읽기만 사라져야 한다 — `filter`가 있는 것은 아래 검사가 따로 본다.
+    flat = {t["action"] for t in later["tasks"] if not t["params"].get("filter")}
+    assert not (flat & set(done)), f"이미 한 {done}를 또 보여 준다"
+    assert "code.grep" in done and "code.grep" not in flat
+
+
+def test_좁힐_수_있는_읽기는_이미_썼어도_보여준다():
+    """**첫 전체 트레이스에서 잡힌 것이다.**
+
+    `mongo.find`를 action 이름으로 빼자 좁히는 본보기가 r1에만 보였다 — 리드가
+    아직 필드 이름을 모를 때만. 문서를 읽어 필드를 알게 된 r2부터는 없어졌고,
+    리드는 끝까지 `filter={}`였다(t-5·t-7). 같은 action이어도 좁힌 질의는 새
+    질의이므로, `filter`가 있는 모양은 계속 보여 준다.
+    """
+    everything = tuple(action for action, _ in briefing._named_reads(("api",)))
+    later = json.loads(briefing.example_block(site(), phase="integrate",
+                                              services=("api",), used=everything))
+    finds = [t for t in later["tasks"] if t["action"] == "mongo.find"]
+    assert finds and finds[0]["params"]["filter"], "좁히는 본보기가 사라졌다"
+    assert not [t for t in later["tasks"] if t["action"] == "code.grep"], (
+        "좁힐 수 없는 읽기까지 되살아났다")
+
+
+def test_좁힐_축이_있는_것만_다시_보여준다():
+    assert briefing._refinable({"collection": "c", "filter": {"a": 1}})
+    assert not briefing._refinable({"collection": "c", "filter": {}})
+    assert not briefing._refinable({"patterns": ["x"]})
 
 
 def test_전부_써_봤으면_그래도_보여준다():
@@ -624,10 +649,15 @@ def test_전부_써_봤으면_그래도_보여준다():
 
     **REST가 없는 사이트로 본다.** `rest.query` 폴백이 있으면 이 검사가 그것에
     가려서 아무것도 안 지킨다 — 실제로 그랬고 RED 스윕이 잡았다.
+
+    **mongo도 없는 사이트로 본다.** `mongo.find`는 좁힐 수 있어 늘 남으므로, mongo가
+    있으면 폴백을 지워도 이 검사가 통과한다 — 그것도 RED 스윕이 잡았다. 폴백이
+    실제로 필요한 건 남은 것이 하나도 없는 사이트다.
     """
     everything = tuple(action for action, _ in briefing._named_reads(("api",)))
-    example = json.loads(briefing.example_block(site(rest=None), phase="integrate",
-                                                services=("api",), used=everything))
+    example = json.loads(briefing.example_block(site(rest=None, mongodb=None),
+                                                phase="integrate", services=("api",),
+                                                used=everything))
     assert example["tasks"], "예시가 비었다"
 
 

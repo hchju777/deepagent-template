@@ -213,6 +213,16 @@ def _discovery(services: tuple[str, ...]):
     return (("code.config", {"service": services[0]}),) + _DISCOVERY
 
 
+def _refinable(params: dict) -> bool:
+    """다시 내도 **같은 질의가 아닌** 읽기 — 좁힐 축(`filter`)이 있는 것.
+
+    `code.grep`·`kafka.tail`·`redis.get`은 리드가 아는 이름이 하나면 다시 내는 순간
+    중복이다. `mongo.find`는 `filter`가 다르면 다른 질의고, 그게 조사가 실제로
+    나아가는 방향이다.
+    """
+    return bool(params.get("filter"))
+
+
 def _named_reads(services: tuple[str, ...]):
     """이름을 찾은 뒤의 수. 코드가 있으면 **그 이름을 코드에서 대조**하는 것이 첫 수다.
 
@@ -302,10 +312,20 @@ def example_block(site_config, *, phase: str, start: int = 1,
                 "tasks": [_task(start + n, a, p, rank=n + 1)
                           for n, (a, p) in enumerate(shapes)]}
     else:
-        fresh = tuple(shape for shape in _named_reads(services) if shape[0] not in used)
+        # **`filter`가 있는 읽기는 이미 썼어도 다시 보여 준다.** 같은 action이어도
+        # 좁힌 질의는 새 질의다. 처음엔 action 이름으로 뺐는데, 그러면 리드가 문서를
+        # 읽어 **필드를 알게 된 바로 그 라운드부터** 좁히는 본보기가 사라진다 —
+        # 사내 측정에서 r1에만 보이고(채울 필드가 아직 없을 때) r2부터 없어졌고,
+        # 리드는 끝까지 `filter={}`였다.
+        fresh = tuple(shape for shape in _named_reads(services)
+                      if shape[0] not in used or _refinable(shape[1]))
         # 전부 써 봤으면 어쩔 수 없이 다시 보여 준다 — 빈 예시는 형식 자체를
         # 못 보여 주므로 더 나쁘다. 그때는 좁힌 `filter`가 차이를 만든다.
-        shapes = _available(site_config, fresh or _named_reads(services), 2, services)
+        # **이 사이트에서 쓸 수 있는 것**이 남았는지로 판단한다 — `fresh` 자체는
+        # `mongo.find`가 늘 남아 비지 않으므로, mongo가 없는 사이트에서 `fresh`만
+        # 보면 전부 쓴 뒤 예시가 빈다(RED 스윕이 잡았다).
+        shapes = (_available(site_config, fresh, 2, services)
+                  or _available(site_config, _named_reads(services), 2, services))
         if not shapes:
             # 마지막 수단도 **이 사이트에 실재하는 것**이어야 한다. 예전엔
             # `rest.query`를 손으로 박아 뒀는데, REST가 없는 사이트에도 그게

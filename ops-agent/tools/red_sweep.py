@@ -286,12 +286,12 @@ CASES = [
   [f"{K4}::test_예시의_건수가_읽을_수_있는_크기다"]),
  # ── 예시가 중복을 만들지 않는다 ───────────────────────────────────
  ("예시가 이미 한 읽기를 또 보여준다", B,
-  '        fresh = tuple(shape for shape in _named_reads(services) if shape[0] not in used)',
+  '        fresh = tuple(shape for shape in _named_reads(services)\n                      if shape[0] not in used or _refinable(shape[1]))',
   '        fresh = tuple(_named_reads(services))',
   [f"{K4}::test_예시가_이미_한_읽기를_다시_보여주지_않는다"]),
  ("전부 썼을 때 예시가 빈다", B,
-  '        shapes = _available(site_config, fresh or _named_reads(services), 2,',
-  '        shapes = _available(site_config, fresh, 2,',
+  '        shapes = (_available(site_config, fresh, 2, services)\n                  or _available(site_config, _named_reads(services), 2, services))',
+  '        shapes = _available(site_config, fresh, 2, services)',
   [f"{K4}::test_전부_써_봤으면_그래도_보여준다"]),
  ("예시가 좁히는 모양을 안 보여준다", B,
   '                               "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},',
@@ -332,9 +332,34 @@ CASES = [
   ["tests/application/test_trace_digest.py::test_비밀처럼_생긴_인자는_가린다",
    "tests/application/test_trace_digest.py::test_키_이름은_안_가린다"]),
  ("못 읽는 응답에 죽는다", TD,
-  '    if not made:\n        out.append("  리드가 낸 것 : (응답을 JSON으로 못 읽었다)")\n        return out',
-  '    if not made:\n        raise ValueError("못 읽었다")',
+  '    if not parsed.ok:\n        out.append("  리드가 낸 것 : (응답을 JSON으로 못 읽었다 — "',
+  '    if not parsed.ok:\n        raise ValueError("못 읽었다")\n        out.append("  리드가 낸 것 : (응답을 JSON으로 못 읽었다 — "',
   ["tests/application/test_trace_digest.py::test_못_읽는_응답에도_안_죽는다"]),
+ # ── 첫 전체 트레이스가 드러낸 것 ─────────────────────────────────
+ ("좁힐 수 있는 읽기도 한 번 쓰면 예시에서 뺀다", B,
+  '                      if shape[0] not in used or _refinable(shape[1]))',
+  '                      if shape[0] not in used)',
+  [f"{K4}::test_좁힐_수_있는_읽기는_이미_썼어도_보여준다"]),
+ ("빈 filter도 좁힐 수 있다고 본다", B,
+  '    return bool(params.get("filter"))',
+  '    return "filter" in params',
+  [f"{K4}::test_좁힐_축이_있는_것만_다시_보여준다"]),
+ ("프롬프트 총량만 찍는다", TD,
+  '           f" = {_sizes(prompt, evidence)}"]',
+  '           ]',
+  ["tests/application/test_trace_digest.py::test_프롬프트가_어디로_가는지_블록별로_센다"]),
+ ("결정을 안 찍는다", TD,
+  '        + (f" · decision={body[\'decision\']}" if body.get("decision") else ""))',
+  '        )',
+  ["tests/application/test_trace_digest.py::test_가설과_결정을_찍는다"]),
+ ("재시도를 새 라운드처럼 찍는다", TD,
+  '    retry = f" (재시도 {attempt}회째)" if attempt > 1 else ""',
+  '    retry = ""',
+  ["tests/application/test_trace_digest.py::test_같은_라운드가_두_번이면_재시도라고_적는다"]),
+ ("못 읽은 응답의 앞머리를 안 보여준다", TD,
+  '    return f"시작: {head!r}" if head else "빈 응답"',
+  '    return "?"',
+  ["tests/application/test_trace_digest.py::test_못_읽은_응답의_앞머리를_보여준다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -362,7 +387,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 75, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 81, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
