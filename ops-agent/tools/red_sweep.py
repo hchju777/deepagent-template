@@ -15,7 +15,16 @@
 
 `tests/` 밖에 있는 이유: pytest가 수집하면 안 된다. 이건 테스트가 아니라
 **테스트를 검사하는 도구**다.
+
+## 중간에 끊겨도 소스를 되돌린다
+
+`finally`만으로는 부족하다. Ctrl-C나 종료 신호로 프로세스가 끊기면 그 자리에서
+죽고, **망가뜨린 소스가 그대로 남는다.** 실제로 그렇게 한 번 남겼고, 그 뒤 전체
+테스트가 빨간불이 나서 원인을 찾는 데 시간이 들었다. 그래서 건드린 파일을 전부
+기억해 두고, 신호로 끊길 때도 복구한 뒤 나간다.
 """
+import atexit
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -260,21 +269,39 @@ CASES = [
   '    evidence_chars: int = Field(default=1200, ge=200)',
   ["tests/config/test_schema_app.py::test_개별_상한이_총_예산을_놀리지_않는다"]),
  ("예시가 읽을 수 없는 건수를 낸다", B,
-  '                               "filter": {}, "limit": 3}),',
-  '                               "filter": {}, "limit": 9}),',
-  ["tests/config/test_schema_app.py::test_예시의_건수가_읽을_수_있는_크기다"]),
+  '                               "limit": 3}),',
+  '                               "limit": 9}),',
+  [f"{K4}::test_예시의_건수가_읽을_수_있는_크기다"]),
 ]
+# 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
+_ORIGINAL: dict = {}
+
+
+def _restore_all(*_signal) -> None:
+    for path, text in _ORIGINAL.items():
+        path.write_text(text, encoding="utf-8")
+    if _signal:
+        print("\n끊겼다 — 건드린 소스를 되돌렸다.")
+        sys.exit(130)
+
+
+atexit.register(_restore_all)
+for _sig in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(_sig, _restore_all)
+
 bad = []
 for label, path, old, new, tests in CASES:
     src = path.read_text(encoding="utf-8")
     if old not in src:
         bad.append(f"{label}: 자리 못 찾음"); print(f"???  {label}"); continue
+    _ORIGINAL[path] = src
     path.write_text(src.replace(old, new, 1), encoding="utf-8")
     try:
         done = subprocess.run([".venv/bin/python", "-m", "pytest", "-q", *tests],
                               cwd=ROOT, capture_output=True, text=True)
     finally:
         path.write_text(src, encoding="utf-8")
+        _ORIGINAL.pop(path, None)
     tail = done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "(출력 없음)"
     ok = done.returncode != 0
     print(f"{'RED ' if ok else '초록!'} {label} — {tail}")

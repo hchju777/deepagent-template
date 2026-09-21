@@ -576,3 +576,64 @@ def test_프롬프트가_모든_자리를_실제로_쓴다():
         text = (REPO_ROOT / "config" / "prompts" / path).read_text(encoding="utf-8")
         missing = sorted(slot for slot in slots if "{" + slot + "}" not in text)
         assert not missing, f"{path}가 안 쓰는 자리: {', '.join(missing)}"
+
+
+def test_예시의_건수가_읽을_수_있는_크기다():
+    """**읽을 수 없는 5건보다 읽을 수 있는 3건이 낫다.**
+
+    예산은 증거 하나당 고정이라 건수를 늘리면 건당 글자가 그만큼 줄어든다.
+    사내 측정에서 `limit=5`의 문서 다섯 건이 한 건도 온전히 안 들어갔다 —
+    10b의 258자 제조 문서와 같은 일이다.
+
+    **예시를 통해서 본다.** 모듈 안의 표를 직접 뒤지면 그 표를 안 거치는 경로가
+    생겼을 때 이 검사가 조용히 무의미해진다 — 리드에게 실제로 나가는 것은 예시다.
+    """
+    from src.config.schema_app import InvestigationConfig
+
+    budget = InvestigationConfig().evidence_chars
+    example = json.loads(briefing.example_block(site(), phase="integrate"))
+    limits = [t["params"]["limit"] for t in example["tasks"] if "limit" in t["params"]]
+    assert limits, "예시에 건수를 지정하는 읽기가 하나는 있어야 이 검사가 뜻이 있다"
+    for limit in limits:
+        assert budget // limit >= 400, (
+            f"limit={limit}이면 한 건에 {budget // limit}자다 — "
+            f"제조 문서 한 건도 안 들어간다")
+
+
+# ── 예시가 중복을 만들지 않는다 ───────────────────────────────────
+
+def test_예시가_이미_한_읽기를_다시_보여주지_않는다():
+    """**사내 측정에서 잡힌 것이다.**
+
+    integrate 예시가 라운드마다 완전히 똑같았다. 모델은 예시를 복사하고 같은
+    증거에서 같은 이름을 채우므로 **같은 질의가 나온다** — t-8·t-9가 정확히
+    그랬고, 중복 방어가 둘 다 거부했다. 예시가 곧 명세라는 성질(10b)이
+    반대로 작동한 것이다.
+    """
+    first = json.loads(briefing.example_block(site(), phase="integrate",
+                                              services=("api",)))
+    done = tuple(t["action"] for t in first["tasks"])
+    later = json.loads(briefing.example_block(site(), phase="integrate",
+                                              services=("api",), used=done))
+    assert not (set(t["action"] for t in later["tasks"]) & set(done)), (
+        f"이미 한 {done}를 또 보여 준다")
+
+
+def test_전부_써_봤으면_그래도_보여준다():
+    """빈 예시는 **형식 자체를 못 보여 준다** — 그게 더 나쁘다."""
+    everything = tuple(action for action, _ in briefing._named_reads(("api",)))
+    example = json.loads(briefing.example_block(site(), phase="integrate",
+                                                services=("api",), used=everything))
+    assert example["tasks"], "예시가 비었다"
+
+
+def test_좁히는_모양을_예시가_보여준다():
+    """`filter: {}`가 리드가 가진 유일한 본보기였다. 그래서 "좁혀서 물어라"를
+    읽고도 **좁히는 모양을 몰라** 같은 질의를 그대로 다시 냈다.
+
+    산문으로 시키는 것과 예시로 보여 주는 것은 이 모델에게 전혀 다르다.
+    """
+    example = json.loads(briefing.example_block(site(), phase="integrate"))
+    finds = [t for t in example["tasks"] if t["action"] == "mongo.find"]
+    assert finds, "이 검사가 뜻을 가지려면 예시에 mongo.find가 있어야 한다"
+    assert finds[0]["params"]["filter"], "filter가 비어 있으면 좁히는 법을 못 배운다"

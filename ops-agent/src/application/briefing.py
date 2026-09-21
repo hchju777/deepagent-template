@@ -184,8 +184,14 @@ _DISCOVERY = (("mongo.list_collections", {}),
 # `limit`이 작은 이유: **읽을 수 없는 5건보다 읽을 수 있는 3건이 낫다.** 예산은
 # 증거 하나당 고정이라 건수를 늘리면 건당 글자가 그만큼 줄고, 사내 측정에서
 # `limit=5`의 문서 다섯 건이 한 건도 온전히 안 들어갔다(10b의 258자 문서와 같은 일).
+#
+# `filter`가 **비어 있지 않은** 이유: 예전엔 `{}`였고, 그게 리드가 가진 유일한
+# `mongo.find` 본보기였다. 그래서 잘린 결과를 보고 "좁혀서 물어라"는 말을 들어도
+# **좁히는 모양을 몰라서** 같은 질의를 그대로 다시 냈다(사내 측정 t-9).
+# 산문으로 시키는 것과 예시로 보여 주는 것은 이 모델에게 전혀 다르다.
 _NAMED_READ = (("mongo.find", {"collection": "위 증거에서 본 컬렉션 이름",
-                               "filter": {}, "limit": 3}),
+                               "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},
+                               "limit": 3}),
                ("kafka.tail", {"topic": "위 증거에서 본 토픽 이름", "limit": 5}),
                ("redis.get", {"key": "위 증거에서 본 키 이름"}))
 
@@ -276,8 +282,13 @@ def next_task_number(state: CaseState) -> int:
 
 
 def example_block(site_config, *, phase: str, start: int = 1,
-                  services: tuple[str, ...] = ()) -> str:
-    """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**"""
+                  services: tuple[str, ...] = (), used: tuple[str, ...] = ()) -> str:
+    """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
+
+    `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
+    똑같고, 모델은 그걸 그대로 복사해 **같은 질의를 다시 낸다** — 사내 측정에서
+    t-8·t-9가 정확히 그랬다. 예시가 곧 명세라는 성질(10b)이 반대로 작동한 것이다.
+    """
     if phase == "frame":
         shapes = _available(site_config, _discovery(services), 3, services)
         free = _free_rest_entry(site_config)
@@ -291,7 +302,11 @@ def example_block(site_config, *, phase: str, start: int = 1,
                 "tasks": [_task(start + n, a, p, rank=n + 1)
                           for n, (a, p) in enumerate(shapes)]}
     else:
-        shapes = _available(site_config, _named_reads(services), 2, services) or [("rest.query", {
+        fresh = tuple(shape for shape in _named_reads(services) if shape[0] not in used)
+        # 전부 써 봤으면 어쩔 수 없이 다시 보여 준다 — 빈 예시는 형식 자체를
+        # 못 보여 주므로 더 나쁘다. 그때는 좁힌 `filter`가 차이를 만든다.
+        shapes = _available(site_config, fresh or _named_reads(services), 2,
+                            services) or [("rest.query", {
             "entry": "등재 목록의 항목 이름", "params": {}})]
         body = {"decision": "continue",
                 "hypotheses": [{"id": "h-1", "statement": "갱신한 가설 (한국어 한 문장)",
@@ -343,7 +358,9 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
             "actions": action_catalog(site_config, services=services),
             "example": example_block(site_config, phase="integrate",
                                      start=next_task_number(state),
-                                     services=services),
+                                     services=services,
+                                     used=tuple(t.action for t in state.plan_tasks
+                                                if t.action)),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state, budget=evidence_budget),
