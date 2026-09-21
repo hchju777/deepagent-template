@@ -1195,6 +1195,61 @@ def cmd_code_read(args, env) -> int:
     return 0
 
 
+def _deployed_code(args, env):
+    """`DeployedCode` 하나. **조사(2차)가 쓰는 것과 같은 조립**을 CLI도 쓴다.
+
+    여기서 따로 조립하면 CLI로는 되는데 조사에서는 안 되는(또는 반대의) 상태가
+    생기고, 그때 원인이 1차인지 2차인지 섞인다 — 규율 8이 막는 그 실패다.
+    """
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.infrastructure.git_reader import RealCodeReader
+    from src.knowledge.loader import load_deployment, load_topology
+
+    site, gbm, fct, _ = _code_site(args, env)
+    root = _knowledge_root(args)
+    try:
+        topology = load_topology(root, gbm)
+        deployment = load_deployment(root, gbm)
+    except (ConfigError, FileNotFoundError) as exc:
+        raise SystemExit(f"지식 층을 읽을 수 없다 — {exc}")
+    reader = RealCodeReader(list(site.code.repos), clock=_clock(args, env))
+    return DeployedCode(reader, topology, deployment, gbm=gbm, fct=fct,
+                        clock=_clock(args, env)), gbm, fct
+
+
+def _show_probe(result) -> int:
+    """`ProbeResult` 하나를 화면에 옮긴다. **잘린 것을 조용히 두지 않는다.**"""
+    print(f"  {result.source}\n")
+    if result.status == "error":
+        print(f"  ❌ {result.error}", file=sys.stderr)
+        return 1
+    if isinstance(result.data, str):
+        print(result.data)
+    else:
+        print(json.dumps(result.data, ensure_ascii=False, indent=2))
+    if not result.envelope.complete:
+        print(f"\n  ⚠ {result.envelope.truncated_reason}", file=sys.stderr)
+    return 0
+
+
+def cmd_code_services(args, env) -> int:
+    """무엇을 조사할 수 있나 — 리드가 `code.services`로 보는 것과 같은 답."""
+    code, gbm, fct = _deployed_code(args, env)
+    print(f"  {gbm}/{fct}")
+    return _show_probe(asyncio.run(code.services()))
+
+
+def cmd_code_config(args, env) -> int:
+    """그 서비스가 배포 시점에 **실제로 보는 설정** — 층을 전부 합친 결과.
+
+    `code read`가 파일 하나를 보여 준다면 이건 "이름이 무엇인가"에 답한다.
+    층 하나만 읽으면 위 층이 덮어쓴 값을 사실로 단정하기 때문에 둘이 다른 명령이다.
+    """
+    code, gbm, fct = _deployed_code(args, env)
+    print(f"  {gbm}/{fct} — 층은 {fct} 기준")
+    return _show_probe(asyncio.run(code.config(args.service)))
+
+
 def cmd_case_list(args, env) -> int:
     repo = _case_repo(args, env)
     now = _clock(args, env)()
@@ -1718,6 +1773,16 @@ def build_parser() -> argparse.ArgumentParser:
         command = code_sub.add_parser(name, help=helptext)
         _add_site_options(command, sub=True)
         command.set_defaults(run=fn)
+
+    services = code_sub.add_parser("services", help="무엇을 조사할 수 있나")
+    _add_site_options(services, sub=True)
+    services.set_defaults(run=cmd_code_services)
+
+    config = code_sub.add_parser(
+        "config", help="그 서비스가 실제로 보는 설정 — 층을 전부 합친 결과")
+    config.add_argument("--service", required=True, help="토폴로지의 서비스 이름")
+    _add_site_options(config, sub=True)
+    config.set_defaults(run=cmd_code_config)
 
     read = code_sub.add_parser("read", help="배포된 커밋의 파일 하나를 실제로 읽는다")
     read.add_argument("--service", required=True, help="토폴로지의 서비스 이름")

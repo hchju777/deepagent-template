@@ -422,3 +422,30 @@ async def test_실행기가_body와_summary를_둘_다_만든다(case, clock):
     assert len(ref.summary) <= 200                  # 사람이 볼 한 줄
     assert "'normal': 0" in ref.body                # 리드가 볼 내용
     assert "'normal': 0" not in ref.summary         # 요약에는 안 들어간다(잘린다)
+
+
+# ── 대상 코드(11a 2차)가 목록에 들어오는가 ─────────────────────────
+
+def test_코드가_없으면_목록에_안_나온다():
+    """**없는 문을 열라고 적어 두면 리드가 거기로 간다.** 그러면 매 라운드가
+    "미등재 action"으로 날아가고, 우리는 라운드 상한만 태운다."""
+    catalog = briefing.action_catalog(site())
+    assert "code." not in catalog
+
+
+def test_코드가_있으면_서비스_이름까지_적는다():
+    """사내 모델은 **완결된 구체값을 그대로 복사하고** 지시문 모양은 바꿔 넣는다
+    (10b에서 측정). 이름을 안 적으면 `service="..."`를 진짜로 조회한다."""
+    catalog = briefing.action_catalog(site(), services=("processor", "sink"))
+    assert "code.config(service)" in catalog
+    assert "processor, sink" in catalog
+
+
+def test_모르는_어댑터는_목록에_안_샌다():
+    """`_INFRA_FIELD`에 없는 이름을 조용히 통과시키면, 새 어댑터를 더했을 때
+    **선언하지도 않은 시스템이 목록에 뜬다.**"""
+    from src.application.briefing import _has
+
+    assert not _has(site(), "새로운어댑터", ())
+    assert not _has(site(), "code", ())
+    assert _has(site(), "code", ("processor",))

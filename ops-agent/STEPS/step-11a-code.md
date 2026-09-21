@@ -451,6 +451,61 @@ python -m src code sync --gbm mx && python -m src ...
 레포를 선언해 놓고 토폴로지가 없나. 전부 증상이 **"코드 증거가 조용히 안 나온다"**라
 런타임에는 원인이 안 보인다.
 
+## 2차 — 리드가 서비스 이름으로 코드를 읽는다
+
+1차는 CLI로만 읽혔다. 2차는 등재표에 `code.*` 넷을 올린다.
+
+| action | 리드가 대는 것 | **코드가 정하는 것** |
+|---|---|---|
+| `code.services` | (없음) | — |
+| `code.config` | `service` | 레포 · 커밋 · 법인 · 층 경로 · 병합 규칙 |
+| `code.grep` | `patterns`, `service?` | 레포 · 커밋 |
+| `code.read` | `service`, `path` | 레포 · 커밋 |
+
+**레포도 커밋도 인자에 없다.** 리드는 SHA를 모르고, 모르면 지어낸다 — 그러면 떠
+있지도 않은 코드를 읽고 확신에 찬 오답을 낸다(규율 3과 같은 계열). `read`의
+`path`도 지어내는 자리가 아니라 **`grep`이 돌려준 경로**다.
+
+### `config`가 `read`와 따로 있는 이유
+
+이름이 사는 config는 층으로 갈린다. gumi면 셋:
+
+```
+config/gbm/mx.json → config/factories/gumi/common.json → config/factories/gumi/mx.json
+```
+
+층 하나만 읽으면 **위 층이 덮어쓴 값을 사실로 단정한다.** 그래서 `config()`는 층
+전부를 읽어 `merge_target`으로 합치고, **어느 층을 읽었는지 `source`에 남긴다.**
+
+실제로 돌린 결과(`code config --service processor`):
+
+```
+code.config processor @ main (가정)
+  [config/gbm/mx.json → config/factories/gumi/common.json → config/factories/gumi/mx.json]
+
+{"kafka": {"topic": "GUMI_ALARM_EVENT",   ← 맨 위 층이 덮었다
+           "group": "G"},                 ← 밑바닥이 살아남았다
+ "mongo": {"collection": "gumi_docs"}}    ← 가운데 층이 덮었다
+```
+
+같은 커밋인데 `--fct sevt`면 답이 갈린다. **법인은 케이스의 사이트에서 온다** —
+리드가 고르는 값이 아니다.
+
+### `DeployedCodePort`를 만든 이유
+
+`tests/domain/test_actions.py`가 "등재표는 **포트에 있는 메서드**만 가리킨다"를
+단정한다. `code.*`를 올리자 그게 빨개졌다 — 좋은 신호다. 포트를 만들어
+`tests/domain/test_ports.py`의 **쓰기 동사 금지**까지 같이 받게 했다.
+
+### 코드가 없으면 목록에 안 나온다
+
+`code`의 가용 여부만 `site.infra`가 아니라 **knowledge**에서 온다. 없는 문을 열라고
+적어 두면 리드가 거기로 가고, 매 라운드가 "미등재 action"으로 날아간다.
+
+그리고 목록에 **서비스 이름을 박는다** — 사내 모델은 완결된 구체값을 그대로
+복사하고 지시문 모양은 바꿔 넣는다(10b에서 측정). 안 적으면 `service="..."`를
+진짜로 조회한다.
+
 ## 검증
 
 `pytest tests/` — 1081개. 11a 1차가 더한 것은 99개.

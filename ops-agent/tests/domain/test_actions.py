@@ -50,7 +50,8 @@ def test_등재_목록이_포트_표면_안에_있다():
     """표가 포트에 없는 메서드를 가리키면 런타임에 AttributeError로만 드러난다."""
     from src.domain import ports
     surfaces = {"redis": ports.RedisReaderPort, "mongo": ports.MongoReaderPort,
-                "kafka": ports.KafkaInspectorPort, "rest": ports.RestProberPort}
+                "kafka": ports.KafkaInspectorPort, "rest": ports.RestProberPort,
+                    "code": ports.DeployedCodePort}
     for action, (adapter, method, _, _) in ACTIONS.items():
         assert adapter in surfaces, f"{action}이 모르는 포트를 가리킨다 — {adapter}"
         assert hasattr(surfaces[adapter], method), \

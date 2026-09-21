@@ -6,10 +6,12 @@
 """
 import inspect
 
-from src.domain.ports import (CodeReaderPort, KafkaInspectorPort, MongoReaderPort,
+from src.domain.ports import (CodeReaderPort, DeployedCodePort, KafkaInspectorPort,
+                              MongoReaderPort,
                               RedisReaderPort)
 
-ALL_PORTS = (RedisReaderPort, MongoReaderPort, KafkaInspectorPort, CodeReaderPort)
+ALL_PORTS = (RedisReaderPort, MongoReaderPort, KafkaInspectorPort, CodeReaderPort,
+             DeployedCodePort)
 
 # 대상 시스템의 상태를 바꾸는 동사들. 이름만으로도 표면에 나타나선 안 된다.
 WRITE_VERBS = {

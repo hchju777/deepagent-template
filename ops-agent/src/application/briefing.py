@@ -31,15 +31,26 @@ from src.domain.actions import ACTIONS
 _RENDERED_SEPARATELY = {"rest.query"}
 
 
-def action_catalog(site_config) -> str:
-    """부를 수 있는 읽기 목록. **config에서 생성한다.**"""
+def action_catalog(site_config, *, services: tuple[str, ...] = ()) -> str:
+    """부를 수 있는 읽기 목록. **config에서 생성한다.**
+
+    `services`는 대상 코드(11a)가 준비됐을 때만 채워진다 — 코드의 가용 여부는
+    `site.infra`가 아니라 **knowledge(토폴로지·배포)**에서 오기 때문이다. 비어
+    있으면 `code.*`는 목록에 아예 안 나온다. 없는 문을 열라고 적어 두면 리드가
+    거기로 가고, 매 라운드가 "미등재 action"으로 날아간다.
+    """
     lines: list[str] = []
     for name, (adapter, _, required, optional) in sorted(ACTIONS.items()):
         if name in _RENDERED_SEPARATELY:
             continue
-        if getattr(site_config.infra, _INFRA_FIELD[adapter], None) is None:
+        if not _has(site_config, adapter, services):
             continue          # 이 사이트에 없는 시스템은 목록에 없다
         lines.append(f"- {name}({_args(required, optional)})")
+    if services:
+        # **이름을 목록에 박아 둔다.** 사내 모델은 완결된 구체값을 그대로 복사하고
+        # 지시문 모양은 바꿔 넣는다(10b에서 측정). 서비스 이름을 여기 안 적으면
+        # `service="..."`를 진짜로 조회한다.
+        lines.append(f"  (service 자리에 쓸 이름: {', '.join(services)})")
 
     rest = site_config.infra.rest
     for entry_name, entry in sorted((rest.entries if rest else {}).items()):
@@ -164,10 +175,23 @@ _NAMED_READ = (("mongo.find", {"collection": "위 증거에서 본 컬렉션 이
 _GOAL = "무엇을 확인하는가 (한국어)"
 
 
-def _available(site_config, shapes, limit: int) -> list[tuple[str, dict]]:
+def _has(site_config, adapter: str, services: tuple[str, ...]) -> bool:
+    """그 어댑터를 이 사이트에서 부를 수 있나.
+
+    `code`만 판단 근거가 다르다 — config가 아니라 knowledge가 있어야 한다.
+    `_INFRA_FIELD`에 없는 이름을 조용히 통과시키면, 새 어댑터를 더했을 때
+    **선언하지도 않은 시스템이 목록에 뜬다.** 그래서 모르는 이름은 막는다.
+    """
+    if adapter == "code":
+        return bool(services)
+    field = _INFRA_FIELD.get(adapter)
+    return field is not None and getattr(site_config.infra, field, None) is not None
+
+
+def _available(site_config, shapes, limit: int,
+               services: tuple[str, ...] = ()) -> list[tuple[str, dict]]:
     picked = [(action, params) for action, params in shapes
-              if getattr(site_config.infra,
-                         _INFRA_FIELD[ACTIONS[action][0]], None) is not None]
+              if _has(site_config, ACTIONS[action][0], services)]
     return picked[:limit]
 
 

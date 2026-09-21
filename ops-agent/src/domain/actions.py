@@ -48,12 +48,23 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     # `params`가 두 번 나오는 것은 포트 시그니처 그대로다 — `query(entry, params)`.
     # 이름을 바꾸면 표와 포트가 갈라지고, 갈라진 것을 아무도 안 본다.
     "rest.query":          ("rest",  "query",         ("entry", "params"),     ()),
+    # ── 대상 코드(11a). **레포·커밋·법인은 여기 인자에 없다** — 리드가 고를 값이
+    # 아니기 때문이다. 리드가 SHA를 대게 하면 모르는 것을 지어내고, 우리는 떠 있지도
+    # 않은 코드를 읽는다. 서비스 이름만 받고 나머지는 `DeployedCode`가 정한다.
+    "code.services":       ("code",  "services",      (),                      ()),
+    # 이름이 사는 config는 **층으로 갈린다.** 하나만 읽으면 덮어쓴 값을 사실로
+    # 단정하므로, 이 action은 층 전부를 합친 결과를 돌려준다(`code.read`와 다르다).
+    "code.config":         ("code",  "config",        ("service",),            ()),
+    "code.grep":           ("code",  "grep",          ("patterns",),           ("service",)),
+    # `path`는 **`code.grep`이 돌려준 경로**다. 지어내는 자리가 아니다.
+    "code.read":           ("code",  "read",          ("service", "path"),     ()),
 }
 
 
 # 인자를 받지 않는 action들 — "이 DB에 무엇이 있나"에는 물을 것이 없다.
 # 목록으로 두는 이유: "필수 인자가 없다"가 실수인지 의도인지 표가 말해야 한다.
-NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics"})
+NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics",
+                     "code.services"})
 
 # **대상에서 찾아야 아는 이름**이 들어가는 인자. 여기 적힌 인자에 값을 대려면
 # 먼저 `list_collections`·`list_topics`·`scan`으로 찾았어야 한다([decisions ⑮]).

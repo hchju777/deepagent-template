@@ -23,8 +23,12 @@ ROOT = Path(__file__).resolve().parent.parent
 R, C, M, S = (ROOT/"src/infrastructure/git_reader.py", ROOT/"src/knowledge/checkout.py",
               ROOT/"src/__main__.py", ROOT/"tests/support.py")
 T = ROOT / "src/knowledge/target_config.py"
+D = ROOT / "src/infrastructure/deployed_code.py"
+B = ROOT / "src/application/briefing.py"
 K = "tests/knowledge/test_checkout.py"
-K2 = "tests/knowledge/test_target_config.py"; G = "tests/infrastructure/test_git_reader.py"
+K2 = "tests/knowledge/test_target_config.py"
+K3 = "tests/infrastructure/test_deployed_code.py"
+K4 = "tests/application/test_briefing.py"; G = "tests/infrastructure/test_git_reader.py"
 L = "tests/knowledge/test_cli_code.py"; P = "tests/test_portability.py"
 CASES = [
  ("show가 경계를 안 넘는다", R,
@@ -137,6 +141,38 @@ CASES = [
  ("최상위 객체 검사를 뺀다", T,
   '    if not isinstance(value, dict):\n        return None, f"{path}: 최상위가 객체가 아니다 — {type(value).__name__}"',
   '    if False:\n        pass', [f"{K2}::test_최상위가_객체가_아니면_거부한다"]),
+ # ── 서비스 이름으로 읽기 (11a 2차) ────────────────────────────────
+ ("config가 층 하나만 읽는다", D,
+  '        return ProbeResult.succeeded(\n            merge_target(layers), source=f"{source} [{read}]", clock=self._clock,',
+  '        return ProbeResult.succeeded(\n            layers[-1][1], source=f"{source} [{read}]", clock=self._clock,',
+  [f"{K3}::test_층을_합친_값을_돌려준다"]),
+ ("법인 자리를 안 치환한다", D,
+  '        wanted = self._topology.resolved_config_paths(self._gbm, self._fct)',
+  '        wanted = self._topology.resolved_config_paths(self._gbm, "gumi")',
+  [f"{K3}::test_법인이_다르면_다른_값이_나온다"]),
+ ("어느 층을 읽었는지 안 남긴다", D,
+  '        read = " → ".join(path for path, _ in layers)', '        read = ""',
+  [f"{K3}::test_어느_층을_읽었는지_증거에_남는다"]),
+ ("깨진 층을 조용히 넘긴다", D,
+  '            if value is None:\n                broken.append(why)\n                continue',
+  '            if value is None:\n                continue',
+  [f"{K3}::test_깨진_층이_있으면_완전하다고_안_한다"]),
+ ("없는 서비스에 아는 것을 안 알려준다", D,
+  '                f"없는 서비스 — {service}. 아는 것: "\n                f"{\', \'.join(sorted(self._topology.services)) or \'없음\'}",',
+  '                f"없는 서비스 — {service}",',
+  [f"{K3}::test_없는_서비스는_아는_것을_알려준다"]),
+ ("grep이 어느 커밋인지 안 적는다", D,
+  '                chunks.append(f"# {repo} @ {commit[:12]}\\n{got.data.rstrip()}")',
+  '                chunks.append(got.data.rstrip())', [f"{K3}::test_grep이_읽은_커밋을_적는다"]),
+ ("코드가 없어도 목록에 적는다", B,
+  '    if adapter == "code":\n        return bool(services)',
+  '    if adapter == "code":\n        return True', [f"{K4}::test_코드가_없으면_목록에_안_나온다"]),
+ ("서비스 이름을 목록에 안 적는다", B,
+  '        lines.append(f"  (service 자리에 쓸 이름: {\', \'.join(services)})")', '        pass',
+  [f"{K4}::test_코드가_있으면_서비스_이름까지_적는다"]),
+ ("모르는 어댑터를 통과시킨다", B,
+  '    field = _INFRA_FIELD.get(adapter)\n    return field is not None and getattr(site_config.infra, field, None) is not None',
+  '    return True', [f"{K4}::test_모르는_어댑터는_목록에_안_샌다"]),
 ]
 bad = []
 for label, path, old, new, tests in CASES:

@@ -175,3 +175,35 @@ class CodeReaderPort(ABC):
     @abstractmethod
     async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
         """그 커밋의 파일 목록. 이름을 모를 때 먼저 찾는 용도다(⑮와 같은 이유)."""
+
+
+class DeployedCodePort(ABC):
+    """**배포된 커밋의 코드를 서비스 이름으로** 읽는다.
+
+    `CodeReaderPort`가 "어느 레포의 어느 커밋"을 받는 저수준이라면, 이쪽은 조사가
+    실제로 부르는 표면이다. **레포도 커밋도 법인도 인자에 없다** — 리드가 고를 값이
+    아니기 때문이다. 리드는 SHA를 모르고, 모르면 지어낸다. 그러면 우리는 떠 있지도
+    않은 코드를 읽고 확신에 찬 오답을 낸다(규율 3과 같은 계열).
+
+    `config`가 `read`와 따로 있는 이유: 이름이 사는 config는 **층으로 갈린다.**
+    층 하나만 읽으면 위 층이 덮어쓴 값을 사실로 단정한다.
+
+    여기에도 쓰기 동사는 없다. `RestProberPort`와 같은 규율이다 — 목록에 없으면
+    문이 안 열린다.
+    """
+
+    @abstractmethod
+    async def services(self) -> ProbeResult:
+        """무엇을 조사할 수 있나. 인자가 없는 것이 정상이다 — 발견용이다."""
+
+    @abstractmethod
+    async def config(self, service: str) -> ProbeResult:
+        """그 서비스가 배포 시점에 실제로 보는 설정. **층을 전부 합친 결과.**"""
+
+    @abstractmethod
+    async def grep(self, patterns: list[str], service: str = "") -> ProbeResult:
+        """이 이름을 누가 쓰나. `service`를 안 주면 모든 레포를 본다."""
+
+    @abstractmethod
+    async def read(self, service: str, path: str) -> ProbeResult:
+        """파일 하나. `path`는 `grep`이 돌려준 경로다."""

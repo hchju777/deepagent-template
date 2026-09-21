@@ -18,14 +18,19 @@ from src.domain.base import Clock
 class Adapters:
     """사이트 하나에 붙는 어댑터 묶음. 없는 시스템은 None이다."""
 
-    def __init__(self, *, redis=None, mongo=None, kafka=None, rest=None):
+    def __init__(self, *, redis=None, mongo=None, kafka=None, rest=None, code=None):
         self.redis = redis
         self.mongo = mongo
         self.kafka = kafka
         self.rest = rest
+        # 대상 **코드**는 다른 넷과 성질이 다르다: 네트워크를 안 타고, config가
+        # 아니라 knowledge(토폴로지·배포)가 있어야 만들어진다. 그래서 여기서
+        # 조립하지 않고 **만들어진 것을 받는다** — 순찰은 코드를 안 읽으므로
+        # 그쪽 경로가 knowledge를 요구하게 되면 안 된다.
+        self.code = code
 
     def available(self) -> list[str]:
-        return [name for name in ("redis", "mongo", "kafka", "rest")
+        return [name for name in ("redis", "mongo", "kafka", "rest", "code")
                 if getattr(self, name) is not None]
 
     async def close(self) -> None:
@@ -38,7 +43,7 @@ class Adapters:
 
 
 def build_adapters(site: SiteConfig, *, clock: Clock,
-                   seeds: dict[str, Any] | None = None) -> Adapters:
+                   seeds: dict[str, Any] | None = None, code=None) -> Adapters:
     infra = site.infra
     if seeds is not None:
         from src.infrastructure.stubs import (StubKafkaInspector, StubMongoReader,
@@ -49,7 +54,8 @@ def build_adapters(site: SiteConfig, *, clock: Clock,
             kafka=StubKafkaInspector(seeds.get("kafka"), seeds.get("lags"),
                                      clock=clock) if infra.kafka else None,
             rest=StubRestProber(infra.rest, seeds.get("rest"),
-                                clock=clock) if infra.rest else None)
+                                clock=clock) if infra.rest else None,
+            code=code)
 
     # 지연 import — 스텁만 쓰는 환경에서 redis/pymongo/aiokafka를 요구하지 않는다.
     from src.infrastructure.kafka_inspector import RealKafkaInspector
@@ -60,4 +66,5 @@ def build_adapters(site: SiteConfig, *, clock: Clock,
         redis=RealRedisReader(infra.redis, clock=clock) if infra.redis else None,
         mongo=RealMongoReader(infra.mongodb, clock=clock) if infra.mongodb else None,
         kafka=RealKafkaInspector(infra.kafka.consumer, clock=clock) if infra.kafka else None,
-        rest=RealRestProber(infra.rest, clock=clock) if infra.rest else None)
+        rest=RealRestProber(infra.rest, clock=clock) if infra.rest else None,
+        code=code)
