@@ -1007,11 +1007,16 @@ def _report_submodules(repo, commit: str) -> int:
     안 채워진 submodule은 `code status`가 말해 주지 않으면 아무 데서도 안 보인다 —
     git 자신이 조용하기 때문이다(`git grep`은 종료코드 1에 출력이 없다).
     """
-    from src.knowledge.checkout import stale, submodules_at, unpopulated
+    from src.knowledge.checkout import (stale, submodule_marks, submodules_at,
+                                        unpopulated)
 
     subs = submodules_at(repo, commit)
     if not subs:
         return 0
+    _, why = submodule_marks(repo)
+    if why:
+        # **물어보지도 못한 것**을 "안 채워졌다"로 찍으면 사람은 엉뚱한 것을 고친다.
+        print(f"       ⚠ submodule 상태를 물어볼 수 없었다 — {why}")
     blind = unpopulated(repo, subs)
     behind = stale(repo, commit, subs)
     note = [f"submodule {len(subs)}개: {', '.join(subs)}"]

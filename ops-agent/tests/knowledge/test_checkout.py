@@ -294,7 +294,7 @@ def test_안_채워진_submodule을_찾아낸다(tmp_path):
 def test_채워졌으면_신고하지_않는다(tmp_path):
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
-    populate_submodule(flat, tmp_path / "libs", "vendor/libs")
+    populate_submodule(flat, "vendor/libs")
     repo = repo_at(flat)
     assert unpopulated(repo, submodules_at(repo, "main")) == []
 
@@ -353,7 +353,7 @@ def test_submodule_안의_config_층을_없다고_하지_않는다(tmp_path):
     parent = _make_parent_with_submodule(tmp_path)
     full = tmp_path / "full"
     git("clone", "-q", str(parent), str(full), cwd=tmp_path)
-    populate_submodule(full, tmp_path / "libs", "vendor/libs")
+    populate_submodule(full, "vendor/libs")
     repo = repo_at(full)
     here, gone = config_layers(repo, "main", ["a.py", "vendor/libs/kafka.json"])
     assert gone == [], f"submodule 안의 층을 없다고 했다: {gone}"
@@ -365,7 +365,7 @@ def test_진짜로_없는_경로는_여전히_없다고_한다(tmp_path):
     parent = _make_parent_with_submodule(tmp_path)
     full = tmp_path / "full"
     git("clone", "-q", str(parent), str(full), cwd=tmp_path)
-    populate_submodule(full, tmp_path / "libs", "vendor/libs")
+    populate_submodule(full, "vendor/libs")
     _, gone = config_layers(repo_at(full), "main", ["vendor/libs/없는파일.json"])
     assert gone == ["vendor/libs/없는파일.json"]
 
@@ -379,7 +379,7 @@ def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path
     """
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
-    populate_submodule(flat, tmp_path / "libs", "vendor/libs")
+    populate_submodule(flat, "vendor/libs")
     repo = repo_at(flat)
     assert unpopulated(repo, submodules_at(repo, "main")) == []   # 채워는 졌다
     assert stale(repo, "main", submodules_at(repo, "main")) == []
@@ -462,3 +462,24 @@ def test_윈도우_경로가_gitmodules에서_깨지지_않는다(tmp_path):
               cwd=tmp_path)
     # git이 읽을 수 있어야 하고, **경로가 원형 그대로** 돌아와야 한다.
     assert got.stdout.strip() == "C:/Users/t/libs"
+
+
+def test_상태를_못_물어본_것과_안_채워진_것을_구별한다(tmp_path):
+    """**같은 답으로 뭉개면 사람이 엉뚱한 것을 고친다.**
+
+    `git submodule status`가 실패하면 `unpopulated`는 안전하게 "전부 못 본다"고
+    답한다 — 그건 맞다. 그런데 화면에 그 이유가 안 나가면, 사람은 submodule을
+    채우려고 애쓰는데 원인은 다른 데 있다.
+    """
+    from src.knowledge.checkout import submodule_marks
+
+    plain = tmp_path / "git이_아님"
+    plain.mkdir()
+    marks, why = submodule_marks(repo_at(plain))
+    assert marks == {} and why, "못 물어봤는데 이유가 비어 있다"
+
+    # 정상 레포에서는 이유가 없어야 한다 — 늘 이유를 내면 경고가 무의미해진다.
+    parent = _make_parent_with_submodule(tmp_path)
+    flat = _flat_clone(tmp_path, parent)
+    marks, why = submodule_marks(repo_at(flat))
+    assert why == "" and marks.get("vendor/libs") == "-", (marks, why)

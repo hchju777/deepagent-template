@@ -242,11 +242,24 @@ def unpopulated(repo: RepoConfig, paths: list[str]) -> list[str]:
     | (공백) | 정상 | ✅ |
     | `+` | 박힌 SHA와 체크아웃이 다름 | ✅ (트리의 SHA로 읽는다) |
     """
-    code, out, _ = _git(Path(repo.path), "submodule", "status")
-    if code != 0:
+    marks, why = submodule_marks(repo)
+    if why:
         # 못 물어봤으면 **"읽을 수 있다"고 말하지 않는다.** 모르는 것을
         # 괜찮은 것으로 적는 것이 이 리포가 제일 싫어하는 실패다.
         return list(paths)
+    return [path for path in paths if marks.get(path, "-") == "-"]
+
+
+def submodule_marks(repo: RepoConfig) -> tuple[dict[str, str], str]:
+    """경로 → `git submodule status`의 앞 글자. 둘째 값은 **못 물어본 이유**다.
+
+    이유를 따로 돌려주는 까닭: 물어보지도 못한 것과 "안 채워졌다"를 같은 답으로
+    돌려주면, 사람은 submodule을 채우려고 애쓰는데 실제 원인은 다른 데 있게 된다.
+    `unpopulated`는 안전한 쪽으로 답하고, 화면에는 이 이유가 같이 나가야 한다.
+    """
+    code, out, err = _git(Path(repo.path), "submodule", "status")
+    if code != 0:
+        return {}, err or f"git submodule status가 {code}로 끝났다"
     marks = {}
     for line in out.splitlines():
         if not line.strip():
@@ -254,7 +267,7 @@ def unpopulated(repo: RepoConfig, paths: list[str]) -> list[str]:
         parts = line[1:].split()          # `<앞글자><sha> <경로> (설명)`
         if len(parts) >= 2:
             marks[parts[1]] = line[0]
-    return [path for path in paths if marks.get(path, "-") == "-"]
+    return marks, ""
 
 
 def auth_args(repo: RepoConfig) -> list[str]:

@@ -166,7 +166,7 @@ def nested(tmp_path):
     _run("git", "clone", "-q", str(parent), str(blind), cwd=tmp_path)
     full = tmp_path / "full"
     _run("git", "clone", "-q", str(parent), str(full), cwd=tmp_path)
-    populate_submodule(full, lib, "vendor/libs")
+    populate_submodule(full, "vendor/libs")
     return blind, full
 
 

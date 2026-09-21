@@ -278,27 +278,35 @@ def declare_submodule_at(parent: Path, sub: Path, at: str, *, path: str,
     return path
 
 
-def populate_submodule(checkout: Path, sub: Path, path: str) -> None:
-    """submodule 자리를 실제로 채운다 — 평범한 clone + 로컬 등록.
+def populate_submodule(checkout: Path, path: str) -> None:
+    """submodule 자리를 **git이 하는 방식 그대로** 채운다.
 
-    **등록(`git submodule init`)이 빠지면 안 된다.** `git grep --recurse-submodules`는
-    등록된 것만 들여다보고, 안 된 것은 `.git`이 있어도 **조용히 건너뛴다**(측정함).
+    처음엔 `git clone`으로 그 자리에 직접 받고 `git submodule init`으로 등록했다.
+    Linux에서는 같은 결과였지만 **모양이 다르다** — 그러면 `.git`이 파일이 아니라
+    디렉터리가 되고, 우리가 흉내 낸 적 없는 차이가 남는다. 픽스처가 실물과
+    다르면 그 차이가 어느 플랫폼에서 어떻게 드러날지 우리는 모른다.
+
+    여기만 file 프로토콜 허락이 필요하다(픽스처 url이 로컬 경로라서). **만드는
+    쪽**은 여전히 허락을 안 타고, 그건 별도 테스트가 지킨다.
+
+    끝나고 **결과를 직접 확인한다.** 안 그러면 "채웠다고 믿었는데 아니었다"가
+    세 단계 뒤의 엉뚱한 assert로 나타난다 — 실제로 그렇게 한 번 헤맸다.
     """
-    git("clone", "-q", str(sub), str(checkout / path), cwd=checkout)
-    git("submodule", "init", cwd=checkout)
+    git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "--",
+        path, cwd=checkout)
+    state = git("submodule", "status", "--", path, cwd=checkout).stdout
+    assert state[:1] not in ("-", ""), (
+        f"submodule을 채웠는데 git이 아직 '등록 안 됨'이라고 한다 — [{state.strip()}]\n"
+        f"  이 상태에서는 `git grep --recurse-submodules`가 조용히 0건을 준다")
 
 
 @pytest.fixture
 def local_submodules_allowed(monkeypatch):
-    """**딱 한 테스트만** 이게 필요하다 — `sync`가 진짜로 채우는지 보는 것.
+    """제품 코드가 부르는 git에도 같은 허락을 넘긴다.
 
-    거기서 도는 것은 제품 코드라 `-c`를 끼울 자리가 없고, 픽스처의 submodule url이
-    로컬 경로라 2.38.1의 기본 거부에 걸린다. `GIT_CONFIG_COUNT/KEY/VALUE`는
-    **하위 프로세스까지 따라가는** 설정이라 이 자리에 맞는다.
-
-    나머지 submodule 테스트는 이게 필요 없다 — `declare_submodule_at`이 전송을
-    일으키지 않기 때문이다. **이 픽스처가 다른 테스트로 번지면 그때부터 그
-    테스트들은 우리 코드가 아니라 환경을 검사하는 것이 된다.**
+    `sync`는 `-c`를 받을 자리가 없고, 픽스처의 submodule url이 로컬 경로라 2.38.1의
+    기본 거부에 걸린다. `GIT_CONFIG_COUNT/KEY/VALUE`는 **하위 프로세스까지 따라가는**
+    설정이라 이 자리에 맞는다.
     """
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")

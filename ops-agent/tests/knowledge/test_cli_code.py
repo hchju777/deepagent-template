@@ -357,7 +357,7 @@ def _with_submodule(tmp_path, url, *, populate: bool):
     checkout = tmp_path / "checkout"
     git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
     if populate:
-        populate_submodule(checkout, lib, "vendor/libs")
+        populate_submodule(checkout, "vendor/libs")
     git("remote", "set-url", "origin", url, cwd=checkout)
     return checkout
 

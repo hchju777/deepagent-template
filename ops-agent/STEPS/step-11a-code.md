@@ -167,6 +167,42 @@ python -m src code read --service processor --path config/common.json --gbm mx
 `code.show p@main:vendor/libs/x.json (submodule vendor/libs@444be98067a7)`이다.
 나중에 "어느 코드를 본 거냐"를 되짚을 수 있어야 판정이 검증 가능하다.
 
+## 픽스처가 **실물과 다르게** 만들고 있었다
+
+앞의 둘을 고치자 실패가 반대로 뒤집혔다: `assert ['vendor/libs'] == []` —
+채웠는데도 "안 채워졌다"고 나온다.
+
+원인은 내가 submodule을 채우는 방식이었다. `git clone`으로 그 자리에 직접 받고
+`git submodule init`으로 등록했는데, 그러면 `.git`이 **파일이 아니라 디렉터리**가
+된다. 진짜 submodule은 `.git`이 `../../.git/modules/…`를 가리키는 파일이다.
+Linux에서는 둘 다 `git submodule status`가 정상으로 읽혔지만, **모양이 다르면
+어느 플랫폼에서 어떻게 갈릴지 우리는 모른다.** 픽스처가 실물과 다르면 그 차이
+자체가 버그의 근원이 된다.
+
+이제 `git submodule update --init`을 쓴다 — git이 하는 바로 그 명령이다. 손으로
+만든 gitlink 위에서도 그대로 동작한다(확인함). 여기만 file 프로토콜 허락이
+필요하고, **만드는 쪽**은 여전히 허락을 안 탄다.
+
+### 그리고 픽스처가 자기 결과를 확인한다
+
+`populate_submodule`이 끝나고 `git submodule status`를 직접 본다. 안 채워졌으면
+**거기서** 죽는다:
+
+```
+submodule을 채웠는데 git이 아직 '등록 안 됨'이라고 한다 — [-dc164b6… vendor/libs]
+  이 상태에서는 `git grep --recurse-submodules`가 조용히 0건을 준다
+```
+
+안 그러면 "채웠다고 믿었는데 아니었다"가 **세 단계 뒤의 엉뚱한 assert**로
+나타난다 — 실제로 그렇게 한 라운드를 썼다.
+
+### 물어보지 못한 것과 "안 채워진 것"을 구별한다
+
+`git submodule status`가 실패하면 `unpopulated`는 안전하게 "전부 못 본다"고
+답한다. 그건 맞다. 그런데 화면에 그 이유가 안 나가면 사람은 submodule을 채우려고
+애쓰는데 원인은 다른 데 있다. `submodule_marks`가 이유를 따로 돌려주고
+`code status`가 그걸 찍는다 — ⑪(`ok`/`finding`/`unreachable`)과 같은 구별이다.
+
 ## 사내(Windows)에서만 터진 것 둘 — 둘 다 재현해서 잡았다
 
 `cwd=C:\...`가 단서였다. Linux에서는 절대 안 나는 실패가 둘 있었다.
@@ -370,7 +406,7 @@ python -m src code sync --gbm mx && python -m src ...
 
 ## 검증
 
-`pytest tests/` — 1079개. 11a 1차가 더한 것은 97개.
+`pytest tests/` — 1080개. 11a 1차가 더한 것은 98개.
 
 **전역 `protocol.file.allow`를 걷어낸 뒤(= git 기본값)** 다시 재서 나온 숫자다.
 
@@ -381,7 +417,7 @@ python -m src code sync --gbm mx && python -m src ...
 그렇게 답하도록 우리가 정해 놓고 "된다"고 확인하는 꼴이 된다 — `ScriptedAdapter`로
 이미 당한 거짓 초록이다. git이 없는 환경에서는 skip하고 **사유가 찍힌다.**
 
-방어를 하나씩 지워 **49가지 전부 RED를 봤다**:
+방어를 하나씩 지워 **52가지 전부 RED를 봤다**:
 
 | 지운 것 | |
 |---|---|
@@ -412,6 +448,7 @@ python -m src code sync --gbm mx && python -m src ...
 | `show`·`grep`이 stale에 git 원문을 흘림 | 1 / 1 failed |
 | `status`가 submodule 탓을 `config_paths`에 돌림 | 1 failed |
 | `_git`·`sync`가 로캘로 디코딩 / 윈도우 경로를 그대로 config에 | 2 / 1 failed |
+| 픽스처가 결과 확인 안 함 / 못 물어본 이유를 안 냄 / 정상인데 이유를 냄 | 1 / 1 / 1 failed |
 
 ### 거짓 초록 셋이 나왔다
 
