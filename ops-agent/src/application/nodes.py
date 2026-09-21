@@ -89,8 +89,13 @@ def _accept_hypotheses(patch: dict, *, have: set[str]) -> tuple[list[Hypothesis]
         supporting = [e for e in h.supporting_ids if e in have]
         refuting = [e for e in h.refuting_ids if e in have]
         demoted = h.status if (supporting or refuting) else "open"
+        # **무엇이 맞는 모양인지 같이 말한다.** 이 메시지는 다음 라운드의
+        # `<버려진 태스크>`로 리드에게 돌아간다 — "틀렸다"만 알려 주면 같은 형식으로
+        # 다시 틀린다. 사내 측정에서 태스크 id(`t-5`)를 증거 id로 썼다.
         complaints.append(f"{h.id}: 없는 증거를 인용했다 — {', '.join(ghosts)}"
-                          + ("" if demoted == h.status else f" (판정을 {h.status}→open으로 되돌렸다)"))
+                          + ("" if demoted == h.status
+                             else f" (판정을 {h.status}→open으로 되돌렸다)")
+                          + ". 증거 id는 `t-3.e1` 모양이다 — 태스크 id가 아니다")
         kept.append(h.model_copy(update={"supporting_ids": supporting,
                                          "refuting_ids": refuting, "status": demoted}))
     return kept, complaints

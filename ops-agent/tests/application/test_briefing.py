@@ -620,13 +620,33 @@ def test_예시가_이미_한_읽기를_다시_보여주지_않는다():
 
 
 def test_전부_써_봤으면_그래도_보여준다():
-    """빈 예시는 **형식 자체를 못 보여 준다** — 그게 더 나쁘다."""
+    """빈 예시는 **형식 자체를 못 보여 준다** — 그게 더 나쁘다.
+
+    **REST가 없는 사이트로 본다.** `rest.query` 폴백이 있으면 이 검사가 그것에
+    가려서 아무것도 안 지킨다 — 실제로 그랬고 RED 스윕이 잡았다.
+    """
     everything = tuple(action for action, _ in briefing._named_reads(("api",)))
-    example = json.loads(briefing.example_block(site(), phase="integrate",
+    example = json.loads(briefing.example_block(site(rest=None), phase="integrate",
                                                 services=("api",), used=everything))
     assert example["tasks"], "예시가 비었다"
 
 
+def test_마지막_수단도_실재하는_것을_보여준다():
+    """**모델은 예시를 그대로 부른다.**
+
+    REST밖에 없는 사이트에서는 예시의 마지막 수단이 `rest.query`가 된다. 예전엔
+    `entry`에 `"등재 목록의 항목 이름"`이라는 **지시문**을 박아 뒀는데, 모델은
+    그걸 진짜 항목 이름으로 부르고 그 라운드는 통째로 날아간다. 이 파일 맨 위가
+    경고하는 바로 그 실패다.
+    """
+    # 시스템이 하나도 없는 사이트는 스키마가 거부하므로, **REST만 있는 사이트**가
+    # 이 폴백에 도달하는 유일한 경우다. 다른 어댑터가 하나라도 있으면 안 온다.
+    only_rest = site(redis=None, mongodb=None, kafka=None)
+    example = json.loads(briefing.example_block(only_rest, phase="integrate"))
+    assert example["tasks"], "부를 수 있는 것이 있는데 예시가 비었다"
+    entry = example["tasks"][0]["params"]["entry"]
+    assert entry in (only_rest.infra.rest.entries or {}), (
+        f"예시가 실재하지 않는 항목을 부른다 — {entry!r}")
 def test_좁히는_모양을_예시가_보여준다():
     """`filter: {}`가 리드가 가진 유일한 본보기였다. 그래서 "좁혀서 물어라"를
     읽고도 **좁히는 모양을 몰라** 같은 질의를 그대로 다시 냈다.
@@ -637,3 +657,19 @@ def test_좁히는_모양을_예시가_보여준다():
     finds = [t for t in example["tasks"] if t["action"] == "mongo.find"]
     assert finds, "이 검사가 뜻을 가지려면 예시에 mongo.find가 있어야 한다"
     assert finds[0]["params"]["filter"], "filter가 비어 있으면 좁히는 법을 못 배운다"
+
+
+def test_예시가_증거_id의_모양을_보여준다():
+    """**사내 측정에서 네 번째로 같은 교훈이 나온 자리다.**
+
+    지시문만 있으면 모델은 무엇이든 id처럼 생긴 것을 넣는다 — 태스크 id(`t-5`)를
+    넣었고, 증거 id는 `t-5.e1`이다. 환각이 아니라 형식을 몰랐던 것이고, 그건
+    우리가 안 보여 준 탓이다.
+
+    **값이 아니라 모양을 보여 준다.** 진짜 id를 박으면 모델이 그대로 베끼는데,
+    그건 통과하지만 **엉뚱한 근거를 단 "supported"**가 된다 — 거부되는 것보다 나쁘다.
+    """
+    example = json.loads(briefing.example_block(site(), phase="integrate"))
+    cited = example["hypotheses"][0]["supporting_ids"]
+    assert cited, "인용 자리가 없으면 모델은 인용을 아예 안 한다"
+    assert ".e" in cited[0], f"증거 id의 모양이 안 보인다 — {cited[0]!r}"

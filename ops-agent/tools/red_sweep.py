@@ -16,6 +16,16 @@
 `tests/` 밖에 있는 이유: pytest가 수집하면 안 된다. 이건 테스트가 아니라
 **테스트를 검사하는 도구**다.
 
+## 되돌린 뒤 `__pycache__`도 지운다
+
+되돌리기만으로는 부족하다. 파이썬은 `.pyc`가 최신인지 **소스의 mtime과 크기**로
+판단하는데, 망가뜨린 내용이 원본과 **같은 길이**이고(예: `1200` → `2400`) 같은 초
+안에 되돌리면 **둘 다 그대로다.** 그러면 파이썬은 망가진 `.pyc`를 계속 쓴다.
+
+실제로 그렇게 당했다: 트리는 `git status`로 깨끗한데 테스트 둘이 계속 빨간불이었고,
+`evidence_chars`가 디스크에는 2400인데 런타임에는 1200이었다. 원인이 안 보이는
+종류의 실패라 여기서 막는다.
+
 ## 중간에 끊겨도 소스를 되돌린다
 
 `finally`만으로는 부족하다. Ctrl-C나 종료 신호로 프로세스가 끊기면 그 자리에서
@@ -36,6 +46,7 @@ D = ROOT / "src/infrastructure/deployed_code.py"
 B = ROOT / "src/application/briefing.py"
 GR = ROOT / "src/infrastructure/git_reader.py"
 MN = ROOT / "src/__main__.py"
+ND = ROOT / "src/application/nodes.py"
 RP = ROOT / "src/application/runner_probe.py"
 SA = ROOT / "src/config/schema_app.py"
 K = "tests/knowledge/test_checkout.py"
@@ -272,14 +283,47 @@ CASES = [
   '                               "limit": 3}),',
   '                               "limit": 9}),',
   [f"{K4}::test_예시의_건수가_읽을_수_있는_크기다"]),
+ # ── 예시가 중복을 만들지 않는다 ───────────────────────────────────
+ ("예시가 이미 한 읽기를 또 보여준다", B,
+  '        fresh = tuple(shape for shape in _named_reads(services) if shape[0] not in used)',
+  '        fresh = tuple(_named_reads(services))',
+  [f"{K4}::test_예시가_이미_한_읽기를_다시_보여주지_않는다"]),
+ ("전부 썼을 때 예시가 빈다", B,
+  '        shapes = _available(site_config, fresh or _named_reads(services), 2,',
+  '        shapes = _available(site_config, fresh, 2,',
+  [f"{K4}::test_전부_써_봤으면_그래도_보여준다"]),
+ ("예시가 좁히는 모양을 안 보여준다", B,
+  '                               "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},',
+  '                               "filter": {},', [f"{K4}::test_좁히는_모양을_예시가_보여준다"]),
+ # ── 인용 형식을 가르친다 ──────────────────────────────────────────
+ ("예시가 증거 id의 모양을 안 보여준다", B,
+  '                                "supporting_ids": ["위 <모은 증거>에 실제로 있는 id "\n                                                   "— `t-3.e1` 같은 모양"],',
+  '                                "supporting_ids": ["위 <모은 증거>에 실제로 있는 id"],',
+  [f"{K4}::test_예시가_증거_id의_모양을_보여준다"]),
+ ("거부가 맞는 모양을 안 알려준다", ND,
+  '                          + ". 증거 id는 `t-3.e1` 모양이다 — 태스크 id가 아니다")',
+  '                          )',
+  ["tests/application/test_nodes.py::test_없는_증거를_인용하면_맞는_모양을_알려준다"]),
+ ("마지막 수단에 지시문을 박는다", B,
+  '            entry = _free_rest_entry(site_config)\n            shapes = [entry] if entry else []',
+  '            shapes = [("rest.query", {"entry": "등재 목록의 항목 이름", "params": {}})]',
+  [f"{K4}::test_마지막_수단도_실재하는_것을_보여준다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
 
 
+def _drop_pyc(path: Path) -> None:
+    """그 소스의 컴파일 캐시를 지운다 — 같은 길이·같은 초면 무효화가 안 된다."""
+    cache = path.parent / "__pycache__"
+    for stale in cache.glob(f"{path.stem}.*.pyc") if cache.is_dir() else ():
+        stale.unlink(missing_ok=True)
+
+
 def _restore_all(*_signal) -> None:
     for path, text in _ORIGINAL.items():
         path.write_text(text, encoding="utf-8")
+        _drop_pyc(path)
     if _signal:
         print("\n끊겼다 — 건드린 소스를 되돌렸다.")
         sys.exit(130)
@@ -288,6 +332,10 @@ def _restore_all(*_signal) -> None:
 atexit.register(_restore_all)
 for _sig in (signal.SIGINT, signal.SIGTERM):
     signal.signal(_sig, _restore_all)
+
+# **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
+# 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
+assert len(CASES) >= 69, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
@@ -301,6 +349,7 @@ for label, path, old, new, tests in CASES:
                               cwd=ROOT, capture_output=True, text=True)
     finally:
         path.write_text(src, encoding="utf-8")
+        _drop_pyc(path)
         _ORIGINAL.pop(path, None)
     tail = done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "(출력 없음)"
     ok = done.returncode != 0

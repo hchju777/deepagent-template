@@ -305,13 +305,23 @@ def example_block(site_config, *, phase: str, start: int = 1,
         fresh = tuple(shape for shape in _named_reads(services) if shape[0] not in used)
         # 전부 써 봤으면 어쩔 수 없이 다시 보여 준다 — 빈 예시는 형식 자체를
         # 못 보여 주므로 더 나쁘다. 그때는 좁힌 `filter`가 차이를 만든다.
-        shapes = _available(site_config, fresh or _named_reads(services), 2,
-                            services) or [("rest.query", {
-            "entry": "등재 목록의 항목 이름", "params": {}})]
+        shapes = _available(site_config, fresh or _named_reads(services), 2, services)
+        if not shapes:
+            # 마지막 수단도 **이 사이트에 실재하는 것**이어야 한다. 예전엔
+            # `rest.query`를 손으로 박아 뒀는데, REST가 없는 사이트에도 그게
+            # 나가서 모델이 **그대로 부른다** — 이 파일 맨 위가 경고하는 그 실패다.
+            entry = _free_rest_entry(site_config)
+            shapes = [entry] if entry else []
         body = {"decision": "continue",
                 "hypotheses": [{"id": "h-1", "statement": "갱신한 가설 (한국어 한 문장)",
                                 "status": "supported",
-                                "supporting_ids": ["위 <모은 증거>에 실제로 있는 id"],
+                                # **모양을 같이 적는다.** 지시문만 있으면 모델은
+                                # 무엇이든 id처럼 생긴 것을 넣는데, 사내 측정에서
+                                # 태스크 id(`t-5`)를 넣었다 — 증거 id는 `t-5.e1`이다.
+                                # 환각이 아니라 형식을 몰랐던 것이고, 그건 우리가
+                                # 안 보여 준 탓이다(이 단계에서 네 번째로 같은 교훈).
+                                "supporting_ids": ["위 <모은 증거>에 실제로 있는 id "
+                                                   "— `t-3.e1` 같은 모양"],
                                 "refuting_ids": []}],
                 "tasks": [_task(start + n, a, p, rank=n + 1, input_evidence_ids=[])
                           for n, (a, p) in enumerate(shapes)]}

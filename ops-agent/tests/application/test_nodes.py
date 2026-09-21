@@ -2,7 +2,7 @@
 from src.application.fakes import ExplodingRunner, ScriptedRunner
 from src.application.nodes import make_nodes, route_after_select, runnable_tasks
 from src.application.state import CaseState
-from src.domain.case import EvidenceRef, PlanTask
+from src.domain.case import EvidenceRef, Hypothesis, PlanTask
 from src.domain.investigation import TaskOutcome
 
 from tests.application.conftest import deps_for, ok, task
@@ -169,3 +169,22 @@ async def test_integrate가_새_태스크를_내면_계속한다(case):
     patch = await nodes["integrate"](CaseState(case=case, round=1,
                                                plan_tasks=[task("t-1", status="ok")]))
     assert patch["decision"] == "continue"
+
+
+def test_없는_증거를_인용하면_맞는_모양을_알려준다():
+    """**"틀렸다"만 알려 주면 같은 형식으로 다시 틀린다.**
+
+    이 메시지는 다음 라운드의 `<버려진 태스크>`로 리드에게 돌아간다. 사내
+    측정에서 리드가 태스크 id(`t-5`)를 증거 id 자리에 썼고, 그때 우리가 돌려준
+    말에는 **무엇이 맞는 모양인지가 없었다.**
+    """
+    from src.application.nodes import _accept_hypotheses
+
+    kept, complaints = _accept_hypotheses(
+        {"hypotheses": [Hypothesis(id="h-1", statement="가설", status="supported",
+                                   supporting_ids=["t-5"])]},
+        have={"t-5.e1"})
+    assert kept[0].status == "open" and kept[0].supporting_ids == []
+    assert len(complaints) == 1
+    assert "t-5" in complaints[0]
+    assert ".e" in complaints[0], "맞는 모양을 안 알려 준다"
