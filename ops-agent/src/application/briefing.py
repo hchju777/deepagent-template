@@ -50,7 +50,12 @@ def action_catalog(site_config, *, services: tuple[str, ...] = ()) -> str:
         # **이름을 목록에 박아 둔다.** 사내 모델은 완결된 구체값을 그대로 복사하고
         # 지시문 모양은 바꿔 넣는다(10b에서 측정). 서비스 이름을 여기 안 적으면
         # `service="..."`를 진짜로 조회한다.
-        lines.append(f"  (service 자리에 쓸 이름: {', '.join(services)})")
+        #
+        # 그리고 **`code.*` 바로 밑에** 붙인다. 목록 맨 끝에 두면 알파벳 순서상
+        # 한참 떨어지고, 순서대로 읽는 모델에게는 그만큼 안 보인다.
+        after = max((n for n, line in enumerate(lines)
+                     if line.startswith("- code.")), default=len(lines) - 1)
+        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {', '.join(services)})")
 
     rest = site_config.infra.rest
     for entry_name, entry in sorted((rest.entries if rest else {}).items()):
@@ -175,6 +180,32 @@ _NAMED_READ = (("mongo.find", {"collection": "위 증거에서 본 컬렉션 이
 _GOAL = "무엇을 확인하는가 (한국어)"
 
 
+def _discovery(services: tuple[str, ...]):
+    """발견 라운드의 수. **코드가 있으면 그게 첫 수다.**
+
+    이름은 대상의 config에 산다(③-2). 그러니 **추측할 이유가 없다** — 10b 측정에서
+    리드가 반복해서 `topic='GUMI_ALARM_EVENT'` 같은 이름을 지어냈는데, 그건 모델이
+    게을러서가 아니라 **찾을 방법을 안 줬기 때문**이다.
+
+    `service` 자리에 진짜 이름을 박는다. 사내 모델은 완결된 구체값을 그대로
+    복사한다 — `code.services`를 먼저 부르게 시키는 2단계보다 훨씬 잘 먹는다.
+    """
+    if not services:
+        return _DISCOVERY
+    return (("code.config", {"service": services[0]}),) + _DISCOVERY
+
+
+def _named_reads(services: tuple[str, ...]):
+    """이름을 찾은 뒤의 수. 코드가 있으면 **그 이름을 코드에서 대조**하는 것이 첫 수다.
+
+    10b 진단에서 제일 많이 나온 계약 위반이 "찾지 않고 이름을 댔다"였다.
+    grep은 그 이름이 **실재하는지**를 코드로 확인하는 유일한 수단이다.
+    """
+    if not services:
+        return _NAMED_READ
+    return (("code.grep", {"patterns": ["위 증거에서 본 이름"]}),) + _NAMED_READ
+
+
 def _has(site_config, adapter: str, services: tuple[str, ...]) -> bool:
     """그 어댑터를 이 사이트에서 부를 수 있나.
 
@@ -232,22 +263,23 @@ def next_task_number(state: CaseState) -> int:
     return max(used, default=0) + 1
 
 
-def example_block(site_config, *, phase: str, start: int = 1) -> str:
+def example_block(site_config, *, phase: str, start: int = 1,
+                  services: tuple[str, ...] = ()) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**"""
     if phase == "frame":
-        shapes = _available(site_config, _DISCOVERY, 3)
+        shapes = _available(site_config, _discovery(services), 3, services)
         free = _free_rest_entry(site_config)
         if free and len(shapes) < 3:
             shapes.append(free)
         if not shapes:
-            shapes = _available(site_config, _NAMED_READ, 1) or [("rest.query", {
+            shapes = _available(site_config, _named_reads(services), 1, services) or [("rest.query", {
                 "entry": "등재 목록의 항목 이름", "params": {}})]
         body = {"hypotheses": [{"id": "h-1", "statement": "원인 가설 하나 (한국어 한 문장)"},
                                {"id": "h-2", "statement": "다른 가능성 (한국어 한 문장)"}],
                 "tasks": [_task(start + n, a, p, rank=n + 1)
                           for n, (a, p) in enumerate(shapes)]}
     else:
-        shapes = _available(site_config, _NAMED_READ, 2) or [("rest.query", {
+        shapes = _available(site_config, _named_reads(services), 2, services) or [("rest.query", {
             "entry": "등재 목록의 항목 이름", "params": {}})]
         body = {"decision": "continue",
                 "hypotheses": [{"id": "h-1", "statement": "갱신한 가설 (한국어 한 문장)",
@@ -267,18 +299,23 @@ FRAME_SLOTS = frozenset({"case", "actions", "example"})
 INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round", "max_rounds"}
 
 
-def frame_fields(state: CaseState, *, site_config) -> dict[str, str]:
-    return {"case": case_block(state), "actions": action_catalog(site_config),
+def frame_fields(state: CaseState, *, site_config,
+                 services: tuple[str, ...] = ()) -> dict[str, str]:
+    return {"case": case_block(state),
+            "actions": action_catalog(site_config, services=services),
             "example": example_block(site_config, phase="frame",
-                                     start=next_task_number(state))}
+                                     start=next_task_number(state),
+                                     services=services)}
 
 
 def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
-                     evidence_budget: int = 12000) -> dict[str, str]:
+                     evidence_budget: int = 12000,
+                     services: tuple[str, ...] = ()) -> dict[str, str]:
     return {"case": case_block(state),
-            "actions": action_catalog(site_config),
+            "actions": action_catalog(site_config, services=services),
             "example": example_block(site_config, phase="integrate",
-                                     start=next_task_number(state)),
+                                     start=next_task_number(state),
+                                     services=services),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state, budget=evidence_budget),

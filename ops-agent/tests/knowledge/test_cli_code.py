@@ -410,3 +410,46 @@ def test_submodule이_안_읽히면_config_경로를_탓하지_않는다(tmp_pat
     assert "하나도" in captured.out
     assert "config_paths를 고쳐라" not in captured.out
     assert "먼저 위의 submodule부터" in captured.out
+
+
+def test_코드가_없어도_조사가_죽지_않는다(tmp_path, monkeypatch):
+    """**토폴로지를 안 적은 사이트가 정상이다** — 코드 확보는 선택이다.
+
+    여기서 던지면 코드와 무관한 조사까지 통째로 못 돈다. 대신 비어 있으면
+    `code.*`가 목록에도 예시에도 안 나가므로 리드가 없는 문을 두드릴 일도 없다.
+    """
+    from src.__main__ import _code_if_ready
+    from src.config.loader import load_site_config
+
+    clock = lambda: None                                          # noqa: E731
+    url = "https://git.example.com/team/dt-core"
+    checkout = _with_submodule(tmp_path, url, populate=True)
+    config_root = _tree(tmp_path, repo_path=str(checkout), url=url)
+    site, _ = load_site_config(config_root, "mx", "gumi", env={})
+
+    # ① 레포 선언이 아예 없다
+    bare = site.model_copy(update={"code": site.code.model_copy(update={"repos": []})})
+    assert _code_if_ready(bare, "mx", "gumi", knowledge_root=tmp_path,
+                          clock=clock) == (None, ())
+
+    # ② 레포는 있는데 knowledge가 없다 — 사람이 아직 안 적은 상태
+    assert site.code.repos, "픽스처가 레포를 선언했어야 한다"
+    code, services = _code_if_ready(site, "mx", "gumi",
+                                    knowledge_root=tmp_path / "없는지식", clock=clock)
+    assert (code, services) == (None, ())
+
+
+def test_지식이_있으면_서비스_이름이_나온다(tmp_path):
+    """비어 있는 것과 **못 읽은 것**을 같은 답으로 뭉개면, 지식을 제대로 적어
+    뒀는데도 리드가 코드를 못 보는 상태를 아무도 못 찾는다."""
+    from src.__main__ import _code_if_ready
+    from src.config.loader import load_site_config
+
+    url = "https://git.example.com/team/dt-core"
+    checkout = _with_submodule(tmp_path, url, populate=True)
+    config_root = _tree(tmp_path, repo_path=str(checkout), url=url)
+    site, _ = load_site_config(config_root, "mx", "gumi", env={})
+    code, services = _code_if_ready(site, "mx", "gumi",
+                                    knowledge_root=tmp_path / "knowledge",
+                                    clock=lambda: None)
+    assert code is not None and services == ("processor",)

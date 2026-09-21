@@ -47,6 +47,10 @@ class DeployedCode(DeployedCodePort):
         self._gbm, self._fct = gbm, fct
         self._clock = clock
 
+    def service_names(self) -> tuple[str, ...]:
+        """브리핑이 목록과 예시에 박을 이름들. **호출부가 토폴로지를 뒤지지 않게** 한다."""
+        return tuple(sorted(self._topology.services))
+
     def describe(self) -> str:
         return f"code({self._gbm}/{self._fct}, 서비스 {len(self._topology.services)}개)"
 

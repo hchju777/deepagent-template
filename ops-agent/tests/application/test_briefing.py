@@ -449,3 +449,36 @@ def test_모르는_어댑터는_목록에_안_샌다():
     assert not _has(site(), "새로운어댑터", ())
     assert not _has(site(), "code", ())
     assert _has(site(), "code", ("processor",))
+
+
+def test_코드가_있으면_발견의_첫_수가_config다():
+    """**10b가 측정한 실패를 막는 자리다.**
+
+    리드는 반복해서 `topic='GUMI_ALARM_EVENT'` 같은 이름을 지어냈다. 모델이
+    게을러서가 아니라 **찾을 방법을 안 줬기 때문**이다. 이름은 대상의 config에
+    있으므로 발견 라운드의 첫 수가 그걸 읽는 것이어야 한다.
+
+    그리고 `service` 자리에는 **진짜 이름**이 박혀야 한다 — 사내 모델은 완결된
+    구체값을 그대로 복사하고 지시문 모양은 바꿔 넣는다(10b 측정).
+    """
+    example = json.loads(briefing.example_block(site(), phase="frame",
+                                                services=("processor", "sink")))
+    first = example["tasks"][0]
+    assert first["action"] == "code.config"
+    assert first["params"] == {"service": "processor"}
+
+
+def test_코드가_있으면_다음_수가_grep이다():
+    """진단에서 제일 많이 나온 계약 위반이 "찾지 않고 이름을 댔다"였다.
+    grep은 그 이름이 **실재하는지**를 코드로 확인하는 유일한 수단이다."""
+    example = json.loads(briefing.example_block(site(), phase="integrate",
+                                                services=("processor",)))
+    assert example["tasks"][0]["action"] == "code.grep"
+
+
+def test_코드가_없으면_예시에_안_나온다():
+    """없는 문을 예시에 그려 두면 리드가 그대로 복사하고, 그 라운드는
+    "미등재 action"으로 통째로 날아간다."""
+    for phase in ("frame", "integrate"):
+        example = briefing.example_block(site(), phase=phase)
+        assert "code." not in example, phase

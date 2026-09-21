@@ -877,13 +877,17 @@ def cmd_case_investigate(args, env) -> int:
     async def go() -> dict:
         llm = build_llm(app.llm, clock=clock)
         built["llm"] = llm.describe()     # config가 뭐라고 적혔는지가 아니라 실제로 붙은 것
-        adapters = build_adapters(site, clock=clock, seeds=seeds)
+        code, services = _code_if_ready(site, gbm, fct,
+                                        knowledge_root=_knowledge_root(args),
+                                        clock=clock)
+        built["code"] = code.describe() if code else "코드 없음"
+        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
         try:
             frame, integrate = make_lead(
                 llm, site_config=site, prompts=prompts,
                 max_rounds=app.investigation.max_rounds,
                 evidence_budget=app.investigation.evidence_total_chars,
-                trace=tracer)
+                trace=tracer, services=services)
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars),
@@ -1195,26 +1199,46 @@ def cmd_code_read(args, env) -> int:
     return 0
 
 
-def _deployed_code(args, env):
-    """`DeployedCode` 하나. **조사(2차)가 쓰는 것과 같은 조립**을 CLI도 쓴다.
+def _build_code(site, gbm: str, fct: str, *, knowledge_root, clock):
+    """`DeployedCode` 하나. **CLI와 조사가 같은 조립을 쓴다.**
 
-    여기서 따로 조립하면 CLI로는 되는데 조사에서는 안 되는(또는 반대의) 상태가
-    생기고, 그때 원인이 1차인지 2차인지 섞인다 — 규율 8이 막는 그 실패다.
+    따로 조립하면 CLI로는 되는데 조사에서는 안 되는(또는 반대의) 상태가 생기고,
+    그때 원인이 1차인지 2차인지 섞인다 — 규율 8이 막는 그 실패다.
     """
     from src.infrastructure.deployed_code import DeployedCode
     from src.infrastructure.git_reader import RealCodeReader
     from src.knowledge.loader import load_deployment, load_topology
 
-    site, gbm, fct, _ = _code_site(args, env)
-    root = _knowledge_root(args)
+    topology = load_topology(knowledge_root, gbm)
+    deployment = load_deployment(knowledge_root, gbm)
+    reader = RealCodeReader(list(site.code.repos), clock=clock)
+    return DeployedCode(reader, topology, deployment, gbm=gbm, fct=fct, clock=clock)
+
+
+def _code_if_ready(site, gbm: str, fct: str, *, knowledge_root, clock):
+    """조사용. 코드를 못 읽는 사이트면 **`(None, ())`** — 던지지 않는다.
+
+    토폴로지를 안 적은 사이트가 정상이다(코드 확보는 선택이다). 여기서 죽으면
+    코드와 무관한 조사까지 통째로 못 돈다. 대신 비어 있으면 `code.*`가 목록에도
+    예시에도 안 나가므로, 리드가 없는 문을 두드릴 일도 없다.
+    """
+    if not site.code.repos:
+        return None, ()
     try:
-        topology = load_topology(root, gbm)
-        deployment = load_deployment(root, gbm)
+        code = _build_code(site, gbm, fct, knowledge_root=knowledge_root, clock=clock)
+    except Exception:                                              # noqa: BLE001
+        return None, ()
+    return code, code.service_names()
+
+
+def _deployed_code(args, env):
+    site, gbm, fct, _ = _code_site(args, env)
+    try:
+        code = _build_code(site, gbm, fct, knowledge_root=_knowledge_root(args),
+                           clock=_clock(args, env))
     except (ConfigError, FileNotFoundError) as exc:
         raise SystemExit(f"지식 층을 읽을 수 없다 — {exc}")
-    reader = RealCodeReader(list(site.code.repos), clock=_clock(args, env))
-    return DeployedCode(reader, topology, deployment, gbm=gbm, fct=fct,
-                        clock=_clock(args, env)), gbm, fct
+    return code, gbm, fct
 
 
 def _show_probe(result) -> int:

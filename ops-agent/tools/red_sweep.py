@@ -26,10 +26,12 @@ T = ROOT / "src/knowledge/target_config.py"
 D = ROOT / "src/infrastructure/deployed_code.py"
 B = ROOT / "src/application/briefing.py"
 GR = ROOT / "src/infrastructure/git_reader.py"
+MN = ROOT / "src/__main__.py"
 K = "tests/knowledge/test_checkout.py"
 K2 = "tests/knowledge/test_target_config.py"
 K3 = "tests/infrastructure/test_deployed_code.py"
-K4 = "tests/application/test_briefing.py"; G = "tests/infrastructure/test_git_reader.py"
+K4 = "tests/application/test_briefing.py"
+K5 = "tests/knowledge/test_cli_code.py"; G = "tests/infrastructure/test_git_reader.py"
 L = "tests/knowledge/test_cli_code.py"; P = "tests/test_portability.py"
 CASES = [
  ("show가 경계를 안 넘는다", R,
@@ -169,7 +171,8 @@ CASES = [
   '    if adapter == "code":\n        return bool(services)',
   '    if adapter == "code":\n        return True', [f"{K4}::test_코드가_없으면_목록에_안_나온다"]),
  ("서비스 이름을 목록에 안 적는다", B,
-  '        lines.append(f"  (service 자리에 쓸 이름: {\', \'.join(services)})")', '        pass',
+  '        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {\', \'.join(services)})")',
+  '        pass',
   [f"{K4}::test_코드가_있으면_서비스_이름까지_적는다"]),
  ("모르는 어댑터를 통과시킨다", B,
   '    field = _INFRA_FIELD.get(adapter)\n    return field is not None and getattr(site_config.infra, field, None) is not None',
@@ -191,6 +194,27 @@ CASES = [
   '            why = (" · ".join(broken) if broken\n                   else f"찾은 자리: {\', \'.join(wanted)}. `code status`를 보라")',
   '            why = f"찾은 자리: {\', \'.join(wanted)}. `code status`를 보라"',
   [f"{K3}::test_우리가_자른_것을_대상_탓으로_돌리지_않는다"]),
+ # ── 예시가 리드를 코드로 보내는가 (11a 2차 마무리) ─────────────────
+ ("발견 예시에 코드를 안 넣는다", B,
+  '    return (("code.config", {"service": services[0]}),) + _DISCOVERY',
+  '    return _DISCOVERY', [f"{K4}::test_코드가_있으면_발견의_첫_수가_config다"]),
+ ("service 자리에 지시문을 넣는다", B,
+  '    return (("code.config", {"service": services[0]}),) + _DISCOVERY',
+  '    return (("code.config", {"service": "조사할 서비스 이름"}),) + _DISCOVERY',
+  [f"{K4}::test_코드가_있으면_발견의_첫_수가_config다"]),
+ ("다음 수에 grep을 안 넣는다", B,
+  '    return (("code.grep", {"patterns": ["위 증거에서 본 이름"]}),) + _NAMED_READ',
+  '    return _NAMED_READ', [f"{K4}::test_코드가_있으면_다음_수가_grep이다"]),
+ ("코드가 없어도 예시에 넣는다", B,
+  '    if not services:\n        return _DISCOVERY',
+  '    if False:\n        return _DISCOVERY', [f"{K4}::test_코드가_없으면_예시에_안_나온다"]),
+ ("지식이 없으면 조사가 죽는다", MN,
+  '    try:\n        code = _build_code(site, gbm, fct, knowledge_root=knowledge_root, clock=clock)\n    except Exception:                                              # noqa: BLE001\n        return None, ()',
+  '    code = _build_code(site, gbm, fct, knowledge_root=knowledge_root, clock=clock)',
+  [f"{K5}::test_코드가_없어도_조사가_죽지_않는다"]),
+ ("지식이 있어도 비어 있다고 한다", MN,
+  '    return code, code.service_names()', '    return None, ()',
+  [f"{K5}::test_지식이_있으면_서비스_이름이_나온다"]),
 ]
 bad = []
 for label, path, old, new, tests in CASES:

@@ -153,8 +153,13 @@ def _dropped_note(where: str, got: Parsed) -> list[str]:
 
 
 def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds: int,
-              evidence_budget: int = 12000, trace=None):
+              evidence_budget: int = 12000, trace=None,
+              services: tuple[str, ...] = ()):
     """`EngineDeps`의 `frame`·`integrate` 자리에 꽂을 두 함수를 만든다.
+
+    `services`는 대상 코드(11a)가 준비됐을 때만 채워진다. 비어 있으면 `code.*`가
+    목록에도 예시에도 안 나온다 — 없는 문을 열라고 적어 두면 리드가 거기로 가고,
+    매 라운드가 "미등재 action"으로 날아간다.
 
     `trace(node, round, prompt, reply_text, error)`를 주면 매 시도가 그대로 흘러간다.
     **프롬프트를 고치려면 모델이 뭐라 했는지 봐야 한다** — 10b를 끝낼 때 이게 없어서
@@ -168,7 +173,8 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
 
     async def frame(state: CaseState) -> dict:
         prompt = fill(prompts["frame"],
-                      briefing.frame_fields(state, site_config=site_config))
+                      briefing.frame_fields(state, site_config=site_config,
+                                            services=services))
         got = await ask_json(llm, prompt, FrameReply, on_exchange=_hook("frame", state))
         if not got.ok:
             return _failure("frame", got.error)
@@ -180,7 +186,8 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
         prompt = fill(prompts["integrate"],
                       briefing.integrate_fields(state, site_config=site_config,
                                                 max_rounds=max_rounds,
-                                                evidence_budget=evidence_budget))
+                                                evidence_budget=evidence_budget,
+                                                services=services))
         got = await ask_json(llm, prompt, IntegrateReply,
                              on_exchange=_hook("integrate", state))
         if not got.ok:
