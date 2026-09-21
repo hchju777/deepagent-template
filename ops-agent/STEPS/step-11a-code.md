@@ -167,6 +167,53 @@ python -m src code read --service processor --path config/common.json --gbm mx
 `code.show p@main:vendor/libs/x.json (submodule vendor/libs@444be98067a7)`이다.
 나중에 "어느 코드를 본 거냐"를 되짚을 수 있어야 판정이 검증 가능하다.
 
+## `git submodule status`를 쓰지 않는다 — 포슬린은 깨질 자리가 많다
+
+"등록됐나"를 `git submodule status`의 앞 글자로 읽었다. 신호는 맞다. 그런데
+**그 명령이 사내 Windows에서 실패했다.** `submodule`은 포슬린이고 플랫폼에 따라
+셸 스크립트를 타므로, 우리가 예상 못 한 이유로 죽을 자리가 많다.
+
+필요한 사실은 **평범한 읽기 두 개**면 충분하다:
+
+| 묻는 것 | 어떻게 |
+|---|---|
+| 로컬에 등록됐나 | `git config --get-regexp ^submodule\..*\.url` |
+| 내용이 있나 | `<경로>/.git`이 있나 |
+
+네 가지 상태에서 `git grep`의 **실제 동작과 일치**하는 것을 확인했다:
+
+| 상태 | 등록 | `.git` | 우리 판정 | grep 실제 |
+|---|---|---|---|---|
+| 안 채움 | ✗ | ✗ | 못 봄 | 조용히 0건 |
+| 내용만 직접 넣음 | ✗ | ✓ | 못 봄 | 조용히 0건 |
+| `init`만 함 | ✓ | ✗ | 못 봄 | 조용히 0건 |
+| 제대로 채움 | ✓ | ✓ | 읽을 수 있음 | 본다 |
+
+### 등록은 **경로가 아니라 이름**으로 걸린다
+
+`submodule.<이름>.url`의 이름은 `.gitmodules`의 섹션 이름이다. 대개 경로와 같지만
+`git submodule add --name`을 쓴 저장소에서는 다르고, 경로로 찾으면 멀쩡히 채워진
+submodule을 **"등록 안 됨"으로 오판한다** — 그러면 조사가 읽을 수 있는 코드를
+"못 본다"고 적는다. 그래서 `parse_gitmodules`가 **이름 → 경로**를 돌려준다.
+
+### 거짓 초록 하나를 RED가 잡았다
+
+"config를 못 읽으면 안전하게 전부 못 본다고 답한다"는 분기를 따로 뒀는데, RED를
+걸어 보니 **지워도 결과가 같았다** — 읽기에 실패하면 등록 목록이 어차피 비고,
+그러면 전부 "못 봄"이 된다. 방어가 아니라 무동작이었다. 지우고 그 성질을
+주석으로 남겼다. 불변식을 재는 테스트는 남겼다(실패를 낙관적으로 바꾸면 빨개진다).
+
+## 테스트는 git으로 네트워크를 타지 않는다 — 물리적으로
+
+픽스처가 `origin`에 `https://git.example.com/...`을 적는다. `status_of`의 origin
+대조가 볼 값이 필요해서고, **그 주소에는 아무도 접속하지 않는다.** submodule url은
+로컬 경로다.
+
+그런데 "안 한다"는 주장과 "못 한다"는 사실은 다르다. 그래서 전역 픽스처가
+`GIT_ALLOW_PROTOCOL=file`을 건다 — git이 http/https/ssh를 **아예 거부한다.**
+누가 네트워크를 타는 픽스처를 넣으면 그 자리에서 빨개진다(https를 타는 테스트를
+넣어 `fatal: transport 'https' not allowed`가 나는 것까지 확인했다).
+
 ## 픽스처가 **실물과 다르게** 만들고 있었다
 
 앞의 둘을 고치자 실패가 반대로 뒤집혔다: `assert ['vendor/libs'] == []` —
@@ -406,7 +453,7 @@ python -m src code sync --gbm mx && python -m src ...
 
 ## 검증
 
-`pytest tests/` — 1080개. 11a 1차가 더한 것은 98개.
+`pytest tests/` — 1081개. 11a 1차가 더한 것은 99개.
 
 **전역 `protocol.file.allow`를 걷어낸 뒤(= git 기본값)** 다시 재서 나온 숫자다.
 
@@ -417,7 +464,7 @@ python -m src code sync --gbm mx && python -m src ...
 그렇게 답하도록 우리가 정해 놓고 "된다"고 확인하는 꼴이 된다 — `ScriptedAdapter`로
 이미 당한 거짓 초록이다. git이 없는 환경에서는 skip하고 **사유가 찍힌다.**
 
-방어를 하나씩 지워 **52가지 전부 RED를 봤다**:
+방어를 하나씩 지워 봤다. submodule 관련 **25가지를 한 스크립트로 모아 매번 다시 돌린다**:
 
 | 지운 것 | |
 |---|---|

@@ -12,7 +12,7 @@ import pytest
 from src.config.schema_site import RepoConfig
 from tests.support import (declare_submodule_at, git,  # noqa: F401
                            local_submodules_allowed, make_git_repo, populate_submodule)
-from src.knowledge.checkout import (auth_args, config_layers, has_commit,
+from src.knowledge.checkout import (auth_args, config_layers, has_commit,  # noqa: F401
                                     parse_gitmodules, plan_for, stale, status_of,
                                     submodules_at, sync, unpopulated)
 
@@ -248,19 +248,19 @@ def _flat_clone(tmp_path, parent):
     return target
 
 
-def test_gitmodules에서_경로만_뽑는다():
+def test_gitmodules에서_이름과_경로를_뽑는다():
     text = ('[submodule "vendor/libs"]\n'
             '\tpath = vendor/libs\n'
             '\turl = https://git.example.com/team/libs\n'
             '[submodule "x"]\n'
             '\tpath = third_party/x\n')
-    assert parse_gitmodules(text) == ["third_party/x", "vendor/libs"]
+    assert parse_gitmodules(text) == {"vendor/libs": "vendor/libs", "x": "third_party/x"}
 
 
 def test_path로_시작하는_다른_키를_안_먹는다():
     """`startswith("path")`만 보면 `pathspec`도 경로로 읽힌다 — 그러면 있지도 않은
     submodule을 "안 채워졌다"고 신고해서, 진짜 경고가 묻힌다."""
-    assert parse_gitmodules("\tpathspec = vendor/x\n") == []
+    assert parse_gitmodules('[submodule "x"]\n\tpathspec = vendor/x\n') == {}
 
 
 def test_submodule이_없으면_빈_목록이다(tmp_path):
@@ -286,7 +286,7 @@ def test_안_채워진_submodule을_찾아낸다(tmp_path):
     repo = repo_at(flat)
     subs = submodules_at(repo, "main")
     assert subs == ["vendor/libs"]
-    assert unpopulated(repo, subs) == ["vendor/libs"]
+    assert unpopulated(repo, "main") == ["vendor/libs"]
     # 그 자리가 실제로 비어 있는지 — 우리 판단이 아니라 디스크를 본다.
     assert list((flat / "vendor" / "libs").iterdir()) == []
 
@@ -296,7 +296,7 @@ def test_채워졌으면_신고하지_않는다(tmp_path):
     flat = _flat_clone(tmp_path, parent)
     populate_submodule(flat, "vendor/libs")
     repo = repo_at(flat)
-    assert unpopulated(repo, submodules_at(repo, "main")) == []
+    assert unpopulated(repo, "main") == []
 
 
 def test_채워도_등록이_안_되면_여전히_못_본다(tmp_path):
@@ -312,7 +312,7 @@ def test_채워도_등록이_안_되면_여전히_못_본다(tmp_path):
     assert (flat / "vendor" / "libs" / ".git").exists()      # 겉보기엔 채워졌다
 
     repo = repo_at(flat)
-    assert unpopulated(repo, submodules_at(repo, "main")) == ["vendor/libs"]
+    assert unpopulated(repo, "main") == ["vendor/libs"]
 
 
 def test_plan이_submodule_채우는_줄까지_준다(tmp_path):
@@ -334,7 +334,7 @@ def test_sync가_안_채워진_submodule을_채운다(tmp_path, local_submodules
     outcome, where = sync(repo, status_of(repo))
     assert outcome == "fetched", where
     assert (flat / "vendor" / "libs" / "kafka.json").exists()
-    assert unpopulated(repo, submodules_at(repo, "main")) == []
+    assert unpopulated(repo, "main") == []
 
 
 def _commit_in(root, message="more"):
@@ -381,7 +381,7 @@ def test_채워졌어도_그_커밋의_버전이_없으면_찾아낸다(tmp_path
     flat = _flat_clone(tmp_path, parent)
     populate_submodule(flat, "vendor/libs")
     repo = repo_at(flat)
-    assert unpopulated(repo, submodules_at(repo, "main")) == []   # 채워는 졌다
+    assert unpopulated(repo, "main") == []   # 채워는 졌다
     assert stale(repo, "main", submodules_at(repo, "main")) == []
 
     # 원본 submodule이 앞서 나가고, 부모가 그걸 가리키게 된다.
@@ -440,7 +440,7 @@ def test_submodule_픽스처가_file_프로토콜_허락을_안_탄다(tmp_path,
     flat = _flat_clone(tmp_path, parent)
     repo = repo_at(flat)
     assert submodules_at(repo, "main") == ["vendor/libs"]
-    assert unpopulated(repo, submodules_at(repo, "main")) == ["vendor/libs"]
+    assert unpopulated(repo, "main") == ["vendor/libs"]
 
 
 def test_윈도우_경로가_gitmodules에서_깨지지_않는다(tmp_path):
@@ -464,22 +464,34 @@ def test_윈도우_경로가_gitmodules에서_깨지지_않는다(tmp_path):
     assert got.stdout.strip() == "C:/Users/t/libs"
 
 
-def test_상태를_못_물어본_것과_안_채워진_것을_구별한다(tmp_path):
-    """**같은 답으로 뭉개면 사람이 엉뚱한 것을 고친다.**
+def test_이름이_경로와_다른_submodule도_등록을_알아본다(tmp_path):
+    """**등록은 `submodule.<이름>.url`이지 경로가 아니다.**
 
-    `git submodule status`가 실패하면 `unpopulated`는 안전하게 "전부 못 본다"고
-    답한다 — 그건 맞다. 그런데 화면에 그 이유가 안 나가면, 사람은 submodule을
-    채우려고 애쓰는데 원인은 다른 데 있다.
+    `git submodule add --name`을 쓴 저장소에서는 둘이 다르고, 경로로 찾으면
+    제대로 채워진 submodule을 "등록 안 됨"으로 **오판한다** — 그러면 조사가
+    멀쩡한 코드를 "못 본다"고 적는다.
     """
-    from src.knowledge.checkout import submodule_marks
+    text = ('[submodule "libs"]\n\tpath = vendor/libs\n'
+            '\turl = https://git.example.com/team/libs\n')
+    assert parse_gitmodules(text) == {"libs": "vendor/libs"}
 
-    plain = tmp_path / "git이_아님"
-    plain.mkdir()
-    marks, why = submodule_marks(repo_at(plain))
-    assert marks == {} and why, "못 물어봤는데 이유가 비어 있다"
 
-    # 정상 레포에서는 이유가 없어야 한다 — 늘 이유를 내면 경고가 무의미해진다.
+def test_물어볼_수_없으면_읽을_수_있다고_말하지_않는다(tmp_path, monkeypatch):
+    """모르는 것을 괜찮은 것으로 적는 것이 이 리포가 제일 싫어하는 실패다(⑪).
+
+    `git config`가 실패하면 "전부 못 본다"가 안전한 답이다 — 그래야 조사가
+    "코드에 없다"를 단정하지 않는다.
+    """
+    from src.knowledge import checkout
+
     parent = _make_parent_with_submodule(tmp_path)
     flat = _flat_clone(tmp_path, parent)
-    marks, why = submodule_marks(repo_at(flat))
-    assert why == "" and marks.get("vendor/libs") == "-", (marks, why)
+    populate_submodule(flat, "vendor/libs")
+    repo = repo_at(flat)
+    assert unpopulated(repo, "main") == []            # 지금은 읽을 수 있다
+
+    real = checkout._git
+    def broken(root, *args, **kw):
+        return (128, "", "boom") if args[:1] == ("config",) else real(root, *args, **kw)
+    monkeypatch.setattr(checkout, "_git", broken)
+    assert checkout.unpopulated(repo, "main") == ["vendor/libs"]

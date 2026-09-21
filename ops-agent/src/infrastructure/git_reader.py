@@ -39,7 +39,8 @@ from src.domain.ports import CodeReaderPort
 # 순수 파서 하나만 빌려 온다. 같은 `.gitmodules`를 두 계층이 따로 해석하면
 # 언젠가 한쪽만 고쳐지고, 그때 `code status`는 "정상"이라 말하는데 읽기는
 # 비어서 돌아온다 — 규율 8이 막는 그 실패다.
-from src.knowledge.checkout import containing_submodule, parse_gitmodules
+from src.knowledge.checkout import (_REGISTERED, containing_submodule,
+                                    parse_gitmodules)
 
 # 한 번에 실어 오는 상한. 코드 파일 하나가 이보다 크면 잘라서 주고 봉투가 말한다.
 _MAX_CHARS = 20000
@@ -53,7 +54,7 @@ class RealCodeReader(CodeReaderPort):
         self._clock = clock
         # 커밋으로 주소가 매겨진 값이라 **절대 안 변한다** — 캐시해도 상할 수 없다.
         # (채워졌는지 여부는 사람이 중간에 바꿀 수 있으므로 캐시하지 않는다.)
-        self._declared: dict[tuple[str, str], list[str]] = {}
+        self._declared: dict[tuple[str, str], dict[str, str]] = {}
 
     def describe(self) -> str:
         return f"git({', '.join(sorted(self._repos)) or '레포 없음'})"
@@ -98,37 +99,48 @@ class RealCodeReader(CodeReaderPort):
 
     # ── submodule 경계 ────────────────────────────────────────────
 
-    async def _declared_subs(self, repo: str, commit: str) -> list[str]:
+    async def _declared_entries(self, repo: str, commit: str) -> dict[str, str]:
+        """그 커밋이 선언한 submodule — **이름 → 경로**. 등록은 이름으로 걸린다."""
         key = (repo, commit)
         if key not in self._declared:
             got = await self._git(repo, ["show", f"{commit}:.gitmodules"],
                                   source=f"code.submodules {repo}@{commit}")
             # `.gitmodules`가 없으면 실패로 온다 = submodule이 없다.
-            self._declared[key] = ([] if got.status == "error"
+            self._declared[key] = ({} if got.status == "error"
                                    else parse_gitmodules(got.data))
         return self._declared[key]
 
-    async def _blind(self, repo: str, subs: list[str]) -> list[str]:
-        """git이 **안 들여다보는** submodule들 — 우리가 못 보는 구석.
+    async def _declared_subs(self, repo: str, commit: str) -> list[str]:
+        return sorted(set((await self._declared_entries(repo, commit)).values()))
 
-        `.git`이 있나로 보면 안 된다. 디렉터리가 채워져 있어도 로컬 등록이
-        안 돼 있으면 `grep --recurse-submodules`가 조용히 건너뛴다(측정함).
-        `git submodule status`의 `-` 접두사가 그 상태를 정확히 가리킨다.
+    async def _blind(self, repo: str, commit: str) -> list[str]:
+        """git이 **안 들여다보는** submodule 경로들 — 우리가 못 보는 구석.
+
+        `.git`이 있나로만 보면 안 된다. 디렉터리가 채워져 있어도 로컬 등록이
+        없으면 `grep --recurse-submodules`가 조용히 건너뛴다(측정함). 그렇다고
+        `git submodule status`를 쓰지도 않는다 — 포슬린이라 사내 Windows에서
+        실패했다. 평범한 config 읽기 둘이면 충분하다.
         """
-        if not subs:
+        entries = await self._declared_entries(repo, commit)
+        if not entries:
             return []
-        got = await self._git(repo, ["submodule", "status"],
-                              source=f"code.submodule-status {repo}")
+        root = self._repos.get(repo)
+        got = await self._git(repo, ["config", "--get-regexp",
+                                     r"^submodule\..*\.url"],
+                              source=f"code.submodule-config {repo}")
+        # `--get-regexp`는 매치가 없으면 1로 끝난다 — 우리 `_git`이 1을 성공으로
+        # 보므로 "등록 0건"이 그대로 빈 집합이 된다.
+        registered = set()
         if got.status == "error":
-            return list(subs)             # 모르는 것을 괜찮은 것으로 적지 않는다
-        marks = {}
+            return sorted(set(entries.values()))   # 모르는 것을 괜찮다고 적지 않는다
         for line in got.data.splitlines():
-            if not line.strip():
-                continue
-            parts = line[1:].split()      # `<앞글자><sha> <경로> (설명)`
-            if len(parts) >= 2:
-                marks[parts[1]] = line[0]
-        return [sub for sub in subs if marks.get(sub, "-") == "-"]
+            match = _REGISTERED.match(line.strip())
+            if match:
+                registered.add(match.group(1))
+        return sorted({path for name, path in entries.items()
+                       if name not in registered
+                       or root is None
+                       or not (root / path / ".git").exists()})
 
     async def _stale(self, repo: str, commit: str, subs: list[str]) -> list[str]:
         """채워져는 있는데 **그 커밋이 박은 버전**의 객체가 없는 것들.
@@ -136,7 +148,7 @@ class RealCodeReader(CodeReaderPort):
         부모만 fetch되고 submodule은 안 당겨진 트리에서 생긴다. `.git`이 있으므로
         `_blind`는 "채워졌다"고 말한다 — 그래서 상태가 셋이다.
         """
-        blind = set(await self._blind(repo, subs))
+        blind = set(await self._blind(repo, commit))
         behind = []
         for sub in subs:
             if sub in blind:
@@ -185,7 +197,7 @@ class RealCodeReader(CodeReaderPort):
         직접 풀어서 그 레포 안에서 다시 읽는다. **최신이 아니라 배포가 쓴 버전**이다.
         """
         rest = path[len(sub):].lstrip("/")
-        if await self._blind(repo, [sub]):
+        if sub in await self._blind(repo, commit):
             return ProbeResult.failed(
                 f"{sub}은 submodule인데 로컬에 안 채워져 있다 — git은 이걸 "
                 f"\"경로가 없다\"고 말한다. 파일이 없는 것이 아니라 **우리가 못 보는 것**이다. "
@@ -235,7 +247,7 @@ class RealCodeReader(CodeReaderPort):
         if got.status == "error":
             return got
         return _clip(got, source, clock=self._clock,
-                     unseen=await self._blind(repo, subs))
+                     unseen=await self._blind(repo, commit))
 
     async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
         source = f"code.ls {repo}@{commit}" + (f":{path}" if path else "")
@@ -252,8 +264,7 @@ class RealCodeReader(CodeReaderPort):
             reasons.append(f"{_MAX_LINES}개에서 끊음")
         # `ls-tree -r`는 submodule 안으로 안 들어간다 — 경로가 이름 하나로만
         # 나온다. 그걸 "그 밑에 파일이 없다"로 읽으면 안 된다.
-        reasons += _unseen_reasons(
-            await self._blind(repo, await self._declared_subs(repo, commit)))
+        reasons += _unseen_reasons(await self._blind(repo, commit))
         return ProbeResult.succeeded(
             names, source=source, clock=self._clock,
             truncated_reason=" · ".join(reasons) + " — 더 있을 수 있다" if reasons else None)

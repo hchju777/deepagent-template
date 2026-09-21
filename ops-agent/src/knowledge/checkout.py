@@ -51,6 +51,8 @@ from src.domain.base import StrictModel
 _TIMEOUT_S = 120
 _PATH_LINE = re.compile(r"path\s*=\s*(.+)$")
 _HTTP_HOST = re.compile(r"(https?://[^/]+)")
+_SECTION = re.compile(r'\[submodule "(.+)"\]')
+_REGISTERED = re.compile(r"^submodule\.(.+)\.url\s")
 
 
 class RepoStatus(StrictModel):
@@ -181,20 +183,36 @@ def config_layers(repo: RepoConfig, commit: str, paths: list[str]) -> tuple[list
     return [p for p in paths if p not in missing], missing
 
 
-def parse_gitmodules(text: str) -> list[str]:
-    """`.gitmodules`에서 submodule 경로만 뽑는다.
+def parse_gitmodules(text: str) -> dict[str, str]:
+    """`.gitmodules`를 **이름 → 경로**로 읽는다.
 
-    ini 파서를 안 쓰는 이유: 섹션 이름이 `[submodule "a/b"]`처럼 따옴표와 슬래시를
-    달고 오고 사람이 손으로도 고치는 파일이라, 필요한 키 하나만 줄 단위로 보는
-    편이 덜 깨진다. `path`로 시작하는 다른 키(`pathspec` 같은)를 안 먹으려고
-    `=`까지 붙여서 본다.
+    이름이 따로 필요한 이유: 로컬 등록은 `submodule.<이름>.url`로 되고, 그 이름은
+    섹션 이름이지 경로가 아니다. 대개 같지만 `git submodule add --name`을 쓴
+    저장소에서는 다르고, 그러면 경로로 찾다가 **"등록 안 됨"으로 오판한다.**
+
+    ini 파서를 안 쓰는 이유: 섹션 이름이 따옴표와 슬래시를 달고 오고 사람이 손으로도
+    고치는 파일이라, 필요한 두 가지만 줄 단위로 보는 편이 덜 깨진다.
     """
-    found = set()
-    for line in text.splitlines():
-        match = _PATH_LINE.match(line.strip())
-        if match:
-            found.add(match.group(1).strip())
-    return sorted(found)
+    entries: dict[str, str] = {}
+    name = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        section = _SECTION.match(line)
+        if section:
+            name = section.group(1)
+            continue
+        match = _PATH_LINE.match(line)
+        if match and name:
+            entries[name] = match.group(1).strip()
+    return entries
+
+
+def submodule_entries(repo: RepoConfig, commit: str) -> dict[str, str]:
+    """그 커밋이 선언한 submodule들 — **이름 → 경로**."""
+    code, out, _ = _git(Path(repo.path), "show", f"{commit}:.gitmodules")
+    if code != 0:
+        return {}                       # `.gitmodules`가 없다 = submodule이 없다
+    return parse_gitmodules(out)
 
 
 def submodules_at(repo: RepoConfig, commit: str) -> list[str]:
@@ -223,51 +241,43 @@ def submodules_at(repo: RepoConfig, commit: str) -> list[str]:
     code, out, _ = _git(Path(repo.path), "show", f"{commit}:.gitmodules")
     if code != 0:
         return []                       # `.gitmodules`가 없다 = submodule이 없다
-    return parse_gitmodules(out)
+    return sorted(set(parse_gitmodules(out).values()))
 
 
-def unpopulated(repo: RepoConfig, paths: list[str]) -> list[str]:
-    """git이 **안 들여다보는** submodule들.
+def unpopulated(repo: RepoConfig, commit: str) -> list[str]:
+    r"""git이 **안 들여다보는** submodule 경로들.
 
-    처음엔 `(경로/.git)이 있나`로 봤다. **틀렸다.** 디렉터리를 사람이 직접 클론해
-    넣어 `.git`이 멀쩡히 있어도, 로컬에 *등록*(`git submodule init`)이 안 돼 있으면
-    `git grep --recurse-submodules`는 그 안을 **조용히 건너뛴다**(측정: 종료코드 1,
-    출력 없음). 즉 "채워졌다"고 말하면서 grep은 계속 못 보는 상태가 존재한다.
+    처음엔 `(경로/.git)이 있나`로 봤다. **틀렸다** — 디렉터리를 직접 클론해 넣어
+    `.git`이 멀쩡히 있어도, 로컬 등록이 없으면 `git grep --recurse-submodules`는
+    그 안을 **조용히 건너뛴다**(측정: 종료코드 1, 출력 없음).
 
-    `git submodule status`의 앞 글자가 정확히 그 신호다:
+    그다음엔 `git submodule status`의 앞 글자로 봤다. 신호는 맞지만 **그 명령이
+    사내 Windows에서 실패했다.** `submodule`은 포슬린(일부 플랫폼에서는 셸 스크립트)이라
+    깨질 자리가 많고, 우리에게 필요한 사실은 두 개의 평범한 읽기로 충분하다:
 
-    | 앞 글자 | 뜻 | grep이 보나 |
-    |---|---|---|
-    | `-` | 등록 안 됨 | ❌ 조용히 0건 |
-    | (공백) | 정상 | ✅ |
-    | `+` | 박힌 SHA와 체크아웃이 다름 | ✅ (트리의 SHA로 읽는다) |
+    | | 어디서 읽나 |
+    |---|---|
+    | 로컬 등록 | `git config --get-regexp ^submodule\..*\.url` |
+    | 내용 존재 | `<경로>/.git`이 있나 |
+
+    둘 다여야 읽을 수 있다. 네 가지 상태(안 채움 / 내용만 / 등록만 / 제대로)에서
+    `git grep`의 실제 동작과 일치하는 것을 확인했다.
     """
-    marks, why = submodule_marks(repo)
-    if why:
-        # 못 물어봤으면 **"읽을 수 있다"고 말하지 않는다.** 모르는 것을
-        # 괜찮은 것으로 적는 것이 이 리포가 제일 싫어하는 실패다.
-        return list(paths)
-    return [path for path in paths if marks.get(path, "-") == "-"]
-
-
-def submodule_marks(repo: RepoConfig) -> tuple[dict[str, str], str]:
-    """경로 → `git submodule status`의 앞 글자. 둘째 값은 **못 물어본 이유**다.
-
-    이유를 따로 돌려주는 까닭: 물어보지도 못한 것과 "안 채워졌다"를 같은 답으로
-    돌려주면, 사람은 submodule을 채우려고 애쓰는데 실제 원인은 다른 데 있게 된다.
-    `unpopulated`는 안전한 쪽으로 답하고, 화면에는 이 이유가 같이 나가야 한다.
-    """
-    code, out, err = _git(Path(repo.path), "submodule", "status")
-    if code != 0:
-        return {}, err or f"git submodule status가 {code}로 끝났다"
-    marks = {}
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        parts = line[1:].split()          # `<앞글자><sha> <경로> (설명)`
-        if len(parts) >= 2:
-            marks[parts[1]] = line[0]
-    return marks, ""
+    entries = submodule_entries(repo, commit)
+    if not entries:
+        return []
+    _, out, _ = _git(Path(repo.path), "config", "--get-regexp",
+                     r"^submodule\..*\.url")
+    # **종료코드를 안 본다.** `--get-regexp`는 매치가 없으면 1로 끝나는데(등록이
+    # 하나도 없는 정상 상태), 진짜 실패와 결과가 같다 — 둘 다 "등록된 것이 없다"다.
+    # 그리고 그게 안전한 답이다: 물어보지 못한 것을 읽을 수 있다고 적지 않는다.
+    # (예전엔 실패를 따로 분기했는데, RED를 걸어 보니 **지워도 결과가 같았다** —
+    #  방어가 아니라 무동작이었다.)
+    registered = {match.group(1) for line in out.splitlines()
+                  if (match := _REGISTERED.match(line.strip()))}
+    return sorted({path for name, path in entries.items()
+                   if name not in registered
+                   or not (Path(repo.path) / path / ".git").exists()})
 
 
 def auth_args(repo: RepoConfig) -> list[str]:
