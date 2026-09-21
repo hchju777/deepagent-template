@@ -525,3 +525,54 @@ def test_큰_키_하나가_뒤의_키를_가리지_않는다():
     assert "GUMI_ALARM_EVENT_MAIN" in body
     assert "'alarm'" in body, "큰 키 뒤에 있는 이름이 사라졌다"
     assert "예산에서 빠졌다" in body, "뺀 것을 조용히 두면 전부인 줄 안다"
+
+
+# ── 거부를 리드에게 돌려준다 ──────────────────────────────────────
+
+def test_잘린_증거가_또_읽으라고_말하지_않는다(case):
+    """**우리가 시켜 놓고 거부했다.**
+
+    사내 측정: 잘린 증거 셋을 리드가 정확히 그대로 다시 냈고, 중복 방어가 셋 다
+    거부했고, 낼 것이 없어져 `no_runnable`로 끝났다. 리드가 받은 지시 중 제일
+    구체적인 것이 `(필요하면 다시 읽어라)`라는 이 줄이었다 — 산문 규칙("같은 것을
+    또 읽는 것은 더 볼 것이 아니다")은 여기에 졌다.
+    """
+    state = CaseState(case=case, evidence=[
+        EvidenceRef(id="t-1.e1", source="code.config service='api'",
+                    summary="…", body="키 3개: kafka, rules, mongo", complete=False)])
+    text = briefing.evidence_block(state)
+    assert "다시 읽어라" not in text
+    assert "좁혀서" in text, "무엇을 하라는 것인지 없으면 또 같은 질의가 나온다"
+
+
+def test_예산에서_빠진_내용도_또_읽으라고_안_한다(case):
+    big = [EvidenceRef(id=f"t-{n}.e1", source=f"mongo.find c{n}", summary="…",
+                       body="x" * 900) for n in range(1, 6)]
+    text = briefing.evidence_block(CaseState(case=case, evidence=big), budget=1000)
+    assert "예산에서 빠졌다" in text
+    assert "다시 읽어라" not in text
+
+
+def test_버려진_태스크가_리드에게_돌아간다(case):
+    """피드백 없이 같은 상태를 보여 주면 **같은 답이 나오는 것이 당연하다.**"""
+    state = CaseState(case=case, llm_errors=[
+        "t-7: 이미 한 읽기를 또 냈다 — 받지 않는다 (mongo.find collection='alarm')"])
+    assert "(없음)" == briefing.rejected_block(CaseState(case=case))
+    block = briefing.rejected_block(state)
+    assert "t-7" in block and "mongo.find" in block
+
+
+def test_프롬프트가_모든_자리를_실제로_쓴다():
+    """**선언만 하고 아무도 안 읽는 것**을 막는다.
+
+    자리를 만들어 놓고 템플릿이 안 쓰면 그 정보는 영영 리드에게 안 간다 —
+    이 리포가 이미 config에서 당한 실패다. 반대로 운영이 템플릿에서 자리를
+    빼면 그것도 여기서 드러난다.
+    """
+    from tests.support import REPO_ROOT
+
+    for path, slots in (("investigate-frame.md", briefing.FRAME_SLOTS),
+                        ("investigate-integrate.md", briefing.INTEGRATE_SLOTS)):
+        text = (REPO_ROOT / "config" / "prompts" / path).read_text(encoding="utf-8")
+        missing = sorted(slot for slot in slots if "{" + slot + "}" not in text)
+        assert not missing, f"{path}가 안 쓰는 자리: {', '.join(missing)}"

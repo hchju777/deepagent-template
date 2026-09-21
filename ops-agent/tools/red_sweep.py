@@ -238,6 +238,21 @@ CASES = [
  ("큰 키에서 멈춘다", RP,
   '            skipped += 1\n            continue', '            break',
   [f"{K4}::test_큰_키_하나가_뒤의_키를_가리지_않는다"]),
+ # ── 거부를 리드에게 돌려준다 ───────────────────────────────────────
+ ("잘린 증거가 또 읽으라고 한다", B,
+  '               "같은 질의는 같은 답이다 — 좁혀서 물어라")',
+  '               "")',
+  [f"{K4}::test_잘린_증거가_또_읽으라고_말하지_않는다"]),
+ ("예산에서 빠진 것을 또 읽으라고 한다", B,
+  '            lines.append("    (내용은 예산에서 빠졌다 — 같은 질의를 또 내지 마라. "\n                         "필요하면 더 좁혀서 물어라)")',
+  '            lines.append("    (내용은 예산에서 빠졌다 — 필요하면 다시 읽어라)")',
+  [f"{K4}::test_예산에서_빠진_내용도_또_읽으라고_안_한다"]),
+ ("버려진 것을 리드에게 안 돌려준다", B,
+  '    return "\\n".join(f"- {_oneline(reason)}" for reason in state.llm_errors)',
+  '    return "(없음)"', [f"{K4}::test_버려진_태스크가_리드에게_돌아간다"]),
+ ("프롬프트가 거부 자리를 안 쓴다", ROOT / "config/prompts/investigate-integrate.md",
+  '<버려진 태스크>\n{rejected}\n</버려진 태스크>\n\n', '',
+  [f"{K4}::test_프롬프트가_모든_자리를_실제로_쓴다"]),
 ]
 bad = []
 for label, path, old, new, tests in CASES:
@@ -259,7 +274,7 @@ print(f"총 {len(CASES)}가지 — " + ("모두 RED" if not bad else "문제:\n 
 
 # **되돌리기가 실제로 됐는지 확인한다.** 스윕이 소스를 건드리므로, 여기서
 # 안 보면 망가진 채로 커밋될 수 있다 — 그건 스윕이 막으려던 것보다 나쁘다.
-dirty = subprocess.run(["git", "status", "--porcelain", "src", "tests"], cwd=ROOT,
+dirty = subprocess.run(["git", "status", "--porcelain", "src", "tests", "config", "tools"], cwd=ROOT,
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace").stdout.strip()
 if dirty:

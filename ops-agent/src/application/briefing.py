@@ -125,11 +125,20 @@ def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
 
     lines = []
     for ref in state.evidence:
-        cut = "" if ref.complete else "  ⚠ 표본이 잘렸다 — '없다'를 주장할 수 없다"
+        # **"또 읽어라"로 읽히면 안 된다.** 같은 질의는 같은 답을 준다 —
+        # 사내 측정에서 리드가 잘린 증거 셋을 정확히 그대로 다시 냈고, 중복
+        # 방어가 셋 다 거부해서 조사가 `no_runnable`로 끝났다.
+        cut = ("" if ref.complete else
+               "  ⚠ 표본이 잘렸다 — '없다'를 주장할 수 없다. "
+               "같은 질의는 같은 답이다 — 좁혀서 물어라")
         lines.append(f"- {_oneline(ref.id)} | {_oneline(ref.source)} | "
                      f"{_oneline(ref.summary)}{cut}")
         if ref.id not in detailed:
-            lines.append("    (내용은 예산에서 빠졌다 — 필요하면 다시 읽어라)")
+            # 예전엔 "필요하면 다시 읽어라"였다. **우리가 시켜 놓고 거부했다** —
+            # 리드가 받은 지시 중 제일 구체적인 것이 이 줄이었고, 산문 규칙보다
+            # 이런 줄이 훨씬 잘 먹는다(10b에서 측정한 성질이 반대로 작동했다).
+            lines.append("    (내용은 예산에서 빠졌다 — 같은 질의를 또 내지 마라. "
+                         "필요하면 더 좁혀서 물어라)")
             continue
         for row in (ref.body or "").splitlines():
             lines.append(f"    {_oneline(row)}")
@@ -296,7 +305,23 @@ def example_block(site_config, *, phase: str, start: int = 1,
 # 치환되지 않은 채 LLM에게 나가고, 응답은 그럴듯해 보여서 아무도 못 본다.
 # 9e에서 `{max_chars}`가 실제로 그렇게 새 나갔다.
 FRAME_SLOTS = frozenset({"case", "actions", "example"})
-INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round", "max_rounds"}
+INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round",
+                                 "max_rounds", "rejected"}
+
+
+def rejected_block(state: CaseState) -> str:
+    """**버려진 태스크를 리드에게 돌려준다.**
+
+    이게 없어서 리드는 자기 태스크가 버려진 걸 몰랐다. 사내 측정에서 같은 질의를
+    세 번 냈고, 세 번 다 조용히 거부됐고, 낼 것이 없어져 `no_runnable`로 끝났다.
+    **피드백 없이 같은 상태를 보여 주면 같은 답이 나오는 것이 당연하다.**
+
+    통제 경계는 그대로다 — 무엇을 받을지는 여전히 코드가 정한다(규율 6).
+    여기서 주는 것은 결정권이 아니라 **결과**다.
+    """
+    if not state.llm_errors:
+        return "(없음)"
+    return "\n".join(f"- {_oneline(reason)}" for reason in state.llm_errors)
 
 
 def frame_fields(state: CaseState, *, site_config,
@@ -319,5 +344,6 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state, budget=evidence_budget),
+            "rejected": rejected_block(state),
             "round": str(state.round),
             "max_rounds": str(max_rounds)}
