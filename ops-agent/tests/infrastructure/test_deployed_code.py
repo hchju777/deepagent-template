@@ -201,3 +201,45 @@ def test_역할은_이름_옆에_붙일_수_있게_따로_준다(code):
     있어야 한다. 역할이 빈 서비스는 뺀다 — 빈 괄호는 정보가 아니다."""
     assert code("gumi").service_roles() == {"processor": "가공한다"}
 
+
+@pytest.fixture
+def flow_code(tmp_path, clock):
+    """사내 모양의 config를 든 진짜 레포 — 흐름 그래프 재료를 실제 git으로 뽑는다."""
+    root = make_git_repo(tmp_path / "dt-core", origin="https://git.example.com/team/dt-core")
+
+    def write(path, value):
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False),
+                          encoding="utf-8")
+
+    write("config/gbm/mx.json", {"infra": {"kafka": {"consumer": {"group_id": "mx-core",
+                                                                   "topic": {"topic1": "mx.alarm.main"}}}},
+                                 "mongodb_collection": {"alarm": "alarm_events"}})
+    write("sink/writer.py", 'def run(cfg, consumer, mongo):\n'
+          '    for m in consumer.subscribe(cfg["infra"]["kafka"]["consumer"]["topic"]["topic1"]):\n'
+          '        mongo[cfg["mongodb_collection"]["alarm"]].insert_one(m)\n')
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "flow", cwd=root)
+    topology = Topology(services={"sink": Service(repo="dt-core", role="저장한다")},
+                        config_paths=LAYERS)
+    reader = RealCodeReader([RepoConfig(name="dt-core", path=str(root),
+                                        url="https://git.example.com/team/dt-core")], clock=clock)
+    return DeployedCode(reader, topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+
+
+async def test_흐름_이름은_합친_config에서_나온다(flow_code):
+    names, problems = await flow_code.flow_names()
+    assert problems == []
+    assert {(n.kind, n.value, n.relation) for n in names} == {
+        ("topic", "mx.alarm.main", "consumes"), ("group", "mx-core", "consumes_as"),
+        ("collection", "alarm_events", None)}
+
+
+async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):
+    hits = await flow_code.flow_hits("alarm")
+    files = {(h.file, h.line) for h in hits}
+    assert ("sink/writer.py", 3) in files and ("config/gbm/mx.json", 1) in files
+    assert all(h.repo == "dt-core" and h.commit for h in hits)
+    assert flow_code.pinned() == {"dt-core": "main"}
+

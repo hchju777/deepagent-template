@@ -53,59 +53,65 @@ def _repo(root: Path, name: str, url: str, files: dict) -> Path:
     return root
 
 
+# **사내 config의 모양이다**(2026-09 확인, 이름은 지어냈다). `infra`는 레포당 하나라 한
+# 레포의 서비스 둘이 공유한다 — 컨슈머 그룹도 같다. 토픽 키는 `topic1`·`topic2`처럼
+# 뜻이 없고, 컬렉션·redis 키는 `infra` 밖 최상위에 있다.
 CORE_FILES = {
     "config/gbm/mx.json": {
-        "kafka": {"topics": {"alarm_raw": "mx.alarm.raw", "alarm_main": "mx.alarm.main"},
-                  "groups": {"processor": "mx-processor", "sink": "mx-sink"}},
-        "mongo": {"collections": {"alarm": "alarm_events", "line_state": "line_state"}},
-        "redis": {"keys": {"alarm_stats": "alarm:stats:{line}", "heartbeat": "hb:{service}"}},
+        "infra": {
+            "kafka": {
+                "consumer": {"group_id": "mx-core",
+                             "topic": {"topic1": "mx.alarm.raw", "topic2": "mx.alarm.main"}},
+                "producer": {"topic": {"topic1": "mx.alarm.main"}}}},
+        "mongodb_collection": {"alarm": "alarm_events", "line_state": "line_state"},
+        "redis_key": {"alarm_stats": "alarm:stats:{line}", "heartbeat": "hb:{service}"},
         "sink": {"batch_size": 200, "flush_sec": 5}},
     "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi"},
     "config/factories/gumi/mx.json": {
-        "kafka": {"groups": {"processor": "gumi-mx-processor", "sink": "gumi-mx-sink"}}},
+        "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}},
     "processor/handler.py": '''"""alarm_raw를 읽어 정규화한 뒤 alarm_main으로 낸다."""
 
 
 def run(cfg, consumer, producer, redis):
-    topics, groups = cfg["kafka"]["topics"], cfg["kafka"]["groups"]
-    for msg in consumer.subscribe(topics["alarm_raw"], group=groups["processor"]):
+    kafka = cfg["infra"]["kafka"]
+    for msg in consumer.subscribe(kafka["consumer"]["topic"]["topic1"], group=kafka["consumer"]["group_id"]):
         event = normalize(msg)
-        producer.send(topics["alarm_main"], event)
-        redis.set(cfg["redis"]["keys"]["heartbeat"].format(service="processor"), now())
+        producer.send(kafka["producer"]["topic"]["topic1"], event)
+        redis.set(cfg["redis_key"]["heartbeat"].format(service="processor"), now())
 ''',
     "sink/writer.py": '''"""alarm_main을 읽어 alarm_events에 넣고 alarm:stats:{line}을 갱신한다."""
 
 
 def run(cfg, consumer, mongo, redis):
-    topics, groups = cfg["kafka"]["topics"], cfg["kafka"]["groups"]
+    kafka = cfg["infra"]["kafka"]
     batch = []
-    for msg in consumer.subscribe(topics["alarm_main"], group=groups["sink"]):
+    for msg in consumer.subscribe(kafka["consumer"]["topic"]["topic2"], group=kafka["consumer"]["group_id"]):
         batch.append(msg)
         if len(batch) >= cfg["sink"]["batch_size"]:
-            mongo[cfg["mongo"]["collections"]["alarm"]].insert_many(batch)
+            mongo[cfg["mongodb_collection"]["alarm"]].insert_many(batch)
             for line in {m["line"] for m in batch}:
-                redis.set(cfg["redis"]["keys"]["alarm_stats"].format(line=line), stats(line))
-            redis.set(cfg["redis"]["keys"]["heartbeat"].format(service="sink"), now())
+                redis.set(cfg["redis_key"]["alarm_stats"].format(line=line), stats(line))
+            redis.set(cfg["redis_key"]["heartbeat"].format(service="sink"), now())
             batch = []
 ''',
 }
 
 API_FILES = {
     "config/gbm/mx.json": {
-        "mongo": {"collections": {"alarm": "alarm_events"}},
-        "redis": {"keys": {"alarm_stats": "alarm:stats:{line}"}},
+        "infra": {"mongodb": {"database": "data"}},
+        "mongodb_collection": {"alarm": "alarm_events"},
+        "redis_key": {"alarm_stats": "alarm:stats:{line}"},
         "api": {"alarm_window_min": 60}},
     "config/factories/gumi/common.json": {"lines": LINES},
     "api/alarms.py": '''"""알람 화면 — 최근 alarm_window_min 분의 alarm_events와 alarm:stats:{line} 배지."""
 
 
 def recent_alarms(cfg, mongo, since):
-    coll = mongo[cfg["mongo"]["collections"]["alarm"]]
-    return list(coll.find({"occ_date": {"$gte": since}}).sort("occ_date", -1))
+    return list(mongo[cfg["mongodb_collection"]["alarm"]].find({"occ_date": {"$gte": since}}).sort("occ_date", -1))
 
 
 def badge(cfg, redis, line):
-    return redis.get(cfg["redis"]["keys"]["alarm_stats"].format(line=line))
+    return redis.get(cfg["redis_key"]["alarm_stats"].format(line=line))
 ''',
 }
 
@@ -133,7 +139,8 @@ def _seeds(now: datetime) -> dict:
                              for i in range(5)],
             "mx.alarm.main": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor",
                                "ts": fresh(13 - 3 * i)} for i in range(5)]},
-        "lags": {"gumi-mx-sink": 1830, "gumi-mx-processor": 2},
+        # 그룹은 레포당 하나라 processor·sink가 공유한다 — lag만으로는 누가 멈췄는지 모른다.
+        "lags": {"gumi-mx-core": 1830},
         "redis": {
             **{f"alarm:stats:{l}": json.dumps({"count_1h": 0, "updated_at": _iso(stale)}) for l in LINES},
             "hb:processor": fresh(0), "hb:sink": _iso(stale)},
@@ -200,6 +207,8 @@ def main() -> int:
 
     py = Path(sys.executable)
     print(f"측정판: {root}\n")
+    print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} code graph      # 흐름 그래프(+graphify)")
+    print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} code flow processor --to sink")
     print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} "
           f"case investigate {args.case_id} --stub-seeds {root / 'seeds.json'} --trace {root / 'trace'}")
     print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} "

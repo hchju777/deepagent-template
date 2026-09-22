@@ -494,7 +494,7 @@ CASES = [
   ["tests/config/test_schema_app.py::test_라운드_상한_기본값은_6이다"]),
  # ── 11c 흐름 그래프 ────────────────────────────────────────────────
  ("키 토큰을 부모 키 없이 맞춘다", ROOT / "src/knowledge/flow.py",
-  '                if (confidence == "INFERRED" and name.parent_token\n                        and name.parent_token not in hit.text):\n                    continue',
+  '                if confidence == "INFERRED" and any(\n                        tok not in hit.text for tok in name.required_tokens):\n                    continue',
   '                if False:\n                    continue',
   ["tests/knowledge/test_flow.py::test_키_토큰은_부모_키가_같은_줄에_있어야_한다"]),
  ("동사를 조각이 아니라 통째로 맞춘다", ROOT / "src/knowledge/flow.py",
@@ -511,13 +511,39 @@ CASES = [
   ["tests/knowledge/test_flow.py::test_processor에서_sink까지_경로는_토픽을_지난다",
    "tests/knowledge/test_flow.py::test_흐름이_없으면_경로도_없다"]),
  ("모르는 자원 종류를 받는다", ROOT / "src/knowledge/schema.py",
-  '        unknown = sorted(set(paths) - set(FLOW_KINDS))',
-  '        unknown = []',
-  ["tests/knowledge/test_flow.py::test_모르는_자원_종류는_거부한다"]),
+  '    kind: Literal["topic", "group", "collection", "rediskey"]',
+  '    kind: str',
+  ["tests/knowledge/test_flow.py::test_모르는_자원_종류나_관계는_거부한다"]),
  ("디렉터리 이름 귀속을 안 한다", ROOT / "src/knowledge/flow.py",
   '    head = file.split("/", 1)[0]\n    if head in candidates:\n        return head, "INFERRED"',
   '    pass',
   ["tests/knowledge/test_flow.py::test_파일을_서비스에_붙인다"]),
+ ("관계 있는 출처를 선언으로만 적는다", ROOT / "src/knowledge/flow.py",
+  '                                  "relation": name.relation or "declares",',
+  '                                  "relation": "declares",',
+  ["tests/knowledge/test_flow.py::test_관계_있는_출처는_config_선언이_곧_엣지다"]),
+ ("키 토큰이 부모 하나만 요구한다", ROOT / "src/knowledge/flow.py",
+  '        return tuple(parts[-3:-1])',
+  '        return tuple(parts[-2:-1])',
+  ["tests/knowledge/test_flow.py::test_키_토큰은_조상_둘을_요구한다",
+   "tests/knowledge/test_flow.py::test_코드가_공유_레포의_서비스를_가른다"]),
+ ("공유 레포의 config를 첫 서비스 것으로 친다", ROOT / "src/knowledge/flow.py",
+  '    return mine[0] if len(mine) == 1 else None',
+  '    return mine[0] if mine else None',
+  ["tests/knowledge/test_flow.py::test_config는_레포당_하나라_공유_레포면_주인이_없다"]),
+ ("git grep의 커밋 접두를 안 벗긴다", ROOT / "src/knowledge/graph_build.py",
+  '        if raw.startswith(prefix):\n            raw = raw[len(prefix):]',
+  '        pass',
+  ["tests/knowledge/test_graph_build.py::test_git_grep_출력을_읽는다"]),
+ ("커밋이 달라도 낡았다고 안 한다", ROOT / "src/knowledge/graph_build.py",
+  '        elif have != sha:',
+  '        elif False:',
+  ["tests/knowledge/test_graph_build.py::test_번들을_쓰고_읽고_커밋을_대조한다",
+   "tests/knowledge/test_cli_code.py::test_code_status가_낡은_그래프를_말한다"]),
+ ("안 쓰는 이름을 안 짚는다", ROOT / "src/knowledge/flow.py",
+  '    if idle:',
+  '    if False:',
+  ["tests/knowledge/test_flow.py::test_요약과_권고"]),
  ("대기 태스크의 갱신을 반복으로 찍는다", TD,
   '        if task_id in waiting:\n            marks.append("대기 중이던 태스크의 갱신")\n        elif spoken in visible:',
   '        if spoken in visible:',
@@ -549,7 +575,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 121, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 127, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -53,27 +53,33 @@ _KNOWN_SLOTS = frozenset({"gbm", "fct"})
 
 
 FLOW_KINDS = ("topic", "group", "collection", "rediskey")
+FLOW_RELATIONS = ("consumes", "produces", "consumes_as", "reads", "writes")
+
+
+class FlowSource(StrictModel):
+    """합친 대상 config에서 **이름이 사는 자리 하나**.
+
+    `relation`이 있으면 config 자체가 방향을 말한다 — 사내 config는
+    `infra.kafka.consumer.topic`(소비)과 `infra.kafka.producer.topic`(생산)으로 갈려
+    있어 코드의 동사를 추정할 필요가 없다. 없으면(`mongodb_collection`·`redis_key`) 그
+    이름이 쓰인 줄의 동사로 방향을 정한다.
+    """
+    path: str = Field(min_length=1)
+    kind: Literal["topic", "group", "collection", "rediskey"]
+    relation: Literal["consumes", "produces", "consumes_as", "reads", "writes"] | None = None
 
 
 class FlowSpec(StrictModel):
-    """흐름 그래프가 **이름을 어디서 뽑는가** — 합친 대상 config의 점 경로.
-
-    자원 종류 → 그 종류의 이름들이 사는 키 경로. 경로 끝이 dict면 값 하나하나가
-    이름이고 str이면 그것이 이름이다. 사내 config 모양이 다르면 이 표만 고친다.
-    기본값은 로컬 측정판의 모양이고, 안 맞으면 `code status`가 "이름 0개"로 말한다.
-    """
-    name_paths: dict[str, list[str]] = {
-        "topic": ["kafka.topics"], "group": ["kafka.groups"],
-        "collection": ["mongo.collections"], "rediskey": ["redis.keys"]}
-
-    @field_validator("name_paths")
-    @classmethod
-    def _known_kinds(cls, paths: dict[str, list[str]]) -> dict[str, list[str]]:
-        unknown = sorted(set(paths) - set(FLOW_KINDS))
-        if unknown:
-            raise ValueError(f"모르는 자원 종류 — {', '.join(unknown)}. "
-                             f"쓸 수 있는 것: {', '.join(FLOW_KINDS)}")
-        return paths
+    """흐름 그래프(11c)가 이름을 어디서 뽑는가. 기본값은 **사내 config의 모양**이다
+    (2026-09 확인). 다른 모양이면 이 표만 고치고, 안 맞으면 `code status`가
+    "이름 0개"로 말한다."""
+    sources: list[FlowSource] = [
+        FlowSource(path="infra.kafka.consumer.topic", kind="topic", relation="consumes"),
+        FlowSource(path="infra.kafka.producer.topic", kind="topic", relation="produces"),
+        FlowSource(path="infra.kafka.consumer.group_id", kind="group", relation="consumes_as"),
+        FlowSource(path="mongodb_collection", kind="collection"),
+        FlowSource(path="redis_key", kind="rediskey"),
+    ]
 
 
 class Topology(StrictModel):

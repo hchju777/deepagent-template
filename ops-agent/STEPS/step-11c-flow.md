@@ -1,6 +1,6 @@
 # 11c — 데이터 흐름 그래프
 
-> 상태: 진행 중 (커밋 1/3). 앞: [11a](step-11a-code.md). 뒤: 11b → 12a.
+> 상태: 진행 중 (커밋 2/3). 앞: [11a](step-11a-code.md). 뒤: 11b → 12a.
 
 ## 왜 이 스텝인가
 
@@ -72,6 +72,70 @@ sink —writes→ alarm_events             api —reads→ alarm_events
 processor·sink —writes→ hb:{service}   dt-core —declares→ (선언된 이름 전부)
 ```
 
+## 사내 config의 실제 모양 (커밋 2에서 반영)
+
+사람 파트너가 확인해 준 모양이다(이름은 가려서):
+
+```
+infra.kafka.consumer.topic.{topic1, topic2, …}   ← 이 레포가 소비하는 토픽
+infra.kafka.consumer.group_id                     ← 컨슈머 그룹 (레포당 하나)
+infra.kafka.producer.topic.{topic1, …}           ← 생산하는 토픽
+mongodb_collection.{이름: 값}                     ← infra 밖, 최상위
+redis_key.{이름: 값}                              ← infra 밖, 최상위
+```
+
+**`infra`는 레포당 하나다.** 레포에 서비스가 둘이면 둘이 공유하고 컨슈머 그룹도 같다.
+이 사실이 설계를 둘 바꿨다.
+
+- **config가 방향을 말한다.** `consumer.topic`에 있으면 소비, `producer.topic`에 있으면 생산.
+  코드의 동사를 추정할 필요가 없다. 그래서 `FlowSpec.name_paths`(종류 → 경로)를
+  `FlowSpec.sources`(경로 + 종류 + 관계)로 바꿨다. 관계가 있으면 config 층의 그 줄이 곧
+  EXTRACTED 엣지다. 없는 것(`mongodb_collection`·`redis_key`)만 코드의 동사로 간다.
+- **공유 레포에서는 config가 "이 레포의 누군가"까지만 안다.** 그 엣지는 레포 노드에
+  붙는다(`attributed: repo`). 어느 서비스인지는 코드 줄이 가른다 — 그런데 토픽 키가
+  소비·생산 양쪽 다 `topic1`이라 부모 키 하나(`topic`)로는 못 가르고, **조상 둘**
+  (`consumer`/`producer` + `topic`)을 같은 줄에 요구한다. 전부를 요구하지 않는 이유는
+  `kafka = cfg["infra"]["kafka"]`처럼 앞에서 묶으면 먼 조상은 그 줄에 없기 때문이다.
+
+로컬 측정판(`tools/local_case.py`)을 이 모양으로 바꿨다. 그룹도 하나(`gumi-mx-core`)를
+processor·sink가 공유하므로 lag만으로는 누가 멈췄는지 모른다 — 흐름 그래프가 필요한 이유가
+측정판에도 그대로 있다.
+
+## 배선 (커밋 2)
+
+- `code graph` — 지금 체크아웃으로 그래프를 만든다. 네트워크 없음. `code sync`도 끝에 같은
+  함수를 부른다(조립 한 벌).
+- 만드는 순서: 서비스별 합친 config → 이름 → 이름마다 배포 커밋에서 `git grep -n` →
+  오버레이(`flow.extract`). 레포마다 배포 SHA로 **`git worktree`를 잠깐 만들어** 거기서
+  `graphify extract --code-only` + `cluster-only --no-label`을 돌리고 지운다. 작업 트리는
+  안 건드리고 HEAD도 그대로다. 오버레이와 심볼 그래프를 id로 합친다.
+- 산출물: `<output_dir>/graph/<gbm>-<fct>/{overlay,graph,meta}.json`. `meta.commits`는
+  레포별 **실제 SHA**다(`main` 같은 참조는 움직인다). git에 안 들어간다.
+- `code status`에 그래프 절이 붙는다: 만든 시각, graphify 버전, 노드·엣지, 서비스를 못 가른
+  엣지 수. 배포 커밋과 다르면 **`⚠ 낡음`**. 없으면 만드는 법.
+- `code flow` — 사람용. 이름 하나면 이웃, `--to`면 흐름 경로(쓰기→자원→읽기 방향), 없으면
+  연결 많은 자원(god node의 우리 판).
+- graphify는 `GRAPHIFY_BIN` 또는 PATH에서 찾는다. 없으면 오버레이만 만들고 그렇게 적는다.
+  조사는 돈다.
+
+측정판에서 실제로 돌린 결과:
+
+```
+그래프 mx/gumi → …/output/graph/mx-gumi
+     graphify 0.9.65 · dt-core ok · dt-api ok
+     오버레이 노드 12 · 엣지 27 · 합친 그래프 노드 22 · 엣지 34
+     권고:
+       - config에 선언됐지만 코드 어디서도 안 쓰는 이름 1개 — line_state
+       - 서비스를 못 가른 엣지 10개 (공유 레포 dt-core) — 토폴로지의 서비스 path를 채우면 코드 쪽은 갈린다
+$ code flow processor --to sink
+  processor —produces→ mx.alarm.main ←consumes— sink
+  processor —produces→ mx.alarm.main   [INFERRED] processor/handler.py:L8
+  sink —consumes→ mx.alarm.main   [INFERRED] sink/writer.py:L7
+```
+
+`Token cost: 0 input`이 GRAPH_REPORT에 찍히는 것을 테스트가 확인한다 — 라벨링 LLM 호출이
+안 나갔다는 뜻이다.
+
 ## 측정 — 결과를 보기 전에 적는다
 
 아래는 커밋 3(브리핑 블록·`code.flow`)을 돌리기 **전에** 못 박은 것이다. 나중에 유리한
@@ -101,10 +165,9 @@ processor·sink —writes→ hb:{service}   dt-core —declares→ (선언된 �
 
 ## 커밋 계획
 
-1. **추출기 + 질의 + 사전 등록** (이 커밋)
-2. `code sync`에 graphify(`--code-only --no-label`) + 오버레이 + `merge-graphs` 배선,
-   `code status`의 커밋 대조와 귀속 못 한 엣지 수·토폴로지 갱신 권고, `code flow` CLI,
-   `tools/local_case.py`에 그래프 생성
+1. 추출기 + 질의 + 사전 등록 ✅
+2. 사내 config 모양 반영, `code sync`/`code graph`에 graphify + 오버레이 + 병합 배선,
+   `code status`의 커밋 대조·권고, `code flow`, 측정판 갱신 ✅ (이 커밋)
 3. 브리핑 `<데이터 흐름>` 블록(증상·증거의 이름을 씨앗으로 이웃 2단계, 800자), `code.flow`
    action, 위 측정
 

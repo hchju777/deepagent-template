@@ -495,3 +495,15 @@ def test_물어볼_수_없으면_읽을_수_있다고_말하지_않는다(tmp_pa
         return (128, "", "boom") if args[:1] == ("config",) else real(root, *args, **kw)
     monkeypatch.setattr(checkout, "_git", broken)
     assert checkout.unpopulated(repo, "main") == ["vendor/libs"]
+
+
+def test_참조를_실제_SHA로_푼다(tmp_path):
+    """그래프는 SHA에 박혀야 한다 — `main`은 움직인다."""
+    from src.knowledge.checkout import resolve_commit
+
+    root = make_git_repo(tmp_path / "r", origin="https://git.example.com/team/r")
+    repo = RepoConfig(name="r", url="https://git.example.com/team/r", path=str(root))
+    sha = resolve_commit(repo, "main")
+    assert len(sha) == 40 and resolve_commit(repo, sha) == sha
+    assert resolve_commit(repo, "없는-참조") == ""
+

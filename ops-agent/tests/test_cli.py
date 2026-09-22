@@ -517,3 +517,11 @@ def test_case_trace에_brief가_있다():
     args = build_parser().parse_args(["case", "trace", "c-1", "--brief"])
     assert args.brief is True
 
+
+def test_code_flow_파서():
+    from src.__main__ import build_parser
+
+    args = build_parser().parse_args(["code", "flow", "processor", "--to", "sink", "--depth", "2"])
+    assert (args.name, args.to, args.depth) == ("processor", "sink", 2)
+    assert build_parser().parse_args(["code", "graph"]).run.__name__ == "cmd_code_graph"
+

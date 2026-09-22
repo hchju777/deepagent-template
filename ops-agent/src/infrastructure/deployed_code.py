@@ -30,6 +30,8 @@
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
 from src.domain.ports import CodeReaderPort, DeployedCodePort
+from src.knowledge.flow import Hit, Name, names_from_config
+from src.knowledge.graph_build import parse_grep
 from src.knowledge.schema import Deployment, Topology
 from src.knowledge.target_config import merge_target, parse_layer
 
@@ -58,6 +60,39 @@ class DeployedCode(DeployedCodePort):
 
     def describe(self) -> str:
         return f"code({self._gbm}/{self._fct}, 서비스 {len(self._topology.services)}개)"
+
+    # ── 흐름 그래프(11c) 재료 ────────────────────────────────────
+
+    def pinned(self) -> dict[str, str]:
+        """레포 → 이 사이트의 배포 커밋(참조 그대로). 같은 레포는 커밋도 같다."""
+        out: dict[str, str] = {}
+        for name, svc in sorted(self._topology.services.items()):
+            out.setdefault(svc.repo, self._deployment.pin_for(name, fct=self._fct).commit)
+        return out
+
+    async def flow_names(self) -> tuple[list[Name], list[str]]:
+        """모든 서비스의 합친 config에서 뽑은 이름들과, 못 읽은 서비스의 사유."""
+        found: dict[tuple, Name] = {}
+        problems = []
+        for service in sorted(self._topology.services):
+            got = await self.config(service)
+            if got.status == "error" or not isinstance(got.data, dict):
+                problems.append(f"{service}: {got.error or 'config가 객체가 아니다'}")
+                continue
+            for n in names_from_config(got.data, self._topology.flow.sources):
+                found.setdefault((n.kind, n.value, n.key_path), n)
+        return list(found.values()), problems
+
+    async def flow_hits(self, pattern: str) -> list[Hit]:
+        """배포 커밋에서 `git grep -n`. 레포마다 한 번. 실패한 레포는 조용히 빈다 —
+        `code status`가 레포 상태를 따로 말한다."""
+        hits: list[Hit] = []
+        for repo, commit in self.pinned().items():
+            got = await self._reader.grep(repo, commit, [pattern])
+            if got.status == "error" or not isinstance(got.data, str):
+                continue
+            hits.extend(parse_grep(repo, commit, got.data))
+        return hits
 
     # ── 서비스 해석 ──────────────────────────────────────────────
 

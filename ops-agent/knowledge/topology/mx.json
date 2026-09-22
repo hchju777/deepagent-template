@@ -38,11 +38,12 @@
     "config/factories/{fct}/{gbm}.json"
   ],
   "flow": {
-    "name_paths": {
-      "topic": ["kafka.topics"],
-      "group": ["kafka.groups"],
-      "collection": ["mongo.collections"],
-      "rediskey": ["redis.keys"]
-    }
+    "sources": [
+      {"path": "infra.kafka.consumer.topic", "kind": "topic", "relation": "consumes"},
+      {"path": "infra.kafka.producer.topic", "kind": "topic", "relation": "produces"},
+      {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
+      {"path": "mongodb_collection", "kind": "collection"},
+      {"path": "redis_key", "kind": "rediskey"}
+    ]
   }
 }

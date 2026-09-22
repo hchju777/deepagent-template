@@ -32,7 +32,10 @@ def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/
     """
     config = tmp_path / "config"
     (config / "gbm").mkdir(parents=True)
-    (config / "app.json").write_text(json.dumps({"timezone": "Asia/Seoul"}), encoding="utf-8")
+    # 산출물(그래프)은 tmp 아래로 — 기본 `output/`은 cwd 기준이라 리포를 더럽힌다.
+    (config / "app.json").write_text(json.dumps({"timezone": "Asia/Seoul",
+                                                 "output_dir": str(tmp_path / "out")}),
+                                     encoding="utf-8")
     (config / "registry.json").write_text(
         json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")
     (config / "gbm" / "mx.json").write_text(json.dumps({
@@ -453,3 +456,103 @@ def test_지식이_있으면_서비스_이름이_나온다(tmp_path):
                                     knowledge_root=tmp_path / "knowledge",
                                     clock=lambda: None)
     assert code is not None and services == ("processor",)
+
+
+# ── 흐름 그래프 (11c) ──────────────────────────────────────────────
+
+LAYERS = ["config/gbm/{gbm}.json", "config/factories/{fct}/common.json",
+          "config/factories/{fct}/{gbm}.json"]
+
+
+def _flow_repo(root, *, origin):
+    """사내 모양의 config를 든 레포. 서비스 둘(processor·sink)이 `infra`를 공유한다."""
+    _make_repo(root, origin=origin)
+
+    def write(path, value):
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False),
+                          encoding="utf-8")
+
+    write("config/gbm/mx.json", {
+        "infra": {"kafka": {"consumer": {"group_id": "mx-core",
+                                         "topic": {"topic1": "mx.alarm.raw", "topic2": "mx.alarm.main"}},
+                            "producer": {"topic": {"topic1": "mx.alarm.main"}}}},
+        "mongodb_collection": {"alarm": "alarm_events"}})
+    write("config/factories/gumi/common.json", {"lines": ["L1"]})
+    write("processor/handler.py",
+          'def run(cfg, consumer, producer):\n'
+          '    k = cfg["infra"]["kafka"]\n'
+          '    for m in consumer.subscribe(k["consumer"]["topic"]["topic1"], group=k["consumer"]["group_id"]):\n'
+          '        producer.send(k["producer"]["topic"]["topic1"], m)\n')
+    write("sink/writer.py",
+          'def run(cfg, consumer, mongo):\n'
+          '    k = cfg["infra"]["kafka"]\n'
+          '    for m in consumer.subscribe(k["consumer"]["topic"]["topic2"], group=k["consumer"]["group_id"]):\n'
+          '        mongo[cfg["mongodb_collection"]["alarm"]].insert_one(m)\n')
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "flow", cwd=root)
+
+
+def _flow_tree(tmp_path):
+    url = "https://git.example.com/team/dt-core"
+    _flow_repo(tmp_path / "checkout", origin=url)
+    return _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url,
+                 services={"processor": {"repo": REPO, "role": "가공한다"},
+                           "sink": {"repo": REPO, "role": "저장한다"}},
+                 config_paths=LAYERS)
+
+
+def test_code_graph가_배포_커밋에_그래프를_박는다(tmp_path, monkeypatch, capsys):
+    """**배선을 부른다.** graphify가 없는 환경이 기본이다 — 오버레이만으로도 만들어져야 한다."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    assert "graphify 없음" in captured.out and "skipped" in captured.out
+    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    assert (bundle / "graph.json").exists() and (bundle / "meta.json").exists()
+    meta = json.loads((bundle / "meta.json").read_text(encoding="utf-8"))
+    assert len(meta["commits"][REPO]) == 40, "참조가 아니라 SHA에 박혀야 한다"
+    assert "서비스를 못 가른 엣지" in captured.out          # 공유 레포의 config 선언
+    assert not (tmp_path / "checkout" / "graphify-out").exists(), "체크아웃을 더럽혔다"
+
+
+def test_code_flow가_흐름_경로를_보여준다(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys,
+                          "code", "flow", "processor", "--to", "sink")
+    assert code == 0, captured.out + captured.err
+    assert "processor —produces→ mx.alarm.main ←consumes— sink" in captured.out
+    assert "processor/handler.py:L4" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "alarm_events")
+    assert code == 0 and "sink —writes→ alarm_events" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow")
+    assert code == 0 and "mx.alarm.main" in captured.out       # 허브 목록
+
+
+def test_code_status가_낡은_그래프를_말한다(tmp_path, monkeypatch, capsys):
+    """그래프는 SHA에 박힌다. 배포 커밋이 앞으로 가면 **낡았다**고 말해야 한다 —
+    조용히 옛 그래프를 쓰는 것이 참고한 글의 첫 번째 함정이었다."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0 and "✅ 만든 시각" in captured.out
+    checkout = tmp_path / "checkout"
+    (checkout / "note.txt").write_text("새 커밋", encoding="utf-8")
+    git("add", "-A", cwd=checkout)
+    git("commit", "-qm", "advance", cwd=checkout)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert "⚠ 낡음" in captured.out and "code sync" in captured.out
+
+
+def test_그래프가_없으면_status가_만드는_법을_말한다(tmp_path, monkeypatch, capsys):
+    config_root = _flow_tree(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0 and "code graph" in captured.out
+    with pytest.raises(SystemExit, match="code graph"):
+        _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "x")
+

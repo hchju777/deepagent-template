@@ -132,6 +132,13 @@ def status_of(repo: RepoConfig) -> RepoStatus:
     return state
 
 
+def resolve_commit(repo: RepoConfig, ref: str) -> str:
+    """`main` 같은 참조를 **실제 SHA**로. 그래프는 SHA에 박혀야 한다 — 참조는 움직인다.
+    못 풀면 빈 문자열."""
+    code, out, _ = _git(Path(repo.path), "rev-parse", "--verify", f"{ref}^{{commit}}")
+    return out.strip() if code == 0 else ""
+
+
 def has_commit(repo: RepoConfig, commit: str) -> bool:
     """그 커밋이 로컬에 실재하는가(⑤-4). 없으면 `code sync`가 필요하다."""
     code, _, _ = _git(Path(repo.path), "cat-file", "-e", f"{commit}^{{commit}}")

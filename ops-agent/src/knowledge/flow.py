@@ -46,7 +46,8 @@ _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 class Name:
     kind: str
     value: str          # config의 값 그대로 (`alarm:stats:{line}`)
-    key_path: str       # `kafka.topics.alarm_main`
+    key_path: str       # `infra.kafka.consumer.topic.topic1`
+    relation: str | None = None     # 출처가 방향을 말하면(`consumes`·`produces`…)
 
     @property
     def literal(self) -> str:
@@ -58,11 +59,17 @@ class Name:
         return self.key_path.rsplit(".", 1)[-1]
 
     @property
-    def parent_token(self) -> str:
-        """키 토큰 매치는 **부모 키도 같은 줄에** 있어야 한다. `groups["processor"]`는
-        맞고 `format(service="processor")`는 아니다 — 짧은 토큰은 어디에나 있다."""
+    def required_tokens(self) -> tuple[str, ...]:
+        """키 토큰 매치에 **같은 줄에 같이 있어야 하는** 조상 키 — 마지막 둘.
+
+        `groups["processor"]`는 맞고 `format(service="processor")`는 아니다. 그리고 사내
+        config는 소비·생산 토픽이 둘 다 `topic1`이라 `["consumer"]["topic"]["topic1"]`과
+        `["producer"]["topic"]["topic1"]`을 부모 하나(`topic`)로는 못 가른다 — 조부모까지 본다.
+        전부를 요구하지 않는 이유: `kafka = cfg["infra"]["kafka"]`처럼 앞에서 묶어 두면
+        먼 조상은 그 줄에 없다.
+        """
         parts = self.key_path.split(".")
-        return parts[-2] if len(parts) >= 2 else ""
+        return tuple(parts[-3:-1])
 
     @property
     def patterns(self) -> tuple[str, ...]:
@@ -86,23 +93,22 @@ class Hit:
     context: str = ""
 
 
-def names_from_config(merged: dict, name_paths: dict[str, list[str]]) -> list[Name]:
+def names_from_config(merged: dict, sources) -> list[Name]:
     """합친 config에서 자원 이름을 뽑는다. 없는 경로는 조용히 건너뛴다 — 층마다
     있는 키가 다르고, 하나도 못 뽑으면 호출부가 "이름 0개"로 말한다."""
     found: list[Name] = []
-    for kind, paths in sorted(name_paths.items()):
-        for path in paths:
-            node = merged
-            for key in path.split("."):
-                node = node.get(key) if isinstance(node, dict) else None
-                if node is None:
-                    break
-            if isinstance(node, dict):
-                for key, value in sorted(node.items()):
-                    if isinstance(value, str) and value:
-                        found.append(Name(kind, value, f"{path}.{key}"))
-            elif isinstance(node, str) and node:
-                found.append(Name(kind, node, path))
+    for src in sources:
+        node = merged
+        for key in src.path.split("."):
+            node = node.get(key) if isinstance(node, dict) else None
+            if node is None:
+                break
+        if isinstance(node, dict):
+            for key, value in sorted(node.items()):
+                if isinstance(value, str) and value:
+                    found.append(Name(src.kind, value, f"{src.path}.{key}", src.relation))
+        elif isinstance(node, str) and node:
+            found.append(Name(src.kind, node, src.path, src.relation))
     return found
 
 
@@ -129,6 +135,13 @@ def direction(text: str) -> str | None:
     if reads and writes:
         return "ambiguous"
     return "reads" if reads else "writes" if writes else None
+
+
+def config_owner(repo: str, topology: Topology) -> str | None:
+    """config 층은 **레포당 하나**다(사내 확인). 서비스가 하나면 그 서비스의 것이고,
+    둘 이상이 공유하면 누구 것이라고 못 한다 — None이면 레포 노드에 붙는다."""
+    mine = [n for n, svc in topology.services.items() if svc.repo == repo]
+    return mine[0] if len(mine) == 1 else None
 
 
 def owner(file: str, repo: str, topology: Topology) -> tuple[str | None, str]:
@@ -191,8 +204,8 @@ def extract(*, names: Iterable[Name], topology: Topology,
         for pattern in name.patterns:
             confidence = "EXTRACTED" if pattern == name.literal else "INFERRED"
             for hit in sorted(hits_for(pattern), key=lambda h: (h.repo, h.file, h.line)):
-                if (confidence == "INFERRED" and name.parent_token
-                        and name.parent_token not in hit.text):
+                if confidence == "INFERRED" and any(
+                        tok not in hit.text for tok in name.required_tokens):
                     continue
                 put_node(target, name.value, name.kind, hit.file, hit.line,
                          key_path=name.key_path)
@@ -200,8 +213,16 @@ def extract(*, names: Iterable[Name], topology: Topology,
                         "source_file": hit.file, "source_location": f"L{hit.line}",
                         "repo": hit.repo, "commit": hit.commit, "text": _clip(hit.text)}
                 if _is_config(hit.file):
-                    links.append({**base, "source": f"repo_{_slug(hit.repo)}",
-                                  "relation": "declares"})
+                    if confidence != "EXTRACTED":
+                        continue            # config 안의 키 토큰 매치는 선언 그 자체다
+                    who = config_owner(hit.repo, topology)
+                    # 출처가 방향을 말하면(`consumer.topic` 등) 선언이 곧 관계다. 공유
+                    # 레포면 레포 노드에 붙는다 — "이 레포의 누군가가 소비한다"까지가 사실이다.
+                    links.append({**base,
+                                  "source": (f"service_{_slug(who)}" if who
+                                             else f"repo_{_slug(hit.repo)}"),
+                                  "relation": name.relation or "declares",
+                                  "attributed": "service" if who else "repo"})
                     continue
                 who, sure = owner(hit.file, hit.repo, topology)
                 verb = direction(hit.text) or direction(hit.context)
@@ -214,6 +235,7 @@ def extract(*, names: Iterable[Name], topology: Topology,
                               "source": (f"service_{_slug(who)}" if who
                                          else f"repo_{_slug(hit.repo)}"),
                               "relation": relation,
+                              "attributed": "service" if who else "repo",
                               "confidence": _weakest(
                                   confidence, sure,
                                   "EXTRACTED" if verb in ("reads", "writes") else "AMBIGUOUS")})
@@ -332,3 +354,38 @@ def render_path(graph: dict, edges: list[dict]) -> str:
             out.append(f"←{e['relation']}— {label_of(graph, e['source'])}")
             cur = e["source"]
     return " ".join(out)
+
+
+def summary(graph: dict) -> dict:
+    """`code status`가 찍을 숫자들."""
+    links = graph["links"]
+    kinds = {}
+    for n in graph["nodes"]:
+        kinds[n.get("type", "?")] = kinds.get(n.get("type", "?"), 0) + 1
+    return {"nodes": len(graph["nodes"]), "links": len(links), "kinds": kinds,
+            "repo_level": sum(1 for e in links if e.get("attributed") == "repo"),
+            "ambiguous": sum(1 for e in links if e.get("confidence") == "AMBIGUOUS")}
+
+
+def advise(graph: dict, topology: Topology) -> list[str]:
+    """토폴로지·config를 고칠 사람에게 주는 권고. **막지 않는다** — 적기만 한다."""
+    out = []
+    resources = [n for n in graph["nodes"] if n.get("type") in ("topic", "group", "collection", "rediskey")]
+    if not resources:
+        out.append("이름을 하나도 못 뽑았다 — knowledge/topology의 flow.sources가 config 모양과 안 맞는다")
+        return out
+    used = {e["target"] for e in graph["links"] if e["relation"] != "declares"}
+    idle = sorted(n["label"] for n in resources if n["id"] not in used)
+    if idle:
+        out.append(f"config에 선언됐지만 코드 어디서도 안 쓰는 이름 {len(idle)}개 — {', '.join(idle[:5])}"
+                   + (" …" if len(idle) > 5 else ""))
+    shared = sum(1 for e in graph["links"] if e.get("attributed") == "repo")
+    if shared:
+        repos = sorted({e["repo"] for e in graph["links"] if e.get("attributed") == "repo"})
+        out.append(f"서비스를 못 가른 엣지 {shared}개 (공유 레포 {', '.join(repos)}) — "
+                   f"토폴로지의 서비스 path를 채우면 코드 쪽은 갈린다")
+    for name, svc in sorted(topology.services.items()):
+        sid = f"service_{_slug(name)}"
+        if not any(e["source"] == sid for e in graph["links"]):
+            out.append(f"{name}: 코드에서 자원을 하나도 안 만진다 — 레포·역할 선언을 의심하라")
+    return out

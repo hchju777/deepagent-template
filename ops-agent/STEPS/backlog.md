@@ -111,6 +111,12 @@ interrupt까지 직접 만들어야 한다 — 파일 하나로 안 끝난다. *
 
 ## ⑦ graphify를 사내에 들일 수 있는지 모른다
 
+> **2026-09 갱신.** 11c가 graphify를 **엔진**으로 쓰기로 했다(`STEPS/step-11c-flow.md`).
+> 여기(리눅스)에서 `pip install graphifyy`(0.9.65)가 되고 `--code-only`·`--no-label`로
+> LLM 호출 없이 도는 것을 테스트가 확인했다. 남은 것은 사내 Windows에서의 설치(아래 1)뿐이고,
+> 안 되면 오버레이만으로 조사는 돈다. 아래 2는 **답이 났다**: graphify 노드에는
+> `source_file`·`source_location`이 있고 커밋은 우리 `meta.json`이 든다.
+
 `code_tracer`가 "어디를 읽을지" 찾는 단계를 개선한다(11c, [decisions ⑦](decisions.md)).
 
 **확인해야 할 것**:

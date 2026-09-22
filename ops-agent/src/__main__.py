@@ -1127,6 +1127,8 @@ def cmd_code_status(args, env) -> int:
                     print(f"       (먼저 위의 submodule부터 — 그 안의 층은 지금 안 읽힌다)")
                 else:
                     print(f"       → knowledge/topology/{gbm}.json의 config_paths를 고쳐라")
+    if not bad:
+        _graph_status(args, env, site=site, gbm=gbm, fct=site_fct)
     return 1 if bad else 0
 
 
@@ -1147,7 +1149,7 @@ def cmd_code_sync(args, env) -> int:
     """**여기서만 네트워크를 탄다.** 사내 밖에서는 실패하고, `code plan`을 안내한다."""
     from src.knowledge.checkout import status_of, sync
 
-    site, gbm, _, _ = _code_site(args, env)
+    site, gbm, fct, _ = _code_site(args, env)
     repos = list(site.code.repos)
     failed = 0
     for repo in repos:
@@ -1159,7 +1161,182 @@ def cmd_code_sync(args, env) -> int:
     if failed:
         print("\n  붙을 수 없으면 `python -m src code plan`이 직접 칠 명령을 알려 준다",
               file=sys.stderr)
-    return 1 if failed else 0
+        return 1
+    # 커밋이 새로 왔으니 그래프도 그 커밋으로. sync와 graph는 같은 조립을 쓴다.
+    return _build_graph(args, env, site=site, gbm=gbm, fct=fct)
+
+
+def _graph_dir(args, env, gbm: str, fct: str) -> Path:
+    from src.knowledge.graph_build import bundle_dir
+    return bundle_dir(Path(load_app_config(args.config_root, env=env).output_dir), gbm, fct)
+
+
+def _resolved_commits(site, code) -> tuple[dict[str, str], list[str]]:
+    """레포 → 배포 커밋의 **실제 SHA**. `main`은 움직이므로 그래프는 SHA에 박는다."""
+    from src.knowledge.checkout import resolve_commit
+
+    declared = {r.name: r for r in site.code.repos}
+    out, problems = {}, []
+    for repo, ref in code.pinned().items():
+        sha = resolve_commit(declared[repo], ref) if repo in declared else ""
+        if sha:
+            out[repo] = sha
+        else:
+            problems.append(f"{repo}: {ref}를 SHA로 못 풀었다 — 체크아웃이 없거나 그 커밋이 없다")
+    return out, problems
+
+
+def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
+    """흐름 오버레이(+ graphify 심볼 그래프)를 배포 커밋에 박는다. **네트워크 없음.**
+
+    `code sync` 끝과 `code graph`가 같은 길을 쓴다. 규율 8과 같은 이유 — 조립을 두 벌
+    두면 한쪽이 빠진다.
+    """
+    from src.knowledge import flow
+    from src.knowledge import graph_build as gb
+    from src.knowledge.loader import load_topology
+
+    clock = _clock(args, env)
+    root = _knowledge_root(args)
+    try:
+        code = _build_code(site, gbm, fct, knowledge_root=root, clock=clock)
+        topology = load_topology(root, gbm)
+    except (ConfigError, FileNotFoundError) as exc:
+        print(f"  그래프: 지식 층을 읽을 수 없다 — {exc}", file=sys.stderr)
+        return 1
+
+    async def gather():
+        names, problems = await code.flow_names()
+        table: dict[str, list] = {}
+        for name in names:
+            for pattern in name.patterns:
+                if pattern not in table:
+                    table[pattern] = await code.flow_hits(pattern)
+        return names, problems, table
+
+    names, problems, table = asyncio.run(gather())
+    commits, more = _resolved_commits(site, code)
+    problems += more
+    overlay = flow.extract(names=names, topology=topology,
+                           hits_for=lambda p: table.get(p, []), commits=commits)
+
+    out_dir = _graph_dir(args, env, gbm, fct)
+    binary = gb.find_graphify()
+    symbol_graphs, states = [], []
+    for repo in site.code.repos:
+        sha = commits.get(repo.name)
+        if not sha:
+            states.append(f"{repo.name} 건너뜀(커밋 없음)")
+            continue
+        status, detail, graph = gb.run_graphify_at(Path(repo.path), sha, binary,
+                                                   out_dir / "worktrees" / repo.name)
+        states.append(f"{repo.name} {status}" + ("" if status == "ok" else f" — {detail}"))
+        if graph:
+            symbol_graphs.append(graph)
+    merged = gb.merge_graphs(overlay, symbol_graphs)
+    meta = gb.GraphMeta(gbm=gbm, fct=fct, commits=commits, built_at=gb.now_text(clock),
+                        graphify=gb.graphify_version(binary), notes=problems + states)
+    gb.write_bundle(out_dir, overlay=overlay, merged=merged, meta=meta)
+
+    summary = flow.summary(overlay)
+    kinds = ", ".join(f"{k} {v}" for k, v in sorted(summary["kinds"].items()))
+    print(f"\n  그래프 {gbm}/{fct} → {out_dir}")
+    print(f"       graphify {meta.graphify} · " + " · ".join(states))
+    print(f"       오버레이 노드 {summary['nodes']} · 엣지 {summary['links']} ({kinds})"
+          f" · 합친 그래프 노드 {len(merged['nodes'])} · 엣지 {len(merged['links'])}")
+    for line in problems:
+        print(f"       ⚠ {line}")
+    advice = flow.advise(overlay, topology)
+    if advice:
+        print("       권고:")
+        for line in advice:
+            print(f"         - {line}")
+    return 1 if (not names or not commits) else 0
+
+
+def cmd_code_graph(args, env) -> int:
+    """지금 체크아웃으로 그래프를 다시 만든다 — sync 없이. **네트워크 없음.**"""
+    site, gbm, fct, _ = _code_site(args, env)
+    if not site.code.repos:
+        print(f"  {gbm}: config에 target 코드 레포가 없다 — code.repos를 적어라")
+        return 1
+    return _build_graph(args, env, site=site, gbm=gbm, fct=fct)
+
+
+def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
+    """`code status`의 그래프 절. 없거나 낡았으면 **말한다** — 막지는 않는다.
+    브리핑은 낡은 그래프를 싣지 않으므로(커밋 3) 조사는 그래프 없이 돈다."""
+    from src.knowledge import flow
+    from src.knowledge import graph_build as gb
+
+    out_dir = _graph_dir(args, env, gbm, fct)
+    print(f"\n  그래프 {out_dir}")
+    got = gb.read_bundle(out_dir)
+    if got is None:
+        print("       ⚠ 없음 — `python -m src code graph`(네트워크 없음) 또는 `code sync`가 만든다")
+        return 0
+    graph, meta = got
+    try:
+        code = _build_code(site, gbm, fct, knowledge_root=_knowledge_root(args),
+                           clock=_clock(args, env))
+        commits, problems = _resolved_commits(site, code)
+    except (ConfigError, FileNotFoundError) as exc:
+        commits, problems = {}, [str(exc)]
+    stale = gb.check_bundle(meta, commits)
+    summary = flow.summary(json.loads((out_dir / "overlay.json").read_text(encoding="utf-8")))
+    print(f"       {'⚠ 낡음' if stale else '✅'} 만든 시각 {meta.built_at} · graphify {meta.graphify}"
+          f" · 노드 {len(graph['nodes'])} · 엣지 {len(graph['links'])}"
+          f" · 서비스를 못 가른 엣지 {summary['repo_level']}")
+    for line in stale + problems:
+        print(f"       ⚠ {line}")
+    return 0
+
+
+def cmd_code_flow(args, env) -> int:
+    """사람이 그래프를 본다. 이름 하나면 이웃, `--to`가 있으면 흐름 경로, 없으면 허브."""
+    from src.knowledge import flow
+    from src.knowledge import graph_build as gb
+
+    _, gbm, fct, _ = _code_site(args, env)
+    got = gb.read_bundle(_graph_dir(args, env, gbm, fct))
+    if got is None:
+        raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
+    graph, meta = got
+
+    def line(e) -> str:
+        return (f"  {flow.label_of(graph, e['source'])} —{e['relation']}→ "
+                f"{flow.label_of(graph, e['target'])}   [{e.get('confidence', '?')}] "
+                f"{e.get('source_file', '?')}:{e.get('source_location', '?')}")
+
+    if args.to:
+        path = flow.shortest_path(graph, args.name or "", args.to)
+        if not path:
+            print(f"  {args.name} → {args.to}: 데이터가 흐르는 경로가 없다"
+                  + ("" if flow.shortest_path(graph, args.name or "", args.to, undirected=True) is None
+                     else " (방향을 무시하면 관계는 있다)"))
+            return 1
+        print("  " + flow.render_path(graph, path))
+        for e in path:
+            print(line(e))
+        return 0
+    if args.name:
+        near = flow.neighbors(graph, args.name, depth=args.depth)
+        if not near:
+            print(f"  {args.name}: 그래프에 없다")
+            return 1
+        for e in near:
+            print(line(e))
+        return 0
+    # 허브 — 연결이 많은 자원부터. god node의 우리 판이다.
+    degree: dict[str, int] = {}
+    for e in graph["links"]:
+        for end in (e["source"], e["target"]):
+            degree[end] = degree.get(end, 0) + 1
+    resources = [n for n in graph["nodes"] if n.get("type") in ("topic", "group", "collection", "rediskey")]
+    print(f"  {gbm}/{fct} · 커밋 " + ", ".join(f"{r}@{c[:12]}" for r, c in sorted(meta.commits.items())))
+    for n in sorted(resources, key=lambda n: -degree.get(n["id"], 0))[:15]:
+        print(f"  {degree.get(n['id'], 0):3d}  {n.get('type', '?'):10} {n['label']}")
+    return 0
 
 
 def cmd_code_read(args, env) -> int:
@@ -1832,6 +2009,18 @@ def build_parser() -> argparse.ArgumentParser:
     config.add_argument("--service", required=True, help="토폴로지의 서비스 이름")
     _add_site_options(config, sub=True)
     config.set_defaults(run=cmd_code_config)
+
+    graph = code_sub.add_parser(
+        "graph", help="흐름 그래프(+graphify)를 배포 커밋에 박는다 — 네트워크 없음")
+    _add_site_options(graph, sub=True)
+    graph.set_defaults(run=cmd_code_graph)
+
+    flow_cmd = code_sub.add_parser("flow", help="그래프를 본다 — 이름 하나면 이웃, --to면 흐름 경로")
+    flow_cmd.add_argument("name", nargs="?", help="자원이나 서비스 이름")
+    flow_cmd.add_argument("--to", help="이 이름까지 데이터가 흐르는 경로")
+    flow_cmd.add_argument("--depth", type=int, default=1, help="이웃 몇 단계 (기본 1)")
+    _add_site_options(flow_cmd, sub=True)
+    flow_cmd.set_defaults(run=cmd_code_flow)
 
     read = code_sub.add_parser("read", help="배포된 커밋의 파일 하나를 실제로 읽는다")
     read.add_argument("--service", required=True, help="토폴로지의 서비스 이름")
