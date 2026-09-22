@@ -22,3 +22,12 @@ def test_개별_상한이_총_예산을_놀리지_않는다():
         f"({cfg.evidence_total_chars}자)에 못 미친다 — 총 예산이 논다")
     assert cfg.evidence_chars <= cfg.evidence_total_chars, (
         "증거 하나가 전체 예산을 먹는다")
+
+
+def test_라운드_상한_기본값은_6이다():
+    """사내 모델은 라운드당 읽기 둘이라 4라운드면 여덟 번이고, 네 실행 모두 상한에서 끝났다.
+    기본값을 바꾸면 이 테스트도 같이 바꾼다 — 조용히 바뀌지 않게."""
+    from src.config.schema_app import InvestigationConfig
+
+    assert InvestigationConfig().max_rounds == 6
+

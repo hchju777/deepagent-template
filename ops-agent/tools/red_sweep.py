@@ -483,6 +483,15 @@ CASES = [
   '        elif not verdict.startswith("**못 읽었다**"):',
   '        else:',
   ["tests/application/test_trace_digest.py::test_못_읽은_시도의_질의는_이미_한_질의가_아니다"]),
+ # ── 11a를 닫으며 ─────────────────────────────────────────────────
+ ("예시 회전에 컨슈머 lag가 없다", B,
+  '               ("kafka.group_offsets", {"group": "위 증거에서 본 컨슈머 그룹 이름"}),\n',
+  '',
+  [f"{K4}::test_예시_회전에_컨슈머_lag_읽기가_있다"]),
+ ("라운드 상한 기본값이 돌아간다", ROOT / "src/config/schema_app.py",
+  '    max_rounds: int = Field(default=6, ge=1)',
+  '    max_rounds: int = Field(default=4, ge=1)',
+  ["tests/config/test_schema_app.py::test_라운드_상한_기본값은_6이다"]),
  ("대기 태스크의 갱신을 반복으로 찍는다", TD,
   '        if task_id in waiting:\n            marks.append("대기 중이던 태스크의 갱신")\n        elif spoken in visible:',
   '        if spoken in visible:',
@@ -514,7 +523,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 113, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 115, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

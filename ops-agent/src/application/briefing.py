@@ -208,6 +208,9 @@ _NAMED_READ = (("mongo.find", {"collection": "위 증거에서 본 컬렉션 이
                                "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},
                                "limit": 3}),
                ("kafka.tail", {"topic": "위 증거에서 본 토픽 이름", "limit": 5}),
+               # 컨슈머 lag는 파이프라인 점검의 표준 읽기인데, 예시에 없으니 베끼는 모델은
+               # 한 번도 안 냈다(사내 네 실행 전부). 그룹 이름은 대상 config에 있다.
+               ("kafka.group_offsets", {"group": "위 증거에서 본 컨슈머 그룹 이름"}),
                ("redis.get", {"key": "위 증거에서 본 키 이름"}))
 
 _GOAL = "무엇을 확인하는가 (한국어)"

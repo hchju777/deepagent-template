@@ -108,6 +108,8 @@ N회째)`(JSON을 못 읽어 다시 물음) 또는 `(거부 뒤 다시 물음)`(
 
 ### 사람이 해야 할 일
 
+0. **사내 `config/app.json`의 `investigation.max_rounds`를 6으로.** 리포 기본값이 6으로
+   올라갔다. 사내 사본이 4로 남아 있으면 그대로 4로 돈다.
 0. **사내 `knowledge/topology/<gbm>.json`의 서비스마다 `role` 한 줄.** 리드가 "누구를 봐야
    하나"를 고르는 유일한 단서이고, 이제 목록에 이름 옆에 붙어 나간다. 비어 있으면 이름만 나간다.
 1. 사내 `config/scenarios/daily-alarm.json`에서 **`"per_gbm": true` 줄을 지워야 한다.**

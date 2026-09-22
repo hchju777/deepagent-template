@@ -740,3 +740,16 @@ def test_예시에_role이_없다():
         example = json.loads(briefing.example_block(site(), phase=phase, services=("api",)))
         assert all("role" not in t for t in example["tasks"]), phase
 
+
+def test_예시_회전에_컨슈머_lag_읽기가_있다():
+    """베끼는 모델은 예시에 없는 것을 안 낸다. 사내 네 실행 모두 `kafka.group_offsets`를
+    한 번도 안 냈다 — 파이프라인 점검의 표준 읽기가 예시 어휘에 없었다."""
+    used = ("code.grep", "mongo.find", "kafka.tail")
+    example = json.loads(briefing.example_block(site(), phase="integrate",
+                                                services=("api",), used=used))
+    lag = [t for t in example["tasks"] if t["action"] == "kafka.group_offsets"]
+    assert lag and "group" in lag[0]["params"]
+    assert "kafka.group_offsets" not in json.loads(
+        briefing.example_block(site(kafka=None), phase="integrate", services=("api",),
+                               used=used)), "Kafka가 없는 사이트에 나갔다"
+

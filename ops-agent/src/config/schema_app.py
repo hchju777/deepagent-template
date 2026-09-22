@@ -23,7 +23,10 @@ class InvestigationConfig(StrictModel):
 
     # 라운드 상한. 닿으면 "계속하자"는 결정을 무시하고 끝낸다 — 억지 결론 대신
     # "미확정"을 허용하는 것이 12a의 설계이고, 그 상한이 여기다.
-    max_rounds: int = Field(default=4, ge=1)
+    # 6인 이유: 사내 모델은 라운드당 읽기 둘이라 4라운드면 여덟 번이고, 네 실행 모두
+    # `conclude` 없이 상한에서 끝났다. haiku급도 결론까지 4라운드를 다 썼다. 12a의
+    # conclude 게이트가 생기면 근거가 서는 순간 더 일찍 끝난다 — 상한은 천장이지 목표가 아니다.
+    max_rounds: int = Field(default=6, ge=1)
     # 한 라운드에 동시에 돌릴 태스크 수. 대상 시스템에 가는 부하의 상한이기도 하다.
     parallel_width: int = Field(default=3, ge=1)
     # 케이스 하나가 가질 수 있는 태스크 총수. 이게 없으면 라운드마다 태스크를
