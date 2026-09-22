@@ -413,3 +413,31 @@ async def test_되물은_답이_첫_답의_것을_빼도_남는다(case):
                                                plan_tasks=[task("t-1", status="ok")]))
     assert [t.id for t in patch["plan_tasks"]] == ["t-9", "t-10"]
 
+
+async def test_되물을_때_첫_답에서_받은_것이_대기_태스크로_실린다(case):
+    """**사내 세 번째 트레이스에서 잡힌 것이다.** 첫 답의 받은 것을 안 실으면 예시의 다음
+    번호가 그대로라 리드가 같은 id로 **다른** 읽기를 내고, 합칠 때 그 id가 첫 답의 받은
+    읽기를 덮는다 — 좁힌 `mongo.find`가 그렇게 `redis.scan`으로 바뀌어 사라졌다."""
+    from src.application.briefing import next_task_number
+
+    seen = []
+
+    async def lead(state):
+        seen.append(state)
+        if len(seen) == 1:
+            return {"decision": "continue",
+                    "plan_tasks": [task("t-1", params={"key": "k-t-1"}),      # 끝난 id → 거부
+                                   _fresh_read("t-8")]}                       # 받는다
+        return {"decision": "continue",
+                "plan_tasks": [task(f"t-{next_task_number(state)}",
+                                    action="kafka.list_topics", params={})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    again = seen[1]
+    assert [(t.id, t.status) for t in again.plan_tasks] == [("t-1", "ok"), ("t-8", "pending")]
+    assert next_task_number(again) == 9
+    assert [(t.id, t.action) for t in patch["plan_tasks"]] == [
+        ("t-8", "mongo.list_collections"), ("t-9", "kafka.list_topics")]
+

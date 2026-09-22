@@ -510,3 +510,10 @@ def test_트레이스_폴더는_실행마다_비운다(tmp_path):
     assert not (folder / "06-r4-integrate.md").exists()
     assert [path.name for path in written] == ["01-r0-frame.md"]
 
+
+def test_case_trace에_brief가_있다():
+    from src.__main__ import build_parser
+
+    args = build_parser().parse_args(["case", "trace", "c-1", "--brief"])
+    assert args.brief is True
+

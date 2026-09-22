@@ -22,6 +22,7 @@ LLM이 죽거나 JSON이 안 나오면 태스크가 0개가 되고, 그러면 `n
 같은 실패를 반복하며 라운드 시간만 늘린다 — 조사는 라운드마다 LLM을 부르므로
 재시도가 길면 전체가 늘어진다.
 """
+import asyncio
 import re
 from typing import Literal
 
@@ -35,6 +36,9 @@ from src.domain.case import Hypothesis, PlanTask
 from src.domain.llm import LlmPort
 
 RETRIES = 1
+# 전송 오류(게이트웨이 403·타임아웃 등) 뒤에 쉬는 시간. 사내 세 번째 트레이스에서 되물음이
+# 앞 호출 직후에 나가자 게이트웨이가 403을 냈다 — 연달아 두 번 부른 것이 원인으로 보인다.
+RETRY_BACKOFF_S = 2.0
 
 
 def fill(template: str, fields: dict[str, str]) -> str:
@@ -107,8 +111,16 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     """
     last = Parsed(False, error="시도하지 않았다")
     asked = prompt
+    transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
     for attempt in range(RETRIES + 1):
-        if attempt:
+        if attempt and transport:
+            # 호출이 실패한 것은 모델이 틀린 것이 아니다. "앞의 답을 읽을 수 없었다:
+            # OpenAIPermissionDeniedError…"를 붙여 다시 물으면 모델에게 오류 문자열을
+            # 고치라고 시키는 꼴이다 — 사내에서 실제로 그렇게 나갔다. 같은 프롬프트로,
+            # 잠깐 쉬고 다시 부른다.
+            await asyncio.sleep(RETRY_BACKOFF_S)
+            asked = prompt
+        elif attempt:
             # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
             asked = repair_prompt(prompt, last.error or "알 수 없음")
         text, failure = None, None
@@ -117,7 +129,9 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         except Exception as exc:                                    # noqa: BLE001
             # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
             last = Parsed(False, error=f"{type(exc).__name__}: {exc}")
+            transport = True
         else:
+            transport = reply.status == "error"
             if reply.status == "error":
                 last = Parsed(False, error=reply.error or "알 수 없는 LLM 오류")
             else:

@@ -198,3 +198,15 @@ def test_대기_중이던_태스크를_같은_id로_다시_내면_갱신이라�
     text = "\n".join(digest([first, later]))
     assert "대기 중이던 태스크의 갱신" in text and "이미 r0에서 한 질의" not in text
 
+
+def test_brief는_옮길_줄만_남긴다():
+    """손으로 옮기는 사람에게 제일 긴 두 줄은 코드가 다시 만들 수 있는 것이다."""
+    prompt = _prompt(evidence="- t-1.e1 | mongo.find c | 1건",
+                     example={"tasks": [_task("t-9", "redis.get", {"key": "지시문"})]})
+    reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "x"})]})
+    full = "\n".join(digest(_file(prompt, reply)))
+    brief = "\n".join(digest(_file(prompt, reply), brief=True))
+    assert "예시가 보여준 것" in full and "이미 물은 것" in full
+    assert "예시가 보여준 것" not in brief and "이미 물은 것" not in brief
+    assert "리드가 낸 것" in brief and "예시와 같은 action" in brief
+

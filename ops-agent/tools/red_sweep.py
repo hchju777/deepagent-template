@@ -454,13 +454,18 @@ CASES = [
   '        held = None',
   ["tests/application/test_nodes.py::test_대기_중인_질의를_새_id로_내면_그_태스크의_갱신이다"]),
  ("되물은 답이 첫 답의 받은 것을 버린다", ND,
-  '                fresh = _merge_tasks(fresh, more)',
+  '                fresh = merge_by_id(fresh, more)',
   '                fresh = more',
   ["tests/application/test_nodes.py::test_되물은_답이_첫_답의_것을_빼도_남는다"]),
- ("합칠 때 같은 질의를 둘 다 남긴다", ND,
-  '        if query in seen_queries:\n            continue',
-  '        if False:\n            continue',
-  ["tests/application/test_nodes.py::test_되물은_답은_첫_답에서_받은_것을_버리지_않는다"]), ("대기 태스크의 갱신을 반복으로 찍는다", TD,
+ ("전송 오류에도 수리 프롬프트를 보낸다", ROOT / "src/application/lead.py",
+  '        if attempt and transport:',
+  '        if False:',
+  ["tests/application/test_lead.py::test_전송_오류는_같은_프롬프트로_다시_묻는다"]),
+ ("brief가 아무것도 안 뺀다", TD,
+  '    if not brief:',
+  '    if True:',
+  ["tests/application/test_trace_digest.py::test_brief는_옮길_줄만_남긴다"]),
+ ("대기 태스크의 갱신을 반복으로 찍는다", TD,
   '        if task_id in waiting:\n            marks.append("대기 중이던 태스크의 갱신")\n        elif spoken in visible:',
   '        if spoken in visible:',
   ["tests/application/test_trace_digest.py::test_대기_중이던_태스크를_같은_id로_다시_내면_갱신이라고_적는다"]),
@@ -491,7 +496,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 108, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 109, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

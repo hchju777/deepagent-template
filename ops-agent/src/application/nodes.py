@@ -261,20 +261,6 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     return kept, reused, guessed
 
 
-def _merge_tasks(first: list[PlanTask], second: list[PlanTask]) -> list[PlanTask]:
-    """되물음 앞뒤의 받은 태스크를 합친다 — 같은 id는 뒤가 이기고, 같은 질의는 하나만."""
-    merged = merge_by_id(first, second)
-    seen_queries: set[str] = set()
-    out = []
-    for task in merged:
-        query = _query(task) if task.action else task.id
-        if query in seen_queries:
-            continue
-        seen_queries.add(query)
-        out.append(task)
-    return out
-
-
 def make_nodes(deps: EngineDeps) -> dict:
     async def frame(state: CaseState) -> dict:
         patch = await deps.frame(state)
@@ -321,18 +307,18 @@ def make_nodes(deps: EngineDeps) -> dict:
         return {"plan_tasks": [done], "evidence": list(outcome.evidence)}
 
     async def integrate(state: CaseState) -> dict:
-        def accept(reply: dict):
-            """`(받은 태스크, 받은 가설, 거부 기록, 찍은 이름 기록)`."""
+        def accept(reply: dict, base: CaseState):
+            """`(받은 태스크, 받은 가설, 거부 기록, 찍은 이름 기록)` — `base` 기준으로."""
             fresh, rejected, guessed = _accept_tasks(
-                reply, room=deps.max_tasks - len(state.plan_tasks),
-                taken=_taken(state), done=_done(state), pending=_pending(state),
-                waiting=_waiting(state),
-                seen=_seen(state) if deps.check_discovery else None)
-            hypotheses, ghosts = _accept_hypotheses(reply, have=state.evidence_ids())
+                reply, room=deps.max_tasks - len(base.plan_tasks),
+                taken=_taken(base), done=_done(base), pending=_pending(base),
+                waiting=_waiting(base),
+                seen=_seen(base) if deps.check_discovery else None)
+            hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed
 
         patch = await deps.integrate(state)
-        fresh, hypotheses, refused, guessed = accept(patch)
+        fresh, hypotheses, refused, guessed = accept(patch, state)
         # **거부가 있으면 그 자리에서 한 번 되묻는다.** 버려진 것을 다음 라운드의
         # `<버려진 태스크>`로만 돌려주면 리드는 한 라운드 뒤에야 좁힌다 — 두 번째 전체
         # 트레이스에서 두 번 그랬고, 매번 실행 한 사이클을 태웠다. 먹힌다고 증명된
@@ -342,7 +328,13 @@ def make_nodes(deps: EngineDeps) -> dict:
         # 첫 답으로 간다 — 한 번 더 물어본 것이 라운드를 죽이면 안 된다.
         if (refused and deps.redo_on_rejection and not patch.get("stopped_by")
                 and state.round < deps.max_rounds):
+            # 첫 답에서 **받은 것은 대기 태스크로 실어서** 되묻는다. 안 실으면 예시의 다음
+            # 번호가 그대로라 리드가 같은 id(t-8)로 **다른** 읽기를 내고, 합칠 때 그 id가
+            # 첫 답의 받은 읽기를 덮는다 — 사내 세 번째 트레이스에서 좁힌 `mongo.find`가
+            # 그렇게 `redis.scan`으로 바뀌어 사라졌다. 실으면 번호가 앞으로 가고, 리드는
+            # 그것들이 남아 있음을 본다. 두 번째 답의 판정도 이 State 기준이다.
             again = state.model_copy(update={
+                "plan_tasks": merge_by_id(state.plan_tasks, fresh),
                 "llm_errors": state.llm_errors + [REDO_MARK + c for c in refused]})
             second = await deps.integrate(again)
             refused = [c + REDO_NOTE for c in refused]
@@ -355,8 +347,11 @@ def make_nodes(deps: EngineDeps) -> dict:
                 # 리드는 끝까지 엉뚱한 서비스를 팠다. 같은 id는 되물은 쪽이 이기고, 같은
                 # 질의를 새 id로 또 냈으면 한 번만 남는다. 가설은 되물은 쪽(최신 판단)이다.
                 patch = second
-                more, hypotheses, later, more_guessed = accept(second)
-                fresh = _merge_tasks(fresh, more)
+                more, hypotheses, later, more_guessed = accept(second, again)
+                # 같은 질의를 새 id로 또 냈으면 `waiting` 경로가 이미 첫 답의 id로 접어
+                # 돌려준다 — 그래서 id 병합 하나면 된다(질의 중복 제거를 따로 뒀다가 RED
+                # 스윕에 닿지 않는 코드로 잡혔다).
+                fresh = merge_by_id(fresh, more)
                 refused += later
                 guessed = [g for g in guessed
                            if g.split(":")[0] in {t.id for t in fresh}] + more_guessed

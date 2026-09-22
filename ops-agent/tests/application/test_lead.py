@@ -845,3 +845,15 @@ async def test_역할이_리드_프롬프트까지_간다(case):
     await frame(CaseState(case=case))
     assert "api — 저장된 것을 API 응답으로 바꾼다" in llm.prompts[0]
 
+
+async def test_전송_오류는_같은_프롬프트로_다시_묻는다(case):
+    """호출이 실패한 것은 모델이 틀린 것이 아니다. 사내에서 게이트웨이 403 뒤에
+    "앞의 답을 읽을 수 없었다: OpenAIPermissionDeniedError…"가 모델에게 나갔다."""
+    _, integrate, llm = leads(RuntimeError("Error code: 403"),
+                              reply(decision="continue", tasks=[TASK]))
+    patch = await integrate(CaseState(case=case))
+    assert "stopped_by" not in patch
+    assert len(llm.prompts) == 2
+    assert llm.prompts[1] == llm.prompts[0], "전송 오류 뒤에 수리 프롬프트가 나갔다"
+    assert "403" not in llm.prompts[1]
+

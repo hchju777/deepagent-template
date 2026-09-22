@@ -37,3 +37,11 @@ def _git_stays_offline(monkeypatch):
 def clock():
     """항상 T0를 돌려주는 시계."""
     return lambda: T0
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch):
+    """전송 오류 뒤의 쉬는 시간은 운영용이다 — 테스트는 기다리지 않는다."""
+    from src.application import lead
+    monkeypatch.setattr(lead, "RETRY_BACKOFF_S", 0)
+

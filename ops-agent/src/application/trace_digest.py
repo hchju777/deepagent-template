@@ -42,8 +42,13 @@ _SECRETISH = re.compile(r"pass|secret|token|credential|pwd", re.I)
 _VALUE_CHARS = 40
 
 
-def digest(entries: list[tuple[str, str]]) -> list[str]:
-    """`(파일명, 내용)` 목록 → 붙여넣을 줄들. **파일명 순서가 곧 라운드 순서다.**"""
+def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
+    """`(파일명, 내용)` 목록 → 붙여넣을 줄들. **파일명 순서가 곧 라운드 순서다.**
+
+    `brief`는 손으로 옮기는 사람을 위한 것이다 — "이미 물은 것"과 "예시가 보여준 것"을
+    뺀다. 둘은 라운드마다 제일 길고, 둘 다 코드에서 다시 만들 수 있다(예시는 `used`로,
+    물은 것은 앞 라운드의 태스크로). 리드가 낸 것과 판정만 사람이 옮기면 된다.
+    """
     lines, asked, attempts = ["트레이스 요약"], {}, {}
     last_added: set[str] = set()
     for name, text in sorted(entries):
@@ -64,7 +69,8 @@ def digest(entries: list[tuple[str, str]]) -> list[str]:
                 asked.pop(query, None)
         before = set(asked)
         lines += _round(round_no, node, prompt, reply, asked,
-                        attempt=attempts[(round_no, node)], verdict=_verdict(text))
+                        attempt=attempts[(round_no, node)], verdict=_verdict(text),
+                        brief=brief)
         last_added = set(asked) - before
     if len(lines) == 1:
         lines.append("  (읽을 수 있는 트레이스 파일이 없다)")
@@ -86,7 +92,8 @@ def _verdict(text: str) -> str:
 
 
 def _round(round_no: str, node: str, prompt: str, reply: str,
-           asked: dict[str, str], *, attempt: int = 1, verdict: str = "") -> list[str]:
+           asked: dict[str, str], *, attempt: int = 1, verdict: str = "",
+           brief: bool = False) -> list[str]:
     evidence = _block(prompt, "모은 증거")
     rejected = _block(prompt, "버려진 태스크")
     seen_names = evidence                       # 이름이 증거에 있나 — 문자열로 본다
@@ -118,10 +125,11 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
     out.append(f"  리드가 본 것 : 태스크 {_count(_block(prompt, '지금까지의 태스크'))}"
                f" · 증거 {_count(evidence)}(잘림 {evidence.count('⚠ 표본이 잘렸다')})"
                f" · 버려진 것 {_count(rejected)}")
-    out.append("  이미 물은 것(증거에 보임) : "
-               + ("  ".join(sorted(_clip(q) for q in visible)) or "(없음)"))
-    out.append("  예시가 보여준 것 : "
-               + ("  ".join(_shape(a, p) for _, a, p in shown) or "(없음)"))
+    if not brief:
+        out.append("  이미 물은 것(증거에 보임) : "
+                   + ("  ".join(sorted(_clip(q) for q in visible)) or "(없음)"))
+        out.append("  예시가 보여준 것 : "
+                   + ("  ".join(_shape(a, p) for _, a, p in shown) or "(없음)"))
     parsed = parse_object(reply)
     if not parsed.ok:
         out.append("  리드가 낸 것 : (응답을 JSON으로 못 읽었다 — "

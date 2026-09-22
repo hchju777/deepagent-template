@@ -87,8 +87,12 @@
 
 ```bash
 python -m src case investigate <케이스id> --trace ./trace
-python -m src case trace <케이스id> --trace ./trace     # 이 출력만 붙여넣으면 된다
+python -m src case trace <케이스id> --trace ./trace --brief   # 이 출력만 옮기면 된다
 ```
+
+`--brief`는 "이미 물은 것"·"예시가 보여준 것" 줄을 뺀다 — 둘 다 코드에서 다시 만들 수 있다.
+**전체 pytest는 사내에서 돌리지 않아도 된다.** 고치는 쪽이 여기서 돌린다(스위트·RED 스윕).
+사내에서 확인할 것은 위 두 명령뿐이다.
 
 트레이스 원본은 라운드당 수천 자라 사람이 옮길 수 없다. 그래서 지금까지 **진단
 요약만** 건너왔고, "리드가 무엇을 보고 무엇을 뱉었는지"는 한 번도 안 건너와서

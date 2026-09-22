@@ -1295,7 +1295,7 @@ def cmd_case_trace(args, env) -> int:
                          f"`case investigate {args.case_id} --trace {args.trace}`로 남긴다")
     entries = [(path.name, path.read_text(encoding="utf-8"))
                for path in sorted(folder.glob("*.md"))]
-    print("\n".join(digest(entries)))
+    print("\n".join(digest(entries, brief=getattr(args, "brief", False))))
     return 0
 
 
@@ -1851,6 +1851,8 @@ def build_parser() -> argparse.ArgumentParser:
         "trace", help="트레이스를 붙여넣을 수 있는 크기로 줄인다")
     trace.add_argument("case_id")
     trace.add_argument("--trace", default="trace", help="`investigate --trace`에 준 폴더")
+    trace.add_argument("--brief", action="store_true",
+                       help="손으로 옮길 때 — 이미 물은 것·예시 줄을 뺀다")
     trace.set_defaults(run=cmd_case_trace)
 
     show_case = case_sub.add_parser("show", help="케이스 한 건")
