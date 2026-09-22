@@ -169,9 +169,12 @@ class CodeReaderPort(ABC):
 
     @abstractmethod
     async def grep(self, repo: str, commit: str, patterns: list[str], *,
-                   path: str = "") -> ProbeResult:
+                   path: str = "", context: int = 0) -> ProbeResult:
         """그 커밋에서 패턴을 찾는다. 패턴은 `-e`로 넘긴다(decisions ⑨) —
-        `-`로 시작하는 패턴이 옵션으로 읽히는 것을 막는다."""
+        `-`로 시작하는 패턴이 옵션으로 읽히는 것을 막는다.
+
+        `context`는 앞뒤 줄 수(`-C`). 흐름 추출만 1을 준다 — 리드의 `code.grep`은
+        0이어야 400줄 상한 안에서 더 많은 매치를 본다."""
 
     @abstractmethod
     async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:

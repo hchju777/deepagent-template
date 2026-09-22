@@ -54,6 +54,8 @@ _KNOWN_SLOTS = frozenset({"gbm", "fct"})
 
 FLOW_KINDS = ("topic", "group", "collection", "rediskey")
 FLOW_RELATIONS = ("consumes", "produces", "consumes_as", "reads", "writes")
+# 값이 객체일 때 이름이 든 기본 필드.
+FLOW_FIELDS = {"collection": "collection", "rediskey": "key", "topic": "topic", "group": "group_id"}
 
 
 class FlowSource(StrictModel):
@@ -67,6 +69,10 @@ class FlowSource(StrictModel):
     path: str = Field(min_length=1)
     kind: Literal["topic", "group", "collection", "rediskey"]
     relation: Literal["consumes", "produces", "consumes_as", "reads", "writes"] | None = None
+    # 값이 문자열이 아니라 객체일 때 이름이 든 필드. 일부 서비스는
+    # `mongodb_collection.alarm = {"collection": "…", "ttl": 3}`처럼 쓴다(사내 확인).
+    # 비우면 종류별 기본(`FLOW_FIELDS`). 문자열과 객체가 섞여 있어도 둘 다 뽑는다.
+    field: str | None = None
 
 
 class FlowSpec(StrictModel):

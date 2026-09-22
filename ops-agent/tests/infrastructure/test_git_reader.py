@@ -86,6 +86,15 @@ async def test_대상의_config_파일에서_이름을_찾는다(reader):
     assert "config/common.json" in got.data
 
 
+async def test_문맥을_청하면_앞뒤_줄이_대시로_온다(reader):
+    """`context=1`이면 `-C1`. 기본은 0이다 — 리드의 `code.grep` 출력이 불어나면 안 된다."""
+    plain = await reader.grep("dt-core", "main", ["handle"])
+    with_ctx = await reader.grep("dt-core", "main", ["handle"], context=1)
+    assert plain.status == with_ctx.status == "ok", (plain.error, with_ctx.error)
+    assert not [l for l in plain.data.splitlines() if "app.py-" in l]
+    assert [l for l in with_ctx.data.splitlines() if "app.py-2-" in l and "pass" in l]
+
+
 async def test_결과가_없는_것은_오류가_아니다(reader):
     """`git grep`은 못 찾으면 1로 끝난다. 그걸 오류로 삼으면 **"없다"가 "못 봤다"가
     되고**, 둘은 완전히 다른 사실이다(5단계의 `unreachable`과 같은 계열)."""

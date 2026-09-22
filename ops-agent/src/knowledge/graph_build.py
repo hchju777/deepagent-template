@@ -23,6 +23,7 @@ from pathlib import Path
 from src.knowledge.flow import Hit
 
 _GREP_LINE = re.compile(r"^(?P<file>[^:]+):(?P<line>\d+):(?P<text>.*)$")
+_CONTEXT_TAIL = re.compile(r"^-(?P<line>\d+)-(?P<text>.*)$")
 GRAPHIFY_TIMEOUT_S = 600
 
 
@@ -37,17 +38,48 @@ class GraphMeta:
 
 
 def parse_grep(repo: str, commit: str, text: str) -> list[Hit]:
-    """`git grep -n` 출력(`path:line:text`) → `Hit`. `# repo @ sha` 머리줄과 빈 줄은 건너뛴다."""
-    hits = []
+    """`git grep -n [-C1]` 출력 → `Hit`. `# repo @ sha` 머리줄과 빈 줄은 건너뛴다.
+
+    측정한 모양(git 2.43): 매치는 `path:줄:본문`, 문맥은 `path-줄-본문`, 묶음 사이는 `--`
+    한 줄이고 문맥이 켜지면 파일이 바뀔 때도 `--`가 온다. 줄마다 `<commit>:`이 앞에 붙는다.
+    `Hit.context`에는 **줄 번호로 앞뒤 한 줄**만 붙는다 — 묶음 전체를 붙이면 세 줄 떨어진
+    동사가 이 이름의 것으로 읽힌다.
+    """
+    hits: list[Hit] = []
     prefix = f"{commit}:"
-    for raw in text.splitlines():
-        # `git grep -n <pattern> <commit>`은 줄마다 `<commit>:`을 앞에 붙인다.
+    group: list[str] = []
+    for raw in text.splitlines() + ["--"]:
         if raw.startswith(prefix):
             raw = raw[len(prefix):]
-        m = _GREP_LINE.match(raw)
-        if m is None:
+        if raw != "--":
+            group.append(raw)
             continue
-        hits.append(Hit(repo, commit, m.group("file"), int(m.group("line")), m.group("text")))
+        hits.extend(_parse_group(repo, commit, group))
+        group = []
+    return hits
+
+
+def _parse_group(repo: str, commit: str, group: list[str]) -> list[Hit]:
+    matched = [m for raw in group if (m := _GREP_LINE.match(raw))]
+    if not matched:
+        return []
+    # 문맥 줄의 `path-줄-`은 경로에도 `-`가 흔해(`mx-1.json`) 정규식으로 못 가른다.
+    # 한 묶음은 한 파일이므로 매치 줄이 말한 경로를 앞에서 떼어내면 나머지는 애매하지 않다.
+    file = matched[0].group("file")
+    lines: dict[tuple[str, int], str] = {}
+    for raw in group:
+        m = _GREP_LINE.match(raw)
+        if m:
+            lines[(m.group("file"), int(m.group("line")))] = m.group("text")
+        elif raw.startswith(file + "-"):
+            c = _CONTEXT_TAIL.match(raw[len(file):])
+            if c:
+                lines[(file, int(c.group("line")))] = c.group("text")
+    hits = []
+    for m in matched:
+        f, n = m.group("file"), int(m.group("line"))
+        around = [lines[(f, k)] for k in (n - 1, n + 1) if (f, k) in lines]
+        hits.append(Hit(repo, commit, f, n, m.group("text"), context="\n".join(around)))
     return hits
 
 

@@ -82,7 +82,21 @@ infra.kafka.consumer.group_id                     ← 컨슈머 그룹 (레포�
 infra.kafka.producer.topic.{topic1, …}           ← 생산하는 토픽
 mongodb_collection.{이름: 값}                     ← infra 밖, 최상위
 redis_key.{이름: 값}                              ← infra 밖, 최상위
+  (일부 서비스는 값이 객체다: {"collection": 값, "ttl": 3} / {"key": 값, "ttl": 30})
 ```
+
+값이 객체면 `FlowSource.field`(기본은 종류별 `FLOW_FIELDS`: collection→`collection`,
+rediskey→`key`)에서 이름을 꺼낸다. 키 경로는 **맵의 키까지**(`mongodb_collection.alarm`)다 —
+코드는 그 키로 꺼내고, `collection`·`key`는 어디에나 있어 토큰으로 못 쓴다. 문자열과 객체가
+섞여 있어도 둘 다 뽑고 같은 이름은 하나로 접힌다(측정판은 dt-core가 문자열, dt-api가 객체).
+
+객체 모양은 코드 쪽도 바꾼다 — 이름 꺼내기와 동사가 **다른 줄**에 온다
+(`coll = cfg["mongodb_collection"]["alarm"]["collection"]` / 다음 줄 `mongo[coll].find(…)`).
+그래서 흐름 추출의 grep만 `-C1`로 앞뒤 한 줄을 받고(`Hit.context`), 그 줄에 동사가 없으면
+옆 줄의 동사를 쓴다. 다만 그 엣지는 **INFERRED**다 — 옆 줄의 동사가 다른 자원의 것일 수
+있다. 리드의 `code.grep`은 그대로 0줄이다(증거가 세 배로 불면 400줄 상한이 먼저 찬다).
+파서는 묶음(`--` 사이) 안에서 줄 번호로 앞뒤 한 줄만 붙인다 — 실제 `git grep -C1` 출력을
+그대로 먹이는 테스트가 있다.
 
 **`infra`는 레포당 하나다.** 레포에 서비스가 둘이면 둘이 공유하고 컨슈머 그룹도 같다.
 이 사실이 설계를 둘 바꿨다.

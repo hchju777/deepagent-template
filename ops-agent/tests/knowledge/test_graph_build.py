@@ -21,6 +21,43 @@ def test_git_grep_출력을_읽는다():
     assert hits[0].text.strip() == "mongo[x].insert_many(batch)" and hits[0].commit == "ab12cd34ef56"
 
 
+def test_문맥은_줄_번호로_앞뒤_한_줄만_붙는다():
+    """`git grep -n -C1 … HEAD`의 실제 출력(측정, git 2.43)을 그대로 먹인다. 경로에 `-`가
+    있어도(`al-arms.py`·`mx-1.json`) 문맥 줄의 경로를 매치 줄에서 얻으므로 안 헷갈린다.
+    묶음 안에 세 줄이 있어도 붙는 것은 앞뒤 한 줄뿐이다."""
+    text = ("HEAD:api/al-arms.py:1:def recent_alarms(cfg, mongo, since):\n"
+            "HEAD:api/al-arms.py:2:    coll = cfg[\"mongodb_collection\"][\"alarm\"][\"collection\"]\n"
+            "HEAD:api/al-arms.py-3-    return list(mongo[coll].find({}))\n"
+            "--\n"
+            "HEAD:api/al-arms.py-7-    x = 1\n"
+            "HEAD:api/al-arms.py:8:    y = \"alarm\"\n"
+            "HEAD:api/al-arms.py-9-    z = 2\n"
+            "--\n"
+            "HEAD:cfg-dir/mx-1.json-1-{\n"
+            "HEAD:cfg-dir/mx-1.json:2:  \"mongodb_collection\": {\"alarm\": {\"collection\": \"alarm_events\"}}\n"
+            "HEAD:cfg-dir/mx-1.json-3-}\n"
+            "--\n"
+            "HEAD:top.txt:1:alarm\n")
+    hits = gb.parse_grep("dt-api", "HEAD", text)
+    assert [(h.file, h.line) for h in hits] == [("api/al-arms.py", 1), ("api/al-arms.py", 2),
+                                                ("api/al-arms.py", 8), ("cfg-dir/mx-1.json", 2),
+                                                ("top.txt", 1)]
+    ctx = {(h.file, h.line): h.context for h in hits}
+    assert ctx[("api/al-arms.py", 2)] == ("def recent_alarms(cfg, mongo, since):\n"
+                                          "    return list(mongo[coll].find({}))")
+    assert ctx[("api/al-arms.py", 1)] == '    coll = cfg["mongodb_collection"]["alarm"]["collection"]'
+    assert ctx[("api/al-arms.py", 8)] == "    x = 1\n    z = 2"
+    assert ctx[("cfg-dir/mx-1.json", 2)] == "{\n}"
+    assert ctx[("top.txt", 1)] == ""
+
+
+def test_문맥_없이_이웃한_줄_번호는_파일이_다르면_안_섞인다():
+    """`-C` 없는 출력에는 `--`가 없어 파일 여럿이 한 묶음이다. 줄 번호만 보면 a.py 10과
+    b.py 11이 이웃이 된다."""
+    hits = gb.parse_grep("r", "c", "a.py:10:x = alarm\nb.py:11:y = alarm\n")
+    assert [h.context for h in hits] == ["", ""]
+
+
 def test_합칠_때_노드는_id로_엣지는_이어_붙인다():
     overlay = {"nodes": [{"id": "service_sink"}], "links": [{"source": "a", "target": "b"}]}
     symbols = {"nodes": [{"id": "dt_core_sink_writer_run"}, {"id": "service_sink", "label": "덮으면 안 됨"}],

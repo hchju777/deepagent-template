@@ -24,7 +24,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from src.knowledge.schema import Service, Topology
+from src.knowledge.schema import FLOW_FIELDS, Service, Topology
 
 # 같은 줄의 동사로 방향을 정한다. 표는 여기 하나뿐이고 테스트가 지킨다.
 READ_VERBS = ("subscribe", "consume", "poll", "find", "aggregate", "count", "distinct",
@@ -103,8 +103,14 @@ def names_from_config(merged: dict, sources) -> list[Name]:
             node = node.get(key) if isinstance(node, dict) else None
             if node is None:
                 break
+        field = src.field or FLOW_FIELDS.get(src.kind, "")
         if isinstance(node, dict):
             for key, value in sorted(node.items()):
+                # 값이 객체면(`{"collection": "…", "ttl": 3}`) 이름은 그 안의 필드다. 키 경로는
+                # **맵의 키까지**(`mongodb_collection.alarm`)로 둔다 — 코드는 그 키로 꺼내고,
+                # `collection`·`key` 같은 필드 이름은 어디에나 있어 토큰으로 못 쓴다.
+                if isinstance(value, dict):
+                    value = value.get(field)
                 if isinstance(value, str) and value:
                     found.append(Name(src.kind, value, f"{src.path}.{key}", src.relation))
         elif isinstance(node, str) and node:
@@ -225,7 +231,11 @@ def extract(*, names: Iterable[Name], topology: Topology,
                                   "attributed": "service" if who else "repo"})
                     continue
                 who, sure = owner(hit.file, hit.repo, topology)
-                verb = direction(hit.text) or direction(hit.context)
+                verb = direction(hit.text)
+                # 동사가 옆 줄에 있으면(`coll = …` / `mongo[coll].find(…)`) 그것을 쓰되
+                # INFERRED다 — 옆 줄의 동사가 다른 자원의 것일 수 있다.
+                sure_verb = "EXTRACTED" if verb else "INFERRED"
+                verb = verb or direction(hit.context)
                 # 동사가 없는 줄(주석·바인딩)도 **버리지 않는다** — `mentions`로 남긴다.
                 # 방향은 모르지만 "이 서비스가 이 이름을 안다"는 것은 사실이고, 그게
                 # 리드가 어느 서비스를 볼지 고르는 데는 충분하다.
@@ -238,7 +248,7 @@ def extract(*, names: Iterable[Name], topology: Topology,
                               "attributed": "service" if who else "repo",
                               "confidence": _weakest(
                                   confidence, sure,
-                                  "EXTRACTED" if verb in ("reads", "writes") else "AMBIGUOUS")})
+                                  sure_verb if verb in ("reads", "writes") else "AMBIGUOUS")})
     return {"directed": True, "multigraph": True, "graph": {"kind": "ops-flow"},
             "nodes": list(nodes.values()), "links": links, "hyperedges": []}
 

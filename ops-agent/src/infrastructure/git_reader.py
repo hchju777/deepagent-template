@@ -236,7 +236,7 @@ class RealCodeReader(CodeReaderPort):
                 else _clip(got, pinned, clock=self._clock, whole=whole))
 
     async def grep(self, repo: str, commit: str, patterns: list[str], *,
-                   path: str = "") -> ProbeResult:
+                   path: str = "", context: int = 0) -> ProbeResult:
         source = f"code.grep {repo}@{commit} {patterns}" + (f" in {path}" if path else "")
         if not patterns:
             return ProbeResult.failed("패턴이 없다", source=source, clock=self._clock)
@@ -245,6 +245,11 @@ class RealCodeReader(CodeReaderPort):
         # `--recurse-submodules`는 **채워진** submodule만 들여다본다. 안 채워진
         # 것은 조용히 건너뛰므로(종료코드 1, 출력 없음) 그건 우리가 말해야 한다.
         args = ["grep", "-n", "-I", "--no-color", "--recurse-submodules"]
+        # 흐름 추출만 앞뒤 줄을 받는다(`-C1`) — 이름 꺼내기와 동사가 다른 줄에 오는
+        # 문장(`coll = …["collection"]` / `mongo[coll].find(…)`) 때문이다. 리드의
+        # `code.grep`은 0이다: 증거가 세 배로 불면 400줄 상한이 먼저 찬다.
+        if context > 0:
+            args.append(f"-C{context}")
         for pattern in patterns:
             args += ["-e", pattern]
         args.append(commit)

@@ -243,3 +243,11 @@ async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):
     assert all(h.repo == "dt-core" and h.commit for h in hits)
     assert flow_code.pinned() == {"dt-core": "main"}
 
+
+async def test_흐름_히트에는_앞뒤_한_줄이_실려_온다(flow_code):
+    """진짜 git → `-C1` → 파서까지 한 줄로. 이름 줄 옆의 동사를 흐름 추출이 읽는 근거다."""
+    hits = {(h.file, h.line): h for h in await flow_code.flow_hits("alarm")}
+    assert hits[("sink/writer.py", 3)].context == \
+        '    for m in consumer.subscribe(cfg["infra"]["kafka"]["consumer"]["topic"]["topic1"]):'
+    assert hits[("config/gbm/mx.json", 1)].context == ""      # 한 줄짜리 파일
+

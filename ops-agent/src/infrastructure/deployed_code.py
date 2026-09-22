@@ -84,11 +84,11 @@ class DeployedCode(DeployedCodePort):
         return list(found.values()), problems
 
     async def flow_hits(self, pattern: str) -> list[Hit]:
-        """배포 커밋에서 `git grep -n`. 레포마다 한 번. 실패한 레포는 조용히 빈다 —
-        `code status`가 레포 상태를 따로 말한다."""
+        """배포 커밋에서 `git grep -n -C1`. 레포마다 한 번. 실패한 레포는 조용히 빈다 —
+        `code status`가 레포 상태를 따로 말한다. 앞뒤 한 줄은 `Hit.context`로 간다."""
         hits: list[Hit] = []
         for repo, commit in self.pinned().items():
-            got = await self._reader.grep(repo, commit, [pattern])
+            got = await self._reader.grep(repo, commit, [pattern], context=1)
             if got.status == "error" or not isinstance(got.data, str):
                 continue
             hits.extend(parse_grep(repo, commit, got.data))

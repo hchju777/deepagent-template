@@ -544,6 +544,38 @@ CASES = [
   '    if idle:',
   '    if False:',
   ["tests/knowledge/test_flow.py::test_요약과_권고"]),
+ ("객체 안의 이름을 못 뽑는다", ROOT / "src/knowledge/flow.py",
+  '                if isinstance(value, dict):\n                    value = value.get(field)',
+  '                pass',
+  ["tests/knowledge/test_flow.py::test_이름이_객체_안에_있어도_뽑는다"]),
+ ("객체의 필드를 못 바꾼다", ROOT / "src/knowledge/flow.py",
+  '        field = src.field or FLOW_FIELDS.get(src.kind, "")',
+  '        field = FLOW_FIELDS.get(src.kind, "")',
+  ["tests/knowledge/test_flow.py::test_객체의_필드는_종류별_기본이고_바꿀_수_있다"]),
+ ("옆 줄의 동사를 안 본다", ROOT / "src/knowledge/flow.py",
+  '                verb = verb or direction(hit.context)',
+  '                verb = verb',
+  ["tests/knowledge/test_flow.py::test_옆_줄의_동사는_쓰되_INFERRED다"]),
+ ("옆 줄의 동사도 EXTRACTED로 친다", ROOT / "src/knowledge/flow.py",
+  '                sure_verb = "EXTRACTED" if verb else "INFERRED"',
+  '                sure_verb = "EXTRACTED"',
+  ["tests/knowledge/test_flow.py::test_옆_줄의_동사는_쓰되_INFERRED다"]),
+ ("문맥 줄을 히트에 안 붙인다", ROOT / "src/knowledge/graph_build.py",
+  '        around = [lines[(f, k)] for k in (n - 1, n + 1) if (f, k) in lines]',
+  '        around = []',
+  ["tests/knowledge/test_graph_build.py::test_문맥은_줄_번호로_앞뒤_한_줄만_붙는다"]),
+ ("문맥 줄의 파일을 안 가른다", ROOT / "src/knowledge/graph_build.py",
+  '        around = [lines[(f, k)] for k in (n - 1, n + 1) if (f, k) in lines]',
+  '        around = [v for (_, k), v in lines.items() if k in (n - 1, n + 1)]',
+  ["tests/knowledge/test_graph_build.py::test_문맥_없이_이웃한_줄_번호는_파일이_다르면_안_섞인다"]),
+ ("흐름 추출이 문맥을 안 청한다", ROOT / "src/infrastructure/deployed_code.py",
+  '            got = await self._reader.grep(repo, commit, [pattern], context=1)',
+  '            got = await self._reader.grep(repo, commit, [pattern])',
+  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트에는_앞뒤_한_줄이_실려_온다"]),
+ ("-C 옵션이 안 붙는다", ROOT / "src/infrastructure/git_reader.py",
+  '        if context > 0:\n            args.append(f"-C{context}")',
+  '        if False:\n            pass',
+  ["tests/infrastructure/test_git_reader.py::test_문맥을_청하면_앞뒤_줄이_대시로_온다"]),
  ("대기 태스크의 갱신을 반복으로 찍는다", TD,
   '        if task_id in waiting:\n            marks.append("대기 중이던 태스크의 갱신")\n        elif spoken in visible:',
   '        if spoken in visible:',
@@ -575,7 +607,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 127, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 135, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

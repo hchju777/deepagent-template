@@ -30,13 +30,15 @@ def _text(content) -> str:
 
 
 def hits_for(pattern: str) -> list[Hit]:
-    """`git grep -n` 흉내 — 부분 문자열, 줄 번호는 1부터."""
+    """`git grep -n -C1` 흉내 — 부분 문자열, 줄 번호는 1부터, 앞뒤 한 줄이 문맥."""
     out = []
     for repo, files in REPOS.items():
         for path, content in files.items():
-            for i, line in enumerate(_text(content).splitlines()):
+            lines = _text(content).splitlines()
+            for i, line in enumerate(lines):
                 if pattern in line:
-                    out.append(Hit(repo, COMMITS[repo], path, i + 1, line))
+                    around = [lines[k] for k in (i - 1, i + 1) if 0 <= k < len(lines)]
+                    out.append(Hit(repo, COMMITS[repo], path, i + 1, line, context="\n".join(around)))
     return out
 
 
@@ -73,6 +75,25 @@ def test_사내_모양의_config에서_이름을_뽑는다():
     assert ("group", "gumi-mx-core", "infra.kafka.consumer.group_id", "consumes_as") in got  # gumi 층이 덮은 값
     assert ("collection", "alarm_events", "mongodb_collection.alarm", None) in got
     assert ("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats", None) in got
+
+
+def test_이름이_객체_안에_있어도_뽑는다():
+    """일부 서비스는 `{"collection": "…", "ttl": 3}` / `{"key": "…", "ttl": 30}`로 쓴다(사내 확인).
+    키 경로는 맵의 키까지다 — `collection`·`key`는 어디에나 있어 토큰으로 못 쓴다."""
+    got = {(n.kind, n.value, n.key_path) for n in flow.names_from_config(merged("dt-api"), FlowSpec().sources)}
+    assert ("collection", "alarm_events", "mongodb_collection.alarm") in got
+    assert ("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats") in got
+    # 문자열 모양(dt-core)과 같은 이름·같은 키 경로로 나온다 — 그래서 하나로 접힌다
+    core = {(n.kind, n.value, n.key_path) for n in flow.names_from_config(merged("dt-core"), FlowSpec().sources)}
+    assert ("collection", "alarm_events", "mongodb_collection.alarm") in core
+
+
+def test_객체의_필드는_종류별_기본이고_바꿀_수_있다():
+    cfg = {"redis_key": {"a": {"name": "k:1", "ttl": 1}, "b": {"key": "k:2"}, "c": "k:3", "d": {"ttl": 9}}}
+    default = flow.names_from_config(cfg, [FlowSource(path="redis_key", kind="rediskey")])
+    assert {n.value for n in default} == {"k:2", "k:3"}          # 필드 없는 객체(d)는 건너뛴다
+    custom = flow.names_from_config(cfg, [FlowSource(path="redis_key", kind="rediskey", field="name")])
+    assert {n.value for n in custom} == {"k:1", "k:3"}
 
 
 def test_템플릿_이름은_앞부분만_찾는다():
@@ -182,6 +203,25 @@ def test_키_토큰은_조상_키가_같은_줄에_있어야_한다():
     g = flow.extract(names=[Name("group", "gumi-mx-processor", "infra.kafka.consumer.groups.processor", "consumes_as")],
                      topology=TOPOLOGY, hits_for=hits, commits=COMMITS)
     assert not [e for e in g["links"] if e["source_file"] == "processor/handler.py"]
+
+
+def test_옆_줄의_동사는_쓰되_INFERRED다():
+    """객체 모양 config를 쓰는 코드는 이름 꺼내기와 동사가 다른 줄에 온다
+    (`coll = …["collection"]` / `mongo[coll].find(…)`, 사내 확인). 옆 줄의 동사는 다른
+    자원의 것일 수도 있으니 같은 줄의 동사(EXTRACTED)와 같은 무게는 아니다."""
+    name = Name("collection", "alarm_events", "mongodb_collection.alarm")
+    split = Hit("dt-api", "c", "api/alarms.py", 3, '    coll = "alarm_events"',
+                context='def recent_alarms(cfg, mongo, since):\n    return list(mongo[coll].find({}))')
+    same = Hit("dt-api", "c", "api/alarms.py", 3, '    return mongo["alarm_events"].find({})',
+               context='def recent_alarms(cfg, mongo, since):\n')
+
+    def graded(hit):
+        g = flow.extract(names=[name], topology=TOPOLOGY, commits=COMMITS,
+                         hits_for=lambda p: [hit] if p in hit.text else [])
+        return [(e["relation"], e["confidence"]) for e in g["links"]]
+
+    assert graded(split) == [("reads", "INFERRED")]
+    assert graded(same) == [("reads", "EXTRACTED")]
 
 
 def test_동사가_없는_줄은_mentions로_남긴다():

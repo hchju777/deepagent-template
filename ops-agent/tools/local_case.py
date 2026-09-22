@@ -96,22 +96,24 @@ def run(cfg, consumer, mongo, redis):
 ''',
 }
 
+# 일부 서비스는 이름을 객체 안에 둔다(`{"collection": …, "ttl": 3}`, 사내 확인). dt-api가 그 모양이다.
 API_FILES = {
     "config/gbm/mx.json": {
         "infra": {"mongodb": {"database": "data"}},
-        "mongodb_collection": {"alarm": "alarm_events"},
-        "redis_key": {"alarm_stats": "alarm:stats:{line}"},
+        "mongodb_collection": {"alarm": {"collection": "alarm_events", "ttl": 3}},
+        "redis_key": {"alarm_stats": {"key": "alarm:stats:{line}", "ttl": 30}},
         "api": {"alarm_window_min": 60}},
     "config/factories/gumi/common.json": {"lines": LINES},
     "api/alarms.py": '''"""알람 화면 — 최근 alarm_window_min 분의 alarm_events와 alarm:stats:{line} 배지."""
 
 
 def recent_alarms(cfg, mongo, since):
-    return list(mongo[cfg["mongodb_collection"]["alarm"]].find({"occ_date": {"$gte": since}}).sort("occ_date", -1))
+    coll = cfg["mongodb_collection"]["alarm"]["collection"]
+    return list(mongo[coll].find({"occ_date": {"$gte": since}}).sort("occ_date", -1))
 
 
 def badge(cfg, redis, line):
-    return redis.get(cfg["redis_key"]["alarm_stats"].format(line=line))
+    return redis.get(cfg["redis_key"]["alarm_stats"]["key"].format(line=line))
 ''',
 }
 
