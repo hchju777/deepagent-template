@@ -210,3 +210,14 @@ def test_brief는_옮길_줄만_남긴다():
     assert "예시가 보여준 것" not in brief and "이미 물은 것" not in brief
     assert "리드가 낸 것" in brief and "예시와 같은 action" in brief
 
+
+def test_못_읽은_시도의_질의는_이미_한_질의가_아니다():
+    """거부된 답의 태스크는 낸 적이 없는 것이다. 재시도가 같은 것을 다시 내면 첫 발행이지
+    반복이 아니다 — 사내 네 번째 트레이스에서 재시도마다 그렇게 찍혔다."""
+    read = _task("t-6", "kafka.tail", {"topic": "T", "limit": 5})
+    refused = _file(_prompt(), json.dumps({"tasks": [read]}),
+                    verdict="**못 읽었다** — tasks.1.role: Input should be …")[0]
+    retry = _file(_prompt(), json.dumps({"tasks": [read]}), name="02-r2-integrate.md")[0]
+    text = "\n".join(digest([refused, retry]))
+    assert "이미 r2에서 한 질의" not in text
+

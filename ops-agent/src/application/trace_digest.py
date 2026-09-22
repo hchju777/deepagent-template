@@ -166,7 +166,9 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
             marks.append("**이미 한 질의 — 증거에 보이는데도 또 냈다**")
         elif query in asked:
             marks.append(f"이미 {asked[query]}에서 한 질의(증거엔 안 보였다)")
-        else:
+        elif not verdict.startswith("**못 읽었다**"):
+            # 거부된 답의 태스크는 낸 적이 없는 것이다 — 재시도가 같은 것을 다시 내면
+            # 그건 반복이 아니라 **첫 발행**이다.
             asked[query] = f"r{round_no}"
         out.append(f"    {task_id} {query}"
                    + (f"   ← {' · '.join(marks)}" if marks else ""))

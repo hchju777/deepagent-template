@@ -283,7 +283,9 @@ def _task(index: int, action: str, params: dict, *, rank: int = 1, **extra) -> d
     # `priority`는 번호가 아니라 **이 라운드 안의 순서**를 따른다. 번호를 곱하면
     # 라운드가 깊어질수록 우선순위가 커져(늦어져) 앞 라운드의 잔여 태스크에 계속
     # 밀린다 — 정작 지금 제일 궁금한 읽기가 제일 나중이 된다.
-    return {"id": f"t-{index}", "goal": _GOAL, "role": "data_prober",
+    # `role`은 예시에 없다 — 코드가 action에서 정한다(`role_for`). 보여 주면 모델이
+    # 태스크마다 다른 이름으로 "다듬고", 그게 닫힌 어휘라 답 전체가 거부됐었다.
+    return {"id": f"t-{index}", "goal": _GOAL,
             "action": action, "params": params, "priority": rank * 10, **extra}
 
 

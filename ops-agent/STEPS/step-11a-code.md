@@ -977,6 +977,36 @@ r4가 돌았다. `route_after_integrate`는 `conclude`면 그래프를 끝내므
 둘은 라운드마다 제일 길고, 둘 다 코드에서 다시 만들 수 있다. 그리고 전체 pytest는 **여기서
 돈다** — 사내에서는 `case investigate`·`case trace --brief` 둘이면 된다.
 
+### 사내 네 번째 트레이스 — 모델을 바꿨더니 `role`에서 죽었다
+
+사내에서 다른 모델로 같은 하네스를 돌렸다. 리드는 눈에 띄게 나아졌다: r1부터 `timestamp
+$gte`로 실제로 좁혔고, `code.grep{"sink"}`로 저장하는 쪽을 찾아 나섰고, `rest.query health`·
+`code.read logs`까지 냈다. 그런데 integrate 네 라운드 중 **셋이 우리 검증에서 거부**됐다:
+
+```
+결과: 못 읽었다 — tasks.1.role: Input should be 'data_prober', 'code_tracer' or 'recompute_verifier'
+```
+
+이 모델은 태스크마다 `role`을 **다듬었다**(`log_reader` 같은 것). 예시가 `data_prober`를 보여
+줘도 조금 나은 모델은 그걸 자기 말로 바꾼다. `role`은 닫힌 어휘라 답 전체가 거부됐고, 수리
+재시도는 "role이 틀렸다"를 고치는 대신 **다른 계획**을 냈다 — r2의 `code.grep sink-alarm`,
+r3의 `rest.query health sink-alarm`처럼 sink로 가던 읽기가 매번 재시도에서 사라졌다.
+
+두 가지가 잘못이었고 둘 다 고쳤다:
+
+- **`role`은 리드가 정할 것이 아니다.** 그건 실행 배선(누가 이 태스크를 도는가)이고, 배선은
+  action이 정한다(`role_for`). 리드가 뭐라고 적든 코드가 덮고, 예시에서도 뺐다. 규율 4·6
+  그대로다 — 재현 가능하고 감사 가능해야 하는 것은 코드가 쥔다.
+- **답을 목록째 검증하지 않는다.** 태스크·가설은 낱개로 검증해서 **틀린 것만** 버리고 사유를
+  남긴다(`_items`). 하나 때문에 계획 전체가 날아가고 재시도가 다른 계획을 내는 것보다, 그
+  하나를 `<버려진 태스크>`로 돌려주는 쪽이 맞다. `decision: maybe` 같은 최상위 어휘 위반은
+  여전히 답 전체의 실패다 — 그건 걷어낼 수도 낱개로 버릴 수도 없다.
+
+요약도 하나 고쳤다: 거부된 시도의 태스크는 낸 적이 없는 것인데, 재시도가 같은 것을 다시 내면
+"이미 한 질의"로 찍혔다.
+
+이 모델로 다시 돌리면 볼 것: 거부 0으로 네 라운드가 다 돌고, sink 쪽 읽기가 살아남는가.
+
 ### 12a로 넘기는 것: 가설이 전부 기각됐는데 `conclude`다
 
 3차에서 리드가 가설 둘을 **둘 다 `refuted`**로 적고 `conclude`를 골랐다.
@@ -988,7 +1018,7 @@ conclude 게이트와 "판정이 인용할 수 있는 우주"는 12a(conclude/ve
 
 ## 검증
 
-`pytest tests/` — 1180개. 11a 1차가 더한 것은 99개. `tools/red_sweep.py` — 109가지 변형, 모두 RED.
+`pytest tests/` — 1185개. 11a 1차가 더한 것은 99개. `tools/red_sweep.py` — 113가지 변형, 모두 RED.
 
 **전역 `protocol.file.allow`를 걷어낸 뒤(= git 기본값)** 다시 재서 나온 숫자다.
 

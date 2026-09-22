@@ -465,6 +465,24 @@ CASES = [
   '    if not brief:',
   '    if True:',
   ["tests/application/test_trace_digest.py::test_brief는_옮길_줄만_남긴다"]),
+ # ── 사내 네 번째 트레이스: role·낱개 검증 ─────────────────────────────
+ ("role을 리드가 정하게 둔다", ROOT / "src/application/lead.py",
+  '    return {**task, "role": role_for(str(task.get("action", "")))}',
+  '    return dict(task)',
+  ["tests/application/test_lead.py::test_role은_코드가_정한다"]),
+ ("틀린 항목을 안 거른다", ROOT / "src/application/lead.py",
+  '        if not got.ok:\n            notes.append(f"{label}: {kind} 모양이 틀렸다 — {got.error} — 받지 않는다")\n            continue',
+  '        if False:\n            continue',
+  ["tests/application/test_lead.py::test_모양이_틀린_태스크만_버리고_나머지는_받는다",
+   "tests/application/test_lead.py::test_모양이_틀린_가설만_버린다"]),
+ ("예시에 role을 다시 넣는다", B,
+  '    return {"id": f"t-{index}", "goal": _GOAL,\n',
+  '    return {"id": f"t-{index}", "goal": _GOAL, "role": "data_prober",\n',
+  [f"{K4}::test_예시에_role이_없다"]),
+ ("못 읽은 시도의 질의를 이미 한 질의로 든다", TD,
+  '        elif not verdict.startswith("**못 읽었다**"):',
+  '        else:',
+  ["tests/application/test_trace_digest.py::test_못_읽은_시도의_질의는_이미_한_질의가_아니다"]),
  ("대기 태스크의 갱신을 반복으로 찍는다", TD,
   '        if task_id in waiting:\n            marks.append("대기 중이던 태스크의 갱신")\n        elif spoken in visible:',
   '        if spoken in visible:',
@@ -496,7 +514,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 109, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 113, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

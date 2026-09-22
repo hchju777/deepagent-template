@@ -857,3 +857,33 @@ async def test_전송_오류는_같은_프롬프트로_다시_묻는다(case):
     assert llm.prompts[1] == llm.prompts[0], "전송 오류 뒤에 수리 프롬프트가 나갔다"
     assert "403" not in llm.prompts[1]
 
+
+# ── 낱개 검증 — 사내 네 번째 트레이스 ────────────────────────────────────
+
+async def test_role은_코드가_정한다(case):
+    """조금 나은 모델이 태스크마다 `log_reader` 같은 role을 지어 넣었고, 닫힌 어휘라
+    **답 전체가 거부**됐다 — integrate 네 라운드 중 셋. role은 실행 배선이고, 배선은
+    action이 정한다. 리드가 뭐라고 적든 코드가 덮는다."""
+    frame, _, _ = leads(reply(tasks=[{**TASK, "role": "log_reader"}]))
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch
+    assert [t.role for t in patch["plan_tasks"]] == ["data_prober"]
+
+
+async def test_모양이_틀린_태스크만_버리고_나머지는_받는다(case):
+    """목록째 검증하면 하나 때문에 답 전체가 날아가고, 수리 재시도는 **다른 계획**을 낸다."""
+    bad = {**TASK, "id": "t-2", "params": "객체가 아니다"}
+    frame, _, _ = leads(reply(tasks=[TASK, bad]))
+    patch = await frame(CaseState(case=case))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-1"]
+    assert any("t-2" in e and "받지 않는다" in e for e in patch["llm_errors"]), patch["llm_errors"]
+
+
+async def test_모양이_틀린_가설만_버린다(case):
+    frame, _, _ = leads(reply(hypotheses=[{"id": "h-1", "statement": "가"},
+                                          {"id": "h-2", "statement": "나", "status": "maybe"}],
+                              tasks=[TASK]))
+    patch = await frame(CaseState(case=case))
+    assert [h.id for h in patch["hypotheses"]] == ["h-1"]
+    assert any("h-2" in e for e in patch["llm_errors"])
+

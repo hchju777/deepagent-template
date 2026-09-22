@@ -128,3 +128,16 @@ async def run_action(adapters: Any, action: str, params: dict, *,
         # 순찰 라운드나 조사 라운드 전체를 지우면 안 된다.
         return ProbeResult.failed(f"호출이 던졌다 — {type(exc).__name__}: {exc}",
                                   source=source, clock=clock)
+
+
+def role_for(action: str) -> str:
+    """태스크의 `role`은 **코드가 action에서 정한다** — 리드가 정하지 않는다.
+
+    `role`은 실행 배선(누가 이 태스크를 도는가)이고, 지금 등재된 읽기는 전부 프로브
+    실행기가 돈다. 리드에게 이 값을 맡겼더니 조금 나은 모델이 태스크마다 `log_reader`
+    같은 이름을 지어 넣었고, 닫힌 어휘라 **답 전체가 거부**됐다 — 사내 네 번째
+    트레이스에서 integrate 네 라운드 중 셋이 그렇게 날아가고 재시도가 다른 계획을 냈다.
+    11b가 서브에이전트를 붙이면 여기서 action별로 갈라진다.
+    """
+    return "data_prober"
+

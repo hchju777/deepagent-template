@@ -731,3 +731,12 @@ def test_예시가_증거_id의_모양을_보여준다():
     cited = example["hypotheses"][0]["supporting_ids"]
     assert cited, "인용 자리가 없으면 모델은 인용을 아예 안 한다"
     assert ".e" in cited[0], f"증거 id의 모양이 안 보인다 — {cited[0]!r}"
+
+
+def test_예시에_role이_없다():
+    """`role`은 코드가 action에서 정한다. 보여 주면 모델이 태스크마다 다른 이름으로
+    다듬고, 그게 닫힌 어휘라 답 전체가 거부됐었다(사내 네 번째 트레이스)."""
+    for phase in ("frame", "integrate"):
+        example = json.loads(briefing.example_block(site(), phase=phase, services=("api",)))
+        assert all("role" not in t for t in example["tasks"]), phase
+

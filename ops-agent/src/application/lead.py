@@ -31,6 +31,7 @@ from pydantic import Field
 from src.application import briefing
 from src.application.schemas import Parsed, parse_object, validate
 from src.application.state import CaseState
+from src.domain.actions import role_for
 from src.domain.base import StrictModel
 from src.domain.case import Hypothesis, PlanTask
 from src.domain.llm import LlmPort
@@ -75,15 +76,18 @@ def slots_in(template: str) -> set[str]:
 _SLOT = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
 
+# 태스크·가설은 여기서 `dict`로 받고 **낱개로** 검증한다(`_items`). 목록째 모델로 받으면
+# 태스크 하나의 모양이 틀렸을 때 답 전체가 거부되고, 수리 재시도는 **다른 계획**을 낸다 —
+# 사내 네 번째 트레이스에서 `role` 하나 때문에 integrate 셋이 그렇게 날아갔다.
 class FrameReply(StrictModel):
-    hypotheses: list[Hypothesis] = []
-    tasks: list[PlanTask] = []
+    hypotheses: list[dict] = []
+    tasks: list[dict] = []
 
 
 class IntegrateReply(StrictModel):
     decision: Literal["continue", "conclude"] = "continue"
-    hypotheses: list[Hypothesis] = []
-    tasks: list[PlanTask] = []
+    hypotheses: list[dict] = []
+    tasks: list[dict] = []
     # 모델이 설명을 덧붙이고 싶어 하는 자리. 없으면 지어내서 다른 칸에 넣는다.
     note: str = Field(default="", max_length=2000)
 
@@ -159,6 +163,33 @@ def _failure(where: str, reason: str) -> dict:
             "decision": "conclude", "stopped_by": "llm_error"}
 
 
+def _items(where: str, kind: str, raw: list, model, *, fix=None) -> tuple[list, list[str]]:
+    """목록의 항목을 **낱개로** 검증한다 — 틀린 것만 버리고 사유를 남긴다.
+
+    `fix`는 검증 전에 코드가 강제로 채우는 것(태스크의 `role`). 곁다리 키는
+    `validate`가 걷어내고, 그것도 기록한다.
+    """
+    kept, notes = [], []
+    for item in raw:
+        if not isinstance(item, dict):
+            notes.append(f"{where}: {kind} 하나가 객체가 아니다 — 받지 않는다")
+            continue
+        body = fix(item) if fix else item
+        got = validate(body, model)
+        label = body.get("id") or kind
+        if not got.ok:
+            notes.append(f"{label}: {kind} 모양이 틀렸다 — {got.error} — 받지 않는다")
+            continue
+        if got.dropped:
+            notes.append(f"{label}: 스키마에 없는 키를 걷어냈다 — {', '.join(got.dropped)}")
+        kept.append(model.model_validate(got.data))
+    return kept, notes
+
+
+def _with_role(task: dict) -> dict:
+    return {**task, "role": role_for(str(task.get("action", "")))}
+
+
 def _dropped_note(where: str, got: Parsed) -> list[str]:
     """걷어낸 곁다리 키를 `llm_errors`에 남길 한 줄. 조용히 고치지 않는다."""
     if not got.dropped:
@@ -192,9 +223,10 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
         got = await ask_json(llm, prompt, FrameReply, on_exchange=_hook("frame", state))
         if not got.ok:
             return _failure("frame", got.error)
-        return {"hypotheses": [Hypothesis.model_validate(h) for h in got.data["hypotheses"]],
-                "plan_tasks": [PlanTask.model_validate(t) for t in got.data["tasks"]],
-                "llm_errors": _dropped_note("frame", got)}
+        hypotheses, h_notes = _items("frame", "가설", got.data["hypotheses"], Hypothesis)
+        tasks, t_notes = _items("frame", "태스크", got.data["tasks"], PlanTask, fix=_with_role)
+        return {"hypotheses": hypotheses, "plan_tasks": tasks,
+                "llm_errors": _dropped_note("frame", got) + h_notes + t_notes}
 
     async def integrate(state: CaseState) -> dict:
         prompt = fill(prompts["integrate"],
@@ -206,9 +238,11 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                              on_exchange=_hook("integrate", state))
         if not got.ok:
             return _failure("integrate", got.error)
+        hypotheses, h_notes = _items("integrate", "가설", got.data["hypotheses"], Hypothesis)
+        tasks, t_notes = _items("integrate", "태스크", got.data["tasks"], PlanTask,
+                                fix=_with_role)
         return {"decision": got.data["decision"],
-                "hypotheses": [Hypothesis.model_validate(h) for h in got.data["hypotheses"]],
-                "plan_tasks": [PlanTask.model_validate(t) for t in got.data["tasks"]],
-                "llm_errors": _dropped_note("integrate", got)}
+                "hypotheses": hypotheses, "plan_tasks": tasks,
+                "llm_errors": _dropped_note("integrate", got) + h_notes + t_notes}
 
     return frame, integrate
