@@ -52,10 +52,36 @@ _SLOT = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 _KNOWN_SLOTS = frozenset({"gbm", "fct"})
 
 
+FLOW_KINDS = ("topic", "group", "collection", "rediskey")
+
+
+class FlowSpec(StrictModel):
+    """흐름 그래프가 **이름을 어디서 뽑는가** — 합친 대상 config의 점 경로.
+
+    자원 종류 → 그 종류의 이름들이 사는 키 경로. 경로 끝이 dict면 값 하나하나가
+    이름이고 str이면 그것이 이름이다. 사내 config 모양이 다르면 이 표만 고친다.
+    기본값은 로컬 측정판의 모양이고, 안 맞으면 `code status`가 "이름 0개"로 말한다.
+    """
+    name_paths: dict[str, list[str]] = {
+        "topic": ["kafka.topics"], "group": ["kafka.groups"],
+        "collection": ["mongo.collections"], "rediskey": ["redis.keys"]}
+
+    @field_validator("name_paths")
+    @classmethod
+    def _known_kinds(cls, paths: dict[str, list[str]]) -> dict[str, list[str]]:
+        unknown = sorted(set(paths) - set(FLOW_KINDS))
+        if unknown:
+            raise ValueError(f"모르는 자원 종류 — {', '.join(unknown)}. "
+                             f"쓸 수 있는 것: {', '.join(FLOW_KINDS)}")
+        return paths
+
+
 class Topology(StrictModel):
     """GBM 하나의 서비스 지도. **사이트 단위가 아니다** — 코드는 GBM별로 같다."""
 
     services: dict[str, Service] = {}
+    # 흐름 그래프(11c)가 이름을 뽑는 자리. 없으면 기본 표.
+    flow: FlowSpec = FlowSpec()
     # 대상 레포 안에서 **이름이 사는 곳**. 층 순서대로 적는다(앞이 밑바닥).
     #
     # `{gbm}`·`{fct}`를 쓸 수 있다 — 대상의 config가 법인별로도 갈리기 때문이다

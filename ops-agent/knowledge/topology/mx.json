@@ -36,5 +36,13 @@
     "config/gbm/{gbm}.json",
     "config/factories/{fct}/common.json",
     "config/factories/{fct}/{gbm}.json"
-  ]
+  ],
+  "flow": {
+    "name_paths": {
+      "topic": ["kafka.topics"],
+      "group": ["kafka.groups"],
+      "collection": ["mongo.collections"],
+      "rediskey": ["redis.keys"]
+    }
+  }
 }

@@ -492,6 +492,32 @@ CASES = [
   '    max_rounds: int = Field(default=6, ge=1)',
   '    max_rounds: int = Field(default=4, ge=1)',
   ["tests/config/test_schema_app.py::test_라운드_상한_기본값은_6이다"]),
+ # ── 11c 흐름 그래프 ────────────────────────────────────────────────
+ ("키 토큰을 부모 키 없이 맞춘다", ROOT / "src/knowledge/flow.py",
+  '                if (confidence == "INFERRED" and name.parent_token\n                        and name.parent_token not in hit.text):\n                    continue',
+  '                if False:\n                    continue',
+  ["tests/knowledge/test_flow.py::test_키_토큰은_부모_키가_같은_줄에_있어야_한다"]),
+ ("동사를 조각이 아니라 통째로 맞춘다", ROOT / "src/knowledge/flow.py",
+  '        for chunk in word.split("_"):',
+  '        for chunk in [word]:',
+  ["tests/knowledge/test_flow.py::test_측정판_코드에서_흐름이_나온다"]),
+ ("동사 없는 줄을 버린다", ROOT / "src/knowledge/flow.py",
+  '                relation = (RELATION[name.kind][verb] if verb in ("reads", "writes")\n                            else "mentions")',
+  '                if verb not in ("reads", "writes"):\n                    continue\n                relation = RELATION[name.kind][verb]',
+  ["tests/knowledge/test_flow.py::test_동사가_없는_줄은_mentions로_남긴다"]),
+ ("경로가 흐름 방향을 무시한다", ROOT / "src/knowledge/flow.py",
+  '    if undirected:\n        if node == edge["source"]:',
+  '    if True:\n        if node == edge["source"]:',
+  ["tests/knowledge/test_flow.py::test_processor에서_sink까지_경로는_토픽을_지난다",
+   "tests/knowledge/test_flow.py::test_흐름이_없으면_경로도_없다"]),
+ ("모르는 자원 종류를 받는다", ROOT / "src/knowledge/schema.py",
+  '        unknown = sorted(set(paths) - set(FLOW_KINDS))',
+  '        unknown = []',
+  ["tests/knowledge/test_flow.py::test_모르는_자원_종류는_거부한다"]),
+ ("디렉터리 이름 귀속을 안 한다", ROOT / "src/knowledge/flow.py",
+  '    head = file.split("/", 1)[0]\n    if head in candidates:\n        return head, "INFERRED"',
+  '    pass',
+  ["tests/knowledge/test_flow.py::test_파일을_서비스에_붙인다"]),
  ("대기 태스크의 갱신을 반복으로 찍는다", TD,
   '        if task_id in waiting:\n            marks.append("대기 중이던 태스크의 갱신")\n        elif spoken in visible:',
   '        if spoken in visible:',
@@ -523,7 +549,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 115, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 121, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
