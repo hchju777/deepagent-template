@@ -154,7 +154,7 @@ def _dropped_note(where: str, got: Parsed) -> list[str]:
 
 def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds: int,
               evidence_budget: int = 12000, trace=None,
-              services: tuple[str, ...] = ()):
+              services: tuple[str, ...] = (), roles: dict[str, str] | None = None):
     """`EngineDeps`의 `frame`·`integrate` 자리에 꽂을 두 함수를 만든다.
 
     `services`는 대상 코드(11a)가 준비됐을 때만 채워진다. 비어 있으면 `code.*`가
@@ -174,7 +174,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
     async def frame(state: CaseState) -> dict:
         prompt = fill(prompts["frame"],
                       briefing.frame_fields(state, site_config=site_config,
-                                            services=services))
+                                            services=services, roles=roles))
         got = await ask_json(llm, prompt, FrameReply, on_exchange=_hook("frame", state))
         if not got.ok:
             return _failure("frame", got.error)
@@ -187,7 +187,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                       briefing.integrate_fields(state, site_config=site_config,
                                                 max_rounds=max_rounds,
                                                 evidence_budget=evidence_budget,
-                                                services=services))
+                                                services=services, roles=roles))
         got = await ask_json(llm, prompt, IntegrateReply,
                              on_exchange=_hook("integrate", state))
         if not got.ok:

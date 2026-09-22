@@ -51,6 +51,11 @@ class DeployedCode(DeployedCodePort):
         """브리핑이 목록과 예시에 박을 이름들. **호출부가 토폴로지를 뒤지지 않게** 한다."""
         return tuple(sorted(self._topology.services))
 
+    def service_roles(self) -> dict[str, str]:
+        """이름 → 역할. 역할이 빈 서비스는 뺀다 — 빈 괄호는 정보가 아니라 소음이다."""
+        return {name: svc.role for name, svc in sorted(self._topology.services.items())
+                if svc.role}
+
     def describe(self) -> str:
         return f"code({self._gbm}/{self._fct}, 서비스 {len(self._topology.services)}개)"
 

@@ -10,6 +10,9 @@
 결정론이 없으면 테스트는 무작위로 깨지고, 무작위로 깨지는 테스트는 아무도
 믿지 않게 되고, 안 믿는 테스트는 없는 것과 같다.
 """
+import asyncio
+from pathlib import Path
+
 from src.domain.base import Clock
 from src.domain.llm import LlmPort, LlmReply
 
@@ -71,3 +74,53 @@ class ExplodingAdapter(LlmPort):
     async def ask(self, prompt: str) -> LlmReply:
         self.prompts.append(prompt)
         raise RuntimeError(self._message)
+
+
+class FileTurnAdapter(LlmPort):
+    """**바깥의 무언가가 답을 써 넣는** 턴 방식. 프롬프트를 `NNN-ask.md`로 내고
+    `NNN-reply.md`가 생길 때까지 기다린다.
+
+    왜 있나: 사내 모델은 이 리포 밖에서만 돈다. 측정을 매번 사내에 부탁하면 사람이
+    결과를 손으로 옮겨야 하고, 그게 11a 후반의 왕복 전부였다. 이 어댑터면 **같은
+    배선**(CLI → 리드 → 그래프 → 트레이스)을 여기서 끝까지 돌리고, 리드 자리에만
+    약한 모델 대역을 세울 수 있다.
+
+    답 파일이 안 오면 `status="error"`로 흡수한다 — 던지지 않는다(규율 1).
+    """
+
+    def __init__(self, turn_dir: str | Path, *, clock: Clock, model: str = "file",
+                 timeout_s: float = 1800.0, poll_s: float = 1.0):
+        self._dir = Path(turn_dir)
+        self._clock = clock
+        self._model = model
+        self._timeout = timeout_s
+        self._poll = poll_s
+        self._turn = 0
+
+    def describe(self) -> str:
+        return f"file {self._model} → {self._dir}"
+
+    async def ask(self, prompt: str) -> LlmReply:
+        self._turn += 1
+        asked_at = self._clock()
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            ask = self._dir / f"{self._turn:03d}-ask.md"
+            reply = self._dir / f"{self._turn:03d}-reply.md"
+            reply.unlink(missing_ok=True)          # 지난 실행의 답을 새 답으로 오인하지 않게
+            ask.write_text(prompt, encoding="utf-8")
+            waited = 0.0
+            while not reply.exists():
+                if waited >= self._timeout:
+                    return LlmReply(status="error", asked_at=asked_at, model=self._model,
+                                    error=f"{reply.name}이 {self._timeout:.0f}초 안에 안 왔다")
+                await asyncio.sleep(self._poll)
+                waited += self._poll
+            # 쓰는 쪽이 아직 쓰는 중일 수 있다 — 한 박자 뒤에 읽는다.
+            await asyncio.sleep(self._poll)
+            return LlmReply(status="ok", asked_at=asked_at, model=self._model,
+                            text=reply.read_text(encoding="utf-8"))
+        except Exception as exc:                                        # noqa: BLE001
+            return LlmReply(status="error", asked_at=asked_at, model=self._model,
+                            error=f"{type(exc).__name__}: {exc}")
+

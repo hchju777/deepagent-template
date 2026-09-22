@@ -83,7 +83,10 @@ class TlsConfig(StrictModel):
 
 
 class LlmConfig(StrictModel):
-    adapter: Literal["chat_model", "http", "echo"] = "chat_model"
+    # `file`: 네트워크 없이 **바깥의 무언가가 답을 써 넣는** 턴 방식. 프롬프트를
+    # `turn_dir`에 파일로 내고 답 파일을 기다린다. 사내 모델 대역(약한 모델)을 이
+    # 리포 밖에서 세워 같은 배선으로 끝까지 돌려 보기 위한 것이다 — 운영용이 아니다.
+    adapter: Literal["chat_model", "http", "echo", "file"] = "chat_model"
     provider: Literal["openai_compatible"] = "openai_compatible"
     # 요청 body의 `model` 필드에 실린다.
     #
@@ -126,6 +129,8 @@ class LlmConfig(StrictModel):
     headers: dict[str, str] = {}           # 그 외 게이트웨이용 임의 헤더
 
     tls: TlsConfig = TlsConfig()
+    turn_dir: str = ""                     # adapter=file 전용
+    turn_timeout_s: float = 1800.0         # 답 파일을 이만큼 기다리고 오류로 흡수한다
 
     @field_validator("temperature")
     @classmethod
@@ -138,6 +143,8 @@ class LlmConfig(StrictModel):
     def _network_adapters_need_base_url(self):
         if self.adapter in ("chat_model", "http") and not self.base_url:
             raise ValueError(f"adapter={self.adapter}에는 base_url이 필요하다")
+        if self.adapter == "file" and not self.turn_dir:
+            raise ValueError("adapter=file에는 turn_dir이 필요하다")
         if self.base_url and not self.base_url.startswith(("http://", "https://")):
             raise ValueError(f"base_url은 http(s)://로 시작해야 한다 — {self.base_url}")
         return self

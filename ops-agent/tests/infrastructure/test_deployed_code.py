@@ -193,3 +193,11 @@ async def test_우리가_자른_것을_대상_탓으로_돌리지_않는다(cloc
     assert "JSON이 아니다" not in got.error, "우리가 자른 것을 대상 탓으로 돌렸다"
     assert "잘라서" in got.error, "왜 못 읽었는지가 안 적혀 있다"
     assert "경로" not in got.error, "경로를 고치라고 하면 맞는 경로를 고치러 간다"
+
+
+def test_역할은_이름_옆에_붙일_수_있게_따로_준다(code):
+    """`Service.role`은 "리드가 누구를 봐야 하나를 고르는 유일한 단서"인데, `code.services`를
+    불러야만 보였다. 브리핑이 이름 옆에 붙이려면 호출부가 토폴로지를 안 뒤지고 받을 수
+    있어야 한다. 역할이 빈 서비스는 뺀다 — 빈 괄호는 정보가 아니다."""
+    assert code("gumi").service_roles() == {"processor": "가공한다"}
+

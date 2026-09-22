@@ -71,6 +71,18 @@
 | 다크모드 메일 | ❌ 확인 안 됨 |
 | 며칠 연속 운영 | ❌ |
 
+### 먼저 여기서 돌린다 — `tools/local_case.py`
+
+```bash
+.venv/bin/python tools/local_case.py --root output/local-case     # 측정판을 만든다
+# 찍힌 두 명령 중 첫째(investigate)를 돌리고, output/local-case/turns/NNN-ask.md 가
+# 생길 때마다 리드 대역(haiku 에이전트 등)이 NNN-reply.md 를 써 준다. 둘째(trace)로 요약.
+```
+
+하네스를 고쳤으면 **사내보다 먼저 이걸 돌린다.** 같은 배선(CLI → 리드 → 그래프 → 트레이스)
+이고 리드 자리만 파일 턴이다. 심은 고장은 sink 컨슈머 정지 하나, 이름은 전부 지어낸 것.
+사내 실행은 마지막 확인 한 번이면 된다.
+
 ### 사내 실행 결과를 넘길 때 — `case trace`
 
 ```bash
@@ -92,6 +104,8 @@ N회째)`(JSON을 못 읽어 다시 물음) 또는 `(거부 뒤 다시 물음)`(
 
 ### 사람이 해야 할 일
 
+0. **사내 `knowledge/topology/<gbm>.json`의 서비스마다 `role` 한 줄.** 리드가 "누구를 봐야
+   하나"를 고르는 유일한 단서이고, 이제 목록에 이름 옆에 붙어 나간다. 비어 있으면 이름만 나간다.
 1. 사내 `config/scenarios/daily-alarm.json`에서 **`"per_gbm": true` 줄을 지워야 한다.**
    그 설정을 없앴고 `extra="forbid"`라서 남아 있으면 config가 로드되지 않는다
    (기동에서 시끄럽게 죽는다).

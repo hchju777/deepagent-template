@@ -13,6 +13,10 @@ def build_llm(cfg: LlmConfig, *, clock: Clock, warn=None) -> LlmPort:
     if cfg.adapter == "echo":
         from src.infrastructure.llm_fakes import EchoAdapter
         return EchoAdapter(clock=clock, model=cfg.model)
+    if cfg.adapter == "file":
+        from src.infrastructure.llm_fakes import FileTurnAdapter
+        return FileTurnAdapter(cfg.turn_dir, clock=clock, model=cfg.model,
+                               timeout_s=cfg.turn_timeout_s)
 
     warn_if_unverified(cfg.tls, warn=warn)      # 검증이 꺼졌으면 시끄럽게
 

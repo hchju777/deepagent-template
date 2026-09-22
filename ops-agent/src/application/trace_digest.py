@@ -45,6 +45,7 @@ _VALUE_CHARS = 40
 def digest(entries: list[tuple[str, str]]) -> list[str]:
     """`(파일명, 내용)` 목록 → 붙여넣을 줄들. **파일명 순서가 곧 라운드 순서다.**"""
     lines, asked, attempts = ["트레이스 요약"], {}, {}
+    last_added: set[str] = set()
     for name, text in sorted(entries):
         match = _FILE.match(name)
         if match is None:
@@ -55,8 +56,16 @@ def digest(entries: list[tuple[str, str]]) -> list[str]:
         attempts[(round_no, node)] = attempts.get((round_no, node), 0) + 1
         prompt = _section(text, "물어본 것")
         reply = _section(text, "날것 응답")
+        # 거부 뒤 되물었으면 **앞 답은 통째로 버려진 것**이다. 그 답의 질의를 "이미 한
+        # 질의"로 들고 있으면 되물은 답이 같은 읽기를 내는 것을 반복으로 찍는다 — 로컬
+        # 대역 측정에서 실제로 그렇게 찍혔다(t-6 `kafka.tail`).
+        if REDO_MARK in _block(prompt, "버려진 태스크"):
+            for query in last_added:
+                asked.pop(query, None)
+        before = set(asked)
         lines += _round(round_no, node, prompt, reply, asked,
                         attempt=attempts[(round_no, node)], verdict=_verdict(text))
+        last_added = set(asked) - before
     if len(lines) == 1:
         lines.append("  (읽을 수 있는 트레이스 파일이 없다)")
     return lines
@@ -87,6 +96,10 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
                for line in evidence.splitlines()
                if line.startswith("- ") and line.count(" | ") >= 2}
     shown = _tasks(_example(prompt))
+    # 아직 안 돈 태스크를 같은 id로 다시 낸 것은 **갱신**이다(우선순위를 올려 달라는 뜻).
+    # 그걸 "이미 한 질의"로 찍으면 정상 동작이 반복으로 읽힌다.
+    waiting = set(re.findall(r"^- (t-\d+) \[pending\]",
+                             _block(prompt, "지금까지의 태스크"), re.M))
     made = _tasks(parse_object(reply).data if parse_object(reply).ok else None)
 
     # 같은 라운드의 두 번째 파일은 둘 중 하나다 — JSON을 못 읽어 다시 물은 것, 또는
@@ -139,7 +152,9 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
             marks.append(f"증거에 없는 이름 {', '.join(ghosts)}")
         query = _shape(action, params)
         spoken = describe(action, params)
-        if spoken in visible:
+        if task_id in waiting:
+            marks.append("대기 중이던 태스크의 갱신")
+        elif spoken in visible:
             marks.append("**이미 한 질의 — 증거에 보이는데도 또 냈다**")
         elif query in asked:
             marks.append(f"이미 {asked[query]}에서 한 질의(증거엔 안 보였다)")

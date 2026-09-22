@@ -835,3 +835,13 @@ async def test_거부되면_같은_프롬프트에_사유를_얹어_되묻는다
     assert REDO_MARK in llm.prompts[1] and "t-2" in llm.prompts[1]
     assert [t.action for t in patch["plan_tasks"]] == ["kafka.list_topics"]
 
+
+async def test_역할이_리드_프롬프트까지_간다(case):
+    """`make_lead(roles=)`가 배선돼 있는지 — 브리핑 단위 테스트만으로는 CLI가 넘기는
+    값이 프롬프트에 닿는지 안 보인다."""
+    llm = ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                              services=("api",), roles={"api": "저장된 것을 API 응답으로 바꾼다"})
+    await frame(CaseState(case=case))
+    assert "api — 저장된 것을 API 응답으로 바꾼다" in llm.prompts[0]
+

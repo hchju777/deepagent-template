@@ -133,6 +133,15 @@ def _taken(state: CaseState) -> frozenset:
     return frozenset(t.id for t in state.plan_tasks)
 
 
+def _pending(state: CaseState) -> frozenset:
+    return frozenset(t.id for t in state.plan_tasks if t.status == "pending")
+
+
+def _waiting(state: CaseState) -> dict[str, PlanTask]:
+    """질의 → 아직 안 돈 태스크. 같은 질의를 새 id로 다시 내면 **그 태스크의 갱신**이다."""
+    return {_query(t): t for t in state.plan_tasks if t.status == "pending" and t.action}
+
+
 def _done(state: CaseState) -> frozenset:
     return frozenset(_query(t) for t in state.plan_tasks if t.action)
 
@@ -165,7 +174,9 @@ def _query(task: PlanTask) -> str:
 
 def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   taken: frozenset = frozenset(),
-                  done: frozenset = frozenset()
+                  done: frozenset = frozenset(),
+                  pending: frozenset = frozenset(),
+                  waiting: dict[str, PlanTask] | None = None
                   ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
@@ -206,10 +217,32 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     """
     kept, reused, used, asked = [], [], set(taken), set(done)
     for task in patch.get("plan_tasks", []):
+        # **아직 안 돈 태스크는 같은 id로 다시 내면 갱신이다** — 거부가 아니다. `taken`이
+        # 막는 것은 끝난 id의 부활(재실행)이지 대기 중인 것의 손질이 아니다. 로컬 대역
+        # 측정에서 리드가 굶고 있던 t-4·t-5를 우선순위를 올려 다시 냈는데 "이미 있는
+        # id"로 거부됐고, 그 둘은 4라운드 내내 `pending`으로 남았다. 새 라운드의 태스크가
+        # 늘 앞 순위(10·20·30)라 오래된 40·50은 리드가 다시 내지 않는 한 영원히 안 돈다.
+        if task.id in pending and task.id not in used - set(taken):
+            kept.append(_sanitize_task(task))
+            used.add(task.id)
+            asked.add(_query(task))
+            continue
         if task.id in used:
             reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")
             continue
         query = _query(task)
+        # 같은 질의가 **아직 안 돈 채** 대기 중이면, 새 id로 다시 낸 것도 그 태스크의
+        # 갱신이다 — 리드는 "그 읽기를 원한다"고 말한 것이지 id를 아는 게 아니다. 로컬 대역
+        # 측정에서 r0의 t-4가 굶는 동안 리드가 t-12로 같은 읽기를 냈고, 거부 → 되물음 →
+        # 되물은 답에서 결정적 읽기가 빠지는 연쇄로 원인을 잘못 짚었다.
+        held = (waiting or {}).get(query)
+        if held is not None and held.id not in used - set(taken):
+            kept.append(_sanitize_task(held.model_copy(update={
+                "priority": task.priority, "goal": task.goal,
+                "input_evidence_ids": list(task.input_evidence_ids)})))
+            used.add(held.id)
+            asked.add(query)
+            continue
         if task.action and query in asked:
             reused.append(f"{task.id}: 이미 한 읽기를 또 냈다 — 받지 않는다 "
                           f"({describe(task.action, task.params)})")
@@ -228,6 +261,20 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     return kept, reused, guessed
 
 
+def _merge_tasks(first: list[PlanTask], second: list[PlanTask]) -> list[PlanTask]:
+    """되물음 앞뒤의 받은 태스크를 합친다 — 같은 id는 뒤가 이기고, 같은 질의는 하나만."""
+    merged = merge_by_id(first, second)
+    seen_queries: set[str] = set()
+    out = []
+    for task in merged:
+        query = _query(task) if task.action else task.id
+        if query in seen_queries:
+            continue
+        seen_queries.add(query)
+        out.append(task)
+    return out
+
+
 def make_nodes(deps: EngineDeps) -> dict:
     async def frame(state: CaseState) -> dict:
         patch = await deps.frame(state)
@@ -238,6 +285,7 @@ def make_nodes(deps: EngineDeps) -> dict:
         # 그게 맞다: 아직 아무것도 안 봤는데 이름을 안다면 찍은 것이다.
         tasks, rejected, guessed = _accept_tasks(
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
+            pending=_pending(state), waiting=_waiting(state),
             seen=_seen(state) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -277,7 +325,8 @@ def make_nodes(deps: EngineDeps) -> dict:
             """`(받은 태스크, 받은 가설, 거부 기록, 찍은 이름 기록)`."""
             fresh, rejected, guessed = _accept_tasks(
                 reply, room=deps.max_tasks - len(state.plan_tasks),
-                taken=_taken(state), done=_done(state),
+                taken=_taken(state), done=_done(state), pending=_pending(state),
+                waiting=_waiting(state),
                 seen=_seen(state) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=state.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed
@@ -300,9 +349,17 @@ def make_nodes(deps: EngineDeps) -> dict:
             if second.get("stopped_by"):
                 refused += list(second.get("llm_errors", []))
             else:
+                # **첫 답에서 받은 것은 남긴다.** 되물음은 거부된 것을 고쳐 받으려는 것이지
+                # 답을 새로 받으려는 것이 아니다. 처음엔 통째로 바꿨는데, 로컬 대역 측정에서
+                # 첫 답의 결정적 읽기(`gumi-mx-sink` 오프셋)가 되물은 답에 없어서 사라졌고,
+                # 리드는 끝까지 엉뚱한 서비스를 팠다. 같은 id는 되물은 쪽이 이기고, 같은
+                # 질의를 새 id로 또 냈으면 한 번만 남는다. 가설은 되물은 쪽(최신 판단)이다.
                 patch = second
-                fresh, hypotheses, later, guessed = accept(second)
+                more, hypotheses, later, more_guessed = accept(second)
+                fresh = _merge_tasks(fresh, more)
                 refused += later
+                guessed = [g for g in guessed
+                           if g.split(":")[0] in {t.id for t in fresh}] + more_guessed
         patch = {**patch, "plan_tasks": fresh, "hypotheses": hypotheses,
                  "llm_errors": list(patch.get("llm_errors", [])) + refused + guessed}
 

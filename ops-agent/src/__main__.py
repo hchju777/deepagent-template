@@ -816,6 +816,11 @@ def _make_tracer(case_id: str, *, folder: Path):
     리포에 들어가지 않는다 — 옮길 때도 이 폴더는 빼라.
     """
     folder.mkdir(parents=True, exist_ok=True)
+    # **지난 실행의 파일을 지운다.** 번호가 1부터 다시 시작하므로 짧은 실행 뒤에
+    # 긴 실행의 꼬리(`06-r4-…`)가 남고, `case trace`가 그걸 이번 라운드로 읽는다 —
+    # 사내에서 실제로 났다. 지난 r4가 이번 r4 앞에 그대로 찍혔다.
+    for stale in list(folder.glob("*.md")):
+        stale.unlink()
     seq = itertools.count(1)
     written: list[Path] = []
 
@@ -887,7 +892,8 @@ def cmd_case_investigate(args, env) -> int:
                 llm, site_config=site, prompts=prompts,
                 max_rounds=app.investigation.max_rounds,
                 evidence_budget=app.investigation.evidence_total_chars,
-                trace=tracer, services=services)
+                trace=tracer, services=services,
+                roles=code.service_roles() if code else {})
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars),

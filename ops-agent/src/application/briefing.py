@@ -25,13 +25,14 @@ import json
 import re
 
 from src.application.state import CaseState
-from src.domain.actions import ACTIONS
+from src.domain.actions import ACTIONS, describe
 
 # 리드가 쓸 수 없는 action. rest.query는 등재 항목마다 따로 적는다(인자가 다르다).
 _RENDERED_SEPARATELY = {"rest.query"}
 
 
-def action_catalog(site_config, *, services: tuple[str, ...] = ()) -> str:
+def action_catalog(site_config, *, services: tuple[str, ...] = (),
+                   roles: dict[str, str] | None = None) -> str:
     """부를 수 있는 읽기 목록. **config에서 생성한다.**
 
     `services`는 대상 코드(11a)가 준비됐을 때만 채워진다 — 코드의 가용 여부는
@@ -55,7 +56,14 @@ def action_catalog(site_config, *, services: tuple[str, ...] = ()) -> str:
         # 한참 떨어지고, 순서대로 읽는 모델에게는 그만큼 안 보인다.
         after = max((n for n, line in enumerate(lines)
                      if line.startswith("- code.")), default=len(lines) - 1)
-        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {', '.join(services)})")
+        # **역할을 이름 옆에 붙인다.** 토폴로지의 `role`은 "리드가 누구를 봐야 하나를
+        # 고르는 유일한 단서"라고 적어 놓고 정작 `code.services`를 불러야만 보이게
+        # 뒀었다 — 예시가 `code.config`로 바로 가라고 하니 한 번도 안 불렀다. 두 번째
+        # 전체 트레이스에서 가설이 4라운드 내내 하나로 고정된 채 결론을 못 낸 것이
+        # 그 결과다. 서비스가 무엇을 하는지 모르면 무엇을 확인해야 끝나는지도 모른다.
+        roles = roles or {}
+        named = [f"{name} — {roles[name]}" if roles.get(name) else name for name in services]
+        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {' / '.join(named)})")
 
     rest = site_config.infra.rest
     for entry_name, entry in sorted((rest.entries if rest else {}).items()):
@@ -157,8 +165,15 @@ def tasks_block(state: CaseState) -> str:
         # goal·error도 한 줄로 눕힌다. goal은 리드가 쓴 문장이라 개행이 들어올 수
         # 있고, error는 대상 시스템의 예외 메시지라 여러 줄인 것이 흔하다.
         detail = task.error or task.result_summary or ""
-        lines.append(f"- {task.id} [{task.status}] {_oneline(task.goal)}"
-                     + (f" — {_oneline(detail)}" if detail else ""))
+        line = (f"- {task.id} [{task.status}] {_oneline(task.goal)}"
+                + (f" — {_oneline(detail)}" if detail else ""))
+        # **증거를 못 만든 태스크는 질의를 여기 적는다.** 증거가 있으면 그 줄의
+        # `source`가 곧 질의라 리드가 볼 수 있지만, 실패했거나 빈 결과였던 태스크는
+        # 어디에도 질의가 안 보인다 — 그래서 리드가 같은 것을 또 내고 거부당한다
+        # (두 번째 전체 트레이스의 t-11 `kafka.tail`, "증거엔 안 보였다").
+        if task.status != "pending" and not task.result_evidence_ids and task.action:
+            line += f" · 질의: {describe(task.action, task.params)}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -373,9 +388,10 @@ def rejected_block(state: CaseState) -> str:
 
 
 def frame_fields(state: CaseState, *, site_config,
-                 services: tuple[str, ...] = ()) -> dict[str, str]:
+                 services: tuple[str, ...] = (),
+                 roles: dict[str, str] | None = None) -> dict[str, str]:
     return {"case": case_block(state),
-            "actions": action_catalog(site_config, services=services),
+            "actions": action_catalog(site_config, services=services, roles=roles),
             "example": example_block(site_config, phase="frame",
                                      start=next_task_number(state),
                                      services=services)}
@@ -383,9 +399,10 @@ def frame_fields(state: CaseState, *, site_config,
 
 def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      evidence_budget: int = 12000,
-                     services: tuple[str, ...] = ()) -> dict[str, str]:
+                     services: tuple[str, ...] = (),
+                     roles: dict[str, str] | None = None) -> dict[str, str]:
     return {"case": case_block(state),
-            "actions": action_catalog(site_config, services=services),
+            "actions": action_catalog(site_config, services=services, roles=roles),
             "example": example_block(site_config, phase="integrate",
                                      start=next_task_number(state),
                                      services=services,

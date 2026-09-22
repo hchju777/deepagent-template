@@ -438,7 +438,35 @@ def test_코드가_있으면_서비스_이름까지_적는다():
     (10b에서 측정). 이름을 안 적으면 `service="..."`를 진짜로 조회한다."""
     catalog = briefing.action_catalog(site(), services=("processor", "sink"))
     assert "code.config(service)" in catalog
-    assert "processor, sink" in catalog
+    assert "processor / sink" in catalog
+
+
+def test_역할이_있으면_이름_옆에_붙는다():
+    """**두 번째 전체 트레이스에서 잡힌 것이다.** 토폴로지의 `role`은 "리드가 누구를
+    봐야 하나를 고르는 유일한 단서"인데 `code.services`를 불러야만 보였고, 예시가
+    `code.config`로 바로 가라고 하니 리드는 한 번도 안 불렀다. 서비스가 무엇을 하는지
+    모르면 무엇을 확인해야 끝나는지도 모른다 — 가설이 4라운드 내내 하나로 고정됐다."""
+    catalog = briefing.action_catalog(site(), services=("processor", "sink"),
+                                      roles={"sink": "가공된 결과를 저장한다"})
+    assert "sink — 가공된 결과를 저장한다" in catalog
+    assert "processor /" in catalog, "역할이 없는 서비스도 이름은 남아야 한다"
+
+
+def test_증거를_못_만든_태스크는_질의를_보여준다(case):
+    """증거가 있으면 그 줄의 `source`가 곧 질의라 리드가 본다. 실패했거나 빈 결과였던
+    태스크는 어디에도 질의가 안 보여서 같은 것을 또 낸다 — 두 번째 전체 트레이스의
+    t-11 `kafka.tail`("증거엔 안 보였다")."""
+    from src.domain.actions import describe
+
+    failed = task("t-2", status="error", action="kafka.tail",
+                  params={"topic": "T", "limit": 5}, error="없는 토픽")
+    seen = task("t-1", status="ok", action="redis.get", params={"key": "k"},
+                result_evidence_ids=["t-1.e1"])
+    queued = task("t-3", status="pending", action="redis.get", params={"key": "q"})
+    block = briefing.tasks_block(CaseState(case=case, plan_tasks=[seen, failed, queued]))
+    assert describe("kafka.tail", {"topic": "T", "limit": 5}) in block
+    assert describe("redis.get", {"key": "k"}) not in block, "증거 줄이 이미 보여 준다"
+    assert describe("redis.get", {"key": "q"}) not in block, "대기 중인 것은 아직 질의가 아니다"
 
 
 def test_모르는_어댑터는_목록에_안_샌다():

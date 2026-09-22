@@ -173,3 +173,28 @@ def test_거부_뒤_되물은_것을_재시도와_가른다():
     second = _file(redo, json.dumps({"tasks": []}), name="02-r2-integrate.md")[0]
     text = "\n".join(digest([first, second]))
     assert "거부 뒤 다시 물음" in text and "재시도" not in text
+
+
+def test_되물음_앞의_버려진_답은_이미_한_질의가_아니다():
+    """되물었으면 앞 답은 통째로 버려진 것이다. 그 답의 질의를 들고 있으면 되물은 답이
+    같은 읽기를 내는 것을 반복으로 찍는다 — 로컬 대역 측정에서 그렇게 찍혔다."""
+    from src.application.nodes import REDO_MARK
+
+    read = _task("t-6", "kafka.tail", {"topic": "T", "limit": 5})
+    first = _file(_prompt(), json.dumps({"tasks": [read]}))[0]
+    redo = _prompt(rejected=f"- {REDO_MARK}t-4: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")
+    second = _file(redo, json.dumps({"tasks": [read]}), name="02-r2-integrate.md")[0]
+    text = "\n".join(digest([first, second]))
+    assert "이미 r2에서 한 질의" not in text
+
+
+def test_대기_중이던_태스크를_같은_id로_다시_내면_갱신이라고_적는다():
+    """세 번째 로컬 실행에서 리드가 굶던 t-4를 같은 id로 다시 냈고 엔진은 갱신으로
+    받았는데, 요약은 "이미 r0에서 한 질의"로 찍었다. 정상 동작이 반복으로 읽힌다."""
+    read = _task("t-4", "kafka.list_topics", {})
+    first = _file(_prompt(), json.dumps({"tasks": [read]}), name="01-r0-frame.md")[0]
+    later = _file(_prompt(tasks="- t-4 [pending] 토픽 목록"), json.dumps({"tasks": [read]}),
+                  name="02-r1-integrate.md")[0]
+    text = "\n".join(digest([first, later]))
+    assert "대기 중이던 태스크의 갱신" in text and "이미 r0에서 한 질의" not in text
+

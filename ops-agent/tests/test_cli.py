@@ -495,3 +495,18 @@ def test_report_prompt이_실제로_나갈_프롬프트를_찍는다(echo_config
     assert not leftovers, report(f"치환되지 않은 자리가 찍혔다 — {leftovers}")
     assert "333자 이내" in captured.out, report("상한이 프롬프트에 안 들어갔다")
     assert "허용 숫자" in captured.out, report("허용 목록을 함께 보여야 한다")
+
+
+def test_트레이스_폴더는_실행마다_비운다(tmp_path):
+    """**사내에서 실제로 났다.** 번호가 1부터 다시 시작하므로 짧은 실행 뒤에 긴 실행의
+    꼬리(`06-r4-…`)가 남았고, `case trace`가 지난 r4를 이번 r4 앞에 그대로 찍었다."""
+    from src.__main__ import _make_tracer
+
+    folder = tmp_path / "c-1"
+    folder.mkdir()
+    (folder / "06-r4-integrate.md").write_text("지난 실행", encoding="utf-8")
+    trace, written = _make_tracer("c-1", folder=folder)
+    trace("frame", 0, "물음", "답", None)
+    assert not (folder / "06-r4-integrate.md").exists()
+    assert [path.name for path in written] == ["01-r0-frame.md"]
+

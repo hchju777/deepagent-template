@@ -326,3 +326,90 @@ async def test_되묻기를_끄면_한_번만_묻는다(case):
     await make_nodes(deps)["integrate"](CaseState(case=case, round=1,
                                                   plan_tasks=[task("t-1", status="ok")]))
     assert len(calls) == 1
+
+
+# ── 대기 중인 태스크의 손질 ────────────────────────────────────────────
+
+
+async def test_대기_중인_태스크는_같은_id로_다시_내면_갱신이다(case):
+    """**로컬 대역 측정에서 잡힌 것이다.** 새 라운드의 태스크가 늘 앞 순위(10·20·30)라
+    frame에서 40·50으로 낸 t-4·t-5는 폭 3에서 영원히 안 돌았고, 리드가 그걸 눈치채고
+    다시 냈더니 "이미 있는 id"로 거부됐다. `taken`이 막을 것은 끝난 id의 부활이다."""
+    async def lead(state):
+        return {"decision": "continue",
+                "plan_tasks": [task("t-4", priority=5, params={"key": "k-t-4"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    waiting = task("t-4", status="pending", priority=40, params={"key": "k-t-4"})
+    patch = await nodes["integrate"](CaseState(case=case, round=2,
+                                               plan_tasks=[task("t-1", status="ok"), waiting]))
+    assert [(t.id, t.priority, t.status) for t in patch["plan_tasks"]] == [("t-4", 5, "pending")]
+    assert not [e for e in patch["llm_errors"] if "받지 않는다" in e], patch["llm_errors"]
+
+
+async def test_끝난_태스크의_id는_여전히_받지_않는다(case):
+    """갱신 허용이 끝난 태스크의 부활까지 열면 안 된다 — 그게 원래 `taken`의 이유다."""
+    async def lead(state):
+        return {"decision": "continue", "plan_tasks": [task("t-1", params={"key": "k-t-1"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=2,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert patch["plan_tasks"] == []
+    assert any("이미 있는 태스크 id" in e for e in patch["llm_errors"])
+
+
+async def test_대기_중인_질의를_새_id로_내면_그_태스크의_갱신이다(case):
+    """리드는 "그 읽기를 원한다"고 말한 것이지 id를 아는 게 아니다. 로컬 대역 측정에서
+    굶던 t-4와 같은 읽기를 t-12로 냈다가 거부 → 되물음 → 결정적 읽기 증발로 이어졌다."""
+    async def lead(state):
+        return {"decision": "continue",
+                "plan_tasks": [task("t-12", priority=10, goal="다시", params={"key": "k-t-4"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    waiting = task("t-4", status="pending", priority=40, params={"key": "k-t-4"})
+    patch = await nodes["integrate"](CaseState(case=case, round=2,
+                                               plan_tasks=[task("t-1", status="ok"), waiting]))
+    assert [(t.id, t.priority, t.goal) for t in patch["plan_tasks"]] == [("t-4", 10, "다시")]
+    assert not [e for e in patch["llm_errors"] if "받지 않는다" in e], patch["llm_errors"]
+
+
+async def test_되물은_답은_첫_답에서_받은_것을_버리지_않는다(case):
+    """되물음은 거부된 것을 고쳐 받으려는 것이다. 통째로 바꾸면 첫 답의 결정적 읽기가
+    되물은 답에 없을 때 사라진다 — 로컬 대역 측정에서 `gumi-mx-sink` 오프셋이 그랬다."""
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        if len(calls) == 1:
+            return {"decision": "continue",
+                    "plan_tasks": [task("t-1", params={"key": "k-t-1"}),      # 끝난 id → 거부
+                                   _fresh_read("t-9")]}                       # 결정적 읽기
+        return {"decision": "continue",
+                "plan_tasks": [_fresh_read("t-11"),                           # 같은 읽기, 새 id
+                               task("t-10", action="kafka.list_topics", params={})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert len(calls) == 2
+    # 첫 답의 t-9는 남고, 같은 읽기를 새 id로 또 낸 t-11은 하나로 접힌다.
+    assert [t.id for t in patch["plan_tasks"]] == ["t-9", "t-10"]
+
+
+async def test_되물은_답이_첫_답의_것을_빼도_남는다(case):
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        if len(calls) == 1:
+            return {"decision": "continue",
+                    "plan_tasks": [task("t-1", params={"key": "k-t-1"}), _fresh_read("t-9")]}
+        return {"decision": "continue",
+                "plan_tasks": [task("t-10", action="kafka.list_topics", params={})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-9", "t-10"]
+
