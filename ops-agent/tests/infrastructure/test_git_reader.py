@@ -95,6 +95,27 @@ async def test_문맥을_청하면_앞뒤_줄이_대시로_온다(reader):
     assert [l for l in with_ctx.data.splitlines() if "app.py-2-" in l and "pass" in l]
 
 
+async def test_고정_문자열이면_점이_점이다(reader):
+    """흐름 추출은 config의 리터럴을 찾는다 — `NEW.NAME`이 `NEW_NAME`에 맞으면 거짓 엣지다.
+    기본은 정규식 그대로다(리드의 `code.grep`)."""
+    loose = await reader.grep("dt-core", "main", ["NEW.NAME"])
+    strict = await reader.grep("dt-core", "main", ["NEW.NAME"], fixed=True)
+    assert "config/common.json" in loose.data
+    assert strict.status == "ok" and strict.data.strip() == ""
+
+
+async def test_흐름용_상한은_호출부가_따로_준다(reader, repo):
+    """400줄은 리드에게 주는 봉투의 상한이다. 그래프 재료는 더 받되 잘리면 똑같이 말한다."""
+    root, _ = repo
+    (root / "big.txt").write_text("".join(f"ROW {i}\n" for i in range(1000)), encoding="utf-8")
+    _run("git", "add", "-A", cwd=root)
+    _run("git", "commit", "-qm", "big", cwd=root)
+    default = await reader.grep("dt-core", "main", ["ROW"])
+    assert default.envelope.complete is False and len(default.data.splitlines()) == 400
+    wide = await reader.grep("dt-core", "main", ["ROW"], max_lines=5000, max_chars=10_000_000)
+    assert wide.envelope.complete is True and len(wide.data.splitlines()) == 1000
+
+
 async def test_결과가_없는_것은_오류가_아니다(reader):
     """`git grep`은 못 찾으면 1로 끝난다. 그걸 오류로 삼으면 **"없다"가 "못 봤다"가
     되고**, 둘은 완전히 다른 사실이다(5단계의 `unreachable`과 같은 계열)."""

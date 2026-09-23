@@ -26,6 +26,35 @@ py -3.11 -m venv .venv
 .venv\Scripts\python.exe -m pytest -v
 ```
 
+### graphify (선택)
+
+흐름 그래프의 심볼 층은 [graphify](https://github.com/Graphify-Labs/graphify)가 만든다.
+**없어도 된다** — 없으면 `code graph`가 흐름 오버레이만 만들고 그렇게 적는다. 심볼 층은 11b의
+code_tracer부터 쓴다. `requirements.txt`에 넣지 않은 이유는 사내 반입 심사가 따로 필요해서다
+(PyPI `graphifyy` 0.9.65, Apache-2.0, Python 3.10+, 의존성 32개: tree-sitter 코어와 언어 문법 휠 26개,
+networkx, numpy, rapidfuzz. LLM SDK는 없고 우리가 부르는 `--code-only`·`--no-label` 경로는
+네트워크를 안 쓴다).
+
+온라인:
+
+```bash
+.venv/bin/pip install -r requirements-graph.txt
+```
+
+폐쇄망 — 밖에서 휠을 받아 반입한다. 받은 휠 파일 목록이 곧 심사 목록이다:
+
+```powershell
+# 인터넷 되는 곳에서 (문법 휠이 바이너리라 플랫폼·파이썬을 맞춘다)
+py -3.11 -m pip download -r requirements-graph.txt --only-binary=:all: --platform win_amd64 --python-version 311 -d wheelhouse
+# 사내에서
+.venv\Scripts\python.exe -m pip install --no-index --find-links wheelhouse -r requirements-graph.txt
+```
+
+설치만 하면 된다. `code graph`와 테스트는 `GRAPHIFY_BIN` → 실행 중인 python 옆(`.venv\Scripts`)
+→ PATH 순서로 찾으므로 activate 여부와 무관하다. 확인은
+`python -m pytest tests/knowledge/test_graph_build.py -v`에서 `test_진짜_graphify로_코드만_추출한다`가
+스킵이 아니라 통과하는 것.
+
 Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 모아 뒀다 —
 인코딩, tz 데이터베이스, 사내 CA와 TLS, 그리고 **같은 3.11인데 argparse 동작이
 갈린 사례**. 읽고 시작하는 편이 빠르다.

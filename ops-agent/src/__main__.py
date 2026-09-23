@@ -1205,14 +1205,19 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         print(f"  그래프: 지식 층을 읽을 수 없다 — {exc}", file=sys.stderr)
         return 1
 
+    import time
+    t0 = time.monotonic()
+
+    def progress(msg: str) -> None:
+        # 사내에서 몇 분을 말없이 돌자 "멈췄다"로 읽혔다. 단계마다 경과 시간과 함께 찍는다.
+        print(f"  [{time.monotonic() - t0:6.1f}s] {msg}", file=sys.stderr, flush=True)
+
     async def gather():
         names, problems = await code.flow_names()
-        table: dict[str, list] = {}
-        for name in names:
-            for pattern in name.patterns:
-                if pattern not in table:
-                    table[pattern] = await code.flow_hits(pattern)
-        return names, problems, table
+        patterns = sorted({p for name in names for p in name.patterns})
+        progress(f"이름 {len(names)}개 · 패턴 {len(patterns)}개 · 레포 {len(code.pinned())}개")
+        table, notes = await code.flow_hits(patterns, progress=progress)
+        return names, problems + notes, table
 
     names, problems, table = asyncio.run(gather())
     commits, more = _resolved_commits(site, code)
@@ -1222,14 +1227,17 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
 
     out_dir = _graph_dir(args, env, gbm, fct)
     binary = gb.find_graphify()
+    if not binary:
+        progress("graphify 없음 — 심볼 그래프는 건너뛴다 (requirements-graph.txt)")
     symbol_graphs, states = [], []
     for repo in site.code.repos:
         sha = commits.get(repo.name)
         if not sha:
             states.append(f"{repo.name} 건너뜀(커밋 없음)")
             continue
-        status, detail, graph = gb.run_graphify_at(Path(repo.path), sha, binary,
-                                                   out_dir / "worktrees" / repo.name)
+        status, detail, graph = gb.run_graphify_at(
+            Path(repo.path), sha, binary, out_dir / "worktrees" / repo.name,
+            progress=lambda m, r=repo.name: progress(f"{r}: {m}"))
         states.append(f"{repo.name} {status}" + ("" if status == "ok" else f" — {detail}"))
         if graph:
             symbol_graphs.append(graph)
@@ -1237,6 +1245,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     meta = gb.GraphMeta(gbm=gbm, fct=fct, commits=commits, built_at=gb.now_text(clock),
                         graphify=gb.graphify_version(binary), notes=problems + states)
     gb.write_bundle(out_dir, overlay=overlay, merged=merged, meta=meta)
+    progress("그래프 씀")
 
     summary = flow.summary(overlay)
     kinds = ", ".join(f"{k} {v}" for k, v in sorted(summary["kinds"].items()))

@@ -110,7 +110,7 @@ N회째)`(JSON을 못 읽어 다시 물음) 또는 `(거부 뒤 다시 물음)`(
 
 0. **흐름 그래프(11c).** `code sync` 뒤에 자동으로 만들어지고, `code status`가 그래프 절을
    찍는다. 사내 config 모양은 기본 표(`FlowSpec.sources`)에 이미 맞춰 뒀다. graphify가
-   있으면(`pip install graphifyy`, 또는 `GRAPHIFY_BIN`) 심볼 그래프까지, 없으면 오버레이만.
+   있으면(`requirements-graph.txt`, 반입 절차는 README) 심볼 그래프까지, 없으면 오버레이만.
    `code flow <이름>`·`code flow A --to B`로 사람이 본다. 산출물은 `output/graph/`이고 git에
    안 들어간다(실제 이름이 든다).
 0. **사내 `config/app.json`의 `investigation.max_rounds`를 6으로.** 리포 기본값이 6으로

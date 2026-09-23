@@ -237,16 +237,42 @@ async def test_흐름_이름은_합친_config에서_나온다(flow_code):
 
 
 async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):
-    hits = await flow_code.flow_hits("alarm")
-    files = {(h.file, h.line) for h in hits}
+    table, notes = await flow_code.flow_hits(["alarm"])
+    files = {(h.file, h.line) for h in table["alarm"]}
     assert ("sink/writer.py", 3) in files and ("config/gbm/mx.json", 1) in files
-    assert all(h.repo == "dt-core" and h.commit for h in hits)
-    assert flow_code.pinned() == {"dt-core": "main"}
+    assert all(h.repo == "dt-core" and h.commit for h in table["alarm"])
+    assert notes == [] and flow_code.pinned() == {"dt-core": "main"}
+
+
+async def test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈다(flow_code):
+    """패턴마다 git 프로세스 하나면 이름 100개·레포 3개에 600번이다(사내에서 분 단위로 조용히
+    기다렸다). 한 번에 묻고, 줄에 든 패턴으로 나눈다 — 없는 패턴은 빈 채로 돌아온다."""
+    calls = []
+    real = flow_code._reader.grep
+
+    async def spy(*a, **kw):
+        calls.append(kw)
+        return await real(*a, **kw)
+
+    flow_code._reader.grep = spy
+    table, _ = await flow_code.flow_hits(["alarm", "topic1", "없는것"])
+    assert len(calls) == 1 and calls[0]["fixed"] is True and calls[0]["context"] == 1
+    assert {(h.file, h.line) for h in table["topic1"]} == {("config/gbm/mx.json", 1), ("sink/writer.py", 2)}
+    assert table["없는것"] == []
+    assert all(p in h.text for p, hits in table.items() for h in hits)
+
+
+async def test_잘린_코드_찾기는_버리지_않고_사유로_남는다(flow_code, monkeypatch):
+    from src.infrastructure import deployed_code as dc
+    monkeypatch.setattr(dc, "FLOW_MAX_LINES", 2)
+    _, notes = await flow_code.flow_hits(["alarm"])
+    assert notes and "잘렸다" in notes[0] and "엣지가 빠졌을 수" in notes[0]
 
 
 async def test_흐름_히트에는_앞뒤_한_줄이_실려_온다(flow_code):
     """진짜 git → `-C1` → 파서까지 한 줄로. 이름 줄 옆의 동사를 흐름 추출이 읽는 근거다."""
-    hits = {(h.file, h.line): h for h in await flow_code.flow_hits("alarm")}
+    table, _ = await flow_code.flow_hits(["alarm"])
+    hits = {(h.file, h.line): h for h in table["alarm"]}
     assert hits[("sink/writer.py", 3)].context == \
         '    for m in consumer.subscribe(cfg["infra"]["kafka"]["consumer"]["topic"]["topic1"]):'
     assert hits[("config/gbm/mx.json", 1)].context == ""      # 한 줄짜리 파일

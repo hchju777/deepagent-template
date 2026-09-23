@@ -62,7 +62,7 @@ CASES = [
   '        sub = ""\n        if sub:',
   [f"{G}::test_안_채워진_submodule의_파일은_없다고_하지_않는다", f"{G}::test_채워진_submodule_안을_실제로_읽는다"]),
  ("grep이 못 본 구석을 안 말한다", R,
-  'unseen=await self._blind(repo, commit))', 'unseen=[])',
+  'unseen=await self._blind(repo, commit),', 'unseen=[],',
   [f"{G}::test_안_채워진_submodule이면_grep이_조용히_0건을_안_준다"]),
  ("grep이 submodule로 안 들어간다", R,
   '"grep", "-n", "-I", "--no-color", "--recurse-submodules"', '"grep", "-n", "-I", "--no-color"',
@@ -573,9 +573,31 @@ CASES = [
   '        around = [v for (_, k), v in lines.items() if k in (n - 1, n + 1)]',
   ["tests/knowledge/test_graph_build.py::test_문맥_없이_이웃한_줄_번호는_파일이_다르면_안_섞인다"]),
  ("흐름 추출이 문맥을 안 청한다", ROOT / "src/infrastructure/deployed_code.py",
-  '            got = await self._reader.grep(repo, commit, [pattern], context=1)',
-  '            got = await self._reader.grep(repo, commit, [pattern])',
+  '                got = await self._reader.grep(repo, commit, chunk, context=1, fixed=True,',
+  '                got = await self._reader.grep(repo, commit, chunk, context=0, fixed=True,',
   ["tests/infrastructure/test_deployed_code.py::test_흐름_히트에는_앞뒤_한_줄이_실려_온다"]),
+ ("흐름 추출이 패턴마다 git을 띄운다", ROOT / "src/infrastructure/deployed_code.py",
+  'FLOW_CHUNK = 20', 'FLOW_CHUNK = 1',
+  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈다"]),
+ ("히트를 패턴별로 안 나눈다", ROOT / "src/infrastructure/deployed_code.py",
+  '                        if p in hit.text:', '                        if True:',
+  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈다"]),
+ ("잘린 코드 찾기를 조용히 버린다", ROOT / "src/infrastructure/deployed_code.py",
+  '                if not got.envelope.complete:', '                if False:',
+  ["tests/infrastructure/test_deployed_code.py::test_잘린_코드_찾기는_버리지_않고_사유로_남는다"]),
+ ("-F가 안 붙는다", ROOT / "src/infrastructure/git_reader.py",
+  '        if fixed:\n            args.append("-F")', '        if False:\n            pass',
+  ["tests/infrastructure/test_git_reader.py::test_고정_문자열이면_점이_점이다"]),
+ ("흐름용 상한이 안 먹는다", ROOT / "src/infrastructure/git_reader.py",
+  '                     max_lines=max_lines, max_chars=max_chars)', '                     )',
+  ["tests/infrastructure/test_git_reader.py::test_흐름용_상한은_호출부가_따로_준다"]),
+ ("python 옆의 graphify를 안 본다", ROOT / "src/knowledge/graph_build.py",
+  '    if beside.exists():\n        return str(beside)', '    if False:\n        pass',
+  ["tests/knowledge/test_graph_build.py::test_python_옆의_graphify를_PATH보다_먼저_본다"]),
+ ("graphify 단계를 안 알린다", ROOT / "src/knowledge/graph_build.py",
+  '        if progress:\n            progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")',
+  '        if False:\n            pass',
+  ["tests/knowledge/test_graph_build.py::test_graphify_단계를_알린다"]),
  ("-C 옵션이 안 붙는다", ROOT / "src/infrastructure/git_reader.py",
   '        if context > 0:\n            args.append(f"-C{context}")',
   '        if False:\n            pass',
@@ -611,7 +633,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 136, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 143, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -119,8 +119,8 @@ processor·sink가 공유하므로 lag만으로는 누가 멈췄는지 모른다
 
 - `code graph` — 지금 체크아웃으로 그래프를 만든다. 네트워크 없음. `code sync`도 끝에 같은
   함수를 부른다(조립 한 벌).
-- 만드는 순서: 서비스별 합친 config → 이름 → 이름마다 배포 커밋에서 `git grep -n` →
-  오버레이(`flow.extract`). 레포마다 배포 SHA로 **`git worktree`를 잠깐 만들어** 거기서
+- 만드는 순서: 서비스별 합친 config → 이름 → **레포마다** 배포 커밋에서 `git grep -n -F -C1`
+  (패턴 20개씩 묶어서) → 오버레이(`flow.extract`). 레포마다 배포 SHA로 **`git worktree`를 잠깐 만들어** 거기서
   `graphify extract --code-only` + `cluster-only --no-label`을 돌리고 지운다. 작업 트리는
   안 건드리고 HEAD도 그대로다. 오버레이와 심볼 그래프를 id로 합친다.
 - 산출물: `<output_dir>/graph/<gbm>-<fct>/{overlay,graph,meta}.json`. `meta.commits`는
@@ -129,8 +129,14 @@ processor·sink가 공유하므로 lag만으로는 누가 멈췄는지 모른다
   엣지 수. 배포 커밋과 다르면 **`⚠ 낡음`**. 없으면 만드는 법.
 - `code flow` — 사람용. 이름 하나면 이웃, `--to`면 흐름 경로(쓰기→자원→읽기 방향), 없으면
   연결 많은 자원(god node의 우리 판).
-- graphify는 `GRAPHIFY_BIN` 또는 PATH에서 찾는다. 없으면 오버레이만 만들고 그렇게 적는다.
-  조사는 돈다.
+- graphify는 `GRAPHIFY_BIN` → 실행 중인 python 옆(`.venv/Scripts`) → PATH에서 찾는다.
+  없으면 오버레이만 만들고 그렇게 적는다. 조사는 돈다. 설치는 `requirements-graph.txt`(고정
+  버전), 반입 절차는 README.
+- 진행은 stderr에 경과 시간과 함께 찍는다. 사내 첫 실행이 몇 분을 말없이 돌자 "멈췄다"로
+  읽혔다 — 원인은 이름마다 `git grep`을 따로 띄우던 것이었다(이름 100개·레포 3개면 600번,
+  Windows 프로세스 비용). 지금은 레포마다 몇 번이다. 이때 리더의 400줄·2만 자 상한도 흐름
+  재료에는 맞지 않아(`alarm` 같은 키 토큰은 큰 레포에서 수백 줄이 정상) 호출부가 상한을 따로
+  주고, 그래도 잘리면 `meta.notes`와 `code graph` 출력에 "엣지가 빠졌을 수 있다"로 남긴다.
 
 측정판에서 실제로 돌린 결과:
 
@@ -189,5 +195,5 @@ $ code flow processor --to sink
 
 1. 사내 config의 키 경로가 기본 표와 다르면 `flow.name_paths`만 고친다 — 사내 확인 필요
 2. 공유 레포에서 서비스를 못 가른 엣지가 많으면 토폴로지 `path`를 채우는 것이 답이다
-3. graphify 사내 설치(`pip install graphifyy`, tree-sitter 휠) — 안 되면 리눅스 한 대에서
-   만들어 `graph.json`만 옮긴다(백로그 ⑦)
+3. graphify 사내 반입 심사(`requirements-graph.txt`, 휠 32개 — 절차는 README) — 안 되면
+   리눅스 한 대에서 만들어 `graph.json`만 옮긴다(백로그 ⑦). 심사 전까지는 오버레이만으로 간다

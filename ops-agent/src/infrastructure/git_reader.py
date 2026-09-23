@@ -236,7 +236,8 @@ class RealCodeReader(CodeReaderPort):
                 else _clip(got, pinned, clock=self._clock, whole=whole))
 
     async def grep(self, repo: str, commit: str, patterns: list[str], *,
-                   path: str = "", context: int = 0) -> ProbeResult:
+                   path: str = "", context: int = 0, fixed: bool = False,
+                   max_lines: int | None = None, max_chars: int | None = None) -> ProbeResult:
         source = f"code.grep {repo}@{commit} {patterns}" + (f" in {path}" if path else "")
         if not patterns:
             return ProbeResult.failed("패턴이 없다", source=source, clock=self._clock)
@@ -250,6 +251,10 @@ class RealCodeReader(CodeReaderPort):
         # `code.grep`은 0이다: 증거가 세 배로 불면 400줄 상한이 먼저 찬다.
         if context > 0:
             args.append(f"-C{context}")
+        # 흐름 추출은 config에서 뽑은 **리터럴**을 찾는다 — `mx.alarm.main`의 점이 아무
+        # 글자나 맞추면 안 된다. 리드의 `code.grep`은 정규식 그대로다(찾는 법은 리드가 고른다).
+        if fixed:
+            args.append("-F")
         for pattern in patterns:
             args += ["-e", pattern]
         args.append(commit)
@@ -266,8 +271,8 @@ class RealCodeReader(CodeReaderPort):
         got = await self._git(repo, args, source=source)
         if got.status == "error":
             return got
-        return _clip(got, source, clock=self._clock,
-                     unseen=await self._blind(repo, commit))
+        return _clip(got, source, clock=self._clock, unseen=await self._blind(repo, commit),
+                     max_lines=max_lines, max_chars=max_chars)
 
     async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
         source = f"code.ls {repo}@{commit}" + (f":{path}" if path else "")
@@ -299,20 +304,25 @@ def _unseen_reasons(blind: list[str]) -> list[str]:
 
 
 def _clip(got: ProbeResult, source: str, *, clock: Clock,
-          unseen: list[str] | tuple = (), whole: bool = False) -> ProbeResult:
+          unseen: list[str] | tuple = (), whole: bool = False,
+          max_lines: int | None = None, max_chars: int | None = None) -> ProbeResult:
     """상한에 걸리면 **잘렸다고 봉투가 말한다.**
 
     조용히 자르면 리드가 "그 파일에 그 문자열이 없다"를 단정한다 — 잘린 뒤쪽에
     있었을 뿐인데. 5단계의 `unreachable`, 증거의 `complete=False`와 같은 규율이다.
+
+    기본 상한은 리드에게 주는 증거 봉투 기준이다. 그래프 재료처럼 사람도 리드도 직접
+    안 읽는 결과는 호출부가 `max_lines`·`max_chars`로 더 크게 준다 — 잘렸다는 말은 똑같이 한다.
     """
     text, reasons = got.data, _unseen_reasons(list(unseen))
+    line_cap = max_lines or _MAX_LINES
     if not whole:
         lines = text.splitlines()
-        if len(lines) > _MAX_LINES:
-            lines = lines[:_MAX_LINES]
-            reasons.append(f"{_MAX_LINES}줄에서 끊음")
+        if len(lines) > line_cap:
+            lines = lines[:line_cap]
+            reasons.append(f"{line_cap}줄에서 끊음")
         text = "\n".join(lines)
-    cap = _WHOLE_MAX_CHARS if whole else _MAX_CHARS
+    cap = _WHOLE_MAX_CHARS if whole else (max_chars or _MAX_CHARS)
     if len(text) > cap:
         text = text[:cap]
         reasons.append(f"{cap}자에서 끊음")

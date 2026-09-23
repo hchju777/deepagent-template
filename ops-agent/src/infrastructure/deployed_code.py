@@ -27,6 +27,8 @@
 전부 `ProbeResult`로 흡수한다. 없는 서비스, 안 읽히는 층, 잘린 파일 — 운영 중에
 정상적으로 일어나는 일이고, 여기서 던지면 조사 그래프가 통째로 죽는다(규율 1).
 """
+from typing import Callable
+
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
 from src.domain.ports import CodeReaderPort, DeployedCodePort
@@ -36,6 +38,13 @@ from src.knowledge.schema import Deployment, Topology
 from src.knowledge.target_config import merge_target, parse_layer
 
 _MAX_CHARS = 20000
+
+# 흐름 재료용 상한. 리더의 400줄·2만 자는 리드에게 주는 증거 봉투의 상한이지 그래프 재료의
+# 상한이 아니다 — `alarm` 같은 키 토큰은 큰 레포에서 수백 줄이 정상이다.
+FLOW_MAX_LINES = 50_000
+FLOW_MAX_CHARS = 5_000_000
+# 한 번의 `git grep`에 넘기는 패턴 수. 명령줄 길이(Windows 32K)와 출력 한 덩어리 크기의 균형.
+FLOW_CHUNK = 20
 
 
 class DeployedCode(DeployedCodePort):
@@ -83,16 +92,37 @@ class DeployedCode(DeployedCodePort):
                 found.setdefault((n.kind, n.value, n.key_path), n)
         return list(found.values()), problems
 
-    async def flow_hits(self, pattern: str) -> list[Hit]:
-        """배포 커밋에서 `git grep -n -C1`. 레포마다 한 번. 실패한 레포는 조용히 빈다 —
-        `code status`가 레포 상태를 따로 말한다. 앞뒤 한 줄은 `Hit.context`로 간다."""
-        hits: list[Hit] = []
+    async def flow_hits(self, patterns: list[str], *,
+                        progress: Callable[[str], None] | None = None
+                        ) -> tuple[dict[str, list[Hit]], list[str]]:
+        """배포 커밋에서 `git grep -n -F -C1`을 **레포마다 몇 번**(패턴 `FLOW_CHUNK`개씩)으로.
+        `(패턴 → 히트, 잘림 사유)`.
+
+        패턴마다 한 번씩 띄우면 이름 100개·레포 3개에 600번이고, 사내 Windows에서는 분
+        단위로 조용히 기다리게 된다. 히트는 줄 본문에 패턴이 들어 있는지로 패턴별로 나눈다
+        — `-F`라 git이 맞춘 것도 정확히 그 부분 문자열이다. 잘린 결과는 버리지 않고 사유로
+        돌려준다(그래프에 엣지가 빠졌을 수 있다). 실패한 레포는 조용히 빈다 — `code status`가
+        레포 상태를 따로 말한다. 앞뒤 한 줄은 `Hit.context`로 간다.
+        """
+        table: dict[str, list[Hit]] = {p: [] for p in patterns}
+        notes: list[str] = []
+        chunks = [patterns[i:i + FLOW_CHUNK] for i in range(0, len(patterns), FLOW_CHUNK)]
         for repo, commit in self.pinned().items():
-            got = await self._reader.grep(repo, commit, [pattern], context=1)
-            if got.status == "error" or not isinstance(got.data, str):
-                continue
-            hits.extend(parse_grep(repo, commit, got.data))
-        return hits
+            if progress:
+                progress(f"{repo}: 코드에서 이름 찾는 중 (패턴 {len(patterns)}개, git grep {len(chunks)}번)")
+            for chunk in chunks:
+                got = await self._reader.grep(repo, commit, chunk, context=1, fixed=True,
+                                              max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)
+                if got.status == "error" or not isinstance(got.data, str):
+                    continue
+                if not got.envelope.complete:
+                    notes.append(f"{repo}: 코드 찾기가 잘렸다({got.envelope.truncated_reason}) — "
+                                 f"그래프에 엣지가 빠졌을 수 있다")
+                for hit in parse_grep(repo, commit, got.data):
+                    for p in chunk:
+                        if p in hit.text:
+                            table[p].append(hit)
+        return table, notes
 
     # ── 서비스 해석 ──────────────────────────────────────────────
 

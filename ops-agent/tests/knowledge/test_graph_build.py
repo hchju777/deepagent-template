@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -115,6 +116,30 @@ def _dying_graphify(dir_: Path) -> Path:
 def test_graphify가_죽으면_failed로_흡수한다(tmp_path):
     status, detail, _ = gb.run_graphify(tmp_path, str(_dying_graphify(tmp_path)))
     assert status == "failed" and "종료코드 3" in detail and "boom" in detail
+
+
+def test_graphify_단계를_알린다(tmp_path):
+    """타임아웃이 10분이라 말없이 돌면 멈춘 줄 안다(사내). 단계 시작마다 한 줄."""
+    seen: list[str] = []
+    gb.run_graphify(tmp_path, str(_dying_graphify(tmp_path)), progress=seen.append)
+    assert seen and "extract" in seen[0] and "10분" in seen[0]
+
+
+def test_python_옆의_graphify를_PATH보다_먼저_본다(monkeypatch, tmp_path):
+    """`requirements-graph.txt`로 venv에 넣으면 activate 없이도, `.env` 없이도 찾아야 한다 —
+    CLI와 pytest가 같은 것을 보게."""
+    monkeypatch.delenv("GRAPHIFY_BIN", raising=False)
+    exe = "graphify.exe" if os.name == "nt" else "graphify"
+    venv_bin, elsewhere = tmp_path / "venv" / "bin", tmp_path / "elsewhere"
+    for d in (venv_bin, elsewhere):
+        d.mkdir(parents=True)
+        (d / exe).write_text("", encoding="utf-8")
+        (d / exe).chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(venv_bin / "python"))
+    monkeypatch.setenv("PATH", str(elsewhere))
+    assert gb.find_graphify() == str(venv_bin / exe)
+    (venv_bin / exe).unlink()
+    assert gb.find_graphify() == str(elsewhere / exe)
 
 
 @pytest.mark.skipif(not gb.find_graphify(), reason="graphify가 없다 (GRAPHIFY_BIN 또는 PATH)")

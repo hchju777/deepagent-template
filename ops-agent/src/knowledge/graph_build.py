@@ -16,9 +16,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from src.knowledge.flow import Hit
 
@@ -84,19 +86,34 @@ def _parse_group(repo: str, commit: str, group: list[str]) -> list[Hit]:
 
 
 def find_graphify() -> str | None:
-    """`GRAPHIFY_BIN`이 있으면 그것, 아니면 PATH. 없으면 None — 오류가 아니다."""
+    """`GRAPHIFY_BIN` → 실행 중인 python 옆(`.venv/Scripts`·`bin`) → PATH. 없으면 None — 오류가 아니다.
+
+    python 옆을 PATH보다 먼저 보는 이유: `requirements-graph.txt`로 venv에 넣은 것이 우리가
+    고정한 버전이고, activate 없이 `python -m src`를 돌리면 PATH에는 그게 없다(사내). 설치만
+    하면 CLI와 pytest가 같은 것을 찾아야 한다.
+    """
     forced = os.environ.get("GRAPHIFY_BIN", "").strip()
     if forced:
         return forced if Path(forced).exists() else None
+    beside = Path(sys.executable).parent / ("graphify.exe" if os.name == "nt" else "graphify")
+    if beside.exists():
+        return str(beside)
     return shutil.which("graphify")
 
 
-def run_graphify(repo_dir: Path, binary: str | None) -> tuple[str, str, Path | None]:
-    """`(상태, 설명, graph.json 경로)`. 상태는 `ok` / `skipped` / `failed`. 던지지 않는다."""
+def run_graphify(repo_dir: Path, binary: str | None, *,
+                 progress: Callable[[str], None] | None = None) -> tuple[str, str, Path | None]:
+    """`(상태, 설명, graph.json 경로)`. 상태는 `ok` / `skipped` / `failed`. 던지지 않는다.
+
+    `progress`는 단계마다 한 줄 — 큰 레포는 파싱이 분 단위고 타임아웃이 10분이라, 말없이
+    기다리게 두면 사람은 멈춘 줄 안다(사내에서 그랬다).
+    """
     if not binary:
         return "skipped", "graphify가 없다 — 오버레이만 만든다 (GRAPHIFY_BIN 또는 PATH)", None
     out = repo_dir / "graphify-out" / "graph.json"
     for args in (["extract", ".", "--code-only"], ["cluster-only", ".", "--no-label"]):
+        if progress:
+            progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")
         try:
             done = subprocess.run([binary, *args], cwd=str(repo_dir), capture_output=True,
                                   text=True, encoding="utf-8", errors="replace",
@@ -111,7 +128,8 @@ def run_graphify(repo_dir: Path, binary: str | None) -> tuple[str, str, Path | N
     return "ok", str(out), out
 
 
-def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path
+def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path, *,
+                    progress: Callable[[str], None] | None = None
                     ) -> tuple[str, str, dict | None]:
     """**배포 커밋의** 코드로 graphify를 돌린다 — 작업 트리가 아니라.
 
@@ -124,6 +142,8 @@ def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path
     scratch.parent.mkdir(parents=True, exist_ok=True)
     if scratch.exists():
         shutil.rmtree(scratch, ignore_errors=True)
+    if progress:
+        progress(f"worktree 만드는 중 @ {sha[:12]}")
     try:
         made = subprocess.run(["git", "-C", str(repo_dir), "worktree", "add", "--detach",
                                str(scratch), sha], capture_output=True, text=True,
@@ -133,7 +153,7 @@ def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path
     if made.returncode != 0:
         return "failed", f"worktree add 실패 — {(made.stderr or made.stdout).strip()[-200:]}", None
     try:
-        status, detail, path = run_graphify(scratch, binary)
+        status, detail, path = run_graphify(scratch, binary, progress=progress)
         if status != "ok" or path is None:
             return status, detail, None
         try:
