@@ -137,9 +137,12 @@ def test_python_옆의_graphify를_PATH보다_먼저_본다(monkeypatch, tmp_pat
         (d / exe).chmod(0o755)
     monkeypatch.setattr(sys, "executable", str(venv_bin / "python"))
     monkeypatch.setenv("PATH", str(elsewhere))
-    assert gb.find_graphify() == str(venv_bin / exe)
+    # `shutil.which`는 Windows에서 PATHEXT의 확장자를 그대로 붙여 준다 — 기본값이 대문자라
+    # `graphify.EXE`로 온다(사내 측정). 같은 파일이면 되므로 normcase로 비교한다.
+    same = lambda a, b: os.path.normcase(a) == os.path.normcase(str(b))
+    assert same(gb.find_graphify(), venv_bin / exe)
     (venv_bin / exe).unlink()
-    assert gb.find_graphify() == str(elsewhere / exe)
+    assert same(gb.find_graphify(), elsewhere / exe)
 
 
 @pytest.mark.skipif(not gb.find_graphify(), reason="graphify가 없다 (GRAPHIFY_BIN 또는 PATH)")
