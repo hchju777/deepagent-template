@@ -52,6 +52,9 @@ class Name:
     # 같은 레포의 서비스 여럿이 환경변수로 역할만 다르면(사내: processor 5개·sink 2개) 합친
     # config도 다를 수 있어, config 엣지는 grep이 아니라 여기서 서비스 단위로 만든다.
     services: tuple[str, ...] = ()
+    # `(서비스, 층 파일, 줄, 본문)` — 그 서비스가 실제로 합친 층에서 값이 적힌 자리. config
+    # 엣지의 근거 줄은 이것이 먼저고, 없을 때만 레포의 config 파일 grep으로 대신한다.
+    evidence: tuple[tuple[str, str, int, str], ...] = ()
 
     @property
     def literal(self) -> str:
@@ -281,24 +284,32 @@ def _declare_per_service(name: Name, target: str, topology: Topology, hits_for, 
     근거 줄은 있으면 붙인다: 그 레포의 config 파일에서 값 리터럴이 있는 첫 줄. 없어도
     엣지는 선다 — 합친 config에 있다는 것이 사실이고, 파일 줄은 편의다.
     """
-    evidence: dict[str, Hit] = {}
+    grepped: dict[str, Hit] = {}
     if name.literal:
         for hit in sorted(hits_for(name.literal), key=lambda h: (h.repo, h.file, h.line)):
             if _is_config(hit.file):
-                evidence.setdefault(hit.repo, hit)
+                grepped.setdefault(hit.repo, hit)
+    own = {svc: (file, line, text) for svc, file, line, text in name.evidence}
     for svc_name in sorted(name.services):
         svc = topology.services.get(svc_name)
         if svc is None:
             continue
-        hit = evidence.get(svc.repo)
-        file, line = (hit.file, hit.line) if hit else (f"config({svc.repo})", 0)
+        # 그 서비스가 실제로 합친 층의 줄이 먼저다. 레포 grep은 이 사이트에 안 쓰이는 층
+        # (`_dev`)을 먼저 집는다 — 알파벳순이라서.
+        if svc_name in own:
+            file, line, text = own[svc_name]
+        elif svc.repo in grepped:
+            hit = grepped[svc.repo]
+            file, line, text = hit.file, hit.line, hit.text
+        else:
+            file, line, text = f"config({svc.repo})", 0, ""
         put_node(target, name.value, name.kind, file, line, key_path=name.key_path)
         links.append({"source": f"service_{_slug(svc_name)}", "target": target,
                       "relation": name.relation or "declares", "confidence": "EXTRACTED",
                       "attributed": "service", "origin": "config",
                       "source_file": file, "source_location": f"L{line}",
                       "repo": svc.repo, "commit": commits.get(svc.repo, ""),
-                      "text": _clip(hit.text) if hit else ""})
+                      "text": _clip(text)})
 
 
 def _is_config(file: str) -> bool:
@@ -439,6 +450,17 @@ def _bfs(graph: dict, starts: list[str], goals: set[str], *, undirected: bool, b
 
 def label_of(graph: dict, node_id: str) -> str:
     return next((n["label"] for n in graph["nodes"] if n["id"] == node_id), node_id)
+
+
+def describe(graph: dict, node_id: str) -> str:
+    """사람용 표시. 자원에는 종류를 붙인다 — 사내에 같은 이름의 토픽과 컬렉션이 실제로 있어
+    라벨만 찍으면 `consumes`와 `declares`가 같은 것을 가리키는 것처럼 보였다."""
+    node = next((n for n in graph["nodes"] if n["id"] == node_id), None)
+    if node is None:
+        return node_id
+    if node.get("type") not in RESOURCE_TYPES:
+        return node["label"]
+    return f"{node['label']} [{node['type']}]"
 
 
 def render_path(graph: dict, edges: list[dict]) -> str:

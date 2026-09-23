@@ -114,6 +114,11 @@ set PYTHONUTF8=1                                     # 이 셸에서 UTF-8 모�
 않는다 — **환경 변수에 기대는 안전은 그 변수를 안 건 사람에게만 유효**하고,
 운영 서비스로 등록하면 그 셸 설정이 안 따라간다.
 
+같은 이유로 CLI(`src/__main__.py`의 `main()`)는 시작할 때 stdout·stderr를 스스로
+UTF-8로 바꾼다(못 그리는 글자는 `?`). 사내에서 `code graph … | tee`가 마지막 줄의
+`—`에서 `UnicodeEncodeError`로 죽은 뒤 넣었다. pytest 출력은 우리 코드가 아니므로
+거기에는 여전히 `PYTHONUTF8=1`이 필요하다.
+
 ## 함정 ③: `zoneinfo`가 tz 데이터베이스를 못 찾는다
 
 Windows에는 `/usr/share/zoneinfo`가 없어서 `ZoneInfo("Asia/Seoul")`이

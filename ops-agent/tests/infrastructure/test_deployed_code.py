@@ -216,6 +216,13 @@ def flow_code(tmp_path, clock):
     write("config/gbm/mx.json", {"infra": {"kafka": {"consumer": {"group_id": "mx-core",
                                                                    "topic": {"topic1": "mx.alarm.main"}}}},
                                  "mongodb_collection": {"alarm": "alarm_events"}})
+    # gumi 층이 그룹을 덮는다 — 근거 줄은 이긴 층이어야 한다.
+    write("config/factories/gumi/mx.json",
+          '{\n  "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}\n}\n')
+    # 이 사이트에 안 쓰이는 층. 값이 똑같이 적혀 있고 알파벳순으로 앞선다 — 레포 grep으로
+    # 근거를 집으면 여기가 찍힌다(사내 `_dev`).
+    write("config/factories/_dev/mx.json",
+          '{\n  "infra": {"kafka": {"consumer": {"topic": {"topic1": "mx.alarm.main"}}}}\n}\n')
     write("sink/writer.py", 'def run(cfg, consumer, mongo):\n'
           '    for m in consumer.subscribe(cfg["infra"]["kafka"]["consumer"]["topic"]["topic1"]):\n'
           '        mongo[cfg["mongodb_collection"]["alarm"]].insert_one(m)\n')
@@ -232,9 +239,12 @@ async def test_흐름_이름은_합친_config에서_나온다(flow_code):
     names, problems = await flow_code.flow_names()
     assert problems == []
     assert {(n.kind, n.value, n.relation) for n in names} == {
-        ("topic", "mx.alarm.main", "consumes"), ("group", "mx-core", "consumes_as"),
+        ("topic", "mx.alarm.main", "consumes"), ("group", "gumi-mx-core", "consumes_as"),
         ("collection", "alarm_events", None)}
     assert all(n.services == ("sink",) for n in names), "어느 서비스의 config인지 이름이 안다"
+    where = {n.value: [(e[0], e[1], e[2]) for e in n.evidence] for n in names}
+    assert where["gumi-mx-core"] == [("sink", "config/factories/gumi/mx.json", 2)]   # 이긴 층
+    assert where["mx.alarm.main"] == [("sink", "config/gbm/mx.json", 1)]              # `_dev`가 아니다
 
 
 async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):
@@ -258,7 +268,8 @@ async def test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈�
     flow_code._reader.grep = spy
     table, _ = await flow_code.flow_hits(["alarm", "topic1", "없는것"])
     assert len(calls) == 1 and calls[0]["fixed"] is True and calls[0]["context"] == 1
-    assert {(h.file, h.line) for h in table["topic1"]} == {("config/gbm/mx.json", 1), ("sink/writer.py", 2)}
+    assert {(h.file, h.line) for h in table["topic1"]} == {
+        ("config/gbm/mx.json", 1), ("config/factories/_dev/mx.json", 2), ("sink/writer.py", 2)}
     assert table["없는것"] == []
     assert all(p in h.text for p, hits in table.items() for h in hits)
 

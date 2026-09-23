@@ -48,6 +48,24 @@ FLOW_MAX_CHARS = 5_000_000
 FLOW_CHUNK = 20
 
 
+def _evidence(layers: list[tuple[str, str, dict]], value: str) -> tuple[str, int, str] | None:
+    """값이 적힌 **실제로 합친 층**의 줄 — `(경로, 줄, 본문)`. 마지막에 이긴 층부터 본다.
+
+    레포의 config 파일을 grep해서 첫 파일을 붙이면 `config/factories/_dev/…`처럼 이 사이트에
+    안 쓰이는 층이 근거로 찍힌다(사내 첫 실행). 근거는 그 서비스가 실제로 읽은 층이어야 한다.
+    """
+    quoted = (f'"{value}"', f"'{value}'")
+    for path, text, _ in reversed(layers):
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if any(q in line for q in quoted):
+                return path, lineno, line.strip()
+    for path, text, _ in reversed(layers):        # YAML·TOML은 따옴표 없이 적기도 한다
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if value in line:
+                return path, lineno, line.strip()
+    return None
+
+
 class DeployedCode(DeployedCodePort):
     """`Adapters.code`에 꽂히는 어댑터. 사이트 하나(=`(gbm, fct)`) 기준이다."""
 
@@ -86,18 +104,25 @@ class DeployedCode(DeployedCodePort):
         다르다 — 그래서 이름마다 서비스를 기억한다."""
         found: dict[tuple, Name] = {}
         holders: dict[tuple, set[str]] = {}
+        evidence: dict[tuple, list] = {}
         problems = []
         for service in sorted(self._topology.services):
-            got = await self.config(service)
-            if got.status == "error" or not isinstance(got.data, dict):
-                problems.append(f"{service}: {got.error or 'config가 객체가 아니다'}")
+            got = await self._layers(service, f"code.config {service}")
+            if isinstance(got, ProbeResult):
+                problems.append(f"{service}: {got.error}")
                 continue
-            for n in names_from_config(got.data, self._topology.flow.sources):
+            _, layers, _, _ = got
+            merged = merge_target([(path, value) for path, _, value in layers])
+            for n in names_from_config(merged, self._topology.flow.sources):
                 key = (n.kind, n.value, n.key_path)
                 found.setdefault(key, n)
                 holders.setdefault(key, set()).add(service)
-        return ([replace(n, services=tuple(sorted(holders[k]))) for k, n in found.items()],
-                problems)
+                where = _evidence(layers, n.value)
+                if where:
+                    evidence.setdefault(key, []).append((service, *where))
+        return ([replace(n, services=tuple(sorted(holders[k])),
+                         evidence=tuple(sorted(evidence.get(k, []))))
+                 for k, n in found.items()], problems)
 
     async def flow_hits(self, patterns: list[str], *,
                         progress: Callable[[str], None] | None = None
@@ -164,6 +189,23 @@ class DeployedCode(DeployedCodePort):
     async def config(self, service: str) -> ProbeResult:
         """그 서비스가 배포 시점에 **실제로 보는 설정.** 층을 전부 합친 결과다."""
         source = f"code.config {service}"
+        got = await self._layers(service, source)
+        if isinstance(got, ProbeResult):
+            return got
+        _, layers, broken, source = got
+        read = " → ".join(path for path, _, _ in layers)
+        return ProbeResult.succeeded(
+            merge_target([(path, value) for path, _, value in layers]),
+            source=f"{source} [{read}]", clock=self._clock,
+            # 깨진 층이 있으면 **합친 결과가 틀렸다.** 그걸 완전하다고 적으면
+            # 리드가 "이 설정은 이렇다"를 단정한다.
+            truncated_reason=(" · ".join(broken) + " — 합친 값이 실제와 다를 수 있다"
+                              if broken else None))
+
+    async def _layers(self, service: str, source: str):
+        """그 서비스의 config 층들 — `(커밋, [(경로, 원문, 값)], 깨진 층, source)`. 못 읽으면
+        실패 `ProbeResult`. `config()`와 `flow_names()`가 같이 쓴다 — 근거 줄을 찾으려면
+        합친 값만이 아니라 **어느 층의 몇 번째 줄**인지가 필요하다."""
         resolved = self._resolve(service, source)
         if isinstance(resolved, ProbeResult):
             return resolved
@@ -194,7 +236,7 @@ class DeployedCode(DeployedCodePort):
             if value is None:
                 broken.append(why)
                 continue
-            layers.append((path, value))
+            layers.append((path, got.data, value))
 
         if not layers:
             # **왜 없는지까지 말한다.** 읽다가 실패한 층이 있으면 그게 원인이고,
@@ -204,14 +246,7 @@ class DeployedCode(DeployedCodePort):
             return ProbeResult.failed(
                 f"쓸 수 있는 config 층이 하나도 없다 — {why}",
                 source=source, clock=self._clock)
-
-        read = " → ".join(path for path, _ in layers)
-        return ProbeResult.succeeded(
-            merge_target(layers), source=f"{source} [{read}]", clock=self._clock,
-            # 깨진 층이 있으면 **합친 결과가 틀렸다.** 그걸 완전하다고 적으면
-            # 리드가 "이 설정은 이렇다"를 단정한다.
-            truncated_reason=(" · ".join(broken) + " — 합친 값이 실제와 다를 수 있다"
-                              if broken else None))
+        return commit, layers, broken, source
 
     async def grep(self, patterns: list[str], service: str = "") -> ProbeResult:
         """**이 이름을 누가 쓰나.** 11a가 존재하는 이유다.

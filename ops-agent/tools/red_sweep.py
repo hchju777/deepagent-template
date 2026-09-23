@@ -169,15 +169,15 @@ CASES = [
   '    if False:\n        pass', [f"{K2}::test_최상위가_객체가_아니면_거부한다"]),
  # ── 서비스 이름으로 읽기 (11a 2차) ────────────────────────────────
  ("config가 층 하나만 읽는다", D,
-  '        return ProbeResult.succeeded(\n            merge_target(layers), source=f"{source} [{read}]", clock=self._clock,',
-  '        return ProbeResult.succeeded(\n            layers[-1][1], source=f"{source} [{read}]", clock=self._clock,',
+  '            merge_target([(path, value) for path, _, value in layers]),',
+  '            layers[-1][2],',
   [f"{K3}::test_층을_합친_값을_돌려준다"]),
  ("법인 자리를 안 치환한다", D,
   '        wanted = self._topology.resolved_config_paths(self._gbm, self._fct)',
   '        wanted = self._topology.resolved_config_paths(self._gbm, "gumi")',
   [f"{K3}::test_법인이_다르면_다른_값이_나온다"]),
  ("어느 층을 읽었는지 안 남긴다", D,
-  '        read = " → ".join(path for path, _ in layers)', '        read = ""',
+  '        read = " → ".join(path for path, _, _ in layers)', '        read = ""',
   [f"{K3}::test_어느_층을_읽었는지_증거에_남는다"]),
  ("깨진 층을 조용히 넘긴다", D,
   '            if value is None:\n                broken.append(why)\n                continue',
@@ -621,6 +621,15 @@ CASES = [
  ("코드에서 못 찾은 이름을 안 센다", ROOT / "src/knowledge/flow.py",
   '            "unreferenced": len(resources - coded)}', '            "unreferenced": 0}',
   ["tests/knowledge/test_flow.py::test_요약과_권고"]),
+ ("근거 줄이 합친 층보다 레포 grep을 먼저 집는다", ROOT / "src/knowledge/flow.py",
+  '        if svc_name in own:', '        if False:',
+  ["tests/knowledge/test_flow.py::test_config_엣지의_근거는_그_서비스가_실제로_합친_층이다"]),
+ ("자원 노드에 종류를 안 붙인다", ROOT / "src/knowledge/flow.py",
+  '    return f"{node[\'label\']} [{node[\'type\']}]"', '    return node["label"]',
+  ["tests/knowledge/test_cli_code.py::test_code_flow가_흐름_경로를_보여준다"]),
+ ("CLI가 콘솔을 UTF-8로 안 바꾼다", ROOT / "src/__main__.py",
+  '    _utf8_console()\n    args = parse_args(argv)', '    args = parse_args(argv)',
+  ["tests/test_cli.py::test_콘솔이_cp949여도_한글과_대시가_안_죽는다"]),
  ("graphify 단계를 안 알린다", ROOT / "src/knowledge/graph_build.py",
   '        if progress:\n            progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")',
   '        if False:\n            pass',
@@ -660,7 +669,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 150, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 153, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -337,6 +337,22 @@ def test_config_엣지는_서비스마다_그_서비스의_합친_config에서_�
     assert not [e for e in g["links"] if e["source"] == "repo_dt_sink"], "레포 노드에 config 엣지가 안 붙는다"
 
 
+def test_config_엣지의_근거는_그_서비스가_실제로_합친_층이다():
+    """레포의 config 파일을 grep해서 첫 파일을 붙이면 알파벳순으로 앞서는 `_dev` 층이 찍힌다
+    (사내 첫 실행). 서비스가 실제로 읽은 층의 줄이 있으면 그것이 먼저다."""
+    topology = Topology(services={"sink": Service(repo="dt-sink", role="저장")})
+    name = Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic1", "consumes",
+                services=("sink",),
+                evidence=(("sink", "config/factories/gumi/mx.json", 9, '"topic1": "mx.alarm.main"'),))
+    decoy = Hit("dt-sink", "c", "config/factories/_dev/_dev.json", 3, '"topic1": "mx.alarm.main"')
+    g = flow.extract(names=[name], topology=topology, commits={"dt-sink": "c"},
+                     hits_for=lambda p: [decoy] if p == "mx.alarm.main" else [])
+    edge = next(e for e in g["links"] if e["relation"] == "consumes")
+    assert (edge["source_file"], edge["source_location"]) == ("config/factories/gumi/mx.json", "L9")
+    assert flow.describe(g, edge["target"]) == "mx.alarm.main [topic]"
+    assert flow.describe(g, edge["source"]) == "sink"
+
+
 def test_같은_코드를_띄우는_서비스는_레포를_거쳐_경로가_난다():
     """코드 엣지가 레포에 붙으면 서비스에서 출발하는 경로가 없다. `runs`가 다리다 —
     단, 자원 경로가 있으면 그쪽이 먼저다(같은 레포의 서비스 둘은 `runs` 두 홉으로 늘 이어진다)."""

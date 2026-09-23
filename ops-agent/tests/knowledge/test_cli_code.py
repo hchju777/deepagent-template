@@ -533,7 +533,7 @@ def test_code_flow가_흐름_경로를_보여준다(tmp_path, monkeypatch, capsy
     assert "processor —produces→ mx.alarm.main ←consumes— sink" in captured.out
     assert "processor/handler.py:L4" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "alarm_events")
-    assert code == 0 and "sink —writes→ alarm_events" in captured.out
+    assert code == 0 and "sink —writes→ alarm_events [collection]" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow")
     assert code == 0 and "mx.alarm.main" in captured.out       # 허브 목록
 

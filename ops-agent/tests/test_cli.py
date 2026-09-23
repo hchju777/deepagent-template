@@ -518,6 +518,22 @@ def test_case_trace에_brief가_있다():
     assert args.brief is True
 
 
+def test_콘솔이_cp949여도_한글과_대시가_안_죽는다(monkeypatch):
+    """사내 `code graph … | tee`가 마지막 줄의 `—`에서 UnicodeEncodeError로 죽었다 — 파이프로
+    넘기면 Windows는 로케일 인코딩을 탄다. CLI 경계가 UTF-8로 바꿔야 한다."""
+    import io
+    import sys
+    from src.__main__ import main
+
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp949"))
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    print("코드 엣지 — 레포 단위다")
+    sys.stdout.flush()
+    assert "코드 엣지 — 레포 단위다".encode("utf-8") in raw.getvalue()
+
+
 def test_code_flow_파서():
     from src.__main__ import build_parser
 

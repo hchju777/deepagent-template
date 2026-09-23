@@ -1316,8 +1316,8 @@ def cmd_code_flow(args, env) -> int:
     graph, meta = got
 
     def line(e) -> str:
-        return (f"  {flow.label_of(graph, e['source'])} —{e['relation']}→ "
-                f"{flow.label_of(graph, e['target'])}   [{e.get('confidence', '?')}] "
+        return (f"  {flow.describe(graph, e['source'])} —{e['relation']}→ "
+                f"{flow.describe(graph, e['target'])}   [{e.get('confidence', '?')}] "
                 f"{e.get('source_file', '?')}:{e.get('source_location', '?')}")
 
     if args.to:
@@ -2102,7 +2102,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _utf8_console() -> None:
+    """stdout·stderr를 UTF-8로, 못 그리는 글자는 `?`로.
+
+    콘솔에 직접 찍을 때는 괜찮은데 파이프나 파일로 넘기면 Windows는 로케일(cp949)을 타서
+    한글이 깨지고 `—`(U+2014)에서 `UnicodeEncodeError`로 죽는다(사내에서 `code graph … | tee`가
+    마지막 줄에서 죽었다, windows.md 함정 ②). `PYTHONUTF8=1`은 그 변수를 건 사람에게만
+    유효하고 서비스로 등록하면 안 따라간다 — 그래서 CLI 경계에서 코드가 정한다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass            # 대체된 스트림(테스트의 캡처 등)이면 그대로 둔다
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     args = parse_args(argv)
     env = _load_env(args.env_file)
     try:
