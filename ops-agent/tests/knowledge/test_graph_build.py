@@ -155,18 +155,18 @@ def _committed_repo(tmp_path):
     return repo, sha
 
 
-def test_레포별_GRAPH_REPORT를_worktree와_함께_안_버린다(tmp_path):
+def test_레포별_GRAPH_REPORT를_worktree와_함께_안_버린다(tmp_path, monkeypatch):
     """사람용 리포트(커뮤니티·연결 많은 노드·토큰 비용)가 임시 worktree 안에 생겼다가 같이
     지워지고 있었다. 번들로 옮기려면 지우기 전에 읽어 와야 한다."""
     repo, sha = _committed_repo(tmp_path)
     status, detail, graph, report = gb.run_graphify_at(
-        repo, sha, str(working_graphify(tmp_path / "bin")), tmp_path / "scratch" / "repo")
+        repo, sha, str(working_graphify(tmp_path / "bin", monkeypatch)), tmp_path / "scratch" / "repo")
     assert status == "ok", detail
     assert graph and graph["nodes"] and report and "Token cost: 0 input" in report
     assert not (tmp_path / "scratch" / "repo").exists()
 
 
-def test_wiki는_graph_json_옆에_생기고_없으면_건너뛴다(tmp_path):
+def test_wiki는_graph_json_옆에_생기고_없으면_건너뛴다(tmp_path, monkeypatch):
     """`graphify export wiki`는 `--dir`이 없어 그래프 파일 옆 `wiki/`에 쓴다. 지난 것은 지우고 만든다."""
     graph = tmp_path / "bundle" / "graph.json"
     graph.parent.mkdir(parents=True)
@@ -175,7 +175,7 @@ def test_wiki는_graph_json_옆에_생기고_없으면_건너뛴다(tmp_path):
     stale.parent.mkdir()
     stale.write_text("옛 그래프의 문서", encoding="utf-8")
     assert gb.run_wiki(None, graph) == ("skipped", "graphify가 없다")
-    status, detail = gb.run_wiki(str(working_graphify(tmp_path / "bin")), graph)
+    status, detail = gb.run_wiki(str(working_graphify(tmp_path / "bin", monkeypatch)), graph)
     assert status == "ok", detail
     assert (graph.parent / "wiki" / "index.md").exists() and not stale.exists()
 

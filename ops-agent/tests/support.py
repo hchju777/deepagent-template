@@ -327,11 +327,16 @@ def local_submodules_allowed(monkeypatch):
     add_git_config(monkeypatch, "protocol.file.allow", "always")
 
 
-def working_graphify(dir_):
+def working_graphify(dir_, monkeypatch):
     """**일하는** 가짜 graphify. `extract`는 graph.json, `cluster-only`는 GRAPH_REPORT.md,
     `export wiki --graph P`는 P 옆의 `wiki/index.md`를 만든다. 진짜가 없는 곳(사내 pytest)에서도
-    배선을 검증하기 위해서다. 실행기는 이 파이썬으로 스크립트를 부르는 한 줄짜리 — Windows는
-    확장자 없는 파일을 실행 못 하므로 `.cmd`다."""
+    배선을 검증하기 위해서다.
+
+    실행기에 **절대 경로를 적지 않는다.** Windows는 확장자 없는 파일을 실행 못 해 `.cmd`가
+    필요한데, cmd.exe는 배치 파일을 콘솔 코드 페이지로 읽는다 — 경로에 한글이나 공백이 있으면
+    UTF-8로 쓴 줄이 깨진다. 스크립트는 `%~dp0`(자기 옆)로, 파이썬은 환경변수로 받는다.
+    환경변수는 유니코드 그대로 넘어간다. 스크립트도 ASCII만 쓴다.
+    """
     import os
     import sys
     from pathlib import Path
@@ -347,19 +352,25 @@ elif args[:1] == ["extract"]:
     out = Path("graphify-out"); out.mkdir(exist_ok=True)
     (out / "graph.json").write_text(json.dumps({"nodes": [{"id": "sym_fake", "label": "fake()"}], "links": []}), encoding="utf-8")
 elif args[:1] == ["cluster-only"]:
-    Path("graphify-out/GRAPH_REPORT.md").write_text("# Graph Report\\n- Token cost: 0 input · 0 output\\n", encoding="utf-8")
+    Path("graphify-out/GRAPH_REPORT.md").write_text("# Graph Report\\n- Token cost: 0 input - 0 output\\n", encoding="utf-8")
 elif args[:2] == ["export", "wiki"]:
     graph = Path(args[args.index("--graph") + 1])
     wiki = graph.parent / "wiki"; wiki.mkdir(exist_ok=True)
     (wiki / "index.md").write_text("# Knowledge Graph Index\\n", encoding="utf-8")
 else:
+    sys.stderr.write("fake graphify: unknown command " + " ".join(args) + "\\n")
     sys.exit(2)
-''', encoding="utf-8")
+''', encoding="ascii")
+    monkeypatch.setenv("OPS_FAKE_PYTHON", sys.executable)
     if os.name == "nt":
         launcher = dir_ / "graphify.cmd"
-        launcher.write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8", newline="")
+        launcher.write_text("@echo off\r\nset PYTHONUTF8=1\r\n"
+                            "\"%OPS_FAKE_PYTHON%\" \"%~dp0fake_graphify.py\" %*\r\n",
+                            encoding="ascii", newline="")
     else:
         launcher = dir_ / "graphify"
-        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        here = dir_.resolve()
+        launcher.write_text('#!/bin/sh\nexec "$OPS_FAKE_PYTHON" "' + str(here / "fake_graphify.py") + '" "$@"\n',
+                            encoding="utf-8")
         launcher.chmod(0o755)
     return launcher

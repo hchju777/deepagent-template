@@ -530,10 +530,12 @@ def test_code_graph는_사람용_산출물을_한_자리에_남긴다(tmp_path, 
     """팀원에게 건넬 것: flow.html(외부 참조 0), 레포별 GRAPH_REPORT.md, wiki/index.md.
     가짜 graphify로 돈다 — 진짜가 없는 곳(사내 pytest)에서도 배선은 검증돼야 한다."""
     from tests.support import working_graphify
-    monkeypatch.setenv("GRAPHIFY_BIN", str(working_graphify(tmp_path / "bin")))
+    monkeypatch.setenv("GRAPHIFY_BIN", str(working_graphify(tmp_path / "bin", monkeypatch)))
     config_root = _flow_tree(tmp_path)
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     assert code == 0, captured.out + captured.err
+    # 가짜가 실패하면 파일이 없어 FileNotFoundError만 보인다 — 실패 사유가 담긴 상태 줄을 먼저 본다.
+    assert f"{REPO} ok" in captured.out, captured.out + captured.err
     bundle = tmp_path / "out" / "graph" / "mx-gumi"
     page = (bundle / "flow.html").read_text(encoding="utf-8")
     assert 'src="http' not in page and "processor" in page
