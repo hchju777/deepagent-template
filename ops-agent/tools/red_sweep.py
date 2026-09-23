@@ -640,7 +640,7 @@ CASES = [
   ["tests/presentation/test_flow_html.py::test_아홉_번째_레포부터는_회색이다"]),
  ("flow.html을 안 쓴다", ROOT / "src/__main__.py",
   '    (out_dir / "flow.html").write_text(', '    (out_dir / "flow.txt").write_text(',
-  ["tests/knowledge/test_cli_code.py::test_code_graph는_사람용_산출물을_한_자리에_남긴다"]),
+  ["tests/knowledge/test_cli_code.py::test_code_graph가_배포_커밋에_그래프를_박는다"]),
  ("GRAPH_REPORT를 worktree와 함께 버린다", ROOT / "src/knowledge/graph_build.py",
   '        report = _read_optional(path.parent / "GRAPH_REPORT.md")', '        report = None',
   ["tests/knowledge/test_graph_build.py::test_레포별_GRAPH_REPORT를_worktree와_함께_안_버린다"]),

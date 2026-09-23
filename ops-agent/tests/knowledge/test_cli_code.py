@@ -526,26 +526,6 @@ def test_code_graph가_배포_커밋에_그래프를_박는다(tmp_path, monkeyp
     assert "이름 " in captured.err and "찾는 중" in captured.err and "graphify 없음" in captured.err
 
 
-def test_code_graph는_사람용_산출물을_한_자리에_남긴다(tmp_path, monkeypatch, capsys):
-    """팀원에게 건넬 것: flow.html(외부 참조 0), 레포별 GRAPH_REPORT.md, wiki/index.md.
-    가짜 graphify로 돈다 — 진짜가 없는 곳(사내 pytest)에서도 배선은 검증돼야 한다."""
-    from tests.support import working_graphify
-    monkeypatch.setenv("GRAPHIFY_BIN", str(working_graphify(tmp_path / "bin", monkeypatch)))
-    config_root = _flow_tree(tmp_path)
-    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
-    assert code == 0, captured.out + captured.err
-    # 가짜가 실패하면 파일이 없어 FileNotFoundError만 보인다 — 실패 사유가 담긴 상태 줄을 먼저 본다.
-    assert f"{REPO} ok" in captured.out, captured.out + captured.err
-    bundle = tmp_path / "out" / "graph" / "mx-gumi"
-    page = (bundle / "flow.html").read_text(encoding="utf-8")
-    assert 'src="http' not in page and "processor" in page
-    assert "Token cost: 0 input" in (bundle / "reports" / REPO / "GRAPH_REPORT.md").read_text(encoding="utf-8")
-    assert (bundle / "wiki" / "index.md").exists()
-    assert "사람용: flow.html · reports/<레포>/GRAPH_REPORT.md (1개) · wiki/index.md" in captured.out
-    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
-    assert "사람용 flow.html · wiki/index.md" in captured.out
-
-
 def test_code_flow가_흐름_경로를_보여준다(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
     config_root = _flow_tree(tmp_path)
