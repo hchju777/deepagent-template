@@ -638,6 +638,16 @@ CASES = [
   '    colors = {r: (REPO_COLORS[i] if i < len(REPO_COLORS) else OTHER_COLOR)',
   '    colors = {r: (REPO_COLORS[i % len(REPO_COLORS)])',
   ["tests/presentation/test_flow_html.py::test_아홉_번째_레포부터는_회색이다"]),
+ ("flow.html을 안 쓴다", ROOT / "src/__main__.py",
+  '    (out_dir / "flow.html").write_text(', '    (out_dir / "flow.txt").write_text(',
+  ["tests/knowledge/test_cli_code.py::test_code_graph는_사람용_산출물을_한_자리에_남긴다"]),
+ ("GRAPH_REPORT를 worktree와 함께 버린다", ROOT / "src/knowledge/graph_build.py",
+  '        report = _read_optional(path.parent / "GRAPH_REPORT.md")', '        report = None',
+  ["tests/knowledge/test_graph_build.py::test_레포별_GRAPH_REPORT를_worktree와_함께_안_버린다"]),
+ ("wiki 대신 다른 것을 내보낸다", ROOT / "src/knowledge/graph_build.py",
+  '        done = subprocess.run([binary, "export", "wiki", "--graph", str(graph_json)],',
+  '        done = subprocess.run([binary, "export", "graphml", "--graph", str(graph_json)],',
+  ["tests/knowledge/test_graph_build.py::test_wiki는_graph_json_옆에_생기고_없으면_건너뛴다"]),
  ("graphify 단계를 안 알린다", ROOT / "src/knowledge/graph_build.py",
   '        if progress:\n            progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")',
   '        if False:\n            pass',
@@ -677,7 +687,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 155, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 158, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

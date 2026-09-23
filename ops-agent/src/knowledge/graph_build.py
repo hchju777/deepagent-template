@@ -130,15 +130,15 @@ def run_graphify(repo_dir: Path, binary: str | None, *,
 
 def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path, *,
                     progress: Callable[[str], None] | None = None
-                    ) -> tuple[str, str, dict | None]:
+                    ) -> tuple[str, str, dict | None, str | None]:
     """**배포 커밋의** 코드로 graphify를 돌린다 — 작업 트리가 아니라.
 
     작업 트리는 `main` 최신일 수 있고, 그래프는 배포된 것이어야 한다. `git worktree`를
     잠깐 만들어 거기서 돌리고 지운다. 체크아웃의 HEAD는 건드리지 않는다.
-    `(상태, 설명, graph.json 내용)`. 던지지 않는다.
+    `(상태, 설명, graph.json 내용, GRAPH_REPORT.md 원문)`. 던지지 않는다.
     """
     if not binary:
-        return "skipped", "graphify가 없다 — 오버레이만 만든다 (GRAPHIFY_BIN 또는 PATH)", None
+        return "skipped", "graphify가 없다 — 오버레이만 만든다 (GRAPHIFY_BIN 또는 PATH)", None, None
     # 절대 경로로 바꾼다. `git -C <레포>`는 상대 경로를 **레포 기준**으로 풀어서, `output`
     # 같은 상대 output_dir이면 worktree가 대상 레포 안에 생기고 우리는 없는 자리에서
     # graphify를 돌리게 된다(사내 첫 실행: WinError 267, 리눅스: FileNotFoundError).
@@ -153,22 +153,60 @@ def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path,
                                str(scratch), sha], capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=120)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return "failed", f"worktree: {type(exc).__name__}: {exc}", None
+        return "failed", f"worktree: {type(exc).__name__}: {exc}", None, None
     if made.returncode != 0:
-        return "failed", f"worktree add 실패 — {(made.stderr or made.stdout).strip()[-200:]}", None
+        return "failed", f"worktree add 실패 — {(made.stderr or made.stdout).strip()[-200:]}", None, None
     try:
         status, detail, path = run_graphify(scratch, binary, progress=progress)
         if status != "ok" or path is None:
-            return status, detail, None
+            return status, detail, None, None
+        # 사람용 리포트(커뮤니티·연결 많은 노드·토큰 비용)는 worktree와 함께 지워지던 것이다.
+        # 여기서 읽어 번들로 옮긴다 — finally가 디렉터리를 지우기 전에.
+        report = _read_optional(path.parent / "GRAPH_REPORT.md")
         try:
-            return "ok", detail, json.loads(path.read_text(encoding="utf-8"))
+            return "ok", detail, json.loads(path.read_text(encoding="utf-8")), report
         except (OSError, ValueError) as exc:
-            return "failed", f"graph.json을 못 읽었다 — {exc}", None
+            return "failed", f"graph.json을 못 읽었다 — {exc}", None, report
     finally:
         subprocess.run(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(scratch)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=120)
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _read_optional(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def run_wiki(binary: str | None, graph_json: Path, *,
+             progress: Callable[[str], None] | None = None) -> tuple[str, str]:
+    """합친 그래프의 사람용 md 묶음 — `graphify export wiki`. `(상태, 설명)`. 던지지 않는다.
+
+    `<graph.json의 디렉터리>/wiki/`에 생긴다 — 자리는 graphify가 정한다(`--dir`이 없다).
+    LLM은 안 부른다(있는 라벨만 쓴다). 사내망에서 그대로 열리는 것은 md뿐이라 html 대신 이것이다.
+    """
+    if not binary:
+        return "skipped", "graphify가 없다"
+    graph_json = Path(os.path.abspath(graph_json))
+    target = graph_json.parent / "wiki"
+    shutil.rmtree(target, ignore_errors=True)          # 지난 그래프의 문서가 섞이지 않게
+    if progress:
+        progress("wiki 만드는 중 (graphify export wiki)")
+    try:
+        done = subprocess.run([binary, "export", "wiki", "--graph", str(graph_json)],
+                              cwd=str(graph_json.parent), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=GRAPHIFY_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "failed", f"wiki: {type(exc).__name__}: {exc}"
+    if done.returncode != 0:
+        tail = (done.stderr or done.stdout).strip().splitlines()[-1:] or ["(출력 없음)"]
+        return "failed", f"wiki 종료코드 {done.returncode} — {tail[0]}"
+    if not (target / "index.md").exists():
+        return "failed", f"graphify가 {target / 'index.md'}를 안 만들었다"
+    return "ok", str(target / "index.md")
 
 
 def graphify_version(binary: str | None) -> str:

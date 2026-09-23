@@ -325,3 +325,41 @@ def local_submodules_allowed(monkeypatch):
     설정이라 이 자리에 맞는다.
     """
     add_git_config(monkeypatch, "protocol.file.allow", "always")
+
+
+def working_graphify(dir_):
+    """**일하는** 가짜 graphify. `extract`는 graph.json, `cluster-only`는 GRAPH_REPORT.md,
+    `export wiki --graph P`는 P 옆의 `wiki/index.md`를 만든다. 진짜가 없는 곳(사내 pytest)에서도
+    배선을 검증하기 위해서다. 실행기는 이 파이썬으로 스크립트를 부르는 한 줄짜리 — Windows는
+    확장자 없는 파일을 실행 못 하므로 `.cmd`다."""
+    import os
+    import sys
+    from pathlib import Path
+    dir_ = Path(dir_)
+    dir_.mkdir(parents=True, exist_ok=True)
+    script = dir_ / "fake_graphify.py"
+    script.write_text('''import json, sys
+from pathlib import Path
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    print("graphify 0.0-fake")
+elif args[:1] == ["extract"]:
+    out = Path("graphify-out"); out.mkdir(exist_ok=True)
+    (out / "graph.json").write_text(json.dumps({"nodes": [{"id": "sym_fake", "label": "fake()"}], "links": []}), encoding="utf-8")
+elif args[:1] == ["cluster-only"]:
+    Path("graphify-out/GRAPH_REPORT.md").write_text("# Graph Report\\n- Token cost: 0 input · 0 output\\n", encoding="utf-8")
+elif args[:2] == ["export", "wiki"]:
+    graph = Path(args[args.index("--graph") + 1])
+    wiki = graph.parent / "wiki"; wiki.mkdir(exist_ok=True)
+    (wiki / "index.md").write_text("# Knowledge Graph Index\\n", encoding="utf-8")
+else:
+    sys.exit(2)
+''', encoding="utf-8")
+    if os.name == "nt":
+        launcher = dir_ / "graphify.cmd"
+        launcher.write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8", newline="")
+    else:
+        launcher = dir_ / "graphify"
+        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        launcher.chmod(0o755)
+    return launcher

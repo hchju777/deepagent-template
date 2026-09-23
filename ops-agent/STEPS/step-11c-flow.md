@@ -129,6 +129,11 @@ processor·sink가 공유하므로 lag만으로는 누가 멈췄는지 모른다
   엣지 수. 배포 커밋과 다르면 **`⚠ 낡음`**. 없으면 만드는 법.
 - `code flow` — 사람용. 이름 하나면 이웃, `--to`면 흐름 경로(쓰기→자원→읽기 방향), 없으면
   연결 많은 자원(god node의 우리 판).
+- **사람용 산출물**(같은 번들 디렉터리): `flow.html`은 오버레이를 우리가 직접 그린 한 장이다.
+  외부 참조 0(graphify의 `graph.html`은 vis-network를 unpkg.com에서 받아 사내망에서 빈 화면).
+  세 열 흐름 배치, 레포마다 색 하나(이름순 고정), 클릭 초점과 근거 패널, 관계·종류 필터,
+  `#node=`·`#repo=` 링크. 다크 고정. graphify가 있으면 레포별 `reports/<레포>/GRAPH_REPORT.md`
+  (worktree와 함께 지워지던 것)와 합친 그래프의 `wiki/`(`graphify export wiki`, md 묶음)도 남긴다.
 - graphify는 `GRAPHIFY_BIN` → 실행 중인 python 옆(`.venv/Scripts`) → PATH에서 찾는다.
   없으면 오버레이만 만들고 그렇게 적는다. 조사는 돈다. 설치는 `requirements-graph.txt`(고정
   버전), 반입 절차는 README.

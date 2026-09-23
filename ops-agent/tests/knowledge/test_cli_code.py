@@ -519,8 +519,29 @@ def test_code_graph가_배포_커밋에_그래프를_박는다(tmp_path, monkeyp
     assert "오버레이 노드" in captured.out
     assert "path" not in captured.out and "안 만진다" not in captured.out
     assert not (tmp_path / "checkout" / "graphify-out").exists(), "체크아웃을 더럽혔다"
+    # graphify가 없어도 flow.html은 선다(오버레이만으로 그린다). 리포트·wiki는 없다.
+    assert (bundle / "flow.html").exists() and not (bundle / "wiki").exists() and not (bundle / "reports").exists()
+    assert not (bundle / "worktrees").exists(), "빈 worktrees 껍데기가 남았다"
     # 진행은 stderr에, 경과 시간과 함께 — 사내에서 몇 분을 말없이 돌자 멈춘 줄 알았다.
     assert "이름 " in captured.err and "찾는 중" in captured.err and "graphify 없음" in captured.err
+
+
+def test_code_graph는_사람용_산출물을_한_자리에_남긴다(tmp_path, monkeypatch, capsys):
+    """팀원에게 건넬 것: flow.html(외부 참조 0), 레포별 GRAPH_REPORT.md, wiki/index.md.
+    가짜 graphify로 돈다 — 진짜가 없는 곳(사내 pytest)에서도 배선은 검증돼야 한다."""
+    from tests.support import working_graphify
+    monkeypatch.setenv("GRAPHIFY_BIN", str(working_graphify(tmp_path / "bin")))
+    config_root = _flow_tree(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    page = (bundle / "flow.html").read_text(encoding="utf-8")
+    assert 'src="http' not in page and "processor" in page
+    assert "Token cost: 0 input" in (bundle / "reports" / REPO / "GRAPH_REPORT.md").read_text(encoding="utf-8")
+    assert (bundle / "wiki" / "index.md").exists()
+    assert "사람용: flow.html · reports/<레포>/GRAPH_REPORT.md (1개) · wiki/index.md" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert "사람용 flow.html · wiki/index.md" in captured.out
 
 
 def test_code_flow가_흐름_경로를_보여준다(tmp_path, monkeypatch, capsys):

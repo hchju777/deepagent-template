@@ -1205,6 +1205,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         print(f"  그래프: 지식 층을 읽을 수 없다 — {exc}", file=sys.stderr)
         return 1
 
+    import shutil
     import time
     t0 = time.monotonic()
 
@@ -1229,28 +1230,50 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     binary = gb.find_graphify()
     if not binary:
         progress("graphify 없음 — 심볼 그래프는 건너뛴다 (requirements-graph.txt)")
-    symbol_graphs, states = [], []
+    symbol_graphs, states, reports = [], [], {}
     for repo in site.code.repos:
         sha = commits.get(repo.name)
         if not sha:
             states.append(f"{repo.name} 건너뜀(커밋 없음)")
             continue
-        status, detail, graph = gb.run_graphify_at(
+        status, detail, graph, report = gb.run_graphify_at(
             Path(repo.path), sha, binary, out_dir / "worktrees" / repo.name,
             progress=lambda m, r=repo.name: progress(f"{r}: {m}"))
         states.append(f"{repo.name} {status}" + ("" if status == "ok" else f" — {detail}"))
         if graph:
             symbol_graphs.append(graph)
+        if report:
+            reports[repo.name] = report
     merged = gb.merge_graphs(overlay, symbol_graphs)
     meta = gb.GraphMeta(gbm=gbm, fct=fct, commits=commits, built_at=gb.now_text(clock),
                         graphify=gb.graphify_version(binary), notes=problems + states)
     gb.write_bundle(out_dir, overlay=overlay, merged=merged, meta=meta)
+    shutil.rmtree(out_dir / "worktrees", ignore_errors=True)      # 빈 껍데기만 남는다
     progress("그래프 씀")
+
+    # 사람용. flow.html은 항상(오버레이만으로 그린다, 외부 참조 0). 리포트와 wiki는 graphify가 있을 때.
+    from src.presentation import flow_html
+    (out_dir / "flow.html").write_text(
+        flow_html.render(overlay, title=f"{gbm}/{fct}", built_at=meta.built_at, commits=commits),
+        encoding="utf-8")
+    for repo_name, report in sorted(reports.items()):
+        target = out_dir / "reports" / repo_name / "GRAPH_REPORT.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(report, encoding="utf-8")
+    wiki_status, wiki_detail = gb.run_wiki(binary, out_dir / "graph.json", progress=progress)
+    human = ["flow.html"]
+    if reports:
+        human.append(f"reports/<레포>/GRAPH_REPORT.md ({len(reports)}개)")
+    if wiki_status == "ok":
+        human.append("wiki/index.md")
+    elif wiki_status == "failed":
+        problems.append(f"wiki: {wiki_detail}")
 
     summary = flow.summary(overlay)
     kinds = ", ".join(f"{k} {v}" for k, v in sorted(summary["kinds"].items()))
     print(f"\n  그래프 {gbm}/{fct} → {out_dir}")
     print(f"       graphify {meta.graphify} · " + " · ".join(states))
+    print(f"       사람용: {' · '.join(human)}")
     print(f"       오버레이 노드 {summary['nodes']} · 엣지 {summary['links']} ({kinds})"
           f" · 합친 그래프 노드 {len(merged['nodes'])} · 엣지 {len(merged['links'])}")
     if summary["unreferenced"]:
@@ -1299,6 +1322,9 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     print(f"       {'⚠ 낡음' if stale else '✅'} 만든 시각 {meta.built_at} · graphify {meta.graphify}"
           f" · 노드 {len(graph['nodes'])} · 엣지 {len(graph['links'])}"
           f" · 레포에 붙은 엣지 {summary['repo_level']}")
+    human = [name for name in ("flow.html", "wiki/index.md") if (out_dir / name).exists()]
+    if human:
+        print(f"       사람용 {' · '.join(human)}")
     for line in stale + problems:
         print(f"       ⚠ {line}")
     return 0

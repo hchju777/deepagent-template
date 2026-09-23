@@ -55,6 +55,11 @@ py -3.11 -m pip download -r requirements-graph.txt --only-binary=:all: --platfor
 `python -m pytest tests/knowledge/test_graph_build.py -v`에서 `test_진짜_graphify로_코드만_추출한다`가
 스킵이 아니라 통과하는 것.
 
+`code graph`가 남기는 사람용 파일(`output/graph/<gbm>-<fct>/`): `flow.html`은 graphify 없이도
+만들어지고 외부 참조가 없어 팀원에게 그 파일 하나만 주면 된다. graphify가 있으면 레포별
+`reports/<레포>/GRAPH_REPORT.md`와 `wiki/index.md`(md 묶음)도 생긴다. graphify 자체의
+`graph.html`은 만들지 않는다 — 그림 라이브러리를 CDN에서 받아 오게 돼 있어 사내망에서 안 열린다.
+
 Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 모아 뒀다 —
 인코딩, tz 데이터베이스, 사내 CA와 TLS, 그리고 **같은 3.11인데 argparse 동작이
 갈린 사례**. 읽고 시작하는 편이 빠르다.
