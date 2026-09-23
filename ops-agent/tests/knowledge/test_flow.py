@@ -224,6 +224,30 @@ def test_옆_줄의_동사는_쓰되_INFERRED다():
     assert graded(same) == [("reads", "EXTRACTED")]
 
 
+def test_kafka가_없는_서비스도_정상이다():
+    """consumer가 모든 서비스에 있는 것은 아니다(사내 확인). 없는 출처는 이름 0개일 뿐,
+    문제도 예외도 아니다. 측정판의 dt-api가 우연히 이 경우라 여기 명시해 둔다 —
+    측정판을 바꾸면 그 우연은 사라진다."""
+    sources = FlowSpec().sources
+    no_kafka = {"infra": {"mongodb": {"database": "data"}},
+                "mongodb_collection": {"alarm": "alarm_events"}}
+    producer_only = {"infra": {"kafka": {"producer": {"topic": {"topic1": "mx.alarm.main"}}}},
+                     "redis_key": {"hb": "hb:{service}"}}
+    assert {(n.kind, n.relation) for n in flow.names_from_config(no_kafka, sources)} == {
+        ("collection", None)}
+    assert {(n.kind, n.relation) for n in flow.names_from_config(producer_only, sources)} == {
+        ("topic", "produces"), ("rediskey", None)}
+
+    # 그래프도 조용히 선다 — 토픽·그룹 노드가 없고, 권고가 그 서비스를 탓하지 않는다.
+    topology = Topology(services={"api": Service(repo="dt-api", role="읽는다")})
+    hit = Hit("dt-api", "c", "api/alarms.py", 3, 'mongo["alarm_events"].find({})')
+    g = flow.extract(names=flow.names_from_config(no_kafka, sources), topology=topology,
+                     hits_for=lambda p: [hit] if p in hit.text else [], commits={"dt-api": "c"})
+    assert {n["type"] for n in g["nodes"]} == {"service", "repo", "collection"}
+    assert [(e["relation"], e["target"]) for e in g["links"]] == [("reads", "collection_alarm_events")]
+    assert not [a for a in flow.advise(g, topology) if a.startswith("api:")]
+
+
 def test_동사가_없는_줄은_mentions로_남긴다():
     """방향은 몰라도 "이 서비스가 이 이름을 안다"는 사실은 남긴다."""
     hits = lambda p: [Hit("dt-api", "c", "api/alarms.py", 3, 'name = cfg["mongodb_collection"]["alarm"]')]

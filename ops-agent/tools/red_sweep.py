@@ -552,6 +552,10 @@ CASES = [
   '        field = src.field or FLOW_FIELDS.get(src.kind, "")',
   '        field = FLOW_FIELDS.get(src.kind, "")',
   ["tests/knowledge/test_flow.py::test_객체의_필드는_종류별_기본이고_바꿀_수_있다"]),
+ ("없는 config 경로에서 죽는다", ROOT / "src/knowledge/flow.py",
+  '            node = node.get(key) if isinstance(node, dict) else None',
+  '            node = node[key]',
+  ["tests/knowledge/test_flow.py::test_kafka가_없는_서비스도_정상이다"]),
  ("옆 줄의 동사를 안 본다", ROOT / "src/knowledge/flow.py",
   '                verb = verb or direction(hit.context)',
   '                verb = verb',
@@ -607,7 +611,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 135, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 136, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -98,11 +98,22 @@ def test_graphify_바이너리는_env가_PATH보다_먼저다(monkeypatch, tmp_p
     assert gb.find_graphify() is None, "가리킨 것이 없으면 PATH로 조용히 넘어가지 않는다"
 
 
+def _dying_graphify(dir_: Path) -> Path:
+    """종료코드 3으로 죽는 가짜 graphify. Windows는 셸뱅을 모르고 확장자 없는 파일을 실행
+    자체를 거부한다(WinError 193, 사내 측정) — 거기서는 `.cmd`다. 프로덕션은 pip가 만든
+    `graphify.exe` 런처를 쓰므로 이 분기는 테스트에만 있다."""
+    if os.name == "nt":
+        bad = dir_ / "graphify.cmd"
+        bad.write_text("@echo boom 1>&2\r\n@exit /b 3\r\n", encoding="utf-8", newline="")
+    else:
+        bad = dir_ / "graphify"
+        bad.write_text("#!/bin/sh\necho boom >&2\nexit 3\n", encoding="utf-8")
+        bad.chmod(0o755)
+    return bad
+
+
 def test_graphify가_죽으면_failed로_흡수한다(tmp_path):
-    bad = tmp_path / "graphify"
-    bad.write_text("#!/bin/sh\necho boom >&2\nexit 3\n", encoding="utf-8")
-    bad.chmod(0o755)
-    status, detail, _ = gb.run_graphify(tmp_path, str(bad))
+    status, detail, _ = gb.run_graphify(tmp_path, str(_dying_graphify(tmp_path)))
     assert status == "failed" and "종료코드 3" in detail and "boom" in detail
 
 
