@@ -1253,6 +1253,9 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     print(f"       graphify {meta.graphify} · " + " · ".join(states))
     print(f"       오버레이 노드 {summary['nodes']} · 엣지 {summary['links']} ({kinds})"
           f" · 합친 그래프 노드 {len(merged['nodes'])} · 엣지 {len(merged['links'])}")
+    if summary["unreferenced"]:
+        print(f"       코드 줄에서 직접 못 찾은 이름 {summary['unreferenced']}개 — config에만 보인다 "
+              f"(Enum·공통 헬퍼로 감싸 쓰면 여기 든다; 코드 층은 리드가 홉을 밟는다)")
     for line in problems:
         print(f"       ⚠ {line}")
     advice = flow.advise(overlay, topology)
@@ -1295,7 +1298,7 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     summary = flow.summary(json.loads((out_dir / "overlay.json").read_text(encoding="utf-8")))
     print(f"       {'⚠ 낡음' if stale else '✅'} 만든 시각 {meta.built_at} · graphify {meta.graphify}"
           f" · 노드 {len(graph['nodes'])} · 엣지 {len(graph['links'])}"
-          f" · 서비스를 못 가른 엣지 {summary['repo_level']}")
+          f" · 레포에 붙은 엣지 {summary['repo_level']}")
     for line in stale + problems:
         print(f"       ⚠ {line}")
     return 0

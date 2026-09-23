@@ -27,6 +27,7 @@
 전부 `ProbeResult`로 흡수한다. 없는 서비스, 안 읽히는 층, 잘린 파일 — 운영 중에
 정상적으로 일어나는 일이고, 여기서 던지면 조사 그래프가 통째로 죽는다(규율 1).
 """
+from dataclasses import replace
 from typing import Callable
 
 from src.domain.base import Clock
@@ -80,8 +81,11 @@ class DeployedCode(DeployedCodePort):
         return out
 
     async def flow_names(self) -> tuple[list[Name], list[str]]:
-        """모든 서비스의 합친 config에서 뽑은 이름들과, 못 읽은 서비스의 사유."""
+        """모든 서비스의 합친 config에서 뽑은 이름들(어느 서비스가 가졌는지 포함)과, 못 읽은
+        서비스의 사유. 같은 레포의 서비스라도 환경변수로 고른 층이 다르면 합친 config가
+        다르다 — 그래서 이름마다 서비스를 기억한다."""
         found: dict[tuple, Name] = {}
+        holders: dict[tuple, set[str]] = {}
         problems = []
         for service in sorted(self._topology.services):
             got = await self.config(service)
@@ -89,8 +93,11 @@ class DeployedCode(DeployedCodePort):
                 problems.append(f"{service}: {got.error or 'config가 객체가 아니다'}")
                 continue
             for n in names_from_config(got.data, self._topology.flow.sources):
-                found.setdefault((n.kind, n.value, n.key_path), n)
-        return list(found.values()), problems
+                key = (n.kind, n.value, n.key_path)
+                found.setdefault(key, n)
+                holders.setdefault(key, set()).add(service)
+        return ([replace(n, services=tuple(sorted(holders[k]))) for k, n in found.items()],
+                problems)
 
     async def flow_hits(self, patterns: list[str], *,
                         progress: Callable[[str], None] | None = None

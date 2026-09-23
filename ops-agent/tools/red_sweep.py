@@ -494,19 +494,21 @@ CASES = [
   ["tests/config/test_schema_app.py::test_라운드_상한_기본값은_6이다"]),
  # ── 11c 흐름 그래프 ────────────────────────────────────────────────
  ("키 토큰을 부모 키 없이 맞춘다", ROOT / "src/knowledge/flow.py",
-  '                if confidence == "INFERRED" and any(\n                        tok not in hit.text for tok in name.required_tokens):\n                    continue',
+  '                if confidence == "INFERRED" and any(\n                        tok not in hit.text for tok in name.required_tokens\n                ) and not _quoted_whole(name.key_token, hit.text):\n                    continue',
   '                if False:\n                    continue',
-  ["tests/knowledge/test_flow.py::test_키_토큰은_부모_키가_같은_줄에_있어야_한다"]),
+  ["tests/knowledge/test_flow.py::test_키_토큰은_조상_둘을_요구한다",
+   "tests/knowledge/test_flow.py::test_키_토큰은_조상_키가_같은_줄에_있어야_한다"]),
  ("동사를 조각이 아니라 통째로 맞춘다", ROOT / "src/knowledge/flow.py",
   '        for chunk in word.split("_"):',
   '        for chunk in [word]:',
-  ["tests/knowledge/test_flow.py::test_측정판_코드에서_흐름이_나온다"]),
+  ["tests/knowledge/test_flow.py::test_동사로_방향을_정한다",
+   "tests/knowledge/test_flow.py::test_코드가_공유_레포의_서비스를_가른다"]),
  ("동사 없는 줄을 버린다", ROOT / "src/knowledge/flow.py",
   '                relation = (RELATION[name.kind][verb] if verb in ("reads", "writes")\n                            else "mentions")',
   '                if verb not in ("reads", "writes"):\n                    continue\n                relation = RELATION[name.kind][verb]',
   ["tests/knowledge/test_flow.py::test_동사가_없는_줄은_mentions로_남긴다"]),
  ("경로가 흐름 방향을 무시한다", ROOT / "src/knowledge/flow.py",
-  '    if undirected:\n        if node == edge["source"]:',
+  '    if undirected or edge["relation"] == _BRIDGE:\n        if node == edge["source"]:',
   '    if True:\n        if node == edge["source"]:',
   ["tests/knowledge/test_flow.py::test_processor에서_sink까지_경로는_토픽을_지난다",
    "tests/knowledge/test_flow.py::test_흐름이_없으면_경로도_없다"]),
@@ -540,10 +542,6 @@ CASES = [
   '        elif False:',
   ["tests/knowledge/test_graph_build.py::test_번들을_쓰고_읽고_커밋을_대조한다",
    "tests/knowledge/test_cli_code.py::test_code_status가_낡은_그래프를_말한다"]),
- ("안 쓰는 이름을 안 짚는다", ROOT / "src/knowledge/flow.py",
-  '    if idle:',
-  '    if False:',
-  ["tests/knowledge/test_flow.py::test_요약과_권고"]),
  ("객체 안의 이름을 못 뽑는다", ROOT / "src/knowledge/flow.py",
   '                if isinstance(value, dict):\n                    value = value.get(field)',
   '                pass',
@@ -594,6 +592,35 @@ CASES = [
  ("python 옆의 graphify를 안 본다", ROOT / "src/knowledge/graph_build.py",
   '    if beside.exists():\n        return str(beside)', '    if False:\n        pass',
   ["tests/knowledge/test_graph_build.py::test_python_옆의_graphify를_PATH보다_먼저_본다"]),
+ ("worktree 경로를 절대 경로로 안 바꾼다", ROOT / "src/knowledge/graph_build.py",
+  '    repo_dir, scratch = Path(os.path.abspath(repo_dir)), Path(os.path.abspath(scratch))',
+  '    pass',
+  ["tests/knowledge/test_graph_build.py::test_worktree_자리는_상대_경로여도_레포_밖에_생긴다"]),
+ ("config 엣지를 서비스별로 안 만든다", ROOT / "src/knowledge/flow.py",
+  '        if name.services:\n            _declare_per_service(name, target, topology, hits_for, commits, put_node, links)',
+  '        if False:\n            pass',
+  ["tests/knowledge/test_flow.py::test_config_엣지는_서비스마다_그_서비스의_합친_config에서_만든다"]),
+ ("서비스→레포 다리가 없다", ROOT / "src/knowledge/flow.py",
+  '                      "relation": "runs", "confidence": "EXTRACTED", "attributed": "service",',
+  '                      "relation": "member", "confidence": "EXTRACTED", "attributed": "service",',
+  ["tests/knowledge/test_flow.py::test_같은_코드를_띄우는_서비스는_레포를_거쳐_경로가_난다"]),
+ ("다리를 자원 경로보다 먼저 탄다", ROOT / "src/knowledge/flow.py",
+  '    for bridge in (False, True):', '    for bridge in (True, False):',
+  ["tests/knowledge/test_flow.py::test_processor에서_sink까지_경로는_토픽을_지난다"]),
+ ("문서·테스트·주석을 코드 엣지로 센다", ROOT / "src/knowledge/flow.py",
+  '                if not _is_config(hit.file) and _is_noise(hit.file, hit.text):\n                    continue',
+  '                if False:\n                    continue',
+  ["tests/knowledge/test_flow.py::test_문서_테스트_주석_줄은_코드_엣지가_아니다"]),
+ ("따옴표 통째 키를 안 받는다", ROOT / "src/knowledge/flow.py",
+  '                ) and not _quoted_whole(name.key_token, hit.text):',
+  '                ) and True:',
+  ["tests/knowledge/test_flow.py::test_따옴표로_통째_적힌_config_키는_조상_없이도_잡는다"]),
+ ("공유 레포를 권고에서 안 말한다", ROOT / "src/knowledge/flow.py",
+  '    for repo, n in sorted(shared_code.items()):', '    for repo, n in []:',
+  ["tests/knowledge/test_flow.py::test_같은_코드를_띄우는_서비스는_레포를_거쳐_경로가_난다"]),
+ ("코드에서 못 찾은 이름을 안 센다", ROOT / "src/knowledge/flow.py",
+  '            "unreferenced": len(resources - coded)}', '            "unreferenced": 0}',
+  ["tests/knowledge/test_flow.py::test_요약과_권고"]),
  ("graphify 단계를 안 알린다", ROOT / "src/knowledge/graph_build.py",
   '        if progress:\n            progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")',
   '        if False:\n            pass',
@@ -633,7 +660,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 143, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 150, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
@@ -650,7 +677,9 @@ for label, path, old, new, tests in CASES:
         _drop_pyc(path)
         _ORIGINAL.pop(path, None)
     tail = done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "(출력 없음)"
-    ok = done.returncode != 0
+    # RED는 "테스트가 실패했다"(1)뿐이다. 4(잘못된 테스트 id)·5(수집 0건)도 0이 아니라서,
+    # 이름이 바뀐 테스트를 가리키는 케이스가 조용히 RED로 통과한 적이 있다.
+    ok = done.returncode == 1
     print(f"{'RED ' if ok else '초록!'} {label} — {tail}")
     if not ok: bad.append(f"{label}: 지웠는데 통과")
 print()

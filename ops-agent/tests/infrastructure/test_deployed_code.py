@@ -234,6 +234,7 @@ async def test_흐름_이름은_합친_config에서_나온다(flow_code):
     assert {(n.kind, n.value, n.relation) for n in names} == {
         ("topic", "mx.alarm.main", "consumes"), ("group", "mx-core", "consumes_as"),
         ("collection", "alarm_events", None)}
+    assert all(n.services == ("sink",) for n in names), "어느 서비스의 config인지 이름이 안다"
 
 
 async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):

@@ -118,6 +118,29 @@ def test_graphify가_죽으면_failed로_흡수한다(tmp_path):
     assert status == "failed" and "종료코드 3" in detail and "boom" in detail
 
 
+def test_worktree_자리는_상대_경로여도_레포_밖에_생긴다(tmp_path, monkeypatch):
+    """`git -C <레포>`는 상대 경로를 레포 기준으로 푼다. `output_dir`이 `output`(기본값)이면
+    worktree가 대상 레포 안에 생기고 graphify는 없는 자리에서 돈다(사내: WinError 267).
+    측정판은 output_dir이 절대 경로라 한 번도 안 드러났다."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), *ident, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), *ident, "commit", "-qm", "i"], check=True)
+    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True,
+                         text=True, encoding="utf-8", check=True).stdout.strip()
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    monkeypatch.chdir(agent)
+    status, detail, _ = gb.run_graphify_at(Path("../repo"), sha, str(_dying_graphify(tmp_path)),
+                                           Path("output/graph/mx-gumi/worktrees/repo"))
+    assert status == "failed" and "종료코드 3" in detail, detail      # 가짜가 그 자리에서 실제로 돌았다
+    assert not (repo / "output").exists(), "worktree가 대상 레포 안에 생겼다"
+    assert not (agent / "output" / "graph" / "mx-gumi" / "worktrees" / "repo").exists()
+
+
 def test_graphify_단계를_알린다(tmp_path):
     """타임아웃이 10분이라 말없이 돌면 멈춘 줄 안다(사내). 단계 시작마다 한 줄."""
     seen: list[str] = []

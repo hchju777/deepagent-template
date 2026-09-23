@@ -139,6 +139,10 @@ def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path,
     """
     if not binary:
         return "skipped", "graphify가 없다 — 오버레이만 만든다 (GRAPHIFY_BIN 또는 PATH)", None
+    # 절대 경로로 바꾼다. `git -C <레포>`는 상대 경로를 **레포 기준**으로 풀어서, `output`
+    # 같은 상대 output_dir이면 worktree가 대상 레포 안에 생기고 우리는 없는 자리에서
+    # graphify를 돌리게 된다(사내 첫 실행: WinError 267, 리눅스: FileNotFoundError).
+    repo_dir, scratch = Path(os.path.abspath(repo_dir)), Path(os.path.abspath(scratch))
     scratch.parent.mkdir(parents=True, exist_ok=True)
     if scratch.exists():
         shutil.rmtree(scratch, ignore_errors=True)

@@ -48,6 +48,10 @@ class Name:
     value: str          # config의 값 그대로 (`alarm:stats:{line}`)
     key_path: str       # `infra.kafka.consumer.topic.topic1`
     relation: str | None = None     # 출처가 방향을 말하면(`consumes`·`produces`…)
+    # 이 이름을 합친 config에 가진 서비스들. 비어 있으면 모른다(테스트의 파일 뭉치 경로).
+    # 같은 레포의 서비스 여럿이 환경변수로 역할만 다르면(사내: processor 5개·sink 2개) 합친
+    # config도 다를 수 있어, config 엣지는 grep이 아니라 여기서 서비스 단위로 만든다.
+    services: tuple[str, ...] = ()
 
     @property
     def literal(self) -> str:
@@ -204,6 +208,14 @@ def extract(*, names: Iterable[Name], topology: Topology,
     for repo in sorted({s.repo for s in topology.services.values()}):
         put_node(f"repo_{_slug(repo)}", repo, "repo", repo, 0,
                  commit=commits.get(repo, ""))
+    # 서비스 → 레포. 같은 코드를 여러 서비스가 띄우면(사내: processor 5개, sink 2개) 코드
+    # 엣지는 레포에 붙는데, 그러면 서비스에서 출발하는 경로가 없어진다. 이 엣지가 그 다리다.
+    for svc_name, svc in sorted(topology.services.items()):
+        links.append({"source": f"service_{_slug(svc_name)}", "target": f"repo_{_slug(svc.repo)}",
+                      "relation": "runs", "confidence": "EXTRACTED", "attributed": "service",
+                      "origin": "topology", "source_file": "knowledge/topology",
+                      "source_location": "L0", "repo": svc.repo,
+                      "commit": commits.get(svc.repo, ""), "text": ""})
 
     for name in sorted(set(names), key=lambda n: (n.kind, n.value, n.key_path)):
         target = _node_id(name.kind, name.value)
@@ -211,7 +223,12 @@ def extract(*, names: Iterable[Name], topology: Topology,
             confidence = "EXTRACTED" if pattern == name.literal else "INFERRED"
             for hit in sorted(hits_for(pattern), key=lambda h: (h.repo, h.file, h.line)):
                 if confidence == "INFERRED" and any(
-                        tok not in hit.text for tok in name.required_tokens):
+                        tok not in hit.text for tok in name.required_tokens
+                ) and not _quoted_whole(name.key_token, hit.text):
+                    continue
+                if _is_config(hit.file) and name.services:
+                    continue            # config 엣지는 아래에서 서비스 단위로 만든다
+                if not _is_config(hit.file) and _is_noise(hit.file, hit.text):
                     continue
                 put_node(target, name.value, name.kind, hit.file, hit.line,
                          key_path=name.key_path)
@@ -224,7 +241,7 @@ def extract(*, names: Iterable[Name], topology: Topology,
                     who = config_owner(hit.repo, topology)
                     # 출처가 방향을 말하면(`consumer.topic` 등) 선언이 곧 관계다. 공유
                     # 레포면 레포 노드에 붙는다 — "이 레포의 누군가가 소비한다"까지가 사실이다.
-                    links.append({**base,
+                    links.append({**base, "origin": "config",
                                   "source": (f"service_{_slug(who)}" if who
                                              else f"repo_{_slug(hit.repo)}"),
                                   "relation": name.relation or "declares",
@@ -241,7 +258,7 @@ def extract(*, names: Iterable[Name], topology: Topology,
                 # 리드가 어느 서비스를 볼지 고르는 데는 충분하다.
                 relation = (RELATION[name.kind][verb] if verb in ("reads", "writes")
                             else "mentions")
-                links.append({**base,
+                links.append({**base, "origin": "code",
                               "source": (f"service_{_slug(who)}" if who
                                          else f"repo_{_slug(hit.repo)}"),
                               "relation": relation,
@@ -249,12 +266,77 @@ def extract(*, names: Iterable[Name], topology: Topology,
                               "confidence": _weakest(
                                   confidence, sure,
                                   sure_verb if verb in ("reads", "writes") else "AMBIGUOUS")})
+        # 코드 엣지 뒤에 둔다 — 경로 탐색이 링크 순서로 첫 엣지를 고르므로, 코드 줄이 있으면
+        # 그 줄이 근거로 찍힌다.
+        if name.services:
+            _declare_per_service(name, target, topology, hits_for, commits, put_node, links)
     return {"directed": True, "multigraph": True, "graph": {"kind": "ops-flow"},
             "nodes": list(nodes.values()), "links": links, "hyperedges": []}
 
 
+def _declare_per_service(name: Name, target: str, topology: Topology, hits_for, commits,
+                         put_node, links: list[dict]) -> None:
+    """config 엣지를 **서비스마다** 그 서비스의 합친 config에서 만든다 — grep 없이, EXTRACTED.
+
+    근거 줄은 있으면 붙인다: 그 레포의 config 파일에서 값 리터럴이 있는 첫 줄. 없어도
+    엣지는 선다 — 합친 config에 있다는 것이 사실이고, 파일 줄은 편의다.
+    """
+    evidence: dict[str, Hit] = {}
+    if name.literal:
+        for hit in sorted(hits_for(name.literal), key=lambda h: (h.repo, h.file, h.line)):
+            if _is_config(hit.file):
+                evidence.setdefault(hit.repo, hit)
+    for svc_name in sorted(name.services):
+        svc = topology.services.get(svc_name)
+        if svc is None:
+            continue
+        hit = evidence.get(svc.repo)
+        file, line = (hit.file, hit.line) if hit else (f"config({svc.repo})", 0)
+        put_node(target, name.value, name.kind, file, line, key_path=name.key_path)
+        links.append({"source": f"service_{_slug(svc_name)}", "target": target,
+                      "relation": name.relation or "declares", "confidence": "EXTRACTED",
+                      "attributed": "service", "origin": "config",
+                      "source_file": file, "source_location": f"L{line}",
+                      "repo": svc.repo, "commit": commits.get(svc.repo, ""),
+                      "text": _clip(hit.text) if hit else ""})
+
+
 def _is_config(file: str) -> bool:
     return file.startswith("config/") or "/config/" in file or file.endswith((".json", ".yaml", ".yml", ".toml"))
+
+
+_NOISE_DIRS = ("tests", "test", "docs", "doc", "examples")
+_NOISE_SUFFIX = (".md", ".rst", ".txt")
+_COMMENT = ("#", "//", "/*", "*", "<!--", '"""', "'''")
+
+
+def _is_noise(file: str, text: str) -> bool:
+    """문서·테스트·주석 줄. 사내 첫 실행에서 코드 엣지의 60%가 여기서 나왔다 — 이름이 적힌
+    문서와 테스트는 "이 서비스가 이 자원을 쓴다"의 근거가 아니다."""
+    parts = file.replace("\\", "/").split("/")
+    base = parts[-1]
+    if file.endswith(_NOISE_SUFFIX) or any(p in _NOISE_DIRS for p in parts[:-1]):
+        return True
+    if base.startswith("test_") or base.endswith(("_test.py", "_tests.py")):
+        return True
+    return text.lstrip().startswith(_COMMENT)
+
+
+_DISTINCTIVE = re.compile(r"[_:.\-]")
+
+
+def _quoted_whole(token: str, text: str) -> bool:
+    """config 키가 **따옴표로 통째로** 코드 줄에 있다 — 조상 키가 없어도 받는다.
+
+    사내 코드는 키를 Enum 값으로 들고(`PROD_BEFORE_WORKER_ALL = "prodcheck_before_cur_worker_all"`)
+    공통 접근 함수가 런타임에 `cfg["redis_key"][key]`로 꺼낸다. 키와 `redis_key`가 같은 줄에
+    오는 일이 없다. 그 Enum 줄이 코드에서 이 키를 아는 유일한 자리이고, 리드가 홉을 밟기
+    시작할 곳이다. `alarm`·`processor` 같은 한 단어는 제외한다 — `format(service="processor")`처럼
+    어디에나 있다. 밑줄·콜론·점·대시로 이어진 여러 조각짜리 이름만 받는다.
+    """
+    if not _DISTINCTIVE.search(token):
+        return False
+    return re.search(r"""["']""" + re.escape(token) + r"""["']""", text) is not None
 
 
 _RANK = {"EXTRACTED": 0, "INFERRED": 1, "AMBIGUOUS": 2}
@@ -297,11 +379,16 @@ def neighbors(graph: dict, name: str, *, depth: int = 1) -> list[dict]:
 # `mentions`·`declares`는 방향이 없어 흐름 경로에 안 낀다(이웃에는 낀다).
 _OUTBOUND = ("writes", "produces")
 _INBOUND = ("reads", "consumes", "consumes_as")
+# 서비스↔레포 다리. 자원 경로가 없을 때만 탄다 — 같은 레포의 서비스 둘은 `runs` 두 홉으로
+# 항상 이어져서, 먼저 허용하면 토픽을 지나는 진짜 흐름을 가린다.
+_BRIDGE = "runs"
 
 
-def _step(edge: dict, node: str, *, undirected: bool) -> str | None:
+def _step(edge: dict, node: str, *, undirected: bool, bridge: bool = False) -> str | None:
     """`node`에서 이 엣지를 타고 갈 수 있으면 건너편, 아니면 None."""
-    if undirected:
+    if edge["relation"] == _BRIDGE and not (undirected or bridge):
+        return None
+    if undirected or edge["relation"] == _BRIDGE:
         if node == edge["source"]:
             return edge["target"]
         return edge["source"] if node == edge["target"] else None
@@ -317,11 +404,21 @@ def shortest_path(graph: dict, a: str, b: str, *, undirected: bool = False) -> l
 
     방향을 무시하면 processor와 sink가 둘 다 쓰는 하트비트 키가 2홉 경로가 된다 —
     그건 흐름이 아니다. 기본은 쓰기→자원→읽기만 통과한다. `undirected=True`는
-    "관계가 있기는 한가"를 물을 때만.
+    "관계가 있기는 한가"를 물을 때만. 자원만으로 길이 없으면 서비스↔레포 다리(`runs`)를
+    허용해 한 번 더 찾는다 — 코드 엣지가 레포에 붙은 공유 레포를 지나기 위해서다.
     """
     starts, goals = _find(graph, a), set(_find(graph, b))
     if not starts or not goals:
         return None
+    for bridge in (False, True):
+        path = _bfs(graph, starts, goals, undirected=undirected, bridge=bridge)
+        if path is not None:
+            return path
+    return None
+
+
+def _bfs(graph: dict, starts: list[str], goals: set[str], *, undirected: bool, bridge: bool
+         ) -> list[dict] | None:
     prev: dict[str, tuple[str, dict] | None] = {s: None for s in starts}
     queue = deque(starts)
     while queue:
@@ -333,7 +430,7 @@ def shortest_path(graph: dict, a: str, b: str, *, undirected: bool = False) -> l
                 path.append(edge)
             return list(reversed(path))
         for e in graph["links"]:
-            other = _step(e, node, undirected=undirected)
+            other = _step(e, node, undirected=undirected, bridge=bridge)
             if other is not None and other not in prev:
                 prev[other] = (node, e)
                 queue.append(other)
@@ -366,36 +463,49 @@ def render_path(graph: dict, edges: list[dict]) -> str:
     return " ".join(out)
 
 
+RESOURCE_TYPES = ("topic", "group", "collection", "rediskey")
+
+
 def summary(graph: dict) -> dict:
     """`code status`가 찍을 숫자들."""
     links = graph["links"]
     kinds = {}
     for n in graph["nodes"]:
         kinds[n.get("type", "?")] = kinds.get(n.get("type", "?"), 0) + 1
+    # config에만 보이고 코드 줄에서 직접 못 찾은 이름. 권고가 아니라 숫자다 — 사내 코드는
+    # 키를 Enum·공통 헬퍼 뒤에 두어 "안 쓴다"가 아니라 "텍스트로는 못 찾는다"가 맞다.
+    resources = {n["id"] for n in graph["nodes"] if n.get("type") in RESOURCE_TYPES}
+    coded = {e["target"] for e in links if e.get("origin", "code") == "code"}
     return {"nodes": len(graph["nodes"]), "links": len(links), "kinds": kinds,
             "repo_level": sum(1 for e in links if e.get("attributed") == "repo"),
-            "ambiguous": sum(1 for e in links if e.get("confidence") == "AMBIGUOUS")}
+            "ambiguous": sum(1 for e in links if e.get("confidence") == "AMBIGUOUS"),
+            "unreferenced": len(resources - coded)}
 
 
 def advise(graph: dict, topology: Topology) -> list[str]:
     """토폴로지·config를 고칠 사람에게 주는 권고. **막지 않는다** — 적기만 한다."""
     out = []
-    resources = [n for n in graph["nodes"] if n.get("type") in ("topic", "group", "collection", "rediskey")]
+    links = graph["links"]
+    resources = [n for n in graph["nodes"] if n.get("type") in RESOURCE_TYPES]
     if not resources:
         out.append("이름을 하나도 못 뽑았다 — knowledge/topology의 flow.sources가 config 모양과 안 맞는다")
         return out
-    used = {e["target"] for e in graph["links"] if e["relation"] != "declares"}
-    idle = sorted(n["label"] for n in resources if n["id"] not in used)
-    if idle:
-        out.append(f"config에 선언됐지만 코드 어디서도 안 쓰는 이름 {len(idle)}개 — {', '.join(idle[:5])}"
-                   + (" …" if len(idle) > 5 else ""))
-    shared = sum(1 for e in graph["links"] if e.get("attributed") == "repo")
-    if shared:
-        repos = sorted({e["repo"] for e in graph["links"] if e.get("attributed") == "repo"})
-        out.append(f"서비스를 못 가른 엣지 {shared}개 (공유 레포 {', '.join(repos)}) — "
-                   f"토폴로지의 서비스 path를 채우면 코드 쪽은 갈린다")
+    # 같은 코드를 여러 서비스가 띄우는 레포(사내: processor 5개, sink 2개). 코드 엣지는 레포에
+    # 붙는 것이 맞고 "path를 채워라"는 틀린 권고였다 — 파일로는 원리상 못 가른다. 사실만 적는다.
+    shared_code: dict[str, int] = {}
+    for e in links:
+        if e.get("attributed") == "repo" and e.get("origin", "code") == "code":
+            shared_code[e["repo"]] = shared_code.get(e["repo"], 0) + 1
+    for repo, n in sorted(shared_code.items()):
+        members = sorted(name for name, s in topology.services.items() if s.repo == repo)
+        out.append(f"{repo}: 서비스 {len(members)}개({', '.join(members)})가 코드를 공유한다 — "
+                   f"코드 엣지 {n}개는 레포 단위다")
+    # 서비스에 자원이 하나도 없다는 말은 레포에 서비스가 하나뿐일 때만 뜻이 있다 — 공유
+    # 레포에서는 위 한 줄이 이미 설명이고, 서비스마다 같은 말을 되풀이하면 사람이 서비스를 의심한다.
     for name, svc in sorted(topology.services.items()):
+        if sum(1 for s in topology.services.values() if s.repo == svc.repo) > 1:
+            continue
         sid = f"service_{_slug(name)}"
-        if not any(e["source"] == sid for e in graph["links"]):
-            out.append(f"{name}: 코드에서 자원을 하나도 안 만진다 — 레포·역할 선언을 의심하라")
+        if not any(e["source"] == sid and e["relation"] != _BRIDGE for e in links):
+            out.append(f"{name}: config에도 코드에도 자원이 없다 — 레포·역할 선언을 의심하라")
     return out

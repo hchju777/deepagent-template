@@ -514,7 +514,10 @@ def test_code_graph가_배포_커밋에_그래프를_박는다(tmp_path, monkeyp
     assert (bundle / "graph.json").exists() and (bundle / "meta.json").exists()
     meta = json.loads((bundle / "meta.json").read_text(encoding="utf-8"))
     assert len(meta["commits"][REPO]) == 40, "참조가 아니라 SHA에 박혀야 한다"
-    assert "서비스를 못 가른 엣지" in captured.out          # 공유 레포의 config 선언
+    # config 엣지는 서비스별 합친 config에서 바로 나오고, 코드는 processor/·sink/로 갈린다 —
+    # "못 가른 엣지"도 "path를 채워라"도 "안 만진다"도 나오면 안 된다.
+    assert "오버레이 노드" in captured.out
+    assert "path" not in captured.out and "안 만진다" not in captured.out
     assert not (tmp_path / "checkout" / "graphify-out").exists(), "체크아웃을 더럽혔다"
     # 진행은 stderr에, 경과 시간과 함께 — 사내에서 몇 분을 말없이 돌자 멈춘 줄 알았다.
     assert "이름 " in captured.err and "찾는 중" in captured.err and "graphify 없음" in captured.err

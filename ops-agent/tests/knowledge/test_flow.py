@@ -218,7 +218,7 @@ def test_옆_줄의_동사는_쓰되_INFERRED다():
     def graded(hit):
         g = flow.extract(names=[name], topology=TOPOLOGY, commits=COMMITS,
                          hits_for=lambda p: [hit] if p in hit.text else [])
-        return [(e["relation"], e["confidence"]) for e in g["links"]]
+        return [(e["relation"], e["confidence"]) for e in g["links"] if e["origin"] == "code"]
 
     assert graded(split) == [("reads", "INFERRED")]
     assert graded(same) == [("reads", "EXTRACTED")]
@@ -244,7 +244,8 @@ def test_kafka가_없는_서비스도_정상이다():
     g = flow.extract(names=flow.names_from_config(no_kafka, sources), topology=topology,
                      hits_for=lambda p: [hit] if p in hit.text else [], commits={"dt-api": "c"})
     assert {n["type"] for n in g["nodes"]} == {"service", "repo", "collection"}
-    assert [(e["relation"], e["target"]) for e in g["links"]] == [("reads", "collection_alarm_events")]
+    assert [(e["relation"], e["target"]) for e in g["links"] if e["origin"] == "code"] == [
+        ("reads", "collection_alarm_events")]
     assert not [a for a in flow.advise(g, topology) if a.startswith("api:")]
 
 
@@ -254,7 +255,7 @@ def test_동사가_없는_줄은_mentions로_남긴다():
     g = flow.extract(names=[Name("collection", "alarm_events", "mongodb_collection.alarm")],
                      topology=TOPOLOGY, hits_for=hits, commits=COMMITS)
     assert ("api", "mentions", "alarm_events") in _edges(g)
-    assert all(e["confidence"] == "AMBIGUOUS" for e in g["links"])
+    assert all(e["confidence"] == "AMBIGUOUS" for e in g["links"] if e["origin"] == "code")
 
 
 def test_같은_커밋이면_같은_JSON이다():
@@ -305,9 +306,90 @@ def test_요약과_권고():
     g = graph()
     s = flow.summary(g)
     assert s["nodes"] > 5 and s["links"] > 5 and s["repo_level"] > 0
+    assert s["unreferenced"] == 1, "line_state는 config에만 있다 — 권고가 아니라 요약의 숫자다"
     advice = "\n".join(flow.advise(g, TOPOLOGY))
-    assert "서비스를 못 가른 엣지" in advice and "dt-core" in advice
-    assert "line_state" in advice, "선언만 되고 안 쓰는 이름을 짚어야 한다"
+    # 측정판은 processor/·sink/ 디렉터리로 갈리므로 공유 코드 줄이 없다. "path를 채워라"와
+    # "안 쓰는 이름"은 사내에서 둘 다 틀린 권고였다 — 다시 나오면 안 된다.
+    assert "path" not in advice and "안 만진다" not in advice and "안 쓰는 이름" not in advice
+
+
+def test_config_엣지는_서비스마다_그_서비스의_합친_config에서_만든다():
+    """같은 레포의 sink·sink-alarm이 환경변수로 역할만 다르면 합친 config도 다를 수 있다(사내).
+    grep으로 config 파일을 찾아 레포에 붙이는 대신, 이름을 가진 서비스에서 바로 만든다."""
+    topology = Topology(services={"sink": Service(repo="dt-sink", role="저장"),
+                                  "sink-alarm": Service(repo="dt-sink", role="알람 저장")})
+    names = [Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic1", "consumes",
+                  services=("sink",)),
+             Name("topic", "mx.alarm.only", "infra.kafka.consumer.topic.topic2", "consumes",
+                  services=("sink-alarm",))]
+    cfg_line = Hit("dt-sink", "c", "config/gbm/mx.json", 7, '"topic1": "mx.alarm.main"')
+    g = flow.extract(names=names, topology=topology, commits={"dt-sink": "c"},
+                     hits_for=lambda p: [cfg_line] if p == "mx.alarm.main" else [])
+    edges = _edges(g)
+    assert ("sink", "consumes", "mx.alarm.main") in edges
+    assert ("sink-alarm", "consumes", "mx.alarm.main") not in edges
+    assert ("sink-alarm", "consumes", "mx.alarm.only") in edges
+    assert ("sink", "consumes", "mx.alarm.only") not in edges
+    by = {e["target"]: e for e in g["links"] if e["relation"] == "consumes"}
+    assert by["topic_mx_alarm_main"]["source_location"] == "L7"
+    assert by["topic_mx_alarm_only"]["source_file"] == "config(dt-sink)"      # 근거 줄이 없어도 선다
+    assert all(e["origin"] == "config" and e["attributed"] == "service" for e in by.values())
+    assert not [e for e in g["links"] if e["source"] == "repo_dt_sink"], "레포 노드에 config 엣지가 안 붙는다"
+
+
+def test_같은_코드를_띄우는_서비스는_레포를_거쳐_경로가_난다():
+    """코드 엣지가 레포에 붙으면 서비스에서 출발하는 경로가 없다. `runs`가 다리다 —
+    단, 자원 경로가 있으면 그쪽이 먼저다(같은 레포의 서비스 둘은 `runs` 두 홉으로 늘 이어진다)."""
+    topology = Topology(services={"sink": Service(repo="dt-sink", role="저장"),
+                                  "sink-alarm": Service(repo="dt-sink", role="알람 저장"),
+                                  "api": Service(repo="dt-api", role="읽기")})
+    name = Name("collection", "alarm_events", "mongodb_collection.alarm")
+    hits = {"alarm_events": [Hit("dt-sink", "c", "core/store.py", 3, 'mongo["alarm_events"].insert_many(b)'),
+                             Hit("dt-api", "c", "api/q.py", 3, 'mongo["alarm_events"].find({})')]}
+    g = flow.extract(names=[name], topology=topology, hits_for=lambda p: hits.get(p, []),
+                     commits={"dt-sink": "c", "dt-api": "c"})
+    assert ("dt-sink", "writes", "alarm_events") in _edges(g)           # core/는 어느 서비스도 아니다
+    path = flow.shortest_path(g, "sink-alarm", "api")
+    assert flow.render_path(g, path) == "sink-alarm —runs→ dt-sink —writes→ alarm_events ←reads— api"
+    assert flow.shortest_path(g, "sink", "sink-alarm") is not None        # 같은 코드 — 다리로만 이어진다
+    advice = "\n".join(flow.advise(g, topology))
+    assert "dt-sink: 서비스 2개(sink, sink-alarm)가 코드를 공유한다" in advice
+    assert "sink-alarm:" not in advice and "path" not in advice
+
+
+def test_문서_테스트_주석_줄은_코드_엣지가_아니다():
+    """사내 첫 실행에서 코드 엣지의 60%가 md·테스트·주석에서 나왔다. 이름이 적힌 문서는
+    "이 서비스가 이 자원을 쓴다"의 근거가 아니다."""
+    topology = Topology(services={"api": Service(repo="dt-api", role="읽기")})
+    name = Name("collection", "alarm_events", "mongodb_collection.alarm")
+    noise = [Hit("dt-api", "c", "README.md", 3, "alarm_events 컬렉션을 읽는다"),
+             Hit("dt-api", "c", "tests/test_q.py", 3, 'mongo["alarm_events"].find({})'),
+             Hit("dt-api", "c", "api/q_test.py", 3, 'mongo["alarm_events"].find({})'),
+             Hit("dt-api", "c", "api/q.py", 1, '# alarm_events에서 읽는다'),
+             Hit("dt-api", "c", "api/q.py", 2, '"""alarm_events를 읽는 모듈."""')]
+    real = Hit("dt-api", "c", "api/q.py", 9, 'mongo["alarm_events"].find({})')
+    g = flow.extract(names=[name], topology=topology, commits={"dt-api": "c"},
+                     hits_for=lambda p: noise + [real] if p == "alarm_events" else [])
+    code = [e for e in g["links"] if e["origin"] == "code"]
+    assert [(e["source_file"], e["source_location"]) for e in code] == [("api/q.py", "L9")]
+
+
+def test_따옴표로_통째_적힌_config_키는_조상_없이도_잡는다():
+    """사내 코드는 키를 Enum 값으로 든다: `PROD_BEFORE_WORKER_ALL = "prodcheck_before_cur_worker_all"`.
+    `redis_key`는 다른 파일의 공통 접근 함수에 있다. 그 Enum 줄이 코드에서 이 키를 아는
+    유일한 자리다 — 리드가 홉을 밟기 시작할 곳. 짧은 한 단어(`alarm`)는 여전히 조상이 필요하다."""
+    topology = Topology(services={"batch": Service(repo="dt-batch", role="배치")})
+    long_key = Name("rediskey", "BATCH:PRODCHECK:BEFORE:WORKER:ALL",
+                    "redis_key.prodcheck_before_cur_worker_all")
+    short_key = Name("collection", "alarm_events", "mongodb_collection.alarm")
+    lines = {"prodcheck_before_cur_worker_all": [
+                 Hit("dt-batch", "c", "common/storage_keys.py", 12,
+                     '    PROD_BEFORE_WORKER_ALL = "prodcheck_before_cur_worker_all"')],
+             "alarm": [Hit("dt-batch", "c", "common/names.py", 4, '    ALARM = "alarm"')]}
+    g = flow.extract(names=[long_key, short_key], topology=topology, commits={"dt-batch": "c"},
+                     hits_for=lambda p: lines.get(p, []))
+    got = [(e["relation"], e["confidence"], e["source_file"]) for e in g["links"] if e["origin"] == "code"]
+    assert got == [("mentions", "AMBIGUOUS", "common/storage_keys.py")]
 
 
 def test_이름이_하나도_없으면_그렇게_말한다():
