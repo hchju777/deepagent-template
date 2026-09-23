@@ -1,0 +1,443 @@
+"""노드가 쥔 통제 경계 — 게이트·소독·상한·무raise."""
+from src.application.fakes import ExplodingRunner, ScriptedRunner
+from src.application.nodes import make_nodes, route_after_select, runnable_tasks
+from src.application.state import CaseState
+from src.domain.case import EvidenceRef, Hypothesis, PlanTask
+from src.domain.investigation import TaskOutcome
+
+from tests.application.conftest import deps_for, ok, task
+
+
+def _ev(evidence_id: str) -> EvidenceRef:
+    return EvidenceRef(id=evidence_id, source="s", summary="x")
+
+
+# ── select 게이트 ───────────────────────────────────────────────────
+
+def test_입력_증거가_전부_있어야_실행_가능하다(case):
+    """`any()`가 아니라 `all()`이다.
+
+    재계산 태스크는 "원천값"과 "로직 명세" 둘 다 있어야 성립한다. 하나만 있어도
+    돌리면 절반의 입력으로 기대값을 만들고, 그게 실제와 다른 것을 "이상 발견"으로
+    보고한다 — **틀린 케이스가 아니라 없는 이상을 만들어 내는 것**이라 더 나쁘다.
+    """
+    state = CaseState(case=case, evidence=[_ev("t-1.e1")], plan_tasks=[
+        task("t-9", input_evidence_ids=["t-1.e1", "t-2.e1"])])
+    assert runnable_tasks(state) == []
+
+    state = state.model_copy(update={"evidence": [_ev("t-1.e1"), _ev("t-2.e1")]})
+    assert [t.id for t in runnable_tasks(state)] == ["t-9"]
+
+
+def test_입력_증거가_없는_태스크는_바로_실행된다(case):
+    state = CaseState(case=case, plan_tasks=[task("t-1")])
+    assert [t.id for t in runnable_tasks(state)] == ["t-1"]
+
+
+def test_우선순위가_낮은_것부터_동률이면_FIFO(case):
+    state = CaseState(case=case, plan_tasks=[
+        task("t-1", priority=50), task("t-2", priority=10),
+        task("t-3", priority=50), task("t-4", priority=1)])
+    assert [t.id for t in runnable_tasks(state)] == ["t-4", "t-2", "t-1", "t-3"]
+
+
+def test_pending이_아닌_태스크는_다시_안_고른다(case):
+    state = CaseState(case=case, plan_tasks=[
+        task("t-1", status="ok"), task("t-2", status="running"),
+        task("t-3", status="error"), task("t-4")])
+    assert [t.id for t in runnable_tasks(state)] == ["t-4"]
+
+
+async def test_select는_병렬_폭만큼만_running으로_굴린다(case):
+    nodes = make_nodes(deps_for(ScriptedRunner(), parallel_width=2))
+    state = CaseState(case=case, plan_tasks=[task(f"t-{i}") for i in range(1, 5)])
+    patch = await nodes["select"](state)
+    assert [t.id for t in patch["plan_tasks"]] == ["t-1", "t-2"]
+    assert all(t.status == "running" for t in patch["plan_tasks"])
+
+
+def test_라우터는_select가_굴린_것만_발사한다(case):
+    """이번 라운드 몫만 정확히 잡아야 한다 — 지난 라운드의 ok/error는 안 섞인다."""
+    state = CaseState(case=case, plan_tasks=[
+        task("t-1", status="ok"), task("t-2", status="running"),
+        task("t-3", status="running"), task("t-4", status="pending")])
+    sends = route_after_select(state)
+    assert [s.arg["task"]["id"] for s in sends] == ["t-2", "t-3"]
+    assert all(s.arg["case"]["id"] == "c-1" for s in sends)
+
+
+def test_굴린_것이_없으면_integrate로_간다(case):
+    state = CaseState(case=case, plan_tasks=[task("t-1", status="ok")])
+    assert route_after_select(state) == "integrate"
+
+
+# ── 소독 (규율 4) ──────────────────────────────────────────────────
+
+async def test_만들어진_태스크의_수명주기_필드는_코드가_덮어쓴다(case):
+    """10b에서 이 자리에 LLM이 들어온다.
+
+    `{"status": "ok", "result_evidence_ids": ["ev-9"]}`를 실어 보내면 그 태스크는
+    실행되지 않은 채 "끝난 것"이 되어 select 게이트를 통째로 우회한다. 그리고
+    있지도 않은 증거 id가 State에 들어간다.
+    """
+    dirty = PlanTask(id="t-1", goal="g", role="data_prober", status="ok",
+                     result_summary="봤다고 치자", result_evidence_ids=["ev-9"],
+                     error="아무 말")
+    nodes = make_nodes(deps_for(ScriptedRunner(), first_tasks=[dirty]))
+    patch = await nodes["frame"](CaseState(case=case))
+    got = patch["plan_tasks"][0]
+    assert (got.status, got.result_summary, got.result_evidence_ids, got.error) \
+        == ("pending", None, [], None)
+
+
+async def test_태스크_개수_상한을_넘겨_만들면_잘린다(case):
+    nodes = make_nodes(deps_for(ScriptedRunner(),
+                                first_tasks=[task(f"t-{i}") for i in range(10)],
+                                max_tasks=3))
+    patch = await nodes["frame"](CaseState(case=case))
+    assert len(patch["plan_tasks"]) == 3
+
+
+# ── execute 무raise ────────────────────────────────────────────────
+
+async def test_실행기가_던져도_라운드가_살아남는다(case):
+    """**대본이 아니라 실제로 던지는 실행기**로 본다.
+
+    대본 실행기는 예약된 `status="error"`를 돌려줄 뿐이라 "얌전히 실패를 보고한
+    것"이고, 그걸로는 방어를 지워도 초록이다. 이 리포에서 `ScriptedAdapter`가
+    똑같은 거짓 초록을 만든 적이 있다.
+
+    LangGraph에서 Send 가지 하나의 예외는 superstep 전체를 실패시켜 **같은 라운드의
+    성공한 가지까지 지운다.**
+    """
+    nodes = make_nodes(deps_for(ExplodingRunner("대상이 터졌다")))
+    patch = await nodes["execute"]({"task": task("t-1").model_dump(mode="json"),
+                                    "case": case.model_dump(mode="json")})
+    done = patch["plan_tasks"][0]
+    assert done.status == "error"
+    assert "RuntimeError" in done.error and "대상이 터졌다" in done.error
+    assert patch["evidence"] == []
+
+
+async def test_실행기가_낸_증거만_State에_오른다(case):
+    """LLM이 "ev-9를 봤다"고 말해도 도구가 안 만들었으면 없어야 한다(규율 3)."""
+    made = EvidenceRef(id="t-1.e1", source="redis.get", summary="512")
+    runner = ScriptedRunner({"t-1": TaskOutcome(task_id="t-1", status="ok",
+                                                summary="읽었다", evidence=[made])})
+    nodes = make_nodes(deps_for(runner))
+    patch = await nodes["execute"]({"task": task("t-1").model_dump(mode="json"),
+                                    "case": case.model_dump(mode="json")})
+    assert [e.id for e in patch["evidence"]] == ["t-1.e1"]
+    assert patch["plan_tasks"][0].result_evidence_ids == ["t-1.e1"]
+
+
+# ── integrate의 상한 ───────────────────────────────────────────────
+
+async def test_상한에_닿으면_계속하자는_결정을_무시한다(case):
+    nodes = make_nodes(deps_for(ScriptedRunner(), max_rounds=3))
+    patch = await nodes["integrate"](CaseState(case=case, round=3,
+                                               plan_tasks=[task("t-1")]))
+    assert patch["decision"] == "conclude"
+    assert patch["stopped_by"] == "max_rounds"
+
+
+async def test_상한_전이면_계속하고_라운드가_오른다(case):
+    nodes = make_nodes(deps_for(ScriptedRunner(), max_rounds=3))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1")]))
+    assert (patch["decision"], patch["round"]) == ("continue", 2)
+
+
+async def test_돌릴_것이_없으면_빈_라운드를_안_돈다(case):
+    """계속하자는데 실행 가능 태스크가 없으면 상한까지 빈 라운드를 돈다.
+
+    그러면 보고서가 "N라운드 조사했다"고 적는데 실제로는 아무것도 안 했다 —
+    **한 일이 없는 것이 한 일이 많은 것처럼 보이는** 형태라 조용히 거짓말이 된다.
+    """
+    nodes = make_nodes(deps_for(ScriptedRunner(), max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert patch["stopped_by"] == "no_runnable"
+
+
+async def test_integrate가_새_태스크를_내면_계속한다(case):
+    """"돌릴 것 없음" 판정은 방금 만들어진 태스크까지 합쳐서 본다."""
+    async def adds(state):
+        return {"decision": "continue", "plan_tasks": [task("t-2")]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=adds, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert patch["decision"] == "continue"
+
+
+def test_없는_증거를_인용하면_맞는_모양을_알려준다():
+    """**"틀렸다"만 알려 주면 같은 형식으로 다시 틀린다.**
+
+    이 메시지는 다음 라운드의 `<버려진 태스크>`로 리드에게 돌아간다. 사내
+    측정에서 리드가 태스크 id(`t-5`)를 증거 id 자리에 썼고, 그때 우리가 돌려준
+    말에는 **무엇이 맞는 모양인지가 없었다.**
+    """
+    from src.application.nodes import _accept_hypotheses
+
+    kept, complaints = _accept_hypotheses(
+        {"hypotheses": [Hypothesis(id="h-1", statement="가설", status="supported",
+                                   supporting_ids=["t-5"])]},
+        have={"t-5.e1"})
+    assert kept[0].status == "open" and kept[0].supporting_ids == []
+    assert len(complaints) == 1
+    assert "t-5" in complaints[0]
+    assert ".e" in complaints[0], "맞는 모양을 안 알려 준다"
+
+
+# ── 거부 뒤 되묻기 ─────────────────────────────────────────────────────
+#
+# 두 번째 전체 트레이스에서 리드가 질의를 좁힌 유일한 계기는 `<버려진 태스크>`에서
+# 자기 질의가 그 값 그대로 버려진 것을 본 일이었고, 그게 늘 한 라운드 뒤였다.
+
+
+def _dup_of_t1():
+    """t-1과 **같은 질의**(같은 action·params) — `done`에 걸려 거부된다."""
+    return task("t-2", params={"key": "k-t-1"})
+
+
+def _fresh_read(task_id="t-2"):
+    """이름 인자가 없는 읽기 — 증거가 없어도 "찾지 않고 댔다"에 안 걸린다."""
+    return task(task_id, action="mongo.list_collections", params={})
+
+
+async def test_거부가_있으면_그_자리에서_한_번_되묻는다(case):
+    from src.application.nodes import REDO_MARK, REDO_NOTE
+
+    seen = []
+
+    async def lead(state):
+        seen.append(list(state.llm_errors))
+        if len(seen) == 1:
+            return {"decision": "continue", "plan_tasks": [_dup_of_t1()]}
+        return {"decision": "continue", "plan_tasks": [_fresh_read()]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert len(seen) == 2
+    # 되물을 때 **거부 사유가 그 프롬프트의 `<버려진 태스크>`에 실린다** — 다음 라운드가 아니라.
+    assert any(e.startswith(REDO_MARK) and "t-2" in e for e in seen[1]), seen[1]
+    # 되물은 답이 첫 답을 통째로 대신한다.
+    assert [t.action for t in patch["plan_tasks"]] == ["mongo.list_collections"]
+    assert patch["decision"] == "continue"
+    # 첫 답의 거부는 기록에 남되, 되물었다는 표시가 붙는다 — 진단이 셀 수 있게.
+    assert any(e.endswith(REDO_NOTE) for e in patch["llm_errors"]), patch["llm_errors"]
+
+
+async def test_거부가_없으면_한_번만_묻는다(case):
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        return {"decision": "continue", "plan_tasks": [_fresh_read()]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    await nodes["integrate"](CaseState(case=case, round=1,
+                                       plan_tasks=[task("t-1", status="ok")]))
+    assert len(calls) == 1
+
+
+async def test_찍은_이름은_거부가_아니라_되묻지_않는다(case):
+    """"찾지 않고 이름을 댔다"는 **받았다는 기록**이다. 그걸로 되물으면 "받았는데 왜
+    다시 묻나"가 되고, 증거가 없는 라운드마다 되묻게 된다."""
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        return {"decision": "continue", "plan_tasks": [task("t-2", params={"key": "guess"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert len(calls) == 1
+    assert any("찾지 않고" in e for e in patch["llm_errors"])
+
+
+async def test_되물어도_거부되면_세_번은_안_묻는다(case):
+    from src.application.nodes import REDO_NOTE
+
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        return {"decision": "continue", "plan_tasks": [_dup_of_t1()]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert len(calls) == 2
+    assert patch["plan_tasks"] == []
+    refusals = [e for e in patch["llm_errors"] if "받지 않는다" in e]
+    assert len(refusals) == 2 and refusals[0].endswith(REDO_NOTE)
+    assert not refusals[1].endswith(REDO_NOTE)
+
+
+async def test_마지막_라운드에는_되묻지_않는다(case):
+    """어차피 상한으로 끝나는 라운드다 — 되물어 봐야 그 태스크는 안 돈다."""
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        return {"decision": "continue", "plan_tasks": [_dup_of_t1()]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=3))
+    patch = await nodes["integrate"](CaseState(case=case, round=3,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert len(calls) == 1 and patch["stopped_by"] == "max_rounds"
+
+
+async def test_되묻기가_실패하면_첫_답으로_간다(case):
+    """한 번 더 물어본 것이 라운드를 죽이면 안 된다 — 첫 답에서 받은 것은 그대로 돌고,
+    실패 사유는 기록에 남는다."""
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        if len(calls) == 1:
+            return {"decision": "continue", "plan_tasks": [_dup_of_t1(), _fresh_read("t-3")]}
+        return {"decision": "conclude", "stopped_by": "llm_error",
+                "llm_errors": ["integrate: 2회 시도 실패 — 죽었다"]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-3"]
+    assert patch["decision"] == "continue" and not patch.get("stopped_by")
+    assert any("죽었다" in e for e in patch["llm_errors"])
+
+
+async def test_되묻기를_끄면_한_번만_묻는다(case):
+    import dataclasses
+
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        return {"decision": "continue", "plan_tasks": [_dup_of_t1()]}
+
+    deps = dataclasses.replace(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9),
+                               redo_on_rejection=False)
+    await make_nodes(deps)["integrate"](CaseState(case=case, round=1,
+                                                  plan_tasks=[task("t-1", status="ok")]))
+    assert len(calls) == 1
+
+
+# ── 대기 중인 태스크의 손질 ────────────────────────────────────────────
+
+
+async def test_대기_중인_태스크는_같은_id로_다시_내면_갱신이다(case):
+    """**로컬 대역 측정에서 잡힌 것이다.** 새 라운드의 태스크가 늘 앞 순위(10·20·30)라
+    frame에서 40·50으로 낸 t-4·t-5는 폭 3에서 영원히 안 돌았고, 리드가 그걸 눈치채고
+    다시 냈더니 "이미 있는 id"로 거부됐다. `taken`이 막을 것은 끝난 id의 부활이다."""
+    async def lead(state):
+        return {"decision": "continue",
+                "plan_tasks": [task("t-4", priority=5, params={"key": "k-t-4"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    waiting = task("t-4", status="pending", priority=40, params={"key": "k-t-4"})
+    patch = await nodes["integrate"](CaseState(case=case, round=2,
+                                               plan_tasks=[task("t-1", status="ok"), waiting]))
+    assert [(t.id, t.priority, t.status) for t in patch["plan_tasks"]] == [("t-4", 5, "pending")]
+    assert not [e for e in patch["llm_errors"] if "받지 않는다" in e], patch["llm_errors"]
+
+
+async def test_끝난_태스크의_id는_여전히_받지_않는다(case):
+    """갱신 허용이 끝난 태스크의 부활까지 열면 안 된다 — 그게 원래 `taken`의 이유다."""
+    async def lead(state):
+        return {"decision": "continue", "plan_tasks": [task("t-1", params={"key": "k-t-1"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=2,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert patch["plan_tasks"] == []
+    assert any("이미 있는 태스크 id" in e for e in patch["llm_errors"])
+
+
+async def test_대기_중인_질의를_새_id로_내면_그_태스크의_갱신이다(case):
+    """리드는 "그 읽기를 원한다"고 말한 것이지 id를 아는 게 아니다. 로컬 대역 측정에서
+    굶던 t-4와 같은 읽기를 t-12로 냈다가 거부 → 되물음 → 결정적 읽기 증발로 이어졌다."""
+    async def lead(state):
+        return {"decision": "continue",
+                "plan_tasks": [task("t-12", priority=10, goal="다시", params={"key": "k-t-4"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    waiting = task("t-4", status="pending", priority=40, params={"key": "k-t-4"})
+    patch = await nodes["integrate"](CaseState(case=case, round=2,
+                                               plan_tasks=[task("t-1", status="ok"), waiting]))
+    assert [(t.id, t.priority, t.goal) for t in patch["plan_tasks"]] == [("t-4", 10, "다시")]
+    assert not [e for e in patch["llm_errors"] if "받지 않는다" in e], patch["llm_errors"]
+
+
+async def test_되물은_답은_첫_답에서_받은_것을_버리지_않는다(case):
+    """되물음은 거부된 것을 고쳐 받으려는 것이다. 통째로 바꾸면 첫 답의 결정적 읽기가
+    되물은 답에 없을 때 사라진다 — 로컬 대역 측정에서 `gumi-mx-sink` 오프셋이 그랬다."""
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        if len(calls) == 1:
+            return {"decision": "continue",
+                    "plan_tasks": [task("t-1", params={"key": "k-t-1"}),      # 끝난 id → 거부
+                                   _fresh_read("t-9")]}                       # 결정적 읽기
+        return {"decision": "continue",
+                "plan_tasks": [_fresh_read("t-11"),                           # 같은 읽기, 새 id
+                               task("t-10", action="kafka.list_topics", params={})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert len(calls) == 2
+    # 첫 답의 t-9는 남고, 같은 읽기를 새 id로 또 낸 t-11은 하나로 접힌다.
+    assert [t.id for t in patch["plan_tasks"]] == ["t-9", "t-10"]
+
+
+async def test_되물은_답이_첫_답의_것을_빼도_남는다(case):
+    calls = []
+
+    async def lead(state):
+        calls.append(1)
+        if len(calls) == 1:
+            return {"decision": "continue",
+                    "plan_tasks": [task("t-1", params={"key": "k-t-1"}), _fresh_read("t-9")]}
+        return {"decision": "continue",
+                "plan_tasks": [task("t-10", action="kafka.list_topics", params={})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert [t.id for t in patch["plan_tasks"]] == ["t-9", "t-10"]
+
+
+async def test_되물을_때_첫_답에서_받은_것이_대기_태스크로_실린다(case):
+    """**사내 세 번째 트레이스에서 잡힌 것이다.** 첫 답의 받은 것을 안 실으면 예시의 다음
+    번호가 그대로라 리드가 같은 id로 **다른** 읽기를 내고, 합칠 때 그 id가 첫 답의 받은
+    읽기를 덮는다 — 좁힌 `mongo.find`가 그렇게 `redis.scan`으로 바뀌어 사라졌다."""
+    from src.application.briefing import next_task_number
+
+    seen = []
+
+    async def lead(state):
+        seen.append(state)
+        if len(seen) == 1:
+            return {"decision": "continue",
+                    "plan_tasks": [task("t-1", params={"key": "k-t-1"}),      # 끝난 id → 거부
+                                   _fresh_read("t-8")]}                       # 받는다
+        return {"decision": "continue",
+                "plan_tasks": [task(f"t-{next_task_number(state)}",
+                                    action="kafka.list_topics", params={})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    again = seen[1]
+    assert [(t.id, t.status) for t in again.plan_tasks] == [("t-1", "ok"), ("t-8", "pending")]
+    assert next_task_number(again) == 9
+    assert [(t.id, t.action) for t in patch["plan_tasks"]] == [
+        ("t-8", "mongo.list_collections"), ("t-9", "kafka.list_topics")]
+

@@ -1,0 +1,13 @@
+{
+  "infra": {
+    "redis": { "url": "redis://sevt-redis.example.net:6379" },
+    "mongodb": { "url": "mongodb://sevt-mongo.example.net:27017" },
+    "kafka": {
+      "consumer": {
+        "bootstrap_server": ["sevt-kafka-1.example.net:9092"],
+        "group_ids": ["dt-processor-mx-sevt", "dt-sink-mx-sevt"]
+      }
+    },
+    "rest": { "base_url": "http://sevt-twin-api.example.net:8080" }
+  }
+}

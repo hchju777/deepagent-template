@@ -1,0 +1,49 @@
+{
+  "_설명": [
+    "이 GBM의 서비스 지도. **사이트 단위가 아니다** — 코드는 GBM별로 같다.",
+    "서비스는 (레포, 선택자)다. 한 레포에 여러 서비스면 디렉터리가 아니라",
+    "`.env`의 값이 역할을 고르므로, `selects`가 그 값을 적는다.",
+    "config_paths는 **대상 레포 안에서 컬렉션·토픽 이름이 사는 파일들**이다.",
+    "층 순서대로 적는다(앞이 밑바닥). `{gbm}`·`{fct}`를 쓸 수 있다 —",
+    "대상 config가 법인별로도 갈리기 때문이다. 우리 SITE_LAYERS와 같은 문법이다.",
+    "층은 **선택이다** — 없는 층이 있어도 정상이고, 하나도 없을 때만 오류다.",
+    "층 모양은 사내 확인을 반영했다 — gumi는 gbm/mx.json → factories/gumi/common.json →",
+    "factories/gumi/mx.json 셋을 보고, sevt는 같은 자리에 sevt가 들어간다.",
+    "합치는 규칙은 **나중 층이 덮는다**(src/knowledge/target_config.py).",
+    "여기 서비스 이름·레포 이름은 **자리표시자다.** 실제 값은 사내에서 채운다."
+  ],
+  "services": {
+    "processor": {
+      "repo": "dt-core",
+      "role": "원천 이벤트를 받아 가공한다",
+      "selects": {
+        "SERVICE_ROLE": "processor"
+      }
+    },
+    "sink": {
+      "repo": "dt-core",
+      "role": "가공된 결과를 저장한다",
+      "selects": {
+        "SERVICE_ROLE": "sink"
+      }
+    },
+    "api": {
+      "repo": "dt-api",
+      "role": "저장된 것을 API 응답으로 바꾼다"
+    }
+  },
+  "config_paths": [
+    "config/gbm/{gbm}.json",
+    "config/factories/{fct}/common.json",
+    "config/factories/{fct}/{gbm}.json"
+  ],
+  "flow": {
+    "sources": [
+      {"path": "infra.kafka.consumer.topic", "kind": "topic", "relation": "consumes"},
+      {"path": "infra.kafka.producer.topic", "kind": "topic", "relation": "produces"},
+      {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
+      {"path": "mongodb_collection", "kind": "collection"},
+      {"path": "redis_key", "kind": "rediskey"}
+    ]
+  }
+}
