@@ -630,6 +630,14 @@ CASES = [
  ("CLI가 콘솔을 UTF-8로 안 바꾼다", ROOT / "src/__main__.py",
   '    _utf8_console()\n    args = parse_args(argv)', '    args = parse_args(argv)',
   ["tests/test_cli.py::test_콘솔이_cp949여도_한글과_대시가_안_죽는다"]),
+ ("데이터 속 닫는 태그를 안 피한다", ROOT / "src/presentation/flow_html.py",
+  '    blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\\\/")',
+  '    blob = json.dumps(data, ensure_ascii=False)',
+  ["tests/presentation/test_flow_html.py::test_데이터_속_닫는_태그와_제목이_문서를_못_끊는다"]),
+ ("아홉 번째 레포에 색을 돌려 쓴다", ROOT / "src/presentation/flow_html.py",
+  '    colors = {r: (REPO_COLORS[i] if i < len(REPO_COLORS) else OTHER_COLOR)',
+  '    colors = {r: (REPO_COLORS[i % len(REPO_COLORS)])',
+  ["tests/presentation/test_flow_html.py::test_아홉_번째_레포부터는_회색이다"]),
  ("graphify 단계를 안 알린다", ROOT / "src/knowledge/graph_build.py",
   '        if progress:\n            progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")',
   '        if False:\n            pass',
@@ -669,7 +677,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 153, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 155, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
