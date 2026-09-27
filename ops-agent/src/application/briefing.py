@@ -26,13 +26,15 @@ import re
 
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS, describe
+from src.knowledge import flow as flowgraph
 
 # 리드가 쓸 수 없는 action. rest.query는 등재 항목마다 따로 적는다(인자가 다르다).
 _RENDERED_SEPARATELY = {"rest.query"}
 
 
 def action_catalog(site_config, *, services: tuple[str, ...] = (),
-                   roles: dict[str, str] | None = None) -> str:
+                   roles: dict[str, str] | None = None,
+                   hide: frozenset[str] = frozenset()) -> str:
     """부를 수 있는 읽기 목록. **config에서 생성한다.**
 
     `services`는 대상 코드(11a)가 준비됐을 때만 채워진다 — 코드의 가용 여부는
@@ -42,7 +44,7 @@ def action_catalog(site_config, *, services: tuple[str, ...] = (),
     """
     lines: list[str] = []
     for name, (adapter, _, required, optional) in sorted(ACTIONS.items()):
-        if name in _RENDERED_SEPARATELY:
+        if name in _RENDERED_SEPARATELY or name in hide:
             continue
         if not _has(site_config, adapter, services):
             continue          # 이 사이트에 없는 시스템은 목록에 없다
@@ -372,7 +374,22 @@ def example_block(site_config, *, phase: str, start: int = 1,
 # 검사한다**(`__main__._load_lead_prompt`) — 여기 없는 이름을 적으면 그 `{...}`는
 # 치환되지 않은 채 LLM에게 나가고, 응답은 그럴듯해 보여서 아무도 못 본다.
 # 9e에서 `{max_chars}`가 실제로 그렇게 새 나갔다.
-FRAME_SLOTS = frozenset({"case", "actions", "example"})
+FRAME_SLOTS = frozenset({"case", "actions", "example", "flow"})
+
+
+def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800) -> str:
+    """`<데이터 흐름>` — 그래프(11c)를 리드에게 준다. **config 층만**, 씨앗은 증상·증거·가설에
+    나온 이름. 그래프가 없거나 낡았으면(호출부가 None을 준다) 없다고 적는다 — 낡은 배선을
+    사실처럼 실으면 리드가 떠 있지도 않은 코드의 흐름을 믿는다."""
+    if graph is None:
+        return "(없음 — `python -m src code graph`로 만들면 여기 실린다)"
+    texts = [state.case.symptom]
+    texts += [f"{ref.summary}\n{ref.body}" for ref in state.evidence]
+    texts += [h.statement for h in state.hypotheses]
+    body = flowgraph.flow_text(graph, flowgraph.find_seeds(graph, texts), budget=budget)
+    return ("config에서 뽑은 배선이다. 어디를 볼지 고르는 데 쓰고, 지금 실제로 그렇게 도는지는 "
+            "프로브로 확인하라. `레포{a,b}`는 같은 config를 쓰는 서비스 전부다 — 어느 쪽인지는 "
+            "코드·프로브로. 다른 이름은 code.flow(name).\n" + body)
 INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round",
                                  "max_rounds", "rejected"}
 
@@ -394,20 +411,31 @@ def rejected_block(state: CaseState) -> str:
 
 def frame_fields(state: CaseState, *, site_config,
                  services: tuple[str, ...] = (),
-                 roles: dict[str, str] | None = None) -> dict[str, str]:
+                 roles: dict[str, str] | None = None,
+                 flow_graph: dict | None = None) -> dict[str, str]:
     return {"case": case_block(state),
-            "actions": action_catalog(site_config, services=services, roles=roles),
+            "actions": action_catalog(site_config, services=services, roles=roles,
+                                      hide=_hidden(flow_graph)),
             "example": example_block(site_config, phase="frame",
                                      start=next_task_number(state),
-                                     services=services)}
+                                     services=services),
+            "flow": flow_block(state, flow_graph)}
+
+
+def _hidden(flow_graph: dict | None) -> frozenset[str]:
+    # 그래프가 없으면 `code.flow`를 목록에서 뺀다 — 없는 문을 열라고 적어 두면 리드가 거기로 간다.
+    return frozenset() if flow_graph is not None else frozenset({"code.flow"})
 
 
 def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      evidence_budget: int = 12000,
                      services: tuple[str, ...] = (),
-                     roles: dict[str, str] | None = None) -> dict[str, str]:
+                     roles: dict[str, str] | None = None,
+                     flow_graph: dict | None = None) -> dict[str, str]:
     return {"case": case_block(state),
-            "actions": action_catalog(site_config, services=services, roles=roles),
+            "actions": action_catalog(site_config, services=services, roles=roles,
+                                      hide=_hidden(flow_graph)),
+            "flow": flow_block(state, flow_graph),
             "example": example_block(site_config, phase="integrate",
                                      start=next_task_number(state),
                                      services=services,

@@ -58,6 +58,9 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     "code.grep":           ("code",  "grep",          ("patterns",),           ("service",)),
     # `path`는 **`code.grep`이 돌려준 경로**다. 지어내는 자리가 아니다.
     "code.read":           ("code",  "read",          ("service", "path"),     ()),
+    # 흐름 그래프(11c)의 이웃. `name`은 브리핑의 <데이터 흐름>이나 증거에 나온 이름 그대로다.
+    # 그래프가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
+    "code.flow":           ("code",  "flow",          ("name",),               ()),
 }
 
 

@@ -433,11 +433,11 @@ def test_코드가_없어도_조사가_죽지_않는다(tmp_path, monkeypatch):
     # ① 레포 선언이 아예 없다
     bare = site.model_copy(update={"code": site.code.model_copy(update={"repos": []})})
     assert _code_if_ready(bare, "mx", "gumi", knowledge_root=tmp_path,
-                          clock=clock) == (None, ())
+                          clock=clock)[:2] == (None, ())
 
     # ② 레포는 있는데 knowledge가 없다 — 사람이 아직 안 적은 상태
     assert site.code.repos, "픽스처가 레포를 선언했어야 한다"
-    code, services = _code_if_ready(site, "mx", "gumi",
+    code, services, _, _ = _code_if_ready(site, "mx", "gumi",
                                     knowledge_root=tmp_path / "없는지식", clock=clock)
     assert (code, services) == (None, ())
 
@@ -452,7 +452,7 @@ def test_지식이_있으면_서비스_이름이_나온다(tmp_path):
     checkout = _with_submodule(tmp_path, url, populate=True)
     config_root = _tree(tmp_path, repo_path=str(checkout), url=url)
     site, _ = load_site_config(config_root, "mx", "gumi", env={})
-    code, services = _code_if_ready(site, "mx", "gumi",
+    code, services, _, _ = _code_if_ready(site, "mx", "gumi",
                                     knowledge_root=tmp_path / "knowledge",
                                     clock=lambda: None)
     assert code is not None and services == ("processor",)
@@ -524,6 +524,22 @@ def test_code_graph가_배포_커밋에_그래프를_박는다(tmp_path, monkeyp
     assert not (bundle / "worktrees").exists(), "빈 worktrees 껍데기가 남았다"
     # 진행은 stderr에, 경과 시간과 함께 — 사내에서 몇 분을 말없이 돌자 멈춘 줄 알았다.
     assert "이름 " in captured.err and "찾는 중" in captured.err and "graphify 없음" in captured.err
+
+
+def test_조사에는_배포_커밋과_같은_그래프만_실린다(tmp_path, monkeypatch, capsys):
+    """없음·낡음은 같은 취급(None)이다 — 낡은 배선을 리드가 믿으면 떠 있지도 않은 코드를 본다."""
+    from src.__main__ import _flow_graph_if_fresh
+
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    assert _flow_graph_if_fresh(bundle, {})[0] is None
+    _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    commits = json.loads((bundle / "meta.json").read_text(encoding="utf-8"))["commits"]
+    fresh, note = _flow_graph_if_fresh(bundle, commits)
+    assert fresh is not None and fresh["nodes"] and "실림" in note
+    stale, note = _flow_graph_if_fresh(bundle, {REPO: "0" * 40})
+    assert stale is None and "낡음" in note
 
 
 def test_code_flow가_흐름_경로를_보여준다(tmp_path, monkeypatch, capsys):

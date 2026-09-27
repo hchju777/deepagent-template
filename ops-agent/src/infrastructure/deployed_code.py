@@ -33,6 +33,7 @@ from typing import Callable
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
 from src.domain.ports import CodeReaderPort, DeployedCodePort
+from src.knowledge import flow as flowgraph
 from src.knowledge.flow import Hit, Name, names_from_config
 from src.knowledge.graph_build import parse_grep
 from src.knowledge.schema import Deployment, Topology
@@ -76,6 +77,27 @@ class DeployedCode(DeployedCodePort):
         self._deployment = deployment
         self._gbm, self._fct = gbm, fct
         self._clock = clock
+        # 흐름 그래프(오버레이). 생성자가 아니라 뒤에 붙이는 이유: 낡았는지 보려면 배포 커밋을
+        # 실제 SHA로 풀어야 하고, 그 일에 이 어댑터 자신이 필요하다.
+        self._flow_graph: dict | None = None
+
+    def attach_flow_graph(self, graph: dict | None) -> None:
+        self._flow_graph = graph
+
+    async def flow(self, name: str) -> ProbeResult:
+        source = f"code.flow {name}"
+        if self._flow_graph is None:
+            return ProbeResult.failed("흐름 그래프가 없다 — `python -m src code graph`로 만든다",
+                                      source=source, clock=self._clock)
+        near = flowgraph.neighbors(self._flow_graph, name, depth=1)
+        if not near:
+            return ProbeResult.failed(
+                f"{name}: 그래프에 없다 — <데이터 흐름>이나 증거에 나온 이름 그대로 써라",
+                source=source, clock=self._clock)
+        lines, left = flowgraph.neighbor_lines(self._flow_graph, near)
+        return ProbeResult.succeeded(
+            "\n".join(lines), source=source, clock=self._clock,
+            truncated_reason=f"{left}줄 더 있다 — 관계가 많은 이름이다" if left else None)
 
     def service_names(self) -> tuple[str, ...]:
         """브리핑이 목록과 예시에 박을 이름들. **호출부가 토폴로지를 뒤지지 않게** 한다."""

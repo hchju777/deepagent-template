@@ -488,6 +488,113 @@ def render_path(graph: dict, edges: list[dict]) -> str:
 RESOURCE_TYPES = ("topic", "group", "collection", "rediskey")
 
 
+# ── 리드용 텍스트 — 브리핑의 <데이터 흐름>과 `code.flow` ─────────────────
+
+_FLOW_ORDER = ("produces", "consumes", "consumes_as", "declares")
+_KIND_RANK = {"service": 0, "topic": 1, "collection": 2, "rediskey": 3, "group": 4}
+_MIN_SEED = 3
+
+
+def find_seeds(graph: dict, texts) -> list[str]:
+    """증상·증거·가설 본문에 **글자 그대로** 나오는 그래프 이름들 — 서비스 먼저, 종류·이름순.
+    이름이 짧으면(`hb`) 아무 데나 걸리므로 세 글자부터."""
+    blob = "\n".join(t for t in texts if t)
+    found = [n for n in graph["nodes"]
+             if n.get("type") in _KIND_RANK and len(n["label"]) >= _MIN_SEED and n["label"] in blob]
+    found.sort(key=lambda n: (_KIND_RANK[n["type"]], n["label"]))
+    return [n["id"] for n in found]
+
+
+def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
+    """`<데이터 흐름>` 본문. **config 층 엣지만** — 코드 층은 사내에서 소음으로 확인됐고 홉을
+    밟는 것은 11b의 일이다. 씨앗의 이웃 1단계, 그다음 닿은 서비스의 토픽(2단계). 씨앗이 없으면
+    토픽 골격(누가 내고 누가 받나). `budget`자에서 끊고 끊었다고 적는다.
+    `레포{a,b}`는 같은 config를 쓰는 서비스 전부 — 어느 쪽인지는 config가 모른다."""
+    by_id = {n["id"]: n for n in graph["nodes"]}
+    links = [e for e in graph["links"] if e.get("origin") == "config"
+             and e["source"] in by_id and e["target"] in by_id]
+    if not links:
+        return "(config에서 뽑은 흐름이 없다)"
+
+    members: dict[str, list[str]] = {}
+    for n in graph["nodes"]:
+        if n.get("type") == "service":
+            members.setdefault(n.get("repo", ""), []).append(n["id"])
+
+    def fold(service_ids: set[str]) -> list[str]:
+        # 같은 코드를 띄우는 서비스들(사내: processor 5개)은 config도 같아서 전부 같은 관계를
+        # 갖는다. 그대로 나열하면 "sink도 생산한다"처럼 읽힌다 — config는 레포까지만 안다.
+        # 레포의 서비스 전부가 있으면 `레포{a,b}`로 접어 그 사실을 드러낸다.
+        out = []
+        for repo, ids in members.items():
+            if len(ids) > 1 and set(ids) <= service_ids:
+                out.append(f"{repo}{{{','.join(sorted(by_id[i]['label'] for i in ids))}}}")
+                service_ids = service_ids - set(ids)
+        return sorted(out + [by_id[i]["label"] for i in service_ids])
+
+    def line_for(node_id: str, *, topics_only: bool = False) -> str:
+        node = by_id[node_id]
+        groups: dict[str, set[str]] = {}
+        if node["type"] == "service":
+            for e in links:
+                if e["source"] != node_id:
+                    continue
+                if topics_only and by_id[e["target"]]["type"] != "topic":
+                    continue
+                groups.setdefault(e["relation"], set()).add(by_id[e["target"]]["label"])
+            shared = len(members.get(node.get("repo", ""), [])) > 1
+            head = f"{node['label']} [service · {node.get('repo', '')}{' 공유 config' if shared else ''}]"
+            parts = [f"{rel}: {', '.join(sorted(groups[rel]))}" for rel in _FLOW_ORDER if rel in groups]
+        else:
+            for e in links:
+                if e["target"] == node_id:
+                    groups.setdefault(e["relation"], set()).add(e["source"])
+            head = f"{node['label']} [{node['type']}]"
+            parts = [f"{rel}: {', '.join(fold(groups[rel]))}" for rel in _FLOW_ORDER if rel in groups]
+        return f"{head}: {' · '.join(parts)}" if parts else f"{head}: (config 엣지 없음)"
+
+    lines: list[str] = []
+    if seeds:
+        touched: list[str] = []
+        for sid in seeds:
+            if sid in by_id:
+                lines.append(line_for(sid))
+                if by_id[sid]["type"] != "service":
+                    touched += [e["source"] for e in links if e["target"] == sid]
+        for svc in sorted(set(touched) - set(seeds), key=lambda s: by_id[s]["label"]):
+            lines.append(line_for(svc, topics_only=True))
+    else:
+        topics = [n for n in graph["nodes"] if n.get("type") == "topic"]
+        degree = {n["id"]: sum(1 for e in links if e["target"] == n["id"]) for n in topics}
+        for n in sorted(topics, key=lambda n: (-degree[n["id"]], n["label"])):
+            lines.append(line_for(n["id"]))
+
+    out, used = [], 0
+    for line in lines:
+        if used + len(line) + 1 > budget and out:
+            out.append(f"… (+{len(lines) - len(out)}줄, code.flow(name)으로 더 본다)")
+            break
+        out.append(line)
+        used += len(line) + 1
+    return "\n".join(out)
+
+
+_CONF_RANK = {"EXTRACTED": 0, "INFERRED": 1, "AMBIGUOUS": 2}
+
+
+def neighbor_lines(graph: dict, edges: list[dict], *, limit: int = 40) -> tuple[list[str], int]:
+    """`code.flow`의 본문 — config 엣지 먼저, 그다음 코드 엣지를 확신 순으로. `(줄들, 못 실은 수)`."""
+    ranked = sorted((e for e in edges if e["relation"] != _BRIDGE),
+                    key=lambda e: (0 if e.get("origin") == "config" else 1,
+                                   _CONF_RANK.get(e.get("confidence"), 9), e["relation"],
+                                   label_of(graph, e["source"]), label_of(graph, e["target"])))
+    lines = [f"{describe(graph, e['source'])} —{e['relation']}→ {describe(graph, e['target'])}"
+             f"  [{e.get('origin', 'code')}·{e.get('confidence', '?')}] "
+             f"{e.get('source_file', '?')}:{e.get('source_location', '?')}"
+             for e in ranked[:limit]]
+    return lines, max(0, len(ranked) - limit)
+
+
 def summary(graph: dict) -> dict:
     """`code status`가 찍을 숫자들."""
     links = graph["links"]

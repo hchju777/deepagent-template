@@ -193,6 +193,51 @@ def test_아직_없는_것은_없다고_적는다(case):
     assert briefing.tasks_block(state) == "(아직 없다)"
 
 
+# ── <데이터 흐름> — 그래프(11c)를 리드에게 ───────────────────────────
+
+FLOW_GRAPH = {
+    "nodes": [
+        {"id": "service_sink", "label": "sink", "type": "service", "repo": "dt-core"},
+        {"id": "service_processor", "label": "processor", "type": "service", "repo": "dt-core"},
+        {"id": "topic_main", "label": "mx.alarm.main", "type": "topic"},
+        {"id": "collection_alarm_events", "label": "alarm_events", "type": "collection"},
+    ],
+    "links": [
+        {"source": "service_processor", "target": "topic_main", "relation": "produces",
+         "origin": "config", "confidence": "EXTRACTED", "source_file": "config/gbm/mx.json", "source_location": "L8"},
+        {"source": "service_sink", "target": "topic_main", "relation": "consumes",
+         "origin": "config", "confidence": "EXTRACTED", "source_file": "config/gbm/mx.json", "source_location": "L7"},
+        {"source": "service_sink", "target": "collection_alarm_events", "relation": "writes",
+         "origin": "code", "confidence": "INFERRED", "source_file": "sink/w.py", "source_location": "L10"},
+    ],
+}
+
+
+def test_흐름_블록은_증상과_증거의_이름을_씨앗으로_config_층만_싣는다(state):
+    """증상(`OEE가 512다`)에는 그래프 이름이 없다 → 토픽 골격. 증거에 `sink`가 나오면 그게 씨앗이다.
+    코드 층(`sink —writes→ alarm_events`)은 어느 쪽에도 안 실린다."""
+    text = briefing.flow_block(state, FLOW_GRAPH)
+    assert text.startswith("config에서 뽑은 배선이다.") and "code.flow(name)" in text
+    assert "mx.alarm.main [topic]: produces: processor · consumes: sink" in text
+    assert "writes" not in text and "alarm_events" not in text
+    state.evidence.append(EvidenceRef(id="e-1", source="kafka.group_offsets group=g",
+                                      summary="sink 그룹 lag 1830", body=""))
+    text = briefing.flow_block(state, FLOW_GRAPH)
+    assert "sink [service · dt-core 공유 config]: consumes: mx.alarm.main" in text
+    assert "writes" not in text
+
+
+def test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다(state):
+    """낡은 그래프도 호출부가 None으로 준다 — 떠 있지도 않은 코드의 배선을 리드가 믿으면 안 된다."""
+    assert briefing.flow_block(state, None).startswith("(없음")
+    cfg = site()
+    without = briefing.frame_fields(state, site_config=cfg, services=("sink",))
+    with_graph = briefing.frame_fields(state, site_config=cfg, services=("sink",), flow_graph=FLOW_GRAPH)
+    assert "code.flow" not in without["actions"] and "code.grep" in without["actions"]
+    assert "- code.flow(name)" in with_graph["actions"]
+    assert "mx.alarm.main" in with_graph["flow"] and without["flow"].startswith("(없음")
+
+
 # ── 자리 이름이 실제로 채워지는 것과 같은가 ────────────────────────
 
 def test_선언한_자리와_실제로_채우는_것이_같다(state):

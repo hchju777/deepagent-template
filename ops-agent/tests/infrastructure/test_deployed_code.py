@@ -247,6 +247,22 @@ async def test_흐름_이름은_합친_config에서_나온다(flow_code):
     assert where["mx.alarm.main"] == [("sink", "config/gbm/mx.json", 1)]              # `_dev`가 아니다
 
 
+async def test_code_flow는_붙인_그래프의_이웃을_주고_없으면_실패로_답한다(flow_code):
+    missing = await flow_code.flow("alarm_events")
+    assert missing.status == "error" and "code graph" in missing.error
+    graph = {"nodes": [{"id": "service_sink", "label": "sink", "type": "service", "repo": "dt-core"},
+                       {"id": "collection_alarm_events", "label": "alarm_events", "type": "collection"}],
+             "links": [{"source": "service_sink", "target": "collection_alarm_events", "relation": "declares",
+                        "origin": "config", "confidence": "EXTRACTED",
+                        "source_file": "config/gbm/mx.json", "source_location": "L1"}]}
+    flow_code.attach_flow_graph(graph)
+    got = await flow_code.flow("alarm_events")
+    assert got.status == "ok" and got.envelope.complete
+    assert got.data == "sink —declares→ alarm_events [collection]  [config·EXTRACTED] config/gbm/mx.json:L1"
+    unknown = await flow_code.flow("없는이름")
+    assert unknown.status == "error" and "그래프에 없다" in unknown.error
+
+
 async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):
     table, notes = await flow_code.flow_hits(["alarm"])
     files = {(h.file, h.line) for h in table["alarm"]}

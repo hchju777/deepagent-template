@@ -211,5 +211,10 @@ class DeployedCodePort(ABC):
         """이 이름을 누가 쓰나. `service`를 안 주면 모든 레포를 본다."""
 
     @abstractmethod
+    async def flow(self, name: str) -> ProbeResult:
+        """흐름 그래프(11c)에서 이 이름의 이웃 — config 층 먼저, 코드 층은 첫 홉의 포인터로.
+        그래프가 없거나 낡았으면 실패로 답한다(호출부가 안 붙인다)."""
+
+    @abstractmethod
     async def read(self, service: str, path: str) -> ProbeResult:
         """파일 하나. `path`는 `grep`이 돌려준 경로다."""

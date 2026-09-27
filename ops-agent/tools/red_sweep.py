@@ -432,8 +432,8 @@ CASES = [
   '        return {}',
   ["tests/infrastructure/test_deployed_code.py::test_역할은_이름_옆에_붙일_수_있게_따로_준다"]),
  ("리드가 역할을 안 넘긴다", ROOT / "src/application/lead.py",
-  'services=services, roles=roles))',
-  'services=services, roles=None))',
+  'briefing.frame_fields(state, site_config=site_config,\n                                            services=services, roles=roles,',
+  'briefing.frame_fields(state, site_config=site_config,\n                                            services=services, roles=None,',
   ["tests/application/test_lead.py::test_역할이_리드_프롬프트까지_간다"]),
  ("file 어댑터에 turn_dir을 안 요구한다", ROOT / "src/config/schema_llm.py",
   '        if self.adapter == "file" and not self.turn_dir:',
@@ -648,6 +648,24 @@ CASES = [
   '        done = subprocess.run([binary, "export", "wiki", "--graph", str(graph_json)],',
   '        done = subprocess.run([binary, "export", "graphml", "--graph", str(graph_json)],',
   ["tests/knowledge/test_graph_build.py::test_wiki는_graph_json_옆에_생기고_없으면_건너뛴다"]),
+ ("흐름 텍스트에 코드 층이 섞인다", ROOT / "src/knowledge/flow.py",
+  '    links = [e for e in graph["links"] if e.get("origin") == "config"',
+  '    links = [e for e in graph["links"] if e.get("origin") != "runs"',
+  ["tests/knowledge/test_flow.py::test_흐름_텍스트는_config_층만_씨앗의_이웃_그리고_닿은_서비스의_토픽"]),
+ ("흐름 텍스트가 예산을 안 지킨다", ROOT / "src/knowledge/flow.py",
+  '        if used + len(line) + 1 > budget and out:', '        if False:',
+  ["tests/knowledge/test_flow.py::test_흐름_텍스트는_예산에서_끊고_끊었다고_적는다"]),
+ ("그래프가 없어도 code.flow를 목록에 둔다", ROOT / "src/application/briefing.py",
+  '    return frozenset() if flow_graph is not None else frozenset({"code.flow"})',
+  '    return frozenset()',
+  ["tests/application/test_briefing.py::test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다"]),
+ ("증거의 이름을 씨앗으로 안 쓴다", ROOT / "src/application/briefing.py",
+  '    texts += [f"{ref.summary}\\n{ref.body}" for ref in state.evidence]', '    texts += []',
+  ["tests/application/test_briefing.py::test_흐름_블록은_증상과_증거의_이름을_씨앗으로_config_층만_싣는다"]),
+ ("낡은 그래프를 조사에 싣는다", ROOT / "src/__main__.py",
+  '    if stale:\n        return None, "그래프 낡음 — 브리핑에 안 싣는다: " + " · ".join(stale)',
+  '    if False:\n        pass',
+  ["tests/knowledge/test_cli_code.py::test_조사에는_배포_커밋과_같은_그래프만_실린다"]),
  ("graphify 단계를 안 알린다", ROOT / "src/knowledge/graph_build.py",
   '        if progress:\n            progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")',
   '        if False:\n            pass',
@@ -687,7 +705,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 158, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 163, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

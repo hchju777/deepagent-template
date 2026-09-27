@@ -882,10 +882,11 @@ def cmd_case_investigate(args, env) -> int:
     async def go() -> dict:
         llm = build_llm(app.llm, clock=clock)
         built["llm"] = llm.describe()     # config가 뭐라고 적혔는지가 아니라 실제로 붙은 것
-        code, services = _code_if_ready(site, gbm, fct,
-                                        knowledge_root=_knowledge_root(args),
-                                        clock=clock)
+        code, services, flow_graph, graph_note = _code_if_ready(
+            site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock,
+            graph_dir=_graph_dir(args, env, gbm, fct))
         built["code"] = code.describe() if code else "코드 없음"
+        built["graph"] = graph_note
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
         try:
             frame, integrate = make_lead(
@@ -893,7 +894,8 @@ def cmd_case_investigate(args, env) -> int:
                 max_rounds=app.investigation.max_rounds,
                 evidence_budget=app.investigation.evidence_total_chars,
                 trace=tracer, services=services,
-                roles=code.service_roles() if code else {})
+                roles=code.service_roles() if code else {},
+                flow_graph=flow_graph)
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars),
@@ -1436,20 +1438,47 @@ def _build_code(site, gbm: str, fct: str, *, knowledge_root, clock):
     return DeployedCode(reader, topology, deployment, gbm=gbm, fct=fct, clock=clock)
 
 
-def _code_if_ready(site, gbm: str, fct: str, *, knowledge_root, clock):
-    """조사용. 코드를 못 읽는 사이트면 **`(None, ())`** — 던지지 않는다.
+def _code_if_ready(site, gbm: str, fct: str, *, knowledge_root, clock, graph_dir=None):
+    """조사용. `(code, 서비스 이름들, 흐름 그래프 또는 None, 그래프 한 줄)`. 코드를 못 읽는
+    사이트면 **`(None, (), None, …)`** — 던지지 않는다.
 
     토폴로지를 안 적은 사이트가 정상이다(코드 확보는 선택이다). 여기서 죽으면
     코드와 무관한 조사까지 통째로 못 돈다. 대신 비어 있으면 `code.*`가 목록에도
     예시에도 안 나가므로, 리드가 없는 문을 두드릴 일도 없다.
+
+    흐름 그래프는 **배포 커밋과 같을 때만** 붙인다. 낡은 배선을 실으면 리드가 떠 있지도
+    않은 코드의 흐름을 믿는다 — 그래서 없음과 낡음은 같은 취급(None)이다.
     """
     if not site.code.repos:
-        return None, ()
+        return None, (), None, "코드 없음"
     try:
         code = _build_code(site, gbm, fct, knowledge_root=knowledge_root, clock=clock)
     except Exception:                                              # noqa: BLE001
-        return None, ()
-    return code, code.service_names()
+        return None, (), None, "코드 없음"
+    graph, note = (None, "그래프 없음")
+    if graph_dir is not None:
+        commits, _ = _resolved_commits(site, code)
+        graph, note = _flow_graph_if_fresh(Path(graph_dir), commits)
+    code.attach_flow_graph(graph)
+    return code, code.service_names(), graph, note
+
+
+def _flow_graph_if_fresh(graph_dir: Path, commits: dict[str, str]) -> tuple[dict | None, str]:
+    """번들의 오버레이와 그 상태 한 줄. 없거나 깨졌거나 **배포 커밋과 다르면 None**."""
+    from src.knowledge import graph_build as gb
+
+    got = gb.read_bundle(graph_dir)
+    if got is None:
+        return None, "그래프 없음 — `code graph`로 만든다"
+    _, meta = got
+    stale = gb.check_bundle(meta, commits)
+    if stale:
+        return None, "그래프 낡음 — 브리핑에 안 싣는다: " + " · ".join(stale)
+    try:
+        overlay = json.loads((graph_dir / "overlay.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, f"그래프 못 읽음 — {exc}"
+    return overlay, f"그래프 실림 ({meta.built_at})"
 
 
 def _deployed_code(args, env):

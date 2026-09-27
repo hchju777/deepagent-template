@@ -353,6 +353,94 @@ def test_config_엣지의_근거는_그_서비스가_실제로_합친_층이다(
     assert flow.describe(g, edge["source"]) == "sink"
 
 
+def _lead_graph():
+    """사내 모양: config 엣지는 서비스 단위, 코드 엣지는 api의 reads 하나."""
+    topology = Topology(services={"processor": Service(repo="dt-core", role="가공"),
+                                  "sink": Service(repo="dt-core", role="저장"),
+                                  "api": Service(repo="dt-api", role="읽기")})
+    names = [Name("topic", "mx.alarm.main", "infra.kafka.producer.topic.topic1", "produces",
+                  services=("processor",)),
+             Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic2", "consumes",
+                  services=("sink",)),
+             Name("topic", "mx.alarm.raw", "infra.kafka.consumer.topic.topic1", "consumes",
+                  services=("processor",)),
+             Name("collection", "alarm_events", "mongodb_collection.alarm", services=("api", "sink"))]
+    # 코드 층: api가 alarm_events를 읽고, sink가 쓰고, sink 코드가 mx.alarm.raw를 구독한다.
+    # 마지막 것은 config에 없는 관계다 — 코드 층이 새면 sink 줄의 consumes에 raw가 끼어든다.
+    hits = {"alarm_events": [Hit("dt-api", "c", "api/q.py", 3, 'mongo["alarm_events"].find({})'),
+                             Hit("dt-core", "c", "sink/w.py", 10, 'mongo["alarm_events"].insert_many(b)')],
+            "mx.alarm.raw": [Hit("dt-core", "c", "sink/w.py", 4, 'consumer.subscribe("mx.alarm.raw")')]}
+    return flow.extract(names=names, topology=topology, commits={},
+                        hits_for=lambda p: hits.get(p, []))
+
+
+def test_씨앗은_본문에_글자_그대로_나온_이름이고_서비스가_먼저다():
+    g = _lead_graph()
+    seeds = flow.find_seeds(g, ["gumi 라인 sink가 안 받는 듯, mx.alarm.main lag 1830", ""])
+    assert seeds == ["service_sink", "topic_mx_alarm_main"]
+    assert flow.find_seeds(g, ["api"]) == ["service_api"]          # 세 글자는 된다
+    assert flow.find_seeds(g, ["아무 이름도 없다"]) == []
+
+
+def test_흐름_텍스트는_config_층만_씨앗의_이웃_그리고_닿은_서비스의_토픽():
+    """코드 층(api —reads→ alarm_events)은 안 실린다 — 사내에서 소음으로 확인됐고 홉을 밟는 것은
+    11b의 일이다. 씨앗 줄 다음에 씨앗 자원에 닿은 서비스의 토픽 줄(2단계)이 온다."""
+    g = _lead_graph()
+    text = flow.flow_text(g, ["service_sink", "topic_mx_alarm_main"])
+    assert text.splitlines() == [
+        "sink [service · dt-core 공유 config]: consumes: mx.alarm.main · declares: alarm_events",
+        "mx.alarm.main [topic]: produces: processor · consumes: sink",
+        "processor [service · dt-core 공유 config]: produces: mx.alarm.main · consumes: mx.alarm.raw",
+    ]
+    assert "reads" not in text and "writes" not in text and "api" not in text
+    assert "mx.alarm.raw" not in text.splitlines()[0], "sink의 raw 구독은 코드 층이다 — config에 없다"
+
+
+def test_흐름_텍스트는_예산에서_끊고_끊었다고_적는다():
+    g = _lead_graph()
+    text = flow.flow_text(g, ["service_sink", "topic_mx_alarm_main"], budget=100)
+    lines = text.splitlines()
+    assert len(lines) == 2                                   # 첫 줄은 예산이 작아도 실린다
+    assert lines[0].startswith("sink [service") and lines[1].startswith("… (+2줄")
+
+
+def test_같은_config를_쓰는_서비스_전부면_레포로_접는다():
+    """사내: processor 5개가 한 config를 쓴다. 나열하면 "sink도 생산한다"로 읽힌다 — config는
+    레포까지만 안다. 레포의 서비스 전부가 같은 관계면 `레포{a,b}`, 일부면 그대로 이름."""
+    topology = Topology(services={"processor": Service(repo="dt-core", role="가공"),
+                                  "sink": Service(repo="dt-core", role="저장"),
+                                  "api": Service(repo="dt-api", role="읽기")})
+    names = [Name("topic", "mx.alarm.main", "infra.kafka.producer.topic.topic1", "produces",
+                  services=("processor", "sink")),
+             Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic2", "consumes",
+                  services=("sink",)),
+             Name("collection", "alarm_events", "mongodb_collection.alarm",
+                  services=("api", "processor", "sink"))]
+    g = flow.extract(names=names, topology=topology, commits={}, hits_for=lambda p: [])
+    assert flow.flow_text(g, ["topic_mx_alarm_main", "collection_alarm_events"]).splitlines()[:2] == [
+        "mx.alarm.main [topic]: produces: dt-core{processor,sink} · consumes: sink",
+        "alarm_events [collection]: declares: api, dt-core{processor,sink}",
+    ]
+
+
+def test_씨앗이_없으면_토픽_골격을_준다():
+    text = flow.flow_text(_lead_graph(), [])
+    assert text.splitlines() == ["mx.alarm.main [topic]: produces: processor · consumes: sink",
+                                 "mx.alarm.raw [topic]: consumes: processor"]
+
+
+def test_code_flow_본문은_config_먼저_코드는_확신_순_runs는_빼고():
+    g = _lead_graph()
+    lines, left = flow.neighbor_lines(g, flow.neighbors(g, "alarm_events"))
+    assert left == 0 and "runs" not in "\n".join(lines)
+    assert lines[0].startswith("api —declares→ alarm_events [collection]  [config·EXTRACTED]")
+    assert lines[1].startswith("sink —declares→ alarm_events [collection]  [config·EXTRACTED]")
+    assert lines[2].startswith("api —reads→ alarm_events [collection]  [code·EXTRACTED] api/q.py:L3")
+    assert lines[3].startswith("sink —writes→ alarm_events [collection]  [code·INFERRED] sink/w.py:L10")   # 디렉터리로 가른 귀속은 INFERRED
+    short, left = flow.neighbor_lines(g, flow.neighbors(g, "alarm_events"), limit=2)
+    assert len(short) == 2 and left == 2
+
+
 def test_같은_코드를_띄우는_서비스는_레포를_거쳐_경로가_난다():
     """코드 엣지가 레포에 붙으면 서비스에서 출발하는 경로가 없다. `runs`가 다리다 —
     단, 자원 경로가 있으면 그쪽이 먼저다(같은 레포의 서비스 둘은 `runs` 두 홉으로 늘 이어진다)."""
