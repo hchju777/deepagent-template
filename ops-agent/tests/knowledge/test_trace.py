@@ -96,7 +96,48 @@ FILES = {
         '    def get_heat_status(self, line: str) -> dict: ...\n'
         '\n'
         'class GaugePort(Protocol):\n'
-        '    def read(self) -> int: ...\n'),
+        '    def read(self) -> int: ...\n'
+        '\n'
+        'class TallyRepository(Protocol):\n'
+        '    def count(self) -> int: ...\n'
+        '\n'
+        'class AuditServicePort(Protocol):\n'
+        '    def recent(self) -> list: ...\n'),
+    "api/repos/tally.py": (
+        'from api.repos.base import BaseRepo\n'
+        '\n'
+        'class TallyRepository(BaseRepo):\n'
+        '    collection = "tally_state"\n'
+        '\n'
+        '    async def count(self):\n'
+        '        return await self.find_one({})\n'),
+    "api/services/tally.py": (
+        'from api.ports import TallyRepository\n'
+        '\n'
+        'class TallyService:\n'
+        '    def __init__(self, repo: TallyRepository):\n'
+        '        self.repo = repo\n'
+        '\n'
+        '    async def total(self):\n'
+        '        return await self.repo.count()\n'),
+    "api/services/audit.py": (
+        'class AuditService:\n'
+        '    async def recent(self):\n'
+        '        return await consumer.tail("mx.alarm.main")\n'),
+    "api/state_deps.py": (
+        'from typing import Annotated\n'
+        'from fastapi import Depends\n'
+        'from api.ports import AuditServicePort\n'
+        'from api.services.tally import TallyService\n'
+        '\n'
+        'def get_tally_service(request):\n'
+        '    return request.app.state.tally\n'
+        '\n'
+        'def get_audit_service(request) -> AuditServicePort:\n'
+        '    return request.app.state.audit\n'
+        '\n'
+        'TallyServiceDep = Annotated[TallyService, Depends(get_tally_service)]\n'
+        'AuditServiceDep = Annotated[AuditServicePort, Depends(get_audit_service)]\n'),
     "api/gauges.py": (
         'from api.ports import GaugePort\n'
         '\n'
@@ -113,6 +154,7 @@ FILES = {
         'from api import settings\n'
         'from api.tables import KEY_TABLE\n'
         'from api.ports import GaugePort\n'
+        'from api.state_deps import TallyServiceDep, AuditServiceDep\n'
         'router = APIRouter(prefix="/furnace")\n'
         '\n'
         '@router.get("/heat")\n'
@@ -135,7 +177,15 @@ FILES = {
         '\n'
         '@router.get("/gauge")\n'
         'async def gauge_view(g: GaugePort):\n'
-        '    return g.read()\n'),
+        '    return g.read()\n'
+        '\n'
+        '@router.get("/tally")\n'
+        'async def tally_view(service: TallyServiceDep):\n'
+        '    return await service.total()\n'
+        '\n'
+        '@router.get("/audit")\n'
+        'async def audit_view(svc: AuditServiceDep):\n'
+        '    return await svc.recent()\n'),
     "api/heat_deps.py": (
         'from typing import Annotated\n'
         'from fastapi import Depends\n'
@@ -160,6 +210,9 @@ FILES = {
         'class BaseRepo:\n'
         '    collection = ""\n'
         '\n'
+        '    def __init__(self):\n'
+        '        self.db = mongo\n'
+        '\n'
         '    async def find_one(self, query):\n'
         '        return await mongo[self.collection].find_one(query)\n'),
     "api/repos/heat.py": (
@@ -167,6 +220,10 @@ FILES = {
         '\n'
         'class HeatRepo(BaseRepo):\n'
         '    collection = "heat_status"\n'
+        '\n'
+        '    def __init__(self):\n'
+        '        super().__init__()\n'
+        '        self.limit = 10\n'
         '\n'
         '    async def status(self, line: str):\n'
         '        return await self.find_one({"line": line})\n'),
@@ -182,6 +239,7 @@ FILES = {
 
 NAMES = [Name("collection", "line_state", "mongodb_collection.line_state"),
          Name("collection", "heat_status", "mongodb_collection.heat"),
+         Name("collection", "tally_state", "mongodb_collection.tally"),
          Name("rediskey", "line:{id}", "redis_key.line_status"),
          Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic1")]
 
@@ -190,11 +248,13 @@ ROUTES = [Route(REPO, "GET", "/api/v1/line/status", "api/routers/line.py", 6, "E
           Route(REPO, "GET", "/api/v1/line/dyn", "api/routers/line.py", 17, "EXTRACTED", ""),
           Route(REPO, "GET", "/api/v1/bad/x", "api/routers/bad.py", 5, "EXTRACTED", ""),
           Route(REPO, "GET", "/health", "api/main.py", 7, "EXTRACTED", ""),
-          Route(REPO, "GET", "/furnace/heat", "api/routers/furnace.py", 8, "EXTRACTED", ""),
-          Route(REPO, "GET", "/furnace/cfg", "api/routers/furnace.py", 12, "EXTRACTED", ""),
-          Route(REPO, "GET", "/furnace/local", "api/routers/furnace.py", 17, "EXTRACTED", ""),
-          Route(REPO, "GET", "/furnace/table", "api/routers/furnace.py", 22, "EXTRACTED", ""),
-          Route(REPO, "GET", "/furnace/gauge", "api/routers/furnace.py", 26, "EXTRACTED", "")]
+          Route(REPO, "GET", "/furnace/heat", "api/routers/furnace.py", 9, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/cfg", "api/routers/furnace.py", 13, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/local", "api/routers/furnace.py", 18, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/table", "api/routers/furnace.py", 23, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/gauge", "api/routers/furnace.py", 27, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/tally", "api/routers/furnace.py", 31, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/audit", "api/routers/furnace.py", 35, "EXTRACTED", "")]
 
 
 class _Source:
@@ -380,3 +440,34 @@ async def test_상속한_구현체가_여럿이면_전부_추정으로_따라가
     assert [s.qualname for s in t.chain] == ["gauge_view", "DialGauge.read", "DigitalGauge.read"]
     assert _reads(t) == {("collection", "line_state", "추정"), ("topic", "mx.alarm.main", "추정")}
     assert [g.why for g in t.gaps] == ["read: GaugePort 구현체 2개 — 전부 따라가되 읽기는 추정"]
+
+
+# ── 사내 두 번째 추적(커밋 2b 뒤, 137/15) — 남은 gap의 모양 셋. 이름은 전부 지어낸 것이다.
+
+async def test_포트와_같은_이름의_클래스가_다른_모듈에_있으면_그것이_구현체다():
+    """포트 `TallyRepository(Protocol)`와 구현 `TallyRepository(BaseRepo)` — 상속하지 않고 이름만 같다(사내
+    저장소 모양). provider는 app.state에서 꺼내 주므로 반환 클래스도 없다. 하나뿐이면 확실이다."""
+    t, _ = await _trace("/furnace/tally")
+    assert [s.qualname for s in t.chain][:4] == [
+        "tally_view", "TallyService.total", "TallyRepository.count", "BaseRepo.find_one"]
+    assert _reads(t) == {("collection", "tally_state", "확실")}
+    assert t.gaps == (), t.gaps
+
+
+async def test_상속도_같은_이름도_없으면_이름_규약으로_구현체를_고르고_추정이라고_적는다():
+    """`AuditServicePort` → `AuditService`. 코드가 보증하는 연결이 아니라 등급은 추정이고 gap에 남긴다 —
+    같은 이름 메서드 전부로 퍼지는 것보다는 좁고, 확실이라고 속이지는 않는다."""
+    t, _ = await _trace("/furnace/audit")
+    assert [s.qualname for s in t.chain][:2] == ["audit_view", "AuditService.recent"]
+    assert _reads(t) == {("topic", "mx.alarm.main", "추정")}
+    assert [g.why for g in t.gaps] == [
+        "recent: AuditServicePort 구현체를 이름 규약으로 골랐다 — AuditService, 읽기는 추정"]
+
+
+async def test_super_호출은_부모의_메서드로_가고_실행_시점_클래스는_자식_그대로다():
+    """`HeatRepo.__init__`의 `super().__init__()` — 받는 쪽이 `super()` 호출이라 전에는 레포의 `def __init__(`
+    전부가 후보였다(사내: 후보 61개, 끝점마다). 부모의 것 하나로 간다."""
+    t, _ = await _trace("/furnace/local")
+    names = [s.qualname for s in t.chain]
+    assert "HeatRepo.__init__" in names and "BaseRepo.__init__" in names, names
+    assert t.gaps == (), t.gaps

@@ -281,6 +281,8 @@ class _Repo:
         """그 Protocol·ABC를 **상속한** 클래스들 — `class X(Proto)`·`class X(Base, Proto)`. 캐시."""
         key = ("impl:" + proto.name, False)
         if key in self._defs:
+            for cmod, _ in self._defs[key]:
+                self.touched.add(cmod.path)
             return self._defs[key]
         out: list[tuple[_Mod, ast.ClassDef]] = []
         patterns = [f"({proto.name})", f"({proto.name},", f", {proto.name})", f", {proto.name},"]
@@ -298,6 +300,27 @@ class _Repo:
                 if proto.name in names:
                     seen.add((hmod.path, cls.lineno))
                     out.append((hmod, cls))
+        self._defs[key] = out
+        return out
+
+    async def classes_named(self, name: str) -> list[tuple[_Mod, ast.ClassDef]]:
+        """레포 전체에서 `class name(`·`class name:`. 사내 저장소는 포트(`XRepository(Protocol)`)와
+        구현(`XRepository(부모 저장소)`)이 **같은 이름**이고 상속 관계가 없다 — 이름이 유일한 연결이다."""
+        key = ("class:" + name, False)
+        if key in self._defs:
+            for cmod, _ in self._defs[key]:
+                self.touched.add(cmod.path)
+            return self._defs[key]
+        out: list[tuple[_Mod, ast.ClassDef]] = []
+        for hit in sorted(await self.source.grep([f"class {name}(", f"class {name}:"]), key=lambda h: (h.file, h.line)):
+            if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):
+                continue
+            hmod = await self.module(hit.file)
+            if hmod is None or name not in hmod.classes:
+                continue
+            cls = hmod.classes[name]
+            if cls.lineno == hit.line and not any(c is cls for _, c in out):
+                out.append((hmod, cls))
         self._defs[key] = out
         return out
 
@@ -405,6 +428,24 @@ def _quoted_at(segment: str, needle: str) -> int | None:
     타입 주석 `line: str`과도 겹치므로, 같은 줄에서 따옴표가 먼저 열려 있어야 읽기로 친다."""
     m = re.search(r"""["'][^"'\n]*""" + re.escape(needle), segment)
     return None if m is None else segment.count("\n", 0, m.start())
+
+
+_PORT_SUFFIXES = ("Protocol", "Port", "Interface", "ABC")
+_PORT_PREFIXES = ("Abstract", "I")
+
+
+def _port_aliases(name: str) -> list[str]:
+    """포트 이름에서 구현체 이름을 짐작한다 — `XProtocol`·`XPort`·`XInterface`·`AbstractX`·`IX` → `X`.
+    코드가 보증하는 연결이 아니므로 이걸로 고른 구현체는 추정이고 gap에 남긴다."""
+    out: list[str] = []
+    for suf in _PORT_SUFFIXES:
+        if name.endswith(suf) and len(name) > len(suf):
+            out.append(name[: -len(suf)])
+    for pre in _PORT_PREFIXES:
+        rest = name[len(pre):]
+        if name.startswith(pre) and rest[:1].isupper():
+            out.append(rest)
+    return [a for i, a in enumerate(out) if a not in out[:i]]
 
 
 def _is_protocol(cls: ast.ClassDef) -> bool:
@@ -643,14 +684,16 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
             if got is not None:
                 push(got[0], got[1], got[2], "확실", self_of=found)
 
-    async def follow(owner: tuple[_Mod, ast.ClassDef], meth: str, *, ann: ast.expr | None, line: int) -> bool:
-        """좁힌 클래스에서 메서드를 따라간다. 찾았으면 True(구현체가 없어도)."""
+    async def follow(owner: tuple[_Mod, ast.ClassDef], meth: str, *, ann: ast.expr | None, line: int,
+                     self_of: tuple[_Mod, ast.ClassDef] | None = None) -> bool:
+        """좁힌 클래스에서 메서드를 따라간다. 찾았으면 True(구현체가 없어도). `self_of`는 실행 시점
+        클래스를 덮어쓴다 — `super().m()`은 부모의 m이지만 self는 자식 그대로다."""
         got = await r.find_method(owner[0], owner[1], meth)
         if got is None:
             return False
         fmod, m, defining = got
         if not (_is_protocol(owner[1]) or _is_abstract(m)):
-            push(fmod, m, defining, "확실", self_of=owner)
+            push(fmod, m, defining, "확실", self_of=self_of or owner)
             return True
         # 포트다 — 구현체를 찾는다.
         impls: list[tuple[_Mod, ast.ClassDef]] = []
@@ -665,6 +708,22 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
             if len(impls) > 1:
                 grade = "추정"
                 gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체 {len(impls)}개 — 전부 따라가되 읽기는 추정"))
+        if not impls:
+            # 상속하지 않는 구현체 — 다른 모듈의 같은 이름 클래스(사내 저장소), 그 다음 이름 규약.
+            same = [(smod, scls) for smod, scls in await r.classes_named(owner[1].name)
+                    if scls is not owner[1] and not _is_protocol(scls)]
+            if same:
+                impls = same
+                if len(same) > 1:
+                    grade = "추정"
+                    gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 같은 이름 클래스 {len(same)}개 — 전부 따라가되 읽기는 추정"))
+            else:
+                for alias in _port_aliases(owner[1].name):
+                    same = [(smod, scls) for smod, scls in await r.classes_named(alias) if not _is_protocol(scls)]
+                    if same:
+                        impls, grade = same, "추정"
+                        gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체를 이름 규약으로 골랐다 — {alias}, 읽기는 추정"))
+                        break
         if not impls:
             cands = [c for c in await r.defs_named(meth, methods=True) if c[1] is not m and c[1] is not func]
             for cmod, cfunc, ccls in cands:
@@ -700,6 +759,17 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
         recv, meth = f.value, f.attr
         owner: tuple[_Mod, ast.ClassDef] | None = None
         kind, ann = "unknown", None
+        if (isinstance(recv, ast.Call) and isinstance(recv.func, ast.Name) and recv.func.id == "super"
+                and self_cls is not None):
+            # 부모 중 m을 가진 첫 클래스. 없으면(외부 부모) 조용히 — `def __init__(` 전부가 후보였다(사내 61개).
+            for b in self_cls[1].bases:
+                base = await r.klass(self_cls[0], b)
+                if base is not None and base[1] is not self_cls[1] and await r.find_method(base[0], base[1], meth):
+                    owner = base
+                    break
+            if owner is not None:
+                await follow(owner, meth, ann=None, line=call.lineno, self_of=self_cls)
+            continue
         if isinstance(recv, ast.Name) and recv.id == "self" and self_cls is not None:
             owner, kind = self_cls, "self"
         elif (isinstance(recv, ast.Attribute) and isinstance(recv.value, ast.Name)

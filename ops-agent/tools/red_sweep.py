@@ -817,6 +817,18 @@ CASES = [
  ('따옴표 밖의 리터럴도 읽기로 친다', ROOT / "src/knowledge/trace.py",
   '    m = re.search(r"""["\'][^"\'\\n]*""" + re.escape(needle), segment)', '    m = re.search(re.escape(needle), segment)',
   ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
+ ('포트와 같은 이름의 클래스를 구현체로 안 본다', ROOT / "src/knowledge/trace.py",
+  '            same = [(smod, scls) for smod, scls in await r.classes_named(owner[1].name)', '            same = [(smod, scls) for smod, scls in ()',
+  ['tests/knowledge/test_trace.py::test_포트와_같은_이름의_클래스가_다른_모듈에_있으면_그것이_구현체다']),
+ ('같은 이름 클래스가 하나뿐인데 추정으로 낮춘다', ROOT / "src/knowledge/trace.py",
+  '                if len(same) > 1:', '                if True:',
+  ['tests/knowledge/test_trace.py::test_포트와_같은_이름의_클래스가_다른_모듈에_있으면_그것이_구현체다']),
+ ('이름 규약으로 구현체를 안 고른다', ROOT / "src/knowledge/trace.py",
+  '                for alias in _port_aliases(owner[1].name):', '                for alias in ():',
+  ['tests/knowledge/test_trace.py::test_상속도_같은_이름도_없으면_이름_규약으로_구현체를_고르고_추정이라고_적는다']),
+ ('super 호출을 부모로 안 따라간다', ROOT / "src/knowledge/trace.py",
+  '                await follow(owner, meth, ann=None, line=call.lineno, self_of=self_cls)', '                pass',
+  ['tests/knowledge/test_trace.py::test_super_호출은_부모의_메서드로_가고_실행_시점_클래스는_자식_그대로다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -844,7 +856,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 206, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 210, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
