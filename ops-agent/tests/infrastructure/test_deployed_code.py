@@ -226,6 +226,10 @@ def flow_code(tmp_path, clock):
     write("sink/writer.py", 'def run(cfg, consumer, mongo):\n'
           '    for m in consumer.subscribe(cfg["infra"]["kafka"]["consumer"]["topic"]["topic1"]):\n'
           '        mongo[cfg["mongodb_collection"]["alarm"]].insert_one(m)\n')
+    # FastAPI 모양의 라우트 선언 — 끝점 노드(11c 커밋 5)의 재료. 테스트 파일의 데코레이터는 빠져야 한다.
+    write("api/routes.py", 'router = APIRouter(prefix="/summary")\n\n\n@router.post("/badge")\n'
+          'def badge():\n    return {}\n')
+    write("tests/test_routes.py", '@router.get("/not-real")\ndef t():\n    pass\n')
     git("add", "-A", cwd=root)
     git("commit", "-qm", "flow", cwd=root)
     topology = Topology(services={"sink": Service(repo="dt-core", role="저장한다")},
@@ -305,3 +309,14 @@ async def test_흐름_히트에는_앞뒤_한_줄이_실려_온다(flow_code):
         '    for m in consumer.subscribe(cfg["infra"]["kafka"]["consumer"]["topic"]["topic1"]):'
     assert hits[("config/gbm/mx.json", 1)].context == ""      # 한 줄짜리 파일
 
+
+
+async def test_라우트_히트는_배포_커밋의_git_grep이고_테스트_파일은_뺀다(flow_code):
+    from src.knowledge import flow
+
+    hits, notes = await flow_code.route_hits()
+    assert notes == []
+    assert {("api/routes.py", 1), ("api/routes.py", 4)} <= {(h.file, h.line) for h in hits}
+    routes = flow.routes_from_hits(hits)        # 테스트 파일의 데코레이터는 여기서 빠진다
+    assert [(r.method, r.path, r.confidence, r.file, r.line) for r in routes] == \
+        [("POST", "/summary/badge", "EXTRACTED", "api/routes.py", 4)]

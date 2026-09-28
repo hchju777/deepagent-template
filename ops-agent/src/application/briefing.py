@@ -367,7 +367,8 @@ def next_task_number(state: CaseState) -> int:
 
 def example_block(site_config, *, phase: str, start: int = 1,
                   services: tuple[str, ...] = (), used: tuple[str, ...] = (),
-                  first_read: tuple[str, dict] | None = None) -> str:
+                  first_read: tuple[str, dict] | None = None,
+                  flow_graph: dict | None = None) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
 
     `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
@@ -382,7 +383,10 @@ def example_block(site_config, *, phase: str, start: int = 1,
             shapes.append(first_read)
             path = _rest_path(site_config, first_read)
             if path and services:
-                shapes.append(("code.grep", {"patterns": [path]}))
+                # 그래프가 서빙 서비스를 하나로 알면 그 레포만 뒤진다 — 모르면 전체다.
+                served = flowgraph.serving_services(flow_graph, path) if flow_graph else []
+                shapes.append(("code.grep", {"patterns": [path],
+                                             **({"service": served[0]} if len(served) == 1 else {})}))
         room = (4 if shapes else 3) - len(shapes)
         shapes += _available(site_config, _discovery(services), room, services)
         free = None if first_read else _free_rest_entry(site_config)
@@ -439,16 +443,19 @@ def example_block(site_config, *, phase: str, start: int = 1,
 FRAME_SLOTS = frozenset({"case", "actions", "example", "flow"})
 
 
-def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800) -> str:
+def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
+               texts: tuple[str, ...] = ()) -> str:
     """`<데이터 흐름>` — 그래프(11c)를 리드에게 준다. **config 층만**, 씨앗은 증상·증거·가설에
     나온 이름. 그래프가 없거나 낡았으면(호출부가 None을 준다) 없다고 적는다 — 낡은 배선을
     사실처럼 실으면 리드가 떠 있지도 않은 코드의 흐름을 믿는다."""
     if graph is None:
         return "(없음 — `python -m src code graph`로 만들면 여기 실린다)"
-    texts = [state.case.symptom]
-    texts += [f"{ref.summary}\n{ref.body}" for ref in state.evidence]
-    texts += [h.statement for h in state.hypotheses]
-    body = flowgraph.flow_text(graph, flowgraph.find_seeds(graph, texts), budget=budget)
+    # 접수 경로 줄(REST path)이 `texts`로 들어온다 — 증상 문장엔 그래프 이름이 없어도 끝점 노드가
+    # 씨앗이 되어 첫 줄이 "이 path를 누가 서빙하나"가 된다(사다리의 첫 칸).
+    seeds_from = [state.case.symptom, *texts]
+    seeds_from += [f"{ref.summary}\n{ref.body}" for ref in state.evidence]
+    seeds_from += [h.statement for h in state.hypotheses]
+    body = flowgraph.flow_text(graph, flowgraph.find_seeds(graph, seeds_from), budget=budget)
     # 머리말은 한 줄 — 사내 블록에서 머리말이 본문만큼 길었다. 규칙은 프롬프트 본문이 말한다.
     return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
             "서비스 전부. 다른 이름은 code.flow(name).\n" + body)
@@ -481,8 +488,10 @@ def frame_fields(state: CaseState, *, site_config,
             "example": example_block(site_config, phase="frame",
                                      start=next_task_number(state),
                                      services=services,
-                                     first_read=start_read(state.case, site_config)),
-            "flow": flow_block(state, flow_graph)}
+                                     first_read=start_read(state.case, site_config),
+                                     flow_graph=flow_graph),
+            "flow": flow_block(state, flow_graph,
+                               texts=(origin_line(state.case, site_config) or "",))}
 
 
 def _hidden(flow_graph: dict | None) -> frozenset[str]:
@@ -498,7 +507,8 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
     return {"case": case_block(state, site_config=site_config),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph)),
-            "flow": flow_block(state, flow_graph),
+            "flow": flow_block(state, flow_graph,
+                               texts=(origin_line(state.case, site_config) or "",)),
             "example": example_block(site_config, phase="integrate",
                                      start=next_task_number(state),
                                      services=services,

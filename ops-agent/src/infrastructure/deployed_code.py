@@ -178,6 +178,25 @@ class DeployedCode(DeployedCodePort):
                             table[p].append(hit)
         return table, notes
 
+    async def route_hits(self, *, progress: Callable[[str], None] | None = None
+                         ) -> tuple[list[Hit], list[str]]:
+        """배포 커밋에서 라우트 선언 줄(FastAPI 모양)을 레포마다 `git grep -n`(정규식) 한 번으로.
+        `(히트, 잘림 사유)`. 조립은 `flow.routes_from_hits`가 한다 — 여기는 줄을 모을 뿐이다."""
+        hits: list[Hit] = []
+        notes: list[str] = []
+        for repo, commit in self.pinned().items():
+            if progress:
+                progress(f"{repo}: 라우트 선언 찾는 중")
+            got = await self._reader.grep(repo, commit, list(flowgraph.ROUTE_PATTERNS),
+                                          max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)
+            if got.status == "error" or not isinstance(got.data, str):
+                continue
+            if not got.envelope.complete:
+                notes.append(f"{repo}: 라우트 찾기가 잘렸다({got.envelope.truncated_reason}) — "
+                             f"끝점이 빠졌을 수 있다")
+            hits += parse_grep(repo, commit, got.data)
+        return hits, notes
+
     # ── 서비스 해석 ──────────────────────────────────────────────
 
     def _resolve(self, service: str, source: str):

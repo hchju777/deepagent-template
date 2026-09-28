@@ -619,7 +619,7 @@ CASES = [
   '    for repo, n in sorted(shared_code.items()):', '    for repo, n in []:',
   ["tests/knowledge/test_flow.py::test_같은_코드를_띄우는_서비스는_레포를_거쳐_경로가_난다"]),
  ("코드에서 못 찾은 이름을 안 센다", ROOT / "src/knowledge/flow.py",
-  '            "unreferenced": len(resources - coded)}', '            "unreferenced": 0}',
+  '            "unreferenced": len(resources - coded),', '            "unreferenced": 0,',
   ["tests/knowledge/test_flow.py::test_요약과_권고"]),
  ("근거 줄이 합친 층보다 레포 grep을 먼저 집는다", ROOT / "src/knowledge/flow.py",
   '        if svc_name in own:', '        if False:',
@@ -649,8 +649,8 @@ CASES = [
   '        done = subprocess.run([binary, "export", "graphml", "--graph", str(graph_json)],',
   ["tests/knowledge/test_graph_build.py::test_wiki는_graph_json_옆에_생기고_없으면_건너뛴다"]),
  ("흐름 텍스트에 코드 층이 섞인다", ROOT / "src/knowledge/flow.py",
-  '    links = [e for e in graph["links"] if e.get("origin") == "config"',
-  '    links = [e for e in graph["links"] if e.get("origin") != "runs"',
+  '    links = [e for e in graph["links"] if (e.get("origin") == "config" or e["relation"] == "serves")',
+  '    links = [e for e in graph["links"] if (e.get("origin") != "runs" or e["relation"] == "serves")',
   ["tests/knowledge/test_flow.py::test_흐름_텍스트는_config_층만_씨앗의_이웃_그리고_닿은_서비스의_토픽"]),
  ("흐름 텍스트가 예산을 안 지킨다", ROOT / "src/knowledge/flow.py",
   '        if used + len(line) + 1 > budget and out:', '        if False:',
@@ -660,7 +660,7 @@ CASES = [
   '    return frozenset()',
   ["tests/application/test_briefing.py::test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다"]),
  ("증거의 이름을 씨앗으로 안 쓴다", ROOT / "src/application/briefing.py",
-  '    texts += [f"{ref.summary}\\n{ref.body}" for ref in state.evidence]', '    texts += []',
+  '    seeds_from += [f"{ref.summary}\\n{ref.body}" for ref in state.evidence]', '    seeds_from += []',
   ["tests/application/test_briefing.py::test_흐름_블록은_증상과_증거의_이름을_씨앗으로_config_층만_싣는다"]),
  ("낡은 그래프를 조사에 싣는다", ROOT / "src/__main__.py",
   '    if stale:\n        return None, "그래프 낡음 — 브리핑에 안 싣는다: " + " · ".join(stale)',
@@ -702,7 +702,7 @@ CASES = [
   '_MAX_NAMES = 8', '_MAX_NAMES = 80',
   ["tests/knowledge/test_flow.py::test_관계당_여덟_개까지만_적고_나머지는_센다"]),
  ("2단계 서비스를 안 접는다", ROOT / "src/knowledge/flow.py",
-  '            if len(ids) > 1:\n                body = " · ".join(parts)', '            if False:\n                body = " · ".join(parts)',
+  '            if len(ids) > 1:\n                out.append(f"{repo}', '            if False:\n                out.append(f"{repo}',
   ["tests/knowledge/test_flow.py::test_2단계_서비스도_같은_config면_접는다"]),
  ("코드 층 방향을 안 보탠다", ROOT / "src/knowledge/flow.py",
   '        tail = code_direction(node_id) if ambiguous else ""', '        tail = ""',
@@ -717,6 +717,35 @@ CASES = [
  ("스텁이 모르는 그룹에 lag 0을 준다", ROOT / "src/infrastructure/stubs.py",
   '        if lag is None:\n            # 모르는 그룹에', '        if False:\n            # 모르는 그룹에',
   ["tests/infrastructure/test_stubs.py::test_group_offsets는_모르는_그룹에_lag_0을_지어내지_않는다"]),
+ ("include_router의 prefix를 안 붙인다", ROOT / "src/knowledge/flow.py",
+  '                prefix = _join_path(outer[0], prefix)', '                prefix = prefix',
+  ["tests/knowledge/test_flow.py::test_라우트_줄에서_끝점을_조립한다"]),
+ ("못 이은 prefix를 EXTRACTED로 속인다", ROOT / "src/knowledge/flow.py",
+  '                confidence = "INFERRED"', '                confidence = "EXTRACTED"',
+  ["tests/knowledge/test_flow.py::test_라우트_줄에서_끝점을_조립한다"]),
+ ("라우트에서 테스트 파일을 안 뺀다", ROOT / "src/knowledge/flow.py",
+  '        if _is_noise(hit.file, hit.text):\n            continue\n        m = _ROUTER_DEF.search(hit.text)',
+  '        if False:\n            continue\n        m = _ROUTER_DEF.search(hit.text)',
+  ["tests/knowledge/test_flow.py::test_라우트_줄에서_끝점을_조립한다",
+   "tests/infrastructure/test_deployed_code.py::test_라우트_히트는_배포_커밋의_git_grep이고_테스트_파일은_뺀다"]),
+ ("등재 path의 꼬리로 안 잇는다", ROOT / "src/knowledge/flow.py",
+  '            if len(tails) == 1:\n                target = tails[0]', '            if False:\n                target = tails[0]',
+  ["tests/knowledge/test_flow.py::test_등재_path와_코드_끝점을_잇는다"]),
+ ("서빙 미상을 안 센다", ROOT / "src/knowledge/flow.py",
+  '            "endpoints_unserved": sum(1 for n in endpoints if n["id"] not in served)}',
+  '            "endpoints_unserved": 0}',
+  ["tests/knowledge/test_flow.py::test_등재_path와_코드_끝점을_잇는다"]),
+ ("블록이 serves를 뺀다", ROOT / "src/knowledge/flow.py",
+  '    links = [e for e in graph["links"] if (e.get("origin") == "config" or e["relation"] == "serves")',
+  '    links = [e for e in graph["links"] if e.get("origin") == "config"',
+  ["tests/knowledge/test_flow.py::test_끝점_씨앗은_serves_줄이_맨_앞이고_서비스_다음_순위다"]),
+ ("블록이 접수 경로를 씨앗으로 안 쓴다", B,
+  '    seeds_from = [state.case.symptom, *texts]', '    seeds_from = [state.case.symptom]',
+  ["tests/application/test_briefing.py::test_흐름_블록은_접수_경로의_path를_씨앗으로_쓴다"]),
+ ("예시의 code.grep이 서빙 서비스를 안 채운다", B,
+  '                                             **({"service": served[0]} if len(served) == 1 else {})}))',
+  '                                             }))',
+  ["tests/application/test_briefing.py::test_frame_예시의_code_grep은_서빙_서비스를_안다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -744,7 +773,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 175, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 183, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -23,8 +23,8 @@ from html import escape
 REPO_COLORS = ("#3987e5", "#d95926", "#199e70", "#d55181",
                "#c98500", "#9085e9", "#008300", "#e66767")
 OTHER_COLOR = "#8a8f98"
-KIND_ORDER = ("topic", "collection", "rediskey", "group")
-KIND_LABEL = {"topic": "토픽", "collection": "컬렉션", "rediskey": "redis 키", "group": "컨슈머 그룹"}
+KIND_ORDER = ("endpoint", "topic", "collection", "rediskey", "group")
+KIND_LABEL = {"endpoint": "끝점", "topic": "토픽", "collection": "컬렉션", "rediskey": "redis 키", "group": "컨슈머 그룹"}
 
 
 def render(overlay: dict, *, title: str, built_at: str, commits: dict[str, str]) -> str:
@@ -118,8 +118,8 @@ button.clear{background:var(--panel);color:var(--ink);border:1px solid var(--rul
 const D = JSON.parse(document.getElementById('data').textContent);
 const NS = 'http://www.w3.org/2000/svg';
 const OUT = new Set(['writes','produces']), IN = new Set(['reads','consumes','consumes_as']);
-const RELS = ['produces','consumes','writes','reads','consumes_as','declares','mentions'];
-const state = {rel: new Set(['produces','consumes','writes','reads','consumes_as']), kind: new Set(D.kind_order), focus: null};
+const RELS = ['serves','produces','consumes','writes','reads','consumes_as','declares','mentions'];
+const state = {rel: new Set(['serves','produces','consumes','writes','reads','consumes_as']), kind: new Set(D.kind_order), focus: null};
 const byId = Object.fromEntries(D.nodes.map(n => [n.id, n]));
 const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
 const color = n => D.colors[n.repo] || '#8a8f98';

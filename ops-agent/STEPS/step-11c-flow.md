@@ -1,6 +1,6 @@
 # 11c — 데이터 흐름 그래프
 
-> 상태: 진행 중 (커밋 4/6 — 다음은 커밋 5 끝점 노드). 앞: [11a](step-11a-code.md). 뒤: [11b](step-11b-trace.md) → 12a.
+> 상태: 진행 중 (커밋 5/6 — 다음은 커밋 6 재측정). 앞: [11a](step-11a-code.md). 뒤: [11b](step-11b-trace.md) → 12a.
 
 ## 왜 이 스텝인가
 
@@ -374,6 +374,26 @@ trace를 읽으니 원인은 모델이 아니라 우리 쪽에 있었다.
   엔진과 요약이 같이 쓴다), 스텁은 모르는 그룹에 실어댑터처럼 "커밋된 오프셋이 없다".
 - 측정판의 케이스는 config에 실제로 있는 점검(`badge_all_zero`)으로 열리고 api 코드에 라우트 한 줄이
   있어, 출발점 줄과 예시 ①②가 측정판에서도 실제로 찍힌다(프롬프트 파일로 확인).
+
+커밋 5도 계획대로 들어갔고 ✅, 계획과 다른 점과 덧붙인 점은 이렇다:
+
+- 라우트 줄은 `git grep -e`(BRE라 `|` 없이 패턴 여덟 개)로 레포마다 한 번 모으고(`route_hits`),
+  조립은 순수 함수(`flow.routes_from_hits`)다. 같은 파일의 `APIRouter(prefix)` + 데코레이터 꼬리,
+  `include_router(mod.router, prefix)`는 **모듈 이름 = 파일 이름**일 때만 앞에 붙인다(EXTRACTED). 레포에
+  include_router가 있는데 못 이었으면 INFERRED이고, `add_endpoints`가 등재 path의 꼬리와 정확히 하나
+  맞을 때 그 항목에 붙인다. 파일에 APIRouter가 없는 데코레이터는 앱 직결(`@app.get`)로 그대로 EXTRACTED.
+  문서·테스트·주석 줄은 코드 엣지와 같은 필터로 뺀다.
+- 등재 항목은 코드에 없어도 노드다(serves 엣지만 없다). serves의 출발점은 레포에 서비스가 하나면 그
+  서비스, 여럿이면 레포 — 코드 엣지와 같은 규칙이다. 브리핑 예시의 `code.grep`은 **서비스가 하나로**
+  잡혔을 때만 `service`를 채운다.
+- 블록: `serves`는 코드에서 왔지만 배선이라 config 엣지와 같이 싣는다. 끝점 씨앗에 닿은 서비스의 2단계
+  줄은 토픽만이 아니라 **전부**다 — 사다리의 다음 칸이 "그 코드가 읽는 데이터"이고 그게 declares에 있다
+  (자원 씨앗에 닿은 서비스는 전처럼 토픽만). 보여 줄 관계가 없는 2단계 서비스는 줄을 안 낸다 — 측정판에서
+  `api [service]: (config 엣지 없음)`이 "아무것도 없다"로 읽혔다. 측정판 첫 프롬프트는 이제
+  `/summary/badge [endpoint]: serves: api` / `api [service · dt-api]: serves: … · declares: …` 두 줄이다.
+- `code graph` 진행줄과 권고, `code status`에 "끝점 N개 (등재 M · 서빙 미상 K)"가 붙는다. flow.html에
+  끝점 열과 serves 선이 는다. `code.flow(path)`는 이름 매칭이 라벨이라 그대로 끝점에도 답한다.
+- 끝점 → 자원(reads) 엣지는 없다. 11b 커밋 2가 채운다.
 
 ## 검토 포인트
 

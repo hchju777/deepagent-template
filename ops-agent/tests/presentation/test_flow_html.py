@@ -61,3 +61,16 @@ def test_아홉_번째_레포부터는_회색이다():
     data = json.loads(re.search(r'<script id="data" type="application/json">(.*?)</script>', page, re.S).group(1))
     assert data["colors"]["r08"] == flow_html.OTHER_COLOR and data["colors"]["r09"] == flow_html.OTHER_COLOR
     assert len({data["colors"][f"r{i:02d}"] for i in range(8)}) == 8
+
+
+def test_끝점_종류와_serves_엣지를_그린다():
+    overlay = {"nodes": [{"id": "service_api", "label": "api", "type": "service", "repo": "dt-api"},
+                         {"id": "endpoint_x", "label": "/summary/badge", "type": "endpoint", "method": "POST"}],
+               "links": [{"source": "service_api", "target": "endpoint_x", "relation": "serves", "origin": "code",
+                          "confidence": "EXTRACTED", "source_file": "api/r.py", "source_location": "L5"}]}
+    page = flow_html.render(overlay, title="t", built_at="b", commits={})
+    data = json.loads(re.search(r'<script id="data" type="application/json">(.*?)</script>', page, re.S).group(1)
+                      .replace("<\\/", "</"))
+    assert "endpoint" in data["kind_order"] and data["kind_label"]["endpoint"]
+    assert [e["relation"] for e in data["links"]] == ["serves"]
+    assert "'serves'" in page, "그리는 관계 목록에 serves가 있어야 선이 보인다"

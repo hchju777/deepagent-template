@@ -543,6 +543,13 @@ def test_2단계_서비스도_같은_config면_접는다():
     lines = flow.flow_text(_shared_graph(), ["topic_0"], budget=10_000).splitlines()
     assert lines[0].startswith("t.00 [topic]:")
     assert len(lines) == 2 and lines[1].startswith("dt-core{processor,sink} [service · dt-core 공유 config]:")
+    # 보여 줄 관계가 없는 2단계 서비스는 줄을 안 낸다("(config 엣지 없음)"이 없는 것처럼 읽혔다).
+    g = _shared_graph()
+    g["nodes"].append({"id": "collection_c", "label": "c_only", "type": "collection"})
+    g["links"] = [e for e in g["links"] if not (e["source"] == "service_sink" and e["target"].startswith("topic_"))]
+    g["links"].append({"source": "service_sink", "target": "collection_c", "relation": "declares",
+                       "origin": "config", "confidence": "EXTRACTED"})
+    assert flow.flow_text(g, ["collection_c"], budget=10_000).splitlines() == ["c_only [collection]: declares: sink"]
 
 
 def test_config가_못_가른_방향은_코드_층_한_줄로_보탠다():
@@ -563,3 +570,76 @@ def test_씨앗은_토큰_단위로_맞추고_자원은_셋까지다():
     assert flow.find_seeds(g, ["alarm 컬렉션이 비었다"]) == ["collection_alarm"]
     many = flow.find_seeds(g, ["t.00 t.01 t.02 t.03 t.04 sink processor"])
     assert many[:2] == ["service_processor", "service_sink"] and len(many) == 5
+
+
+# ── 끝점 노드 (11c 커밋 5) — 사람이 적지 않는다. 우리 rest.entries의 path와 api 레포의 라우트 선언에서.
+
+def _route_hits():
+    return [Hit("dt-api", "c", "api/routers/line.py", 1, 'router = APIRouter(prefix="/line", tags=["line"])'),
+            Hit("dt-api", "c", "api/routers/line.py", 5, '@router.get("/status", response_model=list[LineStatus])'),
+            Hit("dt-api", "c", "api/routers/line.py", 9, '@router.post("/status/{line_id}/ack")'),
+            Hit("dt-api", "c", "api/routers/orphan.py", 1, 'router = APIRouter()'),
+            Hit("dt-api", "c", "api/routers/orphan.py", 3, '@router.post("/x")'),
+            Hit("dt-api", "c", "api/main.py", 7, 'app.include_router(line.router, prefix="/api/v1")'),
+            Hit("dt-api", "c", "api/main.py", 9, '@app.get("/health")'),
+            Hit("dt-api", "c", "tests/test_line.py", 2, '@router.get("/not-real")')]
+
+
+def test_라우트_줄에서_끝점을_조립한다():
+    """같은 파일의 `APIRouter(prefix)` + 데코레이터 꼬리, 그 위에 앱 조립부의 `include_router(mod.router,
+    prefix)`가 모듈 이름으로 이어지면 한 겹 더(EXTRACTED). include_router가 레포에 있는데 이 파일로 못
+    이었으면 INFERRED — prefix 한 겹이 빠졌을 수 있다. 테스트 파일은 뺀다."""
+    routes = {(r.method, r.path): r for r in flow.routes_from_hits(_route_hits())}
+    assert set(routes) == {("GET", "/api/v1/line/status"), ("POST", "/api/v1/line/status/{line_id}/ack"),
+                           ("POST", "/x"), ("GET", "/health")}
+    assert routes[("GET", "/api/v1/line/status")].confidence == "EXTRACTED"
+    assert routes[("GET", "/api/v1/line/status")].file == "api/routers/line.py"
+    assert routes[("GET", "/api/v1/line/status")].line == 5
+    assert routes[("POST", "/x")].confidence == "INFERRED"
+    assert routes[("GET", "/health")].confidence == "EXTRACTED"
+
+
+def test_등재_path와_코드_끝점을_잇는다():
+    """등재 항목은 코드에 없어도 노드다(등재가 곧 존재의 증거) — 단 serves 엣지가 없다. 코드 라우트는
+    레포에 서비스가 하나면 그 서비스가, 여럿이면 레포가 serves한다. prefix를 못 이은 라우트(INFERRED)가
+    등재 path의 꼬리와 같으면 그 항목에 붙는다."""
+    g = _lead_graph()
+    routes = [flow.Route("dt-api", "POST", "/summary/badge", "api/r.py", 5, "EXTRACTED", '@router.post("/badge")'),
+              flow.Route("dt-api", "GET", "/lines", "api/l.py", 2, "INFERRED", '@router.get("/lines")'),
+              flow.Route("dt-core", "GET", "/internal/ping", "shared/ping.py", 1, "EXTRACTED", '@app.get("/internal/ping")')]
+    entries = {"summary_badge": ("POST", "/summary/badge"), "lines": ("GET", "/api/v1/lines"),
+               "oee": ("POST", "/api/v1/oee/summary")}
+    g = flow.add_endpoints(g, routes=routes, entries=entries)
+    ep = {n["label"]: n for n in g["nodes"] if n["type"] == "endpoint"}
+    assert set(ep) == {"/summary/badge", "/api/v1/lines", "/api/v1/oee/summary", "/internal/ping"}
+    assert ep["/summary/badge"]["entry"] == "summary_badge" and ep["/summary/badge"]["method"] == "POST"
+    serves = {(e["source"], e["target"], e["confidence"]) for e in g["links"] if e["relation"] == "serves"}
+    assert ("service_api", ep["/summary/badge"]["id"], "EXTRACTED") in serves
+    assert ("service_api", ep["/api/v1/lines"]["id"], "INFERRED") in serves      # 꼬리로 이었다
+    assert ("repo_dt_core", ep["/internal/ping"]["id"], "EXTRACTED") in serves    # 공유 레포는 레포가
+    assert not any(t == ep["/api/v1/oee/summary"]["id"] for _, t, _ in serves)    # 서빙 미상
+    s = flow.summary(g)
+    assert (s["endpoints"], s["endpoints_registered"], s["endpoints_unserved"]) == (4, 3, 1)
+    assert any("끝점 4개 중 등재 3개" in line and "못 찾은 1개" in line for line in flow.advise(g, _lead_graph_topology()))
+    assert flow.serving_services(g, "/summary/badge") == ["api"]
+    assert flow.serving_services(g, "/internal/ping") == []                       # 레포는 서비스가 아니다
+
+
+def _lead_graph_topology():
+    return Topology(services={"processor": Service(repo="dt-core", role="가공"),
+                              "sink": Service(repo="dt-core", role="저장"),
+                              "api": Service(repo="dt-api", role="읽기")})
+
+
+def test_끝점_씨앗은_serves_줄이_맨_앞이고_서비스_다음_순위다():
+    g = flow.add_endpoints(_lead_graph(), routes=[
+        flow.Route("dt-api", "POST", "/summary/badge", "api/r.py", 5, "EXTRACTED", "")],
+        entries={"summary_badge": ("POST", "/summary/badge")})
+    seeds = flow.find_seeds(g, ["판정이 본 읽기 rest.query entry='summary_badge' (POST /summary/badge) · mx.alarm.main"])
+    assert seeds[0].startswith("endpoint_") and seeds[1] == "topic_mx_alarm_main"
+    text = flow.flow_text(g, seeds[:1], budget=10_000)
+    # 끝점 씨앗에 닿은 서비스는 토픽만이 아니라 전부 — 다음 칸이 "그 코드가 읽는 데이터"다.
+    assert text.splitlines() == ["/summary/badge [endpoint]: serves: api",
+                                 "api [service · dt-api]: serves: /summary/badge · declares: alarm_events"]
+    # api 서비스 줄에도 serves가 보인다 — config 엣지가 아니지만 배선이다.
+    assert "serves: /summary/badge" in flow.flow_text(g, ["service_api"], budget=10_000)

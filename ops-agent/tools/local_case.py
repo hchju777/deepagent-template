@@ -107,7 +107,10 @@ API_FILES = {
     "api/alarms.py": '''"""알람 화면 — 최근 alarm_window_min 분의 alarm_events와 alarm:stats:{line} 배지."""
 
 
-@router.post("/summary/badge")
+router = APIRouter(prefix="/summary")
+
+
+@router.post("/badge")
 def summary_badge(cfg, mongo, redis):
     return {line: badge(cfg, redis, line) for line in cfg["lines"]}
 

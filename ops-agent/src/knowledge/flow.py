@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from collections import deque
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Callable, Iterable
 
 from src.knowledge.schema import FLOW_FIELDS, Service, Topology
@@ -485,13 +486,13 @@ def render_path(graph: dict, edges: list[dict]) -> str:
     return " ".join(out)
 
 
-RESOURCE_TYPES = ("topic", "group", "collection", "rediskey")
+RESOURCE_TYPES = ("topic", "group", "collection", "rediskey", "endpoint")
 
 
 # ── 리드용 텍스트 — 브리핑의 <데이터 흐름>과 `code.flow` ─────────────────
 
-_FLOW_ORDER = ("produces", "consumes", "consumes_as", "declares")
-_KIND_RANK = {"service": 0, "topic": 1, "collection": 2, "rediskey": 3, "group": 4}
+_FLOW_ORDER = ("serves", "produces", "consumes", "consumes_as", "declares")
+_KIND_RANK = {"service": 0, "endpoint": 1, "topic": 2, "collection": 3, "rediskey": 4, "group": 5}
 _MIN_SEED = 3
 _MAX_RESOURCE_SEEDS = 3
 _MAX_NAMES = 8
@@ -521,7 +522,9 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
     토픽 골격(누가 내고 누가 받나). `budget`자에서 끊고 끊었다고 적는다.
     `레포{a,b}`는 같은 config를 쓰는 서비스 전부 — 어느 쪽인지는 config가 모른다."""
     by_id = {n["id"]: n for n in graph["nodes"]}
-    links = [e for e in graph["links"] if e.get("origin") == "config"
+    # `serves`는 코드에서 왔지만 배선이다(라우트 선언은 이름 매칭이 아니라 구문이다) — 끝점 줄이 서야
+    # 접수 경로의 path에서 서빙 서비스로 첫 홉이 이어진다.
+    links = [e for e in graph["links"] if (e.get("origin") == "config" or e["relation"] == "serves")
              and e["source"] in by_id and e["target"] in by_id]
     if not links:
         return "(config에서 뽑은 흐름이 없다)"
@@ -591,32 +594,41 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
         tail = code_direction(node_id) if ambiguous else ""
         return f"{head}: {' · '.join(parts)}{tail}" if parts else f"{head}: (config 엣지 없음)"
 
-    def touched_lines(service_ids) -> list[str]:
-        # 2단계의 서비스 줄 — 같은 레포의 서비스들이 같은 토픽 줄을 가지면 한 줄로 접는다. 사내에서
-        # processor 다섯이 같은 토픽 15개를 다섯 번 반복해 절단(+4줄)을 불렀다.
+    def touched_lines(service_ids, *, topics_only: bool) -> list[str]:
+        # 2단계의 서비스 줄 — 같은 레포의 서비스들이 같은 줄을 가지면 한 줄로 접는다. 사내에서
+        # processor 다섯이 같은 토픽 15개를 다섯 번 반복해 절단(+4줄)을 불렀다. 보여 줄 관계가 없는
+        # 서비스는 줄을 안 낸다 — "(config 엣지 없음)"은 토픽만 걸렀다는 뜻인데 없는 것처럼 읽힌다.
         by_key: dict[tuple, list[str]] = {}
         for sid in sorted(service_ids, key=lambda s: by_id[s]["label"]):
-            key = (by_id[sid].get("repo", ""), tuple(service_parts(sid, topics_only=True)))
-            by_key.setdefault(key, []).append(sid)
+            parts = tuple(service_parts(sid, topics_only=topics_only))
+            if not parts:
+                continue
+            by_key.setdefault((by_id[sid].get("repo", ""), parts), []).append(sid)
         out = []
         for (repo, parts), ids in by_key.items():
             if len(ids) > 1:
-                body = " · ".join(parts) if parts else "(config 엣지 없음)"
                 out.append(f"{repo}{{{','.join(by_id[i]['label'] for i in ids)}}} "
-                           f"[service · {repo} 공유 config]: {body}")
+                           f"[service · {repo} 공유 config]: {' · '.join(parts)}")
             else:
-                out.append(line_for(ids[0], topics_only=True))
+                out.append(line_for(ids[0], topics_only=topics_only))
         return out
 
     lines: list[str] = []
     if seeds:
-        touched: list[str] = []
+        # 자원 씨앗에 닿은 서비스는 토픽만(15개 토픽이 declares 수십 개와 같이 오면 예산이 끝난다).
+        # 끝점 씨앗에 닿은 서비스는 전부 — 사다리의 다음 칸이 "그 코드가 읽는 데이터"이고, 그게
+        # declares에 있다.
+        via_topics: list[str] = []
+        via_endpoint: list[str] = []
         for sid in seeds:
             if sid in by_id:
                 lines.append(line_for(sid))
-                if by_id[sid]["type"] != "service":
-                    touched += [e["source"] for e in links if e["target"] == sid]
-        lines += touched_lines(set(touched) - set(seeds))
+                if by_id[sid]["type"] == "endpoint":
+                    via_endpoint += [e["source"] for e in links if e["target"] == sid]
+                elif by_id[sid]["type"] != "service":
+                    via_topics += [e["source"] for e in links if e["target"] == sid]
+        lines += touched_lines(set(via_endpoint) - set(seeds), topics_only=False)
+        lines += touched_lines(set(via_topics) - set(seeds) - set(via_endpoint), topics_only=True)
     else:
         topics = [n for n in graph["nodes"] if n.get("type") == "topic"]
         degree = {n["id"]: sum(1 for e in links if e["target"] == n["id"]) for n in topics}
@@ -657,12 +669,18 @@ def summary(graph: dict) -> dict:
         kinds[n.get("type", "?")] = kinds.get(n.get("type", "?"), 0) + 1
     # config에만 보이고 코드 줄에서 직접 못 찾은 이름. 권고가 아니라 숫자다 — 사내 코드는
     # 키를 Enum·공통 헬퍼 뒤에 두어 "안 쓴다"가 아니라 "텍스트로는 못 찾는다"가 맞다.
-    resources = {n["id"] for n in graph["nodes"] if n.get("type") in RESOURCE_TYPES}
+    resources = {n["id"] for n in graph["nodes"]
+                 if n.get("type") in RESOURCE_TYPES and n.get("type") != "endpoint"}
     coded = {e["target"] for e in links if e.get("origin", "code") == "code"}
+    endpoints = [n for n in graph["nodes"] if n.get("type") == "endpoint"]
+    served = {e["target"] for e in links if e["relation"] == "serves"}
     return {"nodes": len(graph["nodes"]), "links": len(links), "kinds": kinds,
             "repo_level": sum(1 for e in links if e.get("attributed") == "repo"),
             "ambiguous": sum(1 for e in links if e.get("confidence") == "AMBIGUOUS"),
-            "unreferenced": len(resources - coded)}
+            "unreferenced": len(resources - coded),
+            "endpoints": len(endpoints),
+            "endpoints_registered": sum(1 for n in endpoints if n.get("entry")),
+            "endpoints_unserved": sum(1 for n in endpoints if n["id"] not in served)}
 
 
 def advise(graph: dict, topology: Topology) -> list[str]:
@@ -691,7 +709,154 @@ def advise(graph: dict, topology: Topology) -> list[str]:
         sid = f"service_{_slug(name)}"
         if not any(e["source"] == sid and e["relation"] != _BRIDGE for e in links):
             out.append(f"{name}: config에도 코드에도 자원이 없다 — 레포·역할 선언을 의심하라")
+    s = summary(graph)
+    if s["endpoints"]:
+        out.append(f"끝점 {s['endpoints']}개 중 등재 {s['endpoints_registered']}개 · "
+                   f"서빙 서비스를 못 찾은 {s['endpoints_unserved']}개")
     return out
+
+
+# ── 끝점 (11c 커밋 5) ──────────────────────────────────────────────────────────
+# 사람이 적지 않는다. 우리 `rest.entries`의 path와 api 레포의 라우트 선언에서 만든다. 끝점에서
+# 자원으로 가는 reads 엣지는 여기서 만들지 않는다 — 핸들러를 따라가는 것은 11b 추적기의 일이다.
+
+# `git grep -e` 기본 정규식(BRE)이라 `|`를 안 쓴다 — 패턴마다 한 줄. `(`는 BRE에서 리터럴이다.
+ROUTE_PATTERNS = ("APIRouter(", "include_router(",
+                  "@[A-Za-z_.]*\\.get(", "@[A-Za-z_.]*\\.post(", "@[A-Za-z_.]*\\.put(",
+                  "@[A-Za-z_.]*\\.patch(", "@[A-Za-z_.]*\\.delete(", "@[A-Za-z_.]*\\.api_route(")
+_DECORATOR = re.compile(r"@([A-Za-z_][\w.]*)\.(get|post|put|patch|delete|api_route)\(\s*['\"]([^'\"]*)['\"]")
+_ROUTER_DEF = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*APIRouter\(")
+_PREFIX = re.compile(r"prefix\s*=\s*['\"]([^'\"]*)['\"]")
+_INCLUDE = re.compile(r"include_router\(\s*([A-Za-z_][\w.]*)")
+
+
+@dataclass(frozen=True)
+class Route:
+    repo: str
+    method: str
+    path: str
+    file: str
+    line: int
+    confidence: str      # EXTRACTED: prefix를 다 이었다 / INFERRED: 앱 조립부의 prefix 한 겹을 못 이었을 수 있다
+    text: str
+
+
+def _join_path(*parts: str) -> str:
+    body = "/".join(p.strip("/") for p in parts if p and p.strip("/"))
+    return "/" + body if body else "/"
+
+
+def routes_from_hits(hits: Iterable[Hit]) -> list[Route]:
+    """라우트 선언 줄들에서 끝점 경로를 조립한다 — 사내 FastAPI 모양(확인됨).
+
+    같은 파일의 `router = APIRouter(prefix=…)`에 데코레이터의 꼬리를 붙이고, 앱 조립부의
+    `include_router(mod.router, prefix=…)`가 **모듈 이름 = 파일 이름**으로 이어지면 한 겹 더 붙인다
+    (EXTRACTED). 레포에 include_router가 있는데 이 파일로 못 이었으면 INFERRED — prefix 한 겹이 빠졌을
+    수 있어 `add_endpoints`가 등재 path의 꼬리로 다시 맞춘다. 파일에 APIRouter가 없으면 앱에 직접 단
+    것(`@app.get`)이라 그대로다. 문서·테스트·주석 줄은 뺀다(`_is_noise`).
+    """
+    routers: dict[tuple[str, str], dict[str, str]] = {}
+    includes: dict[str, list[tuple[str, str]]] = {}
+    decorators: list[tuple[Hit, str, str, str]] = []
+    for hit in sorted(hits, key=lambda h: (h.repo, h.file, h.line)):
+        if _is_noise(hit.file, hit.text):
+            continue
+        m = _ROUTER_DEF.search(hit.text)
+        if m:
+            pm = _PREFIX.search(hit.text)
+            routers.setdefault((hit.repo, hit.file), {})[m.group(1)] = pm.group(1) if pm else ""
+            continue
+        m = _INCLUDE.search(hit.text)
+        if m:
+            expr = m.group(1)
+            module = expr.rsplit(".", 1)[0].rsplit(".", 1)[-1] if "." in expr else expr.removesuffix("_router")
+            pm = _PREFIX.search(hit.text)
+            includes.setdefault(hit.repo, []).append((module, pm.group(1) if pm else ""))
+            continue
+        for m in _DECORATOR.finditer(hit.text):
+            decorators.append((hit, m.group(1), m.group(2), m.group(3)))
+    out: list[Route] = []
+    seen: set[tuple[str, str, str]] = set()
+    for hit, var, verb, tail in decorators:
+        local = routers.get((hit.repo, hit.file), {})
+        if var in local:
+            prefix, on_router = local[var], True
+        elif len(local) == 1:
+            prefix, on_router = next(iter(local.values())), True
+        else:
+            prefix, on_router = "", False
+        confidence = "EXTRACTED"
+        if on_router:
+            outer = [p for mod, p in includes.get(hit.repo, []) if mod == PurePosixPath(hit.file).stem]
+            if outer:
+                prefix = _join_path(outer[0], prefix)
+            elif includes.get(hit.repo):
+                confidence = "INFERRED"
+        method = "ANY" if verb == "api_route" else verb.upper()
+        path = _join_path(prefix, tail)
+        key = (hit.repo, method, path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(Route(hit.repo, method, path, hit.file, hit.line, confidence, hit.text.strip()))
+    return out
+
+
+def add_endpoints(graph: dict, *, routes: Iterable[Route], entries: dict[str, tuple[str, str]]) -> dict:
+    """끝점 노드와 `serves` 엣지를 오버레이에 더한 새 그래프.
+
+    `entries`는 우리가 부를 수 있는 등재 항목 `{이름: (method, path)}` — 코드에서 못 찾아도 노드는
+    선다(등재가 곧 존재의 증거) 단 serves 엣지가 없다. 코드 라우트는 그 레포에 서비스가 하나면 그
+    서비스가, 여럿이면 레포가 serves한다(코드 엣지와 같은 규칙, `runs` 엣지로 안다). prefix를 못 이은
+    라우트(INFERRED)는 등재 path의 꼬리와 정확히 하나만 같을 때 그 항목에 붙는다.
+    """
+    nodes = {n["id"]: dict(n) for n in graph["nodes"]}
+    links = list(graph["links"])
+    runs: dict[str, list[str]] = {}
+    for e in links:
+        if e["relation"] == _BRIDGE:
+            runs.setdefault(e["target"], []).append(e["source"])
+
+    def put(path: str, **extra) -> str:
+        nid = _node_id("endpoint", path)
+        if nid not in nodes:
+            nodes[nid] = {"id": nid, "label": path, "type": "endpoint",
+                          "source_file": extra.pop("source_file", ""),
+                          "source_location": extra.pop("source_location", "L0"), **extra}
+        else:
+            for k, v in extra.items():
+                nodes[nid].setdefault(k, v)
+        return nid
+
+    by_path = {path: name for name, (_, path) in entries.items()}
+    for name, (method, path) in sorted(entries.items()):
+        put(path, method=method, entry=name, declared="entries")
+    for r in sorted(routes, key=lambda r: (r.repo, r.file, r.line, r.method, r.path)):
+        target = r.path
+        if r.path not in by_path and r.confidence == "INFERRED":
+            tails = [p for p in by_path if p.endswith(r.path) and p != r.path]
+            if len(tails) == 1:
+                target = tails[0]
+        nid = put(target, method=r.method, source_file=r.file, source_location=f"L{r.line}")
+        repo_id = f"repo_{_slug(r.repo)}"
+        services = sorted(runs.get(repo_id, []))
+        source, attributed = (services[0], "service") if len(services) == 1 else (repo_id, "repo")
+        if source not in nodes:
+            continue                                  # 토폴로지에 없는 레포 — 걸 데가 없다
+        links.append({"source": source, "target": nid, "relation": "serves",
+                      "confidence": r.confidence, "attributed": attributed, "origin": "code",
+                      "source_file": r.file, "source_location": f"L{r.line}", "repo": r.repo,
+                      "commit": "", "text": r.text})
+    return {**graph, "nodes": list(nodes.values()), "links": links}
+
+
+def serving_services(graph: dict, path: str) -> list[str]:
+    """그 끝점을 serves하는 **서비스** 이름들(레포는 아니다) — 브리핑 예시의 `code.grep`이 service를 채운다."""
+    by_id = {n["id"]: n for n in graph["nodes"]}
+    targets = {n["id"] for n in graph["nodes"] if n.get("type") == "endpoint" and n["label"] == path}
+    return sorted({by_id[e["source"]]["label"] for e in graph["links"]
+                   if e["relation"] == "serves" and e["target"] in targets
+                   and by_id.get(e["source"], {}).get("type") == "service"})
 
 
 def known_names(graph: dict | None) -> str:

@@ -490,6 +490,8 @@ def _flow_repo(root, *, origin):
           '    k = cfg["infra"]["kafka"]\n'
           '    for m in consumer.subscribe(k["consumer"]["topic"]["topic2"], group=k["consumer"]["group_id"]):\n'
           '        mongo[cfg["mongodb_collection"]["alarm"]].insert_one(m)\n')
+    # 라우트 선언 하나 — 끝점 노드(11c 커밋 5). 레포를 두 서비스가 나눠 쓰므로 serves는 레포에 붙는다.
+    write("api/r.py", 'router = APIRouter(prefix="/summary")\n\n\n@router.post("/badge")\ndef badge():\n    return {}\n')
     git("add", "-A", cwd=root)
     git("commit", "-qm", "flow", cwd=root)
 
@@ -580,3 +582,18 @@ def test_그래프가_없으면_status가_만드는_법을_말한다(tmp_path, m
     with pytest.raises(SystemExit, match="code graph"):
         _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "x")
 
+
+
+def test_code_graph가_끝점을_싣고_flow와_status가_말한다(tmp_path, monkeypatch, capsys):
+    """끝점은 사람이 적지 않는다 — 코드의 라우트 선언에서 온다. 공유 레포면 레포가 serves한다."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    assert "끝점 1개 중 등재 0개" in captured.out and "끝점 1개" in captured.err
+    overlay = json.loads((tmp_path / "out" / "graph" / "mx-gumi" / "overlay.json").read_text(encoding="utf-8"))
+    assert [n["label"] for n in overlay["nodes"] if n["type"] == "endpoint"] == ["/summary/badge"]
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "/summary/badge")
+    assert code == 0 and "—serves→ /summary/badge [endpoint]" in captured.out and "api/r.py:L4" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0 and "끝점 1(등재 0 · 서빙 미상 0)" in captured.out

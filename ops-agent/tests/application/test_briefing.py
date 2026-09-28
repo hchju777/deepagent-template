@@ -857,3 +857,30 @@ def test_출발점이_없으면_frame_예시는_전과_같다(state):
     fields = briefing.frame_fields(state, site_config=_site_with_check(), services=("api",))
     tasks = json.loads(fields["example"])["tasks"]
     assert tasks[0]["action"] == "code.config" and "rest.query" not in [t["action"] for t in tasks[:2]]
+
+
+def _graph_with_endpoint():
+    g = json.loads(json.dumps(FLOW_GRAPH))
+    g["nodes"] += [{"id": "service_api", "label": "api", "type": "service", "repo": "dt-api"},
+                   {"id": "endpoint_summary_badge", "label": "/summary/badge", "type": "endpoint",
+                    "method": "POST", "entry": "summary_badge"}]
+    g["links"].append({"source": "service_api", "target": "endpoint_summary_badge", "relation": "serves",
+                       "origin": "code", "confidence": "EXTRACTED", "source_file": "api/r.py", "source_location": "L5"})
+    return g
+
+
+def test_흐름_블록은_접수_경로의_path를_씨앗으로_쓴다():
+    """증상 문장에 그래프 이름이 없어도 접수 경로의 REST path가 끝점 노드에 걸려 첫 줄이 된다."""
+    text = briefing.flow_block(CaseState(case=_patrol_case()), _graph_with_endpoint(),
+                               texts=(briefing.origin_line(_patrol_case(), _site_with_check()),))
+    assert text.splitlines()[1] == "/summary/badge [endpoint]: serves: api"
+    fields = briefing.frame_fields(CaseState(case=_patrol_case()), site_config=_site_with_check(),
+                                   services=("api",), flow_graph=_graph_with_endpoint())
+    assert "/summary/badge [endpoint]: serves: api" in fields["flow"]
+
+
+def test_frame_예시의_code_grep은_서빙_서비스를_안다():
+    fields = briefing.frame_fields(CaseState(case=_patrol_case()), site_config=_site_with_check(),
+                                   services=("api", "sink"), flow_graph=_graph_with_endpoint())
+    tasks = json.loads(fields["example"])["tasks"]
+    assert (tasks[1]["action"], tasks[1]["params"]) == ("code.grep", {"patterns": ["/summary/badge"], "service": "api"})

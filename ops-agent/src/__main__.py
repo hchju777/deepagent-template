@@ -1191,6 +1191,12 @@ def _resolved_commits(site, code) -> tuple[dict[str, str], list[str]]:
     return out, problems
 
 
+def _rest_entries(site) -> dict[str, tuple[str, str]]:
+    rest = site.infra.rest
+    return {name: (entry.method, entry.path)
+            for name, entry in (rest.entries.items() if rest is not None else [])}
+
+
 def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     """흐름 오버레이(+ graphify 심볼 그래프)를 배포 커밋에 박는다. **네트워크 없음.**
 
@@ -1223,13 +1229,20 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         patterns = sorted({p for name in names for p in name.patterns})
         progress(f"이름 {len(names)}개 · 패턴 {len(patterns)}개 · 레포 {len(code.pinned())}개")
         table, notes = await code.flow_hits(patterns, progress=progress)
-        return names, problems + notes, table
+        route_lines, route_notes = await code.route_hits(progress=progress)
+        return names, problems + notes + route_notes, table, route_lines
 
-    names, problems, table = asyncio.run(gather())
+    names, problems, table, route_lines = asyncio.run(gather())
     commits, more = _resolved_commits(site, code)
     problems += more
     overlay = flow.extract(names=names, topology=topology,
                            hits_for=lambda p: table.get(p, []), commits=commits)
+    # 끝점 층 — 우리 등재 항목의 path와 코드의 라우트 선언에서. 사람이 적지 않는다.
+    overlay = flow.add_endpoints(overlay, routes=flow.routes_from_hits(route_lines),
+                                 entries=_rest_entries(site))
+    counts = flow.summary(overlay)
+    progress(f"끝점 {counts['endpoints']}개 (등재 {counts['endpoints_registered']} · "
+             f"서빙 미상 {counts['endpoints_unserved']})")
 
     out_dir = _graph_dir(args, env, gbm, fct)
     binary = gb.find_graphify()
@@ -1326,7 +1339,9 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     summary = flow.summary(json.loads((out_dir / "overlay.json").read_text(encoding="utf-8")))
     print(f"       {'⚠ 낡음' if stale else '✅'} 만든 시각 {meta.built_at} · graphify {meta.graphify}"
           f" · 노드 {len(graph['nodes'])} · 엣지 {len(graph['links'])}"
-          f" · 레포에 붙은 엣지 {summary['repo_level']}")
+          f" · 레포에 붙은 엣지 {summary['repo_level']}"
+          f" · 끝점 {summary.get('endpoints', 0)}(등재 {summary.get('endpoints_registered', 0)}"
+          f" · 서빙 미상 {summary.get('endpoints_unserved', 0)})")
     human = [name for name in ("flow.html", "wiki/index.md") if (out_dir / name).exists()]
     if human:
         print(f"       사람용 {' · '.join(human)}")
