@@ -88,9 +88,100 @@ FILES = {
         'def bad_x():\n'
         '    return broken()\n'),
     "tests/test_line.py": 'def latest():\n    return mongo["line_state"].find()\n',
+    # ── 사내 모양(11b 커밋 2b): Protocol 포트 + Depends(provider) + 부모 클래스 + 클래스 속성 ──
+    "api/ports.py": (
+        'from typing import Protocol\n'
+        '\n'
+        'class HeatServicePort(Protocol):\n'
+        '    def get_heat_status(self, line: str) -> dict: ...\n'
+        '\n'
+        'class GaugePort(Protocol):\n'
+        '    def read(self) -> int: ...\n'),
+    "api/gauges.py": (
+        'from api.ports import GaugePort\n'
+        '\n'
+        'class DialGauge(GaugePort):\n'
+        '    def read(self):\n'
+        '        return mongo["line_state"].count()\n'
+        '\n'
+        'class DigitalGauge(GaugePort):\n'
+        '    def read(self):\n'
+        '        return consumer.lag("mx.alarm.main")\n'),
+    "api/routers/furnace.py": (
+        'from fastapi import APIRouter\n'
+        'from api.heat_deps import HeatServiceDep, get_heat_service\n'
+        'from api import settings\n'
+        'from api.tables import KEY_TABLE\n'
+        'from api.ports import GaugePort\n'
+        'router = APIRouter(prefix="/furnace")\n'
+        '\n'
+        '@router.get("/heat")\n'
+        'async def get_heat_status(line: str, service: HeatServiceDep):\n'
+        '    return await service.get_heat_status(line)\n'
+        '\n'
+        '@router.get("/cfg")\n'
+        'async def cfg_view():\n'
+        '    opts = settings.get("view")\n'
+        '    return opts.get("x")\n'
+        '\n'
+        '@router.get("/local")\n'
+        'async def local_view(line: str):\n'
+        '    svc = get_heat_service()\n'
+        '    return await svc.get_heat_status(line)\n'
+        '\n'
+        '@router.get("/table")\n'
+        'async def table_view():\n'
+        '    return [redis.get(k) for _, k in KEY_TABLE]\n'
+        '\n'
+        '@router.get("/gauge")\n'
+        'async def gauge_view(g: GaugePort):\n'
+        '    return g.read()\n'),
+    "api/heat_deps.py": (
+        'from typing import Annotated\n'
+        'from fastapi import Depends\n'
+        'from api.ports import HeatServicePort\n'
+        'from api.services.heat import HeatService\n'
+        'from api.repos.heat import HeatRepo\n'
+        '\n'
+        'def get_heat_service() -> HeatServicePort:\n'
+        '    return HeatService(repo=HeatRepo())\n'
+        '\n'
+        'HeatServiceDep = Annotated[HeatServicePort, Depends(get_heat_service)]\n'),
+    "api/services/heat.py": (
+        'from api.repos.heat import HeatRepo\n'
+        '\n'
+        'class HeatService:\n'
+        '    def __init__(self, repo: HeatRepo):\n'
+        '        self.repo = repo\n'
+        '\n'
+        '    async def get_heat_status(self, line: str) -> dict:\n'
+        '        return await self.repo.status(line)\n'),
+    "api/repos/base.py": (
+        'class BaseRepo:\n'
+        '    collection = ""\n'
+        '\n'
+        '    async def find_one(self, query):\n'
+        '        return await mongo[self.collection].find_one(query)\n'),
+    "api/repos/heat.py": (
+        'from api.repos.base import BaseRepo\n'
+        '\n'
+        'class HeatRepo(BaseRepo):\n'
+        '    collection = "heat_status"\n'
+        '\n'
+        '    async def status(self, line: str):\n'
+        '        return await self.find_one({"line": line})\n'),
+    "api/tables.py": (
+        'from api.keys import Keys\n'
+        '\n'
+        'KEY_TABLE = [("line", Keys.LINE_STATUS)]\n'),
+    "api/settings.py": 'settings = load()\n',
+    "api/clients/web.py": 'class WebFetcher:\n    def get(self, url):\n        return self._request("GET", url)\n',
+    "api/clients/cache.py": 'class CacheHandle:\n    def get(self, key):\n        return self._conn.get(key)\n',
+    "api/options.py": 'class OptionBag:\n    def get(self, key):\n        return self._data[key]\n',
 }
 
 NAMES = [Name("collection", "line_state", "mongodb_collection.line_state"),
+         Name("collection", "heat_status", "mongodb_collection.heat"),
          Name("rediskey", "line:{id}", "redis_key.line_status"),
          Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic1")]
 
@@ -98,7 +189,12 @@ ROUTES = [Route(REPO, "GET", "/api/v1/line/status", "api/routers/line.py", 6, "E
           Route(REPO, "GET", "/api/v1/line/loose", "api/routers/line.py", 12, "EXTRACTED", ""),
           Route(REPO, "GET", "/api/v1/line/dyn", "api/routers/line.py", 17, "EXTRACTED", ""),
           Route(REPO, "GET", "/api/v1/bad/x", "api/routers/bad.py", 5, "EXTRACTED", ""),
-          Route(REPO, "GET", "/health", "api/main.py", 7, "EXTRACTED", "")]
+          Route(REPO, "GET", "/health", "api/main.py", 7, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/heat", "api/routers/furnace.py", 8, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/cfg", "api/routers/furnace.py", 12, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/local", "api/routers/furnace.py", 17, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/table", "api/routers/furnace.py", 22, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/gauge", "api/routers/furnace.py", 26, "EXTRACTED", "")]
 
 
 class _Source:
@@ -233,3 +329,54 @@ async def test_Tracer는_레포_단위로_파싱과_grep을_캐시하고_gap은_
     again = await tracer.trace("/api/v1/line/status")
     assert again == ok
     assert len(src.reads) == reads_before and len(src.greps) == greps_before, "두 번째는 캐시로 끝나야 한다"
+
+
+# ── 사내 모양 (11b 커밋 2b) — 사내 첫 추적: 156개 전부 깊이 상한, "후보" gap 3,032개(그중 `get` 2,564).
+# 주석이 Protocol 포트라 추상 메서드에서 끝났고, 받는 쪽을 모르는 `.get(`마다 레포의 `def get(` 후보를
+# 다 따라가 옆으로 퍼졌다. 이름은 전부 지어낸 것이다.
+
+async def test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다():
+    """덤으로: 시그니처의 `line: str`은 템플릿 `line:{id}`의 리터럴 `line:`과 겹치지만 따옴표 밖이라 읽기가 아니다."""
+    t, _ = await _trace("/furnace/heat")
+    assert t.status == "ok", t
+    assert [s.qualname for s in t.chain][:4] == [
+        "get_heat_status", "HeatService.get_heat_status", "HeatRepo.status", "BaseRepo.find_one"]
+    assert _reads(t) == {("collection", "heat_status", "확실")}
+    assert t.gaps == (), t.gaps
+
+
+async def test_받는_쪽을_모르는_호출은_후보가_여럿이면_안_따라가고_gap_하나만_남긴다():
+    """`settings.get(...)`·`opts.get(...)` — 레포에 `def get(`이 셋(WebFetcher·CacheHandle·OptionBag).
+    전부 따라가면 사슬이 20줄로 퍼지고 깊이 예산이 잡음에 먹힌다(사내). 인자에 주석이 없는 경우
+    (`loose`)는 전처럼 후보 전부를 추정으로 따라간다."""
+    t, _ = await _trace("/furnace/cfg")
+    assert [s.qualname for s in t.chain] == ["cfg_view"]
+    assert t.reads == ()
+    gaps = [g.why for g in t.gaps]
+    assert any("get" in g and "후보 3개" in g and "안 따라간다" in g for g in gaps), gaps
+    assert len(gaps) == 1, gaps                     # 같은 이름은 한 번만
+
+
+async def test_같은_함수의_지역_변수는_provider의_반환_클래스로_좁힌다():
+    t, _ = await _trace("/furnace/local")
+    assert [s.qualname for s in t.chain][:3] == ["local_view", "get_heat_service", "HeatService.get_heat_status"]
+    assert _reads(t) == {("collection", "heat_status", "확실")}
+    assert t.gaps == ()
+
+
+async def test_함수가_참조하는_모듈_상수표의_이름도_읽기다():
+    """사내 config 키는 `MAPPING = [(Enum.A, Keys.A), …]` 표에 있고 함수는 표를 돈다 — 함수 본문에는
+    식별자가 없다. 표의 줄이 근거이고 등급은 추정이다."""
+    t, _ = await _trace("/furnace/table")
+    assert _reads(t) == {("rediskey", "line:{id}", "추정")}
+    read = t.reads[0]
+    assert (read.file, read.line) == ("api/tables.py", 3)
+
+
+async def test_상속한_구현체가_여럿이면_전부_추정으로_따라가고_gap_하나를_남긴다():
+    """provider가 없는 포트 — `class X(Port)`로 상속한 구현체를 grep으로 찾는다. 둘 이상이면 어느 것이
+    실행되는지 코드로는 모르니 전부 따라가되 읽기는 추정이다."""
+    t, _ = await _trace("/furnace/gauge")
+    assert [s.qualname for s in t.chain] == ["gauge_view", "DialGauge.read", "DigitalGauge.read"]
+    assert _reads(t) == {("collection", "line_state", "추정"), ("topic", "mx.alarm.main", "추정")}
+    assert [g.why for g in t.gaps] == ["read: GaugePort 구현체 2개 — 전부 따라가되 읽기는 추정"]

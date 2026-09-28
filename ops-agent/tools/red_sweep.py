@@ -759,13 +759,14 @@ CASES = [
   '        if node.depth >= max_depth:', '        if False:',
   ["tests/knowledge/test_trace.py::test_깊이_상한에서_멈추고_그렇게_적는다"]),
  ("정의 찾기가 테스트 파일을 안 뺀다", ROOT / "src/knowledge/trace.py",
-  '            if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):', '            if not hit.file.endswith(".py"):',
+  '        for hit in hits:\n            if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):',
+  '        for hit in hits:\n            if not hit.file.endswith(".py"):',
   ["tests/knowledge/test_trace.py::test_심볼_이름으로도_시작하고_테스트_파일의_정의는_뺀다"]),
  ("문법 오류를 gap으로 안 남긴다", ROOT / "src/knowledge/trace.py",
   '                self.parse_gaps[path] = Gap(path, exc.lineno or 0, f"문법 오류로 못 읽었다 — {exc.msg}")', '                pass',
   ["tests/knowledge/test_trace.py::test_문법_오류_파일은_gap이고_계속_간다"]),
  ("추적기가 grep 캐시를 안 쓴다", ROOT / "src/knowledge/trace.py",
-  '        if key in self._defs:', '        if False:',
+  '        key = (name, methods)\n        if key in self._defs:', '        key = (name, methods)\n        if False:',
   ["tests/knowledge/test_trace.py::test_Tracer는_레포_단위로_파싱과_grep을_캐시하고_gap은_새지_않는다"]),
  ("다른 끝점의 파싱 gap이 샌다", ROOT / "src/knowledge/trace.py",
   '                 gaps=tuple(r.parse_gaps_touched() + gaps))', '                 gaps=tuple(list(r.parse_gaps.values()) + gaps))',
@@ -786,7 +787,36 @@ CASES = [
  ("지도가 추적 엣지를 그린다", ROOT / "src/presentation/flow_html.py",
   '                  for e in overlay["links"] if e["relation"] != "runs" and e.get("origin") != "trace"],',
   '                  for e in overlay["links"] if e["relation"] != "runs"],',
-  ["tests/presentation/test_flow_html.py::test_추적_엣지는_지도에_안_그린다"]),
+  ["tests/presentation/test_flow_html.py::test_추적_엣지는_지도에_안_그린다"]), ('Protocol 포트를 provider의 반환 클래스로 안 뚫는다', ROOT / "src/knowledge/trace.py",
+  '                impl = await r.returns_class(pmod, pfunc)', '                impl = None',
+  ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
+ ('포트의 추상 메서드에서 멈춘다', ROOT / "src/knowledge/trace.py",
+  '        if not (_is_protocol(owner[1]) or _is_abstract(m)):', '        if True:',
+  ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다', 'tests/knowledge/test_trace.py::test_상속한_구현체가_여럿이면_전부_추정으로_따라가고_gap_하나를_남긴다']),
+ ('상속한 구현체를 안 찾는다', ROOT / "src/knowledge/trace.py",
+  '            impls = await r.implementations(owner[0], owner[1])', '            impls = []',
+  ['tests/knowledge/test_trace.py::test_상속한_구현체가_여럿이면_전부_추정으로_따라가고_gap_하나를_남긴다']),
+ ('부모 클래스의 메서드를 안 본다', ROOT / "src/knowledge/trace.py",
+  '        if hops >= 4:\n            return None\n        for base in cls.bases:', '        if hops >= 4:\n            return None\n        for base in ():',
+  ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
+ ('클래스 본문 상수를 안 읽는다', ROOT / "src/knowledge/trace.py",
+  '                if not isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):', '                if False:',
+  ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
+ ('함수가 참조하는 모듈 상수표를 안 읽는다', ROOT / "src/knowledge/trace.py",
+  '        out.append((text, line, fmod.path, "추정"))', '        pass',
+  ['tests/knowledge/test_trace.py::test_함수가_참조하는_모듈_상수표의_이름도_읽기다']),
+ ('지역 변수를 provider의 반환 클래스로 안 좁힌다', ROOT / "src/knowledge/trace.py",
+  '            owner, kind = await r.klass(mod, locals_[recv.id]), "local"', '            owner, kind = None, "local"',
+  ['tests/knowledge/test_trace.py::test_같은_함수의_지역_변수는_provider의_반환_클래스로_좁힌다']),
+ ('받는 쪽 미상의 호출을 후보 전부로 따라간다', ROOT / "src/knowledge/trace.py",
+  '        if kind == "param_free":', '        if True:',
+  ['tests/knowledge/test_trace.py::test_받는_쪽을_모르는_호출은_후보가_여럿이면_안_따라가고_gap_하나만_남긴다']),
+ ('데코레이터의 호출도 사슬로 훑는다', ROOT / "src/knowledge/trace.py",
+  '    for st in func.body:\n        yield from ast.walk(st)', '    for st in [func]:\n        yield from ast.walk(st)',
+  ['tests/knowledge/test_trace.py::test_끝점에서_핸들러를_찾아_DAO까지_따라가고_읽는_자원을_등급과_함께_낸다']),
+ ('따옴표 밖의 리터럴도 읽기로 친다', ROOT / "src/knowledge/trace.py",
+  '    m = re.search(r"""["\'][^"\'\\n]*""" + re.escape(needle), segment)', '    m = re.search(re.escape(needle), segment)',
+  ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -814,7 +844,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 196, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 206, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

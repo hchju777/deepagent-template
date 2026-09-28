@@ -204,6 +204,10 @@ class _Repo:
             return None
         if isinstance(node, ast.ClassDef):
             return mod, node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return await self.returns_class(mod, node, hops=hops + 1)      # provider → 반환 클래스
+        if isinstance(node, ast.Await):
+            return await self.klass(mod, node.value, hops=hops + 1)
         if isinstance(node, ast.Name):
             found = await self.lookup(mod, node.id)
             if found and found[1] is not node:
@@ -244,13 +248,88 @@ class _Repo:
                         out.append(found)
         return out
 
-    async def field_class(self, mod: _Mod, cls: ast.ClassDef, attr: str) -> tuple[_Mod, ast.ClassDef] | None:
-        """`self.<attr> = Cls(...)`를 클래스 안 어디서든 찾아 Cls로."""
+    async def returns_class(self, mod: _Mod, func: ast.AST, *, hops: int = 0) -> tuple[_Mod, ast.ClassDef] | None:
+        """함수가 돌려주는 클래스 — `return Cls(...)`, `return await make()`, `return _singleton`.
+        FastAPI의 `Depends(provider)`가 Protocol 포트 뒤의 **실제 구현체**를 아는 유일한 자리다."""
+        if hops > 6:
+            return None
+        for node in ast.walk(func):
+            if isinstance(node, ast.Return) and node.value is not None:
+                got = await self.klass(mod, node.value, hops=hops + 1)
+                if got is not None:
+                    return got
+        return None
+
+    async def find_method(self, mod: _Mod, cls: ast.ClassDef, name: str, *, hops: int = 0
+                          ) -> tuple[_Mod, ast.AST, ast.ClassDef] | None:
+        """클래스와 부모들에서 메서드 — `(정의된 모듈, 함수, 정의한 클래스)`. 사내 저장소는 공통
+        메서드를 부모(`BaseRepo`)에 둔다."""
+        m = _method(cls, name)
+        if m is not None:
+            return mod, m, cls
+        if hops >= 4:
+            return None
+        for base in cls.bases:
+            found = await self.klass(mod, base)
+            if found is not None and found[1] is not cls:
+                got = await self.find_method(found[0], found[1], name, hops=hops + 1)
+                if got is not None:
+                    return got
+        return None
+
+    async def implementations(self, mod: _Mod, proto: ast.ClassDef) -> list[tuple[_Mod, ast.ClassDef]]:
+        """그 Protocol·ABC를 **상속한** 클래스들 — `class X(Proto)`·`class X(Base, Proto)`. 캐시."""
+        key = ("impl:" + proto.name, False)
+        if key in self._defs:
+            return self._defs[key]
+        out: list[tuple[_Mod, ast.ClassDef]] = []
+        patterns = [f"({proto.name})", f"({proto.name},", f", {proto.name})", f", {proto.name},"]
+        seen: set[tuple[str, int]] = set()
+        for hit in sorted(await self.source.grep(patterns), key=lambda h: (h.file, h.line)):
+            if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):
+                continue
+            hmod = await self.module(hit.file)
+            if hmod is None:
+                continue
+            for cls in hmod.classes.values():
+                if (hmod.path, cls.lineno) in seen or cls is proto:
+                    continue
+                names = {b.id if isinstance(b, ast.Name) else getattr(b, "attr", "") for b in cls.bases}
+                if proto.name in names:
+                    seen.add((hmod.path, cls.lineno))
+                    out.append((hmod, cls))
+        self._defs[key] = out
+        return out
+
+    async def field_class(self, mod: _Mod, cls: ast.ClassDef, attr: str, *, hops: int = 0
+                          ) -> tuple[_Mod, ast.ClassDef] | None:
+        """`self.<attr>`의 클래스 — `self.x = Cls(...)`, 생성자 인자 `self.x = param`(주석으로),
+        클래스 본문의 `x: Cls`. 부모 클래스도 본다."""
         for node in ast.walk(cls):
-            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
-                    and any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
-                            and t.value.id == "self" and t.attr == attr for t in node.targets)):
-                return await self.klass(mod, node.value.func)
+            if not (isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                    and t.value.id == "self" and t.attr == attr for t in node.targets)):
+                continue
+            if isinstance(node.value, ast.Name):
+                for fn in cls.body:
+                    if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        ann = _param_annotation(fn, node.value.id)
+                        if ann is not None:
+                            return await self.klass(mod, ann)
+                continue
+            got = await self.klass(mod, node.value)
+            if got is not None:
+                return got
+        for st in cls.body:
+            if isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name) and st.target.id == attr:
+                return await self.klass(mod, st.annotation)
+        if hops < 4:
+            for base in cls.bases:
+                found = await self.klass(mod, base)
+                if found is not None and found[1] is not cls:
+                    got = await self.field_class(found[0], found[1], attr, hops=hops + 1)
+                    if got is not None:
+                        return got
         return None
 
     async def defs_named(self, name: str, *, methods: bool) -> list[tuple[_Mod, ast.AST, ast.ClassDef | None]]:
@@ -284,9 +363,10 @@ class _Repo:
 class _Node:
     mod: _Mod
     func: ast.AST
-    cls: ast.ClassDef | None
+    cls: ast.ClassDef | None            # 정의한 클래스
     depth: int
-    grade_cap: str          # 이 노드에 이르는 길이 확실했으면 "확실", 후보 중 하나였으면 "추정"
+    grade_cap: str                      # 이 노드에 이르는 길이 확실했으면 "확실", 후보 중 하나였으면 "추정"
+    self_cls: tuple[_Mod, ast.ClassDef] | None = None   # 실행 시점의 self 클래스(부모 메서드면 자식)
 
     @property
     def qualname(self) -> str:
@@ -301,11 +381,59 @@ def _param_annotation(func: ast.AST, name: str) -> ast.expr | None:
     return None
 
 
+def _param_names(func: ast.AST) -> set[str]:
+    args = func.args
+    return {a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]}
+
+
 def _line_of(segment: str, needle: str, base: int) -> int:
     for i, line in enumerate(segment.splitlines()):
         if needle in line:
             return base + i
     return base
+
+
+def _body_nodes(func: ast.AST):
+    """함수 **본문**의 노드만 — 데코레이터(`@router.get("/x")`)는 프레임워크 등록이지 호출 경로가
+    아니고, 훑으면 `router`(외부 클래스의 싱글턴)의 `.get`이 "받는 쪽 미상" gap으로 새 끝점마다 남는다."""
+    for st in func.body:
+        yield from ast.walk(st)
+
+
+def _quoted_at(segment: str, needle: str) -> int | None:
+    """`needle`이 **문자열 리터럴 안에서** 처음 나오는 줄 오프셋. 템플릿의 리터럴(`line:{id}` → `line:`)은
+    타입 주석 `line: str`과도 겹치므로, 같은 줄에서 따옴표가 먼저 열려 있어야 읽기로 친다."""
+    m = re.search(r"""["'][^"'\n]*""" + re.escape(needle), segment)
+    return None if m is None else segment.count("\n", 0, m.start())
+
+
+def _is_protocol(cls: ast.ClassDef) -> bool:
+    for b in cls.bases:
+        name = b.id if isinstance(b, ast.Name) else getattr(b, "attr", "")
+        if name in ("Protocol", "ABC"):
+            return True
+    return False
+
+
+def _is_abstract(func: ast.AST) -> bool:
+    """본문이 `...`·`pass`·`raise NotImplementedError`뿐인 메서드 — 포트의 선언이지 구현이 아니다."""
+    body = list(func.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        body = body[1:]
+    if not body:
+        return True
+    if len(body) != 1:
+        return False
+    st = body[0]
+    if isinstance(st, ast.Pass):
+        return True
+    if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and st.value.value is Ellipsis:
+        return True
+    if isinstance(st, ast.Raise):
+        exc = st.exc.func if isinstance(st.exc, ast.Call) else st.exc
+        return isinstance(exc, ast.Name) and exc.id == "NotImplementedError"
+    return False
 
 
 class Tracer:
@@ -348,7 +476,8 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
                 continue
             func = _handler_at(mod, route.line)
             if func is not None:
-                roots.append(_Node(mod, func, _enclosing_class(mod, func), 0, "확실"))
+                cls = _enclosing_class(mod, func)
+                roots.append(_Node(mod, func, cls, 0, "확실", (mod, cls) if cls else None))
         if not roots:
             return Trace(target, repo, "not_found",
                          f"{target}: 레포 {repo}의 라우트 선언에 없다 — code graph의 끝점 목록을 보라",
@@ -356,7 +485,8 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
     else:
         found = await r.defs_named(target, methods=False) + await r.defs_named(target, methods=True)
         for mod, func, cls in found:
-            roots.append(_Node(mod, func, cls, 0, "확실" if len(found) == 1 else "추정"))
+            roots.append(_Node(mod, func, cls, 0, "확실" if len(found) == 1 else "추정",
+                               (mod, cls) if cls else None))
         if not roots:
             return Trace(target, repo, "not_found",
                          f"{target}: 레포 {repo}에 `def {target}(`가 없다", gaps=tuple(r.parse_gaps_touched()))
@@ -367,6 +497,7 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
     chain: list[Step] = []
     reads: dict[tuple[str, str, str, int], Read] = {}
     visited: set[tuple[str, int]] = set()
+    scanned: set[tuple[str, int]] = set()          # 읽기를 이미 훑은 클래스 본문·모듈 상수
     queue: list[_Node] = list(roots)
     later: list[_Node] = []          # Depends(g)의 g — 데이터 경로가 사슬 앞에 오게 뒤로 미룬다
 
@@ -388,8 +519,9 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
             break
         visited.add(key)
         chain.append(Step(node.mod.path, node.func.lineno, node.qualname))
+        for text, base, path, cap in await _read_chunks(r, node, scanned):
+            _collect_reads(text, base, path, cap, names, aliases, add_read)
         segment, base = node.mod.segment(node.func)
-        _collect_reads(segment, base, node, names, aliases, add_read)
         if "getattr(" in segment:
             gaps.append(Gap(node.mod.path, _line_of(segment, "getattr(", base),
                             "getattr로 고른 대상은 못 따라간다 — 리드가 code.read로 본다"))
@@ -421,40 +553,132 @@ def _handler_at(mod: _Mod, decorator_line: int) -> ast.AST | None:
     return best
 
 
-def _collect_reads(segment: str, base: int, node: _Node, names: list[Name],
+async def _read_chunks(r: _Repo, node: _Node, scanned: set[tuple[str, int]]
+                       ) -> list[tuple[str, int, str, str]]:
+    """읽기를 훑을 본문들 — `(텍스트, 첫 줄, 파일, 등급 상한)`. 함수 본문에 더해 ① 실행 시점 클래스와
+    부모들의 본문 상수(`collection = "…"` — 사내 저장소가 컬렉션을 이렇게 둔다) ② 함수가 참조하는
+    모듈 상수표(`MAPPING = [(Enum.A, Keys.A), …]` — 식별자가 함수 본문엔 없다). ①은 실행 시점 클래스를
+    좁힌 결과라 사슬의 등급을 따르고, ②는 표의 어느 줄을 쓰는지 모르므로 추정이 상한이다. 같은 것은 한
+    번만 훑는다."""
+    mod, func = node.mod, node.func
+    segment, base = mod.segment(func)
+    out = [(segment, base, mod.path, node.grade_cap)]
+    cur = node.self_cls or ((mod, node.cls) if node.cls is not None else None)
+    hops = 0
+    while cur is not None and hops < 5:
+        cmod, cls = cur
+        if (cmod.path, cls.lineno) not in scanned:
+            scanned.add((cmod.path, cls.lineno))
+            for st in cls.body:
+                if not isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    text, line = cmod.segment(st)
+                    out.append((text, line, cmod.path, node.grade_cap))
+        nxt = None
+        for b in cls.bases:
+            nxt = await r.klass(cmod, b)
+            if nxt is not None and nxt[1] is not cls:
+                break
+            nxt = None
+        cur, hops = nxt, hops + 1
+    params = _param_names(func)
+    for name in sorted({n.id for n in _body_nodes(func) if isinstance(n, ast.Name)
+                        and isinstance(n.ctx, ast.Load) and n.id not in params}):
+        found = await r.lookup(mod, name)
+        if found is None or not isinstance(found[1], ast.expr):
+            continue
+        fmod, value = found
+        if (fmod.path, value.lineno) in scanned:
+            continue
+        scanned.add((fmod.path, value.lineno))
+        text, line = fmod.segment(value)
+        out.append((text, line, fmod.path, "추정"))
+    return out
+
+
+def _collect_reads(segment: str, base: int, path: str, cap: str, names: list[Name],
                    aliases: dict[str, Name], add_read) -> None:
-    cap = node.grade_cap
     for n in names:
-        if n.literal and n.literal in segment:
-            add_read(n.kind, n.value, "추정" if cap == "추정" else "확실",
-                     node.mod.path, _line_of(segment, n.literal, base))
+        at = _quoted_at(segment, n.literal) if n.literal else None
+        if at is not None:
+            add_read(n.kind, n.value, "추정" if cap == "추정" else "확실", path, base + at)
         elif f'"{n.key_token}"' in segment or f"'{n.key_token}'" in segment:
-            add_read(n.kind, n.value, "추정", node.mod.path, _line_of(segment, n.key_token, base))
+            add_read(n.kind, n.value, "추정", path, _line_of(segment, n.key_token, base))
     for ident, n in aliases.items():
         if re.search(rf"\b{re.escape(ident)}\b", segment):
-            add_read(n.kind, n.value, "추정", node.mod.path, _line_of(segment, ident, base))
+            add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base))
 
 
 async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node], list[_Node]]:
-    """이 함수 본문의 호출들이 가리키는 정의. `(본문 호출, Depends 제공자)`."""
+    """이 함수 본문의 호출들이 가리키는 정의. `(본문 호출, Depends 제공자)`.
+
+    받는 쪽을 좁히는 순서: `self`·`self.f`(필드의 클래스) → 인자 주석 → 같은 함수의 지역 변수(대입한
+    호출의 반환 클래스) → 모듈 별칭·클래스 → 호출 결과. 좁힌 클래스의 메서드가 Protocol·추상이면
+    구현체로 간다(Depends provider의 반환 클래스 → 상속한 클래스 → 같은 이름의 메서드들). 받는 쪽을 **못
+    좁혔고** 후보가 여럿이면 안 따라간다 — 사내 첫 추적에서 `.get(`이 후보 넷으로 퍼져 깊이 예산을
+    다 먹었다. 인자에 주석이 없을 때만 후보 전부를 추정으로 따라간다.
+    """
     mod, func, cls = node.mod, node.func, node.cls
+    self_cls = node.self_cls or ((mod, cls) if cls is not None else None)
     out: list[_Node] = []
     seen: set[tuple[str, int]] = set()
+    reported: set[str] = set()
     depth, cap = node.depth + 1, node.grade_cap
+    params = _param_names(func)
+    locals_: dict[str, ast.expr] = {}
+    for st in _body_nodes(func):
+        if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+            locals_.setdefault(st.targets[0].id, st.value)
 
-    def push(target_mod: _Mod, target: ast.AST, target_cls: ast.ClassDef | None, grade: str) -> None:
-        key = (target_mod.path, target.lineno)
+    def push(tmod: _Mod, target: ast.AST, tcls: ast.ClassDef | None, grade: str,
+             self_of: tuple[_Mod, ast.ClassDef] | None = None) -> None:
+        key = (tmod.path, target.lineno)
         if key not in seen and target is not func:
             seen.add(key)
-            out.append(_Node(target_mod, target, target_cls, depth, "추정" if "추정" in (grade, cap) else "확실"))
+            out.append(_Node(tmod, target, tcls, depth, "추정" if "추정" in (grade, cap) else "확실",
+                             self_of if self_of is not None else ((tmod, tcls) if tcls is not None else None)))
 
-    async def push_class_ctor(found: tuple[_Mod, ast.ClassDef] | None) -> None:
+    async def push_ctor(found: tuple[_Mod, ast.ClassDef] | None) -> None:
         if found is not None:
-            init = _method(found[1], "__init__")
-            if init is not None:
-                push(found[0], init, found[1], "확실")
+            got = await r.find_method(found[0], found[1], "__init__")
+            if got is not None:
+                push(got[0], got[1], got[2], "확실", self_of=found)
 
-    for call in ast.walk(func):
+    async def follow(owner: tuple[_Mod, ast.ClassDef], meth: str, *, ann: ast.expr | None, line: int) -> bool:
+        """좁힌 클래스에서 메서드를 따라간다. 찾았으면 True(구현체가 없어도)."""
+        got = await r.find_method(owner[0], owner[1], meth)
+        if got is None:
+            return False
+        fmod, m, defining = got
+        if not (_is_protocol(owner[1]) or _is_abstract(m)):
+            push(fmod, m, defining, "확실", self_of=owner)
+            return True
+        # 포트다 — 구현체를 찾는다.
+        impls: list[tuple[_Mod, ast.ClassDef]] = []
+        if ann is not None:
+            for pmod, pfunc in await r.depends_of(mod, ann):
+                impl = await r.returns_class(pmod, pfunc)
+                if impl is not None:
+                    impls.append(impl)
+        grade = "확실"
+        if not impls:
+            impls = await r.implementations(owner[0], owner[1])
+            if len(impls) > 1:
+                grade = "추정"
+                gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체 {len(impls)}개 — 전부 따라가되 읽기는 추정"))
+        if not impls:
+            cands = [c for c in await r.defs_named(meth, methods=True) if c[1] is not m and c[1] is not func]
+            for cmod, cfunc, ccls in cands:
+                push(cmod, cfunc, ccls, "추정", self_of=(cmod, ccls) if ccls else None)
+            if cands:
+                gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체를 못 찾아 같은 이름 {len(cands)}개 — 읽기는 추정"))
+            return True
+        for imod, icls in impls:
+            got = await r.find_method(imod, icls, meth)
+            if got is not None:
+                push(got[0], got[1], got[2], grade, self_of=(imod, icls))
+        return True
+
+    for call in _body_nodes(func):
         if not isinstance(call, ast.Call):
             continue
         f = call.func
@@ -463,7 +687,7 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
             if found and isinstance(found[1], (ast.FunctionDef, ast.AsyncFunctionDef)):
                 push(found[0], found[1], _enclosing_class(found[0], found[1]), "확실")
             elif found and isinstance(found[1], ast.ClassDef):
-                await push_class_ctor((found[0], found[1]))
+                await push_ctor((found[0], found[1]))
             elif found is None and not hasattr(builtins, f.id):
                 cands = await r.defs_named(f.id, methods=False)
                 for cmod, cfunc, ccls in cands:
@@ -475,41 +699,51 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
             continue
         recv, meth = f.value, f.attr
         owner: tuple[_Mod, ast.ClassDef] | None = None
-        if isinstance(recv, ast.Name) and recv.id == "self" and cls is not None:
-            owner = (mod, cls)
+        kind, ann = "unknown", None
+        if isinstance(recv, ast.Name) and recv.id == "self" and self_cls is not None:
+            owner, kind = self_cls, "self"
         elif (isinstance(recv, ast.Attribute) and isinstance(recv.value, ast.Name)
-              and recv.value.id == "self" and cls is not None):
-            owner = await r.field_class(mod, cls, recv.attr)
-        elif isinstance(recv, ast.Name):
+              and recv.value.id == "self" and self_cls is not None):
+            owner, kind = await r.field_class(self_cls[0], self_cls[1], recv.attr), "field"
+        elif isinstance(recv, ast.Name) and recv.id in params:
             ann = _param_annotation(func, recv.id)
+            kind = "param" if ann is not None else "param_free"
             if ann is not None:
                 owner = await r.klass(mod, ann)
-            else:
-                found = await r.lookup(mod, recv.id)
-                if found and isinstance(found[1], ast.Module):
-                    inner = await r.lookup(found[0], meth)
-                    if inner and isinstance(inner[1], (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        push(inner[0], inner[1], None, "확실")
-                    continue
-                if found and isinstance(found[1], ast.ClassDef):
-                    owner = (found[0], found[1])            # 클래스메서드·정적 호출
-        elif isinstance(recv, ast.Call):
-            owner = await r.klass(mod, recv.func)
-        if owner is not None:
-            m = _method(owner[1], meth)
-            if m is not None:
-                push(owner[0], m, owner[1], "확실")
-                continue
-        if isinstance(recv, ast.Name) and (recv.id == "self" or owner is not None):
+        elif isinstance(recv, ast.Name) and recv.id in locals_:
+            owner, kind = await r.klass(mod, locals_[recv.id]), "local"
+        elif isinstance(recv, ast.Name):
+            found = await r.lookup(mod, recv.id)
+            if found and isinstance(found[1], ast.Module):
+                inner = await r.lookup(found[0], meth)
+                if inner and isinstance(inner[1], (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    push(inner[0], inner[1], None, "확실")
+                continue                                   # 모듈 별칭 — 함수가 없으면 외부 것이다
+            if found and isinstance(found[1], ast.ClassDef):
+                owner, kind = (found[0], found[1]), "class"
+            elif found and isinstance(found[1], ast.expr):
+                owner, kind = await r.klass(found[0], found[1]), "local"     # 모듈 수준 싱글턴
+        elif isinstance(recv, (ast.Call, ast.Await)):
+            owner, kind = await r.klass(mod, recv), "call"
+        if owner is not None and await follow(owner, meth, ann=ann, line=call.lineno):
             continue
-        # 받는 쪽을 못 좁혔다 — 레포의 메서드 정의 전부가 후보다. 없으면 외부 라이브러리로 보고 지나간다.
-        cands = await r.defs_named(meth, methods=True)
-        cands = [c for c in cands if c[1] is not func]
-        for cmod, cfunc, ccls in cands:
-            push(cmod, cfunc, ccls, "확실" if len(cands) == 1 else "추정")
-        if len(cands) > 1:
-            gaps.append(Gap(mod.path, call.lineno,
-                            f"{meth}: 받는 쪽을 못 좁혀 후보 {len(cands)}개 — 전부 따라가되 읽기는 추정"))
+        if kind in ("self", "field", "class") and owner is not None:
+            continue                                       # 좁혔는데 메서드가 없다 — 외부 부모거나 동적
+        cands = [c for c in await r.defs_named(meth, methods=True) if c[1] is not func]
+        if kind == "param_free":
+            for cmod, cfunc, ccls in cands:
+                push(cmod, cfunc, ccls, "확실" if len(cands) == 1 else "추정",
+                     self_of=(cmod, ccls) if ccls else None)
+            if len(cands) > 1:
+                gaps.append(Gap(mod.path, call.lineno,
+                                f"{meth}: 받는 쪽을 못 좁혀 후보 {len(cands)}개 — 전부 따라가되 읽기는 추정"))
+            continue
+        if len(cands) == 1:
+            cmod, cfunc, ccls = cands[0]
+            push(cmod, cfunc, ccls, "추정", self_of=(cmod, ccls) if ccls else None)
+        elif len(cands) > 1 and kind != "unknown" and meth not in reported:
+            reported.add(meth)
+            gaps.append(Gap(mod.path, call.lineno, f"{meth}: 받는 쪽 미상, 후보 {len(cands)}개 — 안 따라간다"))
 
     deps: list[_Node] = []
     for a in [*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs]:
