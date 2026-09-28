@@ -508,3 +508,58 @@ def test_known_names는_그래프의_이름_전부이고_없으면_빈다():
                    {"id": "topic_a", "label": "a.b", "type": "topic"}], "links": []}
     assert flow.known_names(g).splitlines() == ["a.b", "sink"]
     assert flow.known_names(None) == ""
+
+
+# ── 블록 조정 (11c 커밋 4) — 사내 블록은 토픽 15개가 한 줄에 늘어서고 같은 config의 서비스가
+# 2단계에서 다섯 줄로 반복됐다(+4줄 절단). 공유 config는 produces·consumes를 못 가른다.
+
+def _shared_graph(*, topics=2, code=False):
+    nodes = [{"id": "service_processor", "label": "processor", "type": "service", "repo": "dt-core"},
+             {"id": "service_sink", "label": "sink", "type": "service", "repo": "dt-core"},
+             {"id": "repo_dt-core", "label": "dt-core", "type": "repo"}]
+    links = []
+    for i in range(topics):
+        nodes.append({"id": f"topic_{i}", "label": f"t.{i:02d}", "type": "topic"})
+        for svc in ("service_processor", "service_sink"):
+            for rel in ("produces", "consumes"):
+                links.append({"source": svc, "target": f"topic_{i}", "relation": rel,
+                              "origin": "config", "confidence": "EXTRACTED"})
+    if code:
+        links += [{"source": "service_processor", "target": "topic_0", "relation": "produces",
+                   "origin": "code", "confidence": "INFERRED", "source_file": "processor/h.py", "source_location": "L8"},
+                  {"source": "service_sink", "target": "topic_0", "relation": "consumes",
+                   "origin": "code", "confidence": "INFERRED", "source_file": "sink/w.py", "source_location": "L7"}]
+    return {"nodes": nodes, "links": links}
+
+
+def test_관계당_여덟_개까지만_적고_나머지는_센다():
+    text = flow.flow_text(_shared_graph(topics=11), ["service_sink"], budget=10_000)
+    first = text.splitlines()[0]
+    assert "t.07" in first and "t.08" not in first and "외 3개" in first
+
+
+def test_2단계_서비스도_같은_config면_접는다():
+    """씨앗 토픽에 닿은 processor와 sink의 토픽 줄이 같으면 한 줄 `dt-core{processor,sink}`다."""
+    lines = flow.flow_text(_shared_graph(), ["topic_0"], budget=10_000).splitlines()
+    assert lines[0].startswith("t.00 [topic]:")
+    assert len(lines) == 2 and lines[1].startswith("dt-core{processor,sink} [service · dt-core 공유 config]:")
+
+
+def test_config가_못_가른_방향은_코드_층_한_줄로_보탠다():
+    """3b 측정에서 본 것 — produces·consumes가 둘 다 `dt-core{processor,sink}`로 접히면 리드는 방향을
+    모른다. 코드 층이 서비스까지 짚었을 때만(INFERRED 이상) 그 한 줄을 보탠다."""
+    with_code = flow.flow_text(_shared_graph(code=True), ["topic_0"], budget=10_000).splitlines()[0]
+    assert "코드로는 produces: processor · consumes: sink" in with_code
+    without = flow.flow_text(_shared_graph(), ["topic_0"], budget=10_000).splitlines()[0]
+    assert "코드로는" not in without
+
+
+def test_씨앗은_토큰_단위로_맞추고_자원은_셋까지다():
+    """`alarm`이 `alarm_events`나 응답 필드 `alarm`에 글자로 걸려 씨앗이 됐다(사내). 식별자 안의
+    부분 문자열은 안 친다. 자원 씨앗은 셋까지 — 서비스는 상한이 없다."""
+    g = _shared_graph(topics=6)
+    g["nodes"].append({"id": "collection_alarm", "label": "alarm", "type": "collection"})
+    assert flow.find_seeds(g, ["alarm_events가 비었다"]) == []
+    assert flow.find_seeds(g, ["alarm 컬렉션이 비었다"]) == ["collection_alarm"]
+    many = flow.find_seeds(g, ["t.00 t.01 t.02 t.03 t.04 sink processor"])
+    assert many[:2] == ["service_processor", "service_sink"] and len(many) == 5

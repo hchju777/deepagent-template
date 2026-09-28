@@ -138,7 +138,14 @@ class StubKafkaInspector(KafkaInspectorPort):
         # seed가 토픽별로 주면 실어댑터처럼 토픽 행을 낸다. 총량만 주면 행을 **비운다** —
         # 예전엔 `topic="stub"` 행을 지어냈는데, 3b 측정에서 리드가 그걸 "stub 토픽을
         # 구독하고 있다"로 읽고 결론을 그 위에 세웠다. 리드는 스텁인 줄 모른다.
-        lag = self._lags.get(group, 0)
+        lag = self._lags.get(group)
+        if lag is None:
+            # 모르는 그룹에 lag 0을 돌려주면 지어낸 이름이 "정상"으로 읽힌다(3b off-1). 실어댑터와
+            # 같은 모양으로 "커밋된 오프셋이 없다"고 답한다.
+            return ProbeResult.succeeded(
+                {"group": group, "partitions": [],
+                 "note": "커밋된 오프셋이 없다 — 그룹이 없거나 아직 아무것도 안 읽었다"},
+                source=f"stub-kafka:group_offsets {group}", clock=self._clock)
         if isinstance(lag, dict):
             rows = [{"topic": topic, "partition": 0, "committed": 0, "end": n, "lag": n}
                     for topic, n in sorted(lag.items())]

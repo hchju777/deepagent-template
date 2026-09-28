@@ -231,3 +231,10 @@ def test_데이터_흐름_블록의_이름은_증거에_없는_이름이_아니�
     reply = json.dumps({"tasks": [_task("t-7", "kafka.group_offsets", {"group": "g-from-flow"})]})
     text = "\n".join(digest(_file(prompt, reply)))
     assert "증거에 없는 이름" not in text, text
+
+
+def test_템플릿_이름을_채운_값은_증거에_없는_이름이_아니다():
+    prompt = _prompt(evidence="- t-1.e1 | code.config service='sink' | redis_key.heartbeat = hb:{service}")
+    reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "hb:sink"})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "증거에 없는 이름" not in text, text

@@ -27,6 +27,7 @@ infrastructure에 두면 application이 그쪽을 import하게 되어 화살표�
 여기 있는 것들은 포트 이름과 메서드 이름뿐이고 실구현은 모르므로 domain에 닫힌다 —
 `adapters`는 덕 타이핑으로 받는다.
 """
+import re
 from typing import Any
 
 from src.domain.base import Clock
@@ -79,6 +80,16 @@ NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics",
 # `entry`가 빠진 것은 우연이 아니다 — REST 등재 항목은 **config가 선언**하므로
 # 찾을 것이 없다. `pattern`도 빠진다 — `*`가 정상적인 값이라 "찾았는가"를 물을 수 없다.
 DISCOVERED_ARGS = frozenset({"collection", "topic", "key", "group"})
+_TEMPLATE_HEAD = re.compile(r"([A-Za-z0-9_.:\-]{3,})\{")
+
+
+def name_known(value: str, seen: str) -> bool:
+    """리드가 댄 이름이 **찾은 것**인가 — 본 텍스트(증거·브리핑)에 그대로 있거나, 거기 있는
+    템플릿(`hb:{service}`)의 `{` 앞부분으로 시작하면 찾은 것이다. 3b 측정에서 `hb:sink`가 여섯 판
+    전부 "찾지 않고 이름을 댔다"로 찍혔다 — 템플릿을 채운 값은 지어낸 게 아니다."""
+    if value in seen:
+        return True
+    return any(value.startswith(head) for head in _TEMPLATE_HEAD.findall(seen))
 
 
 def action_problem(action: str, params: dict) -> str | None:

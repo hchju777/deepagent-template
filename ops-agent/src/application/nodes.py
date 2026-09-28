@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from src.application.state import CaseState, merge_by_id
-from src.domain.actions import DISCOVERED_ARGS, describe
+from src.domain.actions import DISCOVERED_ARGS, describe, name_known
 from src.domain.case import Case, Hypothesis, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
@@ -267,7 +267,7 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     guessed = []
     for task in kept:
         for name, value in sorted(task.params.items()):
-            if name in DISCOVERED_ARGS and isinstance(value, str) and value not in seen:
+            if name in DISCOVERED_ARGS and isinstance(value, str) and not name_known(value, seen):
                 guessed.append(f"{task.id}: 찾지 않고 이름을 댔다 — {name}={value!r}")
     return kept, reused, guessed
 

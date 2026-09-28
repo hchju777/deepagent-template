@@ -456,3 +456,17 @@ async def test_브리핑이_준_이름은_찍은_것이_아니다(case):
     patch = await nodes["integrate"](CaseState(case=case, round=1,
                                                plan_tasks=[task("t-1", status="ok")]))
     assert not any("찾지 않고" in e for e in patch["llm_errors"]), patch["llm_errors"]
+
+
+async def test_템플릿_이름을_채운_값은_찍은_것이_아니다(case):
+    """config의 `hb:{service}`를 리드가 `hb:sink`로 채워 부른 것이 여섯 판 전부에서 "찾지 않고
+    이름을 댔다"로 찍혔다(3b). 템플릿의 `{` 앞부분이 아는 이름에 있으면 채운 값은 찾은 것이다."""
+    async def lead(state):
+        return {"decision": "continue",
+                "plan_tasks": [task("t-2", params={"key": "hb:sink"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9,
+                                known_names="hb:{service}"))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert not any("찾지 않고" in e for e in patch["llm_errors"]), patch["llm_errors"]

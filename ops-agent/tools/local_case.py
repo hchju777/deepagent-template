@@ -107,6 +107,11 @@ API_FILES = {
     "api/alarms.py": '''"""알람 화면 — 최근 alarm_window_min 분의 alarm_events와 alarm:stats:{line} 배지."""
 
 
+@router.post("/summary/badge")
+def summary_badge(cfg, mongo, redis):
+    return {line: badge(cfg, redis, line) for line in cfg["lines"]}
+
+
 def recent_alarms(cfg, mongo, since):
     coll = cfg["mongodb_collection"]["alarm"]["collection"]
     return list(mongo[coll].find({"occ_date": {"$gte": since}}).sort("occ_date", -1))
@@ -202,7 +207,8 @@ def main() -> int:
     store = FileCaseRepository(root / "output" / "cases.json")
     if not any(c.id == args.case_id for c in store.all()):
         store.add(CaseRecord(
-            id=args.case_id, site="mx/gumi", check="alarm_flow", target="alarm_events",
+            # config/gbm/common.json의 점검이다 — 브리핑이 여기서 출발점(프로브 → REST path)을 되짚는다.
+            id=args.case_id, site="mx/gumi", check="badge_all_zero", target="L1/Alarm",
             concern="system", opened_at=now, last_seen_at=now,
             symptom="gumi MX 알람 화면에 새 알람이 4시간째 안 올라온다. 라인은 정상 가동 중이라고 한다.",
             observed={"recent_alarms": 0, "window_min": 60}))

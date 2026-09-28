@@ -33,7 +33,7 @@ import re
 
 from src.application.nodes import REDO_MARK
 from src.application.schemas import parse_object
-from src.domain.actions import DISCOVERED_ARGS, describe
+from src.domain.actions import DISCOVERED_ARGS, describe, name_known
 
 _FILE = re.compile(r"^(\d+)-r(\d+)-(\w+)\.md$")
 _VERDICT = re.compile(r"^결과: (.+)$", re.M)
@@ -157,7 +157,7 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
         if action in {a for _, a, _ in shown}:
             marks.append("예시와 같은 action")
         ghosts = [f"{k}={v!r}" for k, v in sorted(params.items())
-                  if k in DISCOVERED_ARGS and isinstance(v, str) and v not in seen_names]
+                  if k in DISCOVERED_ARGS and isinstance(v, str) and not name_known(v, seen_names)]
         if ghosts:
             marks.append(f"증거에 없는 이름 {', '.join(ghosts)}")
         query = _shape(action, params)

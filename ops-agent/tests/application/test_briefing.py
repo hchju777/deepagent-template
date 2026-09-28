@@ -217,7 +217,7 @@ def test_흐름_블록은_증상과_증거의_이름을_씨앗으로_config_층�
     """증상(`OEE가 512다`)에는 그래프 이름이 없다 → 토픽 골격. 증거에 `sink`가 나오면 그게 씨앗이다.
     코드 층(`sink —writes→ alarm_events`)은 어느 쪽에도 안 실린다."""
     text = briefing.flow_block(state, FLOW_GRAPH)
-    assert text.startswith("config에서 뽑은 배선이다.") and "code.flow(name)" in text
+    assert text.startswith("config에서 뽑은 배선") and "code.flow(name)" in text
     assert "mx.alarm.main [topic]: produces: processor · consumes: sink" in text
     assert "writes" not in text and "alarm_events" not in text
     state.evidence.append(EvidenceRef(id="e-1", source="kafka.group_offsets group=g",
@@ -798,3 +798,62 @@ def test_예시_회전에_컨슈머_lag_읽기가_있다():
         briefing.example_block(site(kafka=None), phase="integrate", services=("api",),
                                used=used)), "Kafka가 없는 사이트에 나갔다"
 
+
+
+# ── 출발점과 사다리 (11c 커밋 4) ─────────────────────────────────────
+# 순찰 케이스는 어느 점검·어느 프로브·어느 REST 항목에서 왔는지 config로 전부 안다. 사내 첫
+# 조사 trace에서 리드가 끝점을 만드는 코드에 한 번도 가지 않은 것은, 그 출발점을 우리가
+# 안 줬기 때문이다. 사람이 별칭 표를 적는 게 아니라 config에서 **생성**한다(⑮).
+
+def _site_with_check():
+    from src.config.schema_patrol import PatrolConfig
+    patrol = PatrolConfig.model_validate({"checks": {"badge_all_zero": {
+        "concern": "operation",
+        "probes": {"badge": {"action": "rest.query", "params": {"entry": "summary_badge", "params": {}}},
+                   "status": {"action": "mongo.list_collections", "params": {}}},
+        "rule": "items_all_zero",
+        "params": {"items": {"probe": "badge", "path": "response"},
+                   "identity": ["group", "title"], "counts": ["alarm", "caution", "normal"]}}}})
+    return site().model_copy(update={"patrol": patrol})
+
+
+def _patrol_case(check="badge_all_zero", target="L1/Alarm"):
+    from src.domain.case import Case
+    from tests.application.conftest import T0
+    return Case(id="c-2", gbm="mx", fct="gumi", origin="patrol", symptom="L1/Alarm — 전부 0",
+                t0=T0, check=check, target=target)
+
+
+def test_접수_경로가_config에서_출발점을_되짚는다():
+    """점검 → 판정이 본 프로브 → REST 항목 → 메서드와 path. 전부 config에서 나온다."""
+    text = briefing.case_block(CaseState(case=_patrol_case()), site_config=_site_with_check())
+    line = next(l for l in text.splitlines() if l.startswith("접수 경로:"))
+    assert "순찰 점검 badge_all_zero" in line and "대상 L1/Alarm" in line
+    assert "rest.query" in line and "summary_badge" in line and "POST /summary/badge" in line
+    # 판정이 본 프로브(items.probe)만이다 — 다른 프로브(status)는 출발점이 아니다.
+    assert "list_collections" not in line
+
+
+def test_접수_경로는_모르면_짧게_말한다(state):
+    """사람 케이스, 그리고 config에 없는 점검 이름 — 지어내지 않는다."""
+    assert "접수 경로: 사람" in briefing.case_block(state, site_config=_site_with_check())
+    text = briefing.case_block(CaseState(case=_patrol_case(check="gone")), site_config=_site_with_check())
+    assert "접수 경로: 순찰" in text and "rest.query" not in text
+
+
+def test_frame_예시는_출발_읽기로_시작한다():
+    """예시가 곧 출력이다(10b). 사다리의 첫 두 칸을 예시가 보여 준다 — ① 판정이 본 읽기로 증상을
+    재현하고 ② 그 path를 코드에서 찾는다. 그다음이 발견 수다."""
+    fields = briefing.frame_fields(CaseState(case=_patrol_case()), site_config=_site_with_check(),
+                                   services=("api", "sink"))
+    tasks = json.loads(fields["example"])["tasks"]
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("rest.query", {"entry": "summary_badge", "params": {}})
+    assert (tasks[1]["action"], tasks[1]["params"]) == ("code.grep", {"patterns": ["/summary/badge"]})
+    assert tasks[2]["action"] == "code.config"
+    assert [t["priority"] for t in tasks] == sorted(t["priority"] for t in tasks)
+
+
+def test_출발점이_없으면_frame_예시는_전과_같다(state):
+    fields = briefing.frame_fields(state, site_config=_site_with_check(), services=("api",))
+    tasks = json.loads(fields["example"])["tasks"]
+    assert tasks[0]["action"] == "code.config" and "rest.query" not in [t["action"] for t in tasks[:2]]

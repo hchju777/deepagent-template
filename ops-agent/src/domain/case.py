@@ -99,6 +99,11 @@ class Case(StrictModel):
     origin: Literal["human", "patrol"]
     symptom: str
     t0: datetime
+    # 순찰이 연 케이스의 출발점 — 어느 점검, 어느 대상에서 왔나. 사람이 연 케이스는 None.
+    # 브리핑이 config에서 점검 → 판정이 본 프로브 → REST 항목 → path를 되짚어 리드에게 "증상이
+    # 관찰된 자리"(사다리의 첫 칸)를 준다. 여기엔 이름만 두고 해석은 briefing이 한다.
+    check: str | None = None
+    target: str | None = None
 
     @property
     def site(self) -> str:

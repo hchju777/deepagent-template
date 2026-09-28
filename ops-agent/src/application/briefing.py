@@ -85,12 +85,64 @@ def _args(required: tuple, optional: tuple) -> str:
     return ", ".join(parts)
 
 
-def case_block(state: CaseState) -> str:
+def _check_of(case, site_config):
+    checks = getattr(getattr(site_config, "patrol", None), "checks", None) or {}
+    if not case.check or case.check not in checks:
+        return None
+    return checks[case.check]
+
+
+def start_read(case, site_config) -> tuple[str, dict] | None:
+    """접수 경로의 첫 칸 — 케이스를 연 판정이 **본** 프로브의 읽기 `(action, params)`. 없으면 None.
+
+    `params.items.probe`가 판정이 본 프로브다(`only_when`의 프로브가 아니라). 리드는 같은 읽기로
+    증상을 재현하는 데서 시작한다 — 사내 첫 조사 trace에서 리드가 끝점을 만드는 코드에 한 번도
+    가지 않은 것은 이 출발점을 우리가 안 줬기 때문이다. 사람이 적는 표가 아니라 config다(⑮).
+    """
+    check = _check_of(case, site_config)
+    if check is None:
+        return None
+    probe = check.probes.get(check.params.items.probe)
+    if probe is None:
+        return None
+    return probe.action, dict(probe.params)
+
+
+def _rest_path(site_config, read: tuple[str, dict]) -> str | None:
+    action, params = read
+    rest = site_config.infra.rest
+    entry = params.get("entry") if action == "rest.query" else None
+    if entry and rest is not None and entry in rest.entries:
+        return rest.entries[entry].path
+    return None
+
+
+def origin_line(case, site_config) -> str | None:
+    """`접수 경로:` 뒤에 붙는 한 줄 — 점검, 대상, 판정이 본 읽기와 그 REST 경로. 전부 config에서."""
+    if _check_of(case, site_config) is None:
+        return None
+    parts = [f"순찰 점검 {case.check}"]
+    if case.target:
+        parts.append(f"대상 {case.target}")
+    read = start_read(case, site_config)
+    if read is not None:
+        action, params = read
+        text = describe(action, params)
+        entry = params.get("entry") if action == "rest.query" else None
+        rest = site_config.infra.rest
+        if entry and rest is not None and entry in rest.entries:
+            text += f" ({rest.entries[entry].method} {rest.entries[entry].path})"
+        parts.append(f"판정이 본 읽기 {text}")
+    return " · ".join(parts)
+
+
+def case_block(state: CaseState, *, site_config=None) -> str:
     case = state.case
+    origin = "사람" if case.origin == "human" else (origin_line(case, site_config) or "순찰")
     return (f"사이트: {case.site}\n"
             f"증상: {case.symptom}\n"
             f"발생 시각: {case.t0.isoformat()}\n"
-            f"접수 경로: {'사람' if case.origin == 'human' else '순찰'}")
+            f"접수 경로: {origin}")
 
 
 def hypotheses_block(state: CaseState) -> str:
@@ -314,7 +366,8 @@ def next_task_number(state: CaseState) -> int:
 
 
 def example_block(site_config, *, phase: str, start: int = 1,
-                  services: tuple[str, ...] = (), used: tuple[str, ...] = ()) -> str:
+                  services: tuple[str, ...] = (), used: tuple[str, ...] = (),
+                  first_read: tuple[str, dict] | None = None) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
 
     `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
@@ -322,8 +375,17 @@ def example_block(site_config, *, phase: str, start: int = 1,
     t-8·t-9가 정확히 그랬다. 예시가 곧 명세라는 성질(10b)이 반대로 작동한 것이다.
     """
     if phase == "frame":
-        shapes = _available(site_config, _discovery(services), 3, services)
-        free = _free_rest_entry(site_config)
+        shapes: list[tuple[str, dict]] = []
+        if first_read and _has(site_config, ACTIONS[first_read[0]][0], services):
+            # 사다리의 첫 두 칸이 예시다 — ① 판정이 본 읽기로 증상을 재현하고 ② 그 path를 코드에서
+            # 찾는다. 예시가 곧 출력이라(위) 규칙 문장으로는 안 되고 여기 있어야 리드가 밟는다.
+            shapes.append(first_read)
+            path = _rest_path(site_config, first_read)
+            if path and services:
+                shapes.append(("code.grep", {"patterns": [path]}))
+        room = (4 if shapes else 3) - len(shapes)
+        shapes += _available(site_config, _discovery(services), room, services)
+        free = None if first_read else _free_rest_entry(site_config)
         if free and len(shapes) < 3:
             shapes.append(free)
         if not shapes:
@@ -387,9 +449,9 @@ def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800) -> st
     texts += [f"{ref.summary}\n{ref.body}" for ref in state.evidence]
     texts += [h.statement for h in state.hypotheses]
     body = flowgraph.flow_text(graph, flowgraph.find_seeds(graph, texts), budget=budget)
-    return ("config에서 뽑은 배선이다. 어디를 볼지 고르는 데 쓰고, 지금 실제로 그렇게 도는지는 "
-            "프로브로 확인하라. `레포{a,b}`는 같은 config를 쓰는 서비스 전부다 — 어느 쪽인지는 "
-            "코드·프로브로. 다른 이름은 code.flow(name).\n" + body)
+    # 머리말은 한 줄 — 사내 블록에서 머리말이 본문만큼 길었다. 규칙은 프롬프트 본문이 말한다.
+    return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
+            "서비스 전부. 다른 이름은 code.flow(name).\n" + body)
 INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round",
                                  "max_rounds", "rejected"}
 
@@ -413,12 +475,13 @@ def frame_fields(state: CaseState, *, site_config,
                  services: tuple[str, ...] = (),
                  roles: dict[str, str] | None = None,
                  flow_graph: dict | None = None) -> dict[str, str]:
-    return {"case": case_block(state),
+    return {"case": case_block(state, site_config=site_config),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph)),
             "example": example_block(site_config, phase="frame",
                                      start=next_task_number(state),
-                                     services=services),
+                                     services=services,
+                                     first_read=start_read(state.case, site_config)),
             "flow": flow_block(state, flow_graph)}
 
 
@@ -432,7 +495,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      services: tuple[str, ...] = (),
                      roles: dict[str, str] | None = None,
                      flow_graph: dict | None = None) -> dict[str, str]:
-    return {"case": case_block(state),
+    return {"case": case_block(state, site_config=site_config),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph)),
             "flow": flow_block(state, flow_graph),

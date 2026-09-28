@@ -907,7 +907,8 @@ def cmd_case_investigate(args, env) -> int:
                               known_names=flow.known_names(flow_graph))
             state = CaseState(case=Case(
                 id=record.id, gbm=gbm, fct=fct, origin="patrol",
-                symptom=record.symptom, t0=record.opened_at))
+                symptom=record.symptom, t0=record.opened_at,
+                check=record.check, target=record.target))
             return await build_engine(deps).ainvoke(state)
         finally:
             await adapters.close()

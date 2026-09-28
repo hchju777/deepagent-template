@@ -28,3 +28,12 @@ async def test_group_offsets는_총량만_알면_파티션을_지어내지_않�
     got = (await stub.group_offsets("g")).data
     assert got["total_lag"] == 7 and got["partitions"] == []
     assert "stub" not in str(got)
+
+
+async def test_group_offsets는_모르는_그룹에_lag_0을_지어내지_않는다():
+    """3b off-1에서 리드가 지어낸 그룹 이름으로 물었더니 스텁이 lag 0을 돌려줘 "컨슈머 정상"으로
+    읽혔다. 실어댑터는 커밋된 오프셋이 없다고 답한다 — 같은 모양으로."""
+    stub = StubKafkaInspector({}, {"g": 7}, clock=_clock)
+    got = (await stub.group_offsets("no-such-group")).data
+    assert got["partitions"] == [] and "total_lag" not in got
+    assert "커밋된 오프셋이 없다" in got["note"]

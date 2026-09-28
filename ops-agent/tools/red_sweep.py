@@ -692,6 +692,31 @@ CASES = [
   '    return "\\n".join(sorted({n["label"] for n in graph.get("nodes", []) if n.get("label")}))',
   '    return ""',
   ["tests/knowledge/test_flow.py::test_known_names는_그래프의_이름_전부이고_없으면_빈다"]),
+ ("접수 경로가 점검을 못 찾는다", B,
+  '    return checks[case.check]', '    return None',
+  ["tests/application/test_briefing.py::test_접수_경로가_config에서_출발점을_되짚는다"]),
+ ("frame 예시가 출발 읽기를 뺀다", B,
+  '            shapes.append(first_read)', '            pass',
+  ["tests/application/test_briefing.py::test_frame_예시는_출발_읽기로_시작한다"]),
+ ("관계당 이름 상한이 없다", ROOT / "src/knowledge/flow.py",
+  '_MAX_NAMES = 8', '_MAX_NAMES = 80',
+  ["tests/knowledge/test_flow.py::test_관계당_여덟_개까지만_적고_나머지는_센다"]),
+ ("2단계 서비스를 안 접는다", ROOT / "src/knowledge/flow.py",
+  '            if len(ids) > 1:\n                body = " · ".join(parts)', '            if False:\n                body = " · ".join(parts)',
+  ["tests/knowledge/test_flow.py::test_2단계_서비스도_같은_config면_접는다"]),
+ ("코드 층 방향을 안 보탠다", ROOT / "src/knowledge/flow.py",
+  '        tail = code_direction(node_id) if ambiguous else ""', '        tail = ""',
+  ["tests/knowledge/test_flow.py::test_config가_못_가른_방향은_코드_층_한_줄로_보탠다"]),
+ ("씨앗을 부분 문자열로 맞춘다", ROOT / "src/knowledge/flow.py",
+  '             and _as_token(n["label"], blob)]', '             and n["label"] in blob]',
+  ["tests/knowledge/test_flow.py::test_씨앗은_토큰_단위로_맞추고_자원은_셋까지다"]),
+ ("템플릿 이름을 채운 값을 찍은 것으로 센다", ROOT / "src/domain/actions.py",
+  '    return any(value.startswith(head) for head in _TEMPLATE_HEAD.findall(seen))', '    return False',
+  ["tests/application/test_nodes.py::test_템플릿_이름을_채운_값은_찍은_것이_아니다",
+   "tests/application/test_trace_digest.py::test_템플릿_이름을_채운_값은_증거에_없는_이름이_아니다"]),
+ ("스텁이 모르는 그룹에 lag 0을 준다", ROOT / "src/infrastructure/stubs.py",
+  '        if lag is None:\n            # 모르는 그룹에', '        if False:\n            # 모르는 그룹에',
+  ["tests/infrastructure/test_stubs.py::test_group_offsets는_모르는_그룹에_lag_0을_지어내지_않는다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -719,7 +744,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 167, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 175, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

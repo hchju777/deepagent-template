@@ -493,16 +493,26 @@ RESOURCE_TYPES = ("topic", "group", "collection", "rediskey")
 _FLOW_ORDER = ("produces", "consumes", "consumes_as", "declares")
 _KIND_RANK = {"service": 0, "topic": 1, "collection": 2, "rediskey": 3, "group": 4}
 _MIN_SEED = 3
+_MAX_RESOURCE_SEEDS = 3
+_MAX_NAMES = 8
+
+
+def _as_token(label: str, blob: str) -> bool:
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])", blob) is not None
 
 
 def find_seeds(graph: dict, texts) -> list[str]:
-    """증상·증거·가설 본문에 **글자 그대로** 나오는 그래프 이름들 — 서비스 먼저, 종류·이름순.
-    이름이 짧으면(`hb`) 아무 데나 걸리므로 세 글자부터."""
+    """증상·증거·가설 본문에 **토큰으로** 나오는 그래프 이름들 — 서비스 먼저(상한 없음), 자원은
+    종류·이름순으로 셋까지. 식별자 안의 부분 문자열(`alarm_events` 속 `alarm`)은 안 친다 — 사내에서
+    응답 필드 이름이 같은 이름의 컬렉션을 씨앗으로 만들어 첫 줄을 차지했다. 세 글자부터."""
     blob = "\n".join(t for t in texts if t)
     found = [n for n in graph["nodes"]
-             if n.get("type") in _KIND_RANK and len(n["label"]) >= _MIN_SEED and n["label"] in blob]
+             if n.get("type") in _KIND_RANK and len(n["label"]) >= _MIN_SEED
+             and _as_token(n["label"], blob)]
     found.sort(key=lambda n: (_KIND_RANK[n["type"]], n["label"]))
-    return [n["id"] for n in found]
+    services = [n["id"] for n in found if n["type"] == "service"]
+    resources = [n["id"] for n in found if n["type"] != "service"]
+    return services + resources[:_MAX_RESOURCE_SEEDS]
 
 
 def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
@@ -532,26 +542,71 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
                 service_ids = service_ids - set(ids)
         return sorted(out + [by_id[i]["label"] for i in service_ids])
 
+    def clip(names) -> str:
+        # 관계당 여덟 개까지 — 사내에서 토픽 15개가 한 줄에 늘어서 예산 800자를 거의 다 먹었다.
+        names = sorted(names)
+        if len(names) > _MAX_NAMES:
+            names = names[:_MAX_NAMES] + [f"외 {len(names) - _MAX_NAMES}개"]
+        return ", ".join(names)
+
+    def service_parts(node_id: str, *, topics_only: bool) -> list[str]:
+        groups: dict[str, set[str]] = {}
+        for e in links:
+            if e["source"] != node_id:
+                continue
+            if topics_only and by_id[e["target"]]["type"] != "topic":
+                continue
+            groups.setdefault(e["relation"], set()).add(by_id[e["target"]]["label"])
+        return [f"{rel}: {clip(groups[rel])}" for rel in _FLOW_ORDER if rel in groups]
+
+    def code_direction(node_id: str) -> str:
+        # config가 produces·consumes를 같은 서비스들에 붙였으면(공유 config) 방향을 모른다. 코드 층이
+        # 서비스까지 짚은 엣지가 있을 때만 그 한 조각을 보탠다 — 3b 측정에서 이 자리가 비어 리드가
+        # 생산자와 소비자를 못 갈랐다. 레포에만 붙은 코드 엣지는 아무것도 더해 주지 않으므로 뺀다.
+        by_rel: dict[str, set[str]] = {}
+        for e in graph["links"]:
+            if (e.get("origin") == "code" and e["target"] == node_id
+                    and e["relation"] in ("produces", "consumes")
+                    and by_id.get(e["source"], {}).get("type") == "service"):
+                by_rel.setdefault(e["relation"], set()).add(by_id[e["source"]]["label"])
+        if not by_rel:
+            return ""
+        return " · 코드로는 " + " · ".join(f"{rel}: {clip(by_rel[rel])}"
+                                       for rel in ("produces", "consumes") if rel in by_rel)
+
     def line_for(node_id: str, *, topics_only: bool = False) -> str:
         node = by_id[node_id]
-        groups: dict[str, set[str]] = {}
         if node["type"] == "service":
-            for e in links:
-                if e["source"] != node_id:
-                    continue
-                if topics_only and by_id[e["target"]]["type"] != "topic":
-                    continue
-                groups.setdefault(e["relation"], set()).add(by_id[e["target"]]["label"])
             shared = len(members.get(node.get("repo", ""), [])) > 1
             head = f"{node['label']} [service · {node.get('repo', '')}{' 공유 config' if shared else ''}]"
-            parts = [f"{rel}: {', '.join(sorted(groups[rel]))}" for rel in _FLOW_ORDER if rel in groups]
-        else:
-            for e in links:
-                if e["target"] == node_id:
-                    groups.setdefault(e["relation"], set()).add(e["source"])
-            head = f"{node['label']} [{node['type']}]"
-            parts = [f"{rel}: {', '.join(fold(groups[rel]))}" for rel in _FLOW_ORDER if rel in groups]
-        return f"{head}: {' · '.join(parts)}" if parts else f"{head}: (config 엣지 없음)"
+            parts = service_parts(node_id, topics_only=topics_only)
+            return f"{head}: {' · '.join(parts)}" if parts else f"{head}: (config 엣지 없음)"
+        groups: dict[str, set[str]] = {}
+        for e in links:
+            if e["target"] == node_id:
+                groups.setdefault(e["relation"], set()).add(e["source"])
+        head = f"{node['label']} [{node['type']}]"
+        parts = [f"{rel}: {clip(fold(groups[rel]))}" for rel in _FLOW_ORDER if rel in groups]
+        ambiguous = "produces" in groups and groups["produces"] == groups.get("consumes")
+        tail = code_direction(node_id) if ambiguous else ""
+        return f"{head}: {' · '.join(parts)}{tail}" if parts else f"{head}: (config 엣지 없음)"
+
+    def touched_lines(service_ids) -> list[str]:
+        # 2단계의 서비스 줄 — 같은 레포의 서비스들이 같은 토픽 줄을 가지면 한 줄로 접는다. 사내에서
+        # processor 다섯이 같은 토픽 15개를 다섯 번 반복해 절단(+4줄)을 불렀다.
+        by_key: dict[tuple, list[str]] = {}
+        for sid in sorted(service_ids, key=lambda s: by_id[s]["label"]):
+            key = (by_id[sid].get("repo", ""), tuple(service_parts(sid, topics_only=True)))
+            by_key.setdefault(key, []).append(sid)
+        out = []
+        for (repo, parts), ids in by_key.items():
+            if len(ids) > 1:
+                body = " · ".join(parts) if parts else "(config 엣지 없음)"
+                out.append(f"{repo}{{{','.join(by_id[i]['label'] for i in ids)}}} "
+                           f"[service · {repo} 공유 config]: {body}")
+            else:
+                out.append(line_for(ids[0], topics_only=True))
+        return out
 
     lines: list[str] = []
     if seeds:
@@ -561,8 +616,7 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
                 lines.append(line_for(sid))
                 if by_id[sid]["type"] != "service":
                     touched += [e["source"] for e in links if e["target"] == sid]
-        for svc in sorted(set(touched) - set(seeds), key=lambda s: by_id[s]["label"]):
-            lines.append(line_for(svc, topics_only=True))
+        lines += touched_lines(set(touched) - set(seeds))
     else:
         topics = [n for n in graph["nodes"] if n.get("type") == "topic"]
         degree = {n["id"]: sum(1 for e in links if e["target"] == n["id"]) for n in topics}
