@@ -142,7 +142,9 @@ def _seeds(now: datetime) -> dict:
             "mx.alarm.main": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor",
                                "ts": fresh(13 - 3 * i)} for i in range(5)]},
         # 그룹은 레포당 하나라 processor·sink가 공유한다 — lag만으로는 누가 멈췄는지 모른다.
-        "lags": {"gumi-mx-core": 1830},
+        # 그룹은 레포 공유라 processor(raw)와 sink(main)가 같은 이름이다. 실제 Kafka는
+        # 토픽별로 답하고, 어느 토픽이 밀리는지가 두 서비스를 가르는 유일한 숫자다.
+        "lags": {"gumi-mx-core": {"mx.alarm.main": 1830, "mx.alarm.raw": 0}},
         "redis": {
             **{f"alarm:stats:{l}": json.dumps({"count_1h": 0, "updated_at": _iso(stale)}) for l in LINES},
             "hb:processor": fresh(0), "hb:sink": _iso(stale)},

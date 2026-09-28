@@ -88,7 +88,7 @@ def plan(*task_lists):
 
 
 def deps_for(runner, *, first_tasks=(), integrate=None, max_rounds=3,
-             parallel_width=2, max_tasks=20) -> EngineDeps:
+             parallel_width=2, max_tasks=20, known_names="") -> EngineDeps:
     async def frame(state: CaseState) -> dict:
         return {"plan_tasks": list(first_tasks)}
 
@@ -97,7 +97,7 @@ def deps_for(runner, *, first_tasks=(), integrate=None, max_rounds=3,
 
     return EngineDeps(runner=runner, frame=frame, integrate=integrate or stop,
                       max_rounds=max_rounds, parallel_width=parallel_width,
-                      max_tasks=max_tasks)
+                      max_tasks=max_tasks, known_names=known_names)
 
 
 def ok(task_id: str, *, summary: str = "봤다") -> TaskOutcome:

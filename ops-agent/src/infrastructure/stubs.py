@@ -125,7 +125,7 @@ class StubMongoReader(MongoReaderPort):
 
 class StubKafkaInspector(KafkaInspectorPort):
     def __init__(self, topics: dict[str, list[dict]] | None = None,
-                 lags: dict[str, int] | None = None, *, clock: Clock):
+                 lags: dict[str, int | dict[str, int]] | None = None, *, clock: Clock):
         self._topics = {k: list(v) for k, v in (topics or {}).items()}
         self._lags = dict(lags or {})
         self._clock = clock
@@ -135,11 +135,18 @@ class StubKafkaInspector(KafkaInspectorPort):
                                      source="stub-kafka:topics", clock=self._clock)
 
     async def group_offsets(self, group: str) -> ProbeResult:
+        # seed가 토픽별로 주면 실어댑터처럼 토픽 행을 낸다. 총량만 주면 행을 **비운다** —
+        # 예전엔 `topic="stub"` 행을 지어냈는데, 3b 측정에서 리드가 그걸 "stub 토픽을
+        # 구독하고 있다"로 읽고 결론을 그 위에 세웠다. 리드는 스텁인 줄 모른다.
         lag = self._lags.get(group, 0)
+        if isinstance(lag, dict):
+            rows = [{"topic": topic, "partition": 0, "committed": 0, "end": n, "lag": n}
+                    for topic, n in sorted(lag.items())]
+            total = sum(lag.values())
+        else:
+            rows, total = [], lag
         return ProbeResult.succeeded(
-            {"group": group, "total_lag": lag,
-             "partitions": [{"topic": "stub", "partition": 0, "committed": 0,
-                             "end": lag, "lag": lag}]},
+            {"group": group, "total_lag": total, "partitions": rows},
             source=f"stub-kafka:group_offsets {group}", clock=self._clock)
 
     async def tail(self, topic: str, *, limit: int = 10) -> ProbeResult:

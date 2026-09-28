@@ -882,6 +882,7 @@ def cmd_case_investigate(args, env) -> int:
     async def go() -> dict:
         llm = build_llm(app.llm, clock=clock)
         built["llm"] = llm.describe()     # config가 뭐라고 적혔는지가 아니라 실제로 붙은 것
+        from src.knowledge import flow
         code, services, flow_graph, graph_note = _code_if_ready(
             site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock,
             graph_dir=_graph_dir(args, env, gbm, fct))
@@ -902,7 +903,8 @@ def cmd_case_investigate(args, env) -> int:
                               frame=frame, integrate=integrate,
                               max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width,
-                              max_tasks=app.investigation.max_tasks)
+                              max_tasks=app.investigation.max_tasks,
+                              known_names=flow.known_names(flow_graph))
             state = CaseState(case=Case(
                 id=record.id, gbm=gbm, fct=fct, origin="patrol",
                 symptom=record.symptom, t0=record.opened_at))

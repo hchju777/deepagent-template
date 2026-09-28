@@ -59,6 +59,12 @@ class EngineDeps:
     # 그 값 그대로 버려진 것을 본 일이었고, 그게 늘 **한 라운드 뒤**였다. 대본 경로
     # (`dryrun`)는 끈다 — 되물으면 대본의 다음 라운드를 당겨 먹는다.
     redo_on_rejection: bool = True
+    # 브리핑이 리드에게 준 이름들(`<데이터 흐름>` 블록의 그래프 이름, 한 줄에 하나).
+    # "찾지 않고 이름을 댔다" 검사는 증거와 이것을 합쳐 본다 — 블록이 준 컨슈머 그룹
+    # 이름을 쓴 것을 찍었다고 적으면 계측기가 블록에 **불리한** 거짓 양성을 내고(3b 측정에서
+    # 매 판 그랬다), 그 숫자로는 블록의 효과를 잴 수 없다. 그래프가 없으면 빈 문자열이라
+    # 검사는 예전과 같다.
+    known_names: str = ""
 
 
 # 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
@@ -127,6 +133,11 @@ def _seen(state: CaseState) -> str:
     """
     return "\n".join(f"{ref.source} {ref.body or ref.summary}"
                      for ref in state.evidence)
+
+
+def _universe(state: CaseState, deps: "EngineDeps") -> str:
+    """리드가 이름을 알 수 있었던 곳 전부 — 본 증거와 브리핑이 준 그래프 이름."""
+    return _seen(state) + "\n" + deps.known_names
 
 
 def _taken(state: CaseState) -> frozenset:
@@ -272,7 +283,7 @@ def make_nodes(deps: EngineDeps) -> dict:
         tasks, rejected, guessed = _accept_tasks(
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             pending=_pending(state), waiting=_waiting(state),
-            seen=_seen(state) if deps.check_discovery else None)
+            seen=_universe(state, deps) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
                 "plan_tasks": tasks,
@@ -313,7 +324,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                 reply, room=deps.max_tasks - len(base.plan_tasks),
                 taken=_taken(base), done=_done(base), pending=_pending(base),
                 waiting=_waiting(base),
-                seen=_seen(base) if deps.check_discovery else None)
+                seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed
 

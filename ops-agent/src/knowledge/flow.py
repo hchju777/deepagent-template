@@ -638,3 +638,11 @@ def advise(graph: dict, topology: Topology) -> list[str]:
         if not any(e["source"] == sid and e["relation"] != _BRIDGE for e in links):
             out.append(f"{name}: config에도 코드에도 자원이 없다 — 레포·역할 선언을 의심하라")
     return out
+
+
+def known_names(graph: dict | None) -> str:
+    """그래프의 이름 전부, 한 줄에 하나. 엔진의 "찾지 않고 이름을 댔다" 검사가 증거와 합쳐
+    본다 — 그래프에 있는 이름은 지어낸 것이 아니다. None이면 빈 문자열이라 검사가 예전과 같다."""
+    if not graph:
+        return ""
+    return "\n".join(sorted({n["label"] for n in graph.get("nodes", []) if n.get("label")}))

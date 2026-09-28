@@ -441,3 +441,18 @@ async def test_되물을_때_첫_답에서_받은_것이_대기_태스크로_실
     assert [(t.id, t.action) for t in patch["plan_tasks"]] == [
         ("t-8", "mongo.list_collections"), ("t-9", "kafka.list_topics")]
 
+
+
+async def test_브리핑이_준_이름은_찍은_것이_아니다(case):
+    """`<데이터 흐름>` 블록이 준 이름을 리드가 쓰면 "찾지 않고 댔다"가 아니다. 3b 측정에서
+    블록에 적힌 컨슈머 그룹 이름이 매 판 그렇게 찍혔다 — 계측기가 블록에 **불리한** 거짓
+    양성을 냈고, 그 숫자로는 블록의 효과를 잴 수 없다."""
+    async def lead(state):
+        return {"decision": "continue",
+                "plan_tasks": [task("t-2", params={"key": "from-flow"})]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9,
+                                known_names="sink\nfrom-flow"))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="ok")]))
+    assert not any("찾지 않고" in e for e in patch["llm_errors"]), patch["llm_errors"]

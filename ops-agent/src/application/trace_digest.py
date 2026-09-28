@@ -96,7 +96,9 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
            brief: bool = False) -> list[str]:
     evidence = _block(prompt, "모은 증거")
     rejected = _block(prompt, "버려진 태스크")
-    seen_names = evidence                       # 이름이 증거에 있나 — 문자열로 본다
+    # 이름이 증거에 있나 — 문자열로 본다. `<데이터 흐름>` 블록이 준 이름도 찾은 것이다
+    # (엔진의 `known_names`와 같은 판단 — 요약은 그래프가 없으니 실제로 보여 준 블록으로).
+    seen_names = evidence + "\n" + _block(prompt, "데이터 흐름")
     # 증거 줄의 `source`가 곧 그 질의다. `describe`가 만든 문자열이므로
     # 우리도 같은 함수로 만들어서 **정확히** 대조한다.
     visible = {line.split(" | ")[1].strip()

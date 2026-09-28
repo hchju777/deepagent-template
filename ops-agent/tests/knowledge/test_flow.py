@@ -499,3 +499,12 @@ def test_따옴표로_통째_적힌_config_키는_조상_없이도_잡는다():
 def test_이름이_하나도_없으면_그렇게_말한다():
     empty = flow.extract(names=[], topology=TOPOLOGY, hits_for=lambda p: [], commits=COMMITS)
     assert any("flow.sources" in line for line in flow.advise(empty, TOPOLOGY))
+
+
+def test_known_names는_그래프의_이름_전부이고_없으면_빈다():
+    """엔진의 "찾지 않고 이름을 댔다" 검사가 이 목록을 증거와 합쳐 본다 — 브리핑이 준
+    이름은 찾은 것이다. 그래프가 없으면 빈 문자열이라 검사가 예전과 같다."""
+    g = {"nodes": [{"id": "service_sink", "label": "sink", "type": "service"},
+                   {"id": "topic_a", "label": "a.b", "type": "topic"}], "links": []}
+    assert flow.known_names(g).splitlines() == ["a.b", "sink"]
+    assert flow.known_names(None) == ""

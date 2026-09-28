@@ -678,6 +678,20 @@ CASES = [
   '        if task_id in waiting:\n            marks.append("대기 중이던 태스크의 갱신")\n        elif spoken in visible:',
   '        if spoken in visible:',
   ["tests/application/test_trace_digest.py::test_대기_중이던_태스크를_같은_id로_다시_내면_갱신이라고_적는다"]),
+ ("스텁이 파티션을 지어낸다", ROOT / "src/infrastructure/stubs.py",
+  '            rows, total = [], lag',
+  '            rows, total = [{"topic": "stub", "partition": 0, "committed": 0, "end": lag, "lag": lag}], lag',
+  ["tests/infrastructure/test_stubs.py::test_group_offsets는_총량만_알면_파티션을_지어내지_않는다"]),
+ ("브리핑이 준 이름을 찍은 것으로 센다", ND,
+  '    return _seen(state) + "\\n" + deps.known_names', '    return _seen(state)',
+  ["tests/application/test_nodes.py::test_브리핑이_준_이름은_찍은_것이_아니다"]),
+ ("요약이 흐름 블록을 안 본다", TD,
+  '    seen_names = evidence + "\\n" + _block(prompt, "데이터 흐름")', '    seen_names = evidence',
+  ["tests/application/test_trace_digest.py::test_데이터_흐름_블록의_이름은_증거에_없는_이름이_아니다"]),
+ ("known_names가 빈다", ROOT / "src/knowledge/flow.py",
+  '    return "\\n".join(sorted({n["label"] for n in graph.get("nodes", []) if n.get("label")}))',
+  '    return ""',
+  ["tests/knowledge/test_flow.py::test_known_names는_그래프의_이름_전부이고_없으면_빈다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -705,7 +719,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 163, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 167, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

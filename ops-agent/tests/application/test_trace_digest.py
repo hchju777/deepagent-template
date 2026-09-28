@@ -221,3 +221,13 @@ def test_못_읽은_시도의_질의는_이미_한_질의가_아니다():
     text = "\n".join(digest([refused, retry]))
     assert "이미 r2에서 한 질의" not in text
 
+
+
+def test_데이터_흐름_블록의_이름은_증거에_없는_이름이_아니다():
+    """블록이 준 컨슈머 그룹 이름을 리드가 쓰면 그건 찾은 것이다. 3b 측정에서 매 판
+    `증거에 없는 이름 group=…`으로 찍혀 "지어낸 이름" 지표가 블록에 불리하게 틀렸다."""
+    prompt = ("<데이터 흐름>\nsink [service]: consumes_as: g-from-flow\n</데이터 흐름>\n\n"
+              + _prompt(evidence="- t-1.e1 | mongo.find collection='alarm' | 3건"))
+    reply = json.dumps({"tasks": [_task("t-7", "kafka.group_offsets", {"group": "g-from-flow"})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "증거에 없는 이름" not in text, text
