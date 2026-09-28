@@ -746,6 +746,24 @@ CASES = [
   '                                             **({"service": served[0]} if len(served) == 1 else {})}))',
   '                                             }))',
   ["tests/application/test_briefing.py::test_frame_예시의_code_grep은_서빙_서비스를_안다"]),
+ ("추적기가 주석으로 클래스를 안 좁힌다", ROOT / "src/knowledge/trace.py",
+  '                owner = await r.klass(mod, ann)', '                owner = None',
+  ["tests/knowledge/test_trace.py::test_끝점에서_핸들러를_찾아_DAO까지_따라가고_읽는_자원을_등급과_함께_낸다"]),
+ ("후보 아래 읽기를 확실로 속인다", ROOT / "src/knowledge/trace.py",
+  '            add_read(n.kind, n.value, "추정" if cap == "추정" else "확실",', '            add_read(n.kind, n.value, "확실",',
+  ["tests/knowledge/test_trace.py::test_주석이_없으면_후보_전부를_추정으로_남기고_그렇게_적는다"]),
+ ("getattr을 gap으로 안 남긴다", ROOT / "src/knowledge/trace.py",
+  '        if "getattr(" in segment:', '        if False:',
+  ["tests/knowledge/test_trace.py::test_getattr은_못_따라간다고_남긴다"]),
+ ("깊이 상한이 없다", ROOT / "src/knowledge/trace.py",
+  '        if node.depth >= max_depth:', '        if False:',
+  ["tests/knowledge/test_trace.py::test_깊이_상한에서_멈추고_그렇게_적는다"]),
+ ("정의 찾기가 테스트 파일을 안 뺀다", ROOT / "src/knowledge/trace.py",
+  '            if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):', '            if not hit.file.endswith(".py"):',
+  ["tests/knowledge/test_trace.py::test_심볼_이름으로도_시작하고_테스트_파일의_정의는_뺀다"]),
+ ("문법 오류를 gap으로 안 남긴다", ROOT / "src/knowledge/trace.py",
+  '                self.gaps.append(Gap(path, exc.lineno or 0, f"문법 오류로 못 읽었다 — {exc.msg}"))', '                pass',
+  ["tests/knowledge/test_trace.py::test_문법_오류_파일은_gap이고_계속_간다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -773,7 +791,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 183, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 189, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
