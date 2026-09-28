@@ -1,6 +1,6 @@
 # 11c — 데이터 흐름 그래프
 
-> 상태: 진행 중 (커밋 3a/6 — 다음은 3b 측정). 앞: [11a](step-11a-code.md). 뒤: [11b](step-11b-trace.md) → 12a.
+> 상태: 진행 중 (커밋 3b/6 — 다음은 커밋 4 출발점과 사다리). 앞: [11a](step-11a-code.md). 뒤: [11b](step-11b-trace.md) → 12a.
 
 ## 왜 이 스텝인가
 
@@ -262,14 +262,79 @@ trace를 읽으니 원인은 모델이 아니라 우리 쪽에 있었다.
 
 토큰 배율은 재지 않는다. 우리 병목은 토큰이 아니라 방향이다.
 
+### 결과 (3b — 프롬프트는 `fb86200` 그대로, 측정판은 `871eb14`)
+
+**그래프 질문 8개** — 측정판 번들에 `code flow`로 물었다.
+
+| # | 답 | 판정 |
+|---|---|---|
+| A1 | writes: sink (코드 INFERRED) · declares: api·processor·sink (config, 공유) | 일치 |
+| A2 | 코드: sink consumes · config: processor·sink 둘 다 (공유 config는 못 가른다) · 그룹 `gumi-mx-core` | 일치 — 단 기대에 적은 `gumi-mx-sink`는 커밋 2 이전 측정판 이름. 지금은 레포 공유 그룹 `gumi-mx-core`이고 결정적 읽기 지표도 그 이름으로 잰다 |
+| A3 | processor —produces→ mx.alarm.main ←consumes— sink | 일치 |
+| A4 | alarm_events, alarm:stats:{line} | 일치 |
+| A5 | consumes만, produces 없음 | 일치 |
+| A6 | alarm_events, alarm:stats:{line}, hb:{service} | 일치 |
+| B1 | `graph.json`에 `batch_size` 없음 | 정상 |
+| B2 | `graph.json`에 `lag` 없음 | 정상 |
+
+**haiku 루프** — 블록 켬 3회, 끔 3회. 리드 자리는 턴마다 새 haiku 에이전트(11a와 같은 규약).
+"끔"은 `code graph`를 안 돌린 측정판이라 블록도 `code.flow`도 없다.
+
+| 판 | 블록 | sink를 원인으로 짚은 가설이 supported가 된 첫 라운드 | 최종 가설 | 지어낸 이름 | `group_offsets gumi-mx-core` | 종료 |
+|---|---|---|---|---|---|---|
+| on-1 | 켬 | r4 | sink 하나 (정답) | 1 (`hb:sink`) | r3 | r6 conclude |
+| on-2 | 켬 | r2 | sink 하나 (정답) | 1 (`hb:sink`) | r1 | r6 상한 — 끝까지 continue |
+| on-3 | 켬 | r2 | sink 하나 (정답) | 1 (`hb:sink`) | r3 | r4 conclude |
+| off-1 | 끔 | r6 (r2~r5는 "processor가 Mongo에 못 쓴다") | sink 하나 (정답, 마지막 라운드) | 4 (`mx-alarm-processor` 그룹 + 템플릿 채움 3) | r5 | r6 conclude |
+| off-2 | 끔 | r2 | sink 하나 (정답) | 1 (`hb:sink`) | r1 | r4 conclude |
+| off-3 | 끔 | r4 | sink 하나 (정답) | 0 | r5 | r6 conclude |
+
+읽는 법:
+
+- **정답률은 같다** — 여섯 판 전부 sink 하나를 짚었고 "A 또는 B"는 없었다. 이 측정판은 haiku급에게
+  블록 없이도 풀린다. 로컬 결과는 사내의 상한이지 예측이 아니다(11a).
+- **블록은 길을 한두 라운드 줄인다.** sink 지목 라운드 중앙값 켬 2 / 끔 4, 결정적 읽기 평균 켬 2.3 /
+  끔 3.7. 끔 쪽은 그룹 이름을 `code.config` 증거에서 결국 얻지만 그게 r5까지 밀리는 판이 둘이다.
+- **진짜로 지어낸 이름은 끔 쪽에서만 나왔다.** off-1의 `mx-alarm-processor`. 나머지 "지어낸 이름"은
+  전부 `hb:{service}` 템플릿을 `hb:sink`로 채운 것이라 지어낸 게 아니다 — 계측기가 템플릿 이름을
+  채운 값과 못 맞춘다(후속 ①).
+- **블록이 못 하는 것이 그대로 보였다.** 공유 config라 `mx.alarm.main`의 produces·consumes가 둘 다
+  `dt-core{processor,sink}`로 접혀 방향을 못 가른다. 가른 것은 토픽별 lag(main 1830, raw 0)와
+  "토픽엔 새 메시지가 있는데 Mongo엔 없다"는 조합이지 블록이 아니다. 코드 층은 방향을 안다
+  (processor produces / sink consumes, INFERRED) — 블록이 config만 싣기로 한 대가다(커밋 4에서 재검토).
+- on-2는 r2에 좁혀 놓고 6라운드 내내 `continue`였다. 좁힌 뒤 끝내는 문제는 블록과 무관하고 12a의
+  conclude 규칙 몫이다.
+
+**측정판 결함 둘 — 첫 두 판을 버리고 고친 뒤(871eb14) 여섯 판을 다시 돌렸다.**
+
+1. 스텁 `group_offsets`가 `topic="stub"` 파티션 행을 지어냈다. 첫 on-2에서 리드는 그걸 "표시 시스템이
+   stub 토픽을 구독한다"로 읽고 결론을 그 위에 세웠다. seed가 토픽별 lag를 주면 실어댑터 모양으로,
+   총량만 주면 행을 비운다. 측정판 seed는 토픽별(main 1830 / raw 0)로 — 그룹이 레포 공유라 그것이
+   두 서비스를 가르는 유일한 숫자다.
+2. 블록이 준 컨슈머 그룹 이름을 엔진은 "찾지 않고 이름을 댔다"로, 요약은 "증거에 없는 이름"으로
+   찍었다. 블록에 불리한 거짓 양성이라 그 숫자로는 블록을 잴 수 없었다. `EngineDeps.known_names`
+   (`flow.known_names`)와 요약의 `<데이터 흐름>` 블록 텍스트를 아는 이름으로 친다. 고친 뒤 판에서
+   `gumi-mx-core`가 더 안 찍히는 것을 실제 trace로 확인했다.
+
+버린 두 판의 기록: 첫 on-1은 processor를 짚었다(오답) — 공유 그룹의 총 lag만 보고 "processor가
+소비 못 함"으로 읽었고 토픽별 숫자가 없어 되돌릴 근거가 없었다. 첫 on-2는 위 1의 결론이었다.
+
+**후속(커밋 4에 싣거나 백로그):**
+
+① "찾지 않고 이름을 댔다" 검사가 템플릿 이름(`hb:{service}`)의 채운 값(`hb:sink`)을 아는 이름으로
+   치게 — `Name.literal`처럼 `{` 앞까지의 접두어 일치. ② 스텁 `group_offsets`가 모르는 그룹에 lag 0을
+   돌려준다(off-1에서 지어낸 그룹이 "정상"으로 읽힘). 실어댑터처럼 "committed 없음"으로 답해야 한다.
+   ③ 블록이 config에서 못 가른 방향을 코드 층의 INFERRED 한 줄로 보태는 것 — 커밋 4의 블록 조정에서
+   같이 본다. ④ 에이전트 하나가 "written"이라 보고했지만 파일이 없었다(on-2 003) — 파일 턴 어댑터
+   쪽 문제가 아니라 대역 에이전트 쪽이고, 같은 턴을 새 에이전트로 다시 돌렸다.
+
 ## 커밋 계획
 
 1. 추출기 + 질의 + 사전 등록 ✅
 2. 사내 config 모양 반영, `code sync`/`code graph`에 graphify + 오버레이 + 병합 배선,
    `code status`의 커밋 대조·권고, `code flow`, 측정판 갱신 ✅
 3. 브리핑 `<데이터 흐름>` 블록(config 층만, 800자), `code.flow` action ✅ (3a)
-   — **3b: 위 측정을 프롬프트를 고치기 전에 돌린다.** 사전 등록의 문항은 블록을 겨냥했으므로
-   블록만 켜고 끄고 잰다. 이게 4·5의 기준선이다.
+   — 3b: 위 측정을 프롬프트를 고치기 전에 돌렸다 ✅ (결과는 "측정" 절). 이게 4·5의 기준선이다.
 4. **출발점과 사다리.** `Case`에 `check`·`target`을 실어 `case_block`이 접수 경로 한 줄을
    config에서 생성한다("순찰 점검 X · 프로브 Y · rest.query Z · GET /path"; 사람 케이스는 없음).
    frame 규칙에서 "이름을 모른다"·`data_prober` 문장을 빼고 사다리 규칙을 넣는다:
