@@ -1,0 +1,121 @@
+# 11b단계 — 코드 추적과 재계산 대조 (닫힌 action 레인)
+
+> **목적**: 리드가 "이 끝점(또는 이 값)을 만드는 코드가 무엇을 읽는가"를 **함수 사슬과
+> file:line로** 받고, "그 결과가 원천과 맞는가"를 **코드가 센 숫자로** 받는다. 11c가 "어느
+> 서비스·어느 흐름"을 줬다면 11b는 "어느 함수 몇 줄"과 "맞나 틀리나"를 준다.
+>
+> 상태: 설계 확정, 착수 전. 앞: [11c](step-11c-flow.md) 커밋 6 뒤. 뒤: 12a.
+> 결정의 근거는 [decisions ⑰](decisions.md).
+
+## 왜 "서브에이전트 3종"이 LLM 루프가 아닌가
+
+로드맵의 11b는 "서브에이전트 3종(data_prober·code_tracer·recompute_verifier)"이고,
+`PlanTask`의 주석은 "서브에이전트는 스스로 도구를 고른다"였다. **바꾼다.** 3종은 "누가
+골랐나"가 아니라 **"어떤 종류의 증거인가"를 나누는 레인**이다. 리드가 등재표에서 action을
+고르고, `role_for(action)`이 레인을 정하고, 프로브 실행기가 돌린다 — 10b·11a·11c의 배선
+그대로에 표의 줄만 는다. 이유와 기각한 대안은 [⑰](decisions.md)에. 요약: 재현·감사가 되고,
+사내 모델의 "예시를 채운다"는 성질과 맞고, `role`을 리드에게 맡겼다가 답 전체가 거부됐던
+사고의 교훈이다. 잃는 것은 태스크 안의 적응 하나이고, 추적기가 막힌 지점을 file:line으로
+돌려주면 리드가 다음 라운드에 `code.read`로 밟는다.
+
+케이스마다 사람이 정하는 것은 없다. 표는 코드가 한 번, 사이트 config는 사람이 사이트당
+한 번, 어느 읽기를 어떤 인자로 낼지는 리드가 라운드마다.
+
+"어떻게 조합되는가"는 여기서도 코드가 통째로 풀지 않는다. 추적기가 200개 파일을 함수
+서너 개로 좁혀 주고, 그 함수를 읽어 조합 논리를 해석하는 것은 리드다. 재계산 대조는 그
+해석이 맞는지를 숫자로 확인하는 장치다.
+
+## 무엇을 만드나
+
+### 커밋 1 — 추적기 핵심 (`src/knowledge/trace.py`)
+
+입력은 끝점 path(`/line/status`) 또는 심볼 이름(`get_line_status`)과 레포. 출력은 `Trace`:
+
+```
+chain:  [(file, line, qualname), …]                 핸들러부터 순서대로
+reads:  [(resource_kind, name, grade, file, line)]  grade ∈ {확실, 추정}
+gaps:   [(file, line, why)]                          못 따라간 지점
+```
+
+- **출발점.** 라우트 선언에서 핸들러를 찾는다. FastAPI 사내 모양(확인됨):
+  `router = APIRouter(prefix="/line", tags=[…])` + `@router.get("/status", response_model=…)`
+  + `async def get_line_status(service: LineServiceDep)`. 파일을 ast로 읽어 `APIRouter(` 호출의
+  `prefix`와 데코레이터의 첫 문자열을 붙인다. 앱 조립부의 `include_router(x.router,
+  prefix=…)`는 grep으로 찾아 앞에 붙이고, 라우터 변수를 못 이으면 `partial`로 표시한다.
+  `@app.get`, `@router.api_route`, `add_api_route(`도 같은 취급.
+- **호출 따라가기.** 깊이 6, 노드 200, 같은 레포 안. 번들의 graphify 심볼 그래프에 호출
+  엣지가 있으면 뼈대로 쓰고, 없거나 끊기면 Python `ast`로 같은 모듈과 레포 안 import를
+  잇는다. 메서드 호출(`service.get_line_status()`)은 이름으로 레포 안 정의 전부를 후보로 잡고,
+  인자 주석(`LineServiceDep` → `Annotated[LineService, Depends(get_x)]`)에서 얻은 클래스로
+  하나로 좁힌다. 못 좁히면 후보 전부를 `추정`으로 남긴다. `Depends(fn)`은 호출로 친다.
+- **이름 수집.** 지나간 함수마다 11c의 `Name` 목록(collection·rediskey·topic 값), config
+  키, Enum 멤버(`MEMBER = "config_key"` 정의를 레포당 한 번 스캔)를 찾는다. 리터럴 직접
+  참조는 `확실`, Enum·config 키 경유는 `추정`. `getattr`·문자열 조립으로 고르는 자원은
+  `gaps`에 남긴다.
+- 던지지 않는다. 파싱이 실패한 파일은 `gaps`에 적고 계속 간다. 시계는 받지 않는다(순수 함수).
+
+테스트는 가짜 레포 뭉치 하나로: prefix 조립, `include_router` 한 겹, 주석으로 좁히기, Enum
+경유 `추정`, `getattr` gap, 깊이 상한, 문법 오류 파일.
+
+### 커밋 2 — `code graph`가 끝점마다 돌린다
+
+11c 커밋 5의 끝점 노드 전부에 추적기를 돌려 `endpoint reads resource` 엣지를 origin
+`trace`, 등급과 file:line과 함께 박는다. 블록에는 `reads(추정): …`처럼 보인다. `code status`
+요약에 "끝점 N개 중 자원까지 이어진 M개, 막힌 K개". 조사 중에는 안 돌린다(⑥ — 조사 중 그래프
+갱신 금지). 비용은 끝점당 밀리초 단위(호출 그래프는 레포당 한 번 파싱).
+
+### 커밋 3 — action과 레인
+
+- `code.trace` — `("code", "trace", ("target",), ("service",))`. `DeployedCodePort.trace`
+  추가(추상, `tests/domain/test_ports.py`가 표면을 단정). 결과는 증거 한 건:
+
+  ```
+  t-4.e1 [code_tracer] /line/status
+    api/routers/line.py:12 get_line_status
+    → api/services/line.py:40 LineService.get_line_status
+    → api/repos/line.py:22 find(line_state [collection])   확실
+    못 따라감: api/services/line.py:47 getattr(...)
+  ```
+
+- `recompute.count`·`recompute.sum` — `("recompute", "count", ("collection", "filter",
+  "expect"), ())`, sum은 `field` 추가. `expect`는 `{"evidence": "t-2.e1", "path":
+  "response.items[0].alarm"}` — 앞선 증거 안의 값을 가리킨다. 실행기는 mongo 어댑터로
+  세고(읽기만), 인용된 증거에서 기대값을 꺼내 `{recomputed, expected, match}`를 증거로
+  남긴다. 값이 그 path에 없으면 `error`("기대값을 못 찾았다")이지 불일치가 아니다.
+  **`expect.evidence`는 코드가 `input_evidence_ids`에 강제로 넣는다**(`_sanitize_new_task`,
+  규율 4) — 그래야 select 게이트가 그 증거가 생긴 뒤에만 돌린다. 리드는 코드를 읽고
+  collection·filter를 채우는 판단만 한다. Redis·Kafka 판은 필요가 보이면 그때.
+- `role_for`: `code.*` → `code_tracer`, `recompute.*` → `recompute_verifier`, 나머지
+  `data_prober`. `PlanTask`의 "서브에이전트는 스스로 도구를 고른다" 주석을 고친다.
+- 브리핑 예시: `rest.query` 증거가 생긴 뒤 integrate 예시에 `code.trace`(target: "위 증거에서
+  본 끝점 path")가, trace 증거가 생긴 뒤 `recompute.count`(expect.evidence: "위 trace가 나온
+  rest 증거 id")가 나온다. 예시가 곧 출력이므로(10b) 여기서 사다리의 다음 칸을 보여 준다.
+- `case trace`는 증거 내용을 안 찍는 규칙 그대로 — 사슬의 file:line은 찍어도 되지만 읽은
+  자원의 **값**은 안 찍는다.
+
+### 커밋 4 — 측정 (결과를 보기 전에 적는다)
+
+측정판은 11c와 같다(로컬 가짜 레포 dt-core·dt-api, 심은 고장 = sink 컨슈머 정지). 11c 커밋 6의
+숫자가 기준선이다. 로컬 haiku 루프, 11b 켜고 끄고 각 3회.
+
+| # | 질문 | 기대 |
+|---|---|---|
+| T1 | 출발 REST 항목이 있는 케이스에서 리드가 `code.trace`를 내는 첫 라운드 | r1 이내 |
+| T2 | api 핸들러에서 컬렉션까지 사슬이 이어지는가, 등급은 | 이어진다, `확실` |
+| T3 | 고장을 심었을 때 `recompute.count`가 불일치를, 안 심었을 때 일치를 내는가 | 둘 다 맞아야 |
+| T4 | 정답 부품(sink)을 처음 짚는 라운드 | 11c 기준선보다 앞 |
+| T5 | 지어낸 이름 수 | 기준선 이하 |
+| T6 | `getattr` 간접 참조 픽스처에서 추적기가 gap을 남기고, 리드가 그 자리를 `code.read`로 내는가 | 남긴다 / 낸다 |
+| T7 | 최종 가설이 부품 하나를 짚는가, "A 또는 B"인가 | 하나 |
+
+토큰 배율은 재지 않는다(11c와 같은 이유 — 병목은 방향이다).
+
+## 범위 밖
+
+- LLM 서브에이전트 루프. 필요해지면 `PlanTask.action=None`인 태스크로 레인 하나만 연다.
+- 레포를 건너는 호출(HTTP로 다른 서비스를 부르는 것) — 그건 그래프의 `serves` 엣지가
+  이미 잇는다.
+- 런타임 관측(Mongo 프로파일러·접근 로그·트레이스) — 대상에 켜져 있어야 읽을 수 있고 켜는 건
+  쓰기다. 켜져 있으면 정적 추적의 검증 용도로만.
+- `response_model` 스키마 → 응답 필드 → `items_all_zero.counts` 잇기 — 메모만. 필드 수준
+  지식이 필요해지면 그때.
