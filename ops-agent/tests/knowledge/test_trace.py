@@ -216,3 +216,20 @@ async def test_레포가_다른_라우트는_안_본다():
     t = await trace.trace("/api/v1/line/status", repo="dt-core", source=src, names=NAMES,
                           routes=ROUTES, aliases={})
     assert t.status == "not_found"
+
+
+async def test_Tracer는_레포_단위로_파싱과_grep을_캐시하고_gap은_새지_않는다():
+    """끝점 156개(사내)를 한 레포에서 돌리면 파일 읽기와 `def 이름(` grep이 겹친다 — 캐시가 없으면
+    git 호출 수천 번이다. 대신 문법 오류 같은 파싱 gap이 다른 끝점의 결과로 새면 안 된다."""
+    src = _Source()
+    tracer = trace.Tracer(REPO, src, names=NAMES, routes=ROUTES)
+    await tracer.prepare()
+    bad = await tracer.trace("/api/v1/bad/x")
+    assert any("문법" in g.why for g in bad.gaps)
+    ok = await tracer.trace("/api/v1/line/status")
+    assert ok.status == "ok" and ok.gaps == () and _reads(ok) == {
+        ("collection", "line_state", "확실"), ("rediskey", "line:{id}", "추정")}
+    reads_before, greps_before = len(src.reads), len(src.greps)
+    again = await tracer.trace("/api/v1/line/status")
+    assert again == ok
+    assert len(src.reads) == reads_before and len(src.greps) == greps_before, "두 번째는 캐시로 끝나야 한다"

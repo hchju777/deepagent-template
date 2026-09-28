@@ -649,8 +649,8 @@ CASES = [
   '        done = subprocess.run([binary, "export", "graphml", "--graph", str(graph_json)],',
   ["tests/knowledge/test_graph_build.py::test_wiki는_graph_json_옆에_생기고_없으면_건너뛴다"]),
  ("흐름 텍스트에 코드 층이 섞인다", ROOT / "src/knowledge/flow.py",
-  '    links = [e for e in graph["links"] if (e.get("origin") == "config" or e["relation"] == "serves")',
-  '    links = [e for e in graph["links"] if (e.get("origin") != "runs" or e["relation"] == "serves")',
+  '             if (e.get("origin") in ("config", "trace") or e["relation"] == "serves")',
+  '             if (e.get("origin") != "runs" or e["relation"] == "serves")',
   ["tests/knowledge/test_flow.py::test_흐름_텍스트는_config_층만_씨앗의_이웃_그리고_닿은_서비스의_토픽"]),
  ("흐름 텍스트가 예산을 안 지킨다", ROOT / "src/knowledge/flow.py",
   '        if used + len(line) + 1 > budget and out:', '        if False:',
@@ -705,7 +705,7 @@ CASES = [
   '            if len(ids) > 1:\n                out.append(f"{repo}', '            if False:\n                out.append(f"{repo}',
   ["tests/knowledge/test_flow.py::test_2단계_서비스도_같은_config면_접는다"]),
  ("코드 층 방향을 안 보탠다", ROOT / "src/knowledge/flow.py",
-  '        tail = code_direction(node_id) if ambiguous else ""', '        tail = ""',
+  '        tail = code_direction(node_id, directions) if (with_code or ambiguous) else ""', '        tail = ""',
   ["tests/knowledge/test_flow.py::test_config가_못_가른_방향은_코드_층_한_줄로_보탠다"]),
  ("씨앗을 부분 문자열로 맞춘다", ROOT / "src/knowledge/flow.py",
   '             and _as_token(n["label"], blob)]', '             and n["label"] in blob]',
@@ -732,12 +732,12 @@ CASES = [
   '            if len(tails) == 1:\n                target = tails[0]', '            if False:\n                target = tails[0]',
   ["tests/knowledge/test_flow.py::test_등재_path와_코드_끝점을_잇는다"]),
  ("서빙 미상을 안 센다", ROOT / "src/knowledge/flow.py",
-  '            "endpoints_unserved": sum(1 for n in endpoints if n["id"] not in served)}',
-  '            "endpoints_unserved": 0}',
+  '            "endpoints_unserved": sum(1 for n in endpoints if n["id"] not in served),',
+  '            "endpoints_unserved": 0,',
   ["tests/knowledge/test_flow.py::test_등재_path와_코드_끝점을_잇는다"]),
  ("블록이 serves를 뺀다", ROOT / "src/knowledge/flow.py",
-  '    links = [e for e in graph["links"] if (e.get("origin") == "config" or e["relation"] == "serves")',
-  '    links = [e for e in graph["links"] if e.get("origin") == "config"',
+  '             if (e.get("origin") in ("config", "trace") or e["relation"] == "serves")',
+  '             if (e.get("origin") in ("config", "trace"))',
   ["tests/knowledge/test_flow.py::test_끝점_씨앗은_serves_줄이_맨_앞이고_서비스_다음_순위다"]),
  ("블록이 접수 경로를 씨앗으로 안 쓴다", B,
   '    seeds_from = [state.case.symptom, *texts]', '    seeds_from = [state.case.symptom]',
@@ -762,8 +762,31 @@ CASES = [
   '            if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):', '            if not hit.file.endswith(".py"):',
   ["tests/knowledge/test_trace.py::test_심볼_이름으로도_시작하고_테스트_파일의_정의는_뺀다"]),
  ("문법 오류를 gap으로 안 남긴다", ROOT / "src/knowledge/trace.py",
-  '                self.gaps.append(Gap(path, exc.lineno or 0, f"문법 오류로 못 읽었다 — {exc.msg}"))', '                pass',
+  '                self.parse_gaps[path] = Gap(path, exc.lineno or 0, f"문법 오류로 못 읽었다 — {exc.msg}")', '                pass',
   ["tests/knowledge/test_trace.py::test_문법_오류_파일은_gap이고_계속_간다"]),
+ ("추적기가 grep 캐시를 안 쓴다", ROOT / "src/knowledge/trace.py",
+  '        if key in self._defs:', '        if False:',
+  ["tests/knowledge/test_trace.py::test_Tracer는_레포_단위로_파싱과_grep을_캐시하고_gap은_새지_않는다"]),
+ ("다른 끝점의 파싱 gap이 샌다", ROOT / "src/knowledge/trace.py",
+  '                 gaps=tuple(r.parse_gaps_touched() + gaps))', '                 gaps=tuple(list(r.parse_gaps.values()) + gaps))',
+  ["tests/knowledge/test_trace.py::test_Tracer는_레포_단위로_파싱과_grep을_캐시하고_gap은_새지_않는다"]),
+ ("추정 읽기를 EXTRACTED로 싣는다", ROOT / "src/knowledge/flow.py",
+  '                      "confidence": "EXTRACTED" if r.grade == "확실" else "INFERRED", "grade": r.grade,',
+  '                      "confidence": "EXTRACTED", "grade": r.grade,',
+  ["tests/knowledge/test_flow.py::test_add_trace는_읽기_엣지를_등급과_함께_싣고_노드에_사슬을_남긴다"]),
+ ("블록이 확실·추정 읽기를 안 가른다", ROOT / "src/knowledge/flow.py",
+  '                    rel = "reads" if e.get("confidence") == "EXTRACTED" else "reads(추정)"', '                    rel = "reads"',
+  ["tests/knowledge/test_flow.py::test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스가_온다"]),
+ ("끝점이 읽는 자원 줄을 안 낸다", ROOT / "src/knowledge/flow.py",
+  '            lines.append(line_for(rid, with_code=True))', '            pass',
+  ["tests/knowledge/test_flow.py::test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스가_온다"]),
+ ("막힌 끝점을 안 센다", ROOT / "src/knowledge/flow.py",
+  '                                     and n.get("traced") == "ok" and n.get("gaps"))}', '                                     and False)}',
+  ["tests/knowledge/test_flow.py::test_막힌_끝점을_센다"]),
+ ("지도가 추적 엣지를 그린다", ROOT / "src/presentation/flow_html.py",
+  '                  for e in overlay["links"] if e["relation"] != "runs" and e.get("origin") != "trace"],',
+  '                  for e in overlay["links"] if e["relation"] != "runs"],',
+  ["tests/presentation/test_flow_html.py::test_추적_엣지는_지도에_안_그린다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -791,7 +814,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 189, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 196, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

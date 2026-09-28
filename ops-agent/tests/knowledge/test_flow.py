@@ -643,3 +643,54 @@ def test_끝점_씨앗은_serves_줄이_맨_앞이고_서비스_다음_순위다
                                  "api [service · dt-api]: serves: /summary/badge · declares: alarm_events"]
     # api 서비스 줄에도 serves가 보인다 — config 엣지가 아니지만 배선이다.
     assert "serves: /summary/badge" in flow.flow_text(g, ["service_api"], budget=10_000)
+
+
+# ── 끝점 → 자원 (11b 커밋 2) — 추적기의 결과를 그래프에 싣는다.
+
+def _traced_graph():
+    from src.knowledge import trace as tr
+    g = flow.add_endpoints(_lead_graph(), routes=[
+        flow.Route("dt-api", "POST", "/summary/badge", "api/r.py", 5, "EXTRACTED", "")],
+        entries={"summary_badge": ("POST", "/summary/badge")})
+    ep = next(n["id"] for n in g["nodes"] if n["type"] == "endpoint")
+    result = tr.Trace("/summary/badge", "dt-api", "ok",
+                      chain=(tr.Step("api/r.py", 6, "badge"), tr.Step("api/q.py", 3, "AlarmRepo.recent")),
+                      reads=(tr.Read("collection", "alarm_events", "확실", "api/q.py", 3),
+                             tr.Read("topic", "mx.alarm.main", "추정", "api/q.py", 9)),
+                      gaps=(tr.Gap("api/q.py", 12, "getattr로 고른 대상은 못 따라간다"),))
+    return flow.add_trace(g, ep, result), ep
+
+
+def test_add_trace는_읽기_엣지를_등급과_함께_싣고_노드에_사슬을_남긴다():
+    g, ep = _traced_graph()
+    edges = {(e["target"], e["confidence"], e["source_location"]) for e in g["links"]
+             if e["source"] == ep and e.get("origin") == "trace"}
+    assert edges == {("collection_alarm_events", "EXTRACTED", "L3"), ("topic_mx_alarm_main", "INFERRED", "L9")}
+    node = next(n for n in g["nodes"] if n["id"] == ep)
+    assert node["traced"] == "ok" and node["chain"] == ["api/r.py:L6 badge", "api/q.py:L3 AlarmRepo.recent"]
+    assert node["gaps"] == ["api/q.py:L12 getattr로 고른 대상은 못 따라간다"]
+    s = flow.summary(g)
+    assert (s["endpoints_traced"], s["endpoints_blocked"]) == (1, 0)
+    assert any("자원까지 이어진 1개" in line for line in flow.advise(g, _lead_graph_topology()))
+
+
+def test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스가_온다():
+    """사다리의 셋째 칸 — "그 데이터를 쓰는 서비스". 추정 읽기는 따로 표시한다."""
+    g, ep = _traced_graph()
+    lines = flow.flow_text(g, [ep], budget=10_000).splitlines()
+    assert lines[0] == ("/summary/badge [endpoint]: serves: api · reads: alarm_events [collection]"
+                        " · reads(추정): mx.alarm.main [topic]")
+    assert lines[1] == "api [service · dt-api]: serves: /summary/badge · declares: alarm_events"
+    assert "alarm_events [collection]: declares: api, sink · 코드로는 writes: sink · reads: api" in lines
+    assert any(l.startswith("mx.alarm.main [topic]:") for l in lines)
+
+
+def test_막힌_끝점을_센다():
+    from src.knowledge import trace as tr
+    g = flow.add_endpoints(_lead_graph(), routes=[
+        flow.Route("dt-api", "GET", "/dyn", "api/r.py", 9, "EXTRACTED", "")], entries={})
+    ep = next(n["id"] for n in g["nodes"] if n["type"] == "endpoint")
+    g = flow.add_trace(g, ep, tr.Trace("/dyn", "dt-api", "ok", chain=(tr.Step("api/r.py", 10, "dyn"),),
+                                       gaps=(tr.Gap("api/r.py", 11, "getattr"),)))
+    s = flow.summary(g)
+    assert (s["endpoints_traced"], s["endpoints_blocked"]) == (0, 1)

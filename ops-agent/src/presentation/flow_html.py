@@ -44,7 +44,8 @@ def render(overlay: dict, *, title: str, built_at: str, commits: dict[str, str])
                    "confidence": e.get("confidence", "?"), "origin": e.get("origin", "code"),
                    "file": e.get("source_file", ""), "line": e.get("source_location", ""),
                    "text": e.get("text", "")}
-                  for e in overlay["links"] if e["relation"] != "runs"],
+                  # 끝점 → 자원 읽기(origin trace)는 자원 열 안의 선이 되어 지도를 흐린다 — 블록과 code flow가 보여 준다.
+                  for e in overlay["links"] if e["relation"] != "runs" and e.get("origin") != "trace"],
     }
     # `</script>`가 데이터 안에 있으면 문서가 끊긴다 — JSON 안의 `</`를 전부 피한다.
     blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")

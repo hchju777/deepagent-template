@@ -491,7 +491,8 @@ def _flow_repo(root, *, origin):
           '    for m in consumer.subscribe(k["consumer"]["topic"]["topic2"], group=k["consumer"]["group_id"]):\n'
           '        mongo[cfg["mongodb_collection"]["alarm"]].insert_one(m)\n')
     # 라우트 선언 하나 — 끝점 노드(11c 커밋 5). 레포를 두 서비스가 나눠 쓰므로 serves는 레포에 붙는다.
-    write("api/r.py", 'router = APIRouter(prefix="/summary")\n\n\n@router.post("/badge")\ndef badge():\n    return {}\n')
+    write("api/r.py", 'router = APIRouter(prefix="/summary")\n\n\n@router.post("/badge")\ndef badge(cfg, mongo):\n'
+          '    return mongo[cfg["mongodb_collection"]["alarm"]].count_documents({})\n')
     git("add", "-A", cwd=root)
     git("commit", "-qm", "flow", cwd=root)
 
@@ -591,9 +592,12 @@ def test_code_graph가_끝점을_싣고_flow와_status가_말한다(tmp_path, mo
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     assert code == 0, captured.out + captured.err
     assert "끝점 1개 중 등재 0개" in captured.out and "끝점 1개" in captured.err
+    assert "자원까지 이어진 1개" in captured.out and "끝점 추적" in captured.err
     overlay = json.loads((tmp_path / "out" / "graph" / "mx-gumi" / "overlay.json").read_text(encoding="utf-8"))
     assert [n["label"] for n in overlay["nodes"] if n["type"] == "endpoint"] == ["/summary/badge"]
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "/summary/badge")
     assert code == 0 and "—serves→ /summary/badge [endpoint]" in captured.out and "api/r.py:L4" in captured.out
+    # 11b 커밋 2 — 끝점마다 추적기가 돌아 읽는 자원이 엣지가 된다. config 키 경유라 추정(INFERRED)이다.
+    assert "/summary/badge [endpoint] —reads→ alarm_events [collection]   [INFERRED] api/r.py:L6" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
-    assert code == 0 and "끝점 1(등재 0 · 서빙 미상 0)" in captured.out
+    assert code == 0 and "끝점 1(등재 0 · 서빙 미상 0 · 자원까지 1 · 막힘 0)" in captured.out

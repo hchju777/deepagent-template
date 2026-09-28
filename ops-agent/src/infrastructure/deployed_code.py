@@ -197,6 +197,10 @@ class DeployedCode(DeployedCodePort):
             hits += parse_grep(repo, commit, got.data)
         return hits, notes
 
+    def source_for(self, repo: str) -> "_GitSource":
+        """추적기(`knowledge.trace`)의 `Source` — 그 레포의 배포 커밋에서 파일과 리터럴 grep."""
+        return _GitSource(self._reader, repo, self.pinned()[repo])
+
     # ── 서비스 해석 ──────────────────────────────────────────────
 
     def _resolve(self, service: str, source: str):
@@ -355,3 +359,22 @@ class DeployedCode(DeployedCodePort):
         return ProbeResult.succeeded(
             got.data, source=f"{pinned} ({got.source})", clock=self._clock,
             truncated_reason=got.envelope.truncated_reason)
+
+
+class _GitSource:
+    """추적기가 읽는 창 — 배포 커밋의 파일 하나(`show`, 줄 수로 안 자른다)와 리터럴 grep(`-F`).
+    던지지 않는다: 못 읽으면 None, grep이 실패하면 빈 목록. 파싱은 추적기가 캐시한다."""
+
+    def __init__(self, reader: CodeReaderPort, repo: str, commit: str):
+        self._reader, self._repo, self._commit = reader, repo, commit
+
+    async def read(self, path: str) -> str | None:
+        got = await self._reader.show(self._repo, self._commit, path, whole=True)
+        return got.data if got.status == "ok" and isinstance(got.data, str) else None
+
+    async def grep(self, patterns: list[str]) -> list[Hit]:
+        got = await self._reader.grep(self._repo, self._commit, list(patterns), fixed=True,
+                                      max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)
+        if got.status == "error" or not isinstance(got.data, str):
+            return []
+        return parse_grep(self._repo, self._commit, got.data)

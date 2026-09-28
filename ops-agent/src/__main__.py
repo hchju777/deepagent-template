@@ -1238,11 +1238,32 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     overlay = flow.extract(names=names, topology=topology,
                            hits_for=lambda p: table.get(p, []), commits=commits)
     # 끝점 층 — 우리 등재 항목의 path와 코드의 라우트 선언에서. 사람이 적지 않는다.
-    overlay = flow.add_endpoints(overlay, routes=flow.routes_from_hits(route_lines),
-                                 entries=_rest_entries(site))
+    routes = flow.routes_from_hits(route_lines)
+    overlay = flow.add_endpoints(overlay, routes=routes, entries=_rest_entries(site))
     counts = flow.summary(overlay)
     progress(f"끝점 {counts['endpoints']}개 (등재 {counts['endpoints_registered']} · "
              f"서빙 미상 {counts['endpoints_unserved']})")
+
+    async def trace_endpoints(graph: dict) -> dict:
+        # 서빙 서비스가 있는 끝점마다 추적기를 돌린다 — 배포 커밋에서만, 조사 중에는 안 돌린다(⑥).
+        # 레포마다 Tracer 하나라 파싱과 `def 이름(` grep이 끝점들 사이에서 공유된다.
+        from src.knowledge import trace as tracing
+        by_id = {n["id"]: n for n in graph["nodes"]}
+        served: dict[str, dict[str, dict]] = {}
+        for e in graph["links"]:
+            if e["relation"] == "serves" and e.get("repo"):
+                served.setdefault(e["repo"], {})[e["target"]] = by_id[e["target"]]
+        for repo_name, endpoints in sorted(served.items()):
+            tracer = tracing.Tracer(repo_name, code.source_for(repo_name), names=names, routes=routes)
+            await tracer.prepare()
+            progress(f"{repo_name}: 끝점 추적 중 ({len(endpoints)}개)")
+            for node in sorted(endpoints.values(), key=lambda n: n["label"]):
+                graph = flow.add_trace(graph, node["id"], await tracer.trace(node["label"]))
+        return graph
+
+    overlay = asyncio.run(trace_endpoints(overlay))
+    counts = flow.summary(overlay)
+    progress(f"끝점 추적: 자원까지 이어진 {counts['endpoints_traced']}개 · 막힌 {counts['endpoints_blocked']}개")
 
     out_dir = _graph_dir(args, env, gbm, fct)
     binary = gb.find_graphify()
@@ -1341,7 +1362,8 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
           f" · 노드 {len(graph['nodes'])} · 엣지 {len(graph['links'])}"
           f" · 레포에 붙은 엣지 {summary['repo_level']}"
           f" · 끝점 {summary.get('endpoints', 0)}(등재 {summary.get('endpoints_registered', 0)}"
-          f" · 서빙 미상 {summary.get('endpoints_unserved', 0)})")
+          f" · 서빙 미상 {summary.get('endpoints_unserved', 0)}"
+          f" · 자원까지 {summary.get('endpoints_traced', 0)} · 막힘 {summary.get('endpoints_blocked', 0)})")
     human = [name for name in ("flow.html", "wiki/index.md") if (out_dir / name).exists()]
     if human:
         print(f"       사람용 {' · '.join(human)}")

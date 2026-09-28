@@ -4,7 +4,7 @@
 > file:line로** 받고, "그 결과가 원천과 맞는가"를 **코드가 센 숫자로** 받는다. 11c가 "어느
 > 서비스·어느 흐름"을 줬다면 11b는 "어느 함수 몇 줄"과 "맞나 틀리나"를 준다.
 >
-> 상태: 진행 중 (커밋 1/4). 앞: [11c](step-11c-flow.md) ✅. 뒤: 12a.
+> 상태: 진행 중 (커밋 2/4). 앞: [11c](step-11c-flow.md) ✅. 뒤: 12a.
 > 결정의 근거는 [decisions ⑰](decisions.md).
 
 ## 왜 "서브에이전트 3종"이 LLM 루프가 아닌가
@@ -85,6 +85,26 @@ gaps:   [(file, line, why)]                          못 따라간 지점
 `trace`, 등급과 file:line과 함께 박는다. 블록에는 `reads(추정): …`처럼 보인다. `code status`
 요약에 "끝점 N개 중 자원까지 이어진 M개, 막힌 K개". 조사 중에는 안 돌린다(⑥ — 조사 중 그래프
 갱신 금지). 비용은 끝점당 밀리초 단위(호출 그래프는 레포당 한 번 파싱).
+
+커밋 2 ✅ — 계획과 다른 점과 덧붙인 점:
+
+- 레포마다 `trace.Tracer` 하나가 파싱 캐시와 `def 이름(` grep 캐시, 별칭 색인을 끝점들 사이에서
+  공유한다. 파싱 gap은 파일별로 두고 각 trace는 자기가 건드린 파일의 것만 가져간다 — 다른 끝점의
+  문법 오류가 이 끝점의 결과로 새지 않는다. 같은 끝점을 두 번 돌리면 두 번째는 읽기도 grep도 0이다.
+- `DeployedCode.source_for(repo)`가 추적기의 `Source`다 — 배포 커밋의 `show(whole=True)`(줄 수로 안
+  자른다, 잘리면 파싱이 깨진다)와 `grep -F`. 던지지 않는다.
+- 엣지는 `endpoint —reads→ resource`, origin `trace`, 확실→EXTRACTED, 추정→INFERRED, file:line. 끝점
+  노드에 `traced`·`chain`·`gaps`를 문자열로 남긴다(커밋 3의 `code.trace`가 이걸 그대로 증거로 낸다).
+- 블록의 끝점 줄에 `reads: …`와 `reads(추정): …`가 붙고(자원에 종류 표기), 끝점 씨앗의 2단계에 그
+  자원 줄이 **코드 층의 `writes`/`reads`**와 함께 온다 — 사다리의 셋째 칸 "그 데이터를 쓰는 서비스"는
+  config(declares)가 아니라 코드 층에 있다. 토픽이면 produces/consumes다.
+- `summary`에 `endpoints_traced`(읽기 엣지가 하나라도 있는 끝점)와 `endpoints_blocked`(추적은 됐는데
+  읽기 없이 gap만 남은 끝점). `code graph`의 진행줄과 권고, `code status`에 "자원까지 M · 막힘 K".
+- flow.html은 추적 엣지를 **안 그린다** — 자원 열 안의 선이 되어 지도를 흐린다. 블록과 `code flow`가
+  보여 준다.
+- graphify 호출 엣지는 여전히 안 쓴다. 사내 `graph.json`의 graphify 노드 키 이름을 받으면 커밋 3에서
+  정한다. 사내에서 볼 것: `code graph` 뒤 "끝점 추적: 자원까지 이어진 M개 · 막힌 K개" 두 숫자와,
+  등재 항목 path로 `code flow <path>`를 쳤을 때 `—reads→` 줄이 몇 개 나오는지.
 
 ### 커밋 3 — action과 레인
 

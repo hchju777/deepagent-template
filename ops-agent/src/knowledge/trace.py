@@ -134,27 +134,34 @@ def _enclosing_class(mod: _Mod, func: ast.AST) -> ast.ClassDef | None:
 
 
 class _Repo:
-    """파싱 캐시 + 해석. 못 읽은 파일은 gap 하나로 남기고 계속 간다."""
+    """파싱·grep 캐시 + 해석. **끝점들 사이에서 공유한다**(`Tracer`) — 사내 끝점 156개가 같은 파일과
+    같은 `def 이름(` grep을 반복하면 git 호출이 수천 번이다. 못 읽은 파일은 gap 하나로 남기고 계속
+    간다. 파싱 gap은 파일별로 두고, 각 trace는 자기가 **건드린** 파일의 것만 가져간다 — 다른 끝점의
+    문법 오류가 이 끝점의 결과로 새면 안 된다."""
 
     def __init__(self, repo: str, source: Source):
         self.repo, self.source = repo, source
         self.mods: dict[str, _Mod | None] = {}
-        self.gaps: list[Gap] = []
-        self.reads_done = 0
+        self.parse_gaps: dict[str, Gap] = {}
+        self.touched: set[str] = set()
+        self._defs: dict[tuple[str, bool], list] = {}
+
+    def parse_gaps_touched(self) -> list[Gap]:
+        return [self.parse_gaps[p] for p in sorted(self.touched) if p in self.parse_gaps]
 
     async def module(self, path: str) -> _Mod | None:
+        self.touched.add(path)
         if path in self.mods:
             return self.mods[path]
         text = await self.source.read(path)
-        self.reads_done += 1
         mod = None
         if text is not None:
             try:
                 mod = _Mod(path, text, ast.parse(text))
             except SyntaxError as exc:
-                self.gaps.append(Gap(path, exc.lineno or 0, f"문법 오류로 못 읽었다 — {exc.msg}"))
+                self.parse_gaps[path] = Gap(path, exc.lineno or 0, f"문법 오류로 못 읽었다 — {exc.msg}")
             except (ValueError, RecursionError) as exc:                  # noqa: PERF203
-                self.gaps.append(Gap(path, 0, f"파싱 실패 — {type(exc).__name__}"))
+                self.parse_gaps[path] = Gap(path, 0, f"파싱 실패 — {type(exc).__name__}")
         self.mods[path] = mod
         return mod
 
@@ -247,7 +254,12 @@ class _Repo:
         return None
 
     async def defs_named(self, name: str, *, methods: bool) -> list[tuple[_Mod, ast.AST, ast.ClassDef | None]]:
-        """레포 전체에서 `def name(` — 모듈 함수만 또는 메서드만. 문서·테스트는 뺀다."""
+        """레포 전체에서 `def name(` — 모듈 함수만 또는 메서드만. 문서·테스트는 뺀다. 이름별로 캐시."""
+        key = (name, methods)
+        if key in self._defs:
+            for mod, _, _ in self._defs[key]:
+                self.touched.add(mod.path)
+            return self._defs[key]
         out = []
         hits = sorted(await self.source.grep([f"def {name}("]), key=lambda h: (h.file, h.line))
         for hit in hits:
@@ -262,6 +274,7 @@ class _Repo:
                     cls = _enclosing_class(mod, node)
                     if (cls is not None) == methods:
                         out.append((mod, node, cls))
+        self._defs[key] = out
         return out
 
 
@@ -295,13 +308,37 @@ def _line_of(segment: str, needle: str, base: int) -> int:
     return base
 
 
+class Tracer:
+    """레포 하나의 추적기 — 파싱·grep 캐시와 별칭 색인을 끝점들 사이에서 공유한다."""
+
+    def __init__(self, repo: str, source: Source, *, names: Iterable[Name], routes: Iterable[Route] = (),
+                 max_depth: int = MAX_DEPTH, max_nodes: int = MAX_NODES):
+        self.repo, self.source = repo, source
+        self.names, self.routes = list(names), list(routes)
+        self.max_depth, self.max_nodes = max_depth, max_nodes
+        self.aliases: dict[str, Name] | None = None
+        self._cache = _Repo(repo, source)
+
+    async def prepare(self) -> None:
+        self.aliases = await alias_index(self.names, self.source)
+
+    async def trace(self, target: str) -> Trace:
+        if self.aliases is None:
+            await self.prepare()
+        return await trace(target, repo=self.repo, source=self.source, names=self.names, routes=self.routes,
+                           aliases=self.aliases, max_depth=self.max_depth, max_nodes=self.max_nodes,
+                           cache=self._cache)
+
+
 async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name],
                 routes: Iterable[Route] = (), aliases: dict[str, Name] | None = None,
-                max_depth: int = MAX_DEPTH, max_nodes: int = MAX_NODES) -> Trace:
+                max_depth: int = MAX_DEPTH, max_nodes: int = MAX_NODES, cache: _Repo | None = None) -> Trace:
     """끝점 path(`/…`)나 심볼 이름에서 출발한 `Trace`. 던지지 않는다."""
     names = list(names)
     aliases = dict(aliases or {})
-    r = _Repo(repo, source)
+    r = cache if cache is not None else _Repo(repo, source)
+    r.touched = set()
+    gaps: list[Gap] = []
     roots: list[_Node] = []
     if target.startswith("/"):
         for route in sorted((rt for rt in routes if rt.repo == repo and rt.path == target),
@@ -315,17 +352,17 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
         if not roots:
             return Trace(target, repo, "not_found",
                          f"{target}: 레포 {repo}의 라우트 선언에 없다 — code graph의 끝점 목록을 보라",
-                         gaps=tuple(r.gaps))
+                         gaps=tuple(r.parse_gaps_touched()))
     else:
         found = await r.defs_named(target, methods=False) + await r.defs_named(target, methods=True)
         for mod, func, cls in found:
             roots.append(_Node(mod, func, cls, 0, "확실" if len(found) == 1 else "추정"))
         if not roots:
             return Trace(target, repo, "not_found",
-                         f"{target}: 레포 {repo}에 `def {target}(`가 없다", gaps=tuple(r.gaps))
+                         f"{target}: 레포 {repo}에 `def {target}(`가 없다", gaps=tuple(r.parse_gaps_touched()))
         if len(found) > 1:
-            r.gaps.append(Gap(found[0][0].path, found[0][1].lineno,
-                              f"{target}: 정의 {len(found)}개 — 전부 출발점으로 삼았고 읽기는 추정이다"))
+            gaps.append(Gap(found[0][0].path, found[0][1].lineno,
+                            f"{target}: 정의 {len(found)}개 — 전부 출발점으로 삼았고 읽기는 추정이다"))
 
     chain: list[Step] = []
     reads: dict[tuple[str, str, str, int], Read] = {}
@@ -347,28 +384,29 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
         if key in visited:
             continue
         if len(visited) >= max_nodes:
-            r.gaps.append(Gap(node.mod.path, node.func.lineno, f"노드 상한 {max_nodes}에서 멈춤: {node.qualname}"))
+            gaps.append(Gap(node.mod.path, node.func.lineno, f"노드 상한 {max_nodes}에서 멈춤: {node.qualname}"))
             break
         visited.add(key)
         chain.append(Step(node.mod.path, node.func.lineno, node.qualname))
         segment, base = node.mod.segment(node.func)
         _collect_reads(segment, base, node, names, aliases, add_read)
         if "getattr(" in segment:
-            r.gaps.append(Gap(node.mod.path, _line_of(segment, "getattr(", base),
-                              "getattr로 고른 대상은 못 따라간다 — 리드가 code.read로 본다"))
-        callees, deps = await _callees(r, node)
+            gaps.append(Gap(node.mod.path, _line_of(segment, "getattr(", base),
+                            "getattr로 고른 대상은 못 따라간다 — 리드가 code.read로 본다"))
+        callees, deps = await _callees(r, node, gaps)
         if not callees and not deps:
             continue
         if node.depth >= max_depth:
             names_ = ", ".join(sorted({c.qualname for c in callees + deps}))
-            r.gaps.append(Gap(node.mod.path, node.func.lineno,
-                              f"깊이 상한 {max_depth}에서 멈춤: {node.qualname} → {names_}"))
+            gaps.append(Gap(node.mod.path, node.func.lineno,
+                            f"깊이 상한 {max_depth}에서 멈춤: {node.qualname} → {names_}"))
             continue
         queue += callees
         later += deps
 
     ordered = sorted(reads.values(), key=lambda x: (x.file, x.line, x.kind, x.name))
-    return Trace(target, repo, "ok", chain=tuple(chain), reads=tuple(ordered), gaps=tuple(r.gaps))
+    return Trace(target, repo, "ok", chain=tuple(chain), reads=tuple(ordered),
+                 gaps=tuple(r.parse_gaps_touched() + gaps))
 
 
 def _handler_at(mod: _Mod, decorator_line: int) -> ast.AST | None:
@@ -397,7 +435,7 @@ def _collect_reads(segment: str, base: int, node: _Node, names: list[Name],
             add_read(n.kind, n.value, "추정", node.mod.path, _line_of(segment, ident, base))
 
 
-async def _callees(r: _Repo, node: _Node) -> tuple[list[_Node], list[_Node]]:
+async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node], list[_Node]]:
     """이 함수 본문의 호출들이 가리키는 정의. `(본문 호출, Depends 제공자)`."""
     mod, func, cls = node.mod, node.func, node.cls
     out: list[_Node] = []
@@ -431,7 +469,7 @@ async def _callees(r: _Repo, node: _Node) -> tuple[list[_Node], list[_Node]]:
                 for cmod, cfunc, ccls in cands:
                     push(cmod, cfunc, ccls, "확실" if len(cands) == 1 else "추정")
                 if len(cands) > 1:
-                    r.gaps.append(Gap(mod.path, call.lineno, f"{f.id}: 후보 {len(cands)}개 — 전부 따라가되 읽기는 추정"))
+                    gaps.append(Gap(mod.path, call.lineno, f"{f.id}: 후보 {len(cands)}개 — 전부 따라가되 읽기는 추정"))
             continue
         if not isinstance(f, ast.Attribute):
             continue
@@ -470,8 +508,8 @@ async def _callees(r: _Repo, node: _Node) -> tuple[list[_Node], list[_Node]]:
         for cmod, cfunc, ccls in cands:
             push(cmod, cfunc, ccls, "확실" if len(cands) == 1 else "추정")
         if len(cands) > 1:
-            r.gaps.append(Gap(mod.path, call.lineno,
-                              f"{meth}: 받는 쪽을 못 좁혀 후보 {len(cands)}개 — 전부 따라가되 읽기는 추정"))
+            gaps.append(Gap(mod.path, call.lineno,
+                            f"{meth}: 받는 쪽을 못 좁혀 후보 {len(cands)}개 — 전부 따라가되 읽기는 추정"))
 
     deps: list[_Node] = []
     for a in [*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs]:

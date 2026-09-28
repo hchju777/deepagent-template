@@ -320,3 +320,14 @@ async def test_라우트_히트는_배포_커밋의_git_grep이고_테스트_파
     routes = flow.routes_from_hits(hits)        # 테스트 파일의 데코레이터는 여기서 빠진다
     assert [(r.method, r.path, r.confidence, r.file, r.line) for r in routes] == \
         [("POST", "/summary/badge", "EXTRACTED", "api/routes.py", 4)]
+
+
+async def test_source_for는_배포_커밋의_파일과_리터럴_grep을_준다(flow_code):
+    """추적기의 `Source` — 실제 git으로. grep은 `-F`라 패턴이 리터럴이다."""
+    src = flow_code.source_for("dt-core")
+    text = await src.read("api/routes.py")
+    assert text is not None and 'APIRouter(prefix="/summary")' in text
+    assert await src.read("no/such.py") is None
+    hits = await src.grep(["def badge("])
+    assert [(h.file, h.line) for h in hits] == [("api/routes.py", 5)]
+    assert all(h.repo == "dt-core" and h.commit for h in hits)

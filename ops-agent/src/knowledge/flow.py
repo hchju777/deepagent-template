@@ -491,7 +491,7 @@ RESOURCE_TYPES = ("topic", "group", "collection", "rediskey", "endpoint")
 
 # ── 리드용 텍스트 — 브리핑의 <데이터 흐름>과 `code.flow` ─────────────────
 
-_FLOW_ORDER = ("serves", "produces", "consumes", "consumes_as", "declares")
+_FLOW_ORDER = ("serves", "reads", "reads(추정)", "produces", "consumes", "consumes_as", "declares")
 _KIND_RANK = {"service": 0, "endpoint": 1, "topic": 2, "collection": 3, "rediskey": 4, "group": 5}
 _MIN_SEED = 3
 _MAX_RESOURCE_SEEDS = 3
@@ -524,7 +524,8 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
     by_id = {n["id"]: n for n in graph["nodes"]}
     # `serves`는 코드에서 왔지만 배선이다(라우트 선언은 이름 매칭이 아니라 구문이다) — 끝점 줄이 서야
     # 접수 경로의 path에서 서빙 서비스로 첫 홉이 이어진다.
-    links = [e for e in graph["links"] if (e.get("origin") == "config" or e["relation"] == "serves")
+    links = [e for e in graph["links"]
+             if (e.get("origin") in ("config", "trace") or e["relation"] == "serves")
              and e["source"] in by_id and e["target"] in by_id]
     if not links:
         return "(config에서 뽑은 흐름이 없다)"
@@ -562,22 +563,20 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
             groups.setdefault(e["relation"], set()).add(by_id[e["target"]]["label"])
         return [f"{rel}: {clip(groups[rel])}" for rel in _FLOW_ORDER if rel in groups]
 
-    def code_direction(node_id: str) -> str:
+    def code_direction(node_id: str, rels: tuple[str, ...]) -> str:
         # config가 produces·consumes를 같은 서비스들에 붙였으면(공유 config) 방향을 모른다. 코드 층이
         # 서비스까지 짚은 엣지가 있을 때만 그 한 조각을 보탠다 — 3b 측정에서 이 자리가 비어 리드가
         # 생산자와 소비자를 못 갈랐다. 레포에만 붙은 코드 엣지는 아무것도 더해 주지 않으므로 뺀다.
         by_rel: dict[str, set[str]] = {}
         for e in graph["links"]:
-            if (e.get("origin") == "code" and e["target"] == node_id
-                    and e["relation"] in ("produces", "consumes")
+            if (e.get("origin") == "code" and e["target"] == node_id and e["relation"] in rels
                     and by_id.get(e["source"], {}).get("type") == "service"):
                 by_rel.setdefault(e["relation"], set()).add(by_id[e["source"]]["label"])
         if not by_rel:
             return ""
-        return " · 코드로는 " + " · ".join(f"{rel}: {clip(by_rel[rel])}"
-                                       for rel in ("produces", "consumes") if rel in by_rel)
+        return " · 코드로는 " + " · ".join(f"{rel}: {clip(by_rel[rel])}" for rel in rels if rel in by_rel)
 
-    def line_for(node_id: str, *, topics_only: bool = False) -> str:
+    def line_for(node_id: str, *, topics_only: bool = False, with_code: bool = False) -> str:
         node = by_id[node_id]
         if node["type"] == "service":
             shared = len(members.get(node.get("repo", ""), [])) > 1
@@ -586,13 +585,22 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
             return f"{head}: {' · '.join(parts)}" if parts else f"{head}: (config 엣지 없음)"
         groups: dict[str, set[str]] = {}
         for e in links:
-            if e["target"] == node_id:
+            if e["target"] == node_id and e.get("origin") != "trace":
                 groups.setdefault(e["relation"], set()).add(e["source"])
         head = f"{node['label']} [{node['type']}]"
         parts = [f"{rel}: {clip(fold(groups[rel]))}" for rel in _FLOW_ORDER if rel in groups]
+        if node["type"] == "endpoint":
+            # 추적기가 짚은 읽기 — 확실과 추정을 갈라 적는다. 자원엔 종류를 붙인다(같은 이름의 토픽·컬렉션).
+            reads: dict[str, set[str]] = {}
+            for e in links:
+                if e["source"] == node_id and e.get("origin") == "trace":
+                    rel = "reads" if e.get("confidence") == "EXTRACTED" else "reads(추정)"
+                    reads.setdefault(rel, set()).add(f"{by_id[e['target']]['label']} [{by_id[e['target']]['type']}]")
+            parts += [f"{rel}: {clip(reads[rel])}" for rel in ("reads", "reads(추정)") if rel in reads]
+        directions = ("produces", "consumes") if node["type"] == "topic" else ("writes", "reads")
         ambiguous = "produces" in groups and groups["produces"] == groups.get("consumes")
-        tail = code_direction(node_id) if ambiguous else ""
-        return f"{head}: {' · '.join(parts)}{tail}" if parts else f"{head}: (config 엣지 없음)"
+        tail = code_direction(node_id, directions) if (with_code or ambiguous) else ""
+        return f"{head}: {' · '.join(parts)}{tail}" if parts else f"{head}: (config 엣지 없음){tail}"
 
     def touched_lines(service_ids, *, topics_only: bool) -> list[str]:
         # 2단계의 서비스 줄 — 같은 레포의 서비스들이 같은 줄을 가지면 한 줄로 접는다. 사내에서
@@ -620,14 +628,19 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
         # declares에 있다.
         via_topics: list[str] = []
         via_endpoint: list[str] = []
+        via_reads: list[str] = []
         for sid in seeds:
             if sid in by_id:
                 lines.append(line_for(sid))
                 if by_id[sid]["type"] == "endpoint":
                     via_endpoint += [e["source"] for e in links if e["target"] == sid]
+                    via_reads += [e["target"] for e in links if e["source"] == sid and e.get("origin") == "trace"]
                 elif by_id[sid]["type"] != "service":
                     via_topics += [e["source"] for e in links if e["target"] == sid]
         lines += touched_lines(set(via_endpoint) - set(seeds), topics_only=False)
+        # 끝점이 읽는 자원 — 사다리의 셋째 칸 "그 데이터를 쓰는 서비스"가 코드 층에 있다(config는 declares뿐).
+        for rid in sorted(set(via_reads) - set(seeds), key=lambda i: by_id[i]["label"]):
+            lines.append(line_for(rid, with_code=True))
         lines += touched_lines(set(via_topics) - set(seeds) - set(via_endpoint), topics_only=True)
     else:
         topics = [n for n in graph["nodes"] if n.get("type") == "topic"]
@@ -674,13 +687,18 @@ def summary(graph: dict) -> dict:
     coded = {e["target"] for e in links if e.get("origin", "code") == "code"}
     endpoints = [n for n in graph["nodes"] if n.get("type") == "endpoint"]
     served = {e["target"] for e in links if e["relation"] == "serves"}
+    traced = {e["source"] for e in links if e.get("origin") == "trace"}
     return {"nodes": len(graph["nodes"]), "links": len(links), "kinds": kinds,
             "repo_level": sum(1 for e in links if e.get("attributed") == "repo"),
             "ambiguous": sum(1 for e in links if e.get("confidence") == "AMBIGUOUS"),
             "unreferenced": len(resources - coded),
             "endpoints": len(endpoints),
             "endpoints_registered": sum(1 for n in endpoints if n.get("entry")),
-            "endpoints_unserved": sum(1 for n in endpoints if n["id"] not in served)}
+            "endpoints_unserved": sum(1 for n in endpoints if n["id"] not in served),
+            # 자원까지 이어진 끝점 / 추적은 됐는데 읽기 없이 gap만 남은 끝점(막힘)
+            "endpoints_traced": sum(1 for n in endpoints if n["id"] in traced),
+            "endpoints_blocked": sum(1 for n in endpoints if n["id"] not in traced
+                                     and n.get("traced") == "ok" and n.get("gaps"))}
 
 
 def advise(graph: dict, topology: Topology) -> list[str]:
@@ -713,7 +731,32 @@ def advise(graph: dict, topology: Topology) -> list[str]:
     if s["endpoints"]:
         out.append(f"끝점 {s['endpoints']}개 중 등재 {s['endpoints_registered']}개 · "
                    f"서빙 서비스를 못 찾은 {s['endpoints_unserved']}개")
+    if s["endpoints_traced"] or s["endpoints_blocked"]:
+        out.append(f"끝점 추적: 자원까지 이어진 {s['endpoints_traced']}개 · 막힌 {s['endpoints_blocked']}개")
     return out
+
+
+def add_trace(graph: dict, endpoint_id: str, result) -> dict:
+    """추적기(`trace.Trace`)의 결과를 오버레이에 싣는다 — `endpoint —reads→ resource` 엣지(origin
+    `trace`, 확실→EXTRACTED, 추정→INFERRED, file:line)와 끝점 노드의 사슬·gap. 이름 목록에 있는 자원은
+    전부 노드가 있으므로 없는 이름은 조용히 지나간다(자원이 아니라 다른 것이 잡힌 경우)."""
+    nodes = {n["id"]: dict(n) for n in graph["nodes"]}
+    links = list(graph["links"])
+    node = nodes.get(endpoint_id)
+    if node is None:
+        return graph
+    node["traced"] = result.status
+    node["chain"] = [f"{s.file}:L{s.line} {s.qualname}" for s in result.chain]
+    node["gaps"] = [f"{g.file}:L{g.line} {g.why}" for g in result.gaps]
+    for r in result.reads:
+        target = _node_id(r.kind, r.name)
+        if target not in nodes:
+            continue
+        links.append({"source": endpoint_id, "target": target, "relation": "reads",
+                      "confidence": "EXTRACTED" if r.grade == "확실" else "INFERRED", "grade": r.grade,
+                      "attributed": "endpoint", "origin": "trace", "source_file": r.file,
+                      "source_location": f"L{r.line}", "repo": result.repo, "commit": "", "text": ""})
+    return {**graph, "nodes": list(nodes.values()), "links": links}
 
 
 # ── 끝점 (11c 커밋 5) ──────────────────────────────────────────────────────────

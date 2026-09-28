@@ -74,3 +74,18 @@ def test_끝점_종류와_serves_엣지를_그린다():
     assert "endpoint" in data["kind_order"] and data["kind_label"]["endpoint"]
     assert [e["relation"] for e in data["links"]] == ["serves"]
     assert "'serves'" in page, "그리는 관계 목록에 serves가 있어야 선이 보인다"
+
+
+def test_추적_엣지는_지도에_안_그린다():
+    """끝점 → 자원 읽기는 자원 열 안의 선이 되어 지도를 흐린다 — `code flow`와 블록이 보여 준다."""
+    overlay = {"nodes": [{"id": "service_api", "label": "api", "type": "service", "repo": "dt-api"},
+                         {"id": "endpoint_x", "label": "/x", "type": "endpoint"},
+                         {"id": "collection_c", "label": "c", "type": "collection"}],
+               "links": [{"source": "service_api", "target": "endpoint_x", "relation": "serves", "origin": "code",
+                          "confidence": "EXTRACTED", "source_file": "a.py", "source_location": "L1"},
+                         {"source": "endpoint_x", "target": "collection_c", "relation": "reads", "origin": "trace",
+                          "confidence": "EXTRACTED", "source_file": "a.py", "source_location": "L2"}]}
+    page = flow_html.render(overlay, title="t", built_at="b", commits={})
+    data = json.loads(re.search(r'<script id="data" type="application/json">(.*?)</script>', page, re.S).group(1)
+                      .replace("<\\/", "</"))
+    assert [e["relation"] for e in data["links"]] == ["serves"]
