@@ -54,7 +54,7 @@ def stats(overlay: dict) -> list[str]:
     kinds = collections.Counter(_why(w)[:28] for w in gaps)
     names = collections.Counter(_name(w) for w in gaps if _name(w))
     owners = collections.Counter(_owner(s) for n in ok for s in (n.get("chain") or []))
-    conf = collections.Counter(e.get("confidence") or "-" for e in links)
+    conf = collections.Counter(f"{e.get('confidence') or '-'}/{e.get('via') or '-'}" for e in links)
     bkinds = collections.Counter(_why(w)[:28] for n in blocked for w in (n.get("gaps") or []))
     return [
         f"1 끝점 {len(eps)} · 추적 {dict(traced)} · 자원까지 {sum(1 for i in eps if reads[i])} · 막힘 {len(blocked)}",

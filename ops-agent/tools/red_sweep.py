@@ -817,12 +817,22 @@ CASES = [
  ('따옴표 밖의 리터럴도 읽기로 친다', ROOT / "src/knowledge/trace.py",
   '    m = re.search(r"""["\'][^"\'\\n]*""" + re.escape(needle), segment)', '    m = re.search(re.escape(needle), segment)',
   ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
- ('포트와 같은 이름의 클래스를 구현체로 안 본다', ROOT / "src/knowledge/trace.py",
-  '            same = [(smod, scls) for smod, scls in await r.classes_named(owner[1].name)', '            same = [(smod, scls) for smod, scls in ()',
-  ['tests/knowledge/test_trace.py::test_포트와_같은_이름의_클래스가_다른_모듈에_있으면_그것이_구현체다']),
- ('같은 이름 클래스가 하나뿐인데 추정으로 낮춘다', ROOT / "src/knowledge/trace.py",
-  '                if len(same) > 1:', '                if True:',
-  ['tests/knowledge/test_trace.py::test_포트와_같은_이름의_클래스가_다른_모듈에_있으면_그것이_구현체다']),
+ ('구조가 맞는 클래스 하나를 확실로 안 본다', ROOT / "src/knowledge/trace.py",
+  '            if len(structural) == 1:', '            if False:',
+  ['tests/knowledge/test_trace.py::test_포트와_같은_이름의_클래스가_다른_모듈에_있으면_그것이_구현체다', 'tests/knowledge/test_trace.py::test_Protocol이_선언한_메서드를_다_가진_클래스가_구현체이고_하나면_확실이다']),
+ ('구조가 맞는 클래스가 넷 이상인데 따라간다', ROOT / "src/knowledge/trace.py",
+  '            elif len(structural) > 3:', '            elif False:',
+  ['tests/knowledge/test_trace.py::test_구조가_맞는_클래스가_넷_이상이면_안_따라가고_gap_하나를_남긴다']),
+ ('포트의 선언을 같은 이름 메서드 후보로 센다', ROOT / "src/knowledge/trace.py",
+  '    return [c for c in cands if not _is_abstract(c[1])]', '    return list(cands)',
+  ['tests/knowledge/test_trace.py::test_받는_쪽을_모르는_호출은_후보가_여럿이면_안_따라가고_gap_하나만_남긴다']),
+ ('모르는 받는 쪽도 후보 하나면 따라간다', ROOT / "src/knowledge/trace.py",
+  '        if len(cands) == 1 and kind != "unknown":', '        if len(cands) == 1:',
+  ['tests/knowledge/test_trace.py::test_상속한_구현체가_여럿이면_전부_추정으로_따라가고_gap_하나를_남긴다', 'tests/knowledge/test_trace.py::test_Protocol이_선언한_메서드를_다_가진_클래스가_구현체이고_하나면_확실이다']),
+ ('읽기의 출처를 안 적는다', ROOT / "src/knowledge/trace.py",
+  '            add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base), "alias")',
+  '            add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base), "literal")',
+  ['tests/knowledge/test_trace.py::test_끝점에서_핸들러를_찾아_DAO까지_따라가고_읽는_자원을_등급과_함께_낸다']),
  ('이름 규약으로 구현체를 안 고른다', ROOT / "src/knowledge/trace.py",
   '                for alias in _port_aliases(owner[1].name):', '                for alias in ():',
   ['tests/knowledge/test_trace.py::test_상속도_같은_이름도_없으면_이름_규약으로_구현체를_고르고_추정이라고_적는다']),
@@ -856,7 +866,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 210, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 213, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

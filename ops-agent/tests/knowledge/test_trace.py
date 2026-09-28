@@ -102,7 +102,27 @@ FILES = {
         '    def count(self) -> int: ...\n'
         '\n'
         'class AuditServicePort(Protocol):\n'
-        '    def recent(self) -> list: ...\n'),
+        '    def recent(self) -> list: ...\n'
+        '    def purge(self) -> None: ...\n'
+        '\n'
+        'class MeterPort(Protocol):\n'
+        '    def sample(self) -> int: ...\n'
+        '    def flush(self) -> None: ...\n'
+        '\n'
+        'class KeyValuePort(Protocol):\n'
+        '    def get(self, key): ...\n'),
+    "api/meters.py": (
+        'class DialMeter:\n'
+        '    async def sample(self):\n'
+        '        return await mongo["line_state"].count()\n'
+        '\n'
+        '    def flush(self):\n'
+        '        return None\n'
+        '\n'
+        'class Flusher:\n'
+        '    def flush(self):\n'
+        '        return consumer.tail("mx.alarm.main")\n'),
+    "api/ledger.py": 'class Ledger:\n    def get(self, key):\n        return self._rows[key]\n',
     "api/repos/tally.py": (
         'from api.repos.base import BaseRepo\n'
         '\n'
@@ -121,13 +141,15 @@ FILES = {
         '    async def total(self):\n'
         '        return await self.repo.count()\n'),
     "api/services/audit.py": (
-        'class AuditService:\n'
+        'from vendor.base import Component\n'
+        '\n'
+        'class AuditService(Component):\n'
         '    async def recent(self):\n'
         '        return await consumer.tail("mx.alarm.main")\n'),
     "api/state_deps.py": (
         'from typing import Annotated\n'
         'from fastapi import Depends\n'
-        'from api.ports import AuditServicePort\n'
+        'from api.ports import AuditServicePort, MeterPort, KeyValuePort\n'
         'from api.services.tally import TallyService\n'
         '\n'
         'def get_tally_service(request):\n'
@@ -136,8 +158,16 @@ FILES = {
         'def get_audit_service(request) -> AuditServicePort:\n'
         '    return request.app.state.audit\n'
         '\n'
+        'def get_meter(request) -> MeterPort:\n'
+        '    return request.app.state.meter\n'
+        '\n'
+        'def get_kv(request) -> KeyValuePort:\n'
+        '    return request.app.state.kv\n'
+        '\n'
         'TallyServiceDep = Annotated[TallyService, Depends(get_tally_service)]\n'
-        'AuditServiceDep = Annotated[AuditServicePort, Depends(get_audit_service)]\n'),
+        'AuditServiceDep = Annotated[AuditServicePort, Depends(get_audit_service)]\n'
+        'MeterDep = Annotated[MeterPort, Depends(get_meter)]\n'
+        'KeyValueDep = Annotated[KeyValuePort, Depends(get_kv)]\n'),
     "api/gauges.py": (
         'from api.ports import GaugePort\n'
         '\n'
@@ -154,7 +184,7 @@ FILES = {
         'from api import settings\n'
         'from api.tables import KEY_TABLE\n'
         'from api.ports import GaugePort\n'
-        'from api.state_deps import TallyServiceDep, AuditServiceDep\n'
+        'from api.state_deps import TallyServiceDep, AuditServiceDep, MeterDep, KeyValueDep\n'
         'router = APIRouter(prefix="/furnace")\n'
         '\n'
         '@router.get("/heat")\n'
@@ -185,7 +215,15 @@ FILES = {
         '\n'
         '@router.get("/audit")\n'
         'async def audit_view(svc: AuditServiceDep):\n'
-        '    return await svc.recent()\n'),
+        '    return await svc.recent()\n'
+        '\n'
+        '@router.get("/meter")\n'
+        'async def meter_view(m: MeterDep):\n'
+        '    return await m.sample()\n'
+        '\n'
+        '@router.get("/kv")\n'
+        'async def kv_view(kv: KeyValueDep):\n'
+        '    return kv.get("x")\n'),
     "api/heat_deps.py": (
         'from typing import Annotated\n'
         'from fastapi import Depends\n'
@@ -206,6 +244,16 @@ FILES = {
         '\n'
         '    async def get_heat_status(self, line: str) -> dict:\n'
         '        return await self.repo.status(line)\n'),
+    # 같은 포트를 구조로 만족하는 두 번째 클래스 — provider·지역 변수 좁히기가 없으면 여기로도 퍼진다.
+    "api/services/heat_cache.py": (
+        'from api.services.heat import HeatService\n'
+        '\n'
+        'class CachedHeatService:\n'
+        '    def __init__(self, inner: HeatService):\n'
+        '        self.inner = inner\n'
+        '\n'
+        '    async def get_heat_status(self, line: str) -> dict:\n'
+        '        return await self.inner.get_heat_status(line)\n'),
     "api/repos/base.py": (
         'class BaseRepo:\n'
         '    collection = ""\n'
@@ -254,7 +302,9 @@ ROUTES = [Route(REPO, "GET", "/api/v1/line/status", "api/routers/line.py", 6, "E
           Route(REPO, "GET", "/furnace/table", "api/routers/furnace.py", 23, "EXTRACTED", ""),
           Route(REPO, "GET", "/furnace/gauge", "api/routers/furnace.py", 27, "EXTRACTED", ""),
           Route(REPO, "GET", "/furnace/tally", "api/routers/furnace.py", 31, "EXTRACTED", ""),
-          Route(REPO, "GET", "/furnace/audit", "api/routers/furnace.py", 35, "EXTRACTED", "")]
+          Route(REPO, "GET", "/furnace/audit", "api/routers/furnace.py", 35, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/meter", "api/routers/furnace.py", 39, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/kv", "api/routers/furnace.py", 43, "EXTRACTED", "")]
 
 
 class _Source:
@@ -301,6 +351,7 @@ async def test_끝점에서_핸들러를_찾아_DAO까지_따라가고_읽는_�
         ("api/services/line.py", 8, "LineService.get_line_status"),
         ("api/repos/line.py", 2, "LineRepo.latest")]
     assert _reads(t) == {("collection", "line_state", "확실"), ("rediskey", "line:{id}", "추정")}
+    assert {(r.name, r.via) for r in t.reads} == {("line_state", "literal"), ("line:{id}", "alias")}
     assert t.gaps == ()
     line_state = next(r for r in t.reads if r.name == "line_state")
     assert (line_state.file, line_state.line) == ("api/repos/line.py", 3)
@@ -406,14 +457,14 @@ async def test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_
 
 
 async def test_받는_쪽을_모르는_호출은_후보가_여럿이면_안_따라가고_gap_하나만_남긴다():
-    """`settings.get(...)`·`opts.get(...)` — 레포에 `def get(`이 셋(WebFetcher·CacheHandle·OptionBag).
+    """`settings.get(...)`·`opts.get(...)` — 레포에 `def get(`이 넷(WebFetcher·CacheHandle·OptionBag·Ledger).
     전부 따라가면 사슬이 20줄로 퍼지고 깊이 예산이 잡음에 먹힌다(사내). 인자에 주석이 없는 경우
     (`loose`)는 전처럼 후보 전부를 추정으로 따라간다."""
     t, _ = await _trace("/furnace/cfg")
     assert [s.qualname for s in t.chain] == ["cfg_view"]
     assert t.reads == ()
     gaps = [g.why for g in t.gaps]
-    assert any("get" in g and "후보 3개" in g and "안 따라간다" in g for g in gaps), gaps
+    assert any("get" in g and "후보 4개" in g and "안 따라간다" in g for g in gaps), gaps
     assert len(gaps) == 1, gaps                     # 같은 이름은 한 번만
 
 
@@ -455,8 +506,9 @@ async def test_포트와_같은_이름의_클래스가_다른_모듈에_있으�
 
 
 async def test_상속도_같은_이름도_없으면_이름_규약으로_구현체를_고르고_추정이라고_적는다():
-    """`AuditServicePort` → `AuditService`. 코드가 보증하는 연결이 아니라 등급은 추정이고 gap에 남긴다 —
-    같은 이름 메서드 전부로 퍼지는 것보다는 좁고, 확실이라고 속이지는 않는다."""
+    """`AuditServicePort`는 `recent`·`purge`를 선언하는데 `AuditService`에는 `recent`뿐이다(`purge`는 외부
+    부모에서 온다) — 구조로는 못 맞추니 이름 규약으로 고른다. 코드가 보증하는 연결이 아니라 등급은 추정이고
+    gap에 남긴다 — 같은 이름 메서드 전부로 퍼지는 것보다는 좁고, 확실이라고 속이지는 않는다."""
     t, _ = await _trace("/furnace/audit")
     assert [s.qualname for s in t.chain][:2] == ["audit_view", "AuditService.recent"]
     assert _reads(t) == {("topic", "mx.alarm.main", "추정")}
@@ -471,3 +523,23 @@ async def test_super_호출은_부모의_메서드로_가고_실행_시점_클�
     names = [s.qualname for s in t.chain]
     assert "HeatRepo.__init__" in names and "BaseRepo.__init__" in names, names
     assert t.gaps == (), t.gaps
+
+
+# ── 사내 세 번째 추적(커밋 2c 뒤): 읽기 엣지 608개 중 확실 3개. 서비스 포트를 이름 규약으로 고른 추정이 그
+# 아래 전부를 추정으로 만들었다. Protocol은 언어 정의가 구조적이다(PEP 544) — 선언한 메서드를 다 가진
+# 클래스가 곧 구현체이고, 이름은 후보를 찾는 수단일 뿐이다.
+
+async def test_Protocol이_선언한_메서드를_다_가진_클래스가_구현체이고_하나면_확실이다():
+    """`MeterPort(sample, flush)` ↔ `DialMeter`(둘 다) · `Flusher`(flush만). 이름은 안 닮았다."""
+    t, _ = await _trace("/furnace/meter")
+    assert [s.qualname for s in t.chain][:2] == ["meter_view", "DialMeter.sample"]
+    assert _reads(t) == {("collection", "line_state", "확실")}
+    assert t.gaps == (), t.gaps
+
+
+async def test_구조가_맞는_클래스가_넷_이상이면_안_따라가고_gap_하나를_남긴다():
+    """`KeyValuePort(get)` — `def get(`을 가진 클래스가 넷. 전부 따라가면 2b 이전의 퍼짐이다."""
+    t, _ = await _trace("/furnace/kv")
+    assert [s.qualname for s in t.chain] == ["kv_view", "get_kv"]
+    assert t.reads == ()
+    assert [g.why for g in t.gaps] == ["get: KeyValuePort 구조가 맞는 클래스 4개 — 안 따라간다"]

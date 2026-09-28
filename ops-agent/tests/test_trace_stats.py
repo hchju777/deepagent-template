@@ -21,8 +21,8 @@ OVERLAY = {
         {"id": "collection_x", "type": "collection"},
     ],
     "links": [
-        {"source": "endpoint_a", "target": "collection_x", "relation": "reads", "origin": "trace", "confidence": "EXTRACTED"},
-        {"source": "endpoint_a", "target": "collection_x", "relation": "reads", "origin": "trace", "confidence": "INFERRED"},
+        {"source": "endpoint_a", "target": "collection_x", "relation": "reads", "origin": "trace", "confidence": "EXTRACTED", "via": "literal"},
+        {"source": "endpoint_a", "target": "collection_x", "relation": "reads", "origin": "trace", "confidence": "INFERRED", "via": "alias"},
         {"source": "svc", "target": "collection_x", "relation": "reads", "origin": "code", "confidence": "EXTRACTED"},
     ],
 }
@@ -32,7 +32,7 @@ def test_일곱_줄에_끝점_수와_막힌_끝점과_gap_종류가_있다():
     lines = trace_stats.stats(OVERLAY)
     assert len(lines) == 7 and [l[0] for l in lines] == list("1234567")
     assert lines[0].startswith("1 끝점 3 ") and "자원까지 1" in lines[0] and "막힘 1" in lines[0]
-    assert "'EXTRACTED': 1" in lines[1] and "'INFERRED': 1" in lines[1]
+    assert "'EXTRACTED/literal': 1" in lines[1] and "'INFERRED/alias': 1" in lines[1]
     assert "최소 1 · 중간 3 · 최대 3" in lines[2]
     assert "받는 쪽 미상, 후보 N개" in lines[3] and "'get'" in lines[4]
     assert "'Dao'" in lines[5] and "(모듈 함수)" in lines[5]

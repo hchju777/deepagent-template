@@ -753,7 +753,7 @@ def add_trace(graph: dict, endpoint_id: str, result) -> dict:
         if target not in nodes:
             continue
         links.append({"source": endpoint_id, "target": target, "relation": "reads",
-                      "confidence": "EXTRACTED" if r.grade == "확실" else "INFERRED", "grade": r.grade,
+                      "confidence": "EXTRACTED" if r.grade == "확실" else "INFERRED", "grade": r.grade, "via": r.via,
                       "attributed": "endpoint", "origin": "trace", "source_file": r.file,
                       "source_location": f"L{r.line}", "repo": result.repo, "commit": "", "text": ""})
     return {**graph, "nodes": list(nodes.values()), "links": links}

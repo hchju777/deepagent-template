@@ -43,6 +43,7 @@ class Read:
     grade: str          # "확실" | "추정"
     file: str
     line: int
+    via: str = "literal"    # 이름이 코드에 어떻게 있었나 — "literal"(문자열 그대로) | "key"(config 키 토큰) | "alias"(상수·Enum)
 
 
 @dataclass(frozen=True)
@@ -324,6 +325,36 @@ class _Repo:
         self._defs[key] = out
         return out
 
+    async def structural_impls(self, pmod: _Mod, proto: ast.ClassDef) -> list[tuple[_Mod, ast.ClassDef]]:
+        """Protocol이 선언한 메서드를 **전부 가진** 클래스들 — PEP 544의 정의 그대로, 상속도 이름도 필요 없다.
+        후보 파일은 선언 중 가장 긴 이름의 `def m(`으로 grep한다(`get`보다 특이할 확률이 높다). 사내 세 번째
+        추적에서 이름 규약으로 고른 추정이 그 아래 읽기 608개를 전부 추정으로 만들었다 — 구조로 맞으면 확실이다."""
+        methods = [b.name for b in proto.body if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and not b.name.startswith("__")]
+        if not methods:
+            return []
+        key = ("struct:" + proto.name, False)
+        if key in self._defs:
+            for cmod, _ in self._defs[key]:
+                self.touched.add(cmod.path)
+            return self._defs[key]
+        out: list[tuple[_Mod, ast.ClassDef]] = []
+        probe = max(methods, key=len)
+        for hit in sorted(await self.source.grep([f"def {probe}("]), key=lambda h: (h.file, h.line)):
+            if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):
+                continue
+            hmod = await self.module(hit.file)
+            if hmod is None:
+                continue
+            for cls in hmod.classes.values():
+                if cls is proto or _is_protocol(cls) or any(c is cls for _, c in out):
+                    continue
+                found = [await self.find_method(hmod, cls, m) for m in methods]
+                if all(f is not None and not _is_abstract(f[1]) for f in found):
+                    out.append((hmod, cls))
+        self._defs[key] = out
+        return out
+
     async def field_class(self, mod: _Mod, cls: ast.ClassDef, attr: str, *, hops: int = 0
                           ) -> tuple[_Mod, ast.ClassDef] | None:
         """`self.<attr>`의 클래스 — `self.x = Cls(...)`, 생성자 인자 `self.x = param`(주석으로),
@@ -448,6 +479,11 @@ def _port_aliases(name: str) -> list[str]:
     return [a for i, a in enumerate(out) if a not in out[:i]]
 
 
+def _implementers(cands) -> list:
+    """같은 이름 메서드 후보에서 포트의 선언(`...`뿐인 것)을 뺀다 — 선언은 구현체 후보가 아니다."""
+    return [c for c in cands if not _is_abstract(c[1])]
+
+
 def _is_protocol(cls: ast.ClassDef) -> bool:
     for b in cls.bases:
         name = b.id if isinstance(b, ast.Name) else getattr(b, "attr", "")
@@ -542,11 +578,11 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
     queue: list[_Node] = list(roots)
     later: list[_Node] = []          # Depends(g)의 g — 데이터 경로가 사슬 앞에 오게 뒤로 미룬다
 
-    def add_read(kind: str, name: str, grade: str, file: str, line: int) -> None:
+    def add_read(kind: str, name: str, grade: str, file: str, line: int, via: str) -> None:
         key = (kind, name, file, line)
         cur = reads.get(key)
         if cur is None or (cur.grade == "추정" and grade == "확실"):
-            reads[key] = Read(kind, name, grade, file, line)
+            reads[key] = Read(kind, name, grade, file, line, via)
 
     while queue or later:
         if not queue:
@@ -641,12 +677,12 @@ def _collect_reads(segment: str, base: int, path: str, cap: str, names: list[Nam
     for n in names:
         at = _quoted_at(segment, n.literal) if n.literal else None
         if at is not None:
-            add_read(n.kind, n.value, "추정" if cap == "추정" else "확실", path, base + at)
+            add_read(n.kind, n.value, "추정" if cap == "추정" else "확실", path, base + at, "literal")
         elif f'"{n.key_token}"' in segment or f"'{n.key_token}'" in segment:
-            add_read(n.kind, n.value, "추정", path, _line_of(segment, n.key_token, base))
+            add_read(n.kind, n.value, "추정", path, _line_of(segment, n.key_token, base), "key")
     for ident, n in aliases.items():
         if re.search(rf"\b{re.escape(ident)}\b", segment):
-            add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base))
+            add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base), "alias")
 
 
 async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node], list[_Node]]:
@@ -709,14 +745,25 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
                 grade = "추정"
                 gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체 {len(impls)}개 — 전부 따라가되 읽기는 추정"))
         if not impls:
-            # 상속하지 않는 구현체 — 다른 모듈의 같은 이름 클래스(사내 저장소), 그 다음 이름 규약.
+            # 상속하지 않는 구현체 — 선언한 메서드를 다 가진 클래스(언어의 정의). 하나면 확실, 둘셋이면 추정,
+            # 더 많으면 `def get(` 하나짜리 포트다 — 안 따라간다.
+            structural = await r.structural_impls(owner[0], owner[1])
+            if len(structural) == 1:
+                impls = structural
+            elif 1 < len(structural) <= 3:
+                impls, grade = structural, "추정"
+                gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구조가 맞는 클래스 {len(structural)}개 — 전부 따라가되 읽기는 추정"))
+            elif len(structural) > 3:
+                gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구조가 맞는 클래스 {len(structural)}개 — 안 따라간다"))
+                return True
+        if not impls:
+            # 구조로는 안 맞는다(선언한 메서드 일부가 외부 부모에 있거나 아직 없다) — 이름으로 짐작한다: 같은 이름
+            # 클래스(사내 저장소 모양), 그 다음 이름 규약. 둘 다 코드가 보증하지 않으니 추정이고 gap에 남긴다.
             same = [(smod, scls) for smod, scls in await r.classes_named(owner[1].name)
                     if scls is not owner[1] and not _is_protocol(scls)]
             if same:
-                impls = same
-                if len(same) > 1:
-                    grade = "추정"
-                    gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 같은 이름 클래스 {len(same)}개 — 전부 따라가되 읽기는 추정"))
+                impls, grade = same, "추정"
+                gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 같은 이름 클래스 {len(same)}개로 갔다 — 포트의 메서드를 다 갖추지 않아 읽기는 추정"))
             else:
                 for alias in _port_aliases(owner[1].name):
                     same = [(smod, scls) for smod, scls in await r.classes_named(alias) if not _is_protocol(scls)]
@@ -725,7 +772,7 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
                         gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체를 이름 규약으로 골랐다 — {alias}, 읽기는 추정"))
                         break
         if not impls:
-            cands = [c for c in await r.defs_named(meth, methods=True) if c[1] is not m and c[1] is not func]
+            cands = _implementers(c for c in await r.defs_named(meth, methods=True) if c[1] is not m and c[1] is not func)
             for cmod, cfunc, ccls in cands:
                 push(cmod, cfunc, ccls, "추정", self_of=(cmod, ccls) if ccls else None)
             if cands:
@@ -799,7 +846,7 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
             continue
         if kind in ("self", "field", "class") and owner is not None:
             continue                                       # 좁혔는데 메서드가 없다 — 외부 부모거나 동적
-        cands = [c for c in await r.defs_named(meth, methods=True) if c[1] is not func]
+        cands = _implementers(c for c in await r.defs_named(meth, methods=True) if c[1] is not func)
         if kind == "param_free":
             for cmod, cfunc, ccls in cands:
                 push(cmod, cfunc, ccls, "확실" if len(cands) == 1 else "추정",
@@ -808,7 +855,9 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
                 gaps.append(Gap(mod.path, call.lineno,
                                 f"{meth}: 받는 쪽을 못 좁혀 후보 {len(cands)}개 — 전부 따라가되 읽기는 추정"))
             continue
-        if len(cands) == 1:
+        if len(cands) == 1 and kind != "unknown":
+            # 이름조차 못 찾은 받는 쪽(`mongo[...]`·외부 객체)은 후보가 하나여도 안 간다 — 커서의 `.count()`가
+            # 레포의 유일한 `def count(`로 잘못 이어졌다.
             cmod, cfunc, ccls = cands[0]
             push(cmod, cfunc, ccls, "추정", self_of=(cmod, ccls) if ccls else None)
         elif len(cands) > 1 and kind != "unknown" and meth not in reported:
