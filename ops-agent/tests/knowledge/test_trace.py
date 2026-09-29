@@ -144,6 +144,7 @@ FILES = {
         'class DialMeter:\n'
         '    async def sample(self):\n'
         '        hist = cfg["mongodb_collection"]["history"]\n'
+        '        n = await mongo["alarm"].count()\n'
         '        return await mongo["line_state"].count()\n'
         '\n'
         '    def flush(self):\n'
@@ -175,6 +176,7 @@ FILES = {
         '\n'
         'class AuditService(Component):\n'
         '    async def recent(self):\n'
+        '        counts = {"alarm": 0, "caution": 0}\n'
         '        return await consumer.tail("mx.alarm.main")\n'),
     "api/state_deps.py": (
         'from typing import Annotated\n'
@@ -329,6 +331,7 @@ NAMES = [Name("collection", "line_state", "mongodb_collection.line_state"),
          Name("collection", "heat_status", "mongodb_collection.heat"),
          Name("collection", "tally_state", "mongodb_collection.tally"),
          Name("collection", "mx_hist_v2", "mongodb_collection.history"),
+         Name("collection", "alarm", "mongodb_collection.alarm"),
          Name("rediskey", "line:{id}", "redis_key.line_status"),
          Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic1")]
 
@@ -578,8 +581,10 @@ async def test_Protocol이_선언한_메서드를_다_가진_클래스가_구현
     코드의 포트 선언은 그렇게 정확하지 않다."""
     t, _ = await _trace("/furnace/meter")
     assert [s.qualname for s in t.chain][:2] == ["meter_view", "DialMeter.sample"]
-    assert _reads(t) == {("collection", "line_state", "확실"), ("collection", "mx_hist_v2", "추정")}
-    assert {(r.name, r.via) for r in t.reads} == {("line_state", "literal"), ("mx_hist_v2", "key")}
+    assert _reads(t) == {("collection", "line_state", "확실"), ("collection", "mx_hist_v2", "추정"),
+                         ("collection", "alarm", "확실")}
+    assert {(r.name, r.via) for r in t.reads} == {("line_state", "literal"), ("mx_hist_v2", "key"),
+                                                   ("alarm", "literal")}
     assert t.gaps == (), t.gaps
 
 
@@ -624,3 +629,18 @@ async def test_사슬은_트리다_걸음마다_부모가_있고_읽기는_난_�
     assert names[t.chain[2].parent] == "LineService.get_line_status"
     read = next(r for r in t.reads if r.name == "line_state")
     assert names[read.step] == "LineRepo.latest"
+
+
+# ── 3a 보정 — 사내 /summary 끝점이 "alarm 컬렉션을 읽는다"고 나왔다. 배지 상태값 `"alarm"`이었다.
+
+async def test_한_단어_리터럴은_같은_줄에_읽기쓰기_동사가_있어야_읽기다():
+    """`counts = {"alarm": 0, …}`은 읽기가 아니고 `mongo["alarm"].count()`는 읽기다(meter 테스트)."""
+    t, _ = await _trace("/furnace/audit")
+    assert _reads(t) == {("topic", "mx.alarm.main", "추정")}
+
+
+async def test_별칭_색인은_코드에_실제로_있는_값으로_찾는다():
+    """접두사가 붙은 키(`SITE:PLC:LINK`)는 코드에 `"PLC:LINK"`로만 있다 — 색인은 `code_value`로 grep한다."""
+    src = _Source({"api/keys2.py": 'CONN = "PLC:LINK"\n'})
+    n = Name("rediskey", "SITE:PLC:LINK", "redis_key.conn", code_value="PLC:LINK")
+    assert await trace.alias_index([n], src) == {"CONN": n}

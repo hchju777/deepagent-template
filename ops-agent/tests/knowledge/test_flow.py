@@ -88,6 +88,39 @@ def test_이름이_객체_안에_있어도_뽑는다():
     assert ("collection", "alarm_events", "mongodb_collection.alarm") in core
 
 
+def test_접두사_leaf가_있으면_키는_접두사를_붙인_이름이고_코드에는_원래_값으로_찾는다():
+    """사내 관례: `redis_key.prefix` + `:` + 값이 실제 키다. 선언(`prefix`)이 있으면 접두사 leaf는 자원이
+    아니고, 라벨·브리핑·redis.get에는 완전한 키가, grep·추적기에는 코드에 실제로 있는 값이 나간다."""
+    cfg = {"redis_key": {"prefix": "SITE", "conn": "PLC:LINK", "stats": "s:{line}"}}
+    src = FlowSource(path="redis_key", kind="rediskey", prefix="prefix")
+    got = {(n.value, n.key_path, n.code_value, n.literal) for n in flow.names_from_config(cfg, [src])}
+    assert got == {("SITE:PLC:LINK", "redis_key.conn", "PLC:LINK", "PLC:LINK"),
+                   ("SITE:s:{line}", "redis_key.stats", "s:{line}", "s:")}
+    plain = {n.value for n in flow.names_from_config(cfg, [FlowSource(path="redis_key", kind="rediskey")])}
+    assert plain == {"SITE", "PLC:LINK", "s:{line}"}              # 선언이 없으면 전처럼 — 접두사도 leaf다
+    none = {n.value for n in flow.names_from_config({"redis_key": {"conn": "PLC:LINK"}}, [src])}
+    assert none == {"PLC:LINK"}                                    # 접두사 leaf가 없는 층이면 그대로
+    joined = {n.value for n in flow.names_from_config(
+        cfg, [FlowSource(path="redis_key", kind="rediskey", prefix="prefix", join="_")])}
+    assert joined == {"SITE_PLC:LINK", "SITE_s:{line}"}
+
+
+def test_한_단어_리터럴은_같은_줄에_읽기쓰기_동사가_있어야_잡는다():
+    """컬렉션 이름이 `alarm`처럼 흔한 한 단어면 배지 상태값 `"alarm"`과 구별이 안 된다 — 사내에서
+    /summary 끝점이 alarm 컬렉션을 읽는다고 나왔다(실제로는 상태값을 세는 줄). 여러 조각짜리 이름은
+    전처럼 어디 있든 잡는다."""
+    name = Name("collection", "alarm", "mongodb_collection.alarm", services=("api",))
+    lines = {3: 'counts = {"alarm": 0, "caution": 0}', 9: 'rows = await db["alarm"].find({})'}
+
+    def hits_for(pattern):
+        return [Hit("dt-api", COMMITS["dt-api"], "api/badge.py", n, t) for n, t in lines.items() if pattern in t]
+
+    g = flow.extract(names=[name], topology=TOPOLOGY, hits_for=hits_for, commits=COMMITS)
+    code = {(e["relation"], e["source_location"]) for e in g["links"]
+            if e["target"] == "collection_alarm" and e.get("origin") != "config"}
+    assert code == {("reads", "L9")}
+
+
 def test_객체의_필드는_종류별_기본이고_바꿀_수_있다():
     cfg = {"redis_key": {"a": {"name": "k:1", "ttl": 1}, "b": {"key": "k:2"}, "c": "k:3", "d": {"ttl": 9}}}
     default = flow.names_from_config(cfg, [FlowSource(path="redis_key", kind="rediskey")])

@@ -872,6 +872,21 @@ CASES = [
  ("code trace가 없는 끝점을 없다고 안 한다", ROOT / "src/__main__.py",
   '    if not any(n["id"] == node_id for n in graph["nodes"]):\n        print(f"  {args.path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다")', '    if False:\n        print(f"  {args.path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다")',
   ["tests/knowledge/test_cli_code.py::test_code_graph가_끝점을_싣고_flow와_status가_말한다"]),
+ ('접두사 leaf를 키 자원으로 만든다', ROOT / "src/knowledge/flow.py",
+  '                if src.prefix and key == src.prefix:\n                    continue', '                if False:\n                    continue',
+  ['tests/knowledge/test_flow.py::test_접두사_leaf가_있으면_키는_접두사를_붙인_이름이고_코드에는_원래_값으로_찾는다']),
+ ('키에 접두사를 안 붙인다', ROOT / "src/knowledge/flow.py",
+  '                    if pre:\n                        found.append(Name(src.kind, f"{pre}{src.join}{value}"', '                    if False:\n                        found.append(Name(src.kind, f"{pre}{src.join}{value}"',
+  ['tests/knowledge/test_flow.py::test_접두사_leaf가_있으면_키는_접두사를_붙인_이름이고_코드에는_원래_값으로_찾는다']),
+ ('grep 판정이 한 단어 리터럴을 동사 없이 받는다', ROOT / "src/knowledge/flow.py",
+  '                        and not _DISTINCTIVE.search(pattern) and direction(hit.text) is None):', '                        and False):',
+  ['tests/knowledge/test_flow.py::test_한_단어_리터럴은_같은_줄에_읽기쓰기_동사가_있어야_잡는다']),
+ ('추적기가 한 단어 리터럴을 동사 없이 읽기로 친다', ROOT / "src/knowledge/trace.py",
+  '            at = None       # 한 단어 리터럴은 같은 줄에 읽기/쓰기 동사가 있어야 읽기다 — 배지 상태값 "alarm"', '            pass',
+  ['tests/knowledge/test_trace.py::test_한_단어_리터럴은_같은_줄에_읽기쓰기_동사가_있어야_읽기다']),
+ ('별칭 색인이 접두사 붙은 값으로 grep한다', ROOT / "src/knowledge/trace.py",
+  '        wanted.setdefault(n.code_value or n.value, n)', '        wanted.setdefault(n.value, n)',
+  ['tests/knowledge/test_trace.py::test_별칭_색인은_코드에_실제로_있는_값으로_찾는다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -899,7 +914,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 224, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 229, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -73,6 +73,12 @@ class FlowSource(StrictModel):
     # `mongodb_collection.alarm = {"collection": "…", "ttl": 3}`처럼 쓴다(사내 확인).
     # 비우면 종류별 기본(`FLOW_FIELDS`). 문자열과 객체가 섞여 있어도 둘 다 뽑는다.
     field: str | None = None
+    # 접두사가 붙는 키. `prefix`는 그 절 안에서 접두사가 사는 leaf의 이름(사내: `redis_key.prefix`)이다 —
+    # 그 leaf는 자원이 아니고, 나머지 leaf의 **실제 이름**은 접두사 + `join` + 값이다. 선언이 없으면 leaf
+    # 전부가 완전한 이름으로 취급돼 접두사가 키 자원으로 뜨고, 진짜 키는 접두사 없이 리드에게 나간다
+    # (사내 확인 — `redis.get`이 그 키로 빈 결과를 받는 경로).
+    prefix: str | None = None
+    join: str = ":"
 
 
 class FlowSpec(StrictModel):
@@ -84,7 +90,7 @@ class FlowSpec(StrictModel):
         FlowSource(path="infra.kafka.producer.topic", kind="topic", relation="produces"),
         FlowSource(path="infra.kafka.consumer.group_id", kind="group", relation="consumes_as"),
         FlowSource(path="mongodb_collection", kind="collection"),
-        FlowSource(path="redis_key", kind="rediskey"),
+        FlowSource(path="redis_key", kind="rediskey", prefix="prefix"),
     ]
 
 

@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Protocol
 
-from src.knowledge.flow import Hit, Name, Route, _is_noise, _quoted_whole
+from src.knowledge.flow import _DISTINCTIVE, Hit, Name, Route, _is_noise, _quoted_whole, direction
 
 MAX_DEPTH = 6
 MAX_NODES = 200
@@ -78,7 +78,7 @@ async def alias_index(names: Iterable[Name], source: Source) -> dict[str, Name]:
     names = list(names)
     wanted: dict[str, Name] = {}
     for n in names:
-        wanted.setdefault(n.value, n)
+        wanted.setdefault(n.code_value or n.value, n)   # 접두사 키는 코드에 접두사 없는 값으로만 있다
         wanted.setdefault(n.key_token, n)
     patterns = sorted({f'"{k}"' for k in wanted} | {f"'{k}'" for k in wanted})
     out: dict[str, Name] = {}
@@ -702,6 +702,9 @@ def _collect_reads(segment: str, base: int, path: str, cap: str, names: list[Nam
                    aliases: dict[str, Name], add_read) -> None:
     for n in names:
         at = _quoted_at(segment, n.literal) if n.literal else None
+        if (at is not None and not _DISTINCTIVE.search(n.literal)
+                and direction(segment.splitlines()[at]) is None):
+            at = None       # 한 단어 리터럴은 같은 줄에 읽기/쓰기 동사가 있어야 읽기다 — 배지 상태값 "alarm"
         if at is not None:
             add_read(n.kind, n.value, "추정" if cap == "추정" else "확실", path, base + at, "literal")
         elif (at := _key_at(segment, n)) is not None:

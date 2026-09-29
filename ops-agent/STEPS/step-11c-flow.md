@@ -442,3 +442,11 @@ trace를 읽으니 원인은 모델이 아니라 우리 쪽에 있었다.
    분리 유지, 없으면 오버레이만
 4. 라우트 선언 모양 — 확인됐다(FastAPI, 커밋 5). `include_router`의 prefix 사용 여부는 추적기가
    두 경우를 다 다루므로 안 물어도 된다
+
+## 11b에서 돌아온 보정 (3a 보정)
+
+- **접두사 키** — `flow.sources` 항목에 `prefix`·`join`. 사내 관례 `redis_key.prefix` + `:` + 값을 지식이
+  말한다. `Name.value`는 완전한 키(라벨·브리핑·`redis.get`), `Name.code_value`는 코드에 있는 값(grep·추적).
+- **한 단어 리터럴** — grep 판정에서 `alarm`처럼 한 단어인 리터럴은 같은 줄에 읽기/쓰기 동사가 있어야
+  엣지가 된다. 배지 상태값 `"alarm"`이 alarm 컬렉션 읽기로 잡혔다(사내). 자세한 것은
+  [step-11b](step-11b-trace.md)의 "3a 보정".

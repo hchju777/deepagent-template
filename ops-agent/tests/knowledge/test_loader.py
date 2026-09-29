@@ -4,6 +4,7 @@
 제일 비싸고, 그래서 기동에서 잡는다.
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -128,3 +129,11 @@ def test_모르는_자리는_거부한다():
     with pytest.raises(ValueError, match="모르는 자리"):
         Topology.model_validate({"services": {"x": {"repo": "r"}},
                                  "config_paths": ["config/{corp}.json"]})
+
+
+def test_리포의_mx_토폴로지는_redis_키_접두사를_선언한다():
+    """사내 관례(`redis_key.prefix` + `:` + 값)를 지식이 말한다 — 없으면 접두사가 키 자원으로 뜨고 진짜
+    키는 접두사 없이 리드에게 나간다."""
+    topo = load_topology(Path(__file__).resolve().parents[2] / "knowledge", "mx")
+    redis = next(s for s in topo.flow.sources if s.kind == "rediskey")
+    assert (redis.prefix, redis.join) == ("prefix", ":")

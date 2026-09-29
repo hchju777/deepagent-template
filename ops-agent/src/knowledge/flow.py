@@ -56,11 +56,14 @@ class Name:
     # `(서비스, 층 파일, 줄, 본문)` — 그 서비스가 실제로 합친 층에서 값이 적힌 자리. config
     # 엣지의 근거 줄은 이것이 먼저고, 없을 때만 레포의 config 파일 grep으로 대신한다.
     evidence: tuple[tuple[str, str, int, str], ...] = ()
+    # 접두사가 붙는 키(사내: `redis_key.prefix` + `:` + 값)에서 **코드에 실제로 있는 값**. 라벨·브리핑·
+    # `redis.get`은 `value`(완전한 키)를 쓰고, grep과 추적기는 이것을 쓴다. 없으면 `value`가 곧 코드의 값이다.
+    code_value: str | None = None
 
     @property
     def literal(self) -> str:
-        """grep에 쓸 리터럴 — 템플릿이면 `{` 앞까지."""
-        return self.value.split("{", 1)[0]
+        """grep에 쓸 리터럴 — 코드에 있는 값, 템플릿이면 `{` 앞까지."""
+        return (self.code_value or self.value).split("{", 1)[0]
 
     @property
     def key_token(self) -> str:
@@ -113,14 +116,22 @@ def names_from_config(merged: dict, sources) -> list[Name]:
                 break
         field = src.field or FLOW_FIELDS.get(src.kind, "")
         if isinstance(node, dict):
+            pre = node.get(src.prefix) if src.prefix else None
+            pre = pre if isinstance(pre, str) and pre else None
             for key, value in sorted(node.items()):
+                if src.prefix and key == src.prefix:
+                    continue                # 접두사는 키 조각이지 자원이 아니다
                 # 값이 객체면(`{"collection": "…", "ttl": 3}`) 이름은 그 안의 필드다. 키 경로는
                 # **맵의 키까지**(`mongodb_collection.alarm`)로 둔다 — 코드는 그 키로 꺼내고,
                 # `collection`·`key` 같은 필드 이름은 어디에나 있어 토큰으로 못 쓴다.
                 if isinstance(value, dict):
                     value = value.get(field)
                 if isinstance(value, str) and value:
-                    found.append(Name(src.kind, value, f"{src.path}.{key}", src.relation))
+                    if pre:
+                        found.append(Name(src.kind, f"{pre}{src.join}{value}", f"{src.path}.{key}", src.relation,
+                                          code_value=value))
+                    else:
+                        found.append(Name(src.kind, value, f"{src.path}.{key}", src.relation))
         elif isinstance(node, str) and node:
             found.append(Name(src.kind, node, src.path, src.relation))
     return found
@@ -233,6 +244,11 @@ def extract(*, names: Iterable[Name], topology: Topology,
                 if _is_config(hit.file) and name.services:
                     continue            # config 엣지는 아래에서 서비스 단위로 만든다
                 if not _is_config(hit.file) and _is_noise(hit.file, hit.text):
+                    continue
+                if (confidence == "EXTRACTED" and not _is_config(hit.file)
+                        and not _DISTINCTIVE.search(pattern) and direction(hit.text) is None):
+                    # 한 단어 리터럴(`alarm`)은 같은 줄에 읽기/쓰기 동사가 있어야 자원이다 — 배지 상태값
+                    # `"alarm"`이 alarm 컬렉션 읽기로 잡혔다(사내). 여러 조각짜리는 어디 있든 잡는다.
                     continue
                 put_node(target, name.value, name.kind, hit.file, hit.line,
                          key_path=name.key_path)
