@@ -156,3 +156,15 @@ async def test_발견용_읽기도_인자를_검사한다():
                               {"collection": "x"}, clock=CLOCK)
     assert result.status == "error" and "모르는 인자" in result.error
     assert mongo.calls == []
+
+
+def test_레인은_action에서_정해진다():
+    """`role`은 리드가 아니라 코드가 정한다 — `code.*`는 code_tracer, `recompute.*`는 recompute_verifier."""
+    from src.domain.actions import role_for
+    assert role_for("code.trace") == "code_tracer" and role_for("code.grep") == "code_tracer"
+    assert role_for("recompute.count") == "recompute_verifier"
+    assert role_for("mongo.find") == "data_prober" and role_for("") == "data_prober"
+
+
+def test_code_trace가_등재돼_있다():
+    assert ACTIONS["code.trace"] == ("code", "trace", ("target",), ())

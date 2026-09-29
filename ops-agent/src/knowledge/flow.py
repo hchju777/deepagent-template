@@ -491,7 +491,7 @@ RESOURCE_TYPES = ("topic", "group", "collection", "rediskey", "endpoint")
 
 # ── 리드용 텍스트 — 브리핑의 <데이터 흐름>과 `code.flow` ─────────────────
 
-_FLOW_ORDER = ("serves", "reads", "reads(추정)", "produces", "consumes", "consumes_as", "declares")
+_FLOW_ORDER = ("serves", "reads", "reads(config키)", "reads(추정)", "produces", "consumes", "consumes_as", "declares")
 _KIND_RANK = {"service": 0, "endpoint": 1, "topic": 2, "collection": 3, "rediskey": 4, "group": 5}
 _MIN_SEED = 3
 _MAX_RESOURCE_SEEDS = 3
@@ -590,13 +590,14 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
         head = f"{node['label']} [{node['type']}]"
         parts = [f"{rel}: {clip(fold(groups[rel]))}" for rel in _FLOW_ORDER if rel in groups]
         if node["type"] == "endpoint":
-            # 추적기가 짚은 읽기 — 확실과 추정을 갈라 적는다. 자원엔 종류를 붙인다(같은 이름의 토픽·컬렉션).
+            # 추적기가 짚은 읽기 — 확실·config키·추정을 갈라 적는다(등급은 그대로, 표시만 가른다 — 사내 읽기의
+            # 대부분이 config 키 경유라 "추정" 하나로 묶으면 리드가 전부를 확인하러 간다). 자원엔 종류를 붙인다.
             reads: dict[str, set[str]] = {}
             for e in links:
                 if e["source"] == node_id and e.get("origin") == "trace":
-                    rel = "reads" if e.get("confidence") == "EXTRACTED" else "reads(추정)"
+                    rel = "reads" + _READ_MARK[read_mark(e)]
                     reads.setdefault(rel, set()).add(f"{by_id[e['target']]['label']} [{by_id[e['target']]['type']}]")
-            parts += [f"{rel}: {clip(reads[rel])}" for rel in ("reads", "reads(추정)") if rel in reads]
+            parts += [f"{rel}: {clip(reads[rel])}" for rel in ("reads", "reads(config키)", "reads(추정)") if rel in reads]
         directions = ("produces", "consumes") if node["type"] == "topic" else ("writes", "reads")
         ambiguous = "produces" in groups and groups["produces"] == groups.get("consumes")
         tail = code_direction(node_id, directions) if (with_code or ambiguous) else ""
@@ -747,6 +748,7 @@ def add_trace(graph: dict, endpoint_id: str, result) -> dict:
         return graph
     node["traced"] = result.status
     node["chain"] = [f"{s.file}:L{s.line} {s.qualname}" for s in result.chain]
+    node["chain_parent"] = [s.parent for s in result.chain]
     node["gaps"] = [f"{g.file}:L{g.line} {g.why}" for g in result.gaps]
     for r in result.reads:
         target = _node_id(r.kind, r.name)
@@ -754,9 +756,72 @@ def add_trace(graph: dict, endpoint_id: str, result) -> dict:
             continue
         links.append({"source": endpoint_id, "target": target, "relation": "reads",
                       "confidence": "EXTRACTED" if r.grade == "확실" else "INFERRED", "grade": r.grade, "via": r.via,
+                      "step": r.step,
                       "attributed": "endpoint", "origin": "trace", "source_file": r.file,
                       "source_location": f"L{r.line}", "repo": result.repo, "commit": "", "text": ""})
     return {**graph, "nodes": list(nodes.values()), "links": links}
+
+
+def read_mark(edge: dict) -> str:
+    """추적 읽기 엣지의 표시 — 등급이 확실이면 `확실`, 추정인데 이름이 config 키 경유면 `config키`, 그 밖은
+    `추정`. 등급(EXTRACTED/INFERRED)은 안 건드린다 — 표시만 가른다(step-11b 2f 뒤의 결정)."""
+    if edge.get("confidence") == "EXTRACTED":
+        return "확실"
+    return "config키" if edge.get("via") == "key" else "추정"
+
+
+_READ_MARK = {"확실": "", "config키": "(config키)", "추정": "(추정)"}
+_TRACE_MAX_GAPS = 3
+_TRACE_HEAD = 4          # 읽기가 하나도 없는 끝점은 앞 걸음 이만큼만
+
+
+def endpoint_id(path: str) -> str:
+    return _node_id("endpoint", path)
+
+
+def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAPS) -> list[str] | None:
+    """리드에게 보여 줄 사슬 — **읽기로 이어진 걸음의 조상만** 남긴 트리. 사내 사슬은 28~30걸음이고 대부분이
+    저장소 부모의 헬퍼와 로거라, 통째로 주면 함수 서너 개로 좁혀 준다는 약속이 깨진다. 읽기는 걸음 옆에
+    확실·config키·추정으로 붙고, gap은 셋까지, 꼬리에 "걸음 N 중 M". 추적이 안 된 끝점이면 None."""
+    node = next((n for n in graph.get("nodes", []) if n["id"] == endpoint_id), None)
+    if node is None or node.get("traced") != "ok" or not node.get("chain"):
+        return None
+    chain: list[str] = list(node["chain"])
+    parents: list = list(node.get("chain_parent") or [None] * len(chain))
+    by_id = {n["id"]: n for n in graph.get("nodes", [])}
+    reads_at: dict[int, list[str]] = {}
+    for e in graph.get("links", []):
+        if e.get("source") == endpoint_id and e.get("origin") == "trace" and e.get("target") in by_id:
+            target = by_id[e["target"]]
+            reads_at.setdefault(int(e.get("step", -1)), []).append(
+                f"{target['label']} [{target['type']}] {read_mark(e)}")
+    keep: set[int] = set()
+    for i in reads_at:
+        cur = i if 0 <= i < len(chain) else None
+        while cur is not None and cur not in keep:
+            keep.add(cur)
+            cur = parents[cur]
+    if not keep:
+        keep = set(range(min(_TRACE_HEAD, len(chain))))
+
+    def depth(i: int) -> int:
+        d, cur = 0, parents[i]
+        while cur is not None and d < 64:
+            d, cur = d + 1, parents[cur]
+        return d
+
+    lines = []
+    for i in sorted(keep):
+        head = ("  " * depth(i) + "→ " if parents[i] is not None else "") + chain[i]
+        lines.append(head + (f" — reads: {' · '.join(reads_at[i])}" if i in reads_at else ""))
+    gaps = list(node.get("gaps") or [])
+    if gaps:
+        tail = f" 외 {len(gaps) - max_gaps}개" if len(gaps) > max_gaps else ""
+        lines.append(f"못 따라감 {len(gaps)}: {' · '.join(gaps[:max_gaps])}{tail}")
+    if len(keep) < len(chain):
+        lines.append(f"걸음 {len(chain)} 중 읽기로 이어진 {len(keep)}만 적었다 — 나머지는 code.read로 본다"
+                     if reads_at else f"걸음 {len(chain)} 중 {len(keep)}만 적었다 — 읽기로 이어진 걸음이 없다")
+    return lines
 
 
 # ── 끝점 (11c 커밋 5) ──────────────────────────────────────────────────────────

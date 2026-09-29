@@ -611,3 +611,16 @@ async def test_한_단어_config_키는_조상_키가_같은_줄에_있어야_�
     t, _ = await _trace("/furnace/heat")
     assert "BaseRepo.find_one" in [s.qualname for s in t.chain]
     assert _reads(t) == {("collection", "heat_status", "확실")}
+
+
+# ── 11b 커밋 3a — 사슬은 리드에게 보여 줄 때 "읽기로 이어진 가지"만 남겨야 한다. 그러려면 평평한 BFS
+# 목록이 아니라 트리여야 하고, 읽기가 어느 걸음에서 났는지 알아야 한다.
+
+async def test_사슬은_트리다_걸음마다_부모가_있고_읽기는_난_걸음을_안다():
+    t, _ = await _trace("/api/v1/line/status")
+    names = [s.qualname for s in t.chain]
+    assert t.chain[0].parent is None
+    assert names[t.chain[1].parent] == "get_line_status"
+    assert names[t.chain[2].parent] == "LineService.get_line_status"
+    read = next(r for r in t.reads if r.name == "line_state")
+    assert names[read.step] == "LineRepo.latest"

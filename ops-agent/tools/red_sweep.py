@@ -656,7 +656,7 @@ CASES = [
   '        if used + len(line) + 1 > budget and out:', '        if False:',
   ["tests/knowledge/test_flow.py::test_흐름_텍스트는_예산에서_끊고_끊었다고_적는다"]),
  ("그래프가 없어도 code.flow를 목록에 둔다", ROOT / "src/application/briefing.py",
-  '    return frozenset() if flow_graph is not None else frozenset({"code.flow"})',
+  '    return frozenset() if flow_graph is not None else frozenset({"code.flow", "code.trace"})',
   '    return frozenset()',
   ["tests/application/test_briefing.py::test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다"]),
  ("증거의 이름을 씨앗으로 안 쓴다", ROOT / "src/application/briefing.py",
@@ -776,7 +776,7 @@ CASES = [
   '                      "confidence": "EXTRACTED", "grade": r.grade,',
   ["tests/knowledge/test_flow.py::test_add_trace는_읽기_엣지를_등급과_함께_싣고_노드에_사슬을_남긴다"]),
  ("블록이 확실·추정 읽기를 안 가른다", ROOT / "src/knowledge/flow.py",
-  '                    rel = "reads" if e.get("confidence") == "EXTRACTED" else "reads(추정)"', '                    rel = "reads"',
+  '                    rel = "reads" + _READ_MARK[read_mark(e)]', '                    rel = "reads"',
   ["tests/knowledge/test_flow.py::test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스가_온다"]),
  ("끝점이 읽는 자원 줄을 안 낸다", ROOT / "src/knowledge/flow.py",
   '            lines.append(line_for(rid, with_code=True))', '            pass',
@@ -848,6 +848,27 @@ CASES = [
  ('포트 선언의 절반이면 구현체인데 전부를 요구한다', ROOT / "src/knowledge/trace.py",
   '                if meth in covered and 2 * len(covered) >= len(declared):', '                if len(covered) == len(declared):',
   ['tests/knowledge/test_trace.py::test_Protocol이_선언한_메서드를_다_가진_클래스가_구현체이고_하나면_확실이다']),
+ ('추적기가 걸음의 부모를 안 잇는다', ROOT / "src/knowledge/trace.py",
+  '            child.parent = current[0]', '            child.parent = None',
+  ['tests/knowledge/test_trace.py::test_사슬은_트리다_걸음마다_부모가_있고_읽기는_난_걸음을_안다']),
+ ('읽기가 난 걸음을 안 적는다', ROOT / "src/knowledge/trace.py",
+  '        current[0] = len(chain) - 1', '        current[0] = -1',
+  ['tests/knowledge/test_trace.py::test_사슬은_트리다_걸음마다_부모가_있고_읽기는_난_걸음을_안다']),
+ ('사슬을 안 쳐내고 통째로 보여 준다', ROOT / "src/knowledge/flow.py",
+  '    if not keep:\n        keep = set(range(min(_TRACE_HEAD, len(chain))))', '    if True:\n        keep = set(range(len(chain)))',
+  ['tests/knowledge/test_flow.py::test_trace_lines는_읽기로_이어진_걸음만_남기고_표시_셋으로_적는다']),
+ ('config 키 경유 읽기를 추정과 안 가른다', ROOT / "src/knowledge/flow.py",
+  '    return "config키" if edge.get("via") == "key" else "추정"', '    return "추정"',
+  ['tests/knowledge/test_flow.py::test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스가_온다', 'tests/knowledge/test_flow.py::test_trace_lines는_읽기로_이어진_걸음만_남기고_표시_셋으로_적는다']),
+ ('추적 안 된 끝점을 code.trace가 실패로 안 답한다', ROOT / "src/infrastructure/deployed_code.py",
+  '        if lines is None:\n            return ProbeResult.failed(\n                f"{target}: 추적이 안 된 끝점이다', '        if False:\n            return ProbeResult.failed(\n                f"{target}: 추적이 안 된 끝점이다',
+  ['tests/infrastructure/test_deployed_code.py::test_code_trace는_붙인_그래프의_끝점_사슬을_주고_없으면_실패로_답한다']),
+ ('code.* 레인이 data_prober다', ROOT / "src/domain/actions.py",
+  '    if action.startswith("code."):\n        return "code_tracer"', '    if False:\n        return "code_tracer"',
+  ['tests/domain/test_actions.py::test_레인은_action에서_정해진다']),
+ ('그래프 없는 조사에 code.trace가 목록에 뜬다', ROOT / "src/application/briefing.py",
+  '    return frozenset() if flow_graph is not None else frozenset({"code.flow", "code.trace"})', '    return frozenset() if flow_graph is not None else frozenset({"code.flow"})',
+  ['tests/application/test_briefing.py::test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -875,7 +896,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 216, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 223, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

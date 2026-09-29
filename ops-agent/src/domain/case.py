@@ -71,8 +71,9 @@ class PlanTask(StrictModel):
     id: str
     goal: str
     role: Role
-    # 실행기가 읽는 등재 항목 이름과 인자(`ProbeRunner`). 11b의 서브에이전트는
-    # 스스로 도구를 고르므로 이 둘을 안 본다 — 실행기마다 필요한 것이 다르다.
+    # 실행기가 읽는 등재 항목 이름과 인자(`ProbeRunner`). `role`은 여기서 코드가 정한다
+    # (`actions.role_for`) — 서브에이전트가 스스로 도구를 고르는 구조가 아니라, action의
+    # 종류가 곧 레인이다(decisions ⑰).
     action: str | None = None
     params: dict = {}
     # select 게이트: 여기 적힌 id가 **전부** State에 실재해야 실행 가능하다.

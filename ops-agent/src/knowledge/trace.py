@@ -34,6 +34,7 @@ class Step:
     file: str
     line: int
     qualname: str
+    parent: int | None = None   # 사슬 안 부모 걸음의 색인 — 사슬은 BFS 목록이지만 리드에게는 트리로 보여 준다
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class Read:
     file: str
     line: int
     via: str = "literal"    # 이름이 코드에 어떻게 있었나 — "literal"(문자열 그대로) | "key"(config 키 토큰) | "alias"(상수·Enum)
+    step: int = -1          # 이 읽기가 난 걸음(사슬 색인) — 읽기로 이어진 가지만 남길 때 쓴다
 
 
 @dataclass(frozen=True)
@@ -426,6 +428,7 @@ class _Node:
     depth: int
     grade_cap: str                      # 이 노드에 이르는 길이 확실했으면 "확실", 후보 중 하나였으면 "추정"
     self_cls: tuple[_Mod, ast.ClassDef] | None = None   # 실행 시점의 self 클래스(부모 메서드면 자식)
+    parent: int | None = None                           # 이 노드를 민 걸음의 사슬 색인
 
     @property
     def qualname(self) -> str:
@@ -596,11 +599,13 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
     queue: list[_Node] = list(roots)
     later: list[_Node] = []          # Depends(g)의 g — 데이터 경로가 사슬 앞에 오게 뒤로 미룬다
 
+    current = [-1]                   # 지금 훑는 걸음의 사슬 색인 — add_read가 읽기에 적는다
+
     def add_read(kind: str, name: str, grade: str, file: str, line: int, via: str) -> None:
         key = (kind, name, file, line)
         cur = reads.get(key)
         if cur is None or (cur.grade == "추정" and grade == "확실"):
-            reads[key] = Read(kind, name, grade, file, line, via)
+            reads[key] = Read(kind, name, grade, file, line, via, current[0])
 
     while queue or later:
         if not queue:
@@ -613,7 +618,8 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
             gaps.append(Gap(node.mod.path, node.func.lineno, f"노드 상한 {max_nodes}에서 멈춤: {node.qualname}"))
             break
         visited.add(key)
-        chain.append(Step(node.mod.path, node.func.lineno, node.qualname))
+        chain.append(Step(node.mod.path, node.func.lineno, node.qualname, node.parent))
+        current[0] = len(chain) - 1
         for text, base, path, cap in await _read_chunks(r, node, scanned):
             _collect_reads(text, base, path, cap, names, aliases, add_read)
         segment, base = node.mod.segment(node.func)
@@ -621,6 +627,8 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
             gaps.append(Gap(node.mod.path, _line_of(segment, "getattr(", base),
                             "getattr로 고른 대상은 못 따라간다 — 리드가 code.read로 본다"))
         callees, deps = await _callees(r, node, gaps)
+        for child in callees + deps:
+            child.parent = current[0]
         if not callees and not deps:
             continue
         if node.depth >= max_depth:

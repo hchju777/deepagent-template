@@ -62,6 +62,9 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     # 흐름 그래프(11c)의 이웃. `name`은 브리핑의 <데이터 흐름>이나 증거에 나온 이름 그대로다.
     # 그래프가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
     "code.flow":           ("code",  "flow",          ("name",),               ()),
+    # 끝점에서 자원까지의 함수 사슬(11b). `target`은 등재 항목의 path나 증거에 나온 path 그대로다.
+    # 조사 중에 추적하지 않는다 — `code graph`가 남긴 것을 읽는다. 그래프가 없으면 목록에 안 나온다.
+    "code.trace":          ("code",  "trace",         ("target",),             ()),
 }
 
 
@@ -151,7 +154,13 @@ def role_for(action: str) -> str:
     실행기가 돈다. 리드에게 이 값을 맡겼더니 조금 나은 모델이 태스크마다 `log_reader`
     같은 이름을 지어 넣었고, 닫힌 어휘라 **답 전체가 거부**됐다 — 사내 네 번째
     트레이스에서 integrate 네 라운드 중 셋이 그렇게 날아가고 재시도가 다른 계획을 냈다.
-    11b가 서브에이전트를 붙이면 여기서 action별로 갈라진다.
+    11b부터 action별로 갈린다 — 레인은 "누가 골랐나"가 아니라 **어떤 종류의 증거인가**다
+    (decisions ⑰): `code.*`는 코드 추적, `recompute.*`는 재계산 대조, 나머지는 데이터 읽기.
+    셋 다 같은 실행기가 돈다.
     """
+    if action.startswith("code."):
+        return "code_tracer"
+    if action.startswith("recompute."):
+        return "recompute_verifier"
     return "data_prober"
 

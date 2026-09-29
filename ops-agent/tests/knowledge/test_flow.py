@@ -653,11 +653,19 @@ def _traced_graph():
         flow.Route("dt-api", "POST", "/summary/badge", "api/r.py", 5, "EXTRACTED", "")],
         entries={"summary_badge": ("POST", "/summary/badge")})
     ep = next(n["id"] for n in g["nodes"] if n["type"] == "endpoint")
+    # 걸음 넷 — 로거(`Log.info`)는 읽기로 이어지지 않는 가지다. 읽기 셋은 표시 셋(확실·config키·추정)이다.
     result = tr.Trace("/summary/badge", "dt-api", "ok",
-                      chain=(tr.Step("api/r.py", 6, "badge"), tr.Step("api/q.py", 3, "AlarmRepo.recent")),
-                      reads=(tr.Read("collection", "alarm_events", "확실", "api/q.py", 3),
-                             tr.Read("topic", "mx.alarm.main", "추정", "api/q.py", 9)),
-                      gaps=(tr.Gap("api/q.py", 12, "getattr로 고른 대상은 못 따라간다"),))
+                      chain=(tr.Step("api/r.py", 6, "badge"),
+                             tr.Step("api/q.py", 3, "AlarmRepo.recent", parent=0),
+                             tr.Step("api/log.py", 2, "Log.info", parent=0),
+                             tr.Step("api/q.py", 20, "AlarmRepo._q", parent=1)),
+                      reads=(tr.Read("collection", "alarm_events", "확실", "api/q.py", 3, step=1),
+                             tr.Read("topic", "mx.alarm.main", "추정", "api/q.py", 21, "key", step=3),
+                             tr.Read("topic", "mx.alarm.raw", "추정", "api/q.py", 22, step=3)),
+                      gaps=(tr.Gap("api/q.py", 12, "getattr로 고른 대상은 못 따라간다"),
+                            tr.Gap("api/q.py", 30, "get: 받는 쪽 미상, 후보 4개 — 안 따라간다"),
+                            tr.Gap("api/q.py", 31, "깊이 상한 6에서 멈춤: AlarmRepo._deep → x"),
+                            tr.Gap("api/q.py", 32, "put: 받는 쪽 미상, 후보 2개 — 안 따라간다")))
     return flow.add_trace(g, ep, result), ep
 
 
@@ -665,10 +673,11 @@ def test_add_trace는_읽기_엣지를_등급과_함께_싣고_노드에_사슬�
     g, ep = _traced_graph()
     edges = {(e["target"], e["confidence"], e["source_location"]) for e in g["links"]
              if e["source"] == ep and e.get("origin") == "trace"}
-    assert edges == {("collection_alarm_events", "EXTRACTED", "L3"), ("topic_mx_alarm_main", "INFERRED", "L9")}
+    assert edges == {("collection_alarm_events", "EXTRACTED", "L3"), ("topic_mx_alarm_main", "INFERRED", "L21"),
+                     ("topic_mx_alarm_raw", "INFERRED", "L22")}
     node = next(n for n in g["nodes"] if n["id"] == ep)
-    assert node["traced"] == "ok" and node["chain"] == ["api/r.py:L6 badge", "api/q.py:L3 AlarmRepo.recent"]
-    assert node["gaps"] == ["api/q.py:L12 getattr로 고른 대상은 못 따라간다"]
+    assert node["traced"] == "ok" and node["chain"][:2] == ["api/r.py:L6 badge", "api/q.py:L3 AlarmRepo.recent"]
+    assert node["gaps"][0] == "api/q.py:L12 getattr로 고른 대상은 못 따라간다"
     s = flow.summary(g)
     assert (s["endpoints_traced"], s["endpoints_blocked"]) == (1, 0)
     assert any("자원까지 이어진 1개" in line for line in flow.advise(g, _lead_graph_topology()))
@@ -679,7 +688,7 @@ def test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스
     g, ep = _traced_graph()
     lines = flow.flow_text(g, [ep], budget=10_000).splitlines()
     assert lines[0] == ("/summary/badge [endpoint]: serves: api · reads: alarm_events [collection]"
-                        " · reads(추정): mx.alarm.main [topic]")
+                        " · reads(config키): mx.alarm.main [topic] · reads(추정): mx.alarm.raw [topic]")
     assert lines[1] == "api [service · dt-api]: serves: /summary/badge · declares: alarm_events"
     assert "alarm_events [collection]: declares: api, sink · 코드로는 writes: sink · reads: api" in lines
     assert any(l.startswith("mx.alarm.main [topic]:") for l in lines)
@@ -694,3 +703,40 @@ def test_막힌_끝점을_센다():
                                        gaps=(tr.Gap("api/r.py", 11, "getattr"),)))
     s = flow.summary(g)
     assert (s["endpoints_traced"], s["endpoints_blocked"]) == (0, 1)
+
+
+# ── 11b 커밋 3a — 리드에게 보여 줄 사슬. 사내 사슬은 28~30걸음이고 대부분이 저장소 부모의 헬퍼와 로거다.
+
+def test_add_trace는_걸음의_부모와_읽기의_걸음을_싣는다():
+    g, ep = _traced_graph()
+    node = next(n for n in g["nodes"] if n["id"] == ep)
+    assert node["chain_parent"] == [None, 0, 0, 1]
+    steps = {e["target"]: e["step"] for e in g["links"] if e["source"] == ep and e.get("origin") == "trace"}
+    assert steps == {"collection_alarm_events": 1, "topic_mx_alarm_main": 3, "topic_mx_alarm_raw": 3}
+
+
+def test_trace_lines는_읽기로_이어진_걸음만_남기고_표시_셋으로_적는다():
+    """로거 걸음(`Log.info`)이 빠지고, 읽기는 확실·config키·추정으로 갈려 걸음 옆에 붙는다. gap은 셋까지."""
+    g, ep = _traced_graph()
+    assert flow.trace_lines(g, ep) == [
+        "api/r.py:L6 badge",
+        "  → api/q.py:L3 AlarmRepo.recent — reads: alarm_events [collection] 확실",
+        "    → api/q.py:L20 AlarmRepo._q — reads: mx.alarm.main [topic] config키 · mx.alarm.raw [topic] 추정",
+        "못 따라감 4: api/q.py:L12 getattr로 고른 대상은 못 따라간다 · api/q.py:L30 get: 받는 쪽 미상, 후보 4개 — 안 따라간다"
+        " · api/q.py:L31 깊이 상한 6에서 멈춤: AlarmRepo._deep → x 외 1개",
+        "걸음 4 중 읽기로 이어진 3만 적었다 — 나머지는 code.read로 본다"]
+
+
+def test_trace_lines는_읽기가_없으면_앞_걸음_넷과_gap을_적고_추적_안_된_끝점이면_None이다():
+    from src.knowledge import trace as tr
+    g = flow.add_endpoints(_lead_graph(), routes=[
+        flow.Route("dt-api", "POST", "/summary/badge", "api/r.py", 5, "EXTRACTED", "")],
+        entries={"summary_badge": ("POST", "/summary/badge")})
+    ep = next(n["id"] for n in g["nodes"] if n["type"] == "endpoint")
+    assert flow.trace_lines(g, ep) is None                      # 아직 추적이 안 됐다
+    chain = tuple(tr.Step("api/r.py", 6 + i, f"f{i}", parent=None if i == 0 else i - 1) for i in range(6))
+    g2 = flow.add_trace(g, ep, tr.Trace("/summary/badge", "dt-api", "ok", chain=chain, reads=(),
+                                        gaps=(tr.Gap("api/r.py", 40, "getattr로 고른 대상은 못 따라간다"),)))
+    lines = flow.trace_lines(g2, ep)
+    assert lines[:2] == ["api/r.py:L6 f0", "  → api/r.py:L7 f1"] and len(lines) == 6
+    assert lines[-2].startswith("못 따라감 1:") and lines[-1] == "걸음 6 중 4만 적었다 — 읽기로 이어진 걸음이 없다"

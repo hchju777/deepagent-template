@@ -267,6 +267,29 @@ async def test_code_flow는_붙인_그래프의_이웃을_주고_없으면_실�
     assert unknown.status == "error" and "그래프에 없다" in unknown.error
 
 
+async def test_code_trace는_붙인_그래프의_끝점_사슬을_주고_없으면_실패로_답한다(flow_code):
+    """조사 중에 다시 추적하지 않는다(⑥) — `code graph`가 오버레이에 남긴 사슬을 읽는다."""
+    missing = await flow_code.trace("/summary/badge")
+    assert missing.status == "error" and "code graph" in missing.error
+    graph = {"nodes": [{"id": "endpoint_summary_badge", "label": "/summary/badge", "type": "endpoint",
+                        "traced": "ok", "chain": ["api/r.py:L6 badge", "api/q.py:L3 AlarmRepo.recent"],
+                        "chain_parent": [None, 0], "gaps": []},
+                       {"id": "endpoint_summary_raw", "label": "/summary/raw", "type": "endpoint"},
+                       {"id": "collection_alarm_events", "label": "alarm_events", "type": "collection"}],
+             "links": [{"source": "endpoint_summary_badge", "target": "collection_alarm_events",
+                        "relation": "reads", "origin": "trace", "confidence": "EXTRACTED", "via": "literal",
+                        "step": 1, "source_file": "api/q.py", "source_location": "L3"}]}
+    flow_code.attach_flow_graph(graph)
+    got = await flow_code.trace("/summary/badge")
+    assert got.status == "ok" and got.envelope.complete
+    assert got.data.splitlines()[0] == "api/r.py:L6 badge"
+    assert "AlarmRepo.recent — reads: alarm_events [collection] 확실" in got.data
+    untraced = await flow_code.trace("/summary/raw")
+    assert untraced.status == "error" and "추적" in untraced.error
+    unknown = await flow_code.trace("/nope")
+    assert unknown.status == "error" and "끝점에 없다" in unknown.error
+
+
 async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):
     table, notes = await flow_code.flow_hits(["alarm"])
     files = {(h.file, h.line) for h in table["alarm"]}
