@@ -230,6 +230,17 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
 `EXTRACTED/literal`이 늘어야 한다. `INFERRED/key` 401은 남는다 — 이름이 config 키 경유라는 사실 자체는
 추정이 맞는지가 다음 질문이고, 그건 커밋 3에서 리드가 등급을 어떻게 쓰는지와 함께 정한다.
 
+사내 여섯 번째 추적(커밋 2f 뒤): **137/14**. 읽기 = `INFERRED/key` 401 · `EXTRACTED/literal` 83 ·
+`INFERRED/literal` 19. "같은 이름 클래스" 175와 "이름 규약" 63이 사라졌다 — 포트 해석은 전부 확실이 됐다.
+남은 gap은 "받는 쪽 미상 — 안 따라간다" 348, `getattr` 82, 저장소 부모 헬퍼와 Mongo 클라이언트 안의
+깊이 상한(60·60·60·57)뿐이다. 추적기 라운드는 여기서 닫는다(2b~2f, 19/137 → 137/14, 확실 3 → 83).
+
+열어 두는 질문 하나: `INFERRED/key` 401. 조상 키가 같은 줄에 있는 config 키 읽기(`cfg["mongodb_collection"]
+["summary"]`)는 경로가 확실해도 이름이 키 경유라는 이유로 추정이다 — 11c의 grep 판정(리터럴=EXTRACTED,
+키 토큰=INFERRED)과 같은 규칙이다. 리드에게 "확인하라"고 할 만큼 불확실한가? 코드는 그 키를 정확히
+가리키고, 값은 config가 정한다. 등급을 올릴지, 등급은 두고 표시만 `reads(config키)`로 가를지는 커밋 3에서
+리드가 등급을 어떻게 쓰는지와 함께 정한다(스펙의 EXTRACTED/INFERRED 뜻을 건드리므로 사람과 상의).
+
 ### 커밋 3 — action과 레인
 
 - `code.trace` — `("code", "trace", ("target",), ("service",))`. `DeployedCodePort.trace`
