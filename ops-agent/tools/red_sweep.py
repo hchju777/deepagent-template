@@ -784,10 +784,15 @@ CASES = [
  ("막힌 끝점을 안 센다", ROOT / "src/knowledge/flow.py",
   '                                     and n.get("traced") == "ok" and n.get("gaps"))}', '                                     and False)}',
   ["tests/knowledge/test_flow.py::test_막힌_끝점을_센다"]),
- ("지도가 추적 엣지를 그린다", ROOT / "src/presentation/flow_html.py",
-  '                  for e in overlay["links"] if e["relation"] != "runs" and e.get("origin") != "trace"],',
-  '                  for e in overlay["links"] if e["relation"] != "runs"],',
-  ["tests/presentation/test_flow_html.py::test_추적_엣지는_지도에_안_그린다"]), ('Protocol 포트를 provider의 반환 클래스로 안 뚫는다', ROOT / "src/knowledge/trace.py",
+ ("지도가 추적 엣지를 데이터에서 뺀다", ROOT / "src/presentation/flow_html.py",
+  '                  for e in overlay["links"] if e["relation"] != "runs"],', '                  for e in overlay["links"] if e["relation"] != "runs" and e.get("origin") != "trace"],',
+  ["tests/presentation/test_flow_html.py::test_추적_엣지는_데이터에_싣되_기본은_숨기고_초점에서만_켠다"]),
+ ("상류 2홉(자원을 쓰는 서비스)을 안 잇는다", ROOT / "src/presentation/flow_html.py",
+  '_UP_WRITERS = ("writes", "produces")          # 자원 → 그 자원을 만드는 서비스', '_UP_WRITERS = ()          # 자원 → 그 자원을 만드는 서비스',
+  ["tests/presentation/test_flow_html.py::test_끝점의_상류_3홉을_계산해_싣는다"]),
+ ("초점에서도 추적 엣지를 안 켠다", ROOT / "src/presentation/flow_html.py",
+  '.edge.trace{display:none}\nsvg.focused .edge.trace.on{display:inline}', '.edge.trace{display:none}',
+  ["tests/presentation/test_flow_html.py::test_추적_엣지는_데이터에_싣되_기본은_숨기고_초점에서만_켠다"]), ('Protocol 포트를 provider의 반환 클래스로 안 뚫는다', ROOT / "src/knowledge/trace.py",
   '                impl = await r.returns_class(pmod, pfunc)', '                impl = None',
   ['tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
  ('포트의 추상 메서드에서 멈춘다', ROOT / "src/knowledge/trace.py",
@@ -917,7 +922,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 230, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 232, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
