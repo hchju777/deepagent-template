@@ -110,10 +110,36 @@ FILES = {
         '    def flush(self) -> None: ...\n'
         '\n'
         'class KeyValuePort(Protocol):\n'
-        '    def get(self, key): ...\n'),
+        '    def get(self, key): ...\n'
+        '\n'
+        'class PumpRepository(Protocol):\n'
+        '    def start(self) -> None: ...\n'
+        '    def stop(self) -> None: ...\n'
+        '    def drain(self) -> int: ...\n'),
+    "api/repos/pump.py": (
+        'from api.repos.base import BaseRepo\n'
+        '\n'
+        'class PumpRepository(BaseRepo):\n'
+        '    collection = "tally_state"\n'
+        '\n'
+        '    async def start(self):\n'
+        '        return await self.find_one({})\n'
+        '\n'
+        '    def stop(self):\n'
+        '        return None\n'),
+    "api/services/pump.py": (
+        'from api.ports import PumpRepository\n'
+        '\n'
+        'class PumpService:\n'
+        '    def __init__(self, repo: PumpRepository):\n'
+        '        self.repo = repo\n'
+        '\n'
+        '    async def kick(self):\n'
+        '        return await self.repo.start()\n'),
     "api/meters.py": (
         'class DialMeter:\n'
         '    async def sample(self):\n'
+        '        hist = cfg["mongodb_collection"]["history"]\n'
         '        return await mongo["line_state"].count()\n'
         '\n'
         '    def flush(self):\n'
@@ -151,6 +177,10 @@ FILES = {
         'from fastapi import Depends\n'
         'from api.ports import AuditServicePort, MeterPort, KeyValuePort\n'
         'from api.services.tally import TallyService\n'
+        'from api.services.pump import PumpService\n'
+        '\n'
+        'def get_pump_service(request):\n'
+        '    return request.app.state.pump\n'
         '\n'
         'def get_tally_service(request):\n'
         '    return request.app.state.tally\n'
@@ -167,7 +197,8 @@ FILES = {
         'TallyServiceDep = Annotated[TallyService, Depends(get_tally_service)]\n'
         'AuditServiceDep = Annotated[AuditServicePort, Depends(get_audit_service)]\n'
         'MeterDep = Annotated[MeterPort, Depends(get_meter)]\n'
-        'KeyValueDep = Annotated[KeyValuePort, Depends(get_kv)]\n'),
+        'KeyValueDep = Annotated[KeyValuePort, Depends(get_kv)]\n'
+        'PumpServiceDep = Annotated[PumpService, Depends(get_pump_service)]\n'),
     "api/gauges.py": (
         'from api.ports import GaugePort\n'
         '\n'
@@ -184,7 +215,7 @@ FILES = {
         'from api import settings\n'
         'from api.tables import KEY_TABLE\n'
         'from api.ports import GaugePort\n'
-        'from api.state_deps import TallyServiceDep, AuditServiceDep, MeterDep, KeyValueDep\n'
+        'from api.state_deps import TallyServiceDep, AuditServiceDep, MeterDep, KeyValueDep, PumpServiceDep\n'
         'router = APIRouter(prefix="/furnace")\n'
         '\n'
         '@router.get("/heat")\n'
@@ -223,7 +254,11 @@ FILES = {
         '\n'
         '@router.get("/kv")\n'
         'async def kv_view(kv: KeyValueDep):\n'
-        '    return kv.get("x")\n'),
+        '    return kv.get("x")\n'
+        '\n'
+        '@router.get("/pump")\n'
+        'async def pump_view(service: PumpServiceDep):\n'
+        '    return await service.kick()\n'),
     "api/heat_deps.py": (
         'from typing import Annotated\n'
         'from fastapi import Depends\n'
@@ -262,7 +297,8 @@ FILES = {
         '        self.db = mongo\n'
         '\n'
         '    async def find_one(self, query):\n'
-        '        return await mongo[self.collection].find_one(query)\n'),
+        '        opts = {"history": 0}\n'
+        '        return await mongo[self.collection].find_one(query, opts)\n'),
     "api/repos/heat.py": (
         'from api.repos.base import BaseRepo\n'
         '\n'
@@ -288,6 +324,7 @@ FILES = {
 NAMES = [Name("collection", "line_state", "mongodb_collection.line_state"),
          Name("collection", "heat_status", "mongodb_collection.heat"),
          Name("collection", "tally_state", "mongodb_collection.tally"),
+         Name("collection", "mx_hist_v2", "mongodb_collection.history"),
          Name("rediskey", "line:{id}", "redis_key.line_status"),
          Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic1")]
 
@@ -304,7 +341,8 @@ ROUTES = [Route(REPO, "GET", "/api/v1/line/status", "api/routers/line.py", 6, "E
           Route(REPO, "GET", "/furnace/tally", "api/routers/furnace.py", 31, "EXTRACTED", ""),
           Route(REPO, "GET", "/furnace/audit", "api/routers/furnace.py", 35, "EXTRACTED", ""),
           Route(REPO, "GET", "/furnace/meter", "api/routers/furnace.py", 39, "EXTRACTED", ""),
-          Route(REPO, "GET", "/furnace/kv", "api/routers/furnace.py", 43, "EXTRACTED", "")]
+          Route(REPO, "GET", "/furnace/kv", "api/routers/furnace.py", 43, "EXTRACTED", ""),
+          Route(REPO, "GET", "/furnace/pump", "api/routers/furnace.py", 47, "EXTRACTED", "")]
 
 
 class _Source:
@@ -513,7 +551,7 @@ async def test_상속도_같은_이름도_없으면_이름_규약으로_구현�
     assert [s.qualname for s in t.chain][:2] == ["audit_view", "AuditService.recent"]
     assert _reads(t) == {("topic", "mx.alarm.main", "추정")}
     assert [g.why for g in t.gaps] == [
-        "recent: AuditServicePort 구현체를 이름 규약으로 골랐다 — AuditService, 읽기는 추정"]
+        "recent: AuditServicePort 구현체를 이름 규약으로 골랐다 — AuditService(포트 메서드 2개 중 없는 것: purge), 읽기는 추정"]
 
 
 async def test_super_호출은_부모의_메서드로_가고_실행_시점_클래스는_자식_그대로다():
@@ -533,7 +571,8 @@ async def test_Protocol이_선언한_메서드를_다_가진_클래스가_구현
     """`MeterPort(sample, flush)` ↔ `DialMeter`(둘 다) · `Flusher`(flush만). 이름은 안 닮았다."""
     t, _ = await _trace("/furnace/meter")
     assert [s.qualname for s in t.chain][:2] == ["meter_view", "DialMeter.sample"]
-    assert _reads(t) == {("collection", "line_state", "확실")}
+    assert _reads(t) == {("collection", "line_state", "확실"), ("collection", "mx_hist_v2", "추정")}
+    assert {(r.name, r.via) for r in t.reads} == {("line_state", "literal"), ("mx_hist_v2", "key")}
     assert t.gaps == (), t.gaps
 
 
@@ -543,3 +582,25 @@ async def test_구조가_맞는_클래스가_넷_이상이면_안_따라가고_g
     assert [s.qualname for s in t.chain] == ["kv_view", "get_kv"]
     assert t.reads == ()
     assert [g.why for g in t.gaps] == ["get: KeyValuePort 구조가 맞는 클래스 4개 — 안 따라간다"]
+
+
+# ── 사내 네 번째 추적(커밋 2d 뒤): 읽기 611개 중 확실 75, `INFERRED/key` 510. 그리고 같은 이름 저장소가
+# 구조로 안 맞아 추정으로 떨어진 것이 175 — 무엇이 없어서인지 gap이 말해 줘야 다음 판단을 한다.
+
+async def test_같은_이름_클래스가_포트_메서드를_다_못_갖추면_없는_것을_gap에_적는다():
+    """`PumpRepository(Protocol)`는 start·stop·drain, 구현 `PumpRepository(BaseRepo)`에는 drain이 없다.
+    추정으로 가되 **무엇이 없는지**를 적는다 — 사내에서 이 gap이 175개였는데 이유를 못 읽었다."""
+    t, _ = await _trace("/furnace/pump")
+    assert [s.qualname for s in t.chain][:3] == ["pump_view", "PumpService.kick", "PumpRepository.start"]
+    assert _reads(t) == {("collection", "tally_state", "추정")}
+    assert [g.why for g in t.gaps] == [
+        "start: PumpRepository 같은 이름 클래스 1개로 갔다 — 포트 메서드 3개 중 없는 것: drain, 읽기는 추정"]
+
+
+async def test_한_단어_config_키는_조상_키가_같은_줄에_있어야_읽기다():
+    """DAO 부모의 `{"history": 0}` 같은 필드명이 config 키 토큰 `history`와 같아도 읽기가 아니다 — 11c가
+    grep 판정에서 배운 규칙(`required_tokens`·`_quoted_whole`)과 같은 기준. `cfg["mongodb_collection"]["history"]`
+    처럼 조상 키가 같은 줄에 있으면 받는다(meter 테스트)."""
+    t, _ = await _trace("/furnace/heat")
+    assert "BaseRepo.find_one" in [s.qualname for s in t.chain]
+    assert _reads(t) == {("collection", "heat_status", "확실")}

@@ -839,6 +839,12 @@ CASES = [
  ('super 호출을 부모로 안 따라간다', ROOT / "src/knowledge/trace.py",
   '                await follow(owner, meth, ann=None, line=call.lineno, self_of=self_cls)', '                pass',
   ['tests/knowledge/test_trace.py::test_super_호출은_부모의_메서드로_가고_실행_시점_클래스는_자식_그대로다']),
+ ('한 단어 config 키를 조상 키 없이도 읽기로 친다', ROOT / "src/knowledge/trace.py",
+  '        if all(t in line for t in n.required_tokens) or _quoted_whole(tok, line):', '        if True:',
+  ['tests/knowledge/test_trace.py::test_한_단어_config_키는_조상_키가_같은_줄에_있어야_읽기다', 'tests/knowledge/test_trace.py::test_Protocol_포트는_provider의_반환_클래스로_뚫고_부모_메서드와_클래스_속성까지_간다']),
+ ('이름으로 고른 구현체에 없는 포트 메서드를 안 적는다', ROOT / "src/knowledge/trace.py",
+  '                return f"포트 메서드 {len(declared)}개 중 없는 것: {\', \'.join(missing[:3]) or \'-\'}"', '                return "-"',
+  ['tests/knowledge/test_trace.py::test_같은_이름_클래스가_포트_메서드를_다_못_갖추면_없는_것을_gap에_적는다', 'tests/knowledge/test_trace.py::test_상속도_같은_이름도_없으면_이름_규약으로_구현체를_고르고_추정이라고_적는다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -866,7 +872,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 213, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 215, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

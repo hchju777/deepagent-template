@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Protocol
 
-from src.knowledge.flow import Hit, Name, Route, _is_noise
+from src.knowledge.flow import Hit, Name, Route, _is_noise, _quoted_whole
 
 MAX_DEPTH = 6
 MAX_NODES = 200
@@ -484,6 +484,19 @@ def _implementers(cands) -> list:
     return [c for c in cands if not _is_abstract(c[1])]
 
 
+def _key_at(segment: str, n: Name) -> int | None:
+    """config 키 토큰이 따옴표로 있는 줄의 오프셋 — 조상 키(`required_tokens`)가 같은 줄에 다 있거나, 여러
+    조각짜리 토큰이 통째로 따옴표 안이어야 한다. 11c가 grep 판정에서 세운 기준 그대로다: DAO 부모의
+    `{"history": 0}` 같은 필드명이 한 단어 키 토큰과 겹쳐 사내 읽기 611개 중 510개가 이 가짜였다."""
+    tok = n.key_token
+    for i, line in enumerate(segment.splitlines()):
+        if f'"{tok}"' not in line and f"'{tok}'" not in line:
+            continue
+        if all(t in line for t in n.required_tokens) or _quoted_whole(tok, line):
+            return i
+    return None
+
+
 def _is_protocol(cls: ast.ClassDef) -> bool:
     for b in cls.bases:
         name = b.id if isinstance(b, ast.Name) else getattr(b, "attr", "")
@@ -678,8 +691,8 @@ def _collect_reads(segment: str, base: int, path: str, cap: str, names: list[Nam
         at = _quoted_at(segment, n.literal) if n.literal else None
         if at is not None:
             add_read(n.kind, n.value, "추정" if cap == "추정" else "확실", path, base + at, "literal")
-        elif f'"{n.key_token}"' in segment or f"'{n.key_token}'" in segment:
-            add_read(n.kind, n.value, "추정", path, _line_of(segment, n.key_token, base), "key")
+        elif (at := _key_at(segment, n)) is not None:
+            add_read(n.kind, n.value, "추정", path, base + at, "key")
     for ident, n in aliases.items():
         if re.search(rf"\b{re.escape(ident)}\b", segment):
             add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base), "alias")
@@ -759,17 +772,29 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
         if not impls:
             # 구조로는 안 맞는다(선언한 메서드 일부가 외부 부모에 있거나 아직 없다) — 이름으로 짐작한다: 같은 이름
             # 클래스(사내 저장소 모양), 그 다음 이름 규약. 둘 다 코드가 보증하지 않으니 추정이고 gap에 남긴다.
+            # **무엇이 없는지**를 적는다 — 사내에서 이 gap이 175개였는데 이유를 못 읽어 다음 판단을 못 했다.
+            declared = [b.name for b in owner[1].body if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and not b.name.startswith("__")]
+
+            async def lacking(imod: _Mod, icls: ast.ClassDef) -> str:
+                missing = []
+                for name in declared:
+                    got = await r.find_method(imod, icls, name)
+                    if got is None or _is_abstract(got[1]):
+                        missing.append(name)
+                return f"포트 메서드 {len(declared)}개 중 없는 것: {', '.join(missing[:3]) or '-'}"
+
             same = [(smod, scls) for smod, scls in await r.classes_named(owner[1].name)
                     if scls is not owner[1] and not _is_protocol(scls)]
             if same:
                 impls, grade = same, "추정"
-                gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 같은 이름 클래스 {len(same)}개로 갔다 — 포트의 메서드를 다 갖추지 않아 읽기는 추정"))
+                gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 같은 이름 클래스 {len(same)}개로 갔다 — {await lacking(*same[0])}, 읽기는 추정"))
             else:
                 for alias in _port_aliases(owner[1].name):
                     same = [(smod, scls) for smod, scls in await r.classes_named(alias) if not _is_protocol(scls)]
                     if same:
                         impls, grade = same, "추정"
-                        gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체를 이름 규약으로 골랐다 — {alias}, 읽기는 추정"))
+                        gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체를 이름 규약으로 골랐다 — {alias}({await lacking(*same[0])}), 읽기는 추정"))
                         break
         if not impls:
             cands = _implementers(c for c in await r.defs_named(meth, methods=True) if c[1] is not m and c[1] is not func)
