@@ -887,6 +887,9 @@ CASES = [
  ('별칭 색인이 접두사 붙은 값으로 grep한다', ROOT / "src/knowledge/trace.py",
   '        wanted.setdefault(n.code_value or n.value, n)', '        wanted.setdefault(n.value, n)',
   ['tests/knowledge/test_trace.py::test_별칭_색인은_코드에_실제로_있는_값으로_찾는다']),
+ ("코드 쪽 키 템플릿을 안 본다", ROOT / "src/knowledge/trace.py",
+  '        for head in _KEY_TEMPLATE.findall(line):', '        for head in ():',
+  ["tests/knowledge/test_trace.py::test_코드가_키_토큰을_템플릿으로_조립하면_그_머리로_시작하는_키_전부가_읽기다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -914,7 +917,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 229, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 230, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -27,6 +27,8 @@ from src.knowledge.flow import _DISTINCTIVE, Hit, Name, Route, _is_noise, _quote
 MAX_DEPTH = 6
 MAX_NODES = 200
 _UPPER_ASSIGN = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*['\"]([^'\"]+)['\"]")
+# 코드 쪽 키 템플릿 — `f"gauge_face_{f}"`의 머리 `gauge_face_`. 따옴표 바로 뒤부터 `{` 앞까지.
+_KEY_TEMPLATE = re.compile(r"""["']([A-Za-z0-9_.:\-]{2,})\{""")
 
 
 @dataclass(frozen=True)
@@ -712,6 +714,18 @@ def _collect_reads(segment: str, base: int, path: str, cap: str, names: list[Nam
     for ident, n in aliases.items():
         if re.search(rf"\b{re.escape(ident)}\b", segment):
             add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base), "alias")
+    # 코드가 키 토큰을 템플릿으로 조립한다 — `cfg.get("redis_key", f"gauge_face_{f}")`. 토큰이 통째로 없어
+    # 위 판정은 하나도 못 잡는다(사내 /summary 끝점의 redis 읽기가 이 모양뿐이었다). 조상 키가 같은 줄에 있고
+    # 머리가 여러 조각짜리면, 그 머리로 시작하는 키 전부가 읽기(추정)다 — config 값 템플릿(`alarm:stats:{line}`
+    # → `alarm:stats:`)을 리터럴로 잡는 것과 거울 관계다.
+    for i, line in enumerate(segment.splitlines()):
+        for head in _KEY_TEMPLATE.findall(line):
+            if not _DISTINCTIVE.search(head):
+                continue
+            for n in names:
+                if (n.key_token != head and n.key_token.startswith(head) and n.required_tokens
+                        and all(t in line for t in n.required_tokens)):
+                    add_read(n.kind, n.value, "추정", path, base + i, "key")
 
 
 async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node], list[_Node]]:

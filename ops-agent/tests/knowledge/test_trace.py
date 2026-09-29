@@ -145,6 +145,7 @@ FILES = {
         '    async def sample(self):\n'
         '        hist = cfg["mongodb_collection"]["history"]\n'
         '        n = await mongo["alarm"].count()\n'
+        '        keys = {f: cfg.get("redis_key", f"gauge_face_{f}") for f in self.faces}\n'
         '        return await mongo["line_state"].count()\n'
         '\n'
         '    def flush(self):\n'
@@ -177,6 +178,7 @@ FILES = {
         'class AuditService(Component):\n'
         '    async def recent(self):\n'
         '        counts = {"alarm": 0, "caution": 0}\n'
+        '        tag = f"gauge_face_{self.face}"\n'
         '        return await consumer.tail("mx.alarm.main")\n'),
     "api/state_deps.py": (
         'from typing import Annotated\n'
@@ -332,6 +334,8 @@ NAMES = [Name("collection", "line_state", "mongodb_collection.line_state"),
          Name("collection", "tally_state", "mongodb_collection.tally"),
          Name("collection", "mx_hist_v2", "mongodb_collection.history"),
          Name("collection", "alarm", "mongodb_collection.alarm"),
+         Name("rediskey", "SITE:g:x", "redis_key.gauge_face_x", code_value="g:x"),
+         Name("rediskey", "SITE:g:y", "redis_key.gauge_face_y", code_value="g:y"),
          Name("rediskey", "line:{id}", "redis_key.line_status"),
          Name("topic", "mx.alarm.main", "infra.kafka.consumer.topic.topic1")]
 
@@ -582,9 +586,10 @@ async def test_Protocol이_선언한_메서드를_다_가진_클래스가_구현
     t, _ = await _trace("/furnace/meter")
     assert [s.qualname for s in t.chain][:2] == ["meter_view", "DialMeter.sample"]
     assert _reads(t) == {("collection", "line_state", "확실"), ("collection", "mx_hist_v2", "추정"),
-                         ("collection", "alarm", "확실")}
+                         ("collection", "alarm", "확실"),
+                         ("rediskey", "SITE:g:x", "추정"), ("rediskey", "SITE:g:y", "추정")}
     assert {(r.name, r.via) for r in t.reads} == {("line_state", "literal"), ("mx_hist_v2", "key"),
-                                                   ("alarm", "literal")}
+                                                   ("alarm", "literal"), ("SITE:g:x", "key"), ("SITE:g:y", "key")}
     assert t.gaps == (), t.gaps
 
 
@@ -644,3 +649,14 @@ async def test_별칭_색인은_코드에_실제로_있는_값으로_찾는다()
     src = _Source({"api/keys2.py": 'CONN = "PLC:LINK"\n'})
     n = Name("rediskey", "SITE:PLC:LINK", "redis_key.conn", code_value="PLC:LINK")
     assert await trace.alias_index([n], src) == {"CONN": n}
+
+
+async def test_코드가_키_토큰을_템플릿으로_조립하면_그_머리로_시작하는_키_전부가_읽기다():
+    """사내: `cfg.get("redis_key", f"summary_badge_{name}")` — 토큰이 통째로 없어 하나도 안 잡혔다. 조상 키가
+    같은 줄에 있고 `f"<머리>{…}"`가 있으면 그 머리의 키 전부를 추정으로 낸다(meter 테스트의 gauge_face_x·y).
+    조상 키가 없는 같은 템플릿(audit의 `tag = f"gauge_face_{…}"`)은 읽기가 아니다."""
+    t, _ = await _trace("/furnace/meter")
+    faces = {(r.name, r.line, r.via) for r in t.reads if r.kind == "rediskey"}
+    assert faces == {("SITE:g:x", 5, "key"), ("SITE:g:y", 5, "key")}
+    a, _ = await _trace("/furnace/audit")
+    assert _reads(a) == {("topic", "mx.alarm.main", "추정")}
