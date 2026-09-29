@@ -845,6 +845,9 @@ CASES = [
  ('이름으로 고른 구현체에 없는 포트 메서드를 안 적는다', ROOT / "src/knowledge/trace.py",
   '                return f"포트 메서드 {len(declared)}개 중 없는 것: {\', \'.join(missing[:3]) or \'-\'}"', '                return "-"',
   ['tests/knowledge/test_trace.py::test_같은_이름_클래스가_포트_메서드를_다_못_갖추면_없는_것을_gap에_적는다', 'tests/knowledge/test_trace.py::test_상속도_같은_이름도_없으면_이름_규약으로_구현체를_고르고_추정이라고_적는다']),
+ ('포트 선언의 절반이면 구현체인데 전부를 요구한다', ROOT / "src/knowledge/trace.py",
+  '                if meth in covered and 2 * len(covered) >= len(declared):', '                if len(covered) == len(declared):',
+  ['tests/knowledge/test_trace.py::test_Protocol이_선언한_메서드를_다_가진_클래스가_구현체이고_하나면_확실이다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -872,7 +875,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 215, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 216, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

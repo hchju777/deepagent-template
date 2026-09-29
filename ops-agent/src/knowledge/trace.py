@@ -325,22 +325,23 @@ class _Repo:
         self._defs[key] = out
         return out
 
-    async def structural_impls(self, pmod: _Mod, proto: ast.ClassDef) -> list[tuple[_Mod, ast.ClassDef]]:
-        """Protocol이 선언한 메서드를 **전부 가진** 클래스들 — PEP 544의 정의 그대로, 상속도 이름도 필요 없다.
-        후보 파일은 선언 중 가장 긴 이름의 `def m(`으로 grep한다(`get`보다 특이할 확률이 높다). 사내 세 번째
-        추적에서 이름 규약으로 고른 추정이 그 아래 읽기 608개를 전부 추정으로 만들었다 — 구조로 맞으면 확실이다."""
-        methods = [b.name for b in proto.body if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
-                   and not b.name.startswith("__")]
-        if not methods:
+    async def structural_impls(self, pmod: _Mod, proto: ast.ClassDef, meth: str) -> list[tuple[_Mod, ast.ClassDef]]:
+        """포트의 구현체를 **구조**로 — 호출한 메서드 `meth`를 가졌고 포트가 선언한 메서드의 **절반 이상**을 가진
+        클래스들. 상속도 이름도 필요 없다(PEP 544의 정신). 전부를 요구하지 않는 이유: 사내 포트는 8개 중 1개가
+        죽은 선언이었고(구현에 없는 메서드) 그 하나 때문에 호출 175개가 추정으로 떨어졌다 — 이 호출을 받는 것은
+        `meth`를 가진 클래스이지 선언 전부를 가진 클래스가 아니다. 절반 미만이면 `get` 같은 이름의 우연이다.
+        후보 파일은 `def meth(`로 grep한다."""
+        declared = [b.name for b in proto.body if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and not b.name.startswith("__")]
+        if meth not in declared:
             return []
-        key = ("struct:" + proto.name, False)
+        key = (f"struct:{proto.name}:{meth}", False)
         if key in self._defs:
             for cmod, _ in self._defs[key]:
                 self.touched.add(cmod.path)
             return self._defs[key]
         out: list[tuple[_Mod, ast.ClassDef]] = []
-        probe = max(methods, key=len)
-        for hit in sorted(await self.source.grep([f"def {probe}("]), key=lambda h: (h.file, h.line)):
+        for hit in sorted(await self.source.grep([f"def {meth}("]), key=lambda h: (h.file, h.line)):
             if _is_noise(hit.file, hit.text) or not hit.file.endswith(".py"):
                 continue
             hmod = await self.module(hit.file)
@@ -349,8 +350,12 @@ class _Repo:
             for cls in hmod.classes.values():
                 if cls is proto or _is_protocol(cls) or any(c is cls for _, c in out):
                     continue
-                found = [await self.find_method(hmod, cls, m) for m in methods]
-                if all(f is not None and not _is_abstract(f[1]) for f in found):
+                covered = []
+                for m in declared:
+                    got = await self.find_method(hmod, cls, m)
+                    if got is not None and not _is_abstract(got[1]):
+                        covered.append(m)
+                if meth in covered and 2 * len(covered) >= len(declared):
                     out.append((hmod, cls))
         self._defs[key] = out
         return out
@@ -758,9 +763,9 @@ async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node],
                 grade = "추정"
                 gaps.append(Gap(mod.path, line, f"{meth}: {owner[1].name} 구현체 {len(impls)}개 — 전부 따라가되 읽기는 추정"))
         if not impls:
-            # 상속하지 않는 구현체 — 선언한 메서드를 다 가진 클래스(언어의 정의). 하나면 확실, 둘셋이면 추정,
+            # 상속하지 않는 구현체 — 호출한 메서드와 선언의 절반 이상을 가진 클래스. 하나면 확실, 둘셋이면 추정,
             # 더 많으면 `def get(` 하나짜리 포트다 — 안 따라간다.
-            structural = await r.structural_impls(owner[0], owner[1])
+            structural = await r.structural_impls(owner[0], owner[1], meth)
             if len(structural) == 1:
                 impls = structural
             elif 1 < len(structural) <= 3:

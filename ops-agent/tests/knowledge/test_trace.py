@@ -104,10 +104,12 @@ FILES = {
         'class AuditServicePort(Protocol):\n'
         '    def recent(self) -> list: ...\n'
         '    def purge(self) -> None: ...\n'
+        '    def rotate(self) -> None: ...\n'
         '\n'
         'class MeterPort(Protocol):\n'
         '    def sample(self) -> int: ...\n'
         '    def flush(self) -> None: ...\n'
+        '    def calibrate(self) -> None: ...\n'
         '\n'
         'class KeyValuePort(Protocol):\n'
         '    def get(self, key): ...\n'
@@ -115,7 +117,9 @@ FILES = {
         'class PumpRepository(Protocol):\n'
         '    def start(self) -> None: ...\n'
         '    def stop(self) -> None: ...\n'
-        '    def drain(self) -> int: ...\n'),
+        '    def drain(self) -> int: ...\n'
+        '    def prime(self) -> None: ...\n'
+        '    def vent(self) -> None: ...\n'),
     "api/repos/pump.py": (
         'from api.repos.base import BaseRepo\n'
         '\n'
@@ -544,14 +548,14 @@ async def test_포트와_같은_이름의_클래스가_다른_모듈에_있으�
 
 
 async def test_상속도_같은_이름도_없으면_이름_규약으로_구현체를_고르고_추정이라고_적는다():
-    """`AuditServicePort`는 `recent`·`purge`를 선언하는데 `AuditService`에는 `recent`뿐이다(`purge`는 외부
-    부모에서 온다) — 구조로는 못 맞추니 이름 규약으로 고른다. 코드가 보증하는 연결이 아니라 등급은 추정이고
+    """`AuditServicePort`는 `recent`·`purge`·`rotate`를 선언하는데 `AuditService`에는 `recent`뿐이다(나머지는 외부
+    부모에서 온다) — 절반에 못 미쳐 구조로는 못 맞추니 이름 규약으로 고른다. 코드가 보증하는 연결이 아니라 등급은 추정이고
     gap에 남긴다 — 같은 이름 메서드 전부로 퍼지는 것보다는 좁고, 확실이라고 속이지는 않는다."""
     t, _ = await _trace("/furnace/audit")
     assert [s.qualname for s in t.chain][:2] == ["audit_view", "AuditService.recent"]
     assert _reads(t) == {("topic", "mx.alarm.main", "추정")}
     assert [g.why for g in t.gaps] == [
-        "recent: AuditServicePort 구현체를 이름 규약으로 골랐다 — AuditService(포트 메서드 2개 중 없는 것: purge), 읽기는 추정"]
+        "recent: AuditServicePort 구현체를 이름 규약으로 골랐다 — AuditService(포트 메서드 3개 중 없는 것: purge, rotate), 읽기는 추정"]
 
 
 async def test_super_호출은_부모의_메서드로_가고_실행_시점_클래스는_자식_그대로다():
@@ -568,7 +572,10 @@ async def test_super_호출은_부모의_메서드로_가고_실행_시점_클�
 # 클래스가 곧 구현체이고, 이름은 후보를 찾는 수단일 뿐이다.
 
 async def test_Protocol이_선언한_메서드를_다_가진_클래스가_구현체이고_하나면_확실이다():
-    """`MeterPort(sample, flush)` ↔ `DialMeter`(둘 다) · `Flusher`(flush만). 이름은 안 닮았다."""
+    """`MeterPort(sample, flush, calibrate)` ↔ `DialMeter`(sample·flush) · `Flusher`(flush만). 이름은 안 닮았다.
+    호출한 메서드가 있고 선언의 절반 이상이면 구현체다 — 사내 포트는 8개 중 1개가 죽은 선언이었고(2e의 gap
+    원문), 그 하나 때문에 175개 호출이 추정으로 떨어졌다. 전부를 요구하는 것은 PEP 544에는 맞지만 살아 있는
+    코드의 포트 선언은 그렇게 정확하지 않다."""
     t, _ = await _trace("/furnace/meter")
     assert [s.qualname for s in t.chain][:2] == ["meter_view", "DialMeter.sample"]
     assert _reads(t) == {("collection", "line_state", "확실"), ("collection", "mx_hist_v2", "추정")}
@@ -588,13 +595,13 @@ async def test_구조가_맞는_클래스가_넷_이상이면_안_따라가고_g
 # 구조로 안 맞아 추정으로 떨어진 것이 175 — 무엇이 없어서인지 gap이 말해 줘야 다음 판단을 한다.
 
 async def test_같은_이름_클래스가_포트_메서드를_다_못_갖추면_없는_것을_gap에_적는다():
-    """`PumpRepository(Protocol)`는 start·stop·drain, 구현 `PumpRepository(BaseRepo)`에는 drain이 없다.
+    """`PumpRepository(Protocol)`는 다섯을 선언하는데 구현 `PumpRepository(BaseRepo)`에는 둘뿐이다(절반 미만).
     추정으로 가되 **무엇이 없는지**를 적는다 — 사내에서 이 gap이 175개였는데 이유를 못 읽었다."""
     t, _ = await _trace("/furnace/pump")
     assert [s.qualname for s in t.chain][:3] == ["pump_view", "PumpService.kick", "PumpRepository.start"]
     assert _reads(t) == {("collection", "tally_state", "추정")}
     assert [g.why for g in t.gaps] == [
-        "start: PumpRepository 같은 이름 클래스 1개로 갔다 — 포트 메서드 3개 중 없는 것: drain, 읽기는 추정"]
+        "start: PumpRepository 같은 이름 클래스 1개로 갔다 — 포트 메서드 5개 중 없는 것: drain, prime, vent, 읽기는 추정"]
 
 
 async def test_한_단어_config_키는_조상_키가_같은_줄에_있어야_읽기다():
