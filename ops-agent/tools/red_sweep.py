@@ -869,6 +869,9 @@ CASES = [
  ('그래프 없는 조사에 code.trace가 목록에 뜬다', ROOT / "src/application/briefing.py",
   '    return frozenset() if flow_graph is not None else frozenset({"code.flow", "code.trace"})', '    return frozenset() if flow_graph is not None else frozenset({"code.flow"})',
   ['tests/application/test_briefing.py::test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다']),
+ ("code trace가 없는 끝점을 없다고 안 한다", ROOT / "src/__main__.py",
+  '    if not any(n["id"] == node_id for n in graph["nodes"]):\n        print(f"  {args.path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다")', '    if False:\n        print(f"  {args.path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다")',
+  ["tests/knowledge/test_cli_code.py::test_code_graph가_끝점을_싣고_flow와_status가_말한다"]),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -896,7 +899,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 223, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 224, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

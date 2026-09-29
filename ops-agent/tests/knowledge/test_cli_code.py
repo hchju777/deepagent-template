@@ -601,3 +601,10 @@ def test_code_graph가_끝점을_싣고_flow와_status가_말한다(tmp_path, mo
     assert "/summary/badge [endpoint] —reads→ alarm_events [collection]   [INFERRED] api/r.py:L6" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0 and "끝점 1(등재 0 · 서빙 미상 0 · 자원까지 1 · 막힘 0)" in captured.out
+    # 11b 커밋 3a — 사람도 리드가 받는 사슬을 그대로 본다. config 키 경유 읽기는 `config키`로 표시된다.
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "/summary/badge")
+    assert code == 0, captured.out + captured.err
+    assert captured.out.splitlines()[0].startswith("  api/r.py:L")
+    assert "reads: alarm_events [collection] config키" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "/nope")
+    assert code == 1 and "끝점에 없다" in captured.out

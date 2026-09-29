@@ -1372,6 +1372,29 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     return 0
 
 
+def cmd_code_trace(args, env) -> int:
+    """사람이 끝점 하나의 함수 사슬을 본다 — 리드가 `code.trace`로 받는 것과 같은 줄들(11b)."""
+    from src.knowledge import flow
+    from src.knowledge import graph_build as gb
+
+    _, gbm, fct, _ = _code_site(args, env)
+    got = gb.read_bundle(_graph_dir(args, env, gbm, fct))
+    if got is None:
+        raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
+    graph, _ = got
+    node_id = flow.endpoint_id(args.path)
+    if not any(n["id"] == node_id for n in graph["nodes"]):
+        print(f"  {args.path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다")
+        return 1
+    lines = flow.trace_lines(graph, node_id)
+    if lines is None:
+        print(f"  {args.path}: 추적이 안 된 끝점이다 — 라우트 선언을 못 찾았거나 서빙 서비스를 모른다")
+        return 1
+    for line in lines:
+        print("  " + line)
+    return 0
+
+
 def cmd_code_flow(args, env) -> int:
     """사람이 그래프를 본다. 이름 하나면 이웃, `--to`가 있으면 흐름 경로, 없으면 허브."""
     from src.knowledge import flow
@@ -2128,6 +2151,11 @@ def build_parser() -> argparse.ArgumentParser:
     flow_cmd.add_argument("--depth", type=int, default=1, help="이웃 몇 단계 (기본 1)")
     _add_site_options(flow_cmd, sub=True)
     flow_cmd.set_defaults(run=cmd_code_flow)
+
+    trace_cmd = code_sub.add_parser("trace", help="끝점 하나의 함수 사슬 — 리드가 code.trace로 받는 것")
+    trace_cmd.add_argument("path", help="끝점 path (`code flow`나 등재 항목의 path 그대로)")
+    _add_site_options(trace_cmd, sub=True)
+    trace_cmd.set_defaults(run=cmd_code_trace)
 
     read = code_sub.add_parser("read", help="배포된 커밋의 파일 하나를 실제로 읽는다")
     read.add_argument("--service", required=True, help="토폴로지의 서비스 이름")

@@ -287,8 +287,10 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
 - **레인** — `role_for`: `code.*` → code_tracer, `recompute.*` → recompute_verifier, 나머지 data_prober.
   `PlanTask`의 "서브에이전트는 스스로 도구를 고른다" 주석을 ⑰에 맞게 고쳤다.
 
-사내에서 볼 것: 조사 하나에서 리드가 `code.trace`를 부르는지, 그 증거가 몇 줄인지(`case trace`의 증거
-줄 수), 그 다음 라운드에 `code.read`가 사슬의 file:line을 그대로 쓰는지.
+- **`python -m src code trace <path>`** — 사람이 리드가 받는 사슬을 그대로 본다(`code flow`의 짝).
+
+사내에서 볼 것: `code trace`로 사슬 하나(저장소 헬퍼·로거 걸음이 빠졌는지, 몇 걸음인지), 그리고 조사
+하나에서 리드가 `code.trace`를 부르는지와 다음 라운드의 `code.read`가 사슬의 file:line을 그대로 쓰는지.
 
 ### 커밋 4 — 측정 (결과를 보기 전에 적는다)
 
