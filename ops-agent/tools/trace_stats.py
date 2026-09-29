@@ -43,7 +43,7 @@ def _lengths(nodes: list[dict]) -> str:
 
 
 def stats(overlay: dict) -> list[str]:
-    """overlay 하나 → 사람이 옮겨 적을 줄들. 번호를 붙여 "3번 줄만" 하고 부탁할 수 있게."""
+    """overlay 하나 → 사람이 옮겨 적을 줄들(여덟). 번호를 붙여 "3번 줄만" 하고 부탁할 수 있게."""
     eps = {n["id"]: n for n in overlay.get("nodes", []) if n.get("type") == "endpoint"}
     links = [e for e in overlay.get("links", []) if e.get("origin") == "trace"]
     reads = collections.Counter(e["source"] for e in links)
@@ -56,6 +56,11 @@ def stats(overlay: dict) -> list[str]:
     owners = collections.Counter(_owner(s) for n in ok for s in (n.get("chain") or []))
     conf = collections.Counter(f"{e.get('confidence') or '-'}/{e.get('via') or '-'}" for e in links)
     bkinds = collections.Counter(_why(w)[:28] for n in blocked for w in (n.get("gaps") or []))
+    # 종류마다 원문 하나 — 4번 줄은 28자에서 잘라 "없는 것: …" 같은 뒷부분이 안 보인다.
+    samples = {}
+    for w in gaps:
+        samples.setdefault(_why(w)[:28], w.split(" ", 1)[1] if " " in w else w)
+    examples = [samples[k] for k, _ in kinds.most_common(3)]
     return [
         f"1 끝점 {len(eps)} · 추적 {dict(traced)} · 자원까지 {sum(1 for i in eps if reads[i])} · 막힘 {len(blocked)}",
         f"2 읽기 엣지 {dict(conf)}",
@@ -64,6 +69,7 @@ def stats(overlay: dict) -> list[str]:
         f"5 gap 이름 {names.most_common(5)}",
         f"6 사슬 클래스 {owners.most_common(8)}",
         f"7 막힌 끝점 gap {bkinds.most_common(5)} · 사슬 {_lengths(blocked)}",
+        "8 gap 예시 " + (" | ".join(examples) if examples else "-"),
     ]
 
 
