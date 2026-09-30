@@ -507,7 +507,10 @@ RESOURCE_TYPES = ("topic", "group", "collection", "rediskey", "endpoint")
 
 # ── 리드용 텍스트 — 브리핑의 <데이터 흐름>과 `code.flow` ─────────────────
 
-_FLOW_ORDER = ("serves", "reads", "reads(config키)", "reads(추정)", "produces", "consumes", "consumes_as", "declares")
+# `(코드)`는 서비스 노드에 추적기가 붙인 함수 단위 관계(11b 5a) — config 선언(공유 레포면 두 서비스에 같이 붙는다)과
+# 갈라 보여야 리드가 "sink가 alarm_events를 쓴다"를 선언이 아니라 코드의 사실로 읽는다.
+_FLOW_ORDER = ("serves", "reads", "reads(config키)", "reads(추정)", "reads(코드)", "writes(코드)",
+               "produces", "produces(코드)", "consumes", "consumes(코드)", "consumes_as", "declares")
 _KIND_RANK = {"service": 0, "endpoint": 1, "topic": 2, "collection": 3, "rediskey": 4, "group": 5}
 _MIN_SEED = 3
 _MAX_RESOURCE_SEEDS = 3
@@ -576,7 +579,8 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
                 continue
             if topics_only and by_id[e["target"]]["type"] != "topic":
                 continue
-            groups.setdefault(e["relation"], set()).add(by_id[e["target"]]["label"])
+            rel = e["relation"] + ("(코드)" if e.get("origin") == "trace" else "")
+            groups.setdefault(rel, set()).add(by_id[e["target"]]["label"])
         return [f"{rel}: {clip(groups[rel])}" for rel in _FLOW_ORDER if rel in groups]
 
     def code_direction(node_id: str, rels: tuple[str, ...]) -> str:
@@ -585,7 +589,7 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
         # 생산자와 소비자를 못 갈랐다. 레포에만 붙은 코드 엣지는 아무것도 더해 주지 않으므로 뺀다.
         by_rel: dict[str, set[str]] = {}
         for e in graph["links"]:
-            if (e.get("origin") == "code" and e["target"] == node_id and e["relation"] in rels
+            if (e.get("origin") in ("code", "trace") and e["target"] == node_id and e["relation"] in rels
                     and by_id.get(e["source"], {}).get("type") == "service"):
                 by_rel.setdefault(e["relation"], set()).add(by_id[e["source"]]["label"])
         if not by_rel:
@@ -703,9 +707,13 @@ def summary(graph: dict) -> dict:
                  if n.get("type") in RESOURCE_TYPES and n.get("type") != "endpoint"}
     coded = {e["target"] for e in links if e.get("origin", "code") == "code"}
     endpoints = [n for n in graph["nodes"] if n.get("type") == "endpoint"]
+    services = [n for n in graph["nodes"] if n.get("type") == "service"]
     served = {e["target"] for e in links if e["relation"] == "serves"}
     traced = {e["source"] for e in links if e.get("origin") == "trace"}
     return {"nodes": len(graph["nodes"]), "links": len(links), "kinds": kinds,
+            # 서비스 사슬(11b 5a): 자원까지 이어진 서비스 / 출발점을 못 정한 서비스(지식에 적을 자리)
+            "services_traced": sum(1 for n in services if n["id"] in traced),
+            "services_without_entry": sum(1 for n in services if not n.get("entries")),
             "repo_level": sum(1 for e in links if e.get("attributed") == "repo"),
             "ambiguous": sum(1 for e in links if e.get("confidence") == "AMBIGUOUS"),
             "unreferenced": len(resources - coded),
@@ -753,28 +761,41 @@ def advise(graph: dict, topology: Topology) -> list[str]:
     return out
 
 
-def add_trace(graph: dict, endpoint_id: str, result) -> dict:
-    """추적기(`trace.Trace`)의 결과를 오버레이에 싣는다 — `endpoint —reads→ resource` 엣지(origin
-    `trace`, 확실→EXTRACTED, 추정→INFERRED, file:line)와 끝점 노드의 사슬·gap. 이름 목록에 있는 자원은
-    전부 노드가 있으므로 없는 이름은 조용히 지나간다(자원이 아니라 다른 것이 잡힌 경우)."""
+def add_trace(graph: dict, node_id: str, result, *, entry: str | None = None, how: str | None = None) -> dict:
+    """추적기(`trace.Trace`)의 결과를 오버레이에 싣는다 — `노드 —reads/writes/consumes/produces→ resource` 엣지
+    (origin `trace`, 확실→EXTRACTED, 추정→INFERRED, file:line; relation은 줄의 동사 방향과 자원 종류에서)와
+    사슬·gap. 끝점은 노드에 평평하게, **서비스는 출발점별로**(`entries`) 남긴다 — 출발점이 여럿일 수 있고 엣지에
+    `entry`가 붙어 어느 출발점의 사슬인지 안다. 이름 목록에 있는 자원은 전부 노드가 있으므로 없는 이름은
+    조용히 지나간다(자원이 아니라 다른 것이 잡힌 경우)."""
     nodes = {n["id"]: dict(n) for n in graph["nodes"]}
     links = list(graph["links"])
-    node = nodes.get(endpoint_id)
+    node = nodes.get(node_id)
     if node is None:
         return graph
-    node["traced"] = result.status
-    node["chain"] = [f"{s.file}:L{s.line} {s.qualname}" for s in result.chain]
-    node["chain_parent"] = [s.parent for s in result.chain]
-    node["gaps"] = [f"{g.file}:L{g.line} {g.why}" for g in result.gaps]
+    record = {"traced": result.status, "reason": result.reason,
+              "chain": [f"{s.file}:L{s.line} {s.qualname}" for s in result.chain],
+              "chain_parent": [s.parent for s in result.chain],
+              "gaps": [f"{g.file}:L{g.line} {g.why}" for g in result.gaps]}
+    kind = node.get("type", "endpoint")
+    if kind == "service":
+        node["entries"] = list(node.get("entries") or []) + [{"entry": entry, "how": how, **record}]
+    else:
+        record.pop("reason")
+        node.update(record)
     for r in result.reads:
         target = _node_id(r.kind, r.name)
         if target not in nodes:
             continue
-        links.append({"source": endpoint_id, "target": target, "relation": "reads",
-                      "confidence": "EXTRACTED" if r.grade == "확실" else "INFERRED", "grade": r.grade, "via": r.via,
-                      "step": r.step,
-                      "attributed": "endpoint", "origin": "trace", "source_file": r.file,
-                      "source_location": f"L{r.line}", "repo": result.repo, "commit": "", "text": ""})
+        direction_ = getattr(r, "direction", "reads")
+        edge = {"source": node_id, "target": target,
+                "relation": RELATION.get(r.kind, {}).get(direction_, direction_),
+                "confidence": "EXTRACTED" if r.grade == "확실" else "INFERRED", "grade": r.grade, "via": r.via,
+                "step": r.step,
+                "attributed": kind, "origin": "trace", "source_file": r.file,
+                "source_location": f"L{r.line}", "repo": result.repo, "commit": "", "text": ""}
+        if entry is not None:
+            edge["entry"] = entry
+        links.append(edge)
     return {**graph, "nodes": list(nodes.values()), "links": links}
 
 
@@ -795,24 +816,55 @@ def endpoint_id(path: str) -> str:
     return _node_id("endpoint", path)
 
 
-def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAPS) -> list[str] | None:
-    """리드에게 보여 줄 사슬 — **읽기로 이어진 걸음의 조상만** 남긴 트리. 사내 사슬은 28~30걸음이고 대부분이
-    저장소 부모의 헬퍼와 로거라, 통째로 주면 함수 서너 개로 좁혀 준다는 약속이 깨진다. 읽기는 걸음 옆에
-    확실·config키·추정으로 붙고, gap은 셋까지, 꼬리에 "걸음 N 중 M". 추적이 안 된 끝점이면 None."""
-    node = next((n for n in graph.get("nodes", []) if n["id"] == endpoint_id), None)
-    if node is None or node.get("traced") != "ok" or not node.get("chain"):
+def service_id(name: str) -> str:
+    return _node_id("service", name)
+
+
+# 걸음 옆에 붙는 관계의 순서 — 읽는 것이 먼저, 그다음 만드는 것. (`_MARK_ORDER`는 표시 확실·config키·추정의 순서다.)
+_STEP_RELATIONS = ("reads", "consumes", "consumes_as", "writes", "produces")
+
+
+def trace_lines(graph: dict, node_id: str, *, max_gaps: int = _TRACE_MAX_GAPS) -> list[str] | None:
+    """리드에게 보여 줄 사슬 — **읽기·쓰기로 이어진 걸음의 조상만** 남긴 트리. 사내 사슬은 28~30걸음이고 대부분이
+    저장소 부모의 헬퍼와 로거라, 통째로 주면 함수 서너 개로 좁혀 준다는 약속이 깨진다. 자원은 걸음 옆에 관계
+    (reads·consumes·writes·produces)와 확실·config키·추정으로 붙고, gap은 셋까지, 꼬리에 "걸음 N 중 M".
+    끝점은 사슬 하나, 서비스는 **출발점마다** 머리말(`출발점 파일:함수 (지식|이름 규약)`)과 사슬. 추적이 안 된
+    끝점·출발점 없는 서비스면 None."""
+    node = next((n for n in graph.get("nodes", []) if n["id"] == node_id), None)
+    if node is None:
         return None
-    chain: list[str] = list(node["chain"])
-    parents: list = list(node.get("chain_parent") or [None] * len(chain))
+    if node.get("type") == "service":
+        entries = node.get("entries") or []
+        if not entries:
+            return None
+        lines: list[str] = []
+        for rec in entries:
+            if rec.get("traced") != "ok" or not rec.get("chain"):
+                lines.append(f"출발점 {rec.get('entry')} ({rec.get('how')}) — 사슬 없음: {rec.get('reason', '')}".rstrip(": "))
+                continue
+            lines.append(f"출발점 {rec.get('entry')} ({rec.get('how')})")
+            lines += _chain_lines(graph, node_id, rec, only_entry=rec.get("entry"), max_gaps=max_gaps)
+        return lines
+    if node.get("traced") != "ok" or not node.get("chain"):
+        return None
+    return _chain_lines(graph, node_id, node, only_entry=None, max_gaps=max_gaps)
+
+
+def _chain_lines(graph: dict, node_id: str, rec: dict, *, only_entry: str | None, max_gaps: int) -> list[str]:
+    chain: list[str] = list(rec["chain"])
+    parents: list = list(rec.get("chain_parent") or [None] * len(chain))
     by_id = {n["id"]: n for n in graph.get("nodes", [])}
-    reads_at: dict[int, list[str]] = {}
+    marks_at: dict[int, dict[str, list[str]]] = {}
     for e in graph.get("links", []):
-        if e.get("source") == endpoint_id and e.get("origin") == "trace" and e.get("target") in by_id:
-            target = by_id[e["target"]]
-            reads_at.setdefault(int(e.get("step", -1)), []).append(
-                f"{target['label']} [{target['type']}] {read_mark(e)}")
+        if e.get("source") != node_id or e.get("origin") != "trace" or e.get("target") not in by_id:
+            continue
+        if only_entry is not None and e.get("entry") != only_entry:
+            continue
+        target = by_id[e["target"]]
+        marks_at.setdefault(int(e.get("step", -1)), {}).setdefault(e.get("relation", "reads"), []).append(
+            f"{target['label']} [{target['type']}] {read_mark(e)}")
     keep: set[int] = set()
-    for i in reads_at:
+    for i in marks_at:
         cur = i if 0 <= i < len(chain) else None
         while cur is not None and cur not in keep:
             keep.add(cur)
@@ -829,14 +881,16 @@ def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAP
     lines = []
     for i in sorted(keep):
         head = ("  " * depth(i) + "→ " if parents[i] is not None else "") + chain[i]
-        lines.append(head + (f" — reads: {' · '.join(reads_at[i])}" if i in reads_at else ""))
-    gaps = list(node.get("gaps") or [])
+        marks = marks_at.get(i, {})
+        tail = " · ".join(f"{rel}: {' · '.join(marks[rel])}" for rel in _STEP_RELATIONS if rel in marks)
+        lines.append(head + (f" — {tail}" if tail else ""))
+    gaps = list(rec.get("gaps") or [])
     if gaps:
-        tail = f" 외 {len(gaps) - max_gaps}개" if len(gaps) > max_gaps else ""
-        lines.append(f"못 따라감 {len(gaps)}: {' · '.join(gaps[:max_gaps])}{tail}")
+        more = f" 외 {len(gaps) - max_gaps}개" if len(gaps) > max_gaps else ""
+        lines.append(f"못 따라감 {len(gaps)}: {' · '.join(gaps[:max_gaps])}{more}")
     if len(keep) < len(chain):
         lines.append(f"걸음 {len(chain)} 중 읽기로 이어진 {len(keep)}만 적었다 — 나머지는 code.read로 본다"
-                     if reads_at else f"걸음 {len(chain)} 중 {len(keep)}만 적었다 — 읽기로 이어진 걸음이 없다")
+                     if marks_at else f"걸음 {len(chain)} 중 {len(keep)}만 적었다 — 읽기로 이어진 걸음이 없다")
     return lines
 
 

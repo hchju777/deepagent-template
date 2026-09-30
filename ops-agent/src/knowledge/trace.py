@@ -22,10 +22,12 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Protocol
 
-from src.knowledge.flow import _DISTINCTIVE, Hit, Name, Route, _is_noise, _quoted_whole, direction
+from src.knowledge.flow import _DISTINCTIVE, Hit, Name, Route, _is_noise, _quoted_whole, direction, owner
 
 MAX_DEPTH = 6
 MAX_NODES = 200
+# 지식에 출발점이 없는 서비스에서 규약으로 고르는 모듈 함수 이름들 — 컨슈머 루프·잡의 흔한 진입점.
+ENTRY_NAMES = ("main", "run", "start", "serve", "consume", "handle", "on_message", "loop")
 _UPPER_ASSIGN = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*['\"]([^'\"]+)['\"]")
 # 코드 쪽 키 템플릿 — `f"gauge_face_{f}"`의 머리 `gauge_face_`. 따옴표 바로 뒤부터 `{` 앞까지.
 _KEY_TEMPLATE = re.compile(r"""["']([A-Za-z0-9_.:\-]{2,})\{""")
@@ -48,6 +50,9 @@ class Read:
     line: int
     via: str = "literal"    # 이름이 코드에 어떻게 있었나 — "literal"(문자열 그대로) | "key"(config 키 토큰) | "alias"(상수·Enum)
     step: int = -1          # 이 읽기가 난 걸음(사슬 색인) — 읽기로 이어진 가지만 남길 때 쓴다
+    # 그 줄의 동사가 말하는 방향 — "reads" | "writes". 이름은 `Read`지만 쓰기도 여기 담는다(11b 5a): `insert`·`set`을
+    # 읽기로 실으면 "그 데이터를 쓰는 함수"를 코드에서 짚을 수 없다. 동사가 없거나 둘 다면 reads다.
+    direction: str = "reads"
 
 
 @dataclass(frozen=True)
@@ -557,6 +562,24 @@ class Tracer:
                            aliases=self.aliases, max_depth=self.max_depth, max_nodes=self.max_nodes,
                            cache=self._cache)
 
+    async def entries_for(self, service: str, topology) -> tuple[list[str], str]:
+        """서비스 사슬의 출발점들과 그 출처 — `(["파일:함수", …], "지식" | "이름 규약" | "없음")`.
+
+        지식(`Service.entries`)이 먼저다. 없으면 **그 서비스가 소유한 파일**의 `ENTRY_NAMES` 모듈 함수 —
+        다른 서비스나 도구의 `run`을 출발점으로 삼으면 남의 사슬이 이 서비스의 것으로 실린다.
+        """
+        svc = topology.services.get(service)
+        if svc is None or svc.repo != self.repo:
+            return [], "없음"
+        if svc.entries:
+            return list(svc.entries), "지식"
+        found: set[str] = set()
+        for name in ENTRY_NAMES:
+            for mod, _, cls in await self._cache.defs_named(name, methods=False):
+                if cls is None and owner(mod.path, self.repo, topology)[0] == service:
+                    found.add(f"{mod.path}:{name}")
+        return (sorted(found), "이름 규약") if found else ([], "없음")
+
 
 async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name],
                 routes: Iterable[Route] = (), aliases: dict[str, Name] | None = None,
@@ -582,6 +605,18 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
             return Trace(target, repo, "not_found",
                          f"{target}: 레포 {repo}의 라우트 선언에 없다 — code graph의 끝점 목록을 보라",
                          gaps=tuple(r.parse_gaps_touched()))
+    elif ":" in target:
+        # 서비스의 출발점 `파일:함수`(`파일:클래스.메서드`) — 이름만으로 시작하면 레포의 같은 이름 전부가 출발점이다.
+        file, _, qual = target.rpartition(":")
+        mod = await r.module(file)
+        if mod is None:
+            return Trace(target, repo, "not_found", f"{target}: 레포 {repo}에 {file}이 없다 — 지식의 entries를 확인하라",
+                         gaps=tuple(r.parse_gaps_touched()))
+        func, cls = _def_in(mod, qual)
+        if func is None:
+            return Trace(target, repo, "not_found", f"{target}: {file}에 `def {qual}(`이 없다",
+                         gaps=tuple(r.parse_gaps_touched()))
+        roots.append(_Node(mod, func, cls, 0, "확실", (mod, cls) if cls else None))
     else:
         found = await r.defs_named(target, methods=False) + await r.defs_named(target, methods=True)
         for mod, func, cls in found:
@@ -603,11 +638,12 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
 
     current = [-1]                   # 지금 훑는 걸음의 사슬 색인 — add_read가 읽기에 적는다
 
-    def add_read(kind: str, name: str, grade: str, file: str, line: int, via: str) -> None:
+    def add_read(kind: str, name: str, grade: str, file: str, line: int, via: str,
+                 direction_: str = "reads") -> None:
         key = (kind, name, file, line)
         cur = reads.get(key)
         if cur is None or (cur.grade == "추정" and grade == "확실"):
-            reads[key] = Read(kind, name, grade, file, line, via, current[0])
+            reads[key] = Read(kind, name, grade, file, line, via, current[0], direction_)
 
     while queue or later:
         if not queue:
@@ -644,6 +680,21 @@ async def trace(target: str, *, repo: str, source: Source, names: Iterable[Name]
     ordered = sorted(reads.values(), key=lambda x: (x.file, x.line, x.kind, x.name))
     return Trace(target, repo, "ok", chain=tuple(chain), reads=tuple(ordered),
                  gaps=tuple(r.parse_gaps_touched() + gaps))
+
+
+def _def_in(mod: _Mod, qual: str) -> tuple[ast.AST | None, ast.ClassDef | None]:
+    """`함수` 또는 `클래스.메서드`의 정의 — 모듈 최상위만. 중첩 함수는 출발점이 아니다."""
+    if "." in qual:
+        cname, mname = qual.split(".", 1)
+        for node in mod.tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == cname:
+                found = _method(node, mname)
+                return (found, node) if found is not None else (None, None)
+        return None, None
+    for node in mod.tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == qual:
+            return node, None
+    return None, None
 
 
 def _handler_at(mod: _Mod, decorator_line: int) -> ast.AST | None:
@@ -700,20 +751,28 @@ async def _read_chunks(r: _Repo, node: _Node, scanned: set[tuple[str, int]]
     return out
 
 
+def _direction_at(lines: list[str], i: int) -> str:
+    # 쓰기 동사가 있는 줄만 writes — 동사가 없거나 둘 다면 reads(보수적: 사다리가 필요한 것은 읽기 엣지다).
+    return "writes" if 0 <= i < len(lines) and direction(lines[i]) == "writes" else "reads"
+
+
 def _collect_reads(segment: str, base: int, path: str, cap: str, names: list[Name],
                    aliases: dict[str, Name], add_read) -> None:
+    lines = segment.splitlines()
     for n in names:
         at = _quoted_at(segment, n.literal) if n.literal else None
         if (at is not None and not _DISTINCTIVE.search(n.literal)
                 and direction(segment.splitlines()[at]) is None):
             at = None       # 한 단어 리터럴은 같은 줄에 읽기/쓰기 동사가 있어야 읽기다 — 배지 상태값 "alarm"
         if at is not None:
-            add_read(n.kind, n.value, "추정" if cap == "추정" else "확실", path, base + at, "literal")
+            add_read(n.kind, n.value, "추정" if cap == "추정" else "확실", path, base + at, "literal",
+                     _direction_at(lines, at))
         elif (at := _key_at(segment, n)) is not None:
-            add_read(n.kind, n.value, "추정", path, base + at, "key")
+            add_read(n.kind, n.value, "추정", path, base + at, "key", _direction_at(lines, at))
     for ident, n in aliases.items():
         if re.search(rf"\b{re.escape(ident)}\b", segment):
-            add_read(n.kind, n.value, "추정", path, _line_of(segment, ident, base), "alias")
+            line = _line_of(segment, ident, base)
+            add_read(n.kind, n.value, "추정", path, line, "alias", _direction_at(lines, line - base))
     # 코드가 키 토큰을 템플릿으로 조립한다 — `cfg.get("redis_key", f"gauge_face_{f}")`. 토큰이 통째로 없어
     # 위 판정은 하나도 못 잡는다(사내 /summary 끝점의 redis 읽기가 이 모양뿐이었다). 조상 키가 같은 줄에 있고
     # 머리가 여러 조각짜리면, 그 머리로 시작하는 키 전부가 읽기(추정)다 — config 값 템플릿(`alarm:stats:{line}`
@@ -725,7 +784,7 @@ def _collect_reads(segment: str, base: int, path: str, cap: str, names: list[Nam
             for n in names:
                 if (n.key_token != head and n.key_token.startswith(head) and n.required_tokens
                         and all(t in line for t in n.required_tokens)):
-                    add_read(n.kind, n.value, "추정", path, base + i, "key")
+                    add_read(n.kind, n.value, "추정", path, base + i, "key", _direction_at(lines, i))
 
 
 async def _callees(r: _Repo, node: _Node, gaps: list[Gap]) -> tuple[list[_Node], list[_Node]]:

@@ -4,7 +4,7 @@
 > file:line로** 받고, "그 결과가 원천과 맞는가"를 **코드가 센 숫자로** 받는다. 11c가 "어느
 > 서비스·어느 흐름"을 줬다면 11b는 "어느 함수 몇 줄"과 "맞나 틀리나"를 준다.
 >
-> 상태: 진행 중 (3a·3b·커밋 4 측정 완료). 앞: [11c](step-11c-flow.md) ✅. 뒤: **서비스 추적**(측정이 근거를 줬다), 12a.
+> 상태: 진행 중 (3a·3b·커밋 4 측정·5a 서비스 사슬 완료). 앞: [11c](step-11c-flow.md) ✅. 뒤: **5b derives 엣지**, 12a.
 > 결정의 근거는 [decisions ⑰](decisions.md).
 
 ## 왜 "서브에이전트 3종"이 LLM 루프가 아닌가
@@ -377,7 +377,7 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
 컬렉션을 고를 근거(추적)가 없어서다. 필요해지면 발견 읽기에서 고르는 규칙을 더한다. ③ 사내에서는 이 칸이
 실제로 리드의 출력이 되는지가 커밋 4의 T1·T3다.
 
-**후속 (3b 뒤 첫 번째): 서비스 추적.** 끝점이 없는 서비스(processor·sink)에 대해 ① 출발점(컨슈머 콜백·
+**후속 (3b 뒤 첫 번째): 서비스 추적 — 5a(출발점·방향·서비스 사슬)로 절반, 5b(derives)가 나머지.** 끝점이 없는 서비스(processor·sink)에 대해 ① 출발점(컨슈머 콜백·
 스케줄 잡 — 지식에 사람이 적는 편이 정확하다) ② 읽기뿐 아니라 쓰기 수집 ③ 함수 단위 `A —derives→ B`
 엣지(키 A를 읽는 함수가 토픽 T를 만든다). flow.html의 3홉과 리드의 사다리 셋째 칸이 "그 서비스가 읽는 것
 전부"에서 "그 키를 만드는 함수가 실제로 읽는 것"으로 좁아진다. 로직 재현이 아니라 함수 단위 배선이다.
@@ -455,7 +455,39 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
   둘 다 벗겨야 했다. 한 파일로 모으는 것이 맞다(백로그).
 
 **후속.** ⑤ 이름 검사를 인자 종류별로 + 템플릿 채움 검사(T5의 계측기 구멍, 7건 중 1건). 원천 재집계 예시의
-`filter` 모양은 사내 첫 실행 뒤에. 번들의 그래프 파일 단일화. 그리고 **서비스 추적**.
+`filter` 모양은 사내 첫 실행 뒤에. 번들의 그래프 파일 단일화. 그리고 **서비스 추적**(아래 5a·5b).
+
+### 5a ✅ — 서비스 사슬: 출발점 · 읽기/쓰기 방향 · `code.trace_service`
+
+측정에서 리드는 sink 코드를 grep·read로 더듬었고 예비 판에서는 `code.trace`에 서비스 이름을 넣었다. 끝점이
+없는 서비스에도 사슬을 준다 — 셋으로.
+
+- **출발점.** `Service.entries`(`"파일:함수"`·`"파일:클래스.메서드"`, 레포 안 경로만)가 지식에 있으면 그것(**지식**).
+  없으면 그 서비스가 **소유한 파일**(`flow.owner`)의 `main`·`run`·`start`·`serve`·`consume`·`handle`·`on_message`·
+  `loop` 모듈 함수(**이름 규약**) — 다른 서비스나 도구의 `run`은 안 잡는다. 함수 이름만 적는 것은 거부한다:
+  레포의 같은 이름 전부가 출발점이 된다. 추적기는 `파일:함수`를 출발점으로 받는다(`_def_in`, 최상위만).
+- **방향.** `Read.direction`(reads|writes) — 줄의 동사(`WRITE_VERBS`)가 쓰기면 writes, 없거나 둘 다면 reads(보수적:
+  사다리가 필요한 것은 읽기 엣지다). `add_trace`가 종류×방향으로 relation을 고른다(`RELATION`: 토픽은
+  consumes/produces, 그룹은 consumes_as). **끝점에도 적용된다** — 핸들러가 쓰면 writes로 실린다.
+- **서비스 노드.** 출발점별 기록(`entries: [{entry, how, traced, reason, chain, chain_parent, gaps}]`)과 `entry`가 붙은
+  trace 엣지. 끝점의 평평한 필드를 안 쓰는 이유: 출발점이 여럿이다. `trace_lines`가 서비스면 `출발점 파일:함수
+  (지식|이름 규약)` 머리말 뒤에 사슬을 적고, 걸음 옆 표시는 관계별(`consumes: … · writes: …`)이다.
+  `<데이터 흐름>`의 서비스 줄에는 `writes(코드)`·`consumes(코드)`로 **선언과 갈라** 붙는다 — 공유 레포의 config
+  선언은 두 서비스에 같이 붙지만 이건 그 함수의 사실이다. `summary`에 `services_traced`·`services_without_entry`.
+- **문.** `code graph`가 끝점 뒤에 서비스도 추적한다(레포당 Tracer 하나를 둘이 공유). 사람은 `code trace <서비스>`,
+  리드는 `code.trace_service(service)`(그래프 없으면 목록에서 숨김, 출발점 없으면 entries에 적으라고 답한다).
+  `code.trace(endpoint)`는 그대로 끝점 전용이다 — 인자 이름이 곧 설명이라 둘을 한 문에 섞지 않았다.
+
+로컬 판(`code trace sink`): `출발점 sink/writer.py:run (지식)` 아래 한 걸음에 `consumes: mx.alarm.main [topic] config키 ·
+consumes_as: gumi-mx-core [group] config키 · writes: alarm_events [collection] config키 · alarm:stats:{line} [rediskey]
+config키 · hb:{service} [rediskey] config키`. processor는 `consumes: mx.alarm.raw … produces: mx.alarm.main`. 방향이
+붙으니 config 층의 "레포{processor,sink}가 둘 다 consumes"가 코드 층에서 갈린다.
+
+**5b(다음): derives 엣지.** 같은 출발점 사슬 안에서 읽기 → 쓰기를 `A —derives→ B`로 잇는다(함수 단위, INFERRED, 어느
+걸음이 읽고 어느 걸음이 썼는지 `via`에). flow.html 3홉과 `<데이터 흐름>` 자원 줄(`alarm_events ← derives:
+mx.alarm.main (sink run)`), 사다리에 "그 데이터를 쓰는 서비스의 사슬" 칸(`code.trace_service(service=쓰는 서비스)`),
+그리고 측정 T8(리드가 sink 사슬에 몇 라운드에 닿나). `knowledge/topology/mx.json`의 entries는 로컬 판 모양의
+자리표시자다 — 사내에서는 컨슈머 콜백·스케줄 잡의 실제 `파일:함수`를 적는다.
 
 ## 범위 밖
 

@@ -137,3 +137,24 @@ def test_리포의_mx_토폴로지는_redis_키_접두사를_선언한다():
     topo = load_topology(Path(__file__).resolve().parents[2] / "knowledge", "mx")
     redis = next(s for s in topo.flow.sources if s.kind == "rediskey")
     assert (redis.prefix, redis.join) == ("prefix", ":")
+
+
+def test_서비스_출발점은_레포_안_파일과_함수로_적는다():
+    """`entries`는 서비스 사슬의 출발점(11b 5a). 함수 이름만 적으면 레포의 같은 이름 전부가 출발점이 되므로
+    파일까지 요구한다. 레포 밖 경로는 `path`와 같은 이유로 거부한다."""
+    import pytest
+    from src.knowledge.schema import Service
+
+    assert Service(repo="r", entries=["sink/writer.py:run", "api/app.py:Jobs.tick"]).entries[1] == "api/app.py:Jobs.tick"
+    with pytest.raises(ValueError):
+        Service(repo="r", entries=["run"])
+    with pytest.raises(ValueError):
+        Service(repo="r", entries=["../x.py:run"])
+
+
+def test_리포의_mx_토폴로지는_processor와_sink의_출발점을_적는다():
+    from pathlib import Path
+    from src.knowledge.loader import load_topology
+    topo = load_topology(Path(__file__).resolve().parents[2] / "knowledge", "mx")
+    assert topo.services["sink"].entries and topo.services["processor"].entries
+    assert all(":" in e for e in topo.services["sink"].entries)

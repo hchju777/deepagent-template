@@ -562,8 +562,9 @@ def frame_fields(state: CaseState, *, site_config,
 
 
 def _hidden(flow_graph: dict | None) -> frozenset[str]:
-    # 그래프가 없으면 `code.flow`·`code.trace`를 목록에서 뺀다 — 없는 문을 열라고 적어 두면 리드가 거기로 간다.
-    return frozenset() if flow_graph is not None else frozenset({"code.flow", "code.trace"})
+    # 그래프가 없으면 `code.flow`·`code.trace`·`code.trace_service`를 목록에서 뺀다 — 없는 문을 열라고 적어 두면
+    # 리드가 거기로 간다.
+    return frozenset() if flow_graph is not None else frozenset({"code.flow", "code.trace", "code.trace_service"})
 
 
 def integrate_fields(state: CaseState, *, site_config, max_rounds: int,

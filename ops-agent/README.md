@@ -236,6 +236,9 @@ python -m src case list
 python -m src code status     # 읽을 수 있는 상태인가 (네트워크 없음)
 python -m src code plan       # 사람이 직접 칠 git 명령 (네트워크 없음)
 python -m src code sync       # clone/fetch — **사내에서만**
+python -m src code graph      # 흐름 그래프 + 끝점·서비스 사슬 (네트워크 없음)
+python -m src code trace /summary/badge   # 끝점 하나의 함수 사슬 — 리드가 code.trace로 받는 줄
+python -m src code trace sink             # 끝점 없는 서비스의 사슬 — 출발점은 knowledge의 entries
 ```
 
 조사가 "데이터가 이상하다"를 넘어 "왜 그런가"로 가려면 대상 서비스의 코드를 읽어야

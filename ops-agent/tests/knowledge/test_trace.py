@@ -685,3 +685,64 @@ async def test_측정판의_배지_핸들러는_캐시_키를_지나_컬렉션�
     assert {(r.kind, r.name, r.via) for r in t.reads} == {("collection", "alarm_events", "key"),
                                                          ("rediskey", "alarm:stats:{line}", "key")}
     assert len(t.gaps) == 1 and "getattr" in str(t.gaps[0]), t.gaps
+
+
+# ── 서비스 사슬 (11b 5a) — 끝점이 없는 서비스의 출발점·읽기/쓰기 방향 ─────────────────────
+
+SERVICE_FILES = {
+    "sink/writer.py": (
+        'def run(cfg, consumer, mongo, redis):\n'
+        '    k = cfg["infra"]["kafka"]\n'
+        '    for m in consumer.subscribe(k["consumer"]["topic"]["topic1"]):\n'
+        '        store(cfg, mongo, m)\n'
+        '        redis.set(cfg["redis_key"]["line_status"].format(id=m["id"]), m)\n'
+        '\n\n'
+        'def store(cfg, mongo, m):\n'
+        '    mongo[cfg["mongodb_collection"]["line_state"]].insert_one(m)\n'
+        '\n\n'
+        'def main():\n'
+        '    run(load(), Consumer(), Mongo(), Redis())\n'),
+    "tools/cli.py": 'def run(x):\n    return x\n',
+}
+
+
+async def _trace_in(files, target):
+    src = _Source(files)
+    aliases = await trace.alias_index(NAMES, src)
+    return await trace.trace(target, repo=REPO, source=src, names=NAMES, routes=ROUTES, aliases=aliases)
+
+
+async def test_파일로_한정한_출발점에서_시작하고_읽기와_쓰기의_방향을_가른다():
+    """`run`은 레포에 둘이다(sink/writer.py·tools/cli.py) — 이름만으로 시작하면 둘 다 출발점이 된다. 서비스의
+    출발점은 파일까지 적는다. 그리고 `insert_one`·`set`은 읽기가 아니다 — 방향이 있어야 "그 데이터를 쓰는
+    함수"를 코드에서 짚는다(사다리 셋째 칸)."""
+    t = await _trace_in({**FILES, **SERVICE_FILES}, "sink/writer.py:run")
+    assert t.status == "ok", t
+    assert [(s.file, s.qualname) for s in t.chain][:2] == [("sink/writer.py", "run"), ("sink/writer.py", "store")]
+    assert all(s.file != "tools/cli.py" for s in t.chain)
+    assert {(r.kind, r.name, r.direction) for r in t.reads} == {
+        ("topic", "mx.alarm.main", "reads"), ("rediskey", "line:{id}", "writes"), ("collection", "line_state", "writes")}
+    # `line_state`는 값이 곧 키 토큰이라 literal로도 잡힌다 — 방향과 이름이 맞으면 경로는 상관없다.
+    assert {r.via for r in t.reads} <= {"key", "literal"}
+
+
+async def test_출발점의_파일이나_함수가_없으면_값으로_실패한다():
+    missing = await _trace_in({**FILES, **SERVICE_FILES}, "sink/nope.py:run")
+    assert missing.status == "not_found" and "sink/nope.py" in missing.reason
+    absent = await _trace_in({**FILES, **SERVICE_FILES}, "sink/writer.py:absent")
+    assert absent.status == "not_found" and "absent" in absent.reason
+
+
+async def test_출발점은_지식이_먼저고_없으면_소유한_파일의_이름_규약이다():
+    """사람이 적은 entries가 있으면 그것(확실). 없으면 그 서비스가 소유한 파일의 `main`·`run` 같은 이름 —
+    다른 서비스·도구의 `run`은 안 잡는다. 규약으로 고른 것은 추정이라고 적는다."""
+    from src.knowledge.schema import Service, Topology
+
+    src = _Source({**FILES, **SERVICE_FILES})
+    declared = Topology(services={"sink": Service(repo=REPO, entries=["sink/writer.py:run"]),
+                                  "api": Service(repo=REPO)})
+    tracer = trace.Tracer(REPO, src, names=NAMES, routes=ROUTES)
+    assert await tracer.entries_for("sink", declared) == (["sink/writer.py:run"], "지식")
+    guessed = Topology(services={"sink": Service(repo=REPO), "api": Service(repo=REPO)})
+    assert await tracer.entries_for("sink", guessed) == (["sink/writer.py:main", "sink/writer.py:run"], "이름 규약")
+    assert await tracer.entries_for("api", guessed) == ([], "없음")
