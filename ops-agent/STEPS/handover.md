@@ -335,12 +335,13 @@ deepagent-template 리포의 ops-agent/ 트리에서 이어서 작업한다.
 `patrol open`이 케이스를 열고 `case investigate`가 그것을 조사한다.
 판정(12a)과 보고서(12b)는 아직 없다.
 
-11b(step-11b-trace.md)는 3a·3b-1까지 끝났다 — 추적기(2b~2f), `code.trace`와 레인,
-flow.html 초점 상류, 원천 재집계 action. 다음은 **3b-2**(브리핑 예시 — rest 증거 뒤
-`code.trace`, trace 증거 뒤 `recompute.count` — 와 dryrun 통합 시험)이고, 그다음은
+11b(step-11b-trace.md)는 3a·3b(3b-1·3b-2)까지 끝났다 — 추적기(2b~2f), `code.trace`와
+레인, flow.html 초점 상류, 원천 재집계 action, 브리핑 예시의 사다리 칸(rest 증거 뒤
+`code.trace`, trace 증거 뒤 `recompute.count`)과 `case dryrun` 사다리 대본. 다음은
 **서비스 추적**(끝점 없는 서비스의 출발점·쓰기 수집·함수 단위 `derives` 엣지 — step-11b
-"후속" 참조. 사람이 3b 뒤에 하기로 정했고 내가 먼저 꺼내기로 했다). 시작하기 전에
-목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
+"후속" 참조. 사람이 3b 뒤에 하기로 정했고 내가 먼저 꺼내기로 했다 — 3b가 끝났으니
+**먼저 꺼내라**), 그다음 11b 커밋 4(측정 T1~T7), 12a. 시작하기 전에 목적·손댈 파일·
+테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
 
 작업 방식은 handover.md의 "합의된 작업 방식"을 그대로 따른다 — 특히
 작업 전 예고 / 작업 후 A·M·D 목록 / 한국어 주석(WHY만) / 영어 커밋 메시지 /

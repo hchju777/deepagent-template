@@ -1,0 +1,78 @@
+{
+  "_설명": [
+    "`python -m src case dryrun --plan examples/case-ladder.json --stub-seeds examples/stub-seeds.json`.",
+    "사다리 — ① 판정이 본 REST 읽기로 증상을 재현하고 ② 그 끝점을 만드는 코드의 사슬을 보고(code.trace)",
+    "③ 그 코드가 읽는 컬렉션에서 화면의 수를 다시 센다(recompute.count). 셋은 한 라운드에 하나씩 돈다 —",
+    "각 칸의 입력 증거가 앞 칸이 만든 것이라 select 게이트가 그때까지 붙잡는다.",
+    "seeds의 배지는 0이고 원천에는 alarm 문서가 둘이다 — 마지막 칸이 그 불일치를 기계의 증거로 남긴다."
+  ],
+  "symptom": "L1 Alarm 배지가 0인데 현장에는 알람이 있다",
+  "hypotheses": [
+    {
+      "id": "h-1",
+      "statement": "끝점이 읽는 컬렉션에 이 창의 알람 문서가 없다"
+    },
+    {
+      "id": "h-2",
+      "statement": "컬렉션에는 있는데 끝점의 집계가 다른 것을 센다"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t-1",
+      "goal": "증상 재현 — 배지를 그대로 읽는다",
+      "role": "data_prober",
+      "priority": 10,
+      "action": "rest.query",
+      "params": {
+        "entry": "summary_badge",
+        "params": {}
+      }
+    },
+    {
+      "id": "t-2",
+      "goal": "그 끝점을 만드는 코드의 사슬",
+      "role": "code_tracer",
+      "priority": 20,
+      "action": "code.trace",
+      "params": {
+        "target": "/summary/badge"
+      },
+      "input_evidence_ids": [
+        "t-1.e1"
+      ]
+    },
+    {
+      "_설명": "expect는 숫자가 아니라 **증거 안의 위치**다 — 실행기가 t-1의 원본에서 꺼내 원천의 수와 대조한다.",
+      "id": "t-3",
+      "goal": "원천에서 alarm 수를 다시 세어 배지와 대조",
+      "role": "recompute_verifier",
+      "priority": 30,
+      "action": "recompute.count",
+      "params": {
+        "collection": "alarm_events",
+        "filter": {
+          "result": "alarm"
+        },
+        "expect": {
+          "evidence": "t-1.e1",
+          "path": "response.items[0].alarm"
+        }
+      },
+      "input_evidence_ids": [
+        "t-2.e1"
+      ]
+    }
+  ],
+  "rounds": [
+    {
+      "decision": "continue"
+    },
+    {
+      "decision": "continue"
+    },
+    {
+      "decision": "continue"
+    }
+  ]
+}

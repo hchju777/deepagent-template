@@ -277,6 +277,15 @@ python -m src case dryrun --plan examples/case-dryrun.json --stub-seeds examples
 시끄럽게 죽는다). 설명을 적고 싶으면 키 이름을 `_`로 시작하라 — 주석으로 걷어 낸다.
 왜 울타리를 코드가 쥐는지는 [10a단계 문서](STEPS/step-10a-graph.md).
 
+사다리 대본도 있다 — [`examples/case-ladder.json`](examples/case-ladder.json)은 REST 읽기 →
+`code.trace` → `recompute.count` 세 칸이 한 라운드에 하나씩 게이트를 지나는 것을 보여 준다.
+seeds의 `code` 절이 사슬을 대신한다(진짜 사슬은 `code graph`의 오버레이에서 온다). 마지막 칸이
+배지 0과 원천 2의 불일치를 기계의 증거로 남긴다.
+
+```bash
+python -m src case dryrun --plan examples/case-ladder.json --stub-seeds examples/stub-seeds.json
+```
+
 ### 리드 LLM으로 실제 조사
 
 ```bash

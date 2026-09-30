@@ -773,3 +773,17 @@ def test_trace_lines는_읽기가_없으면_앞_걸음_넷과_gap을_적고_추�
     lines = flow.trace_lines(g2, ep)
     assert lines[:2] == ["api/r.py:L6 f0", "  → api/r.py:L7 f1"] and len(lines) == 6
     assert lines[-2].startswith("못 따라감 1:") and lines[-1] == "걸음 6 중 4만 적었다 — 읽기로 이어진 걸음이 없다"
+
+
+def test_traced_reads는_끝점의_추적_읽기를_종류별로_확실_먼저_준다():
+    """브리핑의 recompute 예시가 "그 끝점이 읽는 컬렉션"을 여기서 고른다 — 추정보다 확실이 앞이어야
+    리드가 대조할 컬렉션이 진짜로 그 코드가 읽는 것이 된다."""
+    g, ep = _traced_graph()
+    g["nodes"].append({"id": "collection_alarm_stats", "label": "alarm_stats", "type": "collection"})
+    g["links"].insert(0, {"source": ep, "target": "collection_alarm_stats", "relation": "reads", "origin": "trace",
+                          "confidence": "INFERRED", "via": "key", "step": 0,
+                          "source_file": "api/q.py", "source_location": "L2"})
+    # 추정 읽기가 더 앞 걸음(0)에 있어도 확실이 먼저다 — 걸음 순이 표시 순을 이기면 안 된다.
+    assert flow.traced_reads(g, ep, kind="collection") == ["alarm_events", "alarm_stats"]
+    assert flow.traced_reads(g, ep, kind="topic") == ["mx.alarm.main", "mx.alarm.raw"]
+    assert flow.traced_reads(g, "endpoint_nope", kind="collection") == []

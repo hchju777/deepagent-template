@@ -891,3 +891,95 @@ def test_원천_재집계는_mongo가_있는_사이트에서만_목록에_있다
     assert "- recompute.count(collection, filter, expect)" in briefing.action_catalog(site())
     assert "- recompute.sum(collection, filter, field, expect)" in briefing.action_catalog(site())
     assert "recompute" not in briefing.action_catalog(site(mongodb=None))
+
+
+# ── 사다리 셋째·넷째 칸 — rest 증거 뒤 code.trace, trace 증거 뒤 recompute (11b 3b-2) ──────────
+#
+# 목록에만 있고 예시에 없는 action은 베끼는 모델이 한 번도 안 낸다(10b). 그래서 **증거가 그 칸에
+# 닿은 라운드에** 그 칸을 예시 첫 줄로 보여 준다. 여기서는 진짜 값(path·증거 id)을 박는다 —
+# `supporting_ids`와 달리 그대로 베끼는 것이 정확히 원하는 출력이기 때문이다.
+
+def _traced_endpoint_graph():
+    g = _graph_with_endpoint()
+    ep = next(n for n in g["nodes"] if n["id"] == "endpoint_summary_badge")
+    ep.update({"traced": "ok", "chain": ["api/r.py:L6 badge", "api/q.py:L3 AlarmRepo.recent"],
+               "chain_parent": [None, 0], "gaps": []})
+    g["links"].append({"source": "endpoint_summary_badge", "target": "collection_alarm_events",
+                       "relation": "reads", "origin": "trace", "confidence": "EXTRACTED", "via": "literal",
+                       "step": 1, "source_file": "api/q.py", "source_location": "L3"})
+    return g
+
+
+def _rest_done(task_id="t-1"):
+    return task(task_id, action="rest.query", params={"entry": "summary_badge", "params": {}},
+                status="ok", result_evidence_ids=[f"{task_id}.e1"])
+
+
+def _trace_done(task_id="t-2"):
+    return task(task_id, role="code_tracer", action="code.trace", params={"target": "/summary/badge"},
+                status="ok", result_evidence_ids=[f"{task_id}.e1"])
+
+
+def _ladder(site_config, tasks, *, used=(), services=("api",), graph="traced", start=3):
+    g = {"traced": _traced_endpoint_graph(), "untraced": _graph_with_endpoint(), None: None}[graph]
+    return json.loads(briefing.example_block(site_config, phase="integrate", start=start, services=services,
+                                             used=used, tasks=tuple(tasks), flow_graph=g))["tasks"]
+
+
+def test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_수가_그_path의_code_trace다(case):
+    tasks = _ladder(site(), [_rest_done()], used=("rest.query",))
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("code.trace", {"target": "/summary/badge"})
+    assert tasks[0]["input_evidence_ids"] == ["t-1.e1"]
+    # 번호·순서는 예시의 다른 줄과 같은 규칙이다 — 사다리 수가 첫 줄이고 나머지가 뒤따른다.
+    assert [t["id"] for t in tasks] == [f"t-{3 + n}" for n in range(len(tasks))] and len(tasks) >= 2
+    assert [t["priority"] for t in tasks] == sorted(t["priority"] for t in tasks)
+    # 실제 배선으로 — integrate_fields가 State의 태스크와 그래프를 예시에 넘긴다.
+    state = CaseState(case=case, plan_tasks=[_rest_done()],
+                      evidence=[EvidenceRef(id="t-1.e1", source="rest.query entry='summary_badge'", summary="s")])
+    fields = briefing.integrate_fields(state, site_config=site(), max_rounds=4, services=("api",),
+                                       flow_graph=_traced_endpoint_graph())
+    assert json.loads(fields["example"])["tasks"][0]["action"] == "code.trace"
+
+
+def test_추적_안_된_끝점_그래프_없음_코드_없음이면_code_trace_예시가_없다():
+    """없는 문을 예시로 보여 주면 리드가 거기로 간다 — `code.trace`는 그 끝점의 사슬이 오버레이에 있을 때만."""
+    for kwargs in ({"graph": "untraced"}, {"graph": None}, {"services": ()}):
+        actions = [t["action"] for t in _ladder(site(), [_rest_done()], used=("rest.query",), **kwargs)]
+        assert "code.trace" not in actions, kwargs
+    # rest 증거가 없으면 출발점이 없다.
+    assert "code.trace" not in [t["action"] for t in _ladder(site(), [])]
+
+
+def test_이미_낸_code_trace는_다시_예시에_안_나온다():
+    tasks = _ladder(site(), [_rest_done(), task("t-2", role="code_tracer", action="code.trace",
+                                                   params={"target": "/summary/badge"}, status="error",
+                                                   error="x")], used=("rest.query", "code.trace"))
+    assert "code.trace" not in [t["action"] for t in tasks]
+
+
+def test_trace_증거가_있으면_다음_수가_그_끝점이_읽는_컬렉션의_recompute_count다():
+    """넷째 칸. 컬렉션은 그래프의 추적 읽기(확실 먼저)에서, 기대값은 **rest 증거 안의 위치**로 가리킨다 —
+    리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다(3b-1)."""
+    tasks = _ladder(site(), [_rest_done(), _trace_done()], used=("rest.query", "code.trace"))
+    first = tasks[0]
+    assert first["action"] == "recompute.count"
+    assert first["params"]["collection"] == "alarm_events"
+    assert first["params"]["filter"], "좁히는 모양이 없으면 리드는 filter={}로 전체를 센다"
+    assert first["params"]["expect"]["evidence"] == "t-1.e1"
+    assert first["params"]["expect"]["path"].startswith("response"), "rest 원본은 response 아래에 있다"
+    assert set(first["input_evidence_ids"]) == {"t-1.e1", "t-2.e1"}
+    assert "code.trace" not in [t["action"] for t in tasks]
+
+
+def test_recompute_예시는_이미_냈거나_mongo가_없으면_안_나온다():
+    done = [_rest_done(), _trace_done()]
+    assert "recompute.count" not in [t["action"] for t in _ladder(
+        site(), done, used=("rest.query", "code.trace", "recompute.count"))]
+    assert "recompute.count" not in [t["action"] for t in _ladder(
+        site(mongodb=None), done, used=("rest.query", "code.trace"))]
+
+
+def test_사다리_예시도_JSON이고_이_사이트에_없는_시스템을_안_쓴다():
+    for tasks_done in ([_rest_done()], [_rest_done(), _trace_done()]):
+        for t in _ladder(site(kafka=None), tasks_done, used=("rest.query", "code.trace")):
+            assert not t["action"].startswith("kafka.")

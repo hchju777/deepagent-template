@@ -153,3 +153,79 @@ async def test_대본으로_돈_조사에는_이름_기록이_안_남는다(tmp_
         initial_state(script, case_id="c-1", gbm="mx", fct="gumi",
                       clock=lambda: __import__("datetime").datetime(2026, 9, 14, 9)))
     assert final["llm_errors"] == []
+
+
+# ── 사다리 대본 — rest → code.trace → recompute.count (11b 3b-2) ─────────────────────
+
+LADDER_SEEDS = {
+    "rest": {"summary_badge": {"items": [{"group": "L1", "title": "Alarm", "alarm": 2, "caution": 0}]}},
+    "mongo": {"alarm_events": [{"line": "L1", "result": "alarm"}, {"line": "L1", "result": "alarm"},
+                               {"line": "L1", "result": "caution"}]},
+    "code": {"trace": {"/summary/badge": "api/r.py:L6 badge\n  → api/q.py:L3 AlarmRepo.recent — reads: "
+                                         "alarm_events [collection] 확실"}},
+}
+
+
+def _ladder_script():
+    return Script.model_validate({
+        "symptom": "배지가 전부 0이다",
+        "tasks": [
+            {"id": "t-1", "goal": "증상 재현", "role": "data_prober", "priority": 10,
+             "action": "rest.query", "params": {"entry": "summary_badge", "params": {}}},
+            {"id": "t-2", "goal": "그 끝점을 만드는 코드", "role": "code_tracer", "priority": 20,
+             "action": "code.trace", "params": {"target": "/summary/badge"}, "input_evidence_ids": ["t-1.e1"]},
+            {"id": "t-3", "goal": "원천에서 alarm 수를 다시 센다", "role": "recompute_verifier", "priority": 30,
+             "action": "recompute.count",
+             "params": {"collection": "alarm_events", "filter": {"result": "alarm"},
+                        "expect": {"evidence": "t-1.e1", "path": "response.items[0].alarm"}},
+             "input_evidence_ids": ["t-2.e1"]}],
+        "rounds": [{"decision": "continue"}, {"decision": "continue"}, {"decision": "continue"}]})
+
+
+async def test_사다리_대본이_게이트를_한_칸씩_거쳐_스텁으로_끝까지_돈다(clock):
+    """폭이 3이라 셋이 한 라운드에 다 돌 수 있는데도 한 라운드에 하나씩이다 — 각 칸의 입력 증거가 앞 칸이
+    만든 것이기 때문이다. 마지막 칸은 rest 증거의 **원본**에서 기대값을 꺼내 스텁 mongo의 수와 대조한다."""
+    from src.application.dryrun import build_deps, initial_state
+    from src.application.graph import build_engine
+    from src.application.runner_probe import ProbeRunner
+    from src.config.schema_app import InvestigationConfig
+    from src.infrastructure.factory import build_adapters
+    from tests.application.conftest import site_config
+
+    adapters = build_adapters(site_config(), clock=clock, seeds=LADDER_SEEDS)
+    deps = build_deps(_ladder_script(), runner=ProbeRunner(adapters, clock=clock),
+                      investigation=InvestigationConfig(max_rounds=5, parallel_width=3))
+    final = await build_engine(deps).ainvoke(
+        initial_state(_ladder_script(), case_id="c-1", gbm="mx", fct="gumi", clock=clock))
+    assert [e.id for e in final["evidence"]] == ["t-1.e1", "t-2.e1", "t-3.e1"]
+    assert final["round"] >= 3 and final["llm_errors"] == []
+    last = next(t for t in final["plan_tasks"] if t.id == "t-3")
+    assert last.status == "ok" and "'recomputed': 2" in last.result_summary and "'match': True" in last.result_summary
+
+
+def test_리포에_든_사다리_예제가_실제로_로드된다():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent.parent
+    script = load_script(root / "examples" / "case-ladder.json")
+    assert [t.action for t in script.tasks] == ["rest.query", "code.trace", "recompute.count"]
+    seeds = json.loads((root / "examples" / "stub-seeds.json").read_text(encoding="utf-8"))
+    assert "rest" in seeds and "code" in seeds
+
+
+def test_CLI가_사다리_대본을_돈다(tmp_path, capsys, monkeypatch):
+    from pathlib import Path
+
+    from src.__main__ import main
+
+    root = Path(__file__).resolve().parent.parent.parent
+    set_real_config_env(monkeypatch)
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(root / "config"), "--env-file", str(tmp_path / "none"),
+        "case", "dryrun", "--gbm", "mx", "--fct", "gumi",
+        "--plan", str(root / "examples" / "case-ladder.json"),
+        "--stub-seeds", str(root / "examples" / "stub-seeds.json")])
+    assert main() == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert "✅ t-3 [recompute_verifier]" in out
+    assert "'recomputed': 2" in out and "'expected': 0" in out and "'match': False" in out
+    assert "t-1.e1" in out and "t-2.e1" in out and "t-3.e1" in out

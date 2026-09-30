@@ -50,3 +50,13 @@ async def test_스텁_rest도_등재제를_지킨다(clock):
     rejected = await adapters.rest.query("delete_line", {})
     assert ok.status == "ok" and ok.data["response"] == {"lines": ["L3"]}
     assert rejected.status == "error" and "등재되지 않은" in rejected.error
+
+
+def test_seeds에_code_절이_있을_때만_스텁_코드를_조립하고_만들어진_것이_있으면_그것이_이긴다(clock):
+    """대본 실행에 코드 자리를 주되, 달라고 하지 않은 대본에 `code`가 생기면 안 된다 — 목록에 없는
+    시스템이 어댑터 묶음에 뜨는 것은 config가 아닌 곳에서 허용 범위가 넓어지는 일이다."""
+    assert build_adapters(SITE, clock=clock, seeds={}).code is None
+    stubbed = build_adapters(SITE, clock=clock, seeds={"code": {"trace": {"/lines": "x"}}})
+    assert type(stubbed.code).__name__ == "StubDeployedCode" and "code" in stubbed.available()
+    marker = object()
+    assert build_adapters(SITE, clock=clock, seeds={"code": {}}, code=marker).code is marker

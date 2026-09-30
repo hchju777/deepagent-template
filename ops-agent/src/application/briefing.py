@@ -337,6 +337,54 @@ def _free_rest_entry(site_config) -> tuple[str, dict] | None:
     return None
 
 
+def _done(tasks, action: str, **match):
+    """증거를 만든 **마지막** 태스크 — action이 같고 params가 `match`를 담은 것. 없으면 None."""
+    for t in reversed(tuple(tasks)):
+        if (t.action == action and t.status == "ok" and t.result_evidence_ids
+                and all(t.params.get(k) == v for k, v in match.items())):
+            return t
+    return None
+
+
+def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[str, ...],
+                 flow_graph: dict | None):
+    """사다리의 **다음 한 칸** — `((action, params), input_evidence_ids)` 또는 None.
+
+    rest 증거(증상 재현)가 있고 그 끝점의 사슬이 오버레이에 있으면 `code.trace(target=그 path)`, trace
+    증거까지 있으면 그 끝점이 읽는 컬렉션에 대한 `recompute.count(expect=그 rest 증거)`. 목록에만 있고
+    예시에 없는 action은 베끼는 모델이 한 번도 안 낸다(10b) — 셋째·넷째 칸이 사내 네 실행에서 0번이었다.
+
+    **진짜 값(path·증거 id)을 박는다.** `supporting_ids`가 모양만 보여 주는 것과 반대인데, 여기서는
+    그대로 베끼는 것이 정확히 원하는 출력이기 때문이다(frame의 `code.grep patterns=[path]`와 같은 선택).
+    한 라운드에 한 칸이다 — 다음 칸의 입력이 이 칸의 증거라서, 둘을 같이 보여 주면 뒤 칸은 게이트에
+    붙잡힌 채 번호만 쓴다. 없는 문은 안 보여 준다 — 그래프가 없거나 그 끝점이 추적 안 됐으면
+    `code.trace`는 error로 답하고, 리드는 그 라운드를 잃는다.
+    """
+    rest = _done(tasks, "rest.query")
+    path = _rest_path(site_config, (rest.action, rest.params)) if rest else None
+    if not path:
+        return None
+    rest_id = rest.result_evidence_ids[0]
+    traced = _done(tasks, "code.trace", target=path)
+    if traced is None:
+        if ("code.trace" in used or flow_graph is None or not _has(site_config, "code", services)
+                or flowgraph.trace_lines(flow_graph, flowgraph.endpoint_id(path)) is None):
+            return None
+        return ("code.trace", {"target": path}), [rest_id]
+    if "recompute.count" in used or not _has(site_config, "recompute", services):
+        return None
+    collections = (flowgraph.traced_reads(flow_graph, flowgraph.endpoint_id(path), kind="collection")
+                   if flow_graph is not None else [])
+    # `expect.path`는 지시문 모양이다 — rest 원본은 `{"request", "status", "response"}`라 `response` 아래에
+    # 있다는 것까지만 우리가 안다. 숫자를 옮겨 적게 하지 않는다(3b-1).
+    shape = ("recompute.count", {
+        "collection": collections[0] if collections else "위 추적 증거에서 본 컬렉션 이름",
+        "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},
+        "expect": {"evidence": rest_id,
+                   "path": "response 아래 그 숫자의 위치 — response.items[0].alarm 같은 모양"}})
+    return shape, [traced.result_evidence_ids[0], rest_id]
+
+
 def _task(index: int, action: str, params: dict, *, rank: int = 1, **extra) -> dict:
     # `priority`는 번호가 아니라 **이 라운드 안의 순서**를 따른다. 번호를 곱하면
     # 라운드가 깊어질수록 우선순위가 커져(늦어져) 앞 라운드의 잔여 태스크에 계속
@@ -369,12 +417,15 @@ def next_task_number(state: CaseState) -> int:
 def example_block(site_config, *, phase: str, start: int = 1,
                   services: tuple[str, ...] = (), used: tuple[str, ...] = (),
                   first_read: tuple[str, dict] | None = None,
-                  flow_graph: dict | None = None) -> str:
+                  flow_graph: dict | None = None, tasks=()) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
 
     `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
     똑같고, 모델은 그걸 그대로 복사해 **같은 질의를 다시 낸다** — 사내 측정에서
     t-8·t-9가 정확히 그랬다. 예시가 곧 명세라는 성질(10b)이 반대로 작동한 것이다.
+
+    `tasks`는 State의 태스크(integrate만) — 어느 증거까지 왔는지를 보고 사다리의 다음 칸을
+    첫 줄에 둔다(`_ladder_step`).
     """
     if phase == "frame":
         shapes: list[tuple[str, dict]] = []
@@ -421,6 +472,9 @@ def example_block(site_config, *, phase: str, start: int = 1,
             # 나가서 모델이 **그대로 부른다** — 이 파일 맨 위가 경고하는 그 실패다.
             entry = _free_rest_entry(site_config)
             shapes = [entry] if entry else []
+        ladder = _ladder_step(site_config, tasks, services=services, used=used, flow_graph=flow_graph)
+        lead = ([_task(start, ladder[0][0], ladder[0][1], rank=1, input_evidence_ids=ladder[1])]
+                if ladder else [])
         body = {"decision": "continue",
                 "hypotheses": [{"id": "h-1", "statement": "갱신한 가설 (한국어 한 문장)",
                                 "status": "supported",
@@ -432,8 +486,9 @@ def example_block(site_config, *, phase: str, start: int = 1,
                                 "supporting_ids": ["위 <모은 증거>에 실제로 있는 id "
                                                    "— `t-3.e1` 같은 모양"],
                                 "refuting_ids": []}],
-                "tasks": [_task(start + n, a, p, rank=n + 1, input_evidence_ids=[])
-                          for n, (a, p) in enumerate(shapes)]}
+                "tasks": lead + [_task(start + len(lead) + n, a, p, rank=len(lead) + n + 1,
+                                       input_evidence_ids=[])
+                                 for n, (a, p) in enumerate(shapes)]}
     return json.dumps(body, ensure_ascii=False, indent=2)
 
 
@@ -514,7 +569,8 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                                      start=next_task_number(state),
                                      services=services,
                                      used=tuple(t.action for t in state.plan_tasks
-                                                if t.action)),
+                                                if t.action),
+                                     tasks=tuple(state.plan_tasks), flow_graph=flow_graph),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state, budget=evidence_budget),

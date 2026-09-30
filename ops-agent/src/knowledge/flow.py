@@ -840,6 +840,29 @@ def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAP
     return lines
 
 
+_MARK_ORDER = {"확실": 0, "config키": 1, "추정": 2}
+
+
+def traced_reads(graph: dict, endpoint_id: str, *, kind: str | None = None) -> list[str]:
+    """그 끝점의 추적 읽기 대상 이름들 — 확실 → config키 → 추정, 같은 표시면 걸음 순. 브리핑의 recompute 예시가
+    "그 끝점이 읽는 컬렉션"을 여기서 고른다 — 추정을 앞세우면 리드가 대조할 컬렉션이 그 코드가 읽지도 않는
+    것이 될 수 있다."""
+    by_id = {n["id"]: n for n in graph.get("nodes", [])}
+    found: list[tuple[int, int, str]] = []
+    for e in graph.get("links", []):
+        if e.get("source") != endpoint_id or e.get("origin") != "trace" or e.get("target") not in by_id:
+            continue
+        target = by_id[e["target"]]
+        if kind is not None and target.get("type") != kind:
+            continue
+        found.append((_MARK_ORDER[read_mark(e)], int(e.get("step", -1)), target["label"]))
+    names: list[str] = []
+    for _, _, label in sorted(found):
+        if label not in names:
+            names.append(label)
+    return names
+
+
 # ── 끝점 (11c 커밋 5) ──────────────────────────────────────────────────────────
 # 사람이 적지 않는다. 우리 `rest.entries`의 path와 api 레포의 라우트 선언에서 만든다. 끝점에서
 # 자원으로 가는 reads 엣지는 여기서 만들지 않는다 — 핸들러를 따라가는 것은 11b 추적기의 일이다.

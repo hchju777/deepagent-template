@@ -46,8 +46,11 @@ def build_adapters(site: SiteConfig, *, clock: Clock,
                    seeds: dict[str, Any] | None = None, code=None) -> Adapters:
     infra = site.infra
     if seeds is not None:
-        from src.infrastructure.stubs import (StubKafkaInspector, StubMongoReader,
+        from src.infrastructure.stubs import (StubDeployedCode, StubKafkaInspector, StubMongoReader,
                                               StubRedisReader, StubRestProber)
+        if code is None and "code" in seeds:
+            # 대본이 `code` 절을 적었을 때만 — 달라고 하지 않은 실행에 코드 자리가 생기면 안 된다.
+            code = StubDeployedCode(seeds["code"], clock=clock)
         return Adapters(
             redis=StubRedisReader(seeds.get("redis"), clock=clock) if infra.redis else None,
             mongo=StubMongoReader(seeds.get("mongo"), clock=clock) if infra.mongodb else None,

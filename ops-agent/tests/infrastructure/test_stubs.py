@@ -37,3 +37,22 @@ async def test_group_offsets는_모르는_그룹에_lag_0을_지어내지_않는
     got = (await stub.group_offsets("no-such-group")).data
     assert got["partitions"] == [] and "total_lag" not in got
     assert "커밋된 오프셋이 없다" in got["note"]
+
+
+async def test_스텁_코드는_seed의_사슬만_주고_나머지는_없다고_한다():
+    """`case dryrun`이 rest → code.trace → recompute 사다리를 대상 레포 없이 돌리기 위한 자리. 사슬 본문은
+    사람이 seed에 적은 그대로다 — grep·read를 지어내면 리드(대본)가 그 위에 결론을 세운다."""
+    from src.domain.ports import DeployedCodePort
+    from src.infrastructure.stubs import StubDeployedCode
+
+    stub = StubDeployedCode({"trace": {"/summary/badge": "api/r.py:L6 badge\n  → api/q.py:L3 Repo.recent"}},
+                            clock=_clock)
+    assert isinstance(stub, DeployedCodePort)
+    got = await stub.trace("/summary/badge")
+    assert got.status == "ok" and got.data.splitlines()[0] == "api/r.py:L6 badge"
+    missing = await stub.trace("/nope")
+    assert missing.status == "error" and "/nope" in missing.error
+    for call in (stub.services(), stub.config("api"), stub.grep(["x"]), stub.flow("x"), stub.read("api", "a.py")):
+        result = await call
+        assert result.status == "error" and "스텁" in result.error
+    assert (await StubDeployedCode(None, clock=_clock).trace("/summary/badge")).status == "error"

@@ -10,7 +10,7 @@ from typing import Any
 
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
-from src.domain.ports import (KafkaInspectorPort, MongoReaderPort, RedisReaderPort,
+from src.domain.ports import (DeployedCodePort, KafkaInspectorPort, MongoReaderPort, RedisReaderPort,
                               RestProberPort)
 from src.infrastructure.mongo_reader import filter_problems, to_jsonable
 from src.infrastructure.rest_prober import prepare_params
@@ -160,6 +160,42 @@ class StubKafkaInspector(KafkaInspectorPort):
         messages = self._topics.get(topic, [])[-limit:]
         return ProbeResult.succeeded({"topic": topic, "messages": messages},
                                      source=f"stub-kafka:tail {topic}", clock=self._clock)
+
+
+class StubDeployedCode(DeployedCodePort):
+    """`case dryrun`의 코드 자리. **seed의 `trace`만 안다** — 사슬 본문은 사람이 적은 그대로 돌려주고, 나머지
+    (services·config·grep·flow·read)는 지어내지 않고 없다고 한다. 대본이 rest → code.trace → recompute
+    사다리를 대상 레포 없이 밟아 보기 위한 것이지, 코드 읽기를 흉내내는 것이 아니다 — 지어낸 grep 결과는
+    리드(대본)에게 증거다."""
+
+    def __init__(self, seeds: dict[str, Any] | None, *, clock: Clock):
+        self._trace = dict((seeds or {}).get("trace") or {})
+        self._clock = clock
+
+    def _none(self, source: str) -> ProbeResult:
+        return ProbeResult.failed("스텁에 준비된 응답이 없다 — seeds의 code 절은 trace만 받는다",
+                                  source=source, clock=self._clock)
+
+    async def services(self) -> ProbeResult:
+        return self._none("stub-code:services")
+
+    async def config(self, service: str) -> ProbeResult:
+        return self._none(f"stub-code:config {service}")
+
+    async def grep(self, patterns: list[str], service: str = "") -> ProbeResult:
+        return self._none(f"stub-code:grep {patterns}")
+
+    async def flow(self, name: str) -> ProbeResult:
+        return self._none(f"stub-code:flow {name}")
+
+    async def read(self, service: str, path: str) -> ProbeResult:
+        return self._none(f"stub-code:read {service} {path}")
+
+    async def trace(self, target: str) -> ProbeResult:
+        source = f"stub-code:trace {target}"
+        if target not in self._trace:
+            return ProbeResult.failed(f"{target}: 스텁에 준비된 사슬이 없다", source=source, clock=self._clock)
+        return ProbeResult.succeeded(str(self._trace[target]), source=source, clock=self._clock)
 
 
 class StubRestProber(RestProberPort):

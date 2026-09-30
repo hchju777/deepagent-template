@@ -4,7 +4,7 @@
 > file:line로** 받고, "그 결과가 원천과 맞는가"를 **코드가 센 숫자로** 받는다. 11c가 "어느
 > 서비스·어느 흐름"을 줬다면 11b는 "어느 함수 몇 줄"과 "맞나 틀리나"를 준다.
 >
-> 상태: 진행 중 (3a·3b-1 완료, 3b-2 다음). 앞: [11c](step-11c-flow.md) ✅. 뒤: **3b 뒤 서비스 추적**, 12a.
+> 상태: 진행 중 (3a·3b 완료). 앞: [11c](step-11c-flow.md) ✅. 뒤: **서비스 추적**(3b 뒤 첫 번째), 커밋 4 측정, 12a.
 > 결정의 근거는 [decisions ⑰](decisions.md).
 
 ## 왜 "서브에이전트 3종"이 LLM 루프가 아닌가
@@ -346,6 +346,34 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
   답하고 리드가 그 읽기를 다시 낸다 — 판단이 들어간 자리이고 문서에 이렇게 적는다.
 - `_sanitize_task`가 `expect.evidence`를 `input_evidence_ids`에 강제(규율 4) — select 게이트가 그 증거가
   생긴 뒤에만 돌린다. 목록에는 mongo가 있는 사이트에서만 보인다.
+
+#### 3b-2 ✅ — 브리핑 예시의 사다리 칸 · 대본 통합 시험
+
+10b에서 잰 성질 — 리드는 판단해서 고르는 게 아니라 **예시의 틀을 채운다** — 를 사다리에도 쓴다. 목록에만 있고
+예시에 없는 action은 안 나온다. 그래서 증거가 그 칸에 닿은 라운드에 그 칸을 integrate 예시 **첫 줄**로 둔다.
+
+- `briefing._ladder_step` — State의 태스크에서 어느 칸까지 왔는지를 읽는다. rest 증거(증상 재현)가 있고 그
+  끝점의 사슬이 오버레이에 있으면 `code.trace(target=그 path)`(입력 증거 = rest 증거). trace 증거까지 있으면
+  그 끝점의 추적 읽기 중 컬렉션(`flow.traced_reads`, 확실 → config키 → 추정)에 대한
+  `recompute.count(collection=그 컬렉션, filter=지시문, expect={"evidence": rest 증거 id, "path": 지시문})`
+  (입력 증거 = trace·rest 증거). 한 라운드에 한 칸 — 다음 칸의 입력이 이 칸의 증거라 둘을 같이 보여 주면 뒤
+  칸은 게이트에 붙잡힌 채 번호만 쓴다. `integrate_fields`가 `plan_tasks`와 그래프를 넘긴다.
+- **진짜 값(path·증거 id)을 박는다.** `supporting_ids`가 모양만 보여 주는 것과 반대다 — 여기서는 그대로 베끼는
+  것이 정확히 원하는 출력이다(frame의 `code.grep patterns=[path]`와 같은 선택). `expect.path`만 지시문이다:
+  rest 원본은 `{request, status, response}`라 `response` 아래라는 것까지만 우리가 안다. 숫자를 옮겨 적게 하지
+  않는 3b-1의 선택 그대로.
+- **없는 문은 안 보여 준다** — 그래프 없음·그 끝점 미추적·코드 없는 사이트면 `code.trace` 칸이 없고, mongo
+  없는 사이트거나 이미 냈으면 `recompute` 칸이 없다. 예시에 뜬 문이 error로 답하면 리드는 그 라운드를 잃는다.
+- 대본 통합 — `StubDeployedCode`(seeds의 `code.trace`만 안다, 나머지 읽기는 지어내지 않고 없다고 한다),
+  `build_adapters`는 seeds에 `code` 절이 있을 때만 그것을 조립한다. `examples/case-ladder.json`: 배지 0 vs
+  원천 alarm 문서 2 — 폭이 3인데도 세 라운드에 한 칸씩 돌고 마지막이 `recomputed 2 / expected 0 / match False`를
+  남긴다. `python -m src case dryrun --plan examples/case-ladder.json --stub-seeds examples/stub-seeds.json`.
+- 검증은 소비자로 — 리드가 받는 예시 JSON 원문과 `case dryrun` 출력을 직접 봤다.
+
+메모: ① 칸의 억제가 `used`(action 이름) 기준이라 다른 path의 `code.trace`를 냈어도 이 path의 칸이 안 보인다 —
+케이스당 출발 끝점이 하나인 지금은 문제가 아니다. ② 코드 없는 사이트(mongo만)에는 recompute 칸이 없다 —
+컬렉션을 고를 근거(추적)가 없어서다. 필요해지면 발견 읽기에서 고르는 규칙을 더한다. ③ 사내에서는 이 칸이
+실제로 리드의 출력이 되는지가 커밋 4의 T1·T3다.
 
 **후속 (3b 뒤 첫 번째): 서비스 추적.** 끝점이 없는 서비스(processor·sink)에 대해 ① 출발점(컨슈머 콜백·
 스케줄 잡 — 지식에 사람이 적는 편이 정확하다) ② 읽기뿐 아니라 쓰기 수집 ③ 함수 단위 `A —derives→ B`
