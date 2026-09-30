@@ -167,7 +167,7 @@ def test_레인은_action에서_정해진다():
 
 
 def test_code_trace가_등재돼_있다():
-    assert ACTIONS["code.trace"] == ("code", "trace", ("target",), ())
+    assert ACTIONS["code.trace"] == ("code", "trace", ("endpoint",), ())
 
 
 def test_원천_재집계가_등재돼_있다():

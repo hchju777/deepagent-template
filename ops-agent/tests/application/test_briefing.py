@@ -235,7 +235,7 @@ def test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀�
     with_graph = briefing.frame_fields(state, site_config=cfg, services=("sink",), flow_graph=FLOW_GRAPH)
     assert "code.flow" not in without["actions"] and "code.grep" in without["actions"]
     assert "- code.flow(name)" in with_graph["actions"]
-    assert "code.trace" not in without["actions"] and "- code.trace(target)" in with_graph["actions"]
+    assert "code.trace" not in without["actions"] and "- code.trace(endpoint)" in with_graph["actions"]
     assert "mx.alarm.main" in with_graph["flow"] and without["flow"].startswith("(없음")
 
 
@@ -916,7 +916,7 @@ def _rest_done(task_id="t-1"):
 
 
 def _trace_done(task_id="t-2"):
-    return task(task_id, role="code_tracer", action="code.trace", params={"target": "/summary/badge"},
+    return task(task_id, role="code_tracer", action="code.trace", params={"endpoint": "/summary/badge"},
                 status="ok", result_evidence_ids=[f"{task_id}.e1"])
 
 
@@ -928,7 +928,7 @@ def _ladder(site_config, tasks, *, used=(), services=("api",), graph="traced", s
 
 def test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_수가_그_path의_code_trace다(case):
     tasks = _ladder(site(), [_rest_done()], used=("rest.query",))
-    assert (tasks[0]["action"], tasks[0]["params"]) == ("code.trace", {"target": "/summary/badge"})
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("code.trace", {"endpoint": "/summary/badge"})
     assert tasks[0]["input_evidence_ids"] == ["t-1.e1"]
     # 번호·순서는 예시의 다른 줄과 같은 규칙이다 — 사다리 수가 첫 줄이고 나머지가 뒤따른다.
     assert [t["id"] for t in tasks] == [f"t-{3 + n}" for n in range(len(tasks))] and len(tasks) >= 2
@@ -952,9 +952,18 @@ def test_추적_안_된_끝점_그래프_없음_코드_없음이면_code_trace_�
 
 def test_이미_낸_code_trace는_다시_예시에_안_나온다():
     tasks = _ladder(site(), [_rest_done(), task("t-2", role="code_tracer", action="code.trace",
-                                                   params={"target": "/summary/badge"}, status="error",
+                                                   params={"endpoint": "/summary/badge"}, status="error",
                                                    error="x")], used=("rest.query", "code.trace"))
     assert "code.trace" not in [t["action"] for t in tasks]
+
+
+def test_다른_이름으로_낸_code_trace가_실패해도_그_path의_칸은_남는다():
+    """예비 판(on-1)에서 대역이 `endpoint`에 서비스 이름을 넣어 두 번 실패했고, 그 뒤로 예시에서 칸이 사라져
+    사다리를 끝내 못 밟았다. 억제는 action 이름이 아니라 **이 path로 낸 적이 있나**로 한다."""
+    tasks = _ladder(site(), [_rest_done(), task("t-2", role="code_tracer", action="code.trace",
+                                                   params={"endpoint": "sink"}, status="error", error="x")],
+                    used=("rest.query", "code.trace"))
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("code.trace", {"endpoint": "/summary/badge"})
 
 
 def test_trace_증거가_있으면_다음_수가_그_끝점이_읽는_컬렉션의_recompute_count다():

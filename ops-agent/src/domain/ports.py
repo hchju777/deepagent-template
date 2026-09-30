@@ -216,7 +216,7 @@ class DeployedCodePort(ABC):
         그래프가 없거나 낡았으면 실패로 답한다(호출부가 안 붙인다)."""
 
     @abstractmethod
-    async def trace(self, target: str) -> ProbeResult:
+    async def trace(self, endpoint: str) -> ProbeResult:
         """끝점 path에서 자원까지의 **함수 사슬**(11b) — `code graph`가 오버레이에 남긴 것을 읽는다. 조사 중에
         다시 추적하지 않는다(⑥). 그래프가 없거나 그 끝점이 추적되지 않았으면 실패로 답한다."""
 

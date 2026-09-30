@@ -99,20 +99,20 @@ class DeployedCode(DeployedCodePort):
             "\n".join(lines), source=source, clock=self._clock,
             truncated_reason=f"{left}줄 더 있다 — 관계가 많은 이름이다" if left else None)
 
-    async def trace(self, target: str) -> ProbeResult:
-        source = f"code.trace {target}"
+    async def trace(self, endpoint: str) -> ProbeResult:
+        source = f"code.trace {endpoint}"
         if self._flow_graph is None:
             return ProbeResult.failed("흐름 그래프가 없다 — `python -m src code graph`로 만든다",
                                       source=source, clock=self._clock)
-        node_id = flowgraph.endpoint_id(target)
+        node_id = flowgraph.endpoint_id(endpoint)
         if not any(n["id"] == node_id for n in self._flow_graph.get("nodes", [])):
             return ProbeResult.failed(
-                f"{target}: 그래프의 끝점에 없다 — 등재 항목의 path나 증거에 나온 path 그대로 써라",
+                f"{endpoint}: 그래프의 끝점에 없다 — 등재 항목의 path나 증거에 나온 path 그대로 써라",
                 source=source, clock=self._clock)
         lines = flowgraph.trace_lines(self._flow_graph, node_id)
         if lines is None:
             return ProbeResult.failed(
-                f"{target}: 추적이 안 된 끝점이다 — 라우트 선언을 못 찾았거나 서빙 서비스를 모른다. "
+                f"{endpoint}: 추적이 안 된 끝점이다 — 라우트 선언을 못 찾았거나 서빙 서비스를 모른다. "
                 f"code.grep으로 핸들러를 찾아 code.read로 본다", source=source, clock=self._clock)
         return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
 

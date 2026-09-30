@@ -191,11 +191,11 @@ class StubDeployedCode(DeployedCodePort):
     async def read(self, service: str, path: str) -> ProbeResult:
         return self._none(f"stub-code:read {service} {path}")
 
-    async def trace(self, target: str) -> ProbeResult:
-        source = f"stub-code:trace {target}"
-        if target not in self._trace:
-            return ProbeResult.failed(f"{target}: 스텁에 준비된 사슬이 없다", source=source, clock=self._clock)
-        return ProbeResult.succeeded(str(self._trace[target]), source=source, clock=self._clock)
+    async def trace(self, endpoint: str) -> ProbeResult:
+        source = f"stub-code:trace {endpoint}"
+        if endpoint not in self._trace:
+            return ProbeResult.failed(f"{endpoint}: 스텁에 준비된 사슬이 없다", source=source, clock=self._clock)
+        return ProbeResult.succeeded(str(self._trace[endpoint]), source=source, clock=self._clock)
 
 
 class StubRestProber(RestProberPort):

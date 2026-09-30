@@ -660,3 +660,28 @@ async def test_코드가_키_토큰을_템플릿으로_조립하면_그_머리�
     assert faces == {("SITE:g:x", 5, "key"), ("SITE:g:y", 5, "key")}
     a, _ = await _trace("/furnace/audit")
     assert _reads(a) == {("topic", "mx.alarm.main", "추정")}
+
+
+# ── 로컬 측정판의 가짜 api (tools/local_case.py) — 커밋 4가 T2·T6을 잴 수 있는 모양인가 ──────────
+
+async def test_측정판의_배지_핸들러는_캐시_키를_지나_컬렉션까지_닿고_getattr_gap_하나를_남긴다():
+    """사내 핸들러 모양(캐시 키 → 비면 저장소 조회, 형식은 getattr로 고름)이다. 예전 판은 redis만 읽어서
+    사슬이 컬렉션에 닿을 수 없었다 — 그 판으로는 "핸들러에서 컬렉션까지 이어지나"(T2)를 잴 수 없다."""
+    import json
+
+    from src.knowledge.flow import Route, names_from_config
+    from src.knowledge.schema import FlowSpec
+    from tests.knowledge.test_flow import merged
+    from tools.local_case import API_FILES
+
+    files = {p: (c if isinstance(c, str) else json.dumps(c)) for p, c in API_FILES.items()}
+    line = next(i for i, l in enumerate(files["api/alarms.py"].splitlines(), 1) if '@router.post("/badge")' in l)
+    src = _Source(files)
+    names = names_from_config(merged("dt-api"), FlowSpec().sources)
+    routes = [Route("dt-api", "POST", "/summary/badge", "api/alarms.py", line, "EXTRACTED", "")]
+    aliases = await trace.alias_index(names, src)
+    t = await trace.trace("/summary/badge", repo="dt-api", source=src, names=names, routes=routes, aliases=aliases)
+    assert t.status == "ok", t
+    assert {(r.kind, r.name, r.via) for r in t.reads} == {("collection", "alarm_events", "key"),
+                                                         ("rediskey", "alarm:stats:{line}", "key")}
+    assert len(t.gaps) == 1 and "getattr" in str(t.gaps[0]), t.gaps

@@ -346,11 +346,17 @@ def _done(tasks, action: str, **match):
     return None
 
 
+def _issued(tasks, action: str, **match) -> bool:
+    """그 action을 그 인자로 **낸 적이 있나** — 상태 불문. 실패한 시도도 낸 것이다."""
+    return any(t.action == action and all(t.params.get(k) == v for k, v in match.items())
+               for t in tasks)
+
+
 def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[str, ...],
                  flow_graph: dict | None):
     """사다리의 **다음 한 칸** — `((action, params), input_evidence_ids)` 또는 None.
 
-    rest 증거(증상 재현)가 있고 그 끝점의 사슬이 오버레이에 있으면 `code.trace(target=그 path)`, trace
+    rest 증거(증상 재현)가 있고 그 끝점의 사슬이 오버레이에 있으면 `code.trace(endpoint=그 path)`, trace
     증거까지 있으면 그 끝점이 읽는 컬렉션에 대한 `recompute.count(expect=그 rest 증거)`. 목록에만 있고
     예시에 없는 action은 베끼는 모델이 한 번도 안 낸다(10b) — 셋째·넷째 칸이 사내 네 실행에서 0번이었다.
 
@@ -359,18 +365,23 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
     한 라운드에 한 칸이다 — 다음 칸의 입력이 이 칸의 증거라서, 둘을 같이 보여 주면 뒤 칸은 게이트에
     붙잡힌 채 번호만 쓴다. 없는 문은 안 보여 준다 — 그래프가 없거나 그 끝점이 추적 안 됐으면
     `code.trace`는 error로 답하고, 리드는 그 라운드를 잃는다.
+
+    `code.trace` 칸의 억제는 action 이름(`used`)이 아니라 **이 path로 낸 적이 있나**다 — 예비 측정에서
+    대역이 `endpoint`에 서비스 이름을 넣어 두 번 실패했고, 이름 기준이었다면 그 뒤로 칸이 사라져 사다리를
+    끝내 못 밟는다(실제로 그랬다).
     """
     rest = _done(tasks, "rest.query")
     path = _rest_path(site_config, (rest.action, rest.params)) if rest else None
     if not path:
         return None
     rest_id = rest.result_evidence_ids[0]
-    traced = _done(tasks, "code.trace", target=path)
+    traced = _done(tasks, "code.trace", endpoint=path)
     if traced is None:
-        if ("code.trace" in used or flow_graph is None or not _has(site_config, "code", services)
+        if (_issued(tasks, "code.trace", endpoint=path) or flow_graph is None
+                or not _has(site_config, "code", services)
                 or flowgraph.trace_lines(flow_graph, flowgraph.endpoint_id(path)) is None):
             return None
-        return ("code.trace", {"target": path}), [rest_id]
+        return ("code.trace", {"endpoint": path}), [rest_id]
     if "recompute.count" in used or not _has(site_config, "recompute", services):
         return None
     collections = (flowgraph.traced_reads(flow_graph, flowgraph.endpoint_id(path), kind="collection")

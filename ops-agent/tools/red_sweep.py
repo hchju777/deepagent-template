@@ -866,7 +866,7 @@ CASES = [
   '    return "config키" if edge.get("via") == "key" else "추정"', '    return "추정"',
   ['tests/knowledge/test_flow.py::test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스가_온다', 'tests/knowledge/test_flow.py::test_trace_lines는_읽기로_이어진_걸음만_남기고_표시_셋으로_적는다']),
  ('추적 안 된 끝점을 code.trace가 실패로 안 답한다', ROOT / "src/infrastructure/deployed_code.py",
-  '        if lines is None:\n            return ProbeResult.failed(\n                f"{target}: 추적이 안 된 끝점이다', '        if False:\n            return ProbeResult.failed(\n                f"{target}: 추적이 안 된 끝점이다',
+  '        if lines is None:\n            return ProbeResult.failed(\n                f"{endpoint}: 추적이 안 된 끝점이다', '        if False:\n            return ProbeResult.failed(\n                f"{endpoint}: 추적이 안 된 끝점이다',
   ['tests/infrastructure/test_deployed_code.py::test_code_trace는_붙인_그래프의_끝점_사슬을_주고_없으면_실패로_답한다']),
  ('code.* 레인이 data_prober다', ROOT / "src/domain/actions.py",
   '    if action.startswith("code."):\n        return "code_tracer"', '    if False:\n        return "code_tracer"',
@@ -921,7 +921,7 @@ CASES = [
   'if "recompute.count" in used or not _has(site_config, "recompute", services):', 'if False:',
   ['tests/application/test_briefing.py::test_recompute_예시는_이미_냈거나_mongo가_없으면_안_나온다']),
  ('code.trace 예시의 입력 증거가 비어 있다', ROOT / "src/application/briefing.py",
-  'return ("code.trace", {"target": path}), [rest_id]', 'return ("code.trace", {"target": path}), []',
+  'return ("code.trace", {"endpoint": path}), [rest_id]', 'return ("code.trace", {"endpoint": path}), []',
   ['tests/application/test_briefing.py::test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_수가_그_path의_code_trace다']),
  ('recompute 예시의 컬렉션이 추적 읽기에서 안 온다', ROOT / "src/application/briefing.py",
   'traced_reads(flow_graph, flowgraph.endpoint_id(path), kind="collection")',
@@ -940,6 +940,10 @@ CASES = [
  ('seeds의 code 절이 스텁 코드를 안 만든다', ROOT / "src/infrastructure/factory.py",
   'if code is None and "code" in seeds:', 'if False:',
   ['tests/infrastructure/test_factory.py::test_seeds에_code_절이_있을_때만_스텁_코드를_조립하고_만들어진_것이_있으면_그것이_이긴다']),
+ ('다른 path로 낸 code.trace가 실패하면 칸이 사라진다', ROOT / "src/application/briefing.py",
+  '        if (_issued(tasks, "code.trace", endpoint=path) or flow_graph is None',
+  '        if ("code.trace" in used or flow_graph is None',
+  ['tests/application/test_briefing.py::test_다른_이름으로_낸_code_trace가_실패해도_그_path의_칸은_남는다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -967,7 +971,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 246, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 247, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

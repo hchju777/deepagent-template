@@ -173,7 +173,7 @@ def _ladder_script():
             {"id": "t-1", "goal": "증상 재현", "role": "data_prober", "priority": 10,
              "action": "rest.query", "params": {"entry": "summary_badge", "params": {}}},
             {"id": "t-2", "goal": "그 끝점을 만드는 코드", "role": "code_tracer", "priority": 20,
-             "action": "code.trace", "params": {"target": "/summary/badge"}, "input_evidence_ids": ["t-1.e1"]},
+             "action": "code.trace", "params": {"endpoint": "/summary/badge"}, "input_evidence_ids": ["t-1.e1"]},
             {"id": "t-3", "goal": "원천에서 alarm 수를 다시 센다", "role": "recompute_verifier", "priority": 30,
              "action": "recompute.count",
              "params": {"collection": "alarm_events", "filter": {"result": "alarm"},

@@ -7,10 +7,11 @@ config 층이 든 가짜 git 레포 둘, stub seed, 케이스 레코드. 리드 
 (사람, 다른 모델) `turns/NNN-ask.md`를 읽고 `NNN-reply.md`를 써 주면 된다.
 
 **여기 이름은 전부 지어낸 것이다**(decisions ⑮ — 사내 실물 이름을 테스트 데이터에 넣지
-않는다). 심은 고장은 하나다: sink 컨슈머 그룹이 멈춰 lag가 쌓이고, `alarm_events`에 새
-문서가 안 들어오고, API 화면에 알람이 안 올라온다. 토픽에는 새 메시지가 계속 온다.
+않는다). 심은 고장은 기본이 하나다: sink 컨슈머 그룹이 멈춰 lag가 쌓이고, `alarm_events`에
+새 문서가 안 들어오고, API 화면에 알람이 안 올라온다. 토픽에는 새 메시지가 계속 온다.
+`--variant`로 고장의 자리를 바꾼다(`VARIANTS`) — 원천 재집계의 일치/불일치를 재는 데 쓴다.
 
-    .venv/bin/python tools/local_case.py --root output/local-case
+    .venv/bin/python tools/local_case.py --root output/local-case [--variant cache-stale]
 """
 import argparse
 import json
@@ -102,9 +103,11 @@ API_FILES = {
         "infra": {"mongodb": {"database": "data"}},
         "mongodb_collection": {"alarm": {"collection": "alarm_events", "ttl": 3}},
         "redis_key": {"alarm_stats": {"key": "alarm:stats:{line}", "ttl": 30}},
-        "api": {"alarm_window_min": 60}},
+        "api": {"alarm_window_min": 60, "badge_format": "compact"}},
     "config/factories/gumi/common.json": {"lines": LINES},
-    "api/alarms.py": '''"""알람 화면 — 최근 alarm_window_min 분의 alarm_events와 alarm:stats:{line} 배지."""
+    # 사내 핸들러 모양(2026-09 확인): 캐시 키를 먼저 보고, 비면 저장소를 조회하고, 형식 같은 것은
+    # config 이름으로 getattr해 고른다. 캐시만 읽는 핸들러로는 "핸들러에서 컬렉션까지 이어지나"를 잴 수 없다.
+    "api/alarms.py": '''"""알람 화면 — alarm:stats:{line} 배지. 캐시가 비면 최근 alarm_window_min 분의 alarm_events에서 센다."""
 
 
 router = APIRouter(prefix="/summary")
@@ -112,16 +115,29 @@ router = APIRouter(prefix="/summary")
 
 @router.post("/badge")
 def summary_badge(cfg, mongo, redis):
-    return {line: badge(cfg, redis, line) for line in cfg["lines"]}
+    return {line: badge(cfg, mongo, redis, line) for line in cfg["lines"]}
+
+
+def badge(cfg, mongo, redis, line):
+    cached = redis.get(cfg["redis_key"]["alarm_stats"]["key"].format(line=line))
+    counts = cached or count_recent(cfg, mongo, line)
+    render = getattr(formatters, cfg["api"]["badge_format"])
+    return render(counts)
+
+
+def count_recent(cfg, mongo, line):
+    coll = cfg["mongodb_collection"]["alarm"]["collection"]
+    since = window_start(cfg["api"]["alarm_window_min"])
+    return {"alarm": mongo[coll].count_documents({"line": line, "occ_date": {"$gte": since}})}
+
+
+def window_start(minutes):
+    return now() - timedelta(minutes=minutes)
 
 
 def recent_alarms(cfg, mongo, since):
     coll = cfg["mongodb_collection"]["alarm"]["collection"]
     return list(mongo[coll].find({"occ_date": {"$gte": since}}).sort("occ_date", -1))
-
-
-def badge(cfg, redis, line):
-    return redis.get(cfg["redis_key"]["alarm_stats"]["key"].format(line=line))
 ''',
 }
 
@@ -130,7 +146,20 @@ def _iso(t: datetime) -> str:
     return t.replace(microsecond=0).isoformat()
 
 
-def _seeds(now: datetime) -> dict:
+# 변형은 **어느 홉이 깨졌나**가 다르다. 11b 커밋 4의 T3가 이 셋으로 recompute의 일치/불일치를 잰다 —
+# 고장이 컬렉션 상류(sink-stopped)면 배지와 컬렉션이 **일치**하는 것이 정상이고, 컬렉션과 화면 사이
+# (cache-stale)면 불일치가 나야 한다. healthy는 대조군.
+VARIANTS = {
+    "sink-stopped": "sink 컨슈머 정지 — 토픽엔 새 메시지, 컬렉션·캐시·화면은 4시간째 옛것",
+    "cache-stale": "sink는 컬렉션에 쓰는데 stats 캐시를 안 갱신 — 컬렉션은 최신, 캐시·화면은 옛것",
+    "healthy": "고장 없음 — 배지가 창 안 문서 수와 같다",
+}
+_FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
+
+
+def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
+    if variant not in VARIANTS:
+        raise ValueError(f"모르는 변형 — {variant}. 있는 것: {', '.join(VARIANTS)}")
     stale = now - timedelta(hours=4, minutes=5)
     docs = []
     for i in range(6):
@@ -138,9 +167,19 @@ def _seeds(now: datetime) -> dict:
         docs.append({"_id": f"al-{i + 1:03d}", "line": LINES[i % 3], "occ_date": _iso(t),
                      "alarm_code": f"A{110 + i}", "level": ["minor", "major"][i % 2],
                      "sent_yn": i % 2 == 0})
+    sink_alive = variant != "sink-stopped"
+    if sink_alive:
+        n = len(docs)
+        for line, count in _FRESH_PER_LINE.items():
+            for k in range(count):
+                n += 1
+                docs.append({"_id": f"al-{n:03d}", "line": line, "occ_date": _iso(now - timedelta(minutes=5 + 11 * k)),
+                             "alarm_code": f"A{300 + n}", "level": "minor", "sent_yn": False})
+    stats_fresh = variant == "healthy"
+    counts = {l: (_FRESH_PER_LINE[l] if stats_fresh else 0) for l in LINES}
     fresh = lambda m: _iso(now - timedelta(minutes=m))     # noqa: E731
     return {
-        "_설명": "tools/local_case.py가 만든 가짜 데이터. sink가 멈춘 상황.",
+        "_설명": f"tools/local_case.py가 만든 가짜 데이터. 변형 {variant}: {VARIANTS[variant]}.",
         "mongo": {
             "alarm_events": docs,
             "line_state": [{"line": l, "status": "RUN", "updated_at": fresh(1)} for l in LINES]},
@@ -152,14 +191,16 @@ def _seeds(now: datetime) -> dict:
         # 그룹은 레포당 하나라 processor·sink가 공유한다 — lag만으로는 누가 멈췄는지 모른다.
         # 그룹은 레포 공유라 processor(raw)와 sink(main)가 같은 이름이다. 실제 Kafka는
         # 토픽별로 답하고, 어느 토픽이 밀리는지가 두 서비스를 가르는 유일한 숫자다.
-        "lags": {"gumi-mx-core": {"mx.alarm.main": 1830, "mx.alarm.raw": 0}},
+        "lags": {"gumi-mx-core": {"mx.alarm.main": 0 if sink_alive else 1830, "mx.alarm.raw": 0}},
         "redis": {
-            **{f"alarm:stats:{l}": json.dumps({"count_1h": 0, "updated_at": _iso(stale)}) for l in LINES},
-            "hb:processor": fresh(0), "hb:sink": _iso(stale)},
+            **{f"alarm:stats:{l}": json.dumps({"count_1h": counts[l],
+                                               "updated_at": fresh(1) if stats_fresh else _iso(stale)})
+               for l in LINES},
+            "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게
         # "API가 죽었다"로 읽힌다(첫 로컬 실행에서 `prod_status`가 그랬다).
         "rest": {"lines": LINES,
-                 "summary_badge": {l: {"alarm": 0, "caution": 0, "normal": 3} for l in LINES},
+                 "summary_badge": {l: {"alarm": counts[l], "caution": 0, "normal": 3} for l in LINES},
                  "prod_status": [{"line_code": l, "status": "RUN", "updated_at": fresh(1)} for l in LINES],
                  "oee_summary": {"line": "L3", "oee": 0.87, "date": _iso(now)[:10]}},
     }
@@ -169,6 +210,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=Path("output/local-case"))
     ap.add_argument("--case-id", default="c-local-1")
+    ap.add_argument("--variant", default="sink-stopped", choices=sorted(VARIANTS),
+                    help="심은 고장 — " + " / ".join(f"{k}: {v}" for k, v in VARIANTS.items()))
     args = ap.parse_args()
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -201,7 +244,7 @@ def main() -> int:
 
     # 이 도구는 CLI 경계다 — 가짜 데이터의 "지금"은 실제 지금이어야 stub의 $gte가 뜻을 가진다.
     now = datetime.now()
-    _write(root, "seeds.json", _seeds(now))
+    _write(root, "seeds.json", _seeds(now, args.variant))
     _write(root, ".env", "\n".join(f"{k}=local-dummy" for k in (
         "MONGO_PASSWORD", "REDIS_PASSWORD", "MAIL_AGENT_ID", "MAIL_AGENT_API_KEY")))
 
@@ -219,7 +262,7 @@ def main() -> int:
         stale.unlink()
 
     py = Path(sys.executable)
-    print(f"측정판: {root}\n")
+    print(f"측정판: {root} — 변형 {args.variant}: {VARIANTS[args.variant]}\n")
     print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} code graph      # 흐름 그래프(+graphify)")
     print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} code flow processor --to sink")
     print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} "

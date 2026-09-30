@@ -64,7 +64,9 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     "code.flow":           ("code",  "flow",          ("name",),               ()),
     # 끝점에서 자원까지의 함수 사슬(11b). `target`은 등재 항목의 path나 증거에 나온 path 그대로다.
     # 조사 중에 추적하지 않는다 — `code graph`가 남긴 것을 읽는다. 그래프가 없으면 목록에 안 나온다.
-    "code.trace":          ("code",  "trace",         ("target",),             ()),
+    # 인자 이름이 `endpoint`인 이유: 예비 측정에서 대역이 `target`에 서비스 이름을 넣었다 — 목록 한 줄이 리드가
+    # 보는 시그니처 전부라, 이름이 곧 설명이다.
+    "code.trace":          ("code",  "trace",         ("endpoint",),           ()),
     # ── 원천 재집계(11b 3b). `expect`는 앞선 증거 **안의 값 위치**(`{"evidence": "t-1.e1", "path":
     # "items[0].n"}`)다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다. 실행기
     # (`ProbeRunner`)가 가로채 자기가 보관한 원본에서 값을 꺼낸다. `_sanitize_task`가 `expect.evidence`를

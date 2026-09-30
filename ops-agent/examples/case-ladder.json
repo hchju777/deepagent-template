@@ -36,7 +36,7 @@
       "priority": 20,
       "action": "code.trace",
       "params": {
-        "target": "/summary/badge"
+        "endpoint": "/summary/badge"
       },
       "input_evidence_ids": [
         "t-1.e1"

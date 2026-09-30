@@ -4,7 +4,7 @@
 > file:line로** 받고, "그 결과가 원천과 맞는가"를 **코드가 센 숫자로** 받는다. 11c가 "어느
 > 서비스·어느 흐름"을 줬다면 11b는 "어느 함수 몇 줄"과 "맞나 틀리나"를 준다.
 >
-> 상태: 진행 중 (3a·3b 완료). 앞: [11c](step-11c-flow.md) ✅. 뒤: **서비스 추적**(3b 뒤 첫 번째), 커밋 4 측정, 12a.
+> 상태: 진행 중 (3a·3b·커밋 4 측정 완료). 앞: [11c](step-11c-flow.md) ✅. 뒤: **서비스 추적**(측정이 근거를 줬다), 12a.
 > 결정의 근거는 [decisions ⑰](decisions.md).
 
 ## 왜 "서브에이전트 3종"이 LLM 루프가 아닌가
@@ -281,7 +281,7 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
 - **`flow.trace_lines`** — 읽기가 난 걸음의 조상만 남긴 트리. 읽기는 걸음 옆에 `확실`·`config키`·`추정`
   (2f 뒤의 1안: 등급은 그대로, 표시만 가른다 — `read_mark`), gap은 셋 + 개수, 꼬리에 "걸음 N 중 M".
   읽기가 하나도 없는 끝점은 앞 걸음 넷과 gap. 블록의 끝점 줄도 `reads:`/`reads(config키):`/`reads(추정):`.
-- **`code.trace(target)`** — `DeployedCodePort.trace` 추상(표면 테스트가 자동으로 지킨다), 구현은
+- **`code.trace(endpoint)`** — `DeployedCodePort.trace` 추상(표면 테스트가 자동으로 지킨다), 구현은
   오버레이를 읽는다(조사 중 재추적 없음, ⑥). 그래프가 없으면 `code.flow`처럼 목록에서 숨긴다. 끝점이
   없으면·추적이 안 됐으면 실패로 답하고 다음 손(`code.grep`→`code.read`)을 적는다.
 - **레인** — `role_for`: `code.*` → code_tracer, `recompute.*` → recompute_verifier, 나머지 data_prober.
@@ -353,7 +353,7 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
 예시에 없는 action은 안 나온다. 그래서 증거가 그 칸에 닿은 라운드에 그 칸을 integrate 예시 **첫 줄**로 둔다.
 
 - `briefing._ladder_step` — State의 태스크에서 어느 칸까지 왔는지를 읽는다. rest 증거(증상 재현)가 있고 그
-  끝점의 사슬이 오버레이에 있으면 `code.trace(target=그 path)`(입력 증거 = rest 증거). trace 증거까지 있으면
+  끝점의 사슬이 오버레이에 있으면 `code.trace(endpoint=그 path)`(입력 증거 = rest 증거). trace 증거까지 있으면
   그 끝점의 추적 읽기 중 컬렉션(`flow.traced_reads`, 확실 → config키 → 추정)에 대한
   `recompute.count(collection=그 컬렉션, filter=지시문, expect={"evidence": rest 증거 id, "path": 지시문})`
   (입력 증거 = trace·rest 증거). 한 라운드에 한 칸 — 다음 칸의 입력이 이 칸의 증거라 둘을 같이 보여 주면 뒤
@@ -370,8 +370,10 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
   남긴다. `python -m src case dryrun --plan examples/case-ladder.json --stub-seeds examples/stub-seeds.json`.
 - 검증은 소비자로 — 리드가 받는 예시 JSON 원문과 `case dryrun` 출력을 직접 봤다.
 
-메모: ① 칸의 억제가 `used`(action 이름) 기준이라 다른 path의 `code.trace`를 냈어도 이 path의 칸이 안 보인다 —
-케이스당 출발 끝점이 하나인 지금은 문제가 아니다. ② 코드 없는 사이트(mongo만)에는 recompute 칸이 없다 —
+메모: ① `code.trace` 칸의 억제는 **이 path로 낸 적이 있나**(상태 불문)다. 처음엔 action 이름(`used`)
+기준이었는데 커밋 4 예비 판에서 대역이 `endpoint`에 서비스 이름을 넣어 두 번 실패하자 칸이 사라져 사다리를 끝내
+못 밟았다 — 인자 이름도 그때 `target`에서 `endpoint`로 바꿨다(목록 한 줄이 리드가 보는 시그니처 전부다).
+② 코드 없는 사이트(mongo만)에는 recompute 칸이 없다 —
 컬렉션을 고를 근거(추적)가 없어서다. 필요해지면 발견 읽기에서 고르는 규칙을 더한다. ③ 사내에서는 이 칸이
 실제로 리드의 출력이 되는지가 커밋 4의 T1·T3다.
 
@@ -396,6 +398,64 @@ Protocol은 언어 정의가 구조적이다(PEP 544): 선언한 메서드를 �
 | T7 | 최종 가설이 부품 하나를 짚는가, "A 또는 B"인가 | 하나 |
 
 토큰 배율은 재지 않는다(11c와 같은 이유 — 병목은 방향이다).
+
+### 커밋 4 결과 — 켬 3 · 끔 3 (하네스 `f7eaf64` + 아래 예비 판의 두 픽스)
+
+**판.** `tools/local_case.py`(변형 sink-stopped). 가짜 api의 배지 핸들러를 사내 모양(캐시 키 → 비면 저장소
+조회, 화면 형식은 getattr로 고름)으로 고쳐 사슬이 컬렉션에 닿게 했다 — 예전 판은 redis만 읽어 T2·T6을 잴 수
+없었다. **켬** = `code graph`의 오버레이 그대로. **끔** = 같은 번들에서 추적(노드의 chain·gaps, trace 엣지)만
+벗긴 것 — 11c 상태. 목록의 `code.trace`·`recompute` 줄은 끔에도 남는다("예시에 없으면 안 낸다"가 3b-2의
+주장이라 그 자체를 잰다). 대역은 턴마다 새 haiku 에이전트(ask 파일만 읽고 reply 파일만 쓴다, 11a·11c와 같다).
+
+**예비 판(pre-on-1·pre-off-1) — 표에 안 넣는다, 하네스가 다르다.** 켬의 r1 예시가 `code.trace target=/summary/badge`를
+보여 줬는데 대역은 `target=sink`·`target=processor`로 두 번 냈고(둘 다 "끝점에 없다"), 그 뒤로 예시에서 칸이
+사라져(억제가 action 이름 기준) 사다리를 끝내 못 밟았다. 둘을 고치고 다시 쟀다 — 인자 이름 `target` →
+`endpoint`(목록 한 줄이 리드가 보는 시그니처 전부다), 칸의 억제는 "이 path로 낸 적이 있나"(상태 불문). 그리고
+그 두 시도는 **끝점이 없는 서비스를 추적하고 싶다**는 뜻이었다 — 아래 서비스 추적 항목.
+
+| # | 기대 | 결과 |
+|---|---|---|
+| T1 | `code.trace` r1 이내 | 켬 **r1 · r1 · r0** (3/3). 끔에서도 목록만 보고 off-1이 r3에 냈고(추적 없어 error), off-3은 r0에 `code.flow(/summary/badge)` |
+| T2 | 이어진다, `확실` | 이어진다(`summary_badge → badge → count_recent`, `alarm:stats:{line}`·`alarm_events`). 등급은 **config키**(INFERRED via key). "확실"은 2f의 표시 분리 전에 적은 기대다 — config 키로 컬렉션을 고르는 코드는 원리상 config키가 맞다. 기대를 정정 |
+| T3 | 고장 심으면 불일치 / 아니면 일치 | **도구**(dryrun, 예고에서 재해석한 대로): sink-stopped **일치** 0=0 · cache-stale **불일치** 2≠0 · healthy **일치** 2=2. **리드**: `recompute.count`를 낸 판 **0/3** — r2~r3 예시에 있었는데도 셋 다 같은 뜻을 `mongo.count`/`mongo.find occ_date $gte`로 직접 냈다 |
+| T4 | sink를 처음 짚는 라운드 — 11c 기준선(2·4·없음)보다 앞 | 켬 **r2 · r2 · r1** (on-1은 "processor/sink" 병기, sink 단독은 r4) / 끔 **r5 · 없음 · r2** |
+| T5 | 지어낸 이름 — 기준선 이하 | 켬 1·1·2 / 끔 1·3·0 (손으로 셈). 계측기는 7건 중 **1건**(`alarm-processor`)만 잡았다 — 레포·서비스 이름을 그룹으로 댄 것(`dt-core`·`dt-core-sink`·`processor`)과 템플릿을 엉뚱하게 채운 키(`alarm:stats:gumi`·`…:gumi_line`)는 아는 이름으로 친다 → ⑤ |
+| T6 | 추적기가 gap을 남기고 / 리드가 그 자리를 `code.read` | 남긴다(`api/alarms.py:L15 getattr…`, r2 프롬프트에 실림) / 그 자리를 낸 판 **0/3** — 셋 다 sink 코드로 갔다(`code.read sink/writer.py` 두 판). gap이 증상과 무관한 가지(화면 형식)라 리드의 선택이 틀리지 않다 |
+| T7 | 최종 가설이 부품 하나 | 켬 **3/3 sink 하나** / 끔 sink 하나 1(off-3), processor+sink 병기 1(off-1), **processor 오답** 1(off-2) |
+
+| 판 | sink 지목 | 최종 | `group_offsets gumi-mx-core` | 지어낸 이름 | `code.trace` | 원천 재집계 | 종료 |
+|---|---|---|---|---|---|---|---|
+| on-1 | r2 (단독 r4) | sink | r5 (r3엔 `dt-core`) | 1 | r1 | — (r2 `find occ_date $gt`) | r6 상한 |
+| on-2 | r2 | sink | r4 (r3엔 `dt-core-sink`) | 1 | r1 | — (r2 `find occ_date $gte`) | r6 상한 |
+| on-3 | r1 | sink | 없음 (r3 `dt-core-sink`) | 2 | r0 | — (r2 `count occ_date $gte`) | r4 conclude |
+| off-1 | r5 (r2엔 sink **refuted**) | processor+sink | r3 | 1 | r3 (error) | — | r5 conclude |
+| off-2 | 없음 | **processor (오답)** | r4 (r3엔 `processor`) | 3 | — | — | r6 상한 |
+| off-3 | r2 | sink | r3 | 0 | — | — | r5 conclude |
+
+읽는 법:
+
+- **정답률 켬 3/3, 끔 1.5/3.** sink 지목 중앙값 켬 r2 / 끔 r5. 끔(5·없음·2)이 11c 기준선(2·4·없음)과 같은
+  급이고 켬이 앞이다. n=3, haiku 대역, 상한이지 예측이 아니다(11a).
+- **켬이 앞선 자리는 "API가 잘못 읽는다"를 닫는 라운드다.** `code.trace`가 r1에 "끝점은 캐시를 보고 비면
+  컬렉션을 센다"를 주니 그 가설이 r2~r3에 닫혔다(on-1 h-2 refuted r3, on-2 "0은 증상" r2). 끔은 끝까지
+  supported로 남거나(off-1 h-1) 사슬 없이 processor로 샜다(off-2). 사다리 둘째 칸의 값이 이것이다.
+- **원천 재집계는 안 냈다(0/3).** 예시를 셋 다 봤는데 같은 뜻을 익숙한 읽기로 냈다. 두 가지가 보인다 —
+  ① 예시의 `filter` 자리가 "위 증거에서 본 필드 이름: 찾으려는 값"이라 **창**(`occ_date $gte`)의 모양이 안
+  보이는데 리드가 원한 것은 창이었다. ② 기대값(배지 0)이 사소해 대조의 값이 안 보였다 — 이 도구의 의의
+  (표본으로 못 세는 전체 수, 기계의 대조)는 표본이 큰 사내에서 드러난다. 예시 모양을 이 판에 맞춰 바꾸는 것은
+  튜닝이라 안 한다(⑮) — 사내 첫 실행에서 다시 본다.
+- **공유 그룹 lag 오독(11c l-3)이 off-2에서 재현됐다.** `mx.alarm.main` lag 1830을 processor 것으로 읽어
+  processor를 원인으로 찍었다. 켬 셋은 전부 sink로 읽었다 — 트레이스 덕인지 `<데이터 흐름>`의 consumes 줄과
+  사다리의 결과인지 n=3으로는 못 가른다.
+- **서비스 추적 수요가 실측으로 나왔다.** 예비 판의 `code.trace target=sink/processor`, on-1의 `code.flow dt-core`,
+  `code.read sink/writer.py`(on-1·on-2·off-2·off-3), off-2의 컨슈머 설정 grep 넷. 리드는 끝점이 없는 서비스의
+  코드를 따라가고 싶어 하고 지금은 grep·read로 더듬는다. 후속 "서비스 추적"의 근거다.
+- 계측기 메모: 대역 한 턴이 "썼다"고 하고 파일이 없어 새 에이전트로 다시 돌렸다(11c ④와 같다). `code trace`
+  CLI는 번들의 `graph.json`을, 리드는 `overlay.json`을 읽는다 — 내용이 같아 문제는 아니지만 끔 판을 만들 때
+  둘 다 벗겨야 했다. 한 파일로 모으는 것이 맞다(백로그).
+
+**후속.** ⑤ 이름 검사를 인자 종류별로 + 템플릿 채움 검사(T5의 계측기 구멍, 7건 중 1건). 원천 재집계 예시의
+`filter` 모양은 사내 첫 실행 뒤에. 번들의 그래프 파일 단일화. 그리고 **서비스 추적**.
 
 ## 범위 밖
 
