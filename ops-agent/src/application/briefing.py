@@ -77,7 +77,8 @@ def action_catalog(site_config, *, services: tuple[str, ...] = (),
 
 
 # 어댑터 이름 → SiteConfig.infra의 필드 이름. 둘이 다른 것은 `mongodb` 하나뿐이다.
-_INFRA_FIELD = {"redis": "redis", "mongo": "mongodb", "kafka": "kafka", "rest": "rest"}
+# `recompute`는 우리 실행기지만 mongo로 센다 — mongo가 없는 사이트에서는 목록에 없다.
+_INFRA_FIELD = {"redis": "redis", "mongo": "mongodb", "kafka": "kafka", "rest": "rest", "recompute": "mongodb"}
 
 
 def _args(required: tuple, optional: tuple) -> str:

@@ -81,8 +81,15 @@ def _sanitize_task(task: PlanTask) -> PlanTask:
     그 태스크는 실행되지 않은 채 끝난 것이 되고 select 게이트를 통째로 우회한다.
     10a에서 LLM이 오기 **전에** 이 경계를 먼저 세운 이유다.
     """
+    # 원천 재집계(11b 3b)의 `expect.evidence`는 **입력 증거**다 — 리드가 `input_evidence_ids`를 비워 내도
+    # 코드가 넣는다. 안 넣으면 select 게이트가 그 증거가 생기기 전에 돌려 "기대값을 못 찾았다"로 끝난다.
+    ids = list(task.input_evidence_ids)
+    expect = task.params.get("expect") if isinstance(task.params, dict) else None
+    if isinstance(expect, dict) and isinstance(expect.get("evidence"), str) and expect["evidence"] not in ids:
+        ids.append(expect["evidence"])
     return task.model_copy(update={"status": "pending", "result_summary": None,
-                                   "result_evidence_ids": [], "error": None})
+                                   "result_evidence_ids": [], "error": None,
+                                   "input_evidence_ids": ids})
 
 
 def _accept_hypotheses(patch: dict, *, have: set[str]) -> tuple[list[Hypothesis], list[str]]:

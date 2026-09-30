@@ -51,7 +51,7 @@ def test_등재_목록이_포트_표면_안에_있다():
     from src.domain import ports
     surfaces = {"redis": ports.RedisReaderPort, "mongo": ports.MongoReaderPort,
                 "kafka": ports.KafkaInspectorPort, "rest": ports.RestProberPort,
-                    "code": ports.DeployedCodePort}
+                "code": ports.DeployedCodePort, "recompute": ports.RecomputePort}
     for action, (adapter, method, _, _) in ACTIONS.items():
         assert adapter in surfaces, f"{action}이 모르는 포트를 가리킨다 — {adapter}"
         assert hasattr(surfaces[adapter], method), \
@@ -168,3 +168,9 @@ def test_레인은_action에서_정해진다():
 
 def test_code_trace가_등재돼_있다():
     assert ACTIONS["code.trace"] == ("code", "trace", ("target",), ())
+
+
+def test_원천_재집계가_등재돼_있다():
+    """`expect`는 앞선 증거 **안의 값 위치**다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다."""
+    assert ACTIONS["recompute.count"] == ("recompute", "count", ("collection", "filter", "expect"), ())
+    assert ACTIONS["recompute.sum"] == ("recompute", "sum", ("collection", "filter", "field", "expect"), ())

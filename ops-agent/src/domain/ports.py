@@ -223,3 +223,24 @@ class DeployedCodePort(ABC):
     @abstractmethod
     async def read(self, service: str, path: str) -> ProbeResult:
         """파일 하나. `path`는 `grep`이 돌려준 경로다."""
+
+
+class RecomputePort(ABC):
+    """**원천 재집계**(11b 3b) — 리드가 세운 기대 중 *세거나 더하면 확인되는 것*을 코드가 원천에서 다시
+    만들어 앞선 증거의 값과 대조한다. 대상 시스템의 포트가 아니라 우리 것이지만, 등재 목록이 가리키는
+    표면은 전부 포트라는 불변식을 지키려고 여기 있다 — 쓰기 동사 없음·전부 추상·전부 async 검사를 같이
+    받는다.
+
+    로직을 실행하지 않는다. 질의 모양(filter·집계)의 기대에만 듣고, merge·후처리 같은 변환은 경계값
+    대조(프로브)와 읽기(리드)의 몫이다. `expect`는 앞선 증거 **안의 값 위치**다 — 리드가 숫자를 옮겨
+    적으면 대조가 리드의 전사 실수를 검증하게 된다. 값이 거기 없거나 숫자가 아니면 **error**지
+    불일치가 아니다.
+    """
+
+    @abstractmethod
+    async def count(self, collection: str, filter: dict, expect: dict) -> ProbeResult:
+        """원천에서 세어 `{recomputed, expected, match}`."""
+
+    @abstractmethod
+    async def sum(self, collection: str, filter: dict, field: str, expect: dict) -> ProbeResult:
+        """문서를 받아 한 필드를 더한다. 표본이 잘렸으면 합계 대신 error다."""

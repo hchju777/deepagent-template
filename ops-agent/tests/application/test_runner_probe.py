@@ -200,3 +200,36 @@ async def test_안_자르면_완전하다고_한다(case):
     out = await ProbeRunner(Bundle(code=code), clock=lambda: T0).run(
         task("t-1", action="code.config", params={"service": "api"}), case=case)
     assert out.evidence[0].complete and "잘렸다" not in out.summary
+
+
+# ── 원천 재집계 (11b 3b) ─────────────────────────────────────────────
+
+async def test_실행기는_자기가_만든_원본을_보관하고_recompute가_그것으로_대조한다(case):
+    """State의 증거 body는 렌더한 텍스트라 값을 못 꺼낸다 — 실행기가 원본을 증거 id별로 들고 있는다.
+    다른 프로세스가 만든 증거(재개 뒤)는 모른다고 답하고 그 읽기를 다시 내라고 한다."""
+    from src.infrastructure.stubs import StubMongoReader
+    mongo = StubMongoReader({"alarm_events": [{"status": "alarm"}, {"status": "alarm"}, {"status": "ok"}]},
+                            clock=lambda: T0)
+    rest = Recorder(result=ProbeResult.succeeded({"badge": {"alarm": 2}}, source="rest", clock=lambda: T0))
+    runner = ProbeRunner(Bundle(mongo=mongo, rest=rest), clock=lambda: T0)
+    first = await runner.run(task("t-1", action="rest.query", params={"entry": "summary_badge", "params": {}}), case=case)
+    assert first.status == "ok" and first.evidence[0].id == "t-1.e1"
+    expect = {"evidence": "t-1.e1", "path": "badge.alarm"}
+    second = await runner.run(task("t-2", action="recompute.count", params={
+        "collection": "alarm_events", "filter": {"status": "alarm"}, "expect": expect}), case=case)
+    assert second.status == "ok", second.error
+    ref = second.evidence[0]
+    assert ref.source.startswith("recompute.count ") and "match" in ref.body and "True" in ref.body
+    stranger = await runner.run(task("t-3", action="recompute.count", params={
+        "collection": "alarm_events", "filter": {}, "expect": {"evidence": "t-0.e1", "path": "x"}}), case=case)
+    assert stranger.status == "error" and "t-0.e1" in stranger.error
+
+
+async def test_recompute도_등재_검사를_먼저_받고_mongo가_없으면_거부된다(case):
+    runner = ProbeRunner(Bundle(mongo=Recorder()), clock=lambda: T0)
+    short = await runner.run(task("t-2", action="recompute.count", params={"collection": "c"}), case=case)
+    assert short.status == "error" and "필요한 인자" in short.error
+    none = ProbeRunner(Bundle(), clock=lambda: T0)
+    got = await none.run(task("t-2", action="recompute.count", params={
+        "collection": "c", "filter": {}, "expect": {"evidence": "t-1.e1", "path": "x"}}), case=case)
+    assert got.status == "error" and "mongo" in got.error

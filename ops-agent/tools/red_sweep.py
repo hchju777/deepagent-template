@@ -895,6 +895,24 @@ CASES = [
  ("코드 쪽 키 템플릿을 안 본다", ROOT / "src/knowledge/trace.py",
   '        for head in _KEY_TEMPLATE.findall(line):', '        for head in ():',
   ["tests/knowledge/test_trace.py::test_코드가_키_토큰을_템플릿으로_조립하면_그_머리로_시작하는_키_전부가_읽기다"]),
+ ('소독이 expect의 증거를 입력 증거로 안 넣는다', ROOT / "src/application/nodes.py",
+  '    if isinstance(expect, dict) and isinstance(expect.get("evidence"), str) and expect["evidence"] not in ids:', '    if False:',
+  ['tests/application/test_nodes.py::test_소독은_expect의_증거를_입력_증거로_강제한다', 'tests/application/test_nodes.py::test_expect가_가리키는_증거가_생기기_전에는_안_돈다']),
+ ('실행기가 원본을 안 보관한다', ROOT / "src/application/runner_probe.py",
+  '        self._raw[ref.id] = result.data', '        pass',
+  ['tests/application/test_runner_probe.py::test_실행기는_자기가_만든_원본을_보관하고_recompute가_그것으로_대조한다']),
+ ('recompute가 표의 인자 검사를 건너뛴다', ROOT / "src/application/runner_probe.py",
+  '            if problem is not None:\n                return TaskOutcome(task_id=task.id, status="error", error=f"{source} — {problem}")', '            if False:\n                return TaskOutcome(task_id=task.id, status="error", error=f"{source} — {problem}")',
+  ['tests/application/test_runner_probe.py::test_recompute도_등재_검사를_먼저_받고_mongo가_없으면_거부된다']),
+ ('숫자가 아닌 기대값을 대조한다', ROOT / "src/application/recompute.py",
+  '        if isinstance(value, bool) or not isinstance(value, (int, float)):', '        if False:',
+  ['tests/application/test_recompute.py::test_기대값을_못_찾으면_불일치가_아니라_error다']),
+ ('잘린 표본으로 합계를 낸다', ROOT / "src/application/recompute.py",
+  '        if not got.envelope.complete:', '        if False:',
+  ['tests/application/test_recompute.py::test_표본이_잘리면_합계를_안_낸다']),
+ ('mongo 없는 사이트에도 recompute가 목록에 뜬다', ROOT / "src/application/briefing.py",
+  '"rest": "rest", "recompute": "mongodb"}', '"rest": "rest", "recompute": "redis"}',
+  ['tests/application/test_briefing.py::test_원천_재집계는_mongo가_있는_사이트에서만_목록에_있다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -922,7 +940,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 232, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 238, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

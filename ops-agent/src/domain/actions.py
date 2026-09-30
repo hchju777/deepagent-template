@@ -65,6 +65,12 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     # 끝점에서 자원까지의 함수 사슬(11b). `target`은 등재 항목의 path나 증거에 나온 path 그대로다.
     # 조사 중에 추적하지 않는다 — `code graph`가 남긴 것을 읽는다. 그래프가 없으면 목록에 안 나온다.
     "code.trace":          ("code",  "trace",         ("target",),             ()),
+    # ── 원천 재집계(11b 3b). `expect`는 앞선 증거 **안의 값 위치**(`{"evidence": "t-1.e1", "path":
+    # "items[0].n"}`)다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다. 실행기
+    # (`ProbeRunner`)가 가로채 자기가 보관한 원본에서 값을 꺼낸다. `_sanitize_task`가 `expect.evidence`를
+    # 입력 증거로 강제해 그 증거가 생긴 뒤에만 돈다. mongo 읽기 포트로만 센다 — 로직을 실행하지 않는다.
+    "recompute.count":     ("recompute", "count",     ("collection", "filter", "expect"), ()),
+    "recompute.sum":       ("recompute", "sum",       ("collection", "filter", "field", "expect"), ()),
 }
 
 

@@ -12,9 +12,11 @@
 `ProbeResult`의 봉투를 그대로 물려받는다 — 특히 `complete`. 표본이 잘렸는데 완전한
 척하면 12a의 verify가 "없음"을 근거로 한 결론을 못 걸러낸다.
 """
+from collections import OrderedDict
 from typing import Any
 
-from src.domain.actions import describe, run_action
+from src.application.recompute import Recomputer
+from src.domain.actions import ACTIONS, action_problem, describe, run_action
 from src.domain.base import Clock
 from src.domain.case import Case, EvidenceRef, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
@@ -23,6 +25,8 @@ _SUMMARY_CHARS = 160
 # 한 건이라도 **통째로** 보이게 하는 것이 요점이다. 문서를 반쯤 자르면 리드는
 # 필드 이름은 보고 값은 못 봐서, 같은 질의를 말만 바꿔 다시 낸다.
 _DETAIL_CHARS = 2400
+# 원천 재집계가 기대값을 꺼낼 원본을 몇 건까지 들고 있나. 케이스 하나의 증거는 수십 건이다.
+_RAW_KEEP = 256
 
 
 class ProbeRunner(TaskRunnerPort):
@@ -35,6 +39,12 @@ class ProbeRunner(TaskRunnerPort):
         # **닿기 전에** 거부하는 경우(미등재 action 등)에는 우리가 봉투를 만들어야
         # 하고, 그때 `datetime.now()`로 떨어지면 테스트가 시간에 묶인다.
         self._clock = clock
+        # 원천 재집계(11b 3b)는 앞선 증거의 **원본**에서 기대값을 꺼낸다. State의 증거 body는 렌더한
+        # 텍스트라 값을 못 꺼내고, 저장소에 원본을 남기는 것은 비밀·용량 문제라 안 한다 — 이 실행기가
+        # 만든 결과를 증거 id별로 프로세스 안에 들고 있는다(개수 상한). 다른 프로세스에서 재개된
+        # 케이스면 첫 recompute가 "모른다"고 답하고 리드가 그 읽기를 다시 낸다.
+        self._raw: OrderedDict[str, Any] = OrderedDict()
+        self._recompute = Recomputer(getattr(adapters, "mongo", None), self._raw.get, clock=clock)
 
     def describe(self) -> str:
         return f"probe({', '.join(self._adapters.available()) or '없음'})"
@@ -44,8 +54,20 @@ class ProbeRunner(TaskRunnerPort):
             return TaskOutcome(task_id=task.id, status="error",
                                error="action이 없다 — ProbeRunner는 태스크가 선언한 읽기만 한다")
         source = describe(task.action, task.params)
-        result = await run_action(self._adapters, task.action, task.params,
-                                  clock=self._clock)
+        if task.action.startswith("recompute."):
+            # 표의 검사는 같이 받되, 어댑터가 아니라 우리 실행기가 돈다.
+            problem = action_problem(task.action, task.params)
+            if problem is not None:
+                return TaskOutcome(task_id=task.id, status="error", error=f"{source} — {problem}")
+            _, method, required, _ = ACTIONS[task.action]
+            try:
+                result = await getattr(self._recompute, method)(*[task.params[n] for n in required])
+            except Exception as exc:                                    # noqa: BLE001
+                return TaskOutcome(task_id=task.id, status="error",
+                                   error=f"{source} — 재집계가 던졌다 — {type(exc).__name__}: {exc}")
+        else:
+            result = await run_action(self._adapters, task.action, task.params,
+                                      clock=self._clock)
         if result.status == "error":
             return TaskOutcome(task_id=task.id, status="error",
                                error=f"{source} — {result.error}")
@@ -65,6 +87,9 @@ class ProbeRunner(TaskRunnerPort):
                 else f" (표본이 잘렸다: {result.envelope.truncated_reason})")
         if result.envelope.complete and ours:
             note = " (예산에서 잘렸다 — 없는 것이 아니다)"
+        self._raw[ref.id] = result.data
+        while len(self._raw) > _RAW_KEEP:
+            self._raw.popitem(last=False)
         return TaskOutcome(task_id=task.id, status="ok",
                            summary=f"{source} → {ref.summary}{note}", evidence=[ref])
 

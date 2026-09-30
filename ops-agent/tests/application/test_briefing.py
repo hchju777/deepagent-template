@@ -885,3 +885,9 @@ def test_frame_예시의_code_grep은_서빙_서비스를_안다():
                                    services=("api", "sink"), flow_graph=_graph_with_endpoint())
     tasks = json.loads(fields["example"])["tasks"]
     assert (tasks[1]["action"], tasks[1]["params"]) == ("code.grep", {"patterns": ["/summary/badge"], "service": "api"})
+
+
+def test_원천_재집계는_mongo가_있는_사이트에서만_목록에_있다():
+    assert "- recompute.count(collection, filter, expect)" in briefing.action_catalog(site())
+    assert "- recompute.sum(collection, filter, field, expect)" in briefing.action_catalog(site())
+    assert "recompute" not in briefing.action_catalog(site(mongodb=None))

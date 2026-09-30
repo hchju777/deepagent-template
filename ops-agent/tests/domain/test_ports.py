@@ -7,11 +7,13 @@
 import inspect
 
 from src.domain.ports import (CodeReaderPort, DeployedCodePort, KafkaInspectorPort,
-                              MongoReaderPort,
+                              MongoReaderPort, RecomputePort,
                               RedisReaderPort)
 
+# `RecomputePort`는 대상 포트가 아니라 우리 원천 재집계(11b 3b)지만, 등재 목록이 가리키는 표면은
+# 전부 여기서 검사받는다 — 쓰기 동사 없음·전부 추상·전부 async.
 ALL_PORTS = (RedisReaderPort, MongoReaderPort, KafkaInspectorPort, CodeReaderPort,
-             DeployedCodePort)
+             DeployedCodePort, RecomputePort)
 
 # 대상 시스템의 상태를 바꾸는 동사들. 이름만으로도 표면에 나타나선 안 된다.
 WRITE_VERBS = {

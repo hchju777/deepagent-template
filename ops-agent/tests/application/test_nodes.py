@@ -470,3 +470,29 @@ async def test_템플릿_이름을_채운_값은_찍은_것이_아니다(case):
     patch = await nodes["integrate"](CaseState(case=case, round=1,
                                                plan_tasks=[task("t-1", status="ok")]))
     assert not any("찾지 않고" in e for e in patch["llm_errors"]), patch["llm_errors"]
+
+
+# ── 원천 재집계의 입력 증거 (11b 3b) ───────────────────────────────────
+
+def test_소독은_expect의_증거를_입력_증거로_강제한다():
+    """리드가 `input_evidence_ids`를 비워 내도 코드가 넣는다(규율 4) — 그래야 select 게이트가 그 증거가
+    생긴 뒤에만 돌린다. 이미 있으면 그대로."""
+    from src.application.nodes import _sanitize_task
+    expect = {"evidence": "t-1.e1", "path": "n"}
+    kept = _sanitize_task(task("t-5", action="recompute.count", params={"collection": "c", "filter": {}, "expect": expect},
+                               input_evidence_ids=["t-1.e1", "t-2.e1"], status="ok"))
+    assert kept.status == "pending" and kept.input_evidence_ids == ["t-1.e1", "t-2.e1"]
+    forced = _sanitize_task(task("t-6", action="recompute.count", params={"collection": "c", "filter": {}, "expect": expect}))
+    assert forced.input_evidence_ids == ["t-1.e1"]
+    plain = _sanitize_task(task("t-7", params={"key": "k", "expect": "not-a-dict"}))
+    assert plain.input_evidence_ids == []
+
+
+def test_expect가_가리키는_증거가_생기기_전에는_안_돈다(case):
+    from src.application.nodes import _sanitize_task
+    from tests.application.conftest import state_with
+    t = _sanitize_task(task("t-6", action="recompute.count", params={
+        "collection": "c", "filter": {}, "expect": {"evidence": "t-1.e1", "path": "n"}}))
+    assert runnable_tasks(state_with(case, plan_tasks=[t])) == []
+    ev = EvidenceRef(id="t-1.e1", source="rest.query entry='x'", summary="s")
+    assert [x.id for x in runnable_tasks(state_with(case, plan_tasks=[t], evidence=[ev]))] == ["t-6"]
