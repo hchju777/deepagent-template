@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `933 passed, 24 deselected` (deselected는 사내에서만 도는 live) |
+| 테스트 | `1390 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 262 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -28,8 +28,10 @@
 순찰은 첫날에 **진짜 문제 2건**을 찾았다(`Operator/Check`·`Material/ATR Status`).
 
 **11a(코드 레포 확보와 지식 층)와 11c(흐름 그래프 — 브리핑 블록, 출발점과 사다리, 끝점 노드,
-측정 두 번)가 끝났다. 다음은 [11b](step-11b-trace.md)(코드 추적과 재계산 대조, 닫힌 action
-레인)다.** 왜 그 순서인지는 [step-11c-flow.md](step-11c-flow.md)의 "사내 첫 조사 trace에서
+측정 두 번)가 끝났고, [11b](step-11b-trace.md)(코드 추적과 재계산 대조, 닫힌 action 레인)는
+커밋 4(측정)까지 끝났다. 11b의 5a(서비스 추적)는 되돌렸고 그 자리에 [11d](step-11d-index.md)(전역
+심볼 인덱스)가 들어갔다 — 6a(인덱서·하네스·`code check`)가 끝났고 다음은 6b다.** 11b의 순서가
+왜 그랬는지는 [step-11c-flow.md](step-11c-flow.md)의 "사내 첫 조사 trace에서
 배운 것"과 "측정"(사다리는 출발점을 바꿨고, 공유 그룹의 lag를 누구 것으로 읽나는 못 바꿨다),
 그리고 [decisions ⑰](decisions.md). 아직 판정(12a)과 보고서(12b)가 없어서 조사 결과가
 사람에게 닿는 경로는 CLI 출력뿐이다.
@@ -337,14 +339,15 @@ deepagent-template 리포의 ops-agent/ 트리에서 이어서 작업한다.
 
 11b(step-11b-trace.md)는 3a·3b·커밋 4(측정)까지 끝났다 — 추적기(2b~2f), `code.trace`와
 레인, flow.html 초점 상류, 원천 재집계 action, 브리핑 예시의 사다리 칸, `case dryrun` 사다리
-대본, 로컬 haiku 대역 측정 켬 3·끔 3. 측정 요지: 켬은 `code.trace`를 r1 이내에 3/3 냈고
-sink를 3/3 짚었다(끔 1.5/3, 하나는 processor 오답). 원천 재집계는 예시가 있어도 0/3 —
-같은 뜻을 `mongo.count`로 냈다(사내 첫 실행 뒤 다시 본다). 예비 판에서 대역이
-`code.trace`의 인자에 서비스 이름을 넣어 인자 이름을 `endpoint`로 바꿨다. 다음은
-**서비스 추적**(끝점 없는 서비스의 출발점·쓰기 수집·함수 단위 `derives` 엣지 — step-11b
-"후속"과 커밋 4 결과의 "서비스 추적 수요" 참조. 측정에서 리드가 sink 코드를 grep·read로
-더듬은 것이 그 근거다), 그다음 12a. 시작하기 전에 목적·손댈 파일·테스트할 것을 먼저
-알려 주고, 내 확인을 받고 진행해라.
+대본, 로컬 대역 측정 켬 3·끔 3. 5a(서비스 추적, 사람이 적는 entries)는 되돌렸다.
+그 자리에 11d(step-11d-index.md) 전역 심볼 인덱스가 들어갔고 **6a가 끝났다** — 2-pass
+인덱서(심볼·엣지 5종·확신 2단계·타입 표·자원 참조), 검증 하네스(불변식·정밀도·재현율),
+`code graph`가 symbols.json·edges.json을 쓰고 `code status`가 말하고 `code check`가 일곱 줄로
+검증한다. 실제 코드(src/ 90파일)로 돌려 여섯 가지를 고쳤다(11d 문서의 표). 다음은 **11d 6b**
+(구조적 구현체·DI 레지스트리·디스패치 표·공유 라이브러리를 레포별 핀 SHA로·하네스 D·graphify
+병합), 그다음 6c(impact/path 질의, code.trace를 인덱스 위로), 6d(리드 연결·측정), 12a.
+사내에서는 `code graph` 뒤 `code check`의 일곱 줄을 받아 적는 것이 첫 일이다. 시작하기 전에
+목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
 
 작업 방식은 handover.md의 "합의된 작업 방식"을 그대로 따른다 — 특히
 작업 전 예고 / 작업 후 A·M·D 목록 / 한국어 주석(WHY만) / 영어 커밋 메시지 /

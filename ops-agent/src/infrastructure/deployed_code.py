@@ -389,6 +389,14 @@ class _GitSource:
         got = await self._reader.show(self._repo, self._commit, path, whole=True)
         return got.data if got.status == "ok" and isinstance(got.data, str) else None
 
+    async def files(self) -> list[str]:
+        """배포 커밋의 파일 전부(인덱서용). `ls-tree -r`은 서브모듈 안으로 안 들어가므로 벤더링된 공유
+        라이브러리는 저절로 빠진다 — 그 레포는 자기 레포로 따로 인덱싱한다(6b)."""
+        got = await self._reader.ls(self._repo, self._commit, max_names=200_000)
+        if got.status != "ok" or not isinstance(got.data, list):
+            return []
+        return [n for n in got.data if isinstance(n, str)]
+
     async def grep(self, patterns: list[str]) -> list[Hit]:
         got = await self._reader.grep(self._repo, self._commit, list(patterns), fixed=True,
                                       max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)

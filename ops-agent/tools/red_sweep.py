@@ -944,6 +944,57 @@ CASES = [
   '        if (_issued(tasks, "code.trace", endpoint=path) or flow_graph is None',
   '        if ("code.trace" in used or flow_graph is None',
   ['tests/application/test_briefing.py::test_다른_이름으로_낸_code_trace가_실패해도_그_path의_칸은_남는다']),
+ # ── 11d 6a: 심볼 인덱스 ──
+ ('stoplist를 안 지킨다', ROOT / "src/knowledge/index.py",
+  '        if meth in STOPLIST:\n            self._count("stoplist")\n            return None',
+  '        if False:\n            self._count("stoplist")\n            return None',
+  ['tests/knowledge/test_index.py::test_전부_실패하면_같은_이름_메서드에_candidate이되_stoplist와_상한을_지킨다']),
+ ('후보 상한을 안 지킨다', ROOT / "src/knowledge/index.py",
+  '        if len(cands) > MAX_CANDIDATES:', '        if False:',
+  ['tests/knowledge/test_index.py::test_전부_실패하면_같은_이름_메서드에_candidate이되_stoplist와_상한을_지킨다']),
+ ('self 호출 미해석을 레포 전체로 푼다', ROOT / "src/knowledge/index.py",
+  'for s in self.descendants(fn.class_sid)', 'for s in self.classes',
+  ['tests/knowledge/test_index.py::test_self_호출은_조상에서_찾고_못_찾으면_하위_클래스로만_좁힌다']),
+ ('candidate가 exact를 끌어내린다', ROOT / "src/knowledge/index.py",
+  '        if cur.certainty == "candidate" and certainty == "exact":', '        if True:',
+  ['tests/knowledge/test_index.py::test_같은_엣지는_candidate에서_exact로만_승격한다']),
+ ('생성 지점 역전파를 안 한다', ROOT / "src/knowledge/index.py",
+  '            types = self._types_at_construction(csid, init_fn, param)', '            types = []',
+  ['tests/knowledge/test_index.py::test_생성_지점이_하나면_힌트_없는_주입도_확실이고_그_타입으로_푼다']),
+ ('컨테이너 어노테이션을 벗긴다', ROOT / "src/knowledge/index.py",
+  '            if head and head[-1] in _UNWRAP:', '            if head:',
+  ['tests/knowledge/test_index.py::test_어노테이션은_Optional_Annotated_문자열을_벗기고_컨테이너는_안_벗긴다']),
+ ('동명 클래스를 전부 구현체로 잇는다', ROOT / "src/knowledge/index.py",
+  '            chosen = [c for c in ranked if score(c) == top]', '            chosen = ranked',
+  ['tests/knowledge/test_index.py::test_동명_클래스는_메서드_단위로_implements이고_없는_메서드는_엣지가_없으며_경로가_가까운_쪽이다']),
+ ('Depends 제공자를 안 본다', ROOT / "src/knowledge/index.py",
+  '                    provided = self._depends_provider_class(mod, inner.elts[1:])', '                    provided = None',
+  ['tests/knowledge/test_index.py::test_Depends_제공자의_반환_클래스가_수신_타입이다']),
+ ('커버리지 누락을 안 잡는다', ROOT / "src/knowledge/index_check.py",
+  '        if missing or extra:', '        if False:',
+  ['tests/knowledge/test_index_check.py::test_불변식은_id_엣지_class_id_줄_범위_커버리지_위반을_각각_잡는다']),
+ ('정밀도 표본이 데코레이터를 안 본다', ROOT / "src/knowledge/index_check.py",
+  '        body = "\\n".join(lines[src.line - 1:src.end_line]) + "\\n" + "\\n".join(src.decorators)',
+  '        body = "\\n".join(lines[src.line - 1:src.end_line])',
+  ['tests/knowledge/test_index_check.py::test_정밀도_표본은_exact_calls의_대상_이름이_호출자_본문이나_데코레이터에_있는지_본다']),
+ ('code graph가 인덱스를 안 쓴다', ROOT / "src/__main__.py",
+  '    gb.write_index(out_dir, symbol_index)', '    pass  # gb.write_index(out_dir, symbol_index)',
+  ['tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다']),
+ ('파라미터가 모듈 이름을 안 가린다', ROOT / "src/knowledge/index.py",
+  '            if name in fn.params:\n                self._count("variable_call")',
+  '            if False:\n                self._count("variable_call")',
+  ['tests/knowledge/test_index.py::test_파라미터나_지역변수_호출은_이름이_같은_함수에_안_잇고_별칭_지역은_확정으로_푼다']),
+ ('함수 안 import를 안 본다', ROOT / "src/knowledge/index.py",
+  '            elif isinstance(node, (ast.Import, ast.ImportFrom)):\n                self._imports(node, overwrite=False)',
+  '            elif isinstance(node, (ast.Import, ast.ImportFrom)):\n                pass',
+  ['tests/knowledge/test_index.py::test_함수_안_import도_해석하고_from_import는_정의한_모듈로_imports_엣지를_건다']),
+ ('서드파티 호출을 동명 후보로 떨어뜨린다', ROOT / "src/knowledge/index.py",
+  '        if self.is_external(fn, chain):\n            self._count("external")\n            return None\n        # (c′)',
+  '        if False:\n            self._count("external")\n            return None\n        # (c′)',
+  ['tests/knowledge/test_index.py::test_서드파티_호출과_호출_가능한_필드는_따로_세고_후보를_안_만든다']),
+ ('순환 대입의 타입 추론을 안 끊는다', ROOT / "src/knowledge/index.py",
+  '                target = self._call_target(fn, chain, hops=hops + 1)', '                target = self._call_target(fn, chain)',
+  ['tests/knowledge/test_index.py::test_자기_자신으로_도는_대입은_타입_추론을_끊고_인덱스는_끝난다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -971,7 +1022,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 247, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 262, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

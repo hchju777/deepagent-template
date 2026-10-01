@@ -179,7 +179,7 @@ class CodeReaderPort(ABC):
         정규식으로 본다."""
 
     @abstractmethod
-    async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
+    async def ls(self, repo: str, commit: str, path: str = "", *, max_names: int = 400) -> ProbeResult:
         """그 커밋의 파일 목록. 이름을 모를 때 먼저 찾는 용도다(⑮와 같은 이유)."""
 
 

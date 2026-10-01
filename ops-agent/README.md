@@ -29,8 +29,9 @@ py -3.11 -m venv .venv
 ### graphify (선택)
 
 흐름 그래프의 심볼 층은 [graphify](https://github.com/Graphify-Labs/graphify)가 만든다.
-**없어도 된다** — 없으면 `code graph`가 흐름 오버레이만 만들고 그렇게 적는다. 심볼 층은 11b의
-code_tracer부터 쓴다. `requirements.txt`에 넣지 않은 이유는 사내 반입 심사가 따로 필요해서다
+**없어도 된다** — 없으면 `code graph`가 흐름 오버레이만 만들고 그렇게 적는다. 함수→함수 호출 엣지는
+graphify가 아니라 우리 인덱서가 만든다([11d](STEPS/step-11d-index.md), `symbols.json`·`edges.json`,
+`code check`로 검증) — graphify는 사람용 보고서에 쓴다. `requirements.txt`에 넣지 않은 이유는 사내 반입 심사가 따로 필요해서다
 (PyPI `graphifyy` 0.9.65, Apache-2.0, Python 3.10+, 의존성 32개: tree-sitter 코어와 언어 문법 휠 26개,
 networkx, numpy, rapidfuzz. LLM SDK는 없고 우리가 부르는 `--code-only`·`--no-label` 경로는
 네트워크를 안 쓴다).
@@ -236,6 +237,8 @@ python -m src case list
 python -m src code status     # 읽을 수 있는 상태인가 (네트워크 없음)
 python -m src code plan       # 사람이 직접 칠 git 명령 (네트워크 없음)
 python -m src code sync       # clone/fetch — **사내에서만**
+python -m src code graph      # 흐름 그래프 + 심볼 인덱스 (sync 뒤 자동으로도 돈다)
+python -m src code check      # 인덱스 검증 — 불변식·정밀도·재현율 일곱 줄
 ```
 
 조사가 "데이터가 이상하다"를 넘어 "왜 그런가"로 가려면 대상 서비스의 코드를 읽어야
@@ -383,6 +386,7 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 | 11a | 코드 레포 확보와 지식 층 | ✅ |
 | 11b | 코드 추적과 재계산 대조 (닫힌 action 레인) | 🔧 |
 | 11c | 데이터 흐름 그래프 (graphify 엔진 + 우리 오버레이) | ✅ |
+| 11d | 전역 심볼 인덱스 (2-pass, 확신 등급) | 🔧 |
 | 12a | conclude + verify | ⬜ |
 | 12b | 조사 보고서와 이벤트 | ⬜ |
 | 13 | 사람 개입 (질문·재개) | ⬜ |

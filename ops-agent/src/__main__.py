@@ -1265,6 +1265,13 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     counts = flow.summary(overlay)
     progress(f"끝점 추적: 자원까지 이어진 {counts['endpoints_traced']}개 · 막힌 {counts['endpoints_blocked']}개")
 
+    # 심볼 인덱스(11d) — 레포 전체를 배포 커밋에서 2-pass로. 끝점 사슬과 달리 함수→함수 엣지가 그래프에 남는다.
+    from src.knowledge import index as indexing
+    symbol_index = asyncio.run(indexing.build_index(
+        {name: code.source_for(name) for name in sorted(commits)}, names=names, commits=commits))
+    isum = symbol_index.summary()
+    progress(f"심볼 {isum['symbols']}개 · 엣지 {isum['edges_total']}개 · 파싱 실패 {isum['parse_errors']}개")
+
     out_dir = _graph_dir(args, env, gbm, fct)
     binary = gb.find_graphify()
     if not binary:
@@ -1287,6 +1294,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     meta = gb.GraphMeta(gbm=gbm, fct=fct, commits=commits, built_at=gb.now_text(clock),
                         graphify=gb.graphify_version(binary), notes=problems + states)
     gb.write_bundle(out_dir, overlay=overlay, merged=merged, meta=meta)
+    gb.write_index(out_dir, symbol_index)
     shutil.rmtree(out_dir / "worktrees", ignore_errors=True)      # 빈 껍데기만 남는다
     progress("그래프 씀")
 
@@ -1367,9 +1375,68 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     human = [name for name in ("flow.html", "wiki/index.md") if (out_dir / name).exists()]
     if human:
         print(f"       사람용 {' · '.join(human)}")
+    index = gb.read_index(out_dir)
+    if index is None:
+        print("       ⚠ 심볼 인덱스 없음 — `code graph`로 다시 만든다")
+    else:
+        s = index.summary()
+        calls = s["edges"].get("calls", {"exact": 0, "candidate": 0})
+        print(f"       심볼 {s['symbols']} · 엣지 {s['edges_total']} (calls 확실 {calls['exact']} · 추정 "
+              f"{calls['candidate']}) · 파싱 실패 {s['parse_errors']} · `code check`로 검증")
     for line in stale + problems:
         print(f"       ⚠ {line}")
     return 0
+
+
+def cmd_code_check(args, env) -> int:
+    """심볼 인덱스의 정확도를 **숫자로** 낸다(11d 하네스) — 불변식·정밀도 표본·재현율 표본, 여덟 줄 이내.
+    불변식이 깨지면 1. 정밀도·재현율은 숫자일 뿐이다(사람이 옮겨 적는다)."""
+    from src.knowledge import graph_build as gb
+    from src.knowledge import index_check as chk
+
+    site, gbm, fct, _ = _code_site(args, env)
+    out_dir = _graph_dir(args, env, gbm, fct)
+    index = gb.read_index(out_dir)
+    if index is None:
+        print("  심볼 인덱스가 없다 — `python -m src code graph`로 만든다")
+        return 1
+    try:
+        code = _build_code(site, gbm, fct, knowledge_root=_knowledge_root(args), clock=_clock(args, env))
+    except (ConfigError, FileNotFoundError) as exc:
+        raise SystemExit(f"지식 층을 읽을 수 없다 — {exc}")
+    commits, _ = _resolved_commits(site, code)
+    stale = [f"{r}: 인덱스는 {c[:12]}, 배포는 {commits.get(r, '?')[:12]}" for r, c in sorted(index.commits.items())
+             if commits.get(r) != c]
+
+    async def go():
+        files, counts, cache = {}, {}, {}
+        for repo in sorted(index.commits):
+            if repo not in code.pinned():
+                continue
+            source = code.source_for(repo)
+            names = [f for f in await source.files() if f.endswith(".py")]
+            files[repo] = set(names)
+            for path in names:
+                text = await source.read(path)
+                cache[(repo, path)] = text
+                counts[(repo, path)] = len(text.splitlines()) if text else 0
+
+        async def read(repo: str, path: str) -> str | None:
+            if (repo, path) not in cache:
+                cache[(repo, path)] = await code.source_for(repo).read(path) if repo in code.pinned() else None
+            return cache[(repo, path)]
+
+        problems = chk.invariants(index, files=files, line_counts=counts)
+        precision = await chk.precision_sample(index, read, n=args.sample, seed=args.seed)
+        recall = await chk.recall_sample(index, read)
+        return chk.report(index, problems, precision, recall), problems
+
+    lines, problems = asyncio.run(go())
+    for line in stale:
+        print(f"  ⚠ 낡음 {line} — `code graph`로 다시 만든다")
+    for line in lines:
+        print(f"  {line}")
+    return 1 if problems else 0
 
 
 def cmd_code_trace(args, env) -> int:
@@ -2151,6 +2218,12 @@ def build_parser() -> argparse.ArgumentParser:
     flow_cmd.add_argument("--depth", type=int, default=1, help="이웃 몇 단계 (기본 1)")
     _add_site_options(flow_cmd, sub=True)
     flow_cmd.set_defaults(run=cmd_code_flow)
+
+    check = code_sub.add_parser("check", help="심볼 인덱스 검증 — 불변식·정밀도·재현율 몇 줄 (네트워크 없음)")
+    check.add_argument("--sample", type=int, default=100, help="정밀도 표본 크기 (기본 100)")
+    check.add_argument("--seed", type=int, default=1, help="표본 추출 씨앗 — 같은 씨앗이면 같은 표본")
+    _add_site_options(check, sub=True)
+    check.set_defaults(run=cmd_code_check)
 
     trace_cmd = code_sub.add_parser("trace", help="끝점 하나의 함수 사슬 — 리드가 code.trace로 받는 것")
     trace_cmd.add_argument("path", help="끝점 path (`code flow`나 등재 항목의 path 그대로)")

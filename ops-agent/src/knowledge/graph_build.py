@@ -241,6 +241,27 @@ def write_bundle(out_dir: Path, *, overlay: dict, merged: dict, meta: GraphMeta)
     (out_dir / "meta.json").write_text(json.dumps(asdict(meta), ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def write_index(out_dir: Path, index) -> None:
+    """심볼 인덱스(11d) — 심볼과 엣지를 따로 둔다. 둘 다 배포 커밋의 것이고 `meta.json`의 커밋과 같이 간다."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data = index.to_dict()
+    edges = data.pop("edges")
+    (out_dir / "symbols.json").write_text(json.dumps({**data, "summary": index.summary()}, ensure_ascii=False),
+                                          encoding="utf-8")
+    (out_dir / "edges.json").write_text(json.dumps({"edges": edges}, ensure_ascii=False), encoding="utf-8")
+
+
+def read_index(out_dir: Path):
+    """`Index` 또는 None(없거나 깨짐). 던지지 않는다."""
+    from src.knowledge.index import Index
+    try:
+        data = json.loads((out_dir / "symbols.json").read_text(encoding="utf-8"))
+        data["edges"] = json.loads((out_dir / "edges.json").read_text(encoding="utf-8"))["edges"]
+        return Index.from_dict(data)
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def read_bundle(out_dir: Path) -> tuple[dict, GraphMeta] | None:
     """`(graph, meta)` 또는 None(없거나 깨짐). 던지지 않는다."""
     try:

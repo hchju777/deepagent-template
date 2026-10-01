@@ -274,7 +274,8 @@ class RealCodeReader(CodeReaderPort):
         return _clip(got, source, clock=self._clock, unseen=await self._blind(repo, commit),
                      max_lines=max_lines, max_chars=max_chars)
 
-    async def ls(self, repo: str, commit: str, path: str = "") -> ProbeResult:
+    async def ls(self, repo: str, commit: str, path: str = "", *, max_names: int = _MAX_LINES) -> ProbeResult:
+        # `max_names`: 리드용 기본은 400이지만 인덱서(11d)는 레포 전체(사내 794 파일)를 받아야 한다.
         source = f"code.ls {repo}@{commit}" + (f":{path}" if path else "")
         args = ["ls-tree", "-r", "--name-only", commit]
         if path:
@@ -284,9 +285,9 @@ class RealCodeReader(CodeReaderPort):
             return got
         names = [line for line in got.data.splitlines() if line]
         reasons = []
-        if len(names) > _MAX_LINES:
-            names = names[:_MAX_LINES]
-            reasons.append(f"{_MAX_LINES}개에서 끊음")
+        if len(names) > max_names:
+            names = names[:max_names]
+            reasons.append(f"{max_names}개에서 끊음")
         # `ls-tree -r`는 submodule 안으로 안 들어간다 — 경로가 이름 하나로만
         # 나온다. 그걸 "그 밑에 파일이 없다"로 읽으면 안 된다.
         reasons += _unseen_reasons(await self._blind(repo, commit))

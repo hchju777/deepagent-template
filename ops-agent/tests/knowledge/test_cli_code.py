@@ -608,3 +608,21 @@ def test_code_graph가_끝점을_싣고_flow와_status가_말한다(tmp_path, mo
     assert "reads: alarm_events [collection] config키" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "/nope")
     assert code == 1 and "끝점에 없다" in captured.out
+
+
+def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(tmp_path, monkeypatch, capsys):
+    """11d 6a — 레포 전체의 심볼·엣지가 번들에 든다. `code check`는 사람이 한 줄로 돌려 숫자 몇 줄을 받는 하네스다."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))
+    assert {s["qualname"] for s in symbols["symbols"] if s["kind"] == "module"} >= {"processor.handler", "sink.writer", "api.r"}
+    assert (bundle / "edges.json").exists() and "심볼" in captured.err
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0 and "심볼 " in captured.out and "엣지 " in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "check")
+    assert code == 0, captured.out + captured.err
+    lines = [l for l in captured.out.splitlines() if l.strip()]
+    assert len(lines) <= 8 and any("커버리지" in l for l in lines) and any("정밀도" in l for l in lines)
