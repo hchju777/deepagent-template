@@ -1244,50 +1244,26 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     progress(f"끝점 {counts['endpoints']}개 (등재 {counts['endpoints_registered']} · "
              f"서빙 미상 {counts['endpoints_unserved']})")
 
-    tracers: dict = {}
-
-    async def tracer_for(repo_name: str):
-        # 레포마다 Tracer 하나라 파싱과 `def 이름(` grep이 끝점·서비스 사이에서 공유된다.
-        from src.knowledge import trace as tracing
-        if repo_name not in tracers:
-            tracers[repo_name] = tracing.Tracer(repo_name, code.source_for(repo_name), names=names, routes=routes)
-            await tracers[repo_name].prepare()
-        return tracers[repo_name]
-
     async def trace_endpoints(graph: dict) -> dict:
         # 서빙 서비스가 있는 끝점마다 추적기를 돌린다 — 배포 커밋에서만, 조사 중에는 안 돌린다(⑥).
+        # 레포마다 Tracer 하나라 파싱과 `def 이름(` grep이 끝점들 사이에서 공유된다.
+        from src.knowledge import trace as tracing
         by_id = {n["id"]: n for n in graph["nodes"]}
         served: dict[str, dict[str, dict]] = {}
         for e in graph["links"]:
             if e["relation"] == "serves" and e.get("repo"):
                 served.setdefault(e["repo"], {})[e["target"]] = by_id[e["target"]]
         for repo_name, endpoints in sorted(served.items()):
-            tracer = await tracer_for(repo_name)
+            tracer = tracing.Tracer(repo_name, code.source_for(repo_name), names=names, routes=routes)
+            await tracer.prepare()
             progress(f"{repo_name}: 끝점 추적 중 ({len(endpoints)}개)")
             for node in sorted(endpoints.values(), key=lambda n: n["label"]):
                 graph = flow.add_trace(graph, node["id"], await tracer.trace(node["label"]))
         return graph
 
-    async def trace_services(graph: dict) -> dict:
-        # 끝점이 없는 서비스의 사슬(11b 5a) — 출발점은 지식의 entries, 없으면 소유 파일의 이름 규약.
-        by_label = {n["label"]: n for n in graph["nodes"] if n.get("type") == "service"}
-        for name, svc in sorted(topology.services.items()):
-            node = by_label.get(name)
-            if node is None or svc.repo not in {r.name for r in site.code.repos}:
-                continue
-            tracer = await tracer_for(svc.repo)
-            targets, how = await tracer.entries_for(name, topology)
-            for target in targets:
-                graph = flow.add_trace(graph, node["id"], await tracer.trace(target), entry=target, how=how)
-        return graph
-
-    async def trace_all(graph: dict) -> dict:
-        return await trace_services(await trace_endpoints(graph))
-
-    overlay = asyncio.run(trace_all(overlay))
+    overlay = asyncio.run(trace_endpoints(overlay))
     counts = flow.summary(overlay)
     progress(f"끝점 추적: 자원까지 이어진 {counts['endpoints_traced']}개 · 막힌 {counts['endpoints_blocked']}개")
-    progress(f"서비스 추적: 자원까지 이어진 {counts['services_traced']}개 · 출발점 없음 {counts['services_without_entry']}개")
 
     out_dir = _graph_dir(args, env, gbm, fct)
     binary = gb.find_graphify()
@@ -1397,8 +1373,7 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
 
 
 def cmd_code_trace(args, env) -> int:
-    """사람이 끝점 하나(또는 서비스 하나)의 함수 사슬을 본다 — 리드가 `code.trace`·`code.trace_service`로 받는
-    것과 같은 줄들(11b)."""
+    """사람이 끝점 하나의 함수 사슬을 본다 — 리드가 `code.trace`로 받는 것과 같은 줄들(11b)."""
     from src.knowledge import flow
     from src.knowledge import graph_build as gb
 
@@ -1407,15 +1382,13 @@ def cmd_code_trace(args, env) -> int:
     if got is None:
         raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
     graph, _ = got
-    is_endpoint = args.path.startswith("/")
-    node_id = flow.endpoint_id(args.path) if is_endpoint else flow.service_id(args.path)
+    node_id = flow.endpoint_id(args.path)
     if not any(n["id"] == node_id for n in graph["nodes"]):
-        print(f"  {args.path}: 그래프의 끝점·서비스에 없다 — 끝점은 `/`로 시작하는 path 그대로, 서비스는 토폴로지의 이름")
+        print(f"  {args.path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다")
         return 1
     lines = flow.trace_lines(graph, node_id)
     if lines is None:
-        print(f"  {args.path}: 추적이 안 된 끝점이다 — 라우트 선언을 못 찾았거나 서빙 서비스를 모른다" if is_endpoint
-              else f"  {args.path}: 출발점이 없다 — 지식(topology)의 entries에 `파일:함수`로 적거나 main/run 같은 이름을 쓴다")
+        print(f"  {args.path}: 추적이 안 된 끝점이다 — 라우트 선언을 못 찾았거나 서빙 서비스를 모른다")
         return 1
     for line in lines:
         print("  " + line)
@@ -2180,7 +2153,7 @@ def build_parser() -> argparse.ArgumentParser:
     flow_cmd.set_defaults(run=cmd_code_flow)
 
     trace_cmd = code_sub.add_parser("trace", help="끝점 하나의 함수 사슬 — 리드가 code.trace로 받는 것")
-    trace_cmd.add_argument("path", help="끝점 path(`/`로 시작, 등재 항목의 path 그대로) 또는 서비스 이름")
+    trace_cmd.add_argument("path", help="끝점 path (`code flow`나 등재 항목의 path 그대로)")
     _add_site_options(trace_cmd, sub=True)
     trace_cmd.set_defaults(run=cmd_code_trace)
 

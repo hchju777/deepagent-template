@@ -116,24 +116,6 @@ class DeployedCode(DeployedCodePort):
                 f"code.grep으로 핸들러를 찾아 code.read로 본다", source=source, clock=self._clock)
         return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
 
-    async def trace_service(self, service: str) -> ProbeResult:
-        source = f"code.trace_service {service}"
-        if self._flow_graph is None:
-            return ProbeResult.failed("흐름 그래프가 없다 — `python -m src code graph`로 만든다",
-                                      source=source, clock=self._clock)
-        node_id = flowgraph.service_id(service)
-        if not any(n["id"] == node_id for n in self._flow_graph.get("nodes", [])):
-            return ProbeResult.failed(
-                f"{service}: 그래프의 서비스에 없다 — 아는 것: {', '.join(self.service_names()) or '없음'}",
-                source=source, clock=self._clock)
-        lines = flowgraph.trace_lines(self._flow_graph, node_id)
-        if lines is None:
-            return ProbeResult.failed(
-                f"{service}: 출발점이 없다 — 지식(topology)의 entries에 `파일:함수`로 적거나, 그 서비스 파일에 "
-                f"main/run 같은 이름이 있어야 한다. 지금은 code.grep으로 컨슈머 루프를 찾아 code.read로 본다",
-                source=source, clock=self._clock)
-        return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
-
     def service_names(self) -> tuple[str, ...]:
         """브리핑이 목록과 예시에 박을 이름들. **호출부가 토폴로지를 뒤지지 않게** 한다."""
         return tuple(sorted(self._topology.services))

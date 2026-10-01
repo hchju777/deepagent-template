@@ -56,12 +56,3 @@ async def test_스텁_코드는_seed의_사슬만_주고_나머지는_없다고_
         result = await call
         assert result.status == "error" and "스텁" in result.error
     assert (await StubDeployedCode(None, clock=_clock).trace("/summary/badge")).status == "error"
-
-
-async def test_스텁_코드는_서비스_사슬도_seed에서_준다():
-    from src.infrastructure.stubs import StubDeployedCode
-
-    stub = StubDeployedCode({"trace": {"sink": "출발점 sink/writer.py:run (지식)\nsink/writer.py:L1 run"}}, clock=_clock)
-    got = await stub.trace_service("sink")
-    assert got.status == "ok" and got.data.startswith("출발점 ")
-    assert (await stub.trace_service("processor")).status == "error"

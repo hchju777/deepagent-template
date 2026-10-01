@@ -335,19 +335,16 @@ deepagent-template 리포의 ops-agent/ 트리에서 이어서 작업한다.
 `patrol open`이 케이스를 열고 `case investigate`가 그것을 조사한다.
 판정(12a)과 보고서(12b)는 아직 없다.
 
-11b(step-11b-trace.md)는 3a·3b·커밋 4(측정)·5a(서비스 사슬)까지 끝났다 — 추적기(2b~2f), `code.trace`와
+11b(step-11b-trace.md)는 3a·3b·커밋 4(측정)까지 끝났다 — 추적기(2b~2f), `code.trace`와
 레인, flow.html 초점 상류, 원천 재집계 action, 브리핑 예시의 사다리 칸, `case dryrun` 사다리
 대본, 로컬 haiku 대역 측정 켬 3·끔 3. 측정 요지: 켬은 `code.trace`를 r1 이내에 3/3 냈고
 sink를 3/3 짚었다(끔 1.5/3, 하나는 processor 오답). 원천 재집계는 예시가 있어도 0/3 —
 같은 뜻을 `mongo.count`로 냈다(사내 첫 실행 뒤 다시 본다). 예비 판에서 대역이
-`code.trace`의 인자에 서비스 이름을 넣어 인자 이름을 `endpoint`로 바꿨다. 5a는 끝점 없는
-서비스의 사슬이다 — 출발점(지식 `Service.entries` `파일:함수`, 없으면 소유 파일의 main/run
-이름 규약), 읽기/쓰기 방향(`Read.direction` → consumes/produces/reads/writes), 서비스 노드의
-출발점별 사슬, `code trace <서비스>`·`code.trace_service(service)`. 다음은 **5b derives 엣지**
-(같은 출발점 사슬 안의 읽기 → 쓰기를 `A —derives→ B`로, flow.html 3홉·`<데이터 흐름>` 자원
-줄·사다리 칸·측정 T8 — step-11b 5a 끝의 "5b(다음)" 참조), 그다음 12a. 사내에서는
-`knowledge/topology/mx.json`의 entries에 실제 컨슈머 콜백·잡의 `파일:함수`를 적어야 한다.
-시작하기 전에 목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
+`code.trace`의 인자에 서비스 이름을 넣어 인자 이름을 `endpoint`로 바꿨다. 다음은
+**서비스 추적**(끝점 없는 서비스의 출발점·쓰기 수집·함수 단위 `derives` 엣지 — step-11b
+"후속"과 커밋 4 결과의 "서비스 추적 수요" 참조. 측정에서 리드가 sink 코드를 grep·read로
+더듬은 것이 그 근거다), 그다음 12a. 시작하기 전에 목적·손댈 파일·테스트할 것을 먼저
+알려 주고, 내 확인을 받고 진행해라.
 
 작업 방식은 handover.md의 "합의된 작업 방식"을 그대로 따른다 — 특히
 작업 전 예고 / 작업 후 A·M·D 목록 / 한국어 주석(WHY만) / 영어 커밋 메시지 /

@@ -67,8 +67,6 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     # 인자 이름이 `endpoint`인 이유: 예비 측정에서 대역이 `target`에 서비스 이름을 넣었다 — 목록 한 줄이 리드가
     # 보는 시그니처 전부라, 이름이 곧 설명이다.
     "code.trace":          ("code",  "trace",         ("endpoint",),           ()),
-    # 끝점이 없는 서비스의 사슬(11b 5a) — 출발점(지식 entries 또는 이름 규약)부터 읽기·쓰기까지.
-    "code.trace_service":  ("code",  "trace_service", ("service",),            ()),
     # ── 원천 재집계(11b 3b). `expect`는 앞선 증거 **안의 값 위치**(`{"evidence": "t-1.e1", "path":
     # "items[0].n"}`)다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다. 실행기
     # (`ProbeRunner`)가 가로채 자기가 보관한 원본에서 값을 꺼낸다. `_sanitize_task`가 `expect.evidence`를

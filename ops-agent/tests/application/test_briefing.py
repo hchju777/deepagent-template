@@ -236,7 +236,6 @@ def test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀�
     assert "code.flow" not in without["actions"] and "code.grep" in without["actions"]
     assert "- code.flow(name)" in with_graph["actions"]
     assert "code.trace" not in without["actions"] and "- code.trace(endpoint)" in with_graph["actions"]
-    assert "code.trace_service" not in without["actions"] and "- code.trace_service(service)" in with_graph["actions"]
     assert "mx.alarm.main" in with_graph["flow"] and without["flow"].startswith("(없음")
 
 

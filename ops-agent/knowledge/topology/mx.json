@@ -10,8 +10,7 @@
     "층 모양은 사내 확인을 반영했다 — gumi는 gbm/mx.json → factories/gumi/common.json →",
     "factories/gumi/mx.json 셋을 보고, sevt는 같은 자리에 sevt가 들어간다.",
     "합치는 규칙은 **나중 층이 덮는다**(src/knowledge/target_config.py).",
-    "여기 서비스 이름·레포 이름은 **자리표시자다.** 실제 값은 사내에서 채운다.",
-    "`entries`는 끝점이 없는 서비스의 사슬 출발점(`파일:함수`)이다 — 없으면 이름 규약(main·run…)으로 고르고 추정이라 적는다."
+    "여기 서비스 이름·레포 이름은 **자리표시자다.** 실제 값은 사내에서 채운다."
   ],
   "services": {
     "processor": {
@@ -19,20 +18,14 @@
       "role": "원천 이벤트를 받아 가공한다",
       "selects": {
         "SERVICE_ROLE": "processor"
-      },
-      "entries": [
-        "processor/handler.py:run"
-      ]
+      }
     },
     "sink": {
       "repo": "dt-core",
       "role": "가공된 결과를 저장한다",
       "selects": {
         "SERVICE_ROLE": "sink"
-      },
-      "entries": [
-        "sink/writer.py:run"
-      ]
+      }
     },
     "api": {
       "repo": "dt-api",
@@ -46,31 +39,11 @@
   ],
   "flow": {
     "sources": [
-      {
-        "path": "infra.kafka.consumer.topic",
-        "kind": "topic",
-        "relation": "consumes"
-      },
-      {
-        "path": "infra.kafka.producer.topic",
-        "kind": "topic",
-        "relation": "produces"
-      },
-      {
-        "path": "infra.kafka.consumer.group_id",
-        "kind": "group",
-        "relation": "consumes_as"
-      },
-      {
-        "path": "mongodb_collection",
-        "kind": "collection"
-      },
-      {
-        "path": "redis_key",
-        "kind": "rediskey",
-        "prefix": "prefix",
-        "join": ":"
-      }
+      {"path": "infra.kafka.consumer.topic", "kind": "topic", "relation": "consumes"},
+      {"path": "infra.kafka.producer.topic", "kind": "topic", "relation": "produces"},
+      {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
+      {"path": "mongodb_collection", "kind": "collection"},
+      {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}
     ]
   }
 }

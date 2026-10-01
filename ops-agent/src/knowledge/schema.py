@@ -39,20 +39,6 @@ class Service(StrictModel):
     selects: dict[str, str] = {}
     # 디렉터리가 실제로 나뉜 레포에만. `git grep`을 좁히는 데 쓴다.
     path: str = ""
-    # 서비스 사슬의 출발점(11b 5a) — `"파일:함수"` 또는 `"파일:클래스.메서드"`. 끝점이 없는 서비스(컨슈머 루프·
-    # 스케줄 잡)는 라우트 선언이 없어 추적기가 어디서 시작할지 모른다. 사람이 적는 편이 정확하고, 없으면
-    # 소유한 파일의 `main`·`run` 같은 이름 규약으로 고르되 추정이라고 적는다. 함수 이름만 적으면 레포의 같은
-    # 이름 전부가 출발점이 되므로 파일까지 요구한다.
-    entries: list[str] = []
-
-    @field_validator("entries")
-    @classmethod
-    def _entry_shape(cls, v: list[str]) -> list[str]:
-        for entry in v:
-            file, _, func = entry.rpartition(":")
-            if not file or not func or file.startswith("/") or ".." in file:
-                raise ValueError(f"출발점은 레포 안 `파일:함수` 꼴이어야 한다 — {entry!r}")
-        return v
 
     @field_validator("path")
     @classmethod

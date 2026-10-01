@@ -607,21 +607,4 @@ def test_code_graph가_끝점을_싣고_flow와_status가_말한다(tmp_path, mo
     assert captured.out.splitlines()[0].startswith("  api/r.py:L")
     assert "reads: alarm_events [collection] config키" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "/nope")
-    assert code == 1 and "끝점·서비스에 없다" in captured.out
-
-
-def test_code_graph가_서비스도_추적하고_code_trace가_서비스_이름을_받는다(tmp_path, monkeypatch, capsys):
-    """끝점이 없는 서비스(sink)의 사슬 — 지식에 출발점이 없으면 소유 파일의 `run`을 이름 규약으로 고른다.
-    사람은 `code trace sink`로 리드가 `code.trace_service`로 받는 줄들을 그대로 본다."""
-    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
-    config_root = _flow_tree(tmp_path)
-    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
-    assert code == 0, captured.out + captured.err
-    assert "서비스 추적" in captured.err
-    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "sink")
-    assert code == 0, captured.out + captured.err
-    assert captured.out.splitlines()[0] == "  출발점 sink/writer.py:run (이름 규약)"
-    assert "consumes: mx.alarm.main [topic] config키" in captured.out
-    assert "writes: alarm_events [collection] config키" in captured.out
-    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "nope")
-    assert code == 1 and "끝점·서비스에 없다" in captured.out
+    assert code == 1 and "끝점에 없다" in captured.out

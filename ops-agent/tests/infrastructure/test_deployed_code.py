@@ -354,26 +354,3 @@ async def test_source_for는_배포_커밋의_파일과_리터럴_grep을_준다
     hits = await src.grep(["def badge("])
     assert [(h.file, h.line) for h in hits] == [("api/routes.py", 5)]
     assert all(h.repo == "dt-core" and h.commit for h in hits)
-
-
-async def test_code_trace_service는_서비스_노드의_출발점별_사슬을_주고_없으면_실패로_답한다(flow_code):
-    """리드가 `code.trace`에 서비스 이름을 넣던 자리(커밋 4 예비 판) — 이제 문이 따로 있다. 출발점이 없는
-    서비스는 지식에 적으라고 말한다."""
-    graph = {"nodes": [{"id": "service_sink", "label": "sink", "type": "service", "repo": "dt-core",
-                        "entries": [{"entry": "sink/writer.py:run", "how": "지식", "traced": "ok",
-                                     "chain": ["sink/writer.py:L1 run"], "chain_parent": [None], "gaps": []}]},
-                       {"id": "service_processor", "label": "processor", "type": "service", "repo": "dt-core"},
-                       {"id": "collection_alarm_events", "label": "alarm_events", "type": "collection"}],
-             "links": [{"source": "service_sink", "target": "collection_alarm_events", "relation": "writes",
-                        "origin": "trace", "confidence": "INFERRED", "via": "key", "step": 0,
-                        "entry": "sink/writer.py:run", "source_file": "sink/writer.py", "source_location": "L3"}]}
-    flow_code.attach_flow_graph(graph)
-    got = await flow_code.trace_service("sink")
-    assert got.status == "ok" and got.data.splitlines()[0] == "출발점 sink/writer.py:run (지식)"
-    assert "writes: alarm_events [collection] config키" in got.data
-    none = await flow_code.trace_service("processor")
-    assert none.status == "error" and "출발점" in none.error and "entries" in none.error
-    unknown = await flow_code.trace_service("nope")
-    assert unknown.status == "error" and "서비스에 없다" in unknown.error
-    flow_code.attach_flow_graph(None)
-    assert "code graph" in (await flow_code.trace_service("sink")).error

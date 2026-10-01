@@ -754,7 +754,7 @@ def test_trace_lines는_읽기로_이어진_걸음만_남기고_표시_셋으로
     assert flow.trace_lines(g, ep) == [
         "api/r.py:L6 badge",
         "  → api/q.py:L3 AlarmRepo.recent — reads: alarm_events [collection] 확실",
-        "    → api/q.py:L20 AlarmRepo._q — consumes: mx.alarm.main [topic] config키 · mx.alarm.raw [topic] 추정",
+        "    → api/q.py:L20 AlarmRepo._q — reads: mx.alarm.main [topic] config키 · mx.alarm.raw [topic] 추정",
         "못 따라감 4: api/q.py:L12 getattr로 고른 대상은 못 따라간다 · api/q.py:L30 get: 받는 쪽 미상, 후보 4개 — 안 따라간다"
         " · api/q.py:L31 깊이 상한 6에서 멈춤: AlarmRepo._deep → x 외 1개",
         "걸음 4 중 읽기로 이어진 3만 적었다 — 나머지는 code.read로 본다"]
@@ -787,76 +787,3 @@ def test_traced_reads는_끝점의_추적_읽기를_종류별로_확실_먼저_�
     assert flow.traced_reads(g, ep, kind="collection") == ["alarm_events", "alarm_stats"]
     assert flow.traced_reads(g, ep, kind="topic") == ["mx.alarm.main", "mx.alarm.raw"]
     assert flow.traced_reads(g, "endpoint_nope", kind="collection") == []
-
-
-# ── 서비스 사슬 (11b 5a) ────────────────────────────────────────────────────────
-
-def _lead_graph_with_key():
-    # `_lead_graph`엔 redis 키 이름이 없다 — sink가 쓰는 stats 키 노드를 하나 더 둔다.
-    g = _lead_graph()
-    g["nodes"].append({"id": "rediskey_alarm_stats_line", "label": "alarm:stats:{line}", "type": "rediskey"})
-    return g
-
-
-def _sink_trace():
-    from src.knowledge import trace as tr
-    return tr.Trace("sink/writer.py:run", "dt-core", "ok",
-                    chain=(tr.Step("sink/writer.py", 1, "run"), tr.Step("sink/writer.py", 8, "store", parent=0)),
-                    reads=(tr.Read("topic", "mx.alarm.main", "추정", "sink/writer.py", 3, "key", step=0),
-                           tr.Read("rediskey", "alarm:stats:{line}", "추정", "sink/writer.py", 5, "key", step=0,
-                                   direction="writes"),
-                           tr.Read("collection", "alarm_events", "추정", "sink/writer.py", 9, "key", step=1,
-                                   direction="writes")),
-                    gaps=(tr.Gap("sink/writer.py", 1, "출발점을 이름 규약으로 골랐다"),))
-
-
-def test_add_trace는_서비스_노드에_출발점별_사슬을_남기고_방향으로_relation을_고른다():
-    """토픽을 `subscribe`하면 consumes, 컬렉션에 `insert`하면 writes — 끝점의 reads 하나로는 "그 데이터를 쓰는
-    함수"를 못 짚는다. 서비스는 출발점이 여럿일 수 있어 노드에 출발점별로 남긴다."""
-    assert flow.service_id("sink") == "service_sink"
-    g = flow.add_trace(_lead_graph_with_key(), "service_sink", _sink_trace(), entry="sink/writer.py:run", how="이름 규약")
-    edges = {(e["target"], e["relation"], e.get("entry")) for e in g["links"]
-             if e["source"] == "service_sink" and e.get("origin") == "trace"}
-    assert edges == {("topic_mx_alarm_main", "consumes", "sink/writer.py:run"),
-                     ("rediskey_alarm_stats_line", "writes", "sink/writer.py:run"),
-                     ("collection_alarm_events", "writes", "sink/writer.py:run")}
-    node = next(n for n in g["nodes"] if n["id"] == "service_sink")
-    assert [e["entry"] for e in node["entries"]] == ["sink/writer.py:run"]
-    assert node["entries"][0]["how"] == "이름 규약" and node["entries"][0]["chain"][0] == "sink/writer.py:L1 run"
-    assert "chain" not in node, "끝점의 평평한 필드를 서비스에 쓰지 않는다 — 출발점이 여럿이다"
-
-
-def test_서비스_trace_lines는_출발점마다_사슬을_적고_읽기와_쓰기를_가른다():
-    g = flow.add_trace(_lead_graph_with_key(), "service_sink", _sink_trace(), entry="sink/writer.py:run", how="이름 규약")
-    lines = flow.trace_lines(g, "service_sink")
-    assert lines[0] == "출발점 sink/writer.py:run (이름 규약)"
-    assert lines[1] == ("sink/writer.py:L1 run — consumes: mx.alarm.main [topic] config키 · "
-                        "writes: alarm:stats:{line} [rediskey] config키")
-    assert lines[2] == "  → sink/writer.py:L8 store — writes: alarm_events [collection] config키"
-    assert any(l.startswith("못 따라감 1:") for l in lines)
-    assert flow.trace_lines(_lead_graph(), "service_processor") is None      # 출발점이 없는 서비스
-
-
-def test_끝점_추적도_쓰기를_writes로_싣고_줄에_가른다():
-    from src.knowledge import trace as tr
-    g, ep = _traced_graph()
-    g = flow.add_trace(g, ep, tr.Trace("/summary/badge", "dt-api", "ok",
-                                       chain=(tr.Step("api/r.py", 6, "badge"),),
-                                       reads=(tr.Read("collection", "alarm_events", "확실", "api/r.py", 7, step=0,
-                                                      direction="writes"),)))
-    assert any(e["relation"] == "writes" and e["source"] == ep and e.get("origin") == "trace" for e in g["links"])
-    assert "api/r.py:L6 badge — writes: alarm_events [collection] 확실" in flow.trace_lines(g, ep)
-
-
-def test_summary가_서비스_추적_수를_센다():
-    g = flow.add_trace(_lead_graph(), "service_sink", _sink_trace(), entry="sink/writer.py:run", how="지식")
-    s = flow.summary(g)
-    assert (s["services_traced"], s["services_without_entry"]) == (1, 2)
-
-
-def test_흐름_텍스트의_서비스_줄에_코드가_짚은_방향이_따로_붙는다():
-    """config는 공유 레포의 두 서비스에 같은 consumes를 붙인다. 추적이 짚은 것은 함수 단위 사실이라 `(코드)`로
-    가른다 — 리드가 "sink가 alarm_events를 쓴다"를 config 선언과 구분해 읽게."""
-    g = flow.add_trace(_lead_graph_with_key(), "service_sink", _sink_trace(), entry="sink/writer.py:run", how="지식")
-    line = flow.flow_text(g, ["service_sink"], budget=10_000).splitlines()[0]
-    assert "writes(코드): alarm:stats:{line}, alarm_events" in line and "consumes(코드): mx.alarm.main" in line

@@ -197,13 +197,6 @@ class StubDeployedCode(DeployedCodePort):
             return ProbeResult.failed(f"{endpoint}: 스텁에 준비된 사슬이 없다", source=source, clock=self._clock)
         return ProbeResult.succeeded(str(self._trace[endpoint]), source=source, clock=self._clock)
 
-    async def trace_service(self, service: str) -> ProbeResult:
-        # 같은 seed 표를 쓴다 — 끝점 path와 서비스 이름은 모양이 달라 섞이지 않는다.
-        source = f"stub-code:trace_service {service}"
-        if service not in self._trace:
-            return ProbeResult.failed(f"{service}: 스텁에 준비된 사슬이 없다", source=source, clock=self._clock)
-        return ProbeResult.succeeded(str(self._trace[service]), source=source, clock=self._clock)
-
 
 class StubRestProber(RestProberPort):
     def __init__(self, cfg, responses: dict[str, Any] | None = None, *, clock: Clock):
