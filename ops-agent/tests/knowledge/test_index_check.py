@@ -87,3 +87,32 @@ async def test_보고는_여덟_줄_이내다():
                        await chk.recall_sample(idx, await _read_of(src)))
     assert 3 <= len(lines) <= 8
     assert any("커버리지" in l for l in lines) and any("정밀도" in l for l in lines) and any("재현율" in l for l in lines)
+
+
+async def test_정밀도_표본은_하위_클래스_생성이_베이스_생성자로_풀린_것을_맞은_것으로_본다():
+    """`Child()`는 `Base.__init__`을 실행한다 — 엣지는 맞는데 본문엔 `Child`만 적혀 있다. 베이스 이름만 찾으면
+    거짓 실패다(사내 첫 실행의 틀린 넷이 전부 이 모양이었다)."""
+    files = dict(FILES)
+    files["app/make.py"] = (
+        'class Base:\n'
+        '    def __init__(self):\n'
+        '        self.n = 0\n'
+        '\n'
+        'class Child(Base):\n'
+        '    pass\n'
+        '\n'
+        'def build():\n'
+        '    return Child()\n')
+    idx, src, _, _ = await _built(files)
+    assert ("app.make.Base.__init__", "calls", "exact") in {
+        (idx.symbols[e.dst].qualname, e.type, e.certainty) for e in idx.edges
+        if e.src == idx.lookup(REPO, "app.make.build")}
+    ok, total, failures = await chk.precision_sample(idx, await _read_of(src), n=500, seed=1)
+    assert ok == total, failures
+
+
+async def test_커버리지_불변식은_테스트_파일을_세지_않는다():
+    """입구에서 건너뛴 파일을 하네스가 세면 `.py == module`이 영원히 안 맞는다 — 같은 술어를 쓴다."""
+    idx, src, files, counts = await _built()
+    assert "tests/test_alarm.py" in files[REPO]
+    assert chk.invariants(idx, files=files, line_counts=counts) == []

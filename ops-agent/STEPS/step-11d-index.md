@@ -130,12 +130,44 @@ inherits 84 · overrides 68 · 불변식 OK. 남은 unknown은 stdlib 객체의 
 `sub.add_parser()`)이 대부분이다. 측정판(`tools/local_case.py`, 가짜 레포 둘)은 심볼 10 ·
 엣지 3 · 불변식 OK · 3/3 · 3/3 — 작지만 `code graph → status → check`가 끝까지 이어진다.
 
+## 사내 첫 `code check` — 레포 전부, 모듈 980
+
+| 줄 | 사내 |
+|---|---|
+| 1 심볼 | 9668 (module 980 · class 1816 · function 2537 · method 4335) · 파싱 실패 0 |
+| 2 엣지 | calls 8224/1809 · inherits 816 · imports 2437 · **overrides 3741** · implements 82 |
+| 3 불변식 | OK — 전 레포가 빠짐없이 들어갔다 |
+| 4 정밀도 | 96/100 — 틀린 넷이 전부 `테스트 함수 → 어떤 베이스.__init__` |
+| 5 재현율 | 330/330 |
+| 6 미해석 | builtin 4172 · external 4387 · stoplist 4827 · **too_many 1235 · unknown 1904** · variable_call 105 · method_missing 18 · field_call 3 |
+
+읽은 것과 한 것(**6a 후속 커밋**):
+
+- **정밀도의 틀린 넷은 인덱스가 아니라 하네스 버그였다.** 테스트가 하위 클래스를 생성하고 하위에 `__init__`이
+  없어 베이스의 `__init__`으로 풀렸다 — 실제로 실행되는 생성자가 그것이니 엣지는 맞다. 하네스가 본문에서
+  베이스 이름만 찾았다. 하위 클래스 이름도 맞은 것으로 센다.
+- **테스트 파일은 입구에서 건너뛴다.** 후보 풀·재현율에서만 빼고 심볼·엣지는 만들던 것을, 아예 읽지 않는다
+  (`tests/`·`test/`·`test_*.py`·`*_test.py`·`conftest.py`). 테스트가 어떤 함수를 부르는지는 "누가 부르나"의
+  답이 아니다. 커버리지 불변식은 **같은 술어**(`is_indexed`)로 센다 — 둘이 갈리면 `.py == module`이 영원히
+  안 맞는다. `is_test` 필드는 뜻이 없어져 뺐다.
+- **overrides 3741은 조상 전부에 걸어서다.** 메서드 4335개에 재정의 3741은 베이스 40 × 구현 30 꼴의 곱이다.
+  파이썬 의미대로 **가장 가까운 조상 하나**로 줄였다. 여기 `src/`는 계층이 얕아 68 그대로지만 사내 수치는
+  크게 줄어야 한다.
+- **too_many 1235 / unknown 1904가 6b의 우선순위다.** 수신 타입을 모르는 `x.m()`이 3천 건이고 그중 1235건은
+  같은 이름이 13개를 넘어 전부 버렸다 — 리포지토리 관례(`get`·`find`·`save`가 수십 군데)에서 예상된 모양.
+  답은 (e)의 상한을 올리는 것이 아니라 **수신 타입을 알아내는 것**이다: DI 등록·구조적 구현체·디스패치 표.
+  unknown은 서드파티 객체(커서·세션·클라이언트) 지역이 대부분일 텐데 6b에서 "머리가 외부 타입의 속성"을
+  따로 세어 확인한다.
+- implements 82, method_missing 18, field_call 3은 건강하다. 재현율 330은 코드가 클래스 중심(메서드 4335)이라
+  최상위 함수 호출 자체가 적어서다.
+
 ## 커밋 계획 (넷)
 
 | | 내용 | 상태 |
 |---|---|---|
 | 6a | 인덱서 코어·타입 표·엣지 5종·자원 참조, 하네스 A~C, `code graph`가 `symbols.json`·`edges.json`을 쓰고 `code status`가 말하고 `code check`가 검증 | ✅ |
-| 6b | 구현체·경계: 구조적 구현체(동명이 아닌 Protocol, 메서드 집합 포함), DI 레지스트리 조인, 디스패치 표, **공유 라이브러리를 레포별 핀 SHA로**(`.gitmodules` url ↔ `code.repos[].url`, 선택 `module_prefix`), vendored 건너뜀, 하네스 D, graphify `graph.json`에 우리 엣지 병합 | |
+| 6a 후속 | 사내 첫 숫자가 드러낸 셋 — 테스트 파일 입구 제외, overrides 최근접 조상, 정밀도의 하위 클래스 생성자 | ✅ |
+| 6b | 구현체·경계: **수신 타입 복구부터**(too_many 1235 — DI 레지스트리 조인, 구조적 구현체(동명이 아닌 Protocol, 메서드 집합 포함), 디스패치 표), **공유 라이브러리를 레포별 핀 SHA로**(`.gitmodules` url ↔ `code.repos[].url`, 선택 `module_prefix`), vendored 건너뜀, 하네스 D, graphify `graph.json`에 우리 엣지 병합 | |
 | 6c | 질의: impact(역방향 도달)·path·writers/readers, 인자 식(`obj.m(x.y())`), CLI, `code.trace`를 인덱스 BFS로(불일치는 Gap) | |
 | 6d | 리드 연결: action 등재·브리핑 예시의 칸·`case dryrun`·측정 T8~T10, 패리티 뒤 추적기 퇴역 | |
 
@@ -146,10 +178,11 @@ python -m src code graph
 python -m src code check
 ```
 
-두 번째의 일곱 줄을 그대로 옮겨 주면 된다. 보는 것: 3번 줄이 "불변식 OK"인지(= `.py` 전부가
-모듈로 셌는지), 정밀도·재현율, 그리고 6번 줄의 분류 — `unknown`·`method_missing`이 크면 그
+두 번째의 일곱 줄을 그대로 옮겨 주면 된다. 보는 것: 3번 줄이 "불변식 OK"인지(= 테스트를 뺀 `.py`
+전부가 모듈로 셌는지), 정밀도·재현율, 그리고 6번 줄의 분류 — `unknown`·`method_missing`이 크면 그
 모양을 안다(`external`·`variable_call`·`field_call`이 큰 것은 정상이다). 레포가 크면
-`--sample 200`.
+`--sample 200`. 후속 커밋 뒤 다시 돌리면 1번 줄 심볼 수(테스트 빠짐)와 2번 줄 overrides, 4번 줄
+정밀도가 바뀌어야 한다.
 
 ## 범위 밖 · 열린 것
 

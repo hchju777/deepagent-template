@@ -148,6 +148,10 @@ FILES = {
         '    def area(self):\n'
         '        return 9\n'
         '\n'
+        'class Round(Circle):\n'
+        '    def area(self):\n'
+        '        return 1\n'
+        '\n'
         'class Loose:\n'
         '    def compute(self):\n'
         '        return 0\n'),
@@ -202,11 +206,11 @@ async def test_모든_py가_모듈_심볼이_되고_파싱_실패도_모듈로_�
     """커버리지 `.py 수 == module 수`가 성립하려면 깨진 파일도 모듈이어야 한다 — 빼면 794/794를 말할 수 없다."""
     idx = await _index()
     modules = [s for s in idx.symbols if s.kind == "module"]
-    assert len(modules) == len(FILES)
+    assert len(modules) == sum(ix.is_indexed(p) for p in FILES) == len(FILES) - 1
     assert all(s.id == i for i, s in enumerate(idx.symbols))
     broken = idx.symbols[_sid(idx, "app.broken")]
     assert broken.kind == "module" and broken.parse_error
-    assert idx.symbols[_sid(idx, "tests.test_alarm.test_x")].is_test
+    assert _sid(idx, "tests.test_alarm") is None                        # 테스트 파일은 입구에서 건너뛴다
 
 
 async def test_키는_레포와_qualname이고_메서드는_class_id로_클래스를_가리킨다():
@@ -300,6 +304,8 @@ async def test_상속과_재정의_엣지_던더는_제외():
     assert ("app.plugins.Shape", "inherits", "exact") in _edges(idx, "app.plugins.Square")
     assert ("app.plugins.Shape.area", "overrides", "exact") in _edges(idx, "app.plugins.Circle.area")
     assert not any(t == "overrides" for _, t, _ in _edges(idx, "app.plugins.Square.__repr__"))
+    # 가장 가까운 조상 하나만 — 조상 전부에 걸면 베이스 메서드 40 × 구현 30이 1200 엣지가 된다(사내 3741).
+    assert _edges(idx, "app.plugins.Round.area", "overrides") == {("app.plugins.Circle.area", "overrides", "exact")}
 
 
 async def test_동명_클래스는_메서드_단위로_implements이고_없는_메서드는_엣지가_없으며_경로가_가까운_쪽이다():
@@ -366,7 +372,7 @@ async def test_json으로_내보내고_다시_읽어도_같고_요약이_숫자�
     assert [s.qualname for s in again.symbols] == [s.qualname for s in idx.symbols]
     assert len(again.edges) == len(idx.edges) and again.lookup(REPO, "app.util.now") == idx.lookup(REPO, "app.util.now")
     s = idx.summary()
-    assert s["symbols"] == len(idx.symbols) and s["modules"] == len(FILES) and s["parse_errors"] == 1
+    assert s["symbols"] == len(idx.symbols) and s["modules"] == len(FILES) - 1 and s["parse_errors"] == 1
     assert s["edges"]["calls"]["exact"] > 0 and s["edges"]["calls"]["candidate"] > 0
 
 
@@ -428,3 +434,22 @@ async def test_자기_자신으로_도는_대입은_타입_추론을_끊고_인�
     idx = await _index(SHADOW, names=[])
     spin = _sid(idx, "pkg.use.spin")
     assert spin is not None and all(e.certainty == "candidate" for e in idx.edges if e.src == spin)
+
+
+async def test_테스트_파일은_입구에서_건너뛰어_심볼도_엣지도_안_만든다():
+    """사내 첫 `code check`에서 정밀도 표본의 틀린 넷이 전부 테스트 파일이었다 — 테스트가 어떤 함수를 부르는지는
+    조사의 "누가 부르나"에 답이 아니다. 후보 풀에서만 빼던 것을 아예 안 읽는다."""
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/a.py": "def f():\n    return 1\n",
+        "tests/test_a.py": "from pkg.a import f\n\n\ndef test_f():\n    return f()\n",
+        "pkg/test_b.py": "from pkg.a import f\n\n\ndef test_b():\n    return f()\n",
+        "pkg/c_test.py": "def c():\n    return 1\n",
+        "pkg/conftest.py": "def fixture():\n    return 1\n",
+        "pkg/test/helpers.py": "def h():\n    return 1\n",
+    }
+    idx = await _index(files, names=[])
+    assert {s.qualname for s in idx.symbols if s.kind == "module"} == {"pkg", "pkg.a"}
+    assert not any(e.type == "calls" for e in idx.edges)
+    assert [p for p in files if not ix.is_indexed(p)] == [
+        "tests/test_a.py", "pkg/test_b.py", "pkg/c_test.py", "pkg/conftest.py", "pkg/test/helpers.py"]

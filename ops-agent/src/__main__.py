@@ -1392,6 +1392,7 @@ def cmd_code_check(args, env) -> int:
     """심볼 인덱스의 정확도를 **숫자로** 낸다(11d 하네스) — 불변식·정밀도 표본·재현율 표본, 여덟 줄 이내.
     불변식이 깨지면 1. 정밀도·재현율은 숫자일 뿐이다(사람이 옮겨 적는다)."""
     from src.knowledge import graph_build as gb
+    from src.knowledge import index as indexing
     from src.knowledge import index_check as chk
 
     site, gbm, fct, _ = _code_site(args, env)
@@ -1414,7 +1415,7 @@ def cmd_code_check(args, env) -> int:
             if repo not in code.pinned():
                 continue
             source = code.source_for(repo)
-            names = [f for f in await source.files() if f.endswith(".py")]
+            names = [f for f in await source.files() if indexing.is_indexed(f)]
             files[repo] = set(names)
             for path in names:
                 text = await source.read(path)

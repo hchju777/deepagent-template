@@ -32,7 +32,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Protocol
 
-from src.knowledge.flow import Name, _is_noise, direction
+from src.knowledge.flow import Name, direction
 from src.knowledge.trace import _collect_reads
 
 # 사내 도구가 측정으로 정한 값들. candidate 매칭에서 제외하는 흔한 이름 — 안 막으면 `.get(` 하나가 후보 수십 개로
@@ -73,7 +73,6 @@ class Symbol:
     line: int
     end_line: int
     class_id: int | None = None
-    is_test: bool = False
     is_async: bool = False
     decorators: tuple[str, ...] = ()
     signature: str = ""
@@ -348,7 +347,6 @@ class _Collector:
         qual = f"{owner_qual}.{node.name}"
         sym = self.index.add_symbol(kind="class", name=node.name, qualname=qual, repo=self.mod.repo,
                                     file=self.mod.path, line=node.lineno, end_line=node.end_lineno or node.lineno,
-                                    is_test=_is_noise(self.mod.path, ""),
                                     decorators=tuple(ast.unparse(d) for d in node.decorator_list))
         cls = _Class(sid=sym.id, node=node, mod=self.mod,
                      bases=[c for c in (_chain(b) for b in node.bases) if c], is_port=_is_port_class(node))
@@ -376,7 +374,7 @@ class _Collector:
         sym = self.index.add_symbol(
             kind="method" if class_ is not None else "function", name=node.name, qualname=qual,
             repo=self.mod.repo, file=self.mod.path, line=node.lineno, end_line=node.end_lineno or node.lineno,
-            class_id=class_.sid if class_ is not None else None, is_test=_is_noise(self.mod.path, ""),
+            class_id=class_.sid if class_ is not None else None,
             is_async=isinstance(node, ast.AsyncFunctionDef),
             decorators=tuple(ast.unparse(d) for d in node.decorator_list),
             signature=f"({', '.join(params)})")
@@ -477,8 +475,6 @@ class _Resolver:
                 for f in mod.funcs:
                     self.funcs[f.sid] = f
                     sym = index.symbols[f.sid]
-                    if sym.is_test:
-                        continue
                     (self.methods_by_name if f.class_sid is not None else self.funcs_by_name)[sym.name].append(f.sid)
 
     # ── 이름 → 대상 ──
@@ -954,6 +950,7 @@ class _Resolver:
                     base_m = self.classes[a].methods.get(name) if a in self.classes else None
                     if base_m is not None:
                         idx.add_edge(msid, base_m, "overrides", "exact", line=self.funcs[msid].node.lineno, via="mro")
+                        break           # 가장 가까운 조상 하나 — 전부에 걸면 베이스 40 × 구현 30이 1200 엣지다(사내 3741)
         for fn in self.funcs.values():
             for chain, line in fn.calls:
                 res = self.resolve_call(fn, chain)
@@ -1033,15 +1030,10 @@ class _Resolver:
             wanted.setdefault(n.key_token, n)
         for repo_mods in self.modules.values():
             for mod in repo_mods.values():
-                if _is_noise(mod.path, ""):
-                    continue
                 for ident, value in mod.string_consts.items():
                     if value in wanted and ident not in aliases:
                         aliases[ident] = wanted[value]
         for fn in self.funcs.values():
-            sym = self.index.symbols[fn.sid]
-            if sym.is_test:
-                continue
             node = fn.node
             start, end = node.lineno, node.end_lineno or node.lineno
             # 데코레이터는 빼고 본문부터 — `_collect_reads`는 줄 오프셋으로 답한다.
@@ -1058,6 +1050,7 @@ class _Resolver:
 
             _collect_reads(segment, body_start, fn.mod.path, "확실", self.names, aliases, add)
             if found:
+                sym = self.index.symbols[fn.sid]
                 self.index.symbols[fn.sid] = Symbol(**{**asdict(sym), "resources": tuple(found),
                                                      "decorators": sym.decorators})
 
@@ -1076,7 +1069,7 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
         except Exception as exc:                                        # noqa: BLE001
             index.gaps.append(f"{repo}: 파일 목록을 못 읽었다 — {type(exc).__name__}: {exc}")
             files = []
-        for path in sorted(f for f in files if f.endswith(".py") and not _skipped(f)):
+        for path in sorted(f for f in files if is_indexed(f)):
             fqn = _module_fqn(path, prefixes.get(repo, ""))
             try:
                 text = await source.read(path)
@@ -1087,7 +1080,7 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
                 err = "" if text is not None else "읽기 실패"
             sym = index.add_symbol(kind="module", name=fqn.rsplit(".", 1)[-1] or path, qualname=fqn, repo=repo,
                                    file=path, line=1, end_line=max(1, len((text or "").splitlines())),
-                                   is_test=_is_noise(path, ""), parse_error=err)
+                                   parse_error=err)
             mod = _Module(repo, path, fqn, text or "", sym.id)
             modules.setdefault(repo, {})[fqn] = mod
             if text is None:
@@ -1108,3 +1101,17 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
 
 def _skipped(path: str) -> bool:
     return any(part in _SKIP_DIRS for part in path.split("/")[:-1])
+
+
+def _is_test_file(path: str) -> bool:
+    parts = path.replace("\\", "/").split("/")
+    base = parts[-1]
+    return any(p in ("tests", "test") for p in parts[:-1]) or base == "conftest.py" \
+        or base.startswith("test_") or base.endswith(("_test.py", "_tests.py"))
+
+
+def is_indexed(path: str) -> bool:
+    """인덱스에 들어가는 파일인가 — 하네스의 커버리지 불변식도 **이 술어**로 센다. 둘이 갈리면 `.py == module`이
+    영원히 안 맞는다. 테스트 파일은 입구에서 건너뛴다: 테스트가 어떤 함수를 부르는지는 "누가 부르나"의 답이
+    아니고, 사내 첫 실행에서 정밀도 표본의 틀린 넷이 전부 테스트였다."""
+    return path.endswith(".py") and not _skipped(path) and not _is_test_file(path)

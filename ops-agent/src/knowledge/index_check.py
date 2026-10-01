@@ -17,7 +17,7 @@ import random
 import re
 from typing import Awaitable, Callable
 
-from src.knowledge.index import CERTAINTIES, EDGE_TYPES, Index, _body_walk
+from src.knowledge.index import CERTAINTIES, EDGE_TYPES, Index, _body_walk, is_indexed
 
 Reader = Callable[[str, str], Awaitable[str | None]]      # (repo, path) → 배포 커밋의 파일 본문
 
@@ -50,7 +50,7 @@ def invariants(index: Index, *, files: dict[str, set[str]], line_counts: dict[tu
             problems.append(f"엣지가 중복이다: {index.symbols[e.src].qualname}→{index.symbols[e.dst].qualname} {e.type}")
         seen.add((e.src, e.dst, e.type))
     for repo, paths in sorted(files.items()):
-        want = {p for p in paths if p.endswith(".py")}
+        want = {p for p in paths if is_indexed(p)}
         have = {s.file for s in index.symbols if s.kind == "module" and s.repo == repo}
         missing, extra = sorted(want - have), sorted(have - want)
         if missing or extra:
@@ -74,21 +74,36 @@ async def precision_sample(index: Index, read: Reader, *, n: int = 100, seed: in
             and index.symbols[e.dst].kind in ("function", "method")]
     sample = rng.sample(pool, min(n, len(pool)))
     cache: dict = {}
+    subs: dict[int, list[int]] = {}
+    for e in index.edges:
+        if e.type == "inherits":
+            subs.setdefault(e.dst, []).append(e.src)
     ok, failures = 0, []
     for e in sample:
         src, dst = index.symbols[e.src], index.symbols[e.dst]
         text = await _cached(cache, read, src.repo, src.file) or ""
         lines = text.splitlines()
         body = "\n".join(lines[src.line - 1:src.end_line]) + "\n" + "\n".join(src.decorators)
-        # 생성자 호출은 클래스 이름으로 적힌다 — `__init__`은 본문에 없다.
-        needle = dst.name
+        # 생성자 호출은 클래스 이름으로 적힌다 — `__init__`은 본문에 없다. `Child()`가 `Base.__init__`을 실행하면
+        # 본문엔 Child뿐이다 — 하위 클래스 이름도 맞은 것(사내 첫 실행의 틀린 넷이 전부 이 모양).
+        needles = {dst.name}
         if dst.name == "__init__" and dst.class_id is not None:
-            needle = index.symbols[dst.class_id].name
-        if re.search(rf"\b{re.escape(needle)}\b", body):
+            needles = {index.symbols[c].name for c in _with_descendants(dst.class_id, subs)}
+        if any(re.search(rf"\b{re.escape(n)}\b", body) for n in needles):
             ok += 1
         else:
             failures.append(f"{src.qualname} → {dst.qualname} (L{e.line})")
     return ok, len(sample), failures[:3]
+
+
+def _with_descendants(csid: int, subs: dict[int, list[int]]) -> set[int]:
+    out, stack = {csid}, [csid]
+    while stack:
+        for s in subs.get(stack.pop(), []):
+            if s not in out:
+                out.add(s)
+                stack.append(s)
+    return out
 
 
 async def recall_sample(index: Index, read: Reader) -> tuple[int, int, list[str]]:
@@ -103,7 +118,7 @@ async def recall_sample(index: Index, read: Reader) -> tuple[int, int, list[str]
             by_file.setdefault((s.repo, s.file), []).append(s)
     edge_set = {(e.src, e.dst) for e in index.edges if e.type == "calls"}
     for m in index.symbols:
-        if m.kind != "module" or m.parse_error or m.is_test:
+        if m.kind != "module" or m.parse_error:
             continue
         text = await _cached(cache, read, m.repo, m.file)
         if not text:
@@ -147,7 +162,7 @@ def report(index: Index, problems: list[str], precision: tuple[int, int, list[st
         f"{k.get('function', 0)} · method {k.get('method', 0)}) · 파싱 실패 {s['parse_errors']}",
         "2 엣지 " + " · ".join(f"{t} {e[t]['exact']}/{e[t]['candidate']}" for t in EDGE_TYPES if t in e)
         + " (확실/추정)",
-        f"3 불변식 {'OK — 커버리지(.py == module)·id·엣지·줄 범위 전부' if not problems else f'위반 {len(problems)}: ' + ' | '.join(problems[:2])}",
+        f"3 불변식 {'OK — 커버리지(.py == module, 테스트 제외)·id·엣지·줄 범위 전부' if not problems else f'위반 {len(problems)}: ' + ' | '.join(problems[:2])}",
         f"4 정밀도 {precision[0]}/{precision[1]}" + (f" — 틀림: {' | '.join(precision[2])}" if precision[2] else ""),
         f"5 재현율 {recall[0]}/{recall[1]}" + (f" — 빠짐: {' | '.join(recall[2])}" if recall[2] else ""),
         "6 미해석 호출 " + (" · ".join(f"{k_} {v}" for k_, v in sorted(s["unresolved"].items())) or "없음"),

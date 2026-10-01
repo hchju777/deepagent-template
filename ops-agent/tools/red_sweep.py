@@ -995,6 +995,17 @@ CASES = [
  ('순환 대입의 타입 추론을 안 끊는다', ROOT / "src/knowledge/index.py",
   '                target = self._call_target(fn, chain, hops=hops + 1)', '                target = self._call_target(fn, chain)',
   ['tests/knowledge/test_index.py::test_자기_자신으로_도는_대입은_타입_추론을_끊고_인덱스는_끝난다']),
+ ('테스트 파일을 인덱싱한다', ROOT / "src/knowledge/index.py",
+  '    return path.endswith(".py") and not _skipped(path) and not _is_test_file(path)',
+  '    return path.endswith(".py") and not _skipped(path)',
+  ['tests/knowledge/test_index.py::test_테스트_파일은_입구에서_건너뛰어_심볼도_엣지도_안_만든다']),
+ ('overrides가 조상 전부에 걸린다', ROOT / "src/knowledge/index.py",
+  '                        break           # 가장 가까운 조상 하나', '                        pass            # 가장 가까운 조상 하나',
+  ['tests/knowledge/test_index.py::test_상속과_재정의_엣지_던더는_제외']),
+ ('정밀도 표본이 하위 클래스 생성자를 거짓 실패로 본다', ROOT / "src/knowledge/index_check.py",
+  '            needles = {index.symbols[c].name for c in _with_descendants(dst.class_id, subs)}',
+  '            needles = {index.symbols[dst.class_id].name}',
+  ['tests/knowledge/test_index_check.py::test_정밀도_표본은_하위_클래스_생성이_베이스_생성자로_풀린_것을_맞은_것으로_본다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1022,7 +1033,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 262, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 265, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
