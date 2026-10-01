@@ -238,7 +238,7 @@ python -m src code status     # 읽을 수 있는 상태인가 (네트워크 없
 python -m src code plan       # 사람이 직접 칠 git 명령 (네트워크 없음)
 python -m src code sync       # clone/fetch — **사내에서만**
 python -m src code graph      # 흐름 그래프 + 심볼 인덱스 (sync 뒤 자동으로도 돈다)
-python -m src code check      # 인덱스 검증 — 불변식·정밀도·재현율 일곱 줄
+python -m src code check      # 인덱스 검증 — 불변식·정밀도·재현율 일곱 줄 (--unresolved: 못 푼 호출의 모양)
 ```
 
 조사가 "데이터가 이상하다"를 넘어 "왜 그런가"로 가려면 대상 서비스의 코드를 읽어야

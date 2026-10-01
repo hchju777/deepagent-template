@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1393 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 265 사례 |
+| 테스트 | `1395 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 267 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -345,7 +345,10 @@ deepagent-template 리포의 ops-agent/ 트리에서 이어서 작업한다.
 `code graph`가 symbols.json·edges.json을 쓰고 `code status`가 말하고 `code check`가 일곱 줄로
 검증한다. 실제 코드(src/ 90파일)로 돌려 여섯 가지를 고쳤다(11d 문서의 표). 사내 첫 `code check`
 (모듈 980, 불변식 OK, 정밀도 96/100)가 드러낸 셋 — 테스트 파일 입구 제외·overrides 최근접 조상·
-정밀도의 하위 클래스 생성자 — 은 6a 후속 커밋으로 고쳤다(11d 문서 "사내 첫 code check"). 다음은 **11d 6b**
+정밀도의 하위 클래스 생성자 — 은 6a 후속 커밋으로 고쳤다(11d 문서 "사내 첫 code check"). 두 번째
+숫자(심볼 6509, overrides 1849, 정밀도 100/100, too_many 823 · unknown 1009)를 보고 6b-0으로
+`code check --unresolved`(못 푼 호출의 모양 — 공유 라이브러리 비중·수신자 묶음)를 넣었다. 사내에서 그
+8~10번 줄을 받아야 6b-1의 순서가 정해진다. 다음은 **11d 6b-1**
 (구조적 구현체·DI 레지스트리·디스패치 표·공유 라이브러리를 레포별 핀 SHA로·하네스 D·graphify
 병합), 그다음 6c(impact/path 질의, code.trace를 인덱스 위로), 6d(리드 연결·측정), 12a.
 사내에서는 `code graph` 뒤 `code check`의 일곱 줄을 받아 적는 것이 첫 일이다. 시작하기 전에

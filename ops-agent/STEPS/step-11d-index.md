@@ -161,13 +161,54 @@ inherits 84 · overrides 68 · 불변식 OK. 남은 unknown은 stdlib 객체의 
 - implements 82, method_missing 18, field_call 3은 건강하다. 재현율 330은 코드가 클래스 중심(메서드 4335)이라
   최상위 함수 호출 자체가 적어서다.
 
+### 두 번째 `code check` — 후속 커밋 뒤
+
+| 줄 | 첫 번째 | 두 번째 |
+|---|---|---|
+| 1 심볼 | 9668 (module 980 · function 2537) | **6509** (module 813 · class 1571 · function 545 · method 3580) |
+| 2 엣지 | calls 8224/1809 · overrides 3741 | calls 3748/647 · inherits 772 · imports 1831 · **overrides 1849** · implements 82 |
+| 4 정밀도 | 96/100 | **100/100** |
+| 6 미해석 | too_many 1235 · unknown 1904 · external 2228 | too_many 823 · unknown 1009 · external 2228 |
+
+테스트가 최상위 함수의 80%(2537→545)와 calls 엣지의 절반 넘게를 차지하고 있었다. overrides는 이제 메서드당
+하나라 "3580개 중 1849개가 조상에 같은 이름을 가진다"는 코드의 사실이다 — 인터페이스+구현 구조가 그만큼
+두껍다. 남은 과녁은 **too_many 823 · unknown 1009**(비자명 호출 셋 중 하나는 수신 타입을 모른다)와
+**external 2228에 섞인 공유 라이브러리**다 — `ls-tree`가 서브모듈 안으로 안 내려가 공유 라이브러리는 아직
+인덱스에 없고, 거기로 가는 import·호출이 전부 서드파티로 세어진다.
+
+## 6b-0 — 미해석 진단 (`code check --unresolved`)
+
+6b를 "DI 조인·구조적 구현체·디스패치 표"로 바로 들어가면 사내 코드의 모양을 안 보고 짓는 것이다. 커밋 4처럼
+측정을 먼저 둔다. `--unresolved`가 일곱 줄 뒤에 **8~10번 줄**을 덧붙인다:
+
+| 줄 | 무엇 | 어떻게 가르나 |
+|---|---|---|
+| 8 external | **공유 라이브러리 / 서드파티**, 머리 이름 상위 | `.gitmodules`의 `path`를 import 접두사로(`dir/sub` → `dir.sub`). 접두사가 안 맞으면 공유가 0으로 보인다 — 서브모듈 디렉터리가 곧 패키지라는 가정이고, 아니면 6b-1의 `module_prefix`로 바로잡는다 |
+| 9 미해석 수신자 | too_many+unknown의 `x`가 무엇인가 | `self.attr`(주입 — `self.x = 파라미터` / 호출 결과 — `self.x = Cls()` / 공유 타입 / 출처 모름) · 파라미터(힌트 없음 / 공유 타입) · 지역(외부 호출 결과 / 공유 / 그 밖) · 그 밖(맨 이름 / 체인 머리) — 묶음마다 이름 상위 3 |
+| 10 | too_many가 버린 메서드 이름 상위 5 | 같은 이름이 13개 넘어 전부 버린 것 — `get`·`find`류면 리포지토리 관례다 |
+
+인덱서는 못 푼 자리에서 **모양→이름→건수**만 센다(`Index.unresolved_shapes`, `shared_prefixes`) — 심볼·엣지
+스키마는 안 바뀐다. 자명한 것(builtin·stoplist·variable_call·field_call)은 모양을 안 센다.
+
+읽는 법 — 6b-1의 순서를 이 숫자가 정한다:
+- **8번의 공유 라이브러리가 크면** 핀별 서브모듈 인덱싱(`gitlink_at`의 SHA로 공유 레포를 읽는다)이 먼저다 —
+  그 호출·상속이 전부 진짜 엣지로 바뀐다.
+- **9번의 `self.attr` 주입이 크면** DI 등록 조인(컨테이너·팩토리·`Depends` 제공자 너머)이 먼저다 — 생성
+  지점 역전파가 닿지 않는 주입이 그만큼이라는 뜻이다.
+- **파라미터 힌트 없음이 크면** 호출 지점의 인자 타입 역전파(함수 호출의 인자 → 파라미터)를 더한다.
+- **지역 외부 호출 결과·서드파티가 크면** 그건 원래 못 푸는 것이다 — 더 짓지 않는다.
+
+여기 `src/`에서는 공유 0(서브모듈 없음), 수신자 455 중 지역 311(대부분 argparse·re 객체), 파라미터 57,
+`self.attr` 25 — 예상대로 "원래 못 푸는 것"이 대부분이다.
+
 ## 커밋 계획 (넷)
 
 | | 내용 | 상태 |
 |---|---|---|
 | 6a | 인덱서 코어·타입 표·엣지 5종·자원 참조, 하네스 A~C, `code graph`가 `symbols.json`·`edges.json`을 쓰고 `code status`가 말하고 `code check`가 검증 | ✅ |
 | 6a 후속 | 사내 첫 숫자가 드러낸 셋 — 테스트 파일 입구 제외, overrides 최근접 조상, 정밀도의 하위 클래스 생성자 | ✅ |
-| 6b | 구현체·경계: **수신 타입 복구부터**(too_many 1235 — DI 레지스트리 조인, 구조적 구현체(동명이 아닌 Protocol, 메서드 집합 포함), 디스패치 표), **공유 라이브러리를 레포별 핀 SHA로**(`.gitmodules` url ↔ `code.repos[].url`, 선택 `module_prefix`), vendored 건너뜀, 하네스 D, graphify `graph.json`에 우리 엣지 병합 | |
+| 6b-0 | 미해석 진단 `code check --unresolved` — 공유 라이브러리 비중·수신자 묶음·버린 메서드 | ✅ |
+| 6b-1… | 진단이 가리키는 순서로: 공유 라이브러리를 레포별 핀 SHA로(`.gitmodules` url ↔ `code.repos[].url`, 선택 `module_prefix`) / DI 등록 조인 / 인자 타입 역전파 / 구조적 구현체(동명이 아닌 Protocol) / 디스패치 표, 그리고 하네스 D, graphify `graph.json`에 우리 엣지 병합 | 진단 대기 |
 | 6c | 질의: impact(역방향 도달)·path·writers/readers, 인자 식(`obj.m(x.y())`), CLI, `code.trace`를 인덱스 BFS로(불일치는 Gap) | |
 | 6d | 리드 연결: action 등재·브리핑 예시의 칸·`case dryrun`·측정 T8~T10, 패리티 뒤 추적기 퇴역 | |
 
@@ -175,10 +216,10 @@ inherits 84 · overrides 68 · 불변식 OK. 남은 unknown은 stdlib 객체의 
 
 ```
 python -m src code graph
-python -m src code check
+python -m src code check --unresolved
 ```
 
-두 번째의 일곱 줄을 그대로 옮겨 주면 된다. 보는 것: 3번 줄이 "불변식 OK"인지(= 테스트를 뺀 `.py`
+두 번째의 열 줄을 그대로 옮겨 주면 된다(8~10번이 6b-0의 진단이다). 보는 것: 3번 줄이 "불변식 OK"인지(= 테스트를 뺀 `.py`
 전부가 모듈로 셌는지), 정밀도·재현율, 그리고 6번 줄의 분류 — `unknown`·`method_missing`이 크면 그
 모양을 안다(`external`·`variable_call`·`field_call`이 큰 것은 정상이다). 레포가 크면
 `--sample 200`. 후속 커밋 뒤 다시 돌리면 1번 줄 심볼 수(테스트 빠짐)와 2번 줄 overrides, 4번 줄

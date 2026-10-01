@@ -169,3 +169,39 @@ def report(index: Index, problems: list[str], precision: tuple[int, int, list[st
         f"7 자원 참조 {s['resources']} · gap {s['gaps']}",
     ]
     return lines
+
+
+def _top(counts: dict[str, int], n: int = 3) -> str:
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
+    return " · ".join(f"{k} {v}" for k, v in items) if items else "—"
+
+
+def unresolved_report(index: Index) -> list[str]:
+    """`code check --unresolved` — 못 푼 호출의 **모양**. 사내 두 번째 숫자(too_many 823 · unknown 1009 ·
+    external 2228)가 주입된 필드인지, 힌트 없는 파라미터인지, 서드파티 객체인지, 아직 인덱스에 없는 공유
+    라이브러리인지에 따라 6b-1이 다르다. 여덟 줄 안 — 사람이 옮겨 적는다."""
+    sh = {k: dict(v) for k, v in index.unresolved_shapes.items()}
+    n = lambda k: sum(sh.get(k, {}).values())                         # noqa: E731
+    shared = ", ".join(p for ps in index.shared_prefixes.values() for p in ps) or "없음"
+    recv = ["self_attr_param", "self_attr_call", "self_attr_shared", "self_attr",
+            "param", "param_shared", "local_external", "local_shared", "local", "bare_name", "other"]
+    lines = [
+        f"8 external {n('external_shared') + n('external_third')} — 공유 라이브러리 {n('external_shared')}"
+        f" ({_top(sh.get('external_shared', {}))}) · 서드파티 {n('external_third')} ({_top(sh.get('external_third', {}), 5)})"
+        f" · .gitmodules 접두사: {shared}",
+        f"9 미해석 수신자 {sum(n(k) for k in recv)} (too_many+unknown) —",
+        f"  self.attr {n('self_attr_param') + n('self_attr_call') + n('self_attr_shared') + n('self_attr')}"
+        f" — 주입 {n('self_attr_param')} ({_top(sh.get('self_attr_param', {}))})"
+        f" · 호출 결과 {n('self_attr_call')} ({_top(sh.get('self_attr_call', {}))})"
+        f" · 공유 타입 {n('self_attr_shared')} ({_top(sh.get('self_attr_shared', {}))})"
+        f" · 출처 모름 {n('self_attr')}",
+        f"  파라미터 {n('param') + n('param_shared')} — 힌트 없음 {n('param')} ({_top(sh.get('param', {}))})"
+        f" · 공유 타입 {n('param_shared')} ({_top(sh.get('param_shared', {}))})",
+        f"  지역 {n('local_external') + n('local_shared') + n('local')} — 외부 호출 결과 {n('local_external')}"
+        f" ({_top(sh.get('local_external', {}))}) · 공유 {n('local_shared')} ({_top(sh.get('local_shared', {}))})"
+        f" · 그 밖 {n('local')} ({_top(sh.get('local', {}))})",
+        f"  그 밖 {n('bare_name') + n('other')} — 맨 이름 {n('bare_name')} ({_top(sh.get('bare_name', {}))})"
+        f" · 체인 머리 {n('other')} ({_top(sh.get('other', {}))})",
+        f"10 too_many가 버린 메서드 상위: {_top(sh.get('too_many_method', {}), 5)}",
+    ]
+    return lines

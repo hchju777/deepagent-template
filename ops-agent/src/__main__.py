@@ -1430,7 +1430,10 @@ def cmd_code_check(args, env) -> int:
         problems = chk.invariants(index, files=files, line_counts=counts)
         precision = await chk.precision_sample(index, read, n=args.sample, seed=args.seed)
         recall = await chk.recall_sample(index, read)
-        return chk.report(index, problems, precision, recall), problems
+        lines = chk.report(index, problems, precision, recall)
+        if getattr(args, "unresolved", False):
+            lines += chk.unresolved_report(index)
+        return lines, problems
 
     lines, problems = asyncio.run(go())
     for line in stale:
@@ -2223,6 +2226,8 @@ def build_parser() -> argparse.ArgumentParser:
     check = code_sub.add_parser("check", help="심볼 인덱스 검증 — 불변식·정밀도·재현율 몇 줄 (네트워크 없음)")
     check.add_argument("--sample", type=int, default=100, help="정밀도 표본 크기 (기본 100)")
     check.add_argument("--seed", type=int, default=1, help="표본 추출 씨앗 — 같은 씨앗이면 같은 표본")
+    check.add_argument("--unresolved", action="store_true",
+                       help="못 푼 호출의 모양을 덧붙인다 — 공유 라이브러리 비중·수신자 묶음·버린 메서드 상위")
     _add_site_options(check, sub=True)
     check.set_defaults(run=cmd_code_check)
 

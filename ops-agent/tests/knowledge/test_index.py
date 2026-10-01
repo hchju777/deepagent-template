@@ -453,3 +453,52 @@ async def test_테스트_파일은_입구에서_건너뛰어_심볼도_엣지도
     assert not any(e.type == "calls" for e in idx.edges)
     assert [p for p in files if not ix.is_indexed(p)] == [
         "tests/test_a.py", "pkg/test_b.py", "pkg/c_test.py", "pkg/conftest.py", "pkg/test/helpers.py"]
+
+
+# ── 미해석 진단(6b-0) — 못 푼 호출이 어떤 모양인지 ────────────────────────
+
+SHARED = {
+    ".gitmodules": '[submodule "shared_lib"]\n\tpath = shared_lib\n\turl = ../shared-lib.git\n',
+    "pkg/__init__.py": "",
+    "pkg/svc.py": (
+        "import httpx\n"
+        "from shared_lib.store import Store\n"
+        "from shared_lib import util\n\n\n"
+        "class Svc:\n"
+        "    def __init__(self, repo, client):\n"
+        "        self.repo = repo\n"
+        "        self.client = httpx.Client()\n"
+        "        self.store = Store()\n\n"
+        "    def run(self, db, store: Store):\n"
+        "        resp = httpx.get('x')\n"
+        "        self.repo.find_all()\n"
+        "        self.client.post('y')\n"
+        "        self.store.save()\n"
+        "        db.run_query('q')\n"
+        "        store.save()\n"
+        "        resp.raise_for_status()\n"
+        "        util.helper()\n"
+        "        return httpx.Timeout(3)\n"
+    ),
+    "pkg/many.py": "".join(f"class M{i}:\n    def fetch(self):\n        return {i}\n\n\n" for i in range(13))
+                   + "def use(x):\n    return x.fetch()\n",
+}
+
+
+async def test_미해석_호출은_수신자_모양별로_세어_6b가_무엇을_먼저_지을지_숫자로_정한다():
+    """사내 두 번째 숫자: too_many 823 · unknown 1009 · external 2228. 이게 `self.attr` 주입인지, 힌트 없는
+    파라미터인지, 서드파티 객체인지, 아직 인덱스에 없는 **공유 라이브러리**(서브모듈)인지에 따라 다음 커밋이
+    다르다 — 모양을 안 보고 지으면 사내 코드가 아니라 상상 속 코드에 짓는 것이다."""
+    idx = await _index(SHARED, names=[])
+    assert idx.shared_prefixes == {REPO: ["shared_lib"]}
+    sh = idx.unresolved_shapes
+    assert sh["external_shared"] == {"shared_lib": 2}                   # Store()·util.helper()
+    assert sh["external_third"] == {"httpx": 3}                          # Client()·get()·Timeout()
+    assert sh["self_attr_param"] == {"repo": 1} and sh["self_attr_call"] == {"client": 1}
+    assert sh["self_attr_shared"] == {"store": 1}
+    assert sh["param"] == {"db": 1, "x": 1} and sh["param_shared"] == {"store": 1}
+    assert sh["local_external"] == {"resp": 1}
+    assert sh["too_many_method"] == {"fetch": 1}
+    assert "stoplist" not in sh and "builtin" not in sh                  # 자명한 것은 모양을 안 센다
+    again = ix.Index.from_dict(json.loads(json.dumps(idx.to_dict())))
+    assert again.unresolved_shapes == sh and again.shared_prefixes == idx.shared_prefixes

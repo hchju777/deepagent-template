@@ -950,7 +950,8 @@ CASES = [
   '        if False:\n            self._count("stoplist")\n            return None',
   ['tests/knowledge/test_index.py::test_전부_실패하면_같은_이름_메서드에_candidate이되_stoplist와_상한을_지킨다']),
  ('후보 상한을 안 지킨다', ROOT / "src/knowledge/index.py",
-  '        if len(cands) > MAX_CANDIDATES:', '        if False:',
+  '        if len(cands) > MAX_CANDIDATES:\n            self._count("too_many")\n            self._note("too_many_method", meth)',
+  '        if False:\n            self._count("too_many")\n            self._note("too_many_method", meth)',
   ['tests/knowledge/test_index.py::test_전부_실패하면_같은_이름_메서드에_candidate이되_stoplist와_상한을_지킨다']),
  ('self 호출 미해석을 레포 전체로 푼다', ROOT / "src/knowledge/index.py",
   'for s in self.descendants(fn.class_sid)', 'for s in self.classes',
@@ -989,8 +990,8 @@ CASES = [
   '            elif isinstance(node, (ast.Import, ast.ImportFrom)):\n                pass',
   ['tests/knowledge/test_index.py::test_함수_안_import도_해석하고_from_import는_정의한_모듈로_imports_엣지를_건다']),
  ('서드파티 호출을 동명 후보로 떨어뜨린다', ROOT / "src/knowledge/index.py",
-  '        if self.is_external(fn, chain):\n            self._count("external")\n            return None\n        # (c′)',
-  '        if False:\n            self._count("external")\n            return None\n        # (c′)',
+  '        if self.is_external(fn, chain):\n            self._count("external")\n            self._note_external(fn, chain)\n            return None\n        # (c′)',
+  '        if False:\n            self._count("external")\n            self._note_external(fn, chain)\n            return None\n        # (c′)',
   ['tests/knowledge/test_index.py::test_서드파티_호출과_호출_가능한_필드는_따로_세고_후보를_안_만든다']),
  ('순환 대입의 타입 추론을 안 끊는다', ROOT / "src/knowledge/index.py",
   '                target = self._call_target(fn, chain, hops=hops + 1)', '                target = self._call_target(fn, chain)',
@@ -1006,6 +1007,14 @@ CASES = [
   '            needles = {index.symbols[c].name for c in _with_descendants(dst.class_id, subs)}',
   '            needles = {index.symbols[dst.class_id].name}',
   ['tests/knowledge/test_index_check.py::test_정밀도_표본은_하위_클래스_생성이_베이스_생성자로_풀린_것을_맞은_것으로_본다']),
+ ('공유 라이브러리 접두사를 서드파티와 안 가른다', ROOT / "src/knowledge/index.py",
+  '        return any(fqn == p or fqn.startswith(p + ".") for p in self.shared.get(repo, ()))',
+  '        return False',
+  ['tests/knowledge/test_index.py::test_미해석_호출은_수신자_모양별로_세어_6b가_무엇을_먼저_지을지_숫자로_정한다']),
+ ('못 푼 호출의 모양을 안 센다', ROOT / "src/knowledge/index.py",
+  '        if not self._quiet:\n            self.shapes[shape][name] += 1',
+  '        if False:\n            self.shapes[shape][name] += 1',
+  ['tests/knowledge/test_index.py::test_미해석_호출은_수신자_모양별로_세어_6b가_무엇을_먼저_지을지_숫자로_정한다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1033,7 +1042,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 265, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 267, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

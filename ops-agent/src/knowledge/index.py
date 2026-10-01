@@ -103,6 +103,8 @@ class Index:
     commits: dict[str, str] = field(default_factory=dict)
     gaps: list[str] = field(default_factory=list)
     unresolved: dict[str, int] = field(default_factory=dict)
+    unresolved_shapes: dict[str, dict[str, int]] = field(default_factory=dict)   # 모양 → 이름 → 건수(6b-0 진단)
+    shared_prefixes: dict[str, list[str]] = field(default_factory=dict)          # repo → `.gitmodules`의 path 접두사
 
     def __post_init__(self) -> None:
         self._by_key: dict[tuple[str, str], int] = {(s.repo, s.qualname): s.id for s in self.symbols}
@@ -170,7 +172,9 @@ class Index:
                 "symbols": [{**asdict(s), "resources": [list(r) for r in map(asdict_tuple, s.resources)],
                              "decorators": list(s.decorators)} for s in self.symbols],
                 "edges": [asdict(e) for e in self.edges],
-                "gaps": list(self.gaps), "unresolved": dict(self.unresolved)}
+                "gaps": list(self.gaps), "unresolved": dict(self.unresolved),
+                "unresolved_shapes": {k: dict(v) for k, v in self.unresolved_shapes.items()},
+                "shared_prefixes": {k: list(v) for k, v in self.shared_prefixes.items()}}
 
     @classmethod
     def from_dict(cls, data: dict) -> "Index":
@@ -182,7 +186,9 @@ class Index:
             symbols.append(Symbol(**d))
         edges = [Edge(**e) for e in data.get("edges", [])]
         return cls(symbols=symbols, edges=edges, commits=dict(data.get("commits", {})),
-                   gaps=list(data.get("gaps", [])), unresolved=dict(data.get("unresolved", {})))
+                   gaps=list(data.get("gaps", [])), unresolved=dict(data.get("unresolved", {})),
+                   unresolved_shapes={k: dict(v) for k, v in data.get("unresolved_shapes", {}).items()},
+                   shared_prefixes={k: list(v) for k, v in data.get("shared_prefixes", {}).items()})
 
 
 def asdict_tuple(r: Resource) -> tuple:
@@ -450,10 +456,14 @@ def _body_walk(body: list[ast.stmt]):
 # ── pass 2: 해석 ─────────────────────────────────────────────────────────
 
 class _Resolver:
-    def __init__(self, index: Index, modules: dict[str, dict[str, _Module]], names: list[Name]):
+    def __init__(self, index: Index, modules: dict[str, dict[str, _Module]], names: list[Name],
+                 shared: dict[str, list[str]] | None = None):
         self.index = index
         self.modules = modules                     # repo → fqn → 모듈
         self.names = names
+        self.shared = dict(shared or {})           # repo → 서브모듈 접두사 — 아직 인덱스에 없는 공유 라이브러리
+        self.shapes: dict[str, Counter] = defaultdict(Counter)        # 못 푼 호출의 모양 → 이름 → 건수
+        self.attr_source: dict[tuple[int, str], tuple] = {}           # (class, attr) → ("param", 이름, fn) | ("call", 머리, fn)
         self.classes: dict[int, _Class] = {}
         self.funcs: dict[int, _Func] = {}
         self.methods_by_name: dict[str, list[int]] = defaultdict(list)
@@ -738,9 +748,18 @@ class _Resolver:
                 return None
             if self.is_external(fn, chain):
                 self._count("external")
+                self._note_external(fn, chain)
                 return None
             cands = [s for s in self.funcs_by_name.get(name, []) if s != fn.sid]
-            return self._candidates(cands, name)
+            if not cands:
+                self._count("unknown")
+                self._note("bare_name", name)
+                return None
+            if len(cands) > MAX_CANDIDATES:
+                self._count("too_many")
+                self._note("too_many_method", name)
+                return None
+            return "candidate", cands, "name"
         head, rest = chain[0], chain[1:]
         # (b) self.m() / cls.m()
         if head in ("self", "cls") and fn.class_sid is not None:
@@ -766,9 +785,10 @@ class _Resolver:
                     return ("exact" if len(types) == 1 else "candidate"), found, "field"
                 self._count("method_missing")
                 return None
-            return self._fallback(fn, rest[-1], "field_unknown")
+            return self._fallback(fn, chain, "field_unknown")
         if self.is_external(fn, chain):
             self._count("external")
+            self._note_external(fn, chain)
             return None
         # (c′) 생성자 호출을 받는 쪽 — `Cls().m()`
         if "()" in rest or chain[-1] == "()":
@@ -779,7 +799,7 @@ class _Resolver:
             if c is not None and len(tail) == 1:
                 m = self.find_method(c, tail[0])
                 return ("exact", [m], "ctor") if m is not None else None
-            return self._fallback(fn, chain[-1], "call_recv")
+            return self._fallback(fn, chain, "call_recv")
         # (c) 타입을 아는 이름 경유 — 파라미터·지역·모듈 싱글턴
         if len(rest) == 1:
             t = self.type_of_var(fn, head, hops=hops + 1) if head not in mod.imports and head not in mod.defs else None
@@ -810,7 +830,7 @@ class _Resolver:
                     return ("exact", [m], "singleton") if m is not None else None
                 return None
         # (e) 전부 실패 — 같은 이름 메서드 전부에 candidate (stoplist·상한)
-        return self._fallback(fn, chain[-1], "name")
+        return self._fallback(fn, chain, "name")
 
     def _as_target(self, sid: int, via: str) -> tuple[str, list[int], str] | None:
         if sid in self.classes:
@@ -824,21 +844,77 @@ class _Resolver:
         if not self._quiet:
             self.unresolved[why] += 1
 
-    def _fallback(self, fn: _Func, meth: str, why: str) -> tuple[str, list[int], str] | None:
+    def _fallback(self, fn: _Func, chain: tuple[str, ...], why: str) -> tuple[str, list[int], str] | None:
+        meth = chain[-1]
         if meth in STOPLIST:
             self._count("stoplist")
             return None
         cands = [s for s in self.methods_by_name.get(meth, []) if s != fn.sid]
-        return self._candidates(cands, meth)
-
-    def _candidates(self, cands: list[int], name: str) -> tuple[str, list[int], str] | None:
         if not cands:
             self._count("unknown")
+            self._note_receiver(fn, chain)
             return None
         if len(cands) > MAX_CANDIDATES:
             self._count("too_many")
+            self._note("too_many_method", meth)
+            self._note_receiver(fn, chain)
             return None
         return "candidate", cands, "name"
+
+    # ── 미해석 진단(6b-0) — 못 푼 것의 **모양**을 센다. 숫자가 다음 커밋을 정한다 ──
+    def _note(self, shape: str, name: str) -> None:
+        if not self._quiet:
+            self.shapes[shape][name] += 1
+
+    def _is_shared(self, repo: str, fqn: str) -> bool:
+        return any(fqn == p or fqn.startswith(p + ".") for p in self.shared.get(repo, ()))
+
+    def _import_shared(self, fn: _Func, head: str | None) -> bool | None:
+        """머리가 import면 공유 라이브러리인지(True/False), import가 아니면 None."""
+        if head is None or head in fn.params or head in fn.locals_ or head not in fn.mod.imports:
+            return None
+        return self._is_shared(fn.mod.repo, fn.mod.imports[head])
+
+    def _annotation_shared(self, fn: _Func, param: str) -> bool:
+        ann = fn.annotations.get(param)
+        if isinstance(ann, ast.Subscript):
+            ann = ann.slice.elts[0] if isinstance(ann.slice, ast.Tuple) and ann.slice.elts else ann.slice
+        chain = _chain(ann) if ann is not None else None
+        return bool(chain) and self._import_shared(fn, chain[0]) is True
+
+    def _note_external(self, fn: _Func, chain: tuple[str, ...]) -> None:
+        target = fn.mod.imports[chain[0]]
+        self._note("external_shared" if self._is_shared(fn.mod.repo, target) else "external_third", target.split(".")[0])
+
+    def _note_receiver(self, fn: _Func, chain: tuple[str, ...]) -> None:
+        """`x.m()`을 못 풀었을 때 x가 무엇인가 — 주입된 필드·힌트 없는 파라미터·외부 호출 결과의 지역·공유
+        라이브러리 타입. 사내 두 번째 숫자(too_many 823 · unknown 1009)를 이 묶음으로 갈라야 6b-1이 정해진다."""
+        head = chain[0]
+        if head in ("self", "cls") and fn.class_sid is not None and len(chain) >= 2:
+            attr = chain[1]
+            src = next((self.attr_source[(c, attr)] for c in [fn.class_sid] + self.ancestors(fn.class_sid)
+                        if (c, attr) in self.attr_source), None)
+            if src is None:
+                return self._note("self_attr", attr)
+            kind, origin, ofn = src
+            if kind == "param":
+                return self._note("self_attr_shared" if self._annotation_shared(ofn, origin) else "self_attr_param", attr)
+            if kind == "call":
+                return self._note("self_attr_shared" if self._import_shared(ofn, origin) else "self_attr_call", attr)
+            return self._note("self_attr", attr)
+        if head in fn.params:
+            return self._note("param_shared" if self._annotation_shared(fn, head) else "param", head)
+        if head in fn.locals_:
+            v = fn.locals_[head]
+            v = v.value if isinstance(v, ast.Await) else v
+            vc = _chain(v.func) if isinstance(v, ast.Call) else _chain(v)
+            shared = self._import_shared(fn, vc[0]) if vc else None
+            if shared is True:
+                return self._note("local_shared", head)
+            if shared is False and self.resolve_fqn(fn.mod.repo, fn.mod.imports[vc[0]]) is None:
+                return self._note("local_external", head)
+            return self._note("local", head)
+        return self._note("other", head)
 
     def resolve_ref(self, fn: _Func, chain: tuple[str, ...]) -> int | None:
         """인자로 넘긴 이름이 **확정으로** 가리키는 함수·메서드 — 등록처에서 실행된다. candidate는 안 만든다:
@@ -862,6 +938,15 @@ class _Resolver:
         for fn in self.funcs.values():
             if fn.class_sid is not None:
                 self.attrs_of[fn.class_sid].update(a for a, _ in fn.self_assigns)
+                for attr, value in fn.self_assigns:
+                    if (fn.class_sid, attr) in self.attr_source:
+                        continue
+                    if isinstance(value, ast.Name) and value.id in fn.params:
+                        self.attr_source[(fn.class_sid, attr)] = ("param", value.id, fn)
+                    else:
+                        v = value.value if isinstance(value, ast.Await) else value
+                        vc = _chain(v.func) if isinstance(v, ast.Call) else None
+                        self.attr_source[(fn.class_sid, attr)] = ("call", vc[0], fn) if vc else ("other", "", fn)
         # 상속 먼저 — find_method가 조상을 봐야 한다.
         for csid, c in self.classes.items():
             for b in c.bases:
@@ -1069,6 +1154,14 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
         except Exception as exc:                                        # noqa: BLE001
             index.gaps.append(f"{repo}: 파일 목록을 못 읽었다 — {type(exc).__name__}: {exc}")
             files = []
+        # 공유 라이브러리는 서브모듈이라 이 레포의 트리에 없다 — 어디로 가는 import가 "아직 인덱스에 없는 우리
+        # 코드"인지 알아야 서드파티와 가른다(진단). 핀별 인덱싱은 6b-1.
+        try:
+            gitmodules = await source.read(".gitmodules")
+        except Exception:                                               # noqa: BLE001
+            gitmodules = None
+        if gitmodules:
+            index.shared_prefixes[repo] = _gitmodules_prefixes(gitmodules)
         for path in sorted(f for f in files if is_indexed(f)):
             fqn = _module_fqn(path, prefixes.get(repo, ""))
             try:
@@ -1091,12 +1184,22 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
                 index.symbols[sym.id] = Symbol(**{**asdict(sym), "parse_error": f"{type(exc).__name__}: {exc}"})
                 continue
             _Collector(index, mod).run(tree)
-    resolver = _Resolver(index, modules, list(names))
+    resolver = _Resolver(index, modules, list(names), shared=index.shared_prefixes)
     resolver.build_types()
     resolver.connect()
     resolver.attach_resources()
     index.unresolved = dict(resolver.unresolved)
+    index.unresolved_shapes = {k: dict(v) for k, v in resolver.shapes.items() if v}
     return index
+
+
+_GITMODULES_PATH = re.compile(r"^\s*path\s*=\s*(\S+)", re.M)
+
+
+def _gitmodules_prefixes(text: str) -> list[str]:
+    """`path = dir/sub` → import 접두사 `dir.sub`. 서브모듈 디렉터리가 곧 패키지라는 가정이다 — 아니면(한 단계
+    더 안에 패키지가 있으면) 공유 비중이 0으로 보이고, 그때는 config의 `module_prefix`로 바로잡는다(6b-1)."""
+    return sorted({m.group(1).strip("/").replace("/", ".") for m in _GITMODULES_PATH.finditer(text)})
 
 
 def _skipped(path: str) -> bool:

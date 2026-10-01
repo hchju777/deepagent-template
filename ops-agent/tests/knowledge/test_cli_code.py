@@ -626,3 +626,8 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     assert code == 0, captured.out + captured.err
     lines = [l for l in captured.out.splitlines() if l.strip()]
     assert len(lines) <= 8 and any("커버리지" in l for l in lines) and any("정밀도" in l for l in lines)
+    # 6b-0 — `--unresolved`는 못 푼 호출의 모양을 덧붙인다(공유 라이브러리·수신자 묶음). 기본 출력은 그대로 일곱 줄.
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "check", "--unresolved")
+    assert code == 0, captured.out + captured.err
+    more = [l for l in captured.out.splitlines() if l.strip()]
+    assert len(lines) < len(more) <= 16 and any("external" in l for l in more) and any("수신자" in l for l in more)
