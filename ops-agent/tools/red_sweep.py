@@ -1070,6 +1070,26 @@ CASES = [
   '        needles |= {a for n in needles for a in aliases.get(n, ())}',
   '        needles |= set()',
   ['tests/knowledge/test_index_check.py::test_정밀도_표본은_import_별칭으로_부른_것을_맞은_것으로_본다']),
+ ('다른 모듈의 모듈 수준 값을 안 따라간다', ROOT / 'src/knowledge/index.py',
+  '                if rest[0] in mod.aliases:\n                    return self._value(mod, mod.aliases[rest[0]], rest[1:])',
+  '                if False:\n                    return self._value(mod, mod.aliases[rest[0]], rest[1:])',
+  ['tests/knowledge/test_index.py::test_다른_모듈의_싱글턴은_정의한_모듈에서_값의_클래스를_정하고_서드파티_값이면_서드파티로_센다']),
+ ('싱글턴의 클래스를 부르는 쪽 모듈에서 찾는다', ROOT / 'src/knowledge/index.py',
+  '                    or self._class_of_value(owner, got[1], hops + 1)',
+  '                    or self._class_of_value(mod, got[1], hops + 1)',
+  ['tests/knowledge/test_index.py::test_다른_모듈의_싱글턴은_정의한_모듈에서_값의_클래스를_정하고_서드파티_값이면_서드파티로_센다']),
+ ('다시 내보낸 서드파티를 공유 라이브러리로 센다', ROOT / 'src/knowledge/index.py',
+  '        origin = self._origin(repo, target)',
+  '        origin = target',
+  ['tests/knowledge/test_index.py::test_다른_모듈의_싱글턴은_정의한_모듈에서_값의_클래스를_정하고_서드파티_값이면_서드파티로_센다']),
+ ('서드파티 값의 싱글턴 호출을 안 세고 버린다', ROOT / 'src/knowledge/index.py',
+  '                    if origin is not None:\n                        self._count("external")',
+  '                    if False:\n                        self._count("external")',
+  ['tests/knowledge/test_index.py::test_다른_모듈의_싱글턴은_정의한_모듈에서_값의_클래스를_정하고_서드파티_값이면_서드파티로_센다']),
+ ('정밀도 표본이 super 경유 엣지를 거짓 실패로 본다', ROOT / 'src/knowledge/index_check.py',
+  '        if e.via == "super":\n            needles.add("super")',
+  '        if False:\n            needles.add("super")',
+  ['tests/knowledge/test_index_check.py::test_정밀도_표본은_super_경유_엣지를_본문의_super로_확인한다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1097,7 +1117,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 281, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 286, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -141,3 +141,16 @@ async def test_정밀도_표본은_import_별칭으로_부른_것을_맞은_것�
                for e in idx.edges if e.src == via and e.type == "calls")
     ok, total, failures = await chk.precision_sample(idx, await _read_of(src), n=500, seed=1)
     assert ok == total, failures
+
+
+async def test_정밀도_표본은_super_경유_엣지를_본문의_super로_확인한다():
+    """사내 여섯 번째 숫자의 98/100 — 틀린 둘이 둘 다 하위 클래스 `__init__` → 베이스 `__init__`이었다. 6b-1의
+    `super().__init__()` 엣지인데 본문엔 클래스 이름이 없다."""
+    files = dict(FILES)
+    files["app/sup.py"] = ("class Base:\n    def __init__(self):\n        self.n = 0\n\n\n"
+                           "class Child(Base):\n    def __init__(self):\n        super().__init__()\n")
+    idx, src, _, _ = await _built(files)
+    child = idx.lookup(REPO, "app.sup.Child.__init__")
+    assert any(e.via == "super" and e.certainty == "exact" for e in idx.edges if e.src == child)
+    ok, total, failures = await chk.precision_sample(idx, await _read_of(src), n=500, seed=1)
+    assert ok == total, failures

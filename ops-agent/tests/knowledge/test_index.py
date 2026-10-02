@@ -643,3 +643,41 @@ async def test_바깥_함수의_인자를_부르는_클로저는_변수_호출�
     assert _edges(idx, "app.use.deco.wrapper", "calls") == set()
     assert "func" not in idx.unresolved_shapes.get("bare_name", {})
     assert idx.unresolved.get("variable_call", 0) >= 1
+
+
+# ── 6b-2 후속 2: 다른 모듈의 모듈 수준 값(싱글턴) ──────────────────────────
+
+SINGLETON = {
+    ".gitmodules": STAR[".gitmodules"],
+    "lib/__init__.py": "",
+    "lib/log_reexport.py": "from loguru import logger\n",
+    "lib/log_bound.py": "from loguru import logger as _base\n\nlogger = _base.bind(app='x')\n",
+    "lib/log_custom.py": "class AppLog:\n    def info(self, m):\n        return m\n\n\nlogger = AppLog()\n",
+    "lib/clients.py": "import httpx\n\nclient = httpx.Client()\n",
+    "app/__init__.py": "",
+    "app/use.py": ("from lib.log_reexport import logger\n"
+                   "from lib.log_bound import logger as bound\n"
+                   "from lib.log_custom import logger as applog\n"
+                   "from lib.clients import client\n"
+                   "import lib.log_custom\n\n\n"
+                   "def run():\n"
+                   "    logger.info('a')\n"
+                   "    bound.info('b')\n"
+                   "    applog.info('c')\n"
+                   "    lib.log_custom.logger.info('d')\n"
+                   "    return client.get('e')\n"),
+}
+
+
+async def test_다른_모듈의_싱글턴은_정의한_모듈에서_값의_클래스를_정하고_서드파티_값이면_서드파티로_센다():
+    """사내 여섯 번째 숫자: 공유 라이브러리 470이 전부 `<공유>.logging.logger.logger` 하나였다 — 공유 쪽 로깅 모듈의
+    모듈 수준 변수를 import해 `logger.info()`로 부른다. 인덱서가 다른 모듈의 모듈 수준 변수를 안 따라가서, 그것이
+    우리 클래스의 인스턴스면 엣지가 없고 서드파티 객체를 다시 내보낸 것이면 공유 라이브러리로 잘못 셌다."""
+    idx = await _index(SINGLETON, names=[])
+    assert _edges(idx, "app.use.run", "calls") == {("lib.log_custom.AppLog.info", "calls", "exact")}
+    run = _sid(idx, "app.use.run")
+    hit = next(e for e in idx.edges if e.src == run and e.type == "calls")
+    assert hit.count == 2                                          # `applog.info`와 `lib.log_custom.logger.info` 둘 다
+    sh = idx.unresolved_shapes
+    assert sh["external_third"] == {"loguru": 2, "httpx": 1}       # 다시 내보낸 것 · bind()로 감싼 것 · 서드파티 클래스
+    assert "external_shared" not in sh and "shared_unnamed" not in sh

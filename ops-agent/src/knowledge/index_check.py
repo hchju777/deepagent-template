@@ -94,6 +94,8 @@ async def precision_sample(index: Index, read: Reader, *, n: int = 100, seed: in
         # `import Canvas as _Canvas` 뒤 `_Canvas(...)` — 본문엔 별칭만 있다.
         aliases = _import_aliases(alias_cache, (src.repo, src.file), text)
         needles |= {a for n in needles for a in aliases.get(n, ())}
+        if e.via == "super":
+            needles.add("super")           # `super().__init__()` — 본문에 클래스 이름이 없다(사내 98/100의 둘)
         if any(re.search(rf"\b{re.escape(n)}\b", body) for n in needles):
             ok += 1
         else:

@@ -536,13 +536,17 @@ class _Resolver:
             # 모듈 수준 이름이 import된 것일 수 있다(`from x import C` 뒤 `mod.C`)
             target = mod.imports.get(rest[0])
             if target is None:
+                if rest[0] in mod.aliases:
+                    return self._value(mod, mod.aliases[rest[0]], rest[1:])
                 return self._via_star(mod, rest, _seen)
             got = self.resolve_fqn(mod.repo, target)
             if got is None or not rest[1:]:
                 return got
             if got[0] == "symbol":
                 return self._attr_of_symbol(got[1], rest[1:])
-            return self._descend(got[1], rest[1:])
+            if got[0] == "module":
+                return self._descend(got[1], rest[1:])
+            return self._value(got[2], got[1], rest[1:])
         if len(rest) == 1:
             return "symbol", sid
         return self._attr_of_symbol(sid, rest[1:])
@@ -567,6 +571,66 @@ class _Resolver:
                 return got
         return None
 
+    def _value(self, owner: _Module, expr: ast.expr, attrs: list[str]) -> tuple[str, Any, Any] | None:
+        """모듈 수준 값(싱글턴). 다른 모듈에서 `from m import logger`로 들여 `logger.info()`로 부르면 그 값의 클래스는
+        **정의한 모듈**에서 정해야 한다 — 부르는 쪽 모듈에는 그 클래스 이름이 없다(사내 공유 라이브러리 470이 전부
+        공유 쪽 로깅 모듈의 `logger` 하나였다)."""
+        if not attrs:
+            return "expr", expr, owner
+        c = self._class_of_value(owner, expr)
+        return self._attr_of_symbol(c, attrs) if c is not None else None
+
+    def _class_of_value(self, owner: _Module, expr: ast.expr, hops: int = 0) -> int | None:
+        """모듈 수준 값이 어느 클래스의 인스턴스인가 — `AppLog()`, `make_client()`의 반환, 다른 값의 별칭."""
+        if hops > 8:
+            return None
+        if isinstance(expr, ast.Await):
+            expr = expr.value
+        if isinstance(expr, ast.Call):
+            c = self.class_of_annotation(owner, expr.func, hops=hops + 1)
+            if c is not None:
+                return c
+            chain = _chain(expr.func)
+            if chain and "()" not in chain:
+                got, used = self.resolve_prefix(owner, chain)
+                if got and got[0] == "symbol" and used == len(chain) and got[1] in self.funcs:
+                    return self.returns_class(self.funcs[got[1]], hops=hops + 1)
+            return None
+        chain = _chain(expr)
+        if chain and "()" not in chain:
+            got, used = self.resolve_prefix(owner, chain)
+            if got and got[0] == "expr" and used == len(chain):
+                return self._class_of_value(got[2], got[1], hops + 1)
+        return None
+
+    def _value_origin(self, owner: _Module, expr: ast.expr) -> str | None:
+        """값이 인덱스 밖 import에서 만들어졌으면 그 FQN — `client = httpx.Client()`, `logger = _base.bind(...)`."""
+        v = expr.value if isinstance(expr, ast.Await) else expr
+        vc = _chain(v.func) if isinstance(v, ast.Call) else _chain(v)
+        if vc and vc[0] in owner.imports and self.resolve_fqn(owner.repo, owner.imports[vc[0]]) is None:
+            return owner.imports[vc[0]]
+        return None
+
+    def _origin(self, repo: str, target: str, hops: int = 0) -> str:
+        """이름이 실제로 온 곳. 우리 모듈이 서드파티 이름을 다시 내보내면(`from loguru import logger`) 그 서드파티다 —
+        공유 라이브러리로 세면 "인덱서가 못 찾은 우리 코드"로 읽힌다. 따라갈 수 없으면 그대로."""
+        if hops > 8:
+            return target
+        mods = self.modules.get(repo, {})
+        parts = target.split(".")
+        for cut in range(len(parts) - 1, 0, -1):
+            owner = mods.get(".".join(parts[:cut]))
+            if owner is None:
+                continue
+            name, rest = parts[cut], parts[cut + 1:]
+            if name in owner.imports:
+                return self._origin(repo, ".".join([owner.imports[name], *rest]), hops + 1)
+            if name in owner.aliases:
+                got = self._value_origin(owner, owner.aliases[name])
+                return self._origin(repo, got, hops + 1) if got else target
+            return target
+        return target
+
     def _attr_of_symbol(self, sid: int, rest: list[str]) -> tuple[str, Any] | None:
         if sid in self.classes and len(rest) == 1:
             m = self.find_method(sid, rest[0])
@@ -580,7 +644,7 @@ class _Resolver:
         if name in mod.imports:
             return self.resolve_fqn(mod.repo, mod.imports[name])
         if name in mod.aliases:
-            return "expr", mod.aliases[name]
+            return "expr", mod.aliases[name], mod
         return self._via_star(mod, [name])
 
     def resolve_prefix(self, mod: _Module, chain: tuple[str, ...]) -> tuple[tuple[str, Any] | None, int]:
@@ -634,7 +698,7 @@ class _Resolver:
         if got[0] == "symbol" and got[1] in self.classes and used == len(chain):
             return got[1]
         if got[0] == "expr":
-            return self.class_of_annotation(mod, got[1], hops=hops + 1)
+            return self.class_of_annotation(got[2], got[1], hops=hops + 1)
         if got[0] == "module" and used < len(chain):
             inner = self._descend(got[1], list(chain[used:]))
             if inner and inner[0] == "symbol" and inner[1] in self.classes:
@@ -696,8 +760,8 @@ class _Resolver:
             return self.class_of_expr(fn, fn.locals_[var], hops=hops + 1)
         got = self.resolve_name(fn.mod, var)
         if got and got[0] == "expr":
-            return self.class_of_expr(fn, got[1], hops=hops + 1) \
-                or self.class_of_annotation(fn.mod, got[1], hops=hops + 1)
+            return self._class_of_value(got[2], got[1], hops + 1) \
+                or self.class_of_annotation(got[2], got[1], hops=hops + 1)
         return None
 
     def ancestors(self, csid: int) -> list[int]:
@@ -772,7 +836,7 @@ class _Resolver:
             if got and got[0] == "symbol":
                 return self._as_target(got[1], "name")
             if got and got[0] == "expr":
-                c = self.class_of_annotation(mod, got[1], hops=hops + 1)
+                c = self.class_of_annotation(got[2], got[1], hops=hops + 1)
                 return self._as_target(c, "alias") if c is not None else None
             if got is not None:
                 return None
@@ -864,8 +928,21 @@ class _Resolver:
                     return ("exact", [m], "class") if m is not None else None
                 return None
             if got[0] == "expr":
-                c = self.class_of_annotation(mod, got[1], hops=hops + 1) or self.class_of_expr(fn, got[1], hops=hops + 1)
-                if c is not None and len(tail) == 1:
+                owner = got[2]
+                c = self.class_of_annotation(owner, got[1], hops=hops + 1) \
+                    or self._class_of_value(owner, got[1], hops + 1)
+                if c is None:
+                    # 값의 클래스를 모른다 — 전엔 아무것도 안 세고 버렸다. 서드파티에서 만든 값이면
+                    # (`client = httpx.Client()`) 그쪽으로 센다.
+                    origin = self._value_origin(owner, got[1])
+                    if origin is not None:
+                        self._count("external")
+                        self._note_target(owner.repo, origin)
+                    else:
+                        self._count("unknown")
+                        self._note_receiver(fn, chain)
+                    return None
+                if len(tail) == 1:
                     m = self.find_method(c, tail[0])
                     return ("exact", [m], "singleton") if m is not None else None
                 return None
@@ -966,8 +1043,9 @@ class _Resolver:
         self._note_target(fn.mod.repo, fn.mod.imports[chain[0]])
 
     def _note_target(self, repo: str, target: str) -> None:
-        if not self._is_shared(repo, target):
-            return self._note("external_third", target.split(".")[0])
+        origin = self._origin(repo, target)
+        if not self._is_shared(repo, origin):
+            return self._note("external_third", origin.split(".")[0])
         self._note("external_shared", target.split(".")[0])
         # 이유를 가른다 — 레포에 공유 모듈이 하나도 없으면 서브모듈이 안 들어온 것(`code status`의 일), 모듈은
         # 있는데 이름을 못 찾으면 인덱서의 일(재수출·동적 이름). 한 숫자로 세면 사내에 한 번 더 물어야 한다.
