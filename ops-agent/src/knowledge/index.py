@@ -211,6 +211,7 @@ class _Func:
     refs: list[tuple[tuple[str, ...], int]] = field(default_factory=list)        # 인자로 넘긴 이름·속성
     decorator_calls: list[tuple[tuple[str, ...], int]] = field(default_factory=list)
     self_assigns: list[tuple[str, ast.expr]] = field(default_factory=list)      # self.attr = <식>
+    free: set[str] = field(default_factory=set)          # 바깥 함수의 인자·지역 — 클로저가 부르는 이름
 
 
 @dataclass
@@ -232,6 +233,7 @@ class _Module:
         self.imports: dict[str, str] = {}                   # 묶인 이름 → FQN(`a.b.C` 또는 모듈)
         self.aliases: dict[str, ast.expr] = {}              # 모듈 수준 대입 — 타입 별칭·싱글턴
         self.string_consts: dict[str, str] = {}             # IDENT = "리터럴" (자원 별칭용)
+        self.stars: list[str] = []                          # `from x import *`의 x(FQN) — 재수출을 따라간다
         self.funcs: list[_Func] = []
         self.classes: list[_Class] = []
         self.tree: ast.Module | None = None
@@ -328,7 +330,10 @@ class _Collector:
         is_pkg = mod.path.endswith("__init__.py")
         base = _relative(mod.fqn, st.level, st.module, is_pkg) if st.level else (st.module or "")
         for a in st.names:
-            if a.name != "*":
+            if a.name == "*":
+                if base and base not in mod.stars:
+                    mod.stars.append(base)
+            else:
                 put(a.asname or a.name, f"{base}.{a.name}" if base else a.name)
 
     def _walk_body(self, body: list[ast.stmt], *, owner_qual: str, class_: _Class | None) -> None:
@@ -361,7 +366,7 @@ class _Collector:
             self.mod.defs[node.name] = sym.id
         self._walk_body(node.body, owner_qual=qual, class_=cls)
 
-    def _func(self, node: ast.AST, owner_qual: str, class_: _Class | None) -> None:
+    def _func(self, node: ast.AST, owner_qual: str, class_: _Class | None, *, outer: "_Func | None" = None) -> None:
         qual = f"{owner_qual}.{node.name}"
         args = node.args
         params = [a.arg for a in args.posonlyargs + args.args + args.kwonlyargs]
@@ -386,6 +391,8 @@ class _Collector:
             signature=f"({', '.join(params)})")
         fn = _Func(sid=sym.id, node=node, mod=self.mod, class_sid=class_.sid if class_ else None,
                    params=params, annotations=annotations, defaults=defaults)
+        if outer is not None:
+            fn.free = set(outer.params) | set(outer.locals_) | outer.free
         self.mod.funcs.append(fn)
         if class_ is not None:
             class_.methods.setdefault(node.name, sym.id)
@@ -401,7 +408,7 @@ class _Collector:
             if isinstance(st, ast.ClassDef):
                 self._class(st, qual, class_)
             else:
-                self._func(st, qual, None)
+                self._func(st, qual, None, outer=fn)
 
     def _scan(self, fn: _Func, body: list[ast.stmt], class_: _Class | None) -> None:
         for node in _body_walk(body):
@@ -465,6 +472,7 @@ class _Resolver:
         self.shapes: dict[str, Counter] = defaultdict(Counter)        # 못 푼 호출의 모양 → 이름 → 건수
         self.attr_source: dict[tuple[int, str], tuple] = {}           # (class, attr) → ("param", 이름, fn) | ("call", 머리, fn)
         self.override_of: dict[int, int] = {}                          # 메서드 → 가장 가까운 재정의 대상(베이스 메서드)
+        self._shared_present: dict[tuple[str, str], bool] = {}         # (레포, 공유 접두사) → 그 레포 인덱스에 있나
         self.classes: dict[int, _Class] = {}
         self.funcs: dict[int, _Func] = {}
         self.methods_by_name: dict[str, list[int]] = defaultdict(list)
@@ -518,17 +526,17 @@ class _Resolver:
         """머리가 import된 이름인데 어느 레포에도 없다 — 서드파티다. 동명 메서드 추정(e)으로 떨어뜨리면
         `httpx.get()`이 우리 `get`들의 후보가 된다. 파라미터·지역이 그 이름을 가리면 import가 아니다."""
         head, mod = chain[0], fn.mod
-        if head in fn.params or head in fn.locals_ or head in mod.defs:
+        if head in fn.params or head in fn.locals_ or head in fn.free or head in mod.defs:
             return False
         return head in mod.imports and self.resolve_fqn(mod.repo, mod.imports[head]) is None
 
-    def _descend(self, mod: _Module, rest: list[str]) -> tuple[str, Any] | None:
+    def _descend(self, mod: _Module, rest: list[str], _seen: set | None = None) -> tuple[str, Any] | None:
         sid = mod.defs.get(rest[0])
         if sid is None:
             # 모듈 수준 이름이 import된 것일 수 있다(`from x import C` 뒤 `mod.C`)
             target = mod.imports.get(rest[0])
             if target is None:
-                return None
+                return self._via_star(mod, rest, _seen)
             got = self.resolve_fqn(mod.repo, target)
             if got is None or not rest[1:]:
                 return got
@@ -538,6 +546,26 @@ class _Resolver:
         if len(rest) == 1:
             return "symbol", sid
         return self._attr_of_symbol(sid, rest[1:])
+
+    def _via_star(self, mod: _Module, rest: list[str], _seen: set | None = None) -> tuple[str, Any] | None:
+        """`from .core import *`로 들여온 이름. 공유 라이브러리의 `__init__.py`가 이렇게 재수출하는 일이 흔하고,
+        버리면 `from <공유> import Store`가 공유 코드가 인덱스에 있어도 안 풀린다(사내: 서브모듈 다섯 개가 다
+        채워졌는데 공유 라이브러리 470). `__all__`이 있으면 그 이름만, 없으면 밑줄 없는 이름만 나간다 —
+        파이썬과 같다. 서로 `*`하는 순환은 본 모듈을 다시 안 연다."""
+        if not mod.stars:
+            return None
+        seen = _seen if _seen is not None else set()
+        if (mod.repo, mod.fqn) in seen:
+            return None
+        seen.add((mod.repo, mod.fqn))
+        for base in mod.stars:
+            src = self.module(mod.repo, base)
+            if src is None or not _exports(src, rest[0]):
+                continue
+            got = self._descend(src, rest, seen)
+            if got is not None:
+                return got
+        return None
 
     def _attr_of_symbol(self, sid: int, rest: list[str]) -> tuple[str, Any] | None:
         if sid in self.classes and len(rest) == 1:
@@ -553,7 +581,7 @@ class _Resolver:
             return self.resolve_fqn(mod.repo, mod.imports[name])
         if name in mod.aliases:
             return "expr", mod.aliases[name]
-        return None
+        return self._via_star(mod, [name])
 
     def resolve_prefix(self, mod: _Module, chain: tuple[str, ...]) -> tuple[tuple[str, Any] | None, int]:
         """체인 접두사를 긴 것부터 import·정의와 대조 — `import a.b` 뒤 `a.b.c()`는 머리 한 글자로 안 풀린다."""
@@ -725,7 +753,8 @@ class _Resolver:
         # 풀면 확실 표시가 붙은 거짓 엣지다(실제 코드에서 났다).
         if len(chain) == 1:
             name = chain[0]
-            if name in fn.params:
+            if name in fn.params or (name in fn.free and name not in fn.locals_):
+                # 클로저: 데코레이터의 `wrapper`가 바깥 인자 `func`를 부른다 — 실행 시점에 정해진다(사내 맨 이름 func 28).
                 self._count("variable_call")
                 return None
             if name in fn.locals_:
@@ -877,8 +906,7 @@ class _Resolver:
             target = c.mod.imports.get(b[0])
             if target and self.resolve_fqn(c.mod.repo, target) is None:
                 self._count("external")
-                self._note("external_shared" if self._is_shared(c.mod.repo, target) else "external_third",
-                           target.split(".")[0])
+                self._note_target(c.mod.repo, target)
                 return None
         self._count("method_missing")
         return None
@@ -935,8 +963,24 @@ class _Resolver:
         return bool(chain) and self._import_shared(fn, chain[0]) is True
 
     def _note_external(self, fn: _Func, chain: tuple[str, ...]) -> None:
-        target = fn.mod.imports[chain[0]]
-        self._note("external_shared" if self._is_shared(fn.mod.repo, target) else "external_third", target.split(".")[0])
+        self._note_target(fn.mod.repo, fn.mod.imports[chain[0]])
+
+    def _note_target(self, repo: str, target: str) -> None:
+        if not self._is_shared(repo, target):
+            return self._note("external_third", target.split(".")[0])
+        self._note("external_shared", target.split(".")[0])
+        # 이유를 가른다 — 레포에 공유 모듈이 하나도 없으면 서브모듈이 안 들어온 것(`code status`의 일), 모듈은
+        # 있는데 이름을 못 찾으면 인덱서의 일(재수출·동적 이름). 한 숫자로 세면 사내에 한 번 더 물어야 한다.
+        mods = self.modules.get(repo, {})
+        prefix = next(p for p in self.shared.get(repo, ()) if target == p or target.startswith(p + "."))
+        key = (repo, prefix)
+        if key not in self._shared_present:
+            self._shared_present[key] = any(f == prefix or f.startswith(prefix + ".") for f in mods)
+        if not self._shared_present[key]:
+            return self._note("shared_absent", repo)
+        parts = target.split(".")
+        cut = next((c for c in range(len(parts) - 1, 0, -1) if ".".join(parts[:c]) in mods), len(parts) - 1)
+        self._note("shared_unnamed", ".".join(parts[:cut + 1]))
 
     def _note_receiver(self, fn: _Func, chain: tuple[str, ...]) -> None:
         """`x.m()`을 못 풀었을 때 x가 무엇인가 — 주입된 필드·힌트 없는 파라미터·외부 호출 결과의 지역·공유
@@ -1244,6 +1288,14 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
     index.unresolved = dict(resolver.unresolved)
     index.unresolved_shapes = {k: dict(v) for k, v in resolver.shapes.items() if v}
     return index
+
+
+def _exports(mod: _Module, name: str) -> bool:
+    """`from mod import *`가 `name`을 내보내나 — `__all__`(문자열 리스트·튜플)이 있으면 그것, 없으면 밑줄 없는 이름."""
+    declared = mod.aliases.get("__all__")
+    if isinstance(declared, (ast.List, ast.Tuple)):
+        return any(isinstance(e, ast.Constant) and e.value == name for e in declared.elts)
+    return not name.startswith("_")
 
 
 _GITMODULES_PATH = re.compile(r"^\s*path\s*=\s*(\S+)", re.M)

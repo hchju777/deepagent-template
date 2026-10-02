@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import random
 import re
+from collections import Counter
 from typing import Awaitable, Callable
 
 from src.knowledge.index import CERTAINTIES, EDGE_TYPES, Index, _body_walk, is_indexed
@@ -74,6 +75,7 @@ async def precision_sample(index: Index, read: Reader, *, n: int = 100, seed: in
             and index.symbols[e.dst].kind in ("function", "method")]
     sample = rng.sample(pool, min(n, len(pool)))
     cache: dict = {}
+    alias_cache: dict = {}
     subs: dict[int, list[int]] = {}
     for e in index.edges:
         if e.type == "inherits":
@@ -89,11 +91,31 @@ async def precision_sample(index: Index, read: Reader, *, n: int = 100, seed: in
         needles = {dst.name}
         if dst.name == "__init__" and dst.class_id is not None:
             needles = {index.symbols[c].name for c in _with_descendants(dst.class_id, subs)}
+        # `import Canvas as _Canvas` 뒤 `_Canvas(...)` — 본문엔 별칭만 있다.
+        aliases = _import_aliases(alias_cache, (src.repo, src.file), text)
+        needles |= {a for n in needles for a in aliases.get(n, ())}
         if any(re.search(rf"\b{re.escape(n)}\b", body) for n in needles):
             ok += 1
         else:
             failures.append(f"{src.qualname} → {dst.qualname} (L{e.line})")
     return ok, len(sample), failures[:3]
+
+
+def _import_aliases(cache: dict, key: tuple[str, str], text: str) -> dict[str, set[str]]:
+    """원래 이름 → 그 파일에서 붙인 별칭들(`import x as y`·`from m import x as y`)."""
+    if key not in cache:
+        out: dict[str, set[str]] = {}
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            tree = None
+        for node in ast.walk(tree) if tree is not None else ():
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for a in node.names:
+                    if a.asname:
+                        out.setdefault(a.name.rsplit(".", 1)[-1], set()).add(a.asname)
+        cache[key] = out
+    return cache[key]
 
 
 def _with_descendants(csid: int, subs: dict[int, list[int]]) -> set[int]:
@@ -182,13 +204,16 @@ def unresolved_report(index: Index) -> list[str]:
     라이브러리인지에 따라 6b-1이 다르다. 여덟 줄 안 — 사람이 옮겨 적는다."""
     sh = {k: dict(v) for k, v in index.unresolved_shapes.items()}
     n = lambda k: sum(sh.get(k, {}).values())                         # noqa: E731
-    shared = ", ".join(p for ps in index.shared_prefixes.values() for p in ps) or "없음"
+    prefixes = Counter(p for ps in index.shared_prefixes.values() for p in ps)
+    shared = " · ".join(f"{p} (레포 {n})" for p, n in sorted(prefixes.items())) or "없음"
     recv = ["self_attr_param", "self_attr_call", "self_attr_shared", "self_attr",
             "param", "param_shared", "local_external", "local_shared", "local", "bare_name", "other"]
     lines = [
         f"8 external {n('external_shared') + n('external_third')} — 공유 라이브러리 {n('external_shared')}"
-        f" ({_top(sh.get('external_shared', {}))}) · 서드파티 {n('external_third')} ({_top(sh.get('external_third', {}), 5)})"
-        f" · .gitmodules 접두사: {shared}",
+        f" · 서드파티 {n('external_third')} ({_top(sh.get('external_third', {}), 5)}) · 서브모듈 접두사: {shared}",
+        f"  공유 라이브러리 {n('external_shared')} — 레포에 안 들어옴 {n('shared_absent')}"
+        f" ({_top(sh.get('shared_absent', {}))}) · 들어왔는데 이름 못 찾음 {n('shared_unnamed')}"
+        f" ({_top(sh.get('shared_unnamed', {}))})",
         f"9 미해석 수신자 {sum(n(k) for k in recv)} (too_many+unknown) —",
         f"  self.attr {n('self_attr_param') + n('self_attr_call') + n('self_attr_shared') + n('self_attr')}"
         f" — 주입 {n('self_attr_param')} ({_top(sh.get('self_attr_param', {}))})"

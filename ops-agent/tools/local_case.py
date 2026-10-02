@@ -73,7 +73,8 @@ def _repo(root: Path, name: str, url: str, files: dict) -> Path:
 # 공유 라이브러리(서브모듈) — processor가 부르는 `normalize`·`now`가 여기 산다. 대상 이름(토픽·컬렉션)을 안 쓴다:
 # 흐름 그래프는 그대로이고, 인덱스에 레포 경계를 넘는 확실 엣지가 생기는지만 본다.
 SHARED_FILES = {
-    "__init__.py": "",
+    # 사내 공유 라이브러리처럼 패키지 머리에서 `*`로 재수출한다 — 소비 코드는 패키지에서 받는다.
+    "__init__.py": "from .clock import *\nfrom .events import *\n",
     "events.py": '''"""소비 레포마다 서브모듈로 핀을 박아 쓴다."""
 
 
@@ -107,8 +108,7 @@ CORE_FILES = {
     "config/factories/gumi/mx.json": {
         "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}},
     "processor/handler.py": '''"""alarm_raw를 읽어 정규화한 뒤 alarm_main으로 낸다."""
-from shared_lib.clock import now
-from shared_lib.events import normalize
+from shared_lib import normalize, now
 
 
 def run(cfg, consumer, producer, redis):

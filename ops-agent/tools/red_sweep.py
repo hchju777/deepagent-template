@@ -982,8 +982,8 @@ CASES = [
   '    gb.write_index(out_dir, symbol_index)', '    pass  # gb.write_index(out_dir, symbol_index)',
   ['tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다']),
  ('파라미터가 모듈 이름을 안 가린다', ROOT / "src/knowledge/index.py",
-  '            if name in fn.params:\n                self._count("variable_call")',
-  '            if False:\n                self._count("variable_call")',
+  '            if name in fn.params or (name in fn.free and name not in fn.locals_):',
+  '            if name in fn.free and name not in fn.locals_:',
   ['tests/knowledge/test_index.py::test_파라미터나_지역변수_호출은_이름이_같은_함수에_안_잇고_별칭_지역은_확정으로_푼다']),
  ('함수 안 import를 안 본다', ROOT / "src/knowledge/index.py",
   '            elif isinstance(node, (ast.Import, ast.ImportFrom)):\n                self._imports(node, overwrite=False)',
@@ -1046,6 +1046,30 @@ CASES = [
   '        return [s for s in pool if s != fn.sid and self.index.symbols[s].repo == repo]',
   '        return [s for s in pool if s != fn.sid]',
   ['tests/knowledge/test_index.py::test_추정_후보는_부르는_쪽_레포_안에서만_고른다']),
+ ('재수출(import *)을 안 따라간다', ROOT / 'src/knowledge/index.py',
+  '                return self._via_star(mod, rest, _seen)',
+  '                return None',
+  ['tests/knowledge/test_index.py::test_import_별표로_재수출한_이름을_따라가되_all과_밑줄과_순환을_지킨다']),
+ ('import * 뒤 맨 이름을 안 찾는다', ROOT / 'src/knowledge/index.py',
+  '        return self._via_star(mod, [name])',
+  '        return None',
+  ['tests/knowledge/test_index.py::test_import_별표로_재수출한_이름을_따라가되_all과_밑줄과_순환을_지킨다']),
+ ('재수출이 __all__을 안 지킨다', ROOT / 'src/knowledge/index.py',
+  '        return any(isinstance(e, ast.Constant) and e.value == name for e in declared.elts)',
+  '        return True',
+  ['tests/knowledge/test_index.py::test_import_별표로_재수출한_이름을_따라가되_all과_밑줄과_순환을_지킨다']),
+ ('공유 라이브러리 미해석을 이유별로 안 가른다', ROOT / 'src/knowledge/index.py',
+  '            return self._note("shared_absent", repo)',
+  '            return self._note("shared_unnamed", repo)',
+  ['tests/knowledge/test_index.py::test_공유_라이브러리_미해석은_레포에_안_들어옴과_이름_못_찾음으로_가른다']),
+ ('클로저 변수를 맨 이름으로 센다', ROOT / 'src/knowledge/index.py',
+  '            if name in fn.params or (name in fn.free and name not in fn.locals_):',
+  '            if name in fn.params:',
+  ['tests/knowledge/test_index.py::test_바깥_함수의_인자를_부르는_클로저는_변수_호출이다']),
+ ('정밀도 표본이 import 별칭을 안 본다', ROOT / 'src/knowledge/index_check.py',
+  '        needles |= {a for n in needles for a in aliases.get(n, ())}',
+  '        needles |= set()',
+  ['tests/knowledge/test_index_check.py::test_정밀도_표본은_import_별칭으로_부른_것을_맞은_것으로_본다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1073,7 +1097,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 275, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 281, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -581,3 +581,65 @@ async def test_추정_후보는_부르는_쪽_레포_안에서만_고른다():
         sid = idx.lookup("ra", q)
         assert sid is not None and [e for e in idx.edges if e.src == sid and e.type == "calls"] == []
     assert idx.unresolved.get("unknown", 0) == 2
+
+
+# ── 6b-2 후속: `import *` 재수출·공유 라이브러리 진단·클로저 변수 ─────────
+
+STAR = {
+    ".gitmodules": '[submodule "lib"]\n\tpath = lib\n\turl = ../lib.git\n',
+    "lib/__init__.py": "from .core import *\nfrom .hidden import *\n",
+    "lib/core.py": ("__all__ = ['Store', 'helper']\n\n\n"
+                    "class Store:\n    def save(self):\n        return 1\n\n\n"
+                    "def helper():\n    return 2\n\n\n"
+                    "def internal():\n    return 3\n"),
+    # `from . import *` — 패키지로 되돌아가는 순환. 본 모듈을 다시 열면 안 끝난다.
+    "lib/hidden.py": "from . import *\n\n\ndef _private():\n    return 4\n\n\ndef visible():\n    return 5\n",
+    "app/__init__.py": "",
+    "app/use.py": ("from lib import Store, helper, internal, visible, _private, gone\n\n\n"
+                   "def run():\n"
+                   "    helper()\n"
+                   "    visible()\n"
+                   "    Store().save()\n"
+                   "    internal()\n"
+                   "    _private()\n"
+                   "    return gone()\n\n\n"
+                   "def deco(func):\n"
+                   "    def wrapper(*a):\n"
+                   "        return func(*a)\n"
+                   "    return wrapper\n"),
+    "app/bare.py": "from lib.core import *\n\n\ndef go():\n    return helper()\n",
+}
+
+
+async def test_import_별표로_재수출한_이름을_따라가되_all과_밑줄과_순환을_지킨다():
+    """사내 다섯 번째 숫자: 서브모듈이 다섯 레포 모두 채워졌는데 공유 라이브러리 470이 남았다. 공유 라이브러리의
+    `__init__.py`가 `from .core import *`로 내보내면 인덱서가 `*`를 버려서 `from <공유> import Store`가 안 풀렸다."""
+    idx = await _index(STAR, names=[])
+    got = _edges(idx, "app.use.run", "calls")
+    assert ("lib.core.helper", "calls", "exact") in got
+    assert ("lib.hidden.visible", "calls", "exact") in got
+    assert ("lib.core.Store.save", "calls", "exact") in got
+    assert not any(q.endswith(("internal", "_private", "gone")) for q, _, _ in got)   # __all__ 밖·밑줄·없는 이름
+    assert ("lib.core.helper", "calls", "exact") in _edges(idx, "app.bare.go")          # `import *` 뒤 맨 이름
+    sh = idx.unresolved_shapes
+    assert sh["shared_unnamed"] == {"lib.internal": 1, "lib._private": 1, "lib.gone": 1}
+    assert "shared_absent" not in sh
+
+
+async def test_공유_라이브러리_미해석은_레포에_안_들어옴과_이름_못_찾음으로_가른다():
+    """서브모듈이 안 채워진 레포는 공유 모듈이 하나도 없다 — 그 몫은 `code status`가 고칠 일이고, 모듈은 있는데
+    이름을 못 찾은 몫은 인덱서가 고칠 일이다. 한 숫자로 세면 어느 쪽인지 사내에 한 번 더 물어야 한다."""
+    absent = {".gitmodules": STAR[".gitmodules"], "app/__init__.py": "",
+              "app/x.py": "from lib.core import helper\n\n\ndef go():\n    return helper()\n"}
+    idx = await _index(absent, names=[])
+    assert idx.unresolved_shapes["shared_absent"] == {REPO: 1}
+    assert "shared_unnamed" not in idx.unresolved_shapes
+
+
+async def test_바깥_함수의_인자를_부르는_클로저는_변수_호출이다():
+    """데코레이터의 `wrapper`가 `func(*a)`를 부른다 — 사내 맨 이름 `func` 28건. 무엇이 올지는 실행 시점에 정해지므로
+    못 푸는 것이 맞고, 맨 이름(진짜 모르는 것)에 섞이면 진단이 흐려진다."""
+    idx = await _index(STAR, names=[])
+    assert _edges(idx, "app.use.deco.wrapper", "calls") == set()
+    assert "func" not in idx.unresolved_shapes.get("bare_name", {})
+    assert idx.unresolved.get("variable_call", 0) >= 1

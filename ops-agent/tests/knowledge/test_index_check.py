@@ -123,7 +123,21 @@ async def test_미해석_진단은_여덟_줄_안에_공유_라이브러리와_�
     lines = chk.unresolved_report(idx)
     assert 3 <= len(lines) <= 8
     text = "\n".join(lines)
-    assert "공유 라이브러리 3" in text and "shared_lib 3" in text and "httpx 3" in text
+    assert "공유 라이브러리 3" in text and "httpx 3" in text and "shared_lib (레포 1)" in text
+    assert "레포에 안 들어옴 3" in text and f"{REPO} 3" in text and "이름 못 찾음 0" in text
     assert "self.attr" in text and "repo 1" in text and "파라미터" in text and "db 1" in text
     assert "resp 1" in text and "fetch 1" in text
     assert all(len(line) <= 160 for line in lines)                       # 사람이 옮겨 적는다
+
+
+async def test_정밀도_표본은_import_별칭으로_부른_것을_맞은_것으로_본다():
+    """`from x import Canvas as _Canvas` 뒤 `_Canvas(...)` — 엣지는 맞는데 본문엔 별칭만 있다. 여기 `src/`에서 6b-2
+    후속 뒤 표본이 바뀌자 99/100으로 드러났다(`\\b`는 밑줄 뒤에서 안 끊긴다)."""
+    files = dict(FILES)
+    files["app/alias.py"] = "from app.util import helper as _h\n\n\ndef via():\n    return _h()\n"
+    idx, src, _, _ = await _built(files)
+    via = idx.lookup(REPO, "app.alias.via")
+    assert any(idx.symbols[e.dst].qualname == "app.util.helper" and e.certainty == "exact"
+               for e in idx.edges if e.src == via and e.type == "calls")
+    ok, total, failures = await chk.precision_sample(idx, await _read_of(src), n=500, seed=1)
+    assert ok == total, failures
