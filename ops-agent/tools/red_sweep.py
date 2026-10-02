@@ -950,8 +950,8 @@ CASES = [
   '        if False:\n            self._count("stoplist")\n            return None',
   ['tests/knowledge/test_index.py::test_전부_실패하면_같은_이름_메서드에_candidate이되_stoplist와_상한을_지킨다']),
  ('후보 상한을 안 지킨다', ROOT / "src/knowledge/index.py",
-  '        if len(cands) > MAX_CANDIDATES:\n            self._count("too_many")\n            self._note("too_many_method", meth)',
-  '        if False:\n            self._count("too_many")\n            self._note("too_many_method", meth)',
+  '        if len(cands) > MAX_CANDIDATES:\n            # 재정의 뿌리로 접는다',
+  '        if False:\n            # 재정의 뿌리로 접는다',
   ['tests/knowledge/test_index.py::test_전부_실패하면_같은_이름_메서드에_candidate이되_stoplist와_상한을_지킨다']),
  ('self 호출 미해석을 레포 전체로 푼다', ROOT / "src/knowledge/index.py",
   'for s in self.descendants(fn.class_sid)', 'for s in self.classes',
@@ -1015,6 +1015,17 @@ CASES = [
   '        if not self._quiet:\n            self.shapes[shape][name] += 1',
   '        if False:\n            self.shapes[shape][name] += 1',
   ['tests/knowledge/test_index.py::test_미해석_호출은_수신자_모양별로_세어_6b가_무엇을_먼저_지을지_숫자로_정한다']),
+ ('super 호출을 조상에서 안 찾는다', ROOT / "src/knowledge/index.py",
+  '            if head_chain == ("super",) and fn.class_sid is not None and len(tail) == 1:',
+  '            if False:',
+  ['tests/knowledge/test_index.py::test_super_호출은_조상에서_확실로_풀고_조상이_갈리면_그_조상들만_후보다']),
+ ('f().m()을 반환 클래스로 안 푼다', ROOT / "src/knowledge/index.py",
+  '            if c is None and plain:', '            if False:',
+  ['tests/knowledge/test_index.py::test_함수_호출_결과에_대한_호출은_그_함수의_반환_클래스에서_푼다']),
+ ('동명 후보를 재정의 뿌리로 안 접는다', ROOT / "src/knowledge/index.py",
+  '            if len(roots) <= MAX_CANDIDATES:\n                return "candidate", roots, "root"',
+  '            if False:\n                return "candidate", roots, "root"',
+  ['tests/knowledge/test_index.py::test_동명_후보가_상한을_넘으면_재정의_뿌리로_접어_베이스_메서드_하나에_candidate다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1042,7 +1053,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 267, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 270, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

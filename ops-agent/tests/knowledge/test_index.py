@@ -478,7 +478,10 @@ SHARED = {
         "        store.save()\n"
         "        resp.raise_for_status()\n"
         "        util.helper()\n"
-        "        return httpx.Timeout(3)\n"
+        "        return httpx.Timeout(3)\n\n\n"
+        "class Ext(Store):\n"
+        "    def __init__(self):\n"
+        "        super().__init__()\n"
     ),
     "pkg/many.py": "".join(f"class M{i}:\n    def fetch(self):\n        return {i}\n\n\n" for i in range(13))
                    + "def use(x):\n    return x.fetch()\n",
@@ -492,7 +495,7 @@ async def test_미해석_호출은_수신자_모양별로_세어_6b가_무엇을
     idx = await _index(SHARED, names=[])
     assert idx.shared_prefixes == {REPO: ["shared_lib"]}
     sh = idx.unresolved_shapes
-    assert sh["external_shared"] == {"shared_lib": 2}                   # Store()·util.helper()
+    assert sh["external_shared"] == {"shared_lib": 3}                   # Store()·util.helper()·super()→Store
     assert sh["external_third"] == {"httpx": 3}                          # Client()·get()·Timeout()
     assert sh["self_attr_param"] == {"repo": 1} and sh["self_attr_call"] == {"client": 1}
     assert sh["self_attr_shared"] == {"store": 1}
@@ -502,3 +505,66 @@ async def test_미해석_호출은_수신자_모양별로_세어_6b가_무엇을
     assert "stoplist" not in sh and "builtin" not in sh                  # 자명한 것은 모양을 안 센다
     again = ix.Index.from_dict(json.loads(json.dumps(idx.to_dict())))
     assert again.unresolved_shapes == sh and again.shared_prefixes == idx.shared_prefixes
+
+
+# ── 6b-1: super()·f().m()·재정의 뿌리로 접기 ────────────────────────────
+
+SUPER = {
+    "pkg/__init__.py": "",
+    "pkg/base.py": (
+        "class Base:\n"
+        "    def __init__(self, n):\n"
+        "        self.n = n\n\n"
+        "    def save(self):\n"
+        "        return 0\n\n"
+        "    def hello(self):\n"
+        "        return 'b'\n"
+    ),
+    "pkg/mixin.py": "class Mixin:\n    def hello(self):\n        return 'm'\n",
+    "pkg/impl.py": (
+        "from pkg.base import Base\n"
+        "from pkg.mixin import Mixin\n\n\n"
+        "class Child(Base):\n"
+        "    def __init__(self, n):\n"
+        "        super().__init__(n)\n\n"
+        "    def save(self):\n"
+        "        return super().save() + 1\n\n\n"
+        "class Both(Base, Mixin):\n"
+        "    def hello(self):\n"
+        "        return super().hello()\n\n\n"
+        "def make():\n"
+        "    return Child(1)\n\n\n"
+        "def use():\n"
+        "    return make().save()\n\n\n"
+        "def anywhere(x):\n"
+        "    return x.save()\n"
+    ),
+    "pkg/stores.py": "from pkg.base import Base\n\n\n" + "".join(
+        f"class S{i}(Base):\n    def save(self):\n        return {i}\n\n\n" for i in range(13)),
+}
+
+
+async def test_super_호출은_조상에서_확실로_풀고_조상이_갈리면_그_조상들만_후보다():
+    """사내 세 번째 숫자: 체인 머리 `super` 257건 + 버린 `__init__` 85건 — `super().m()`을 `()`가 낀 체인이라
+    동명 후보로 떨어뜨리고 있었다. 조상에서 찾으면 확실이다."""
+    idx = await _index(SUPER, names=[])
+    assert ("pkg.base.Base.__init__", "calls", "exact") in _edges(idx, "pkg.impl.Child.__init__")
+    assert ("pkg.base.Base.save", "calls", "exact") in _edges(idx, "pkg.impl.Child.save")
+    assert _edges(idx, "pkg.impl.Both.hello", "calls") == {
+        ("pkg.base.Base.hello", "calls", "candidate"), ("pkg.mixin.Mixin.hello", "calls", "candidate")}
+    assert idx.unresolved.get("too_many", 0) == 0
+
+
+async def test_함수_호출_결과에_대한_호출은_그_함수의_반환_클래스에서_푼다():
+    idx = await _index(SUPER, names=[])
+    assert ("pkg.impl.Child.save", "calls", "exact") in _edges(idx, "pkg.impl.use")
+
+
+async def test_동명_후보가_상한을_넘으면_재정의_뿌리로_접어_베이스_메서드_하나에_candidate다():
+    """`storage.save()` — 구현체 30개에 후보 30개를 거는 대신, 전부가 재정의하는 `Base.save` 하나로 접는다.
+    `overrides`가 구현체로 이어 주므로 impact 질의는 그대로 된다. 공통 뿌리가 없으면(crowd) 지금처럼 버린다."""
+    idx = await _index(SUPER, names=[])
+    src = _sid(idx, "pkg.impl.anywhere")
+    hits = [e for e in idx.edges if e.src == src and e.type == "calls"]
+    assert [(idx.symbols[e.dst].qualname, e.certainty, e.via) for e in hits] == [("pkg.base.Base.save", "candidate", "root")]
+    assert idx.unresolved.get("too_many", 0) == 0 and "too_many_method" not in idx.unresolved_shapes

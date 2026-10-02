@@ -61,9 +61,9 @@
 | (a) | `f()` | 파라미터·지역이 모듈 이름을 **가린다** → 모듈 정의 → import 별칭 → builtin은 버림 → 레포 전체 최상위 동명 | exact / candidate |
 | (b) | `self.m()` | 자기 클래스와 조상에서. 없으면 **하위 클래스로만** 좁힌 candidate(`restricted`, 템플릿 메서드) | exact / candidate |
 | (c) | `x.m()` | 타입 표(파라미터 힌트·지역 대입·모듈 싱글턴·`Depends` 제공자·생성 지점 역전파)로 수신 클래스를 안다 | exact |
-| (c′) | `Cls().m()` | 생성자 호출을 받는 쪽 | exact |
+| (c′) | `Cls().m()` · `super().m()` · `f(...).m()` | 생성자 호출을 받는 쪽 / 직접 베이스들의 MRO에서(베이스마다 다르면 그 조상들만 후보) / f의 반환 클래스에서 | exact / candidate |
 | (d) | `a.b.c()` | import·모듈·클래스 접두사를 **긴 것부터** | exact |
-| (e) | 그 밖 | 같은 이름 메서드 전부에 candidate — `STOPLIST`(`get`·`update`·`info`…)와 상한 12 | candidate |
+| (e) | 그 밖 | 같은 이름 메서드 전부에 candidate — `STOPLIST`(`get`·`update`·`info`…)와 상한 12. 상한을 넘으면 **재정의 뿌리로 접는다**(전부가 `Base.save`를 재정의하면 뿌리 하나에 candidate, via `root`) | candidate |
 
 어노테이션은 `Optional`·`Annotated`·`Final`·`Type`·`X | None`·문자열을 벗기고 **컨테이너는 안
 벗긴다**(`list[X]`의 원소에 대한 호출이 아니다). `Annotated[T, Depends(g)]`는 g가 돌려주는
@@ -201,6 +201,33 @@ inherits 84 · overrides 68 · 불변식 OK. 남은 unknown은 stdlib 객체의 
 여기 `src/`에서는 공유 0(서브모듈 없음), 수신자 455 중 지역 311(대부분 argparse·re 객체), 파라미터 57,
 `self.attr` 25 — 예상대로 "원래 못 푸는 것"이 대부분이다.
 
+### 세 번째 `code check --unresolved` — 진단 결과
+
+| 줄 | 사내 |
+|---|---|
+| 8 external 2228 | **공유 라이브러리 738** · 서드파티 1490 (pandas 853 · datetime 172 · asyncio 77 · time 75 · abc 45) |
+| 9 수신자 1832 | `self.attr` 88 (주입 **1** · 호출 결과 43 · 출처 모름 44) · 파라미터 355 (df 88 · data 40 · dto 31) · 지역 989 (외부 호출 결과 64 · **그 밖 924**: 저장소·프로세서·수집기 지역) · 그 밖 400 (**체인 머리 391 — `super` 257**, 팩토리 함수 47) |
+| 10 버린 메서드 | **process 265 · save 174 · collect 116 · `__init__` 85** · (비공개 메서드 하나) 75 |
+
+읽은 것 → 6b의 순서:
+
+- **생성자 주입은 1건이다.** DI 등록 조인은 지을 필요가 없다 — 사내 코드는 생성자 주입이 아니라 팩토리·컴포넌트
+  레지스트리다(`*_components` 43). 사내 분석에서 받은 "DI 레지스트리" 항목은 그쪽 코드의 모양이었다.
+- **`super` 257 + `__init__` 85는 구멍이었다.** `super().m()`이 `()`가 낀 체인이라 (c′)에서 동명 후보로
+  떨어지고, `super().__init__()`은 `__init__`이 수백 개라 버려졌다. 팩토리 함수 결과(`f(...).m()`) 47건도 같다.
+- **지역 924 + 버린 process/save/collect 555는 한 모양이다** — 팩토리·레지스트리에서 받은 객체로 구현체가 13개
+  넘는 메서드를 부른다. 상한을 올려 30개에 후보를 거는 것은 답이 아니다. 전부가 공통 베이스 메서드를
+  **재정의**하면 그 뿌리 하나로 접어 `→ Base.save` candidate 한 줄(via `root`) — `overrides`가 구현체로 이어
+  주니 impact 질의는 그대로 된다. 뿌리가 공유 라이브러리에 있으면 못 접히고, 공유 인덱싱 뒤에 풀린다.
+- **공유 라이브러리 738 + `self.attr` 출처 모름 44** — 베이스가 공유 라이브러리에 있다. 6b-2(핀별 인덱싱).
+- pandas 853, `df`·`data`·`dto` 파라미터 — 원래 못 푸는 것. 짓지 않는다.
+- 접두사 다섯 중 하나가 달라 보였던 것은 옮겨 적는 중의 오타였다(전부 같은 이름).
+
+**6b-1(이 커밋)**: `super().m()`을 직접 베이스들의 MRO에서(하나면 확실, 갈리면 그 조상들만 후보; 베이스가
+인덱스 밖이면 공유/서드파티 미해석으로 센다), `f(...).m()`을 f의 반환 클래스에서, 동명 후보가 상한을 넘으면
+재정의 뿌리로 접기. 여기 `src/`에서는 too_many 9가 0이 됐고(`describe` 9종이 한 베이스로 접힘) 정밀도 100
+그대로. 사내 기대: 체인 머리 391→100 아래, too_many 823이 접힌 만큼 줄고 calls 추정이 그만큼 는다.
+
 ## 커밋 계획 (넷)
 
 | | 내용 | 상태 |
@@ -208,7 +235,9 @@ inherits 84 · overrides 68 · 불변식 OK. 남은 unknown은 stdlib 객체의 
 | 6a | 인덱서 코어·타입 표·엣지 5종·자원 참조, 하네스 A~C, `code graph`가 `symbols.json`·`edges.json`을 쓰고 `code status`가 말하고 `code check`가 검증 | ✅ |
 | 6a 후속 | 사내 첫 숫자가 드러낸 셋 — 테스트 파일 입구 제외, overrides 최근접 조상, 정밀도의 하위 클래스 생성자 | ✅ |
 | 6b-0 | 미해석 진단 `code check --unresolved` — 공유 라이브러리 비중·수신자 묶음·버린 메서드 | ✅ |
-| 6b-1… | 진단이 가리키는 순서로: 공유 라이브러리를 레포별 핀 SHA로(`.gitmodules` url ↔ `code.repos[].url`, 선택 `module_prefix`) / DI 등록 조인 / 인자 타입 역전파 / 구조적 구현체(동명이 아닌 Protocol) / 디스패치 표, 그리고 하네스 D, graphify `graph.json`에 우리 엣지 병합 | 진단 대기 |
+| 6b-1 | `super().m()`·`f(...).m()`·재정의 뿌리로 접기 — 진단의 `super` 257·`__init__` 85·process/save/collect 555 | ✅ |
+| 6b-2 | 공유 라이브러리를 레포별 핀 SHA로(`.gitmodules` url ↔ `code.repos[].url`, `gitlink_at`, 선택 `module_prefix`), vendored 건너뜀 — 진단의 공유 738·출처 모름 44 | |
+| 6b-3 | 남는 것을 보고: 팩토리·레지스트리 반환 타입(디스패치 표), 구조적 구현체(동명이 아닌 Protocol), 하네스 D, graphify `graph.json`에 우리 엣지 병합. DI 등록 조인은 **안 짓는다**(주입 1건) | |
 | 6c | 질의: impact(역방향 도달)·path·writers/readers, 인자 식(`obj.m(x.y())`), CLI, `code.trace`를 인덱스 BFS로(불일치는 Gap) | |
 | 6d | 리드 연결: action 등재·브리핑 예시의 칸·`case dryrun`·측정 T8~T10, 패리티 뒤 추적기 퇴역 | |
 

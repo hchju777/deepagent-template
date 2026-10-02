@@ -464,6 +464,7 @@ class _Resolver:
         self.shared = dict(shared or {})           # repo → 서브모듈 접두사 — 아직 인덱스에 없는 공유 라이브러리
         self.shapes: dict[str, Counter] = defaultdict(Counter)        # 못 푼 호출의 모양 → 이름 → 건수
         self.attr_source: dict[tuple[int, str], tuple] = {}           # (class, attr) → ("param", 이름, fn) | ("call", 머리, fn)
+        self.override_of: dict[int, int] = {}                          # 메서드 → 가장 가까운 재정의 대상(베이스 메서드)
         self.classes: dict[int, _Class] = {}
         self.funcs: dict[int, _Func] = {}
         self.methods_by_name: dict[str, list[int]] = defaultdict(list)
@@ -793,12 +794,22 @@ class _Resolver:
         # (c′) 생성자 호출을 받는 쪽 — `Cls().m()`
         if "()" in rest or chain[-1] == "()":
             cut = list(chain).index("()")
-            c = self.class_of_annotation(mod, ast.parse(".".join(chain[:cut]), mode="eval").body, hops=hops + 1) \
-                if all(p.isidentifier() for p in chain[:cut]) else None
-            tail = chain[cut + 1:]
+            head_chain, tail = chain[:cut], chain[cut + 1:]
+            # `super().m()` — `()`가 낀 체인이라 여기로 떨어져 동명 후보가 되고 있었다(사내 super 257 · __init__ 85).
+            if head_chain == ("super",) and fn.class_sid is not None and len(tail) == 1:
+                return self._super_call(fn, tail[0])
+            plain = all(p.isidentifier() for p in head_chain)
+            c = self.class_of_annotation(mod, ast.parse(".".join(head_chain), mode="eval").body, hops=hops + 1) \
+                if plain else None
+            via = "ctor"
+            if c is None and plain:
+                # `f(...).m()` — f의 반환 클래스에서. 생성자가 아니라 팩토리 함수를 거친 수신자.
+                target = self._call_target(fn, head_chain, hops=hops + 1)
+                if target is not None and target in self.funcs:
+                    c, via = self.returns_class(self.funcs[target], hops=hops + 1), "returns"
             if c is not None and len(tail) == 1:
                 m = self.find_method(c, tail[0])
-                return ("exact", [m], "ctor") if m is not None else None
+                return ("exact", [m], via) if m is not None else None
             return self._fallback(fn, chain, "call_recv")
         # (c) 타입을 아는 이름 경유 — 파라미터·지역·모듈 싱글턴
         if len(rest) == 1:
@@ -844,6 +855,27 @@ class _Resolver:
         if not self._quiet:
             self.unresolved[why] += 1
 
+    def _super_call(self, fn: _Func, name: str) -> tuple[str, list[int], str] | None:
+        """직접 베이스들의 MRO에서 — 하나면 확실, 베이스마다 다르면 그 조상들만 후보(협력적 super는 여럿을 돈다).
+        베이스가 인덱스 밖(공유 라이브러리·서드파티)이면 그쪽 미해석으로 센다 — 동명 후보로 떨어뜨리지 않는다."""
+        found: list[int] = []
+        for b in self.base_of.get(fn.class_sid, []):
+            m = self.find_method(b, name)
+            if m is not None and m not in found:
+                found.append(m)
+        if found:
+            return ("exact" if len(found) == 1 else "candidate"), found, "super"
+        c = self.classes[fn.class_sid]
+        for b in c.bases:
+            target = c.mod.imports.get(b[0])
+            if target and self.resolve_fqn(c.mod.repo, target) is None:
+                self._count("external")
+                self._note("external_shared" if self._is_shared(c.mod.repo, target) else "external_third",
+                           target.split(".")[0])
+                return None
+        self._count("method_missing")
+        return None
+
     def _fallback(self, fn: _Func, chain: tuple[str, ...], why: str) -> tuple[str, list[int], str] | None:
         meth = chain[-1]
         if meth in STOPLIST:
@@ -855,6 +887,19 @@ class _Resolver:
             self._note_receiver(fn, chain)
             return None
         if len(cands) > MAX_CANDIDATES:
+            # 재정의 뿌리로 접는다 — 구현체 30개가 전부 `Base.save`를 재정의하면 후보 30개 대신 뿌리 하나다.
+            # `overrides`가 구현체로 이어 주므로 impact 질의는 그대로 된다. 뿌리가 인덱스 밖(공유 라이브러리)이면
+            # 안 접히고 지금처럼 버린다(사내 process 265 · save 174 · collect 116).
+            roots: list[int] = []
+            for m in cands:
+                for _ in range(64):
+                    if m not in self.override_of:
+                        break
+                    m = self.override_of[m]
+                if m not in roots:
+                    roots.append(m)
+            if len(roots) <= MAX_CANDIDATES:
+                return "candidate", roots, "root"
             self._count("too_many")
             self._note("too_many_method", meth)
             self._note_receiver(fn, chain)
@@ -1035,6 +1080,7 @@ class _Resolver:
                     base_m = self.classes[a].methods.get(name) if a in self.classes else None
                     if base_m is not None:
                         idx.add_edge(msid, base_m, "overrides", "exact", line=self.funcs[msid].node.lineno, via="mro")
+                        self.override_of[msid] = base_m
                         break           # 가장 가까운 조상 하나 — 전부에 걸면 베이스 40 × 구현 30이 1200 엣지다(사내 3741)
         for fn in self.funcs.values():
             for chain, line in fn.calls:

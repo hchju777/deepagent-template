@@ -123,7 +123,7 @@ async def test_미해석_진단은_여덟_줄_안에_공유_라이브러리와_�
     lines = chk.unresolved_report(idx)
     assert 3 <= len(lines) <= 8
     text = "\n".join(lines)
-    assert "공유 라이브러리 2" in text and "shared_lib 2" in text and "httpx 3" in text
+    assert "공유 라이브러리 3" in text and "shared_lib 3" in text and "httpx 3" in text
     assert "self.attr" in text and "repo 1" in text and "파라미터" in text and "db 1" in text
     assert "resp 1" in text and "fetch 1" in text
     assert all(len(line) <= 160 for line in lines)                       # 사람이 옮겨 적는다
