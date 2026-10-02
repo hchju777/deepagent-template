@@ -1090,6 +1090,30 @@ CASES = [
   '        if e.via == "super":\n            needles.add("super")',
   '        if False:\n            needles.add("super")',
   ['tests/knowledge/test_index_check.py::test_정밀도_표본은_super_경유_엣지를_본문의_super로_확인한다']),
+ ('질의가 베이스·포트를 거친 디스패치를 안 본다', ROOT / 'src/knowledge/query.py',
+  '            elif e.type in ("overrides", "implements"):',
+  '            elif False:',
+  ['tests/knowledge/test_query.py::test_부르는_쪽은_디스패치를_거쳐_진입점까지_가고_베이스_메서드는_진입점이_아니다']),
+ ('디스패치로만 닿은 베이스 메서드를 진입점이라 한다', ROOT / 'src/knowledge/query.py',
+  '                (dead if parent[node].mark == DISPATCH else roots).append(node)',
+  '                roots.append(node)',
+  ['tests/knowledge/test_query.py::test_디스패치로만_닿은_베이스_메서드는_진입점이_아니라_막다른_곳으로_따로_말한다']),
+ ('이름 찾기가 정확한 qualname을 앞세우지 않는다', ROOT / 'src/knowledge/query.py',
+  '    return exact or [s.id for s in pool if s.qualname.endswith("." + name)]',
+  '    return exact + [s.id for s in pool if s.qualname.endswith("." + name)]',
+  ['tests/knowledge/test_query.py::test_이름은_qualname_끝부분_파일_레포로_찾고_정확한_qualname이_끝부분보다_앞선다']),
+ ('라우트 핸들러를 못 알아본다', ROOT / 'src/knowledge/query.py',
+  '    return next((d for d in index.symbols[sid].decorators if _ROUTE.search(d)), None)',
+  '    return None',
+  ['tests/knowledge/test_query.py::test_부르는_쪽은_디스패치를_거쳐_진입점까지_가고_베이스_메서드는_진입점이_아니다']),
+ ('자원 이름이 정확하지 않으면 못 찾는다', ROOT / 'src/knowledge/query.py',
+  '    return collect(lambda n: n == name) or collect(lambda n: name in n)',
+  '    return collect(lambda n: n == name)',
+  ['tests/knowledge/test_query.py::test_자원을_쓰고_읽는_함수를_이름으로_찾고_정확한_이름이_없으면_부분_일치다']),
+ ('이름이 모호해도 아무거나 고른다', ROOT / 'src/__main__.py',
+  '    if len(found) > 1:\n        print(f"  {text}: 여럿이다',
+  '    if False:\n        print(f"  {text}: 여럿이다',
+  ['tests/knowledge/test_cli_code.py::test_code_callers_path_uses가_인덱스로_역질문에_답한다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1117,7 +1141,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 286, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 292, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

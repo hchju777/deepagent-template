@@ -239,6 +239,9 @@ python -m src code plan       # 사람이 직접 칠 git 명령 (네트워크 �
 python -m src code sync       # clone/fetch — **사내에서만**
 python -m src code graph      # 흐름 그래프 + 심볼 인덱스 (sync 뒤 자동으로도 돈다)
 python -m src code check      # 인덱스 검증 — 불변식·정밀도·재현율 일곱 줄 (--unresolved: 못 푼 호출의 모양)
+python -m src code callers <함수>   # 누가 부르나 — 진입점까지
+python -m src code path <A> <B>     # A에서 B로 가는 호출 경로
+python -m src code uses <자원>      # 이 컬렉션·토픽·키를 쓰고 읽는 함수와 진입점
 ```
 
 조사가 "데이터가 이상하다"를 넘어 "왜 그런가"로 가려면 대상 서비스의 코드를 읽어야

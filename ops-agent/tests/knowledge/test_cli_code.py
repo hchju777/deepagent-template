@@ -681,3 +681,36 @@ def test_code_graph가_채워진_공유_서브모듈까지_인덱싱해_소비_�
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "check", "--unresolved")
     assert code == 0, captured.out + captured.err
     assert "불변식 OK" in captured.out and "공유 라이브러리 0" in captured.out
+
+
+def test_code_callers_path_uses가_인덱스로_역질문에_답한다(tmp_path, monkeypatch, capsys):
+    """11d 6c-1 — "이 컬렉션에 누가 쓰고 읽나", "이 함수를 누가 부르나", "A에서 B로 어떻게 가나". 사람이 사내에서 한 줄로
+    돌려 아는 답과 맞는지 볼 수 있어야 한다 — 리드에 잇기(6d) 전에."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree_with_shared(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "alarm_events")
+    assert code == 0, captured.out + captured.err
+    out = captured.out
+    assert "쓰기 1" in out and "sink.writer.run" in out and "읽기 1" in out and "api.r.badge" in out
+    assert "라우트 router.post" in out                                 # 읽는 쪽 진입점이 라우트라고 말한다
+    assert "· sink]" in out                                            # 서비스 이름이 붙는다
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "callers", "utc_stamp")
+    assert code == 0, captured.out + captured.err
+    assert "processor.stamp.Stamp.apply" in captured.out and "shared_lib.clock.utc_stamp" in captured.out
+    assert "=>" in captured.out and "shared_lib/clock.py" in captured.out   # Step.apply => Stamp.apply
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "callers", "run")
+    assert code == 1 and "여럿" in captured.out                       # 모호하면 후보를 보여 주고 멈춘다
+    assert "processor.handler.run" in captured.out and "sink.writer.run" in captured.out
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys,
+                          "code", "path", "shared_lib.base.Step.apply", "utc_stamp")
+    assert code == 0, captured.out + captured.err
+    assert "base.Step.apply => stamp.Stamp.apply → clock.utc_stamp" in captured.out
+
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "없는이름")
+    assert code == 1 and "없다" in captured.out
