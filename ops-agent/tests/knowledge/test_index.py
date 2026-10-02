@@ -568,3 +568,16 @@ async def test_동명_후보가_상한을_넘으면_재정의_뿌리로_접어_�
     hits = [e for e in idx.edges if e.src == src and e.type == "calls"]
     assert [(idx.symbols[e.dst].qualname, e.certainty, e.via) for e in hits] == [("pkg.base.Base.save", "candidate", "root")]
     assert idx.unresolved.get("too_many", 0) == 0 and "too_many_method" not in idx.unresolved_shapes
+
+
+async def test_추정_후보는_부르는_쪽_레포_안에서만_고른다():
+    """다른 레포의 함수는 이 프로세스에 없다 — 레포 사이는 HTTP·Kafka로 잇고(흐름 그래프), 공유 라이브러리는 레포마다
+    자기 핀으로 들어온다(6b-2). 후보 풀이 레포를 건너면 공유 라이브러리가 레포 수만큼 겹쳐 같은 이름 후보가 다섯 배가
+    된다 — 측정판에서 다른 레포의 공유 `now()`가 후보로 잡혀 드러났다."""
+    a = {"a/__init__.py": "", "a/m.py": "def tick():\n    return now()\n\n\ndef poke(x):\n    return x.flush()\n"}
+    b = {"b/__init__.py": "", "b/k.py": "def now():\n    return 1\n\n\nclass W:\n    def flush(self):\n        return 2\n"}
+    idx = await ix.build_index({"ra": _Src(a), "rb": _Src(b)}, names=[], commits={"ra": "c1", "rb": "c2"})
+    for q in ("a.m.tick", "a.m.poke"):
+        sid = idx.lookup("ra", q)
+        assert sid is not None and [e for e in idx.edges if e.src == sid and e.type == "calls"] == []
+    assert idx.unresolved.get("unknown", 0) == 2

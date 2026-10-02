@@ -312,3 +312,55 @@ async def test_버전이_없으면_grep이_git의_원문을_안_흘린다(behind
     assert got.status == "error"
     assert "unable to read tree" not in got.error
     assert "code sync" in got.error
+
+
+# ── 목록이 submodule 안으로 (11d 6b-2) ───────────────────────────────────
+
+async def test_채워진_submodule_안의_파일도_목록에_든다_부모가_박은_버전으로(nested, clock):
+    """`ls-tree -r`는 submodule 안으로 안 들어간다 — 인덱서(11d)가 공유 라이브러리를 못 봤던 이유다(사내
+    external 2228건 중 738건). `show`·`grep`은 이미 들어가는데 목록만 안 들어갔다. 채워진 것은 **부모가 박은
+    SHA로** 한 단계 내려간다 — 서브모듈의 지금 HEAD가 아니다."""
+    _, full = nested
+    sub = full / "vendor" / "libs"
+    git("config", "user.email", "t@t", cwd=sub)
+    git("config", "user.name", "t", cwd=sub)
+    (sub / "later.json").write_text("{}\n", encoding="utf-8")
+    git("add", "-A", cwd=sub)
+    git("commit", "-qm", "later", cwd=sub)                        # 서브모듈 HEAD만 옮긴다 — 부모는 옛 SHA 그대로
+    reader = _reader_at(full, clock)
+    got = await reader.ls("dt-core", "main")
+    assert got.status == "ok", got.error
+    assert "vendor/libs/kafka.json" in got.data and "app.py" in got.data
+    assert "vendor/libs" not in got.data                          # gitlink 이름 하나 대신 그 안의 파일들
+    assert "vendor/libs/later.json" not in got.data               # 지금 HEAD가 아니라 부모가 박은 버전
+    assert got.envelope.complete
+    assert (await reader.ls("dt-core", "main", "vendor/libs")).data == ["vendor/libs/kafka.json"]
+    assert (await reader.ls("dt-core", "main", "vendor")).data == ["vendor/libs/kafka.json"]
+
+
+async def test_그_커밋의_submodule_버전이_없으면_목록은_안_펼치고_이유를_말한다(behind, clock):
+    got = await _reader_at(behind, clock).ls("dt-core", "main")
+    assert got.status == "ok" and "app.py" in got.data and "vendor/libs" in got.data
+    assert not any(n.startswith("vendor/libs/") for n in got.data)
+    assert not got.envelope.complete and "code sync" in got.envelope.truncated_reason
+
+
+async def test_submodule_안_파일을_여럿_읽어도_gitlink와_버전_확인은_한_번이다(nested, clock, monkeypatch):
+    """인덱서는 공유 라이브러리 파일을 **하나씩** 읽는다 — 사내는 레포 다섯 × 수백 파일이다. 파일마다 gitlink를
+    풀고 객체를 확인하면 Windows에서 subprocess가 수천 개다. gitlink는 커밋으로 주소가 매겨져 안 변하고,
+    "그 버전이 있다"는 한 번 참이면 참이다(없다는 sync로 바뀔 수 있어 안 담는다)."""
+    _, full = nested
+    head = git("rev-parse", "HEAD", cwd=full).stdout.strip()       # 배포 핀은 SHA다 — 참조(`main`)는 움직인다
+    reader = _reader_at(full, clock)
+    calls = []
+    real = reader._git
+
+    async def counting(repo, args, **kw):
+        calls.append(args[0])
+        return await real(repo, args, **kw)
+
+    monkeypatch.setattr(reader, "_git", counting)
+    for _ in range(3):
+        got = await reader.show("dt-core", head, "vendor/libs/kafka.json", whole=True)
+        assert got.status == "ok", got.error
+    assert calls.count("ls-tree") == 1 and calls.count("cat-file") == 1

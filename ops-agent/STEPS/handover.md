@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1398 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 270 사례 |
+| 테스트 | `1403 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 275 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -350,7 +350,10 @@ deepagent-template 리포의 ops-agent/ 트리에서 이어서 작업한다.
 `code check --unresolved`(못 푼 호출의 모양 — 공유 라이브러리 비중·수신자 묶음)를 넣었다. 사내에서 그
 8~10번 줄이 순서를 정했다: 생성자 주입은 1건(DI 조인 불필요), `super` 257·`__init__` 85는 구멍,
 process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브러리 738. 6b-1(super·`f().m()`·재정의
-뿌리로 접기)까지 끝났다. 다음은 **11d 6b-2**(공유 라이브러리 핀별 인덱싱)
+뿌리로 접기)까지 끝났다. 네 번째 숫자는 수신자 1832→1009였다. 6b-2로 리더의 `ls`가 채워진 서브모듈 안을
+부모가 박은 SHA로 펼쳐 공유 라이브러리가 레포마다 자기 핀으로 인덱스에 든다(공유 레포 등재는 안 한다), 추정
+후보 풀은 레포 안으로 좁혔다. 사내에서 `code check --unresolved`로 8번 공유 라이브러리가 0이 되는지 확인하는
+것이 다음이다. 그다음은 **11d 6b-3**(남는 것을 보고)
 (구조적 구현체·DI 레지스트리·디스패치 표·공유 라이브러리를 레포별 핀 SHA로·하네스 D·graphify
 병합), 그다음 6c(impact/path 질의, code.trace를 인덱스 위로), 6d(리드 연결·측정), 12a.
 사내에서는 `code graph` 뒤 `code check`의 일곱 줄을 받아 적는 것이 첫 일이다. 시작하기 전에

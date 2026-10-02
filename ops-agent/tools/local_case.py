@@ -32,6 +32,22 @@ def _git(*args, cwd: Path) -> None:
                    encoding="utf-8", errors="replace")
 
 
+def _head(repo: Path) -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True,
+                          encoding="utf-8", errors="replace").stdout.strip()
+
+
+def _submodule(parent: Path, lib: Path, *, path: str) -> None:
+    """공유 라이브러리를 서브모듈로 심고 채운다 — 사내 모양이다(레포마다 같은 라이브러리를 `src`와 같은 깊이에
+    두고 핀을 박는다). `git submodule add`는 로컬 경로에 막혀 있어(CVE-2022-39253) `.gitmodules`와 gitlink를
+    손으로 만들고(tests/support와 같은 방식) 채우기만 git에 맡긴다."""
+    _write(parent, ".gitmodules", f'[submodule "{path}"]\n\tpath = {path}\n\turl = {lib.as_posix()}\n')
+    _git("add", ".gitmodules", cwd=parent)
+    _git("update-index", "--add", "--cacheinfo", f"160000,{_head(lib)},{path}", cwd=parent)
+    _git("commit", "-qm", "shared library", cwd=parent)
+    _git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", path, cwd=parent)
+
+
 def _write(root: Path, rel: str, content) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +70,26 @@ def _repo(root: Path, name: str, url: str, files: dict) -> Path:
     return root
 
 
+# 공유 라이브러리(서브모듈) — processor가 부르는 `normalize`·`now`가 여기 산다. 대상 이름(토픽·컬렉션)을 안 쓴다:
+# 흐름 그래프는 그대로이고, 인덱스에 레포 경계를 넘는 확실 엣지가 생기는지만 본다.
+SHARED_FILES = {
+    "__init__.py": "",
+    "events.py": '''"""소비 레포마다 서브모듈로 핀을 박아 쓴다."""
+
+
+def normalize(msg):
+    event = dict(msg)
+    event.setdefault("severity", "minor")
+    return event
+''',
+    "clock.py": '''import time
+
+
+def now():
+    return time.time()
+''',
+}
+
 # **사내 config의 모양이다**(2026-09 확인, 이름은 지어냈다). `infra`는 레포당 하나라 한
 # 레포의 서비스 둘이 공유한다 — 컨슈머 그룹도 같다. 토픽 키는 `topic1`·`topic2`처럼
 # 뜻이 없고, 컬렉션·redis 키는 `infra` 밖 최상위에 있다.
@@ -71,6 +107,8 @@ CORE_FILES = {
     "config/factories/gumi/mx.json": {
         "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}},
     "processor/handler.py": '''"""alarm_raw를 읽어 정규화한 뒤 alarm_main으로 낸다."""
+from shared_lib.clock import now
+from shared_lib.events import normalize
 
 
 def run(cfg, consumer, producer, redis):
@@ -239,7 +277,10 @@ def main() -> int:
         shutil.rmtree(know)
     shutil.copytree(HERE / "knowledge", know)
 
-    _repo(root / "target-code" / "dt-core", "dt-core", urls["dt-core"], CORE_FILES)
+    shared = _repo(root / "target-code" / "_shared" / "shared-lib", "shared-lib",
+                   "https://git.example.com/team/shared-lib", SHARED_FILES)
+    _submodule(_repo(root / "target-code" / "dt-core", "dt-core", urls["dt-core"], CORE_FILES), shared,
+               path="shared_lib")
     _repo(root / "target-code" / "dt-api", "dt-api", urls["dt-api"], API_FILES)
 
     # 이 도구는 CLI 경계다 — 가짜 데이터의 "지금"은 실제 지금이어야 stub의 $gte가 뜻을 가진다.

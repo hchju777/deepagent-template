@@ -751,7 +751,7 @@ class _Resolver:
                 self._count("external")
                 self._note_external(fn, chain)
                 return None
-            cands = [s for s in self.funcs_by_name.get(name, []) if s != fn.sid]
+            cands = self._same_repo(fn, self.funcs_by_name.get(name, []))
             if not cands:
                 self._count("unknown")
                 self._note("bare_name", name)
@@ -855,6 +855,13 @@ class _Resolver:
         if not self._quiet:
             self.unresolved[why] += 1
 
+    def _same_repo(self, fn: _Func, pool: list[int]) -> list[int]:
+        """추정 후보는 부르는 쪽 레포 안에서만 — 다른 레포의 함수는 이 프로세스에 없다(레포 사이는 HTTP·Kafka, 흐름
+        그래프의 몫). 공유 라이브러리는 레포마다 자기 핀으로 들어오므로(6b-2) 레포를 건너면 같은 이름이 레포 수만큼
+        겹친다."""
+        repo = fn.mod.repo
+        return [s for s in pool if s != fn.sid and self.index.symbols[s].repo == repo]
+
     def _super_call(self, fn: _Func, name: str) -> tuple[str, list[int], str] | None:
         """직접 베이스들의 MRO에서 — 하나면 확실, 베이스마다 다르면 그 조상들만 후보(협력적 super는 여럿을 돈다).
         베이스가 인덱스 밖(공유 라이브러리·서드파티)이면 그쪽 미해석으로 센다 — 동명 후보로 떨어뜨리지 않는다."""
@@ -881,7 +888,7 @@ class _Resolver:
         if meth in STOPLIST:
             self._count("stoplist")
             return None
-        cands = [s for s in self.methods_by_name.get(meth, []) if s != fn.sid]
+        cands = self._same_repo(fn, self.methods_by_name.get(meth, []))
         if not cands:
             self._count("unknown")
             self._note_receiver(fn, chain)
@@ -1200,8 +1207,8 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
         except Exception as exc:                                        # noqa: BLE001
             index.gaps.append(f"{repo}: 파일 목록을 못 읽었다 — {type(exc).__name__}: {exc}")
             files = []
-        # 공유 라이브러리는 서브모듈이라 이 레포의 트리에 없다 — 어디로 가는 import가 "아직 인덱스에 없는 우리
-        # 코드"인지 알아야 서드파티와 가른다(진단). 핀별 인덱싱은 6b-1.
+        # 채워진 서브모듈의 파일은 이미 목록에 있다(리더의 `ls`, 6b-2). 안 채워진 것으로 가는 import가 "못 본 우리
+        # 코드"인지 알아야 서드파티와 가른다(진단).
         try:
             gitmodules = await source.read(".gitmodules")
         except Exception:                                               # noqa: BLE001
@@ -1243,8 +1250,9 @@ _GITMODULES_PATH = re.compile(r"^\s*path\s*=\s*(\S+)", re.M)
 
 
 def _gitmodules_prefixes(text: str) -> list[str]:
-    """`path = dir/sub` → import 접두사 `dir.sub`. 서브모듈 디렉터리가 곧 패키지라는 가정이다 — 아니면(한 단계
-    더 안에 패키지가 있으면) 공유 비중이 0으로 보이고, 그때는 config의 `module_prefix`로 바로잡는다(6b-1)."""
+    """`path = dir/sub` → import 접두사 `dir.sub`. 서브모듈 디렉터리가 곧 패키지라는 가정이다(사내가 그 모양) —
+    채워진 서브모듈의 모듈 이름도 같은 가정으로 경로에서 나온다. 안 맞으면 공유 비중이 0으로 보이고 import가 안
+    풀린다 — 그때 고친다."""
     return sorted({m.group(1).strip("/").replace("/", ".") for m in _GITMODULES_PATH.finditer(text)})
 
 

@@ -390,8 +390,9 @@ class _GitSource:
         return got.data if got.status == "ok" and isinstance(got.data, str) else None
 
     async def files(self) -> list[str]:
-        """배포 커밋의 파일 전부(인덱서용). `ls-tree -r`은 서브모듈 안으로 안 들어가므로 벤더링된 공유
-        라이브러리는 저절로 빠진다 — 그 레포는 자기 레포로 따로 인덱싱한다(6b)."""
+        """배포 커밋의 파일 전부(인덱서용). **채워진 서브모듈 안도** 부모가 박은 버전으로 든다(리더의 `ls`) —
+        공유 라이브러리를 따로 등재하지 않고 레포마다 자기 핀으로 인덱싱한다(11d 6b-2). 안 채워진 것은 빠지고
+        그쪽 import는 `external_shared`로 남는다."""
         got = await self._reader.ls(self._repo, self._commit, max_names=200_000)
         if got.status != "ok" or not isinstance(got.data, list):
             return []

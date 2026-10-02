@@ -631,3 +631,53 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     assert code == 0, captured.out + captured.err
     more = [l for l in captured.out.splitlines() if l.strip()]
     assert len(lines) < len(more) <= 16 and any("external" in l for l in more) and any("수신자" in l for l in more)
+
+
+
+def _flow_tree_with_shared(tmp_path):
+    """공유 라이브러리를 서브모듈로 쓰는 레포 — 사내 모양이다(레포마다 같은 라이브러리를 `src`와 같은 깊이에
+    서브모듈로 두고, 레포마다 핀이 다를 수 있다)."""
+    url = "https://git.example.com/team/dt-core"
+    origin = tmp_path / "origin"
+    _flow_repo(origin, origin=url)
+    lib = tmp_path / "shared"
+    _make_repo(lib, origin="https://git.example.com/team/shared-lib")
+    (lib / "clock.py").write_text("def utc_stamp(m):\n    return m\n", encoding="utf-8")
+    (lib / "base.py").write_text("class Step:\n    def apply(self, m):\n        return m\n", encoding="utf-8")
+    git("add", "-A", cwd=lib)
+    git("commit", "-qm", "lib", cwd=lib)
+    head = git("rev-parse", "HEAD", cwd=lib).stdout.strip()
+    (origin / "processor" / "stamp.py").write_text(
+        "from shared_lib.clock import utc_stamp\nfrom shared_lib.base import Step\n\n\n"
+        "class Stamp(Step):\n    def apply(self, m):\n        return utc_stamp(m)\n", encoding="utf-8")
+    git("add", "-A", cwd=origin)
+    git("commit", "-qm", "stamp", cwd=origin)
+    declare_submodule_at(origin, lib, head, path="shared_lib")
+    checkout = tmp_path / "checkout"
+    git("clone", "-q", str(origin), str(checkout), cwd=tmp_path)
+    populate_submodule(checkout, "shared_lib")
+    git("remote", "set-url", "origin", url, cwd=checkout)
+    return _tree(tmp_path, repo_path=str(checkout), url=url,
+                 services={"processor": {"repo": REPO, "role": "가공한다"},
+                           "sink": {"repo": REPO, "role": "저장한다"}},
+                 config_paths=LAYERS)
+
+
+def test_code_graph가_채워진_공유_서브모듈까지_인덱싱해_소비_코드에서_확실로_잇는다(tmp_path, monkeypatch, capsys):
+    """사내 세 번째 숫자: external 2228 중 공유 라이브러리 738. 공유 레포를 따로 등재하지 않는다 — 부모가 박은
+    버전으로 서브모듈 안을 읽으면 `from <서브>.x import f`가 **같은 레포 안에서** 풀리고, 레포마다 자기 핀이다."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree_with_shared(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))["symbols"]
+    edges = json.loads((bundle / "edges.json").read_text(encoding="utf-8"))["edges"]
+    q = {s["id"]: s["qualname"] for s in symbols}
+    assert {"shared_lib.clock", "shared_lib.base"} <= {s["qualname"] for s in symbols if s["kind"] == "module"}
+    got = {(q[e["src"]], q[e["dst"]], e["type"], e["certainty"]) for e in edges}
+    assert ("processor.stamp.Stamp.apply", "shared_lib.clock.utc_stamp", "calls", "exact") in got
+    assert ("processor.stamp.Stamp", "shared_lib.base.Step", "inherits", "exact") in got
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "check", "--unresolved")
+    assert code == 0, captured.out + captured.err
+    assert "불변식 OK" in captured.out and "공유 라이브러리 0" in captured.out

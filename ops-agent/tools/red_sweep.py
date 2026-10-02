@@ -68,13 +68,13 @@ CASES = [
   '"grep", "-n", "-I", "--no-color", "--recurse-submodules"', '"grep", "-n", "-I", "--no-color"',
   [f"{G}::test_채워진_submodule_안까지_grep한다"]),
  ("ls가 못 본 구석을 안 말한다", R,
-  '        reasons += _unseen_reasons(await self._blind(repo, commit))', '        reasons += []',
+  '        reasons += _unseen_reasons(blind) + notes', '        reasons += notes',
   [f"{G}::test_목록도_submodule_안은_못_봤다고_말한다"]),
  ("봉투가 늘 불완전하다고 우긴다", R,
   '    if not blind:\n        return []', '    if not blind:\n        return ["아무튼 못 봤다"]',
   [f"{G}::test_submodule이_없으면_봉투가_멀쩡하다"]),
  ("show가 stale을 안 본다", R,
-  '        if sub in await self._blind(repo, commit):', '        if False:',
+  '        if sub in blind:\n            return ProbeResult.failed(', '        if False:\n            return ProbeResult.failed(',
   [f"{G}::test_안_채워진_submodule의_파일은_없다고_하지_않는다"]),
  ("grep이 stale에 git 원문을 흘린다", R,
   '        behind = await self._stale(repo, commit, subs)\n        if behind:', '        behind = []\n        if behind:',
@@ -1026,6 +1026,26 @@ CASES = [
   '            if len(roots) <= MAX_CANDIDATES:\n                return "candidate", roots, "root"',
   '            if False:\n                return "candidate", roots, "root"',
   ['tests/knowledge/test_index.py::test_동명_후보가_상한을_넘으면_재정의_뿌리로_접어_베이스_메서드_하나에_candidate다']),
+ ('ls가 채워진 서브모듈 안으로 안 내려간다', ROOT / 'src/infrastructure/git_reader.py',
+  '        subs = await self._declared_subs(repo, commit)\n        if not subs:\n            return names, []',
+  '        subs = await self._declared_subs(repo, commit)\n        if True:\n            return names, []',
+  ['tests/infrastructure/test_git_reader.py::test_채워진_submodule_안의_파일도_목록에_든다_부모가_박은_버전으로', 'tests/knowledge/test_cli_code.py::test_code_graph가_채워진_공유_서브모듈까지_인덱싱해_소비_코드에서_확실로_잇는다']),
+ ('ls가 부모가 박은 버전이 아니라 지금 HEAD로 내려간다', ROOT / 'src/infrastructure/git_reader.py',
+  '            args = ["ls-tree", "-r", "--name-only", sha]',
+  '            args = ["ls-tree", "-r", "--name-only", "HEAD"]',
+  ['tests/infrastructure/test_git_reader.py::test_채워진_submodule_안의_파일도_목록에_든다_부모가_박은_버전으로']),
+ ('버전 없는 서브모듈을 목록이 완전하다고 한다', ROOT / 'src/infrastructure/git_reader.py',
+  '        if stale:\n            notes.append(self._stale_error(stale))',
+  '        if False:\n            notes.append(self._stale_error(stale))',
+  ['tests/infrastructure/test_git_reader.py::test_그_커밋의_submodule_버전이_없으면_목록은_안_펼치고_이유를_말한다']),
+ ('gitlink를 파일마다 다시 푼다', ROOT / 'src/infrastructure/git_reader.py',
+  '                if _FULL_SHA.fullmatch(commit):\n                    self._gitlinks[key] = sha',
+  '                if False:\n                    self._gitlinks[key] = sha',
+  ['tests/infrastructure/test_git_reader.py::test_submodule_안_파일을_여럿_읽어도_gitlink와_버전_확인은_한_번이다']),
+ ('추정 후보 풀이 레포를 건넌다', ROOT / 'src/knowledge/index.py',
+  '        return [s for s in pool if s != fn.sid and self.index.symbols[s].repo == repo]',
+  '        return [s for s in pool if s != fn.sid]',
+  ['tests/knowledge/test_index.py::test_추정_후보는_부르는_쪽_레포_안에서만_고른다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1053,7 +1073,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 270, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 275, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
