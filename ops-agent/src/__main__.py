@@ -1657,17 +1657,31 @@ def cmd_code_trace(args, env) -> int:
     if got is None:
         raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
     graph, _ = got
-    node_id = flow.endpoint_id(args.path)
+    path = _shell_path(args.path, graph)
+    node_id = flow.endpoint_id(path)
     if not any(n["id"] == node_id for n in graph["nodes"]):
-        print(f"  {args.path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다")
+        print(f"  {path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다"
+              + (" (Git Bash가 `/`로 시작하는 인자를 바꿨다 — 명령 앞에 `MSYS_NO_PATHCONV=1`을 붙인다)"
+                 if flow.shell_mangled(path) else ""))
         return 1
     lines = flow.trace_lines(graph, node_id)
     if lines is None:
-        print(f"  {args.path}: 추적이 안 된 끝점이다 — 라우트 선언을 못 찾았거나 서빙 서비스를 모른다")
+        print(f"  {path}: 추적이 안 된 끝점이다 — 라우트 선언을 못 찾았거나 서빙 서비스를 모른다")
         return 1
     for line in lines:
         print("  " + line)
     return 0
+
+
+def _shell_path(arg: str | None, graph: dict) -> str | None:
+    """Git Bash가 바꾼 끝점 path를 되돌린다(`flow.unmangle`) — 되돌렸으면 무엇으로 읽었는지 한 줄 말한다."""
+    from src.knowledge import flow
+
+    back = flow.unmangle(arg, (n.get("label", "") for n in graph["nodes"] if n.get("type") == "endpoint")) if arg else None
+    if back is None:
+        return arg
+    print(f"  Git Bash가 바꾼 인자를 {back}로 읽었다 (명령 앞에 `MSYS_NO_PATHCONV=1`을 붙이면 안 바뀐다)")
+    return back
 
 
 def cmd_code_flow(args, env) -> int:
@@ -1680,6 +1694,7 @@ def cmd_code_flow(args, env) -> int:
     if got is None:
         raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
     graph, meta = got
+    args.name, args.to = _shell_path(args.name, graph), _shell_path(args.to, graph)
 
     def line(e) -> str:
         return (f"  {flow.describe(graph, e['source'])} —{e['relation']}→ "

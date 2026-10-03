@@ -799,6 +799,24 @@ def endpoint_id(path: str) -> str:
     return _node_id("endpoint", path)
 
 
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def shell_mangled(arg: str) -> bool:
+    return bool(_DRIVE.match(arg))
+
+
+def unmangle(arg: str, labels: Iterable[str]) -> str | None:
+    """Git Bash(MSYS)는 Windows 프로그램에 넘기는 `/`로 시작하는 인자 앞에 자기 설치 경로를 붙인다 — `/items/x`가
+    `C:/Program Files/Git/items/x`로 온다. 설치 경로는 사람마다 달라서 떼어 낼 수 없고, URL path는 드라이브 문자로
+    시작할 수 없으니 그런 인자만 끝부분이 가장 길게 맞는 끝점 path로 되돌린다. 아니면 None."""
+    if not shell_mangled(arg):
+        return None
+    tail = arg.replace("\\", "/")
+    hits = [label for label in labels if label.startswith("/") and tail.endswith(label)]
+    return max(hits, key=len) if hits else None
+
+
 def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAPS) -> list[str] | None:
     """리드에게 보여 줄 사슬 — **읽기로 이어진 걸음의 조상만** 남긴 트리. 사내 사슬은 28~30걸음이고 대부분이
     저장소 부모의 헬퍼와 로거라, 통째로 주면 함수 서너 개로 좁혀 준다는 약속이 깨진다. 읽기는 걸음 옆에
@@ -839,11 +857,15 @@ def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAP
         tail = f" 외 {len(gaps) - max_gaps}개" if len(gaps) > max_gaps else ""
         lines.append(f"못 따라감 {len(gaps)}: {' · '.join(gaps[:max_gaps])}{tail}")
     # 인덱스 대조(11d 6c-2) — 같으면 안 적는다(소음). 다르면 리드가 "인덱스만" 자원을 다음 읽기 후보로 쓸 수 있다.
+    # 자원마다 왜를 한 줄(쪽마다 셋까지) — 인덱스만은 닿은 경로, 추적기만은 인덱스가 못 이은 호출이나 못 본 함수.
     check = node.get("index_check") or {}
     if check.get("status") == "diff":
-        parts = [f"{label} {_few(check[key])}" for key, label in (("only_index", "인덱스만"), ("only_tracer", "추적기만"))
-                 if check.get(key)]
+        sides = (("only_index", "인덱스만"), ("only_tracer", "추적기만"))
+        parts = [f"{label} {_few(check[key])}" for key, label in sides if check.get(key)]
         lines.append("인덱스 대조: 다르다 — " + " / ".join(parts))
+        why = check.get("why") or {}
+        lines += [f"  {label} {item}: {why[item]}" for key, label in sides
+                  for item in (check.get(key) or [])[:3] if item in why]
     elif check.get("status") == "no_handler":
         lines.append(f"인덱스 대조: 핸들러를 인덱스에서 못 찾았다({chain[0].split(' ', 1)[0]})")
     if len(keep) < len(chain):

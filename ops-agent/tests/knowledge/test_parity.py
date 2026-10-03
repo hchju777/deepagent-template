@@ -18,7 +18,21 @@ FILES = {
                  "    recent(db)\n"
                  "    return extra(db)\n"),
     "api/q.py": ("def recent(db):\n    return db[\"alarm_events\"].find({})\n\n\n"
-                 "def extra(db):\n    db[\"ghost\"].find({})\n    return db[\"line_state\"].find({})\n"),
+                 "def extra(db):\n    db[\"ghost\"].find({})\n    return db[\"line_state\"].find({})\n\n\n"
+                 "def lost(db):\n    return db[\"audit_log\"].find({})\n"),
+    # `store`는 타입을 모른다 — `fetch_rows`는 이름만 같은 두 메서드 어느 쪽으로도 갈 수 있다(추정 `?→`).
+    "api/c.py": ("from api.q import extra\n\n\n"
+                 "@router.get('/cand')\n"
+                 "def cand(db, store):\n"
+                 "    return store.fetch_rows(db)\n\n\n"
+                 "def via_extra(db):\n"
+                 "    return extra(db)\n\n\n"
+                 "@router.get('/mixed')\n"
+                 "def mixed(db, store):\n"
+                 "    store.fetch_rows(db)\n"
+                 "    return via_extra(db)\n"),
+    "api/stores.py": ("class Lines:\n    def fetch_rows(self, db):\n        return db[\"line_state\"].find({})\n\n\n"
+                      "class Alarms:\n    def fetch_rows(self, db):\n        return db[\"alarm_events\"].find({})\n"),
     "api/deep.py": "".join(f"def f{i}():\n    return f{i + 1}()\n\n\n" for i in range(7))
                    + "def f7(db):\n    return db[\"line_state\"].find({})\n",
 }
@@ -61,7 +75,7 @@ async def test_인덱스가_같은_깊이에서_더_본_자원은_인덱스만�
     g = parity.check(_overlay((("collection", "alarm_events"),)), idx, qy.Graph(idx))
     got = _node(g)["index_check"]
     assert got == {"status": "diff", "handler": "api.r.badge", "only_index": ["line_state [collection]"],
-                   "only_tracer": []}
+                   "only_tracer": [], "why": {"line_state [collection]": "[svc] r.badge → q.extra"}}
 
 
 async def test_같으면_같다고_적고_사슬에_대조_줄을_안_붙인다():
@@ -118,3 +132,62 @@ async def test_다른_끝점은_path와_차이를_한_줄씩_열_개까지_나�
                       for i in reversed(range(12))], "links": []}
     lines = flow.index_diff_lines(many)
     assert len(lines) == 11 and lines[0] == "/e00 — 추적기만 x [topic]" and lines[-1] == "… 외 2"
+
+
+def _traced(chain, reads):
+    """추적기 사슬을 손으로 — chain은 (파일, 줄, 이름, 부모 걸음), reads는 (이름, 파일, 줄, 걸음)."""
+    g = {"nodes": [{"id": flow.endpoint_id("/badge"), "label": "/badge", "type": "endpoint"},
+                   *({"id": f"collection_{n}", "label": n, "type": "collection"}
+                     for n in ("alarm_events", "line_state", "audit_log"))],
+         "links": []}
+    result = tr.Trace("/badge", REPO, "ok",
+                      chain=tuple(tr.Step(f, line, q, parent=p) for f, line, q, p in chain),
+                      reads=tuple(tr.Read("collection", n, "확실", f, line, step=st) for n, f, line, st in reads))
+    return flow.add_trace(g, flow.endpoint_id("/badge"), result)
+
+
+def _why(g):
+    return flow.trace_lines(g, flow.endpoint_id("/badge"))
+
+
+async def test_인덱스만_자원은_핸들러에서_닿은_경로를_말하고_추정_호출을_거치면_그렇다고_적는다():
+    """사내 대조의 "인덱스만" 다섯 — 추적기가 놓친 것인지 인덱스가 이름만 같은 후보를 타고 넘어간 것인지 한 줄로 갈린다."""
+    idx = await _index()
+    g = parity.check(_overlay((("collection", "alarm_events"),), first=("api/c.py", 5)), idx, qy.Graph(idx))
+    assert ("  인덱스만 line_state [collection]: [svc] c.cand ?→ stores.Lines.fetch_rows"
+            " — 이름만 같은 후보(?→)를 거친다") in _why(g)
+
+
+async def test_인덱스만_경로는_확실한_호출로_닿는_길이_있으면_더_길어도_그것을_고른다():
+    """추정 한 걸음짜리 길과 확실한 두 걸음짜리 길이 둘 다 있으면 — 짧은 쪽을 보이면 "후보를 거쳐서만 닿는다"로 읽힌다."""
+    idx = await _index()
+    g = parity.check(_overlay((("collection", "alarm_events"),), first=("api/c.py", 14)), idx, qy.Graph(idx))
+    assert "  인덱스만 line_state [collection]: [svc] c.mixed → c.via_extra → q.extra" in _why(g)
+
+
+async def test_추적기만_자원은_인덱스가_그_함수에_닿았는데_못_본_것이다():
+    idx = await _index()
+    g = parity.check(_traced([("api/r.py", 5, "badge", None), ("api/q.py", 1, "recent", 0)],
+                             [("alarm_events", "api/q.py", 2, 1), ("line_state", "api/q.py", 2, 1),
+                              ("audit_log", "api/q.py", 2, 1)]), idx, qy.Graph(idx))
+    assert _node(g)["index_check"]["only_tracer"] == ["audit_log [collection]"]
+    assert ("  추적기만 audit_log [collection]: 인덱스는 q.recent에 닿지만 거기서 이 이름을 못 본다"
+            " (추적기: api/q.py:L2)") in _why(g)
+
+
+async def test_추적기만_자원은_인덱스가_못_이은_호출을_짚는다():
+    """추적기 사슬을 뿌리부터 내려가며 인덱스가 처음 못 닿은 걸음 — 그 부모에서 그 걸음으로 가는 호출이 인덱스에 없다."""
+    idx = await _index()
+    g = parity.check(_traced([("api/r.py", 5, "badge", None), ("api/q.py", 1, "recent", 0),
+                              ("api/q.py", 10, "lost", 1)],
+                             [("alarm_events", "api/q.py", 2, 1), ("line_state", "api/q.py", 2, 1),
+                              ("audit_log", "api/q.py", 11, 2)]), idx, qy.Graph(idx))
+    assert "  추적기만 audit_log [collection]: 인덱스가 못 이은 호출 q.recent → q.lost (api/q.py:L10)" in _why(g)
+
+
+async def test_추적기만_자원의_걸음을_품는_함수가_인덱스에_없으면_그렇게_적는다():
+    idx = await _index()
+    g = parity.check(_traced([("api/r.py", 5, "badge", None), ("api/gone.py", 3, "gone", 0)],
+                             [("alarm_events", "api/q.py", 2, 0), ("line_state", "api/q.py", 2, 0),
+                              ("audit_log", "api/gone.py", 4, 1)]), idx, qy.Graph(idx))
+    assert "  추적기만 audit_log [collection]: 추적기 걸음 api/gone.py:L3 gone을 품는 함수가 인덱스에 없다" in _why(g)

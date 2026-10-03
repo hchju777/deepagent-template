@@ -787,3 +787,15 @@ def test_traced_reads는_끝점의_추적_읽기를_종류별로_확실_먼저_�
     assert flow.traced_reads(g, ep, kind="collection") == ["alarm_events", "alarm_stats"]
     assert flow.traced_reads(g, ep, kind="topic") == ["mx.alarm.main", "mx.alarm.raw"]
     assert flow.traced_reads(g, "endpoint_nope", kind="collection") == []
+
+
+def test_Git_Bash가_바꾼_끝점_path를_가장_길게_맞는_path로_되돌린다():
+    """Git Bash는 Windows 프로그램에 넘기는 `/`로 시작하는 인자 앞에 자기 설치 경로를 붙인다 — 사내에서
+    `code trace /items/…`가 `C:\\Program Files/Git/items/…`로 와 "끝점에 없다"가 났다. URL path는 드라이브 문자로
+    시작할 수 없으니 그런 인자만 되돌린다."""
+    labels = ["/line/{id}", "/a/line/{id}", "/b", "alarm_events"]
+    assert flow.unmangle("C:\\Program Files/Git/a/line/{id}", labels) == "/a/line/{id}"
+    assert flow.unmangle("D:/tools/Git/line/{id}", labels) == "/line/{id}"
+    assert flow.unmangle("C:/Program Files/Git/ab", labels) is None          # `/b`의 끝이 맞아도 경계가 아니다
+    assert flow.unmangle("/v2/line/{id}", labels) is None                    # 드라이브 문자가 없으면 사람이 친 그대로다
+    assert flow.unmangle("C:/Program Files/Git/alarm_events", labels) is None  # 끝점이 아닌 이름은 path가 아니다

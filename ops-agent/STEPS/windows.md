@@ -261,6 +261,24 @@ OSError: [WinError 1314] 클라이언트에게 필요한 권한이 없습니다
 **프로세스가 죽으면 누가 살리는가**는 이 스케줄러가 못 푸는 문제다. 서비스의 복구
 설정이든 컨테이너의 재시작 정책이든, 그 자리는 바깥이 맡는다.
 
+## 함정 ⑧: Git Bash가 `/`로 시작하는 인자를 Windows 경로로 바꾼다
+
+Git Bash(MSYS)는 Windows 프로그램(`python.exe`)에 넘기는 인자가 `/`로 시작하면 자기 설치 경로를 앞에
+붙인다. 사내에서 `code trace /items/{id}`가 `C:\Program Files/Git/items/{id}`로 와 "그래프의 끝점에 없다"가
+났다(10-03). 끝점 path를 받는 명령 전부(`code trace`·`code flow`)가 같은 일을 겪는다.
+
+**막은 방법**: URL path는 드라이브 문자로 시작할 수 없으니, 그런 인자가 오면 끝부분이 가장 길게 맞는 끝점
+path로 되돌리고 `Git Bash가 바꾼 인자를 …로 읽었다`를 한 줄 찍는다(`flow.unmangle`). 설치 경로는 사람마다
+달라서 앞을 떼어 내는 식으로는 못 푼다. 맞는 끝점이 없으면 "없다"와 함께 아래 우회를 안내한다.
+
+**우회**: 명령 앞에 `MSYS_NO_PATHCONV=1`을 붙이면 Git Bash가 인자를 안 바꾼다.
+
+```
+MSYS_NO_PATHCONV=1 python -m src code trace "/items/{id}"
+```
+
+새 명령이 `/`로 시작하는 값을 받는다면 같은 처리가 필요한지 먼저 본다.
+
 ## 걸리지 않는 것
 
 Redis·MongoDB **서버**를 Windows에 설치할 필요는 없다. 우리에게 필요한 것은

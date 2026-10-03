@@ -610,6 +610,25 @@ def test_code_graph가_끝점을_싣고_flow와_status가_말한다(tmp_path, mo
     assert code == 1 and "끝점에 없다" in captured.out
 
 
+def test_code_trace와_flow는_Git_Bash가_바꾼_끝점_path를_되돌려_읽는다(tmp_path, monkeypatch, capsys):
+    """사내(Git Bash)에서 `code trace /items/…`가 `C:\\Program Files/Git/items/…`로 와 "끝점에 없다"가 났다."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys,
+                          "code", "trace", "C:\\Program Files/Git/summary/badge")
+    assert code == 0, captured.out + captured.err
+    assert "Git Bash가 바꾼 인자를 /summary/badge로 읽었다" in captured.out and "api/r.py:L" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys,
+                          "code", "flow", "C:/Program Files/Git/summary/badge")
+    assert code == 0 and "—serves→ /summary/badge [endpoint]" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "C:/Program Files/Git/nope")
+    assert code == 1 and "MSYS_NO_PATHCONV=1" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "trace", "/v2/summary/badge")
+    assert code == 1 and "Git Bash" not in captured.out and "MSYS" not in captured.out
+
+
 def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(tmp_path, monkeypatch, capsys):
     """11d 6a — 레포 전체의 심볼·엣지가 번들에 든다. `code check`는 사람이 한 줄로 돌려 숫자 몇 줄을 받는 하네스다."""
     monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))

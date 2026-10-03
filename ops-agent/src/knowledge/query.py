@@ -156,6 +156,14 @@ def _back(parent: dict[int, Link], start_set: set[int], node: int) -> list[Link]
 def reach(graph: Graph, starts: list[int], *, max_hops: int = MAX_HOPS) -> set[int]:
     """앞으로 `max_hops` 단계 안에 닿는 함수들(시작 포함) — 호출과 디스패치. 추적기와 대조할 때(6c-2)는 추적기와
     같은 깊이를 준다."""
+    return set(reach_tree(graph, starts, max_hops=max_hops))
+
+
+def reach_tree(graph: Graph, starts: list[int], *, max_hops: int = MAX_HOPS,
+               marks: frozenset[str] | None = None) -> dict[int, Link | None]:
+    """`reach`와 같되 함수마다 처음 닿은 링크를 든다(시작은 None) — `path_to`로 경로를 되짚는다. `marks`를 주면 그
+    표시의 링크만 탄다: 대조가 "확실한 호출만으로도 닿나"를 물을 때."""
+    parent: dict[int, Link | None] = {s: None for s in starts}
     depth = {s: 0 for s in starts}
     queue = deque(starts)
     while queue:
@@ -163,10 +171,21 @@ def reach(graph: Graph, starts: list[int], *, max_hops: int = MAX_HOPS) -> set[i
         if depth[node] >= max_hops:
             continue
         for link in graph.out.get(node, []):
+            if marks is not None and link.mark not in marks:
+                continue
             if link.dst not in depth and len(depth) < BUDGET:
                 depth[link.dst] = depth[node] + 1
+                parent[link.dst] = link
                 queue.append(link.dst)
-    return set(depth)
+    return parent
+
+
+def path_to(tree: dict[int, Link | None], node: int) -> list[Link]:
+    path = []
+    while tree.get(node) is not None:
+        path.append(tree[node])
+        node = tree[node].src
+    return path[::-1]
 
 
 def paths(graph: Graph, starts: list[int], goals: list[int], *, k: int = 3,
