@@ -620,6 +620,7 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))
     assert {s["qualname"] for s in symbols["symbols"] if s["kind"] == "module"} >= {"processor.handler", "sink.writer", "api.r"}
     assert (bundle / "edges.json").exists() and "심볼" in captured.err
+    assert "processor.handler.run" in (bundle / "calls.html").read_text(encoding="utf-8")   # 사람용 한 장(6c-1b)
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0 and "심볼 " in captured.out and "엣지 " in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "check")

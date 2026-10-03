@@ -57,7 +57,9 @@ py -3.11 -m pip download -r requirements-graph.txt --only-binary=:all: --platfor
 스킵이 아니라 통과하는 것.
 
 `code graph`가 남기는 사람용 파일(`output/graph/<gbm>-<fct>/`): `flow.html`은 graphify 없이도
-만들어지고 외부 참조가 없어 팀원에게 그 파일 하나만 주면 된다. graphify가 있으면 레포별
+만들어지고 외부 참조가 없어 팀원에게 그 파일 하나만 주면 된다. `calls.html`은 심볼 인덱스를 골라 펼쳐 보는
+한 장이다 — 자원을 고르면 진입점 → 쓰는 함수 → 자원 → 읽는 함수 → 진입점, 함수를 고르면 부르는 쪽과 부르는
+대상(역시 외부 참조 없음). graphify가 있으면 레포별
 `reports/<레포>/GRAPH_REPORT.md`와 `wiki/index.md`(md 묶음)도 생긴다. graphify 자체의
 `graph.html`은 만들지 않는다 — 그림 라이브러리를 CDN에서 받아 오게 돼 있어 사내망에서 안 열린다.
 

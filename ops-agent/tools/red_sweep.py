@@ -1134,6 +1134,26 @@ CASES = [
   '            if link in seen:            # 같은 짝이',
   '            if False:            # 같은 짝이',
   ['tests/knowledge/test_query.py::test_같은_디스패치가_두_길로_들어와도_그래프에는_한_번이다']),
+ ('calls.html이 베이스 메서드를 진입점이라 한다', ROOT / 'src/presentation/calls_html.py',
+  '            entry = "base" if any(l.mark == qy.DISPATCH for l in graph.out.get(sid, [])) else "entry"',
+  '            entry = "entry"',
+  ['tests/presentation/test_calls_html.py::test_진입점_라우트_베이스와_함수마다_쓰고_읽는_자원을_표시한다']),
+ ('calls.html이 자원의 진입점 경로를 안 싣는다', ROOT / 'src/presentation/calls_html.py',
+  '                flows[sid] = {"p": entries[:PATHS_PER_USE],',
+  '                flows[sid] = {"p": [],',
+  ['tests/presentation/test_calls_html.py::test_자원마다_쓰고_읽는_함수와_진입점_경로를_질의로_미리_계산해_싣는다']),
+ ('calls.html이 쓰기와 읽기를 가르지 않는다', ROOT / 'src/presentation/calls_html.py',
+  '            d = "w" if r.direction == "writes" else "r"',
+  '            d = "w"',
+  ['tests/presentation/test_calls_html.py::test_자원마다_쓰고_읽는_함수와_진입점_경로를_질의로_미리_계산해_싣는다']),
+ ('calls.html 데이터의 닫는 태그가 문서를 끊는다', ROOT / 'src/presentation/calls_html.py',
+  '    blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\\\/")',
+  '    blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))',
+  ['tests/presentation/test_calls_html.py::test_외부_참조가_없고_데이터_속_닫는_태그와_제목이_문서를_못_끊는다']),
+ ('code graph가 calls.html을 안 쓴다', ROOT / 'src/__main__.py',
+  '    (out_dir / "calls.html").write_text(',
+  '    (out_dir / "calls-off.html").write_text(',
+  ['tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1161,7 +1181,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 297, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 302, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

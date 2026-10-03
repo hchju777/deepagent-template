@@ -1303,12 +1303,18 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     (out_dir / "flow.html").write_text(
         flow_html.render(overlay, title=f"{gbm}/{fct}", built_at=meta.built_at, commits=commits),
         encoding="utf-8")
+    # 코드 호출 흐름(11d 6c-1b) — 심볼 인덱스를 골라 펼쳐 보는 한 장. CLI 샘플 몇 개로는 안심이 안 된다는 사내 요청.
+    from src.presentation import calls_html
+    (out_dir / "calls.html").write_text(
+        calls_html.render(symbol_index, title=f"{gbm}/{fct}", built_at=meta.built_at, commits=commits,
+                          service_of=lambda s: flow.owner(s.file, s.repo, topology)[0]),
+        encoding="utf-8")
     for repo_name, report in sorted(reports.items()):
         target = out_dir / "reports" / repo_name / "GRAPH_REPORT.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(report, encoding="utf-8")
     wiki_status, wiki_detail = gb.run_wiki(binary, out_dir / "graph.json", progress=progress)
-    human = ["flow.html"]
+    human = ["flow.html", "calls.html"]
     if reports:
         human.append(f"reports/<레포>/GRAPH_REPORT.md ({len(reports)}개)")
     if wiki_status == "ok":
