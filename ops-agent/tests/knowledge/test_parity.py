@@ -1,0 +1,106 @@
+"""추적기와 인덱스의 대조(11d 6c-2) — 엔진을 하나로 모으기 전에 둘이 어디서 다르게 말하나.
+
+리드가 받는 `code.trace` 사슬은 11b 추적기가 만든 것이다. 인덱스가 같은 끝점에서 같은 깊이로 다른 답을 내면
+그 차이가 `code.trace` 출력에 나오고 `code status`가 센다 — 패리티가 확인되면 추적기를 뺀다(decisions ⑱)."""
+from src.knowledge import flow
+from src.knowledge import index as ix
+from src.knowledge import parity
+from src.knowledge import query as qy
+from src.knowledge import trace as tr
+from src.knowledge.flow import Name
+
+REPO = "svc"
+FILES = {
+    "api/__init__.py": "",
+    "api/r.py": ("from api.q import recent, extra\n\n\n"
+                 "@router.post('/badge')\n"
+                 "def badge(db):\n"
+                 "    recent(db)\n"
+                 "    return extra(db)\n"),
+    "api/q.py": ("def recent(db):\n    return db[\"alarm_events\"].find({})\n\n\n"
+                 "def extra(db):\n    db[\"ghost\"].find({})\n    return db[\"line_state\"].find({})\n"),
+    "api/deep.py": "".join(f"def f{i}():\n    return f{i + 1}()\n\n\n" for i in range(7))
+                   + "def f7(db):\n    return db[\"line_state\"].find({})\n",
+}
+# `ghost`는 이름 목록에는 있지만 오버레이에 노드가 없다 — `add_trace`도 안 싣는 자원이라 대조에서도 빠져야 한다.
+NAMES = [Name("collection", "alarm_events", "mongodb_collection.alarm"),
+         Name("collection", "line_state", "mongodb_collection.line"),
+         Name("collection", "ghost", "mongodb_collection.ghost")]
+
+
+class _Src:
+    async def files(self):
+        return sorted(FILES)
+
+    async def read(self, path):
+        return FILES.get(path)
+
+
+async def _index():
+    return await ix.build_index({REPO: _Src()}, names=NAMES, commits={REPO: "c0ffee"})
+
+
+def _overlay(reads: tuple[tuple[str, str], ...], first=("api/r.py", 5)):
+    g = {"nodes": [{"id": flow.endpoint_id("/badge"), "label": "/badge", "type": "endpoint"},
+                   {"id": "collection_alarm_events", "label": "alarm_events", "type": "collection"},
+                   {"id": "collection_line_state", "label": "line_state", "type": "collection"}],
+         "links": []}
+    result = tr.Trace("/badge", REPO, "ok",
+                      chain=(tr.Step(first[0], first[1], "badge"), tr.Step("api/q.py", 1, "recent", parent=0)),
+                      reads=tuple(tr.Read("collection", n, "확실", "api/q.py", 2, step=1) for _, n in reads))
+    return flow.add_trace(g, flow.endpoint_id("/badge"), result)
+
+
+def _node(g):
+    return next(n for n in g["nodes"] if n["type"] == "endpoint")
+
+
+async def test_인덱스가_같은_깊이에서_더_본_자원은_인덱스만으로_적힌다():
+    """추적기가 `extra`로 가는 가지를 놓쳤다 — 인덱스는 같은 핸들러에서 둘 다 닿는다."""
+    idx = await _index()
+    g = parity.check(_overlay((("collection", "alarm_events"),)), idx, qy.Graph(idx))
+    got = _node(g)["index_check"]
+    assert got == {"status": "diff", "handler": "api.r.badge", "only_index": ["line_state [collection]"],
+                   "only_tracer": []}
+
+
+async def test_같으면_같다고_적고_사슬에_대조_줄을_안_붙인다():
+    idx = await _index()
+    g = parity.check(_overlay((("collection", "alarm_events"), ("collection", "line_state"))), idx, qy.Graph(idx))
+    assert _node(g)["index_check"]["status"] == "same"
+    assert not any("인덱스 대조" in line for line in flow.trace_lines(g, flow.endpoint_id("/badge")))
+
+
+async def test_다르면_code_trace_출력에_대조_줄이_나오고_status가_센다():
+    idx = await _index()
+    g = parity.check(_overlay((("collection", "alarm_events"),)), idx, qy.Graph(idx))
+    lines = flow.trace_lines(g, flow.endpoint_id("/badge"))
+    assert "인덱스 대조: 다르다 — 인덱스만 line_state [collection]" in lines
+    s = flow.summary(g)
+    assert (s["endpoints_index_same"], s["endpoints_index_diff"], s["endpoints_index_no_handler"]) == (0, 1, 0)
+
+
+async def test_사슬_첫_걸음을_품는_함수가_인덱스에_없으면_핸들러를_못_찾았다고_적는다():
+    idx = await _index()
+    g = parity.check(_overlay((("collection", "alarm_events"),), first=("api/gone.py", 3)), idx, qy.Graph(idx))
+    assert _node(g)["index_check"] == {"status": "no_handler"}
+    assert "인덱스 대조: 핸들러를 인덱스에서 못 찾았다(api/gone.py:L3)" in flow.trace_lines(g, flow.endpoint_id("/badge"))
+
+
+async def test_인덱스_도달은_추적기와_같은_깊이에서_멈춘다():
+    """깊이를 맞추지 않으면 "인덱스만"이 대부분 더 깊이 간 몫이 되어 대조가 뜻을 잃는다."""
+    idx = await _index()
+    g = qy.Graph(idx)
+    start = idx.lookup(REPO, "api.deep.f0")
+    near = qy.reach(g, [start], max_hops=tr.MAX_DEPTH)
+    far = qy.reach(g, [start], max_hops=tr.MAX_DEPTH + 1)
+    assert idx.lookup(REPO, "api.deep.f6") in near and idx.lookup(REPO, "api.deep.f7") not in near
+    assert idx.lookup(REPO, "api.deep.f7") in far
+
+
+async def test_대조도_추적기와_같은_깊이에서_멈춘다():
+    """핸들러에서 7단계 아래에만 자원이 있는 끝점 — 추적기는 깊이 6에서 멈춰 못 닿는다. 인덱스가 더 깊이 가서
+    "인덱스만"이라 하면 그건 엔진 차이가 아니라 깊이 차이다."""
+    idx = await _index()
+    g = parity.check(_overlay((), first=("api/deep.py", 1)), idx, qy.Graph(idx))
+    assert _node(g)["index_check"]["status"] == "same"

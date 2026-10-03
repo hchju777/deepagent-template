@@ -715,7 +715,10 @@ def summary(graph: dict) -> dict:
             # 자원까지 이어진 끝점 / 추적은 됐는데 읽기 없이 gap만 남은 끝점(막힘)
             "endpoints_traced": sum(1 for n in endpoints if n["id"] in traced),
             "endpoints_blocked": sum(1 for n in endpoints if n["id"] not in traced
-                                     and n.get("traced") == "ok" and n.get("gaps"))}
+                                     and n.get("traced") == "ok" and n.get("gaps")),
+            # 추적기와 인덱스의 대조(11d 6c-2) — 패리티가 서면 추적기를 뺀다
+            **{f"endpoints_index_{k}": sum(1 for n in endpoints if (n.get("index_check") or {}).get("status") == s)
+               for k, s in (("same", "same"), ("diff", "diff"), ("no_handler", "no_handler"))}}
 
 
 def advise(graph: dict, topology: Topology) -> list[str]:
@@ -763,6 +766,7 @@ def add_trace(graph: dict, endpoint_id: str, result) -> dict:
     if node is None:
         return graph
     node["traced"] = result.status
+    node["trace_repo"] = result.repo         # 인덱스 대조(6c-2)가 핸들러를 찾는 레포
     node["chain"] = [f"{s.file}:L{s.line} {s.qualname}" for s in result.chain]
     node["chain_parent"] = [s.parent for s in result.chain]
     node["gaps"] = [f"{g.file}:L{g.line} {g.why}" for g in result.gaps]
@@ -834,10 +838,22 @@ def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAP
     if gaps:
         tail = f" 외 {len(gaps) - max_gaps}개" if len(gaps) > max_gaps else ""
         lines.append(f"못 따라감 {len(gaps)}: {' · '.join(gaps[:max_gaps])}{tail}")
+    # 인덱스 대조(11d 6c-2) — 같으면 안 적는다(소음). 다르면 리드가 "인덱스만" 자원을 다음 읽기 후보로 쓸 수 있다.
+    check = node.get("index_check") or {}
+    if check.get("status") == "diff":
+        parts = [f"{label} {_few(check[key])}" for key, label in (("only_index", "인덱스만"), ("only_tracer", "추적기만"))
+                 if check.get(key)]
+        lines.append("인덱스 대조: 다르다 — " + " / ".join(parts))
+    elif check.get("status") == "no_handler":
+        lines.append(f"인덱스 대조: 핸들러를 인덱스에서 못 찾았다({chain[0].split(' ', 1)[0]})")
     if len(keep) < len(chain):
         lines.append(f"걸음 {len(chain)} 중 읽기로 이어진 {len(keep)}만 적었다 — 나머지는 code.read로 본다"
                      if reads_at else f"걸음 {len(chain)} 중 {len(keep)}만 적었다 — 읽기로 이어진 걸음이 없다")
     return lines
+
+
+def _few(items: list[str], k: int = 3) -> str:
+    return " · ".join(items[:k]) + (f" 외 {len(items) - k}" if len(items) > k else "")
 
 
 _MARK_ORDER = {"확실": 0, "config키": 1, "추정": 2}

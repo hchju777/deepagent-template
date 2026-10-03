@@ -782,7 +782,7 @@ CASES = [
   '            lines.append(line_for(rid, with_code=True))', '            pass',
   ["tests/knowledge/test_flow.py::test_끝점_줄에_reads가_붙고_2단계로_그_자원과_쓰는_서비스가_온다"]),
  ("막힌 끝점을 안 센다", ROOT / "src/knowledge/flow.py",
-  '                                     and n.get("traced") == "ok" and n.get("gaps"))}', '                                     and False)}',
+  '                                     and n.get("traced") == "ok" and n.get("gaps")),', '                                     and False),',
   ["tests/knowledge/test_flow.py::test_막힌_끝점을_센다"]),
  ("지도가 추적 엣지를 데이터에서 뺀다", ROOT / "src/presentation/flow_html.py",
   '                  for e in overlay["links"] if e["relation"] != "runs"],', '                  for e in overlay["links"] if e["relation"] != "runs" and e.get("origin") != "trace"],',
@@ -1154,6 +1154,26 @@ CASES = [
   '    (out_dir / "calls.html").write_text(',
   '    (out_dir / "calls-off.html").write_text(',
   ['tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다']),
+ ('대조가 추적기보다 깊이 간다', ROOT / 'src/knowledge/parity.py',
+  '        reached = qy.reach(graph, [handler.id], max_hops=MAX_DEPTH)',
+  '        reached = qy.reach(graph, [handler.id], max_hops=MAX_DEPTH + 4)',
+  ['tests/knowledge/test_parity.py::test_대조도_추적기와_같은_깊이에서_멈춘다']),
+ ('인덱스 도달이 깊이 상한을 넘는다', ROOT / 'src/knowledge/query.py',
+  '        if depth[node] >= max_hops:\n            continue\n        for link in graph.out.get(node, []):\n            if link.dst not in depth and len(depth) < BUDGET:',
+  '        if depth[node] > max_hops:\n            continue\n        for link in graph.out.get(node, []):\n            if link.dst not in depth and len(depth) < BUDGET:',
+  ['tests/knowledge/test_parity.py::test_인덱스_도달은_추적기와_같은_깊이에서_멈춘다']),
+ ('대조가 오버레이에 없는 자원까지 센다', ROOT / 'src/knowledge/parity.py',
+  '        got = {(r.kind, r.name) for sid in reached for r in index.symbols[sid].resources} & known',
+  '        got = {(r.kind, r.name) for sid in reached for r in index.symbols[sid].resources}',
+  ['tests/knowledge/test_parity.py::test_같으면_같다고_적고_사슬에_대조_줄을_안_붙인다']),
+ ('다른 대조를 code.trace에 안 적는다', ROOT / 'src/knowledge/flow.py',
+  '    if check.get("status") == "diff":',
+  '    if False:',
+  ['tests/knowledge/test_parity.py::test_다르면_code_trace_출력에_대조_줄이_나오고_status가_센다']),
+ ('code graph가 대조를 안 돌린다', ROOT / 'src/__main__.py',
+  '    overlay = parity.check(overlay, symbol_index, qy.Graph(symbol_index))',
+  '    overlay = overlay',
+  ['tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1181,7 +1201,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 302, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 307, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

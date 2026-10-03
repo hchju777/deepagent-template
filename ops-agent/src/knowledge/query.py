@@ -153,6 +153,22 @@ def _back(parent: dict[int, Link], start_set: set[int], node: int) -> list[Link]
     return path
 
 
+def reach(graph: Graph, starts: list[int], *, max_hops: int = MAX_HOPS) -> set[int]:
+    """앞으로 `max_hops` 단계 안에 닿는 함수들(시작 포함) — 호출과 디스패치. 추적기와 대조할 때(6c-2)는 추적기와
+    같은 깊이를 준다."""
+    depth = {s: 0 for s in starts}
+    queue = deque(starts)
+    while queue:
+        node = queue.popleft()
+        if depth[node] >= max_hops:
+            continue
+        for link in graph.out.get(node, []):
+            if link.dst not in depth and len(depth) < BUDGET:
+                depth[link.dst] = depth[node] + 1
+                queue.append(link.dst)
+    return set(depth)
+
+
 def paths(graph: Graph, starts: list[int], goals: list[int], *, k: int = 3,
           max_hops: int = MAX_HOPS) -> tuple[list[list[Link]], bool]:
     """A에서 B로 가는 호출 경로, 짧은 것부터 최대 k개. 한 노드를 k번 넘게 지나지 않는다(경로 수 폭발 방지) — 그래서

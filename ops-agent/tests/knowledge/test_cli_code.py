@@ -623,6 +623,7 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     assert "processor.handler.run" in (bundle / "calls.html").read_text(encoding="utf-8")   # 사람용 한 장(6c-1b)
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0 and "심볼 " in captured.out and "엣지 " in captured.out
+    assert "인덱스 대조 같음 1 · 다름 0" in captured.out                  # 6c-2 — 추적기와 인덱스가 같은 답
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "check")
     assert code == 0, captured.out + captured.err
     lines = [l for l in captured.out.splitlines() if l.strip()]

@@ -1271,6 +1271,13 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         {name: code.source_for(name) for name in sorted(commits)}, names=names, commits=commits))
     isum = symbol_index.summary()
     progress(f"심볼 {isum['symbols']}개 · 엣지 {isum['edges_total']}개 · 파싱 실패 {isum['parse_errors']}개")
+    # 추적기와 인덱스의 대조(11d 6c-2) — 같은 끝점·같은 깊이에서 다른 답이면 끝점에 적는다. 엔진을 하나로 모으기 전에.
+    from src.knowledge import parity
+    from src.knowledge import query as qy
+    overlay = parity.check(overlay, symbol_index, qy.Graph(symbol_index))
+    counts = flow.summary(overlay)
+    progress(f"끝점 대조(인덱스): 같음 {counts['endpoints_index_same']}개 · 다름 {counts['endpoints_index_diff']}개"
+             f" · 핸들러 못 찾음 {counts['endpoints_index_no_handler']}개")
 
     out_dir = _graph_dir(args, env, gbm, fct)
     binary = gb.find_graphify()
@@ -1377,7 +1384,9 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
           f" · 레포에 붙은 엣지 {summary['repo_level']}"
           f" · 끝점 {summary.get('endpoints', 0)}(등재 {summary.get('endpoints_registered', 0)}"
           f" · 서빙 미상 {summary.get('endpoints_unserved', 0)}"
-          f" · 자원까지 {summary.get('endpoints_traced', 0)} · 막힘 {summary.get('endpoints_blocked', 0)})")
+          f" · 자원까지 {summary.get('endpoints_traced', 0)} · 막힘 {summary.get('endpoints_blocked', 0)})"
+          f" · 인덱스 대조 같음 {summary.get('endpoints_index_same', 0)} · 다름 {summary.get('endpoints_index_diff', 0)}"
+          + (f" · 핸들러 못 찾음 {summary['endpoints_index_no_handler']}" if summary.get('endpoints_index_no_handler') else ""))
     human = [name for name in ("flow.html", "wiki/index.md") if (out_dir / name).exists()]
     if human:
         print(f"       사람용 {' · '.join(human)}")
