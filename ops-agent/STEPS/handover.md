@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1417 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 292 사례 |
+| 테스트 | `1421 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 297 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -357,7 +357,9 @@ process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브�
 했고 8번 줄이 공유 라이브러리를 "레포에 안 들어옴 / 이름 못 찾음"으로 가른다. 여섯 번째 숫자에서 470이 전부
 공유 쪽 로깅 모듈의 `logger` 하나로 드러나 6b-2 후속 2로 다른 모듈의 싱글턴을 풀었다(일곱 번째 숫자: 공유 0,
 정밀도 100 — 6b를 닫았다). 6c-1로 질의 `code callers`·`code path`·`code uses`가 섰다. 사내에서 아는 컬렉션·함수로
-답이 맞는지 받는 것이 다음이고, 그다음은 **11d 6c-2**(`code.trace`를 인덱스 위로, 추적기와 대조)
+답이 맞는지 받는 것이 다음이다. 사내 질문(presentation → `XxxProtocol` → `Xxx`)으로 이름 규칙 포트·구현과
+`= Depends(공급자)`를 6c-1 후속에서 고쳤다. 다음은 **6c-1b `calls.html`**(사람이 흐름을 눈으로 확인하는 한 장), 그다음
+**11d 6c-2**(`code.trace`를 인덱스 위로, 추적기와 대조)
 (구조적 구현체·DI 레지스트리·디스패치 표·공유 라이브러리를 레포별 핀 SHA로·하네스 D·graphify
 병합), 그다음 6c(impact/path 질의, code.trace를 인덱스 위로), 6d(리드 연결·측정), 12a.
 사내에서는 `code graph` 뒤 `code check`의 일곱 줄을 받아 적는 것이 첫 일이다. 시작하기 전에

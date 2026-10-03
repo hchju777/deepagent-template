@@ -681,3 +681,54 @@ async def test_다른_모듈의_싱글턴은_정의한_모듈에서_값의_클�
     sh = idx.unresolved_shapes
     assert sh["external_third"] == {"loguru": 2, "httpx": 1}       # 다시 내보낸 것 · bind()로 감싼 것 · 서드파티 클래스
     assert "external_shared" not in sh and "shared_unnamed" not in sh
+
+
+# ── 6c-1 후속: 이름이 다른 포트와 구현 · `= Depends(공급자)` ─────────────
+
+PROTO = {
+    "src/__init__.py": "",
+    "src/ports.py": ("from abc import ABC, abstractmethod\nfrom typing import Protocol\n\n\n"
+                     "class BadgeServiceProtocol(Protocol):\n    def get_badge(self, line): ...\n\n\n"
+                     "class IStore(ABC):\n    @abstractmethod\n    def put(self, x):\n        ...\n\n\n"
+                     "class ReportPort(Protocol):\n    def render(self): ...\n\n\n"
+                     "class CachePort(ABC):\n    @abstractmethod\n    def fetch(self, k):\n        ...\n"),
+    "src/services.py": ("class BadgeService:\n    def get_badge(self, line):\n        return line\n\n\n"
+                        "class Store:\n    def put(self, x):\n        return x\n\n\n"
+                        "class Report:\n    def unrelated(self):\n        return 0\n\n\n"
+                        "from src.ports import CachePort\n\n\n"
+                        "class Cache(CachePort):\n    def fetch(self, k):\n        return k\n"),
+    "src/deps.py": "from src.services import BadgeService\n\n\ndef get_badge_service():\n    return BadgeService()\n",
+    "src/routes.py": (
+        "from typing import Annotated\nfrom fastapi import Depends\nfrom src.ports import BadgeServiceProtocol\n"
+        "from src.deps import get_badge_service\n\n\n"
+        "@router.get('/a')\ndef by_default(svc: BadgeServiceProtocol = Depends(get_badge_service)):\n    return svc.get_badge('L1')\n\n\n"
+        "@router.get('/b')\ndef by_annotated(svc: Annotated[BadgeServiceProtocol, Depends(get_badge_service)]):\n"
+        "    return svc.get_badge('L1')\n\n\n"
+        "class Handler:\n    def __init__(self, svc: BadgeServiceProtocol):\n        self.svc = svc\n\n"
+        "    def run(self):\n        return self.svc.get_badge('L1')\n"),
+}
+
+
+async def test_이름_규칙이_다른_포트와_구현을_메서드_단위로_잇고_메서드가_없으면_안_잇는다():
+    """`XProtocol`·`IX`·`XPort` → `X`. 사내 presentation이 `XxxServiceProtocol`로 부르고 `XxxService`가 구현인데, 인덱서가
+    이름이 **똑같은** 포트와 구현만 이어서 구현 쪽에서 보면 "부르는 곳이 없다"였다(11b 추적기는 이 규칙을 봤다)."""
+    idx = await _index(PROTO, names=[])
+    got = {(idx.symbols[e.src].qualname, idx.symbols[e.dst].qualname, e.certainty, e.via)
+           for e in idx.edges if e.type == "implements"}
+    assert ("src.services.BadgeService.get_badge", "src.ports.BadgeServiceProtocol.get_badge", "exact", "name_rule") in got
+    assert ("src.services.Store.put", "src.ports.IStore.put", "exact", "name_rule") in got
+    assert not any(dst.startswith("src.ports.ReportPort") for _, dst, _, _ in got)   # `Report`는 render가 없다
+    assert not any("ReportPort" in g for g in idx.gaps)            # "구현인데 render가 없다"는 거짓 gap도 없다
+    # 포트를 직접 상속한 구현은 `overrides`가 이미 잇는다 — 같은 디스패치를 두 번 걸지 않는다.
+    assert not any(src.startswith("src.services.Cache.") for src, _, _, _ in got)
+    assert ("src.ports.CachePort.fetch", "overrides", "exact") in _edges(idx, "src.services.Cache.fetch", "overrides")
+
+
+async def test_기본값_자리의_Depends도_공급자가_돌려주는_구현이_수신_타입이다():
+    """`svc: XProtocol = Depends(공급자)` — 어노테이션은 포트이고 실제로 들어오는 것은 공급자가 만든 구현이다.
+    `Annotated[XProtocol, Depends(공급자)]` 꼴은 이미 그렇게 풀었는데 기본값 자리만 어노테이션이 이겼다."""
+    idx = await _index(PROTO, names=[])
+    impl = ("src.services.BadgeService.get_badge", "calls", "exact")
+    assert impl in _edges(idx, "src.routes.by_default", "calls")
+    assert impl in _edges(idx, "src.routes.by_annotated", "calls")
+    assert ("src.ports.BadgeServiceProtocol.get_badge", "calls", "exact") in _edges(idx, "src.routes.Handler.run", "calls")

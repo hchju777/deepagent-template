@@ -129,3 +129,27 @@ async def test_한_줄_표시는_짧은_이름에_표식을_붙이고_레포는_
     assert qy.render_path(idx, ingest) == (
         f"[{REPO}] api.ingest → svc.handle → base.Store.save => impl.MongoStore.save → impl.MongoStore.write")
     assert qy.display(idx, idx.lookup(REPO, "app.util.norm")) == "app.util.norm (app/util.py:L1)"
+
+
+async def test_포트_타입으로_부르는_곳도_구현의_부르는_쪽으로_모인다():
+    """주입 모양 셋(`= Depends`, `Annotated[…, Depends]`, 생성자에 포트 타입) 모두 구현 쪽 `callers`에 나와야 한다."""
+    from tests.knowledge.test_index import PROTO
+    idx = await ix.build_index({REPO: _Src(PROTO)}, names=[], commits={REPO: "c0ffee"})
+    g = qy.Graph(idx)
+    got = qy.callers(g, [idx.lookup(REPO, "src.services.BadgeService.get_badge")])
+    assert sorted(_q(idx, p[0].src) for p in got.entries) == [
+        "src.routes.Handler.run", "src.routes.by_annotated", "src.routes.by_default"]
+    handler = next(p for p in got.entries if _q(idx, p[0].src) == "src.routes.Handler.run")
+    assert [l.mark for l in handler] == ["→", "=>"]
+    fetch = idx.lookup(REPO, "src.services.Cache.fetch")
+    assert [(_q(idx, l.src), l.mark) for l in g.inc[fetch]] == [("src.ports.CachePort.fetch", "=>")]   # 한 번만
+
+
+async def test_같은_디스패치가_두_길로_들어와도_그래프에는_한_번이다():
+    """상속(`overrides`)과 이름 규칙(`implements`)이 같은 짝을 가리키면 `callers`에 같은 줄이 두 번 나온다 — 인덱서가
+    이제 그렇게 만들지 않지만, 그래프가 스스로 지킨다."""
+    idx, _ = await _graph()
+    impl, base = idx.lookup(REPO, "app.impl.MongoStore.save"), idx.lookup(REPO, "app.base.Store.save")
+    idx.add_edge(impl, base, "implements", "exact", line=5, via="name_rule")
+    g = qy.Graph(idx)
+    assert [(_q(idx, l.src), l.mark) for l in g.inc[impl]] == [("app.base.Store.save", "=>")]

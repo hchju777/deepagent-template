@@ -57,6 +57,7 @@ class Graph:
         self.modules = _modules(index)
         self.out: dict[int, list[Link]] = {}
         self.inc: dict[int, list[Link]] = {}
+        seen: set[Link] = set()
         for e in index.edges:
             if e.type == "calls":
                 link = Link(e.src, e.dst, MARKS.get(e.certainty, "?→"), e.line)
@@ -64,6 +65,9 @@ class Graph:
                 link = Link(e.dst, e.src, DISPATCH, 0)
             else:
                 continue
+            if link in seen:            # 같은 짝이 두 길(상속·이름 규칙)로 들어와도 한 번
+                continue
+            seen.add(link)
             self.out.setdefault(link.src, []).append(link)
             self.inc.setdefault(link.dst, []).append(link)
 

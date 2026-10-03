@@ -1114,6 +1114,26 @@ CASES = [
   '    if len(found) > 1:\n        print(f"  {text}: 여럿이다',
   '    if False:\n        print(f"  {text}: 여럿이다',
   ['tests/knowledge/test_cli_code.py::test_code_callers_path_uses가_인덱스로_역질문에_답한다']),
+ ('이름이 다른 포트와 구현을 안 잇는다', ROOT / 'src/knowledge/index.py',
+  '            ruled = [c for a in _port_aliases(port.node.name) for c in pool(a)',
+  '            ruled = [c for a in [] for c in pool(a)',
+  ['tests/knowledge/test_index.py::test_이름_규칙이_다른_포트와_구현을_메서드_단위로_잇고_메서드가_없으면_안_잇는다', 'tests/knowledge/test_query.py::test_포트_타입으로_부르는_곳도_구현의_부르는_쪽으로_모인다']),
+ ('이름만 닮은 클래스를 구현으로 본다', ROOT / 'src/knowledge/index.py',
+  '                     if c not in same and any(self.find_method(c, n) is not None for n in declared)]',
+  '                     if c not in same]',
+  ['tests/knowledge/test_index.py::test_이름_규칙이_다른_포트와_구현을_메서드_단위로_잇고_메서드가_없으면_안_잇는다']),
+ ('포트를 상속한 구현에 implements를 또 건다', ROOT / 'src/knowledge/index.py',
+  '                        and psid not in self.ancestors(c)]',
+  '                        ]',
+  ['tests/knowledge/test_index.py::test_이름_규칙이_다른_포트와_구현을_메서드_단위로_잇고_메서드가_없으면_안_잇는다']),
+ ('기본값 자리 Depends의 공급자를 안 본다', ROOT / 'src/knowledge/index.py',
+  '                c = provided if provided is not None else self.class_of_annotation(fn.mod, ann)',
+  '                c = self.class_of_annotation(fn.mod, ann) or provided',
+  ['tests/knowledge/test_index.py::test_기본값_자리의_Depends도_공급자가_돌려주는_구현이_수신_타입이다']),
+ ('질의 그래프가 같은 디스패치를 두 번 담는다', ROOT / 'src/knowledge/query.py',
+  '            if link in seen:            # 같은 짝이',
+  '            if False:            # 같은 짝이',
+  ['tests/knowledge/test_query.py::test_같은_디스패치가_두_길로_들어와도_그래프에는_한_번이다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1141,7 +1161,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 292, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 297, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

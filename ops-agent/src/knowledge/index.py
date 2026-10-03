@@ -48,6 +48,10 @@ CERTAINTIES = ("exact", "candidate")
 _SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".venv", "venv", "site-packages", "build", "dist"})
 _UNWRAP = frozenset({"Optional", "Final", "Type", "ClassVar", "Annotated", "Required", "NotRequired"})
 _PROTOCOL_BASES = frozenset({"Protocol", "ABC", "ABCMeta"})
+# 포트 이름에서 구현 이름을 짐작한다 — `XProtocol`·`XPort`·`XInterface`·`XABC`·`AbstractX`·`IX` → `X`. 11b 추적기의
+# 규칙과 같다(추적기가 퇴역하면 여기만 남는다).
+_PORT_SUFFIXES = ("Protocol", "Port", "Interface", "ABC")
+_PORT_PREFIXES = ("Abstract", "I")
 _UPPER_ASSIGN = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*(?::\s*[^=]+)?=\s*['\"]([^'\"]+)['\"]")
 
 
@@ -1132,9 +1136,10 @@ class _Resolver:
         # 파라미터 힌트 → 그 함수의 변수 타입
         for fsid, fn in self.funcs.items():
             for p, ann in fn.annotations.items():
-                c = self.class_of_annotation(fn.mod, ann)
-                if c is None and p in fn.defaults:
-                    c = self._depends_provider_class(fn.mod, [fn.defaults[p]])
+                # `svc: XProtocol = Depends(공급자)` — 어노테이션은 포트이고 실제로 들어오는 것은 공급자가 만든 구현이다.
+                # `Annotated[XProtocol, Depends(공급자)]`와 같게 공급자가 이긴다.
+                provided = self._depends_provider_class(fn.mod, [fn.defaults[p]]) if p in fn.defaults else None
+                c = provided if provided is not None else self.class_of_annotation(fn.mod, ann)
                 if c is not None:
                     self.param_types[(fsid, p)] = c
             for p, d in fn.defaults.items():
@@ -1238,19 +1243,31 @@ class _Resolver:
         self._link_same_name_ports()
 
     def _link_same_name_ports(self) -> None:
-        """포트(Protocol/ABC)와 **이름이 같은** 클래스는 그 구현체다 — 포트/어댑터 관례. 메서드 단위로 잇고 없는
-        메서드는 엣지 없이 gap에 적는다. 동명이 여럿이면 포트와 모듈 경로를 가장 길게 공유하는 쪽, 그다음 메서드를
-        더 많이 갖춘 쪽, 그래도 같으면 둘 다 추정이다 — 한 레포에 도메인이 여럿이면 다른 도메인의 동명 클래스가
-        걸리는 것이 사내 도구가 적어 둔 약점이었다."""
+        """포트(Protocol/ABC)와 **이름이 같거나 이름 규칙으로 짝인**(`XProtocol`·`IX` → `X`) 클래스는 그 구현체다 —
+        포트/어댑터 관례. 메서드 단위로 잇고 없는 메서드는 엣지 없이 gap에 적는다. 이름 규칙 짝은 포트의 메서드를
+        하나라도 가져야 구현으로 본다(이름만 닮은 클래스가 걸리지 않게). 여럿이면 포트와 모듈 경로를 가장 길게
+        공유하는 쪽, 그다음 메서드를 더 많이 갖춘 쪽, 그래도 같으면 둘 다 추정이다 — 한 레포에 도메인이 여럿이면
+        다른 도메인의 동명 클래스가 걸리는 것이 사내 도구가 적어 둔 약점이었다. 이름 규칙이 빠져 있던 동안 사내
+        presentation이 `XxxProtocol`로 부르는 구현은 구현 쪽에서 보면 "부르는 곳이 없다"였다."""
         idx = self.index
         for psid, port in self.classes.items():
             if not port.is_port:
                 continue
-            same = [c for c in self.classes_by_name.get(port.node.name, [])
-                    if c != psid and not self.classes[c].is_port and self.classes[c].mod.repo == port.mod.repo]
+            declared = [n for n in port.methods if not n.startswith("__")]
+
+            def pool(name: str) -> list[int]:
+                # 포트를 직접 상속한 클래스는 `overrides`가 이미 잇는다 — 또 걸면 질의에 같은 디스패치가 두 번 나온다.
+                return [c for c in self.classes_by_name.get(name, [])
+                        if c != psid and not self.classes[c].is_port and self.classes[c].mod.repo == port.mod.repo
+                        and psid not in self.ancestors(c)]
+
+            same = pool(port.node.name)
+            ruled = [c for a in _port_aliases(port.node.name) for c in pool(a)
+                     if c not in same and any(self.find_method(c, n) is not None for n in declared)]
+            via = {c: "same_name" for c in same} | {c: "name_rule" for c in ruled}
+            same = same + ruled
             if not same:
                 continue
-            declared = [n for n in port.methods if not n.startswith("__")]
             pq = idx.symbols[psid].qualname.split(".")
 
             def score(c: int) -> tuple[int, int]:
@@ -1274,9 +1291,9 @@ class _Resolver:
                     if m is None:
                         missing.append(n)
                         continue
-                    idx.add_edge(m, port.methods[n], "implements", certainty, line=self.funcs[m].node.lineno, via="same_name")
+                    idx.add_edge(m, port.methods[n], "implements", certainty, line=self.funcs[m].node.lineno, via=via[c])
                 if missing:
-                    idx.gaps.append(f"{idx.symbols[psid].qualname}: 동명 클래스 {idx.symbols[c].qualname}에 없는 메서드: "
+                    idx.gaps.append(f"{idx.symbols[psid].qualname}: 구현으로 본 {idx.symbols[c].qualname}에 없는 메서드: "
                                     f"{', '.join(missing[:3])}")
 
     # ── 자원 참조 ──
@@ -1366,6 +1383,18 @@ async def build_index(sources: dict[str, IndexSource], *, names: Iterable[Name] 
     index.unresolved = dict(resolver.unresolved)
     index.unresolved_shapes = {k: dict(v) for k, v in resolver.shapes.items() if v}
     return index
+
+
+def _port_aliases(name: str) -> list[str]:
+    out: list[str] = []
+    for suf in _PORT_SUFFIXES:
+        if name.endswith(suf) and len(name) > len(suf):
+            out.append(name[: -len(suf)])
+    for pre in _PORT_PREFIXES:
+        rest = name[len(pre):]
+        if name.startswith(pre) and rest[:1].isupper():
+            out.append(rest)
+    return [a for i, a in enumerate(out) if a not in out[:i]]
 
 
 def _exports(mod: _Module, name: str) -> bool:
