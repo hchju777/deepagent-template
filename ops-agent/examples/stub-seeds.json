@@ -1,0 +1,53 @@
+{
+  "_설명": "대상 시스템에 안 붙고 돌려 보기 위한 가짜 응답. --stub-seeds로 준다. `code.trace`는 사람이 적은 사슬이다 — 진짜 사슬은 `code graph`의 오버레이에서 온다.",
+  "redis": {
+    "oee:L3": "512"
+  },
+  "mongo": {
+    "twin_state": [
+      {
+        "line": "L3",
+        "run_time_min": 480,
+        "planned_min": 480,
+        "total_count": 4551,
+        "good_count": 4460,
+        "ideal_cycle_sec": 6.0
+      }
+    ],
+    "alarm_events": [
+      {
+        "line": "L1",
+        "result": "alarm",
+        "at": "2026-09-14T08:50:00"
+      },
+      {
+        "line": "L1",
+        "result": "alarm",
+        "at": "2026-09-14T08:55:00"
+      },
+      {
+        "line": "L1",
+        "result": "caution",
+        "at": "2026-09-14T08:58:00"
+      }
+    ]
+  },
+  "rest": {
+    "summary_badge": {
+      "items": [
+        {
+          "group": "L1",
+          "title": "Alarm",
+          "alarm": 0,
+          "caution": 0,
+          "normal": 0
+        }
+      ]
+    }
+  },
+  "code": {
+    "trace": {
+      "/summary/badge": "api/routers/summary.py:L12 badge\n  → api/repos/alarm.py:L30 AlarmRepo.count_by_result — reads: alarm_events [collection] 확실"
+    }
+  }
+}
