@@ -359,7 +359,7 @@ process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브�
 정밀도 100 — 6b를 닫았다). 6c-1로 질의 `code callers`·`code path`·`code uses`가 섰다. 사내에서 아는 컬렉션·함수로
 답이 맞는지 받는 것이 다음이다. 사내 질문(presentation → `XxxProtocol` → `Xxx`)으로 이름 규칙 포트·구현과
 `= Depends(공급자)`를 6c-1 후속에서 고쳤다. 6c-1b로 `code graph`가 `calls.html`(골라 펼쳐 보는 사람용 한 장)도 쓴다 —
-사내에서 그걸 열어 끊긴 곳을 찾는다. 6c-2로 `code graph`가 끝점마다 추적기와 인덱스를 같은 깊이로 대조해
+사내 확인(10-03): `code uses`·`code callers`가 아는 답과 맞고 calls.html에서 끊긴 곳이 안 보였다. 6c-2로 `code graph`가 끝점마다 추적기와 인덱스를 같은 깊이로 대조해
 다르면 `code.trace`에 적고 `code status`가 센다. 사내 대조 숫자를 받은 뒤 **11d 6d**(리드 연결 — `code.callers`·
 `code.uses` action, 브리핑 예시, 측정, 대조가 서면 추적기 퇴역), 그다음 12a
 (구조적 구현체·DI 레지스트리·디스패치 표·공유 라이브러리를 레포별 핀 SHA로·하네스 D·graphify
