@@ -36,15 +36,26 @@ def check(overlay: dict, index: Index, graph: qy.Graph) -> dict:
     for node in nodes:
         if node.get("type") != "endpoint" or node.get("traced") != "ok" or not node.get("chain"):
             continue
-        m = _FIRST.match(node["chain"][0])
-        if m is None:
-            continue
         repo = node.get("trace_repo", "")
-        handler = _innermost(spans, repo, m.group(1), int(m.group(2)))
-        if handler is None:
+        chain = node["chain"]
+        parents = node.get("chain_parent") or [None] + [0] * (len(chain) - 1)
+        # 추적기는 같은 path의 라우트 선언 전부(GET·PUT …)를 사슬의 뿌리로 삼는다 — 대조도 그 전부에서 출발한다.
+        # 첫 핸들러에서만 출발했더니 사내에서 PUT 쪽이 쓰는 토픽이 "추적기만"으로 나왔다.
+        roots = [m for i, p in enumerate(parents) if p is None and i < len(chain)
+                 if (m := _FIRST.match(chain[i])) is not None]
+        if not roots:
+            continue
+        handlers: list = []
+        for m in roots:
+            fn = _innermost(spans, repo, m.group(1), int(m.group(2)))
+            if fn is not None and all(fn.id != h.id for h in handlers):
+                handlers.append(fn)
+        if not handlers:
             node["index_check"] = {"status": "no_handler"}
             continue
-        reached = qy.reach(graph, [handler.id], max_hops=MAX_DEPTH)
+        handler = handlers[0]
+        starts = [h.id for h in handlers]
+        reached = qy.reach(graph, starts, max_hops=MAX_DEPTH)
         got = {(r.kind, r.name) for sid in reached for r in index.symbols[sid].resources} & known
         reads: dict[tuple, dict] = {}
         for e in overlay["links"]:
@@ -55,7 +66,7 @@ def check(overlay: dict, index: Index, graph: qy.Graph) -> dict:
         why: dict[str, str] = {}
         trees: list = []
         for k, n in sorted(got - want):
-            why[f"{n} [{k}]"] = _index_why(index, graph, handler, (k, n), reached, trees)
+            why[f"{n} [{k}]"] = _index_why(index, graph, starts, (k, n), reached, trees)
         for k, n in sorted(want - got):
             why[f"{n} [{k}]"] = _tracer_why(index, graph, node, repo, spans, reached, reads[(k, n)])
         only_index = sorted(f"{n} [{k}]" for k, n in got - want)
@@ -71,18 +82,22 @@ def _innermost(spans: dict, repo: str, file: str, line: int):
     return min(around, key=lambda s: s.end_line - s.line) if around else None
 
 
-def _index_why(index: Index, graph: qy.Graph, handler, key: tuple, reached: set[int], trees: list) -> str:
+def _index_why(index: Index, graph: qy.Graph, starts: list[int], key: tuple, reached: set[int],
+               trees: list) -> str:
     holders = [sid for sid in sorted(reached) if key in {(r.kind, r.name) for r in index.symbols[sid].resources}]
     if not trees:
-        trees.extend(qy.reach_tree(graph, [handler.id], max_hops=MAX_DEPTH, marks=m) for m in _TIERS)
-    path: list = []
+        trees.extend(qy.reach_tree(graph, starts, max_hops=MAX_DEPTH, marks=m) for m in _TIERS)
+    best, path = None, []
     for tree in trees:
         hits = [sid for sid in holders if sid in tree]
         if hits:
-            path = min((qy.path_to(tree, sid) for sid in hits), key=len)
+            best = min(hits, key=lambda sid: len(qy.path_to(tree, sid)))
+            path = qy.path_to(tree, best)
             break
+    if best is None:
+        return "인덱스 경로를 되짚지 못했다"
     if not path:
-        return f"[{handler.repo}] {qy.short(index, handler.id, graph.modules)} — 핸들러가 직접"
+        return f"[{index.symbols[best].repo}] {qy.short(index, best, graph.modules)} — 핸들러가 직접"
     text = qy.render_path(index, path)
     if any(link.mark == qy.MARKS["candidate"] for link in path):
         text += " — 이름만 같은 후보(?→)를 거친다"

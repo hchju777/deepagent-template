@@ -16,7 +16,10 @@ FILES = {
                  "@router.post('/badge')\n"
                  "def badge(db):\n"
                  "    recent(db)\n"
-                 "    return extra(db)\n"),
+                 "    return extra(db)\n\n\n"
+                 "@router.put('/badge')\n"
+                 "def update_badge(db):\n"
+                 "    return db[\"audit_log\"].insert_one({})\n"),
     "api/q.py": ("def recent(db):\n    return db[\"alarm_events\"].find({})\n\n\n"
                  "def extra(db):\n    db[\"ghost\"].find({})\n    return db[\"line_state\"].find({})\n\n\n"
                  "def lost(db):\n    return db[\"audit_log\"].find({})\n"),
@@ -39,7 +42,8 @@ FILES = {
 # `ghost`는 이름 목록에는 있지만 오버레이에 노드가 없다 — `add_trace`도 안 싣는 자원이라 대조에서도 빠져야 한다.
 NAMES = [Name("collection", "alarm_events", "mongodb_collection.alarm"),
          Name("collection", "line_state", "mongodb_collection.line"),
-         Name("collection", "ghost", "mongodb_collection.ghost")]
+         Name("collection", "ghost", "mongodb_collection.ghost"),
+         Name("collection", "audit_log", "mongodb_collection.audit")]
 
 
 class _Src:
@@ -191,3 +195,20 @@ async def test_추적기만_자원의_걸음을_품는_함수가_인덱스에_�
                              [("alarm_events", "api/q.py", 2, 0), ("line_state", "api/q.py", 2, 0),
                               ("audit_log", "api/gone.py", 4, 1)]), idx, qy.Graph(idx))
     assert "  추적기만 audit_log [collection]: 추적기 걸음 api/gone.py:L3 gone을 품는 함수가 인덱스에 없다" in _why(g)
+
+
+async def test_같은_path의_핸들러가_여럿이면_전부에서_출발한다():
+    """추적기는 같은 path에 걸린 라우트 선언 전부(GET·PUT …)를 사슬의 뿌리로 삼는다. 대조가 첫 핸들러에서만 출발하면
+    둘째 핸들러가 쓰는 자원이 전부 "추적기만"이 된다 — 사내 첫 대조에서 토픽을 쓰는 PUT 쪽이 그렇게 빠졌다."""
+    idx = await _index()
+    g = parity.check(_traced([("api/r.py", 5, "badge", None), ("api/q.py", 1, "recent", 0),
+                              ("api/r.py", 11, "update_badge", None)],
+                             [("alarm_events", "api/q.py", 2, 1), ("line_state", "api/q.py", 7, 1),
+                              ("audit_log", "api/r.py", 12, 2)]), idx, qy.Graph(idx))
+    assert _node(g)["index_check"]["status"] == "same"
+
+
+async def test_핸들러가_직접_건드린_자원은_그_핸들러를_적는다():
+    idx = await _index()
+    g = parity.check(_traced([("api/r.py", 11, "update_badge", None)], []), idx, qy.Graph(idx))
+    assert "  인덱스만 audit_log [collection]: [svc] r.update_badge — 핸들러가 직접" in _why(g)

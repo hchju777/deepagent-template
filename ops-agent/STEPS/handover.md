@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1440 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 324 사례 |
+| 테스트 | `1442 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 325 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -363,8 +363,9 @@ process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브�
 다르면 `code.trace`에 적고 `code status`가 센다. 사내 첫 대조(10-03)가 같음 149 · 다름 7 · 핸들러 못 찾음 0 —
 숫자만으로는 그 7개가 어느 path인지 몰라 `code graph`·`code status`가 다른 끝점을 path로 나열하게 했다(인덱스만 5 ·
 추적기만 2). 한 줄로는 원인을 못 갈라 6c-2 후속 2로 `code trace`의 대조 줄 아래에 자원마다 원인(닿은 경로·추정 여부 /
-못 이은 호출·못 본 함수)을 붙였고, Git Bash가 `/…` 인자를 바꾸던 것도 막았다(windows.md ⑧). 그 원인 줄을 받은 뒤
-**11d 6d**(리드 연결 — `code.callers`·
+못 이은 호출·못 본 함수)을 붙였고, Git Bash가 `/…` 인자를 바꾸던 것도 막았다(windows.md ⑧). 원인 줄로 7을 판정했다
+(11d "6c-2 후속 3" 표 — 대조 버그 1은 고쳤고, 추적기 오탐 1, 인덱스 맞음 1, 인덱스가 이름만 같은 후보로 넘어감 1, 같은 후보
+엣지 3). 다음은 **6c-2 후속 4**(후보를 부르는 모듈에서 보이는 클래스로 좁힌다) — 그 뒤 **11d 6d**(리드 연결 — `code.callers`·
 `code.uses` action, 브리핑 예시, 측정, 대조가 서면 추적기 퇴역), 그다음 12a
 (구조적 구현체·DI 레지스트리·디스패치 표·하네스 D·graphify 병합). 시작하기 전에
 목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
