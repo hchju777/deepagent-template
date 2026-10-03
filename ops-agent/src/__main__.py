@@ -1336,6 +1336,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     print(f"       사람용: {' · '.join(human)}")
     print(f"       오버레이 노드 {summary['nodes']} · 엣지 {summary['links']} ({kinds})"
           f" · 합친 그래프 노드 {len(merged['nodes'])} · 엣지 {len(merged['links'])}")
+    _print_index_diffs(overlay, summary)
     if summary["unreferenced"]:
         print(f"       코드 줄에서 직접 못 찾은 이름 {summary['unreferenced']}개 — config에만 보인다 "
               f"(Enum·공통 헬퍼로 감싸 쓰면 여기 든다; 코드 층은 리드가 홉을 밟는다)")
@@ -1347,6 +1348,19 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         for line in advice:
             print(f"         - {line}")
     return 1 if (not names or not commits) else 0
+
+
+def _print_index_diffs(overlay: dict, summary: dict) -> None:
+    """추적기와 인덱스가 다르게 답한 끝점 목록(11d 6c-2) — `code graph` 끝과 `code status`가 같이 쓴다."""
+    from src.knowledge import flow
+
+    lines = flow.index_diff_lines(overlay)
+    if not lines:
+        return
+    print(f"       인덱스 대조가 다른 끝점 {summary.get('endpoints_index_diff', len(lines))} — "
+          f"하나씩 `code trace <path>`로 본다:")
+    for line in lines:
+        print(f"         {line}")
 
 
 def cmd_code_graph(args, env) -> int:
@@ -1378,7 +1392,8 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     except (ConfigError, FileNotFoundError) as exc:
         commits, problems = {}, [str(exc)]
     stale = gb.check_bundle(meta, commits)
-    summary = flow.summary(json.loads((out_dir / "overlay.json").read_text(encoding="utf-8")))
+    overlay = json.loads((out_dir / "overlay.json").read_text(encoding="utf-8"))
+    summary = flow.summary(overlay)
     print(f"       {'⚠ 낡음' if stale else '✅'} 만든 시각 {meta.built_at} · graphify {meta.graphify}"
           f" · 노드 {len(graph['nodes'])} · 엣지 {len(graph['links'])}"
           f" · 레포에 붙은 엣지 {summary['repo_level']}"
@@ -1387,6 +1402,7 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
           f" · 자원까지 {summary.get('endpoints_traced', 0)} · 막힘 {summary.get('endpoints_blocked', 0)})"
           f" · 인덱스 대조 같음 {summary.get('endpoints_index_same', 0)} · 다름 {summary.get('endpoints_index_diff', 0)}"
           + (f" · 핸들러 못 찾음 {summary['endpoints_index_no_handler']}" if summary.get('endpoints_index_no_handler') else ""))
+    _print_index_diffs(overlay, summary)
     human = [name for name in ("flow.html", "wiki/index.md") if (out_dir / name).exists()]
     if human:
         print(f"       사람용 {' · '.join(human)}")

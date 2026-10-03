@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1431 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 307 사례 |
+| 테스트 | `1433 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 312 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -360,11 +360,11 @@ process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브�
 답이 맞는지 받는 것이 다음이다. 사내 질문(presentation → `XxxProtocol` → `Xxx`)으로 이름 규칙 포트·구현과
 `= Depends(공급자)`를 6c-1 후속에서 고쳤다. 6c-1b로 `code graph`가 `calls.html`(골라 펼쳐 보는 사람용 한 장)도 쓴다 —
 사내 확인(10-03): `code uses`·`code callers`가 아는 답과 맞고 calls.html에서 끊긴 곳이 안 보였다. 6c-2로 `code graph`가 끝점마다 추적기와 인덱스를 같은 깊이로 대조해
-다르면 `code.trace`에 적고 `code status`가 센다. 사내 대조 숫자를 받은 뒤 **11d 6d**(리드 연결 — `code.callers`·
+다르면 `code.trace`에 적고 `code status`가 센다. 사내 첫 대조(10-03)가 같음 149 · 다름 7 · 핸들러 못 찾음 0 —
+숫자만으로는 그 7개가 어느 path인지 몰라 `code graph`·`code status`가 다른 끝점을 path로 나열하게 했다. 그 몇 개의
+`code trace <path>` "인덱스 대조" 줄을 받은 뒤 **11d 6d**(리드 연결 — `code.callers`·
 `code.uses` action, 브리핑 예시, 측정, 대조가 서면 추적기 퇴역), 그다음 12a
-(구조적 구현체·DI 레지스트리·디스패치 표·공유 라이브러리를 레포별 핀 SHA로·하네스 D·graphify
-병합), 그다음 6c(impact/path 질의, code.trace를 인덱스 위로), 6d(리드 연결·측정), 12a.
-사내에서는 `code graph` 뒤 `code check`의 일곱 줄을 받아 적는 것이 첫 일이다. 시작하기 전에
+(구조적 구현체·DI 레지스트리·디스패치 표·하네스 D·graphify 병합). 시작하기 전에
 목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
 
 작업 방식은 handover.md의 "합의된 작업 방식"을 그대로 따른다 — 특히

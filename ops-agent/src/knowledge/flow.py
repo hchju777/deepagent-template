@@ -852,6 +852,20 @@ def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAP
     return lines
 
 
+def index_diff_lines(graph: dict, *, limit: int = 10) -> list[str]:
+    """추적기와 인덱스가 다르게 답한 끝점 — `path — 인덱스만 … / 추적기만 …` 한 줄씩, path 순으로 `limit`개까지.
+    숫자만 찍었더니 사내에서 "그 7개가 어느 path인지" 알 길이 없었다(끝점이 150개 넘는다). 사람이 이 목록에서
+    하나를 골라 `code trace <path>`로 본다."""
+    lines = []
+    for n in sorted((n for n in graph.get("nodes", []) if n.get("type") == "endpoint"
+                     and (n.get("index_check") or {}).get("status") == "diff"), key=lambda n: n.get("label", "")):
+        check = n["index_check"]
+        parts = [f"{label} {_few(check[key], 2)}" for key, label in (("only_index", "인덱스만"), ("only_tracer", "추적기만"))
+                 if check.get(key)]
+        lines.append(f"{n.get('label', n['id'])} — " + " / ".join(parts))
+    return lines[:limit] + ([f"… 외 {len(lines) - limit}"] if len(lines) > limit else [])
+
+
 def _few(items: list[str], k: int = 3) -> str:
     return " · ".join(items[:k]) + (f" 외 {len(items) - k}" if len(items) > k else "")
 

@@ -104,3 +104,17 @@ async def test_대조도_추적기와_같은_깊이에서_멈춘다():
     idx = await _index()
     g = parity.check(_overlay((), first=("api/deep.py", 1)), idx, qy.Graph(idx))
     assert _node(g)["index_check"]["status"] == "same"
+
+
+async def test_다른_끝점은_path와_차이를_한_줄씩_열_개까지_나열한다():
+    """사내 첫 대조: 같음 149 · 다름 7. 숫자만 찍고 어느 끝점인지 안 찍어서 `code trace`로 볼 끝점을 고를 수 없었다."""
+    idx = await _index()
+    g = parity.check(_overlay((("collection", "alarm_events"),)), idx, qy.Graph(idx))
+    assert flow.index_diff_lines(g) == ["/badge — 인덱스만 line_state [collection]"]
+    same = parity.check(_overlay((("collection", "alarm_events"), ("collection", "line_state"))), idx, qy.Graph(idx))
+    assert flow.index_diff_lines(same) == []
+    many = {"nodes": [{"id": f"endpoint_e{i:02d}", "label": f"/e{i:02d}", "type": "endpoint",
+                       "index_check": {"status": "diff", "only_index": [], "only_tracer": ["x [topic]"]}}
+                      for i in reversed(range(12))], "links": []}
+    lines = flow.index_diff_lines(many)
+    assert len(lines) == 11 and lines[0] == "/e00 — 추적기만 x [topic]" and lines[-1] == "… 외 2"

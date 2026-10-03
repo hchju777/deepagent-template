@@ -1174,6 +1174,26 @@ CASES = [
   '    overlay = parity.check(overlay, symbol_index, qy.Graph(symbol_index))',
   '    overlay = overlay',
   ['tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다']),
+ ('code graph가 다른 끝점을 안 나열한다', ROOT / 'src/__main__.py',
+  '    _print_index_diffs(overlay, summary)\n    if summary["unreferenced"]:',
+  '    if summary["unreferenced"]:',
+  ['tests/knowledge/test_cli_code.py::test_인덱스_대조가_다른_끝점은_code_graph와_status가_path로_나열한다']),
+ ('code status가 다른 끝점을 안 나열한다', ROOT / 'src/__main__.py',
+  '    _print_index_diffs(overlay, summary)\n    human = [name for name in ("flow.html", "wiki/index.md")',
+  '    human = [name for name in ("flow.html", "wiki/index.md")',
+  ['tests/knowledge/test_cli_code.py::test_인덱스_대조가_다른_끝점은_code_graph와_status가_path로_나열한다']),
+ ('같은 끝점까지 다르다고 나열한다', ROOT / 'src/knowledge/flow.py',
+  '                     and (n.get("index_check") or {}).get("status") == "diff"), key=lambda n: n.get("label", "")):',
+  '                     and (n.get("index_check") or {}).get("status") in ("diff", "same")), key=lambda n: n.get("label", "")):',
+  ['tests/knowledge/test_parity.py::test_다른_끝점은_path와_차이를_한_줄씩_열_개까지_나열한다']),
+ ('다른 끝점을 path 순으로 안 나열한다', ROOT / 'src/knowledge/flow.py',
+  '.get("status") == "diff"), key=lambda n: n.get("label", "")):',
+  '.get("status") == "diff"), key=lambda n: 0):',
+  ['tests/knowledge/test_parity.py::test_다른_끝점은_path와_차이를_한_줄씩_열_개까지_나열한다']),
+ ('다른 끝점 나열에 상한이 없다', ROOT / 'src/knowledge/flow.py',
+  '    return lines[:limit] + ([f"… 외 {len(lines) - limit}"] if len(lines) > limit else [])',
+  '    return lines + ([f"… 외 {len(lines) - limit}"] if len(lines) > limit else [])',
+  ['tests/knowledge/test_parity.py::test_다른_끝점은_path와_차이를_한_줄씩_열_개까지_나열한다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1201,7 +1221,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 307, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 312, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
