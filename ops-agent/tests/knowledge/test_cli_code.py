@@ -686,8 +686,8 @@ def test_인덱스_대조가_다른_끝점은_code_graph와_status가_path로_�
 
     real = parity.check
 
-    def differ(overlay, index, graph):
-        overlay = real(overlay, index, graph)
+    def differ(overlay, index, graph, tracer):
+        overlay = real(overlay, index, graph, tracer)
         for n in overlay["nodes"]:
             if n.get("type") == "endpoint":
                 n["index_check"] = {"status": "diff", "handler": "api.r.badge",

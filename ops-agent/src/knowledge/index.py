@@ -82,6 +82,9 @@ class Symbol:
     signature: str = ""
     parse_error: str = ""                       # module만. 파싱 실패도 모듈이다 — 커버리지는 전수여야 한다
     resources: tuple[Resource, ...] = ()        # function·method만. 함수별 자원 참조(방향 포함)
+    # function·method만. (줄, 호출식, 사유) — 못 푼 호출과 `getattr(` 자리. 끝점 사슬을 인덱스에서 만들 때(6d-3)
+    # 추적기가 남기던 "못 따라감"을 같게 내려면 집계(6b-0)만으로는 안 되고 함수에 남아 있어야 한다.
+    unresolved: tuple[tuple[int, str, str], ...] = ()
 
 
 @dataclass
@@ -187,6 +190,7 @@ class Index:
             d = dict(d)
             d["resources"] = tuple(Resource(*r) for r in d.get("resources", []))
             d["decorators"] = tuple(d.get("decorators", ()))
+            d["unresolved"] = tuple(tuple(u) for u in d.get("unresolved", ()))
             symbols.append(Symbol(**d))
         edges = [Edge(**e) for e in data.get("edges", [])]
         return cls(symbols=symbols, edges=edges, commits=dict(data.get("commits", {})),
@@ -256,6 +260,22 @@ def _chain(node: ast.AST) -> tuple[str, ...] | None:
         head = _chain(node.func)
         return None if head is None else head + ("()",)
     return None
+
+
+_GETATTR_ARG = re.compile(r"getattr\(\s*([^,)]+)")
+
+
+def _getattr_sites(fn: "_Func") -> list[tuple[int, str, str]]:
+    """`getattr(x, name)`으로 고른 대상은 정적으로 못 따라간다 — 추적기가 gap으로 남기던 자리(11b T6)."""
+    node = fn.node
+    start = node.body[0].lineno if getattr(node, "body", None) else node.lineno
+    end = node.end_lineno or node.lineno
+    out = []
+    for i, text in enumerate(fn.mod.lines[start - 1:end], start):
+        m = _GETATTR_ARG.search(text)
+        if m:
+            out.append((i, f"getattr({m.group(1).strip()}, ...)", "getattr"))
+    return out
 
 
 def _module_fqn(path: str, prefix: str = "") -> str:
@@ -483,6 +503,7 @@ class _Resolver:
         self.funcs_by_name: dict[str, list[int]] = defaultdict(list)
         self.classes_by_name: dict[str, list[int]] = defaultdict(list)
         self.unresolved: Counter = Counter()
+        self._last_why = ""                                        # 직전 `_count`의 사유 — 함수별 기록용
         self.param_types: dict[tuple[int, str], int] = {}          # (func sid, 파라미터) → class sid
         self.attr_types: dict[tuple[int, str], list[int]] = {}      # (class sid, 속성) → class sid들(하나면 확실)
         self.sub_of: dict[int, list[int]] = defaultdict(list)       # class → 하위 클래스들
@@ -962,6 +983,7 @@ class _Resolver:
         return None
 
     def _count(self, why: str) -> None:
+        self._last_why = why
         if not self._quiet:
             self.unresolved[why] += 1
 
@@ -1217,13 +1239,22 @@ class _Resolver:
                         self.override_of[msid] = base_m
                         break           # 가장 가까운 조상 하나 — 전부에 걸면 베이스 40 × 구현 30이 1200 엣지다(사내 3741)
         for fn in self.funcs.values():
+            missed: list[tuple[int, str, str]] = _getattr_sites(fn)
             for chain, line in fn.calls:
+                self._last_why = "unresolved"
                 res = self.resolve_call(fn, chain)
                 if res is None:
+                    # 내장·stoplist(`len`·`.get`)는 못 따라간 것이 아니라 안 따라가는 것이다 — 사내에서 수천 건이라 빼야 읽힌다.
+                    if self._last_why not in ("builtin", "stoplist"):
+                        missed.append((line, (".".join(chain) + "()").replace(".()", "()"), self._last_why))
                     continue
                 certainty, targets, via = res
                 for t in targets:
                     idx.add_edge(fn.sid, t, "calls", certainty, line=line, via=via)
+            if missed:
+                sym = idx.symbols[fn.sid]
+                idx.symbols[fn.sid] = Symbol(**{**asdict(sym), "resources": sym.resources, "decorators": sym.decorators,
+                                                "unresolved": tuple(sorted(missed))})
             for chain, line in fn.decorator_calls:
                 res = self.resolve_call(fn, chain)
                 if res and res[0] == "exact":

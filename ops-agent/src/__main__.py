@@ -1244,9 +1244,21 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     progress(f"끝점 {counts['endpoints']}개 (등재 {counts['endpoints_registered']} · "
              f"서빙 미상 {counts['endpoints_unserved']})")
 
+    # 심볼 인덱스(11d) — 레포 전체를 배포 커밋에서 2-pass로. 끝점 사슬이 여기서 나온다(6d-3) — 함수→함수 엣지도 그래프에 남는다.
+    from src.knowledge import index as indexing
+    from src.knowledge import index_trace
+    from src.knowledge import parity
+    from src.knowledge import query as qy
+    symbol_index = asyncio.run(indexing.build_index(
+        {name: code.source_for(name) for name in sorted(commits)}, names=names, commits=commits))
+    isum = symbol_index.summary()
+    progress(f"심볼 {isum['symbols']}개 · 엣지 {isum['edges_total']}개 · 파싱 실패 {isum['parse_errors']}개")
+    qgraph = qy.Graph(symbol_index)
+    theirs: dict[str, object] = {}
+
     async def trace_endpoints(graph: dict) -> dict:
-        # 서빙 서비스가 있는 끝점마다 추적기를 돌린다 — 배포 커밋에서만, 조사 중에는 안 돌린다(⑥).
-        # 레포마다 Tracer 하나라 파싱과 `def 이름(` grep이 끝점들 사이에서 공유된다.
+        # 서빙 서비스가 있는 끝점마다 사슬을 만든다 — 배포 커밋에서만, 조사 중에는 안 돌린다(⑥). 사슬은 **인덱스**에서
+        # 나오고(6d-3), 11b 추적기는 대조용으로 한 번 더 돈다 — 사내 대조가 서면 지운다(6d-4).
         from src.knowledge import trace as tracing
         by_id = {n["id"]: n for n in graph["nodes"]}
         served: dict[str, dict[str, dict]] = {}
@@ -1258,25 +1270,18 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
             await tracer.prepare()
             progress(f"{repo_name}: 끝점 추적 중 ({len(endpoints)}개)")
             for node in sorted(endpoints.values(), key=lambda n: n["label"]):
-                graph = flow.add_trace(graph, node["id"], await tracer.trace(node["label"]))
+                mine = index_trace.trace(symbol_index, qgraph, repo=repo_name, target=node["label"], routes=routes)
+                graph = flow.add_trace(graph, node["id"], mine)
+                theirs[node["id"]] = await tracer.trace(node["label"])
         return graph
 
     overlay = asyncio.run(trace_endpoints(overlay))
     counts = flow.summary(overlay)
     progress(f"끝점 추적: 자원까지 이어진 {counts['endpoints_traced']}개 · 막힌 {counts['endpoints_blocked']}개")
-
-    # 심볼 인덱스(11d) — 레포 전체를 배포 커밋에서 2-pass로. 끝점 사슬과 달리 함수→함수 엣지가 그래프에 남는다.
-    from src.knowledge import index as indexing
-    symbol_index = asyncio.run(indexing.build_index(
-        {name: code.source_for(name) for name in sorted(commits)}, names=names, commits=commits))
-    isum = symbol_index.summary()
-    progress(f"심볼 {isum['symbols']}개 · 엣지 {isum['edges_total']}개 · 파싱 실패 {isum['parse_errors']}개")
-    # 추적기와 인덱스의 대조(11d 6c-2) — 같은 끝점·같은 깊이에서 다른 답이면 끝점에 적는다. 엔진을 하나로 모으기 전에.
-    from src.knowledge import parity
-    from src.knowledge import query as qy
-    overlay = parity.check(overlay, symbol_index, qy.Graph(symbol_index))
+    # 두 엔진의 대조(6c-2·6d-3) — 같은 끝점에서 다른 답이면 끝점에 적는다. 추적기를 지우기 전 마지막 확인.
+    overlay = parity.check(overlay, symbol_index, qgraph, theirs)
     counts = flow.summary(overlay)
-    progress(f"끝점 대조(인덱스): 같음 {counts['endpoints_index_same']}개 · 다름 {counts['endpoints_index_diff']}개"
+    progress(f"끝점 대조(두 엔진): 같음 {counts['endpoints_index_same']}개 · 다름 {counts['endpoints_index_diff']}개"
              f" · 핸들러 못 찾음 {counts['endpoints_index_no_handler']}개")
 
     out_dir = _graph_dir(args, env, gbm, fct)

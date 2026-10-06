@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1451 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 344 사례 |
+| 테스트 | `1457 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 357 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -374,8 +374,9 @@ process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브�
 엣지 3). 후속 3 뒤 사내 재측정(10-05) 같음 150 · 다름 6으로 **6c-2를 닫았다**(11d "6c-2를 닫는다" — 인덱스가
 추적기보다 못한 지점이 없다). 후속 4는 안 하고 backlog ⑨에 설계만 뒀다. **11d 6d**(리드 연결)를 종료 판단을 먼저 적고 시작했다 — 6d-1(`code.callers`·
 `code.uses` 등재, 인덱스를 그래프와 같은 신선도로 붙임, CLI와 같은 조립)과 6d-2(사다리 넷째·다섯째 칸 — 일치/불일치로
-컬렉션·캐시 키를 고르고 쓰는 함수의 callers까지, dryrun 다섯 칸)까지 됐다. 다음은 6d-3(`code.trace`를 인덱스에서 —
-함수별 미해석 호출을 심볼에 남겨 gap 유지, 두 엔진 대조, 사내 150/6 확인), 6d-4(추적기 삭제·측정 T8~T10), 그다음 12a
+컬렉션·캐시 키를 고르고 쓰는 함수의 callers까지, dryrun 다섯 칸), 6d-3(`code graph`의 끝점 사슬을 인덱스에서 만든다 —
+`index_trace`, 추적기는 대조용으로만 한 번 더 돈다)까지 됐다. **사내에서 `code graph`의 `끝점 대조(두 엔진)` 줄이 150/6과
+맞는지 받는 것이 다음이다.** 그다음 6d-4(추적기·parity 삭제, 측정 T8~T10), 그다음 12a
 (구조적 구현체·DI 레지스트리·디스패치 표·하네스 D·graphify 병합). 시작하기 전에
 목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
 

@@ -732,3 +732,19 @@ async def test_기본값_자리의_Depends도_공급자가_돌려주는_구현�
     assert impl in _edges(idx, "src.routes.by_default", "calls")
     assert impl in _edges(idx, "src.routes.by_annotated", "calls")
     assert ("src.ports.BadgeServiceProtocol.get_badge", "calls", "exact") in _edges(idx, "src.routes.Handler.run", "calls")
+
+
+async def test_함수마다_못_푼_호출과_getattr_자리가_심볼에_남고_번들을_오간다():
+    """6d-3 — 끝점 사슬을 인덱스에서 만들 때 "못 따라감"(getattr·후보)을 추적기와 같게 내려면 함수별로 남아 있어야
+    한다. 집계만 있던 것(6b-0)을 함수에도 적는다."""
+    files = {"app/__init__.py": "",
+             "app/h.py": ("import json\n\n\ndef h(cfg, box):\n    box.spin()\n    fmt = getattr(formatters, cfg[\"f\"])\n"
+                          "    return json.dumps(fmt(1))\n")}
+    idx = await ix.build_index({"r": _Src(files)}, commits={"r": "c0ffee"})
+    h = idx.symbols[idx.lookup("r", "app.h.h")]
+    assert ("box.spin()", "unknown") in {(u[1], u[2]) for u in h.unresolved}
+    assert (6, "getattr(formatters, ...)", "getattr") in h.unresolved
+    assert ("json.dumps()", "external") in {(u[1], u[2]) for u in h.unresolved}   # 서드파티도 같은 모양으로 남는다
+    assert all(u[2] not in ("builtin", "stoplist") for u in h.unresolved)         # `getattr()` 호출 자체는 내장이라 안 남는다
+    again = ix.Index.from_dict(json.loads(json.dumps(idx.to_dict())))
+    assert again.symbols[h.id].unresolved == h.unresolved

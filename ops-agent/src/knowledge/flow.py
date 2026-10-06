@@ -866,8 +866,6 @@ def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAP
         why = check.get("why") or {}
         lines += [f"  {label} {item}: {why[item]}" for key, label in sides
                   for item in (check.get(key) or [])[:3] if item in why]
-    elif check.get("status") == "no_handler":
-        lines.append(f"인덱스 대조: 핸들러를 인덱스에서 못 찾았다({chain[0].split(' ', 1)[0]})")
     if len(keep) < len(chain):
         lines.append(f"걸음 {len(chain)} 중 읽기로 이어진 {len(keep)}만 적었다 — 나머지는 code.read로 본다"
                      if reads_at else f"걸음 {len(chain)} 중 {len(keep)}만 적었다 — 읽기로 이어진 걸음이 없다")
