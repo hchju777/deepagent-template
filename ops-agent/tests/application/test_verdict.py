@@ -1,0 +1,306 @@
+"""12a — conclude + verify. **판정은 항상 생기고, 인용은 코드가 검사한다.**
+
+- conclude: 조사가 어떻게 끝났든 `Verdict`가 State에 남는다. 조사가 안 돌았거나(llm_error)
+  볼 것이 없었으면(증거 0) LLM을 묻지 않고 코드가 `degraded`를 찍는다.
+- verify: LLM 없이 인용·불완전 증거·component 이름을 검사한다. 문제가 있으면 한 번 되묻고,
+  그래도 안 되면 없는 인용을 걷어내고 낮은 확신으로 통과시킨다.
+"""
+import dataclasses
+
+from src.application.fakes import ScriptedRunner
+from src.application.graph import build_engine
+from src.application.nodes import (MAX_ALTERNATES, make_nodes, route_after_frame,
+                                   route_after_integrate, route_after_verify,
+                                   sanitize_verdict, verify_verdict)
+from src.application.state import CaseState
+from src.domain.case import CauseLink, EvidenceRef, Verdict
+from src.domain.investigation import TaskOutcome
+
+from tests.application.conftest import deps_for, task
+
+
+def _ev(evidence_id: str, *, complete: bool = True, body: str = "") -> EvidenceRef:
+    return EvidenceRef(id=evidence_id, source="mongo.find collection='alarm_events'",
+                       summary="x", body=body, complete=complete)
+
+
+def cause(component: str, *ids, **over) -> CauseLink:
+    return CauseLink(component=component, evidence_ids=list(ids), **over)
+
+
+def verdict(**over) -> Verdict:
+    body = {"verdict_type": "data_loss", "confidence": "high", "narrative": "sink가 멈췄다",
+            "root_cause": cause("sink", "t-1.e1")}
+    body.update(over)
+    return Verdict.model_validate(body)
+
+
+class Concluder:
+    """`deps.conclude` 자리의 대본. 부른 횟수와 받은 State를 남긴다."""
+
+    def __init__(self, *replies):
+        self._replies = list(replies)
+        self.calls: list[CaseState] = []
+
+    async def __call__(self, state: CaseState) -> dict:
+        self.calls.append(state)
+        reply = self._replies.pop(0) if self._replies else {"verdict": verdict()}
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def _state(case, **over) -> CaseState:
+    base = {"round": 2, "stopped_by": "decision", "decision": "conclude",
+            "evidence": [_ev("t-1.e1")]}
+    base.update(over)
+    return CaseState(case=case, **base)
+
+
+# ── conclude: 코드가 먼저 가르는 두 degraded ─────────────────────────
+
+async def test_조사가_안_돌았으면_LLM을_묻지_않고_degraded다(case):
+    """`stopped_by=llm_error`는 "조사 실패"다. 그 위에 판정을 또 물으면 죽은 LLM을 한 번
+    더 부르고, 성공하면 **안 돈 조사에 판정이 생긴다.**"""
+    concluder = Concluder()
+    nodes = make_nodes(deps_for(ScriptedRunner(), conclude=concluder))
+    state = _state(case, stopped_by="llm_error", evidence=[],
+                   llm_errors=["frame: 2회 시도 실패 — ConnectTimeout"])
+    patch = await nodes["conclude"](state)
+    got = patch["verdict"]
+    assert got.verdict_type == "degraded" and got.confidence == "low"
+    assert got.root_cause is None
+    assert "조사 실패" in got.narrative
+    assert any("ConnectTimeout" in c for c in got.caveats)
+    assert concluder.calls == []
+
+
+async def test_증거가_하나도_없으면_degraded이고_실패한_태스크가_caveat에_남는다(case):
+    concluder = Concluder()
+    nodes = make_nodes(deps_for(ScriptedRunner(), conclude=concluder))
+    state = _state(case, stopped_by="no_runnable", evidence=[], plan_tasks=[
+        task("t-1", status="error", error="ReadTimeout: 5s"),
+        task("t-2", status="error")])
+    patch = await nodes["conclude"](state)
+    got = patch["verdict"]
+    assert got.verdict_type == "degraded"
+    assert "t-1: ReadTimeout: 5s" in got.caveats and "t-2: 원인 불명" in got.caveats
+    assert concluder.calls == []
+
+
+async def test_판정을_못_받으면_degraded이고_사유가_남는다(case):
+    """리드가 JSON을 못 내면 **판정 없음이 아니라 degraded**다 — 그래야 보고서가 "판정 불가"를
+    적을 수 있고, 사유가 `llm_errors`에도 남아 프롬프트가 안 먹히는 것이 보인다."""
+    concluder = Concluder({"llm_errors": ["conclude: 2회 시도 실패 — JSON으로 읽을 수 없다"]})
+    nodes = make_nodes(deps_for(ScriptedRunner(), conclude=concluder))
+    patch = await nodes["conclude"](_state(case))
+    got = patch["verdict"]
+    assert got.verdict_type == "degraded"
+    assert any("JSON으로 읽을 수 없다" in c for c in got.caveats)
+    assert any("JSON으로 읽을 수 없다" in e for e in patch["llm_errors"])
+    assert len(concluder.calls) == 1
+
+
+async def test_판정자가_던져도_흡수한다(case):
+    """무raise(규율 1) — 판정자는 LLM 어댑터를 품고 있어 던질 수 있다. 여기서 죽으면
+    조사 전체가 `investigating`으로 남는다."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), conclude=Concluder(RuntimeError("폭발"))))
+    patch = await nodes["conclude"](_state(case))
+    assert patch["verdict"].verdict_type == "degraded"
+    assert any("RuntimeError" in c for c in patch["verdict"].caveats)
+
+
+async def test_판정자가_없으면_degraded다(case):
+    """대본 경로가 판정을 안 실었을 때 — 조용히 None이 아니라 "판정자가 없다"가 남는다."""
+    nodes = make_nodes(deps_for(ScriptedRunner()))
+    patch = await nodes["conclude"](_state(case))
+    assert patch["verdict"].verdict_type == "degraded"
+    assert any("판정자" in c for c in patch["verdict"].caveats)
+
+
+async def test_판정자의_비LLM_사유는_caveat에만_남는다(case):
+    """대본이 판정을 안 실은 것은 리드 계약 위반이 아니다 — `llm_errors`로 세면 거짓 양성이다."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), conclude=Concluder({"note": "대본에 verdict가 없다"})))
+    patch = await nodes["conclude"](_state(case))
+    assert patch["verdict"].verdict_type == "degraded"
+    assert "대본에 verdict가 없다" in patch["verdict"].caveats
+    assert patch["llm_errors"] == []
+
+
+# ── 인과 사슬의 형태는 코드가 정한다 (규율 4·6) ──────────────────────
+
+def test_인과_사슬의_형태는_코드가_정한다():
+    many = [cause("a", "t-1.e1", confidence="low"), cause("b", "t-1.e1"), cause("a", "t-1.e1"),
+            cause("  ", "t-1.e1"), cause("c", "t-1.e1"), cause("d", "t-1.e1")]
+    got = sanitize_verdict(verdict(
+        root_cause=cause(" sink ", "t-1.e1", confidence="high", relation="x" * 400),
+        alternates=many, contributing=[cause("api", "t-1.e1", confidence="medium")]))
+    assert got.root_cause.component == "sink"
+    assert got.root_cause.confidence is None and got.contributing[0].confidence is None
+    assert len(got.root_cause.relation) == 300 and got.root_cause.relation.endswith("…")
+    assert [a.component for a in got.alternates] == ["a", "b", "c"][:MAX_ALTERNATES]
+    assert "sink" not in [a.component for a in got.alternates]
+    assert any("후보 정리" in c and "d" in c for c in got.caveats)
+
+
+def test_바뀐_것이_없으면_같은_객체다():
+    v = verdict(alternates=[cause("api", "t-1.e1", confidence="low")])
+    assert sanitize_verdict(v) is v
+
+
+# ── verify: LLM 없는 검사 ────────────────────────────────────────────
+
+def _problems(v: Verdict, *, citable=("t-1.e1",), incomplete=(), ok=lambda c: True):
+    return verify_verdict(v, citable=set(citable), incomplete=set(incomplete), component_ok=ok)
+
+
+def test_verify는_리드가_본_증거만_인용으로_친다():
+    """우주는 `state.evidence`다 — Store 전체가 아니다(규율 3)."""
+    assert _problems(verdict()) == []
+    got = _problems(verdict(root_cause=cause("sink", "t-1.e1", "t-9.e1")))
+    assert got == ["없는 id t-9.e1 인용 (sink)"]
+
+
+def test_후보와_기여_요인의_인용도_검사한다():
+    got = _problems(verdict(alternates=[cause("api", "ghost.e1", confidence="low")],
+                            contributing=[cause("processor")]))
+    assert "없는 id ghost.e1 인용 (api)" in got
+    assert "다리에 인용 없음: processor" in got
+
+
+def test_잘린_증거로_주장하면_caveat에_그_id가_있어야_한다():
+    bad = verdict(root_cause=cause("sink", "t-1.e1"))
+    assert _problems(bad, incomplete=("t-1.e1",)) == ["불완전 증거 t-1.e1가 caveat에 명시되지 않음"]
+    ok = verdict(root_cause=cause("sink", "t-1.e1"), caveats=["t-1.e1은 표본이 잘려 상한 밖은 못 봤다"])
+    assert _problems(ok, incomplete=("t-1.e1",)) == []
+    # 토큰 경계 — `t-1.e1`이 `t-1.e10` 안에 있다고 명시된 것이 아니다.
+    near = verdict(root_cause=cause("sink", "t-1.e1"), caveats=["t-1.e10만 잘렸다"])
+    assert _problems(near, incomplete=("t-1.e1",)) != []
+
+
+def test_component는_토폴로지나_증거에_있어야_한다():
+    """지어낸 서비스 이름이 판정의 최상위에 올라오면 보고서가 없는 부품을 가리킨다 —
+    `찾지 않고 이름을 댔다`(태스크)의 판정판이다."""
+    known = {"sink", "alarm_events"}
+    good = verdict(root_cause=cause("sink", "t-1.e1"), alternates=[cause("alarm_events", "t-1.e1", confidence="low")])
+    assert _problems(good, ok=lambda c: c in known) == []
+    bad = verdict(root_cause=cause("alarm-svc", "t-1.e1"))
+    assert _problems(bad, ok=lambda c: c in known) == ["증거에도 토폴로지에도 없는 component 'alarm-svc'"]
+
+
+async def test_verify_노드의_component_우주는_토폴로지와_본_증거다(case):
+    """`EngineDeps.components`(서비스 이름)와 증거 본문·그래프 이름을 합쳐 본다. 대본 경로
+    (`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 안 본다."""
+    state = _state(case, evidence=[_ev("t-1.e1", body="collection alarm_events 6건")],
+                   verdict=verdict(root_cause=cause("alarm_events", "t-1.e1"),
+                                   alternates=[cause("sink", "t-1.e1", confidence="low"),
+                                               cause("ghost-svc", "t-1.e1", confidence="low")]))
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    patch = await nodes["verify"](state)
+    assert patch["verify_problems"] == ["증거에도 토폴로지에도 없는 component 'ghost-svc'"]
+    loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
+    assert (await loose["verify"](state))["verify_problems"] == []
+
+
+async def test_첫_실패는_재작성을_요구하고_두_번째_실패는_강등한다(case):
+    """한 번은 되묻는다(decisions ⑯). 두 번째도 안 되면 **없는 인용을 걷어내고** 낮은 확신으로
+    통과시킨다 — 세 번째는 없다. 근거가 전부 사라진 최상위는 `inconclusive`가 된다
+    (`_accept_hypotheses`가 근거 잃은 supported를 open으로 되돌리는 것과 같은 규칙)."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink", "api"})))
+    bad = verdict(root_cause=cause("sink", "ghost.e1"),
+                  alternates=[cause("api", "t-1.e1", "ghost.e2", confidence="low")])
+    first = await nodes["verify"](_state(case, verdict=bad))
+    assert first["verify_problems"] and first["verify_attempts"] == 1
+    assert "verdict" not in first
+    assert any(e.startswith("verify:") for e in first["llm_errors"])
+    assert route_after_verify(CaseState.model_validate({**_state(case).model_dump(), **first})) == "conclude"
+
+    second = await nodes["verify"](_state(case, verdict=bad, verify_attempts=1,
+                                          verify_problems=first["verify_problems"]))
+    got = second["verdict"]
+    assert second["verify_problems"] == []
+    assert got.confidence == "low" and got.verdict_type == "inconclusive"
+    assert got.root_cause is None
+    assert got.alternates[0].evidence_ids == ["t-1.e1"]        # 없는 id만 걷어냈다
+    assert any("검증 미통과" in c for c in got.caveats)
+    assert any("sink" in c for c in got.caveats)               # 걷어낸 최상위를 적는다
+    assert route_after_verify(CaseState.model_validate({**_state(case).model_dump(), **second})) == "__end__"
+
+
+async def test_통과하면_판정을_건드리지_않는다(case):
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    patch = await nodes["verify"](_state(case, verdict=verdict()))
+    assert patch == {"verify_problems": []}
+
+
+async def test_판정이_없으면_verify는_빈손으로_통과한다(case):
+    nodes = make_nodes(deps_for(ScriptedRunner()))
+    assert (await nodes["verify"](_state(case)))["verify_problems"] == []
+
+
+# ── 배선 ─────────────────────────────────────────────────────────────
+
+def test_라우터들(case):
+    assert route_after_integrate(_state(case, decision="continue")) == "select"
+    assert route_after_integrate(_state(case, decision="conclude")) == "conclude"
+    assert route_after_frame(_state(case, stopped_by=None)) == "select"
+    # frame이 죽어도 **판정(degraded)은 남아야** 한다 — END로 바로 가면 판정 없는 끝이 생긴다.
+    assert route_after_frame(_state(case, stopped_by="llm_error")) == "conclude"
+
+
+def _runner():
+    return ScriptedRunner({"t-1": TaskOutcome(task_id="t-1", status="ok", summary="봤다",
+                                              evidence=[_ev("t-1.e1")])})
+
+
+async def _conclude_now(state):
+    return {"decision": "conclude"}
+
+
+async def test_그래프가_판정까지_돈다(case):
+    concluder = Concluder({"verdict": verdict()})
+    deps = deps_for(_runner(), first_tasks=[task("t-1")], integrate=_conclude_now,
+                    conclude=concluder, components=frozenset({"sink"}))
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert final["stopped_by"] == "decision"
+    assert final["verdict"].verdict_type == "data_loss"
+    assert final["verify_problems"] == [] and final["verify_attempts"] == 0
+    assert len(concluder.calls) == 1 and concluder.calls[0].evidence[0].id == "t-1.e1"
+
+
+async def test_frame이_죽어도_판정은_남는다(case):
+    async def dead(state):
+        return {"llm_errors": ["frame: 2회 시도 실패 — 429"], "decision": "conclude",
+                "stopped_by": "llm_error"}
+
+    concluder = Concluder()
+    deps = deps_for(_runner(), conclude=concluder)
+    deps = dataclasses.replace(deps, frame=dead)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert final["stopped_by"] == "llm_error"
+    assert final["verdict"].verdict_type == "degraded"
+    assert concluder.calls == []
+
+
+async def test_재작성_한_번_뒤_통과한다(case):
+    """첫 판정이 없는 id를 인용했다 → verify가 되묻는다 → 두 번째 판정이 통과한다.
+    되물을 때 판정자는 **문제 목록이 실린 State**를 받는다."""
+    concluder = Concluder({"verdict": verdict(root_cause=cause("sink", "ghost.e1"))},
+                          {"verdict": verdict()})
+    deps = deps_for(_runner(), first_tasks=[task("t-1")], integrate=_conclude_now,
+                    conclude=concluder, components=frozenset({"sink"}))
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert len(concluder.calls) == 2
+    assert concluder.calls[1].verify_problems == ["없는 id ghost.e1 인용 (sink)"]
+    assert final["verdict"].root_cause.evidence_ids == ["t-1.e1"]
+    assert final["verdict"].confidence == "high"
+    assert final["verify_problems"] == [] and final["verify_attempts"] == 1
+
+
+async def test_상한으로_끝나도_판정이_있다(case):
+    concluder = Concluder({"verdict": Verdict(verdict_type="inconclusive", confidence="low",
+                                              narrative="못 가렸다")})
+    deps = deps_for(_runner(), first_tasks=[task("t-1")], max_rounds=2, conclude=concluder)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert final["stopped_by"] in ("max_rounds", "no_runnable")
+    assert final["verdict"].verdict_type == "inconclusive"

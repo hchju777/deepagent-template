@@ -24,6 +24,8 @@ State를 못 본다 — 공유 카운터를 두면 같은 번호가 두 번 나�
 from datetime import datetime
 from typing import Literal
 
+from pydantic import model_validator
+
 from src.domain.base import StrictModel
 
 # 서브에이전트 역할(11b). 10a는 이 값을 읽지 않지만, 태스크에 역할이 없으면
@@ -109,3 +111,47 @@ class Case(StrictModel):
     @property
     def site(self) -> str:
         return f"{self.gbm}/{self.fct}"
+
+
+# ── 판정 (12a) ──────────────────────────────────────────────────────
+#
+# `degraded`는 **코드만 찍는 낙인**이다 — "조사가 안 돌았다"(리드 LLM 실패·증거 0건·판정을 못
+# 받음)를 "조사했는데 못 가렸다"(`inconclusive`)와 가르기 위한 값이라, 리드가 고르면 뜻이
+# 사라진다. 리드가 낼 수 있는 집합은 `lead.ConcludeReply`가 이 하나를 뺀 것이다.
+VerdictType = Literal["logic_bug", "data_loss", "config_error", "stale_data",
+                      "external", "inconclusive", "degraded"]
+Confidence = Literal["high", "medium", "low"]
+
+
+class CauseLink(StrictModel):
+    """인과 사슬의 다리 하나 — 부품과 그 근거.
+
+    `component`는 토폴로지의 서비스 이름이거나 **리드가 본 증거에 나온 자원 이름**이어야 한다.
+    verify가 그걸 검사한다 — 태스크의 "찾지 않고 이름을 댔다"가 판정에서는 "없는 부품을
+    가리켰다"가 되고, 보고서가 그 이름을 그대로 싣기 때문이다.
+    """
+
+    component: str
+    evidence_ids: list[str]
+    # 기여 요인: 근본 원인과의 관계 / 후보: 왜 후보이고 왜 최상위가 아닌가.
+    relation: str | None = None
+    # 후보(alternates) 전용. 최상위의 신뢰도는 `Verdict.confidence` 하나다 — 둘 다 두면
+    # 보고서가 두 값을 보인다. root_cause·contributing에서는 코드가 None으로 만든다.
+    confidence: Confidence | None = None
+
+
+class Verdict(StrictModel):
+    verdict_type: VerdictType
+    root_cause: CauseLink | None = None
+    alternates: list[CauseLink] = []          # 최상위 다음의 후보들, 유력한 순
+    contributing: list[CauseLink] = []
+    confidence: Confidence
+    recommendations: list[str] = []
+    caveats: list[str] = []
+    narrative: str
+
+    @model_validator(mode="after")
+    def _conclusive_needs_root_cause(self):
+        if self.verdict_type not in ("inconclusive", "degraded") and self.root_cause is None:
+            raise ValueError("결론이 있는 판정에는 root_cause가 필요하다")
+        return self

@@ -238,3 +238,18 @@ def test_템플릿_이름을_채운_값은_증거에_없는_이름이_아니다(
     reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "hb:sink"})]})
     text = "\n".join(digest(_file(prompt, reply)))
     assert "증거에 없는 이름" not in text, text
+
+
+def test_conclude_트레이스는_판정을_한_줄로_찍는다():
+    """판정 턴의 응답은 태스크가 아니다 — integrate처럼 읽으면 "리드가 낸 것 (없음)"으로 보인다."""
+    prompt = "<모은 증거>\n- t-1.e1 | redis.get key='k' | 512\n</모은 증거>\n{}"
+    reply = json.dumps({"verdict_type": "data_loss", "confidence": "high", "narrative": "n",
+                        "root_cause": {"component": "sink", "evidence_ids": ["t-1.e1", "ghost.e1"]},
+                        "alternates": [{"component": "api", "evidence_ids": ["t-1.e1"], "confidence": "low"}],
+                        "contributing": []})
+    text = "\n".join(digest(_file(prompt, reply, name="07-r5-conclude.md")))
+    assert "판정 : data_loss high" in text
+    assert "원인 sink" in text and "후보 api" in text
+    assert "증거에 없는 id ghost.e1" in text
+    assert "리드가 낸 것" not in text
+    assert "예시가 보여준 것" not in text and "이미 물은 것" not in text   # 읽기를 내는 턴이 아니다

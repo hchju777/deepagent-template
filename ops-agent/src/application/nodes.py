@@ -15,7 +15,9 @@
 | 증거 인용 검사 | `_accept_hypotheses` — 실재하지 않는 id를 걷어낸다 |
 | 태스크 id 재사용 | `_accept_tasks` — 이미 있는 id는 안 받는다 |
 | **같은 질의 반복** | `_accept_tasks` — `action`+`params`가 같으면 안 받는다 |
-| 예외 흡수 | `execute` 최외곽 |
+| 예외 흡수 | `execute`·`conclude` 최외곽 |
+| **판정은 항상 생긴다** | `conclude` — 조사가 안 돌았으면 LLM을 묻지 않고 `degraded` |
+| **판정의 인용·부품 검사** | `verify` — LLM 없음. 한 번 되묻고, 그래도 안 되면 걷어내고 강등 |
 
 ## 노드는 `(state) -> dict`다
 
@@ -30,12 +32,13 @@ LangGraph 타입을 아는 것은 `graph.py` 하나뿐이고, 여기는 State를
 라우터는 그걸 읽기만 한다 — 판단과 배선이 갈린다.
 """
 import json
+import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from src.application.state import CaseState, merge_by_id
 from src.domain.actions import DISCOVERED_ARGS, describe, name_known
-from src.domain.case import Case, Hypothesis, PlanTask
+from src.domain.case import Case, CauseLink, Hypothesis, PlanTask, Verdict
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
 # 이 자리에 리드 LLM(`lead.make_lead`)이나 테스트의 대본이 들어온다.
@@ -65,6 +68,12 @@ class EngineDeps:
     # 매 판 그랬다), 그 숫자로는 블록의 효과를 잴 수 없다. 그래프가 없으면 빈 문자열이라
     # 검사는 예전과 같다.
     known_names: str = ""
+    # 12a — 판정자. 리드 경로에서는 `lead.make_lead`의 셋째 함수, 대본 경로에서는 대본의 `verdict`.
+    # None이면 conclude가 "판정자가 없다"는 degraded를 찍는다 — 조용히 None 판정이 아니다.
+    conclude: NodeFn | None = None
+    # 판정의 `component`가 가리킬 수 있는 부품 — 토폴로지의 서비스 이름. 증거 본문과 그래프
+    # 이름(`known_names`)은 `_universe`가 더하므로 여기엔 서비스만 온다.
+    components: frozenset = frozenset()
 
 
 # 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
@@ -397,7 +406,8 @@ def make_nodes(deps: EngineDeps) -> dict:
             return {**patch, "decision": "conclude", "stopped_by": "no_runnable"}
         return {**patch, "decision": "continue", "round": state.round + 1}
 
-    return {"frame": frame, "select": select, "execute": execute, "integrate": integrate}
+    return {"frame": frame, "select": select, "execute": execute, "integrate": integrate,
+            **make_verdict_nodes(deps)}
 
 
 def route_after_frame(state: CaseState) -> str:
@@ -406,8 +416,11 @@ def route_after_frame(state: CaseState) -> str:
     흘려보내면 select가 0건 → integrate가 LLM을 **또** 부르고, 또 죽고, 끝난 이유가
     `no_runnable`로 덮여 "조사할 게 없었다"가 된다. LLM이 안 붙은 것과 볼 게 없는
     것은 완전히 다른 사실이고, 12a가 그 둘을 갈라 적는다.
+
+    END가 아니라 conclude로 간다 — 죽은 조사에도 판정(degraded)은 남아야 한다. conclude는
+    `llm_error`를 보고 LLM을 묻지 않는다.
     """
-    return "__end__" if state.stopped_by else "select"
+    return "conclude" if state.stopped_by else "select"
 
 
 def route_after_select(state: CaseState):
@@ -428,4 +441,202 @@ def route_after_select(state: CaseState):
 
 
 def route_after_integrate(state: CaseState) -> str:
-    return "select" if state.decision == "continue" else "__end__"
+    return "select" if state.decision == "continue" else "conclude"
+
+
+# ── 12a — 판정 ───────────────────────────────────────────────────────
+
+MAX_ALTERNATES = 3        # 상한은 코드가 쥔다(규율 6) — 보고서가 읽히는 길이의 한계
+MAX_RELATION_CHARS = 300  # LLM 산문에는 길이 상한이 없다
+VERIFY_REWRITES = 1       # 되묻기는 한 번(decisions ⑯) — 세 번째는 없다
+
+
+def degraded(narrative: str, caveats=()) -> Verdict:
+    """"조사 실패"의 판정. **코드만 만든다** — 리드 어휘에는 없다(`lead.ConcludeReply`)."""
+    return Verdict(verdict_type="degraded", confidence="low", narrative=narrative,
+                   caveats=list(caveats))
+
+
+def _clean_link(link: CauseLink, *, own_confidence: bool) -> CauseLink:
+    relation = link.relation
+    if relation is not None and len(relation) > MAX_RELATION_CHARS:
+        relation = relation[:MAX_RELATION_CHARS - 1] + "…"
+    return link.model_copy(update={
+        "component": link.component.strip(), "relation": relation,
+        # 최상위·기여 요인의 confidence는 항상 None — 최상위의 신뢰도는 Verdict.confidence다.
+        "confidence": link.confidence if own_confidence else None})
+
+
+def sanitize_verdict(verdict: Verdict) -> Verdict:
+    """인과 사슬의 **형태**는 코드가 정한다(규율 4·6) — 후보 상한·중복·빈 부품, relation 길이,
+    최상위·기여 요인의 confidence.
+
+    거부가 아니라 소독인 이유: validator로 거부하면 후보 하나가 중복됐다고 판정 전체가
+    degraded("판정을 못 받았다")로 떨어진다. 버린 후보는 caveat에 남긴다. 바뀐 것이 없으면
+    같은 객체를 돌려준다.
+    """
+    root = _clean_link(verdict.root_cause, own_confidence=False) if verdict.root_cause else None
+    contributing = [_clean_link(c, own_confidence=False) for c in verdict.contributing]
+    seen = {root.component} if root is not None else set()
+    kept, dropped = [], []
+    for link in verdict.alternates:
+        link = _clean_link(link, own_confidence=True)
+        if not link.component:
+            dropped.append("(빈 부품)")
+            continue
+        if link.component in seen or len(kept) >= MAX_ALTERNATES:
+            dropped.append(link.component)
+            continue
+        seen.add(link.component)
+        kept.append(link)
+    caveats = verdict.caveats + (
+        [f"후보 정리: {', '.join(dropped)} 제외(중복·빈 부품 또는 상한 {MAX_ALTERNATES} 초과)"]
+        if dropped else [])
+    cleaned = verdict.model_copy(update={"root_cause": root, "contributing": contributing,
+                                         "alternates": kept, "caveats": caveats})
+    return verdict if cleaned == verdict else cleaned
+
+
+def _links(verdict: Verdict) -> list[CauseLink]:
+    # 후보·기여 요인도 리드가 인용한 id다(규율 3) — 최상위만 검사하면 후보가 환각 id를 실은 채
+    # 보고서에 나간다.
+    return ([verdict.root_cause] if verdict.root_cause is not None else []) \
+        + list(verdict.alternates) + list(verdict.contributing)
+
+
+def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
+    """caveat 안에 증거 id가 **토큰 경계**로 있는가 — `t-1.e1`은 `t-1.e10` 안에 있는 것이 아니다.
+
+    경계는 ASCII로 본다 — 정규식의 단어 문자(w)는 한글도 포함해서 "t-1.e1은 잘렸다"의 조사(은)가 id에 붙어
+    "명시하지 않았다"가 된다.
+    """
+    pattern = re.compile(rf"(?<![A-Za-z0-9_.-]){re.escape(evidence_id)}(?![A-Za-z0-9_-])")
+    return any(pattern.search(c) for c in caveats)
+
+
+def verify_verdict(verdict: Verdict, *, citable: set[str], incomplete: set[str],
+                   component_ok: Callable[[str], bool]) -> list[str]:
+    """LLM 없는 검사. 인용 우주는 **`state.evidence`**(리드가 실제로 본 것)다 — Store 전체를
+    기준으로 삼으면 리드가 본 적도 없는 id를 인용해도 통과한다(규율 3).
+
+    1. 다리마다 인용이 있어야 하고, 인용한 id는 전부 실재해야 한다.
+    2. 잘린 표본(`complete=False`)으로 주장했으면 caveat에 그 id를 적어야 한다 — 잘린 표본으로는
+       "없다"를 주장할 수 없고, 그 사실이 보고서에 남아야 한다.
+    3. `component`는 토폴로지나 본 증거에 있는 이름이어야 한다 — 없는 부품을 가리키는 판정은
+       보고서가 없는 것을 고치라고 적는다.
+    """
+    problems = []
+    for link in _links(verdict):
+        if not link.evidence_ids:
+            problems.append(f"다리에 인용 없음: {link.component}")
+            continue
+        for evidence_id in link.evidence_ids:
+            if evidence_id not in citable:
+                problems.append(f"없는 id {evidence_id} 인용 ({link.component})")
+            elif evidence_id in incomplete and not _id_mentioned(evidence_id, verdict.caveats):
+                problems.append(f"불완전 증거 {evidence_id}가 caveat에 명시되지 않음")
+    for link in _links(verdict):
+        if not component_ok(link.component):
+            problems.append(f"증거에도 토폴로지에도 없는 component {link.component!r}")
+    return problems
+
+
+def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str]) -> Verdict:
+    """재작성도 실패한 판정 — **없는 인용을 걷어내고** 낮은 확신으로 통과시킨다.
+
+    근거가 전부 사라진 다리는 뺀다. 최상위가 그러면 `inconclusive`가 된다 —
+    `_accept_hypotheses`가 근거를 잃은 supported를 open으로 되돌리는 것과 같은 규칙이다.
+    근거 없는 단정이 "확신 low"를 달고 보고서에 나가는 것보다 낫다.
+    """
+    def strip(link: CauseLink) -> CauseLink:
+        return link.model_copy(update={"evidence_ids": [e for e in link.evidence_ids if e in citable]})
+
+    dropped: list[str] = []
+    alternates, contributing = [], []
+    for kind, source, sink in (("후보", verdict.alternates, alternates),
+                               ("기여 요인", verdict.contributing, contributing)):
+        for link in source:
+            kept = strip(link)
+            (sink.append if kept.evidence_ids else lambda _: dropped.append(f"{kind} {link.component}"))(kept)
+    root = strip(verdict.root_cause) if verdict.root_cause is not None else None
+    verdict_type = verdict.verdict_type
+    if root is not None and not root.evidence_ids:
+        dropped.append(f"최상위 {root.component}")
+        root, verdict_type = None, "inconclusive"
+    caveats = verdict.caveats + ["검증 미통과: " + "; ".join(problems)] + (
+        [f"근거 없는 다리 제외: {', '.join(dropped)}"] if dropped else [])
+    return verdict.model_copy(update={
+        "verdict_type": verdict_type, "root_cause": root, "alternates": alternates,
+        "contributing": contributing, "confidence": "low", "caveats": caveats})
+
+
+def _component_ok(state: CaseState, deps: EngineDeps) -> Callable[[str], bool]:
+    # 대본 경로(`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 검사하지 않는다 —
+    # 태스크의 "찾지 않고 이름을 댔다"와 같은 스위치다.
+    if not deps.check_discovery:
+        return lambda component: True
+    universe = _universe(state, deps)
+    return lambda component: component in deps.components or name_known(component, universe)
+
+
+def make_verdict_nodes(deps: EngineDeps) -> dict:
+    async def conclude(state: CaseState) -> dict:
+        """판정. **조사가 어떻게 끝났든 Verdict가 생긴다.**
+
+        코드가 먼저 가르는 둘은 LLM을 묻지 않는다 — 리드가 응답하지 못해 끝났으면 죽은 LLM을
+        한 번 더 부르는 것이고(성공하면 안 돈 조사에 판정이 생긴다), 증거가 0건이면 인용할
+        것이 없어 어떤 판정도 근거가 없다. 둘 다 "미확정"이 아니라 **조사 실패**다.
+        """
+        if state.stopped_by == "llm_error":
+            return {"verdict": degraded("조사 실패 — 리드 LLM이 응답하지 못해 조사가 돌지 않았다",
+                                        caveats=state.llm_errors)}
+        if not state.evidence:
+            return {"verdict": degraded(
+                "조사 실패 — 읽기가 하나도 성공하지 않아 판정할 재료가 없다",
+                caveats=[f"{t.id}: {t.error or '원인 불명'}" for t in state.plan_tasks
+                         if t.status == "error"])}
+        if deps.conclude is None:
+            return {"verdict": degraded("판정 불가 — 이 경로에는 판정자가 배선되지 않았다",
+                                        caveats=["판정자 없음 — 리드 경로는 lead.make_lead, "
+                                                 "대본 경로는 대본의 verdict"])}
+        try:
+            reply = await deps.conclude(state)
+        except Exception as exc:                                    # noqa: BLE001
+            # 판정자는 LLM 어댑터를 품고 있다. 여기서 죽으면 케이스가 investigating으로 남는다.
+            reply = {"llm_errors": [f"conclude: {type(exc).__name__}: {exc}"]}
+        notes = list(reply.get("llm_errors", []))
+        verdict = reply.get("verdict")
+        if verdict is None:
+            # "판정 없음"이 아니라 degraded — 보고서가 "판정 불가"를 적는다. LLM 쪽 사유는
+            # llm_errors에도 남아 프롬프트가 안 먹히고 있는 것이 보이고, 대본의 "판정을 안 실었다"
+            # 같은 비LLM 사유(`note`)는 caveat에만 남는다 — 리드 계약 위반으로 세면 거짓 양성이다.
+            reasons = notes + ([str(reply["note"])] if reply.get("note") else [])
+            return {"verdict": degraded("판정 불가 — 판정자가 판정을 주지 않았다", caveats=reasons),
+                    "llm_errors": notes}
+        return {"verdict": sanitize_verdict(verdict), "llm_errors": notes}
+
+    async def verify(state: CaseState) -> dict:
+        """LLM 없는 가드레일. 노드는 raise하지 않는다."""
+        verdict = state.verdict
+        if verdict is None:
+            # conclude가 항상 verdict를 만들지만, 그래프 변경·재개 엣지에 대한 방어다.
+            return {"verify_problems": []}
+        citable = state.evidence_ids()
+        incomplete = {e.id for e in state.evidence if not e.complete}
+        problems = verify_verdict(verdict, citable=citable, incomplete=incomplete,
+                                  component_ok=_component_ok(state, deps))
+        if not problems:
+            return {"verify_problems": []}
+        if state.verify_attempts < VERIFY_REWRITES:
+            # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.
+            return {"verify_problems": problems, "verify_attempts": state.verify_attempts + 1,
+                    "llm_errors": [f"verify: {p}" for p in problems]}
+        return {"verdict": demote_verdict(verdict, problems, citable=citable),
+                "verify_problems": [],
+                "llm_errors": [f"verify: 재작성 뒤에도 미통과 — 걷어내고 강등 ({len(problems)}건)"]}
+
+    return {"conclude": conclude, "verify": verify}
+
+
+def route_after_verify(state: CaseState) -> str:
+    return "conclude" if state.verify_problems else "__end__"

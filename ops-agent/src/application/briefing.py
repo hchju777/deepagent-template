@@ -641,3 +641,80 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
             "rejected": rejected_block(state),
             "round": str(state.round),
             "max_rounds": str(max_rounds)}
+
+
+# ── 12a — 판정 턴의 재료 ──────────────────────────────────────────────
+
+CONCLUDE_SLOTS = frozenset({"case", "flow", "hypotheses", "tasks", "evidence", "ended",
+                            "rewrite", "components", "example"})
+# 판정 턴에는 부를 읽기가 없다 — `{actions}`를 요구하면 운영이 빈 목록을 넣어 통과시킨다.
+# 대신 `{evidence}`가 없으면 리드는 인용할 것을 못 본다.
+CONCLUDE_REQUIRED = ("case", "evidence", "example")
+
+_ENDED = {"decision": "리드가 끝냈다(원인이 충분히 좁혀졌다고 판단)",
+          "max_rounds": "라운드 상한에 닿았다 — 억지 결론 대신 미확정을 허용한다",
+          "no_runnable": "더 볼 것이 없었다(낼 읽기가 남지 않았다)",
+          "llm_error": "리드 LLM이 응답하지 못했다"}
+
+
+def ended_line(state: CaseState) -> str:
+    """조사가 **왜** 끝났는지를 사람 말로. `stopped_by` 값을 그대로 보이면 리드는 그 토큰을 판정에
+    베낀다. 태스크 오류율을 같이 적는다 — 실패한 읽기가 많은 조사의 "없다"는 약하다."""
+    reason = _ENDED.get(state.stopped_by or "", state.stopped_by or "아직 안 끝났다")
+    errors = sum(1 for t in state.plan_tasks if t.status == "error")
+    return (f"라운드 {state.round}에서 끝났다 — {reason}. "
+            f"태스크 오류 {errors}/{len(state.plan_tasks)}건")
+
+
+def rewrite_block(state: CaseState) -> str:
+    """verify가 남긴 문제 — 되물을 때만 실린다. 문제 없는 첫 판정에 빈 머리말을 두면 리드가
+    "고칠 것"을 지어낸다."""
+    if not state.verify_problems:
+        return ""
+    return ("## 재작성\n\n앞의 판정은 검증을 통과하지 못했다. 아래를 고쳐 **다시** 쓰라 — "
+            "없는 id는 빼고, 없는 부품은 증거에 있는 이름으로 바꾸고, 잘린 증거는 caveats에 적어라.\n"
+            + "\n".join(f"- {_oneline(p)}" for p in state.verify_problems))
+
+
+def components_line(services: tuple[str, ...]) -> str:
+    """`component`에 쓸 수 있는 이름 — 토폴로지에서 **생성**한다(손으로 적으면 ⑮를 어긴다)."""
+    tail = "위 <모은 증거>에 나온 자원 이름(컬렉션·토픽·키)"
+    if not services:
+        return tail + " 또는 <데이터 흐름>의 서비스 이름"
+    return "서비스 " + ", ".join(services) + " — 또는 " + tail
+
+
+def verdict_example() -> str:
+    """판정 JSON의 틀. **예시가 곧 출력이다** — `degraded`를 보여 주면 리드가 베낀다(그건 코드의
+    낙인이다). `verdict_type` 자리는 값이 아니라 고를 목록이라 그대로 두면 검증이 거부하고 수리
+    재시도가 "그중 하나를 적어라"를 전한다."""
+    body = {
+        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | inconclusive 중 하나>",
+        "root_cause": {"component": "위 component 후보 중 하나",
+                       "evidence_ids": ["위 <모은 증거>에 실제로 있는 id"]},
+        "alternates": [{"component": "위 component 후보 중 하나",
+                        "evidence_ids": ["위 <모은 증거>에 실제로 있는 id"],
+                        "confidence": "low",
+                        "relation": "왜 후보이고 왜 최상위가 아닌가 (한국어)"}],
+        "contributing": [],
+        "confidence": "<high | medium | low 중 하나>",
+        "recommendations": ["사람이 할 조치 (한국어)"],
+        "caveats": ["잘린 증거(⚠)로 주장했다면 그 증거 id를 여기 적는다"],
+        "narrative": "인과 사슬을 한 문단으로 — 무엇이 어디서 멈춰 증상이 됐나 (한국어)",
+    }
+    return json.dumps(body, ensure_ascii=False, indent=2)
+
+
+def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 12000,
+                    services: tuple[str, ...] = (),
+                    flow_graph: dict | None = None) -> dict[str, str]:
+    return {"case": case_block(state, site_config=site_config),
+            "flow": flow_block(state, flow_graph,
+                               texts=(origin_line(state.case, site_config) or "",)),
+            "hypotheses": hypotheses_block(state),
+            "tasks": tasks_block(state),
+            "evidence": evidence_block(state, budget=evidence_budget),
+            "ended": ended_line(state),
+            "rewrite": rewrite_block(state),
+            "components": components_line(tuple(services)),
+            "example": verdict_example()}

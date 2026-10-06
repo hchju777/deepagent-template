@@ -31,7 +31,7 @@ from pydantic import ValidationError
 from src.application.nodes import EngineDeps
 from src.application.state import CaseState, Decision
 from src.domain.base import StrictModel
-from src.domain.case import Case, Hypothesis, PlanTask
+from src.domain.case import Case, Hypothesis, PlanTask, Verdict
 
 
 class ScriptRound(StrictModel):
@@ -47,6 +47,9 @@ class Script(StrictModel):
     hypotheses: list[Hypothesis] = []
     tasks: list[PlanTask] = []
     rounds: list[ScriptRound] = []
+    # 12a — conclude가 낼 판정. 없으면 "대본에 판정이 없다"가 남고 코드가 degraded를 찍는다 —
+    # 대본으로도 verify(인용·부품 검사)가 실제로 도는 것을 보기 위해서다.
+    verdict: Verdict | None = None
 
 
 def strip_comments(node):
@@ -96,10 +99,17 @@ class ScriptedPlan:
         return {"decision": step.decision, "plan_tasks": list(step.tasks),
                 "hypotheses": list(step.hypotheses)}
 
+    async def conclude(self, state: CaseState) -> dict:
+        if self._script.verdict is None:
+            # LLM 오류가 아니다 — 대본이 판정을 안 실은 것. 코드가 degraded를 찍되 계약 위반으로 안 센다.
+            return {"note": "대본에 verdict가 없다"}
+        return {"verdict": self._script.verdict}
+
 
 def build_deps(script: Script, *, runner, investigation) -> EngineDeps:
     plan = ScriptedPlan(script)
     return EngineDeps(runner=runner, frame=plan.frame, integrate=plan.integrate,
+                      conclude=plan.conclude,
                       max_rounds=investigation.max_rounds,
                       parallel_width=investigation.parallel_width,
                       max_tasks=investigation.max_tasks,

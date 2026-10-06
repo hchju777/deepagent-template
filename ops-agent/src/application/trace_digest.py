@@ -127,7 +127,7 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
     out.append(f"  리드가 본 것 : 태스크 {_count(_block(prompt, '지금까지의 태스크'))}"
                f" · 증거 {_count(evidence)}(잘림 {evidence.count('⚠ 표본이 잘렸다')})"
                f" · 버려진 것 {_count(rejected)}")
-    if not brief:
+    if not brief and node != "conclude":
         out.append("  이미 물은 것(증거에 보임) : "
                    + ("  ".join(sorted(_clip(q) for q in visible)) or "(없음)"))
         out.append("  예시가 보여준 것 : "
@@ -138,6 +138,10 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
                    f"{len(reply):,}자, {_peek(reply)})")
         return out
     body = parsed.data if isinstance(parsed.data, dict) else {}
+    if node == "conclude":
+        # 판정 턴의 답은 태스크가 아니다 — integrate처럼 읽으면 "리드가 낸 것 (없음)"이 된다.
+        out.append("  " + _verdict_line(body, evidence))
+        return out
     hyps = [h for h in body.get("hypotheses", []) if isinstance(h, dict)]
     if node == "frame":
         # frame의 가설엔 아직 판정도 인용도 없다 — `?(인용 0)`은 없는 결함처럼 읽힌다.
@@ -262,3 +266,30 @@ def _block(prompt: str, tag: str) -> str:
 def _count(block: str) -> int:
     """`- `로 시작하는 줄의 수. 내용은 세지 않는다 — 비밀이 섞일 수 있다."""
     return sum(1 for line in block.splitlines() if line.startswith("- "))
+
+
+def _verdict_line(body: dict, evidence: str) -> str:
+    """판정 한 줄 — 종류·확신·다리들, 그리고 **증거 블록에 없는 id**. 증거 내용은 안 찍는다."""
+    known = {line.split(" | ")[0][2:].strip() for line in evidence.splitlines()
+             if line.startswith("- ") and " | " in line}
+
+    def bridge(label, raw):
+        if not isinstance(raw, dict):
+            return None
+        ids = [str(i) for i in raw.get("evidence_ids") or []]
+        return f"{label} {raw.get('component', '?')}(인용 {len(ids)})", [i for i in ids if i not in known]
+
+    parts, ghosts = [], []
+    for label, raw in (("원인", body.get("root_cause")),
+                       *(("후보", a) for a in body.get("alternates") or []),
+                       *(("기여", c) for c in body.get("contributing") or [])):
+        got = bridge(label, raw)
+        if got:
+            parts.append(got[0])
+            ghosts += got[1]
+    line = f"판정 : {body.get('verdict_type', '?')} {body.get('confidence', '?')}"
+    if parts:
+        line += " · " + " · ".join(parts)
+    if ghosts:
+        line += f" · **증거에 없는 id {', '.join(ghosts)}**"
+    return line

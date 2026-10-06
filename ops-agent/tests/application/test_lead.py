@@ -33,7 +33,7 @@ PROMPTS = {"frame": FRAME_PROMPT, "integrate": INTEGRATE_PROMPT}
 def leads(*replies, max_rounds=3, llm=None, site=None):
     """대본 LLM을 물린 `(frame, integrate)`와 그 LLM을 함께 돌려준다."""
     llm = llm or ScriptedAdapter(list(replies), clock=lambda: T0)
-    frame, integrate = lead.make_lead(llm, site_config=site or site_config(),
+    frame, integrate, _ = lead.make_lead(llm, site_config=site or site_config(),
                                       prompts=PROMPTS, max_rounds=max_rounds)
     return frame, integrate, llm
 
@@ -44,6 +44,21 @@ def reply(**body) -> str:
 
 TASK = {"id": "t-1", "goal": "어떤 컬렉션이 있는지 본다", "role": "data_prober",
         "action": "mongo.list_collections", "params": {}}
+# 12a — 판정 턴의 답. component는 **증거에 나온 이름**이어야 verify를 지난다(t-1이 본 컬렉션).
+VERDICT = {"verdict_type": "data_loss", "confidence": "high", "narrative": "원천 컬렉션이 비었다",
+           "root_cause": {"component": "bb_state", "evidence_ids": ["t-1.e1"]},
+           "alternates": [], "contributing": [], "recommendations": ["원천 적재를 확인한다"],
+           "caveats": []}
+INCONCLUSIVE = {"verdict_type": "inconclusive", "confidence": "low", "narrative": "못 가렸다"}
+
+
+def shipped_prompts() -> dict[str, str]:
+    """배포되는 템플릿 셋. 이 파일의 `PROMPTS`는 자리가 최소라 블록이 실리는지는 이걸로 본다."""
+    from pathlib import Path
+
+    folder = Path(__file__).resolve().parents[2] / "config" / "prompts"
+    return {name: (folder / f"investigate-{name}.md").read_text(encoding="utf-8")
+            for name in ("frame", "integrate", "conclude")}
 
 
 
@@ -53,8 +68,8 @@ async def test_심볼_인덱스가_있을_때만_역질문_action이_프롬프�
     state = CaseState(case=case)
     for code_index, want in ((True, True), (False, False)):
         llm = ScriptedAdapter([reply(hypotheses=[], tasks=[TASK])], clock=lambda: T0)
-        frame, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
-                                  services=("sink",), code_index=code_index)
+        frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                     services=("sink",), code_index=code_index)
         await frame(state)
         assert ("- code.uses(name)" in llm.prompts[0]) is want and ("- code.callers(name)" in llm.prompts[0]) is want
 
@@ -503,7 +518,7 @@ async def test_트레이스가_시도마다_날것을_건넨다(case):
     """
     seen = []
     llm = ScriptedAdapter(["쓰레기", reply(tasks=[TASK])], clock=lambda: T0)
-    frame, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS,
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS,
                               max_rounds=3,
                               trace=lambda *row: seen.append(row))
     await frame(CaseState(case=case, round=2))
@@ -521,7 +536,7 @@ async def test_트레이스가_던져도_조사는_계속된다(case):
     def explode(*_):
         raise OSError("No space left on device")
 
-    frame, _ = lead.make_lead(
+    frame, _, _ = lead.make_lead(
         ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0),
         site_config=site_config(), prompts=PROMPTS, max_rounds=3, trace=explode)
     patch = await frame(CaseState(case=case))
@@ -650,7 +665,8 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
                      tasks=[TASK]),
                reply(decision="conclude", hypotheses=[
                    {"id": "h-1", "statement": "파생 집계가 비어 있다",
-                    "status": "refuted", "refuting_ids": ["t-1.e1"]}])]
+                    "status": "refuted", "refuting_ids": ["t-1.e1"]}]),
+               reply(**VERDICT)]
     monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
                         lambda cfg, *, clock, warn=None: ScriptedAdapter(
                             replies, clock=clock))
@@ -663,6 +679,11 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     assert "끝난 이유: decision" in out
     assert "h-1 [refuted]" in out
     assert "t-1" in out and "t-1.e1" in out
+    # 12a — 판정 **블록**이 출력에 보이고(진단의 한 줄 요약과 다르다 — 서술·권고는 블록에만 있다),
+    # 인용 검증을 통과했다.
+    assert "판정 data_loss (high) — 원천 컬렉션이 비었다" in out
+    assert "원인 bb_state  (t-1.e1)" in out and "권고 원천 적재를 확인한다" in out
+    assert "검증 통과" in out
 
 
 def test_CLI가_돈_조사와_못_돈_조사를_같은_등급으로_보지_않는다(tmp_path, capsys, monkeypatch):
@@ -685,10 +706,16 @@ def test_CLI가_돈_조사와_못_돈_조사를_같은_등급으로_보지_않�
     assert main() == 0, capsys.readouterr().err
     capsys.readouterr()
 
+    # 없는 증거 인용은 거부 → 그 자리에서 되묻는다(⑯). 되물은 답(셋째)이 integrate의 답이 되고,
+    # 그다음이 판정 턴이다.
     replies = [reply(tasks=[TASK]),
                reply(decision="conclude", hypotheses=[
                    {"id": "h-1", "statement": "집계가 비었다", "status": "refuted",
-                    "refuting_ids": ["t-1.e1", "없는-증거.e1"]}])]
+                    "refuting_ids": ["t-1.e1", "없는-증거.e1"]}]),
+               reply(decision="conclude", hypotheses=[
+                   {"id": "h-1", "statement": "집계가 비었다", "status": "refuted",
+                    "refuting_ids": ["t-1.e1"]}]),
+               reply(**INCONCLUSIVE)]
     monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
                         lambda cfg, *, clock, warn=None: ScriptedAdapter(replies, clock=clock))
     monkeypatch.setattr("sys.argv", [
@@ -796,7 +823,8 @@ def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path
     assert main() == 0, capsys.readouterr().err
     capsys.readouterr()
 
-    replies = ["설명을 먼저 드리자면", reply(tasks=[TASK]), reply(decision="conclude")]
+    replies = ["설명을 먼저 드리자면", reply(tasks=[TASK]), reply(decision="conclude"),
+               reply(**INCONCLUSIVE)]
     monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
                         lambda cfg, *, clock, warn=None: ScriptedAdapter(replies, clock=clock))
     monkeypatch.setattr("sys.argv", [
@@ -807,14 +835,15 @@ def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path
 
     folder = tmp_path / "traces" / "c-1"
     files = sorted(f for f in folder.glob("*.md") if f.name != "summary.md")
-    assert len(files) == 3                       # frame 2회(재시도) + integrate 1회
+    assert len(files) == 4                       # frame 2회(재시도) + integrate 1회 + conclude 1회
     # 진단도 파일로 남는다 — 사람이 터미널에서 옮겨 적지 않아도 되게.
     assert "진단" in (folder / "summary.md").read_text(encoding="utf-8")
     first = files[0].read_text(encoding="utf-8")
     assert "설명을 먼저 드리자면" in first          # 날것이 남는다
     assert "못 읽었다" in first
     assert "mongo.list_collections" in first     # 물어본 프롬프트도 통째로
-    assert "트레이스 3건" in capsys.readouterr().out
+    assert "트레이스 4건" in capsys.readouterr().out
+    assert files[-1].name.endswith("-conclude.md")      # 판정 턴도 같은 트레이스에 남는다
 
 
 # ── 거부 뒤 되묻기 — 배선 ────────────────────────────────────────────
@@ -837,7 +866,7 @@ async def test_거부되면_같은_프롬프트에_사유를_얹어_되묻는다
     other = {**TASK, "id": "t-2", "action": "kafka.list_topics"}
     llm = ScriptedAdapter([reply(decision="continue", tasks=[dup]),
                            reply(decision="continue", tasks=[other])], clock=lambda: T0)
-    _, integrate = lead.make_lead(llm, site_config=site_config(), prompts=shipped,
+    _, integrate, _ = lead.make_lead(llm, site_config=site_config(), prompts=shipped,
                                   max_rounds=5)
     nodes = make_nodes(_deps(integrate, max_rounds=5))
     done = PlanTask.model_validate({**TASK, "status": "ok"})
@@ -853,7 +882,7 @@ async def test_역할이_리드_프롬프트까지_간다(case):
     """`make_lead(roles=)`가 배선돼 있는지 — 브리핑 단위 테스트만으로는 CLI가 넘기는
     값이 프롬프트에 닿는지 안 보인다."""
     llm = ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0)
-    frame, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
                               services=("api",), roles={"api": "저장된 것을 API 응답으로 바꾼다"})
     await frame(CaseState(case=case))
     assert "api — 저장된 것을 API 응답으로 바꾼다" in llm.prompts[0]
@@ -900,3 +929,97 @@ async def test_모양이_틀린_가설만_버린다(case):
     assert [h.id for h in patch["hypotheses"]] == ["h-1"]
     assert any("h-2" in e for e in patch["llm_errors"])
 
+
+# ── 12a — conclude ──────────────────────────────────────────────────
+
+def _ended(case, **over) -> CaseState:
+    from src.domain.case import Hypothesis
+
+    body = {"round": 2, "stopped_by": "decision", "decision": "conclude",
+            "hypotheses": [Hypothesis(id="h-1", statement="원천이 비었다", status="supported",
+                                      supporting_ids=["t-1.e1"])],
+            "evidence": [EvidenceRef(id="t-1.e1", source="mongo.list_collections",
+                                     summary="컬렉션 1개", body="bb_state")]}
+    body.update(over)
+    return CaseState(case=case, **body)
+
+
+async def test_conclude가_판정_JSON을_Verdict로_받고_프롬프트에_본_것만_싣는다(case):
+    seen = []
+    llm = ScriptedAdapter([reply(**VERDICT)], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(),
+                                    max_rounds=3, services=("sink", "api"),
+                                    trace=lambda node, *_: seen.append(node))
+    patch = await conclude(_ended(case))
+    assert patch["verdict"].root_cause.component == "bb_state"
+    assert patch["verdict"].recommendations == ["원천 적재를 확인한다"]
+    assert "stopped_by" not in patch and patch["llm_errors"] == []
+    prompt = llm.prompts[0]
+    assert "t-1.e1" in prompt and "h-1" in prompt and "원천이 비었다" in prompt
+    assert "sink" in prompt and "api" in prompt            # component로 쓸 수 있는 서비스 이름
+    assert SECRET not in prompt and "mongodb://" not in prompt
+    assert seen == ["conclude"]
+
+
+async def test_degraded_판정은_LLM이_못_낸다(case):
+    """`degraded`는 "조사 실패"라는 **코드의 낙인**이다. 리드가 내면 어휘 위반이라 수리 재시도로
+    가고, 그래도 내면 판정 없이 사유만 남는다(노드가 degraded를 찍는다)."""
+    # root_cause를 실어 보낸다 — 없으면 "결론엔 root_cause가 필요하다"가 먼저 거부해 어휘 검사가 안 보인다.
+    bad = reply(**{**VERDICT, "verdict_type": "degraded"})
+    llm = ScriptedAdapter([bad, bad], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(),
+                                    max_rounds=3)
+    patch = await conclude(_ended(case))
+    assert "verdict" not in patch
+    assert any("verdict_type" in e for e in patch["llm_errors"])
+    assert len(llm.prompts) == 2 and "다시" in llm.prompts[1]
+
+
+async def test_판정_프롬프트가_없으면_판정_없이_사유를_남긴다(case):
+    llm = ScriptedAdapter([reply(**VERDICT)], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await conclude(_ended(case))
+    assert "verdict" not in patch and "프롬프트" in patch["llm_errors"][0]
+    assert llm.prompts == []
+
+
+async def test_되물을_때는_verify의_문제가_프롬프트에_실린다(case):
+    llm = ScriptedAdapter([reply(**VERDICT)], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(),
+                                    max_rounds=3)
+    await conclude(_ended(case, verify_attempts=1,
+                          verify_problems=["없는 id ghost.e1 인용 (sink)"]))
+    assert "재작성" in llm.prompts[0] and "ghost.e1" in llm.prompts[0]
+    llm2 = ScriptedAdapter([reply(**VERDICT)], clock=lambda: T0)
+    _, _, conclude2 = lead.make_lead(llm2, site_config=site_config(), prompts=shipped_prompts(),
+                                     max_rounds=3)
+    await conclude2(_ended(case))
+    assert "재작성" not in llm2.prompts[0]
+
+
+async def test_곁다리_키는_걷어내고_기록한다_판정도(case):
+    llm = ScriptedAdapter([reply(**VERDICT, score=0.9)], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(),
+                                    max_rounds=3)
+    patch = await conclude(_ended(case))
+    assert patch["verdict"].verdict_type == "data_loss"
+    assert any("score" in e for e in patch["llm_errors"])
+
+
+def test_판정_프롬프트는_actions_자리가_없어도_되고_evidence_자리는_있어야_한다(tmp_path):
+    """판정 턴에는 부를 읽기가 없다 — `{actions}`를 요구하면 운영이 빈 목록을 넣어 통과시킨다.
+    대신 `{evidence}`가 없으면 리드는 인용할 것을 못 본다."""
+    import pytest
+
+    from src.__main__ import _load_lead_prompt
+    from src.application import briefing
+
+    good = tmp_path / "c.md"
+    good.write_text("{case}\n{evidence}\n{example}\n", encoding="utf-8")
+    assert _load_lead_prompt(tmp_path, "c.md", slots=briefing.CONCLUDE_SLOTS,
+                             required=briefing.CONCLUDE_REQUIRED)
+    (tmp_path / "bad.md").write_text("{case}\n{example}\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _load_lead_prompt(tmp_path, "bad.md", slots=briefing.CONCLUDE_SLOTS,
+                          required=briefing.CONCLUDE_REQUIRED)
+    assert "{evidence}" in str(caught.value)

@@ -26,14 +26,14 @@ import asyncio
 import re
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from src.application import briefing
 from src.application.schemas import Parsed, parse_object, validate
 from src.application.state import CaseState
 from src.domain.actions import role_for
 from src.domain.base import StrictModel
-from src.domain.case import Hypothesis, PlanTask
+from src.domain.case import CauseLink, Hypothesis, PlanTask, Verdict
 from src.domain.llm import LlmPort
 
 RETRIES = 1
@@ -90,6 +90,31 @@ class IntegrateReply(StrictModel):
     tasks: list[dict] = []
     # 모델이 설명을 덧붙이고 싶어 하는 자리. 없으면 지어내서 다른 칸에 넣는다.
     note: str = Field(default="", max_length=2000)
+
+
+class ConcludeReply(StrictModel):
+    """판정 턴의 답 — `Verdict`와 같은 모양이되 `verdict_type`에 **`degraded`가 없다.**
+
+    `degraded`는 "조사가 안 돌았다"는 코드의 낙인이다. 리드가 내면 어휘 위반이라 `validate`가
+    거부하고 수리 재시도로 간다 — 그래도 내면 판정 없이 사유만 남고 노드가 degraded를 찍는다.
+    """
+
+    verdict_type: Literal["logic_bug", "data_loss", "config_error", "stale_data",
+                          "external", "inconclusive"]
+    root_cause: CauseLink | None = None
+    alternates: list[CauseLink] = []
+    contributing: list[CauseLink] = []
+    confidence: Literal["high", "medium", "low"]
+    recommendations: list[str] = []
+    caveats: list[str] = []
+    narrative: str
+
+    @model_validator(mode="after")
+    def _conclusive_needs_root_cause(self):
+        # `Verdict`와 같은 규칙을 여기서도 — 그래야 수리 재시도가 "root_cause가 필요하다"를 전한다.
+        if self.verdict_type != "inconclusive" and self.root_cause is None:
+            raise ValueError("결론이 있는 판정에는 root_cause가 필요하다 — 모르면 inconclusive")
+        return self
 
 
 def repair_prompt(prompt: str, reason: str) -> str:
@@ -201,7 +226,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
               evidence_budget: int = 12000, trace=None,
               services: tuple[str, ...] = (), roles: dict[str, str] | None = None,
               flow_graph: dict | None = None, code_index: bool = False):
-    """`EngineDeps`의 `frame`·`integrate` 자리에 꽂을 두 함수를 만든다.
+    """`EngineDeps`의 `frame`·`integrate`·`conclude` 자리에 꽂을 세 함수를 만든다.
 
     `services`는 대상 코드(11a)가 준비됐을 때만 채워진다. 비어 있으면 `code.*`가
     목록에도 예시에도 안 나온다 — 없는 문을 열라고 적어 두면 리드가 거기로 가고,
@@ -248,4 +273,20 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                 "hypotheses": hypotheses, "plan_tasks": tasks,
                 "llm_errors": _dropped_note("integrate", got) + h_notes + t_notes}
 
-    return frame, integrate
+    async def conclude(state: CaseState) -> dict:
+        """판정 턴. 실패는 `verdict` 없이 사유만 — degraded를 찍는 것은 노드다(코드의 낙인)."""
+        template = prompts.get("conclude")
+        if template is None:
+            return {"llm_errors": ["conclude: 프롬프트가 없다 — app.json의 "
+                                   "investigation.conclude_prompt"]}
+        prompt = fill(template,
+                      briefing.conclude_fields(state, site_config=site_config,
+                                               evidence_budget=evidence_budget,
+                                               services=services, flow_graph=flow_graph))
+        got = await ask_json(llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))
+        if not got.ok:
+            return {"llm_errors": [f"conclude: {got.error}"]}
+        return {"verdict": Verdict.model_validate(got.data),
+                "llm_errors": _dropped_note("conclude", got)}
+
+    return frame, integrate, conclude

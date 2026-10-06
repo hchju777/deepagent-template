@@ -93,3 +93,21 @@ def test_무엇이_잘렸는지_말한다(case):
     assert "잘린 것 1건" in text
     assert "✂ code.config api" in text
     assert text.count("✂") == 1, "안 잘린 것까지 적으면 신호가 뜻을 잃는다"
+
+
+def test_판정_줄이_있다(case):
+    """12a — 진단은 보고서(12b)의 재료라 판정과 검증 결과도 한 줄로 센다."""
+    from src.domain.case import CauseLink, Verdict
+
+    none = CaseState(case=case, round=1, stopped_by="llm_error")
+    assert "판정 없음" in block(none)
+    done = CaseState(case=case, round=3, stopped_by="decision", verify_attempts=1,
+                     verdict=Verdict(verdict_type="data_loss", confidence="medium", narrative="n",
+                                     root_cause=CauseLink(component="sink", evidence_ids=["t-1.e1"])))
+    text = block(done)
+    assert "판정 data_loss (medium) · 원인 sink" in text
+    assert "재작성 1회" in text
+    low = CaseState(case=case, round=3, stopped_by="decision", verify_attempts=1,
+                    verdict=Verdict(verdict_type="inconclusive", confidence="low", narrative="n",
+                                    caveats=["검증 미통과: 없는 id x 인용"]))
+    assert "강등" in block(low)

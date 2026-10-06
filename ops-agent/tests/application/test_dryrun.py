@@ -207,6 +207,8 @@ async def test_사다리_대본이_게이트를_한_칸씩_거쳐_스텁으로_�
         initial_state(_ladder_script(), case_id="c-1", gbm="mx", fct="gumi", clock=clock))
     assert [e.id for e in final["evidence"]] == ["t-1.e1", "t-2.e1", "t-3.e1", "t-4.e1", "t-5.e1"]
     assert final["round"] >= 5 and final["llm_errors"] == []
+    # 12a — 판정이 없는 대본은 degraded로 끝나되 리드 계약 위반으로 세지 않는다.
+    assert final["verdict"].verdict_type == "degraded" and "대본에 verdict가 없다" in final["verdict"].caveats
     third = next(t for t in final["plan_tasks"] if t.id == "t-3")
     assert third.status == "ok" and "'recomputed': 2" in third.result_summary and "'match': True" in third.result_summary
     # 6d-2 — 넷째·다섯째 칸(uses → callers)도 스텁으로 끝까지 간다.
@@ -243,3 +245,55 @@ def test_CLI가_사다리_대본을_돈다(tmp_path, capsys, monkeypatch):
     assert "'recomputed': 2" in out and "'expected': 0" in out and "'match': False" in out
     assert "✅ t-4 [code_tracer]" in out and "✅ t-5 [code_tracer]" in out
     assert "t-1.e1" in out and "t-2.e1" in out and "t-3.e1" in out
+    assert "판정 " in out and "검증 통과" in out          # 12a — 대본의 판정이 출력까지 온다
+
+
+# ── 12a — 대본의 판정 ────────────────────────────────────────────────
+
+async def test_대본의_판정을_conclude가_내고_없으면_사유를_남긴다(case):
+    from src.domain.case import Verdict
+
+    with_verdict = Script.model_validate({
+        "symptom": "x", "verdict": {"verdict_type": "inconclusive", "confidence": "low",
+                                    "narrative": "대본이 정한 판정"}})
+    plan = ScriptedPlan(with_verdict)
+    patch = await plan.conclude(CaseState(case=case))
+    assert isinstance(patch["verdict"], Verdict) and patch["verdict"].narrative == "대본이 정한 판정"
+
+    bare = ScriptedPlan(Script.model_validate({"symptom": "x"}))
+    patch = await bare.conclude(CaseState(case=case))
+    assert "verdict" not in patch and "verdict" in patch["note"] and "llm_errors" not in patch
+
+
+def test_대본의_판정도_StrictModel이다(tmp_path):
+    with pytest.raises(SystemExit) as caught:
+        load_script(write(tmp_path, {"symptom": "x", "verdict": {
+            "verdict_type": "inconclusive", "confidence": "low", "narrative": "n", "score": 1}}))
+    assert "score" in str(caught.value)
+
+
+async def test_사다리_대본은_판정까지_가고_인용이_실재한다(clock):
+    """예제 대본의 판정이 verify를 **실제로** 지난다 — 인용 id가 그 대본이 만든 증거다."""
+    from pathlib import Path
+
+    from src.application.dryrun import build_deps, initial_state
+    from src.application.graph import build_engine
+    from src.application.runner_probe import ProbeRunner
+    from src.config.schema_app import InvestigationConfig
+    from src.infrastructure.factory import build_adapters
+    from tests.application.conftest import site_config
+
+    root = Path(__file__).resolve().parent.parent.parent
+    script = load_script(root / "examples" / "case-ladder.json")
+    seeds = json.loads((root / "examples" / "stub-seeds.json").read_text(encoding="utf-8"))
+    adapters = build_adapters(site_config(), clock=clock, seeds=seeds)
+    deps = build_deps(script, runner=ProbeRunner(adapters, clock=clock),
+                      investigation=InvestigationConfig(max_rounds=7, parallel_width=3))
+    final = await build_engine(deps).ainvoke(
+        initial_state(script, case_id="c-1", gbm="mx", fct="gumi", clock=clock))
+    assert final["verdict"] is not None and final["verdict"].verdict_type != "degraded"
+    assert final["verdict"].root_cause is not None
+    assert final["verify_problems"] == [] and final["verify_attempts"] == 0
+    cited = {i for link in [final["verdict"].root_cause, *final["verdict"].alternates,
+                            *final["verdict"].contributing] for i in link.evidence_ids}
+    assert cited and cited <= {e.id for e in final["evidence"]}

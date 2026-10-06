@@ -48,6 +48,7 @@ class InvestigationConfig(StrictModel):
     frame_prompt: str = Field(default="prompts/investigate-frame.md", min_length=1)
     integrate_prompt: str = Field(default="prompts/investigate-integrate.md",
                                   min_length=1)
+    conclude_prompt: str = Field(default="prompts/investigate-conclude.md", min_length=1)
 
 
 class AppConfig(StrictModel):

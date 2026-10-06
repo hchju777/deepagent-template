@@ -36,8 +36,8 @@ START → frame → select → (Send로 execute×N  |  0건이면 integrate)
 `execute → integrate`가 **고정 엣지**인 것이 barrier다. Send로 퍼진 가지가 전부
 끝나야 integrate가 한 번 돈다 — 라운드 경계가 거기서 생긴다.
 
-conclude·verify(12a)와 ask_human(13)은 아직 없다. integrate가 `conclude`를 고르면
-그냥 END로 간다.
+conclude·verify는 12a에서 붙었다([step-12a-verdict.md](step-12a-verdict.md)) — integrate가 `conclude`를
+고르면 판정으로 간다. ask_human(13)은 아직 없다.
 
 ## 코드가 쥔 것 / LLM이 쥘 것
 

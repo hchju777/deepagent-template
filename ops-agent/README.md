@@ -231,7 +231,7 @@ python -m src case list
 정상으로 관측돼야** 다시 열린다 — 안 그러면 안 고쳐진 문제로 3시간마다 케이스가 쌓인다.
 자세한 것은 [6a단계 문서](STEPS/step-06a-gate.md).
 
-열린 케이스는 `case investigate`로 조사한다(아래). 판정과 보고서는 아직 없다(12).
+열린 케이스는 `case investigate`로 조사하고 판정까지 낸다(아래). 보고서는 아직 없다(12b).
 
 ## 대상 코드
 
@@ -308,10 +308,13 @@ python -m src case investigate c-1 --trace            # 프롬프트·날것 응
 python -m src case investigate c-1 --stub-seeds examples/stub-seeds.json
 ```
 
-같은 울타리 안에서 `frame`·`integrate` 자리만 LLM으로 바뀐다.
+같은 울타리 안에서 `frame`·`integrate`·`conclude` 자리만 LLM으로 바뀐다.
 
 ```
   라운드 2 — 끝난 이유: decision
+  판정 data_loss (high) — 원천 컬렉션이 비었다
+    원인 bb_state  (t-1.e1)
+    검증 통과
   가설
     h-1 [refuted] 파생 집계가 비어 있다  (t-2.e1)
   태스크
@@ -328,7 +331,12 @@ id는 **State에 실재하는 것만** 남는다 — 환각한 인용을 그냥 
 근거로 다시 추론한다. LLM이 죽으면 `stopped_by="llm_error"`로 끝나고 종료 코드 1이다
 ("조사할 게 없었다"와 절대 같은 모양이 되면 안 된다).
 
-프롬프트는 `config/prompts/investigate-{frame,integrate}.md`에 있다 — 운영이 직접
+조사가 끝나면 **판정이 항상 생긴다**(12a) — 리드가 끝냈든 상한에 닿았든 LLM이 죽었든. 뒤의 둘은 LLM을
+묻지 않고 코드가 `degraded`(조사 실패)를 찍는다. 판정의 인용은 코드가 검사한다 — 리드가 본 증거에 없는
+id, 잘린 표본으로 한 주장, 토폴로지에도 증거에도 없는 부품 이름은 한 번 되묻고, 그래도 안 되면 걷어내고
+낮은 확신으로 통과시킨다. [12a단계 문서](STEPS/step-12a-verdict.md).
+
+프롬프트는 `config/prompts/investigate-{frame,integrate,conclude}.md`에 있다 — 운영이 직접
 고치는 파일이라 코드에 안 박았다. **`{example}` 자리의 예시는 코드가 만든다** —
 사내 모델로 재 보니 리드는 판단해서 고르는 게 아니라 **예시의 틀을 채운다**(`id`·
 `action`·`params`를 그대로 베끼고 `goal`만 바꿨다). 그러면 예시가 곧 출력이므로,
@@ -398,7 +406,7 @@ LLM이 숫자를 만들지 못하게 어떻게 막는지는 [9e단계 문서](ST
 | 11b | 코드 추적과 재계산 대조 (닫힌 action 레인) | 🔧 |
 | 11c | 데이터 흐름 그래프 (graphify 엔진 + 우리 오버레이) | ✅ |
 | 11d | 전역 심볼 인덱스 (2-pass, 확신 등급) | 🔧 |
-| 12a | conclude + verify | ⬜ |
+| 12a | conclude + verify | ✅ |
 | 12b | 조사 보고서와 이벤트 | ⬜ |
 | 13 | 사람 개입 (질문·재개) | ⬜ |
 | 14 | 데몬·워커 (lease·resume) | ⬜ |

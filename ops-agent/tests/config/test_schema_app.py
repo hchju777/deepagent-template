@@ -31,3 +31,8 @@ def test_라운드_상한_기본값은_6이다():
 
     assert InvestigationConfig().max_rounds == 6
 
+
+def test_판정_프롬프트_경로도_config에_있다():
+    """12a — 운영이 고치는 파일이라 코드에 박지 않는다(frame·integrate와 같은 자리)."""
+    cfg = InvestigationConfig()
+    assert cfg.conclude_prompt == "prompts/investigate-conclude.md"

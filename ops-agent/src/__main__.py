@@ -773,7 +773,8 @@ class _DryRunRepo:
         return f"(새 케이스 {self._fake})"
 
 
-def _load_lead_prompt(config_root: Path, relative: str, *, slots: frozenset) -> str:
+def _load_lead_prompt(config_root: Path, relative: str, *, slots: frozenset,
+                      required: tuple[str, ...] = ("case", "actions", "example")) -> str:
     """리드 프롬프트 하나. **자리가 안 맞으면 기동을 막는다.**
 
     두 방향 다 조용히 틀린다:
@@ -796,7 +797,7 @@ def _load_lead_prompt(config_root: Path, relative: str, *, slots: frozenset) -> 
     # `{example}`도 필수다. 사내 모델은 **예시의 틀을 채우는** 식으로 답하므로,
     # 예시가 없으면 베낄 것이 없어 형식이 매번 달라진다.
     problems = [f"{{{name}}} 자리가 없다 — 리드가 그 재료를 못 받는다"
-                for name in ("case", "actions", "example") if f"{{{name}}}" not in text]
+                for name in required if f"{{{name}}}" not in text]
     problems += [f"{{{name}}}는 우리가 채우지 않는 자리다 — 그대로 LLM에게 나간다. "
                  f"쓸 수 있는 것: {', '.join(sorted(slots))}"
                  for name in sorted(slots_in(text) - slots)]
@@ -839,13 +840,13 @@ def _make_tracer(case_id: str, *, folder: Path):
 
 
 def cmd_case_investigate(args, env) -> int:
-    """케이스 하나를 **리드 LLM으로** 조사한다.
+    """케이스 하나를 **리드 LLM으로** 조사하고 판정까지 낸다.
 
-    판정은 아직 없다(12a) — 여기까지는 "무엇을 볼지 LLM이 정하고, 보고, 다시
-    정한다"이다.
+    "무엇을 볼지 LLM이 정하고, 보고, 다시 정한다"(10b) 뒤에 conclude가 판정을 쓰고 verify가
+    인용을 검사한다(12a). 보고서·이벤트는 12b.
     """
     from src.application import briefing
-    from src.application.diagnose import diagnose
+    from src.application.diagnose import diagnose, verdict_lines
     from src.application.graph import build_engine
     from src.application.lead import make_lead
     from src.application.nodes import EngineDeps
@@ -872,7 +873,11 @@ def cmd_case_investigate(args, env) -> int:
                                          slots=briefing.FRAME_SLOTS),
                "integrate": _load_lead_prompt(args.config_root,
                                               app.investigation.integrate_prompt,
-                                              slots=briefing.INTEGRATE_SLOTS)}
+                                              slots=briefing.INTEGRATE_SLOTS),
+               "conclude": _load_lead_prompt(args.config_root,
+                                             app.investigation.conclude_prompt,
+                                             slots=briefing.CONCLUDE_SLOTS,
+                                             required=briefing.CONCLUDE_REQUIRED)}
 
     built = {}
     tracer, traced = (None, [])
@@ -890,7 +895,7 @@ def cmd_case_investigate(args, env) -> int:
         built["graph"] = graph_note
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
         try:
-            frame, integrate = make_lead(
+            frame, integrate, conclude = make_lead(
                 llm, site_config=site, prompts=prompts,
                 max_rounds=app.investigation.max_rounds,
                 evidence_budget=app.investigation.evidence_total_chars,
@@ -900,11 +905,12 @@ def cmd_case_investigate(args, env) -> int:
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars),
-                              frame=frame, integrate=integrate,
+                              frame=frame, integrate=integrate, conclude=conclude,
                               max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width,
                               max_tasks=app.investigation.max_tasks,
-                              known_names=flow.known_names(flow_graph))
+                              known_names=flow.known_names(flow_graph),
+                              components=frozenset(services))
             state = CaseState(case=Case(
                 id=record.id, gbm=gbm, fct=fct, origin="patrol",
                 symptom=record.symptom, t0=record.opened_at,
@@ -917,6 +923,7 @@ def cmd_case_investigate(args, env) -> int:
     print(f"  {record.site}  {record.id} — {record.symptom}")
     print(f"  {built['llm']}")
     print(f"  라운드 {final['round']} — 끝난 이유: {final['stopped_by']}\n")
+    print("\n".join(verdict_lines(CaseState.model_validate(final))) + "\n")
 
     if final["hypotheses"]:
         print("  가설")
@@ -1874,6 +1881,9 @@ def cmd_case_dryrun(args, env) -> int:
     print(f"  울타리: max_rounds={cfg.max_rounds} parallel_width={cfg.parallel_width} "
           f"max_tasks={cfg.max_tasks}")
     print(f"  라운드 {final['round']} — 끝난 이유: {final['stopped_by']}")
+    from src.application.diagnose import verdict_lines
+    from src.application.state import CaseState
+    print("\n".join(verdict_lines(CaseState.model_validate(final))))
     for task in final["plan_tasks"]:
         mark = {"ok": "✅", "error": "❌", "pending": "⬜", "running": "…"}.get(task.status, "?")
         detail = task.error or task.result_summary or "(실행 안 됨)"

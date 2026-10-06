@@ -259,6 +259,7 @@ def test_선언한_자리와_실제로_채우는_것이_같다(state):
     assert set(briefing.frame_fields(state, site_config=cfg)) == set(briefing.FRAME_SLOTS)
     assert set(briefing.integrate_fields(state, site_config=cfg, max_rounds=4)) \
         == set(briefing.INTEGRATE_SLOTS)
+    assert set(briefing.conclude_fields(state, site_config=cfg)) == set(briefing.CONCLUDE_SLOTS)
 
 
 # ── 예시 (`{example}`) — **이게 곧 다음 출력이다** ─────────────────────
@@ -654,7 +655,8 @@ def test_프롬프트가_모든_자리를_실제로_쓴다():
     from tests.support import REPO_ROOT
 
     for path, slots in (("investigate-frame.md", briefing.FRAME_SLOTS),
-                        ("investigate-integrate.md", briefing.INTEGRATE_SLOTS)):
+                        ("investigate-integrate.md", briefing.INTEGRATE_SLOTS),
+                        ("investigate-conclude.md", briefing.CONCLUDE_SLOTS)):
         text = (REPO_ROOT / "config" / "prompts" / path).read_text(encoding="utf-8")
         missing = sorted(slot for slot in slots if "{" + slot + "}" not in text)
         assert not missing, f"{path}가 안 쓰는 자리: {', '.join(missing)}"
@@ -1086,3 +1088,49 @@ def test_사다리_예시도_JSON이고_이_사이트에_없는_시스템을_안
     for tasks_done in ([_rest_done()], [_rest_done(), _trace_done()]):
         for t in _ladder(site(kafka=None), tasks_done, used=("rest.query", "code.trace")):
             assert not t["action"].startswith("kafka.")
+
+
+# ── 12a — 판정 턴의 재료 ────────────────────────────────────────────
+
+def test_판정_예시는_degraded를_안_보여주고_component_후보를_서비스에서_만든다(state):
+    """예시가 곧 출력이다. `degraded`를 보여 주면 리드가 베끼고, 그건 "조사 실패"라는 코드의 낙인을
+    리드가 찍는 꼴이다. component 후보는 토폴로지에서 생성한다 — 손으로 적으면 ⑮를 어긴다."""
+    fields = briefing.conclude_fields(state, site_config=site(), services=("sink", "api"))
+    example = fields["example"]
+    assert "degraded" not in example
+    assert "inconclusive" in example                 # 억지 결론 대신 고를 수 있는 값
+    assert "sink" in fields["components"] and "api" in fields["components"]
+    assert '"evidence_ids"' in example and "실제로 있는 id" in example
+    without = briefing.conclude_fields(state, site_config=site())["components"]
+    assert "sink" not in without and "증거" in without   # 서비스가 없으면 증거의 자원 이름만
+
+
+def test_재작성_블록은_문제가_있을_때만_실린다(case):
+    plain = CaseState(case=case, stopped_by="decision")
+    assert briefing.conclude_fields(plain, site_config=site())["rewrite"] == ""
+    redo = CaseState(case=case, stopped_by="decision", verify_attempts=1,
+                     verify_problems=["없는 id ghost.e1 인용 (sink)", "다리에 인용 없음: api"])
+    block = briefing.conclude_fields(redo, site_config=site())["rewrite"]
+    assert "재작성" in block and "ghost.e1" in block and "api" in block
+
+
+def test_조사가_끝난_이유를_사람_말로_적는다(case):
+    def ended(reason):
+        return briefing.conclude_fields(CaseState(case=case, round=4, stopped_by=reason),
+                                        site_config=site())["ended"]
+    assert "상한" in ended("max_rounds")
+    assert "더 볼 것" in ended("no_runnable")
+    assert "리드가" in ended("decision")
+    assert "4" in ended("max_rounds")
+
+
+def test_판정_재료의_증거_블록은_리드가_본_것이고_접속_정보가_없다(case):
+    state = CaseState(case=case, stopped_by="decision", plan_tasks=[
+        task("t-1", status="error", error="연결 실패")],
+        evidence=[EvidenceRef(id="t-1.e1", source="redis.get key='k'", summary="512",
+                              body="512", complete=False)])
+    fields = briefing.conclude_fields(state, site_config=site())
+    blob = "\n".join(fields.values())
+    assert "t-1.e1" in fields["evidence"] and "표본이 잘렸다" in fields["evidence"]
+    assert "1/1" in fields["ended"]                   # 태스크 오류율
+    assert SECRET not in blob and DATABASE not in blob

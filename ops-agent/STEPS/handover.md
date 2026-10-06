@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1419 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 310 사례 |
+| 테스트 | `1460 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 345 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -43,7 +43,7 @@
 코드에는 흔적이 없다.
 
 단계 번호는 [step-00의 로드맵 표](step-00-overview.md)가 단일 진실 소스다. 실행 순서는
-번호 순이 아니다 — 남은 것은 `11b → 12a → 12b → 13 → 6b → 14 → 15`.
+번호 순이 아니다 — 남은 것은 `12b → 13 → 6b → 14 → 15`(11b·11d·12a는 됐다).
 
 ### 대상 환경의 규모 — **사이트 28개**
 
@@ -378,7 +378,9 @@ process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브�
 `index_trace`)까지 됐고, 사내 대조가 150/6 그대로여서 6d-4a로 **11b 추적기와 parity를 지웠다 — 엔진은 하나다.**
 6d-4b 측정(8판, 10-06)으로 **11d를 닫았다** — 인덱스 사슬은 리드 프롬프트에서도 추적기 때와 글자까지 같고(T10),
 넷째·다섯째 칸은 대역이 재집계 칸을 안 밟아 **못 쟀으며**(T8 → backlog ⑩), 정답 8/8에 켬/끔 차이가 없었다(T9 — 이
-판은 쉽다). 다음은 **12a**(conclude + verify). 11d에서 미룬 것: 6b-3
+판은 쉽다). **12a(conclude + verify)를 했다**(10-06, [step-12a-verdict.md](step-12a-verdict.md)) — 판정은
+조사가 어떻게 끝나든 생기고(llm_error·증거 0건은 코드가 degraded), verify가 인용·잘린 증거·component를
+LLM 없이 검사해 한 번 되묻고 그래도 안 되면 걷어내고 강등한다. 다음은 **12b**(보고서·이벤트). 11d에서 미룬 것: 6b-3
 (구조적 구현체·DI 레지스트리·디스패치 표·하네스 D·graphify 병합), backlog ⑨·⑩. 시작하기 전에
 목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
 

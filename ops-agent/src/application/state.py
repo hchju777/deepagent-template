@@ -32,7 +32,7 @@ import operator
 from typing import Annotated, Literal
 
 from src.domain.base import StrictModel
-from src.domain.case import Case, EvidenceRef, Hypothesis, PlanTask
+from src.domain.case import Case, EvidenceRef, Hypothesis, PlanTask, Verdict
 
 Decision = Literal["continue", "conclude"]
 
@@ -66,6 +66,13 @@ class CaseState(StrictModel):
     # LLM이 죽거나 형식을 못 지킨 기록. **비어 있지 않으면 그 조사는 반쪽이다.**
     # 없으면 "아무것도 안 했다"가 "조사할 게 없었다"와 같은 모양이 된다.
     llm_errors: Annotated[list[str], operator.add] = []
+    # 12a — 조사가 **어떻게 끝났든** conclude가 채운다(상한·no_runnable·LLM 실패 전부).
+    # None은 "아직 안 끝났다"뿐이다.
+    verdict: Verdict | None = None
+    # verify가 남긴 문제. 비어 있지 않으면 conclude가 한 번 더 돈다(되묻기 — decisions ⑯).
+    # 두 번째도 실패하면 verify가 강등해 통과시키고 비운다 — 세 번째는 없다.
+    verify_problems: list[str] = []
+    verify_attempts: int = 0
 
     def evidence_ids(self) -> set[str]:
         """select 게이트가 보는 우주 — **리드가 실제로 본 것**뿐이다."""
