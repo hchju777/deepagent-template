@@ -221,6 +221,16 @@ class DeployedCodePort(ABC):
         다시 추적하지 않는다(⑥). 그래프가 없거나 그 끝점이 추적되지 않았으면 실패로 답한다."""
 
     @abstractmethod
+    async def callers(self, name: str) -> ProbeResult:
+        """이 함수를 누가 부르나 — 진입점까지(11d). `code graph`가 남긴 심볼 인덱스를 읽는다. 인덱스가 없거나
+        이름이 없거나 **여럿이면 실패로 답한다**(후보를 적어서) — 코드가 하나를 고르면 리드가 모르는 사이에 엉뚱한
+        함수를 본다."""
+
+    @abstractmethod
+    async def uses(self, name: str) -> ProbeResult:
+        """이 컬렉션·토픽·키·그룹을 누가 쓰고 읽나, 어느 진입점에서 오나(11d). 인덱스가 없거나 이름이 없으면 실패."""
+
+    @abstractmethod
     async def read(self, service: str, path: str) -> ProbeResult:
         """파일 하나. `path`는 `grep`이 돌려준 경로다."""
 

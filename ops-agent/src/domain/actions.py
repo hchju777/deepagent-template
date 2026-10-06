@@ -67,6 +67,11 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     # 인자 이름이 `endpoint`인 이유: 예비 측정에서 대역이 `target`에 서비스 이름을 넣었다 — 목록 한 줄이 리드가
     # 보는 시그니처 전부라, 이름이 곧 설명이다.
     "code.trace":          ("code",  "trace",         ("endpoint",),           ()),
+    # 역질문(11d) — "이 함수를 누가 부르나(진입점까지)", "이 컬렉션·토픽·키를 누가 쓰고 읽나". `name`은 code.trace·
+    # code.uses 출력이나 증거에 나온 이름 그대로(함수는 `Class.method` 끝부분이면 된다). 여럿이면 코드가 고르지
+    # 않고 후보를 돌려준다 — 그중 하나로 다시 낸다. 심볼 인덱스가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
+    "code.callers":        ("code",  "callers",       ("name",),               ()),
+    "code.uses":           ("code",  "uses",          ("name",),               ()),
     # ── 원천 재집계(11b 3b). `expect`는 앞선 증거 **안의 값 위치**(`{"evidence": "t-1.e1", "path":
     # "items[0].n"}`)다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다. 실행기
     # (`ProbeRunner`)가 가로채 자기가 보관한 원본에서 값을 꺼낸다. `_sanitize_task`가 `expect.evidence`를

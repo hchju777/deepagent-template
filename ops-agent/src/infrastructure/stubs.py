@@ -163,18 +163,32 @@ class StubKafkaInspector(KafkaInspectorPort):
 
 
 class StubDeployedCode(DeployedCodePort):
-    """`case dryrun`의 코드 자리. **seed의 `trace`만 안다** — 사슬 본문은 사람이 적은 그대로 돌려주고, 나머지
-    (services·config·grep·flow·read)는 지어내지 않고 없다고 한다. 대본이 rest → code.trace → recompute
-    사다리를 대상 레포 없이 밟아 보기 위한 것이지, 코드 읽기를 흉내내는 것이 아니다 — 지어낸 grep 결과는
-    리드(대본)에게 증거다."""
+    """`case dryrun`의 코드 자리. **seed의 `trace`·`uses`·`callers`만 안다** — 본문은 사람이 적은 그대로
+    돌려주고, 나머지(services·config·grep·flow·read)는 지어내지 않고 없다고 한다. 대본이 rest → code.trace →
+    recompute → code.uses → code.callers 사다리를 대상 레포 없이 밟아 보기 위한 것이지, 코드 읽기를 흉내내는
+    것이 아니다 — 지어낸 grep 결과는 리드(대본)에게 증거다."""
 
     def __init__(self, seeds: dict[str, Any] | None, *, clock: Clock):
-        self._trace = dict((seeds or {}).get("trace") or {})
+        seeds = seeds or {}
+        self._trace = dict(seeds.get("trace") or {})
+        self._uses = dict(seeds.get("uses") or {})
+        self._callers = dict(seeds.get("callers") or {})
         self._clock = clock
 
     def _none(self, source: str) -> ProbeResult:
-        return ProbeResult.failed("스텁에 준비된 응답이 없다 — seeds의 code 절은 trace만 받는다",
+        return ProbeResult.failed("스텁에 준비된 응답이 없다 — seeds의 code 절은 trace·uses·callers만 받는다",
                                   source=source, clock=self._clock)
+
+    def _seeded(self, table: dict, key: str, source: str, what: str) -> ProbeResult:
+        if key not in table:
+            return ProbeResult.failed(f"{key}: 스텁에 준비된 {what}이 없다", source=source, clock=self._clock)
+        return ProbeResult.succeeded(str(table[key]), source=source, clock=self._clock)
+
+    async def callers(self, name: str) -> ProbeResult:
+        return self._seeded(self._callers, name, f"stub-code:callers {name}", "부르는 곳")
+
+    async def uses(self, name: str) -> ProbeResult:
+        return self._seeded(self._uses, name, f"stub-code:uses {name}", "쓰는 곳")
 
     async def services(self) -> ProbeResult:
         return self._none("stub-code:services")
@@ -192,10 +206,7 @@ class StubDeployedCode(DeployedCodePort):
         return self._none(f"stub-code:read {service} {path}")
 
     async def trace(self, endpoint: str) -> ProbeResult:
-        source = f"stub-code:trace {endpoint}"
-        if endpoint not in self._trace:
-            return ProbeResult.failed(f"{endpoint}: 스텁에 준비된 사슬이 없다", source=source, clock=self._clock)
-        return ProbeResult.succeeded(str(self._trace[endpoint]), source=source, clock=self._clock)
+        return self._seeded(self._trace, endpoint, f"stub-code:trace {endpoint}", "사슬")
 
 
 class StubRestProber(RestProberPort):

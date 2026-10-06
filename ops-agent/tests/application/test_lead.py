@@ -46,6 +46,19 @@ TASK = {"id": "t-1", "goal": "어떤 컬렉션이 있는지 본다", "role": "da
         "action": "mongo.list_collections", "params": {}}
 
 
+
+async def test_심볼_인덱스가_있을_때만_역질문_action이_프롬프트에_실린다(case):
+    """6d-1 — `make_lead(code_index=…)`가 브리핑까지 간다. 인덱스가 없는데 목록에 두면 리드가 그 문을 두드리고
+    라운드를 잃는다(11b가 `code.trace`에서 겪은 것)."""
+    state = CaseState(case=case)
+    for code_index, want in ((True, True), (False, False)):
+        llm = ScriptedAdapter([reply(hypotheses=[], tasks=[TASK])], clock=lambda: T0)
+        frame, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                  services=("sink",), code_index=code_index)
+        await frame(state)
+        assert ("- code.uses(name)" in llm.prompts[0]) is want and ("- code.callers(name)" in llm.prompts[0]) is want
+
+
 # ── 정상 ───────────────────────────────────────────────────────────
 
 async def test_리드가_가설과_태스크를_낸다(case):

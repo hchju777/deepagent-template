@@ -56,3 +56,15 @@ async def test_스텁_코드는_seed의_사슬만_주고_나머지는_없다고_
         result = await call
         assert result.status == "error" and "스텁" in result.error
     assert (await StubDeployedCode(None, clock=_clock).trace("/summary/badge")).status == "error"
+
+
+async def test_스텁_코드는_seed의_callers와_uses도_그대로_준다():
+    """6d — 사다리의 넷째·다섯째 칸(uses → callers)을 대본으로 밟기 위해. 역시 적힌 것만 돌려준다."""
+    from src.infrastructure.stubs import StubDeployedCode
+
+    stub = StubDeployedCode({"uses": {"alarm_events": "alarm_events [collection]\n  쓰기 1:\n    sink.writer.run"},
+                             "callers": {"sink.writer.run": "대상 sink.writer.run\n부르는 곳이 없다"}}, clock=_clock)
+    assert (await stub.uses("alarm_events")).data.startswith("alarm_events [collection]")
+    assert (await stub.callers("sink.writer.run")).data.startswith("대상 sink.writer.run")
+    for result in (await stub.uses("nope"), await stub.callers("nope"), await stub.trace("/x")):
+        assert result.status == "error" and "스텁" in result.error

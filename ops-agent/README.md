@@ -246,6 +246,10 @@ python -m src code path <A> <B>     # A에서 B로 가는 호출 경로
 python -m src code uses <자원>      # 이 컬렉션·토픽·키를 쓰고 읽는 함수와 진입점
 ```
 
+`code callers`·`code uses`는 리드도 같은 이름으로 낸다(`code.callers(name)`·`code.uses(name)`) — 사람이 CLI로
+맞춰 본 답과 리드가 받는 답이 **같은 조립**이다. 둘은 `code graph`가 남긴 심볼 인덱스가 배포 커밋과 같을 때만
+목록에 나온다(그래프와 같은 규칙).
+
 조사가 "데이터가 이상하다"를 넘어 "왜 그런가"로 가려면 대상 서비스의 코드를 읽어야
 한다. 코드는 **GBM 단위로 같고**, 어느 커밋이 떠 있는지는
 `knowledge/deployment/<gbm>.json`이 말한다. 선언이 없으면 `main` 최신이라고
@@ -287,8 +291,8 @@ python -m src case dryrun --plan examples/case-dryrun.json --stub-seeds examples
 
 사다리 대본도 있다 — [`examples/case-ladder.json`](examples/case-ladder.json)은 REST 읽기 →
 `code.trace` → `recompute.count` 세 칸이 한 라운드에 하나씩 게이트를 지나는 것을 보여 준다.
-seeds의 `code` 절이 사슬을 대신한다(진짜 사슬은 `code graph`의 오버레이에서 온다). 마지막 칸이
-배지 0과 원천 2의 불일치를 기계의 증거로 남긴다.
+seeds의 `code` 절이 사슬을 대신한다(진짜 사슬은 `code graph`의 오버레이에서 온다; `trace` 외에 `uses`·`callers`도
+같은 모양으로 적을 수 있다). 마지막 칸이 배지 0과 원천 2의 불일치를 기계의 증거로 남긴다.
 
 ```bash
 python -m src case dryrun --plan examples/case-ladder.json --stub-seeds examples/stub-seeds.json

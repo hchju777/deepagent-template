@@ -237,6 +237,14 @@ def test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀�
     assert "- code.flow(name)" in with_graph["actions"]
     assert "code.trace" not in without["actions"] and "- code.trace(endpoint)" in with_graph["actions"]
     assert "mx.alarm.main" in with_graph["flow"] and without["flow"].startswith("(없음")
+    # 6d — 역질문 둘은 **심볼 인덱스**가 붙었을 때만. 그래프가 있어도 옛 번들엔 인덱스가 없을 수 있다.
+    assert "code.callers" not in with_graph["actions"] and "code.uses" not in with_graph["actions"]
+    with_index = briefing.frame_fields(state, site_config=cfg, services=("sink",), flow_graph=FLOW_GRAPH,
+                                       code_index=True)
+    assert "- code.callers(name)" in with_index["actions"] and "- code.uses(name)" in with_index["actions"]
+    later = briefing.integrate_fields(state, site_config=cfg, max_rounds=6, services=("sink",),
+                                      flow_graph=FLOW_GRAPH, code_index=True)
+    assert "- code.uses(name)" in later["actions"]
 
 
 # ── 자리 이름이 실제로 채워지는 것과 같은가 ────────────────────────

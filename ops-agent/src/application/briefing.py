@@ -548,10 +548,10 @@ def rejected_block(state: CaseState) -> str:
 def frame_fields(state: CaseState, *, site_config,
                  services: tuple[str, ...] = (),
                  roles: dict[str, str] | None = None,
-                 flow_graph: dict | None = None) -> dict[str, str]:
+                 flow_graph: dict | None = None, code_index: bool = False) -> dict[str, str]:
     return {"case": case_block(state, site_config=site_config),
             "actions": action_catalog(site_config, services=services, roles=roles,
-                                      hide=_hidden(flow_graph)),
+                                      hide=_hidden(flow_graph, code_index)),
             "example": example_block(site_config, phase="frame",
                                      start=next_task_number(state),
                                      services=services,
@@ -561,19 +561,25 @@ def frame_fields(state: CaseState, *, site_config,
                                texts=(origin_line(state.case, site_config) or "",))}
 
 
-def _hidden(flow_graph: dict | None) -> frozenset[str]:
-    # 그래프가 없으면 `code.flow`·`code.trace`를 목록에서 뺀다 — 없는 문을 열라고 적어 두면 리드가 거기로 간다.
-    return frozenset() if flow_graph is not None else frozenset({"code.flow", "code.trace"})
+def _hidden(flow_graph: dict | None, code_index: bool = False) -> frozenset[str]:
+    # 없는 문을 열라고 적어 두면 리드가 거기로 간다 — 그래프가 없으면 `code.flow`·`code.trace`를, 심볼 인덱스가
+    # 없으면(옛 번들) `code.callers`·`code.uses`를 목록에서 뺀다.
+    out: set[str] = set()
+    if flow_graph is None:
+        out |= {"code.flow", "code.trace"}
+    if not code_index:
+        out |= {"code.callers", "code.uses"}
+    return frozenset(out)
 
 
 def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      evidence_budget: int = 12000,
                      services: tuple[str, ...] = (),
                      roles: dict[str, str] | None = None,
-                     flow_graph: dict | None = None) -> dict[str, str]:
+                     flow_graph: dict | None = None, code_index: bool = False) -> dict[str, str]:
     return {"case": case_block(state, site_config=site_config),
             "actions": action_catalog(site_config, services=services, roles=roles,
-                                      hide=_hidden(flow_graph)),
+                                      hide=_hidden(flow_graph, code_index)),
             "flow": flow_block(state, flow_graph,
                                texts=(origin_line(state.case, site_config) or "",)),
             "example": example_block(site_config, phase="integrate",

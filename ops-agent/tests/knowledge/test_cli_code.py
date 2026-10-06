@@ -545,6 +545,30 @@ def test_조사에는_배포_커밋과_같은_그래프만_실린다(tmp_path, m
     assert stale is None and "낡음" in note
 
 
+def test_조사에는_신선한_번들의_심볼_인덱스도_실리고_낡으면_같이_빠진다(tmp_path, monkeypatch, capsys):
+    """6d-1 — 역질문(`code.callers`·`code.uses`)은 그래프와 같은 번들의 인덱스를 읽는다. 낡은 번들은 둘 다 None,
+    인덱스만 없는 옛 번들은 그래프는 싣되 인덱스 없음을 말한다(그러면 역질문이 목록에서 빠진다)."""
+    from src.__main__ import _code_if_ready
+    from src.config.loader import load_site_config
+
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _flow_tree(tmp_path)
+    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    site, _ = load_site_config(config_root, "mx", "gumi", env={})
+    ready = lambda: _code_if_ready(site, "mx", "gumi", knowledge_root=tmp_path / "knowledge",   # noqa: E731
+                                   clock=lambda: None, graph_dir=bundle)
+    code, _, graph, note = ready()
+    assert graph is not None and code.has_index() and "인덱스 없음" not in note
+    git("commit", "-q", "--allow-empty", "-m", "moved on", cwd=tmp_path / "checkout")   # 배포 커밋이 바뀌었다
+    code, _, graph, note = ready()
+    assert graph is None and not code.has_index() and "낡음" in note   # 인덱스 파일은 그대로 있어도 안 붙인다
+    _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    (bundle / "symbols.json").unlink()                                   # 6a 이전 번들 모양
+    code, _, graph, note = ready()
+    assert graph is not None and not code.has_index() and "심볼 인덱스 없음" in note
+
+
 def test_code_flow가_흐름_경로를_보여준다(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
     config_root = _flow_tree(tmp_path)

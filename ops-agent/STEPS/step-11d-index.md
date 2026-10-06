@@ -546,6 +546,28 @@ LineRows.execute (파일:L줄)`이 나왔다 — 스톱리스트가 끊은 바�
 **멈춤 규칙(합의, 10-05)**: 후속은 (a) 방금 낸 것의 버그이거나 (b) 그 단계의 종료 판단에 필요한 것일 때만.
 나머지는 backlog에 적고 다음 단계로 간다. 단계를 시작할 때 종료 판단이 무엇인지 먼저 적는다.
 
+## 6d — 리드 연결
+
+**종료 판단(시작할 때 적음, 10-06)**: ① `code.callers`·`code.uses`가 리드 action이고 로컬 측정판에서 리드가 실제로
+낸다(T8) ② `code.trace`가 `code graph` 때 인덱스에서 만들어지고 추적기는 돌지 않는다 — 사내 `code graph` 한 번의 두 엔진
+대조 줄이 150/6과 맞은 뒤 추적기를 지운다 ③ T8~T10을 한 번 잰다(켬/끔 각 3판, 11b와 같은 하네스). 셋이 되면 닫고,
+숫자가 어떻든 개선은 backlog로.
+
+### 6d-1 — action 등재·어댑터 ✅
+
+- `ACTIONS`에 `code.callers(name)`·`code.uses(name)`. 레인은 `code_tracer`(action 접두사로 정해진다, decisions ⑰).
+- `DeployedCodePort`에 둘을 추가. `DeployedCode`는 번들의 심볼 인덱스를 **그래프와 같은 신선도**로 붙인다
+  (`attach_index` — `_code_if_ready`가 그래프가 신선할 때만 `read_index`를 읽는다. 옛 번들엔 없어 "심볼 인덱스 없음"을
+  말하고, 그러면 역질문 둘이 목록에서 빠진다 — `briefing._hidden(flow_graph, code_index)`, `make_lead(code_index=)`).
+- **출력 조립은 CLI와 한 함수다** — `query.callers_lines`·`uses_lines`·`ambiguous_lines`·`entry_brief`로 내렸고
+  `code callers`·`code uses`가 그걸 부른다. 사람이 사내에서 CLI로 맞춰 본 답이 곧 리드가 받는 답이다(둘로 베끼면 한쪽이
+  먼저 어긋난다 — 규율 8과 같은 이유). 이름이 여럿이면 코드가 고르지 않고 후보를 적은 실패로 답한다(CLI와 같다).
+- `StubDeployedCode`가 seeds의 `uses`·`callers`도 받는다 — 6d-2의 dryrun 대본용.
+
+측정판에서 리드가 받는 답(`_code_if_ready` → `code.uses("alarm_events")`): 쓰기 1(sink의 `run`, 진입점 없음) · 읽기 2
+(api의 `count_recent` — 진입점 `summary_badge`(라우트), `recent_alarms` — 부르는 곳 없음). `code.callers("run")`은 두
+후보를 적은 실패. CLI 출력과 글자까지 같다.
+
 ## 커밋 계획 (넷)
 
 | | 내용 | 상태 |
@@ -565,7 +587,10 @@ LineRows.execute (파일:L줄)`이 나왔다 — 스톱리스트가 끊은 바�
 | 6c-2 후속 2 | 대조 줄이 자원마다 원인을 말한다(인덱스만: 닿은 경로·추정 여부 / 추적기만: 못 이은 호출·못 본 함수), `code trace`·`code flow`가 Git Bash가 바꾼 끝점 path를 되돌린다 | ✅ |
 | 6c-2 후속 3 | 대조가 같은 path의 핸들러 전부에서 출발. 사내 다름 7 판정(대조 버그 1 · 추적기 오탐 1 · 인덱스 맞음 1 · 인덱스 넘어감 1 · 같은 후보 엣지 3) | ✅ |
 | 6c-2 후속 4 | 이름만 같은 후보에 "부르는 모듈이 보는가"를 표시하고 센다 — **안 한다**, [backlog ⑨](backlog.md)로. 종료 판단에 필요하지 않다 | 보류 |
-| 6d | 리드 연결: `code.callers`·`code.uses`를 action으로 등재·브리핑 예시의 칸·`case dryrun`·측정 T8~T10, 사내 대조가 서면 `code.trace`를 인덱스로 옮기고 추적기 퇴역 | |
+| 6d-1 | `code.callers`·`code.uses` 등재 — 포트·어댑터(인덱스를 그래프와 같은 신선도로)·스텁, CLI와 같은 조립, 인덱스 없으면 목록에서 뺌 | ✅ |
+| 6d-2 | 브리핑 사다리 넷째·다섯째 칸(uses → callers, 이름은 코드가 고른다)·dryrun 대본 | |
+| 6d-3 | `code.trace`를 인덱스에서 — 함수별 미해석 호출을 심볼에 남겨 gap 유지, 두 엔진 대조 줄, 사내 150/6 확인 | |
+| 6d-4 | 추적기·parity 삭제, 측정 T8~T10 | |
 
 ## 사내에서 돌릴 것
 

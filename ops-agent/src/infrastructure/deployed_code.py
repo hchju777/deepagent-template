@@ -80,9 +80,57 @@ class DeployedCode(DeployedCodePort):
         # 흐름 그래프(오버레이). 생성자가 아니라 뒤에 붙이는 이유: 낡았는지 보려면 배포 커밋을
         # 실제 SHA로 풀어야 하고, 그 일에 이 어댑터 자신이 필요하다.
         self._flow_graph: dict | None = None
+        # 심볼 인덱스(11d)와 그 질의 그래프 — 같은 번들에서 같은 신선도로 붙는다. 질의 그래프는 한 번만 만든다.
+        self._index = None
+        self._qgraph = None
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
+
+    def attach_index(self, index) -> None:
+        from src.knowledge import query as qy
+
+        self._index = index
+        self._qgraph = qy.Graph(index) if index is not None else None
+
+    def has_index(self) -> bool:
+        return self._index is not None
+
+    def _where(self, sid: int) -> str:
+        s = self._index.symbols[sid]
+        svc = flowgraph.owner(s.file, s.repo, self._topology)[0]
+        return f"[{s.repo}{' · ' + svc if svc else ''}]"
+
+    async def callers(self, name: str) -> ProbeResult:
+        from src.knowledge import query as qy
+
+        source = f"code.callers {name}"
+        if self._index is None:
+            return ProbeResult.failed("심볼 인덱스가 없다 — `python -m src code graph`로 만든다",
+                                      source=source, clock=self._clock)
+        found = qy.find(self._index, name)
+        if not found:
+            return ProbeResult.failed(f"{name}: 인덱스에 없다 — code.trace·code.uses 출력에 나온 이름 끝부분"
+                                      f"(`Class.method`)이나 `파일:qualname`으로", source=source, clock=self._clock)
+        if len(found) > 1:
+            return ProbeResult.failed("\n".join(qy.ambiguous_lines(self._index, name, found)),
+                                      source=source, clock=self._clock)
+        lines = qy.callers_lines(self._index, self._qgraph, found[0], where=self._where)
+        return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
+
+    async def uses(self, name: str) -> ProbeResult:
+        from src.knowledge import query as qy
+
+        source = f"code.uses {name}"
+        if self._index is None:
+            return ProbeResult.failed("심볼 인덱스가 없다 — `python -m src code graph`로 만든다",
+                                      source=source, clock=self._clock)
+        found = qy.uses(self._index, name)
+        if not found:
+            return ProbeResult.failed(f"{name}: 이 이름의 자원을 쓰거나 읽는 함수가 인덱스에 없다 — "
+                                      f"<데이터 흐름>이나 증거에 나온 이름 그대로 써라", source=source, clock=self._clock)
+        lines = qy.uses_lines(self._index, self._qgraph, found, where=self._where)
+        return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
 
     async def flow(self, name: str) -> ProbeResult:
         source = f"code.flow {name}"

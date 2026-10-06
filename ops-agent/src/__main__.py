@@ -896,7 +896,7 @@ def cmd_case_investigate(args, env) -> int:
                 evidence_budget=app.investigation.evidence_total_chars,
                 trace=tracer, services=services,
                 roles=code.service_roles() if code else {},
-                flow_graph=flow_graph)
+                flow_graph=flow_graph, code_index=code.has_index() if code else False)
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars),
@@ -1472,41 +1472,15 @@ def _pick(index, text: str) -> int | None:
         print(f"  {text}: 인덱스에 없다 — 이름 끝부분(`Class.method`)이나 `파일:qualname`으로")
         return None
     if len(found) > 1:
-        print(f"  {text}: 여럿이다({len(found)}) — qualname이나 `파일:qualname`으로 하나를 골라 다시:")
-        for sid in found[:5]:
-            print(f"    {qy.display(index, sid)} [{index.symbols[sid].repo}]")
-        if len(found) > 5:
-            print(f"    … 외 {len(found) - 5}")
+        for line in qy.ambiguous_lines(index, text, found):
+            print("  " + line)
         return None
     return found[0]
 
 
-def _more(total: int, cap: int | None) -> None:
-    if cap is not None and total > cap:
-        print(f"    … 외 {total - cap} (`--all`로 전부)")
-
-
-def _entry_brief(index, graph, sid: int) -> str:
-    """이 함수가 어느 진입점에서 오나 — `code uses`의 한 줄 꼬리."""
-    from src.knowledge import query as qy
-
-    res = qy.callers(graph, [sid])
-    if not res.direct:
-        tag = qy.route(index, sid)
-        return f"진입점: 이 함수(라우트 {tag})" if tag else "진입점: 이 함수(부르는 곳 없음)"
-    names = []
-    for p in res.entries[:3]:
-        tag = qy.route(index, p[0].src)
-        names.append(qy.short(index, p[0].src, graph.modules) + (f"(라우트 {tag})" if tag else ""))
-    if not names:
-        return ("진입점을 못 찾았다 — 부르는 쪽 없는 베이스·포트 메서드로만 닿는다(프레임워크가 부를 수 있다)"
-                if res.dead_ends else "진입점을 못 찾았다(순환)")
-    extra = len(res.entries) - len(names)
-    return "진입점: " + ", ".join(names) + (f" 외 {extra}" if extra > 0 else "")
-
-
 def cmd_code_callers(args, env) -> int:
-    """이 함수를 누가 부르나 — 진입점까지(11d 6c-1). 11b의 추적기는 끝점에서 앞으로만 걸어서 이 질문에 답이 없었다."""
+    """이 함수를 누가 부르나 — 진입점까지(11d 6c-1). 11b의 추적기는 끝점에서 앞으로만 걸어서 이 질문에 답이 없었다.
+    조립은 리드의 `code.callers`와 같은 함수(`query.callers_lines`)다 — 사람이 CLI로 맞춰 본 답이 리드가 받는 답이다."""
     from src.knowledge import query as qy
 
     got = _query_setup(args, env)
@@ -1516,34 +1490,8 @@ def cmd_code_callers(args, env) -> int:
     sid = _pick(index, args.name)
     if sid is None:
         return 1
-    res = qy.callers(graph, qy.targets(index, sid))
-    cap = None if args.all else 10
-    print(f"  대상 {qy.display(index, sid)} {where(sid)}")
-    if not res.direct:
-        tag = qy.route(index, sid)
-        print(f"  부르는 곳이 없다 — 이 함수가 진입점이다" + (f"(라우트 {tag})" if tag else
-              "(스크립트·스케줄·동적 호출일 수 있다)"))
-        return 0
-    print(f"  바로 부르는 곳 {len(res.direct)} (줄은 부르는 자리):")
-    for link in res.direct[:cap]:
-        how = {qy.DISPATCH: " — 베이스·포트 메서드를 거쳐(디스패치)", "?→": " — 추정"}.get(link.mark, "")
-        print(f"    {qy.display(index, link.src, link.line or None)} {where(link.src)}{how}")
-    _more(len(res.direct), cap)
-    if res.entries:
-        print(f"  진입점 {len(res.entries)}:")
-        for p in res.entries[:cap]:
-            tag = qy.route(index, p[0].src)
-            print(f"    {qy.render_path(index, p)}" + (f"   (라우트 {tag})" if tag else ""))
-        _more(len(res.entries), cap)
-    else:
-        print("  진입점을 못 찾았다" + ("" if res.dead_ends else " — 부르는 쪽이 순환뿐이다"))
-    if res.dead_ends:
-        print(f"  부르는 쪽 없는 베이스·포트 메서드 {len(res.dead_ends)} — 프레임워크가 부를 수 있다:")
-        for p in res.dead_ends[:cap]:
-            print(f"    {qy.render_path(index, p)}")
-        _more(len(res.dead_ends), cap)
-    if res.cut:
-        print(f"  ⚠ 상한({qy.MAX_HOPS}단계·노드 {qy.BUDGET})에 걸려 다 못 봤다")
+    for line in qy.callers_lines(index, graph, sid, where=where, cap=None if args.all else 10, more=" (`--all`로 전부)"):
+        print("  " + line)
     return 0
 
 
@@ -1585,20 +1533,8 @@ def cmd_code_uses(args, env) -> int:
     if not found:
         print(f"  {args.name}: 이 이름의 자원을 쓰거나 읽는 함수가 인덱스에 없다 — `code flow`의 허브 목록에서 이름을 본다")
         return 1
-    cap = None if args.all else 10
-    groups: dict[tuple[str, str], list] = {}
-    for u in found:
-        groups.setdefault((u.name, u.kind), []).append(u)
-    for (name, kind), items in groups.items():
-        print(f"  {name} [{kind}]")
-        for direction, label in (("writes", "쓰기"), ("reads", "읽기")):
-            rows = [u for u in items if u.direction == direction]
-            if not rows:
-                continue
-            print(f"    {label} {len(rows)}:")
-            for u in rows[:cap]:
-                print(f"      {qy.display(index, u.sid, u.line)} {where(u.sid)} — {_entry_brief(index, graph, u.sid)}")
-            _more(len(rows), cap)
+    for line in qy.uses_lines(index, graph, found, where=where, cap=None if args.all else 10, more=" (`--all`로 전부)"):
+        print("  " + line)
     return 0
 
 
@@ -1809,10 +1745,19 @@ def _code_if_ready(site, gbm: str, fct: str, *, knowledge_root, clock, graph_dir
     except Exception:                                              # noqa: BLE001
         return None, (), None, "코드 없음"
     graph, note = (None, "그래프 없음")
+    index = None
     if graph_dir is not None:
         commits, _ = _resolved_commits(site, code)
         graph, note = _flow_graph_if_fresh(Path(graph_dir), commits)
+        if graph is not None:
+            # 심볼 인덱스(11d)는 같은 번들에 같은 커밋으로 박혀 있다 — 그래프가 신선하면 인덱스도 신선하다.
+            # 옛 번들(6a 전)엔 없다 — 그러면 역질문 action이 목록에서 빠진다(`briefing._hidden`).
+            from src.knowledge import graph_build as gb
+            index = gb.read_index(Path(graph_dir))
+            if index is None:
+                note += " · 심볼 인덱스 없음(`code graph`로 다시 만든다)"
     code.attach_flow_graph(graph)
+    code.attach_index(index)
     return code, code.service_names(), graph, note
 
 

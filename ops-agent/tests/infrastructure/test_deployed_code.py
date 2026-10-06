@@ -354,3 +354,55 @@ async def test_source_for는_배포_커밋의_파일과_리터럴_grep을_준다
     hits = await src.grep(["def badge("])
     assert [(h.file, h.line) for h in hits] == [("api/routes.py", 5)]
     assert all(h.repo == "dt-core" and h.commit for h in hits)
+
+
+class _Src:
+    """인덱스 재료 — 같은 이름 `run`이 둘(sink·jobs)이라 모호함을, 라우트 `badge → recent` 사슬로 진입점 경로를 본다."""
+    FILES = {
+        "sink/__init__.py": "", "api/__init__.py": "", "jobs/__init__.py": "",
+        "sink/writer.py": "def run(cfg, mongo):\n    mongo[cfg[\"mongodb_collection\"][\"alarm\"]].insert_one({})\n",
+        "api/q.py": "def recent(db):\n    return db[\"alarm_events\"].find({})\n",
+        "api/r.py": "from api.q import recent\n\n\n@router.post('/badge')\ndef badge(db):\n    return recent(db)\n",
+        "jobs/run.py": "def run():\n    pass\n",
+    }
+
+    async def files(self):
+        return sorted(self.FILES)
+
+    async def read(self, path):
+        return self.FILES.get(path)
+
+
+async def test_code_callers와_uses는_붙인_인덱스로_답하고_없거나_모호하면_실패로_답한다(flow_code):
+    """11d 6d-1 — 리드가 "이 컬렉션에 누가 쓰나"·"이 함수를 누가 부르나"를 묻는다. 출력은 사람이 CLI로 보는 것과
+    같은 조립이고, 이름이 여럿이면 코드가 고르지 않고 후보를 돌려준다(사람이 CLI에서 받는 것과 같다)."""
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+
+    missing = await flow_code.uses("alarm_events")
+    assert missing.status == "error" and "code graph" in missing.error
+    idx = await ix.build_index({"dt-core": _Src()}, names=[Name("collection", "alarm_events", "mongodb_collection.alarm")],
+                               commits={"dt-core": "c0ffee"})
+    flow_code.attach_index(idx)
+    uses = await flow_code.uses("alarm_events")
+    assert uses.status == "ok" and uses.envelope.complete
+    assert "alarm_events [collection]" in uses.data and "쓰기 1" in uses.data and "읽기 1" in uses.data
+    assert "sink.writer.run (sink/writer.py:L2) [dt-core · sink]" in uses.data        # 서비스 이름이 붙는다
+    assert "api.q.recent (api/q.py:L2) [dt-core" in uses.data
+    assert "진입점: r.badge(라우트 router.post('/badge'))" in uses.data           # 읽는 함수가 어느 끝점에서 오나
+    none = await flow_code.uses("없는이름")
+    assert none.status == "error" and "인덱스에 없다" in none.error
+
+    callers = await flow_code.callers("badge")
+    assert callers.status == "ok" and callers.data.splitlines()[0].startswith("대상 api.r.badge (api/r.py:L")
+    assert "부르는 곳이 없다" in callers.data and "라우트" in callers.data
+    chain = await flow_code.callers("recent")
+    assert "바로 부르는 곳 1" in chain.data and "api.r.badge (api/r.py:L6)" in chain.data   # 줄은 부르는 자리
+    assert "진입점 1:" in chain.data and "[dt-core] r.badge → q.recent   (라우트 router.post('/badge'))" in chain.data
+    many = await flow_code.callers("run")
+    assert many.status == "error" and "여럿" in many.error
+    assert "sink.writer.run" in many.error and "jobs.run.run" in many.error
+    unknown = await flow_code.callers("nope")
+    assert unknown.status == "error" and "인덱스에 없다" in unknown.error
+    flow_code.attach_index(None)
+    assert (await flow_code.callers("badge")).status == "error"

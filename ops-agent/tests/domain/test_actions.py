@@ -174,3 +174,11 @@ def test_원천_재집계가_등재돼_있다():
     """`expect`는 앞선 증거 **안의 값 위치**다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다."""
     assert ACTIONS["recompute.count"] == ("recompute", "count", ("collection", "filter", "expect"), ())
     assert ACTIONS["recompute.sum"] == ("recompute", "sum", ("collection", "filter", "field", "expect"), ())
+
+
+def test_역질문_둘이_이름_하나로_등재돼_있고_코드_추적_레인이다():
+    """11d 6d — `code.callers`·`code.uses`. `name`은 trace·uses 출력이나 증거에 나온 이름 그대로다. 둘 다 코드 레인."""
+    from src.domain.actions import role_for
+    assert ACTIONS["code.callers"] == ("code", "callers", ("name",), ())
+    assert ACTIONS["code.uses"] == ("code", "uses", ("name",), ())
+    assert role_for("code.callers") == role_for("code.uses") == "code_tracer"

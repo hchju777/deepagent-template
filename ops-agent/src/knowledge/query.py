@@ -253,3 +253,88 @@ def render_path(index: Index, path: list[Link]) -> str:
 
 def _modules(index: Index) -> dict[tuple[str, str], str]:
     return {(s.repo, s.file): s.qualname for s in index.symbols if s.kind == "module"}
+
+
+# ── 표시 조립(6d-1) — CLI `code callers`·`code uses`와 리드의 `code.callers`·`code.uses`가 **같은 함수**를 부른다.
+# 둘로 베끼면 한쪽이 먼저 어긋나고(규율 8과 같은 이유), 사내에서 사람이 CLI로 맞춰 본 답과 리드가 받는 답이 달라진다.
+# 줄은 들여쓰기 없이 돌려주고 호출부가 앞을 붙인다. `where(sid)`는 `[레포 · 서비스]` — 토폴로지는 호출부가 안다.
+
+def ambiguous_lines(index: Index, text: str, found: list[int], *, cap: int = 5) -> list[str]:
+    lines = [f"{text}: 여럿이다({len(found)}) — qualname이나 `파일:qualname`으로 하나를 골라 다시:"]
+    lines += [f"  {display(index, sid)} [{index.symbols[sid].repo}]" for sid in found[:cap]]
+    if len(found) > cap:
+        lines.append(f"  … 외 {len(found) - cap}")
+    return lines
+
+
+def entry_brief(index: Index, graph: Graph, sid: int) -> str:
+    """이 함수가 어느 진입점에서 오나 — `uses` 줄의 꼬리."""
+    res = callers(graph, [sid])
+    if not res.direct:
+        tag = route(index, sid)
+        return f"진입점: 이 함수(라우트 {tag})" if tag else "진입점: 이 함수(부르는 곳 없음)"
+    names = []
+    for p in res.entries[:3]:
+        tag = route(index, p[0].src)
+        names.append(short(index, p[0].src, graph.modules) + (f"(라우트 {tag})" if tag else ""))
+    if not names:
+        return ("진입점을 못 찾았다 — 부르는 쪽 없는 베이스·포트 메서드로만 닿는다(프레임워크가 부를 수 있다)"
+                if res.dead_ends else "진입점을 못 찾았다(순환)")
+    extra = len(res.entries) - len(names)
+    return "진입점: " + ", ".join(names) + (f" 외 {extra}" if extra > 0 else "")
+
+
+def _more(total: int, cap: int | None, more: str) -> list[str]:
+    return [f"  … 외 {total - cap}{more}"] if cap is not None and total > cap else []
+
+
+def callers_lines(index: Index, graph: Graph, sid: int, *, where, cap: int | None = 10,
+                  more: str = "") -> list[str]:
+    """`code callers` 한 벌 — 대상, 바로 부르는 곳, 진입점 경로, 막다른 베이스, 상한."""
+    res = callers(graph, targets(index, sid))
+    lines = [f"대상 {display(index, sid)} {where(sid)}"]
+    if not res.direct:
+        tag = route(index, sid)
+        lines.append("부르는 곳이 없다 — 이 함수가 진입점이다"
+                     + (f"(라우트 {tag})" if tag else "(스크립트·스케줄·동적 호출일 수 있다)"))
+        return lines
+    lines.append(f"바로 부르는 곳 {len(res.direct)} (줄은 부르는 자리):")
+    for link in res.direct[:cap]:
+        how = {DISPATCH: " — 베이스·포트 메서드를 거쳐(디스패치)", MARKS["candidate"]: " — 추정"}.get(link.mark, "")
+        lines.append(f"  {display(index, link.src, link.line or None)} {where(link.src)}{how}")
+    lines += _more(len(res.direct), cap, more)
+    if res.entries:
+        lines.append(f"진입점 {len(res.entries)}:")
+        for p in res.entries[:cap]:
+            tag = route(index, p[0].src)
+            lines.append(f"  {render_path(index, p)}" + (f"   (라우트 {tag})" if tag else ""))
+        lines += _more(len(res.entries), cap, more)
+    else:
+        lines.append("진입점을 못 찾았다" + ("" if res.dead_ends else " — 부르는 쪽이 순환뿐이다"))
+    if res.dead_ends:
+        lines.append(f"부르는 쪽 없는 베이스·포트 메서드 {len(res.dead_ends)} — 프레임워크가 부를 수 있다:")
+        lines += [f"  {render_path(index, p)}" for p in res.dead_ends[:cap]]
+        lines += _more(len(res.dead_ends), cap, more)
+    if res.cut:
+        lines.append(f"⚠ 상한({MAX_HOPS}단계·노드 {BUDGET})에 걸려 다 못 봤다")
+    return lines
+
+
+def uses_lines(index: Index, graph: Graph, found: list[Use], *, where, cap: int | None = 10,
+               more: str = "") -> list[str]:
+    """`code uses` 한 벌 — 자원마다 쓰기·읽기 함수와 그 진입점 한 줄."""
+    groups: dict[tuple[str, str], list[Use]] = {}
+    for u in found:
+        groups.setdefault((u.name, u.kind), []).append(u)
+    lines: list[str] = []
+    for (name, kind), items in groups.items():
+        lines.append(f"{name} [{kind}]")
+        for direction, label in (("writes", "쓰기"), ("reads", "읽기")):
+            rows = [u for u in items if u.direction == direction]
+            if not rows:
+                continue
+            lines.append(f"  {label} {len(rows)}:")
+            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}"
+                      for u in rows[:cap]]
+            lines += [("  " + l) for l in _more(len(rows), cap, more)]
+    return lines
