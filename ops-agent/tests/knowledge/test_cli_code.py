@@ -666,8 +666,6 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     assert "processor.handler.run" in (bundle / "calls.html").read_text(encoding="utf-8")   # 사람용 한 장(6c-1b)
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
     assert code == 0 and "심볼 " in captured.out and "엣지 " in captured.out
-    assert "인덱스 대조 같음 1 · 다름 0" in captured.out                  # 6c-2 — 추적기와 인덱스가 같은 답
-    assert "인덱스 대조가 다른 끝점" not in captured.out                  # 다 같으면 목록이 없다
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "check")
     assert code == 0, captured.out + captured.err
     lines = [l for l in captured.out.splitlines() if l.strip()]
@@ -678,30 +676,6 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     more = [l for l in captured.out.splitlines() if l.strip()]
     assert len(lines) < len(more) <= 16 and any("external" in l for l in more) and any("수신자" in l for l in more)
 
-
-
-def test_인덱스_대조가_다른_끝점은_code_graph와_status가_path로_나열한다(tmp_path, monkeypatch, capsys):
-    """사내 첫 대조가 "같음 149 · 다름 7"만 찍었다 — 끝점이 150개 넘으면 그 7개가 어느 path인지 알 길이 없다."""
-    from src.knowledge import parity
-
-    real = parity.check
-
-    def differ(overlay, index, graph, tracer):
-        overlay = real(overlay, index, graph, tracer)
-        for n in overlay["nodes"]:
-            if n.get("type") == "endpoint":
-                n["index_check"] = {"status": "diff", "handler": "api.r.badge",
-                                    "only_index": ["line_state [collection]"], "only_tracer": []}
-        return overlay
-
-    monkeypatch.setattr(parity, "check", differ)
-    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
-    config_root = _flow_tree(tmp_path)
-    want = "/summary/badge — 인덱스만 line_state [collection]"
-    for command in ("graph", "status"):
-        code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", command)
-        assert code == 0, captured.out + captured.err
-        assert "인덱스 대조가 다른 끝점 1" in captured.out and want in captured.out, command
 
 
 def _flow_tree_with_shared(tmp_path):

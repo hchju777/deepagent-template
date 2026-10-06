@@ -715,10 +715,7 @@ def summary(graph: dict) -> dict:
             # 자원까지 이어진 끝점 / 추적은 됐는데 읽기 없이 gap만 남은 끝점(막힘)
             "endpoints_traced": sum(1 for n in endpoints if n["id"] in traced),
             "endpoints_blocked": sum(1 for n in endpoints if n["id"] not in traced
-                                     and n.get("traced") == "ok" and n.get("gaps")),
-            # 추적기와 인덱스의 대조(11d 6c-2) — 패리티가 서면 추적기를 뺀다
-            **{f"endpoints_index_{k}": sum(1 for n in endpoints if (n.get("index_check") or {}).get("status") == s)
-               for k, s in (("same", "same"), ("diff", "diff"), ("no_handler", "no_handler"))}}
+                                     and n.get("traced") == "ok" and n.get("gaps"))}
 
 
 def advise(graph: dict, topology: Topology) -> list[str]:
@@ -757,7 +754,7 @@ def advise(graph: dict, topology: Topology) -> list[str]:
 
 
 def add_trace(graph: dict, endpoint_id: str, result) -> dict:
-    """추적기(`trace.Trace`)의 결과를 오버레이에 싣는다 — `endpoint —reads→ resource` 엣지(origin
+    """끝점 사슬(`trace.Trace` — 11d 6d-3부터 `index_trace`가 만든다)을 오버레이에 싣는다 — `endpoint —reads→ resource` 엣지(origin
     `trace`, 확실→EXTRACTED, 추정→INFERRED, file:line)와 끝점 노드의 사슬·gap. 이름 목록에 있는 자원은
     전부 노드가 있으므로 없는 이름은 조용히 지나간다(자원이 아니라 다른 것이 잡힌 경우)."""
     nodes = {n["id"]: dict(n) for n in graph["nodes"]}
@@ -766,7 +763,7 @@ def add_trace(graph: dict, endpoint_id: str, result) -> dict:
     if node is None:
         return graph
     node["traced"] = result.status
-    node["trace_repo"] = result.repo         # 인덱스 대조(6c-2)가 핸들러를 찾는 레포
+    node["trace_repo"] = result.repo         # 사슬이 어느 레포의 코드인가 — 인덱스 사슬(6d-3)의 레포
     node["chain"] = [f"{s.file}:L{s.line} {s.qualname}" for s in result.chain]
     node["chain_parent"] = [s.parent for s in result.chain]
     node["gaps"] = [f"{g.file}:L{g.line} {g.why}" for g in result.gaps]
@@ -856,38 +853,12 @@ def trace_lines(graph: dict, endpoint_id: str, *, max_gaps: int = _TRACE_MAX_GAP
     if gaps:
         tail = f" 외 {len(gaps) - max_gaps}개" if len(gaps) > max_gaps else ""
         lines.append(f"못 따라감 {len(gaps)}: {' · '.join(gaps[:max_gaps])}{tail}")
-    # 인덱스 대조(11d 6c-2) — 같으면 안 적는다(소음). 다르면 리드가 "인덱스만" 자원을 다음 읽기 후보로 쓸 수 있다.
-    # 자원마다 왜를 한 줄(쪽마다 셋까지) — 인덱스만은 닿은 경로, 추적기만은 인덱스가 못 이은 호출이나 못 본 함수.
-    check = node.get("index_check") or {}
-    if check.get("status") == "diff":
-        sides = (("only_index", "인덱스만"), ("only_tracer", "추적기만"))
-        parts = [f"{label} {_few(check[key])}" for key, label in sides if check.get(key)]
-        lines.append("인덱스 대조: 다르다 — " + " / ".join(parts))
-        why = check.get("why") or {}
-        lines += [f"  {label} {item}: {why[item]}" for key, label in sides
-                  for item in (check.get(key) or [])[:3] if item in why]
     if len(keep) < len(chain):
         lines.append(f"걸음 {len(chain)} 중 읽기로 이어진 {len(keep)}만 적었다 — 나머지는 code.read로 본다"
                      if reads_at else f"걸음 {len(chain)} 중 {len(keep)}만 적었다 — 읽기로 이어진 걸음이 없다")
     return lines
 
 
-def index_diff_lines(graph: dict, *, limit: int = 10) -> list[str]:
-    """추적기와 인덱스가 다르게 답한 끝점 — `path — 인덱스만 … / 추적기만 …` 한 줄씩, path 순으로 `limit`개까지.
-    숫자만 찍었더니 사내에서 "그 7개가 어느 path인지" 알 길이 없었다(끝점이 150개 넘는다). 사람이 이 목록에서
-    하나를 골라 `code trace <path>`로 본다."""
-    lines = []
-    for n in sorted((n for n in graph.get("nodes", []) if n.get("type") == "endpoint"
-                     and (n.get("index_check") or {}).get("status") == "diff"), key=lambda n: n.get("label", "")):
-        check = n["index_check"]
-        parts = [f"{label} {_few(check[key], 2)}" for key, label in (("only_index", "인덱스만"), ("only_tracer", "추적기만"))
-                 if check.get(key)]
-        lines.append(f"{n.get('label', n['id'])} — " + " / ".join(parts))
-    return lines[:limit] + ([f"… 외 {len(lines) - limit}"] if len(lines) > limit else [])
-
-
-def _few(items: list[str], k: int = 3) -> str:
-    return " · ".join(items[:k]) + (f" 외 {len(items) - k}" if len(items) > k else "")
 
 
 _MARK_ORDER = {"확실": 0, "config키": 1, "추정": 2}

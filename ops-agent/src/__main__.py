@@ -1247,42 +1247,26 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     # 심볼 인덱스(11d) — 레포 전체를 배포 커밋에서 2-pass로. 끝점 사슬이 여기서 나온다(6d-3) — 함수→함수 엣지도 그래프에 남는다.
     from src.knowledge import index as indexing
     from src.knowledge import index_trace
-    from src.knowledge import parity
     from src.knowledge import query as qy
     symbol_index = asyncio.run(indexing.build_index(
         {name: code.source_for(name) for name in sorted(commits)}, names=names, commits=commits))
     isum = symbol_index.summary()
     progress(f"심볼 {isum['symbols']}개 · 엣지 {isum['edges_total']}개 · 파싱 실패 {isum['parse_errors']}개")
     qgraph = qy.Graph(symbol_index)
-    theirs: dict[str, object] = {}
-
-    async def trace_endpoints(graph: dict) -> dict:
-        # 서빙 서비스가 있는 끝점마다 사슬을 만든다 — 배포 커밋에서만, 조사 중에는 안 돌린다(⑥). 사슬은 **인덱스**에서
-        # 나오고(6d-3), 11b 추적기는 대조용으로 한 번 더 돈다 — 사내 대조가 서면 지운다(6d-4).
-        from src.knowledge import trace as tracing
-        by_id = {n["id"]: n for n in graph["nodes"]}
-        served: dict[str, dict[str, dict]] = {}
-        for e in graph["links"]:
-            if e["relation"] == "serves" and e.get("repo"):
-                served.setdefault(e["repo"], {})[e["target"]] = by_id[e["target"]]
-        for repo_name, endpoints in sorted(served.items()):
-            tracer = tracing.Tracer(repo_name, code.source_for(repo_name), names=names, routes=routes)
-            await tracer.prepare()
-            progress(f"{repo_name}: 끝점 추적 중 ({len(endpoints)}개)")
-            for node in sorted(endpoints.values(), key=lambda n: n["label"]):
-                mine = index_trace.trace(symbol_index, qgraph, repo=repo_name, target=node["label"], routes=routes)
-                graph = flow.add_trace(graph, node["id"], mine)
-                theirs[node["id"]] = await tracer.trace(node["label"])
-        return graph
-
-    overlay = asyncio.run(trace_endpoints(overlay))
+    # 서빙 서비스가 있는 끝점마다 사슬을 만든다 — 배포 커밋에서만, 조사 중에는 안 돌린다(⑥). 11b 추적기는 6d-4에서
+    # 지웠다 — 두 번의 사내 대조(150/6)에서 인덱스가 못한 지점이 없었다.
+    by_id = {n["id"]: n for n in overlay["nodes"]}
+    served: dict[str, dict[str, dict]] = {}
+    for e in overlay["links"]:
+        if e["relation"] == "serves" and e.get("repo"):
+            served.setdefault(e["repo"], {})[e["target"]] = by_id[e["target"]]
+    for repo_name, endpoints in sorted(served.items()):
+        progress(f"{repo_name}: 끝점 사슬 ({len(endpoints)}개)")
+        for node in sorted(endpoints.values(), key=lambda n: n["label"]):
+            overlay = flow.add_trace(overlay, node["id"],
+                                     index_trace.trace(symbol_index, qgraph, repo=repo_name, target=node["label"], routes=routes))
     counts = flow.summary(overlay)
     progress(f"끝점 추적: 자원까지 이어진 {counts['endpoints_traced']}개 · 막힌 {counts['endpoints_blocked']}개")
-    # 두 엔진의 대조(6c-2·6d-3) — 같은 끝점에서 다른 답이면 끝점에 적는다. 추적기를 지우기 전 마지막 확인.
-    overlay = parity.check(overlay, symbol_index, qgraph, theirs)
-    counts = flow.summary(overlay)
-    progress(f"끝점 대조(두 엔진): 같음 {counts['endpoints_index_same']}개 · 다름 {counts['endpoints_index_diff']}개"
-             f" · 핸들러 못 찾음 {counts['endpoints_index_no_handler']}개")
 
     out_dir = _graph_dir(args, env, gbm, fct)
     binary = gb.find_graphify()
@@ -1341,7 +1325,6 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     print(f"       사람용: {' · '.join(human)}")
     print(f"       오버레이 노드 {summary['nodes']} · 엣지 {summary['links']} ({kinds})"
           f" · 합친 그래프 노드 {len(merged['nodes'])} · 엣지 {len(merged['links'])}")
-    _print_index_diffs(overlay, summary)
     if summary["unreferenced"]:
         print(f"       코드 줄에서 직접 못 찾은 이름 {summary['unreferenced']}개 — config에만 보인다 "
               f"(Enum·공통 헬퍼로 감싸 쓰면 여기 든다; 코드 층은 리드가 홉을 밟는다)")
@@ -1353,19 +1336,6 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         for line in advice:
             print(f"         - {line}")
     return 1 if (not names or not commits) else 0
-
-
-def _print_index_diffs(overlay: dict, summary: dict) -> None:
-    """추적기와 인덱스가 다르게 답한 끝점 목록(11d 6c-2) — `code graph` 끝과 `code status`가 같이 쓴다."""
-    from src.knowledge import flow
-
-    lines = flow.index_diff_lines(overlay)
-    if not lines:
-        return
-    print(f"       인덱스 대조가 다른 끝점 {summary.get('endpoints_index_diff', len(lines))} — "
-          f"하나씩 `code trace <path>`로 본다:")
-    for line in lines:
-        print(f"         {line}")
 
 
 def cmd_code_graph(args, env) -> int:
@@ -1404,10 +1374,7 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
           f" · 레포에 붙은 엣지 {summary['repo_level']}"
           f" · 끝점 {summary.get('endpoints', 0)}(등재 {summary.get('endpoints_registered', 0)}"
           f" · 서빙 미상 {summary.get('endpoints_unserved', 0)}"
-          f" · 자원까지 {summary.get('endpoints_traced', 0)} · 막힘 {summary.get('endpoints_blocked', 0)})"
-          f" · 인덱스 대조 같음 {summary.get('endpoints_index_same', 0)} · 다름 {summary.get('endpoints_index_diff', 0)}"
-          + (f" · 핸들러 못 찾음 {summary['endpoints_index_no_handler']}" if summary.get('endpoints_index_no_handler') else ""))
-    _print_index_diffs(overlay, summary)
+          f" · 자원까지 {summary.get('endpoints_traced', 0)} · 막힘 {summary.get('endpoints_blocked', 0)})")
     human = [name for name in ("flow.html", "wiki/index.md") if (out_dir / name).exists()]
     if human:
         print(f"       사람용 {' · '.join(human)}")

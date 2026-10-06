@@ -1,11 +1,10 @@
-"""끝점 사슬을 심볼 인덱스에서 만든다(11d 6d-3) — 11b 추적기와 같은 `Trace` 모양으로.
+"""끝점 사슬을 심볼 인덱스에서 만든다(11d 6d-3·6d-4) — 11b 추적기가 내던 `Trace` 모양 그대로.
 
-decisions ⑱의 "엔진 하나". 사내 대조(같음 150 · 다름 6)로 인덱스가 추적기보다 못한 지점이 없다는 것이 섰으니,
-`code graph`의 사슬을 인덱스에서 만들고 추적기는 대조용으로만 한 번 더 돈 뒤(6d-3) 지운다(6d-4)."""
+decisions ⑱의 "엔진 하나". 사내 대조(같음 150 · 다름 6)로 인덱스가 추적기보다 못한 지점이 없다는 것이 두 번 섰고,
+추적기는 지웠다. 이 테스트들이 추적기와 맞춰 둔 성질(뿌리·깊이·등급·gap)의 유일한 기록이다."""
 from src.knowledge import index as ix
 from src.knowledge import index_trace
 from src.knowledge import query as qy
-from src.knowledge import trace as tr
 from src.knowledge.flow import Name, Route
 from tools.local_case import API_FILES
 
@@ -121,21 +120,16 @@ async def test_라우트_선언이_없거나_그_줄_아래_함수가_인덱스�
     assert missing.status == "not_found" and "api/gone.py:L3" in missing.reason
 
 
-async def test_측정판_핸들러에서_추적기와_같은_사슬_읽기_getattr_gap을_낸다():
-    """측정판(`tools/local_case.py`)의 api — 캐시 키를 먼저 읽고 비면 컬렉션에서 세고 형식은 getattr로 고른다. 두 엔진이
-    같은 함수·같은 읽기·같은 gap을 내야 `code.trace`를 옮길 수 있다."""
+async def test_측정판_핸들러는_캐시_키를_지나_컬렉션까지_닿고_getattr_gap_하나를_남긴다():
+    """측정판(`tools/local_case.py`)의 api — 캐시 키를 먼저 읽고 비면 컬렉션에서 세고 형식은 getattr로 고른다. 11b 추적기가
+    내던 것과 같은 사슬·읽기·gap이다(6d-3에서 두 엔진이 같음을 확인하고 추적기를 지웠다)."""
     files = {k: v for k, v in API_FILES.items() if k.endswith(".py")}
     names = [Name("collection", "alarm_events", "mongodb_collection.alarm.collection"),
              Name("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats.key")]
     routes = [Route("dt-api", "POST", "/summary/badge", "api/alarms.py", 7, "EXTRACTED", "")]
     idx, g = await _index(files, names, repo="dt-api")
-    mine = index_trace.trace(idx, g, repo="dt-api", target="/summary/badge", routes=routes)
-    src = _Src(files)
-    theirs = await tr.trace("/summary/badge", repo="dt-api", source=src, names=names, routes=routes,
-                            aliases=await tr.alias_index(names, src))
-    assert theirs.status == mine.status == "ok"
-    assert {s.qualname for s in mine.chain} == {s.qualname for s in theirs.chain}
-    assert _reads(mine) == _reads(theirs) == {("rediskey", "alarm:stats:{line}", "추정", "key"),
-                                               ("collection", "alarm_events", "추정", "key")}
-    assert [x.why for x in mine.gaps] == [x.why for x in theirs.gaps] and "getattr" in mine.gaps[0].why
-    assert mine.gaps[0].line == theirs.gaps[0].line
+    t = index_trace.trace(idx, g, repo="dt-api", target="/summary/badge", routes=routes)
+    assert t.status == "ok"
+    assert {s.qualname for s in t.chain} == {"summary_badge", "badge", "count_recent", "window_start"}
+    assert _reads(t) == {("rediskey", "alarm:stats:{line}", "추정", "key"), ("collection", "alarm_events", "추정", "key")}
+    assert [(x.line, x.why) for x in t.gaps] == [(15, "getattr로 고른 대상은 못 따라간다 — 리드가 code.read로 본다")]
