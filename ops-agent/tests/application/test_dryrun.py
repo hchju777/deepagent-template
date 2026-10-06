@@ -162,7 +162,11 @@ LADDER_SEEDS = {
     "mongo": {"alarm_events": [{"line": "L1", "result": "alarm"}, {"line": "L1", "result": "alarm"},
                                {"line": "L1", "result": "caution"}]},
     "code": {"trace": {"/summary/badge": "api/r.py:L6 badge\n  → api/q.py:L3 AlarmRepo.recent — reads: "
-                                         "alarm_events [collection] 확실"}},
+                                         "alarm_events [collection] 확실"},
+             "uses": {"alarm_events": "alarm_events [collection]\n  쓰기 1:\n    sink.writer.run (sink/writer.py:L10) "
+                                      "[dt-core · sink] — 진입점: 이 함수(부르는 곳 없음)"},
+             "callers": {"sink.writer.run": "대상 sink.writer.run (sink/writer.py:L4) [dt-core · sink]\n"
+                                            "부르는 곳이 없다 — 이 함수가 진입점이다(스크립트·스케줄·동적 호출일 수 있다)"}},
 }
 
 
@@ -178,8 +182,12 @@ def _ladder_script():
              "action": "recompute.count",
              "params": {"collection": "alarm_events", "filter": {"result": "alarm"},
                         "expect": {"evidence": "t-1.e1", "path": "response.items[0].alarm"}},
-             "input_evidence_ids": ["t-2.e1"]}],
-        "rounds": [{"decision": "continue"}, {"decision": "continue"}, {"decision": "continue"}]})
+             "input_evidence_ids": ["t-2.e1"]},
+            {"id": "t-4", "goal": "그 컬렉션에 누가 쓰나", "role": "code_tracer", "priority": 40,
+             "action": "code.uses", "params": {"name": "alarm_events"}, "input_evidence_ids": ["t-3.e1"]},
+            {"id": "t-5", "goal": "쓰는 함수를 누가 부르나", "role": "code_tracer", "priority": 50,
+             "action": "code.callers", "params": {"name": "sink.writer.run"}, "input_evidence_ids": ["t-4.e1"]}],
+        "rounds": [{"decision": "continue"}] * 5})
 
 
 async def test_사다리_대본이_게이트를_한_칸씩_거쳐_스텁으로_끝까지_돈다(clock):
@@ -194,22 +202,27 @@ async def test_사다리_대본이_게이트를_한_칸씩_거쳐_스텁으로_�
 
     adapters = build_adapters(site_config(), clock=clock, seeds=LADDER_SEEDS)
     deps = build_deps(_ladder_script(), runner=ProbeRunner(adapters, clock=clock),
-                      investigation=InvestigationConfig(max_rounds=5, parallel_width=3))
+                      investigation=InvestigationConfig(max_rounds=7, parallel_width=3))
     final = await build_engine(deps).ainvoke(
         initial_state(_ladder_script(), case_id="c-1", gbm="mx", fct="gumi", clock=clock))
-    assert [e.id for e in final["evidence"]] == ["t-1.e1", "t-2.e1", "t-3.e1"]
-    assert final["round"] >= 3 and final["llm_errors"] == []
-    last = next(t for t in final["plan_tasks"] if t.id == "t-3")
-    assert last.status == "ok" and "'recomputed': 2" in last.result_summary and "'match': True" in last.result_summary
+    assert [e.id for e in final["evidence"]] == ["t-1.e1", "t-2.e1", "t-3.e1", "t-4.e1", "t-5.e1"]
+    assert final["round"] >= 5 and final["llm_errors"] == []
+    third = next(t for t in final["plan_tasks"] if t.id == "t-3")
+    assert third.status == "ok" and "'recomputed': 2" in third.result_summary and "'match': True" in third.result_summary
+    # 6d-2 — 넷째·다섯째 칸(uses → callers)도 스텁으로 끝까지 간다.
+    last = next(t for t in final["plan_tasks"] if t.id == "t-5")
+    assert last.status == "ok" and "부르는 곳이 없다" in last.result_summary
 
 
 def test_리포에_든_사다리_예제가_실제로_로드된다():
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent.parent
     script = load_script(root / "examples" / "case-ladder.json")
-    assert [t.action for t in script.tasks] == ["rest.query", "code.trace", "recompute.count"]
+    assert [t.action for t in script.tasks] == ["rest.query", "code.trace", "recompute.count", "code.uses", "code.callers"]
     seeds = json.loads((root / "examples" / "stub-seeds.json").read_text(encoding="utf-8"))
-    assert "rest" in seeds and "code" in seeds
+    assert "rest" in seeds and {"trace", "uses", "callers"} <= set(seeds["code"])
+    # 대본의 callers 이름은 seeds의 uses 본문에 실제로 있는 쓰는 함수다 — 사다리가 그 이름을 거기서 뽑는다.
+    assert script.tasks[4].params["name"] in next(iter(seeds["code"]["uses"].values()))
 
 
 def test_CLI가_사다리_대본을_돈다(tmp_path, capsys, monkeypatch):
@@ -228,4 +241,5 @@ def test_CLI가_사다리_대본을_돈다(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "✅ t-3 [recompute_verifier]" in out
     assert "'recomputed': 2" in out and "'expected': 0" in out and "'match': False" in out
+    assert "✅ t-4 [code_tracer]" in out and "✅ t-5 [code_tracer]" in out
     assert "t-1.e1" in out and "t-2.e1" in out and "t-3.e1" in out

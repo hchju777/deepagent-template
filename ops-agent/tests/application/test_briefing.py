@@ -907,7 +907,7 @@ def test_원천_재집계는_mongo가_있는_사이트에서만_목록에_있다
 # 닿은 라운드에** 그 칸을 예시 첫 줄로 보여 준다. 여기서는 진짜 값(path·증거 id)을 박는다 —
 # `supporting_ids`와 달리 그대로 베끼는 것이 정확히 원하는 출력이기 때문이다.
 
-def _traced_endpoint_graph():
+def _traced_endpoint_graph(*, with_key=False):
     g = _graph_with_endpoint()
     ep = next(n for n in g["nodes"] if n["id"] == "endpoint_summary_badge")
     ep.update({"traced": "ok", "chain": ["api/r.py:L6 badge", "api/q.py:L3 AlarmRepo.recent"],
@@ -915,6 +915,12 @@ def _traced_endpoint_graph():
     g["links"].append({"source": "endpoint_summary_badge", "target": "collection_alarm_events",
                        "relation": "reads", "origin": "trace", "confidence": "EXTRACTED", "via": "literal",
                        "step": 1, "source_file": "api/q.py", "source_location": "L3"})
+    if with_key:
+        # 사내 모양 — 핸들러가 캐시 키를 먼저 읽고 비면 컬렉션에서 센다(11b 측정판과 같다).
+        g["nodes"].append({"id": "rediskey_alarm_stats", "label": "alarm:stats:{line}", "type": "rediskey"})
+        g["links"].append({"source": "endpoint_summary_badge", "target": "rediskey_alarm_stats",
+                           "relation": "reads", "origin": "trace", "confidence": "INFERRED", "via": "key",
+                           "step": 0, "source_file": "api/r.py", "source_location": "L7"})
     return g
 
 
@@ -928,10 +934,13 @@ def _trace_done(task_id="t-2"):
                 status="ok", result_evidence_ids=[f"{task_id}.e1"])
 
 
-def _ladder(site_config, tasks, *, used=(), services=("api",), graph="traced", start=3):
-    g = {"traced": _traced_endpoint_graph(), "untraced": _graph_with_endpoint(), None: None}[graph]
+def _ladder(site_config, tasks, *, used=(), services=("api",), graph="traced", start=3, evidence=(),
+            code_index=False):
+    g = {"traced": _traced_endpoint_graph(), "keyed": _traced_endpoint_graph(with_key=True),
+         "untraced": _graph_with_endpoint(), None: None}[graph]
     return json.loads(briefing.example_block(site_config, phase="integrate", start=start, services=services,
-                                             used=used, tasks=tuple(tasks), flow_graph=g))["tasks"]
+                                             used=used, tasks=tuple(tasks), flow_graph=g,
+                                             evidence=tuple(evidence), code_index=code_index))["tasks"]
 
 
 def test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_수가_그_path의_code_trace다(case):
@@ -947,6 +956,83 @@ def test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_�
     fields = briefing.integrate_fields(state, site_config=site(), max_rounds=4, services=("api",),
                                        flow_graph=_traced_endpoint_graph())
     assert json.loads(fields["example"])["tasks"][0]["action"] == "code.trace"
+
+
+def _recompute_done(match: bool, task_id="t-3"):
+    """재집계 칸을 밟은 뒤 — 결과의 `match`는 증거 요약(repr)에 그대로 있다."""
+    t = task(task_id, role="recompute_verifier", action="recompute.count",
+             params={"collection": "alarm_events", "filter": {}, "expect": {"evidence": "t-1.e1", "path": "x"}},
+             status="ok", result_evidence_ids=[f"{task_id}.e1"])
+    ref = EvidenceRef(id=f"{task_id}.e1", source="recompute.count collection='alarm_events'",
+                      summary=repr({"recomputed": 2, "expected": 0 if not match else 2, "match": match,
+                                    "evidence": "t-1.e1", "path": "x"}))
+    return t, ref
+
+
+USES_TEXT = ("alarm_events [collection]\n  쓰기 1:\n    sink.writer.run (sink/writer.py:L10) [dt-core · sink] — 진입점: "
+             "이 함수(부르는 곳 없음)\n  읽기 1:\n    api.q.AlarmRepo.recent (api/q.py:L3) [dt-api · api] — 진입점: r.badge")
+
+
+def _uses_done(name="alarm_events", task_id="t-4"):
+    t = task(task_id, role="code_tracer", action="code.uses", params={"name": name},
+             status="ok", result_evidence_ids=[f"{task_id}.e1"])
+    # 실행기가 문자열 결과를 repr로 눕힌다(`detail`) — 개행이 `\\n` 두 글자다. 꼬리의 함수 이름은 그 안에서 찾는다.
+    ref = EvidenceRef(id=f"{task_id}.e1", source=f"code.uses {name}", summary=repr(USES_TEXT)[:160], body=repr(USES_TEXT))
+    return t, ref
+
+
+def test_재집계_뒤_넷째_칸은_code_uses이고_이름은_일치면_컬렉션_불일치면_끝점이_읽은_키다(case):
+    """6d-2 — 일치(컬렉션도 옛것)면 상류 쓰는 쪽을, 불일치(컬렉션은 최신)면 끝점이 읽은 캐시 키를 누가 쓰나 묻는다.
+    사내 측정판의 두 변형(sink-stopped · cache-stale)이 정확히 이 둘이다."""
+    same_t, same_e = _recompute_done(True)
+    tasks = _ladder(site(), [_rest_done(), _trace_done(), same_t], used=("rest.query", "code.trace", "recompute.count"),
+                    graph="keyed", evidence=[same_e], code_index=True)
+    assert (tasks[0]["action"], tasks[0]["params"], tasks[0]["input_evidence_ids"]) == (
+        "code.uses", {"name": "alarm_events"}, ["t-3.e1"])
+    diff_t, diff_e = _recompute_done(False)
+    tasks = _ladder(site(), [_rest_done(), _trace_done(), diff_t], used=("rest.query", "code.trace", "recompute.count"),
+                    graph="keyed", evidence=[diff_e], code_index=True)
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("code.uses", {"name": "alarm:stats:{line}"})
+    # 끝점이 키를 안 읽는 사슬이면 불일치여도 컬렉션이다 — 없는 이름을 박으면 리드가 그 문을 두드린다.
+    tasks = _ladder(site(), [_rest_done(), _trace_done(), diff_t], used=("rest.query", "code.trace", "recompute.count"),
+                    graph="traced", evidence=[diff_e], code_index=True)
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("code.uses", {"name": "alarm_events"})
+    # 인덱스가 없으면 그 문도 없다 — 재집계까지만 보여 주고 사다리는 거기서 끝난다.
+    tasks = _ladder(site(), [_rest_done(), _trace_done(), same_t], used=("rest.query", "code.trace", "recompute.count"),
+                    graph="keyed", evidence=[same_e], code_index=False)
+    assert "code.uses" not in [t["action"] for t in tasks]
+    # 같은 이름으로 이미 냈으면(실패했어도) 다시 안 보여 준다 — 억제는 이름 기준이다(`code.trace`와 같다).
+    issued = task("t-4", role="code_tracer", action="code.uses", params={"name": "alarm_events"}, status="error")
+    tasks = _ladder(site(), [_rest_done(), _trace_done(), same_t, issued],
+                    used=("rest.query", "code.trace", "recompute.count", "code.uses"), graph="keyed",
+                    evidence=[same_e], code_index=True)
+    assert "code.uses" not in [t["action"] for t in tasks]
+
+
+def test_uses_증거_뒤_다섯째_칸은_그_자원을_쓰는_함수의_code_callers다(case):
+    same_t, same_e = _recompute_done(True)
+    uses_t, uses_e = _uses_done()
+    done = [_rest_done(), _trace_done(), same_t, uses_t]
+    used = ("rest.query", "code.trace", "recompute.count", "code.uses")
+    tasks = _ladder(site(), done, used=used, graph="keyed", evidence=[same_e, uses_e], code_index=True)
+    assert (tasks[0]["action"], tasks[0]["params"], tasks[0]["input_evidence_ids"]) == (
+        "code.callers", {"name": "sink.writer.run"}, ["t-4.e1"])
+    # 그 이름으로 냈으면 사다리는 끝 — 예시는 다른 읽기로 돌아간다.
+    asked = task("t-5", role="code_tracer", action="code.callers", params={"name": "sink.writer.run"}, status="ok",
+                 result_evidence_ids=["t-5.e1"])
+    tasks = _ladder(site(), done + [asked], used=used + ("code.callers",), graph="keyed",
+                    evidence=[same_e, uses_e], code_index=True)
+    assert "code.callers" not in [t["action"] for t in tasks] and tasks
+    # 쓰는 함수가 없는 자원(읽기만)이면 callers 칸이 없다.
+    read_only = EvidenceRef(id="t-4.e1", source="code.uses alarm_events",
+                            summary=repr("alarm_events [collection]\n  읽기 1:\n    api.q.AlarmRepo.recent (api/q.py:L3) [dt-api]"))
+    tasks = _ladder(site(), done, used=used, graph="keyed", evidence=[same_e, read_only], code_index=True)
+    assert "code.callers" not in [t["action"] for t in tasks]
+    # 실제 배선 — integrate_fields가 State의 증거와 인덱스 유무를 예시에 넘긴다.
+    state = CaseState(case=case, plan_tasks=done, evidence=[same_e, uses_e])
+    fields = briefing.integrate_fields(state, site_config=site(), max_rounds=6, services=("api",),
+                                       flow_graph=_traced_endpoint_graph(with_key=True), code_index=True)
+    assert json.loads(fields["example"])["tasks"][0]["action"] == "code.callers"
 
 
 def test_추적_안_된_끝점_그래프_없음_코드_없음이면_code_trace_예시가_없다():

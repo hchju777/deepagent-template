@@ -568,6 +568,21 @@ LineRows.execute (파일:L줄)`이 나왔다 — 스톱리스트가 끊은 바�
 (api의 `count_recent` — 진입점 `summary_badge`(라우트), `recent_alarms` — 부르는 곳 없음). `code.callers("run")`은 두
 후보를 적은 실패. CLI 출력과 글자까지 같다.
 
+### 6d-2 — 사다리 넷째·다섯째 칸 · dryrun 대본 ✅
+
+목록에만 있고 예시에 없는 action은 리드가 안 낸다(11b 측정 — 셋째·넷째 칸이 사내 네 실행에서 0번). 사다리를
+rest → trace → recompute.count → **uses** → **callers**로 늘리고 이름은 코드가 앞 증거에서 뽑아 박는다
+(`briefing._ladder_step`, 한 라운드에 한 칸, 억제는 "그 이름으로 낸 적이 있나"):
+
+| 칸 | 이름 | 왜 |
+|---|---|---|
+| `code.uses(name)` | 재집계가 **일치**면 그 컬렉션, **불일치**면 끝점이 읽은 캐시 키(추적 읽기 중 rediskey; 없으면 컬렉션) | 일치 = 컬렉션도 옛것 → 상류 쓰는 쪽. 불일치 = 컬렉션은 최신인데 화면이 옛것 → 캐시를 누가 쓰나. 측정판의 sink-stopped·cache-stale이 정확히 이 둘이다. `match`는 재집계 증거(repr)에 그대로 있다 |
+| `code.callers(name)` | uses 증거의 첫 "쓰기" 함수 qualname | 쓰는 함수의 진입점이 고장의 부품(컨슈머·배치)이다. 읽기만 있는 자원이면 칸이 없다 |
+
+`integrate_fields`가 State의 증거와 인덱스 유무를 예시에 넘긴다 — 인덱스가 없으면 두 칸이 없다(action도 목록에 없다).
+`examples/case-ladder.json`이 다섯 칸, `stub-seeds.json`의 `code`에 `uses`·`callers` 본문. 측정판에서 실제 CLI로 돌려
+t-1~t-5가 한 라운드에 하나씩 ✅로 끝까지 갔다.
+
 ## 커밋 계획 (넷)
 
 | | 내용 | 상태 |
@@ -588,7 +603,7 @@ LineRows.execute (파일:L줄)`이 나왔다 — 스톱리스트가 끊은 바�
 | 6c-2 후속 3 | 대조가 같은 path의 핸들러 전부에서 출발. 사내 다름 7 판정(대조 버그 1 · 추적기 오탐 1 · 인덱스 맞음 1 · 인덱스 넘어감 1 · 같은 후보 엣지 3) | ✅ |
 | 6c-2 후속 4 | 이름만 같은 후보에 "부르는 모듈이 보는가"를 표시하고 센다 — **안 한다**, [backlog ⑨](backlog.md)로. 종료 판단에 필요하지 않다 | 보류 |
 | 6d-1 | `code.callers`·`code.uses` 등재 — 포트·어댑터(인덱스를 그래프와 같은 신선도로)·스텁, CLI와 같은 조립, 인덱스 없으면 목록에서 뺌 | ✅ |
-| 6d-2 | 브리핑 사다리 넷째·다섯째 칸(uses → callers, 이름은 코드가 고른다)·dryrun 대본 | |
+| 6d-2 | 브리핑 사다리 넷째·다섯째 칸(uses → callers, 이름은 코드가 앞 증거에서 뽑는다)·dryrun 대본 다섯 칸 | ✅ |
 | 6d-3 | `code.trace`를 인덱스에서 — 함수별 미해석 호출을 심볼에 남겨 gap 유지, 두 엔진 대조 줄, 사내 150/6 확인 | |
 | 6d-4 | 추적기·parity 삭제, 측정 T8~T10 | |
 

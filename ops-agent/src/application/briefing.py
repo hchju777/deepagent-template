@@ -353,12 +353,18 @@ def _issued(tasks, action: str, **match) -> bool:
 
 
 def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[str, ...],
-                 flow_graph: dict | None):
+                 flow_graph: dict | None, evidence=(), code_index: bool = False):
     """사다리의 **다음 한 칸** — `((action, params), input_evidence_ids)` 또는 None.
 
     rest 증거(증상 재현)가 있고 그 끝점의 사슬이 오버레이에 있으면 `code.trace(endpoint=그 path)`, trace
     증거까지 있으면 그 끝점이 읽는 컬렉션에 대한 `recompute.count(expect=그 rest 증거)`. 목록에만 있고
     예시에 없는 action은 베끼는 모델이 한 번도 안 낸다(10b) — 셋째·넷째 칸이 사내 네 실행에서 0번이었다.
+
+    재집계 뒤 두 칸(11d 6d-2): **`code.uses(name)`** — 일치(컬렉션도 옛것)면 그 컬렉션을 누가 쓰나, 불일치
+    (컬렉션은 최신인데 화면이 옛것)면 끝점이 읽은 캐시 키를 누가 쓰나. 측정판의 두 변형(sink-stopped·cache-stale)이
+    정확히 이 둘이고, `match`는 재집계 증거에 그대로 있다. 그다음 **`code.callers(name)`** — uses 증거의 첫 "쓰기"
+    함수를 누가 부르나. 이름은 전부 코드가 증거에서 뽑아 박는다(리드가 지어내는 자리가 아니다). 심볼 인덱스가 없는
+    조사에서는 두 칸이 없다(그 action이 목록에도 없다).
 
     **진짜 값(path·증거 id)을 박는다.** `supporting_ids`가 모양만 보여 주는 것과 반대인데, 여기서는
     그대로 베끼는 것이 정확히 원하는 출력이기 때문이다(frame의 `code.grep patterns=[path]`와 같은 선택).
@@ -382,18 +388,57 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
                 or flowgraph.trace_lines(flow_graph, flowgraph.endpoint_id(path)) is None):
             return None
         return ("code.trace", {"endpoint": path}), [rest_id]
-    if "recompute.count" in used or not _has(site_config, "recompute", services):
+    ep = flowgraph.endpoint_id(path)
+    collections = flowgraph.traced_reads(flow_graph, ep, kind="collection") if flow_graph is not None else []
+    recomputed = _done(tasks, "recompute.count")
+    if recomputed is None:
+        if "recompute.count" in used or not _has(site_config, "recompute", services):
+            return None
+        # `expect.path`는 지시문 모양이다 — rest 원본은 `{"request", "status", "response"}`라 `response` 아래에
+        # 있다는 것까지만 우리가 안다. 숫자를 옮겨 적게 하지 않는다(3b-1).
+        shape = ("recompute.count", {
+            "collection": collections[0] if collections else "위 추적 증거에서 본 컬렉션 이름",
+            "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},
+            "expect": {"evidence": rest_id,
+                       "path": "response 아래 그 숫자의 위치 — response.items[0].alarm 같은 모양"}})
+        return shape, [traced.result_evidence_ids[0], rest_id]
+    if not code_index or flow_graph is None:
         return None
-    collections = (flowgraph.traced_reads(flow_graph, flowgraph.endpoint_id(path), kind="collection")
-                   if flow_graph is not None else [])
-    # `expect.path`는 지시문 모양이다 — rest 원본은 `{"request", "status", "response"}`라 `response` 아래에
-    # 있다는 것까지만 우리가 안다. 숫자를 옮겨 적게 하지 않는다(3b-1).
-    shape = ("recompute.count", {
-        "collection": collections[0] if collections else "위 추적 증거에서 본 컬렉션 이름",
-        "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},
-        "expect": {"evidence": rest_id,
-                   "path": "response 아래 그 숫자의 위치 — response.items[0].alarm 같은 모양"}})
-    return shape, [traced.result_evidence_ids[0], rest_id]
+    keys = flowgraph.traced_reads(flow_graph, ep, kind="rediskey")
+    match = _recompute_match(evidence, recomputed.result_evidence_ids[0])
+    # 불일치인데 끝점이 키를 안 읽는 사슬이면 컬렉션으로 — 없는 이름을 박으면 리드가 그 문을 두드린다.
+    name = keys[0] if (match is False and keys) else (collections[0] if collections else None)
+    if name is None:
+        return None
+    uses = _done(tasks, "code.uses", name=name)
+    if uses is None:
+        if _issued(tasks, "code.uses", name=name):
+            return None
+        return ("code.uses", {"name": name}), [recomputed.result_evidence_ids[0]]
+    writer = _first_writer(evidence, uses.result_evidence_ids[0])
+    if writer is None or _issued(tasks, "code.callers", name=writer):
+        return None
+    return ("code.callers", {"name": writer}), [uses.result_evidence_ids[0]]
+
+
+_MATCH = re.compile(r"\bmatch'?: (True|False)")
+# 실행기는 문자열 결과를 repr로 눕힌다(`detail`) — 개행이 `\n` 두 글자로 온다. 둘 다 받는다.
+_WRITER = re.compile(r"쓰기 \d+:(?:\\n|\n)\s*(\S+) \(")
+
+
+def _evidence_text(evidence, evidence_id: str) -> str:
+    ref = next((e for e in evidence if e.id == evidence_id), None)
+    return f"{ref.summary}\n{ref.body}" if ref is not None else ""
+
+
+def _recompute_match(evidence, evidence_id: str) -> bool | None:
+    m = _MATCH.search(_evidence_text(evidence, evidence_id))
+    return None if m is None else m.group(1) == "True"
+
+
+def _first_writer(evidence, evidence_id: str) -> str | None:
+    m = _WRITER.search(_evidence_text(evidence, evidence_id))
+    return m.group(1) if m else None
 
 
 def _task(index: int, action: str, params: dict, *, rank: int = 1, **extra) -> dict:
@@ -428,7 +473,7 @@ def next_task_number(state: CaseState) -> int:
 def example_block(site_config, *, phase: str, start: int = 1,
                   services: tuple[str, ...] = (), used: tuple[str, ...] = (),
                   first_read: tuple[str, dict] | None = None,
-                  flow_graph: dict | None = None, tasks=()) -> str:
+                  flow_graph: dict | None = None, tasks=(), evidence=(), code_index: bool = False) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
 
     `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
@@ -483,7 +528,8 @@ def example_block(site_config, *, phase: str, start: int = 1,
             # 나가서 모델이 **그대로 부른다** — 이 파일 맨 위가 경고하는 그 실패다.
             entry = _free_rest_entry(site_config)
             shapes = [entry] if entry else []
-        ladder = _ladder_step(site_config, tasks, services=services, used=used, flow_graph=flow_graph)
+        ladder = _ladder_step(site_config, tasks, services=services, used=used, flow_graph=flow_graph,
+                              evidence=evidence, code_index=code_index)
         lead = ([_task(start, ladder[0][0], ladder[0][1], rank=1, input_evidence_ids=ladder[1])]
                 if ladder else [])
         body = {"decision": "continue",
@@ -587,7 +633,8 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                                      services=services,
                                      used=tuple(t.action for t in state.plan_tasks
                                                 if t.action),
-                                     tasks=tuple(state.plan_tasks), flow_graph=flow_graph),
+                                     tasks=tuple(state.plan_tasks), flow_graph=flow_graph,
+                                     evidence=tuple(state.evidence), code_index=code_index),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state, budget=evidence_budget),

@@ -290,9 +290,11 @@ python -m src case dryrun --plan examples/case-dryrun.json --stub-seeds examples
 왜 울타리를 코드가 쥐는지는 [10a단계 문서](STEPS/step-10a-graph.md).
 
 사다리 대본도 있다 — [`examples/case-ladder.json`](examples/case-ladder.json)은 REST 읽기 →
-`code.trace` → `recompute.count` 세 칸이 한 라운드에 하나씩 게이트를 지나는 것을 보여 준다.
-seeds의 `code` 절이 사슬을 대신한다(진짜 사슬은 `code graph`의 오버레이에서 온다; `trace` 외에 `uses`·`callers`도
-같은 모양으로 적을 수 있다). 마지막 칸이 배지 0과 원천 2의 불일치를 기계의 증거로 남긴다.
+`code.trace` → `recompute.count` → `code.uses` → `code.callers` 다섯 칸이 한 라운드에 하나씩 게이트를 지나는 것을
+보여 준다. seeds의 `code` 절(`trace`·`uses`·`callers`)이 답을 대신한다(진짜는 `code graph`의 오버레이와 심볼
+인덱스에서 온다). 셋째 칸이 배지 0과 원천 2의 불일치를 기계의 증거로 남기고, 넷째·다섯째 칸이 쓰는 쪽으로 간다 —
+실제 조사에서는 이 두 칸의 이름을 코드가 앞 증거에서 뽑아 예시에 박는다(일치면 그 컬렉션, 불일치면 끝점이 읽은 캐시
+키; 그다음 그 자원을 쓰는 함수).
 
 ```bash
 python -m src case dryrun --plan examples/case-ladder.json --stub-seeds examples/stub-seeds.json

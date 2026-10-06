@@ -924,11 +924,11 @@ CASES = [
   'return ("code.trace", {"endpoint": path}), [rest_id]', 'return ("code.trace", {"endpoint": path}), []',
   ['tests/application/test_briefing.py::test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_수가_그_path의_code_trace다']),
  ('recompute 예시의 컬렉션이 추적 읽기에서 안 온다', ROOT / "src/application/briefing.py",
-  'traced_reads(flow_graph, flowgraph.endpoint_id(path), kind="collection")',
-  'traced_reads(flow_graph, flowgraph.endpoint_id(path), kind="topic")',
+  '    collections = flowgraph.traced_reads(flow_graph, ep, kind="collection")',
+  '    collections = flowgraph.traced_reads(flow_graph, ep, kind="topic")',
   ['tests/application/test_briefing.py::test_trace_증거가_있으면_다음_수가_그_끝점이_읽는_컬렉션의_recompute_count다']),
  ('integrate_fields가 태스크를 예시에 안 넘긴다', ROOT / "src/application/briefing.py",
-  'tasks=tuple(state.plan_tasks), flow_graph=flow_graph),', 'tasks=(), flow_graph=flow_graph),',
+  'tasks=tuple(state.plan_tasks), flow_graph=flow_graph,', 'tasks=(), flow_graph=flow_graph,',
   ['tests/application/test_briefing.py::test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_수가_그_path의_code_trace다']),
  ('추적 읽기 목록이 확실을 앞세우지 않는다', ROOT / "src/knowledge/flow.py",
   'found.append((_MARK_ORDER[read_mark(e)], ', 'found.append((0, ',
@@ -1286,6 +1286,42 @@ CASES = [
   '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}"',
   '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)}"',
   ['tests/knowledge/test_cli_code.py::test_code_callers_path_uses가_인덱스로_역질문에_답한다']),
+ ('재집계 뒤 uses 칸이 없다', ROOT / 'src/application/briefing.py',
+  '    if not code_index or flow_graph is None:\n        return None\n    keys =',
+  '    if True:\n        return None\n    keys =',
+  ['tests/application/test_briefing.py::test_재집계_뒤_넷째_칸은_code_uses이고_이름은_일치면_컬렉션_불일치면_끝점이_읽은_키다']),
+ ('인덱스 없어도 uses 칸을 보여 준다', ROOT / 'src/application/briefing.py',
+  '    if not code_index or flow_graph is None:',
+  '    if flow_graph is None:',
+  ['tests/application/test_briefing.py::test_재집계_뒤_넷째_칸은_code_uses이고_이름은_일치면_컬렉션_불일치면_끝점이_읽은_키다']),
+ ('불일치에서 끝점이 읽은 키 대신 컬렉션을 묻는다', ROOT / 'src/application/briefing.py',
+  '    name = keys[0] if (match is False and keys) else',
+  '    name = keys[0] if False else',
+  ['tests/application/test_briefing.py::test_재집계_뒤_넷째_칸은_code_uses이고_이름은_일치면_컬렉션_불일치면_끝점이_읽은_키다']),
+ ('일치·불일치를 안 가리고 키를 묻는다', ROOT / 'src/application/briefing.py',
+  '    name = keys[0] if (match is False and keys) else',
+  '    name = keys[0] if keys else',
+  ['tests/application/test_briefing.py::test_재집계_뒤_넷째_칸은_code_uses이고_이름은_일치면_컬렉션_불일치면_끝점이_읽은_키다']),
+ ('uses 칸 억제가 없다', ROOT / 'src/application/briefing.py',
+  '        if _issued(tasks, "code.uses", name=name):\n            return None',
+  '        if False:\n            return None',
+  ['tests/application/test_briefing.py::test_재집계_뒤_넷째_칸은_code_uses이고_이름은_일치면_컬렉션_불일치면_끝점이_읽은_키다']),
+ ('쓰는 함수가 없어도 callers 칸을 낸다', ROOT / 'src/application/briefing.py',
+  '    if writer is None or _issued(tasks, "code.callers", name=writer):',
+  '    if _issued(tasks, "code.callers", name=writer):',
+  ['tests/application/test_briefing.py::test_uses_증거_뒤_다섯째_칸은_그_자원을_쓰는_함수의_code_callers다']),
+ ('callers 칸 억제가 없다', ROOT / 'src/application/briefing.py',
+  '    if writer is None or _issued(tasks, "code.callers", name=writer):',
+  '    if writer is None:',
+  ['tests/application/test_briefing.py::test_uses_증거_뒤_다섯째_칸은_그_자원을_쓰는_함수의_code_callers다']),
+ ('integrate가 증거를 예시에 안 넘긴다', ROOT / 'src/application/briefing.py',
+  '                                     evidence=tuple(state.evidence), code_index=code_index),',
+  '                                     evidence=(), code_index=code_index),',
+  ['tests/application/test_briefing.py::test_uses_증거_뒤_다섯째_칸은_그_자원을_쓰는_함수의_code_callers다']),
+ ('쓰는 함수 대신 읽는 함수를 집는다', ROOT / 'src/application/briefing.py',
+  '_WRITER = re.compile(r"쓰기 \\d+:',
+  '_WRITER = re.compile(r"읽기 \\d+:',
+  ['tests/application/test_briefing.py::test_uses_증거_뒤_다섯째_칸은_그_자원을_쓰는_함수의_code_callers다']),
 ]
 # 건드린 파일의 **원본**을 들고 있는다. 신호로 끊겨도 이걸로 되돌린다.
 _ORIGINAL: dict = {}
@@ -1313,7 +1349,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
 
 # **케이스를 붙이다 조용히 놓치는 일**이 실제로 있었다 — 문자열 치환이 안 맞아도
 # 파이썬은 아무 말도 안 한다. 수가 줄면 여기서 드러난다.
-assert len(CASES) >= 335, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 344, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
