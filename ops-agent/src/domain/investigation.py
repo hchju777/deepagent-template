@@ -39,6 +39,9 @@ class TaskOutcome(StrictModel):
     # 말해도 도구가 만들지 않았으면 여기 없어야 한다(규율 3).
     evidence: list[EvidenceRef] = []
     error: str | None = None
+    # 발견 읽기(`redis.scan`·`mongo.list_collections`·`kafka.list_topics`)가 돌려준 이름 **그대로**. 코드가 선언된 이름과
+    # 대조할 때 쓴다(R2-2b-2) — 렌더한 본문을 다시 파싱하지 않는다. 다른 읽기는 빈 목록이다.
+    found: list[str] = []
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):

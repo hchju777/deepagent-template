@@ -66,6 +66,9 @@ class CaseState(StrictModel):
     # LLM이 죽거나 형식을 못 지킨 기록. **비어 있지 않으면 그 조사는 반쪽이다.**
     # 없으면 "아무것도 안 했다"가 "조사할 게 없었다"와 같은 모양이 된다.
     llm_errors: Annotated[list[str], operator.add] = []
+    # 코드가 증거에서 **대조해 낸 사실**(R2-2b-2): "선언됐는데 없는 키 1개 (scan *, t-1): alarm:stats:{line}". 리드가
+    # 쥐고 있어야 할 것을 하네스가 대신 쥔다 — 약한 모델은 r2의 발견을 r3에서 잊었다(사내 c-1). `<열린 질문>`에 실린다.
+    facts: Annotated[list[str], operator.add] = []
     # 12a — 조사가 **어떻게 끝났든** conclude가 채운다(상한·no_runnable·LLM 실패 전부).
     # None은 "아직 안 끝났다"뿐이다.
     verdict: Verdict | None = None

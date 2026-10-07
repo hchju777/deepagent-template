@@ -12,11 +12,12 @@
 `ProbeResult`의 봉투를 그대로 물려받는다 — 특히 `complete`. 표본이 잘렸는데 완전한
 척하면 12a의 verify가 "없음"을 근거로 한 결론을 못 걸러낸다.
 """
+import json
 from collections import OrderedDict
 from typing import Any
 
 from src.application.recompute import Recomputer
-from src.domain.actions import ACTIONS, action_problem, describe, narrowed, run_action
+from src.domain.actions import ACTIONS, DISCOVERY_ACTIONS, action_problem, describe, narrowed, run_action
 from src.domain.base import Clock
 from src.domain.case import Case, EvidenceRef, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
@@ -79,7 +80,7 @@ class ProbeRunner(TaskRunnerPort):
                                error=f"{source} — {result.error}")
 
         body, ours = detail(result.data, limit=(self._narrowed_chars if narrowed(task.action, task.params)
-                                                else self._detail_chars))
+                                                else self._detail_chars), focus=focus_of(case))
         ref = EvidenceRef(
             id=EvidenceRef.make_id(task.id, 1),
             source=source,
@@ -98,7 +99,22 @@ class ProbeRunner(TaskRunnerPort):
         while len(self._raw) > _RAW_KEEP:
             self._raw.popitem(last=False)
         return TaskOutcome(task_id=task.id, status="ok",
-                           summary=f"{source} → {ref.summary}{note}", evidence=[ref])
+                           summary=f"{source} → {ref.summary}{note}", evidence=[ref],
+                           found=_found(task.action, result.data))
+
+
+def focus_of(case) -> tuple[str, ...]:
+    """케이스 `target`의 식별 값들 — 순찰 판정이 `/`로 이은 것(`rules.py`)을 되푼다. 목록 증거에서 이 값이 전부 든 행을
+    앞에 통째로 둔다(R2-2b-2). 한 글자는 어디에나 들어서 안 센다."""
+    target = getattr(case, "target", None) or ""
+    return tuple(part for part in target.split("/") if len(part) >= 2)
+
+
+def _found(action: str, data: Any) -> list[str]:
+    """발견 읽기의 이름 목록 그대로 — 코드가 선언된 이름과 대조한다(`application/facts.py`)."""
+    if action in DISCOVERY_ACTIONS and isinstance(data, list) and all(isinstance(x, str) for x in data):
+        return list(data)
+    return []
 
 
 def _summarize(data: Any) -> str:
@@ -112,7 +128,7 @@ def _summarize(data: Any) -> str:
     return repr(data)[:_SUMMARY_CHARS]
 
 
-def detail(data: Any, *, limit: int = _DETAIL_CHARS) -> tuple[list[str], bool]:
+def detail(data: Any, *, limit: int = _DETAIL_CHARS, focus: tuple[str, ...] = ()) -> tuple[list[str], bool]:
     """리드가 읽을 여러 줄. **개행은 우리가 만든 것만 있다.**
 
     `repr`을 그냥 자르지 않고 모양을 본다:
@@ -126,16 +142,18 @@ def detail(data: Any, *, limit: int = _DETAIL_CHARS) -> tuple[list[str], bool]:
 
     **둘째 값은 "우리가 잘랐나"다.** 호출부가 그걸 봉투에 실어야 한다 — 자른 사실을
     안 실으면 리드가 조각을 전부로 착각한다.
+
+    `focus`는 케이스 `target`의 식별 값들 — 문서 목록에서 이 값이 전부 든 행을 앞에 통째로 둔다(R2-2b-2).
     """
     if isinstance(data, dict):
-        return _dict_detail(data, limit=limit)
+        return _dict_detail(data, limit=limit, focus=focus)
     if isinstance(data, list):
-        return _list_detail(data, limit=limit)
+        return _list_detail(data, limit=limit, focus=focus)
     line, cut = _line(repr(data), limit)
     return [line], cut
 
 
-def _dict_detail(mapping: dict, *, limit: int) -> tuple[list[str], bool]:
+def _dict_detail(mapping: dict, *, limit: int, focus: tuple[str, ...] = ()) -> tuple[list[str], bool]:
     """**키 먼저.** 목록에서 필드를 먼저 보여 주는 것과 같은 이유다.
 
     중첩 config를 `repr`로 눕혀 그냥 자르면 **뒤쪽 키가 통째로 사라진다.** 사내
@@ -145,11 +163,11 @@ def _dict_detail(mapping: dict, *, limit: int) -> tuple[list[str], bool]:
     if not mapping:
         return ["비어 있다"], False
     head, cut_head = _line(", ".join(str(key) for key in mapping), limit)
-    rows, cut_rows = _entries(mapping, limit=limit)
+    rows, cut_rows = _entries(mapping, limit=limit, focus=focus)
     return [f"키 {len(mapping)}개: {head}"] + rows, cut_head or cut_rows
 
 
-def _entries(mapping: dict, *, limit: int) -> tuple[list[str], bool]:
+def _entries(mapping: dict, *, limit: int, focus: tuple[str, ...] = ()) -> tuple[list[str], bool]:
     """값을 싣되, **안 들어가는 키는 건너뛰고 계속한다.**
 
     목록(`_fill`)은 첫 예산 초과에서 멈춘다 — 문서 `[1]` 다음에 `[5]`가 나오면
@@ -160,6 +178,15 @@ def _entries(mapping: dict, *, limit: int) -> tuple[list[str], bool]:
     """
     taken, used, skipped, cut = [], 0, 0, False
     for key, value in mapping.items():
+        if _doc_list(value):
+            # 문서 목록 값(`rest.query`의 `response`)은 한 줄로 눕히지 않는다 — 사내 실측에서 19개 항목이 첫 항목에서
+            # 잘렸다. 목록처럼 필드 줄 + 항목당 한 줄로, 남은 예산 안에서(대상 행 먼저).
+            block, cut_block = _list_detail(value, limit=max(limit - used, 0), focus=focus)
+            lines = [f"{key}: {block[0]}"] + [f"  {row}" for row in block[1:]]
+            taken += lines
+            used += sum(len(line) for line in lines)
+            cut = cut or cut_block
+            continue
         flat, cut_row = _line(f"{key}: {value!r}", limit)
         if taken and used + len(flat) > limit:
             skipped += 1
@@ -173,7 +200,16 @@ def _entries(mapping: dict, *, limit: int) -> tuple[list[str], bool]:
     return taken, cut
 
 
-def _list_detail(rows: list, *, limit: int) -> tuple[list[str], bool]:
+def _doc_list(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(row, dict) for row in value)
+
+
+def _compact(row: dict) -> str:
+    # 압축 JSON — repr보다 짧고(따옴표·공백) 리드가 `filter`·`path`에 그대로 옮겨 쓸 수 있는 모양이다.
+    return json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _list_detail(rows: list, *, limit: int, focus: tuple[str, ...] = ()) -> tuple[list[str], bool]:
     if not rows:
         return ["0건 — 비어 있다"], False
     if all(isinstance(row, dict) for row in rows):
@@ -184,9 +220,14 @@ def _list_detail(rows: list, *, limit: int) -> tuple[list[str], bool]:
                     seen.add(key)
                     fields.append(str(key))
         head, cut_head = _line(", ".join(fields), limit)
-        body, cut_body = _fill([f"[{i}] {repr(row)}" for i, row in enumerate(rows, 1)],
-                               limit=limit, total=len(rows))
-        return [f"{len(rows)}건 · 필드: {head}"] + body, cut_head or cut_body
+        texts = [_compact(row) for row in rows]
+        # 케이스 `target`의 값이 전부 든 행 — 사내 실측에서 대상 행은 19개 중 뒤쪽이라 예산 밖이었다. 앞에 두되
+        # `[n]`은 원래 자리라 리드가 "몇 번째"를 그대로 옮겨 적을 수 있다.
+        hits = [i for i, text in enumerate(texts) if focus and all(value in text for value in focus)]
+        order = hits + [i for i in range(len(rows)) if i not in set(hits)]
+        body, cut_body = _fill([f"[{i + 1}] {texts[i]}" for i in order], limit=limit, total=len(rows))
+        note = f" · 대상 행 {len(hits)}건 먼저" if hits else ""
+        return [f"{len(rows)}건 · 필드: {head}{note}"] + body, cut_head or cut_body
     # 이름 목록은 **한 줄에 여러 개**로 채운다. 한 줄에 하나씩 쓰면 같은 예산에
     # 훨씬 적게 보이는데, 여기서 리드가 하려는 일이 바로 "179개 중에 고르기"다 —
     # 이름이 더 보일수록 고를 수 있는 폭이 넓어진다.

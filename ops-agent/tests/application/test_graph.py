@@ -96,3 +96,45 @@ async def test_conclude_결정이면_상한_전에도_끝난다(case):
                     integrate=done)
     final = await run(deps, case)
     assert (final["round"], final["stopped_by"]) == (1, "decision")
+
+
+# ── R2-2b-2 — scan 결과와 선언된 키의 대조는 코드가 한다 ──
+
+class _ScanRunner:
+    def __init__(self, found, *, complete=True):
+        self._found, self._complete = found, complete
+
+    def describe(self):
+        return "scan"
+
+    async def run(self, task, *, case):
+        from src.domain.case import EvidenceRef
+        from src.domain.investigation import TaskOutcome
+        return TaskOutcome(task_id=task.id, status="ok", summary=f"{len(self._found)}건", found=list(self._found),
+                           evidence=[EvidenceRef(id=f"{task.id}.e1", source=f"redis.scan {task.params}",
+                                                 summary=f"{len(self._found)}건", body="", complete=self._complete)])
+
+
+async def _facts_after(case, *, pattern, found, complete=True):
+    from dataclasses import replace
+    deps = replace(deps_for(_ScanRunner(found, complete=complete), max_rounds=1,
+                            first_tasks=[task("t-1", action="redis.scan", params={"pattern": pattern})]),
+                   declared={"rediskey": ("alarm:stats:{line}", "hb:{service}")})
+    return await run(deps, case)
+
+
+async def test_완전한_scan에_선언된_키가_없으면_사실로_남긴다(case):
+    """사내 실측 c-1: r2가 쥐고 있던 "요약 키가 없다"가 r3에서 사라졌다. 코드가 대조해 State에 남긴다 — 템플릿
+    (`alarm:stats:{line}`)은 `{` 앞부분으로 맞춘다."""
+    state = await _facts_after(case, pattern="*", found=["hb:sink", "hb:processor"])
+    assert len(state["facts"]) == 1
+    fact = state["facts"][0]
+    assert "선언됐는데 없는 키 1개" in fact and "alarm:stats:{line}" in fact and "hb:{service}" not in fact
+    assert "t-1" in fact and "선언됐는데 없는 키" in state["plan_tasks"][0].result_summary
+
+
+async def test_패턴이_안_덮는_키와_잘린_scan은_없다고_하지_않는다(case):
+    narrow = await _facts_after(case, pattern="hb:*", found=["hb:sink"])
+    assert narrow["facts"] == []                                   # `hb:*`는 alarm:stats에 대해 아무 말도 안 한다
+    cut = await _facts_after(case, pattern="*", found=["hb:sink"], complete=False)
+    assert cut["facts"] == []                                      # 잘린 표본으로는 "없다"를 주장할 수 없다

@@ -33,9 +33,10 @@ LangGraph 타입을 아는 것은 `graph.py` 하나뿐이고, 여기는 State를
 """
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
+from src.application.facts import facts_for
 from src.application.state import CaseState, merge_by_id
 from src.domain.actions import DISCOVERED_ARGS, describe, name_known
 from src.domain.case import Case, CauseLink, Hypothesis, PlanTask, Verdict
@@ -74,6 +75,9 @@ class EngineDeps:
     # 판정의 `component`가 가리킬 수 있는 부품 — 토폴로지의 서비스 이름. 증거 본문과 그래프
     # 이름(`known_names`)은 `_universe`가 더하므로 여기엔 서비스만 온다.
     components: frozenset = frozenset()
+    # 흐름 그래프가 선언한 이름, 종류별(`rediskey` → 접수 끝점이 읽는 키 템플릿, 없으면 config의 전부). 발견 읽기의 결과와
+    # 대조해 "선언됐는데 없는 키"를 사실로 남긴다(`facts.py`). 그래프가 없으면 비어 있고 아무 사실도 안 남는다.
+    declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 # 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
@@ -339,12 +343,13 @@ def make_nodes(deps: EngineDeps) -> dict:
         except Exception as exc:                                    # noqa: BLE001
             outcome = TaskOutcome(task_id=task.id, status="error",
                                   error=f"{type(exc).__name__}: {exc}")
+        facts = facts_for(task, outcome, deps.declared)
         done = task.model_copy(update={
             "status": outcome.status,
-            "result_summary": outcome.summary or None,
+            "result_summary": " · ".join([outcome.summary, *facts]) if facts else (outcome.summary or None),
             "result_evidence_ids": [e.id for e in outcome.evidence],
             "error": outcome.error})
-        return {"plan_tasks": [done], "evidence": list(outcome.evidence)}
+        return {"plan_tasks": [done], "evidence": list(outcome.evidence), "facts": facts}
 
     async def integrate(state: CaseState) -> dict:
         def accept(reply: dict, base: CaseState):

@@ -532,11 +532,14 @@ def find_seeds(graph: dict, texts) -> list[str]:
     return services + resources[:_MAX_RESOURCE_SEEDS]
 
 
-def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
+def flow_text(graph: dict, seeds: list[str], *, budget: int = 800, prefer: tuple[str, ...] = ()) -> str:
     """`<데이터 흐름>` 본문. **config 층 엣지만** — 코드 층은 사내에서 소음으로 확인됐고 홉을
     밟는 것은 11b의 일이다. 씨앗의 이웃 1단계, 그다음 닿은 서비스의 토픽(2단계). 씨앗이 없으면
     토픽 골격(누가 내고 누가 받나). `budget`자에서 끊고 끊었다고 적는다.
-    `레포{a,b}`는 같은 config를 쓰는 서비스 전부 — 어느 쪽인지는 config가 모른다."""
+    `레포{a,b}`는 같은 config를 쓰는 서비스 전부 — 어느 쪽인지는 config가 모른다.
+
+    `prefer`는 케이스의 단어들(증상·target) — 관계당 여덟 이름 안에 그 단어가 든 이름을 먼저 둔다. 끝점 씨앗의 줄은
+    맨 앞에 **예산 밖**으로 — 둘 다 사내 실측(키 8개 + "외 21개"가 예산을 먹고 접수 끝점 줄이 밀렸다)에서 왔다."""
     by_id = {n["id"]: n for n in graph["nodes"]}
     # `serves`는 코드에서 왔지만 배선이다(라우트 선언은 이름 매칭이 아니라 구문이다) — 끝점 줄이 서야
     # 접수 경로의 path에서 서빙 서비스로 첫 홉이 이어진다.
@@ -564,7 +567,8 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
 
     def clip(names) -> str:
         # 관계당 여덟 개까지 — 사내에서 토픽 15개가 한 줄에 늘어서 예산 800자를 거의 다 먹었다.
-        names = sorted(names)
+        # 케이스의 단어가 든 이름이 먼저 — 알파벳순이면 지금 보려는 이름이 "외 N개"에 숨는다.
+        names = sorted(names, key=lambda n: (0 if _preferred(n, prefer) else 1, n))
         if len(names) > _MAX_NAMES:
             names = names[:_MAX_NAMES] + [f"외 {len(names) - _MAX_NAMES}개"]
         return ", ".join(names)
@@ -639,6 +643,7 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
         return out
 
     lines: list[str] = []
+    pinned: list[str] = []
     if seeds:
         # 자원 씨앗에 닿은 서비스는 토픽만(15개 토픽이 declares 수십 개와 같이 오면 예산이 끝난다).
         # 끝점 씨앗에 닿은 서비스는 전부 — 사다리의 다음 칸이 "그 코드가 읽는 데이터"이고, 그게
@@ -648,7 +653,9 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
         via_reads: list[str] = []
         for sid in seeds:
             if sid in by_id:
-                lines.append(line_for(sid))
+                # 끝점 줄은 접수 경로 그 자체라 예산 밖에 둔다 — 서비스 씨앗이 앞서면(`find_seeds`는 서비스 먼저) 작은
+                # 예산에서 끝점 줄이 먼저 떨어졌다.
+                (pinned if by_id[sid]["type"] == "endpoint" else lines).append(line_for(sid))
                 if by_id[sid]["type"] == "endpoint":
                     via_endpoint += [e["source"] for e in links if e["target"] == sid]
                     via_reads += [e["target"] for e in links if e["source"] == sid and e.get("origin") == "trace"]
@@ -672,7 +679,24 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800) -> str:
             break
         out.append(line)
         used += len(line) + 1
-    return "\n".join(out)
+    return "\n".join(pinned + out)
+
+
+def _preferred(name: str, prefer: tuple[str, ...]) -> bool:
+    low = name.lower()
+    return any(word and word.lower() in low for word in prefer)
+
+
+def declared_keys(graph: dict | None, path: str | None) -> tuple[str, ...]:
+    """config가 선언한 Redis 키 템플릿 — 접수 끝점(`path`)이 읽는 것이 추적돼 있으면 그것만, 아니면 그래프의 전부.
+    `redis.scan` 결과와 대조해 "선언됐는데 없는 키"를 남기는 데 쓴다(`application/facts.py`)."""
+    if not graph:
+        return ()
+    if path:
+        keys = traced_reads(graph, endpoint_id(path), kind="rediskey")
+        if keys:
+            return tuple(keys)
+    return tuple(sorted({n["label"] for n in graph.get("nodes", []) if n.get("type") == "rediskey"}))
 
 
 _CONF_RANK = {"EXTRACTED": 0, "INFERRED": 1, "AMBIGUOUS": 2}

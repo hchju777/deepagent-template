@@ -26,6 +26,7 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 
 LINES = ["L1", "L2", "L3"]
+BADGE_TITLES = ["Setup", "Idle", "Quality", "Stop", "Caution", "Alarm"]
 
 
 def _git(*args, cwd: Path) -> None:
@@ -197,6 +198,8 @@ VARIANTS = {
     "sink-stopped": "sink 컨슈머 정지 — 토픽엔 새 메시지, 컬렉션·캐시·화면은 4시간째 옛것",
     "cache-stale": "sink는 컬렉션에 쓰는데 stats 캐시를 안 갱신 — 컬렉션은 최신, 캐시·화면은 옛것",
     "healthy": "고장 없음 — 배지가 창 안 문서 수와 같다",
+    # 사내 실측 c-1의 모양 — 요약 키가 Redis에 아예 없다. "선언됐는데 없는 키"가 r1 브리핑에 실리는지 잰다.
+    "cache-missing": "sink는 컬렉션에 쓰는데 stats 캐시 키를 한 번도 안 만들었다 — 키 자체가 없고 화면은 0",
 }
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 
@@ -237,14 +240,19 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
         # 토픽별로 답하고, 어느 토픽이 밀리는지가 두 서비스를 가르는 유일한 숫자다.
         "lags": {"gumi-mx-core": {"mx.alarm.main": 0 if sink_alive else 1830, "mx.alarm.raw": 0}},
         "redis": {
-            **{f"alarm:stats:{l}": json.dumps({"count_1h": counts[l],
-                                               "updated_at": fresh(1) if stats_fresh else _iso(stale)})
-               for l in LINES},
+            **({} if variant == "cache-missing" else
+               {f"alarm:stats:{l}": json.dumps({"count_1h": counts[l],
+                                                "updated_at": fresh(1) if stats_fresh else _iso(stale)})
+                for l in LINES}),
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게
         # "API가 죽었다"로 읽힌다(첫 로컬 실행에서 `prod_status`가 그랬다).
         "rest": {"lines": LINES,
-                 "summary_badge": {l: {"alarm": counts[l], "caution": 0, "normal": 3} for l in LINES},
+                 # 사내 모양 — 라인×항목의 행 목록(식별은 group/title, 케이스 target `L1/Alarm`이 그 둘을 이은 것).
+                 # 대상 행이 뒤쪽에 오게 둔다: 증거가 첫 행에서 잘리면 리드가 대상 행을 못 보는 사내 실측의 재현이다.
+                 "summary_badge": [{"group": l, "title": t, "alarm": counts[l] if t == "Alarm" else 0,
+                                    "caution": 0, "normal": 3}
+                                   for t in BADGE_TITLES for l in LINES],
                  "prod_status": [{"line_code": l, "status": "RUN", "updated_at": fresh(1)} for l in LINES],
                  "oee_summary": {"line": "L3", "oee": 0.87, "date": _iso(now)[:10]}},
     }

@@ -1800,7 +1800,71 @@ CASES += [
   ["tests/application/test_briefing.py::test_좁혀_읽기_규칙이_integrate_프롬프트에_있다"]),
 ]
 
-assert len(CASES) >= 438, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-2b-2 — 증거 모양: 대상 행 먼저·항목당 한 줄·찾은 이름·선언됐는데 없는 키·끝점 줄 고정·이름 순서 ──
+FC = ROOT / "src/application/facts.py"
+LC = ROOT / "tools/local_case.py"
+RPT = "tests/application/test_runner_probe.py"
+GT = "tests/application/test_graph.py"
+FT2 = "tests/knowledge/test_flow.py"
+CASES += [
+ ("대상 행을 앞에 안 둔다", RP,
+  "        hits = [i for i, text in enumerate(texts) if focus and all(value in text for value in focus)]",
+  "        hits = []",
+  [f"{RPT}::test_대상_값이_든_행을_앞에_통째로_두고_나머지는_한_줄씩"]),
+ ("target의 식별 값을 안 푼다", RP,
+  '    return tuple(part for part in target.split("/") if len(part) >= 2)', "    return ()",
+  [f"{RPT}::test_대상_값이_든_행을_앞에_통째로_두고_나머지는_한_줄씩"]),
+ ("dict 안의 문서 목록을 한 줄로 눕힌다", RP,
+  "        if _doc_list(value):", "        if False:",
+  [f"{RPT}::test_rest_응답의_response_목록은_항목당_한_줄이다"]),
+ ("발견 읽기의 이름을 안 남긴다", RP,
+  "                           found=_found(task.action, result.data))", "                           found=[])",
+  [f"{RPT}::test_발견_읽기는_찾은_이름을_outcome에_싣는다"]),
+ ("잘린 scan으로도 없다고 한다", FC,
+  "            or not outcome.evidence[0].complete or not declared.get(kind)):", "            or not declared.get(kind)):",
+  [f"{GT}::test_패턴이_안_덮는_키와_잘린_scan은_없다고_하지_않는다"]),
+ ("패턴이 안 덮는 키도 없다고 한다", FC,
+  "    return head.startswith(prefix) or prefix.startswith(head)", "    return True",
+  [f"{GT}::test_패턴이_안_덮는_키와_잘린_scan은_없다고_하지_않는다"]),
+ ("템플릿 키를 앞부분으로 안 맞춘다", FC,
+  "        return any(name.startswith(head) for name in found)", "        return False",
+  [f"{GT}::test_완전한_scan에_선언된_키가_없으면_사실로_남긴다"]),
+ ("사실을 State에 안 남긴다", ND,
+  '        return {"plan_tasks": [done], "evidence": list(outcome.evidence), "facts": facts}',
+  '        return {"plan_tasks": [done], "evidence": list(outcome.evidence)}',
+  [f"{GT}::test_완전한_scan에_선언된_키가_없으면_사실로_남긴다"]),
+ ("사실을 태스크 요약에 안 붙인다", ND,
+  '            "result_summary": " · ".join([outcome.summary, *facts]) if facts else (outcome.summary or None),',
+  '            "result_summary": outcome.summary or None,',
+  [f"{GT}::test_완전한_scan에_선언된_키가_없으면_사실로_남긴다"]),
+ ("끝점 씨앗 줄을 예산 안에 둔다", FLW,
+  '                (pinned if by_id[sid]["type"] == "endpoint" else lines).append(line_for(sid))',
+  "                lines.append(line_for(sid))",
+  [f"{FT2}::test_흐름_텍스트는_끝점_씨앗_줄을_예산_밖에_둔다"]),
+ ("이름을 알파벳순으로만 둔다", FLW,
+  "        names = sorted(names, key=lambda n: (0 if _preferred(n, prefer) else 1, n))", "        names = sorted(names)",
+  [f"{FT2}::test_이름_목록은_prefer_단어가_든_것이_먼저다"]),
+ ("끝점이 읽는 키가 있어도 전부를 준다", FLW,
+  "        if keys:\n            return tuple(keys)", "        if False:\n            return tuple(keys)",
+  [f"{FT2}::test_선언된_키는_끝점이_읽는_것_없으면_config의_전부다"]),
+ ("끝점을 모르면 선언된 키를 안 준다", FLW,
+  '    return tuple(sorted({n["label"] for n in graph.get("nodes", []) if n.get("type") == "rediskey"}))', "    return ()",
+  [f"{FT2}::test_선언된_키는_끝점이_읽는_것_없으면_config의_전부다"]),
+ ("열린 질문에 사실이 없다", B,
+  '        lines.append(f"- {fact}")\n    cut = [', "        pass\n    cut = [",
+  ["tests/application/test_briefing.py::test_열린_질문에_코드가_남긴_사실이_실린다"]),
+ ("같은 이름의 사실을 두 번 싣는다", B,
+  "        if names in seen:\n            continue", "        if False:\n            continue",
+  ["tests/application/test_briefing.py::test_열린_질문에_코드가_남긴_사실이_실린다"]),
+ ("흐름 블록이 케이스 단어를 안 넘긴다", B,
+  "                               prefer=case_words(state.case))", "                               prefer=())",
+  ["tests/application/test_briefing.py::test_흐름_블록은_증상_단어와_겹치는_이름을_먼저_둔다"]),
+ ("cache-missing 변형이 캐시 키를 만든다", LC,
+  '            **({} if variant == "cache-missing" else', '            **({} if False else',
+  ["tests/test_local_case.py::test_cache_missing은_캐시_키가_아예_없고_배지는_0이다"]),
+]
+
+assert len(CASES) >= 455, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -246,3 +246,55 @@ async def test_경로로_고른_redis_값은_예산에_안_잘린다(case):
     assert ref.complete and ref.body.count("x" * 40) == 20
     small = await runner.run(task("t-2", action="redis.get", params={"key": "k"}), case=case)
     assert not small.evidence[0].complete                                # 경로 없이 읽은 큰 값은 전처럼 예산에서 잘린다
+
+
+# ── R2-2b-2 — 증거 모양: 대상 행 먼저·항목당 한 줄·찾은 이름 ──
+
+def _badge_rows(n=19):
+    return [{"group": f"L{i % 3 + 1}", "title": ["Alarm", "Caution"][i % 2], "alarm": i, "note": "n" * 30}
+            for i in range(n)]
+
+
+async def test_대상_값이_든_행을_앞에_통째로_두고_나머지는_한_줄씩(case):
+    """사내 실측: 19개 항목 중 첫 항목에서 잘려 리드가 대상 행을 못 봤다. 케이스 `target`(식별 값을 `/`로 이은 것)이
+    든 행은 **앞에 통째로**, 나머지는 압축 JSON 한 줄씩 예산까지. `[n]`은 원래 자리다."""
+    rows = _badge_rows()
+    mongo = Recorder(result=ProbeResult.succeeded(rows, source="m", clock=lambda: T0))
+    runner = ProbeRunner(clock=lambda: T0, adapters=Bundle(mongo=mongo), detail_chars=400)
+    focused = case.model_copy(update={"target": "L3/Alarm"})
+    out = await runner.run(task("t-1", action="mongo.find", params={"collection": "c", "filter": {}}), case=focused)
+    lines = out.evidence[0].body.splitlines()
+    assert lines[0].startswith("19건 · 필드: group, title, alarm, note") and "대상 행 3건 먼저" in lines[0]
+    assert lines[1].startswith("[3] ") and '"group":"L3"' in lines[1] and '"title":"Alarm"' in lines[1]
+    assert lines[2].startswith("[9] ") and lines[3].startswith("[15] ")
+    assert not out.evidence[0].complete and "더 있다" in out.evidence[0].body
+    plain = await runner.run(task("t-2", action="mongo.find", params={"collection": "c", "filter": {}}), case=case)
+    first = plain.evidence[0].body.splitlines()
+    assert first[1].startswith('[1] {"group":"L1"') and "대상" not in first[0]      # target이 없으면 원래 순서
+
+
+async def test_rest_응답의_response_목록은_항목당_한_줄이다(case):
+    """`{request, status, response}` 꼴에서 `response`가 목록이면 한 줄 repr로 눕혀 첫 항목에서 자르지 않고, 목록처럼
+    **필드 줄 + 항목당 한 줄**로 편다. 대상 행은 거기서도 먼저다."""
+    data = {"request": {"entry": "summary_badge"}, "status": 200, "response": _badge_rows(6)}
+    rest = Recorder(result=ProbeResult.succeeded(data, source="r", clock=lambda: T0))
+    runner = ProbeRunner(clock=lambda: T0, adapters=Bundle(rest=rest), detail_chars=600)
+    focused = case.model_copy(update={"target": "L3/Alarm"})
+    out = await runner.run(task("t-1", action="rest.query", params={"entry": "summary_badge", "params": {}}), case=focused)
+    body = out.evidence[0].body
+    lines = body.splitlines()
+    head = next(i for i, l in enumerate(lines) if l.startswith("response: 6건 · 필드: group, title, alarm, note"))
+    assert lines[head + 1].startswith('  [3] {"group":"L3","title":"Alarm"') and lines[head + 1].endswith("}")
+    assert sum(1 for l in lines if l.startswith("  [")) == 6 and out.evidence[0].complete
+    assert "status: 200" in body and "request:" in body
+
+
+async def test_발견_읽기는_찾은_이름을_outcome에_싣는다(case):
+    """`redis.scan`·`mongo.list_collections`·`kafka.list_topics`가 돌려준 이름은 코드가 쓸 수 있게 구조로 남는다 —
+    "선언됐는데 없는 키"를 렌더한 본문을 다시 파싱해서 알아내지 않는다."""
+    found = ProbeResult.succeeded(["hb:sink", "hb:processor"], source="s", clock=lambda: T0)
+    runner = ProbeRunner(clock=lambda: T0, adapters=Bundle(redis=Recorder(result=found)))
+    out = await runner.run(task("t-1", action="redis.scan", params={"pattern": "hb:*"}), case=case)
+    assert out.found == ["hb:sink", "hb:processor"]
+    other = await runner.run(task("t-2", action="redis.get", params={"key": "k"}), case=case)
+    assert other.found == []

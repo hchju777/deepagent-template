@@ -66,16 +66,18 @@ R4-1의 프롬프트 상한으로 미룸). 측정판 확인은 R2-2b와 함께(`
 클라이언트로 봉투 계약만), `test_deployed_code` 3, `test_runner_probe` 1, `test_briefing` 2. 기존 넷은 "예시 읽기 하나"와
 `code.config(service, key?)` 시그니처에 맞췄다. `test_400줄이_넘는_층도_통째로_읽는다`는 키 지도 + `key=`로 끝까지 읽었는지 본다.
 
-### R2-2b-2 — 증거·브리핑
+### R2-2b-2 — 증거·브리핑 ✅ (10-07)
 
-| 항목 | 할 것 | 자리 |
+| 항목 | 한 것 | 자리 |
 |---|---|---|
-| 1-5 / 6 | `rest.query` 목록 응답: 항목당 한 줄(압축 JSON), 케이스 `target`·점검 `identity` 값이 든 행을 **앞에 통째로**, 나머지는 `외 N행(id로 연다)` | 증거 렌더(`runner_probe.detail`), `CaseRecord.target`·`check.params.identity` |
-| 5-4 | `redis.scan` 결과가 오면 코드가 **끝점이 읽는 키 목록**(`flow.traced_reads(kind="rediskey")`)과 대조해 `선언됐는데 없는 키 N: …`를 사실로(열린 질문에, 증거 요약에) | execute 뒤 후처리(`nodes.execute` 또는 `briefing`), `flow.py` |
-| 7 | `<데이터 흐름>`: 접수 끝점 줄을 예산 밖에 고정, `_MAX_NAMES` 안에 증상·케이스 단어와 겹치는 이름 먼저 | `briefing.flow_block`, `flow.flow_text` |
+| 1-5 / 6 | 문서 목록은 항목당 **압축 JSON 한 줄**(repr 대신 — 짧고 `filter`에 그대로 옮겨 쓴다). 케이스 `target`(식별 값을 `/`로 이은 것)의 값이 전부 든 행을 **앞에 통째로**, `[n]`은 원래 자리, 머리줄에 `대상 행 N건 먼저`. dict 안의 문서 목록(`rest.query`의 `response`)도 한 줄로 눕히지 않고 같은 모양으로 편다. "외 N행(id로 연다)"는 안 했다 — `evidence.open`이 없다(R4) | `runner_probe.detail(focus=)`, `focus_of(case)` |
+| 5-4 | 발견 읽기의 이름을 `TaskOutcome.found`에 구조로 남기고, `execute`가 `deps.declared`(접수 끝점이 읽는 키 템플릿, 없으면 config의 전부 — `flow.declared_keys`)와 대조해 `선언됐는데 없는 키 N개 (scan P, t-k): …`를 **State `facts`**에, 태스크 요약 뒤에도. 잘린 scan·패턴이 안 덮는 템플릿은 말하지 않는다 | `application/facts.py`, `nodes.execute`, `EngineDeps.declared`, `state.facts`, `__main__` 배선 |
+| 7 | 끝점 씨앗 줄은 맨 앞에 **예산 밖**, 관계당 여덟 이름은 증상·target 단어가 든 것 먼저(`prefer=`) | `flow.flow_text`, `briefing.case_words` |
+| 측정판 | 변형 `cache-missing`(요약 키가 아예 없음 — 사내 c-1형), 배지 응답은 사내 모양의 **행 목록**(group/title, 대상 행은 16번째) | `tools/local_case.py` |
 
-종료 판단: 측정판 c-1형 픽스처(`tools/local_case.py`에 `pipeline-off` 변형 추가 — 요약 키 없음)에서 r1 브리핑에 대상 행과
-`선언됐는데 없는 키`가 실린다. 스윕 +6 안팎.
+종료 판단 — 측정판에서 실제 소비자로 확인: `cache-missing`에서 r1에 `rest.query`+`redis.scan alarm:*`+`redis.scan *`를 내니 r1
+integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 행 1건 먼저` 다음 줄이 `[16] {"group":"L1","title":"Alarm",…}`이고,
+`<열린 질문>`에 `선언됐는데 없는 키 1개 (scan alarm:*, t-2): alarm:stats:{line}`가 실렸다(conclude 프롬프트에도). 스윕 +17(455).
 
 ## R2-2c — 운영·구조 (지시서 7-2·7-3, 리뷰 H)
 

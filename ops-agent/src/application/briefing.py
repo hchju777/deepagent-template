@@ -573,10 +573,26 @@ def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
     seeds_from = [state.case.symptom, *texts]
     seeds_from += [f"{ref.summary}\n{ref.body}" for ref in state.evidence]
     seeds_from += [h.statement for h in state.hypotheses]
-    body = flowgraph.flow_text(graph, flowgraph.find_seeds(graph, seeds_from), budget=budget)
+    body = flowgraph.flow_text(graph, flowgraph.find_seeds(graph, seeds_from), budget=budget,
+                               prefer=case_words(state.case))
     # 머리말은 한 줄 — 사내 블록에서 머리말이 본문만큼 길었다. 규칙은 프롬프트 본문이 말한다.
     return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
             "서비스 전부. 다른 이름은 code.flow(name).\n" + body)
+
+_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_:\-.]+")
+
+
+def case_words(case) -> tuple[str, ...]:
+    """증상과 target에 든 식별 토큰(두 글자부터) — 흐름 블록이 관계당 여덟 이름 안에 이 케이스의 이름을 먼저 둔다."""
+    return tuple(dict.fromkeys(_WORD_RE.findall(f"{case.symptom} {case.target or ''}")))
+
+
+def intake_path(case, site_config) -> str | None:
+    """접수 경로의 REST path — 판정이 본 읽기의 등재 항목에서. 없으면 None."""
+    read = start_read(case, site_config)
+    return _rest_path(site_config, read) if read else None
+
+
 INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round",
                                  "max_rounds", "rejected", "open"}
 
@@ -592,7 +608,15 @@ def open_questions_block(state: CaseState) -> str:
     읽기(사유 그대로 — 프록시 의심 같은 안내가 거기 있다), 거부된 중복(결과는 이미 증거에 있다). R2-2b가 "선언됐는데
     없는 키"를 더한다. 리드가 정하는 것은 없다 — 사실의 목록이다.
     """
-    lines = []
+    # 코드가 대조해 낸 사실이 먼저 — 리드가 알아내야 했던 것을 이미 알아낸 것이다(`facts.py`). 같은 이름을 두 scan이
+    # 각각 못 찾았으면(측정판: `alarm:*`와 `*`) 한 줄이면 된다 — 첫 scan의 것만 남긴다.
+    lines, seen = [], set()
+    for fact in state.facts:
+        names = fact.split("): ", 1)[-1]
+        if names in seen:
+            continue
+        seen.add(names)
+        lines.append(f"- {fact}")
     cut = [ref.id for ref in state.evidence if not ref.complete]
     if cut:
         lines.append(f"- 잘린 증거 {len(cut)}건: {', '.join(cut)} — 잘린 표본으로는 \"없다\"를 주장할 수 없다. "

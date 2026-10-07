@@ -864,3 +864,50 @@ def test_덮은_값_입히기는_두_번_해도_같다():
              "services": ["sink"], "relation": "consumes_as"}]
     once = flow.apply_site(_gbm_graph(), rows)
     assert flow.apply_site(once, rows) == once
+
+
+# ── R2-2b-2 — 끝점 줄 고정 · prefer 순서 · 선언된 키 ──
+
+def _endpoint_graph():
+    g = _lead_graph()
+    g["nodes"] += [{"id": "endpoint_summary_badge", "label": "/summary/badge", "type": "endpoint", "traced": "ok"},
+                   {"id": "rediskey_alarm_stats", "label": "alarm:stats:{line}", "type": "rediskey"},
+                   {"id": "rediskey_hb", "label": "hb:{service}", "type": "rediskey"}]
+    g["links"] += [{"source": "service_api", "target": "endpoint_summary_badge", "relation": "serves", "origin": "code",
+                    "confidence": "EXTRACTED", "source_file": "api/r.py", "source_location": "L5"},
+                   {"source": "endpoint_summary_badge", "target": "rediskey_alarm_stats", "relation": "reads",
+                    "origin": "trace", "confidence": "INFERRED", "via": "key", "step": 0,
+                    "source_file": "api/r.py", "source_location": "L7"},
+                   {"source": "service_sink", "target": "rediskey_hb", "relation": "declares", "origin": "config",
+                    "confidence": "EXTRACTED", "source_file": "config/gbm/mx.json", "source_location": "L9"}]
+    return g
+
+
+def test_흐름_텍스트는_끝점_씨앗_줄을_예산_밖에_둔다():
+    """씨앗은 서비스가 먼저라(`find_seeds`) 끝점 줄은 둘째 이후다 — 예산이 작으면 거기서 끊겼다(사내: 키 8개 + 외 21개).
+    끝점 줄은 맨 앞에, 예산 밖에."""
+    g = _endpoint_graph()
+    text = flow.flow_text(g, ["service_sink", "endpoint_summary_badge"], budget=30)
+    lines = text.splitlines()
+    assert lines[0].startswith("/summary/badge [endpoint]: serves: api") and "alarm:stats:{line} [rediskey]" in lines[0]
+    assert lines[1].startswith("sink [service") and len(lines) == 3 and lines[2].startswith("… (+")
+
+
+def test_이름_목록은_prefer_단어가_든_것이_먼저다():
+    g = _lead_graph()
+    for name in [f"aa{i}" for i in range(9)] + ["zz_badge_cache"]:
+        g["nodes"].append({"id": f"collection_{name}", "label": name, "type": "collection"})
+        g["links"].append({"source": "service_sink", "target": f"collection_{name}", "relation": "declares",
+                           "origin": "config", "confidence": "EXTRACTED", "source_file": "c.json", "source_location": "L1"})
+    plain = flow.flow_text(g, ["service_sink"]).splitlines()[0]
+    assert "declares: aa0, aa1" in plain and "zz_badge_cache" not in plain      # 알파벳순이면 숨는다
+    preferred = flow.flow_text(g, ["service_sink"], prefer=("badge",)).splitlines()[0]
+    assert "declares: zz_badge_cache, aa0, aa1" in preferred
+
+
+def test_선언된_키는_끝점이_읽는_것_없으면_config의_전부다():
+    g = _endpoint_graph()
+    assert flow.declared_keys(g, "/summary/badge") == ("alarm:stats:{line}",)
+    assert flow.declared_keys(g, None) == ("alarm:stats:{line}", "hb:{service}")
+    assert flow.declared_keys(g, "/nope") == ("alarm:stats:{line}", "hb:{service}")   # 모르는 끝점이면 전부
+    assert flow.declared_keys(None, "/summary/badge") == ()

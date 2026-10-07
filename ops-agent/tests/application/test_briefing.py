@@ -409,7 +409,7 @@ def test_문서가_통째로_보인다():
     assert len(repr(doc)) > 160, "문서가 짧으면 이 테스트가 아무것도 안 잡는다"
 
     body = "\n".join(detail([doc] * 5)[0])
-    for field in ("'alarm': 0", "'caution': 0", "'normal': 0"):
+    for field in ('"alarm":0', '"caution":0', '"normal":0'):              # 항목은 압축 JSON 한 줄이다(R2-2b-2)
         assert field in body, f"{field}가 안 보인다 — 리드가 값을 판단할 수 없다"
     assert "필드: _id, occ_date" in body        # 무엇이 들어 있는지부터 답한다
 
@@ -475,8 +475,8 @@ async def test_실행기가_body와_summary를_둘_다_만든다(case, clock):
         case=case)
     ref = outcome.evidence[0]
     assert len(ref.summary) <= 200                  # 사람이 볼 한 줄
-    assert "'normal': 0" in ref.body                # 리드가 볼 내용
-    assert "'normal': 0" not in ref.summary         # 요약에는 안 들어간다(잘린다)
+    assert '"normal":0' in ref.body                 # 리드가 볼 내용(압축 JSON)
+    assert "normal" not in ref.summary               # 요약에는 안 들어간다(잘린다)
 
 
 # ── 대상 코드(11a 2차)가 목록에 들어오는가 ─────────────────────────
@@ -1181,3 +1181,39 @@ def test_좁혀_읽기_규칙이_integrate_프롬프트에_있다():
 
     text = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "investigate-integrate.md").read_text(encoding="utf-8")
     assert "골라서 전부" in text and "projection" in text and "path" in text and "offset" in text
+
+
+# ── R2-2b-2 — 열린 질문의 사실·흐름 블록의 끝점 고정과 이름 순서 ──
+
+def test_열린_질문에_코드가_남긴_사실이_실린다(case):
+    state = CaseState(case=case, facts=["선언됐는데 없는 키 1개 (scan *, t-1): alarm:stats:{line}"])
+    assert "- 선언됐는데 없는 키 1개 (scan *, t-1): alarm:stats:{line}" in briefing.open_questions_block(state)
+    # 두 scan이 같은 이름을 못 찾았으면 한 줄 — 측정판에서 `alarm:*`와 `*`가 같은 줄을 둘 냈다.
+    twice = CaseState(case=case, facts=["선언됐는데 없는 키 1개 (scan alarm:*, t-2): alarm:stats:{line}",
+                                        "선언됐는데 없는 키 1개 (scan *, t-3): alarm:stats:{line}"])
+    assert briefing.open_questions_block(twice).count("선언됐는데 없는 키") == 1
+
+
+def test_흐름_블록은_접수_끝점_줄을_예산_밖에_둔다():
+    """사내 실측: 키 8개 + "외 21개"가 예산을 먹어 끝점 줄이 밀렸다. 접수 경로의 끝점 줄은 예산과 무관하게 실린다."""
+    patrol = _patrol_case()
+    state = CaseState(case=patrol, evidence=[EvidenceRef(id="e-1", source="x", summary="sink lag 1830", body="")])
+    text = briefing.flow_block(state, _traced_endpoint_graph(with_key=True), budget=40,
+                               texts=(briefing.origin_line(patrol, _site_with_check()),))
+    lines = text.splitlines()[1:]
+    assert lines[0].startswith("/summary/badge [endpoint]") and "alarm:stats:{line} [rediskey]" in lines[0]
+    assert lines[1].startswith("sink [service") and lines[-1].startswith("… (+")
+
+
+def test_흐름_블록은_증상_단어와_겹치는_이름을_먼저_둔다():
+    """관계당 여덟 개 안에 **지금 케이스의 이름**이 들게 — 알파벳순이면 `badge_cache`가 `aa…` 아홉 개에 밀려 "외 N개"로 숨는다."""
+    g = json.loads(json.dumps(FLOW_GRAPH))
+    for name in [f"aa{i}" for i in range(9)] + ["zz_badge_cache"]:
+        g["nodes"].append({"id": f"collection_{name}", "label": name, "type": "collection"})
+        g["links"].append({"source": "service_sink", "target": f"collection_{name}", "relation": "declares",
+                           "origin": "config", "confidence": "EXTRACTED", "source_file": "c.json", "source_location": "L1"})
+    case = _patrol_case(target="L1/badge")
+    state = CaseState(case=case, evidence=[EvidenceRef(id="e-1", source="x", summary="sink lag", body="")])
+    text = briefing.flow_block(state, g)
+    sink = next(l for l in text.splitlines() if l.startswith("sink [service"))
+    assert "declares: zz_badge_cache, aa0" in sink

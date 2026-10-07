@@ -91,6 +91,9 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
 # 목록으로 두는 이유: "필수 인자가 없다"가 실수인지 의도인지 표가 말해야 한다.
 NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics",
                      "code.services"})
+# **이름을 찾는** 읽기 — 결과가 이름 목록이다. 실행기가 그 목록을 `TaskOutcome.found`에 구조로 남겨, 코드가 선언된
+# 이름과 대조한다(R2-2b-2). 값은 그 이름의 종류(흐름 그래프의 노드 type).
+DISCOVERY_ACTIONS = {"redis.scan": "rediskey", "mongo.list_collections": "collection", "kafka.list_topics": "topic"}
 
 # **대상에서 찾아야 아는 이름**이 들어가는 인자. 여기 적힌 인자에 값을 대려면
 # 먼저 `list_collections`·`list_topics`·`scan`으로 찾았어야 한다([decisions ⑮]).

@@ -249,8 +249,29 @@ R1 뒤 두 판: c-1 3라운드 6분 20초, c-2 6라운드 18분 51초, 둘 다 d
 - **integrate 규칙 한 줄**(3-4) "큰 것은 잘라 보지 말고 골라서 전부 봐라"와 **예시 읽기 하나**(2-4): 사내 실측에서 리드는
   예시의 action을 그대로 베꼈다. 한 칸뿐이라 순서가 곧 선택이다 — 안 써 본 action 먼저(컨슈머 lag가 보이게), 좁혀 다시 낼
   수 있는 `mongo.find{filter}`는 그 뒤.
-- 테스트 먼저(RED 8 → GREEN). 스윕 +19(438) — 전부 RED 확인. R2-2b-2(대상 행 앞세우기·선언됐는데 없는 키·흐름 블록 고정)는
-  [plan-12a-r2-r4.md](plan-12a-r2-r4.md).
+- 테스트 먼저(RED 8 → GREEN). 스윕 +19(438) — 전부 RED 확인.
+
+### R2-2b-2 (10-07) ✅ — 증거·브리핑: 대상 행 먼저, 코드가 쥐는 사실
+
+- **대상 행 먼저, 항목당 한 줄**(1-5/6): 문서 목록은 압축 JSON 한 줄씩이고, 케이스 `target`(`L1/Alarm` — 순찰 판정이 식별 값을
+  `/`로 이은 것)의 값이 전부 든 행은 **앞에 통째로**(`[n]`은 원래 자리, 머리줄에 `대상 행 N건 먼저`). `rest.query`의
+  `{request, status, response}`에서 `response`가 문서 목록이면 한 줄로 눕히지 않고 같은 모양으로 편다 — 사내 실측에서
+  19개 항목이 첫 항목에서 잘려 리드가 대상 행을 못 봤다.
+- **선언됐는데 없는 키**(5-4): 발견 읽기(`redis.scan`·`mongo.list_collections`·`kafka.list_topics`)의 이름을
+  `TaskOutcome.found`에 구조로 남기고, `execute`가 `EngineDeps.declared`와 대조해 **State `facts`**에 적는다
+  (`application/facts.py`). 선언은 흐름 그래프에서 — 접수 끝점이 읽는 키 템플릿(`flow.declared_keys`), 추적이 없으면 config의
+  전부. 잘린 scan으로는 말하지 않고, `hb:*`는 `alarm:stats:{line}`에 대해 아무 말도 못 한다(패턴의 글자 접두와 템플릿의 `{`
+  앞부분이 겹칠 때만). `<열린 질문>` 맨 위에 실리고(같은 이름은 한 줄) 태스크 요약 뒤에도 붙는다. c-1에서 r2의 리드가
+  알아낸 "요약 키가 없다"를 r3에서 잊은 자리다 — 이제 하네스가 쥔다.
+- **흐름 블록**(7): 접수 끝점 줄은 맨 앞에 예산 밖으로(`find_seeds`는 서비스를 먼저 두므로 작은 예산에서 끝점 줄이 먼저
+  떨어졌다), 관계당 여덟 이름은 증상·target 단어가 든 것 먼저(`briefing.case_words` → `flow_text(prefer=)`).
+- **측정판**: 변형 `cache-missing`(요약 키가 아예 없음), 배지 응답은 사내 모양의 행 목록(대상 행은 18개 중 16번째).
+  실제 소비자로 확인 — 파일 턴 리드로 r1에 `rest.query`+`redis.scan alarm:*`+`redis.scan *`를 내니 r1 integrate 프롬프트의
+  증거에 `[16] {"group":"L1","title":"Alarm",…}`가 `response:` 바로 아래 첫 줄로, `<열린 질문>`에 `선언됐는데 없는 키 1개
+  (scan alarm:*, t-2): alarm:stats:{line}`가 실렸다. 프롬프트 크기 frame 3.4K · integrate 7.2K · conclude 5.6K.
+- 테스트 먼저(RED 10 → GREEN): `test_runner_probe` 3, `test_graph` 2, `test_briefing` 3, `test_flow` 3, `test_local_case` 1.
+  기존 둘은 압축 JSON 따옴표에 맞췄고 측정판 테스트 넷은 행 목록 접근으로. 스윕 +17(455). `__main__`의 `declared` 배선은
+  단위 테스트가 없다 — 측정판 실행이 그 배선을 통째로 지난다.
 
 ## 범위 밖 — 12b·13으로
 
