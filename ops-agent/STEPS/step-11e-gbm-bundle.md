@@ -25,9 +25,10 @@
 
 1. `code graph --gbm mx` 한 번으로 그 GBM의 모든 사이트가 조사에 실린다. 측정판에서 gumi 조사는
    `gumi-mx-core`, sevt 조사는 sevt 값을 받는다.
-2. 인덱스 읽기는 레포당 `git archive` 1번 + 채워진 서브모듈당 1번. `.py`용 `show` 0.
+2. 인덱스 읽기는 레포당 git 한 쌍(`ls-tree -r` + `cat-file --batch`) + 채워진 서브모듈당 한 쌍. `.py`용 `show` 0.
+   (처음엔 `git archive` 1번이었다 — 아래 11e-1의 사내 확인에서 바꿨다.)
 3. 결과 동일 — 측정판 `symbols.json`·`edges.json`은 바이트까지 같고, 오버레이는 덮어쓴 값만 다르다.
-   서브모듈 픽스처에서 show 기반과 archive 기반 인덱스가 같고 blind·stale 규칙이 같다. `git archive` 실패 시
+   서브모듈 픽스처에서 show 기반과 스냅샷 기반 인덱스가 같고 blind·stale 규칙이 같다. 스냅샷 실패 시
    파일별 show로 내려간다.
 4. graphify는 켬 그대로. 조사가 읽는 것은 전후가 같다.
 5. 사내 `code graph --gbm mx` 한 번의 시간과 `code check` 첫 줄(심볼 7,308 · calls 4,885/1,710)이 같은지.
@@ -36,21 +37,29 @@
 
 - `CodeReaderPort.snapshot(repo, commit)` — 그 커밋의 파일 전부를 `경로 → 본문`으로 한 번에. 읽기이고 커밋을
   지정하므로 포트의 성질(쓰기 없음·커밋 명시)이 그대로다. `tests/domain/test_ports.py`가 자동으로 본다.
-- `RealCodeReader.snapshot`: `git archive --format=tar <커밋>`을 메모리에서 `tarfile`로 푼다. 외부 tar도
-  디스크 쓰기도 없다. 내용은 `show(whole=True)`와 같다(같은 디코딩, 같은 1,000,000자 상한). submodule은
-  `ls`·`show`와 **같은 헬퍼**(`_declared_subs`·`_blind`·`_stale`·`_gitlink`)로 같은 규칙 — 채워진 것은 부모가 박은
-  SHA로 그 레포에서 한 번 더 받고, 안 채워진 것과 버전 없는 것은 빼고 봉투가 말한다. `export-ignore`로
-  아카이브에서 빠진 파일은 목록(`ls`)과 대조해 그만큼만 `show`로 메운다(평소 0건).
+- `RealCodeReader.snapshot`: 레포당 git 두 번 — `ls-tree -r -z <커밋>`으로 blob 목록을, `cat-file --batch`(표준 입력으로
+  sha 목록)로 본문을 받는다. 디스크 쓰기 없음. 내용은 `show(whole=True)`와 **바이트까지** 같다(같은 blob, 같은
+  디코딩, 같은 1,000,000자 상한). submodule은 `ls`·`show`와 **같은 헬퍼**(`_declared_subs`·`_blind`·`_stale`·
+  `_gitlink`)로 같은 규칙 — 채워진 것은 부모가 박은 SHA로 그 레포에서 한 쌍 더 받고, 안 채워진 것과 버전 없는
+  것은 빼고 봉투가 말한다. 목록의 gitlink(type `commit`)는 파일이 아니라 뺀다.
+- **사내 확인(10-07)에서 바꾼 것**: 처음 구현은 `git archive --format=tar`를 메모리에서 푸는 것이었는데, 사내 Windows
+  (`core.autocrlf=true`)에서 `test_snapshot은_show와_같은_내용을_한_번에_준다`·`…부모가_박은_버전으로_넣는다`가
+  CRLF로 빨간불이 났다. archive는 **체크아웃과 같은 변환**(autocrlf, `.gitattributes`의 `eol`·`filter`·`export-ignore`)을
+  타고, `show <커밋>:<경로>`는 저장소의 blob 그대로다 — 여기 리눅스에서도 `core.autocrlf=true`나 `*.json text eol=crlf`로
+  재현됐다(`test_snapshot은_작업_트리용_변환을_안_타고_show와_바이트까지_같다`). `cat-file`은 blob 그대로라 바이트까지
+  같고, `export-ignore` 구멍(과 그걸 메우던 `show`)이 없어졌고, LFS 같은 filter가 smudge로 밖에 나가려 들 일도 없다.
+  프로세스는 레포당 1 → 2(목록·본문)지만 파일 수와 무관한 것은 같다.
 - `_GitSource`(인덱서의 소스)는 첫 호출에 스냅샷을 한 번 받아 `files()`·`read()`를 거기서 답하고, 스냅샷을 못
   받으면(옛 git·시간 초과) 예전처럼 `ls`·파일별 `show`로 간다. `build_index`와 `IndexSource`는 안 바뀌었다.
 - 측정판 결과: `symbols.json`·`edges.json`·`overlay.json` **바이트까지 같다.** git 호출 47 → 36, `.py`용 `show`
-  3 → 0, `archive` 3(dt-core·shared_lib·dt-api). 남은 `show` 11은 서비스별 config 층(3×3)과 `.gitmodules`다 —
+  3 → 0, `archive` 3(dt-core·shared_lib·dt-api; 지금은 `ls-tree`+`cat-file` 3쌍). 남은 `show` 11은 서비스별 config 층(3×3)과 `.gitmodules`다 —
   11e-2에서 28사이트 덮어쓰기를 만들 때 이것도 스냅샷에서 읽는다(안 그러면 28×8×3 ≈ 670번이 되살아난다).
-- 테스트: `test_git_reader.py` 7(같은 내용·없는 커밋·서브모듈 핀 버전·blind·stale·호출 수·export-ignore),
+- 테스트: `test_git_reader.py` 9(같은 내용·없는 커밋·서브모듈 핀 버전·blind·stale·호출 수·export-ignore 파일도 듦·
+  작업 트리용 변환 안 탐·같은 내용의 두 파일),
   `test_deployed_code.py` 2(스냅샷 우선·실패 시 되돌아감), `test_cli_code.py`에 `code graph` 동안 `.py`용
   `show` 0. 구현을 먼저 써 버려서 src 변경을 stash로 걷어내고 **RED 10을 본 뒤** 되돌려 GREEN을 봤다. 스윕 +7.
 
-예상(Windows): 인덱스 읽기 1,600 × 0.5~1초 → archive 2~3번 수 초. 인덱서 파이썬은 심볼 2,172개가 1.9초
+예상(Windows): 인덱스 읽기 1,600 × 0.5~1초 → 레포당 git 두 번, 수 초. 인덱서 파이썬은 심볼 2,172개가 1.9초
 측정 → 7,308개 비례 약 10초. 확인은 종료 판단 5.
 
 ## 11e-2 — GBM 번들 레이아웃·CLI (다음)

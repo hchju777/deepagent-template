@@ -1407,17 +1407,21 @@ CASES += [
   '                if sub in blind:\n                    continue\n                sha = await self._gitlink(repo, commit, sub)',
   [f"{GRT}::test_snapshot은_버전_없는_submodule을_펼치지_않고_이유를_말한다"]),
  ("스냅샷이 submodule을 부모 SHA가 아니라 HEAD로 받는다", GR,
-  '                inner = await self._archive(repo, sha, source=f"{source} (submodule {sub}@{sha[:12]})",',
-  '                inner = await self._archive(repo, "HEAD", source=f"{source} (submodule {sub}@{sha[:12]})",',
+  '                inner = await self._blobs(repo, sha, source=f"{source} (submodule {sub}@{sha[:12]})",',
+  '                inner = await self._blobs(repo, "HEAD", source=f"{source} (submodule {sub}@{sha[:12]})",',
   [f"{GRT}::test_snapshot은_채워진_submodule을_부모가_박은_버전으로_넣는다"]),
- ("스냅샷이 export-ignore 구멍을 안 메운다", GR,
-  '        listed = await self.ls(repo, commit, max_names=200_000)\n        if listed.status == "ok":',
-  '        listed = await self.ls(repo, commit, max_names=200_000)\n        if False:',
-  [f"{GRT}::test_snapshot은_export_ignore로_빠진_파일을_show로_메운다"]),
- ("스냅샷이 디렉터리·gitlink를 파일로 넣는다", GR,
-  '                    if not member.isfile():\n                        continue',
-  '                    if False:\n                        continue',
-  [f"{GRT}::test_snapshot은_채워진_submodule을_부모가_박은_버전으로_넣는다"]),
+ ("스냅샷이 같은 내용의 파일을 하나만 준다", GR,
+  '                for path in paths_by_sha.get(header[0].decode("ascii", "replace"), ()):',
+  '                for path in paths_by_sha.get(header[0].decode("ascii", "replace"), ())[:1]:',
+  [f"{GRT}::test_snapshot은_내용이_같은_두_파일을_둘_다_준다"]),
+ ("스냅샷이 cat-file 머리줄 자리를 잘못 짚는다", GR,
+  '                pos += size + 1                     # 본문 뒤에 줄바꿈 하나',
+  '                pos += size + 2',
+  [f"{GRT}::test_snapshot은_내용이_같은_두_파일을_둘_다_준다"]),
+ ("스냅샷이 blob 마지막 글자를 빠뜨린다", GR,
+  '                text = data[pos:pos + size].decode("utf-8", "replace")[:_WHOLE_MAX_CHARS]',
+  '                text = data[pos:pos + size - 1].decode("utf-8", "replace")[:_WHOLE_MAX_CHARS]',
+  [f"{GRT}::test_snapshot은_show와_같은_내용을_한_번에_준다"]),
  ("인덱스 소스가 스냅샷을 안 쓴다", D,
   '            got = await self._reader.snapshot(self._repo, self._commit)\n            if got.status == "ok" and isinstance(got.data, dict):',
   '            got = await self._reader.snapshot(self._repo, self._commit)\n            if False:',
@@ -1429,7 +1433,7 @@ CASES += [
   [f"{DCT}::test_스냅샷을_못_받으면_예전처럼_파일별로_읽는다"]),
 ]
 
-assert len(CASES) >= 352, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 353, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

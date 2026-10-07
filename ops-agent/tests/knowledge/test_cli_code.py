@@ -659,7 +659,7 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
 
     monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
     config_root = _flow_tree(tmp_path)
-    # 11e — 인덱스는 커밋을 `archive` 한 번으로 받는다. 파일마다 `show`를 띄우면 사내 Windows에서 20분이다.
+    # 11e — 인덱스는 커밋을 `ls-tree`+`cat-file` 한 쌍으로 받는다. 파일마다 `show`를 띄우면 사내 Windows에서 20분이다.
     spawned, real = [], RealCodeReader._git_bytes
 
     async def counting(self, repo, args, **kw):
@@ -670,7 +670,7 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     assert code == 0, captured.out + captured.err
     assert [a for a in spawned if a[0] == "show" and a[1].endswith(".py")] == [], "파일마다 show를 띄웠다"
-    assert sum(1 for a in spawned if a[0] == "archive") == 1          # 레포 하나, 서브모듈 없음
+    assert sum(1 for a in spawned if a[:2] == ["cat-file", "--batch"]) == 1   # 레포 하나, 서브모듈 없음
     bundle = tmp_path / "out" / "graph" / "mx-gumi"
     symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))
     assert {s["qualname"] for s in symbols["symbols"] if s["kind"] == "module"} >= {"processor.handler", "sink.writer", "api.r"}

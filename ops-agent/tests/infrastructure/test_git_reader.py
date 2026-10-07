@@ -405,14 +405,15 @@ async def test_snapshot은_채워진_submodule을_부모가_박은_버전으로_
 
 
 async def test_snapshot은_안_채워진_submodule을_못_봤다고_말한다(nested, clock, monkeypatch):
-    """못 보는 submodule에는 `archive`를 **띄우지도 않는다** — git이 거부해 결과가 같더라도 프로세스 하나가
+    """못 보는 submodule에는 `cat-file`을 **띄우지도 않는다** — git이 거부해 결과가 같더라도 프로세스 하나가
     Windows에서 1초다. 그래서 봉투뿐 아니라 호출 수를 본다."""
     blind, _ = nested
     reader = _reader_at(blind, clock)
     spawned = _spawned(reader, monkeypatch)
     got = await reader.snapshot("dt-core", "main")
     assert got.status == "ok", got.error
-    assert spawned.count("archive") == 1
+    assert spawned.count("cat-file --batch") == 1
+    assert not any(c.endswith("@vendor/libs") for c in spawned), spawned   # 그 안에서는 아무것도 안 띄운다
     assert not any(p.startswith("vendor/libs/") for p in got.data)
     assert not got.envelope.complete and "vendor/libs" in got.envelope.truncated_reason
 
@@ -422,18 +423,21 @@ async def test_snapshot은_버전_없는_submodule을_펼치지_않고_이유를
     spawned = _spawned(reader, monkeypatch)
     got = await reader.snapshot("dt-core", "main")
     assert got.status == "ok", got.error
-    assert spawned.count("archive") == 1                           # 없는 버전에 archive를 안 띄운다
+    assert spawned.count("cat-file --batch") == 1                  # 없는 버전의 본문을 받으러 가지 않는다
+    assert "ls-tree@vendor/libs" not in spawned, spawned              # 그 안에서 띄우는 것은 stale 검사(`cat-file -e`)뿐
     assert not any(p.startswith("vendor/libs/") for p in got.data)
     assert not got.envelope.complete and "code sync" in got.envelope.truncated_reason
 
 
 def _spawned(reader, monkeypatch) -> list[str]:
-    """리더가 띄우는 git 하위 명령을 순서대로 모은다."""
+    """리더가 띄우는 git 하위 명령을 순서대로 모은다. `cat-file --batch`(스냅샷 본문)는 `cat-file -e`(stale 검사)와
+    구분하고, submodule 안에서 띄운 것은 `@경로`를 붙인다 — "그 안에는 띄우지도 않는다"를 세려면 어디서 띄웠는지가 필요하다."""
     calls: list[str] = []
     real = reader._git_bytes
 
     async def counting(repo, args, **kw):
-        calls.append(args[0])
+        name = " ".join(args[:2]) if args[:2] == ["cat-file", "--batch"] else args[0]
+        calls.append(name + (f"@{kw['inside']}" if kw.get("inside") else ""))
         return await real(repo, args, **kw)
 
     monkeypatch.setattr(reader, "_git_bytes", counting)
@@ -441,31 +445,60 @@ def _spawned(reader, monkeypatch) -> list[str]:
 
 
 async def test_snapshot은_git을_레포당_한_번_submodule당_한_번만_띄운다(nested, clock, monkeypatch):
-    """이게 11e의 요점이다. `archive` 둘(부모·서브모듈)이고 파일마다의 `show`는 없다."""
+    """이게 11e의 요점이다. 레포당 `ls-tree`+`cat-file` 한 쌍(부모·서브모듈)이고 파일마다의 `show`는 없다."""
     _, full = nested
     head = git("rev-parse", "HEAD", cwd=full).stdout.strip()
     reader = _reader_at(full, clock)
-    calls = []
-    real = reader._git_bytes
-
-    async def counting(repo, args, **kw):
-        calls.append(args[0])
-        return await real(repo, args, **kw)
-
-    monkeypatch.setattr(reader, "_git_bytes", counting)
+    calls = _spawned(reader, monkeypatch)
     got = await reader.snapshot("dt-core", head)
     assert got.status == "ok" and "vendor/libs/kafka.json" in got.data
-    assert calls.count("archive") == 2 and calls.count("show") == 1      # show는 .gitmodules 선언 읽기 하나뿐
+    assert [c for c in calls if c.startswith("cat-file --batch")] == ["cat-file --batch", "cat-file --batch@vendor/libs"]
+    assert calls.count("show") == 1                                   # show는 .gitmodules 선언 읽기 하나뿐
 
 
-async def test_snapshot은_export_ignore로_빠진_파일을_show로_메운다(repo, clock):
-    """`git archive`는 `.gitattributes`의 `export-ignore`를 따른다 — 목록(`ls`)에는 있는데 아카이브에 없는
-    파일이 생기면 인덱서가 "읽기 실패" 모듈을 만든다. 목록과 대조해 그만큼만 `show`로 읽는다."""
+async def test_snapshot은_export_ignore_파일도_show_없이_든다(repo, clock, monkeypatch):
+    """`export-ignore`는 `git archive`의 규칙이다 — 저장소의 blob을 읽는 스냅샷에는 그런 구멍이 없어야 하고, 메우려고
+    `show`를 띄워서도 안 된다(한때 그랬다: archive로 받고 목록과 대조해 메웠다)."""
     root, _ = repo
     (root / ".gitattributes").write_text("hidden.py export-ignore\n", encoding="utf-8")
     (root / "hidden.py").write_text("def h():\n    pass\n", encoding="utf-8")
     git("add", "-A", cwd=root)
     git("commit", "-qm", "attrs", cwd=root)
-    got = await _reader_at(root, clock).snapshot("dt-core", "main")
+    reader = _reader_at(root, clock)
+    spawned = _spawned(reader, monkeypatch)
+    got = await reader.snapshot("dt-core", "main")
     assert got.status == "ok", got.error
     assert got.data["hidden.py"] == "def h():\n    pass\n"
+    assert spawned.count("show") == 1                              # .gitmodules 선언 읽기뿐 — 파일용 show 없음
+
+
+async def test_snapshot은_작업_트리용_변환을_안_타고_show와_바이트까지_같다(repo, clock):
+    """**사내 Windows에서 실제로 난 일이다.** `core.autocrlf=true`에서 `git archive`가 CRLF를 돌려줘 `show`(LF)와
+    달랐다 — archive는 체크아웃과 같은 변환(autocrlf, `.gitattributes`의 eol·filter)을 탄다. 스냅샷은 `show <커밋>:<경로>`와
+    같은 저장소의 blob이어야 한다: 인덱스가 바이트까지 같고, LFS 같은 filter가 밖으로 나가려 들지도 않는다."""
+    root, old = repo
+    git("config", "core.autocrlf", "true", cwd=root)
+    (root / ".gitattributes").write_text("*.json text eol=crlf\n", encoding="utf-8")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "eol", cwd=root)
+    reader = _reader_at(root, clock)
+    got = await reader.snapshot("dt-core", "main")
+    assert got.status == "ok", got.error
+    for path in ("config/common.json", "app.py"):
+        shown = await reader.show("dt-core", "main", path, whole=True)
+        assert got.data[path] == shown.data, path
+        assert "\r" not in got.data[path]
+    assert (await reader.snapshot("dt-core", old)).data["config/common.json"] == \
+        (await reader.show("dt-core", old, "config/common.json", whole=True)).data
+
+
+async def test_snapshot은_내용이_같은_두_파일을_둘_다_준다(repo, clock):
+    """같은 내용은 같은 blob 하나다 — blob 단위로 받으면 경로 둘에 같은 본문을 **둘 다** 돌려줘야 한다."""
+    root, _ = repo
+    (root / "twin_a.py").write_text("def same():\n    pass\n", encoding="utf-8")
+    (root / "twin_b.py").write_text("def same():\n    pass\n", encoding="utf-8")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "twins", cwd=root)
+    got = await _reader_at(root, clock).snapshot("dt-core", "main")
+    assert got.status == "ok", got.error
+    assert got.data["twin_a.py"] == got.data["twin_b.py"] == "def same():\n    pass\n"
