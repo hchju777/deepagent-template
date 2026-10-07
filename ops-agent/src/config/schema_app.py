@@ -43,7 +43,9 @@ class InvestigationConfig(StrictModel):
     # 개별 상한 혼자 자르고 있었고, 사내 측정에서 5건 중 4건이 잘렸다.
     evidence_chars: int = Field(default=2400, ge=200)
     # 증거 블록 전체 예산. 넘으면 **오래된 것부터 한 줄 요약만** 남긴다 — id와
-    # 출처는 끝까지 남으므로 인용은 계속 유효하다.
+    # 출처는 끝까지 남으므로 인용은 계속 유효하다. 리드가 **좁혀서** 낸 읽기 한 건(`redis.get path`·`code.read offset`·
+    # `code.config key`)의 상한이기도 하다(`runner_probe`) — 고른 부분은 통째로 보여야 하고, 전체 예산보다 큰 것은 어차피
+    # 더 좁혀야 한다.
     evidence_total_chars: int = Field(default=12000, ge=1000)
     # 리드 프롬프트. config 안의 상대 경로다 — 운영이 직접 고치는 파일이라
     # 코드에 박아 두면 고치려고 배포를 해야 한다.

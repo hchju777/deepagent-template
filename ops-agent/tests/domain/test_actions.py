@@ -182,3 +182,18 @@ def test_역질문_둘이_이름_하나로_등재돼_있고_코드_추적_레인
     assert ACTIONS["code.callers"] == ("code", "callers", ("name",), ())
     assert ACTIONS["code.uses"] == ("code", "uses", ("name",), ())
     assert role_for("code.callers") == role_for("code.uses") == "code_tracer"
+
+
+def test_범위_경로_키_인자는_선택이다():
+    """R2-2b: 잘라서 보여 주지 않고 **골라서 전부** 보여 주기 위한 인자들. 없으면 전과 같다."""
+    from src.domain.actions import action_problem
+    for action, extra in (("code.read", {"offset": 10, "limit": 50}), ("redis.get", {"path": "record[0].data"}),
+                          ("code.config", {"key": "infra.kafka"})):
+        required = ACTIONS[action][2]
+        assert action_problem(action, {**{name: "x" for name in required}, **extra}) is None, action
+        assert action_problem(action, {name: "x" for name in required}) is None, action
+    from src.domain.actions import narrowed
+    assert narrowed("code.config", {"service": "s", "key": "infra"}) and narrowed("redis.get", {"key": "k", "path": "a"})
+    assert narrowed("code.read", {"service": "s", "path": "p", "offset": 3})
+    # `redis.get`의 `key`는 키 이름이지 좁히는 자리가 아니다 — 이름이 같아도 필수 인자는 안 센다.
+    assert not narrowed("redis.get", {"key": "k"}) and not narrowed("code.read", {"service": "s", "path": "p"})

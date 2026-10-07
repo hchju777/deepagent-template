@@ -356,7 +356,7 @@ def test_예시의_id가_다음_빈_번호부터_나온다(case):
 
     ids = [t["id"] for t in json.loads(briefing.example_block(
         site(), phase="integrate", start=briefing.next_task_number(state_with(5))))["tasks"]]
-    assert ids == ["t-6", "t-7"]
+    assert ids == ["t-6"]                                   # 예시 읽기는 하나다(R2-2b-1) — 번호는 다음 빈 것
 
 
 def test_번호가_안_이어져도_최대값_다음을_쓴다(case):
@@ -373,7 +373,7 @@ def test_priority는_번호가_아니라_라운드_안의_순서다():
     """번호를 곱하면 라운드가 깊어질수록 우선순위가 커져(늦어져) 앞 라운드의 잔여
     태스크에 계속 밀린다 — 지금 제일 궁금한 읽기가 제일 나중이 된다."""
     late = json.loads(briefing.example_block(site(), phase="integrate", start=20))
-    assert [t["priority"] for t in late["tasks"]] == [10, 20]
+    assert [t["priority"] for t in late["tasks"]] == [10]                   # 200이 아니다
 
 
 def test_integrate_프롬프트가_결정_지침을_예시_뒤에_둔다():
@@ -492,7 +492,7 @@ def test_코드가_있으면_서비스_이름까지_적는다():
     """사내 모델은 **완결된 구체값을 그대로 복사하고** 지시문 모양은 바꿔 넣는다
     (10b에서 측정). 이름을 안 적으면 `service="..."`를 진짜로 조회한다."""
     catalog = briefing.action_catalog(site(), services=("processor", "sink"))
-    assert "code.config(service)" in catalog
+    assert "code.config(service, key?)" in catalog
     assert "processor / sink" in catalog
 
 
@@ -1166,3 +1166,18 @@ def test_열린_질문은_integrate와_conclude_프롬프트에_자리가_있다
     state = CaseState(case=case)
     assert slots_in(templates["integrate"]) <= set(briefing.integrate_fields(state, site_config=site(), max_rounds=6))
     assert slots_in(templates["conclude"]) <= set(briefing.conclude_fields(state, site_config=site()))
+
+
+def test_integrate_예시는_사다리_수와_읽기_하나뿐이다(case):
+    """사내 실측: 리드가 예시의 action을 그대로 베꼈다(트레이스에 `← 예시와 같은 action`). 보여 줄수록 그대로 낸다 —
+    지금 단계의 사다리 수 하나와 형식을 보이는 읽기 하나면 충분하다."""
+    tasks = _ladder(site(), [_rest_done()], used=("rest.query",))
+    assert len(tasks) == 2 and tasks[0]["action"] == "code.trace"
+    assert len(_ladder(site(), [], graph=None)) == 1
+
+
+def test_좁혀_읽기_규칙이_integrate_프롬프트에_있다():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "investigate-integrate.md").read_text(encoding="utf-8")
+    assert "골라서 전부" in text and "projection" in text and "path" in text and "offset" in text

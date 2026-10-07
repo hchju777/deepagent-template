@@ -233,3 +233,16 @@ async def test_recompute도_등재_검사를_먼저_받고_mongo가_없으면_�
     got = await none.run(task("t-2", action="recompute.count", params={
         "collection": "c", "filter": {}, "expect": {"evidence": "t-1.e1", "path": "x"}}), case=case)
     assert got.status == "error" and "mongo" in got.error
+
+
+async def test_경로로_고른_redis_값은_예산에_안_잘린다(case):
+    """골라서 전부 — 리드가 `path`로 좁혀 읽은 것까지 증거 예산에서 자르면 좁힌 뜻이 없다."""
+    big = {"type": "string", "path": "record[0].data", "value": {"rows": ["x" * 40] * 20}}
+    redis = Recorder(result=ProbeResult.succeeded(big, source="r", clock=lambda: T0))
+    runner = ProbeRunner(clock=lambda: T0, adapters=Bundle(redis=redis), detail_chars=80)
+    outcome = await runner.run(task("t-1", action="redis.get", params={"key": "k", "path": "record[0].data"}), case=case)
+    assert outcome.status == "ok", outcome.error
+    ref = outcome.evidence[0]
+    assert ref.complete and ref.body.count("x" * 40) == 20
+    small = await runner.run(task("t-2", action="redis.get", params={"key": "k"}), case=case)
+    assert not small.evidence[0].complete                                # 경로 없이 읽은 큰 값은 전처럼 예산에서 잘린다

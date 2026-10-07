@@ -68,3 +68,20 @@ async def test_스텁_코드는_seed의_callers와_uses도_그대로_준다():
     assert (await stub.callers("sink.writer.run")).data.startswith("대상 sink.writer.run")
     for result in (await stub.uses("nope"), await stub.callers("nope"), await stub.trace("/x")):
         assert result.status == "error" and "스텁" in result.error
+
+
+async def test_stub_redis_get은_JSON_경로로_고른_부분만_준다():
+    """사내 실측: 요약 키 값이 커서 첫 키에서 잘렸다. 경로를 주면 그 부분을 **통째로**, 없는 경로면 있는 키를 말한다."""
+    import json
+
+    from src.infrastructure.stubs import StubRedisReader
+
+    redis = StubRedisReader({"k": json.dumps({"record": [{"data": {"x": 1}}], "metadata": {"status": "ok"}})}, clock=_clock)
+    got = await redis.get("k", path="record[0].data")
+    assert got.status == "ok" and got.data == {"type": "string", "path": "record[0].data", "value": {"x": 1}}
+    missing = await redis.get("k", path="record[0].nope")
+    assert missing.status == "error" and "nope" in missing.error and "data" in missing.error
+    plain = await redis.get("k")
+    assert plain.data["value"].startswith("{") and "path" not in plain.data       # 경로 없으면 전처럼 원문
+    absent = await redis.get("none", path="a")
+    assert absent.status == "ok" and absent.data is None                           # 키 없음은 사실이지 오류가 아니다

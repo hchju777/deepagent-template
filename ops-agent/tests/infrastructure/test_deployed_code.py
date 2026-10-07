@@ -152,9 +152,14 @@ async def test_400줄이_넘는_층도_통째로_읽는다(tmp_path, clock, code
 
     got = await code("gumi").config("processor")
     assert got.status == "ok", got.error
-    assert got.envelope.complete, got.envelope.truncated_reason
-    assert got.data["rules"]["r299"] == {"threshold": 299}   # 끝까지 읽었다
-    assert got.data["kafka"]["topic"] == "GUMI_ALARM_EVENT"  # 덮어쓰기도 그대로
+    # 상한을 넘는 덤프는 키 지도만 온다(R2-2b-1) — 끝까지 읽었는지는 `key=`로 그 자리를 골라 확인한다.
+    assert not got.envelope.complete and "key=" in got.envelope.truncated_reason
+    assert got.data["_키_지도"]["rules"].startswith("객체 · 키 300개")
+    end = await code("gumi").config("processor", key="rules.r299")
+    assert end.envelope.complete and end.data == {"threshold": 299}   # 끝까지 읽었다
+    topic = await code("gumi").config("processor", key="kafka.topic")
+    winning = json.loads((root / "config" / "factories" / "gumi" / "mx.json").read_text(encoding="utf-8"))
+    assert topic.data == winning["kafka"]["topic"]                     # 덮어쓰기도 그대로 — 맨 위 층의 값
 
 
 class _Truncating:
@@ -571,3 +576,56 @@ async def test_사이트_층_읽기는_스냅샷_뒤로는_git을_안_띄운다(
     await flow_code.names_for("gumi")
     await flow_code.site_overrides("gumi", base)
     assert len(calls) == first                                     # 두 번째부터는 메모리에서
+
+
+# ── R2-2b-1 — 골라서 전부: code.read 범위 · code.config key · grep은 코드 줄 먼저 ──
+
+async def test_code_read는_범위를_주면_그_범위를_전부_준다(flow_code):
+    """사내 실측: 라우터 파일이 400줄에서 잘려 핸들러를 못 봤다. `offset`·`limit`을 주면 그 줄들을 자르지 않고 준다."""
+    whole = await flow_code.read("sink", "sink/writer.py")
+    assert whole.status == "ok" and len(whole.data.splitlines()) == 3
+    part = await flow_code.read("sink", "sink/writer.py", offset=2, limit=1)
+    assert part.status == "ok" and part.data == whole.data.splitlines()[1]
+    assert "L2-L2 / 전체 3줄" in part.source and part.envelope.complete
+    tail = await flow_code.read("sink", "sink/writer.py", offset=3)
+    assert tail.data == whole.data.splitlines()[2] and "L3-L3 / 전체 3줄" in tail.source
+    beyond = await flow_code.read("sink", "sink/writer.py", offset=9)
+    assert beyond.status == "error" and "전체 3줄" in beyond.error
+    bad = await flow_code.read("sink", "sink/writer.py", offset=0)
+    assert bad.status == "error" and "1 이상" in bad.error
+
+
+async def test_code_config는_key로_좁히고_크면_키_지도를_준다(flow_code, monkeypatch):
+    """통째 덤프는 첫 키에서 잘린다(사내 실측). `key`면 그 부분을 통째로, 없이 부르면 상한을 넘을 때 키 지도로 — 리드가
+    어디를 좁혀 물을지 보이게."""
+    from src.infrastructure import deployed_code as dc
+
+    part = await flow_code.config("sink", key="infra.kafka.consumer.group_id")
+    assert part.status == "ok" and part.data == "gumi-mx-core" and "key=infra.kafka.consumer.group_id" in part.source
+    missing = await flow_code.config("sink", key="infra.nope")
+    assert missing.status == "error" and "nope" in missing.error and "kafka" in missing.error
+    whole = await flow_code.config("sink")
+    assert whole.status == "ok" and whole.data["mongodb_collection"] == {"alarm": "alarm_events"}
+    monkeypatch.setattr(dc, "_CONFIG_INLINE_CHARS", 20)
+    big = await flow_code.config("sink")
+    assert big.status == "ok" and "_키_지도" in big.data
+    assert any(path.startswith("infra.") for path in big.data["_키_지도"])      # 두 단계 경로 — key=에 그대로 쓴다
+    assert not big.envelope.complete and "key=" in big.envelope.truncated_reason
+
+
+async def test_code_grep은_코드_줄을_먼저_문서_줄을_뒤에_둔다(tmp_path, flow_code):
+    """사내 실측: 끝점 path로 grep하니 README만 걸려 증거 예산을 다 먹었다. 문서 줄을 버리지는 않는다 — 뒤로 보낸다."""
+    root = tmp_path / "dt-core"
+    # 리더의 기본 상한(400줄)보다 많은 문서 줄 — 리더가 먼저 자르면 트리 순서상 앞서는 README가 전부를 먹고 config 줄은
+    # 영영 안 온다. 그래서 어댑터가 더 크게 받아 코드 줄을 앞세운 뒤 자기 상한(400줄)에서 자른다.
+    (root / "README.md").write_text("alarm_events 컬렉션 설명\n" * 500, encoding="utf-8")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "readme", cwd=root)
+    got = await flow_code.grep(["alarm_events"])
+    assert got.status == "ok"
+    paths = [line.split(":", 2)[1] for line in got.data.splitlines() if line.startswith("main:")]   # <커밋>:경로:줄:…
+    code_lines = [i for i, path in enumerate(paths) if path.startswith("config/")]
+    doc_lines = [i for i, path in enumerate(paths) if path == "README.md"]
+    assert code_lines and doc_lines and max(code_lines) < min(doc_lines)
+    assert "문서 줄" in got.data and len(got.data.splitlines()) <= 400
+    assert not got.envelope.complete and "코드 줄 먼저" in got.envelope.truncated_reason

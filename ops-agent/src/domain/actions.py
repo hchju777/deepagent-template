@@ -35,7 +35,9 @@ from src.domain.envelope import ProbeResult
 
 # action 이름 → (어댑터 속성, 메서드, 필수 인자, 선택 인자)
 ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
-    "redis.get":           ("redis", "get",           ("key",),                ()),
+    # `path`는 값 **안의** 자리(`record[0].data`)다 — 큰 값을 잘라 보여 주는 대신 고른 부분을 통째로 준다
+    # (`domain/jsonpath.py`). 읽기를 좁히는 것이지 쓰기 표면이 아니다(`mongo.find`의 `projection`과 같다).
+    "redis.get":           ("redis", "get",           ("key",),                ("path",)),
     "redis.scan":          ("redis", "scan",          ("pattern",),            ()),
     "redis.ttl":           ("redis", "ttl",           ("key",),                ()),
     "mongo.find":          ("mongo", "find",          ("collection", "filter"),
@@ -55,10 +57,14 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     "code.services":       ("code",  "services",      (),                      ()),
     # 이름이 사는 config는 **층으로 갈린다.** 하나만 읽으면 덮어쓴 값을 사실로
     # 단정하므로, 이 action은 층 전부를 합친 결과를 돌려준다(`code.read`와 다르다).
-    "code.config":         ("code",  "config",        ("service",),            ()),
+    # `key`는 합친 설정 안의 자리(`infra.kafka.consumer`)다. 통째 덤프는 사내 실측에서 첫 키에서 잘렸다 —
+    # 상한을 넘는 덤프는 키 지도만 오고, 리드는 그중 하나를 `key`로 골라 통째로 받는다.
+    "code.config":         ("code",  "config",        ("service",),            ("key",)),
     "code.grep":           ("code",  "grep",          ("patterns",),           ("service",)),
     # `path`는 **`code.grep`이 돌려준 경로**다. 지어내는 자리가 아니다.
-    "code.read":           ("code",  "read",          ("service", "path"),     ()),
+    # `offset`·`limit`은 줄 범위(1부터)다. 파일은 400줄에서 잘리는데 핸들러는 그 뒤에 있었다(사내 실측) — 범위를
+    # 대면 그 줄들은 자르지 않는다. `grep`이 돌려준 `경로:줄번호`가 `offset`의 출처다.
+    "code.read":           ("code",  "read",          ("service", "path"),     ("offset", "limit")),
     # 흐름 그래프(11c)의 이웃. `name`은 브리핑의 <데이터 흐름>이나 증거에 나온 이름 그대로다.
     # 그래프가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
     "code.flow":           ("code",  "flow",          ("name",),               ()),
@@ -96,6 +102,17 @@ NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics",
 # `entry`가 빠진 것은 우연이 아니다 — REST 등재 항목은 **config가 선언**하므로
 # 찾을 것이 없다. `pattern`도 빠진다 — `*`가 정상적인 값이라 "찾았는가"를 물을 수 없다.
 DISCOVERED_ARGS = frozenset({"collection", "topic", "key", "group"})
+# **읽기를 좁히는** 인자 — 이게 있으면 리드가 "전부 말고 이 자리만"을 골라 낸 것이다. 실행기는 그 결과를 증거 한 건의
+# 예산이 아니라 증거 블록 전체 예산까지 싣는다(`runner_probe`) — 좁힌 결과가 또 잘리면 좁힌 뜻이 없다. `filter`·
+# `limit`·`projection`은 여기 없다: 좁혀도 문서 목록이라 한 건이 통째로 보이는 것이 요점이지 전부가 아니다.
+NARROWING_ARGS = frozenset({"path", "key", "offset"})
+
+
+def narrowed(action: str, params: dict) -> bool:
+    """이 태스크가 **좁혀서** 낸 읽기인가 — 그 action의 **선택** 인자 중 좁히는 것이 왔을 때만. 필수 인자는 안 센다:
+    `redis.get`의 `key`는 키 이름이고 `code.config`의 `key`는 좁히는 자리다 — 이름이 같아도 뜻이 다르다."""
+    spec = ACTIONS.get(action)
+    return bool(spec and NARROWING_ARGS & set(spec[3]) & set(params))
 _TEMPLATE_HEAD = re.compile(r"([A-Za-z0-9_.:\-]{3,})\{")
 
 

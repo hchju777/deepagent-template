@@ -27,11 +27,13 @@
 전부 `ProbeResult`로 흡수한다. 없는 서비스, 안 읽히는 층, 잘린 파일 — 운영 중에
 정상적으로 일어나는 일이고, 여기서 던지면 조사 그래프가 통째로 죽는다(규율 1).
 """
+import json
 from dataclasses import replace
-from typing import Callable
+from typing import Any, Callable
 
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
+from src.domain.jsonpath import select
 from src.domain.ports import CodeReaderPort, DeployedCodePort
 from src.knowledge import flow as flowgraph
 from src.knowledge.flow import Hit, Name, names_from_config
@@ -40,6 +42,17 @@ from src.knowledge.schema import Deployment, Topology
 from src.knowledge.target_config import merge_target, parse_layer
 
 _MAX_CHARS = 20000
+# 리드에게 주는 grep·read의 줄 상한 — 리더의 기본값(`git_reader._MAX_LINES`)과 같은 수. grep은 리더에서 더 크게 받아
+# 코드 줄을 앞세운 뒤 **여기서** 자른다 — 리더가 먼저 400줄에서 자르면 트리 순서상 앞에 오는 README가 전부를 먹는다
+# (사내 실측: 끝점 path로 grep하니 문서 줄만 왔다).
+_LINES = 400
+_GREP_RAW_LINES, _GREP_RAW_CHARS = 4000, 400_000
+# 코드가 아니라 **문서**인 줄. 버리지 않고 뒤로 보낸다 — 설명서의 한 줄이 단서일 때도 있다.
+_DOC_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
+# 합친 설정을 그대로 실을 상한. 증거 한 건의 기본 예산(`evidence_chars` 2400)과 같은 수다 — 그 안에 안 들어가는
+# 덤프는 어차피 첫 키에서 잘리므로(사내 실측), 그때는 **키 지도**를 주고 `key=`로 골라 읽게 한다.
+_CONFIG_INLINE_CHARS = 2400
+_MAP_DEPTH, _MAP_FANOUT, _MAP_VALUE_CHARS = 2, 24, 60
 
 # 흐름 재료용 상한. 리더의 400줄·2만 자는 리드에게 주는 증거 봉투의 상한이지 그래프 재료의
 # 상한이 아니다 — `alarm` 같은 키 토큰은 큰 레포에서 수백 줄이 정상이다.
@@ -404,21 +417,34 @@ class DeployedCode(DeployedCodePort):
                          **({"selects": service.selects} if service.selects else {})})
         return ProbeResult.succeeded(rows, source=source, clock=self._clock)
 
-    async def config(self, service: str) -> ProbeResult:
-        """그 서비스가 배포 시점에 **실제로 보는 설정.** 층을 전부 합친 결과다."""
-        source = f"code.config {service}"
+    async def config(self, service: str, *, key: str | None = None) -> ProbeResult:
+        """그 서비스가 배포 시점에 **실제로 보는 설정.** 층을 전부 합친 결과다.
+
+        `key`면 그 자리만 통째로. 없이 불렀는데 상한을 넘으면 키 지도만 — 사내 실측에서 통째 덤프는 첫 키에서
+        잘렸고 리드는 그 뒤에 무엇이 있는지 몰라 좁혀 물을 수도 없었다.
+        """
+        source = f"code.config {service}" + (f" key={key}" if key else "")
         got = await self._layers(service, source)
         if isinstance(got, ProbeResult):
             return got
         _, layers, broken, source = got
         read = " → ".join(path for path, _, _ in layers)
+        merged = merge_target([(path, value) for path, _, value in layers])
+        # 깨진 층이 있으면 **합친 결과가 틀렸다.** 그걸 완전하다고 적으면
+        # 리드가 "이 설정은 이렇다"를 단정한다.
+        problems = [" · ".join(broken) + " — 합친 값이 실제와 다를 수 있다"] if broken else []
+        if key:
+            ok, picked = select(merged, key)
+            if not ok:
+                return ProbeResult.failed(picked, source=f"{source} [{read}]", clock=self._clock)
+            merged = picked
+        elif len(json.dumps(merged, ensure_ascii=False)) > _CONFIG_INLINE_CHARS:
+            merged = {"_키_지도": key_map(merged)}
+            problems.append(f"합친 설정이 {_CONFIG_INLINE_CHARS}자를 넘어 키 지도만 실었다 — "
+                            f"key=<지도의 경로>로 그 부분을 통째로 읽어라")
         return ProbeResult.succeeded(
-            merge_target([(path, value) for path, _, value in layers]),
-            source=f"{source} [{read}]", clock=self._clock,
-            # 깨진 층이 있으면 **합친 결과가 틀렸다.** 그걸 완전하다고 적으면
-            # 리드가 "이 설정은 이렇다"를 단정한다.
-            truncated_reason=(" · ".join(broken) + " — 합친 값이 실제와 다를 수 있다"
-                              if broken else None))
+            merged, source=f"{source} [{read}]", clock=self._clock,
+            truncated_reason=" · ".join(problems) if problems else None)
 
     async def _layers(self, service: str, source: str):
         """그 서비스의 config 층들 — `(커밋, [(경로, 원문, 값)], 깨진 층, source)`. 못 읽으면
@@ -493,19 +519,32 @@ class DeployedCode(DeployedCodePort):
                 seen.add(key)
                 targets.append((name, known.repo, pin.commit, pin.how, ""))
 
-        chunks, problems, complete = [], [], True
+        chunks, docs, problems, complete = [], [], [], True
         for _, repo, commit, how, path in targets:
-            got = await self._reader.grep(repo, commit, patterns, path=path)
+            # 리더의 기본 상한(400줄)보다 크게 받는다 — 자르는 것은 코드 줄을 앞세운 뒤 우리가 한다(`_LINES`).
+            got = await self._reader.grep(repo, commit, patterns, path=path,
+                                          max_lines=_GREP_RAW_LINES, max_chars=_GREP_RAW_CHARS)
             if got.status == "error":
                 problems.append(f"{repo}: {got.error}")
                 continue
             if not got.envelope.complete:
                 complete = False
                 problems.append(f"{repo}: {got.envelope.truncated_reason}")
-            if got.data.strip():
-                chunks.append(f"# {repo} @ {commit[:12]}\n{got.data.rstrip()}")
+            code_lines, doc_lines = split_doc_lines(got.data, commit)
+            head = f"# {repo} @ {commit[:12]}"
+            if code_lines:
+                chunks.append("\n".join([head, *code_lines]))
+            if doc_lines:
+                docs.append("\n".join([head, *doc_lines]))
+        if docs:
+            chunks.append("# ── 문서 줄(" + "·".join(_DOC_SUFFIXES) + ") — 코드 줄 뒤에 둔다 ──")
+            chunks += docs
 
-        text = "\n".join(chunks)
+        lines = "\n".join(chunks).splitlines()
+        if len(lines) > _LINES:
+            lines, complete = lines[:_LINES], False
+            problems.append(f"{_LINES}줄에서 끊음(코드 줄 먼저)")
+        text = "\n".join(lines)
         if len(text) > _MAX_CHARS:
             text, complete = text[:_MAX_CHARS], False
             problems.append(f"{_MAX_CHARS}자에서 끊음")
@@ -518,20 +557,96 @@ class DeployedCode(DeployedCodePort):
             truncated_reason=(" · ".join(problems) + " — 더 있을 수 있다"
                               if (problems or not complete) else None))
 
-    async def read(self, service: str, path: str) -> ProbeResult:
-        """파일 하나. **`path`는 `grep`이 돌려준 경로다** — 지어내는 자리가 아니다."""
-        source = f"code.read {service}:{path}"
+    async def read(self, service: str, path: str, *, offset: int | None = None,
+                   limit: int | None = None) -> ProbeResult:
+        """파일 하나. **`path`는 `grep`이 돌려준 경로다** — 지어내는 자리가 아니다.
+
+        `offset`(1부터)·`limit`은 줄 범위다. 범위를 주면 파일을 통째로 받아 그 줄들을 **자르지 않고** 준다 — 사내
+        실측에서 라우터 파일이 400줄에서 잘려 핸들러를 못 봤다. `offset`만 주면 거기서 기본 상한만큼이다.
+        """
+        ranged = offset is not None or limit is not None
+        span = f" L{offset or 1}" + (f"+{limit}" if limit is not None else "") if ranged else ""
+        source = f"code.read {service}:{path}{span}"
         resolved = self._resolve(service, source)
         if isinstance(resolved, ProbeResult):
             return resolved
         known, commit, how = resolved
-        got = await self._reader.show(known.repo, commit, path)
         pinned = self._pinned(source, commit, how)
+        problem = _range_problem(offset, limit)
+        if problem:
+            return ProbeResult.failed(problem, source=pinned, clock=self._clock)
+        got = await self._reader.show(known.repo, commit, path, whole=ranged)
         if got.status == "error":
             return ProbeResult.failed(got.error, source=pinned, clock=self._clock)
+        if not ranged:
+            return ProbeResult.succeeded(
+                got.data, source=f"{pinned} ({got.source})", clock=self._clock,
+                truncated_reason=got.envelope.truncated_reason)
+        lines = got.data.splitlines()
+        start = int(offset or 1)
+        if start > len(lines):
+            return ProbeResult.failed(f"{path}는 전체 {len(lines)}줄이라 L{start}부터는 없다",
+                                      source=pinned, clock=self._clock)
+        count = int(limit) if limit is not None else _LINES
+        picked = lines[start - 1:start - 1 + count]
+        end = start + len(picked) - 1
+        reasons = [got.envelope.truncated_reason] if not got.envelope.complete else []
+        if limit is None and end < len(lines):
+            reasons.append(f"L{end}까지 — offset만 주면 기본 {_LINES}줄이다. limit을 주면 더 본다")
         return ProbeResult.succeeded(
-            got.data, source=f"{pinned} ({got.source})", clock=self._clock,
-            truncated_reason=got.envelope.truncated_reason)
+            "\n".join(picked), source=f"{pinned} ({got.source}) L{start}-L{end} / 전체 {len(lines)}줄",
+            clock=self._clock, truncated_reason=" · ".join(reasons) if reasons else None)
+
+
+def _range_problem(offset, limit) -> str | None:
+    """`offset`·`limit`은 리드가 적은 값이다 — 소켓 전에 거른다(`actions.action_problem`과 같은 이유)."""
+    for name, value, floor in (("offset", offset, 1), ("limit", limit, 1)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < floor:
+            return f"{name}은 {floor} 이상의 정수여야 한다 — {value!r}"
+    return None
+
+
+def split_doc_lines(text: str, commit: str) -> tuple[list[str], list[str]]:
+    """grep 출력(`<커밋>:경로:줄:내용`, `parse_grep`과 같은 모양)을 코드 줄과 문서 줄로 가른다. 줄은 그대로 둔다 —
+    경로는 커밋 접두사 뒤 첫 `:` 앞이고, git 경로는 레포 상대라 드라이브 문자가 없다."""
+    code, docs, prefix = [], [], f"{commit}:"
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        bare = line[len(prefix):] if line.startswith(prefix) else line
+        path = bare.split(":", 1)[0]
+        (docs if path.lower().endswith(_DOC_SUFFIXES) else code).append(line)
+    return code, docs
+
+
+def key_map(value: Any, *, depth: int = _MAP_DEPTH) -> dict[str, str]:
+    """합친 설정의 **지도** — `경로 → 거기 무엇이 있나`(두 단계까지). 값 전체를 잘라 보여 주는 대신 리드가 어디를 `key=`로
+    좁혀 물을지 보이게 한다."""
+    out: dict[str, str] = {}
+
+    def walk(node, prefix: str, left: int):
+        for k, v in node.items():
+            path = f"{prefix}.{k}" if prefix else str(k)
+            # 자식이 많은 객체(`rules.r0…r299`)는 안 내려간다 — 지도가 덤프만큼 커지면 지도가 아니다.
+            if isinstance(v, dict) and left > 1 and 0 < len(v) <= _MAP_FANOUT:
+                walk(v, path, left - 1)
+            else:
+                out[path] = _brief(v)
+
+    walk(value, "", depth) if isinstance(value, dict) else out.update({"(맨 위)": _brief(value)})
+    return out
+
+
+def _brief(value: Any) -> str:
+    if isinstance(value, dict):
+        keys = ", ".join(str(k) for k in list(value)[:8]) + (" …" if len(value) > 8 else "")
+        return f"객체 · 키 {len(value)}개: {keys}"
+    if isinstance(value, list):
+        return f"목록 {len(value)}개"
+    text = repr(value)
+    return text if len(text) <= _MAP_VALUE_CHARS else text[:_MAP_VALUE_CHARS] + "…"
 
 
 class _GitSource:

@@ -921,7 +921,8 @@ def cmd_case_investigate(args, env) -> int:
                 conclude_llm=conclude_llm)
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
-                detail_chars=app.investigation.evidence_chars),
+                detail_chars=app.investigation.evidence_chars,
+                narrowed_chars=app.investigation.evidence_total_chars),
                               frame=frame, integrate=integrate, conclude=conclude,
                               max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width,

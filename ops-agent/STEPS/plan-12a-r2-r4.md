@@ -46,22 +46,36 @@ R4-1의 프롬프트 상한으로 미룸). 측정판 확인은 R2-2b와 함께(`
 
 ## R2-2b — 증거 모양 (지시서 1-5·5-4·3-2·3-3·3-4·2-4, 앞선 R2 4~7)
 
-목적: 리드가 대상 행과 대상 키를 **보게** 한다. 지금은 첫 행·첫 키에서 잘린다.
+목적: 리드가 대상 행과 대상 키를 **보게** 한다. 지금은 첫 행·첫 키에서 잘린다. 둘로 나눠 간다 — **-1 도구**(리드가 좁혀
+낼 수 있는 인자와 그 결과를 통째로 싣는 것)와 **-2 증거·브리핑**(코드가 알아서 앞세우고 대조하는 것). -1이 먼저인 이유:
+-2의 "앞에 통째로"도 좁힌 결과를 안 자르는 실행기 규칙(`actions.narrowed`) 위에 선다.
+
+### R2-2b-1 — 도구 ✅ (10-07)
+
+| 항목 | 한 것 | 자리 |
+|---|---|---|
+| 3-2 | `code.read(service, path, offset?, limit?)` — 범위를 주면 통째로 받아 그 줄들을 자르지 않는다. source에 `L2-L2 / 전체 3줄`. `offset`만이면 기본 400줄(봉투가 말한다). 0 이하·파일 끝 너머는 소켓 전에 error | `actions.py`, `deployed_code.read`(`show(whole=True)` + 슬라이스 — `git_reader.show(lines=)`는 안 만들었다: 리더에 또 하나의 자르기를 두지 않는다) |
+| 3-3 | `redis.get(key, path?)` — `domain/jsonpath.select`(점·`[n]`, 문자열이면 JSON으로 풂, 실패하면 **있는 키·목록 길이**를 말함). 실제 리더·스텁 같은 계약: 자리 없음 error, 키 없음 None | `jsonpath.py`, `redis_reader`, `stubs`, `ports` |
+| 5 | `code.config(service, key?)` — `key`면 그 자리 통째. 없이 부르고 합친 설정이 2400자를 넘으면 `{"_키_지도": {경로(두 단계) → 무엇이 있나}}`만, `complete=False`에 "key=로 읽어라". 자식 24개 넘는 부채꼴은 안 내려간다 | `deployed_code.config`, `key_map` |
+| 4 | `code.grep` — 리더에서 4000줄로 받아 **코드 줄 먼저, 문서(`.md/.rst/.txt/.adoc`) 줄은 뒤에** 구분 줄 밑에, 그다음 400줄에서 자른다 | `deployed_code.grep`, `split_doc_lines` |
+| 실행기 | 좁힌 읽기(`actions.narrowed` — 그 action의 **선택** 인자 중 `path`·`key`·`offset`)는 증거 한 건 예산이 아니라 전체 예산(`evidence_total_chars`)까지 싣는다. `redis.get`의 `key`는 필수 인자라 안 센다(이름이 같을 뿐) | `runner_probe`(`narrowed_chars=`), `__main__` |
+| 3-4 | integrate 규칙 한 줄: "큰 것은 잘라 보지 말고 골라서 전부 봐라" — `projection`·`path`·`offset/limit`·`key` | `config/prompts/investigate-integrate.md` |
+| 2-4 | integrate 예시는 사다리 칸 + 읽기 **하나**. 한 칸뿐이라 순서가 선택이다 — 안 써 본 action 먼저, 좁혀 다시 낼 수 있는 것은 뒤 | `briefing.example_block` |
+
+스윕 +19(438). 테스트 먼저(RED 8 → GREEN): `test_jsonpath` 3, `test_actions` 1, `test_stubs` 1, `test_redis_reader` 1(새 파일 — 가짜
+클라이언트로 봉투 계약만), `test_deployed_code` 3, `test_runner_probe` 1, `test_briefing` 2. 기존 넷은 "예시 읽기 하나"와
+`code.config(service, key?)` 시그니처에 맞췄다. `test_400줄이_넘는_층도_통째로_읽는다`는 키 지도 + `key=`로 끝까지 읽었는지 본다.
+
+### R2-2b-2 — 증거·브리핑
 
 | 항목 | 할 것 | 자리 |
 |---|---|---|
-| 1-5 / 6 | `rest.query` 목록 응답: 항목당 한 줄(압축 JSON), 케이스 `target`·점검 `identity` 값이 든 행을 **앞에 통째로**, 나머지는 `외 N행(id로 연다)` | 증거 렌더(`runner_probe`/evidence 생성 자리), `CaseRecord.target`·`check.params.identity` |
+| 1-5 / 6 | `rest.query` 목록 응답: 항목당 한 줄(압축 JSON), 케이스 `target`·점검 `identity` 값이 든 행을 **앞에 통째로**, 나머지는 `외 N행(id로 연다)` | 증거 렌더(`runner_probe.detail`), `CaseRecord.target`·`check.params.identity` |
 | 5-4 | `redis.scan` 결과가 오면 코드가 **끝점이 읽는 키 목록**(`flow.traced_reads(kind="rediskey")`)과 대조해 `선언됐는데 없는 키 N: …`를 사실로(열린 질문에, 증거 요약에) | execute 뒤 후처리(`nodes.execute` 또는 `briefing`), `flow.py` |
-| 3-2 | `code.read(service, path, offset?, limit?)` — 범위를 주면 그 범위 전부, 봉투에 `L120-L220 / 전체 410줄` | `actions.py`, `deployed_code.read`, `git_reader.show(lines=)` |
-| 3-3 | `redis.get(key, path?)` — JSON 경로(`a.b[0].c`)로 고른 부분은 자르지 않는다(절대 상한만) | `actions.py`, `redis_reader`/stub, 증거 렌더 |
-| 3-4 | 프롬프트 규칙 한 줄: "`⚠ 표본이 잘렸다`를 보면 projection·limit·path로 **좁혀** 다시 읽어라 — 같은 질의를 반복하지 마라" | `config/prompts/investigate-*.md` |
-| 2-4 | integrate 예시는 지금 단계의 사다리 칸 **하나**만. frame의 접수 읽기는 그대로(설계) | `briefing.example_block` |
-| 4 | `code.grep` 결과: 코드 파일 줄 먼저, 문서(`.md/.rst/.txt`) 줄 뒤, 상한은 줄 수 | `deployed_code.grep` |
-| 5 | `code.config(service, key?)` — `key`면 그 부분 통째, 없이 부르면 상한 넘을 때 **키 지도**(키·크기) | `actions.py`, `deployed_code.config` |
 | 7 | `<데이터 흐름>`: 접수 끝점 줄을 예산 밖에 고정, `_MAX_NAMES` 안에 증상·케이스 단어와 겹치는 이름 먼저 | `briefing.flow_block`, `flow.flow_text` |
 
 종료 판단: 측정판 c-1형 픽스처(`tools/local_case.py`에 `pipeline-off` 변형 추가 — 요약 키 없음)에서 r1 브리핑에 대상 행과
-`선언됐는데 없는 키`가 실린다. `code read --offset`·`redis.get path`는 CLI와 리드가 같은 조립. 스윕 +10 안팎.
+`선언됐는데 없는 키`가 실린다. 스윕 +6 안팎.
 
 ## R2-2c — 운영·구조 (지시서 7-2·7-3, 리뷰 H)
 

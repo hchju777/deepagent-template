@@ -10,6 +10,7 @@ from typing import Any
 
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
+from src.domain.jsonpath import select
 from src.domain.ports import (DeployedCodePort, KafkaInspectorPort, MongoReaderPort, RedisReaderPort,
                               RestProberPort)
 from src.infrastructure.mongo_reader import filter_problems, to_jsonable
@@ -21,10 +22,18 @@ class StubRedisReader(RedisReaderPort):
         self._values = dict(values or {})
         self._clock = clock
 
-    async def get(self, key: str) -> ProbeResult:
+    async def get(self, key: str, *, path: str | None = None) -> ProbeResult:
+        source = f"stub-redis:{key}" + (f" path={path}" if path else "")
         found = self._values.get(key)
-        data = None if found is None else {"type": "string", "value": found}
-        return ProbeResult.succeeded(data, source=f"stub-redis:{key}", clock=self._clock)
+        if found is None:
+            return ProbeResult.succeeded(None, source=source, clock=self._clock)
+        if path is None:
+            return ProbeResult.succeeded({"type": "string", "value": found}, source=source, clock=self._clock)
+        ok, picked = select(found, path)
+        if not ok:
+            return ProbeResult.failed(picked, source=source, clock=self._clock)
+        return ProbeResult.succeeded({"type": "string", "path": path, "value": picked}, source=source,
+                                     clock=self._clock)
 
     async def scan(self, pattern: str) -> ProbeResult:
         import fnmatch
@@ -193,7 +202,7 @@ class StubDeployedCode(DeployedCodePort):
     async def services(self) -> ProbeResult:
         return self._none("stub-code:services")
 
-    async def config(self, service: str) -> ProbeResult:
+    async def config(self, service: str, *, key: str | None = None) -> ProbeResult:
         return self._none(f"stub-code:config {service}")
 
     async def grep(self, patterns: list[str], service: str = "") -> ProbeResult:
@@ -202,7 +211,8 @@ class StubDeployedCode(DeployedCodePort):
     async def flow(self, name: str) -> ProbeResult:
         return self._none(f"stub-code:flow {name}")
 
-    async def read(self, service: str, path: str) -> ProbeResult:
+    async def read(self, service: str, path: str, *, offset: int | None = None,
+                   limit: int | None = None) -> ProbeResult:
         return self._none(f"stub-code:read {service} {path}")
 
     async def trace(self, endpoint: str) -> ProbeResult:

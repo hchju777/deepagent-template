@@ -17,6 +17,7 @@ from typing import Any
 from src.config.schema_site import RedisConfig
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
+from src.domain.jsonpath import select
 from src.domain.ports import RedisReaderPort
 
 DEFAULT_MAX_ROWS = 200
@@ -50,8 +51,8 @@ class RealRedisReader(RedisReaderPort):
 
     # ── 포트 구현 ────────────────────────────────────────────────
 
-    async def get(self, key: str) -> ProbeResult:
-        source = f"redis:{self._cfg.url}/{self._cfg.db}:{key}"
+    async def get(self, key: str, *, path: str | None = None) -> ProbeResult:
+        source = f"redis:{self._cfg.url}/{self._cfg.db}:{key}" + (f" path={path}" if path else "")
         try:
             client = self._connect()
             kind = await client.type(key)
@@ -60,7 +61,16 @@ class RealRedisReader(RedisReaderPort):
                 # "붙지 못했다"와 "키가 없다"가 같은 상태가 되어 구별이 사라진다.
                 return ProbeResult.succeeded(None, source=source, clock=self._clock)
             data, truncated = await self._read_by_type(client, key, kind)
-            return ProbeResult.succeeded({"type": kind, "value": data},
+            if path is None:
+                return ProbeResult.succeeded({"type": kind, "value": data},
+                                             source=source, clock=self._clock,
+                                             truncated_reason=truncated)
+            # 값 전체를 받은 뒤 **우리 쪽에서** 고른다 — Redis의 JSON 모듈은 대상에 있다고 가정할 수 없다.
+            # hash·list는 그 구조 그대로 경로를 탄다(`field`, `[n]`); string은 JSON으로 풀어서.
+            ok, picked = select(data, path)
+            if not ok:
+                return ProbeResult.failed(picked, source=source, clock=self._clock)
+            return ProbeResult.succeeded({"type": kind, "path": path, "value": picked},
                                          source=source, clock=self._clock,
                                          truncated_reason=truncated)
         except Exception as exc:                                   # noqa: BLE001

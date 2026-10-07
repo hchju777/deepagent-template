@@ -16,7 +16,7 @@ from collections import OrderedDict
 from typing import Any
 
 from src.application.recompute import Recomputer
-from src.domain.actions import ACTIONS, action_problem, describe, run_action
+from src.domain.actions import ACTIONS, action_problem, describe, narrowed, run_action
 from src.domain.base import Clock
 from src.domain.case import Case, EvidenceRef, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
@@ -25,6 +25,10 @@ _SUMMARY_CHARS = 160
 # 한 건이라도 **통째로** 보이게 하는 것이 요점이다. 문서를 반쯤 자르면 리드는
 # 필드 이름은 보고 값은 못 봐서, 같은 질의를 말만 바꿔 다시 낸다.
 _DETAIL_CHARS = 2400
+# 리드가 **좁혀서** 낸 읽기(`actions.narrowed`)의 상한. 증거 블록 전체 예산(`evidence_total_chars`)과 같은 수다 — 고른
+# 부분은 통째로 보여야 하고, 그래도 안 들어가면 더 좁히라는 열린 질문이 남는다. 상한이 없으면 `path=record`
+# 한 번이 프롬프트를 혼자 채운다.
+_NARROWED_CHARS = 12000
 # 원천 재집계가 기대값을 꺼낼 원본을 몇 건까지 들고 있나. 케이스 하나의 증거는 수십 건이다.
 _RAW_KEEP = 256
 
@@ -32,9 +36,11 @@ _RAW_KEEP = 256
 class ProbeRunner(TaskRunnerPort):
     """사이트 하나의 어댑터 묶음에 붙는다."""
 
-    def __init__(self, adapters, *, clock: Clock, detail_chars: int = _DETAIL_CHARS):
+    def __init__(self, adapters, *, clock: Clock, detail_chars: int = _DETAIL_CHARS,
+                 narrowed_chars: int = _NARROWED_CHARS):
         self._adapters = adapters
         self._detail_chars = detail_chars
+        self._narrowed_chars = max(narrowed_chars, detail_chars)
         # 시계를 필수로 받는다(규율 2). 어댑터가 자기 시계를 갖고 있지만, 포트에
         # **닿기 전에** 거부하는 경우(미등재 action 등)에는 우리가 봉투를 만들어야
         # 하고, 그때 `datetime.now()`로 떨어지면 테스트가 시간에 묶인다.
@@ -72,7 +78,8 @@ class ProbeRunner(TaskRunnerPort):
             return TaskOutcome(task_id=task.id, status="error",
                                error=f"{source} — {result.error}")
 
-        body, ours = detail(result.data, limit=self._detail_chars)
+        body, ours = detail(result.data, limit=(self._narrowed_chars if narrowed(task.action, task.params)
+                                                else self._detail_chars))
         ref = EvidenceRef(
             id=EvidenceRef.make_id(task.id, 1),
             source=source,

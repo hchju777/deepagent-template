@@ -32,8 +32,12 @@ class RedisReaderPort(ABC):
     """Redis 읽기. 값 하나, 키 목록, 남은 수명."""
 
     @abstractmethod
-    async def get(self, key: str) -> ProbeResult:
-        """string이면 str, hash면 dict로 돌려준다(TYPE으로 분기)."""
+    async def get(self, key: str, *, path: str | None = None) -> ProbeResult:
+        """string이면 str, hash면 dict로 돌려준다(TYPE으로 분기).
+
+        `path`를 주면 값(JSON) 안의 그 자리만 — 큰 값을 잘라 보여 주는 대신 고른 부분을 통째로 주기 위해서다
+        (`domain/jsonpath.py`). 자리가 없으면 error(있는 키를 적어서), 키 자체가 없으면 전처럼 None이다.
+        """
 
     @abstractmethod
     async def scan(self, pattern: str) -> ProbeResult:
@@ -211,8 +215,12 @@ class DeployedCodePort(ABC):
         """무엇을 조사할 수 있나. 인자가 없는 것이 정상이다 — 발견용이다."""
 
     @abstractmethod
-    async def config(self, service: str) -> ProbeResult:
-        """그 서비스가 배포 시점에 실제로 보는 설정. **층을 전부 합친 결과.**"""
+    async def config(self, service: str, *, key: str | None = None) -> ProbeResult:
+        """그 서비스가 배포 시점에 실제로 보는 설정. **층을 전부 합친 결과.**
+
+        `key`를 주면 합친 설정 안의 그 자리만 통째로. 안 주고 결과가 크면 **키 지도**(어느 키 아래 무엇이 있나)만
+        돌려주고 봉투가 `complete=False`로 말한다 — 첫 키에서 잘린 덤프보다 다음에 무엇을 물을지 보이는 지도가 낫다.
+        """
 
     @abstractmethod
     async def grep(self, patterns: list[str], service: str = "") -> ProbeResult:
@@ -239,8 +247,13 @@ class DeployedCodePort(ABC):
         """이 컬렉션·토픽·키·그룹을 누가 쓰고 읽나, 어느 진입점에서 오나(11d). 인덱스가 없거나 이름이 없으면 실패."""
 
     @abstractmethod
-    async def read(self, service: str, path: str) -> ProbeResult:
-        """파일 하나. `path`는 `grep`이 돌려준 경로다."""
+    async def read(self, service: str, path: str, *, offset: int | None = None,
+                   limit: int | None = None) -> ProbeResult:
+        """파일 하나. `path`는 `grep`이 돌려준 경로다.
+
+        `offset`(1부터)·`limit`은 줄 범위다. 범위를 주면 그 줄들은 **자르지 않는다** — 400줄 상한은 "어디부터
+        볼지 모를 때"의 기본값이고, `grep`이 줄 번호를 알려 준 뒤에는 그 자리를 통째로 봐야 한다.
+        """
 
 
 class RecomputePort(ABC):

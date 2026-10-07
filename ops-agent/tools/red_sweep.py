@@ -169,8 +169,8 @@ CASES = [
   '    if False:\n        pass', [f"{K2}::test_최상위가_객체가_아니면_거부한다"]),
  # ── 서비스 이름으로 읽기 (11a 2차) ────────────────────────────────
  ("config가 층 하나만 읽는다", D,
-  '            merge_target([(path, value) for path, _, value in layers]),',
-  '            layers[-1][2],',
+  '        read = " → ".join(path for path, _, _ in layers)\n        merged = merge_target([(path, value) for path, _, value in layers])',
+  '        read = " → ".join(path for path, _, _ in layers)\n        merged = layers[-1][2]',
   [f"{K3}::test_층을_합친_값을_돌려준다"]),
  ("법인 자리를 안 치환한다", D,
   '        wanted = self._topology.resolved_config_paths(self._gbm, self._fct)',
@@ -188,8 +188,8 @@ CASES = [
   '                f"없는 서비스 — {service}",',
   [f"{K3}::test_없는_서비스는_아는_것을_알려준다"]),
  ("grep이 어느 커밋인지 안 적는다", D,
-  '                chunks.append(f"# {repo} @ {commit[:12]}\\n{got.data.rstrip()}")',
-  '                chunks.append(got.data.rstrip())', [f"{K3}::test_grep이_읽은_커밋을_적는다"]),
+  '            head = f"# {repo} @ {commit[:12]}"',
+  '            head = f"# {repo}"', [f"{K3}::test_grep이_읽은_커밋을_적는다"]),
  ("코드가 없어도 목록에 적는다", B,
   '    if adapter == "code":\n        return bool(services)',
   '    if adapter == "code":\n        return True', [f"{K4}::test_코드가_없으면_목록에_안_나온다"]),
@@ -286,12 +286,12 @@ CASES = [
   [f"{K4}::test_예시의_건수가_읽을_수_있는_크기다"]),
  # ── 예시가 중복을 만들지 않는다 ───────────────────────────────────
  ("예시가 이미 한 읽기를 또 보여준다", B,
-  '        fresh = tuple(shape for shape in _named_reads(services)\n                      if shape[0] not in used or _refinable(shape[1]))',
-  '        fresh = tuple(_named_reads(services))',
+  '        unused = tuple(shape for shape in _named_reads(services) if shape[0] not in used)',
+  '        unused = tuple(_named_reads(services))',
   [f"{K4}::test_예시가_이미_한_읽기를_다시_보여주지_않는다"]),
  ("전부 썼을 때 예시가 빈다", B,
-  '        shapes = (_available(site_config, fresh, 2, services)\n                  or _available(site_config, _named_reads(services), 2, services))',
-  '        shapes = _available(site_config, fresh, 2, services)',
+  '        shapes = (_available(site_config, fresh, 1, services)\n                  or _available(site_config, _named_reads(services), 1, services))',
+  '        shapes = _available(site_config, fresh, 1, services)',
   [f"{K4}::test_전부_써_봤으면_그래도_보여준다"]),
  ("예시가 좁히는 모양을 안 보여준다", B,
   '                               "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},',
@@ -337,8 +337,8 @@ CASES = [
   ["tests/application/test_trace_digest.py::test_못_읽는_응답에도_안_죽는다"]),
  # ── 첫 전체 트레이스가 드러낸 것 ─────────────────────────────────
  ("좁힐 수 있는 읽기도 한 번 쓰면 예시에서 뺀다", B,
-  '                      if shape[0] not in used or _refinable(shape[1]))',
-  '                      if shape[0] not in used)',
+  '        again = tuple(shape for shape in _named_reads(services) if shape[0] in used and _refinable(shape[1]))',
+  '        again = ()',
   [f"{K4}::test_좁힐_수_있는_읽기는_이미_썼어도_보여준다"]),
  ("빈 filter도 좁힐 수 있다고 본다", B,
   '    return bool(params.get("filter"))',
@@ -1720,7 +1720,87 @@ CASES += [
   ["tests/application/test_briefing.py::test_열린_질문은_integrate와_conclude_프롬프트에_자리가_있다"]),
 ]
 
-assert len(CASES) >= 419, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-2b-1 — 도구: 골라서 전부(jsonpath·redis path·code.read 범위·code.config key·grep 코드 줄 먼저·예시 하나) ──
+JP = ROOT / "src/domain/jsonpath.py"
+AC = ROOT / "src/domain/actions.py"
+RR = ROOT / "src/infrastructure/redis_reader.py"
+ST = ROOT / "src/infrastructure/stubs.py"
+IT = ROOT / "config/prompts/investigate-integrate.md"
+JPT = "tests/domain/test_jsonpath.py"
+DCT2 = "tests/infrastructure/test_deployed_code.py"
+NARROW_T = "tests/domain/test_actions.py::test_범위_경로_키_인자는_선택이다"
+CASES += [
+ ("jsonpath가 없는 키에서 있는 키를 안 말한다", JP,
+  '                return False, f"{where}에 {key!r}가 없다 — 있는 키: {_keys(cur)}"',
+  '                return False, f"{where}에 {key!r}가 없다"',
+  [f"{JPT}::test_없는_자리는_있는_것을_알려_주며_실패한다"]),
+ ("jsonpath가 JSON 문자열을 안 푼다", JP,
+  "    if isinstance(value, str):\n        try:\n            value = json.loads(value)",
+  "    if False:\n        try:\n            value = json.loads(value)",
+  [f"{JPT}::test_JSON_문자열이면_먼저_푼다"]),
+ ("jsonpath가 목록 범위를 안 본다", JP,
+  "            if n >= len(cur):", "            if False:",
+  [f"{JPT}::test_없는_자리는_있는_것을_알려_주며_실패한다"]),
+ ("stub redis가 path를 무시한다", ST,
+  '        if path is None:\n            return ProbeResult.succeeded({"type": "string", "value": found}',
+  '        if True:\n            return ProbeResult.succeeded({"type": "string", "value": found}',
+  ["tests/infrastructure/test_stubs.py::test_stub_redis_get은_JSON_경로로_고른_부분만_준다"]),
+ ("실제 redis가 path를 무시한다", RR,
+  '            if path is None:\n                return ProbeResult.succeeded({"type": kind, "value": data},',
+  '            if True:\n                return ProbeResult.succeeded({"type": kind, "value": data},',
+  ["tests/infrastructure/test_redis_reader.py::test_path를_주면_JSON_값_안의_그_자리만_준다"]),
+ ("redis.get에 path가 등재돼 있지 않다", AC,
+  '("redis", "get",           ("key",),                ("path",)),',
+  '("redis", "get",           ("key",),                ()),',
+  [NARROW_T]),
+ ("좁힘 판정이 필수 인자 이름도 센다", AC,
+  "    return bool(spec and NARROWING_ARGS & set(spec[3]) & set(params))",
+  "    return bool(spec and NARROWING_ARGS & set(params))",
+  [NARROW_T]),
+ ("좁힌 읽기도 증거 한 건 예산에서 자른다", RP,
+  "        body, ours = detail(result.data, limit=(self._narrowed_chars if narrowed(task.action, task.params)",
+  "        body, ours = detail(result.data, limit=(self._detail_chars if narrowed(task.action, task.params)",
+  ["tests/application/test_runner_probe.py::test_경로로_고른_redis_값은_예산에_안_잘린다"]),
+ ("code.read가 범위를 무시한다", D,
+  "        picked = lines[start - 1:start - 1 + count]", "        picked = lines[:count]",
+  [f"{DCT2}::test_code_read는_범위를_주면_그_범위를_전부_준다"]),
+ ("code.read가 파일 끝 너머 offset을 오류로 안 본다", D,
+  "        if start > len(lines):", "        if False:",
+  [f"{DCT2}::test_code_read는_범위를_주면_그_범위를_전부_준다"]),
+ ("code.read가 offset 0을 거르지 않는다", D,
+  "        if isinstance(value, bool) or not isinstance(value, int) or value < floor:",
+  "        if isinstance(value, bool) or not isinstance(value, int):",
+  [f"{DCT2}::test_code_read는_범위를_주면_그_범위를_전부_준다"]),
+ ("code.config가 key를 무시한다", D,
+  "        if key:\n            ok, picked = select(merged, key)", "        if False:\n            ok, picked = select(merged, key)",
+  [f"{DCT2}::test_code_config는_key로_좁히고_크면_키_지도를_준다"]),
+ ("code.config가 큰 덤프를 그대로 싣는다", D,
+  "        elif len(json.dumps(merged, ensure_ascii=False)) > _CONFIG_INLINE_CHARS:", "        elif False:",
+  [f"{DCT2}::test_code_config는_key로_좁히고_크면_키_지도를_준다"]),
+ ("키 지도가 큰 부채꼴 안으로 내려간다", D,
+  "            if isinstance(v, dict) and left > 1 and 0 < len(v) <= _MAP_FANOUT:",
+  "            if isinstance(v, dict) and left > 1 and 0 < len(v):",
+  [f"{DCT2}::test_400줄이_넘는_층도_통째로_읽는다"]),
+ ("grep이 문서 줄을 뒤로 안 보낸다", D,
+  "        (docs if path.lower().endswith(_DOC_SUFFIXES) else code).append(line)", "        code.append(line)",
+  [f"{DCT2}::test_code_grep은_코드_줄을_먼저_문서_줄을_뒤에_둔다"]),
+ ("grep을 리더 기본 상한으로 받는다", D,
+  "                                          max_lines=_GREP_RAW_LINES, max_chars=_GREP_RAW_CHARS)",
+  "                                          )",
+  [f"{DCT2}::test_code_grep은_코드_줄을_먼저_문서_줄을_뒤에_둔다"]),
+ ("integrate 예시가 읽기를 둘 보여 준다", B,
+  "        shapes = (_available(site_config, fresh, 1, services)\n                  or _available(site_config, _named_reads(services), 1, services))",
+  "        shapes = (_available(site_config, fresh, 2, services)\n                  or _available(site_config, _named_reads(services), 2, services))",
+  ["tests/application/test_briefing.py::test_integrate_예시는_사다리_수와_읽기_하나뿐이다"]),
+ ("예시 회전이 좁힐 수 있는 것을 먼저 둔다", B,
+  "        fresh = unused + again", "        fresh = again + unused",
+  ["tests/application/test_briefing.py::test_예시_회전에_컨슈머_lag_읽기가_있다"]),
+ ("integrate 규칙에 좁혀 읽기 줄이 없다", IT,
+  "- **큰 것은 잘라 보지 말고 골라서 전부 봐라.**", "- **큰 것은 잘 봐라.**",
+  ["tests/application/test_briefing.py::test_좁혀_읽기_규칙이_integrate_프롬프트에_있다"]),
+]
+
+assert len(CASES) >= 438, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

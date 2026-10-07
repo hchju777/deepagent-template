@@ -513,15 +513,20 @@ def example_block(site_config, *, phase: str, start: int = 1,
         # 읽어 **필드를 알게 된 바로 그 라운드부터** 좁히는 본보기가 사라진다 —
         # 사내 측정에서 r1에만 보이고(채울 필드가 아직 없을 때) r2부터 없어졌고,
         # 리드는 끝까지 `filter={}`였다.
-        fresh = tuple(shape for shape in _named_reads(services)
-                      if shape[0] not in used or _refinable(shape[1]))
+        # 한 칸뿐이라(아래) 순서가 곧 선택이다 — **안 써 본 action 먼저**, 좁혀서 다시 낼 수 있는 것은 그 뒤.
+        # 좁힌 `filter`를 먼저 두면 `mongo.find`가 늘 남아 다른 읽기(컨슈머 lag 등)는 영영 안 보인다.
+        unused = tuple(shape for shape in _named_reads(services) if shape[0] not in used)
+        again = tuple(shape for shape in _named_reads(services) if shape[0] in used and _refinable(shape[1]))
+        fresh = unused + again
         # 전부 써 봤으면 어쩔 수 없이 다시 보여 준다 — 빈 예시는 형식 자체를
         # 못 보여 주므로 더 나쁘다. 그때는 좁힌 `filter`가 차이를 만든다.
         # **이 사이트에서 쓸 수 있는 것**이 남았는지로 판단한다 — `fresh` 자체는
         # `mongo.find`가 늘 남아 비지 않으므로, mongo가 없는 사이트에서 `fresh`만
         # 보면 전부 쓴 뒤 예시가 빈다(RED 스윕이 잡았다).
-        shapes = (_available(site_config, fresh, 2, services)
-                  or _available(site_config, _named_reads(services), 2, services))
+        # **하나만.** 사내 실측에서 리드는 예시의 action을 그대로 베꼈다(트레이스에 `← 예시와 같은 action`) —
+        # 보여 줄수록 그대로 낸다. 형식을 보이는 읽기 하나와 사다리의 다음 칸이면 충분하다.
+        shapes = (_available(site_config, fresh, 1, services)
+                  or _available(site_config, _named_reads(services), 1, services))
         if not shapes:
             # 마지막 수단도 **이 사이트에 실재하는 것**이어야 한다. 예전엔
             # `rest.query`를 손으로 박아 뒀는데, REST가 없는 사이트에도 그게

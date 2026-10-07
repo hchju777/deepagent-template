@@ -53,6 +53,9 @@
 - `<열린 질문>`은 아직 모르는 것이다 — 잘린 증거는 좁혀 다시 읽고, 실패한 읽기는 사유를 보고 다른 길로 가라.
   같은 것을 보고 싶으면 **질의를 좁혀라** — `filter`를 걸거나 `limit`을 줄이거나
   다른 컬렉션·토픽을 봐라.
+- **큰 것은 잘라 보지 말고 골라서 전부 봐라.** `mongo.find`는 `projection`(필드 목록)과 `filter`, `redis.get`은
+  `path`(값 안의 자리, 예 `record[0].data`), `code.read`는 `offset`·`limit`(줄 범위 — `code.grep`이 준 줄 번호에서),
+  `code.config`는 `key`(설정 안의 자리, 예 `infra.kafka`). 좁혀 읽은 것은 예산에서 안 잘린다.
 
 ## 답
 
