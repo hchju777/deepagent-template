@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]
@@ -290,6 +291,7 @@ def main() -> int:
 
     # 이 도구는 CLI 경계다 — 가짜 데이터의 "지금"은 실제 지금이어야 stub의 $gte가 뜻을 가진다.
     now = datetime.now()
+    TZ = json.loads((cfg / "app.json").read_text(encoding="utf-8"))["timezone"]
     _write(root, "seeds.json", _seeds(now, args.variant))
     _write(root, ".env", "\n".join(f"{k}=local-dummy" for k in (
         "MONGO_PASSWORD", "REDIS_PASSWORD", "MAIL_AGENT_ID", "MAIL_AGENT_API_KEY")))
@@ -301,7 +303,8 @@ def main() -> int:
         store.add(CaseRecord(
             # config/gbm/common.json의 점검이다 — 브리핑이 여기서 출발점(프로브 → REST path)을 되짚는다.
             id=args.case_id, site="mx/gumi", check="badge_all_zero", target="L1/Alarm",
-            concern="system", opened_at=now, last_seen_at=now,
+            # 앱 시계와 같은 시간대로 — 시간대 없는 값을 적으면 `case list`의 `sustained_for`가 앱 시계와 못 뺀다(실제로 죽었다).
+            concern="system", opened_at=now.astimezone(ZoneInfo(TZ)), last_seen_at=now.astimezone(ZoneInfo(TZ)),
             symptom="gumi MX 알람 화면에 새 알람이 4시간째 안 올라온다. 라인은 정상 가동 중이라고 한다.",
             observed={"recent_alarms": 0, "window_min": 60}))
     for stale in (root / "turns").glob("*"):
