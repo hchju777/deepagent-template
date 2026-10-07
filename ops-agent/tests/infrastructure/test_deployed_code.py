@@ -299,9 +299,20 @@ async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):
     assert notes == [] and flow_code.pinned() == {"dt-core": "main"}
 
 
-async def test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈다(flow_code):
-    """패턴마다 git 프로세스 하나면 이름 100개·레포 3개에 600번이다(사내에서 분 단위로 조용히
-    기다렸다). 한 번에 묻고, 줄에 든 패턴으로 나눈다 — 없는 패턴은 빈 채로 돌아온다."""
+def _no_snapshot(flow_code, monkeypatch):
+    """스냅샷을 못 받는 리더로 — 옛 git·시간 초과의 길."""
+    clock = flow_code._clock
+
+    async def failing(repo, commit):
+        return ProbeResult.failed("옛 git", source=f"code.snapshot {repo}@{commit}", clock=clock)
+
+    monkeypatch.setattr(flow_code._reader, "snapshot", failing)
+    flow_code._snapshots.clear()
+
+
+async def test_흐름_히트는_스냅샷에서_찾고_git_grep은_안_띄운다(flow_code, monkeypatch):
+    """11e-3. 패턴 20개씩 묶어도 사내는 레포당 19번 × 5레포 = 231초였다 — 본문은 이미 스냅샷에 있다. 라우트 선언도
+    같다. 스냅샷을 못 받으면 전처럼 묶어 묻는다(패턴마다 한 번이면 600번이던 그 길 그대로)."""
     calls = []
     real = flow_code._reader.grep
 
@@ -310,19 +321,50 @@ async def test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈�
         return await real(*a, **kw)
 
     flow_code._reader.grep = spy
-    table, _ = await flow_code.flow_hits(["alarm", "topic1", "없는것"])
-    assert len(calls) == 1 and calls[0]["fixed"] is True and calls[0]["context"] == 1
+    table, notes = await flow_code.flow_hits(["alarm", "topic1", "없는것"])
+    routes, _ = await flow_code.route_hits()
+    assert calls == [] and notes == []
     assert {(h.file, h.line) for h in table["topic1"]} == {
         ("config/gbm/mx.json", 1), ("config/factories/_dev/mx.json", 2), ("sink/writer.py", 2)}
     assert table["없는것"] == []
     assert all(p in h.text for p, hits in table.items() for h in hits)
+    # 테스트 파일의 데코레이터도 줄로는 온다 — 빼는 것은 조립(`routes_from_hits`)의 일이고 git grep도 그랬다.
+    assert [(h.file, h.line) for h in routes] == [("api/routes.py", 1), ("api/routes.py", 4), ("tests/test_routes.py", 1)]
+    _no_snapshot(flow_code, monkeypatch)
+    again, _ = await flow_code.flow_hits(["alarm", "topic1", "없는것"])
+    again_routes, _ = await flow_code.route_hits()
+    assert len(calls) == 2 and calls[0]["fixed"] is True and calls[0]["context"] == 1
+    assert again == table and again_routes == routes                  # 두 길의 답이 같다
 
 
 async def test_잘린_코드_찾기는_버리지_않고_사유로_남는다(flow_code, monkeypatch):
+    """git grep으로 내려간 길의 상한. 스냅샷 길은 상한이 없다 — 봉투를 안 거친다."""
     from src.infrastructure import deployed_code as dc
+    _no_snapshot(flow_code, monkeypatch)
     monkeypatch.setattr(dc, "FLOW_MAX_LINES", 2)
     _, notes = await flow_code.flow_hits(["alarm"])
     assert notes and "잘렸다" in notes[0] and "엣지가 빠졌을 수" in notes[0]
+
+
+async def test_흐름_히트는_스냅샷이_못_본_submodule을_사유로_남긴다(clock):
+    """`git grep --recurse-submodules`가 안 채워진 submodule을 조용히 건너뛸 때 봉투가 말하던 것 — 스냅샷 길에서도
+    같은 말이 나와야 한다(그래프에 엣지가 빠졌을 수 있다)."""
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded({"a.py": "alarm = 1\n", "api/r.py": "x = APIRouter()\n"}, source="s", clock=clock,
+                                         truncated_reason="submodule vendor/libs을 못 봤다(안 채워져 있다) — 그 안은 이 결과에 없다")
+
+        async def grep(self, *a, **k):
+            raise AssertionError("스냅샷이 있으면 grep을 안 부른다")
+
+    code = DeployedCode(Reader(), Topology(services={"sink": Service(repo="dt-core", role="저장한다")}, config_paths=LAYERS),
+                        Deployment(), gbm="mx", fct="gumi", clock=clock)
+    table, notes = await code.flow_hits(["alarm"])
+    assert [(h.file, h.line) for h in table["alarm"]] == [("a.py", 1)]
+    assert len(notes) == 1 and "vendor/libs" in notes[0] and "엣지가 빠졌을 수" in notes[0]
+    routes, route_notes = await code.route_hits()
+    assert [(h.file, h.line) for h in routes] == [("api/r.py", 1)]
+    assert len(route_notes) == 1 and "vendor/libs" in route_notes[0] and "끝점이 빠졌을 수" in route_notes[0]
 
 
 async def test_흐름_히트에는_앞뒤_한_줄이_실려_온다(flow_code):

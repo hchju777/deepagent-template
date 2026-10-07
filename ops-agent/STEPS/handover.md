@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1486 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 375 사례 |
+| 테스트 | `1490 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 387 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -384,8 +384,8 @@ LLM 없이 검사해 한 번 되묻고 그래도 안 되면 걷어내고 강등�
 20분인 것이 드러나 **11e(GBM 단위 그래프 번들, [step-11e-gbm-bundle.md](step-11e-gbm-bundle.md))를 끼워 넣었다**
 — 11e-1(인덱스가 커밋을 레포당 git 두 번, `ls-tree`+`cat-file --batch`로 받는다 — 사내 Windows에서 archive가 CRLF를
 줘 바꿨다)과 11e-2(번들을 `output/graph/<gbm>/` 하나로, 사이트는 `sites/<fct>.json`에 덮은 값만, `code graph --gbm mx`
-한 번)가 됐다. 사내 한 번은 562초, `code check` 숫자는 받아 적었다(11e 문서 종료 판단 5) — 그 562초의 단계별 분해를 보고
-11e를 닫는다. 그다음 **12b**(보고서·이벤트).
+한 번)가 됐다. 사내 한 번은 562초였고 분해해 보니 `git grep` 231초 + graphify 순차 296초라 **11e-3**(이름·라우트 찾기를
+스냅샷에서, graphify는 레포 병렬)을 했다 — 사내 한 번을 다시 재면 11e를 닫는다. 그다음 **12b**(보고서·이벤트).
 11d에서 미룬 것: 6b-3
 (구조적 구현체·DI 레지스트리·디스패치 표·하네스 D·graphify 병합), backlog ⑨·⑩. 시작하기 전에
 목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.

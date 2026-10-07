@@ -1300,14 +1300,19 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
     if not binary:
         progress("graphify 없음 — 심볼 그래프는 건너뛴다 (requirements-graph.txt)")
     symbol_graphs, states, reports = [], [], {}
+    # 레포마다 독립이라 겹쳐 돌린다(11e-3, 사내 5레포 순차 296초). 합치는 순서는 config의 레포 순서 그대로다.
+    jobs = [(repo.name, Path(repo.path), commits[repo.name], out_dir / "worktrees" / repo.name)
+            for repo in site.code.repos if commits.get(repo.name)]
+    width = gb.graphify_width(len(jobs))
+    if binary and len(jobs) > 1:
+        progress(f"graphify: 레포 {len(jobs)}개를 {width}개씩 겹쳐 돌린다")
+    done = dict(zip([name for name, *_ in jobs],
+                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"))))
     for repo in site.code.repos:
-        sha = commits.get(repo.name)
-        if not sha:
+        if repo.name not in done:
             states.append(f"{repo.name} 건너뜀(커밋 없음)")
             continue
-        status, detail, graph, report = gb.run_graphify_at(
-            Path(repo.path), sha, binary, out_dir / "worktrees" / repo.name,
-            progress=lambda m, r=repo.name: progress(f"{r}: {m}"))
+        status, detail, graph, report = done[repo.name]
         states.append(f"{repo.name} {status}" + ("" if status == "ok" else f" — {detail}"))
         if graph:
             symbol_graphs.append(graph)

@@ -672,6 +672,7 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     assert code == 0, captured.out + captured.err
     assert [a for a in spawned if a[0] == "show" and a[1].endswith(".py")] == [], "파일마다 show를 띄웠다"
     assert sum(1 for a in spawned if a[:2] == ["cat-file", "--batch"]) == 1   # 레포 하나, 서브모듈 없음
+    assert [a for a in spawned if a[0] == "grep"] == [], "이름·라우트 찾기가 스냅샷이 아니라 git grep을 띄웠다"   # 11e-3
     bundle = tmp_path / "out" / "graph" / "mx"
     symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))
     assert {s["qualname"] for s in symbols["symbols"] if s["kind"] == "module"} >= {"processor.handler", "sink.writer", "api.r"}
@@ -875,6 +876,32 @@ def test_끝점_등재는_GBM의_사이트_전부를_합친다(tmp_path, monkeyp
     overlay = json.loads((tmp_path / "out" / "graph" / "mx" / "overlay.json").read_text(encoding="utf-8"))
     endpoints = {n["label"]: n for n in overlay["nodes"] if n["type"] == "endpoint"}
     assert "/sevt/only" in endpoints and endpoints["/sevt/only"]["entry"] == "sevt_only"
+
+
+def test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서로_합친다(tmp_path, monkeypatch, capsys):
+    """`_build_graph`가 `run_graphify_many`를 타는지(11e-3) — 레포 하나뿐인 트리라 겹침은 못 보고(그건
+    `test_graphify는_레포를_병렬로…`) 배선과 폭, 그리고 결과가 번들에 실리는지만 본다."""
+    from src.knowledge import graph_build as gb
+
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _two_site_tree(tmp_path)
+    seen = {}
+
+    def fake_many(jobs, binary, *, width, progress=None):
+        seen.update(jobs=[(name, sha) for name, _, sha, _ in jobs], width=width, binary=binary)
+        if progress:
+            progress(jobs[0][0], "가짜 진행")
+        return [("ok", "", {"nodes": [{"id": "fake_symbol", "label": "fake", "type": "function"}], "links": []}, None)
+                for _ in jobs]
+
+    monkeypatch.setattr(gb, "run_graphify_many", fake_many)
+    code, captured = _run_gbm(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    assert [n for n, _ in seen["jobs"]] == [REPO] and len(seen["jobs"][0][1]) == 40 and seen["width"] == 1
+    assert seen["binary"] is None                                      # graphify가 없어도 같은 길 — 결과는 skipped
+    assert f"{REPO}: 가짜 진행" in captured.err
+    graph = json.loads((tmp_path / "out" / "graph" / "mx" / "graph.json").read_text(encoding="utf-8"))
+    assert any(n["id"] == "fake_symbol" for n in graph["nodes"]) and f"{REPO} ok" in captured.out
 
 
 def test_사이트_파일이_없으면_GBM_값_그대로_싣고_말한다(tmp_path, monkeypatch, capsys):

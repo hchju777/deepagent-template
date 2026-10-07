@@ -120,8 +120,8 @@ processor·sink가 공유하므로 lag만으로는 누가 멈췄는지 모른다
 - `code graph` — 지금 체크아웃으로 그래프를 만든다. 네트워크 없음. `code sync`도 끝에 같은
   함수를 부른다(조립 한 벌).
 - 만드는 순서: 서비스별 합친 config → 이름 → **레포마다** 배포 커밋에서 `git grep -n -F -C1`
-  (패턴 20개씩 묶어서) → 오버레이(`flow.extract`). 레포마다 배포 SHA로 **`git worktree`를 잠깐 만들어** 거기서
-  `graphify extract --code-only` + `cluster-only --no-label`을 돌리고 지운다. 작업 트리는
+  (패턴 20개씩 묶어서; 11e-3부터는 레포 스냅샷에서 같은 결과를 프로세스 없이 — git grep은 스냅샷을 못 받았을 때만) → 오버레이(`flow.extract`). 레포마다 배포 SHA로 **`git worktree`를 잠깐 만들어** 거기서
+  `graphify extract --code-only` + `cluster-only --no-label`을 돌리고 지운다(11e-3부터 레포 여럿을 겹쳐 돌린다, 폭 ≤ 4). 작업 트리는
   안 건드리고 HEAD도 그대로다. 오버레이와 심볼 그래프를 id로 합친다.
 - 산출물: `<output_dir>/graph/<gbm>-<fct>/{overlay,graph,meta}.json`(11e-2부터 `graph/<gbm>/` 하나에 사이트별 `sites/<fct>.json`). `meta.commits`는
   레포별 **실제 SHA**다(`main` 같은 참조는 움직인다). git에 안 들어간다.

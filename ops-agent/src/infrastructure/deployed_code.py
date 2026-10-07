@@ -35,7 +35,7 @@ from src.domain.envelope import ProbeResult
 from src.domain.ports import CodeReaderPort, DeployedCodePort
 from src.knowledge import flow as flowgraph
 from src.knowledge.flow import Hit, Name, names_from_config
-from src.knowledge.graph_build import parse_grep
+from src.knowledge.graph_build import grep_snapshot, parse_grep
 from src.knowledge.schema import Deployment, Topology
 from src.knowledge.target_config import merge_target, parse_layer
 
@@ -85,7 +85,8 @@ class DeployedCode(DeployedCodePort):
         self._qgraph = None
         # 레포 스냅샷(11e) — `(repo, commit)` → `경로 → 본문`. 커밋으로 주소가 매겨져 안 변하므로 한 번만 받는다.
         # `code graph`가 사이트 28개의 config 층을 병합할 때 여기서 읽는다 — git은 레포당 한 번이다.
-        self._snapshots: dict[tuple[str, str], dict[str, str] | None] = {}
+        # (파일들 또는 None, 못 본 것의 사유) — 사유는 흐름 히트의 "잘렸다" 메모가 된다(안 채워진 submodule 등).
+        self._snapshots: dict[tuple[str, str], tuple[dict[str, str] | None, str]] = {}
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -217,19 +218,30 @@ class DeployedCode(DeployedCodePort):
     async def flow_hits(self, patterns: list[str], *,
                         progress: Callable[[str], None] | None = None
                         ) -> tuple[dict[str, list[Hit]], list[str]]:
-        """배포 커밋에서 `git grep -n -F -C1`을 **레포마다 몇 번**(패턴 `FLOW_CHUNK`개씩)으로.
-        `(패턴 → 히트, 잘림 사유)`.
+        """배포 커밋의 **스냅샷에서**(11e-3) `git grep -n -F -C1`과 같은 히트를 — `(패턴 → 히트, 잘림 사유)`.
+        스냅샷을 못 받으면 `git grep`을 레포마다 몇 번(패턴 `FLOW_CHUNK`개씩)으로.
 
-        패턴마다 한 번씩 띄우면 이름 100개·레포 3개에 600번이고, 사내 Windows에서는 분
-        단위로 조용히 기다리게 된다. 히트는 줄 본문에 패턴이 들어 있는지로 패턴별로 나눈다
+        패턴마다 한 번씩 띄우면 이름 100개·레포 3개에 600번이고, 20개씩 묶어도 사내는 레포당 19번 × 5레포 =
+        231초였다 — 본문은 이미 스냅샷에 있다. 히트는 줄 본문에 패턴이 들어 있는지로 패턴별로 나눈다
         — `-F`라 git이 맞춘 것도 정확히 그 부분 문자열이다. 잘린 결과는 버리지 않고 사유로
-        돌려준다(그래프에 엣지가 빠졌을 수 있다). 실패한 레포는 조용히 빈다 — `code status`가
-        레포 상태를 따로 말한다. 앞뒤 한 줄은 `Hit.context`로 간다.
+        돌려준다(그래프에 엣지가 빠졌을 수 있다) — 스냅샷 길에서는 못 본 submodule이 그 사유다. 실패한 레포는
+        조용히 빈다 — `code status`가 레포 상태를 따로 말한다. 앞뒤 한 줄은 `Hit.context`로 간다.
         """
         table: dict[str, list[Hit]] = {p: [] for p in patterns}
         notes: list[str] = []
         chunks = [patterns[i:i + FLOW_CHUNK] for i in range(0, len(patterns), FLOW_CHUNK)]
         for repo, commit in self.pinned().items():
+            snap, unseen = await self._snapshot_result(repo)
+            if snap is not None:
+                if progress:
+                    progress(f"{repo}: 코드에서 이름 찾는 중 (패턴 {len(patterns)}개, 스냅샷에서)")
+                if unseen:
+                    notes.append(f"{repo}: 코드 찾기가 잘렸다({unseen}) — 그래프에 엣지가 빠졌을 수 있다")
+                for hit in grep_snapshot(repo, commit, snap, patterns, fixed=True, context=1):
+                    for p in patterns:
+                        if p in hit.text:
+                            table[p].append(hit)
+                continue
             if progress:
                 progress(f"{repo}: 코드에서 이름 찾는 중 (패턴 {len(patterns)}개, git grep {len(chunks)}번)")
             for chunk in chunks:
@@ -248,13 +260,19 @@ class DeployedCode(DeployedCodePort):
 
     async def route_hits(self, *, progress: Callable[[str], None] | None = None
                          ) -> tuple[list[Hit], list[str]]:
-        """배포 커밋에서 라우트 선언 줄(FastAPI 모양)을 레포마다 `git grep -n`(정규식) 한 번으로.
+        """배포 커밋의 스냅샷에서 라우트 선언 줄(FastAPI 모양)을 — 스냅샷이 없으면 레포마다 `git grep -n`(정규식) 한 번.
         `(히트, 잘림 사유)`. 조립은 `flow.routes_from_hits`가 한다 — 여기는 줄을 모을 뿐이다."""
         hits: list[Hit] = []
         notes: list[str] = []
         for repo, commit in self.pinned().items():
             if progress:
                 progress(f"{repo}: 라우트 선언 찾는 중")
+            snap, unseen = await self._snapshot_result(repo)
+            if snap is not None:
+                if unseen:
+                    notes.append(f"{repo}: 라우트 찾기가 잘렸다({unseen}) — 끝점이 빠졌을 수 있다")
+                hits += grep_snapshot(repo, commit, snap, list(flowgraph.ROUTE_REGEXES), fixed=False)
+                continue
             got = await self._reader.grep(repo, commit, list(flowgraph.ROUTE_PATTERNS),
                                           max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)
             if got.status == "error" or not isinstance(got.data, str):
@@ -267,11 +285,16 @@ class DeployedCode(DeployedCodePort):
 
     async def snapshot_for(self, repo: str) -> dict[str, str] | None:
         """그 레포의 배포 커밋 스냅샷. 못 받으면 None — 호출자가 `show`로 간다."""
+        return (await self._snapshot_result(repo))[0]
+
+    async def _snapshot_result(self, repo: str) -> tuple[dict[str, str] | None, str]:
+        """`(파일들 또는 None, 못 본 것의 사유)` — 한 번만 받는다."""
         commit = self.pinned()[repo]
         key = (repo, commit)
         if key not in self._snapshots:
             got = await self._reader.snapshot(repo, commit)
-            self._snapshots[key] = got.data if got.status == "ok" and isinstance(got.data, dict) else None
+            ok = got.status == "ok" and isinstance(got.data, dict)
+            self._snapshots[key] = (got.data if ok else None, (got.envelope.truncated_reason or "") if ok else "")
         return self._snapshots[key]
 
     def _layer_paths(self, fct: str) -> list[str]:

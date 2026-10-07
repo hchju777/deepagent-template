@@ -88,6 +88,61 @@ def _parse_group(repo: str, commit: str, group: list[str]) -> list[Hit]:
     return hits
 
 
+def grep_snapshot(repo: str, commit: str, files: dict[str, str], patterns, *,
+                  fixed: bool = True, context: int = 0) -> list[Hit]:
+    """스냅샷(경로 → 본문)에서 `git grep -n -I [-F] [-C1] <커밋>`과 **같은** `Hit`를 — 프로세스 없이.
+
+    11e-1이 만든 모순의 답이다: 레포 본문을 메모리에 다 받아 놓고도 이름을 찾을 때는 `git grep <커밋>`을 레포당
+    19번 띄워 git이 매번 전체 blob을 다시 풀게 했다(사내 5레포 231초). 결과는 git과 같아야 오버레이가 바이트까지
+    같다 — 패리티 테스트가 진짜 git과 대조하는 것들: 파일 순서는 트리 순서(= 전체 경로의 바이트 순서, 디렉터리와
+    submodule도 그 자리), 줄은 `\n`으로만 가르고 꼬리 `\r`은 뗀다(`parse_grep`이 `splitlines`로 떼던 것), NUL이 든
+    파일은 이진으로 보고 뺀다(`-I` — git은 앞 8000바이트를 본다), 한 줄은 패턴이 여럿 맞아도 `Hit` 하나, 문맥은 줄
+    번호로 앞뒤 한 줄(`context=0`이면 git 출력에 있던 **인접한 매치 줄**만 — `_parse_group`이 그렇게 읽는다).
+    `fixed`면 부분 문자열, 아니면 파이썬 정규식(`flow.ROUTE_REGEXES` — git에 주는 BRE와 한 출처다).
+    """
+    if fixed:
+        matchers = [(lambda line, p=p: p in line) for p in patterns]
+    else:
+        matchers = [(re.compile(p) if isinstance(p, str) else p).search for p in patterns]
+    hits: list[Hit] = []
+    for path in sorted(files):
+        text = files[path]
+        if "\x00" in text[:8000]:
+            continue
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()                             # 끝 줄바꿈 뒤의 빈 조각은 줄이 아니다
+        lines = [line[:-1] if line.endswith("\r") else line for line in lines]
+        matched = [n for n, line in enumerate(lines, 1) if any(m(line) for m in matchers)]
+        visible = set(range(1, len(lines) + 1)) if context else set(matched)
+        for n in matched:
+            around = [lines[k - 1] for k in (n - 1, n + 1) if k in visible]
+            hits.append(Hit(repo, commit, path, n, lines[n - 1], context="\n".join(around)))
+    return hits
+
+
+def graphify_width(n: int) -> int:
+    """동시에 돌릴 레포 수 — 코드가 정한다(규율 6). CPU 수와 4 중 작은 쪽. graphify는 CPU를 먹는 파싱이라 코어보다
+    많이 띄우면 느려질 뿐이고, 4는 사내 PC(백신이 프로세스마다 붙는다)를 생각한 상한이다."""
+    return max(1, min(4, os.cpu_count() or 1, n))
+
+
+def run_graphify_many(jobs, binary: str | None, *, width: int,
+                      progress: Callable[[str, str], None] | None = None) -> list[tuple]:
+    """레포마다 `run_graphify_at`을 스레드 풀에서 겹쳐 돌리고 결과는 **준 순서**로 — 끝난 순서로 합치면 같은 입력에
+    다른 번들이 나온다. `jobs`는 `[(이름, 레포 경로, sha, scratch)]`. graphify는 자식 프로세스라 GIL 밖이고 레포마다
+    worktree가 따로라 서로 안 건드린다. 사내 5레포 순차 296초의 답."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(job):
+        name, repo_dir, sha, scratch = job
+        return run_graphify_at(repo_dir, sha, binary, scratch,
+                               progress=(lambda m, r=name: progress(r, m)) if progress else None)
+
+    with ThreadPoolExecutor(max_workers=max(1, width)) as pool:
+        return list(pool.map(one, jobs))
+
+
 def find_graphify() -> str | None:
     """`GRAPHIFY_BIN` → 실행 중인 python 옆(`.venv/Scripts`·`bin`) → PATH. 없으면 None — 오류가 아니다.
 

@@ -9,8 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from src.config.schema_site import RepoConfig
+from src.infrastructure.git_reader import RealCodeReader
+from src.knowledge import flow
 from src.knowledge import graph_build as gb
-from tests.support import working_graphify
+from tests.support import git, make_git_repo, working_graphify
 
 T0 = datetime(2026, 9, 22, 9, 0)
 
@@ -243,3 +246,77 @@ def test_옛_번들의_meta도_읽힌다():
     """`sites`가 없던 번들(11e 전)을 읽어도 죽지 않는다 — 낡음 판정이 말하게 둔다."""
     meta = gb.GraphMeta(gbm="mx", fct="gumi", commits={}, built_at="t", graphify="없음")
     assert meta.sites == []
+
+
+# ── 11e-3 — 이름·라우트 찾기를 스냅샷에서, graphify는 레포 병렬 ─────────────
+
+def _grep_fixture(tmp_path):
+    """`git grep`과 갈릴 수 있는 자리를 일부러 모은 레포 — 인접 매치(문맥 겹침), CRLF, 같은 blob 둘(그룹·순서),
+    정렬 경계(`-` `.` `/` `0`), NUL이 든 파일(`-I`가 뺀다), 라우트 선언 세 모양."""
+    root = make_git_repo(tmp_path / "g", origin="https://git.example.com/team/g")
+    files = {
+        "a.py": 'x = cfg["alarm_events"]\nmongo[x].insert_one(m)\nalarm_events = 1\n',
+        "dir/b.json": '{\r\n  "alarm": "alarm_events"\r\n}\r\n',
+        "twin1.txt": "alarm_events here\n", "twin2.txt": "alarm_events here\n",
+        "a-b.py": "# alarm_events\n", "a0.py": "# alarm_events\n", "a/c.py": "alarm_events\n",
+        "api/r.py": 'router = APIRouter(prefix="/s")\n\n@router.api_route("/x")\ndef x():\n    pass\n'
+                    'app.include_router(router)\n',
+    }
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(text.encode("utf-8"))
+    (root / "bin.dat").write_bytes(b"alarm_events\x00binary\n")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "grep", cwd=root)
+    return root
+
+
+async def test_스냅샷_grep은_git_grep과_같은_Hit를_준다(tmp_path, clock):
+    """11e-1이 만든 모순: 레포 본문을 메모리에 다 받아 놓고도 이름을 찾을 때는 `git grep <커밋>`을 레포당 19번 띄워
+    git이 매번 전체 blob을 다시 풀게 했다(사내 231초). 스냅샷에서 찾되 **`Hit`가 git grep 결과와 같아야** 오버레이가
+    바이트까지 같다 — 파일 순서, 줄 번호, 본문, 앞뒤 한 줄, 이진 파일 제외, 정규식(라우트)까지."""
+    root = _grep_fixture(tmp_path)
+    reader = RealCodeReader([RepoConfig(name="g", path=str(root), url="https://git.example.com/team/g")], clock=clock)
+    snap = await reader.snapshot("g", "main")
+    assert snap.status == "ok", snap.error
+    literal = ["alarm_events", "insert_one", "없는것"]
+    got = await reader.grep("g", "main", literal, context=1, fixed=True, max_lines=50_000, max_chars=5_000_000)
+    expected = gb.parse_grep("g", "main", got.data)
+    mine = gb.grep_snapshot("g", "main", snap.data, literal, fixed=True, context=1)
+    assert mine == expected
+    files = [h.file for h in mine]
+    assert "bin.dat" not in files and "twin1.txt" in files and "twin2.txt" in files and "dir/b.json" in files
+    assert all("\r" not in h.text and "\r" not in h.context for h in mine)
+    got = await reader.grep("g", "main", list(flow.ROUTE_PATTERNS), max_lines=50_000, max_chars=5_000_000)
+    expected = gb.parse_grep("g", "main", got.data)
+    mine = gb.grep_snapshot("g", "main", snap.data, list(flow.ROUTE_REGEXES), fixed=False, context=0)
+    assert mine == expected and len(mine) == 3                      # APIRouter( · api_route( · include_router(
+
+
+def test_graphify는_레포를_병렬로_돌리고_결과는_레포_순서다(monkeypatch):
+    """사내 5레포 순차 296초의 답. 레포마다 독립이라 겹쳐 돌리고, 합치는 순서는 끝난 순서가 아니라 **준 순서**다 —
+    그래야 결과가 같다. 폭은 코드가 정한다(규율 6)."""
+    import time
+    seen = []
+
+    def fake(repo_dir, sha, binary, scratch, *, progress=None):
+        t0 = time.monotonic()
+        time.sleep(0.3)
+        seen.append((repo_dir.name, t0, time.monotonic()))
+        if progress:
+            progress("가짜")
+        return "ok", "", {"nodes": [{"id": repo_dir.name}], "links": []}, None
+
+    monkeypatch.setattr(gb, "run_graphify_at", fake)
+    jobs = [(n, Path(n), "deadbeef", Path("s") / n) for n in ("c", "a", "b")]
+    lines = []
+    results = gb.run_graphify_many(jobs, "graphify", width=3,
+                                   progress=lambda name, msg: lines.append(f"{name}: {msg}"))
+    assert [g["nodes"][0]["id"] for _, _, g, _ in results] == ["c", "a", "b"]
+    assert max(s for _, s, _ in seen) < min(e for _, _, e in seen)           # 셋이 겹쳐 돌았다
+    assert sorted(lines) == ["a: 가짜", "b: 가짜", "c: 가짜"]
+    seen.clear()
+    gb.run_graphify_many(jobs, "graphify", width=1, progress=None)
+    assert all(seen[i][2] <= seen[i + 1][1] for i in range(2))               # 폭 1이면 차례로
+    assert gb.graphify_width(10) == min(4, os.cpu_count() or 1)
+    assert gb.graphify_width(1) == 1 and gb.graphify_width(0) == 1

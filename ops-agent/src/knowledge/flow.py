@@ -892,6 +892,9 @@ def traced_reads(graph: dict, endpoint_id: str, *, kind: str | None = None) -> l
 ROUTE_PATTERNS = ("APIRouter(", "include_router(",
                   "@[A-Za-z_.]*\\.get(", "@[A-Za-z_.]*\\.post(", "@[A-Za-z_.]*\\.put(",
                   "@[A-Za-z_.]*\\.patch(", "@[A-Za-z_.]*\\.delete(", "@[A-Za-z_.]*\\.api_route(")
+# `git grep`에는 위 BRE를 주고 스냅샷 찾기(`graph_build.grep_snapshot`)에는 이 파이썬 정규식을 준다. BRE에서 `(`는
+# 글자 그대로라 그것만 이스케이프하면 같은 식이다 — 한 출처에서 만들어 둘이 갈리지 않게 한다(패리티 테스트가 진짜 git과 대조).
+ROUTE_REGEXES = tuple(re.compile(p.replace("(", r"\(")) for p in ROUTE_PATTERNS)
 _DECORATOR = re.compile(r"@([A-Za-z_][\w.]*)\.(get|post|put|patch|delete|api_route)\(\s*['\"]([^'\"]*)['\"]")
 _ROUTER_DEF = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*APIRouter\(")
 _PREFIX = re.compile(r"prefix\s*=\s*['\"]([^'\"]*)['\"]")

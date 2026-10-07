@@ -562,7 +562,8 @@ Gap으로 적는다.
 사실의 다른 면: 코드는 GBM 단위로 같다). 그래서 인덱스·끝점 사슬·오버레이·graphify·사람용 페이지는
 `output/graph/<gbm>/`에 **하나**고, 사이트 층이 GBM 값을 덮은 것만 `sites/<fct>.json`에 남아 조사 시작 때
 그 사이트 몫이 입혀진다(그래프는 `flow.apply_site`, 심볼 인덱스의 함수별 자원 이름은 `Index.renamed`). 사이트 층 병합은 레포 스냅샷(11e-1, `ls-tree`+`cat-file --batch`)에서
-하므로 사이트 수가 늘어도 git 프로세스는 늘지 않는다.
+하므로 사이트 수가 늘어도 git 프로세스는 늘지 않는다. 이름·라우트 찾기도 같은 스냅샷에서 한다(11e-3) — `git grep`은
+스냅샷을 못 받았을 때의 길이다.
 
 20분의 정체는 graphify가 아니라 우리 인덱서가 `.py`마다 `git show`를 띄운 것이었다(측정판 gitshim으로 셌다).
 graphify는 사내 실제 레포에서 `calls`·`imports`·`inherits` 같은 진짜 심볼 그래프를 냈으므로 **기본 켬**

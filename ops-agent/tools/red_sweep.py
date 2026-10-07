@@ -570,16 +570,20 @@ CASES = [
   '        around = [lines[(f, k)] for k in (n - 1, n + 1) if (f, k) in lines]',
   '        around = [v for (_, k), v in lines.items() if k in (n - 1, n + 1)]',
   ["tests/knowledge/test_graph_build.py::test_문맥_없이_이웃한_줄_번호는_파일이_다르면_안_섞인다"]),
- ("흐름 추출이 문맥을 안 청한다", ROOT / "src/infrastructure/deployed_code.py",
+ ("흐름 추출이 문맥을 안 청한다(git grep 길)", ROOT / "src/infrastructure/deployed_code.py",
   '                got = await self._reader.grep(repo, commit, chunk, context=1, fixed=True,',
   '                got = await self._reader.grep(repo, commit, chunk, context=0, fixed=True,',
+  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트는_스냅샷에서_찾고_git_grep은_안_띄운다"]),
+ ("흐름 추출이 문맥을 안 청한다(스냅샷 길)", ROOT / "src/infrastructure/deployed_code.py",
+  '                for hit in grep_snapshot(repo, commit, snap, patterns, fixed=True, context=1):',
+  '                for hit in grep_snapshot(repo, commit, snap, patterns, fixed=True, context=0):',
   ["tests/infrastructure/test_deployed_code.py::test_흐름_히트에는_앞뒤_한_줄이_실려_온다"]),
  ("흐름 추출이 패턴마다 git을 띄운다", ROOT / "src/infrastructure/deployed_code.py",
   'FLOW_CHUNK = 20', 'FLOW_CHUNK = 1',
-  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈다"]),
+  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트는_스냅샷에서_찾고_git_grep은_안_띄운다"]),
  ("히트를 패턴별로 안 나눈다", ROOT / "src/infrastructure/deployed_code.py",
   '                        if p in hit.text:', '                        if True:',
-  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트는_레포마다_묶어_묻고_패턴별로_나눈다"]),
+  ["tests/infrastructure/test_deployed_code.py::test_흐름_히트는_스냅샷에서_찾고_git_grep은_안_띄운다"]),
  ("잘린 코드 찾기를 조용히 버린다", ROOT / "src/infrastructure/deployed_code.py",
   '                if not got.envelope.complete:', '                if False:',
   ["tests/infrastructure/test_deployed_code.py::test_잘린_코드_찾기는_버리지_않고_사유로_남는다"]),
@@ -1533,7 +1537,58 @@ CASES += [
   ["tests/knowledge/test_cli_code.py::test_code_status와_flow는_그_사이트의_값으로_말한다"]),
 ]
 
-assert len(CASES) >= 375, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 11e-3 — 이름·라우트 찾기를 스냅샷에서, graphify는 레포 병렬 ─────────────
+PARITY = "tests/knowledge/test_graph_build.py::test_스냅샷_grep은_git_grep과_같은_Hit를_준다"
+SNAP_HITS = f"{DCT}::test_흐름_히트는_스냅샷에서_찾고_git_grep은_안_띄운다"
+MANY = "tests/knowledge/test_graph_build.py::test_graphify는_레포를_병렬로_돌리고_결과는_레포_순서다"
+CASES += [
+ ("이름 찾기가 스냅샷을 두고 git grep을 띄운다", D,
+  '            snap, unseen = await self._snapshot_result(repo)\n            if snap is not None:\n                if progress:',
+  '            snap, unseen = await self._snapshot_result(repo)\n            if False:\n                if progress:',
+  [SNAP_HITS, "tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다"]),
+ ("라우트 찾기가 스냅샷을 두고 git grep을 띄운다", D,
+  '            snap, unseen = await self._snapshot_result(repo)\n            if snap is not None:\n                if unseen:\n                    notes.append(f"{repo}: 라우트 찾기가',
+  '            snap, unseen = await self._snapshot_result(repo)\n            if False:\n                if unseen:\n                    notes.append(f"{repo}: 라우트 찾기가',
+  [SNAP_HITS]),
+ ("스냅샷 길이 못 본 submodule을 말하지 않는다", D,
+  '            self._snapshots[key] = (got.data if ok else None, (got.envelope.truncated_reason or "") if ok else "")',
+  '            self._snapshots[key] = (got.data if ok else None, "")',
+  [f"{DCT}::test_흐름_히트는_스냅샷이_못_본_submodule을_사유로_남긴다"]),
+ ("스냅샷 grep이 파일을 트리 순서로 안 본다", GBD,
+  '    for path in sorted(files):\n        text = files[path]',
+  '    for path in files:\n        text = files[path]',
+  [PARITY]),
+ ("스냅샷 grep이 이진 파일을 안 뺀다", GBD,
+  '        if "\\x00" in text[:8000]:\n            continue',
+  '        if False:\n            continue',
+  [PARITY]),
+ ("스냅샷 grep이 CR을 안 뗀다", GBD,
+  '        lines = [line[:-1] if line.endswith("\\r") else line for line in lines]',
+  '        lines = list(lines)',
+  [PARITY]),
+ ("스냅샷 grep의 문맥이 앞뒤가 아니다", GBD,
+  '            around = [lines[k - 1] for k in (n - 1, n + 1) if k in visible]',
+  '            around = [lines[k - 1] for k in (n + 1,) if k in visible]',
+  [PARITY]),
+ ("라우트 정규식이 git 패턴과 갈린다", FLW,
+  'ROUTE_REGEXES = tuple(re.compile(p.replace("(", r"\\(")) for p in ROUTE_PATTERNS)',
+  'ROUTE_REGEXES = tuple(re.compile(p.replace("(", r"\\(")) for p in ROUTE_PATTERNS[:-1])',
+  [PARITY]),
+ ("graphify 결과를 끝난 순서로 합친다", GBD,
+  '        return list(pool.map(one, jobs))',
+  '        return list(pool.map(one, jobs))[::-1]',
+  [MANY]),
+ ("graphify 폭이 항상 1이다", GBD,
+  '    return max(1, min(4, os.cpu_count() or 1, n))',
+  '    return 1',
+  [MANY]),
+ ("code graph가 graphify를 레포마다 차례로 돌린다", MN,
+  '                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"))))',
+  '                    [gb.run_graphify_at(d, s, binary, sc, progress=lambda m, r=n: progress(f"{r}: {m}")) for n, d, s, sc in jobs]))',
+  ["tests/knowledge/test_cli_code.py::test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서로_합친다"]),
+]
+
+assert len(CASES) >= 387, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
