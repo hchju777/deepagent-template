@@ -112,6 +112,58 @@ def _render(result) -> dict:
 
 # ── 명령들 ────────────────────────────────────────────────────────────
 
+def _shutdown_noise_handler(loop, context: dict) -> None:
+    """이벤트 루프의 예외 처리기 — **transport 층의 끊김만** 거른다.
+
+    사내 Windows(proactor)에서 명령이 끝나 내려갈 때 `ConnectionResetError(10054)`·`RuntimeError: Event loop is closed`
+    트레이스백이 났다(12a 리뷰 4번 7-2). 원인(안 닫은 httpx 풀)은 어댑터의 `close()`가 없앴고, 그래도 남는 것은 끊긴 소켓을
+    치우는 transport의 소음뿐이다. 태스크의 예외(`task`·`future`가 든 context)와 다른 종류의 예외는 그대로 기본 처리기로 —
+    거름망이 진짜 오류를 삼키면 조사가 왜 죽었는지 아무도 모른다.
+    """
+    exc = context.get("exception")
+    transport_level = ("transport" in context or "protocol" in context) and "task" not in context and "future" not in context
+    quiet = isinstance(exc, ConnectionResetError) or (isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc))
+    if transport_level and quiet:
+        return
+    loop.default_exception_handler(context)
+
+
+def _quiet_unraisable(inner):
+    """`sys.unraisablehook` 거름망 — proactor transport의 `__del__`이 닫힌 루프에서 내는 것만 삼킨다. 루프가 이미 닫힌 뒤라
+    예외 처리기에는 안 오고 이 훅으로 온다. 다른 객체·다른 예외는 원래 훅으로."""
+    def hook(unraisable):
+        exc = getattr(unraisable, "exc_value", None)
+        where = getattr(getattr(unraisable, "object", None), "__qualname__", "") or repr(getattr(unraisable, "object", ""))
+        if "_ProactorBasePipeTransport" in where and (
+                isinstance(exc, ConnectionResetError) or (isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc))):
+            return
+        inner(unraisable)
+    return hook
+
+
+def _run(coro):
+    """`asyncio.run` — 모든 명령이 여기를 지난다. 루프에 종료 소음 거름망을 달고, Windows에서는 unraisable 훅도 건다."""
+    async def wrapped():
+        asyncio.get_running_loop().set_exception_handler(_shutdown_noise_handler)
+        return await coro
+    if sys.platform == "win32" and getattr(sys.unraisablehook, "__name__", "") != "hook":
+        sys.unraisablehook = _quiet_unraisable(sys.unraisablehook)
+    return asyncio.run(wrapped())
+
+
+async def _close_llms(*llms) -> None:
+    """같은 객체는 한 번만, 던지면 삼킨다 — 닫다가 죽는 것이 조사 결과를 지우면 안 된다."""
+    seen: list = []
+    for llm in llms:
+        if llm is None or any(llm is s for s in seen):
+            continue
+        seen.append(llm)
+        try:
+            await llm.close()
+        except Exception:                                          # noqa: BLE001
+            pass
+
+
 def cmd_boot(args, env) -> int:
     errors = validate_boot(args.config_root, env=env, knowledge_root=_knowledge_root(args))
     if not errors:
@@ -189,7 +241,7 @@ def _report(name: str, result, summarize) -> int:
 
 def cmd_doctor(args, env) -> int:
     site, _ = _resolve_site(args.config_root, args, env)
-    return asyncio.run(_doctor(site, _clock(args, env)))
+    return _run(_doctor(site, _clock(args, env)))
 
 
 async def _peek(site, args, clock) -> int:
@@ -266,7 +318,7 @@ async def _dispatch(adapters, site, args) -> list:
 
 def cmd_peek(args, env) -> int:
     site, _ = _resolve_site(args.config_root, args, env)
-    return asyncio.run(_peek(site, args, _clock(args, env)))
+    return _run(_peek(site, args, _clock(args, env)))
 
 
 # ── llm ──────────────────────────────────────────────────────────────
@@ -298,7 +350,14 @@ def cmd_llm_ask(args, env) -> int:
     from src.infrastructure.llm_factory import build_llm
 
     llm = build_llm(_llm_config(args, env, getattr(args, "role", None)), clock=_clock(args, env))
-    reply = asyncio.run(llm.ask(args.prompt))
+
+    async def ask():
+        try:
+            return await llm.ask(args.prompt)
+        finally:
+            await _close_llms(llm)
+
+    reply = _run(ask())
     _out(json.loads(reply.model_dump_json()))
     return 1 if reply.status == "error" else 0
 
@@ -336,8 +395,14 @@ def cmd_llm_check(args, env) -> int:
     print(f"  {cfg.describe()}\n")
     failed = 0
     reported = None
+    async def ask(prompt: str):
+        try:
+            return await llm.ask(prompt)
+        finally:
+            await _close_llms(llm)
+
     for name, prompt, ok in _CHECKS:
-        reply = asyncio.run(llm.ask(prompt))
+        reply = _run(ask(prompt))
         reported = reported or reply.reported_model
         if reply.status == "error":
             print(f"  {name:<8} ❌ {reply.error}")
@@ -395,7 +460,7 @@ def cmd_mail_send(args, env) -> int:
         _out(sender.preview(subject, body))
         return 0
 
-    result = asyncio.run(sender.send(subject, body))
+    result = _run(sender.send(subject, body))
     _out(json.loads(result.model_dump_json()))
     for warning in result.warnings:
         # 성공 판정이 HTTP 200뿐이므로, Agent가 낸 경고가 유일한 추가 신호다.
@@ -477,7 +542,7 @@ def cmd_report_aggregate(args, env) -> int:
         return 1
     args._today = today
 
-    facts = asyncio.run(_collect_facts(args, env, scenario))
+    facts = _run(_collect_facts(args, env, scenario))
     print(f"  시나리오: {name}  ({scenario.title})")
     if not facts.complete:
         print("  ⚠  표본이 잘렸다 — 아래 건수는 전부 **하한**이다", file=sys.stderr)
@@ -513,9 +578,12 @@ async def _comments(args, env, scenario, facts):
     if app.llm is not None:
         from src.infrastructure.llm_factory import build_llm
         llm = build_llm(app.llm_for("report"), clock=_clock(args, env))
-    return await comment_on(facts, llm=llm, spec=scenario.comment,
-                            template=load_prompt(args.config_root, scenario),
-                            clock=_clock(args, env))
+    try:
+        return await comment_on(facts, llm=llm, spec=scenario.comment,
+                                template=load_prompt(args.config_root, scenario),
+                                clock=_clock(args, env))
+    finally:
+        await _close_llms(llm)
 
 
 def cmd_report_prompt(args, env) -> int:
@@ -532,7 +600,7 @@ def cmd_report_prompt(args, env) -> int:
     if today is None:
         return 1
     args._today = today
-    facts = asyncio.run(_collect_facts(args, env, scenario))
+    facts = _run(_collect_facts(args, env, scenario))
 
     try:
         template = load_prompt(args.config_root, scenario)
@@ -570,8 +638,8 @@ def cmd_report_render(args, env) -> int:
         return 1
     args._today = today
 
-    facts = asyncio.run(_collect_facts(args, env, scenario))
-    comments = asyncio.run(_comments(args, env, scenario, facts))
+    facts = _run(_collect_facts(args, env, scenario))
+    comments = _run(_comments(args, env, scenario, facts))
     blocks = build_blocks(facts, comments)
     html = render(blocks, title=scenario.title,
                   generated_at=_clock(args, env)().strftime("%Y-%m-%d %H:%M"))
@@ -633,7 +701,7 @@ def cmd_patrol_probe(args, env) -> int:
         finally:
             await adapters.close()
 
-    probe_sets = asyncio.run(go())
+    probe_sets = _run(go())
     for probes in probe_sets:
         check = checks[probes.check]
         mark = "✅" if probes.status == "ok" else "⚠"
@@ -667,7 +735,7 @@ def cmd_patrol_check(args, env) -> int:
         cfg, _ = load_site_config(args.config_root, entry.gbm, entry.fct, env=env)
         return cfg
 
-    outcomes = asyncio.run(run_sites(
+    outcomes = _run(run_sites(
         entries, load=load,
         build=lambda cfg: build_adapters(cfg, clock=clock, seeds=seeds),
         clock=clock, only=args.check))
@@ -732,7 +800,7 @@ def cmd_patrol_open(args, env) -> int:
         site, _ = _resolve_site(args.config_root, args, env)
         entries = [site.site]
 
-    outcomes = asyncio.run(run_sites(
+    outcomes = _run(run_sites(
         entries,
         load=lambda e: load_site_config(args.config_root, e.gbm, e.fct, env=env)[0],
         build=lambda cfg: build_adapters(cfg, clock=clock, seeds=seeds),
@@ -937,8 +1005,9 @@ def cmd_case_investigate(args, env) -> int:
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()
+            await _close_llms(llm, conclude_llm)
 
-    final = asyncio.run(go())
+    final = _run(go())
     print(f"  {record.site}  {record.id} — {record.symptom}")
     print(f"  {built['llm']}")
     print(f"  라운드 {final['round']} — 끝난 이유: {final['stopped_by']}\n")
@@ -1277,7 +1346,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
         route_lines, route_notes = await code.route_hits(progress=progress)
         return names, problems + notes + route_notes, table, route_lines
 
-    names, problems, table, route_lines = asyncio.run(gather())
+    names, problems, table, route_lines = _run(gather())
     commits, more = _resolved_commits(site, code)
     problems += more
     overlay = flow.extract(names=names, topology=topology,
@@ -1294,7 +1363,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
     from src.knowledge import index as indexing
     from src.knowledge import index_trace
     from src.knowledge import query as qy
-    symbol_index = asyncio.run(indexing.build_index(
+    symbol_index = _run(indexing.build_index(
         {name: code.source_for(name) for name in sorted(commits)}, names=names, commits=commits))
     isum = symbol_index.summary()
     progress(f"심볼 {isum['symbols']}개 · 엣지 {isum['edges_total']}개 · 파싱 실패 {isum['parse_errors']}개")
@@ -1345,7 +1414,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
     # 사이트마다 그 층이 GBM 값을 덮은 것만 — 스냅샷에서 병합하므로 git은 안 는다(사내 28사이트 × 서비스 × 층).
     site_counts: dict[str, int] = {}
     for one in fcts:
-        rows = asyncio.run(code.site_overrides(one, names))
+        rows = _run(code.site_overrides(one, names))
         gb.write_site(out_dir, one, rows)
         site_counts[one] = len(rows)
     progress(f"사이트 {len(fcts)}개 덮은 값: " + " · ".join(f"{f} {n}" for f, n in site_counts.items()))
@@ -1615,7 +1684,7 @@ def cmd_code_check(args, env) -> int:
             lines += chk.unresolved_report(index)
         return lines, problems
 
-    lines, problems = asyncio.run(go())
+    lines, problems = _run(go())
     for line in stale:
         print(f"  ⚠ 낡음 {line} — `code graph`로 다시 만든다")
     for line in lines:
@@ -1738,7 +1807,7 @@ def cmd_code_read(args, env) -> int:
     path = args.path.replace("{gbm}", gbm).replace("{fct}", site_fct)
 
     reader = RealCodeReader(list(site.code.repos), clock=_clock(args, env))
-    result = asyncio.run(reader.show(service.repo, pin.commit, path))
+    result = _run(reader.show(service.repo, pin.commit, path))
 
     note = "" if pin.how == "declared" else "  (배포 커밋을 가정했다)"
     print(f"  {args.service} → {service.repo} @ {pin.commit}{note}")
@@ -1862,7 +1931,7 @@ def cmd_code_services(args, env) -> int:
     """무엇을 조사할 수 있나 — 리드가 `code.services`로 보는 것과 같은 답."""
     code, gbm, fct = _deployed_code(args, env)
     print(f"  {gbm}/{fct}")
-    return _show_probe(asyncio.run(code.services()))
+    return _show_probe(_run(code.services()))
 
 
 def cmd_code_config(args, env) -> int:
@@ -1873,7 +1942,7 @@ def cmd_code_config(args, env) -> int:
     """
     code, gbm, fct = _deployed_code(args, env)
     print(f"  {gbm}/{fct} — 층은 {fct} 기준")
-    return _show_probe(asyncio.run(code.config(args.service)))
+    return _show_probe(_run(code.config(args.service)))
 
 
 def cmd_case_trace(args, env) -> int:
@@ -1950,7 +2019,7 @@ def cmd_case_dryrun(args, env) -> int:
         finally:
             await adapters.close()
 
-    final = asyncio.run(go())
+    final = _run(go())
     cfg = app.investigation
     print(f"  {site.site} — {final['case'].symptom}")
     print(f"  울타리: max_rounds={cfg.max_rounds} parallel_width={cfg.parallel_width} "
@@ -2010,7 +2079,7 @@ def cmd_schedule(args, env) -> int:
     print(f"  루프: {install_fast_loop()}")
     print(f"  {'(dry-run — 메일을 보내지 않는다)' if args.dry_run else ''}\n"
           f"  Ctrl+C로 멈춘다.\n")
-    return asyncio.run(_schedule_forever(wanted, args, env, clock))
+    return _run(_schedule_forever(wanted, args, env, clock))
 
 
 def _print_next_fires(scenarios, *, clock, count: int) -> None:
@@ -2157,8 +2226,8 @@ def cmd_report_run(args, env) -> int:
         return 1
     args._today = today
 
-    facts = asyncio.run(_collect_facts(args, env, scenario))
-    comments = asyncio.run(_comments(args, env, scenario, facts))
+    facts = _run(_collect_facts(args, env, scenario))
+    comments = _run(_comments(args, env, scenario, facts))
     html = render(build_blocks(facts, comments), title=scenario.title,
                   generated_at=_clock(args, env)().strftime("%Y-%m-%d %H:%M"))
 
@@ -2170,7 +2239,7 @@ def cmd_report_run(args, env) -> int:
 
     # 기간은 `facts`가 들고 있는 것을 쓴다 — 여기서 다시 계산하면 집계한 날과
     # 제목의 날이 갈라질 수 있다(자정 직전에 돌면 실제로 갈라진다).
-    published = asyncio.run(publish(
+    published = _run(publish(
         html, scenario=scenario, scenario_name=name, window=facts.window,
         output_dir=_output_dir(args, env), mail=mail, clock=_clock(args, env),
         dry_run=args.dry_run))

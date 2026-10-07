@@ -23,6 +23,7 @@ class ChatModelAdapter(LlmPort):
         self._clock = clock
         self._ticker = ticker
         self._client = None
+        self._http = self._ahttp = None
 
     def describe(self) -> str:
         return self._cfg.describe()
@@ -49,6 +50,8 @@ class ChatModelAdapter(LlmPort):
                 extra["http_socket_options"] = ()
             if self._cfg.max_tokens is not None:
                 extra["max_tokens"] = self._cfg.max_tokens
+            self._http = httpx.Client(verify=verify, trust_env=trust_env)
+            self._ahttp = httpx.AsyncClient(verify=verify, trust_env=trust_env)
             self._client = ChatOpenAI(
                 base_url=self._cfg.base_url,
                 **extra,
@@ -60,9 +63,18 @@ class ChatModelAdapter(LlmPort):
                 timeout=self._cfg.timeout_s,
                 max_retries=self._cfg.max_retries,
                 default_headers=self._cfg.gateway_headers(),
-                http_client=httpx.Client(verify=verify, trust_env=trust_env),
-                http_async_client=httpx.AsyncClient(verify=verify, trust_env=trust_env))
+                http_client=self._http, http_async_client=self._ahttp)
         return self._client
+
+    async def close(self) -> None:
+        # 우리가 만든 클라이언트는 우리가 닫는다 — ChatOpenAI는 받은 클라이언트의 수명을 모른다.
+        for client in (self._ahttp, self._http):
+            try:
+                if client is None or client.is_closed:
+                    continue
+                await client.aclose() if hasattr(client, "aclose") else client.close()
+            except Exception:                                      # noqa: BLE001
+                pass
 
     async def ask(self, prompt: str) -> LlmReply:
         started = self._ticker()

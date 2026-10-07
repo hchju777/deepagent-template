@@ -41,5 +41,6 @@ async def test_포트_표면은_ask와_describe_뿐이다():
 
     from src.domain.llm import LlmPort
     surface = {n for n in dir(LlmPort) if not n.startswith("_")}
-    assert surface == {"ask", "describe"}, f"LLM 포트 표면이 넓어졌다 — {surface}"
+    # `close`는 수명주기(잡은 커넥션 풀을 놓는다)지 묻는 표면이 아니다 — R2-2c 7-2에서 더해졌고, 기본 구현은 할 일이 없다.
+    assert surface == {"ask", "describe", "close"}, f"LLM 포트 표면이 넓어졌다 — {surface}"
     assert inspect.iscoroutinefunction(LlmPort.ask)

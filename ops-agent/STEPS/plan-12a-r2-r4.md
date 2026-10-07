@@ -79,16 +79,18 @@ R4-1의 프롬프트 상한으로 미룸). 측정판 확인은 R2-2b와 함께(`
 integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 행 1건 먼저` 다음 줄이 `[16] {"group":"L1","title":"Alarm",…}`이고,
 `<열린 질문>`에 `선언됐는데 없는 키 1개 (scan alarm:*, t-2): alarm:stats:{line}`가 실렸다(conclude 프롬프트에도). 스윕 +17(455).
 
-## R2-2c — 운영·구조 (지시서 7-2·7-3, 리뷰 H)
+## R2-2c — 운영 ✅ (10-07) — 7-2·7-3. H는 미룸
 
-| 항목 | 할 것 | 자리 |
+| 항목 | 한 것 | 자리 |
 |---|---|---|
-| 7-2 | Windows 종료 시 `ConnectionResetError(10054)` 트레이스백: 어댑터의 httpx 클라이언트를 닫고(`adapters.close`에 LLM도), 그래도 남는 proactor 소음은 루프 예외 처리기에서 걸러 한 줄로 | `llm_chat_model`(close), `__main__`(`asyncio.run` 감싸기) |
-| 7-3 | README에 NO_PROXY: 대상 도메인·LLM 게이트웨이를 넣는 이유와 `doctor`의 "프록시 경유 의심" 줄 | `README.md` |
-| H | system/user 분리: `LlmPort.ask(prompt, *, system=None)`(이름 표면은 그대로), 템플릿을 `규칙`(고정)과 `상태`(가변)로 나눠 고정 부분은 system으로. 트레이스 파일은 둘 다 적고 요약은 user 길이를 센다 | 어댑터 넷, `lead.fill`, `config/prompts/*`, `_make_tracer`, `trace_digest` |
+| 7-2 | `LlmPort.close()`(기본은 할 일 없음) · `ChatModelAdapter.close()`가 자기 httpx 풀 둘을 닫음 · `case investigate`(리드·판정 둘 다)·`llm ask/check`·리포트 서술이 끝나면 닫음(`_close_llms`) · **모든 명령이 `_run`을 지남**(`asyncio.run`은 한 곳) — 루프 예외 처리기는 transport 층의 `ConnectionResetError`·`Event loop is closed`만 거르고 태스크 예외는 그대로, Windows에서는 `sys.unraisablehook`도 proactor transport의 `__del__`만 거름 | `domain/llm.py`, `llm_chat_model.py`, `__main__` |
+| 7-3 | README "프록시와 NO_PROXY" — 왜 넣는지, `doctor`·조사의 "프록시 경유 의심" 줄, `llm.trust_env_proxy` | `README.md` |
+| H | **미룸.** 사내 재측정은 R2-1·R2-2의 효과를 재는 자리인데 system/user 분리는 프롬프트 구조를 바꿔 효과가 섞인다. 토큰 수는 그대로고 이득(게이트웨이의 접두 캐시)은 측정 전엔 가정이다. 재측정 뒤 R4-1(프롬프트 상한)과 함께 — 그때 트레이스에 둘 다 적고 요약은 user 길이를 센다 | — |
 
-종료 판단: 측정판 한 판의 트레이스에 system/user가 나뉘어 남고 결과(판정)는 전과 같다. **여기서 사내 재측정** —
-일곱 줄 + `응답 N초` + 프롬프트 크기. 이 결과로 R3·R4의 숫자를 정한다.
+종료 판단: Windows 종료 트레이스백은 여기서 재현 못 한다 — 거름망은 합성 context·unraisable 객체로 단위 검증(태스크 예외·다른
+객체는 안 삼킨다), 닫기는 가짜 게이트웨이로 `is_closed` 확인, 닫는 배선은 CLI 테스트가 두 어댑터의 `close` 횟수로. 스윕 +5(460).
+**여기서 사내 재측정** — [review-12a-4.md](review-12a-4.md)의 일곱 줄 + `응답 N초` + 프롬프트 크기 + **종료 때 트레이스백 유무**.
+이 결과로 R3·R4의 숫자를 정한다.
 
 ## R3 — 결정적 triage (지시서 4·5·6, 리뷰 J). 사내에서 받을 것 1~5가 전제
 

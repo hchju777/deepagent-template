@@ -273,6 +273,22 @@ R1 뒤 두 판: c-1 3라운드 6분 20초, c-2 6라운드 18분 51초, 둘 다 d
   기존 둘은 압축 JSON 따옴표에 맞췄고 측정판 테스트 넷은 행 목록 접근으로. 스윕 +17(455). `__main__`의 `declared` 배선은
   단위 테스트가 없다 — 측정판 실행이 그 배선을 통째로 지난다.
 
+### R2-2c (10-07) ✅ — 운영: 닫기와 종료 소음, NO_PROXY
+
+- **LLM 어댑터를 닫는다**(7-2): `LlmPort.close()`(기본은 할 일 없음 — 포트 표면 테스트는 수명주기 메서드로 허용),
+  `ChatModelAdapter`는 자기가 만든 httpx 풀 둘을 들고 있다가 닫는다. `case investigate`는 리드·판정 어댑터 둘 다(같은 객체면
+  한 번), `llm ask/check`와 리포트 서술도 끝나면 닫는다. 사내 Windows의 `ConnectionResetError(10054)` 트레이스백은 안 닫은
+  풀을 proactor가 종료 중 치우며 낸 것이다 — 원인부터.
+- **종료 소음 거름망**: 모든 명령이 `_run`을 지난다(`asyncio.run`은 한 곳 — 테스트가 센다). 루프 예외 처리기는 **transport
+  층**의 `ConnectionResetError`·`Event loop is closed`만 거르고 태스크의 예외와 다른 예외는 기본 처리기로 — 거름망이 진짜
+  오류를 삼키면 조사가 왜 죽었는지 아무도 모른다. Windows에서는 `sys.unraisablehook`도 proactor transport의 `__del__`만.
+  여기서는 재현이 안 되므로 합성 context로 단위 검증했다 — 사내 재측정에서 "종료 때 트레이스백 유무"를 받는다.
+- **README "프록시와 NO_PROXY"**(7-3): 왜 대상 REST·LLM 게이트웨이 호스트를 넣는지, "프록시 경유 의심" 줄이 코드가 env를
+  보고 붙이는 것임을, `trust_env_proxy`의 자리.
+- **H(system/user 분리)는 미뤘다** — 재측정이 R2-1·R2-2의 효과를 재는 자리라 프롬프트 구조를 같이 바꾸면 효과가 섞인다.
+  R4-1과 함께([plan-12a-r2-r4.md](plan-12a-r2-r4.md)).
+- 테스트 먼저(RED 5 → GREEN): `test_llm_adapters` 1, `test_cli` 4, 역할 배선 CLI 테스트에 `close` 횟수. 스윕 +5(460).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

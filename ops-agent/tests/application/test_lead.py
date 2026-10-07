@@ -698,12 +698,18 @@ def test_CLI가_역할별_LLM을_따로_꽂는다(tmp_path, capsys, monkeypatch)
     assert main() == 0, capsys.readouterr().err
     capsys.readouterr()
 
-    action_turns = ScriptedAdapter([
+    class Closing(ScriptedAdapter):
+        closed = 0
+
+        async def close(self):
+            self.closed += 1
+
+    action_turns = Closing([
         reply(hypotheses=[{"id": "h-1", "statement": "파생 집계가 비어 있다"}], tasks=[TASK]),
         reply(decision="conclude", hypotheses=[{"id": "h-1", "statement": "파생 집계가 비어 있다",
                                                  "status": "refuted", "refuting_ids": ["t-1.e1"]}])],
         clock=lambda: T0)
-    verdict_turn = ScriptedAdapter([reply(**VERDICT)], clock=lambda: T0, model="think-model")
+    verdict_turn = Closing([reply(**VERDICT)], clock=lambda: T0, model="think-model")
     adapters, seen = iter([action_turns, verdict_turn]), []
 
     def fake_build(cfg, *, clock, warn=None):
@@ -719,6 +725,8 @@ def test_CLI가_역할별_LLM을_따로_꽂는다(tmp_path, capsys, monkeypatch)
     assert seen == [app["llm"]["model"], "think-model"]                 # 액션용 하나, 판정용 하나
     assert "판정: " in out and "think-model" in out                       # 어느 LLM이 판정했는지 출력에 남는다
     assert "판정 data_loss (high)" in out and len(verdict_turn.prompts) == 1 and len(action_turns.prompts) == 2
+    # 끝나면 둘 다 닫는다(R2-2c 7-2) — 안 닫은 httpx 풀이 Windows 종료 때 트레이스백을 냈다.
+    assert action_turns.closed == 1 and verdict_turn.closed == 1
 
 
 def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):

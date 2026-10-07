@@ -113,3 +113,17 @@ async def test_토큰_상한이_요청에_실린다(gateway, clock, adapter):
     await build_llm(_cfg(base_url, adapter), clock=clock).ask("hi")
     body = recorder.requests[-1]["body"]
     assert "max_tokens" not in body and "max_completion_tokens" not in body   # 안 적으면 안 보낸다
+
+
+async def test_close는_chat_model의_httpx_클라이언트를_닫는다(gateway, clock):
+    """사내 Windows: 조사가 끝나고 프로세스가 내려갈 때 `ConnectionResetError(10054)` 트레이스백 — 안 닫은 httpx 풀을
+    proactor가 치우며 내는 소음이다. 원인부터 없앤다: 어댑터가 자기 클라이언트를 닫는다."""
+    base_url, _ = gateway
+    llm = build_llm(_cfg(base_url, "chat_model"), clock=clock)
+    await llm.close()                                     # 아직 클라이언트가 없어도 조용하다
+    assert (await llm.ask("hi")).status == "ok"
+    await llm.close()
+    assert llm._http.is_closed and llm._ahttp.is_closed
+    await llm.close()                                     # 두 번 닫아도 조용하다
+    http = build_llm(_cfg(base_url, "http"), clock=clock)
+    await http.close()                                    # 호출마다 열고 닫으므로 할 일이 없다 — 계약은 같다

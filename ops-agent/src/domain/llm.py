@@ -58,3 +58,8 @@ class LlmPort(ABC):
     @abstractmethod
     def describe(self) -> str:
         """사람이 읽을 한 줄 — 무엇에 붙어 있는지. 비밀값은 담지 않는다."""
+
+    async def close(self) -> None:
+        """잡은 자원을 놓는다. 기본은 할 일이 없다 — 커넥션 풀을 드는 어댑터만 덮어쓴다. 사내 Windows에서 안 닫은 풀을
+        proactor가 종료 중 치우며 `ConnectionResetError(10054)` 트레이스백을 냈다(12a 리뷰 4번 7-2). 던지지 않는다."""
+        return None

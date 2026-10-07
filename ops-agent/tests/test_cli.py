@@ -562,3 +562,68 @@ def test_llm_describe는_역할별_실효값을_찍고_ask는_역할을_고른�
     assert "lead" not in out                                           # 기본과 같은 역할은 따로 안 찍는다
     assert main(["--config-root", str(root), "--env-file", "/dev/null", "llm", "ask", "--role", "conclude", "안녕"]) == 0
     assert json.loads(capsys.readouterr().out)["model"] == "think"
+
+
+# ── R2-2c — Windows 종료 소음(7-2) ──
+
+def test_asyncio_run은_한_곳에서만_부른다():
+    """모든 명령이 `_run`을 지난다 — 종료 소음 거름망은 거기 하나뿐이고, 새 명령이 `asyncio.run`을 직접 부르면 그 명령만
+    Windows에서 트레이스백을 낸다."""
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[1].joinpath("src", "__main__.py").read_text(encoding="utf-8")
+    assert source.count("asyncio.run(") == 1
+
+
+def test_run은_루프에_종료_소음_처리기를_단다():
+    import asyncio
+
+    from src.__main__ import _run, _shutdown_noise_handler
+
+    async def probe():
+        return asyncio.get_running_loop().get_exception_handler()
+
+    assert _run(probe()) is _shutdown_noise_handler
+
+
+def test_종료_소음_처리기는_transport의_끊김만_거른다():
+    from src.__main__ import _shutdown_noise_handler
+
+    calls = []
+
+    class Loop:
+        def default_exception_handler(self, context):
+            calls.append(context)
+
+    loop = Loop()
+    _shutdown_noise_handler(loop, {"message": "Fatal error on transport", "transport": object(),
+                                   "exception": ConnectionResetError(10054, "원격 호스트에 의해 강제로 끊겼습니다")})
+    _shutdown_noise_handler(loop, {"message": "Fatal error on transport", "transport": object(),
+                                   "exception": RuntimeError("Event loop is closed")})
+    assert calls == []
+    # 태스크의 예외와 다른 종류의 예외는 그대로 — 거름망이 진짜 오류를 삼키면 안 된다.
+    _shutdown_noise_handler(loop, {"message": "Task exception was never retrieved", "task": object(),
+                                   "exception": ConnectionResetError(10054, "x")})
+    _shutdown_noise_handler(loop, {"message": "Fatal error on transport", "transport": object(),
+                                   "exception": ValueError("x")})
+    assert len(calls) == 2
+
+
+def test_unraisable_거름망은_proactor_transport의_닫힌_루프만_삼킨다():
+    from src.__main__ import _quiet_unraisable
+
+    seen = []
+    hook = _quiet_unraisable(seen.append)
+
+    class Unraisable:
+        def __init__(self, exc, obj):
+            self.exc_type, self.exc_value, self.object = type(exc), exc, obj
+
+    def proactor_del():
+        pass
+    proactor_del.__qualname__ = "_ProactorBasePipeTransport.__del__"
+    hook(Unraisable(RuntimeError("Event loop is closed"), proactor_del))
+    hook(Unraisable(ConnectionResetError(10054, "x"), proactor_del))
+    assert seen == []
+    hook(Unraisable(RuntimeError("Event loop is closed"), object()))     # 다른 객체의 같은 메시지는 그대로
+    hook(Unraisable(ValueError("x"), proactor_del))
+    assert len(seen) == 2

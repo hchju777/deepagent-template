@@ -1864,7 +1864,27 @@ CASES += [
   ["tests/test_local_case.py::test_cache_missing은_캐시_키가_아예_없고_배지는_0이다"]),
 ]
 
-assert len(CASES) >= 455, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-2c — 운영: LLM 클라이언트 닫기·종료 소음 거름망 ──
+LCM2 = ROOT / "src/infrastructure/llm_chat_model.py"
+CASES += [
+ ("chat_model이 httpx 클라이언트를 안 닫는다", LCM2,
+  '                await client.aclose() if hasattr(client, "aclose") else client.close()', "                continue",
+  ["tests/infrastructure/test_llm_adapters.py::test_close는_chat_model의_httpx_클라이언트를_닫는다"]),
+ ("조사가 끝나도 LLM을 안 닫는다", MN,
+  "            await adapters.close()\n            await _close_llms(llm, conclude_llm)", "            await adapters.close()",
+  ["tests/application/test_lead.py::test_CLI가_역할별_LLM을_따로_꽂는다"]),
+ ("거름망이 태스크 예외까지 삼킨다", MN,
+  "    if transport_level and quiet:", "    if quiet:",
+  ["tests/test_cli.py::test_종료_소음_처리기는_transport의_끊김만_거른다"]),
+ ("unraisable 거름망이 다른 객체의 것도 삼킨다", MN,
+  '        if "_ProactorBasePipeTransport" in where and (', "        if (",
+  ["tests/test_cli.py::test_unraisable_거름망은_proactor_transport의_닫힌_루프만_삼킨다"]),
+ ("_run이 거름망을 안 단다", MN,
+  "        asyncio.get_running_loop().set_exception_handler(_shutdown_noise_handler)", "        pass",
+  ["tests/test_cli.py::test_run은_루프에_종료_소음_처리기를_단다"]),
+]
+
+assert len(CASES) >= 460, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -69,6 +69,18 @@ Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 
 
 검증된 파이썬: 3.11.3(사내 Windows), 3.11.15(개발).
 
+### 프록시와 NO_PROXY
+
+사내 PC에는 보통 전사 프록시(`HTTPS_PROXY`)가 env에 박혀 있다. 대상 시스템의 **REST**와 **LLM 게이트웨이**는 사내망
+안이라 프록시를 거치면 안 되는데, 거치면 프록시가 그 주소를 몰라 `RemoteProtocolError`·`ConnectError` 같은 **원인이 안
+보이는 오류**만 돌아온다(12a 리뷰 4번 ⑩). Redis·Mongo·Kafka는 HTTP가 아니라 무관하다.
+
+- 정석은 `NO_PROXY`에 대상 REST 호스트와 LLM 게이트웨이 호스트를 넣는 것이다(쉼표로 여럿, 접미는 `.example.net`꼴).
+- `doctor`와 조사의 REST 실패에 `프록시 경유 의심: HTTPS_PROXY가 설정돼 있고 <호스트>가 NO_PROXY에 없다`가 붙으면
+  이 문제다 — 코드가 env를 보고 붙이는 줄이라 추측이 아니다.
+- env를 못 바꾸는 배치면 LLM 쪽만 `llm.trust_env_proxy: false`로 **그 커넥션만** 프록시를 무시하게 할 수 있다.
+  REST 쪽은 env(`NO_PROXY`)로 푼다.
+
 ## 설정 트리
 
 설정은 `config/` **하나**다. 리포에 들어 있고, 모든 명령의 `--config-root`

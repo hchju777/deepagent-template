@@ -77,3 +77,11 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 ```
 
 이상이 있으면 그 줄의 원문을 자리표시자 처리해서 덧붙인다. 증거 본문·호스트명·실제 이름은 옮기지 않는다.
+
+## R2 뒤 재측정에서 더 볼 것 (10-07)
+
+- 시작 전 `NO_PROXY`에 대상 REST 호스트와 LLM 게이트웨이 호스트가 있는지 — 없으면 REST 실패에 `프록시 경유 의심` 줄이 붙는다
+  (README "프록시와 NO_PROXY").
+- 명령이 끝나 내려갈 때 **트레이스백이 남는가**(`ConnectionResetError(10054)`·`Event loop is closed`). 남으면 그 전문 세 줄.
+- 트레이스 파일 머리의 `응답: N초`와 `## 물어본 것 (N자)`의 N — 라운드별로. integrate 프롬프트의 `<열린 질문>` 첫 줄.
+
