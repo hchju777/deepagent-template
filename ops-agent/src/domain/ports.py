@@ -182,6 +182,14 @@ class CodeReaderPort(ABC):
     async def ls(self, repo: str, commit: str, path: str = "", *, max_names: int = 400) -> ProbeResult:
         """그 커밋의 파일 목록. 이름을 모를 때 먼저 찾는 용도다(⑮와 같은 이유)."""
 
+    @abstractmethod
+    async def snapshot(self, repo: str, commit: str) -> ProbeResult:
+        """그 커밋의 파일 **전부**를 한 번에 — `data`는 `경로 → 본문`. 인덱서(11d)용이다.
+
+        파일마다 `show`를 띄우면 Windows에서 git 프로세스가 수천 개다(사내 `code graph` 20분의
+        정체 — 11e). 채워진 submodule은 `ls`와 같은 규칙으로 부모가 박은 SHA에서 같이 들고,
+        못 본 submodule은 봉투가 말한다. 읽기이고 커밋을 지정한다 — 이 포트의 다른 것과 같다."""
+
 
 class DeployedCodePort(ABC):
     """**배포된 커밋의 코드를 서비스 이름으로** 읽는다.

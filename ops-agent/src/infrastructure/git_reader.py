@@ -30,7 +30,9 @@
 — 배포 커밋 선언이 오래됐거나, 서비스가 그 파일을 안 쓰거나.
 """
 import asyncio
+import io
 import re
+import tarfile
 from pathlib import Path
 
 from src.config.schema_site import RepoConfig
@@ -50,6 +52,9 @@ _MAX_LINES = 400
 # 조사 한 라운드가 그것만으로 끝난다. 다만 config 한 층은 여기 한참 못 미친다.
 _WHOLE_MAX_CHARS = 1_000_000
 _TIMEOUT_S = 20
+# `git archive` 한 번은 레포 전체다 — 사내 규모(파일 800·수 MB)가 여기서 1초대였지만 Windows의
+# 느린 디스크·백신을 생각해 넉넉히 둔다. 넘으면 값으로 실패하고 호출자가 파일별 `show`로 간다.
+_ARCHIVE_TIMEOUT_S = 120
 
 
 class RealCodeReader(CodeReaderPort):
@@ -75,6 +80,15 @@ class RealCodeReader(CodeReaderPort):
         `.git` 검사는 **레포 뿌리**에 대고 한다. submodule 쪽 `.git`은 파일일
         수도 디렉터리일 수도 있고, 그 존재 여부는 호출자가 이미 판단한다.
         """
+        got = await self._git_bytes(repo, args, source=source, inside=inside)
+        if got.status == "error":
+            return got
+        return ProbeResult.succeeded(got.data.decode("utf-8", "replace"), source=source,
+                                     clock=self._clock)
+
+    async def _git_bytes(self, repo: str, args: list[str], *, source: str, inside: str = "",
+                         timeout: float = _TIMEOUT_S) -> ProbeResult:
+        """`_git`의 바이트판 — `archive`처럼 텍스트가 아닌 출력을 받을 때. 성공의 `data`는 bytes."""
         root = self._repos.get(repo)
         if root is None:
             return ProbeResult.failed(
@@ -89,9 +103,9 @@ class RealCodeReader(CodeReaderPort):
             proc = await asyncio.create_subprocess_exec(
                 "git", "-C", str(root / inside if inside else root), *args,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_S)
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            return ProbeResult.failed(f"{_TIMEOUT_S}초 안에 안 끝났다", source=source,
+            return ProbeResult.failed(f"{timeout:.0f}초 안에 안 끝났다", source=source,
                                       clock=self._clock)
         except FileNotFoundError:
             return ProbeResult.failed("git 실행 파일이 없다", source=source, clock=self._clock)
@@ -103,8 +117,7 @@ class RealCodeReader(CodeReaderPort):
                 (err or b"").decode("utf-8", "replace").strip()
                 or f"git이 {proc.returncode}로 끝났다",
                 source=source, clock=self._clock)
-        return ProbeResult.succeeded((out or b"").decode("utf-8", "replace"), source=source,
-                                     clock=self._clock)
+        return ProbeResult.succeeded(out or b"", source=source, clock=self._clock)
 
     # ── submodule 경계 ────────────────────────────────────────────
 
@@ -353,6 +366,81 @@ class RealCodeReader(CodeReaderPort):
         return ProbeResult.succeeded(
             names, source=source, clock=self._clock,
             truncated_reason=" · ".join(reasons) + " — 더 있을 수 있다" if reasons else None)
+
+    # ── 커밋 전체를 한 번에 (11e) ────────────────────────────────
+
+    async def snapshot(self, repo: str, commit: str) -> ProbeResult:
+        """`git archive` 한 번으로 그 커밋의 파일 전부 — `경로 → 본문`.
+
+        인덱서가 파일마다 `show`를 띄우던 것이 사내 `code graph` 20분의 정체였다(파일 ~1,600 ×
+        Windows 프로세스 0.5~1초). 내용은 `show(whole=True)`와 같다 — 같은 디코딩, 같은 상한.
+
+        submodule은 `ls`·`show`와 **같은 규칙**이다: 채워진 것은 부모가 박은 SHA로 그 레포에서 한 번
+        더 받고, 안 채워진 것(blind)과 그 버전이 없는 것(stale)은 빼고 봉투가 말한다. `git archive`가
+        `export-ignore`로 뺀 파일은 `ls-tree`와 대조해 `show`로 메운다 — 목록과 내용이 갈리면 인덱서가
+        "읽기 실패" 모듈을 만든다.
+        """
+        source = f"code.snapshot {repo}@{commit}"
+        files, reasons = {}, []
+        got = await self._archive(repo, commit, source=source)
+        if got.status == "error":
+            return got
+        files.update(got.data)
+        subs = await self._declared_subs(repo, commit)
+        if subs:
+            blind = await self._blind(repo, commit)
+            stale = await self._stale(repo, commit, subs, blind=blind)
+            for sub in subs:
+                if sub in blind or sub in stale:
+                    continue
+                sha = await self._gitlink(repo, commit, sub)
+                if not sha:
+                    continue
+                inner = await self._archive(repo, sha, source=f"{source} (submodule {sub}@{sha[:12]})",
+                                            inside=sub)
+                if inner.status == "error":
+                    reasons.append(f"submodule {sub}을 못 받았다 — {inner.error}")
+                    continue
+                files.update({f"{sub}/{name}": text for name, text in inner.data.items()})
+            reasons += _unseen_reasons(blind)
+            if stale:
+                reasons.append(self._stale_error(stale))
+        # `export-ignore`·`export-subst`로 아카이브가 목록과 다를 수 있다 — 목록(`ls`와 같은 규칙)에 있는데
+        # 아카이브에 없는 파일만 `show`로 메운다. 평소엔 0건이라 프로세스가 안 는다.
+        listed = await self.ls(repo, commit, max_names=200_000)
+        if listed.status == "ok":
+            for path in listed.data:
+                if path in files or containing_submodule(subs, path) == path:
+                    continue
+                one = await self.show(repo, commit, path, whole=True)
+                if one.status == "ok" and isinstance(one.data, str):
+                    files[path] = one.data
+        clipped = sum(1 for text in files.values() if len(text) >= _WHOLE_MAX_CHARS)
+        if clipped:
+            reasons.append(f"{clipped}개 파일을 {_WHOLE_MAX_CHARS}자에서 끊음")
+        return ProbeResult.succeeded(
+            files, source=source, clock=self._clock,
+            truncated_reason=" · ".join(reasons) + " — 더 있을 수 있다" if reasons else None)
+
+    async def _archive(self, repo: str, commit: str, *, source: str, inside: str = "") -> ProbeResult:
+        """`git archive --format=tar <커밋>`을 메모리에서 푼다 — `경로 → 본문`. 외부 tar도 디스크 쓰기도 없다."""
+        got = await self._git_bytes(repo, ["archive", "--format=tar", commit], source=source,
+                                    inside=inside, timeout=_ARCHIVE_TIMEOUT_S)
+        if got.status == "error":
+            return got
+        try:
+            with tarfile.TarFile(fileobj=io.BytesIO(got.data), mode="r") as tar:
+                out = {}
+                for member in tar.getmembers():
+                    if not member.isfile():
+                        continue                   # 디렉터리·gitlink(빈 디렉터리)·링크는 파일이 아니다
+                    handle = tar.extractfile(member)
+                    text = (handle.read() if handle else b"").decode("utf-8", "replace")
+                    out[member.name] = text[:_WHOLE_MAX_CHARS]
+        except (tarfile.TarError, OSError, ValueError) as exc:
+            return ProbeResult.failed(f"archive를 풀 수 없다 — {type(exc).__name__}: {exc}",
+                                      source=source, clock=self._clock)
+        return ProbeResult.succeeded(out, source=source, clock=self._clock)
 
 
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")

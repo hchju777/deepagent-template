@@ -655,10 +655,22 @@ def test_code_trace와_flow는_Git_Bash가_바꾼_끝점_path를_되돌려_읽�
 
 def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(tmp_path, monkeypatch, capsys):
     """11d 6a — 레포 전체의 심볼·엣지가 번들에 든다. `code check`는 사람이 한 줄로 돌려 숫자 몇 줄을 받는 하네스다."""
+    from src.infrastructure.git_reader import RealCodeReader
+
     monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
     config_root = _flow_tree(tmp_path)
+    # 11e — 인덱스는 커밋을 `archive` 한 번으로 받는다. 파일마다 `show`를 띄우면 사내 Windows에서 20분이다.
+    spawned, real = [], RealCodeReader._git_bytes
+
+    async def counting(self, repo, args, **kw):
+        spawned.append(list(args))
+        return await real(self, repo, args, **kw)
+
+    monkeypatch.setattr(RealCodeReader, "_git_bytes", counting)
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     assert code == 0, captured.out + captured.err
+    assert [a for a in spawned if a[0] == "show" and a[1].endswith(".py")] == [], "파일마다 show를 띄웠다"
+    assert sum(1 for a in spawned if a[0] == "archive") == 1          # 레포 하나, 서브모듈 없음
     bundle = tmp_path / "out" / "graph" / "mx-gumi"
     symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))
     assert {s["qualname"] for s in symbols["symbols"] if s["kind"] == "module"} >= {"processor.handler", "sink.writer", "api.r"}

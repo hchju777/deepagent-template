@@ -427,20 +427,40 @@ class DeployedCode(DeployedCodePort):
 
 
 class _GitSource:
-    """추적기가 읽는 창 — 배포 커밋의 파일 하나(`show`, 줄 수로 안 자른다)와 리터럴 grep(`-F`).
-    던지지 않는다: 못 읽으면 None, grep이 실패하면 빈 목록. 파싱은 추적기가 캐시한다."""
+    """인덱서가 읽는 창 — 배포 커밋의 파일들과 리터럴 grep(`-F`). 던지지 않는다: 못 읽으면 None,
+    grep이 실패하면 빈 목록.
+
+    **커밋 전체를 한 번에 받는다**(`snapshot`, 11e). 파일마다 `show`를 띄우던 것이 사내 `code graph`
+    20분의 정체였다. 스냅샷을 못 받으면(옛 git·시간 초과) 예전처럼 파일별 `show`로 간다 — 느려질 뿐
+    결과는 같다."""
 
     def __init__(self, reader: CodeReaderPort, repo: str, commit: str):
         self._reader, self._repo, self._commit = reader, repo, commit
+        self._snapshot: dict[str, str] | None = None
+        self._tried = False
+
+    async def _snap(self) -> dict[str, str] | None:
+        if not self._tried:
+            self._tried = True
+            got = await self._reader.snapshot(self._repo, self._commit)
+            if got.status == "ok" and isinstance(got.data, dict):
+                self._snapshot = got.data
+        return self._snapshot
 
     async def read(self, path: str) -> str | None:
+        snap = await self._snap()
+        if snap is not None:
+            return snap.get(path)
         got = await self._reader.show(self._repo, self._commit, path, whole=True)
         return got.data if got.status == "ok" and isinstance(got.data, str) else None
 
     async def files(self) -> list[str]:
-        """배포 커밋의 파일 전부(인덱서용). **채워진 서브모듈 안도** 부모가 박은 버전으로 든다(리더의 `ls`) —
-        공유 라이브러리를 따로 등재하지 않고 레포마다 자기 핀으로 인덱싱한다(11d 6b-2). 안 채워진 것은 빠지고
-        그쪽 import는 `external_shared`로 남는다."""
+        """배포 커밋의 파일 전부(인덱서용). **채워진 서브모듈 안도** 부모가 박은 버전으로 든다(리더의 `ls`·
+        `snapshot`이 같은 규칙) — 공유 라이브러리를 따로 등재하지 않고 레포마다 자기 핀으로 인덱싱한다(11d 6b-2).
+        안 채워진 것은 빠지고 그쪽 import는 `external_shared`로 남는다."""
+        snap = await self._snap()
+        if snap is not None:
+            return sorted(snap)
         got = await self._reader.ls(self._repo, self._commit, max_names=200_000)
         if got.status != "ok" or not isinstance(got.data, list):
             return []

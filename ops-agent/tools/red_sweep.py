@@ -1393,7 +1393,43 @@ CASES += [
   ["tests/config/test_schema_app.py::test_판정_프롬프트_경로도_config에_있다"]),
 ]
 
-assert len(CASES) >= 345, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 11e-1 — 인덱스 소스를 커밋 스냅샷에서 ─────────────────────────────
+GRT = "tests/infrastructure/test_git_reader.py"
+DCT = "tests/infrastructure/test_deployed_code.py"
+CASES += [
+ ("스냅샷이 안 채워진 submodule을 넣는다", GR,
+  '                if sub in blind or sub in stale:\n                    continue\n                sha = await self._gitlink(repo, commit, sub)',
+  '                if sub in stale:\n                    continue\n                sha = await self._gitlink(repo, commit, sub)',
+  [f"{GRT}::test_snapshot은_안_채워진_submodule을_못_봤다고_말한다"]),
+ ("스냅샷이 버전 없는 submodule을 넣는다", GR,
+  '                if sub in blind or sub in stale:\n                    continue\n                sha = await self._gitlink(repo, commit, sub)',
+  '                if sub in blind:\n                    continue\n                sha = await self._gitlink(repo, commit, sub)',
+  [f"{GRT}::test_snapshot은_버전_없는_submodule을_펼치지_않고_이유를_말한다"]),
+ ("스냅샷이 submodule을 부모 SHA가 아니라 HEAD로 받는다", GR,
+  '                inner = await self._archive(repo, sha, source=f"{source} (submodule {sub}@{sha[:12]})",',
+  '                inner = await self._archive(repo, "HEAD", source=f"{source} (submodule {sub}@{sha[:12]})",',
+  [f"{GRT}::test_snapshot은_채워진_submodule을_부모가_박은_버전으로_넣는다"]),
+ ("스냅샷이 export-ignore 구멍을 안 메운다", GR,
+  '        listed = await self.ls(repo, commit, max_names=200_000)\n        if listed.status == "ok":',
+  '        listed = await self.ls(repo, commit, max_names=200_000)\n        if False:',
+  [f"{GRT}::test_snapshot은_export_ignore로_빠진_파일을_show로_메운다"]),
+ ("스냅샷이 디렉터리·gitlink를 파일로 넣는다", GR,
+  '                    if not member.isfile():\n                        continue',
+  '                    if False:\n                        continue',
+  [f"{GRT}::test_snapshot은_채워진_submodule을_부모가_박은_버전으로_넣는다"]),
+ ("인덱스 소스가 스냅샷을 안 쓴다", D,
+  '            got = await self._reader.snapshot(self._repo, self._commit)\n            if got.status == "ok" and isinstance(got.data, dict):',
+  '            got = await self._reader.snapshot(self._repo, self._commit)\n            if False:',
+  [f"{DCT}::test_인덱스_소스는_스냅샷_한_번으로_목록과_내용을_다_답한다",
+   "tests/knowledge/test_cli_code.py::test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다"]),
+ ("스냅샷이 실패하면 목록이 빈다", D,
+  '        snap = await self._snap()\n        if snap is not None:\n            return sorted(snap)\n        got = await self._reader.ls(',
+  '        snap = await self._snap()\n        if snap is not None:\n            return sorted(snap)\n        return []\n        got = await self._reader.ls(',
+  [f"{DCT}::test_스냅샷을_못_받으면_예전처럼_파일별로_읽는다"]),
+]
+
+assert len(CASES) >= 352, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

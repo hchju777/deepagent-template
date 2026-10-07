@@ -406,3 +406,58 @@ async def test_code_callers와_uses는_붙인_인덱스로_답하고_없거나_�
     assert unknown.status == "error" and "인덱스에 없다" in unknown.error
     flow_code.attach_index(None)
     assert (await flow_code.callers("badge")).status == "error"
+
+
+# ── 인덱스 소스는 스냅샷을 먼저 쓴다 (11e) ──────────────────────────
+
+class _Counting:
+    """스냅샷을 주거나(`ok`) 못 주는(`fail`) 리더. 어느 길을 탔는지 호출 수로 본다."""
+
+    def __init__(self, clock, *, snapshot_ok: bool):
+        from src.domain.envelope import ProbeResult
+        self._clock, self._ok, self._P = clock, snapshot_ok, ProbeResult
+        self.calls: list[str] = []
+        self.files = {"a.py": "def a():\n    pass\n", ".gitmodules": ""}
+
+    async def snapshot(self, repo, commit):
+        self.calls.append("snapshot")
+        if not self._ok:
+            return self._P.failed("옛 git — archive 없음", source="s", clock=self._clock)
+        return self._P.succeeded(dict(self.files), source="s", clock=self._clock)
+
+    async def ls(self, repo, commit, path="", *, max_names=400):
+        self.calls.append("ls")
+        return self._P.succeeded(sorted(self.files), source="l", clock=self._clock)
+
+    async def show(self, repo, commit, path, *, whole=False):
+        self.calls.append("show")
+        text = self.files.get(path)
+        return (self._P.succeeded(text, source="w", clock=self._clock) if text is not None
+                else self._P.failed("없다", source="w", clock=self._clock))
+
+    async def grep(self, *a, **k):
+        raise AssertionError("안 부른다")
+
+
+def _source_with(reader):
+    from src.infrastructure.deployed_code import _GitSource
+    return _GitSource(reader, "dt-core", "c0ffee")
+
+
+async def test_인덱스_소스는_스냅샷_한_번으로_목록과_내용을_다_답한다(clock):
+    reader = _Counting(clock, snapshot_ok=True)
+    src = _source_with(reader)
+    assert await src.files() == [".gitmodules", "a.py"]
+    assert await src.read("a.py") == "def a():\n    pass\n"
+    assert await src.read(".gitmodules") == ""
+    assert await src.read("없다.py") is None
+    assert reader.calls == ["snapshot"]                 # ls도 show도 없다
+
+
+async def test_스냅샷을_못_받으면_예전처럼_파일별로_읽는다(clock):
+    """옛 git·시간 초과에서 느려질 뿐 결과는 같아야 한다 — 스냅샷은 지름길이지 새 계약이 아니다."""
+    reader = _Counting(clock, snapshot_ok=False)
+    src = _source_with(reader)
+    assert await src.files() == [".gitmodules", "a.py"]
+    assert await src.read("a.py") == "def a():\n    pass\n"
+    assert reader.calls == ["snapshot", "ls", "show"]   # 스냅샷은 한 번만 시도한다

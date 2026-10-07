@@ -364,3 +364,108 @@ async def test_submodule_안_파일을_여럿_읽어도_gitlink와_버전_확인
         got = await reader.show("dt-core", head, "vendor/libs/kafka.json", whole=True)
         assert got.status == "ok", got.error
     assert calls.count("ls-tree") == 1 and calls.count("cat-file") == 1
+
+
+# ── 커밋 전체를 한 번에 — snapshot (11e) ────────────────────────────
+
+async def test_snapshot은_show와_같은_내용을_한_번에_준다(reader, repo):
+    """인덱서가 파일마다 `show`를 띄우던 것이 사내 `code graph` 20분의 정체였다. 한 번에 받되 **내용은
+    `show(whole=True)`와 같아야** 인덱스가 바이트까지 같다."""
+    _, old = repo
+    got = await reader.snapshot("dt-core", old)
+    assert got.status == "ok", got.error
+    assert got.envelope.complete
+    assert set(got.data) == {"config/common.json", "app.py"}
+    assert got.data["config/common.json"] == (await reader.show("dt-core", old, "config/common.json", whole=True)).data
+    assert "OLD_NAME" in got.data["config/common.json"]
+    assert "NEW_NAME" in (await reader.snapshot("dt-core", "main")).data["config/common.json"]
+
+
+async def test_없는_커밋의_snapshot은_값으로_실패한다(reader):
+    got = await reader.snapshot("dt-core", "0000000000000000000000000000000000000000")
+    assert got.status == "error" and got.error
+
+
+async def test_snapshot은_채워진_submodule을_부모가_박은_버전으로_넣는다(nested, clock):
+    """`ls`와 같은 규칙 — 서브모듈의 지금 HEAD가 아니라 부모 커밋이 박은 SHA다."""
+    _, full = nested
+    sub = full / "vendor" / "libs"
+    git("config", "user.email", "t@t", cwd=sub)
+    git("config", "user.name", "t", cwd=sub)
+    (sub / "later.json").write_text("{}\n", encoding="utf-8")
+    git("add", "-A", cwd=sub)
+    git("commit", "-qm", "later", cwd=sub)                        # 서브모듈 HEAD만 옮긴다
+    got = await _reader_at(full, clock).snapshot("dt-core", "main")
+    assert got.status == "ok", got.error
+    assert got.envelope.complete, got.envelope.truncated_reason
+    assert got.data["vendor/libs/kafka.json"] == '{"topic": "ALARM_EVENT"}\n'
+    assert "vendor/libs/later.json" not in got.data
+    assert "vendor/libs" not in got.data                          # gitlink는 파일이 아니다
+    assert "app.py" in got.data and ".gitmodules" in got.data
+
+
+async def test_snapshot은_안_채워진_submodule을_못_봤다고_말한다(nested, clock, monkeypatch):
+    """못 보는 submodule에는 `archive`를 **띄우지도 않는다** — git이 거부해 결과가 같더라도 프로세스 하나가
+    Windows에서 1초다. 그래서 봉투뿐 아니라 호출 수를 본다."""
+    blind, _ = nested
+    reader = _reader_at(blind, clock)
+    spawned = _spawned(reader, monkeypatch)
+    got = await reader.snapshot("dt-core", "main")
+    assert got.status == "ok", got.error
+    assert spawned.count("archive") == 1
+    assert not any(p.startswith("vendor/libs/") for p in got.data)
+    assert not got.envelope.complete and "vendor/libs" in got.envelope.truncated_reason
+
+
+async def test_snapshot은_버전_없는_submodule을_펼치지_않고_이유를_말한다(behind, clock, monkeypatch):
+    reader = _reader_at(behind, clock)
+    spawned = _spawned(reader, monkeypatch)
+    got = await reader.snapshot("dt-core", "main")
+    assert got.status == "ok", got.error
+    assert spawned.count("archive") == 1                           # 없는 버전에 archive를 안 띄운다
+    assert not any(p.startswith("vendor/libs/") for p in got.data)
+    assert not got.envelope.complete and "code sync" in got.envelope.truncated_reason
+
+
+def _spawned(reader, monkeypatch) -> list[str]:
+    """리더가 띄우는 git 하위 명령을 순서대로 모은다."""
+    calls: list[str] = []
+    real = reader._git_bytes
+
+    async def counting(repo, args, **kw):
+        calls.append(args[0])
+        return await real(repo, args, **kw)
+
+    monkeypatch.setattr(reader, "_git_bytes", counting)
+    return calls
+
+
+async def test_snapshot은_git을_레포당_한_번_submodule당_한_번만_띄운다(nested, clock, monkeypatch):
+    """이게 11e의 요점이다. `archive` 둘(부모·서브모듈)이고 파일마다의 `show`는 없다."""
+    _, full = nested
+    head = git("rev-parse", "HEAD", cwd=full).stdout.strip()
+    reader = _reader_at(full, clock)
+    calls = []
+    real = reader._git_bytes
+
+    async def counting(repo, args, **kw):
+        calls.append(args[0])
+        return await real(repo, args, **kw)
+
+    monkeypatch.setattr(reader, "_git_bytes", counting)
+    got = await reader.snapshot("dt-core", head)
+    assert got.status == "ok" and "vendor/libs/kafka.json" in got.data
+    assert calls.count("archive") == 2 and calls.count("show") == 1      # show는 .gitmodules 선언 읽기 하나뿐
+
+
+async def test_snapshot은_export_ignore로_빠진_파일을_show로_메운다(repo, clock):
+    """`git archive`는 `.gitattributes`의 `export-ignore`를 따른다 — 목록(`ls`)에는 있는데 아카이브에 없는
+    파일이 생기면 인덱서가 "읽기 실패" 모듈을 만든다. 목록과 대조해 그만큼만 `show`로 읽는다."""
+    root, _ = repo
+    (root / ".gitattributes").write_text("hidden.py export-ignore\n", encoding="utf-8")
+    (root / "hidden.py").write_text("def h():\n    pass\n", encoding="utf-8")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "attrs", cwd=root)
+    got = await _reader_at(root, clock).snapshot("dt-core", "main")
+    assert got.status == "ok", got.error
+    assert got.data["hidden.py"] == "def h():\n    pass\n"
