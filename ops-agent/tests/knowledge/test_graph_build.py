@@ -136,10 +136,10 @@ def test_worktree_자리는_상대_경로여도_레포_밖에_생긴다(tmp_path
     agent.mkdir()
     monkeypatch.chdir(agent)
     status, detail, _, _ = gb.run_graphify_at(Path("../repo"), sha, str(_dying_graphify(tmp_path)),
-                                              Path("output/graph/mx-gumi/worktrees/repo"))
+                                              Path("output/graph/mx/worktrees/repo"))
     assert status == "failed" and "종료코드 3" in detail, detail      # 가짜가 그 자리에서 실제로 돌았다
     assert not (repo / "output").exists(), "worktree가 대상 레포 안에 생겼다"
-    assert not (agent / "output" / "graph" / "mx-gumi" / "worktrees" / "repo").exists()
+    assert not (agent / "output" / "graph" / "mx" / "worktrees" / "repo").exists()
 
 
 def _committed_repo(tmp_path):
@@ -220,3 +220,26 @@ def test_진짜_graphify로_코드만_추출한다(tmp_path):
     assert "Token cost: 0 input" in report, "라벨링 LLM 호출이 나갔다"
     merged = gb.merge_graphs({"nodes": [{"id": "service_x", "label": "x"}], "links": []}, [symbols])
     assert len(merged["nodes"]) == len(symbols["nodes"]) + 1
+
+
+# ── 11e-2 — 번들은 GBM 단위, 사이트는 덮은 값 파일 ─────────────────────
+
+def test_번들은_GBM_단위이고_사이트는_덮은_값_파일이다(tmp_path):
+    """그래프(인덱스·사슬·오버레이·graphify)는 GBM에 하나. 사이트 층이 GBM 값을 덮은 것만 `sites/<fct>.json`."""
+    out = tmp_path / "out"
+    assert gb.bundle_dir(out, "mx") == out / "graph" / "mx"
+    bundle = gb.bundle_dir(out, "mx")
+    assert gb.site_file(bundle, "gumi") == bundle / "sites" / "gumi.json"
+    rows = [{"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "gumi-mx-core",
+             "services": ["sink"], "relation": "consumes_as"}]
+    gb.write_site(bundle, "gumi", rows)
+    assert gb.read_site(bundle, "gumi") == rows
+    assert gb.read_site(bundle, "sevt") is None                      # 없는 사이트는 None — 빈 목록이 아니다
+    gb.write_site(bundle, "sevt", [])
+    assert gb.read_site(bundle, "sevt") == []
+
+
+def test_옛_번들의_meta도_읽힌다():
+    """`sites`가 없던 번들(11e 전)을 읽어도 죽지 않는다 — 낡음 판정이 말하게 둔다."""
+    meta = gb.GraphMeta(gbm="mx", fct="gumi", commits={}, built_at="t", graphify="없음")
+    assert meta.sites == []

@@ -799,3 +799,68 @@ def test_Git_Bash가_바꾼_끝점_path를_가장_길게_맞는_path로_되돌�
     assert flow.unmangle("C:/Program Files/Git/ab", labels) is None          # `/b`의 끝이 맞아도 경계가 아니다
     assert flow.unmangle("/v2/line/{id}", labels) is None                    # 드라이브 문자가 없으면 사람이 친 그대로다
     assert flow.unmangle("C:/Program Files/Git/alarm_events", labels) is None  # 끝점이 아닌 이름은 path가 아니다
+
+
+# ── 11e-2 — 사이트 층이 덮은 값을 GBM 오버레이에 입힌다 ───────────────
+
+def _gbm_graph() -> dict:
+    return {"directed": True, "multigraph": True, "graph": {"kind": "ops-flow"},
+            "nodes": [{"id": "service_sink", "label": "sink", "type": "service", "repo": "dt-core",
+                       "source_file": "dt-core", "source_location": "L0"},
+                      {"id": "group_mx_core", "label": "mx-core", "type": "group", "source_file": "config/gbm/mx.json",
+                       "source_location": "L3", "key_path": "infra.kafka.consumer.group_id"},
+                      {"id": "topic_mx_alarm_main", "label": "mx.alarm.main", "type": "topic",
+                       "source_file": "config/gbm/mx.json", "source_location": "L5",
+                       "key_path": "infra.kafka.consumer.topic.topic2"}],
+            "links": [{"source": "service_sink", "target": "group_mx_core", "relation": "consumes_as",
+                       "confidence": "EXTRACTED", "attributed": "service", "origin": "config",
+                       "source_file": "config/gbm/mx.json", "source_location": "L3", "repo": "dt-core",
+                       "commit": "c1", "text": ""},
+                      {"source": "service_sink", "target": "topic_mx_alarm_main", "relation": "consumes",
+                       "confidence": "EXTRACTED", "attributed": "service", "origin": "code",
+                       "source_file": "sink/writer.py", "source_location": "L4", "repo": "dt-core",
+                       "commit": "c1", "text": "consumer.subscribe(...)"}],
+            "hyperedges": []}
+
+
+def test_덮은_값은_같은_key_path의_노드를_이름만_바꾸고_엣지를_따라간다():
+    got = flow.apply_site(_gbm_graph(), [{"kind": "group", "key_path": "infra.kafka.consumer.group_id",
+                                         "value": "gumi-mx-core", "services": ["sink"], "relation": "consumes_as"}])
+    ids = {n["id"]: n for n in got["nodes"]}
+    assert "group_mx_core" not in ids and ids["group_gumi_mx_core"]["label"] == "gumi-mx-core"
+    assert ids["group_gumi_mx_core"]["key_path"] == "infra.kafka.consumer.group_id"
+    assert [e["target"] for e in got["links"] if e["relation"] == "consumes_as"] == ["group_gumi_mx_core"]
+    assert len(got["links"]) == 2 and len(got["nodes"]) == 3        # 다른 노드·엣지는 그대로
+    assert "gumi-mx-core" in flow.known_names(got) and "mx-core" not in flow.known_names(got).split("\n")
+    assert flow.apply_site(_gbm_graph(), []) == _gbm_graph()        # 덮은 것이 없으면 그대로
+
+
+def test_GBM_층에_없는_이름은_config_엣지만_달고_새_노드로_든다():
+    """사이트 층에만 있는 이름(GBM 기본값이 없는 키)은 코드 엣지를 모른다 — 그 사이트의 서비스가 선언했다는
+    것까지만 사실이다. 그래서 `declares`(출처가 방향을 말하면 그 관계)만 붙는다."""
+    got = flow.apply_site(_gbm_graph(), [{"kind": "collection", "key_path": "mongodb_collection.extra",
+                                         "value": "sevt_only", "services": ["sink"], "relation": None}])
+    ids = {n["id"]: n for n in got["nodes"]}
+    assert ids["collection_sevt_only"]["label"] == "sevt_only" and ids["collection_sevt_only"]["type"] == "collection"
+    added = [e for e in got["links"] if e["target"] == "collection_sevt_only"]
+    assert [(e["source"], e["relation"], e["origin"], e["repo"]) for e in added] == [("service_sink", "declares", "config", "dt-core")]
+
+
+def test_덮은_값_행은_인덱스의_자원_이름을_바꿀_표도_준다():
+    """그래프 노드는 `key_path`로 찾지만 인덱스의 함수별 자원(`Resource`)은 이름뿐이다 — 행의 `base`(GBM 값)로
+    `{(종류, GBM 값): 사이트 값}`을 만든다. GBM 층에 없던 이름(`base` 없음)과 같은 값은 바꿀 것이 없다."""
+    rows = [{"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "gumi-mx-core", "base": "mx-core",
+             "services": ["sink"], "relation": "consumes_as"},
+            {"kind": "collection", "key_path": "mongodb_collection.extra", "value": "sevt_only", "base": None,
+             "services": ["sink"], "relation": None},
+            {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic2", "value": "mx.alarm.main",
+             "base": "mx.alarm.main", "services": ["sink"], "relation": "consumes"}]
+    assert flow.site_renames(rows) == {("group", "mx-core"): "gumi-mx-core"}
+    assert flow.site_renames([]) == {}
+
+
+def test_덮은_값_입히기는_두_번_해도_같다():
+    rows = [{"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "gumi-mx-core",
+             "services": ["sink"], "relation": "consumes_as"}]
+    once = flow.apply_site(_gbm_graph(), rows)
+    assert flow.apply_site(once, rows) == once

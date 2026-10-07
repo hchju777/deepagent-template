@@ -335,6 +335,20 @@ async def test_같은_엣지는_candidate에서_exact로만_승격한다():
     assert len(twice) == 1 and twice[0].certainty == "candidate" and twice[0].count == 2
 
 
+async def test_renamed는_자원_이름만_바꾼_새_인덱스를_준다():
+    """번들의 인덱스는 GBM 기준값으로 서 있다(11e-2). 사이트 층이 덮은 값으로 묻는 조사(`code.uses`)가 맞으려면 함수별
+    자원 이름을 그 사이트 것으로 바꾼 사본이 필요하다 — 엣지·심볼 id는 그대로고 원본은 안 바뀐다."""
+    idx = await _index()
+    save = _sid(idx, "app.infra.alarm_repository.AlarmRepository.save")
+    got = idx.renamed({("collection", "alarm_events"): "gumi_alarm_events"})
+    assert got.writers("collection", "gumi_alarm_events") == [save] and got.writers("collection", "alarm_events") == []
+    assert idx.writers("collection", "alarm_events") == [save]                       # 원본 그대로
+    assert [e for e in got.edges] == [e for e in idx.edges] and [s.id for s in got.symbols] == [s.id for s in idx.symbols]
+    kept = idx.symbols[save]
+    assert {(r.direction, r.line, r.via) for r in got.symbols[save].resources} == {(r.direction, r.line, r.via) for r in kept.resources}
+    assert idx.renamed({}) is idx and idx.renamed({("topic", "없는이름"): "x"}).writers("collection", "alarm_events") == [save]
+
+
 async def test_함수마다_자원_참조를_방향과_함께_단다():
     idx = await _index()
     save = idx.symbols[_sid(idx, "app.infra.alarm_repository.AlarmRepository.save")]

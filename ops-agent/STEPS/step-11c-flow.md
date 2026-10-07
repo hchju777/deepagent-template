@@ -123,7 +123,7 @@ processor·sink가 공유하므로 lag만으로는 누가 멈췄는지 모른다
   (패턴 20개씩 묶어서) → 오버레이(`flow.extract`). 레포마다 배포 SHA로 **`git worktree`를 잠깐 만들어** 거기서
   `graphify extract --code-only` + `cluster-only --no-label`을 돌리고 지운다. 작업 트리는
   안 건드리고 HEAD도 그대로다. 오버레이와 심볼 그래프를 id로 합친다.
-- 산출물: `<output_dir>/graph/<gbm>-<fct>/{overlay,graph,meta}.json`. `meta.commits`는
+- 산출물: `<output_dir>/graph/<gbm>-<fct>/{overlay,graph,meta}.json`(11e-2부터 `graph/<gbm>/` 하나에 사이트별 `sites/<fct>.json`). `meta.commits`는
   레포별 **실제 SHA**다(`main` 같은 참조는 움직인다). git에 안 들어간다.
 - `code status`에 그래프 절이 붙는다: 만든 시각, graphify 버전, 노드·엣지, 서비스를 못 가른
   엣지 수. 배포 커밋과 다르면 **`⚠ 낡음`**. 없으면 만드는 법.

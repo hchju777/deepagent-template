@@ -56,7 +56,7 @@ py -3.11 -m pip download -r requirements-graph.txt --only-binary=:all: --platfor
 `python -m pytest tests/knowledge/test_graph_build.py -v`에서 `test_진짜_graphify로_코드만_추출한다`가
 스킵이 아니라 통과하는 것.
 
-`code graph`가 남기는 사람용 파일(`output/graph/<gbm>-<fct>/`): `flow.html`은 graphify 없이도
+`code graph`가 남기는 사람용 파일(`output/graph/<gbm>/`): `flow.html`은 graphify 없이도
 만들어지고 외부 참조가 없어 팀원에게 그 파일 하나만 주면 된다. `calls.html`은 심볼 인덱스를 골라 펼쳐 보는
 한 장이다 — 자원을 고르면 진입점 → 쓰는 함수 → 자원 → 읽는 함수 → 진입점, 함수를 고르면 부르는 쪽과 부르는
 대상(역시 외부 참조 없음). graphify가 있으면 레포별
@@ -239,7 +239,7 @@ python -m src case list
 python -m src code status     # 읽을 수 있는 상태인가 (네트워크 없음)
 python -m src code plan       # 사람이 직접 칠 git 명령 (네트워크 없음)
 python -m src code sync       # clone/fetch — **사내에서만**
-python -m src code graph      # 흐름 그래프 + 심볼 인덱스 (sync 뒤 자동으로도 돈다)
+python -m src code graph --gbm mx   # 흐름 그래프 + 심볼 인덱스 — GBM에 하나, 그 GBM의 사이트 전부 (sync 뒤 자동으로도 돈다)
 python -m src code check      # 인덱스 검증 — 불변식·정밀도·재현율 일곱 줄 (--unresolved: 못 푼 호출의 모양)
 python -m src code callers <함수>   # 누가 부르나 — 진입점까지
 python -m src code path <A> <B>     # A에서 B로 가는 호출 경로
@@ -249,6 +249,10 @@ python -m src code uses <자원>      # 이 컬렉션·토픽·키를 쓰고 읽
 `code callers`·`code uses`는 리드도 같은 이름으로 낸다(`code.callers(name)`·`code.uses(name)`) — 사람이 CLI로
 맞춰 본 답과 리드가 받는 답이 **같은 조립**이다. 둘은 `code graph`가 남긴 심볼 인덱스가 배포 커밋과 같을 때만
 목록에 나온다(그래프와 같은 규칙).
+
+그래프 번들은 **GBM에 하나**(`output/graph/<gbm>/`, [11e](STEPS/step-11e-gbm-bundle.md))다 — 인덱스·끝점 사슬·오버레이·
+사람용 페이지가 한 번 만들어지고, 사이트 층이 GBM 값을 덮은 것만 `sites/<fct>.json`에 남아 조사 시작 때 그 사이트 몫이
+입혀진다(그래프의 이름과 인덱스의 함수별 자원 이름 둘 다 — `code uses`도 같다). `--fct`를 주면 그 사이트만 적는다.
 
 조사가 "데이터가 이상하다"를 넘어 "왜 그런가"로 가려면 대상 서비스의 코드를 읽어야
 한다. 코드는 **GBM 단위로 같고**, 어느 커밋이 떠 있는지는

@@ -10,6 +10,7 @@ import shutil
 import pytest
 
 from src.config.schema_site import RepoConfig
+from src.domain.envelope import ProbeResult
 from src.infrastructure.deployed_code import DeployedCode
 from src.infrastructure.git_reader import RealCodeReader
 from src.knowledge.schema import Deployment, Service, Topology
@@ -461,3 +462,67 @@ async def test_스냅샷을_못_받으면_예전처럼_파일별로_읽는다(cl
     assert await src.files() == [".gitmodules", "a.py"]
     assert await src.read("a.py") == "def a():\n    pass\n"
     assert reader.calls == ["snapshot", "ls", "show"]   # 스냅샷은 한 번만 시도한다
+
+
+# ── 11e-2 — 사이트 층은 스냅샷에서, GBM 기준과의 차이만 ──────────────────
+
+async def test_names_for는_층을_스냅샷에서_읽고_GBM_층만으로도_뽑는다(flow_code):
+    """`code graph --gbm mx`가 사이트 28개의 층을 읽을 때 git을 다시 띄우면 안 된다(28×서비스×층). 레포 스냅샷
+    (11e-1)에서 병합한다. `fct=""`는 `{fct}`가 든 층을 빼고 GBM 층만 — 그래프의 기준값이다."""
+    base, problems = await flow_code.names_for("")
+    gumi, _ = await flow_code.names_for("gumi")
+    key = "infra.kafka.consumer.group_id"
+    assert problems == []
+    assert {n.value for n in base if n.key_path == key} == {"mx-core"}
+    assert {n.value for n in gumi if n.key_path == key} == {"gumi-mx-core"}
+    assert {(n.kind, n.value) for n in base if n.kind != "group"} == {(n.kind, n.value) for n in gumi if n.kind != "group"}
+
+
+async def test_site_overrides는_GBM_값과_다른_것만_적는다(flow_code):
+    base, _ = await flow_code.names_for("")
+    rows = await flow_code.site_overrides("gumi", base)
+    # `base`는 그 키의 GBM 값 — 인덱스의 함수별 자원은 key_path를 모르므로 "무엇이 무엇으로"가 있어야 입힌다.
+    assert rows == [{"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "gumi-mx-core",
+                     "base": "mx-core", "services": ["sink"], "relation": "consumes_as"}]
+
+
+async def test_스냅샷이_없으면_사이트_층도_통째로_읽는다(tmp_path, flow_code, monkeypatch, clock):
+    """`_layers_in`의 되돌아가는 길도 `_layers`와 같은 규칙이다 — 리더 기본 상한 400줄에 잘린 config는 파싱이
+    실패하고, 그 실패가 "대상 파일이 깨졌다"로 읽힌다(사내에서 실제로 났던 일, `test_400줄이_넘는_층도_통째로_읽는다`)."""
+    root = tmp_path / "dt-core"
+    big = {"infra": {"kafka": {"consumer": {"group_id": "mx-core", "topic": {"topic1": "mx.alarm.main"}}}},
+           "mongodb_collection": {"alarm": "alarm_events"},
+           "rules": {f"r{i}": {"threshold": i} for i in range(300)}}
+    (root / "config" / "gbm" / "mx.json").write_text(json.dumps(big, indent=2), encoding="utf-8")
+    assert len((root / "config" / "gbm" / "mx.json").read_text(encoding="utf-8").splitlines()) > 400
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "big", cwd=root)
+
+    async def no_snapshot(repo, commit):
+        return ProbeResult.failed("옛 git — archive 없음", source=f"code.snapshot {repo}@{commit}", clock=clock)
+
+    monkeypatch.setattr(flow_code._reader, "snapshot", no_snapshot)
+    base, problems = await flow_code.names_for("")
+    assert problems == []
+    assert {n.value for n in base if n.kind == "group"} == {"mx-core"}
+
+
+async def test_사이트_층_읽기는_스냅샷_뒤로는_git을_안_띄운다(flow_code, monkeypatch):
+    reader = flow_code._reader
+    calls = []
+    real = reader._git_bytes
+
+    async def counting(repo, args, **kw):
+        calls.append(list(args))
+        return await real(repo, args, **kw)
+
+    monkeypatch.setattr(reader, "_git_bytes", counting)
+    base, _ = await flow_code.names_for("")
+    first = len(calls)
+    assert sum(1 for a in calls if a[:2] == ["cat-file", "--batch"]) == 1
+    # 스냅샷 자체는 `ls-tree`·`.gitmodules`를 더 묻는다(blob 목록·submodule 규칙). 층 파일(`config/…`)을
+    # `show`로 읽으면 안 된다 — 그게 사이트 28개 × 서비스 × 층의 프로세스였다.
+    assert [a for a in calls if a[0] == "show" and "config/" in a[-1]] == []
+    await flow_code.names_for("gumi")
+    await flow_code.site_overrides("gumi", base)
+    assert len(calls) == first                                     # 두 번째부터는 메모리에서

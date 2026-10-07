@@ -3,7 +3,7 @@
 > **목적**: `code graph`가 사이트마다 20분이던 것을 GBM당 한 번, 몇 분 안으로. 그래프는 **GBM 단위**다 —
 > 심볼 인덱스·끝점 사슬·오버레이·graphify·사람용 페이지 전부 `output/graph/<gbm>/`에 하나. 사이트에
 > 남는 것은 사이트 층이 덮은 값 몇 개(`sites/<fct>.json`)뿐이고, 조사 시작 때 그 사이트 몫만 끼운다.
-> 상태: **11e-1 됐다(10-07)** · 11e-2(번들 레이아웃·CLI) 다음.
+> 상태: **11e-1·11e-2 됐다(10-07)** · 남은 것은 종료 판단 5(사내 한 번의 시간과 `code check` 첫 줄).
 
 ## 왜 (10-07에 정리한 것)
 
@@ -32,6 +32,10 @@
    파일별 show로 내려간다.
 4. graphify는 켬 그대로. 조사가 읽는 것은 전후가 같다.
 5. 사내 `code graph --gbm mx` 한 번의 시간과 `code check` 첫 줄(심볼 7,308 · calls 4,885/1,710)이 같은지.
+
+결과(10-07, 측정판): 1·2·4는 그대로 됐다. 3은 **글자 그대로는 아니다** — `edges.json`은 바이트까지 같지만 `symbols.json`은
+덮인 그룹의 자원 이름(`gumi-mx-core` → 기준값 `mx-core`)만 다르다. 기준값이 GBM 층이 된 결과이고, 조사는 그 사이트의
+이름을 입혀 받으므로 리드가 보는 것은 전후가 같다(아래 11e-2 측정). 5는 사내 확인 대기.
 
 ## 11e-1 — 인덱스 소스를 커밋 스냅샷에서 ✅
 
@@ -62,12 +66,35 @@
 예상(Windows): 인덱스 읽기 1,600 × 0.5~1초 → 레포당 git 두 번, 수 초. 인덱서 파이썬은 심볼 2,172개가 1.9초
 측정 → 7,308개 비례 약 10초. 확인은 종료 판단 5.
 
-## 11e-2 — GBM 번들 레이아웃·CLI (다음)
+## 11e-2 — GBM 번들 레이아웃·CLI ✅
 
-`output/graph/<gbm>/` 하나에 인덱스·사슬·오버레이·graphify·사람용 페이지, `sites/<fct>.json`에 사이트 층이 덮은
-값만. `code graph --gbm mx`가 GBM의 사이트 전부를 돈다(사이트당 config 층 병합은 스냅샷에서, git 0번).
-조사·`code status/trace/flow/callers/uses`는 GBM 번들을 읽고 사이트 값을 입힌다. 커밋은 GBM 하나, 사이트 핀이
-다르면 그 사이트에만 안 싣는다.
+- 번들은 `output/graph/<gbm>/` 하나(`graph_build.bundle_dir`) — 인덱스(`symbols.json`·`edges.json`)·오버레이·합친
+  그래프·`flow.html`·`calls.html`·graphify 산출물 전부. `meta.fct=""`, `meta.sites`에 그 번들이 덮은 값을 적은 사이트 목록.
+- 이름의 **기준값은 GBM 층만**으로 병합한 것(`DeployedCode.names_for("")` — `{fct}`가 든 층을 뺀다). 사이트마다는
+  `names_for(fct)`와 비교해 **다른 값만** `sites/<fct>.json`에 — 행은 `{kind, key_path, value, base, services, relation}`,
+  `base`는 그 키의 GBM 값(GBM 층에 없던 키면 null). 측정판은 사이트당 1행(`group_id`).
+- 사이트 층 병합은 레포 스냅샷(11e-1)에서 한다(`_layers_in`) — 사이트 28개 × 서비스 × 층을 git에 다시 묻지 않는다.
+  스냅샷을 못 받으면 그 경로만 `show(whole=True)`로 내려간다(같은 결과, 느릴 뿐 — 400줄 상한 규칙도 `_layers`와 같다).
+- `code graph --gbm mx`가 registry의 그 GBM 활성 사이트 전부를 적는다. `--fct`를 주면 그 사이트만. 등재 항목(`entries`)은
+  사이트 전부의 합집합이다(끝점 노드는 번들에 한 번 선다). `code sync` 끝도 같은 길(`_build_graph`).
+- 조사 시작(`_code_if_ready`)과 `code status/flow/trace/uses/callers/path`는 GBM 번들을 읽고 **그 사이트의 값을 입힌다**:
+  그래프는 `flow.apply_site`(같은 `key_path`의 노드는 이름만 바뀌고 엣지가 따라간다, GBM 층에 없던 이름은 config 엣지만
+  단 새 노드), 심볼 인덱스는 `Index.renamed(flow.site_renames(rows))`(함수별 자원 이름). `code check`는 번들 그대로를
+  잰다. 사이트 파일이 없으면 GBM 값 그대로 싣고 한 줄 말한다(`사이트 덮어쓰기 없음`). 사이트 핀이 번들 커밋과 다르면
+  그 사이트에만 안 싣는다(낡음 판정 그대로).
+- 측정판(사이트 gumi·sevt, 사이트 층은 `group_id`만 덮는다): `code graph --gbm mx` 한 번에 `sites/gumi.json`(gumi-mx-core)·
+  `sites/sevt.json`(sevt-mx-core) 각 1행. git 호출 36 → **24**(`ls-tree`+`cat-file --batch` 3쌍, `show`는 `.gitmodules` 2뿐, config 층·`.py` 0 —
+  archive 때 목록과 대조하던 `ls`도 없어졌다).
+  `edges.json`은 11e 전과 바이트까지 같고 `symbols.json`·오버레이는 그룹 이름만 다르다(위 종료 판단 3). 조사 조립에서
+  gumi는 `gumi-mx-core`, sevt는 `sevt-mx-core`를 받고(`known_names` 차이가 그 둘뿐) `code.uses(그 이름)`도 사이트마다
+  답한다. 측정판엔 graphify가 안 깔려 있어 그 다리는 여기서 안 돌았다(사내에서 켬, 코드는 안 바뀜).
+- 하다 잡은 것: 처음엔 그래프에만 입히고 인덱스는 GBM 값 그대로 뒀다 — 리드가 `<데이터 흐름>`에서 본 `gumi-mx-core`로
+  `code.uses`를 물으면 "인덱스에 없다"가 됐을 것이다. 측정판 `symbols.json` 대조(그룹 자원 이름이 달라짐)에서 드러나
+  행에 `base`를 더하고 인덱스도 입힌다.
+- 테스트: `test_graph_build.py` 2(번들 경로·사이트 파일·옛 meta), `test_flow.py` 4(이름만 바뀌고 엣지 따라감·새 노드는
+  config 엣지만·두 번 같음·자원 이름 표), `test_deployed_code.py` 4(GBM 층만·다른 값만·스냅샷 뒤 git 0·되돌아가는 길도
+  통째로), `test_index.py` 1(`renamed`), `test_cli_code.py` 4(GBM 번들 한 번·등재 합집합·사이트 파일 없을 때·status/flow/uses).
+  테스트를 먼저 썼다(RED 17 → GREEN, 인덱스 쪽 RED 4 → GREEN). 스윕 +22, 11e-2가 옮긴 앵커 2개 재지정.
 
 ## 그다음 (별도 예고)
 

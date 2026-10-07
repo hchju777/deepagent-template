@@ -32,11 +32,14 @@ GRAPHIFY_TIMEOUT_S = 600
 @dataclass(frozen=True)
 class GraphMeta:
     gbm: str
+    # 11e-2부터 번들은 GBM 단위라 빈 문자열이다. 옛 번들(사이트 단위)의 값을 읽을 수 있게 남긴다.
     fct: str
     commits: dict[str, str]          # repo → 실제 SHA
     built_at: str
     graphify: str                    # "0.9.65" 같은 버전, 또는 "없음 — 사유"
     notes: list[str] = field(default_factory=list)
+    # 이 번들이 덮은 값 파일(`sites/<fct>.json`)을 쓴 사이트들. 옛 번들엔 없다 — 그러면 빈 목록.
+    sites: list[str] = field(default_factory=list)
 
 
 def parse_grep(repo: str, commit: str, text: str) -> list[Hit]:
@@ -284,8 +287,31 @@ def check_bundle(meta: GraphMeta, commits: dict[str, str]) -> list[str]:
     return problems
 
 
-def bundle_dir(output_dir: Path, gbm: str, fct: str) -> Path:
-    return Path(output_dir) / "graph" / f"{gbm}-{fct}"
+def bundle_dir(output_dir: Path, gbm: str) -> Path:
+    """번들은 **GBM 단위**다(11e-2). 코드는 GBM 단위로 같고(decisions ②) 사이트 층은 값 몇 개를 덮을 뿐이라,
+    사이트마다 만들면 같은 인덱스를 28번 만든다(사내 사이트당 20분)."""
+    return Path(output_dir) / "graph" / gbm
+
+
+def site_file(bundle: Path, fct: str) -> Path:
+    """그 사이트 층이 GBM 값을 **덮은 것만** — `[{kind, key_path, value, services, relation}]`. 조사 시작 때
+    `flow.apply_site`가 오버레이 사본에 입힌다. 보통 몇 줄이다(측정판: `group_id` 하나)."""
+    return Path(bundle) / "sites" / f"{fct}.json"
+
+
+def write_site(bundle: Path, fct: str, rows: list[dict]) -> None:
+    path = site_file(bundle, fct)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def read_site(bundle: Path, fct: str) -> list[dict] | None:
+    """없으면 None — "덮은 값이 없다"(빈 목록)와 "그 사이트 파일을 안 만들었다"는 다른 사실이다."""
+    try:
+        rows = json.loads(site_file(bundle, fct).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
 
 
 def now_text(clock) -> str:

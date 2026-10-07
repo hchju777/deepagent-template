@@ -29,7 +29,7 @@ import ast
 import builtins
 import re
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Iterable, Protocol
 
 from src.knowledge.flow import Name, direction
@@ -161,6 +161,19 @@ class Index:
     def readers(self, kind: str, name: str) -> list[int]:
         return [s.id for s in self.symbols
                 if any(r.kind == kind and r.name == name and r.direction == "reads" for r in s.resources)]
+
+    def renamed(self, renames: dict[tuple[str, str], str]) -> "Index":
+        """자원 이름을 바꾼 **새** 인덱스 — 사이트 층이 GBM 값을 덮었을 때(11e-2, `flow.site_renames`). 번들의 인덱스는
+        GBM 기준값으로 서 있고 조사·`code uses`는 그 사이트의 이름으로 묻는다. 심볼 id·엣지는 그대로, 원본은 안 바뀐다."""
+        if not renames:
+            return self
+        symbols = []
+        for s in self.symbols:
+            if any((r.kind, r.name) in renames for r in s.resources):
+                s = replace(s, resources=tuple(Resource(r.kind, renames.get((r.kind, r.name), r.name), r.direction,
+                                                        r.line, r.via) for r in s.resources))
+            symbols.append(s)
+        return replace(self, symbols=symbols)
 
     # ── 요약·직렬화 ──
     def summary(self) -> dict:

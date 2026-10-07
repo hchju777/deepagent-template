@@ -3,6 +3,7 @@
 이 리포에서 실제로 났다: `ProbeRunner`에 `clock`을 필수로 올렸는데 `__main__`의
 호출부가 안 따라갔고 776개가 전부 통과했다.
 """
+import asyncio
 import json
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ REPO = "테스트레포"
 
 
 def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/dt-core",
-          services=None, config_paths=()):
+          services=None, config_paths=(), sites=(("mx", "gumi"),)):
     """**테스트가 자기 트리를 세운다.** 리포의 `config/`·`knowledge/`를 베끼지 않는다.
 
     처음엔 베꼈고, 그 파일들이 **운영이 채우는 칸**이라 사내에서 실제 레포 이름을
@@ -37,7 +38,7 @@ def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/
                                                  "output_dir": str(tmp_path / "out")}),
                                      encoding="utf-8")
     (config / "registry.json").write_text(
-        json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")
+        json.dumps({"sites": [{"gbm": g, "fct": f} for g, f in sites]}), encoding="utf-8")
     (config / "gbm" / "mx.json").write_text(json.dumps({
         "infra": {"redis": {"url": "redis://h:6379"}},
         "code": {"repos": [{"name": REPO, "url": url, "path": repo_path}]}},
@@ -513,7 +514,7 @@ def test_code_graph가_배포_커밋에_그래프를_박는다(tmp_path, monkeyp
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     assert code == 0, captured.out + captured.err
     assert "graphify 없음" in captured.out and "skipped" in captured.out
-    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    bundle = tmp_path / "out" / "graph" / "mx"
     assert (bundle / "graph.json").exists() and (bundle / "meta.json").exists()
     meta = json.loads((bundle / "meta.json").read_text(encoding="utf-8"))
     assert len(meta["commits"][REPO]) == 40, "참조가 아니라 SHA에 박혀야 한다"
@@ -535,7 +536,7 @@ def test_조사에는_배포_커밋과_같은_그래프만_실린다(tmp_path, m
 
     monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
     config_root = _flow_tree(tmp_path)
-    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    bundle = tmp_path / "out" / "graph" / "mx"
     assert _flow_graph_if_fresh(bundle, {})[0] is None
     _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     commits = json.loads((bundle / "meta.json").read_text(encoding="utf-8"))["commits"]
@@ -553,7 +554,7 @@ def test_조사에는_신선한_번들의_심볼_인덱스도_실리고_낡으�
 
     monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
     config_root = _flow_tree(tmp_path)
-    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    bundle = tmp_path / "out" / "graph" / "mx"
     _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     site, _ = load_site_config(config_root, "mx", "gumi", env={})
     ready = lambda: _code_if_ready(site, "mx", "gumi", knowledge_root=tmp_path / "knowledge",   # noqa: E731
@@ -617,7 +618,7 @@ def test_code_graph가_끝점을_싣고_flow와_status가_말한다(tmp_path, mo
     assert code == 0, captured.out + captured.err
     assert "끝점 1개 중 등재 0개" in captured.out and "끝점 1개" in captured.err
     assert "자원까지 이어진 1개" in captured.out and "끝점 추적" in captured.err
-    overlay = json.loads((tmp_path / "out" / "graph" / "mx-gumi" / "overlay.json").read_text(encoding="utf-8"))
+    overlay = json.loads((tmp_path / "out" / "graph" / "mx" / "overlay.json").read_text(encoding="utf-8"))
     assert [n["label"] for n in overlay["nodes"] if n["type"] == "endpoint"] == ["/summary/badge"]
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "/summary/badge")
     assert code == 0 and "—serves→ /summary/badge [endpoint]" in captured.out and "api/r.py:L4" in captured.out
@@ -671,7 +672,7 @@ def test_code_graph가_심볼_인덱스를_쓰고_status와_check가_말한다(t
     assert code == 0, captured.out + captured.err
     assert [a for a in spawned if a[0] == "show" and a[1].endswith(".py")] == [], "파일마다 show를 띄웠다"
     assert sum(1 for a in spawned if a[:2] == ["cat-file", "--batch"]) == 1   # 레포 하나, 서브모듈 없음
-    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    bundle = tmp_path / "out" / "graph" / "mx"
     symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))
     assert {s["qualname"] for s in symbols["symbols"] if s["kind"] == "module"} >= {"processor.handler", "sink.writer", "api.r"}
     assert (bundle / "edges.json").exists() and "심볼" in captured.err
@@ -726,7 +727,7 @@ def test_code_graph가_채워진_공유_서브모듈까지_인덱싱해_소비_�
     config_root = _flow_tree_with_shared(tmp_path)
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
     assert code == 0, captured.out + captured.err
-    bundle = tmp_path / "out" / "graph" / "mx-gumi"
+    bundle = tmp_path / "out" / "graph" / "mx"
     symbols = json.loads((bundle / "symbols.json").read_text(encoding="utf-8"))["symbols"]
     edges = json.loads((bundle / "edges.json").read_text(encoding="utf-8"))["edges"]
     q = {s["id"]: s["qualname"] for s in symbols}
@@ -770,3 +771,135 @@ def test_code_callers_path_uses가_인덱스로_역질문에_답한다(tmp_path,
 
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "없는이름")
     assert code == 1 and "없다" in captured.out
+
+
+# ── 11e-2 — 번들은 GBM 하나, 사이트는 덮은 값만 ─────────────────────────
+
+def _run_gbm(config_root, tmp_path, monkeypatch, capsys, *argv):
+    """`--fct` 없이 — GBM 전체."""
+    from src.__main__ import main
+
+    set_real_config_env(monkeypatch)
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        *argv, "--gbm", "mx"])
+    code = main()
+    return code, capsys.readouterr()
+
+
+def _two_site_tree(tmp_path):
+    """gumi·sevt 두 사이트. 사이트 층은 `group_id`만 덮는다 — 사내 모양(이름은 GBM 층, 사이트는 고르는 층)."""
+    url = "https://git.example.com/team/dt-core"
+    root = tmp_path / "checkout"
+    _flow_repo(root, origin=url)
+    (root / "config" / "factories" / "sevt").mkdir(parents=True)
+    (root / "config" / "factories" / "sevt" / "common.json").write_text(json.dumps({"lines": ["S1"]}), encoding="utf-8")
+    (root / "config" / "factories" / "sevt" / "mx.json").write_text(
+        json.dumps({"infra": {"kafka": {"consumer": {"group_id": "sevt-mx-core"}}}}), encoding="utf-8")
+    (root / "config" / "factories" / "gumi" / "mx.json").write_text(
+        json.dumps({"infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}}), encoding="utf-8")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "sites", cwd=root)
+    config_root = _tree(tmp_path, repo_path=str(root), url=url,
+                        services={"processor": {"repo": REPO, "role": "가공한다"},
+                                  "sink": {"repo": REPO, "role": "저장한다"}},
+                        config_paths=LAYERS, sites=(("mx", "gumi"), ("mx", "sevt")))
+    # 우리 쪽 등재 항목이 한 사이트에만 있는 경우 — 끝점 노드는 GBM 번들에 한 번 서므로 합집합이어야 한다.
+    (config_root / "fct" / "sevt").mkdir(parents=True)
+    (config_root / "fct" / "sevt" / "mx.json").write_text(json.dumps(
+        {"infra": {"rest": {"base_url": "https://api.example.com",
+                            "entries": {"sevt_only": {"method": "GET", "path": "/sevt/only"}}}}}), encoding="utf-8")
+    return config_root
+
+
+def test_code_graph는_GBM_하나에_번들을_만들고_사이트는_덮은_값만_적는다(tmp_path, monkeypatch, capsys, clock):
+    """사이트당 20분이던 것의 답. 인덱스·사슬·오버레이는 GBM 층 값으로 한 번, 사이트 층은 git 없이 스냅샷에서
+    병합해 다른 값만 `sites/<fct>.json`에."""
+    from src.__main__ import _code_if_ready
+    from src.config.loader import load_site_config
+    from src.infrastructure.git_reader import RealCodeReader
+    from src.knowledge import flow
+
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _two_site_tree(tmp_path)
+    spawned, real = [], RealCodeReader._git_bytes
+
+    async def counting(self, repo, args, **kw):
+        spawned.append(list(args))
+        return await real(self, repo, args, **kw)
+
+    monkeypatch.setattr(RealCodeReader, "_git_bytes", counting)
+    code, captured = _run_gbm(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    bundle = tmp_path / "out" / "graph" / "mx"
+    assert bundle.is_dir() and not (tmp_path / "out" / "graph" / "mx-gumi").exists()
+    meta = json.loads((bundle / "meta.json").read_text(encoding="utf-8"))
+    assert meta["sites"] == ["gumi", "sevt"] and len(meta["commits"][REPO]) == 40
+    overlay = json.loads((bundle / "overlay.json").read_text(encoding="utf-8"))
+    labels = {n["label"] for n in overlay["nodes"]}
+    assert "mx-core" in labels and "gumi-mx-core" not in labels and "sevt-mx-core" not in labels
+    sites = {fct: json.loads((bundle / "sites" / f"{fct}.json").read_text(encoding="utf-8")) for fct in ("gumi", "sevt")}
+    assert [(r["key_path"], r["value"]) for r in sites["gumi"]] == [("infra.kafka.consumer.group_id", "gumi-mx-core")]
+    assert [(r["key_path"], r["value"]) for r in sites["sevt"]] == [("infra.kafka.consumer.group_id", "sevt-mx-core")]
+    # 사이트 층은 스냅샷에서 — config 파일을 git에 다시 묻지 않는다(사이트 28 × 서비스 × 층).
+    assert [a for a in spawned if a[0] == "show" and "config/" in a[1]] == [], "config 층을 show로 읽었다"
+    assert "사이트 2" in captured.out and "gumi" in captured.out and "sevt" in captured.out
+    # 조사는 GBM 번들에 그 사이트의 값을 입혀 받는다.
+    for fct, mine, other in (("gumi", "gumi-mx-core", "sevt-mx-core"), ("sevt", "sevt-mx-core", "gumi-mx-core")):
+        site, _ = load_site_config(config_root, "mx", fct, env={})
+        code_, _, graph, note = _code_if_ready(site, "mx", fct, knowledge_root=tmp_path / "knowledge",
+                                               clock=clock, graph_dir=bundle)      # uses()가 봉투에 시각을 찍는다
+        assert graph is not None, note
+        names = flow.known_names(graph).split("\n")
+        assert mine in names and other not in names and "mx-core" not in names
+        assert "사이트 값 1개" in note
+        # 인덱스의 함수별 자원도 그 사이트의 이름이다 — 리드가 <데이터 흐름>에서 본 이름으로 `code.uses`를 물으면 답이 와야 한다.
+        got = asyncio.run(code_.uses(mine))
+        assert got.status == "ok" and "sink.writer.run" in got.data, got.error
+        heads = [line for line in got.data.splitlines() if line.endswith("[group]")]
+        assert heads == [f"{mine} [group]"]                            # GBM 값 `mx-core`는 자원 이름에 안 남는다
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "gumi-mx-core")   # --fct gumi
+    assert code == 0 and "sink.writer.run" in captured.out, captured.out + captured.err
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "mx-core")
+    # 정확한 이름이 없으니 부분 일치로 — 보여 주는 이름은 그 사이트의 것이다.
+    assert code == 0 and "  gumi-mx-core [group]" in captured.out and "  mx-core [group]" not in captured.out
+
+
+def test_끝점_등재는_GBM의_사이트_전부를_합친다(tmp_path, monkeypatch, capsys):
+    """`code graph`는 사이트 하나를 골라 config를 병합한다(`_code_site`). 그 사이트에 없는 등재 항목이 다른 사이트에
+    있으면 끝점 노드가 빠진다 — 번들이 GBM 하나가 된 뒤로는 모든 사이트의 항목을 합쳐야 한다."""
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _two_site_tree(tmp_path)
+    code, captured = _run_gbm(config_root, tmp_path, monkeypatch, capsys, "code", "graph")   # 고른 사이트는 gumi
+    assert code == 0, captured.out + captured.err
+    overlay = json.loads((tmp_path / "out" / "graph" / "mx" / "overlay.json").read_text(encoding="utf-8"))
+    endpoints = {n["label"]: n for n in overlay["nodes"] if n["type"] == "endpoint"}
+    assert "/sevt/only" in endpoints and endpoints["/sevt/only"]["entry"] == "sevt_only"
+
+
+def test_사이트_파일이_없으면_GBM_값_그대로_싣고_말한다(tmp_path, monkeypatch, capsys):
+    from src.__main__ import _code_if_ready
+    from src.config.loader import load_site_config
+    from src.knowledge import flow
+
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _two_site_tree(tmp_path)
+    _run_gbm(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    bundle = tmp_path / "out" / "graph" / "mx"
+    (bundle / "sites" / "sevt.json").unlink()
+    site, _ = load_site_config(config_root, "mx", "sevt", env={})
+    _, _, graph, note = _code_if_ready(site, "mx", "sevt", knowledge_root=tmp_path / "knowledge",
+                                       clock=lambda: None, graph_dir=bundle)
+    assert graph is not None and "mx-core" in flow.known_names(graph).split("\n")
+    assert "사이트 덮어쓰기 없음" in note and "code graph" in note
+
+
+def test_code_status와_flow는_그_사이트의_값으로_말한다(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GRAPHIFY_BIN", str(tmp_path / "없는-graphify"))
+    config_root = _two_site_tree(tmp_path)
+    _run_gbm(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")      # --fct gumi
+    assert code == 0 and "graph" + "/mx" in captured.out.replace("\\", "/")
+    assert "사이트 gumi" in captured.out and "덮은 값 1" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "sink")
+    assert code == 0 and "gumi-mx-core" in captured.out and "sevt-mx-core" not in captured.out

@@ -83,6 +83,9 @@ class DeployedCode(DeployedCodePort):
         # 심볼 인덱스(11d)와 그 질의 그래프 — 같은 번들에서 같은 신선도로 붙는다. 질의 그래프는 한 번만 만든다.
         self._index = None
         self._qgraph = None
+        # 레포 스냅샷(11e) — `(repo, commit)` → `경로 → 본문`. 커밋으로 주소가 매겨져 안 변하므로 한 번만 받는다.
+        # `code graph`가 사이트 28개의 config 층을 병합할 때 여기서 읽는다 — git은 레포당 한 번이다.
+        self._snapshots: dict[tuple[str, str], dict[str, str] | None] = {}
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -262,9 +265,90 @@ class DeployedCode(DeployedCodePort):
             hits += parse_grep(repo, commit, got.data)
         return hits, notes
 
+    async def snapshot_for(self, repo: str) -> dict[str, str] | None:
+        """그 레포의 배포 커밋 스냅샷. 못 받으면 None — 호출자가 `show`로 간다."""
+        commit = self.pinned()[repo]
+        key = (repo, commit)
+        if key not in self._snapshots:
+            got = await self._reader.snapshot(repo, commit)
+            self._snapshots[key] = got.data if got.status == "ok" and isinstance(got.data, dict) else None
+        return self._snapshots[key]
+
+    def _layer_paths(self, fct: str) -> list[str]:
+        """그 사이트가 볼 층. `fct=""`는 **GBM 층만**(`{fct}`가 든 경로를 뺀다) — 그래프의 기준값이다."""
+        if fct:
+            return self._topology.resolved_config_paths(self._gbm, fct)
+        return [p.replace("{gbm}", self._gbm) for p in self._topology.config_paths if "{fct}" not in p]
+
+    async def _layers_in(self, service: str, fct: str):
+        """`_layers`와 같은 `[(경로, 원문, 값)]`을 **스냅샷에서** — 사이트 28개 × 서비스 × 층을 git에 다시 묻지
+        않기 위해서다. 스냅샷이 없으면 그 경로들만 `show`로 읽는다(같은 결과, 느릴 뿐). 못 읽으면 실패 `ProbeResult`."""
+        source = f"code.config {service}" + (f" @{fct}" if fct else " @gbm")
+        resolved = self._resolve(service, source)
+        if isinstance(resolved, ProbeResult):
+            return resolved
+        known, commit, _ = resolved
+        wanted = self._layer_paths(fct)
+        if not wanted:
+            return ProbeResult.failed("config_paths가 선언돼 있지 않다", source=source, clock=self._clock)
+        snap = await self.snapshot_for(known.repo)
+        layers = []
+        for path in wanted:
+            if snap is not None:
+                text = snap.get(path)
+            else:
+                got = await self._reader.show(known.repo, commit, path, whole=True)
+                text = got.data if got.status == "ok" and got.envelope.complete else None
+            if text is None:
+                continue                    # 없는 층은 정상이다(층은 선택)
+            value, _ = parse_layer(path, text)
+            if value is not None:
+                layers.append((path, text, value))
+        if not layers:
+            return ProbeResult.failed(f"쓸 수 있는 config 층이 없다 — 찾은 자리: {', '.join(wanted)}",
+                                      source=source, clock=self._clock)
+        return layers
+
+    async def names_for(self, fct: str) -> tuple[list[Name], list[str]]:
+        """`flow_names`와 같은 이름들을 **그 사이트의 층**(스냅샷)에서. `fct=""`면 GBM 층만."""
+        found: dict[tuple, Name] = {}
+        holders: dict[tuple, set[str]] = {}
+        evidence: dict[tuple, list] = {}
+        problems = []
+        for service in sorted(self._topology.services):
+            got = await self._layers_in(service, fct)
+            if isinstance(got, ProbeResult):
+                problems.append(f"{service}: {got.error}")
+                continue
+            merged = merge_target([(path, value) for path, _, value in got])
+            for n in names_from_config(merged, self._topology.flow.sources):
+                key = (n.kind, n.value, n.key_path)
+                found.setdefault(key, n)
+                holders.setdefault(key, set()).add(service)
+                where = _evidence(got, n.value)
+                if where:
+                    evidence.setdefault(key, []).append((service, *where))
+        return ([replace(n, services=tuple(sorted(holders[k])), evidence=tuple(sorted(evidence.get(k, []))))
+                 for k, n in found.items()], problems)
+
+    async def site_overrides(self, fct: str, base: list[Name]) -> list[dict]:
+        """그 사이트 층이 GBM 기준(`base`)과 **다르게** 정한 값만 — `sites/<fct>.json`의 내용. 행의 `base`는 그 키의
+        GBM 값(GBM 층에 없던 키면 None): 그래프 노드는 `key_path`로 찾지만 심볼 인덱스의 함수별 자원은 이름뿐이라,
+        조사 때 인덱스 쪽도 입히려면 "무엇이 무엇으로"가 행에 있어야 한다(`flow.site_renames`)."""
+        mine, _ = await self.names_for(fct)
+        base_by = {(n.kind, n.key_path): n.value for n in base}
+        rows = []
+        for n in sorted(mine, key=lambda n: (n.kind, n.key_path, n.value)):
+            if base_by.get((n.kind, n.key_path)) == n.value:
+                continue
+            rows.append({"kind": n.kind, "key_path": n.key_path, "value": n.value,
+                         "base": base_by.get((n.kind, n.key_path)),
+                         "services": sorted(n.services), "relation": n.relation})
+        return rows
+
     def source_for(self, repo: str) -> "_GitSource":
         """추적기(`knowledge.trace`)의 `Source` — 그 레포의 배포 커밋에서 파일과 리터럴 grep."""
-        return _GitSource(self._reader, repo, self.pinned()[repo])
+        return _GitSource(self._reader, repo, self.pinned()[repo], shared=self.snapshot_for)
 
     # ── 서비스 해석 ──────────────────────────────────────────────
 
@@ -434,14 +518,19 @@ class _GitSource:
     20분의 정체였다. 스냅샷을 못 받으면(옛 git·시간 초과) 예전처럼 파일별 `show`로 간다 — 느려질 뿐
     결과는 같다."""
 
-    def __init__(self, reader: CodeReaderPort, repo: str, commit: str):
+    def __init__(self, reader: CodeReaderPort, repo: str, commit: str, *, shared=None):
         self._reader, self._repo, self._commit = reader, repo, commit
         self._snapshot: dict[str, str] | None = None
         self._tried = False
+        # `DeployedCode.snapshot_for` — 어댑터가 이미 받은 스냅샷을 같이 쓴다(레포당 archive 한 번).
+        self._shared = shared
 
     async def _snap(self) -> dict[str, str] | None:
         if not self._tried:
             self._tried = True
+            if self._shared is not None:
+                self._snapshot = await self._shared(self._repo)
+                return self._snapshot
             got = await self._reader.snapshot(self._repo, self._commit)
             if got.status == "ok" and isinstance(got.data, dict):
                 self._snapshot = got.data

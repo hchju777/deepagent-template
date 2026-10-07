@@ -1,4 +1,4 @@
-"""흐름 그래프의 사람용 한 장 — `output/graph/<gbm>-<fct>/flow.html`.
+"""흐름 그래프의 사람용 한 장 — `output/graph/<gbm>/flow.html`.
 
 **외부 참조가 없다.** graphify의 `graph.html`은 그림 라이브러리(vis-network)를 unpkg.com에서
 받아 오게 돼 있어 사내망에서는 빈 화면이다. 팀원에게 파일 하나만 건네고 어떤 설치도

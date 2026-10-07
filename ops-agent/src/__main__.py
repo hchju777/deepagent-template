@@ -890,7 +890,7 @@ def cmd_case_investigate(args, env) -> int:
         from src.knowledge import flow
         code, services, flow_graph, graph_note = _code_if_ready(
             site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock,
-            graph_dir=_graph_dir(args, env, gbm, fct))
+            graph_dir=_graph_dir(args, env, gbm))
         built["code"] = code.describe() if code else "코드 없음"
         built["graph"] = graph_note
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
@@ -1161,7 +1161,7 @@ def cmd_code_sync(args, env) -> int:
     """**여기서만 네트워크를 탄다.** 사내 밖에서는 실패하고, `code plan`을 안내한다."""
     from src.knowledge.checkout import status_of, sync
 
-    site, gbm, fct, _ = _code_site(args, env)
+    site, gbm, fct, fcts = _code_site(args, env)
     repos = list(site.code.repos)
     failed = 0
     for repo in repos:
@@ -1175,12 +1175,13 @@ def cmd_code_sync(args, env) -> int:
               file=sys.stderr)
         return 1
     # 커밋이 새로 왔으니 그래프도 그 커밋으로. sync와 graph는 같은 조립을 쓴다.
-    return _build_graph(args, env, site=site, gbm=gbm, fct=fct)
+    return _build_graph(args, env, site=site, gbm=gbm, fct=fct, fcts=fcts)
 
 
-def _graph_dir(args, env, gbm: str, fct: str) -> Path:
+def _graph_dir(args, env, gbm: str) -> Path:
+    """번들 자리 — GBM 단위(11e-2). 사이트는 그 안의 `sites/<fct>.json`이다."""
     from src.knowledge.graph_build import bundle_dir
-    return bundle_dir(Path(load_app_config(args.config_root, env=env).output_dir), gbm, fct)
+    return bundle_dir(Path(load_app_config(args.config_root, env=env).output_dir), gbm)
 
 
 def _resolved_commits(site, code) -> tuple[dict[str, str], list[str]]:
@@ -1204,8 +1205,22 @@ def _rest_entries(site) -> dict[str, tuple[str, str]]:
             for name, entry in (rest.entries.items() if rest is not None else [])}
 
 
-def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
-    """흐름 오버레이(+ graphify 심볼 그래프)를 배포 커밋에 박는다. **네트워크 없음.**
+def _entries_across(args, env, gbm: str, fcts: list[str], site) -> dict[str, tuple[str, str]]:
+    """GBM의 사이트 전부의 등재 항목 합집합 — 끝점 노드는 GBM 번들에 한 번 서므로 어느 사이트에만 있는 항목도 든다."""
+    entries = dict(_rest_entries(site))
+    for fct in fcts:
+        try:
+            other, _ = load_site_config(args.config_root, gbm, fct, env=env)
+        except (ConfigError, FileNotFoundError):
+            continue
+        for name, pair in _rest_entries(other).items():
+            entries.setdefault(name, pair)
+    return entries
+
+
+def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None = None) -> int:
+    """흐름 오버레이(+ graphify 심볼 그래프)를 배포 커밋에 박는다. **네트워크 없음.** 번들은 GBM 하나(11e-2) —
+    이름은 GBM 층에서, 사이트(`fcts`)마다는 그 층이 덮은 값만 `sites/<fct>.json`에.
 
     `code sync` 끝과 `code graph`가 같은 길을 쓴다. 규율 8과 같은 이유 — 조립을 두 벌
     두면 한쪽이 빠진다.
@@ -1232,7 +1247,11 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         print(f"  [{time.monotonic() - t0:6.1f}s] {msg}", file=sys.stderr, flush=True)
 
     async def gather():
-        names, problems = await code.flow_names()
+        # GBM 층만으로 뽑은 이름이 그래프의 기준값이다(11e-2). 사이트 층은 값을 덮을 뿐이라 따로 입힌다.
+        names, problems = await code.names_for("")
+        if not names:
+            names, more = await code.names_for(fct)
+            problems = problems + more + [f"GBM 층에 이름이 없어 {fct} 층을 기준으로 삼았다"]
         patterns = sorted({p for name in names for p in name.patterns})
         progress(f"이름 {len(names)}개 · 패턴 {len(patterns)}개 · 레포 {len(code.pinned())}개")
         table, notes = await code.flow_hits(patterns, progress=progress)
@@ -1246,7 +1265,8 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
                            hits_for=lambda p: table.get(p, []), commits=commits)
     # 끝점 층 — 우리 등재 항목의 path와 코드의 라우트 선언에서. 사람이 적지 않는다.
     routes = flow.routes_from_hits(route_lines)
-    overlay = flow.add_endpoints(overlay, routes=routes, entries=_rest_entries(site))
+    fcts = list(fcts or [fct])
+    overlay = flow.add_endpoints(overlay, routes=routes, entries=_entries_across(args, env, gbm, fcts, site))
     counts = flow.summary(overlay)
     progress(f"끝점 {counts['endpoints']}개 (등재 {counts['endpoints_registered']} · "
              f"서빙 미상 {counts['endpoints_unserved']})")
@@ -1275,7 +1295,7 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
     counts = flow.summary(overlay)
     progress(f"끝점 추적: 자원까지 이어진 {counts['endpoints_traced']}개 · 막힌 {counts['endpoints_blocked']}개")
 
-    out_dir = _graph_dir(args, env, gbm, fct)
+    out_dir = _graph_dir(args, env, gbm)
     binary = gb.find_graphify()
     if not binary:
         progress("graphify 없음 — 심볼 그래프는 건너뛴다 (requirements-graph.txt)")
@@ -1294,22 +1314,29 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
         if report:
             reports[repo.name] = report
     merged = gb.merge_graphs(overlay, symbol_graphs)
-    meta = gb.GraphMeta(gbm=gbm, fct=fct, commits=commits, built_at=gb.now_text(clock),
-                        graphify=gb.graphify_version(binary), notes=problems + states)
+    meta = gb.GraphMeta(gbm=gbm, fct="", commits=commits, built_at=gb.now_text(clock),
+                        graphify=gb.graphify_version(binary), notes=problems + states, sites=fcts)
     gb.write_bundle(out_dir, overlay=overlay, merged=merged, meta=meta)
     gb.write_index(out_dir, symbol_index)
+    # 사이트마다 그 층이 GBM 값을 덮은 것만 — 스냅샷에서 병합하므로 git은 안 는다(사내 28사이트 × 서비스 × 층).
+    site_counts: dict[str, int] = {}
+    for one in fcts:
+        rows = asyncio.run(code.site_overrides(one, names))
+        gb.write_site(out_dir, one, rows)
+        site_counts[one] = len(rows)
+    progress(f"사이트 {len(fcts)}개 덮은 값: " + " · ".join(f"{f} {n}" for f, n in site_counts.items()))
     shutil.rmtree(out_dir / "worktrees", ignore_errors=True)      # 빈 껍데기만 남는다
     progress("그래프 씀")
 
     # 사람용. flow.html은 항상(오버레이만으로 그린다, 외부 참조 0). 리포트와 wiki는 graphify가 있을 때.
     from src.presentation import flow_html
     (out_dir / "flow.html").write_text(
-        flow_html.render(overlay, title=f"{gbm}/{fct}", built_at=meta.built_at, commits=commits),
+        flow_html.render(overlay, title=gbm, built_at=meta.built_at, commits=commits),
         encoding="utf-8")
     # 코드 호출 흐름(11d 6c-1b) — 심볼 인덱스를 골라 펼쳐 보는 한 장. CLI 샘플 몇 개로는 안심이 안 된다는 사내 요청.
     from src.presentation import calls_html
     (out_dir / "calls.html").write_text(
-        calls_html.render(symbol_index, title=f"{gbm}/{fct}", built_at=meta.built_at, commits=commits,
+        calls_html.render(symbol_index, title=gbm, built_at=meta.built_at, commits=commits,
                           service_of=lambda s: flow.owner(s.file, s.repo, topology)[0]),
         encoding="utf-8")
     for repo_name, report in sorted(reports.items()):
@@ -1327,7 +1354,8 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
 
     summary = flow.summary(overlay)
     kinds = ", ".join(f"{k} {v}" for k, v in sorted(summary["kinds"].items()))
-    print(f"\n  그래프 {gbm}/{fct} → {out_dir}")
+    print(f"\n  그래프 {gbm} → {out_dir}")
+    print(f"       사이트 {len(fcts)}: " + " · ".join(f"{f}(덮은 값 {n})" for f, n in site_counts.items()))
     print(f"       graphify {meta.graphify} · " + " · ".join(states))
     print(f"       사람용: {' · '.join(human)}")
     print(f"       오버레이 노드 {summary['nodes']} · 엣지 {summary['links']} ({kinds})"
@@ -1347,11 +1375,11 @@ def _build_graph(args, env, *, site, gbm: str, fct: str) -> int:
 
 def cmd_code_graph(args, env) -> int:
     """지금 체크아웃으로 그래프를 다시 만든다 — sync 없이. **네트워크 없음.**"""
-    site, gbm, fct, _ = _code_site(args, env)
+    site, gbm, fct, fcts = _code_site(args, env)
     if not site.code.repos:
         print(f"  {gbm}: config에 target 코드 레포가 없다 — code.repos를 적어라")
         return 1
-    return _build_graph(args, env, site=site, gbm=gbm, fct=fct)
+    return _build_graph(args, env, site=site, gbm=gbm, fct=fct, fcts=fcts)
 
 
 def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
@@ -1360,7 +1388,7 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     from src.knowledge import flow
     from src.knowledge import graph_build as gb
 
-    out_dir = _graph_dir(args, env, gbm, fct)
+    out_dir = _graph_dir(args, env, gbm)
     print(f"\n  그래프 {out_dir}")
     got = gb.read_bundle(out_dir)
     if got is None:
@@ -1393,20 +1421,29 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
         calls = s["edges"].get("calls", {"exact": 0, "candidate": 0})
         print(f"       심볼 {s['symbols']} · 엣지 {s['edges_total']} (calls 확실 {calls['exact']} · 추정 "
               f"{calls['candidate']}) · 파싱 실패 {s['parse_errors']} · `code check`로 검증")
+    rows = gb.read_site(out_dir, fct)
+    listed = ", ".join(meta.sites) if meta.sites else "(옛 번들 — 사이트 파일 없음)"
+    print(f"       사이트 {fct}: " + (f"덮은 값 {len(rows)}개" if rows is not None
+                                   else f"파일 없음 — `code graph --gbm {gbm}`으로 다시 만든다")
+          + f" · 번들의 사이트: {listed}")
     for line in stale + problems:
         print(f"       ⚠ {line}")
     return 0
 
 
-def _symbol_index(args, env):
-    """번들의 심볼 인덱스와 그것이 낡았는지 — `code check`·`callers`·`path`·`uses`가 같이 쓴다. 없으면 None(말하고)."""
+def _symbol_index(args, env, *, site_values: bool = False):
+    """번들의 심볼 인덱스와 그것이 낡았는지 — `code check`·`callers`·`path`·`uses`가 같이 쓴다. 없으면 None(말하고).
+    `site_values`면 그 사이트 층이 덮은 값을 자원 이름에 입힌다(조사와 같은 조립). `code check`는 번들 그대로를 잰다."""
     from src.knowledge import graph_build as gb
 
     site, gbm, fct, _ = _code_site(args, env)
-    index = gb.read_index(_graph_dir(args, env, gbm, fct))
+    index = gb.read_index(_graph_dir(args, env, gbm))
     if index is None:
         print("  심볼 인덱스가 없다 — `python -m src code graph`로 만든다")
         return None
+    if site_values:
+        from src.knowledge import flow
+        index = index.renamed(flow.site_renames(gb.read_site(_graph_dir(args, env, gbm), fct) or []))
     try:
         code = _build_code(site, gbm, fct, knowledge_root=_knowledge_root(args), clock=_clock(args, env))
     except (ConfigError, FileNotFoundError) as exc:
@@ -1423,7 +1460,7 @@ def _query_setup(args, env):
     from src.knowledge.flow import owner
     from src.knowledge.loader import load_topology
 
-    got = _symbol_index(args, env)
+    got = _symbol_index(args, env, site_values=True)
     if got is None:
         return None
     index, _, gbm, stale = got
@@ -1568,10 +1605,11 @@ def cmd_code_trace(args, env) -> int:
     from src.knowledge import graph_build as gb
 
     _, gbm, fct, _ = _code_site(args, env)
-    got = gb.read_bundle(_graph_dir(args, env, gbm, fct))
+    got = gb.read_bundle(_graph_dir(args, env, gbm))
     if got is None:
         raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
     graph, _ = got
+    graph = flow.apply_site(graph, gb.read_site(_graph_dir(args, env, gbm), fct) or [])
     path = _shell_path(args.path, graph)
     node_id = flow.endpoint_id(path)
     if not any(n["id"] == node_id for n in graph["nodes"]):
@@ -1605,10 +1643,11 @@ def cmd_code_flow(args, env) -> int:
     from src.knowledge import graph_build as gb
 
     _, gbm, fct, _ = _code_site(args, env)
-    got = gb.read_bundle(_graph_dir(args, env, gbm, fct))
+    got = gb.read_bundle(_graph_dir(args, env, gbm))
     if got is None:
         raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
     graph, meta = got
+    graph = flow.apply_site(graph, gb.read_site(_graph_dir(args, env, gbm), fct) or [])
     args.name, args.to = _shell_path(args.name, graph), _shell_path(args.to, graph)
 
     def line(e) -> str:
@@ -1729,12 +1768,24 @@ def _code_if_ready(site, gbm: str, fct: str, *, knowledge_root, clock, graph_dir
         commits, _ = _resolved_commits(site, code)
         graph, note = _flow_graph_if_fresh(Path(graph_dir), commits)
         if graph is not None:
+            # 번들은 GBM 하나다(11e-2) — 이 사이트 층이 덮은 값을 입혀야 리드가 보는 이름(컨슈머 그룹 등)이 이 사이트 것이다.
+            from src.knowledge import flow as flowmod
+            from src.knowledge import graph_build as gbm_bundle
+            rows = gbm_bundle.read_site(Path(graph_dir), fct)
+            if rows is None:
+                note += f" · 사이트 덮어쓰기 없음(`code graph --gbm {gbm}`으로 다시 만든다)"
+            else:
+                graph = flowmod.apply_site(graph, rows)
+                note += f" · 사이트 값 {len(rows)}개"
             # 심볼 인덱스(11d)는 같은 번들에 같은 커밋으로 박혀 있다 — 그래프가 신선하면 인덱스도 신선하다.
             # 옛 번들(6a 전)엔 없다 — 그러면 역질문 action이 목록에서 빠진다(`briefing._hidden`).
             from src.knowledge import graph_build as gb
             index = gb.read_index(Path(graph_dir))
             if index is None:
                 note += " · 심볼 인덱스 없음(`code graph`로 다시 만든다)"
+            elif rows:
+                # 인덱스의 함수별 자원도 그 사이트의 이름으로 — 리드가 <데이터 흐름>에서 본 이름으로 `code.uses`를 묻는다.
+                index = index.renamed(flowmod.site_renames(rows))
     code.attach_flow_graph(graph)
     code.attach_index(index)
     return code, code.service_names(), graph, note

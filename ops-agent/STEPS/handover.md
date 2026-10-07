@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1471 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 353 사례 |
+| 테스트 | `1486 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 375 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -117,7 +117,7 @@ N회째)`(JSON을 못 읽어 다시 물음) 또는 `(거부 뒤 다시 물음)`(
    찍는다. 사내 config 모양은 기본 표(`FlowSpec.sources`)에 이미 맞춰 뒀다. graphify가
    있으면(`requirements-graph.txt`, 반입 절차는 README) 심볼 그래프까지, 없으면 오버레이만.
    조사에는 브리핑의 `<데이터 흐름>` 블록(config 층만, 배포 커밋과 같을 때만)과 `code.flow`
-   액션으로 들어간다. `code flow <이름>`·`code flow A --to B`로 사람이 본다. 팀원에게는 `output/graph/<gbm>-<fct>/flow.html`
+   액션으로 들어간다. `code flow <이름>`·`code flow A --to B`로 사람이 본다. 팀원에게는 `output/graph/<gbm>/flow.html`
    한 파일을 건넨다(외부 참조 0, 설치 불필요). 산출물은 `output/graph/`이고 git에
    안 들어간다(실제 이름이 든다).
 0. **사내 `config/app.json`의 `investigation.max_rounds`를 6으로.** 리포 기본값이 6으로
@@ -382,8 +382,10 @@ process/save/collect 555는 구현체 13개 넘는 메서드, 공유 라이브�
 조사가 어떻게 끝나든 생기고(llm_error·증거 0건은 코드가 degraded), verify가 인용·잘린 증거·component를
 LLM 없이 검사해 한 번 되묻고 그래도 안 되면 걷어내고 강등한다. 12a 리뷰 중에 사내 `code graph`가 사이트당
 20분인 것이 드러나 **11e(GBM 단위 그래프 번들, [step-11e-gbm-bundle.md](step-11e-gbm-bundle.md))를 끼워 넣었다**
-— 11e-1(인덱스가 커밋을 레포당 git 두 번, `ls-tree`+`cat-file --batch`로 받는다 — 사내 Windows에서 archive가 CRLF를 줘 바꿨다)은 됐고 11e-2(번들을 GBM 하나로, 사이트는 덮은 값만)가
-다음이다. 그다음 **12b**(보고서·이벤트). 11d에서 미룬 것: 6b-3
+— 11e-1(인덱스가 커밋을 레포당 git 두 번, `ls-tree`+`cat-file --batch`로 받는다 — 사내 Windows에서 archive가 CRLF를
+줘 바꿨다)과 11e-2(번들을 `output/graph/<gbm>/` 하나로, 사이트는 `sites/<fct>.json`에 덮은 값만, `code graph --gbm mx`
+한 번)가 됐다. 남은 것은 사내에서 한 번 돌린 시간과 `code check` 첫 줄(종료 판단 5)이다. 그다음 **12b**(보고서·이벤트).
+11d에서 미룬 것: 6b-3
 (구조적 구현체·DI 레지스트리·디스패치 표·하네스 D·graphify 병합), backlog ⑨·⑩. 시작하기 전에
 목적·손댈 파일·테스트할 것을 먼저 알려 주고, 내 확인을 받고 진행해라.
 

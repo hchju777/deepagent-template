@@ -107,6 +107,10 @@ CORE_FILES = {
     "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi"},
     "config/factories/gumi/mx.json": {
         "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}},
+    # 두 번째 사이트 — 11e-2의 "번들은 GBM 하나, 사이트는 덮은 값만"을 측정판에서 보기 위해서다.
+    "config/factories/sevt/common.json": {"lines": LINES, "site_code": "sevt"},
+    "config/factories/sevt/mx.json": {
+        "infra": {"kafka": {"consumer": {"group_id": "sevt-mx-core"}}}},
     "processor/handler.py": '''"""alarm_raw를 읽어 정규화한 뒤 alarm_main으로 낸다."""
 from shared_lib import normalize, now
 
@@ -143,6 +147,7 @@ API_FILES = {
         "redis_key": {"alarm_stats": {"key": "alarm:stats:{line}", "ttl": 30}},
         "api": {"alarm_window_min": 60, "badge_format": "compact"}},
     "config/factories/gumi/common.json": {"lines": LINES},
+    "config/factories/sevt/common.json": {"lines": LINES},
     # 사내 핸들러 모양(2026-09 확인): 캐시 키를 먼저 보고, 비면 저장소를 조회하고, 형식 같은 것은
     # config 이름으로 getattr해 고른다. 캐시만 읽는 핸들러로는 "핸들러에서 컬렉션까지 이어지나"를 잴 수 없다.
     "api/alarms.py": '''"""알람 화면 — alarm:stats:{line} 배지. 캐시가 비면 최근 alarm_window_min 분의 alarm_events에서 센다."""
