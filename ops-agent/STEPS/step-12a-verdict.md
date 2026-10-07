@@ -139,6 +139,41 @@ conclude → verify → (문제 없음 → END)
 - 되묻기·강등 경로는 이 판에서는 안 밟혔다(대역이 바로 맞게 냈다). 그 경로는 적대적 대본(위)과 노드·그래프 테스트가
   본다. n=1, haiku 대역 — 상한이지 예측이 아니다(11a).
 
+## 사내 실측(sevt, 10-07) — 리뷰 4번과 그 뒤
+
+실제 대상 + 실제 LLM + 11e 그래프로 두 판. **둘 다 r1 integrate에서 LLM 시간 초과 → degraded**라 판정은 비교하지
+못했다. 사내 AI가 트레이스를 읽고 진단한 열 가지를 코드로 대조한 결과(사실은 코드에서, 판단은 사람이):
+
+| # | 진단 | 코드 대조 | 처리 |
+|---|---|---|---|
+| 1 | 60초 × SDK 재시도 3 × 리드 재시도 2 = 한 호출 6분 | 기본 `timeout_s=60`·`max_retries=2`·`lead.RETRIES=1`, 트레이스에 걸린 초 없음 | **R1** |
+| 2 | frame이 예시를 베낌, `code.trace`를 안 씀 | frame 예시는 접수 프로브 읽기 + 탐색 읽기(설계), `code.trace`는 integrate 예시의 칸 — 거기까지 못 갔다 | 1의 결과. R1 뒤 재측정 |
+| 3 | `code.trace`가 `POST /path` 거부 | 문자열 그대로 노드 id | **R1** |
+| 4 | `code.grep`이 README만 400줄 | 트리 순서로 자른다 | R2 — 코드 줄 먼저, 문서 줄 뒤 |
+| 5 | `code.config` 통째 덤프 | 병합 전체를 돌려준다 | R2 — `key` 인자·키 지도 |
+| 6 | `rest.query` 첫 항목에서 잘림 | 목록 응답을 들여쓴 JSON으로 | R2 — 항목당 한 줄, 대상 단어 든 항목 먼저 |
+| 7 | `<데이터 흐름>` 대상 키 탈락·접수 끝점 줄 소실 | `_MAX_NAMES=8`, `budget=800`, 접수 끝점은 씨앗일 뿐 | R2 — 접수 끝점 고정, 증상 단어 겹치는 이름 먼저 |
+| 8 | 그래프 방향(kafka 명령 target_resource가 reads)·동적 키 과대 귀속 | 동사는 옆 줄 어휘, 동적 키는 템플릿 매칭 | R3 — 사내 코드 줄 모양 두 개 받은 뒤 |
+| 9 | degraded에 `검증 통과` | `verify_note`가 되묻기 0회를 통과로 | **R1** |
+| 10 | NO_PROXY 밖이면 `RemoteProtocolError`만 | REST 프로버가 예외를 문자열로만 | **R1** |
+
+### R1 (10-07) ✅ — 재측정을 막는 넷
+
+- 기본값 `timeout_s` 60 → **300**, `max_retries` 2 → **0**(리드가 전송 오류를 한 번 되묻으니 SDK 재시도는 중복). 리드는
+  **시간 초과면 되묻지 않는다**(`_is_timeout` — `APITimeoutError`·`ReadTimeout`·`TimeoutError`가 다 이름에 담는다) — 같은
+  상한을 또 기다릴 이유가 없다. `llm_errors` 사유에 `시간 초과 (N초)`가 남고 "N회 시도 실패"는 실제 횟수다.
+- 호출마다 걸린 초가 트레이스로 간다: `ask_json`의 `on_exchange`에 여섯째 인자 `latency_s`, 트레이스 파일 머리에
+  `응답: N초`, `case trace` 머리줄에 `· 응답 N초`(옛 파일은 그대로 읽힌다).
+- `flow.endpoint_path`: `POST /path`·`get /path`의 메서드 접두를 뗀다 — `code.trace`(리드)와 `code trace`(CLI) 둘 다.
+- degraded 판정은 `검증 해당 없음`(코드가 찍고 verify를 안 거친다).
+- REST 프로버: 전송 계층 오류에 프록시 env가 있고 호스트가 NO_PROXY 밖이면 `프록시 경유 의심: … NO_PROXY에 <host>를
+  넣어라`를 덧붙인다(`urllib`의 bypass 규칙 그대로). doctor·patrol·조사가 같은 문자열을 본다.
+- 테스트 먼저(RED 8 → GREEN): `test_schema_llm` 1, `test_lead` 2, `test_cli` 1(트레이서), `test_trace_digest` 1,
+  `test_deployed_code` 1(기존 확장), `test_verdict` 1, `test_rest_prober` 2. 스윕 +11.
+- 사내 확인: `app.json`의 `llm.timeout_s`·`max_retries`가 **명시돼 있으면 그 값이 이긴다** — 60이면 300, 재시도는 0으로
+  맞춘 뒤 같은 판을 한 번 더([review-12a-4.md](review-12a-4.md) 그대로). 통과 기준: ④의 `끝난 이유`가 `llm_error`가
+  아니고 트레이스 머리의 `응답 N초`가 보인다.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

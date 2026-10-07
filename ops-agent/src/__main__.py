@@ -825,12 +825,14 @@ def _make_tracer(case_id: str, *, folder: Path):
     seq = itertools.count(1)
     written: list[Path] = []
 
-    def trace(node: str, round_no: int, prompt: str, text, error) -> None:
+    def trace(node: str, round_no: int, prompt: str, text, error, latency_s=None) -> None:
         path = folder / f"{next(seq):02d}-r{round_no}-{node}.md"
         verdict = "읽었다" if error is None else f"**못 읽었다** — {error}"
+        # 호출이 걸린 초 — 사내 실측 두 판이 시간 초과로 죽었는데 어느 호출이 몇 초였는지가 아무 데도 없었다.
+        took = f"응답: {latency_s:.1f}초\n" if latency_s is not None else ""
         path.write_text(
             f"# {case_id} · {node} · 라운드 {round_no}\n\n"
-            f"결과: {verdict}\n\n"
+            f"결과: {verdict}\n{took}\n"
             f"## 물어본 것 ({len(prompt):,}자)\n\n````\n{prompt}\n````\n\n"
             f"## 날것 응답\n\n````\n{'(응답 없음 — 호출 자체가 실패했다)' if text is None else text}\n````\n",
             encoding="utf-8")
@@ -1615,7 +1617,7 @@ def cmd_code_trace(args, env) -> int:
         raise SystemExit("그래프가 없다 — `python -m src code graph`로 만든다")
     graph, _ = got
     graph = flow.apply_site(graph, gb.read_site(_graph_dir(args, env, gbm), fct) or [])
-    path = _shell_path(args.path, graph)
+    path = flow.endpoint_path(_shell_path(args.path, graph) or "")
     node_id = flow.endpoint_id(path)
     if not any(n["id"] == node_id for n in graph["nodes"]):
         print(f"  {path}: 그래프의 끝점에 없다 — `code flow`나 등재 항목의 path 그대로 쓴다"

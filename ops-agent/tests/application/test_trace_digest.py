@@ -253,3 +253,14 @@ def test_conclude_트레이스는_판정을_한_줄로_찍는다():
     assert "증거에 없는 id ghost.e1" in text
     assert "리드가 낸 것" not in text
     assert "예시가 보여준 것" not in text and "이미 물은 것" not in text   # 읽기를 내는 턴이 아니다
+
+
+def test_요약_머리줄에_호출이_걸린_초가_붙는다():
+    """사내 실측 두 판이 시간 초과로 죽었는데 어느 호출이 몇 초였는지는 아무 데도 없었다 — 트레이스 파일의 `응답: N초`를
+    요약 머리줄로 올린다. 없는 옛 파일은 그대로 읽힌다."""
+    name, text = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    with_latency = text.replace("결과: 읽었다\n", "결과: 읽었다\n응답: 61.2초\n")
+    head = [line for line in digest([(name, with_latency)]) if line.startswith("\nr2") or line.startswith("r2")]
+    assert head and "응답 61.2초" in head[0]
+    old = [line for line in digest([(name, text)]) if "r2 integrate" in line]
+    assert old and "응답" not in old[0]

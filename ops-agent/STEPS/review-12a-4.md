@@ -22,6 +22,8 @@ GBM 단위가 되어(`code graph --gbm mx` 한 번, 사내 203초) 실제 사이
 
 - `code graph --gbm mx`가 돼 있다(`code status --gbm mx --fct sevt`에 그래프 절이 `✅`로 보이고 `사이트 sevt: 덮은 값 N개`가
   찍힌다). 낡음(`⚠ 낡음`)이면 `code graph --gbm mx`를 먼저 다시 돌린다.
+- `config/app.json`의 `llm`에 `timeout_s`·`max_retries`가 **명시돼 있으면 그 값이 이긴다.** 생각하는 모델은 한 답에 60초가
+  모자라 두 판이 r1에서 죽었다 — 명시돼 있으면 `timeout_s: 300`, `max_retries: 0`으로(없으면 그게 기본값이다).
 - 순찰이 sevt에서 **finding을 내야** 케이스가 열린다. 사람이 손으로 케이스를 여는 CLI는 아직 없다. finding 0건이면
   4번은 지금 못 돌린다 — 그 사실 자체가 보고다(아래 형식 ②에서 멈춘다).
 
@@ -49,7 +51,7 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 
 | 보는 곳 | 기대 | 아니면 |
 |---|---|---|
-| `라운드 N — 끝난 이유: …` | `decision`(리드가 스스로 conclude) 또는 `max_rounds` | `llm_error`·`no_runnable`이면 그 윗줄들을 같이 옮긴다 |
+| `라운드 N — 끝난 이유: …` | `decision`(리드가 스스로 conclude) 또는 `max_rounds` | `llm_error`면 사유 줄(`시간 초과 (N초) — …`)과 트레이스 파일 머리의 `응답: N초`를 같이 옮긴다 |
 | `판정 <종류> (<확신>) — …` 블록 | 종류가 `logic_bug/data_loss/config_error/stale_data/external/inconclusive/degraded` 중 하나, `원인 <컴포넌트>`가 토폴로지의 서비스 이름 | `판정 없음`이면 결함 — 전체 출력을 옮긴다 |
 | 같은 블록의 `검증 …` 줄 | `검증 통과` / `검증 통과 (재작성 1회)` / `검증 미통과 → 강등` | 그 외 문구가 있으면 그대로 옮긴다 |
 | `태스크` 목록 | `code.flow`·`code.uses`·`code.callers`·`code.trace` 중 하나 이상 | 하나도 없으면 "그래프 액션 0" — 브리핑에 `<데이터 흐름>`이 실렸는지 trace로 본다 |
@@ -67,7 +69,7 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 ③ patrol open 케이스 줄: 🆕 <id> mx/sevt <점검> …                 (실제 이름은 자리표시자로)
 ④ investigate: 라운드 N — 끝난 이유: … / 판정 … / 검증 … / 그래프 액션: code.flow 1·code.uses 2 (없으면 0)
 ⑤ 증거 N건 · 인용 id 전부 목록에 있음 (예/아니오) · 계약 위반 N
-⑥ 걸린 시간(대략) 과 라운드 수
+⑥ 걸린 시간(대략) · 라운드 수 · `case trace --brief` 머리줄의 `응답 N초` 중 가장 큰 것
 ⑦ 사람 판단 한 줄: 판정이 아는 사실과 맞나 (맞다 / 어긋난다 — 어떻게)
 ```
 

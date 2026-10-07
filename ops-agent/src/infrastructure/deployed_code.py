@@ -156,6 +156,7 @@ class DeployedCode(DeployedCodePort):
         if self._flow_graph is None:
             return ProbeResult.failed("흐름 그래프가 없다 — `python -m src code graph`로 만든다",
                                       source=source, clock=self._clock)
+        endpoint = flowgraph.endpoint_path(endpoint)
         node_id = flowgraph.endpoint_id(endpoint)
         if not any(n["id"] == node_id for n in self._flow_graph.get("nodes", [])):
             return ProbeResult.failed(

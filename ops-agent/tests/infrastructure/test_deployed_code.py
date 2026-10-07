@@ -289,6 +289,9 @@ async def test_code_trace는_붙인_그래프의_끝점_사슬을_주고_없으�
     assert untraced.status == "error" and "추적" in untraced.error
     unknown = await flow_code.trace("/nope")
     assert unknown.status == "error" and "끝점에 없다" in unknown.error
+    # 등재 항목은 `POST /path` 모양으로 보인다 — 사내 실측에서 리드가 그대로 넘겨 거부당했다. 메서드는 떼고 맞춘다.
+    assert (await flow_code.trace("POST /summary/badge")).data == got.data
+    assert (await flow_code.trace("get /summary/badge")).data == got.data
 
 
 async def test_흐름_히트는_배포_커밋의_git_grep이다(flow_code):

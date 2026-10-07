@@ -141,7 +141,9 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     last = Parsed(False, error="시도하지 않았다")
     asked = prompt
     transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
+    attempts = 0
     for attempt in range(RETRIES + 1):
+        attempts = attempt + 1
         if attempt and transport:
             # 호출이 실패한 것은 모델이 틀린 것이 아니다. "앞의 답을 읽을 수 없었다:
             # OpenAIPermissionDeniedError…"를 붙여 다시 물으면 모델에게 오류 문자열을
@@ -152,7 +154,8 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         elif attempt:
             # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
             asked = repair_prompt(prompt, last.error or "알 수 없음")
-        text, failure = None, None
+        text, failure, latency = None, None, None
+        timed_out = False
         try:
             reply = await llm.ask(asked)
         except Exception as exc:                                    # noqa: BLE001
@@ -161,24 +164,41 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             transport = True
         else:
             transport = reply.status == "error"
+            latency = reply.latency_s
             if reply.status == "error":
                 last = Parsed(False, error=reply.error or "알 수 없는 LLM 오류")
+                timed_out = _is_timeout(last.error or "")
+                if timed_out:
+                    # 같은 상한을 한 번 더 기다릴 이유가 없다 — 사내 실측에서 60초 시간 초과를 두 번 기다려
+                    # 한 호출에 분 단위를 썼다. 몇 초 만에 났는지는 사유에 남긴다.
+                    took = f"({latency:.0f}초) " if latency is not None else ""
+                    last = Parsed(False, error=f"시간 초과 {took}— {last.error}")
             else:
                 text = reply.text or ""
                 parsed = parse_object(text)
                 last = validate(parsed.data, model) if parsed.ok else parsed
         failure = None if last.ok else last.error
-        _tell(on_exchange, asked, text, failure)
+        _tell(on_exchange, asked, text, failure, latency)
         if last.ok:
             return last
-    return Parsed(False, error=f"{RETRIES + 1}회 시도 실패 — {last.error}")
+        if timed_out:
+            break
+    return Parsed(False, error=f"{attempts}회 시도 실패 — {last.error}")
 
 
-def _tell(on_exchange, prompt: str, text, error) -> None:
+_TIMEOUT_WORDS = re.compile(r"time ?out|timed out|시간 초과", re.I)
+
+
+def _is_timeout(error: str) -> bool:
+    """전송 오류가 **시간 초과**인가 — SDK(`APITimeoutError`)·httpx(`ReadTimeout`)·표준(`TimeoutError`)이 다 이름에 담는다."""
+    return bool(_TIMEOUT_WORDS.search(error))
+
+
+def _tell(on_exchange, prompt: str, text, error, latency_s=None) -> None:
     if on_exchange is None:
         return
     try:
-        on_exchange(prompt, text, error)
+        on_exchange(prompt, text, error, latency_s)
     except Exception:                                               # noqa: BLE001
         pass          # 트레이스는 편의다. 이것 때문에 조사가 멈추면 안 된다
 
@@ -232,7 +252,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
     목록에도 예시에도 안 나온다 — 없는 문을 열라고 적어 두면 리드가 거기로 가고,
     매 라운드가 "미등재 action"으로 날아간다.
 
-    `trace(node, round, prompt, reply_text, error)`를 주면 매 시도가 그대로 흘러간다.
+    `trace(node, round, prompt, reply_text, error, latency_s)`를 주면 매 시도가 그대로 흘러간다.
     **프롬프트를 고치려면 모델이 뭐라 했는지 봐야 한다** — 10b를 끝낼 때 이게 없어서
     프롬프트 설계가 전부 추측 위에 있었다.
     """
@@ -240,7 +260,8 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
     def _hook(node: str, state: CaseState):
         if trace is None:
             return None
-        return lambda prompt, text, error: trace(node, state.round, prompt, text, error)
+        # 여섯째 인자는 그 호출이 걸린 초(모르면 None) — 위치 인자라 옛 트레이서(`*row`)도 그대로 받는다.
+        return lambda prompt, text, error, latency_s=None: trace(node, state.round, prompt, text, error, latency_s)
 
     async def frame(state: CaseState) -> dict:
         prompt = fill(prompts["frame"],

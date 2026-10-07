@@ -138,3 +138,48 @@ async def test_스텁도_같은_정규화를_거친다(clock):
     assert result.status == "ok"
     assert result.data["request"]["params"] == {"line_code": ["P222"]}, (
         "스텁과 실구현의 계약이 갈라지면 테스트는 통과하는데 사내에서 깨진다")
+
+
+class _Disconnecting:
+    """소켓에서 끊긴 것처럼 — 사내에서 대상 호스트가 NO_PROXY에 없어 전사 프록시로 나갔을 때의 모양."""
+
+    def __init__(self, *a, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, *a, **kw):
+        import httpx
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    async def post(self, *a, **kw):
+        return await self.get()
+
+
+async def test_프록시_env가_있고_호스트가_NO_PROXY에_없으면_의심을_말한다(clock, monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _Disconnecting)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    result = await RealRestProber(CFG, clock=clock).query("lines", {})
+    assert result.status == "error" and "RemoteProtocolError" in result.error
+    assert "프록시 경유 의심" in result.error and "twin.example.net" in result.error and "NO_PROXY" in result.error
+
+
+async def test_NO_PROXY에_있거나_프록시_env가_없으면_의심을_안_말한다(clock, monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _Disconnecting)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "localhost,twin.example.net")
+    bypassed = await RealRestProber(CFG, clock=clock).query("lines", {})
+    assert bypassed.status == "error" and "프록시 경유 의심" not in bypassed.error
+    # 돌리는 기계가 소문자 `https_proxy`를 갖고 있을 수 있다(여기 샌드박스가 그렇다) — 양쪽 다 지운다.
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    plain = await RealRestProber(CFG, clock=clock).query("lines", {})
+    assert plain.status == "error" and "프록시 경유 의심" not in plain.error

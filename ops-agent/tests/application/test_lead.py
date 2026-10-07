@@ -114,6 +114,36 @@ async def test_LLM이_던져도_흡수하고_llm_error로_끝낸다(case):
     assert len(llm.prompts) == lead.RETRIES + 1     # 던져도 재시도는 한다
 
 
+async def test_시간_초과는_되묻지_않는다(case):
+    """사내 실측: 60초 시간 초과를 리드가 같은 프롬프트로 한 번 더 기다렸다 — 같은 상한을 또 기다릴 이유가 없다.
+    429 같은 일시 오류는 전처럼 한 번 더 묻는다."""
+    class APITimeoutError(Exception):
+        pass
+
+    frame, _, llm = leads(APITimeoutError("Request timed out."))
+    patch = await frame(CaseState(case=case))
+    assert len(llm.prompts) == 1 and patch["stopped_by"] == "llm_error"
+    assert "시간 초과" in patch["llm_errors"][0] and "2회 시도" not in patch["llm_errors"][0]
+
+
+async def test_응답_시간이_트레이스로_간다(case):
+    """`--trace` 파일에 호출마다 걸린 초가 남아야 "어디서 몇 분을 썼나"를 사내에서 알 수 있다."""
+    from src.domain.llm import LlmPort, LlmReply
+
+    class Slow(LlmPort):
+        def describe(self):
+            return "slow"
+
+        async def ask(self, prompt):
+            return LlmReply(status="ok", asked_at=T0, model="slow", text=reply(tasks=[TASK]), latency_s=1.5)
+
+    seen = []
+    frame, _, _ = lead.make_lead(Slow(), site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                 trace=lambda *a, **kw: seen.append((a, kw)))
+    await frame(CaseState(case=case))
+    assert seen and seen[0][0][0] == "frame" and seen[0][0][5] == 1.5        # 여섯째 위치 인자
+
+
 async def test_어댑터가_오류를_값으로_줘도_llm_error다(case):
     frame, _, _ = leads(RuntimeError("429 Too Many Requests"),
                         RuntimeError("429 Too Many Requests"))
@@ -524,7 +554,7 @@ async def test_트레이스가_시도마다_날것을_건넨다(case):
     await frame(CaseState(case=case, round=2))
 
     assert len(seen) == 2                       # 실패한 1차도 남는다
-    (node, round_no, prompt, text, error) = seen[0]
+    (node, round_no, prompt, text, error, _latency) = seen[0]
     assert (node, round_no, text) == ("frame", 2, "쓰레기")
     assert error and "JSON" in error
     assert "다시" in seen[1][2]                  # 2차는 수리 프롬프트

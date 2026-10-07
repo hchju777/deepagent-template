@@ -136,3 +136,10 @@ def test_describe가_실제_모델을_같이_보인다():
 def test_박제가_요청_이름과_같으면_describe를_어지럽히지_않는다():
     described = LlmConfig(model="m", base_url="https://g", expect_reported_model="m").describe()
     assert "실제=" not in described
+
+
+def test_기본_시간_상한은_생각하는_모델_기준이고_SDK_재시도는_없다():
+    """사내 실측 두 판이 r1 integrate에서 LLM 시간 초과로 죽었다 — 60초 × SDK 재시도 3회 × 리드 재시도 2회 = 한 번에
+    6분을 쓰고 degraded. 생각하는 모델은 한 답에 60초가 모자라고, 리드가 전송 오류를 한 번 되묻으니 SDK 재시도는 중복이다."""
+    cfg = LlmConfig(**GATEWAY)
+    assert cfg.timeout_s == 300.0 and cfg.max_retries == 0

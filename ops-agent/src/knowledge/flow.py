@@ -796,6 +796,15 @@ def endpoint_id(path: str) -> str:
     return _node_id("endpoint", path)
 
 
+_METHOD_PREFIX = re.compile(r"^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+", re.I)
+
+
+def endpoint_path(text: str) -> str:
+    """사람·리드가 적은 끝점 — 등재 항목은 `POST /path`로 보이므로 그대로 넘어온다(사내 실측에서 리드가 그래서
+    거부당했다). 메서드는 떼고 path만. 노드 id는 path로만 만든다."""
+    return _METHOD_PREFIX.sub("", text.strip(), count=1)
+
+
 _DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 
 

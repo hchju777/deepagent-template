@@ -304,3 +304,14 @@ async def test_상한으로_끝나도_판정이_있다(case):
     final = await build_engine(deps).ainvoke(CaseState(case=case))
     assert final["stopped_by"] in ("max_rounds", "no_runnable")
     assert final["verdict"].verdict_type == "inconclusive"
+
+
+def test_degraded_판정에는_검증_해당_없음이_붙는다(case):
+    """degraded는 코드가 찍고 verify를 안 거친다 — 사내 실측에서 `검증 통과`로 찍혀 "검증을 지났다"로 읽혔다."""
+    from src.application.diagnose import verdict_summary, verify_note
+    from src.application.nodes import degraded
+
+    state = _state(case, verdict=degraded("조사 실패 — 리드 LLM이 응답하지 못해 조사가 돌지 않았다"), stopped_by="llm_error")
+    assert verify_note(state) == "검증 해당 없음" and "검증 해당 없음" in verdict_summary(state)
+    normal = _state(case, verdict=Verdict(verdict_type="inconclusive", confidence="low", narrative="모름"))
+    assert verify_note(normal) == "검증 통과"

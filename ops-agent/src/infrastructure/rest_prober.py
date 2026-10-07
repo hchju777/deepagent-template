@@ -18,7 +18,10 @@ POST가 필요한 API가 있다(조회 조건이 복잡하면 body로 받는다)
 대상의 OpenAPI를 읽어 호출 가능 목록을 자동으로 늘리는 코드는 만들지 않는다.
 대상이 새 POST를 배포하면 우리 허용 범위가 자동으로 넓어지는 fail-open이 된다.
 """
-from typing import Any
+import os
+from typing import Any, Mapping
+from urllib.parse import urlsplit
+from urllib.request import proxy_bypass_environment
 
 from src.config.schema_site import RestConfig, RestEntry
 from src.domain.base import Clock
@@ -135,8 +138,33 @@ class RealRestProber(RestProberPort):
                  "response": _decode(response)},
                 source=source, clock=self._clock)
         except Exception as exc:                                   # noqa: BLE001
-            return ProbeResult.failed(f"{type(exc).__name__}: {exc}",
+            # 전송 계층 오류면 프록시 의심을 덧붙인다 — 사내에서 대상 호스트가 NO_PROXY에 없어 전사 프록시로 나갔고
+            # `RemoteProtocolError` 한 줄만 남아 원인을 찾는 데 시간이 들었다.
+            hint = proxy_suspicion(url) if isinstance(exc, httpx.TransportError) else ""
+            return ProbeResult.failed(f"{type(exc).__name__}: {exc}{hint}",
                                       source=source, clock=self._clock)
+
+
+_PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+
+
+def proxy_suspicion(url: str, environ: Mapping[str, str] | None = None) -> str:
+    """프록시 env가 있고 그 호스트가 NO_PROXY에 안 걸리면 "프록시 경유 의심" 한 토막, 아니면 빈 문자열.
+
+    httpx는 기본으로 env의 프록시를 따른다(`trust_env`). 사내망 대상이 전사 프록시로 나가면 프록시가 끊어 버리고
+    오류는 `RemoteProtocolError`뿐이라 사람이 NO_PROXY를 떠올리기 어렵다. 판단은 `urllib`의 bypass 규칙 그대로다
+    (`*`, 꼬리 일치, 포트).
+    """
+    env = os.environ if environ is None else environ
+    using = [k for k in _PROXY_VARS if env.get(k)]
+    host = urlsplit(url).hostname or ""
+    if not using or not host:
+        return ""
+    no_proxy = env.get("NO_PROXY") or env.get("no_proxy") or ""
+    if proxy_bypass_environment(host, {"no": no_proxy}):
+        return ""
+    return (f" — 프록시 경유 의심: {using[0]}가 설정돼 있고 {host}가 NO_PROXY에 없다. "
+            f"대상이 사내망이면 NO_PROXY에 {host}를 넣어라")
 
 
 def _decode(response: Any) -> Any:

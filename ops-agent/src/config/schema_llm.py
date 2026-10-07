@@ -110,10 +110,12 @@ class LlmConfig(StrictModel):
     expect_reported_model: str | None = None
     temperature: float = 0.0
     base_url: str = ""
-    timeout_s: float = 60.0
-    # 일시적 실패(429·게이트웨이 재시작)에 몇 번 다시 물을지. 0이면 한 번만 시도한다.
-    # 조사는 라운드마다 LLM을 여러 번 부르므로 재시도가 길면 전체가 늘어진다.
-    max_retries: int = 2
+    # 한 답의 상한. 사내 실측(12a 리뷰 4번)에서 생각하는 모델이 60초를 넘겨 두 판 다 r1에서 죽었다 — 60 × SDK 재시도
+    # 3회 × 리드 재시도 2회 = 한 호출에 6분을 쓰고 degraded. 생각하는 모델 기준으로 300초.
+    timeout_s: float = 300.0
+    # 일시적 실패(429·게이트웨이 재시작)에 SDK가 몇 번 다시 물을지. 0이면 한 번만 시도한다.
+    # 리드가 전송 오류를 한 번 되묻으므로(`lead.RETRIES`) SDK 재시도는 중복이고, 시간 초과까지 곱해져 늘어진다.
+    max_retries: int = 0
     # `HTTPS_PROXY`/`NO_PROXY` env를 따를지. 기본은 따른다(httpx 기본값).
     #
     # **사내에서 끄게 되는 경우**: 전사 프록시가 env에 박혀 있는데 LLM 게이트웨이는

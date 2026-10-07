@@ -1079,8 +1079,8 @@ CASES = [
   '    return min(hits, key=len) if hits else None',
   ['tests/knowledge/test_flow.py::test_Git_Bash가_바꾼_끝점_path를_가장_길게_맞는_path로_되돌린다']),
  ('code trace가 Git Bash 인자를 안 되돌린다', ROOT / 'src/__main__.py',
-  '    path = _shell_path(args.path, graph)',
-  '    path = args.path',
+  '    path = flow.endpoint_path(_shell_path(args.path, graph) or "")',
+  '    path = flow.endpoint_path(args.path or "")',
   ['tests/knowledge/test_cli_code.py::test_code_trace와_flow는_Git_Bash가_바꾼_끝점_path를_되돌려_읽는다']),
  ('code flow가 Git Bash 인자를 안 되돌린다', ROOT / 'src/__main__.py',
   '    args.name, args.to = _shell_path(args.name, graph), _shell_path(args.to, graph)\n',
@@ -1588,7 +1588,49 @@ CASES += [
   ["tests/knowledge/test_cli_code.py::test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서로_합친다"]),
 ]
 
-assert len(CASES) >= 387, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R1 — 사내 실측(sevt) 뒤: 시간 초과·트레이스 초·메서드 접두·degraded 표기·프록시 안내 ──
+SL = ROOT / "src/config/schema_llm.py"
+LD = ROOT / "src/application/lead.py"
+DG = ROOT / "src/application/diagnose.py"
+RPB = ROOT / "src/infrastructure/rest_prober.py"
+CASES += [
+ ("LLM 기본 상한이 60초로 돌아간다", SL,
+  '    timeout_s: float = 300.0', '    timeout_s: float = 60.0',
+  ["tests/config/test_schema_llm.py::test_기본_시간_상한은_생각하는_모델_기준이고_SDK_재시도는_없다"]),
+ ("SDK 재시도 기본이 되살아난다", SL,
+  '    max_retries: int = 0', '    max_retries: int = 2',
+  ["tests/config/test_schema_llm.py::test_기본_시간_상한은_생각하는_모델_기준이고_SDK_재시도는_없다"]),
+ ("시간 초과를 한 번 더 기다린다", LD,
+  '        if timed_out:\n            break', '        if False:\n            break',
+  ["tests/application/test_lead.py::test_시간_초과는_되묻지_않는다"]),
+ ("시간 초과를 못 알아본다", LD,
+  '    return bool(_TIMEOUT_WORDS.search(error))', '    return False',
+  ["tests/application/test_lead.py::test_시간_초과는_되묻지_않는다"]),
+ ("걸린 초가 트레이스로 안 간다", LD,
+  '        _tell(on_exchange, asked, text, failure, latency)', '        _tell(on_exchange, asked, text, failure)',
+  ["tests/application/test_lead.py::test_응답_시간이_트레이스로_간다"]),
+ ("트레이스 파일에 응답 초를 안 적는다", MN,
+  '        took = f"응답: {latency_s:.1f}초\\n" if latency_s is not None else ""', '        took = ""',
+  ["tests/test_cli.py::test_트레이스_폴더는_실행마다_비운다"]),
+ ("요약 머리줄이 응답 초를 안 올린다", TD,
+  '           + (f" · 응답 {latency}초" if latency else "")', '',
+  ["tests/application/test_trace_digest.py::test_요약_머리줄에_호출이_걸린_초가_붙는다"]),
+ ("code.trace가 메서드 접두를 안 뗀다", D,
+  '        endpoint = flowgraph.endpoint_path(endpoint)\n        node_id = flowgraph.endpoint_id(endpoint)',
+  '        node_id = flowgraph.endpoint_id(endpoint)',
+  [f"{DCT}::test_code_trace는_붙인_그래프의_끝점_사슬을_주고_없으면_실패로_답한다"]),
+ ("degraded에 검증 통과가 붙는다", DG,
+  '    if state.verdict is not None and state.verdict.verdict_type == "degraded":', '    if False:',
+  ["tests/application/test_verdict.py::test_degraded_판정에는_검증_해당_없음이_붙는다"]),
+ ("프록시 의심을 말하지 않는다", RPB,
+  '            hint = proxy_suspicion(url) if isinstance(exc, httpx.TransportError) else ""', '            hint = ""',
+  ["tests/infrastructure/test_rest_prober.py::test_프록시_env가_있고_호스트가_NO_PROXY에_없으면_의심을_말한다"]),
+ ("NO_PROXY를 안 본다", RPB,
+  '    if proxy_bypass_environment(host, {"no": no_proxy}):\n        return ""', '    if False:\n        return ""',
+  ["tests/infrastructure/test_rest_prober.py::test_NO_PROXY에_있거나_프록시_env가_없으면_의심을_안_말한다"]),
+]
+
+assert len(CASES) >= 398, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

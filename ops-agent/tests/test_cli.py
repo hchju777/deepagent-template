@@ -509,6 +509,9 @@ def test_트레이스_폴더는_실행마다_비운다(tmp_path):
     trace("frame", 0, "물음", "답", None)
     assert not (folder / "06-r4-integrate.md").exists()
     assert [path.name for path in written] == ["01-r0-frame.md"]
+    assert "응답:" not in (folder / "01-r0-frame.md").read_text(encoding="utf-8")   # 모르면 안 적는다
+    trace("integrate", 1, "물음", None, "APITimeoutError: timed out", latency_s=61.2)
+    assert "응답: 61.2초" in (folder / "02-r1-integrate.md").read_text(encoding="utf-8")
 
 
 def test_case_trace에_brief가_있다():

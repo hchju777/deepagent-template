@@ -73,7 +73,10 @@ def _demoted(state: CaseState) -> bool:
 
 
 def verify_note(state: CaseState) -> str:
-    """검증이 어떻게 끝났나 — 통과 / 재작성 n회 뒤 통과 / 미통과 → 강등."""
+    """검증이 어떻게 끝났나 — 통과 / 재작성 n회 뒤 통과 / 미통과 → 강등 / 해당 없음(degraded)."""
+    if state.verdict is not None and state.verdict.verdict_type == "degraded":
+        # degraded는 코드가 찍고 verify를 안 거친다 — "통과"로 적으면 검증을 지난 것으로 읽힌다(사내 실측).
+        return "검증 해당 없음"
     if _demoted(state):
         return "검증 미통과 → 강등"
     if state.verify_attempts:
