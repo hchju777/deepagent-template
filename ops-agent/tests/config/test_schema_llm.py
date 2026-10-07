@@ -143,3 +143,14 @@ def test_기본_시간_상한은_생각하는_모델_기준이고_SDK_재시도�
     6분을 쓰고 degraded. 생각하는 모델은 한 답에 60초가 모자라고, 리드가 전송 오류를 한 번 되묻으니 SDK 재시도는 중복이다."""
     cfg = LlmConfig(**GATEWAY)
     assert cfg.timeout_s == 300.0 and cfg.max_retries == 0
+
+
+def test_토큰_상한과_스트리밍은_config이고_설명에_실효값이_보인다():
+    """7-4: `llm describe`가 실효 상한을 찍어야 "config에 60이 박혀 있었다"를 사람이 본다."""
+    cfg = LlmConfig(**GATEWAY, max_tokens=300, stream=True)
+    text = cfg.describe()
+    assert "상한 300s" in text and "재시도 0" in text and "토큰 300" in text and "스트리밍" in text
+    assert "토큰" not in LlmConfig(**GATEWAY).describe() and "스트리밍" not in LlmConfig(**GATEWAY).describe()
+    with pytest.raises(ValidationError) as caught:
+        LlmConfig(**GATEWAY, adapter="http", stream=True)
+    assert "스트리밍" in str(caught.value)

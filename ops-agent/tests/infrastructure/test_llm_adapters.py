@@ -88,3 +88,28 @@ async def test_경과_시간을_잰다(gateway, clock):
     reply = await HttpChatAdapter(_cfg(base_url), clock=clock,
                                   ticker=lambda: next(ticks)).ask("hi")
     assert reply.latency_s == 0.25, "경과는 Clock이 아니라 ticker가 잰다"
+
+
+async def test_스트리밍이면_조각을_모아_한_답으로_주고_첫_토큰_시각을_적는다(gateway, clock):
+    """사내 게이트웨이의 180초 끊김은 총 시간이 아니라 **유휴** 상한일 가능성이 크다 — 스트리밍이면 출력이 시작된
+    뒤로는 바이트가 흐른다. 호출부는 전과 같은 `LlmReply` 하나를 받는다."""
+    base_url, recorder = gateway
+    recorder.reply = "pong-streamed"
+    reply = await build_llm(_cfg(base_url, "chat_model", stream=True), clock=clock).ask("hi")
+    assert reply.status == "ok", reply.error
+    assert reply.text == "pong-streamed" and reply.first_token_s is not None and reply.latency_s is not None
+    assert recorder.requests[-1]["body"].get("stream") is True
+    plain = await build_llm(_cfg(base_url, "chat_model"), clock=clock).ask("hi")
+    assert plain.first_token_s is None and not recorder.requests[-1]["body"].get("stream")
+
+
+@pytest.mark.parametrize("adapter", ADAPTERS)
+async def test_토큰_상한이_요청에_실린다(gateway, clock, adapter):
+    base_url, recorder = gateway
+    await build_llm(_cfg(base_url, adapter, max_tokens=321), clock=clock).ask("hi")
+    body = recorder.requests[-1]["body"]
+    # langchain-openai는 `max_completion_tokens`(OpenAI의 현재 이름)로, 우리 http 어댑터는 `max_tokens`로 내보낸다.
+    assert body.get("max_tokens", body.get("max_completion_tokens")) == 321
+    await build_llm(_cfg(base_url, adapter), clock=clock).ask("hi")
+    body = recorder.requests[-1]["body"]
+    assert "max_tokens" not in body and "max_completion_tokens" not in body   # 안 적으면 안 보낸다

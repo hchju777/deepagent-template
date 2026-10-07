@@ -116,6 +116,13 @@ class LlmConfig(StrictModel):
     # 일시적 실패(429·게이트웨이 재시작)에 SDK가 몇 번 다시 물을지. 0이면 한 번만 시도한다.
     # 리드가 전송 오류를 한 번 되묻으므로(`lead.RETRIES`) SDK 재시도는 중복이고, 시간 초과까지 곱해져 늘어진다.
     max_retries: int = 0
+    # 한 답의 출력 토큰 상한. 액션 턴(한 줄 thought + 액션 하나)은 작게 두면 형식이 아니라 상한으로 짧아지고
+    # 지연 시간도 같이 잡힌다. 없으면 안 보낸다(게이트웨이 기본). chat_model은 langchain-openai가 OpenAI의 현재 이름
+    # `max_completion_tokens`로 내보내고 http 어댑터는 `max_tokens`로 — 게이트웨이가 옛 이름만 알면 http로 간다.
+    max_tokens: int | None = None
+    # 스트리밍으로 받아 조각을 모은다. 사내 게이트웨이의 ~180초 끊김은 총 시간이 아니라 **유휴** 상한일 가능성이
+    # 커서, 출력이 시작된 뒤 바이트가 흐르면 산다. 호출부가 받는 것은 전과 같은 `LlmReply` 하나다(chat_model만).
+    stream: bool = False
     # `HTTPS_PROXY`/`NO_PROXY` env를 따를지. 기본은 따른다(httpx 기본값).
     #
     # **사내에서 끄게 되는 경우**: 전사 프록시가 env에 박혀 있는데 LLM 게이트웨이는
@@ -141,8 +148,17 @@ class LlmConfig(StrictModel):
             raise ValueError(f"temperature는 0~2다 — {v}")
         return v
 
+    @field_validator("max_tokens")
+    @classmethod
+    def _positive_tokens(cls, v):
+        if v is not None and v < 1:
+            raise ValueError(f"max_tokens는 1 이상이다 — {v}")
+        return v
+
     @model_validator(mode="after")
     def _network_adapters_need_base_url(self):
+        if self.stream and self.adapter != "chat_model":
+            raise ValueError(f"스트리밍은 adapter=chat_model에서만 받는다 — {self.adapter}")
         if self.adapter in ("chat_model", "http") and not self.base_url:
             raise ValueError(f"adapter={self.adapter}에는 base_url이 필요하다")
         if self.adapter == "file" and not self.turn_dir:
@@ -234,6 +250,10 @@ class LlmConfig(StrictModel):
         served = (f" 실제={self.expect_reported_model}"
                   if self.expect_reported_model and
                   self.expect_reported_model != self.model else "")
+        # 실효 상한을 같이 찍는다 — 사내에서 config의 60초가 어디서 이기는지 보이지 않아 한참 돌았다.
+        limits = (f" · 상한 {self.timeout_s:g}s · 재시도 {self.max_retries}"
+                  + (f" · 토큰 {self.max_tokens}" if self.max_tokens else "")
+                  + (" · 스트리밍" if self.stream else ""))
         return (f"{self.adapter}/{self.provider} {self.model}"
                 f"{f'(id={self.model_id})' if self.model_id else ''}{served} "
-                f"→ {self.base_url or '(네트워크 없음)'} [인증: {auth}, TLS: {tls}]")
+                f"→ {self.base_url or '(네트워크 없음)'} [인증: {auth}, TLS: {tls}]{limits}")

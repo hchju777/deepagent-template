@@ -1335,7 +1335,7 @@ CASES += [
   ["tests/application/test_lead.py::test_degraded_판정은_LLM이_못_낸다",
    "tests/domain/test_verdict_model.py::test_degraded는_판정_어휘에_있지만_LLM_어휘에는_없다"]),
  ("판정 턴이 트레이스에 안 남는다", LD,
-  '        got = await ask_json(llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
+  '        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
   '        got = await ask_json(llm, prompt, ConcludeReply)',
   ["tests/application/test_lead.py::test_conclude가_판정_JSON을_Verdict로_받고_프롬프트에_본_것만_싣는다"]),
  ("판정 예시가 degraded를 보여 준다", B,
@@ -1630,7 +1630,57 @@ CASES += [
   ["tests/infrastructure/test_rest_prober.py::test_NO_PROXY에_있거나_프록시_env가_없으면_의심을_안_말한다"]),
 ]
 
-assert len(CASES) >= 398, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-1 — 역할별 LLM·토큰 상한·스트리밍 ─────────────────────────────
+SAP = ROOT / "src/config/schema_app.py"
+LCM = ROOT / "src/infrastructure/llm_chat_model.py"
+LHT = ROOT / "src/infrastructure/llm_http.py"
+ROLE_T = "tests/config/test_schema_app.py::test_역할별_LLM은_기본_위에_부분_덮어쓰기다"
+CASES += [
+ ("역할 덮어쓰기를 무시하고 기본만 쓴다", SAP,
+  '        over = getattr(self.llm_roles, role)\n        if not over:\n            return self.llm',
+  '        over = getattr(self.llm_roles, role)\n        if True:\n            return self.llm',
+  [ROLE_T]),
+ ("역할 덮어쓰기가 중첩을 통째로 바꾼다", SAP,
+  '        out[key] = _merged(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value',
+  '        out[key] = value',
+  [ROLE_T]),
+ ("역할 덮어쓰기의 오류를 기동에서 안 잡는다", SAP,
+  '        for role in used:\n            try:\n                self.llm_for(role)',
+  '        for role in []:\n            try:\n                self.llm_for(role)',
+  ["tests/config/test_schema_app.py::test_역할_덮어쓰기의_모르는_키와_모르는_역할은_막는다"]),
+ ("describe가 실효 상한을 안 찍는다", SL,
+  '        limits = (f" · 상한 {self.timeout_s:g}s · 재시도 {self.max_retries}"', '        limits = ("" + ""',
+  ["tests/config/test_schema_llm.py::test_토큰_상한과_스트리밍은_config이고_설명에_실효값이_보인다"]),
+ ("스트리밍 조각을 모으지 않는다", LCM,
+  '                    parts.append(str(getattr(chunk, "content", "") or ""))', '                    pass',
+  ["tests/infrastructure/test_llm_adapters.py::test_스트리밍이면_조각을_모아_한_답으로_주고_첫_토큰_시각을_적는다"]),
+ ("첫 토큰 시각을 안 적는다", LCM,
+  '                    if first is None:\n                        first = round(self._ticker() - started, 3)',
+  '                    if False:\n                        first = round(self._ticker() - started, 3)',
+  ["tests/infrastructure/test_llm_adapters.py::test_스트리밍이면_조각을_모아_한_답으로_주고_첫_토큰_시각을_적는다"]),
+ ("chat_model이 토큰 상한을 안 보낸다", LCM,
+  '            if self._cfg.max_tokens is not None:\n                extra["max_tokens"] = self._cfg.max_tokens',
+  '            if False:\n                extra["max_tokens"] = self._cfg.max_tokens',
+  ["tests/infrastructure/test_llm_adapters.py::test_토큰_상한이_요청에_실린다"]),
+ ("http가 토큰 상한을 안 보낸다", LHT,
+  '        if self._cfg.max_tokens is not None:\n            body["max_tokens"] = self._cfg.max_tokens',
+  '        if False:\n            body["max_tokens"] = self._cfg.max_tokens',
+  ["tests/infrastructure/test_llm_adapters.py::test_토큰_상한이_요청에_실린다"]),
+ ("판정 턴이 액션 LLM에게 간다", LD,
+  '        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
+  '        got = await ask_json(llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
+  ["tests/application/test_lead.py::test_판정_턴은_다른_LLM을_쓸_수_있다", "tests/application/test_lead.py::test_CLI가_역할별_LLM을_따로_꽂는다"]),
+ ("investigate가 판정 LLM을 안 꽂는다", MN,
+  '                flow_graph=flow_graph, code_index=code.has_index() if code else False,\n                conclude_llm=conclude_llm)',
+  '                flow_graph=flow_graph, code_index=code.has_index() if code else False,\n                conclude_llm=None)',
+  ["tests/application/test_lead.py::test_CLI가_역할별_LLM을_따로_꽂는다"]),
+ ("llm describe가 역할을 안 찍는다", MN,
+  '        if cfg is not base:\n            print(f"  역할 {role}: {cfg.describe()}")',
+  '        if False:\n            print(f"  역할 {role}: {cfg.describe()}")',
+  ["tests/test_cli.py::test_llm_describe는_역할별_실효값을_찍고_ask는_역할을_고른다"]),
+]
+
+assert len(CASES) >= 409, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

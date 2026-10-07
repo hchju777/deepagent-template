@@ -144,6 +144,18 @@ async def test_응답_시간이_트레이스로_간다(case):
     assert seen and seen[0][0][0] == "frame" and seen[0][0][5] == 1.5        # 여섯째 위치 인자
 
 
+async def test_판정_턴은_다른_LLM을_쓸_수_있다(case):
+    """액션 턴(frame·integrate)은 빠른 모델, 판정은 생각하는 모델 — 둘을 따로 꽂는다. 안 주면 하나로 다 한다."""
+    fast = ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0)
+    think = ScriptedAdapter(["쓰레기", "쓰레기"], clock=lambda: T0)
+    frame, _, conclude = lead.make_lead(fast, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3,
+                                        conclude_llm=think)
+    patch = await frame(CaseState(case=case))
+    assert len(fast.prompts) == 1 and think.prompts == []
+    await conclude(CaseState(case=case, **{k: v for k, v in patch.items() if k in ("hypotheses", "plan_tasks")}))
+    assert len(fast.prompts) == 1 and len(think.prompts) >= 1          # 판정은 think에게만 물었다
+
+
 async def test_어댑터가_오류를_값으로_줘도_llm_error다(case):
     frame, _, _ = leads(RuntimeError("429 Too Many Requests"),
                         RuntimeError("429 Too Many Requests"))
@@ -662,6 +674,51 @@ def _cli_tree(tmp_path, monkeypatch):
                                           encoding="utf-8")
     set_real_config_env(monkeypatch)
     return config_root
+
+
+def test_CLI가_역할별_LLM을_따로_꽂는다(tmp_path, capsys, monkeypatch):
+    """`llm_roles.conclude`가 있으면 `case investigate`가 어댑터를 둘 만들고 판정 턴은 둘째에게만 묻는다.
+    대본을 어댑터마다 따로 주므로, 판정이 첫째로 가면 대본 소진으로 판정이 안 나온다."""
+    from src.__main__ import main
+
+    config_root = _cli_tree(tmp_path, monkeypatch)
+    app_path = config_root / "app.json"
+    app = json.loads(app_path.read_text(encoding="utf-8"))
+    app["llm_roles"] = {"conclude": {"model": "think-model", "model_id": "77"}}
+    app_path.write_text(json.dumps(app, ensure_ascii=False), encoding="utf-8")
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({
+        "rest": {"summary_badge": [
+            {"group": "Operator", "title": "Check", "alarm": 0, "caution": 0, "normal": 0}],
+            "prod_status": {"status": "In Production"}},
+        "mongo": {"bb_state": [{"m": "x"}]}}), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "patrol", "open", "--gbm", "mx", "--fct", "gumi", "--stub-seeds", str(seeds)])
+    assert main() == 0, capsys.readouterr().err
+    capsys.readouterr()
+
+    action_turns = ScriptedAdapter([
+        reply(hypotheses=[{"id": "h-1", "statement": "파생 집계가 비어 있다"}], tasks=[TASK]),
+        reply(decision="conclude", hypotheses=[{"id": "h-1", "statement": "파생 집계가 비어 있다",
+                                                 "status": "refuted", "refuting_ids": ["t-1.e1"]}])],
+        clock=lambda: T0)
+    verdict_turn = ScriptedAdapter([reply(**VERDICT)], clock=lambda: T0, model="think-model")
+    adapters, seen = iter([action_turns, verdict_turn]), []
+
+    def fake_build(cfg, *, clock, warn=None):
+        seen.append(cfg.model)
+        return next(adapters)
+
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm", fake_build)
+    monkeypatch.setattr("sys.argv", [
+        "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
+        "case", "investigate", "c-1", "--stub-seeds", str(seeds)])
+    assert main() == 0
+    out = capsys.readouterr().out
+    assert seen == [app["llm"]["model"], "think-model"]                 # 액션용 하나, 판정용 하나
+    assert "판정: " in out and "think-model" in out                       # 어느 LLM이 판정했는지 출력에 남는다
+    assert "판정 data_loss (high)" in out and len(verdict_turn.prompts) == 1 and len(action_turns.prompts) == 2
 
 
 def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):

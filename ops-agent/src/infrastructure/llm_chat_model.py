@@ -47,6 +47,8 @@ class ChatModelAdapter(LlmPort):
             # (3.11.3과 3.11.15가 argparse에서 갈린 것과 같은 교훈).
             if "http_socket_options" in ChatOpenAI.model_fields:
                 extra["http_socket_options"] = ()
+            if self._cfg.max_tokens is not None:
+                extra["max_tokens"] = self._cfg.max_tokens
             self._client = ChatOpenAI(
                 base_url=self._cfg.base_url,
                 **extra,
@@ -64,14 +66,26 @@ class ChatModelAdapter(LlmPort):
 
     async def ask(self, prompt: str) -> LlmReply:
         started = self._ticker()
+        messages = [{"role": "user", "content": prompt}]
+        first = None
         try:
-            message = await self.client().ainvoke([{"role": "user", "content": prompt}])
+            if self._cfg.stream:
+                # 조각을 모아 한 답으로 — 호출부는 스트리밍을 모른다. 첫 조각 시각은 유휴 상한을 보는 재료다.
+                parts, metadata = [], {}
+                async for chunk in self.client().astream(messages):
+                    if first is None:
+                        first = round(self._ticker() - started, 3)
+                    parts.append(str(getattr(chunk, "content", "") or ""))
+                    metadata = getattr(chunk, "response_metadata", None) or metadata
+                text = "".join(parts)
+            else:
+                message = await self.client().ainvoke(messages)
+                metadata = getattr(message, "response_metadata", None) or {}
+                text = str(getattr(message, "content", message) or "")
         except Exception as exc:                                   # noqa: BLE001
             return LlmReply(status="error", asked_at=self._clock(), model=self._cfg.model,
                             error=f"{type(exc).__name__}: {exc}",
-                            latency_s=round(self._ticker() - started, 3))
-        metadata = getattr(message, "response_metadata", None) or {}
+                            latency_s=round(self._ticker() - started, 3), first_token_s=first)
         return LlmReply(status="ok", asked_at=self._clock(), model=self._cfg.model,
-                        text=str(getattr(message, "content", message) or ""),
-                        reported_model=metadata.get("model_name"),
-                        latency_s=round(self._ticker() - started, 3))
+                        text=text, reported_model=metadata.get("model_name"),
+                        latency_s=round(self._ticker() - started, 3), first_token_s=first)

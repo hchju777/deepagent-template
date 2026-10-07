@@ -51,9 +51,27 @@ def _handler_for(recorder: _Recorder):
                 return self._send(recorder.status, {"error": {"message": "boom"}})
             if recorder.payload is not None:
                 return self._send(200, recorder.payload)
+            if body.get("stream"):
+                return self._stream(body.get("model"), recorder.reply)
             self._send(200, {"id": "chatcmpl-fake", "model": body.get("model"),
                              "choices": [{"message": {"role": "assistant",
                                                       "content": recorder.reply}}]})
+
+        def _stream(self, model, text):
+            """SSE — 답을 두 조각으로 나눠 보낸다. 조각마다 `data:` 한 줄, 끝은 `[DONE]`(OpenAI 규약)."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            half = max(1, len(text) // 2)
+            for piece in (text[:half], text[half:]):
+                chunk = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": model,
+                         "choices": [{"index": 0, "delta": {"role": "assistant", "content": piece},
+                                      "finish_reason": None}]}
+                self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
     return Handler
 
 

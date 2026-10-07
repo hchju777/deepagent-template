@@ -271,22 +271,33 @@ def cmd_peek(args, env) -> int:
 
 # ── llm ──────────────────────────────────────────────────────────────
 
-def _llm_config(args, env):
+def _llm_config(args, env, role: str | None = None):
     app = load_app_config(args.config_root, env=env)
     if app.llm is None:
         raise SystemExit("app.json에 llm 설정이 없다 — STEPS/step-07-llm.md 참고")
-    return app.llm
+    return app.llm_for(role) if role else app.llm
 
 
 def cmd_llm_describe(args, env) -> int:
-    print(" ", _llm_config(args, env).describe())
+    from src.config.schema_app import LLM_ROLES
+
+    app = load_app_config(args.config_root, env=env)
+    if app.llm is None:
+        raise SystemExit("app.json에 llm 설정이 없다 — STEPS/step-07-llm.md 참고")
+    base = app.llm
+    print(" ", base.describe())
+    # 기본과 다른 역할만 — 같은 것을 네 줄 찍으면 다른 한 줄이 묻힌다.
+    for role in LLM_ROLES:
+        cfg = app.llm_for(role)
+        if cfg is not base:
+            print(f"  역할 {role}: {cfg.describe()}")
     return 0
 
 
 def cmd_llm_ask(args, env) -> int:
     from src.infrastructure.llm_factory import build_llm
 
-    llm = build_llm(_llm_config(args, env), clock=_clock(args, env))
+    llm = build_llm(_llm_config(args, env, getattr(args, "role", None)), clock=_clock(args, env))
     reply = asyncio.run(llm.ask(args.prompt))
     _out(json.loads(reply.model_dump_json()))
     return 1 if reply.status == "error" else 0
@@ -320,7 +331,7 @@ def _parses_as_json(text: str) -> bool:
 def cmd_llm_check(args, env) -> int:
     from src.infrastructure.llm_factory import build_llm
 
-    cfg = _llm_config(args, env)
+    cfg = _llm_config(args, env, getattr(args, "role", None))
     llm = build_llm(cfg, clock=_clock(args, env))
     print(f"  {cfg.describe()}\n")
     failed = 0
@@ -501,7 +512,7 @@ async def _comments(args, env, scenario, facts):
     llm = None
     if app.llm is not None:
         from src.infrastructure.llm_factory import build_llm
-        llm = build_llm(app.llm, clock=_clock(args, env))
+        llm = build_llm(app.llm_for("report"), clock=_clock(args, env))
     return await comment_on(facts, llm=llm, spec=scenario.comment,
                             template=load_prompt(args.config_root, scenario),
                             clock=_clock(args, env))
@@ -887,8 +898,11 @@ def cmd_case_investigate(args, env) -> int:
         tracer, traced = _make_tracer(record.id, folder=Path(args.trace) / record.id)
 
     async def go() -> dict:
-        llm = build_llm(app.llm, clock=clock)
-        built["llm"] = llm.describe()     # config가 뭐라고 적혔는지가 아니라 실제로 붙은 것
+        # 액션 턴과 판정 턴은 다른 LLM일 수 있다(역할별, R2-1). 설정이 같으면 어댑터도 하나다.
+        lead_cfg, conclude_cfg = app.llm_for("lead"), app.llm_for("conclude")
+        llm = build_llm(lead_cfg, clock=clock)
+        conclude_llm = llm if conclude_cfg is lead_cfg else build_llm(conclude_cfg, clock=clock)
+        built["llm"] = llm.describe() + ("" if conclude_llm is llm else f"\n  판정: {conclude_llm.describe()}")
         from src.knowledge import flow
         code, services, flow_graph, graph_note = _code_if_ready(
             site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock,
@@ -903,7 +917,8 @@ def cmd_case_investigate(args, env) -> int:
                 evidence_budget=app.investigation.evidence_total_chars,
                 trace=tracer, services=services,
                 roles=code.service_roles() if code else {},
-                flow_graph=flow_graph, code_index=code.has_index() if code else False)
+                flow_graph=flow_graph, code_index=code.has_index() if code else False,
+                conclude_llm=conclude_llm)
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars),
@@ -2299,8 +2314,13 @@ def build_parser() -> argparse.ArgumentParser:
     llm_sub.add_parser("describe", help="무엇에 붙어 있는지").set_defaults(run=cmd_llm_describe)
     ask = llm_sub.add_parser("ask", help="한 번 묻고 한 번 받는다")
     ask.add_argument("prompt")
+    ask.add_argument("--role", choices=("lead", "conclude", "report"),
+                     help="그 역할의 실효 설정으로(llm_roles). 생략하면 기본 llm")
     ask.set_defaults(run=cmd_llm_ask)
-    llm_sub.add_parser("check", help="간단한 질문 묶음").set_defaults(run=cmd_llm_check)
+    check_llm = llm_sub.add_parser("check", help="간단한 질문 묶음")
+    check_llm.add_argument("--role", choices=("lead", "conclude", "report"),
+                           help="그 역할의 실효 설정으로")
+    check_llm.set_defaults(run=cmd_llm_check)
 
     mail = sub.add_parser("mail", help="보고서를 메일로 보낸다")
     mail_sub = mail.add_subparsers(dest="what", required=True)

@@ -24,6 +24,9 @@ GBM 단위가 되어(`code graph --gbm mx` 한 번, 사내 203초) 실제 사이
   찍힌다). 낡음(`⚠ 낡음`)이면 `code graph --gbm mx`를 먼저 다시 돌린다.
 - `config/app.json`의 `llm`에 `timeout_s`·`max_retries`가 **명시돼 있으면 그 값이 이긴다.** 생각하는 모델은 한 답에 60초가
   모자라 두 판이 r1에서 죽었다 — 명시돼 있으면 `timeout_s: 300`, `max_retries: 0`으로(없으면 그게 기본값이다).
+- R2-1부터 역할별 모델이 된다. `app.json`에 `llm_roles`를 적는다 — `lead`(액션 턴)는 빠른 모델 + `max_tokens: 400`,
+  `conclude`(판정)는 생각하는 모델 + 넉넉한 `timeout_s`, 기본 `llm`에 `stream: true`(게이트웨이의 유휴 끊김 실험).
+  `llm describe`로 역할별 실효값을 확인하고 `llm check --role lead`·`--role conclude`가 둘 다 붙는지 본다.
 - 순찰이 sevt에서 **finding을 내야** 케이스가 열린다. 사람이 손으로 케이스를 여는 CLI는 아직 없다. finding 0건이면
   4번은 지금 못 돌린다 — 그 사실 자체가 보고다(아래 형식 ②에서 멈춘다).
 
@@ -64,7 +67,7 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 ## 보고 형식 (이 일곱 줄이면 된다)
 
 ```
-① llm describe: <한 줄 그대로>
+① llm describe: <기본 한 줄 + 역할 줄 그대로>
 ② patrol check 마지막 줄: finding N건 · 판정 못 한 점검 M개      ← 0건이면 여기까지
 ③ patrol open 케이스 줄: 🆕 <id> mx/sevt <점검> …                 (실제 이름은 자리표시자로)
 ④ investigate: 라운드 N — 끝난 이유: … / 판정 … / 검증 … / 그래프 액션: code.flow 1·code.uses 2 (없으면 0)

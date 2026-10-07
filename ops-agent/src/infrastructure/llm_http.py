@@ -40,6 +40,8 @@ class HttpChatAdapter(LlmPort):
         body = {"model": self._cfg.model,
                 "temperature": self._cfg.temperature,
                 "messages": [{"role": "user", "content": prompt}]}
+        if self._cfg.max_tokens is not None:
+            body["max_tokens"] = self._cfg.max_tokens
 
         started = self._ticker()
         try:

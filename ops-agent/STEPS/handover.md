@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1497 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 398 사례 |
+| 테스트 | `1506 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 409 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -389,8 +389,11 @@ LLM 없이 검사해 한 번 되묻고 그래도 안 되면 걷어내고 강등�
 3.4분). 12a 리뷰 4번(sevt 실제 조사, 브리프 [review-12a-4.md](review-12a-4.md))은 두 판 다 **r1 integrate에서 LLM 시간
 초과 → degraded**였고, 사내 AI의 진단 열 가지를 코드로 대조해 **R1**(시간 상한 300·SDK 재시도 0·시간 초과는 안 되물음·
 트레이스에 걸린 초·`POST /path` 접두·degraded `검증 해당 없음`·프록시 의심 안내)을 했다(12a 문서 "사내 실측" 표).
-남은 것: R2(브리핑 예산 — grep 문서 뒤로·`code.config` key·`rest.query` 목록 한 줄·`<데이터 흐름>` 접수 끝점 고정),
-R3(그래프 방향·동적 키 — 사내 코드 줄 모양 두 개 받은 뒤), 그다음 **12b**(보고서·이벤트).
+두 번째 실측도 r1~r6에서 **게이트웨이 180초 끊김**으로 죽어, 사내 Claude와 만든 수정 지시를 리뷰해 R2~R4로 묶었다
+(12a 문서 "두 번째 실측과 R2 계획"). **R2-1**(역할별 LLM `llm_roles`·`max_tokens`·`stream`, `make_lead(conclude_llm=)`,
+`llm describe/ask/check --role`)을 했다. **남은 라운드(R2-2a·R2-2b·R2-2c → 사내 재측정 → R3 triage → R4 ReAct)는
+[plan-12a-r2-r4.md](plan-12a-r2-r4.md)에 항목·자리·테스트·종료 판단까지 적혀 있다 — 라운드를 시작할 때 그 문서를 먼저
+읽고, 그 사이 알게 된 것으로 문서를 고친 뒤 예고를 쓴다.** 그다음 **12b**.
 11e 후속 후보(별도 예고): 사이트에서 도는 파이프라인만 배선으로 보이게, 레포 커밋별 graphify 캐시.
 11d에서 미룬 것: 6b-3
 (구조적 구현체·DI 레지스트리·디스패치 표·하네스 D·graphify 병합), backlog ⑨·⑩. 시작하기 전에

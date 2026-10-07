@@ -245,12 +245,15 @@ def _dropped_note(where: str, got: Parsed) -> list[str]:
 def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds: int,
               evidence_budget: int = 12000, trace=None,
               services: tuple[str, ...] = (), roles: dict[str, str] | None = None,
-              flow_graph: dict | None = None, code_index: bool = False):
+              flow_graph: dict | None = None, code_index: bool = False,
+              conclude_llm: LlmPort | None = None):
     """`EngineDeps`의 `frame`·`integrate`·`conclude` 자리에 꽂을 세 함수를 만든다.
 
     `services`는 대상 코드(11a)가 준비됐을 때만 채워진다. 비어 있으면 `code.*`가
     목록에도 예시에도 안 나온다 — 없는 문을 열라고 적어 두면 리드가 거기로 가고,
     매 라운드가 "미등재 action"으로 날아간다.
+
+    `conclude_llm`은 판정 턴만 묻는 LLM이다(역할별 모델 — 액션 턴은 빠른 모델, 판정은 생각하는 모델). 없으면 `llm`.
 
     `trace(node, round, prompt, reply_text, error, latency_s)`를 주면 매 시도가 그대로 흘러간다.
     **프롬프트를 고치려면 모델이 뭐라 했는지 봐야 한다** — 10b를 끝낼 때 이게 없어서
@@ -304,7 +307,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                       briefing.conclude_fields(state, site_config=site_config,
                                                evidence_budget=evidence_budget,
                                                services=services, flow_graph=flow_graph))
-        got = await ask_json(llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))
+        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))
         if not got.ok:
             return {"llm_errors": [f"conclude: {got.error}"]}
         return {"verdict": Verdict.model_validate(got.data),

@@ -5,7 +5,9 @@
 """
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import field_validator
+from typing import Any
+
+from pydantic import ValidationError, field_validator, model_validator
 
 from pydantic import Field
 
@@ -51,6 +53,26 @@ class InvestigationConfig(StrictModel):
     conclude_prompt: str = Field(default="prompts/investigate-conclude.md", min_length=1)
 
 
+# LLM을 쓰는 자리. 액션 턴(lead)은 빠른 모델, 판정(conclude)은 생각하는 모델, 보고서 서술(report) — 사내 실측
+# (12a 리뷰 4번)에서 생각하는 모델을 모든 턴에 쓰니 한 턴이 게이트웨이 180초 벽에 걸렸다. triage의 입구 매핑(R3)이
+# 생기면 그 역할이 여기 는다 — 읽는 곳이 없는 칸은 미리 두지 않는다(`test_dead_settings`).
+LLM_ROLES = ("lead", "conclude", "report")
+
+
+class LlmRoles(StrictModel):
+    """역할마다 기본 `llm` 위에 **덮어쓸 것만** 적는다(부분, 중첩도 부분). 안 적은 역할은 기본 그대로다."""
+    lead: dict[str, Any] = {}
+    conclude: dict[str, Any] = {}
+    report: dict[str, Any] = {}
+
+
+def _merged(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for key, value in over.items():
+        out[key] = _merged(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+    return out
+
+
 class AppConfig(StrictModel):
     # 순찰 주기·보고서 시각 표시의 기준. UTC로 저장하고 사람에게 보일 때만 이걸 쓴다.
     timezone: str = "Asia/Seoul"
@@ -61,9 +83,37 @@ class AppConfig(StrictModel):
     # LLM은 사이트를 가로질러 하나다 — 법인마다 다른 모델을 쓸 이유가 없고,
     # 사이트마다 두면 같은 게이트웨이를 향한 커넥션 풀이 사이트 수만큼 생긴다.
     llm: LlmConfig | None = None
+    llm_roles: LlmRoles = LlmRoles()
     # 메일도 사이트를 가로질러 하나다 — 보고서 수신자는 법인이 아니라 조직이 정한다.
     mail: MailConfig = MailConfig()
     investigation: InvestigationConfig = InvestigationConfig()
+
+    def llm_for(self, role: str) -> LlmConfig | None:
+        """그 역할의 실효 LLM 설정 — 기본 `llm`에 역할의 덮어쓰기를 얹어 **다시 검증한** 것. 덮어쓰기가 없으면 기본
+        객체 그대로(`is`로 같다 — 호출부가 어댑터를 두 벌 만들지 않는 근거)."""
+        if role not in LLM_ROLES:
+            raise ValueError(f"모르는 LLM 역할 — {role}. 있는 것: {', '.join(LLM_ROLES)}")
+        if self.llm is None:
+            return None
+        over = getattr(self.llm_roles, role)
+        if not over:
+            return self.llm
+        return LlmConfig.model_validate(_merged(self.llm.model_dump(mode="python"), over))
+
+    @model_validator(mode="after")
+    def _roles_resolve(self):
+        # 역할 덮어쓰기의 오류는 기동에서 잡는다 — 판정 턴에 가서야 "모르는 키"로 죽으면 조사 하나가 날아간다.
+        used = [role for role in LLM_ROLES if getattr(self.llm_roles, role)]
+        if used and self.llm is None:
+            raise ValueError(f"llm_roles({', '.join(used)})는 llm이 있을 때만 — 역할은 기본 llm 위에 덮어쓴다")
+        for role in used:
+            try:
+                self.llm_for(role)
+            except ValidationError as exc:
+                first = exc.errors()[0]
+                where = ".".join(str(x) for x in first.get("loc", ())) or "(전체)"
+                raise ValueError(f"llm_roles.{role}: {where} — {first.get('msg')}") from exc
+        return self
 
     @field_validator("timezone")
     @classmethod

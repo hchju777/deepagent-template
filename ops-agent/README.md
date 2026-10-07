@@ -158,6 +158,18 @@ python -m src llm ask "질문"
 사내 게이트웨이 접속은 [7단계 문서](STEPS/step-07-llm.md). 실제로 붙는지는
 사내에서 `pytest tests/live -m live_llm -v`가 확인한다.
 
+**역할별 모델** — 액션 턴(가설·다음 읽기 고르기)은 빠른 모델, 판정(`conclude`)은 생각하는 모델, 보고서 서술은
+또 다를 수 있다. `app.json`의 `llm`이 기본이고 `llm_roles`에 역할마다 **다른 것만** 적는다(인증·주소·TLS는 물려받는다):
+
+```json
+"llm": {"adapter": "chat_model", "model": "fast", "model_id": "1", "base_url": "${LLM_BASE_URL}", "max_tokens": 400, "stream": true},
+"llm_roles": {"conclude": {"model": "think", "model_id": "9", "timeout_s": 600, "max_tokens": 4000}}
+```
+
+`llm describe`가 기본과 역할별 **실효** 상한(`timeout_s`·`max_retries`·`max_tokens`·스트리밍)을 찍고, `llm ask --role
+conclude`·`llm check --role lead`로 역할 하나만 쳐 볼 수 있다. `stream: true`는 조각을 모아 같은 답을 돌려주되
+게이트웨이의 **유휴** 끊김(사내 ~180초)을 피하는 길이다 — 첫 조각이 온 초가 트레이스에 남는다.
+
 ## 메일 보내기
 
 ```bash

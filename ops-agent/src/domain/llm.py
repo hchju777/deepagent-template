@@ -36,6 +36,8 @@ class LlmReply(StrictModel):
     # "설정한 모델이 실제로 돌지 않는다"는 뜻이고, 그건 조용한 실패다.
     reported_model: str | None = None
     latency_s: float | None = None
+    # 스트리밍일 때 첫 조각이 온 시각(초). 게이트웨이의 유휴 상한에 걸리는지 보는 재료다.
+    first_token_s: float | None = None
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):

@@ -174,6 +174,42 @@ conclude → verify → (문제 없음 → END)
   맞춘 뒤 같은 판을 한 번 더([review-12a-4.md](review-12a-4.md) 그대로). 통과 기준: ④의 `끝난 이유`가 `llm_error`가
   아니고 트레이스 머리의 `응답 N초`가 보인다.
 
+### 두 번째 실측(sevt, 10-07)과 R2 계획
+
+R1 뒤 두 판: c-1 3라운드 6분 20초, c-2 6라운드 18분 51초, 둘 다 degraded. 직접 원인은 **게이트웨이가 ~180초에 끊는
+것**(`500 Send timeout`·upstream reset) — integrate 프롬프트가 라운드마다 5K → 26K로 커졌고 생각하는 모델의 한 답이
+180초를 넘었다. `timeout_s=300`은 의미가 없었다. 실제 원인은 사람이 찾았다(c-1: 해당 요약 파이프라인이 config에서
+꺼져 있어 요약 키가 안 만들어짐 → `config_error`, 원인 배치; c-2: 원천 키의 두 컬럼이 전행 비어 요약 필터를 거치면
+0건 → 상류). 리드가 놓친 이유: 접수 증거가 첫 행에서 잘려 대상 행을 못 봤고, 예시 액션을 그대로 따랐고, 읽는 쪽만
+보고 쓰는 쪽을 안 봤고, `code.flow/uses/callers`를 0회 썼고, r2에 쥔 "키가 없다" 증거의 차이를 계산하지 않았다.
+
+사내 Claude와 만든 수정 지시 열 묶음을 리뷰해 순서를 정했다(대화 기록). 요지: 강한 모델이 스스로 하는 일(중복 차단·
+열린 질문·정체 감지·도구 경계 요약·예산)을 **코드가 먼저** 하고, 벽의 정체(유휴 상한인가)는 스트리밍으로 먼저 잰다.
+
+- **R2-1 LLM 층 ✅(10-07)** — 아래.
+- R2-2a 엔진 P0: llm_error여도 증거가 있으면 짧은 conclude 1회, degraded 서술에 라운드·읽기·증거 수, 미실행 태스크
+  보고, 중복 질의 거부 사유에 기존 증거 id, 열린 질문 블록.
+- R2-2b 증거 모양: 접수 증거는 identity 행만, 선언됐는데 없는 키, `code.read` 범위·`redis.get` 경로·`mongo.find` 좁히기
+  안내, 예시 자리표시자, grep 코드 줄 먼저, `code.config key`, `rest.query` 목록 한 줄, `<데이터 흐름>` 접수 끝점 고정.
+- R2-2c 운영·구조: Windows 종료 트레이스백, README NO_PROXY, system/user 메시지 분리.
+- 그다음 사내 재측정 → R3(결정적 triage) → R4(ReAct 루프·도구 경계 요약).
+
+### R2-1 (10-07) ✅ — 역할별 LLM·토큰 상한·스트리밍
+
+- `app.json`: `llm`은 기본, `llm_roles: {lead, conclude, report}`에 역할마다 **덮어쓸 것만**(부분, 중첩도 부분 —
+  `headers`·`tls`). `AppConfig.llm_for(role)`이 병합해 다시 검증한 설정을 주고, 덮어쓰기가 없으면 기본 객체 그대로(`is`)
+  라 호출부가 어댑터를 두 벌 만들지 않는다. 역할의 모르는 키·역할 이름은 config 로드에서 막힌다(decisions ⑳).
+- `LlmConfig.max_tokens`(chat_model은 langchain이 `max_completion_tokens`로, http는 `max_tokens`로 보낸다)와
+  `stream`(chat_model만 — `astream`으로 조각을 모아 같은 `LlmReply`, `first_token_s` 기록). `describe()`가 실효
+  `상한 Ns · 재시도 N · 토큰 N · 스트리밍`을 찍는다(7-4).
+- `make_lead(..., conclude_llm=)`: 판정 턴만 다른 LLM. `case investigate`가 `lead`·`conclude` 역할로 둘을 만들고 출력에
+  `판정: <describe>`를 남긴다. 보고서 서술은 `report`. `llm describe`는 기본과 **다른 역할만** 더 찍고, `llm ask/check
+  --role`.
+- 테스트 먼저(RED 8 → GREEN): `test_schema_app` 2, `test_schema_llm` 1, `test_llm_adapters` 2(가짜 게이트웨이에 SSE 추가),
+  `test_lead` 2(판정 LLM 분리, CLI 배선 — 대본을 어댑터마다 따로 줘 판정이 첫째로 가면 소진된다), `test_cli` 1. 스윕 +11.
+- 사내 확인: `llm_roles.lead`에 빠른 모델(+`max_tokens` 400), `conclude`에 생각하는 모델, 기본에 `stream: true`로 같은
+  판을 한 번 더. 받을 것은 브리프의 일곱 줄 + 트레이스 머리의 `응답 N초`·첫 조각 초.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

@@ -544,3 +544,21 @@ def test_code_flow_파서():
     assert (args.name, args.to, args.depth) == ("processor", "sink", 2)
     assert build_parser().parse_args(["code", "graph"]).run.__name__ == "cmd_code_graph"
 
+
+
+def test_llm_describe는_역할별_실효값을_찍고_ask는_역할을_고른다(tmp_path, capsys):
+    from src.__main__ import main
+
+    root = tmp_path / "config"
+    (root / "gbm").mkdir(parents=True)
+    (root / "app.json").write_text(json.dumps({
+        "timezone": "Asia/Seoul",
+        "llm": {"adapter": "echo", "model": "fast"},
+        "llm_roles": {"conclude": {"model": "think", "max_tokens": 4000}}}), encoding="utf-8")
+    (root / "registry.json").write_text(json.dumps({"sites": []}), encoding="utf-8")
+    assert main(["--config-root", str(root), "--env-file", "/dev/null", "llm", "describe"]) == 0
+    out = capsys.readouterr().out
+    assert "fast" in out and "conclude" in out and "think" in out and "토큰 4000" in out
+    assert "lead" not in out                                           # 기본과 같은 역할은 따로 안 찍는다
+    assert main(["--config-root", str(root), "--env-file", "/dev/null", "llm", "ask", "--role", "conclude", "안녕"]) == 0
+    assert json.loads(capsys.readouterr().out)["model"] == "think"
