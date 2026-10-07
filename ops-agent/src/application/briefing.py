@@ -573,7 +573,36 @@ def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
     return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
             "서비스 전부. 다른 이름은 code.flow(name).\n" + body)
 INTEGRATE_SLOTS = FRAME_SLOTS | {"hypotheses", "tasks", "evidence", "round",
-                                 "max_rounds", "rejected"}
+                                 "max_rounds", "rejected", "open"}
+
+
+_DUP_MARK = "이미 한 읽기를 또 냈다"
+
+
+def open_questions_block(state: CaseState) -> str:
+    """`<열린 질문>` — 코드가 아는 "모르는 것"을 매 턴 리드 앞에 둔다.
+
+    강한 모델은 잘린 표본·실패한 읽기·자기가 반복한 질의를 스스로 기억한다. 약한 모델은 못 한다 — c-1의 r2가 쥐고 있던
+    "키가 없다"가 r3에서 사라졌다. 그래서 하네스가 유지한다: 잘린 증거(잘린 표본으로는 "없다"를 주장할 수 없다), 실패한
+    읽기(사유 그대로 — 프록시 의심 같은 안내가 거기 있다), 거부된 중복(결과는 이미 증거에 있다). R2-2b가 "선언됐는데
+    없는 키"를 더한다. 리드가 정하는 것은 없다 — 사실의 목록이다.
+    """
+    lines = []
+    cut = [ref.id for ref in state.evidence if not ref.complete]
+    if cut:
+        lines.append(f"- 잘린 증거 {len(cut)}건: {', '.join(cut)} — 잘린 표본으로는 \"없다\"를 주장할 수 없다. "
+                     f"projection·limit·path로 좁혀 다시 읽어라")
+    failed = [t for t in state.plan_tasks if t.status == "error"]
+    if failed:
+        lines.append(f"- 실패한 읽기 {len(failed)}건: " + "; ".join(f"{t.id} ({_oneline(t.error or '원인 불명')[:120]})"
+                                                                for t in failed))
+    dup = [e for e in state.llm_errors if _DUP_MARK in e]
+    if dup:
+        found = sorted({part.strip() for e in dup if "그 결과는 " in e
+                        for part in e.split("그 결과는 ", 1)[1].split(",")})
+        lines.append(f"- 같은 읽기를 {len(dup)}번 다시 냈다 — 결과는 이미 증거에 있다"
+                     + (f": {', '.join(found)}" if found else ""))
+    return "\n".join(lines) if lines else "(없음)"
 
 
 def rejected_block(state: CaseState) -> str:
@@ -639,6 +668,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
             "tasks": tasks_block(state),
             "evidence": evidence_block(state, budget=evidence_budget),
             "rejected": rejected_block(state),
+            "open": open_questions_block(state),
             "round": str(state.round),
             "max_rounds": str(max_rounds)}
 
@@ -646,7 +676,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
 # ── 12a — 판정 턴의 재료 ──────────────────────────────────────────────
 
 CONCLUDE_SLOTS = frozenset({"case", "flow", "hypotheses", "tasks", "evidence", "ended",
-                            "rewrite", "components", "example"})
+                            "rewrite", "components", "example", "open"})
 # 판정 턴에는 부를 읽기가 없다 — `{actions}`를 요구하면 운영이 빈 목록을 넣어 통과시킨다.
 # 대신 `{evidence}`가 없으면 리드는 인용할 것을 못 본다.
 CONCLUDE_REQUIRED = ("case", "evidence", "example")
@@ -714,6 +744,7 @@ def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 120
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state),
             "evidence": evidence_block(state, budget=evidence_budget),
+            "open": open_questions_block(state),
             "ended": ended_line(state),
             "rewrite": rewrite_block(state),
             "components": components_line(tuple(services)),

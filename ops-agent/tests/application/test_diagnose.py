@@ -111,3 +111,13 @@ def test_판정_줄이_있다(case):
                     verdict=Verdict(verdict_type="inconclusive", confidence="low", narrative="n",
                                     caveats=["검증 미통과: 없는 id x 인용"]))
     assert "강등" in block(low)
+
+
+def test_끝까지_안_돈_태스크를_미실행으로_센다(case):
+    """사내 실측: 우선순위에 밀린 t-4가 끝까지 안 돌았는데 요약 어디에도 "안 돌았다"가 없었다."""
+    state = CaseState(case=case, round=3, stopped_by="max_rounds",
+                      plan_tasks=[task("t-1", status="ok"), task("t-4"), task("t-5")])
+    text = "\n".join(diagnose(state))
+    assert "미실행 2개" in text and "t-4" in text and "t-5" in text and "우선순위" in text
+    done = CaseState(case=case, round=1, stopped_by="decision", plan_tasks=[task("t-1", status="ok")])
+    assert "미실행" not in "\n".join(diagnose(done))

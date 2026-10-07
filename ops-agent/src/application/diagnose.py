@@ -63,6 +63,10 @@ def diagnose(state: CaseState) -> list[str]:
     mark = {"ok": "✅", "error": "❌", "pending": "⬜", "running": "…"}
     for task_id, query, task_status in queries:
         lines.append(f"    {mark.get(task_status, '?')} {task_id}  {query}")
+    # 끝까지 안 돈 태스크 — 사내 실측에서 우선순위에 밀린 t-4가 조용히 남았다. ⬜만으로는 "안 돌았다"가 안 읽힌다.
+    unrun = [t.id for t in state.plan_tasks if t.status == "pending"] if state.stopped_by else []
+    if unrun:
+        lines.append(f"  미실행 {len(unrun)}개 — 끝날 때까지 안 돌았다(우선순위에 밀림): {', '.join(unrun)}")
     return lines
 
 

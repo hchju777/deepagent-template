@@ -60,8 +60,9 @@ def _state(case, **over) -> CaseState:
 # ── conclude: 코드가 먼저 가르는 두 degraded ─────────────────────────
 
 async def test_조사가_안_돌았으면_LLM을_묻지_않고_degraded다(case):
-    """`stopped_by=llm_error`는 "조사 실패"다. 그 위에 판정을 또 물으면 죽은 LLM을 한 번
-    더 부르고, 성공하면 **안 돈 조사에 판정이 생긴다.**"""
+    """`stopped_by=llm_error`에 **증거까지 없으면** 판정을 묻지 않는다 — 인용할 것이 없는 판정은 근거가 없다.
+    (증거가 있으면 한 번 묻는다, R2-2a — 아래 `test_llm_error여도_증거가_있으면_판정을_한_번_묻는다`.)
+    서술은 사실이어야 한다: 몇 라운드에 무엇을 읽었나(사내 실측에서 "돌지 않았다"가 거짓이었다)."""
     concluder = Concluder()
     nodes = make_nodes(deps_for(ScriptedRunner(), conclude=concluder))
     state = _state(case, stopped_by="llm_error", evidence=[],
@@ -70,7 +71,7 @@ async def test_조사가_안_돌았으면_LLM을_묻지_않고_degraded다(case)
     got = patch["verdict"]
     assert got.verdict_type == "degraded" and got.confidence == "low"
     assert got.root_cause is None
-    assert "조사 실패" in got.narrative
+    assert "조사 중단" in got.narrative and "증거 0건" in got.narrative
     assert any("ConnectTimeout" in c for c in got.caveats)
     assert concluder.calls == []
 
@@ -315,3 +316,50 @@ def test_degraded_판정에는_검증_해당_없음이_붙는다(case):
     assert verify_note(state) == "검증 해당 없음" and "검증 해당 없음" in verdict_summary(state)
     normal = _state(case, verdict=Verdict(verdict_type="inconclusive", confidence="low", narrative="모름"))
     assert verify_note(normal) == "검증 통과"
+
+
+# ── R2-2a — llm_error여도 증거가 있으면 판정을 한 번 묻는다, degraded 서술은 사실로 ──
+
+async def _dead_integrate(state):
+    return {"llm_errors": ["integrate: 시간 초과 (181초) — APITimeoutError"], "decision": "conclude",
+            "stopped_by": "llm_error"}
+
+
+async def test_llm_error여도_증거가_있으면_판정을_한_번_묻는다(case):
+    """사내 실측 두 판: r1 integrate가 죽자 그때까지 모은 증거를 두고도 degraded로 끝났다. 액션 턴이 죽었다고 판정 턴까지
+    죽은 것은 아니다(다른 모델일 수 있다, R2-1) — 증거가 있으면 **한 번** 묻고, 그것도 실패하면 그때 degraded."""
+    concluder = Concluder({"verdict": verdict()})
+    deps = deps_for(_runner(), first_tasks=[task("t-1")], integrate=_dead_integrate,
+                    conclude=concluder, components=frozenset({"sink"}))
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert final["stopped_by"] == "llm_error" and len(concluder.calls) == 1
+    assert final["verdict"].verdict_type == "data_loss" and final["verify_problems"] == []
+
+    failing = Concluder({"llm_errors": ["conclude: 시간 초과 (182초) — APITimeoutError"]})
+    deps = deps_for(_runner(), first_tasks=[task("t-1")], integrate=_dead_integrate,
+                    conclude=failing, components=frozenset({"sink"}))
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    v = final["verdict"]
+    assert v.verdict_type == "degraded" and len(failing.calls) == 1
+    # 1-4: "조사가 돌지 않았다"는 거짓이다 — 몇 라운드에 무엇을 읽고 몇 건을 모았는지를 적는다.
+    assert "조사 중단" in v.narrative and "1라운드" in v.narrative
+    assert "읽기 1회(성공 1)" in v.narrative and "증거 1건" in v.narrative
+    assert any("conclude: 시간 초과" in c for c in v.caveats) and any("integrate: 시간 초과" in c for c in v.caveats)
+
+    exploding = Concluder(RuntimeError("폭발"))                      # 무raise(규율 1) — 이 길에서도
+    deps = deps_for(_runner(), first_tasks=[task("t-1")], integrate=_dead_integrate,
+                    conclude=exploding, components=frozenset({"sink"}))
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert final["verdict"].verdict_type == "degraded" and any("RuntimeError" in c for c in final["verdict"].caveats)
+
+
+async def test_증거가_없으면_죽은_리드_뒤에_판정을_묻지_않는다(case):
+    async def dead_frame(state):
+        return {"llm_errors": ["frame: 시간 초과 (183초)"], "decision": "conclude", "stopped_by": "llm_error"}
+
+    concluder = Concluder({"verdict": verdict()})
+    deps = deps_for(_runner(), conclude=concluder)
+    deps = dataclasses.replace(deps, frame=dead_frame)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    assert final["verdict"].verdict_type == "degraded" and concluder.calls == []
+    assert "증거 0건" in final["verdict"].narrative and "읽기 0회" in final["verdict"].narrative

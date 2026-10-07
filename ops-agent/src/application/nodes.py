@@ -173,6 +173,15 @@ def _done(state: CaseState) -> frozenset:
     return frozenset(_query(t) for t in state.plan_tasks if t.action)
 
 
+def _evidence_of(state: CaseState) -> dict[str, list[str]]:
+    """질의 → 그 읽기가 남긴 증거 id들. 같은 읽기를 다시 낸 리드에게 "그 결과는 t-1.e1에 있다"고 말하기 위해서다."""
+    out: dict[str, list[str]] = {}
+    for t in state.plan_tasks:
+        if t.action and t.result_evidence_ids:
+            out.setdefault(_query(t), []).extend(t.result_evidence_ids)
+    return out
+
+
 def runnable_tasks(state: CaseState) -> list[PlanTask]:
     """지금 실행할 수 있는 태스크 — 우선순위 오름차순, 동률이면 FIFO.
 
@@ -203,7 +212,8 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   taken: frozenset = frozenset(),
                   done: frozenset = frozenset(),
                   pending: frozenset = frozenset(),
-                  waiting: dict[str, PlanTask] | None = None
+                  waiting: dict[str, PlanTask] | None = None,
+                  evidence_of: dict[str, list[str]] | None = None
                   ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
@@ -271,8 +281,11 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
             asked.add(query)
             continue
         if task.action and query in asked:
+            # 거부만 하면 리드는 "왜"를 모른 채 또 낸다(사내 실측에서 세 번). 결과가 어디 있는지를 같이 적는다.
+            where = (evidence_of or {}).get(query) or []
             reused.append(f"{task.id}: 이미 한 읽기를 또 냈다 — 받지 않는다 "
-                          f"({describe(task.action, task.params)})")
+                          f"({describe(task.action, task.params)})"
+                          + (f" — 그 결과는 {', '.join(where)}" if where else ""))
             continue
         used.add(task.id)
         asked.add(query)
@@ -298,7 +311,7 @@ def make_nodes(deps: EngineDeps) -> dict:
         # 그게 맞다: 아직 아무것도 안 봤는데 이름을 안다면 찍은 것이다.
         tasks, rejected, guessed = _accept_tasks(
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
-            pending=_pending(state), waiting=_waiting(state),
+            pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),
             seen=_universe(state, deps) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -339,7 +352,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             fresh, rejected, guessed = _accept_tasks(
                 reply, room=deps.max_tasks - len(base.plan_tasks),
                 taken=_taken(base), done=_done(base), pending=_pending(base),
-                waiting=_waiting(base),
+                waiting=_waiting(base), evidence_of=_evidence_of(base),
                 seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed
@@ -449,6 +462,16 @@ def route_after_integrate(state: CaseState) -> str:
 MAX_ALTERNATES = 3        # 상한은 코드가 쥔다(규율 6) — 보고서가 읽히는 길이의 한계
 MAX_RELATION_CHARS = 300  # LLM 산문에는 길이 상한이 없다
 VERIFY_REWRITES = 1       # 되묻기는 한 번(decisions ⑯) — 세 번째는 없다
+
+
+def stopped_summary(state: CaseState, why: str) -> str:
+    """degraded 서술 — "조사가 돌지 않았다"는 사내 실측에서 거짓이었다(3라운드를 돌고 증거를 쥔 채 죽었다).
+    몇 라운드에 무엇을 읽고 몇 건을 모았는지, 가설이 어디까지 갔는지를 적는다."""
+    ran = [t for t in state.plan_tasks if t.status in ("ok", "error")]
+    good = sum(1 for t in ran if t.status == "ok")
+    hyps = " ".join(f"{h.id}[{h.status}]" for h in state.hypotheses[:4]) or "없음"
+    return (f"조사 중단 — {why}. {state.round}라운드 · 읽기 {len(ran)}회(성공 {good}) · "
+            f"증거 {len(state.evidence)}건 · 가설 {hyps}")
 
 
 def degraded(narrative: str, caveats=()) -> Verdict:
@@ -587,14 +610,26 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         한 번 더 부르는 것이고(성공하면 안 돈 조사에 판정이 생긴다), 증거가 0건이면 인용할
         것이 없어 어떤 판정도 근거가 없다. 둘 다 "미확정"이 아니라 **조사 실패**다.
         """
-        if state.stopped_by == "llm_error":
-            return {"verdict": degraded("조사 실패 — 리드 LLM이 응답하지 못해 조사가 돌지 않았다",
-                                        caveats=state.llm_errors)}
         if not state.evidence:
+            why = ("리드 LLM이 응답하지 못했고 모은 증거가 없다" if state.stopped_by == "llm_error"
+                   else "읽기가 하나도 성공하지 않아 판정할 재료가 없다")
             return {"verdict": degraded(
-                "조사 실패 — 읽기가 하나도 성공하지 않아 판정할 재료가 없다",
-                caveats=[f"{t.id}: {t.error or '원인 불명'}" for t in state.plan_tasks
-                         if t.status == "error"])}
+                stopped_summary(state, why),
+                caveats=list(state.llm_errors) + [f"{t.id}: {t.error or '원인 불명'}" for t in state.plan_tasks
+                                                  if t.status == "error"])}
+        if state.stopped_by == "llm_error" and deps.conclude is not None:
+            # 액션 턴이 죽었다고 판정 턴까지 죽은 것은 아니다(다른 모델일 수 있다, R2-1). 모은 증거가 있으면 **한 번**
+            # 묻는다 — 사내 실측 두 판은 증거를 쥐고도 여기서 degraded로 끝났다. 그것도 실패하면 그때 degraded.
+            try:
+                reply = await deps.conclude(state)
+            except Exception as exc:                                # noqa: BLE001
+                reply = {"llm_errors": [f"conclude: {type(exc).__name__}: {exc}"]}
+            notes = list(reply.get("llm_errors", []))
+            if reply.get("verdict") is not None:
+                return {"verdict": sanitize_verdict(reply["verdict"]), "llm_errors": notes}
+            return {"verdict": degraded(stopped_summary(state, "리드 LLM이 응답하지 못했고 판정 한 번도 실패했다"),
+                                        caveats=list(state.llm_errors) + notes),
+                    "llm_errors": notes}
         if deps.conclude is None:
             return {"verdict": degraded("판정 불가 — 이 경로에는 판정자가 배선되지 않았다",
                                         caveats=["판정자 없음 — 리드 경로는 lead.make_lead, "

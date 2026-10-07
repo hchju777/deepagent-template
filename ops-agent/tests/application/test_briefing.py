@@ -1134,3 +1134,35 @@ def test_판정_재료의_증거_블록은_리드가_본_것이고_접속_정보
     assert "t-1.e1" in fields["evidence"] and "표본이 잘렸다" in fields["evidence"]
     assert "1/1" in fields["ended"]                   # 태스크 오류율
     assert SECRET not in blob and DATABASE not in blob
+
+
+# ── R2-2a — <열린 질문>: 코드가 아는 "모르는 것"을 매 턴 리드 앞에 ──
+
+def test_열린_질문_블록은_잘린_증거_실패한_읽기_거부된_중복을_모은다(case):
+    """c-1의 r2가 쥐고 있던 사실("키가 없다")이 r3까지 가지 못했다 — 리드가 다시 떠올리길 바라지 않고 코드가 매 턴 적는다."""
+    state = CaseState(case=case, plan_tasks=[task("t-1", status="ok"), task("t-2", status="ok"),
+                                             task("t-3", status="error", error="ConnectError: 못 붙었다 — 프록시 경유 의심")],
+                      evidence=[EvidenceRef(id="t-1.e1", source="s", summary="a", body="b"),
+                                EvidenceRef(id="t-2.e1", source="s", summary="a", body="b", complete=False)],
+                      llm_errors=["t-7: 이미 한 읽기를 또 냈다 — 받지 않는다 (redis.get key=k) — 그 결과는 t-1.e1"])
+    text = briefing.open_questions_block(state)
+    assert "잘린 증거 1건: t-2.e1" in text and "없다" in text          # 잘린 표본으로 "없다"를 주장할 수 없다
+    assert "실패한 읽기 1건: t-3" in text and "프록시 경유 의심" in text
+    assert "같은 읽기를 1번 다시 냈다" in text and "t-1.e1" in text
+    assert briefing.open_questions_block(CaseState(case=case)) == "(없음)"
+
+
+def test_열린_질문은_integrate와_conclude_프롬프트에_자리가_있다(case):
+    from pathlib import Path
+
+    from src.application.lead import slots_in
+
+    folder = Path(__file__).resolve().parents[2] / "config" / "prompts"
+    templates = {name: (folder / f"investigate-{name}.md").read_text(encoding="utf-8") for name in ("integrate", "conclude")}
+    for name, text in templates.items():
+        assert "open" in slots_in(text), name
+    assert "open" in briefing.INTEGRATE_SLOTS
+    # 자리가 있으면 재료도 있어야 한다 — 빈 자리는 리드에게 `{open}` 글자로 간다.
+    state = CaseState(case=case)
+    assert slots_in(templates["integrate"]) <= set(briefing.integrate_fields(state, site_config=site(), max_rounds=6))
+    assert slots_in(templates["conclude"]) <= set(briefing.conclude_fields(state, site_config=site()))

@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1506 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 409 사례 |
+| 테스트 | `1512 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 419 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -391,7 +391,8 @@ LLM 없이 검사해 한 번 되묻고 그래도 안 되면 걷어내고 강등�
 트레이스에 걸린 초·`POST /path` 접두·degraded `검증 해당 없음`·프록시 의심 안내)을 했다(12a 문서 "사내 실측" 표).
 두 번째 실측도 r1~r6에서 **게이트웨이 180초 끊김**으로 죽어, 사내 Claude와 만든 수정 지시를 리뷰해 R2~R4로 묶었다
 (12a 문서 "두 번째 실측과 R2 계획"). **R2-1**(역할별 LLM `llm_roles`·`max_tokens`·`stream`, `make_lead(conclude_llm=)`,
-`llm describe/ask/check --role`)을 했다. **남은 라운드(R2-2a·R2-2b·R2-2c → 사내 재측정 → R3 triage → R4 ReAct)는
+`llm describe/ask/check --role`)과 **R2-2a**(llm_error 뒤 판정 1회·사실 서술·미실행·중복 사유에 증거 id·`<열린 질문>`)를
+했다. **남은 라운드(R2-2b·R2-2c → 사내 재측정 → R3 triage → R4 ReAct)는
 [plan-12a-r2-r4.md](plan-12a-r2-r4.md)에 항목·자리·테스트·종료 판단까지 적혀 있다 — 라운드를 시작할 때 그 문서를 먼저
 읽고, 그 사이 알게 된 것으로 문서를 고친 뒤 예고를 쓴다.** 그다음 **12b**.
 11e 후속 후보(별도 예고): 사이트에서 도는 파이프라인만 배선으로 보이게, 레포 커밋별 graphify 캐시.

@@ -1253,18 +1253,22 @@ DG = ROOT / "src/application/diagnose.py"
 CS = ROOT / "src/domain/case.py"
 V = "tests/application/test_verdict.py"
 CASES += [
- ("죽은 조사에도 LLM을 묻는다", ND,
-  '        if state.stopped_by == "llm_error":\n            return {"verdict": degraded("조사 실패 — 리드 LLM이',
-  '        if False:\n            return {"verdict": degraded("조사 실패 — 리드 LLM이',
+ ("죽은 조사에도 LLM을 묻는다(증거 0건)", ND,
+  '        if not state.evidence:\n            why = (',
+  '        if False:\n            why = (',
   [f"{V}::test_조사가_안_돌았으면_LLM을_묻지_않고_degraded다"]),
  ("증거 0건에도 판정을 묻는다", ND,
-  '        if not state.evidence:\n            return {"verdict": degraded(\n                "조사 실패 — 읽기가 하나도',
-  '        if False:\n            return {"verdict": degraded(\n                "조사 실패 — 읽기가 하나도',
+  '        if not state.evidence:\n            why = (',
+  '        if False:\n            why = (',
   [f"{V}::test_증거가_하나도_없으면_degraded이고_실패한_태스크가_caveat에_남는다"]),
  ("판정자의 예외를 흡수하지 않는다", ND,
-  '            reply = {"llm_errors": [f"conclude: {type(exc).__name__}: {exc}"]}',
-  '            raise',
+  '            # 판정자는 LLM 어댑터를 품고 있다. 여기서 죽으면 케이스가 investigating으로 남는다.\n            reply = {"llm_errors": [f"conclude: {type(exc).__name__}: {exc}"]}',
+  '            # 판정자는 LLM 어댑터를 품고 있다. 여기서 죽으면 케이스가 investigating으로 남는다.\n            raise',
   [f"{V}::test_판정자가_던져도_흡수한다"]),
+ ("llm_error 뒤 판정자의 예외를 흡수하지 않는다", ND,
+  '            except Exception as exc:                                # noqa: BLE001\n                reply = {"llm_errors": [f"conclude: {type(exc).__name__}: {exc}"]}',
+  '            except Exception as exc:                                # noqa: BLE001\n                raise',
+  [f"{V}::test_llm_error여도_증거가_있으면_판정을_한_번_묻는다"]),
  ("비LLM 사유를 caveat에 안 남긴다", ND,
   '            reasons = notes + ([str(reply["note"])] if reply.get("note") else [])',
   '            reasons = notes',
@@ -1680,7 +1684,43 @@ CASES += [
   ["tests/test_cli.py::test_llm_describe는_역할별_실효값을_찍고_ask는_역할을_고른다"]),
 ]
 
-assert len(CASES) >= 409, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-2a — 엔진 P0: llm_error 뒤 판정 1회·사실 서술·미실행·중복 사유·열린 질문 ──
+VT = "tests/application/test_verdict.py"
+CASES += [
+ ("llm_error 뒤 판정이 와도 degraded로 찍는다", ND,
+  '            if reply.get("verdict") is not None:\n                return {"verdict": sanitize_verdict(reply["verdict"]), "llm_errors": notes}',
+  '            if False:\n                return {"verdict": sanitize_verdict(reply["verdict"]), "llm_errors": notes}',
+  [f"{VT}::test_llm_error여도_증거가_있으면_판정을_한_번_묻는다"]),
+ ("증거가 없어도 죽은 리드 뒤에 판정을 묻는다", ND,
+  '        if not state.evidence:\n            why = (', '        if False:\n            why = (',
+  [f"{VT}::test_증거가_없으면_죽은_리드_뒤에_판정을_묻지_않는다"]),
+ ("degraded 서술이 읽기 수를 안 센다", ND,
+  '    return (f"조사 중단 — {why}. {state.round}라운드 · 읽기 {len(ran)}회(성공 {good}) · "',
+  '    return (f"조사 중단 — {why}. {state.round}라운드 · 읽기 0회(성공 {good}) · "',
+  [f"{VT}::test_llm_error여도_증거가_있으면_판정을_한_번_묻는다"]),
+ ("미실행 태스크를 안 센다", ROOT / "src/application/diagnose.py",
+  '    if unrun:\n        lines.append(f"  미실행', '    if False:\n        lines.append(f"  미실행',
+  ["tests/application/test_diagnose.py::test_끝까지_안_돈_태스크를_미실행으로_센다"]),
+ ("중복 거부 사유에 증거 id를 안 적는다", ND,
+  '            where = (evidence_of or {}).get(query) or []',
+  '            where = []',
+  ["tests/application/test_nodes.py::test_중복_질의_거부_사유에_기존_증거_id가_있다"]),
+ ("열린 질문이 잘린 증거를 안 적는다", B,
+  '    if cut:\n        lines.append(f"- 잘린 증거', '    if False:\n        lines.append(f"- 잘린 증거',
+  ["tests/application/test_briefing.py::test_열린_질문_블록은_잘린_증거_실패한_읽기_거부된_중복을_모은다"]),
+ ("열린 질문이 실패한 읽기를 안 적는다", B,
+  '    if failed:\n        lines.append(f"- 실패한 읽기', '    if False:\n        lines.append(f"- 실패한 읽기',
+  ["tests/application/test_briefing.py::test_열린_질문_블록은_잘린_증거_실패한_읽기_거부된_중복을_모은다"]),
+ ("열린 질문이 거부된 중복을 안 적는다", B,
+  '    if dup:\n        found = sorted(', '    if False:\n        found = sorted(',
+  ["tests/application/test_briefing.py::test_열린_질문_블록은_잘린_증거_실패한_읽기_거부된_중복을_모은다"]),
+ ("integrate 재료에 열린 질문이 없다", B,
+  '            "rejected": rejected_block(state),\n            "open": open_questions_block(state),',
+  '            "rejected": rejected_block(state),',
+  ["tests/application/test_briefing.py::test_열린_질문은_integrate와_conclude_프롬프트에_자리가_있다"]),
+]
+
+assert len(CASES) >= 419, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

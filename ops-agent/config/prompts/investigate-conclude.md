@@ -20,6 +20,10 @@
 {evidence}
 </모은 증거>
 
+<열린 질문>
+{open}
+</열린 질문>
+
 조사 종료: {ended}
 
 {rewrite}

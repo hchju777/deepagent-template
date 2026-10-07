@@ -5,7 +5,7 @@ from src.application.state import CaseState
 from src.domain.case import EvidenceRef, Hypothesis, PlanTask
 from src.domain.investigation import TaskOutcome
 
-from tests.application.conftest import deps_for, ok, task
+from tests.application.conftest import deps_for, ok, plan, task
 
 
 def _ev(evidence_id: str) -> EvidenceRef:
@@ -496,3 +496,20 @@ def test_expect가_가리키는_증거가_생기기_전에는_안_돈다(case):
     assert runnable_tasks(state_with(case, plan_tasks=[t])) == []
     ev = EvidenceRef(id="t-1.e1", source="rest.query entry='x'", summary="s")
     assert [x.id for x in runnable_tasks(state_with(case, plan_tasks=[t], evidence=[ev]))] == ["t-6"]
+
+
+async def test_중복_질의_거부_사유에_기존_증거_id가_있다(case):
+    """리드는 같은 읽기를 다시 낸다 — 거부만 하면 "왜"를 모른 채 또 낸다(사내 실측에서 세 번). 그 결과가 어느 증거에
+    있는지를 사유에 적어 주면 거기를 읽는다."""
+    from src.application.graph import build_engine
+    from src.domain.case import EvidenceRef
+    from src.domain.investigation import TaskOutcome
+
+    runner = ScriptedRunner({"t-1": TaskOutcome(task_id="t-1", status="ok", summary="봤다",
+                                                evidence=[EvidenceRef(id="t-1.e1", source="redis.get key=k-t-1",
+                                                                      summary="값", body="{}")])})
+    duplicate = task("t-7", params={"key": "k-t-1"})                 # t-1과 같은 질의, 새 id
+    deps = deps_for(runner, first_tasks=[task("t-1")], integrate=plan([duplicate]), max_rounds=2)
+    final = await build_engine(deps).ainvoke(CaseState(case=case))
+    refused = [e for e in final["llm_errors"] if "t-7" in e and "이미 한 읽기" in e]
+    assert refused and "t-1.e1" in refused[0]
