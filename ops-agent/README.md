@@ -170,6 +170,12 @@ python -m src llm ask "질문"
 사내 게이트웨이 접속은 [7단계 문서](STEPS/step-07-llm.md). 실제로 붙는지는
 사내에서 `pytest tests/live -m live_llm -v`가 확인한다.
 
+`app.json`의 `llm`에서 사내 실측으로 정해진 것들(12a 리뷰 4번): **역할별 모델** `llm_roles.lead`(액션 턴, 빠른 모델)·
+`llm_roles.conclude`(판정, 생각하는 모델 + 긴 `timeout_s`)·`llm_roles.report` — 기본 `llm` 위에 덮어쓸 것만 적는다;
+`stream`은 chat_model이면 기본 켬(게이트웨이의 180초 벽은 유휴 끊김이었다); `response_format`은 기본 `json_schema`(리드의 답
+스키마를 서버가 강제 — 거부하는 게이트웨이면 `json_object`); `min_interval_s`는 분당 할당량(429)에 걸릴 때 게이트웨이 단위
+호출 간격, `rate_wait_max_s`는 429 뒤 기다리는 상한. `llm describe`가 역할별 실효값을 한 줄씩 찍는다.
+
 **역할별 모델** — 액션 턴(가설·다음 읽기 고르기)은 빠른 모델, 판정(`conclude`)은 생각하는 모델, 보고서 서술은
 또 다를 수 있다. `app.json`의 `llm`이 기본이고 `llm_roles`에 역할마다 **다른 것만** 적는다(인증·주소·TLS는 물려받는다):
 

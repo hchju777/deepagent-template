@@ -150,7 +150,7 @@ def test_토큰_상한과_스트리밍은_config이고_설명에_실효값이_�
     cfg = LlmConfig(**GATEWAY, max_tokens=300, stream=True)
     text = cfg.describe()
     assert "상한 300s" in text and "재시도 0" in text and "토큰 300" in text and "스트리밍" in text
-    assert "토큰" not in LlmConfig(**GATEWAY).describe() and "스트리밍" not in LlmConfig(**GATEWAY).describe()
+    assert "토큰" not in LlmConfig(**GATEWAY).describe() and "스트리밍" not in LlmConfig(**GATEWAY, stream=False).describe()
     with pytest.raises(ValidationError) as caught:
         LlmConfig(**GATEWAY, adapter="http", stream=True)
     assert "스트리밍" in str(caught.value)
@@ -173,3 +173,13 @@ def test_response_format은_셋_중_하나이고_describe에_보인다():
     assert "· 답" not in LlmConfig(**GATEWAY, response_format="none").describe()
     with pytest.raises(ValidationError):
         LlmConfig(**GATEWAY, response_format="yaml")
+
+
+def test_stream_기본값은_chat_model이면_켬_http면_끔이고_명시가_이긴다():
+    """사내 10-08: 판정 턴 226초도 stream이면 살았다 — 180초 벽은 유휴 끊김이었다. 그래서 기본이 켬이다. http 어댑터는
+    스트리밍이 없으므로 기본이 끔이고, 켜 달라고 명시하면 전처럼 거부한다."""
+    assert LlmConfig(**GATEWAY).stream is True and "스트리밍" in LlmConfig(**GATEWAY).describe()
+    assert LlmConfig(**GATEWAY, adapter="http").stream is False
+    assert LlmConfig(**GATEWAY, stream=False).stream is False and "스트리밍" not in LlmConfig(**GATEWAY, stream=False).describe()
+    with pytest.raises(ValidationError):
+        LlmConfig(**GATEWAY, adapter="http", stream=True)

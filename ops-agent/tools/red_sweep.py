@@ -1986,7 +1986,14 @@ CASES += [
   ["tests/config/test_schema_llm.py::test_response_format은_셋_중_하나이고_describe에_보인다"]),
 ]
 
-assert len(CASES) >= 486, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-3 ④ — stream 기본 켬 ──
+CASES += [
+ ("stream 기본값이 chat_model에서도 꺼져 있다", ROOT / "src/config/schema_llm.py",
+  '            self.stream = self.adapter == "chat_model"', "            self.stream = False",
+  ["tests/config/test_schema_llm.py::test_stream_기본값은_chat_model이면_켬_http면_끔이고_명시가_이긴다"]),
+]
+
+assert len(CASES) >= 487, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

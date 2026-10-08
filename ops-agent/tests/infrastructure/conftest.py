@@ -75,10 +75,13 @@ def _handler_for(recorder: _Recorder):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             half = max(1, len(text) // 2)
-            for piece in (text[:half], text[half:]):
+            pieces = (text[:half], text[half:])
+            for n, piece in enumerate(pieces):
+                # 마지막 조각에 `finish_reason: "stop"` — OpenAI 규약이고, langchain-openai는 **그 조각에서만** `model`을
+                # `response_metadata.model_name`으로 올린다. 없으면 스트리밍 답의 reported_model이 비어 모델 확인이 죽는다.
                 chunk = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": model,
                          "choices": [{"index": 0, "delta": {"role": "assistant", "content": piece},
-                                      "finish_reason": None}]}
+                                      "finish_reason": "stop" if n == len(pieces) - 1 else None}]}
                 self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
             self.wfile.write(b"data: [DONE]\n\n")

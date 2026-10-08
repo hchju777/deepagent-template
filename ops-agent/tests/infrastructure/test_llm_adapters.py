@@ -99,7 +99,7 @@ async def test_스트리밍이면_조각을_모아_한_답으로_주고_첫_토�
     assert reply.status == "ok", reply.error
     assert reply.text == "pong-streamed" and reply.first_token_s is not None and reply.latency_s is not None
     assert recorder.requests[-1]["body"].get("stream") is True
-    plain = await build_llm(_cfg(base_url, "chat_model"), clock=clock).ask("hi")
+    plain = await build_llm(_cfg(base_url, "chat_model", stream=False), clock=clock).ask("hi")
     assert plain.first_token_s is None and not recorder.requests[-1]["body"].get("stream")
 
 

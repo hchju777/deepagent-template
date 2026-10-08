@@ -120,9 +120,10 @@ class LlmConfig(StrictModel):
     # 지연 시간도 같이 잡힌다. 없으면 안 보낸다(게이트웨이 기본). chat_model은 langchain-openai가 OpenAI의 현재 이름
     # `max_completion_tokens`로 내보내고 http 어댑터는 `max_tokens`로 — 게이트웨이가 옛 이름만 알면 http로 간다.
     max_tokens: int | None = None
-    # 스트리밍으로 받아 조각을 모은다. 사내 게이트웨이의 ~180초 끊김은 총 시간이 아니라 **유휴** 상한일 가능성이
-    # 커서, 출력이 시작된 뒤 바이트가 흐르면 산다. 호출부가 받는 것은 전과 같은 `LlmReply` 하나다(chat_model만).
-    stream: bool = False
+    # 스트리밍으로 받아 조각을 모은다. 사내 게이트웨이의 ~180초 끊김은 총 시간이 아니라 **유휴** 상한이었다(10-08 재측정:
+    # 판정 턴 226초도 stream이면 살았다). 그래서 **기본이 켬**이다 — `None`이면 chat_model은 켬, http는(스트리밍이 없다) 끔.
+    # 명시하면 그 값. 호출부가 받는 것은 전과 같은 `LlmReply` 하나다.
+    stream: bool | None = None
     # 답에 스키마가 있을 때 OpenAI 규약 `response_format`을 어떻게 보낼지. `json_schema`(기본)는 모양까지 — strict는 스키마가
     # 닫힐 때만(`domain/llm_schema`); `json_object`는 문법만(게이트웨이가 json_schema를 거부할 때); `none`은 안 보낸다.
     response_format: Literal["json_schema", "json_object", "none"] = "json_schema"
@@ -176,6 +177,12 @@ class LlmConfig(StrictModel):
         if v is not None and v < 1:
             raise ValueError(f"max_tokens는 1 이상이다 — {v}")
         return v
+
+    @model_validator(mode="after")
+    def _stream_default(self):
+        if self.stream is None:
+            self.stream = self.adapter == "chat_model"
+        return self
 
     @model_validator(mode="after")
     def _network_adapters_need_base_url(self):

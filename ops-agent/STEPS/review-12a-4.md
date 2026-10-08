@@ -24,9 +24,20 @@ GBM 단위가 되어(`code graph --gbm mx` 한 번, 사내 203초) 실제 사이
   찍힌다). 낡음(`⚠ 낡음`)이면 `code graph --gbm mx`를 먼저 다시 돌린다.
 - `config/app.json`의 `llm`에 `timeout_s`·`max_retries`가 **명시돼 있으면 그 값이 이긴다.** 생각하는 모델은 한 답에 60초가
   모자라 두 판이 r1에서 죽었다 — 명시돼 있으면 `timeout_s: 300`, `max_retries: 0`으로(없으면 그게 기본값이다).
-- R2-1부터 역할별 모델이 된다. `app.json`에 `llm_roles`를 적는다 — `lead`(액션 턴)는 빠른 모델 + `max_tokens: 400`,
-  `conclude`(판정)는 생각하는 모델 + 넉넉한 `timeout_s`, 기본 `llm`에 `stream: true`(게이트웨이의 유휴 끊김 실험).
-  `llm describe`로 역할별 실효값을 확인하고 `llm check --role lead`·`--role conclude`가 둘 다 붙는지 본다.
+- 역할별 모델(R2-1). 10-08 재측정으로 확정한 설정 — 사내 `app.json`의 `llm` 옆에 그대로 적는다(`llm.stream`은 chat_model이면
+  기본이 켬이라 안 적어도 된다; 리포의 `config/app.json`에는 안 넣는다 — CLI 테스트가 그 파일을 복사해 쓴다):
+
+  ```json
+  "llm_roles": {
+    "lead": {"model": "gauss-o-flash", "model_id": "339", "max_tokens": 1500, "expect_reported_model": "openai/gpt-oss-120b"},
+    "conclude": {"model": "gauss-o-think-beta", "model_id": "581", "timeout_s": 600}
+  }
+  ```
+
+  lead `max_tokens` 400은 지금
+  integrate 형식(가설 + 태스크 여럿)에서 JSON이 잘린다 — ReAct 전까지 1500. `llm describe`로 역할별 실효값을 확인하고
+  `llm check --role lead`·`--role conclude`가 둘 다 붙는지 본다(`llm check`는 R2-3 ①에서 고쳤다 — 둘째 질문부터 Connection
+  error가 나던 것). 분당 할당량에 걸리면 `llm.min_interval_s`(초)를 둔다 — 게이트웨이 단위로 리드·판정이 같이 지킨다.
 - 순찰이 sevt에서 **finding을 내야** 케이스가 열린다. 사람이 손으로 케이스를 여는 CLI는 아직 없다. finding 0건이면
   4번은 지금 못 돌린다 — 그 사실 자체가 보고다(아래 형식 ②에서 멈춘다).
 
@@ -84,4 +95,13 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
   (README "프록시와 NO_PROXY").
 - 명령이 끝나 내려갈 때 **트레이스백이 남는가**(`ConnectionResetError(10054)`·`Event loop is closed`). 남으면 그 전문 세 줄.
 - 트레이스 파일 머리의 `응답: N초`와 `## 물어본 것 (N자)`의 N — 라운드별로. integrate 프롬프트의 `<열린 질문>` 첫 줄.
+
+## R2-3 뒤 측정 #3에서 더 볼 것 (10-08)
+
+- 같은 두 케이스, 설정은 위 `llm_roles` 그대로(2-3).
+- 리드 턴의 **JSON 실패 횟수**: `case trace --brief`에서 `결과: 못 읽었다 — … JSON …`인 라운드 수. 0이어야 한다
+  (`response_format`을 서버가 받았다는 뜻). 게이트웨이가 400으로 거부하면 그 본문 한 줄 — `llm.response_format: json_object`로
+  바꿔 다시.
+- **429 횟수와 대기 초**: 요약 끝줄 `429 대기: 합계 N초 · 호출 M회`(없으면 안 찍힌다).
+- `kafka tail --limit 300`(또는 `peek kafka`)이 이제 몇 건을 돌려주는지 한 줄.
 
