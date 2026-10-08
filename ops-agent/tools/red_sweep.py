@@ -1611,7 +1611,7 @@ CASES += [
   '    return bool(_TIMEOUT_WORDS.search(error))', '    return False',
   ["tests/application/test_lead.py::test_시간_초과는_되묻지_않는다"]),
  ("걸린 초가 트레이스로 안 간다", LD,
-  '        _tell(on_exchange, asked, text, failure, latency)', '        _tell(on_exchange, asked, text, failure)',
+  '        _tell(on_exchange, asked, text, failure, latency, waited)', '        _tell(on_exchange, asked, text, failure, None, waited)',
   ["tests/application/test_lead.py::test_응답_시간이_트레이스로_간다"]),
  ("트레이스 파일에 응답 초를 안 적는다", MN,
   '        took = f"응답: {latency_s:.1f}초\\n" if latency_s is not None else ""', '        took = ""',
