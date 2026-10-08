@@ -92,7 +92,41 @@ integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 �
 **여기서 사내 재측정** — [review-12a-4.md](review-12a-4.md)의 일곱 줄 + `응답 N초` + 프롬프트 크기 + **종료 때 트레이스백 유무**.
 이 결과로 R3·R4의 숫자를 정한다.
 
-## R3 — 결정적 triage (지시서 4·5·6, 리뷰 J). 사내에서 받을 것 1~5가 전제
+## R2-3 — 재측정(10-08) 뒤 P0 (지시서 "최종" 2-1~2-6, 3-3(a)·3-4·3-5, 5의 kafka tail)
+
+재측정 요약(10-08, sevt): 역할 지정(lead 빠른 모델·conclude 생각 모델·`stream`)으로 리드 턴 4~14초, 판정 턴은 226초가 걸려도
+성공 — 180초 벽은 유휴 끊김이었고 stream이 풀었다. 새 문제: 빠른 모델의 JSON 문법 오류(따옴표 누락), 분당 할당량(429, 모델 공유).
+모델과 무관하게 남는 것: 입구 매핑 오판(이름 유사성), 예시 따라 하기, 결정적 읽기가 폭에 밀림, verify가 오판을 통과시킴.
+**지난 리뷰의 c-1 원인("use:false")은 오판** — 이름이 비슷한 다른 배지였다. 실제 c-1은 요약 키 data 0건 ← 도메인 키 0건 ←
+입력 5개 중 원천 키 하나 부재(TTL -2).
+
+| 항목 | 할 것 | 자리 |
+|---|---|---|
+| 2-5 | `llm check`가 질문마다 닫아 둘째부터 Connection error — 끝에서 한 번만(R2-2c 회귀) | `__main__.cmd_llm_check` |
+| 2-6 | stderr "이 조사는 안 돌았다"가 판정 뒤에도 찍힘 → `diagnose.llm_error_line`: `LLM 오류 N건 — 조사 중단(llm_error) · 판정 <종류>` / `리드가 계약을 어겼다` | `diagnose.py`, `__main__` |
+| 5 | `kafka tail --limit 300`이 2건: `getmany`를 한 번만 불러 첫 배치만 받는다 → 다 채우거나 더 안 올 때까지 루프 | `kafka_inspector.tail` |
+| 2-2 | 429: 본문의 `nextAccessTime`(ISO·epoch)까지 기다린 뒤 한 번 재시도, 실패로 안 셈. `llm.min_interval_s`를 **base_url 단위 pacer**로 공유(할당량이 모델을 안 가림). 대기 초·횟수는 `LlmReply.waited_s`·`rate_limited`로 트레이스·다이제스트에 | `llm_pacing.py`(새), 어댑터 둘, `trace_digest`, `_make_tracer` |
+| 2-1 | `response_format`: `LlmPort.ask(prompt, *, schema=None)`; `ask_json`이 답 모델의 JSON 스키마를 넘김. `json_schema`로 보내되 **`strict`는 스키마가 닫힐 때만 true** — 태스크 `params`·`filter`가 자유형이라 lead 쪽은 false. `llm.response_format: json_schema \| json_object \| none` | `domain/llm.py`, 어댑터 넷, `lead.ask_json`, `schema_llm` |
+| 2-3 | `stream` 기본값 true(chat_model). 브리프·`config/app.json`의 `llm_roles` 예시 확정(lead max_tokens 1500, conclude timeout 600) | `schema_llm`, `review-12a-4.md`, `app.json` |
+| 2-4 | 프롬프트 상한 `integrate_prompt_chars 8000`·`conclude_prompt_chars 10000`: 넘으면 오래된 증거부터 `id \| 질의 \| 한 줄`로 접고, 그래도 넘으면 끝난 태스크 줄을 접는다. 좁혀 읽은 증거도 같다 | `schema_app`, `lead.make_lead`, `briefing` |
+| 3-3(a) | `component`는 토폴로지 서비스 이름만(`external` 판정만 예외) — 지금은 증거에 나온 이름도 통과해 Redis 키 이름이 통과했다 | `nodes._component_ok` |
+| 3-4 | 예시의 자유 칸은 **자리표시자**(action은 목록의 이름, 인자 키는 그 action의 것) — 사다리 칸(진짜 값)은 그대로. 규칙 한 줄 "인자는 그 읽기의 것만" | `briefing.example_block`, 템플릿 |
+| 3-5 | integrate 규칙 한 줄: "값이 비었으면 다음은 그 키를 쓰는 쪽(`code.uses`)과 그 파이프라인의 입력 키" | 템플릿 |
+
+종료 판단: 가짜 게이트웨이로 429→대기→성공, `response_format`이 소켓에 나가는 것, 측정판 r2 integrate 프롬프트가 상한 안.
+**그다음 사내 측정 #3**(같은 두 케이스, 2-3 설정 그대로) — 브리프에 리드 턴 JSON 실패 횟수·429 횟수와 대기 초를 더한다.
+
+## R3 — 정확도: 선언형 입구 매핑과 frame 전 읽기 (지시서 "최종" 3-1·3-2·3-3(b)(c)·4, 사내 정보 6)
+
+사내 어휘는 리포에 못 들어간다(⑮). 사슬 — 대상 행의 링크 필드 → 이름 토큰 → api config 경로(`use`·설정 블록) → 키 설정
+경로 → 접두 + 키 → 값 안의 identity 경로 — 를 **토폴로지 config가 선언**하고 코드가 걷는다. 이름 유사성은 쓰지 않는다.
+사슬이 닫히면 매핑 키와 확인 결과를 케이스 블록에 싣고 그 키 읽기(`redis.get`, 필요하면 `path`)를 **frame 전에** 코드가 돌려
+증거로 싣는다. 끊길 때만 후보를 리드에게. frame이 낸 태스크는 폭과 무관하게 전부 돈다(생성 라운드 → 우선순위 순).
+verify (b) 인용한 설정 항목이 매핑된 것인지, (c) 인용 증거에 대상 항목의 반대 사실(`use:true`)이 있으면 강등.
+픽스처: `source-missing`(c-1형), `source-blank`(c-2형), `pipeline-off`는 이름이 비슷한 `use:false` 미끼. 8-3 숫자는 역할 지정
+기준(리드 턴 ≤15초, 판정 ≤600초 stream, 케이스 ≤5분 — 429 대기 별도 표시).
+
+## (옛) R3 — 결정적 triage (지시서 4·5·6, 리뷰 J). 사내에서 받을 것 1~5가 전제
 
 목적: LLM 없이 30초 안에 "첫 나쁜 홉"을 코드가 찾고, 리드는 거기서 "왜"만 판단한다. 8-4: 아무것도 모르는 대역 LLM으로도
 첫 나쁜 홉이 맞아야 한다.

@@ -627,3 +627,37 @@ def test_unraisable_거름망은_proactor_transport의_닫힌_루프만_삼킨�
     hook(Unraisable(RuntimeError("Event loop is closed"), object()))     # 다른 객체의 같은 메시지는 그대로
     hook(Unraisable(ValueError("x"), proactor_del))
     assert len(seen) == 2
+
+
+def test_llm_check는_끝에서_한_번만_닫는다(echo_config, capsys, monkeypatch):
+    """R2-2c 회귀(사내 10-08): 질문마다 닫아서 둘째 질문부터 Connection error — 모든 모델이 고장난 것처럼 보였다."""
+    from src.__main__ import main
+    from src.infrastructure import llm_factory
+
+    real = llm_factory.build_llm
+
+    class Counting:
+        def __init__(self, inner):
+            self.inner, self.closed, self.asked = inner, 0, 0
+
+        async def ask(self, prompt, **kw):
+            self.asked += 1
+            return await self.inner.ask(prompt, **kw)
+
+        def describe(self):
+            return self.inner.describe()
+
+        async def close(self):
+            self.closed += 1
+
+    made = []
+
+    def fake_build(cfg, *, clock, **kw):
+        made.append(Counting(real(cfg, clock=clock)))
+        return made[-1]
+
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm", fake_build)
+    main(["--config-root", str(echo_config), "--env-file", "/dev/null", "llm", "check"])
+    out = capsys.readouterr().out
+    assert len(made) == 1 and made[0].asked == 3 and made[0].closed == 1, (made[0].asked, made[0].closed)
+    assert "❌" not in out

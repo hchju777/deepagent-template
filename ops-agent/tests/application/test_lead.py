@@ -851,7 +851,7 @@ def test_CLI가_LLM_실패를_0으로_숨기지_않는다(tmp_path, capsys, monk
     captured = capsys.readouterr()
     assert "끝난 이유: llm_error" in captured.out
     assert "ConnectTimeout" in captured.err        # 사유는 stderr에 그대로 남는다
-    assert "안 돌았다" in captured.err
+    assert "조사 중단(llm_error)" in captured.err and "판정 degraded" in captured.err   # 사실 머리줄(R2-3 ①)
 
 
 def test_우리가_안_채우는_자리가_있으면_기동을_막는다(tmp_path, monkeypatch):

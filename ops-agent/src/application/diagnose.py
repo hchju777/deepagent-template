@@ -117,3 +117,16 @@ def verdict_lines(state: CaseState) -> list[str]:
     lines += [f"    주의 {c}" for c in v.caveats]
     lines.append(f"    {verify_note(state)}")
     return lines
+
+
+def llm_error_line(state: CaseState) -> str:
+    """stderr 머리줄 — **사실만.** "이 조사는 안 돌았다"는 llm_error 뒤에도 판정을 한 번 묻는 지금(R2-2a) 거짓이 됐고, 사내
+    10-08에서 표준 출력의 판정과 모순됐다. 중단이면 중단과 판정 유무를, 아니면 계약 위반이었음을 적는다. 오류가 없으면 빈 문자열."""
+    if not state.llm_errors:
+        return ""
+    head = f"⚠ LLM 오류 {len(state.llm_errors)}건 — "
+    if state.stopped_by == "llm_error":
+        verdict = f"판정 {state.verdict.verdict_type}" if state.verdict is not None else "판정 없음"
+        return head + f"조사 중단(llm_error) · {verdict}"
+    return head + "리드가 계약을 어겼다(조사는 끝까지 돌았다)"
+

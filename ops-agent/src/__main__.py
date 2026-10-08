@@ -395,22 +395,26 @@ def cmd_llm_check(args, env) -> int:
     print(f"  {cfg.describe()}\n")
     failed = 0
     reported = None
-    async def ask(prompt: str):
+
+    async def run_checks():
+        # 질문 셋을 **한 루프 안에서** 묻고 끝에서 한 번만 닫는다 — 질문마다 닫았더니(R2-2c) 둘째부터 닫힌 클라이언트로
+        # 나가 Connection error가 났고, 모든 모델이 고장난 것처럼 보였다(사내 10-08).
+        nonlocal failed, reported
         try:
-            return await llm.ask(prompt)
+            for name, prompt, ok in _CHECKS:
+                reply = await llm.ask(prompt)
+                reported = reported or reply.reported_model
+                if reply.status == "error":
+                    print(f"  {name:<8} ❌ {reply.error}")
+                    failed += 1
+                    continue
+                mark = "✅" if ok(reply.text) else "⚠ "
+                failed += 0 if ok(reply.text) else 1
+                print(f"  {name:<8} {mark} ({reply.latency_s}s) {reply.text.strip()[:110]}")
         finally:
             await _close_llms(llm)
 
-    for name, prompt, ok in _CHECKS:
-        reply = _run(ask(prompt))
-        reported = reported or reply.reported_model
-        if reply.status == "error":
-            print(f"  {name:<8} ❌ {reply.error}")
-            failed += 1
-            continue
-        mark = "✅" if ok(reply.text) else "⚠ "
-        failed += 0 if ok(reply.text) else 1
-        print(f"  {name:<8} {mark} ({reply.latency_s}s) {reply.text.strip()[:110]}")
+    _run(run_checks())
 
     # 모델 확인은 **한 번만** 찍는다. 항목마다 같은 경고를 반복하면 읽는 사람이
     # 세 줄을 하나로 뭉뚱그려 넘기고, 그러면 진짜 경고도 같이 넘어간다.
@@ -927,7 +931,7 @@ def cmd_case_investigate(args, env) -> int:
     인용을 검사한다(12a). 보고서·이벤트는 12b.
     """
     from src.application import briefing
-    from src.application.diagnose import diagnose, verdict_lines
+    from src.application.diagnose import diagnose, llm_error_line, verdict_lines
     from src.application.graph import build_engine
     from src.application.lead import make_lead
     from src.application.nodes import EngineDeps
@@ -1044,9 +1048,8 @@ def cmd_case_investigate(args, env) -> int:
 
     broken = final["stopped_by"] == "llm_error"
     if final["llm_errors"]:
-        print(f"\n  ⚠ LLM 오류 {len(final['llm_errors'])}건 — "
-              + ("**이 조사는 안 돌았다**" if broken else "**리드가 계약을 어겼다**"),
-              file=sys.stderr)
+        # 머리줄은 사실만 — "이 조사는 안 돌았다"는 llm_error 뒤에도 판정이 나오는 지금(R2-2a) 표준 출력과 모순됐다.
+        print("\n  " + llm_error_line(CaseState.model_validate(final)), file=sys.stderr)
         for problem in final["llm_errors"]:
             print(f"    {problem}", file=sys.stderr)
     # 조용히 성공한 척하면 아무도 안 본다.

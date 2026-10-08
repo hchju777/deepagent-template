@@ -1884,7 +1884,23 @@ CASES += [
   ["tests/test_cli.py::test_run은_루프에_종료_소음_처리기를_단다"]),
 ]
 
-assert len(CASES) >= 460, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-3 ① — llm check 한 번만 닫기 · 사실 머리줄 · kafka tail 루프 ──
+KI = ROOT / "src/infrastructure/kafka_inspector.py"
+CASES += [
+ ("llm check가 질문마다 닫는다", MN,
+  "                reply = await llm.ask(prompt)\n                reported = reported or reply.reported_model",
+  "                reply = await llm.ask(prompt)\n                await _close_llms(llm)\n                reported = reported or reply.reported_model",
+  ["tests/test_cli.py::test_llm_check는_끝에서_한_번만_닫는다"]),
+ ("LLM 오류 머리줄이 판정을 안 적는다", DG,
+  '        verdict = f"판정 {state.verdict.verdict_type}" if state.verdict is not None else "판정 없음"\n        return head + f"조사 중단(llm_error) · {verdict}"',
+  '        return head + "**이 조사는 안 돌았다**"',
+  ["tests/application/test_diagnose.py::test_LLM_오류_머리줄은_판정_유무를_사실대로_적는다"]),
+ ("kafka tail이 getmany를 한 번만 부른다", KI,
+  "                records.extend(got)", "                records.extend(got)\n                break",
+  ["tests/infrastructure/test_kafka_inspector.py::test_tail은_limit을_채울_때까지_getmany를_돈다"]),
+]
+
+assert len(CASES) >= 463, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

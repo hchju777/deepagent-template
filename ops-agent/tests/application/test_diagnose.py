@@ -121,3 +121,22 @@ def test_끝까지_안_돈_태스크를_미실행으로_센다(case):
     assert "미실행 2개" in text and "t-4" in text and "t-5" in text and "우선순위" in text
     done = CaseState(case=case, round=1, stopped_by="decision", plan_tasks=[task("t-1", status="ok")])
     assert "미실행" not in "\n".join(diagnose(done))
+
+
+def test_LLM_오류_머리줄은_판정_유무를_사실대로_적는다(case):
+    """사내 10-08: 판정이 나온 뒤에도 stderr에 "이 조사는 안 돌았다"가 찍혀 표준 출력과 모순됐다 — R2-2a가 llm_error 뒤에도
+    판정을 한 번 묻게 바꿨는데 이 줄은 안 따라갔다. 1-4와 같은 사실 서술로."""
+    from src.application.diagnose import llm_error_line
+    from src.application.nodes import degraded
+    from src.domain.case import Verdict
+
+    judged = CaseState(case=case, llm_errors=["integrate: 시간 초과"], stopped_by="llm_error",
+                       verdict=Verdict(verdict_type="inconclusive", confidence="low", narrative="n"))
+    line = llm_error_line(judged)
+    assert "LLM 오류 1건" in line and "조사 중단(llm_error)" in line and "판정 inconclusive" in line
+    assert "안 돌았다" not in line
+    broken = CaseState(case=case, llm_errors=["frame: 시간 초과"], stopped_by="llm_error", verdict=degraded("x"))
+    assert "판정 degraded" in llm_error_line(broken)
+    nagged = CaseState(case=case, llm_errors=["integrate: 태스크 하나 버림"], stopped_by="decision")
+    assert "리드가 계약을 어겼다" in llm_error_line(nagged) and "조사 중단" not in llm_error_line(nagged)
+    assert llm_error_line(CaseState(case=case)) == ""
