@@ -154,3 +154,14 @@ def test_토큰_상한과_스트리밍은_config이고_설명에_실효값이_�
     with pytest.raises(ValidationError) as caught:
         LlmConfig(**GATEWAY, adapter="http", stream=True)
     assert "스트리밍" in str(caught.value)
+
+
+def test_호출_간격과_429_대기_상한은_음수가_아니고_describe에_보인다():
+    from pydantic import ValidationError
+
+    cfg = LlmConfig(**GATEWAY)
+    assert cfg.min_interval_s == 0.0 and cfg.rate_wait_max_s == 120.0 and "간격" not in cfg.describe()
+    assert "· 간격 2s" in LlmConfig(**GATEWAY, min_interval_s=2).describe()
+    for bad in ({"min_interval_s": -1}, {"rate_wait_max_s": 0}):
+        with pytest.raises(ValidationError):
+            LlmConfig(**GATEWAY, **bad)

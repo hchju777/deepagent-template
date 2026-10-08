@@ -1900,7 +1900,54 @@ CASES += [
   ["tests/infrastructure/test_kafka_inspector.py::test_tail은_limit을_채울_때까지_getmany를_돈다"]),
 ]
 
-assert len(CASES) >= 463, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-3 ② — 429 대기·호출 간격·트레이스의 대기 초 ──
+PC = ROOT / "src/infrastructure/llm_pacing.py"
+LH = ROOT / "src/infrastructure/llm_http.py"
+PCT = "tests/infrastructure/test_llm_pacing.py"
+LAT = "tests/infrastructure/test_llm_adapters.py"
+CASES += [
+ ("epoch 밀리초를 초로 읽는다", PC,
+  "        seconds = raw / 1000.0 if raw > 1e11 else float(raw)", "        seconds = float(raw)",
+  [f"{PCT}::test_nextAccessTime을_여러_모양으로_읽는다"]),
+ ("naive 시각에 시간대를 안 붙인다", PC,
+  "        return when if when.tzinfo else when.replace(tzinfo=tz)", "        return when",
+  [f"{PCT}::test_nextAccessTime을_여러_모양으로_읽는다"]),
+ ("429 대기를 상한으로 안 자른다", PC,
+  "    return min(max(0.0, wait), cap)", "    return max(0.0, wait)",
+  [f"{LAT}::test_시각이_없으면_Retry_After나_기본값을_상한_안에서_기다린다"]),
+ ("pacer가 간격을 안 기다린다", PC,
+  "            if remaining > 0:\n                await sleep(remaining)", "            if False:\n                await sleep(remaining)",
+  [f"{PCT}::test_pacer는_게이트웨이_단위로_최소_간격을_지킨다"]),
+ ("끝 슬래시만 다른 게이트웨이를 둘로 센다", PC,
+  '    key = (base_url or "").rstrip("/")', '    key = base_url or ""',
+  [f"{PCT}::test_pacer는_게이트웨이_단위로_최소_간격을_지킨다"]),
+ ("http 어댑터가 429 뒤 안 기다린다", LH,
+  "            if quota is None or attempt:", "            if True:",
+  [f"{LAT}::test_429면_nextAccessTime까지_기다렸다_한_번_다시_묻는다"]),
+ ("chat_model 어댑터가 429 뒤 안 기다린다", LCM2,
+  "            if quota is None or attempt:", "            if True:",
+  [f"{LAT}::test_429면_nextAccessTime까지_기다렸다_한_번_다시_묻는다"]),
+ ("chat_model이 429 예외를 못 알아본다", LCM2,
+  '    if getattr(exc, "status_code", None) != 429:\n        return None', "    if True:\n        return None",
+  [f"{LAT}::test_429면_nextAccessTime까지_기다렸다_한_번_다시_묻는다"]),
+ ("리드가 대기 초를 트레이스에 안 넘긴다", LD,
+  "            waited = reply.waited_s or None", "            waited = None",
+  ["tests/application/test_lead.py::test_트레이스가_시도마다_날것을_건넨다"]),
+ ("트레이스 파일이 대기 초를 안 적는다", MN,
+  '        took += f"대기: {waited_s:.1f}초(429)\\n" if waited_s else ""', '        took += ""',
+  ["tests/test_cli.py::test_트레이스가_429_대기_초를_적는다"]),
+ ("요약 머리줄에 대기가 없다", TD,
+  '           + (f" · 대기 {waited}초" if waited else "")', "",
+  ["tests/application/test_trace_digest.py::test_요약_머리줄과_끝줄에_429_대기가_붙는다"]),
+ ("요약 끝줄에 429 합계가 없다", TD,
+  "    if waits:", "    if False:",
+  ["tests/application/test_trace_digest.py::test_요약_머리줄과_끝줄에_429_대기가_붙는다"]),
+ ("음수 간격을 받는다", ROOT / "src/config/schema_llm.py",
+  '        if v < 0:\n            raise ValueError(f"min_interval_s는 0 이상 — {v}")', '        if False:\n            raise ValueError(f"min_interval_s는 0 이상 — {v}")',
+  ["tests/config/test_schema_llm.py::test_호출_간격과_429_대기_상한은_음수가_아니고_describe에_보인다"]),
+]
+
+assert len(CASES) >= 476, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

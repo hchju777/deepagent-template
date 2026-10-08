@@ -154,7 +154,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         elif attempt:
             # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
             asked = repair_prompt(prompt, last.error or "알 수 없음")
-        text, failure, latency = None, None, None
+        text, failure, latency, waited = None, None, None, None
         timed_out = False
         try:
             reply = await llm.ask(asked)
@@ -165,6 +165,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         else:
             transport = reply.status == "error"
             latency = reply.latency_s
+            waited = reply.waited_s or None            # 429 뒤 기다린 초 — 트레이스가 적는다(브리프의 "429 횟수와 대기 초")
             if reply.status == "error":
                 last = Parsed(False, error=reply.error or "알 수 없는 LLM 오류")
                 timed_out = _is_timeout(last.error or "")
@@ -178,7 +179,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
                 parsed = parse_object(text)
                 last = validate(parsed.data, model) if parsed.ok else parsed
         failure = None if last.ok else last.error
-        _tell(on_exchange, asked, text, failure, latency)
+        _tell(on_exchange, asked, text, failure, latency, waited)
         if last.ok:
             return last
         if timed_out:
@@ -194,11 +195,11 @@ def _is_timeout(error: str) -> bool:
     return bool(_TIMEOUT_WORDS.search(error))
 
 
-def _tell(on_exchange, prompt: str, text, error, latency_s=None) -> None:
+def _tell(on_exchange, prompt: str, text, error, latency_s=None, waited_s=None) -> None:
     if on_exchange is None:
         return
     try:
-        on_exchange(prompt, text, error, latency_s)
+        on_exchange(prompt, text, error, latency_s, waited_s)
     except Exception:                                               # noqa: BLE001
         pass          # 트레이스는 편의다. 이것 때문에 조사가 멈추면 안 된다
 
@@ -263,8 +264,9 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
     def _hook(node: str, state: CaseState):
         if trace is None:
             return None
-        # 여섯째 인자는 그 호출이 걸린 초(모르면 None) — 위치 인자라 옛 트레이서(`*row`)도 그대로 받는다.
-        return lambda prompt, text, error, latency_s=None: trace(node, state.round, prompt, text, error, latency_s)
+        # 여섯째는 그 호출이 걸린 초, 일곱째는 429 뒤 기다린 초(둘 다 모르면 None) — 위치 인자라 옛 트레이서(`*row`)도 받는다.
+        return lambda prompt, text, error, latency_s=None, waited_s=None: trace(
+            node, state.round, prompt, text, error, latency_s, waited_s)
 
     async def frame(state: CaseState) -> dict:
         prompt = fill(prompts["frame"],

@@ -309,6 +309,17 @@ verify가 통과시켰다. 실제 c-1: 요약 키 data 0건 ← 도메인 키 0�
   "N초 안에 M건만"이라 말한다. 가짜 `aiokafka`로 단위 검증(`test_kafka_inspector.py` 새 파일 — 실물은 live).
 - 테스트 먼저(RED 4 → GREEN). 스윕 +3(463).
 
+#### R2-3 ② (10-08) ✅ — 429는 기다렸다 한 번 더, 호출 간격은 게이트웨이가 쥔다
+
+- **`llm_pacing.py`**(2-2): 429 본문의 `nextAccessTime`(ISO·naive는 now의 시간대·epoch 초·밀리초)까지 기다렸다 **한 번만**
+  다시 묻고 실패로 안 센다. 없으면 `Retry-After`, 그것도 없으면 60초 — 전부 `llm.rate_wait_max_s`(기본 120) 안. 두 번째도
+  429면 오류(더 안 기다림). 할당량은 모델을 가리지 않으므로 `llm.min_interval_s`는 **base_url 단위 `Pacer`**가 지킨다 — 리드와
+  판정 어댑터가 하나를 나눠 쓴다(둘째 어댑터의 첫 호출도 간격을 기다린다). 어댑터 둘이 같은 `ask → _once` 모양.
+- **`LlmReply.waited_s`·`rate_limited`** → `ask_json` → 트레이스 훅 일곱째 인자 → 파일 머리 `대기: N초(429)` → 요약 머리줄
+  `· 대기 N초`와 끝줄 `429 대기: 합계 N초 · 호출 M회`(브리프의 새 보고 항목). 안 기다렸으면 안 적는다.
+- 가짜 게이트웨이에 429 본문 큐(`recorder.rate_limit`)와 `Retry-After`. 테스트 먼저(RED 9 → GREEN): pacing 2, 어댑터 4×2,
+  schema 1, tracer 1, digest 1. 스윕 +13(476).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

@@ -123,6 +123,11 @@ class LlmConfig(StrictModel):
     # 스트리밍으로 받아 조각을 모은다. 사내 게이트웨이의 ~180초 끊김은 총 시간이 아니라 **유휴** 상한일 가능성이
     # 커서, 출력이 시작된 뒤 바이트가 흐르면 산다. 호출부가 받는 것은 전과 같은 `LlmReply` 하나다(chat_model만).
     stream: bool = False
+    # 같은 게이트웨이로 가는 호출 사이의 최소 간격(초). 분당 할당량(429)은 모델을 가리지 않고 게이트웨이가 센다 — 리드와
+    # 판정 어댑터가 base_url 단위 pacer를 나눠 쓴다(`llm_pacing`). 0이면 안 기다린다.
+    min_interval_s: float = 0.0
+    # 429 뒤 `nextAccessTime`(없으면 Retry-After, 그것도 없으면 60초)까지 기다리는 상한. 그 안이면 한 번 다시 묻고 실패로 안 센다.
+    rate_wait_max_s: float = 120.0
     # `HTTPS_PROXY`/`NO_PROXY` env를 따를지. 기본은 따른다(httpx 기본값).
     #
     # **사내에서 끄게 되는 경우**: 전사 프록시가 env에 박혀 있는데 LLM 게이트웨이는
@@ -146,6 +151,20 @@ class LlmConfig(StrictModel):
     def _range(cls, v: float) -> float:
         if not 0.0 <= v <= 2.0:
             raise ValueError(f"temperature는 0~2다 — {v}")
+        return v
+
+    @field_validator("min_interval_s")
+    @classmethod
+    def _interval_not_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"min_interval_s는 0 이상 — {v}")
+        return v
+
+    @field_validator("rate_wait_max_s")
+    @classmethod
+    def _wait_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"rate_wait_max_s는 0보다 커야 한다 — {v}")
         return v
 
     @field_validator("max_tokens")
@@ -253,7 +272,8 @@ class LlmConfig(StrictModel):
         # 실효 상한을 같이 찍는다 — 사내에서 config의 60초가 어디서 이기는지 보이지 않아 한참 돌았다.
         limits = (f" · 상한 {self.timeout_s:g}s · 재시도 {self.max_retries}"
                   + (f" · 토큰 {self.max_tokens}" if self.max_tokens else "")
-                  + (" · 스트리밍" if self.stream else ""))
+                  + (" · 스트리밍" if self.stream else "")
+                  + (f" · 간격 {self.min_interval_s:g}s" if self.min_interval_s > 0 else ""))
         return (f"{self.adapter}/{self.provider} {self.model}"
                 f"{f'(id={self.model_id})' if self.model_id else ''}{served} "
                 f"→ {self.base_url or '(네트워크 없음)'} [인증: {auth}, TLS: {tls}]{limits}")

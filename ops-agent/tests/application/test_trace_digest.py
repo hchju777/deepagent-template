@@ -264,3 +264,13 @@ def test_요약_머리줄에_호출이_걸린_초가_붙는다():
     assert head and "응답 61.2초" in head[0]
     old = [line for line in digest([(name, text)]) if "r2 integrate" in line]
     assert old and "응답" not in old[0]
+
+
+def test_요약_머리줄과_끝줄에_429_대기가_붙는다():
+    name, text = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    waited = text.replace("결과: 읽었다\n", "결과: 읽었다\n응답: 9.0초\n대기: 48.0초(429)\n")
+    lines = digest([(name, waited)])
+    head = [line for line in lines if "r2 integrate" in line]
+    assert head and "응답 9.0초" in head[0] and "대기 48.0초" in head[0]
+    assert any(line.strip().startswith("429 대기") and "48" in line for line in lines)
+    assert not any(line.strip().startswith("429 대기") for line in digest([(name, text)]))

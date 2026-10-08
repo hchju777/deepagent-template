@@ -102,10 +102,10 @@ integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 �
 
 | 항목 | 할 것 | 자리 |
 |---|---|---|
-| 2-5 | `llm check`가 질문마다 닫아 둘째부터 Connection error — 끝에서 한 번만(R2-2c 회귀) | `__main__.cmd_llm_check` |
-| 2-6 | stderr "이 조사는 안 돌았다"가 판정 뒤에도 찍힘 → `diagnose.llm_error_line`: `LLM 오류 N건 — 조사 중단(llm_error) · 판정 <종류>` / `리드가 계약을 어겼다` | `diagnose.py`, `__main__` |
-| 5 | `kafka tail --limit 300`이 2건: `getmany`를 한 번만 불러 첫 배치만 받는다 → 다 채우거나 더 안 올 때까지 루프 | `kafka_inspector.tail` |
-| 2-2 | 429: 본문의 `nextAccessTime`(ISO·epoch)까지 기다린 뒤 한 번 재시도, 실패로 안 셈. `llm.min_interval_s`를 **base_url 단위 pacer**로 공유(할당량이 모델을 안 가림). 대기 초·횟수는 `LlmReply.waited_s`·`rate_limited`로 트레이스·다이제스트에 | `llm_pacing.py`(새), 어댑터 둘, `trace_digest`, `_make_tracer` |
+| 2-5 ✅ | `llm check`가 질문마다 닫아 둘째부터 Connection error — 끝에서 한 번만(R2-2c 회귀) | `__main__.cmd_llm_check` |
+| 2-6 ✅ | stderr "이 조사는 안 돌았다"가 판정 뒤에도 찍힘 → `diagnose.llm_error_line`: `LLM 오류 N건 — 조사 중단(llm_error) · 판정 <종류>` / `리드가 계약을 어겼다` | `diagnose.py`, `__main__` |
+| 5 ✅ | `kafka tail --limit 300`이 2건: `getmany`를 한 번만 불러 첫 배치만 받는다 → 다 채우거나 더 안 올 때까지 루프 | `kafka_inspector.tail` |
+| 2-2 ✅ | 429: 본문의 `nextAccessTime`(ISO·epoch)까지 기다린 뒤 한 번 재시도, 실패로 안 셈. `llm.min_interval_s`를 **base_url 단위 pacer**로 공유(할당량이 모델을 안 가림). 대기 초·횟수는 `LlmReply.waited_s`·`rate_limited`로 트레이스·다이제스트에 | `llm_pacing.py`(새), 어댑터 둘, `trace_digest`, `_make_tracer` |
 | 2-1 | `response_format`: `LlmPort.ask(prompt, *, schema=None)`; `ask_json`이 답 모델의 JSON 스키마를 넘김. `json_schema`로 보내되 **`strict`는 스키마가 닫힐 때만 true** — 태스크 `params`·`filter`가 자유형이라 lead 쪽은 false. `llm.response_format: json_schema \| json_object \| none` | `domain/llm.py`, 어댑터 넷, `lead.ask_json`, `schema_llm` |
 | 2-3 | `stream` 기본값 true(chat_model). 브리프·`config/app.json`의 `llm_roles` 예시 확정(lead max_tokens 1500, conclude timeout 600) | `schema_llm`, `review-12a-4.md`, `app.json` |
 | 2-4 | 프롬프트 상한 `integrate_prompt_chars 8000`·`conclude_prompt_chars 10000`: 넘으면 오래된 증거부터 `id \| 질의 \| 한 줄`로 접고, 그래도 넘으면 끝난 태스크 줄을 접는다. 좁혀 읽은 증거도 같다 | `schema_app`, `lead.make_lead`, `briefing` |

@@ -127,3 +127,77 @@ async def test_close는_chat_model의_httpx_클라이언트를_닫는다(gateway
     await llm.close()                                     # 두 번 닫아도 조용하다
     http = build_llm(_cfg(base_url, "http"), clock=clock)
     await http.close()                                    # 호출마다 열고 닫으므로 할 일이 없다 — 계약은 같다
+
+
+# ── R2-3 ② — 429는 기다렸다 한 번 더, 호출 간 최소 간격 ──
+
+def _adapter(cfg, *, clock, sleep):
+    from src.infrastructure.llm_chat_model import ChatModelAdapter
+    from src.infrastructure.llm_http import HttpChatAdapter
+    return (HttpChatAdapter if cfg.adapter == "http" else ChatModelAdapter)(cfg, clock=clock, sleep=sleep)
+
+
+def _at(seconds):
+    from datetime import timedelta
+    return (T0 + timedelta(seconds=seconds)).isoformat()
+
+
+@pytest.mark.parametrize("adapter", ADAPTERS)
+async def test_429면_nextAccessTime까지_기다렸다_한_번_다시_묻는다(gateway, clock, adapter):
+    """사내 10-08: 할당량에 걸리면 0초 만에 재시도해 두 번 다 날렸다. 본문의 시각까지 기다린 뒤 한 번 더 — 실패로 안 센다."""
+    base_url, recorder = gateway
+    recorder.rate_limit = [{"error": {"message": "quota exceeded", "nextAccessTime": _at(7)}}]
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    reply = await _adapter(_cfg(base_url, adapter), clock=clock, sleep=sleep).ask("hi")
+    assert reply.status == "ok" and reply.text == "pong", reply.error
+    assert slept == [7.0] and reply.waited_s == 7.0 and reply.rate_limited == 1
+    assert len(recorder.requests) == 2
+
+
+@pytest.mark.parametrize("adapter", ADAPTERS)
+async def test_두_번째도_429면_오류이고_더_기다리지_않는다(gateway, clock, adapter):
+    base_url, recorder = gateway
+    recorder.rate_limit = [{"nextAccessTime": _at(3)}, {"nextAccessTime": _at(60)}]
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    reply = await _adapter(_cfg(base_url, adapter), clock=clock, sleep=sleep).ask("hi")
+    assert reply.status == "error" and "429" in reply.error and reply.rate_limited == 1 and reply.waited_s == 3.0
+    assert slept == [3.0] and len(recorder.requests) == 2
+
+
+@pytest.mark.parametrize("adapter", ADAPTERS)
+async def test_시각이_없으면_Retry_After나_기본값을_상한_안에서_기다린다(gateway, clock, adapter):
+    base_url, recorder = gateway
+    recorder.rate_limit = [{"error": {"message": "quota"}}]
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    reply = await _adapter(_cfg(base_url, adapter, rate_wait_max_s=10), clock=clock, sleep=sleep).ask("hi")
+    assert reply.status == "ok" and slept == [10.0]                    # 기본 60초를 상한 10초가 자른다
+    recorder.rate_limit = [{"error": {"message": "quota"}}]
+    recorder.retry_after = "4"
+    reply = await _adapter(_cfg(base_url, adapter, rate_wait_max_s=10), clock=clock, sleep=sleep).ask("hi")
+    assert reply.status == "ok" and slept == [10.0, 4.0]
+
+
+async def test_최소_간격은_같은_게이트웨이의_어댑터_둘이_같이_지킨다(gateway, clock):
+    """리드와 판정이 다른 어댑터여도 할당량은 하나다 — 둘째 어댑터의 첫 호출도 간격을 기다린다."""
+    base_url, recorder = gateway
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    lead = _adapter(_cfg(base_url, "http", min_interval_s=5), clock=clock, sleep=sleep)
+    verdict = _adapter(_cfg(base_url, "chat_model", min_interval_s=5), clock=clock, sleep=sleep)
+    assert (await lead.ask("a")).status == "ok" and slept == []
+    assert (await verdict.ask("b")).status == "ok" and len(slept) == 1 and 4.0 < slept[0] <= 5.0

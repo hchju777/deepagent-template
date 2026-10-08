@@ -9,19 +9,23 @@
 클라이언트를 **스스로 만들면** 그 하나가 `verify` 설정을 물려받지 못해
 사내 인증서에서 조용히 실패한다. 둘 다 지정해 그 구멍을 닫는다.
 """
+import asyncio
 import time
 
 from src.config.schema_llm import LlmConfig
 from src.domain.base import Clock
 from src.domain.llm import LlmPort, LlmReply
+from src.infrastructure.llm_pacing import pacer_for, quota_wait
 from src.infrastructure.tls import verify_arg
 
 
 class ChatModelAdapter(LlmPort):
-    def __init__(self, cfg: LlmConfig, *, clock: Clock, ticker=time.perf_counter):
+    def __init__(self, cfg: LlmConfig, *, clock: Clock, ticker=time.perf_counter, sleep=asyncio.sleep):
         self._cfg = cfg
         self._clock = clock
         self._ticker = ticker
+        self._sleep = sleep
+        self._pacer = pacer_for(cfg.base_url)
         self._client = None
         self._http = self._ahttp = None
 
@@ -77,6 +81,20 @@ class ChatModelAdapter(LlmPort):
                 pass
 
     async def ask(self, prompt: str) -> LlmReply:
+        # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
+        waited, limited = 0.0, 0
+        for attempt in (0, 1):
+            await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
+            reply, quota = await self._once(prompt)
+            if quota is None or attempt:
+                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited})
+            wait = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
+            await self._sleep(wait)
+            waited, limited = waited + wait, limited + 1
+        return reply                                                 # 도달하지 않는다 — 형식상
+
+    async def _once(self, prompt: str):
+        """한 번 묻는다. `(답, 429면 (본문, 헤더) 아니면 None)` — SDK는 429를 예외(`status_code`)로 올린다."""
         started = self._ticker()
         messages = [{"role": "user", "content": prompt}]
         first = None
@@ -95,9 +113,24 @@ class ChatModelAdapter(LlmPort):
                 metadata = getattr(message, "response_metadata", None) or {}
                 text = str(getattr(message, "content", message) or "")
         except Exception as exc:                                   # noqa: BLE001
-            return LlmReply(status="error", asked_at=self._clock(), model=self._cfg.model,
-                            error=f"{type(exc).__name__}: {exc}",
-                            latency_s=round(self._ticker() - started, 3), first_token_s=first)
+            failed = LlmReply(status="error", asked_at=self._clock(), model=self._cfg.model,
+                              error=f"{type(exc).__name__}: {exc}",
+                              latency_s=round(self._ticker() - started, 3), first_token_s=first)
+            return failed, _quota_info(exc)
         return LlmReply(status="ok", asked_at=self._clock(), model=self._cfg.model,
                         text=text, reported_model=metadata.get("model_name"),
-                        latency_s=round(self._ticker() - started, 3), first_token_s=first)
+                        latency_s=round(self._ticker() - started, 3), first_token_s=first), None
+
+
+def _quota_info(exc: Exception):
+    """429 예외에서 `(본문, 헤더)` — openai SDK의 `APIStatusError`는 `status_code`·`body`·`response`를 든다. 아니면 None."""
+    if getattr(exc, "status_code", None) != 429:
+        return None
+    response = getattr(exc, "response", None)
+    body = getattr(exc, "body", None)
+    if body is None and response is not None:
+        try:
+            body = response.json()
+        except Exception:                                          # noqa: BLE001
+            body = None
+    return body, getattr(response, "headers", None)

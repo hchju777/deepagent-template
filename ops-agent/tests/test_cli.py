@@ -661,3 +661,16 @@ def test_llm_check는_끝에서_한_번만_닫는다(echo_config, capsys, monkey
     out = capsys.readouterr().out
     assert len(made) == 1 and made[0].asked == 3 and made[0].closed == 1, (made[0].asked, made[0].closed)
     assert "❌" not in out
+
+
+def test_트레이스가_429_대기_초를_적는다(tmp_path):
+    """브리프가 "429 횟수와 대기 초"를 받는다 — 트레이스 파일 머리에 `대기: N초(429)`로 남는다. 안 기다렸으면 안 적는다."""
+    from src.__main__ import _make_tracer
+
+    folder = tmp_path / "c-1"
+    trace, written = _make_tracer("c-1", folder=folder)
+    trace("integrate", 1, "물음", "답", None, 12.5, 48.0)
+    text = written[0].read_text(encoding="utf-8")
+    assert "응답: 12.5초" in text and "대기: 48.0초(429)" in text
+    trace("integrate", 2, "물음", "답", None, 3.0, 0.0)
+    assert "대기:" not in written[1].read_text(encoding="utf-8")

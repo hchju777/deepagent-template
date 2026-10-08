@@ -22,6 +22,8 @@ class _Recorder:
         self.reply = "pong"
         self.status = 200
         self.payload = None          # 설정하면 이 모양을 그대로 돌려준다
+        self.rate_limit: list = []   # 비어 있지 않으면 요청마다 하나씩 꺼내 **429 본문**으로 돌려준다
+        self.retry_after = None      # 429에 붙일 Retry-After 헤더
 
 
 def _handler_for(recorder: _Recorder):
@@ -49,6 +51,15 @@ def _handler_for(recorder: _Recorder):
                 return self._send(401, {"error": {"message": f"bad headers: {wrong}"}})
             if recorder.status >= 400:
                 return self._send(recorder.status, {"error": {"message": "boom"}})
+            if recorder.rate_limit:
+                raw = json.dumps(recorder.rate_limit.pop(0), ensure_ascii=False).encode("utf-8")
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                if recorder.retry_after is not None:
+                    self.send_header("Retry-After", str(recorder.retry_after))
+                self.end_headers()
+                return self.wfile.write(raw)
             if recorder.payload is not None:
                 return self._send(200, recorder.payload)
             if body.get("stream"):

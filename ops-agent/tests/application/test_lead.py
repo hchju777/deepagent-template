@@ -559,18 +559,25 @@ async def test_트레이스가_시도마다_날것을_건넨다(case):
     State에는 흔적이 없는 사실이었다. 실패한 시도도 남아야 한다 — 고칠 근거가 거기 있다.
     """
     seen = []
-    llm = ScriptedAdapter(["쓰레기", reply(tasks=[TASK])], clock=lambda: T0)
+
+    class Waited(ScriptedAdapter):
+        """첫 답은 429 뒤 4초 기다려 받은 것으로 — 그 초가 트레이스 행 일곱째 자리까지 와야 한다(브리프의 "대기 초")."""
+        async def ask(self, prompt, **kw):
+            got = await super().ask(prompt, **kw)
+            return got.model_copy(update={"waited_s": 4.0, "rate_limited": 1}) if got.text == "쓰레기" else got
+
+    llm = Waited(["쓰레기", reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS,
                               max_rounds=3,
                               trace=lambda *row: seen.append(row))
     await frame(CaseState(case=case, round=2))
 
     assert len(seen) == 2                       # 실패한 1차도 남는다
-    (node, round_no, prompt, text, error, _latency) = seen[0]
+    (node, round_no, prompt, text, error, _latency, waited) = seen[0]
     assert (node, round_no, text) == ("frame", 2, "쓰레기")
-    assert error and "JSON" in error
+    assert error and "JSON" in error and waited == 4.0
     assert "다시" in seen[1][2]                  # 2차는 수리 프롬프트
-    assert seen[1][4] is None                   # 2차는 성공
+    assert seen[1][4] is None and seen[1][6] is None   # 2차는 성공, 안 기다렸다
 
 
 async def test_트레이스가_던져도_조사는_계속된다(case):

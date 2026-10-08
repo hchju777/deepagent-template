@@ -38,6 +38,9 @@ class LlmReply(StrictModel):
     latency_s: float | None = None
     # 스트리밍일 때 첫 조각이 온 시각(초). 게이트웨이의 유휴 상한에 걸리는지 보는 재료다.
     first_token_s: float | None = None
+    # 429(할당량) 뒤 기다린 초와 횟수 — 이 답을 받기까지. 실패가 아니라 **대기**라 `latency_s`와 따로 센다(브리프가 받는다).
+    waited_s: float = 0.0
+    rate_limited: int = 0
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):

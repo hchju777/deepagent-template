@@ -10,25 +10,43 @@
 
 둘은 같은 `LlmPort`를 구현하므로 엔진 입장에서는 구별되지 않는다.
 """
+import asyncio
 import time
 from typing import Any
 
 from src.config.schema_llm import LlmConfig
 from src.domain.base import Clock
 from src.domain.llm import LlmPort, LlmReply
+from src.infrastructure.llm_pacing import pacer_for, quota_wait
 from src.infrastructure.tls import verify_arg
 
 
 class HttpChatAdapter(LlmPort):
-    def __init__(self, cfg: LlmConfig, *, clock: Clock, ticker=time.perf_counter):
+    def __init__(self, cfg: LlmConfig, *, clock: Clock, ticker=time.perf_counter, sleep=asyncio.sleep):
         self._cfg = cfg
         self._clock = clock
         self._ticker = ticker          # 경과 시간은 Clock과 다른 양이다
+        self._sleep = sleep
+        self._pacer = pacer_for(cfg.base_url)
 
     def describe(self) -> str:
         return self._cfg.describe()
 
     async def ask(self, prompt: str) -> LlmReply:
+        # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
+        waited, limited = 0.0, 0
+        for attempt in (0, 1):
+            await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
+            reply, quota = await self._once(prompt)
+            if quota is None or attempt:
+                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited})
+            wait = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
+            await self._sleep(wait)
+            waited, limited = waited + wait, limited + 1
+        return reply                                                 # 도달하지 않는다 — 형식상
+
+    async def _once(self, prompt: str):
+        """한 번 묻는다. `(답, 429면 (본문, 헤더) 아니면 None)`."""
         import httpx
 
         url = f"{self._cfg.base_url.rstrip('/')}/chat/completions"
@@ -50,11 +68,17 @@ class HttpChatAdapter(LlmPort):
                                          trust_env=self._cfg.trust_env_proxy) as client:
                 response = await client.post(url, json=body, headers=headers)
             if response.status_code >= 400:
-                return self._failed(f"HTTP {response.status_code} — {response.text[:400]}",
-                                    started)
-            return self._from_payload(response.json(), started)
+                failed = self._failed(f"HTTP {response.status_code} — {response.text[:400]}", started)
+                if response.status_code == 429:
+                    try:
+                        parsed = response.json()
+                    except ValueError:
+                        parsed = None
+                    return failed, (parsed, response.headers)
+                return failed, None
+            return self._from_payload(response.json(), started), None
         except Exception as exc:                                   # noqa: BLE001
-            return self._failed(f"{type(exc).__name__}: {exc}", started)
+            return self._failed(f"{type(exc).__name__}: {exc}", started), None
 
     def _from_payload(self, payload: Any, started: float) -> LlmReply:
         try:
