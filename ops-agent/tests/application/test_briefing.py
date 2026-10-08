@@ -1234,3 +1234,12 @@ def test_태스크_블록을_접으면_끝난_것만_짧아지고_대기는_그�
     assert folded[1].startswith("- t-2 [error] ") and "질의: redis.get" in folded[1] and "ConnectError" not in folded[1]
     assert folded[2] == briefing.tasks_block(state).splitlines()[2]            # 대기 중인 것은 그대로
 
+
+def test_integrate_규칙에_빈_값의_다음_홉과_인자_규칙이_있다():
+    """사내 10-08: 대상 키가 비었음을 확인한 뒤 무관한 컬렉션으로 샜고(3-5), 다른 읽기의 인자(`expect`)를 옮겨 붙여 거부됐다(3-4)."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "investigate-integrate.md").read_text(encoding="utf-8")
+    assert "값이 비었으면" in text and "code.uses(name)" in text and "입력 키" in text
+    assert "인자는 그 읽기의 것만" in text
+

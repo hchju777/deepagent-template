@@ -152,7 +152,8 @@ def test_바뀐_것이_없으면_같은_객체다():
 # ── verify: LLM 없는 검사 ────────────────────────────────────────────
 
 def _problems(v: Verdict, *, citable=("t-1.e1",), incomplete=(), ok=lambda c: True):
-    return verify_verdict(v, citable=set(citable), incomplete=set(incomplete), component_ok=ok)
+    # `ok`는 옛 모양(참/거짓)의 편의 — 노드는 사유 문자열을 돌려주는 `component_problem`을 쓴다.
+    return verify_verdict(v, citable=set(citable), incomplete=set(incomplete), component_problem=lambda c: None if ok(c) else f"증거에도 토폴로지에도 없는 component {c!r}")
 
 
 def test_verify는_리드가_본_증거만_인용으로_친다():
@@ -189,15 +190,23 @@ def test_component는_토폴로지나_증거에_있어야_한다():
     assert _problems(bad, ok=lambda c: c in known) == ["증거에도 토폴로지에도 없는 component 'alarm-svc'"]
 
 
-async def test_verify_노드의_component_우주는_토폴로지와_본_증거다(case):
-    """`EngineDeps.components`(서비스 이름)와 증거 본문·그래프 이름을 합쳐 본다. 대본 경로
-    (`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 안 본다."""
-    state = _state(case, evidence=[_ev("t-1.e1", body="collection alarm_events 6건")],
+async def test_verify_노드의_component는_토폴로지_서비스여야_하고_external만_증거의_이름을_허용한다(case):
+    """사내 10-08(c-2): 원인 칸에 Redis 키 이름이 들어갔는데 통과했다. 토폴로지를 아는 조사에서는 **서비스만** — 데이터의
+    이름은 원인이 아니다. `external`은 바깥 시스템이라 토폴로지에 없으니 증거에 나온 이름이면 된다. 토폴로지가 없는 조사
+    (`components` 비어 있음)는 옛 규칙(증거에 나온 이름)대로."""
+    state = _state(case, evidence=[_ev("t-1.e1", body="collection alarm_events 6건 · sink 그룹 lag 1830")],
                    verdict=verdict(root_cause=cause("alarm_events", "t-1.e1"),
                                    alternates=[cause("sink", "t-1.e1", confidence="low"),
                                                cause("ghost-svc", "t-1.e1", confidence="low")]))
     nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
     patch = await nodes["verify"](state)
+    assert [p.split(" — ")[0] for p in patch["verify_problems"]] == [
+        "토폴로지 서비스가 아닌 component 'alarm_events'", "토폴로지 서비스가 아닌 component 'ghost-svc'"]
+    assert "(sink)" in patch["verify_problems"][0]                              # 어느 이름이면 되는지 같이
+    external = state.model_copy(update={"verdict": verdict(verdict_type="external", root_cause=cause("alarm_events", "t-1.e1"))})
+    assert (await nodes["verify"](external))["verify_problems"] == []
+    blind = make_nodes(deps_for(ScriptedRunner(), components=frozenset()))
+    patch = await blind["verify"](state)
     assert patch["verify_problems"] == ["증거에도 토폴로지에도 없는 component 'ghost-svc'"]
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
     assert (await loose["verify"](state))["verify_problems"] == []

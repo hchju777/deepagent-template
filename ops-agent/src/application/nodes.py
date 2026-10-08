@@ -543,15 +543,16 @@ def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
 
 
 def verify_verdict(verdict: Verdict, *, citable: set[str], incomplete: set[str],
-                   component_ok: Callable[[str], bool]) -> list[str]:
+                   component_problem: Callable[[str], str | None]) -> list[str]:
     """LLM 없는 검사. 인용 우주는 **`state.evidence`**(리드가 실제로 본 것)다 — Store 전체를
     기준으로 삼으면 리드가 본 적도 없는 id를 인용해도 통과한다(규율 3).
 
     1. 다리마다 인용이 있어야 하고, 인용한 id는 전부 실재해야 한다.
     2. 잘린 표본(`complete=False`)으로 주장했으면 caveat에 그 id를 적어야 한다 — 잘린 표본으로는
        "없다"를 주장할 수 없고, 그 사실이 보고서에 남아야 한다.
-    3. `component`는 토폴로지나 본 증거에 있는 이름이어야 한다 — 없는 부품을 가리키는 판정은
-       보고서가 없는 것을 고치라고 적는다.
+    3. `component`는 **토폴로지의 서비스 이름**이어야 한다(`_component_problem`) — 사내 10-08에서 Redis 키 이름이 원인 칸에
+       들어가 통과했다. 원인은 그 데이터를 만들거나 쓰는 쪽이지 데이터의 이름이 아니다. 토폴로지가 없는 조사만 옛 규칙
+       (증거에 나온 이름)으로, `external` 판정만 증거에 나온 바깥 이름을 허용한다.
     """
     problems = []
     for link in _links(verdict):
@@ -564,8 +565,9 @@ def verify_verdict(verdict: Verdict, *, citable: set[str], incomplete: set[str],
             elif evidence_id in incomplete and not _id_mentioned(evidence_id, verdict.caveats):
                 problems.append(f"불완전 증거 {evidence_id}가 caveat에 명시되지 않음")
     for link in _links(verdict):
-        if not component_ok(link.component):
-            problems.append(f"증거에도 토폴로지에도 없는 component {link.component!r}")
+        problem = component_problem(link.component)
+        if problem:
+            problems.append(problem)
     return problems
 
 
@@ -598,13 +600,25 @@ def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str]) 
         "contributing": contributing, "confidence": "low", "caveats": caveats})
 
 
-def _component_ok(state: CaseState, deps: EngineDeps) -> Callable[[str], bool]:
-    # 대본 경로(`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 검사하지 않는다 —
-    # 태스크의 "찾지 않고 이름을 댔다"와 같은 스위치다.
+def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> Callable[[str], str | None]:
+    """component 하나의 문제 — 없으면 None. 대본 경로(`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 검사하지
+    않는다(태스크의 "찾지 않고 이름을 댔다"와 같은 스위치)."""
     if not deps.check_discovery:
-        return lambda component: True
+        return lambda component: None
     universe = _universe(state, deps)
-    return lambda component: component in deps.components or name_known(component, universe)
+    services = ", ".join(sorted(deps.components))
+
+    def problem(component: str) -> str | None:
+        if component in deps.components:
+            return None
+        # 토폴로지를 아는 조사에서는 서비스만 — 키·컬렉션 이름은 데이터지 원인이 아니다(사내 c-2가 Redis 키 이름으로 통과했다).
+        # `external`만 예외: 바깥 시스템은 토폴로지에 없고, 증거에 나온 이름이면 된다.
+        if deps.components and verdict.verdict_type != "external":
+            return f"토폴로지 서비스가 아닌 component {component!r} — 원인은 그 데이터를 만들거나 쓰는 서비스다 ({services})"
+        if name_known(component, universe):
+            return None
+        return f"증거에도 토폴로지에도 없는 component {component!r}"
+    return problem
 
 
 def make_verdict_nodes(deps: EngineDeps) -> dict:
@@ -664,7 +678,7 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         citable = state.evidence_ids()
         incomplete = {e.id for e in state.evidence if not e.complete}
         problems = verify_verdict(verdict, citable=citable, incomplete=incomplete,
-                                  component_ok=_component_ok(state, deps))
+                                  component_problem=_component_problem(state, deps, verdict))
         if not problems:
             return {"verify_problems": []}
         if state.verify_attempts < VERIFY_REWRITES:

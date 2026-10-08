@@ -109,9 +109,9 @@ integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 �
 | 2-1 ✅ | `response_format`: `LlmPort.ask(prompt, *, schema=None)`; `ask_json`이 답 모델의 JSON 스키마를 넘김. `json_schema`로 보내되 **`strict`는 스키마가 닫힐 때만 true** — 태스크 `params`·`filter`가 자유형이라 lead 쪽은 false. `llm.response_format: json_schema \| json_object \| none` | `domain/llm.py`, 어댑터 넷, `lead.ask_json`, `schema_llm` |
 | 2-3 ✅ | `stream` 기본값 true(chat_model). 브리프·`config/app.json`의 `llm_roles` 예시 확정(lead max_tokens 1500, conclude timeout 600) | `schema_llm`, `review-12a-4.md`, `app.json` |
 | 2-4 ✅ | 프롬프트 상한 `integrate_prompt_chars 8000`·`conclude_prompt_chars 10000`: 넘으면 오래된 증거부터 `id \| 질의 \| 한 줄`로 접고, 그래도 넘으면 끝난 태스크 줄을 접는다. 좁혀 읽은 증거도 같다 | `schema_app`, `lead.make_lead`, `briefing` |
-| 3-3(a) | `component`는 토폴로지 서비스 이름만(`external` 판정만 예외) — 지금은 증거에 나온 이름도 통과해 Redis 키 이름이 통과했다 | `nodes._component_ok` |
-| 3-4 | 예시의 자유 칸은 **자리표시자**(action은 목록의 이름, 인자 키는 그 action의 것) — 사다리 칸(진짜 값)은 그대로. 규칙 한 줄 "인자는 그 읽기의 것만" | `briefing.example_block`, 템플릿 |
-| 3-5 | integrate 규칙 한 줄: "값이 비었으면 다음은 그 키를 쓰는 쪽(`code.uses`)과 그 파이프라인의 입력 키" | 템플릿 |
+| 3-3(a) ✅ | `component`는 토폴로지 서비스 이름만(`external` 판정만 예외) — 지금은 증거에 나온 이름도 통과해 Redis 키 이름이 통과했다 | `nodes._component_ok` |
+| 3-4 △ | 규칙 한 줄 "인자는 그 읽기의 것만" ✅. 예시의 자유 칸을 **자리표시자**로 바꾸는 것은 **R3-0으로** — 입구 매핑이 결정적 읽기를 frame 앞으로 옮기면 frame 예시가 줄어 그때 한 번에 | 템플릿 (→ `briefing.example_block`은 R3-0) |
+| 3-5 ✅ | integrate 규칙 한 줄: "값이 비었으면 다음은 그 키를 쓰는 쪽(`code.uses`)과 그 파이프라인의 입력 키" | 템플릿 |
 
 종료 판단: 가짜 게이트웨이로 429→대기→성공, `response_format`이 소켓에 나가는 것, 측정판 r2 integrate 프롬프트가 상한 안.
 **그다음 사내 측정 #3**(같은 두 케이스, 2-3 설정 그대로) — 브리프에 리드 턴 JSON 실패 횟수·429 횟수와 대기 초를 더한다.

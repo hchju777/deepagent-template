@@ -1290,17 +1290,17 @@ CASES += [
   '        if not link.evidence_ids:\n            continue',
   [f"{V}::test_후보와_기여_요인의_인용도_검사한다"]),
  ("component를 안 본다", ND,
-  '        if not component_ok(link.component):',
-  '        if False:',
+  '        if problem:\n            problems.append(problem)',
+  '        if False:\n            problems.append(problem)',
   [f"{V}::test_component는_토폴로지나_증거에_있어야_한다"]),
  ("component 우주에 토폴로지가 빠진다", ND,
-  '    return lambda component: component in deps.components or name_known(component, universe)',
-  '    return lambda component: name_known(component, universe)',
-  [f"{V}::test_verify_노드의_component_우주는_토폴로지와_본_증거다"]),
+  '        if component in deps.components:\n            return None',
+  '        if False:\n            return None',
+  [f"{V}::test_verify_노드의_component는_토폴로지_서비스여야_하고_external만_증거의_이름을_허용한다"]),
  ("대본 경로도 component를 검사한다", ND,
-  '    if not deps.check_discovery:\n        return lambda component: True',
-  '    if False:\n        return lambda component: True',
-  [f"{V}::test_verify_노드의_component_우주는_토폴로지와_본_증거다"]),
+  '    if not deps.check_discovery:\n        return lambda component: None',
+  '    if False:\n        return lambda component: None',
+  [f"{V}::test_verify_노드의_component는_토폴로지_서비스여야_하고_external만_증거의_이름을_허용한다"]),
  ("되묻지 않고 바로 강등한다", ND,
   '        if state.verify_attempts < VERIFY_REWRITES:',
   '        if False:',
@@ -2013,7 +2013,24 @@ CASES += [
   ["tests/config/test_schema_app.py::test_프롬프트_상한은_integrate_8000_conclude_10000이고_2000_아래는_막는다"]),
 ]
 
-assert len(CASES) >= 492, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-3 ⑥ — verify component는 서비스만 · integrate 규칙 두 줄 ──
+VT2 = "tests/application/test_verdict.py::test_verify_노드의_component는_토폴로지_서비스여야_하고_external만_증거의_이름을_허용한다"
+CASES += [
+ ("증거에 나온 키 이름을 원인으로 통과시킨다", ND,
+  '        if deps.components and verdict.verdict_type != "external":', "        if False:",
+  [VT2]),
+ ("external 판정에도 서비스만 허용한다", ND,
+  '        if deps.components and verdict.verdict_type != "external":', '        if deps.components and verdict.verdict_type != "__none__":',
+  [VT2]),
+ ("빈 값의 다음 홉 규칙이 없다", IT,
+  "- **값이 비었으면**(빈 배열·0건) 다음 홉은", "- 값이 차 있으면 다음 홉은",
+  ["tests/application/test_briefing.py::test_integrate_규칙에_빈_값의_다음_홉과_인자_규칙이_있다"]),
+ ("인자 규칙이 없다", IT,
+  "- **인자는 그 읽기의 것만.**", "- **인자.**",
+  ["tests/application/test_briefing.py::test_integrate_규칙에_빈_값의_다음_홉과_인자_규칙이_있다"]),
+]
+
+assert len(CASES) >= 496, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
