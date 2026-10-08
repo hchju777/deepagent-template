@@ -201,3 +201,39 @@ async def test_최소_간격은_같은_게이트웨이의_어댑터_둘이_같�
     verdict = _adapter(_cfg(base_url, "chat_model", min_interval_s=5), clock=clock, sleep=sleep)
     assert (await lead.ask("a")).status == "ok" and slept == []
     assert (await verdict.ask("b")).status == "ok" and len(slept) == 1 and 4.0 < slept[0] <= 5.0
+
+
+# ── R2-3 ③ — 답 스키마는 response_format으로 나간다 ──
+
+_CLOSED = {"title": "reply", "type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"],
+           "additionalProperties": False}
+_OPEN = {"title": "frame_reply", "type": "object",
+         "properties": {"tasks": {"type": "array", "items": {"type": "object"}}},
+         "required": ["tasks"], "additionalProperties": False}
+
+
+@pytest.mark.parametrize("adapter", ADAPTERS)
+async def test_스키마를_주면_response_format으로_나가고_닫힌_것만_strict다(gateway, clock, adapter):
+    """사내 10-08: 빠른 모델이 따옴표를 빠뜨려 JSON이 깨졌다 — 서버가 문법을 강제하게 한다. `params`가 자유형인 액션 턴은
+    strict가 못 되고, 닫힌 스키마(판정 턴)만 strict다. 자유 질문(`llm ask`)에는 안 보낸다."""
+    base_url, recorder = gateway
+    llm = build_llm(_cfg(base_url, adapter), clock=clock)
+    assert (await llm.ask("hi", schema=_OPEN)).status == "ok"
+    sent = recorder.requests[-1]["body"]["response_format"]
+    assert sent["type"] == "json_schema" and sent["json_schema"]["name"] == "frame_reply"
+    assert sent["json_schema"]["strict"] is False and sent["json_schema"]["schema"] == _OPEN
+    await llm.ask("hi", schema=_CLOSED)
+    assert recorder.requests[-1]["body"]["response_format"]["json_schema"]["strict"] is True
+    await llm.ask("hi")
+    assert "response_format" not in recorder.requests[-1]["body"]
+    await build_llm(_cfg(base_url, adapter, response_format="json_object"), clock=clock).ask("hi", schema=_OPEN)
+    assert recorder.requests[-1]["body"]["response_format"] == {"type": "json_object"}
+    await build_llm(_cfg(base_url, adapter, response_format="none"), clock=clock).ask("hi", schema=_OPEN)
+    assert "response_format" not in recorder.requests[-1]["body"]
+
+
+async def test_스트리밍에서도_response_format이_나간다(gateway, clock):
+    base_url, recorder = gateway
+    reply = await build_llm(_cfg(base_url, "chat_model", stream=True), clock=clock).ask("hi", schema=_CLOSED)
+    assert reply.status == "ok" and recorder.requests[-1]["body"]["stream"] is True
+    assert recorder.requests[-1]["body"]["response_format"]["json_schema"]["strict"] is True

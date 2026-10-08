@@ -134,7 +134,7 @@ async def test_응답_시간이_트레이스로_간다(case):
         def describe(self):
             return "slow"
 
-        async def ask(self, prompt):
+        async def ask(self, prompt, **kw):
             return LlmReply(status="ok", asked_at=T0, model="slow", text=reply(tasks=[TASK]), latency_s=1.5)
 
     seen = []
@@ -1125,3 +1125,26 @@ def test_판정_프롬프트는_actions_자리가_없어도_되고_evidence_자�
         _load_lead_prompt(tmp_path, "bad.md", slots=briefing.CONCLUDE_SLOTS,
                           required=briefing.CONCLUDE_REQUIRED)
     assert "{evidence}" in str(caught.value)
+
+
+# ── R2-3 ③ — 답 스키마 ──
+
+def test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다():
+    from src.application.lead import ConcludeReply, FrameReply, IntegrateReply, response_schema
+    from src.domain.llm_schema import is_closed
+
+    integrate = response_schema(IntegrateReply)
+    assert integrate["properties"]["decision"]["enum"] == ["continue", "conclude"]
+    task = integrate["properties"]["tasks"]["items"]
+    assert task["properties"]["params"] == {"type": "object"} and "action" in task["required"]   # 자유형 — 닫을 수 없다
+    assert not is_closed(integrate) and not is_closed(response_schema(FrameReply))
+    conclude = response_schema(ConcludeReply)
+    assert is_closed(conclude) and conclude["title"] == "concludereply"
+    assert "degraded" not in conclude["properties"]["verdict_type"]["enum"]                       # 코드만 찍는 낙인
+
+
+async def test_ask_json은_답_스키마를_어댑터에_넘긴다(case):
+    llm = ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    await frame(CaseState(case=case))
+    assert llm.schemas and llm.schemas[0]["title"] == "frame_reply"

@@ -15,6 +15,7 @@ import time
 from src.config.schema_llm import LlmConfig
 from src.domain.base import Clock
 from src.domain.llm import LlmPort, LlmReply
+from src.infrastructure.llm_format import response_format
 from src.infrastructure.llm_pacing import pacer_for, quota_wait
 from src.infrastructure.tls import verify_arg
 
@@ -80,12 +81,12 @@ class ChatModelAdapter(LlmPort):
             except Exception:                                      # noqa: BLE001
                 pass
 
-    async def ask(self, prompt: str) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
         waited, limited = 0.0, 0
         for attempt in (0, 1):
             await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
-            reply, quota = await self._once(prompt)
+            reply, quota = await self._once(prompt, schema)
             if quota is None or attempt:
                 return reply.model_copy(update={"waited_s": waited, "rate_limited": limited})
             wait = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
@@ -93,23 +94,27 @@ class ChatModelAdapter(LlmPort):
             waited, limited = waited + wait, limited + 1
         return reply                                                 # 도달하지 않는다 — 형식상
 
-    async def _once(self, prompt: str):
+    async def _once(self, prompt: str, schema: dict | None = None):
         """한 번 묻는다. `(답, 429면 (본문, 헤더) 아니면 None)` — SDK는 429를 예외(`status_code`)로 올린다."""
         started = self._ticker()
         messages = [{"role": "user", "content": prompt}]
         first = None
+        # 호출마다 넘긴다 — langchain-openai는 호출 kwargs를 요청 본문에 그대로 합친다(`_get_request_payload`). 모델 객체에
+        # 박으면 자유 질문(`llm ask`)까지 JSON을 강요한다.
+        fmt = response_format(self._cfg.response_format, schema)
+        extra = {"response_format": fmt} if fmt is not None else {}
         try:
             if self._cfg.stream:
                 # 조각을 모아 한 답으로 — 호출부는 스트리밍을 모른다. 첫 조각 시각은 유휴 상한을 보는 재료다.
                 parts, metadata = [], {}
-                async for chunk in self.client().astream(messages):
+                async for chunk in self.client().astream(messages, **extra):
                     if first is None:
                         first = round(self._ticker() - started, 3)
                     parts.append(str(getattr(chunk, "content", "") or ""))
                     metadata = getattr(chunk, "response_metadata", None) or metadata
                 text = "".join(parts)
             else:
-                message = await self.client().ainvoke(messages)
+                message = await self.client().ainvoke(messages, **extra)
                 metadata = getattr(message, "response_metadata", None) or {}
                 text = str(getattr(message, "content", message) or "")
         except Exception as exc:                                   # noqa: BLE001

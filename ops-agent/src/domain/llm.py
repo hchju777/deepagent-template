@@ -55,8 +55,13 @@ class LlmPort(ABC):
     """**이 표면이 전부다.** 갈아끼울 수 있으려면 좁아야 한다."""
 
     @abstractmethod
-    async def ask(self, prompt: str) -> LlmReply:
-        """한 번 묻고 한 번 받는다. 절대 raise하지 않는다."""
+    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+        """한 번 묻고 한 번 받는다. 절대 raise하지 않는다.
+
+        `schema`는 답이 따라야 할 JSON 스키마(있으면). 어댑터는 그것을 OpenAI 규약의 `response_format`으로 보내 **서버가
+        문법을 강제**하게 한다(`infrastructure/llm_format`) — 빠른 모델의 따옴표 누락이 파싱을 깨뜨렸다(사내 10-08). 없으면
+        자유 글이다. 받은 어댑터가 그 기능이 없으면 무시해도 된다(파일 턴·대본).
+        """
 
     @abstractmethod
     def describe(self) -> str:

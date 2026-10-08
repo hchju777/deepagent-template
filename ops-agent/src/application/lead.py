@@ -33,6 +33,7 @@ from src.application.schemas import Parsed, parse_object, validate
 from src.application.state import CaseState
 from src.domain.actions import role_for
 from src.domain.base import StrictModel
+from src.domain.llm_schema import strictify
 from src.domain.case import CauseLink, Hypothesis, PlanTask, Verdict
 from src.domain.llm import LlmPort
 
@@ -117,6 +118,38 @@ class ConcludeReply(StrictModel):
         return self
 
 
+_ID = {"type": "string"}
+_HYPOTHESIS_SCHEMA = {"type": "object", "properties": {
+    "id": _ID, "statement": {"type": "string"},
+    "status": {"type": "string", "enum": ["open", "supported", "refuted"]},
+    "supporting_ids": {"type": "array", "items": _ID}, "refuting_ids": {"type": "array", "items": _ID}},
+    "required": ["id", "statement"]}
+# `params`는 자유형이다 — action마다 인자가 다르고 `filter`는 질의 그 자체라 닫을 수 없다. 그래서 액션 턴의 스키마는 strict가
+# 못 되고(`llm_schema.is_closed`), 서버는 문법과 윗단 모양만 강제한다. 그것으로 충분하다 — 깨진 것은 따옴표였다.
+_TASK_SCHEMA = {"type": "object", "properties": {
+    "id": _ID, "goal": {"type": "string"}, "action": {"type": "string"}, "params": {"type": "object"},
+    "priority": {"type": "integer"}, "input_evidence_ids": {"type": "array", "items": _ID}},
+    "required": ["id", "goal", "action", "params"]}
+
+
+def response_schema(model: type[StrictModel]) -> dict:
+    """답 모델 → 서버에 보낼 JSON 스키마. 액션 턴 둘은 항목 모양을 손으로 적는다(pydantic 쪽은 `list[dict]`로 느슨하게
+    받으므로 — 낱개 검증 때문이다), 판정 턴은 pydantic 스키마를 닫아서(strict) 보낸다."""
+    lists = {"hypotheses": {"type": "array", "items": _HYPOTHESIS_SCHEMA},
+             "tasks": {"type": "array", "items": _TASK_SCHEMA}}
+    if model is FrameReply:
+        return {"title": "frame_reply", "type": "object", "properties": lists,
+                "required": ["hypotheses", "tasks"], "additionalProperties": False}
+    if model is IntegrateReply:
+        return {"title": "integrate_reply", "type": "object",
+                "properties": {"decision": {"type": "string", "enum": ["continue", "conclude"]}, **lists,
+                               "note": {"type": "string"}},
+                "required": ["decision", "hypotheses", "tasks"], "additionalProperties": False}
+    schema = strictify(model.model_json_schema())
+    schema["title"] = f"{model.__name__}".lower()
+    return schema
+
+
 def repair_prompt(prompt: str, reason: str) -> str:
     """재시도 프롬프트 — **무엇이 틀렸는지 붙여서** 다시 묻는다.
 
@@ -140,6 +173,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     """
     last = Parsed(False, error="시도하지 않았다")
     asked = prompt
+    schema = response_schema(model)
     transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
     attempts = 0
     for attempt in range(RETRIES + 1):
@@ -157,7 +191,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         text, failure, latency, waited = None, None, None, None
         timed_out = False
         try:
-            reply = await llm.ask(asked)
+            reply = await llm.ask(asked, schema=schema)
         except Exception as exc:                                    # noqa: BLE001
             # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
             last = Parsed(False, error=f"{type(exc).__name__}: {exc}")

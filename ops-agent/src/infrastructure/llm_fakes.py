@@ -22,12 +22,14 @@ class EchoAdapter(LlmPort):
         self._clock = clock
         self._model = model
         self.prompts: list[str] = []
+        self.schemas: list = []
 
     def describe(self) -> str:
         return f"echo {self._model} → (네트워크 없음)"
 
-    async def ask(self, prompt: str) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         self.prompts.append(prompt)
+        self.schemas.append(schema)
         return LlmReply(status="ok", asked_at=self._clock(), model=self._model,
                         text=f"[echo] {prompt}")
 
@@ -38,12 +40,14 @@ class ScriptedAdapter(LlmPort):
         self._clock = clock
         self._model = model
         self.prompts: list[str] = []
+        self.schemas: list = []
 
     def describe(self) -> str:
         return f"scripted {self._model} ({len(self._replies)}개 남음)"
 
-    async def ask(self, prompt: str) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         self.prompts.append(prompt)
+        self.schemas.append(schema)
         if not self._replies:
             # 여기서 **던진다**. 대본 소진은 대상 시스템의 실패가 아니라
             # 테스트가 잘못 쓰인 것이고, 그건 조용히 넘어가면 안 된다.
@@ -67,12 +71,14 @@ class ExplodingAdapter(LlmPort):
     def __init__(self, message: str = "게이트웨이 폭발"):
         self._message = message
         self.prompts: list[str] = []
+        self.schemas: list = []
 
     def describe(self) -> str:
         return "exploding(항상 던진다)"
 
-    async def ask(self, prompt: str) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         self.prompts.append(prompt)
+        self.schemas.append(schema)
         raise RuntimeError(self._message)
 
 
@@ -100,7 +106,7 @@ class FileTurnAdapter(LlmPort):
     def describe(self) -> str:
         return f"file {self._model} → {self._dir}"
 
-    async def ask(self, prompt: str) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         self._turn += 1
         asked_at = self._clock()
         try:

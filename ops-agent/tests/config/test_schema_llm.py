@@ -165,3 +165,11 @@ def test_호출_간격과_429_대기_상한은_음수가_아니고_describe에_�
     for bad in ({"min_interval_s": -1}, {"rate_wait_max_s": 0}):
         with pytest.raises(ValidationError):
             LlmConfig(**GATEWAY, **bad)
+
+
+def test_response_format은_셋_중_하나이고_describe에_보인다():
+    cfg = LlmConfig(**GATEWAY)
+    assert cfg.response_format == "json_schema" and "· 답 json_schema" in cfg.describe()
+    assert "· 답" not in LlmConfig(**GATEWAY, response_format="none").describe()
+    with pytest.raises(ValidationError):
+        LlmConfig(**GATEWAY, response_format="yaml")

@@ -17,6 +17,7 @@ from typing import Any
 from src.config.schema_llm import LlmConfig
 from src.domain.base import Clock
 from src.domain.llm import LlmPort, LlmReply
+from src.infrastructure.llm_format import response_format
 from src.infrastructure.llm_pacing import pacer_for, quota_wait
 from src.infrastructure.tls import verify_arg
 
@@ -32,12 +33,12 @@ class HttpChatAdapter(LlmPort):
     def describe(self) -> str:
         return self._cfg.describe()
 
-    async def ask(self, prompt: str) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
         waited, limited = 0.0, 0
         for attempt in (0, 1):
             await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
-            reply, quota = await self._once(prompt)
+            reply, quota = await self._once(prompt, schema)
             if quota is None or attempt:
                 return reply.model_copy(update={"waited_s": waited, "rate_limited": limited})
             wait = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
@@ -45,7 +46,7 @@ class HttpChatAdapter(LlmPort):
             waited, limited = waited + wait, limited + 1
         return reply                                                 # 도달하지 않는다 — 형식상
 
-    async def _once(self, prompt: str):
+    async def _once(self, prompt: str, schema: dict | None = None):
         """한 번 묻는다. `(답, 429면 (본문, 헤더) 아니면 None)`."""
         import httpx
 
@@ -60,6 +61,9 @@ class HttpChatAdapter(LlmPort):
                 "messages": [{"role": "user", "content": prompt}]}
         if self._cfg.max_tokens is not None:
             body["max_tokens"] = self._cfg.max_tokens
+        fmt = response_format(self._cfg.response_format, schema)
+        if fmt is not None:
+            body["response_format"] = fmt
 
         started = self._ticker()
         try:

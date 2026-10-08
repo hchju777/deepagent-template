@@ -162,7 +162,7 @@ def test_어댑터가_진짜로_던져도_그_GBM만_빈다(source, window):
         def describe(self):
             return "던지는 어댑터"
 
-        async def ask(self, prompt):
+        async def ask(self, prompt, **kw):
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("드라이버가 죽었다")
@@ -180,7 +180,7 @@ def test_어댑터가_진짜로_던져도_그_GBM만_빈다(source, window):
 
 def test_LLM이_error를_돌려주면_이유가_남는다(source, window):
     class Failing(ScriptedAdapter):
-        async def ask(self, prompt):
+        async def ask(self, prompt, **kw):
             from src.domain.llm import LlmReply
             return LlmReply(status="error", asked_at=CLOCK(), model="x",
                             error="타임아웃")

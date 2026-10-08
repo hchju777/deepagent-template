@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1557 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 476 사례 |
+| 테스트 | `1565 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 486 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -397,7 +397,7 @@ LLM 없이 검사해 한 번 되묻고 그래도 안 되면 걷어내고 강등�
 `cache-missing`), **R2-2c**(LLM 어댑터 `close`·모든 명령이 `_run`을 지나는 종료 소음 거름망·README NO_PROXY — H system/user
 분리는 재측정 뒤로 미룸)를 했다. 사내 재측정(10-08)이 들어와 지시 "최종"을 받았다 — 역할 지정으로 리드 턴 4~14초, 판정은
 stream으로 226초도 성공, 새 문제는 빠른 모델의 JSON 문법 오류와 429. 그 뒤 **R2-3**(재측정 뒤 P0)을 한 스텝씩 하는 중 —
-① `llm check` 회귀·stderr 사실 머리줄·kafka tail 루프 ✅, ② 429 대기·게이트웨이 단위 간격·트레이스의 대기 초 ✅. **남은 것(R2-3 ②~ → 사내 측정 #3 → R3 선언형 입구 매핑 → R4)은
+① `llm check` 회귀·stderr 사실 머리줄·kafka tail 루프 ✅, ② 429 대기·게이트웨이 단위 간격·트레이스의 대기 초 ✅, ③ 답 스키마를 `response_format`으로(닫힐 때만 strict) ✅. **남은 것(R2-3 ②~ → 사내 측정 #3 → R3 선언형 입구 매핑 → R4)은
 [plan-12a-r2-r4.md](plan-12a-r2-r4.md)에 항목·자리·테스트·종료 판단까지 적혀 있다 — 라운드를 시작할 때 그 문서를 먼저
 읽고, 그 사이 알게 된 것으로 문서를 고친 뒤 예고를 쓴다.** 그다음 **12b**.
 11e 후속 후보(별도 예고): 사이트에서 도는 파이프라인만 배선으로 보이게, 레포 커밋별 graphify 캐시.

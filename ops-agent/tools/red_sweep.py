@@ -1947,7 +1947,46 @@ CASES += [
   ["tests/config/test_schema_llm.py::test_호출_간격과_429_대기_상한은_음수가_아니고_describe에_보인다"]),
 ]
 
-assert len(CASES) >= 476, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-3 ③ — 답 스키마를 response_format으로 ──
+LLS = ROOT / "src/domain/llm_schema.py"
+LFM = ROOT / "src/infrastructure/llm_format.py"
+LLST = "tests/domain/test_llm_schema.py"
+FMT_T = "tests/infrastructure/test_llm_adapters.py::test_스키마를_주면_response_format으로_나가고_닫힌_것만_strict다"
+CASES += [
+ ("선택 속성이 남아도 닫힌 것으로 본다", LLS,
+  '            if set(schema.get("required", ())) != set(props):', "            if False:",
+  [f"{LLST}::test_닫힌_스키마만_strict로_보낼_수_있다"]),
+ ("strictify가 전부를 required로 안 만든다", LLS,
+  '                node["required"] = list(node["properties"])', "                pass",
+  [f"{LLST}::test_strictify는_전부_required로_닫고_default를_지우고_null은_남긴다"]),
+ ("strictify가 default를 안 지운다", LLS,
+  '            node.pop("default", None)', "            pass",
+  [f"{LLST}::test_strictify는_전부_required로_닫고_default를_지우고_null은_남긴다"]),
+ ("json_object 설정을 무시한다", LFM,
+  '    if mode == "json_object":\n        return {"type": "json_object"}', '    if False:\n        return {"type": "json_object"}',
+  [FMT_T]),
+ ("닫힌 스키마도 strict로 안 보낸다", LFM,
+  '"strict": is_closed(schema)}}', '"strict": False}}',
+  [FMT_T]),
+ ("http 어댑터가 response_format을 안 보낸다", LH,
+  '        if fmt is not None:\n            body["response_format"] = fmt', '        if False:\n            body["response_format"] = fmt',
+  [FMT_T]),
+ ("chat_model 어댑터가 response_format을 안 보낸다", LCM2,
+  '        extra = {"response_format": fmt} if fmt is not None else {}', "        extra = {}",
+  [FMT_T]),
+ ("리드가 스키마를 어댑터에 안 넘긴다", LD,
+  "            reply = await llm.ask(asked, schema=schema)", "            reply = await llm.ask(asked)",
+  ["tests/application/test_lead.py::test_ask_json은_답_스키마를_어댑터에_넘긴다"]),
+ ("판정 스키마를 안 닫는다", LD,
+  "    schema = strictify(model.model_json_schema())", "    schema = model.model_json_schema()",
+  ["tests/application/test_lead.py::test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다"]),
+ ("response_format 기본이 none이다", ROOT / "src/config/schema_llm.py",
+  '    response_format: Literal["json_schema", "json_object", "none"] = "json_schema"',
+  '    response_format: Literal["json_schema", "json_object", "none"] = "none"',
+  ["tests/config/test_schema_llm.py::test_response_format은_셋_중_하나이고_describe에_보인다"]),
+]
+
+assert len(CASES) >= 486, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

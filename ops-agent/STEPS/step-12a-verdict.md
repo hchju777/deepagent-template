@@ -320,6 +320,19 @@ verify가 통과시켰다. 실제 c-1: 요약 키 data 0건 ← 도메인 키 0�
 - 가짜 게이트웨이에 429 본문 큐(`recorder.rate_limit`)와 `Retry-After`. 테스트 먼저(RED 9 → GREEN): pacing 2, 어댑터 4×2,
   schema 1, tracer 1, digest 1. 스윕 +13(476).
 
+#### R2-3 ③ (10-08) ✅ — 답 스키마를 서버가 강제한다
+
+- **`LlmPort.ask(prompt, *, schema=None)`**(2-1): `ask_json`이 답 모델의 JSON 스키마(`lead.response_schema`)를 넘기고 어댑터
+  둘이 OpenAI 규약 `response_format`으로 보낸다(`llm_format`). **`strict`는 스키마가 닫힐 때만**(`domain/llm_schema.is_closed`):
+  액션 턴은 태스크 `params`·`filter`가 자유형이라 닫을 수 없어 `strict: false`(문법과 윗단 모양만 강제 — 깨진 것은 따옴표였다),
+  판정 턴은 pydantic 스키마를 `strictify`(전부 required·`additionalProperties: false`·default 제거, Optional은 null)해 `strict: true`.
+  지시의 "strict: true"를 그대로는 못 하는 이유가 이것이다.
+- `llm.response_format: json_schema(기본) | json_object | none` — 게이트웨이가 `json_schema`를 거부하는 배치는 `json_object`.
+  자유 질문(`llm ask`)에는 안 보낸다. chat_model은 호출 kwargs로 넘긴다(langchain-openai가 요청 본문에 합친다 — 모델 객체에
+  박으면 자유 질문까지 JSON을 강요한다). 스트리밍에서도 나간다(가짜 게이트웨이로 확인).
+- 가짜 어댑터 넷이 `schema=`를 받고(`ScriptedAdapter.schemas`에 기록), 테스트의 지역 가짜들은 `**kw`로.
+- 테스트: 스키마 닫힘 2, 어댑터 2(×2), 리드 2, 설정 1. 스윕 +10(486).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.
