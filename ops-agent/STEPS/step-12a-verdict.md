@@ -333,6 +333,23 @@ verify가 통과시켰다. 실제 c-1: 요약 키 data 0건 ← 도메인 키 0�
 - 가짜 어댑터 넷이 `schema=`를 받고(`ScriptedAdapter.schemas`에 기록), 테스트의 지역 가짜들은 `**kw`로.
 - 테스트: 스키마 닫힘 2, 어댑터 2(×2), 리드 2, 설정 1. 스윕 +10(486).
 
+#### R2-3 ④ (10-08) ✅ — stream 기본 켬, 역할 설정 확정
+
+- `llm.stream`은 `None`이면 chat_model 켬·http 끔(명시가 이김, http에 켜 달라면 전처럼 거부). 재측정에서 판정 턴 226초도
+  stream이면 살았다 — 180초 벽은 유휴 끊김이었다. 가짜 게이트웨이의 마지막 조각에 `finish_reason: "stop"` — langchain-openai는
+  그 조각에서만 `model`을 올리므로 없으면 스트리밍 답의 모델 확인이 죽는다(테스트가 잡았다).
+- 역할 설정은 브리프에 JSON 그대로(lead `max_tokens 1500`, conclude `timeout_s 600`). 리포의 `config/app.json`에는 안 넣는다 —
+  CLI 테스트가 그 파일을 복사해 쓴다(넣었더니 둘이 깨졌다). README에 사내 실측으로 정해진 `llm` 설정 요약. 스윕 +1(487).
+- **작업 방식**: 이 스텝부터 전체 스윕과 기계적 커밋·푸시는 haiku 서브에이전트가 `sweep_commit.sh`로 돈다.
+
+#### R2-3 ⑤ (10-08) ✅ — 프롬프트 상한
+
+- `investigation.integrate_prompt_chars 8000`·`conclude_prompt_chars 10000`(2-4): `lead.fit_prompt`가 상한을 넘으면 넘친 만큼
+  증거 예산을 줄여 다시 만든다(오래된 증거부터 `id | 질의 | 한 줄`로 접히고 최신은 통째로 — `evidence_block`의 규칙 그대로),
+  바닥(1500 — 최신 한 건은 통째로)까지 접어도 넘으면 끝난 태스크 줄을 접는다(`tasks_block(fold=True)`: id·상태·goal 앞머리,
+  실패한 것의 질의는 남긴다). 그래도 넘으면 그대로 보낸다(자르는 것보다 낫고 크기는 트레이스 머리에 남는다). frame은 상한 없음.
+  좁혀 읽은 증거도 같은 규칙이다. 측정판 r2 integrate는 7.2K라 안 접힌다 — 사내 22.8K가 접힐 자리다. 스윕 +5(492).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

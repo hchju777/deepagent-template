@@ -212,11 +212,19 @@ def _oneline(text: str) -> str:
     return text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
 
 
-def tasks_block(state: CaseState) -> str:
+def tasks_block(state: CaseState, *, fold: bool = False) -> str:
+    """`fold`면 **끝난** 태스크는 id·상태·goal 앞머리만 — 프롬프트 상한(`lead.fit_prompt`)에서 증거를 접어도 모자랄 때.
+    대기 중인 태스크는 리드의 큐라 그대로 둔다."""
     if not state.plan_tasks:
         return "(아직 없다)"
     lines = []
     for task in state.plan_tasks:
+        if fold and task.status in ("ok", "error"):
+            line = f"- {task.id} [{task.status}] {_oneline(task.goal)[:60]}"
+            if not task.result_evidence_ids and task.action:
+                line += f" · 질의: {describe(task.action, task.params)}"
+            lines.append(line)
+            continue
         # goal·error도 한 줄로 눕힌다. goal은 리드가 쓴 문장이라 개행이 들어올 수
         # 있고, error는 대상 시스템의 예외 메시지라 여러 줄인 것이 흔하다.
         detail = task.error or task.result_summary or ""
@@ -680,7 +688,8 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      evidence_budget: int = 12000,
                      services: tuple[str, ...] = (),
                      roles: dict[str, str] | None = None,
-                     flow_graph: dict | None = None, code_index: bool = False) -> dict[str, str]:
+                     flow_graph: dict | None = None, code_index: bool = False,
+                     fold_tasks: bool = False) -> dict[str, str]:
     return {"case": case_block(state, site_config=site_config),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
@@ -694,7 +703,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                                      tasks=tuple(state.plan_tasks), flow_graph=flow_graph,
                                      evidence=tuple(state.evidence), code_index=code_index),
             "hypotheses": hypotheses_block(state),
-            "tasks": tasks_block(state),
+            "tasks": tasks_block(state, fold=fold_tasks),
             "evidence": evidence_block(state, budget=evidence_budget),
             "rejected": rejected_block(state),
             "open": open_questions_block(state),
@@ -766,12 +775,12 @@ def verdict_example() -> str:
 
 def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 12000,
                     services: tuple[str, ...] = (),
-                    flow_graph: dict | None = None) -> dict[str, str]:
+                    flow_graph: dict | None = None, fold_tasks: bool = False) -> dict[str, str]:
     return {"case": case_block(state, site_config=site_config),
             "flow": flow_block(state, flow_graph,
                                texts=(origin_line(state.case, site_config) or "",)),
             "hypotheses": hypotheses_block(state),
-            "tasks": tasks_block(state),
+            "tasks": tasks_block(state, fold=fold_tasks),
             "evidence": evidence_block(state, budget=evidence_budget),
             "open": open_questions_block(state),
             "ended": ended_line(state),

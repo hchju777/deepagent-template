@@ -47,6 +47,11 @@ class InvestigationConfig(StrictModel):
     # `code.config key`)의 상한이기도 하다(`runner_probe`) — 고른 부분은 통째로 보여야 하고, 전체 예산보다 큰 것은 어차피
     # 더 좁혀야 한다.
     evidence_total_chars: int = Field(default=12000, ge=1000)
+    # 프롬프트 **전체**의 글자 상한(integrate·conclude). 넘으면 오래된 증거부터 한 줄로 접고, 그래도 넘으면 끝난 태스크 줄을
+    # 접는다(`lead.fit_prompt`). 사내 재측정(10-08)에서 r2 integrate가 22.8K자였다 — 증거는 쌓일수록 값이 줄고 프롬프트는
+    # 클수록 느리다. 좁혀 읽은 증거도 같은 상한을 지킨다. frame은 작아서 상한이 없다.
+    integrate_prompt_chars: int = Field(default=8000, ge=2000)
+    conclude_prompt_chars: int = Field(default=10000, ge=2000)
     # 리드 프롬프트. config 안의 상대 경로다 — 운영이 직접 고치는 파일이라
     # 코드에 박아 두면 고치려고 배포를 해야 한다.
     frame_prompt: str = Field(default="prompts/investigate-frame.md", min_length=1)

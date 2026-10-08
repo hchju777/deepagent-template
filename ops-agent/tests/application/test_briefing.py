@@ -1217,3 +1217,20 @@ def test_흐름_블록은_증상_단어와_겹치는_이름을_먼저_둔다():
     text = briefing.flow_block(state, g)
     sink = next(l for l in text.splitlines() if l.startswith("sink [service"))
     assert "declares: zz_badge_cache, aa0" in sink
+
+
+def test_태스크_블록을_접으면_끝난_것만_짧아지고_대기는_그대로다(case):
+    from src.domain.case import PlanTask
+
+    state = CaseState(case=case, plan_tasks=[
+        PlanTask(id="t-1", goal="아주 긴 목표 " * 20, role="data_prober", action="mongo.find",
+                 params={"collection": "c", "filter": {}}, status="ok", result_summary="본 것 " * 30,
+                 result_evidence_ids=["t-1.e1"]),
+        PlanTask(id="t-2", goal="실패한 읽기", role="data_prober", action="redis.get", params={"key": "k"},
+                 status="error", error="ConnectError " * 10),
+        PlanTask(id="t-3", goal="아직 안 돈 것 " * 10, role="data_prober", action="redis.get", params={"key": "k2"})])
+    folded = briefing.tasks_block(state, fold=True).splitlines()
+    assert folded[0].startswith("- t-1 [ok] ") and len(folded[0]) < 80 and "본 것" not in folded[0]
+    assert folded[1].startswith("- t-2 [error] ") and "질의: redis.get" in folded[1] and "ConnectError" not in folded[1]
+    assert folded[2] == briefing.tasks_block(state).splitlines()[2]            # 대기 중인 것은 그대로
+

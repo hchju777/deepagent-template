@@ -1675,8 +1675,8 @@ CASES += [
   '        got = await ask_json(llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
   ["tests/application/test_lead.py::test_판정_턴은_다른_LLM을_쓸_수_있다", "tests/application/test_lead.py::test_CLI가_역할별_LLM을_따로_꽂는다"]),
  ("investigate가 판정 LLM을 안 꽂는다", MN,
-  '                flow_graph=flow_graph, code_index=code.has_index() if code else False,\n                conclude_llm=conclude_llm)',
-  '                flow_graph=flow_graph, code_index=code.has_index() if code else False,\n                conclude_llm=None)',
+  '                flow_graph=flow_graph, code_index=code.has_index() if code else False,\n                conclude_llm=conclude_llm,',
+  '                flow_graph=flow_graph, code_index=code.has_index() if code else False,\n                conclude_llm=None,',
   ["tests/application/test_lead.py::test_CLI가_역할별_LLM을_따로_꽂는다"]),
  ("llm describe가 역할을 안 찍는다", MN,
   '        if cfg is not base:\n            print(f"  역할 {role}: {cfg.describe()}")',
@@ -1993,7 +1993,27 @@ CASES += [
   ["tests/config/test_schema_llm.py::test_stream_기본값은_chat_model이면_켬_http면_끔이고_명시가_이긴다"]),
 ]
 
-assert len(CASES) >= 487, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-3 ⑤ — 프롬프트 상한 ──
+CASES += [
+ ("프롬프트 상한을 넘어도 증거를 안 접는다", LD,
+  "    while len(prompt) > cap and budget > _EVIDENCE_FLOOR:", "    while False:",
+  ["tests/application/test_lead.py::test_프롬프트_상한을_넘으면_오래된_증거부터_접고_최신은_통째로_남는다"]),
+ ("증거 바닥 뒤에도 태스크를 안 접는다", LD,
+  "    if len(prompt) > cap:\n        prompt = render(budget, True)", "    if False:\n        prompt = render(budget, True)",
+  ["tests/application/test_lead.py::test_증거를_바닥까지_접어도_넘으면_끝난_태스크_줄을_접는다"]),
+ ("integrate가 상한을 안 넘긴다", LD,
+  '        prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("integrate"), budget=evidence_budget)',
+  "        prompt, _ = fit_prompt(render, cap=None, budget=evidence_budget)",
+  ["tests/application/test_lead.py::test_프롬프트_상한을_넘으면_오래된_증거부터_접고_최신은_통째로_남는다"]),
+ ("태스크 접기가 끝난 것을 안 줄인다", B,
+  '        if fold and task.status in ("ok", "error"):', "        if False:",
+  ["tests/application/test_briefing.py::test_태스크_블록을_접으면_끝난_것만_짧아지고_대기는_그대로다"]),
+ ("프롬프트 상한 기본값이 다르다", SAP,
+  "    integrate_prompt_chars: int = Field(default=8000, ge=2000)", "    integrate_prompt_chars: int = Field(default=80000, ge=2000)",
+  ["tests/config/test_schema_app.py::test_프롬프트_상한은_integrate_8000_conclude_10000이고_2000_아래는_막는다"]),
+]
+
+assert len(CASES) >= 492, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

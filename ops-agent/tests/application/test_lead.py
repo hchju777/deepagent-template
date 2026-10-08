@@ -1148,3 +1148,48 @@ async def test_ask_json은_답_스키마를_어댑터에_넘긴다(case):
     frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     await frame(CaseState(case=case))
     assert llm.schemas and llm.schemas[0]["title"] == "frame_reply"
+
+
+# ── R2-3 ⑤ — 프롬프트 상한 ──
+
+def _fat_state(case, n=8):
+    tasks = [task(f"t-{i}", action="mongo.find", params={"collection": f"c{i}", "filter": {}}, status="ok",
+                  result_summary="본 것 " * 20, result_evidence_ids=[f"t-{i}.e1"]) for i in range(1, n + 1)]
+    evidence = [EvidenceRef(id=f"t-{i}.e1", source=f"mongo.find collection='c{i}' filter={{}}", summary=f"{i}건",
+                            body=f"[{i}] " + "x" * 1500) for i in range(1, n + 1)]
+    return CaseState(case=case, plan_tasks=tasks, evidence=evidence, round=1)
+
+
+async def test_프롬프트_상한을_넘으면_오래된_증거부터_접고_최신은_통째로_남는다(case):
+    """사내 재측정: r2 integrate가 22.8K자. 상한을 넘으면 오래된 증거부터 `id | 질의 | 한 줄`로 접는다 — 최신 증거는 통째로."""
+    state = _fat_state(case)
+    llm = ScriptedAdapter([reply(decision="conclude")], clock=lambda: T0)
+    _, integrate, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                     evidence_budget=12000, prompt_caps={"integrate": 6000})
+    await integrate(state)
+    prompt = llm.prompts[0]
+    assert len(prompt) <= 6000
+    assert "[8] " + "x" * 1500 in prompt and "[1] " + "x" * 1500 not in prompt
+    assert "내용은 예산에서 빠졌다" in prompt                                   # 접힌 것은 접혔다고 적는다
+    loose = ScriptedAdapter([reply(decision="conclude")], clock=lambda: T0)
+    _, integrate2, _ = lead.make_lead(loose, site_config=site_config(), prompts=PROMPTS, max_rounds=3, evidence_budget=12000)
+    await integrate2(state)
+    assert len(loose.prompts[0]) > 6000                                        # 상한이 없으면 전처럼
+
+
+def test_증거를_바닥까지_접어도_넘으면_끝난_태스크_줄을_접는다(case):
+    """렌더 함수가 받는 두 번째 인자가 그 신호다 — 증거 바닥(1500)에서 멈추고 그다음에야 태스크를 접는다."""
+    from src.application.lead import _EVIDENCE_FLOOR, fit_prompt
+
+    calls = []
+
+    def render(budget, fold):
+        calls.append((budget, fold))
+        return "p" * (9000 if not fold else 3000)                              # 증거를 아무리 접어도 9000자
+
+    prompt, budget = fit_prompt(render, cap=5000, budget=12000)
+    assert len(prompt) == 3000 and budget == _EVIDENCE_FLOOR
+    assert calls[0] == (12000, False) and calls[-1] == (_EVIDENCE_FLOOR, True)
+    assert all(not fold for _, fold in calls[:-1])                              # 태스크 접기는 마지막 수단
+    assert fit_prompt(lambda b, f: "q" * 100, cap=None, budget=12000) == ("q" * 100, 12000)
+

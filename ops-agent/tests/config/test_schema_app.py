@@ -71,3 +71,13 @@ def test_역할_덮어쓰기의_모르는_키와_모르는_역할은_막는다()
     assert "llm" in str(none.value)
     with pytest.raises(ValueError):
         AppConfig(llm=GATEWAY).llm_for("nope")
+
+
+def test_프롬프트_상한은_integrate_8000_conclude_10000이고_2000_아래는_막는다():
+    from pydantic import ValidationError
+
+    cfg = InvestigationConfig()
+    assert (cfg.integrate_prompt_chars, cfg.conclude_prompt_chars) == (8000, 10000)
+    with pytest.raises(ValidationError):
+        InvestigationConfig(integrate_prompt_chars=1000)
+

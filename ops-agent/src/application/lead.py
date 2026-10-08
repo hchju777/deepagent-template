@@ -150,6 +150,28 @@ def response_schema(model: type[StrictModel]) -> dict:
     return schema
 
 
+# 증거 예산을 여기까지만 줄인다 — 더 줄이면 최신 증거 한 건도 통째로 못 들어가 리드가 눈이 먼다(`evidence_chars` 2400의 뜻).
+_EVIDENCE_FLOOR = 1500
+
+
+def fit_prompt(render, *, cap: int | None, budget: int) -> tuple[str, int]:
+    """프롬프트를 상한 안에 — 오래된 증거부터 접고(예산을 넘친 만큼 줄인다), 그래도 넘으면 끝난 태스크 줄을 접는다.
+
+    `render(evidence_budget, fold_tasks)`가 프롬프트를 만든다. 사내 재측정에서 r2 integrate가 22.8K자였다(2-4). 상한이 없으면
+    한 번 만들고 끝. 바닥까지 접어도 넘으면 그대로 보낸다 — 자르는 것보다 조금 큰 쪽이 낫고, 크기는 트레이스 머리에 남는다.
+    `(프롬프트, 쓴 증거 예산)`.
+    """
+    prompt = render(budget, False)
+    if cap is None:
+        return prompt, budget
+    while len(prompt) > cap and budget > _EVIDENCE_FLOOR:
+        budget = max(_EVIDENCE_FLOOR, budget - (len(prompt) - cap))
+        prompt = render(budget, False)
+    if len(prompt) > cap:
+        prompt = render(budget, True)
+    return prompt, budget
+
+
 def repair_prompt(prompt: str, reason: str) -> str:
     """재시도 프롬프트 — **무엇이 틀렸는지 붙여서** 다시 묻는다.
 
@@ -281,8 +303,10 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
               evidence_budget: int = 12000, trace=None,
               services: tuple[str, ...] = (), roles: dict[str, str] | None = None,
               flow_graph: dict | None = None, code_index: bool = False,
-              conclude_llm: LlmPort | None = None):
+              conclude_llm: LlmPort | None = None, prompt_caps: dict[str, int] | None = None):
     """`EngineDeps`의 `frame`·`integrate`·`conclude` 자리에 꽂을 세 함수를 만든다.
+
+    `prompt_caps`는 턴별 프롬프트 글자 상한(`{"integrate": 8000, "conclude": 10000}`) — `fit_prompt`가 지킨다. 없으면 상한 없음.
 
     `services`는 대상 코드(11a)가 준비됐을 때만 채워진다. 비어 있으면 `code.*`가
     목록에도 예시에도 안 나온다 — 없는 문을 열라고 적어 두면 리드가 거기로 가고,
@@ -316,12 +340,15 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                 "llm_errors": _dropped_note("frame", got) + h_notes + t_notes}
 
     async def integrate(state: CaseState) -> dict:
-        prompt = fill(prompts["integrate"],
-                      briefing.integrate_fields(state, site_config=site_config,
-                                                max_rounds=max_rounds,
-                                                evidence_budget=evidence_budget,
-                                                services=services, roles=roles,
-                                                flow_graph=flow_graph, code_index=code_index))
+        def render(budget: int, fold: bool) -> str:
+            return fill(prompts["integrate"],
+                        briefing.integrate_fields(state, site_config=site_config,
+                                                  max_rounds=max_rounds,
+                                                  evidence_budget=budget,
+                                                  services=services, roles=roles,
+                                                  flow_graph=flow_graph, code_index=code_index,
+                                                  fold_tasks=fold))
+        prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("integrate"), budget=evidence_budget)
         got = await ask_json(llm, prompt, IntegrateReply,
                              on_exchange=_hook("integrate", state))
         if not got.ok:
@@ -339,10 +366,13 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
         if template is None:
             return {"llm_errors": ["conclude: 프롬프트가 없다 — app.json의 "
                                    "investigation.conclude_prompt"]}
-        prompt = fill(template,
-                      briefing.conclude_fields(state, site_config=site_config,
-                                               evidence_budget=evidence_budget,
-                                               services=services, flow_graph=flow_graph))
+        def render(budget: int, fold: bool) -> str:
+            return fill(template,
+                        briefing.conclude_fields(state, site_config=site_config,
+                                                 evidence_budget=budget,
+                                                 services=services, flow_graph=flow_graph,
+                                                 fold_tasks=fold))
+        prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("conclude"), budget=evidence_budget)
         got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))
         if not got.ok:
             return {"llm_errors": [f"conclude: {got.error}"]}
