@@ -35,13 +35,13 @@ class HttpChatAdapter(LlmPort):
 
     async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
-        waited, limited = 0.0, 0
+        waited, limited, source = 0.0, 0, ""
         for attempt in (0, 1):
             await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
             reply, quota = await self._once(prompt, schema)
             if quota is None or attempt:
-                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited})
-            wait = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
+                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited, "rate_source": source})
+            wait, source = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
             await self._sleep(wait)
             waited, limited = waited + wait, limited + 1
         return reply                                                 # 도달하지 않는다 — 형식상

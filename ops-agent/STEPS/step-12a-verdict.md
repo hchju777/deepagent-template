@@ -376,6 +376,17 @@ R2-2c의 거름망은 context에 `transport`·`protocol` 키가 있을 때만 �
 연결 리셋일 때만 거른다 — 다른 콜백의 같은 예외, 같은 콜백의 다른 예외는 기본 처리기로. 테스트는 실제 `asyncio.Handle`로 그
 context를 만든다(Windows 재현은 여기서 안 된다 — 측정 #4에서 트레이스백 유무를 받는다). 스윕 +2(498).
 
+#### R2-4 ② (10-09) ✅ — 429는 게이트웨이의 시각까지, 근거를 남긴다
+
+- 사내 게이트웨이의 `nextAccessTime`은 429 본문 최상위에 `2026-Oct-08 02:09:00+0000 UTC` 모양이다(월 영문 약어, 오프셋 뒤 `UTC`).
+  ISO로 못 읽어 매번 기본값 60초였다. `_gateway_form`이 월 약어를 **표로** 숫자로 바꾸고(`strptime("%b")`는 로캘을 따르고 사내
+  Windows는 한국어다) 끝의 `UTC`/`GMT`를 뗀다. 오프셋 없이 `UTC`만 있으면 UTC로 본다(KST 시계로 테스트). 모르는 약어는 그대로
+  둬서 파싱이 실패하게 한다 — 지어낸 달로 기다리지 않는다.
+- openai SDK는 429 본문에서 `error` 안쪽만 예외에 남긴다(`body.get("error", body)`) — 시각이 `error`의 형제여도 찾게 응답 원문도
+  같이 본다(chat_model). 사내 본문은 `error` 키가 없어 이번 원인은 아니었다.
+- `quota_wait`가 `(초, 근거)` — `nextAccessTime`·`Retry-After`·`기본값`. `LlmReply.rate_source` → 트레이스 `대기: N초(429·근거)` →
+  요약 끝줄 `· 근거 nextAccessTime 1 · 기본값 1`. 브리프에 측정 #4 항목과 `min_interval_s: 15`. 스윕 +7(505), 옮겨진 앵커 셋.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

@@ -918,13 +918,14 @@ def _make_tracer(case_id: str, *, folder: Path):
     seq = itertools.count(1)
     written: list[Path] = []
 
-    def trace(node: str, round_no: int, prompt: str, text, error, latency_s=None, waited_s=None) -> None:
+    def trace(node: str, round_no: int, prompt: str, text, error, latency_s=None, waited_s=None,
+              wait_source=None) -> None:
         path = folder / f"{next(seq):02d}-r{round_no}-{node}.md"
         verdict = "읽었다" if error is None else f"**못 읽었다** — {error}"
         # 호출이 걸린 초 — 사내 실측 두 판이 시간 초과로 죽었는데 어느 호출이 몇 초였는지가 아무 데도 없었다.
         took = f"응답: {latency_s:.1f}초\n" if latency_s is not None else ""
         # 429 뒤 기다린 초 — 할당량 대기는 응답 시간과 다른 양이다(브리프가 따로 받는다). 안 기다렸으면 안 적는다.
-        took += f"대기: {waited_s:.1f}초(429)\n" if waited_s else ""
+        took += f"대기: {waited_s:.1f}초(429{'·' + wait_source if wait_source else ''})\n" if waited_s else ""
         path.write_text(
             f"# {case_id} · {node} · 라운드 {round_no}\n\n"
             f"결과: {verdict}\n{took}\n"

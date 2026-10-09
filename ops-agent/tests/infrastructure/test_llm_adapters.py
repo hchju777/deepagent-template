@@ -237,3 +237,38 @@ async def test_스트리밍에서도_response_format이_나간다(gateway, clock
     reply = await build_llm(_cfg(base_url, "chat_model", stream=True), clock=clock).ask("hi", schema=_CLOSED)
     assert reply.status == "ok" and recorder.requests[-1]["body"]["stream"] is True
     assert recorder.requests[-1]["body"]["response_format"]["json_schema"]["strict"] is True
+
+
+def _gw_time(seconds):
+    """사내 게이트웨이 모양의 시각 — `2026-Mar-01 09:00:07+0000 UTC`."""
+    from datetime import timedelta
+    return (T0 + timedelta(seconds=seconds)).strftime("%Y-") + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug",
+                                                                "Sep", "Oct", "Nov", "Dec"][(T0 + timedelta(seconds=seconds)).month - 1] \
+        + (T0 + timedelta(seconds=seconds)).strftime("-%d %H:%M:%S+0000 UTC")
+
+
+@pytest.mark.parametrize("adapter", ADAPTERS)
+async def test_사내_모양의_429는_그_시각까지_기다리고_근거를_남긴다(gateway, clock, adapter):
+    """사내 10-08: 본문 최상위(code·message·description과 같은 층)에 `nextAccessTime: 2026-Oct-08 02:09:00+0000 UTC`."""
+    base_url, recorder = gateway
+    recorder.rate_limit = [{"code": "429", "message": "quota", "description": "per minute", "nextAccessTime": _gw_time(7)}]
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    reply = await _adapter(_cfg(base_url, adapter), clock=clock, sleep=sleep).ask("hi")
+    assert reply.status == "ok" and slept == [7.0] and reply.rate_source == "nextAccessTime"
+
+
+async def test_error_옆에_있는_nextAccessTime도_원문에서_찾는다(gateway, clock):
+    """openai SDK는 429 본문에서 `error` 안쪽만 예외에 남긴다 — 시각이 `error`의 형제면 원문을 봐야 찾는다."""
+    base_url, recorder = gateway
+    recorder.rate_limit = [{"error": {"message": "quota"}, "nextAccessTime": _gw_time(5)}]
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    reply = await _adapter(_cfg(base_url, "chat_model"), clock=clock, sleep=sleep).ask("hi")
+    assert reply.status == "ok" and slept == [5.0] and reply.rate_source == "nextAccessTime"

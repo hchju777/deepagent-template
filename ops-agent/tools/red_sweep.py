@@ -1611,7 +1611,7 @@ CASES += [
   '    return bool(_TIMEOUT_WORDS.search(error))', '    return False',
   ["tests/application/test_lead.py::test_시간_초과는_되묻지_않는다"]),
  ("걸린 초가 트레이스로 안 간다", LD,
-  '        _tell(on_exchange, asked, text, failure, latency, waited)', '        _tell(on_exchange, asked, text, failure, None, waited)',
+  '        _tell(on_exchange, asked, text, failure, latency, waited, source)', '        _tell(on_exchange, asked, text, failure, None, waited, source)',
   ["tests/application/test_lead.py::test_응답_시간이_트레이스로_간다"]),
  ("트레이스 파일에 응답 초를 안 적는다", MN,
   '        took = f"응답: {latency_s:.1f}초\\n" if latency_s is not None else ""', '        took = ""',
@@ -1910,7 +1910,7 @@ CASES += [
   "        seconds = raw / 1000.0 if raw > 1e11 else float(raw)", "        seconds = float(raw)",
   [f"{PCT}::test_nextAccessTime을_여러_모양으로_읽는다"]),
  ("naive 시각에 시간대를 안 붙인다", PC,
-  "        return when if when.tzinfo else when.replace(tzinfo=tz)", "        return when",
+  "        if when.tzinfo is None:\n            when = when.replace(tzinfo=timezone.utc if named_utc else tz)", "        if False:\n            when = when.replace(tzinfo=timezone.utc if named_utc else tz)",
   [f"{PCT}::test_nextAccessTime을_여러_모양으로_읽는다"]),
  ("429 대기를 상한으로 안 자른다", PC,
   "    return min(max(0.0, wait), cap)", "    return max(0.0, wait)",
@@ -1934,7 +1934,7 @@ CASES += [
   "            waited = reply.waited_s or None", "            waited = None",
   ["tests/application/test_lead.py::test_트레이스가_시도마다_날것을_건넨다"]),
  ("트레이스 파일이 대기 초를 안 적는다", MN,
-  '        took += f"대기: {waited_s:.1f}초(429)\\n" if waited_s else ""', '        took += ""',
+  '        took += f"대기: {waited_s:.1f}초(429{\'·\' + wait_source if wait_source else \'\'})\\n" if waited_s else ""', '        took += ""',
   ["tests/test_cli.py::test_트레이스가_429_대기_초를_적는다"]),
  ("요약 머리줄에 대기가 없다", TD,
   '           + (f" · 대기 {waited}초" if waited else "")', "",
@@ -2041,7 +2041,36 @@ CASES += [
   ["tests/test_cli.py::test_종료_소음_처리기는_proactor의_connection_lost_콜백_실패도_거른다"]),
 ]
 
-assert len(CASES) >= 498, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-4 ② — 429 시각 형식·원문 본문·대기 근거 ──
+PCT2 = "tests/infrastructure/test_llm_pacing.py"
+CASES += [
+ ("월 약어를 숫자로 안 바꾼다", PC,
+  "    if match and match.group(2).lower() in _MONTHS:", "    if False:",
+  [f"{PCT2}::test_사내_게이트웨이의_월_약어_시각을_읽는다"]),
+ ("끝의 UTC를 안 뗀다", PC,
+  '    text = _ZONE_NAME.sub("", text)', "    pass",
+  [f"{PCT2}::test_사내_게이트웨이의_월_약어_시각을_읽는다"]),
+ ("오프셋 없는 UTC를 로컬 시간대로 본다", PC,
+  "        when = when.replace(tzinfo=timezone.utc if named_utc else tz)", "        when = when.replace(tzinfo=tz)",
+  [f"{PCT2}::test_사내_게이트웨이의_월_약어_시각을_읽는다"]),
+ ("대기 근거를 안 준다", PC,
+  '        wait, source = _RATE_FALLBACK_S, "기본값"', '        wait, source = _RATE_FALLBACK_S, "nextAccessTime"',
+  [f"{PCT2}::test_quota_wait는_기다린_근거를_같이_준다"]),
+ ("chat_model이 429 원문 본문을 안 본다", LCM2,
+  '    return {"sdk": getattr(exc, "body", None), "raw": raw}, getattr(response, "headers", None)',
+  '    return {"sdk": getattr(exc, "body", None)}, getattr(response, "headers", None)',
+  ["tests/infrastructure/test_llm_adapters.py::test_error_옆에_있는_nextAccessTime도_원문에서_찾는다"]),
+ ("트레이스 대기 줄에 근거가 없다", MN,
+  "        took += f\"대기: {waited_s:.1f}초(429{'·' + wait_source if wait_source else ''})\\n\" if waited_s else \"\"",
+  "        took += f\"대기: {waited_s:.1f}초(429)\\n\" if waited_s else \"\"",
+  ["tests/test_cli.py::test_트레이스_대기_줄에_근거가_붙는다"]),
+ ("요약 끝줄에 근거별 횟수가 없다", TD,
+  '        why = " · 근거 " + " · ".join(f"{k} {v}" for k, v in sorted(sources.items())) if sources else ""',
+  '        why = ""',
+  ["tests/application/test_trace_digest.py::test_요약_끝줄에_429_대기_근거별_횟수가_붙는다"]),
+]
+
+assert len(CASES) >= 505, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

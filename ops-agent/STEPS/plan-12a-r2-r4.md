@@ -127,8 +127,8 @@ integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 �
 
 | 순서 | 항목 | 할 것 |
 |---|---|---|
-| ① | 4 10054 | 콜백 실패(context에 `handle`만, `transport` 키 없음 — asyncio `Handle._run`)도 거른다: 콜백이 `_ProactorBasePipeTransport._call_connection_lost`이고 예외가 연결 리셋일 때만 |
-| ② | 5 429 | `2026-Oct-08 02:09:00+0000 UTC` 모양을 읽는다(월 약어는 로캘과 무관하게 표로). SDK가 남긴 본문과 응답 원문을 둘 다 본다. 트레이스 대기 줄에 근거(`nextAccessTime`·`Retry-After`·`기본값`). 브리프 `min_interval_s` 시작값 15 |
+| ① ✅ | 4 10054 | 콜백 실패(context에 `handle`만, `transport` 키 없음 — asyncio `Handle._run`)도 거른다: 콜백이 `_ProactorBasePipeTransport._call_connection_lost`이고 예외가 연결 리셋일 때만 |
+| ② ✅ | 5 429 | `2026-Oct-08 02:09:00+0000 UTC` 모양을 읽는다(월 약어는 로캘과 무관하게 표로). SDK가 남긴 본문과 응답 원문을 둘 다 본다. 트레이스 대기 줄에 근거(`nextAccessTime`·`Retry-After`·`기본값`). 브리프 `min_interval_s` 시작값 15 |
 | ③ | 3 kafka | 빈 배치 한 번에 멈추지 않는다 — 모든 파티션이 끝 오프셋에 닿거나, 빈 배치가 연속 3번이거나, 시간 상한까지 |
 | ④ | 1 판정 형식 | 판정 역할은 따로 안 적으면 `response_format: none`(역할 기본값). 스키마를 건 시도가 **파싱**에 실패하면 재시도는 스키마 없이(모든 턴) |
 | ⑤ | 2 고정부 | 읽기 목록의 서비스 설명은 이름 + 첫 구절 40자, 해당 없는 규칙 줄은 뺀다(템플릿의 `{?블록}` 표지), 끝점 줄도 흐름 예산 안, 증거 바닥 4K(상한보다 이김), 요약에 읽기 목록·흐름·케이스·열린 질문 크기 |

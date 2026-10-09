@@ -105,3 +105,14 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - **429 횟수와 대기 초**: 요약 끝줄 `429 대기: 합계 N초 · 호출 M회`(없으면 안 찍힌다).
 - `kafka tail --limit 300`(또는 `peek kafka`)이 이제 몇 건을 돌려주는지 한 줄.
 
+## R2-4 뒤 측정 #4에서 더 볼 것 (10-09)
+
+- 같은 두 케이스, 같은 `llm_roles`. `llm`에 `"min_interval_s": 15`를 더한다 — 빠르게 3~4번 연속 부르면 걸렸다(측정 #3).
+  429 대기는 이제 게이트웨이의 `nextAccessTime`까지라 보통 60초보다 짧다.
+- 요약 끝줄 `429 대기: 합계 N초 · 호출 M회 · 근거 …` 그대로. 근거가 `기본값`이면 시각을 또 못 읽은 것이다 — 그 429 본문의
+  `nextAccessTime` 값 한 줄.
+- 판정 턴의 JSON 실패 횟수(`case trace --brief`에서 `conclude`의 `결과: 못 읽었다`).
+- integrate 머리줄의 고정부와 증거 글자 수(요약 머리줄 `프롬프트 N자 = …`).
+- 종료 때 10054 트레이스백이 남는가.
+- `peek kafka --topic <원천토픽> --limit 300`의 건수와 걸린 초.
+

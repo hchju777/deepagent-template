@@ -37,3 +37,25 @@ async def test_pacer는_게이트웨이_단위로_최소_간격을_지킨다():
     assert slept == [3.0]                                # 간격 0이면 안 기다린다
     assert pacer_for("http://gw.example/v1") is pacer_for("http://gw.example/v1/")
     assert pacer_for("http://gw.example/v1") is not pacer_for("http://other.example/v1")
+
+
+def test_사내_게이트웨이의_월_약어_시각을_읽는다():
+    """사내 측정 #3: 429가 매번 정확히 60.0초 — nextAccessTime이 `2026-Oct-08 02:09:00+0000 UTC`(월 영문 약어, 오프셋 뒤 UTC)라
+    ISO로 못 읽고 기본값으로 갔다. 월 약어는 로캘과 무관하게 표로 읽는다(사내 Windows는 한국어 로캘이다)."""
+    now = datetime(2026, 10, 8, 2, 8, 30, tzinfo=timezone.utc)
+    body = {"code": "429", "message": "quota", "description": "x", "nextAccessTime": "2026-Oct-08 02:09:00+0000 UTC"}
+    assert next_access_wait(body, now=now) == 30
+    kst = now.astimezone(timezone(timedelta(hours=9)))                                              # 사내 시계는 KST다
+    assert next_access_wait({"nextAccessTime": "2026-OCT-08 02:09:00 UTC"}, now=kst) == 30          # 오프셋 없이 UTC만 — KST로 보면 안 된다
+    assert next_access_wait({"nextAccessTime": "2026-oct-8 02:09:00+0900"}, now=now) is not None   # 한 자리 날짜·다른 오프셋
+    assert next_access_wait({"nextAccessTime": "2026-Foo-08 02:09:00+0000 UTC"}, now=now) is None
+
+
+def test_quota_wait는_기다린_근거를_같이_준다():
+    from src.infrastructure.llm_pacing import quota_wait
+
+    now = datetime(2026, 10, 8, 2, 8, 30, tzinfo=timezone.utc)
+    assert quota_wait({"nextAccessTime": "2026-Oct-08 02:09:00+0000 UTC"}, None, now=now, cap=120) == (30, "nextAccessTime")
+    assert quota_wait({"code": "429"}, {"retry-after": "4"}, now=now, cap=120) == (4.0, "Retry-After")
+    assert quota_wait({"code": "429"}, None, now=now, cap=120) == (60.0, "기본값")
+    assert quota_wait({"code": "429"}, None, now=now, cap=10) == (10, "기본값")

@@ -710,3 +710,11 @@ def test_종료_소음_처리기는_proactor의_connection_lost_콜백_실패도
         assert len(calls) == 2
     finally:
         real.close()
+
+
+def test_트레이스_대기_줄에_근거가_붙는다(tmp_path):
+    from src.__main__ import _make_tracer
+
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("integrate", 1, "물음", "답", None, 12.5, 30.0, "nextAccessTime")
+    assert "대기: 30.0초(429·nextAccessTime)" in written[0].read_text(encoding="utf-8")

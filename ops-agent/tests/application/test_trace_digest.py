@@ -274,3 +274,12 @@ def test_요약_머리줄과_끝줄에_429_대기가_붙는다():
     assert head and "응답 9.0초" in head[0] and "대기 48.0초" in head[0]
     assert any(line.strip().startswith("429 대기") and "48" in line for line in lines)
     assert not any(line.strip().startswith("429 대기") for line in digest([(name, text)]))
+
+
+def test_요약_끝줄에_429_대기_근거별_횟수가_붙는다():
+    name, text = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    first = text.replace("결과: 읽었다\n", "결과: 읽었다\n대기: 30.0초(429·nextAccessTime)\n")
+    second = first.replace("대기: 30.0초(429·nextAccessTime)", "대기: 60.0초(429·기본값)")
+    lines = digest([(name, first), (name.replace("r2", "r3"), second)])
+    end = [line for line in lines if line.strip().startswith("429 대기")]
+    assert end and "합계 90초" in end[0] and "nextAccessTime 1" in end[0] and "기본값 1" in end[0]

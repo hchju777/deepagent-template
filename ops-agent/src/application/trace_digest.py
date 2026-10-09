@@ -39,6 +39,7 @@ _FILE = re.compile(r"^(\d+)-r(\d+)-(\w+)\.md$")
 _VERDICT = re.compile(r"^결과: (.+)$", re.M)
 _LATENCY = re.compile(r"^응답: ([\d.]+)초$", re.M)
 _WAIT = re.compile(r"^대기: ([\d.]+)초", re.M)
+_WAIT_SOURCE = re.compile(r"^대기: [\d.]+초\(429·([^)]+)\)", re.M)
 _REASON_CHARS = 160
 _SECRETISH = re.compile(r"pass|secret|token|credential|pwd", re.I)
 _VALUE_CHARS = 40
@@ -54,6 +55,7 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
     lines, asked, attempts = ["트레이스 요약"], {}, {}
     last_added: set[str] = set()
     waits: list[float] = []
+    sources: dict[str, int] = {}
     for name, text in sorted(entries):
         match = _FILE.match(name)
         if match is None:
@@ -74,6 +76,9 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
         waited = _waited(text)
         if waited:
             waits.append(float(waited))
+            found = _WAIT_SOURCE.search(text)
+            if found:
+                sources[found.group(1)] = sources.get(found.group(1), 0) + 1
         lines += _round(round_no, node, prompt, reply, asked,
                         attempt=attempts[(round_no, node)], verdict=_verdict(text),
                         latency=_latency(text), waited=waited, brief=brief)
@@ -82,7 +87,8 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
         lines.append("  (읽을 수 있는 트레이스 파일이 없다)")
     if waits:
         # 브리프의 "429 횟수와 대기 초" — 라운드마다 찾지 않아도 되게 끝에 합계 한 줄.
-        lines.append(f"\n429 대기: 합계 {sum(waits):.0f}초 · 호출 {len(waits)}회")
+        why = " · 근거 " + " · ".join(f"{k} {v}" for k, v in sorted(sources.items())) if sources else ""
+        lines.append(f"\n429 대기: 합계 {sum(waits):.0f}초 · 호출 {len(waits)}회{why}")
     return lines
 
 

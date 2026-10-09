@@ -83,13 +83,13 @@ class ChatModelAdapter(LlmPort):
 
     async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
-        waited, limited = 0.0, 0
+        waited, limited, source = 0.0, 0, ""
         for attempt in (0, 1):
             await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
             reply, quota = await self._once(prompt, schema)
             if quota is None or attempt:
-                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited})
-            wait = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
+                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited, "rate_source": source})
+            wait, source = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
             await self._sleep(wait)
             waited, limited = waited + wait, limited + 1
         return reply                                                 # 도달하지 않는다 — 형식상
@@ -132,10 +132,11 @@ def _quota_info(exc: Exception):
     if getattr(exc, "status_code", None) != 429:
         return None
     response = getattr(exc, "response", None)
-    body = getattr(exc, "body", None)
-    if body is None and response is not None:
+    # SDK는 본문에서 `error` 안쪽만 예외에 남긴다(`body.get("error", body)`) — 시각이 `error`의 형제면 거기엔 없다. 원문도 같이 본다.
+    raw = None
+    if response is not None:
         try:
-            body = response.json()
+            raw = response.json()
         except Exception:                                          # noqa: BLE001
-            body = None
-    return body, getattr(response, "headers", None)
+            raw = None
+    return {"sdk": getattr(exc, "body", None), "raw": raw}, getattr(response, "headers", None)

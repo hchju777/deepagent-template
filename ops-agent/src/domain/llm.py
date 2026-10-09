@@ -41,6 +41,8 @@ class LlmReply(StrictModel):
     # 429(할당량) 뒤 기다린 초와 횟수 — 이 답을 받기까지. 실패가 아니라 **대기**라 `latency_s`와 따로 센다(브리프가 받는다).
     waited_s: float = 0.0
     rate_limited: int = 0
+    # 그 대기의 근거 — `nextAccessTime` · `Retry-After` · `기본값`. 기본값이면 게이트웨이의 시각을 못 읽은 것이다(사내 측정 #3).
+    rate_source: str = ""
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):
