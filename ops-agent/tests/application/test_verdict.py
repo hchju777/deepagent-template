@@ -401,3 +401,32 @@ def test_판정_예시의_caveats는_문장을_요구한다():
 
     example = json.loads(briefing.verdict_example())
     assert "문장" in example["caveats"][0] and "id" in example["caveats"][0]
+
+
+# ── R2-5 ② — 강등은 검사와 같은 규칙으로 걷어낸다 ──
+
+async def test_강등은_서비스_아닌_component_다리도_걷어낸다(case):
+    """사내 측정 #4: c-2 강등 출력에 `후보 external [low]`가 남았다 — verify가 규칙 3(서비스 이름)으로 되물었는데 강등은 인용만
+    걸러, 인용이 멀쩡한 그 다리를 통과시켰다. 검사하는 규칙과 걷어내는 규칙이 같아야 한다. 무엇을 뺐는지는 caveat에 남는다."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink", "api"})))
+    bad = verdict(alternates=[cause("external", "t-1.e1", confidence="low"), cause("api", "t-1.e1", confidence="low")],
+                  contributing=[cause("alarm:stats", "t-1.e1")])
+    got = (await nodes["verify"](_state(case, verdict=bad, verify_attempts=1)))["verdict"]
+    assert [a.component for a in got.alternates] == ["api"] and got.contributing == []
+    assert got.root_cause.component == "sink" and got.verdict_type == "data_loss"      # 멀쩡한 최상위는 그대로
+    assert any("서비스 아닌 component 제외" in c and "후보 external" in c and "기여 요인 alarm:stats" in c for c in got.caveats)
+    wrong_root = verdict(root_cause=cause("alarm:stats", "t-1.e1"))
+    got = (await nodes["verify"](_state(case, verdict=wrong_root, verify_attempts=1)))["verdict"]
+    assert got.root_cause is None and got.verdict_type == "inconclusive"
+    assert any("최상위 alarm:stats" in c for c in got.caveats)
+
+
+def test_판정_프롬프트는_component가_데이터를_만드는_서비스라고_말한다():
+    """사내 c-2는 판정 종류 값(`external`)을 component 칸에 넣었다 — 두 칸을 헷갈렸다. 원인이 데이터면 그것을 만드는 서비스, 바깥이면
+    종류를 external로. 사내 서비스 이름 꼴은 적지 않는다(⑮) — 목록은 `{components}`가 준다."""
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "config/prompts/investigate-conclude.md").read_text(encoding="utf-8")
+    rule = re.search(r"^- `component`는.*?(?=^- )", text, re.M | re.S).group(0)
+    assert "데이터를 **만드는** 서비스" in rule and "판정 종류" in rule and "external" in rule and "{components}" in rule

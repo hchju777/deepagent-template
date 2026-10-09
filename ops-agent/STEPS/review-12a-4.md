@@ -124,3 +124,5 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - 요약 끝줄 `스트림 끊김: N회 — 받은 글로 읽음 K · 다시 물음 M`과 `전송 실패: N회 — 사유`(없으면 안 찍힌다). 끊김이 있었으면 그
   트레이스 파일의 `스트림:` 줄 한 줄과 날것 응답의 **마지막 40자**(끝이 `}`로 닫혔는지 — 끝 표시만 빠진 답이었나를 가른다).
 - stderr에 `stream_chunk_timeout fired` 줄이 더는 안 찍히는가.
+- 판정이 강등됐으면 그 출력의 다리들(`원인`·`후보`의 component)과 caveat `서비스 아닌 component 제외: …` 한 줄 — 서비스 아닌 이름이
+  다리로 남아 있으면 안 된다.

@@ -1314,8 +1314,8 @@ CASES += [
   '        return link.model_copy(update={"evidence_ids": list(link.evidence_ids)})',
   [f"{V}::test_첫_실패는_재작성을_요구하고_두_번째_실패는_강등한다"]),
  ("근거 잃은 최상위를 결론으로 둔다", ND,
-  '        root, verdict_type = None, "inconclusive"',
-  '        root, verdict_type = None, verdict.verdict_type',
+  '    if verdict.root_cause is not None and root is None:\n        verdict_type = "inconclusive"',
+  '    if verdict.root_cause is not None and root is None:\n        verdict_type = verdict.verdict_type',
   [f"{V}::test_첫_실패는_재작성을_요구하고_두_번째_실패는_강등한다"]),
  ("verify가 되묻는 길이 없다", ND,
   '    return "conclude" if state.verify_problems else "__end__"',
@@ -2199,7 +2199,22 @@ CASES += [
   '            cuts["다시 물음" if "읽었다" in stream.group(1) else "받은 글로 읽음"] += 1', [CUT_DG]),
 ]
 
-assert len(CASES) >= 541, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-5 ② — 강등은 검사와 같은 규칙으로 걷어낸다 · 판정 프롬프트의 component 줄 ──
+DEMOTE_T = "tests/application/test_verdict.py::test_강등은_서비스_아닌_component_다리도_걷어낸다"
+CASES += [
+ ("강등이 component 문제 다리를 안 걷는다", ND, "        if component_problem(link.component):\n            foreign.append",
+  "        if False:\n            foreign.append", [DEMOTE_T]),
+ ("verify가 강등에 component 검사를 안 넘긴다", ND,
+  "        return {\"verdict\": demote_verdict(verdict, problems, citable=citable, component_problem=component_problem),",
+  "        return {\"verdict\": demote_verdict(verdict, problems, citable=citable),", [DEMOTE_T]),
+ ("서비스 아닌 component 제외를 caveat에 안 적는다", ND,
+  "        [f\"서비스 아닌 component 제외: {', '.join(foreign)}\"] if foreign else [])", "        [])", [DEMOTE_T]),
+ ("판정 프롬프트가 만드는 서비스를 말하지 않는다", ROOT / "config/prompts/investigate-conclude.md",
+  "원인이 데이터(키·컬렉션·토픽)면 그 데이터를 **만드는** 서비스다", "원인이 데이터(키·컬렉션·토픽)면 그 데이터의 서비스다",
+  ["tests/application/test_verdict.py::test_판정_프롬프트는_component가_데이터를_만드는_서비스라고_말한다"]),
+]
+
+assert len(CASES) >= 545, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

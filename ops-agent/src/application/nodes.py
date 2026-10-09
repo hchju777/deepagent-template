@@ -604,30 +604,40 @@ def verify_verdict(verdict: Verdict, *, citable: set[str], incomplete: set[str],
     return problems
 
 
-def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str]) -> Verdict:
-    """재작성도 실패한 판정 — **없는 인용을 걷어내고** 낮은 확신으로 통과시킨다.
+def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str],
+                   component_problem: Callable[[str], str | None] = lambda component: None) -> Verdict:
+    """재작성도 실패한 판정 — **없는 인용과 서비스 아닌 component를 걷어내고** 낮은 확신으로 통과시킨다.
 
-    근거가 전부 사라진 다리는 뺀다. 최상위가 그러면 `inconclusive`가 된다 —
-    `_accept_hypotheses`가 근거를 잃은 supported를 open으로 되돌리는 것과 같은 규칙이다.
-    근거 없는 단정이 "확신 low"를 달고 보고서에 나가는 것보다 낫다.
+    근거가 전부 사라진 다리와 component가 verify 규칙 3에 걸리는 다리는 뺀다. 최상위가 그러면 `inconclusive`가 된다 —
+    `_accept_hypotheses`가 근거를 잃은 supported를 open으로 되돌리는 것과 같은 규칙이다. 근거 없는 단정이 "확신 low"를 달고
+    보고서에 나가는 것보다 낫다. `component_problem`은 verify가 쓴 그 검사다 — 검사하는 규칙과 걷어내는 규칙이 다르면 되물은
+    문제가 강등 출력에 그대로 남는다(사내 측정 #4: c-2의 `후보 external`).
     """
     def strip(link: CauseLink) -> CauseLink:
         return link.model_copy(update={"evidence_ids": [e for e in link.evidence_ids if e in citable]})
 
-    dropped: list[str] = []
-    alternates, contributing = [], []
-    for kind, source, sink in (("후보", verdict.alternates, alternates),
-                               ("기여 요인", verdict.contributing, contributing)):
-        for link in source:
-            kept = strip(link)
-            (sink.append if kept.evidence_ids else lambda _: dropped.append(f"{kind} {link.component}"))(kept)
-    root = strip(verdict.root_cause) if verdict.root_cause is not None else None
+    unsupported: list[str] = []
+    foreign: list[str] = []
+
+    def keep(kind: str, link: CauseLink) -> CauseLink | None:
+        kept = strip(link)
+        if not kept.evidence_ids:
+            unsupported.append(f"{kind} {link.component}")
+            return None
+        if component_problem(link.component):
+            foreign.append(f"{kind} {link.component}")
+            return None
+        return kept
+
+    alternates = [k for k in (keep("후보", link) for link in verdict.alternates) if k is not None]
+    contributing = [k for k in (keep("기여 요인", link) for link in verdict.contributing) if k is not None]
+    root = keep("최상위", verdict.root_cause) if verdict.root_cause is not None else None
     verdict_type = verdict.verdict_type
-    if root is not None and not root.evidence_ids:
-        dropped.append(f"최상위 {root.component}")
-        root, verdict_type = None, "inconclusive"
+    if verdict.root_cause is not None and root is None:
+        verdict_type = "inconclusive"
     caveats = verdict.caveats + ["검증 미통과: " + "; ".join(problems)] + (
-        [f"근거 없는 다리 제외: {', '.join(dropped)}"] if dropped else [])
+        [f"근거 없는 다리 제외: {', '.join(unsupported)}"] if unsupported else []) + (
+        [f"서비스 아닌 component 제외: {', '.join(foreign)}"] if foreign else [])
     return verdict.model_copy(update={
         "verdict_type": verdict_type, "root_cause": root, "alternates": alternates,
         "contributing": contributing, "confidence": "low", "caveats": caveats})
@@ -711,15 +721,15 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             return {"verify_problems": []}
         citable = state.evidence_ids()
         incomplete = {e.id for e in state.evidence if not e.complete}
-        problems = verify_verdict(verdict, citable=citable, incomplete=incomplete,
-                                  component_problem=_component_problem(state, deps, verdict))
+        component_problem = _component_problem(state, deps, verdict)
+        problems = verify_verdict(verdict, citable=citable, incomplete=incomplete, component_problem=component_problem)
         if not problems:
             return {"verify_problems": []}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.
             return {"verify_problems": problems, "verify_attempts": state.verify_attempts + 1,
                     "llm_errors": [f"verify: {p}" for p in problems]}
-        return {"verdict": demote_verdict(verdict, problems, citable=citable),
+        return {"verdict": demote_verdict(verdict, problems, citable=citable, component_problem=component_problem),
                 "verify_problems": [],
                 "llm_errors": [f"verify: 재작성 뒤에도 미통과 — 걷어내고 강등 ({len(problems)}건)"]}
 
