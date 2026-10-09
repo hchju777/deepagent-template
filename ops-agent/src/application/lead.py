@@ -196,6 +196,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     last = Parsed(False, error="시도하지 않았다")
     asked = prompt
     schema = response_schema(model)
+    use_schema = schema
     transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
     attempts = 0
     for attempt in range(RETRIES + 1):
@@ -210,10 +211,13 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         elif attempt:
             # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
             asked = repair_prompt(prompt, last.error or "알 수 없음")
+            # **스키마는 뗀다.** 스키마를 건 답이 깨졌다면 모델이 그 강제에 약한 것이고, 같은 스키마로 다시 물으면 같은 모양으로
+            # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다.
+            use_schema = None
         text, failure, latency, waited, source = None, None, None, None, None
         timed_out = False
         try:
-            reply = await llm.ask(asked, schema=schema)
+            reply = await llm.ask(asked, schema=use_schema)
         except Exception as exc:                                    # noqa: BLE001
             # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
             last = Parsed(False, error=f"{type(exc).__name__}: {exc}")

@@ -38,6 +38,17 @@ def leads(*replies, max_rounds=3, llm=None, site=None):
     return frame, integrate, llm
 
 
+def _one_script(replies):
+    """CLI의 `build_llm` 자리 — 몇 번 불려도 **같은 대본 하나**를 돌려준다. 판정 역할은 따로 안 적어도 형식(`response_format`)이
+    달라 어댑터가 둘 만들어진다(R2-4 ④). 둘이 각자 대본을 처음부터 읽으면 판정 턴이 액션 턴의 답을 받는다."""
+    made = {}
+
+    def build(cfg, *, clock, warn=None):
+        made.setdefault("llm", ScriptedAdapter(replies, clock=clock))
+        return made["llm"]
+    return build
+
+
 def reply(**body) -> str:
     return json.dumps(body, ensure_ascii=False)
 
@@ -774,9 +785,7 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
                    {"id": "h-1", "statement": "파생 집계가 비어 있다",
                     "status": "refuted", "refuting_ids": ["t-1.e1"]}]),
                reply(**VERDICT)]
-    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
-                        lambda cfg, *, clock, warn=None: ScriptedAdapter(
-                            replies, clock=clock))
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm", _one_script(replies))
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "case", "investigate", case_id, "--stub-seeds", str(seeds)])
@@ -823,8 +832,7 @@ def test_CLI가_돈_조사와_못_돈_조사를_같은_등급으로_보지_않�
                    {"id": "h-1", "statement": "집계가 비었다", "status": "refuted",
                     "refuting_ids": ["t-1.e1"]}]),
                reply(**INCONCLUSIVE)]
-    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
-                        lambda cfg, *, clock, warn=None: ScriptedAdapter(replies, clock=clock))
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm", _one_script(replies))
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "case", "investigate", "c-1", "--stub-seeds", str(seeds)])
@@ -932,8 +940,7 @@ def test_CLI_트레이스가_프롬프트와_날것_응답을_남긴다(tmp_path
 
     replies = ["설명을 먼저 드리자면", reply(tasks=[TASK]), reply(decision="conclude"),
                reply(**INCONCLUSIVE)]
-    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm",
-                        lambda cfg, *, clock, warn=None: ScriptedAdapter(replies, clock=clock))
+    monkeypatch.setattr("src.infrastructure.llm_factory.build_llm", _one_script(replies))
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "case", "investigate", "c-1", "--stub-seeds", str(seeds),
@@ -1198,3 +1205,19 @@ def test_증거를_바닥까지_접어도_넘으면_끝난_태스크_줄을_접�
     assert all(not fold for _, fold in calls[:-1])                              # 태스크 접기는 마지막 수단
     assert fit_prompt(lambda b, f: "q" * 100, cap=None, budget=12000) == ("q" * 100, 12000)
 
+
+async def test_스키마를_건_답이_깨지면_재시도는_스키마_없이_묻는다(case):
+    """사내 측정 #3: 판정 턴의 json_schema 답이 깨졌고, 같은 스키마로 다시 물은 답도 같은 모양으로 깨졌다(4분짜리 턴을 두 번).
+    모델이 스키마에 약하면 스키마가 원인이다 — 파싱이 실패한 다음 시도는 스키마를 뗀다."""
+    llm = ScriptedAdapter(["{verdict{\"verdict_type\": 깨짐", reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    await frame(CaseState(case=case))
+    assert llm.schemas[0] is not None and llm.schemas[1] is None
+
+
+async def test_호출이_실패한_재시도는_스키마를_그대로_건다(case):
+    """호출 자체가 실패한 것은 모델이 스키마에 약하다는 증거가 아니다 — 같은 질문을 같은 형식으로."""
+    llm = ScriptedAdapter([RuntimeError("Connection refused"), reply(tasks=[TASK])], clock=lambda: T0)   # 시간 초과는 안 되묻는다
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    await frame(CaseState(case=case))
+    assert llm.schemas[0] is not None and llm.schemas[1] == llm.schemas[0]

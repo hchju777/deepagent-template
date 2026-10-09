@@ -64,6 +64,9 @@ class InvestigationConfig(StrictModel):
 # (12a 리뷰 4번)에서 생각하는 모델을 모든 턴에 쓰니 한 턴이 게이트웨이 180초 벽에 걸렸다. triage의 입구 매핑(R3)이
 # 생기면 그 역할이 여기 는다 — 읽는 곳이 없는 칸은 미리 두지 않는다(`test_dead_settings`).
 LLM_ROLES = ("lead", "conclude", "report")
+# 역할의 **기본값** — 기본 `llm`과 역할의 덮어쓰기 사이에 깔린다(덮어쓰기가 이긴다). 판정 턴은 생각 모델이라 `json_schema`를 걸면
+# 답이 깨졌다(사내 측정 #3: 4/4, 스키마 없이 같은 프롬프트는 121초에 정상) — 판정 턴은 서버의 형식 강제 없이 묻는다.
+_ROLE_DEFAULTS: dict[str, dict] = {"conclude": {"response_format": "none"}}
 
 
 class LlmRoles(StrictModel):
@@ -96,16 +99,17 @@ class AppConfig(StrictModel):
     investigation: InvestigationConfig = InvestigationConfig()
 
     def llm_for(self, role: str) -> LlmConfig | None:
-        """그 역할의 실효 LLM 설정 — 기본 `llm`에 역할의 덮어쓰기를 얹어 **다시 검증한** 것. 덮어쓰기가 없으면 기본
-        객체 그대로(`is`로 같다 — 호출부가 어댑터를 두 벌 만들지 않는 근거)."""
+        """그 역할의 실효 LLM 설정 — 기본 `llm` 위에 역할의 기본값(`_ROLE_DEFAULTS`), 그 위에 역할의 덮어쓰기를 얹어 **다시
+        검증한** 것. 바뀌는 것이 없으면 기본 객체 그대로(`is`로 같다 — 호출부가 어댑터를 두 벌 만들지 않는 근거)."""
         if role not in LLM_ROLES:
             raise ValueError(f"모르는 LLM 역할 — {role}. 있는 것: {', '.join(LLM_ROLES)}")
         if self.llm is None:
             return None
-        over = getattr(self.llm_roles, role)
-        if not over:
+        base = self.llm.model_dump(mode="python")
+        merged = _merged(_merged(base, _ROLE_DEFAULTS.get(role, {})), getattr(self.llm_roles, role))
+        if merged == base:
             return self.llm
-        return LlmConfig.model_validate(_merged(self.llm.model_dump(mode="python"), over))
+        return LlmConfig.model_validate(merged)
 
     @model_validator(mode="after")
     def _roles_resolve(self):

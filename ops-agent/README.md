@@ -173,7 +173,8 @@ python -m src llm ask "질문"
 `app.json`의 `llm`에서 사내 실측으로 정해진 것들(12a 리뷰 4번): **역할별 모델** `llm_roles.lead`(액션 턴, 빠른 모델)·
 `llm_roles.conclude`(판정, 생각하는 모델 + 긴 `timeout_s`)·`llm_roles.report` — 기본 `llm` 위에 덮어쓸 것만 적는다;
 `stream`은 chat_model이면 기본 켬(게이트웨이의 180초 벽은 유휴 끊김이었다); `response_format`은 기본 `json_schema`(리드의 답
-스키마를 서버가 강제 — 거부하는 게이트웨이면 `json_object`); `min_interval_s`는 분당 할당량(429)에 걸릴 때 게이트웨이 단위
+스키마를 서버가 강제 — 거부하는 게이트웨이면 `json_object`), **판정 역할만 기본 `none`**(생각 모델은 스키마를 걸면 답이 깨졌다 —
+적으면 그 값이 이긴다), 스키마를 건 답이 깨지면 재시도는 스키마 없이; `min_interval_s`는 분당 할당량(429)에 걸릴 때 게이트웨이 단위
 호출 간격, `rate_wait_max_s`는 429 뒤 기다리는 상한. `llm describe`가 역할별 실효값을 한 줄씩 찍는다.
 
 **역할별 모델** — 액션 턴(가설·다음 읽기 고르기)은 빠른 모델, 판정(`conclude`)은 생각하는 모델, 보고서 서술은

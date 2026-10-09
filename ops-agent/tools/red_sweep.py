@@ -1641,8 +1641,8 @@ LHT = ROOT / "src/infrastructure/llm_http.py"
 ROLE_T = "tests/config/test_schema_app.py::test_역할별_LLM은_기본_위에_부분_덮어쓰기다"
 CASES += [
  ("역할 덮어쓰기를 무시하고 기본만 쓴다", SAP,
-  '        over = getattr(self.llm_roles, role)\n        if not over:\n            return self.llm',
-  '        over = getattr(self.llm_roles, role)\n        if True:\n            return self.llm',
+  "        merged = _merged(_merged(base, _ROLE_DEFAULTS.get(role, {})), getattr(self.llm_roles, role))",
+  "        merged = _merged(base, _ROLE_DEFAULTS.get(role, {}))",
   [ROLE_T]),
  ("역할 덮어쓰기가 중첩을 통째로 바꾼다", SAP,
   '        out[key] = _merged(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value',
@@ -1975,7 +1975,7 @@ CASES += [
   '        extra = {"response_format": fmt} if fmt is not None else {}', "        extra = {}",
   [FMT_T]),
  ("리드가 스키마를 어댑터에 안 넘긴다", LD,
-  "            reply = await llm.ask(asked, schema=schema)", "            reply = await llm.ask(asked)",
+  "            reply = await llm.ask(asked, schema=use_schema)", "            reply = await llm.ask(asked)",
   ["tests/application/test_lead.py::test_ask_json은_답_스키마를_어댑터에_넘긴다"]),
  ("판정 스키마를 안 닫는다", LD,
   "    schema = strictify(model.model_json_schema())", "    schema = model.model_json_schema()",
@@ -2084,7 +2084,29 @@ CASES += [
   [f"{KIT}::test_tail은_받는_사이사이_빈_배치는_연속으로_세지_않는다"]),
 ]
 
-assert len(CASES) >= 508, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-4 ④ — 판정 역할의 기본 형식 none · 깨진 답의 재시도는 스키마 없이 ──
+ROLE_RF = "tests/config/test_schema_app.py::test_판정_역할은_따로_안_적으면_response_format이_none이다"
+CASES += [
+ ("판정 역할도 기본 형식이 json_schema다", SAP,
+  '_ROLE_DEFAULTS: dict[str, dict] = {"conclude": {"response_format": "none"}}', '_ROLE_DEFAULTS: dict[str, dict] = {}',
+  [ROLE_RF]),
+ ("역할 기본값이 덮어쓰기를 이긴다", SAP,
+  "        merged = _merged(_merged(base, _ROLE_DEFAULTS.get(role, {})), getattr(self.llm_roles, role))",
+  "        merged = _merged(_merged(base, getattr(self.llm_roles, role)), _ROLE_DEFAULTS.get(role, {}))",
+  [ROLE_RF]),
+ ("바뀌는 게 없어도 새 설정 객체를 만든다", SAP,
+  "        if merged == base:\n            return self.llm", "        if False:\n            return self.llm",
+  [ROLE_RF]),
+ ("깨진 답의 재시도에도 스키마를 건다", LD,
+  "            use_schema = None", "            pass",
+  ["tests/application/test_lead.py::test_스키마를_건_답이_깨지면_재시도는_스키마_없이_묻는다"]),
+ ("호출 실패의 재시도는 스키마를 뗀다", LD,
+  "            await asyncio.sleep(RETRY_BACKOFF_S)\n            asked = prompt",
+  "            await asyncio.sleep(RETRY_BACKOFF_S)\n            asked = prompt\n            use_schema = None",
+  ["tests/application/test_lead.py::test_호출이_실패한_재시도는_스키마를_그대로_건다"]),
+]
+
+assert len(CASES) >= 513, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -81,3 +81,15 @@ def test_프롬프트_상한은_integrate_8000_conclude_10000이고_2000_아래�
     with pytest.raises(ValidationError):
         InvestigationConfig(integrate_prompt_chars=1000)
 
+
+def test_판정_역할은_따로_안_적으면_response_format이_none이다():
+    """사내 측정 #3: 생각 모델(판정 턴)에 json_schema를 걸면 4/4 JSON이 깨졌고, 같은 프롬프트를 스키마 없이 보내면 정상이었다.
+    판정 역할의 **기본값**이 none이다 — 적으면 그 값이 이긴다. 다른 역할은 기본 llm 그대로(같은 객체 — 어댑터 한 벌)."""
+    app = AppConfig(llm=GATEWAY)
+    assert app.llm.response_format == "json_schema"
+    assert app.llm_for("conclude").response_format == "none" and app.llm_for("conclude") is not app.llm
+    assert app.llm_for("lead") is app.llm and app.llm_for("report") is app.llm
+    asked = AppConfig(llm=GATEWAY, llm_roles={"conclude": {"response_format": "json_object"}})
+    assert asked.llm_for("conclude").response_format == "json_object"                 # 적으면 이긴다
+    plain = AppConfig(llm={**GATEWAY, "response_format": "none"})
+    assert plain.llm_for("conclude") is plain.llm                                      # 바뀌는 게 없으면 같은 객체
