@@ -532,14 +532,18 @@ def find_seeds(graph: dict, texts) -> list[str]:
     return services + resources[:_MAX_RESOURCE_SEEDS]
 
 
-def flow_text(graph: dict, seeds: list[str], *, budget: int = 800, prefer: tuple[str, ...] = ()) -> str:
+def flow_text(graph: dict, seeds: list[str], *, budget: int = 800, prefer: tuple[str, ...] = (),
+              pin: set[str] | None = None) -> str:
     """`<데이터 흐름>` 본문. **config 층 엣지만** — 코드 층은 사내에서 소음으로 확인됐고 홉을
     밟는 것은 11b의 일이다. 씨앗의 이웃 1단계, 그다음 닿은 서비스의 토픽(2단계). 씨앗이 없으면
     토픽 골격(누가 내고 누가 받나). `budget`자에서 끊고 끊었다고 적는다.
     `레포{a,b}`는 같은 config를 쓰는 서비스 전부 — 어느 쪽인지는 config가 모른다.
 
     `prefer`는 케이스의 단어들(증상·target) — 관계당 여덟 이름 안에 그 단어가 든 이름을 먼저 둔다. 끝점 씨앗의 줄은
-    맨 앞에(늘 실리고 예산에는 센다) — 둘 다 사내 실측(키 8개 + "외 21개"가 예산을 먹고 접수 끝점 줄이 밀렸다)에서 왔다."""
+    맨 앞에(늘 실리고 예산에는 센다) — 둘 다 사내 실측(키 8개 + "외 21개"가 예산을 먹고 접수 끝점 줄이 밀렸다)에서 왔다.
+
+    `pin`을 주면 그 끝점만 맨 앞에 고정하고, 나머지 끝점 씨앗은 이웃을 펼치지 않고 **맨 뒤에** 예산 안에서 — 사내 측정 #4에서 증거에
+    나온 다른 끝점들이 고정 줄로 예산을 다 먹고 접수 끝점의 이웃을 밀어냈다(흐름 블록 0.7K → 1.5K). 없으면 끝점 씨앗 전부가 고정."""
     by_id = {n["id"]: n for n in graph["nodes"]}
     # `serves`는 코드에서 왔지만 배선이다(라우트 선언은 이름 매칭이 아니라 구문이다) — 끝점 줄이 서야
     # 접수 경로의 path에서 서빙 서비스로 첫 홉이 이어진다.
@@ -651,8 +655,11 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800, prefer: tuple
         via_topics: list[str] = []
         via_endpoint: list[str] = []
         via_reads: list[str] = []
+        others: list[str] = []
         for sid in seeds:
-            if sid in by_id:
+            if sid in by_id and by_id[sid]["type"] == "endpoint" and pin is not None and sid not in pin:
+                others.append(sid)
+            elif sid in by_id:
                 # 끝점 줄은 접수 경로 그 자체라 예산 밖에 둔다 — 서비스 씨앗이 앞서면(`find_seeds`는 서비스 먼저) 작은
                 # 예산에서 끝점 줄이 먼저 떨어졌다.
                 (pinned if by_id[sid]["type"] == "endpoint" else lines).append(line_for(sid))
@@ -666,6 +673,7 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800, prefer: tuple
         for rid in sorted(set(via_reads) - set(seeds), key=lambda i: by_id[i]["label"]):
             lines.append(line_for(rid, with_code=True))
         lines += touched_lines(set(via_topics) - set(seeds) - set(via_endpoint), topics_only=True)
+        lines += [line_for(sid) for sid in others]
     else:
         topics = [n for n in graph["nodes"] if n.get("type") == "topic"]
         degree = {n["id"]: sum(1 for e in links if e["target"] == n["id"]) for n in topics}

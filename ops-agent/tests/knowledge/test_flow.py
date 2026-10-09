@@ -915,3 +915,16 @@ def test_선언된_키는_끝점이_읽는_것_없으면_config의_전부다():
     assert flow.declared_keys(g, None) == ("alarm:stats:{line}", "hb:{service}")
     assert flow.declared_keys(g, "/nope") == ("alarm:stats:{line}", "hb:{service}")   # 모르는 끝점이면 전부
     assert flow.declared_keys(None, "/summary/badge") == ()
+
+
+def test_고정_안_한_끝점은_맨_뒤에_예산_안에서_실린다():
+    """`pin`을 주면 그 끝점만 맨 앞 고정이고, 다른 끝점 씨앗은 이웃을 펼치지 않고 맨 뒤에 예산 안에서(R2-5 ④). 안 주면 전처럼 전부 고정."""
+    g = _endpoint_graph()
+    g["nodes"].append({"id": "endpoint_other", "label": "/other/path", "type": "endpoint"})
+    g["links"].append({"source": "service_api", "target": "endpoint_other", "relation": "serves", "origin": "code",
+                       "confidence": "EXTRACTED", "source_file": "api/r.py", "source_location": "L9"})
+    seeds = ["service_sink", "endpoint_summary_badge", "endpoint_other"]
+    pinned = flow.flow_text(g, seeds, budget=2000, pin={"endpoint_summary_badge"}).splitlines()
+    assert pinned[0].startswith("/summary/badge [endpoint]") and pinned[-1].startswith("/other/path [endpoint]")
+    legacy = flow.flow_text(g, seeds, budget=2000).splitlines()
+    assert {legacy[0].split(" [")[0], legacy[1].split(" [")[0]} == {"/summary/badge", "/other/path"}

@@ -1309,3 +1309,44 @@ def test_케이스_블록이_증거가_짚은_대상_행을_적는다(case):
 
     assert "대상 행: t-1.e1 response[2]" in briefing.case_block(CaseState(case=case, evidence=[_target_rest_evidence()]))
     assert "대상 행" not in briefing.case_block(CaseState(case=case))
+
+
+# ── R2-5 ④ — 흐름 블록의 고정 줄은 케이스 자신의 끝점만 ──
+
+def _endpoints_graph(paths):
+    nodes = [{"id": "service_api", "label": "api", "type": "service", "repo": "dt-api"},
+             {"id": "service_sink", "label": "sink", "type": "service", "repo": "dt-core"}]
+    links = []
+    for path in paths:
+        ep = "endpoint" + path.replace("/", "_")
+        nodes.append({"id": ep, "label": path, "type": "endpoint", "method": "POST", "traced": "ok"})
+        links.append({"source": "service_api", "target": ep, "relation": "serves", "origin": "code"})
+        for i in range(8):
+            name = f"{path.strip('/').replace('/', '_')}_source_collection_{i:02d}"
+            nodes.append({"id": f"collection_{name}", "label": name, "type": "collection"})
+            links.append({"source": ep, "target": f"collection_{name}", "relation": "reads", "origin": "trace",
+                          "confidence": "EXTRACTED", "via": "literal"})
+            links.append({"source": "service_sink", "target": f"collection_{name}", "relation": "declares",
+                          "origin": "config"})
+    return {"nodes": nodes, "links": links}
+
+
+def test_흐름_블록은_증거에_나온_다른_끝점에_밀리지_않는다(case):
+    """사내 측정 #4: 흐름 블록이 frame 0.7K → integrate 1.5K. 끝점 줄은 예산 앞에 고정인데 씨앗을 증거 본문에서도 찾아, 증거(grep·trace)에
+    나온 **다른** 끝점들이 고정 줄로 예산을 다 먹고 접수 끝점의 이웃(서빙 서비스·읽는 자원)을 밀어냈다. 끝점 씨앗은 자원 씨앗 셋 상한
+    안에서 이름순이라, 접수 끝점 이름이 뒤쪽이면 아예 빠지기도 했다. 고정은 케이스 자신의 끝점만, 다른 끝점은 예산 안에서 맨 뒤."""
+    from src.application.state import CaseState
+    from src.domain.case import EvidenceRef
+
+    graph = _endpoints_graph(["/summary/zeta", "/summary/alpha", "/summary/beta", "/summary/gamma"])
+    intake = ("판정이 본 읽기 rest.query entry='summary_zeta' (POST /summary/zeta)",)
+    grep = EvidenceRef(id="t-2.e1", source="code.grep patterns=['summary']", summary="x",
+                       body="api/r.py:L5 @router.post('/summary/alpha')\napi/r.py:L9 @router.post('/summary/beta')\n"
+                            "api/r.py:L14 @router.post('/summary/gamma')")
+    frame = briefing.flow_block(CaseState(case=case), graph, texts=intake).splitlines()[1:]
+    later = briefing.flow_block(CaseState(case=case, evidence=[grep]), graph, texts=intake).splitlines()[1:]
+    for body in (frame, later):
+        assert body[0].startswith("/summary/zeta [endpoint]")
+        assert any(line.startswith("api [service") for line in body)                  # 접수 끝점의 이웃이 남는다
+        assert len("\n".join(body)) <= 800 + 60                                        # 예산(+ 끊었다는 줄)
+    assert not any(line.startswith(("/summary/alpha", "/summary/beta")) for line in later[:3])

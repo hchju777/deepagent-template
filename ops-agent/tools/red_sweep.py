@@ -1857,7 +1857,7 @@ CASES += [
   "        if names in seen:\n            continue", "        if False:\n            continue",
   ["tests/application/test_briefing.py::test_열린_질문에_코드가_남긴_사실이_실린다"]),
  ("흐름 블록이 케이스 단어를 안 넘긴다", B,
-  "                               prefer=case_words(state.case))", "                               prefer=())",
+  "budget=budget, prefer=case_words(state.case), pin=set(own))", "budget=budget, prefer=(), pin=set(own))",
   ["tests/application/test_briefing.py::test_흐름_블록은_증상_단어와_겹치는_이름을_먼저_둔다"]),
  ("cache-missing 변형이 캐시 키를 만든다", LC,
   '            **({} if variant == "cache-missing" else', '            **({} if False else',
@@ -2236,7 +2236,18 @@ CASES += [
   ["tests/application/test_briefing.py::test_recompute_예시의_기대값_경로는_증거가_짚은_대상_행이다"]),
 ]
 
-assert len(CASES) >= 552, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-5 ④ — 흐름 블록의 고정 줄은 케이스 자신의 끝점만 ──
+PIN_T = "tests/application/test_briefing.py::test_흐름_블록은_증거에_나온_다른_끝점에_밀리지_않는다"
+CASES += [
+ ("증거에 나온 끝점도 고정한다", FLW, "            if sid in by_id and by_id[sid][\"type\"] == \"endpoint\" and pin is not None and sid not in pin:",
+  "            if False:", [PIN_T]),
+ ("브리핑이 고정할 끝점을 안 넘긴다", B, "prefer=case_words(state.case), pin=set(own))", "prefer=case_words(state.case))", [PIN_T]),
+ ("케이스 끝점을 씨앗 상한에 맡긴다", B, "    seeds = own + [s for s in flowgraph.find_seeds(graph, seeds_from) if s not in own]",
+  "    seeds = flowgraph.find_seeds(graph, seeds_from)", [PIN_T]),
+ ("고정 안 한 끝점 줄을 버린다", FLW, "        lines += [line_for(sid) for sid in others]\n", "", ["tests/knowledge/test_flow.py::test_고정_안_한_끝점은_맨_뒤에_예산_안에서_실린다"]),
+]
+
+assert len(CASES) >= 556, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -599,10 +599,14 @@ def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
     # 접수 경로 줄(REST path)이 `texts`로 들어온다 — 증상 문장엔 그래프 이름이 없어도 끝점 노드가
     # 씨앗이 되어 첫 줄이 "이 path를 누가 서빙하나"가 된다(사다리의 첫 칸).
     seeds_from = [state.case.symptom, *texts]
+    # 케이스 자신의 끝점(증상·접수 경로)만 고정 줄이고 씨앗 상한과 무관하게 늘 든다 — 증거에서 찾은 끝점까지 고정했더니 증거에 나온
+    # 다른 끝점들이 예산을 다 먹고 접수 끝점의 이웃을 밀어냈고, 이름순 상한에서 접수 끝점이 빠지기도 했다(사내 측정 #4).
+    kinds = {n["id"]: n.get("type") for n in graph.get("nodes", [])}
+    own = [s for s in flowgraph.find_seeds(graph, seeds_from) if kinds.get(s) == "endpoint"]
     seeds_from += [f"{ref.summary}\n{ref.body}" for ref in state.evidence]
     seeds_from += [h.statement for h in state.hypotheses]
-    body = flowgraph.flow_text(graph, flowgraph.find_seeds(graph, seeds_from), budget=budget,
-                               prefer=case_words(state.case))
+    seeds = own + [s for s in flowgraph.find_seeds(graph, seeds_from) if s not in own]
+    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=case_words(state.case), pin=set(own))
     # 머리말은 한 줄 — 사내 블록에서 머리말이 본문만큼 길었다. 규칙은 프롬프트 본문이 말한다.
     return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
             "서비스 전부. 다른 이름은 code.flow(name).\n" + body)

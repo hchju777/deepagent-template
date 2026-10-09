@@ -151,8 +151,10 @@ frame 0.7K → integrate 1.5K.
 | ① ✅ | P0 1 + P1 5 | (c) 멈춘 스트림이 받은 글을 답에 남긴다(트레이스 날것). (a) 조각을 받은 뒤 멈춘 것은 시간 초과가 아니다 — 받은 글이 답 모델로 검증되면 그대로 쓰고(끝 표시만 빠진 답), 아니면 같은 프롬프트로 1회 재시도. 조각 0개 멈춤은 지금처럼 시간 초과. (b) `llm.stream_idle_s`(→ `stream_chunk_timeout`, 필드가 있을 때만) — 브리프 `llm_roles.lead`에 30. (d) stderr의 그 경고 레코드만 거른다(`source == stream_chunk_timeout`). P1 5: 요약에 전송 오류 재시도 횟수와 사유 | `llm_chat_model`, `domain/llm`, `lead.ask_json`, `schema_llm`, `__main__`, `trace_digest`, 브리프 |
 | ② ✅ | P0 2 | 강등이 component 문제 다리도 뺀다(최상위면 inconclusive), caveat에 무엇을 뺐는지. 판정 프롬프트 한 줄: component는 서비스 이름 — 원인이 상류 데이터면 그것을 만드는 서비스, 토폴로지 밖이면 `verdict_type: external`(사내 이름 꼴은 안 넣는다 ⑮) | `nodes.demote_verdict`, `investigate-conclude.md` |
 | ③ ✅ | P1 3 | recompute 예시의 `expect.path`를 대상 행 번호로(코드가 앎). 실행 전 검사: `expect.path`가 문서 목록 행(`[n]`)을 가리키면 그 행이 케이스 target 값을 다 담는지 — 아니면 거부 + 대상 행 경로 안내(규율 3의 연장). 케이스 블록에 `대상 행: response[n]` | `briefing`, `nodes._sanitize_task` 근처, `runner_probe.focus_of` |
-| ④ | P1 6 | **재현 먼저.** 가설: 끝점 줄은 예산 앞에 고정인데 씨앗을 증거 본문에서도 찾아, 증거에 나온 다른 끝점들이 고정 줄로 예산을 비켜 간다. 맞으면 고정은 접수 끝점 하나만 | `flow.flow_text`, `briefing.flow_block` |
+| ④ ✅ | P1 6 | **재현 먼저.** 가설: 끝점 줄은 예산 앞에 고정인데 씨앗을 증거 본문에서도 찾아, 증거에 나온 다른 끝점들이 고정 줄로 예산을 비켜 간다. 맞으면 고정은 접수 끝점 하나만 | `flow.flow_text`, `briefing.flow_block` |
 
+R2-5 끝(10-09): ① `3464e13` · ② `95367c0` · ③ `85ad35b` · ④ — 12a 문서 "측정 #4와 R2-5". ③에서 하나 더 찾았다: 증거의 행 번호가
+1부터라 경로 문법(0부터)과 한 칸 어긋났다 — 0부터로 맞췄다. ④는 가설에 더해 접수 끝점이 씨앗 상한에서 빠지는 것도 고쳤다.
 P1 4("선언됐는데 없는 키"가 무관한 키로 보냄)는 **R3로** — "대상 키는 있다"를 말하려면 대상 키를 알아야 하고 그게 입구 매핑이다.
 측정 #5: 같은 두 케이스, 같은 설정(`min_interval_s` 15, `llm_roles.lead.stream_idle_s` 30). 멈춤이 또 나면 남은 글의 길이·끝
 모양과 "받은 글로 읽었다/재시도" 중 무엇이었는지, 강등 출력의 component, recompute 사실 줄, 요약의 흐름 글자 수.
