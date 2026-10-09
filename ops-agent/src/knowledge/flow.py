@@ -539,7 +539,7 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800, prefer: tuple
     `레포{a,b}`는 같은 config를 쓰는 서비스 전부 — 어느 쪽인지는 config가 모른다.
 
     `prefer`는 케이스의 단어들(증상·target) — 관계당 여덟 이름 안에 그 단어가 든 이름을 먼저 둔다. 끝점 씨앗의 줄은
-    맨 앞에 **예산 밖**으로 — 둘 다 사내 실측(키 8개 + "외 21개"가 예산을 먹고 접수 끝점 줄이 밀렸다)에서 왔다."""
+    맨 앞에(늘 실리고 예산에는 센다) — 둘 다 사내 실측(키 8개 + "외 21개"가 예산을 먹고 접수 끝점 줄이 밀렸다)에서 왔다."""
     by_id = {n["id"]: n for n in graph["nodes"]}
     # `serves`는 코드에서 왔지만 배선이다(라우트 선언은 이름 매칭이 아니라 구문이다) — 끝점 줄이 서야
     # 접수 경로의 path에서 서빙 서비스로 첫 홉이 이어진다.
@@ -672,9 +672,10 @@ def flow_text(graph: dict, seeds: list[str], *, budget: int = 800, prefer: tuple
         for n in sorted(topics, key=lambda n: (-degree[n["id"]], n["label"])):
             lines.append(line_for(n["id"]))
 
-    out, used = [], 0
+    # 끝점 줄은 늘 맨 앞에 실리지만 **예산에는 센다** — 예산 밖에 두었더니(R2-2b-2) 흐름 블록이 그만큼 커져 고정부를 키웠다(측정 #3).
+    out, used = [], sum(len(line) + 1 for line in pinned)
     for line in lines:
-        if used + len(line) + 1 > budget and out:
+        if used + len(line) + 1 > budget and (out or pinned):
             out.append(f"… (+{len(lines) - len(out)}줄, code.flow(name)으로 더 본다)")
             break
         out.append(line)

@@ -212,10 +212,15 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
 
 def _sizes(prompt: str, evidence: str) -> str:
     """**13K가 어디로 가는지.** 총량만 보면 예산을 어디서 줄일지 알 수 없다."""
+    # 고정부도 쪼갠다 — 측정 #3은 "나머지 7.1~7.9K"까지만 보여 어디를 줄일지 몰랐다. 남는 "나머지"는 템플릿 자체(규칙·지침)다.
     parts = {"증거": len(evidence),
              "태스크": len(_block(prompt, "지금까지의 태스크")),
              "가설": len(_block(prompt, "가설")),
-             "버려진": len(_block(prompt, "버려진 태스크"))}
+             "버려진": len(_block(prompt, "버려진 태스크")),
+             "읽기 목록": len(_block(prompt, "부를 수 있는 읽기")),
+             "흐름": len(_block(prompt, "데이터 흐름")),
+             "케이스": len(_block(prompt, "케이스")),
+             "열린 질문": len(_block(prompt, "열린 질문"))}
     example = _example_text(prompt)
     parts["예시"] = len(example)
     parts["나머지"] = max(0, len(prompt) - sum(parts.values()))

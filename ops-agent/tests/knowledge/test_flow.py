@@ -883,14 +883,18 @@ def _endpoint_graph():
     return g
 
 
-def test_흐름_텍스트는_끝점_씨앗_줄을_예산_밖에_둔다():
-    """씨앗은 서비스가 먼저라(`find_seeds`) 끝점 줄은 둘째 이후다 — 예산이 작으면 거기서 끊겼다(사내: 키 8개 + 외 21개).
-    끝점 줄은 맨 앞에, 예산 밖에."""
+def test_흐름_텍스트는_끝점_씨앗_줄을_맨_앞에_두고_예산에_센다():
+    """씨앗은 서비스가 먼저라(`find_seeds`) 끝점 줄은 둘째 이후다 — 예산이 작으면 거기서 끊겼다(사내: 키 8개 + 외 21개). 끝점 줄은
+    맨 앞에, 늘 실린다. 다만 **예산에는 센다**(R2-4 ⑤) — 예산 밖에 두었더니 흐름 블록이 끝점 줄만큼 커져 고정부를 키웠다."""
     g = _endpoint_graph()
-    text = flow.flow_text(g, ["service_sink", "endpoint_summary_badge"], budget=30)
-    lines = text.splitlines()
-    assert lines[0].startswith("/summary/badge [endpoint]: serves: api") and "alarm:stats:{line} [rediskey]" in lines[0]
-    assert lines[1].startswith("sink [service") and len(lines) == 3 and lines[2].startswith("… (+")
+    small = flow.flow_text(g, ["service_sink", "endpoint_summary_badge"], budget=30).splitlines()
+    assert small[0].startswith("/summary/badge [endpoint]: serves: api") and "alarm:stats:{line} [rediskey]" in small[0]
+    assert len(small) == 2 and small[1].startswith("… (+")                    # 끝점 줄이 예산을 다 썼다
+    roomy = flow.flow_text(g, ["service_sink", "endpoint_summary_badge"], budget=2000).splitlines()
+    assert roomy[0] == small[0] and roomy[1].startswith("sink [service")
+    # 서비스 줄 하나만 들어갈 예산 — 끝점 줄을 세면 안 들어가고, 안 세면 들어간다.
+    mid = flow.flow_text(g, ["service_sink", "endpoint_summary_badge"], budget=len(roomy[1]) + 5).splitlines()
+    assert mid[0] == small[0] and mid[1].startswith("… (+")
 
 
 def test_이름_목록은_prefer_단어가_든_것이_먼저다():

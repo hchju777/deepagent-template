@@ -1221,3 +1221,21 @@ async def test_호출이_실패한_재시도는_스키마를_그대로_건다(ca
     frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     await frame(CaseState(case=case))
     assert llm.schemas[0] is not None and llm.schemas[1] == llm.schemas[0]
+
+
+def test_증거는_4K_밑으로_깎지_않고_그래도_넘으면_태스크를_접고_보낸다():
+    """사내 측정 #3: 고정부가 7.1~7.9K라 8K 상한을 맞추려다 증거가 1.6K까지 깎였다. 상한의 이유였던 지연은 빠른 모델이 13~17K를
+    4~14초에 처리해 약해졌다 — 증거를 굶기는 쪽이 더 큰 손해다. **증거 바닥 4K가 상한을 이긴다.**"""
+    from src.application.lead import fit_prompt
+
+    budgets = []
+
+    def render(budget, fold):
+        budgets.append((budget, fold))
+        return "f" * 7000 + "e" * budget + "t" * (100 if fold else 500)
+
+    prompt, budget = fit_prompt(render, cap=8000, budget=12000)
+    assert budget == 4000 and min(b for b, _ in budgets) == 4000 and budgets[-1] == (4000, True)
+    assert len(prompt) == 11100                                                # 상한을 넘어도 보낸다
+    _, small = fit_prompt(lambda b, f: "x" * (9000 + b), cap=8000, budget=3000)
+    assert small == 3000                                                       # 예산이 원래 바닥보다 작으면 그대로

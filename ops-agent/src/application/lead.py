@@ -58,10 +58,36 @@ def fill(template: str, fields: dict[str, str]) -> str:
     (`__main__._load_lead_prompt`) — 9e에서 `{max_chars}`가 치환되지 않은 채 LLM에게
     나간 적이 있고, 리포트는 정상으로 보여서 아무도 못 봤다.
     """
-    filled = template
+    filled = _conditional(template, fields)
     for name, value in fields.items():
         filled = filled.replace("{" + name + "}", value)
     return filled
+
+
+_COND = re.compile(r"\{\?([a-z_][a-z0-9_]*)\}")
+_EMPTY_BLOCK = ("", "(없음)", "(아직 없다)")
+
+
+def _conditional(template: str, fields: dict[str, str]) -> str:
+    """`{?블록}` 표지가 든 줄은 그 블록이 **비었으면** 이어지는 들여쓴 줄까지 같이 뺀다(차 있으면 표지만 지운다).
+
+    사내 측정 #3: integrate 고정부가 7.1~7.9K였다. 열린 질문이 없는 라운드의 "열린 질문을 보라", 버려진 것이 없는 라운드의 "버려진
+    것은 이미 거부됐다"는 읽을 것 없이 자리만 먹는다. 무엇을 뺄지는 템플릿(운영이 고치는 파일)이 표지로 정하고, 코드는 블록이
+    비었는지만 본다. 모르는 블록 이름은 빈 것으로 — 표지가 그대로 LLM에게 나가지 않게.
+    """
+    out, dropping = [], False
+    for line in template.splitlines(keepends=True):
+        mark = _COND.search(line)
+        if mark is not None:
+            dropping = fields.get(mark.group(1), "").strip() in _EMPTY_BLOCK
+            if not dropping:
+                out.append(_COND.sub("", line, count=1))
+            continue
+        if dropping and line.startswith("  "):
+            continue
+        dropping = False
+        out.append(line)
+    return "".join(out)
 
 
 def slots_in(template: str) -> set[str]:
@@ -150,8 +176,10 @@ def response_schema(model: type[StrictModel]) -> dict:
     return schema
 
 
-# 증거 예산을 여기까지만 줄인다 — 더 줄이면 최신 증거 한 건도 통째로 못 들어가 리드가 눈이 먼다(`evidence_chars` 2400의 뜻).
-_EVIDENCE_FLOOR = 1500
+# 증거 예산을 여기까지만 줄인다 — **상한보다 이긴다.** 사내 측정 #3에서 고정부가 7.1~7.9K라 8K 상한을 맞추려다 증거가 1.6K까지
+# 깎였다. 상한의 이유였던 지연은 빠른 모델이 13~17K를 4~14초에 처리해 약해졌고, 증거를 굶기는 쪽이 더 큰 손해다. 고정부는 따로
+# 줄인다(`_role_brief`·`{?블록}`·흐름 예산).
+_EVIDENCE_FLOOR = 4000
 
 
 def fit_prompt(render, *, cap: int | None, budget: int) -> tuple[str, int]:

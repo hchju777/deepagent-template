@@ -1194,15 +1194,16 @@ def test_열린_질문에_코드가_남긴_사실이_실린다(case):
     assert briefing.open_questions_block(twice).count("선언됐는데 없는 키") == 1
 
 
-def test_흐름_블록은_접수_끝점_줄을_예산_밖에_둔다():
-    """사내 실측: 키 8개 + "외 21개"가 예산을 먹어 끝점 줄이 밀렸다. 접수 경로의 끝점 줄은 예산과 무관하게 실린다."""
+def test_흐름_블록은_접수_끝점_줄을_늘_맨_앞에_싣는다():
+    """사내 실측: 키 8개 + "외 21개"가 예산을 먹어 끝점 줄이 밀렸다. 접수 경로의 끝점 줄은 늘 맨 앞에 실린다 — 예산에는 센다
+    (R2-4 ⑤: 예산 밖에 두었더니 고정부가 그만큼 컸다)."""
     patrol = _patrol_case()
     state = CaseState(case=patrol, evidence=[EvidenceRef(id="e-1", source="x", summary="sink lag 1830", body="")])
     text = briefing.flow_block(state, _traced_endpoint_graph(with_key=True), budget=40,
                                texts=(briefing.origin_line(patrol, _site_with_check()),))
     lines = text.splitlines()[1:]
     assert lines[0].startswith("/summary/badge [endpoint]") and "alarm:stats:{line} [rediskey]" in lines[0]
-    assert lines[1].startswith("sink [service") and lines[-1].startswith("… (+")
+    assert lines[-1].startswith("… (+")                                        # 끝점 줄은 늘 실리고 나머지는 예산대로
 
 
 def test_흐름_블록은_증상_단어와_겹치는_이름을_먼저_둔다():
@@ -1243,3 +1244,39 @@ def test_integrate_규칙에_빈_값의_다음_홉과_인자_규칙이_있다():
     assert "값이 비었으면" in text and "code.uses(name)" in text and "입력 키" in text
     assert "인자는 그 읽기의 것만" in text
 
+
+# ── R2-4 ⑤ — 고정부 줄이기 ──
+
+def test_읽기_목록의_서비스_설명은_첫_구절_40자까지다():
+    """사내 측정 #3: integrate 고정부 7.1~7.9K 중 서비스 설명(긴 문단 열 개)이 컸다. 이름 옆에는 무엇을 하는 서비스인지 고를
+    단서만 — 첫 구절 40자. 전문은 `code.services`가 준다(잘랐으면 그렇게 적는다)."""
+    long_role = "화면 API. 배지와 상태를 요약 키에서 읽어 응답한다. " + "설명이 길게 이어진다 " * 10
+    catalog = briefing.action_catalog(site(), services=("api", "sink"), roles={"api": long_role, "sink": "저장한다"})
+    line = next(l for l in catalog.splitlines() if "service 자리에 쓸 이름" in l)
+    assert "api — 화면 API." in line and "배지와 상태를" not in line and "sink — 저장한다" in line
+    assert "code.services" in line and len(line) < 140
+
+
+def test_해당_없는_규칙_줄은_프롬프트에서_빠진다(case):
+    """규칙 줄의 `{?블록}` 표지 — 그 블록이 비었으면(`(없음)`) 그 규칙과 이어지는 줄이 빠진다. 열린 질문이 없는 라운드에 "열린
+    질문을 보라"는 규칙은 읽을 것 없이 자리만 먹는다."""
+    from pathlib import Path
+
+    from src.application.lead import fill
+    template = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "investigate-integrate.md").read_text(encoding="utf-8")
+    quiet = fill(template, briefing.integrate_fields(CaseState(case=case), site_config=site(), max_rounds=6))
+    assert "`<열린 질문>`은 아직 모르는 것이다" not in quiet and "이미 거부됐다" not in quiet
+    assert "{?" not in quiet and "**증거에 없는 것을 단정하지 마라.**" in quiet          # 표지는 남지 않고 다른 규칙은 그대로
+    state = CaseState(case=case, plan_tasks=[task("t-1", status="error", error="ConnectError")],
+                      llm_errors=["integrate: 태스크 t-2 — 이미 한 읽기를 또 냈다"])
+    loud = fill(template, briefing.integrate_fields(state, site_config=site(), max_rounds=6))
+    assert "`<열린 질문>`은 아직 모르는 것이다" in loud and "이미 거부됐다" in loud
+    assert "  다른 컬렉션·토픽을 봐라." in loud and "  다른 컬렉션·토픽을 봐라." not in quiet   # 이어지는 줄도 같이
+
+
+def test_fill의_조건부_줄은_이어지는_들여쓴_줄까지_같이_빠진다():
+    from src.application.lead import fill
+    text = "머리\n- {?open}첫 규칙\n  이어짐\n- 다른 규칙\n  다른 이어짐\n"
+    assert fill(text, {"open": "(없음)"}) == "머리\n- 다른 규칙\n  다른 이어짐\n"
+    assert fill(text, {"open": "- 잘린 증거 1건"}) == "머리\n- 첫 규칙\n  이어짐\n- 다른 규칙\n  다른 이어짐\n"
+    assert fill(text, {}) == "머리\n- 다른 규칙\n  다른 이어짐\n"                   # 모르는 블록은 빈 것으로

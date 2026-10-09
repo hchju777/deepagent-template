@@ -64,8 +64,13 @@ def action_catalog(site_config, *, services: tuple[str, ...] = (),
         # 전체 트레이스에서 가설이 4라운드 내내 하나로 고정된 채 결론을 못 낸 것이
         # 그 결과다. 서비스가 무엇을 하는지 모르면 무엇을 확인해야 끝나는지도 모른다.
         roles = roles or {}
-        named = [f"{name} — {roles[name]}" if roles.get(name) else name for name in services]
-        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {' / '.join(named)})")
+        briefs = {name: _role_brief(roles[name]) for name in services if roles.get(name)}
+        named = [f"{name} — {briefs[name]}" if name in briefs else name for name in services]
+        # 설명은 **첫 구절 40자** — 사내 측정 #3에서 열 개의 긴 문단이 고정부를 키웠다. 고르는 단서는 첫 구절에 있고, 전문은
+        # `code.services`가 준다. 잘랐으면 그렇게 적는다(안 적으면 리드는 잘린 것을 전부로 안다).
+        clipped = any(briefs[name] != roles[name].strip() for name in briefs)
+        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {' / '.join(named)}"
+                                + (" — 설명 전문은 code.services" if clipped else "") + ")")
 
     rest = site_config.infra.rest
     for entry_name, entry in sorted((rest.entries if rest else {}).items()):
@@ -74,6 +79,16 @@ def action_catalog(site_config, *, services: tuple[str, ...] = (),
             for k, spec in sorted(entry.params.items()))
         lines.append(f'- rest.query(entry="{entry_name}", params={{{params}}})')
     return "\n".join(lines) or "- (이 사이트에 부를 수 있는 것이 없다)"
+
+
+_ROLE_CHARS = 40
+_FIRST_CLAUSE = re.compile(r"(?<=[.。!?])\s|\n| — ")
+
+
+def _role_brief(role: str) -> str:
+    """토폴로지 `role`의 첫 구절, 40자까지 — 읽기 목록에서 서비스를 고를 단서만."""
+    first = _FIRST_CLAUSE.split(role.strip(), maxsplit=1)[0].strip()
+    return first if len(first) <= _ROLE_CHARS else first[:_ROLE_CHARS] + "…"
 
 
 # 어댑터 이름 → SiteConfig.infra의 필드 이름. 둘이 다른 것은 `mongodb` 하나뿐이다.

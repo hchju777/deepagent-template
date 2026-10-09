@@ -283,3 +283,12 @@ def test_요약_끝줄에_429_대기_근거별_횟수가_붙는다():
     lines = digest([(name, first), (name.replace("r2", "r3"), second)])
     end = [line for line in lines if line.strip().startswith("429 대기")]
     assert end and "합계 90초" in end[0] and "nextAccessTime 1" in end[0] and "기본값 1" in end[0]
+
+
+def test_요약_머리줄은_고정부를_읽기_목록_흐름_케이스_열린_질문으로_쪼갠다():
+    """측정 #3은 "나머지 7.1~7.9K"까지만 보였다 — 어디를 줄일지 알려면 고정부를 쪼개 찍어야 한다."""
+    prompt = ("<케이스>\n" + "c" * 300 + "\n</케이스>\n<데이터 흐름>\n" + "f" * 800 + "\n</데이터 흐름>\n"
+              "<열린 질문>\n" + "o" * 100 + "\n</열린 질문>\n<부를 수 있는 읽기>\n" + "a" * 2000 + "\n</부를 수 있는 읽기>\n"
+              + _prompt())
+    head = [line for line in digest(_file(prompt, json.dumps({"tasks": []}))) if "프롬프트" in line][0]
+    assert "읽기 목록 2,000" in head and "흐름 800" in head and "케이스 300" in head and "열린 질문 100" in head

@@ -194,7 +194,7 @@ CASES = [
   '    if adapter == "code":\n        return bool(services)',
   '    if adapter == "code":\n        return True', [f"{K4}::test_코드가_없으면_목록에_안_나온다"]),
  ("서비스 이름을 목록에 안 적는다", B,
-  '        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {\' / \'.join(named)})")',
+  '        lines.insert(after + 1, f"  (service 자리에 쓸 이름: {\' / \'.join(named)}"\n                                + (" — 설명 전문은 code.services" if clipped else "") + ")")',
   '        pass',
   [f"{K4}::test_코드가_있으면_서비스_이름까지_적는다"]),
  ("모르는 어댑터를 통과시킨다", B,
@@ -404,7 +404,7 @@ CASES = [
   '                      briefing.integrate_fields(state.model_copy(update={"llm_errors": []}), site_config=site_config,',
   ["tests/application/test_lead.py::test_거부되면_같은_프롬프트에_사유를_얹어_되묻는다"]), # ── 로컬 대역 측정을 위한 것들 ────────────────────────────────────
  ("역할을 이름 옆에 안 붙인다", B,
-  '        named = [f"{name} — {roles[name]}" if roles.get(name) else name for name in services]',
+  '        named = [f"{name} — {briefs[name]}" if name in briefs else name for name in services]',
   '        named = list(services)',
   [f"{K4}::test_역할이_있으면_이름_옆에_붙는다"]),
  ("증거 없는 태스크의 질의를 안 보여준다", B,
@@ -657,7 +657,7 @@ CASES = [
   '             if (e.get("origin") != "runs" or e["relation"] == "serves")',
   ["tests/knowledge/test_flow.py::test_흐름_텍스트는_config_층만_씨앗의_이웃_그리고_닿은_서비스의_토픽"]),
  ("흐름 텍스트가 예산을 안 지킨다", ROOT / "src/knowledge/flow.py",
-  '        if used + len(line) + 1 > budget and out:', '        if False:',
+  '        if used + len(line) + 1 > budget and (out or pinned):', '        if False:',
   ["tests/knowledge/test_flow.py::test_흐름_텍스트는_예산에서_끊고_끊었다고_적는다"]),
  ("그래프가 없어도 code.flow를 목록에 둔다", ROOT / "src/application/briefing.py",
   '    if flow_graph is None:\n        out |= {"code.flow", "code.trace"}',
@@ -1840,7 +1840,7 @@ CASES += [
  ("끝점 씨앗 줄을 예산 안에 둔다", FLW,
   '                (pinned if by_id[sid]["type"] == "endpoint" else lines).append(line_for(sid))',
   "                lines.append(line_for(sid))",
-  [f"{FT2}::test_흐름_텍스트는_끝점_씨앗_줄을_예산_밖에_둔다"]),
+  [f"{FT2}::test_흐름_텍스트는_끝점_씨앗_줄을_맨_앞에_두고_예산에_센다"]),
  ("이름을 알파벳순으로만 둔다", FLW,
   "        names = sorted(names, key=lambda n: (0 if _preferred(n, prefer) else 1, n))", "        names = sorted(names)",
   [f"{FT2}::test_이름_목록은_prefer_단어가_든_것이_먼저다"]),
@@ -2106,7 +2106,39 @@ CASES += [
   ["tests/application/test_lead.py::test_호출이_실패한_재시도는_스키마를_그대로_건다"]),
 ]
 
-assert len(CASES) >= 513, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-4 ⑤ — 고정부 줄이기 ──
+BT5 = "tests/application/test_briefing.py"
+CASES += [
+ ("서비스 설명을 통째로 싣는다", B,
+  "        briefs = {name: _role_brief(roles[name]) for name in services if roles.get(name)}",
+  "        briefs = {name: roles[name] for name in services if roles.get(name)}",
+  [f"{BT5}::test_읽기_목록의_서비스_설명은_첫_구절_40자까지다"]),
+ ("잘린 설명이라고 안 적는다", B,
+  '                                + (" — 설명 전문은 code.services" if clipped else "") + ")")',
+  '                                + ")")',
+  [f"{BT5}::test_읽기_목록의_서비스_설명은_첫_구절_40자까지다"]),
+ ("조건부 규칙 줄을 안 뺀다", LD,
+  "            dropping = fields.get(mark.group(1), \"\").strip() in _EMPTY_BLOCK",
+  "            dropping = False",
+  [f"{BT5}::test_fill의_조건부_줄은_이어지는_들여쓴_줄까지_같이_빠진다", f"{BT5}::test_해당_없는_규칙_줄은_프롬프트에서_빠진다"]),
+ ("조건부 규칙의 이어지는 줄을 남긴다", LD,
+  '        if dropping and line.startswith("  "):\n            continue', '        if False:\n            continue',
+  [f"{BT5}::test_fill의_조건부_줄은_이어지는_들여쓴_줄까지_같이_빠진다"]),
+ ("integrate 템플릿에 조건부 표지가 없다", IT,
+  "- {?open}`<열린 질문>`은 아직 모르는 것이다", "- `<열린 질문>`은 아직 모르는 것이다",
+  [f"{BT5}::test_해당_없는_규칙_줄은_프롬프트에서_빠진다"]),
+ ("끝점 줄을 흐름 예산에 안 센다", FLW,
+  "    out, used = [], sum(len(line) + 1 for line in pinned)", "    out, used = [], 0",
+  ["tests/knowledge/test_flow.py::test_흐름_텍스트는_끝점_씨앗_줄을_맨_앞에_두고_예산에_센다"]),
+ ("증거 바닥이 4K보다 낮다", LD,
+  "_EVIDENCE_FLOOR = 4000", "_EVIDENCE_FLOOR = 1500",
+  ["tests/application/test_lead.py::test_증거는_4K_밑으로_깎지_않고_그래도_넘으면_태스크를_접고_보낸다"]),
+ ("요약이 고정부를 안 쪼갠다", TD,
+  '             "읽기 목록": len(_block(prompt, "부를 수 있는 읽기")),', "",
+  ["tests/application/test_trace_digest.py::test_요약_머리줄은_고정부를_읽기_목록_흐름_케이스_열린_질문으로_쪼갠다"]),
+]
+
+assert len(CASES) >= 521, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
