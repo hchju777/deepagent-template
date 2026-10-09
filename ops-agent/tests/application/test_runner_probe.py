@@ -264,13 +264,16 @@ async def test_대상_값이_든_행을_앞에_통째로_두고_나머지는_한
     focused = case.model_copy(update={"target": "L3/Alarm"})
     out = await runner.run(task("t-1", action="mongo.find", params={"collection": "c", "filter": {}}), case=focused)
     lines = out.evidence[0].body.splitlines()
-    assert lines[0].startswith("19건 · 필드: group, title, alarm, note") and "대상 행 3건 먼저" in lines[0]
-    assert lines[1].startswith("[3] ") and '"group":"L3"' in lines[1] and '"title":"Alarm"' in lines[1]
-    assert lines[2].startswith("[9] ") and lines[3].startswith("[15] ")
+    assert lines[0].startswith("19건 · 필드: group, title, alarm, note") and "대상 행 [2], [8], [14] 먼저" in lines[0]
+    assert lines[1].startswith("[2] ") and '"group":"L3"' in lines[1] and '"title":"Alarm"' in lines[1]
+    assert lines[2].startswith("[8] ") and lines[3].startswith("[14] ")
+    # 번호는 경로 문법(`redis.get`의 path·recompute의 expect.path)과 같은 0부터다 — 1부터 적었더니 그대로 옮기면 옆 행이었다.
+    from src.domain.jsonpath import select
+    assert select(rows, "[2]")[1]["group"] == "L3" and select(rows, "[2]")[1]["title"] == "Alarm"
     assert not out.evidence[0].complete and "더 있다" in out.evidence[0].body
     plain = await runner.run(task("t-2", action="mongo.find", params={"collection": "c", "filter": {}}), case=case)
     first = plain.evidence[0].body.splitlines()
-    assert first[1].startswith('[1] {"group":"L1"') and "대상" not in first[0]      # target이 없으면 원래 순서
+    assert first[1].startswith('[0] {"group":"L1"') and "대상" not in first[0]      # target이 없으면 원래 순서
 
 
 async def test_rest_응답의_response_목록은_항목당_한_줄이다(case):
@@ -284,7 +287,8 @@ async def test_rest_응답의_response_목록은_항목당_한_줄이다(case):
     body = out.evidence[0].body
     lines = body.splitlines()
     head = next(i for i, l in enumerate(lines) if l.startswith("response: 6건 · 필드: group, title, alarm, note"))
-    assert lines[head + 1].startswith('  [3] {"group":"L3","title":"Alarm"') and lines[head + 1].endswith("}")
+    assert "대상 행 response[2] 먼저" in lines[head]                        # 리드가 그대로 옮겨 쓸 경로
+    assert lines[head + 1].startswith('  [2] {"group":"L3","title":"Alarm"') and lines[head + 1].endswith("}")
     assert sum(1 for l in lines if l.startswith("  [")) == 6 and out.evidence[0].complete
     assert "status: 200" in body and "request:" in body
 
@@ -298,3 +302,30 @@ async def test_발견_읽기는_찾은_이름을_outcome에_싣는다(case):
     assert out.found == ["hb:sink", "hb:processor"]
     other = await runner.run(task("t-2", action="redis.get", params={"key": "k"}), case=case)
     assert other.found == []
+
+
+# ── R2-5 ③ — recompute 기대값은 대상 행 ──
+
+async def test_recompute_기대값이_대상_행이_아닌_행을_가리키면_실행_전에_거부하고_대상_행_경로를_준다(case):
+    """사내 측정 #4: 리드가 `response[0].alarm`(첫 행 — 다른 배지)을 기대값으로 써서 엉뚱한 "불일치" 사실이 생겼다. 경로가 문서
+    목록의 행을 지나면 그 행이 케이스 target 값을 다 담는지 코드가 본다(규율 3의 연장 — LLM이 댄 위치를 믿지 않는다). 그 목록에
+    대상 값이 든 행이 없거나 케이스에 target이 없으면 가릴 수 없어 막지 않는다."""
+    from src.infrastructure.stubs import StubMongoReader
+    mongo = StubMongoReader({"alarm_events": [{"status": "alarm"}]}, clock=lambda: T0)
+    data = {"request": {"entry": "summary_badge"}, "status": 200, "response": _badge_rows(6)}
+    rest = Recorder(result=ProbeResult.succeeded(data, source="r", clock=lambda: T0))
+    runner = ProbeRunner(Bundle(mongo=mongo, rest=rest), clock=lambda: T0)
+    focused = case.model_copy(update={"target": "L3/Alarm"})
+    await runner.run(task("t-1", action="rest.query", params={"entry": "summary_badge", "params": {}}), case=focused)
+
+    def recount(task_id, path, on=focused):
+        return runner.run(task(task_id, action="recompute.count", params={
+            "collection": "alarm_events", "filter": {"status": "alarm"},
+            "expect": {"evidence": "t-1.e1", "path": path}}), case=on)
+
+    wrong = await recount("t-2", "response[0].alarm")
+    assert wrong.status == "error" and "response[0]" in wrong.error and "대상 행은 response[2]" in wrong.error
+    assert (await recount("t-3", "response[2].alarm")).status == "ok"
+    assert (await recount("t-4", "response[0].alarm", on=case)).status == "ok"                  # target이 없다
+    other = case.model_copy(update={"target": "ZZ/Nope"})
+    assert (await recount("t-5", "response[0].alarm", on=other)).status == "ok"                 # 대상 값이 든 행이 없다

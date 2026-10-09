@@ -1280,3 +1280,32 @@ def test_fill의_조건부_줄은_이어지는_들여쓴_줄까지_같이_빠진
     assert fill(text, {"open": "(없음)"}) == "머리\n- 다른 규칙\n  다른 이어짐\n"
     assert fill(text, {"open": "- 잘린 증거 1건"}) == "머리\n- 첫 규칙\n  이어짐\n- 다른 규칙\n  다른 이어짐\n"
     assert fill(text, {}) == "머리\n- 다른 규칙\n  다른 이어짐\n"                   # 모르는 블록은 빈 것으로
+
+
+# ── R2-5 ③ — 대상 행 경로 ──
+
+def _target_rest_evidence():
+    """실행기가 실제로 쓰는 본문 — 손으로 흉내 내면 형식이 갈려도 모른다."""
+    from src.application.runner_probe import detail
+    from src.domain.case import EvidenceRef
+
+    rows = [{"group": f"L{i % 3 + 1}", "title": ["Alarm", "Caution"][i % 2], "alarm": i} for i in range(6)]
+    body, _ = detail({"request": {"entry": "summary_badge"}, "status": 200, "response": rows}, focus=("L3", "Alarm"))
+    return EvidenceRef(id="t-1.e1", source="rest.query entry='summary_badge'", summary="x", body="\n".join(body))
+
+
+def test_recompute_예시의_기대값_경로는_증거가_짚은_대상_행이다():
+    """사내 측정 #4: 예시가 `response.items[0].alarm 같은 모양`을 보여 줬고 리드가 `[0]`(첫 행 — 다른 배지)을 그대로 옮겼다.
+    실행기가 증거 머리줄에 짚은 대상 행 경로를 코드가 박는다. 모르면 번호를 비워 둔다 — 지어낸 번호를 보여 주지 않는다."""
+    done = [_rest_done(), _trace_done()]
+    tasks = _ladder(site(), done, used=("rest.query", "code.trace"), evidence=(_target_rest_evidence(),))
+    assert tasks[0]["params"]["expect"]["path"].startswith("response[2].")
+    blind = _ladder(site(), done, used=("rest.query", "code.trace"))[0]["params"]["expect"]["path"]
+    assert blind.startswith("response[") and "[0]" not in blind and "대상 행" in blind
+
+
+def test_케이스_블록이_증거가_짚은_대상_행을_적는다(case):
+    from src.application.state import CaseState
+
+    assert "대상 행: t-1.e1 response[2]" in briefing.case_block(CaseState(case=case, evidence=[_target_rest_evidence()]))
+    assert "대상 행" not in briefing.case_block(CaseState(case=case))

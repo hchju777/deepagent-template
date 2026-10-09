@@ -126,3 +126,5 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - stderr에 `stream_chunk_timeout fired` 줄이 더는 안 찍히는가.
 - 판정이 강등됐으면 그 출력의 다리들(`원인`·`후보`의 component)과 caveat `서비스 아닌 component 제외: …` 한 줄 — 서비스 아닌 이름이
   다리로 남아 있으면 안 된다.
+- 증거의 행 번호는 이제 **0부터**다(경로 문법과 같다 — 측정 #4의 `[16]`은 `[15]`로 보인다). 리드가 recompute를 냈으면 그 태스크 줄
+  한 줄 — 기대값 경로가 케이스 블록의 `대상 행:`과 같은 행인지, 아니면 `대상 행은 …` 거부 사유가 붙었는지.

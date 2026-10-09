@@ -13,6 +13,7 @@
 척하면 12a의 verify가 "없음"을 근거로 한 결론을 못 걸러낸다.
 """
 import json
+import re
 from collections import OrderedDict
 from typing import Any
 
@@ -21,6 +22,7 @@ from src.domain.actions import ACTIONS, DISCOVERY_ACTIONS, action_problem, descr
 from src.domain.base import Clock
 from src.domain.case import Case, EvidenceRef, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
+from src.domain.jsonpath import steps
 
 _SUMMARY_CHARS = 160
 # 한 건이라도 **통째로** 보이게 하는 것이 요점이다. 문서를 반쯤 자르면 리드는
@@ -66,6 +68,11 @@ class ProbeRunner(TaskRunnerPort):
             problem = action_problem(task.action, task.params)
             if problem is not None:
                 return TaskOutcome(task_id=task.id, status="error", error=f"{source} — {problem}")
+            expect = task.params.get("expect")
+            if isinstance(expect, dict):
+                wrong = target_row_problem(self._raw.get(str(expect.get("evidence"))), expect.get("path"), focus_of(case))
+                if wrong is not None:
+                    return TaskOutcome(task_id=task.id, status="error", error=f"{source} — {wrong}")
             _, method, required, _ = ACTIONS[task.action]
             try:
                 result = await getattr(self._recompute, method)(*[task.params[n] for n in required])
@@ -108,6 +115,41 @@ def focus_of(case) -> tuple[str, ...]:
     앞에 통째로 둔다(R2-2b-2). 한 글자는 어디에나 들어서 안 센다."""
     target = getattr(case, "target", None) or ""
     return tuple(part for part in target.split("/") if len(part) >= 2)
+
+
+_TARGET_ROWS = re.compile(r" · 대상 행 (.+?) 먼저")
+
+
+def target_rows(body: str) -> list[str]:
+    """증거 머리줄이 짚은 대상 행 경로들(`response[2]`) — `detail`이 쓴 그 줄을 읽는다. 브리핑이 케이스 블록과 recompute 예시에
+    싣는다(같은 모듈이 쓰고 읽어 형식이 갈리지 않는다)."""
+    match = _TARGET_ROWS.search(body or "")
+    return match.group(1).split(", ") if match else []
+
+
+def target_row_problem(raw: Any, path: Any, focus: tuple[str, ...]) -> str | None:
+    """recompute `expect.path`가 문서 목록의 행을 지나면 그 행이 케이스 대상 행인가 — 아니면 사유와 대상 행 경로.
+
+    사내 측정 #4: 리드가 `response[0].alarm`(첫 행 — 다른 배지)을 기대값으로 써 엉뚱한 "불일치"가 사실로 남았다. 행을 고르는 기준은
+    증거를 보여 줄 때 대상 행을 앞세운 것과 같다(값이 전부 든 행). 그 목록에 대상 값이 든 행이 없으면 가릴 수 없어 막지 않는다.
+    """
+    parts = steps(path) if focus else None
+    cur, walked = raw, ""
+    for step in parts or ():
+        if isinstance(step, int):
+            if not _doc_list(cur) or step >= len(cur):
+                return None
+            hits = [i for i, row in enumerate(cur) if all(value in _compact(row) for value in focus)]
+            if hits and step not in hits:
+                rows = ", ".join(f"{walked}[{i}]" for i in hits)
+                return (f"expect.path의 {walked}[{step}]는 케이스 대상({'/'.join(focus)})의 행이 아니다 — 대상 행은 {rows}. "
+                        f"그 경로로 다시 내라")
+            cur, walked = cur[step], f"{walked}[{step}]"
+        else:
+            if not isinstance(cur, dict) or step not in cur:
+                return None
+            cur, walked = cur[step], f"{walked}.{step}" if walked else step
+    return None
 
 
 def _found(action: str, data: Any) -> list[str]:
@@ -181,7 +223,7 @@ def _entries(mapping: dict, *, limit: int, focus: tuple[str, ...] = ()) -> tuple
         if _doc_list(value):
             # 문서 목록 값(`rest.query`의 `response`)은 한 줄로 눕히지 않는다 — 사내 실측에서 19개 항목이 첫 항목에서
             # 잘렸다. 목록처럼 필드 줄 + 항목당 한 줄로, 남은 예산 안에서(대상 행 먼저).
-            block, cut_block = _list_detail(value, limit=max(limit - used, 0), focus=focus)
+            block, cut_block = _list_detail(value, limit=max(limit - used, 0), focus=focus, at=str(key))
             lines = [f"{key}: {block[0]}"] + [f"  {row}" for row in block[1:]]
             taken += lines
             used += sum(len(line) for line in lines)
@@ -209,7 +251,7 @@ def _compact(row: dict) -> str:
     return json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
-def _list_detail(rows: list, *, limit: int, focus: tuple[str, ...] = ()) -> tuple[list[str], bool]:
+def _list_detail(rows: list, *, limit: int, focus: tuple[str, ...] = (), at: str = "") -> tuple[list[str], bool]:
     if not rows:
         return ["0건 — 비어 있다"], False
     if all(isinstance(row, dict) for row in rows):
@@ -222,11 +264,12 @@ def _list_detail(rows: list, *, limit: int, focus: tuple[str, ...] = ()) -> tupl
         head, cut_head = _line(", ".join(fields), limit)
         texts = [_compact(row) for row in rows]
         # 케이스 `target`의 값이 전부 든 행 — 사내 실측에서 대상 행은 19개 중 뒤쪽이라 예산 밖이었다. 앞에 두되
-        # `[n]`은 원래 자리라 리드가 "몇 번째"를 그대로 옮겨 적을 수 있다.
+        # `[n]`은 원래 자리이고 **경로 문법과 같은 0부터**다 — 1부터 적었더니 리드가 그대로 옮기면 옆 행을 가리켰다. 머리줄은
+        # 대상 행의 경로(`at`은 dict 안의 키)를 그대로 — 리드가 path·expect.path에 옮겨 쓰고, 브리핑이 읽는다(`target_rows`).
         hits = [i for i, text in enumerate(texts) if focus and all(value in text for value in focus)]
         order = hits + [i for i in range(len(rows)) if i not in set(hits)]
-        body, cut_body = _fill([f"[{i + 1}] {texts[i]}" for i in order], limit=limit, total=len(rows))
-        note = f" · 대상 행 {len(hits)}건 먼저" if hits else ""
+        body, cut_body = _fill([f"[{i}] {texts[i]}" for i in order], limit=limit, total=len(rows))
+        note = f" · 대상 행 {', '.join(f'{at}[{i}]' for i in hits)} 먼저" if hits else ""
         return [f"{len(rows)}건 · 필드: {head}{note}"] + body, cut_head or cut_body
     # 이름 목록은 **한 줄에 여러 개**로 채운다. 한 줄에 하나씩 쓰면 같은 예산에
     # 훨씬 적게 보이는데, 여기서 리드가 하려는 일이 바로 "179개 중에 고르기"다 —

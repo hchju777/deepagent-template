@@ -2214,7 +2214,29 @@ CASES += [
   ["tests/application/test_verdict.py::test_판정_프롬프트는_component가_데이터를_만드는_서비스라고_말한다"]),
 ]
 
-assert len(CASES) >= 545, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-5 ③ — recompute 기대값은 대상 행: 0부터의 번호 · 머리줄·케이스·예시의 경로 · 실행 전 검사 ──
+ROWS_T = "tests/application/test_runner_probe.py::test_대상_값이_든_행을_앞에_통째로_두고_나머지는_한_줄씩"
+REST_ROWS_T = "tests/application/test_runner_probe.py::test_rest_응답의_response_목록은_항목당_한_줄이다"
+GUARD_T = "tests/application/test_runner_probe.py::test_recompute_기대값이_대상_행이_아닌_행을_가리키면_실행_전에_거부하고_대상_행_경로를_준다"
+CASES += [
+ ("행 번호를 1부터 적는다", RP, '        body, cut_body = _fill([f"[{i}] {texts[i]}" for i in order], limit=limit, total=len(rows))',
+  '        body, cut_body = _fill([f"[{i + 1}] {texts[i]}" for i in order], limit=limit, total=len(rows))', [ROWS_T]),
+ ("머리줄이 대상 행 경로 대신 건수만 적는다", RP,
+  """        note = f" · 대상 행 {', '.join(f'{at}[{i}]' for i in hits)} 먼저" if hits else \"\"""",
+  """        note = f" · 대상 행 {len(hits)}건 먼저" if hits else \"\"""", [ROWS_T, REST_ROWS_T]),
+ ("dict 안 목록의 경로에 키를 안 붙인다", RP, "focus=focus, at=str(key))", "focus=focus)", [REST_ROWS_T]),
+ ("recompute 전에 대상 행을 안 본다", RP, "                if wrong is not None:\n                    return TaskOutcome",
+  "                if False:\n                    return TaskOutcome", [GUARD_T]),
+ ("대상 행이 아닌 행도 통과시킨다", RP, "            if hits and step not in hits:", "            if False:", [GUARD_T]),
+ ("케이스 블록에 대상 행을 안 적는다", B, """            + (f"\\n대상 행: {'; '.join(rows)}" if rows else ""))""", "            )",
+  ["tests/application/test_briefing.py::test_케이스_블록이_증거가_짚은_대상_행을_적는다"]),
+ ("recompute 예시가 첫 행을 보여 준다", B,
+  """                       "path": f"{rows[0] if rows else 'response[대상 행 번호]'}.화면이 보여 준 그 숫자의 필드"}})""",
+  """                       "path": "response 아래 그 숫자의 위치 — response.items[0].alarm 같은 모양"}})""",
+  ["tests/application/test_briefing.py::test_recompute_예시의_기대값_경로는_증거가_짚은_대상_행이다"]),
+]
+
+assert len(CASES) >= 552, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

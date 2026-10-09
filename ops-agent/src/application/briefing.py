@@ -24,6 +24,7 @@ url·비밀번호·계정은 프롬프트에 들어가지 않는다. 리드가 �
 import json
 import re
 
+from src.application.runner_probe import target_rows
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS, describe
 from src.knowledge import flow as flowgraph
@@ -155,10 +156,13 @@ def origin_line(case, site_config) -> str | None:
 def case_block(state: CaseState, *, site_config=None) -> str:
     case = state.case
     origin = "사람" if case.origin == "human" else (origin_line(case, site_config) or "순찰")
+    # 증거가 짚은 대상 행 경로 — 리드가 첫 행(다른 배지)을 기대값으로 썼다(사내 측정 #4). 실행기가 머리줄에 적은 것을 그대로.
+    rows = [f"{ref.id} {', '.join(target_rows(ref.body))}" for ref in state.evidence if target_rows(ref.body)]
     return (f"사이트: {case.site}\n"
             f"증상: {case.symptom}\n"
             f"발생 시각: {case.t0.isoformat()}\n"
-            f"접수 경로: {origin}")
+            f"접수 경로: {origin}"
+            + (f"\n대상 행: {'; '.join(rows)}" if rows else ""))
 
 
 def hypotheses_block(state: CaseState) -> str:
@@ -417,13 +421,14 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
     if recomputed is None:
         if "recompute.count" in used or not _has(site_config, "recompute", services):
             return None
-        # `expect.path`는 지시문 모양이다 — rest 원본은 `{"request", "status", "response"}`라 `response` 아래에
-        # 있다는 것까지만 우리가 안다. 숫자를 옮겨 적게 하지 않는다(3b-1).
+        # `expect.path`의 행은 실행기가 증거 머리줄에 짚은 대상 행 경로를 박는다 — `items[0]`을 보여 줬더니 리드가 첫 행(다른
+        # 배지)을 그대로 옮겼다(사내 측정 #4). 모르면 번호를 비워 둔다. 필드는 지시문이다 — 숫자를 옮겨 적게 하지 않는다(3b-1).
+        rows = target_rows(_evidence_text(evidence, rest_id))
         shape = ("recompute.count", {
             "collection": collections[0] if collections else "위 추적 증거에서 본 컬렉션 이름",
             "filter": {"위 증거에서 본 필드 이름": "찾으려는 값"},
             "expect": {"evidence": rest_id,
-                       "path": "response 아래 그 숫자의 위치 — response.items[0].alarm 같은 모양"}})
+                       "path": f"{rows[0] if rows else 'response[대상 행 번호]'}.화면이 보여 준 그 숫자의 필드"}})
         return shape, [traced.result_evidence_ids[0], rest_id]
     if not code_index or flow_graph is None:
         return None

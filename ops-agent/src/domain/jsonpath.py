@@ -19,6 +19,14 @@ _JUNK = re.compile(r"\[\d+\]|[^.\[\]]+|\.")
 _SHOW_KEYS = 12
 
 
+def steps(path: Any) -> list[str | int] | None:
+    """경로의 칸들 — 키는 문자열, 목록 자리는 정수. 문법이 아니면 None. 값을 고르지 않고 경로만 걸어야 하는 쪽(recompute 기대값의
+    대상 행 검사)이 같은 문법을 쓰게."""
+    if not isinstance(path, str) or not path or _JUNK.sub("", path):
+        return None
+    return [int(m.group(1)) if m.group(1) is not None else m.group(2) for m in _TOKEN.finditer(path)]
+
+
 def select(value: Any, path: str) -> tuple[bool, Any]:
     """`(True, 고른 값)` 또는 `(False, 왜 못 골랐나)`. 빈 경로는 전부다.
 
