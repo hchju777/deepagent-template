@@ -1,0 +1,59 @@
+{
+  "_설명": "대상 시스템에 안 붙고 돌려 보기 위한 가짜 응답. --stub-seeds로 준다. `code`의 trace·uses·callers는 사람이 적은 본문이다 — 진짜는 `code graph`의 오버레이와 심볼 인덱스에서 온다.",
+  "redis": {
+    "oee:L3": "512"
+  },
+  "mongo": {
+    "twin_state": [
+      {
+        "line": "L3",
+        "run_time_min": 480,
+        "planned_min": 480,
+        "total_count": 4551,
+        "good_count": 4460,
+        "ideal_cycle_sec": 6.0
+      }
+    ],
+    "alarm_events": [
+      {
+        "line": "L1",
+        "result": "alarm",
+        "at": "2026-09-14T08:50:00"
+      },
+      {
+        "line": "L1",
+        "result": "alarm",
+        "at": "2026-09-14T08:55:00"
+      },
+      {
+        "line": "L1",
+        "result": "caution",
+        "at": "2026-09-14T08:58:00"
+      }
+    ]
+  },
+  "rest": {
+    "summary_badge": {
+      "items": [
+        {
+          "group": "L1",
+          "title": "Alarm",
+          "alarm": 0,
+          "caution": 0,
+          "normal": 0
+        }
+      ]
+    }
+  },
+  "code": {
+    "trace": {
+      "/summary/badge": "api/routers/summary.py:L12 badge\n  → api/repos/alarm.py:L30 AlarmRepo.count_by_result — reads: alarm_events [collection] 확실"
+    },
+    "uses": {
+      "alarm_events": "alarm_events [collection]\n  쓰기 1:\n    sink.writers.alarm_sink.AlarmSink.write (sink/writers/alarm_sink.py:L42) [dt-core · sink] — 진입점: 이 함수(부르는 곳 없음)\n  읽기 1:\n    api.repos.alarm.AlarmRepo.count_by_result (api/repos/alarm.py:L30) [dt-api · api] — 진입점: summary.badge(라우트 router.post('/badge'))"
+    },
+    "callers": {
+      "sink.writers.alarm_sink.AlarmSink.write": "대상 sink.writers.alarm_sink.AlarmSink.write (sink/writers/alarm_sink.py:L42) [dt-core · sink]\n바로 부르는 곳 1 (줄은 부르는 자리):\n  sink.consumer.run (sink/consumer.py:L18) [dt-core · sink]\n진입점 1:\n  [dt-core] consumer.run → alarm_sink.AlarmSink.write"
+    }
+  }
+}

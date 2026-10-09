@@ -1,0 +1,199 @@
+"""**우리가 대상에게 할 수 있는 읽기의 전부.** 이름으로 부르고, 목록에 없으면 문이 안 열린다.
+
+## 왜 한 곳인가
+
+이 표를 쓰는 곳이 둘이다 — 순찰의 프로브(4단계)와 조사의 `ProbeRunner`(10a). 각자
+자기 표를 들면 언젠가 한쪽만 넓어지고, **넓은 쪽이 곧 우리 허용 범위**가 된다.
+어댑터 조립을 `factory.py` 한 곳에 둔 것과 같은 이유다.
+
+## 왜 `run(port, method, args)`가 아닌가
+
+규율 9다. "어느 포트의 어느 메서드를 어떤 인자로 부르라"가 표현 가능해지면, 그 결정이
+config에서 코드로, 결국 **LLM의 판단으로** 흘러간다(10b부터 태스크를 LLM이 만든다).
+`mongo.aggregate`는 부를 수 없다 — 포트에 없기도 하지만, **여기에도 없다.**
+
+쓰는 메서드가 하나도 없는 것은 우연이 아니다. 포트에 없으므로 여기 적을 수도 없다.
+
+## 왜 인자를 소켓 전에 검사하는가
+
+`redis.get`에 `{"pattern": ...}`가 오면 어댑터는 `TypeError`를 던진다. 그건 "대상
+시스템의 실패"가 아니라 **우리가 잘못 부른 것**인데, 흡수해서 error로 돌려주면 보고서에
+"Redis 조회 실패"라고 적힌다 — 원인이 우리라는 사실이 지워진다.
+
+## 왜 domain에 있는가
+
+계층 규칙이 `application → domain ← infrastructure`다. 이 표를 patrol이나
+infrastructure에 두면 application이 그쪽을 import하게 되어 화살표가 하나 늘어난다.
+여기 있는 것들은 포트 이름과 메서드 이름뿐이고 실구현은 모르므로 domain에 닫힌다 —
+`adapters`는 덕 타이핑으로 받는다.
+"""
+import re
+from typing import Any
+
+from src.domain.base import Clock
+from src.domain.envelope import ProbeResult
+
+# action 이름 → (어댑터 속성, 메서드, 필수 인자, 선택 인자)
+ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
+    # `path`는 값 **안의** 자리(`record[0].data`)다 — 큰 값을 잘라 보여 주는 대신 고른 부분을 통째로 준다
+    # (`domain/jsonpath.py`). 읽기를 좁히는 것이지 쓰기 표면이 아니다(`mongo.find`의 `projection`과 같다).
+    "redis.get":           ("redis", "get",           ("key",),                ("path",)),
+    "redis.scan":          ("redis", "scan",          ("pattern",),            ()),
+    "redis.ttl":           ("redis", "ttl",           ("key",),                ()),
+    "mongo.find":          ("mongo", "find",          ("collection", "filter"),
+                            ("sort", "limit", "projection")),
+    "mongo.count":         ("mongo", "count",         ("collection", "filter"), ()),
+    # 발견용. 인자가 없는 것이 정상이다 — "이 DB에 무엇이 있나"에는 물을 것이 없다.
+    "mongo.list_collections": ("mongo", "list_collections", (), ()),
+    "kafka.list_topics":      ("kafka", "list_topics",      (), ()),
+    "kafka.group_offsets": ("kafka", "group_offsets", ("group",),              ()),
+    "kafka.tail":          ("kafka", "tail",          ("topic",),              ("limit",)),
+    # `params`가 두 번 나오는 것은 포트 시그니처 그대로다 — `query(entry, params)`.
+    # 이름을 바꾸면 표와 포트가 갈라지고, 갈라진 것을 아무도 안 본다.
+    "rest.query":          ("rest",  "query",         ("entry", "params"),     ()),
+    # ── 대상 코드(11a). **레포·커밋·법인은 여기 인자에 없다** — 리드가 고를 값이
+    # 아니기 때문이다. 리드가 SHA를 대게 하면 모르는 것을 지어내고, 우리는 떠 있지도
+    # 않은 코드를 읽는다. 서비스 이름만 받고 나머지는 `DeployedCode`가 정한다.
+    "code.services":       ("code",  "services",      (),                      ()),
+    # 이름이 사는 config는 **층으로 갈린다.** 하나만 읽으면 덮어쓴 값을 사실로
+    # 단정하므로, 이 action은 층 전부를 합친 결과를 돌려준다(`code.read`와 다르다).
+    # `key`는 합친 설정 안의 자리(`infra.kafka.consumer`)다. 통째 덤프는 사내 실측에서 첫 키에서 잘렸다 —
+    # 상한을 넘는 덤프는 키 지도만 오고, 리드는 그중 하나를 `key`로 골라 통째로 받는다.
+    "code.config":         ("code",  "config",        ("service",),            ("key",)),
+    "code.grep":           ("code",  "grep",          ("patterns",),           ("service",)),
+    # `path`는 **`code.grep`이 돌려준 경로**다. 지어내는 자리가 아니다.
+    # `offset`·`limit`은 줄 범위(1부터)다. 파일은 400줄에서 잘리는데 핸들러는 그 뒤에 있었다(사내 실측) — 범위를
+    # 대면 그 줄들은 자르지 않는다. `grep`이 돌려준 `경로:줄번호`가 `offset`의 출처다.
+    "code.read":           ("code",  "read",          ("service", "path"),     ("offset", "limit")),
+    # 흐름 그래프(11c)의 이웃. `name`은 브리핑의 <데이터 흐름>이나 증거에 나온 이름 그대로다.
+    # 그래프가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
+    "code.flow":           ("code",  "flow",          ("name",),               ()),
+    # 끝점에서 자원까지의 함수 사슬(11b). `target`은 등재 항목의 path나 증거에 나온 path 그대로다.
+    # 조사 중에 추적하지 않는다 — `code graph`가 남긴 것을 읽는다. 그래프가 없으면 목록에 안 나온다.
+    # 인자 이름이 `endpoint`인 이유: 예비 측정에서 대역이 `target`에 서비스 이름을 넣었다 — 목록 한 줄이 리드가
+    # 보는 시그니처 전부라, 이름이 곧 설명이다.
+    "code.trace":          ("code",  "trace",         ("endpoint",),           ()),
+    # 역질문(11d) — "이 함수를 누가 부르나(진입점까지)", "이 컬렉션·토픽·키를 누가 쓰고 읽나". `name`은 code.trace·
+    # code.uses 출력이나 증거에 나온 이름 그대로(함수는 `Class.method` 끝부분이면 된다). 여럿이면 코드가 고르지
+    # 않고 후보를 돌려준다 — 그중 하나로 다시 낸다. 심볼 인덱스가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
+    "code.callers":        ("code",  "callers",       ("name",),               ()),
+    "code.uses":           ("code",  "uses",          ("name",),               ()),
+    # ── 원천 재집계(11b 3b). `expect`는 앞선 증거 **안의 값 위치**(`{"evidence": "t-1.e1", "path":
+    # "items[0].n"}`)다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다. 실행기
+    # (`ProbeRunner`)가 가로채 자기가 보관한 원본에서 값을 꺼낸다. `_sanitize_task`가 `expect.evidence`를
+    # 입력 증거로 강제해 그 증거가 생긴 뒤에만 돈다. mongo 읽기 포트로만 센다 — 로직을 실행하지 않는다.
+    "recompute.count":     ("recompute", "count",     ("collection", "filter", "expect"), ()),
+    "recompute.sum":       ("recompute", "sum",       ("collection", "filter", "field", "expect"), ()),
+}
+
+
+# 인자를 받지 않는 action들 — "이 DB에 무엇이 있나"에는 물을 것이 없다.
+# 목록으로 두는 이유: "필수 인자가 없다"가 실수인지 의도인지 표가 말해야 한다.
+NO_ARGS = frozenset({"mongo.list_collections", "kafka.list_topics",
+                     "code.services"})
+# **이름을 찾는** 읽기 — 결과가 이름 목록이다. 실행기가 그 목록을 `TaskOutcome.found`에 구조로 남겨, 코드가 선언된
+# 이름과 대조한다(R2-2b-2). 값은 그 이름의 종류(흐름 그래프의 노드 type).
+DISCOVERY_ACTIONS = {"redis.scan": "rediskey", "mongo.list_collections": "collection", "kafka.list_topics": "topic"}
+
+# **대상에서 찾아야 아는 이름**이 들어가는 인자. 여기 적힌 인자에 값을 대려면
+# 먼저 `list_collections`·`list_topics`·`scan`으로 찾았어야 한다([decisions ⑮]).
+#
+# 안 찾고 찍으면 빈 결과가 오는데, 그건 "데이터가 없다"가 아니라 "질문을 잘못했다"다.
+# 둘은 완전히 다른 사실이고 **판정이 둘을 구별 못 하면 없는 이상을 보고한다.**
+# `nodes._accept_tasks`가 이 목록으로 "찾지 않고 댄 이름"을 기록한다.
+#
+# `entry`가 빠진 것은 우연이 아니다 — REST 등재 항목은 **config가 선언**하므로
+# 찾을 것이 없다. `pattern`도 빠진다 — `*`가 정상적인 값이라 "찾았는가"를 물을 수 없다.
+DISCOVERED_ARGS = frozenset({"collection", "topic", "key", "group"})
+# **읽기를 좁히는** 인자 — 이게 있으면 리드가 "전부 말고 이 자리만"을 골라 낸 것이다. 실행기는 그 결과를 증거 한 건의
+# 예산이 아니라 증거 블록 전체 예산까지 싣는다(`runner_probe`) — 좁힌 결과가 또 잘리면 좁힌 뜻이 없다. `filter`·
+# `limit`·`projection`은 여기 없다: 좁혀도 문서 목록이라 한 건이 통째로 보이는 것이 요점이지 전부가 아니다.
+NARROWING_ARGS = frozenset({"path", "key", "offset"})
+
+
+def narrowed(action: str, params: dict) -> bool:
+    """이 태스크가 **좁혀서** 낸 읽기인가 — 그 action의 **선택** 인자 중 좁히는 것이 왔을 때만. 필수 인자는 안 센다:
+    `redis.get`의 `key`는 키 이름이고 `code.config`의 `key`는 좁히는 자리다 — 이름이 같아도 뜻이 다르다."""
+    spec = ACTIONS.get(action)
+    return bool(spec and NARROWING_ARGS & set(spec[3]) & set(params))
+_TEMPLATE_HEAD = re.compile(r"([A-Za-z0-9_.:\-]{3,})\{")
+
+
+def name_known(value: str, seen: str) -> bool:
+    """리드가 댄 이름이 **찾은 것**인가 — 본 텍스트(증거·브리핑)에 그대로 있거나, 거기 있는
+    템플릿(`hb:{service}`)의 `{` 앞부분으로 시작하면 찾은 것이다. 3b 측정에서 `hb:sink`가 여섯 판
+    전부 "찾지 않고 이름을 댔다"로 찍혔다 — 템플릿을 채운 값은 지어낸 게 아니다."""
+    if value in seen:
+        return True
+    return any(value.startswith(head) for head in _TEMPLATE_HEAD.findall(seen))
+
+
+def action_problem(action: str, params: dict) -> str | None:
+    """등재·인자 검사. 통과하면 None. **소켓에 나가기 전에 부른다.**"""
+    spec = ACTIONS.get(action)
+    if spec is None:
+        return f"미등재 action — {action} (등재: {', '.join(sorted(ACTIONS))})"
+    _, _, required, optional = spec
+    unknown = sorted(set(params) - set(required) - set(optional))
+    if unknown:
+        return f"{action}이 모르는 인자 — {', '.join(unknown)}"
+    missing = [name for name in required if name not in params]
+    if missing:
+        return f"{action}에 필요한 인자가 없다 — {', '.join(missing)}"
+    return None
+
+
+def describe(action: str, params: dict) -> str:
+    """증거와 로그에 남는 한 줄 — **무엇을 물었는가**.
+
+    응답만 보관하면 "0건"이 "현장이 멈췄다"인지 "질문을 잘못 던졌다"인지 구별할 수 없다.
+    """
+    rendered = " ".join(f"{k}={v!r}" for k, v in sorted(params.items()))
+    return f"{action} {rendered}".strip()
+
+
+async def run_action(adapters: Any, action: str, params: dict, *,
+                     clock: Clock) -> ProbeResult:
+    """등재된 읽기 하나를 수행한다. **절대 raise하지 않는다.**"""
+    source = describe(action, params)
+    problem = action_problem(action, params)
+    if problem is not None:
+        return ProbeResult.failed(problem, source=source, clock=clock)
+
+    adapter_name, method_name, required, optional = ACTIONS[action]
+    adapter = getattr(adapters, adapter_name, None)
+    if adapter is None:
+        return ProbeResult.failed(
+            f"{adapter_name} 어댑터가 없다 — config가 선언하지 않았다",
+            source=source, clock=clock)
+
+    # 포트가 `find(collection, filter, *, limit=...)`처럼 키워드 전용을 쓰므로
+    # 전부 키워드로 넘길 수 없다 — 이름이 맞아도 TypeError가 난다.
+    args = [params[name] for name in required]
+    kwargs = {name: params[name] for name in optional if name in params}
+    try:
+        return await getattr(adapter, method_name)(*args, **kwargs)
+    except Exception as exc:                                        # noqa: BLE001
+        # 포트는 던지지 않기로 돼 있다. 그래도 잡는 이유: 계약을 어기는 구현 하나가
+        # 순찰 라운드나 조사 라운드 전체를 지우면 안 된다.
+        return ProbeResult.failed(f"호출이 던졌다 — {type(exc).__name__}: {exc}",
+                                  source=source, clock=clock)
+
+
+def role_for(action: str) -> str:
+    """태스크의 `role`은 **코드가 action에서 정한다** — 리드가 정하지 않는다.
+
+    `role`은 실행 배선(누가 이 태스크를 도는가)이고, 지금 등재된 읽기는 전부 프로브
+    실행기가 돈다. 리드에게 이 값을 맡겼더니 조금 나은 모델이 태스크마다 `log_reader`
+    같은 이름을 지어 넣었고, 닫힌 어휘라 **답 전체가 거부**됐다 — 사내 네 번째
+    트레이스에서 integrate 네 라운드 중 셋이 그렇게 날아가고 재시도가 다른 계획을 냈다.
+    11b부터 action별로 갈린다 — 레인은 "누가 골랐나"가 아니라 **어떤 종류의 증거인가**다
+    (decisions ⑰): `code.*`는 코드 추적, `recompute.*`는 재계산 대조, 나머지는 데이터 읽기.
+    셋 다 같은 실행기가 돈다.
+    """
+    if action.startswith("code."):
+        return "code_tracer"
+    if action.startswith("recompute."):
+        return "recompute_verifier"
+    return "data_prober"
+

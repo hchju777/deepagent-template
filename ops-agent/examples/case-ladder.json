@@ -1,0 +1,142 @@
+{
+  "_설명": [
+    "`python -m src case dryrun --plan examples/case-ladder.json --stub-seeds examples/stub-seeds.json`.",
+    "사다리 — ① 판정이 본 REST 읽기로 증상을 재현하고 ② 그 끝점을 만드는 코드의 사슬을 보고(code.trace)",
+    "③ 그 코드가 읽는 컬렉션에서 화면의 수를 다시 센다(recompute.count) ④ 그 컬렉션에 누가 쓰나(code.uses)",
+    "⑤ 쓰는 함수를 누가 부르나(code.callers). 다섯은 한 라운드에 하나씩 돈다 —",
+    "각 칸의 입력 증거가 앞 칸이 만든 것이라 select 게이트가 그때까지 붙잡는다.",
+    "seeds의 배지는 0이고 원천에는 alarm 문서가 둘이다 — ③이 그 불일치를 기계의 증거로 남기고 ④⑤가 쓰는 쪽으로 간다.",
+    "⑥ 다섯 칸이 끝나면 conclude가 이 `verdict`를 내고 verify가 인용(t-3.e1·t-4.e1 — 이 대본이 만든 증거)을 검사한다 — 대본에서도 판정과 검증이 실제로 돈다."
+  ],
+  "symptom": "L1 Alarm 배지가 0인데 현장에는 알람이 있다",
+  "hypotheses": [
+    {
+      "id": "h-1",
+      "statement": "끝점이 읽는 컬렉션에 이 창의 알람 문서가 없다"
+    },
+    {
+      "id": "h-2",
+      "statement": "컬렉션에는 있는데 끝점의 집계가 다른 것을 센다"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t-1",
+      "goal": "증상 재현 — 배지를 그대로 읽는다",
+      "role": "data_prober",
+      "priority": 10,
+      "action": "rest.query",
+      "params": {
+        "entry": "summary_badge",
+        "params": {}
+      }
+    },
+    {
+      "id": "t-2",
+      "goal": "그 끝점을 만드는 코드의 사슬",
+      "role": "code_tracer",
+      "priority": 20,
+      "action": "code.trace",
+      "params": {
+        "endpoint": "/summary/badge"
+      },
+      "input_evidence_ids": [
+        "t-1.e1"
+      ]
+    },
+    {
+      "_설명": "expect는 숫자가 아니라 **증거 안의 위치**다 — 실행기가 t-1의 원본에서 꺼내 원천의 수와 대조한다.",
+      "id": "t-3",
+      "goal": "원천에서 alarm 수를 다시 세어 배지와 대조",
+      "role": "recompute_verifier",
+      "priority": 30,
+      "action": "recompute.count",
+      "params": {
+        "collection": "alarm_events",
+        "filter": {
+          "result": "alarm"
+        },
+        "expect": {
+          "evidence": "t-1.e1",
+          "path": "response.items[0].alarm"
+        }
+      },
+      "input_evidence_ids": [
+        "t-2.e1"
+      ]
+    },
+    {
+      "id": "t-4",
+      "goal": "그 컬렉션에 누가 쓰나 — 상류의 쓰는 함수와 진입점",
+      "role": "code_tracer",
+      "priority": 40,
+      "action": "code.uses",
+      "params": {
+        "name": "alarm_events"
+      },
+      "input_evidence_ids": [
+        "t-3.e1"
+      ]
+    },
+    {
+      "_설명": "name은 ④의 답에 나온 쓰는 함수 그대로다 — 리드가 지어내는 자리가 아니다.",
+      "id": "t-5",
+      "goal": "그 쓰는 함수를 누가 부르나 — 진입점까지",
+      "role": "code_tracer",
+      "priority": 50,
+      "action": "code.callers",
+      "params": {
+        "name": "sink.writers.alarm_sink.AlarmSink.write"
+      },
+      "input_evidence_ids": [
+        "t-4.e1"
+      ]
+    }
+  ],
+  "rounds": [
+    {
+      "decision": "continue"
+    },
+    {
+      "decision": "continue"
+    },
+    {
+      "decision": "continue"
+    },
+    {
+      "decision": "continue"
+    },
+    {
+      "decision": "continue"
+    }
+  ],
+  "verdict": {
+    "_설명": "LLM 자리의 대본이다. 인용은 이 대본의 태스크가 만든 증거 id여야 verify를 지난다 — 없는 id를 적어 보면 강등되는 것을 볼 수 있다.",
+    "verdict_type": "data_loss",
+    "confidence": "medium",
+    "root_cause": {
+      "component": "sink",
+      "evidence_ids": [
+        "t-3.e1",
+        "t-4.e1"
+      ],
+      "relation": "원천에는 alarm 문서가 둘인데 배지는 0 — 컬렉션에 쓰는 유일한 함수가 sink의 쓰기이고 그 뒤 집계가 안 따라왔다"
+    },
+    "alternates": [
+      {
+        "component": "api",
+        "evidence_ids": [
+          "t-2.e1"
+        ],
+        "confidence": "low",
+        "relation": "끝점의 집계가 다른 것을 셀 가능성 — 사슬은 같은 컬렉션을 읽어 재집계 불일치가 설명되지 않는다"
+      }
+    ],
+    "contributing": [],
+    "recommendations": [
+      "sink의 쓰기 이후 배지 집계가 갱신되는 경로를 확인한다"
+    ],
+    "caveats": [],
+    "narrative": "끝점은 컬렉션의 alarm 수를 세어 배지를 만드는데, 원천 재집계는 2이고 배지는 0이다. 컬렉션에 쓰는 함수는 sink 하나이고 그 함수를 부르는 곳이 없다 — 쓰기 이후 집계가 갱신되지 않은 것이 증상이다."
+  }
+}
