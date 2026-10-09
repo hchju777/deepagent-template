@@ -38,6 +38,9 @@ DEFAULT_TAIL = 10
 # tail이 레코드를 모으는 데 쓸 시간. `getmany`는 레코드가 조금이라도 오면 바로 돌아오므로(한 번에 limit을 채우지 않는다 —
 # 사내 `--limit 300`이 2건을 돌려줬다) 다 채우거나 더 안 올 때까지 돈다. 이 상한은 브로커가 느릴 때 명령이 매달리지 않게.
 TAIL_WAIT_S = 15.0
+# 빈 배치를 몇 번 연속으로 받으면 그만 기다리나. 한 번으로는 안 된다 — 새 컨슈머의 첫 fetch는 1초를 넘기기 쉬워 사내 측정 #3에서
+# 파티션 하나에 0건이 나왔다. 셋이면 3초다(받을 것이 끝에 닿으면 그 전에 끝난다).
+EMPTY_POLLS = 3
 
 
 class RealKafkaInspector(KafkaInspectorPort):
@@ -188,21 +191,28 @@ class RealKafkaInspector(KafkaInspectorPort):
 
             # 끝에서 뒤로 간 자리부터 끝까지가 받을 수 있는 전부다 — 그만큼 모이거나, 더 안 오거나, 시간이 다할 때까지.
             wanted = min(limit, sum(ends[tp] - max(begins[tp], ends[tp] - per_partition) for tp in tps))
+            # `wanted`를 다 받았다 = 모든 파티션이 끝 오프셋에 닿았다(끝에서 뒤로 간 자리부터 차례로 읽으므로).
             records: list = []
+            empties = 0
             deadline = time.monotonic() + TAIL_WAIT_S
             while len(records) < wanted and time.monotonic() < deadline:
                 batches = await consumer.getmany(timeout_ms=1000, max_records=wanted - len(records))
                 got = [record for rs in batches.values() for record in rs]
                 if not got:
-                    break
+                    empties += 1
+                    if empties >= EMPTY_POLLS:
+                        break
+                    continue
+                empties = 0
                 records.extend(got)
             messages = [_render(record) for record in records]
             messages.sort(key=lambda m: (m["partition"], m["offset"]))
             short = len(messages) < wanted
+            why = f"빈 응답 {EMPTY_POLLS}번" if empties >= EMPTY_POLLS else f"{TAIL_WAIT_S:.0f}초"
             return ProbeResult.succeeded(
                 {"topic": actual, "messages": messages[:limit]},
                 source=source, clock=self._clock,
-                truncated_reason=(f"{TAIL_WAIT_S:.0f}초 안에 {len(messages)}건만 — 더 있을 수 있다" if short
+                truncated_reason=(f"{why} 뒤 {len(messages)}건만(받을 수 있던 것 {wanted}건) — 더 있을 수 있다" if short
                                   else f"끝에서 {limit}건만" if len(messages) >= limit else None))
         except Exception as exc:                                   # noqa: BLE001
             return ProbeResult.failed(f"{type(exc).__name__}: {exc}",

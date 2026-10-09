@@ -2070,7 +2070,21 @@ CASES += [
   ["tests/application/test_trace_digest.py::test_요약_끝줄에_429_대기_근거별_횟수가_붙는다"]),
 ]
 
-assert len(CASES) >= 505, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-4 ③ — kafka tail은 빈 배치 한 번에 멈추지 않는다 ──
+KIT = "tests/infrastructure/test_kafka_inspector.py"
+CASES += [
+ ("kafka tail이 첫 빈 배치에 멈춘다", KI,
+  "                    if empties >= EMPTY_POLLS:\n                        break", "                    if True:\n                        break",
+  [f"{KIT}::test_tail은_첫_배치가_비어도_멈추지_않는다"]),
+ ("kafka tail이 빈 배치가 이어져도 안 멈춘다", KI,
+  "                    if empties >= EMPTY_POLLS:\n                        break", "                    if False:\n                        break",
+  [f"{KIT}::test_tail은_빈_배치가_연속_세_번이면_멈추고_모자란다고_적는다"]),
+ ("kafka tail이 받은 뒤 빈 횟수를 안 지운다", KI,
+  "                empties = 0\n                records.extend(got)", "                records.extend(got)",
+  [f"{KIT}::test_tail은_받는_사이사이_빈_배치는_연속으로_세지_않는다"]),
+]
+
+assert len(CASES) >= 508, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
