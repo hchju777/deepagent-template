@@ -183,3 +183,13 @@ def test_stream_기본값은_chat_model이면_켬_http면_끔이고_명시가_�
     assert LlmConfig(**GATEWAY, stream=False).stream is False and "스트리밍" not in LlmConfig(**GATEWAY, stream=False).describe()
     with pytest.raises(ValidationError):
         LlmConfig(**GATEWAY, adapter="http", stream=True)
+
+
+def test_스트림_유휴_상한은_양수이고_스트리밍일_때_describe에_보인다():
+    """사내 측정 #4: 리드 턴이 조각 520개 뒤 120초(langchain-openai의 기본 유휴 상한) 멈췄다. 리드 턴은 보통 15초 안이라
+    역할마다 짧게 줄 수 있어야 한다. 안 적으면 라이브러리 기본 그대로(None)."""
+    assert LlmConfig(**GATEWAY).stream_idle_s is None
+    assert "· 유휴 30s" in LlmConfig(**GATEWAY, stream=True, stream_idle_s=30).describe()
+    assert "유휴" not in LlmConfig(**GATEWAY, stream=True).describe()
+    with pytest.raises(ValidationError, match="stream_idle_s"):
+        LlmConfig(**GATEWAY, stream_idle_s=0)

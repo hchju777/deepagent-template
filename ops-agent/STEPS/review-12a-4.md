@@ -29,7 +29,8 @@ GBM 단위가 되어(`code graph --gbm mx` 한 번, 사내 203초) 실제 사이
 
   ```json
   "llm_roles": {
-    "lead": {"model": "gauss-o-flash", "model_id": "339", "max_tokens": 1500, "expect_reported_model": "openai/gpt-oss-120b"},
+    "lead": {"model": "gauss-o-flash", "model_id": "339", "max_tokens": 1500, "expect_reported_model": "openai/gpt-oss-120b",
+             "stream_idle_s": 30},
     "conclude": {"model": "gauss-o-think-beta", "model_id": "581", "timeout_s": 600}
   }
   ```
@@ -116,3 +117,10 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - 종료 때 10054 트레이스백이 남는가.
 - `peek kafka --topic <원천토픽> --limit 300`의 건수와 걸린 초.
 
+## R2-5 뒤 측정 #5에서 더 볼 것 (10-09)
+
+- 같은 두 케이스, 같은 설정(`min_interval_s` 15). `llm_roles.lead`에 `"stream_idle_s": 30`을 더한다(위 JSON) — 리드 턴은 보통 15초
+  안인데 측정 #4에서 조각 520개 뒤 120초를 멈춰 기다렸다. `llm describe`의 리드 줄에 `· 유휴 30s`가 보이면 붙은 것이다.
+- 요약 끝줄 `스트림 끊김: N회 — 받은 글로 읽음 K · 다시 물음 M`과 `전송 실패: N회 — 사유`(없으면 안 찍힌다). 끊김이 있었으면 그
+  트레이스 파일의 `스트림:` 줄 한 줄과 날것 응답의 **마지막 40자**(끝이 `}`로 닫혔는지 — 끝 표시만 빠진 답이었나를 가른다).
+- stderr에 `stream_chunk_timeout fired` 줄이 더는 안 찍히는가.

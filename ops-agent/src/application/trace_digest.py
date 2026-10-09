@@ -40,6 +40,9 @@ _VERDICT = re.compile(r"^결과: (.+)$", re.M)
 _LATENCY = re.compile(r"^응답: ([\d.]+)초$", re.M)
 _WAIT = re.compile(r"^대기: ([\d.]+)초", re.M)
 _WAIT_SOURCE = re.compile(r"^대기: [\d.]+초\(429·([^)]+)\)", re.M)
+_STREAM = re.compile(r"^스트림: (.+)$", re.M)
+_NO_REPLY = "(응답 없음"
+_FAILED = "**못 읽었다** — "
 _REASON_CHARS = 160
 _SECRETISH = re.compile(r"pass|secret|token|credential|pwd", re.I)
 _VALUE_CHARS = 40
@@ -56,6 +59,8 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
     last_added: set[str] = set()
     waits: list[float] = []
     sources: dict[str, int] = {}
+    failures: dict[str, int] = {}
+    cuts = {"받은 글로 읽음": 0, "다시 물음": 0}
     for name, text in sorted(entries):
         match = _FILE.match(name)
         if match is None:
@@ -79,8 +84,17 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
             found = _WAIT_SOURCE.search(text)
             if found:
                 sources[found.group(1)] = sources.get(found.group(1), 0) + 1
+        # 호출 자체의 실패(답이 없다)와 조각을 받은 뒤의 끊김 — 사내 측정 #4: 400 한 번 뒤 재시도로 성공, 리드 턴이 조각 뒤
+        # 멈춤. 라운드 줄 속에 묻히면 셀 수 없어 끝에 한 줄씩 모은다.
+        stream = _STREAM.search(text)
+        verdict = _verdict(text)
+        if stream:
+            cuts["받은 글로 읽음" if "읽었다" in stream.group(1) else "다시 물음"] += 1
+        elif reply.startswith(_NO_REPLY) and verdict.startswith(_FAILED):
+            reason = verdict[len(_FAILED):]
+            failures[reason] = failures.get(reason, 0) + 1
         lines += _round(round_no, node, prompt, reply, asked,
-                        attempt=attempts[(round_no, node)], verdict=_verdict(text),
+                        attempt=attempts[(round_no, node)], verdict=verdict,
                         latency=_latency(text), waited=waited, brief=brief)
         last_added = set(asked) - before
     if len(lines) == 1:
@@ -89,6 +103,11 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
         # 브리프의 "429 횟수와 대기 초" — 라운드마다 찾지 않아도 되게 끝에 합계 한 줄.
         why = " · 근거 " + " · ".join(f"{k} {v}" for k, v in sorted(sources.items())) if sources else ""
         lines.append(f"\n429 대기: 합계 {sum(waits):.0f}초 · 호출 {len(waits)}회{why}")
+    if failures:
+        lines.append(f"전송 실패: {sum(failures.values())}회 — "
+                     + " · ".join(f"{why}{f' ×{n}' if n > 1 else ''}" for why, n in failures.items()))
+    if any(cuts.values()):
+        lines.append(f"스트림 끊김: {sum(cuts.values())}회 — " + " · ".join(f"{k} {v}" for k, v in cuts.items()))
     return lines
 
 

@@ -55,6 +55,9 @@ class ChatModelAdapter(LlmPort):
                 extra["http_socket_options"] = ()
             if self._cfg.max_tokens is not None:
                 extra["max_tokens"] = self._cfg.max_tokens
+            # 유휴 상한도 같은 확인 — 사내 langchain-openai에 그 필드가 없으면 config가 말없이 무시된다(기본 상한 그대로).
+            if self._cfg.stream_idle_s is not None and "stream_chunk_timeout" in ChatOpenAI.model_fields:
+                extra["stream_chunk_timeout"] = self._cfg.stream_idle_s
             self._http = httpx.Client(verify=verify, trust_env=trust_env)
             self._ahttp = httpx.AsyncClient(verify=verify, trust_env=trust_env)
             self._client = ChatOpenAI(
@@ -99,6 +102,7 @@ class ChatModelAdapter(LlmPort):
         started = self._ticker()
         messages = [{"role": "user", "content": prompt}]
         first = None
+        parts: list[str] = []
         # 호출마다 넘긴다 — langchain-openai는 호출 kwargs를 요청 본문에 그대로 합친다(`_get_request_payload`). 모델 객체에
         # 박으면 자유 질문(`llm ask`)까지 JSON을 강요한다.
         fmt = response_format(self._cfg.response_format, schema)
@@ -106,7 +110,7 @@ class ChatModelAdapter(LlmPort):
         try:
             if self._cfg.stream:
                 # 조각을 모아 한 답으로 — 호출부는 스트리밍을 모른다. 첫 조각 시각은 유휴 상한을 보는 재료다.
-                parts, metadata = [], {}
+                metadata = {}
                 async for chunk in self.client().astream(messages, **extra):
                     if first is None:
                         first = round(self._ticker() - started, 3)
@@ -118,8 +122,9 @@ class ChatModelAdapter(LlmPort):
                 metadata = getattr(message, "response_metadata", None) or {}
                 text = str(getattr(message, "content", message) or "")
         except Exception as exc:                                   # noqa: BLE001
+            # 받은 조각은 버리지 않는다 — 끝 표시만 빠진 답일 수 있다(사내 측정 #4). 쓸지는 답을 아는 쪽(`lead.ask_json`)이 정한다.
             failed = LlmReply(status="error", asked_at=self._clock(), model=self._cfg.model,
-                              error=f"{type(exc).__name__}: {exc}",
+                              error=f"{type(exc).__name__}: {exc}", partial_text="".join(parts),
                               latency_s=round(self._ticker() - started, 3), first_token_s=first)
             return failed, _quota_info(exc)
         return LlmReply(status="ok", asked_at=self._clock(), model=self._cfg.model,

@@ -43,6 +43,9 @@ class LlmReply(StrictModel):
     rate_limited: int = 0
     # 그 대기의 근거 — `nextAccessTime` · `Retry-After` · `기본값`. 기본값이면 게이트웨이의 시각을 못 읽은 것이다(사내 측정 #3).
     rate_source: str = ""
+    # 스트림이 끊기기 전까지 받은 글 — 실패한 답에만. 사내 측정 #4에서 리드 턴이 조각 520개 뒤 멈췄는데 트레이스엔
+    # "(응답 없음)"뿐이라 끝 표시만 빠진 답이었는지 알 수 없었다. `text`와 따로 둔다 — `text`는 성공한 답이다.
+    partial_text: str = ""
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):
@@ -50,6 +53,8 @@ class LlmReply(StrictModel):
             raise ValueError("status=error면 error 원인이 필요하다")
         if self.status == "ok" and self.error:
             raise ValueError("status=ok면 error가 없어야 한다")
+        if self.status == "ok" and self.partial_text:
+            raise ValueError("partial_text는 실패한 답에만 — 성공한 답은 text다")
         return self
 
 

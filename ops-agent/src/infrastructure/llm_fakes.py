@@ -53,6 +53,8 @@ class ScriptedAdapter(LlmPort):
             # 테스트가 잘못 쓰인 것이고, 그건 조용히 넘어가면 안 된다.
             raise RuntimeError("대본 소진 — 예약된 응답보다 호출이 많다")
         reply = self._replies.pop(0)
+        if isinstance(reply, LlmReply):
+            return reply                     # 어댑터가 만든 모양 그대로 — 끊긴 스트림(`partial_text`) 같은 것
         if isinstance(reply, Exception):
             return LlmReply(status="error", asked_at=self._clock(), model=self._model,
                             error=f"{type(reply).__name__}: {reply}")

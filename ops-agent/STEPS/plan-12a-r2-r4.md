@@ -136,6 +136,27 @@ integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 �
 
 측정 #4: 같은 두 케이스, 같은 `llm_roles` + `min_interval_s`. 브리프에 판정 턴 JSON 실패 수, 고정부/증거 글자 수, 429 대기 근거.
 
+## R2-5 — 측정 #4(10-09) 뒤 (사내 결론 P0 1·2, P1 3·5·6)
+
+측정 #4: 판정 턴 JSON 실패 0(30~76초), 리드 JSON 실패 0, 두 케이스 5분 안(3분 27초·4분 26초), 429는 c-2만 2회 합계 30초
+(근거 `nextAccessTime` — 시각을 읽었다), 10054 없음, 고정부 5.6~6.0K, kafka tail 300에 183/250/258건(15초 상한을 봉투가
+말함, 접속만 약 40초). 남은 것: c-1 r1에서 **스트림이 조각 520개 뒤 120초 멈춤** → `StreamChunkTimeoutError`(langchain-openai의
+`stream_chunk_timeout`, 기본 120초) → 메시지의 "timeout" 때문에 시간 초과로 분류돼 재시도 없이 llm_error → 1라운드 판정
+(c-1 판정은 그래서 정확도의 재료가 못 된다). c-2 강등 출력에 `후보 external [low]`가 남았다 — verify 규칙 3(서비스 이름)을
+강등이 안 따른다(R2-3 ⑥에서 규칙만 넣었다). recompute의 `expect.path`가 첫 행 — **우리 예시가 `items[0]`**이다. 흐름 블록이
+frame 0.7K → integrate 1.5K.
+
+| 순서 | 항목 | 할 것 | 자리 |
+|---|---|---|---|
+| ① ✅ | P0 1 + P1 5 | (c) 멈춘 스트림이 받은 글을 답에 남긴다(트레이스 날것). (a) 조각을 받은 뒤 멈춘 것은 시간 초과가 아니다 — 받은 글이 답 모델로 검증되면 그대로 쓰고(끝 표시만 빠진 답), 아니면 같은 프롬프트로 1회 재시도. 조각 0개 멈춤은 지금처럼 시간 초과. (b) `llm.stream_idle_s`(→ `stream_chunk_timeout`, 필드가 있을 때만) — 브리프 `llm_roles.lead`에 30. (d) stderr의 그 경고 레코드만 거른다(`source == stream_chunk_timeout`). P1 5: 요약에 전송 오류 재시도 횟수와 사유 | `llm_chat_model`, `domain/llm`, `lead.ask_json`, `schema_llm`, `__main__`, `trace_digest`, 브리프 |
+| ② | P0 2 | 강등이 component 문제 다리도 뺀다(최상위면 inconclusive), caveat에 무엇을 뺐는지. 판정 프롬프트 한 줄: component는 서비스 이름 — 원인이 상류 데이터면 그것을 만드는 서비스, 토폴로지 밖이면 `verdict_type: external`(사내 이름 꼴은 안 넣는다 ⑮) | `nodes.demote_verdict`, `investigate-conclude.md` |
+| ③ | P1 3 | recompute 예시의 `expect.path`를 대상 행 번호로(코드가 앎). 실행 전 검사: `expect.path`가 문서 목록 행(`[n]`)을 가리키면 그 행이 케이스 target 값을 다 담는지 — 아니면 거부 + 대상 행 경로 안내(규율 3의 연장). 케이스 블록에 `대상 행: response[n]` | `briefing`, `nodes._sanitize_task` 근처, `runner_probe.focus_of` |
+| ④ | P1 6 | **재현 먼저.** 가설: 끝점 줄은 예산 앞에 고정인데 씨앗을 증거 본문에서도 찾아, 증거에 나온 다른 끝점들이 고정 줄로 예산을 비켜 간다. 맞으면 고정은 접수 끝점 하나만 | `flow.flow_text`, `briefing.flow_block` |
+
+P1 4("선언됐는데 없는 키"가 무관한 키로 보냄)는 **R3로** — "대상 키는 있다"를 말하려면 대상 키를 알아야 하고 그게 입구 매핑이다.
+측정 #5: 같은 두 케이스, 같은 설정(`min_interval_s` 15, `llm_roles.lead.stream_idle_s` 30). 멈춤이 또 나면 남은 글의 길이·끝
+모양과 "받은 글로 읽었다/재시도" 중 무엇이었는지, 강등 출력의 component, recompute 사실 줄, 요약의 흐름 글자 수.
+
 ## R3 — 정확도: 선언형 입구 매핑과 frame 전 읽기 (지시서 "최종" 3-1·3-2·3-3(b)(c)·4, 사내 정보 6)
 
 사내 어휘는 리포에 못 들어간다(⑮). 사슬 — 대상 행의 링크 필드 → 이름 토큰 → api config 경로(`use`·설정 블록) → 키 설정
@@ -143,7 +164,8 @@ integrate 프롬프트(7195자)의 증거에 `response: 18건 · … · 대상 �
 사슬이 닫히면 매핑 키와 확인 결과를 케이스 블록에 싣고 그 키 읽기(`redis.get`, 필요하면 `path`)를 **frame 전에** 코드가 돌려
 증거로 싣는다. 끊길 때만 후보를 리드에게. frame이 낸 태스크는 폭과 무관하게 전부 돈다(생성 라운드 → 우선순위 순).
 verify (b) 인용한 설정 항목이 매핑된 것인지, (c) 인용 증거에 대상 항목의 반대 사실(`use:true`)이 있으면 강등.
-픽스처: `source-missing`(c-1형), `source-blank`(c-2형), `pipeline-off`는 이름이 비슷한 `use:false` 미끼. 측정 #3에서 더해진 것:
+측정 #4에서 더해진 것: "선언됐는데 없는 키" 사실 줄이 대상 키의 유무를 먼저 말한다(매핑이 대상 키를 안다 —
+사내 c-2는 대상 키가 있는데 목록 첫 키를 쫓았다). 픽스처: `source-missing`(c-1형), `source-blank`(c-2형), `pipeline-off`는 이름이 비슷한 `use:false` 미끼. 측정 #3에서 더해진 것:
 `code.read`에 "그 줄이 든 함수 전체" 모드(심볼 인덱스의 시작·끝 줄 — 리드가 `limit=20`을 골라 필터 로직을 못 봤다), 파이프라인
 클래스 이름으로 쓰는 쪽 엣지와 입력 키 목록(R3-1 (a)(c)). 8-3 숫자는 역할 지정
 기준(리드 턴 ≤15초, 판정 ≤600초 stream, 케이스 ≤5분 — 429 대기 별도 표시).

@@ -718,3 +718,32 @@ def test_트레이스_대기_줄에_근거가_붙는다(tmp_path):
     trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
     trace("integrate", 1, "물음", "답", None, 12.5, 30.0, "nextAccessTime")
     assert "대기: 30.0초(429·nextAccessTime)" in written[0].read_text(encoding="utf-8")
+
+
+def test_트레이스가_스트림_끊김을_적는다(tmp_path):
+    """사내 측정 #4의 멈춤 — 받은 글로 읽었는지가 트레이스 머리에 남아야 측정 #5에서 센다."""
+    from src.__main__ import _make_tracer
+
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("integrate", 1, "물음", '{"tasks": []}', None, 30.4, None, None, "끝 표시 없이 끊김 — 받은 글 13자로 읽었다")
+    text = written[0].read_text(encoding="utf-8")
+    assert "결과: 읽었다" in text and "스트림: 끝 표시 없이 끊김 — 받은 글 13자로 읽었다" in text
+    trace("integrate", 2, "물음", "답", None, 3.0)
+    assert "스트림:" not in written[1].read_text(encoding="utf-8")
+
+
+def test_스트림_유휴_경고_줄만_거른다(caplog):
+    """사내 측정 #4: stderr에 `langchain_openai.stream_chunk_timeout fired`가 찍혔다 — 그 사실은 트레이스가 이미 적는다. 같은
+    로거의 다른 경고는 그대로 둔다."""
+    import asyncio
+    import logging
+
+    from src.__main__ import _not_stream_stall, _run
+
+    log = logging.getLogger("langchain_openai.chat_models._client_utils")
+    log.removeFilter(_not_stream_stall)                       # 앞 테스트가 단 것을 걷는다 — 모든 명령이 지나는 `_run`이 다는지 본다
+    _run(asyncio.sleep(0))
+    with caplog.at_level(logging.WARNING):
+        log.warning("langchain_openai.stream_chunk_timeout fired", extra={"source": "stream_chunk_timeout"})
+        log.warning("다른 경고")
+    assert [r.getMessage() for r in caplog.records] == ["다른 경고"]

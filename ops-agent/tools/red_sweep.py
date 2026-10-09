@@ -1611,7 +1611,7 @@ CASES += [
   '    return bool(_TIMEOUT_WORDS.search(error))', '    return False',
   ["tests/application/test_lead.py::test_시간_초과는_되묻지_않는다"]),
  ("걸린 초가 트레이스로 안 간다", LD,
-  '        _tell(on_exchange, asked, text, failure, latency, waited, source)', '        _tell(on_exchange, asked, text, failure, None, waited, source)',
+  '        _tell(on_exchange, asked, text, failure, latency, waited, source, note)', '        _tell(on_exchange, asked, text, failure, None, waited, source, note)',
   ["tests/application/test_lead.py::test_응답_시간이_트레이스로_간다"]),
  ("트레이스 파일에 응답 초를 안 적는다", MN,
   '        took = f"응답: {latency_s:.1f}초\\n" if latency_s is not None else ""', '        took = ""',
@@ -2158,7 +2158,48 @@ CASES += [
   ["tests/application/test_verdict.py::test_판정_예시의_caveats는_문장을_요구한다"]),
 ]
 
-assert len(CASES) >= 525, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-5 ① — 멈춘 스트림: 받은 글을 남기고, 온전하면 쓰고, 아니면 한 번 다시 · 유휴 상한 config · 경고 거름 · 요약 줄 ──
+DLM = ROOT / "src/domain/llm.py"
+IDLE_T = "tests/config/test_schema_llm.py::test_스트림_유휴_상한은_양수이고_스트리밍일_때_describe에_보인다"
+STALL_T = "tests/infrastructure/test_llm_adapters.py::test_멈춘_스트림은_받은_글을_남기고_유휴_상한은_config가_정한다"
+PART_T = "tests/infrastructure/test_llm_adapters.py::test_받은_글은_실패한_답에만_실린다"
+CUT_OK = "tests/application/test_lead.py::test_끊긴_스트림의_받은_글이_온전한_답이면_그대로_쓴다"
+CUT_RE = "tests/application/test_lead.py::test_끊긴_스트림의_글이_깨졌으면_시간_초과가_아니라_같은_질문으로_한_번_다시_묻는다"
+CUT_TR = "tests/test_cli.py::test_트레이스가_스트림_끊김을_적는다"
+CUT_LOG = "tests/test_cli.py::test_스트림_유휴_경고_줄만_거른다"
+CUT_DG = "tests/application/test_trace_digest.py::test_요약_끝에_전송_실패와_스트림_끊김을_센다"
+CASES += [
+ ("유휴 상한을 describe에 안 적는다", SL,
+  '                  + (f" · 유휴 {self.stream_idle_s:g}s" if self.stream and self.stream_idle_s else "")\n', "", [IDLE_T]),
+ ("유휴 상한 0을 받는다", SL, "        if v is not None and v <= 0:\n            raise ValueError(f\"stream_idle_s",
+  "        if v is not None and v < 0:\n            raise ValueError(f\"stream_idle_s", [IDLE_T]),
+ ("유휴 상한을 모델에 안 넘긴다", LCM, '                extra["stream_chunk_timeout"] = self._cfg.stream_idle_s',
+  "                pass", [STALL_T]),
+ ("멈춘 스트림이 받은 글을 버린다", LCM, 'partial_text="".join(parts),', 'partial_text="",', [STALL_T]),
+ ("성공한 답에도 받은 글을 허용한다", DLM, '        if self.status == "ok" and self.partial_text:',
+  "        if False:", [PART_T]),
+ ("끊긴 스트림을 따로 보지 않는다", LD, '            if reply.status == "error" and reply.partial_text:',
+  "            if False:", [CUT_OK, CUT_RE]),
+ ("받은 글이 온전해도 안 쓴다", LD, "                if got.ok:\n                    last = got\n",
+  "                if False:\n                    last = got\n", [CUT_OK]),
+ ("깨진 받은 글을 시간 초과로 본다", LD,
+  '                    note = f"답 도중 끊김 — 받은 글 {len(text):,}자, 같은 질문으로 다시 묻는다"',
+  '                    note, timed_out = f"답 도중 끊김 — 받은 글 {len(text):,}자, 같은 질문으로 다시 묻는다", True', [CUT_RE]),
+ ("받은 글을 트레이스 날것에 안 싣는다", LD, "                text = reply.partial_text\n                parsed = parse_object(text)",
+  "                parsed = parse_object(reply.partial_text)", [CUT_OK, CUT_RE]),
+ ("끊김 메모를 트레이스에 안 넘긴다", LD, "        _tell(on_exchange, asked, text, failure, latency, waited, source, note)",
+  "        _tell(on_exchange, asked, text, failure, latency, waited, source)", [CUT_OK]),
+ ("라이브러리 오류 문구를 통째로 싣는다", LD, '    return error.split(". ", 1)[0]', "    return error", [CUT_OK]),
+ ("트레이서가 스트림 줄을 안 쓴다", MN, '        took += f"스트림: {note}\\n" if note else ""\n', "", [CUT_TR]),
+ ("유휴 경고를 안 거른다", MN, '    return getattr(record, "source", None) != "stream_chunk_timeout"', "    return True", [CUT_LOG]),
+ ("_run이 경고 거름망을 안 단다", MN, "    _quiet_stream_stall_log()\n\n    async def wrapped():", "    async def wrapped():", [CUT_LOG]),
+ ("요약이 전송 실패를 안 센다", TD, "        elif reply.startswith(_NO_REPLY) and verdict.startswith(_FAILED):", "        elif False:", [CUT_DG]),
+ ("요약이 받은 글로 읽음과 다시 물음을 뒤바꾼다", TD,
+  '            cuts["받은 글로 읽음" if "읽었다" in stream.group(1) else "다시 물음"] += 1',
+  '            cuts["다시 물음" if "읽었다" in stream.group(1) else "받은 글로 읽음"] += 1', [CUT_DG]),
+]
+
+assert len(CASES) >= 541, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -585,8 +585,8 @@ async def test_트레이스가_시도마다_날것을_건넨다(case):
     await frame(CaseState(case=case, round=2))
 
     assert len(seen) == 2                       # 실패한 1차도 남는다
-    (node, round_no, prompt, text, error, _latency, waited, source) = seen[0]
-    assert (node, round_no, text) == ("frame", 2, "쓰레기")
+    (node, round_no, prompt, text, error, _latency, waited, source, note) = seen[0]
+    assert (node, round_no, text, note) == ("frame", 2, "쓰레기", None)       # 끊김 메모는 끊겼을 때만
     assert error and "JSON" in error and waited == 4.0 and source == "nextAccessTime"
     assert "다시" in seen[1][2]                  # 2차는 수리 프롬프트
     assert seen[1][4] is None and seen[1][6] is None   # 2차는 성공, 안 기다렸다
@@ -1239,3 +1239,49 @@ def test_증거는_4K_밑으로_깎지_않고_그래도_넘으면_태스크를_�
     assert len(prompt) == 11100                                                # 상한을 넘어도 보낸다
     _, small = fit_prompt(lambda b, f: "x" * (9000 + b), cap=8000, budget=3000)
     assert small == 3000                                                       # 예산이 원래 바닥보다 작으면 그대로
+
+
+# ── R2-5 ① — 끊긴 스트림 ──
+
+_STALL = ("StreamChunkTimeoutError: No streaming chunk received for 30.0s (model=m, chunks_received=520). The connection may "
+          "be alive at the TCP layer but is not producing content. Tune or disable via the `stream_chunk_timeout` kwarg")
+
+
+def _cut(text: str):
+    from src.domain.llm import LlmReply
+
+    return LlmReply(status="error", asked_at=T0, model="scripted", error=_STALL, partial_text=text)
+
+
+async def test_끊긴_스트림의_받은_글이_온전한_답이면_그대로_쓴다(case):
+    """사내 측정 #4: 리드 턴이 조각 520개(≈ 답 한 벌) 뒤 멈췄고, 오류 문구의 "timeout" 때문에 시간 초과로 분류돼 재시도 없이
+    조사가 1라운드로 끝났다. 끝 표시만 빠진 답이면 다시 물을 이유가 없다 — 답 모델로 검증되면 쓰고 트레이스에 남긴다."""
+    seen = []
+    llm = ScriptedAdapter([_cut(reply(tasks=[TASK]))], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                 trace=lambda *a, **kw: seen.append(a))
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch and [t.id for t in patch["plan_tasks"]] == ["t-1"]
+    assert len(llm.prompts) == 1
+    assert seen[0][3] == reply(tasks=[TASK]) and seen[0][4] is None          # 날것은 받은 글, 실패가 아니다
+    assert "받은 글" in seen[0][8] and "chunks_received=520" in seen[0][8]    # 아홉째 — 무엇이 있었나
+    assert "Tune" not in seen[0][8]          # 라이브러리의 설정 안내는 뺀다 — 사내에서 손으로 옮기는 줄이다
+
+
+async def test_끊긴_스트림의_글이_깨졌으면_시간_초과가_아니라_같은_질문으로_한_번_다시_묻는다(case):
+    seen = []
+    llm = ScriptedAdapter([_cut('{"tasks": [{"id": "t-1", "goal"'), reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                 trace=lambda *a, **kw: seen.append(a))
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch and len(llm.prompts) == 2
+    assert llm.prompts[1] == llm.prompts[0] and llm.schemas[1] == llm.schemas[0]   # 전송 실패처럼 — 같은 질문, 같은 형식
+    assert seen[0][3] == '{"tasks": [{"id": "t-1", "goal"'                   # (c) 받은 글이 트레이스에 남는다
+    assert "끊김" in seen[0][4] and "시간 초과" not in seen[0][4]
+
+
+async def test_조각_없이_멈춘_것은_지금처럼_시간_초과다(case):
+    llm = ScriptedAdapter([_cut("")], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(llm.prompts) == 1 and "시간 초과" in patch["llm_errors"][0]

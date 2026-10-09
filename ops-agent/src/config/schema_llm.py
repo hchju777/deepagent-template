@@ -124,6 +124,10 @@ class LlmConfig(StrictModel):
     # 판정 턴 226초도 stream이면 살았다). 그래서 **기본이 켬**이다 — `None`이면 chat_model은 켬, http는(스트리밍이 없다) 끔.
     # 명시하면 그 값. 호출부가 받는 것은 전과 같은 `LlmReply` 하나다.
     stream: bool | None = None
+    # 스트림의 조각 사이 침묵 상한(초) — langchain-openai의 `stream_chunk_timeout`(기본 120초, 첫 조각 전도 센다). 사내 측정 #4:
+    # 리드 턴이 조각 520개 뒤 120초 멈췄다. 리드 턴은 보통 15초 안이라 역할에서 짧게 준다(판정 턴의 생각 모델은 첫 조각까지
+    # 오래 걸릴 수 있어 기본 그대로). 없으면 라이브러리 기본.
+    stream_idle_s: float | None = None
     # 답에 스키마가 있을 때 OpenAI 규약 `response_format`을 어떻게 보낼지. `json_schema`(기본)는 모양까지 — strict는 스키마가
     # 닫힐 때만(`domain/llm_schema`); `json_object`는 문법만(게이트웨이가 json_schema를 거부할 때); `none`은 안 보낸다.
     response_format: Literal["json_schema", "json_object", "none"] = "json_schema"
@@ -162,6 +166,13 @@ class LlmConfig(StrictModel):
     def _interval_not_negative(cls, v: float) -> float:
         if v < 0:
             raise ValueError(f"min_interval_s는 0 이상 — {v}")
+        return v
+
+    @field_validator("stream_idle_s")
+    @classmethod
+    def _idle_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError(f"stream_idle_s는 0보다 커야 한다 — {v} (끄려면 안 적는다)")
         return v
 
     @field_validator("rate_wait_max_s")
@@ -283,6 +294,7 @@ class LlmConfig(StrictModel):
         limits = (f" · 상한 {self.timeout_s:g}s · 재시도 {self.max_retries}"
                   + (f" · 토큰 {self.max_tokens}" if self.max_tokens else "")
                   + (" · 스트리밍" if self.stream else "")
+                  + (f" · 유휴 {self.stream_idle_s:g}s" if self.stream and self.stream_idle_s else "")
                   + (f" · 간격 {self.min_interval_s:g}s" if self.min_interval_s > 0 else "")
                   + (f" · 답 {self.response_format}" if self.response_format != "none" else ""))
         return (f"{self.adapter}/{self.provider} {self.model}"

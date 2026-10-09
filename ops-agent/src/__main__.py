@@ -36,6 +36,7 @@ import argparse
 import asyncio
 import itertools
 import json
+import logging
 import os
 import sys
 from datetime import datetime
@@ -151,8 +152,20 @@ def _quiet_unraisable(inner):
     return hook
 
 
+def _not_stream_stall(record) -> bool:
+    return getattr(record, "source", None) != "stream_chunk_timeout"
+
+
+def _quiet_stream_stall_log() -> None:
+    """langchain-openai가 스트림 유휴 상한에 걸릴 때 남기는 WARNING 한 줄을 거른다 — 사내 측정 #4에서 stderr에 찍혔다. 그 사실은
+    트레이스의 `스트림:` 줄과 오류 문구가 이미 적는다. 레코드의 `source`로 고른다 — 같은 로거의 다른 경고는 그대로 나간다."""
+    logging.getLogger("langchain_openai.chat_models._client_utils").addFilter(_not_stream_stall)   # 같은 것은 한 번만 붙는다
+
+
 def _run(coro):
     """`asyncio.run` — 모든 명령이 여기를 지난다. 루프에 종료 소음 거름망을 달고, Windows에서는 unraisable 훅도 건다."""
+    _quiet_stream_stall_log()
+
     async def wrapped():
         asyncio.get_running_loop().set_exception_handler(_shutdown_noise_handler)
         return await coro
@@ -919,13 +932,15 @@ def _make_tracer(case_id: str, *, folder: Path):
     written: list[Path] = []
 
     def trace(node: str, round_no: int, prompt: str, text, error, latency_s=None, waited_s=None,
-              wait_source=None) -> None:
+              wait_source=None, note=None) -> None:
         path = folder / f"{next(seq):02d}-r{round_no}-{node}.md"
         verdict = "읽었다" if error is None else f"**못 읽었다** — {error}"
         # 호출이 걸린 초 — 사내 실측 두 판이 시간 초과로 죽었는데 어느 호출이 몇 초였는지가 아무 데도 없었다.
         took = f"응답: {latency_s:.1f}초\n" if latency_s is not None else ""
         # 429 뒤 기다린 초 — 할당량 대기는 응답 시간과 다른 양이다(브리프가 따로 받는다). 안 기다렸으면 안 적는다.
         took += f"대기: {waited_s:.1f}초(429{'·' + wait_source if wait_source else ''})\n" if waited_s else ""
+        # 스트림이 끝 표시 없이 끊겼으면 — 받은 글로 읽었나, 다시 묻나(사내 측정 #4의 멈춤을 측정 #5에서 센다).
+        took += f"스트림: {note}\n" if note else ""
         path.write_text(
             f"# {case_id} · {node} · 라운드 {round_no}\n\n"
             f"결과: {verdict}\n{took}\n"

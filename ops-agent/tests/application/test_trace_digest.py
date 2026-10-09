@@ -292,3 +292,22 @@ def test_요약_머리줄은_고정부를_읽기_목록_흐름_케이스_열린_
               + _prompt())
     head = [line for line in digest(_file(prompt, json.dumps({"tasks": []}))) if "프롬프트" in line][0]
     assert "읽기 목록 2,000" in head and "흐름 800" in head and "케이스 300" in head and "열린 질문 100" in head
+
+
+def test_요약_끝에_전송_실패와_스트림_끊김을_센다():
+    """사내 측정 #4: 400 "filter server request failed" 한 번 뒤 재시도로 성공했고, 리드 턴이 조각을 받은 뒤 멈췄다. 둘 다
+    라운드 줄 속에 묻히면 측정 #5에서 셀 수 없다 — 끝에 한 줄씩."""
+    failed = ("01-r1-integrate.md", "# c-1 · integrate · 라운드 1\n\n결과: **못 읽었다** — BadRequestError: Error code: 400 - "
+              "filter server request failed\n응답: 2.0초\n\n## 물어본 것 (2자)\n\n````\n물음\n````\n\n"
+              "## 날것 응답\n\n````\n(응답 없음 — 호출 자체가 실패했다)\n````\n")
+    cut = ("02-r1-integrate.md", "# c-1 · integrate · 라운드 1\n\n결과: 읽었다\n응답: 30.0초\n"
+           "스트림: 끝 표시 없이 끊김 — 받은 글 13자로 읽었다\n\n## 물어본 것 (2자)\n\n````\n물음\n````\n\n"
+           "## 날것 응답\n\n````\n{\"tasks\": []}\n````\n")
+    retried = ("03-r2-integrate.md", "# c-1 · integrate · 라운드 2\n\n결과: **못 읽었다** — 답 도중 끊김(5자 받음)\n"
+               "스트림: 답 도중 끊김 — 받은 글 5자, 같은 질문으로 다시 묻는다\n\n## 물어본 것 (2자)\n\n````\n물음\n````\n\n"
+               "## 날것 응답\n\n````\n{\"tas\n````\n")
+    again = ("04-r3-integrate.md", cut[1].replace("라운드 1", "라운드 3"))     # 수가 갈려야 둘을 뒤바꾼 것이 드러난다
+    text = "\n".join(digest([failed, cut, retried, again]))
+    assert "전송 실패: 1회 — BadRequestError: Error code: 400 - filter server request failed" in text
+    assert "스트림 끊김: 3회 — 받은 글로 읽음 2 · 다시 물음 1" in text
+    assert "전송 실패" not in "\n".join(digest([cut])) and "스트림 끊김" not in "\n".join(digest([failed]))

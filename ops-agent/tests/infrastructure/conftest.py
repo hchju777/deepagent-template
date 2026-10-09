@@ -9,6 +9,7 @@ httpx를 목으로 갈아끼우지 않는 이유: 그러면 "헤더가 실제로
 """
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -24,6 +25,7 @@ class _Recorder:
         self.payload = None          # 설정하면 이 모양을 그대로 돌려준다
         self.rate_limit: list = []   # 비어 있지 않으면 요청마다 하나씩 꺼내 **429 본문**으로 돌려준다
         self.retry_after = None      # 429에 붙일 Retry-After 헤더
+        self.stall: list = []        # 비어 있지 않으면 스트리밍 요청마다 하나씩 꺼내 — 조각을 보낸 뒤 끝 표시 없이 그 초만큼 멈춘다
 
 
 def _handler_for(recorder: _Recorder):
@@ -76,14 +78,19 @@ def _handler_for(recorder: _Recorder):
             self.end_headers()
             half = max(1, len(text) // 2)
             pieces = (text[:half], text[half:])
+            # 사내 측정 #4: 조각 520개 뒤 끝 표시(`finish_reason`·`[DONE]`) 없이 멈췄다 — 그 모양.
+            stall = recorder.stall.pop(0) if recorder.stall else None
             for n, piece in enumerate(pieces):
                 # 마지막 조각에 `finish_reason: "stop"` — OpenAI 규약이고, langchain-openai는 **그 조각에서만** `model`을
                 # `response_metadata.model_name`으로 올린다. 없으면 스트리밍 답의 reported_model이 비어 모델 확인이 죽는다.
                 chunk = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": model,
                          "choices": [{"index": 0, "delta": {"role": "assistant", "content": piece},
-                                      "finish_reason": "stop" if n == len(pieces) - 1 else None}]}
+                                      "finish_reason": "stop" if n == len(pieces) - 1 and stall is None else None}]}
                 self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
+            if stall is not None:
+                time.sleep(stall)
+                return
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
     return Handler

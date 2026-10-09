@@ -272,3 +272,26 @@ async def test_error_옆에_있는_nextAccessTime도_원문에서_찾는다(gate
 
     reply = await _adapter(_cfg(base_url, "chat_model"), clock=clock, sleep=sleep).ask("hi")
     assert reply.status == "ok" and slept == [5.0] and reply.rate_source == "nextAccessTime"
+
+
+# ── R2-5 ① — 조각을 받은 뒤 멈춘 스트림 ──
+
+async def test_멈춘_스트림은_받은_글을_남기고_유휴_상한은_config가_정한다(gateway, clock):
+    """사내 측정 #4: 리드 턴이 조각 520개 뒤 멈췄고(langchain-openai `stream_chunk_timeout` 기본 120초) 트레이스엔 "(응답 없음)"
+    뿐이었다 — 끝 표시만 빠진 답이었는지 알 수 없었다. 받은 글은 실패한 답에도 남는다. 유휴 상한은 `stream_idle_s`."""
+    base_url, recorder = gateway
+    recorder.reply = '{"tasks": []}'
+    recorder.stall = [0.6]
+    llm = build_llm(_cfg(base_url, "chat_model", stream=True, stream_idle_s=0.2), clock=clock)
+    reply = await llm.ask("hi")
+    assert reply.status == "error" and "StreamChunkTimeout" in reply.error, reply
+    assert reply.partial_text == '{"tasks": []}'
+    whole = await llm.ask("hi")                                 # 멈추지 않으면 전과 같다 — 받은 글은 실패에만
+    assert whole.status == "ok" and whole.text == '{"tasks": []}' and whole.partial_text == ""
+
+
+def test_받은_글은_실패한_답에만_실린다():
+    from src.domain.llm import LlmReply
+
+    with pytest.raises(ValueError, match="partial_text"):
+        LlmReply(status="ok", asked_at=T0, model="m", text="x", partial_text="x")
