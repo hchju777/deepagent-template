@@ -525,6 +525,39 @@ def sanitize_verdict(verdict: Verdict) -> Verdict:
     return verdict if cleaned == verdict else cleaned
 
 
+_TASK_ID = re.compile(r"^t-\d+$")
+
+
+def resolve_task_citations(verdict: Verdict, tasks) -> Verdict:
+    """판정이 **태스크 id**(`t-8`)를 증거로 인용했고 그 태스크가 만든 증거가 하나뿐이면 그 증거 id로 바꾼다 — caveat에 적는다.
+
+    verify는 `t-8`을 "없는 id"로 보고 판정 턴을 다시 묻는다. 사내 판정 턴은 한 번에 4분이라 뜻이 하나인 실수에 그 값을 치를
+    이유가 없다. 바꾼 id는 State에 실재하는 증거라 규율 3(LLM이 댄 id를 믿지 않는다) 안이다. 증거가 둘 이상이면 고르지 않는다 —
+    코드가 고르면 판정이 인용하지 않은 것을 인용한 것이 된다. 그대로 두고 verify가 전처럼 되묻는다. 바뀐 것이 없으면 같은 객체.
+    """
+    only = {t.id: t.result_evidence_ids[0] for t in tasks if len(t.result_evidence_ids) == 1}
+    fixed: list[str] = []
+
+    def fix(link: CauseLink) -> CauseLink:
+        ids = []
+        for evidence_id in link.evidence_ids:
+            if _TASK_ID.match(evidence_id) and evidence_id in only:
+                ids.append(only[evidence_id])
+                fixed.append(f"{evidence_id}→{only[evidence_id]}")
+            else:
+                ids.append(evidence_id)
+        return link if ids == link.evidence_ids else link.model_copy(update={"evidence_ids": ids})
+
+    root = fix(verdict.root_cause) if verdict.root_cause is not None else None
+    alternates = [fix(link) for link in verdict.alternates]
+    contributing = [fix(link) for link in verdict.contributing]
+    if not fixed:
+        return verdict
+    note = f"인용 정리: 태스크 id를 그 태스크의 유일한 증거 id로 바꿨다 — {', '.join(dict.fromkeys(fixed))}"
+    return verdict.model_copy(update={"root_cause": root, "alternates": alternates, "contributing": contributing,
+                                      "caveats": verdict.caveats + [note]})
+
+
 def _links(verdict: Verdict) -> list[CauseLink]:
     # 후보·기여 요인도 리드가 인용한 id다(규율 3) — 최상위만 검사하면 후보가 환각 id를 실은 채
     # 보고서에 나간다.
@@ -645,7 +678,8 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
                 reply = {"llm_errors": [f"conclude: {type(exc).__name__}: {exc}"]}
             notes = list(reply.get("llm_errors", []))
             if reply.get("verdict") is not None:
-                return {"verdict": sanitize_verdict(reply["verdict"]), "llm_errors": notes}
+                return {"verdict": sanitize_verdict(resolve_task_citations(reply["verdict"], state.plan_tasks)),
+                        "llm_errors": notes}
             return {"verdict": degraded(stopped_summary(state, "리드 LLM이 응답하지 못했고 판정 한 번도 실패했다"),
                                         caveats=list(state.llm_errors) + notes),
                     "llm_errors": notes}
@@ -667,7 +701,7 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             reasons = notes + ([str(reply["note"])] if reply.get("note") else [])
             return {"verdict": degraded("판정 불가 — 판정자가 판정을 주지 않았다", caveats=reasons),
                     "llm_errors": notes}
-        return {"verdict": sanitize_verdict(verdict), "llm_errors": notes}
+        return {"verdict": sanitize_verdict(resolve_task_citations(verdict, state.plan_tasks)), "llm_errors": notes}
 
     async def verify(state: CaseState) -> dict:
         """LLM 없는 가드레일. 노드는 raise하지 않는다."""

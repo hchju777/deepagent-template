@@ -6,6 +6,7 @@
   그래도 안 되면 없는 인용을 걷어내고 낮은 확신으로 통과시킨다.
 """
 import dataclasses
+import json
 
 from src.application.fakes import ScriptedRunner
 from src.application.graph import build_engine
@@ -372,3 +373,31 @@ async def test_증거가_없으면_죽은_리드_뒤에_판정을_묻지_않는�
     final = await build_engine(deps).ainvoke(CaseState(case=case))
     assert final["verdict"].verdict_type == "degraded" and concluder.calls == []
     assert "증거 0건" in final["verdict"].narrative and "읽기 0회" in final["verdict"].narrative
+
+
+# ── R2-4 ⑥ — 태스크 id 인용 ──
+
+async def test_태스크_id를_인용하면_그_태스크의_증거가_하나일_때_코드가_고친다(case):
+    """판정 턴이 `t-1`(태스크)을 인용하면 verify가 "없는 id"로 되묻는다 — 사내 판정 턴은 한 번에 4분이다. 그 태스크가 만든
+    증거가 **하나뿐**이면 뜻이 하나라 코드가 그 증거 id로 바꾸고 caveat에 적는다(바꾼 id는 State에 실재 — 규율 3 안). 둘
+    이상이면 고르지 않는다 — verify가 전처럼 되묻는다."""
+    tasks = [task("t-1", status="ok", result_evidence_ids=["t-1.e1"]),
+             task("t-2", status="ok", result_evidence_ids=["t-2.e1", "t-2.e2"])]
+    evidence = [_ev("t-1.e1"), _ev("t-2.e1"), _ev("t-2.e2")]
+    cited = verdict(root_cause=cause("sink", "t-1"), alternates=[cause("api", "t-2", confidence="low")])
+    nodes = make_nodes(deps_for(ScriptedRunner(), conclude=Concluder({"verdict": cited}), components=frozenset({"sink", "api"})))
+    patch = await nodes["conclude"](_state(case, plan_tasks=tasks, evidence=evidence))
+    got = patch["verdict"]
+    assert got.root_cause.evidence_ids == ["t-1.e1"]
+    assert got.alternates[0].evidence_ids == ["t-2"]                            # 둘이면 그대로 — verify가 되묻는다
+    assert any("t-1" in c and "t-1.e1" in c for c in got.caveats)
+    plain = await nodes["conclude"](_state(case, plan_tasks=tasks, evidence=evidence))   # 대본이 기본 판정(t-1.e1)을 준다
+    assert plain["verdict"].caveats == []                                      # 고칠 것이 없으면 caveat도 없다
+
+
+def test_판정_예시의_caveats는_문장을_요구한다():
+    """사내 측정 #3: caveats가 증거 id 나열뿐이었다 — 보고서가 그대로 싣는다. 무엇이 잘려 무엇을 단정 못 하는지 문장으로."""
+    from src.application import briefing
+
+    example = json.loads(briefing.verdict_example())
+    assert "문장" in example["caveats"][0] and "id" in example["caveats"][0]

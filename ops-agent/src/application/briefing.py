@@ -782,7 +782,7 @@ def verdict_example() -> str:
         "contributing": [],
         "confidence": "<high | medium | low 중 하나>",
         "recommendations": ["사람이 할 조치 (한국어)"],
-        "caveats": ["잘린 증거(⚠)로 주장했다면 그 증거 id를 여기 적는다"],
+        "caveats": ["한 문장으로 — 무엇이 잘리거나 실패해서 무엇을 단정 못 하는가, 그 증거 id와 함께 (한국어)"],
         "narrative": "인과 사슬을 한 문단으로 — 무엇이 어디서 멈춰 증상이 됐나 (한국어)",
     }
     return json.dumps(body, ensure_ascii=False, indent=2)

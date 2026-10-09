@@ -1688,8 +1688,8 @@ CASES += [
 VT = "tests/application/test_verdict.py"
 CASES += [
  ("llm_error 뒤 판정이 와도 degraded로 찍는다", ND,
-  '            if reply.get("verdict") is not None:\n                return {"verdict": sanitize_verdict(reply["verdict"]), "llm_errors": notes}',
-  '            if False:\n                return {"verdict": sanitize_verdict(reply["verdict"]), "llm_errors": notes}',
+  '            if reply.get("verdict") is not None:\n                return {"verdict": sanitize_verdict(resolve_task_citations(reply["verdict"], state.plan_tasks)),',
+  '            if False:\n                return {"verdict": sanitize_verdict(resolve_task_citations(reply["verdict"], state.plan_tasks)),',
   [f"{VT}::test_llm_error여도_증거가_있으면_판정을_한_번_묻는다"]),
  ("증거가 없어도 죽은 리드 뒤에 판정을 묻는다", ND,
   '        if not state.evidence:\n            why = (', '        if False:\n            why = (',
@@ -2138,7 +2138,27 @@ CASES += [
   ["tests/application/test_trace_digest.py::test_요약_머리줄은_고정부를_읽기_목록_흐름_케이스_열린_질문으로_쪼갠다"]),
 ]
 
-assert len(CASES) >= 521, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-4 ⑥ — 태스크 id 인용 정리 · caveats는 문장으로 ──
+CITE_T = "tests/application/test_verdict.py::test_태스크_id를_인용하면_그_태스크의_증거가_하나일_때_코드가_고친다"
+CASES += [
+ ("태스크 id 인용을 안 고친다", ND,
+  '        return {"verdict": sanitize_verdict(resolve_task_citations(verdict, state.plan_tasks)), "llm_errors": notes}',
+  '        return {"verdict": sanitize_verdict(verdict), "llm_errors": notes}',
+  [CITE_T]),
+ ("증거가 여럿인 태스크도 첫 증거로 고친다", ND,
+  "    only = {t.id: t.result_evidence_ids[0] for t in tasks if len(t.result_evidence_ids) == 1}",
+  "    only = {t.id: t.result_evidence_ids[0] for t in tasks if t.result_evidence_ids}",
+  [CITE_T]),
+ ("고친 인용을 caveat에 안 적는다", ND,
+  '                                      "caveats": verdict.caveats + [note]})', '                                      "caveats": verdict.caveats})',
+  [CITE_T]),
+ ("판정 예시가 caveats에 id만 요구한다", B,
+  '        "caveats": ["한 문장으로 — 무엇이 잘리거나 실패해서 무엇을 단정 못 하는가, 그 증거 id와 함께 (한국어)"],',
+  '        "caveats": ["잘린 증거(⚠)로 주장했다면 그 증거 id를 여기 적는다"],',
+  ["tests/application/test_verdict.py::test_판정_예시의_caveats는_문장을_요구한다"]),
+]
+
+assert len(CASES) >= 525, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
