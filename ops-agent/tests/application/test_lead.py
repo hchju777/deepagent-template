@@ -678,6 +678,10 @@ def _cli_tree(tmp_path, monkeypatch):
     shutil.copytree(root / "config", config_root)
     app = json.loads((root / "config" / "app.json").read_text(encoding="utf-8"))
     app["case_store"] = str(tmp_path / "cases.json")
+    # **역할 설정은 걷어낸다.** 사내 `app.json`에는 `llm_roles`(report·lead·conclude)가 있다 — 그러면 `case investigate`가
+    # 판정 어댑터를 따로 만들고, `build_llm` 자리의 대본이 어댑터마다 처음부터 읽혀 판정 턴이 액션 턴의 답을 받는다(사내에서
+    # 이 파일의 CLI 테스트 둘이 깨졌다). 역할 배선을 보는 테스트는 스스로 `llm_roles`를 적는다.
+    app.pop("llm_roles", None)
     (config_root / "app.json").write_text(json.dumps(app, ensure_ascii=False),
                                           encoding="utf-8")
     set_real_config_env(monkeypatch)
