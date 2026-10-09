@@ -122,10 +122,20 @@ def _shutdown_noise_handler(loop, context: dict) -> None:
     """
     exc = context.get("exception")
     transport_level = ("transport" in context or "protocol" in context) and "task" not in context and "future" not in context
+    # 끊긴 소켓을 치우는 proactor의 콜백(`_call_connection_lost`)이 실패하면 **콜백 실패**로 온다 — context에 `handle`만 있고
+    # `transport` 키가 없다(asyncio `Handle._run`). 처음엔 transport 키만 봐서 사내 측정 #3에서 10054가 그대로 찍혔다.
+    transport_level = transport_level or _callback_name(context.get("handle")).endswith(
+        "_ProactorBasePipeTransport._call_connection_lost")
     quiet = isinstance(exc, ConnectionResetError) or (isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc))
     if transport_level and quiet:
         return
     loop.default_exception_handler(context)
+
+
+def _callback_name(handle) -> str:
+    """asyncio Handle이 부를 콜백의 qualname — 없으면 빈 문자열."""
+    callback = getattr(handle, "_callback", None)
+    return getattr(callback, "__qualname__", "") or ""
 
 
 def _quiet_unraisable(inner):

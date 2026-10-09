@@ -674,3 +674,39 @@ def test_트레이스가_429_대기_초를_적는다(tmp_path):
     assert "응답: 12.5초" in text and "대기: 48.0초(429)" in text
     trace("integrate", 2, "물음", "답", None, 3.0, 0.0)
     assert "대기:" not in written[1].read_text(encoding="utf-8")
+
+
+def test_종료_소음_처리기는_proactor의_connection_lost_콜백_실패도_거른다():
+    """사내 측정 #3(10-08): 10054 트레이스백이 R2-2c 뒤에도 찍혔다. 이 실패는 transport 이벤트가 아니라 **콜백 실패**로 온다 —
+    asyncio `Handle._run`은 context에 `message`·`exception`·`handle`만 싣고 `transport` 키가 없다. 실제 Handle로 그 모양을 만든다."""
+    import asyncio
+
+    from src.__main__ import _shutdown_noise_handler
+
+    class _ProactorBasePipeTransport:                                    # CPython의 그 이름 — 콜백의 qualname이 이것이 된다
+        def _call_connection_lost(self, exc):
+            pass
+
+    class Other:
+        def _call_connection_lost(self, exc):
+            pass
+
+    calls = []
+
+    class Loop:
+        def default_exception_handler(self, context):
+            calls.append(context)
+
+    real = asyncio.new_event_loop()
+    try:
+        lost = asyncio.Handle(_ProactorBasePipeTransport()._call_connection_lost, (None,), real)
+        other = asyncio.Handle(Other()._call_connection_lost, (None,), real)
+        reset = ConnectionResetError(10054, "현재 연결은 원격 호스트에 의해 강제로 끊겼습니다")
+        _shutdown_noise_handler(Loop(), {"message": f"Exception in callback {lost!r}", "exception": reset, "handle": lost})
+        assert calls == []
+        # 같은 예외라도 다른 콜백, 같은 콜백이라도 다른 예외는 그대로 — 거름망이 진짜 오류를 삼키면 안 된다.
+        _shutdown_noise_handler(Loop(), {"message": "Exception in callback", "exception": reset, "handle": other})
+        _shutdown_noise_handler(Loop(), {"message": "Exception in callback", "exception": ValueError("x"), "handle": lost})
+        assert len(calls) == 2
+    finally:
+        real.close()

@@ -361,6 +361,21 @@ verify가 통과시켰다. 실제 c-1: 요약 키 data 0건 ← 도메인 키 0�
   R3-0으로 — 입구 매핑이 결정적 읽기를 frame 앞으로 옮기면 frame 예시 자체가 줄어서 그때 한 번에 바꾼다.
 - 스윕 +4(496). **R2-3 끝 — 사내 측정 #3**([review-12a-4.md](review-12a-4.md) "R2-3 뒤 측정 #3에서 더 볼 것").
 
+### 측정 #3(sevt, 10-08)과 R2-4
+
+판정 턴(생각 모델)이 `json_schema`를 걸면 4/4 JSON이 깨졌다 — 같은 프롬프트를 스키마 없이 보내면 121초에 정상이었다. 리드 턴(빠른
+모델)은 JSON 실패 0. 429는 매번 정확히 60.0초(기본값) — nextAccessTime이 `2026-Oct-08 02:09:00+0000 UTC`라 못 읽었다. integrate
+고정부가 7.1~7.9K라 증거가 1.6~4.5K로 깎였다. 10054 트레이스백 재발, kafka tail은 파티션 1개에 0건/168건. 항목·순서는
+[plan-12a-r2-r4.md](plan-12a-r2-r4.md) R2-4.
+
+#### R2-4 ① (10-09) ✅ — 10054는 콜백 실패로 온다
+
+R2-2c의 거름망은 context에 `transport`·`protocol` 키가 있을 때만 걸렀다. 그런데 proactor가 끊긴 소켓을 치우는
+`_call_connection_lost`가 실패하면 asyncio `Handle._run`이 `message`·`exception`·`handle`만 실어 보낸다 — `transport` 키가 없다
+(CPython 소스로 확인). 그래서 그대로 찍혔다. 콜백의 qualname이 `_ProactorBasePipeTransport._call_connection_lost`이고 예외가
+연결 리셋일 때만 거른다 — 다른 콜백의 같은 예외, 같은 콜백의 다른 예외는 기본 처리기로. 테스트는 실제 `asyncio.Handle`로 그
+context를 만든다(Windows 재현은 여기서 안 된다 — 측정 #4에서 트레이스백 유무를 받는다). 스윕 +2(498).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

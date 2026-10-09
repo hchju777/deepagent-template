@@ -2030,7 +2030,18 @@ CASES += [
   ["tests/application/test_briefing.py::test_integrate_규칙에_빈_값의_다음_홉과_인자_규칙이_있다"]),
 ]
 
-assert len(CASES) >= 496, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R2-4 ① — 10054는 콜백 실패로도 온다 ──
+CASES += [
+ ("거름망이 proactor 콜백 실패를 못 알아본다", MN,
+  '    transport_level = transport_level or _callback_name(context.get("handle")).endswith(',
+  '    transport_level = transport_level or False and _callback_name(context.get("handle")).endswith(',
+  ["tests/test_cli.py::test_종료_소음_처리기는_proactor의_connection_lost_콜백_실패도_거른다"]),
+ ("거름망이 아무 콜백의 connection_lost나 삼킨다", MN,
+  '        "_ProactorBasePipeTransport._call_connection_lost")', '        "_call_connection_lost")',
+  ["tests/test_cli.py::test_종료_소음_처리기는_proactor의_connection_lost_콜백_실패도_거른다"]),
+]
+
+assert len(CASES) >= 498, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
