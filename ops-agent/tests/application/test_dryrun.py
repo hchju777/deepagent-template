@@ -152,7 +152,8 @@ async def test_대본으로_돈_조사에는_이름_기록이_안_남는다(tmp_
     final = await build_engine(deps).ainvoke(
         initial_state(script, case_id="c-1", gbm="mx", fct="gumi",
                       clock=lambda: __import__("datetime").datetime(2026, 9, 14, 9)))
-    assert final["llm_errors"] == []
+    # 막힌 채 끝난 기록(R3-1 ②(c) — 대본 실행기는 증거를 안 만들어 입력 있는 태스크가 못 돈다)은 이름 기록이 아니다.
+    assert not [e for e in final["llm_errors"] if "찾지 않고 이름을 댔다" in e], final["llm_errors"]
 
 
 # ── 사다리 대본 — rest → code.trace → recompute.count (11b 3b-2) ─────────────────────

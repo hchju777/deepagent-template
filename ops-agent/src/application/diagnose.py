@@ -14,6 +14,7 @@
 조사 보고서가 "몇 라운드 돌았고 무엇을 봤는가"를 적을 때 필요한 숫자가 그대로
 여기 있다. 그래서 CLI가 아니라 application에 둔다.
 """
+from src.application.nodes import unrun_reason
 from src.application.state import CaseState
 from src.domain.actions import describe
 from src.domain.case import CauseLink
@@ -64,9 +65,11 @@ def diagnose(state: CaseState) -> list[str]:
     for task_id, query, task_status in queries:
         lines.append(f"    {mark.get(task_status, '?')} {task_id}  {query}")
     # 끝까지 안 돈 태스크 — 사내 실측에서 우선순위에 밀린 t-4가 조용히 남았다. ⬜만으로는 "안 돌았다"가 안 읽힌다.
-    unrun = [t.id for t in state.plan_tasks if t.status == "pending"] if state.stopped_by else []
+    # 사유는 사실대로 — 사내 측정 #6에서 입력 t-6(실패)에 막힌 t-7이 "우선순위에 밀림"으로 적혔다(R3-1 ②(b)).
+    unrun = [t for t in state.plan_tasks if t.status == "pending"] if state.stopped_by else []
     if unrun:
-        lines.append(f"  미실행 {len(unrun)}개 — 끝날 때까지 안 돌았다(우선순위에 밀림): {', '.join(unrun)}")
+        lines.append(f"  미실행 {len(unrun)}개 — 끝날 때까지 안 돌았다: "
+                     + ", ".join(f"{t.id}({unrun_reason(state, t)})" for t in unrun))
     return lines
 
 

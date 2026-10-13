@@ -2332,7 +2332,38 @@ CASES += [
   [f"{LCT}::test_미끼_키는_이름이_비슷하고_같은_라벨을_달았지만_identity가_다르다"]),
 ]
 
-assert len(CASES) >= 586, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1 ② — 태스크 id 입력 · 막힘 되묻기 · 미실행 사유 ──
+INPUT_T = "tests/application/test_nodes.py::test_입력이_태스크_id면_그_태스크의_증거_id로_바꾸고_실패했으면_의존을_뗀다"
+WIRED_T = "tests/application/test_nodes.py::test_integrate가_실패한_태스크_id를_입력으로_낸_태스크의_의존을_떼고_기록한다"
+BLOCK_T = "tests/application/test_nodes.py::test_대기만_있고_돌릴_것이_없으면_한_번_되묻고_그래도_없으면_no_runnable이다"
+REASON_T = "tests/application/test_diagnose.py::test_미실행_사유는_사실대로다_막힌_입력과_밀린_우선순위를_가른다"
+ALIAS_T = "tests/application/test_nodes.py::test_같은_답에서_거부되거나_접힌_id를_입력으로_대면_그_읽기의_증거로_바꾼다"
+PAST_T = "tests/application/test_nodes.py::test_앞_라운드에서_거부된_중복_읽기의_id를_입력으로_대면_그_기록의_증거로_바꾼다"
+CASES += [
+ ("태스크 id 입력을 안 바꾼다", ND, "        task, notes = _resolve_inputs(task, {**(inputs_of or {}), **aliases})", "        task, notes = task, []", [INPUT_T]),
+ ("실패한 태스크 입력의 의존을 안 뗀다", ND, "        if found is None:\n            notes.append(f\"{task.id}: 입력 {item}은 태스크 id이고",
+  "        if found is None:\n            ids.append(item)\n            notes.append(f\"{task.id}: 입력 {item}은 태스크 id이고", [INPUT_T]),
+ ("기대값의 증거 id를 안 바꾼다", ND, "        if found and len(found) == 1:\n            params = {**params,", "        if False:\n            params = {**params,", [INPUT_T]),
+ ("아직 안 돈 태스크 id를 첫 증거 id로 안 바꾼다", ND, "    return [EvidenceRef.make_id(item, 1)]", "    return [item]", [INPUT_T]),
+ ("integrate가 입력 지도를 안 넘긴다", ND, "                inputs_of={**_rejected_reads(base), **_inputs_of(base)},",
+  "", [WIRED_T]),
+ ("앞 라운드에서 거부된 id를 입력에서 안 바꾼다", ND, "                inputs_of={**_rejected_reads(base), **_inputs_of(base)},",
+  "                inputs_of=_inputs_of(base),", [PAST_T]),
+ ("막혔는데 되묻지 않는다", ND, "        if (blocked and patch.get(\"decision\") != \"conclude\" and not patch.get(\"stopped_by\")\n                and not any(BLOCKED_MARK in e for e in state.llm_errors)):",
+  "        if False:", [BLOCK_T]),
+ ("막힘 되묻기를 케이스당 한 번으로 안 묶는다", ND, "        if (blocked and patch.get(\"decision\") != \"conclude\" and not patch.get(\"stopped_by\")\n                and not any(BLOCKED_MARK in e for e in state.llm_errors)):",
+  "        if blocked and patch.get(\"decision\") != \"conclude\" and not patch.get(\"stopped_by\"):", [BLOCK_T]),
+ ("막혀서 끝날 때 이유를 안 남긴다", ND, "                    \"llm_errors\": errors + ([still] if still and still not in errors else [])}",
+  "                    \"llm_errors\": errors}", [BLOCK_T]),
+ ("막힌 입력을 우선순위 탓으로 적는다", ND, "        if owner is not None and owner.status == \"error\":\n            return f\"막힘 — 입력 {item} 실패\"",
+  "        if owner is not None and owner.status == \"error\":\n            return \"우선순위에 밀림\"", [REASON_T]),
+ ("거부된 중복의 id를 입력에서 안 바꾼다", ND, "            aliases[task.id] = list(where) or None\n", "", [ALIAS_T]),
+ ("갱신으로 접힌 id를 입력에서 안 바꾼다", ND, "            aliases[task.id] = [EvidenceRef.make_id(held.id, 1)]\n", "", [ALIAS_T]),
+ ("diagnose가 미실행 사유를 안 가른다", DG, "                     + \", \".join(f\"{t.id}({unrun_reason(state, t)})\" for t in unrun))",
+  "                     + \", \".join(f\"{t.id}(우선순위에 밀림)\" for t in unrun))", [REASON_T]),
+]
+
+assert len(CASES) >= 599, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

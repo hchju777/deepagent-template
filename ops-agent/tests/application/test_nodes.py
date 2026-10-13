@@ -557,3 +557,121 @@ async def test_입구_노드는_frame_전에_접수를_읽고_대상_키를_Stat
     plain = dataclasses.replace(deps_for(runner), frame=frame)
     await build_engine(plain).ainvoke(CaseState(case=case))
     assert runner.ran == []
+
+
+# ── R3-1 ② — 태스크 id를 입력으로 낸 태스크 ──
+
+async def test_입력이_태스크_id면_그_태스크의_증거_id로_바꾸고_실패했으면_의존을_뗀다(case):
+    """사내 측정 #6 c-2: t-7이 `input_evidence_ids=['t-6']`(태스크 id, 그 태스크는 실패)을 내 영영 못 돌고 t-8도 t-7을 기다려
+    `no_runnable`로 끝났다 — 리드는 continue였다. 판정 인용(R2-4 ⑥)과 같은 규칙: 끝난 태스크면 그 증거 id로, 실패했으면 의존을
+    떼고 기록, 아직 안 돌았으면 그 첫 증거 id(`t-7.e1`) — 게이트가 그 태스크가 끝날 때 열린다."""
+    from src.application.nodes import _accept_tasks, _inputs_of
+    from tests.application.conftest import state_with
+
+    done_ok = task("t-1", status="ok", result_evidence_ids=["t-1.e1"])
+    done_two = task("t-2", status="ok", result_evidence_ids=["t-2.e1", "t-2.e2"])
+    failed = task("t-3", status="error", error="연결 거부")
+    state = state_with(case, plan_tasks=[done_ok, done_two, failed])
+    patch = {"plan_tasks": [task("t-4", input_evidence_ids=["t-1"]),
+                            task("t-5", input_evidence_ids=["t-2", "t-1.e1"]),
+                            task("t-6", input_evidence_ids=["t-3"]),
+                            task("t-7", action="recompute.count", params={"collection": "c", "filter": {},
+                                                                          "expect": {"evidence": "t-1", "path": "n"}}),
+                            task("t-8", input_evidence_ids=["t-7"])]}
+    kept, refused, records = _accept_tasks(patch, room=10, taken=frozenset(t.id for t in state.plan_tasks),
+                                           inputs_of=_inputs_of(state))
+    by_id = {t.id: t for t in kept}
+    assert by_id["t-4"].input_evidence_ids == ["t-1.e1"]
+    assert by_id["t-5"].input_evidence_ids == ["t-2.e1", "t-2.e2", "t-1.e1"]          # 둘이면 둘 다 — 증거는 전부 입력이다
+    assert by_id["t-6"].input_evidence_ids == [] and refused == []                      # 실패한 태스크 — 의존을 떼고 받는다
+    assert any("t-6" in r and "t-3" in r and "의존을 뗐다" in r for r in records), records
+    assert by_id["t-7"].params["expect"]["evidence"] == "t-1.e1"                        # 기대값의 증거도 같은 규칙
+    assert by_id["t-7"].input_evidence_ids == ["t-1.e1"]
+    assert by_id["t-8"].input_evidence_ids == ["t-7.e1"]                                # 같은 답의 태스크 — 그 첫 증거를 기다린다
+
+
+async def test_integrate가_실패한_태스크_id를_입력으로_낸_태스크의_의존을_떼고_기록한다(case):
+    """(a)가 integrate 경로에 실제로 배선됐는지 — 실패한 t-1을 입력으로 낸 t-2는 의존이 떼여 바로 돈다."""
+    async def cites(state):
+        return {"decision": "continue", "plan_tasks": [task("t-2", input_evidence_ids=["t-1"])]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=cites, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1,
+                                               plan_tasks=[task("t-1", status="error", error="끊김")]))
+    assert patch["decision"] == "continue"
+    assert [t.input_evidence_ids for t in patch["plan_tasks"]] == [[]]
+    assert any("t-2" in e and "t-1" in e and "의존을 뗐다" in e for e in patch["llm_errors"]), patch["llm_errors"]
+
+
+async def test_대기만_있고_돌릴_것이_없으면_한_번_되묻고_그래도_없으면_no_runnable이다(case):
+    """(c) 막힌 채 `no_runnable`로 끝내지 않는다 — 리드에게 무엇이 막혔는지 주고 한 번 더. 케이스당 한 번."""
+    from src.application.nodes import BLOCKED_MARK, REDO_NOTE
+
+    seen = []
+
+    async def lead(state):
+        seen.append(list(state.llm_errors))
+        if len(seen) == 1:
+            return {"decision": "continue", "plan_tasks": [task("t-9", input_evidence_ids=["없는.e1"])]}
+        return {"decision": "continue", "plan_tasks": [task("t-10")]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=lead, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1, plan_tasks=[task("t-1", status="ok")]))
+    assert len(seen) == 2 and any(BLOCKED_MARK in e and "t-9" in e and "없는.e1 없음" in e for e in seen[1]), seen[1]
+    assert patch["decision"] == "continue" and "stopped_by" not in patch
+    assert {t.id for t in patch["plan_tasks"]} == {"t-9", "t-10"}
+    stuck = []
+
+    async def still(state):
+        stuck.append(1)
+        return {"decision": "continue", "plan_tasks": [task("t-9", input_evidence_ids=["없는.e1"])]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=still, max_rounds=9))
+    patch = await nodes["integrate"](CaseState(case=case, round=1, plan_tasks=[task("t-1", status="ok")]))
+    assert len(stuck) == 2 and patch["stopped_by"] == "no_runnable"
+    # 되물어도 막혔으면 끝내되 왜 막혔는지가 기록에 남는다 — 되물음 꼬리가 없는 줄이 그것이다
+    assert any(BLOCKED_MARK in e and "t-9(입력 없는.e1 없음)" in e and not e.endswith(REDO_NOTE) for e in patch["llm_errors"]), patch["llm_errors"]
+    # 이미 한 번 되물은 케이스는 다시 안 묻는다
+    stuck.clear()
+    once = CaseState(case=case, round=2, plan_tasks=[task("t-1", status="ok")], llm_errors=["t-9: " + BLOCKED_MARK + " — t-9(입력 없는.e1 없음)"])
+    patch = await nodes["integrate"](once)
+    assert len(stuck) == 1 and patch["stopped_by"] == "no_runnable"
+
+
+async def test_같은_답에서_거부되거나_접힌_id를_입력으로_대면_그_읽기의_증거로_바꾼다(case):
+    """입구 노드가 접수를 먼저 읽으므로 리드의 "증상 재현" 읽기는 으레 중복으로 거부된다 — 그 id를 다음 태스크의 입력으로 대면
+    (측정판에서 실제로 그랬다) 거부된 읽기의 결과로, 대기 중인 같은 읽기의 갱신으로 접힌 id는 그 태스크의 첫 증거로."""
+    from src.application.nodes import _accept_tasks, _done, _evidence_of, _inputs_of, _taken, _waiting
+    from tests.application.conftest import state_with
+
+    done = task("t-1", status="ok", result_evidence_ids=["t-1.e1"])
+    held = task("t-2")                                                   # 아직 안 돈 읽기 — 같은 질의를 새 id로 또 내면 갱신
+    state = state_with(case, plan_tasks=[done, held])
+    patch = {"plan_tasks": [task("t-5", params={"key": "k-t-1"}),       # t-1과 같은 읽기 — 거부
+                            task("t-6", input_evidence_ids=["t-5"]),
+                            task("t-7", params={"key": "k-t-2"}),       # t-2와 같은 읽기 — t-2의 갱신으로 접힌다
+                            task("t-8", input_evidence_ids=["t-7"])]}
+    kept, refused, records = _accept_tasks(patch, room=10, taken=_taken(state), done=_done(state), pending=frozenset({"t-2"}),
+                                           waiting=_waiting(state), evidence_of=_evidence_of(state), inputs_of=_inputs_of(state))
+    by_id = {t.id: t for t in kept}
+    assert "t-5" not in by_id and any(r.startswith("t-5:") and "t-1.e1" in r for r in refused)
+    assert by_id["t-6"].input_evidence_ids == ["t-1.e1"]
+    assert "t-7" not in by_id and by_id["t-2"].goal == "목표 t-7"
+    assert by_id["t-8"].input_evidence_ids == ["t-2.e1"]
+
+
+async def test_앞_라운드에서_거부된_중복_읽기의_id를_입력으로_대면_그_기록의_증거로_바꾼다(case):
+    """frame 답의 "증상 재현"(t-1)은 입구 노드가 이미 읽어 거부된다 — 다음 라운드에 리드가 t-1을 입력으로 댄 t-3은 그 기록의
+    `그 결과는 t-0.e1`로 바로 돈다(보드에서 막혀 되묻기까지 갔다)."""
+    from src.application.nodes import DUP_KIND, DUP_WHERE
+
+    async def chains(state):
+        return {"decision": "continue", "plan_tasks": [task("t-3", input_evidence_ids=["t-1"])]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=chains, max_rounds=9))
+    state = CaseState(case=case, round=1, plan_tasks=[task("t-0", status="ok", result_evidence_ids=["t-0.e1"])],
+                      evidence=[_ev("t-0.e1")],
+                      llm_errors=[f"t-1{DUP_KIND} — 받지 않는다 (rest.query entry='x' params={{}}){DUP_WHERE}t-0.e1"])
+    patch = await nodes["integrate"](state)
+    assert patch["decision"] == "continue"
+    assert [t.input_evidence_ids for t in patch["plan_tasks"]] == [["t-0.e1"]]

@@ -40,7 +40,7 @@ from src.application.facts import facts_for, present
 from src.application.intake_map import IntakeSpec, cited_keys, run_intake
 from src.application.state import CaseState, merge_by_id
 from src.domain.actions import DISCOVERED_ARGS, describe, name_known
-from src.domain.case import Case, CauseLink, Hypothesis, PlanTask, TargetPick, Verdict
+from src.domain.case import Case, CauseLink, EvidenceRef, Hypothesis, PlanTask, TargetPick, Verdict
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
 # 이 자리에 리드 LLM(`lead.make_lead`)이나 테스트의 대본이 들어온다.
@@ -88,6 +88,12 @@ class EngineDeps:
 REDO_MARK = "방금 낸 답의 "
 # 되물은 뒤 State에 남는 첫 답의 거부 기록에 붙는 꼬리 — 진단이 되물음 횟수를 셀 수 있다.
 REDO_NOTE = " (그 자리에서 다시 물었다)"
+# 대기 태스크는 있는데 돌릴 것이 없을 때 리드에게 되묻는 기록의 종류(R3-1 ②(c)) — State에 남아 "케이스당 한 번"의 표식이 된다.
+# 다른 기록과 같은 모양(`t-3: 종류 — 자세히`)이어야 진단이 종류를 센다(보드에서 `1× t-3(막힘`으로 깨져 보였다).
+BLOCKED_MARK = "막힘 — 대기 태스크가 못 돈다"
+# 중복 거부 기록의 두 조각 — `_rejected_reads`가 앞 라운드의 기록에서 "그 id의 결과는 어디"를 되읽는다. 모양을 바꾸면 둘 다 바꿔라.
+DUP_KIND = ": 이미 한 읽기를 또 냈다"
+DUP_WHERE = " — 그 결과는 "
 
 
 def _sanitize_task(task: PlanTask) -> PlanTask:
@@ -180,6 +186,66 @@ def _done(state: CaseState) -> frozenset:
     return frozenset(_query(t) for t in state.plan_tasks if t.action)
 
 
+def _rejected_reads(state: CaseState) -> dict[str, list[str]]:
+    """앞 라운드에서 중복으로 거부된 태스크 id → 그 읽기의 증거 id들. 기록(`llm_errors`)에서 되읽는다.
+
+    입구 노드가 접수를 먼저 읽으므로 리드의 frame 답 "증상 재현"은 으레 거부되고, 리드는 다음 라운드에 그 id를 입력으로 댄다(측정판에서
+    그랬다). State에 따로 두지 않는 이유: 기록이 이미 그 사실(`그 결과는 t-0.e1`)을 담고 있고, 같은 사실을 두 곳에 두면 어긋난다.
+    """
+    out: dict[str, list[str]] = {}
+    for line in state.llm_errors:
+        head, kind, tail = line.removesuffix(REDO_NOTE).partition(DUP_KIND)
+        if kind and _TASK_ID.match(head) and DUP_WHERE in tail:
+            out[head] = tail.rsplit(DUP_WHERE, 1)[1].split(", ")
+    return out
+
+
+def _inputs_of(state: CaseState) -> dict[str, list[str] | None]:
+    """끝난 태스크 id → 그 태스크의 증거 id들(실패했거나 증거가 없으면 None). 리드가 입력에 **태스크 id**를 쓰면 코드가 이걸로 바꾼다."""
+    return {t.id: (list(t.result_evidence_ids) or None) if t.status == "ok" else None
+            for t in state.plan_tasks if t.status in ("ok", "error")}
+
+
+def _resolve_input(item: str, inputs_of: dict[str, list[str] | None]) -> list[str] | None:
+    """입력 하나 → 증거 id들. 태스크 id가 아니면 그대로. 끝난 태스크면 그 증거들, 실패했거나 증거가 없으면 None(의존을 뗀다).
+
+    아직 안 돈(또는 같은 답에 같이 낸) 태스크면 그 **첫 증거 id**(`t-7.e1`)다 — `ProbeRunner`는 ok 태스크마다 증거를 정확히 하나
+    남기므로(`runner_probe.py`) 그 id가 생기는 때가 곧 그 태스크가 끝난 때고, 게이트가 그때 열린다. 그 태스크가 실패하면 영영 안
+    생기는데, 그건 (c)의 되묻기와 진단의 "막힘 — 입력 … 실패"가 받는다.
+    """
+    if not _TASK_ID.match(item):
+        return [item]
+    if item in inputs_of:
+        return list(inputs_of[item]) if inputs_of[item] else None
+    return [EvidenceRef.make_id(item, 1)]
+
+
+def _resolve_inputs(task: PlanTask, inputs_of: dict[str, list[str] | None]) -> tuple[PlanTask, list[str]]:
+    """입력의 태스크 id를 증거 id로 — 실패했거나 증거가 없으면 **의존을 떼고** 기록한다(R3-1 ②(a)).
+
+    사내 측정 #6 c-2: `input_evidence_ids=['t-6']`(실패한 태스크)로 낸 t-7이 영영 못 돌고 t-8이 t-7을 기다려 `no_runnable`로 끝났다
+    — 리드는 continue였다. select 게이트는 증거 id만 안다. 판정 인용 정리(R2-4 ⑥)와 같은 규칙이되, 증거가 여럿이면 전부 입력이다
+    (인용과 달리 입력은 "그 결과를 다 본 뒤"라는 뜻이라 고를 것이 없다). `expect.evidence`(재집계 기대값)도 같은 규칙 — 하나일 때만.
+    """
+    notes: list[str] = []
+    ids: list[str] = []
+    for item in task.input_evidence_ids:
+        found = _resolve_input(item, inputs_of)
+        if found is None:
+            notes.append(f"{task.id}: 입력 {item}은 태스크 id이고 그 태스크는 실패했거나 증거가 없다 — 의존을 뗐다")
+            continue
+        ids += [e for e in found if e not in ids]
+    params = task.params
+    expect = params.get("expect") if isinstance(params, dict) else None
+    if isinstance(expect, dict) and isinstance(expect.get("evidence"), str) and _TASK_ID.match(expect["evidence"]):
+        found = _resolve_input(expect["evidence"], inputs_of)
+        if found and len(found) == 1:
+            params = {**params, "expect": {**expect, "evidence": found[0]}}
+    if ids == list(task.input_evidence_ids) and params is task.params:
+        return task, notes
+    return task.model_copy(update={"input_evidence_ids": ids, "params": params}), notes
+
+
 def _evidence_of(state: CaseState) -> dict[str, list[str]]:
     """질의 → 그 읽기가 남긴 증거 id들. 같은 읽기를 다시 낸 리드에게 "그 결과는 t-1.e1에 있다"고 말하기 위해서다."""
     out: dict[str, list[str]] = {}
@@ -220,7 +286,8 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   done: frozenset = frozenset(),
                   pending: frozenset = frozenset(),
                   waiting: dict[str, PlanTask] | None = None,
-                  evidence_of: dict[str, list[str]] | None = None
+                  evidence_of: dict[str, list[str]] | None = None,
+                  inputs_of: dict[str, list[str] | None] | None = None
                   ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
@@ -260,6 +327,9 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     먹히는지를 **빈도로 알아야** 막을지 정할 수 있다.
     """
     kept, reused, used, asked = [], [], set(taken), set(done)
+    # 같은 답에서 거부되거나 접힌 id → 그 읽기의 증거. 입구 노드가 접수를 먼저 읽으므로 리드의 "증상 재현" 읽기는 으레 중복으로
+    # 거부되는데, 리드는 그 id를 다음 태스크의 입력으로 댄다(측정판에서 그랬다) — 뜻은 "그 결과를 본 뒤"이고 결과는 이미 있다.
+    aliases: dict[str, list[str] | None] = {}
     for task in patch.get("plan_tasks", []):
         # **아직 안 돈 태스크는 같은 id로 다시 내면 갱신이다** — 거부가 아니다. `taken`이
         # 막는 것은 끝난 id의 부활(재실행)이지 대기 중인 것의 손질이 아니다. 로컬 대역
@@ -284,23 +354,34 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
             kept.append(_sanitize_task(held.model_copy(update={
                 "priority": task.priority, "goal": task.goal,
                 "input_evidence_ids": list(task.input_evidence_ids)})))
+            aliases[task.id] = [EvidenceRef.make_id(held.id, 1)]
             used.add(held.id)
             asked.add(query)
             continue
         if task.action and query in asked:
             # 거부만 하면 리드는 "왜"를 모른 채 또 낸다(사내 실측에서 세 번). 결과가 어디 있는지를 같이 적는다.
             where = (evidence_of or {}).get(query) or []
-            reused.append(f"{task.id}: 이미 한 읽기를 또 냈다 — 받지 않는다 "
+            reused.append(f"{task.id}{DUP_KIND} — 받지 않는다 "
                           f"({describe(task.action, task.params)})"
-                          + (f" — 그 결과는 {', '.join(where)}" if where else ""))
+                          + (f"{DUP_WHERE}{', '.join(where)}" if where else ""))
+            aliases[task.id] = list(where) or None
             continue
         used.add(task.id)
         asked.add(query)
         kept.append(_sanitize_task(task))
     kept = kept[:max(0, room)]
+    # 입력의 태스크 id → 증거 id(R3-1 ②(a)). 받은 뒤에 한다 — 갱신 경로(`waiting`)가 입력을 새 답의 것으로 바꾸기 때문이다.
+    # 기록은 셋째 묶음이다 — 받았다는 기록이지 거부가 아니다(거부로 되물으면 "받았는데 왜 다시 묻나"가 된다).
+    resolved: list[str] = []
+    fixed: list[PlanTask] = []
+    for task in kept:
+        task, notes = _resolve_inputs(task, {**(inputs_of or {}), **aliases})
+        fixed.append(task)
+        resolved += notes
+    kept = fixed
     if seen is None:
-        return kept, reused, []
-    guessed = []
+        return kept, reused, resolved
+    guessed = list(resolved)
     for task in kept:
         for name, value in sorted(task.params.items()):
             if name in DISCOVERED_ARGS and isinstance(value, str) and not name_known(value, seen):
@@ -372,12 +453,20 @@ def make_nodes(deps: EngineDeps) -> dict:
                 reply, room=deps.max_tasks - len(base.plan_tasks),
                 taken=_taken(base), done=_done(base), pending=_pending(base),
                 waiting=_waiting(base), evidence_of=_evidence_of(base),
+                inputs_of={**_rejected_reads(base), **_inputs_of(base)},
                 seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed
 
         patch = await deps.integrate(state)
         fresh, hypotheses, refused, guessed = accept(patch, state)
+        # (c) 대기 태스크는 있는데 돌릴 것이 없으면 — 입력이 영영 안 생기는 것이다 — 거부와 같은 길로 **케이스당 한 번** 되묻는다.
+        # 사내 측정 #6 c-2는 그 자리에서 `no_runnable`로 끝났고 리드는 continue였다. (a)가 입력을 고치므로 드물지만 안전망이다.
+        # 한 번인 이유: 같은 막힘을 라운드마다 되물으면 리드가 같은 답을 내는 동안 LLM 호출만 두 배가 된다.
+        blocked = _blocked_note(state, fresh)
+        if (blocked and patch.get("decision") != "conclude" and not patch.get("stopped_by")
+                and not any(BLOCKED_MARK in e for e in state.llm_errors)):
+            refused = refused + [blocked]
         # **거부가 있으면 그 자리에서 한 번 되묻는다.** 버려진 것을 다음 라운드의
         # `<버려진 태스크>`로만 돌려주면 리드는 한 라운드 뒤에야 좁힌다 — 두 번째 전체
         # 트레이스에서 두 번 그랬고, 매번 실행 한 사이클을 태웠다. 먹힌다고 증명된
@@ -435,11 +524,43 @@ def make_nodes(deps: EngineDeps) -> dict:
         ahead = state.model_copy(update={
             "plan_tasks": merge_by_id(state.plan_tasks, fresh)})
         if not runnable_tasks(ahead):
-            return {**patch, "decision": "conclude", "stopped_by": "no_runnable"}
+            # 막혀서 끝나는 거면 왜 막혔는지를 기록에 남긴다 — `no_runnable`만으로는 "낼 것이 없었다"로 읽힌다.
+            errors = list(patch.get("llm_errors", []))
+            still = _blocked_note(state, fresh)
+            return {**patch, "decision": "conclude", "stopped_by": "no_runnable",
+                    "llm_errors": errors + ([still] if still and still not in errors else [])}
         return {**patch, "decision": "continue", "round": state.round + 1}
 
     return {"intake": intake, "frame": frame, "select": select, "execute": execute, "integrate": integrate,
             **make_verdict_nodes(deps)}
+
+
+def _blocked_note(state: CaseState, fresh: list[PlanTask]) -> str | None:
+    """대기 태스크는 있는데 돌릴 것이 없을 때의 한 줄 — 무엇이 어느 입력에 막혔나. 아니면 None."""
+    ahead = state.model_copy(update={"plan_tasks": merge_by_id(state.plan_tasks, fresh)})
+    pending = [t for t in ahead.plan_tasks if t.status == "pending"]
+    if not pending or runnable_tasks(ahead):
+        return None
+    return (", ".join(t.id for t in pending) + f": {BLOCKED_MARK} — "
+            + ", ".join(f"{t.id}({unrun_reason(ahead, t).removeprefix('막힘 — ')})" for t in pending)
+            + " — 입력 없는 읽기를 내거나 conclude")
+
+
+def unrun_reason(state: CaseState, task: PlanTask) -> str:
+    """끝까지 안 돈 태스크의 사유 — 입력이 막혔으면 어느 입력이 왜(실패/없음), 아니면 우선순위에 밀림(R3-1 ②(b)).
+
+    사내 측정 #6에서 입력 t-6(실패)에 막힌 t-7이 "우선순위에 밀림"으로 적혔다 — 틀린 말이고, 틀린 말은 다음 수정을 엉뚱한 데로 보낸다.
+    """
+    have = state.evidence_ids()
+    by_id = {t.id: t for t in state.plan_tasks}
+    for item in task.input_evidence_ids:
+        if item in have:
+            continue
+        owner = by_id.get(item) or by_id.get(item.split(".e", 1)[0])
+        if owner is not None and owner.status == "error":
+            return f"막힘 — 입력 {item} 실패"
+        return f"막힘 — 입력 {item} 없음"
+    return "우선순위에 밀림"
 
 
 def route_after_frame(state: CaseState) -> str:

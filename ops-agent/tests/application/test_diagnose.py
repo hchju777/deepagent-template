@@ -118,7 +118,7 @@ def test_끝까지_안_돈_태스크를_미실행으로_센다(case):
     state = CaseState(case=case, round=3, stopped_by="max_rounds",
                       plan_tasks=[task("t-1", status="ok"), task("t-4"), task("t-5")])
     text = "\n".join(diagnose(state))
-    assert "미실행 2개" in text and "t-4" in text and "t-5" in text and "우선순위" in text
+    assert "미실행 2개" in text and "t-4(우선순위에 밀림)" in text and "t-5(우선순위에 밀림)" in text
     done = CaseState(case=case, round=1, stopped_by="decision", plan_tasks=[task("t-1", status="ok")])
     assert "미실행" not in "\n".join(diagnose(done))
 
@@ -140,3 +140,12 @@ def test_LLM_오류_머리줄은_판정_유무를_사실대로_적는다(case):
     nagged = CaseState(case=case, llm_errors=["integrate: 태스크 하나 버림"], stopped_by="decision")
     assert "리드가 계약을 어겼다" in llm_error_line(nagged) and "조사 중단" not in llm_error_line(nagged)
     assert llm_error_line(CaseState(case=case)) == ""
+
+
+def test_미실행_사유는_사실대로다_막힌_입력과_밀린_우선순위를_가른다(case):
+    """사내 측정 #6 c-2: 입력 t-6(실패)을 기다리다 막힌 t-7이 "우선순위에 밀림"으로 적혔다 — 틀린 말이다."""
+    state = CaseState(case=case, round=2, stopped_by="no_runnable", plan_tasks=[
+        task("t-6", status="error", error="연결 거부"), task("t-7", input_evidence_ids=["t-6"]),
+        task("t-8", input_evidence_ids=["t-7.e1"]), task("t-9")])
+    text = "\n".join(diagnose(state))
+    assert "t-7(막힘 — 입력 t-6 실패)" in text and "t-8(막힘 — 입력 t-7.e1 없음)" in text and "t-9(우선순위에 밀림)" in text
