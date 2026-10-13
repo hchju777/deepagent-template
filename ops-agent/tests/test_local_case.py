@@ -57,15 +57,3 @@ def test_cache_missing은_캐시_키가_아예_없고_배지는_0이다():
     assert not [k for k in s["redis"] if k.startswith("alarm:stats:")]
     assert "hb:sink" in s["redis"]
     assert all(_badge(s, l)["alarm"] == 0 for l in LINES)
-
-
-def test_배지_행의_링크_값_토큰이_대상_배지만_stats_키에_든다():
-    """사내 모양 — 배지 행에 링크 필드가 있고 값 안에 그 배지 키의 이름 토큰이 든다(측정 #5). 코드는 선언 없이 그 값에서 고른다
-    (`intake_map.row_tokens`). Alarm 배지의 토큰만 `alarm:stats:{line}`에 들어야 "골랐다"가 나고, 다른 배지는 어느 키에도 안 든다."""
-    from src.application.intake_map import row_tokens
-
-    s = _seeds(NOW, "cache-missing")
-    keys = ("alarm:stats:{line}", "hb:{service}")
-    hits = [k for k in keys if any(tok in k for _, tok in row_tokens(_badge(s, "L1")))]
-    assert hits == ["alarm:stats:{line}"]
-    assert not [k for k in keys if any(tok in k for _, tok in row_tokens(_badge(s, "L1", "Caution")))]

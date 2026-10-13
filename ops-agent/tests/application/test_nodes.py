@@ -513,3 +513,47 @@ async def test_중복_질의_거부_사유에_기존_증거_id가_있다(case):
     final = await build_engine(deps).ainvoke(CaseState(case=case))
     refused = [e for e in final["llm_errors"] if "t-7" in e and "이미 한 읽기" in e]
     assert refused and "t-1.e1" in refused[0]
+
+
+# ── R3-1 ① — frame 전 입구 노드 ──
+
+async def test_입구_노드는_frame_전에_접수를_읽고_대상_키를_State에_둔다(case):
+    import dataclasses
+    import json
+
+    from src.application.fakes import ScriptedRunner
+    from src.application.graph import build_engine
+    from src.application.intake_map import IntakeSpec
+    from src.domain.case import EvidenceRef
+    from src.domain.investigation import TaskOutcome
+
+    def ok(task_id, data, source):
+        return TaskOutcome(task_id=task_id, status="ok", summary=source,
+                           evidence=[EvidenceRef(id=f"{task_id}.e1", source=source, summary="x", body="raw")])
+
+    rest = {"response": [{"group": "L1", "title": "Alarm"}]}
+    value = {"type": "string", "value": json.dumps({"info": {"group": "L1", "title": "Alarm"}, "data": []})}
+    runner = ScriptedRunner({"t-0": ok("t-0", rest, "rest.query entry='summary_badge'"),
+                             "t-0-1": ok("t-0-1", value, "redis.get key='alarm:stats:L1'")},
+                            raws={"t-0.e1": rest, "t-0-1.e1": value})
+    spec = IntakeSpec(read=("rest.query", {"entry": "summary_badge", "params": {}}), fields=("group", "title"))
+    seen = []
+
+    async def frame(state):
+        seen.append(state.target)
+        return {"plan_tasks": []}
+
+    patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
+    deps = deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)})
+    deps = dataclasses.replace(deps, frame=frame)
+    final = CaseState.model_validate(await build_engine(deps).ainvoke(CaseState(case=patrol)))
+    assert seen[0] is not None and seen[0].key == "alarm:stats:L1"                 # frame이 볼 때 이미 있다
+    assert final.target.key == "alarm:stats:L1" and [t.id for t in final.plan_tasks][:2] == ["t-0", "t-0-1"]
+    assert {e.id for e in final.evidence} >= {"t-0.e1", "t-0-1.e1"}
+    # 대본 경로(`check_discovery=False`)와 접수 읽기가 없는 케이스(사람이 연 것)는 입구를 안 돈다.
+    runner.ran.clear()
+    loose = dataclasses.replace(deps_for(runner, intake=spec, check_discovery=False), frame=frame)
+    await build_engine(loose).ainvoke(CaseState(case=patrol))
+    plain = dataclasses.replace(deps_for(runner), frame=frame)
+    await build_engine(plain).ainvoke(CaseState(case=case))
+    assert runner.ran == []

@@ -61,6 +61,9 @@ class ProbeRunner(TaskRunnerPort):
     def describe(self) -> str:
         return f"probe({', '.join(self._adapters.available()) or '없음'})"
 
+    def raw(self, evidence_id: str):
+        return self._raw.get(evidence_id)
+
     async def run(self, task: PlanTask, *, case: Case) -> TaskOutcome:
         if not task.action:
             return TaskOutcome(task_id=task.id, status="error",

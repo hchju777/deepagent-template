@@ -795,6 +795,7 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     assert "끝난 이유: decision" in out
     assert "h-1 [refuted]" in out
     assert "t-1" in out and "t-1.e1" in out
+    assert "t-0 접수 읽기" in out                       # R3-1 ① — 입구 노드가 frame 전에 접수를 읽었다
     # 12a — 판정 **블록**이 출력에 보이고(진단의 한 줄 요약과 다르다 — 서술·권고는 블록에만 있다),
     # 인용 검증을 통과했다.
     assert "판정 data_loss (high) — 원천 컬렉션이 비었다" in out
@@ -1287,17 +1288,15 @@ async def test_조각_없이_멈춘_것은_지금처럼_시간_초과다(case):
     assert len(llm.prompts) == 1 and "시간 초과" in patch["llm_errors"][0]
 
 
-# ── R3-0 ①·④ — 대상 키 줄이 리드 프롬프트까지 간다 ──
+# ── R3-1 ① — 대상 키 줄이 리드 프롬프트까지 간다 ──
 
 async def test_리드_프롬프트에_대상_키_줄이_간다(case):
-    from tests.application.test_briefing import _keyed_graph_with_decoy, _linked_rest_evidence, _site_with_check
+    from src.domain.case import TargetPick
+    from tests.application.test_briefing import _keyed_graph_with_decoy, _site_with_check
 
-    state = CaseState(case=case, evidence=[_linked_rest_evidence()], round=1)
-    _, integrate, llm = leads(reply(decision="conclude", hypotheses=[], tasks=[]), site=_site_with_check())
-    await integrate(state)
-    assert "대상 키" not in llm.prompts[0]                                           # 그래프가 없으면 고를 선언 키가 없다
-    llm2 = ScriptedAdapter([reply(decision="conclude", hypotheses=[], tasks=[])], clock=lambda: T0)
-    _, integrate, _ = lead.make_lead(llm2, site_config=_site_with_check(), prompts=PROMPTS, max_rounds=3,
+    picked = TargetPick(key="alarm:stats:{line}", basis="키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)")
+    llm = ScriptedAdapter([reply(decision="conclude", hypotheses=[], tasks=[])], clock=lambda: T0)
+    _, integrate, _ = lead.make_lead(llm, site_config=_site_with_check(), prompts=PROMPTS, max_rounds=3,
                                      flow_graph=_keyed_graph_with_decoy())
-    await integrate(state)
-    assert "대상 키: alarm:stats:{line} (대상 행 t-1.e1 response[2]의 link 값 토큰 'stats'가 이 키에만 든다)" in llm2.prompts[0]
+    await integrate(CaseState(case=case, round=1, target=picked))
+    assert "대상 키: alarm:stats:{line} — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)" in llm.prompts[0]

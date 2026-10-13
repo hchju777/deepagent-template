@@ -1358,16 +1358,6 @@ def test_흐름_블록은_증거에_나온_다른_끝점에_밀리지_않는다(
 
 # ── R3-0 ① — 케이스 블록의 대상 키, 흐름 줄의 순서는 링크 토큰 ──
 
-def _linked_rest_evidence():
-    from src.application.runner_probe import detail
-    from src.domain.case import EvidenceRef
-
-    rows = [{"group": f"L{i % 3 + 1}", "title": ["Alarm", "Caution"][i % 2], "alarm": i,
-             "link": f"/summary/badge/{'stats' if i % 2 == 0 else 'caution'}/"} for i in range(6)]
-    body, _ = detail({"request": {"entry": "summary_badge"}, "status": 200, "response": rows}, focus=("L3", "Alarm"))
-    return EvidenceRef(id="t-1.e1", source="rest.query entry='summary_badge'", summary="x", body="\n".join(body))
-
-
 def _keyed_graph_with_decoy():
     g = _traced_endpoint_graph(with_key=True)
     # 이름이 비슷한 다른 배지의 키 — 알파벳순이면 이것이 먼저다(사내 측정 #5의 모양).
@@ -1378,20 +1368,26 @@ def _keyed_graph_with_decoy():
     return g
 
 
-def test_케이스_블록이_대상_행의_값으로_고른_대상_키를_말하고_흐름_줄은_그_키를_앞세운다():
-    """선언 없이 — 대상 행 자신의 값 토큰이 접수 끝점이 읽는 키 하나에만 들면 그 키. 접수 응답이 없으면(frame) 줄도 순서도 없다."""
+def test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함께_말하고_흐름_줄은_그_키를_앞세운다():
+    """대상 키는 frame 전 입구 노드가 State에 둔다(`state.target`). 브리핑은 고르지 않고 적기만 한다 — 못 골랐으면 그 이유를."""
     from src.application.state import CaseState
+    from src.domain.case import TargetPick
 
-    state = CaseState(case=_patrol_case(), evidence=[_linked_rest_evidence()])
+    picked = TargetPick(key="alarm:stats:{line}", basis="키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)",
+                        candidates=["alarm:scan:{line}", "alarm:stats:{line}"])
+    state = CaseState(case=_patrol_case(), target=picked)
     fields = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy())
-    assert "대상 키: alarm:stats:{line} (대상 행 t-1.e1 response[2]의 link 값 토큰 'stats'가 이 키에만 든다)" in fields["case"]
+    assert "대상 키: alarm:stats:{line} — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)" in fields["case"]
     endpoint = next(l for l in fields["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
     assert endpoint.index("alarm:stats:{line}") < endpoint.index("alarm:scan:{line}")
+    unpicked = CaseState(case=_patrol_case(), target=TargetPick(problem="후보 2개 중 identity가 든 키가 없다", candidates=["a", "b"]))
+    fields = briefing.integrate_fields(unpicked, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy())
+    assert "대상 키: 못 골랐다 — 후보 2개 중 identity가 든 키가 없다" in fields["case"]
+    endpoint = next(l for l in fields["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
+    assert endpoint.index("alarm:scan:{line}") < endpoint.index("alarm:stats:{line}")   # 고른 것이 없으면 순서에 뜻이 없다
     blank = briefing.integrate_fields(CaseState(case=_patrol_case()), site_config=_site_with_check(), max_rounds=3,
                                       flow_graph=_keyed_graph_with_decoy())
     assert "대상 키" not in blank["case"]
-    endpoint = next(l for l in blank["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
-    assert endpoint.index("alarm:scan:{line}") < endpoint.index("alarm:stats:{line}")   # 고른 것이 없으면 순서에 뜻이 없다
     for turn in ("frame", "conclude"):
         fn = getattr(briefing, f"{turn}_fields")
         assert "대상 키: alarm:stats:{line}" in fn(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy())["case"]

@@ -24,10 +24,11 @@ url·비밀번호·계정은 프롬프트에 들어가지 않는다. 리드가 �
 import json
 import re
 
-from src.application.intake_map import TargetKey, map_target
+from src.application.intake_map import check_of, start_read
 from src.application.runner_probe import target_rows
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS, describe
+from src.domain.case import TargetPick
 from src.knowledge import flow as flowgraph
 
 # 리드가 쓸 수 없는 action. rest.query는 등재 항목마다 따로 적는다(인자가 다르다).
@@ -103,27 +104,7 @@ def _args(required: tuple, optional: tuple) -> str:
     return ", ".join(parts)
 
 
-def _check_of(case, site_config):
-    checks = getattr(getattr(site_config, "patrol", None), "checks", None) or {}
-    if not case.check or case.check not in checks:
-        return None
-    return checks[case.check]
-
-
-def start_read(case, site_config) -> tuple[str, dict] | None:
-    """접수 경로의 첫 칸 — 케이스를 연 판정이 **본** 프로브의 읽기 `(action, params)`. 없으면 None.
-
-    `params.items.probe`가 판정이 본 프로브다(`only_when`의 프로브가 아니라). 리드는 같은 읽기로
-    증상을 재현하는 데서 시작한다 — 사내 첫 조사 trace에서 리드가 끝점을 만드는 코드에 한 번도
-    가지 않은 것은 이 출발점을 우리가 안 줬기 때문이다. 사람이 적는 표가 아니라 config다(⑮).
-    """
-    check = _check_of(case, site_config)
-    if check is None:
-        return None
-    probe = check.probes.get(check.params.items.probe)
-    if probe is None:
-        return None
-    return probe.action, dict(probe.params)
+_check_of = check_of                 # 접수 읽기·점검 조회는 `intake_map`으로 옮겼다(입구 노드도 쓴다) — 이름은 남긴다
 
 
 def _rest_path(site_config, read: tuple[str, dict]) -> str | None:
@@ -154,7 +135,7 @@ def origin_line(case, site_config) -> str | None:
     return " · ".join(parts)
 
 
-def case_block(state: CaseState, *, site_config=None, target: TargetKey | None = None) -> str:
+def case_block(state: CaseState, *, site_config=None, target: TargetPick | None = None) -> str:
     case = state.case
     origin = "사람" if case.origin == "human" else (origin_line(case, site_config) or "순찰")
     # 증거가 짚은 대상 행 경로 — 리드가 첫 행(다른 배지)을 기대값으로 썼다(사내 측정 #4). 실행기가 머리줄에 적은 것을 그대로.
@@ -616,10 +597,9 @@ def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
     return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
             "서비스 전부. 다른 이름은 code.flow(name).\n" + body)
 
-def target_key(state: CaseState, *, site_config, flow_graph: dict | None) -> TargetKey:
-    """케이스 블록·흐름 줄·(R3-0 ②) verify가 같은 답을 보게 — 접수 끝점이 읽는 선언 키 안에서 대상 행의 값으로 고른다. 선언은 없다."""
-    keys = flowgraph.declared_keys(flow_graph, intake_path(state.case, site_config))
-    return map_target(state, declared_keys=keys)
+def target_key(state: CaseState, *, site_config=None, flow_graph: dict | None = None) -> TargetPick:
+    """입구 노드(R3-1 ①)가 State에 둔 대상 키 — 브리핑은 고르지 않고 적기만 한다. 아직 안 돌았으면 빈 것."""
+    return state.target or TargetPick()
 
 
 def intake_path(case, site_config) -> str | None:
@@ -698,7 +678,7 @@ def frame_fields(state: CaseState, *, site_config,
                                      first_read=start_read(state.case, site_config),
                                      flow_graph=flow_graph),
             "flow": flow_block(state, flow_graph,
-                               texts=(origin_line(state.case, site_config) or "",), prefer=target.prefer)}
+                               texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ()))}
 
 
 def _hidden(flow_graph: dict | None, code_index: bool = False) -> frozenset[str]:
@@ -723,7 +703,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
             "flow": flow_block(state, flow_graph,
-                               texts=(origin_line(state.case, site_config) or "",), prefer=target.prefer),
+                               texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ())),
             "example": example_block(site_config, phase="integrate",
                                      start=next_task_number(state),
                                      services=services,
@@ -808,7 +788,7 @@ def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 120
     target = target_key(state, site_config=site_config, flow_graph=flow_graph)
     return {"case": case_block(state, site_config=site_config, target=target),
             "flow": flow_block(state, flow_graph,
-                               texts=(origin_line(state.case, site_config) or "",), prefer=target.prefer),
+                               texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ())),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state, fold=fold_tasks),
             "evidence": evidence_block(state, budget=evidence_budget),

@@ -349,3 +349,12 @@ async def test_앞선_키_지도의_경로를_컬렉션이나_키_이름으로_�
     assert key.status == "error" and "설정의 경로" in key.error and redis.calls == []
     fine = await runner.run(task("t-4", action="mongo.find", params={"collection": "alarm", "filter": {}}), case=case)
     assert fine.status == "ok" and len(mongo.calls) == 1
+
+
+async def test_실행기는_증거_id로_원본을_돌려준다(case):
+    """R3-1 ① — 입구 노드가 키 값 안의 identity를 **원본**으로 대조한다. 렌더한 본문은 잘리고 모양이 바뀐다."""
+    redis = Recorder(result=ProbeResult.succeeded({"type": "string", "value": "{\"a\": 1}"}, source="r", clock=lambda: T0))
+    runner = ProbeRunner(Bundle(redis=redis), clock=lambda: T0)
+    out = await runner.run(task("t-0", action="redis.get", params={"key": "k"}), case=case)
+    assert runner.raw(out.evidence[0].id) == {"type": "string", "value": "{\"a\": 1}"}
+    assert runner.raw("없는.e1") is None

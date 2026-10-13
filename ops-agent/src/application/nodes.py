@@ -37,10 +37,10 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from src.application.facts import facts_for, present
-from src.application.intake_map import TargetKey, cited_keys, map_target
+from src.application.intake_map import IntakeSpec, cited_keys, run_intake
 from src.application.state import CaseState, merge_by_id
 from src.domain.actions import DISCOVERED_ARGS, describe, name_known
-from src.domain.case import Case, CauseLink, Hypothesis, PlanTask, Verdict
+from src.domain.case import Case, CauseLink, Hypothesis, PlanTask, TargetPick, Verdict
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
 # 이 자리에 리드 LLM(`lead.make_lead`)이나 테스트의 대본이 들어온다.
@@ -79,6 +79,8 @@ class EngineDeps:
     # 흐름 그래프가 선언한 이름, 종류별(`rediskey` → 접수 끝점이 읽는 키 템플릿, 없으면 config의 전부). 발견 읽기의 결과와
     # 대조해 "선언됐는데 없는 키"를 사실로 남긴다(`facts.py`). 그래프가 없으면 비어 있고 아무 사실도 안 남는다.
     declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # R3-1 ① — 입구 노드의 재료(접수 읽기·identity 필드, `intake_map.intake_spec`). None이면(사람이 연 케이스, 대본) 입구를 안 돈다.
+    intake: IntakeSpec | None = None
 
 
 # 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
@@ -307,6 +309,17 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
 
 
 def make_nodes(deps: EngineDeps) -> dict:
+    async def intake(state: CaseState) -> dict:
+        """frame **전에** 코드가 접수를 읽고 대상 키를 고른다(R3-1 ①). 리드가 아직 아무것도 보기 전이라 여기 실린 것이 리드의 첫
+        사실이다. 대본 경로(`check_discovery=False`)와 재료가 없는 케이스는 안 돈다. 던지지 않는다 — 실패는 `target.problem`."""
+        if deps.intake is None or not deps.check_discovery or state.target is not None:
+            return {}
+        try:
+            return await run_intake(state, deps.intake, runner=deps.runner,
+                                    declared=tuple(deps.declared.get("rediskey", ())))
+        except Exception as exc:                                    # noqa: BLE001
+            return {"target": TargetPick(problem=f"입구 노드가 던졌다 — {type(exc).__name__}: {exc}")}
+
     async def frame(state: CaseState) -> dict:
         patch = await deps.frame(state)
         # frame 시점에는 증거가 하나도 없다 — 그래서 여기서 인용을 단 가설은
@@ -425,7 +438,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             return {**patch, "decision": "conclude", "stopped_by": "no_runnable"}
         return {**patch, "decision": "continue", "round": state.round + 1}
 
-    return {"frame": frame, "select": select, "execute": execute, "integrate": integrate,
+    return {"intake": intake, "frame": frame, "select": select, "execute": execute, "integrate": integrate,
             **make_verdict_nodes(deps)}
 
 
@@ -644,7 +657,7 @@ def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str],
         "contributing": contributing, "confidence": "low", "caveats": caveats})
 
 
-def cap_unlinked_key(verdict: Verdict, *, target: TargetKey, evidence) -> Verdict:
+def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence) -> Verdict:
     """최상위 원인이 인용한 **키 읽기**가 대상 키(링크 토큰에서 고른 것)가 아니면 확신 상한 medium + caveat. 되묻지 않는다 — 한도다.
 
     사내 측정 #5: 리드가 이름이 비슷한 다른 배지의 키를 읽어 `None`을 유실의 증거로 삼아 `data_loss(high)`로 틀렸다. 이 규칙은
@@ -658,7 +671,7 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetKey, evidence) -> Verdic
     if not keys or (target.key and any(present(target.key, [k]) for k in keys)):
         return verdict
     known = (f"대상 키 {target.key}" if target.key
-             else "대상 키를 못 골랐다 — " + (target.problem or "고를 재료가 없다(접수 응답이나 선언 키)"))
+             else "대상 키를 못 골랐다 — " + (target.problem or "입구 노드가 고르지 않았다(접수 읽기 없음)"))
     note = f"대상과 키의 연결이 확인되지 않았다 — 최상위가 인용한 키 {', '.join(keys)}; {known}"
     confidence = "medium" if verdict.confidence == "high" else verdict.confidence
     return verdict.model_copy(update={"confidence": confidence, "caveats": verdict.caveats + [note]})
@@ -747,8 +760,7 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         if not problems:
             if not deps.check_discovery:
                 return {"verify_problems": []}            # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
-            target = map_target(state, declared_keys=tuple(deps.declared.get("rediskey", ())))
-            capped = cap_unlinked_key(verdict, target=target, evidence=state.evidence)
+            capped = cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence)
             return {"verify_problems": []} if capped is verdict else {"verdict": capped, "verify_problems": []}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.

@@ -17,9 +17,13 @@ from src.domain.investigation import TaskOutcome, TaskRunnerPort
 class ScriptedRunner(TaskRunnerPort):
     """태스크 id별로 예약된 결과를 돌려준다. 예약이 없으면 빈 성공."""
 
-    def __init__(self, outcomes: dict[str, TaskOutcome] | None = None):
+    def __init__(self, outcomes: dict[str, TaskOutcome] | None = None, raws: dict | None = None):
         self._outcomes = dict(outcomes or {})
+        self._raws = dict(raws or {})
         self.ran: list[str] = []
+
+    def raw(self, evidence_id: str):
+        return self._raws.get(evidence_id)
 
     def describe(self) -> str:
         return f"scripted({len(self._outcomes)}개 예약)"

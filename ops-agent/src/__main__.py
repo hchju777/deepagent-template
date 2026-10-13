@@ -960,6 +960,7 @@ def cmd_case_investigate(args, env) -> int:
     """
     from src.application import briefing
     from src.application.diagnose import diagnose, llm_error_line, verdict_lines
+    from src.application.intake_map import intake_spec
     from src.application.graph import build_engine
     from src.application.lead import make_lead
     from src.application.nodes import EngineDeps
@@ -1035,7 +1036,8 @@ def cmd_case_investigate(args, env) -> int:
                               known_names=flow.known_names(flow_graph),
                               components=frozenset(services),
                               declared={"rediskey": flow.declared_keys(
-                                  flow_graph, briefing.intake_path(case, site))})
+                                  flow_graph, briefing.intake_path(case, site))},
+                              intake=intake_spec(case, site))
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()

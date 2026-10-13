@@ -89,6 +89,23 @@ class PlanTask(StrictModel):
     error: str | None = None
 
 
+class TargetPick(StrictModel):
+    """접수 끝점의 대상 행 → 대상 키 매핑 결과(R3-1 ①). **frame 전에 코드가 읽고 대조해 정한다** — LLM도, 사람의 선언도 아니다.
+
+    고른 키가 있으면 `basis`에 근거(어느 증거의 값 어느 자리에 identity가 그대로 있었나)가 있고, 없으면 `problem`에 이유가 있다.
+    둘 다 케이스 블록에 문장으로 실린다 — 순서는 리드가 못 읽는 신호다(사내 측정 #5).
+    """
+    key: str | None = None
+    basis: str = ""
+    candidates: list[str] = []
+    problem: str = ""
+
+    def line(self) -> str:
+        if self.key:
+            return f"대상 키: {self.key} — {self.basis}"
+        return f"대상 키: 못 골랐다 — {self.problem}" if self.problem else ""
+
+
 class Case(StrictModel):
     """조사 사건 하나.
 

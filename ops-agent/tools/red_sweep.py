@@ -44,6 +44,7 @@ R, C, M, S = (ROOT/"src/infrastructure/git_reader.py", ROOT/"src/knowledge/check
 T = ROOT / "src/knowledge/target_config.py"
 D = ROOT / "src/infrastructure/deployed_code.py"
 B = ROOT / "src/application/briefing.py"
+IM = ROOT / "src/application/intake_map.py"
 GR = ROOT / "src/infrastructure/git_reader.py"
 MN = ROOT / "src/__main__.py"
 ND = ROOT / "src/application/nodes.py"
@@ -696,7 +697,7 @@ CASES = [
   '    return "\\n".join(sorted({n["label"] for n in graph.get("nodes", []) if n.get("label")}))',
   '    return ""',
   ["tests/knowledge/test_flow.py::test_known_names는_그래프의_이름_전부이고_없으면_빈다"]),
- ("접수 경로가 점검을 못 찾는다", B,
+ ("접수 경로가 점검을 못 찾는다", IM,
   '    return checks[case.check]', '    return None',
   ["tests/application/test_briefing.py::test_접수_경로가_config에서_출발점을_되짚는다"]),
  ("frame 예시가 출발 읽기를 뺀다", B,
@@ -1857,9 +1858,9 @@ CASES += [
   "        if names in seen:\n            continue", "        if False:\n            continue",
   ["tests/application/test_briefing.py::test_열린_질문에_코드가_남긴_사실이_실린다"]),
  ("흐름 블록이 케이스 단어를 안 넘긴다", B,
-  "                               texts=(origin_line(state.case, site_config) or \"\",), prefer=target.prefer),\n            \"example\"",
+  "                               texts=(origin_line(state.case, site_config) or \"\",), prefer=((target.key,) if target.key else ())),\n            \"example\"",
   "                               texts=(origin_line(state.case, site_config) or \"\",)),\n            \"example\"",
-  ["tests/application/test_briefing.py::test_케이스_블록이_대상_행의_값으로_고른_대상_키를_말하고_흐름_줄은_그_키를_앞세운다"]),
+  ["tests/application/test_briefing.py::test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함께_말하고_흐름_줄은_그_키를_앞세운다"]),
  ("cache-missing 변형이 캐시 키를 만든다", LC,
   '            **({} if variant == "cache-missing" else', '            **({} if False else',
   ["tests/test_local_case.py::test_cache_missing은_캐시_키가_아예_없고_배지는_0이다"]),
@@ -2248,28 +2249,37 @@ CASES += [
  ("고정 안 한 끝점 줄을 버린다", FLW, "        lines += [line_for(sid) for sid in others]\n", "", ["tests/knowledge/test_flow.py::test_고정_안_한_끝점은_맨_뒤에_예산_안에서_실린다"]),
 ]
 
-# ── 12a-R3-0 ①·④ — 대상 행의 값 → 대상 키(선언 없이, 하나일 때만) ──
+# ── 12a-R3-1 ① — frame 전 입구 노드: 값 안의 identity로 대상 키 ──
 IM = ROOT / "src/application/intake_map.py"
+GP = ROOT / "src/application/graph.py"
 IMT = "tests/application/test_intake_map.py"
-MAP_T = f"{IMT}::test_대상_행의_값이_선언_키_하나에만_들면_그_키를_고르고_케이스_줄로_말한다"
-NOPICK_T = f"{IMT}::test_고르지_못하면_고르지_않고_그_사실을_적는다"
-LINK_B = "tests/application/test_briefing.py::test_케이스_블록이_대상_행의_값으로_고른_대상_키를_말하고_흐름_줄은_그_키를_앞세운다"
+PICK_T = f"{IMT}::test_identity가_그대로_든_키가_하나면_그_키를_고르고_근거와_증거가_State에_남는다"
+NOPICK_T = f"{IMT}::test_고르지_못하면_고르지_않고_이유와_후보를_적는다"
+HOLD_T = f"{IMT}::test_값_안의_같은_객체에_identity_전부가_잎으로_있으면_그_자리를_준다"
+NODE_T = "tests/application/test_nodes.py::test_입구_노드는_frame_전에_접수를_읽고_대상_키를_State에_둔다"
+LINK_B = "tests/application/test_briefing.py::test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함께_말하고_흐름_줄은_그_키를_앞세운다"
 PREF_B = "tests/application/test_briefing.py::test_흐름_블록은_증상_단어로_이름을_앞세우지_않고_prefer로만_앞세운다"
 CASES += [
- ("행의 값 토큰이 숫자만이어도 쓴다", IM, "            if len(tok) >= _MIN_TOKEN and not tok.isdigit() and (field, tok) not in out:",
-  "            if len(tok) >= _MIN_TOKEN and (field, tok) not in out:", [f"{IMT}::test_행의_값은_영숫자_토큰_3자_이상이고_숫자만인_것은_뺀다"]),
- ("둘 이상에 들어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, hit), = hits.items()", "    if hits:\n        (key, hit), *_ = hits.items()", [NOPICK_T]),
- ("못 골랐는데도 prefer를 준다", IM, "        return (self.token,) if self.key and self.token else ()", "        return tuple(t for t in [self.token] if t) or tuple(k.split(\":\")[0] for k in self.keys[:1])", [NOPICK_T]),
- ("선언 키가 없어도 뭔가 고른다", IM, "    if not declared_keys:\n        return TargetKey()", "    if False:\n        return TargetKey()", [NOPICK_T]),
- ("잘린 대상 행을 행으로 읽는다", IM, "            except ValueError:\n                return where, None", "            except ValueError:\n                return where, {}",
-  [f"{IMT}::test_잘린_대상_행은_못_읽었다고_말한다"]),
+ ("identity 일부만 있어도 그 자리로 친다", IM, "        if values and all(v in leaves for v in values):", "        if values and any(v in leaves for v in values):", [HOLD_T]),
+ ("부분 문자열로 identity를 찾는다", IM, "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}",
+  "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}\n        leaves = {l for l in leaves} | {v for v in values if any(l in v for l in leaves)}", [HOLD_T]),
+ ("둘 이상이어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, (evidence_id, at)), = hits.items()", "    if hits:\n        (key, (evidence_id, at)), *_ = hits.items()", [NOPICK_T]),
+ ("identity가 없는 키도 고른다", IM, "        at = holds_identity(_unwrap(raw), identity)\n        if at:", "        at = holds_identity(_unwrap(raw), identity) or \"(맨 위)\"\n        if at:", [PICK_T, NOPICK_T]),
+ ("접수 읽기가 실패해도 계속 간다", IM, "    if outcome.status != \"ok\" or not outcome.evidence:\n        return patch(", "    if False:\n        return patch(",
+  [f"{IMT}::test_접수_읽기가_실패하거나_대상_행이_없으면_거기서_멈춘다"]),
+ ("템플릿 머리를 scan하지 않는다", IM, "    for template in (k for k in declared if \"{\" in k):", "    for template in ():",
+  [f"{IMT}::test_템플릿_키는_머리로_scan해_실재하는_키를_후보로_삼고_상한을_지킨다"]),
+ ("후보 상한을 안 지킨다", IM, "            if len(candidates) >= MAX_CANDIDATES:\n                capped = True\n                break", "            if False:\n                capped = True\n                break",
+  [f"{IMT}::test_템플릿_키는_머리로_scan해_실재하는_키를_후보로_삼고_상한을_지킨다"]),
+ ("입구 노드가 그래프에 없다", GP, '    builder.add_edge(START, "intake")\n    builder.add_edge("intake", "frame")', '    builder.add_edge(START, "frame")', [NODE_T]),
+ ("대본 경로에서도 입구를 돈다", ND, "        if deps.intake is None or not deps.check_discovery or state.target is not None:", "        if deps.intake is None or state.target is not None:", [NODE_T]),
+ ("실행기가 원본을 안 준다", RP, "    def raw(self, evidence_id: str):\n        return self._raw.get(evidence_id)", "    def raw(self, evidence_id: str):\n        return None",
+  ["tests/application/test_runner_probe.py::test_실행기는_증거_id로_원본을_돌려준다"]),
  ("케이스 블록에 대상 키를 안 적는다", B, '            + (f"\\n{target.line()}" if target is not None and target.line() else ""))', "            )", [LINK_B]),
- ("흐름 줄이 토큰을 안 앞세운다", B, "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=prefer, pin=set(own))",
+ ("흐름 줄이 고른 키를 안 앞세운다", B, "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=prefer, pin=set(own))",
   "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=(), pin=set(own))", [LINK_B, PREF_B]),
- ("integrate가 대상 키를 안 구한다", B, "                     fold_tasks: bool = False) -> dict[str, str]:\n    target = target_key(state, site_config=site_config, flow_graph=flow_graph)",
-  "                     fold_tasks: bool = False) -> dict[str, str]:\n    target = TargetKey()", [LINK_B]),
- ("측정판 배지 행에 링크가 없다", LC, '                                    "caution": 0, "normal": 3,\n                                    "link": f"/summary/badge/{BADGE_LINKS.get(t, t.lower())}/"}',
-  '                                    "caution": 0, "normal": 3}', ["tests/test_local_case.py::test_배지_행의_링크_값_토큰이_대상_배지만_stats_키에_든다"]),
+ ("브리핑이 State의 대상 키를 안 본다", B, "    return state.target or TargetPick()", "    return TargetPick()", [LINK_B]),
+ ("CLI가 입구 재료를 안 넘긴다", MN, "                              intake=intake_spec(case, site))", "                              )", ["tests/application/test_lead.py::test_CLI가_실제로_돈다"]),
 ]
 # ── 12a-R3-0 ② — 대상과 연결 안 된 키로 high 금지 ──
 CAP_T = "tests/application/test_verdict.py::test_최상위가_인용한_키가_대상_키가_아니면_확신_상한_medium과_caveat"

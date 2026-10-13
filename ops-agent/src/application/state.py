@@ -32,7 +32,7 @@ import operator
 from typing import Annotated, Literal
 
 from src.domain.base import StrictModel
-from src.domain.case import Case, EvidenceRef, Hypothesis, PlanTask, Verdict
+from src.domain.case import TargetPick, Case, EvidenceRef, Hypothesis, PlanTask, Verdict
 
 Decision = Literal["continue", "conclude"]
 
@@ -76,6 +76,8 @@ class CaseState(StrictModel):
     # 두 번째도 실패하면 verify가 강등해 통과시키고 비운다 — 세 번째는 없다.
     verify_problems: list[str] = []
     verify_attempts: int = 0
+    # R3-1 ① — frame 전 입구 노드가 고른 대상 키(또는 못 고른 이유). 브리핑·verify가 이것을 본다 — 다시 고르지 않는다.
+    target: TargetPick | None = None
 
     def evidence_ids(self) -> set[str]:
         """select 게이트가 보는 우주 — **리드가 실제로 본 것**뿐이다."""

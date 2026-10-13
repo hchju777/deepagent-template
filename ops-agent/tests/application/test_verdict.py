@@ -434,14 +434,16 @@ def test_판정_프롬프트는_component가_데이터를_만드는_서비스라
 
 # ── R3-0 ② — 대상과 연결 안 된 키로 high 금지 ──
 
-def _linked_state(case, *, key_read: str | None, **over) -> CaseState:
-    """접수 응답(대상 행 response[2] → 링크 토큰 'stats')과, 있으면 키 읽기 하나(t-2.e1)."""
-    from tests.application.test_briefing import _linked_rest_evidence
+def _linked_state(case, *, key_read: str | None, target="picked", **over) -> CaseState:
+    """입구 노드가 고른 대상 키(`state.target`)와, 있으면 키 읽기 하나(t-2.e1)."""
+    from src.domain.case import TargetPick
 
-    evidence = [_linked_rest_evidence()]
+    evidence = [_ev("t-1.e1")]
     if key_read is not None:
         evidence.append(EvidenceRef(id="t-2.e1", source=f"redis.get key={key_read!r}", summary="(nil)", body="(nil)"))
-    return _state(case, evidence=evidence, **over)
+    picks = {"picked": TargetPick(key="alarm:stats:{line}", basis="키 값의 x에 대상 identity가 그대로 있다 (t-0-1.e1)"),
+             "unpicked": TargetPick(problem="후보 2개 중 identity가 든 키가 없다"), None: None}
+    return _state(case, evidence=evidence, target=picks[target], **over)
 
 
 def _citing(*ids, confidence="high") -> Verdict:
@@ -449,8 +451,7 @@ def _citing(*ids, confidence="high") -> Verdict:
 
 
 def _linked_deps(**over):
-    return deps_for(ScriptedRunner(), components=frozenset({"sink"}),
-                    declared={"rediskey": ("alarm:scan:{line}", "alarm:stats:{line}")}, **over)
+    return deps_for(ScriptedRunner(), components=frozenset({"sink"}), **over)
 
 
 async def test_최상위가_인용한_키가_대상_키가_아니면_확신_상한_medium과_caveat(case):
@@ -473,14 +474,12 @@ async def test_최상위가_인용한_키가_대상_키가_아니면_확신_상�
 
 
 async def test_대상_키를_못_골랐어도_키를_인용한_high는_medium이고_대본_경로는_안_건다(case):
-    """연결이 "확인되지 않은" 것은 고를 재료가 없을 때(그래프 없음)나 못 골랐을 때(둘 이상에 든다)도 같다. 대본
+    """연결이 "확인되지 않은" 것은 입구 노드가 안 돌았을 때(`target` 없음)나 못 골랐을 때도 같다. 대본
     (`check_discovery=False`)은 사람이 이름을 알고 쓴 것이라 안 건다 — `_component_problem`과 같은 스위치."""
-    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))             # 선언 키 없음
-    got = await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1")))
-    assert got["verdict"].confidence == "medium" and any("고를 재료가 없다" in c for c in got["verdict"].caveats)
-    both = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"}),
-                               declared={"rediskey": ("alarm:scan:{line}", "alarm:stats:{line}", "stats:old:{line}")}))
-    got = await both["verify"](_linked_state(case, key_read="alarm:stats:L1", verdict=_citing("t-2.e1")))
-    assert got["verdict"].confidence == "medium" and any("2개에 든다" in c for c in got["verdict"].caveats)
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    got = await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", target=None, verdict=_citing("t-2.e1")))
+    assert got["verdict"].confidence == "medium" and any("입구 노드가 고르지 않았다" in c for c in got["verdict"].caveats)
+    got = await nodes["verify"](_linked_state(case, key_read="alarm:stats:L1", target="unpicked", verdict=_citing("t-2.e1")))
+    assert got["verdict"].confidence == "medium" and any("identity가 든 키가 없다" in c for c in got["verdict"].caveats)
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
     assert await loose["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1"))) == {"verify_problems": []}

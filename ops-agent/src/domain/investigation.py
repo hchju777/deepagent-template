@@ -60,3 +60,8 @@ class TaskRunnerPort(ABC):
     @abstractmethod
     def describe(self) -> str:
         """사람이 읽을 한 줄. 비밀값은 담지 않는다."""
+
+    def raw(self, evidence_id: str):
+        """그 증거의 **원본**(렌더하기 전 값) — 이 실행기가 만든 것만, 없으면 None. 입구 노드(R3-1 ①)가 키 값 안의 identity를
+        원본으로 대조한다. 렌더한 본문은 잘리고 모양이 바뀌어 대조 재료가 못 된다. 기본은 "모른다"."""
+        return None

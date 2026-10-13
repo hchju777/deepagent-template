@@ -1,114 +1,215 @@
-"""접수 끝점의 대상 행 → 대상 키 (R3-0 ①·④) — **선언 없이, 행 자신의 값으로, 정확히 하나일 때만.**
+"""접수 끝점의 대상 행 → 대상 키 (R3-1 ①) — **frame 전에 코드가 읽고, 값 안에 identity가 그대로 있는 키 하나를 고른다.**
 
-왜 있는가: 사내 측정 #5에서 흐름 줄의 키 순서를 증상 단어의 유사성(`briefing.case_words`, R2-2b-2)으로 정했더니 이름이
-비슷한 다른 배지의 키가 첫 자리에 왔고, 리드가 그 키를 읽어 `None`을 유실의 증거로 삼아 high로 틀렸다. 순서는 리드가 읽을 수
-없는 신호이고 증상 단어는 근거가 아니다. 여기서는 **대상 행 자신의 값**(링크·이름 같은 문자열 필드의 영숫자 토큰)이 접수
-끝점이 읽는 선언 키 이름에 드는지를 보고, **정확히 하나의 키에만** 들 때 그 키를 골라 케이스 블록에 **문장으로** 적는다.
+왜 있는가: 사내 측정 #5에서 흐름 줄의 키 순서를 증상 단어의 유사성으로 정했더니 리드가 이름이 비슷한 다른 배지의 키를 읽어
+high로 틀렸다. #6에서 "대상 행의 값 토큰이 든 키"로 바꿨더니 무관한 라벨 필드의 조각이 한 키에만 들어 틀린 키를 사실처럼
+박았다. 이름·토큰·선언은 전부 손 규칙이었다. 이제는 **실제 값**으로 판정한다 — 접수 끝점이 읽는 후보 키를 전부 읽고, 그 값의
+같은 객체에 대상 행의 identity 값 **전부**가 JSON 잎으로 **완전 일치**하는 키가 정확히 하나면 그 키다(사내 c-1·c-2는 요약 키
+값의 `record[0].summary_info`에 배지 행의 group/title이 그대로 있다). 필드 이름은 안 본다 — 키 값 쪽 이름이 행과 같다는 보장이
+없다. 0개·여럿이면 고르지 않고 이유와 후보를 적는다(②가 확신을 medium으로 묶는다).
 
-처음엔 토폴로지에 `intake: {field, token}`을 선언하게 했다(①). 10-13에 뺐다 — 끝점마다 사람이 적어야 하는 선언은 단기엔 되지만
-장기 유지보수의 짐이고, 측정 뒤 정 안 되면 그때 더하는 것이 맞는 순서다. 선언이 없는 대가는 추정이 더 자주 실패하는 것이고,
-그때는 틀린 키를 집지 않고 "못 골랐다"로 멈춘다(②가 확신을 medium으로 묶는다).
+읽은 것은 전부 State의 태스크·증거(`t-0`, `t-0-N`)로 남는다 — 리드가 같은 읽기를 다시 낼 필요가 없고, 판정이 인용할 수 있다.
+후보 키는 그래프가 아는 선언 키(리터럴)와 템플릿 머리의 `scan` 결과(개수 상한)다. 대조는 실행기가 든 **원본**(`runner.raw`)으로
+한다 — 렌더한 본문은 잘리고 모양이 바뀐다.
 
-토큰이 키 이름에 드는지는 부분 문자열 대조다 — 상대가 증상 문장이 아니라 그 행의 값이고, 유일할 때만 고른다는 것이 #5의
-실패와 다른 점이다. R3-1의 그래프 사슬(끝점 → 읽는 키 → config 자리 → 접두)이 이것을 좁힌다.
+B(키가 없을 때 config 잎 → 항목 → 조립식)는 측정 #7 뒤다 — 이유는 plan-12a-r2-r4.md R3-1 표 아래.
 """
 import json
 import re
 from dataclasses import dataclass
+from typing import Any
 
-from src.application.runner_probe import target_rows
+from src.application.runner_probe import focus_of
 from src.application.state import CaseState
+from src.domain.actions import role_for
+from src.domain.case import EvidenceRef, PlanTask, TargetPick
+from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
-_ROW = re.compile(r"^\s*\[(\d+)\] (.*)$", re.M)
+MAX_CANDIDATES = 50
 # 증거 `source`는 우리가 만든 `describe` 문자열(`redis.get key='…' path='…'`)이라 그 모양으로 키를 되읽는다. scan은 키 하나를 읽은 것이
 # 아니라 세지 않는다.
 _KEY_READ = re.compile(r"^redis\.get key='((?:[^'\\]|\\.)*)'")
-_VALUE_CHARS = 60
-
-
-_TOKEN = re.compile(r"[A-Za-z0-9]+")
-_MIN_TOKEN = 3
 
 
 @dataclass(frozen=True)
-class TargetKey:
-    token: str | None = None
-    where: str = ""                 # 어느 증거의 어느 행 — `t-1.e1 response[15]`
-    keys: tuple[str, ...] = ()      # 행의 값이 든 선언 키들(하나면 고른 것)
-    problem: str = ""               # 못 고른 이유(비면 고른 것이거나 아직 볼 것이 없다)
-    field: str = ""                 # 토큰이 나온 행의 필드
-
-    @property
-    def key(self) -> str | None:
-        return self.keys[0] if len(self.keys) == 1 else None
-
-    @property
-    def prefer(self) -> tuple[str, ...]:
-        """흐름 줄이 앞세울 단어 — 고른 키의 토큰뿐. 못 골랐으면 아무것도 앞세우지 않는다(증상 단어는 다시 쓰지 않는다)."""
-        return (self.token,) if self.key and self.token else ()
-
-    def line(self) -> str:
-        if self.key:
-            return f"대상 키: {self.key} (대상 행 {self.where}의 {self.field} 값 토큰 '{self.token}'가 이 키에만 든다)"
-        return f"대상 키: 못 골랐다 — {self.problem}" if self.problem else ""
+class IntakeSpec:
+    """입구 노드가 돌 재료 — 접수 읽기(점검이 본 프로브의 `(action, params)`)와 identity 필드 이름. 둘 다 점검 config에서."""
+    read: tuple[str, dict]
+    fields: tuple[str, ...]
 
 
-def row_tokens(row: dict) -> list[tuple[str, str]]:
-    """대상 행의 문자열 값에서 뽑은 `(필드, 토큰)` — 영숫자 덩어리, 3자 이상, 숫자만인 것은 뺀다(시각·건수는 이름이 아니다).
-    대소문자는 그대로 — `Alarm`은 `alarm:…`에 안 든다(식별 값이 우연히 여러 키에 드는 것을 막는다)."""
-    out: list[tuple[str, str]] = []
-    for field, value in row.items():
-        if not isinstance(value, str):
-            continue
-        for tok in _TOKEN.findall(value):
-            if len(tok) >= _MIN_TOKEN and not tok.isdigit() and (field, tok) not in out:
-                out.append((field, tok))
-    return out
+def check_of(case, site_config):
+    checks = getattr(getattr(site_config, "patrol", None), "checks", None) or {}
+    if not case.check or case.check not in checks:
+        return None
+    return checks[case.check]
 
 
-def target_row(state: CaseState) -> tuple[str, dict | None] | None:
-    """증거가 짚은 첫 대상 행 — `(어디, 행)`. 실행기가 머리줄에 적은 경로의 `[n] …` 줄을 다시 읽는다(항목당 압축 JSON 한 줄이라
-    그대로 풀린다). 예산에서 잘린 줄이면 행은 None. 대상 행을 짚은 증거가 없으면 None."""
-    for ref in state.evidence:
-        paths = target_rows(ref.body)
-        if not paths:
-            continue
-        where = f"{ref.id} {paths[0]}"
-        n = int(paths[0].rsplit("[", 1)[1].rstrip("]"))
-        for m in _ROW.finditer(ref.body):
-            if int(m.group(1)) != n:
-                continue
-            try:
-                row = json.loads(m.group(2))
-            except ValueError:
-                return where, None
-            return where, (row if isinstance(row, dict) else None)
-        return where, None
+def start_read(case, site_config) -> tuple[str, dict] | None:
+    """접수 경로의 첫 칸 — 케이스를 연 판정이 **본** 프로브의 읽기 `(action, params)`. 없으면 None.
+
+    `params.items.probe`가 판정이 본 프로브다(`only_when`의 프로브가 아니라). 리드는 같은 읽기로
+    증상을 재현하는 데서 시작한다 — 사내 첫 조사 trace에서 리드가 끝점을 만드는 코드에 한 번도
+    가지 않은 것은 이 출발점을 우리가 안 줬기 때문이다. 사람이 적는 표가 아니라 config다(⑮).
+    """
+    check = check_of(case, site_config)
+    if check is None:
+        return None
+    probe = check.probes.get(check.params.items.probe)
+    if probe is None:
+        return None
+    return probe.action, dict(probe.params)
+
+
+def intake_spec(case, site_config) -> IntakeSpec | None:
+    """순찰이 연 케이스(점검·target이 있고 점검에 identity가 있는 것)만 입구를 돈다. 사람이 연 케이스는 None."""
+    read = start_read(case, site_config)
+    check = check_of(case, site_config)
+    fields = tuple(getattr(getattr(check, "params", None), "identity", None) or ()) if check is not None else ()
+    if read is None or not fields or not case.target:
+        return None
+    return IntakeSpec(read=read, fields=fields)
+
+
+def _doc_lists(value: Any, path: str = ""):
+    """값 안의 문서 목록들 — `(경로, 목록)`. 맨 위가 목록이면 경로는 빈 문자열."""
+    if isinstance(value, list) and value and all(isinstance(r, dict) for r in value):
+        yield path, value
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from _doc_lists(v, f"{path}.{k}" if path else str(k))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            yield from _doc_lists(v, f"{path}[{i}]")
+
+
+def target_row(data: Any, *, fields: tuple[str, ...], values: tuple[str, ...]) -> tuple[str, dict] | None:
+    """접수 응답 원본에서 identity 필드가 전부 `values`와 같은 첫 행 — `(경로, 행)`. 경로 번호는 0부터(경로 문법과 같다)."""
+    for path, rows in _doc_lists(data):
+        for i, row in enumerate(rows):
+            if all(str(row.get(f)) == v for f, v in zip(fields, values)) and len(fields) == len(values):
+                return f"{path}[{i}]", row
     return None
 
 
-def map_target(state: CaseState, *, declared_keys: tuple[str, ...]) -> TargetKey:
-    """`declared_keys`는 접수 끝점이 읽는 키 템플릿(`flow.declared_keys`). 행의 값 토큰이 **정확히 하나의 키에만** 들 때 고른다."""
-    if not declared_keys:
-        return TargetKey()                      # 고를 재료가 없다(흐름 그래프 없음) — 흐름 블록이 이미 "없음"을 말한다
-    found = target_row(state)
+def holds_identity(value: Any, values: tuple[str, ...], path: str = "(맨 위)") -> str | None:
+    """값 안에서 **같은 객체**의 잎(문자열·숫자, bool 제외)에 identity 값 전부가 완전 일치하는 자리 — 없으면 None. 첫 자리."""
+    if isinstance(value, dict):
+        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}
+        if values and all(v in leaves for v in values):
+            return path
+        for k, v in value.items():
+            found = holds_identity(v, values, f"{path}.{k}" if path != "(맨 위)" else str(k))
+            if found:
+                return found
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            found = holds_identity(v, values, f"{path}[{i}]" if path != "(맨 위)" else f"[{i}]")
+            if found:
+                return found
+    return None
+
+
+def _unwrap(raw: Any) -> Any:
+    """`redis.get` 원본(`{"type": "string", "value": …}`)에서 값 — 문자열이면 JSON으로 풀어 본다."""
+    value = raw.get("value") if isinstance(raw, dict) and "value" in raw else raw
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _task(task_id: str, goal: str, action: str, params: dict) -> PlanTask:
+    return PlanTask(id=task_id, goal=goal, role=role_for(action), action=action, params=params, status="running")
+
+
+def _finish(task: PlanTask, outcome: TaskOutcome) -> PlanTask:
+    return task.model_copy(update={"status": outcome.status, "result_summary": outcome.summary or None,
+                                   "result_evidence_ids": [e.id for e in outcome.evidence], "error": outcome.error})
+
+
+async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPort, declared: tuple[str, ...]) -> dict:
+    """입구 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`target`). 던지지 않는다(호출부가 한 번 더 감싼다)."""
+    from src.application.facts import key_head
+
+    tasks: list[PlanTask] = []
+    evidence: list[EvidenceRef] = []
+    counter = 0
+
+    async def run(goal: str, action: str, params: dict):
+        # 접수 읽기는 `t-0`, 그다음은 `t-0-1`, `t-0-2`… — `t-N`(리드의 번호)과 겹치지 않고 판정 인용 정리(`^t-\\d+$`)에도 안 걸린다.
+        nonlocal counter
+        task_id = "t-0" if counter == 0 else f"t-0-{counter}"
+        counter += 1
+        task = _task(task_id, goal, action, params)
+        outcome = await runner.run(task, case=state.case)
+        done = _finish(task, outcome)
+        tasks.append(done)
+        evidence.extend(outcome.evidence)
+        return done, outcome
+
+    def patch(pick: TargetPick) -> dict:
+        return {"plan_tasks": tasks, "evidence": evidence, "target": pick}
+
+    action, params = spec.read
+    done, outcome = await run("접수 읽기 — 증상 재현(코드)", action, params)
+    if outcome.status != "ok" or not outcome.evidence:
+        return patch(TargetPick(problem=f"접수 읽기 실패 — {outcome.error or '증거 없음'}"))
+    values = focus_of(state.case)
+    found = target_row(runner.raw(outcome.evidence[0].id), fields=spec.fields, values=values)
     if found is None:
-        return TargetKey()                      # 접수 응답을 아직 안 봤다(frame) — R3-1이 frame 전에 읽는다
+        return patch(TargetPick(problem=f"접수 응답에 대상 행이 없다 — identity {'/'.join(spec.fields)} = {'/'.join(values)} ({outcome.evidence[0].id})"))
     where, row = found
-    if row is None:
-        return TargetKey(where=where, problem=f"대상 행 {where}이 예산에서 잘려 값을 못 읽었다")
-    tokens = row_tokens(row)
-    hits = {key: [(f, t) for f, t in tokens if t in key] for key in declared_keys}
-    hits = {key: hit for key, hit in hits.items() if hit}
+    identity = tuple(str(row.get(f)) for f in spec.fields)
+
+    # 후보 — 리터럴 선언 키 먼저, 템플릿은 머리로 scan해 실재하는 키. 상한을 넘으면 그 사실을 적는다.
+    candidates: list[str] = [k for k in declared if "{" not in k]
+    capped = False
+    for template in (k for k in declared if "{" in k):
+        if len(candidates) >= MAX_CANDIDATES:
+            capped = True
+            break
+        head = key_head(template)
+        _, scanned = await run(f"대상 키 후보 — {template}의 실재 키", "redis.scan", {"pattern": f"{head}*"})
+        names = runner.raw(scanned.evidence[0].id) if scanned.status == "ok" and scanned.evidence else None
+        for name in (names if isinstance(names, list) else []):
+            if len(candidates) >= MAX_CANDIDATES:
+                capped = True
+                break
+            if isinstance(name, str) and name not in candidates:
+                candidates.append(name)
+    if not candidates:
+        return patch(TargetPick(problem=f"후보 키가 없다 — 접수 끝점이 읽는 선언 키를 모른다(흐름 그래프) ({where} 대상 행은 찾았다)"))
+
+    hits: dict[str, tuple[str, str]] = {}
+    missing: list[str] = []
+    for key in candidates:
+        _, got = await run(f"대상 키 후보 읽기 — {key}", "redis.get", {"key": key})
+        if got.status != "ok" or not got.evidence:
+            continue
+        raw = runner.raw(got.evidence[0].id)
+        if raw is None:
+            missing.append(key)
+            continue
+        at = holds_identity(_unwrap(raw), identity)
+        if at:
+            hits[key] = (got.evidence[0].id, at)
+    tail = f" — 후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""
+    label = f"대상 identity({'/'.join(identity)})"
     if len(hits) == 1:
-        (key, hit), = hits.items()
-        field, token = max(hit, key=lambda ft: len(ft[1]))                 # 가장 긴 토큰이 가장 구체적이다
-        return TargetKey(token=token, where=where, keys=(key,), field=field)
+        (key, (evidence_id, at)), = hits.items()
+        return patch(TargetPick(key=key, candidates=candidates,
+                                basis=f"키 값의 {at}에 {label}가 그대로 있다 ({evidence_id})",
+                                problem=f"후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""))
     if not hits:
-        return TargetKey(where=where, problem=f"대상 행 {where}의 값 중 선언 키 이름에 든 것이 없다 (선언 키: {', '.join(declared_keys)})")
-    shown = "; ".join(f"{key} ← {', '.join(sorted({t for _, t in hit}))}" for key, hit in hits.items())
-    return TargetKey(where=where, keys=tuple(hits),
-                     problem=f"대상 행 {where}의 값이 선언 키 {len(hits)}개에 든다 — 하나로 못 좁힌다: {shown}")
+        gone = f"; 없는 키 {len(missing)}개: {', '.join(missing)}" if missing else ""
+        return patch(TargetPick(candidates=candidates,
+                                problem=f"후보 {len(candidates)}개 중 값에 {label}가 든 키가 없다{gone}{tail}"))
+    shown = "; ".join(f"{k} ({at}, {eid})" for k, (eid, at) in hits.items())
+    return patch(TargetPick(candidates=candidates,
+                            problem=f"값에 {label}가 든 키가 {len(hits)}개 — 하나로 못 좁힌다: {shown}{tail}"))
 
 
 def cited_keys(evidence_ids, evidence) -> list[str]:

@@ -599,6 +599,34 @@ conclude), `data_loss(high)`로 **틀렸다**. 흐름 줄의 키 순서를 `pref
   인용한 high 판정이 `data_loss (medium)` + caveat로 나왔다. 테스트 먼저(RED 5 + 모듈 함수 부재 → GREEN). 스윕 581 → 578(선언 케이스
   넷 제거, 추정 케이스 추가, 옮겨진 앵커 둘).
 
+### 측정 #6(sevt, 10-13)과 R3-1
+
+②(확신 상한)·③(키 지도 거부)은 작동했고, ④의 토큰 규칙은 두 케이스 다 틀렸다 — 유일성을 키 쪽에서만 봐서 무관한 라벨 필드의 조각이
+한 키에만 들어 "유일"이 됐고 c-2는 틀린 키를 케이스 블록에 사실처럼 박았다. 영숫자·3자·부분 문자열은 config의 손 규칙을 코드로 옮긴
+것일 뿐이었다. **정정(사내 10-13 재확인)**: c-1은 키 없는 케이스가 아니다 — 대상 요약 키는 있고 data가 빈 배열, 값의
+`record[0].summary_info`에 대상 행의 identity가 그대로 있다(c-2도). 없는 키는 이름이 비슷한 다른 배지의 키였다. 측정판 `cache-missing`은
+c-1형이 아니다. 항목·순서·B를 #7 뒤로 미루는 이유는 [plan-12a-r2-r4.md](plan-12a-r2-r4.md) R3-1.
+
+#### R3-1 ①-a (10-13) ✅ — frame 전 입구 노드: 값 안의 identity로 대상 키
+
+- 그래프에 `intake` 노드(START → intake → frame). 재료는 `EngineDeps.intake`(`intake_map.intake_spec` — 점검이 본 프로브의 읽기와
+  `identity` 필드, 전부 점검 config에서). 사람이 연 케이스·대본(`check_discovery=False`)·이미 고른 State는 안 돈다. 던지지 않는다.
+- `intake_map.run_intake`: `t-0` 접수 읽기 → 응답 원본(`runner.raw` — 포트에 새로 둔 "원본" 조회; 렌더한 본문은 잘리고 모양이 바뀐다)에서
+  identity 필드가 전부 같은 대상 행 → 후보 키(그래프의 리터럴 선언 키 + 템플릿은 머리로 `scan`, 상한 50) → 하나씩 `redis.get`(`t-0-N`) →
+  값의 **같은 객체**에 identity 값 전부가 잎으로 **완전 일치**하는 자리(`holds_identity`, 필드 이름 안 봄) → 정확히 하나면 그 키. 결과는
+  `State.target`(`domain.TargetPick` — key·basis·candidates·problem). 읽은 것은 전부 태스크·증거로 State에 남아 리드가 같은 읽기를 다시
+  낼 필요가 없고 판정이 인용할 수 있다.
+- 케이스 블록 줄 `대상 키: alarm:stats:L1 — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)` /
+  `대상 키: 못 골랐다 — 후보 3개 중 값에 대상 identity(L1/Alarm)가 든 키가 없다`. 브리핑은 고르지 않고 적기만 한다(`state.target`). 흐름
+  줄은 고른 키만 앞세운다. ②의 상한은 `state.target`으로(못 골랐으면 그 이유가 caveat에).
+- 토큰 규칙(`row_tokens`)과 행 본문 되읽기(`target_row` 옛 것)는 뺐다. `start_read`·`check_of`는 `intake_map`으로 옮겼다(브리핑과 노드가
+  같이 쓴다).
+- 실제 소비자로: 측정판(`cache-stale`, 아직 옛 값 모양)에서 r1 프롬프트에 `t-0`(접수)·`t-0-1`(scan `alarm:stats:*`)·`t-0-2~4`(get)가
+  실렸고 케이스 블록은 `못 골랐다 — 후보 3개 중 … 든 키가 없다`(값에 identity가 없는 옛 모양이라 맞는 답), 대본 판정이 `hb:sink`를 인용하자
+  medium + 그 이유가 caveat에. "골랐다"는 ①-b의 측정판(값에 identity)에서 본다.
+- 테스트 먼저(RED → GREEN). 스윕 578 → 583(토큰 케이스 9 제거, 입구 케이스 14 추가, 옮겨진 앵커 둘). 초록으로 잡힌 변이 둘은 테스트를
+  날카롭게 했다(부분 문자열 대조 / 모든 키를 hit로).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

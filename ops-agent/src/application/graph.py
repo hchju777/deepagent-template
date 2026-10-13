@@ -1,7 +1,7 @@
 """그래프 배선. **LangGraph를 아는 유일한 파일이다.**
 
 ```
-START → frame → (실패면 conclude | select)
+START → intake → frame → (실패면 conclude | select)
                   select → (Send로 execute×N  |  0건이면 integrate)
                   ↑                ↓
                   │            integrate → continue면 select, 아니면 conclude
@@ -27,10 +27,12 @@ from src.application.state import CaseState
 def build_engine(deps: EngineDeps, *, checkpointer=None):
     nodes = make_nodes(deps)
     builder = StateGraph(CaseState)
-    for name in ("frame", "select", "execute", "integrate", "conclude", "verify"):
+    for name in ("intake", "frame", "select", "execute", "integrate", "conclude", "verify"):
         builder.add_node(name, nodes[name])
 
-    builder.add_edge(START, "frame")
+    # R3-1 ① — frame 전에 코드가 접수를 읽고 대상 키를 고른다. 재료가 없으면 빈 패치로 지나간다.
+    builder.add_edge(START, "intake")
+    builder.add_edge("intake", "frame")
     # frame이 실패하면(리드 LLM이 죽었다) 라운드를 시작하지 않고 끝낸다 —
     # 흘려보내면 integrate가 LLM을 또 부르고, 끝난 이유가 덮인다.
     # 죽은 조사에도 판정(degraded)은 남는다 — END가 아니라 conclude로.
