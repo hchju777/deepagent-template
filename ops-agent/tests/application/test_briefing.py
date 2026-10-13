@@ -1391,3 +1391,15 @@ def test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함
     for turn in ("frame", "conclude"):
         fn = getattr(briefing, f"{turn}_fields")
         assert "대상 키: alarm:stats:{line}" in fn(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy())["case"]
+
+
+def test_참고_재집계의_match는_사다리가_사실로_쓰지_않는다(case):
+    """R3-1 ③: filter에 대상 identity가 없는 재집계의 "불일치"는 대상 행의 사실이 아니다 — 그걸로 캐시 키 쪽을 파게 하면 c-1 t-10이
+    그랬듯 엉뚱한 사슬로 간다. 다음 칸을 짐작하지 않고 비운다."""
+    from src.application.runner_probe import ASIDE_MARK
+    diff_t, diff_e = _recompute_done(False)
+    aside = diff_e.model_copy(update={"summary": ASIDE_MARK + "(L1/Alarm)가 없다: 대상 행의 수가 아니라 그 filter 범위의 수다. "
+                                      + diff_e.summary})
+    tasks = _ladder(site(), [_rest_done(), _trace_done(), diff_t], used=("rest.query", "code.trace", "recompute.count"),
+                    graph="keyed", evidence=[aside], code_index=True)
+    assert all(t["action"] not in ("code.uses", "code.callers") for t in tasks), tasks

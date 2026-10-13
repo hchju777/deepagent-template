@@ -25,7 +25,7 @@ import json
 import re
 
 from src.application.intake_map import check_of, start_read
-from src.application.runner_probe import target_rows
+from src.application.runner_probe import ASIDE_MARK, target_rows
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS, describe
 from src.domain.case import TargetPick
@@ -417,6 +417,10 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
     if not code_index or flow_graph is None:
         return None
     keys = flowgraph.traced_reads(flow_graph, ep, kind="rediskey")
+    # 참고 재집계(filter에 대상 identity 없음 — `ASIDE_MARK`)의 match는 대상 행의 사실이 아니다. 다음 칸을 짐작하지 않고 비운다 —
+    # 사내 측정 #6 c-1 t-10의 "불일치"로 캐시 키 쪽을 팠다면 엉뚱한 사슬이다.
+    if ASIDE_MARK in _evidence_text(evidence, recomputed.result_evidence_ids[0]):
+        return None
     match = _recompute_match(evidence, recomputed.result_evidence_ids[0])
     # 불일치인데 끝점이 키를 안 읽는 사슬이면 컬렉션으로 — 없는 이름을 박으면 리드가 그 문을 두드린다.
     name = keys[0] if (match is False and keys) else (collections[0] if collections else None)

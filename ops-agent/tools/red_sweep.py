@@ -2363,7 +2363,22 @@ CASES += [
   "                     + \", \".join(f\"{t.id}(우선순위에 밀림)\" for t in unrun))", [REASON_T]),
 ]
 
-assert len(CASES) >= 599, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1 ③ — 받을 때 인자 검사 · 참고 재집계 ──
+ACCEPT_T = "tests/application/test_nodes.py::test_모르는_인자나_빠진_인자나_없는_action은_받을_때_거부하고_받는_인자를_같이_적는다"
+ASIDE_T = "tests/application/test_runner_probe.py::test_recompute_filter에_대상_identity가_하나도_없으면_결과를_참고로_표시한다"
+LADDER_ASIDE_T = "tests/application/test_briefing.py::test_참고_재집계의_match는_사다리가_사실로_쓰지_않는다"
+CASES += [
+ ("모르는 인자를 받을 때 안 거른다", ND, "        problem = _accept_problem(task)\n        if problem is not None:", "        problem = _accept_problem(task)\n        if False:", [ACCEPT_T]),
+ ("거부 기록에 받는 인자를 안 적는다", ND, "    return problem + hint", "    return problem", [ACCEPT_T]),
+ ("action 없는 태스크를 받는다", ND, "    if not task.action:\n        return \"action이 없다", "    if False:\n        return \"action이 없다", [ACCEPT_T]),
+ ("identity 없는 재집계를 참고로 안 표시한다", RP, "    return bool(focus) and not (set(focus) & _leaves(filter_))", "    return False", [ASIDE_T]),
+ ("identity가 하나만 있어도 참고로 표시한다", RP, "    return bool(focus) and not (set(focus) & _leaves(filter_))", "    return bool(focus) and not (set(focus) <= _leaves(filter_))", [ASIDE_T]),
+ ("dryrun이 거부 기록을 안 보여 준다", MN, "    if final[\"llm_errors\"]:\n        # 받을 때 거부된 태스크(R3-1 ③)", "    if False:\n        # 받을 때 거부된 태스크(R3-1 ③)",
+  ["tests/application/test_dryrun.py::test_CLI가_실제로_돈다"]),
+ ("참고 재집계의 match를 사다리가 사실로 쓴다", B, "    if ASIDE_MARK in _evidence_text(evidence, recomputed.result_evidence_ids[0]):\n        return None", "    if False:\n        return None", [LADDER_ASIDE_T]),
+]
+
+assert len(CASES) >= 606, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

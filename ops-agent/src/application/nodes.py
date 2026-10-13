@@ -39,7 +39,7 @@ from typing import Awaitable, Callable
 from src.application.facts import facts_for, present
 from src.application.intake_map import IntakeSpec, cited_keys, run_intake
 from src.application.state import CaseState, merge_by_id
-from src.domain.actions import DISCOVERED_ARGS, describe, name_known
+from src.domain.actions import ACTIONS, DISCOVERED_ARGS, action_problem, describe, name_known
 from src.domain.case import Case, CauseLink, EvidenceRef, Hypothesis, PlanTask, TargetPick, Verdict
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
@@ -184,6 +184,18 @@ def _waiting(state: CaseState) -> dict[str, PlanTask]:
 
 def _done(state: CaseState) -> frozenset:
     return frozenset(_query(t) for t in state.plan_tasks if t.action)
+
+
+def _accept_problem(task: PlanTask) -> str | None:
+    """받을 때의 등재·인자 검사 한 줄 — 통과하면 None. 받는 인자 목록을 붙인다(선택 인자는 `?`)."""
+    if not task.action:
+        return "action이 없다 — 등재된 읽기 하나를 적어라"
+    problem = action_problem(task.action, task.params if isinstance(task.params, dict) else {})
+    if problem is None:
+        return None
+    spec = ACTIONS.get(task.action)
+    hint = f" (인자: {', '.join([*spec[2], *(f'{name}?' for name in spec[3])])})" if spec else ""
+    return problem + hint
 
 
 def _rejected_reads(state: CaseState) -> dict[str, list[str]]:
@@ -331,6 +343,13 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
     # 거부되는데, 리드는 그 id를 다음 태스크의 입력으로 댄다(측정판에서 그랬다) — 뜻은 "그 결과를 본 뒤"이고 결과는 이미 있다.
     aliases: dict[str, list[str] | None] = {}
     for task in patch.get("plan_tasks", []):
+        # 등재·인자 검사를 **받을 때** 한다(R3-1 ③). 실행에서 거르면 리드는 한 라운드 뒤에야 안다 — 사내 측정 #6에서 `redis.scan
+        # limit`·`mongo.count expect`가 그렇게 라운드를 잃었다. 거부라 되묻기가 그 자리에서 고쳐 받는다. 실행기의 같은 검사는
+        # 마지막 방어선으로 그대로 둔다. 받는 인자를 같이 적는다 — "모르는 인자"만으로는 같은 모양으로 다시 틀린다.
+        problem = _accept_problem(task)
+        if problem is not None:
+            reused.append(f"{task.id}: 받지 않는다 — {problem}")
+            continue
         # **아직 안 돈 태스크는 같은 id로 다시 내면 갱신이다** — 거부가 아니다. `taken`이
         # 막는 것은 끝난 id의 부활(재실행)이지 대기 중인 것의 손질이 아니다. 로컬 대역
         # 측정에서 리드가 굶고 있던 t-4·t-5를 우선순위를 올려 다시 냈는데 "이미 있는

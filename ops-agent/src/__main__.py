@@ -2072,6 +2072,11 @@ def cmd_case_dryrun(args, env) -> int:
         for ref in final["evidence"]:
             partial = "" if ref.complete else "  ⚠ 표본이 잘렸다"
             print(f"    {ref.id}  {ref.source}{partial}")
+    if final["llm_errors"]:
+        # 받을 때 거부된 태스크(R3-1 ③)는 목록에 안 남는다 — 울타리를 보는 명령이니 무엇이 왜 걸러졌는지도 보여 준다.
+        print(f"  받지 않은 것·기록 {len(final['llm_errors'])}건")
+        for problem in final["llm_errors"]:
+            print(f"    {problem}")
     # 실행된 태스크가 하나도 없으면 배선을 확인해 볼 일이다 — 0을 주면 그게 묻힌다.
     return 0 if any(t.status == "ok" for t in final["plan_tasks"]) else 1
 

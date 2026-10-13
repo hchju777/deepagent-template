@@ -80,7 +80,7 @@ async def test_만들어진_태스크의_수명주기_필드는_코드가_덮어
     실행되지 않은 채 "끝난 것"이 되어 select 게이트를 통째로 우회한다. 그리고
     있지도 않은 증거 id가 State에 들어간다.
     """
-    dirty = PlanTask(id="t-1", goal="g", role="data_prober", status="ok",
+    dirty = PlanTask(id="t-1", goal="g", role="data_prober", action="redis.get", params={"key": "k"}, status="ok",
                      result_summary="봤다고 치자", result_evidence_ids=["ev-9"],
                      error="아무 말")
     nodes = make_nodes(deps_for(ScriptedRunner(), first_tasks=[dirty]))
@@ -675,3 +675,24 @@ async def test_앞_라운드에서_거부된_중복_읽기의_id를_입력으로
     patch = await nodes["integrate"](state)
     assert patch["decision"] == "continue"
     assert [t.input_evidence_ids for t in patch["plan_tasks"]] == [["t-0.e1"]]
+
+
+# ── R3-1 ③ — 등재·인자 검사는 받을 때 ──
+
+def test_모르는_인자나_빠진_인자나_없는_action은_받을_때_거부하고_받는_인자를_같이_적는다():
+    """사내 측정 #6: `redis.scan limit`·`mongo.count expect`가 **실행**에서 "모르는 인자"로 죽어 그 라운드를 잃었다 — 리드는 한 라운드
+    뒤에야 안다. 받을 때 거부하면 거부 되묻기가 그 자리에서 고쳐 받는다. 실행기의 검사는 그대로다(마지막 방어선)."""
+    from src.application.nodes import _accept_tasks
+
+    patch = {"plan_tasks": [task("t-1", action="redis.scan", params={"pattern": "a*", "limit": 5}),
+                            task("t-2", action="mongo.count", params={"collection": "c", "filter": {},
+                                                                     "expect": {"evidence": "t-0.e1", "path": "n"}}),
+                            task("t-3", action="recompute.count", params={"collection": "c", "filter": {}}),
+                            task("t-4", action=None, params={}),
+                            task("t-5", action="redis.scan", params={"pattern": "a*"})]}
+    kept, refused, _ = _accept_tasks(patch, room=10)
+    assert [t.id for t in kept] == ["t-5"]
+    assert any(r.startswith("t-1: 받지 않는다 — ") and "모르는 인자 — limit" in r and "(인자: pattern" in r for r in refused), refused
+    assert any(r.startswith("t-2: 받지 않는다 — ") and "모르는 인자 — expect" in r for r in refused)
+    assert any(r.startswith("t-3: 받지 않는다 — ") and "필요한 인자가 없다 — expect" in r for r in refused)
+    assert any(r.startswith("t-4: 받지 않는다 — ") and "action이 없다" in r for r in refused)

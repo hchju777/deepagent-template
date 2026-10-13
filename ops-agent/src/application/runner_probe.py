@@ -100,11 +100,16 @@ class ProbeRunner(TaskRunnerPort):
 
         body, ours = detail(result.data, limit=(self._narrowed_chars if narrowed(task.action, task.params)
                                                 else self._detail_chars), focus=focus_of(case))
+        # 재집계의 filter에 대상 identity가 하나도 없으면 그 수는 대상 행의 수가 아니다(R3-1 ③) — 머리에 "참고"를 박아 요약·본문·
+        # 태스크 줄 어디서 봐도 보이게 한다. 사내 측정 #6 c-1 t-10: 컬렉션 전체 987281 vs 화면 0이 "불일치" 사실로 남았다.
+        aside = ""
+        if task.action.startswith("recompute.") and off_target(task.params.get("filter"), focus_of(case)):
+            aside = f"{ASIDE_MARK}({'/'.join(focus_of(case))})가 없다: 대상 행의 수가 아니라 그 filter 범위의 수다. "
         ref = EvidenceRef(
             id=EvidenceRef.make_id(task.id, 1),
             source=source,
-            summary=_summarize(result.data),
-            body="\n".join(body),
+            summary=aside + _summarize(result.data),
+            body="\n".join([aside.rstrip(), *body] if aside else body),
             as_of=result.envelope.observed_at,
             # **우리가 자른 것도 잘린 것이다.** 예전엔 봉투만 봤고, 예산에서
             # 잘라 놓고 `complete=True`라고 적었다. 그러면 리드는 자기가 본 것이
@@ -122,6 +127,24 @@ class ProbeRunner(TaskRunnerPort):
         return TaskOutcome(task_id=task.id, status="ok",
                            summary=f"{source} → {ref.summary}{note}", evidence=[ref],
                            found=_found(task.action, result.data))
+
+
+# 참고 재집계의 머리말 — 브리핑의 사다리가 이걸 보고 그 match를 사실로 쓰지 않는다. 모양을 바꾸면 거기도 본다.
+ASIDE_MARK = "참고 — filter에 대상 identity"
+
+
+def _leaves(value) -> set[str]:
+    if isinstance(value, dict):
+        return set().union(*(_leaves(v) for v in value.values())) if value else set()
+    if isinstance(value, list):
+        return set().union(*(_leaves(v) for v in value)) if value else set()
+    return {value} if isinstance(value, str) else set()
+
+
+def off_target(filter_, focus: tuple[str, ...]) -> bool:
+    """재집계 filter의 잎에 케이스 target 값이 **하나도** 없나. 하나라도 있으면 대상 쪽이다 — 배지 이름은 문서 필드가 아닐 수 있어
+    전부를 요구하면 거의 모든 재집계가 참고가 된다. target이 없으면 가릴 수 없다(False)."""
+    return bool(focus) and not (set(focus) & _leaves(filter_))
 
 
 def focus_of(case) -> tuple[str, ...]:

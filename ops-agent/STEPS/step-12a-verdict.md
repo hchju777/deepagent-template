@@ -666,6 +666,25 @@ c-1형이 아니다. 항목·순서·B를 #7 뒤로 미루는 이유는 [plan-12
 - 테스트 먼저(RED 4 → GREEN, 보드 뒤 +2). 스윕 +13(599). 대본 예제(`case-dryrun.json`)의 t-9는 대본 실행기가 증거를 안 만들어
   막힌 채 끝나므로 그 기록이 남는다 — `test_dryrun`의 "이름 기록 없음" 단언을 이름 기록으로 좁혔다.
 
+#### R3-1 ③ (10-13) ✅ — 받을 때 인자 검사 · 참고 재집계
+
+- P1 3: 등재·인자 검사(`action_problem`)를 **받을 때**(`_accept_tasks` 맨 앞, `_accept_problem`) 한다 — 거부라 되묻기가 그 자리에서
+  고쳐 받는다. 사내 측정 #6에서 `redis.scan limit`·`mongo.count expect`가 실행에서 죽어 라운드를 잃었다. 기록은
+  `t-1: 받지 않는다 — redis.scan이 모르는 인자 — limit (인자: pattern, count?)` — 받는 인자를 같이 적는다("모르는 인자"만으로는 같은
+  모양으로 다시 틀린다). action이 없는 태스크도 받지 않는다. 실행기의 같은 검사는 마지막 방어선으로 그대로.
+- P1 4: 재집계 filter의 잎에 케이스 target 값이 **하나도** 없으면(`runner_probe.off_target`) 증거 요약·본문·태스크 줄 머리에
+  `참고 — filter에 대상 identity(L1/Alarm)가 없다: 대상 행의 수가 아니라 그 filter 범위의 수다.`(`ASIDE_MARK`). 하나라도 있으면 그대로
+  — 배지 이름은 문서 필드가 아닐 수 있어 전부를 요구하면 거의 모든 재집계가 참고가 된다. target 없는 케이스는 가릴 수 없다. 브리핑의
+  사다리는 참고 재집계의 `match`를 사실로 쓰지 않고 다음 칸을 비운다(짐작하지 않는다). 사내 c-1 t-10(컬렉션 전체 987281 vs 화면 0)의
+  모양이다.
+- `case dryrun`은 받을 때 거부된 태스크를 `받지 않은 것·기록 N건` 아래 보여 준다 — 울타리를 보는 명령인데 거부된 것이 목록에서
+  조용히 사라졌다(예제의 미등재 `mongo.aggregate`). README 표본·예제 설명도 그 모양으로.
+- 실제 소비자로(측정판 `data-empty`, 대본 리드): frame 답의 `redis.scan pattern='hb:*' limit=5` → r1 프롬프트 `<버려진 태스크>`에
+  `t-1: 받지 않는다 — redis.scan이 모르는 인자 — limit (인자: pattern)`. r1 답의 `recompute.count filter={'level': 'minor'}` → r2 프롬프트의
+  증거 줄이 `참고 — filter에 대상 identity(L1/Alarm)가 없다: …`로 시작하고, `filter={'line': 'L1', …}`인 것은 그대로. 진단에 `1× 받지 않는다`.
+- 테스트 먼저(RED 3 → GREEN; 받을 때 거부로 모양이 바뀐 기존 테스트 둘 — 소독 테스트의 태스크에 action, CLI 테스트는 거부 기록 —
+  손질). 스윕 +7(606).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

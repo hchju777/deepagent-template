@@ -319,8 +319,9 @@ python -m src case dryrun --plan examples/case-dryrun.json --stub-seeds examples
 ```
   라운드 2 — 끝난 이유: no_runnable
     ✅ t-1 [data_prober] 파생값(현재 OEE)을 읽는다 — redis.get key='oee:L3' → …
-    ❌ t-3 [data_prober] 집계 파이프라인을 돌려 본다 — 미등재 action — mongo.aggregate
     ✅ t-9 [recompute_verifier] 재계산 대조 — t-1의 증거를 입력으로 받는다 — …
+  받지 않은 것·기록 1건
+    t-3: 받지 않는다 — 미등재 action — mongo.aggregate (등재: …)
 ```
 
 **`t-9`를 보라.** 우선순위가 제일 앞인데 1라운드에 안 돌고 2라운드에 돌았다 —

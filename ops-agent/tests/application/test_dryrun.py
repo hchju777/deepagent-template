@@ -104,10 +104,13 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
         "--stub-seeds", str(root / "examples" / "stub-seeds.json")])
 
     assert main() == 0, capsys.readouterr().err
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out, err = captured.out, captured.err
     assert "끝난 이유: no_runnable" in out
     # 게이트가 붙잡았다가 2라운드에 푼 것 — 이 단계가 만든 것의 요약이다.
-    assert "t-9" in out and "미등재 action" in out
+    assert "t-9" in out
+    # 미등재 action(t-3)은 실행이 아니라 **받을 때** 거부된다(R3-1 ③) — 목록에 안 남고 기록으로 보인다.
+    assert "받지 않은 것·기록" in out and "t-3: 받지 않는다 — 미등재 action" in out and err == ""
 
 
 def test_대본_경로는_이름_추측_검사를_끈다():

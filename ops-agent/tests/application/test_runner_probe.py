@@ -358,3 +358,30 @@ async def test_실행기는_증거_id로_원본을_돌려준다(case):
     out = await runner.run(task("t-0", action="redis.get", params={"key": "k"}), case=case)
     assert runner.raw(out.evidence[0].id) == {"type": "string", "value": "{\"a\": 1}"}
     assert runner.raw("없는.e1") is None
+
+
+# ── R3-1 ③ — filter에 대상 identity가 없는 재집계는 참고 ──
+
+async def test_recompute_filter에_대상_identity가_하나도_없으면_결과를_참고로_표시한다(case):
+    """사내 측정 #6 c-1 t-10: filter에 라인도 배지도 없는 `recompute.count`가 컬렉션 전체(987281)를 세어 화면의 0과 "불일치"했고, 그
+    수가 사실처럼 남았다. 대상 행의 수가 아니라는 것은 코드가 안다 — filter의 잎에 target 값이 하나도 없으면 참고다. 하나라도 있으면
+    (배지 이름은 문서 필드가 아닐 수 있다) 그대로다. target이 없는 케이스는 가릴 수 없다."""
+    from src.application.runner_probe import ASIDE_MARK
+    from src.infrastructure.stubs import StubMongoReader
+    mongo = StubMongoReader({"alarm_events": [{"line": "L1", "status": "alarm"}, {"line": "L2", "status": "alarm"}]},
+                            clock=lambda: T0)
+    rest = Recorder(result=ProbeResult.succeeded({"badge": {"alarm": 1}}, source="rest", clock=lambda: T0))
+    runner = ProbeRunner(Bundle(mongo=mongo, rest=rest), clock=lambda: T0)
+    focused = case.model_copy(update={"target": "L1/Alarm"})
+    await runner.run(task("t-1", action="rest.query", params={"entry": "summary_badge", "params": {}}), case=focused)
+
+    def recount(task_id, filter_, on=focused):
+        return runner.run(task(task_id, action="recompute.count", params={
+            "collection": "alarm_events", "filter": filter_, "expect": {"evidence": "t-1.e1", "path": "badge.alarm"}}), case=on)
+
+    whole = await recount("t-2", {"status": "alarm"})
+    assert whole.status == "ok" and whole.evidence[0].summary.startswith(ASIDE_MARK) and "L1/Alarm" in whole.summary
+    assert whole.evidence[0].body.startswith(ASIDE_MARK) and "match: False" in whole.evidence[0].body
+    assert not (await recount("t-3", {"line": "L1", "status": "alarm"})).evidence[0].summary.startswith(ASIDE_MARK)
+    assert not (await recount("t-4", {"line": {"$in": ["L1"]}})).evidence[0].summary.startswith(ASIDE_MARK)
+    assert not (await recount("t-5", {"status": "alarm"}, on=case)).evidence[0].summary.startswith(ASIDE_MARK)   # target 없음
