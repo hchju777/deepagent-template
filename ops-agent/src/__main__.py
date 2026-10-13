@@ -1036,7 +1036,8 @@ def cmd_case_investigate(args, env) -> int:
                               known_names=flow.known_names(flow_graph),
                               components=frozenset(services),
                               declared={"rediskey": flow.declared_keys(
-                                  flow_graph, briefing.intake_path(case, site))})
+                                  flow_graph, briefing.intake_path(case, site))},
+                              intake=code.intake() if code else None)
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()

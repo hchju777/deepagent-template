@@ -36,7 +36,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from src.application.facts import facts_for
+from src.application.facts import facts_for, present
+from src.application.intake_map import TargetKey, cited_keys, map_target
 from src.application.state import CaseState, merge_by_id
 from src.domain.actions import DISCOVERED_ARGS, describe, name_known
 from src.domain.case import Case, CauseLink, Hypothesis, PlanTask, Verdict
@@ -78,6 +79,9 @@ class EngineDeps:
     # 흐름 그래프가 선언한 이름, 종류별(`rediskey` → 접수 끝점이 읽는 키 템플릿, 없으면 config의 전부). 발견 읽기의 결과와
     # 대조해 "선언됐는데 없는 키"를 사실로 남긴다(`facts.py`). 그래프가 없으면 비어 있고 아무 사실도 안 남는다.
     declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # 토폴로지의 접수 링크 선언(`IntakeLink`, R3-0 ①) — verify가 "최상위가 인용한 키가 대상 키인가"를 보는 데 쓴다(②). 브리핑과 같은
+    # 재료(`declared["rediskey"]`)로 같은 답을 낸다. 없으면 대상 키를 모르는 것이고, 그것도 "연결이 확인되지 않은" 것이다.
+    intake: object | None = None
 
 
 # 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
@@ -643,6 +647,26 @@ def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str],
         "contributing": contributing, "confidence": "low", "caveats": caveats})
 
 
+def cap_unlinked_key(verdict: Verdict, *, target: TargetKey, evidence) -> Verdict:
+    """최상위 원인이 인용한 **키 읽기**가 대상 키(링크 토큰에서 고른 것)가 아니면 확신 상한 medium + caveat. 되묻지 않는다 — 한도다.
+
+    사내 측정 #5: 리드가 이름이 비슷한 다른 배지의 키를 읽어 `None`을 유실의 증거로 삼아 `data_loss(high)`로 틀렸다. 이 규칙은
+    판정을 맞게 만들지 않는다 — 거짓 확신을 막을 뿐이다(맞게 만드는 것은 R3-0 ①과 R3-1의 frame 전 읽기). 키를 인용하지 않은
+    최상위는 이 규칙 밖(R3-2 (b)(c)). 대상 키를 모를 때(선언 없음·못 고름)도 건다 — 연결이 확인되지 않은 것은 같다. 바뀐 것이
+    없으면 같은 객체.
+    """
+    if verdict.root_cause is None:
+        return verdict
+    keys = cited_keys(verdict.root_cause.evidence_ids, evidence)
+    if not keys or (target.key and any(present(target.key, [k]) for k in keys)):
+        return verdict
+    known = (f"대상 키 {target.key}" if target.key
+             else "대상 키를 못 골랐다" + (f" — {target.problem}" if target.problem else "(토폴로지 intake 선언 없음)"))
+    note = f"대상과 키의 연결이 확인되지 않았다 — 최상위가 인용한 키 {', '.join(keys)}; {known}"
+    confidence = "medium" if verdict.confidence == "high" else verdict.confidence
+    return verdict.model_copy(update={"confidence": confidence, "caveats": verdict.caveats + [note]})
+
+
 def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> Callable[[str], str | None]:
     """component 하나의 문제 — 없으면 None. 대본 경로(`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 검사하지
     않는다(태스크의 "찾지 않고 이름을 댔다"와 같은 스위치)."""
@@ -724,7 +748,11 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         component_problem = _component_problem(state, deps, verdict)
         problems = verify_verdict(verdict, citable=citable, incomplete=incomplete, component_problem=component_problem)
         if not problems:
-            return {"verify_problems": []}
+            if not deps.check_discovery:
+                return {"verify_problems": []}            # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
+            target = map_target(state, link=deps.intake, declared_keys=tuple(deps.declared.get("rediskey", ())))
+            capped = cap_unlinked_key(verdict, target=target, evidence=state.evidence)
+            return {"verify_problems": []} if capped is verdict else {"verdict": capped, "verify_problems": []}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.
             return {"verify_problems": problems, "verify_attempts": state.verify_attempts + 1,

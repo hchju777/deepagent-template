@@ -103,18 +103,23 @@ class FileTurnAdapter(LlmPort):
         self._model = model
         self._timeout = timeout_s
         self._poll = poll_s
-        self._turn = 0
 
     def describe(self) -> str:
         return f"file {self._model} → {self._dir}"
 
+    def _next_turn(self) -> int:
+        # 번호는 **폴더가 센다** — 메모리에 세면 리드와 판정(R2-4 ④부터 어댑터가 따로다)이 둘 다 001부터라 판정의 물음이 리드의
+        # 001-ask.md를 덮어쓰고 이미 소비된 답을 기다렸다(측정판이 판정 턴에서 멈췄다, R3-0 ②).
+        taken = [int(p.name[:3]) for p in self._dir.glob("[0-9][0-9][0-9]-ask.md") if p.name[:3].isdigit()]
+        return max(taken, default=0) + 1
+
     async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
-        self._turn += 1
         asked_at = self._clock()
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
-            ask = self._dir / f"{self._turn:03d}-ask.md"
-            reply = self._dir / f"{self._turn:03d}-reply.md"
+            turn = self._next_turn()
+            ask = self._dir / f"{turn:03d}-ask.md"
+            reply = self._dir / f"{turn:03d}-reply.md"
             reply.unlink(missing_ok=True)          # 지난 실행의 답을 새 답으로 오인하지 않게
             ask.write_text(prompt, encoding="utf-8")
             waited = 0.0

@@ -2280,7 +2280,30 @@ CASES += [
   '                                    "caution": 0, "normal": 3}', ["tests/test_local_case.py::test_배지_행은_선언된_모양의_링크를_달고_대상_행의_토큰이_stats_키를_가리킨다"]),
 ]
 
-assert len(CASES) >= 568, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-0 ② — 대상과 연결 안 된 키로 high 금지 ──
+CAP_T = "tests/application/test_verdict.py::test_최상위가_인용한_키가_대상_키가_아니면_확신_상한_medium과_caveat"
+CAP2_T = "tests/application/test_verdict.py::test_매핑이_없어도_키를_인용한_high는_medium이고_대본_경로는_안_건다"
+CASES += [
+ ("키를 인용해도 확신을 안 낮춘다", ND, '    confidence = "medium" if verdict.confidence == "high" else verdict.confidence',
+  "    confidence = verdict.confidence", [CAP_T]),
+ ("대상 키를 읽었어도 낮춘다", ND, "    if not keys or (target.key and any(present(target.key, [k]) for k in keys)):", "    if not keys:", [CAP_T]),
+ ("키를 인용하지 않은 최상위도 낮춘다", ND, "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence)\n    if not keys or",
+  "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence) or [\"?\"]\n    if not keys or", [CAP_T]),
+ ("verify가 상한을 안 건다", ND, '            return {"verify_problems": []} if capped is verdict else {"verdict": capped, "verify_problems": []}',
+  '            return {"verify_problems": []}', [CAP_T, CAP2_T]),
+ ("대본 경로에도 상한을 건다", ND, "            if not deps.check_discovery:\n                return {\"verify_problems\": []}", "            if False:\n                return {\"verify_problems\": []}", [CAP2_T]),
+ ("scan 패턴을 키 읽기로 센다", IM, "_KEY_READ = re.compile(r\"^redis\\.get key='((?:[^'\\\\]|\\\\.)*)'\")",
+  "_KEY_READ = re.compile(r\"^redis\\.(?:get|scan) (?:key|pattern)='((?:[^'\\\\]|\\\\.)*)'\")", [CAP_T]),
+]
+
+# ── 12a-R3-0 ② 곁다리 — 파일 턴 번호는 폴더가 센다(판정 어댑터가 따로라 둘이 001을 겹쳐 썼다) ──
+LFK = ROOT / "src/infrastructure/llm_fakes.py"
+CASES += [
+ ("파일 턴 번호를 폴더에서 안 센다", LFK, '        taken = [int(p.name[:3]) for p in self._dir.glob("[0-9][0-9][0-9]-ask.md") if p.name[:3].isdigit()]',
+  "        taken = []", ["tests/infrastructure/test_llm_file_turn.py::test_같은_폴더의_어댑터_둘은_번호를_이어_쓴다"]),
+]
+
+assert len(CASES) >= 575, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

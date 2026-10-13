@@ -547,6 +547,24 @@ conclude), `data_loss(high)`로 **틀렸다**. 흐름 줄의 키 순서를 `pref
   스윕 짝이 없다(코드 트리로 조사를 돌리는 테스트가 없다) — 이 판이 그 줄의 확인이다.
 - 테스트 먼저(RED 7 + 새 모듈 3 → GREEN). 스윕 +12(568), 옮겨진 앵커 넷(그중 `case_words` 케이스는 `prefer=target.prefer`로).
 
+#### R3-0 ② (10-13) ✅ — 대상과 연결 안 된 키로 high 금지
+
+- `nodes.cap_unlinked_key`(verify 안, 코드만): 최상위 원인이 인용한 증거 중 **키 읽기**(`redis.get` — 증거 `source`의 `describe` 문자열을
+  되읽는다, `intake_map.cited_keys`)가 있고 그 키가 ①의 대상 키(템플릿 — `facts.present`로 대조)가 아니면 confidence 상한 medium +
+  caveat `대상과 키의 연결이 확인되지 않았다 — 최상위가 인용한 키 …; 대상 키 …`. 되묻지 않는다 — 한도다(R3 verify (b)의 싼 절반).
+  대상 키를 모를 때(선언 없음·못 고름)도 건다 — 연결이 확인되지 않은 것은 같다. 키를 인용하지 않은 최상위는 이 규칙 밖(R3-2),
+  scan 패턴은 키 읽기가 아니다, 대본 경로(`check_discovery=False`)는 안 건다(`_component_problem`과 같은 스위치). 이 규칙은 판정을
+  맞게 만들지 않는다 — 거짓 확신을 막을 뿐이다.
+- `EngineDeps.intake` — verify가 브리핑과 같은 재료(`declared["rediskey"]` + 토폴로지 `intake`)로 같은 대상 키를 본다. `__main__`이
+  `code.intake()`를 넘긴다(①과 같이 스윕 짝 없음 — 아래 판이 확인).
+- **곁다리(종료 판단에 필요)**: 측정판이 판정 턴에서 멈췄다. `FileTurnAdapter`가 번호를 메모리에 세서, R2-4 ④부터 따로인 판정 어댑터가
+  리드의 `001-ask.md`를 덮어쓰고 이미 소비된 답을 기다렸다(R2-5 ③·R3-0 ①의 판에서 "004-ask 대기 시간 초과"가 그것이었다). 번호는
+  폴더가 센다(`_next_turn`). 테스트는 어댑터 둘이 같은 폴더에서 001·002를 이어 쓰는지.
+- 실제 소비자로: 측정판 `cache-missing`(r30b2b)에서 대본 리드가 `redis.get key=hb:sink`(대상 키가 아니다)를 읽고 그것만 인용해
+  `data_loss(high)`를 내자 출력이 `판정 data_loss (medium)` · `주의 대상과 키의 연결이 확인되지 않았다 — 최상위가 인용한 키 hb:sink; 대상 키
+  alarm:stats:{line}` · `검증 통과`였다.
+- 테스트 먼저(RED 2 + 파일 턴 1 → GREEN). 스윕 +7(575).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

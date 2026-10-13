@@ -430,3 +430,56 @@ def test_판정_프롬프트는_component가_데이터를_만드는_서비스라
     text = (Path(__file__).resolve().parents[2] / "config/prompts/investigate-conclude.md").read_text(encoding="utf-8")
     rule = re.search(r"^- `component`는.*?(?=^- )", text, re.M | re.S).group(0)
     assert "데이터를 **만드는** 서비스" in rule and "판정 종류" in rule and "external" in rule and "{components}" in rule
+
+
+# ── R3-0 ② — 대상과 연결 안 된 키로 high 금지 ──
+
+def _linked_state(case, *, key_read: str | None, **over) -> CaseState:
+    """접수 응답(대상 행 response[2] → 링크 토큰 'stats')과, 있으면 키 읽기 하나(t-2.e1)."""
+    from tests.application.test_briefing import _linked_rest_evidence
+
+    evidence = [_linked_rest_evidence()]
+    if key_read is not None:
+        evidence.append(EvidenceRef(id="t-2.e1", source=f"redis.get key={key_read!r}", summary="(nil)", body="(nil)"))
+    return _state(case, evidence=evidence, **over)
+
+
+def _citing(*ids, confidence="high") -> Verdict:
+    return verdict(root_cause=cause("sink", *ids), confidence=confidence)
+
+
+def _linked_deps(**over):
+    from src.knowledge.schema import IntakeLink
+
+    return deps_for(ScriptedRunner(), components=frozenset({"sink"}),
+                    intake=IntakeLink(field="link", token="/summary/badge/([^/]+)/"),
+                    declared={"rediskey": ("alarm:scan:{line}", "alarm:stats:{line}")}, **over)
+
+
+async def test_최상위가_인용한_키가_대상_키가_아니면_확신_상한_medium과_caveat(case):
+    """사내 측정 #5 c-1: 이름이 비슷한 다른 배지의 키를 읽어 `None`을 유실의 증거로 삼아 high로 틀렸다. 되묻지 않는다 — 한도다
+    (R3 verify (b)의 싼 절반). 대상 키를 읽었으면 그대로, 키를 인용하지 않은 최상위는 이 규칙 밖(R3-2)."""
+    nodes = make_nodes(_linked_deps())
+    got = await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1")))
+    assert got["verify_problems"] == [] and got["verdict"].confidence == "medium"
+    assert any("대상과 키의 연결이 확인되지 않았다" in c and "alarm:scan:L1" in c and "alarm:stats:{line}" in c
+               for c in got["verdict"].caveats)
+    assert await nodes["verify"](_linked_state(case, key_read="alarm:stats:L1", verdict=_citing("t-2.e1"))) == {"verify_problems": []}
+    assert await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-1.e1"))) == {"verify_problems": []}
+    low = await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1", confidence="low")))
+    assert low["verdict"].confidence == "low" and any("연결이 확인되지 않았다" in c for c in low["verdict"].caveats)
+    # scan은 키 하나를 읽은 것이 아니다 — 패턴을 키로 세면 훑기만 한 최상위까지 낮아진다.
+    scanned = _linked_state(case, key_read=None, verdict=_citing("t-3.e1"))
+    scanned = scanned.model_copy(update={"evidence": scanned.evidence + [
+        EvidenceRef(id="t-3.e1", source="redis.scan pattern='alarm:*'", summary="2건", body="alarm:scan:L1, alarm:stats:L1")]})
+    assert await nodes["verify"](scanned) == {"verify_problems": []}
+
+
+async def test_매핑이_없어도_키를_인용한_high는_medium이고_대본_경로는_안_건다(case):
+    """연결이 "확인되지 않은" 것은 선언이 없을 때도 같다. 대본(`check_discovery=False`)은 사람이 이름을 알고 쓴 것이라 안 건다 —
+    `_component_problem`과 같은 스위치."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    got = await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1")))
+    assert got["verdict"].confidence == "medium" and any("intake" in c for c in got["verdict"].caveats)
+    loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
+    assert await loose["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1"))) == {"verify_problems": []}

@@ -19,6 +19,9 @@ from src.application.runner_probe import target_rows
 from src.application.state import CaseState
 
 _ROW = re.compile(r"^\s*\[(\d+)\] (.*)$", re.M)
+# 증거 `source`는 우리가 만든 `describe` 문자열(`redis.get key='…' path='…'`)이라 그 모양으로 키를 되읽는다. scan은 키 하나를 읽은 것이
+# 아니라 세지 않는다.
+_KEY_READ = re.compile(r"^redis\.get key='((?:[^'\\]|\\.)*)'")
 _VALUE_CHARS = 60
 
 
@@ -89,3 +92,15 @@ def map_target(state: CaseState, *, link, declared_keys: tuple[str, ...]) -> Tar
     if not keys:
         return TargetKey(token, where, (), f"토큰 '{token}'이 든 선언 키가 없다")
     return TargetKey(token, where, keys, f"토큰 '{token}'이 든 선언 키 {len(keys)}개: {', '.join(keys)} — 하나로 못 좁힌다")
+
+
+def cited_keys(evidence_ids, evidence) -> list[str]:
+    """인용한 증거 중 **키 읽기**(`redis.get`)의 키들 — 인용 순서대로, 같은 키는 한 번."""
+    by_id = {ref.id: ref for ref in evidence}
+    found: list[str] = []
+    for evidence_id in evidence_ids:
+        ref = by_id.get(evidence_id)
+        match = _KEY_READ.match(ref.source) if ref is not None else None
+        if match and match.group(1) not in found:
+            found.append(match.group(1))
+    return found

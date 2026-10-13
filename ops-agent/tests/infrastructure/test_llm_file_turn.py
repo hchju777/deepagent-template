@@ -50,3 +50,24 @@ def test_config로_조립된다(tmp_path):
 def test_file_어댑터는_turn_dir이_필요하다():
     with pytest.raises(ValueError, match="turn_dir"):
         LlmConfig(adapter="file", model="standin")
+
+
+async def test_같은_폴더의_어댑터_둘은_번호를_이어_쓴다(tmp_path):
+    """R2-4 ④부터 판정 턴은 어댑터가 따로다(형식이 다르다). 번호를 메모리에 세면 둘 다 001부터라 판정 턴의 물음이 리드의
+    001-ask.md를 덮어쓰고 이미 소비된 001-reply.md를 기다린다 — 측정판이 판정 턴에서 멈췄다(R3-0 ②). 번호는 폴더가 센다."""
+    lead = FileTurnAdapter(tmp_path, clock=lambda: T0, poll_s=0.01, timeout_s=0.5)      # 버그면 없는 답을 기다린다 — 짧게
+    judge = FileTurnAdapter(tmp_path, clock=lambda: T0, poll_s=0.01, timeout_s=0.5)
+
+    async def answer(n, text):
+        for _ in range(100):                                      # 버그면 002-ask.md가 영영 안 온다 — 기다림에 상한
+            if (tmp_path / f"{n:03d}-ask.md").exists():
+                (tmp_path / f"{n:03d}-reply.md").write_text(text, encoding="utf-8")
+                return
+            await asyncio.sleep(0.01)
+
+    first, _ = await asyncio.gather(lead.ask("리드 물음"), answer(1, "리드 답"))
+    second, _ = await asyncio.gather(judge.ask("판정 물음"), answer(2, "판정 답"))
+    assert (first.text, second.text) == ("리드 답", "판정 답")
+    assert (tmp_path / "001-ask.md").read_text(encoding="utf-8") == "리드 물음"      # 덮어쓰지 않았다
+    assert (tmp_path / "002-ask.md").read_text(encoding="utf-8") == "판정 물음"
+
