@@ -94,34 +94,10 @@ class FlowSpec(StrictModel):
     ]
 
 
-class IntakeLink(StrictModel):
-    """접수 끝점 응답의 **대상 행에서 대상 키로 가는 링크** — 행의 어느 필드에, 어떤 모양으로 키의 이름 토큰이 드나.
-
-    사내 측정 #5(10-13): 흐름 줄의 키 순서를 증상 단어의 유사성으로 정했더니 리드가 이름이 비슷한 다른 배지의 키를 읽고
-    `data_loss(high)`로 틀렸다. 토큰은 데이터 자신이 선언된 필드에 싣는 식별자다 — 증상 문장의 단어가 아니다. 리포의 값은
-    자리표시자고 실제 필드 이름과 모양은 사내에서 채운다(⑮).
-    """
-    field: str = Field(min_length=1)          # 대상 행에서 링크가 든 필드
-    token: str = Field(min_length=1)          # 그 값에서 이름 토큰을 뽑는 정규식 — 그룹 하나
-
-    @field_validator("token")
-    @classmethod
-    def _one_group(cls, v: str) -> str:
-        try:
-            groups = re.compile(v).groups
-        except re.error as exc:
-            raise ValueError(f"token이 정규식이 아니다 — {exc}") from exc
-        if groups != 1:
-            raise ValueError(f"token은 그룹 하나로 이름 토큰을 잡아야 한다 — 그룹 {groups}개")
-        return v
-
-
 class Topology(StrictModel):
     """GBM 하나의 서비스 지도. **사이트 단위가 아니다** — 코드는 GBM별로 같다."""
 
     services: dict[str, Service] = {}
-    # 접수 끝점의 대상 행 → 대상 키 링크(R3-0 ①). 없으면 코드가 대상 키를 고르지 않는다 — 케이스 블록에 그 줄이 안 실린다.
-    intake: IntakeLink | None = None
     # 흐름 그래프(11c)가 이름을 뽑는 자리. 없으면 기본 표.
     flow: FlowSpec = FlowSpec()
     # 대상 레포 안에서 **이름이 사는 곳**. 층 순서대로 적는다(앞이 밑바닥).

@@ -356,7 +356,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
               evidence_budget: int = 12000, trace=None,
               services: tuple[str, ...] = (), roles: dict[str, str] | None = None,
               flow_graph: dict | None = None, code_index: bool = False,
-              conclude_llm: LlmPort | None = None, prompt_caps: dict[str, int] | None = None, intake=None):
+              conclude_llm: LlmPort | None = None, prompt_caps: dict[str, int] | None = None):
     """`EngineDeps`의 `frame`·`integrate`·`conclude` 자리에 꽂을 세 함수를 만든다.
 
     `prompt_caps`는 턴별 프롬프트 글자 상한(`{"integrate": 8000, "conclude": 10000}`) — `fit_prompt`가 지킨다. 없으면 상한 없음.
@@ -384,7 +384,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
         prompt = fill(prompts["frame"],
                       briefing.frame_fields(state, site_config=site_config,
                                             services=services, roles=roles,
-                                            flow_graph=flow_graph, code_index=code_index, intake=intake))
+                                            flow_graph=flow_graph, code_index=code_index))
         got = await ask_json(llm, prompt, FrameReply, on_exchange=_hook("frame", state))
         if not got.ok:
             return _failure("frame", got.error)
@@ -400,7 +400,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                                                   max_rounds=max_rounds,
                                                   evidence_budget=budget,
                                                   services=services, roles=roles,
-                                                  flow_graph=flow_graph, code_index=code_index, intake=intake,
+                                                  flow_graph=flow_graph, code_index=code_index,
                                                   fold_tasks=fold))
         prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("integrate"), budget=evidence_budget)
         got = await ask_json(llm, prompt, IntegrateReply,
@@ -425,7 +425,7 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                         briefing.conclude_fields(state, site_config=site_config,
                                                  evidence_budget=budget,
                                                  services=services, flow_graph=flow_graph,
-                                                 fold_tasks=fold, intake=intake))
+                                                 fold_tasks=fold))
         prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("conclude"), budget=evidence_budget)
         got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))
         if not got.ok:

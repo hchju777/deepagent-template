@@ -449,10 +449,7 @@ def _citing(*ids, confidence="high") -> Verdict:
 
 
 def _linked_deps(**over):
-    from src.knowledge.schema import IntakeLink
-
     return deps_for(ScriptedRunner(), components=frozenset({"sink"}),
-                    intake=IntakeLink(field="link", token="/summary/badge/([^/]+)/"),
                     declared={"rediskey": ("alarm:scan:{line}", "alarm:stats:{line}")}, **over)
 
 
@@ -475,11 +472,15 @@ async def test_최상위가_인용한_키가_대상_키가_아니면_확신_상�
     assert await nodes["verify"](scanned) == {"verify_problems": []}
 
 
-async def test_매핑이_없어도_키를_인용한_high는_medium이고_대본_경로는_안_건다(case):
-    """연결이 "확인되지 않은" 것은 선언이 없을 때도 같다. 대본(`check_discovery=False`)은 사람이 이름을 알고 쓴 것이라 안 건다 —
-    `_component_problem`과 같은 스위치."""
-    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+async def test_대상_키를_못_골랐어도_키를_인용한_high는_medium이고_대본_경로는_안_건다(case):
+    """연결이 "확인되지 않은" 것은 고를 재료가 없을 때(그래프 없음)나 못 골랐을 때(둘 이상에 든다)도 같다. 대본
+    (`check_discovery=False`)은 사람이 이름을 알고 쓴 것이라 안 건다 — `_component_problem`과 같은 스위치."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))             # 선언 키 없음
     got = await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1")))
-    assert got["verdict"].confidence == "medium" and any("intake" in c for c in got["verdict"].caveats)
+    assert got["verdict"].confidence == "medium" and any("고를 재료가 없다" in c for c in got["verdict"].caveats)
+    both = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"}),
+                               declared={"rediskey": ("alarm:scan:{line}", "alarm:stats:{line}", "stats:old:{line}")}))
+    got = await both["verify"](_linked_state(case, key_read="alarm:stats:L1", verdict=_citing("t-2.e1")))
+    assert got["verdict"].confidence == "medium" and any("2개에 든다" in c for c in got["verdict"].caveats)
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
     assert await loose["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1"))) == {"verify_problems": []}

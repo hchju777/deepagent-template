@@ -1287,19 +1287,17 @@ async def test_조각_없이_멈춘_것은_지금처럼_시간_초과다(case):
     assert len(llm.prompts) == 1 and "시간 초과" in patch["llm_errors"][0]
 
 
-# ── R3-0 ① — 입구 링크가 리드 프롬프트까지 간다 ──
+# ── R3-0 ①·④ — 대상 키 줄이 리드 프롬프트까지 간다 ──
 
-async def test_make_lead가_입구_링크를_브리핑에_넘긴다(case):
-    from src.knowledge.schema import IntakeLink
+async def test_리드_프롬프트에_대상_키_줄이_간다(case):
     from tests.application.test_briefing import _keyed_graph_with_decoy, _linked_rest_evidence, _site_with_check
 
-    link = IntakeLink(field="link", token="/summary/badge/([^/]+)/")
     state = CaseState(case=case, evidence=[_linked_rest_evidence()], round=1)
     _, integrate, llm = leads(reply(decision="conclude", hypotheses=[], tasks=[]), site=_site_with_check())
     await integrate(state)
-    assert "대상 키" not in llm.prompts[0]
+    assert "대상 키" not in llm.prompts[0]                                           # 그래프가 없으면 고를 선언 키가 없다
     llm2 = ScriptedAdapter([reply(decision="conclude", hypotheses=[], tasks=[])], clock=lambda: T0)
     _, integrate, _ = lead.make_lead(llm2, site_config=_site_with_check(), prompts=PROMPTS, max_rounds=3,
-                                     flow_graph=_keyed_graph_with_decoy(), intake=link)
+                                     flow_graph=_keyed_graph_with_decoy())
     await integrate(state)
-    assert "대상 키: alarm:stats:{line} (대상 행 t-1.e1 response[2]의 링크 토큰 'stats'에서)" in llm2.prompts[0]
+    assert "대상 키: alarm:stats:{line} (대상 행 t-1.e1 response[2]의 link 값 토큰 'stats'가 이 키에만 든다)" in llm2.prompts[0]

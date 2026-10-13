@@ -1378,24 +1378,20 @@ def _keyed_graph_with_decoy():
     return g
 
 
-def test_케이스_블록이_링크_토큰의_대상_키를_말하고_흐름_줄은_그_키를_앞세운다():
+def test_케이스_블록이_대상_행의_값으로_고른_대상_키를_말하고_흐름_줄은_그_키를_앞세운다():
+    """선언 없이 — 대상 행 자신의 값 토큰이 접수 끝점이 읽는 키 하나에만 들면 그 키. 접수 응답이 없으면(frame) 줄도 순서도 없다."""
     from src.application.state import CaseState
-    from src.knowledge.schema import IntakeLink
 
-    link = IntakeLink(field="link", token="/summary/badge/([^/]+)/")
     state = CaseState(case=_patrol_case(), evidence=[_linked_rest_evidence()])
-    fields = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3,
-                                       flow_graph=_keyed_graph_with_decoy(), intake=link)
-    assert "대상 키: alarm:stats:{line} (대상 행 t-1.e1 response[2]의 링크 토큰 'stats'에서)" in fields["case"]
+    fields = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy())
+    assert "대상 키: alarm:stats:{line} (대상 행 t-1.e1 response[2]의 link 값 토큰 'stats'가 이 키에만 든다)" in fields["case"]
     endpoint = next(l for l in fields["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
     assert endpoint.index("alarm:stats:{line}") < endpoint.index("alarm:scan:{line}")
-    plain = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3,
+    blank = briefing.integrate_fields(CaseState(case=_patrol_case()), site_config=_site_with_check(), max_rounds=3,
                                       flow_graph=_keyed_graph_with_decoy())
-    assert "대상 키" not in plain["case"]
-    endpoint = next(l for l in plain["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
-    assert endpoint.index("alarm:scan:{line}") < endpoint.index("alarm:stats:{line}")   # 선언이 없으면 순서에 뜻이 없다
+    assert "대상 키" not in blank["case"]
+    endpoint = next(l for l in blank["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
+    assert endpoint.index("alarm:scan:{line}") < endpoint.index("alarm:stats:{line}")   # 고른 것이 없으면 순서에 뜻이 없다
     for turn in ("frame", "conclude"):
         fn = getattr(briefing, f"{turn}_fields")
-        kw = {"max_rounds": 3} if turn == "integrate" else {}
-        assert "대상 키: alarm:stats:{line}" in fn(state, site_config=_site_with_check(),
-                                               flow_graph=_keyed_graph_with_decoy(), intake=link, **kw)["case"]
+        assert "대상 키: alarm:stats:{line}" in fn(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy())["case"]

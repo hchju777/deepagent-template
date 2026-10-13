@@ -1020,8 +1020,7 @@ def cmd_case_investigate(args, env) -> int:
                 flow_graph=flow_graph, code_index=code.has_index() if code else False,
                 conclude_llm=conclude_llm,
                 prompt_caps={"integrate": app.investigation.integrate_prompt_chars,
-                             "conclude": app.investigation.conclude_prompt_chars},
-                intake=code.intake() if code else None)
+                             "conclude": app.investigation.conclude_prompt_chars})
             case = Case(id=record.id, gbm=gbm, fct=fct, origin="patrol",
                         symptom=record.symptom, t0=record.opened_at,
                         check=record.check, target=record.target)
@@ -1036,8 +1035,7 @@ def cmd_case_investigate(args, env) -> int:
                               known_names=flow.known_names(flow_graph),
                               components=frozenset(services),
                               declared={"rediskey": flow.declared_keys(
-                                  flow_graph, briefing.intake_path(case, site))},
-                              intake=code.intake() if code else None)
+                                  flow_graph, briefing.intake_path(case, site))})
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()

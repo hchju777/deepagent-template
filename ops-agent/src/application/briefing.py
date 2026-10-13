@@ -616,10 +616,10 @@ def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
     return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
             "서비스 전부. 다른 이름은 code.flow(name).\n" + body)
 
-def target_key(state: CaseState, *, site_config, flow_graph: dict | None, intake) -> TargetKey:
-    """케이스 블록·흐름 줄·(R3-0 ②) verify가 같은 답을 보게 — 접수 끝점이 읽는 선언 키 안에서 링크 토큰으로 고른다."""
+def target_key(state: CaseState, *, site_config, flow_graph: dict | None) -> TargetKey:
+    """케이스 블록·흐름 줄·(R3-0 ②) verify가 같은 답을 보게 — 접수 끝점이 읽는 선언 키 안에서 대상 행의 값으로 고른다. 선언은 없다."""
     keys = flowgraph.declared_keys(flow_graph, intake_path(state.case, site_config))
-    return map_target(state, link=intake, declared_keys=keys)
+    return map_target(state, declared_keys=keys)
 
 
 def intake_path(case, site_config) -> str | None:
@@ -687,8 +687,8 @@ def rejected_block(state: CaseState) -> str:
 def frame_fields(state: CaseState, *, site_config,
                  services: tuple[str, ...] = (),
                  roles: dict[str, str] | None = None,
-                 flow_graph: dict | None = None, code_index: bool = False, intake=None) -> dict[str, str]:
-    target = target_key(state, site_config=site_config, flow_graph=flow_graph, intake=intake)
+                 flow_graph: dict | None = None, code_index: bool = False) -> dict[str, str]:
+    target = target_key(state, site_config=site_config, flow_graph=flow_graph)
     return {"case": case_block(state, site_config=site_config, target=target),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
@@ -717,8 +717,8 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      services: tuple[str, ...] = (),
                      roles: dict[str, str] | None = None,
                      flow_graph: dict | None = None, code_index: bool = False,
-                     fold_tasks: bool = False, intake=None) -> dict[str, str]:
-    target = target_key(state, site_config=site_config, flow_graph=flow_graph, intake=intake)
+                     fold_tasks: bool = False) -> dict[str, str]:
+    target = target_key(state, site_config=site_config, flow_graph=flow_graph)
     return {"case": case_block(state, site_config=site_config, target=target),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
@@ -804,8 +804,8 @@ def verdict_example() -> str:
 
 def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 12000,
                     services: tuple[str, ...] = (),
-                    flow_graph: dict | None = None, fold_tasks: bool = False, intake=None) -> dict[str, str]:
-    target = target_key(state, site_config=site_config, flow_graph=flow_graph, intake=intake)
+                    flow_graph: dict | None = None, fold_tasks: bool = False) -> dict[str, str]:
+    target = target_key(state, site_config=site_config, flow_graph=flow_graph)
     return {"case": case_block(state, site_config=site_config, target=target),
             "flow": flow_block(state, flow_graph,
                                texts=(origin_line(state.case, site_config) or "",), prefer=target.prefer),

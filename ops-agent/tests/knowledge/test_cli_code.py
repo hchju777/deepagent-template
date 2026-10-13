@@ -21,7 +21,7 @@ REPO = "테스트레포"
 
 
 def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/dt-core",
-          services=None, config_paths=(), sites=(("mx", "gumi"),), intake=None):
+          services=None, config_paths=(), sites=(("mx", "gumi"),)):
     """**테스트가 자기 트리를 세운다.** 리포의 `config/`·`knowledge/`를 베끼지 않는다.
 
     처음엔 베꼈고, 그 파일들이 **운영이 채우는 칸**이라 사내에서 실제 레포 이름을
@@ -48,8 +48,7 @@ def _tree(tmp_path, *, repo_path: str, url: str = "https://git.example.com/team/
     (knowledge / "topology").mkdir(parents=True)
     (knowledge / "topology" / "mx.json").write_text(json.dumps({
         "services": services or {"processor": {"repo": REPO, "role": "가공한다"}},
-        "config_paths": list(config_paths), **({"intake": intake} if intake else {})},
-        ensure_ascii=False), encoding="utf-8")
+        "config_paths": list(config_paths)}, ensure_ascii=False), encoding="utf-8")
     return config
 
 
@@ -458,20 +457,6 @@ def test_지식이_있으면_서비스_이름이_나온다(tmp_path):
                                     knowledge_root=tmp_path / "knowledge",
                                     clock=lambda: None)
     assert code is not None and services == ("processor",)
-
-
-def test_조사가_토폴로지의_입구_링크를_받는다(tmp_path):
-    """R3-0 ① — `case investigate`는 `code.intake()`로 선언을 받아 브리핑에 넘긴다. 선언이 없으면 None(대상 키 줄이 안 실린다)."""
-    from src.__main__ import _code_if_ready
-    from src.config.loader import load_site_config
-    from src.knowledge.schema import IntakeLink
-
-    url = "https://git.example.com/team/dt-core"
-    checkout = _with_submodule(tmp_path, url, populate=True)
-    config_root = _tree(tmp_path, repo_path=str(checkout), url=url, intake={"field": "link", "token": "/b/([^/]+)/"})
-    site, _ = load_site_config(config_root, "mx", "gumi", env={})
-    code, _, _, _ = _code_if_ready(site, "mx", "gumi", knowledge_root=tmp_path / "knowledge", clock=lambda: None)
-    assert code.intake() == IntakeLink(field="link", token="/b/([^/]+)/")
 
 
 # ── 흐름 그래프 (11c) ──────────────────────────────────────────────

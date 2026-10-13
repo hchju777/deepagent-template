@@ -27,8 +27,8 @@ sys.path.insert(0, str(HERE))
 
 LINES = ["L1", "L2", "L3"]
 BADGE_TITLES = ["Setup", "Idle", "Quality", "Stop", "Caution", "Alarm"]
-# 배지 행의 링크 필드(사내 모양 — 값 안에 그 배지 키의 이름 토큰이 든다). 토폴로지 `intake`가 같은 모양을 선언한다. Alarm 배지의
-# 토큰만 선언 키(`alarm:stats:{line}`)에 든다 — 다른 배지의 토큰은 어떤 키에도 안 들어야 "못 골랐다"가 아니라 "골랐다"가 난다.
+# 배지 행의 링크 필드(사내 모양 — 값 안에 그 배지 키의 이름 토큰이 든다). 코드가 선언 없이 행의 값에서 토큰을 뽑아 선언 키와 맞춘다
+# (`intake_map`). Alarm 배지의 토큰만 `alarm:stats:{line}`에 든다 — 다른 배지의 토큰은 어떤 키에도 안 들어야 "골랐다"가 난다.
 BADGE_LINKS = {"Alarm": "stats"}
 
 

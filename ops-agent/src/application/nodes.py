@@ -79,9 +79,6 @@ class EngineDeps:
     # 흐름 그래프가 선언한 이름, 종류별(`rediskey` → 접수 끝점이 읽는 키 템플릿, 없으면 config의 전부). 발견 읽기의 결과와
     # 대조해 "선언됐는데 없는 키"를 사실로 남긴다(`facts.py`). 그래프가 없으면 비어 있고 아무 사실도 안 남는다.
     declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    # 토폴로지의 접수 링크 선언(`IntakeLink`, R3-0 ①) — verify가 "최상위가 인용한 키가 대상 키인가"를 보는 데 쓴다(②). 브리핑과 같은
-    # 재료(`declared["rediskey"]`)로 같은 답을 낸다. 없으면 대상 키를 모르는 것이고, 그것도 "연결이 확인되지 않은" 것이다.
-    intake: object | None = None
 
 
 # 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
@@ -652,7 +649,7 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetKey, evidence) -> Verdic
 
     사내 측정 #5: 리드가 이름이 비슷한 다른 배지의 키를 읽어 `None`을 유실의 증거로 삼아 `data_loss(high)`로 틀렸다. 이 규칙은
     판정을 맞게 만들지 않는다 — 거짓 확신을 막을 뿐이다(맞게 만드는 것은 R3-0 ①과 R3-1의 frame 전 읽기). 키를 인용하지 않은
-    최상위는 이 규칙 밖(R3-2 (b)(c)). 대상 키를 모를 때(선언 없음·못 고름)도 건다 — 연결이 확인되지 않은 것은 같다. 바뀐 것이
+    최상위는 이 규칙 밖(R3-2 (b)(c)). 대상 키를 모를 때(고를 재료 없음·못 고름)도 건다 — 연결이 확인되지 않은 것은 같다. 바뀐 것이
     없으면 같은 객체.
     """
     if verdict.root_cause is None:
@@ -661,7 +658,7 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetKey, evidence) -> Verdic
     if not keys or (target.key and any(present(target.key, [k]) for k in keys)):
         return verdict
     known = (f"대상 키 {target.key}" if target.key
-             else "대상 키를 못 골랐다" + (f" — {target.problem}" if target.problem else "(토폴로지 intake 선언 없음)"))
+             else "대상 키를 못 골랐다 — " + (target.problem or "고를 재료가 없다(접수 응답이나 선언 키)"))
     note = f"대상과 키의 연결이 확인되지 않았다 — 최상위가 인용한 키 {', '.join(keys)}; {known}"
     confidence = "medium" if verdict.confidence == "high" else verdict.confidence
     return verdict.model_copy(update={"confidence": confidence, "caveats": verdict.caveats + [note]})
@@ -750,7 +747,7 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         if not problems:
             if not deps.check_discovery:
                 return {"verify_problems": []}            # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
-            target = map_target(state, link=deps.intake, declared_keys=tuple(deps.declared.get("rediskey", ())))
+            target = map_target(state, declared_keys=tuple(deps.declared.get("rediskey", ())))
             capped = cap_unlinked_key(verdict, target=target, evidence=state.evidence)
             return {"verify_problems": []} if capped is verdict else {"verdict": capped, "verify_problems": []}
         if state.verify_attempts < VERIFY_REWRITES:

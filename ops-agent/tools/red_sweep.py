@@ -1099,8 +1099,8 @@ CASES = [
   '    if False:\n        out |= {"code.callers", "code.uses"}',
   ['tests/application/test_briefing.py::test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다']),
  ('리드에 인덱스 유무를 안 넘긴다', ROOT / 'src/application/lead.py',
-  '                                            flow_graph=flow_graph, code_index=code_index, intake=intake))\n        got = await ask_json(llm, prompt, FrameReply',
-  '                                            flow_graph=flow_graph, intake=intake))\n        got = await ask_json(llm, prompt, FrameReply',
+  '                                            flow_graph=flow_graph, code_index=code_index))\n        got = await ask_json(llm, prompt, FrameReply',
+  '                                            flow_graph=flow_graph))\n        got = await ask_json(llm, prompt, FrameReply',
   ['tests/application/test_lead.py::test_심볼_인덱스가_있을_때만_역질문_action이_프롬프트에_실린다']),
  ('조사가 심볼 인덱스를 안 붙인다', ROOT / 'src/__main__.py',
   '    code.attach_index(index)\n    return code, code.service_names(), graph, note',
@@ -1859,7 +1859,7 @@ CASES += [
  ("흐름 블록이 케이스 단어를 안 넘긴다", B,
   "                               texts=(origin_line(state.case, site_config) or \"\",), prefer=target.prefer),\n            \"example\"",
   "                               texts=(origin_line(state.case, site_config) or \"\",)),\n            \"example\"",
-  ["tests/application/test_briefing.py::test_케이스_블록이_링크_토큰의_대상_키를_말하고_흐름_줄은_그_키를_앞세운다"]),
+  ["tests/application/test_briefing.py::test_케이스_블록이_대상_행의_값으로_고른_대상_키를_말하고_흐름_줄은_그_키를_앞세운다"]),
  ("cache-missing 변형이 캐시 키를 만든다", LC,
   '            **({} if variant == "cache-missing" else', '            **({} if False else',
   ["tests/test_local_case.py::test_cache_missing은_캐시_키가_아예_없고_배지는_0이다"]),
@@ -2248,41 +2248,32 @@ CASES += [
  ("고정 안 한 끝점 줄을 버린다", FLW, "        lines += [line_for(sid) for sid in others]\n", "", ["tests/knowledge/test_flow.py::test_고정_안_한_끝점은_맨_뒤에_예산_안에서_실린다"]),
 ]
 
-# ── 12a-R3-0 ① — 대상 행의 링크 토큰 → 대상 키 ──
+# ── 12a-R3-0 ①·④ — 대상 행의 값 → 대상 키(선언 없이, 하나일 때만) ──
 IM = ROOT / "src/application/intake_map.py"
-KS = ROOT / "src/knowledge/schema.py"
 IMT = "tests/application/test_intake_map.py"
-MAP_T = f"{IMT}::test_대상_행의_링크_토큰이_든_선언_키_하나를_고르고_케이스_줄로_말한다"
+MAP_T = f"{IMT}::test_대상_행의_값이_선언_키_하나에만_들면_그_키를_고르고_케이스_줄로_말한다"
 NOPICK_T = f"{IMT}::test_고르지_못하면_고르지_않고_그_사실을_적는다"
-LINK_B = "tests/application/test_briefing.py::test_케이스_블록이_링크_토큰의_대상_키를_말하고_흐름_줄은_그_키를_앞세운다"
+LINK_B = "tests/application/test_briefing.py::test_케이스_블록이_대상_행의_값으로_고른_대상_키를_말하고_흐름_줄은_그_키를_앞세운다"
 PREF_B = "tests/application/test_briefing.py::test_흐름_블록은_증상_단어로_이름을_앞세우지_않고_prefer로만_앞세운다"
 CASES += [
- ("토큰 정규식의 그룹 수를 안 본다", KS, "        if groups != 1:\n            raise ValueError", "        if False:\n            raise ValueError",
-  ["tests/knowledge/test_loader.py::test_입구_링크는_그룹_하나짜리_토큰_정규식이어야_한다"]),
- ("리포 토폴로지가 입구 링크를 안 적는다", ROOT / "knowledge/topology/mx.json",
-  '  "intake": {"field": "link", "token": "/summary/badge/([^/]+)/"},\n', "",
-  ["tests/knowledge/test_loader.py::test_리포의_mx_토폴로지는_입구_링크를_선언한다", "tests/test_local_case.py::test_배지_행은_선언된_모양의_링크를_달고_대상_행의_토큰이_stats_키를_가리킨다"]),
- ("토큰과 무관하게 선언 키 전부를 고른다", IM, "    keys = tuple(k for k in declared_keys if token in k)", "    keys = tuple(declared_keys)", [MAP_T]),
- ("둘 이상이어도 첫 키를 고른다", IM, "        return self.keys[0] if len(self.keys) == 1 else None", "        return self.keys[0] if self.keys else None", [NOPICK_T]),
- ("토큰이 없어도 prefer를 준다", IM, '        return (self.token,) if self.token else ()', '        return (self.token or "",)', [NOPICK_T]),
+ ("행의 값 토큰이 숫자만이어도 쓴다", IM, "            if len(tok) >= _MIN_TOKEN and not tok.isdigit() and (field, tok) not in out:",
+  "            if len(tok) >= _MIN_TOKEN and (field, tok) not in out:", [f"{IMT}::test_행의_값은_영숫자_토큰_3자_이상이고_숫자만인_것은_뺀다"]),
+ ("둘 이상에 들어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, hit), = hits.items()", "    if hits:\n        (key, hit), *_ = hits.items()", [NOPICK_T]),
+ ("못 골랐는데도 prefer를 준다", IM, "        return (self.token,) if self.key and self.token else ()", "        return tuple(t for t in [self.token] if t) or tuple(k.split(\":\")[0] for k in self.keys[:1])", [NOPICK_T]),
+ ("선언 키가 없어도 뭔가 고른다", IM, "    if not declared_keys:\n        return TargetKey()", "    if False:\n        return TargetKey()", [NOPICK_T]),
  ("잘린 대상 행을 행으로 읽는다", IM, "            except ValueError:\n                return where, None", "            except ValueError:\n                return where, {}",
   [f"{IMT}::test_잘린_대상_행은_못_읽었다고_말한다"]),
  ("케이스 블록에 대상 키를 안 적는다", B, '            + (f"\\n{target.line()}" if target is not None and target.line() else ""))', "            )", [LINK_B]),
  ("흐름 줄이 토큰을 안 앞세운다", B, "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=prefer, pin=set(own))",
   "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=(), pin=set(own))", [LINK_B, PREF_B]),
- ("integrate가 대상 키를 안 구한다", B, "                     fold_tasks: bool = False, intake=None) -> dict[str, str]:\n    target = target_key(state, site_config=site_config, flow_graph=flow_graph, intake=intake)",
-  "                     fold_tasks: bool = False, intake=None) -> dict[str, str]:\n    target = TargetKey()", [LINK_B]),
- ("리드가 입구 링크를 안 넘긴다", LD, "flow_graph=flow_graph, code_index=code_index, intake=intake,", "flow_graph=flow_graph, code_index=code_index,",
-  ["tests/application/test_lead.py::test_make_lead가_입구_링크를_브리핑에_넘긴다"]),
- ("코드 객체가 입구 링크를 안 준다", D, "        return self._topology.intake", "        return None",
-  ["tests/knowledge/test_cli_code.py::test_조사가_토폴로지의_입구_링크를_받는다"]),
+ ("integrate가 대상 키를 안 구한다", B, "                     fold_tasks: bool = False) -> dict[str, str]:\n    target = target_key(state, site_config=site_config, flow_graph=flow_graph)",
+  "                     fold_tasks: bool = False) -> dict[str, str]:\n    target = TargetKey()", [LINK_B]),
  ("측정판 배지 행에 링크가 없다", LC, '                                    "caution": 0, "normal": 3,\n                                    "link": f"/summary/badge/{BADGE_LINKS.get(t, t.lower())}/"}',
-  '                                    "caution": 0, "normal": 3}', ["tests/test_local_case.py::test_배지_행은_선언된_모양의_링크를_달고_대상_행의_토큰이_stats_키를_가리킨다"]),
+  '                                    "caution": 0, "normal": 3}', ["tests/test_local_case.py::test_배지_행의_링크_값_토큰이_대상_배지만_stats_키에_든다"]),
 ]
-
 # ── 12a-R3-0 ② — 대상과 연결 안 된 키로 high 금지 ──
 CAP_T = "tests/application/test_verdict.py::test_최상위가_인용한_키가_대상_키가_아니면_확신_상한_medium과_caveat"
-CAP2_T = "tests/application/test_verdict.py::test_매핑이_없어도_키를_인용한_high는_medium이고_대본_경로는_안_건다"
+CAP2_T = "tests/application/test_verdict.py::test_대상_키를_못_골랐어도_키를_인용한_high는_medium이고_대본_경로는_안_건다"
 CASES += [
  ("키를 인용해도 확신을 안 낮춘다", ND, '    confidence = "medium" if verdict.confidence == "high" else verdict.confidence',
   "    confidence = verdict.confidence", [CAP_T]),
@@ -2318,7 +2309,7 @@ CASES += [
   ["tests/infrastructure/test_deployed_code.py::test_code_uses에_서비스_이름을_주면_code_flow로_안내한다"]),
 ]
 
-assert len(CASES) >= 581, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 578, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

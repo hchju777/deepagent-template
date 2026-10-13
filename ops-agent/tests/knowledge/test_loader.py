@@ -4,11 +4,9 @@
 제일 비싸고, 그래서 기동에서 잡는다.
 """
 import json
-import re
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from src.config.loader import ConfigError
 from src.knowledge.loader import load_deployment, load_topology
@@ -139,25 +137,3 @@ def test_리포의_mx_토폴로지는_redis_키_접두사를_선언한다():
     topo = load_topology(Path(__file__).resolve().parents[2] / "knowledge", "mx")
     redis = next(s for s in topo.flow.sources if s.kind == "rediskey")
     assert (redis.prefix, redis.join) == ("prefix", ":")
-
-
-# ── R3-0 ① — 접수 끝점의 대상 행 → 대상 키 링크 ──
-
-def test_입구_링크는_그룹_하나짜리_토큰_정규식이어야_한다():
-    """사내 측정 #5: 흐름 줄의 키 순서를 증상 단어 유사성으로 정했더니 리드가 이름이 비슷한 다른 배지의 키를 읽고 high로 틀렸다.
-    대상 행의 링크 필드가 키의 이름 토큰을 싣는다 — 토폴로지가 그 필드와 토큰 모양(그룹 하나)을 선언한다. 리포 값은 자리표시자."""
-    from src.knowledge.schema import IntakeLink
-
-    base = {"services": {"x": {"repo": "r"}}}
-    assert Topology.model_validate(base).intake is None
-    link = Topology.model_validate({**base, "intake": {"field": "link", "token": "/b/([^/]+)/"}}).intake
-    assert link == IntakeLink(field="link", token="/b/([^/]+)/")
-    for bad in ("/b/[^/]+/", "/b/([^/]+)/([^/]+)", "(["):
-        with pytest.raises(ValidationError, match="token"):
-            IntakeLink(field="link", token=bad)
-
-
-def test_리포의_mx_토폴로지는_입구_링크를_선언한다():
-    topo = load_topology(Path(__file__).resolve().parents[2] / "knowledge", "mx")
-    assert topo.intake is not None
-    assert re.search(topo.intake.token, "/summary/badge/stats/").group(1) == "stats"
