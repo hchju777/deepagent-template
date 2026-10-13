@@ -149,7 +149,8 @@ API_FILES = {
     "config/gbm/mx.json": {
         "infra": {"mongodb": {"database": "data"}},
         "mongodb_collection": {"alarm": {"collection": "alarm_events", "ttl": 3}},
-        "redis_key": {"alarm_stats": {"key": "alarm:stats:{line}", "ttl": 30}},
+        "redis_key": {"alarm_stats": {"key": "alarm:stats:{line}", "ttl": 30},
+                      "alarm_scan": {"key": "alarm:scan:{line}", "ttl": 30}},
         "api": {"alarm_window_min": 60, "badge_format": "compact"}},
     "config/factories/gumi/common.json": {"lines": LINES},
     "config/factories/sevt/common.json": {"lines": LINES},
@@ -168,6 +169,7 @@ def summary_badge(cfg, mongo, redis):
 
 def badge(cfg, mongo, redis, line):
     cached = redis.get(cfg["redis_key"]["alarm_stats"]["key"].format(line=line))
+    caution = redis.get(cfg["redis_key"]["alarm_scan"]["key"].format(line=line))
     counts = cached or count_recent(cfg, mongo, line)
     render = getattr(formatters, cfg["api"]["badge_format"])
     return render(counts)
@@ -201,10 +203,19 @@ VARIANTS = {
     "sink-stopped": "sink 컨슈머 정지 — 토픽엔 새 메시지, 컬렉션·캐시·화면은 4시간째 옛것",
     "cache-stale": "sink는 컬렉션에 쓰는데 stats 캐시를 안 갱신 — 컬렉션은 최신, 캐시·화면은 옛것",
     "healthy": "고장 없음 — 배지가 창 안 문서 수와 같다",
-    # 사내 실측 c-1의 모양 — 요약 키가 Redis에 아예 없다. "선언됐는데 없는 키"가 r1 브리핑에 실리는지 잰다.
+    # 요약 키가 Redis에 아예 없다 — "선언됐는데 없는 키"가 r1 브리핑에 실리는지 잰다. (측정 #6 정정: 사내 c-1형이 **아니다**.)
     "cache-missing": "sink는 컬렉션에 쓰는데 stats 캐시 키를 한 번도 안 만들었다 — 키 자체가 없고 화면은 0",
+    # 사내 c-1형(측정 #6 정정) — 요약 키는 있는데 data가 빈 배열. 값의 summary_info에 identity가 그대로 있어 입구 노드가 키를 고른다.
+    "data-empty": "sink가 요약 키를 갱신하지만 data가 빈 배열 — 키는 있고 화면은 0, 컬렉션엔 최근 문서가 있다",
 }
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
+
+
+def _stats_data(docs, line, variant):
+    """요약 키 값의 `data` — c-1형(`data-empty`)만 빈 배열, 나머지는 그 라인의 문서 요약."""
+    if variant == "data-empty":
+        return []
+    return [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == line]
 
 
 def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
@@ -242,11 +253,20 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
         # 그룹은 레포 공유라 processor(raw)와 sink(main)가 같은 이름이다. 실제 Kafka는
         # 토픽별로 답하고, 어느 토픽이 밀리는지가 두 서비스를 가르는 유일한 숫자다.
         "lags": {"gumi-mx-core": {"mx.alarm.main": 0 if sink_alive else 1830, "mx.alarm.raw": 0}},
+        # 요약 키 값은 사내 모양 — `record[0].summary_info`에 배지 행의 identity(group/title)가 그대로 있고 라벨(`source`)도 있다.
+        # 입구 노드(R3-1 ①)는 이 identity로 키를 고른다. `alarm:scan:{line}`은 미끼 — 이름이 비슷하고 라벨은 같지만 identity가
+        # 다른 배지(Caution)다(측정 #6 c-2의 모양). api가 둘 다 읽어 둘 다 후보가 된다.
         "redis": {
             **({} if variant == "cache-missing" else
-               {f"alarm:stats:{l}": json.dumps({"count_1h": counts[l],
-                                                "updated_at": fresh(1) if stats_fresh else _iso(stale)})
+               {f"alarm:stats:{l}": json.dumps({
+                    "record": [{"summary_info": {"group": l, "title": "Alarm", "source": "MES"},
+                                "data": _stats_data(docs, l, variant)}],
+                    "count_1h": counts[l], "updated_at": fresh(1) if stats_fresh or variant == "data-empty" else _iso(stale)})
                 for l in LINES}),
+            **{f"alarm:scan:{l}": json.dumps({
+                    "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],
+                    "count_1h": 0, "updated_at": fresh(1)})
+               for l in LINES},
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게
         # "API가 죽었다"로 읽힌다(첫 로컬 실행에서 `prod_status`가 그랬다).

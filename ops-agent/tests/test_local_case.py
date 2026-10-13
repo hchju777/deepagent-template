@@ -52,8 +52,42 @@ def test_모르는_변형은_거부한다():
 
 
 def test_cache_missing은_캐시_키가_아예_없고_배지는_0이다():
-    """사내 실측 c-1의 모양 — 요약 키가 Redis에 없다. 선언됐는데 없는 키가 r1 브리핑에 실리는지 재는 변형."""
+    """요약 키가 Redis에 아예 없다 — "선언됐는데 없는 키"가 r1 브리핑에 실리는지 재는 변형. (측정 #6 정정: 사내 c-1형이 **아니다** —
+    c-1형은 키가 있고 data가 빈 배열이다, 아래 `data-empty`.)"""
     s = _seeds(NOW, "cache-missing")
     assert not [k for k in s["redis"] if k.startswith("alarm:stats:")]
     assert "hb:sink" in s["redis"]
     assert all(_badge(s, l)["alarm"] == 0 for l in LINES)
+
+
+# ── R3-1 ①-b — 요약 키 값에 identity, c-1형, 미끼 ──
+
+def _value(seeds, key):
+    import json
+    return json.loads(seeds["redis"][key])
+
+
+def test_data_empty는_요약_키가_있고_data가_빈_배열이며_값_안에_대상_identity가_그대로_있다():
+    """사내 c-1형(측정 #6 정정): 대상 요약 키는 있고 data가 비었다. 값의 `record[0].summary_info`에 배지 행의 group/title이 그대로 —
+    입구 노드(R3-1 ①)가 그 자리로 키를 고른다."""
+    from src.application.intake_map import holds_identity
+
+    s = _seeds(NOW, "data-empty")
+    value = _value(s, "alarm:stats:L1")
+    assert value["record"][0]["data"] == [] and value["count_1h"] == 0
+    assert holds_identity(value, ("L1", "Alarm")) == "record[0].summary_info"
+    assert all(_badge(s, l)["alarm"] == 0 for l in LINES)
+    assert len(_recent(s, "L1")) >= 2                                   # 컬렉션엔 최근 문서가 있다 — 깨진 곳은 요약 키 쪽
+    healthy = _value(_seeds(NOW, "healthy"), "alarm:stats:L1")
+    assert healthy["record"][0]["data"] and holds_identity(healthy, ("L1", "Alarm")) == "record[0].summary_info"
+
+
+def test_미끼_키는_이름이_비슷하고_같은_라벨을_달았지만_identity가_다르다():
+    """측정 #6 c-2의 모양 — 라벨(`source`)은 여러 키가 공유하고 이름도 비슷하다. identity로만 가르면 미끼는 빠진다."""
+    from src.application.intake_map import holds_identity
+
+    s = _seeds(NOW, "data-empty")
+    stats, decoy = _value(s, "alarm:stats:L1"), _value(s, "alarm:scan:L1")
+    assert stats["record"][0]["summary_info"]["source"] == decoy["record"][0]["summary_info"]["source"] == "MES"
+    assert holds_identity(decoy, ("L1", "Alarm")) is None and holds_identity(decoy, ("L1", "Caution")) == "record[0].summary_info"
+    assert [k for k in ("alarm:scan:L1", "alarm:stats:L1") if holds_identity(_value(s, k), ("L1", "Alarm"))] == ["alarm:stats:L1"]

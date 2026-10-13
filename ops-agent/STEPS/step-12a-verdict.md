@@ -627,6 +627,20 @@ c-1형이 아니다. 항목·순서·B를 #7 뒤로 미루는 이유는 [plan-12
 - 테스트 먼저(RED → GREEN). 스윕 578 → 583(토큰 케이스 9 제거, 입구 케이스 14 추가, 옮겨진 앵커 둘). 초록으로 잡힌 변이 둘은 테스트를
   날카롭게 했다(부분 문자열 대조 / 모든 키를 hit로).
 
+#### R3-1 ①-b (10-13) ✅ — 측정판: 요약 키 값에 identity, c-1형, 미끼
+
+- 요약 키 값을 사내 모양으로: `{"record": [{"summary_info": {"group", "title", "source"}, "data": [...]}], "count_1h", "updated_at"}`.
+  변형 `data-empty`(**c-1형** — 키 있음, `data: []`, 컬렉션엔 최근 문서 있음). `cache-missing`의 "c-1형" 라벨을 뗐다(키가 아예 없는 변형).
+- 미끼 `alarm:scan:{line}` — 이름이 비슷하고 라벨(`source: MES`)은 같지만 identity가 다른 배지(Caution). api 핸들러가 둘 다 읽어 둘 다
+  후보가 된다(측정 #6 c-2의 모양). `test_index_trace`의 측정판 핸들러 테스트에 그 읽기와 밀린 gap 줄 번호를 반영했다.
+- 실제 소비자로(`data-empty`, 그래프 재생성 뒤): 입구 노드가 `t-0`(접수) → `t-0-1`·`t-0-2`(scan `alarm:scan:*`·`alarm:stats:*`) → `t-0-3~8`
+  (get 여섯) 뒤 케이스 블록에 `대상 키: alarm:stats:L1 — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-6.e1)`.
+  미끼 셋은 읽혔지만 안 골렸다. 대본 판정이 `hb:sink`를 인용하자 medium + `대상 키 alarm:stats:L1`이 caveat에.
+- **`code graph` 재생성 규칙(사람 요청 10-13)**: 측정 안내마다 "필요/불필요"를 명시한다. 기준은 ① 번들을 만드는 코드(`graph_build`·`index`·
+  `index_trace`·`trace`, `flow.extract/add_endpoints/add_trace/apply_site`)가 바뀌었나 ② 배포 커밋이 바뀌어 `code status`가 낡음을 말하나.
+  측정 #3 이후 ①에 해당하는 변경은 없다 — 측정 #7은 ②일 때만 재생성.
+- 테스트 먼저(RED 2 → GREEN). 스윕 +3(586).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

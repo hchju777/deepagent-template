@@ -2319,7 +2319,20 @@ CASES += [
   ["tests/infrastructure/test_deployed_code.py::test_code_uses에_서비스_이름을_주면_code_flow로_안내한다"]),
 ]
 
-assert len(CASES) >= 578, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1 ①-b — 측정판: 요약 키 값의 identity · c-1형 · 미끼 ──
+LCT = "tests/test_local_case.py"
+CASES += [
+ ("data-empty의 data가 안 비었다", LC, '    if variant == "data-empty":\n        return []', '    if False:\n        return []',
+  [f"{LCT}::test_data_empty는_요약_키가_있고_data가_빈_배열이며_값_안에_대상_identity가_그대로_있다"]),
+ ("요약 키 값에 identity가 없다", LC, '                    "record": [{"summary_info": {"group": l, "title": "Alarm", "source": "MES"},',
+  '                    "record": [{"summary_info": {"source": "MES"},',
+  [f"{LCT}::test_data_empty는_요약_키가_있고_data가_빈_배열이며_값_안에_대상_identity가_그대로_있다"]),
+ ("미끼 키의 identity가 대상과 같다", LC, '                    "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],',
+  '                    "record": [{"summary_info": {"group": l, "title": "Alarm", "source": "MES"}, "data": []}],',
+  [f"{LCT}::test_미끼_키는_이름이_비슷하고_같은_라벨을_달았지만_identity가_다르다"]),
+]
+
+assert len(CASES) >= 586, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
