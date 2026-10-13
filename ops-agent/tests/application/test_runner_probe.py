@@ -329,3 +329,23 @@ async def test_recompute_기대값이_대상_행이_아닌_행을_가리키면_�
     assert (await recount("t-4", "response[0].alarm", on=case)).status == "ok"                  # target이 없다
     other = case.model_copy(update={"target": "ZZ/Nope"})
     assert (await recount("t-5", "response[0].alarm", on=other)).status == "ok"                 # 대상 값이 든 행이 없다
+
+
+# ── R3-0 ③ — 키 지도의 경로는 이름이 아니다 ──
+
+async def test_앞선_키_지도의_경로를_컬렉션이나_키_이름으로_내면_실행_전에_거부한다(case):
+    """사내 측정 #5 c-2: 리드가 `mongodb_collection.<이름>`(설정 안의 경로)을 컬렉션 이름으로 넣었다. Mongo 컬렉션 이름에 점이 올 수
+    있어 모양으로는 못 거른다 — 이 실행기가 앞서 돌려준 키 지도의 경로와 **정확히 같을 때만** 거부하고 `code.config key=`로 보낸다."""
+    cfg = ProbeResult.succeeded({"_주의": "경로다", "_키_지도": {"mongodb_collection.alarm": "객체 · 키 2개: collection, ttl",
+                                                              "redis_key": "객체 · 키 1개: prefix"}},
+                                source="code.config api", clock=lambda: T0, truncated_reason="키 지도만")
+    mongo, redis = Recorder(), Recorder()
+    runner = ProbeRunner(Bundle(code=Recorder(result=cfg), mongo=mongo, redis=redis), clock=lambda: T0)
+    await runner.run(task("t-1", action="code.config", params={"service": "api"}), case=case)
+    wrong = await runner.run(task("t-2", action="mongo.find", params={"collection": "mongodb_collection.alarm", "filter": {}}), case=case)
+    assert wrong.status == "error" and "설정의 경로" in wrong.error and "code.config key='mongodb_collection.alarm'" in wrong.error
+    assert mongo.calls == []                                                          # 소켓에 안 나갔다
+    key = await runner.run(task("t-3", action="redis.get", params={"key": "redis_key"}), case=case)
+    assert key.status == "error" and "설정의 경로" in key.error and redis.calls == []
+    fine = await runner.run(task("t-4", action="mongo.find", params={"collection": "alarm", "filter": {}}), case=case)
+    assert fine.status == "ok" and len(mongo.calls) == 1

@@ -139,3 +139,5 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - 같은 두 케이스. r1 integrate 프롬프트(`case trace`)의 케이스 블록에 `대상 키: <키> (대상 행 … 링크 토큰 '…'에서)` 줄이 있는가 —
   있으면 그 줄 그대로, `못 골랐다`면 그 줄 그대로(사유가 적혀 있다).
 - c-1이 그 키를 읽는가(r1 태스크 줄의 `redis.get key=`), c-1 확신이 high가 아닌가(②), 판정의 component.
+- 리드가 `code.flow name=<서비스>`를 냈으면 그 태스크 줄의 머리(`… [service · …]: 관계 N개 — …`)가 요약인지, `code.uses name=<서비스>`는
+  "서비스 이름이다" 안내인지, `code.config`의 키 지도 경로를 컬렉션·키 이름으로 냈으면 "설정의 경로" 거부 사유가 붙었는지 — 각 한 줄.

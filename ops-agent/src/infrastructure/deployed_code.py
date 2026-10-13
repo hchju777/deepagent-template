@@ -142,6 +142,10 @@ class DeployedCode(DeployedCodePort):
         if self._index is None:
             return ProbeResult.failed("심볼 인덱스가 없다 — `python -m src code graph`로 만든다",
                                       source=source, clock=self._clock)
+        if name in self._topology.services:
+            # 사내 측정 #5: 서비스 이름으로 내고 "인덱스에 없다"를 받자 같은 이름으로 또 냈다 — 어디로 가야 하는지까지 말한다.
+            return ProbeResult.failed(f"{name}: 서비스 이름이다 — 서비스의 배선은 code.flow name={name!r}, 자원을 쓰는 함수는 "
+                                      f"그 자원 이름(컬렉션·토픽·키)으로 code.uses", source=source, clock=self._clock)
         found = qy.uses(self._index, name)
         if not found:
             return ProbeResult.failed(f"{name}: 이 이름의 자원을 쓰거나 읽는 함수가 인덱스에 없다 — "
@@ -159,6 +163,11 @@ class DeployedCode(DeployedCodePort):
             return ProbeResult.failed(
                 f"{name}: 그래프에 없다 — <데이터 흐름>이나 증거에 나온 이름 그대로 써라",
                 source=source, clock=self._clock)
+        services = [n["id"] for n in self._flow_graph["nodes"] if n.get("type") == "service" and name in (n["id"], n["label"])]
+        if services:
+            # 서비스는 엣지 나열이 아니라 관계별 요약(사내 측정 #5: 684줄이 40줄에서 잘렸다). 자원은 전처럼 엣지.
+            return ProbeResult.succeeded("\n".join(flowgraph.service_summary(self._flow_graph, services[0])),
+                                         source=source, clock=self._clock)
         lines, left = flowgraph.neighbor_lines(self._flow_graph, near)
         return ProbeResult.succeeded(
             "\n".join(lines), source=source, clock=self._clock,
@@ -443,7 +452,9 @@ class DeployedCode(DeployedCodePort):
                 return ProbeResult.failed(picked, source=f"{source} [{read}]", clock=self._clock)
             merged = picked
         elif len(json.dumps(merged, ensure_ascii=False)) > _CONFIG_INLINE_CHARS:
-            merged = {"_키_지도": key_map(merged)}
+            # 지도의 경로를 컬렉션 이름으로 쓴 사내 측정 #5 — 지도가 스스로 말하고(`_주의`가 첫 키), 실행기도 막는다(`runner_probe`).
+            merged = {"_주의": "아래 경로는 설정 안의 위치이지 컬렉션·키 이름이 아니다 — 그 자리의 값은 code.config key=<경로>로 읽는다",
+                      "_키_지도": key_map(merged)}
             problems.append(f"합친 설정이 {_CONFIG_INLINE_CHARS}자를 넘어 키 지도만 실었다 — "
                             f"key=<지도의 경로>로 그 부분을 통째로 읽어라")
         return ProbeResult.succeeded(

@@ -565,6 +565,20 @@ conclude), `data_loss(high)`로 **틀렸다**. 흐름 줄의 키 순서를 `pref
   alarm:stats:{line}` · `검증 통과`였다.
 - 테스트 먼저(RED 2 + 파일 턴 1 → GREEN). 스윕 +7(575).
 
+#### R3-0 ③ (10-13) ✅ — 키 지도의 경로는 이름이 아니다 · `code.flow` 서비스 요약 · `code.uses` 서비스 안내
+
+- P1 3: 키 지도(`code.config`가 상한을 넘겨 지도만 줄 때)의 첫 키가 `_주의` — "아래 경로는 설정 안의 위치이지 컬렉션·키 이름이 아니다
+  — 그 자리의 값은 code.config key=<경로>로". 그리고 실행기(`ProbeRunner`)가 앞서 돌려준 키 지도의 경로를 기억해 두고, `collection`·`key`
+  인자가 그 경로와 **정확히 같으면** 소켓 전에 거부한다(`… 설정의 경로(앞선 키 지도)이지 이름이 아니다 — code.config key='…'로`). 모양으로는
+  못 거른다 — Mongo 컬렉션 이름에 점이 올 수 있다. 사내 c-2가 `mongodb_collection.<이름>`을 컬렉션으로 냈던 것.
+- P1 4: `code.flow name=<서비스>`는 엣지 나열(40줄에서 잘림 — 사내 684줄) 대신 `flow.service_summary` — `api [service · dt-api]: 관계 N개`,
+  관계별 `declares: 컬렉션 12 — c00, … 외 4개`, 끝에 "자원 하나의 배선은 code.flow name=<그 자원 이름>으로". 자원 이름은 전처럼 엣지.
+- P1 5: `code.uses name=<서비스>`는 "서비스 이름이다 — 배선은 code.flow name='…', 자원을 쓰는 함수는 그 자원 이름으로"로 실패 사유.
+- 실제 소비자로: 측정판에서 대본 리드가 r1에 `code.flow name=api`·`code.uses name=sink`를 내자 r2 태스크 줄이 각각 관계별 요약과 서비스
+  안내였다(아래 확인 줄). 키 지도 거부는 측정판 config가 상한(2400자) 아래라 판에선 안 나온다 — 실행기 테스트(가짜 키 지도)와
+  `deployed_code` 테스트(300키 config)가 각각 지킨다.
+- 테스트 먼저(RED 4 → GREEN). 스윕 +6(581). **R3-0 끝 — 측정 #6**([review-12a-4.md](review-12a-4.md) "R3-0 뒤 측정 #6에서 더 볼 것").
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

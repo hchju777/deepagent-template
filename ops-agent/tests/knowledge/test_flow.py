@@ -928,3 +928,11 @@ def test_고정_안_한_끝점은_맨_뒤에_예산_안에서_실린다():
     assert pinned[0].startswith("/summary/badge [endpoint]") and pinned[-1].startswith("/other/path [endpoint]")
     legacy = flow.flow_text(g, seeds, budget=2000).splitlines()
     assert {legacy[0].split(" [")[0], legacy[1].split(" [")[0]} == {"/summary/badge", "/other/path"}
+
+
+def test_service_summary는_관계별_개수와_이름_여덟_개와_안내_줄이다():
+    g = _lead_graph()
+    lines = flow.service_summary(g, "service_sink")
+    assert lines[0].startswith("sink [service · dt-core]: 관계 ") and "요약" in lines[0]
+    assert any(l.startswith("  consumes: 토픽 ") for l in lines) and any(l.startswith("  declares: ") for l in lines)
+    assert lines[-1] == "  자원 하나의 배선(누가 쓰고 어디서 왔나)은 code.flow name=<그 자원 이름>으로"

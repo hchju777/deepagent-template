@@ -175,7 +175,7 @@ P1 4("선언됐는데 없는 키"가 무관한 키로 보냄)는 **R3로** — "
 |---|---|---|---|
 | R3-0 ① ✅ | P0 1 | 토폴로지 `intake: {field, token}`(대상 행의 링크 필드와 토큰 정규식 — 리포엔 자리표시자). 코드가 증거의 대상 행(R2-5 ③ `target_rows`)에서 토큰을 뽑아 선언 키(`declared_keys`) 중 토큰이 든 것을 고른다. **케이스 블록에 명시** `대상 키: <키> (대상 행 … 링크 토큰 '<토큰>'에서)` — 0개·2개 이상이면 그 사실을 적고 고르지 않는다. 흐름 줄의 `prefer`는 토큰만, `case_words`는 뗀다(토큰이 없으면 prefer 없음). 측정판 배지 행에 같은 모양의 링크 필드 | `knowledge/schema.py`, `application/intake_map.py`(새), `briefing`, `lead.make_lead(intake=)`, `__main__`, `tools/local_case.py`, `knowledge/topology/mx.json` |
 | R3-0 ② ✅ | P0 2 | verify(코드): 최상위 원인이 인용한 증거에 키 읽기가 있고 그 키가 ①의 대상 키가 아니면(매핑이 없을 때 포함) confidence 상한 medium + caveat "대상과 키의 연결이 확인되지 않았다". 되묻지 않는다 — 한도다. 키를 인용하지 않은 최상위는 이 규칙 밖(R3-2 (b)(c)) | `nodes.verify`, `EngineDeps.intake` |
-| R3-0 ③ | P1 3·4·5 | 키 지도에 "경로이지 이름이 아니다" 한 줄 + 실행기가 앞선 키 지도의 경로와 같은 `collection`·`key`를 거부. `code.flow name=<서비스>`는 관계 종류별 개수 요약 + "자원 이름으로". `code.uses name=<서비스>`는 "서비스 이름이다 — code.flow로" | `deployed_code`, `runner_probe`, `flow.neighbor_lines` |
+| R3-0 ③ ✅ | P1 3·4·5 | 키 지도에 "경로이지 이름이 아니다" 한 줄 + 실행기가 앞선 키 지도의 경로와 같은 `collection`·`key`를 거부. `code.flow name=<서비스>`는 관계 종류별 개수 요약 + "자원 이름으로". `code.uses name=<서비스>`는 "서비스 이름이다 — code.flow로" | `deployed_code`, `runner_probe`, `flow.neighbor_lines` |
 | — | 측정 #6 | 같은 두 케이스. c-1이 링크 토큰의 키를 읽는가, c-1 확신이 high가 아닌가, 케이스 블록의 `대상 키:` 줄 | 브리프 |
 | R3-1 | 사슬·frame 전 읽기 | 토큰 → api config 경로 → 키 설정 경로 → 접두+키 → 값 안의 identity 경로를 config 선언으로 걷고, 닫히면 frame **전에** 코드가 그 키를 읽어 증거로. frame 태스크는 폭과 무관하게 전부 | `intake_map`, `graph.py`/`nodes.frame` 앞 노드 |
 | R3-2 | verify (b)(c) | (b) 인용한 설정 항목이 매핑된 것인가 (c) 인용 증거에 대상의 반대 사실(`use:true`)이 있으면 강등. 측정 #4 P1 4: "대상 키는 있음 · 다른 없는 키 N개(대상과 무관)" | `nodes.verify`, `facts.py` |

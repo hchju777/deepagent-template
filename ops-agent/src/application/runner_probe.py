@@ -53,6 +53,9 @@ class ProbeRunner(TaskRunnerPort):
         # 만든 결과를 증거 id별로 프로세스 안에 들고 있는다(개수 상한). 다른 프로세스에서 재개된
         # 케이스면 첫 recompute가 "모른다"고 답하고 리드가 그 읽기를 다시 낸다.
         self._raw: OrderedDict[str, Any] = OrderedDict()
+        # 앞서 돌려준 키 지도(`code.config`가 상한을 넘겨 지도만 준 것)의 경로들 — 리드가 그 경로를 컬렉션·키 이름으로 내면 실행
+        # 전에 거부한다(사내 측정 #5 c-2). 모양으로는 못 거른다(Mongo 컬렉션 이름에 점이 올 수 있다) — 정확히 같을 때만.
+        self._map_paths: set[str] = set()
         self._recompute = Recomputer(getattr(adapters, "mongo", None), self._raw.get, clock=clock)
 
     def describe(self) -> str:
@@ -63,6 +66,12 @@ class ProbeRunner(TaskRunnerPort):
             return TaskOutcome(task_id=task.id, status="error",
                                error="action이 없다 — ProbeRunner는 태스크가 선언한 읽기만 한다")
         source = describe(task.action, task.params)
+        for arg in ("collection", "key"):
+            name = task.params.get(arg) if isinstance(task.params, dict) else None
+            if isinstance(name, str) and name in self._map_paths:
+                return TaskOutcome(task_id=task.id, status="error",
+                                   error=f"{source} — {arg}={name!r}은 설정의 경로(앞선 키 지도)이지 이름이 아니다 — "
+                                         f"그 자리의 값은 code.config key={name!r}로 읽어라")
         if task.action.startswith("recompute."):
             # 표의 검사는 같이 받되, 어댑터가 아니라 우리 실행기가 돈다.
             problem = action_problem(task.action, task.params)
@@ -103,6 +112,8 @@ class ProbeRunner(TaskRunnerPort):
         if result.envelope.complete and ours:
             note = " (예산에서 잘렸다 — 없는 것이 아니다)"
         self._raw[ref.id] = result.data
+        if isinstance(result.data, dict) and isinstance(result.data.get("_키_지도"), dict):
+            self._map_paths |= set(result.data["_키_지도"])
         while len(self._raw) > _RAW_KEEP:
             self._raw.popitem(last=False)
         return TaskOutcome(task_id=task.id, status="ok",

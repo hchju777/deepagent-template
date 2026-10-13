@@ -2303,7 +2303,22 @@ CASES += [
   "        taken = []", ["tests/infrastructure/test_llm_file_turn.py::test_같은_폴더의_어댑터_둘은_번호를_이어_쓴다"]),
 ]
 
-assert len(CASES) >= 575, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-0 ③ — 키 지도의 경로는 이름이 아니다 · code.flow 서비스 요약 · code.uses 서비스 안내 ──
+MAPPATH_T = "tests/application/test_runner_probe.py::test_앞선_키_지도의_경로를_컬렉션이나_키_이름으로_내면_실행_전에_거부한다"
+SVCFLOW_T = "tests/infrastructure/test_deployed_code.py::test_code_flow에_서비스_이름을_주면_엣지_나열_대신_관계별_요약이다"
+CASES += [
+ ("키 지도가 경로라고 말하지 않는다", D, '            merged = {"_주의": "아래 경로는 설정 안의 위치이지 컬렉션·키 이름이 아니다 — 그 자리의 값은 code.config key=<경로>로 읽는다",\n                      "_키_지도": key_map(merged)}',
+  '            merged = {"_키_지도": key_map(merged)}', ["tests/infrastructure/test_deployed_code.py::test_400줄이_넘는_층도_통째로_읽는다"]),
+ ("실행기가 키 지도의 경로를 기억하지 않는다", RP, '            self._map_paths |= set(result.data["_키_지도"])', "            pass", [MAPPATH_T]),
+ ("키 지도의 경로를 이름으로 내도 소켓에 나간다", RP, "            if isinstance(name, str) and name in self._map_paths:", "            if False:", [MAPPATH_T]),
+ ("code.flow가 서비스도 엣지로 나열한다", D, "        if services:\n            # 서비스는", "        if False:\n            # 서비스는", [SVCFLOW_T]),
+ ("서비스 요약이 이름을 여덟 개 넘게 싣는다", FLW, '        shown = ", ".join(sorted(labels)[:names]) + (f" 외 {len(labels) - names}개" if len(labels) > names else "")',
+  '        shown = ", ".join(sorted(labels))', [SVCFLOW_T]),
+ ("code.uses가 서비스 이름을 안내하지 않는다", D, "        if name in self._topology.services:\n            # 사내 측정 #5", "        if False:\n            # 사내 측정 #5",
+  ["tests/infrastructure/test_deployed_code.py::test_code_uses에_서비스_이름을_주면_code_flow로_안내한다"]),
+]
+
+assert len(CASES) >= 581, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -711,6 +711,34 @@ def declared_keys(graph: dict | None, path: str | None) -> tuple[str, ...]:
 _CONF_RANK = {"EXTRACTED": 0, "INFERRED": 1, "AMBIGUOUS": 2}
 
 
+_TYPE_WORD = {"topic": "토픽", "group": "그룹", "collection": "컬렉션", "rediskey": "키", "endpoint": "끝점", "service": "서비스"}
+
+
+def service_summary(graph: dict, node_id: str, *, names: int = _MAX_NAMES) -> list[str]:
+    """`code.flow name=<서비스>`의 본문 — 엣지 나열 대신 **관계별 개수와 이름 몇 개**. 사내 측정 #5: 서비스 하나의 이웃이 684줄이라
+    40줄에서 잘렸고 리드는 잘린 조각을 전부로 봤다. 서비스 단위에서 리드가 묻는 것은 "무엇을 갖나"지 엣지의 출처가 아니다 — 출처는
+    자원 하나로 다시 내면 전처럼 엣지로 준다."""
+    by_id = {n["id"]: n for n in graph["nodes"]}
+    node = by_id[node_id]
+    groups: dict[tuple[str, str], list[str]] = {}
+    for e in graph["links"]:
+        if e["relation"] == _BRIDGE or node_id not in (e["source"], e["target"]):
+            continue
+        other = by_id.get(e["target"] if e["source"] == node_id else e["source"])
+        if other is None:
+            continue
+        labels = groups.setdefault((e["relation"], other.get("type", "?")), [])
+        if other["label"] not in labels:
+            labels.append(other["label"])
+    total = sum(len(v) for v in groups.values())
+    lines = [f"{node['label']} [service · {node.get('repo', '')}]: 관계 {total}개 — 엣지 나열 대신 관계별 요약"]
+    for (relation, kind), labels in sorted(groups.items(), key=lambda kv: (_FLOW_ORDER.index(kv[0][0]) if kv[0][0] in _FLOW_ORDER else 99, kv[0])):
+        shown = ", ".join(sorted(labels)[:names]) + (f" 외 {len(labels) - names}개" if len(labels) > names else "")
+        lines.append(f"  {relation}: {_TYPE_WORD.get(kind, kind)} {len(labels)} — {shown}")
+    lines.append("  자원 하나의 배선(누가 쓰고 어디서 왔나)은 code.flow name=<그 자원 이름>으로")
+    return lines
+
+
 def neighbor_lines(graph: dict, edges: list[dict], *, limit: int = 40) -> tuple[list[str], int]:
     """`code.flow`의 본문 — config 엣지 먼저, 그다음 코드 엣지를 확신 순으로. `(줄들, 못 실은 수)`."""
     ranked = sorted((e for e in edges if e["relation"] != _BRIDGE),

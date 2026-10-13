@@ -155,6 +155,8 @@ async def test_400줄이_넘는_층도_통째로_읽는다(tmp_path, clock, code
     # 상한을 넘는 덤프는 키 지도만 온다(R2-2b-1) — 끝까지 읽었는지는 `key=`로 그 자리를 골라 확인한다.
     assert not got.envelope.complete and "key=" in got.envelope.truncated_reason
     assert got.data["_키_지도"]["rules"].startswith("객체 · 키 300개")
+    # 사내 측정 #5: 리드가 지도의 경로(`mongodb_collection.<이름>`)를 컬렉션 이름으로 썼다 — 지도가 스스로 말한다(실행기도 막는다).
+    assert list(got.data)[0] == "_주의" and "이름이 아니다" in got.data["_주의"] and "key=" in got.data["_주의"]
     end = await code("gumi").config("processor", key="rules.r299")
     assert end.envelope.complete and end.data == {"threshold": 299}   # 끝까지 읽었다
     topic = await code("gumi").config("processor", key="kafka.topic")
@@ -629,3 +631,40 @@ async def test_code_grep은_코드_줄을_먼저_문서_줄을_뒤에_둔다(tmp
     assert code_lines and doc_lines and max(code_lines) < min(doc_lines)
     assert "문서 줄" in got.data and len(got.data.splitlines()) <= 400
     assert not got.envelope.complete and "코드 줄 먼저" in got.envelope.truncated_reason
+
+
+# ── R3-0 ③ — 서비스 이름으로 낸 code.flow·code.uses ──
+
+async def test_code_flow에_서비스_이름을_주면_엣지_나열_대신_관계별_요약이다(flow_code):
+    """사내 측정 #5: 서비스 하나의 이웃이 684줄이라 40줄에서 잘렸고 리드는 잘린 조각을 전부로 봤다. 서비스 단위에서 리드가 묻는 것은
+    "무엇을 갖나"지 엣지의 출처가 아니다 — 관계별 개수와 이름 몇 개, 그리고 자원 이름으로 다시 내라는 안내."""
+    graph = {"nodes": [{"id": "service_sink", "label": "sink", "type": "service", "repo": "dt-core"},
+                       {"id": "topic_main", "label": "mx.alarm.main", "type": "topic"}]
+             + [{"id": f"collection_c{i:02d}", "label": f"c{i:02d}", "type": "collection"} for i in range(12)],
+             "links": [{"source": "service_sink", "target": "topic_main", "relation": "consumes", "origin": "config",
+                        "confidence": "EXTRACTED", "source_file": "config/gbm/mx.json", "source_location": "L1"}]
+             + [{"source": "service_sink", "target": f"collection_c{i:02d}", "relation": "declares", "origin": "config",
+                 "confidence": "EXTRACTED", "source_file": "config/gbm/mx.json", "source_location": f"L{i + 2}"} for i in range(12)]}
+    flow_code.attach_flow_graph(graph)
+    got = await flow_code.flow("sink")
+    assert got.status == "ok" and got.envelope.complete, got.error
+    lines = got.data.splitlines()
+    assert lines[0] == "sink [service · dt-core]: 관계 13개 — 엣지 나열 대신 관계별 요약"
+    assert "  declares: 컬렉션 12 — c00, c01, c02, c03, c04, c05, c06, c07 외 4개" in lines
+    assert "  consumes: 토픽 1 — mx.alarm.main" in lines
+    assert lines[-1].startswith("  자원 하나의 배선") and "code.flow" in lines[-1]
+    assert "—declares→" not in got.data                                           # 엣지 줄은 없다
+    resource = await flow_code.flow("c00")
+    assert resource.data.startswith("sink —declares→ c00 [collection]")             # 자원은 전처럼 엣지
+
+
+async def test_code_uses에_서비스_이름을_주면_code_flow로_안내한다(flow_code):
+    """사내 측정 #5: `code.uses name=<서비스>`가 "인덱스에 없다"로만 실패해 리드가 같은 이름으로 또 냈다."""
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+
+    flow_code.attach_index(await ix.build_index({"dt-core": _Src()}, names=[Name("collection", "alarm_events", "mongodb_collection.alarm")],
+                                                commits={"dt-core": "c0ffee"}))
+    got = await flow_code.uses("sink")
+    assert got.status == "error" and "서비스 이름이다" in got.error and "code.flow name='sink'" in got.error
+    assert (await flow_code.uses("alarm_events")).status == "ok"
