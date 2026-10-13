@@ -1206,8 +1206,9 @@ def test_흐름_블록은_접수_끝점_줄을_늘_맨_앞에_싣는다():
     assert lines[-1].startswith("… (+")                                        # 끝점 줄은 늘 실리고 나머지는 예산대로
 
 
-def test_흐름_블록은_증상_단어와_겹치는_이름을_먼저_둔다():
-    """관계당 여덟 개 안에 **지금 케이스의 이름**이 들게 — 알파벳순이면 `badge_cache`가 `aa…` 아홉 개에 밀려 "외 N개"로 숨는다."""
+def test_흐름_블록은_증상_단어로_이름을_앞세우지_않고_prefer로만_앞세운다():
+    """R2-2b-2는 증상·target 단어가 든 이름을 앞세웠다 — 사내 측정 #5에서 그 순서가 이름이 비슷한 다른 배지의 키를 첫 자리에
+    놓았고 리드가 그 키를 읽어 high로 틀렸다. 이제 증상 단어는 순서에 안 쓴다. 앞세우는 것은 호출부가 준 `prefer`(링크 토큰)뿐."""
     g = json.loads(json.dumps(FLOW_GRAPH))
     for name in [f"aa{i}" for i in range(9)] + ["zz_badge_cache"]:
         g["nodes"].append({"id": f"collection_{name}", "label": name, "type": "collection"})
@@ -1216,6 +1217,9 @@ def test_흐름_블록은_증상_단어와_겹치는_이름을_먼저_둔다():
     case = _patrol_case(target="L1/badge")
     state = CaseState(case=case, evidence=[EvidenceRef(id="e-1", source="x", summary="sink lag", body="")])
     text = briefing.flow_block(state, g)
+    sink = next(l for l in text.splitlines() if l.startswith("sink [service"))
+    assert "declares: aa0, aa1" in sink and "zz_badge_cache" not in sink            # 증상의 badge는 순서에 안 쓴다
+    text = briefing.flow_block(state, g, prefer=("badge",))
     sink = next(l for l in text.splitlines() if l.startswith("sink [service"))
     assert "declares: zz_badge_cache, aa0" in sink
 
@@ -1350,3 +1354,48 @@ def test_흐름_블록은_증거에_나온_다른_끝점에_밀리지_않는다(
         assert any(line.startswith("api [service") for line in body)                  # 접수 끝점의 이웃이 남는다
         assert len("\n".join(body)) <= 800 + 60                                        # 예산(+ 끊었다는 줄)
     assert not any(line.startswith(("/summary/alpha", "/summary/beta")) for line in later[:3])
+
+
+# ── R3-0 ① — 케이스 블록의 대상 키, 흐름 줄의 순서는 링크 토큰 ──
+
+def _linked_rest_evidence():
+    from src.application.runner_probe import detail
+    from src.domain.case import EvidenceRef
+
+    rows = [{"group": f"L{i % 3 + 1}", "title": ["Alarm", "Caution"][i % 2], "alarm": i,
+             "link": f"/summary/badge/{'stats' if i % 2 == 0 else 'caution'}/"} for i in range(6)]
+    body, _ = detail({"request": {"entry": "summary_badge"}, "status": 200, "response": rows}, focus=("L3", "Alarm"))
+    return EvidenceRef(id="t-1.e1", source="rest.query entry='summary_badge'", summary="x", body="\n".join(body))
+
+
+def _keyed_graph_with_decoy():
+    g = _traced_endpoint_graph(with_key=True)
+    # 이름이 비슷한 다른 배지의 키 — 알파벳순이면 이것이 먼저다(사내 측정 #5의 모양).
+    g["nodes"].append({"id": "rediskey_alarm_scan", "label": "alarm:scan:{line}", "type": "rediskey"})
+    g["links"].append({"source": "endpoint_summary_badge", "target": "rediskey_alarm_scan", "relation": "reads",
+                       "origin": "trace", "confidence": "INFERRED", "via": "key", "step": 0,
+                       "source_file": "api/r.py", "source_location": "L8"})
+    return g
+
+
+def test_케이스_블록이_링크_토큰의_대상_키를_말하고_흐름_줄은_그_키를_앞세운다():
+    from src.application.state import CaseState
+    from src.knowledge.schema import IntakeLink
+
+    link = IntakeLink(field="link", token="/summary/badge/([^/]+)/")
+    state = CaseState(case=_patrol_case(), evidence=[_linked_rest_evidence()])
+    fields = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3,
+                                       flow_graph=_keyed_graph_with_decoy(), intake=link)
+    assert "대상 키: alarm:stats:{line} (대상 행 t-1.e1 response[2]의 링크 토큰 'stats'에서)" in fields["case"]
+    endpoint = next(l for l in fields["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
+    assert endpoint.index("alarm:stats:{line}") < endpoint.index("alarm:scan:{line}")
+    plain = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3,
+                                      flow_graph=_keyed_graph_with_decoy())
+    assert "대상 키" not in plain["case"]
+    endpoint = next(l for l in plain["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
+    assert endpoint.index("alarm:scan:{line}") < endpoint.index("alarm:stats:{line}")   # 선언이 없으면 순서에 뜻이 없다
+    for turn in ("frame", "conclude"):
+        fn = getattr(briefing, f"{turn}_fields")
+        kw = {"max_rounds": 3} if turn == "integrate" else {}
+        assert "대상 키: alarm:stats:{line}" in fn(state, site_config=_site_with_check(),
+                                               flow_graph=_keyed_graph_with_decoy(), intake=link, **kw)["case"]

@@ -1020,7 +1020,8 @@ def cmd_case_investigate(args, env) -> int:
                 flow_graph=flow_graph, code_index=code.has_index() if code else False,
                 conclude_llm=conclude_llm,
                 prompt_caps={"integrate": app.investigation.integrate_prompt_chars,
-                             "conclude": app.investigation.conclude_prompt_chars})
+                             "conclude": app.investigation.conclude_prompt_chars},
+                intake=code.intake() if code else None)
             case = Case(id=record.id, gbm=gbm, fct=fct, origin="patrol",
                         symptom=record.symptom, t0=record.opened_at,
                         check=record.check, target=record.target)

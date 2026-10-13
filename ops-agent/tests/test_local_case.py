@@ -57,3 +57,19 @@ def test_cache_missing은_캐시_키가_아예_없고_배지는_0이다():
     assert not [k for k in s["redis"] if k.startswith("alarm:stats:")]
     assert "hb:sink" in s["redis"]
     assert all(_badge(s, l)["alarm"] == 0 for l in LINES)
+
+
+def test_배지_행은_선언된_모양의_링크를_달고_대상_행의_토큰이_stats_키를_가리킨다():
+    """사내 모양 — 배지 행의 링크 필드에 키의 이름 토큰이 든다(측정 #5). 리포 토폴로지의 `intake` 선언과 같은 모양이어야
+    측정판이 R3-0 ①의 "대상 키" 줄을 낸다. 다른 배지의 토큰은 어떤 키에도 안 든다 — 미끼 키는 R3-3 픽스처의 몫."""
+    import re
+    from pathlib import Path
+
+    from src.knowledge.loader import load_topology
+
+    link = load_topology(Path(__file__).resolve().parents[1] / "knowledge", "mx").intake
+    s = _seeds(NOW, "cache-missing")
+    token = re.search(link.token, _badge(s, "L1")[link.field]).group(1)
+    assert token == "stats" and token in "alarm:stats:{line}"
+    assert all(link.field in r for r in s["rest"]["summary_badge"])
+    assert re.search(link.token, _badge(s, "L1", "Caution")[link.field]).group(1) not in "alarm:stats:{line} hb:{service}"

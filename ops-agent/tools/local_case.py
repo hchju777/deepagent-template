@@ -27,6 +27,9 @@ sys.path.insert(0, str(HERE))
 
 LINES = ["L1", "L2", "L3"]
 BADGE_TITLES = ["Setup", "Idle", "Quality", "Stop", "Caution", "Alarm"]
+# 배지 행의 링크 필드(사내 모양 — 값 안에 그 배지 키의 이름 토큰이 든다). 토폴로지 `intake`가 같은 모양을 선언한다. Alarm 배지의
+# 토큰만 선언 키(`alarm:stats:{line}`)에 든다 — 다른 배지의 토큰은 어떤 키에도 안 들어야 "못 골랐다"가 아니라 "골랐다"가 난다.
+BADGE_LINKS = {"Alarm": "stats"}
 
 
 def _git(*args, cwd: Path) -> None:
@@ -251,7 +254,8 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                  # 사내 모양 — 라인×항목의 행 목록(식별은 group/title, 케이스 target `L1/Alarm`이 그 둘을 이은 것).
                  # 대상 행이 뒤쪽에 오게 둔다: 증거가 첫 행에서 잘리면 리드가 대상 행을 못 보는 사내 실측의 재현이다.
                  "summary_badge": [{"group": l, "title": t, "alarm": counts[l] if t == "Alarm" else 0,
-                                    "caution": 0, "normal": 3}
+                                    "caution": 0, "normal": 3,
+                                    "link": f"/summary/badge/{BADGE_LINKS.get(t, t.lower())}/"}
                                    for t in BADGE_TITLES for l in LINES],
                  "prod_status": [{"line_code": l, "status": "RUN", "updated_at": fresh(1)} for l in LINES],
                  "oee_summary": {"line": "L3", "oee": 0.87, "date": _iso(now)[:10]}},

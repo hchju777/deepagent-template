@@ -10,8 +10,11 @@
     "층 모양은 사내 확인을 반영했다 — gumi는 gbm/mx.json → factories/gumi/common.json →",
     "factories/gumi/mx.json 셋을 보고, sevt는 같은 자리에 sevt가 들어간다.",
     "합치는 규칙은 **나중 층이 덮는다**(src/knowledge/target_config.py).",
-    "여기 서비스 이름·레포 이름은 **자리표시자다.** 실제 값은 사내에서 채운다."
+    "여기 서비스 이름·레포 이름은 **자리표시자다.** 실제 값은 사내에서 채운다.",
+    "intake는 접수 끝점 응답의 대상 행에서 대상 키로 가는 링크다 — field는 행에서 링크가 든 필드, token은 그 값에서",
+    "키의 이름 토큰을 뽑는 정규식(그룹 하나). 코드가 그 토큰이 든 선언 키를 골라 케이스 블록에 적는다(R3-0 ①). 자리표시자."
   ],
+  "intake": {"field": "link", "token": "/summary/badge/([^/]+)/"},
   "services": {
     "processor": {
       "repo": "dt-core",

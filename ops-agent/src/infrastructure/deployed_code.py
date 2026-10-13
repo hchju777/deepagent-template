@@ -191,6 +191,10 @@ class DeployedCode(DeployedCodePort):
         return {name: svc.role for name, svc in sorted(self._topology.services.items())
                 if svc.role}
 
+    def intake(self):
+        """토폴로지의 접수 링크 선언(R3-0 ①) — 조사가 브리핑에 넘긴다. 없으면 None."""
+        return self._topology.intake
+
     def describe(self) -> str:
         return f"code({self._gbm}/{self._fct}, 서비스 {len(self._topology.services)}개)"
 

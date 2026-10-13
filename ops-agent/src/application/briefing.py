@@ -24,6 +24,7 @@ url·비밀번호·계정은 프롬프트에 들어가지 않는다. 리드가 �
 import json
 import re
 
+from src.application.intake_map import TargetKey, map_target
 from src.application.runner_probe import target_rows
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS, describe
@@ -153,7 +154,7 @@ def origin_line(case, site_config) -> str | None:
     return " · ".join(parts)
 
 
-def case_block(state: CaseState, *, site_config=None) -> str:
+def case_block(state: CaseState, *, site_config=None, target: TargetKey | None = None) -> str:
     case = state.case
     origin = "사람" if case.origin == "human" else (origin_line(case, site_config) or "순찰")
     # 증거가 짚은 대상 행 경로 — 리드가 첫 행(다른 배지)을 기대값으로 썼다(사내 측정 #4). 실행기가 머리줄에 적은 것을 그대로.
@@ -162,7 +163,9 @@ def case_block(state: CaseState, *, site_config=None) -> str:
             f"증상: {case.symptom}\n"
             f"발생 시각: {case.t0.isoformat()}\n"
             f"접수 경로: {origin}"
-            + (f"\n대상 행: {'; '.join(rows)}" if rows else ""))
+            + (f"\n대상 행: {'; '.join(rows)}" if rows else "")
+            # 코드가 고른 대상 키 — 흐름 줄의 순서는 리드가 못 읽는 신호라 문장으로(R3-0 ①). 못 골랐으면 그 사실.
+            + (f"\n{target.line()}" if target is not None and target.line() else ""))
 
 
 def hypotheses_block(state: CaseState) -> str:
@@ -590,7 +593,7 @@ FRAME_SLOTS = frozenset({"case", "actions", "example", "flow"})
 
 
 def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
-               texts: tuple[str, ...] = ()) -> str:
+               texts: tuple[str, ...] = (), prefer: tuple[str, ...] = ()) -> str:
     """`<데이터 흐름>` — 그래프(11c)를 리드에게 준다. **config 층만**, 씨앗은 증상·증거·가설에
     나온 이름. 그래프가 없거나 낡았으면(호출부가 None을 준다) 없다고 적는다 — 낡은 배선을
     사실처럼 실으면 리드가 떠 있지도 않은 코드의 흐름을 믿는다."""
@@ -606,17 +609,17 @@ def flow_block(state: CaseState, graph: dict | None, *, budget: int = 800,
     seeds_from += [f"{ref.summary}\n{ref.body}" for ref in state.evidence]
     seeds_from += [h.statement for h in state.hypotheses]
     seeds = own + [s for s in flowgraph.find_seeds(graph, seeds_from) if s not in own]
-    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=case_words(state.case), pin=set(own))
+    # `prefer`는 호출부가 준 링크 토큰뿐 — 증상·target 단어(`case_words`, R2-2b-2)로 앞세우던 것은 뗐다. 사내 측정 #5에서 그 순서가
+    # 이름이 비슷한 다른 배지의 키를 첫 자리에 놓았고 리드가 그 키를 읽어 high로 틀렸다. 토큰이 없으면 아무것도 앞세우지 않는다.
+    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=prefer, pin=set(own))
     # 머리말은 한 줄 — 사내 블록에서 머리말이 본문만큼 길었다. 규칙은 프롬프트 본문이 말한다.
     return ("config에서 뽑은 배선 — 실제 동작은 프로브로 확인. `레포{a,b}`는 같은 config를 쓰는 "
             "서비스 전부. 다른 이름은 code.flow(name).\n" + body)
 
-_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_:\-.]+")
-
-
-def case_words(case) -> tuple[str, ...]:
-    """증상과 target에 든 식별 토큰(두 글자부터) — 흐름 블록이 관계당 여덟 이름 안에 이 케이스의 이름을 먼저 둔다."""
-    return tuple(dict.fromkeys(_WORD_RE.findall(f"{case.symptom} {case.target or ''}")))
+def target_key(state: CaseState, *, site_config, flow_graph: dict | None, intake) -> TargetKey:
+    """케이스 블록·흐름 줄·(R3-0 ②) verify가 같은 답을 보게 — 접수 끝점이 읽는 선언 키 안에서 링크 토큰으로 고른다."""
+    keys = flowgraph.declared_keys(flow_graph, intake_path(state.case, site_config))
+    return map_target(state, link=intake, declared_keys=keys)
 
 
 def intake_path(case, site_config) -> str | None:
@@ -684,8 +687,9 @@ def rejected_block(state: CaseState) -> str:
 def frame_fields(state: CaseState, *, site_config,
                  services: tuple[str, ...] = (),
                  roles: dict[str, str] | None = None,
-                 flow_graph: dict | None = None, code_index: bool = False) -> dict[str, str]:
-    return {"case": case_block(state, site_config=site_config),
+                 flow_graph: dict | None = None, code_index: bool = False, intake=None) -> dict[str, str]:
+    target = target_key(state, site_config=site_config, flow_graph=flow_graph, intake=intake)
+    return {"case": case_block(state, site_config=site_config, target=target),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
             "example": example_block(site_config, phase="frame",
@@ -694,7 +698,7 @@ def frame_fields(state: CaseState, *, site_config,
                                      first_read=start_read(state.case, site_config),
                                      flow_graph=flow_graph),
             "flow": flow_block(state, flow_graph,
-                               texts=(origin_line(state.case, site_config) or "",))}
+                               texts=(origin_line(state.case, site_config) or "",), prefer=target.prefer)}
 
 
 def _hidden(flow_graph: dict | None, code_index: bool = False) -> frozenset[str]:
@@ -713,12 +717,13 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      services: tuple[str, ...] = (),
                      roles: dict[str, str] | None = None,
                      flow_graph: dict | None = None, code_index: bool = False,
-                     fold_tasks: bool = False) -> dict[str, str]:
-    return {"case": case_block(state, site_config=site_config),
+                     fold_tasks: bool = False, intake=None) -> dict[str, str]:
+    target = target_key(state, site_config=site_config, flow_graph=flow_graph, intake=intake)
+    return {"case": case_block(state, site_config=site_config, target=target),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
             "flow": flow_block(state, flow_graph,
-                               texts=(origin_line(state.case, site_config) or "",)),
+                               texts=(origin_line(state.case, site_config) or "",), prefer=target.prefer),
             "example": example_block(site_config, phase="integrate",
                                      start=next_task_number(state),
                                      services=services,
@@ -799,10 +804,11 @@ def verdict_example() -> str:
 
 def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 12000,
                     services: tuple[str, ...] = (),
-                    flow_graph: dict | None = None, fold_tasks: bool = False) -> dict[str, str]:
-    return {"case": case_block(state, site_config=site_config),
+                    flow_graph: dict | None = None, fold_tasks: bool = False, intake=None) -> dict[str, str]:
+    target = target_key(state, site_config=site_config, flow_graph=flow_graph, intake=intake)
+    return {"case": case_block(state, site_config=site_config, target=target),
             "flow": flow_block(state, flow_graph,
-                               texts=(origin_line(state.case, site_config) or "",)),
+                               texts=(origin_line(state.case, site_config) or "",), prefer=target.prefer),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state, fold=fold_tasks),
             "evidence": evidence_block(state, budget=evidence_budget),
