@@ -34,8 +34,6 @@ READ_VERBS = ("subscribe", "consume", "poll", "find", "aggregate", "count", "dis
 WRITE_VERBS = ("send", "produce", "publish", "emit", "insert", "update", "upsert",
                "replace", "delete", "remove", "set", "hset", "lpush", "rpush", "xadd",
                "expire", "incr", "save", "write")
-# 토픽으로 **보내는** 동사만 — 같은 함수가 뒤에서 이것을 하면 앞줄에서 메시지에 실린 자원 이름은 "쓰라는 명령"이다(R3-1b ②).
-PRODUCE_VERBS = ("send", "produce", "publish", "emit")
 # config 조회의 `get`은 자원 읽기가 아니다 — `cfg.get("redis_key")`·`self.config.get(...)`·`settings.get(...)`. 사내 10-07 진단표 #8:
 # 배치 파이프라인이 요약 키를 `config.get`으로 꺼내 kafka 명령에 실어 보내는 줄이 이 `get` 때문에 읽기로 분류됐다.
 _CONFIG_GET = re.compile(r"\b\w*(?:config|cfg|settings)\w*\.get\(", re.IGNORECASE)
@@ -165,12 +163,6 @@ def direction(text: str) -> str | None:
     if reads and writes:
         return "ambiguous"
     return "reads" if reads else "writes" if writes else None
-
-
-def produces(text: str) -> bool:
-    """이 줄이 토픽으로 보내는가(`send`·`produce`·`publish`·`emit`) — 명령 판정의 뒷줄 검사."""
-    words = _parts(text)
-    return any(v in words for v in PRODUCE_VERBS)
 
 
 def config_owner(repo: str, topology: Topology) -> str | None:
@@ -823,30 +815,6 @@ def advise(graph: dict, topology: Topology) -> list[str]:
     if s["endpoints_traced"] or s["endpoints_blocked"]:
         out.append(f"끝점 추적: 자원까지 이어진 {s['endpoints_traced']}개 · 막힌 {s['endpoints_blocked']}개")
     return out
-
-
-def add_commands(graph: dict, index, topology: Topology) -> dict:
-    """함수가 메시지에 자원 이름을 실어 토픽으로 보내면(인덱스 `Resource.how == "command"`) 그 서비스 → 자원 `writes` 엣지(origin `command`,
-    INFERRED). grep 줄에는 동사가 없어 `mentions`로만 남던 것이다 — 사내 10-07 진단표 #8(배치 파이프라인이 요약 키를 명령 target으로
-    보내는데 읽기로 분류). 자원·서비스 노드가 없으면 조용히 지나가고, 같은 (서비스, 자원)은 한 번만 단다."""
-    nodes = {n["id"] for n in graph["nodes"]}
-    links = list(graph["links"])
-    seen = {(e["source"], e["target"]) for e in links if e.get("origin") == "command"}
-    for sym in index.symbols:
-        for r in sym.resources:
-            if r.how != "command":
-                continue
-            target = _node_id(r.kind, r.name)
-            who, _ = owner(sym.file, sym.repo, topology)
-            source = f"service_{_slug(who)}" if who else f"repo_{_slug(sym.repo)}"
-            if target not in nodes or source not in nodes or (source, target) in seen:
-                continue
-            seen.add((source, target))
-            links.append({"source": source, "target": target, "relation": RELATION[r.kind]["writes"],
-                          "confidence": "INFERRED", "origin": "command", "attributed": "service" if who else "repo",
-                          "source_file": sym.file, "source_location": f"L{r.line}", "repo": sym.repo, "commit": "",
-                          "text": f"{sym.qualname} — 메시지에 자원 이름을 실어 보낸다"})
-    return {**graph, "links": links}
 
 
 def add_trace(graph: dict, endpoint_id: str, result) -> dict:

@@ -32,7 +32,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Iterable, Protocol
 
-from src.knowledge.flow import Name, direction, produces
+from src.knowledge.flow import Name, direction
 from src.knowledge.trace import _collect_reads
 
 # 사내 도구가 측정으로 정한 값들. candidate 매칭에서 제외하는 흔한 이름 — 안 막으면 `.get(` 하나가 후보 수십 개로
@@ -61,11 +61,9 @@ _UPPER_ASSIGN = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*(?::\s*[^=]+)?=\s*['\"]([^'
 class Resource:
     kind: str
     name: str
-    direction: str      # "reads" | "writes" — 줄의 동사. 없거나 둘 다면 reads(보수적) — 단 아래 `how`.
+    direction: str      # "reads" | "writes" — 줄의 동사. 없거나 둘 다면 reads(보수적). 쓴 쪽은 여기가 아니라 키 값에서 안다(R3-1c ①-a).
     line: int
     via: str            # literal | key | alias
-    # "command": 동사 없는 줄의 이름이 같은 함수 뒤에서 토픽으로 나간다 — 쓰라는 명령이라 `writes`(R3-1b ②). 아니면 빈 문자열.
-    how: str = ""
 
 
 @dataclass
@@ -173,7 +171,7 @@ class Index:
         for s in self.symbols:
             if any((r.kind, r.name) in renames for r in s.resources):
                 s = replace(s, resources=tuple(Resource(r.kind, renames.get((r.kind, r.name), r.name), r.direction,
-                                                        r.line, r.via, r.how) for r in s.resources))
+                                                        r.line, r.via) for r in s.resources))
             symbols.append(s)
         return replace(self, symbols=symbols)
 
@@ -203,7 +201,8 @@ class Index:
         symbols = []
         for d in data.get("symbols", []):
             d = dict(d)
-            d["resources"] = tuple(Resource(*r) for r in d.get("resources", []))
+            # R3-1b ②가 여섯째 칸(`how`)을 넣은 번들이 사내에 있다 — 다섯 칸만 받는다. 옛 번들을 못 읽으면 `code graph`를 다시 만들기 전까지 전부 막힌다.
+            d["resources"] = tuple(Resource(*r[:5]) for r in d.get("resources", []))
             d["decorators"] = tuple(d.get("decorators", ()))
             d["unresolved"] = tuple(tuple(u) for u in d.get("unresolved", ()))
             symbols.append(Symbol(**d))
@@ -215,8 +214,7 @@ class Index:
 
 
 def asdict_tuple(r: Resource) -> tuple:
-    # `how`까지 — 빼먹으면 번들을 읽은 CLI가 명령 표시를 잃는다(보드에서 그랬다). 옛 번들의 다섯 칸은 `Resource(*r)`가 기본값으로 받는다.
-    return (r.kind, r.name, r.direction, r.line, r.via, r.how)
+    return (r.kind, r.name, r.direction, r.line, r.via)
 
 
 # ── pass 1: 수집 ─────────────────────────────────────────────────────────
@@ -1367,13 +1365,10 @@ class _Resolver:
 
             def add(kind: str, name: str, grade: str, file: str, line: int, via: str) -> None:
                 text = fn.mod.lines[line - 1] if 0 < line <= len(fn.mod.lines) else ""
-                verb = direction(text)
-                d, how = ("writes" if verb == "writes" else "reads"), ""
-                if verb is None and any(produces(after) for after in fn.mod.lines[line:end]):
-                    # 동사 없는 줄의 이름이 뒤에서 토픽으로 나간다 — 쓰라는 명령이다(R3-1b ②, 사내 진단표 #8). 읽기 동사가 있는 줄
-                    # (`redis.get(key)`를 읽어 보낸다)은 읽기 그대로다.
-                    d, how = "writes", "command"
-                r = Resource(kind, name, d, line, via, how)
+                # 동사 없는 줄은 읽기(보수적). "뒷줄이 토픽으로 보내면 쓰라는 명령"이라는 동사 목록 규칙(R3-1b ②)은 사내 모양(뒷줄 `save`,
+                # 앞줄 클래스 이름)에서 틀려 걷어냈다(측정 #8) — 쓴 쪽은 키 값이 대는 클래스 이름으로 안다(R3-1c ①-a).
+                d = "writes" if direction(text) == "writes" else "reads"
+                r = Resource(kind, name, d, line, via)
                 if r not in found:
                     found.append(r)
 

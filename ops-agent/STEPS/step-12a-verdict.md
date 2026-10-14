@@ -780,6 +780,18 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - CLI `python -m src code resources <이름>`도 같은 조립 — 사내에서 손으로 확인하는 자리(`code uses`로 B를 보던 그 자리).
 - 테스트 먼저(RED 7 → GREEN, 이름 바꾼 뒤 +1, CLI +1). 스윕 +13(650; 옮긴 앵커 둘).
 
+#### R3-1c ①-b (10-14) ✅ — 동사 목록 걷어내기
+
+- R3-1b ②의 "자원 줄에 동사가 없고 같은 함수의 뒷줄이 토픽으로 보내면 쓰라는 명령"(`PRODUCE_VERBS`·`produces`·`Resource.how`)을 걷어냈다 —
+  사내 모양(뒷줄 `save`, 앞줄 클래스 이름)에서 틀렸고, 목록을 늘려도 다음 모양에서 또 틀린다. 쓴 쪽은 ①-a의 데이터 링크로 안다.
+- 같이 걷어낸 것: 흐름 그래프의 명령 엣지(`flow.add_commands`와 `code graph`의 호출), `code.uses`의 "(명령 — …)" 표시, 인덱스 자원 튜플의
+  여섯째 칸. 남긴 것: `config.get`·`cfg.get`·`settings.get`의 `get`을 읽기 동사로 안 세는 것(`_CONFIG_GET`) — 규칙이 아니라 오분류 수정이다.
+- 옛 번들 호환: ②로 만든 번들(사내 측정 #8의 것)은 자원 튜플이 여섯 칸이다 — `Index.from_dict`가 다섯 칸만 받는다. 못 읽으면 `code graph`를
+  다시 만들기 전까지 `code uses`·`code resources`가 전부 막힌다.
+- 동사 없는 줄은 다시 "읽기(보수적)"다. 그래서 측정판 `code resources SummaryRefresh`의 쓰기 목록에서 `alarm:stats:{line}`이 빠지고 읽기에
+  든다 — 틀린 분류지만 규칙으로 맞추지 않는다. 쓴 쪽은 키 값이 말한다.
+- 테스트: ②의 테스트 넷을 걷어내고 번들 호환 테스트 하나(RED → GREEN). 스윕 -8 +1(643).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

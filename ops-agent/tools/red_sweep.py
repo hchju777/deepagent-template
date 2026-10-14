@@ -2406,18 +2406,6 @@ CMD_EDGE_T = "tests/knowledge/test_index.py::test_흐름_그래프에_명령으�
 CASES += [
  ("config 조회의 get을 읽기로 센다", FLP, "    words = _parts(_CONFIG_GET.sub(\"\", text))", "    words = _parts(text)",
   ["tests/knowledge/test_flow.py::test_config_조회의_get은_자원_읽기가_아니다"]),
- ("produces가 쓰기 동사 전부를 본다", FLP, "    return any(v in words for v in PRODUCE_VERBS)", "    return any(v in words for v in WRITE_VERBS)",
-  ["tests/knowledge/test_flow.py::test_produces는_토픽으로_보내는_동사만_본다"]),
- ("명령으로 보내는 이름을 읽기로 둔다", IXP, "                if verb is None and any(produces(after) for after in fn.mod.lines[line:end]):", "                if False:", [CMD_T]),
- ("읽기 동사가 있는 줄도 명령으로 친다", IXP, "                if verb is None and any(produces(after) for after in fn.mod.lines[line:end]):",
-  "                if verb != \"writes\" and any(produces(after) for after in fn.mod.lines[line:end]):", [CMD_T]),
- ("renamed 사본이 how를 잃는다", IXP, "                                                        r.line, r.via, r.how) for r in s.resources))",
-  "                                                        r.line, r.via) for r in s.resources))", [CMD_T]),
- ("code uses가 명령을 안 적는다", QYP, "                      + (\" (명령 — 메시지에 자원 이름을 실어 보낸다)\" if u.how == \"command\" else \"\")", "", [CMD_USES_T]),
- ("명령 writes 엣지를 안 단다", FLP, "            if r.how != \"command\":\n                continue", "            if True:\n                continue", [CMD_EDGE_T]),
- ("번들이 명령 표시를 안 싣는다", IXP, "    return (r.kind, r.name, r.direction, r.line, r.via, r.how)", "    return (r.kind, r.name, r.direction, r.line, r.via)",
-  ["tests/knowledge/test_index.py::test_번들로_오간_인덱스도_명령_표시를_지킨다"]),
- ("명령 엣지를 자원마다 거듭 단다", FLP, "            if target not in nodes or source not in nodes or (source, target) in seen:", "            if target not in nodes or source not in nodes:", [CMD_EDGE_T]),
 ]
 
 # ── 12a-R3-1b ③ — 이미 읽었다 + 다음 홉 ──
@@ -2480,11 +2468,13 @@ CASES += [
   ["tests/domain/test_ports.py::test_등재된_code_액션의_메서드는_전부_포트에_있다"]),
  ("CLI code resources가 찾은 심볼을 안 쓴다", MN, "    for line in qy.resources_lines(index, found[0], where=where):", "    for line in []:",
   ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
+ ("옛 번들의 여섯 칸 자원을 못 읽는다", IXP, "            d[\"resources\"] = tuple(Resource(*r[:5]) for r in d.get(\"resources\", []))", "            d[\"resources\"] = tuple(Resource(*r) for r in d.get(\"resources\", []))",
+  ["tests/knowledge/test_index.py::test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다"]),
  ("입구 노드가 클래스 집합을 안 넘긴다", ND, "                                    declared=tuple(deps.declared.get(\"rediskey\", ())), classes=deps.classes)",
   "                                    declared=tuple(deps.declared.get(\"rediskey\", ())))", ["tests/application/test_nodes.py::test_입구_노드는_frame_전에_접수를_읽고_대상_키를_State에_둔다"]),
 ]
 
-assert len(CASES) >= 650, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 643, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -949,7 +949,3 @@ def test_config_조회의_get은_자원_읽기가_아니다():
     assert flow.direction("redis.get(key)") == "reads"
     assert flow.direction('cfg.get("a"); redis.get(key)') == "reads"
 
-
-def test_produces는_토픽으로_보내는_동사만_본다():
-    assert flow.produces("producer.send(topic, cmd)") and flow.produces("bus.publish(x)") and flow.produces("emit_event(e)")
-    assert not flow.produces("redis.set(k, v)") and not flow.produces("mongo.insert_one(d)") and not flow.produces("x = 1")
