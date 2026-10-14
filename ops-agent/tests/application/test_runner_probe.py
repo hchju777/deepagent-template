@@ -385,3 +385,34 @@ async def test_recompute_filter에_대상_identity가_하나도_없으면_결과
     assert not (await recount("t-3", {"line": "L1", "status": "alarm"})).evidence[0].summary.startswith(ASIDE_MARK)
     assert not (await recount("t-4", {"line": {"$in": ["L1"]}})).evidence[0].summary.startswith(ASIDE_MARK)
     assert not (await recount("t-5", {"status": "alarm"}, on=case)).evidence[0].summary.startswith(ASIDE_MARK)   # target 없음
+
+
+# ── R3-3 ① — 행 목록 값은 코드가 요약한다 ──
+
+async def test_행_목록_값은_코드가_요약한다_행수_필드수_모든_행이_같은_값인_필드(case):
+    """측정 #9 P0 2: 입력 키 554행의 두 필드가 전부 `'-'`였는데 본문이 접혀 리드가 못 봤고 같은 읽기를 8회 냈다. 행 목록은 코드가
+    `행 N · 필드 M · 모든 행이 같은 값: f='-'`로 요약해 요약 줄 머리와 본문 머리에 둔다 — 접혀도 보인다. Redis 값의 JSON 문자열 안 목록도
+    같다(한 겹). 한 행이면 모든 필드가 그렇다 — 안 적는다. JSON이 아닌 문자열은 전처럼."""
+    import json
+    rows = [{"line": "L1", "code": f"A{i}", "qty": "-", "wg": "-"} for i in range(5)]
+    mongo = Recorder(result=ProbeResult.succeeded(rows, source="m", clock=lambda: T0))
+    out = await ProbeRunner(clock=lambda: T0, adapters=Bundle(mongo=mongo), detail_chars=600).run(
+        task("t-1", action="mongo.find", params={"collection": "c", "filter": {}}), case=case)
+    assert out.evidence[0].body.splitlines()[0] == "5건 · 필드: line, code, qty, wg · 모든 행이 같은 값: line='L1', qty='-', wg='-'"
+    assert out.evidence[0].summary.startswith("5건 [행 5 · 필드 4 · 모든 행이 같은 값: line='L1', qty='-', wg='-'] [{")
+    value = json.dumps({"record": rows, "metadata": {"event_type": "W"}})
+    redis = Recorder(result=ProbeResult.succeeded({"type": "string", "value": value}, source="r", clock=lambda: T0))
+    out = await ProbeRunner(clock=lambda: T0, adapters=Bundle(redis=redis), detail_chars=600).run(
+        task("t-2", action="redis.get", params={"key": "k"}), case=case)
+    lines = out.evidence[0].body.splitlines()
+    assert any(l.startswith("value: (JSON 문자열) 키 2개: record, metadata") for l in lines)
+    assert any(l.strip().startswith("record: 5건 · 필드: line, code, qty, wg · 모든 행이 같은 값: line='L1', qty='-', wg='-'") for l in lines)
+    assert out.evidence[0].summary.startswith("[value.record: 행 5 · 필드 4 · 모든 행이 같은 값: line='L1', qty='-', wg='-'] {'type'")
+    one = Recorder(result=ProbeResult.succeeded(rows[:1], source="m", clock=lambda: T0))
+    out = await ProbeRunner(clock=lambda: T0, adapters=Bundle(mongo=one), detail_chars=600).run(
+        task("t-3", action="mongo.find", params={"collection": "c", "filter": {}}), case=case)
+    assert "모든 행이 같은 값" not in out.evidence[0].body and out.evidence[0].summary.startswith("1건 [행 1 · 필드 4] [{")
+    plain = Recorder(result=ProbeResult.succeeded({"type": "string", "value": "not json ["}, source="r", clock=lambda: T0))
+    out = await ProbeRunner(clock=lambda: T0, adapters=Bundle(redis=plain), detail_chars=600).run(
+        task("t-4", action="redis.get", params={"key": "k"}), case=case)
+    assert "value: 'not json ['" in out.evidence[0].body and "JSON 문자열" not in out.evidence[0].body

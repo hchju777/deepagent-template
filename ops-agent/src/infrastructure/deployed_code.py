@@ -171,6 +171,11 @@ class DeployedCode(DeployedCodePort):
                                       f"그 자원 이름(컬렉션·토픽·키)으로 code.uses", source=source, clock=self._clock)
         found = qy.uses(self._index, name)
         if not found:
+            # 측정 #9: 케이스 블록의 `쓴 쪽: <클래스>`를 보고 `code.uses <클래스>`를 냈다(r2·r3) — 클래스는 자원이 아니다. 서비스 이름 때처럼
+            # 어디로 가야 하는지까지 말한다.
+            if any(self._index.symbols[sid].kind == "class" for sid in qy.find(self._index, name)):
+                return ProbeResult.failed(f"{name}: 클래스 이름이다 — 그 클래스가 읽고 쓰는 자원은 code.resources name={name!r}, "
+                                          f"자원을 쓰는 함수는 그 자원 이름(컬렉션·토픽·키)으로 code.uses", source=source, clock=self._clock)
             return ProbeResult.failed(f"{name}: 이 이름의 자원을 쓰거나 읽는 함수가 인덱스에 없다 — "
                                       f"<데이터 흐름>이나 증거에 나온 이름 그대로 써라", source=source, clock=self._clock)
         lines = qy.uses_lines(self._index, self._qgraph, found, where=self._where)

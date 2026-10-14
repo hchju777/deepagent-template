@@ -1245,7 +1245,8 @@ def test_integrate_규칙에_빈_값의_다음_홉과_인자_규칙이_있다():
     from pathlib import Path
 
     text = (Path(__file__).resolve().parents[2] / "config" / "prompts" / "investigate-integrate.md").read_text(encoding="utf-8")
-    assert "값이 비었으면" in text and "code.uses(name)" in text and "입력 키" in text
+    assert "값이 비었으면" in text and "code.resources(name)" in text and "입력 키" in text
+    assert "쓴 쪽을 모르면" in text and "code.uses(" in text                      # 쓴 쪽은 값이 말한다(R3-1c) — 규칙 문장도 그 기준(R3-3 ①)
     assert "인자는 그 읽기의 것만" in text
 
 
@@ -1423,12 +1424,15 @@ def test_입구가_돌았으면_케이스_블록에_입구_줄이_실리고_fram
     `no_runnable`(c-1 r1, c-2 r2). 입구가 돌았으면 접수 읽기는 예시에 없고 첫 칸은 다음 홉이다. 인덱스가 없으면 홉도 없다(없는 문)."""
     from src.application.state import CaseState
     state = _intake_state()
-    fields = briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=True)
+    # `services`를 줘야 `code.grep`(접수 path) 칸이 후보에 든다 — 홉이 있으면 그것도 빠져야 한 칸이다.
+    fields = briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=True,
+                                   services=("api",))
     assert "입구 노드가 이미 읽었다: 접수 읽기(t-0.e1) · 대상 키 alarm:stats:L1(t-1.e1) — 같은 읽기를 다시 내지 마라" in fields["case"]
     assert "값: record[0].data가 비었다" in fields["case"] and "다음 홉: code.uses name='alarm:stats:{line}'" in fields["case"]
     tasks = json.loads(fields["example"])["tasks"]
     assert (tasks[0]["id"], tasks[0]["action"], tasks[0]["params"]) == ("t-2", "code.uses", {"name": "alarm:stats:{line}"})
     assert all(t["action"] != "rest.query" for t in tasks)
+    assert len(tasks) == 1                      # 홉이 있으면 frame 예시도 그 한 칸(R3-3 ①) — 넷 중 셋을 리드가 그대로 내 라운드를 낭비했다
     blind = briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=False)
     assert "다음 홉" not in blind["case"] and "이미 읽었다" in blind["case"]
     assert all(t["action"] not in ("rest.query", "code.uses") for t in json.loads(blind["example"])["tasks"])

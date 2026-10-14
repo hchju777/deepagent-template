@@ -2507,7 +2507,22 @@ CASES += [
  ("같은 레포의 없는 경로에도 안내를 붙인다", DCP, "        repos = sorted({s.repo for s in self._index.symbols if s.kind == \"module\" and s.file == path and s.repo != repo})", "        repos = sorted({s.repo for s in self._index.symbols if s.kind == \"module\" and s.file == path} or {repo})", [READ3_T]),
 ]
 
-assert len(CASES) >= 661, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-3 ① — 행 목록 요약 · frame 예시 한 칸 · code.uses 클래스 안내 ──
+PROFILE_T = "tests/application/test_runner_probe.py::test_행_목록_값은_코드가_요약한다_행수_필드수_모든_행이_같은_값인_필드"
+FRAME1_T = "tests/application/test_briefing.py::test_입구가_돌았으면_케이스_블록에_입구_줄이_실리고_frame_예시_첫_칸은_접수_읽기가_아니라_다음_홉이다"
+USES_CLS_T = "tests/infrastructure/test_deployed_code.py::test_code_uses에_클래스_이름을_주면_code_resources로_안내한다"
+CASES += [
+ ("단일값 필드를 안 센다", RP, "    for key, value in rows[0].items():\n        marker = json.dumps(value, sort_keys=True, default=str)", "    for key, value in {}.items():\n        marker = json.dumps(value, sort_keys=True, default=str)", [PROFILE_T]),
+ ("한 행이어도 단일값을 적는다", RP, "    if len(rows) < 2:\n        return []\n    out = []", "    if False:\n        return []\n    out = []", [PROFILE_T]),
+ ("JSON 문자열 값을 안 푼다", RP, "        decoded = _json_value(value)\n        if decoded is not None:", "        decoded = None\n        if decoded is not None:", [PROFILE_T]),
+ ("요약 줄에 프로필을 안 싣는다", RP, "    head = _first_profile(data)\n    if isinstance(data, list):", "    head = \"\"\n    if isinstance(data, list):", [PROFILE_T]),
+ ("JSON 안의 목록은 요약에 안 싣는다", RP, "            inner = value if _doc_list(value) or isinstance(value, dict) else _json_value(value)", "            inner = value if _doc_list(value) or isinstance(value, dict) else None", [PROFILE_T]),
+ ("홉이 있어도 frame 예시에 code.grep을 둔다", B, "        if first_read and not hop and _has(site_config, ACTIONS[first_read[0]][0], services):", "        if first_read and _has(site_config, ACTIONS[first_read[0]][0], services):", [FRAME1_T]),
+ ("홉이 있어도 frame 예시에 발견 읽기를 채운다", B, "        room = 0 if hop else (4 if shapes else 3) - len(shapes)", "        room = (4 if shapes else 3) - len(shapes)", [FRAME1_T]),
+ ("클래스 이름에 안내를 안 한다", DCP, "            if any(self._index.symbols[sid].kind == \"class\" for sid in qy.find(self._index, name)):", "            if False:", [USES_CLS_T]),
+]
+
+assert len(CASES) >= 669, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

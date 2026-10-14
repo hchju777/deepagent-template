@@ -201,10 +201,80 @@ def _summarize(data: Any) -> str:
 
     `repr`인 이유는 개행을 이스케이프하기 위해서다. 대상 데이터는 여러 줄이 정상인데,
     날것으로 실리면 목록 블록에 가짜 항목이 붙는다.
+
+    머리에 첫 문서 목록의 `profile`(R3-3 ①) — 요약 줄은 접혀도 남는 자리라 "554행 두 필드 전부 `'-'`"가 여기 있어야 리드가 본다.
     """
+    head = _first_profile(data)
     if isinstance(data, list):
-        return f"{len(data)}건 {repr(data)[:_SUMMARY_CHARS]}"
-    return repr(data)[:_SUMMARY_CHARS]
+        return f"{len(data)}건 {head}{repr(data)[:_SUMMARY_CHARS]}"
+    return f"{head}{repr(data)[:_SUMMARY_CHARS]}"
+
+
+_SAME_FIELDS = 6
+
+
+def _fields(rows: list) -> list[str]:
+    fields, seen = [], set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fields.append(str(key))
+    return fields
+
+
+def _same_valued(rows: list) -> list[tuple[str, Any]]:
+    """모든 행에 있고 값이 전부 같은 필드 `(이름, 값)` — 행이 둘 이상일 때만(한 행이면 모든 필드가 그렇다)."""
+    if len(rows) < 2:
+        return []
+    out = []
+    for key, value in rows[0].items():
+        marker = json.dumps(value, sort_keys=True, default=str)
+        if all(key in row and json.dumps(row[key], sort_keys=True, default=str) == marker for row in rows[1:]):
+            out.append((str(key), value))
+    return out
+
+
+def _same_note(rows: list) -> str:
+    same = _same_valued(rows)
+    if not same:
+        return ""
+    shown = ", ".join(f"{key}={value!r}" for key, value in same[:_SAME_FIELDS])
+    more = f" 외 {len(same) - _SAME_FIELDS}개" if len(same) > _SAME_FIELDS else ""
+    return f" · 모든 행이 같은 값: {shown}{more}"
+
+
+def profile(rows: list) -> str:
+    """문서 목록의 한 줄 요약 `행 N · 필드 M · 모든 행이 같은 값: f='-'`(R3-3 ①). 측정 #9 P0 2: 입력 키 554행의 두 필드가 전부 `'-'`였는데
+    본문이 접혀 리드가 못 봤고 같은 읽기를 8회 냈다 — 코드가 요약하면 접혀도 보인다. 값 분포 액션(`data.value_counts`)은 이것으로 대신한다."""
+    return f"행 {len(rows)} · 필드 {len(_fields(rows))}{_same_note(rows)}"
+
+
+def _json_value(value: Any):
+    """JSON 문자열(Redis 값의 흔한 모양)을 **한 겹** 푼다 — 비지 않은 목록이나 객체일 때만. 아니면 None."""
+    if not isinstance(value, str) or not value.lstrip().startswith(("[", "{")):
+        return None
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, (list, dict)) and parsed else None
+
+
+def _first_profile(data: Any) -> str:
+    """요약 줄 머리 — 데이터 안의 첫 문서 목록(맨 위·dict 값·JSON 문자열 한 겹 안)의 `profile`. 없으면 빈 문자열."""
+    if _doc_list(data):
+        return f"[{profile(data)}] "
+    if isinstance(data, dict):
+        for key, value in data.items():
+            inner = value if _doc_list(value) or isinstance(value, dict) else _json_value(value)
+            if _doc_list(inner):
+                return f"[{key}: {profile(inner)}] "
+            if isinstance(inner, dict):
+                for sub, sval in inner.items():
+                    if _doc_list(sval):
+                        return f"[{key}.{sub}: {profile(sval)}] "
+    return ""
 
 
 def detail(data: Any, *, limit: int = _DETAIL_CHARS, focus: tuple[str, ...] = ()) -> tuple[list[str], bool]:
@@ -266,6 +336,15 @@ def _entries(mapping: dict, *, limit: int, focus: tuple[str, ...] = ()) -> tuple
             used += sum(len(line) for line in lines)
             cut = cut or cut_block
             continue
+        # Redis 값은 JSON **문자열**로 온다 — 그대로 눕히면 안의 행 목록이 첫 행에서 잘리고 요약도 없다(R3-3 ①). 한 겹 풀어 같은 모양으로.
+        decoded = _json_value(value)
+        if decoded is not None:
+            block, cut_block = detail(decoded, limit=max(limit - used, 0), focus=focus)
+            lines = [f"{key}: (JSON 문자열) {block[0]}"] + [f"  {row}" for row in block[1:]]
+            taken += lines
+            used += sum(len(line) for line in lines)
+            cut = cut or cut_block
+            continue
         flat, cut_row = _line(f"{key}: {value!r}", limit)
         if taken and used + len(flat) > limit:
             skipped += 1
@@ -292,13 +371,7 @@ def _list_detail(rows: list, *, limit: int, focus: tuple[str, ...] = (), at: str
     if not rows:
         return ["0건 — 비어 있다"], False
     if all(isinstance(row, dict) for row in rows):
-        fields, seen = [], set()
-        for row in rows:
-            for key in row:
-                if key not in seen:
-                    seen.add(key)
-                    fields.append(str(key))
-        head, cut_head = _line(", ".join(fields), limit)
+        head, cut_head = _line(", ".join(_fields(rows)), limit)
         texts = [_compact(row) for row in rows]
         # 케이스 `target`의 값이 전부 든 행 — 사내 실측에서 대상 행은 19개 중 뒤쪽이라 예산 밖이었다. 앞에 두되
         # `[n]`은 원래 자리이고 **경로 문법과 같은 0부터**다 — 1부터 적었더니 리드가 그대로 옮기면 옆 행을 가리켰다. 머리줄은
@@ -307,7 +380,7 @@ def _list_detail(rows: list, *, limit: int, focus: tuple[str, ...] = (), at: str
         order = hits + [i for i in range(len(rows)) if i not in set(hits)]
         body, cut_body = _fill([f"[{i}] {texts[i]}" for i in order], limit=limit, total=len(rows))
         note = f" · 대상 행 {', '.join(f'{at}[{i}]' for i in hits)} 먼저" if hits else ""
-        return [f"{len(rows)}건 · 필드: {head}{note}"] + body, cut_head or cut_body
+        return [f"{len(rows)}건 · 필드: {head}{note}{_same_note(rows)}"] + body, cut_head or cut_body
     # 이름 목록은 **한 줄에 여러 개**로 채운다. 한 줄에 하나씩 쓰면 같은 예산에
     # 훨씬 적게 보이는데, 여기서 리드가 하려는 일이 바로 "179개 중에 고르기"다 —
     # 이름이 더 보일수록 고를 수 있는 폭이 넓어진다.

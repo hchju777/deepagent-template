@@ -589,7 +589,7 @@ def example_block(site_config, *, phase: str, start: int = 1,
         # 보여 줘 리드가 베꼈고, 중복 거부 → 되물어도 중복 → `no_runnable`로 끝났다.
         if hop:
             shapes.append(hop)
-        if first_read and _has(site_config, ACTIONS[first_read[0]][0], services):
+        if first_read and not hop and _has(site_config, ACTIONS[first_read[0]][0], services):
             # 사다리의 첫 두 칸이 예시다 — ① 판정이 본 읽기로 증상을 재현하고 ② 그 path를 코드에서
             # 찾는다. 예시가 곧 출력이라(위) 규칙 문장으로는 안 되고 여기 있어야 리드가 밟는다.
             if not intake_done:
@@ -600,7 +600,9 @@ def example_block(site_config, *, phase: str, start: int = 1,
                 served = flowgraph.serving_services(flow_graph, path) if flow_graph else []
                 shapes.append(("code.grep", {"patterns": [path],
                                              **({"service": served[0]} if len(served) == 1 else {})}))
-        room = (4 if shapes else 3) - len(shapes)
+        # 홉이 있으면 frame 예시도 **그 한 칸**이다(R3-3 ①, 측정 #9 P1 5) — 넷 중 셋(`code.grep`·`code.config`·`mongo.list_collections`)을 리드가
+        # 그대로 내 라운드를 낭비했고, 그 잘린 증거가 끝까지 예산을 먹었다.
+        room = 0 if hop else (4 if shapes else 3) - len(shapes)
         shapes += _available(site_config, _discovery(services), room, services)
         free = None if (first_read or intake_done) else _free_rest_entry(site_config)
         if free and len(shapes) < 3:

@@ -728,3 +728,26 @@ async def test_code_read에_다른_서비스의_경로를_주면_그_경로가_�
     assert "이 경로는 sink(dt-core)에 있다 — service='sink'로 다시 내라" in got.error
     same = await code.read("sink", "sink/nope.py")
     assert same.status == "error" and "이 경로는" not in same.error
+
+
+# ── R3-3 ① — code.uses에 클래스 이름 ──
+
+async def test_code_uses에_클래스_이름을_주면_code_resources로_안내한다(flow_code):
+    """측정 #9 P1 6: 케이스 블록의 `쓴 쪽: <클래스>`를 보고 리드가 `code.uses <클래스>`를 냈다(r2·r3) — 클래스는 자원이 아니다. 어디로
+    가야 하는지까지 말한다(서비스 이름 때와 같은 이유)."""
+    from src.knowledge import index as ix
+
+    class Src:
+        FILES = {"batch/__init__.py": "",
+                 "batch/refresh.py": "class SummaryRefresh:\n    def _run(self, redis):\n        return redis.get('alarm:source')\n"}
+
+        async def files(self):
+            return sorted(self.FILES)
+
+        async def read(self, path):
+            return self.FILES.get(path)
+
+    flow_code.attach_index(await ix.build_index({"dt-core": Src()}, commits={"dt-core": "c0ffee"}))
+    got = await flow_code.uses("SummaryRefresh")
+    assert got.status == "error" and "클래스 이름이다" in got.error and "code.resources name='SummaryRefresh'" in got.error
+    assert "인덱스에 없다" in (await flow_code.uses("없는이름")).error
