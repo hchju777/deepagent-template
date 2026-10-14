@@ -145,19 +145,52 @@ def _empty_lists(value: Any, at: str) -> list[str]:
     return [f"{parent}.{k}" if parent else k for k, v in obj.items() if isinstance(v, list) and not v]
 
 
+def _string_leaves(value: Any, path: str = ""):
+    """값 안의 문자열 잎 전부 — `(자리, 문자열)`. 자리 문법은 `holds_identity`와 같다(`metadata.event_type`, `record[0].x`)."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from _string_leaves(v, f"{path}.{k}" if path else str(k))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            yield from _string_leaves(v, f"{path}[{i}]")
+    elif isinstance(value, str):
+        yield path, value
+
+
+def writer_of(value: Any, classes: frozenset[str]) -> tuple[str, str, str]:
+    """`(쓴 쪽 클래스, 자리, 문제)` — 값의 문자열 잎 중 인덱스의 **클래스 이름**과 완전 일치하는 것(R3-1c ①-a). 하나면 그 클래스, 둘 이상
+    다른 클래스면 고르지 않고 문제를, 없거나 인덱스가 없으면 셋 다 빈 문자열.
+
+    측정 #8: 자원 줄 뒤의 동사 목록(send·produce…)으로 쓴 쪽을 고르던 규칙은 사내 모양(뒷줄 `save`, 앞줄 클래스 이름)에서 틀렸다. 사내 요약 키
+    값의 `metadata.event_type`은 쓴 파이프라인 클래스 이름과 완전 일치한다 — `holds_identity`와 같은 종류의 판정(닫힌 집합과 완전 일치)이고,
+    입구가 이미 읽은 값이라 읽기도 늘지 않는다.
+    """
+    hits = [(at, text) for at, text in _string_leaves(value) if text in classes]
+    names = sorted({text for _, text in hits})
+    if len(names) == 1:
+        return hits[0][1], hits[0][0], ""
+    if names:
+        return "", "", f"값에 인덱스의 클래스 이름이 {len(names)}개 — 하나로 못 좁힌다: {', '.join(names)}"
+    return "", "", ""
+
+
 def next_hop(target: TargetPick | None, *, code_index: bool) -> tuple[str, dict] | None:
-    """입구 결과로 **코드가 정하는** 다음 홉(R3-1b ③) — 고른 키가 있으면 그 키를 누가 쓰나(`code.uses <선언 이름>`). 인덱스는 템플릿
-    이름으로 답하므로 고른 키가 아니라 선언 이름이다. 심볼 인덱스가 없으면 없는 문이라 None — 그때는 옛 사다리(접수 끝점의 사슬)다."""
-    if target is None or not target.key or not target.declared or not code_index:
+    """입구 결과로 **코드가 정하는** 다음 홉 — 쓴 쪽을 알면 그 클래스가 읽는 자원(`code.resources <클래스>`, R3-1c ①-a), 모르면 고른 키를 누가
+    쓰나(`code.uses <선언 이름>`, R3-1b ③ — 인덱스는 템플릿 이름으로 답하므로 선언 이름이다). 심볼 인덱스가 없으면 없는 문이라 None —
+    그때는 옛 사다리(접수 끝점의 사슬)다."""
+    if target is None or not target.key or not code_index:
         return None
-    return "code.uses", {"name": target.declared}
+    if target.writer:
+        return "code.resources", {"name": target.writer}
+    return ("code.uses", {"name": target.declared}) if target.declared else None
 
 
 def hop_line(target: TargetPick | None, *, code_index: bool) -> str:
     hop = next_hop(target, code_index=code_index)
     if hop is None:
         return ""
-    return f"다음 홉: {hop[0]} name={hop[1]['name']!r} — 이 키를 누가 쓰나(값이 어디서 오나)"
+    why = "쓴 쪽이 읽는 자원(입력)" if hop[0] == "code.resources" else "이 키를 누가 쓰나(값이 어디서 오나)"
+    return f"다음 홉: {hop[0]} name={hop[1]['name']!r} — {why}"
 
 
 def intake_lines(state: CaseState, *, code_index: bool) -> str:
@@ -177,6 +210,8 @@ def intake_lines(state: CaseState, *, code_index: bool) -> str:
         lines.append("입구 노드가 이미 읽었다: " + " · ".join(done) + " — 같은 읽기를 다시 내지 마라")
     if target.empty:
         lines.append("값: " + ", ".join(f"{p}가 비었다" for p in target.empty))
+    if target.writer_line():
+        lines.append(target.writer_line())
     hop = hop_line(target, code_index=code_index)
     if hop:
         lines.append(hop)
@@ -192,7 +227,8 @@ def _finish(task: PlanTask, outcome: TaskOutcome) -> PlanTask:
                                    "result_evidence_ids": [e.id for e in outcome.evidence], "error": outcome.error})
 
 
-async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPort, declared: tuple[str, ...]) -> dict:
+async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPort, declared: tuple[str, ...],
+                     classes: frozenset[str] = frozenset()) -> dict:
     """입구 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`target`). 던지지 않는다(호출부가 한 번 더 감싼다)."""
     from src.application.facts import key_head
 
@@ -280,8 +316,11 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
             basis = f"키 값의 {at2}에 {label}가 그대로 있다 ({again.evidence[0].id})"
         else:
             basis = f"키 값의 {at}에 {label}가 그대로 있다 (다시 읽기 실패: {again.error or '증거 없음'})"
+        writer, writer_at, writer_problem = writer_of(_unwrap(raw), classes) if raw is not None else ("", "", "")
         return patch(TargetPick(key=key, basis=basis, declared=declared_of.get(key, key),
-                                empty=_empty_lists(_unwrap(raw), at2) if at2 else [], **folded,
+                                empty=_empty_lists(_unwrap(raw), at2) if at2 else [],
+                                writer=writer, writer_at=writer_at, writer_problem=writer_problem,
+                                writer_searched=bool(classes) and raw is not None, **folded,
                                 problem=f"후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""))
     if not hits:
         gone = f"; 없는 키 {len(missing)}개: {', '.join(missing)}" if missing else ""

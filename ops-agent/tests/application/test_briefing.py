@@ -1453,3 +1453,22 @@ def test_입구가_고른_키가_있으면_사다리_첫_칸은_그_키를_누�
     # 인덱스가 없으면 그 칸이 없고 옛 사다리(접수 끝점의 사슬)로 간다
     tasks = _ladder(site(), [_rest_done("t-0"), read], used=("rest.query", "redis.get"), graph="keyed", code_index=False, target=picked)
     assert tasks[0]["action"] == "code.trace"
+
+
+# ── R3-1c ①-a — 쓴 쪽 줄과 code.resources 홉 ──
+
+def test_쓴_쪽을_알면_케이스_블록에_그_줄이_실리고_첫_칸은_code_resources다():
+    from src.application.state import CaseState
+    from src.domain.case import TargetPick
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"],
+                        writer="SummaryRefresh", writer_at="metadata.event_type")
+    state = CaseState(case=_patrol_case(), target=picked, plan_tasks=_intake_state().plan_tasks)
+    fields = briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=True)
+    assert "쓴 쪽: SummaryRefresh — 값의 metadata.event_type과 인덱스의 클래스 이름이 완전 일치" in fields["case"]
+    assert "다음 홉: code.resources name='SummaryRefresh'" in fields["case"]
+    first = json.loads(fields["example"])["tasks"][0]
+    assert (first["action"], first["params"]) == ("code.resources", {"name": "SummaryRefresh"})
+    read = task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"])
+    tasks = _ladder(site(), [_rest_done("t-0"), read], used=("rest.query", "redis.get"), graph="keyed", code_index=True, target=picked)
+    assert (tasks[0]["action"], tasks[0]["params"], tasks[0]["input_evidence_ids"]) == ("code.resources", {"name": "SummaryRefresh"}, ["t-1.e1"])
+    assert "code.resources" in briefing._hidden(None, False) and "code.resources" not in briefing._hidden(None, True)   # 인덱스 없으면 없는 문

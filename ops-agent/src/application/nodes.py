@@ -78,6 +78,8 @@ class EngineDeps:
     components: frozenset = frozenset()
     # 심볼 인덱스가 있나 — 다음 홉(`code.uses`, R3-1b ③)은 없는 문을 가리키면 안 된다. 브리핑이 받는 것과 같은 값.
     code_index: bool = False
+    # 인덱스의 클래스 이름들 — 입구 노드가 키 값에서 "쓴 쪽"을 완전 일치로 고르는 닫힌 집합(R3-1c ①-a). 엔진은 인덱스를 들지 않는다.
+    classes: frozenset = frozenset()
     # 흐름 그래프가 선언한 이름, 종류별(`rediskey` → 접수 끝점이 읽는 키 템플릿, 없으면 config의 전부). 발견 읽기의 결과와
     # 대조해 "선언됐는데 없는 키"를 사실로 남긴다(`facts.py`). 그래프가 없으면 비어 있고 아무 사실도 안 남는다.
     declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
@@ -429,7 +431,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             return {}
         try:
             return await run_intake(state, deps.intake, runner=deps.runner,
-                                    declared=tuple(deps.declared.get("rediskey", ())))
+                                    declared=tuple(deps.declared.get("rediskey", ())), classes=deps.classes)
         except Exception as exc:                                    # noqa: BLE001
             return {"target": TargetPick(problem=f"입구 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 

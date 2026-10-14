@@ -108,3 +108,12 @@ def test_발견용도_쓰기가_아니다():
         for name in _public_methods(port):
             assert not name.startswith(("create", "make", "ensure")), \
                 f"{port.__name__}.{name} — 발견용이라도 만드는 동사는 안 된다"
+
+
+def test_등재된_code_액션의_메서드는_전부_포트에_있다():
+    """등재 목록의 둘째 칸이 어댑터의 메서드 이름이다 — 이름이 어긋나면 `run_action`이 AttributeError를 error로 삼켜 조용히 "실행 실패"가
+    된다(R3-1c ①-a에서 action 이름을 바꾸며 실제로 어긋났다). 목록이 가리키는 메서드는 포트에 있어야 한다."""
+    from src.domain.actions import ACTIONS
+    missing = [name for name, (adapter, method, *_rest) in ACTIONS.items()
+               if adapter == "code" and not hasattr(DeployedCodePort, method)]
+    assert missing == []

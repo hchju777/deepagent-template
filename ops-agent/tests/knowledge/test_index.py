@@ -835,3 +835,36 @@ async def test_번들로_오간_인덱스도_명령_표시를_지킨다():
     old = idx.to_dict()
     old["symbols"] = [{**s, "resources": [r[:5] for r in s["resources"]]} for s in old["symbols"]]
     assert _resource(ix.Index.from_dict(old), "app.batch.refresh", "alarm:stats:{line}") == ("writes", "")
+
+
+# ── R3-1c ①-a — code.resources: 이 클래스가 읽고 쓰는 자원 ──
+
+RESOURCES_FILES = {**FILES, "app/batch.py": (
+    'class Refresh:\n'
+    '    def __init__(self, cfg, redis, producer):\n'
+    '        self.cfg, self.redis, self.producer = cfg, redis, producer\n'
+    '\n'
+    '    def _run(self):\n'
+    '        src = self.redis.get(self.cfg["redis_key"]["alarm_source"].format(line="L1"))\n'
+    '        self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], src)\n'
+    '\n'
+    '    def _nothing(self):\n'
+    '        return 1\n'
+    '\n'
+    'class Empty:\n'
+    '    def go(self):\n'
+    '        return 2\n')}
+RESOURCES_NAMES = NAMES + [Name("rediskey", "alarm:source:{line}", "redis_key.alarm_source")]
+
+
+async def test_resources는_클래스의_메서드들이_읽고_쓰는_자원을_나눠_준다():
+    """다음 홉의 재료(R3-1c ①-a) — "쓴 쪽이 무엇을 읽나". 읽기가 앞, 메서드와 줄을 같이. 자원이 없는 클래스는 그 사실을 말한다(키를
+    조립식으로 만들면 텍스트로는 못 찾는다 — 없는 것이 아니라 못 본 것)."""
+    from src.knowledge import query as qy
+    idx = await _index(RESOURCES_FILES, RESOURCES_NAMES)
+    lines = qy.resources_lines(idx, _sid(idx, "app.batch.Refresh"), where=lambda sid: "[svc]")
+    assert lines[0] == "app.batch.Refresh (app/batch.py:L1) [svc]"
+    assert lines[1] == "  읽기 1:" and lines[2] == "    alarm:source:{line} [rediskey] — app.batch.Refresh._run (app/batch.py:L6)"
+    assert lines[3] == "  쓰기 1:" and lines[4].startswith("    mx.alarm.main [topic] — app.batch.Refresh._run (app/batch.py:L7)")
+    empty = qy.resources_lines(idx, _sid(idx, "app.batch.Empty"), where=lambda sid: "")
+    assert empty[1] == "  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 1개 (키를 조립식으로 만들면 텍스트로는 못 찾는다)"

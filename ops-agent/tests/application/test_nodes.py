@@ -532,7 +532,7 @@ async def test_입구_노드는_frame_전에_접수를_읽고_대상_키를_Stat
                            evidence=[EvidenceRef(id=f"{task_id}.e1", source=source, summary="x", body="raw")])
 
     rest = {"response": [{"group": "L1", "title": "Alarm"}]}
-    value = {"type": "string", "value": json.dumps({"info": {"group": "L1", "title": "Alarm"}, "data": []})}
+    value = {"type": "string", "value": json.dumps({"info": {"group": "L1", "title": "Alarm"}, "data": [], "event_type": "Writer"})}
     runner = ScriptedRunner({"t-0": ok("t-0", rest, "rest.query entry='summary_badge'"),
                              "t-0-1": ok("t-0-1", value, "redis.get key='alarm:stats:L1'"),
                              "t-1": ok("t-1", value, "redis.get key='alarm:stats:L1'")},
@@ -545,11 +545,12 @@ async def test_입구_노드는_frame_전에_접수를_읽고_대상_키를_Stat
         return {"plan_tasks": []}
 
     patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
-    deps = deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)})
+    deps = deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}))
     deps = dataclasses.replace(deps, frame=frame)
     final = CaseState.model_validate(await build_engine(deps).ainvoke(CaseState(case=patrol)))
     assert seen[0] is not None and seen[0].key == "alarm:stats:L1"                 # frame이 볼 때 이미 있다
     assert final.target.key == "alarm:stats:L1" and [t.id for t in final.plan_tasks] == ["t-0", "t-1"]
+    assert (final.target.writer, final.target.writer_at) == ("Writer", "event_type")           # 엔진이 클래스 이름 집합을 넘긴다
     assert {e.id for e in final.evidence} == {"t-0.e1", "t-1.e1"}                       # 후보 읽기(t-0-1)는 State에 없다
     # 대본 경로(`check_discovery=False`)와 접수 읽기가 없는 케이스(사람이 연 것)는 입구를 안 돈다.
     runner.ran.clear()

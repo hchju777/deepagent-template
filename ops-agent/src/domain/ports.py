@@ -247,6 +247,10 @@ class DeployedCodePort(ABC):
         """이 컬렉션·토픽·키·그룹을 누가 쓰고 읽나, 어느 진입점에서 오나(11d). 인덱스가 없거나 이름이 없으면 실패."""
 
     @abstractmethod
+    async def resources(self, name: str) -> ProbeResult:
+        """이 클래스(함수)가 읽고 쓰는 자원(R3-1c ①-a) — 쓴 쪽의 입력. 인덱스가 없거나 이름이 없거나 여럿이면 실패로 답한다."""
+
+    @abstractmethod
     async def read(self, service: str, path: str, *, offset: int | None = None,
                    limit: int | None = None) -> ProbeResult:
         """파일 하나. `path`는 `grep`이 돌려준 경로다.

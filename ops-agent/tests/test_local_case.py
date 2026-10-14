@@ -101,6 +101,12 @@ def test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다(
     from tools.local_case import BOARD_SERVICES, CORE_FILES, _board_topology
     src = CORE_FILES["batch/refresh.py"]
     assert 'cfg["redis_key"]["alarm_stats"]' in src and "producer.send(" in src and "redis.set" not in src
+    # 사내 모양(측정 #8): 쓰는 쪽은 `_run`을 가진 클래스이고, 요약 키 값의 `metadata.event_type`이 그 클래스 이름이다. 입력 키를 읽는다.
+    assert "class SummaryRefresh:" in src and "def _run(self" in src and 'cfg["redis_key"]["alarm_source"]' in src
+    s = _seeds(NOW, "data-empty")
+    assert _value(s, "alarm:stats:L1")["metadata"]["event_type"] == "SummaryRefresh"
+    assert _value(s, "alarm:scan:L1")["metadata"]["event_type"] == "refresh-job"            # 미끼 — 클래스 이름이 아니다
+    assert "alarm:source:L1" in s["redis"]
     # 리포의 knowledge/topology/mx.json은 사내에서 실제 서비스 지도로 바뀌는 파일이다 — 측정판은 자기 사본의 services만 바꾼다(핫픽스 10-14).
     assert BOARD_SERVICES["batch"] == {"repo": "dt-core", "role": "주기적으로 요약을 다시 만들라는 명령을 낸다",
                                        "selects": {"SERVICE_ROLE": "batch"}}

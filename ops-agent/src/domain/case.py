@@ -108,11 +108,25 @@ class TargetPick(StrictModel):
     declared: str = ""
     # identity가 든 객체 옆의 빈 목록 경로들(`record[0].data`) — 코드가 보는 사실. 사내 c-1의 모양.
     empty: list[str] = []
+    # 쓴 쪽(R3-1c ①-a) — 값의 문자열 잎이 인덱스의 클래스 이름과 완전 일치한 그 클래스와 자리(`metadata.event_type`). 둘 이상 다른
+    # 클래스면 `writer_problem`. 인덱스가 없으면 셋 다 비어 있고 아무 말도 안 한다.
+    writer: str = ""
+    writer_at: str = ""
+    writer_problem: str = ""
+    # 클래스 이름 집합을 **받고도** 못 골랐나 — 받지 않았으면(인덱스 없음) "모른다"를 말할 자격이 없다.
+    writer_searched: bool = False
 
     def line(self) -> str:
         if self.key:
             return f"대상 키: {self.key} — {self.basis}"
         return f"대상 키: 못 골랐다 — {self.problem}" if self.problem else ""
+
+    def writer_line(self) -> str:
+        if self.writer:
+            return f"쓴 쪽: {self.writer} — 값의 {self.writer_at}과 인덱스의 클래스 이름이 완전 일치"
+        if self.writer_problem:
+            return f"쓴 쪽: 못 골랐다 — {self.writer_problem}"
+        return "쓴 쪽: 모른다 — 값에 인덱스의 클래스 이름이 없다" if self.writer_searched else ""
 
     def fold_line(self) -> str:
         """후보 읽기를 접은 한 줄 — 증거 29줄 대신. 후보를 하나도 안 읽었으면 빈 줄."""

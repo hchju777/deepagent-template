@@ -182,10 +182,11 @@ class StubDeployedCode(DeployedCodePort):
         self._trace = dict(seeds.get("trace") or {})
         self._uses = dict(seeds.get("uses") or {})
         self._callers = dict(seeds.get("callers") or {})
+        self._resources = dict(seeds.get("resources") or {})
         self._clock = clock
 
     def _none(self, source: str) -> ProbeResult:
-        return ProbeResult.failed("스텁에 준비된 응답이 없다 — seeds의 code 절은 trace·uses·callers만 받는다",
+        return ProbeResult.failed("스텁에 준비된 응답이 없다 — seeds의 code 절은 trace·uses·callers·resources만 받는다",
                                   source=source, clock=self._clock)
 
     def _seeded(self, table: dict, key: str, source: str, what: str) -> ProbeResult:
@@ -198,6 +199,9 @@ class StubDeployedCode(DeployedCodePort):
 
     async def uses(self, name: str) -> ProbeResult:
         return self._seeded(self._uses, name, f"stub-code:uses {name}", "쓰는 곳")
+
+    async def resources(self, name: str) -> ProbeResult:
+        return self._seeded(self._resources, name, f"stub-code:resources {name}", "읽는 자원")
 
     async def services(self) -> ProbeResult:
         return self._none("stub-code:services")

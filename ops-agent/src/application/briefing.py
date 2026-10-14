@@ -400,10 +400,11 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
             if not _issued(tasks, action, **params):
                 key_read = _done(tasks, "redis.get", key=target.key)
                 return hop, ([key_read.result_evidence_ids[0]] if key_read else [])
-        else:
+        elif action == "code.uses":
             writer = _first_writer(evidence, used_hop.result_evidence_ids[0])
             if writer is not None and not _issued(tasks, "code.callers", name=writer):
                 return ("code.callers", {"name": writer}), [used_hop.result_evidence_ids[0]]
+        # `code.resources` 뒤(입력 키마다 읽기 한 칸)는 R3-1c ③ — 지금은 옛 사다리로 이어진다.
     rest = _done(tasks, "rest.query")
     path = _rest_path(site_config, (rest.action, rest.params)) if rest else None
     if not path:
@@ -716,7 +717,7 @@ def _hidden(flow_graph: dict | None, code_index: bool = False) -> frozenset[str]
     if flow_graph is None:
         out |= {"code.flow", "code.trace"}
     if not code_index:
-        out |= {"code.callers", "code.uses"}
+        out |= {"code.callers", "code.uses", "code.resources"}
     return frozenset(out)
 
 

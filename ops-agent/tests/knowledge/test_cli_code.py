@@ -930,3 +930,15 @@ def test_code_status와_flow는_그_사이트의_값으로_말한다(tmp_path, m
     assert "사이트 gumi" in captured.out and "덮은 값 1" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "sink")
     assert code == 0 and "gumi-mx-core" in captured.out and "sevt-mx-core" not in captured.out
+
+
+def test_code_resources가_클래스가_읽고_쓰는_자원에_답한다(tmp_path, monkeypatch, capsys):
+    """R3-1c ①-a — 입구가 값에서 고른 쓴 쪽 클래스의 입력을 사람이 CLI로도 본다(사내에서 `code uses`로 B를 확인하던 그 자리)."""
+    config_root = _flow_tree_with_shared(tmp_path)
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Stamp")
+    assert code == 0, captured.out + captured.err
+    assert captured.out.splitlines()[0].strip().startswith("processor.stamp.Stamp (")
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Nope")
+    assert code == 1 and "인덱스에 없다" in captured.out

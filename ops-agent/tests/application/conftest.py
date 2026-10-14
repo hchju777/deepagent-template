@@ -90,7 +90,7 @@ def plan(*task_lists):
 def deps_for(runner, *, first_tasks=(), integrate=None, max_rounds=3,
              parallel_width=2, max_tasks=20, known_names="", conclude=None,
              components=frozenset(), check_discovery=True, declared=None, intake=None,
-             redo_on_rejection=True, code_index=False) -> EngineDeps:
+             redo_on_rejection=True, code_index=False, classes=frozenset()) -> EngineDeps:
     async def frame(state: CaseState) -> dict:
         return {"plan_tasks": list(first_tasks)}
 
@@ -101,7 +101,8 @@ def deps_for(runner, *, first_tasks=(), integrate=None, max_rounds=3,
                       max_rounds=max_rounds, parallel_width=parallel_width,
                       max_tasks=max_tasks, known_names=known_names, conclude=conclude,
                       components=components, check_discovery=check_discovery,
-                      declared=declared or {}, intake=intake, redo_on_rejection=redo_on_rejection, code_index=code_index)
+                      declared=declared or {}, intake=intake, redo_on_rejection=redo_on_rejection, code_index=code_index,
+                      classes=classes)
 
 
 def ok(task_id: str, *, summary: str = "봤다") -> TaskOutcome:

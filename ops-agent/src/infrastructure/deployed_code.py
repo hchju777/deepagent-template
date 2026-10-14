@@ -113,6 +113,12 @@ class DeployedCode(DeployedCodePort):
     def has_index(self) -> bool:
         return self._index is not None
 
+    def class_names(self) -> frozenset[str]:
+        """인덱스의 클래스 이름들 — 입구 노드가 키 값의 문자열 잎과 완전 일치로 "쓴 쪽"을 고르는 닫힌 집합(R3-1c ①-a)."""
+        if self._index is None:
+            return frozenset()
+        return frozenset(s.name for s in self._index.symbols if s.kind == "class")
+
     def _where(self, sid: int) -> str:
         s = self._index.symbols[sid]
         svc = flowgraph.owner(s.file, s.repo, self._topology)[0]
@@ -134,6 +140,23 @@ class DeployedCode(DeployedCodePort):
                                       source=source, clock=self._clock)
         lines = qy.callers_lines(self._index, self._qgraph, found[0], where=self._where)
         return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
+
+    async def resources(self, name: str) -> ProbeResult:
+        from src.knowledge import query as qy
+
+        source = f"code.resources {name}"
+        if self._index is None:
+            return ProbeResult.failed("심볼 인덱스가 없다 — `python -m src code graph`로 만든다",
+                                      source=source, clock=self._clock)
+        found = qy.find(self._index, name)
+        if not found:
+            return ProbeResult.failed(f"{name}: 인덱스에 없다 — 케이스 블록의 쓴 쪽 이름 그대로나 `파일:qualname`으로",
+                                      source=source, clock=self._clock)
+        if len(found) > 1:
+            return ProbeResult.failed("\n".join(qy.ambiguous_lines(self._index, name, found)),
+                                      source=source, clock=self._clock)
+        return ProbeResult.succeeded("\n".join(qy.resources_lines(self._index, found[0], where=self._where)),
+                                     source=source, clock=self._clock)
 
     async def uses(self, name: str) -> ProbeResult:
         from src.knowledge import query as qy

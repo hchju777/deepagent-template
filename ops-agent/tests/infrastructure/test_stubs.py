@@ -85,3 +85,12 @@ async def test_stub_redis_get은_JSON_경로로_고른_부분만_준다():
     assert plain.data["value"].startswith("{") and "path" not in plain.data       # 경로 없으면 전처럼 원문
     absent = await redis.get("none", path="a")
     assert absent.status == "ok" and absent.data is None                           # 키 없음은 사실이지 오류가 아니다
+
+
+async def test_스텁_코드는_seed의_resources도_그대로_준다():
+    from src.infrastructure.stubs import StubDeployedCode
+
+    stub = StubDeployedCode({"resources": {"SummaryRefresh": "SummaryRefresh (batch/job.py:L1)\n  읽기 1:\n    alarm:source:{line} [rediskey]"}}, clock=_clock)
+    assert (await stub.resources("SummaryRefresh")).data.startswith("SummaryRefresh (batch/job.py:L1)")
+    missing = await stub.resources("nope")
+    assert missing.status == "error" and "스텁" in missing.error

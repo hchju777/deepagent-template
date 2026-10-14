@@ -121,7 +121,7 @@ CORE_FILES = {
                              "topic": {"topic1": "mx.alarm.raw", "topic2": "mx.alarm.main"}},
                 "producer": {"topic": {"topic1": "mx.alarm.main"}}}},
         "mongodb_collection": {"alarm": "alarm_events", "line_state": "line_state"},
-        "redis_key": {"alarm_stats": "alarm:stats:{line}", "heartbeat": "hb:{service}"},
+        "redis_key": {"alarm_stats": "alarm:stats:{line}", "alarm_source": "alarm:source:{line}", "heartbeat": "hb:{service}"},
         "sink": {"batch_size": 200, "flush_sec": 5}},
     "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi"},
     "config/factories/gumi/mx.json": {
@@ -158,13 +158,20 @@ def run(cfg, consumer, mongo, redis):
 ''',
     # 사내 10-07 진단표 #8의 모양 — 배치 파이프라인이 요약 키를 **직접 쓰지 않고** 이름을 kafka 명령에 실어 보낸다. 그 줄엔 동사가 없어
     # `code.uses`가 읽기로 분류했었다(R3-1b ②가 "명령"으로 쓰기에 둔다).
-    "batch/refresh.py": '''"""배지 요약을 다시 만들라는 명령을 낸다 — 키 이름을 메시지에 실어 보낼 뿐 직접 쓰지 않는다."""
+    # 사내 모양(측정 #8): 쓰는 쪽은 `_run`을 가진 클래스이고, 요약 키 값의 `metadata.event_type`이 이 클래스 이름이다(입구 노드가 그걸로
+    # 쓴 쪽을 고른다, R3-1c ①-a). 원천 키(`alarm:source:{line}`)를 읽어 요약 이름을 메시지에 실어 보낸다 — 직접 `set` 안 함.
+    "batch/refresh.py": '''"""배지 요약을 다시 만든다 — 원천 키를 읽고, 요약 키 이름을 메시지에 실어 보낸다(직접 쓰지 않는다)."""
 
 
-def run(cfg, producer):
-    for line in cfg["lines"]:
-        command = {"op": "refresh", "target": cfg["redis_key"]["alarm_stats"].format(line=line)}
-        producer.send(cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
+class SummaryRefresh:
+    def __init__(self, cfg, redis, producer):
+        self.cfg, self.redis, self.producer = cfg, redis, producer
+
+    def _run(self):
+        for line in self.cfg["lines"]:
+            source = self.redis.get(self.cfg["redis_key"]["alarm_source"].format(line=line))
+            command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": source}
+            self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
 ''',
 }
 
@@ -285,10 +292,17 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                {f"alarm:stats:{l}": json.dumps({
                     "record": [{"summary_info": {"group": l, "title": "Alarm", "source": "MES"},
                                 "data": _stats_data(docs, l, variant)}],
+                    # 사내 모양 — 값이 쓴 파이프라인 클래스 이름을 싣는다(측정 #8). 입구 노드가 이걸로 "쓴 쪽"을 고른다.
+                    "metadata": {"event_type": "SummaryRefresh"},
                     "count_1h": counts[l], "updated_at": fresh(1) if stats_fresh or variant == "data-empty" else _iso(stale)})
                 for l in LINES}),
+            # 쓴 쪽의 입력 — 원천 키. 지금은 전 변형에서 있다(없음·빈 값 변형은 R3-3).
+            **{f"alarm:source:{l}": json.dumps([{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == l])
+               for l in LINES},
             **{f"alarm:scan:{l}": json.dumps({
                     "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],
+                    # 값이 쓴 쪽 이름을 **안** 싣는 키 — 클래스 이름이 아닌 문자열. 이런 키에서는 "쓴 쪽: 모른다"가 떠야 한다.
+                    "metadata": {"event_type": "refresh-job"},
                     "count_1h": 0, "updated_at": fresh(1)})
                for l in LINES},
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},

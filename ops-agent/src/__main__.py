@@ -1038,7 +1038,8 @@ def cmd_case_investigate(args, env) -> int:
                               declared={"rediskey": flow.declared_keys(
                                   flow_graph, briefing.intake_path(case, site))},
                               intake=intake_spec(case, site),
-                              code_index=code.has_index() if code else False)
+                              code_index=code.has_index() if code else False,
+                              classes=code.class_names() if code else frozenset())
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()
@@ -1666,6 +1667,27 @@ def cmd_code_path(args, env) -> int:
         print(f"  {qy.render_path(index, p)}")
     if cut:
         print(f"  ⚠ 상한에 걸려 다 못 봤다 — 더 긴 경로가 있을 수 있다")
+    return 0
+
+
+def cmd_code_resources(args, env) -> int:
+    """이 클래스(함수)가 읽고 쓰는 자원(R3-1c ①-a) — 입구가 키 값에서 고른 쓴 쪽의 입력. 엔진의 `code.resources`와 같은 조립."""
+    from src.knowledge import query as qy
+
+    got = _query_setup(args, env)
+    if got is None:
+        return 1
+    index, graph, where = got
+    found = qy.find(index, args.name)
+    if not found:
+        print(f"  {args.name}: 인덱스에 없다 — 케이스 블록의 쓴 쪽 이름 그대로나 `파일:qualname`으로")
+        return 1
+    if len(found) > 1:
+        for line in qy.ambiguous_lines(index, args.name, found):
+            print("  " + line)
+        return 1
+    for line in qy.resources_lines(index, found[0], where=where):
+        print("  " + line)
     return 0
 
 
@@ -2587,6 +2609,10 @@ def build_parser() -> argparse.ArgumentParser:
     uses_cmd.add_argument("--all", action="store_true", help="자르지 않고 전부")
     _add_site_options(uses_cmd, sub=True)
     uses_cmd.set_defaults(run=cmd_code_uses)
+    resources_cmd = code_sub.add_parser("resources", help="이 클래스(함수)가 읽고 쓰는 자원 (심볼 인덱스)")
+    resources_cmd.add_argument("name", help="클래스·함수 이름 (`Class`, `Class.method`, `파일:qualname`)")
+    _add_site_options(resources_cmd, sub=True)
+    resources_cmd.set_defaults(run=cmd_code_resources)
 
     trace_cmd = code_sub.add_parser("trace", help="끝점 하나의 함수 사슬 — 리드가 code.trace로 받는 것")
     trace_cmd.add_argument("path", help="끝점 path (`code flow`나 등재 항목의 path 그대로)")

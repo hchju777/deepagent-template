@@ -1096,8 +1096,8 @@ CASES = [
   '',
   ['tests/domain/test_actions.py::test_역질문_둘이_이름_하나로_등재돼_있고_코드_추적_레인이다']),
  ('인덱스 없이도 역질문을 목록에 둔다', ROOT / 'src/application/briefing.py',
-  '    if not code_index:\n        out |= {"code.callers", "code.uses"}',
-  '    if False:\n        out |= {"code.callers", "code.uses"}',
+  '    if not code_index:\n        out |= {"code.callers", "code.uses", "code.resources"}',
+  '    if False:\n        out |= {"code.callers", "code.uses", "code.resources"}',
   ['tests/application/test_briefing.py::test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀다']),
  ('리드에 인덱스 유무를 안 넘긴다', ROOT / 'src/application/lead.py',
   '                                            flow_graph=flow_graph, code_index=code_index))\n        got = await ask_json(llm, prompt, FrameReply',
@@ -2431,7 +2431,7 @@ HINT_WIRE_T = "tests/application/test_nodes.py::test_integrate는_입구_결과�
 CASES += [
  ("선언 이름을 안 남긴다", IM, "                declared_of[name] = template\n", "", [DECL_T]),
  ("identity 옆 빈 목록을 안 적는다", IM, "    return [f\"{parent}.{k}\" if parent else k for k, v in obj.items() if isinstance(v, list) and not v]", "    return []", [DECL_T]),
- ("인덱스가 없어도 다음 홉을 낸다", IM, "    if target is None or not target.key or not target.declared or not code_index:", "    if target is None or not target.key or not target.declared:", [HOP_T]),
+ ("인덱스가 없어도 다음 홉을 낸다", IM, "    if target is None or not target.key or not code_index:", "    if target is None or not target.key:", [HOP_T]),
  ("입구 줄이 이미 읽은 것을 안 적는다", IM, "    if done:\n        lines.append(\"입구 노드가 이미 읽었다: \"", "    if False:\n        lines.append(\"입구 노드가 이미 읽었다: \"", [LINES_T]),
  ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake_lines(state, code_index=code_index)}\" if intake_lines(state, code_index=code_index) else \"\"))", "            )", [FRAME_HOP_T]),
  ("입구가 돌았는데 frame 예시에 접수 읽기를 둔다", B, "            if not intake_done:\n                shapes.append(first_read)", "            if True:\n                shapes.append(first_read)", [FRAME_HOP_T]),
@@ -2455,7 +2455,36 @@ CASES += [
   "        if False:", ["tests/test_portability.py::test_검사기가_repo_루트의_knowledge_읽기를_실제로_잡는다"]),
 ]
 
-assert len(CASES) >= 637, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1c ①-a — 쓴 쪽은 데이터로 · code.resources ──
+DCP = ROOT / "src/infrastructure/deployed_code.py"
+WRITER_T = f"{IMT}::test_값의_문자열_잎이_인덱스의_클래스_이름과_완전_일치하면_그_클래스가_쓴_쪽이다"
+HOP2_T = f"{IMT}::test_다음_홉은_쓴_쪽을_알면_그_클래스의_입력이고_모르면_선언_키의_uses다"
+RESOURCES_T = "tests/knowledge/test_index.py::test_resources는_클래스의_메서드들이_읽고_쓰는_자원을_나눠_준다"
+RESOURCES_DC_T = "tests/infrastructure/test_deployed_code.py::test_code_resources는_클래스가_읽고_쓰는_자원을_주고_없거나_여럿이면_실패로_답한다"
+WRITER_B_T = "tests/application/test_briefing.py::test_쓴_쪽을_알면_케이스_블록에_그_줄이_실리고_첫_칸은_code_resources다"
+CASES += [
+ ("클래스 이름이 둘이어도 첫 것을 고른다", IM, "    if len(names) == 1:\n        return hits[0][1], hits[0][0], \"\"", "    if names:\n        return hits[0][1], hits[0][0], \"\"", [WRITER_T]),
+ ("부분 일치로 쓴 쪽을 고른다", IM, "    hits = [(at, text) for at, text in _string_leaves(value) if text in classes]",
+  "    hits = [(at, text) for at, text in _string_leaves(value) if any(c.lower() == text.lower() for c in classes)]", [WRITER_T]),
+ ("입구가 쓴 쪽을 안 적는다", IM, "        writer, writer_at, writer_problem = writer_of(_unwrap(raw), classes) if raw is not None else (\"\", \"\", \"\")",
+  "        writer, writer_at, writer_problem = \"\", \"\", \"\"", [WRITER_T]),
+ ("인덱스 없이도 모른다고 말한다", IM, "                                writer_searched=bool(classes) and raw is not None, **folded,", "                                writer_searched=raw is not None, **folded,", [WRITER_T]),
+ ("쓴 쪽을 알아도 uses로 간다", IM, "    if target.writer:\n        return \"code.resources\", {\"name\": target.writer}", "    if False:\n        return \"code.resources\", {\"name\": target.writer}", [HOP2_T, WRITER_B_T]),
+ ("resources가 메서드 자원을 안 모은다", QYP, "    members = [m for m in index.symbols if m.class_id == sid] if s.kind == \"class\" else [s]", "    members = [s]", [RESOURCES_T]),
+ ("resources가 읽기와 쓰기를 안 가른다", QYP, "        rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)", "        rows = sorted((k, v) for k, v in seen.items())", [RESOURCES_T]),
+ ("code.resources가 여럿이어도 하나를 고른다", DCP, "        if len(found) > 1:\n            return ProbeResult.failed(\"\\n\".join(qy.ambiguous_lines(self._index, name, found)),\n                                      source=source, clock=self._clock)\n        return ProbeResult.succeeded(\"\\n\".join(qy.resources_lines(",
+  "        if False:\n            return ProbeResult.failed(\"\\n\".join(qy.ambiguous_lines(self._index, name, found)),\n                                      source=source, clock=self._clock)\n        return ProbeResult.succeeded(\"\\n\".join(qy.resources_lines(", [RESOURCES_DC_T]),
+ ("class_names가 함수까지 센다", DCP, "        return frozenset(s.name for s in self._index.symbols if s.kind == \"class\")", "        return frozenset(s.name for s in self._index.symbols)", [RESOURCES_DC_T]),
+ ("인덱스 없이 code.resources를 목록에 둔다", B, "        out |= {\"code.callers\", \"code.uses\", \"code.resources\"}", "        out |= {\"code.callers\", \"code.uses\"}", [WRITER_B_T]),
+ ("등재 목록이 포트에 없는 메서드를 가리킨다", ROOT / "src/domain/actions.py", "    \"code.resources\":      (\"code\",  \"resources\",", "    \"code.resources\":      (\"code\",  \"inputs\",",
+  ["tests/domain/test_ports.py::test_등재된_code_액션의_메서드는_전부_포트에_있다"]),
+ ("CLI code resources가 찾은 심볼을 안 쓴다", MN, "    for line in qy.resources_lines(index, found[0], where=where):", "    for line in []:",
+  ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
+ ("입구 노드가 클래스 집합을 안 넘긴다", ND, "                                    declared=tuple(deps.declared.get(\"rediskey\", ())), classes=deps.classes)",
+  "                                    declared=tuple(deps.declared.get(\"rediskey\", ())))", ["tests/application/test_nodes.py::test_입구_노드는_frame_전에_접수를_읽고_대상_키를_State에_둔다"]),
+]
+
+assert len(CASES) >= 650, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

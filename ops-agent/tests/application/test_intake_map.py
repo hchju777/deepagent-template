@@ -194,3 +194,52 @@ def test_입구_줄은_이미_읽은_것과_빈_목록과_다음_홉을_말한�
         "다음 홉: code.uses name='alarm:stats:{line}' — 이 키를 누가 쓰나(값이 어디서 오나)")
     assert intake_lines(state, code_index=False).count("\n") == 1                                  # 홉 줄만 빠진다
     assert intake_lines(CaseState(case=_case()), code_index=True) == ""                           # 입구가 안 돌았다
+
+
+# ── R3-1c ①-a — 쓴 쪽은 데이터로 ──
+
+async def test_값의_문자열_잎이_인덱스의_클래스_이름과_완전_일치하면_그_클래스가_쓴_쪽이다():
+    """측정 #8: 동사 목록 규칙은 사내 모양(뒷줄 `save`, 앞줄 클래스 이름 `Publish…`)에서 틀렸다. 사내 요약 키 값의 `metadata.event_type`은
+    쓴 파이프라인 클래스 이름과 완전 일치한다(c-1·c-2 둘 다) — 입구가 이미 읽은 값에서, 닫힌 집합(인덱스의 클래스 이름)과 완전 일치로 고른다.
+    둘 이상 다른 클래스면 고르지 않고, 없으면 모른다."""
+    from src.application.intake_map import writer_of
+
+    classes = frozenset({"SummaryRefresh", "AlarmSink"})
+    value = {"record": [{"summary_info": {"group": "L1", "title": "Alarm"}, "data": []}],
+             "metadata": {"event_type": "SummaryRefresh", "source": "MES"}}
+    assert writer_of(value, classes) == ("SummaryRefresh", "metadata.event_type", "")
+    assert writer_of({"event_type": "AlarmSink"}, classes) == ("AlarmSink", "event_type", "")
+    both = writer_of({"a": "SummaryRefresh", "b": {"c": "AlarmSink"}}, classes)
+    assert both[:2] == ("", "") and "2개" in both[2] and "AlarmSink, SummaryRefresh" in both[2]
+    assert writer_of({"event_type": "summaryrefresh"}, classes) == ("", "", "")          # 완전 일치 — 대소문자도
+    assert writer_of(value, frozenset()) == ("", "", "")                                  # 인덱스가 없으면 모른다
+
+    runner = _runner(keys={"alarm:stats:L1": json.dumps({**value})}, picked="alarm:stats:L1")
+    pick = (await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",), classes=classes))["target"]
+    assert (pick.writer, pick.writer_at, pick.writer_problem) == ("SummaryRefresh", "metadata.event_type", "")
+    assert pick.writer_line() == "쓴 쪽: SummaryRefresh — 값의 metadata.event_type과 인덱스의 클래스 이름이 완전 일치"
+    unknown = (await run_intake(CaseState(case=_case()), SPEC, runner=_runner(keys={"alarm:stats:L1": _value("L1", "Alarm")}, picked="alarm:stats:L1"),
+                                declared=("alarm:stats:L1",), classes=classes))["target"]
+    assert unknown.writer == "" and unknown.writer_line() == "쓴 쪽: 모른다 — 값에 인덱스의 클래스 이름이 없다"
+    blind = (await run_intake(CaseState(case=_case()), SPEC, runner=_runner(keys={"alarm:stats:L1": _value("L1", "Alarm")}, picked="alarm:stats:L1"),
+                              declared=("alarm:stats:L1",)))["target"]
+    assert blind.writer_line() == ""                                                      # 인덱스 자체가 없으면 말이 없다
+
+
+def test_다음_홉은_쓴_쪽을_알면_그_클래스의_입력이고_모르면_선언_키의_uses다():
+    from src.application.intake_map import hop_line, intake_lines, next_hop
+    from src.domain.case import TargetPick
+    from tests.application.conftest import task
+
+    known = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", writer="SummaryRefresh", writer_at="metadata.event_type")
+    assert next_hop(known, code_index=True) == ("code.resources", {"name": "SummaryRefresh"})
+    assert hop_line(known, code_index=True) == "다음 홉: code.resources name='SummaryRefresh' — 쓴 쪽이 읽는 자원(입력)"
+    assert next_hop(known, code_index=False) is None
+    unknown = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b")
+    assert next_hop(unknown, code_index=True) == ("code.uses", {"name": "alarm:stats:{line}"})
+    state = CaseState(case=_case(), target=known, plan_tasks=[
+        task("t-0", action="rest.query", params={"entry": "summary_badge", "params": {}}, status="ok", result_evidence_ids=["t-0.e1"]),
+        task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"])])
+    lines = intake_lines(state, code_index=True).split("\n")
+    assert lines[1] == "쓴 쪽: SummaryRefresh — 값의 metadata.event_type과 인덱스의 클래스 이름이 완전 일치"
+    assert lines[2] == "다음 홉: code.resources name='SummaryRefresh' — 쓴 쪽이 읽는 자원(입력)"

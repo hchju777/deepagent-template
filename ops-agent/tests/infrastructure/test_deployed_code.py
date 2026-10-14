@@ -668,3 +668,36 @@ async def test_code_uses에_서비스_이름을_주면_code_flow로_안내한다
     got = await flow_code.uses("sink")
     assert got.status == "error" and "서비스 이름이다" in got.error and "code.flow name='sink'" in got.error
     assert (await flow_code.uses("alarm_events")).status == "ok"
+
+
+# ── R3-1c ①-a — code.resources ──
+
+class _WithClass(_Src):
+    FILES = {**_Src.FILES, "batch/__init__.py": "", "batch/job.py": (
+        "class Refresh:\n"
+        "    def _run(self, cfg, redis, producer):\n"
+        "        src = redis.get(cfg[\"redis_key\"][\"alarm_source\"].format(line=\"L1\"))\n"
+        "        producer.send(cfg[\"infra\"][\"kafka\"][\"producer\"][\"topic\"][\"topic1\"], src)\n"),
+        "jobs/again.py": "class Refresh:\n    def go(self):\n        return 1\n"}
+
+
+async def test_code_resources는_클래스가_읽고_쓰는_자원을_주고_없거나_여럿이면_실패로_답한다(flow_code):
+    """입구가 값에서 고른 쓴 쪽 클래스의 **입력**이 다음 홉이다(R3-1c ①-a). 이름이 여럿이면 코드가 고르지 않는다(`callers`와 같다)."""
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+
+    assert (await flow_code.resources("Refresh")).status == "error"                                   # 인덱스 없음
+    idx = await ix.build_index({"dt-core": _WithClass()}, names=[Name("rediskey", "alarm:source:{line}", "redis_key.alarm_source"),
+                                                                 Name("topic", "mx.alarm.main", "infra.kafka.producer.topic.topic1")],
+                               commits={"dt-core": "c0ffee"})
+    flow_code.attach_index(idx)
+    many = await flow_code.resources("Refresh")
+    assert many.status == "error" and "여럿" in many.error and "batch.job.Refresh" in many.error
+    one = await flow_code.resources("batch.job.Refresh")
+    assert one.status == "ok" and one.data.splitlines()[0].startswith("batch.job.Refresh (batch/job.py:L1) [dt-core")
+    assert "  읽기 1:" in one.data and "alarm:source:{line} [rediskey] — batch.job.Refresh._run (batch/job.py:L3)" in one.data
+    none = await flow_code.resources("Nope")
+    assert none.status == "error" and "인덱스에 없다" in none.error
+    assert flow_code.class_names() == frozenset({"Refresh"})
+    flow_code.attach_index(None)
+    assert flow_code.class_names() == frozenset()

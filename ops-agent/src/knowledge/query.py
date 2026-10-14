@@ -193,6 +193,27 @@ def uses(index: Index, name: str) -> list[Use]:
     return collect(lambda n: n == name) or collect(lambda n: name in n)
 
 
+def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str]:
+    """`code.resources` 한 벌 — 이 클래스의 메서드들(함수면 자기)이 읽고 쓰는 자원, 읽기가 앞. 자원 하나는 한 번(첫 메서드·줄).
+    자원이 없으면 그 사실 — 키를 조립식으로 만들면 텍스트로는 못 찾는다(없는 것이 아니라 못 본 것)."""
+    s = index.symbols[sid]
+    members = [m for m in index.symbols if m.class_id == sid] if s.kind == "class" else [s]
+    lines = [f"{display(index, sid)} {where(sid)}".rstrip()]
+    seen: dict[tuple[str, str, str], tuple[int, int]] = {}
+    for m in members:
+        for r in m.resources:
+            seen.setdefault((r.direction, r.kind, r.name), (m.id, r.line))
+    for direction, label in (("reads", "읽기"), ("writes", "쓰기")):
+        rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)
+        if not rows:
+            continue
+        lines.append(f"  {label} {len(rows)}:")
+        lines += [f"    {name} [{kind}] — {display(index, mid, line)}" for (_, kind, name), (mid, line) in rows[:cap]]
+    if not seen:
+        lines.append(f"  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 {len(members)}개 (키를 조립식으로 만들면 텍스트로는 못 찾는다)")
+    return lines
+
+
 def short(index: Index, sid: int, modules: dict[tuple[str, str], str] | None = None) -> str:
     """경로 한 칸 — 모듈 끝 이름 + 모듈 안의 이름(`impl.MongoStore.save`, `svc.handle`)."""
     s = index.symbols[sid]

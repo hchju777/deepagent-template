@@ -750,6 +750,36 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   `hint`·`hint_for`, integrate·frame이 `EngineDeps.code_index`로 넘긴다). 리드 자신의 읽기 중복엔 안 붙는다.
 - 되물어도 중복이면 코드가 그 홉을 직접 내는 안은 보류 — #8에서도 안 먹히면 그때.
 
+### 측정 #8(sevt, 10-14)과 R3-1c
+
+①·③은 사내에서 그대로 작동했다(케이스 블록 다섯 줄, 첫 칸 `code.uses`, r1 9.8K자, `no_runnable` 0, 없는 증거 0). 판정은 둘 다 "요약 키 data 빈
+배열"을 첫 나쁜 홉으로 잡고 거기서 멈췄다 — 실제 원인은 그 파이프라인의 입력 쪽 한두 홉 위다. **②의 쓰는 쪽 엣지는 사내에서 안 잡혔다**:
+사내 모양은 발행 명령 DTO에 자원 이름을 `f"{config.get(…)}:{config.get(…)}"`로 싣고 **다음 줄**에서 `storage.save(command)`한다 — 뒷줄 동사가
+`save`라 produce 목록에 없고, `Publish`는 같은 문장의 **앞줄** 클래스 이름에 있다. 동사 목록이라는 손 규칙은 다음 모양에서 또 틀린다. 대신
+데이터로 간다: 사내 요약 키 값의 `metadata.event_type`이 쓴 파이프라인 클래스 이름과 완전 일치한다(c-1·c-2 둘 다). 항목·순서는
+[plan-12a-r2-r4.md](plan-12a-r2-r4.md) R3-1c.
+
+#### R3-1c ①-a (10-14) ✅ — 쓴 쪽은 데이터로: 값이 이름을 대는 클래스, `code.resources`
+
+- 입구 노드가 고른 키 값의 **문자열 잎** 중 심볼 인덱스의 **클래스 이름**과 완전 일치하는 것이 정확히 하나면 그 클래스가 쓴 쪽이다
+  (`intake_map.writer_of` — `holds_identity`와 같은 종류: 닫힌 집합과 완전 일치, 대소문자 그대로). 둘 이상 다른 클래스면 `못 골랐다`, 없으면
+  `모른다`(클래스 집합을 받았을 때만 — 인덱스가 없으면 말이 없다, `writer_searched`). `TargetPick.writer`·`writer_at`·`writer_problem`.
+  엔진은 인덱스를 들지 않고 클래스 이름 집합만 받는다(`EngineDeps.classes` ← `DeployedCode.class_names()`).
+- 케이스 블록 줄 `쓴 쪽: SummaryRefresh — 값의 metadata.event_type과 인덱스의 클래스 이름이 완전 일치`(`writer_line`), 그다음 홉.
+- 다음 홉은 쓴 쪽을 알면 **그 클래스가 읽는 자원**: 새 action `code.resources name=<클래스>`(`DeployedCodePort.resources`,
+  `query.resources_lines` — 그 클래스 메서드들의 자원을 읽기·쓰기로 나눠 메서드·줄과 함께, 자원이 없으면 "메서드 N개, 키를 조립식으로
+  만들면 텍스트로는 못 찾는다"; 이름이 여럿이면 `callers`처럼 후보만). 모르면 `code.uses <선언 키>` 그대로(인덱스 데이터라 남긴다). 인덱스가
+  없으면 목록에서 숨긴다(`_hidden`). 이름이 `inputs`가 아닌 이유: 등재 목록 검사가 `put` 부분 문자열을 막는다(규율 9) — 검사를 느슨하게 하지
+  않고 이름을 바꿨다. 등재 목록의 메서드 이름이 포트에 있는지 보는 테스트를 하나 더 뒀다(이름을 바꾸다 실제로 어긋났다).
+- 사다리: `code.uses` 홉 뒤의 `code.callers`(쓰는 함수)는 그대로, `code.resources` 뒤(입력 키마다 읽기 한 칸)는 ③에서.
+- 측정판: 배치를 사내 모양대로 `_run`을 가진 클래스(`SummaryRefresh`)로, 요약 키 값에 `metadata.event_type`으로 그 이름, 원천 키
+  `alarm:source:{line}`을 읽는다. 미끼 키의 `event_type`은 클래스 이름이 아닌 문자열(`refresh-job`) — "모른다"가 뜨는 쪽.
+- 실제 소비자로(측정판 재생성 + `code graph`): r0 케이스 블록 `쓴 쪽: SummaryRefresh — …`·`다음 홉: code.resources name='SummaryRefresh'`,
+  예시 첫 칸 `code.resources`. 대본 리드가 그대로 내자 r1 증거 `t-2.e1 | code.resources name='SummaryRefresh' | batch.refresh.SummaryRefresh
+  (batch/refresh.py:L4) [dt-core · batch] / 읽기 1: alarm:source:{line} [rediskey] — …_run (…)`. r1 10.8K자. CLI `code resources <이름>`도 같은 출력.
+- CLI `python -m src code resources <이름>`도 같은 조립 — 사내에서 손으로 확인하는 자리(`code uses`로 B를 보던 그 자리).
+- 테스트 먼저(RED 7 → GREEN, 이름 바꾼 뒤 +1, CLI +1). 스윕 +13(650; 옮긴 앵커 둘).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.
