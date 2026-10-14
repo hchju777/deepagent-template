@@ -942,3 +942,8 @@ def test_code_resources가_클래스가_읽고_쓰는_자원에_답한다(tmp_pa
     assert captured.out.splitlines()[0].strip().startswith("processor.stamp.Stamp (")
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Nope")
     assert code == 1 and "인덱스에 없다" in captured.out
+    # 같은 이름이 두 레포면 `--service`로 고른다(R3-3 ②-b) — 없는 서비스는 그 자리에서
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Stamp", "--service", "processor")
+    assert code == 0 and captured.out.splitlines()[0].strip().startswith("processor.stamp.Stamp ("), captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Stamp", "--service", "nope")
+    assert code == 1 and "없는 서비스" in captured.out

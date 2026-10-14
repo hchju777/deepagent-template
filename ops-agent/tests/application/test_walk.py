@@ -16,7 +16,7 @@ class _Reads(TaskRunnerPort):
     """`(action, 이름)` → 원본. 없는 조합은 읽기 실패. 값 None은 Redis의 없는 키(성공인데 원본이 없다)."""
 
     def __init__(self, table):
-        self.table, self.ran, self._raws = dict(table), [], {}
+        self.table, self.ran, self.params, self._raws = dict(table), [], [], {}
 
     def describe(self):
         return "reads"
@@ -27,6 +27,7 @@ class _Reads(TaskRunnerPort):
     async def run(self, task, *, case):
         name = next((task.params[k] for k in _NAME if k in task.params), None)
         self.ran.append((task.action, name))
+        self.params.append((task.action, dict(task.params)))
         if (task.action, name) not in self.table:
             return TaskOutcome(task_id=task.id, status="error", error="대본 없음")
         ref = EvidenceRef(id=f"{task.id}.e1", source=f"{task.action} {name}", summary="x", body="raw")
@@ -142,3 +143,33 @@ def test_상태는_없음_0행_빈_배열만_나쁘고_정상이면_행_요약�
     assert status_of([{"a": 1, "b": "-"}, {"a": 2, "b": "-"}]) == ("정상 — 행 2 · 필드 2 · 모든 행이 같은 값: b='-'", False)
     assert status_of({"type": "string", "value": json.dumps({"record": [{"a": 1}], "meta": []})}) == ("정상 — record: 행 1 · 필드 1", False)
     assert status_of(["a", "b"]) == ("정상 — 2건", False) and status_of({"type": "string", "value": "7"}) == ("정상", False)
+
+
+async def test_같은_클래스_이름이_두_레포면_그_키를_선언한_서비스로_가르고_못_가르면_둘_다_걷는다():
+    """측정 #9 P1 4: 같은 클래스 이름이 수집기·처리기 두 레포에 있고 `파일:qualname`도 같다. 사람 결정: 대상 키를 config로 선언한 서비스(흐름
+    그래프 `declares`)로 가른다 — 후보끼리 가를 때만, 표에 근거. 둘 다 선언이거나 선언이 없으면 둘 다 걷는다(판정의 component 후보도 둘 다).
+    깊은 홉은 **그 입력 키의 선언 이름**으로 가른다. 한 곳뿐이면 가를 것이 없고 `service` 인자도 안 단다(리드의 중복이 같은 질의여야 잡힌다)."""
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(record=[], metadata={"event_type": "W1"}),
+             ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey")]),
+             ("redis.get", "src:L1"): _value(n=1)}
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a", "b"), "W1": ("a", "b")},
+                           declared_by={"alarm:stats:{line}": ("a",), "in:a:{line}": ("b",)}, clock=lambda: T0))["walk"]
+    assert [p for a, p in runner.params if a == "code.resources"] == [{"name": "W0", "service": "a"}, {"name": "W1", "service": "b"}]
+    assert (walk.hops[0].service, walk.hops[1].service) == ("a", "b") and walk.hops[1].basis == "W0[a]가 읽는 자원 (t-1-1.e1)"
+    assert walk.notes == ["W0는 2곳(a, b)에 있다 — alarm:stats:{line}을 선언한 a로 골랐다", "W1는 2곳(a, b)에 있다 — in:a:{line}을 선언한 b로 골랐다"]
+    assert "  주: W0는 2곳(a, b)에 있다 — alarm:stats:{line}을 선언한 a로 골랐다" in walk.lines()
+    both = _Reads(table)
+    walk = (await run_walk(_state(), runner=both, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a", "b")},
+                           declared_by={"alarm:stats:{line}": ("a", "b")}, clock=lambda: T0))["walk"]
+    assert [p for a, p in both.params if a == "code.resources"][:2] == [{"name": "W0", "service": "a"}, {"name": "W0", "service": "b"}]
+    assert walk.hops[0].service == "a, b" and walk.notes[0].endswith("(둘 다 선언): 둘 다 걷는다")
+    assert [h.key for h in walk.hops] == ["alarm:stats:L1", "in:a:L1", "src:L1"]            # 둘째 가지의 같은 입력은 다시 안 읽는다
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a", "b")},
+                           clock=lambda: T0))["walk"]
+    assert walk.notes[0].endswith("(선언 없음): 둘 다 걷는다")
+    one = _Reads(table)
+    walk = (await run_walk(_state(), runner=one, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("b",)}, clock=lambda: T0))["walk"]
+    assert walk.notes == [] and [p for a, p in one.params if a == "code.resources"] == [{"name": "W0"}, {"name": "W1"}]
+    assert (walk.hops[0].service, walk.hops[1].service, walk.hops[1].basis) == ("a", "b", "W0가 읽는 자원 (t-1-1.e1)")

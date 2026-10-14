@@ -200,7 +200,7 @@ class StubDeployedCode(DeployedCodePort):
     async def uses(self, name: str) -> ProbeResult:
         return self._seeded(self._uses, name, f"stub-code:uses {name}", "쓰는 곳")
 
-    async def resources(self, name: str) -> ProbeResult:
+    async def resources(self, name: str, service: str = "") -> ProbeResult:
         return self._seeded(self._resources, name, f"stub-code:resources {name}", "읽는 자원")
 
     async def services(self) -> ProbeResult:

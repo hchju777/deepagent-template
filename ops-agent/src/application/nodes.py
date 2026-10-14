@@ -90,6 +90,8 @@ class EngineDeps:
     # R3-3 ② — 클래스 이름 → 서비스들(홉 표의 `[서비스]`; 같은 이름이 두 레포면 둘 다 — 가르기는 ②-b). 걷기의 30초 상한에 쓰는 시계(규율 2) —
     # None이면 시간 상한이 없다(깊이·읽기 상한은 그대로).
     class_services: dict = field(default_factory=dict)
+    # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
+    declared_by: dict = field(default_factory=dict)
     clock: Callable[[], datetime] | None = None
 
 
@@ -457,7 +459,8 @@ def make_nodes(deps: EngineDeps) -> dict:
                 or not deps.check_discovery):
             return {}
         try:
-            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services, clock=deps.clock)
+            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
+                                  declared_by=deps.declared_by, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 

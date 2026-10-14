@@ -119,6 +119,14 @@ class DeployedCode(DeployedCodePort):
             return frozenset()
         return frozenset(s.name for s in self._index.symbols if s.kind == "class")
 
+    def _service_hint(self, found: list[int]) -> list[str]:
+        """같은 이름이 **두 서비스**에 있으면 `파일:qualname`으로는 못 가른다(측정 #9 P1 4 — 파일도 같았다). `service=`로 고르라고 말한다."""
+        services = sorted({svc for sid in found
+                           if (svc := flowgraph.owner(self._index.symbols[sid].file, self._index.symbols[sid].repo, self._topology)[0])})
+        if len(services) < 2:
+            return []
+        return [f"  같은 이름이 서비스 {len(services)}곳에 있다 — service= 인자로 고른다: {', '.join(services)}"]
+
     def class_services(self) -> dict[str, tuple[str, ...]]:
         """클래스 이름 → 그 클래스가 있는 파일의 서비스들(`flow.owner`). 같은 이름이 두 레포에 있으면 둘 다(측정 #9 P1 4 — 가르기는 R3-3 ②-b).
         홉 표의 `[서비스]`와 verify의 클래스→서비스 번역(⑤)이 쓴다."""
@@ -153,20 +161,28 @@ class DeployedCode(DeployedCodePort):
         lines = qy.callers_lines(self._index, self._qgraph, found[0], where=self._where)
         return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
 
-    async def resources(self, name: str) -> ProbeResult:
+    async def resources(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy
 
-        source = f"code.resources {name}"
+        source = f"code.resources {name}" + (f" service={service}" if service else "")
         if self._index is None:
             return ProbeResult.failed("심볼 인덱스가 없다 — `python -m src code graph`로 만든다",
                                       source=source, clock=self._clock)
-        found = qy.find(self._index, name)
+        text = name
+        if service:
+            known = self._topology.services.get(service)
+            if known is None:
+                return ProbeResult.failed(f"없는 서비스 — {service}. 아는 것: {', '.join(sorted(self._topology.services)) or '없음'}",
+                                          source=source, clock=self._clock)
+            text = f"{known.repo}:{name}"
+        found = qy.find(self._index, text)
         if not found:
             return ProbeResult.failed(f"{name}: 인덱스에 없다 — 케이스 블록의 쓴 쪽 이름 그대로나 `파일:qualname`으로",
                                       source=source, clock=self._clock)
         if len(found) > 1:
-            return ProbeResult.failed("\n".join(qy.ambiguous_lines(self._index, name, found)),
-                                      source=source, clock=self._clock)
+            lines = qy.ambiguous_lines(self._index, name, found)
+            lines += self._service_hint(found)
+            return ProbeResult.failed("\n".join(lines), source=source, clock=self._clock)
         return ProbeResult.succeeded("\n".join(qy.resources_lines(self._index, found[0], where=self._where)),
                                      source=source, clock=self._clock)
 

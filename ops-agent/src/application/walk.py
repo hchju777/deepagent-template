@@ -73,12 +73,15 @@ def status_of(raw: Any) -> tuple[str, bool]:
 
 async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozenset[str],
                    class_services: dict[str, tuple[str, ...]] | None = None,
+                   declared_by: dict[str, tuple[str, ...]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
     services = class_services or {}
+    owners = declared_by or {}
+    notes: list[str] = []
     tasks: list[PlanTask] = []
     evidence: list[EvidenceRef] = []
     started = clock() if clock is not None else None
@@ -108,25 +111,44 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     def who(name: str) -> str:
         return ", ".join(services.get(name, ()))
 
+    def branches(writer: str, template: str) -> tuple[list[str], str]:
+        """이 클래스를 걸을 서비스들과 표에 적을 이름 — 한 곳이면 `service` 인자 없이(리드의 중복이 같은 질의여야 잡힌다). 두 레포면 **그 키를
+        선언한 서비스**로 가른다(측정 #9 P1 4: `파일:qualname`도 같아 그걸로는 못 가른다; 사람 결정: 후보끼리 가를 때만, 표에 근거). 둘 다
+        선언이거나 선언이 없으면 둘 다 걷는다 — 판정의 component 후보도 둘 다."""
+        found = list(services.get(writer, ()))
+        if len(found) <= 1:
+            return [""], who(writer)
+        picked = [s for s in found if s in owners.get(template, ())]
+        if len(picked) == 1:
+            notes.append(f"{writer}는 {len(found)}곳({', '.join(found)})에 있다 — {template}을 선언한 {picked[0]}로 골랐다")
+            return picked, picked[0]
+        notes.append(f"{writer}는 {len(found)}곳({', '.join(found)})에 있다 — {template}을 선언한 쪽으로 못 가른다"
+                     f"({'둘 다 선언' if picked else '선언 없음'}): 둘 다 걷는다")
+        return found, ", ".join(found)
+
     first = next((t for t in state.plan_tasks if t.id == "t-1" and t.result_evidence_ids), None)
-    hops = [Hop(key=target.key, depth=0, writer=target.writer, service=who(target.writer),
+    first_services, first_shown = branches(target.writer, target.declared)
+    hops = [Hop(key=target.key, depth=0, writer=target.writer, service=first_shown,
                 status=f"빈 배열 ({', '.join(target.empty)})" if target.empty else "정상", bad=bool(target.empty),
                 evidence_id=first.result_evidence_ids[0] if first else "",
                 basis=f"대상 키 — 값의 {target.writer_at}이 {target.writer}")]
     seen = {target.key, target.declared}
-    frontier: list[tuple[str, int, str]] = [(target.writer, 0, hops[0].evidence_id)]     # (쓴 클래스, 깊이, 여기로 오게 한 증거)
+    # (쓴 클래스, 서비스 — 두 레포일 때만, 깊이, 여기로 오게 한 증거)
+    frontier: list[tuple[str, str, int, str]] = [(target.writer, s, 0, hops[0].evidence_id) for s in first_services]
     unknown: list[tuple[str, str, str]] = []                                                # 쓴 쪽을 모르는 나쁜 입력 — (실재 키, 선언 이름, 증거)
     stopped, nxt, nxt_ev, last = "", None, "", target.writer
     while frontier and not stopped:
-        writer, depth, came_from = frontier.pop(0)
+        writer, service, depth, came_from = frontier.pop(0)
         last = writer
+        here = {"name": writer, **({"service": service} if service else {})}
+        tag = f"[{service}]" if service else ""
         if depth >= MAX_DEPTH:
-            stopped, nxt, nxt_ev = f"깊이 {MAX_DEPTH} 상한 — {writer}부터는 리드가", ("code.resources", {"name": writer}), came_from
+            stopped, nxt, nxt_ev = f"깊이 {MAX_DEPTH} 상한 — {writer}부터는 리드가", ("code.resources", here), came_from
             break
         if (why := over(writer, "자원")):
-            stopped, nxt, nxt_ev = why, ("code.resources", {"name": writer}), came_from
+            stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
             break
-        _, res = await run(f"걷기 — {writer}가 읽고 쓰는 자원", "code.resources", {"name": writer})
+        _, res = await run(f"걷기 — {writer}{tag}가 읽고 쓰는 자원", "code.resources", here)
         if res.status != "ok" or not res.evidence:
             stopped, nxt, nxt_ev = f"{writer}의 자원을 못 읽었다 — {res.error or '증거 없음'}", None, came_from
             break
@@ -139,7 +161,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     reads = [("redis.get", {"key": filled}, filled)]
                 else:
                     if (why := over(writer, name)):
-                        stopped, nxt, nxt_ev = why, ("code.resources", {"name": writer}), came_from
+                        stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
                         break
                     _, scanned = await run(f"걷기 — {writer}의 입력 {name}의 실재 키", "redis.scan", {"pattern": f"{key_head(name)}*"})
                     names = runner.raw(scanned.evidence[0].id) if scanned.status == "ok" and scanned.evidence else None
@@ -152,7 +174,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 if label in seen:
                     continue
                 if (why := over(writer, label)):
-                    stopped, nxt, nxt_ev = why, ("code.resources", {"name": writer}), came_from
+                    stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
                     break
                 seen.add(label)
                 _, got = await run(f"걷기 — {writer}의 입력 {label}", action, params)
@@ -166,11 +188,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 if w and w == writer:
                     # 값이 이 클래스를 댄다 — 이 클래스의 **출력**이지 입력이 아니다(측정 #9 P0 3). 표에는 남긴다(리드가 또 읽지 않게).
                     status, bad = f"출력 ({writer} 자신의 것 — 값의 {at})", False
-                hops.append(Hop(key=label, kind=kind, depth=depth + 1, writer=w, service=who(w), status=status, bad=bad, evidence_id=ev,
-                                basis=f"{writer}가 읽는 자원 ({res_id})"))
+                # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다.
+                next_services, shown = branches(w, name) if (bad and w) else ([], who(w))
+                hops.append(Hop(key=label, kind=kind, depth=depth + 1, writer=w, service=shown, status=status, bad=bad, evidence_id=ev,
+                                basis=f"{writer}{tag}가 읽는 자원 ({res_id})"))
                 if bad:
                     if w:
-                        frontier.append((w, depth + 1, ev))
+                        frontier += [(w, s, depth + 1, ev) for s in next_services]
                     else:
                         unknown.append((label, name, ev))
             if stopped:
@@ -183,4 +207,4 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             stopped, nxt, nxt_ev = f"입력이 다 정상 — {last}", None, ""
     return {"plan_tasks": tasks, "evidence": evidence,
             "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), stopped=stopped,
-                         next_action=nxt[0] if nxt else "", next_params=nxt[1] if nxt else {}, next_evidence=nxt_ev)}
+                         next_action=nxt[0] if nxt else "", next_params=nxt[1] if nxt else {}, next_evidence=nxt_ev, notes=notes)}

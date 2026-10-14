@@ -770,3 +770,38 @@ async def test_class_services는_클래스_이름을_그_파일의_서비스에_
     assert flow_code.class_services() == {}
     flow_code.attach_index(await ix.build_index({"dt-core": Src()}, commits={"dt-core": "c0ffee"}))
     assert flow_code.class_services() == {"SummaryRefresh": ("sink",), "Other": ("sink",)}        # flow_code 토폴로지는 dt-core에 sink 하나
+
+
+# ── R3-3 ②-b — code.resources service= ──
+
+async def test_code_resources는_service로_레포를_좁히고_같은_이름이_두_서비스에_있으면_그렇게_안내한다(clock):
+    """측정 #9 P1 4: 같은 클래스 이름이 두 레포에 있고 `파일:qualname`도 같아 그 안내로는 못 골랐다. `service=`로 레포를 좁힌다 — 걷기가
+    선언 서비스로 가른 뒤 그 인자로 묻고, 사람은 CLI `--service`로."""
+    from src.domain.actions import action_problem
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    class Src:
+        def __init__(self, body):
+            self.FILES = {"pipe/__init__.py": "", "pipe/job.py": body}
+
+        async def files(self):
+            return sorted(self.FILES)
+
+        async def read(self, path):
+            return self.FILES.get(path)
+
+    body = "class Refresh:\n    def _run(self, redis):\n        return redis.get('alarm:source')\n"
+    topology = Topology(services={"collector": Service(repo="dt-col", role="모은다"), "processor": Service(repo="dt-proc", role="가공한다")},
+                        config_paths=LAYERS)
+    code = DeployedCode(object(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    code.attach_index(await ix.build_index({"dt-col": Src(body), "dt-proc": Src(body)}, commits={"dt-col": "c1", "dt-proc": "c2"}))
+    many = await code.resources("Refresh")
+    assert many.status == "error" and "여럿" in many.error and "service= 인자로 고른다: collector, processor" in many.error
+    one = await code.resources("Refresh", service="processor")
+    assert one.status == "ok" and one.data.splitlines()[0].startswith("pipe.job.Refresh (pipe/job.py:L1) [dt-proc · processor]")
+    assert "service=processor" in one.source
+    bad = await code.resources("Refresh", service="nope")
+    assert bad.status == "error" and "없는 서비스" in bad.error
+    assert action_problem("code.resources", {"name": "Refresh", "service": "processor"}) is None          # 등재 목록의 선택 인자

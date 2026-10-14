@@ -1040,7 +1040,8 @@ def cmd_case_investigate(args, env) -> int:
                               intake=intake_spec(case, site),
                               code_index=code.has_index() if code else False,
                               classes=code.class_names() if code else frozenset(),
-                              class_services=code.class_services() if code else {}, clock=clock)
+                              class_services=code.class_services() if code else {},
+                              declared_by=flow.declaring_map(flow_graph), clock=clock)
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()
@@ -1607,7 +1608,7 @@ def _query_setup(args, env):
         svc = owner(s.file, s.repo, topology)[0] if topology is not None else None
         return f"[{s.repo}{' · ' + svc if svc else ''}]"
 
-    return index, qy.Graph(index), where
+    return index, qy.Graph(index), where, topology
 
 
 def _pick(index, text: str) -> int | None:
@@ -1633,7 +1634,7 @@ def cmd_code_callers(args, env) -> int:
     got = _query_setup(args, env)
     if got is None:
         return 1
-    index, graph, where = got
+    index, graph, where, _ = got
     sid = _pick(index, args.name)
     if sid is None:
         return 1
@@ -1649,7 +1650,7 @@ def cmd_code_path(args, env) -> int:
     got = _query_setup(args, env)
     if got is None:
         return 1
-    index, graph, _ = got
+    index, graph, _, _ = got
     a, b = _pick(index, args.src), _pick(index, args.dst)
     if a is None or b is None:
         return 1
@@ -1672,17 +1673,30 @@ def cmd_code_resources(args, env) -> int:
     """이 클래스(함수)가 읽고 쓰는 자원(R3-1c ①-a) — 입구가 키 값에서 고른 쓴 쪽의 입력. 엔진의 `code.resources`와 같은 조립."""
     from src.knowledge import query as qy
 
+    from src.knowledge.flow import owner
+
     got = _query_setup(args, env)
     if got is None:
         return 1
-    index, graph, where = got
-    found = qy.find(index, args.name)
+    index, graph, where, topology = got
+    text = args.name
+    if args.service:
+        known = topology.services.get(args.service) if topology is not None else None
+        if known is None:
+            print(f"  없는 서비스 — {args.service}. 아는 것: {', '.join(sorted(topology.services)) if topology is not None else '없음'}")
+            return 1
+        text = f"{known.repo}:{args.name}"
+    found = qy.find(index, text)
     if not found:
         print(f"  {args.name}: 인덱스에 없다 — 케이스 블록의 쓴 쪽 이름 그대로나 `파일:qualname`으로")
         return 1
     if len(found) > 1:
         for line in qy.ambiguous_lines(index, args.name, found):
             print("  " + line)
+        services = sorted({svc for sid in found if topology is not None
+                           and (svc := owner(index.symbols[sid].file, index.symbols[sid].repo, topology)[0])})
+        if len(services) > 1:
+            print(f"  같은 이름이 서비스 {len(services)}곳에 있다 — --service로 고른다: {', '.join(services)}")
         return 1
     for line in qy.resources_lines(index, found[0], where=where):
         print("  " + line)
@@ -1696,7 +1710,7 @@ def cmd_code_uses(args, env) -> int:
     got = _query_setup(args, env)
     if got is None:
         return 1
-    index, graph, where = got
+    index, graph, where, _ = got
     found = qy.uses(index, args.name)
     if not found:
         print(f"  {args.name}: 이 이름의 자원을 쓰거나 읽는 함수가 인덱스에 없다 — `code flow`의 허브 목록에서 이름을 본다")
@@ -2609,6 +2623,7 @@ def build_parser() -> argparse.ArgumentParser:
     uses_cmd.set_defaults(run=cmd_code_uses)
     resources_cmd = code_sub.add_parser("resources", help="이 클래스(함수)가 읽고 쓰는 자원 (심볼 인덱스)")
     resources_cmd.add_argument("name", help="클래스·함수 이름 (`Class`, `Class.method`, `파일:qualname`)")
+    resources_cmd.add_argument("--service", default="", help="같은 이름이 두 레포에 있으면 이 서비스의 레포로 좁힌다")
     _add_site_options(resources_cmd, sub=True)
     resources_cmd.set_defaults(run=cmd_code_resources)
 

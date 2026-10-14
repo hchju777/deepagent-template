@@ -949,3 +949,14 @@ def test_config_조회의_get은_자원_읽기가_아니다():
     assert flow.direction("redis.get(key)") == "reads"
     assert flow.direction('cfg.get("a"); redis.get(key)') == "reads"
 
+
+def test_declaring_services는_그_자원을_config로_선언한_서비스들이다():
+    """R3-3 ②-b — 같은 클래스 이름이 두 레포에 있으면 걷기는 대상 키를 선언한 서비스로 가른다. `declares` 엣지의 출발 서비스만(읽기·레포 엣지는 아니다)."""
+    g = {"nodes": [{"id": "service_a", "label": "a", "type": "service"}, {"id": "service_b", "label": "b", "type": "service"},
+                   {"id": "rediskey_k", "label": "k:{line}", "type": "rediskey"}, {"id": "rediskey_j", "label": "j", "type": "rediskey"},
+                   {"id": "repo_r", "label": "r", "type": "repo"}],
+         "links": [{"source": "service_a", "target": "rediskey_k", "relation": "declares"},
+                   {"source": "service_b", "target": "rediskey_k", "relation": "reads"},
+                   {"source": "repo_r", "target": "rediskey_j", "relation": "declares"}]}
+    assert flow.declaring_services(g, "k:{line}") == ("a",) and flow.declaring_services(g, "j") == () and flow.declaring_services(None, "k") == ()
+    assert flow.declaring_map(g) == {"j": (), "k:{line}": ("a",)} and flow.declaring_map(None) == {}

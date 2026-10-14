@@ -1103,6 +1103,26 @@ def serving_services(graph: dict, path: str) -> list[str]:
                    and by_id.get(e["source"], {}).get("type") == "service"})
 
 
+def declaring_services(graph: dict | None, label: str) -> tuple[str, ...]:
+    """이 자원(라벨)을 config로 **선언한** 서비스들 — `declares` 엣지의 출발 서비스. 같은 클래스 이름이 두 레포에 있을 때 걷기가 대상 키를 선언한
+    쪽을 쓴 쪽으로 고른다(R3-3 ②-b, 사람 결정 10-14: 후보끼리 가를 때만)."""
+    if not graph:
+        return ()
+    by_id = {n["id"]: n for n in graph.get("nodes", [])}
+    targets = {n["id"] for n in graph.get("nodes", []) if n.get("label") == label}
+    return tuple(sorted({by_id[e["source"]]["label"] for e in graph.get("links", [])
+                         if e.get("relation") == "declares" and e.get("target") in targets
+                         and by_id.get(e.get("source"), {}).get("type") == "service"}))
+
+
+def declaring_map(graph: dict | None) -> dict[str, tuple[str, ...]]:
+    """키 템플릿 → 선언한 서비스들(그래프의 rediskey 전부). 엔진에 넘기는 닫힌 표 — 엔진은 그래프를 들지 않는다."""
+    if not graph:
+        return {}
+    labels = {n["label"] for n in graph.get("nodes", []) if n.get("type") == "rediskey" and n.get("label")}
+    return {label: declaring_services(graph, label) for label in sorted(labels)}
+
+
 def known_names(graph: dict | None) -> str:
     """그래프의 이름 전부, 한 줄에 하나. 엔진의 "찾지 않고 이름을 댔다" 검사가 증거와 합쳐
     본다 — 그래프에 있는 이름은 지어낸 것이 아니다. None이면 빈 문자열이라 검사가 예전과 같다."""

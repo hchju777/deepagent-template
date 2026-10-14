@@ -2460,8 +2460,7 @@ CASES += [
  ("쓴 쪽을 알아도 uses로 간다", IM, "    if target.writer:\n        return \"code.resources\", {\"name\": target.writer}", "    if False:\n        return \"code.resources\", {\"name\": target.writer}", [HOP2_T, WRITER_B_T]),
  ("resources가 메서드 자원을 안 모은다", QYP, "    members = [m for m in index.symbols if m.class_id == sid] if s.kind == \"class\" else [s]", "    members = [s]", [RESOURCES_T]),
  ("resources가 읽기와 쓰기를 안 가른다", QYP, "        rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)", "        rows = sorted((k, v) for k, v in seen.items())", [RESOURCES_T]),
- ("code.resources가 여럿이어도 하나를 고른다", DCP, "        if len(found) > 1:\n            return ProbeResult.failed(\"\\n\".join(qy.ambiguous_lines(self._index, name, found)),\n                                      source=source, clock=self._clock)\n        return ProbeResult.succeeded(\"\\n\".join(qy.resources_lines(",
-  "        if False:\n            return ProbeResult.failed(\"\\n\".join(qy.ambiguous_lines(self._index, name, found)),\n                                      source=source, clock=self._clock)\n        return ProbeResult.succeeded(\"\\n\".join(qy.resources_lines(", [RESOURCES_DC_T]),
+ ("code.resources가 여럿이어도 하나를 고른다", DCP, "        if len(found) > 1:\n            lines = qy.ambiguous_lines(self._index, name, found)", "        if False:\n            lines = qy.ambiguous_lines(self._index, name, found)", [RESOURCES_DC_T]),
  ("class_names가 함수까지 센다", DCP, "        return frozenset(s.name for s in self._index.symbols if s.kind == \"class\")", "        return frozenset(s.name for s in self._index.symbols)", [RESOURCES_DC_T]),
  ("인덱스 없이 code.resources를 목록에 둔다", B, "        out |= {\"code.callers\", \"code.uses\", \"code.resources\"}", "        out |= {\"code.callers\", \"code.uses\"}", [WRITER_B_T]),
  ("등재 목록이 포트에 없는 메서드를 가리킨다", ROOT / "src/domain/actions.py", "    \"code.resources\":      (\"code\",  \"resources\",", "    \"code.resources\":      (\"code\",  \"inputs\",",
@@ -2533,7 +2532,7 @@ WHOP_T = "tests/application/test_nodes.py::test_걷기가_있으면_받을_때�
 WBRIEF_T = "tests/application/test_briefing.py::test_걷기가_있으면_케이스_블록에_홉_표가_실리고_다음_홉은_멈춘_자리이며_걸은_읽기는_접힌다"
 CASES += [
  ("출력을 입력으로 센다", WK, "                if w and w == writer:\n", "                if False:\n", [WALK_T]),
- ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                    if w:\n                        frontier.append((w, depth + 1, ev))", "                    if False:\n                        frontier.append((w, depth + 1, ev))", [WALK_T]),
+ ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                    if w:\n                        frontier += [(w, s, depth + 1, ev) for s in next_services]", "                    if False:\n                        frontier += [(w, s, depth + 1, ev) for s in next_services]", [WALK_T]),
  ("정상인 입력으로도 간다", WK, "                if bad:\n                    if w:", "                if True:\n                    if w:", [WALK_T]),
  ("대상 키를 또 읽는다", WK, "    seen = {target.key, target.declared}", "    seen = set()", [WALK_T]),
  ("쓰기 구간도 걷는다", WK, "    m = _WRITES_AT.search(text)\n    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [WALK_T]),
@@ -2545,7 +2544,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if empties:\n            return f\"빈 배열 ({', '.join(empties)})\", True", "        if False:\n            return f\"빈 배열 ({', '.join(empties)})\", True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  declared_by=deps.declared_by, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.id.startswith(WALK_PREFIX) for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "            hop=next_hop(state.target, code_index=deps.code_index, walk=state.walk),", "            hop=next_hop(state.target, code_index=deps.code_index),", [WHOP_T]),
@@ -2559,7 +2558,24 @@ CASES += [
  ("source-missing에 원천 키가 있다", ROOT / "tools/local_case.py", "            **({} if variant == \"source-missing\" else", "            **({} if False else", ["tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"]),
 ]
 
-assert len(CASES) >= 694, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-3 ②-b — 두 레포의 같은 클래스 이름 ──
+TIE_T = "tests/application/test_walk.py::test_같은_클래스_이름이_두_레포면_그_키를_선언한_서비스로_가르고_못_가르면_둘_다_걷는다"
+RES_SVC_T = "tests/infrastructure/test_deployed_code.py::test_code_resources는_service로_레포를_좁히고_같은_이름이_두_서비스에_있으면_그렇게_안내한다"
+DECL_T = "tests/knowledge/test_flow.py::test_declaring_services는_그_자원을_config로_선언한_서비스들이다"
+CASES += [
+ ("선언한 서비스로 안 가른다", WK, "        if len(picked) == 1:\n            notes.append(", "        if False:\n            notes.append(", [TIE_T]),
+ ("못 가르면 한 쪽만 걷는다", WK, "        return found, \", \".join(found)", "        return found[:1], \", \".join(found)", [TIE_T]),
+ ("한 곳뿐인데도 service 인자를 단다", WK, "        if len(found) <= 1:\n            return [\"\"], who(writer)", "        if len(found) <= 1:\n            return found or [\"\"], who(writer)", [TIE_T]),
+ ("깊은 홉을 대상 키의 선언으로 가른다", WK, "                next_services, shown = branches(w, name) if (bad and w) else ([], who(w))", "                next_services, shown = branches(w, target.declared) if (bad and w) else ([], who(w))", [TIE_T]),
+ ("service로 레포를 안 좁힌다", DCP, "            text = f\"{known.repo}:{name}\"\n        found = qy.find(self._index, text)", "            text = name\n        found = qy.find(self._index, text)", [RES_SVC_T]),
+ ("두 서비스 안내를 안 한다", DCP, "            lines += self._service_hint(found)", "            pass", [RES_SVC_T]),
+ ("등재 목록에 service 인자가 없다", ROOT / "src/domain/actions.py", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"service\",)),", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               ()),", [RES_SVC_T]),
+ ("declares가 아닌 엣지도 선언으로 센다", ROOT / "src/knowledge/flow.py", "                         if e.get(\"relation\") == \"declares\" and e.get(\"target\") in targets", "                         if e.get(\"target\") in targets", [DECL_T]),
+ ("걷기 노드가 선언 서비스를 안 넘긴다", ND, "                                  declared_by=deps.declared_by, clock=deps.clock)", "                                  clock=deps.clock)", [WNODE_T]),
+ ("CLI가 없는 서비스를 안 거른다", MN, "        known = topology.services.get(args.service) if topology is not None else None\n        if known is None:", "        known = topology.services.get(args.service) if topology is not None else None\n        if False:", ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
+]
+
+assert len(CASES) >= 704, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

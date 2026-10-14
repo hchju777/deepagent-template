@@ -821,10 +821,12 @@ async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_
 
     patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
     deps = dataclasses.replace(deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}),
-                                        code_index=True, class_services={"Writer": ("sink",)}, clock=lambda: T0), frame=frame)
+                                        code_index=True, class_services={"Writer": ("api", "sink")}, declared_by={"alarm:stats:L1": ("sink",)},
+                                        clock=lambda: T0), frame=frame)
     final = CaseState.model_validate(await build_engine(deps).ainvoke(CaseState(case=patrol)))
     assert seen[0] is not None and [h.key for h in seen[0].hops] == ["alarm:stats:L1", "src:L1"]          # frame이 볼 때 이미 걸었다
     assert final.walk.stopped == "입력이 다 정상 — Writer" and final.walk.next_hop() is None and final.walk.hops[0].service == "sink"
+    assert final.walk.notes == ["Writer는 2곳(api, sink)에 있다 — alarm:stats:L1을 선언한 sink로 골랐다"]      # 엔진이 선언 서비스를 넘긴다
     assert [t.id for t in final.plan_tasks] == ["t-0", "t-1", "t-1-1", "t-1-2"] and runner.ran == ["t-0", "t-0-1", "t-1", "t-1-1", "t-1-2"]
     assert final.walk.hops[0].status == "빈 배열 (data)"
     runner.ran.clear()

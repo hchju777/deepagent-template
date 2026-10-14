@@ -169,6 +169,8 @@ class Walk(StrictModel):
     next_params: dict = {}
     # 다음 홉의 입력이 될 증거 — 멈추게 한 그 홉의 읽기.
     next_evidence: str = ""
+    # 표 아래 주 — 같은 클래스 이름이 두 레포일 때 어느 서비스로 갈랐나(근거), 못 갈랐으면 둘 다 걸었다는 사실(R3-3 ②-b).
+    notes: list[str] = []
 
     def next_hop(self) -> tuple[str, dict] | None:
         return (self.next_action, dict(self.next_params)) if self.next_action else None
@@ -179,8 +181,8 @@ class Walk(StrictModel):
     def lines(self) -> list[str]:
         if not self.hops:
             return []
-        return [f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}",
-                "  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops]
+        return ([f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}",
+                 "  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in self.notes])
 
 
 class Case(StrictModel):
