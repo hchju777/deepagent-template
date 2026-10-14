@@ -933,6 +933,24 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   같은 이름으로 있다. 보드: CLI `code resources PaletteLoader`가 `같은 이름이 레포 2곳에 있다 — --repo(또는 그 레포의 서비스로 --service)로 고른다: dt-api(api), dt-core(batch, processor, sink)`를 내고 `--repo dt-core`로 읽기 목록이 나오며 `code uses alarm:palette --service batch`가 레포 안으로 좁힌다. r0 홉 표 `alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 빈 배열 (colors)` + 주 `PaletteLoader는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — alarm:palette을 선언한 dt-core(서비스 3개 공유)로 골랐다`, 걷기가 `palette:source`까지 이어 `입력이 다 정상 — PaletteLoader`에서 멈춘다(다음 홉 없음 → 예시 네 칸 — ②의 몫). source-filtered는 팔레트 행이 `정상`으로 끼고 전처럼 리터럴 줄과 `code.read line=`을 가리킨다. r0 6.4K.
 - 테스트 먼저(RED → GREEN). 스윕 +26(748).
 
+#### R3-4 ② (10-14) ✅ — 멈춘 자리 = 가장 깊은 나쁜 홉, 다음 칸은 늘, pinned는 사슬만, 걷기 id 한 단계
+
+- 측정 #10 P0 3: 멈춘 이유가 "마지막 실패"(다른 가지의 일)였고, 입력이 다 정상에서 멈추면 다음 홉이 없어 frame 예시가 네 칸으로 돌아갔다. P0 4:
+  나쁜 홉 전부를 고정하니 r1이 22~28K. P1 5: `t-1-N` 때문에 리드가 `t-1`을 다시 냈다.
+- 멈춘 자리는 **가장 깊은 나쁜 홉**(`Walk.stop_at`; 같은 깊이면 먼저 읽은 것)이고 사유와 다음 칸은 그 홉의 일로 만든다 — 쓴 쪽 모름 → `code.uses
+  <선언 이름>`, 자원 못 읽음 → `code.resources`(같은 인자), 걸었는데 입력이 다 정상 → **읽는 메서드 전체**(`code.read line=`, 자원 줄의 메서드 자리),
+  입력이 0 → `입력을 모른다 — W(인덱스 자원 0 — 메시지 입력일 수 있다)`와 클래스 본문(머리 줄). 리터럴 줄이 있으면 그 함수가 첫 칸, 멈춘 자리의
+  질의가 둘째 칸 — `Walk.rungs`(차례)로 두고 사다리(`_ladder_step`)가 **아직 안 낸 첫 칸**을 밟는다(낸 칸은 실패했어도 또 안 낸다; 다 밟았으면
+  마지막 칸의 결과로 옛 사다리). 받을 때의 pinned도 그 칸(`nodes._hop` — 돈 태스크만 "낸 것"으로 센다: 되묻기의 base에는 첫 답의 태스크가 대기로
+  실려 있다). 칸을 못 만들면(읽는 쪽 서비스 모름) 입구 홉으로 돌아가지 않는다. 이은 컴포넌트 함수 칸은 ③의 조회가 생긴 뒤 그 뒤 칸으로.
+- pinned 본문은 **멈춘 홉까지의 사슬**(`Hop.parent`로 되짚는 `Walk.chain_ids`)만 — 다른 가지의 나쁜 홉은 표의 상태로 족하고 본문은 접는다.
+- 걷기 읽기의 id는 리드와 같은 한 단계(입구 뒤 다음 빈 번호부터 `t-2`…)이고 `PlanTask.walked`(코드만 단다 — `_sanitize_task`가 지운다)로 식별한다.
+  `WALK_PREFIX`는 없앴다. `next_task_number`가 그 뒤부터 보여 준다(보드: 걷기 5건 뒤 예시 `t-7`).
+- 보드: palette-empty r0 `멈춤: 입력이 다 정상 — PaletteLoader`, `다음 홉: code.read line=9 path='common/palette.py' service='batch'`, 예시 한 칸 `t-7`.
+  source-filtered r0 첫 칸 `code.read line=12`(리터럴 함수, `t-6`), 리드가 그대로 내자 r1 예시 첫 줄은 둘째 칸 `code.uses`(멈춘 자리 — 쓴 쪽 모름),
+  태스크 블록 `- 걷기 읽기 4건 (t-2…t-5)`, 접힌 증거 3(사슬 밖의 자원·팔레트·grep), r1 14.0K.
+- 테스트 먼저(RED → GREEN). 스윕 +20(768).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

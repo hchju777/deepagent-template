@@ -31,8 +31,6 @@ from src.domain.case import EvidenceRef, PlanTask, TargetPick
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
 MAX_CANDIDATES = 50
-# 걷기 노드(R3-3 ②, `walk.py`)의 읽기 번호 — `t-1-1`, `t-1-2`… 브리핑이 이 접두로 접고, 중복 거부가 "입구가 이미 읽었다"로 센다.
-WALK_PREFIX = "t-1-"
 # 증거 `source`는 우리가 만든 `describe` 문자열(`redis.get key='…' path='…'`)이라 그 모양으로 키를 되읽는다. scan은 키 하나를 읽은 것이
 # 아니라 세지 않는다.
 _KEY_READ = re.compile(r"^redis\.get key='((?:[^'\\]|\\.)*)'")
@@ -213,7 +211,7 @@ def intake_lines(state: CaseState, *, code_index: bool) -> str:
         done.append(f"접수 읽기({by_id['t-0'].result_evidence_ids[0]})")
     if "t-1" in by_id and target.key:
         done.append(f"대상 키 {target.key}({by_id['t-1'].result_evidence_ids[0]})")
-    walked = [t for t in state.plan_tasks if t.id.startswith(WALK_PREFIX) and t.status == "ok"]
+    walked = [t for t in state.plan_tasks if t.walked and t.status == "ok"]
     if walked:
         done.append(f"걷기 읽기 {len(walked)}건(아래 홉 표)")
     lines = []

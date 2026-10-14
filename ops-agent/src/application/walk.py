@@ -8,6 +8,9 @@
 나쁜 입력의 쓴 쪽을 알면 한 홉 더, 모르면 거기서 멈춘다(다음 홉은 그 키의 `code.uses`). 입력이 다 정상이면 멈춘다(그 자리의 다음 홉은 ④).
 같은 클래스 이름이 두 레포에 있으면 **레포 단위**로 가른다(R3-4 ①, 측정 #10 P0 2) — 한 레포를 여러 서비스가 `path` 없이 공유하면 표에
 `<레포>(서비스 N개 공유)`로 적고 그 레포를 `code.resources repo=`로 넘긴다. 한 가지의 `code.resources` 실패는 그 행에만 적고 다른 가지는 계속 걷는다.
+멈춘 자리는 **가장 깊은 나쁜 홉**이고(R3-4 ②, 측정 #10 P0 3: "마지막 실패"는 다른 가지의 일이었다) 다음 칸은 늘 낸다 — 리터럴 줄의 함수 → 그 자리의
+질의(쓴 쪽 모름 `code.uses`, 못 걸음 `code.resources`, 걸었는데 입력이 다 정상이면 읽는 메서드 전체, 입력이 0이면 "입력을 모른다"와 클래스 본문).
+pinned 본문은 그 홉까지의 사슬만(P0 4). 읽기의 id는 리드와 같은 한 단계(`t-2`…, `walked` 플래그 — P1 5).
 상한 깊이 4·읽기 15·30초(주입 시계) — 상한에서 멈추면 다음 홉은 그 자리의 `code.resources`(리드가 이어 걷는다; 이미 읽은 것이면 ③의 입력 칸
 사다리가 이어 받는다). 걸은 읽기는 State에 증거로 남고(판정이 인용한다) 브리핑이 접는다. 던지지 않는다 — 호출부(노드)가 한 번 더 감싼다.
 """
@@ -16,10 +19,10 @@ from datetime import datetime
 from typing import Any, Callable, NamedTuple
 
 from src.application.facts import key_head
-from src.application.intake_map import WALK_PREFIX, _finish, _task, _unwrap, writer_of
+from src.application.intake_map import _finish, _task, _unwrap, writer_of
 from src.application.runner_probe import _same_valued, profile
 from src.application.state import CaseState
-from src.domain.case import EvidenceRef, Hop, PlanTask, Walk
+from src.domain.case import EvidenceRef, Hop, PlanTask, Rung, Walk
 from src.domain.investigation import TaskRunnerPort
 
 MAX_DEPTH = 4
@@ -72,6 +75,27 @@ def inputs_in(text: str) -> list[tuple[str, str]]:
     return _RESOURCE.findall(text[:m.start()] if m else text)
 
 
+_LOC = re.compile(r"\(([^()\s]+):L(\d+)\)")
+
+
+def class_at(text: str) -> tuple[str, int] | None:
+    """`code.resources` 본문 머리줄의 클래스 자리 `(경로, 줄)` — 입력이 0인 클래스의 다음 칸은 그 본문이다(`code.read line=`이 머리 줄을 품은 심볼을 준다)."""
+    head = re.split(r"\\n|\n", text, maxsplit=1)[0]
+    m = _LOC.search(head)
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def reader_at(text: str) -> tuple[str, int] | None:
+    """첫 읽기 자원 줄의 메서드 자리 `(경로, 줄)` — 입력이 다 정상인 클래스의 다음 칸은 **읽는 메서드 전체**다(사람 결정: `_run` 전체)."""
+    m = _WRITES_AT.search(text)
+    head = text[:m.start()] if m else text
+    r = _RESOURCE.search(head)
+    if r is None:
+        return None
+    at = _LOC.search(head, r.end())
+    return (at.group(1), int(at.group(2))) if at else None
+
+
 def fill_key(template: str, *, declared: str, key: str) -> str | None:
     """입력 템플릿의 자리를 대상 키에서 채운다 — 선언 `alarm:stats:{line}`과 실재 키 `alarm:stats:L1`에서 `{line}`=`L1`. 못 채우는 자리가 있으면
     None(호출부가 scan으로 간다)."""
@@ -105,6 +129,16 @@ def status_of(raw: Any) -> tuple[str, bool]:
     return "정상", False
 
 
+class _Walked(NamedTuple):
+    """걸은 클래스 하나의 기록 — 멈춘 자리가 이 클래스면 사유와 다음 칸을 여기서 만든다(R3-4 ②)."""
+    writer: str
+    tag: str
+    scope: str
+    inputs: int
+    res_id: str
+    at: tuple[str, int] | None          # 입력이 있으면 읽는 메서드의 자리, 없으면 클래스 머리 줄
+
+
 class _Branch(NamedTuple):
     """걸을 가지 하나 — `code.resources`에 더 줄 인자(한 레포뿐이면 없음, 한 서비스 레포면 `service`, 공유 레포면 `repo`), 표·기록의 꼬리표,
     판정의 component 후보 서비스들(공유 레포면 그 서비스 전부)."""
@@ -130,6 +164,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     evidence: list[EvidenceRef] = []
     started = clock() if clock is not None else None
     counter = 0
+    from src.application.briefing import next_task_number          # 지연 import — briefing이 이 모듈을 import한다
+
+    start = next_task_number(state)
 
     def elapsed() -> float:
         return (clock() - started).total_seconds() if started is not None else 0.0
@@ -145,7 +182,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     async def run(goal: str, action: str, params: dict):
         nonlocal counter
         counter += 1
-        task = _task(f"{WALK_PREFIX}{counter}", goal, action, params)
+        # 리드와 같은 한 단계 번호(입구 뒤 다음 빈 번호부터) + `walked` — 두 단계 `t-1-N`은 리드가 `t-1`을 다시 내게 했다(측정 #10 P1 5).
+        task = _task(f"t-{start + counter - 1}", goal, action, params).model_copy(update={"walked": True})
         outcome = await runner.run(task, case=state.case)
         done = _finish(task, outcome)
         tasks.append(done)
@@ -199,8 +237,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     seen = {target.key, target.declared}
     # (쓴 클래스, 가지 — 인자·꼬리표·후보, 깊이, 여기로 오게 한 증거, 이어 볼 단일값 `(필드, 값)` — ③)
     frontier: list[tuple[str, _Branch, int, str, tuple[str, str] | None]] = [(target.writer, b, 0, hops[0].evidence_id, None) for b in first_branches]
-    unknown: list[tuple[str, str, str]] = []                                                # 쓴 쪽을 모르는 나쁜 입력 — (실재 키, 선언 이름, 증거)
-    failed: list[tuple[str, str, str]] = []                                                 # 자원을 못 읽은 가지 — (쓴 쪽[꼬리표], 사유, 증거)
+    declared_names: dict[str, str] = {}                                                     # 홉의 증거 → 그 키의 선언 이름(`code.uses`는 선언 이름으로 묻는다)
+    failed_at: dict[str, tuple[str, str, dict]] = {}                                        # 자원을 못 읽은 가지 — 그 홉의 증거 → (쓴 쪽[꼬리표], 사유, 질의 인자)
+    walked_at: dict[str, _Walked] = {}                                                      # 걸은 가지 — 그 홉의 증거 → 기록
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     stopped, nxt, nxt_ev, last = "", None, "", target.writer
     while frontier and not stopped:
@@ -222,11 +261,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             why = res.error or "증거 없음"
             at = next((i for i, h in enumerate(hops) if h.evidence_id == came_from and h.writer == writer), len(hops) - 1)
             hops[at] = hops[at].model_copy(update={"status": f"{hops[at].status} · {writer}{tag}의 자원 못 읽음 — {why}"})
-            failed.append((f"{writer}{tag}", why, came_from))
+            failed_at[came_from] = (f"{writer}{tag}", why, here)
             continue
         res_id = res.evidence[0].id
         text = runner.raw(res_id)
-        for name, kind in inputs_in(text if isinstance(text, str) else ""):
+        text = text if isinstance(text, str) else ""
+        found_inputs = inputs_in(text)
+        walked_at[came_from] = _Walked(writer, tag, scope, len(found_inputs), res_id, reader_at(text) if found_inputs else class_at(text))
+        for name, kind in found_inputs:
             if kind == "rediskey":
                 filled = fill_key(name, declared=target.declared, key=target.key)
                 if filled is not None:
@@ -285,33 +327,45 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다.
                 next_branches, shown, cands = (branches(w, name) if (bad and w)
                                                else ([], who(w), tuple(x for _, s in homes(w) for x in s)))
+                declared_names[ev] = name
                 hops.append(Hop(key=label, kind=kind, depth=depth + 1, writer=w, service=shown, candidates=list(cands), status=status, bad=bad,
-                                evidence_id=ev, basis=f"{writer}{tag}가 읽는 자원 ({res_id})"))
+                                evidence_id=ev, basis=f"{writer}{tag}가 읽는 자원 ({res_id})", parent=came_from))
                 if stopped:
                     break
-                if bad:
-                    if w:
-                        frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]
-                    else:
-                        unknown.append((label, name, ev))
+                frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]          # 나쁜 입력의 아는 쓴 쪽만 — 그때만 가지가 있다
             if stopped:
                 break
+    # 멈춘 자리 = 가장 깊은 나쁜 홉(같은 깊이면 먼저 읽은 것). 사유와 다음 칸은 **그 홉**의 일로 만든다 — 마지막 실패나 첫 "모름"이 아니라.
+    bad_hops = [h for h in hops if h.bad]
+    stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]
+    ev = stop_hop.evidence_id
+    rungs: list[Rung] = []
     if not stopped:
-        if unknown:
-            label, name, ev = unknown[0]
-            stopped, nxt, nxt_ev = f"쓴 쪽을 모른다 — {label}(값에 인덱스의 클래스 이름이 없다)", ("code.uses", {"name": name}), ev
-        elif failed:
-            name, why, ev = failed[0]
-            stopped, nxt, nxt_ev = f"{name}의 자원을 못 읽었다 — {why}", None, ev
+        if stop_hop is not hops[0] and not stop_hop.writer:
+            stopped = f"쓴 쪽을 모른다 — {stop_hop.key}(값에 인덱스의 클래스 이름이 없다)"
+            rungs.append(Rung(action="code.uses", params={"name": declared_names.get(ev, stop_hop.key)}, evidence=ev))
+        elif ev in failed_at:
+            tag, why, here = failed_at[ev]
+            stopped = f"{tag}의 자원을 못 읽었다 — {why}"
+            rungs.append(Rung(action="code.resources", params=here, evidence=ev))
+        elif ev in walked_at:
+            info = walked_at[ev]
+            # 입력이 0인 것은 "정상"이 아니라 "모름"이다 — 메시지(토픽) 입력은 인덱스가 자원으로 못 세고, 조립식 키도 그렇다.
+            stopped = (f"입력이 다 정상 — {info.writer}" if info.inputs
+                       else f"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)")
+            if info.scope and info.at is not None:
+                rungs.append(Rung(action="code.read", params={"service": info.scope, "path": info.at[0], "line": info.at[1]}, evidence=info.res_id))
         else:
-            stopped, nxt, nxt_ev = f"입력이 다 정상 — {last}", None, ""
-        if literal is not None:
-            # 아래에 단일값을 거르는 코드 줄이 있었다 — 멈춘 이유가 무엇이든 리드가 볼 곳은 **그 줄을 품은 함수**다(사람 결정; `code.read line=`이
-            # 인덱스의 심볼 줄 범위로 함수 전체를 준다 — ④-a). 읽는 쪽 서비스를 모르면 `code.read`를 못 만들어 위의 홉 그대로.
-            scope, path, line, gev = literal
-            stopped += f" (단일값을 거르는 코드 줄 {path}:L{line})"
-            if scope:
-                nxt, nxt_ev = ("code.read", {"service": scope, "path": path, "line": line}), gev
+            stopped = f"입력이 다 정상 — {last}"
+    elif nxt is not None:
+        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))
+    if literal is not None:
+        # 아래에 단일값을 거르는 코드 줄이 있었다 — 멈춘 이유가 무엇이든 리드가 먼저 볼 곳은 **그 줄을 품은 함수**다(사람 결정; `code.read line=`이
+        # 인덱스의 심볼 줄 범위로 함수 전체를 준다 — ④-a). 그 뒤 칸이 멈춘 자리의 질의다. 읽는 쪽 서비스를 모르면 `code.read`를 못 만든다.
+        scope, path, line, gev = literal
+        stopped += f" (단일값을 거르는 코드 줄 {path}:L{line})"
+        if scope:
+            head = Rung(action="code.read", params={"service": scope, "path": path, "line": line}, evidence=gev)
+            rungs = [head] + [r for r in rungs if r != head]
     return {"plan_tasks": tasks, "evidence": evidence,
-            "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), stopped=stopped,
-                         next_action=nxt[0] if nxt else "", next_params=nxt[1] if nxt else {}, next_evidence=nxt_ev, notes=notes)}
+            "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), stopped=stopped, stop_at=ev, rungs=rungs, notes=notes)}

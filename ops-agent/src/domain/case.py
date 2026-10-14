@@ -90,6 +90,9 @@ class PlanTask(StrictModel):
     # 코드가 지정한 다음 홉을 리드가 그대로 냈다(R3-1c ②) — 브리핑이 이 태스크의 증거 본문을 예산에서 빼지 않는다. 받을 때 코드가 단다;
     # 리드가 실어 보낸 값은 수명주기 필드처럼 지운다(`_sanitize_task`).
     pinned: bool = False
+    # 걷기 노드의 읽기다(R3-3 ② → R3-4 ②). id는 리드와 같은 한 단계(`t-2`…) — 두 단계(`t-1-N`)였을 때 리드가 `t-1`을 다시 냈다(측정 #10 P1 5).
+    # 브리핑이 이 플래그로 접고, 중복 거부가 "입구가 이미 읽었다"로 센다. 리드가 실어 보낸 값은 지운다.
+    walked: bool = False
 
 
 class TargetPick(StrictModel):
@@ -155,31 +158,57 @@ class Hop(StrictModel):
     bad: bool = False
     evidence_id: str = ""
     basis: str = ""
+    # 여기로 오게 한 홉의 증거 id(R3-4 ②) — 멈춘 홉까지의 사슬(`Walk.chain_ids`)을 되짚는다. 대상 키 홉은 빈 문자열.
+    parent: str = ""
 
     def line(self) -> str:
         who = (self.writer + (f" [{self.service}]" if self.service else "")) if self.writer else "—"
         return f"  {self.key} | {who} | {self.status} | {self.evidence_id or '—'}"
 
 
+class Rung(StrictModel):
+    """걷기가 멈춘 자리의 다음 칸 하나(R3-4 ②) — 리드가 낼 질의와 그 입력 증거. 사다리가 한 라운드에 한 칸씩 밟는다(`briefing._ladder_step`)."""
+    action: str
+    params: dict = {}
+    evidence: str = ""
+
+
 class Walk(StrictModel):
-    """코드가 상류를 걸은 결과(R3-3 ②) — 홉 표, 멈춘 이유, 멈춘 자리의 다음 홉. 브리핑의 다음 홉과 중복 거부의 홉은 입구 홉이 아니라 **이것**을
+    """코드가 상류를 걸은 결과(R3-3 ②) — 홉 표, 멈춘 이유, 멈춘 자리의 다음 칸들. 브리핑의 다음 홉과 중복 거부의 홉은 입구 홉이 아니라 **이것**을
     본다(측정 #9: 입구 홉에 고정돼 있어 리드가 코드가 이미 읽은 자리로 또 갔다)."""
     hops: list[Hop] = []
     reads: int = 0
     seconds: float = 0.0
     stopped: str = ""
-    next_action: str = ""
-    next_params: dict = {}
-    # 다음 홉의 입력이 될 증거 — 멈추게 한 그 홉의 읽기.
-    next_evidence: str = ""
+    # 멈춘 자리 — **가장 깊은 나쁜 홉**의 증거 id(R3-4 ②; 측정 #10 P0 3: "마지막 실패"는 다른 가지의 일이었다). 나쁜 홉이 없으면 대상 키 홉.
+    stop_at: str = ""
+    # 멈춘 자리의 다음 칸들, 차례대로 — 리터럴 줄의 함수 → 그 자리의 질의(`code.uses`·`code.resources`·읽는 메서드 전체). 늘 하나는 두려 한다(없으면
+    # frame 예시가 네 칸으로 돌아간다 — 측정 #10 P0 3).
+    rungs: list[Rung] = []
     # 표 아래 주 — 같은 클래스 이름이 두 레포일 때 어느 서비스로 갈랐나(근거), 못 갈랐으면 둘 다 걸었다는 사실(R3-3 ②-b).
     notes: list[str] = []
 
     def next_hop(self) -> tuple[str, dict] | None:
-        return (self.next_action, dict(self.next_params)) if self.next_action else None
+        return (self.rungs[0].action, dict(self.rungs[0].params)) if self.rungs else None
+
+    @property
+    def next_evidence(self) -> str:
+        return self.rungs[0].evidence if self.rungs else ""
 
     def bad_ids(self) -> frozenset[str]:
         return frozenset(h.evidence_id for h in self.hops if h.bad and h.evidence_id)
+
+    def chain_ids(self) -> frozenset[str]:
+        """멈춘 홉에서 대상 키 홉까지의 증거 id들 — pinned 본문은 이 사슬만(측정 #10 P0 4: 나쁜 홉 전부를 고정하니 r1이 22~28K였다)."""
+        by_id: dict[str, Hop] = {}
+        for h in self.hops:
+            by_id.setdefault(h.evidence_id, h)
+        ids: set[str] = set()
+        cur = by_id.get(self.stop_at) if self.stop_at else None
+        while cur is not None and cur.evidence_id and cur.evidence_id not in ids:
+            ids.add(cur.evidence_id)
+            cur = by_id.get(cur.parent) if cur.parent else None
+        return frozenset(ids)
 
     def lines(self) -> list[str]:
         if not self.hops:

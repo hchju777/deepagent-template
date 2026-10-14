@@ -2424,7 +2424,7 @@ CASES += [
  ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake_lines(state, code_index=code_index)}\" if intake_lines(state, code_index=code_index) else \"\"))", "            )", [FRAME_HOP_T]),
  ("입구가 돌았는데 frame 예시에 접수 읽기를 둔다", B, "            if not intake_done:\n                shapes.append(first_read)", "            if True:\n                shapes.append(first_read)", [FRAME_HOP_T]),
  ("frame 예시에 다음 홉을 안 둔다", B, "        if hop:\n            shapes.append(hop)", "        if False:\n            shapes.append(hop)", [FRAME_HOP_T]),
- ("사다리 첫 칸이 고른 키의 uses가 아니다", B, "    hop = next_hop(target, code_index=code_index, walk=walk)\n    if hop is not None:", "    hop = next_hop(target, code_index=code_index, walk=walk)\n    if False:", [LADDER_HOP_T]),
+ ("사다리 첫 칸이 고른 키의 uses가 아니다", B, "        hop = (pending.action, dict(pending.params))\n    if hop is not None:", "        hop = (pending.action, dict(pending.params))\n    if False:", [LADDER_HOP_T]),
  ("uses 뒤에 쓰는 함수의 호출자를 안 묻는다", B, "            if writer is not None and not _issued(tasks, \"code.callers\", name=writer):\n                return (\"code.callers\", {\"name\": writer}), [used_hop.result_evidence_ids[0]]",
   "            if False:\n                return (\"code.callers\", {\"name\": writer}), [used_hop.result_evidence_ids[0]]", [LADDER_HOP_T]),
  ("거부 기록에 다음 홉을 안 적는다", ND, "            at_intake = bool(where) and hint and set(where) <= hint_for", "            at_intake = False", [HINT_T]),
@@ -2479,8 +2479,8 @@ PIN_WIRE_T = "tests/application/test_nodes.py::test_integrate는_입구_결과�
 PIN_B_T = "tests/application/test_briefing.py::test_입구_읽기와_pinned_태스크의_증거_본문은_예산에서_빠지지_않는다"
 CASES += [
  ("홉과 같은 태스크에 pinned를 안 단다", ND, "        kept = [t.model_copy(update={\"pinned\": True}) if (t.action, t.params) == hop else t for t in kept]", "        kept = list(kept)", [PIN_T]),
- ("리드가 단 pinned를 안 지운다", ND, "                                   \"input_evidence_ids\": ids, \"pinned\": False})", "                                   \"input_evidence_ids\": ids})", [PIN_T]),
- ("integrate가 홉을 받을 때 안 넘긴다", ND, "                hop=next_hop(base.target, code_index=deps.code_index, walk=base.walk),\n", "", [PIN_WIRE_T]),
+ ("리드가 단 pinned를 안 지운다", ND, "                                   \"input_evidence_ids\": ids, \"pinned\": False, \"walked\": False})", "                                   \"input_evidence_ids\": ids, \"walked\": False})", [PIN_T]),
+ ("integrate가 홉을 받을 때 안 넘긴다", ND, "                hop=_hop(base, deps),\n", "", [PIN_WIRE_T]),
  ("고정 증거의 본문을 안 남긴다", B, "    detailed = {ref.id for ref in state.evidence if ref.id in pinned}", "    detailed = set()", [PIN_B_T]),
  ("고정 증거가 예산을 안 쓴다", B, "    used = sum(len(ref.body or ref.summary) for ref in state.evidence if ref.id in pinned)", "    used = 0", [PIN_B_T]),
  ("입구 읽기를 고정으로 안 본다", B, "        if t.pinned or (state.target is not None and t.id in (\"t-0\", \"t-1\")):", "        if t.pinned:", [PIN_B_T]),
@@ -2532,28 +2532,29 @@ WHOP_T = "tests/application/test_nodes.py::test_걷기가_있으면_받을_때�
 WBRIEF_T = "tests/application/test_briefing.py::test_걷기가_있으면_케이스_블록에_홉_표가_실리고_다음_홉은_멈춘_자리이며_걸은_읽기는_접힌다"
 CASES += [
  ("출력을 입력으로 센다", WK, "                if w and w == writer:\n", "                if False:\n", [WALK_T]),
- ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                    if w:\n                        frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                    if False:\n                        frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", [WALK_T]),
- ("정상인 입력으로도 간다", WK, "                if bad:\n                    if w:", "                if True:\n                    if w:", [WALK_T]),
+ ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                pass", [WALK_T]),
+ ("정상인 입력으로도 간다", WK, "(branches(w, name) if (bad and w)", "(branches(w, name) if w", [WALK_T]),
+ ("쓴 쪽 모름을 걷는다", WK, "(branches(w, name) if (bad and w)", "(branches(w, name) if bad", [UNKNOWN_T]),
  ("대상 키를 또 읽는다", WK, "    seen = {target.key, target.declared}", "    seen = set()", [WALK_T]),
  ("쓰기 구간도 걷는다", WK, "    m = _WRITES_AT.search(text)\n    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [WALK_T]),
  ("깊이 상한이 없다", WK, "        if depth >= MAX_DEPTH:", "        if False:", [CAP_T]),
  ("읽기 상한이 없다", WK, "        if counter >= MAX_READS:\n            return f\"읽기", "        if False:\n            return f\"읽기", [CAP_T]),
  ("시간 상한이 없다", WK, "        if elapsed() > MAX_SECONDS:", "        if False:", [CAP_T]),
- ("쓴 쪽 모름에서 uses를 안 가리킨다", WK, "            stopped, nxt, nxt_ev = f\"쓴 쪽을 모른다 — {label}(값에 인덱스의 클래스 이름이 없다)\", (\"code.uses\", {\"name\": name}), ev", "            stopped, nxt, nxt_ev = f\"쓴 쪽을 모른다 — {label}(값에 인덱스의 클래스 이름이 없다)\", None, ev", [UNKNOWN_T]),
+ ("쓴 쪽 모름에서 uses를 안 가리킨다", WK, "            rungs.append(Rung(action=\"code.uses\", params={\"name\": declared_names.get(ev, stop_hop.key)}, evidence=ev))", "            pass", [UNKNOWN_T]),
  ("scan 뒤 전부 읽는다", WK, "[:SCAN_READS] if isinstance(k, str)]", "[:SCAN_READS * 2] if isinstance(k, str)]", [UNKNOWN_T]),
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if empties:\n            return f\"빈 배열 ({', '.join(empties)})\", True", "        if False:\n            return f\"빈 배열 ({', '.join(empties)})\", True", [STATUS_T]),
  ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
- ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.id.startswith(WALK_PREFIX) for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
- ("받을 때의 홉이 걷기를 안 본다", ND, "            hop=next_hop(state.target, code_index=deps.code_index, walk=state.walk),", "            hop=next_hop(state.target, code_index=deps.code_index),", [WHOP_T]),
+ ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
+ ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
  ("다음 홉이 걷기를 안 본다", IM, "    if walk is not None and walk.hops:\n        return walk.next_hop() if code_index else None", "    if False:\n        return walk.next_hop() if code_index else None", [WBRIEF_T]),
  ("홉 표를 안 싣는다", IM, "    if state.walk is not None:\n        lines += state.walk.lines()", "    if False:\n        lines += state.walk.lines()", [WBRIEF_T]),
- ("나쁜 홉의 증거를 안 고정한다", B, "        ids |= set(state.walk.bad_ids())", "        pass", [WBRIEF_T]),
+ ("나쁜 홉의 증거를 안 고정한다", B, "        ids |= set(state.walk.chain_ids())", "        pass", [WBRIEF_T]),
  ("걸은 읽기 본문을 안 접는다", B, "        if ref.id in pinned or ref.id in folded:\n            continue", "        if ref.id in pinned:\n            continue", [WBRIEF_T]),
- ("걸은 태스크를 한 줄로 안 접는다", B, "        if task.id.startswith(WALK_PREFIX):\n            # 걷기 노드의 읽기는 한 줄로", "        if False:\n            # 걷기 노드의 읽기는 한 줄로", [WBRIEF_T]),
- ("사다리 칸의 입력이 걷기의 증거가 아니다", B, "                inputs = ([walk.next_evidence] if walk is not None and walk.next_evidence\n                          else [key_read.result_evidence_ids[0]] if key_read else [])", "                inputs = [key_read.result_evidence_ids[0]] if key_read else []", [WBRIEF_T]),
+ ("걸은 태스크를 한 줄로 안 접는다", B, "        if task.walked:\n            # 걷기 노드의 읽기는 한 줄로", "        if False:\n            # 걷기 노드의 읽기는 한 줄로", [WBRIEF_T]),
+ ("사다리 칸의 입력이 걷기의 증거가 아니다", B, "                inputs = ([rung.evidence] if rung is not None and rung.evidence\n                          else [key_read.result_evidence_ids[0]] if key_read else [])", "                inputs = [key_read.result_evidence_ids[0]] if key_read else []", [WBRIEF_T]),
  ("class_services가 서비스를 안 단다", DCP, "                out.setdefault(s.name, set()).update([svc] if svc else shared.get(s.repo, ()))", "                out.setdefault(s.name, set())", ["tests/infrastructure/test_deployed_code.py::test_class_services는_클래스_이름을_그_파일의_서비스에_잇는다"]),
  ("source-missing에 원천 키가 있다", ROOT / "tools/local_case.py", "            **({} if variant == \"source-missing\" else", "            **({} if False else", ["tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"]),
 ]
@@ -2585,9 +2586,9 @@ CASES += [
  ("같은 단일값이 이어져도 위로 안 간다", WK, "                if not bad and watch is not None and same.get(watch[0]) == watch[1]:", "                if False:", [LIT_T]),
  ("단일값 검사에 읽는 쪽 서비스를 안 준다", WK, "                                               {\"patterns\": [field], **({\"service\": scope} if scope else {})})", "                                               {\"patterns\": [field]})", [LIT_T]),
  ("단일값 검사를 안 한다", WK, "                elif not bad and same and status.startswith(\"정상\"):", "                elif False:", [LIT_T]),
- ("리터럴 줄을 다음 홉으로 안 가리킨다", WK, "        if literal is not None:\n            # 아래에", "        if False:\n            # 아래에", [LIT_NEXT_T]),
+ ("리터럴 줄을 다음 홉으로 안 가리킨다", WK, "    if literal is not None:\n        # 아래에", "    if False:\n        # 아래에", [LIT_NEXT_T]),
  ("다음 홉 줄이 name 인자를 가정한다", IM, "        return f\"다음 홉: {describe(*hop)} — 걷기가 멈춘 자리({walk.stopped})\"", "        return f\"다음 홉: {hop[0]} name={hop[1]['name']!r} — 걷기가 멈춘 자리({walk.stopped})\"", [LIT_NEXT_T]),
- ("잡은 단일값을 위로 안 넘긴다", WK, "                        frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                        frontier += [(w, b, depth + 1, ev, None) for b in next_branches]", [LIT_T]),
+ ("잡은 단일값을 위로 안 넘긴다", WK, "                frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                frontier += [(w, b, depth + 1, ev, None) for b in next_branches]", [LIT_T]),
 ]
 
 # ── 12a-R3-3 ⑤ — 클래스 이름 component는 서비스로 ──
@@ -2607,7 +2608,7 @@ CASES += [
  ("안쪽이 아니라 바깥 심볼을 고른다", DCP, "        return min(inside, key=lambda s: s.end_line - s.line) if inside else None", "        return max(inside, key=lambda s: s.end_line - s.line) if inside else None", [READ_LINE_T]),
  ("line 0을 받는다", DCP, "            if isinstance(line, bool) or not isinstance(line, int) or line < 1:", "            if False:", [READ_LINE_T]),
  ("등재 목록에 line 인자가 없다", ROOT / "src/domain/actions.py", "    \"code.read\":           (\"code\",  \"read\",          (\"service\", \"path\"),     (\"offset\", \"limit\", \"line\")),", "    \"code.read\":           (\"code\",  \"read\",          (\"service\", \"path\"),     (\"offset\", \"limit\")),", [READ_LINE_T]),
- ("리터럴 홉이 줄 둘레로 간다", WK, "                nxt, nxt_ev = (\"code.read\", {\"service\": scope, \"path\": path, \"line\": line}), gev", "                nxt, nxt_ev = (\"code.read\", {\"service\": scope, \"path\": path, \"offset\": max(1, line - 15), \"limit\": 40}), gev", [LIT_NEXT_T]),
+ ("리터럴 홉이 줄 둘레로 간다", WK, "            head = Rung(action=\"code.read\", params={\"service\": scope, \"path\": path, \"line\": line}, evidence=gev)", "            head = Rung(action=\"code.read\", params={\"service\": scope, \"path\": path, \"offset\": max(1, line - 15), \"limit\": 40}, evidence=gev)", [LIT_NEXT_T]),
 ]
 
 
@@ -2627,9 +2628,9 @@ CASES += [
  ("가른 레포를 resources에 안 넘긴다", WK, "        return {\"service\": svcs[0]} if len(svcs) == 1 else {\"repo\": repo}", "        return {\"service\": svcs[0]} if len(svcs) == 1 else {}", [SHARED_T]),
  ("후보를 홉에 안 적는다", WK, "candidates=list(first_cands),", "candidates=[],", [SHARED_T, TIE_T]),
  ("깊은 홉의 후보를 안 적는다", WK, "service=shown, candidates=list(cands), status=status", "service=shown, status=status", [SHARED_T, TIE_T]),
- ("한 가지의 실패가 걷기를 끊는다", WK, "            failed.append((f\"{writer}{tag}\", why, came_from))\n            continue", "            failed.append((f\"{writer}{tag}\", why, came_from))\n            break", [ISOLATE_T]),
+ ("한 가지의 실패가 걷기를 끊는다", WK, "            failed_at[came_from] = (f\"{writer}{tag}\", why, here)\n            continue", "            failed_at[came_from] = (f\"{writer}{tag}\", why, here)\n            break", [ISOLATE_T]),
  ("실패를 그 행에 안 적는다", WK, "            hops[at] = hops[at].model_copy(update={\"status\": f\"{hops[at].status} · {writer}{tag}의 자원 못 읽음 — {why}\"})", "            pass", [ISOLATE_T, UNKNOWN_T]),
- ("실패를 멈춘 이유로 안 적는다", WK, "        elif failed:\n            name, why, ev = failed[0]", "        elif False:\n            name, why, ev = failed[0]", [ISOLATE_T, UNKNOWN_T]),
+ ("실패를 멈춘 이유로 안 적는다", WK, "        elif ev in failed_at:\n            tag, why, here = failed_at[ev]", "        elif False:\n            tag, why, here = failed_at[ev]", [ISOLATE_T, UNKNOWN_T]),
  ("실패를 여기로 오게 한 행이 아니라 마지막 행에 적는다", WK, "            at = next((i for i, h in enumerate(hops) if h.evidence_id == came_from and h.writer == writer), len(hops) - 1)", "            at = len(hops) - 1", [ISOLATE_T]),
  ("못 가른 파일의 클래스를 버린다", DCP, "                out.setdefault(s.name, set()).update([svc] if svc else shared.get(s.repo, ()))", "                out.setdefault(s.name, set()).update([svc] if svc else [])", [RES_SVC_T]),
  ("서비스 지도를 어댑터가 안 낸다", DCP, "        return {name: svc.repo for name, svc in self._topology.services.items()}", "        return {}", [RES_SVC_T]),
@@ -2650,7 +2651,33 @@ CASES += [
  ("palette-empty가 빈 data가 아니다", LC, "_EMPTY_DATA = {\"data-empty\", \"source-missing\", \"source-blank\", \"source-filtered\", \"palette-empty\"}", "_EMPTY_DATA = {\"data-empty\", \"source-missing\", \"source-blank\", \"source-filtered\"}", [PAL_T]),
 ]
 
-assert len(CASES) >= 748, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-4 ② — 멈춘 자리 = 가장 깊은 나쁜 홉, 다음 칸은 늘, pinned는 사슬만, 걷기 id 한 단계 ──
+DEEP_T = "tests/application/test_walk.py::test_멈춘_자리는_가장_깊은_나쁜_홉이고_다음_칸은_늘_있으며_입력이_없으면_입력을_모른다고_적는다"
+LADDER2_T = "tests/application/test_briefing.py::test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸_칸은_건너뛴다"
+CASES += [
+ ("멈춘 자리가 가장 깊은 나쁜 홉이 아니다", WK, "    stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]", "    stop_hop = min(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]", [DEEP_T, WALK_T]),
+ ("입력이 0이어도 정상이라 한다", WK, "            stopped = (f\"입력이 다 정상 — {info.writer}\" if info.inputs", "            stopped = (f\"입력이 다 정상 — {info.writer}\" if True", [DEEP_T]),
+ ("입력 0의 칸이 클래스 본문이 아니다", WK, "reader_at(text) if found_inputs else class_at(text))", "reader_at(text))", [DEEP_T]),
+ ("입력 정상의 칸이 읽는 메서드가 아니다", WK, "reader_at(text) if found_inputs else class_at(text))", "class_at(text))", [WALK_T]),
+ ("홉의 부모를 안 적는다", WK, "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\", parent=came_from))", "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\"))", [DEEP_T]),
+ ("사슬이 부모를 안 따라간다", CS, "            cur = by_id.get(cur.parent) if cur.parent else None", "            cur = None", [DEEP_T]),
+ ("사슬 밖의 나쁜 홉도 고정한다", B, "        ids |= set(state.walk.chain_ids())", "        ids |= set(state.walk.bad_ids())", [WBRIEF_T]),
+ ("접는 범위가 사슬 밖이 아니다", B, "    return frozenset(ids - set(state.walk.chain_ids()))", "    return frozenset(ids - set(state.walk.bad_ids()))", [WBRIEF_T]),
+ ("걷기 읽기에 walked를 안 단다", WK, ".model_copy(update={\"walked\": True})", "", [WALK_T, WNODE_T]),
+ ("걷기 id가 다음 빈 번호부터가 아니다", WK, "        task = _task(f\"t-{start + counter - 1}\", goal, action, params)", "        task = _task(f\"t-{counter}\", goal, action, params)", [WALK_T]),
+ ("리드가 단 walked를 안 지운다", ND, "\"pinned\": False, \"walked\": False})", "\"pinned\": False})", [PIN_T]),
+ ("사다리가 낸 칸을 건너뛰지 않는다", B, "        pending = next((r for r in rungs if not _issued(tasks, r.action, **r.params)), rungs[-1])", "        pending = rungs[0]", [LADDER2_T]),
+ ("둘째 칸을 안 고정한다", ND, "        return next(((r.action, dict(r.params)) for r in walk.rungs\n", "        return next(((r.action, dict(r.params)) for r in walk.rungs[:1]\n", [WHOP_T]),
+ ("대기 태스크를 낸 칸으로 센다", ND, "        ran = {_query(t) for t in state.plan_tasks if t.action and t.status != \"pending\"}", "        ran = {_query(t) for t in state.plan_tasks if t.action}", [WHOP_T]),
+ ("stop_at을 안 적는다", WK, "stopped=stopped, stop_at=ev, rungs=rungs, notes=notes)", "stopped=stopped, rungs=rungs, notes=notes)", [DEEP_T, WALK_T]),
+ ("상한 멈춤의 칸을 안 낸다", WK, "    elif nxt is not None:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", "    elif False:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", [CAP_T]),
+ ("리터럴 칸이 첫 칸이 아니다", WK, "            rungs = [head] + [r for r in rungs if r != head]", "            rungs = [r for r in rungs if r != head] + [head]", [LIT_NEXT_T]),
+ ("walked로 입구 읽기 줄을 안 센다", IM, "    walked = [t for t in state.plan_tasks if t.walked and t.status == \"ok\"]", "    walked = []", [WBRIEF_T]),
+ ("칸이 없는데 입구 홉으로 돌아간다", ND, "    if walk is not None and walk.hops and deps.code_index and walk.rungs:", "    if walk is not None and walk.hops and deps.code_index and walk.rungs and False:", [WHOP_T]),
+]
+
+assert len(CASES) >= 768, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

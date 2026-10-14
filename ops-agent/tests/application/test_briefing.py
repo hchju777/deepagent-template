@@ -1563,33 +1563,64 @@ def test_홉이_있으면_integrate_예시는_그_칸_하나이고_code_resource
 
 def test_걷기가_있으면_케이스_블록에_홉_표가_실리고_다음_홉은_멈춘_자리이며_걸은_읽기는_접힌다():
     from src.application.state import CaseState
-    from src.domain.case import Hop, TargetPick, Walk
+    from src.domain.case import Hop, Rung, TargetPick, Walk
     picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"], writer="SummaryRefresh",
                         writer_at="metadata.event_type")
+    # 홉 셋 — 멈춘 자리(alarm:source:L1)까지의 사슬은 대상 키·그 홉이고, 다른 가지의 나쁜 홉(alarm:other:L1)은 사슬 밖이라 접힌다(R3-4 ② P0 4)
     walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", service="batch", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1"),
-                      Hop(key="alarm:source:L1", depth=1, status="0행", bad=True, evidence_id="t-1-2.e1", basis="SummaryRefresh가 읽는 자원 (t-1-1.e1)")],
-                reads=2, seconds=0.4, stopped="쓴 쪽을 모른다 — alarm:source:L1(값에 인덱스의 클래스 이름이 없다)",
-                next_action="code.uses", next_params={"name": "alarm:source:{line}"}, next_evidence="t-1-2.e1")
+                      Hop(key="alarm:source:L1", depth=1, status="0행", bad=True, evidence_id="t-3.e1", basis="SummaryRefresh가 읽는 자원 (t-2.e1)", parent="t-1.e1"),
+                      Hop(key="alarm:other:L1", depth=1, status="0행", bad=True, evidence_id="t-4.e1", basis="SummaryRefresh가 읽는 자원 (t-2.e1)", parent="t-1.e1")],
+                reads=3, seconds=0.4, stopped="쓴 쪽을 모른다 — alarm:source:L1(값에 인덱스의 클래스 이름이 없다)", stop_at="t-3.e1",
+                rungs=[Rung(action="code.uses", params={"name": "alarm:source:{line}"}, evidence="t-3.e1")])
     big = "x" * 300
     state = CaseState(case=_patrol_case(), target=picked, walk=walk, plan_tasks=_intake_state().plan_tasks + [
-        task("t-1-1", action="code.resources", params={"name": "SummaryRefresh"}, status="ok", result_evidence_ids=["t-1-1.e1"]),
-        task("t-1-2", action="redis.get", params={"key": "alarm:source:L1"}, status="ok", result_evidence_ids=["t-1-2.e1"])],
-        evidence=[EvidenceRef(id=i, source="s", summary=f"요약 {i}", body=big) for i in ("t-0.e1", "t-1.e1", "t-1-1.e1", "t-1-2.e1")])
+        task("t-2", action="code.resources", params={"name": "SummaryRefresh"}, status="ok", result_evidence_ids=["t-2.e1"], walked=True),
+        task("t-3", action="redis.get", params={"key": "alarm:source:L1"}, status="ok", result_evidence_ids=["t-3.e1"], walked=True),
+        task("t-4", action="redis.get", params={"key": "alarm:other:L1"}, status="ok", result_evidence_ids=["t-4.e1"], walked=True)],
+        evidence=[EvidenceRef(id=i, source="s", summary=f"요약 {i}", body=big) for i in ("t-0.e1", "t-1.e1", "t-2.e1", "t-3.e1", "t-4.e1")])
     fields = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(), code_index=True)
     text = fields["case"]
-    assert "걷기(코드가 상류를 걸었다): 홉 2 · 읽기 2 · 0.4초 — 멈춤: 쓴 쪽을 모른다 — alarm:source:L1" in text
-    assert "  alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data) | t-1.e1" in text and "  alarm:source:L1 | — | 0행 | t-1-2.e1" in text
-    assert "다음 홉: code.uses name='alarm:source:{line}' — 걷기가 멈춘 자리(쓴 쪽을 모른다" in text and "걷기 읽기 2건(아래 홉 표)" in text
+    assert "걷기(코드가 상류를 걸었다): 홉 3 · 읽기 3 · 0.4초 — 멈춤: 쓴 쪽을 모른다 — alarm:source:L1" in text
+    assert "  alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data) | t-1.e1" in text and "  alarm:source:L1 | — | 0행 | t-3.e1" in text
+    assert "다음 홉: code.uses name='alarm:source:{line}' — 걷기가 멈춘 자리(쓴 쪽을 모른다" in text and "걷기 읽기 3건(아래 홉 표)" in text
     tasks = json.loads(fields["example"])["tasks"]
-    assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in tasks] == [("code.uses", {"name": "alarm:source:{line}"}, ["t-1-2.e1"])]
-    assert "- 걷기 읽기 2건 (t-1-1…t-1-2) — 상태는 케이스 블록의 홉 표에 있다" in fields["tasks"] and "- t-1-1 [" not in fields["tasks"]
-    assert briefing.pinned_evidence(state) >= {"t-1.e1", "t-1-2.e1"} and briefing.folded_evidence(state) == frozenset({"t-1-1.e1"})
+    assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in tasks] == [("code.uses", {"name": "alarm:source:{line}"}, ["t-3.e1"])]
+    assert "- 걷기 읽기 3건 (t-2…t-4) — 상태는 케이스 블록의 홉 표에 있다" in fields["tasks"] and "- t-2 [" not in fields["tasks"]
+    assert briefing.pinned_evidence(state) >= {"t-1.e1", "t-3.e1"} and "t-4.e1" not in briefing.pinned_evidence(state)
+    assert briefing.folded_evidence(state) == frozenset({"t-2.e1", "t-4.e1"})
     assert "(걷기 읽기 — 상태는 케이스 블록의 홉 표에 있다. 본문은 접었다)" in fields["evidence"]
-    assert "예산에서 빠졌다" not in briefing.evidence_block(state, budget=1000)          # 접힌 증거는 예산을 안 쓴다(고정 900 + 접힌 300)
+    assert "예산에서 빠졌다" not in briefing.evidence_block(state, budget=1000)          # 접힌 증거는 예산을 안 쓴다(고정 900 + 접힌 600)
     frame = briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=True)
-    assert json.loads(frame["example"])["tasks"][0]["action"] == "code.uses" and "홉 2" in frame["case"]
-    # 걷기가 입력이 다 정상에서 멈췄으면(다음 홉 없음) 사다리는 옛 사슬로, 예시도 옛 모양
-    done = walk.model_copy(update={"stopped": "입력이 다 정상 — SummaryRefresh", "next_action": "", "next_params": {}, "next_evidence": ""})
+    assert json.loads(frame["example"])["tasks"][0]["action"] == "code.uses" and "홉 3" in frame["case"]
+    # 걷기가 칸을 못 만들었으면(입력이 다 정상인데 읽는 쪽 서비스를 모른다) 사다리는 옛 사슬로, 예시도 옛 모양
+    done = walk.model_copy(update={"stopped": "입력이 다 정상 — SummaryRefresh", "rungs": []})
     plain = briefing.integrate_fields(state.model_copy(update={"walk": done}), site_config=_site_with_check(), max_rounds=3,
                                       flow_graph=_keyed_graph_with_decoy(), code_index=True)
     assert "다음 홉" not in plain["case"] and "멈춤: 입력이 다 정상" in plain["case"]
+
+
+def test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸_칸은_건너뛴다():
+    """R3-4 ②: 다음 칸은 늘 있고 차례가 있다(리터럴 줄의 함수 → 그 자리의 질의). 첫 칸을 냈으면(끝났든 실패했든) 둘째 칸이 예시의 첫 줄이고 입력은
+    그 칸의 증거다. 다 밟았으면 마지막 칸의 결과로 옛 사다리가 이어진다(`code.uses` 뒤 `code.callers`)."""
+    from src.application.state import CaseState
+    from src.domain.case import Hop, Rung, TargetPick, Walk
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"], writer="SummaryRefresh",
+                        writer_at="metadata.event_type")
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", service="batch", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1")],
+                reads=1, stopped="입력이 다 정상 — SummaryRefresh (단일값을 거르는 코드 줄 batch/refresh.py:L12)", stop_at="t-1.e1",
+                rungs=[Rung(action="code.read", params={"service": "batch", "path": "batch/refresh.py", "line": 12}, evidence="t-3.e1"),
+                       Rung(action="code.read", params={"service": "batch", "path": "batch/refresh.py", "line": 9}, evidence="t-2.e1")])
+    base = CaseState(case=_patrol_case(), target=picked, walk=walk, plan_tasks=_intake_state().plan_tasks + [
+        task("t-2", action="code.resources", params={"name": "SummaryRefresh"}, status="ok", result_evidence_ids=["t-2.e1"], walked=True),
+        task("t-3", action="code.grep", params={"patterns": ["state"], "service": "batch"}, status="ok", result_evidence_ids=["t-3.e1"], walked=True)],
+        evidence=[EvidenceRef(id=i, source="s", summary=f"요약 {i}", body="x") for i in ("t-0.e1", "t-1.e1", "t-2.e1", "t-3.e1")])
+    first = json.loads(briefing.integrate_fields(base, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(),
+                                                 code_index=True)["example"])["tasks"]
+    assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in first] == [("code.read", {"service": "batch", "path": "batch/refresh.py", "line": 12}, ["t-3.e1"])]
+    stepped = base.model_copy(update={"plan_tasks": base.plan_tasks + [
+        task("t-4", action="code.read", params={"service": "batch", "path": "batch/refresh.py", "line": 12}, status="error", error="x")]})
+    second = json.loads(briefing.integrate_fields(stepped, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(),
+                                                  code_index=True)["example"])["tasks"]
+    assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in second] == [("code.read", {"service": "batch", "path": "batch/refresh.py", "line": 9}, ["t-2.e1"])]
+    assert "다음 홉: code.read line=12 path='batch/refresh.py' service='batch'" in briefing.integrate_fields(
+        stepped, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(), code_index=True)["case"]

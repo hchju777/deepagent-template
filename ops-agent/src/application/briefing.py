@@ -25,7 +25,7 @@ import json
 import re
 
 from src.application.facts import key_head
-from src.application.intake_map import WALK_PREFIX, check_of, intake_lines, next_hop, start_read
+from src.application.intake_map import check_of, intake_lines, next_hop, start_read
 from src.application.runner_probe import ASIDE_MARK, target_rows
 from src.application.state import CaseState
 from src.application.walk import fill_key, inputs_in
@@ -169,16 +169,18 @@ def pinned_evidence(state: CaseState) -> frozenset[str]:
         if t.pinned or (state.target is not None and t.id in ("t-0", "t-1")):
             ids.update(t.result_evidence_ids)
     if state.walk is not None:
-        ids |= set(state.walk.bad_ids())                 # 나쁜 홉의 본문(행 요약)은 리드가 봐야 한다(R3-3 ②)
+        # 멈춘 홉까지의 사슬만(R3-4 ② P0 4) — 나쁜 홉 전부를 고정하니 r1이 22~28K였다. 다른 가지의 나쁜 홉은 표의 상태로 족하다.
+        ids |= set(state.walk.chain_ids())
     return frozenset(ids)
 
 
 def folded_evidence(state: CaseState) -> frozenset[str]:
-    """걷기 노드의 읽기 중 나쁘지 않은 것의 증거 — 상태는 홉 표가 말하므로 본문은 접고 예산도 안 쓴다(R3-3 ②). 인용은 할 수 있다(State에 있다)."""
+    """걷기 노드의 읽기 중 멈춘 홉까지의 사슬 밖의 증거 — 상태는 홉 표가 말하므로 본문은 접고 예산도 안 쓴다(R3-3 ② → R3-4 ②). 인용은 할 수
+    있다(State에 있다)."""
     if state.walk is None:
         return frozenset()
-    ids = {e for t in state.plan_tasks if t.id.startswith(WALK_PREFIX) for e in t.result_evidence_ids}
-    return frozenset(ids - set(state.walk.bad_ids()))
+    ids = {e for t in state.plan_tasks if t.walked for e in t.result_evidence_ids}
+    return frozenset(ids - set(state.walk.chain_ids()))
 
 
 def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
@@ -255,9 +257,9 @@ def tasks_block(state: CaseState, *, fold: bool = False) -> str:
     if not state.plan_tasks:
         return "(아직 없다)"
     lines = []
-    walked = [t for t in state.plan_tasks if t.id.startswith(WALK_PREFIX)]
+    walked = [t for t in state.plan_tasks if t.walked]
     for task in state.plan_tasks:
-        if task.id.startswith(WALK_PREFIX):
+        if task.walked:
             # 걷기 노드의 읽기는 한 줄로(R3-3 ②) — 상태는 케이스 블록의 홉 표에 있고, 열다섯 줄이 리드의 큐를 밀어낸다.
             if task is walked[0]:
                 lines.append(f"- 걷기 읽기 {len(walked)}건 ({walked[0].id}…{walked[-1].id}) — 상태는 케이스 블록의 홉 표에 있다")
@@ -430,14 +432,21 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
     # 입구가 키를 골랐으면 첫 칸은 **그 키를 누가 쓰나**(R3-1b ③) — 화면이 읽는 키이니 값이 어디서 오는지가 다음 질문이다. 그다음은 쓰는
     # 함수의 호출자. 그 뒤는 접수 끝점의 옛 사다리로 이어진다. 인덱스가 없으면 이 칸은 없다(`next_hop`).
     hop = next_hop(target, code_index=code_index, walk=walk)
+    rungs = list(walk.rungs) if walk is not None and walk.hops and code_index else []
+    if rungs:
+        # 걷기의 칸들을 차례로(R3-4 ②) — 아직 안 낸 첫 칸(냈는데 실패한 칸은 또 안 낸다). 다 밟았으면 마지막 칸의 결과로 아래가 이어진다
+        # (`code.uses` → `code.callers`, `code.resources` → 입력 읽기).
+        pending = next((r for r in rungs if not _issued(tasks, r.action, **r.params)), rungs[-1])
+        hop = (pending.action, dict(pending.params))
     if hop is not None:
         action, params = hop
         used_hop = _done(tasks, action, **params)
         if used_hop is None:
             if not _issued(tasks, action, **params):
-                # 입력은 걷기가 멈추게 한 그 홉의 증거(R3-3 ②), 걷기가 없으면 대상 키 읽기.
+                # 입력은 그 칸의 증거(걷기가 멈추게 한 홉의 읽기, R3-3 ②), 걷기가 없으면 대상 키 읽기.
                 key_read = _done(tasks, "redis.get", key=target.key)
-                inputs = ([walk.next_evidence] if walk is not None and walk.next_evidence
+                rung = next((r for r in rungs if (r.action, r.params) == (action, params)), None)
+                inputs = ([rung.evidence] if rung is not None and rung.evidence
                           else [key_read.result_evidence_ids[0]] if key_read else [])
                 return hop, inputs
         elif action == "code.uses":
