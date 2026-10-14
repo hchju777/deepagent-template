@@ -243,13 +243,15 @@ class DeployedCodePort(ABC):
         함수를 본다."""
 
     @abstractmethod
-    async def uses(self, name: str) -> ProbeResult:
-        """이 컬렉션·토픽·키·그룹을 누가 쓰고 읽나, 어느 진입점에서 오나(11d). 인덱스가 없거나 이름이 없으면 실패."""
+    async def uses(self, name: str, service: str = "") -> ProbeResult:
+        """이 컬렉션·토픽·키·그룹을 누가 쓰고 읽나, 어느 진입점에서 오나(11d). 인덱스가 없거나 이름이 없으면 실패. `service`는 그 서비스의 레포
+        안으로 좁힌다(R3-4 ① — `code.resources`와 같은 인자)."""
 
     @abstractmethod
-    async def resources(self, name: str, service: str = "") -> ProbeResult:
+    async def resources(self, name: str, service: str = "", repo: str = "") -> ProbeResult:
         """이 클래스(함수)가 읽고 쓰는 자원(R3-1c ①-a) — 쓴 쪽의 입력. 인덱스가 없거나 이름이 없거나 여럿이면 실패로 답한다. `service`는 같은
-        이름이 두 레포에 있을 때 그 서비스의 레포로 좁힌다(R3-3 ②-b)."""
+        이름이 두 레포에 있을 때 그 서비스의 레포로 좁힌다(R3-3 ②-b); `repo`는 레포를 바로 댄다 — 한 레포를 여러 서비스가 공유해 걷기가 레포
+        단위로 가를 때(R3-4 ①)."""
 
     @abstractmethod
     async def read(self, service: str, path: str, *, offset: int | None = None,

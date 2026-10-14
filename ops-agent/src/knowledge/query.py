@@ -253,6 +253,17 @@ def ambiguous_lines(index: Index, text: str, found: list[int], *, cap: int = 5) 
     return lines
 
 
+def repo_hint(index: Index, found: list[int], repo_services: dict[str, tuple[str, ...]], *, how: str) -> list[str]:
+    """찾은 심볼이 **레포 둘 이상**에 걸치면 레포와 그 서비스들을 한 줄로 — `파일:qualname`으로는 못 가른다(측정 #9 P1 4: 파일도 같았다). 레포
+    단위로 센다(측정 #10 P1 6: 한 레포를 여러 서비스가 `path` 없이 공유하면 서비스 단위 셈이 그 파일을 못 세어 안내가 안 떴다). 어떻게 고르는지는
+    호출부가 댄다(어댑터는 인자, CLI는 옵션). 한 레포 안의 여럿은 `ambiguous_lines`의 몫."""
+    repos = sorted({index.symbols[sid].repo for sid in found})
+    if len(repos) < 2:
+        return []
+    shown = ", ".join(f"{repo}({', '.join(repo_services.get(repo, ())) or '서비스 없음'})" for repo in repos)
+    return [f"  같은 이름이 레포 {len(repos)}곳에 있다 — {how}로 고른다: {shown}"]
+
+
 def entry_brief(index: Index, graph: Graph, sid: int) -> str:
     """이 함수가 어느 진입점에서 오나 — `uses` 줄의 꼬리."""
     res = callers(graph, [sid])

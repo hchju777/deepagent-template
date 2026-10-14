@@ -87,9 +87,12 @@ class EngineDeps:
     declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # R3-1 ① — 입구 노드의 재료(접수 읽기·identity 필드, `intake_map.intake_spec`). None이면(사람이 연 케이스, 대본) 입구를 안 돈다.
     intake: IntakeSpec | None = None
-    # R3-3 ② — 클래스 이름 → 서비스들(홉 표의 `[서비스]`; 같은 이름이 두 레포면 둘 다 — 가르기는 ②-b). 걷기의 30초 상한에 쓰는 시계(규율 2) —
-    # None이면 시간 상한이 없다(깊이·읽기 상한은 그대로).
+    # R3-3 ② — 클래스 이름 → 서비스들(홉 표의 `[서비스]`; 같은 이름이 두 레포면 둘 다 — 가르기는 ②-b; 못 가른 파일은 그 레포의 서비스 전부).
+    # 걷기의 30초 상한에 쓰는 시계(규율 2) — None이면 시간 상한이 없다(깊이·읽기 상한은 그대로).
     class_services: dict = field(default_factory=dict)
+    # R3-4 ① — 서비스 → 레포(`DeployedCode.service_repos`). 걷기가 같은 클래스 이름을 **레포 단위**로 가르고, 한 레포를 여러 서비스가 공유하면
+    # 표에 그렇게 적는다(측정 #10 P0 2). 비어 있으면 서비스가 곧 레포다(전과 같다).
+    service_repos: dict = field(default_factory=dict)
     # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
     declared_by: dict = field(default_factory=dict)
     clock: Callable[[], datetime] | None = None
@@ -460,7 +463,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             return {}
         try:
             return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
-                                  declared_by=deps.declared_by, clock=deps.clock)
+                                  service_repos=deps.service_repos, declared_by=deps.declared_by, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 
@@ -867,11 +870,12 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence) -> Verdi
 
 def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | None) -> Verdict:
     """component가 인덱스의 **클래스 이름**이면 그 서비스로 바꾸고 caveat(R3-3 ⑤). 측정 #9 c-2: 리드가 쓴 쪽 클래스 이름을 원인 칸에 적었고
-    verify가 "서비스 아닌 component"로 걷어냈다 — 클래스는 서비스 안에 있으니 걷어낼 것이 아니라 번역할 것이다. 두 레포면 걷기가 가른 서비스
-    (홉 표의 쓴 쪽), 못 갈랐으면 첫 것 + "둘 다 후보". 바뀐 것이 없으면 같은 객체."""
+    verify가 "서비스 아닌 component"로 걷어냈다 — 클래스는 서비스 안에 있으니 걷어낼 것이 아니라 번역할 것이다. 두 레포면 걷기가 가른 쪽(홉의
+    후보 — 한 레포를 여러 서비스가 공유하면 그 전부라 첫 것으로 바꾸고 caveat에 전부, R3-4 ①), 못 갈랐으면 첫 것 + "전부 후보". 바뀐 것이 없으면
+    같은 객체."""
     if not class_services:
         return verdict
-    resolved = {h.writer: h.service for h in (walk.hops if walk is not None else []) if h.writer and h.service and "," not in h.service}
+    resolved = {h.writer: tuple(h.candidates) for h in (walk.hops if walk is not None else []) if h.writer and h.candidates}
     caveats: list[str] = []
 
     def fix(link: CauseLink | None) -> CauseLink | None:
@@ -880,11 +884,14 @@ def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | No
         services = class_services[link.component]
         if not services:
             return link
-        picked = resolved.get(link.component) or services[0]
+        candidates = resolved.get(link.component) or services
+        picked = candidates[0]
         note = ""
-        if len(services) > 1:
-            note = (f" (두 레포 {', '.join(services)} 중 걷기가 고른 것)" if link.component in resolved
-                    else f" (두 레포 {', '.join(services)} — 못 가른다, 둘 다 후보)")
+        if len(candidates) > 1:
+            note = (f" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)" if link.component in resolved
+                    else f" ({', '.join(candidates)}에 다 있다 — 못 가른다, 전부 후보)")
+        elif len(services) > 1:
+            note = f" ({', '.join(services)} 중 걷기가 고른 것)"
         caveats.append(f"component {link.component}는 클래스 이름 — 인덱스로 서비스 {picked}로 바꿨다{note}")
         return link.model_copy(update={"component": picked})
 

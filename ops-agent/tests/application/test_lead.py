@@ -82,7 +82,7 @@ async def test_심볼_인덱스가_있을_때만_역질문_action이_프롬프�
         frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3,
                                      services=("sink",), code_index=code_index)
         await frame(state)
-        assert ("- code.uses(name)" in llm.prompts[0]) is want and ("- code.callers(name)" in llm.prompts[0]) is want
+        assert ("- code.uses(name, service?)" in llm.prompts[0]) is want and ("- code.callers(name)" in llm.prompts[0]) is want
 
 
 # ── 정상 ───────────────────────────────────────────────────────────

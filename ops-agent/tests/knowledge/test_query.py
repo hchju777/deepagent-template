@@ -153,3 +153,14 @@ async def test_같은_디스패치가_두_길로_들어와도_그래프에는_�
     idx.add_edge(impl, base, "implements", "exact", line=5, via="name_rule")
     g = qy.Graph(idx)
     assert [(_q(idx, l.src), l.mark) for l in g.inc[impl]] == [("app.base.Store.save", "=>")]
+
+
+def test_repo_hint는_찾은_심볼이_레포_둘_이상에_걸칠_때만_레포와_그_서비스들을_한_줄로_안내한다():
+    """측정 #10 P1 6: 같은 이름이 두 레포에 있는데 한 레포를 여러 서비스가 `path` 없이 공유하면 서비스 단위 셈이 그 파일을 못 세어 안내가
+    안 떴다 — 레포 단위로 센다. 어떻게 고르는지(`how`)는 호출부가 댄다(어댑터는 인자, CLI는 옵션)."""
+    from types import SimpleNamespace
+    index = SimpleNamespace(symbols=[SimpleNamespace(repo="dt-col"), SimpleNamespace(repo="dt-proc"), SimpleNamespace(repo="dt-proc")])
+    repos = {"dt-col": ("collector",), "dt-proc": ("p1", "p2", "p3")}
+    assert qy.repo_hint(index, [0, 1, 2], repos, how="repo=") == ["  같은 이름이 레포 2곳에 있다 — repo=로 고른다: dt-col(collector), dt-proc(p1, p2, p3)"]
+    assert qy.repo_hint(index, [1, 2], repos, how="repo=") == []                                     # 한 레포 안의 여럿은 `파일:qualname`의 몫
+    assert qy.repo_hint(index, [0, 1], {}, how="--repo") == ["  같은 이름이 레포 2곳에 있다 — --repo로 고른다: dt-col(서비스 없음), dt-proc(서비스 없음)"]

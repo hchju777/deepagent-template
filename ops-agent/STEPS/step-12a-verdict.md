@@ -913,6 +913,26 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   수집기 클래스)는 "같은 이름"의 뜻(값의 잎 = 수집기 클래스 이름인가, 토픽 문자열 = 등록 문자열인가)을 답 받은 뒤.
 - 테스트 먼저(RED 1 → GREEN). 스윕 +5(722).
 
+#### R3-4 ① (10-14) ✅ — 레포 단위 가르기·가지 격리·`code.uses service=`·`code.resources repo=`
+
+- 측정 #10 P0 2: 처리기 레포는 서비스 5개가 `path` 없이 한 레포·한 config를 공유한다 — `flow.owner`가 못 가르고(`AMBIGUOUS`) `class_services`가
+  그 파일을 **버려서** 같은 이름의 클래스가 "수집기 한 곳"으로 보였다 → 원천 키 셋이 수집기로 붙고, `code.resources`에 인자 없이 물어 "여럿"으로
+  실패하고, 그 실패 하나가 걷기 전체를 끊었다. 사람 결정: 레포 단위로 가르고 표에 `<레포>(서비스 N개 공유)`, component 후보는 그 전부, 가른
+  레포를 `code.resources`에 넘긴다.
+- `class_services`는 못 가른 파일을 그 레포의 서비스 전부로 잇고, 어댑터가 `service_repos()`(서비스 → 레포)를 내며 엔진(`EngineDeps.service_repos`)이
+  걷기에 넘긴다. 걷기는 클래스의 서비스들을 레포로 묶어 **레포끼리** 선언 서비스로 가른다 — 한 서비스 레포는 `service=`, 공유 레포는 `repo=`(새
+  선택 인자 — 서비스 하나를 대표로 대면 표와 기록이 거짓이 된다), 한 레포뿐이면 인자 없이. 홉에 `candidates`(판정의 component 후보)를 두고
+  verify 번역(⑤)은 그 후보로(공유 레포면 첫 것 + caveat에 전부; 표의 `service` 글자에서 되읽지 않는다). 주의 모양: `W는 레포 2곳(a, dt-proc(서비스
+  3개 공유))에 있다 — <키>을 선언한 dt-proc(서비스 3개 공유)로 골랐다`.
+- **가지 격리**: 한 가지의 `code.resources` 실패는 여기로 오게 한 행에 `· W[꼬리표]의 자원 못 읽음 — 사유`로 적고 다른 가지는 계속 걷는다. 모르는
+  쓴 쪽이 없으면 멈춘 이유는 그 실패(다음 홉 없음) — 멈춘 자리의 재정의(가장 깊은 나쁜 홉)는 ②.
+- `code.uses service=`(등재 목록·포트·스텁·어댑터·CLI `--service`)를 받아 그 서비스의 레포 안으로 좁힌다(P1 7). CLI `code resources <이름>`의 안내는
+  레포 단위(`query.repo_hint` — 어댑터·CLI 공용): `같은 이름이 레포 N곳에 있다 — --repo(또는 그 레포의 서비스로 --service)로 고른다: <레포>(<서비스들>)`
+  (P1 6). `--repo`도 받는다.
+- 측정판: 변형 `palette-empty` — batch가 읽는 공용 팔레트 키의 쓴 클래스(`PaletteLoader`)가 서비스 디렉터리 밖(`common/`, 세 서비스 공유)과 dt-api에
+  같은 이름으로 있다. 보드: CLI `code resources PaletteLoader`가 `같은 이름이 레포 2곳에 있다 — --repo(또는 그 레포의 서비스로 --service)로 고른다: dt-api(api), dt-core(batch, processor, sink)`를 내고 `--repo dt-core`로 읽기 목록이 나오며 `code uses alarm:palette --service batch`가 레포 안으로 좁힌다. r0 홉 표 `alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 빈 배열 (colors)` + 주 `PaletteLoader는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — alarm:palette을 선언한 dt-core(서비스 3개 공유)로 골랐다`, 걷기가 `palette:source`까지 이어 `입력이 다 정상 — PaletteLoader`에서 멈춘다(다음 홉 없음 → 예시 네 칸 — ②의 몫). source-filtered는 팔레트 행이 `정상`으로 끼고 전처럼 리터럴 줄과 `code.read line=`을 가리킨다. r0 6.4K.
+- 테스트 먼저(RED → GREEN). 스윕 +26(748).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

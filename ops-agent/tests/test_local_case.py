@@ -128,3 +128,21 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     assert rows and all(r["state"] == "-" for r in rows)
     from tools.local_case import CORE_FILES
     assert 'r.get("state") != "-"' in CORE_FILES["batch/refresh.py"]
+
+
+def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_클래스는_서비스_디렉터리_밖과_다른_레포에_같은_이름으로_있다():
+    """측정 #10 P0 2의 모양 — 쓴 쪽(batch)이 읽는 공용 키의 쓴 클래스가 (1) 서비스 디렉터리 밖(`common/`)이라 `path` 없는 토폴로지로는 세
+    서비스 중 어느 것인지 못 가르고, (2) 다른 레포(dt-api)에도 같은 이름으로 있다. 걷기가 레포 단위로 가르고 `repo=`를 넘기는지 재는 변형.
+    dt-api는 그 키를 선언하지 않는다 — 선언으로 dt-core를 고른다."""
+    import json
+    from tools.local_case import API_FILES, CORE_FILES, VARIANTS, _EMPTY_DATA
+    assert "palette-empty" in VARIANTS and "palette-empty" in _EMPTY_DATA
+    s = _seeds(NOW, "palette-empty")
+    palette = json.loads(s["redis"]["alarm:palette"])
+    assert palette["colors"] == [] and palette["metadata"]["event_type"] == "PaletteLoader"
+    assert json.loads(s["redis"]["palette:source"]) and json.loads(s["redis"]["alarm:stats:L1"])["record"][0]["data"] == []
+    assert json.loads(_seeds(NOW, "data-empty")["redis"]["alarm:palette"])["colors"]
+    assert "class PaletteLoader:" in CORE_FILES["common/palette.py"] and "class PaletteLoader:" in API_FILES["api/palette.py"]
+    assert 'cfg["redis_key"]["alarm_palette"]' in CORE_FILES["batch/refresh.py"] and 'cfg["redis_key"]["palette_source"]' in CORE_FILES["common/palette.py"]
+    assert CORE_FILES["config/gbm/mx.json"]["redis_key"]["alarm_palette"] == "alarm:palette"
+    assert "alarm_palette" not in API_FILES["config/gbm/mx.json"]["redis_key"]

@@ -776,10 +776,13 @@ async def test_class_services는_클래스_이름을_그_파일의_서비스에_
 
 async def test_code_resources는_service로_레포를_좁히고_같은_이름이_두_서비스에_있으면_그렇게_안내한다(clock):
     """측정 #9 P1 4: 같은 클래스 이름이 두 레포에 있고 `파일:qualname`도 같아 그 안내로는 못 골랐다. `service=`로 레포를 좁힌다 — 걷기가
-    선언 서비스로 가른 뒤 그 인자로 묻고, 사람은 CLI `--service`로."""
+    선언 서비스로 가른 뒤 그 인자로 묻고, 사람은 CLI `--service`로. R3-4 ①(측정 #10 P0 2·P1 6·7): 한 레포를 여러 서비스가 `path` 없이
+    공유하면 `owner`가 못 가른다 — `class_services`는 그 파일을 버리지 않고 **그 레포의 서비스 전부**로 잇고, 안내는 레포 단위로 세며,
+    `repo=`로도 좁힌다. `code.uses`도 `service=`를 받는다(리드가 `code.resources`의 인자를 여기에도 냈다가 거부당했다)."""
     from src.domain.actions import action_problem
     from src.infrastructure.deployed_code import DeployedCode
     from src.knowledge import index as ix
+    from src.knowledge.flow import Name
     from src.knowledge.schema import Deployment, Service, Topology
 
     class Src:
@@ -793,18 +796,34 @@ async def test_code_resources는_service로_레포를_좁히고_같은_이름이
             return self.FILES.get(path)
 
     body = "class Refresh:\n    def _run(self, redis):\n        return redis.get('alarm:source')\n"
-    topology = Topology(services={"collector": Service(repo="dt-col", role="모은다"), "processor": Service(repo="dt-proc", role="가공한다")},
-                        config_paths=LAYERS)
+    # dt-proc은 서비스 둘(processor·p2)이 `path` 없이 공유한다 — 사내 처리기 레포의 모양(서비스 5개)
+    topology = Topology(services={"collector": Service(repo="dt-col", role="모은다"), "processor": Service(repo="dt-proc", role="가공한다"),
+                                  "p2": Service(repo="dt-proc", role="가공한다")}, config_paths=LAYERS)
     code = DeployedCode(object(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
-    code.attach_index(await ix.build_index({"dt-col": Src(body), "dt-proc": Src(body)}, commits={"dt-col": "c1", "dt-proc": "c2"}))
+    assert code.service_repos() == {"collector": "dt-col", "processor": "dt-proc", "p2": "dt-proc"}
+    code.attach_index(await ix.build_index({"dt-col": Src(body), "dt-proc": Src(body)}, commits={"dt-col": "c1", "dt-proc": "c2"},
+                                           names=[Name("rediskey", "alarm:source", "redis_key.alarm_source")]))
+    assert code.class_services() == {"Refresh": ("collector", "p2", "processor")}               # 못 가른 파일 → 그 레포의 서비스 전부
     many = await code.resources("Refresh")
-    assert many.status == "error" and "여럿" in many.error and "service= 인자로 고른다: collector, processor" in many.error
+    assert many.status == "error" and "여럿" in many.error
+    assert "같은 이름이 레포 2곳에 있다 — repo= 인자(또는 그 레포의 서비스로 service=)로 고른다: dt-col(collector), dt-proc(p2, processor)" in many.error
     one = await code.resources("Refresh", service="processor")
-    assert one.status == "ok" and one.data.splitlines()[0].startswith("pipe.job.Refresh (pipe/job.py:L1) [dt-proc · processor]")
+    assert one.status == "ok" and one.data.splitlines()[0].startswith("pipe.job.Refresh (pipe/job.py:L1) [dt-proc]")
     assert "service=processor" in one.source
     bad = await code.resources("Refresh", service="nope")
     assert bad.status == "error" and "없는 서비스" in bad.error
+    byrepo = await code.resources("Refresh", repo="dt-proc")
+    assert byrepo.status == "ok" and byrepo.data == one.data and "repo=dt-proc" in byrepo.source
+    assert "없는 레포 — nope. 아는 것: dt-col, dt-proc" in (await code.resources("Refresh", repo="nope")).error
     assert action_problem("code.resources", {"name": "Refresh", "service": "processor"}) is None          # 등재 목록의 선택 인자
+    assert action_problem("code.resources", {"name": "Refresh", "repo": "dt-proc"}) is None
+    # code.uses service= — 그 서비스의 레포 안에서만
+    everywhere = await code.uses("alarm:source")
+    assert everywhere.status == "ok" and "[dt-col" in everywhere.data and "[dt-proc" in everywhere.data
+    narrowed = await code.uses("alarm:source", service="collector")
+    assert narrowed.status == "ok" and "[dt-col" in narrowed.data and "[dt-proc" not in narrowed.data and "service=collector" in narrowed.source
+    assert "없는 서비스" in (await code.uses("alarm:source", service="nope")).error
+    assert action_problem("code.uses", {"name": "alarm:source", "service": "collector"}) is None
 
 
 # ── R3-3 ④-a — code.read line= : 그 줄을 품은 함수 전체 ──

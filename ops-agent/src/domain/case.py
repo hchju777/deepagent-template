@@ -148,6 +148,9 @@ class Hop(StrictModel):
     depth: int = 0
     writer: str = ""
     service: str = ""
+    # 판정의 component 후보 서비스들(R3-4 ①) — 걷기가 가른 레포의 서비스 전부(한 레포를 여러 서비스가 공유하면 여럿). `service`는 표에 적는
+    # 글자(`<레포>(서비스 N개 공유)`)라 거기서 서비스를 되읽지 않는다.
+    candidates: list[str] = []
     status: str = ""
     bad: bool = False
     evidence_id: str = ""

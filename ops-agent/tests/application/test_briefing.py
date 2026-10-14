@@ -241,10 +241,10 @@ def test_그래프가_없으면_없다고_적고_code_flow를_목록에서_뺀�
     assert "code.callers" not in with_graph["actions"] and "code.uses" not in with_graph["actions"]
     with_index = briefing.frame_fields(state, site_config=cfg, services=("sink",), flow_graph=FLOW_GRAPH,
                                        code_index=True)
-    assert "- code.callers(name)" in with_index["actions"] and "- code.uses(name)" in with_index["actions"]
+    assert "- code.callers(name)" in with_index["actions"] and "- code.uses(name, service?)" in with_index["actions"]
     later = briefing.integrate_fields(state, site_config=cfg, max_rounds=6, services=("sink",),
                                       flow_graph=FLOW_GRAPH, code_index=True)
-    assert "- code.uses(name)" in later["actions"]
+    assert "- code.uses(name, service?)" in later["actions"]
 
 
 # ── 자리 이름이 실제로 채워지는 것과 같은가 ────────────────────────

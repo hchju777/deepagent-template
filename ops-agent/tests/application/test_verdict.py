@@ -494,15 +494,22 @@ async def test_verify는_클래스_이름_component를_인덱스의_서비스로
     from src.application.nodes import translate_classes
     from src.domain.case import Hop, Walk
 
-    classes = {"SummaryRefresh": ("sink",), "Dual": ("api", "sink")}
+    classes = {"SummaryRefresh": ("sink",), "Dual": ("api", "sink"), "Shared": ("p1", "p2", "p3")}
     v = verdict(root_cause=cause("SummaryRefresh", "t-1.e1"), alternates=[cause("Dual", "t-1.e1", confidence="low")],
                 contributing=[cause("api", "t-1.e1", relation="r")])
     got = translate_classes(v, class_services=classes, walk=None)
     assert (got.root_cause.component, got.alternates[0].component, got.contributing[0].component) == ("sink", "api", "api")
     assert got.caveats == ["component SummaryRefresh는 클래스 이름 — 인덱스로 서비스 sink로 바꿨다",
-                           "component Dual는 클래스 이름 — 인덱스로 서비스 api로 바꿨다 (두 레포 api, sink — 못 가른다, 둘 다 후보)"]
-    walked = Walk(hops=[Hop(key="k", writer="Dual", service="sink", status="정상")])
-    assert translate_classes(v, class_services=classes, walk=walked).alternates[0].component == "sink"        # 걷기가 가른 쪽
+                           "component Dual는 클래스 이름 — 인덱스로 서비스 api로 바꿨다 (api, sink에 다 있다 — 못 가른다, 전부 후보)"]
+    walked = Walk(hops=[Hop(key="k", writer="Dual", service="sink", candidates=["sink"], status="정상")])
+    picked = translate_classes(v, class_services=classes, walk=walked)
+    assert picked.alternates[0].component == "sink"                                                            # 걷기가 가른 쪽(홉의 후보)
+    assert picked.caveats[1] == "component Dual는 클래스 이름 — 인덱스로 서비스 sink로 바꿨다 (api, sink 중 걷기가 고른 것)"
+    # 한 레포를 여러 서비스가 공유하면(R3-4 ①) 걷기가 가른 것은 레포다 — 그 서비스 전부가 후보, 첫 것으로 바꾸고 caveat에 전부
+    byrepo = Walk(hops=[Hop(key="k", writer="Shared", service="dt-proc(서비스 3개 공유)", candidates=["p1", "p2", "p3"], status="정상")])
+    shared = translate_classes(verdict(root_cause=cause("Shared", "t-1.e1")), class_services=classes, walk=byrepo)
+    assert shared.root_cause.component == "p1"
+    assert shared.caveats == ["component Shared는 클래스 이름 — 인덱스로 서비스 p1로 바꿨다 (레포를 p1, p2, p3가 공유 — 첫 것, 전부 후보)"]
     assert translate_classes(v, class_services={}, walk=None) is v                                             # 바뀐 것이 없으면 같은 객체
     nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink", "api"}), class_services=classes))
     patch = await nodes["verify"](_state(case, verdict=v))

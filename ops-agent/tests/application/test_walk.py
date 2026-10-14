@@ -107,6 +107,7 @@ async def test_나쁜_입력의_쓴_쪽을_모르면_거기서_멈추고_다음_
     # 쓴 쪽의 자원 자체를 못 읽었으면 거기서 멈춘다
     walk = (await run_walk(_state(), runner=_Reads({}), classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
     assert walk.stopped == "W0의 자원을 못 읽었다 — 대본 없음" and walk.next_hop() is None and len(walk.hops) == 1
+    assert walk.hops[0].status == "빈 배열 (record[0].data) · W0의 자원 못 읽음 — 대본 없음"              # 그 행에 적는다(R3-4 ①)
 
 
 async def test_걷기의_상한은_깊이_읽기_시간이고_상한에서_멈추면_다음_홉은_그_자리의_resources다():
@@ -159,13 +160,14 @@ async def test_같은_클래스_이름이_두_레포면_그_키를_선언한_서
                            declared_by={"alarm:stats:{line}": ("a",), "in:a:{line}": ("b",)}, clock=lambda: T0))["walk"]
     assert [p for a, p in runner.params if a == "code.resources"] == [{"name": "W0", "service": "a"}, {"name": "W1", "service": "b"}]
     assert (walk.hops[0].service, walk.hops[1].service) == ("a", "b") and walk.hops[1].basis == "W0[a]가 읽는 자원 (t-1-1.e1)"
-    assert walk.notes == ["W0는 2곳(a, b)에 있다 — alarm:stats:{line}을 선언한 a로 골랐다", "W1는 2곳(a, b)에 있다 — in:a:{line}을 선언한 b로 골랐다"]
-    assert "  주: W0는 2곳(a, b)에 있다 — alarm:stats:{line}을 선언한 a로 골랐다" in walk.lines()
+    assert walk.notes == ["W0는 레포 2곳(a, b)에 있다 — alarm:stats:{line}을 선언한 a로 골랐다", "W1는 레포 2곳(a, b)에 있다 — in:a:{line}을 선언한 b로 골랐다"]
+    assert "  주: W0는 레포 2곳(a, b)에 있다 — alarm:stats:{line}을 선언한 a로 골랐다" in walk.lines()
+    assert (walk.hops[0].candidates, walk.hops[1].candidates) == (["a"], ["b"])                 # 판정의 component 후보 — 가른 쪽
     both = _Reads(table)
     walk = (await run_walk(_state(), runner=both, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a", "b")},
                            declared_by={"alarm:stats:{line}": ("a", "b")}, clock=lambda: T0))["walk"]
     assert [p for a, p in both.params if a == "code.resources"][:2] == [{"name": "W0", "service": "a"}, {"name": "W0", "service": "b"}]
-    assert walk.hops[0].service == "a, b" and walk.notes[0].endswith("(둘 다 선언): 둘 다 걷는다")
+    assert walk.hops[0].service == "a, b" and walk.notes[0].endswith("(둘 다 선언): 둘 다 걷는다") and walk.hops[0].candidates == ["a", "b"]
     assert [h.key for h in walk.hops] == ["alarm:stats:L1", "in:a:L1", "src:L1"]            # 둘째 가지의 같은 입력은 다시 안 읽는다
     walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a", "b")},
                            clock=lambda: T0))["walk"]
@@ -174,6 +176,52 @@ async def test_같은_클래스_이름이_두_레포면_그_키를_선언한_서
     walk = (await run_walk(_state(), runner=one, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("b",)}, clock=lambda: T0))["walk"]
     assert walk.notes == [] and [p for a, p in one.params if a == "code.resources"] == [{"name": "W0"}, {"name": "W1"}]
     assert (walk.hops[0].service, walk.hops[1].service, walk.hops[1].basis) == ("a", "b", "W0가 읽는 자원 (t-1-1.e1)")
+
+
+# ── R3-4 ① — 레포 단위 가르기·가지 격리 ──
+
+async def test_한_레포를_여러_서비스가_공유하면_레포_단위로_가르고_표에_공유로_적으며_그_레포를_resources에_넘긴다():
+    """측정 #10 P0 2: 처리기 레포는 서비스 5개가 `path` 없이 한 레포·한 config를 공유한다 — 서비스로는 못 가르고 원천 키 셋이 수집기로 붙었다.
+    사람 결정: 레포 단위로 가르고 표에 `<레포>(서비스 N개 공유)`, component 후보는 그 레포의 서비스 전부, 가른 레포를 `code.resources repo=`로
+    넘긴다(공용 키 멈춤의 직접 원인). 한 레포뿐이면(공유라도) 인자 없이 — 리드의 중복이 같은 질의여야 잡힌다."""
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(record=[], metadata={"event_type": "W1"}),
+             ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey")]),
+             ("redis.get", "src:L1"): _value(n=1)}
+    runner = _Reads(table)
+    repos = {"col": "dt-col", "p1": "dt-proc", "p2": "dt-proc", "p3": "dt-proc"}
+    walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0", "W1"}),
+                           class_services={"W0": ("col", "p1", "p2", "p3"), "W1": ("p1", "p2", "p3")}, service_repos=repos,
+                           declared_by={"alarm:stats:{line}": ("p1", "p2", "p3")}, clock=lambda: T0))["walk"]
+    assert [p for a, p in runner.params if a == "code.resources"] == [{"name": "W0", "repo": "dt-proc"}, {"name": "W1"}]
+    assert (walk.hops[0].service, walk.hops[0].candidates) == ("dt-proc(서비스 3개 공유)", ["p1", "p2", "p3"])
+    assert (walk.hops[1].service, walk.hops[1].candidates) == ("dt-proc(서비스 3개 공유)", ["p1", "p2", "p3"])
+    assert walk.hops[1].basis == "W0[dt-proc(서비스 3개 공유)]가 읽는 자원 (t-1-1.e1)"
+    assert walk.notes == ["W0는 레포 2곳(col, dt-proc(서비스 3개 공유))에 있다 — alarm:stats:{line}을 선언한 dt-proc(서비스 3개 공유)로 골랐다"]
+    assert walk.stopped == "입력이 다 정상 — W1"
+    # 선언이 양쪽이면 레포 둘 다 걷는다 — 한 서비스 레포는 service=, 공유 레포는 repo=. 후보는 전부.
+    both = _Reads(table)
+    walk = (await run_walk(_state(), runner=both, classes=frozenset({"W0", "W1"}), class_services={"W0": ("col", "p1", "p2")},
+                           service_repos=repos, declared_by={"alarm:stats:{line}": ("col", "p1")}, clock=lambda: T0))["walk"]
+    assert [p for a, p in both.params if a == "code.resources"][:2] == [{"name": "W0", "service": "col"}, {"name": "W0", "repo": "dt-proc"}]
+    assert (walk.hops[0].service, walk.hops[0].candidates) == ("col, dt-proc(서비스 2개 공유)", ["col", "p1", "p2"])
+    assert walk.notes[0] == "W0는 레포 2곳(col, dt-proc(서비스 2개 공유))에 있다 — alarm:stats:{line}을 선언한 쪽으로 못 가른다(둘 다 선언): 둘 다 걷는다"
+
+
+async def test_한_가지의_resources_실패는_그_행에만_적고_다른_가지는_계속_걷는다():
+    """측정 #10 P0 2: 공용 키 하나의 쓴 쪽 `code.resources`가 실패하자 걷기 전체가 멈췄다. 실패는 그 입력 행에 `자원 못 읽음`으로 남기고 다른
+    가지는 끝까지 걷는다. 멈춘 이유는 (모르는 쓴 쪽이 없으면) 그 실패고 다음 홉은 없다 — 증거는 그 행의 것."""
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("in:b:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(record=[], metadata={"event_type": "W1"}),
+             ("redis.get", "in:b:L1"): _value(record=[], metadata={"event_type": "W2"}),
+             ("code.resources", "W2"): _res("W2", [("src:{line}", "rediskey")]),
+             ("redis.get", "src:L1"): _value(n=1)}
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0", "W1", "W2"}), class_services={"W1": ("a",)}, clock=lambda: T0))["walk"]
+    assert [h.key for h in walk.hops] == ["alarm:stats:L1", "in:a:L1", "in:b:L1", "src:L1"]
+    assert walk.hops[1].status == "빈 배열 (record) · W1의 자원 못 읽음 — 대본 없음" and walk.hops[1].bad
+    assert walk.hops[3].status.startswith("정상") and ("code.resources", "W2") in runner.ran
+    assert walk.stopped == "W1의 자원을 못 읽었다 — 대본 없음" and walk.next_hop() is None and walk.next_evidence == "t-1-2.e1"
 
 
 # ── R3-3 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다 ──

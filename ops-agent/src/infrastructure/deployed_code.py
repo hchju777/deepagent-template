@@ -119,25 +119,30 @@ class DeployedCode(DeployedCodePort):
             return frozenset()
         return frozenset(s.name for s in self._index.symbols if s.kind == "class")
 
-    def _service_hint(self, found: list[int]) -> list[str]:
-        """같은 이름이 **두 서비스**에 있으면 `파일:qualname`으로는 못 가른다(측정 #9 P1 4 — 파일도 같았다). `service=`로 고르라고 말한다."""
-        services = sorted({svc for sid in found
-                           if (svc := flowgraph.owner(self._index.symbols[sid].file, self._index.symbols[sid].repo, self._topology)[0])})
-        if len(services) < 2:
-            return []
-        return [f"  같은 이름이 서비스 {len(services)}곳에 있다 — service= 인자로 고른다: {', '.join(services)}"]
+    def _repo_hint(self, found: list[int]) -> list[str]:
+        """같은 이름이 **두 레포**에 있으면 `파일:qualname`으로는 못 가른다(측정 #9 P1 4 — 파일도 같았다). 레포 단위로 센다 — 서비스 단위 셈은 한
+        레포를 여러 서비스가 `path` 없이 공유할 때 그 파일을 못 세어 안내가 안 떴다(측정 #10 P1 6)."""
+        from src.knowledge import query as qy
+
+        return qy.repo_hint(self._index, found, flowgraph.repo_services(self._topology), how="repo= 인자(또는 그 레포의 서비스로 service=)")
 
     def class_services(self) -> dict[str, tuple[str, ...]]:
-        """클래스 이름 → 그 클래스가 있는 파일의 서비스들(`flow.owner`). 같은 이름이 두 레포에 있으면 둘 다(측정 #9 P1 4 — 가르기는 R3-3 ②-b).
-        홉 표의 `[서비스]`와 verify의 클래스→서비스 번역(⑤)이 쓴다."""
+        """클래스 이름 → 그 클래스가 있는 파일의 서비스들(`flow.owner`). 같은 이름이 두 레포에 있으면 둘 다(측정 #9 P1 4). `owner`가 못 가른
+        파일(한 레포를 여러 서비스가 `path` 없이 공유)은 **그 레포의 서비스 전부** — 버리면 걷기가 그 클래스를 "한 곳"으로 보고 레포를 못 가른다
+        (측정 #10 P0 2: 원천 키 셋이 수집기로 붙고 공용 키에서 걷기가 멈췄다). 홉 표의 `[서비스]`와 verify의 클래스→서비스 번역(⑤)이 쓴다."""
         if self._index is None:
             return {}
+        shared = flowgraph.repo_services(self._topology)
         out: dict[str, set[str]] = {}
         for s in self._index.symbols:
             if s.kind == "class":
                 svc = flowgraph.owner(s.file, s.repo, self._topology)[0]
-                out.setdefault(s.name, set()).update([svc] if svc else [])
+                out.setdefault(s.name, set()).update([svc] if svc else shared.get(s.repo, ()))
         return {name: tuple(sorted(services)) for name, services in out.items()}
+
+    def service_repos(self) -> dict[str, str]:
+        """서비스 → 레포(토폴로지). 걷기가 클래스의 서비스들을 레포로 묶어 레포 단위로 가르는 데 쓴다(R3-4 ①)."""
+        return {name: svc.repo for name, svc in self._topology.services.items()}
 
     def _where(self, sid: int) -> str:
         s = self._index.symbols[sid]
@@ -161,10 +166,10 @@ class DeployedCode(DeployedCodePort):
         lines = qy.callers_lines(self._index, self._qgraph, found[0], where=self._where)
         return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)
 
-    async def resources(self, name: str, service: str = "") -> ProbeResult:
+    async def resources(self, name: str, service: str = "", repo: str = "") -> ProbeResult:
         from src.knowledge import query as qy
 
-        source = f"code.resources {name}" + (f" service={service}" if service else "")
+        source = f"code.resources {name}" + (f" service={service}" if service else f" repo={repo}" if repo else "")
         if self._index is None:
             return ProbeResult.failed("심볼 인덱스가 없다 — `python -m src code graph`로 만든다",
                                       source=source, clock=self._clock)
@@ -175,36 +180,52 @@ class DeployedCode(DeployedCodePort):
                 return ProbeResult.failed(f"없는 서비스 — {service}. 아는 것: {', '.join(sorted(self._topology.services)) or '없음'}",
                                           source=source, clock=self._clock)
             text = f"{known.repo}:{name}"
+        elif repo:
+            # 한 레포를 여러 서비스가 공유하면 걷기는 레포로 가른다(R3-4 ①) — 서비스 하나를 대표로 대면 표와 기록이 거짓이 된다.
+            known_repos = flowgraph.repo_services(self._topology)
+            if repo not in known_repos:
+                return ProbeResult.failed(f"없는 레포 — {repo}. 아는 것: {', '.join(known_repos) or '없음'}", source=source, clock=self._clock)
+            text = f"{repo}:{name}"
         found = qy.find(self._index, text)
         if not found:
             return ProbeResult.failed(f"{name}: 인덱스에 없다 — 케이스 블록의 쓴 쪽 이름 그대로나 `파일:qualname`으로",
                                       source=source, clock=self._clock)
         if len(found) > 1:
             lines = qy.ambiguous_lines(self._index, name, found)
-            lines += self._service_hint(found)
+            lines += self._repo_hint(found)
             return ProbeResult.failed("\n".join(lines), source=source, clock=self._clock)
         return ProbeResult.succeeded("\n".join(qy.resources_lines(self._index, found[0], where=self._where)),
                                      source=source, clock=self._clock)
 
-    async def uses(self, name: str) -> ProbeResult:
+    async def uses(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy
 
-        source = f"code.uses {name}"
+        source = f"code.uses {name}" + (f" service={service}" if service else "")
         if self._index is None:
             return ProbeResult.failed("심볼 인덱스가 없다 — `python -m src code graph`로 만든다",
                                       source=source, clock=self._clock)
+        known = None
+        if service:
+            # 측정 #10 P1 7: 리드가 `code.resources`의 service=를 여기에도 냈다가 거부당했다 — 받아서 그 서비스의 레포 안으로 좁힌다.
+            known = self._topology.services.get(service)
+            if known is None:
+                return ProbeResult.failed(f"없는 서비스 — {service}. 아는 것: {', '.join(sorted(self._topology.services)) or '없음'}",
+                                          source=source, clock=self._clock)
         if name in self._topology.services:
             # 사내 측정 #5: 서비스 이름으로 내고 "인덱스에 없다"를 받자 같은 이름으로 또 냈다 — 어디로 가야 하는지까지 말한다.
             return ProbeResult.failed(f"{name}: 서비스 이름이다 — 서비스의 배선은 code.flow name={name!r}, 자원을 쓰는 함수는 "
                                       f"그 자원 이름(컬렉션·토픽·키)으로 code.uses", source=source, clock=self._clock)
         found = qy.uses(self._index, name)
+        if known is not None:
+            found = [u for u in found if self._index.symbols[u.sid].repo == known.repo]
         if not found:
             # 측정 #9: 케이스 블록의 `쓴 쪽: <클래스>`를 보고 `code.uses <클래스>`를 냈다(r2·r3) — 클래스는 자원이 아니다. 서비스 이름 때처럼
             # 어디로 가야 하는지까지 말한다.
             if any(self._index.symbols[sid].kind == "class" for sid in qy.find(self._index, name)):
                 return ProbeResult.failed(f"{name}: 클래스 이름이다 — 그 클래스가 읽고 쓰는 자원은 code.resources name={name!r}, "
                                           f"자원을 쓰는 함수는 그 자원 이름(컬렉션·토픽·키)으로 code.uses", source=source, clock=self._clock)
-            return ProbeResult.failed(f"{name}: 이 이름의 자원을 쓰거나 읽는 함수가 인덱스에 없다 — "
+            inside = f"({service}의 레포 {known.repo} 안에서) " if known is not None else ""
+            return ProbeResult.failed(f"{name}: 이 이름의 자원을 쓰거나 읽는 함수가 인덱스에 없다{inside} — "
                                       f"<데이터 흐름>이나 증거에 나온 이름 그대로 써라", source=source, clock=self._clock)
         lines = qy.uses_lines(self._index, self._qgraph, found, where=self._where)
         return ProbeResult.succeeded("\n".join(lines), source=source, clock=self._clock)

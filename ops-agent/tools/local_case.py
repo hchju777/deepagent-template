@@ -121,7 +121,8 @@ CORE_FILES = {
                              "topic": {"topic1": "mx.alarm.raw", "topic2": "mx.alarm.main"}},
                 "producer": {"topic": {"topic1": "mx.alarm.main"}}}},
         "mongodb_collection": {"alarm": "alarm_events", "line_state": "line_state"},
-        "redis_key": {"alarm_stats": "alarm:stats:{line}", "alarm_source": "alarm:source:{line}", "heartbeat": "hb:{service}"},
+        "redis_key": {"alarm_stats": "alarm:stats:{line}", "alarm_source": "alarm:source:{line}", "heartbeat": "hb:{service}",
+                      "alarm_palette": "alarm:palette", "palette_source": "palette:source"},
         "sink": {"batch_size": 200, "flush_sec": 5}},
     "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi"},
     "config/factories/gumi/mx.json": {
@@ -168,11 +169,27 @@ class SummaryRefresh:
         self.cfg, self.redis, self.producer = cfg, redis, producer
 
     def _run(self):
+        palette = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_palette"]) or "{}")
         for line in self.cfg["lines"]:
             source = self.redis.get(self.cfg["redis_key"]["alarm_source"].format(line=line))
             rows = [r for r in json.loads(source or "[]") if r.get("state") != "-"]
-            command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": rows}
+            command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": rows,
+                       "colors": palette.get("colors", [])}
             self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
+''',
+    # 측정 #10 P0 2의 모양 — 공용 키의 쓴 쪽이 서비스 디렉터리 **밖**(`common/`)에 있다. 토폴로지에 `path`가 없으니 processor·sink·batch 중 어느
+    # 것인지 코드로는 못 가른다(사내 처리기 레포: 서비스 5개가 한 레포·한 config). 같은 이름이 dt-api에도 있어 레포 둘이다.
+    "common/palette.py": '''"""배지 색 표 — 원천 색 목록에서 켜진 것만 남겨 alarm:palette에 둔다."""
+
+
+class PaletteLoader:
+    def __init__(self, cfg, redis):
+        self.cfg, self.redis = cfg, redis
+
+    def _run(self):
+        source = self.redis.get(self.cfg["redis_key"]["palette_source"])
+        colors = [c for c in json.loads(source or "[]") if c.get("enabled")]
+        self.redis.set(self.cfg["redis_key"]["alarm_palette"], json.dumps({"metadata": {"event_type": "PaletteLoader"}, "colors": colors}))
 ''',
 }
 
@@ -188,6 +205,17 @@ API_FILES = {
     "config/factories/sevt/common.json": {"lines": LINES},
     # 사내 핸들러 모양(2026-09 확인): 캐시 키를 먼저 보고, 비면 저장소를 조회하고, 형식 같은 것은
     # config 이름으로 getattr해 고른다. 캐시만 읽는 핸들러로는 "핸들러에서 컬렉션까지 이어지나"를 잴 수 없다.
+    # dt-core의 `common/palette.py`와 **같은 클래스 이름** — 레포 둘(사내 수집기·처리기의 모양). 이쪽은 alarm:palette를 선언하지 않는다.
+    "api/palette.py": '''"""화면 색 — 고정 팔레트에 형식만 config에서."""
+
+
+class PaletteLoader:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def _run(self):
+        return {"format": self.cfg["api"]["badge_format"], "colors": ["#d33", "#fc0", "#3a3"]}
+''',
     "api/alarms.py": '''"""알람 화면 — alarm:stats:{line} 배지. 캐시가 비면 최근 alarm_window_min 분의 alarm_events에서 센다."""
 
 
@@ -244,8 +272,11 @@ VARIANTS = {
     "source-blank": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 빈 배열이다 — 걷기가 '0행'에서 멈춘다",
     # 사내 c-2형(측정 #9) — 원천 행은 있는데 모든 행의 한 필드가 '-'이고 batch 코드가 그 값을 거른다(`r.get("state") != "-"`).
     "source-filtered": "요약 키 data는 빈 배열이고 원천 키 행은 있지만 모든 행의 state가 '-'다 — batch가 그 값을 걸러 아무것도 안 남는다",
+    # 측정 #10 P0 2의 모양(R3-4 ①) — batch가 읽는 공용 키의 쓴 클래스가 서비스 디렉터리 밖·두 레포에 있다. 걷기가 레포 단위로 가르는지 잰다.
+    "palette-empty": "요약 키 data는 빈 배열이고 batch가 읽는 공용 팔레트 키의 colors가 빈 배열이다 — 쓴 쪽 PaletteLoader는 dt-core의 세 서비스가 "
+                     "공유하는 자리와 dt-api에 같은 이름으로 있다",
 }
-_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered"}
+_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty"}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 
 
@@ -315,6 +346,11 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                     "metadata": {"event_type": "refresh-job"},
                     "count_1h": 0, "updated_at": fresh(1)})
                for l in LINES},
+            # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①).
+            "alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader"},
+                                         "colors": [] if variant == "palette-empty" else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]}),
+            "palette:source": json.dumps([{"name": "alarm", "hex": "#d33", "enabled": True}, {"name": "caution", "hex": "#fc0", "enabled": True},
+                                          {"name": "normal", "hex": "#3a3", "enabled": False}]),
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게
         # "API가 죽었다"로 읽힌다(첫 로컬 실행에서 `prod_status`가 그랬다).

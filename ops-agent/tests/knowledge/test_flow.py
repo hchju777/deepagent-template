@@ -950,6 +950,12 @@ def test_config_조회의_get은_자원_읽기가_아니다():
     assert flow.direction('cfg.get("a"); redis.get(key)') == "reads"
 
 
+def test_repo_services는_레포마다_그_레포를_쓰는_서비스들을_이름순으로_준다():
+    """R3-4 ① — 한 레포를 여러 서비스가 공유하는 모양(사내 처리기 레포: 다섯)을 호출부(걷기의 레포 묶기·레포 안내)가 한 번에 본다."""
+    topology = Topology(services={"p2": Service(repo="dt-proc"), "collector": Service(repo="dt-col"), "p1": Service(repo="dt-proc")})
+    assert flow.repo_services(topology) == {"dt-col": ("collector",), "dt-proc": ("p1", "p2")}
+
+
 def test_declaring_services는_그_자원을_config로_선언한_서비스들이다():
     """R3-3 ②-b — 같은 클래스 이름이 두 레포에 있으면 걷기는 대상 키를 선언한 서비스로 가른다. `declares` 엣지의 출발 서비스만(읽기·레포 엣지는 아니다)."""
     g = {"nodes": [{"id": "service_a", "label": "a", "type": "service"}, {"id": "service_b", "label": "b", "type": "service"},

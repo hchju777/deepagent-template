@@ -2532,7 +2532,7 @@ WHOP_T = "tests/application/test_nodes.py::test_걷기가_있으면_받을_때�
 WBRIEF_T = "tests/application/test_briefing.py::test_걷기가_있으면_케이스_블록에_홉_표가_실리고_다음_홉은_멈춘_자리이며_걸은_읽기는_접힌다"
 CASES += [
  ("출력을 입력으로 센다", WK, "                if w and w == writer:\n", "                if False:\n", [WALK_T]),
- ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                    if w:\n                        frontier += [(w, s, depth + 1, ev, carry) for s in next_services]", "                    if False:\n                        frontier += [(w, s, depth + 1, ev, carry) for s in next_services]", [WALK_T]),
+ ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                    if w:\n                        frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                    if False:\n                        frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", [WALK_T]),
  ("정상인 입력으로도 간다", WK, "                if bad:\n                    if w:", "                if True:\n                    if w:", [WALK_T]),
  ("대상 키를 또 읽는다", WK, "    seen = {target.key, target.declared}", "    seen = set()", [WALK_T]),
  ("쓰기 구간도 걷는다", WK, "    m = _WRITES_AT.search(text)\n    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [WALK_T]),
@@ -2544,7 +2544,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if empties:\n            return f\"빈 배열 ({', '.join(empties)})\", True", "        if False:\n            return f\"빈 배열 ({', '.join(empties)})\", True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  declared_by=deps.declared_by, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.id.startswith(WALK_PREFIX) for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "            hop=next_hop(state.target, code_index=deps.code_index, walk=state.walk),", "            hop=next_hop(state.target, code_index=deps.code_index),", [WHOP_T]),
@@ -2554,7 +2554,7 @@ CASES += [
  ("걸은 읽기 본문을 안 접는다", B, "        if ref.id in pinned or ref.id in folded:\n            continue", "        if ref.id in pinned:\n            continue", [WBRIEF_T]),
  ("걸은 태스크를 한 줄로 안 접는다", B, "        if task.id.startswith(WALK_PREFIX):\n            # 걷기 노드의 읽기는 한 줄로", "        if False:\n            # 걷기 노드의 읽기는 한 줄로", [WBRIEF_T]),
  ("사다리 칸의 입력이 걷기의 증거가 아니다", B, "                inputs = ([walk.next_evidence] if walk is not None and walk.next_evidence\n                          else [key_read.result_evidence_ids[0]] if key_read else [])", "                inputs = [key_read.result_evidence_ids[0]] if key_read else []", [WBRIEF_T]),
- ("class_services가 서비스를 안 단다", DCP, "                out.setdefault(s.name, set()).update([svc] if svc else [])", "                out.setdefault(s.name, set())", ["tests/infrastructure/test_deployed_code.py::test_class_services는_클래스_이름을_그_파일의_서비스에_잇는다"]),
+ ("class_services가 서비스를 안 단다", DCP, "                out.setdefault(s.name, set()).update([svc] if svc else shared.get(s.repo, ()))", "                out.setdefault(s.name, set())", ["tests/infrastructure/test_deployed_code.py::test_class_services는_클래스_이름을_그_파일의_서비스에_잇는다"]),
  ("source-missing에 원천 키가 있다", ROOT / "tools/local_case.py", "            **({} if variant == \"source-missing\" else", "            **({} if False else", ["tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"]),
 ]
 
@@ -2563,16 +2563,16 @@ TIE_T = "tests/application/test_walk.py::test_같은_클래스_이름이_두_레
 RES_SVC_T = "tests/infrastructure/test_deployed_code.py::test_code_resources는_service로_레포를_좁히고_같은_이름이_두_서비스에_있으면_그렇게_안내한다"
 DECL_T = "tests/knowledge/test_flow.py::test_declaring_services는_그_자원을_config로_선언한_서비스들이다"
 CASES += [
- ("선언한 서비스로 안 가른다", WK, "        if len(picked) == 1:\n            notes.append(", "        if False:\n            notes.append(", [TIE_T]),
- ("못 가르면 한 쪽만 걷는다", WK, "        return found, \", \".join(found)", "        return found[:1], \", \".join(found)", [TIE_T]),
- ("한 곳뿐인데도 service 인자를 단다", WK, "        if len(found) <= 1:\n            return [\"\"], who(writer)", "        if len(found) <= 1:\n            return found or [\"\"], who(writer)", [TIE_T]),
- ("깊은 홉을 대상 키의 선언으로 가른다", WK, "                next_services, shown = branches(w, name) if (bad and w) else ([], who(w))", "                next_services, shown = branches(w, target.declared) if (bad and w) else ([], who(w))", [TIE_T]),
- ("service로 레포를 안 좁힌다", DCP, "            text = f\"{known.repo}:{name}\"\n        found = qy.find(self._index, text)", "            text = name\n        found = qy.find(self._index, text)", [RES_SVC_T]),
- ("두 서비스 안내를 안 한다", DCP, "            lines += self._service_hint(found)", "            pass", [RES_SVC_T]),
- ("등재 목록에 service 인자가 없다", ROOT / "src/domain/actions.py", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"service\",)),", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               ()),", [RES_SVC_T]),
+ ("선언한 서비스로 안 가른다", WK, "        if len(picked) == 1:\n            repo, svcs = picked[0]", "        if False:\n            repo, svcs = picked[0]", [TIE_T]),
+ ("못 가르면 한 쪽만 걷는다", WK, "        return [_Branch(where(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)", "        return [_Branch(where(r, s), shown_as(r, s), s) for r, s in found[:1]], shown, tuple(x for _, s in found for x in s)", [TIE_T]),
+ ("한 곳뿐인데도 service 인자를 단다", WK, "            return [_Branch({}, \"\", svcs)], who(writer), svcs", "            return [_Branch({\"service\": svcs[0]} if len(svcs) == 1 else {}, \"\", svcs)], who(writer), svcs", [TIE_T]),
+ ("깊은 홉을 대상 키의 선언으로 가른다", WK, "                next_branches, shown, cands = (branches(w, name) if (bad and w)", "                next_branches, shown, cands = (branches(w, target.declared) if (bad and w)", [TIE_T]),
+ ("service로 레포를 안 좁힌다", DCP, "            text = f\"{known.repo}:{name}\"\n        elif repo:", "            text = name\n        elif repo:", [RES_SVC_T]),
+ ("두 서비스 안내를 안 한다", DCP, "            lines += self._repo_hint(found)", "            pass", [RES_SVC_T]),
+ ("등재 목록에 service 인자가 없다", ROOT / "src/domain/actions.py", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"service\", \"repo\")),", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"repo\",)),", [RES_SVC_T]),
  ("declares가 아닌 엣지도 선언으로 센다", ROOT / "src/knowledge/flow.py", "                         if e.get(\"relation\") == \"declares\" and e.get(\"target\") in targets", "                         if e.get(\"target\") in targets", [DECL_T]),
- ("걷기 노드가 선언 서비스를 안 넘긴다", ND, "                                  declared_by=deps.declared_by, clock=deps.clock)", "                                  clock=deps.clock)", [WNODE_T]),
- ("CLI가 없는 서비스를 안 거른다", MN, "        known = topology.services.get(args.service) if topology is not None else None\n        if known is None:", "        known = topology.services.get(args.service) if topology is not None else None\n        if False:", ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
+ ("걷기 노드가 선언 서비스를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by, clock=deps.clock)", "service_repos=deps.service_repos, clock=deps.clock)", [WNODE_T]),
+ ("CLI가 없는 서비스를 안 거른다", MN, "            return 1\n        text = f\"{known.repo}:{args.name}\"", "            pass\n        text = f\"{known.repo}:{args.name}\"", ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
 ]
 
 # ── 12a-R3-3 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다 ──
@@ -2587,14 +2587,14 @@ CASES += [
  ("단일값 검사를 안 한다", WK, "                elif not bad and same and status.startswith(\"정상\"):", "                elif False:", [LIT_T]),
  ("리터럴 줄을 다음 홉으로 안 가리킨다", WK, "        if literal is not None:\n            # 아래에", "        if False:\n            # 아래에", [LIT_NEXT_T]),
  ("다음 홉 줄이 name 인자를 가정한다", IM, "        return f\"다음 홉: {describe(*hop)} — 걷기가 멈춘 자리({walk.stopped})\"", "        return f\"다음 홉: {hop[0]} name={hop[1]['name']!r} — 걷기가 멈춘 자리({walk.stopped})\"", [LIT_NEXT_T]),
- ("잡은 단일값을 위로 안 넘긴다", WK, "                        frontier += [(w, s, depth + 1, ev, carry) for s in next_services]", "                        frontier += [(w, s, depth + 1, ev, None) for s in next_services]", [LIT_T]),
+ ("잡은 단일값을 위로 안 넘긴다", WK, "                        frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                        frontier += [(w, b, depth + 1, ev, None) for b in next_branches]", [LIT_T]),
 ]
 
 # ── 12a-R3-3 ⑤ — 클래스 이름 component는 서비스로 ──
 CLS_T = "tests/application/test_verdict.py::test_verify는_클래스_이름_component를_인덱스의_서비스로_바꾸고_caveat을_단다"
 CASES += [
  ("클래스 이름을 서비스로 안 바꾼다", ND, "        return link.model_copy(update={\"component\": picked})", "        return link", [CLS_T]),
- ("두 레포에서 걷기가 가른 쪽을 안 쓴다", ND, "        picked = resolved.get(link.component) or services[0]", "        picked = services[0]", [CLS_T]),
+ ("두 레포에서 걷기가 가른 쪽을 안 쓴다", ND, "        candidates = resolved.get(link.component) or services", "        candidates = services", [CLS_T]),
  ("번역에 caveat을 안 단다", ND, "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing,\n                                      \"caveats\": verdict.caveats + caveats})", "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing})", [CLS_T]),
  ("verify가 번역 전 판정을 검사한다", ND, "        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk)", "        verdict = state.verdict", [CLS_T]),
  ("번역한 판정을 State에 안 둔다", ND, "            return {\"verify_problems\": [], **({\"verdict\": capped} if (changed or capped is not verdict) else {})}", "            return {\"verify_problems\": []} if capped is verdict else {\"verdict\": capped, \"verify_problems\": []}", [CLS_T]),
@@ -2610,7 +2610,47 @@ CASES += [
  ("리터럴 홉이 줄 둘레로 간다", WK, "                nxt, nxt_ev = (\"code.read\", {\"service\": scope, \"path\": path, \"line\": line}), gev", "                nxt, nxt_ev = (\"code.read\", {\"service\": scope, \"path\": path, \"offset\": max(1, line - 15), \"limit\": 40}), gev", [LIT_NEXT_T]),
 ]
 
-assert len(CASES) >= 722, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-4 ① — 레포 단위 가르기·가지 격리·code.uses service=·code.resources repo= ──
+SHARED_T = "tests/application/test_walk.py::test_한_레포를_여러_서비스가_공유하면_레포_단위로_가르고_표에_공유로_적으며_그_레포를_resources에_넘긴다"
+ISOLATE_T = "tests/application/test_walk.py::test_한_가지의_resources_실패는_그_행에만_적고_다른_가지는_계속_걷는다"
+REPO_HINT_T = "tests/knowledge/test_query.py::test_repo_hint는_찾은_심볼이_레포_둘_이상에_걸칠_때만_레포와_그_서비스들을_한_줄로_안내한다"
+REPO_SVC_T = "tests/knowledge/test_flow.py::test_repo_services는_레포마다_그_레포를_쓰는_서비스들을_이름순으로_준다"
+PAL_T = "tests/test_local_case.py::test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_클래스는_서비스_디렉터리_밖과_다른_레포에_같은_이름으로_있다"
+ACT_USES_T = "tests/domain/test_actions.py::test_역질문_둘이_이름_하나로_등재돼_있고_코드_추적_레인이다"
+CLI_RES_T = "tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"
+QY = ROOT / "src/knowledge/query.py"
+FLW = ROOT / "src/knowledge/flow.py"
+CASES += [
+ ("서비스를 레포로 안 묶는다", WK, "            by_repo.setdefault(repos.get(s, s), []).append(s)", "            by_repo.setdefault(s, []).append(s)", [SHARED_T]),
+ ("공유 레포를 표에 안 적는다", WK, "        return svcs[0] if len(svcs) == 1 else f\"{repo}(서비스 {len(svcs)}개 공유)\"", "        return svcs[0]", [SHARED_T]),
+ ("가른 레포를 resources에 안 넘긴다", WK, "        return {\"service\": svcs[0]} if len(svcs) == 1 else {\"repo\": repo}", "        return {\"service\": svcs[0]} if len(svcs) == 1 else {}", [SHARED_T]),
+ ("후보를 홉에 안 적는다", WK, "candidates=list(first_cands),", "candidates=[],", [SHARED_T, TIE_T]),
+ ("깊은 홉의 후보를 안 적는다", WK, "service=shown, candidates=list(cands), status=status", "service=shown, status=status", [SHARED_T, TIE_T]),
+ ("한 가지의 실패가 걷기를 끊는다", WK, "            failed.append((f\"{writer}{tag}\", why, came_from))\n            continue", "            failed.append((f\"{writer}{tag}\", why, came_from))\n            break", [ISOLATE_T]),
+ ("실패를 그 행에 안 적는다", WK, "            hops[at] = hops[at].model_copy(update={\"status\": f\"{hops[at].status} · {writer}{tag}의 자원 못 읽음 — {why}\"})", "            pass", [ISOLATE_T, UNKNOWN_T]),
+ ("실패를 멈춘 이유로 안 적는다", WK, "        elif failed:\n            name, why, ev = failed[0]", "        elif False:\n            name, why, ev = failed[0]", [ISOLATE_T, UNKNOWN_T]),
+ ("실패를 여기로 오게 한 행이 아니라 마지막 행에 적는다", WK, "            at = next((i for i, h in enumerate(hops) if h.evidence_id == came_from and h.writer == writer), len(hops) - 1)", "            at = len(hops) - 1", [ISOLATE_T]),
+ ("못 가른 파일의 클래스를 버린다", DCP, "                out.setdefault(s.name, set()).update([svc] if svc else shared.get(s.repo, ()))", "                out.setdefault(s.name, set()).update([svc] if svc else [])", [RES_SVC_T]),
+ ("서비스 지도를 어댑터가 안 낸다", DCP, "        return {name: svc.repo for name, svc in self._topology.services.items()}", "        return {}", [RES_SVC_T]),
+ ("repo로 레포를 안 좁힌다", DCP, "            text = f\"{repo}:{name}\"\n        found = qy.find(self._index, text)", "            text = name\n        found = qy.find(self._index, text)", [RES_SVC_T]),
+ ("없는 레포를 안 거른다", DCP, "            if repo not in known_repos:", "            if False:", [RES_SVC_T]),
+ ("uses가 service로 안 좁힌다", DCP, "            found = [u for u in found if self._index.symbols[u.sid].repo == known.repo]", "            pass", [RES_SVC_T]),
+ ("uses가 없는 서비스를 안 거른다", DCP, "            known = self._topology.services.get(service)\n            if known is None:\n                return ProbeResult.failed(f\"없는 서비스 — {service}. 아는 것: {', '.join(sorted(self._topology.services)) or '없음'}\",\n                                          source=source, clock=self._clock)\n        if name in self._topology.services:", "            known = self._topology.services.get(service)\n            if False:\n                return ProbeResult.failed(f\"없는 서비스 — {service}. 아는 것: {', '.join(sorted(self._topology.services)) or '없음'}\",\n                                          source=source, clock=self._clock)\n        if name in self._topology.services:", [RES_SVC_T]),
+ ("레포 안내를 안 한다", QY, "    if len(repos) < 2:\n        return []", "    if len(repos) < 3:\n        return []", [REPO_HINT_T, RES_SVC_T]),
+ ("레포 안내에 서비스를 안 적는다", QY, "    shown = \", \".join(f\"{repo}({', '.join(repo_services.get(repo, ())) or '서비스 없음'})\" for repo in repos)", "    shown = \", \".join(repos)", [REPO_HINT_T, RES_SVC_T]),
+ ("repo_services가 서비스를 안 묶는다", FLW, "        out.setdefault(svc.repo, []).append(name)", "        out.setdefault(svc.repo, [name])", [REPO_SVC_T, RES_SVC_T]),
+ ("등재 목록에 uses의 service 인자가 없다", AC, "    \"code.uses\":           (\"code\",  \"uses\",          (\"name\",),               (\"service\",)),", "    \"code.uses\":           (\"code\",  \"uses\",          (\"name\",),               ()),", [ACT_USES_T, RES_SVC_T]),
+ ("번역이 걷기의 후보를 안 쓴다", ND, "    resolved = {h.writer: tuple(h.candidates) for h in (walk.hops if walk is not None else []) if h.writer and h.candidates}", "    resolved = {}", [CLS_T]),
+ ("공유 레포 후보에 caveat을 안 단다", ND, "            note = (f\" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)\" if link.component in resolved", "            note = (\"\" if link.component in resolved", [CLS_T]),
+ ("걷기 노드가 레포 지도를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by", "declared_by=deps.declared_by", [WNODE_T]),
+ ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
+ ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
+ ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant == \"palette-empty\" else", "\"colors\": [] if False else", [PAL_T]),
+ ("palette-empty가 빈 data가 아니다", LC, "_EMPTY_DATA = {\"data-empty\", \"source-missing\", \"source-blank\", \"source-filtered\", \"palette-empty\"}", "_EMPTY_DATA = {\"data-empty\", \"source-missing\", \"source-blank\", \"source-filtered\"}", [PAL_T]),
+]
+
+assert len(CASES) >= 748, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -947,3 +947,12 @@ def test_code_resources가_클래스가_읽고_쓰는_자원에_답한다(tmp_pa
     assert code == 0 and captured.out.splitlines()[0].strip().startswith("processor.stamp.Stamp ("), captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Stamp", "--service", "nope")
     assert code == 1 and "없는 서비스" in captured.out
+    # 레포로도 좁힌다(R3-4 ① — 한 레포를 여러 서비스가 공유할 때) — 없는 레포는 그 자리에서. `code uses`도 서비스로 좁힌다.
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Stamp", "--repo", REPO)
+    assert code == 0 and captured.out.splitlines()[0].strip().startswith("processor.stamp.Stamp ("), captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "resources", "Stamp", "--repo", "nope")
+    assert code == 1 and "없는 레포" in captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "alarm_events", "--service", "sink")
+    assert code == 0 and "alarm_events" in captured.out, captured.out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "alarm_events", "--service", "nope")
+    assert code == 1 and "없는 서비스" in captured.out

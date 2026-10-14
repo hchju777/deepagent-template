@@ -180,7 +180,7 @@ def test_역질문_둘이_이름_하나로_등재돼_있고_코드_추적_레인
     """11d 6d — `code.callers`·`code.uses`. `name`은 trace·uses 출력이나 증거에 나온 이름 그대로다. 둘 다 코드 레인."""
     from src.domain.actions import role_for
     assert ACTIONS["code.callers"] == ("code", "callers", ("name",), ())
-    assert ACTIONS["code.uses"] == ("code", "uses", ("name",), ())
+    assert ACTIONS["code.uses"] == ("code", "uses", ("name",), ("service",))        # R3-4 ①: code.resources처럼 service=를 받는다
     assert role_for("code.callers") == role_for("code.uses") == "code_tracer"
 
 

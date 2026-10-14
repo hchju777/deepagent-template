@@ -191,6 +191,15 @@ def owner(file: str, repo: str, topology: Topology) -> tuple[str | None, str]:
     return None, "AMBIGUOUS"
 
 
+def repo_services(topology: Topology) -> dict[str, tuple[str, ...]]:
+    """레포 → 그 레포를 쓰는 서비스들(이름순). 한 레포를 여러 서비스가 공유하는 모양(사내 처리기 레포: 다섯)을 호출부(걷기의 레포 묶기·같은 이름의
+    레포 안내·`class_services`의 못 가른 파일)가 한 번에 본다(R3-4 ①)."""
+    out: dict[str, list[str]] = {}
+    for name, svc in topology.services.items():
+        out.setdefault(svc.repo, []).append(name)
+    return {repo: tuple(sorted(names)) for repo, names in sorted(out.items())}
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
 

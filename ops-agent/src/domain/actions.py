@@ -78,11 +78,13 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     # code.uses 출력이나 증거에 나온 이름 그대로(함수는 `Class.method` 끝부분이면 된다). 여럿이면 코드가 고르지
     # 않고 후보를 돌려준다 — 그중 하나로 다시 낸다. 심볼 인덱스가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
     "code.callers":        ("code",  "callers",       ("name",),               ()),
-    "code.uses":           ("code",  "uses",          ("name",),               ()),
+    # `service`(선택)는 그 서비스의 레포 안으로 — `code.resources`와 같은 인자(측정 #10 P1 7: 리드가 여기에도 냈다가 거부당했다).
+    "code.uses":           ("code",  "uses",          ("name",),               ("service",)),
     # 이 클래스(함수)가 읽고 쓰는 자원(R3-1c ①-a) — 입구가 키 값에서 고른 "쓴 쪽"의 **입력**이 다음 홉이다. `name`은 케이스 블록의
     # 쓴 쪽 이름 그대로(`Class` 또는 `파일:qualname`). 여럿이면 코드가 고르지 않고 후보를 돌려준다.
-    # `service`는 같은 클래스 이름이 두 레포에 있을 때 레포를 좁힌다(R3-3 ②-b) — 걷기가 선언 서비스로 가른 뒤 이 인자로 묻는다.
-    "code.resources":      ("code",  "resources",     ("name",),               ("service",)),
+    # `service`는 같은 클래스 이름이 두 레포에 있을 때 레포를 좁힌다(R3-3 ②-b) — 걷기가 선언 서비스로 가른 뒤 이 인자로 묻는다. `repo`는
+    # 레포를 바로 댄다(R3-4 ①) — 한 레포를 여러 서비스가 `path` 없이 공유하면 서비스 하나로는 거짓이라 걷기가 레포로 가른다.
+    "code.resources":      ("code",  "resources",     ("name",),               ("service", "repo")),
     # ── 원천 재집계(11b 3b). `expect`는 앞선 증거 **안의 값 위치**(`{"evidence": "t-1.e1", "path":
     # "items[0].n"}`)다 — 리드가 숫자를 옮겨 적으면 대조가 전사 실수를 검증하게 된다. 실행기
     # (`ProbeRunner`)가 가로채 자기가 보관한 원본에서 값을 꺼낸다. `_sanitize_task`가 `expect.evidence`를
