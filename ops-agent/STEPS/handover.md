@@ -15,7 +15,7 @@
 | 리포 | `hchju777/deepagent-template` |
 | 브랜치 | `claude/template-implementation-llm-gtv8nz` |
 | 작업 트리 | `ops-agent/` — **원본 `src/`·`tests/`는 건드리지 않는다**(참고용) |
-| 테스트 | `1652 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 634 사례 |
+| 테스트 | `1654 passed, 1 skipped, 26 deselected` (deselected는 사내에서만 도는 live) · RED 스윕 636 사례 |
 
 (마지막 커밋 해시는 적지 않는다 — 커밋할 때마다 썩고, 실제로 한 번 썩어 있었다.
 `git log --oneline -5`가 답한다.)
@@ -243,6 +243,9 @@ CLAUDE.md의 "흔한 실수"에 더해, 9단계에서 새로 나온 것들이다
 4. **인코딩을 자식 프로세스에 적용 안 했다.** `tests/test_portability.py`가 이미
    같은 규율을 `open()`에 대해 갖고 있었는데 `subprocess`엔 없었다
    ([windows.md](windows.md) 함정 ①-b).
+5. **리포의 `knowledge/topology`에 측정판 서비스를 적고 테스트가 그 파일을 읽었다**(883175e, 사내 10-14). 그 파일은 운영이 실제
+   서비스 이름으로 채우는 칸이다 — `copytree`만 보던 검사를 읽기가 비껴갔다. 측정판은 자기 사본의 `services`를 바꾸고
+   (`local_case._board_topology`), 테스트는 그 함수를 본다. `test_portability`가 이제 `__file__` 기준 `knowledge` 경로 자체를 잡는다.
 
 그리고 RED 스윕이 **거짓 초록**을 하나 잡았다: "config를 못 읽으면 안전하게
 답한다"는 분기가 지워도 결과가 같았다 — 방어가 아니라 무동작이었다.

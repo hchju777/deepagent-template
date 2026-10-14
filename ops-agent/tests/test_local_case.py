@@ -98,12 +98,11 @@ def test_미끼_키는_이름이_비슷하고_같은_라벨을_달았지만_iden
 def test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다():
     """사내 10-07 진단표 #8의 모양 — 배치 파이프라인이 요약 키 이름을 kafka 명령에 실어 보낸다(직접 set 안 함). 토폴로지의 `batch`가
     그 서비스다 — `code uses <요약 키>`의 쓰기에 sink와 함께 나와야 P0 2의 다음 홉이 쓸모 있다."""
-    import json
-    import pathlib
-
-    from tools.local_case import CORE_FILES
+    from tools.local_case import BOARD_SERVICES, CORE_FILES, _board_topology
     src = CORE_FILES["batch/refresh.py"]
     assert 'cfg["redis_key"]["alarm_stats"]' in src and "producer.send(" in src and "redis.set" not in src
-    topo = json.loads((pathlib.Path(__file__).resolve().parents[1] / "knowledge" / "topology" / "mx.json").read_text(encoding="utf-8"))
-    assert topo["services"]["batch"] == {"repo": "dt-core", "role": "주기적으로 요약을 다시 만들라는 명령을 낸다",
-                                         "selects": {"SERVICE_ROLE": "batch"}}
+    # 리포의 knowledge/topology/mx.json은 사내에서 실제 서비스 지도로 바뀌는 파일이다 — 측정판은 자기 사본의 services만 바꾼다(핫픽스 10-14).
+    assert BOARD_SERVICES["batch"] == {"repo": "dt-core", "role": "주기적으로 요약을 다시 만들라는 명령을 낸다",
+                                       "selects": {"SERVICE_ROLE": "batch"}}
+    made = _board_topology({"_설명": ["x"], "services": {"real-svc": {"repo": "real-repo"}}, "flow": {"sources": []}, "config_paths": ["c"]})
+    assert made["services"] == BOARD_SERVICES and made["flow"] == {"sources": []} and made["config_paths"] == ["c"] and made["_설명"] == ["x"]

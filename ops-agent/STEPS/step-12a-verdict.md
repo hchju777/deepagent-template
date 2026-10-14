@@ -723,7 +723,10 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - `code.uses`: 명령으로 쓰는 함수는 쓰기 목록에 `(명령 — 메시지에 자원 이름을 실어 보낸다)`를 달고 나온다.
 - 흐름 그래프: `flow.add_commands(overlay, index, topology)` — 인덱스의 명령 자원마다 서비스 → 자원 `writes`(origin `command`, INFERRED,
   file:line) 엣지. `code graph`가 끝점 사슬 뒤에 단다. grep 줄만으로는 동사가 없어 `mentions`로만 남던 것이다.
-- 측정판: 토폴로지에 `batch`(dt-core, `SERVICE_ROLE=batch`), `batch/refresh.py`가 요약 키 이름을 명령에 실어 보낸다(직접 `set` 안 함).
+- 측정판: **자기 토폴로지 사본**에 `batch`(dt-core, `SERVICE_ROLE=batch`; `local_case._board_topology`), `batch/refresh.py`가 요약 키 이름을
+  명령에 실어 보낸다(직접 `set` 안 함). 리포의 `knowledge/topology/mx.json`은 사내에서 실제 서비스 지도로 바뀌는 파일이라 건드리지 않는다 —
+  883175e가 거기에 적고 테스트가 그 파일을 읽어 사내에서 깨졌다(핫픽스 10-14: 파일 되돌림, `test_portability`가 `__file__` 기준 `knowledge`
+  경로를 잡는다).
   **번들을 만드는 코드가 바뀌었다 → 측정 #8은 `code graph` 재생성 필요.**
 - 실제 소비자로(측정판 다시 만들고 `code graph`): `명령 쓰기 엣지 1개`, `code uses 'alarm:stats:{line}'` 쓰기 2 — `batch.refresh.run
   (batch/refresh.py:L6) [dt-core · batch] … (명령 — 메시지에 자원 이름을 실어 보낸다)`와 `sink.writer.run`, 읽기 1 `api.alarms.badge`.

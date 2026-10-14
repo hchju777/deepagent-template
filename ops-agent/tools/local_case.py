@@ -53,6 +53,20 @@ def _submodule(parent: Path, lib: Path, *, path: str) -> None:
     _git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", path, cwd=parent)
 
 
+# 측정판의 서비스 지도 — 리포의 자리표시자 셋(processor·sink·api)에 요약 키를 명령에 실어 보내는 `batch`(R3-1b ②, 사내 10-07 진단표 #8의 모양).
+BOARD_SERVICES = {
+    "processor": {"repo": "dt-core", "role": "원천 이벤트를 받아 가공한다", "selects": {"SERVICE_ROLE": "processor"}},
+    "sink": {"repo": "dt-core", "role": "가공된 결과를 저장한다", "selects": {"SERVICE_ROLE": "sink"}},
+    "batch": {"repo": "dt-core", "role": "주기적으로 요약을 다시 만들라는 명령을 낸다", "selects": {"SERVICE_ROLE": "batch"}},
+    "api": {"repo": "dt-api", "role": "저장된 것을 API 응답으로 바꾼다"},
+}
+
+
+def _board_topology(topo: dict) -> dict:
+    """복사한 토폴로지의 `services`를 측정판 것으로 — 나머지(흐름 출처·config 경로·설명)는 그대로."""
+    return {**topo, "services": dict(BOARD_SERVICES)}
+
+
 def _write(root: Path, rel: str, content) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,6 +338,10 @@ def main() -> int:
     if know.exists():
         shutil.rmtree(know)
     shutil.copytree(HERE / "knowledge", know)
+    # 측정판은 **자기 서비스 지도**를 쓴다 — 리포의 `knowledge/topology/mx.json`은 사내에서 실제 서비스 이름으로 바뀌는 파일이라 거기에
+    # 측정판 서비스(`batch`)를 적지 않는다(883175e가 적어 사내 테스트가 깨졌다, 10-14). 사본의 `services`만 바꾸고 흐름 출처·config 경로는 그대로.
+    topo_path = know / "topology" / "mx.json"
+    _write(know, "topology/mx.json", _board_topology(json.loads(topo_path.read_text(encoding="utf-8"))))
 
     shared = _repo(root / "target-code" / "_shared" / "shared-lib", "shared-lib",
                    "https://git.example.com/team/shared-lib", SHARED_FILES)

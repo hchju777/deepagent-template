@@ -285,6 +285,44 @@ def knowledge_copies(path) -> list[str]:
     return found
 
 
+def knowledge_from_repo_root(path) -> list[str]:
+    """테스트가 `__file__`에서 리포 루트를 짚어 `knowledge/`로 들어가는 곳 — 베끼든 읽든. 사내 10-14: 측정판 서비스 `batch`를 리포의
+    `knowledge/topology/mx.json`에 적고 테스트가 그 파일을 읽었더니 사내(실제 서비스 지도)에서 깨졌다. `copytree`만 보던 위 검사를 비껴갔다.
+    `tmp_path / "knowledge"`처럼 테스트가 직접 세운 트리는 `__file__`이 없어 안 걸린다."""
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if (isinstance(node, ast.BinOp) and _mentions_knowledge(node)
+                and any(isinstance(n, ast.Name) and n.id == "__file__" for n in ast.walk(node))):
+            label = f"{_label(path)}:{node.lineno} — __file__ … / \"knowledge\""
+            if label not in found:
+                found.append(label)
+    return found
+
+
+# 예외 하나: 리포가 **싣는 관례**(`flow.sources`의 redis 접두사 선언)를 확인하는 테스트 — 운영이 채우는 `services`가 아니라 우리가 싣는 선언을
+# 본다. 그 밖의 읽기는 전부 위반이다.
+_READS_SHIPPED_CONVENTION = {"tests/knowledge/test_loader.py"}
+
+
+def test_테스트가_리포의_knowledge를_읽지_않는다():
+    violations = [v for path in _python_files() if "tests" in path.parts and _label(path) not in _READS_SHIPPED_CONVENTION
+                  for v in knowledge_from_repo_root(path)]
+    assert not violations, (
+        "테스트가 리포의 knowledge/를 읽는다 — 운영이 자기 서비스 이름으로 채우는 칸이라 사내에서 깨진다. "
+        "필요한 값은 테스트가 직접 세우거나 만드는 함수를 보라:\n  " + "\n  ".join(violations))
+
+
+def test_검사기가_repo_루트의_knowledge_읽기를_실제로_잡는다(tmp_path):
+    bad = tmp_path / "bad.py"
+    bad.write_text('import json, pathlib\n'
+                   'topo = json.loads((pathlib.Path(__file__).resolve().parents[1] / "knowledge" / "topology" / "mx.json").read_text())\n',
+                   encoding="utf-8")
+    assert knowledge_from_repo_root(bad)[0].endswith('bad.py:2 — __file__ … / "knowledge"')
+    good = tmp_path / "good.py"
+    good.write_text('def test_x(tmp_path):\n    tree = tmp_path / "knowledge" / "topology"\n    tree.mkdir(parents=True)\n', encoding="utf-8")
+    assert knowledge_from_repo_root(good) == []
+
+
 def test_테스트가_리포의_knowledge를_베끼지_않는다():
     violations = [v for path in _python_files() if "tests" in path.parts
                   for v in knowledge_copies(path)]
