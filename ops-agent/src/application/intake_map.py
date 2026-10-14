@@ -31,6 +31,8 @@ from src.domain.case import EvidenceRef, PlanTask, TargetPick
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
 MAX_CANDIDATES = 50
+# 걷기 노드(R3-3 ②, `walk.py`)의 읽기 번호 — `t-1-1`, `t-1-2`… 브리핑이 이 접두로 접고, 중복 거부가 "입구가 이미 읽었다"로 센다.
+WALK_PREFIX = "t-1-"
 # 증거 `source`는 우리가 만든 `describe` 문자열(`redis.get key='…' path='…'`)이라 그 모양으로 키를 되읽는다. scan은 키 하나를 읽은 것이
 # 아니라 세지 않는다.
 _KEY_READ = re.compile(r"^redis\.get key='((?:[^'\\]|\\.)*)'")
@@ -174,10 +176,13 @@ def writer_of(value: Any, classes: frozenset[str]) -> tuple[str, str, str]:
     return "", "", ""
 
 
-def next_hop(target: TargetPick | None, *, code_index: bool) -> tuple[str, dict] | None:
+def next_hop(target: TargetPick | None, *, code_index: bool, walk=None) -> tuple[str, dict] | None:
     """입구 결과로 **코드가 정하는** 다음 홉 — 쓴 쪽을 알면 그 클래스가 읽는 자원(`code.resources <클래스>`, R3-1c ①-a), 모르면 고른 키를 누가
     쓰나(`code.uses <선언 이름>`, R3-1b ③ — 인덱스는 템플릿 이름으로 답하므로 선언 이름이다). 심볼 인덱스가 없으면 없는 문이라 None —
-    그때는 옛 사다리(접수 끝점의 사슬)다."""
+    그때는 옛 사다리(접수 끝점의 사슬)다. 걷기가 돌았으면(R3-3 ②) 다음 홉은 **걷기가 멈춘 자리**다 — 입구 홉에 고정돼 있으면 리드가 코드가
+    이미 읽은 자리로 또 간다(측정 #9)."""
+    if walk is not None and walk.hops:
+        return walk.next_hop() if code_index else None
     if target is None or not target.key or not code_index:
         return None
     if target.writer:
@@ -185,10 +190,12 @@ def next_hop(target: TargetPick | None, *, code_index: bool) -> tuple[str, dict]
     return ("code.uses", {"name": target.declared}) if target.declared else None
 
 
-def hop_line(target: TargetPick | None, *, code_index: bool) -> str:
-    hop = next_hop(target, code_index=code_index)
+def hop_line(target: TargetPick | None, *, code_index: bool, walk=None) -> str:
+    hop = next_hop(target, code_index=code_index, walk=walk)
     if hop is None:
         return ""
+    if walk is not None and walk.hops:
+        return f"다음 홉: {hop[0]} name={hop[1]['name']!r} — 걷기가 멈춘 자리({walk.stopped})"
     why = "쓴 쪽이 읽는 자원(입력)" if hop[0] == "code.resources" else "이 키를 누가 쓰나(값이 어디서 오나)"
     return f"다음 홉: {hop[0]} name={hop[1]['name']!r} — {why}"
 
@@ -205,6 +212,9 @@ def intake_lines(state: CaseState, *, code_index: bool) -> str:
         done.append(f"접수 읽기({by_id['t-0'].result_evidence_ids[0]})")
     if "t-1" in by_id and target.key:
         done.append(f"대상 키 {target.key}({by_id['t-1'].result_evidence_ids[0]})")
+    walked = [t for t in state.plan_tasks if t.id.startswith(WALK_PREFIX) and t.status == "ok"]
+    if walked:
+        done.append(f"걷기 읽기 {len(walked)}건(아래 홉 표)")
     lines = []
     if done:
         lines.append("입구 노드가 이미 읽었다: " + " · ".join(done) + " — 같은 읽기를 다시 내지 마라")
@@ -212,7 +222,9 @@ def intake_lines(state: CaseState, *, code_index: bool) -> str:
         lines.append("값: " + ", ".join(f"{p}가 비었다" for p in target.empty))
     if target.writer_line():
         lines.append(target.writer_line())
-    hop = hop_line(target, code_index=code_index)
+    if state.walk is not None:
+        lines += state.walk.lines()
+    hop = hop_line(target, code_index=code_index, walk=state.walk)
     if hop:
         lines.append(hop)
     return "\n".join(lines)

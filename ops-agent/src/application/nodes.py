@@ -34,13 +34,15 @@ LangGraph 타입을 아는 것은 `graph.py` 하나뿐이고, 여기는 State를
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Awaitable, Callable
 
 from src.application.facts import facts_for, present
-from src.application.intake_map import IntakeSpec, cited_keys, hop_line, next_hop, run_intake
+from src.application.intake_map import WALK_PREFIX, IntakeSpec, cited_keys, hop_line, next_hop, run_intake
 from src.application.state import CaseState, merge_by_id
+from src.application.walk import run_walk
 from src.domain.actions import ACTIONS, DISCOVERED_ARGS, action_problem, describe, name_known
-from src.domain.case import Case, CauseLink, EvidenceRef, Hypothesis, PlanTask, TargetPick, Verdict
+from src.domain.case import Case, CauseLink, EvidenceRef, Hypothesis, PlanTask, TargetPick, Verdict, Walk
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
 # 이 자리에 리드 LLM(`lead.make_lead`)이나 테스트의 대본이 들어온다.
@@ -85,6 +87,10 @@ class EngineDeps:
     declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # R3-1 ① — 입구 노드의 재료(접수 읽기·identity 필드, `intake_map.intake_spec`). None이면(사람이 연 케이스, 대본) 입구를 안 돈다.
     intake: IntakeSpec | None = None
+    # R3-3 ② — 클래스 이름 → 서비스들(홉 표의 `[서비스]`; 같은 이름이 두 레포면 둘 다 — 가르기는 ②-b). 걷기의 30초 상한에 쓰는 시계(규율 2) —
+    # None이면 시간 상한이 없다(깊이·읽기 상한은 그대로).
+    class_services: dict = field(default_factory=dict)
+    clock: Callable[[], datetime] | None = None
 
 
 # 되물을 때 `<버려진 태스크>` 줄에 붙는 머리말. 리드에게는 "방금 낸 답"이라는 뜻이고,
@@ -206,7 +212,7 @@ def _intake_ids(state: CaseState) -> frozenset:
     """입구 노드가 남긴 증거 id들(`t-0`·`t-1`) — 이 결과의 중복에만 다음 홉을 붙인다."""
     if state.target is None:
         return frozenset()
-    return frozenset(e for t in state.plan_tasks if t.id in ("t-0", "t-1") for e in t.result_evidence_ids)
+    return frozenset(e for t in state.plan_tasks if t.id in ("t-0", "t-1") or t.id.startswith(WALK_PREFIX) for e in t.result_evidence_ids)
 
 
 def _rejected_reads(state: CaseState) -> dict[str, list[str]]:
@@ -444,6 +450,17 @@ def make_nodes(deps: EngineDeps) -> dict:
         except Exception as exc:                                    # noqa: BLE001
             return {"target": TargetPick(problem=f"입구 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 
+    async def walk(state: CaseState) -> dict:
+        """입구가 키와 쓴 쪽을 골랐으면 **코드가 상류를 걷는다**(R3-3 ②) — frame이 볼 때 홉 표가 이미 있다. 인덱스가 없으면(홉도 없는 문)
+        안 돈다. 던지지 않는다 — 실패는 `walk.stopped`."""
+        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index
+                or not deps.check_discovery):
+            return {}
+        try:
+            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services, clock=deps.clock)
+        except Exception as exc:                                    # noqa: BLE001
+            return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
+
     async def frame(state: CaseState) -> dict:
         patch = await deps.frame(state)
         # frame 시점에는 증거가 하나도 없다 — 그래서 여기서 인용을 단 가설은
@@ -454,8 +471,8 @@ def make_nodes(deps: EngineDeps) -> dict:
         tasks, rejected, guessed = _accept_tasks(
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),
-            hint=hop_line(state.target, code_index=deps.code_index), hint_for=_intake_ids(state),
-            hop=next_hop(state.target, code_index=deps.code_index),
+            hint=hop_line(state.target, code_index=deps.code_index, walk=state.walk), hint_for=_intake_ids(state),
+            hop=next_hop(state.target, code_index=deps.code_index, walk=state.walk),
             seen=_universe(state, deps) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -499,8 +516,8 @@ def make_nodes(deps: EngineDeps) -> dict:
                 taken=_taken(base), done=_done(base), pending=_pending(base),
                 waiting=_waiting(base), evidence_of=_evidence_of(base),
                 inputs_of={**_rejected_reads(base), **_inputs_of(base)},
-                hint=hop_line(base.target, code_index=deps.code_index), hint_for=_intake_ids(base),
-                hop=next_hop(base.target, code_index=deps.code_index),
+                hint=hop_line(base.target, code_index=deps.code_index, walk=base.walk), hint_for=_intake_ids(base),
+                hop=next_hop(base.target, code_index=deps.code_index, walk=base.walk),
                 seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed
@@ -578,7 +595,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                     "llm_errors": errors + ([still] if still and still not in errors else [])}
         return {**patch, "decision": "continue", "round": state.round + 1}
 
-    return {"intake": intake, "frame": frame, "select": select, "execute": execute, "integrate": integrate,
+    return {"intake": intake, "walk": walk, "frame": frame, "select": select, "execute": execute, "integrate": integrate,
             **make_verdict_nodes(deps)}
 
 

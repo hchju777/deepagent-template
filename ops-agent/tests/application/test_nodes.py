@@ -786,3 +786,87 @@ async def test_integrate는_입구_결과의_홉을_받을_때_넘긴다(case):
 
 def nodes_for(integrate, **kw):
     return make_nodes(deps_for(ScriptedRunner(), integrate=integrate, max_rounds=9, **kw))
+
+
+# ── R3-3 ② — 걷기 노드 ──
+
+async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_둔다(case):
+    """입구가 키와 쓴 쪽을 골랐으면 코드가 상류를 걷는다 — frame이 볼 때 홉 표가 이미 있다. 인덱스가 없으면(홉도 없는 문) 안 돈다."""
+    import dataclasses
+    import json
+
+    from src.application.fakes import ScriptedRunner
+    from src.application.graph import build_engine
+    from src.application.intake_map import IntakeSpec
+    from tests.application.conftest import T0
+
+    def ok(task_id, data, source):
+        return TaskOutcome(task_id=task_id, status="ok", summary=source,
+                           evidence=[EvidenceRef(id=f"{task_id}.e1", source=source, summary="x", body="raw")])
+
+    rest = {"response": [{"group": "L1", "title": "Alarm"}]}
+    value = {"type": "string", "value": json.dumps({"info": {"group": "L1", "title": "Alarm"}, "data": [], "event_type": "Writer"})}
+    res_text = "Writer (w.py:L1) [dt-core · sink]\n  읽기 1:\n    src:L1 [rediskey] — Writer._run (w.py:L3)"
+    src = {"type": "string", "value": json.dumps([{"a": 1}, {"a": 2}])}
+    runner = ScriptedRunner({"t-0": ok("t-0", rest, "rest.query entry='summary_badge'"), "t-0-1": ok("t-0-1", value, "redis.get key='alarm:stats:L1'"),
+                             "t-1": ok("t-1", value, "redis.get key='alarm:stats:L1'"), "t-1-1": ok("t-1-1", res_text, "code.resources name='Writer'"),
+                             "t-1-2": ok("t-1-2", src, "redis.get key='src:L1'")},
+                            raws={"t-0.e1": rest, "t-0-1.e1": value, "t-1.e1": value, "t-1-1.e1": res_text, "t-1-2.e1": src})
+    spec = IntakeSpec(read=("rest.query", {"entry": "summary_badge", "params": {}}), fields=("group", "title"))
+    seen = []
+
+    async def frame(state):
+        seen.append(state.walk)
+        return {"plan_tasks": []}
+
+    patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
+    deps = dataclasses.replace(deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}),
+                                        code_index=True, class_services={"Writer": ("sink",)}, clock=lambda: T0), frame=frame)
+    final = CaseState.model_validate(await build_engine(deps).ainvoke(CaseState(case=patrol)))
+    assert seen[0] is not None and [h.key for h in seen[0].hops] == ["alarm:stats:L1", "src:L1"]          # frame이 볼 때 이미 걸었다
+    assert final.walk.stopped == "입력이 다 정상 — Writer" and final.walk.next_hop() is None and final.walk.hops[0].service == "sink"
+    assert [t.id for t in final.plan_tasks] == ["t-0", "t-1", "t-1-1", "t-1-2"] and runner.ran == ["t-0", "t-0-1", "t-1", "t-1-1", "t-1-2"]
+    assert final.walk.hops[0].status == "빈 배열 (data)"
+    runner.ran.clear()
+    blind = dataclasses.replace(deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}),
+                                         clock=lambda: T0), frame=frame)
+    final = CaseState.model_validate(await build_engine(blind).ainvoke(CaseState(case=patrol)))
+    assert final.walk is None and "t-1-1" not in runner.ran
+
+
+async def test_걷기가_있으면_받을_때의_홉과_거부_기록의_홉은_걷기가_멈춘_자리다(case):
+    from src.domain.case import Hop, TargetPick, Walk
+
+    async def follows(state):
+        return {"decision": "continue", "plan_tasks": [task("t-5", action="code.uses", params={"name": "alarm:source:{line}"}),
+                                                         task("t-6", action="code.resources", params={"name": "SummaryRefresh"}),
+                                                         task("t-7", action="redis.get", params={"key": "alarm:source:L1"})]}
+
+    patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1"),
+                      Hop(key="alarm:source:L1", depth=1, status="0행", bad=True, evidence_id="t-1-2.e1")],
+                reads=2, stopped="쓴 쪽을 모른다 — alarm:source:L1(값에 인덱스의 클래스 이름이 없다)",
+                next_action="code.uses", next_params={"name": "alarm:source:{line}"}, next_evidence="t-1-2.e1")
+    state = CaseState(case=patrol, round=1, walk=walk,
+                      target=TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", writer="SummaryRefresh", writer_at="metadata.event_type"),
+                      plan_tasks=[task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"]),
+                                  task("t-1-1", action="code.resources", params={"name": "SummaryRefresh"}, status="ok", result_evidence_ids=["t-1-1.e1"]),
+                                  task("t-1-2", action="redis.get", params={"key": "alarm:source:L1"}, status="ok", result_evidence_ids=["t-1-2.e1"])],
+                      evidence=[_ev("t-1.e1"), _ev("t-1-1.e1"), _ev("t-1-2.e1")])
+    patch = await nodes_for(follows, code_index=True)["integrate"](state)
+    assert {t.id: t.pinned for t in patch["plan_tasks"]} == {"t-5": True}                       # 걷기의 다음 홉이 pinned, 입구 홉은 아니다
+    refused = patch["llm_errors"]
+    assert any(r.startswith("t-6: 이미 한 읽기를 또 냈다") and "그 결과는 t-1-1.e1 — 입구 노드가 이미 읽었다. 다음 홉: code.uses name='alarm:source:{line}' — 걷기가 멈춘 자리(쓴 쪽을 모른다" in r for r in refused), refused
+    assert any(r.startswith("t-7: 이미 한 읽기를 또 냈다") and "그 결과는 t-1-2.e1 — 입구 노드가 이미 읽었다." in r for r in refused), refused
+
+    async def clean(state):
+        return {"decision": "continue", "plan_tasks": [task("t-8", action="code.uses", params={"name": "alarm:source:{line}"})]}
+
+    patch = await nodes_for(clean, code_index=True)["integrate"](state)
+    assert [(t.id, t.pinned) for t in patch["plan_tasks"]] == [("t-8", True)]             # 되묻기 없는 길(첫 받기)도 걷기의 홉을 본다
+    # frame이 받을 때도 걷기의 홉이다 — 입구 홉(`code.resources SummaryRefresh`)이 아니라.
+    first = make_nodes(deps_for(ScriptedRunner(), first_tasks=[task("t-9", action="code.uses", params={"name": "alarm:source:{line}"}),
+                                                              task("t-10", action="code.resources", params={"name": "SummaryRefresh"})],
+                                code_index=True))
+    patch = await first["frame"](state.model_copy(update={"plan_tasks": [], "evidence": []}))
+    assert {t.id: t.pinned for t in patch["plan_tasks"]} == {"t-9": True, "t-10": False}

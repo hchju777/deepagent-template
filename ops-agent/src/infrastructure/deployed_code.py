@@ -119,6 +119,18 @@ class DeployedCode(DeployedCodePort):
             return frozenset()
         return frozenset(s.name for s in self._index.symbols if s.kind == "class")
 
+    def class_services(self) -> dict[str, tuple[str, ...]]:
+        """클래스 이름 → 그 클래스가 있는 파일의 서비스들(`flow.owner`). 같은 이름이 두 레포에 있으면 둘 다(측정 #9 P1 4 — 가르기는 R3-3 ②-b).
+        홉 표의 `[서비스]`와 verify의 클래스→서비스 번역(⑤)이 쓴다."""
+        if self._index is None:
+            return {}
+        out: dict[str, set[str]] = {}
+        for s in self._index.symbols:
+            if s.kind == "class":
+                svc = flowgraph.owner(s.file, s.repo, self._topology)[0]
+                out.setdefault(s.name, set()).update([svc] if svc else [])
+        return {name: tuple(sorted(services)) for name, services in out.items()}
+
     def _where(self, sid: int) -> str:
         s = self._index.symbols[sid]
         svc = flowgraph.owner(s.file, s.repo, self._topology)[0]

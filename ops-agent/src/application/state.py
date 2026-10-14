@@ -32,7 +32,7 @@ import operator
 from typing import Annotated, Literal
 
 from src.domain.base import StrictModel
-from src.domain.case import TargetPick, Case, EvidenceRef, Hypothesis, PlanTask, Verdict
+from src.domain.case import TargetPick, Case, EvidenceRef, Hypothesis, PlanTask, Verdict, Walk
 
 Decision = Literal["continue", "conclude"]
 
@@ -78,6 +78,8 @@ class CaseState(StrictModel):
     verify_attempts: int = 0
     # R3-1 ① — frame 전 입구 노드가 고른 대상 키(또는 못 고른 이유). 브리핑·verify가 이것을 본다 — 다시 고르지 않는다.
     target: TargetPick | None = None
+    # R3-3 ② — 입구 뒤 걷기 노드가 상류를 걸은 결과(홉 표·멈춘 자리). 브리핑의 다음 홉과 중복 거부의 홉은 이것을 본다.
+    walk: Walk | None = None
 
     def evidence_ids(self) -> set[str]:
         """select 게이트가 보는 우주 — **리드가 실제로 본 것**뿐이다."""

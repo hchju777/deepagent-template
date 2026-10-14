@@ -140,6 +140,49 @@ class TargetPick(StrictModel):
                 + (f" · 읽기 실패 {self.failed}" if self.failed else "") + (f" (대상 키 {self.key})" if self.key else ""))
 
 
+class Hop(StrictModel):
+    """걷기의 표 한 행(R3-3 ②) — 코드가 읽은 키 하나와 그 상태. `writer`는 그 키 값의 잎이 댄 클래스(`writer_of`), 없으면 빈 문자열.
+    `bad`는 없음·빈 배열·0행뿐(사람 결정 10-14 — 손 규칙 없음)."""
+    key: str
+    kind: str = "rediskey"
+    depth: int = 0
+    writer: str = ""
+    service: str = ""
+    status: str = ""
+    bad: bool = False
+    evidence_id: str = ""
+    basis: str = ""
+
+    def line(self) -> str:
+        who = (self.writer + (f" [{self.service}]" if self.service else "")) if self.writer else "—"
+        return f"  {self.key} | {who} | {self.status} | {self.evidence_id or '—'}"
+
+
+class Walk(StrictModel):
+    """코드가 상류를 걸은 결과(R3-3 ②) — 홉 표, 멈춘 이유, 멈춘 자리의 다음 홉. 브리핑의 다음 홉과 중복 거부의 홉은 입구 홉이 아니라 **이것**을
+    본다(측정 #9: 입구 홉에 고정돼 있어 리드가 코드가 이미 읽은 자리로 또 갔다)."""
+    hops: list[Hop] = []
+    reads: int = 0
+    seconds: float = 0.0
+    stopped: str = ""
+    next_action: str = ""
+    next_params: dict = {}
+    # 다음 홉의 입력이 될 증거 — 멈추게 한 그 홉의 읽기.
+    next_evidence: str = ""
+
+    def next_hop(self) -> tuple[str, dict] | None:
+        return (self.next_action, dict(self.next_params)) if self.next_action else None
+
+    def bad_ids(self) -> frozenset[str]:
+        return frozenset(h.evidence_id for h in self.hops if h.bad and h.evidence_id)
+
+    def lines(self) -> list[str]:
+        if not self.hops:
+            return []
+        return [f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}",
+                "  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops]
+
+
 class Case(StrictModel):
     """조사 사건 하나.
 

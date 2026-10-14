@@ -25,9 +25,10 @@ import json
 import re
 
 from src.application.facts import key_head
-from src.application.intake_map import check_of, intake_lines, next_hop, start_read
+from src.application.intake_map import WALK_PREFIX, check_of, intake_lines, next_hop, start_read
 from src.application.runner_probe import ASIDE_MARK, target_rows
 from src.application.state import CaseState
+from src.application.walk import fill_key, inputs_in
 from src.domain.actions import ACTIONS, describe
 from src.domain.case import TargetPick
 from src.knowledge import flow as flowgraph
@@ -167,7 +168,17 @@ def pinned_evidence(state: CaseState) -> frozenset[str]:
     for t in state.plan_tasks:
         if t.pinned or (state.target is not None and t.id in ("t-0", "t-1")):
             ids.update(t.result_evidence_ids)
+    if state.walk is not None:
+        ids |= set(state.walk.bad_ids())                 # 나쁜 홉의 본문(행 요약)은 리드가 봐야 한다(R3-3 ②)
     return frozenset(ids)
+
+
+def folded_evidence(state: CaseState) -> frozenset[str]:
+    """걷기 노드의 읽기 중 나쁘지 않은 것의 증거 — 상태는 홉 표가 말하므로 본문은 접고 예산도 안 쓴다(R3-3 ②). 인용은 할 수 있다(State에 있다)."""
+    if state.walk is None:
+        return frozenset()
+    ids = {e for t in state.plan_tasks if t.id.startswith(WALK_PREFIX) for e in t.result_evidence_ids}
+    return frozenset(ids - set(state.walk.bad_ids()))
 
 
 def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
@@ -198,10 +209,11 @@ def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
     # 고정 증거(입구 읽기·코드가 지정한 홉의 결과)가 먼저 예산을 쓰고 — 예산을 넘어도 빠지지 않는다 — 나머지는 뒤에서부터 채운다(최근
     # 증거가 지금 판단에 쓰인다). 고정만으로 예산을 넘으면 나머지는 최근 하나만 본문이 남는다.
     pinned = pinned_evidence(state)
+    folded = folded_evidence(state)
     detailed = {ref.id for ref in state.evidence if ref.id in pinned}
     used = sum(len(ref.body or ref.summary) for ref in state.evidence if ref.id in pinned)
     for ref in reversed(state.evidence):
-        if ref.id in pinned:
+        if ref.id in pinned or ref.id in folded:
             continue
         used += len(ref.body or ref.summary)
         if used > budget and (detailed - pinned):
@@ -218,6 +230,9 @@ def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
                "같은 질의는 같은 답이다 — 좁혀서 물어라")
         lines.append(f"- {_oneline(ref.id)} | {_oneline(ref.source)} | "
                      f"{_oneline(ref.summary)}{cut}")
+        if ref.id in folded and ref.id not in detailed:
+            lines.append("    (걷기 읽기 — 상태는 케이스 블록의 홉 표에 있다. 본문은 접었다)")
+            continue
         if ref.id not in detailed:
             # 예전엔 "필요하면 다시 읽어라"였다. **우리가 시켜 놓고 거부했다** —
             # 리드가 받은 지시 중 제일 구체적인 것이 이 줄이었고, 산문 규칙보다
@@ -240,7 +255,13 @@ def tasks_block(state: CaseState, *, fold: bool = False) -> str:
     if not state.plan_tasks:
         return "(아직 없다)"
     lines = []
+    walked = [t for t in state.plan_tasks if t.id.startswith(WALK_PREFIX)]
     for task in state.plan_tasks:
+        if task.id.startswith(WALK_PREFIX):
+            # 걷기 노드의 읽기는 한 줄로(R3-3 ②) — 상태는 케이스 블록의 홉 표에 있고, 열다섯 줄이 리드의 큐를 밀어낸다.
+            if task is walked[0]:
+                lines.append(f"- 걷기 읽기 {len(walked)}건 ({walked[0].id}…{walked[-1].id}) — 상태는 케이스 블록의 홉 표에 있다")
+            continue
         if fold and task.status in ("ok", "error"):
             line = f"- {task.id} [{task.status}] {_oneline(task.goal)[:60]}"
             if not task.result_evidence_ids and task.action:
@@ -383,7 +404,7 @@ def _issued(tasks, action: str, **match) -> bool:
 
 
 def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[str, ...],
-                 flow_graph: dict | None, evidence=(), code_index: bool = False, target: TargetPick | None = None):
+                 flow_graph: dict | None, evidence=(), code_index: bool = False, target: TargetPick | None = None, walk=None):
     """사다리의 **다음 한 칸** — `((action, params), input_evidence_ids)` 또는 None.
 
     rest 증거(증상 재현)가 있고 그 끝점의 사슬이 오버레이에 있으면 `code.trace(endpoint=그 path)`, trace
@@ -408,14 +429,17 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
     """
     # 입구가 키를 골랐으면 첫 칸은 **그 키를 누가 쓰나**(R3-1b ③) — 화면이 읽는 키이니 값이 어디서 오는지가 다음 질문이다. 그다음은 쓰는
     # 함수의 호출자. 그 뒤는 접수 끝점의 옛 사다리로 이어진다. 인덱스가 없으면 이 칸은 없다(`next_hop`).
-    hop = next_hop(target, code_index=code_index)
+    hop = next_hop(target, code_index=code_index, walk=walk)
     if hop is not None:
         action, params = hop
         used_hop = _done(tasks, action, **params)
         if used_hop is None:
             if not _issued(tasks, action, **params):
+                # 입력은 걷기가 멈추게 한 그 홉의 증거(R3-3 ②), 걷기가 없으면 대상 키 읽기.
                 key_read = _done(tasks, "redis.get", key=target.key)
-                return hop, ([key_read.result_evidence_ids[0]] if key_read else [])
+                inputs = ([walk.next_evidence] if walk is not None and walk.next_evidence
+                          else [key_read.result_evidence_ids[0]] if key_read else [])
+                return hop, inputs
         elif action == "code.uses":
             writer = _first_writer(evidence, used_hop.result_evidence_ids[0])
             if writer is not None and not _issued(tasks, "code.callers", name=writer):
@@ -496,29 +520,18 @@ def _first_writer(evidence, evidence_id: str) -> str | None:
 
 
 # `code.resources` 증거의 자원 줄 — `    <이름> [<종류>] — <메서드> (<파일>:L<줄>)`. 읽기 구간이 앞, 쓰기 구간이 뒤다(`query.resources_lines`).
-_RESOURCE = re.compile(r"(?:\\n|\n) {4}(\S+) \[(rediskey|collection|topic)\] — ")
-_WRITES_AT = re.compile(r"(?:\\n|\n) {2}쓰기 \d+:")
 _IDENT = {"redis.get": "key", "redis.scan": "pattern", "mongo.find": "collection", "kafka.tail": "topic"}
 
 
 def _inputs(evidence, evidence_id: str) -> list[tuple[str, str]]:
-    """쓴 쪽이 **읽는** 자원 `(이름, 종류)`들 — 쓰기 구간은 뺀다. 본문만 본다(요약은 본문의 머리를 잘라 둔 것이라 같은 줄이 두 번 나온다)."""
+    """쓴 쪽이 **읽는** 자원 `(이름, 종류)`들 — 걷기와 같은 파서(`walk.inputs_in`). 본문만 본다(요약은 본문의 머리를 잘라 둔 것이라 같은 줄이
+    두 번 나온다)."""
     ref = next((e for e in evidence if e.id == evidence_id), None)
-    text = (ref.body or ref.summary) if ref is not None else ""
-    m = _WRITES_AT.search(text)
-    return _RESOURCE.findall(text[:m.start()] if m else text)
+    return inputs_in((ref.body or ref.summary) if ref is not None else "")
 
 
 def _fill(template: str, *, declared: str, key: str) -> str | None:
-    """입력 템플릿의 자리를 대상 키에서 채운다 — 선언 `alarm:stats:{line}`과 실재 키 `alarm:stats:L1`에서 `{line}`=`L1`. 못 채우는 자리가
-    있으면 None(호출부가 scan으로 간다)."""
-    if "{" not in template:
-        return template
-    try:
-        m = re.match("^" + re.sub(r"\\\{(\w+)\\\}", r"(?P<\1>.+?)", re.escape(declared)) + "$", key)
-        return template.format_map(m.groupdict() if m else {})
-    except (re.error, KeyError, IndexError, ValueError):
-        return None
+    return fill_key(template, declared=declared, key=key)
 
 
 def _input_step(site_config, tasks, evidence, used_hop, *, services, target):
@@ -573,7 +586,7 @@ def example_block(site_config, *, phase: str, start: int = 1,
                   services: tuple[str, ...] = (), used: tuple[str, ...] = (),
                   first_read: tuple[str, dict] | None = None,
                   flow_graph: dict | None = None, tasks=(), evidence=(), code_index: bool = False,
-                  intake_done: bool = False, hop: tuple[str, dict] | None = None, target: TargetPick | None = None) -> str:
+                  intake_done: bool = False, hop: tuple[str, dict] | None = None, target: TargetPick | None = None, walk=None) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
 
     `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
@@ -641,12 +654,12 @@ def example_block(site_config, *, phase: str, start: int = 1,
             entry = _free_rest_entry(site_config)
             shapes = [entry] if entry else []
         ladder = _ladder_step(site_config, tasks, services=services, used=used, flow_graph=flow_graph,
-                              evidence=evidence, code_index=code_index, target=target)
+                              evidence=evidence, code_index=code_index, target=target, walk=walk)
         lead = ([_task(start, ladder[0][0], ladder[0][1], rank=1, input_evidence_ids=ladder[1])]
                 if ladder else [])
         # 입구가 홉을 정한 케이스에서 사다리 칸이 있으면 예시는 **그 칸 하나**다(R3-1c ③) — 측정 #8에서 둘째 칸 `mongo.find`를 리드가 그대로
         # 베껴 무관한 컬렉션으로 샜다. 홉 칸이 다 끝나 사다리가 없으면 전처럼(빈 예시는 형식을 못 보여 준다).
-        if lead and next_hop(target, code_index=code_index) is not None:
+        if lead and next_hop(target, code_index=code_index, walk=walk) is not None:
             shapes = []
         body = {"decision": "continue",
                 "hypotheses": [{"id": "h-1", "statement": "갱신한 가설 (한국어 한 문장)",
@@ -776,7 +789,7 @@ def frame_fields(state: CaseState, *, site_config,
                                      services=services,
                                      first_read=start_read(state.case, site_config),
                                      flow_graph=flow_graph, intake_done=state.target is not None,
-                                     hop=next_hop(target, code_index=code_index)),
+                                     hop=next_hop(target, code_index=code_index, walk=state.walk)),
             "flow": flow_block(state, flow_graph,
                                texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ()))}
 
@@ -810,7 +823,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                                      used=tuple(t.action for t in state.plan_tasks
                                                 if t.action),
                                      tasks=tuple(state.plan_tasks), flow_graph=flow_graph,
-                                     evidence=tuple(state.evidence), code_index=code_index, target=target),
+                                     evidence=tuple(state.evidence), code_index=code_index, target=target, walk=state.walk),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state, fold=fold_tasks),
             "evidence": evidence_block(state, budget=evidence_budget),

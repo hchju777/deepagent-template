@@ -751,3 +751,22 @@ async def test_code_uses에_클래스_이름을_주면_code_resources로_안내�
     got = await flow_code.uses("SummaryRefresh")
     assert got.status == "error" and "클래스 이름이다" in got.error and "code.resources name='SummaryRefresh'" in got.error
     assert "인덱스에 없다" in (await flow_code.uses("없는이름")).error
+
+
+# ── R3-3 ② — 클래스 → 서비스 ──
+
+async def test_class_services는_클래스_이름을_그_파일의_서비스에_잇는다(flow_code):
+    from src.knowledge import index as ix
+
+    class Src:
+        FILES = {"batch/__init__.py": "", "batch/refresh.py": "class SummaryRefresh:\n    pass\n\n\nclass Other:\n    pass\n"}
+
+        async def files(self):
+            return sorted(self.FILES)
+
+        async def read(self, path):
+            return self.FILES.get(path)
+
+    assert flow_code.class_services() == {}
+    flow_code.attach_index(await ix.build_index({"dt-core": Src()}, commits={"dt-core": "c0ffee"}))
+    assert flow_code.class_services() == {"SummaryRefresh": ("sink",), "Other": ("sink",)}        # flow_code 토폴로지는 dt-core에 sink 하나

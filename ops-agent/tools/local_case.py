@@ -238,13 +238,17 @@ VARIANTS = {
     "cache-missing": "sink는 컬렉션에 쓰는데 stats 캐시 키를 한 번도 안 만들었다 — 키 자체가 없고 화면은 0",
     # 사내 c-1형(측정 #6 정정) — 요약 키는 있는데 data가 빈 배열. 값의 summary_info에 identity가 그대로 있어 입구 노드가 키를 고른다.
     "data-empty": "sink가 요약 키를 갱신하지만 data가 빈 배열 — 키는 있고 화면은 0, 컬렉션엔 최근 문서가 있다",
+    # R3-3 ② — 걷기가 나쁜 입력에서 멈추는 두 모양. 요약 키는 c-1형 그대로이고 쓴 쪽(batch)의 원천 키가 없거나 빈 배열이다.
+    "source-missing": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 아예 없다 — 걷기가 '없음'에서 멈춘다",
+    "source-blank": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 빈 배열이다 — 걷기가 '0행'에서 멈춘다",
 }
+_EMPTY_DATA = {"data-empty", "source-missing", "source-blank"}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 
 
 def _stats_data(docs, line, variant):
     """요약 키 값의 `data` — c-1형(`data-empty`)만 빈 배열, 나머지는 그 라인의 문서 요약."""
-    if variant == "data-empty":
+    if variant in _EMPTY_DATA:
         return []
     return [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == line]
 
@@ -294,11 +298,13 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                                 "data": _stats_data(docs, l, variant)}],
                     # 사내 모양 — 값이 쓴 파이프라인 클래스 이름을 싣는다(측정 #8). 입구 노드가 이걸로 "쓴 쪽"을 고른다.
                     "metadata": {"event_type": "SummaryRefresh"},
-                    "count_1h": counts[l], "updated_at": fresh(1) if stats_fresh or variant == "data-empty" else _iso(stale)})
+                    "count_1h": counts[l], "updated_at": fresh(1) if stats_fresh or variant in _EMPTY_DATA else _iso(stale)})
                 for l in LINES}),
-            # 쓴 쪽의 입력 — 원천 키. 지금은 전 변형에서 있다(없음·빈 값 변형은 R3-3).
-            **{f"alarm:source:{l}": json.dumps([{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == l])
-               for l in LINES},
+            # 쓴 쪽의 입력 — 원천 키. `source-missing`은 키가 없고 `source-blank`은 빈 배열(R3-3 ②).
+            **({} if variant == "source-missing" else
+               {f"alarm:source:{l}": json.dumps([] if variant == "source-blank" else
+                                                [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == l])
+                for l in LINES}),
             **{f"alarm:scan:{l}": json.dumps({
                     "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],
                     # 값이 쓴 쪽 이름을 **안** 싣는 키 — 클래스 이름이 아닌 문자열. 이런 키에서는 "쓴 쪽: 모른다"가 떠야 한다.

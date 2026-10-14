@@ -27,12 +27,14 @@ from src.application.state import CaseState
 def build_engine(deps: EngineDeps, *, checkpointer=None):
     nodes = make_nodes(deps)
     builder = StateGraph(CaseState)
-    for name in ("intake", "frame", "select", "execute", "integrate", "conclude", "verify"):
+    for name in ("intake", "walk", "frame", "select", "execute", "integrate", "conclude", "verify"):
         builder.add_node(name, nodes[name])
 
     # R3-1 ① — frame 전에 코드가 접수를 읽고 대상 키를 고른다. 재료가 없으면 빈 패치로 지나간다.
     builder.add_edge(START, "intake")
-    builder.add_edge("intake", "frame")
+    # R3-3 ② — 입구가 키와 쓴 쪽을 골랐으면 코드가 상류를 걷는다. 재료가 없으면 빈 패치로 지나간다.
+    builder.add_edge("intake", "walk")
+    builder.add_edge("walk", "frame")
     # frame이 실패하면(리드 LLM이 죽었다) 라운드를 시작하지 않고 끝낸다 —
     # 흘려보내면 integrate가 LLM을 또 부르고, 끝난 이유가 덮인다.
     # 죽은 조사에도 판정(degraded)은 남는다 — END가 아니라 conclude로.

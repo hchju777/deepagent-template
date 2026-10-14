@@ -1039,7 +1039,8 @@ def cmd_case_investigate(args, env) -> int:
                                   flow_graph, briefing.intake_path(case, site))},
                               intake=intake_spec(case, site),
                               code_index=code.has_index() if code else False,
-                              classes=code.class_names() if code else frozenset())
+                              classes=code.class_names() if code else frozenset(),
+                              class_services=code.class_services() if code else {}, clock=clock)
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()

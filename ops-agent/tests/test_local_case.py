@@ -112,3 +112,14 @@ def test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다(
                                        "selects": {"SERVICE_ROLE": "batch"}}
     made = _board_topology({"_설명": ["x"], "services": {"real-svc": {"repo": "real-repo"}}, "flow": {"sources": []}, "config_paths": ["c"]})
     assert made["services"] == BOARD_SERVICES and made["flow"] == {"sources": []} and made["config_paths"] == ["c"] and made["_설명"] == ["x"]
+
+
+def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다():
+    """R3-3 ② 걷기가 나쁜 입력에서 멈추는 두 모양 — 없음(키가 없다)과 0행(빈 배열). 요약 키는 c-1형(`data-empty`) 그대로."""
+    import json
+    missing, blank = _seeds(NOW, "source-missing"), _seeds(NOW, "source-blank")
+    assert not [k for k in missing["redis"] if k.startswith("alarm:source:")]
+    assert json.loads(blank["redis"]["alarm:source:L1"]) == []
+    for s in (missing, blank):
+        assert json.loads(s["redis"]["alarm:stats:L1"])["record"][0]["data"] == []
+    assert json.loads(_seeds(NOW, "data-empty")["redis"]["alarm:source:L1"])
