@@ -304,8 +304,23 @@ def knowledge_from_repo_root(path) -> list[str]:
 _READS_SHIPPED_CONVENTION = {"tests/knowledge/test_loader.py"}
 
 
+def _rel_posix(path, root=PROJECT_ROOT) -> str:
+    """예외 목록과 비교할 경로 — 구분자는 항상 `/`. `_label`(`str(relative_to)`)은 Windows에서 `\\`라 예외가 안 먹었다(사내 10-14, 두 번째)."""
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def test_예외_목록은_Windows_구분자에도_맞는다():
+    from pathlib import PureWindowsPath
+    root = PureWindowsPath("C:/work/ops-agent")
+    assert _rel_posix(root / "tests" / "knowledge" / "test_loader.py", root) in _READS_SHIPPED_CONVENTION
+    assert _rel_posix(PureWindowsPath("D:/elsewhere/x.py"), root) == "D:/elsewhere/x.py"
+
+
 def test_테스트가_리포의_knowledge를_읽지_않는다():
-    violations = [v for path in _python_files() if "tests" in path.parts and _label(path) not in _READS_SHIPPED_CONVENTION
+    violations = [v for path in _python_files() if "tests" in path.parts and _rel_posix(path) not in _READS_SHIPPED_CONVENTION
                   for v in knowledge_from_repo_root(path)]
     assert not violations, (
         "테스트가 리포의 knowledge/를 읽는다 — 운영이 자기 서비스 이름으로 채우는 칸이라 사내에서 깨진다. "

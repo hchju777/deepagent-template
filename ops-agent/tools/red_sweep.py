@@ -2448,12 +2448,14 @@ CASES += [
 CASES += [
  ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES)}", "    return dict(topo)",
   ["tests/test_local_case.py::test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다"]),
+ ("예외 목록을 OS 구분자 그대로 비교한다", ROOT / "tests/test_portability.py", "        return path.relative_to(root).as_posix()", "        return str(path.relative_to(root))",
+  ["tests/test_portability.py::test_예외_목록은_Windows_구분자에도_맞는다"]),
  ("repo 루트 knowledge 읽기 검사가 안 잡는다", ROOT / "tests/test_portability.py",
   "        if (isinstance(node, ast.BinOp) and _mentions_knowledge(node)\n                and any(isinstance(n, ast.Name) and n.id == \"__file__\" for n in ast.walk(node))):",
   "        if False:", ["tests/test_portability.py::test_검사기가_repo_루트의_knowledge_읽기를_실제로_잡는다"]),
 ]
 
-assert len(CASES) >= 636, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+assert len(CASES) >= 637, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
