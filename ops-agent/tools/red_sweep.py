@@ -2474,7 +2474,21 @@ CASES += [
   "                                    declared=tuple(deps.declared.get(\"rediskey\", ())))", ["tests/application/test_nodes.py::test_입구_노드는_frame_전에_접수를_읽고_대상_키를_State에_둔다"]),
 ]
 
-assert len(CASES) >= 643, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1c ② — pinned 증거 ──
+PIN_T = "tests/application/test_nodes.py::test_코드가_지정한_홉과_같은_태스크만_pinned이고_리드가_단_pinned는_지운다"
+PIN_WIRE_T = "tests/application/test_nodes.py::test_integrate는_입구_결과의_홉을_받을_때_넘긴다"
+PIN_B_T = "tests/application/test_briefing.py::test_입구_읽기와_pinned_태스크의_증거_본문은_예산에서_빠지지_않는다"
+CASES += [
+ ("홉과 같은 태스크에 pinned를 안 단다", ND, "        kept = [t.model_copy(update={\"pinned\": True}) if (t.action, t.params) == hop else t for t in kept]", "        kept = list(kept)", [PIN_T]),
+ ("리드가 단 pinned를 안 지운다", ND, "                                   \"input_evidence_ids\": ids, \"pinned\": False})", "                                   \"input_evidence_ids\": ids})", [PIN_T]),
+ ("integrate가 홉을 받을 때 안 넘긴다", ND, "                hop=next_hop(base.target, code_index=deps.code_index),\n", "", [PIN_WIRE_T]),
+ ("고정 증거의 본문을 안 남긴다", B, "    detailed = {ref.id for ref in state.evidence if ref.id in pinned}", "    detailed = set()", [PIN_B_T]),
+ ("고정 증거가 예산을 안 쓴다", B, "    used = sum(len(ref.body or ref.summary) for ref in state.evidence if ref.id in pinned)", "    used = 0", [PIN_B_T]),
+ ("입구 읽기를 고정으로 안 본다", B, "        if t.pinned or (state.target is not None and t.id in (\"t-0\", \"t-1\")):", "        if t.pinned:", [PIN_B_T]),
+ ("입구가 안 돈 케이스의 t-0도 고정한다", B, "        if t.pinned or (state.target is not None and t.id in (\"t-0\", \"t-1\")):", "        if t.pinned or t.id in (\"t-0\", \"t-1\"):", [PIN_B_T]),
+]
+
+assert len(CASES) >= 650, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -1472,3 +1472,39 @@ def test_쓴_쪽을_알면_케이스_블록에_그_줄이_실리고_첫_칸은_c
     tasks = _ladder(site(), [_rest_done("t-0"), read], used=("rest.query", "redis.get"), graph="keyed", code_index=True, target=picked)
     assert (tasks[0]["action"], tasks[0]["params"], tasks[0]["input_evidence_ids"]) == ("code.resources", {"name": "SummaryRefresh"}, ["t-1.e1"])
     assert "code.resources" in briefing._hidden(None, False) and "code.resources" not in briefing._hidden(None, True)   # 인덱스 없으면 없는 문
+
+
+# ── R3-1c ② — 입구 읽기와 pinned 태스크의 증거는 예산에서 빼지 않는다 ──
+
+def test_입구_읽기와_pinned_태스크의_증거_본문은_예산에서_빠지지_않는다(case):
+    """측정 #8: c-1 r2에서 다음 홉(`code.uses`)의 결과가 "예산에서 빠졌다". 코드가 보라고 한 것(입구의 `t-0`·`t-1`, 코드가 지정한 홉을 그대로
+    낸 태스크)의 본문은 예산과 무관하게 남는다 — 나머지는 전처럼 최근 것부터."""
+    from src.application.state import CaseState
+    from src.domain.case import TargetPick
+    big = "x" * 400
+    state = CaseState(case=case, target=TargetPick(key="k", declared="k", basis="b"), plan_tasks=[
+        task("t-0", action="rest.query", params={"entry": "e", "params": {}}, status="ok", result_evidence_ids=["t-0.e1"]),
+        task("t-1", action="redis.get", params={"key": "k"}, status="ok", result_evidence_ids=["t-1.e1"]),
+        task("t-2", action="code.resources", params={"name": "W"}, status="ok", result_evidence_ids=["t-2.e1"], pinned=True),
+        task("t-3", status="ok", result_evidence_ids=["t-3.e1"]), task("t-4", status="ok", result_evidence_ids=["t-4.e1"])],
+        evidence=[EvidenceRef(id=f"t-{i}.e1", source=f"s{i}", summary=f"요약{i}", body=big) for i in range(5)])
+    assert briefing.pinned_evidence(state) == frozenset({"t-0.e1", "t-1.e1", "t-2.e1"})
+    block = briefing.evidence_block(state, budget=500)
+    shown = {line.split(" | ")[0][2:] for line in block.splitlines() if line.startswith("- t-")}
+    assert shown == {f"t-{i}.e1" for i in range(5)}                                           # 줄은 전부 남는다
+    dropped = [line for line in block.splitlines() if "예산에서 빠졌다" in line]
+    assert len(dropped) == 1                                                                   # 고정 셋 + 최근 하나(t-4)만 본문, t-3은 빠진다
+    body_of = {}
+    cur = None
+    for line in block.splitlines():
+        if line.startswith("- t-"):
+            cur = line.split(" | ")[0][2:]; body_of[cur] = ""
+        elif cur:
+            body_of[cur] += line
+    assert all(big in body_of[i] for i in ("t-0.e1", "t-1.e1", "t-2.e1", "t-4.e1")) and big not in body_of["t-3.e1"]
+    # 고정(1200자)이 예산을 **먼저** 쓴다 — 예산 900이어도 나머지는 최근 하나뿐이다. 아니면 프롬프트가 고정 본문만큼 예산을 넘어 자란다.
+    roomy = briefing.evidence_block(state, budget=900)
+    assert len([line for line in roomy.splitlines() if "예산에서 빠졌다" in line]) == 1
+    # 입구가 안 돈 케이스(사람이 연 것)의 t-0·t-1은 고정이 아니다
+    plain = state.model_copy(update={"target": None})
+    assert briefing.pinned_evidence(plain) == frozenset({"t-2.e1"})

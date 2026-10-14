@@ -87,6 +87,9 @@ class PlanTask(StrictModel):
     result_summary: str | None = None
     result_evidence_ids: list[str] = []
     error: str | None = None
+    # 코드가 지정한 다음 홉을 리드가 그대로 냈다(R3-1c ②) — 브리핑이 이 태스크의 증거 본문을 예산에서 빼지 않는다. 받을 때 코드가 단다;
+    # 리드가 실어 보낸 값은 수명주기 필드처럼 지운다(`_sanitize_task`).
+    pinned: bool = False
 
 
 class TargetPick(StrictModel):

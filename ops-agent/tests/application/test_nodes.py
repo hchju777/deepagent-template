@@ -729,3 +729,41 @@ async def test_integrate는_입구_결과로_다음_홉_힌트를_넘긴다(case
     nodes = make_nodes(deps_for(ScriptedRunner(), integrate=again, max_rounds=9, redo_on_rejection=False, code_index=True))
     patch = await nodes["integrate"](state)
     assert any("입구 노드가 이미 읽었다. 다음 홉: code.uses name='alarm:stats:{line}'" in e for e in patch["llm_errors"]), patch["llm_errors"]
+
+
+# ── R3-1c ② — 코드가 지정한 홉을 그대로 낸 태스크는 pinned ──
+
+def test_코드가_지정한_홉과_같은_태스크만_pinned이고_리드가_단_pinned는_지운다():
+    """측정 #8 P0 2: 다음 홉(`code.uses`)의 결과가 다음 라운드 프롬프트에서 "예산에서 빠졌다" — 코드가 보라고 한 것을 코드가 안 보여 줬다.
+    받을 때 홉과 action·params가 같은 태스크에 `pinned`를 단다(브리핑이 그 증거 본문을 예산에서 빼지 않는다). 리드가 스스로 단 `pinned`는
+    수명주기 필드처럼 코드가 지운다(규율 4)."""
+    from src.application.nodes import _accept_tasks
+
+    hop = ("code.resources", {"name": "SummaryRefresh"})
+    patch = {"plan_tasks": [task("t-2", action="code.resources", params={"name": "SummaryRefresh"}),
+                            task("t-3", action="code.resources", params={"name": "Other"}),
+                            task("t-4", pinned=True)]}
+    kept, _, _ = _accept_tasks(patch, room=10, hop=hop)
+    assert [(t.id, t.pinned) for t in kept] == [("t-2", True), ("t-3", False), ("t-4", False)]
+    kept, _, _ = _accept_tasks(patch, room=10)
+    assert all(not t.pinned for t in kept)                                                 # 홉이 없으면 아무것도 안 단다
+
+
+async def test_integrate는_입구_결과의_홉을_받을_때_넘긴다(case):
+    from src.domain.case import TargetPick
+
+    async def follows(state):
+        return {"decision": "continue", "plan_tasks": [task("t-2", action="code.resources", params={"name": "SummaryRefresh"}),
+                                                         task("t-3")]}
+
+    patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
+    state = CaseState(case=patrol, round=1, target=TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b",
+                                                             writer="SummaryRefresh", writer_at="metadata.event_type"),
+                      plan_tasks=[task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"])],
+                      evidence=[_ev("t-1.e1")])
+    patch = await nodes_for(follows, code_index=True)["integrate"](state)
+    assert {t.id: t.pinned for t in patch["plan_tasks"]} == {"t-2": True, "t-3": False}
+
+
+def nodes_for(integrate, **kw):
+    return make_nodes(deps_for(ScriptedRunner(), integrate=integrate, max_rounds=9, **kw))

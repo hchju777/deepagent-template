@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from src.application.facts import facts_for, present
-from src.application.intake_map import IntakeSpec, cited_keys, hop_line, run_intake
+from src.application.intake_map import IntakeSpec, cited_keys, hop_line, next_hop, run_intake
 from src.application.state import CaseState, merge_by_id
 from src.domain.actions import ACTIONS, DISCOVERED_ARGS, action_problem, describe, name_known
 from src.domain.case import Case, CauseLink, EvidenceRef, Hypothesis, PlanTask, TargetPick, Verdict
@@ -115,7 +115,7 @@ def _sanitize_task(task: PlanTask) -> PlanTask:
         ids.append(expect["evidence"])
     return task.model_copy(update={"status": "pending", "result_summary": None,
                                    "result_evidence_ids": [], "error": None,
-                                   "input_evidence_ids": ids})
+                                   "input_evidence_ids": ids, "pinned": False})
 
 
 def _accept_hypotheses(patch: dict, *, have: set[str]) -> tuple[list[Hypothesis], list[str]]:
@@ -311,7 +311,8 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   waiting: dict[str, PlanTask] | None = None,
                   evidence_of: dict[str, list[str]] | None = None,
                   inputs_of: dict[str, list[str] | None] | None = None,
-                  hint: str = "", hint_for: frozenset = frozenset()
+                  hint: str = "", hint_for: frozenset = frozenset(),
+                  hop: tuple[str, dict] | None = None
                   ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
@@ -413,6 +414,9 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
         fixed.append(task)
         resolved += notes
     kept = fixed
+    if hop is not None:
+        # 코드가 지정한 홉을 그대로 낸 태스크 — 브리핑이 그 증거 본문을 예산에서 빼지 않는다(R3-1c ②). action·params가 정확히 같을 때만.
+        kept = [t.model_copy(update={"pinned": True}) if (t.action, t.params) == hop else t for t in kept]
     if seen is None:
         return kept, reused, resolved
     guessed = list(resolved)
@@ -446,6 +450,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),
             hint=hop_line(state.target, code_index=deps.code_index), hint_for=_intake_ids(state),
+            hop=next_hop(state.target, code_index=deps.code_index),
             seen=_universe(state, deps) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -490,6 +495,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                 waiting=_waiting(base), evidence_of=_evidence_of(base),
                 inputs_of={**_rejected_reads(base), **_inputs_of(base)},
                 hint=hop_line(base.target, code_index=deps.code_index), hint_for=_intake_ids(base),
+                hop=next_hop(base.target, code_index=deps.code_index),
                 seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed

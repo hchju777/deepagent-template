@@ -159,6 +159,16 @@ def hypotheses_block(state: CaseState) -> str:
         f"- {h.id} [{h.status}] {_oneline(h.statement)}" for h in state.hypotheses)
 
 
+def pinned_evidence(state: CaseState) -> frozenset[str]:
+    """예산에서 빼지 않는 증거 — 입구 노드의 읽기(`t-0`·`t-1`, 입구가 돌았을 때)와 코드가 지정한 홉을 리드가 그대로 낸 태스크(`pinned`)의 것.
+    측정 #8: 다음 홉의 결과가 다음 라운드에서 "예산에서 빠졌다" — 코드가 보라고 한 것을 코드가 안 보여 주는 모순이었다(R3-1c ②)."""
+    ids: set[str] = set()
+    for t in state.plan_tasks:
+        if t.pinned or (state.target is not None and t.id in ("t-0", "t-1")):
+            ids.update(t.result_evidence_ids)
+    return frozenset(ids)
+
+
 def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
     """**리드가 실제로 본 것**만. 이게 나중에 판정이 인용할 수 있는 우주다(12a).
 
@@ -184,11 +194,16 @@ def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
     if not state.evidence:
         return "(아직 없다)"
 
-    # 뒤에서부터 예산을 채운다 — 최근 증거가 지금 판단에 쓰인다.
-    detailed, used = set(), 0
+    # 고정 증거(입구 읽기·코드가 지정한 홉의 결과)가 먼저 예산을 쓰고 — 예산을 넘어도 빠지지 않는다 — 나머지는 뒤에서부터 채운다(최근
+    # 증거가 지금 판단에 쓰인다). 고정만으로 예산을 넘으면 나머지는 최근 하나만 본문이 남는다.
+    pinned = pinned_evidence(state)
+    detailed = {ref.id for ref in state.evidence if ref.id in pinned}
+    used = sum(len(ref.body or ref.summary) for ref in state.evidence if ref.id in pinned)
     for ref in reversed(state.evidence):
+        if ref.id in pinned:
+            continue
         used += len(ref.body or ref.summary)
-        if used > budget and detailed:
+        if used > budget and (detailed - pinned):
             break
         detailed.add(ref.id)
 
