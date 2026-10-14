@@ -24,7 +24,7 @@ url·비밀번호·계정은 프롬프트에 들어가지 않는다. 리드가 �
 import json
 import re
 
-from src.application.intake_map import check_of, start_read
+from src.application.intake_map import check_of, intake_lines, next_hop, start_read
 from src.application.runner_probe import ASIDE_MARK, target_rows
 from src.application.state import CaseState
 from src.domain.actions import ACTIONS, describe
@@ -135,7 +135,7 @@ def origin_line(case, site_config) -> str | None:
     return " · ".join(parts)
 
 
-def case_block(state: CaseState, *, site_config=None, target: TargetPick | None = None) -> str:
+def case_block(state: CaseState, *, site_config=None, target: TargetPick | None = None, code_index: bool = False) -> str:
     case = state.case
     origin = "사람" if case.origin == "human" else (origin_line(case, site_config) or "순찰")
     # 증거가 짚은 대상 행 경로 — 리드가 첫 행(다른 배지)을 기대값으로 썼다(사내 측정 #4). 실행기가 머리줄에 적은 것을 그대로.
@@ -147,7 +147,9 @@ def case_block(state: CaseState, *, site_config=None, target: TargetPick | None 
             + (f"\n대상 행: {'; '.join(rows)}" if rows else "")
             # 코드가 고른 대상 키 — 흐름 줄의 순서는 리드가 못 읽는 신호라 문장으로(R3-0 ①). 못 골랐으면 그 사실.
             + (f"\n{target.line()}" if target is not None and target.line() else "")
-            + (f"\n{target.fold_line()}" if target is not None and target.fold_line() else ""))
+            + (f"\n{target.fold_line()}" if target is not None and target.fold_line() else "")
+            # 입구가 이미 읽은 것·빈 목록·다음 홉(R3-1b ③) — 측정 #7의 "첫 수 중복 → no_runnable"의 답.
+            + (f"\n{intake_lines(state, code_index=code_index)}" if intake_lines(state, code_index=code_index) else ""))
 
 
 def hypotheses_block(state: CaseState) -> str:
@@ -365,7 +367,7 @@ def _issued(tasks, action: str, **match) -> bool:
 
 
 def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[str, ...],
-                 flow_graph: dict | None, evidence=(), code_index: bool = False):
+                 flow_graph: dict | None, evidence=(), code_index: bool = False, target: TargetPick | None = None):
     """사다리의 **다음 한 칸** — `((action, params), input_evidence_ids)` 또는 None.
 
     rest 증거(증상 재현)가 있고 그 끝점의 사슬이 오버레이에 있으면 `code.trace(endpoint=그 path)`, trace
@@ -388,6 +390,20 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
     대역이 `endpoint`에 서비스 이름을 넣어 두 번 실패했고, 이름 기준이었다면 그 뒤로 칸이 사라져 사다리를
     끝내 못 밟는다(실제로 그랬다).
     """
+    # 입구가 키를 골랐으면 첫 칸은 **그 키를 누가 쓰나**(R3-1b ③) — 화면이 읽는 키이니 값이 어디서 오는지가 다음 질문이다. 그다음은 쓰는
+    # 함수의 호출자. 그 뒤는 접수 끝점의 옛 사다리로 이어진다. 인덱스가 없으면 이 칸은 없다(`next_hop`).
+    hop = next_hop(target, code_index=code_index)
+    if hop is not None:
+        action, params = hop
+        used_hop = _done(tasks, action, **params)
+        if used_hop is None:
+            if not _issued(tasks, action, **params):
+                key_read = _done(tasks, "redis.get", key=target.key)
+                return hop, ([key_read.result_evidence_ids[0]] if key_read else [])
+        else:
+            writer = _first_writer(evidence, used_hop.result_evidence_ids[0])
+            if writer is not None and not _issued(tasks, "code.callers", name=writer):
+                return ("code.callers", {"name": writer}), [used_hop.result_evidence_ids[0]]
     rest = _done(tasks, "rest.query")
     path = _rest_path(site_config, (rest.action, rest.params)) if rest else None
     if not path:
@@ -490,7 +506,8 @@ def next_task_number(state: CaseState) -> int:
 def example_block(site_config, *, phase: str, start: int = 1,
                   services: tuple[str, ...] = (), used: tuple[str, ...] = (),
                   first_read: tuple[str, dict] | None = None,
-                  flow_graph: dict | None = None, tasks=(), evidence=(), code_index: bool = False) -> str:
+                  flow_graph: dict | None = None, tasks=(), evidence=(), code_index: bool = False,
+                  intake_done: bool = False, hop: tuple[str, dict] | None = None, target: TargetPick | None = None) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
 
     `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
@@ -502,10 +519,15 @@ def example_block(site_config, *, phase: str, start: int = 1,
     """
     if phase == "frame":
         shapes: list[tuple[str, dict]] = []
+        # 입구가 돌았으면 첫 칸은 다음 홉이고 접수 읽기는 **예시에 없다**(R3-1b ③) — 측정 #7에서 입구가 이미 한 읽기를 예시가 그대로
+        # 보여 줘 리드가 베꼈고, 중복 거부 → 되물어도 중복 → `no_runnable`로 끝났다.
+        if hop:
+            shapes.append(hop)
         if first_read and _has(site_config, ACTIONS[first_read[0]][0], services):
             # 사다리의 첫 두 칸이 예시다 — ① 판정이 본 읽기로 증상을 재현하고 ② 그 path를 코드에서
             # 찾는다. 예시가 곧 출력이라(위) 규칙 문장으로는 안 되고 여기 있어야 리드가 밟는다.
-            shapes.append(first_read)
+            if not intake_done:
+                shapes.append(first_read)
             path = _rest_path(site_config, first_read)
             if path and services:
                 # 그래프가 서빙 서비스를 하나로 알면 그 레포만 뒤진다 — 모르면 전체다.
@@ -514,7 +536,7 @@ def example_block(site_config, *, phase: str, start: int = 1,
                                              **({"service": served[0]} if len(served) == 1 else {})}))
         room = (4 if shapes else 3) - len(shapes)
         shapes += _available(site_config, _discovery(services), room, services)
-        free = None if first_read else _free_rest_entry(site_config)
+        free = None if (first_read or intake_done) else _free_rest_entry(site_config)
         if free and len(shapes) < 3:
             shapes.append(free)
         if not shapes:
@@ -551,7 +573,7 @@ def example_block(site_config, *, phase: str, start: int = 1,
             entry = _free_rest_entry(site_config)
             shapes = [entry] if entry else []
         ladder = _ladder_step(site_config, tasks, services=services, used=used, flow_graph=flow_graph,
-                              evidence=evidence, code_index=code_index)
+                              evidence=evidence, code_index=code_index, target=target)
         lead = ([_task(start, ladder[0][0], ladder[0][1], rank=1, input_evidence_ids=ladder[1])]
                 if ladder else [])
         body = {"decision": "continue",
@@ -674,14 +696,15 @@ def frame_fields(state: CaseState, *, site_config,
                  roles: dict[str, str] | None = None,
                  flow_graph: dict | None = None, code_index: bool = False) -> dict[str, str]:
     target = target_key(state, site_config=site_config, flow_graph=flow_graph)
-    return {"case": case_block(state, site_config=site_config, target=target),
+    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
             "example": example_block(site_config, phase="frame",
                                      start=next_task_number(state),
                                      services=services,
                                      first_read=start_read(state.case, site_config),
-                                     flow_graph=flow_graph),
+                                     flow_graph=flow_graph, intake_done=state.target is not None,
+                                     hop=next_hop(target, code_index=code_index)),
             "flow": flow_block(state, flow_graph,
                                texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ()))}
 
@@ -704,7 +727,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      flow_graph: dict | None = None, code_index: bool = False,
                      fold_tasks: bool = False) -> dict[str, str]:
     target = target_key(state, site_config=site_config, flow_graph=flow_graph)
-    return {"case": case_block(state, site_config=site_config, target=target),
+    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
             "flow": flow_block(state, flow_graph,
@@ -715,7 +738,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                                      used=tuple(t.action for t in state.plan_tasks
                                                 if t.action),
                                      tasks=tuple(state.plan_tasks), flow_graph=flow_graph,
-                                     evidence=tuple(state.evidence), code_index=code_index),
+                                     evidence=tuple(state.evidence), code_index=code_index, target=target),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state, fold=fold_tasks),
             "evidence": evidence_block(state, budget=evidence_budget),

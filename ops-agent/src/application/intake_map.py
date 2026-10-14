@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from src.application.recompute import pluck
 from src.application.runner_probe import focus_of
 from src.application.state import CaseState
 from src.domain.actions import role_for
@@ -134,6 +135,54 @@ def _parent(path: str) -> str | None:
     return m.group(1) or None if m else None
 
 
+def _empty_lists(value: Any, at: str) -> list[str]:
+    """identity가 든 객체의 **부모**에서 빈 목록 필드들 — `record[0].data`. 사내 c-1의 모양(키는 있고 data가 `[]`)을 코드가 사실로 적는다
+    (측정 #7에서 그 빈 배열을 아무도 못 봤다). 부모가 객체가 아니면 없다."""
+    parent = _parent(at)
+    obj = value if parent is None else pluck(value, parent)
+    if not isinstance(obj, dict):
+        return []
+    return [f"{parent}.{k}" if parent else k for k, v in obj.items() if isinstance(v, list) and not v]
+
+
+def next_hop(target: TargetPick | None, *, code_index: bool) -> tuple[str, dict] | None:
+    """입구 결과로 **코드가 정하는** 다음 홉(R3-1b ③) — 고른 키가 있으면 그 키를 누가 쓰나(`code.uses <선언 이름>`). 인덱스는 템플릿
+    이름으로 답하므로 고른 키가 아니라 선언 이름이다. 심볼 인덱스가 없으면 없는 문이라 None — 그때는 옛 사다리(접수 끝점의 사슬)다."""
+    if target is None or not target.key or not target.declared or not code_index:
+        return None
+    return "code.uses", {"name": target.declared}
+
+
+def hop_line(target: TargetPick | None, *, code_index: bool) -> str:
+    hop = next_hop(target, code_index=code_index)
+    if hop is None:
+        return ""
+    return f"다음 홉: {hop[0]} name={hop[1]['name']!r} — 이 키를 누가 쓰나(값이 어디서 오나)"
+
+
+def intake_lines(state: CaseState, *, code_index: bool) -> str:
+    """케이스 블록의 입구 줄들 — 입구 노드가 이미 읽은 것(다시 내지 마라), identity 옆의 빈 목록, 다음 홉. 측정 #7: 리드의 첫 수가 입구가 이미
+    한 읽기라 중복 거부 → 되물어도 중복 → `no_runnable`로 끝났다. 입구가 안 돌았으면 빈 문자열."""
+    target = state.target
+    if target is None:
+        return ""
+    by_id = {t.id: t for t in state.plan_tasks if t.status == "ok" and t.result_evidence_ids}
+    done = []
+    if "t-0" in by_id:
+        done.append(f"접수 읽기({by_id['t-0'].result_evidence_ids[0]})")
+    if "t-1" in by_id and target.key:
+        done.append(f"대상 키 {target.key}({by_id['t-1'].result_evidence_ids[0]})")
+    lines = []
+    if done:
+        lines.append("입구 노드가 이미 읽었다: " + " · ".join(done) + " — 같은 읽기를 다시 내지 마라")
+    if target.empty:
+        lines.append("값: " + ", ".join(f"{p}가 비었다" for p in target.empty))
+    hop = hop_line(target, code_index=code_index)
+    if hop:
+        lines.append(hop)
+    return "\n".join(lines)
+
+
 def _task(task_id: str, goal: str, action: str, params: dict) -> PlanTask:
     return PlanTask(id=task_id, goal=goal, role=role_for(action), action=action, params=params, status="running")
 
@@ -182,6 +231,7 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
 
     # 후보 — 리터럴 선언 키 먼저, 템플릿은 머리로 scan해 실재하는 키. 상한을 넘으면 그 사실을 적는다.
     candidates: list[str] = [k for k in declared if "{" not in k]
+    declared_of: dict[str, str] = {k: k for k in candidates}       # 실재 키 → 그 키가 나온 선언(템플릿) — 다음 홉의 `code.uses` 이름
     capped = False
     for template in (k for k in declared if "{" in k):
         if len(candidates) >= MAX_CANDIDATES:
@@ -196,6 +246,7 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
                 break
             if isinstance(name, str) and name not in candidates:
                 candidates.append(name)
+                declared_of[name] = template
     if not candidates:
         return patch(TargetPick(problem=f"후보 키가 없다 — 접수 끝점이 읽는 선언 키를 모른다(흐름 그래프) ({where} 대상 행은 찾았다)"))
 
@@ -229,7 +280,8 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
             basis = f"키 값의 {at2}에 {label}가 그대로 있다 ({again.evidence[0].id})"
         else:
             basis = f"키 값의 {at}에 {label}가 그대로 있다 (다시 읽기 실패: {again.error or '증거 없음'})"
-        return patch(TargetPick(key=key, basis=basis, **folded,
+        return patch(TargetPick(key=key, basis=basis, declared=declared_of.get(key, key),
+                                empty=_empty_lists(_unwrap(raw), at2) if at2 else [], **folded,
                                 problem=f"후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""))
     if not hits:
         gone = f"; 없는 키 {len(missing)}개: {', '.join(missing)}" if missing else ""

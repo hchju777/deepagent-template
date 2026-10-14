@@ -152,3 +152,45 @@ async def test_템플릿_키는_머리로_scan해_실재하는_키를_후보로_
     many = _runner(scans={"k:*": [f"k:{i}" for i in range(80)]}, keys={f"k:{i}": "x" for i in range(80)})
     patch = await run_intake(CaseState(case=_case()), SPEC, runner=many, declared=("k:{n}",))
     assert len(patch["target"].candidates) == 50 and "상한" in patch["target"].problem
+
+
+# ── R3-1b ③ — 다음 홉 ──
+
+async def test_고른_키의_선언_이름과_identity_옆의_빈_목록을_적는다():
+    """③의 다음 홉은 `code.uses <선언 이름>`이다 — 인덱스는 템플릿 이름(`alarm:stats:{line}`)으로 답하므로 고른 키가 어느 선언에서 왔는지 남긴다.
+    identity 옆의 빈 목록(`record[0].data`)은 코드가 보는 사실 — 사내 c-1의 바로 그 모양(키는 있고 data가 `[]`)."""
+    runner = _runner(scans={"alarm:stats:*": ["alarm:stats:L1"]}, keys={"alarm:stats:L1": _value("L1", "Alarm", data=[])},
+                     picked="alarm:stats:L1")
+    pick = (await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:{line}",)))["target"]
+    assert pick.declared == "alarm:stats:{line}" and pick.empty == ["record[0].data"]
+    literal = _runner(keys={"alarm:stats:L1": _value("L1", "Alarm", data=[{"n": 1}])}, picked="alarm:stats:L1")
+    pick = (await run_intake(CaseState(case=_case()), SPEC, runner=literal, declared=("alarm:stats:L1",)))["target"]
+    assert pick.declared == "alarm:stats:L1" and pick.empty == []
+
+
+def test_다음_홉은_고른_키의_선언_이름으로_code_uses이고_인덱스가_없으면_없다():
+    from src.application.intake_map import hop_line, next_hop
+    from src.domain.case import TargetPick
+
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b")
+    assert next_hop(picked, code_index=True) == ("code.uses", {"name": "alarm:stats:{line}"})
+    assert hop_line(picked, code_index=True) == "다음 홉: code.uses name='alarm:stats:{line}' — 이 키를 누가 쓰나(값이 어디서 오나)"
+    assert next_hop(picked, code_index=False) is None and hop_line(picked, code_index=False) == ""     # 없는 문은 안 가리킨다
+    assert next_hop(TargetPick(problem="못 골랐다"), code_index=True) is None and next_hop(None, code_index=True) is None
+
+
+def test_입구_줄은_이미_읽은_것과_빈_목록과_다음_홉을_말한다():
+    from src.application.intake_map import intake_lines
+    from src.domain.case import TargetPick
+    from tests.application.conftest import task
+
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"])
+    state = CaseState(case=_case(), target=picked, plan_tasks=[
+        task("t-0", action="rest.query", params={"entry": "summary_badge", "params": {}}, status="ok", result_evidence_ids=["t-0.e1"]),
+        task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"])])
+    assert intake_lines(state, code_index=True) == (
+        "입구 노드가 이미 읽었다: 접수 읽기(t-0.e1) · 대상 키 alarm:stats:L1(t-1.e1) — 같은 읽기를 다시 내지 마라\n"
+        "값: record[0].data가 비었다\n"
+        "다음 홉: code.uses name='alarm:stats:{line}' — 이 키를 누가 쓰나(값이 어디서 오나)")
+    assert intake_lines(state, code_index=False).count("\n") == 1                                  # 홉 줄만 빠진다
+    assert intake_lines(CaseState(case=_case()), code_index=True) == ""                           # 입구가 안 돌았다

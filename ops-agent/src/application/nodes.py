@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from src.application.facts import facts_for, present
-from src.application.intake_map import IntakeSpec, cited_keys, run_intake
+from src.application.intake_map import IntakeSpec, cited_keys, hop_line, run_intake
 from src.application.state import CaseState, merge_by_id
 from src.domain.actions import ACTIONS, DISCOVERED_ARGS, action_problem, describe, name_known
 from src.domain.case import Case, CauseLink, EvidenceRef, Hypothesis, PlanTask, TargetPick, Verdict
@@ -76,6 +76,8 @@ class EngineDeps:
     # 판정의 `component`가 가리킬 수 있는 부품 — 토폴로지의 서비스 이름. 증거 본문과 그래프
     # 이름(`known_names`)은 `_universe`가 더하므로 여기엔 서비스만 온다.
     components: frozenset = frozenset()
+    # 심볼 인덱스가 있나 — 다음 홉(`code.uses`, R3-1b ③)은 없는 문을 가리키면 안 된다. 브리핑이 받는 것과 같은 값.
+    code_index: bool = False
     # 흐름 그래프가 선언한 이름, 종류별(`rediskey` → 접수 끝점이 읽는 키 템플릿, 없으면 config의 전부). 발견 읽기의 결과와
     # 대조해 "선언됐는데 없는 키"를 사실로 남긴다(`facts.py`). 그래프가 없으면 비어 있고 아무 사실도 안 남는다.
     declared: dict[str, tuple[str, ...]] = field(default_factory=dict)
@@ -198,6 +200,13 @@ def _accept_problem(task: PlanTask) -> str | None:
     return problem + hint
 
 
+def _intake_ids(state: CaseState) -> frozenset:
+    """입구 노드가 남긴 증거 id들(`t-0`·`t-1`) — 이 결과의 중복에만 다음 홉을 붙인다."""
+    if state.target is None:
+        return frozenset()
+    return frozenset(e for t in state.plan_tasks if t.id in ("t-0", "t-1") for e in t.result_evidence_ids)
+
+
 def _rejected_reads(state: CaseState) -> dict[str, list[str]]:
     """앞 라운드에서 중복으로 거부된 태스크 id → 그 읽기의 증거 id들. 기록(`llm_errors`)에서 되읽는다.
 
@@ -299,7 +308,8 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   pending: frozenset = frozenset(),
                   waiting: dict[str, PlanTask] | None = None,
                   evidence_of: dict[str, list[str]] | None = None,
-                  inputs_of: dict[str, list[str] | None] | None = None
+                  inputs_of: dict[str, list[str] | None] | None = None,
+                  hint: str = "", hint_for: frozenset = frozenset()
                   ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
@@ -380,9 +390,12 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
         if task.action and query in asked:
             # 거부만 하면 리드는 "왜"를 모른 채 또 낸다(사내 실측에서 세 번). 결과가 어디 있는지를 같이 적는다.
             where = (evidence_of or {}).get(query) or []
+            # 입구 노드가 이미 한 읽기면 다음 홉까지(R3-1b ③) — 측정 #7에서 리드가 접수 읽기를 두 번 냈고 둘 다 "또 냈다"만 받았다.
+            at_intake = bool(where) and hint and set(where) <= hint_for
             reused.append(f"{task.id}{DUP_KIND} — 받지 않는다 "
                           f"({describe(task.action, task.params)})"
-                          + (f"{DUP_WHERE}{', '.join(where)}" if where else ""))
+                          + (f"{DUP_WHERE}{', '.join(where)}" if where else "")
+                          + (f" — 입구 노드가 이미 읽었다. {hint}" if at_intake else ""))
             aliases[task.id] = list(where) or None
             continue
         used.add(task.id)
@@ -430,6 +443,7 @@ def make_nodes(deps: EngineDeps) -> dict:
         tasks, rejected, guessed = _accept_tasks(
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),
+            hint=hop_line(state.target, code_index=deps.code_index), hint_for=_intake_ids(state),
             seen=_universe(state, deps) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -473,6 +487,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                 taken=_taken(base), done=_done(base), pending=_pending(base),
                 waiting=_waiting(base), evidence_of=_evidence_of(base),
                 inputs_of={**_rejected_reads(base), **_inputs_of(base)},
+                hint=hop_line(base.target, code_index=deps.code_index), hint_for=_intake_ids(base),
                 seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed

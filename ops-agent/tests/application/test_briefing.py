@@ -937,12 +937,12 @@ def _trace_done(task_id="t-2"):
 
 
 def _ladder(site_config, tasks, *, used=(), services=("api",), graph="traced", start=3, evidence=(),
-            code_index=False):
+            code_index=False, target=None):
     g = {"traced": _traced_endpoint_graph(), "keyed": _traced_endpoint_graph(with_key=True),
          "untraced": _graph_with_endpoint(), None: None}[graph]
     return json.loads(briefing.example_block(site_config, phase="integrate", start=start, services=services,
                                              used=used, tasks=tuple(tasks), flow_graph=g,
-                                             evidence=tuple(evidence), code_index=code_index))["tasks"]
+                                             evidence=tuple(evidence), code_index=code_index, target=target))["tasks"]
 
 
 def test_rest_증거가_있고_끝점이_추적됐으면_integrate_예시_첫_수가_그_path의_code_trace다(case):
@@ -1405,3 +1405,51 @@ def test_참고_재집계의_match는_사다리가_사실로_쓰지_않는다(ca
     tasks = _ladder(site(), [_rest_done(), _trace_done(), diff_t], used=("rest.query", "code.trace", "recompute.count"),
                     graph="keyed", evidence=[aside], code_index=True)
     assert all(t["action"] not in ("code.uses", "code.callers") for t in tasks), tasks
+
+
+# ── R3-1b ③ — 이미 읽었다 + 다음 홉 ──
+
+def _intake_state(empty=("record[0].data",)):
+    from src.application.state import CaseState
+    from src.domain.case import TargetPick
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=list(empty))
+    return CaseState(case=_patrol_case(), target=picked, plan_tasks=[
+        task("t-0", action="rest.query", params={"entry": "summary_badge", "params": {}}, status="ok", result_evidence_ids=["t-0.e1"]),
+        task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"])])
+
+
+def test_입구가_돌았으면_케이스_블록에_입구_줄이_실리고_frame_예시_첫_칸은_접수_읽기가_아니라_다음_홉이다():
+    """측정 #7: 입구 노드가 접수를 읽었는데 frame 예시 첫 칸이 여전히 접수 읽기라 리드가 그대로 베껴 중복 거부 → 되물어도 중복 →
+    `no_runnable`(c-1 r1, c-2 r2). 입구가 돌았으면 접수 읽기는 예시에 없고 첫 칸은 다음 홉이다. 인덱스가 없으면 홉도 없다(없는 문)."""
+    from src.application.state import CaseState
+    state = _intake_state()
+    fields = briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=True)
+    assert "입구 노드가 이미 읽었다: 접수 읽기(t-0.e1) · 대상 키 alarm:stats:L1(t-1.e1) — 같은 읽기를 다시 내지 마라" in fields["case"]
+    assert "값: record[0].data가 비었다" in fields["case"] and "다음 홉: code.uses name='alarm:stats:{line}'" in fields["case"]
+    tasks = json.loads(fields["example"])["tasks"]
+    assert (tasks[0]["id"], tasks[0]["action"], tasks[0]["params"]) == ("t-2", "code.uses", {"name": "alarm:stats:{line}"})
+    assert all(t["action"] != "rest.query" for t in tasks)
+    blind = briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=False)
+    assert "다음 홉" not in blind["case"] and "이미 읽었다" in blind["case"]
+    assert all(t["action"] not in ("rest.query", "code.uses") for t in json.loads(blind["example"])["tasks"])
+    plain = briefing.frame_fields(CaseState(case=_patrol_case()), site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(),
+                                  code_index=True)
+    assert json.loads(plain["example"])["tasks"][0]["action"] == "rest.query"                     # 입구가 안 돈 케이스는 전처럼
+    assert "다음 홉" in briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(),
+                                              code_index=True)["case"]
+
+
+def test_입구가_고른_키가_있으면_사다리_첫_칸은_그_키를_누가_쓰나이고_그다음은_쓰는_함수의_호출자다():
+    from src.domain.case import TargetPick
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b")
+    read = task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"])
+    tasks = _ladder(site(), [_rest_done("t-0"), read], used=("rest.query", "redis.get"), graph="keyed", code_index=True, target=picked)
+    assert (tasks[0]["action"], tasks[0]["params"], tasks[0]["input_evidence_ids"]) == (
+        "code.uses", {"name": "alarm:stats:{line}"}, ["t-1.e1"])
+    uses_t, uses_e = _uses_done("alarm:stats:{line}", task_id="t-2")
+    tasks = _ladder(site(), [_rest_done("t-0"), read, uses_t], used=("rest.query", "redis.get", "code.uses"), graph="keyed",
+                    evidence=[uses_e], code_index=True, target=picked)
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("code.callers", {"name": "sink.writer.run"})
+    # 인덱스가 없으면 그 칸이 없고 옛 사다리(접수 끝점의 사슬)로 간다
+    tasks = _ladder(site(), [_rest_done("t-0"), read], used=("rest.query", "redis.get"), graph="keyed", code_index=False, target=picked)
+    assert tasks[0]["action"] == "code.trace"

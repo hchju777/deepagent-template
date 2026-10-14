@@ -697,3 +697,34 @@ def test_모르는_인자나_빠진_인자나_없는_action은_받을_때_거부
     assert any(r.startswith("t-2: 받지 않는다 — ") and "모르는 인자 — expect" in r for r in refused)
     assert any(r.startswith("t-3: 받지 않는다 — ") and "필요한 인자가 없다 — expect" in r for r in refused)
     assert any(r.startswith("t-4: 받지 않는다 — ") and "action이 없다" in r for r in refused)
+
+
+# ── R3-1b ③ — 입구가 이미 한 읽기를 또 내면 거부 기록에 다음 홉 ──
+
+def test_입구가_이미_한_읽기를_또_내면_거부_기록에_다음_홉을_적는다():
+    from src.application.nodes import _accept_tasks, _query
+
+    same = task("t-2", action="rest.query", params={"entry": "summary_badge", "params": {}})
+    hint = "다음 홉: code.uses name='alarm:stats:{line}' — 이 키를 누가 쓰나(값이 어디서 오나)"
+    _, refused, _ = _accept_tasks({"plan_tasks": [same]}, room=5, done=frozenset({_query(same)}), evidence_of={_query(same): ["t-0.e1"]},
+                                  hint=hint, hint_for=frozenset({"t-0.e1", "t-1.e1"}))
+    assert refused == [f"t-2: 이미 한 읽기를 또 냈다 — 받지 않는다 (rest.query entry='summary_badge' params={{}}) — 그 결과는 t-0.e1 — "
+                       f"입구 노드가 이미 읽었다. {hint}"]
+    _, other, _ = _accept_tasks({"plan_tasks": [same]}, room=5, done=frozenset({_query(same)}), evidence_of={_query(same): ["t-5.e1"]},
+                                hint=hint, hint_for=frozenset({"t-0.e1", "t-1.e1"}))
+    assert other[0].endswith("그 결과는 t-5.e1")                                               # 리드가 한 읽기의 중복엔 안 붙는다
+
+
+async def test_integrate는_입구_결과로_다음_홉_힌트를_넘긴다(case):
+    from src.domain.case import TargetPick
+
+    async def again(state):
+        return {"decision": "continue", "plan_tasks": [task("t-2", action="rest.query", params={"entry": "summary_badge", "params": {}})]}
+
+    patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
+    state = CaseState(case=patrol, round=1, target=TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b"),
+                      plan_tasks=[task("t-0", action="rest.query", params={"entry": "summary_badge", "params": {}}, status="ok",
+                                       result_evidence_ids=["t-0.e1"])])
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=again, max_rounds=9, redo_on_rejection=False, code_index=True))
+    patch = await nodes["integrate"](state)
+    assert any("입구 노드가 이미 읽었다. 다음 홉: code.uses name='alarm:stats:{line}'" in e for e in patch["llm_errors"]), patch["llm_errors"]

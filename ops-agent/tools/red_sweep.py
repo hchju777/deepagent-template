@@ -1160,8 +1160,8 @@ CASES = [
   '    if writer is None:',
   ['tests/application/test_briefing.py::test_uses_증거_뒤_다섯째_칸은_그_자원을_쓰는_함수의_code_callers다']),
  ('integrate가 증거를 예시에 안 넘긴다', ROOT / 'src/application/briefing.py',
-  '                                     evidence=tuple(state.evidence), code_index=code_index),',
-  '                                     evidence=(), code_index=code_index),',
+  '                                     evidence=tuple(state.evidence), code_index=code_index, target=target),',
+  '                                     evidence=(), code_index=code_index, target=target),',
   ['tests/application/test_briefing.py::test_uses_증거_뒤_다섯째_칸은_그_자원을_쓰는_함수의_code_callers다']),
  ('쓰는 함수 대신 읽는 함수를 집는다', ROOT / 'src/application/briefing.py',
   '_WRITER = re.compile(r"쓰기 \\d+:',
@@ -2279,7 +2279,7 @@ CASES += [
  ("흐름 줄이 고른 키를 안 앞세운다", B, "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=prefer, pin=set(own))",
   "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=(), pin=set(own))", [LINK_B, PREF_B]),
  ("브리핑이 State의 대상 키를 안 본다", B, "    return state.target or TargetPick()", "    return TargetPick()", [LINK_B]),
- ("CLI가 입구 재료를 안 넘긴다", MN, "                              intake=intake_spec(case, site))", "                              )", ["tests/application/test_lead.py::test_CLI가_실제로_돈다"]),
+ ("CLI가 입구 재료를 안 넘긴다", MN, "                              intake=intake_spec(case, site),\n", "", ["tests/application/test_lead.py::test_CLI가_실제로_돈다"]),
 ]
 # ── 12a-R3-0 ② — 대상과 연결 안 된 키로 high 금지 ──
 CAP_T = "tests/application/test_verdict.py::test_최상위가_인용한_키가_대상_키가_아니면_확신_상한_medium과_caveat"
@@ -2392,7 +2392,7 @@ CASES += [
  ("다시 읽기 실패를 사실로 안 적는다", IM, "            basis = f\"키 값의 {at}에 {label}가 그대로 있다 (다시 읽기 실패: {again.error or '증거 없음'})\"",
   "            basis = f\"키 값의 {at}에 {label}가 그대로 있다\"", [REREAD_T]),
  ("접기 줄의 있음 개수가 틀리다", CS, "        present = self.read - len(self.absent) - self.failed", "        present = self.read", [INTAKE_T]),
- ("케이스 블록에 접기 줄이 없다", B, "            + (f\"\\n{target.fold_line()}\" if target is not None and target.fold_line() else \"\"))", "            )",
+ ("케이스 블록에 접기 줄이 없다", B, "            + (f\"\\n{target.fold_line()}\" if target is not None and target.fold_line() else \"\")\n", "",
   ["tests/application/test_briefing.py::test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함께_말하고_흐름_줄은_그_키를_앞세운다"]),
 ]
 
@@ -2420,7 +2420,31 @@ CASES += [
  ("명령 엣지를 자원마다 거듭 단다", FLP, "            if target not in nodes or source not in nodes or (source, target) in seen:", "            if target not in nodes or source not in nodes:", [CMD_EDGE_T]),
 ]
 
-assert len(CASES) >= 622, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1b ③ — 이미 읽었다 + 다음 홉 ──
+DECL_T = f"{IMT}::test_고른_키의_선언_이름과_identity_옆의_빈_목록을_적는다"
+HOP_T = f"{IMT}::test_다음_홉은_고른_키의_선언_이름으로_code_uses이고_인덱스가_없으면_없다"
+LINES_T = f"{IMT}::test_입구_줄은_이미_읽은_것과_빈_목록과_다음_홉을_말한다"
+FRAME_HOP_T = "tests/application/test_briefing.py::test_입구가_돌았으면_케이스_블록에_입구_줄이_실리고_frame_예시_첫_칸은_접수_읽기가_아니라_다음_홉이다"
+LADDER_HOP_T = "tests/application/test_briefing.py::test_입구가_고른_키가_있으면_사다리_첫_칸은_그_키를_누가_쓰나이고_그다음은_쓰는_함수의_호출자다"
+HINT_T = "tests/application/test_nodes.py::test_입구가_이미_한_읽기를_또_내면_거부_기록에_다음_홉을_적는다"
+HINT_WIRE_T = "tests/application/test_nodes.py::test_integrate는_입구_결과로_다음_홉_힌트를_넘긴다"
+CASES += [
+ ("선언 이름을 안 남긴다", IM, "                declared_of[name] = template\n", "", [DECL_T]),
+ ("identity 옆 빈 목록을 안 적는다", IM, "    return [f\"{parent}.{k}\" if parent else k for k, v in obj.items() if isinstance(v, list) and not v]", "    return []", [DECL_T]),
+ ("인덱스가 없어도 다음 홉을 낸다", IM, "    if target is None or not target.key or not target.declared or not code_index:", "    if target is None or not target.key or not target.declared:", [HOP_T]),
+ ("입구 줄이 이미 읽은 것을 안 적는다", IM, "    if done:\n        lines.append(\"입구 노드가 이미 읽었다: \"", "    if False:\n        lines.append(\"입구 노드가 이미 읽었다: \"", [LINES_T]),
+ ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake_lines(state, code_index=code_index)}\" if intake_lines(state, code_index=code_index) else \"\"))", "            )", [FRAME_HOP_T]),
+ ("입구가 돌았는데 frame 예시에 접수 읽기를 둔다", B, "            if not intake_done:\n                shapes.append(first_read)", "            if True:\n                shapes.append(first_read)", [FRAME_HOP_T]),
+ ("frame 예시에 다음 홉을 안 둔다", B, "        if hop:\n            shapes.append(hop)", "        if False:\n            shapes.append(hop)", [FRAME_HOP_T]),
+ ("사다리 첫 칸이 고른 키의 uses가 아니다", B, "    hop = next_hop(target, code_index=code_index)\n    if hop is not None:", "    hop = next_hop(target, code_index=code_index)\n    if False:", [LADDER_HOP_T]),
+ ("uses 뒤에 쓰는 함수의 호출자를 안 묻는다", B, "            if writer is not None and not _issued(tasks, \"code.callers\", name=writer):\n                return (\"code.callers\", {\"name\": writer}), [used_hop.result_evidence_ids[0]]",
+  "            if False:\n                return (\"code.callers\", {\"name\": writer}), [used_hop.result_evidence_ids[0]]", [LADDER_HOP_T]),
+ ("거부 기록에 다음 홉을 안 적는다", ND, "            at_intake = bool(where) and hint and set(where) <= hint_for", "            at_intake = False", [HINT_T]),
+ ("리드가 한 읽기의 중복에도 다음 홉을 붙인다", ND, "            at_intake = bool(where) and hint and set(where) <= hint_for", "            at_intake = bool(where) and hint", [HINT_T]),
+ ("integrate가 다음 홉 힌트를 안 넘긴다", ND, "                hint=hop_line(base.target, code_index=deps.code_index), hint_for=_intake_ids(base),", "                hint=\"\", hint_for=_intake_ids(base),", [HINT_WIRE_T]),
+]
+
+assert len(CASES) >= 634, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

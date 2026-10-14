@@ -104,6 +104,10 @@ class TargetPick(StrictModel):
     absent: list[str] = []
     failed: int = 0
     hits: int = 0
+    # 고른 키가 나온 선언 이름(템플릿 `alarm:stats:{line}` 또는 리터럴) — 다음 홉 `code.uses`는 인덱스가 아는 이 이름으로 묻는다(R3-1b ③).
+    declared: str = ""
+    # identity가 든 객체 옆의 빈 목록 경로들(`record[0].data`) — 코드가 보는 사실. 사내 c-1의 모양.
+    empty: list[str] = []
 
     def line(self) -> str:
         if self.key:
