@@ -234,7 +234,7 @@ P1 4("선언됐는데 없는 키"가 무관한 키로 보냄)는 **R3로** — "
 | R3-3 ②-b ✅ | P1 4 | 같은 클래스 이름이 두 레포: **대상 키를 선언한 서비스**(흐름 그래프 `declares`)로 가른다(후보끼리 가를 때만, 표에 근거), 둘 다 선언이면 둘 다 — `code.resources service=` 인자, 걷기는 두 서비스를 다 component 후보로 | `walk.py`, `deployed_code.resources`, `domain/actions`, `__main__` |
 | R3-3 ③ ✅ | P0 1(단일값) | **단일값 필드의 나쁨은 코드 줄이 정한다**: 요약의 단일값 `f=v` 중 쓴 쪽 레포의 한 줄에 `f`와 `v`가 리터럴로 같이 있으면 나쁨(그 줄이 근거) — 걷기는 입력에 같은 `f=v`가 있는 동안 위로 | `walk.py`, `deployed_code`(스냅샷 줄 검색) |
 | R3-3 ④ | P0 1(멈춘 자리) | **멈춘 자리의 다음 홉**: ③의 리터럴 줄이 있으면 그 줄을 품은 함수(`code.read` 함수 전체 — 심볼의 시작·끝 줄), 없으면 `_run`과, `_run`이 `get("X")`로 꺼내는 문자열로 `register(component="X")`된 클래스 본문(스냅샷에서 문자열을 찾아 인덱스의 줄 범위로 클래스를 집는다 — 번들은 안 바뀐다). 원천에서 멈췄으면(값의 잎 = 토픽 이름) 그 토픽의 `kafka.group_offsets`·`kafka.tail`과 같은 이름의 수집기 클래스 | `walk.py`, `deployed_code.read`, `briefing._ladder_step` |
-| R3-3 ⑤ | P1 7 | verify: component가 인덱스의 클래스 이름이면 그 서비스로 바꾸고 caveat(두 레포면 둘 다 후보) | `nodes.verify`, `EngineDeps` |
+| R3-3 ⑤ ✅ | P1 7 | verify: component가 인덱스의 클래스 이름이면 그 서비스로 바꾸고 caveat(두 레포면 둘 다 후보) | `nodes.verify`, `EngineDeps` |
 | — | **측정 #10** | **`code graph` 재생성: 불필요**(①~⑤는 번들을 안 바꾼다 — 바뀌면 그때 적는다). 홉 표(홉 수·멈춘 자리·사유), 걷기의 읽기 수·시간, r1 예시, 프롬프트 크기(P2 재측정), 판정 component가 입력 쪽으로 갔는가 | 브리프 |
 (옛 메모) R3-3(옛 triage — 코드가 상류를 걷는 주체 — 와 `data.value_counts`)은 ①-a의 첫 고리(대상 키 → 쓴 클래스 → 입력 키) 뒤에 둔다: 입력 키마다 있나·비었나·값 분포(c-1 원천 키 TTL -2, c-2 원천 키 컬럼 전부 '-'). B는 그대로 미룬다 — 쓴 쪽은 값에서 오므로 B의 쓰는 쪽 절반은 필요가 없어졌고, 읽는 쪽은 끝점 사슬이 한다.
 

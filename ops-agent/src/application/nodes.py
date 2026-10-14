@@ -865,6 +865,38 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence) -> Verdi
     return verdict.model_copy(update={"confidence": confidence, "caveats": verdict.caveats + [note]})
 
 
+def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | None) -> Verdict:
+    """component가 인덱스의 **클래스 이름**이면 그 서비스로 바꾸고 caveat(R3-3 ⑤). 측정 #9 c-2: 리드가 쓴 쪽 클래스 이름을 원인 칸에 적었고
+    verify가 "서비스 아닌 component"로 걷어냈다 — 클래스는 서비스 안에 있으니 걷어낼 것이 아니라 번역할 것이다. 두 레포면 걷기가 가른 서비스
+    (홉 표의 쓴 쪽), 못 갈랐으면 첫 것 + "둘 다 후보". 바뀐 것이 없으면 같은 객체."""
+    if not class_services:
+        return verdict
+    resolved = {h.writer: h.service for h in (walk.hops if walk is not None else []) if h.writer and h.service and "," not in h.service}
+    caveats: list[str] = []
+
+    def fix(link: CauseLink | None) -> CauseLink | None:
+        if link is None or link.component not in class_services:
+            return link
+        services = class_services[link.component]
+        if not services:
+            return link
+        picked = resolved.get(link.component) or services[0]
+        note = ""
+        if len(services) > 1:
+            note = (f" (두 레포 {', '.join(services)} 중 걷기가 고른 것)" if link.component in resolved
+                    else f" (두 레포 {', '.join(services)} — 못 가른다, 둘 다 후보)")
+        caveats.append(f"component {link.component}는 클래스 이름 — 인덱스로 서비스 {picked}로 바꿨다{note}")
+        return link.model_copy(update={"component": picked})
+
+    root = fix(verdict.root_cause)
+    alternates = [fix(l) for l in verdict.alternates]
+    contributing = [fix(l) for l in verdict.contributing]
+    if not caveats:
+        return verdict
+    return verdict.model_copy(update={"root_cause": root, "alternates": alternates, "contributing": contributing,
+                                      "caveats": verdict.caveats + caveats})
+
+
 def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> Callable[[str], str | None]:
     """component 하나의 문제 — 없으면 None. 대본 경로(`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 검사하지
     않는다(태스크의 "찾지 않고 이름을 댔다"와 같은 스위치)."""
@@ -937,19 +969,21 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
 
     async def verify(state: CaseState) -> dict:
         """LLM 없는 가드레일. 노드는 raise하지 않는다."""
-        verdict = state.verdict
-        if verdict is None:
+        if state.verdict is None:
             # conclude가 항상 verdict를 만들지만, 그래프 변경·재개 엣지에 대한 방어다.
             return {"verify_problems": []}
+        # 클래스 이름 component는 검사 전에 서비스로 번역한다(R3-3 ⑤) — 걷어낼 것이 아니라 바꿀 것이다.
+        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk)
+        changed = verdict is not state.verdict
         citable = state.evidence_ids()
         incomplete = {e.id for e in state.evidence if not e.complete}
         component_problem = _component_problem(state, deps, verdict)
         problems = verify_verdict(verdict, citable=citable, incomplete=incomplete, component_problem=component_problem)
         if not problems:
             if not deps.check_discovery:
-                return {"verify_problems": []}            # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
+                return {"verify_problems": [], **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
             capped = cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence)
-            return {"verify_problems": []} if capped is verdict else {"verdict": capped, "verify_problems": []}
+            return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.
             return {"verify_problems": problems, "verify_attempts": state.verify_attempts + 1,

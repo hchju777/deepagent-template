@@ -2290,9 +2290,9 @@ CASES += [
  ("대상 키를 읽었어도 낮춘다", ND, "    if not keys or (target.key and any(present(target.key, [k]) for k in keys)):", "    if not keys:", [CAP_T]),
  ("키를 인용하지 않은 최상위도 낮춘다", ND, "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence)\n    if not keys or",
   "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence) or [\"?\"]\n    if not keys or", [CAP_T]),
- ("verify가 상한을 안 건다", ND, '            return {"verify_problems": []} if capped is verdict else {"verdict": capped, "verify_problems": []}',
-  '            return {"verify_problems": []}', [CAP_T, CAP2_T]),
- ("대본 경로에도 상한을 건다", ND, "            if not deps.check_discovery:\n                return {\"verify_problems\": []}", "            if False:\n                return {\"verify_problems\": []}", [CAP2_T]),
+ ("verify가 상한을 안 건다", ND, '            return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}',
+  '            return {"verify_problems": [], **({"verdict": verdict} if changed else {})}', [CAP_T, CAP2_T]),
+ ("대본 경로에도 상한을 건다", ND, "            if not deps.check_discovery:\n                return {\"verify_problems\": [], **({\"verdict\": verdict} if changed else {})}", "            if False:\n                return {\"verify_problems\": [], **({\"verdict\": verdict} if changed else {})}", [CAP2_T]),
  ("scan 패턴을 키 읽기로 센다", IM, "_KEY_READ = re.compile(r\"^redis\\.get key='((?:[^'\\\\]|\\\\.)*)'\")",
   "_KEY_READ = re.compile(r\"^redis\\.(?:get|scan) (?:key|pattern)='((?:[^'\\\\]|\\\\.)*)'\")", [CAP_T]),
 ]
@@ -2590,7 +2590,17 @@ CASES += [
  ("잡은 단일값을 위로 안 넘긴다", WK, "                        frontier += [(w, s, depth + 1, ev, carry) for s in next_services]", "                        frontier += [(w, s, depth + 1, ev, None) for s in next_services]", [LIT_T]),
 ]
 
-assert len(CASES) >= 712, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-3 ⑤ — 클래스 이름 component는 서비스로 ──
+CLS_T = "tests/application/test_verdict.py::test_verify는_클래스_이름_component를_인덱스의_서비스로_바꾸고_caveat을_단다"
+CASES += [
+ ("클래스 이름을 서비스로 안 바꾼다", ND, "        return link.model_copy(update={\"component\": picked})", "        return link", [CLS_T]),
+ ("두 레포에서 걷기가 가른 쪽을 안 쓴다", ND, "        picked = resolved.get(link.component) or services[0]", "        picked = services[0]", [CLS_T]),
+ ("번역에 caveat을 안 단다", ND, "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing,\n                                      \"caveats\": verdict.caveats + caveats})", "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing})", [CLS_T]),
+ ("verify가 번역 전 판정을 검사한다", ND, "        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk)", "        verdict = state.verdict", [CLS_T]),
+ ("번역한 판정을 State에 안 둔다", ND, "            return {\"verify_problems\": [], **({\"verdict\": capped} if (changed or capped is not verdict) else {})}", "            return {\"verify_problems\": []} if capped is verdict else {\"verdict\": capped, \"verify_problems\": []}", [CLS_T]),
+]
+
+assert len(CASES) >= 717, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

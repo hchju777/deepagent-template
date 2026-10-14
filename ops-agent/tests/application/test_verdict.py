@@ -483,3 +483,31 @@ async def test_대상_키를_못_골랐어도_키를_인용한_high는_medium이
     assert got["verdict"].confidence == "medium" and any("identity가 든 키가 없다" in c for c in got["verdict"].caveats)
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
     assert await loose["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1"))) == {"verify_problems": []}
+
+
+# ── R3-3 ⑤ — 클래스 이름 component는 서비스로 ──
+
+async def test_verify는_클래스_이름_component를_인덱스의_서비스로_바꾸고_caveat을_단다(case):
+    """측정 #9 P1 7(c-2): 리드가 쓴 쪽 **클래스 이름**을 원인 칸에 적었고 verify가 "서비스 아닌 component"로 걷어냈다. 클래스는 서비스 안에
+    있으니 걷어낼 것이 아니라 번역할 것이다 — 인덱스의 클래스→서비스로 바꾸고 caveat. 두 레포면 걷기가 가른 서비스(홉 표의 쓴 쪽), 못 갈랐으면
+    첫 것에 "둘 다 후보". 클래스 이름이 아니면 전처럼(서비스 아님 → 문제)."""
+    from src.application.nodes import translate_classes
+    from src.domain.case import Hop, Walk
+
+    classes = {"SummaryRefresh": ("sink",), "Dual": ("api", "sink")}
+    v = verdict(root_cause=cause("SummaryRefresh", "t-1.e1"), alternates=[cause("Dual", "t-1.e1", confidence="low")],
+                contributing=[cause("api", "t-1.e1", relation="r")])
+    got = translate_classes(v, class_services=classes, walk=None)
+    assert (got.root_cause.component, got.alternates[0].component, got.contributing[0].component) == ("sink", "api", "api")
+    assert got.caveats == ["component SummaryRefresh는 클래스 이름 — 인덱스로 서비스 sink로 바꿨다",
+                           "component Dual는 클래스 이름 — 인덱스로 서비스 api로 바꿨다 (두 레포 api, sink — 못 가른다, 둘 다 후보)"]
+    walked = Walk(hops=[Hop(key="k", writer="Dual", service="sink", status="정상")])
+    assert translate_classes(v, class_services=classes, walk=walked).alternates[0].component == "sink"        # 걷기가 가른 쪽
+    assert translate_classes(v, class_services={}, walk=None) is v                                             # 바뀐 것이 없으면 같은 객체
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink", "api"}), class_services=classes))
+    patch = await nodes["verify"](_state(case, verdict=v))
+    assert patch["verify_problems"] == [] and patch["verdict"].root_cause.component == "sink"
+    assert any("클래스 이름" in c for c in patch["verdict"].caveats)
+    # 클래스 이름이 아닌 것은 전처럼 문제다
+    plain = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink", "api"})))
+    assert "verdict" not in await plain["verify"](_state(case, verdict=v)) and (await plain["verify"](_state(case, verdict=v)))["verify_problems"]
