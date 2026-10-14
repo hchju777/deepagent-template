@@ -2532,7 +2532,7 @@ WHOP_T = "tests/application/test_nodes.py::test_걷기가_있으면_받을_때�
 WBRIEF_T = "tests/application/test_briefing.py::test_걷기가_있으면_케이스_블록에_홉_표가_실리고_다음_홉은_멈춘_자리이며_걸은_읽기는_접힌다"
 CASES += [
  ("출력을 입력으로 센다", WK, "                if w and w == writer:\n", "                if False:\n", [WALK_T]),
- ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                    if w:\n                        frontier += [(w, s, depth + 1, ev) for s in next_services]", "                    if False:\n                        frontier += [(w, s, depth + 1, ev) for s in next_services]", [WALK_T]),
+ ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                    if w:\n                        frontier += [(w, s, depth + 1, ev, carry) for s in next_services]", "                    if False:\n                        frontier += [(w, s, depth + 1, ev, carry) for s in next_services]", [WALK_T]),
  ("정상인 입력으로도 간다", WK, "                if bad:\n                    if w:", "                if True:\n                    if w:", [WALK_T]),
  ("대상 키를 또 읽는다", WK, "    seen = {target.key, target.declared}", "    seen = set()", [WALK_T]),
  ("쓰기 구간도 걷는다", WK, "    m = _WRITES_AT.search(text)\n    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [WALK_T]),
@@ -2575,7 +2575,22 @@ CASES += [
  ("CLI가 없는 서비스를 안 거른다", MN, "        known = topology.services.get(args.service) if topology is not None else None\n        if known is None:", "        known = topology.services.get(args.service) if topology is not None else None\n        if False:", ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
 ]
 
-assert len(CASES) >= 704, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-3 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다 ──
+LIT_T = "tests/application/test_walk.py::test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_리터럴로_같이_있을_때만_나쁘고_그_값이_이어지는_동안_위로_간다"
+LIT_NEXT_T = "tests/application/test_walk.py::test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_그_코드_줄_둘레다"
+LIT_LINE_T = "tests/application/test_walk.py::test_리터럴_줄은_필드와_값이_둘_다_따옴표로_같은_줄에_있을_때다"
+CASES += [
+ ("값이 리터럴이 아니어도 센다", WK, "        if any(q + field + q in body for q in (\"'\", '\"')) and any(q + value + q in body for q in (\"'\", '\"')):", "        if any(q + field + q in body for q in (\"'\", '\"')):", [LIT_T, LIT_LINE_T]),
+ ("필드가 리터럴이 아니어도 센다", WK, "        if any(q + field + q in body for q in (\"'\", '\"')) and any(q + value + q in body for q in (\"'\", '\"')):", "        if field in body and any(q + value + q in body for q in (\"'\", '\"')):", [LIT_T, LIT_LINE_T]),
+ ("같은 단일값이 이어져도 위로 안 간다", WK, "                if not bad and watch is not None and same.get(watch[0]) == watch[1]:", "                if False:", [LIT_T]),
+ ("단일값 검사에 읽는 쪽 서비스를 안 준다", WK, "                                               {\"patterns\": [field], **({\"service\": scope} if scope else {})})", "                                               {\"patterns\": [field]})", [LIT_T]),
+ ("단일값 검사를 안 한다", WK, "                elif not bad and same and status.startswith(\"정상\"):", "                elif False:", [LIT_T]),
+ ("리터럴 줄을 다음 홉으로 안 가리킨다", WK, "        if literal is not None:\n            # 아래에", "        if False:\n            # 아래에", [LIT_NEXT_T]),
+ ("다음 홉 줄이 name 인자를 가정한다", IM, "        return f\"다음 홉: {describe(*hop)} — 걷기가 멈춘 자리({walk.stopped})\"", "        return f\"다음 홉: {hop[0]} name={hop[1]['name']!r} — 걷기가 멈춘 자리({walk.stopped})\"", [LIT_NEXT_T]),
+ ("잡은 단일값을 위로 안 넘긴다", WK, "                        frontier += [(w, s, depth + 1, ev, carry) for s in next_services]", "                        frontier += [(w, s, depth + 1, ev, None) for s in next_services]", [LIT_T]),
+]
+
+assert len(CASES) >= 712, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

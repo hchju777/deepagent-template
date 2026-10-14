@@ -123,3 +123,8 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     for s in (missing, blank):
         assert json.loads(s["redis"]["alarm:stats:L1"])["record"][0]["data"] == []
     assert json.loads(_seeds(NOW, "data-empty")["redis"]["alarm:source:L1"])
+    # c-2형 — 원천 행은 있는데 모든 행의 state가 '-'. batch 코드에 그 필드와 값이 한 줄에 리터럴로 있다(③의 데이터 링크).
+    rows = json.loads(_seeds(NOW, "source-filtered")["redis"]["alarm:source:L1"])
+    assert rows and all(r["state"] == "-" for r in rows)
+    from tools.local_case import CORE_FILES
+    assert 'r.get("state") != "-"' in CORE_FILES["batch/refresh.py"]

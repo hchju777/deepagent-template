@@ -170,7 +170,8 @@ class SummaryRefresh:
     def _run(self):
         for line in self.cfg["lines"]:
             source = self.redis.get(self.cfg["redis_key"]["alarm_source"].format(line=line))
-            command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": source}
+            rows = [r for r in json.loads(source or "[]") if r.get("state") != "-"]
+            command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": rows}
             self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
 ''',
 }
@@ -241,8 +242,10 @@ VARIANTS = {
     # R3-3 ② — 걷기가 나쁜 입력에서 멈추는 두 모양. 요약 키는 c-1형 그대로이고 쓴 쪽(batch)의 원천 키가 없거나 빈 배열이다.
     "source-missing": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 아예 없다 — 걷기가 '없음'에서 멈춘다",
     "source-blank": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 빈 배열이다 — 걷기가 '0행'에서 멈춘다",
+    # 사내 c-2형(측정 #9) — 원천 행은 있는데 모든 행의 한 필드가 '-'이고 batch 코드가 그 값을 거른다(`r.get("state") != "-"`).
+    "source-filtered": "요약 키 data는 빈 배열이고 원천 키 행은 있지만 모든 행의 state가 '-'다 — batch가 그 값을 걸러 아무것도 안 남는다",
 }
-_EMPTY_DATA = {"data-empty", "source-missing", "source-blank"}
+_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered"}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 
 
@@ -303,7 +306,8 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             # 쓴 쪽의 입력 — 원천 키. `source-missing`은 키가 없고 `source-blank`은 빈 배열(R3-3 ②).
             **({} if variant == "source-missing" else
                {f"alarm:source:{l}": json.dumps([] if variant == "source-blank" else
-                                                [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == l])
+                                                [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"],
+                                                  **({"state": "-"} if variant == "source-filtered" else {})} for d in docs if d["line"] == l])
                 for l in LINES}),
             **{f"alarm:scan:{l}": json.dumps({
                     "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],

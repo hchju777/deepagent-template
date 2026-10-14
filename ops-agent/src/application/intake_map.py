@@ -26,7 +26,7 @@ from typing import Any
 from src.application.recompute import pluck
 from src.application.runner_probe import focus_of
 from src.application.state import CaseState
-from src.domain.actions import role_for
+from src.domain.actions import describe, role_for
 from src.domain.case import EvidenceRef, PlanTask, TargetPick
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
@@ -194,10 +194,11 @@ def hop_line(target: TargetPick | None, *, code_index: bool, walk=None) -> str:
     hop = next_hop(target, code_index=code_index, walk=walk)
     if hop is None:
         return ""
+    # 인자는 `describe`로 — 홉이 `name` 하나라고 가정했다가 `code.read` 홉(R3-3 ③)에서 frame 노드가 KeyError로 죽었다(측정판).
     if walk is not None and walk.hops:
-        return f"다음 홉: {hop[0]} name={hop[1]['name']!r} — 걷기가 멈춘 자리({walk.stopped})"
+        return f"다음 홉: {describe(*hop)} — 걷기가 멈춘 자리({walk.stopped})"
     why = "쓴 쪽이 읽는 자원(입력)" if hop[0] == "code.resources" else "이 키를 누가 쓰나(값이 어디서 오나)"
-    return f"다음 홉: {hop[0]} name={hop[1]['name']!r} — {why}"
+    return f"다음 홉: {describe(*hop)} — {why}"
 
 
 def intake_lines(state: CaseState, *, code_index: bool) -> str:
