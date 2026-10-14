@@ -46,6 +46,7 @@ class Use:
     direction: str     # "writes" | "reads"
     sid: int
     line: int
+    how: str = ""      # "command"면 메시지에 실어 보내는 쓰기(R3-1b ②)
 
 
 class Graph:
@@ -186,7 +187,7 @@ def uses(index: Index, name: str) -> list[Use]:
     """이 이름의 자원(컬렉션·토픽·키·그룹)을 쓰고 읽는 함수들 — 쓰기가 앞. 정확한 이름이 없으면 부분 일치(키 템플릿
     `alarm:stats:{line}`을 그대로 치기는 어렵다)."""
     def collect(match) -> list[Use]:
-        found = [Use(r.kind, r.name, r.direction, s.id, r.line)
+        found = [Use(r.kind, r.name, r.direction, s.id, r.line, r.how)
                  for s in index.symbols for r in s.resources if match(r.name)]
         return sorted(found, key=lambda u: (u.direction != "writes", u.name, u.sid, u.line))
     return collect(lambda n: n == name) or collect(lambda n: name in n)
@@ -300,6 +301,7 @@ def uses_lines(index: Index, graph: Graph, found: list[Use], *, where, cap: int 
                 continue
             lines.append(f"  {label} {len(rows)}:")
             lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}"
+                      + (" (명령 — 메시지에 자원 이름을 실어 보낸다)" if u.how == "command" else "")
                       for u in rows[:cap]]
             lines += [("  " + l) for l in _more(len(rows), cap, more)]
     return lines

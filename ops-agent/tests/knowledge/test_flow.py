@@ -936,3 +936,20 @@ def test_service_summary는_관계별_개수와_이름_여덟_개와_안내_줄�
     assert lines[0].startswith("sink [service · dt-core]: 관계 ") and "요약" in lines[0]
     assert any(l.startswith("  consumes: 토픽 ") for l in lines) and any(l.startswith("  declares: ") for l in lines)
     assert lines[-1] == "  자원 하나의 배선(누가 쓰고 어디서 왔나)은 code.flow name=<그 자원 이름>으로"
+
+
+# ── R3-1b ② — 쓰는 쪽 엣지: config 조회의 get, 토픽으로 보내는 동사 ──
+
+def test_config_조회의_get은_자원_읽기가_아니다():
+    """사내 10-07 진단표 #8: 배치 파이프라인이 요약 키를 `config.get(...)`으로 꺼내 kafka 명령에 실어 보내는데 `get` 때문에 읽기로 분류됐다.
+    `cfg`·`config`·`settings`가 붙은 `.get(`은 설정 조회다 — `redis.get(key)`·`mongo.get(...)`은 그대로 읽기."""
+    assert flow.direction('key = cfg.get("redis_key")') is None
+    assert flow.direction('target = self.config.get("redis_key", "x")') is None
+    assert flow.direction('settings.get("a")') is None
+    assert flow.direction("redis.get(key)") == "reads"
+    assert flow.direction('cfg.get("a"); redis.get(key)') == "reads"
+
+
+def test_produces는_토픽으로_보내는_동사만_본다():
+    assert flow.produces("producer.send(topic, cmd)") and flow.produces("bus.publish(x)") and flow.produces("emit_event(e)")
+    assert not flow.produces("redis.set(k, v)") and not flow.produces("mongo.insert_one(d)") and not flow.produces("x = 1")

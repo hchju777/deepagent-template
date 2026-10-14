@@ -762,3 +762,76 @@ async def test_함수마다_못_푼_호출과_getattr_자리가_심볼에_남고
     assert all(u[2] not in ("builtin", "stoplist") for u in h.unresolved)         # `getattr()` 호출 자체는 내장이라 안 남는다
     again = ix.Index.from_dict(json.loads(json.dumps(idx.to_dict())))
     assert again.symbols[h.id].unresolved == h.unresolved
+
+
+# ── R3-1b ② — 메시지에 실어 보내는 자원 이름은 쓰라는 명령이다 ──
+
+COMMAND_FILES = {**FILES, "app/batch.py": (
+    'def refresh(cfg, producer):\n'
+    '    for line in cfg["lines"]:\n'
+    '        command = {"op": "refresh", "target": cfg["redis_key"]["alarm_stats"].format(line=line)}\n'
+    '        producer.send(cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)\n'
+    '\n'
+    'def relay(cfg, redis, producer):\n'
+    '    value = redis.get(cfg["redis_key"]["alarm_stats"].format(line="L1"))\n'
+    '    producer.send(cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], value)\n'
+    '\n'
+    'def lookup(cfg):\n'
+    '    return cfg["redis_key"]["alarm_stats"]\n')}
+COMMAND_NAMES = NAMES + [Name("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats")]
+
+
+def _resource(idx, qualname, name):
+    sym = idx.symbols[_sid(idx, qualname)]
+    return next((r.direction, r.how) for r in sym.resources if r.name == name)
+
+
+async def test_동사_없는_줄의_이름이_뒤에서_토픽으로_나가면_쓰라는_명령이다():
+    """사내 10-07 진단표 #8: 배치 파이프라인이 요약 키를 kafka 명령의 target으로 실어 보내는데 `code.uses`가 읽기로 분류했다 — 그 줄엔 동사가
+    없고 동사 없는 줄은 보수적으로 읽기였다. 같은 함수가 뒤에서 토픽으로 보내면 그 이름은 **쓰라는 명령**(writes, how=command)이다.
+    읽기 동사가 있는 줄(`redis.get(key)`를 읽어 보낸다)은 읽기 그대로, 뒤에 보내는 것이 없으면 전처럼 읽기."""
+    idx = await _index(COMMAND_FILES, COMMAND_NAMES)
+    assert _resource(idx, "app.batch.refresh", "alarm:stats:{line}") == ("writes", "command")
+    assert _resource(idx, "app.batch.relay", "alarm:stats:{line}") == ("reads", "")
+    assert _resource(idx, "app.batch.lookup", "alarm:stats:{line}") == ("reads", "")
+    assert idx.writers("rediskey", "alarm:stats:{line}") == [_sid(idx, "app.batch.refresh")]
+    renamed = idx.renamed({("rediskey", "alarm:stats:{line}"): "k2"})
+    assert _resource(renamed, "app.batch.refresh", "k2") == ("writes", "command")           # 사본도 how를 지킨다
+
+
+async def test_code_uses는_명령으로_쓰는_함수를_쓰기에_두고_그렇게_적는다():
+    from src.knowledge import query as qy
+    idx = await _index(COMMAND_FILES, COMMAND_NAMES)
+    lines = qy.uses_lines(idx, qy.Graph(idx), qy.uses(idx, "alarm:stats:{line}"), where=lambda sid: "")
+    writes = lines[lines.index("  쓰기 1:") + 1]
+    assert writes.startswith("    app.batch.refresh (app/batch.py:L3)") and writes.endswith("(명령 — 메시지에 자원 이름을 실어 보낸다)")
+    reads = "\n".join(lines[lines.index("  읽기 2:"):])
+    assert "app.batch.relay" in reads and "app.batch.lookup" in reads and "명령" not in reads
+
+
+async def test_흐름_그래프에_명령으로_쓰는_서비스의_writes_엣지를_단다():
+    """grep 줄에는 동사가 없어 `mentions`로만 남던 것 — 인덱스가 아는 명령을 서비스 → 자원 `writes`(origin command, INFERRED)로."""
+    from src.knowledge import flow as fl
+    from src.knowledge.schema import Service, Topology
+    idx = await _index(COMMAND_FILES, COMMAND_NAMES)
+    topology = Topology(services={"batch": Service(repo=REPO, path="app/batch.py")})
+    graph = {"nodes": [{"id": "service_batch", "type": "service", "label": "batch"},
+                       {"id": "rediskey_alarm_stats_line", "type": "rediskey", "label": "alarm:stats:{line}"}], "links": []}
+    out = fl.add_commands(graph, idx, topology)
+    (link,) = out["links"]
+    assert (link["source"], link["target"], link["relation"], link["origin"], link["confidence"]) == (
+        "service_batch", "rediskey_alarm_stats_line", "writes", "command", "INFERRED")
+    assert link["source_file"] == "app/batch.py" and link["source_location"] == "L3" and "app.batch.refresh" in link["text"]
+    assert len(fl.add_commands(out, idx, topology)["links"]) == 1                            # 두 번 달아도 하나
+    assert fl.add_commands({"nodes": [], "links": []}, idx, topology)["links"] == []            # 노드가 없으면 조용히
+
+
+async def test_번들로_오간_인덱스도_명령_표시를_지킨다():
+    """보드에서 잡혔다: 메모리 인덱스는 맞는데 `code graph`가 쓴 symbols.json을 읽은 CLI `code uses`에 "(명령 …)"이 없었다 — 직렬화가
+    자원을 다섯 칸 튜플로만 실었다. 옛 번들(다섯 칸)은 그대로 읽힌다(how는 빈 문자열)."""
+    idx = await _index(COMMAND_FILES, COMMAND_NAMES)
+    back = ix.Index.from_dict(idx.to_dict())
+    assert _resource(back, "app.batch.refresh", "alarm:stats:{line}") == ("writes", "command")
+    old = idx.to_dict()
+    old["symbols"] = [{**s, "resources": [r[:5] for r in s["resources"]]} for s in old["symbols"]]
+    assert _resource(ix.Index.from_dict(old), "app.batch.refresh", "alarm:stats:{line}") == ("writes", "")

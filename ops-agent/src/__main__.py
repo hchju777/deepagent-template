@@ -1417,6 +1417,9 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
                                      index_trace.trace(symbol_index, qgraph, repo=repo_name, target=node["label"], routes=routes))
     counts = flow.summary(overlay)
     progress(f"끝점 추적: 자원까지 이어진 {counts['endpoints_traced']}개 · 막힌 {counts['endpoints_blocked']}개")
+    # 명령으로 쓰는 쪽(R3-1b ②) — 인덱스가 함수 본문에서 본 것을 서비스 → 자원 writes 엣지로. grep 줄만으로는 동사가 없어 못 본다.
+    overlay = flow.add_commands(overlay, symbol_index, topology)
+    progress(f"명령 쓰기 엣지 {sum(1 for e in overlay['links'] if e.get('origin') == 'command')}개")
 
     out_dir = _graph_dir(args, env, gbm)
     binary = gb.find_graphify()

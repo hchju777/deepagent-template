@@ -2396,7 +2396,31 @@ CASES += [
   ["tests/application/test_briefing.py::test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함께_말하고_흐름_줄은_그_키를_앞세운다"]),
 ]
 
-assert len(CASES) >= 613, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1b ② — 쓰는 쪽 엣지: 명령으로 쓰는 자원 ──
+IXP = ROOT / "src/knowledge/index.py"
+QYP = ROOT / "src/knowledge/query.py"
+FLP = ROOT / "src/knowledge/flow.py"
+CMD_T = "tests/knowledge/test_index.py::test_동사_없는_줄의_이름이_뒤에서_토픽으로_나가면_쓰라는_명령이다"
+CMD_USES_T = "tests/knowledge/test_index.py::test_code_uses는_명령으로_쓰는_함수를_쓰기에_두고_그렇게_적는다"
+CMD_EDGE_T = "tests/knowledge/test_index.py::test_흐름_그래프에_명령으로_쓰는_서비스의_writes_엣지를_단다"
+CASES += [
+ ("config 조회의 get을 읽기로 센다", FLP, "    words = _parts(_CONFIG_GET.sub(\"\", text))", "    words = _parts(text)",
+  ["tests/knowledge/test_flow.py::test_config_조회의_get은_자원_읽기가_아니다"]),
+ ("produces가 쓰기 동사 전부를 본다", FLP, "    return any(v in words for v in PRODUCE_VERBS)", "    return any(v in words for v in WRITE_VERBS)",
+  ["tests/knowledge/test_flow.py::test_produces는_토픽으로_보내는_동사만_본다"]),
+ ("명령으로 보내는 이름을 읽기로 둔다", IXP, "                if verb is None and any(produces(after) for after in fn.mod.lines[line:end]):", "                if False:", [CMD_T]),
+ ("읽기 동사가 있는 줄도 명령으로 친다", IXP, "                if verb is None and any(produces(after) for after in fn.mod.lines[line:end]):",
+  "                if verb != \"writes\" and any(produces(after) for after in fn.mod.lines[line:end]):", [CMD_T]),
+ ("renamed 사본이 how를 잃는다", IXP, "                                                        r.line, r.via, r.how) for r in s.resources))",
+  "                                                        r.line, r.via) for r in s.resources))", [CMD_T]),
+ ("code uses가 명령을 안 적는다", QYP, "                      + (\" (명령 — 메시지에 자원 이름을 실어 보낸다)\" if u.how == \"command\" else \"\")", "", [CMD_USES_T]),
+ ("명령 writes 엣지를 안 단다", FLP, "            if r.how != \"command\":\n                continue", "            if True:\n                continue", [CMD_EDGE_T]),
+ ("번들이 명령 표시를 안 싣는다", IXP, "    return (r.kind, r.name, r.direction, r.line, r.via, r.how)", "    return (r.kind, r.name, r.direction, r.line, r.via)",
+  ["tests/knowledge/test_index.py::test_번들로_오간_인덱스도_명령_표시를_지킨다"]),
+ ("명령 엣지를 자원마다 거듭 단다", FLP, "            if target not in nodes or source not in nodes or (source, target) in seen:", "            if target not in nodes or source not in nodes:", [CMD_EDGE_T]),
+]
+
+assert len(CASES) >= 622, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

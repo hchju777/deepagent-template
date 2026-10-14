@@ -142,6 +142,16 @@ def run(cfg, consumer, mongo, redis):
             redis.set(cfg["redis_key"]["heartbeat"].format(service="sink"), now())
             batch = []
 ''',
+    # 사내 10-07 진단표 #8의 모양 — 배치 파이프라인이 요약 키를 **직접 쓰지 않고** 이름을 kafka 명령에 실어 보낸다. 그 줄엔 동사가 없어
+    # `code.uses`가 읽기로 분류했었다(R3-1b ②가 "명령"으로 쓰기에 둔다).
+    "batch/refresh.py": '''"""배지 요약을 다시 만들라는 명령을 낸다 — 키 이름을 메시지에 실어 보낼 뿐 직접 쓰지 않는다."""
+
+
+def run(cfg, producer):
+    for line in cfg["lines"]:
+        command = {"op": "refresh", "target": cfg["redis_key"]["alarm_stats"].format(line=line)}
+        producer.send(cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
+''',
 }
 
 # 일부 서비스는 이름을 객체 안에 둔다(`{"collection": …, "ttl": 3}`, 사내 확인). dt-api가 그 모양이다.

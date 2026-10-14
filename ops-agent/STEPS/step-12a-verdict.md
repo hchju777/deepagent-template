@@ -711,6 +711,26 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   크기 9.8K자(①-b 보드에서는 후보 여섯이 실려 13.5K자).
 - 테스트 먼저(RED 7 → GREEN). 스윕 +7(613), 옮겨진 앵커 둘.
 
+#### R3-1b ② (10-14) ✅ — 쓰는 쪽 엣지: 명령으로 쓰는 자원 (R3-3 앞당김)
+
+- 사내 10-07 진단표 #8: 배치 파이프라인이 요약 키 이름을 kafka 명령에 실어 보내는데 `code.uses`가 그 함수를 "읽기"에 뒀다 — 그 줄엔 동사가
+  없고(또는 `config.get`의 `get`뿐이고) 동사 없는 줄은 보수적으로 읽기였다. ③의 다음 홉(`code.uses <대상 키>`)이 쓰는 쪽을 보여 주려면 먼저
+  고쳐야 했다.
+- 인덱스(`attach_resources`): 자원 줄에 동사가 없고 **같은 함수의 뒷줄이 토픽으로 보내면**(`flow.produces` — `send`·`produce`·`publish`·`emit`)
+  그 자원은 `writes`, `Resource.how = "command"`. 읽기 동사가 있는 줄(`redis.get(key)`를 읽어 보낸다)은 읽기 그대로, 뒤에 보내는 것이
+  없으면 전처럼 읽기. `renamed` 사본도 `how`를 지킨다.
+- `flow.direction`: `cfg`·`config`·`settings`가 붙은 `.get(`은 설정 조회라 동사로 안 센다(`_CONFIG_GET`) — `redis.get(key)`는 그대로 읽기.
+- `code.uses`: 명령으로 쓰는 함수는 쓰기 목록에 `(명령 — 메시지에 자원 이름을 실어 보낸다)`를 달고 나온다.
+- 흐름 그래프: `flow.add_commands(overlay, index, topology)` — 인덱스의 명령 자원마다 서비스 → 자원 `writes`(origin `command`, INFERRED,
+  file:line) 엣지. `code graph`가 끝점 사슬 뒤에 단다. grep 줄만으로는 동사가 없어 `mentions`로만 남던 것이다.
+- 측정판: 토폴로지에 `batch`(dt-core, `SERVICE_ROLE=batch`), `batch/refresh.py`가 요약 키 이름을 명령에 실어 보낸다(직접 `set` 안 함).
+  **번들을 만드는 코드가 바뀌었다 → 측정 #8은 `code graph` 재생성 필요.**
+- 실제 소비자로(측정판 다시 만들고 `code graph`): `명령 쓰기 엣지 1개`, `code uses 'alarm:stats:{line}'` 쓰기 2 — `batch.refresh.run
+  (batch/refresh.py:L6) [dt-core · batch] … (명령 — 메시지에 자원 이름을 실어 보낸다)`와 `sink.writer.run`, 읽기 1 `api.alarms.badge`.
+  graph.json·overlay.json에 `service_batch → rediskey_alarm_stats_line writes INFERRED batch/refresh.py L6`. 처음 돌렸을 땐 표시가 없었다 —
+  번들(symbols.json)의 자원 직렬화가 다섯 칸이라 `how`를 잃었다. 여섯 칸으로(옛 다섯 칸 번들도 그대로 읽힌다).
+- 테스트 먼저(RED 6 → GREEN, 보드 뒤 +1). 스윕 +9(622). `__main__`의 배선(`add_commands` 호출)은 짝 테스트가 없다 — 보드가 본다.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

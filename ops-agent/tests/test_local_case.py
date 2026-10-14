@@ -91,3 +91,19 @@ def test_미끼_키는_이름이_비슷하고_같은_라벨을_달았지만_iden
     assert stats["record"][0]["summary_info"]["source"] == decoy["record"][0]["summary_info"]["source"] == "MES"
     assert holds_identity(decoy, ("L1", "Alarm")) is None and holds_identity(decoy, ("L1", "Caution")) == "record[0].summary_info"
     assert [k for k in ("alarm:scan:L1", "alarm:stats:L1") if holds_identity(_value(s, k), ("L1", "Alarm"))] == ["alarm:stats:L1"]
+
+
+# ── R3-1b ② — 측정판: 요약 키를 명령에 실어 보내는 배치 서비스 ──
+
+def test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다():
+    """사내 10-07 진단표 #8의 모양 — 배치 파이프라인이 요약 키 이름을 kafka 명령에 실어 보낸다(직접 set 안 함). 토폴로지의 `batch`가
+    그 서비스다 — `code uses <요약 키>`의 쓰기에 sink와 함께 나와야 P0 2의 다음 홉이 쓸모 있다."""
+    import json
+    import pathlib
+
+    from tools.local_case import CORE_FILES
+    src = CORE_FILES["batch/refresh.py"]
+    assert 'cfg["redis_key"]["alarm_stats"]' in src and "producer.send(" in src and "redis.set" not in src
+    topo = json.loads((pathlib.Path(__file__).resolve().parents[1] / "knowledge" / "topology" / "mx.json").read_text(encoding="utf-8"))
+    assert topo["services"]["batch"] == {"repo": "dt-core", "role": "주기적으로 요약을 다시 만들라는 명령을 낸다",
+                                         "selects": {"SERVICE_ROLE": "batch"}}
