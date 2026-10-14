@@ -99,11 +99,24 @@ class TargetPick(StrictModel):
     basis: str = ""
     candidates: list[str] = []
     problem: str = ""
+    # 후보 읽기의 집계(R3-1b ①) — 읽은 후보 수, 없는 키 이름, 읽기 실패 수, identity가 든 키 수. 본문은 State에 없다(모듈 설명).
+    read: int = 0
+    absent: list[str] = []
+    failed: int = 0
+    hits: int = 0
 
     def line(self) -> str:
         if self.key:
             return f"대상 키: {self.key} — {self.basis}"
         return f"대상 키: 못 골랐다 — {self.problem}" if self.problem else ""
+
+    def fold_line(self) -> str:
+        """후보 읽기를 접은 한 줄 — 증거 29줄 대신. 후보를 하나도 안 읽었으면 빈 줄."""
+        if not self.read:
+            return ""
+        present = self.read - len(self.absent) - self.failed
+        return (f"후보 {self.read}개 읽음 — 있음 {present} · 없음 {len(self.absent)} · identity 일치 {self.hits}"
+                + (f" · 읽기 실패 {self.failed}" if self.failed else "") + (f" (대상 키 {self.key})" if self.key else ""))
 
 
 class Case(StrictModel):

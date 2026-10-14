@@ -29,13 +29,14 @@ def _value(group="L1", title="Alarm", *, data=(), extra=None):
                                    "data": list(data)}], "updated_at": "2026-10-13T00:00:00"})
 
 
-def _ok(task_id, data, *, source):
-    ref = EvidenceRef(id=f"{task_id}.e1", source=source, summary="x", body="(원본은 raw)")
+def _ok(task_id, data, *, source, complete=True):
+    ref = EvidenceRef(id=f"{task_id}.e1", source=source, summary="x", body="(원본은 raw)", complete=complete)
     return TaskOutcome(task_id=task_id, status="ok", summary=source, evidence=[ref])
 
 
-def _runner(rest=None, keys=None, scans=None):
-    """`t-0`은 접수 읽기, 그다음 번호는 후보 순서대로 — 리터럴 선언 키 먼저, 머리 scan은 그 뒤."""
+def _runner(rest=None, keys=None, scans=None, *, picked=None, cut=(), reread=None):
+    """`t-0`은 접수 읽기, 후보는 내부 번호 `t-0-N` 순서대로(리터럴 선언 키 먼저, 머리 scan은 그 뒤), 고른 키의 다시 읽기는 `t-1`.
+    `cut`에 든 키의 후보 읽기는 본문이 잘린 것(`complete=False`), `reread`는 `t-1`이 돌려줄 값(없으면 고른 키의 값 그대로)."""
     rest = rest if rest is not None else {"request": {}, "status": 200, "response": _rows()}
     outcomes, raws = {"t-0": _ok("t-0", rest, source="rest.query entry='summary_badge'")}, {"t-0.e1": rest}
     n = 0
@@ -46,8 +47,12 @@ def _runner(rest=None, keys=None, scans=None):
     for key, value in (keys or {}).items():
         n += 1
         raw = None if value is None else {"type": "string", "value": value}
-        outcomes[f"t-0-{n}"] = _ok(f"t-0-{n}", raw, source=f"redis.get key={key!r}")
+        outcomes[f"t-0-{n}"] = _ok(f"t-0-{n}", raw, source=f"redis.get key={key!r}", complete=key not in cut)
         raws[f"t-0-{n}.e1"] = raw
+    if picked is not None:
+        raw = {"type": "string", "value": reread if reread is not None else keys[picked]}
+        outcomes["t-1"] = _ok("t-1", raw, source=f"redis.get key={picked!r}")
+        raws["t-1.e1"] = raw
     return ScriptedRunner(outcomes, raws=raws)
 
 
@@ -68,20 +73,44 @@ def test_대상_행은_identity_필드가_전부_같은_행이다():
     assert target_row(_rows(), fields=FIELDS, values=("L2", "Setup")) == ("[1]", _rows()[1])
 
 
-async def test_identity가_그대로_든_키가_하나면_그_키를_고르고_근거와_증거가_State에_남는다():
-    """사내 측정 #6 c-2는 라벨 조각 'MES'로 틀린 키를 골랐다 — 라벨은 안 본다. 값 안에 identity가 그대로 있는 키만."""
+async def test_identity가_그대로_든_키가_하나면_그_키를_고르고_State에는_접수와_대상_키_읽기만_남는다():
+    """사내 측정 #6 c-2는 라벨 조각 'MES'로 틀린 키를 골랐다 — 라벨은 안 본다. 값 안에 identity가 그대로 있는 키만.
+    측정 #7: 후보 29개 읽기를 전부 증거로 실었더니 예산을 넘어 **대상 키 본문이 빠졌다** — 입구 노드는 결과만 보인다(R3-1b ①):
+    State에는 `t-0`(접수)·`t-1`(고른 키를 다시 읽은 것)만, 후보 읽기는 집계 한 줄. id는 리드와 같은 한 단계 모양이다."""
     runner = _runner(keys={"alarm:scan:L1": _value("L1", "Caution"), "alarm:stats:L1": _value("L1", "Alarm", data=[]),
-                           "hb:sink": "2026-10-13"})
+                           "hb:sink": "2026-10-13", "gone:L1": None}, picked="alarm:stats:L1")
     patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner,
-                             declared=("alarm:scan:L1", "alarm:stats:L1", "hb:sink"))
+                             declared=("alarm:scan:L1", "alarm:stats:L1", "hb:sink", "gone:L1"))
     pick = patch["target"]
-    assert pick.key == "alarm:stats:L1" and pick.candidates == ["alarm:scan:L1", "alarm:stats:L1", "hb:sink"]
-    assert pick.basis == "키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)"
-    assert pick.line() == "대상 키: alarm:stats:L1 — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)"
-    assert [t.id for t in patch["plan_tasks"]] == ["t-0", "t-0-1", "t-0-2", "t-0-3"]
+    assert pick.key == "alarm:stats:L1" and pick.candidates == ["alarm:scan:L1", "alarm:stats:L1", "hb:sink", "gone:L1"]
+    assert pick.basis == "키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-1.e1)"
+    assert pick.line() == "대상 키: alarm:stats:L1 — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-1.e1)"
+    assert (pick.read, pick.absent, pick.failed, pick.hits) == (4, ["gone:L1"], 0, 1)
+    assert pick.fold_line() == "후보 4개 읽음 — 있음 3 · 없음 1 · identity 일치 1 (대상 키 alarm:stats:L1)"
+    assert [t.id for t in patch["plan_tasks"]] == ["t-0", "t-1"]
     assert all(t.status == "ok" for t in patch["plan_tasks"]) and patch["plan_tasks"][0].goal.startswith("접수 읽기")
-    assert [e.id for e in patch["evidence"]] == ["t-0.e1", "t-0-1.e1", "t-0-2.e1", "t-0-3.e1"]
-    assert runner.ran == ["t-0", "t-0-1", "t-0-2", "t-0-3"]
+    assert patch["plan_tasks"][1].params == {"key": "alarm:stats:L1"} and "대상 키" in patch["plan_tasks"][1].goal
+    assert [e.id for e in patch["evidence"]] == ["t-0.e1", "t-1.e1"]
+    assert runner.ran == ["t-0", "t-0-1", "t-0-2", "t-0-3", "t-0-4", "t-1"]           # 후보는 내부 번호로만 돈다
+
+
+async def test_후보_읽기_본문이_잘렸으면_대상_키를_identity_객체의_부모로_좁혀_다시_읽는다():
+    """"좁혀서 통째로"(측정 #7 P0 1) — 잘린 본문으로는 data가 비었는지 못 본다. 잘리지 않았으면 통째로 다시 읽는다(위 테스트)."""
+    narrowed = json.dumps({"summary_info": {"group": "L1", "title": "Alarm", "source": "MES"}, "data": []})
+    runner = _runner(keys={"alarm:stats:L1": _value("L1", "Alarm", data=[{"n": i} for i in range(50)])},
+                     picked="alarm:stats:L1", cut=("alarm:stats:L1",), reread=narrowed)
+    patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",))
+    assert patch["plan_tasks"][1].params == {"key": "alarm:stats:L1", "path": "record[0]"}
+    assert patch["target"].basis == "키 값의 summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-1.e1)"
+    assert "좁혀" in patch["plan_tasks"][1].goal
+
+
+async def test_대상_키_다시_읽기가_실패하면_고른_키는_남기고_그_사실을_적는다():
+    runner = _runner(keys={"alarm:stats:L1": _value("L1", "Alarm")})                 # t-1이 대본에 없다 → 증거 없는 ok
+    patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",))
+    pick = patch["target"]
+    assert pick.key == "alarm:stats:L1" and "다시 읽기 실패" in pick.basis and "(t-" not in pick.basis
+    assert [t.id for t in patch["plan_tasks"]] == ["t-0", "t-1"] and [e.id for e in patch["evidence"]] == ["t-0.e1"]
 
 
 async def test_고르지_못하면_고르지_않고_이유와_후보를_적는다():
@@ -90,6 +119,8 @@ async def test_고르지_못하면_고르지_않고_이유와_후보를_적는�
                             declared=("alarm:scan:L1", "hb:sink"))
     assert none["target"].key is None and "든 키가 없다" in none["target"].problem and none["target"].candidates == ["alarm:scan:L1", "hb:sink"]
     assert none["target"].line().startswith("대상 키: 못 골랐다 — ")
+    assert none["target"].fold_line() == "후보 2개 읽음 — 있음 2 · 없음 0 · identity 일치 0"
+    assert [t.id for t in none["plan_tasks"]] == ["t-0"] and [e.id for e in none["evidence"]] == ["t-0.e1"]
     both = await run_intake(CaseState(case=_case()), SPEC,
                             runner=_runner(keys={"alarm:all:L1": _value("L1", "Alarm", extra={"all": True}),
                                                  "alarm:stats:L1": _value("L1", "Alarm")}),
@@ -97,8 +128,10 @@ async def test_고르지_못하면_고르지_않고_이유와_후보를_적는�
     assert both["target"].key is None and "2개" in both["target"].problem and "alarm:all:L1" in both["target"].problem
     missing = await run_intake(CaseState(case=_case()), SPEC, runner=_runner(keys={"alarm:stats:L1": None}), declared=("alarm:stats:L1",))
     assert missing["target"].key is None and "없다" in missing["target"].problem      # 키 자체가 없다(None) — 후보엔 남는다
+    assert missing["target"].absent == ["alarm:stats:L1"] and missing["target"].fold_line().startswith("후보 1개 읽음 — 있음 0 · 없음 1")
     empty = await run_intake(CaseState(case=_case()), SPEC, runner=_runner(), declared=())
     assert empty["target"].key is None and "후보" in empty["target"].problem and [t.id for t in empty["plan_tasks"]] == ["t-0"]
+    assert empty["target"].fold_line() == ""
 
 
 async def test_접수_읽기가_실패하거나_대상_행이_없으면_거기서_멈춘다():
@@ -112,10 +145,10 @@ async def test_접수_읽기가_실패하거나_대상_행이_없으면_거기�
 
 async def test_템플릿_키는_머리로_scan해_실재하는_키를_후보로_삼고_상한을_지킨다():
     runner = _runner(scans={"alarm:stats:*": ["alarm:stats:L1", "alarm:stats:L2"]},
-                     keys={"alarm:stats:L1": _value("L1", "Alarm"), "alarm:stats:L2": _value("L2", "Alarm")})
+                     keys={"alarm:stats:L1": _value("L1", "Alarm"), "alarm:stats:L2": _value("L2", "Alarm")}, picked="alarm:stats:L1")
     patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:{line}",))
     assert patch["target"].key == "alarm:stats:L1" and patch["target"].candidates == ["alarm:stats:L1", "alarm:stats:L2"]
-    assert patch["plan_tasks"][1].action == "redis.scan" and patch["plan_tasks"][1].params == {"pattern": "alarm:stats:*"}
+    assert runner.ran[1] == "t-0-1" and [t.action for t in patch["plan_tasks"]] == ["rest.query", "redis.get"]   # scan은 내부 번호
     many = _runner(scans={"k:*": [f"k:{i}" for i in range(80)]}, keys={f"k:{i}": "x" for i in range(80)})
     patch = await run_intake(CaseState(case=_case()), SPEC, runner=many, declared=("k:{n}",))
     assert len(patch["target"].candidates) == 50 and "상한" in patch["target"].problem

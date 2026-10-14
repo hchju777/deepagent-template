@@ -1378,6 +1378,8 @@ def test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함
     state = CaseState(case=_patrol_case(), target=picked)
     fields = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy())
     assert "대상 키: alarm:stats:{line} — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)" in fields["case"]
+    folded = CaseState(case=_patrol_case(), target=picked.model_copy(update={"read": 29, "absent": ["a"] * 9, "hits": 1}))
+    assert "\n후보 29개 읽음 — 있음 20 · 없음 9 · identity 일치 1 (대상 키 alarm:stats:{line})" in briefing.frame_fields(folded, site_config=_site_with_check())["case"]
     endpoint = next(l for l in fields["flow"].splitlines() if l.startswith("/summary/badge [endpoint]"))
     assert endpoint.index("alarm:stats:{line}") < endpoint.index("alarm:scan:{line}")
     unpicked = CaseState(case=_patrol_case(), target=TargetPick(problem="후보 2개 중 identity가 든 키가 없다", candidates=["a", "b"]))

@@ -146,7 +146,8 @@ def case_block(state: CaseState, *, site_config=None, target: TargetPick | None 
             f"접수 경로: {origin}"
             + (f"\n대상 행: {'; '.join(rows)}" if rows else "")
             # 코드가 고른 대상 키 — 흐름 줄의 순서는 리드가 못 읽는 신호라 문장으로(R3-0 ①). 못 골랐으면 그 사실.
-            + (f"\n{target.line()}" if target is not None and target.line() else ""))
+            + (f"\n{target.line()}" if target is not None and target.line() else "")
+            + (f"\n{target.fold_line()}" if target is not None and target.fold_line() else ""))
 
 
 def hypotheses_block(state: CaseState) -> str:

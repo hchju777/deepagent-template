@@ -2253,7 +2253,7 @@ CASES += [
 IM = ROOT / "src/application/intake_map.py"
 GP = ROOT / "src/application/graph.py"
 IMT = "tests/application/test_intake_map.py"
-PICK_T = f"{IMT}::test_identity가_그대로_든_키가_하나면_그_키를_고르고_근거와_증거가_State에_남는다"
+PICK_T = f"{IMT}::test_identity가_그대로_든_키가_하나면_그_키를_고르고_State에는_접수와_대상_키_읽기만_남는다"
 NOPICK_T = f"{IMT}::test_고르지_못하면_고르지_않고_이유와_후보를_적는다"
 HOLD_T = f"{IMT}::test_값_안의_같은_객체에_identity_전부가_잎으로_있으면_그_자리를_준다"
 NODE_T = "tests/application/test_nodes.py::test_입구_노드는_frame_전에_접수를_읽고_대상_키를_State에_둔다"
@@ -2263,7 +2263,7 @@ CASES += [
  ("identity 일부만 있어도 그 자리로 친다", IM, "        if values and all(v in leaves for v in values):", "        if values and any(v in leaves for v in values):", [HOLD_T]),
  ("부분 문자열로 identity를 찾는다", IM, "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}",
   "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}\n        leaves = {l for l in leaves} | {v for v in values if any(l in v for l in leaves)}", [HOLD_T]),
- ("둘 이상이어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, (evidence_id, at)), = hits.items()", "    if hits:\n        (key, (evidence_id, at)), *_ = hits.items()", [NOPICK_T]),
+ ("둘 이상이어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, (at, complete)), = hits.items()", "    if hits:\n        (key, (at, complete)), *_ = hits.items()", [NOPICK_T]),
  ("identity가 없는 키도 고른다", IM, "        at = holds_identity(_unwrap(raw), identity)\n        if at:", "        at = holds_identity(_unwrap(raw), identity) or \"(맨 위)\"\n        if at:", [PICK_T, NOPICK_T]),
  ("접수 읽기가 실패해도 계속 간다", IM, "    if outcome.status != \"ok\" or not outcome.evidence:\n        return patch(", "    if False:\n        return patch(",
   [f"{IMT}::test_접수_읽기가_실패하거나_대상_행이_없으면_거기서_멈춘다"]),
@@ -2275,7 +2275,7 @@ CASES += [
  ("대본 경로에서도 입구를 돈다", ND, "        if deps.intake is None or not deps.check_discovery or state.target is not None:", "        if deps.intake is None or state.target is not None:", [NODE_T]),
  ("실행기가 원본을 안 준다", RP, "    def raw(self, evidence_id: str):\n        return self._raw.get(evidence_id)", "    def raw(self, evidence_id: str):\n        return None",
   ["tests/application/test_runner_probe.py::test_실행기는_증거_id로_원본을_돌려준다"]),
- ("케이스 블록에 대상 키를 안 적는다", B, '            + (f"\\n{target.line()}" if target is not None and target.line() else ""))', "            )", [LINK_B]),
+ ("케이스 블록에 대상 키를 안 적는다", B, '            + (f"\\n{target.line()}" if target is not None and target.line() else "")\n', "", [LINK_B]),
  ("흐름 줄이 고른 키를 안 앞세운다", B, "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=prefer, pin=set(own))",
   "    body = flowgraph.flow_text(graph, seeds, budget=budget, prefer=(), pin=set(own))", [LINK_B, PREF_B]),
  ("브리핑이 State의 대상 키를 안 본다", B, "    return state.target or TargetPick()", "    return TargetPick()", [LINK_B]),
@@ -2378,7 +2378,25 @@ CASES += [
  ("참고 재집계의 match를 사다리가 사실로 쓴다", B, "    if ASIDE_MARK in _evidence_text(evidence, recomputed.result_evidence_ids[0]):\n        return None", "    if False:\n        return None", [LADDER_ASIDE_T]),
 ]
 
-assert len(CASES) >= 606, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1b ① — 입구 노드는 결과만 보인다 ──
+INTAKE_T = "tests/application/test_intake_map.py::test_identity가_그대로_든_키가_하나면_그_키를_고르고_State에는_접수와_대상_키_읽기만_남는다"
+NARROW_T = "tests/application/test_intake_map.py::test_후보_읽기_본문이_잘렸으면_대상_키를_identity_객체의_부모로_좁혀_다시_읽는다"
+REREAD_T = "tests/application/test_intake_map.py::test_대상_키_다시_읽기가_실패하면_고른_키는_남기고_그_사실을_적는다"
+CASES += [
+ ("후보 읽기를 State에 싣는다", IM, "        if keep:\n            tasks.append(done)", "        if True:\n            tasks.append(done)", [INTAKE_T]),
+ ("고른 키를 State에 남는 읽기로 다시 안 읽는다", IM, "        _, again = await run(goal, \"redis.get\", {\"key\": key, **({\"path\": narrow} if narrow else {})}, keep=True, task_id=\"t-1\")",
+  "        _, again = await run(goal, \"redis.get\", {\"key\": key, **({\"path\": narrow} if narrow else {})}, keep=False, task_id=\"t-1\")", [INTAKE_T]),
+ ("잘린 본문인데 좁혀 읽지 않는다", IM, "        narrow = None if complete else _parent(at)", "        narrow = None", [NARROW_T]),
+ ("identity 자리 자체로 좁혀 data를 놓친다", IM, "    m = re.match(r\"^(.*)(\\.[^.\\[\\]]+|\\[\\d+\\])$\", path)\n    return m.group(1) or None if m else None",
+  "    return path", [NARROW_T]),
+ ("다시 읽기 실패를 사실로 안 적는다", IM, "            basis = f\"키 값의 {at}에 {label}가 그대로 있다 (다시 읽기 실패: {again.error or '증거 없음'})\"",
+  "            basis = f\"키 값의 {at}에 {label}가 그대로 있다\"", [REREAD_T]),
+ ("접기 줄의 있음 개수가 틀리다", CS, "        present = self.read - len(self.absent) - self.failed", "        present = self.read", [INTAKE_T]),
+ ("케이스 블록에 접기 줄이 없다", B, "            + (f\"\\n{target.fold_line()}\" if target is not None and target.fold_line() else \"\"))", "            )",
+  ["tests/application/test_briefing.py::test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함께_말하고_흐름_줄은_그_키를_앞세운다"]),
+]
+
+assert len(CASES) >= 613, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

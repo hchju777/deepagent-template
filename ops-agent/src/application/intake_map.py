@@ -7,9 +7,14 @@ high로 틀렸다. #6에서 "대상 행의 값 토큰이 든 키"로 바꿨더�
 값의 `record[0].summary_info`에 배지 행의 group/title이 그대로 있다). 필드 이름은 안 본다 — 키 값 쪽 이름이 행과 같다는 보장이
 없다. 0개·여럿이면 고르지 않고 이유와 후보를 적는다(②가 확신을 medium으로 묶는다).
 
-읽은 것은 전부 State의 태스크·증거(`t-0`, `t-0-N`)로 남는다 — 리드가 같은 읽기를 다시 낼 필요가 없고, 판정이 인용할 수 있다.
-후보 키는 그래프가 아는 선언 키(리터럴)와 템플릿 머리의 `scan` 결과(개수 상한)다. 대조는 실행기가 든 **원본**(`runner.raw`)으로
-한다 — 렌더한 본문은 잘리고 모양이 바뀐다.
+State에 남기는 것은 **결과뿐**이다(R3-1b ①, 측정 #7): `t-0`(접수 읽기)과 `t-1`(고른 키를 다시 읽은 것). 후보 scan·get은 내부 번호
+(`t-0-N`)로만 돌고 `TargetPick`의 집계(읽음·있음·없음·일치)로 접힌다 — 후보 29개를 전부 증거로 실었더니 프롬프트가 예산을 넘었고, 증거
+예산은 뒤(최근)에서부터 채우므로 가장 오래된 입구 읽기부터 본문을 잃어 **대상 키 본문이 빠졌다**. 리드가 `t-0-19.e1`을 `t-0.19.e1`로
+적은 것도 그 두 단계 id 모양 탓이다 — 남는 둘은 리드와 같은 한 단계 모양이라 `next_task_number`가 `t-2`부터 보여 준다. 후보 읽기의
+본문은 어디에도 남기지 않는다: State에 접은 채 두려면 증거를 읽는 소비자마다 "접힘"을 배워야 하고, 값은 `peek redis`로 다시 볼 수 있다.
+고른 키의 다시 읽기는 통째로이되, 후보 읽기 본문이 상세 예산에서 잘렸으면 identity가 든 객체의 **부모**(`record[0]` — identity와 data가
+같이 있는 자리)로 좁힌다. 후보 키는 그래프가 아는 선언 키(리터럴)와 템플릿 머리의 `scan` 결과(개수 상한)다. 대조는 실행기가 든
+**원본**(`runner.raw`)으로 한다 — 렌더한 본문은 잘리고 모양이 바뀐다.
 
 B(키가 없을 때 config 잎 → 항목 → 조립식)는 측정 #7 뒤다 — 이유는 plan-12a-r2-r4.md R3-1 표 아래.
 """
@@ -121,6 +126,14 @@ def _unwrap(raw: Any) -> Any:
     return value
 
 
+def _parent(path: str) -> str | None:
+    """identity가 든 객체 자리의 부모 — `record[0].summary_info` → `record[0]`, `x[0]` → `x`. 맨 위거나 한 단계면 None(통째로)."""
+    if path == "(맨 위)":
+        return None
+    m = re.match(r"^(.*)(\.[^.\[\]]+|\[\d+\])$", path)
+    return m.group(1) or None if m else None
+
+
 def _task(task_id: str, goal: str, action: str, params: dict) -> PlanTask:
     return PlanTask(id=task_id, goal=goal, role=role_for(action), action=action, params=params, status="running")
 
@@ -138,23 +151,26 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
     evidence: list[EvidenceRef] = []
     counter = 0
 
-    async def run(goal: str, action: str, params: dict):
-        # 접수 읽기는 `t-0`, 그다음은 `t-0-1`, `t-0-2`… — `t-N`(리드의 번호)과 겹치지 않고 판정 인용 정리(`^t-\\d+$`)에도 안 걸린다.
+    async def run(goal: str, action: str, params: dict, *, keep: bool, task_id: str | None = None):
+        # 후보 읽기는 내부 번호 `t-0-1`, `t-0-2`… — 실행기의 원본 보관에만 쓰이고 State에는 안 남는다(`keep=False`). State에 남는 둘
+        # (`t-0`·`t-1`)은 리드의 번호와 같은 한 단계 모양이다.
         nonlocal counter
-        task_id = "t-0" if counter == 0 else f"t-0-{counter}"
-        counter += 1
+        if task_id is None:
+            counter += 1
+            task_id = f"t-0-{counter}"
         task = _task(task_id, goal, action, params)
         outcome = await runner.run(task, case=state.case)
         done = _finish(task, outcome)
-        tasks.append(done)
-        evidence.extend(outcome.evidence)
+        if keep:
+            tasks.append(done)
+            evidence.extend(outcome.evidence)
         return done, outcome
 
     def patch(pick: TargetPick) -> dict:
         return {"plan_tasks": tasks, "evidence": evidence, "target": pick}
 
     action, params = spec.read
-    done, outcome = await run("접수 읽기 — 증상 재현(코드)", action, params)
+    done, outcome = await run("접수 읽기 — 증상 재현(코드)", action, params, keep=True, task_id="t-0")
     if outcome.status != "ok" or not outcome.evidence:
         return patch(TargetPick(problem=f"접수 읽기 실패 — {outcome.error or '증거 없음'}"))
     values = focus_of(state.case)
@@ -172,7 +188,7 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
             capped = True
             break
         head = key_head(template)
-        _, scanned = await run(f"대상 키 후보 — {template}의 실재 키", "redis.scan", {"pattern": f"{head}*"})
+        _, scanned = await run(f"대상 키 후보 — {template}의 실재 키", "redis.scan", {"pattern": f"{head}*"}, keep=False)
         names = runner.raw(scanned.evidence[0].id) if scanned.status == "ok" and scanned.evidence else None
         for name in (names if isinstance(names, list) else []):
             if len(candidates) >= MAX_CANDIDATES:
@@ -183,11 +199,13 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
     if not candidates:
         return patch(TargetPick(problem=f"후보 키가 없다 — 접수 끝점이 읽는 선언 키를 모른다(흐름 그래프) ({where} 대상 행은 찾았다)"))
 
-    hits: dict[str, tuple[str, str]] = {}
+    hits: dict[str, tuple[str, bool]] = {}
     missing: list[str] = []
+    failed = 0
     for key in candidates:
-        _, got = await run(f"대상 키 후보 읽기 — {key}", "redis.get", {"key": key})
+        _, got = await run(f"대상 키 후보 읽기 — {key}", "redis.get", {"key": key}, keep=False)
         if got.status != "ok" or not got.evidence:
+            failed += 1
             continue
         raw = runner.raw(got.evidence[0].id)
         if raw is None:
@@ -195,21 +213,29 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
             continue
         at = holds_identity(_unwrap(raw), identity)
         if at:
-            hits[key] = (got.evidence[0].id, at)
+            hits[key] = (at, got.evidence[0].complete)
     tail = f" — 후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""
     label = f"대상 identity({'/'.join(identity)})"
+    folded = dict(candidates=candidates, read=len(candidates), absent=missing, failed=failed, hits=len(hits))
     if len(hits) == 1:
-        (key, (evidence_id, at)), = hits.items()
-        return patch(TargetPick(key=key, candidates=candidates,
-                                basis=f"키 값의 {at}에 {label}가 그대로 있다 ({evidence_id})",
+        (key, (at, complete)), = hits.items()
+        # 고른 키를 **State에 남는 읽기**로 한 번 더 — 후보 읽기 본문이 잘렸으면 identity 객체의 부모로 좁혀 data까지 통째로.
+        narrow = None if complete else _parent(at)
+        goal = f"대상 키 읽기 — {key}" + (f" (identity 자리 {at}의 부모 {narrow}로 좁혀)" if narrow else "")
+        _, again = await run(goal, "redis.get", {"key": key, **({"path": narrow} if narrow else {})}, keep=True, task_id="t-1")
+        raw = runner.raw(again.evidence[0].id) if again.status == "ok" and again.evidence else None
+        at2 = holds_identity(_unwrap(raw), identity) if raw is not None else None
+        if at2:
+            basis = f"키 값의 {at2}에 {label}가 그대로 있다 ({again.evidence[0].id})"
+        else:
+            basis = f"키 값의 {at}에 {label}가 그대로 있다 (다시 읽기 실패: {again.error or '증거 없음'})"
+        return patch(TargetPick(key=key, basis=basis, **folded,
                                 problem=f"후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""))
     if not hits:
         gone = f"; 없는 키 {len(missing)}개: {', '.join(missing)}" if missing else ""
-        return patch(TargetPick(candidates=candidates,
-                                problem=f"후보 {len(candidates)}개 중 값에 {label}가 든 키가 없다{gone}{tail}"))
-    shown = "; ".join(f"{k} ({at}, {eid})" for k, (eid, at) in hits.items())
-    return patch(TargetPick(candidates=candidates,
-                            problem=f"값에 {label}가 든 키가 {len(hits)}개 — 하나로 못 좁힌다: {shown}{tail}"))
+        return patch(TargetPick(**folded, problem=f"후보 {len(candidates)}개 중 값에 {label}가 든 키가 없다{gone}{tail}"))
+    shown = "; ".join(f"{k} ({at})" for k, (at, _) in hits.items())
+    return patch(TargetPick(**folded, problem=f"값에 {label}가 든 키가 {len(hits)}개 — 하나로 못 좁힌다: {shown}{tail}"))
 
 
 def cited_keys(evidence_ids, evidence) -> list[str]:
