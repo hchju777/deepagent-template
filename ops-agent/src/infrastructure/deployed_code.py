@@ -436,6 +436,22 @@ class DeployedCode(DeployedCodePort):
         """증거에 **어느 커밋을 읽었는지**가 남아야 판정을 되짚을 수 있다."""
         return f"{source} @ {commit[:12]}" + ("" if how == "declared" else " (가정)")
 
+    def _elsewhere(self, path: str, repo: str) -> str:
+        """`code.read`가 git에서 실패했을 때의 꼬리 — 인덱스가 이 경로를 **다른 레포**의 모듈로 알면 그 서비스를 말한다(측정 #8 P1 5: 리드가
+        `code.uses` 증거의 경로를 다른 서비스 이름으로 읽어 git의 `fatal: path`만 받았다). 같은 레포에서 없는 경로는 꾸미지 않는다 — 인덱스와
+        배포 커밋이 다를 수 있다."""
+        if self._index is None:
+            return ""
+        repos = sorted({s.repo for s in self._index.symbols if s.kind == "module" and s.file == path and s.repo != repo})
+        if not repos:
+            return ""
+        other = repos[0]
+        svc = flowgraph.owner(path, other, self._topology)[0]
+        names = [svc] if svc else sorted(n for n, s in self._topology.services.items() if s.repo == other)
+        if not names:
+            return f" — 이 경로는 {other} 레포에 있다(토폴로지에 그 레포의 서비스가 없다)"
+        return f" — 이 경로는 {'·'.join(names)}({other})에 있다 — service={names[0]!r}로 다시 내라"
+
     # ── action 넷 ────────────────────────────────────────────────
 
     async def services(self) -> ProbeResult:
@@ -611,7 +627,7 @@ class DeployedCode(DeployedCodePort):
             return ProbeResult.failed(problem, source=pinned, clock=self._clock)
         got = await self._reader.show(known.repo, commit, path, whole=ranged)
         if got.status == "error":
-            return ProbeResult.failed(got.error, source=pinned, clock=self._clock)
+            return ProbeResult.failed(got.error + self._elsewhere(path, known.repo), source=pinned, clock=self._clock)
         if not ranged:
             return ProbeResult.succeeded(
                 got.data, source=f"{pinned} ({got.source})", clock=self._clock,

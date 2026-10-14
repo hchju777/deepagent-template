@@ -713,7 +713,26 @@ def test_입구가_이미_한_읽기를_또_내면_거부_기록에_다음_홉�
                        f"입구 노드가 이미 읽었다. {hint}"]
     _, other, _ = _accept_tasks({"plan_tasks": [same]}, room=5, done=frozenset({_query(same)}), evidence_of={_query(same): ["t-5.e1"]},
                                 hint=hint, hint_for=frozenset({"t-0.e1", "t-1.e1"}))
-    assert other[0].endswith("그 결과는 t-5.e1")                                               # 리드가 한 읽기의 중복엔 안 붙는다
+    assert other[0].endswith(f"그 결과는 t-5.e1 — {hint}")                                    # 리드 자신의 읽기 중복에도 홉은 붙는다(R3-1c ③)
+    _, bare, _ = _accept_tasks({"plan_tasks": [same]}, room=5, done=frozenset({_query(same)}), evidence_of={_query(same): ["t-5.e1"]})
+    assert bare[0].endswith("그 결과는 t-5.e1")                                                # 홉이 없으면(인덱스 없음) 안 붙는다
+    # 홉 **자체**를 또 냈으면 "다음 홉: <그 홉>"은 제자리걸음이다(보드에서 그렇게 나왔다) — 예시의 첫 칸(그 결과를 입력으로 한 다음 읽기)으로 보낸다.
+    hop = ("code.resources", {"name": "SummaryRefresh"})
+    again = task("t-6", action=hop[0], params=hop[1])
+    _, circular, _ = _accept_tasks({"plan_tasks": [again]}, room=5, done=frozenset({_query(again)}), evidence_of={_query(again): ["t-2.e1"]},
+                                   hint="다음 홉: code.resources name='SummaryRefresh' — 쓴 쪽이 읽는 자원(입력)", hint_for=frozenset({"t-0.e1", "t-1.e1"}),
+                                   hop=hop)
+    assert circular[0].endswith("그 결과는 t-2.e1 — 그 홉은 이미 돌았다. 예시의 첫 칸(그 결과를 입력으로 한 다음 읽기)을 내라")
+
+
+def test_거부_기록의_증거_id는_홉_안내가_붙어도_그대로_읽힌다(case):
+    """거부 기록 되읽기(`_rejected_reads`)는 `그 결과는 ` 뒤를 전부 증거 id로 봤다 — 홉 안내가 붙은 줄에서는 마지막 id에 안내문이 섞였다(R3-1b ③
+    이후 입구 중복에서 이미 그랬고, ③이 안내를 모든 중복에 붙이니 늘 그렇게 된다). id는 다음 ` — ` 앞까지다."""
+    from src.application.nodes import DUP_KIND, DUP_WHERE, _rejected_reads
+
+    hint = "다음 홉: code.resources name='W' — 쓴 쪽이 읽는 자원(입력)"
+    state = CaseState(case=case, llm_errors=[f"t-2{DUP_KIND} — 받지 않는다 (redis.get key='k'){DUP_WHERE}t-0.e1, t-1.e1 — {hint}"])
+    assert _rejected_reads(state) == {"t-2": ["t-0.e1", "t-1.e1"]}
 
 
 async def test_integrate는_입구_결과로_다음_홉_힌트를_넘긴다(case):

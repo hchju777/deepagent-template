@@ -24,6 +24,7 @@ url·비밀번호·계정은 프롬프트에 들어가지 않는다. 리드가 �
 import json
 import re
 
+from src.application.facts import key_head
 from src.application.intake_map import check_of, intake_lines, next_hop, start_read
 from src.application.runner_probe import ASIDE_MARK, target_rows
 from src.application.state import CaseState
@@ -419,7 +420,11 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
             writer = _first_writer(evidence, used_hop.result_evidence_ids[0])
             if writer is not None and not _issued(tasks, "code.callers", name=writer):
                 return ("code.callers", {"name": writer}), [used_hop.result_evidence_ids[0]]
-        # `code.resources` 뒤(입력 키마다 읽기 한 칸)는 R3-1c ③ — 지금은 옛 사다리로 이어진다.
+        elif action == "code.resources":
+            # 쓴 쪽이 읽는 자원(입력)마다 읽기 한 칸(R3-1c ③) — 상류 걷기의 첫 고리. 다 읽었으면 옛 사다리로 이어진다.
+            step = _input_step(site_config, tasks, evidence, used_hop, services=services, target=target)
+            if step is not None:
+                return step
     rest = _done(tasks, "rest.query")
     path = _rest_path(site_config, (rest.action, rest.params)) if rest else None
     if not path:
@@ -488,6 +493,51 @@ def _recompute_match(evidence, evidence_id: str) -> bool | None:
 def _first_writer(evidence, evidence_id: str) -> str | None:
     m = _WRITER.search(_evidence_text(evidence, evidence_id))
     return m.group(1) if m else None
+
+
+# `code.resources` 증거의 자원 줄 — `    <이름> [<종류>] — <메서드> (<파일>:L<줄>)`. 읽기 구간이 앞, 쓰기 구간이 뒤다(`query.resources_lines`).
+_RESOURCE = re.compile(r"(?:\\n|\n) {4}(\S+) \[(rediskey|collection|topic)\] — ")
+_WRITES_AT = re.compile(r"(?:\\n|\n) {2}쓰기 \d+:")
+_IDENT = {"redis.get": "key", "redis.scan": "pattern", "mongo.find": "collection", "kafka.tail": "topic"}
+
+
+def _inputs(evidence, evidence_id: str) -> list[tuple[str, str]]:
+    """쓴 쪽이 **읽는** 자원 `(이름, 종류)`들 — 쓰기 구간은 뺀다. 본문만 본다(요약은 본문의 머리를 잘라 둔 것이라 같은 줄이 두 번 나온다)."""
+    ref = next((e for e in evidence if e.id == evidence_id), None)
+    text = (ref.body or ref.summary) if ref is not None else ""
+    m = _WRITES_AT.search(text)
+    return _RESOURCE.findall(text[:m.start()] if m else text)
+
+
+def _fill(template: str, *, declared: str, key: str) -> str | None:
+    """입력 템플릿의 자리를 대상 키에서 채운다 — 선언 `alarm:stats:{line}`과 실재 키 `alarm:stats:L1`에서 `{line}`=`L1`. 못 채우는 자리가
+    있으면 None(호출부가 scan으로 간다)."""
+    if "{" not in template:
+        return template
+    try:
+        m = re.match("^" + re.sub(r"\\\{(\w+)\\\}", r"(?P<\1>.+?)", re.escape(declared)) + "$", key)
+        return template.format_map(m.groupdict() if m else {})
+    except (re.error, KeyError, IndexError, ValueError):
+        return None
+
+
+def _input_step(site_config, tasks, evidence, used_hop, *, services, target):
+    """`code.resources` 뒤의 한 칸 — 아직 안 낸 첫 입력 자원의 읽기. 대상 키 자신은 입구가 이미 읽어 `_issued`에 걸린다(동사 없는 줄은
+    읽기로 분류돼 쓴 쪽의 출력도 입력 목록에 든다 — ①-b). 템플릿은 대상 키에서 안 자리를 채우고, 못 채우면 글자 앞부분으로 scan이다. 이 사이트에
+    없는 시스템의 자원은 건너뛴다. 이름 하나만 맞으면 낸 것으로 본다 — `limit`을 바꿔 낸 것까지 새 칸으로 치면 같은 칸이 매 라운드 돌아온다."""
+    for name, kind in _inputs(evidence, used_hop.result_evidence_ids[0]):
+        if kind == "rediskey":
+            filled = _fill(name, declared=target.declared, key=target.key)
+            shape = ("redis.get", {"key": filled}) if filled is not None else ("redis.scan", {"pattern": f"{key_head(name)}*"})
+        elif kind == "collection":
+            shape = ("mongo.find", {"collection": name, "filter": {}, "limit": 5})
+        else:
+            shape = ("kafka.tail", {"topic": name, "limit": 5})
+        ident = _IDENT[shape[0]]
+        if not _available(site_config, [shape], 1, services) or _issued(tasks, shape[0], **{ident: shape[1][ident]}):
+            continue
+        return shape, [used_hop.result_evidence_ids[0]]
+    return None
 
 
 def _task(index: int, action: str, params: dict, *, rank: int = 1, **extra) -> dict:
@@ -592,6 +642,10 @@ def example_block(site_config, *, phase: str, start: int = 1,
                               evidence=evidence, code_index=code_index, target=target)
         lead = ([_task(start, ladder[0][0], ladder[0][1], rank=1, input_evidence_ids=ladder[1])]
                 if ladder else [])
+        # 입구가 홉을 정한 케이스에서 사다리 칸이 있으면 예시는 **그 칸 하나**다(R3-1c ③) — 측정 #8에서 둘째 칸 `mongo.find`를 리드가 그대로
+        # 베껴 무관한 컬렉션으로 샜다. 홉 칸이 다 끝나 사다리가 없으면 전처럼(빈 예시는 형식을 못 보여 준다).
+        if lead and next_hop(target, code_index=code_index) is not None:
+            shapes = []
         body = {"decision": "continue",
                 "hypotheses": [{"id": "h-1", "statement": "갱신한 가설 (한국어 한 문장)",
                                 "status": "supported",

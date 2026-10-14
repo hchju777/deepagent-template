@@ -701,3 +701,30 @@ async def test_code_resources는_클래스가_읽고_쓰는_자원을_주고_없
     assert flow_code.class_names() == frozenset({"Refresh"})
     flow_code.attach_index(None)
     assert flow_code.class_names() == frozenset()
+
+
+# ── R3-1c ③ — code.read에 다른 서비스의 경로 ──
+
+async def test_code_read에_다른_서비스의_경로를_주면_그_경로가_어느_서비스에_있는지_안내한다(clock):
+    """측정 #8 P1 5: 리드가 `code.uses` 증거의 경로를 다른 서비스 이름으로 읽어 git의 `fatal: path`만 받았다. 인덱스가 그 경로를 **다른 레포**의
+    모듈로 알면 그 서비스를 말한다 — 같은 레포에서 없는 경로는 git 말 그대로(인덱스와 배포 커밋이 다를 수 있어 꾸미지 않는다)."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    class Reader:
+        async def show(self, repo, commit, path, *, whole=False):
+            return ProbeResult.failed(f"fatal: path '{path}' does not exist in '{commit}'", source="w", clock=clock)
+
+    topology = Topology(services={"api": Service(repo="dt-api", role="화면"), "sink": Service(repo="dt-core", role="저장한다")},
+                        config_paths=LAYERS)
+    code = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    plain = await code.read("api", "sink/writer.py")
+    assert plain.status == "error" and plain.error.startswith("fatal: path") and "이 경로는" not in plain.error    # 인덱스 없으면 git 말 그대로
+    code.attach_index(await ix.build_index({"dt-core": _Src()}, commits={"dt-core": "c0ffee"}))
+    got = await code.read("api", "sink/writer.py")
+    assert got.status == "error" and got.error.startswith("fatal: path")
+    assert "이 경로는 sink(dt-core)에 있다 — service='sink'로 다시 내라" in got.error
+    same = await code.read("sink", "sink/nope.py")
+    assert same.status == "error" and "이 경로는" not in same.error

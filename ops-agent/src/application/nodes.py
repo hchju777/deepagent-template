@@ -219,7 +219,8 @@ def _rejected_reads(state: CaseState) -> dict[str, list[str]]:
     for line in state.llm_errors:
         head, kind, tail = line.removesuffix(REDO_NOTE).partition(DUP_KIND)
         if kind and _TASK_ID.match(head) and DUP_WHERE in tail:
-            out[head] = tail.rsplit(DUP_WHERE, 1)[1].split(", ")
+            # 증거 id는 다음 ` — ` 앞까지 — 그 뒤는 홉 안내다(R3-1c ③). 전부 id로 보면 마지막 id에 안내문이 섞인다.
+            out[head] = tail.rsplit(DUP_WHERE, 1)[1].split(" — ", 1)[0].split(", ")
     return out
 
 
@@ -395,10 +396,14 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
             where = (evidence_of or {}).get(query) or []
             # 입구 노드가 이미 한 읽기면 다음 홉까지(R3-1b ③) — 측정 #7에서 리드가 접수 읽기를 두 번 냈고 둘 다 "또 냈다"만 받았다.
             at_intake = bool(where) and hint and set(where) <= hint_for
+            # 리드 자신의 읽기 중복에도 홉은 붙는다(R3-1c ③, 측정 #8 P1 4) — "또 냈다"만 받으면 다음 수가 없다. 홉 **자체**를 또 냈으면 홉 줄은
+            # 제자리걸음이라(보드에서 그렇게 나왔다) 예시의 첫 칸으로 보낸다.
+            tip = (f" — 입구 노드가 이미 읽었다. {hint}" if at_intake
+                   else " — 그 홉은 이미 돌았다. 예시의 첫 칸(그 결과를 입력으로 한 다음 읽기)을 내라" if hop is not None and (task.action, task.params) == hop
+                   else f" — {hint}" if hint else "")
             reused.append(f"{task.id}{DUP_KIND} — 받지 않는다 "
                           f"({describe(task.action, task.params)})"
-                          + (f"{DUP_WHERE}{', '.join(where)}" if where else "")
-                          + (f" — 입구 노드가 이미 읽었다. {hint}" if at_intake else ""))
+                          + (f"{DUP_WHERE}{', '.join(where)}" if where else "") + tip)
             aliases[task.id] = list(where) or None
             continue
         used.add(task.id)

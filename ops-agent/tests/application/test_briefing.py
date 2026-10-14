@@ -1508,3 +1508,48 @@ def test_입구_읽기와_pinned_태스크의_증거_본문은_예산에서_빠�
     # 입구가 안 돈 케이스(사람이 연 것)의 t-0·t-1은 고정이 아니다
     plain = state.model_copy(update={"target": None})
     assert briefing.pinned_evidence(plain) == frozenset({"t-2.e1"})
+
+
+# ── R3-1c ③ — 홉이 있으면 integrate 예시는 그 칸 하나, code.resources 뒤는 입력 자원마다 읽기 한 칸 ──
+
+RESOURCES_TEXT = ("batch.refresh.SummaryRefresh (batch/refresh.py:L4) [dt-core · batch]\n  읽기 3:\n"
+                  "    alarm:source:{line} [rediskey] — batch.refresh.SummaryRefresh._run (batch/refresh.py:L9)\n"
+                  "    alarm:stats:{line} [rediskey] — batch.refresh.SummaryRefresh._run (batch/refresh.py:L10)\n"
+                  "    alarm_events [collection] — batch.refresh.SummaryRefresh._run (batch/refresh.py:L11)\n"
+                  "  쓰기 1:\n    alarm:done:{site}:{line} [rediskey] — batch.refresh.SummaryRefresh._run (batch/refresh.py:L12)")
+
+
+def _resources_done(name="SummaryRefresh", task_id="t-2", text=RESOURCES_TEXT):
+    t = task(task_id, role="code_tracer", action="code.resources", params={"name": name}, status="ok", result_evidence_ids=[f"{task_id}.e1"])
+    # 실행기가 문자열 결과를 repr로 눕힌다 — 개행이 `\\n` 두 글자다(`_uses_done`과 같다).
+    ref = EvidenceRef(id=f"{task_id}.e1", source=f"code.resources {name}", summary=repr(text)[:160], body=repr(text))
+    return t, ref
+
+
+def test_홉이_있으면_integrate_예시는_그_칸_하나이고_code_resources_뒤는_입력_자원마다_읽기_한_칸이다():
+    """측정 #8 P1 3: integrate 예시의 둘째 칸 `mongo.find`를 리드가 그대로 베껴 무관한 컬렉션으로 샜다 — 홉이 있는 케이스에서 사다리 칸이
+    있으면 예시는 그 칸 하나다. "다음": 쓴 쪽이 읽는 자원(입력)을 읽는 것이 상류 걷기의 첫 고리 — 한 라운드 한 칸, 쓰기 구간과 이미 낸 읽기
+    (대상 키 자신은 입구가 읽었다)는 뺀다. 템플릿은 대상 키에서 안 자리를 채우고(`{line}`=`L1`), 못 채우면 글자 앞부분으로 scan. 이 사이트에
+    없는 시스템의 자원은 건너뛴다. 입력을 다 읽었으면 옛 사다리(접수 끝점의 사슬)로 — 그래도 한 칸이다."""
+    from src.domain.case import TargetPick
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", writer="SummaryRefresh", writer_at="metadata.event_type")
+    read = task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"])
+    first = _ladder(site(), [_rest_done("t-0"), read], used=("rest.query", "redis.get"), graph="keyed", code_index=True, target=picked)
+    assert [(t["action"], t["params"]) for t in first] == [("code.resources", {"name": "SummaryRefresh"})]
+    res_t, res_e = _resources_done()
+    base = [_rest_done("t-0"), read, res_t]
+    kw = dict(graph="keyed", evidence=[res_e], code_index=True, target=picked)
+    tasks = _ladder(site(), base, used=("rest.query", "redis.get", "code.resources"), **kw)
+    assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in tasks] == [("redis.get", {"key": "alarm:source:L1"}, ["t-2.e1"])]
+    got = task("t-3", action="redis.get", params={"key": "alarm:source:L1"}, status="ok", result_evidence_ids=["t-3.e1"])
+    tasks = _ladder(site(), base + [got], used=("rest.query", "redis.get", "code.resources"), **kw)
+    assert [(t["action"], t["params"]) for t in tasks] == [("mongo.find", {"collection": "alarm_events", "filter": {}, "limit": 5})]
+    coll = task("t-4", action="mongo.find", params={"collection": "alarm_events", "filter": {}, "limit": 5}, status="ok", result_evidence_ids=["t-4.e1"])
+    tasks = _ladder(site(), base + [got, coll], used=("rest.query", "redis.get", "code.resources", "mongo.find"), **kw)
+    assert [t["action"] for t in tasks] == ["code.trace"]                             # 입력을 다 읽었으면 옛 사다리로 — 쓰기 구간은 입력이 아니다
+    tasks = _ladder(site(mongodb=None), base + [got], used=("rest.query", "redis.get", "code.resources"), **kw)
+    assert tasks[0]["action"] == "code.trace"                                          # 이 사이트에 mongo가 없으면 컬렉션 칸은 없다
+    res_t2, res_e2 = _resources_done(text=RESOURCES_TEXT.replace("alarm:source:{line}", "alarm:source:{site}:{line}"))
+    tasks = _ladder(site(), [_rest_done("t-0"), read, res_t2], used=("rest.query", "redis.get", "code.resources"),
+                    graph="keyed", evidence=[res_e2], code_index=True, target=picked)
+    assert (tasks[0]["action"], tasks[0]["params"]) == ("redis.scan", {"pattern": "alarm:source:*"})

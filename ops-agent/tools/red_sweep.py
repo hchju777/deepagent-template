@@ -2488,7 +2488,26 @@ CASES += [
  ("입구가 안 돈 케이스의 t-0도 고정한다", B, "        if t.pinned or (state.target is not None and t.id in (\"t-0\", \"t-1\")):", "        if t.pinned or t.id in (\"t-0\", \"t-1\"):", [PIN_B_T]),
 ]
 
-assert len(CASES) >= 650, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-1c ③ — 예시 홉 하나 · 입력 자원 칸 · 중복 기록 홉 · code.read 안내 ──
+LAD3_T = "tests/application/test_briefing.py::test_홉이_있으면_integrate_예시는_그_칸_하나이고_code_resources_뒤는_입력_자원마다_읽기_한_칸이다"
+DUP3_T = "tests/application/test_nodes.py::test_입구가_이미_한_읽기를_또_내면_거부_기록에_다음_홉을_적는다"
+REJ3_T = "tests/application/test_nodes.py::test_거부_기록의_증거_id는_홉_안내가_붙어도_그대로_읽힌다"
+READ3_T = "tests/infrastructure/test_deployed_code.py::test_code_read에_다른_서비스의_경로를_주면_그_경로가_어느_서비스에_있는지_안내한다"
+CASES += [
+ ("홉이 있어도 예시에 둘째 칸을 둔다", B, "        if lead and next_hop(target, code_index=code_index) is not None:\n            shapes = []", "        if False:\n            shapes = []", [LAD3_T]),
+ ("code.resources 뒤에 입력 칸이 없다", B, "        elif action == \"code.resources\":\n            # 쓴 쪽이", "        elif False:\n            # 쓴 쪽이", [LAD3_T]),
+ ("쓰기 구간의 자원도 입력으로 센다", B, "    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [LAD3_T]),
+ ("못 채우는 템플릿도 get으로 낸다", B, "            shape = (\"redis.get\", {\"key\": filled}) if filled is not None else (\"redis.scan\", {\"pattern\": f\"{key_head(name)}*\"})", "            shape = (\"redis.get\", {\"key\": filled if filled is not None else name})", [LAD3_T]),
+ ("낸 입력 칸을 또 보여 준다", B, "        if not _available(site_config, [shape], 1, services) or _issued(tasks, shape[0], **{ident: shape[1][ident]}):", "        if not _available(site_config, [shape], 1, services):", [LAD3_T]),
+ ("없는 시스템의 입력도 보여 준다", B, "        if not _available(site_config, [shape], 1, services) or _issued(tasks, shape[0], **{ident: shape[1][ident]}):", "        if _issued(tasks, shape[0], **{ident: shape[1][ident]}):", [LAD3_T]),
+ ("리드 읽기 중복에 홉을 안 붙인다", ND, "                   else f\" — {hint}\" if hint else \"\")", "                   else \"\")", [DUP3_T]),
+ ("홉 자체의 중복에도 홉 줄을 붙인다", ND, "                   else \" — 그 홉은 이미 돌았다. 예시의 첫 칸(그 결과를 입력으로 한 다음 읽기)을 내라\" if hop is not None and (task.action, task.params) == hop\n", "", [DUP3_T]),
+ ("거부 기록의 증거 id에 홉 안내가 섞인다", ND, "            out[head] = tail.rsplit(DUP_WHERE, 1)[1].split(\" — \", 1)[0].split(\", \")", "            out[head] = tail.rsplit(DUP_WHERE, 1)[1].split(\", \")", [REJ3_T]),
+ ("다른 레포의 경로에 안내를 안 붙인다", DCP, "            return ProbeResult.failed(got.error + self._elsewhere(path, known.repo), source=pinned, clock=self._clock)", "            return ProbeResult.failed(got.error, source=pinned, clock=self._clock)", [READ3_T]),
+ ("같은 레포의 없는 경로에도 안내를 붙인다", DCP, "        repos = sorted({s.repo for s in self._index.symbols if s.kind == \"module\" and s.file == path and s.repo != repo})", "        repos = sorted({s.repo for s in self._index.symbols if s.kind == \"module\" and s.file == path} or {repo})", [READ3_T]),
+]
+
+assert len(CASES) >= 661, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
