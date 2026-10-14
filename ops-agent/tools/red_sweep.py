@@ -2600,7 +2600,17 @@ CASES += [
  ("번역한 판정을 State에 안 둔다", ND, "            return {\"verify_problems\": [], **({\"verdict\": capped} if (changed or capped is not verdict) else {})}", "            return {\"verify_problems\": []} if capped is verdict else {\"verdict\": capped, \"verify_problems\": []}", [CLS_T]),
 ]
 
-assert len(CASES) >= 717, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-3 ④-a — code.read line= : 그 줄을 품은 함수 전체 ──
+READ_LINE_T = "tests/infrastructure/test_deployed_code.py::test_code_read에_line을_주면_그_줄을_품은_가장_안쪽_함수_전체를_준다"
+CASES += [
+ ("line이 품은 함수를 안 찾는다", DCP, "            sym = self._enclosing(known.repo, path, line)\n            if sym is not None:", "            sym = None\n            if sym is not None:", [READ_LINE_T]),
+ ("안쪽이 아니라 바깥 심볼을 고른다", DCP, "        return min(inside, key=lambda s: s.end_line - s.line) if inside else None", "        return max(inside, key=lambda s: s.end_line - s.line) if inside else None", [READ_LINE_T]),
+ ("line 0을 받는다", DCP, "            if isinstance(line, bool) or not isinstance(line, int) or line < 1:", "            if False:", [READ_LINE_T]),
+ ("등재 목록에 line 인자가 없다", ROOT / "src/domain/actions.py", "    \"code.read\":           (\"code\",  \"read\",          (\"service\", \"path\"),     (\"offset\", \"limit\", \"line\")),", "    \"code.read\":           (\"code\",  \"read\",          (\"service\", \"path\"),     (\"offset\", \"limit\")),", [READ_LINE_T]),
+ ("리터럴 홉이 줄 둘레로 간다", WK, "                nxt, nxt_ev = (\"code.read\", {\"service\": scope, \"path\": path, \"line\": line}), gev", "                nxt, nxt_ev = (\"code.read\", {\"service\": scope, \"path\": path, \"offset\": max(1, line - 15), \"limit\": 40}), gev", [LIT_NEXT_T]),
+]
+
+assert len(CASES) >= 722, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -253,8 +253,8 @@ class DeployedCodePort(ABC):
 
     @abstractmethod
     async def read(self, service: str, path: str, *, offset: int | None = None,
-                   limit: int | None = None) -> ProbeResult:
-        """파일 하나. `path`는 `grep`이 돌려준 경로다.
+                   limit: int | None = None, line: int | None = None) -> ProbeResult:
+        """파일 하나. `path`는 `grep`이 돌려준 경로다. `line`은 그 줄을 품은 함수 전체(R3-3 ④-a).
 
         `offset`(1부터)·`limit`은 줄 범위다. 범위를 주면 그 줄들은 **자르지 않는다** — 400줄 상한은 "어디부터
         볼지 모를 때"의 기본값이고, `grep`이 줄 번호를 알려 준 뒤에는 그 자리를 통째로 봐야 한다.

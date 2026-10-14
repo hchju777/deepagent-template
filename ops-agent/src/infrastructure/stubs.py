@@ -216,7 +216,7 @@ class StubDeployedCode(DeployedCodePort):
         return self._none(f"stub-code:flow {name}")
 
     async def read(self, service: str, path: str, *, offset: int | None = None,
-                   limit: int | None = None) -> ProbeResult:
+                   limit: int | None = None, line: int | None = None) -> ProbeResult:
         return self._none(f"stub-code:read {service} {path}")
 
     async def trace(self, endpoint: str) -> ProbeResult:

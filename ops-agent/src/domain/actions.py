@@ -64,7 +64,8 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     # `path`는 **`code.grep`이 돌려준 경로**다. 지어내는 자리가 아니다.
     # `offset`·`limit`은 줄 범위(1부터)다. 파일은 400줄에서 잘리는데 핸들러는 그 뒤에 있었다(사내 실측) — 범위를
     # 대면 그 줄들은 자르지 않는다. `grep`이 돌려준 `경로:줄번호`가 `offset`의 출처다.
-    "code.read":           ("code",  "read",          ("service", "path"),     ("offset", "limit")),
+    # `line`은 그 줄을 **품은 함수 전체**(R3-3 ④-a — 걷기가 잡은 리터럴 줄의 다음 홉). 인덱스에 없으면 줄 둘레.
+    "code.read":           ("code",  "read",          ("service", "path"),     ("offset", "limit", "line")),
     # 흐름 그래프(11c)의 이웃. `name`은 브리핑의 <데이터 흐름>이나 증거에 나온 이름 그대로다.
     # 그래프가 없는 조사에서는 목록에 안 나온다(`briefing._hidden`).
     "code.flow":           ("code",  "flow",          ("name",),               ()),

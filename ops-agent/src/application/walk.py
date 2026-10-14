@@ -29,7 +29,6 @@ SCAN_READS = 5
 # 레포에서 필드 이름과 그 값이 한 줄에 **리터럴로** 같이 있으면(실측 `["<필드>"] != "-"`) 코드가 그 값을 거르는 것이고, 모든 행이 그 값이면 아무것도
 # 안 남는다. 한 홉에 검사할 단일값 필드 수 상한 — grep 한 번이 읽기 한 번이다.
 LITERAL_FIELDS = 3
-LITERAL_WINDOW = 40
 # 머리는 커밋(SHA 또는 `main` 같은 ref)이고 없을 수도 있다 — 경로 뒤 `:줄:`이 기준이다.
 _GREP_LINE = re.compile(r"^(?:[^:\s]+:)?([^:\n]+):(\d+):(.*)$")
 
@@ -266,12 +265,12 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         else:
             stopped, nxt, nxt_ev = f"입력이 다 정상 — {last}", None, ""
         if literal is not None:
-            # 아래에 단일값을 거르는 코드 줄이 있었다 — 멈춘 이유가 무엇이든 리드가 볼 곳은 그 줄이다(사람 결정: "리터럴 줄이 있으면 그 함수";
-            # 지금은 줄 둘레, 함수 전체는 ④). 읽는 쪽 서비스를 모르면 `code.read`를 못 만들어 위의 홉 그대로.
+            # 아래에 단일값을 거르는 코드 줄이 있었다 — 멈춘 이유가 무엇이든 리드가 볼 곳은 **그 줄을 품은 함수**다(사람 결정; `code.read line=`이
+            # 인덱스의 심볼 줄 범위로 함수 전체를 준다 — ④-a). 읽는 쪽 서비스를 모르면 `code.read`를 못 만들어 위의 홉 그대로.
             scope, path, line, gev = literal
             stopped += f" (단일값을 거르는 코드 줄 {path}:L{line})"
             if scope:
-                nxt, nxt_ev = ("code.read", {"service": scope, "path": path, "offset": max(1, line - LITERAL_WINDOW // 2 + 5), "limit": LITERAL_WINDOW}), gev
+                nxt, nxt_ev = ("code.read", {"service": scope, "path": path, "line": line}), gev
     return {"plan_tasks": tasks, "evidence": evidence,
             "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), stopped=stopped,
                          next_action=nxt[0] if nxt else "", next_params=nxt[1] if nxt else {}, next_evidence=nxt_ev, notes=notes)}

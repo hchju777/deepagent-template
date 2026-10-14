@@ -641,20 +641,35 @@ class DeployedCode(DeployedCodePort):
                               if (problems or not complete) else None))
 
     async def read(self, service: str, path: str, *, offset: int | None = None,
-                   limit: int | None = None) -> ProbeResult:
+                   limit: int | None = None, line: int | None = None) -> ProbeResult:
         """파일 하나. **`path`는 `grep`이 돌려준 경로다** — 지어내는 자리가 아니다.
 
         `offset`(1부터)·`limit`은 줄 범위다. 범위를 주면 파일을 통째로 받아 그 줄들을 **자르지 않고** 준다 — 사내
         실측에서 라우터 파일이 400줄에서 잘려 핸들러를 못 봤다. `offset`만 주면 거기서 기본 상한만큼이다.
+        `line`은 그 줄을 **품은 함수 전체**(R3-3 ④-a) — 인덱스의 심볼 줄 범위로 가장 안쪽 함수·메서드·클래스를 통째로. 줄 둘레 N줄은 함수가
+        길면 잘리고 짧으면 옆 함수를 섞는다. 인덱스에 그 줄을 품은 심볼이 없으면 줄 둘레다.
         """
-        ranged = offset is not None or limit is not None
-        span = f" L{offset or 1}" + (f"+{limit}" if limit is not None else "") if ranged else ""
+        if line is not None:
+            if isinstance(line, bool) or not isinstance(line, int) or line < 1:
+                return ProbeResult.failed("line은 1 이상의 정수다", source=f"code.read {service}:{path}", clock=self._clock)
+            span = f" L{line} 함수"
+        else:
+            ranged = offset is not None or limit is not None
+            span = f" L{offset or 1}" + (f"+{limit}" if limit is not None else "") if ranged else ""
         source = f"code.read {service}:{path}{span}"
         resolved = self._resolve(service, source)
         if isinstance(resolved, ProbeResult):
             return resolved
         known, commit, how = resolved
         pinned = self._pinned(source, commit, how)
+        whole_fn = ""
+        if line is not None:
+            sym = self._enclosing(known.repo, path, line)
+            if sym is not None:
+                offset, limit, whole_fn = sym.line, sym.end_line - sym.line + 1, f" — {sym.qualname} 전체"
+            else:
+                offset, limit, whole_fn = max(1, line - _WINDOW // 2), _WINDOW, " — 그 줄을 품은 함수가 인덱스에 없어 줄 둘레"
+        ranged = offset is not None or limit is not None
         problem = _range_problem(offset, limit)
         if problem:
             return ProbeResult.failed(problem, source=pinned, clock=self._clock)
@@ -677,8 +692,20 @@ class DeployedCode(DeployedCodePort):
         if limit is None and end < len(lines):
             reasons.append(f"L{end}까지 — offset만 주면 기본 {_LINES}줄이다. limit을 주면 더 본다")
         return ProbeResult.succeeded(
-            "\n".join(picked), source=f"{pinned} ({got.source}) L{start}-L{end} / 전체 {len(lines)}줄",
+            "\n".join(picked), source=f"{pinned} ({got.source}) L{start}-L{end} / 전체 {len(lines)}줄{whole_fn}",
             clock=self._clock, truncated_reason=" · ".join(reasons) if reasons else None)
+
+    def _enclosing(self, repo: str, path: str, line: int):
+        """그 줄을 품은 **가장 안쪽** 심볼(함수·메서드·클래스) — 인덱스가 없거나 품은 것이 없으면 None."""
+        if self._index is None:
+            return None
+        inside = [s for s in self._index.symbols if s.repo == repo and s.file == path and s.kind in ("function", "method", "class")
+                  and s.line <= line <= s.end_line]
+        return min(inside, key=lambda s: s.end_line - s.line) if inside else None
+
+
+# `line=`에 그 줄을 품은 심볼이 없을 때의 줄 둘레.
+_WINDOW = 40
 
 
 def _range_problem(offset, limit) -> str | None:

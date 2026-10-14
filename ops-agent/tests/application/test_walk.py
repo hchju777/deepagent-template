@@ -209,7 +209,7 @@ async def test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_리
     assert walk.hops[2].status == "나쁨 — 같은 단일값 wg='-' (아래 홉과 같다)" and walk.hops[2].bad                       # grep 없이 이어진다
     # 멈춘 이유는 "쓴 쪽을 모른다"지만 리터럴 줄이 있으면 리드가 볼 곳은 그 줄이다(사람 결정)
     assert walk.stopped == "쓴 쪽을 모른다 — src:L1(값에 인덱스의 클래스 이름이 없다) (단일값을 거르는 코드 줄 proc/job.py:L50)"
-    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "offset": 35, "limit": 40}) and walk.next_evidence == "t-1-3.e1"
+    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "line": 50}) and walk.next_evidence == "t-1-3.e1"
     # 값이 리터럴로 없는 줄뿐이면 표시만 — 정상이고 행 요약에 남는다
     rows2 = [{"code": f"A{i}", "lvl": "x"} for i in range(3)]
     plain = _Reads({**table, ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows2})}})
@@ -219,8 +219,8 @@ async def test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_리
 
 
 async def test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_그_코드_줄_둘레다():
-    """걷기가 "입력이 다 정상"에서 멈췄는데 아래에 단일값을 거르는 코드 줄이 있었으면, 리드가 볼 곳은 그 줄이다(④의 "리터럴 줄이 있으면 그 함수"
-    — 지금은 줄 둘레 40줄, 함수 전체는 ④)."""
+    """걷기가 멈췄는데 아래에 단일값을 거르는 코드 줄이 있었으면, 리드가 볼 곳은 그 줄을 품은 **함수**다(사람 결정 — ④-a: `code.read line=`이
+    인덱스의 심볼 줄 범위로 함수 전체를 준다)."""
     rows = [{"code": f"A{i}", "wg": "-"} for i in range(3)]
     table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
              ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows, "metadata": {"event_type": "W1"}})},
@@ -229,11 +229,11 @@ async def test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_
              ("redis.get", "src:L1"): {"type": "string", "value": json.dumps([{"id": i, "v": i} for i in range(4)])}}
     walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
     assert walk.stopped == "입력이 다 정상 — W1 (단일값을 거르는 코드 줄 proc/job.py:L50)"
-    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "offset": 35, "limit": 40}) and walk.next_evidence == "t-1-3.e1"
+    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "line": 50}) and walk.next_evidence == "t-1-3.e1"
     # 케이스 블록의 다음 홉 줄은 인자가 `name`이 아니어도 그려야 한다 — 측정판에서 frame 노드가 KeyError로 죽었다(규율 1)
     from src.application.intake_map import hop_line
     line = hop_line(_state().target, code_index=True, walk=walk)
-    assert line.startswith("다음 홉: code.read limit=40 offset=35 path='proc/job.py' service='a' — 걷기가 멈춘 자리(입력이 다 정상 — W1")
+    assert line.startswith("다음 홉: code.read line=50 path='proc/job.py' service='a' — 걷기가 멈춘 자리(입력이 다 정상 — W1")
     # 읽는 쪽 서비스를 모르면 grep은 전체이고 `code.read`는 서비스가 필요해 다음 홉이 없다
     free = _Reads(table)
     walk = (await run_walk(_state(), runner=free, classes=frozenset({"W0", "W1"}), clock=lambda: T0))["walk"]

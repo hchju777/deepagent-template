@@ -805,3 +805,42 @@ async def test_code_resources는_service로_레포를_좁히고_같은_이름이
     bad = await code.resources("Refresh", service="nope")
     assert bad.status == "error" and "없는 서비스" in bad.error
     assert action_problem("code.resources", {"name": "Refresh", "service": "processor"}) is None          # 등재 목록의 선택 인자
+
+
+# ── R3-3 ④-a — code.read line= : 그 줄을 품은 함수 전체 ──
+
+async def test_code_read에_line을_주면_그_줄을_품은_가장_안쪽_함수_전체를_준다(tmp_path, flow_code):
+    """걷기가 잡은 리터럴 줄(③)의 다음 홉은 "그 줄을 품은 함수"다(사람 결정). 인덱스의 심볼 줄 범위로 가장 안쪽 함수·메서드·클래스를
+    통째로 — 줄 둘레 40줄은 함수가 길면 잘리고 짧으면 옆 함수를 섞는다. 인덱스에 그 줄을 품은 심볼이 없으면 줄 둘레로."""
+    from src.domain.actions import action_problem
+    from src.knowledge import index as ix
+
+    text = "class Job:\n    def a(self):\n        return 1\n\n    def b(self):\n        x = 1\n        return x\n\n\ndef top():\n    pass\n"
+    root = tmp_path / "dt-core"
+    (root / "jobs").mkdir(exist_ok=True)
+    (root / "jobs" / "run2.py").write_text(text, encoding="utf-8")
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "fn", cwd=root)
+
+    class Src:
+        FILES = {"jobs/__init__.py": "", "jobs/run2.py": text}
+
+        async def files(self):
+            return sorted(self.FILES)
+
+        async def read(self, path):
+            return self.FILES.get(path)
+
+    blind = await flow_code.read("sink", "jobs/run2.py", line=6)
+    assert blind.status == "ok" and "줄 둘레" in blind.source and blind.data == text.rstrip("\n")                 # 인덱스 없음 → 둘레(파일이 짧다)
+    flow_code.attach_index(await ix.build_index({"dt-core": Src()}, commits={"dt-core": "c0ffee"}))
+    got = await flow_code.read("sink", "jobs/run2.py", line=6)
+    assert got.status == "ok" and got.data == "    def b(self):\n        x = 1\n        return x"
+    assert "L5-L7" in got.source and "jobs.run2.Job.b 전체" in got.source and got.envelope.complete
+    whole = await flow_code.read("sink", "jobs/run2.py", line=1)
+    assert whole.data.startswith("class Job:") and whole.data.endswith("return x") and "jobs.run2.Job 전체" in whole.source  # 클래스 줄은 클래스
+    between = await flow_code.read("sink", "jobs/run2.py", line=9)
+    assert between.status == "ok" and "품은 함수가 인덱스에 없어 줄 둘레" in between.source
+    bad = await flow_code.read("sink", "jobs/run2.py", line=0)
+    assert bad.status == "error" and "1 이상" in bad.error
+    assert action_problem("code.read", {"service": "sink", "path": "jobs/run2.py", "line": 6}) is None       # 등재 목록의 선택 인자
