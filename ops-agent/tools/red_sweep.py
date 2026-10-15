@@ -2713,7 +2713,24 @@ CASES += [
  ("진단에 걷기 줄이 없다", DG, "    if state.walk is not None:\n        # 걷기가 있었으면 한 줄", "    if False:\n        # 걷기가 있었으면 한 줄", [DIAG_WALK_T, THROWN_T]),
 ]
 
-assert len(CASES) >= 788, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5 ② — case walk(측정 도구): 입구 + 걷기만, 그래프와 같은 병합 ──
+WO = ROOT / "src/application/walk_only.py"
+WO_T = "tests/application/test_walk_only.py::test_walk_only는_입구와_걷기만_돌리고_패치를_State_규칙대로_합친다"
+WO_PATCH_T = "tests/application/test_walk_only.py::test_apply_patch는_id_병합과_이어_붙이기와_교체를_그래프와_같게_한다"
+CW_ARGS_T = "tests/test_cli_case_walk.py::test_case_walk은_케이스_id나_target_하나만_받고_check는_필수이며_틀리면_점검_목록을_보인다"
+CW_RUN_T = "tests/test_cli_case_walk.py::test_case_walk은_target으로_입구를_돌리고_케이스_블록만_찍으며_아무것도_남기지_않는다"
+CASES += [
+ ("패치를 id로 병합하지 않는다", WO, "            update[key] = merge_by_id(getattr(state, key), value)", "            update[key] = list(value)", [WO_T, WO_PATCH_T]),
+ ("패치를 이어 붙이지 않는다", WO, "            update[key] = list(getattr(state, key)) + list(value)", "            update[key] = list(value)", [WO_PATCH_T]),
+ ("걷기 노드를 안 부른다", WO, "    for name in (\"intake\", \"walk\"):", "    for name in (\"intake\",):", [WO_T]),
+ ("둘 다 줘도 받는다", MN, "    if bool(args.case_id) == bool(args.target):\n        print(\"  케이스 id 하나나 --target 하나 — 둘 중 하나만\")", "    if False:\n        print(\"  케이스 id 하나나 --target 하나 — 둘 중 하나만\")", [CW_ARGS_T]),
+ ("--check 없이도 돈다", MN, "        if not args.check:\n            print(f\"  --check가 필요하다 — 점검: {checks}\")", "        if False:\n            print(f\"  --check가 필요하다 — 점검: {checks}\")", [CW_ARGS_T]),
+ ("없는 점검을 안 거른다", MN, "        if args.check not in site.patrol.checks:\n            print(f\"  없는 점검 — {args.check}. 점검: {checks}\")", "        if False:\n            print(f\"  없는 점검 — {args.check}. 점검: {checks}\")", [CW_ARGS_T]),
+ ("대상 문자열을 안 넘긴다", MN, "                    check=args.check, target=args.target)", "                    check=args.check, target=\"\")", [CW_RUN_T]),
+]
+
+assert len(CASES) >= 795, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

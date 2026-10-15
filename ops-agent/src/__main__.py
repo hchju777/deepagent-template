@@ -952,6 +952,84 @@ def _make_tracer(case_id: str, *, folder: Path):
     return trace, written
 
 
+async def _no_lead(state) -> dict:
+    raise RuntimeError("case walk는 리드를 부르지 않는다")
+
+
+def cmd_case_walk(args, env) -> int:
+    """측정 도구(R3-5 ②): LLM 없이 **입구 + 걷기만** 돌리고 케이스 블록만 찍는다. 읽기 전용 — 케이스 저장소·보고서·트레이스에 아무것도 남기지 않는다.
+    측정 #12가 이 출력을 정답 홉 표와 대조하므로 블록은 리드가 받는 것 그대로다. 엔진 기능이 아니다."""
+    from src.application import briefing
+    from src.application.intake_map import intake_spec
+    from src.application.nodes import EngineDeps
+    from src.application.runner_probe import ProbeRunner
+    from src.application.walk_only import walk_only
+    from src.domain.case import Case
+    from src.knowledge import flow
+
+    if bool(args.case_id) == bool(args.target):
+        print("  케이스 id 하나나 --target 하나 — 둘 중 하나만")
+        return 2
+    app = load_app_config(args.config_root, env=env)
+    clock = _clock(args, env)
+    if args.case_id:
+        found = [c for c in _case_repo(args, env).all() if c.id == args.case_id]
+        if not found:
+            print(f"  없는 케이스 — {args.case_id}")
+            return 1
+        record = found[0]
+        gbm, fct = record.site.split("/", 1)
+        site, _ = load_site_config(args.config_root, gbm, fct, env=env)
+        case = Case(id=record.id, gbm=gbm, fct=fct, origin="patrol", symptom=record.symptom, t0=record.opened_at,
+                    check=record.check, target=record.target)
+    else:
+        site, _ = _resolve_site(args.config_root, args, env)
+        gbm, fct = site.site.gbm, site.site.fct
+        checks = ", ".join(sorted(site.patrol.checks)) or "(없음)"
+        # `--check`는 기본값 없이 필수(사람 결정 10-15) — 점검이 접수 읽기와 identity를 정한다.
+        if not args.check:
+            print(f"  --check가 필요하다 — 점검: {checks}")
+            return 2
+        if args.check not in site.patrol.checks:
+            print(f"  없는 점검 — {args.check}. 점검: {checks}")
+            return 2
+        # `--target`은 순찰이 만드는 대상 문자열(identity 필드를 '/'로 이은 것) 그대로 — 쪼개지 않는다. 제목에 '/'가 든 행이 있다.
+        case = Case(id=f"walk-{args.check}", gbm=gbm, fct=fct, origin="patrol", symptom=f"{args.target} — case walk(측정)", t0=clock(),
+                    check=args.check, target=args.target)
+    seeds = json.loads(Path(args.stub_seeds).read_text(encoding="utf-8")) if args.stub_seeds else None
+
+    async def go():
+        code, services, flow_graph, graph_note = _code_if_ready(
+            site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock, graph_dir=_graph_dir(args, env, gbm))
+        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
+        try:
+            # 조사(`cmd_case_investigate`)와 같은 재료 — 다른 것은 리드(`_no_lead`)뿐이다. 여기서 갈라지면 `case walk`가 조사와 다른 걷기를 보여 준다.
+            deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock, detail_chars=app.investigation.evidence_chars,
+                                                 narrowed_chars=app.investigation.evidence_total_chars),
+                              frame=_no_lead, integrate=_no_lead, max_rounds=app.investigation.max_rounds,
+                              parallel_width=app.investigation.parallel_width, max_tasks=app.investigation.max_tasks,
+                              known_names=flow.known_names(flow_graph), components=frozenset(services),
+                              declared={"rediskey": flow.declared_keys(flow_graph, briefing.intake_path(case, site))},
+                              intake=intake_spec(case, site), code_index=code.has_index() if code else False,
+                              classes=code.class_names() if code else frozenset(),
+                              class_services=code.class_services() if code else {},
+                              service_repos=code.service_repos() if code else {},
+                              filter_lines=code.filter_lines if code else None,
+                              declared_by=flow.declaring_map(flow_graph), clock=clock)
+            state = await walk_only(case, deps)
+            return state, flow_graph, (code.has_index() if code else False), graph_note
+        finally:
+            await adapters.close()
+
+    state, flow_graph, code_index, graph_note = _run(go())
+    target = briefing.target_key(state, site_config=site, flow_graph=flow_graph)
+    print(briefing.case_block(state, site_config=site, target=target, code_index=code_index))
+    walk = state.walk
+    tail = f"걷기 읽기 {walk.reads}건 · {walk.seconds:.1f}초" if walk is not None else "걷기 없음(인덱스가 없거나 입구가 쓴 쪽을 못 골랐다)"
+    print(f"\n  ({tail} · {graph_note} · 읽기 전용 — 저장소·보고서·트레이스에 남긴 것 없음)")
+    return 0
+
+
 def cmd_case_investigate(args, env) -> int:
     """케이스 하나를 **리드 LLM으로** 조사하고 판정까지 낸다.
 
@@ -2659,6 +2737,13 @@ def build_parser() -> argparse.ArgumentParser:
     investigate.add_argument("--trace", nargs="?", const="output/traces",
                              help="프롬프트와 날것 응답을 남긴다 (기본 output/traces)")
     investigate.set_defaults(run=cmd_case_investigate)
+    walk_cmd = case_sub.add_parser("walk", help="LLM 없이 입구 + 걷기만 돌리고 케이스 블록을 찍는다 (측정 도구, 읽기 전용)")
+    walk_cmd.add_argument("case_id", nargs="?", help="저장된 케이스 id (또는 --target)")
+    walk_cmd.add_argument("--target", help="순찰의 대상 문자열 그대로 — identity 필드를 '/'로 이은 것")
+    walk_cmd.add_argument("--check", help="--target일 때 점검 이름 (필수)")
+    walk_cmd.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
+    _add_site_options(walk_cmd, sub=True)
+    walk_cmd.set_defaults(run=cmd_case_walk)
 
     trace = case_sub.add_parser(
         "trace", help="트레이스를 붙여넣을 수 있는 크기로 줄인다")

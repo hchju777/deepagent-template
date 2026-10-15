@@ -983,6 +983,20 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 엔진 수준 테스트: 조회가 던지는 걷기 → `walk.stopped == "걷기 노드가 던졌다 — RuntimeError: boom"`, 케이스 블록에 그 줄, 진단에 그 줄.
 - 테스트 먼저(RED 3 → GREEN). 스윕 +3(788). 보드 두 변형은 전과 같다(회귀 순서는 ④의 측정판 모양으로).
 
+#### R3-5 ② (10-15) ✅ — 측정 도구 `case walk`: LLM 없이 입구 + 걷기만, 케이스 블록만, 읽기 전용
+
+- 측정 #12는 걷기의 홉 표를 정답 표와 대조한다 — LLM 조사(한 케이스 3~4분, 판정이 끼어든다) 없이 걷기만 봐야 한 판에 배지 19행을 돌 수 있다.
+- `src/application/walk_only.py`: 그래프 대신 두 노드(`intake`·`walk`)를 직접 부르고 패치를 **그래프의 reducer와 같은 규칙**(`plan_tasks`·`evidence`·
+  `hypotheses`는 id 병합, `llm_errors`·`facts`는 이어 붙이기, 나머지 교체)으로 합친다 — 여기서 어긋나면 `case walk`의 표와 조사의 표가 다른 걷기를 말한다.
+  리드는 안 부른다(`_no_lead`는 불리면 던진다). 엔진 기능이 아니다.
+- CLI `case walk <id>` / `case walk --target "<identity 문자열>" --check <점검> --gbm --fct [--stub-seeds]`: 조사(`cmd_case_investigate`)와 같은 재료
+  (`_code_if_ready`·`build_adapters`·`ProbeRunner`·`EngineDeps`)에 리드만 뺀다. `--check`는 기본값 없이 필수(틀리면 점검 목록), `--target`은 순찰이
+  만드는 문자열 그대로(쪼개지 않는다 — 제목에 `/`가 든 행이 있다). 출력은 리드가 받는 케이스 블록 그대로 + 꼬리 한 줄(걷기 읽기 수·초, 그래프 상태,
+  읽기 전용). 저장소·보고서·트레이스에 아무것도 남기지 않는다(테스트가 디렉터리 상태로 확인). 코루틴은 CLI의 단일 `_run`을 지난다(`asyncio.run` 한 곳 규칙).
+- 보드(palette-empty 번들): `--target "L1/Alarm"` → 조사 r0와 같은 홉 표·주·다음 홉, 꼬리 `걷기 읽기 5건`; `--target "L9/Nope"` → `대상 키: 못 골랐다 — 접수
+  응답에 대상 행이 없다`와 `걷기 없음(…)`; `--check nope` → 점검 목록; 저장된 케이스 id로도 같은 표; 전후 `cases.json`·출력 디렉터리 변화 없음.
+- 테스트 먼저(RED → GREEN: 응용 2 + CLI 2). 스윕 +7(795).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.
