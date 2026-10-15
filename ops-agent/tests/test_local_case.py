@@ -126,8 +126,13 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     # c-2형 — 원천 행은 있는데 모든 행의 state가 '-'. batch 코드에 그 필드와 값이 한 줄에 리터럴로 있다(③의 데이터 링크).
     rows = json.loads(_seeds(NOW, "source-filtered")["redis"]["alarm:source:L1"])
     assert rows and all(r["state"] == "-" for r in rows)
+    # 사내 모양(측정 #10): `_run`은 조립뿐이고 거르는 줄은 `get("X")`↔`register(component="X")`로 이은 컴포넌트에 있다. 미끼 — 사이트 config의 같은
+    # 필드·값 줄과 다른 서비스의 dict 줄(둘 다 레포 전체 grep이 가짜로 잡던 것).
     from tools.local_case import CORE_FILES
-    assert 'r.get("state") != "-"' in CORE_FILES["batch/refresh.py"]
+    assert 'self.components.get("state_filter")' in CORE_FILES["batch/refresh.py"] and 'r.get("state") != "-"' not in CORE_FILES["batch/refresh.py"]
+    assert '@register(component="state_filter")' in CORE_FILES["batch/components.py"] and 'r.get("state") != "-"' in CORE_FILES["batch/components.py"]
+    assert CORE_FILES["config/factories/gumi/common.json"]["badge"] == {"empty_state": "-", "state": "-"}
+    assert '{"state": "-"' in CORE_FILES["processor/handler.py"]
 
 
 def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_클래스는_서비스_디렉터리_밖과_다른_레포에_같은_이름으로_있다():

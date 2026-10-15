@@ -42,7 +42,7 @@ from src.application.intake_map import IntakeSpec, cited_keys, hop_line, next_ho
 from src.application.state import CaseState, merge_by_id
 from src.application.walk import run_walk
 from src.domain.actions import ACTIONS, DISCOVERED_ARGS, action_problem, describe, name_known
-from src.domain.case import Case, CauseLink, EvidenceRef, Hypothesis, PlanTask, TargetPick, Verdict, Walk
+from src.domain.case import Case, CauseLink, EvidenceRef, FilterScan, Hypothesis, PlanTask, TargetPick, Verdict, Walk
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 
 # 이 자리에 리드 LLM(`lead.make_lead`)이나 테스트의 대본이 들어온다.
@@ -93,6 +93,8 @@ class EngineDeps:
     # R3-4 ① — 서비스 → 레포(`DeployedCode.service_repos`). 걷기가 같은 클래스 이름을 **레포 단위**로 가르고, 한 레포를 여러 서비스가 공유하면
     # 표에 그렇게 적는다(측정 #10 P0 2). 비어 있으면 서비스가 곧 레포다(전과 같다).
     service_repos: dict = field(default_factory=dict)
+    # R3-4 ③ — 어댑터의 단일값 조회(`DeployedCodePort.filter_lines`). None이면(인덱스 없음·대본) 걷기가 단일값을 표시만 한다.
+    filter_lines: Callable[..., Awaitable[FilterScan]] | None = None
     # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
     declared_by: dict = field(default_factory=dict)
     clock: Callable[[], datetime] | None = None
@@ -475,7 +477,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             return {}
         try:
             return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
-                                  service_repos=deps.service_repos, declared_by=deps.declared_by, clock=deps.clock)
+                                  service_repos=deps.service_repos, declared_by=deps.declared_by, lookup=deps.filter_lines, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 

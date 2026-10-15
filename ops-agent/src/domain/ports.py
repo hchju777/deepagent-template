@@ -25,6 +25,7 @@ envelope.py의 첫 절을 보라. 요약하면: 순찰 잡 하나가 raise하면
 """
 from abc import ABC, abstractmethod
 
+from src.domain.case import FilterScan
 from src.domain.envelope import ProbeResult
 
 
@@ -252,6 +253,11 @@ class DeployedCodePort(ABC):
         """이 클래스(함수)가 읽고 쓰는 자원(R3-1c ①-a) — 쓴 쪽의 입력. 인덱스가 없거나 이름이 없거나 여럿이면 실패로 답한다. `service`는 같은
         이름이 두 레포에 있을 때 그 서비스의 레포로 좁힌다(R3-3 ②-b); `repo`는 레포를 바로 댄다 — 한 레포를 여러 서비스가 공유해 걷기가 레포
         단위로 가를 때(R3-4 ①)."""
+
+    @abstractmethod
+    async def filter_lines(self, name: str, *, field: str, value: str, service: str = "", repo: str = "") -> FilterScan:
+        """걷기의 단일값 검사(R3-4 ③) — 이 클래스의 파일과 이은 컴포넌트 파일에서 필드와 값이 한 비교식 양쪽인 줄. 등재 항목이 아니다(리드가 못 낸다) —
+        걷기 노드만 부르고, 읽기 상한·증거 밖이다. 던지지 않는다(`problem`)."""
 
     @abstractmethod
     async def read(self, service: str, path: str, *, offset: int | None = None,

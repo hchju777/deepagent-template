@@ -28,10 +28,12 @@
 정상적으로 일어나는 일이고, 여기서 던지면 조사 그래프가 통째로 죽는다(규율 1).
 """
 import json
+import re
 from dataclasses import replace
 from typing import Any, Callable
 
 from src.domain.base import Clock
+from src.domain.case import FilterHit, FilterScan
 from src.domain.envelope import ProbeResult
 from src.domain.jsonpath import select
 from src.domain.ports import CodeReaderPort, DeployedCodePort
@@ -60,6 +62,33 @@ FLOW_MAX_LINES = 50_000
 FLOW_MAX_CHARS = 5_000_000
 # 한 번의 `git grep`에 넘기는 패턴 수. 명령줄 길이(Windows 32K)와 출력 한 덩어리 크기의 균형.
 FLOW_CHUNK = 20
+
+
+# ── R3-4 ③ — 단일값 검사의 범위와 짝(사람 결정 10-14) ──
+# 컴포넌트 등록 줄 — 데코레이터든 호출이든 `register(component="X")`. 값은 리터럴만(사내: 전부 리터럴).
+_REGISTER = r"""register\(\s*(?:[^()]*?,\s*)?component\s*=\s*(["']){name}\1"""
+_GET_LITERAL = re.compile(r"""\.get\(\s*(["'])([^"'\n]+)\1\s*[,)]""")
+_GET_VARIABLE = re.compile(r"""\.get\(\s*([A-Za-z_][\w.]*)\s*[,)]""")
+_CODE_SUFFIX = ".py"
+
+
+def component_names(text: str) -> tuple[list[str], list[str]]:
+    """클래스 파일의 `get("X")` 리터럴들과 `get(<변수>)`의 변수 이름들(차례, 중복 없이). 리터럴만 잇는다 — 사내 `get("…")`은 리터럴 590 / 변수 6이고
+    `register(component="…")`는 전부 리터럴이라 새 데이터 링크 없이 그 둘로 잇고, 변수면 "못 이음 — 변수"다."""
+    literals = list(dict.fromkeys(m.group(2) for m in _GET_LITERAL.finditer(text)))
+    variables = list(dict.fromkeys(m.group(1) for m in _GET_VARIABLE.finditer(text)))
+    return literals, variables
+
+
+def comparison_lines(text: str, field: str, value: str) -> list[tuple[int, str]]:
+    """필드와 값이 **한 비교식의 양쪽**에 리터럴로 든 코드 줄 `(줄, 본문)` — `x["f"] != "v"`·`r.get("f") == "v"`·`getattr(r, "f") == "v"`, 뒤집힌 순서도.
+    사전 리터럴(`{"f": "v"}`)·주석·변수(`r[f]`, `!= v`)는 안 센다(측정 #10: 다른 처리기의 dict 줄과 사이트 상수 줄이 가짜로 잡혔다)."""
+    f, v = re.escape(field), re.escape(value)
+    access = rf"""(?:\[\s*["']{f}["']\s*\]|\.get\(\s*["']{f}["'][^()]*\)|getattr\([^(),]+,\s*["']{f}["'][^()]*\))"""
+    lit = rf"""["']{v}["']"""
+    # 뒤집힌 순서는 연산자와 접근 사이에 수신자(`rows[0]`·`self.row`)가 온다 — 공백·따옴표·연산자가 없는 한 토막까지 허용한다.
+    pair = re.compile(rf"""(?:{access}\s*(?:==|!=)\s*{lit}|{lit}\s*(?:==|!=)\s*[^\s=!"']*{access})""")
+    return [(i, line.strip()) for i, line in enumerate(text.splitlines(), 1) if not line.lstrip().startswith("#") and pair.search(line)]
 
 
 def _evidence(layers: list[tuple[str, str, dict]], value: str) -> tuple[str, int, str] | None:
@@ -196,6 +225,58 @@ class DeployedCode(DeployedCodePort):
             return ProbeResult.failed("\n".join(lines), source=source, clock=self._clock)
         return ProbeResult.succeeded("\n".join(qy.resources_lines(self._index, found[0], where=self._where)),
                                      source=source, clock=self._clock)
+
+    async def filter_lines(self, name: str, *, field: str, value: str, service: str = "", repo: str = "") -> FilterScan:
+        """걷기의 단일값 검사(R3-4 ③) — **범위**는 그 입력을 읽는 클래스의 파일 + 거기서 `get("X")` 리터럴로 부르는 컴포넌트의 등록 파일
+        (`register(component="X")`, `.py`만 — config 제외), **짝**은 필드와 값이 한 비교식의 양쪽. 레포 전체 grep(400줄 상한 + 첫 리터럴)은 사이트
+        상수 config 줄과 다른 처리기의 dict 줄을 가짜로 잡고 진짜 `["<필드>"] != "-"` 줄은 놓쳤다(측정 #10 P0 1). runner를 안 거친다 — 읽기 상한·증거
+        밖(P0 4). 던지지 않는다 — 조회가 안 되면 `problem`."""
+        from src.knowledge import query as qy
+
+        if self._index is None:
+            return FilterScan(problem="심볼 인덱스가 없다")
+        text = name
+        if service:
+            known = self._topology.services.get(service)
+            if known is None:
+                return FilterScan(problem=f"없는 서비스 — {service}")
+            text = f"{known.repo}:{name}"
+        elif repo:
+            if repo not in flowgraph.repo_services(self._topology):
+                return FilterScan(problem=f"없는 레포 — {repo}")
+            text = f"{repo}:{name}"
+        found = [sid for sid in qy.find(self._index, text) if self._index.symbols[sid].kind == "class"]
+        if not found:
+            return FilterScan(problem=f"{name}: 인덱스에 없다")
+        if len(found) > 1:
+            return FilterScan(problem=f"{name}: 여럿이다({len(found)}) — 레포 {', '.join(sorted({self._index.symbols[sid].repo for sid in found}))}")
+        sym = self._index.symbols[found[0]]
+        try:
+            snap = await self.snapshot_for(sym.repo)
+        except Exception as exc:                                    # noqa: BLE001
+            return FilterScan(problem=f"{sym.repo}의 스냅샷을 못 받았다 — {type(exc).__name__}: {exc}")
+        if snap is None:
+            return FilterScan(problem=f"{sym.repo}의 스냅샷을 못 받았다")
+        if sym.file not in snap:
+            return FilterScan(problem=f"{sym.repo}의 스냅샷에 {sym.file}이 없다")
+        files = [sym.file]
+        literals, variables = component_names(snap[sym.file])
+        linked: list[str] = []
+        linked_at: list[FilterHit] = []
+        for comp in literals:
+            reg = re.compile(_REGISTER.format(name=re.escape(comp)))
+            for path in sorted(snap):
+                if not path.endswith(_CODE_SUFFIX) or path == sym.file:
+                    continue
+                for i, line in enumerate(snap[path].splitlines(), 1):
+                    if reg.search(line):
+                        if path not in files:
+                            files.append(path)
+                        if comp not in linked:
+                            linked.append(comp)
+                        linked_at.append(FilterHit(path=path, line=i, text=line.strip(), repo=sym.repo))
+        hits = [FilterHit(path=path, line=i, text=t, repo=sym.repo) for path in files for i, t in comparison_lines(snap[path], field, value)]
+        return FilterScan(hits=hits, files=files, linked=linked, linked_at=linked_at, unlinked=[] if linked else variables)
 
     async def uses(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy

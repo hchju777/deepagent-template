@@ -2545,7 +2545,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if empties:\n            return f\"빈 배열 ({', '.join(empties)})\", True", "        if False:\n            return f\"빈 배열 ({', '.join(empties)})\", True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by, lookup=deps.filter_lines, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -2568,24 +2568,24 @@ CASES += [
  ("못 가르면 한 쪽만 걷는다", WK, "        return [_Branch(where(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)", "        return [_Branch(where(r, s), shown_as(r, s), s) for r, s in found[:1]], shown, tuple(x for _, s in found for x in s)", [TIE_T]),
  ("한 곳뿐인데도 service 인자를 단다", WK, "            return [_Branch({}, \"\", svcs)], who(writer), svcs", "            return [_Branch({\"service\": svcs[0]} if len(svcs) == 1 else {}, \"\", svcs)], who(writer), svcs", [TIE_T]),
  ("깊은 홉을 대상 키의 선언으로 가른다", WK, "                next_branches, shown, cands = (branches(w, name) if (bad and w)", "                next_branches, shown, cands = (branches(w, target.declared) if (bad and w)", [TIE_T]),
- ("service로 레포를 안 좁힌다", DCP, "            text = f\"{known.repo}:{name}\"\n        elif repo:", "            text = name\n        elif repo:", [RES_SVC_T]),
+ ("service로 레포를 안 좁힌다", DCP, "            text = f\"{known.repo}:{name}\"\n        elif repo:\n            # 한 레포를", "            text = name\n        elif repo:\n            # 한 레포를", [RES_SVC_T]),
  ("두 서비스 안내를 안 한다", DCP, "            lines += self._repo_hint(found)", "            pass", [RES_SVC_T]),
  ("등재 목록에 service 인자가 없다", ROOT / "src/domain/actions.py", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"service\", \"repo\")),", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"repo\",)),", [RES_SVC_T]),
  ("declares가 아닌 엣지도 선언으로 센다", ROOT / "src/knowledge/flow.py", "                         if e.get(\"relation\") == \"declares\" and e.get(\"target\") in targets", "                         if e.get(\"target\") in targets", [DECL_T]),
- ("걷기 노드가 선언 서비스를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by, clock=deps.clock)", "service_repos=deps.service_repos, clock=deps.clock)", [WNODE_T]),
+ ("걷기 노드가 선언 서비스를 안 넘긴다", ND, "declared_by=deps.declared_by, lookup=deps.filter_lines, clock=deps.clock)", "lookup=deps.filter_lines, clock=deps.clock)", [WNODE_T]),
  ("CLI가 없는 서비스를 안 거른다", MN, "            return 1\n        text = f\"{known.repo}:{args.name}\"", "            pass\n        text = f\"{known.repo}:{args.name}\"", ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
 ]
 
 # ── 12a-R3-3 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다 ──
-LIT_T = "tests/application/test_walk.py::test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_리터럴로_같이_있을_때만_나쁘고_그_값이_이어지는_동안_위로_간다"
+LIT_T = "tests/application/test_walk.py::test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_한_비교식_양쪽에_있을_때만_나쁘고_그_값이_이어지는_동안_위로_간다"
+FILTER_T = "tests/infrastructure/test_deployed_code.py::test_filter_lines는_클래스_파일과_이은_컴포넌트_파일에서_필드와_값이_한_비교식_양쪽인_줄만_찾는다"
 LIT_NEXT_T = "tests/application/test_walk.py::test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_그_코드_줄_둘레다"
-LIT_LINE_T = "tests/application/test_walk.py::test_리터럴_줄은_필드와_값이_둘_다_따옴표로_같은_줄에_있을_때다"
 CASES += [
- ("값이 리터럴이 아니어도 센다", WK, "        if any(q + field + q in body for q in (\"'\", '\"')) and any(q + value + q in body for q in (\"'\", '\"')):", "        if any(q + field + q in body for q in (\"'\", '\"')):", [LIT_T, LIT_LINE_T]),
- ("필드가 리터럴이 아니어도 센다", WK, "        if any(q + field + q in body for q in (\"'\", '\"')) and any(q + value + q in body for q in (\"'\", '\"')):", "        if field in body and any(q + value + q in body for q in (\"'\", '\"')):", [LIT_T, LIT_LINE_T]),
+ ("값이 리터럴이 아니어도 센다", DCP, '    lit = rf"""["\']{v}["\']"""', '    lit = rf"""["\']?{v}["\']?"""', [FILTER_T]),
+ ("필드가 리터럴이 아니어도 센다", DCP, '    access = rf"""(?:\\[\\s*["\']{f}["\']\\s*\\]|\\.get\\(\\s*["\']{f}["\'][^()]*\\)|getattr\\([^(),]+,\\s*["\']{f}["\'][^()]*\\))"""', '    access = rf"""(?:\\[\\s*["\']?{f}["\']?\\s*\\]|\\.get\\(\\s*["\']{f}["\'][^()]*\\)|getattr\\([^(),]+,\\s*["\']{f}["\'][^()]*\\))"""', [FILTER_T]),
  ("같은 단일값이 이어져도 위로 안 간다", WK, "                if not bad and watch is not None and same.get(watch[0]) == watch[1]:", "                if False:", [LIT_T]),
- ("단일값 검사에 읽는 쪽 서비스를 안 준다", WK, "                                               {\"patterns\": [field], **({\"service\": scope} if scope else {})})", "                                               {\"patterns\": [field]})", [LIT_T]),
- ("단일값 검사를 안 한다", WK, "                elif not bad and same and status.startswith(\"정상\"):", "                elif False:", [LIT_T]),
+ ("단일값 조회에 가지의 인자를 안 넘긴다", WK, "                        scan = await lookup(writer, field=field, value=value, **branch.params)", "                        scan = await lookup(writer, field=field, value=value)", [LIT_T, WNODE_T]),
+ ("단일값 검사를 안 한다", WK, "                elif not bad and same and status.startswith(\"정상\") and lookup is not None:", "                elif False:", [LIT_T]),
  ("리터럴 줄을 다음 홉으로 안 가리킨다", WK, "    if literal is not None:\n        # 아래에", "    if False:\n        # 아래에", [LIT_NEXT_T]),
  ("다음 홉 줄이 name 인자를 가정한다", IM, "        return f\"다음 홉: {describe(*hop)} — 걷기가 멈춘 자리({walk.stopped})\"", "        return f\"다음 홉: {hop[0]} name={hop[1]['name']!r} — 걷기가 멈춘 자리({walk.stopped})\"", [LIT_NEXT_T]),
  ("잡은 단일값을 위로 안 넘긴다", WK, "                frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                frontier += [(w, b, depth + 1, ev, None) for b in next_branches]", [LIT_T]),
@@ -2677,7 +2677,31 @@ CASES += [
  ("칸이 없는데 입구 홉으로 돌아간다", ND, "    if walk is not None and walk.hops and deps.code_index and walk.rungs:", "    if walk is not None and walk.hops and deps.code_index and walk.rungs and False:", [WHOP_T]),
 ]
 
-assert len(CASES) >= 768, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-4 ③ — 단일값 검사는 어댑터 안의 조회(범위·짝) ──
+LINK_T = "tests/application/test_walk.py::test_단일값_조회가_이은_컴포넌트의_등록_줄은_입력_정상의_뒤_칸이_되고_못_이음과_검사_못_함은_표에_적는다"
+LC_SRC_T = "tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"
+CASES += [
+ ("주석 줄을 센다", DCP, "if not line.lstrip().startswith(\"#\") and pair.search(line)]", "if pair.search(line)]", [FILTER_T]),
+ ("뒤집힌 비교식을 안 센다", DCP, '    pair = re.compile(rf"""(?:{access}\\s*(?:==|!=)\\s*{lit}|{lit}\\s*(?:==|!=)\\s*[^\\s=!"\']*{access})""")', '    pair = re.compile(rf"""(?:{access}\\s*(?:==|!=)\\s*{lit})""")', [FILTER_T]),
+ ("컴포넌트를 안 잇는다", DCP, "        for comp in literals:", "        for comp in []:", [FILTER_T]),
+ ("등록 파일을 범위에 안 넣는다", DCP, "                        if path not in files:\n                            files.append(path)", "                        if False:\n                            files.append(path)", [FILTER_T]),
+ ("변수 get을 못 이음으로 안 적는다", DCP, "unlinked=[] if linked else variables)", "unlinked=[])", [FILTER_T]),
+ ("클래스 파일을 안 본다", DCP, "        files = [sym.file]", "        files = []", [FILTER_T]),
+ ("스냅샷 없음을 문제로 안 적는다", DCP, "        if snap is None:\n            return FilterScan(problem=f\"{sym.repo}의 스냅샷을 못 받았다\")", "        if snap is None:\n            return FilterScan()", [FILTER_T]),
+ ("첫 거르는 줄에서 안 멈춘다", WK, "                                literal = (scope, hit.path, hit.line, ev)\n                            break", "                                literal = (scope, hit.path, hit.line, ev)\n                            continue", [LIT_T]),
+ ("통과한 필드를 안 적는다", WK, "                    if passed and not bad:", "                    if False:", [LIT_T, LINK_T]),
+ ("이은 컴포넌트를 뒤 칸으로 안 낸다", WK, "                          for found_at in linked_at.get(ev, [])[:2]]", "                          for found_at in []]", [LINK_T]),
+ ("조회 문제를 검사 못 함으로 안 적는다", WK, "                        if scan.problem:", "                        if False:", [LINK_T]),
+ ("등록 줄을 안 모은다", WK, "                        for found_at in scan.linked_at:", "                        for found_at in []:", [LINK_T]),
+ ("리터럴 칸의 입력 증거가 그 홉의 읽기가 아니다", WK, "                                literal = (scope, hit.path, hit.line, ev)", "                                literal = (scope, hit.path, hit.line, \"\")", [LIT_T]),
+ ("이은 컴포넌트 파일의 줄을 그렇게 안 적는다", WK, "where = \" (이은 컴포넌트 파일)\" if hit.path in scan.files[1:] else \"\"", "where = \"\"", [LIT_T]),
+ ("걷기 노드가 조회를 안 넘긴다", ND, "lookup=deps.filter_lines, ", "", [WNODE_T]),
+ ("측정판의 거르는 줄이 컴포넌트에 없다", LC, "        return [r for r in rows if r.get(\"state\") != \"-\"]", "        return [r for r in rows]", [LC_SRC_T]),
+ ("측정판 batch가 컴포넌트를 안 찾는다", LC, "            rows = self.components.get(\"state_filter\").apply(json.loads(source or \"[]\"))", "            rows = json.loads(source or \"[]\")", [LC_SRC_T]),
+]
+
+assert len(CASES) >= 785, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

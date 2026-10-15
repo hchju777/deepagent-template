@@ -809,7 +809,13 @@ async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_
     rest = {"response": [{"group": "L1", "title": "Alarm"}]}
     value = {"type": "string", "value": json.dumps({"info": {"group": "L1", "title": "Alarm"}, "data": [], "event_type": "Writer"})}
     res_text = "Writer (w.py:L1) [dt-core · sink]\n  읽기 1:\n    src:L1 [rediskey] — Writer._run (w.py:L3)"
-    src = {"type": "string", "value": json.dumps([{"a": 1}, {"a": 2}])}
+    src = {"type": "string", "value": json.dumps([{"a": "x"}, {"a": "x"}])}                   # 단일값 — 조회가 가지의 repo=로 간다(R3-4 ③)
+    from src.domain.case import FilterScan
+    looked = []
+
+    async def lookup(name, *, field, value, **params):
+        looked.append((name, field, value, params))
+        return FilterScan(files=["w.py"])
     runner = ScriptedRunner({"t-0": ok("t-0", rest, "rest.query entry='summary_badge'"), "t-0-1": ok("t-0-1", value, "redis.get key='alarm:stats:L1'"),
                              "t-1": ok("t-1", value, "redis.get key='alarm:stats:L1'"), "t-2": ok("t-2", res_text, "code.resources name='Writer'"),
                              "t-3": ok("t-3", src, "redis.get key='src:L1'")},
@@ -824,7 +830,7 @@ async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_
     patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
     deps = dataclasses.replace(deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}),
                                         code_index=True, class_services={"Writer": ("api", "sink", "batch")}, declared_by={"alarm:stats:L1": ("sink",)},
-                                        service_repos={"api": "dt-api", "sink": "dt-core", "batch": "dt-core"},
+                                        service_repos={"api": "dt-api", "sink": "dt-core", "batch": "dt-core"}, filter_lines=lookup,
                                         clock=lambda: T0), frame=frame)
     final = CaseState.model_validate(await build_engine(deps).ainvoke(CaseState(case=patrol)))
     assert seen[0] is not None and [h.key for h in seen[0].hops] == ["alarm:stats:L1", "src:L1"]          # frame이 볼 때 이미 걸었다
@@ -835,6 +841,7 @@ async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_
     assert [t.id for t in final.plan_tasks] == ["t-0", "t-1", "t-2", "t-3"] and runner.ran == ["t-0", "t-0-1", "t-1", "t-2", "t-3"]
     assert [t.walked for t in final.plan_tasks] == [False, False, True, True]                      # 걷기 읽기는 플래그로 — id 모양이 아니라
     assert final.walk.hops[0].status == "빈 배열 (data)"
+    assert looked == [("Writer", "a", "x", {"repo": "dt-core"})] and final.walk.hops[1].status.endswith("단일값 a='x' — 거르는 줄 없음(1파일)")
     runner.ran.clear()
     blind = dataclasses.replace(deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}),
                                          clock=lambda: T0), frame=frame)

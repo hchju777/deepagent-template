@@ -951,6 +951,26 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   태스크 블록 `- 걷기 읽기 4건 (t-2…t-5)`, 접힌 증거 3(사슬 밖의 자원·팔레트·grep), r1 14.0K.
 - 테스트 먼저(RED → GREEN). 스윕 +20(768).
 
+#### R3-4 ③ (10-14) ✅ — 단일값 나쁨 좁히기: 어댑터 안의 조회(범위·짝)
+
+- 측정 #10 P0 1: 단일값 검사가 레포 전체 `code.grep`(400줄 상한, 첫 리터럴에서 멈춤)이라 사이트 상수 config 줄과 다른 처리기의 dict 줄을 가짜로
+  잡고 진짜 `["<필드>"] != "-"` 줄은 놓쳤다. grep 5번이 읽기 상한 15를 먹고 증거로 실려 r1이 14~19K였다(P0 4).
+- 사람 결정: **범위** = 그 입력을 읽는 클래스의 파일 + 거기서 `get("X")` 리터럴로 부르는 컴포넌트의 등록 파일(`register(component="X")`, `.py`만 —
+  config 제외), **짝** = 필드와 값이 한 비교식의 양쪽(`x["f"] != "v"`·`r.get("f") == "v"`·뒤집힌 순서; 사전 리터럴·주석·변수는 아님). X가 변수면
+  "못 이음 — 변수"(새 데이터 링크는 만들지 않는다). 통과한 필드는 전부 적는다.
+- `DeployedCodePort.filter_lines(name, field=, value=, service=|repo=) → FilterScan`(등재 항목이 아니다 — 리드가 못 내고 걷기 노드만 부른다;
+  `nodes.EngineDeps.filter_lines`, `__main__`이 어댑터의 메서드를 꽂는다). 어댑터는 인덱스로 클래스 파일을 고르고(가지의 `service=`/`repo=`로 같은
+  이름 둘 중 그 레포), 배포 커밋 **스냅샷**(이미 받아 둔 것)에서 등록 줄과 비교식 줄을 찾는다 — runner를 안 거치므로 읽기 상한·증거 밖. 던지지 않는다
+  (`problem` — 인덱스·클래스·스냅샷). 순수 조각 `comparison_lines`·`component_names`.
+- 걷기: 첫 거르는 줄에서 나쁨(`… 코드가 거른다: <경로>:L<줄> \`<본문>\` (이은 컴포넌트 파일)`), 리터럴 칸의 입력 증거는 그 입력 키의 읽기. 통과하면
+  `· 단일값 f='v' — 거르는 줄 없음(N파일, 이은 컴포넌트 X)` / `(1파일 — 못 이음: 변수 name)` / `— 검사 못 함(<문제>)`. 이은 컴포넌트의 등록 줄은 ②의
+  사다리에서 `_run` 전체 다음 칸들(`code.read line=` — 등록 줄을 품은 심볼 전체). 조회가 없으면(인덱스 없음·대본) 표시만.
+- 측정판: `batch/refresh.py`의 `_run`은 조립뿐(`self.components.get("state_filter")`), 거르는 줄은 `batch/components.py`의 `@register(component=
+  "state_filter")` 클래스에; 미끼 둘(사이트 config `badge.state: "-"`, processor의 `EMPTY = {"state": "-", …}`). 보드 source-filtered r0: 입력 행
+  `나쁨 — 모든 행이 state='-', 코드가 거른다: batch/components.py:L7 \`return [r for r in rows if r.get("state") != "-"]\` (이은 컴포넌트 파일)`, 미끼는
+  안 잡혔고 걷기 읽기 3건(grep 없음), 첫 칸 `code.read line=7 path='batch/components.py'` → r1 증거가 `apply` 함수 전체, r1 13.1K(②의 14.0K).
+- 테스트 먼저(RED → GREEN). 스윕 +17(785).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

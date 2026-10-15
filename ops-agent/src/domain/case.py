@@ -166,6 +166,25 @@ class Hop(StrictModel):
         return f"  {self.key} | {who} | {self.status} | {self.evidence_id or '—'}"
 
 
+class FilterHit(StrictModel):
+    """단일값을 거르는 코드 줄 하나(R3-4 ③) — 필드와 값이 한 비교식의 양쪽에 리터럴로(`x["f"] != "v"`). 컴포넌트 등록 줄(`register(component="X")`)에도 쓴다."""
+    path: str
+    line: int
+    text: str
+    repo: str = ""
+
+
+class FilterScan(StrictModel):
+    """걷기의 단일값 검사 — 어댑터 안에서 한 조회의 결과(R3-4 ③, 사람 결정 10-14). 범위 = 그 입력을 읽는 클래스의 파일 + `get("X")`(리터럴)↔
+    `register(component="X")`로 이은 컴포넌트 파일(config 제외). runner를 안 거치므로 읽기 상한·증거 밖이다 — 표에 적히는 것은 줄의 자리와 본문."""
+    hits: list[FilterHit] = []
+    files: list[str] = []                    # 본 파일들 — 클래스 파일 먼저
+    linked: list[str] = []                   # 이은 컴포넌트 이름(리터럴)
+    linked_at: list[FilterHit] = []          # 컴포넌트 등록 줄 — 뒤 칸(등록된 클래스·함수 본문)의 자리
+    unlinked: list[str] = []                 # `get(<변수>)`의 변수 이름 — 못 이음(새 데이터 링크는 만들지 않는다)
+    problem: str = ""                        # 조회 자체가 안 됐을 때(인덱스·클래스·스냅샷) — "없음"과 다르다
+
+
 class Rung(StrictModel):
     """걷기가 멈춘 자리의 다음 칸 하나(R3-4 ②) — 리드가 낼 질의와 그 입력 증거. 사다리가 한 라운드에 한 칸씩 밟는다(`briefing._ladder_step`)."""
     action: str

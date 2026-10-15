@@ -1042,6 +1042,7 @@ def cmd_case_investigate(args, env) -> int:
                               classes=code.class_names() if code else frozenset(),
                               class_services=code.class_services() if code else {},
                               service_repos=code.service_repos() if code else {},
+                              filter_lines=code.filter_lines if code else None,
                               declared_by=flow.declaring_map(flow_graph), clock=clock)
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:

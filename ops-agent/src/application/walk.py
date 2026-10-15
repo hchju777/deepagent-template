@@ -3,7 +3,8 @@
 측정 #9: 쓴 쪽 링크·pinned·예시 한 칸이 작동해도 c-1은 원천 키까지 세 홉이 걸렸고, c-2는 첫 나쁜 값을 읽고도 못 봤다 — 리드가 한 홉씩 걷는
 구조의 한계다. 입구 노드의 고리(키 값의 잎 = 클래스 → `code.resources` → 자원 키 읽기)를 **코드가 키마다 반복**하고, 리드는 표를 받는다.
 
-규칙(사람 결정 10-14): 나쁨은 없음·빈 배열·0행뿐 — 손 규칙 없음(단일값 필드는 ③에서 쓴 쪽 레포의 코드 줄이 정한다). 값이 그 클래스를 대는 키는
+규칙(사람 결정 10-14): 나쁨은 없음·빈 배열·0행뿐 — 손 규칙 없음(단일값 필드는 읽는 쪽 코드 줄이 정한다 — R3-4 ③: 어댑터 안의 조회, 범위는
+그 클래스의 파일 + `get("X")`↔`register(component="X")`로 이은 컴포넌트 파일, 짝은 한 비교식의 양쪽; runner를 안 거쳐 읽기 상한·증거 밖). 값이 그 클래스를 대는 키는
 그 클래스의 **출력**이라 입력에서 뺀다(측정 #9 P0 3: `code.resources`가 발행 명령의 대상 자원 줄을 읽기로 세어 자기 출력이 입력에 섞였다).
 나쁜 입력의 쓴 쪽을 알면 한 홉 더, 모르면 거기서 멈춘다(다음 홉은 그 키의 `code.uses`). 입력이 다 정상이면 멈춘다(그 자리의 다음 홉은 ④).
 같은 클래스 이름이 두 레포에 있으면 **레포 단위**로 가른다(R3-4 ①, 측정 #10 P0 2) — 한 레포를 여러 서비스가 `path` 없이 공유하면 표에
@@ -16,13 +17,13 @@ pinned 본문은 그 홉까지의 사슬만(P0 4). 읽기의 id는 리드와 같
 """
 import re
 from datetime import datetime
-from typing import Any, Callable, NamedTuple
+from typing import Any, Awaitable, Callable, NamedTuple
 
 from src.application.facts import key_head
 from src.application.intake_map import _finish, _task, _unwrap, writer_of
 from src.application.runner_probe import _same_valued, profile
 from src.application.state import CaseState
-from src.domain.case import EvidenceRef, Hop, PlanTask, Rung, Walk
+from src.domain.case import EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
 from src.domain.investigation import TaskRunnerPort
 
 MAX_DEPTH = 4
@@ -30,12 +31,10 @@ MAX_READS = 15
 MAX_SECONDS = 30.0
 # 못 채우는 템플릿(대상 키에 없는 자리) — scan 뒤 읽는 실재 키 수.
 SCAN_READS = 5
-# 단일값 필드의 나쁨은 **코드 줄**이 정한다(R3-3 ③, 사람 결정 10-14 — 자리표시자 목록 같은 손 규칙은 두지 않는다): 입력을 읽는 쪽(걷고 있는 클래스)의
-# 레포에서 필드 이름과 그 값이 한 줄에 **리터럴로** 같이 있으면(실측 `["<필드>"] != "-"`) 코드가 그 값을 거르는 것이고, 모든 행이 그 값이면 아무것도
-# 안 남는다. 한 홉에 검사할 단일값 필드 수 상한 — grep 한 번이 읽기 한 번이다.
-LITERAL_FIELDS = 3
-# 머리는 커밋(SHA 또는 `main` 같은 ref)이고 없을 수도 있다 — 경로 뒤 `:줄:`이 기준이다.
-_GREP_LINE = re.compile(r"^(?:[^:\s]+:)?([^:\n]+):(\d+):(.*)$")
+# 단일값 필드의 나쁨은 **코드 줄**이 정한다(R3-3 ③ → R3-4 ③, 사람 결정 10-14 — 자리표시자 목록 같은 손 규칙은 두지 않는다): 입력을 읽는 쪽(걷고 있는
+# 클래스)의 파일과 이은 컴포넌트 파일에서 필드 이름과 그 값이 한 비교식의 양쪽에 리터럴로 있으면(실측 `["<필드>"] != "-"`) 코드가 그 값을 거르는
+# 것이고, 모든 행이 그 값이면 아무것도 안 남는다. 한 홉에 검사할 단일값 필드 수 상한 — 조회는 읽기가 아니지만 표 한 줄이 길어진다.
+LITERAL_FIELDS = 6
 
 
 def rows_of(raw: Any) -> list[dict]:
@@ -49,19 +48,6 @@ def rows_of(raw: Any) -> list[dict]:
                 return v
     return []
 
-
-def literal_lines(text: str, field: str, value: str) -> list[tuple[str, int, str]]:
-    """`code.grep` 결과(`<커밋>:경로:줄:본문`)에서 필드 이름과 값이 **둘 다 따옴표 리터럴**로 든 줄 — `(경로, 줄, 본문)`. 변수 이름으로 쓰인 필드
-    (`if wg != "-"`)는 안 센다 — 데이터 필드 이름이 코드에 문자열로 있어야 같은 것이다."""
-    out = []
-    for line in text.splitlines():
-        m = _GREP_LINE.match(line)
-        if not m:
-            continue
-        body = m.group(3)
-        if any(q + field + q in body for q in ("'", '"')) and any(q + value + q in body for q in ("'", '"')):
-            out.append((m.group(1), int(m.group(2)), body.strip()))
-    return out
 
 # `code.resources` 본문의 자원 줄 — `    <이름> [<종류>] — <메서드> (<파일>:L<줄>)`. 읽기 구간이 앞, 쓰기 구간이 뒤(`query.resources_lines`).
 # 실행기가 repr로 눕힌 텍스트(개행이 `\n` 두 글자)도 받는다 — 브리핑이 증거 본문에서 같은 것을 뽑는다.
@@ -151,8 +137,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    class_services: dict[str, tuple[str, ...]] | None = None,
                    service_repos: dict[str, str] | None = None,
                    declared_by: dict[str, tuple[str, ...]] | None = None,
+                   lookup: Callable[..., Awaitable[FilterScan]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
-    """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치."""
+    """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
+    (`DeployedCodePort.filter_lines` — `lookup(클래스, field=, value=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
@@ -240,6 +228,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     declared_names: dict[str, str] = {}                                                     # 홉의 증거 → 그 키의 선언 이름(`code.uses`는 선언 이름으로 묻는다)
     failed_at: dict[str, tuple[str, str, dict]] = {}                                        # 자원을 못 읽은 가지 — 그 홉의 증거 → (쓴 쪽[꼬리표], 사유, 질의 인자)
     walked_at: dict[str, _Walked] = {}                                                      # 걸은 가지 — 그 홉의 증거 → 기록
+    linked_at: dict[str, list[FilterHit]] = {}                                              # 걸은 가지 — 그 홉의 증거 → 이은 컴포넌트의 등록 줄들(③)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     stopped, nxt, nxt_ev, last = "", None, "", target.writer
     while frontier and not stopped:
@@ -307,23 +296,33 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 same = {k: v for k, v in _same_valued(rows_of(raw) if raw is not None else []) if isinstance(v, str)}
                 if not bad and watch is not None and same.get(watch[0]) == watch[1]:
                     status, bad, carry = f"나쁨 — 같은 단일값 {watch[0]}={watch[1]!r} (아래 홉과 같다)", True, watch
-                elif not bad and same and status.startswith("정상"):
+                elif not bad and same and status.startswith("정상") and lookup is not None:
+                    # 어댑터 안의 조회(R3-4 ③) — 가지의 인자(service·repo)를 그대로 넘겨 같은 이름 둘 중 그 레포의 파일을 본다. runner를 안 거치므로
+                    # 읽기 상한·증거 밖이다(P0 4: grep 5번이 r1을 14~19K로 키웠다). 첫 거르는 줄에서 멈추고, 통과한 필드는 전부 적는다(사람 결정).
+                    passed: list[str] = []
+                    scan = FilterScan()
                     for field, value in list(same.items())[:LITERAL_FIELDS]:
-                        if (why := over(writer, f"{label}의 단일값 {field}")):
-                            stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
-                            break
-                        _, grepped = await run(f"걷기 — {writer}{tag} 코드에서 {field}={value!r} 리터럴 줄", "code.grep",
-                                               {"patterns": [field], **({"service": scope} if scope else {})})
-                        gev = grepped.evidence[0].id if grepped.evidence else ""
-                        text = runner.raw(gev) if grepped.status == "ok" and gev else None
-                        found = literal_lines(text, field, value) if isinstance(text, str) else []
-                        if found:
-                            path, line, body = found[0]
-                            status, bad, carry = (f"나쁨 — 모든 행이 {field}={value!r}, 코드가 거른다: {path}:L{line} `{body}` ({gev})", True,
+                        scan = await lookup(writer, field=field, value=value, **branch.params)
+                        for found_at in scan.linked_at:
+                            if found_at not in linked_at.setdefault(came_from, []):
+                                linked_at[came_from].append(found_at)
+                        if scan.hits:
+                            hit = scan.hits[0]
+                            where = " (이은 컴포넌트 파일)" if hit.path in scan.files[1:] else ""
+                            status, bad, carry = (f"나쁨 — 모든 행이 {field}={value!r}, 코드가 거른다: {hit.path}:L{hit.line} `{hit.text}`{where}", True,
                                                   (field, value))
                             if literal is None:
-                                literal = (scope, path, line, gev)
+                                literal = (scope, hit.path, hit.line, ev)
                             break
+                        passed.append(f"{field}={value!r}")
+                    if passed and not bad:
+                        # "검사 안 함"·"검사했는데 없음"·"검사 못 함"이 표에서 갈려야 한다 — 본 범위(파일 수·이은 컴포넌트·못 이음)까지.
+                        if scan.problem:
+                            status += f" · 단일값 {', '.join(passed)} — 검사 못 함({scan.problem})"
+                        else:
+                            where = f"{len(scan.files)}파일" + (f", 이은 컴포넌트 {', '.join(scan.linked)}" if scan.linked
+                                                             else f" — 못 이음: 변수 {', '.join(scan.unlinked[:3])}" if scan.unlinked else "")
+                            status += f" · 단일값 {', '.join(passed)} — 거르는 줄 없음({where})"
                 # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다.
                 next_branches, shown, cands = (branches(w, name) if (bad and w)
                                                else ([], who(w), tuple(x for _, s in homes(w) for x in s)))
@@ -355,6 +354,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                        else f"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)")
             if info.scope and info.at is not None:
                 rungs.append(Rung(action="code.read", params={"service": info.scope, "path": info.at[0], "line": info.at[1]}, evidence=info.res_id))
+                # 이은 컴포넌트의 등록 줄을 품은 심볼(등록된 클래스·함수) 전체가 그 뒤 칸 — 결정적인 줄은 컴포넌트에 있다(사람 결정 10-14).
+                rungs += [Rung(action="code.read", params={"service": info.scope, "path": found_at.path, "line": found_at.line}, evidence=info.res_id)
+                          for found_at in linked_at.get(ev, [])[:2]]
         else:
             stopped = f"입력이 다 정상 — {last}"
     elif nxt is not None:

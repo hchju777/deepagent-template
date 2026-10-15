@@ -9,6 +9,7 @@
 from typing import Any
 
 from src.domain.base import Clock
+from src.domain.case import FilterScan
 from src.domain.envelope import ProbeResult
 from src.domain.jsonpath import select
 from src.domain.ports import (DeployedCodePort, KafkaInspectorPort, MongoReaderPort, RedisReaderPort,
@@ -202,6 +203,9 @@ class StubDeployedCode(DeployedCodePort):
 
     async def resources(self, name: str, service: str = "", repo: str = "") -> ProbeResult:
         return self._seeded(self._resources, name, f"stub-code:resources {name}", "읽는 자원")
+
+    async def filter_lines(self, name: str, *, field: str, value: str, service: str = "", repo: str = "") -> FilterScan:
+        return FilterScan(problem="스텁에 준비된 조회가 없다")
 
     async def services(self) -> ProbeResult:
         return self._none("stub-code:services")

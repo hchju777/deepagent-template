@@ -863,3 +863,65 @@ async def test_code_read에_line을_주면_그_줄을_품은_가장_안쪽_함�
     bad = await flow_code.read("sink", "jobs/run2.py", line=0)
     assert bad.status == "error" and "1 이상" in bad.error
     assert action_problem("code.read", {"service": "sink", "path": "jobs/run2.py", "line": 6}) is None       # 등재 목록의 선택 인자
+
+
+# ── R3-4 ③ — 단일값 검사의 범위와 짝 ──
+
+async def test_filter_lines는_클래스_파일과_이은_컴포넌트_파일에서_필드와_값이_한_비교식_양쪽인_줄만_찾는다(clock):
+    """측정 #10 P0 1: 레포 전체 grep(400줄 상한, 첫 리터럴)은 사이트 상수 config 줄과 다른 처리기의 dict 줄을 가짜로 잡고 진짜 `["<필드>"] != "-"`
+    줄은 놓쳤다. 사람 결정: 범위 = 그 입력을 읽는 클래스의 파일 + `get("X")`(리터럴)↔`register(component="X")`로 이은 컴포넌트 파일만(config 제외),
+    짝 = 필드와 값이 한 비교식의 양쪽. X가 변수면 "못 이음 — 변수"(새 데이터 링크는 만들지 않는다). 던지지 않는다 — 조회가 안 되면 `problem`."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode, comparison_lines, component_names
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    FILES = {"pipe/__init__.py": "",
+             "pipe/job.py": 'class Job:\n    def _run(self, rows):\n        rows = self.components.get("state_filter").apply(rows)\n'
+                            '        if "-" == rows[0].get("state"):\n            return []\n        return rows\n',
+             "pipe/filters.py": '@register(component="state_filter")\nclass StateFilter:\n    def apply(self, rows):\n'
+                                '        return [r for r in rows if r["state"] != "-"]\n',
+             "pipe/other.py": 'DEFAULTS = {"state": "-"}\n\n\ndef lookup(r):\n    return r.get("state")\n',                 # 사전 리터럴 — 비교식이 아니다
+             "config/gbm/mx.json": '{"state": "-", "k": {"state": "-"}}\n',                                                  # config — 범위 밖
+             "pipe/var.py": 'class Var:\n    def _run(self, name):\n        return self.components.get(name)\n'}
+
+    class Src:
+        async def files(self):
+            return sorted(FILES)
+
+        async def read(self, path):
+            return FILES.get(path)
+
+    class Reader:
+        def __init__(self, ok=True):
+            self.ok = ok
+
+        async def snapshot(self, repo, commit):
+            return (ProbeResult.succeeded(dict(FILES), source="s", clock=clock) if self.ok
+                    else ProbeResult.failed("옛 git", source="s", clock=clock))
+
+    topology = Topology(services={"processor": Service(repo="dt-proc", role="가공한다")})
+    code = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    assert (await code.filter_lines("Job", field="state", value="-")).problem == "심볼 인덱스가 없다"
+    index = await ix.build_index({"dt-proc": Src()}, commits={"dt-proc": "c2"})
+    code.attach_index(index)
+    scan = await code.filter_lines("Job", field="state", value="-")
+    assert scan.problem == "" and scan.files == ["pipe/job.py", "pipe/filters.py"] and scan.linked == ["state_filter"] and scan.unlinked == []
+    assert [(h.path, h.line, h.text, h.repo) for h in scan.hits] == [("pipe/job.py", 4, 'if "-" == rows[0].get("state"):', "dt-proc"),
+                                                                    ("pipe/filters.py", 4, 'return [r for r in rows if r["state"] != "-"]', "dt-proc")]
+    assert [(h.path, h.line, h.text) for h in scan.linked_at] == [("pipe/filters.py", 1, '@register(component="state_filter")')]
+    assert (await code.filter_lines("Job", field="state", value="x")).hits == []
+    var = await code.filter_lines("Var", field="state", value="-")
+    assert var.files == ["pipe/var.py"] and var.linked == [] and var.unlinked == ["name"] and var.hits == []
+    assert "인덱스에 없다" in (await code.filter_lines("Nope", field="a", value="b")).problem
+    assert "없는 서비스" in (await code.filter_lines("Job", field="a", value="b", service="nope")).problem
+    assert "없는 레포" in (await code.filter_lines("Job", field="a", value="b", repo="nope")).problem
+    assert (await code.filter_lines("Job", field="a", value="b", service="processor")).files[0] == "pipe/job.py"
+    assert (await code.filter_lines("Job", field="a", value="b", repo="dt-proc")).files[0] == "pipe/job.py"
+    broken = DeployedCode(Reader(ok=False), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    broken.attach_index(index)
+    assert (await broken.filter_lines("Job", field="state", value="-")).problem == "dt-proc의 스냅샷을 못 받았다"
+    # 순수 조각 — 짝과 컴포넌트 이름
+    text = 'x = {"f": "v"}\n# r["f"] != "v"\nok = r["f"] != "v"\nrev = "v" == r.get("f", None)\nnm = r[f] != "v"\nraw = r["f"] != v\nat = getattr(r, "f") == "v"\n'
+    assert comparison_lines(text, "f", "v") == [(3, 'ok = r["f"] != "v"'), (4, 'rev = "v" == r.get("f", None)'), (7, 'at = getattr(r, "f") == "v"')]
+    assert component_names('a = reg.get("x")\nb = reg.get(\'y\', None)\nc = reg.get(key)\nd = reg.get("x")\n') == (["x", "y"], ["key"])

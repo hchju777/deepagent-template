@@ -4,8 +4,8 @@ import json
 from datetime import timedelta
 
 from src.application.state import CaseState
-from src.application.walk import MAX_DEPTH, MAX_READS, MAX_SECONDS, SCAN_READS, literal_lines, run_walk, status_of
-from src.domain.case import Case, EvidenceRef, Rung, TargetPick
+from src.application.walk import MAX_DEPTH, MAX_READS, MAX_SECONDS, SCAN_READS, run_walk, status_of
+from src.domain.case import Case, EvidenceRef, FilterHit, FilterScan, Rung, TargetPick
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 from tests.application.conftest import T0, task
 
@@ -33,6 +33,17 @@ class _Reads(TaskRunnerPort):
         ref = EvidenceRef(id=f"{task.id}.e1", source=f"{task.action} {name}", summary="x", body="raw")
         self._raws[ref.id] = self.table[(task.action, name)]
         return TaskOutcome(task_id=task.id, status="ok", summary="s", evidence=[ref])
+
+
+class _Lookup:
+    """어댑터의 단일값 조회(`filter_lines`) 대역 — `(클래스, 필드, 값)` → `FilterScan`. 없는 조합은 거르는 줄 없음(클래스 파일 하나)."""
+
+    def __init__(self, table):
+        self.table, self.calls = dict(table), []
+
+    async def __call__(self, name, *, field, value, **params):
+        self.calls.append((name, field, value, dict(params)))
+        return self.table.get((name, field, value), FilterScan(files=[f"{name.lower()}.py"]))
 
 
 def _res(writer, reads, writes=()):
@@ -78,14 +89,14 @@ async def test_걷기는_쓴_쪽의_입력을_읽고_나쁜_입력의_쓴_쪽으
     # 멈춘 자리는 가장 깊은 나쁜 홉(in:a:L1 — 그 쓴 쪽 W1의 입력이 다 정상), 다음 칸은 W1의 읽는 메서드 전체(`code.read line=`, R3-4 ②)
     assert walk.stopped == "입력이 다 정상 — W1" and walk.stop_at == "t-3.e1" and walk.chain_ids() == frozenset({"t-1.e1", "t-3.e1"})
     assert walk.next_hop() == ("code.read", {"service": "collector", "path": "x.py", "line": 9}) and walk.next_evidence == "t-6.e1"
-    # 읽기 7 = 자원 2 + 입력 4 + src:L1의 단일값 d='-'에 grep 한 번(③ — 리터럴 줄이 없어 정상으로 남는다)
-    assert walk.reads == 7 and [t.id for t in patch["plan_tasks"]] == [f"t-{i}" for i in range(2, 9)] and all(t.walked for t in patch["plan_tasks"])
-    assert {e.id for e in patch["evidence"]} == {f"t-{i}.e1" for i in range(2, 8)} and ("code.grep", "d") in runner.ran   # grep은 대본에 없어 증거가 없다
+    # 읽기 6 = 자원 2 + 입력 4 — 단일값 검사는 조회(R3-4 ③)라 읽기가 아니고, 조회가 없으면(인덱스 없음) 표시만
+    assert walk.reads == 6 and [t.id for t in patch["plan_tasks"]] == [f"t-{i}" for i in range(2, 8)] and all(t.walked for t in patch["plan_tasks"])
+    assert {e.id for e in patch["evidence"]} == {f"t-{i}.e1" for i in range(2, 8)} and ("code.grep", "d") not in runner.ran
     assert ("redis.get", "alarm:stats:L1") not in runner.ran and ("redis.get", "x:L1") not in runner.ran     # 대상 키·쓰기 구간은 안 읽는다
     assert walk.hops[1].evidence_id == "t-3.e1" and walk.bad_ids() == frozenset({"t-1.e1", "t-3.e1"})
     assert (walk.hops[0].service, walk.hops[1].service, walk.hops[2].kind, walk.hops[3].kind) == ("batch", "collector", "rediskey", "collection")
     assert walk.hops[1].basis == "W0가 읽는 자원 (t-2.e1)" and walk.hops[0].basis == "대상 키 — 값의 metadata.event_type이 W0"
-    assert walk.lines()[0] == "걷기(코드가 상류를 걸었다): 홉 5 · 읽기 7 · 0.0초 — 멈춤: 입력이 다 정상 — W1"
+    assert walk.lines()[0] == "걷기(코드가 상류를 걸었다): 홉 5 · 읽기 6 · 0.0초 — 멈춤: 입력이 다 정상 — W1"
     assert walk.lines()[2] == "  alarm:stats:L1 | W0 [batch] | 빈 배열 (record[0].data) | t-1.e1" and walk.lines()[5] == "  events | — | 정상 — 행 2 · 필드 1 | t-5.e1"
     # 쓴 쪽을 모르면(입구가 못 골랐다) 걷지 않는다 — 빈 패치
     assert await run_walk(_state(writer=""), runner=runner, classes=frozenset(), clock=lambda: T0) == {}
@@ -250,47 +261,66 @@ async def test_멈춘_자리는_가장_깊은_나쁜_홉이고_다음_칸은_늘
     assert walk.rungs == [] and walk.next_hop() is None and walk.next_evidence == ""
 
 
-# ── R3-3 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다 ──
+# ── R3-3 ③ → R3-4 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다(어댑터 안의 조회) ──
 
-GREP = ("c0ffee:proc/job.py:8:        if wg != \"-\":\n"                                              # 필드가 리터럴이 아니다 — 안 센다
-        "c0ffee:proc/job.py:50:        rows = [r for r in rows if r[\"wg\"] != \"-\"]\n"               # 둘 다 리터럴 — 이 줄
-        "c0ffee:proc/job.py:9:        wg = cfg.get(\"wg\")")
+HIT = FilterHit(path="proc/job.py", line=50, text='rows = [r for r in rows if r["wg"] != "-"]', repo="r")
 
 
-def test_리터럴_줄은_필드와_값이_둘_다_따옴표로_같은_줄에_있을_때다():
-    assert literal_lines(GREP, "wg", "-") == [("proc/job.py", 50, 'rows = [r for r in rows if r["wg"] != "-"]')]
-    assert literal_lines(GREP, "wg", "x") == [] and literal_lines("# dt-core @ c0ffee\n", "wg", "-") == []
-    assert literal_lines("proc/a.py:3:    v = row['lvl'] == '-'", "lvl", "-") == [("proc/a.py", 3, "v = row['lvl'] == '-'")]    # 커밋 접두 없이도
-    assert literal_lines("main:batch/r.py:7:    rows = [r for r in rows if r.get(\"state\") != \"-\"]", "state", "-") == [
-        ("batch/r.py", 7, 'rows = [r for r in rows if r.get("state") != "-"]')]                                                # ref 머리(`main:`)로도
-
-
-async def test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_리터럴로_같이_있을_때만_나쁘고_그_값이_이어지는_동안_위로_간다():
+async def test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_한_비교식_양쪽에_있을_때만_나쁘고_그_값이_이어지는_동안_위로_간다():
     """측정 #9 c-2: 입력 키 554행의 두 필드가 전부 `'-'`였고, 읽는 쪽 코드에 `["<필드>"] != "-"` 줄이 있었다 — 코드가 그 값을 걸러 아무것도 안
-    남는다. 사람 결정: 자리표시자 목록은 두지 않는다. 필드 이름과 값이 **한 줄에 리터럴로** 같이 있을 때만 나쁨이고 그 줄이 근거다. 잡히면 입력에
-    같은 필드=같은 값이 있는 동안 위로(grep 없이), 나머지 단일값은 표시만. 읽는 쪽 서비스를 알면 그 레포만 본다."""
+    남는다. 측정 #10 P0 1: 레포 전체 grep은 사이트 상수 config 줄과 다른 처리기의 dict 줄을 가짜로 잡고 진짜 줄은 놓쳤다 — 조회는 어댑터 안에서
+    (범위 = 읽는 클래스의 파일 + 이은 컴포넌트 파일, 짝 = 한 비교식의 양쪽), runner를 안 거쳐 읽기 상한·증거 밖(P0 4). 잡히면 입력에 같은 필드=
+    같은 값이 있는 동안 위로(조회 없이), 통과한 필드는 전부 표에 적는다."""
     rows = [{"code": f"A{i}", "wg": "-", "lvl": "x"} for i in range(3)]
     table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
              ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows, "metadata": {"event_type": "W1"}})},
-             ("code.grep", "wg"): GREP, ("code.grep", "lvl"): "c0ffee:proc/job.py:12:        lvl = row['lvl']",
              ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey")]),
              ("redis.get", "src:L1"): {"type": "string", "value": json.dumps([{"id": i, "wg": "-"} for i in range(4)])}}
-    runner = _Reads(table)
-    walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
-    assert walk.hops[1].status == "나쁨 — 모든 행이 wg='-', 코드가 거른다: proc/job.py:L50 `rows = [r for r in rows if r[\"wg\"] != \"-\"]` (t-4.e1)"
+    runner, lookup = _Reads(table), _Lookup({("W0", "wg", "-"): FilterScan(hits=[HIT], files=["w0.py", "proc/job.py"], linked=["flt"])})
+    walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",)}, lookup=lookup, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status == "나쁨 — 모든 행이 wg='-', 코드가 거른다: proc/job.py:L50 `rows = [r for r in rows if r[\"wg\"] != \"-\"]` (이은 컴포넌트 파일)"
     assert walk.hops[1].bad and walk.hops[1].writer == "W1"
-    assert ("code.grep", {"patterns": ["wg"], "service": "a"}) in runner.params and ("code.grep", "lvl") not in runner.ran   # 첫 리터럴에서 멈춘다
-    assert walk.hops[2].status == "나쁨 — 같은 단일값 wg='-' (아래 홉과 같다)" and walk.hops[2].bad                       # grep 없이 이어진다
-    # 멈춘 이유는 "쓴 쪽을 모른다"지만 리터럴 줄이 있으면 리드가 볼 곳은 그 줄이다(사람 결정)
+    assert lookup.calls == [("W0", "wg", "-", {})] and walk.reads == 4                        # 첫 거르는 줄에서 멈춘다 · 조회는 읽기가 아니다
+    assert walk.hops[2].status == "나쁨 — 같은 단일값 wg='-' (아래 홉과 같다)" and walk.hops[2].bad                       # 조회 없이 이어진다
+    # 멈춘 이유는 "쓴 쪽을 모른다"지만 리터럴 줄이 있으면 리드가 볼 곳은 그 줄의 함수다(사람 결정) — 입력은 그 입력 키의 읽기
     assert walk.stopped == "쓴 쪽을 모른다 — src:L1(값에 인덱스의 클래스 이름이 없다) (단일값을 거르는 코드 줄 proc/job.py:L50)"
-    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "line": 50}) and walk.next_evidence == "t-4.e1"
-    # 값이 리터럴로 없는 줄뿐이면 표시만 — 정상이고 행 요약에 남는다
+    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "line": 50}) and walk.next_evidence == "t-3.e1"
+    # 거르는 줄이 없으면 표시만 — 정상이고, 통과한 필드와 본 범위를 적는다
     rows2 = [{"code": f"A{i}", "lvl": "x"} for i in range(3)]
     plain = _Reads({**table, ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows2})}})
-    walk = (await run_walk(_state(), runner=plain, classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
-    assert walk.hops[1].status == "정상 — record: 행 3 · 필드 2 · 모든 행이 같은 값: lvl='x'" and not walk.hops[1].bad
-    assert ("code.grep", "lvl") in plain.ran and walk.stopped == "입력이 다 정상 — W0"
+    walk = (await run_walk(_state(), runner=plain, classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=lookup, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status == "정상 — record: 행 3 · 필드 2 · 모든 행이 같은 값: lvl='x' · 단일값 lvl='x' — 거르는 줄 없음(1파일)" and not walk.hops[1].bad
+    assert ("W0", "lvl", "x", {}) in lookup.calls and walk.stopped == "입력이 다 정상 — W0"
     assert walk.next_hop() == ("code.read", {"service": "a", "path": "x.py", "line": 9})             # 입력이 다 정상 → 읽는 메서드 전체(R3-4 ②)
+    # 가지의 인자(service·repo)가 조회에 그대로 간다 — 같은 이름이 두 레포면 그 레포의 파일이어야 한다
+    two = _Lookup({})
+    await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a", "b")}, declared_by={"alarm:stats:{line}": ("b",)},
+                   lookup=two, clock=lambda: T0)
+    assert two.calls[0] == ("W0", "wg", "-", {"service": "b"})
+
+
+async def test_단일값_조회가_이은_컴포넌트의_등록_줄은_입력_정상의_뒤_칸이_되고_못_이음과_검사_못_함은_표에_적는다():
+    """사람 결정(10-14): 입력이 정상에서 멈추면 `_run` 전체 + `get("X")`↔`register(component="X")`로 이은 컴포넌트 함수 본문이 다음 칸들이다 —
+    결정적인 줄은 컴포넌트에 있다. X가 변수면 "못 이음 — 변수"로 적고 클래스 파일에서 멈춘다. 조회 자체가 안 됐으면 "검사 못 함"(없음과 다르다)."""
+    rows = [{"code": f"A{i}", "lvl": "x"} for i in range(3)]
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows})}}
+    linked = FilterScan(files=["w0.py", "comp/filters.py"], linked=["state_filter"],
+                        linked_at=[FilterHit(path="comp/filters.py", line=7, text='@register(component="state_filter")', repo="r")])
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)},
+                           lookup=_Lookup({("W0", "lvl", "x"): linked}), clock=lambda: T0))["walk"]
+    assert walk.hops[1].status.endswith("· 단일값 lvl='x' — 거르는 줄 없음(2파일, 이은 컴포넌트 state_filter)") and walk.stopped == "입력이 다 정상 — W0"
+    assert walk.rungs == [Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 9}, evidence="t-2.e1"),
+                          Rung(action="code.read", params={"service": "a", "path": "comp/filters.py", "line": 7}, evidence="t-2.e1")]
+    varied = _Lookup({("W0", "lvl", "x"): FilterScan(files=["w0.py"], unlinked=["name"])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=varied, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status.endswith("— 거르는 줄 없음(1파일 — 못 이음: 변수 name)") and len(walk.rungs) == 1
+    broken = _Lookup({("W0", "lvl", "x"): FilterScan(problem="dt-core의 스냅샷을 못 받았다")})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=broken, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status.endswith("· 단일값 lvl='x' — 검사 못 함(dt-core의 스냅샷을 못 받았다)") and not walk.hops[1].bad
+    # 조회가 없으면(인덱스 없음) 검사도 없다 — 행 요약의 단일값 표시만
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status == "정상 — record: 행 3 · 필드 2 · 모든 행이 같은 값: lvl='x'"
 
 
 async def test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_그_코드_줄_둘레다():
@@ -299,24 +329,24 @@ async def test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_
     rows = [{"code": f"A{i}", "wg": "-"} for i in range(3)]
     table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
              ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows, "metadata": {"event_type": "W1"}})},
-             ("code.grep", "wg"): GREP,
              ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey")]),
              ("redis.get", "src:L1"): {"type": "string", "value": json.dumps([{"id": i, "v": i} for i in range(4)])}}
+    lookup = _Lookup({("W0", "wg", "-"): FilterScan(hits=[HIT], files=["proc/job.py"])})
     walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)},
-                           clock=lambda: T0))["walk"]
+                           lookup=lookup, clock=lambda: T0))["walk"]
     assert walk.stopped == "입력이 다 정상 — W1 (단일값을 거르는 코드 줄 proc/job.py:L50)"
-    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "line": 50}) and walk.next_evidence == "t-4.e1"
+    assert walk.next_hop() == ("code.read", {"service": "a", "path": "proc/job.py", "line": 50}) and walk.next_evidence == "t-3.e1"
     # 리터럴 줄의 함수가 첫 칸, 멈춘 자리(W1 — 입력이 다 정상)의 읽는 메서드 전체가 둘째 칸(R3-4 ②)
-    assert walk.rungs[1] == Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 9}, evidence="t-5.e1") and len(walk.rungs) == 2
+    assert walk.rungs[1] == Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 9}, evidence="t-4.e1") and len(walk.rungs) == 2
     # 케이스 블록의 다음 홉 줄은 인자가 `name`이 아니어도 그려야 한다 — 측정판에서 frame 노드가 KeyError로 죽었다(규율 1)
     from src.application.intake_map import hop_line
     line = hop_line(_state().target, code_index=True, walk=walk)
     assert line.startswith("다음 홉: code.read line=50 path='proc/job.py' service='a' — 걷기가 멈춘 자리(입력이 다 정상 — W1")
-    # 읽는 쪽 서비스를 모르면 grep은 전체이고 `code.read`는 서비스가 필요해 다음 홉이 없다
-    free = _Reads(table)
-    walk = (await run_walk(_state(), runner=free, classes=frozenset({"W0", "W1"}), clock=lambda: T0))["walk"]
-    assert ("code.grep", {"patterns": ["wg"]}) in free.params and walk.next_hop() is None and "proc/job.py:L50" in walk.stopped
+    # 읽는 쪽 서비스를 모르면 조회는 인자 없이 가고 `code.read`는 서비스가 필요해 칸이 없다
+    free = _Lookup(lookup.table)
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), lookup=free, clock=lambda: T0))["walk"]
+    assert free.calls[0] == ("W0", "wg", "-", {}) and walk.next_hop() is None and "proc/job.py:L50" in walk.stopped
     # 서비스를 모르고 쓴 쪽도 모르면 `code.uses`가 남는다
     unknown = _Reads({**table, ("redis.get", "src:L1"): {"type": "string", "value": "[]"}})
-    walk = (await run_walk(_state(), runner=unknown, classes=frozenset({"W0", "W1"}), clock=lambda: T0))["walk"]
+    walk = (await run_walk(_state(), runner=unknown, classes=frozenset({"W0", "W1"}), lookup=free, clock=lambda: T0))["walk"]
     assert walk.next_hop() == ("code.uses", {"name": "src:{line}"}) and walk.stopped.startswith("쓴 쪽을 모른다 — src:L1")

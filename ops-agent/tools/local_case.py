@@ -124,7 +124,8 @@ CORE_FILES = {
         "redis_key": {"alarm_stats": "alarm:stats:{line}", "alarm_source": "alarm:source:{line}", "heartbeat": "hb:{service}",
                       "alarm_palette": "alarm:palette", "palette_source": "palette:source"},
         "sink": {"batch_size": 200, "flush_sec": 5}},
-    "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi"},
+    # `badge.state`는 미끼(측정 #10 P0 1의 가짜 ① — 사이트 상수 config 줄): 필드와 값이 한 줄에 리터럴로 있지만 비교식도 코드도 아니다.
+    "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi", "badge": {"empty_state": "-", "state": "-"}},
     "config/factories/gumi/mx.json": {
         "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}},
     # 두 번째 사이트 — 11e-2의 "번들은 GBM 하나, 사이트는 덮은 값만"을 측정판에서 보기 위해서다.
@@ -133,6 +134,8 @@ CORE_FILES = {
         "infra": {"kafka": {"consumer": {"group_id": "sevt-mx-core"}}}},
     "processor/handler.py": '''"""alarm_raw를 읽어 정규화한 뒤 alarm_main으로 낸다."""
 from shared_lib import normalize, now
+
+EMPTY = {"state": "-", "alarm_code": ""}      # 자리표시자 행 — 사전 리터럴이지 비교식이 아니다(측정 #10의 가짜 ②: 다른 처리기의 dict 줄)
 
 
 def run(cfg, consumer, producer, redis):
@@ -165,17 +168,27 @@ def run(cfg, consumer, mongo, redis):
 
 
 class SummaryRefresh:
-    def __init__(self, cfg, redis, producer):
-        self.cfg, self.redis, self.producer = cfg, redis, producer
+    def __init__(self, cfg, redis, producer, components):
+        self.cfg, self.redis, self.producer, self.components = cfg, redis, producer, components
 
     def _run(self):
         palette = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_palette"]) or "{}")
         for line in self.cfg["lines"]:
             source = self.redis.get(self.cfg["redis_key"]["alarm_source"].format(line=line))
-            rows = [r for r in json.loads(source or "[]") if r.get("state") != "-"]
+            rows = self.components.get("state_filter").apply(json.loads(source or "[]"))
             command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": rows,
                        "colors": palette.get("colors", [])}
             self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
+''',
+    # 사내 모양(측정 #10): `_run`은 조립뿐이고 **거르는 줄은 컴포넌트에** 있다 — `_run`의 `get("<컴포넌트>")`와 `register(component="<컴포넌트>")`가
+    # 리터럴로 이어진다(호출 그래프에는 없다). 걷기의 단일값 조회(R3-4 ③)가 이 등록 줄로 범위를 넓힌다.
+    "batch/components.py": '''"""배치 파이프라인의 컴포넌트 — 등록 문자열로 `_run`이 `get("…")`로 찾는다."""
+
+
+@register(component="state_filter")
+class StateFilter:
+    def apply(self, rows):
+        return [r for r in rows if r.get("state") != "-"]
 ''',
     # 측정 #10 P0 2의 모양 — 공용 키의 쓴 쪽이 서비스 디렉터리 **밖**(`common/`)에 있다. 토폴로지에 `path`가 없으니 processor·sink·batch 중 어느
     # 것인지 코드로는 못 가른다(사내 처리기 레포: 서비스 5개가 한 레포·한 config). 같은 이름이 dt-api에도 있어 레포 둘이다.
