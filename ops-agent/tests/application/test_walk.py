@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from src.application.state import CaseState
 from src.application.walk import MAX_DEPTH, MAX_READS, MAX_SECONDS, SCAN_READS, run_walk, status_of
-from src.domain.case import Case, EvidenceRef, FilterHit, FilterScan, Rung, TargetPick
+from src.domain.case import Case, EvidenceRef, FilterHit, FilterScan, Rung, TargetPick, Walk
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 from tests.application.conftest import T0, task
 
@@ -259,6 +259,35 @@ async def test_멈춘_자리는_가장_깊은_나쁜_홉이고_다음_칸은_늘
     # 읽는 쪽 서비스를 모르면 code.read를 못 만든다 — 칸 없음
     walk = (await run_walk(_state(), runner=none, classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
     assert walk.rungs == [] and walk.next_hop() is None and walk.next_evidence == ""
+
+
+# ── R3-5 ① — 단일값 통과 뒤 두 레포 가르기(측정 #11 P0 1), 던진 걷기도 보인다(P0 2) ──
+
+async def test_단일값_통과_뒤_두_레포_가르기가_같은_걷기에서_이어진다():
+    """측정 #11 P0 1: 단일값 분기의 문자열 변수가 중첩 함수 이름을 덮어 그 뒤 `branches()`가 TypeError를 냈다 — 걷기 노드가 삼켜 케이스 블록에 아무것도
+    안 떴고 리드가 혼자 걸었다(c-1이 #9 수준으로 되돌아간 원인). 통과한 입력 뒤에 두 레포인 쓴 쪽이 와도 가른다. 보드(palette-empty)는 가르기가 통과보다
+    먼저라 못 잡았다 — 순서가 테스트에 있어야 한다."""
+    rows = [{"code": f"A{i}", "lvl": "x"} for i in range(3)]
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("in:b:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): {"type": "string", "value": json.dumps({"record": rows})},        # 단일값 lvl='x' — 통과
+             ("redis.get", "in:b:L1"): _value(record=[], metadata={"event_type": "W1"}),                  # 나쁨 — 쓴 쪽 W1은 레포 둘
+             ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey")]),
+             ("redis.get", "src:L1"): _value(n=1)}
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a", "b")},
+                           declared_by={"in:b:{line}": ("b",)}, lookup=_Lookup({}), clock=lambda: T0))["walk"]
+    assert walk.hops[1].status.endswith("· 단일값 lvl='x' — 거르는 줄 없음(1파일)")
+    assert walk.notes == ["W1는 레포 2곳(a, b)에 있다 — in:b:{line}을 선언한 b로 골랐다"]
+    assert ("code.resources", {"name": "W1", "service": "b"}) in runner.params and walk.stopped == "입력이 다 정상 — W1"
+    # 거르는 줄을 잡은 뒤(다른 문자열 분기)에도 같다
+    hit = _Lookup({("W0", "lvl", "x"): FilterScan(hits=[HIT], files=["w0.py"])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a", "b")},
+                           declared_by={"in:b:{line}": ("b",)}, lookup=hit, clock=lambda: T0))["walk"]
+    assert walk.hops[1].bad and walk.notes == ["W1는 레포 2곳(a, b)에 있다 — in:b:{line}을 선언한 b로 골랐다"]
+    # 던진 걷기(홉 0)도 멈춤 사유 한 줄은 보인다 — 아무것도 없으면 걷기가 있었는지조차 모른다
+    assert Walk(stopped="걷기 노드가 던졌다 — TypeError: 'str' object is not callable").lines() == [
+        "걷기(코드가 상류를 걸었다): 홉 0 · 읽기 0 · 0.0초 — 멈춤: 걷기 노드가 던졌다 — TypeError: 'str' object is not callable"]
+    assert Walk().lines() == []                                                                 # 걷기 자체가 없으면 전처럼 빈 목록
 
 
 # ── R3-3 ③ → R3-4 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다(어댑터 안의 조회) ──

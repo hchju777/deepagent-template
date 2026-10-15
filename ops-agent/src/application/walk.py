@@ -190,7 +190,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         # 적고 판정의 component 후보는 그 전부다(사람 결정 10-14).
         return svcs[0] if len(svcs) == 1 else f"{repo}(서비스 {len(svcs)}개 공유)"
 
-    def where(repo: str, svcs: tuple[str, ...]) -> dict:
+    def params_for(repo: str, svcs: tuple[str, ...]) -> dict:
+        # 이 함수 안의 이름은 아래 분기의 지역 변수와 겹치면 안 된다 — 측정 #11 P0 1: 단일값 분기의 문자열 `where = …`가 이 중첩 함수를 덮어 그 뒤
+        # `branches()`가 문자열을 불렀고(TypeError), 걷기가 통째로 사라졌다.
         return {"service": svcs[0]} if len(svcs) == 1 else {"repo": repo}
 
     def who(name: str) -> str:
@@ -211,10 +213,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if len(picked) == 1:
             repo, svcs = picked[0]
             notes.append(f"{writer}는 레포 {len(found)}곳({shown})에 있다 — {template}을 선언한 {shown_as(repo, svcs)}로 골랐다")
-            return [_Branch(where(repo, svcs), shown_as(repo, svcs), svcs)], shown_as(repo, svcs), svcs
+            return [_Branch(params_for(repo, svcs), shown_as(repo, svcs), svcs)], shown_as(repo, svcs), svcs
         notes.append(f"{writer}는 레포 {len(found)}곳({shown})에 있다 — {template}을 선언한 쪽으로 못 가른다"
                      f"({'둘 다 선언' if picked else '선언 없음'}): 둘 다 걷는다")
-        return [_Branch(where(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)
+        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)
 
     first = next((t for t in state.plan_tasks if t.id == "t-1" and t.result_evidence_ids), None)
     first_branches, first_shown, first_cands = branches(target.writer, target.declared)
@@ -308,8 +310,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                                 linked_at[came_from].append(found_at)
                         if scan.hits:
                             hit = scan.hits[0]
-                            where = " (이은 컴포넌트 파일)" if hit.path in scan.files[1:] else ""
-                            status, bad, carry = (f"나쁨 — 모든 행이 {field}={value!r}, 코드가 거른다: {hit.path}:L{hit.line} `{hit.text}`{where}", True,
+                            linked_note = " (이은 컴포넌트 파일)" if hit.path in scan.files[1:] else ""
+                            status, bad, carry = (f"나쁨 — 모든 행이 {field}={value!r}, 코드가 거른다: {hit.path}:L{hit.line} `{hit.text}`{linked_note}", True,
                                                   (field, value))
                             if literal is None:
                                 literal = (scope, hit.path, hit.line, ev)
@@ -320,9 +322,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         if scan.problem:
                             status += f" · 단일값 {', '.join(passed)} — 검사 못 함({scan.problem})"
                         else:
-                            where = f"{len(scan.files)}파일" + (f", 이은 컴포넌트 {', '.join(scan.linked)}" if scan.linked
-                                                             else f" — 못 이음: 변수 {', '.join(scan.unlinked[:3])}" if scan.unlinked else "")
-                            status += f" · 단일값 {', '.join(passed)} — 거르는 줄 없음({where})"
+                            scope_note = f"{len(scan.files)}파일" + (f", 이은 컴포넌트 {', '.join(scan.linked)}" if scan.linked
+                                                                  else f" — 못 이음: 변수 {', '.join(scan.unlinked[:3])}" if scan.unlinked else "")
+                            status += f" · 단일값 {', '.join(passed)} — 거르는 줄 없음({scope_note})"
                 # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다.
                 next_branches, shown, cands = (branches(w, name) if (bad and w)
                                                else ([], who(w), tuple(x for _, s in homes(w) for x in s)))

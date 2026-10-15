@@ -53,6 +53,9 @@ def diagnose(state: CaseState) -> list[str]:
         + (f" ({' · '.join(f'{k} {v}' for k, v in sorted(status.items()))})"
            if status else ""),
     ]
+    if state.walk is not None:
+        # 걷기가 있었으면 한 줄 — 던져서 홉 0이어도(측정 #11 P0 2: 걷기 없이 돈 조사가 출력 어디에도 안 드러났다).
+        lines.append(f"  걷기 홉 {len(state.walk.hops)} · 읽기 {state.walk.reads} — 멈춤: {state.walk.stopped}")
     lines.append("  " + verdict_summary(state))
     if kinds:
         lines.append(f"  리드 계약 위반 {len(state.llm_errors)}건")

@@ -849,6 +849,51 @@ async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_
     assert final.walk is None and "t-2" not in runner.ran
 
 
+async def test_걷기_노드가_던지면_멈춤_사유가_State에_남고_케이스_블록에_보인다(case):
+    """측정 #11 P0 2: 걷기 노드의 마지막 방어선(`except`)은 `Walk(stopped="걷기 노드가 던졌다…")`를 두지만 홉이 없어 케이스 블록·진단 어디에도 안 보였다 —
+    두 케이스가 걷기 없이 돌았는데 아무도 몰랐다. 던진 걷기도 한 줄은 보인다."""
+    import dataclasses
+    import json
+    from src.application import briefing
+    from src.application.diagnose import diagnose
+    from src.application.graph import build_engine
+    from src.application.intake_map import IntakeSpec
+    from tests.application.conftest import T0
+
+    def ok(task_id, data, source):
+        return TaskOutcome(task_id=task_id, status="ok", summary=source,
+                           evidence=[EvidenceRef(id=f"{task_id}.e1", source=source, summary="x", body="raw")])
+
+    rest = {"response": [{"group": "L1", "title": "Alarm"}]}
+    value = {"type": "string", "value": json.dumps({"info": {"group": "L1", "title": "Alarm"}, "data": [], "event_type": "Writer"})}
+    res_text = "Writer (w.py:L1) [dt-core · sink]\n  읽기 1:\n    src:L1 [rediskey] — Writer._run (w.py:L3)"
+    src = {"type": "string", "value": json.dumps([{"a": "x"}, {"a": "x"}])}
+    runner = ScriptedRunner({"t-0": ok("t-0", rest, "rest.query entry='summary_badge'"), "t-0-1": ok("t-0-1", value, "redis.get key='alarm:stats:L1'"),
+                             "t-1": ok("t-1", value, "redis.get key='alarm:stats:L1'"), "t-2": ok("t-2", res_text, "code.resources name='Writer'"),
+                             "t-3": ok("t-3", src, "redis.get key='src:L1'")},
+                            raws={"t-0.e1": rest, "t-0-1.e1": value, "t-1.e1": value, "t-2.e1": res_text, "t-3.e1": src})
+    spec = IntakeSpec(read=("rest.query", {"entry": "summary_badge", "params": {}}), fields=("group", "title"))
+
+    async def boom(name, *, field, value, **params):
+        raise RuntimeError("boom")
+
+    seen = []
+
+    async def frame(state):
+        seen.append(state)
+        return {"plan_tasks": []}
+
+    patrol = case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"})
+    deps = dataclasses.replace(deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}),
+                                        code_index=True, class_services={"Writer": ("sink",)}, filter_lines=boom, clock=lambda: T0), frame=frame)
+    final = CaseState.model_validate(await build_engine(deps).ainvoke(CaseState(case=patrol)))
+    assert final.walk is not None and final.walk.hops == [] and final.walk.stopped == "걷기 노드가 던졌다 — RuntimeError: boom"
+    block = briefing.intake_lines(seen[0], code_index=True)
+    assert "걷기(코드가 상류를 걸었다): 홉 0 · 읽기 0 · 0.0초 — 멈춤: 걷기 노드가 던졌다 — RuntimeError: boom" in block
+    assert "다음 홉: code.resources name='Writer' — 쓴 쪽이 읽는 자원(입력)" in block          # 아무것도 못 읽었으니 입구 홉이 그대로 다음 홉
+    assert "  걷기 홉 0 · 읽기 0 — 멈춤: 걷기 노드가 던졌다 — RuntimeError: boom" in diagnose(final)
+
+
 async def test_걷기가_있으면_받을_때의_홉과_거부_기록의_홉은_걷기가_멈춘_자리다(case):
     from src.domain.case import Hop, Rung, TargetPick, Walk
 

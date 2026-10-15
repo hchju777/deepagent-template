@@ -149,3 +149,15 @@ def test_미실행_사유는_사실대로다_막힌_입력과_밀린_우선순�
         task("t-8", input_evidence_ids=["t-7.e1"]), task("t-9")])
     text = "\n".join(diagnose(state))
     assert "t-7(막힘 — 입력 t-6 실패)" in text and "t-8(막힘 — 입력 t-7.e1 없음)" in text and "t-9(우선순위에 밀림)" in text
+
+
+def test_걷기가_있으면_홉_읽기_멈춤_사유를_한_줄로_적고_없으면_안_적는다(case):
+    """측정 #11 P0 2: 걷기가 던져 홉 0으로 끝났는데 CLI 출력과 trace의 summary.md 어디에도 걷기 줄이 없어 두 케이스가 걷기 없이 돈 것을 아무도 몰랐다."""
+    from src.application.diagnose import diagnose
+    from src.application.state import CaseState
+    from src.domain.case import Hop, Walk
+    assert not any("걷기" in line for line in diagnose(CaseState(case=case)))
+    thrown = CaseState(case=case, walk=Walk(stopped="걷기 노드가 던졌다 — TypeError: x"))
+    assert "  걷기 홉 0 · 읽기 0 — 멈춤: 걷기 노드가 던졌다 — TypeError: x" in diagnose(thrown)
+    walked = CaseState(case=case, walk=Walk(hops=[Hop(key="k"), Hop(key="k2", depth=1)], reads=3, stopped="입력이 다 정상 — W"))
+    assert "  걷기 홉 2 · 읽기 3 — 멈춤: 입력이 다 정상 — W" in diagnose(walked)

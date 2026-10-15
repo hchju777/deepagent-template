@@ -230,10 +230,13 @@ class Walk(StrictModel):
         return frozenset(ids)
 
     def lines(self) -> list[str]:
-        if not self.hops:
+        if not self.hops and not self.stopped:
             return []
-        return ([f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}",
-                 "  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in self.notes])
+        head = [f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}"]
+        if not self.hops:
+            # 던진 걷기(홉 0)도 보인다(측정 #11 P0 2) — 사유 한 줄이 없으면 리드도 사람도 걷기가 있었는지 모른다.
+            return head
+        return head + ["  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in self.notes]
 
 
 class Case(StrictModel):

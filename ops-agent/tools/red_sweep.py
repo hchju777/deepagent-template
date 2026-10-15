@@ -2565,7 +2565,7 @@ RES_SVC_T = "tests/infrastructure/test_deployed_code.py::test_code_resources는_
 DECL_T = "tests/knowledge/test_flow.py::test_declaring_services는_그_자원을_config로_선언한_서비스들이다"
 CASES += [
  ("선언한 서비스로 안 가른다", WK, "        if len(picked) == 1:\n            repo, svcs = picked[0]", "        if False:\n            repo, svcs = picked[0]", [TIE_T]),
- ("못 가르면 한 쪽만 걷는다", WK, "        return [_Branch(where(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)", "        return [_Branch(where(r, s), shown_as(r, s), s) for r, s in found[:1]], shown, tuple(x for _, s in found for x in s)", [TIE_T]),
+ ("못 가르면 한 쪽만 걷는다", WK, "        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)", "        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found[:1]], shown, tuple(x for _, s in found for x in s)", [TIE_T]),
  ("한 곳뿐인데도 service 인자를 단다", WK, "            return [_Branch({}, \"\", svcs)], who(writer), svcs", "            return [_Branch({\"service\": svcs[0]} if len(svcs) == 1 else {}, \"\", svcs)], who(writer), svcs", [TIE_T]),
  ("깊은 홉을 대상 키의 선언으로 가른다", WK, "                next_branches, shown, cands = (branches(w, name) if (bad and w)", "                next_branches, shown, cands = (branches(w, target.declared) if (bad and w)", [TIE_T]),
  ("service로 레포를 안 좁힌다", DCP, "            text = f\"{known.repo}:{name}\"\n        elif repo:\n            # 한 레포를", "            text = name\n        elif repo:\n            # 한 레포를", [RES_SVC_T]),
@@ -2695,13 +2695,25 @@ CASES += [
  ("조회 문제를 검사 못 함으로 안 적는다", WK, "                        if scan.problem:", "                        if False:", [LINK_T]),
  ("등록 줄을 안 모은다", WK, "                        for found_at in scan.linked_at:", "                        for found_at in []:", [LINK_T]),
  ("리터럴 칸의 입력 증거가 그 홉의 읽기가 아니다", WK, "                                literal = (scope, hit.path, hit.line, ev)", "                                literal = (scope, hit.path, hit.line, \"\")", [LIT_T]),
- ("이은 컴포넌트 파일의 줄을 그렇게 안 적는다", WK, "where = \" (이은 컴포넌트 파일)\" if hit.path in scan.files[1:] else \"\"", "where = \"\"", [LIT_T]),
+ ("이은 컴포넌트 파일의 줄을 그렇게 안 적는다", WK, "linked_note = \" (이은 컴포넌트 파일)\" if hit.path in scan.files[1:] else \"\"", "linked_note = \"\"", [LIT_T]),
  ("걷기 노드가 조회를 안 넘긴다", ND, "lookup=deps.filter_lines, ", "", [WNODE_T]),
  ("측정판의 거르는 줄이 컴포넌트에 없다", LC, "        return [r for r in rows if r.get(\"state\") != \"-\"]", "        return [r for r in rows]", [LC_SRC_T]),
  ("측정판 batch가 컴포넌트를 안 찾는다", LC, "            rows = self.components.get(\"state_filter\").apply(json.loads(source or \"[]\"))", "            rows = json.loads(source or \"[]\")", [LC_SRC_T]),
 ]
 
-assert len(CASES) >= 785, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5 ① — 중첩 함수 이름 가림 핫픽스, 던진 걷기도 보인다 ──
+SHADOW_T = "tests/application/test_walk.py::test_단일값_통과_뒤_두_레포_가르기가_같은_걷기에서_이어진다"
+THROWN_T = "tests/application/test_nodes.py::test_걷기_노드가_던지면_멈춤_사유가_State에_남고_케이스_블록에_보인다"
+DIAG_WALK_T = "tests/application/test_diagnose.py::test_걷기가_있으면_홉_읽기_멈춤_사유를_한_줄로_적고_없으면_안_적는다"
+DG = ROOT / "src/application/diagnose.py"
+CASES += [
+ ("단일값 분기가 중첩 함수 이름을 덮는다", WK, "                            scope_note = f\"{len(scan.files)}파일\"", "                            params_for = f\"{len(scan.files)}파일\"", [SHADOW_T]),
+ ("홉 0이면 멈춤 사유를 안 보인다", CS, "        if not self.hops and not self.stopped:", "        if not self.hops:", [SHADOW_T, THROWN_T]),
+ ("진단에 걷기 줄이 없다", DG, "    if state.walk is not None:\n        # 걷기가 있었으면 한 줄", "    if False:\n        # 걷기가 있었으면 한 줄", [DIAG_WALK_T, THROWN_T]),
+]
+
+assert len(CASES) >= 788, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
