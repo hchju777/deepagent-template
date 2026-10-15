@@ -261,7 +261,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         walked_at[came_from] = _Walked(writer, tag, scope, len(found_inputs), res_id, reader_at(text) if found_inputs else class_at(text))
         if lookup is not None:
             # 컴포넌트 링크는 입력의 단일값과 무관하게 클래스 파일에서 뽑는다(사람 결정 10-15: 자원 0인 클래스도 `get("X")` 리터럴이 있다) — 멈춘 자리의 뒤 칸.
-            linked_at[came_from] = list((await lookup(writer, fields={}, **branch.params)).linked_at)
+            # 이어 온 단일값이 있으면 그 필드로 묻는다 — 어댑터가 그 필드 이름이 리터럴로 든 컴포넌트를 앞에 둔다(10-15 (c)). 필드 없이 물으면 코드
+            # 차례 그대로라 뒤 칸 셋에서 잘릴 수 있다(측정판 R3-5 ④).
+            linked_at[came_from] = list((await lookup(writer, fields=dict([watch]) if watch else {}, **branch.params)).linked_at)
         for name, kind in found_inputs:
             if kind == "rediskey":
                 filled = fill_key(name, declared=target.declared, key=target.key)
@@ -312,7 +314,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         hit = scan.hits[0]
                         caught = dict.fromkeys((h.field, h.value) for h in scan.hits)
                         shown_fields = " ".join(f"{f}={v!r}" for f, v in caught)
-                        more = f" 외 {len(scan.hits) - 1}줄" if len(scan.hits) > 1 else ""
+                        # 줄로 센다 — 한 줄에 짝이 둘(`r.get("state") != "-" and r.get("wg") != "-"`)이면 짝 수로 센 "외 1줄"은 없는 줄을 말한다(R3-5 ④).
+                        lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))
+                        more = f" 외 {lines_hit - 1}줄" if lines_hit > 1 else ""
                         status, bad, carry = (f"나쁨 — {len(rows)}행 전부 {shown_fields} · 이 필드 값이 든 비교식 {hit.path}:L{hit.line} '{hit.text}'{more}", True,
                                               (hit.field, hit.value))
                         if literal is None:

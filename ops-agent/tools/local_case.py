@@ -122,7 +122,9 @@ CORE_FILES = {
                 "producer": {"topic": {"topic1": "mx.alarm.main"}}}},
         "mongodb_collection": {"alarm": "alarm_events", "line_state": "line_state"},
         "redis_key": {"alarm_stats": "alarm:stats:{line}", "alarm_source": "alarm:source:{line}", "heartbeat": "hb:{service}",
-                      "alarm_palette": "alarm:palette", "palette_source": "palette:source"},
+                      "alarm_palette": "alarm:palette", "palette_source": "palette:source",
+                      "alarm_domain": "alarm:domain:{line}", "alarm_raw": "alarm:raw:{line}",
+                      "feed_events": "feed:events:{line}", "feed_status": "feed:status:{line}", "feed_ref": "feed:ref"},
         "sink": {"batch_size": 200, "flush_sec": 5}},
     # `badge.state`는 미끼(측정 #10 P0 1의 가짜 ① — 사이트 상수 config 줄): 필드와 값이 한 줄에 리터럴로 있지만 비교식도 코드도 아니다.
     "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi", "badge": {"empty_state": "-", "state": "-"}},
@@ -164,7 +166,7 @@ def run(cfg, consumer, mongo, redis):
     # `code.uses`가 읽기로 분류했었다(R3-1b ②가 "명령"으로 쓰기에 둔다).
     # 사내 모양(측정 #8): 쓰는 쪽은 `_run`을 가진 클래스이고, 요약 키 값의 `metadata.event_type`이 이 클래스 이름이다(입구 노드가 그걸로
     # 쓴 쪽을 고른다, R3-1c ①-a). 원천 키(`alarm:source:{line}`)를 읽어 요약 이름을 메시지에 실어 보낸다 — 직접 `set` 안 함.
-    "batch/refresh.py": '''"""배지 요약을 다시 만든다 — 원천 키를 읽고, 요약 키 이름을 메시지에 실어 보낸다(직접 쓰지 않는다)."""
+    "batch/refresh.py": '''"""배지 요약을 다시 만든다 — 도메인 키와 원천 키를 읽고, 요약 키 이름을 메시지에 실어 보낸다(직접 쓰지 않는다)."""
 
 
 class SummaryRefresh:
@@ -174,21 +176,134 @@ class SummaryRefresh:
     def _run(self):
         palette = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_palette"]) or "{}")
         for line in self.cfg["lines"]:
+            domain = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_domain"].format(line=line)) or "{}")
             source = self.redis.get(self.cfg["redis_key"]["alarm_source"].format(line=line))
-            rows = self.components.get("state_filter").apply(json.loads(source or "[]"))
+            rows = self.components.get("state_filter").apply(domain.get("record", []) + json.loads(source or "[]"))
             command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": rows,
                        "colors": palette.get("colors", [])}
             self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
 ''',
-    # 사내 모양(측정 #10): `_run`은 조립뿐이고 **거르는 줄은 컴포넌트에** 있다 — `_run`의 `get("<컴포넌트>")`와 `register(component="<컴포넌트>")`가
-    # 리터럴로 이어진다(호출 그래프에는 없다). 걷기의 단일값 조회(R3-4 ③)가 이 등록 줄로 범위를 넓힌다.
-    "batch/components.py": '''"""배치 파이프라인의 컴포넌트 — 등록 문자열로 `_run`이 `get("…")`로 찾는다."""
+    # 사내 모양(측정 #10·#11): `_run`은 조립뿐이고 **비교식은 컴포넌트 클래스에** 있다 — `_run`의 `get("<컴포넌트>")`와 등록 모음 파일의
+    # `register(component="<컴포넌트>", …)(<클래스>)`가 리터럴로 이어진다(호출 그래프에는 없다). 단일값 검사의 범위는 등록이 가리키는 클래스의 파일이다
+    # (R3-5 ③). 기본 클래스는 거르지 않고, 이 사이트 전용 클래스가 비교한다 — 한 줄에 짝이 둘이다.
+    "batch/components.py": '''"""배치 파이프라인의 컴포넌트 — 등록은 등록 모음 파일에 있고 `_run`이 `get("…")`로 찾는다."""
 
 
-@register(component="state_filter")
 class StateFilter:
     def apply(self, rows):
-        return [r for r in rows if r.get("state") != "-"]
+        return rows
+
+
+class GumiStateFilter:
+    def apply(self, rows):
+        return [r for r in rows if r.get("state") != "-" and r.get("wg") != "-"]
+''',
+    # 다른 사이트 전용 클래스(미끼) — 이 사이트(gumi)의 걷기는 이 파일을 보면 안 된다. 보면 원천 행의 `unit='ea'`가 가짜 나쁨이 된다.
+    "batch/sevt_filters.py": '''"""sevt 전용 컴포넌트."""
+
+
+class SevtStateFilter:
+    def apply(self, rows):
+        return [r for r in rows if r.get("unit") != "ea"]
+''',
+    # 사내 등록 모음 파일의 모양(사람 확인 10-15) — 레포마다 한 곳, 데코레이터가 아니라 호출형 네 모양: (a) 한 줄 `register(component="X")(Cls)`,
+    # (b) 사이트 인자(기본 클래스 위에 사이트 전용 클래스), (c) 점 표기 `alias.Cls`(`import <모듈> as alias`), (d) 여러 줄. 문서 문자열 속 예시는
+    # 등록이 아니다 — 세면 이 사이트의 state_filter가 둘이 돼 못 이음이 된다.
+    "common/registry.py": '''"""등록 모음 파일 — 컴포넌트 이름 → 클래스.
+
+예시(문서일 뿐 등록이 아니다):
+    @register(component="state_filter", gbm="mx", factory="gumi")
+    class LegacyStateFilter: ...
+"""
+import batch.components as comp
+import batch.sevt_filters as sevt_filters
+import common.fillers as fillers
+from batch.components import StateFilter
+from common.joiners import RefJoiner
+from common.parsers import RowParser
+
+register(component="state_filter")(StateFilter)
+register(component="state_filter", gbm="mx", factory="gumi")(comp.GumiStateFilter)
+register(component="state_filter", gbm="mx", factory="sevt")(sevt_filters.SevtStateFilter)
+register(component="row_parser")(RowParser)
+register(component="ref_joiner")(RefJoiner)
+register(
+    component="row_filler",
+)(
+    fillers.RowFiller
+)
+''',
+    # 도메인 키를 쓰는 배치 클래스 — 원천 묶음을 읽는다(사내 c-1·c-2의 가운데 홉).
+    "batch/domain.py": '''"""도메인 키를 만든다 — 원천 묶음의 행을 그대로 record로."""
+
+
+class DomainBuilder:
+    def __init__(self, cfg, redis):
+        self.cfg, self.redis = cfg, redis
+
+    def _run(self):
+        for line in self.cfg["lines"]:
+            raw = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_raw"].format(line=line)) or "{}")
+            record = {"metadata": {"event_type": "DomainBuilder"}, "record": raw.get("rows", [])}
+            self.redis.set(self.cfg["redis_key"]["alarm_domain"].format(line=line), json.dumps(record))
+''',
+    # c-1형의 원천 클래스 — 토픽 메시지를 받아 인덱스 자원(읽기)이 0이다. 같은 이름이 dt-api에도 있다(그쪽은 alarm:raw를 선언하지 않는다).
+    "common/source.py": '''"""원천 수집 — 메시지를 행으로 바꿔 원천 묶음에 둔다."""
+
+
+class SourceCollector:
+    def __init__(self, cfg, redis, components):
+        self.cfg, self.redis, self.components = cfg, redis, components
+
+    def _run(self, message):
+        rows = self.components.get("row_parser").parse(message)
+        record = {"metadata": {"event_type": "SourceCollector"}, "rows": rows}
+        self.redis.set(self.cfg["redis_key"]["alarm_raw"].format(line=message["line"]), json.dumps(record))
+''',
+    "common/parsers.py": '''"""메시지 → 행 — 이벤트 행만 남긴다."""
+
+
+class RowParser:
+    def parse(self, message):
+        return [row for row in message.get("rows", []) if row.get("kind") == "event"]
+''',
+    # c-2형의 원천 클래스 — 입력 셋(정상)을 합치고 빈 칸을 채운다. 여기엔 비교식이 없다. 컴포넌트 둘 중 빈 칸을 채우는 쪽이 코드 차례로는 뒤다 —
+    # 뒤 칸의 차례가 나쁜 필드 이름으로 정해지는지 본다(사람 결정 10-15 (c)).
+    "common/merge.py": '''"""원천 병합 — 이벤트·상태·기준표를 합쳐 행을 만들고 빈 칸을 채워 원천 묶음에 둔다."""
+
+
+class SourceMerger:
+    def __init__(self, cfg, redis, components):
+        self.cfg, self.redis, self.components = cfg, redis, components
+
+    def _run(self):
+        ref = json.loads(self.redis.get(self.cfg["redis_key"]["feed_ref"]) or "{}")
+        for line in self.cfg["lines"]:
+            events = json.loads(self.redis.get(self.cfg["redis_key"]["feed_events"].format(line=line)) or "[]")
+            status = json.loads(self.redis.get(self.cfg["redis_key"]["feed_status"].format(line=line)) or "[]")
+            merged = self.components.get("ref_joiner").join(events, status, ref)
+            rows = self.components.get("row_filler").fill(merged)
+            record = {"metadata": {"event_type": "SourceMerger"}, "rows": rows}
+            self.redis.set(self.cfg["redis_key"]["alarm_raw"].format(line=line), json.dumps(record))
+''',
+    "common/joiners.py": '''"""이벤트에 상태·기준표를 붙인다 — 바깥 병합이라 짝이 없으면 칸이 빈다."""
+
+
+class RefJoiner:
+    def join(self, events, status, ref):
+        by_id = {s["id"]: s for s in status}
+        codes = {c["code"]: c for c in ref.get("codes", [])}
+        return [{**e, **by_id.get(e["id"], {}), **codes.get(e["alarm_code"], {})} for e in events]
+''',
+    "common/fillers.py": '''"""병합 뒤 빈 칸 채우기."""
+
+
+class RowFiller:
+    def fill(self, rows):
+        for row in rows:
+            row.setdefault("state", "-")
+            row.setdefault("wg", "-")
+        return rows
 ''',
     # 측정 #10 P0 2의 모양 — 공용 키의 쓴 쪽이 서비스 디렉터리 **밖**(`common/`)에 있다. 토폴로지에 `path`가 없으니 processor·sink·batch 중 어느
     # 것인지 코드로는 못 가른다(사내 처리기 레포: 서비스 5개가 한 레포·한 config). 같은 이름이 dt-api에도 있어 레포 둘이다.
@@ -228,6 +343,17 @@ class PaletteLoader:
 
     def _run(self):
         return {"format": self.cfg["api"]["badge_format"], "colors": ["#d33", "#fc0", "#3a3"]}
+''',
+    # dt-core의 `common/source.py`와 같은 클래스 이름(사내 수집기·처리기 레포의 모양) — 이쪽은 alarm:raw를 선언하지 않는다.
+    "api/source.py": '''"""화면용 원천 표 — 메시지의 행을 형식과 함께 돌려준다."""
+
+
+class SourceCollector:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def _run(self, message):
+        return {"format": self.cfg["api"]["badge_format"], "rows": message.get("rows", [])}
 ''',
     "api/alarms.py": '''"""알람 화면 — alarm:stats:{line} 배지. 캐시가 비면 최근 alarm_window_min 분의 alarm_events에서 센다."""
 
@@ -288,8 +414,13 @@ VARIANTS = {
     # 측정 #10 P0 2의 모양(R3-4 ①) — batch가 읽는 공용 키의 쓴 클래스가 서비스 디렉터리 밖·두 레포에 있다. 걷기가 레포 단위로 가르는지 잰다.
     "palette-empty": "요약 키 data는 빈 배열이고 batch가 읽는 공용 팔레트 키의 colors가 빈 배열이다 — 쓴 쪽 PaletteLoader는 dt-core의 세 서비스가 "
                      "공유하는 자리와 dt-api에 같은 이름으로 있다",
+    # 측정 #11 뒤 사람이 준 정답 홉 표의 두 모양(R3-5 ④). c-1형: 요약 ← 도메인 ← 원천이 전부 빈 배열이고 원천을 쓴 클래스는 메시지 입력이다.
+    "chain-empty": "요약 키 data·도메인 키 record·원천 묶음 rows가 전부 빈 배열 — 원천을 쓴 SourceCollector는 메시지를 받아 인덱스 자원이 0이고 "
+                   "같은 이름이 dt-api에도 있다",
+    # c-2형: 도메인·원천 행은 있는데 모든 행의 state·wg가 '-'(같은 값인 문자열 일곱 필드 뒤)이고 이 사이트의 컴포넌트에 그 값의 비교식이 있다.
+    "chain-filtered": "요약 키 data는 빈 배열이고 도메인·원천 묶음 행은 있지만 모든 행의 state·wg가 '-'다 — 원천을 쓴 SourceMerger의 입력 셋은 정상이다",
 }
-_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty"}
+_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered"}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 
 
@@ -297,6 +428,19 @@ def _stats_data(docs, line, variant):
     """요약 키 값의 `data` — c-1형(`data-empty`)만 빈 배열, 나머지는 그 라인의 문서 요약."""
     if variant in _EMPTY_DATA:
         return []
+    return [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == line]
+
+
+# c-2형의 행 — 같은 값인 문자열 필드 일곱(무해) 뒤에 숫자 하나, 그 뒤에 state·wg가 '-'(측정 #11 P0 3: 필드 상한 6이 7번째 뒤를 가렸다).
+_FILTERED_ROW = {"unit": "ea", "zone": "A", "shift": "D", "area": "G1", "model": "X", "mode": "auto", "grade": "1", "qty": 0, "state": "-", "wg": "-"}
+
+
+def _chain_rows(docs, line, variant):
+    """도메인 키 record·원천 묶음 rows — chain-empty는 빈 배열, chain-filtered는 state·wg가 전부 '-'인 다섯 행, 나머지는 그 라인의 문서 요약(정상)."""
+    if variant == "chain-empty":
+        return []
+    if variant == "chain-filtered":
+        return [{"alarm_code": f"A{500 + i}", **_FILTERED_ROW} for i in range(5)]
     return [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == line]
 
 
@@ -350,9 +494,16 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             # 쓴 쪽의 입력 — 원천 키. `source-missing`은 키가 없고 `source-blank`은 빈 배열(R3-3 ②).
             **({} if variant == "source-missing" else
                {f"alarm:source:{l}": json.dumps([] if variant == "source-blank" else
-                                                [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"],
+                                                [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"], "unit": "ea",
                                                   **({"state": "-"} if variant == "source-filtered" else {})} for d in docs if d["line"] == l])
                 for l in LINES}),
+            # 도메인 키·원천 묶음과 그 입력 셋(R3-5 ④ — 사내 c-1·c-2의 사슬). 기본은 정상이라 다른 변형의 걷기는 여기서 안 멈춘다.
+            **{f"alarm:domain:{l}": json.dumps({"metadata": {"event_type": "DomainBuilder"}, "record": _chain_rows(docs, l, variant)}) for l in LINES},
+            **{f"alarm:raw:{l}": json.dumps({"metadata": {"event_type": "SourceCollector" if variant == "chain-empty" else "SourceMerger"},
+                                             "rows": _chain_rows(docs, l, variant)}) for l in LINES},
+            **{f"feed:events:{l}": json.dumps([{"id": i, "alarm_code": d["alarm_code"]} for i, d in enumerate(docs) if d["line"] == l]) for l in LINES},
+            **{f"feed:status:{l}": json.dumps([{"id": i, "status": ["RUN", "STOP"][i % 2]} for i in range(4)]) for l in LINES},
+            "feed:ref": json.dumps({"codes": [{"code": f"A{110 + i}", "name": f"code-{i}"} for i in range(3)]}),
             **{f"alarm:scan:{l}": json.dumps({
                     "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],
                     # 값이 쓴 쪽 이름을 **안** 싣는 키 — 클래스 이름이 아닌 문자열. 이런 키에서는 "쓴 쪽: 모른다"가 떠야 한다.
@@ -451,6 +602,8 @@ def main() -> int:
           f"case investigate {args.case_id} --stub-seeds {root / 'seeds.json'} --trace {root / 'trace'}")
     print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} "
           f"case trace {args.case_id} --trace {root / 'trace'}")
+    print(f"{py} -m src --config-root {cfg} --env-file {root / '.env'} "
+          f"case walk --target L1/Alarm --check badge_all_zero --stub-seeds {root / 'seeds.json'} --gbm mx --fct gumi      # LLM 없이 입구 + 걷기")
     print(f"\n리드 자리: {root / 'turns'}/NNN-ask.md 를 읽고 NNN-reply.md 를 써 준다.")
     return 0
 

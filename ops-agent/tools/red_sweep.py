@@ -2648,7 +2648,7 @@ CASES += [
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
  ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
  ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant == \"palette-empty\" else", "\"colors\": [] if False else", [PAL_T]),
- ("palette-empty가 빈 data가 아니다", LC, "_EMPTY_DATA = {\"data-empty\", \"source-missing\", \"source-blank\", \"source-filtered\", \"palette-empty\"}", "_EMPTY_DATA = {\"data-empty\", \"source-missing\", \"source-blank\", \"source-filtered\"}", [PAL_T]),
+ ("palette-empty가 빈 data가 아니다", LC, "\"source-filtered\", \"palette-empty\", \"chain-empty\"", "\"source-filtered\", \"chain-empty\"", [PAL_T]),
 ]
 
 
@@ -2693,12 +2693,12 @@ CASES += [
  ("통과한 필드를 안 적는다", WK, "                        status += f\" · 단일값 {passed} — 거르는 줄 없음({scope_note})\"", "                        pass", [LIT_T, LINK_T]),
  ("이은 컴포넌트를 뒤 칸으로 안 낸다", WK, "                          for found_at in linked_at.get(ev, [])[:3]]", "                          for found_at in []]", [LINK_T]),
  ("조회 문제를 일부만 검사로 안 적는다", WK, "                    elif scan.problem:", "                    elif False:", [LINK_T]),
- ("링크를 안 모은다", WK, "            linked_at[came_from] = list((await lookup(writer, fields={}, **branch.params)).linked_at)", "            linked_at[came_from] = []", [LINK_T]),
+ ("링크를 안 모은다", WK, "            linked_at[came_from] = list((await lookup(writer, fields=dict([watch]) if watch else {}, **branch.params)).linked_at)", "            linked_at[came_from] = []", [LINK_T]),
  ("리터럴 칸의 입력 증거가 그 홉의 읽기가 아니다", WK, "                            literal = (scope, hit.path, hit.line, ev)", "                            literal = (scope, hit.path, hit.line, \"\")", [LIT_T]),
  ("못 이음이 있어도 정상이라 한다", WK, "                    elif scan.unlinked:", "                    elif False:", [LINK_T]),
  ("걷기 노드가 조회를 안 넘긴다", ND, "lookup=deps.filter_lines, ", "", [WNODE_T]),
- ("측정판의 거르는 줄이 컴포넌트에 없다", LC, "        return [r for r in rows if r.get(\"state\") != \"-\"]", "        return [r for r in rows]", [LC_SRC_T]),
- ("측정판 batch가 컴포넌트를 안 찾는다", LC, "            rows = self.components.get(\"state_filter\").apply(json.loads(source or \"[]\"))", "            rows = json.loads(source or \"[]\")", [LC_SRC_T]),
+ ("측정판의 거르는 줄이 컴포넌트에 없다", LC, "        return [r for r in rows if r.get(\"state\") != \"-\" and r.get(\"wg\") != \"-\"]", "        return [r for r in rows if r.get(\"wg\") != \"-\"]", [LC_SRC_T]),
+ ("측정판 batch가 컴포넌트를 안 찾는다", LC, "            rows = self.components.get(\"state_filter\").apply(domain.get(\"record\", []) + json.loads(source or \"[]\"))", "            rows = domain.get(\"record\", []) + json.loads(source or \"[]\")", [LC_SRC_T]),
 ]
 
 
@@ -2748,7 +2748,27 @@ CASES += [
  ("빈 JSON 목록을 안 푼다", RP, "    return parsed if isinstance(parsed, list) or (isinstance(parsed, dict) and parsed) else None", "    return parsed if isinstance(parsed, (list, dict)) and parsed else None", [EMPTY_ROWS_T]),
 ]
 
-assert len(CASES) >= 806, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5 ④ — 측정판 모양(등록 모음 파일·c-1/c-2 사슬)과 정답 홉 표, 같은 줄 짝·뒤 칸 정렬·case walk의 칸 목록 ──
+BOARD_C1_T = "tests/test_board_walk.py::test_c1형_빈_배열_사슬은_메시지_입력_원천_클래스에서_입력을_모른다로_멈추고_다음_칸은_그_클래스와_이은_컴포넌트의_본문이다"
+BOARD_C2_T = "tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다"
+SAME_LINE_T = "tests/application/test_walk.py::test_한_줄에_짝이_둘이면_한_줄로_센다"
+CHAIN_T = "tests/test_local_case.py::test_chain_empty와_chain_filtered는_정답_홉_표의_사슬_모양이다"
+REG_BOARD_T = "tests/test_local_case.py::test_등록은_모음_파일에_호출형_네_모양으로_있고_문서_문자열_속_예시는_등록이_아니다"
+CASES += [
+ ("링크 조회에 이어 온 단일값을 안 싣는다", WK, "fields=dict([watch]) if watch else {}, **branch.params", "fields={}, **branch.params", [LIT_T, BOARD_C2_T]),
+ ("같은 줄의 짝을 따로 센다", WK, "lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))", "lines_hit = len(scan.hits)", [SAME_LINE_T, BOARD_C2_T]),
+ ("case walk가 칸을 안 찍는다", MN, "        for number, rung in enumerate(walk.rungs, 1):", "        for number, rung in enumerate([], 1):", [BOARD_C1_T, BOARD_C2_T]),
+ ("측정판이 중첩 함수 가림을 못 잡는다", WK, "                        scope_note = f\"{len(scan.checked)}/{len(same)} 대조, {len(scan.files)}파일\"", "                        params_for = f\"{len(scan.checked)}/{len(same)} 대조, {len(scan.files)}파일\"", [BOARD_C1_T]),
+ ("측정판에 사이트 인자 등록이 없다", LC, "register(component=\"state_filter\", gbm=\"mx\", factory=\"gumi\")(comp.GumiStateFilter)", "register(component=\"state_filter\")(comp.GumiStateFilter)", [REG_BOARD_T]),
+ ("측정판 등록이 여러 줄이 아니다", LC, "register(\n    component=\"row_filler\",\n)(\n    fillers.RowFiller\n)", "register(component=\"row_filler\")(fillers.RowFiller)", [REG_BOARD_T]),
+ ("측정판 c-2 행의 나쁜 필드가 일곱 필드 앞이다", LC, "_FILTERED_ROW = {\"unit\": \"ea\",", "_FILTERED_ROW = {\"state\": \"-\", \"unit\": \"ea\",", [CHAIN_T]),
+ ("chain-empty의 원천 쓴 쪽이 메시지 입력 클래스가 아니다", LC, "\"SourceCollector\" if variant == \"chain-empty\" else \"SourceMerger\"", "\"SourceMerger\"", [CHAIN_T, BOARD_C1_T]),
+ ("측정판 원천 클래스가 다른 레포에 같은 이름으로 없다", LC, "class SourceCollector:\n    def __init__(self, cfg):\n", "class SourceTable:\n    def __init__(self, cfg):\n", [BOARD_C1_T]),
+ ("측정판 원천 행에 통과할 단일값이 없다", LC, "\"occ_date\": d[\"occ_date\"], \"unit\": \"ea\",", "\"occ_date\": d[\"occ_date\"],", [BOARD_C1_T]),
+]
+
+assert len(CASES) >= 816, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

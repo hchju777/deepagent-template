@@ -314,7 +314,8 @@ async def test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_한
     assert walk.hops[1].status == "나쁨 — 3행 전부 wg='-' · 이 필드 값이 든 비교식 proc/job.py:L50 'rows = [r for r in rows if r[\"wg\"] != \"-\"]'"
     assert walk.hops[1].bad and walk.hops[1].writer == "W1"
     # 단일값 전부를 한 번에 대조한다(상한 없음) — 조회는 클래스마다 링크 한 번 + 입력마다 한 번이고 읽기가 아니다
-    assert lookup.calls == [("W0", {}, {}), ("W0", {"wg": "-", "lvl": "x"}, {}), ("W1", {}, {})] and walk.reads == 4
+    # 이어 온 단일값이 있는 클래스(W1)의 링크 조회는 그 필드를 싣는다 — 어댑터가 그 필드 이름이 든 컴포넌트를 뒤 칸 앞에 둔다(R3-5 ④)
+    assert lookup.calls == [("W0", {}, {}), ("W0", {"wg": "-", "lvl": "x"}, {}), ("W1", {"wg": "-"}, {})] and walk.reads == 4
     assert walk.hops[2].status == "나쁨 — 같은 단일값 wg='-' (아래 홉과 같다)" and walk.hops[2].bad                       # 조회 없이 이어진다
     # 멈춘 이유는 "쓴 쪽을 모른다"지만 리터럴 줄이 있으면 리드가 볼 곳은 그 줄의 함수다(사람 결정) — 입력은 그 입력 키의 읽기
     assert walk.stopped == "쓴 쪽을 모른다 — src:L1(값에 인덱스의 클래스 이름이 없다) (단일값이 든 비교식 proc/job.py:L50)"
@@ -390,3 +391,17 @@ async def test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_
     unknown = _Reads({**table, ("redis.get", "src:L1"): {"type": "string", "value": "[]"}})
     walk = (await run_walk(_state(), runner=unknown, classes=frozenset({"W0", "W1"}), lookup=free, clock=lambda: T0))["walk"]
     assert walk.next_hop() == ("code.uses", {"name": "src:{line}"}) and walk.stopped.startswith("쓴 쪽을 모른다 — src:L1")
+
+
+async def test_한_줄에_짝이_둘이면_한_줄로_센다():
+    """측정판 c-2형(R3-5 ④): `r.get("state") != "-" and r.get("wg") != "-"` 한 줄에 짝이 둘이다 — 짝 수로 세면 "외 1줄"이 없는 줄을 말한다."""
+    rows = [{"code": f"A{i}", "wg": "-", "st": "-"} for i in range(3)]
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("redis.get", "in:L1"): _value(record=rows)}
+    one = 'r for r in rows if r["st"] != "-" and r["wg"] != "-"'
+    pair = [FilterHit(path="p.py", line=5, text=one, repo="r", field=f, value="-") for f in ("st", "wg")]
+    other = FilterHit(path="q.py", line=9, text='x["wg"] != "-"', repo="r", field="wg", value="-")
+    for hits, tail in ((pair, f"p.py:L5 '{one}'"), (pair + [other], f"p.py:L5 '{one}' 외 1줄")):
+        lookup = _Lookup({("W0", (("st", "-"), ("wg", "-"))): FilterScan(hits=hits, checked=["wg", "st"], files=["p.py", "q.py"])})
+        walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=lookup,
+                               clock=lambda: T0))["walk"]
+        assert walk.hops[1].status == f"나쁨 — 3행 전부 st='-' wg='-' · 이 필드 값이 든 비교식 {tail}"

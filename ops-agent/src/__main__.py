@@ -964,6 +964,7 @@ def cmd_case_walk(args, env) -> int:
     from src.application.nodes import EngineDeps
     from src.application.runner_probe import ProbeRunner
     from src.application.walk_only import walk_only
+    from src.domain.actions import describe
     from src.domain.case import Case
     from src.knowledge import flow
 
@@ -1025,6 +1026,11 @@ def cmd_case_walk(args, env) -> int:
     target = briefing.target_key(state, site_config=site, flow_graph=flow_graph)
     print(briefing.case_block(state, site_config=site, target=target, code_index=code_index))
     walk = state.walk
+    if walk is not None and walk.rungs:
+        # 칸 전부, 차례대로 — 케이스 블록은 첫 칸(다음 홉)만 보인다. 측정 #12가 "다음 칸"의 차례를 정답 표와 대조한다(R3-5 ④). 리드가 받는 것은 아니다.
+        print("\n  칸(멈춘 자리부터 차례대로):")
+        for number, rung in enumerate(walk.rungs, 1):
+            print(f"    {number}. {describe(rung.action, rung.params)}")
     tail = f"걷기 읽기 {walk.reads}건 · {walk.seconds:.1f}초" if walk is not None else "걷기 없음(인덱스가 없거나 입구가 쓴 쪽을 못 골랐다)"
     print(f"\n  ({tail} · {graph_note} · 읽기 전용 — 저장소·보고서·트레이스에 남긴 것 없음)")
     return 0

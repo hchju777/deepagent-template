@@ -130,7 +130,9 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     # 필드·값 줄과 다른 서비스의 dict 줄(둘 다 레포 전체 grep이 가짜로 잡던 것).
     from tools.local_case import CORE_FILES
     assert 'self.components.get("state_filter")' in CORE_FILES["batch/refresh.py"] and 'r.get("state") != "-"' not in CORE_FILES["batch/refresh.py"]
-    assert '@register(component="state_filter")' in CORE_FILES["batch/components.py"] and 'r.get("state") != "-"' in CORE_FILES["batch/components.py"]
+    # 등록은 등록 모음 파일에 호출형으로(R3-5 ④) — 컴포넌트 파일엔 데코레이터가 없고, 비교식은 이 사이트 전용 클래스에 있다.
+    assert 'register(component="state_filter", gbm="mx", factory="gumi")(comp.GumiStateFilter)' in CORE_FILES["common/registry.py"]
+    assert "@register" not in CORE_FILES["batch/components.py"] and 'r.get("state") != "-"' in CORE_FILES["batch/components.py"]
     assert CORE_FILES["config/factories/gumi/common.json"]["badge"] == {"empty_state": "-", "state": "-"}
     assert '{"state": "-"' in CORE_FILES["processor/handler.py"]
 
@@ -151,3 +153,43 @@ def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_�
     assert 'cfg["redis_key"]["alarm_palette"]' in CORE_FILES["batch/refresh.py"] and 'cfg["redis_key"]["palette_source"]' in CORE_FILES["common/palette.py"]
     assert CORE_FILES["config/gbm/mx.json"]["redis_key"]["alarm_palette"] == "alarm:palette"
     assert "alarm_palette" not in API_FILES["config/gbm/mx.json"]["redis_key"]
+
+
+# ── R3-5 ④ — 사내 c-1·c-2의 사슬과 등록 모음 파일 ──
+
+def test_chain_empty와_chain_filtered는_정답_홉_표의_사슬_모양이다():
+    """측정 #11 뒤 사람이 준 정답 표의 모양. c-1: 요약(빈 배열) ← 도메인(빈 배열) ← 원천(빈 배열, 쓴 클래스는 메시지 입력이라 인덱스 자원 0).
+    c-2: 요약(빈 배열) ← 도메인(행 전부 state·wg가 '-', 같은 값인 문자열 일곱 필드 뒤) ← 원천(같은 값) ← 입력 셋(정상)."""
+    from tools.local_case import VARIANTS, _EMPTY_DATA
+    assert {"chain-empty", "chain-filtered"} <= set(VARIANTS) & _EMPTY_DATA
+    empty, filtered = _seeds(NOW, "chain-empty"), _seeds(NOW, "chain-filtered")
+    for s in (empty, filtered):
+        assert _value(s, "alarm:stats:L1")["record"][0]["data"] == []
+    assert _value(empty, "alarm:domain:L1") == {"metadata": {"event_type": "DomainBuilder"}, "record": []}
+    assert _value(empty, "alarm:raw:L1") == {"metadata": {"event_type": "SourceCollector"}, "rows": []}
+    rows = _value(filtered, "alarm:domain:L1")["record"]
+    same = [k for k, v in rows[0].items() if isinstance(v, str) and all(r[k] == v for r in rows)]
+    assert len(rows) == 5 and all(r["state"] == r["wg"] == "-" for r in rows) and same.index("state") >= 7
+    assert _value(filtered, "alarm:raw:L1") == {"metadata": {"event_type": "SourceMerger"}, "rows": rows}
+    assert all(_value(filtered, k) for k in ("feed:events:L1", "feed:status:L1", "feed:ref"))
+    # 다른 변형의 도메인·원천 묶음은 정상이다 — 걷기가 거기서 멈추면 다른 변형의 측정이 바뀐다
+    healthy = _seeds(NOW, "healthy")
+    assert _value(healthy, "alarm:domain:L1")["record"] and _value(healthy, "alarm:raw:L1")["rows"]
+
+
+def test_등록은_모음_파일에_호출형_네_모양으로_있고_문서_문자열_속_예시는_등록이_아니다():
+    """사내 등록 모음 파일의 모양(사람 확인 10-15): (a) 한 줄, (b) 사이트 인자(기본 클래스 위에 사이트 전용 클래스), (c) 점 표기 별칭, (d) 여러 줄.
+    문서 문자열의 `@register` 예시는 세지 않는다 — 세면 이 사이트의 state_filter가 둘이 돼 못 이음이 된다."""
+    from src.infrastructure.deployed_code import registrations
+    from tools.local_case import CORE_FILES
+    text = CORE_FILES["common/registry.py"]
+    regs = registrations("common/registry.py", text)
+    assert [(r.component, r.cls, r.module, r.site) for r in regs] == [
+        ("state_filter", "StateFilter", None, {}),
+        ("state_filter", "GumiStateFilter", "batch.components", {"gbm": "mx", "factory": "gumi"}),
+        ("state_filter", "SevtStateFilter", "batch.sevt_filters", {"gbm": "mx", "factory": "sevt"}),
+        ("row_parser", "RowParser", None, {}),
+        ("ref_joiner", "RefJoiner", None, {}),
+        ("row_filler", "RowFiller", "common.fillers", {})]
+    assert '@register(component="state_filter"' in text and "register(\n    component=" in text
+    assert not [p for p, t in CORE_FILES.items() if p.endswith(".py") and p != "common/registry.py" and "register(" in t]

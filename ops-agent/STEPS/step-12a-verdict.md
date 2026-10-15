@@ -1016,6 +1016,40 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 보드: source-filtered r0 입력 행 `나쁨 — 4행 전부 state='-' · 이 필드 값이 든 비교식 batch/components.py:L7 'return [r for r in rows if r.get("state") != "-"]'`(미끼 둘은 안 잡힘), 멈춤 꼬리 `(단일값이 든 비교식 batch/components.py:L7)`, 첫 칸 `code.read line=7`; palette-empty는 전과 같다. 측정판의 등록은 아직 데코레이터 형(호출형·사이트 인자·점 표기·여러 줄은 ④에서).
 - 테스트 먼저(RED → GREEN). 스윕 +11(806).
 
+#### R3-5 ④ (10-15) ✅ — 측정판 모양 + 정답 홉 표 테스트 (+ 표가 드러낸 고침 둘, `case walk`의 칸 목록)
+
+- 측정판(`tools/local_case.py`)에 사내 c-1·c-2의 사슬을 세웠다: 요약 키 ← 도메인 키(`alarm:domain:{line}`, `DomainBuilder`) ← 원천 묶음
+  (`alarm:raw:{line}`). 변형 `chain-empty`(c-1형 — 셋 다 빈 배열; 원천의 쓴 쪽 `SourceCollector`는 메시지 입력이라 인덱스 자원 0이고 같은 이름이
+  dt-api에도 있다)와 `chain-filtered`(c-2형 — 도메인·원천 행 전부 `state='-' wg='-'`, 같은 값인 문자열 일곱 필드 뒤; 원천의 쓴 쪽 `SourceMerger`의
+  입력 셋 `feed:*`은 정상). 다른 변형의 도메인·원천 묶음은 정상이라 그 측정은 행이 하나 늘 뿐이다.
+- **등록 모음 파일**(`common/registry.py`) 하나에 호출형 네 모양 — (a) 한 줄, (b) 사이트 인자(기본 `StateFilter`는 거르지 않고 이 사이트 전용
+  `GumiStateFilter`가 비교한다; 다른 사이트 전용은 다른 파일의 미끼), (c) 점 표기 별칭, (d) 여러 줄 — 과 문서 문자열 속 `@register` 예시(세면 이
+  사이트의 state_filter가 둘이 돼 못 이음이 된다). 컴포넌트 파일엔 데코레이터가 없다. 원천 키 행에 `unit='ea'`를 넣어 "단일값 통과 뒤 두 레포
+  가르기" 순서를 측정판이 탄다 — 이제 측정판이 P0 1(중첩 함수 가림)을 잡는다(스윕으로 확인).
+- **정답 홉 표 테스트**(`tests/test_board_walk.py`): 트리는 테스트가 세우고(리포 `config/`·`knowledge/`를 베끼지 않는다 — 사내에서 실제 값으로 바뀌는
+  칸) 대상 레포 둘은 측정판 파일 그대로, `code graph`(graphify 없음) 한 번 뒤 `case walk --target L1/Alarm`을 c-1형·c-2형·정상 시드로. 행(증거 칸
+  뺌)·주·멈춤·칸을 통째로 대조한다.
+  - c-1형: `alarm:raw:L1 | SourceCollector [dt-core(서비스 3개 공유)] | 빈 배열 (rows)`, 주 `… alarm:raw:{line}을 선언한 dt-core(서비스 3개 공유)로
+    골랐다`, 멈춤 `입력을 모른다 — SourceCollector(인덱스 자원 0 — 메시지 입력일 수 있다)`, 칸 `SourceCollector` 본문 → `RowParser` 본문(그 안의
+    `row.get("kind") == "event"`). 다른 입력은 정상(가짜 나쁨 0).
+  - c-2형: `alarm:domain:L1 | DomainBuilder [batch] | 나쁨 — 5행 전부 state='-' wg='-' · 이 필드 값이 든 비교식 batch/components.py:L11 '…' · 대조
+    안 함 1개(문자열 아님)`, `alarm:raw:L1 | SourceMerger [dt-core(서비스 3개 공유)] | 나쁨 — 같은 단일값 state='-' (아래 홉과 같다)`, 입력 셋 정상,
+    멈춤 `입력이 다 정상 — SourceMerger (단일값이 든 비교식 batch/components.py:L11)`, 칸 그 줄의 함수 → `SourceMerger._run` → `RowFiller` 본문 →
+    `RefJoiner` 본문.
+  - 정상 시드: 가짜 나쁨 0(단일값 검사는 돌고 다른 사이트 전용 클래스의 `unit != "ea"`에 안 걸린다).
+- 표가 드러낸 것(고침):
+  - **같은 줄의 짝 둘을 "외 1줄"로 셌다** — `r.get("state") != "-" and r.get("wg") != "-"`는 한 줄인데 짝 수로 세어 없는 줄을 말했다. `(경로, 줄)`로 센다.
+  - **뒤 칸 정렬이 걷기에선 안 먹었다** — ③ 항목은 "나쁜 필드 이름이 리터럴로 든 파일 먼저"라 적었지만 걷기는 링크를 `fields={}`로 물어 어댑터가
+    정렬하지 않았다(코드 차례 그대로 — 뒤 칸 셋에서 잘릴 수 있다). 이어 온 단일값이 있으면 그 필드로 묻는다. c-2형은 빈 칸을 채우는 컴포넌트
+    (`RowFiller`)가 코드 차례로 뒤인데 칸에서 먼저 온다.
+  - `case walk`가 **칸 전부**를 찍는다(`칸(멈춘 자리부터 차례대로):` 번호 목록) — 케이스 블록은 첫 칸(다음 홉)만 보여 측정 #12가 "다음 칸"의 차례를
+    대조할 수 없었다. 측정 도구의 출력이지 리드가 받는 것은 아니다.
+- 남긴 것(측정 #12가 볼 것): 범위는 사람 결정대로 등록이 가리키는 클래스의 **파일**이다 — 다른 사이트 전용 클래스가 **같은 파일**에 있으면 그
+  비교식도 범위에 든다(측정판은 다른 파일에 두었다). 채우는 자리에 필드 이름이 리터럴로 안 나오면 정렬이 안 먹어 코드 차례(최대 3)다.
+- 보드: chain-empty·chain-filtered의 `case walk`가 테스트의 표 그대로(행·주·멈춤·칸), source-filtered·palette-empty는 멈춤·첫 칸 그대로(행
+  `alarm:domain:L1 … 정상`이 하나 늘었다), 다른 배지 행 `L1/Caution`은 `걷기 없음`, 넷 다 읽기 전용(저장소·출력 변화 없음).
+- 테스트 먼저(RED → GREEN: 측정판 2·걷기 1, 측정판 걷기 3은 엔진 수정을 빼고 실패 확인). 스윕 +10(816), 앵커 재지정 4.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.
