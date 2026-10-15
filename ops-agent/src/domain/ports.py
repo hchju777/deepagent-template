@@ -255,9 +255,9 @@ class DeployedCodePort(ABC):
         단위로 가를 때(R3-4 ①)."""
 
     @abstractmethod
-    async def filter_lines(self, name: str, *, field: str, value: str, service: str = "", repo: str = "") -> FilterScan:
-        """걷기의 단일값 검사(R3-4 ③) — 이 클래스의 파일과 이은 컴포넌트 파일에서 필드와 값이 한 비교식 양쪽인 줄. 등재 항목이 아니다(리드가 못 낸다) —
-        걷기 노드만 부르고, 읽기 상한·증거 밖이다. 던지지 않는다(`problem`)."""
+    async def filter_lines(self, name: str, *, fields: dict[str, str] | None = None, service: str = "", repo: str = "") -> FilterScan:
+        """걷기의 단일값 검사(R3-4 ③ → R3-5 ③) — 이 클래스의 파일과 이은 컴포넌트 **클래스** 파일에서 `fields`(필드 → 값) 전부와 비교식을 맞춘다. `fields`가
+        비면 링크만(멈춘 자리의 뒤 칸). 등재 항목이 아니다(리드가 못 낸다) — 걷기 노드만 부르고, 읽기 상한·증거 밖이다. 던지지 않는다(`problem`)."""
 
     @abstractmethod
     async def read(self, service: str, path: str, *, offset: int | None = None,

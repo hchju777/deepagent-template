@@ -167,21 +167,25 @@ class Hop(StrictModel):
 
 
 class FilterHit(StrictModel):
-    """단일값을 거르는 코드 줄 하나(R3-4 ③) — 필드와 값이 한 비교식의 양쪽에 리터럴로(`x["f"] != "v"`). 컴포넌트 등록 줄(`register(component="X")`)에도 쓴다."""
+    """코드 줄 하나(R3-4 ③) — 필드와 값이 한 비교식의 양쪽에 리터럴로 든 줄(`x["f"] != "v"`; `field`·`value`가 그 짝), 또는 이은 컴포넌트 **클래스**의
+    자리(R3-5 ③ — 등록 줄이 아니라 등록이 가리키는 클래스 정의 줄; 그 줄을 `code.read line=`에 주면 클래스 본문이 온다)."""
     path: str
     line: int
     text: str
     repo: str = ""
+    field: str = ""
+    value: str = ""
 
 
 class FilterScan(StrictModel):
     """걷기의 단일값 검사 — 어댑터 안에서 한 조회의 결과(R3-4 ③, 사람 결정 10-14). 범위 = 그 입력을 읽는 클래스의 파일 + `get("X")`(리터럴)↔
     `register(component="X")`로 이은 컴포넌트 파일(config 제외). runner를 안 거치므로 읽기 상한·증거 밖이다 — 표에 적히는 것은 줄의 자리와 본문."""
-    hits: list[FilterHit] = []
-    files: list[str] = []                    # 본 파일들 — 클래스 파일 먼저
+    hits: list[FilterHit] = []               # 필드 값이 든 비교식 줄들(파일 차례) — 어느 필드·값인지 함께
+    checked: list[str] = []                  # 대조한 필드들(N) — 조회가 안 되면 비어 있다(일부만 검사 0/M)
+    files: list[str] = []                    # 본 파일들 — 클래스 파일 먼저, 그 뒤 이은 컴포넌트 클래스 파일
     linked: list[str] = []                   # 이은 컴포넌트 이름(리터럴)
-    linked_at: list[FilterHit] = []          # 컴포넌트 등록 줄 — 뒤 칸(등록된 클래스·함수 본문)의 자리
-    unlinked: list[str] = []                 # `get(<변수>)`의 변수 이름 — 못 이음(새 데이터 링크는 만들지 않는다)
+    linked_at: list[FilterHit] = []          # 이은 컴포넌트 **클래스**의 자리(나쁜 필드 이름이 리터럴로 든 파일 먼저) — 뒤 칸
+    unlinked: list[str] = []                 # 못 이은 것 — `변수 x`·`X: Cls(인덱스에 없음)`·`X(이 사이트의 등록 없음)`. 하나라도 있으면 "일부만 검사"
     problem: str = ""                        # 조회 자체가 안 됐을 때(인덱스·클래스·스냅샷) — "없음"과 다르다
 
 

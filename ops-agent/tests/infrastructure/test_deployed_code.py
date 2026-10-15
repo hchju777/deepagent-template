@@ -865,32 +865,69 @@ async def test_code_read에_line을_주면_그_줄을_품은_가장_안쪽_함�
     assert action_problem("code.read", {"service": "sink", "path": "jobs/run2.py", "line": 6}) is None       # 등재 목록의 선택 인자
 
 
-# ── R3-4 ③ — 단일값 검사의 범위와 짝 ──
+# ── R3-4 ③ → R3-5 ③ — 단일값 검사의 범위와 짝 ──
 
-async def test_filter_lines는_클래스_파일과_이은_컴포넌트_파일에서_필드와_값이_한_비교식_양쪽인_줄만_찾는다(clock):
-    """측정 #10 P0 1: 레포 전체 grep(400줄 상한, 첫 리터럴)은 사이트 상수 config 줄과 다른 처리기의 dict 줄을 가짜로 잡고 진짜 `["<필드>"] != "-"`
-    줄은 놓쳤다. 사람 결정: 범위 = 그 입력을 읽는 클래스의 파일 + `get("X")`(리터럴)↔`register(component="X")`로 이은 컴포넌트 파일만(config 제외),
-    짝 = 필드와 값이 한 비교식의 양쪽. X가 변수면 "못 이음 — 변수"(새 데이터 링크는 만들지 않는다). 던지지 않는다 — 조회가 안 되면 `problem`."""
+REGISTRY = (
+    'import pipe.filters as flt\n'
+    'from pipe.filters import StateFilter\n'
+    'from pipe.shapes import ShapeFilter\n'
+    '\n'
+    'register(component="state_filter")(StateFilter)\n'                                        # (a) 한 줄 단순 이름
+    'register(component="state_filter", gbm="mx", factory="gumi")(flt.SiteFilter)\n'            # (b) 사이트 인자 + (c) 점 표기
+    'register(component="state_filter", gbm="mx", factory="other")(flt.OtherFilter)\n'           # (b) 다른 사이트 — 후보 아님
+    'register(\n'
+    '    component="shape_filter",\n'
+    ')(\n'
+    '    ShapeFilter\n'                                                                           # (d) 여러 줄
+    ')\n'
+    'HELP = """예시: @register(component="doc_only")(Cls) — 문서 문자열, 등록 아님"""\n'
+    'register(component="ghost")(GhostFilter)\n'                                                 # 인덱스에 없는 클래스 — 못 이음
+)
+FILES = {"pipe/__init__.py": "",
+         "pipe/job.py": 'class Job:\n    def _run(self, rows):\n        self.components.get("shape_filter")\n'
+                        '        rows = self.components.get("state_filter").apply(rows)\n        self.components.get("ghost")\n        kind = self.cfg.get("kind")\n'
+                        '        if "-" == rows[0].get("state"):\n            return []\n        return rows\n',
+         "pipe/filters.py": 'class StateFilter:\n    def apply(self, rows):\n        return [r for r in rows if r["state"] != "-"]\n\n\n'
+                            'class SiteFilter:\n    def apply(self, rows):\n        return [r for r in rows if r.get("state") != "-" and r["kind"] != "x"]\n\n\n'
+                            'class OtherFilter:\n    def apply(self, rows):\n        return [r for r in rows if r["other"] == "-"]\n',
+         "pipe/shapes.py": 'class ShapeFilter:\n    def apply(self, rows):\n        return rows\n',
+         "pipe/registry.py": REGISTRY,
+         "pipe/other.py": 'DEFAULTS = {"state": "-"}\n\n\ndef lookup(r):\n    return r.get("state")\n',                 # 사전 리터럴 — 비교식이 아니다
+         "config/gbm/mx.json": '{"state": "-", "k": {"state": "-"}}\n',                                                  # config — 범위 밖
+         "pipe/var.py": 'class Var:\n    def _run(self, name):\n        self.components.get("state_filter")\n        return self.components.get(name)\n'}
+
+
+class _FilterSrc:
+    async def files(self):
+        return sorted(FILES)
+
+    async def read(self, path):
+        return FILES.get(path)
+
+
+def test_registrations는_AST로_네_모양의_등록을_읽고_문서_문자열_속_예시는_등록으로_안_센다():
+    """사람 결정(10-15): 등록 모음 파일의 모양은 (a) 한 줄 단순 이름, (b) 사이트 인자, (c) 점 표기(import 별칭), (d) 여러 줄 — 정규식은 (c)(d)를 놓치고
+    문서 문자열 속 `@register` 예시를 등록으로 센다. AST: `register` 호출의 `component` 상수 + 바깥 호출 인자(Name, 또는 Attribute의 끝 이름 — 별칭은 모듈)."""
+    from src.infrastructure.deployed_code import registrations
+    got = [(r.component, r.cls, r.module, r.site, r.line) for r in registrations("pipe/registry.py", REGISTRY)]
+    assert got == [("state_filter", "StateFilter", None, {}, 5),
+                   ("state_filter", "SiteFilter", "pipe.filters", {"gbm": "mx", "factory": "gumi"}, 6),
+                   ("state_filter", "OtherFilter", "pipe.filters", {"gbm": "mx", "factory": "other"}, 7),
+                   ("shape_filter", "ShapeFilter", None, {}, 8),
+                   ("ghost", "GhostFilter", None, {}, 14)]
+    deco = "@register(component=\"x\")\nclass Deco:\n    pass\n"
+    assert [(r.component, r.cls, r.line) for r in registrations("d.py", deco)] == [("x", "Deco", 2)]        # 데코레이터 형도 같은 모양
+    assert registrations("bad.py", "def (:\n") == []                                                      # 못 읽는 파일은 등록 없음(던지지 않는다)
+
+
+async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스_파일을_범위로_비교식을_먼저_뽑아_단일값_전부와_맞춘다(clock):
+    """측정 #10 P0 1 → #11 P0 3: 범위는 등록 **줄**의 파일이 아니라 `register(component="X")(<클래스>)`의 클래스를 인덱스로 푼 파일. 사이트 인자가 전부
+    이 사이트 값과 같은 등록만 후보이고 그중 명시 인자가 많은 것(같으면 여럿). 비교식을 먼저 뽑아 단일값 전부와 맞춘다(상한 없음). 못 이은 것(변수·
+    등록 없음·인덱스에 없음)은 `unlinked`. 던지지 않는다 — 조회가 안 되면 `problem`."""
     from src.domain.envelope import ProbeResult
-    from src.infrastructure.deployed_code import DeployedCode, comparison_lines, component_names
+    from src.infrastructure.deployed_code import DeployedCode, comparison_lines, comparison_pairs, component_names
     from src.knowledge import index as ix
     from src.knowledge.schema import Deployment, Service, Topology
-
-    FILES = {"pipe/__init__.py": "",
-             "pipe/job.py": 'class Job:\n    def _run(self, rows):\n        rows = self.components.get("state_filter").apply(rows)\n'
-                            '        if "-" == rows[0].get("state"):\n            return []\n        return rows\n',
-             "pipe/filters.py": '@register(component="state_filter")\nclass StateFilter:\n    def apply(self, rows):\n'
-                                '        return [r for r in rows if r["state"] != "-"]\n',
-             "pipe/other.py": 'DEFAULTS = {"state": "-"}\n\n\ndef lookup(r):\n    return r.get("state")\n',                 # 사전 리터럴 — 비교식이 아니다
-             "config/gbm/mx.json": '{"state": "-", "k": {"state": "-"}}\n',                                                  # config — 범위 밖
-             "pipe/var.py": 'class Var:\n    def _run(self, name):\n        return self.components.get(name)\n'}
-
-    class Src:
-        async def files(self):
-            return sorted(FILES)
-
-        async def read(self, path):
-            return FILES.get(path)
 
     class Reader:
         def __init__(self, ok=True):
@@ -902,26 +939,42 @@ async def test_filter_lines는_클래스_파일과_이은_컴포넌트_파일에
 
     topology = Topology(services={"processor": Service(repo="dt-proc", role="가공한다")})
     code = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
-    assert (await code.filter_lines("Job", field="state", value="-")).problem == "심볼 인덱스가 없다"
-    index = await ix.build_index({"dt-proc": Src()}, commits={"dt-proc": "c2"})
+    assert (await code.filter_lines("Job", fields={"state": "-"})).problem == "심볼 인덱스가 없다"
+    index = await ix.build_index({"dt-proc": _FilterSrc()}, commits={"dt-proc": "c2"})
     code.attach_index(index)
-    scan = await code.filter_lines("Job", field="state", value="-")
-    assert scan.problem == "" and scan.files == ["pipe/job.py", "pipe/filters.py"] and scan.linked == ["state_filter"] and scan.unlinked == []
-    assert [(h.path, h.line, h.text, h.repo) for h in scan.hits] == [("pipe/job.py", 4, 'if "-" == rows[0].get("state"):', "dt-proc"),
-                                                                    ("pipe/filters.py", 4, 'return [r for r in rows if r["state"] != "-"]', "dt-proc")]
-    assert [(h.path, h.line, h.text) for h in scan.linked_at] == [("pipe/filters.py", 1, '@register(component="state_filter")')]
-    assert (await code.filter_lines("Job", field="state", value="x")).hits == []
-    var = await code.filter_lines("Var", field="state", value="-")
-    assert var.files == ["pipe/var.py"] and var.linked == [] and var.unlinked == ["name"] and var.hits == []
-    assert "인덱스에 없다" in (await code.filter_lines("Nope", field="a", value="b")).problem
-    assert "없는 서비스" in (await code.filter_lines("Job", field="a", value="b", service="nope")).problem
-    assert "없는 레포" in (await code.filter_lines("Job", field="a", value="b", repo="nope")).problem
-    assert (await code.filter_lines("Job", field="a", value="b", service="processor")).files[0] == "pipe/job.py"
-    assert (await code.filter_lines("Job", field="a", value="b", repo="dt-proc")).files[0] == "pipe/job.py"
+    scan = await code.filter_lines("Job", fields={"state": "-", "kind": "x"})
+    assert scan.problem == "" and scan.checked == ["state", "kind"]
+    assert scan.files == ["pipe/job.py", "pipe/shapes.py", "pipe/filters.py"] and scan.linked == ["shape_filter", "state_filter"]
+    # 범위는 **파일**(사람 결정) — 사이트 인자가 맞는 등록(SiteFilter)의 파일에 (a)의 StateFilter도 있어 그 줄(L3)도 든다. 두 필드가 한 줄의 비교식에 각각
+    assert [(h.path, h.line, h.field, h.value) for h in scan.hits] == [("pipe/job.py", 7, "state", "-"), ("pipe/filters.py", 3, "state", "-"),
+                                                                       ("pipe/filters.py", 8, "state", "-"), ("pipe/filters.py", 8, "kind", "x")]   # 파일 차례: 클래스 → 이은 것
+    assert scan.hits[2].text == 'return [r for r in rows if r.get("state") != "-" and r["kind"] != "x"]' and scan.hits[0].repo == "dt-proc"
+    # 뒤 칸의 자리는 등록 줄이 아니라 **클래스**의 자리 — 나쁜 필드 이름이 리터럴로 든 파일 먼저
+    assert [(h.path, h.line) for h in scan.linked_at] == [("pipe/filters.py", 6), ("pipe/shapes.py", 1)] and "register(component='state_filter')" in scan.linked_at[0].text
+    assert scan.unlinked == ["ghost: GhostFilter(인덱스에 없음)"]                                                 # 사전 get("kind")은 등록이 없다 — 못 이음 아님
+    plain = await code.filter_lines("Job", fields={})
+    assert plain.hits == [] and plain.checked == [] and [(h.path, h.line) for h in plain.linked_at] == [("pipe/shapes.py", 1), ("pipe/filters.py", 6)]   # 필드 없으면 부른 차례
+    assert (await code.filter_lines("Job", fields={"state": "x"})).hits == []
+    var = await code.filter_lines("Var", fields={"state": "-"})
+    assert var.files == ["pipe/var.py", "pipe/filters.py"] and var.unlinked == ["변수 name"] and [h.line for h in var.hits] == [3, 8]
+    assert "인덱스에 없다" in (await code.filter_lines("Nope", fields={})).problem
+    assert "없는 서비스" in (await code.filter_lines("Job", fields={}, service="nope")).problem
+    assert "없는 레포" in (await code.filter_lines("Job", fields={}, repo="nope")).problem
+    assert (await code.filter_lines("Job", fields={}, service="processor")).files[0] == "pipe/job.py"
+    assert (await code.filter_lines("Job", fields={}, repo="dt-proc")).files[0] == "pipe/job.py"
     broken = DeployedCode(Reader(ok=False), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
     broken.attach_index(index)
-    assert (await broken.filter_lines("Job", field="state", value="-")).problem == "dt-proc의 스냅샷을 못 받았다"
-    # 순수 조각 — 짝과 컴포넌트 이름
+    assert (await broken.filter_lines("Job", fields={"state": "-"})).problem == "dt-proc의 스냅샷을 못 받았다"
+    # 다른 사이트면 (b)의 다른 등록 — 후보가 없으면 "이 사이트의 등록 없음"
+    other = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="other", clock=clock)
+    other.attach_index(index)
+    assert [(h.path, h.line) for h in (await other.filter_lines("Job", fields={})).linked_at] == [("pipe/shapes.py", 1), ("pipe/filters.py", 11)]
+    third = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="third", clock=clock)
+    third.attach_index(index)
+    scan3 = await third.filter_lines("Job", fields={})
+    assert [(h.path, h.line) for h in scan3.linked_at] == [("pipe/shapes.py", 1), ("pipe/filters.py", 1)]        # 사이트 인자 없는 (a)만 후보
+    # 순수 조각 — 짝 전부, 특정 짝, 컴포넌트 이름(같은 수신자의 변수만 "못 이음")
     text = 'x = {"f": "v"}\n# r["f"] != "v"\nok = r["f"] != "v"\nrev = "v" == r.get("f", None)\nnm = r[f] != "v"\nraw = r["f"] != v\nat = getattr(r, "f") == "v"\n'
+    assert comparison_pairs(text) == [(3, "f", "v", 'ok = r["f"] != "v"'), (4, "f", "v", 'rev = "v" == r.get("f", None)'), (7, "f", "v", 'at = getattr(r, "f") == "v"')]
     assert comparison_lines(text, "f", "v") == [(3, 'ok = r["f"] != "v"'), (4, 'rev = "v" == r.get("f", None)'), (7, 'at = getattr(r, "f") == "v"')]
-    assert component_names('a = reg.get("x")\nb = reg.get(\'y\', None)\nc = reg.get(key)\nd = reg.get("x")\n') == (["x", "y"], ["key"])
+    assert component_names('a = reg.get("x")\nb = reg.get(\'y\', None)\nc = reg.get(key)\nd = reg.get("x")\ne = cfg.get(other)\n') == (["x", "y"], ["key"])

@@ -813,9 +813,9 @@ async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_
     from src.domain.case import FilterScan
     looked = []
 
-    async def lookup(name, *, field, value, **params):
-        looked.append((name, field, value, params))
-        return FilterScan(files=["w.py"])
+    async def lookup(name, *, fields, **params):
+        looked.append((name, dict(fields), params))
+        return FilterScan(files=["w.py"], checked=list(fields))
     runner = ScriptedRunner({"t-0": ok("t-0", rest, "rest.query entry='summary_badge'"), "t-0-1": ok("t-0-1", value, "redis.get key='alarm:stats:L1'"),
                              "t-1": ok("t-1", value, "redis.get key='alarm:stats:L1'"), "t-2": ok("t-2", res_text, "code.resources name='Writer'"),
                              "t-3": ok("t-3", src, "redis.get key='src:L1'")},
@@ -841,7 +841,8 @@ async def test_걷기_노드는_입구_뒤_frame_전에_돌고_State에_walk를_
     assert [t.id for t in final.plan_tasks] == ["t-0", "t-1", "t-2", "t-3"] and runner.ran == ["t-0", "t-0-1", "t-1", "t-2", "t-3"]
     assert [t.walked for t in final.plan_tasks] == [False, False, True, True]                      # 걷기 읽기는 플래그로 — id 모양이 아니라
     assert final.walk.hops[0].status == "빈 배열 (data)"
-    assert looked == [("Writer", "a", "x", {"repo": "dt-core"})] and final.walk.hops[1].status.endswith("단일값 a='x' — 거르는 줄 없음(1파일)")
+    assert looked == [("Writer", {}, {"repo": "dt-core"}), ("Writer", {"a": "x"}, {"repo": "dt-core"})]    # 링크 한 번 + 단일값 한 번, 가지의 인자 그대로
+    assert final.walk.hops[1].status.endswith("단일값 a='x' — 거르는 줄 없음(1/1 대조, 1파일)")
     runner.ran.clear()
     blind = dataclasses.replace(deps_for(runner, intake=spec, declared={"rediskey": ("alarm:stats:L1",)}, classes=frozenset({"Writer"}),
                                          clock=lambda: T0), frame=frame)
@@ -874,7 +875,7 @@ async def test_걷기_노드가_던지면_멈춤_사유가_State에_남고_케�
                             raws={"t-0.e1": rest, "t-0-1.e1": value, "t-1.e1": value, "t-2.e1": res_text, "t-3.e1": src})
     spec = IntakeSpec(read=("rest.query", {"entry": "summary_badge", "params": {}}), fields=("group", "title"))
 
-    async def boom(name, *, field, value, **params):
+    async def boom(name, *, fields, **params):
         raise RuntimeError("boom")
 
     seen = []

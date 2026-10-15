@@ -1607,7 +1607,7 @@ def test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸
     picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"], writer="SummaryRefresh",
                         writer_at="metadata.event_type")
     walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", service="batch", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1")],
-                reads=1, stopped="입력이 다 정상 — SummaryRefresh (단일값을 거르는 코드 줄 batch/refresh.py:L12)", stop_at="t-1.e1",
+                reads=1, stopped="입력이 다 정상 — SummaryRefresh (단일값이 든 비교식 batch/refresh.py:L12)", stop_at="t-1.e1",
                 rungs=[Rung(action="code.read", params={"service": "batch", "path": "batch/refresh.py", "line": 12}, evidence="t-3.e1"),
                        Rung(action="code.read", params={"service": "batch", "path": "batch/refresh.py", "line": 9}, evidence="t-2.e1")])
     base = CaseState(case=_patrol_case(), target=picked, walk=walk, plan_tasks=_intake_state().plan_tasks + [

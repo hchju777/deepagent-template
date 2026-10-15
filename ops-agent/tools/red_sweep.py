@@ -2515,7 +2515,7 @@ CASES += [
  ("한 행이어도 단일값을 적는다", RP, "    if len(rows) < 2:\n        return []\n    out = []", "    if False:\n        return []\n    out = []", [PROFILE_T]),
  ("JSON 문자열 값을 안 푼다", RP, "        decoded = _json_value(value)\n        if decoded is not None:", "        decoded = None\n        if decoded is not None:", [PROFILE_T]),
  ("요약 줄에 프로필을 안 싣는다", RP, "    head = _first_profile(data)\n    if isinstance(data, list):", "    head = \"\"\n    if isinstance(data, list):", [PROFILE_T]),
- ("JSON 안의 목록은 요약에 안 싣는다", RP, "            inner = value if _doc_list(value) or isinstance(value, dict) else _json_value(value)", "            inner = value if _doc_list(value) or isinstance(value, dict) else None", [PROFILE_T]),
+ ("JSON 안의 목록은 요약에 안 싣는다", RP, "            inner = value if _rows_or_empty(value) or isinstance(value, dict) else _json_value(value)", "            inner = value if _rows_or_empty(value) or isinstance(value, dict) else None", [PROFILE_T]),
  ("홉이 있어도 frame 예시에 code.grep을 둔다", B, "        if first_read and not hop and _has(site_config, ACTIONS[first_read[0]][0], services):", "        if first_read and _has(site_config, ACTIONS[first_read[0]][0], services):", [FRAME1_T]),
  ("홉이 있어도 frame 예시에 발견 읽기를 채운다", B, "        room = 0 if hop else (4 if shapes else 3) - len(shapes)", "        room = (4 if shapes else 3) - len(shapes)", [FRAME1_T]),
  ("클래스 이름에 안내를 안 한다", DCP, "            if any(self._index.symbols[sid].kind == \"class\" for sid in qy.find(self._index, name)):", "            if False:", [USES_CLS_T]),
@@ -2578,13 +2578,13 @@ CASES += [
 
 # ── 12a-R3-3 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다 ──
 LIT_T = "tests/application/test_walk.py::test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_한_비교식_양쪽에_있을_때만_나쁘고_그_값이_이어지는_동안_위로_간다"
-FILTER_T = "tests/infrastructure/test_deployed_code.py::test_filter_lines는_클래스_파일과_이은_컴포넌트_파일에서_필드와_값이_한_비교식_양쪽인_줄만_찾는다"
+FILTER_T = "tests/infrastructure/test_deployed_code.py::test_filter_lines는_이_사이트의_등록이_가리키는_클래스_파일을_범위로_비교식을_먼저_뽑아_단일값_전부와_맞춘다"
 LIT_NEXT_T = "tests/application/test_walk.py::test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_그_코드_줄_둘레다"
 CASES += [
- ("값이 리터럴이 아니어도 센다", DCP, '    lit = rf"""["\']{v}["\']"""', '    lit = rf"""["\']?{v}["\']?"""', [FILTER_T]),
- ("필드가 리터럴이 아니어도 센다", DCP, '    access = rf"""(?:\\[\\s*["\']{f}["\']\\s*\\]|\\.get\\(\\s*["\']{f}["\'][^()]*\\)|getattr\\([^(),]+,\\s*["\']{f}["\'][^()]*\\))"""', '    access = rf"""(?:\\[\\s*["\']?{f}["\']?\\s*\\]|\\.get\\(\\s*["\']{f}["\'][^()]*\\)|getattr\\([^(),]+,\\s*["\']{f}["\'][^()]*\\))"""', [FILTER_T]),
+ ("값이 리터럴이 아니어도 센다", DCP, '_LITERAL = r"""(?P<q4>["\'])(?P<v>[^"\'\\n]*)(?P=q4)"""', '_LITERAL = r"""(?P<q4>["\']?)(?P<v>[^"\'\\s]*)(?P=q4)"""', [FILTER_T]),
+ ("필드가 리터럴이 아니어도 센다", DCP, '_ACCESS = r"""(?:\\[\\s*(?P<q1>["\'])(?P<f1>[^"\'\\n]+)(?P=q1)\\s*\\]|\\.get\\(\\s*(?P<q2>["\'])(?P<f2>[^"\'\\n]+)(?P=q2)[^()]*\\)|getattr\\([^(),]+,\\s*(?P<q3>["\'])(?P<f3>[^"\'\\n]+)(?P=q3)[^()]*\\))"""', '_ACCESS = r"""(?:\\[\\s*(?P<q1>["\']?)(?P<f1>[^"\'\\n]+)(?P=q1)\\s*\\]|\\.get\\(\\s*(?P<q2>["\'])(?P<f2>[^"\'\\n]+)(?P=q2)[^()]*\\)|getattr\\([^(),]+,\\s*(?P<q3>["\'])(?P<f3>[^"\'\\n]+)(?P=q3)[^()]*\\))"""', [FILTER_T]),
  ("같은 단일값이 이어져도 위로 안 간다", WK, "                if not bad and watch is not None and same.get(watch[0]) == watch[1]:", "                if False:", [LIT_T]),
- ("단일값 조회에 가지의 인자를 안 넘긴다", WK, "                        scan = await lookup(writer, field=field, value=value, **branch.params)", "                        scan = await lookup(writer, field=field, value=value)", [LIT_T, WNODE_T]),
+ ("단일값 조회에 가지의 인자를 안 넘긴다", WK, "                    scan = await lookup(writer, fields=same, **branch.params)", "                    scan = await lookup(writer, fields=same)", [LIT_T, WNODE_T]),
  ("단일값 검사를 안 한다", WK, "                elif not bad and same and status.startswith(\"정상\") and lookup is not None:", "                elif False:", [LIT_T]),
  ("리터럴 줄을 다음 홉으로 안 가리킨다", WK, "    if literal is not None:\n        # 아래에", "    if False:\n        # 아래에", [LIT_NEXT_T]),
  ("다음 홉 줄이 name 인자를 가정한다", IM, "        return f\"다음 홉: {describe(*hop)} — 걷기가 멈춘 자리({walk.stopped})\"", "        return f\"다음 홉: {hop[0]} name={hop[1]['name']!r} — 걷기가 멈춘 자리({walk.stopped})\"", [LIT_NEXT_T]),
@@ -2657,7 +2657,7 @@ DEEP_T = "tests/application/test_walk.py::test_멈춘_자리는_가장_깊은_�
 LADDER2_T = "tests/application/test_briefing.py::test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸_칸은_건너뛴다"
 CASES += [
  ("멈춘 자리가 가장 깊은 나쁜 홉이 아니다", WK, "    stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]", "    stop_hop = min(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]", [DEEP_T, WALK_T]),
- ("입력이 0이어도 정상이라 한다", WK, "            stopped = (f\"입력이 다 정상 — {info.writer}\" if info.inputs", "            stopped = (f\"입력이 다 정상 — {info.writer}\" if True", [DEEP_T]),
+ ("입력이 0이어도 정상이라 한다", WK, "            stopped = (f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)\" if not info.inputs", "            stopped = (f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)\" if False", [DEEP_T]),
  ("입력 0의 칸이 클래스 본문이 아니다", WK, "reader_at(text) if found_inputs else class_at(text))", "reader_at(text))", [DEEP_T]),
  ("입력 정상의 칸이 읽는 메서드가 아니다", WK, "reader_at(text) if found_inputs else class_at(text))", "class_at(text))", [WALK_T]),
  ("홉의 부모를 안 적는다", WK, "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\", parent=came_from))", "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\"))", [DEEP_T]),
@@ -2679,23 +2679,23 @@ CASES += [
 
 
 # ── 12a-R3-4 ③ — 단일값 검사는 어댑터 안의 조회(범위·짝) ──
-LINK_T = "tests/application/test_walk.py::test_단일값_조회가_이은_컴포넌트의_등록_줄은_입력_정상의_뒤_칸이_되고_못_이음과_검사_못_함은_표에_적는다"
+LINK_T = "tests/application/test_walk.py::test_이은_컴포넌트_클래스_본문은_멈춘_자리의_뒤_칸이_되고_못_이음은_일부만_검사로_정상이라_하지_않는다"
 LC_SRC_T = "tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"
 CASES += [
- ("주석 줄을 센다", DCP, "if not line.lstrip().startswith(\"#\") and pair.search(line)]", "if pair.search(line)]", [FILTER_T]),
- ("뒤집힌 비교식을 안 센다", DCP, '    pair = re.compile(rf"""(?:{access}\\s*(?:==|!=)\\s*{lit}|{lit}\\s*(?:==|!=)\\s*[^\\s=!"\']*{access})""")', '    pair = re.compile(rf"""(?:{access}\\s*(?:==|!=)\\s*{lit})""")', [FILTER_T]),
+ ("주석 줄을 센다", DCP, "        if line.lstrip().startswith(\"#\"):\n            continue", "        if False:\n            continue", [FILTER_T]),
+ ("뒤집힌 비교식을 안 센다", DCP, "        for m in (*_FORWARD.finditer(line), *_REVERSED.finditer(line)):", "        for m in _FORWARD.finditer(line):", [FILTER_T]),
  ("컴포넌트를 안 잇는다", DCP, "        for comp in literals:", "        for comp in []:", [FILTER_T]),
- ("등록 파일을 범위에 안 넣는다", DCP, "                        if path not in files:\n                            files.append(path)", "                        if False:\n                            files.append(path)", [FILTER_T]),
- ("변수 get을 못 이음으로 안 적는다", DCP, "unlinked=[] if linked else variables)", "unlinked=[])", [FILTER_T]),
+ ("등록의 클래스 파일을 범위에 안 넣는다", DCP, "                if csym.file not in files:\n                    files.append(csym.file)", "                if False:\n                    files.append(csym.file)", [FILTER_T]),
+ ("변수 get을 못 이음으로 안 적는다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables]", "        unlinked = []", [FILTER_T]),
  ("클래스 파일을 안 본다", DCP, "        files = [sym.file]", "        files = []", [FILTER_T]),
  ("스냅샷 없음을 문제로 안 적는다", DCP, "        if snap is None:\n            return FilterScan(problem=f\"{sym.repo}의 스냅샷을 못 받았다\")", "        if snap is None:\n            return FilterScan()", [FILTER_T]),
- ("첫 거르는 줄에서 안 멈춘다", WK, "                                literal = (scope, hit.path, hit.line, ev)\n                            break", "                                literal = (scope, hit.path, hit.line, ev)\n                            continue", [LIT_T]),
- ("통과한 필드를 안 적는다", WK, "                    if passed and not bad:", "                    if False:", [LIT_T, LINK_T]),
- ("이은 컴포넌트를 뒤 칸으로 안 낸다", WK, "                          for found_at in linked_at.get(ev, [])[:2]]", "                          for found_at in []]", [LINK_T]),
- ("조회 문제를 검사 못 함으로 안 적는다", WK, "                        if scan.problem:", "                        if False:", [LINK_T]),
- ("등록 줄을 안 모은다", WK, "                        for found_at in scan.linked_at:", "                        for found_at in []:", [LINK_T]),
- ("리터럴 칸의 입력 증거가 그 홉의 읽기가 아니다", WK, "                                literal = (scope, hit.path, hit.line, ev)", "                                literal = (scope, hit.path, hit.line, \"\")", [LIT_T]),
- ("이은 컴포넌트 파일의 줄을 그렇게 안 적는다", WK, "linked_note = \" (이은 컴포넌트 파일)\" if hit.path in scan.files[1:] else \"\"", "linked_note = \"\"", [LIT_T]),
+ ("나쁨에 행 수를 안 적는다", WK, "status, bad, carry = (f\"나쁨 — {len(rows)}행 전부 {shown_fields}", "status, bad, carry = (f\"나쁨 — 모든 행이 {shown_fields}", [LIT_T]),
+ ("통과한 필드를 안 적는다", WK, "                        status += f\" · 단일값 {passed} — 거르는 줄 없음({scope_note})\"", "                        pass", [LIT_T, LINK_T]),
+ ("이은 컴포넌트를 뒤 칸으로 안 낸다", WK, "                          for found_at in linked_at.get(ev, [])[:3]]", "                          for found_at in []]", [LINK_T]),
+ ("조회 문제를 일부만 검사로 안 적는다", WK, "                    elif scan.problem:", "                    elif False:", [LINK_T]),
+ ("링크를 안 모은다", WK, "            linked_at[came_from] = list((await lookup(writer, fields={}, **branch.params)).linked_at)", "            linked_at[came_from] = []", [LINK_T]),
+ ("리터럴 칸의 입력 증거가 그 홉의 읽기가 아니다", WK, "                            literal = (scope, hit.path, hit.line, ev)", "                            literal = (scope, hit.path, hit.line, \"\")", [LIT_T]),
+ ("못 이음이 있어도 정상이라 한다", WK, "                    elif scan.unlinked:", "                    elif False:", [LINK_T]),
  ("걷기 노드가 조회를 안 넘긴다", ND, "lookup=deps.filter_lines, ", "", [WNODE_T]),
  ("측정판의 거르는 줄이 컴포넌트에 없다", LC, "        return [r for r in rows if r.get(\"state\") != \"-\"]", "        return [r for r in rows]", [LC_SRC_T]),
  ("측정판 batch가 컴포넌트를 안 찾는다", LC, "            rows = self.components.get(\"state_filter\").apply(json.loads(source or \"[]\"))", "            rows = json.loads(source or \"[]\")", [LC_SRC_T]),
@@ -2708,7 +2708,7 @@ THROWN_T = "tests/application/test_nodes.py::test_걷기_노드가_던지면_멈
 DIAG_WALK_T = "tests/application/test_diagnose.py::test_걷기가_있으면_홉_읽기_멈춤_사유를_한_줄로_적고_없으면_안_적는다"
 DG = ROOT / "src/application/diagnose.py"
 CASES += [
- ("단일값 분기가 중첩 함수 이름을 덮는다", WK, "                            scope_note = f\"{len(scan.files)}파일\"", "                            params_for = f\"{len(scan.files)}파일\"", [SHADOW_T]),
+ ("단일값 분기가 중첩 함수 이름을 덮는다", WK, "                        scope_note = f\"{len(scan.checked)}/{len(same)} 대조, {len(scan.files)}파일\"", "                        params_for = f\"{len(scan.checked)}/{len(same)} 대조, {len(scan.files)}파일\"", [SHADOW_T]),
  ("홉 0이면 멈춤 사유를 안 보인다", CS, "        if not self.hops and not self.stopped:", "        if not self.hops:", [SHADOW_T, THROWN_T]),
  ("진단에 걷기 줄이 없다", DG, "    if state.walk is not None:\n        # 걷기가 있었으면 한 줄", "    if False:\n        # 걷기가 있었으면 한 줄", [DIAG_WALK_T, THROWN_T]),
 ]
@@ -2730,7 +2730,25 @@ CASES += [
  ("대상 문자열을 안 넘긴다", MN, "                    check=args.check, target=args.target)", "                    check=args.check, target=\"\")", [CW_RUN_T]),
 ]
 
-assert len(CASES) >= 795, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5 ③ — 단일값 재설계: AST 등록·클래스 파일 범위·상한 없음·N/M·행 0 ──
+REG_T = "tests/infrastructure/test_deployed_code.py::test_registrations는_AST로_네_모양의_등록을_읽고_문서_문자열_속_예시는_등록으로_안_센다"
+EMPTY_ROWS_T = "tests/application/test_runner_probe.py::test_요약_머리는_빈_배열에도_행_0을_적는다"
+CASES += [
+ ("문자열 아닌 단일값을 안 센다", WK, "                    if len(same_all) > len(same):", "                    if False:", [LINK_T]),
+ ("일부만 검사가 멈춤을 안 바꾼다", WK, "                       else f\"입력을 다 못 봤다 — {info.writer}(일부만 검사)\" if ev in partial", "                       else f\"입력을 다 못 봤다 — {info.writer}(일부만 검사)\" if False", [LINK_T]),
+ ("일부만 검사를 미확인으로 안 적는다", WK, "                        status = (\"미확인\" + status[len(\"정상\"):]", "                        status = (status", [LINK_T]),
+ ("점 표기 별칭을 모듈로 안 푼다", DCP, "aliases.get(target.value.id, target.value.id)", "None", [REG_T]),
+ ("데코레이터 등록을 안 읽는다", DCP, "        elif isinstance(node, ast.ClassDef):", "        elif False:", [REG_T]),
+ ("사이트 인자가 다른 등록도 후보다", DCP, "        ok = [r for r in regs if r.component == component and all(mine.get(k) == v for k, v in r.site.items())]", "        ok = [r for r in regs if r.component == component]", [FILTER_T]),
+ ("명시 인자가 많은 등록을 안 고른다", DCP, "        best = max(len(r.site) for r in ok)", "        best = 0", [FILTER_T]),
+ ("등록 없는 사전 get을 못 이음으로 센다", DCP, "                if any(r.component == comp for r in regs):\n                    unlinked.append", "                if True:\n                    unlinked.append", [FILTER_T]),
+ ("나쁜 필드가 든 클래스를 먼저 두지 않는다", DCP, "            linked_at.sort(key=lambda h: 0 if any(q in snap.get(h.path, \"\") for q in quoted) else 1)", "            pass", [FILTER_T]),
+ ("빈 배열 요약에 행 0을 안 적는다", RP, "    if not rows:\n        return \"행 0\"", "    if False:\n        return \"행 0\"", [EMPTY_ROWS_T]),
+ ("빈 JSON 목록을 안 푼다", RP, "    return parsed if isinstance(parsed, list) or (isinstance(parsed, dict) and parsed) else None", "    return parsed if isinstance(parsed, (list, dict)) and parsed else None", [EMPTY_ROWS_T]),
+]
+
+assert len(CASES) >= 806, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

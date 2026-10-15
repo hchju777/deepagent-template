@@ -246,7 +246,10 @@ def _same_note(rows: list) -> str:
 
 def profile(rows: list) -> str:
     """문서 목록의 한 줄 요약 `행 N · 필드 M · 모든 행이 같은 값: f='-'`(R3-3 ①). 측정 #9 P0 2: 입력 키 554행의 두 필드가 전부 `'-'`였는데
-    본문이 접혀 리드가 못 봤고 같은 읽기를 8회 냈다 — 코드가 요약하면 접혀도 보인다. 값 분포 액션(`data.value_counts`)은 이것으로 대신한다."""
+    본문이 접혀 리드가 못 봤고 같은 읽기를 8회 냈다 — 코드가 요약하면 접혀도 보인다. 값 분포 액션(`data.value_counts`)은 이것으로 대신한다.
+    빈 목록은 `행 0`(측정 #11 P0 4: 빈 배열이 요약 자리에 안 보였다)."""
+    if not rows:
+        return "행 0"
     return f"행 {len(rows)} · 필드 {len(_fields(rows))}{_same_note(rows)}"
 
 
@@ -258,21 +261,27 @@ def _json_value(value: Any):
         parsed = json.loads(value)
     except ValueError:
         return None
-    return parsed if isinstance(parsed, (list, dict)) and parsed else None
+    # 빈 목록도 돌려준다 — 요약 머리가 `행 0`을 적어야 한다(측정 #11 P0 4). 빈 객체는 전처럼 없음.
+    return parsed if isinstance(parsed, list) or (isinstance(parsed, dict) and parsed) else None
+
+
+def _rows_or_empty(value: Any) -> bool:
+    """문서 목록이거나 **빈 목록** — 요약 머리는 빈 배열에도 `행 0`을 적는다(측정 #11 P0 4)."""
+    return isinstance(value, list) and (not value or _doc_list(value))
 
 
 def _first_profile(data: Any) -> str:
     """요약 줄 머리 — 데이터 안의 첫 문서 목록(맨 위·dict 값·JSON 문자열 한 겹 안)의 `profile`. 없으면 빈 문자열."""
-    if _doc_list(data):
+    if _rows_or_empty(data):
         return f"[{profile(data)}] "
     if isinstance(data, dict):
         for key, value in data.items():
-            inner = value if _doc_list(value) or isinstance(value, dict) else _json_value(value)
-            if _doc_list(inner):
+            inner = value if _rows_or_empty(value) or isinstance(value, dict) else _json_value(value)
+            if _rows_or_empty(inner):
                 return f"[{key}: {profile(inner)}] "
             if isinstance(inner, dict):
                 for sub, sval in inner.items():
-                    if _doc_list(sval):
+                    if _rows_or_empty(sval):
                         return f"[{key}.{sub}: {profile(sval)}] "
     return ""
 

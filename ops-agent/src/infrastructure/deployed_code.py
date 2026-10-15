@@ -27,9 +27,10 @@
 전부 `ProbeResult`로 흡수한다. 없는 서비스, 안 읽히는 층, 잘린 파일 — 운영 중에
 정상적으로 일어나는 일이고, 여기서 던지면 조사 그래프가 통째로 죽는다(규율 1).
 """
+import ast
 import json
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from src.domain.base import Clock
@@ -64,31 +65,111 @@ FLOW_MAX_CHARS = 5_000_000
 FLOW_CHUNK = 20
 
 
-# ── R3-4 ③ — 단일값 검사의 범위와 짝(사람 결정 10-14) ──
-# 컴포넌트 등록 줄 — 데코레이터든 호출이든 `register(component="X")`. 값은 리터럴만(사내: 전부 리터럴).
-_REGISTER = r"""register\(\s*(?:[^()]*?,\s*)?component\s*=\s*(["']){name}\1"""
-_GET_LITERAL = re.compile(r"""\.get\(\s*(["'])([^"'\n]+)\1\s*[,)]""")
-_GET_VARIABLE = re.compile(r"""\.get\(\s*([A-Za-z_][\w.]*)\s*[,)]""")
+# ── R3-4 ③ → R3-5 ③ — 단일값 검사의 범위와 짝(사람 결정 10-14·10-15) ──
 _CODE_SUFFIX = ".py"
+# 컴포넌트를 부르는 자리 `<수신자>.get("X")`. 변수 인자는 **같은 수신자**에 리터럴 get이 있는 파일에서만 "못 이음 — 변수"로 센다 — 사전의 `cfg.get(key)`까지
+# 세면 어느 파일이나 못 이음이 된다.
+_GET_LITERAL = re.compile(r"""(?P<recv>[\w.\]\)]+)\.get\(\s*(?P<q>["'])(?P<name>[^"'\n]+)(?P=q)\s*[,)]""")
+_GET_VARIABLE = re.compile(r"""(?P<recv>[\w.\]\)]+)\.get\(\s*(?P<var>[A-Za-z_][\w.]*)\s*[,)]""")
+_ACCESS = r"""(?:\[\s*(?P<q1>["'])(?P<f1>[^"'\n]+)(?P=q1)\s*\]|\.get\(\s*(?P<q2>["'])(?P<f2>[^"'\n]+)(?P=q2)[^()]*\)|getattr\([^(),]+,\s*(?P<q3>["'])(?P<f3>[^"'\n]+)(?P=q3)[^()]*\))"""
+_LITERAL = r"""(?P<q4>["'])(?P<v>[^"'\n]*)(?P=q4)"""
+_FORWARD = re.compile(_ACCESS + r"\s*(?:==|!=)\s*" + _LITERAL)
+# 뒤집힌 순서는 연산자와 접근 사이에 수신자(`rows[0]`·`self.row`)가 온다 — 공백·따옴표·연산자가 없는 한 토막까지 허용한다.
+_REVERSED = re.compile(_LITERAL + r"""\s*(?:==|!=)\s*[^\s=!"']*""" + _ACCESS)
+# 등록의 사이트 인자 — 명시한 값이 전부 이 사이트와 같은 등록만 후보다(사람 결정 10-15: 같은 X가 사이트마다 다른 클래스).
+_SITE_KEYS = ("gbm", "factory", "fct")
 
 
 def component_names(text: str) -> tuple[list[str], list[str]]:
-    """클래스 파일의 `get("X")` 리터럴들과 `get(<변수>)`의 변수 이름들(차례, 중복 없이). 리터럴만 잇는다 — 사내 `get("…")`은 리터럴 590 / 변수 6이고
-    `register(component="…")`는 전부 리터럴이라 새 데이터 링크 없이 그 둘로 잇고, 변수면 "못 이음 — 변수"다."""
-    literals = list(dict.fromkeys(m.group(2) for m in _GET_LITERAL.finditer(text)))
-    variables = list(dict.fromkeys(m.group(1) for m in _GET_VARIABLE.finditer(text)))
-    return literals, variables
+    """`<수신자>.get("X")` 리터럴들과, 같은 수신자의 `get(<변수>)` 변수 이름들(차례, 중복 없이). 리터럴만 잇는다 — 사내 `get("…")`은 리터럴이 대부분이고
+    변수는 여섯뿐이라 새 데이터 링크 없이 그 둘로 잇고, 변수면 "못 이음 — 변수"다(사람 결정 10-14·10-15)."""
+    literals: list[str] = []
+    receivers: set[str] = set()
+    for m in _GET_LITERAL.finditer(text):
+        receivers.add(m.group("recv"))
+        if m.group("name") not in literals:
+            literals.append(m.group("name"))
+    variables = [m.group("var") for m in _GET_VARIABLE.finditer(text) if m.group("recv") in receivers]
+    return literals, list(dict.fromkeys(variables))
+
+
+def comparison_pairs(text: str) -> list[tuple[int, str, str, str]]:
+    """코드 줄의 비교식에서 **필드와 리터럴이 양쪽**인 짝 `(줄, 필드, 값, 본문)` 전부 — `x["f"] != "v"`·`r.get("f") == "v"`·`getattr(r, "f") == "v"`, 뒤집힌
+    순서도. 사전 리터럴(`{"f": "v"}`)·주석·변수(`r[f]`, `!= v`)는 아니다. 먼저 전부 뽑아 두고 단일값 전부와 맞춘다(R3-5 ③ (a) — 필드 상한 없음)."""
+    out: list[tuple[int, str, str, str]] = []
+    for i, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        for m in (*_FORWARD.finditer(line), *_REVERSED.finditer(line)):
+            out.append((i, m.group("f1") or m.group("f2") or m.group("f3"), m.group("v"), line.strip()))
+    return out
 
 
 def comparison_lines(text: str, field: str, value: str) -> list[tuple[int, str]]:
-    """필드와 값이 **한 비교식의 양쪽**에 리터럴로 든 코드 줄 `(줄, 본문)` — `x["f"] != "v"`·`r.get("f") == "v"`·`getattr(r, "f") == "v"`, 뒤집힌 순서도.
-    사전 리터럴(`{"f": "v"}`)·주석·변수(`r[f]`, `!= v`)는 안 센다(측정 #10: 다른 처리기의 dict 줄과 사이트 상수 줄이 가짜로 잡혔다)."""
-    f, v = re.escape(field), re.escape(value)
-    access = rf"""(?:\[\s*["']{f}["']\s*\]|\.get\(\s*["']{f}["'][^()]*\)|getattr\([^(),]+,\s*["']{f}["'][^()]*\))"""
-    lit = rf"""["']{v}["']"""
-    # 뒤집힌 순서는 연산자와 접근 사이에 수신자(`rows[0]`·`self.row`)가 온다 — 공백·따옴표·연산자가 없는 한 토막까지 허용한다.
-    pair = re.compile(rf"""(?:{access}\s*(?:==|!=)\s*{lit}|{lit}\s*(?:==|!=)\s*[^\s=!"']*{access})""")
-    return [(i, line.strip()) for i, line in enumerate(text.splitlines(), 1) if not line.lstrip().startswith("#") and pair.search(line)]
+    return [(i, body) for i, f, v, body in comparison_pairs(text) if f == field and v == value]
+
+
+@dataclass(frozen=True)
+class Registration:
+    """등록 모음 파일의 `register(component="X", <사이트 인자>)(<클래스>)` 한 건 — 데코레이터 형도 같은 모양으로 둔다."""
+    component: str
+    cls: str
+    module: str | None            # `alias.Cls`면 import 별칭이 가리키는 모듈, 아니면 None
+    site: dict
+    path: str
+    line: int
+
+
+def _is_register(func) -> bool:
+    return (isinstance(func, ast.Name) and func.id == "register") or (isinstance(func, ast.Attribute) and func.attr == "register")
+
+
+def _register_args(call) -> tuple[str | None, dict]:
+    component, site = None, {}
+    for kw in call.keywords:
+        if not isinstance(kw.value, ast.Constant) or not isinstance(kw.value.value, str):
+            continue
+        if kw.arg == "component":
+            component = kw.value.value
+        elif kw.arg in _SITE_KEYS:
+            site[kw.arg] = kw.value.value
+    return component, site
+
+
+def registrations(path: str, text: str) -> list[Registration]:
+    """한 파일의 등록들 — **AST**로(사람 결정 10-15): 정규식은 여러 줄 등록과 점 표기를 놓치고 문서 문자열 속 `@register` 예시를 등록으로 센다. 모양은
+    (a) `register(component="X")(Cls)`, (b) 사이트 인자 `register(component="X", gbm=…, factory=…)(Cls)`, (c) 점 표기 `alias.Cls`(별칭은 import한 모듈),
+    (d) 여러 줄, 그리고 데코레이터 `@register(component="X")` 아래의 클래스. 못 읽는 파일은 등록 없음 — 던지지 않는다."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for name in node.names:
+                aliases[name.asname or name.name.split(".")[0]] = name.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for name in node.names:
+                aliases[name.asname or name.name] = f"{node.module}.{name.name}"
+    out: list[Registration] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Call) and _is_register(node.func.func) and len(node.args) == 1:
+            component, site = _register_args(node.func)
+            target = node.args[0]
+            if component is None:
+                continue
+            if isinstance(target, ast.Name):
+                out.append(Registration(component, target.id, None, site, path, node.lineno))
+            elif isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                out.append(Registration(component, target.attr, aliases.get(target.value.id, target.value.id), site, path, node.lineno))
+        elif isinstance(node, ast.ClassDef):
+            for deco in node.decorator_list:
+                if isinstance(deco, ast.Call) and _is_register(deco.func):
+                    component, site = _register_args(deco)
+                    if component is not None:
+                        out.append(Registration(component, node.name, None, site, path, node.lineno))
+    return sorted(out, key=lambda r: r.line)
 
 
 def _evidence(layers: list[tuple[str, str, dict]], value: str) -> tuple[str, int, str] | None:
@@ -129,6 +210,8 @@ class DeployedCode(DeployedCodePort):
         # `code graph`가 사이트 28개의 config 층을 병합할 때 여기서 읽는다 — git은 레포당 한 번이다.
         # (파일들 또는 None, 못 본 것의 사유) — 사유는 흐름 히트의 "잘렸다" 메모가 된다(안 채워진 submodule 등).
         self._snapshots: dict[tuple[str, str], tuple[dict[str, str] | None, str]] = {}
+        # 레포 스냅샷의 등록들(AST) — `(repo, commit)`마다 한 번(R3-5 ③). 걷기가 클래스마다 묻는다.
+        self._registrations: dict[tuple[str, str], list[Registration]] = {}
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -226,13 +309,42 @@ class DeployedCode(DeployedCodePort):
         return ProbeResult.succeeded("\n".join(qy.resources_lines(self._index, found[0], where=self._where)),
                                      source=source, clock=self._clock)
 
-    async def filter_lines(self, name: str, *, field: str, value: str, service: str = "", repo: str = "") -> FilterScan:
-        """걷기의 단일값 검사(R3-4 ③) — **범위**는 그 입력을 읽는 클래스의 파일 + 거기서 `get("X")` 리터럴로 부르는 컴포넌트의 등록 파일
-        (`register(component="X")`, `.py`만 — config 제외), **짝**은 필드와 값이 한 비교식의 양쪽. 레포 전체 grep(400줄 상한 + 첫 리터럴)은 사이트
-        상수 config 줄과 다른 처리기의 dict 줄을 가짜로 잡고 진짜 `["<필드>"] != "-"` 줄은 놓쳤다(측정 #10 P0 1). runner를 안 거친다 — 읽기 상한·증거
-        밖(P0 4). 던지지 않는다 — 조회가 안 되면 `problem`."""
+    def _registered(self, repo: str, snap: dict[str, str]) -> list[Registration]:
+        key = (repo, self.pinned().get(repo, ""))
+        if key not in self._registrations:
+            self._registrations[key] = [r for path in sorted(snap) if path.endswith(_CODE_SUFFIX) for r in registrations(path, snap[path])]
+        return self._registrations[key]
+
+    def _site_picks(self, regs: list[Registration], component: str) -> list[Registration]:
+        """이 사이트의 등록 — 명시한 사이트 인자가 전부 이 사이트 값과 같은 것만 후보, 그중 명시 인자가 많은 것, 수가 같으면 여럿(사람 결정 10-15)."""
+        mine = {"gbm": self._gbm, "factory": self._fct, "fct": self._fct}
+        ok = [r for r in regs if r.component == component and all(mine.get(k) == v for k, v in r.site.items())]
+        if not ok:
+            return []
+        best = max(len(r.site) for r in ok)
+        return [r for r in ok if len(r.site) == best]
+
+    def _class_of(self, repo: str, reg: Registration):
+        """등록이 가리키는 클래스 심볼 — 별칭이 있으면 그 모듈의 것. `(심볼 또는 None, 못 푼 사유)`."""
         from src.knowledge import query as qy
 
+        found = [sid for sid in qy.find(self._index, f"{repo}:{reg.cls}") if self._index.symbols[sid].kind == "class"]
+        if reg.module:
+            found = [sid for sid in found if self._index.symbols[sid].qualname == f"{reg.module}.{reg.cls}"] or found
+        if not found:
+            return None, f"{reg.cls}(인덱스에 없음)"
+        if len(found) > 1:
+            return None, f"{reg.cls}(여럿)"
+        return self._index.symbols[found[0]], ""
+
+    async def filter_lines(self, name: str, *, fields: dict[str, str] | None = None, service: str = "", repo: str = "") -> FilterScan:
+        """걷기의 단일값 검사(R3-4 ③ → R3-5 ③) — **범위**는 그 입력을 읽는 클래스의 파일 + 거기서 `get("X")` 리터럴로 부르는 컴포넌트의 **클래스 파일**
+        (등록 모음 파일의 `register(component="X", …)(<클래스>)`를 AST로 읽고 클래스를 인덱스로 푼다; 등록 줄의 파일이 아니다 — 측정 #11 P0 3), **짝**은
+        필드와 값이 한 비교식의 양쪽. 비교식을 먼저 뽑아 `fields` 전부와 맞춘다(상한 없음). 못 이은 것(변수·이 사이트의 등록 없음·인덱스에 없음·여럿)은
+        `unlinked` — 하나라도 있으면 걷기가 "일부만 검사"로 적는다. runner를 안 거친다 — 읽기 상한·증거 밖. 던지지 않는다 — 조회가 안 되면 `problem`."""
+        from src.knowledge import query as qy
+
+        fields = dict(fields or {})
         if self._index is None:
             return FilterScan(problem="심볼 인덱스가 없다")
         text = name
@@ -261,22 +373,35 @@ class DeployedCode(DeployedCodePort):
             return FilterScan(problem=f"{sym.repo}의 스냅샷에 {sym.file}이 없다")
         files = [sym.file]
         literals, variables = component_names(snap[sym.file])
+        regs = self._registered(sym.repo, snap)
         linked: list[str] = []
         linked_at: list[FilterHit] = []
+        unlinked = [f"변수 {v}" for v in variables]
         for comp in literals:
-            reg = re.compile(_REGISTER.format(name=re.escape(comp)))
-            for path in sorted(snap):
-                if not path.endswith(_CODE_SUFFIX) or path == sym.file:
+            picked = self._site_picks(regs, comp)
+            if not picked:
+                # 등록이 아예 없는 이름(`cfg.get("kind")` 같은 사전 get)은 컴포넌트가 아니다 — 못 이음도 아니다. 있는데 이 사이트 것이 없으면 못 이음.
+                if any(r.component == comp for r in regs):
+                    unlinked.append(f"{comp}(이 사이트의 등록 없음)")
+                continue
+            for reg in picked:
+                csym, why = self._class_of(sym.repo, reg)
+                if csym is None:
+                    unlinked.append(f"{comp}: {why}")
                     continue
-                for i, line in enumerate(snap[path].splitlines(), 1):
-                    if reg.search(line):
-                        if path not in files:
-                            files.append(path)
-                        if comp not in linked:
-                            linked.append(comp)
-                        linked_at.append(FilterHit(path=path, line=i, text=line.strip(), repo=sym.repo))
-        hits = [FilterHit(path=path, line=i, text=t, repo=sym.repo) for path in files for i, t in comparison_lines(snap[path], field, value)]
-        return FilterScan(hits=hits, files=files, linked=linked, linked_at=linked_at, unlinked=[] if linked else variables)
+                if csym.file not in files:
+                    files.append(csym.file)
+                if comp not in linked:
+                    linked.append(comp)
+                linked_at.append(FilterHit(path=csym.file, line=csym.line, repo=sym.repo,
+                                           text=f"class {csym.name} — register(component={comp!r}) {reg.path}:L{reg.line}"))
+        if fields:
+            # 뒤 칸의 차례 — 나쁜 필드 이름이 리터럴로 든 클래스 파일 먼저(사람 결정 10-15 (c))
+            quoted = [q + f + q for f in fields for q in ("'", '"')]
+            linked_at.sort(key=lambda h: 0 if any(q in snap.get(h.path, "") for q in quoted) else 1)
+        hits = [FilterHit(path=path, line=i, text=body, repo=sym.repo, field=f, value=v)
+                for path in files for i, f, v, body in comparison_pairs(snap.get(path, "")) if f in fields and fields[f] == v]
+        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked)
 
     async def uses(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy

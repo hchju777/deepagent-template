@@ -416,3 +416,12 @@ async def test_행_목록_값은_코드가_요약한다_행수_필드수_모든_
     out = await ProbeRunner(clock=lambda: T0, adapters=Bundle(redis=plain), detail_chars=600).run(
         task("t-4", action="redis.get", params={"key": "k"}), case=case)
     assert "value: 'not json ['" in out.evidence[0].body and "JSON 문자열" not in out.evidence[0].body
+
+
+
+def test_요약_머리는_빈_배열에도_행_0을_적는다():
+    """측정 #11 P0 4: 빈 배열은 요약 머리가 없어 "비었다"가 행 요약 자리에 안 보였다 — `[value.record: 행 0]`."""
+    from src.application.runner_probe import _first_profile
+    assert _first_profile([]) == "[행 0] " and _first_profile({"record": []}) == "[record: 행 0] "
+    assert _first_profile({"value": {"record": []}}) == "[value.record: 행 0] " and _first_profile({"value": "[]"}) == "[value: 행 0] "
+    assert _first_profile({"n": 1}) == "" and _first_profile([{"a": 1}]) == "[행 1 · 필드 1] "

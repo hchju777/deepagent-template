@@ -204,7 +204,7 @@ class StubDeployedCode(DeployedCodePort):
     async def resources(self, name: str, service: str = "", repo: str = "") -> ProbeResult:
         return self._seeded(self._resources, name, f"stub-code:resources {name}", "읽는 자원")
 
-    async def filter_lines(self, name: str, *, field: str, value: str, service: str = "", repo: str = "") -> FilterScan:
+    async def filter_lines(self, name: str, *, fields: dict[str, str] | None = None, service: str = "", repo: str = "") -> FilterScan:
         return FilterScan(problem="스텁에 준비된 조회가 없다")
 
     async def services(self) -> ProbeResult:
