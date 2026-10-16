@@ -28,12 +28,15 @@ def _root(tmp_path):
 
 
 def test_case_walk은_케이스_id나_target_하나만_받고_check는_필수이며_틀리면_점검_목록을_보인다(tmp_path, monkeypatch, capsys):
-    """사람 결정(10-15): `--check`는 기본값 없이 필수, 틀리면 점검 목록. `--target`은 순찰의 대상 문자열 그대로(쪼개지 않는다)."""
+    """사람 결정(10-15): `--check`는 기본값 없이 필수, 틀리면 점검 목록. `--target`은 순찰의 대상 문자열 그대로(쪼개지 않는다). `--key`(R3-5b ③)까지
+    셋 중 하나만."""
     root = _root(tmp_path)
     code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk")
-    assert code == 2 and "둘 중 하나만" in out.out
+    assert code == 2 and "셋 중 하나만" in out.out
     code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk", "c-1", "--target", "L1/Alarm")
-    assert code == 2 and "둘 중 하나만" in out.out
+    assert code == 2 and "셋 중 하나만" in out.out
+    code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk", "--target", "L1/Alarm", "--key", "alarm:stats:L1")
+    assert code == 2 and "셋 중 하나만" in out.out
     code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk", "--target", "L1/Alarm", "--gbm", "mx", "--fct", "gumi")
     assert code == 2 and "--check가 필요하다 — 점검: badge_all_zero" in out.out
     code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk", "--target", "L1/Alarm", "--check", "nope", "--gbm", "mx", "--fct", "gumi")

@@ -2724,7 +2724,7 @@ CASES += [
  ("패치를 id로 병합하지 않는다", WO, "            update[key] = merge_by_id(getattr(state, key), value)", "            update[key] = list(value)", [WO_T, WO_PATCH_T]),
  ("패치를 이어 붙이지 않는다", WO, "            update[key] = list(getattr(state, key)) + list(value)", "            update[key] = list(value)", [WO_PATCH_T]),
  ("걷기 노드를 안 부른다", WO, "    for name in (\"intake\", \"walk\"):", "    for name in (\"intake\",):", [WO_T]),
- ("둘 다 줘도 받는다", MN, "    if bool(args.case_id) == bool(args.target):\n        print(\"  케이스 id 하나나 --target 하나 — 둘 중 하나만\")", "    if False:\n        print(\"  케이스 id 하나나 --target 하나 — 둘 중 하나만\")", [CW_ARGS_T]),
+ ("둘 다 줘도 받는다", MN, "    if sum(bool(x) for x in (args.case_id, args.target, args.key)) != 1:\n        print(\"  케이스 id 하나나 --target 하나나 --key 하나 — 셋 중 하나만\")", "    if False:\n        print(\"  케이스 id 하나나 --target 하나나 --key 하나 — 셋 중 하나만\")", [CW_ARGS_T]),
  ("--check 없이도 돈다", MN, "        if not args.check:\n            print(f\"  --check가 필요하다 — 점검: {checks}\")", "        if False:\n            print(f\"  --check가 필요하다 — 점검: {checks}\")", [CW_ARGS_T]),
  ("없는 점검을 안 거른다", MN, "        if args.check not in site.patrol.checks:\n            print(f\"  없는 점검 — {args.check}. 점검: {checks}\")", "        if False:\n            print(f\"  없는 점검 — {args.check}. 점검: {checks}\")", [CW_ARGS_T]),
  ("대상 문자열을 안 넘긴다", MN, "                    check=args.check, target=args.target)", "                    check=args.check, target=\"\")", [CW_RUN_T]),
@@ -2823,7 +2823,23 @@ CASES += [
  ("chain-objects의 도메인 record가 빈 객체가 아니다", LC, "\"record\": {} if variant == \"chain-objects\" else", "\"record\": [] if variant == \"chain-objects\" else", [LC_OBJ_T, BOARD_OBJ_T]),
 ]
 
-assert len(CASES) >= 840, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5b ③ — 측정 도구 `case walk --key <키>`: 입구 없이 그 키부터 ──
+DECL_FOR_T = "tests/application/test_walk_only.py::test_키의_선언_이름은_흐름_그래프의_선언_키와_자리가_맞는_하나다"
+WALK_KEY_T = "tests/application/test_walk_only.py::test_walk_from_key는_입구_없이_그_키를_t_1로_읽어_대상_키로_삼고_걷는다"
+BOARD_KEY_T = "tests/test_board_walk.py::test_key로_댄_키부터_입구_없이_걷는다"
+CLI_ARGS_T = "tests/test_cli_case_walk.py::test_case_walk은_케이스_id나_target_하나만_받고_check는_필수이며_틀리면_점검_목록을_보인다"
+CASES += [
+ ("--key 키의 선언 이름을 안 찾는다", WO, "    matched = [t for t in templates if \"{\" in t and re.fullmatch(re.sub(r\"\\\\\\{\\w+\\\\\\}\", \".+?\", re.escape(t)), key)]", "    matched = []", [DECL_FOR_T]),
+ ("선언 이름이 여럿이어도 첫 것을 고른다", WO, "    return matched[0] if len(matched) == 1 else key", "    return matched[0] if matched else key", [DECL_FOR_T]),
+ ("--key가 쓴 쪽을 안 찾는다", WO, "        writer, writer_at, writer_problem = writer_of(value, deps.classes)", "        writer, writer_at, writer_problem = \"\", \"\", \"\"", [WALK_KEY_T, BOARD_KEY_T]),
+ ("--key가 빈 자리를 안 본다", WO, "        arrays, objects = empties(value)", "        arrays, objects = [], []", [WALK_KEY_T, BOARD_KEY_T]),
+ ("--key가 키 없음을 대상 키로 삼는다", WO, "    elif raw is None:\n        pick = TargetPick(problem=", "    elif False:\n        pick = TargetPick(problem=", [WALK_KEY_T]),
+ ("case walk가 --key를 안 쓴다", MN, "            state = await (walk_from_key(case, args.key, deps) if args.key else walk_only(case, deps))", "            state = await walk_only(case, deps)", [BOARD_KEY_T]),
+ ("case walk가 셋 중 둘을 받는다", MN, "    if sum(bool(x) for x in (args.case_id, args.target, args.key)) != 1:", "    if bool(args.case_id) == bool(args.target):", [CLI_ARGS_T]),
+]
+
+assert len(CASES) >= 847, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

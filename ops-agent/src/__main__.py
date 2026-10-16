@@ -963,13 +963,13 @@ def cmd_case_walk(args, env) -> int:
     from src.application.intake_map import intake_spec
     from src.application.nodes import EngineDeps
     from src.application.runner_probe import ProbeRunner
-    from src.application.walk_only import walk_only
+    from src.application.walk_only import walk_from_key, walk_only
     from src.domain.actions import describe
     from src.domain.case import Case
     from src.knowledge import flow
 
-    if bool(args.case_id) == bool(args.target):
-        print("  케이스 id 하나나 --target 하나 — 둘 중 하나만")
+    if sum(bool(x) for x in (args.case_id, args.target, args.key)) != 1:
+        print("  케이스 id 하나나 --target 하나나 --key 하나 — 셋 중 하나만")
         return 2
     app = load_app_config(args.config_root, env=env)
     clock = _clock(args, env)
@@ -983,6 +983,11 @@ def cmd_case_walk(args, env) -> int:
         site, _ = load_site_config(args.config_root, gbm, fct, env=env)
         case = Case(id=record.id, gbm=gbm, fct=fct, origin="patrol", symptom=record.symptom, t0=record.opened_at,
                     check=record.check, target=record.target)
+    elif args.key:
+        # 입구 없이 그 키부터(R3-5b ③) — 배지 밖 끝점은 입구가 막힌다(라우트가 리터럴 → config로 키를 정한다, B는 아직 없다). 점검은 안 쓴다.
+        site, _ = _resolve_site(args.config_root, args, env)
+        gbm, fct = site.site.gbm, site.site.fct
+        case = Case(id="walk-key", gbm=gbm, fct=fct, origin="human", symptom=f"{args.key} — case walk --key(측정, 입구 없이)", t0=clock())
     else:
         site, _ = _resolve_site(args.config_root, args, env)
         gbm, fct = site.site.gbm, site.site.fct
@@ -1017,7 +1022,7 @@ def cmd_case_walk(args, env) -> int:
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
                               declared_by=flow.declaring_map(flow_graph), clock=clock)
-            state = await walk_only(case, deps)
+            state = await (walk_from_key(case, args.key, deps) if args.key else walk_only(case, deps))
             return state, flow_graph, (code.has_index() if code else False), graph_note
         finally:
             await adapters.close()
@@ -2744,9 +2749,10 @@ def build_parser() -> argparse.ArgumentParser:
                              help="프롬프트와 날것 응답을 남긴다 (기본 output/traces)")
     investigate.set_defaults(run=cmd_case_investigate)
     walk_cmd = case_sub.add_parser("walk", help="LLM 없이 입구 + 걷기만 돌리고 케이스 블록을 찍는다 (측정 도구, 읽기 전용)")
-    walk_cmd.add_argument("case_id", nargs="?", help="저장된 케이스 id (또는 --target)")
+    walk_cmd.add_argument("case_id", nargs="?", help="저장된 케이스 id (또는 --target, --key)")
     walk_cmd.add_argument("--target", help="순찰의 대상 문자열 그대로 — identity 필드를 '/'로 이은 것")
     walk_cmd.add_argument("--check", help="--target일 때 점검 이름 (필수)")
+    walk_cmd.add_argument("--key", help="입구 없이 이 Redis 키부터 걷는다 — 배지 밖 키를 잴 때")
     walk_cmd.add_argument("--stub-seeds", help="대상에 안 붙고 돌려 본다")
     _add_site_options(walk_cmd, sub=True)
     walk_cmd.set_defaults(run=cmd_case_walk)

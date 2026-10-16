@@ -1093,6 +1093,18 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   `입력을 다 못 봤다 — PaletteLoader(읽기 실패 palette:source)`, 칸 그 읽기가 든 메서드. chain-empty·chain-filtered는 그대로.
 - 테스트 먼저(RED 7 + 측정판 2 → GREEN). 스윕 +18(840), 앵커 재지정 9.
 
+#### R3-5b ③ (10-16) ✅ — 측정 도구 `case walk --key <키>`
+
+- 측정 #12: 배지 밖 끝점은 입구에서 막힌다 — 라우트가 리터럴 → config로 키를 정해 접수 응답의 행과 키 값의 identity로 고르는 입구가 할 일이 없다(B는
+  아직 안 만든다). 사람이 키를 대면 그 키부터 걷는다. 엔진 기능이 아니라 측정 도구다(읽기 전용 — 저장소·보고서·트레이스 없음).
+- `case walk --key <키> --gbm --fct [--stub-seeds]`(`walk_only.walk_from_key`): 그 키를 `t-1`로 읽어 대상 키로 삼는다 — 쓴 쪽은 값에서(`writer_of`), 빈 자리는
+  걷기와 같은 판정(`empties`, 값의 맨 위), 선언 이름은 흐름 그래프의 선언 키와 자리가 맞는 **하나**(`declared_for`; 없거나 여럿이면 키 그대로 — 입력 채우기는
+  scan으로). 키가 없거나 읽기가 실패하면 그 사실만 적고 걷지 않는다. 대상 키 줄은 `대상 키: <키> — --key로 댄 키 (t-1.e1)`. 케이스 id·`--target`·`--key`는
+  셋 중 하나만이고 `--key`는 점검을 안 쓴다.
+- 보드: chain-objects 시드로 `case walk --key alarm:domain:L1` → `alarm:domain:L1 | DomainBuilder [batch] | 빈 객체 (record)` → `alarm:raw:L1 | RawAppender
+  […] | 빈 배열 (rows)` → 멈춤 `입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐)`.
+- 테스트 먼저(RED → GREEN). 스윕 +7(847).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

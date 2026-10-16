@@ -203,3 +203,19 @@ def test_입력_읽기가_실패하면_입력이_다_정상이_아니라_다_못
     # 다음 칸은 그 읽기가 든 메서드 — 클래스 머리가 아니다(읽은 입력이 0이어서 "모른다"일 때만 클래스 본문)
     rung = f"code.read line={_at('common/palette.py', 'palette_source')} path='common/palette.py' service='batch'"
     assert rungs == [rung]
+
+
+
+def test_key로_댄_키부터_입구_없이_걷는다(board, monkeypatch):
+    """측정 #12(R3-5b ③): 배지 밖 끝점은 입구에서 막힌다 — 사람이 키를 대면 그 키부터 걷는다(측정 도구, 읽기 전용). 선언 이름은 흐름 그래프에서."""
+    for key, value in ENV.items():
+        monkeypatch.setenv(key, value)
+    code, out = _cli("--config-root", str(board / "config"), "--env-file", str(board / "none"), "case", "walk", "--key", "alarm:domain:L1",
+                     "--stub-seeds", str(board / "chain-objects.json"), "--gbm", "mx", "--fct", "gumi")
+    assert code == 0, out
+    assert "대상 키: alarm:domain:L1 — --key로 댄 키 (t-1.e1)" in out and "쓴 쪽: DomainBuilder — 값의 metadata.event_type" in out
+    lines = out.splitlines()
+    head = next(i for i, line in enumerate(lines) if line.startswith("걷기(코드가 상류를 걸었다)"))
+    rows = [line.strip().rsplit(" | ", 1)[0] for line in lines[head + 2:head + 4]]
+    assert rows == ["alarm:domain:L1 | DomainBuilder [batch] | 빈 객체 (record)", "alarm:raw:L1 | RawAppender [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
+    assert lines[head].endswith("멈춤: 입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐)") and "읽기 전용" in out
