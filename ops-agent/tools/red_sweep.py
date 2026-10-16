@@ -2872,7 +2872,17 @@ CASES += [
  ("멈춘 홉의 본문도 접는다", B, "    keep = {state.walk.stop_at} | {e for t in state.plan_tasks if t.id == \"t-1\" for e in t.result_evidence_ids}", "    keep = {e for t in state.plan_tasks if t.id == \"t-1\" for e in t.result_evidence_ids}", [FOLD_T]),
 ]
 
-assert len(CASES) >= 861, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5c ③ — 인용한 코드 증거의 레포가 component의 레포와 다르면 caveat ──
+CAVEAT_T = "tests/application/test_verdict.py::test_component의_근거로_인용한_코드가_다른_레포의_것이면_그_레포의_서비스를_후보로_caveat에_적는다"
+CASES += [
+ ("인용한 코드의 레포를 안 본다", ND, "            if repo and repo != home:", "            if False:", [CAVEAT_T]),
+ ("verify가 코드 레포 caveat를 안 건다", ND, "        verdict = caveat_code_repos(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos)\n", "", [CAVEAT_T]),
+ ("코드 증거의 레포 인자를 안 본다", ND, "repo = str(made.params.get(\"repo\") or service_repos.get(str(made.params.get(\"service\", \"\")), \"\"))", "repo = str(service_repos.get(str(made.params.get(\"service\", \"\")), \"\"))", [CAVEAT_T]),
+ ("그 레포의 서비스를 후보로 안 적는다", ND, "의 코드다 — 그 레포의 서비스 {others}도 후보\")", "의 코드다\")", [CAVEAT_T]),
+]
+
+assert len(CASES) >= 865, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

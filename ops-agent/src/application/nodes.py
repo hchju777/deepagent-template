@@ -918,6 +918,32 @@ def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | No
                                       "caveats": verdict.caveats + caveats})
 
 
+def caveat_code_repos(verdict: Verdict, *, plan_tasks, service_repos: dict[str, str]) -> Verdict:
+    """component(서비스)의 근거로 인용한 **코드 증거의 레포**가 그 서비스의 레포와 다르면 caveat — 그 레포의 서비스를 후보로 같이(R3-5c ③, 사람 결정
+    10-16). 측정 #12b P1-4: 서술은 배치 레포의 `<요약 처리기>`인데 component가 처리기 서비스였고 서비스 이름이라 검증을 지났다 — 근거로 인용한 것은
+    배치 서비스의 `code.read`였다. component는 안 바꾼다(코드는 사실만 적는다). 코드 증거의 레포는 그것을 만든 태스크의 `repo`·`service` 인자에서 —
+    인자가 없으면(레포 하나) 말하지 않는다. 서비스→레포 지도가 없으면 그대로."""
+    if not service_repos:
+        return verdict
+    made_by = {e: t for t in plan_tasks for e in t.result_evidence_ids} | {t.id: t for t in plan_tasks}
+    caveats: list[str] = []
+    for link in [verdict.root_cause, *verdict.alternates, *verdict.contributing]:
+        if link is None or link.component not in service_repos:
+            continue
+        home = service_repos[link.component]
+        for cited in link.evidence_ids:
+            made = made_by.get(cited)
+            if made is None or not made.action.startswith("code."):
+                continue
+            repo = str(made.params.get("repo") or service_repos.get(str(made.params.get("service", "")), ""))
+            if repo and repo != home:
+                others = ", ".join(sorted(s for s, r in service_repos.items() if r == repo))
+                caveats.append(f"component {link.component}(레포 {home})의 근거로 인용한 {cited}은 레포 {repo}의 코드다 — 그 레포의 서비스 {others}도 후보")
+    if not caveats:
+        return verdict
+    return verdict.model_copy(update={"caveats": verdict.caveats + [c for c in dict.fromkeys(caveats) if c not in verdict.caveats]})
+
+
 def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> Callable[[str], str | None]:
     """component 하나의 문제 — 없으면 None. 대본 경로(`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 검사하지
     않는다(태스크의 "찾지 않고 이름을 댔다"와 같은 스위치)."""
@@ -995,6 +1021,8 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             return {"verify_problems": []}
         # 클래스 이름 component는 검사 전에 서비스로 번역한다(R3-3 ⑤) — 걷어낼 것이 아니라 바꿀 것이다.
         verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk)
+        # 인용한 코드의 레포가 component의 레포와 다르면 caveat(R3-5c ③) — 검증 문제가 아니라 적어 둘 사실이다.
+        verdict = caveat_code_repos(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos)
         changed = verdict is not state.verdict
         citable = state.evidence_ids()
         incomplete = {e.id for e in state.evidence if not e.complete}

@@ -518,3 +518,31 @@ async def test_verify는_클래스_이름_component를_인덱스의_서비스로
     # 클래스 이름이 아닌 것은 전처럼 문제다
     plain = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink", "api"})))
     assert "verdict" not in await plain["verify"](_state(case, verdict=v)) and (await plain["verify"](_state(case, verdict=v)))["verify_problems"]
+
+
+
+# ── R3-5c ③ — 인용한 코드 증거의 레포가 component의 레포와 다르면 caveat ──
+
+async def test_component의_근거로_인용한_코드가_다른_레포의_것이면_그_레포의_서비스를_후보로_caveat에_적는다(case):
+    """측정 #12b P1-4: 서술은 배치 레포의 `<요약 처리기>`인데 component가 처리기 서비스였고, 서비스 이름이라 검증을 지났다. 근거로 인용한 t-11은 배치
+    서비스의 `code.read`였다 — 인용한 코드의 레포가 component의 레포와 다르면 caveat, 그 레포의 서비스를 후보로 같이(사람 결정 10-16). component는 안
+    바꾼다(사실만 적는다)."""
+    from src.application.nodes import caveat_code_repos
+
+    repos = {"processor": "core", "batchsvc": "batch-repo", "batchsink": "batch-repo", "api": "api-repo"}
+    tasks = [task("t-11", action="code.read", params={"service": "batchsvc", "path": "b/x.py", "line": 3}, status="ok", result_evidence_ids=["t-11.e1"]),
+             task("t-12", action="code.read", params={"service": "processor", "path": "p/y.py", "line": 1}, status="ok", result_evidence_ids=["t-12.e1"]),
+             task("t-13", action="redis.get", params={"key": "k"}, status="ok", result_evidence_ids=["t-13.e1"]),
+             task("t-14", action="code.resources", params={"name": "X", "repo": "api-repo"}, status="ok", result_evidence_ids=["t-14.e1"])]
+    v = verdict(root_cause=cause("processor", "t-11.e1", "t-13.e1"), contributing=[cause("processor", "t-14.e1", relation="r")])
+    got = caveat_code_repos(v, plan_tasks=tasks, service_repos=repos)
+    assert got.caveats == ["component processor(레포 core)의 근거로 인용한 t-11.e1은 레포 batch-repo의 코드다 — 그 레포의 서비스 batchsink, batchsvc도 후보",
+                           "component processor(레포 core)의 근거로 인용한 t-14.e1은 레포 api-repo의 코드다 — 그 레포의 서비스 api도 후보"]
+    assert got.root_cause.component == "processor"
+    same = verdict(root_cause=cause("processor", "t-12.e1", "t-13.e1"))
+    assert caveat_code_repos(same, plan_tasks=tasks, service_repos=repos) is same                  # 같은 레포·코드 아닌 증거면 그대로
+    assert caveat_code_repos(v, plan_tasks=tasks, service_repos={}) is v                           # 지도가 없으면 그대로
+    # verify 노드가 붙인다 — 검증 문제는 아니다
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset(repos), service_repos=repos))
+    patch = await nodes["verify"](_state(case, verdict=v, plan_tasks=tasks, evidence=[_ev(f"t-{n}.e1") for n in (11, 12, 13, 14)]))
+    assert patch["verify_problems"] == [] and any("레포 batch-repo의 코드다" in c for c in patch["verdict"].caveats)
