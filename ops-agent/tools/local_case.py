@@ -283,6 +283,19 @@ class RowParser:
     def parse(self, message):
         return [row for row in message.get("rows", []) if row.get("kind") == "event"]
 ''',
+    # 읽는 자원이 자기 출력뿐인 원천 클래스(R3-5b ② — 측정 #12의 `<클래스>` 모양) — 원천 묶음을 읽어 행을 덧붙여 다시 쓴다.
+    "common/appender.py": '''"""원천 묶음에 행을 덧붙인다 — 지금 값을 읽어 행을 더해 다시 쓴다."""
+
+
+class RawAppender:
+    def __init__(self, cfg, redis):
+        self.cfg, self.redis = cfg, redis
+
+    def _run(self, message):
+        raw = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_raw"].format(line=message["line"])) or "{}")
+        rows = raw.get("rows", []) + [message]
+        self.redis.set(self.cfg["redis_key"]["alarm_raw"].format(line=message["line"]), json.dumps({"metadata": {"event_type": "RawAppender"}, "rows": rows}))
+''',
     # c-2형의 원천 클래스 — 입력 셋(정상)을 합치고 빈 칸을 채운다. 여기엔 비교식이 없다. 컴포넌트 둘 중 빈 칸을 채우는 쪽이 코드 차례로는 뒤다 —
     # 뒤 칸의 차례가 나쁜 필드 이름으로 정해지는지 본다(사람 결정 10-15 (c)).
     "common/merge.py": '''"""원천 병합 — 이벤트·상태·기준표를 합쳐 행을 만들고 빈 칸을 채워 원천 묶음에 둔다."""
@@ -437,8 +450,15 @@ VARIANTS = {
                    "같은 이름이 dt-api에도 있다",
     # c-2형: 도메인·원천 행은 있는데 모든 행의 state·wg가 '-'(같은 값인 문자열 일곱 필드 뒤)이고 이 사이트의 컴포넌트에 그 값의 비교식이 있다.
     "chain-filtered": "요약 키 data는 빈 배열이고 도메인·원천 묶음 행은 있지만 모든 행의 state·wg가 '-'다 — 원천을 쓴 SourceMerger의 입력 셋은 정상이다",
+    # 측정 #12의 걷기 틀린 사실 둘(R3-5b ②) — 도메인 키 `record {}`(빈 객체)와, 읽는 자원이 자기 출력뿐인 원천 클래스.
+    "chain-objects": "요약 키 data는 빈 배열이고 도메인 키 record가 빈 객체다 — 원천 묶음은 빈 배열이고 그 쓴 쪽 RawAppender는 그 묶음만 읽는다(자기 출력)",
+    # 입력 읽기 실패(R3-5b ② — 키 없음과 다른 사실). palette-empty에 원천 색 키 읽기 실패를 더했다.
+    "palette-unread": "palette-empty와 같고 PaletteLoader가 읽는 원천 색 키의 읽기가 실패한다(WRONGTYPE)",
 }
-_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered"}
+_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered",
+               "chain-objects", "palette-unread"}
+# 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
+_RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender"}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 # 증감 배지 요약 키의 data 행 수 — 입구의 후보 본문(기본 evidence_chars 2400)이 잘릴 만큼(R3-5b ①).
 _RATE_ROWS = 150
@@ -457,7 +477,7 @@ _FILTERED_ROW = {"unit": "ea", "zone": "A", "shift": "D", "area": "G1", "model":
 
 def _chain_rows(docs, line, variant):
     """도메인 키 record·원천 묶음 rows — chain-empty는 빈 배열, chain-filtered는 state·wg가 전부 '-'인 다섯 행, 나머지는 그 라인의 문서 요약(정상)."""
-    if variant == "chain-empty":
+    if variant in ("chain-empty", "chain-objects"):
         return []
     if variant == "chain-filtered":
         return [{"alarm_code": f"A{500 + i}", **_FILTERED_ROW} for i in range(5)]
@@ -518,8 +538,9 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                                                   **({"state": "-"} if variant == "source-filtered" else {})} for d in docs if d["line"] == l])
                 for l in LINES}),
             # 도메인 키·원천 묶음과 그 입력 셋(R3-5 ④ — 사내 c-1·c-2의 사슬). 기본은 정상이라 다른 변형의 걷기는 여기서 안 멈춘다.
-            **{f"alarm:domain:{l}": json.dumps({"metadata": {"event_type": "DomainBuilder"}, "record": _chain_rows(docs, l, variant)}) for l in LINES},
-            **{f"alarm:raw:{l}": json.dumps({"metadata": {"event_type": "SourceCollector" if variant == "chain-empty" else "SourceMerger"},
+            **{f"alarm:domain:{l}": json.dumps({"metadata": {"event_type": "DomainBuilder"},
+                                                "record": {} if variant == "chain-objects" else _chain_rows(docs, l, variant)}) for l in LINES},
+            **{f"alarm:raw:{l}": json.dumps({"metadata": {"event_type": _RAW_WRITER.get(variant, "SourceMerger")},
                                              "rows": _chain_rows(docs, l, variant)}) for l in LINES},
             **{f"feed:events:{l}": json.dumps([{"id": i, "alarm_code": d["alarm_code"]} for i, d in enumerate(docs) if d["line"] == l]) for l in LINES},
             **{f"feed:status:{l}": json.dumps([{"id": i, "status": ["RUN", "STOP"][i % 2]} for i in range(4)]) for l in LINES},
@@ -538,8 +559,9 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                for l in LINES},
             # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①).
             "alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader"},
-                                         "colors": [] if variant == "palette-empty" else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]}),
-            "palette:source": json.dumps([{"name": "alarm", "hex": "#d33", "enabled": True}, {"name": "caution", "hex": "#fc0", "enabled": True},
+                                         "colors": [] if variant in ("palette-empty", "palette-unread") else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]}),
+            # palette-unread는 이 키의 읽기가 실패한다 — stub이 오류 신호 시드(`{"__error__": …}`)를 실패로 돌려준다.
+            "palette:source": {"__error__": "WRONGTYPE Operation against a key holding the wrong kind of value"} if variant == "palette-unread" else json.dumps([{"name": "alarm", "hex": "#d33", "enabled": True}, {"name": "caution", "hex": "#fc0", "enabled": True},
                                           {"name": "normal", "hex": "#3a3", "enabled": False}]),
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게

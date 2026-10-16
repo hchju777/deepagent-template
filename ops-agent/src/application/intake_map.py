@@ -136,14 +136,31 @@ def _parent(path: str) -> str | None:
     return m.group(1) or None if m else None
 
 
-def _empty_lists(value: Any, at: str) -> list[str]:
-    """identity가 든 객체의 **부모**에서 빈 목록 필드들 — `record[0].data`. 사내 c-1의 모양(키는 있고 data가 `[]`)을 코드가 사실로 적는다
-    (측정 #7에서 그 빈 배열을 아무도 못 봤다). 부모가 객체가 아니면 없다."""
+def empties(obj: Any, at: str = "") -> tuple[list[str], list[str]]:
+    """"비었다"의 판정 하나(R3-5b ②) — `(빈 목록 자리들, 빈 객체 자리들)`. 객체 바로 아래에 행이 든 목록이 하나라도 있으면 둘 다 없음(정상)이고,
+    없을 때만 빈 목록·빈 객체 필드를 적는다. 대상 키 홉은 identity의 부모에(`empties_at`), 다른 홉은 값의 맨 위에(`walk.status_of`) 쓴다 — 측정 #12:
+    두 자리가 따로 놀아 `record {}`를 정상이라 했다(사람 결정 10-16). 객체가 아니면 없음."""
+    if not isinstance(obj, dict) or any(isinstance(v, list) and v and all(isinstance(r, dict) for r in v) for v in obj.values()):
+        return [], []
+
+    def place(k) -> str:
+        return f"{at}.{k}" if at else str(k)
+
+    return ([place(k) for k, v in obj.items() if isinstance(v, list) and not v],
+            [place(k) for k, v in obj.items() if isinstance(v, dict) and not v])
+
+
+def empty_text(arrays: list[str], objects: list[str]) -> str:
+    """빈 자리들의 한 줄 — `빈 배열 (a, b) · 빈 객체 (c)`. 없으면 빈 문자열."""
+    parts = ([f"빈 배열 ({', '.join(arrays)})"] if arrays else []) + ([f"빈 객체 ({', '.join(objects)})"] if objects else [])
+    return " · ".join(parts)
+
+
+def empties_at(value: Any, at: str) -> tuple[list[str], list[str]]:
+    """identity가 든 객체의 **부모**의 빈 자리(`record[0].data`) — 사내 c-1의 모양(키는 있고 data가 `[]`)을 코드가 사실로 적는다(측정 #7에서 그 빈
+    배열을 아무도 못 봤다). 부모가 객체가 아니면 없다."""
     parent = _parent(at)
-    obj = value if parent is None else pluck(value, parent)
-    if not isinstance(obj, dict):
-        return []
-    return [f"{parent}.{k}" if parent else k for k, v in obj.items() if isinstance(v, list) and not v]
+    return empties(value if parent is None else pluck(value, parent), parent or "")
 
 
 def _string_leaves(value: Any, path: str = ""):
@@ -218,8 +235,8 @@ def intake_lines(state: CaseState, *, code_index: bool) -> str:
     lines = []
     if done:
         lines.append("입구 노드가 이미 읽었다: " + " · ".join(done) + " — 같은 읽기를 다시 내지 마라")
-    if target.empty:
-        lines.append("값: " + ", ".join(f"{p}가 비었다" for p in target.empty))
+    if target.empty or target.empty_objects:
+        lines.append("값: " + ", ".join(f"{p}가 비었다" for p in [*target.empty, *target.empty_objects]))
     if target.writer_line():
         lines.append(target.writer_line())
     if state.walk is not None:
@@ -332,8 +349,10 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
         # 쓴 쪽은 후보 읽기의 **전체 값**에서 — 좁힌 다시 읽기는 identity의 부모만 돌려줘 형제 자리(`metadata.event_type`)가 빠진다(측정 #12: data가
         # 커서 잘린 16행이 "쓴 쪽: 모른다"였다). 원본은 실행기가 잘리지 않은 채 들고 있다.
         writer, writer_at, writer_problem = writer_of(value, classes)
+        # 빈 자리도 후보 읽기의 전체 값에서 — 자리 문법이 전체 값 기준 하나다(좁힌 값이면 `record[0].data`가 `data`가 됐다).
+        arrays, objects = empties_at(value, at)
         return patch(TargetPick(key=key, basis=basis, declared=declared_of.get(key, key),
-                                empty=_empty_lists(_unwrap(raw), at2) if at2 else [],
+                                empty=arrays, empty_objects=objects,
                                 writer=writer, writer_at=writer_at, writer_problem=writer_problem,
                                 writer_searched=bool(classes), **folded,
                                 problem=f"후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""))

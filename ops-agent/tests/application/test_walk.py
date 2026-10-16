@@ -115,10 +115,11 @@ async def test_나쁜_입력의_쓴_쪽을_모르면_거기서_멈추고_다음_
     assert walk.stopped == "쓴 쪽을 모른다 — in:a:L1(값에 인덱스의 클래스 이름이 없다)"
     assert walk.next_hop() == ("code.uses", {"name": "in:a:{line}"}) and walk.next_evidence == "t-3.e1"
     assert ("redis.get", names[SCAN_READS]) not in runner.ran and walk.reads == 1 + 1 + 1 + SCAN_READS
-    # 읽기 실패는 나쁨이 아니다 — 모르는 것이지 비어 있는 것이 아니다
+    # 읽기 실패는 나쁨이 아니다 — 모르는 것이지 비어 있는 것이 아니다. 그래서 멈춤도 "입력이 다 정상"이 아니라 "다 못 봤다"(R3-5b ②, 사람 결정 10-16 —
+    # 전에는 여기서 "입력이 다 정상"을 단정했다)
     failing = _Reads({("code.resources", "W0"): _res("W0", [("k", "rediskey")])})
     walk = (await run_walk(_state(), runner=failing, classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
-    assert walk.hops[1].status == "읽기 실패 — 대본 없음" and not walk.hops[1].bad and walk.stopped == "입력이 다 정상 — W0"
+    assert walk.hops[1].status == "읽기 실패 — 대본 없음" and not walk.hops[1].bad and walk.stopped == "입력을 다 못 봤다 — W0(읽기 실패 k)"
     # 쓴 쪽의 자원 자체를 못 읽었으면 거기서 멈춘다
     walk = (await run_walk(_state(), runner=_Reads({}), classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
     assert walk.stopped == "W0의 자원을 못 읽었다 — 대본 없음" and walk.next_hop() == ("code.resources", {"name": "W0"}) and len(walk.hops) == 1
@@ -405,3 +406,77 @@ async def test_한_줄에_짝이_둘이면_한_줄로_센다():
         walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=lookup,
                                clock=lambda: T0))["walk"]
         assert walk.hops[1].status == f"나쁨 — 3행 전부 st='-' wg='-' · 이 필드 값이 든 비교식 {tail}"
+
+
+# ── R3-5b ② — "비었다"는 한 판정, `입력이 다 정상`은 전부 읽고 전부 정상일 때만 ──
+
+def test_빈_목록과_빈_객체는_한_판정이고_행이_든_목록이_하나라도_있으면_정상이다():
+    """측정 #12: `<입력 키>`의 `record {}`를 정상이라 했다 — 걷기의 상태(`status_of`)와 대상 키 홉의 빈 자리(`_empty_lists`)가 따로 놀아 빈 객체를
+    놓쳤다. 판정은 `empties` 하나(사람 결정 10-16): 객체 바로 아래에 행이 든 목록이 하나라도 있으면 정상, 없을 때만 빈 목록·빈 객체를 적는다."""
+    from src.application.intake_map import empties, empty_text
+
+    assert status_of(_value(metadata={"event_type": "X"}, record={})) == ("빈 객체 (record)", True)
+    assert status_of({"type": "string", "value": "{}"}) == ("빈 객체", True)
+    assert status_of(_value(a=[], b={})) == ("빈 배열 (a) · 빈 객체 (b)", True)
+    assert status_of(_value(meta={}, rows=[{"x": 1}, {"x": 2}])) == ("정상 — rows: 행 2 · 필드 1", False)   # 행이 든 목록이 있으면 정상
+    assert empties({"summary_info": {"g": "L1"}, "data": []}, "record[0]") == (["record[0].data"], [])
+    assert empties({"data": {}, "rows": [{"x": 1}]}) == ([], []) and empties([]) == ([], [])
+    assert empty_text([], []) == "" and empty_text(["a"], ["b", "c"]) == "빈 배열 (a) · 빈 객체 (b, c)"
+
+
+async def test_대상_키_홉의_빈_객체도_같은_판정으로_나쁘다():
+    state = _state(empty=())
+    state = state.model_copy(update={"target": state.target.model_copy(update={"empty_objects": ["record[0].data"]})})
+    walk = (await run_walk(state, runner=_Reads({("code.resources", "W0"): _res("W0", [])}), classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
+    assert walk.hops[0].status == "빈 객체 (record[0].data)" and walk.hops[0].bad
+
+
+async def test_입력이_다_정상은_나열된_입력을_전부_읽고_전부_정상일_때만이고_읽은_입력이_없으면_모른다():
+    """측정 #12(사람 결정 10-16): `<클래스>`는 인덱스 자원이 자기 출력뿐인데 "입력이 다 정상"이었다 — 입력 수를 자원 줄 수로 셌다. 읽기가 실패한
+    입력도 나쁨이 아니라서 거기에 섞였다. 키 없음(None)은 읽기 실패가 아니다 — 사실 `없음`(나쁨)이고 둘을 섞지 않는다."""
+    # 대상 키의 쓴 쪽이 읽는 자원이 대상 키(자기 출력)뿐 — 대상 홉은 정상이어도 "모른다", 다음 칸은 클래스 본문
+    own = {("code.resources", "W0"): _res("W0", [("alarm:stats:{line}", "rediskey")])}
+    walk = (await run_walk(_state(empty=()), runner=_Reads(own), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert walk.stopped == "입력을 모른다 — W0(인덱스 자원이 자기 출력뿐)" and walk.rungs[0].params == {"service": "a", "path": "x.py", "line": 1}
+    # 읽기 실패 — 그 행은 나쁨이 아니지만 멈춤은 "다 못 봤다"
+    failed = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey"), ("ok:{line}", "rediskey")]),
+              ("redis.get", "ok:L1"): _value(rows=[{"a": 1}, {"a": 2}])}
+    walk = (await run_walk(_state(empty=()), runner=_Reads(failed), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status.startswith("읽기 실패") and not walk.hops[1].bad
+    assert walk.stopped == "입력을 다 못 봤다 — W0(읽기 실패 in:L1)" and walk.rungs[0].params["line"] == 9           # 읽은 입력이 있다 → 읽는 메서드
+    # 키 없음은 읽기 실패가 아니다 — 사실 `없음`, 나쁨(그 키에서 멈춘다)
+    gone = {**failed, ("redis.get", "in:L1"): None}
+    walk = (await run_walk(_state(empty=()), runner=_Reads(gone), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status == "없음" and walk.hops[1].bad and walk.stopped.startswith("쓴 쪽을 모른다 — in:L1")
+    # 다 읽고 다 정상일 때만 "입력이 다 정상"
+    fine = {**failed, ("redis.get", "in:L1"): _value(rows=[{"a": 1}, {"a": 3}])}
+    walk = (await run_walk(_state(empty=()), runner=_Reads(fine), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert walk.stopped == "입력이 다 정상 — W0"
+
+
+async def test_못_채우는_템플릿을_다_못_읽었거나_scan이_실패하면_다_못_봤다():
+    """scan이 돌려준 실재 키를 상한(다섯)에 걸려 다 못 읽었거나, 0개였거나, scan 자체가 실패하면 그 입력은 다 본 것이 아니다(사람 결정 10-16:
+    `<템플릿> scan N개 중 M개`)."""
+    n = SCAN_READS + 2
+    many = {("code.resources", "W0"): _res("W0", [("x:{zone}", "rediskey")]), ("redis.scan", "x:*"): [f"x:{i}" for i in range(n)],
+            **{("redis.get", f"x:{i}"): _value(rows=[{"a": i}, {"a": i + 1}]) for i in range(n)}}
+    for table, why in ((many, f"x:{{zone}} scan {n}개 중 {SCAN_READS}개"), ({**many, ("redis.scan", "x:*"): []}, "x:{zone} scan 0개 중 0개"),
+                       ({k: v for k, v in many.items() if k[0] != "redis.scan"}, "읽기 실패 x:{zone}(scan)")):
+        walk = (await run_walk(_state(empty=()), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)},
+                               clock=lambda: T0))["walk"]
+        assert walk.stopped == f"입력을 다 못 봤다 — W0({why})"
+
+
+async def test_다른_클래스가_이미_읽은_입력은_그_읽기_결과를_따른다():
+    """같은 입력을 두 클래스가 나열하면 두 번째는 다시 안 읽는다 — 그 입력의 읽기 결과(정상·실패)를 따라 센다(R3-5b ②). 안 세면 두 번째 클래스가
+    "읽는 자원이 자기 출력뿐"이 되고, 실패를 안 따르면 "입력이 다 정상"이 된다."""
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey"), ("mid:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): _value(rows=[{"a": 1}, {"a": 2}]),
+             ("redis.get", "mid:L1"): _value(record=[], metadata={"event_type": "W1"}),
+             ("code.resources", "W1"): _res("W1", [("in:{line}", "rediskey")])}
+    services = {"W0": ("a",), "W1": ("a",)}
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services=services, clock=lambda: T0))["walk"]
+    assert walk.hops[-1].key == "mid:L1" and walk.hops[-1].bad and walk.stopped == "입력이 다 정상 — W1"
+    failed = {k: v for k, v in table.items() if k != ("redis.get", "in:L1")}
+    walk = (await run_walk(_state(), runner=_Reads(failed), classes=frozenset({"W0", "W1"}), class_services=services, clock=lambda: T0))["walk"]
+    assert walk.stopped == "입력을 다 못 봤다 — W1(읽기 실패 in:L1)"

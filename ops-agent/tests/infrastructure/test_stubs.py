@@ -94,3 +94,15 @@ async def test_스텁_코드는_seed의_resources도_그대로_준다():
     assert (await stub.resources("SummaryRefresh")).data.startswith("SummaryRefresh (batch/job.py:L1)")
     missing = await stub.resources("nope")
     assert missing.status == "error" and "스텁" in missing.error
+
+
+
+async def test_stub_redis는_오류_신호_시드를_읽기_실패로_돌려준다():
+    """측정판의 읽기 실패(R3-5b ②) — 키 없음(None, 성공)과 다른 사실이다. 시드 값이 `{"__error__": …}` 하나면 실패로."""
+    from datetime import datetime
+
+    from src.infrastructure.stubs import StubRedisReader
+    redis = StubRedisReader({"k": {"__error__": "WRONGTYPE"}, "v": "1"}, clock=lambda: datetime(2026, 10, 16))
+    bad, gone, ok = await redis.get("k"), await redis.get("없음"), await redis.get("v")
+    assert bad.status == "error" and "WRONGTYPE" in (bad.error or "")
+    assert gone.status == "ok" and gone.data is None and ok.status == "ok"

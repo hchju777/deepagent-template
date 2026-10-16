@@ -29,7 +29,7 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
-VARIANTS = ("chain-empty", "chain-filtered", "healthy")
+VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread")
 
 
 def _repo(root, url, files):
@@ -182,3 +182,24 @@ def test_제목에_슬래시가_든_행도_입구가_고르고_잘린_키의_쓴
     assert rows == ["alarm:rate:L1 | RateRefresh [batch] | 정상",
                     "alarm:source:L1 | — | 정상 — 행 4 · 필드 3 · 모든 행이 같은 값: unit='ea' · 단일값 unit='ea' — 거르는 줄 없음(1/1 대조, 1파일)"]
     assert stopped == "입력이 다 정상 — RateRefresh" and rungs
+
+
+
+def test_빈_객체_입력과_자기_출력뿐인_원천_클래스는_사실대로_적는다(board, monkeypatch):
+    """측정 #12(R3-5b ②): `record {}`는 빈 객체(나쁨)이고, 읽는 자원이 자기 출력뿐인 클래스는 "입력이 다 정상"이 아니라 "입력을 모른다"."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "chain-objects")
+    assert rows == ["alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data)",
+                    "alarm:domain:L1 | DomainBuilder [batch] | 빈 객체 (record)",
+                    PALETTE_ROW, SOURCE_ROW,
+                    "alarm:raw:L1 | RawAppender [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
+    assert stopped == "입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐)"
+    assert rungs == [f"code.read line={_at('common/appender.py', 'class RawAppender')} path='common/appender.py' service='batch'"]
+
+
+def test_입력_읽기가_실패하면_입력이_다_정상이_아니라_다_못_봤다(board, monkeypatch):
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "palette-unread")
+    assert [r for r in rows if r.startswith("palette:source")] == ["palette:source | — | 읽기 실패 — redis.get key='palette:source' — WRONGTYPE Operation against a key holding the wrong kind of value"]
+    assert stopped == "입력을 다 못 봤다 — PaletteLoader(읽기 실패 palette:source)"
+    # 다음 칸은 그 읽기가 든 메서드 — 클래스 머리가 아니다(읽은 입력이 0이어서 "모른다"일 때만 클래스 본문)
+    rung = f"code.read line={_at('common/palette.py', 'palette_source')} path='common/palette.py' service='batch'"
+    assert rungs == [rung]

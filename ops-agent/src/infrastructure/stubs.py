@@ -28,6 +28,9 @@ class StubRedisReader(RedisReaderPort):
         found = self._values.get(key)
         if found is None:
             return ProbeResult.succeeded(None, source=source, clock=self._clock)
+        if isinstance(found, dict) and set(found) == {"__error__"}:
+            # 시드가 읽기 실패를 흉내낸다(R3-5b ② 측정판) — 실서버의 WRONGTYPE·시간 초과 자리. 키 없음(None, 성공)과 다른 사실이다.
+            return ProbeResult.failed(str(found["__error__"]), source=source, clock=self._clock)
         if path is None:
             return ProbeResult.succeeded({"type": "string", "value": found}, source=source, clock=self._clock)
         ok, picked = select(found, path)

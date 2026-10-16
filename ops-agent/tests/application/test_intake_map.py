@@ -278,3 +278,21 @@ async def test_쓴_쪽은_좁힌_다시_읽기가_아니라_후보_읽기의_전
     failed = _runner(keys={"alarm:stats:L1": full})                                                  # t-1이 대본에 없다
     pick = (await run_intake(CaseState(case=_case()), SPEC, runner=failed, declared=("alarm:stats:L1",), classes=classes))["target"]
     assert pick.writer == "SummaryRefresh" and "다시 읽기 실패" in pick.basis
+
+
+
+async def test_대상_키_홉의_빈_자리도_걷기와_같은_한_판정이다():
+    """R3-5b ②(사람 결정 10-16): 대상 키 홉은 identity의 부모에서 같은 판정(`empties`)을 쓴다 — 빈 객체도 비었다, 행이 든 목록이 옆에 있으면 정상.
+    자리는 후보 읽기의 전체 값 기준이다(좁힌 다시 읽기 안의 자리가 아니다)."""
+    def keyed(**parent):
+        return json.dumps({"record": [{"summary_info": {"group": "L1", "title": "Alarm", "source": "MES"}, **parent}]})
+
+    for parent, want in (({"data": {}}, ([], ["record[0].data"])), ({"data": []}, (["record[0].data"], [])),
+                         ({"data": [], "rows": [{"n": 1}]}, ([], []))):
+        runner = _runner(keys={"alarm:stats:L1": keyed(**parent)}, picked="alarm:stats:L1")
+        pick = (await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",)))["target"]
+        assert (pick.empty, pick.empty_objects) == want
+    from src.application.intake_map import intake_lines
+    runner = _runner(keys={"alarm:stats:L1": keyed(data={})}, picked="alarm:stats:L1")
+    patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",))
+    assert "값: record[0].data가 비었다" in intake_lines(CaseState(case=_case(), **patch), code_index=False)

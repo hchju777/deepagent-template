@@ -112,8 +112,10 @@ class TargetPick(StrictModel):
     hits: int = 0
     # 고른 키가 나온 선언 이름(템플릿 `alarm:stats:{line}` 또는 리터럴) — 다음 홉 `code.uses`는 인덱스가 아는 이 이름으로 묻는다(R3-1b ③).
     declared: str = ""
-    # identity가 든 객체 옆의 빈 목록 경로들(`record[0].data`) — 코드가 보는 사실. 사내 c-1의 모양.
+    # identity가 든 객체 옆의 빈 목록·빈 객체 경로들(`record[0].data`) — 코드가 보는 사실(사내 c-1의 모양). 판정은 `intake_map.empties` 하나다
+    # (R3-5b ②) — 걷기의 다른 홉과 같다.
     empty: list[str] = []
+    empty_objects: list[str] = []
     # 쓴 쪽(R3-1c ①-a) — 값의 문자열 잎이 인덱스의 클래스 이름과 완전 일치한 그 클래스와 자리(`metadata.event_type`). 둘 이상 다른
     # 클래스면 `writer_problem`. 인덱스가 없으면 셋 다 비어 있고 아무 말도 안 한다.
     writer: str = ""

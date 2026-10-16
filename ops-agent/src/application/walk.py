@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, NamedTuple
 
 from src.application.facts import key_head
-from src.application.intake_map import _finish, _task, _unwrap, writer_of
+from src.application.intake_map import _finish, _task, _unwrap, empties, empty_text, writer_of
 from src.application.runner_probe import _same_valued, profile
 from src.application.state import CaseState
 from src.domain.case import EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
@@ -94,7 +94,7 @@ def fill_key(template: str, *, declared: str, key: str) -> str | None:
 
 
 def status_of(raw: Any) -> tuple[str, bool]:
-    """읽은 값의 상태 `(문장, 나쁜가)` — 없음·0행·빈 배열만 나쁘다. 정상이면 행 요약(`profile`)을 같이 — 표 한 줄에서 "554행 두 필드 전부 '-'"가
+    """읽은 값의 상태 `(문장, 나쁜가)` — 없음·0행·빈 배열·빈 객체만 나쁘다. 정상이면 행 요약(`profile`)을 같이 — 표 한 줄에서 "554행 두 필드 전부 '-'"가
     보여야 한다(측정 #9 P0 2)."""
     if raw is None:
         return "없음", True
@@ -108,9 +108,12 @@ def status_of(raw: Any) -> tuple[str, bool]:
         if docs:
             name, rows = docs[0]
             return f"정상 — {name}: {profile(rows)}", False
-        empties = [k for k, v in value.items() if isinstance(v, list) and not v]
-        if empties:
-            return f"빈 배열 ({', '.join(empties)})", True
+        # 빈 목록·빈 객체는 판정 하나(`empties` — 대상 키 홉과 같다, R3-5b ②). 측정 #12: `record {}`를 정상이라 했다.
+        arrays, objects = empties(value)
+        if arrays or objects:
+            return empty_text(arrays, objects), True
+        if not value:
+            return "빈 객체", True
     return "정상", False
 
 
@@ -119,9 +122,11 @@ class _Walked(NamedTuple):
     writer: str
     tag: str
     scope: str
-    inputs: int
+    inputs: int                         # 실제로 읽은 입력 수 — 자기 출력과 읽기 실패는 안 센다(R3-5b ②)
     res_id: str
-    at: tuple[str, int] | None          # 입력이 있으면 읽는 메서드의 자리, 없으면 클래스 머리 줄
+    at: tuple[str, int] | None          # 읽은 입력이 있으면 읽는 메서드의 자리, 없으면 클래스 머리 줄
+    listed: int = 0                     # 인덱스가 적은 읽기 자원 수
+    missed: tuple[str, ...] = ()        # 못 본 입력 — `읽기 실패 <키>`, `<템플릿> scan N개 중 M개`
 
 
 class _Branch(NamedTuple):
@@ -220,7 +225,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     first = next((t for t in state.plan_tasks if t.id == "t-1" and t.result_evidence_ids), None)
     first_branches, first_shown, first_cands = branches(target.writer, target.declared)
     hops = [Hop(key=target.key, depth=0, writer=target.writer, service=first_shown, candidates=list(first_cands),
-                status=f"빈 배열 ({', '.join(target.empty)})" if target.empty else "정상", bad=bool(target.empty),
+                status=empty_text(target.empty, target.empty_objects) or "정상", bad=bool(target.empty or target.empty_objects),
                 evidence_id=first.result_evidence_ids[0] if first else "",
                 basis=f"대상 키 — 값의 {target.writer_at}이 {target.writer}")]
     seen = {target.key, target.declared}
@@ -232,6 +237,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     linked_at: dict[str, list[FilterHit]] = {}                                              # 걸은 가지 — 그 홉의 증거 → 이은 컴포넌트 클래스들의 자리(③)
     partial: set[str] = set()                                                               # 입력을 다 못 본 가지 — 그 홉의 증거(일부만 검사한 입력이 있다)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
+    # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
+    # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
+    readings: dict[str, tuple[str, str]] = {target.key: ("ok", target.writer), target.declared: ("ok", target.writer)}
     stopped, nxt, nxt_ev, last = "", None, "", target.writer
     while frontier and not stopped:
         writer, branch, depth, came_from, watch = frontier.pop(0)
@@ -258,7 +266,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         text = runner.raw(res_id)
         text = text if isinstance(text, str) else ""
         found_inputs = inputs_in(text)
-        walked_at[came_from] = _Walked(writer, tag, scope, len(found_inputs), res_id, reader_at(text) if found_inputs else class_at(text))
+        walked_at[came_from] = _Walked(writer, tag, scope, 0, res_id, class_at(text), len(found_inputs))
+        real, missed = 0, []                                                                # 실제로 읽은 입력 수, 못 본 입력(R3-5b ②)
         if lookup is not None:
             # 컴포넌트 링크는 입력의 단일값과 무관하게 클래스 파일에서 뽑는다(사람 결정 10-15: 자원 0인 클래스도 `get("X")` 리터럴이 있다) — 멈춘 자리의 뒤 칸.
             # 이어 온 단일값이 있으면 그 필드로 묻는다 — 어댑터가 그 필드 이름이 리터럴로 든 컴포넌트를 앞에 둔다(10-15 (c)). 필드 없이 물으면 코드
@@ -275,13 +284,27 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         break
                     _, scanned = await run(f"걷기 — {writer}의 입력 {name}의 실재 키", "redis.scan", {"pattern": f"{key_head(name)}*"})
                     names = runner.raw(scanned.evidence[0].id) if scanned.status == "ok" and scanned.evidence else None
-                    reads = [("redis.get", {"key": k}, k) for k in (names if isinstance(names, list) else [])[:SCAN_READS] if isinstance(k, str)]
+                    scanned_keys = [k for k in names if isinstance(k, str)] if isinstance(names, list) else []
+                    reads = [("redis.get", {"key": k}, k) for k in scanned_keys[:SCAN_READS]]
+                    # scan이 실패했거나 실재 키를 다 못 읽었거나 0개면 그 입력은 다 본 것이 아니다(사람 결정 10-16: `<템플릿> scan N개 중 M개`).
+                    if not isinstance(names, list):
+                        missed.append(f"읽기 실패 {name}(scan)")
+                    elif len(reads) < len(scanned_keys) or not scanned_keys:
+                        missed.append(f"{name} scan {len(scanned_keys)}개 중 {len(reads)}개")
             elif kind == "collection":
                 reads = [("mongo.find", {"collection": name, "filter": {}, "limit": 5}, name)]
             else:
                 reads = [("kafka.tail", {"topic": name, "limit": 5}, name)]
             for action, params, label in reads:
                 if label in seen:
+                    # 이미 읽은 키 — 값이 이 클래스를 대면 자기 출력이라 입력으로 안 센다(사람 결정 10-16: 자원이 자기 출력뿐이면 "입력을 모른다"). 다른
+                    # 쪽이 읽어 둔 입력이면 그 결과를 따른다.
+                    result, named = readings.get(label, ("", ""))
+                    if named != writer:
+                        if result == "ok":
+                            real += 1
+                        elif result == "fail":
+                            missed.append(f"읽기 실패 {label}")
                     continue
                 if (why := over(writer, label)):
                     stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
@@ -298,6 +321,12 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 if w and w == writer:
                     # 값이 이 클래스를 댄다 — 이 클래스의 **출력**이지 입력이 아니다(측정 #9 P0 3). 표에는 남긴다(리드가 또 읽지 않게).
                     status, bad = f"출력 ({writer} 자신의 것 — 값의 {at})", False
+                # 읽기 실패는 모르는 것이지 나쁜 것이 아니다 — 행은 나쁨이 아니고, 멈춤은 "다 못 봤다"다. 키 없음(None)은 읽은 것이다 — 사실 `없음`(나쁨).
+                readings[label] = ("ok" if got.status == "ok" else "fail", w)
+                if got.status != "ok":
+                    missed.append(f"읽기 실패 {label}")
+                elif w != writer:
+                    real += 1
                 # 단일값 필드(③) — 아래 홉에서 잡힌 `(필드, 값)`이 여기도 그대로면 나쁨(grep 없이 이어진다). 아니면 읽는 쪽 코드 줄이 정한다.
                 carry = None
                 rows = rows_of(raw) if raw is not None else []
@@ -346,6 +375,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]          # 나쁜 입력의 아는 쓴 쪽만 — 그때만 가지가 있다
             if stopped:
                 break
+        # 이 클래스가 실제로 읽은 입력과 못 본 입력 — 멈춘 자리가 이 클래스면 사유가 여기서 나온다. 다음 칸은 읽기가 있었으면(실패한 읽기도) 읽는 메서드,
+        # 읽은 입력이 없으면("모른다") 클래스 본문.
+        walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),
+                                                             at=reader_at(text) if real or missed else class_at(text))
     # 멈춘 자리 = 가장 깊은 나쁜 홉(같은 깊이면 먼저 읽은 것). 사유와 다음 칸은 **그 홉**의 일로 만든다 — 마지막 실패나 첫 "모름"이 아니라.
     bad_hops = [h for h in hops if h.bad]
     stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]
@@ -361,10 +394,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             rungs.append(Rung(action="code.resources", params=here, evidence=ev))
         elif ev in walked_at:
             info = walked_at[ev]
-            # 입력이 0인 것은 "정상"이 아니라 "모름"이다 — 메시지(토픽) 입력은 인덱스가 자원으로 못 세고, 조립식 키도 그렇다. 일부만 검사한 입력이 있으면
-            # "다 못 봤다"(사람 결정 10-15) — 못 이은 컴포넌트에 비교식이 있을 수 있다.
-            stopped = (f"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)" if not info.inputs
-                       else f"입력을 다 못 봤다 — {info.writer}(일부만 검사)" if ev in partial
+            # `입력이 다 정상`은 나열된 입력을 전부 실제로 읽었고 전부 정상이고 단일값 검사도 완전할 때만이다(사람 결정 10-16). 못 본 입력(읽기 실패·
+            # scan 일부)이나 일부만 검사(못 이은 컴포넌트에 비교식이 있을 수 있다, 10-15)가 있으면 "다 못 봤다". 실제로 읽은 입력이 0이면 "모름" — 메시지
+            # (토픽) 입력은 인덱스가 자원으로 못 세고, 읽는 자원이 자기 출력뿐인 클래스도 있다(측정 #12).
+            unseen = [*info.missed, *(["일부만 검사"] if ev in partial else [])]
+            stopped = (f"입력을 다 못 봤다 — {info.writer}({' · '.join(unseen)})" if unseen
+                       else f"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)" if not info.listed
+                       else f"입력을 모른다 — {info.writer}(인덱스 자원이 자기 출력뿐)" if not info.inputs
                        else f"입력이 다 정상 — {info.writer}")
             if info.scope and info.at is not None:
                 rungs.append(Rung(action="code.read", params={"service": info.scope, "path": info.at[0], "line": info.at[1]}, evidence=info.res_id))

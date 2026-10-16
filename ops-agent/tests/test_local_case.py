@@ -206,3 +206,18 @@ def test_제목에_슬래시가_든_배지의_요약_키는_data가_커서_잘�
     assert value["record"][0]["summary_info"]["title"] == "Up/Down Rate" and value["metadata"]["event_type"] == "RateRefresh"
     assert len(json.dumps(value["record"][0]["data"])) > 2400
     assert "class RateRefresh:" in CORE_FILES["batch/rate.py"] and 'cfg["redis_key"]["alarm_rate"]["key"]' in API_FILES["api/alarms.py"]
+
+
+
+def test_chain_objects와_palette_unread는_빈_객체_자기_출력뿐인_클래스_읽기_실패의_모양이다():
+    """측정 #12의 걷기 틀린 사실 둘과 읽기 실패(R3-5b ②). chain-objects: 도메인 키 `record {}`(빈 객체) ← 원천 묶음 빈 배열, 원천의 쓴 쪽은 그 묶음을
+    읽어 덧붙여 다시 쓴다(읽는 자원이 자기 출력뿐). palette-unread: palette-empty에 원천 색 키 읽기 실패(stub 신호 — 실서버의 WRONGTYPE 자리)."""
+    from tools.local_case import CORE_FILES, VARIANTS, _EMPTY_DATA
+    assert {"chain-objects", "palette-unread"} <= set(VARIANTS) & _EMPTY_DATA
+    objects = _seeds(NOW, "chain-objects")
+    assert _value(objects, "alarm:domain:L1") == {"metadata": {"event_type": "DomainBuilder"}, "record": {}}
+    assert _value(objects, "alarm:raw:L1") == {"metadata": {"event_type": "RawAppender"}, "rows": []}
+    src = CORE_FILES["common/appender.py"]
+    assert src.count('cfg["redis_key"]["alarm_raw"]') == 2 and "self.redis.get(" in src and "self.redis.set(" in src
+    unread = _seeds(NOW, "palette-unread")
+    assert set(unread["redis"]["palette:source"]) == {"__error__"} and _value(unread, "alarm:palette")["colors"] == []

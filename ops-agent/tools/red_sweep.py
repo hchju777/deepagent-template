@@ -2418,7 +2418,7 @@ HINT_T = "tests/application/test_nodes.py::test_입구가_이미_한_읽기를_�
 HINT_WIRE_T = "tests/application/test_nodes.py::test_integrate는_입구_결과로_다음_홉_힌트를_넘긴다"
 CASES += [
  ("선언 이름을 안 남긴다", IM, "                declared_of[name] = template\n", "", [DECL_T]),
- ("identity 옆 빈 목록을 안 적는다", IM, "    return [f\"{parent}.{k}\" if parent else k for k, v in obj.items() if isinstance(v, list) and not v]", "    return []", [DECL_T]),
+ ("identity 옆 빈 목록을 안 적는다", IM, "    return ([place(k) for k, v in obj.items() if isinstance(v, list) and not v],", "    return ([],", [DECL_T]),
  ("인덱스가 없어도 다음 홉을 낸다", IM, "    if target is None or not target.key or not code_index:", "    if target is None or not target.key:", [HOP_T]),
  ("입구 줄이 이미 읽은 것을 안 적는다", IM, "    if done:\n        lines.append(\"입구 노드가 이미 읽었다: \"", "    if False:\n        lines.append(\"입구 노드가 이미 읽었다: \"", [LINES_T]),
  ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake_lines(state, code_index=code_index)}\" if intake_lines(state, code_index=code_index) else \"\"))", "            )", [FRAME_HOP_T]),
@@ -2541,10 +2541,10 @@ CASES += [
  ("읽기 상한이 없다", WK, "        if counter >= MAX_READS:\n            return f\"읽기", "        if False:\n            return f\"읽기", [CAP_T]),
  ("시간 상한이 없다", WK, "        if elapsed() > MAX_SECONDS:", "        if False:", [CAP_T]),
  ("쓴 쪽 모름에서 uses를 안 가리킨다", WK, "            rungs.append(Rung(action=\"code.uses\", params={\"name\": declared_names.get(ev, stop_hop.key)}, evidence=ev))", "            pass", [UNKNOWN_T]),
- ("scan 뒤 전부 읽는다", WK, "[:SCAN_READS] if isinstance(k, str)]", "[:SCAN_READS * 2] if isinstance(k, str)]", [UNKNOWN_T]),
+ ("scan 뒤 전부 읽는다", WK, "for k in scanned_keys[:SCAN_READS]]", "for k in scanned_keys[:SCAN_READS * 2]]", [UNKNOWN_T]),
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
- ("빈 배열을 정상으로 본다", WK, "        if empties:\n            return f\"빈 배열 ({', '.join(empties)})\", True", "        if False:\n            return f\"빈 배열 ({', '.join(empties)})\", True", [STATUS_T]),
+ ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
  ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by, lookup=deps.filter_lines, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
@@ -2647,7 +2647,7 @@ CASES += [
  ("걷기 노드가 레포 지도를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by", "declared_by=deps.declared_by", [WNODE_T]),
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
  ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
- ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant == \"palette-empty\" else", "\"colors\": [] if False else", [PAL_T]),
+ ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\") else", "\"colors\": [] if variant in (\"palette-unread\",) else", [PAL_T]),
  ("palette-empty가 빈 data가 아니다", LC, "\"source-filtered\", \"palette-empty\", \"chain-empty\"", "\"source-filtered\", \"chain-empty\"", [PAL_T]),
 ]
 
@@ -2657,9 +2657,9 @@ DEEP_T = "tests/application/test_walk.py::test_멈춘_자리는_가장_깊은_�
 LADDER2_T = "tests/application/test_briefing.py::test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸_칸은_건너뛴다"
 CASES += [
  ("멈춘 자리가 가장 깊은 나쁜 홉이 아니다", WK, "    stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]", "    stop_hop = min(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]", [DEEP_T, WALK_T]),
- ("입력이 0이어도 정상이라 한다", WK, "            stopped = (f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)\" if not info.inputs", "            stopped = (f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)\" if False", [DEEP_T]),
- ("입력 0의 칸이 클래스 본문이 아니다", WK, "reader_at(text) if found_inputs else class_at(text))", "reader_at(text))", [DEEP_T]),
- ("입력 정상의 칸이 읽는 메서드가 아니다", WK, "reader_at(text) if found_inputs else class_at(text))", "class_at(text))", [WALK_T]),
+ ("입력이 0이어도 정상이라 한다", WK, "                       else f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)\" if not info.listed", "                       else f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)\" if False", [DEEP_T]),
+ ("입력 0의 칸이 클래스 본문이 아니다", WK, "at=reader_at(text) if real or missed else class_at(text))", "at=reader_at(text))", [DEEP_T]),
+ ("입력 정상의 칸이 읽는 메서드가 아니다", WK, "at=reader_at(text) if real or missed else class_at(text))", "at=class_at(text))", [WALK_T]),
  ("홉의 부모를 안 적는다", WK, "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\", parent=came_from))", "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\"))", [DEEP_T]),
  ("사슬이 부모를 안 따라간다", CS, "            cur = by_id.get(cur.parent) if cur.parent else None", "            cur = None", [DEEP_T]),
  ("사슬 밖의 나쁜 홉도 고정한다", B, "        ids |= set(state.walk.chain_ids())", "        ids |= set(state.walk.bad_ids())", [WBRIEF_T]),
@@ -2736,7 +2736,7 @@ REG_T = "tests/infrastructure/test_deployed_code.py::test_registrations는_AST�
 EMPTY_ROWS_T = "tests/application/test_runner_probe.py::test_요약_머리는_빈_배열에도_행_0을_적는다"
 CASES += [
  ("문자열 아닌 단일값을 안 센다", WK, "                    if len(same_all) > len(same):", "                    if False:", [LINK_T]),
- ("일부만 검사가 멈춤을 안 바꾼다", WK, "                       else f\"입력을 다 못 봤다 — {info.writer}(일부만 검사)\" if ev in partial", "                       else f\"입력을 다 못 봤다 — {info.writer}(일부만 검사)\" if False", [LINK_T]),
+ ("일부만 검사가 멈춤을 안 바꾼다", WK, "            unseen = [*info.missed, *([\"일부만 검사\"] if ev in partial else [])]", "            unseen = [*info.missed]", [LINK_T]),
  ("일부만 검사를 미확인으로 안 적는다", WK, "                        status = (\"미확인\" + status[len(\"정상\"):]", "                        status = (status", [LINK_T]),
  ("점 표기 별칭을 모듈로 안 푼다", DCP, "aliases.get(target.value.id, target.value.id)", "None", [REG_T]),
  ("데코레이터 등록을 안 읽는다", DCP, "        elif isinstance(node, ast.ClassDef):", "        elif False:", [REG_T]),
@@ -2763,7 +2763,7 @@ CASES += [
  ("측정판에 사이트 인자 등록이 없다", LC, "register(component=\"state_filter\", gbm=\"mx\", factory=\"gumi\")(comp.GumiStateFilter)", "register(component=\"state_filter\")(comp.GumiStateFilter)", [REG_BOARD_T]),
  ("측정판 등록이 여러 줄이 아니다", LC, "register(\n    component=\"row_filler\",\n)(\n    fillers.RowFiller\n)", "register(component=\"row_filler\")(fillers.RowFiller)", [REG_BOARD_T]),
  ("측정판 c-2 행의 나쁜 필드가 일곱 필드 앞이다", LC, "_FILTERED_ROW = {\"unit\": \"ea\",", "_FILTERED_ROW = {\"state\": \"-\", \"unit\": \"ea\",", [CHAIN_T]),
- ("chain-empty의 원천 쓴 쪽이 메시지 입력 클래스가 아니다", LC, "\"SourceCollector\" if variant == \"chain-empty\" else \"SourceMerger\"", "\"SourceMerger\"", [CHAIN_T, BOARD_C1_T]),
+ ("chain-empty의 원천 쓴 쪽이 메시지 입력 클래스가 아니다", LC, "_RAW_WRITER = {\"chain-empty\": \"SourceCollector\", \"chain-objects\": \"RawAppender\"}", "_RAW_WRITER = {\"chain-objects\": \"RawAppender\"}", [CHAIN_T, BOARD_C1_T]),
  ("측정판 원천 클래스가 다른 레포에 같은 이름으로 없다", LC, "class SourceCollector:\n    def __init__(self, cfg):\n", "class SourceTable:\n    def __init__(self, cfg):\n", [BOARD_C1_T]),
  ("측정판 원천 행에 통과할 단일값이 없다", LC, "\"occ_date\": d[\"occ_date\"], \"unit\": \"ea\",", "\"occ_date\": d[\"occ_date\"],", [BOARD_C1_T]),
 ]
@@ -2789,7 +2789,41 @@ CASES += [
  ("측정판 api가 증감 배지 키를 안 읽는다", LC, "    rate = redis.get(cfg[\"redis_key\"][\"alarm_rate\"][\"key\"].format(line=line))\n", "", [LC_RATE_T, BOARD_SLASH_T]),
 ]
 
-assert len(CASES) >= 822, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5b ② — "비었다"는 한 판정(대상 키 홉·다른 홉), `입력이 다 정상`은 전부 읽고 전부 정상일 때만 ──
+STB = ROOT / "src/infrastructure/stubs.py"
+EMPTY_ONE_T = "tests/application/test_walk.py::test_빈_목록과_빈_객체는_한_판정이고_행이_든_목록이_하나라도_있으면_정상이다"
+HOP0_OBJ_T = "tests/application/test_walk.py::test_대상_키_홉의_빈_객체도_같은_판정으로_나쁘다"
+INPUTS_T = "tests/application/test_walk.py::test_입력이_다_정상은_나열된_입력을_전부_읽고_전부_정상일_때만이고_읽은_입력이_없으면_모른다"
+SCAN_MISS_T = "tests/application/test_walk.py::test_못_채우는_템플릿을_다_못_읽었거나_scan이_실패하면_다_못_봤다"
+SHARED_IN_T = "tests/application/test_walk.py::test_다른_클래스가_이미_읽은_입력은_그_읽기_결과를_따른다"
+INTAKE_EMPTY_T = "tests/application/test_intake_map.py::test_대상_키_홉의_빈_자리도_걷기와_같은_한_판정이다"
+LC_OBJ_T = "tests/test_local_case.py::test_chain_objects와_palette_unread는_빈_객체_자기_출력뿐인_클래스_읽기_실패의_모양이다"
+STUB_ERR_T = "tests/infrastructure/test_stubs.py::test_stub_redis는_오류_신호_시드를_읽기_실패로_돌려준다"
+BOARD_OBJ_T = "tests/test_board_walk.py::test_빈_객체_입력과_자기_출력뿐인_원천_클래스는_사실대로_적는다"
+BOARD_UNREAD_T = "tests/test_board_walk.py::test_입력_읽기가_실패하면_입력이_다_정상이_아니라_다_못_봤다"
+CASES += [
+ ("빈 객체를 비었다고 안 본다", IM, "            [place(k) for k, v in obj.items() if isinstance(v, dict) and not v])", "            [])", [EMPTY_ONE_T, INTAKE_EMPTY_T, BOARD_OBJ_T]),
+ ("행이 든 목록이 있어도 빈 자리를 적는다", IM, "    if not isinstance(obj, dict) or any(isinstance(v, list) and v and all(isinstance(r, dict) for r in v) for v in obj.values()):", "    if not isinstance(obj, dict):", [EMPTY_ONE_T, INTAKE_EMPTY_T]),
+ ("맨 위 빈 객체를 정상으로 본다", WK, "        if not value:\n            return \"빈 객체\", True", "        if False:\n            return \"빈 객체\", True", [EMPTY_ONE_T]),
+ ("대상 키 홉이 빈 객체를 안 본다", WK, "bad=bool(target.empty or target.empty_objects),", "bad=bool(target.empty),", [HOP0_OBJ_T]),
+ ("입구가 빈 객체 자리를 안 넘긴다", IM, "                                empty=arrays, empty_objects=objects,", "                                empty=arrays,", [INTAKE_EMPTY_T]),
+ ("입구 줄이 빈 객체를 안 적는다", IM, "for p in [*target.empty, *target.empty_objects]))", "for p in target.empty))", [INTAKE_EMPTY_T]),
+ ("자기 출력도 입력으로 센다", WK, "                    if named != writer:\n                        if result == \"ok\":", "                    if True:\n                        if result == \"ok\":", [INPUTS_T, BOARD_OBJ_T]),
+ ("읽기 실패를 못 본 입력으로 안 센다", WK, "                if got.status != \"ok\":\n                    missed.append(f\"읽기 실패 {label}\")", "                if got.status != \"ok\":\n                    pass", [INPUTS_T, BOARD_UNREAD_T]),
+ ("scan 일부를 못 본 입력으로 안 센다", WK, "                    elif len(reads) < len(scanned_keys) or not scanned_keys:", "                    elif False:", [SCAN_MISS_T]),
+ ("scan 실패를 못 본 입력으로 안 센다", WK, "                        missed.append(f\"읽기 실패 {name}(scan)\")", "                        pass", [SCAN_MISS_T]),
+ ("자원이 자기 출력뿐이어도 정상이라 한다", WK, "                       else f\"입력을 모른다 — {info.writer}(인덱스 자원이 자기 출력뿐)\" if not info.inputs", "                       else f\"입력을 모른다 — {info.writer}(인덱스 자원이 자기 출력뿐)\" if False", [INPUTS_T, BOARD_OBJ_T]),
+ ("이미 읽은 입력을 안 센다", WK, "                        if result == \"ok\":\n                            real += 1", "                        if False:\n                            real += 1", [SHARED_IN_T]),
+ ("이미 읽은 입력의 실패를 안 따른다", WK, "                        elif result == \"fail\":\n                            missed.append(f\"읽기 실패 {label}\")", "                        elif False:\n                            missed.append(f\"읽기 실패 {label}\")", [SHARED_IN_T]),
+ ("읽기 실패의 칸이 클래스 머리다", WK, "at=reader_at(text) if real or missed else class_at(text))", "at=reader_at(text) if real else class_at(text))", [BOARD_UNREAD_T]),
+ ("stub이 오류 신호를 값으로 돌려준다", STB, "        if isinstance(found, dict) and set(found) == {\"__error__\"}:", "        if False:", [STUB_ERR_T, BOARD_UNREAD_T]),
+ ("측정판 원천 클래스가 자기 출력을 안 읽는다", LC, "        raw = json.loads(self.redis.get(self.cfg[\"redis_key\"][\"alarm_raw\"].format(line=message[\"line\"])) or \"{}\")\n        rows = raw.get(\"rows\", []) + [message]", "        rows = [message]", [LC_OBJ_T, BOARD_OBJ_T]),
+ ("palette-unread의 원천 색 키가 읽힌다", LC, "} if variant == \"palette-unread\" else json.dumps(", "} if False else json.dumps(", [LC_OBJ_T, BOARD_UNREAD_T]),
+ ("chain-objects의 도메인 record가 빈 객체가 아니다", LC, "\"record\": {} if variant == \"chain-objects\" else", "\"record\": [] if variant == \"chain-objects\" else", [LC_OBJ_T, BOARD_OBJ_T]),
+]
+
+assert len(CASES) >= 840, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
