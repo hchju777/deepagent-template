@@ -193,3 +193,16 @@ def test_등록은_모음_파일에_호출형_네_모양으로_있고_문서_문
         ("row_filler", "RowFiller", "common.fillers", {})]
     assert '@register(component="state_filter"' in text and "register(\n    component=" in text
     assert not [p for p, t in CORE_FILES.items() if p.endswith(".py") and p != "common/registry.py" and "register(" in t]
+
+
+def test_제목에_슬래시가_든_배지의_요약_키는_data가_커서_잘리고_쓴_쪽_이름은_data_밖에_있다():
+    """측정 #12의 16행 모양(R3-5b ①) — data가 커서 입구의 후보 본문(기본 evidence_chars)이 잘려 좁혀 다시 읽고, 쓴 쪽 이름은 data의 형제 자리에
+    있다. 제목에 '/'가 든다(행 9)."""
+    import json
+    from tools.local_case import API_FILES, BADGE_TITLES, CORE_FILES
+    s = _seeds(NOW, "healthy")
+    assert "Up/Down Rate" in BADGE_TITLES and _badge(s, "L1", "Up/Down Rate")
+    value = _value(s, "alarm:rate:L1")
+    assert value["record"][0]["summary_info"]["title"] == "Up/Down Rate" and value["metadata"]["event_type"] == "RateRefresh"
+    assert len(json.dumps(value["record"][0]["data"])) > 2400
+    assert "class RateRefresh:" in CORE_FILES["batch/rate.py"] and 'cfg["redis_key"]["alarm_rate"]["key"]' in API_FILES["api/alarms.py"]

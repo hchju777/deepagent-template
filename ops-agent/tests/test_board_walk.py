@@ -81,13 +81,18 @@ def board(tmp_path_factory):
     return root
 
 
-def _walk(board, monkeypatch, variant):
-    """`case walk --target L1/Alarm`의 출력 → (행들 — 증거 칸 뺌, 주들, 멈춤, 칸들)."""
+def _out(board, monkeypatch, variant, target="L1/Alarm"):
     for key, value in ENV.items():
         monkeypatch.setenv(key, value)
-    code, out = _cli("--config-root", str(board / "config"), "--env-file", str(board / "none"), "case", "walk", "--target", "L1/Alarm",
+    code, out = _cli("--config-root", str(board / "config"), "--env-file", str(board / "none"), "case", "walk", "--target", target,
                      "--check", "badge_all_zero", "--stub-seeds", str(board / f"{variant}.json"), "--gbm", "mx", "--fct", "gumi")
     assert code == 0, out
+    return out
+
+
+def _walk(board, monkeypatch, variant, target="L1/Alarm"):
+    """`case walk --target <대상>`의 출력 → (행들 — 증거 칸 뺌, 주들, 멈춤, 칸들)."""
+    out = _out(board, monkeypatch, variant, target)
     lines = out.splitlines()
     head = next((i for i, line in enumerate(lines) if line.startswith("걷기(코드가 상류를 걸었다)")), None)
     assert head is not None, out
@@ -164,3 +169,16 @@ def test_정상_사슬은_가짜_나쁨이_없다(board, monkeypatch):
     rows, notes, stopped, rungs = _walk(board, monkeypatch, "healthy")
     assert not [r for r in rows if re.search(r"\| (나쁨|미확인|없음|0행|빈 배열|읽기 실패)", r)], rows
     assert SOURCE_ROW in rows and stopped == "입력이 다 정상 — SummaryRefresh" and rungs
+
+
+def test_제목에_슬래시가_든_행도_입구가_고르고_잘린_키의_쓴_쪽은_전체_값에서_찾아_걷는다(board, monkeypatch):
+    """측정 #12(R3-5b ①): 행 9는 입구가 대상 문자열을 '/'로 쪼개 "대상 행이 없다"였고, data가 커서 좁혀 다시 읽은 16행은 쓴 쪽 이름(data의 형제
+    자리)을 못 봐 "쓴 쪽: 모른다"였다 — 걷기가 c-1·c-2에서만 돌았다. 대상 키 줄의 `summary_info`(부모 `record[0]`로 좁힌 값 안의 자리)가 잘린
+    키라는 표시다."""
+    out = _out(board, monkeypatch, "healthy", "L1/Up/Down Rate")
+    assert "대상 키: alarm:rate:L1 — 키 값의 summary_info에 대상 identity(L1/Up/Down Rate)가 그대로 있다 (t-1.e1)" in out
+    assert "쓴 쪽: RateRefresh — 값의 metadata.event_type과 인덱스의 클래스 이름이 완전 일치" in out
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "healthy", "L1/Up/Down Rate")
+    assert rows == ["alarm:rate:L1 | RateRefresh [batch] | 정상",
+                    "alarm:source:L1 | — | 정상 — 행 4 · 필드 3 · 모든 행이 같은 값: unit='ea' · 단일값 unit='ea' — 거르는 줄 없음(1/1 대조, 1파일)"]
+    assert stopped == "입력이 다 정상 — RateRefresh" and rungs

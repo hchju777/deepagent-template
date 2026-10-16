@@ -25,7 +25,7 @@ from typing import Any
 
 from src.config.schema_patrol import CheckConfig, Guard, ItemsAllZeroParams, ProbeRef
 from src.domain.base import Clock
-from src.domain.patrol import CheckOutcome, Finding, ProbeSet
+from src.domain.patrol import CheckOutcome, Finding, ProbeSet, target_of
 
 
 class _Missing:
@@ -135,7 +135,7 @@ def judge_items_all_zero(probes: ProbeSet, check: CheckConfig, *,
         if missing_id:
             findings.append(finding(label, f"식별 필드 부재 — {', '.join(missing_id)}"))
             continue
-        target = "/".join(str(item[f]) for f in params.identity)
+        target = target_of(item, params.identity)
         if target in seen:
             # 덮어쓰면 항목 하나가 조용히 사라진다.
             findings.append(finding(

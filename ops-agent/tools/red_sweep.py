@@ -2263,8 +2263,8 @@ CASES += [
  ("identity 일부만 있어도 그 자리로 친다", IM, "        if values and all(v in leaves for v in values):", "        if values and any(v in leaves for v in values):", [HOLD_T]),
  ("부분 문자열로 identity를 찾는다", IM, "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}",
   "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}\n        leaves = {l for l in leaves} | {v for v in values if any(l in v for l in leaves)}", [HOLD_T]),
- ("둘 이상이어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, (at, complete)), = hits.items()", "    if hits:\n        (key, (at, complete)), *_ = hits.items()", [NOPICK_T]),
- ("identity가 없는 키도 고른다", IM, "        at = holds_identity(_unwrap(raw), identity)\n        if at:", "        at = holds_identity(_unwrap(raw), identity) or \"(맨 위)\"\n        if at:", [PICK_T, NOPICK_T]),
+ ("둘 이상이어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, (at, complete, value)), = hits.items()", "    if hits:\n        (key, (at, complete, value)), *_ = hits.items()", [NOPICK_T]),
+ ("identity가 없는 키도 고른다", IM, "        at = holds_identity(value, identity)\n        if at:", "        at = holds_identity(value, identity) or \"(맨 위)\"\n        if at:", [PICK_T, NOPICK_T]),
  ("접수 읽기가 실패해도 계속 간다", IM, "    if outcome.status != \"ok\" or not outcome.evidence:\n        return patch(", "    if False:\n        return patch(",
   [f"{IMT}::test_접수_읽기가_실패하거나_대상_행이_없으면_거기서_멈춘다"]),
  ("템플릿 머리를 scan하지 않는다", IM, "    for template in (k for k in declared if \"{\" in k):", "    for template in ():",
@@ -2454,9 +2454,9 @@ CASES += [
  ("클래스 이름이 둘이어도 첫 것을 고른다", IM, "    if len(names) == 1:\n        return hits[0][1], hits[0][0], \"\"", "    if names:\n        return hits[0][1], hits[0][0], \"\"", [WRITER_T]),
  ("부분 일치로 쓴 쪽을 고른다", IM, "    hits = [(at, text) for at, text in _string_leaves(value) if text in classes]",
   "    hits = [(at, text) for at, text in _string_leaves(value) if any(c.lower() == text.lower() for c in classes)]", [WRITER_T]),
- ("입구가 쓴 쪽을 안 적는다", IM, "        writer, writer_at, writer_problem = writer_of(_unwrap(raw), classes) if raw is not None else (\"\", \"\", \"\")",
+ ("입구가 쓴 쪽을 안 적는다", IM, "        writer, writer_at, writer_problem = writer_of(value, classes)",
   "        writer, writer_at, writer_problem = \"\", \"\", \"\"", [WRITER_T]),
- ("인덱스 없이도 모른다고 말한다", IM, "                                writer_searched=bool(classes) and raw is not None, **folded,", "                                writer_searched=raw is not None, **folded,", [WRITER_T]),
+ ("인덱스 없이도 모른다고 말한다", IM, "                                writer_searched=bool(classes), **folded,", "                                writer_searched=True, **folded,", [WRITER_T]),
  ("쓴 쪽을 알아도 uses로 간다", IM, "    if target.writer:\n        return \"code.resources\", {\"name\": target.writer}", "    if False:\n        return \"code.resources\", {\"name\": target.writer}", [HOP2_T, WRITER_B_T]),
  ("resources가 메서드 자원을 안 모은다", QYP, "    members = [m for m in index.symbols if m.class_id == sid] if s.kind == \"class\" else [s]", "    members = [s]", [RESOURCES_T]),
  ("resources가 읽기와 쓰기를 안 가른다", QYP, "        rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)", "        rows = sorted((k, v) for k, v in seen.items())", [RESOURCES_T]),
@@ -2768,7 +2768,28 @@ CASES += [
  ("측정판 원천 행에 통과할 단일값이 없다", LC, "\"occ_date\": d[\"occ_date\"], \"unit\": \"ea\",", "\"occ_date\": d[\"occ_date\"],", [BOARD_C1_T]),
 ]
 
-assert len(CASES) >= 816, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5b ① — 입구: 대상 행은 순찰과 같은 함수로 통째로, 쓴 쪽은 후보 읽기의 전체 값에서 ──
+DPAT = ROOT / "src/domain/patrol.py"
+TARGET_ROW_T = "tests/application/test_intake_map.py::test_대상_행은_identity를_순찰과_같은_함수로_이은_문자열이_케이스_대상과_통째로_같은_행이다"
+SLASH_T = "tests/application/test_intake_map.py::test_제목에_슬래시가_든_대상도_고르고_identity는_그_행의_값이다"
+WRITER_FULL_T = "tests/application/test_intake_map.py::test_쓴_쪽은_좁힌_다시_읽기가_아니라_후보_읽기의_전체_값에서_찾는다"
+CLI_WALK_T = "tests/test_cli_case_walk.py::test_case_walk은_target으로_입구를_돌리고_케이스_블록만_찍으며_아무것도_남기지_않는다"
+BOARD_SLASH_T = "tests/test_board_walk.py::test_제목에_슬래시가_든_행도_입구가_고르고_잘린_키의_쓴_쪽은_전체_값에서_찾아_걷는다"
+LC_RATE_T = "tests/test_local_case.py::test_제목에_슬래시가_든_배지의_요약_키는_data가_커서_잘리고_쓴_쪽_이름은_data_밖에_있다"
+CASES += [
+ ("대상 행을 대상 문자열의 조각으로 맞춘다", IM, "target_of(row, fields) == target:", "target_of(row, fields) == \"/\".join(target.split(\"/\")[:len(fields)]):",
+  [TARGET_ROW_T, SLASH_T, CLI_WALK_T, BOARD_SLASH_T]),
+ ("identity 필드가 없는 행도 대상이 된다", IM, "if fields and all(f in row for f in fields) and target_of(row, fields) == target:",
+  "if fields and \"/\".join(str(row.get(f)) for f in fields) == target:", [TARGET_ROW_T]),
+ ("대상 문자열의 구분자가 순찰과 다르다", DPAT, "    return \"/\".join(str(row[f]) for f in identity)", "    return \" / \".join(str(row[f]) for f in identity)", [TARGET_ROW_T]),
+ ("쓴 쪽을 좁힌 다시 읽기에서 찾는다", IM, "        writer, writer_at, writer_problem = writer_of(value, classes)",
+  "        writer, writer_at, writer_problem = writer_of(_unwrap(raw), classes) if raw is not None else (\"\", \"\", \"\")", [WRITER_FULL_T, BOARD_SLASH_T]),
+ ("측정판 증감 배지 data가 안 잘린다", LC, "_RATE_ROWS = 150", "_RATE_ROWS = 3", [LC_RATE_T, BOARD_SLASH_T]),
+ ("측정판 api가 증감 배지 키를 안 읽는다", LC, "    rate = redis.get(cfg[\"redis_key\"][\"alarm_rate\"][\"key\"].format(line=line))\n", "", [LC_RATE_T, BOARD_SLASH_T]),
+]
+
+assert len(CASES) >= 822, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -24,11 +24,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.application.recompute import pluck
-from src.application.runner_probe import focus_of
 from src.application.state import CaseState
 from src.domain.actions import describe, role_for
 from src.domain.case import EvidenceRef, PlanTask, TargetPick
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
+from src.domain.patrol import target_of
 
 MAX_CANDIDATES = 50
 # 증거 `source`는 우리가 만든 `describe` 문자열(`redis.get key='…' path='…'`)이라 그 모양으로 키를 되읽는다. scan은 키 하나를 읽은 것이
@@ -89,11 +89,12 @@ def _doc_lists(value: Any, path: str = ""):
             yield from _doc_lists(v, f"{path}[{i}]")
 
 
-def target_row(data: Any, *, fields: tuple[str, ...], values: tuple[str, ...]) -> tuple[str, dict] | None:
-    """접수 응답 원본에서 identity 필드가 전부 `values`와 같은 첫 행 — `(경로, 행)`. 경로 번호는 0부터(경로 문법과 같다)."""
+def target_row(data: Any, *, fields: tuple[str, ...], target: str) -> tuple[str, dict] | None:
+    """접수 응답 원본에서 identity를 순찰과 같은 함수(`target_of`)로 이은 문자열이 케이스 대상과 **통째로** 같은 첫 행 — `(경로, 행)`. 경로 번호는
+    0부터(경로 문법과 같다). 대상 문자열을 쪼개지 않는다(측정 #12: 제목에 '/'가 든 행을 쪼갠 조각 수로 맞춰 보다 놓쳤다)."""
     for path, rows in _doc_lists(data):
         for i, row in enumerate(rows):
-            if all(str(row.get(f)) == v for f, v in zip(fields, values)) and len(fields) == len(values):
+            if fields and all(f in row for f in fields) and target_of(row, fields) == target:
                 return f"{path}[{i}]", row
     return None
 
@@ -269,10 +270,10 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
     done, outcome = await run("접수 읽기 — 증상 재현(코드)", action, params, keep=True, task_id="t-0")
     if outcome.status != "ok" or not outcome.evidence:
         return patch(TargetPick(problem=f"접수 읽기 실패 — {outcome.error or '증거 없음'}"))
-    values = focus_of(state.case)
-    found = target_row(runner.raw(outcome.evidence[0].id), fields=spec.fields, values=values)
+    wanted = state.case.target or ""
+    found = target_row(runner.raw(outcome.evidence[0].id), fields=spec.fields, target=wanted)
     if found is None:
-        return patch(TargetPick(problem=f"접수 응답에 대상 행이 없다 — identity {'/'.join(spec.fields)} = {'/'.join(values)} ({outcome.evidence[0].id})"))
+        return patch(TargetPick(problem=f"접수 응답에 대상 행이 없다 — identity {'/'.join(spec.fields)} = {wanted} ({outcome.evidence[0].id})"))
     where, row = found
     identity = tuple(str(row.get(f)) for f in spec.fields)
 
@@ -297,7 +298,7 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
     if not candidates:
         return patch(TargetPick(problem=f"후보 키가 없다 — 접수 끝점이 읽는 선언 키를 모른다(흐름 그래프) ({where} 대상 행은 찾았다)"))
 
-    hits: dict[str, tuple[str, bool]] = {}
+    hits: dict[str, tuple[str, bool, Any]] = {}                    # 키 → (identity 자리, 본문이 다 실렸나, 후보 읽기의 전체 값)
     missing: list[str] = []
     failed = 0
     for key in candidates:
@@ -309,14 +310,15 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
         if raw is None:
             missing.append(key)
             continue
-        at = holds_identity(_unwrap(raw), identity)
+        value = _unwrap(raw)
+        at = holds_identity(value, identity)
         if at:
-            hits[key] = (at, got.evidence[0].complete)
+            hits[key] = (at, got.evidence[0].complete, value)
     tail = f" — 후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""
     label = f"대상 identity({'/'.join(identity)})"
     folded = dict(candidates=candidates, read=len(candidates), absent=missing, failed=failed, hits=len(hits))
     if len(hits) == 1:
-        (key, (at, complete)), = hits.items()
+        (key, (at, complete, value)), = hits.items()
         # 고른 키를 **State에 남는 읽기**로 한 번 더 — 후보 읽기 본문이 잘렸으면 identity 객체의 부모로 좁혀 data까지 통째로.
         narrow = None if complete else _parent(at)
         goal = f"대상 키 읽기 — {key}" + (f" (identity 자리 {at}의 부모 {narrow}로 좁혀)" if narrow else "")
@@ -327,16 +329,18 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
             basis = f"키 값의 {at2}에 {label}가 그대로 있다 ({again.evidence[0].id})"
         else:
             basis = f"키 값의 {at}에 {label}가 그대로 있다 (다시 읽기 실패: {again.error or '증거 없음'})"
-        writer, writer_at, writer_problem = writer_of(_unwrap(raw), classes) if raw is not None else ("", "", "")
+        # 쓴 쪽은 후보 읽기의 **전체 값**에서 — 좁힌 다시 읽기는 identity의 부모만 돌려줘 형제 자리(`metadata.event_type`)가 빠진다(측정 #12: data가
+        # 커서 잘린 16행이 "쓴 쪽: 모른다"였다). 원본은 실행기가 잘리지 않은 채 들고 있다.
+        writer, writer_at, writer_problem = writer_of(value, classes)
         return patch(TargetPick(key=key, basis=basis, declared=declared_of.get(key, key),
                                 empty=_empty_lists(_unwrap(raw), at2) if at2 else [],
                                 writer=writer, writer_at=writer_at, writer_problem=writer_problem,
-                                writer_searched=bool(classes) and raw is not None, **folded,
+                                writer_searched=bool(classes), **folded,
                                 problem=f"후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""))
     if not hits:
         gone = f"; 없는 키 {len(missing)}개: {', '.join(missing)}" if missing else ""
         return patch(TargetPick(**folded, problem=f"후보 {len(candidates)}개 중 값에 {label}가 든 키가 없다{gone}{tail}"))
-    shown = "; ".join(f"{k} ({at})" for k, (at, _) in hits.items())
+    shown = "; ".join(f"{k} ({at})" for k, (at, _, _) in hits.items())
     return patch(TargetPick(**folded, problem=f"값에 {label}가 든 키가 {len(hits)}개 — 하나로 못 좁힌다: {shown}{tail}"))
 
 

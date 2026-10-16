@@ -54,6 +54,9 @@ def test_case_walk은_target으로_입구를_돌리고_케이스_블록만_찍�
                      "--stub-seeds", str(tmp_path / "seeds.json"), "--gbm", "mx", "--fct", "gumi")
     assert code == 0, out.out + out.err
     assert "사이트: mx/gumi" in out.out and "증상: L1/Up/Down Rate — case walk(측정)" in out.out
-    assert "입구 노드가 이미 읽었다: 접수 읽기(t-0.e1)" in out.out                                # 제목의 '/'를 쪼개지 않고 통째로 대상 행을 골랐다
+    assert "입구 노드가 이미 읽었다: 접수 읽기(t-0.e1)" in out.out
+    # 제목의 '/'를 쪼개지 않고 통째로 대상 행을 골랐다 — 코드 번들이 없어 후보 키가 없다는 데서 멈추지만 대상 행은 찾았다. R3-5 ②의 이 테스트는
+    # 위 줄만 보고 "골랐다"고 적었는데 실제로는 "대상 행이 없다"였다(측정 #12 행 9, R3-5b ①).
+    assert "(response[1] 대상 행은 찾았다)" in out.out and "대상 행이 없다" not in out.out
     assert "걷기 없음" in out.out and "읽기 전용" in out.out
     assert sorted(p.name for p in tmp_path.iterdir()) == before                                 # cases.json·out/ 어느 것도 생기지 않았다

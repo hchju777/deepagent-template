@@ -26,10 +26,11 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 
 LINES = ["L1", "L2", "L3"]
-BADGE_TITLES = ["Setup", "Idle", "Quality", "Stop", "Caution", "Alarm"]
+# 제목에 '/'가 든 배지(R3-5b ① — 측정 #12 행 9: 입구가 대상 문자열을 '/'로 쪼개 대상 행을 놓쳤다).
+BADGE_TITLES = ["Setup", "Idle", "Quality", "Stop", "Caution", "Alarm", "Up/Down Rate"]
 # 배지 행의 링크 필드(사내 모양 — 값 안에 그 배지 키의 이름 토큰이 든다). 코드가 선언 없이 행의 값에서 토큰을 뽑아 선언 키와 맞춘다
 # (`intake_map`). Alarm 배지의 토큰만 `alarm:stats:{line}`에 든다 — 다른 배지의 토큰은 어떤 키에도 안 들어야 "골랐다"가 난다.
-BADGE_LINKS = {"Alarm": "stats"}
+BADGE_LINKS = {"Alarm": "stats", "Up/Down Rate": "rate"}
 
 
 def _git(*args, cwd: Path) -> None:
@@ -124,7 +125,8 @@ CORE_FILES = {
         "redis_key": {"alarm_stats": "alarm:stats:{line}", "alarm_source": "alarm:source:{line}", "heartbeat": "hb:{service}",
                       "alarm_palette": "alarm:palette", "palette_source": "palette:source",
                       "alarm_domain": "alarm:domain:{line}", "alarm_raw": "alarm:raw:{line}",
-                      "feed_events": "feed:events:{line}", "feed_status": "feed:status:{line}", "feed_ref": "feed:ref"},
+                      "feed_events": "feed:events:{line}", "feed_status": "feed:status:{line}", "feed_ref": "feed:ref",
+                      "alarm_rate": "alarm:rate:{line}"},
         "sink": {"batch_size": 200, "flush_sec": 5}},
     # `badge.state`는 미끼(측정 #10 P0 1의 가짜 ① — 사이트 상수 config 줄): 필드와 값이 한 줄에 리터럴로 있지만 비교식도 코드도 아니다.
     "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi", "badge": {"empty_state": "-", "state": "-"}},
@@ -181,6 +183,20 @@ class SummaryRefresh:
             rows = self.components.get("state_filter").apply(domain.get("record", []) + json.loads(source or "[]"))
             command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line), "source": rows,
                        "colors": palette.get("colors", [])}
+            self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
+''',
+    # 제목에 '/'가 든 배지의 요약 키를 쓰는 배치 클래스(R3-5b ①) — 요약 키 이름을 메시지에 실어 보낸다.
+    "batch/rate.py": '''"""증감 배지 요약을 다시 만든다 — 원천 키를 읽고 요약 키 이름을 메시지에 실어 보낸다."""
+
+
+class RateRefresh:
+    def __init__(self, cfg, redis, producer):
+        self.cfg, self.redis, self.producer = cfg, redis, producer
+
+    def _run(self):
+        for line in self.cfg["lines"]:
+            source = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_source"].format(line=line)) or "[]")
+            command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_rate"].format(line=line), "rows": source}
             self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
 ''',
     # 사내 모양(측정 #10·#11): `_run`은 조립뿐이고 **비교식은 컴포넌트 클래스에** 있다 — `_run`의 `get("<컴포넌트>")`와 등록 모음 파일의
@@ -327,7 +343,8 @@ API_FILES = {
         "infra": {"mongodb": {"database": "data"}},
         "mongodb_collection": {"alarm": {"collection": "alarm_events", "ttl": 3}},
         "redis_key": {"alarm_stats": {"key": "alarm:stats:{line}", "ttl": 30},
-                      "alarm_scan": {"key": "alarm:scan:{line}", "ttl": 30}},
+                      "alarm_scan": {"key": "alarm:scan:{line}", "ttl": 30},
+                      "alarm_rate": {"key": "alarm:rate:{line}", "ttl": 30}},
         "api": {"alarm_window_min": 60, "badge_format": "compact"}},
     "config/factories/gumi/common.json": {"lines": LINES},
     "config/factories/sevt/common.json": {"lines": LINES},
@@ -369,6 +386,7 @@ def summary_badge(cfg, mongo, redis):
 def badge(cfg, mongo, redis, line):
     cached = redis.get(cfg["redis_key"]["alarm_stats"]["key"].format(line=line))
     caution = redis.get(cfg["redis_key"]["alarm_scan"]["key"].format(line=line))
+    rate = redis.get(cfg["redis_key"]["alarm_rate"]["key"].format(line=line))
     counts = cached or count_recent(cfg, mongo, line)
     render = getattr(formatters, cfg["api"]["badge_format"])
     return render(counts)
@@ -422,6 +440,8 @@ VARIANTS = {
 }
 _EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered"}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
+# 증감 배지 요약 키의 data 행 수 — 입구의 후보 본문(기본 evidence_chars 2400)이 잘릴 만큼(R3-5b ①).
+_RATE_ROWS = 150
 
 
 def _stats_data(docs, line, variant):
@@ -509,6 +529,12 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                     # 값이 쓴 쪽 이름을 **안** 싣는 키 — 클래스 이름이 아닌 문자열. 이런 키에서는 "쓴 쪽: 모른다"가 떠야 한다.
                     "metadata": {"event_type": "refresh-job"},
                     "count_1h": 0, "updated_at": fresh(1)})
+               for l in LINES},
+            # 제목에 '/'가 든 배지의 요약 키(R3-5b ①) — data가 커서 입구의 후보 본문이 잘리고(부모로 좁혀 다시 읽는다), 쓴 쪽 이름은 data 밖 `metadata`에 있다.
+            **{f"alarm:rate:{l}": json.dumps({
+                    "record": [{"summary_info": {"group": l, "title": "Up/Down Rate", "source": "MES"},
+                                "data": [{"seq": i, "dir": ["up", "down"][i % 2], "v": i} for i in range(_RATE_ROWS)]}],
+                    "metadata": {"event_type": "RateRefresh"}, "updated_at": fresh(1)})
                for l in LINES},
             # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①).
             "alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader"},

@@ -66,11 +66,20 @@ def test_값_안의_같은_객체에_identity_전부가_잎으로_있으면_그_
     assert holds_identity({"x": [{"group": "L1", "title": "Alarm"}]}, ("L1", "Alarm")) == "x[0]"
 
 
-def test_대상_행은_identity_필드가_전부_같은_행이다():
+def test_대상_행은_identity를_순찰과_같은_함수로_이은_문자열이_케이스_대상과_통째로_같은_행이다():
+    """R3-5b ①(측정 #12 행 9): 대상 문자열을 '/'로 쪼개 필드 수와 맞춰 보면 제목에 '/'가 든 행을 놓친다 — 순찰이 대상을 만든 함수(`target_of`)로
+    행마다 이어 통째로 비교한다."""
+    from src.domain.patrol import target_of
+
     data = {"request": {}, "status": 200, "response": _rows()}
-    assert target_row(data, fields=FIELDS, values=("L1", "Alarm")) == ("response[3]", _rows()[3])
-    assert target_row(data, fields=FIELDS, values=("L9", "Alarm")) is None
-    assert target_row(_rows(), fields=FIELDS, values=("L2", "Setup")) == ("[1]", _rows()[1])
+    assert target_row(data, fields=FIELDS, target="L1/Alarm") == ("response[3]", _rows()[3])
+    assert target_row(data, fields=FIELDS, target="L9/Alarm") is None
+    assert target_row(_rows(), fields=FIELDS, target="L2/Setup") == ("[1]", _rows()[1])
+    slash = _rows() + [{"group": "L1", "title": "Up/Down Rate", "alarm": 0}]
+    assert target_of(slash[6], FIELDS) == "L1/Up/Down Rate"
+    assert target_row(slash, fields=FIELDS, target="L1/Up/Down Rate") == ("[6]", slash[6])
+    assert target_row(slash, fields=FIELDS, target="L1/Up") is None                          # 조각이 아니라 통째로
+    assert target_row([{"group": "L1"}], fields=FIELDS, target="L1/None") is None            # identity 필드가 없는 행은 대상이 아니다
 
 
 async def test_identity가_그대로_든_키가_하나면_그_키를_고르고_State에는_접수와_대상_키_읽기만_남는다():
@@ -243,3 +252,29 @@ def test_다음_홉은_쓴_쪽을_알면_그_클래스의_입력이고_모르면
     lines = intake_lines(state, code_index=True).split("\n")
     assert lines[1] == "쓴 쪽: SummaryRefresh — 값의 metadata.event_type과 인덱스의 클래스 이름이 완전 일치"
     assert lines[2] == "다음 홉: code.resources name='SummaryRefresh' — 쓴 쪽이 읽는 자원(입력)"
+
+
+# ── R3-5b ① — 대상 행은 통째로, 쓴 쪽은 전체 값에서 ──
+
+async def test_제목에_슬래시가_든_대상도_고르고_identity는_그_행의_값이다():
+    rows = _rows() + [{"group": "L1", "title": "Up/Down Rate", "alarm": 0, "source": "MES"}]
+    case = _case().model_copy(update={"target": "L1/Up/Down Rate"})
+    runner = _runner(rest={"response": rows}, keys={"alarm:rate:L1": _value("L1", "Up/Down Rate")}, picked="alarm:rate:L1")
+    pick = (await run_intake(CaseState(case=case), SPEC, runner=runner, declared=("alarm:rate:L1",)))["target"]
+    assert pick.key == "alarm:rate:L1" and "대상 identity(L1/Up/Down Rate)가 그대로 있다" in pick.basis
+
+
+async def test_쓴_쪽은_좁힌_다시_읽기가_아니라_후보_읽기의_전체_값에서_찾는다():
+    """측정 #12: data가 커서 후보 본문이 잘린 키는 identity의 부모로 좁혀 다시 읽는다 — 그 값엔 형제 자리(`metadata.event_type`)가 없어 16행이
+    "쓴 쪽: 모른다"였다(틀린 사실). 실행기는 후보 읽기의 원본을 잘리지 않은 채 들고 있다 — 다시 읽기가 실패해도 쓴 쪽은 안다."""
+    data = [{"n": i} for i in range(50)]
+    full = json.dumps({**json.loads(_value("L1", "Alarm", data=data)), "metadata": {"event_type": "SummaryRefresh"}})
+    narrowed = json.dumps({"summary_info": {"group": "L1", "title": "Alarm", "source": "MES"}, "data": data})
+    classes = frozenset({"SummaryRefresh"})
+    runner = _runner(keys={"alarm:stats:L1": full}, picked="alarm:stats:L1", cut=("alarm:stats:L1",), reread=narrowed)
+    patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",), classes=classes)
+    assert patch["plan_tasks"][1].params == {"key": "alarm:stats:L1", "path": "record[0]"}             # 좁혀 다시 읽었다
+    assert (patch["target"].writer, patch["target"].writer_at) == ("SummaryRefresh", "metadata.event_type")
+    failed = _runner(keys={"alarm:stats:L1": full})                                                  # t-1이 대본에 없다
+    pick = (await run_intake(CaseState(case=_case()), SPEC, runner=failed, declared=("alarm:stats:L1",), classes=classes))["target"]
+    assert pick.writer == "SummaryRefresh" and "다시 읽기 실패" in pick.basis

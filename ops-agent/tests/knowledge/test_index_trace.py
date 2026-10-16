@@ -127,12 +127,14 @@ async def test_측정판_핸들러는_캐시_키를_지나_컬렉션까지_닿�
     names = [Name("collection", "alarm_events", "mongodb_collection.alarm.collection"),
              Name("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats.key"),
              # R3-1 ①-b의 미끼 키 — 핸들러가 같이 읽어 입구 노드의 후보가 된다(identity가 달라 안 골린다).
-             Name("rediskey", "alarm:scan:{line}", "redis_key.alarm_scan.key")]
+             Name("rediskey", "alarm:scan:{line}", "redis_key.alarm_scan.key"),
+             # R3-5b ①의 제목에 '/'가 든 배지의 요약 키 — 같은 핸들러가 읽는다.
+             Name("rediskey", "alarm:rate:{line}", "redis_key.alarm_rate.key")]
     routes = [Route("dt-api", "POST", "/summary/badge", "api/alarms.py", 7, "EXTRACTED", "")]
     idx, g = await _index(files, names, repo="dt-api")
     t = index_trace.trace(idx, g, repo="dt-api", target="/summary/badge", routes=routes)
     assert t.status == "ok"
     assert {s.qualname for s in t.chain} == {"summary_badge", "badge", "count_recent", "window_start"}
     assert _reads(t) == {("rediskey", "alarm:stats:{line}", "추정", "key"), ("rediskey", "alarm:scan:{line}", "추정", "key"),
-                         ("collection", "alarm_events", "추정", "key")}
-    assert [(x.line, x.why) for x in t.gaps] == [(16, "getattr로 고른 대상은 못 따라간다 — 리드가 code.read로 본다")]
+                         ("rediskey", "alarm:rate:{line}", "추정", "key"), ("collection", "alarm_events", "추정", "key")}
+    assert [(x.line, x.why) for x in t.gaps] == [(17, "getattr로 고른 대상은 못 따라간다 — 리드가 code.read로 본다")]

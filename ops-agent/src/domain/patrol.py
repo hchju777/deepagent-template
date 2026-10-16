@@ -17,6 +17,12 @@ from src.domain.concern import Concern
 from src.domain.envelope import ProbeResult
 
 
+def target_of(row: dict, identity) -> str:
+    """대상 문자열 — identity 필드 값을 `/`로 이은 것. 순찰이 finding의 대상으로 만들고(`rules`) 입구가 접수 응답의 행과 통째로 비교한다
+    (R3-5b ①). 한 함수여야 한다 — 측정 #12: 입구가 대상 문자열을 '/'로 쪼개 맞춰 보다 제목에 '/'가 든 행을 놓쳤다."""
+    return "/".join(str(row[f]) for f in identity)
+
+
 class ProbeSet(StrictModel):
     """점검 하나가 선언한 프로브들을 **동시에** 읽은 결과.
 
