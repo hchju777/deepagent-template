@@ -296,3 +296,26 @@ async def test_대상_키_홉의_빈_자리도_걷기와_같은_한_판정이다
     runner = _runner(keys={"alarm:stats:L1": keyed(data={})}, picked="alarm:stats:L1")
     patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",))
     assert "값: record[0].data가 비었다" in intake_lines(CaseState(case=_case(), **patch), code_index=False)
+
+
+
+# ── R3-5c ① — 쓴 쪽은 행 밖에서, identity는 개수까지 ──
+
+def test_쓴_쪽은_문서_목록_밖의_잎에서만_찾는다():
+    """측정 #12b P0 1: 행 안의 화면 라벨이 인덱스의 스키마 클래스 이름과 같아 쓴 쪽으로 붙었고(38회), 쓴 쪽 + 행 안 이름 둘로 "3개 — 못 고른다"도
+    났다. 쓴 쪽 이름은 행 밖(`metadata.event_type`)에 있다 — 문서 목록(dict들의 목록) 안의 잎은 안 본다."""
+    from src.application.intake_map import writer_of
+
+    classes = frozenset({"SummaryRefresh", "Overview", "Alarm"})
+    value = {"metadata": {"event_type": "SummaryRefresh"},
+             "record": [{"summary_info": {"title": "Alarm"}, "data": [{"view": "Overview"}, {"view": "Overview"}]}]}
+    assert writer_of(value, classes) == ("SummaryRefresh", "metadata.event_type", "")
+    assert writer_of({"record": [{"data": [{"view": "Overview"}]}]}, classes) == ("", "", "")             # 행 안에만 있으면 모른다
+    assert writer_of({"tags": ["Overview"]}, classes) == ("Overview", "tags[0]", "")                      # 문자열 목록은 행이 아니다
+
+
+def test_identity가_같은_값_둘이면_그_값이_두_번_든_객체만_맞는다():
+    """측정 #12b P0 2: 그룹과 제목이 같은 배지가 그 값이 한 번 든 키 셋과 맞았다 — 집합으로 비교해 개수를 안 셌다."""
+    assert holds_identity({"group": "X", "title": "Y"}, ("X", "X")) is None
+    assert holds_identity({"group": "X", "title": "X", "n": 1}, ("X", "X")) == "(맨 위)"
+    assert holds_identity({"a": {"scope": "X", "t": "C"}, "b": {"g": "X", "t": "X"}}, ("X", "X")) == "b"

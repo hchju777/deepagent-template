@@ -2260,9 +2260,8 @@ NODE_T = "tests/application/test_nodes.py::test_입구_노드는_frame_전에_�
 LINK_B = "tests/application/test_briefing.py::test_케이스_블록이_입구_노드가_고른_대상_키를_근거와_함께_말하고_흐름_줄은_그_키를_앞세운다"
 PREF_B = "tests/application/test_briefing.py::test_흐름_블록은_증상_단어로_이름을_앞세우지_않고_prefer로만_앞세운다"
 CASES += [
- ("identity 일부만 있어도 그 자리로 친다", IM, "        if values and all(v in leaves for v in values):", "        if values and any(v in leaves for v in values):", [HOLD_T]),
- ("부분 문자열로 identity를 찾는다", IM, "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}",
-  "        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}\n        leaves = {l for l in leaves} | {v for v in values if any(l in v for l in leaves)}", [HOLD_T]),
+ ("identity 일부만 있어도 그 자리로 친다", IM, "        if values and all(leaves[v] >= n for v, n in Counter(values).items()):", "        if values and any(leaves[v] >= n for v, n in Counter(values).items()):", [HOLD_T]),
+ ("부분 문자열로 identity를 찾는다", IM, "        leaves = Counter(str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool))", "        leaves = Counter(str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool))\n        leaves.update({v: 9 for v in values if any(l in v for l in list(leaves))})", [HOLD_T]),
  ("둘 이상이어도 첫 키를 고른다", IM, "    if len(hits) == 1:\n        (key, (at, complete, value)), = hits.items()", "    if hits:\n        (key, (at, complete, value)), *_ = hits.items()", [NOPICK_T]),
  ("identity가 없는 키도 고른다", IM, "        at = holds_identity(value, identity)\n        if at:", "        at = holds_identity(value, identity) or \"(맨 위)\"\n        if at:", [PICK_T, NOPICK_T]),
  ("접수 읽기가 실패해도 계속 간다", IM, "    if outcome.status != \"ok\" or not outcome.evidence:\n        return patch(", "    if False:\n        return patch(",
@@ -2327,8 +2326,8 @@ CASES += [
  ("요약 키 값에 identity가 없다", LC, '                    "record": [{"summary_info": {"group": l, "title": "Alarm", "source": "MES"},',
   '                    "record": [{"summary_info": {"source": "MES"},',
   [f"{LCT}::test_data_empty는_요약_키가_있고_data가_빈_배열이며_값_안에_대상_identity가_그대로_있다"]),
- ("미끼 키의 identity가 대상과 같다", LC, '                    "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],',
-  '                    "record": [{"summary_info": {"group": l, "title": "Alarm", "source": "MES"}, "data": []}],',
+ ("미끼 키의 identity가 대상과 같다", LC, '                    "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES", "scope": "ALL"}, "data": []}],',
+  '                    "record": [{"summary_info": {"group": l, "title": "Alarm", "source": "MES", "scope": "ALL"}, "data": []}],',
   [f"{LCT}::test_미끼_키는_이름이_비슷하고_같은_라벨을_달았지만_identity가_다르다"]),
 ]
 
@@ -2839,7 +2838,22 @@ CASES += [
  ("case walk가 셋 중 둘을 받는다", MN, "    if sum(bool(x) for x in (args.case_id, args.target, args.key)) != 1:", "    if bool(args.case_id) == bool(args.target):", [CLI_ARGS_T]),
 ]
 
-assert len(CASES) >= 847, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5c ① — 쓴 쪽은 문서 목록(행) 밖의 잎에서만, identity는 개수까지 ──
+WRITER_ROWS_T = "tests/application/test_intake_map.py::test_쓴_쪽은_문서_목록_밖의_잎에서만_찾는다"
+IDENT_COUNT_T = "tests/application/test_intake_map.py::test_identity가_같은_값_둘이면_그_값이_두_번_든_객체만_맞는다"
+WALK_ROWS_T = "tests/application/test_walk.py::test_걷기의_입력도_행_안의_클래스_이름을_쓴_쪽으로_안_삼는다"
+LC_ALL_T = "tests/test_local_case.py::test_그룹과_제목이_같은_배지와_행_안의_클래스_이름_미끼"
+BOARD_ALL_T = "tests/test_board_walk.py::test_그룹과_제목이_같은_배지는_그_값이_한_번_든_키와_안_맞는다"
+CASES += [
+ ("행 안의 잎도 쓴 쪽으로 본다", IM, "        if value and all(isinstance(r, dict) for r in value):\n            return\n", "", [WRITER_ROWS_T, WALK_ROWS_T, BOARD_SLASH_T]),
+ ("identity를 집합으로 비교한다", IM, "        if values and all(leaves[v] >= n for v, n in Counter(values).items()):", "        if values and all(leaves[v] >= 1 for v in values):", [IDENT_COUNT_T, BOARD_ALL_T]),
+ ("측정판에 그룹=제목 배지가 없다", LC, "+ [{\"group\": \"ALL\", \"title\": \"ALL\",", "+ [{\"group\": \"ALL\", \"title\": \"NONE\",", [LC_ALL_T, BOARD_ALL_T]),
+ ("측정판 미끼 키에 그룹=제목 값이 없다", LC, "\"source\": \"MES\", \"scope\": \"ALL\"}", "\"source\": \"MES\"}", [LC_ALL_T]),
+ ("측정판 행 안의 라벨이 클래스 이름이 아니다", LC, "\"v\": i, \"view\": \"Overview\"}", "\"v\": i, \"view\": \"overview\"}", [LC_ALL_T]),
+]
+
+assert len(CASES) >= 852, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -219,3 +219,10 @@ def test_key로_댄_키부터_입구_없이_걷는다(board, monkeypatch):
     rows = [line.strip().rsplit(" | ", 1)[0] for line in lines[head + 2:head + 4]]
     assert rows == ["alarm:domain:L1 | DomainBuilder [batch] | 빈 객체 (record)", "alarm:raw:L1 | RawAppender [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
     assert lines[head].endswith("멈춤: 입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐)") and "읽기 전용" in out
+
+
+
+def test_그룹과_제목이_같은_배지는_그_값이_한_번_든_키와_안_맞는다(board, monkeypatch):
+    """측정 #12b P0 2(R3-5c ①): 집합 비교로 `ALL/ALL`이 그 값이 한 번 든 미끼 키 셋과 맞아 "3개 — 못 고른다"였다. 개수를 세면 든 키가 없다."""
+    out = _out(board, monkeypatch, "healthy", "ALL/ALL")
+    assert "중 값에 대상 identity(ALL/ALL)가 든 키가 없다" in out and "하나로 못 좁힌다" not in out

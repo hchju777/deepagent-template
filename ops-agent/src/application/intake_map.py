@@ -20,6 +20,7 @@ B(키가 없을 때 config 잎 → 항목 → 조립식)는 측정 #7 뒤다 —
 """
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,10 +101,11 @@ def target_row(data: Any, *, fields: tuple[str, ...], target: str) -> tuple[str,
 
 
 def holds_identity(value: Any, values: tuple[str, ...], path: str = "(맨 위)") -> str | None:
-    """값 안에서 **같은 객체**의 잎(문자열·숫자, bool 제외)에 identity 값 전부가 완전 일치하는 자리 — 없으면 None. 첫 자리."""
+    """값 안에서 **같은 객체**의 잎(문자열·숫자, bool 제외)에 identity 값 전부가 완전 일치하는 자리 — 없으면 None. 첫 자리. 개수까지 센다 — 같은
+    값 둘(그룹=제목)이면 그 값이 두 번 든 객체만(측정 #12b P0 2: 집합으로 비교해 그 값이 한 번 든 키 셋과 맞았다)."""
     if isinstance(value, dict):
-        leaves = {str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool)}
-        if values and all(v in leaves for v in values):
+        leaves = Counter(str(v) for v in value.values() if isinstance(v, (str, int, float)) and not isinstance(v, bool))
+        if values and all(leaves[v] >= n for v, n in Counter(values).items()):
             return path
         for k, v in value.items():
             found = holds_identity(v, values, f"{path}.{k}" if path != "(맨 위)" else str(k))
@@ -164,11 +166,14 @@ def empties_at(value: Any, at: str) -> tuple[list[str], list[str]]:
 
 
 def _string_leaves(value: Any, path: str = ""):
-    """값 안의 문자열 잎 전부 — `(자리, 문자열)`. 자리 문법은 `holds_identity`와 같다(`metadata.event_type`, `record[0].x`)."""
+    """값 안의 문자열 잎 — `(자리, 문자열)`, **문서 목록(행 — dict들의 목록) 밖의 것만**. 자리 문법은 `holds_identity`와 같다(`metadata.event_type`).
+    측정 #12b P0 1: 행 안의 화면 라벨이 인덱스의 스키마 클래스 이름과 같아 쓴 쪽으로 붙었다 — 쓴 쪽 이름은 행 밖에 있다."""
     if isinstance(value, dict):
         for k, v in value.items():
             yield from _string_leaves(v, f"{path}.{k}" if path else str(k))
     elif isinstance(value, list):
+        if value and all(isinstance(r, dict) for r in value):
+            return
         for i, v in enumerate(value):
             yield from _string_leaves(v, f"{path}[{i}]")
     elif isinstance(value, str):
@@ -176,7 +181,7 @@ def _string_leaves(value: Any, path: str = ""):
 
 
 def writer_of(value: Any, classes: frozenset[str]) -> tuple[str, str, str]:
-    """`(쓴 쪽 클래스, 자리, 문제)` — 값의 문자열 잎 중 인덱스의 **클래스 이름**과 완전 일치하는 것(R3-1c ①-a). 하나면 그 클래스, 둘 이상
+    """`(쓴 쪽 클래스, 자리, 문제)` — 값의 문자열 잎(문서 목록 밖, R3-5c ①) 중 인덱스의 **클래스 이름**과 완전 일치하는 것(R3-1c ①-a). 하나면 그 클래스, 둘 이상
     다른 클래스면 고르지 않고 문제를, 없거나 인덱스가 없으면 셋 다 빈 문자열.
 
     측정 #8: 자원 줄 뒤의 동사 목록(send·produce…)으로 쓴 쪽을 고르던 규칙은 사내 모양(뒷줄 `save`, 앞줄 클래스 이름)에서 틀렸다. 사내 요약 키

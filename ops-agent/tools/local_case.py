@@ -375,6 +375,14 @@ class PaletteLoader:
         return {"format": self.cfg["api"]["badge_format"], "colors": ["#d33", "#fc0", "#3a3"]}
 ''',
     # dt-core의 `common/source.py`와 같은 클래스 이름(사내 수집기·처리기 레포의 모양) — 이쪽은 alarm:raw를 선언하지 않는다.
+    # 화면 스키마 클래스 — 이름이 증감 배지 키의 행 안 화면 라벨과 같다(R3-5c ① 미끼).
+    "api/schemas.py": '''"""화면 스키마."""
+
+
+class Overview:
+    def __init__(self, rows):
+        self.rows = rows
+''',
     "api/source.py": '''"""화면용 원천 표 — 메시지의 행을 형식과 함께 돌려준다."""
 
 
@@ -546,7 +554,8 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             **{f"feed:status:{l}": json.dumps([{"id": i, "status": ["RUN", "STOP"][i % 2]} for i in range(4)]) for l in LINES},
             "feed:ref": json.dumps({"codes": [{"code": f"A{110 + i}", "name": f"code-{i}"} for i in range(3)]}),
             **{f"alarm:scan:{l}": json.dumps({
-                    "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES"}, "data": []}],
+                    # `scope`는 그룹=제목 배지(`ALL/ALL`)의 값이 한 번 든 미끼 — identity는 개수까지 센다(R3-5c ①, 측정 #12b P0 2).
+                    "record": [{"summary_info": {"group": l, "title": "Caution", "source": "MES", "scope": "ALL"}, "data": []}],
                     # 값이 쓴 쪽 이름을 **안** 싣는 키 — 클래스 이름이 아닌 문자열. 이런 키에서는 "쓴 쪽: 모른다"가 떠야 한다.
                     "metadata": {"event_type": "refresh-job"},
                     "count_1h": 0, "updated_at": fresh(1)})
@@ -554,7 +563,8 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             # 제목에 '/'가 든 배지의 요약 키(R3-5b ①) — data가 커서 입구의 후보 본문이 잘리고(부모로 좁혀 다시 읽는다), 쓴 쪽 이름은 data 밖 `metadata`에 있다.
             **{f"alarm:rate:{l}": json.dumps({
                     "record": [{"summary_info": {"group": l, "title": "Up/Down Rate", "source": "MES"},
-                                "data": [{"seq": i, "dir": ["up", "down"][i % 2], "v": i} for i in range(_RATE_ROWS)]}],
+                                # 행 안의 화면 라벨이 dt-api의 스키마 클래스 이름과 같다 — 쓴 쪽은 행 밖에서만 찾는다(R3-5c ① 미끼, 측정 #12b P0 1).
+                                "data": [{"seq": i, "dir": ["up", "down"][i % 2], "v": i, "view": "Overview"} for i in range(_RATE_ROWS)]}],
                     "metadata": {"event_type": "RateRefresh"}, "updated_at": fresh(1)})
                for l in LINES},
             # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①).
@@ -572,7 +582,9 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                  "summary_badge": [{"group": l, "title": t, "alarm": counts[l] if t == "Alarm" else 0,
                                     "caution": 0, "normal": 3,
                                     "link": f"/summary/badge/{BADGE_LINKS.get(t, t.lower())}/"}
-                                   for t in BADGE_TITLES for l in LINES],
+                                   for t in BADGE_TITLES for l in LINES]
+                                  # 그룹과 제목이 같은 배지(R3-5c ①) — 그 값이 한 번 든 미끼 키와 맞으면 안 된다.
+                                  + [{"group": "ALL", "title": "ALL", "alarm": 0, "caution": 0, "normal": 3, "link": "/summary/badge/all/"}],
                  "prod_status": [{"line_code": l, "status": "RUN", "updated_at": fresh(1)} for l in LINES],
                  "oee_summary": {"line": "L3", "oee": 0.87, "date": _iso(now)[:10]}},
     }

@@ -221,3 +221,14 @@ def test_chain_objects와_palette_unread는_빈_객체_자기_출력뿐인_클�
     assert src.count('cfg["redis_key"]["alarm_raw"]') == 2 and "self.redis.get(" in src and "self.redis.set(" in src
     unread = _seeds(NOW, "palette-unread")
     assert set(unread["redis"]["palette:source"]) == {"__error__"} and _value(unread, "alarm:palette")["colors"] == []
+
+
+
+def test_그룹과_제목이_같은_배지와_행_안의_클래스_이름_미끼():
+    """측정 #12b P0 1·2의 모양(R3-5c ①) — 증감 배지 키의 행 안 화면 라벨이 dt-api의 스키마 클래스 이름과 같고, 그룹=제목인 배지(`ALL/ALL`)의 값이
+    미끼 키(Caution 배지)에 한 번 든다."""
+    from tools.local_case import API_FILES
+    s = _seeds(NOW, "healthy")
+    assert _badge(s, "ALL", "ALL")
+    assert _value(s, "alarm:scan:L1")["record"][0]["summary_info"]["scope"] == "ALL"
+    assert {r["view"] for r in _value(s, "alarm:rate:L1")["record"][0]["data"]} == {"Overview"} and "class Overview:" in API_FILES["api/schemas.py"]

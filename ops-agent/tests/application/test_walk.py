@@ -480,3 +480,12 @@ async def test_다른_클래스가_이미_읽은_입력은_그_읽기_결과를_
     failed = {k: v for k, v in table.items() if k != ("redis.get", "in:L1")}
     walk = (await run_walk(_state(), runner=_Reads(failed), classes=frozenset({"W0", "W1"}), class_services=services, clock=lambda: T0))["walk"]
     assert walk.stopped == "입력을 다 못 봤다 — W1(읽기 실패 in:L1)"
+
+
+
+async def test_걷기의_입력도_행_안의_클래스_이름을_쓴_쪽으로_안_삼는다():
+    """R3-5c ①(측정 #12b P0 1) — 쓴 쪽 판정은 입구·걷기의 입력·`--key`가 같은 함수를 쓴다. 행 안의 값이 클래스 이름과 같아도 쓴 쪽이 아니다."""
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): {"type": "string", "value": json.dumps([{"view": "W1"}, {"view": "W1"}])}}
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert walk.hops[1].key == "in:L1" and walk.hops[1].writer == ""
