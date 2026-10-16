@@ -1,0 +1,302 @@
+"""LLM 설정 — 사내 게이트웨이와, 그것이 아닌 것들.
+
+## 왜 adapter와 provider가 둘인가
+
+- `adapter`: **무엇으로 말하는가** — LangChain 채팅 모델인가, 평범한 HTTP인가.
+- `provider`: **어떤 규약으로 말하는가** — OpenAI 호환인가.
+
+사내 코드가 쓰는 어휘를 그대로 따랐다. 둘을 분리해 두면 "langchain을 설치할 수
+없는 환경"(사내 PyPI가 막힌 경우)에서 `adapter: "http"`로 바꿔 같은 게이트웨이에
+붙을 수 있다 — 규약은 같고 말하는 도구만 다르다.
+
+## 사내 게이트웨이가 OpenAI 규약인데 인증만 다르다
+
+`Authorization` 헤더를 보지 않고 헤더 셋이 인증한다:
+
+| 헤더 | 값 |
+|---|---|
+| `X-FABRIX-CLIENT` | pass_key |
+| `X-OPENAPI-TOKEN` | client_key |
+| `X-LLM-MODEL-ID` | model_id (예 "339") |
+
+그런데 `ChatOpenAI`는 api_key가 없으면 `OPENAI_API_KEY` env를 뒤지다 죽으므로
+자리를 채워야만 한다. 그래서 기본값이 `"EMPTY"`인 sentinel이다 — 소켓에 나가도
+아무 뜻이 없고, 진짜 인증은 헤더 셋이 한다.
+
+## 다른 LLM으로 갈아끼우기
+
+`headers`가 임의 헤더를 받으므로 다른 게이트웨이도 config만으로 붙는다.
+OpenAI 본체·vLLM·Ollama(`/v1`)·LiteLLM은 `api_key`만 채우고 `pass_key`/
+`client_key`를 비우면 된다.
+"""
+from typing import Literal
+
+from pydantic import SecretStr, field_validator, model_validator
+
+from src.domain.base import StrictModel
+
+
+class TlsConfig(StrictModel):
+    """이 커넥션 **하나**의 TLS 방침. 전역에는 손대지 않는다.
+
+    사내 루트 CA가 파이썬 신뢰 저장소에 없어서 TLS가 실패하는 것이 흔하다.
+    검색하면 나오는 처방은 이것인데:
+
+    ```python
+    ssl._create_default_https_context = ssl._create_unverified_context   # 쓰지 않는다
+    os.environ["REQUESTS_CA_BUNDLE"] = ""
+    requests.Session.request = <verify=False를 박은 패치>
+    ```
+
+    **프로세스 전체**의 검증을 끈다. LLM 하나 붙이려고 Redis·Mongo·Kafka·대상
+    REST 접속 다섯 종의 인증서 검증을 같이 끄는 셈이고, 그건 모니터링 대상보다
+    모니터링 도구가 더 위험해지는 상태다.
+
+    여기서는 세 가지 중 하나를 고른다:
+
+    | 선택 | 언제 | 범위 |
+    |---|---|---|
+    | `use_system_store: true` | Windows (권장) | 이 커넥션만 |
+    | `ca_bundle: "C:/certs/ca.pem"` | 번들 파일이 있을 때 | 이 커넥션만 |
+    | `verify: false` | 번들을 구하기 전 임시 | 이 커넥션만 |
+
+    `use_system_store`는 `truststore`로 **OS 신뢰 저장소**를 본다. 사내 CA가
+    Windows 인증서 저장소에 이미 있으므로(브라우저가 되니까) `.pem` 내보내기가
+    불필요해진다.
+    """
+
+    verify: bool = True
+    ca_bundle: str | None = None
+    use_system_store: bool = False
+
+    @model_validator(mode="after")
+    def _one_choice_only(self):
+        # 둘을 함께 적으면 어느 쪽이 이기는지를 코드가 정하게 되고,
+        # 사람은 자기가 적은 쪽이 먹는다고 믿는다.
+        if self.ca_bundle and not self.verify:
+            raise ValueError("ca_bundle과 verify=false를 함께 적을 수 없다 — 하나만 고르라")
+        if self.ca_bundle and self.use_system_store:
+            raise ValueError("ca_bundle과 use_system_store를 함께 적을 수 없다")
+        if self.use_system_store and not self.verify:
+            raise ValueError("use_system_store와 verify=false를 함께 적을 수 없다")
+        return self
+
+
+class LlmConfig(StrictModel):
+    # `file`: 네트워크 없이 **바깥의 무언가가 답을 써 넣는** 턴 방식. 프롬프트를
+    # `turn_dir`에 파일로 내고 답 파일을 기다린다. 사내 모델 대역(약한 모델)을 이
+    # 리포 밖에서 세워 같은 배선으로 끝까지 돌려 보기 위한 것이다 — 운영용이 아니다.
+    adapter: Literal["chat_model", "http", "echo", "file"] = "chat_model"
+    provider: Literal["openai_compatible"] = "openai_compatible"
+    # 요청 body의 `model` 필드에 실린다.
+    #
+    # **주의: 게이트웨이에 따라 이 값이 아무 일도 안 한다.** 사내 게이트웨이는
+    # `X-LLM-MODEL-ID` 헤더로 모델을 고르고 body의 model은 검증조차 하지 않는다
+    # (없는 이름을 적어도 정상 응답이 온다). 그런 게이트웨이에서 이 필드는
+    # **사람이 읽는 이름표**일 뿐이고, 실제로 무엇이 답했는지는
+    # `expect_reported_model`로 확인한다.
+    model: str
+    # X-LLM-MODEL-ID 헤더. 사내 게이트웨이에서는 **이것이 진짜 선택자다** —
+    # 값을 바꾸면 호출 자체가 실패한다(그게 라우팅한다는 증거다).
+    model_id: str = ""
+    # 게이트웨이가 응답에 실어 주는 모델 이름. **사람이 확인해서 적는다.**
+    #
+    # 왜 필요한가: 사내 게이트웨이는 `GET /models`에 405를 준다 — 어느 ID가 어느
+    # 모델인지 **런타임에 알아낼 방법이 없다.** 확인할 수 있는 유일한 경로가
+    # 응답에 실려 오는 이름이고, 그것을 여기 박제해 두면 게이트웨이가 나중에
+    # 모델을 조용히 바꿨을 때 즉시 드러난다.
+    #
+    # 비워 두면 `model`과 같기를 기대한다(요청한 이름으로 답하는 보통의 게이트웨이).
+    expect_reported_model: str | None = None
+    temperature: float = 0.0
+    base_url: str = ""
+    # 한 답의 상한. 사내 실측(12a 리뷰 4번)에서 생각하는 모델이 60초를 넘겨 두 판 다 r1에서 죽었다 — 60 × SDK 재시도
+    # 3회 × 리드 재시도 2회 = 한 호출에 6분을 쓰고 degraded. 생각하는 모델 기준으로 300초.
+    timeout_s: float = 300.0
+    # 일시적 실패(429·게이트웨이 재시작)에 SDK가 몇 번 다시 물을지. 0이면 한 번만 시도한다.
+    # 리드가 전송 오류를 한 번 되묻으므로(`lead.RETRIES`) SDK 재시도는 중복이고, 시간 초과까지 곱해져 늘어진다.
+    max_retries: int = 0
+    # 한 답의 출력 토큰 상한. 액션 턴(한 줄 thought + 액션 하나)은 작게 두면 형식이 아니라 상한으로 짧아지고
+    # 지연 시간도 같이 잡힌다. 없으면 안 보낸다(게이트웨이 기본). chat_model은 langchain-openai가 OpenAI의 현재 이름
+    # `max_completion_tokens`로 내보내고 http 어댑터는 `max_tokens`로 — 게이트웨이가 옛 이름만 알면 http로 간다.
+    max_tokens: int | None = None
+    # 스트리밍으로 받아 조각을 모은다. 사내 게이트웨이의 ~180초 끊김은 총 시간이 아니라 **유휴** 상한이었다(10-08 재측정:
+    # 판정 턴 226초도 stream이면 살았다). 그래서 **기본이 켬**이다 — `None`이면 chat_model은 켬, http는(스트리밍이 없다) 끔.
+    # 명시하면 그 값. 호출부가 받는 것은 전과 같은 `LlmReply` 하나다.
+    stream: bool | None = None
+    # 스트림의 조각 사이 침묵 상한(초) — langchain-openai의 `stream_chunk_timeout`(기본 120초, 첫 조각 전도 센다). 사내 측정 #4:
+    # 리드 턴이 조각 520개 뒤 120초 멈췄다. 리드 턴은 보통 15초 안이라 역할에서 짧게 준다(판정 턴의 생각 모델은 첫 조각까지
+    # 오래 걸릴 수 있어 기본 그대로). 없으면 라이브러리 기본.
+    stream_idle_s: float | None = None
+    # 답에 스키마가 있을 때 OpenAI 규약 `response_format`을 어떻게 보낼지. `json_schema`(기본)는 모양까지 — strict는 스키마가
+    # 닫힐 때만(`domain/llm_schema`); `json_object`는 문법만(게이트웨이가 json_schema를 거부할 때); `none`은 안 보낸다.
+    response_format: Literal["json_schema", "json_object", "none"] = "json_schema"
+    # 같은 게이트웨이로 가는 호출 사이의 최소 간격(초). 분당 할당량(429)은 모델을 가리지 않고 게이트웨이가 센다 — 리드와
+    # 판정 어댑터가 base_url 단위 pacer를 나눠 쓴다(`llm_pacing`). 0이면 안 기다린다.
+    min_interval_s: float = 0.0
+    # 429 뒤 `nextAccessTime`(없으면 Retry-After, 그것도 없으면 60초)까지 기다리는 상한. 그 안이면 한 번 다시 묻고 실패로 안 센다.
+    rate_wait_max_s: float = 120.0
+    # `HTTPS_PROXY`/`NO_PROXY` env를 따를지. 기본은 따른다(httpx 기본값).
+    #
+    # **사내에서 끄게 되는 경우**: 전사 프록시가 env에 박혀 있는데 LLM 게이트웨이는
+    # 사내망 안이라 프록시를 거치면 안 되는 상황. `NO_PROXY`에 게이트웨이 호스트를
+    # 넣는 것이 정석이지만 그 env를 우리가 바꿀 수 없는 배치도 있다. 그때
+    # `trust_env_proxy: false`가 **이 커넥션만** 프록시를 무시하게 한다.
+    trust_env_proxy: bool = True
+
+    # OpenAI 규약의 api_key. 사내 게이트웨이는 보지 않으므로 sentinel이 기본값이다.
+    api_key: SecretStr = SecretStr("EMPTY")
+    pass_key: SecretStr | None = None      # X-FABRIX-CLIENT
+    client_key: SecretStr | None = None    # X-OPENAPI-TOKEN
+    headers: dict[str, str] = {}           # 그 외 게이트웨이용 임의 헤더
+
+    tls: TlsConfig = TlsConfig()
+    turn_dir: str = ""                     # adapter=file 전용
+    turn_timeout_s: float = 1800.0         # 답 파일을 이만큼 기다리고 오류로 흡수한다
+
+    @field_validator("temperature")
+    @classmethod
+    def _range(cls, v: float) -> float:
+        if not 0.0 <= v <= 2.0:
+            raise ValueError(f"temperature는 0~2다 — {v}")
+        return v
+
+    @field_validator("min_interval_s")
+    @classmethod
+    def _interval_not_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"min_interval_s는 0 이상 — {v}")
+        return v
+
+    @field_validator("stream_idle_s")
+    @classmethod
+    def _idle_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError(f"stream_idle_s는 0보다 커야 한다 — {v} (끄려면 안 적는다)")
+        return v
+
+    @field_validator("rate_wait_max_s")
+    @classmethod
+    def _wait_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"rate_wait_max_s는 0보다 커야 한다 — {v}")
+        return v
+
+    @field_validator("max_tokens")
+    @classmethod
+    def _positive_tokens(cls, v):
+        if v is not None and v < 1:
+            raise ValueError(f"max_tokens는 1 이상이다 — {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _stream_default(self):
+        if self.stream is None:
+            self.stream = self.adapter == "chat_model"
+        return self
+
+    @model_validator(mode="after")
+    def _network_adapters_need_base_url(self):
+        if self.stream and self.adapter != "chat_model":
+            raise ValueError(f"스트리밍은 adapter=chat_model에서만 받는다 — {self.adapter}")
+        if self.adapter in ("chat_model", "http") and not self.base_url:
+            raise ValueError(f"adapter={self.adapter}에는 base_url이 필요하다")
+        if self.adapter == "file" and not self.turn_dir:
+            raise ValueError("adapter=file에는 turn_dir이 필요하다")
+        if self.base_url and not self.base_url.startswith(("http://", "https://")):
+            raise ValueError(f"base_url은 http(s)://로 시작해야 한다 — {self.base_url}")
+        return self
+
+    @model_validator(mode="after")
+    def _gateway_keys_come_in_pairs(self):
+        # 하나만 채우면 인증이 반쯤 된 상태로 나가고, 게이트웨이는 보통 401을
+        # 돌려준다 — 그 메시지는 "키가 틀렸다"로 보여 둘 중 어느 쪽이 빠졌는지 모른다.
+        if bool(self.pass_key) != bool(self.client_key):
+            raise ValueError("pass_key와 client_key는 둘 다 있거나 둘 다 없어야 한다")
+        if self.pass_key and not self.model_id:
+            raise ValueError("사내 게이트웨이(pass_key)를 쓰면 model_id도 필요하다 "
+                             "— X-LLM-MODEL-ID 헤더에 실린다")
+        return self
+
+    @model_validator(mode="after")
+    def _header_values_must_be_ascii(self):
+        """헤더 값에 ASCII 밖 문자가 있으면 거부한다.
+
+        HTTP 헤더는 ASCII만 실을 수 있어서, 키를 복사하다 전각 문자나 한글이
+        섞이면 런타임에 `UnicodeEncodeError: 'ascii' codec can't encode`가 난다.
+        그 메시지로는 **원인이 키라는 것을 아무도 짐작할 수 없다** — 인코딩
+        버그처럼 보인다. 실제로 이 프로젝트에서 그 에러를 한 번 보고 나서 넣었다.
+
+        값 자체는 메시지에 담지 않는다(비밀값이다). 어느 헤더인지만 말한다.
+        """
+        for name, value in self.gateway_headers().items():
+            try:
+                value.encode("ascii")
+            except UnicodeEncodeError:
+                raise ValueError(
+                    f"{name} 헤더 값에 ASCII 밖 문자가 있다 — 키를 복사할 때 "
+                    f"전각 문자나 공백이 섞였는지 확인하라") from None
+        return self
+
+    def gateway_headers(self) -> dict[str, str]:
+        """소켓에 나갈 헤더. **조립은 여기 하나뿐이다.**
+
+        어댑터마다 각자 조립하면 하나가 헤더 이름을 틀려도(`X-OPENAI-TOKEN`처럼)
+        다른 쪽은 멀쩡해서, 증상이 "어떤 경로는 되고 어떤 경로는 401"이 된다.
+        """
+        headers = dict(self.headers)
+        if self.pass_key and self.client_key:
+            headers["X-FABRIX-CLIENT"] = self.pass_key.get_secret_value()
+            headers["X-OPENAPI-TOKEN"] = self.client_key.get_secret_value()
+            headers["X-LLM-MODEL-ID"] = self.model_id
+        return headers
+
+    def expected_model_name(self) -> str:
+        """응답에 실려 오기를 기대하는 이름."""
+        return self.expect_reported_model or self.model
+
+    def reported_model_problem(self, reported: str | None) -> str | None:
+        """게이트웨이가 답한 모델이 기대와 다른가. **비교는 여기 한 곳뿐이다.**
+
+        CLI와 live 테스트가 각자 비교하면 관용 범위가 갈라지고, 느슨한 쪽이
+        "통과했다"고 말한다.
+
+        부분 일치로 보는 이유: 게이트웨이가 접두사를 붙이는 일이 흔하다
+        (`gpt-oss-120b`를 요청하면 `openai/gpt-oss-120b`로 답한다). 그건 같은
+        모델이므로 실패로 칠 이유가 없다.
+
+        `reported`가 없으면 None이다 — 게이트웨이가 이름을 안 실어 주면 확인할
+        방법이 없고, **확인할 수 없는 것을 실패로 만들면 그 신호는 곧 무시된다.**
+        """
+        if not reported:
+            return None
+        expected = self.expected_model_name()
+        if expected in reported:
+            return None
+        if self.expect_reported_model:
+            return (f"게이트웨이가 모델을 바꿨다 — config는 "
+                    f"{self.expect_reported_model}를 박제했는데 {reported}로 응답했다. "
+                    f"의도한 변경이면 config를 갱신하고, 아니면 사내에 확인하라")
+        return (f"요청한 이름({self.model})과 응답한 이름({reported})이 다르다. "
+                f"이 게이트웨이는 body의 model을 안 볼 수 있다 — 실제로 무엇이 "
+                f"답하는지 확인한 뒤 config의 llm에 다음을 적어라:\n"
+                f'    "expect_reported_model": "{reported}"')
+
+    def describe(self) -> str:
+        """사람이 읽을 한 줄 — 비밀값은 담지 않는다."""
+        auth = "헤더 셋(사내 게이트웨이)" if self.pass_key else "api_key"
+        tls = ("시스템 저장소" if self.tls.use_system_store
+               else self.tls.ca_bundle or ("검증 켬" if self.tls.verify else "⚠ 검증 끔"))
+        served = (f" 실제={self.expect_reported_model}"
+                  if self.expect_reported_model and
+                  self.expect_reported_model != self.model else "")
+        # 실효 상한을 같이 찍는다 — 사내에서 config의 60초가 어디서 이기는지 보이지 않아 한참 돌았다.
+        limits = (f" · 상한 {self.timeout_s:g}s · 재시도 {self.max_retries}"
+                  + (f" · 토큰 {self.max_tokens}" if self.max_tokens else "")
+                  + (" · 스트리밍" if self.stream else "")
+                  + (f" · 유휴 {self.stream_idle_s:g}s" if self.stream and self.stream_idle_s else "")
+                  + (f" · 간격 {self.min_interval_s:g}s" if self.min_interval_s > 0 else "")
+                  + (f" · 답 {self.response_format}" if self.response_format != "none" else ""))
+        return (f"{self.adapter}/{self.provider} {self.model}"
+                f"{f'(id={self.model_id})' if self.model_id else ''}{served} "
+                f"→ {self.base_url or '(네트워크 없음)'} [인증: {auth}, TLS: {tls}]{limits}")

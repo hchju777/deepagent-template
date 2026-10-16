@@ -1,0 +1,313 @@
+"""트레이스 요약 — **사람이 붙여넣을 수 있는 크기로, 가려야 할 것은 가리고.**
+
+이 도구가 있기 전까지 사내에서 고치는 쪽으로 건너온 것은 진단 요약뿐이었다.
+"리드가 무엇을 보고 무엇을 뱉었는지"는 한 번도 안 건너왔고, 그래서 매 라운드
+원인을 코드에서 역추적했다 — 그게 왕복의 진짜 원인이었다.
+"""
+import json
+
+from src.application.trace_digest import digest
+from src.domain.actions import describe
+
+
+def _file(prompt: str, reply: str, *, name: str = "01-r2-integrate.md",
+          verdict: str = "읽었다") -> list[tuple[str, str]]:
+    """`_make_tracer`가 쓰는 형식 그대로. **형식이 갈리면 이 도구가 조용히 빈다.**"""
+    return [(name,
+             f"# c-1 · integrate · 라운드 2\n\n결과: {verdict}\n\n"
+             f"## 물어본 것 ({len(prompt):,}자)\n\n````\n{prompt}\n````\n\n"
+             f"## 날것 응답\n\n````\n{reply}\n````\n")]
+
+
+def _prompt(*, evidence: str = "", example=None, tasks: str = "", rejected: str = "") -> str:
+    body = json.dumps(example or {"tasks": []}, ensure_ascii=False)
+    return (f"<지금까지의 태스크>\n{tasks}\n</지금까지의 태스크>\n\n"
+            f"<모은 증거>\n{evidence}\n</모은 증거>\n\n"
+            f"<버려진 태스크>\n{rejected}\n</버려진 태스크>\n\n{body}\n")
+
+
+def _task(task_id, action, params):
+    return {"id": task_id, "goal": "g", "role": "data_prober", "action": action,
+            "params": params, "priority": 1, "input_evidence_ids": []}
+
+
+def test_예시와_리드가_낸_것을_나란히_놓는다():
+    """이 모델은 예시를 베낀다. **베낀 것인지 스스로 고른 것인지**가 하네스 결함과
+    모델 한계를 가르는 유일한 신호라, 둘을 붙여 놔야 읽힌다."""
+    prompt = _prompt(example={"tasks": [_task("t-9", "redis.get", {"key": "지시문"})]})
+    reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "x"})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "예시가 보여준 것" in text and "redis.get" in text
+    assert "예시와 같은 action" in text
+
+
+def test_증거에_없는_이름을_표시한다():
+    """사내 측정에서 `key='pipeline:alarm:stats'`를 지어냈다. 예시가 `redis.get`을
+    보여 줬는데 **증거에 키 이름이 하나도 없었다** — 없는 걸 채우라고 하면 지어낸다."""
+    prompt = _prompt(evidence="- t-1.e1 | mongo.find collection='alarm' | 3건")
+    reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "pipeline:alarm:stats"})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "증거에 없는 이름" in text and "pipeline:alarm:stats" in text
+
+
+def test_증거에_보이는_질의를_또_내면_구별한다():
+    """**여기가 하네스와 모델을 가르는 지점이다.**
+
+    증거 줄의 `source`가 곧 그 질의라 리드는 그걸 볼 수 있다. 보이는데도 또 냈으면
+    모델 쪽이고, 안 보였으면 우리가 안 보여 준 것이다.
+    """
+    spoken = describe("code.grep", {"patterns": ["GUMI_ALARM_EVENT_MAIN"]})
+    prompt = _prompt(evidence=f"- t-4.e1 | {spoken} | 3건")
+    reply = json.dumps({"tasks": [
+        _task("t-8", "code.grep", {"patterns": ["GUMI_ALARM_EVENT_MAIN"]})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "증거에 보이는데도 또 냈다" in text
+
+
+def test_증거에_안_보였으면_그렇게_적는다():
+    prompt = _prompt(evidence="- t-1.e1 | mongo.count collection='alarm' | 1건")
+    reply = json.dumps({"tasks": [_task("t-8", "code.grep", {"patterns": ["X"]})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "증거에 보이는데도" not in text
+
+
+def test_증거_내용은_안_찍는다():
+    """**대상 config에는 비밀이 있을 수 있다.** 그건 프롬프트에 실려 트레이스에
+    남고, 이 요약은 사람이 대화에 붙여넣는다. 건수만 센다."""
+    prompt = _prompt(evidence="- t-1.e1 | mongo.find c | 1건\n    password: hunter2")
+    text = "\n".join(digest(_file(prompt, json.dumps({"tasks": []}))))
+    assert "hunter2" not in text
+    assert "증거 1" in text
+
+
+def test_비밀처럼_생긴_인자는_가린다():
+    reply = json.dumps({"tasks": [_task("t-7", "rest.query",
+                                        {"entry": "e", "api_token": "abcd1234"})]})
+    text = "\n".join(digest(_file(_prompt(), reply)))
+    assert "abcd1234" not in text and "***" in text
+
+
+def test_키_이름은_안_가린다():
+    """`key`는 Redis 키 이름이지 비밀이 아니다. 가리면 **제일 중요한 신호가 사라진다.**"""
+    reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "oee:L3"})]})
+    assert "oee:L3" in "\n".join(digest(_file(_prompt(), reply)))
+
+
+def test_못_읽는_응답에도_안_죽는다():
+    """모델이 JSON을 안 낸 라운드가 **제일 알고 싶은 라운드**다. 거기서 도구가
+    죽으면 나머지 라운드까지 못 본다."""
+    text = "\n".join(digest(_file(_prompt(), "무슨 말인지 모를 응답")))
+    assert "JSON으로 못 읽었다" in text
+
+
+def test_트레이스가_없으면_그렇게_말한다():
+    assert "트레이스 파일이 없다" in "\n".join(digest([]))
+
+
+def test_프롬프트가_어디로_가는지_블록별로_센다():
+    """첫 전체 트레이스에서 r4 응답이 13.6K 프롬프트 뒤에 깨졌다. **총량만으로는
+    어느 예산을 줄일지 알 수 없다** — 증거인지, 태스크 목록인지, 예시인지."""
+    prompt = _prompt(evidence="- t-1.e1 | mongo.find c | 1건\n" * 20,
+                     tasks="- t-1 done\n" * 5)
+    text = "\n".join(digest(_file(prompt, json.dumps({"tasks": []}))))
+    head = next(line for line in text.splitlines() if line.startswith("r2 "))
+    assert "프롬프트" in head and "= 증거" in head and "태스크" in head
+    assert "나머지" in head
+
+
+def test_가설과_결정을_찍는다():
+    """가설이 전부 refuted인데 conclude인지, 인용이 몇 건인지 — 12a로 넘긴 질문의
+    데이터가 여기서 나온다."""
+    reply = json.dumps({"decision": "conclude", "hypotheses": [
+        {"id": "h-1", "status": "refuted", "supporting_ids": [], "refuting_ids": ["t-1.e1"]},
+        {"id": "h-2", "status": "refuted"}], "tasks": []})
+    text = "\n".join(digest(_file(_prompt(), reply)))
+    assert "h-1 refuted(인용 1)" in text and "h-2 refuted(인용 0)" in text
+    assert "decision=conclude" in text
+
+
+def test_같은_라운드가_두_번이면_재시도라고_적는다():
+    """첫 답을 못 읽어 다시 물은 것을 새 라운드처럼 찍으면 "라운드가 하나 더
+    돌았다"로 읽힌다."""
+    one = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    two = ("02-r2-integrate.md", one[1])
+    text = "\n".join(digest([one, two]))
+    assert "재시도 2회째" in text and text.count("r2 integrate") == 2
+
+
+def test_못_읽은_응답의_앞머리를_보여준다():
+    """빈 답인지, 산문인지, 잘린 JSON인지가 앞머리에서 갈린다. 내용 전체는 안
+    찍는다 — 증거를 되뇌었을 수 있다."""
+    text = "\n".join(digest(_file(_prompt(), "{\"decision\": \"continue\", \"hyp" + "x" * 500)))
+    assert "시작:" in text and "x" * 200 not in text
+    assert "빈 응답" in "\n".join(digest(_file(_prompt(), "   ")))
+
+
+def test_우리_판정을_시도마다_찍는다():
+    """스키마가 거부한 답도 JSON으로는 읽힌다. 요약이 제 눈으로만 보면 **거부된 답이
+    결론처럼 찍힌다** — 두 번째 전체 트레이스의 r3가 `decision=conclude`로 보였지만
+    실제로는 거부됐고, 되물은 답이 `continue`였다. 왜 거부됐는지는 이 줄에만 있다."""
+    reply = json.dumps({"decision": "conclude", "hypotheses": [], "tasks": []})
+    refused = _file(_prompt(), reply,
+                    verdict="**못 읽었다** — status는 supported|refuted|open 중 하나다")
+    text = "\n".join(digest(refused))
+    assert "못 읽었다" in text and "supported|refuted|open" in text
+    assert "결과: 읽었다" in "\n".join(digest(_file(_prompt(), reply)))
+
+
+def test_frame_가설은_status를_안_찍는다():
+    reply = json.dumps({"hypotheses": [{"id": "h-1", "statement": "s"},
+                                       {"id": "h-2", "statement": "s"}], "tasks": []})
+    text = "\n".join(digest(_file(_prompt(), reply, name="01-r0-frame.md")))
+    line = next(l for l in text.splitlines() if l.strip().startswith("가설"))
+    assert "h-1" in line and "h-2" in line and "?" not in line
+
+
+def test_거부_뒤_되물은_것을_재시도와_가른다():
+    """같은 라운드의 두 번째 파일은 둘 중 하나다. JSON을 못 읽어 다시 물은 것과 거부
+    뒤 되물은 것을 같은 이름으로 찍으면, 되물음이 "모델이 JSON을 못 냈다"로 읽힌다."""
+    from src.application.nodes import REDO_MARK
+
+    first = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    redo = _prompt(rejected=f"- {REDO_MARK}t-6: 이미 한 읽기를 또 냈다 — 받지 않는다")
+    second = _file(redo, json.dumps({"tasks": []}), name="02-r2-integrate.md")[0]
+    text = "\n".join(digest([first, second]))
+    assert "거부 뒤 다시 물음" in text and "재시도" not in text
+
+
+def test_되물음_앞의_버려진_답은_이미_한_질의가_아니다():
+    """되물었으면 앞 답은 통째로 버려진 것이다. 그 답의 질의를 들고 있으면 되물은 답이
+    같은 읽기를 내는 것을 반복으로 찍는다 — 로컬 대역 측정에서 그렇게 찍혔다."""
+    from src.application.nodes import REDO_MARK
+
+    read = _task("t-6", "kafka.tail", {"topic": "T", "limit": 5})
+    first = _file(_prompt(), json.dumps({"tasks": [read]}))[0]
+    redo = _prompt(rejected=f"- {REDO_MARK}t-4: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")
+    second = _file(redo, json.dumps({"tasks": [read]}), name="02-r2-integrate.md")[0]
+    text = "\n".join(digest([first, second]))
+    assert "이미 r2에서 한 질의" not in text
+
+
+def test_대기_중이던_태스크를_같은_id로_다시_내면_갱신이라고_적는다():
+    """세 번째 로컬 실행에서 리드가 굶던 t-4를 같은 id로 다시 냈고 엔진은 갱신으로
+    받았는데, 요약은 "이미 r0에서 한 질의"로 찍었다. 정상 동작이 반복으로 읽힌다."""
+    read = _task("t-4", "kafka.list_topics", {})
+    first = _file(_prompt(), json.dumps({"tasks": [read]}), name="01-r0-frame.md")[0]
+    later = _file(_prompt(tasks="- t-4 [pending] 토픽 목록"), json.dumps({"tasks": [read]}),
+                  name="02-r1-integrate.md")[0]
+    text = "\n".join(digest([first, later]))
+    assert "대기 중이던 태스크의 갱신" in text and "이미 r0에서 한 질의" not in text
+
+
+def test_brief는_옮길_줄만_남긴다():
+    """손으로 옮기는 사람에게 제일 긴 두 줄은 코드가 다시 만들 수 있는 것이다."""
+    prompt = _prompt(evidence="- t-1.e1 | mongo.find c | 1건",
+                     example={"tasks": [_task("t-9", "redis.get", {"key": "지시문"})]})
+    reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "x"})]})
+    full = "\n".join(digest(_file(prompt, reply)))
+    brief = "\n".join(digest(_file(prompt, reply), brief=True))
+    assert "예시가 보여준 것" in full and "이미 물은 것" in full
+    assert "예시가 보여준 것" not in brief and "이미 물은 것" not in brief
+    assert "리드가 낸 것" in brief and "예시와 같은 action" in brief
+
+
+def test_못_읽은_시도의_질의는_이미_한_질의가_아니다():
+    """거부된 답의 태스크는 낸 적이 없는 것이다. 재시도가 같은 것을 다시 내면 첫 발행이지
+    반복이 아니다 — 사내 네 번째 트레이스에서 재시도마다 그렇게 찍혔다."""
+    read = _task("t-6", "kafka.tail", {"topic": "T", "limit": 5})
+    refused = _file(_prompt(), json.dumps({"tasks": [read]}),
+                    verdict="**못 읽었다** — tasks.1.role: Input should be …")[0]
+    retry = _file(_prompt(), json.dumps({"tasks": [read]}), name="02-r2-integrate.md")[0]
+    text = "\n".join(digest([refused, retry]))
+    assert "이미 r2에서 한 질의" not in text
+
+
+
+def test_데이터_흐름_블록의_이름은_증거에_없는_이름이_아니다():
+    """블록이 준 컨슈머 그룹 이름을 리드가 쓰면 그건 찾은 것이다. 3b 측정에서 매 판
+    `증거에 없는 이름 group=…`으로 찍혀 "지어낸 이름" 지표가 블록에 불리하게 틀렸다."""
+    prompt = ("<데이터 흐름>\nsink [service]: consumes_as: g-from-flow\n</데이터 흐름>\n\n"
+              + _prompt(evidence="- t-1.e1 | mongo.find collection='alarm' | 3건"))
+    reply = json.dumps({"tasks": [_task("t-7", "kafka.group_offsets", {"group": "g-from-flow"})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "증거에 없는 이름" not in text, text
+
+
+def test_템플릿_이름을_채운_값은_증거에_없는_이름이_아니다():
+    prompt = _prompt(evidence="- t-1.e1 | code.config service='sink' | redis_key.heartbeat = hb:{service}")
+    reply = json.dumps({"tasks": [_task("t-7", "redis.get", {"key": "hb:sink"})]})
+    text = "\n".join(digest(_file(prompt, reply)))
+    assert "증거에 없는 이름" not in text, text
+
+
+def test_conclude_트레이스는_판정을_한_줄로_찍는다():
+    """판정 턴의 응답은 태스크가 아니다 — integrate처럼 읽으면 "리드가 낸 것 (없음)"으로 보인다."""
+    prompt = "<모은 증거>\n- t-1.e1 | redis.get key='k' | 512\n</모은 증거>\n{}"
+    reply = json.dumps({"verdict_type": "data_loss", "confidence": "high", "narrative": "n",
+                        "root_cause": {"component": "sink", "evidence_ids": ["t-1.e1", "ghost.e1"]},
+                        "alternates": [{"component": "api", "evidence_ids": ["t-1.e1"], "confidence": "low"}],
+                        "contributing": []})
+    text = "\n".join(digest(_file(prompt, reply, name="07-r5-conclude.md")))
+    assert "판정 : data_loss high" in text
+    assert "원인 sink" in text and "후보 api" in text
+    assert "증거에 없는 id ghost.e1" in text
+    assert "리드가 낸 것" not in text
+    assert "예시가 보여준 것" not in text and "이미 물은 것" not in text   # 읽기를 내는 턴이 아니다
+
+
+def test_요약_머리줄에_호출이_걸린_초가_붙는다():
+    """사내 실측 두 판이 시간 초과로 죽었는데 어느 호출이 몇 초였는지는 아무 데도 없었다 — 트레이스 파일의 `응답: N초`를
+    요약 머리줄로 올린다. 없는 옛 파일은 그대로 읽힌다."""
+    name, text = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    with_latency = text.replace("결과: 읽었다\n", "결과: 읽었다\n응답: 61.2초\n")
+    head = [line for line in digest([(name, with_latency)]) if line.startswith("\nr2") or line.startswith("r2")]
+    assert head and "응답 61.2초" in head[0]
+    old = [line for line in digest([(name, text)]) if "r2 integrate" in line]
+    assert old and "응답" not in old[0]
+
+
+def test_요약_머리줄과_끝줄에_429_대기가_붙는다():
+    name, text = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    waited = text.replace("결과: 읽었다\n", "결과: 읽었다\n응답: 9.0초\n대기: 48.0초(429)\n")
+    lines = digest([(name, waited)])
+    head = [line for line in lines if "r2 integrate" in line]
+    assert head and "응답 9.0초" in head[0] and "대기 48.0초" in head[0]
+    assert any(line.strip().startswith("429 대기") and "48" in line for line in lines)
+    assert not any(line.strip().startswith("429 대기") for line in digest([(name, text)]))
+
+
+def test_요약_끝줄에_429_대기_근거별_횟수가_붙는다():
+    name, text = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    first = text.replace("결과: 읽었다\n", "결과: 읽었다\n대기: 30.0초(429·nextAccessTime)\n")
+    second = first.replace("대기: 30.0초(429·nextAccessTime)", "대기: 60.0초(429·기본값)")
+    lines = digest([(name, first), (name.replace("r2", "r3"), second)])
+    end = [line for line in lines if line.strip().startswith("429 대기")]
+    assert end and "합계 90초" in end[0] and "nextAccessTime 1" in end[0] and "기본값 1" in end[0]
+
+
+def test_요약_머리줄은_고정부를_읽기_목록_흐름_케이스_열린_질문으로_쪼갠다():
+    """측정 #3은 "나머지 7.1~7.9K"까지만 보였다 — 어디를 줄일지 알려면 고정부를 쪼개 찍어야 한다."""
+    prompt = ("<케이스>\n" + "c" * 300 + "\n</케이스>\n<데이터 흐름>\n" + "f" * 800 + "\n</데이터 흐름>\n"
+              "<열린 질문>\n" + "o" * 100 + "\n</열린 질문>\n<부를 수 있는 읽기>\n" + "a" * 2000 + "\n</부를 수 있는 읽기>\n"
+              + _prompt())
+    head = [line for line in digest(_file(prompt, json.dumps({"tasks": []}))) if "프롬프트" in line][0]
+    assert "읽기 목록 2,000" in head and "흐름 800" in head and "케이스 300" in head and "열린 질문 100" in head
+
+
+def test_요약_끝에_전송_실패와_스트림_끊김을_센다():
+    """사내 측정 #4: 400 "filter server request failed" 한 번 뒤 재시도로 성공했고, 리드 턴이 조각을 받은 뒤 멈췄다. 둘 다
+    라운드 줄 속에 묻히면 측정 #5에서 셀 수 없다 — 끝에 한 줄씩."""
+    failed = ("01-r1-integrate.md", "# c-1 · integrate · 라운드 1\n\n결과: **못 읽었다** — BadRequestError: Error code: 400 - "
+              "filter server request failed\n응답: 2.0초\n\n## 물어본 것 (2자)\n\n````\n물음\n````\n\n"
+              "## 날것 응답\n\n````\n(응답 없음 — 호출 자체가 실패했다)\n````\n")
+    cut = ("02-r1-integrate.md", "# c-1 · integrate · 라운드 1\n\n결과: 읽었다\n응답: 30.0초\n"
+           "스트림: 끝 표시 없이 끊김 — 받은 글 13자로 읽었다\n\n## 물어본 것 (2자)\n\n````\n물음\n````\n\n"
+           "## 날것 응답\n\n````\n{\"tasks\": []}\n````\n")
+    retried = ("03-r2-integrate.md", "# c-1 · integrate · 라운드 2\n\n결과: **못 읽었다** — 답 도중 끊김(5자 받음)\n"
+               "스트림: 답 도중 끊김 — 받은 글 5자, 같은 질문으로 다시 묻는다\n\n## 물어본 것 (2자)\n\n````\n물음\n````\n\n"
+               "## 날것 응답\n\n````\n{\"tas\n````\n")
+    again = ("04-r3-integrate.md", cut[1].replace("라운드 1", "라운드 3"))     # 수가 갈려야 둘을 뒤바꾼 것이 드러난다
+    text = "\n".join(digest([failed, cut, retried, again]))
+    assert "전송 실패: 1회 — BadRequestError: Error code: 400 - filter server request failed" in text
+    assert "스트림 끊김: 3회 — 받은 글로 읽음 2 · 다시 물음 1" in text
+    assert "전송 실패" not in "\n".join(digest([cut])) and "스트림 끊김" not in "\n".join(digest([failed]))
