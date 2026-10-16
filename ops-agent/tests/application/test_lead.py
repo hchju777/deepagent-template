@@ -1300,3 +1300,46 @@ async def test_리드_프롬프트에_대상_키_줄이_간다(case):
                                      flow_graph=_keyed_graph_with_decoy())
     await integrate(CaseState(case=case, round=1, target=picked))
     assert "대상 키: alarm:stats:{line} — 키 값의 record[0].summary_info에 대상 identity(L1/Alarm)가 그대로 있다 (t-0-2.e1)" in llm.prompts[0]
+
+
+
+# ── R3-5c ② — 판정 턴: 조각 뒤 멈춤, 빈 응답 ──
+
+def _stalled(chunks: int):
+    from src.domain.llm import LlmReply
+
+    return LlmReply(status="error", asked_at=T0, model="scripted", error=_STALL, chunks=chunks)
+
+
+def _empty(finish: str, chunks: int = 40):
+    from src.domain.llm import LlmReply
+
+    return LlmReply(status="ok", asked_at=T0, model="scripted", text="", chunks=chunks, finish_reason=finish)
+
+
+async def test_조각이_온_뒤의_멈춤은_본문이_없어도_시간_초과가_아니라_같은_질문으로_한_번_다시_묻는다(case):
+    """사내 측정 #12b: 판정 턴이 664조각 뒤 120초 멈췄다 — 조각의 본문이 비어 받은 글이 없었고, 시간 초과로 분류돼 재시도 없이 판정이 실패했다.
+    조각이 왔으면 같은 상한의 재대기가 아니다 — 답을 만들던 중에 끊겼다. 조각도 없이 났으면 지금처럼 시간 초과다."""
+    seen = []
+    llm = ScriptedAdapter([_stalled(664), reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3, trace=lambda *a, **kw: seen.append(a))
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch and len(llm.prompts) == 2 and llm.prompts[1] == llm.prompts[0]
+    assert "시간 초과" not in seen[0][4] and "조각 664개 뒤 끊김" in seen[0][8]
+    none = ScriptedAdapter([_stalled(0)], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(none, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(none.prompts) == 1 and "시간 초과" in patch["llm_errors"][0]
+
+
+async def test_빈_응답은_같은_질문으로_한_번_다시_묻고_토큰_상한이면_다시_안_묻는다(case):
+    """사내 측정 #12b: 판정 턴이 빈 응답을 두 번(220초씩) 냈다. 빈 답은 형식을 틀린 것이 아니다 — 사유를 붙인 재질문("앞의 답을 읽을 수 없었다")이
+    아니라 같은 질문으로 한 번 더. 종료 사유가 토큰 상한(`length`)이면 같은 질문도 같은 상한에 걸린다 — 다시 안 묻고 그 사실을 적는다."""
+    llm = ScriptedAdapter([_empty("stop"), reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch and len(llm.prompts) == 2 and llm.prompts[1] == llm.prompts[0] and llm.schemas[1] == llm.schemas[0]
+    capped = ScriptedAdapter([_empty("length")], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(capped, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(capped.prompts) == 1 and "빈 응답(조각 40개, 종료 사유 length)" in patch["llm_errors"][0]

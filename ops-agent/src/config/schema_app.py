@@ -65,8 +65,9 @@ class InvestigationConfig(StrictModel):
 # 생기면 그 역할이 여기 는다 — 읽는 곳이 없는 칸은 미리 두지 않는다(`test_dead_settings`).
 LLM_ROLES = ("lead", "conclude", "report")
 # 역할의 **기본값** — 기본 `llm`과 역할의 덮어쓰기 사이에 깔린다(덮어쓰기가 이긴다). 판정 턴은 생각 모델이라 `json_schema`를 걸면
-# 답이 깨졌다(사내 측정 #3: 4/4, 스키마 없이 같은 프롬프트는 121초에 정상) — 판정 턴은 서버의 형식 강제 없이 묻는다.
-_ROLE_DEFAULTS: dict[str, dict] = {"conclude": {"response_format": "none"}}
+# 답이 깨졌다(사내 측정 #3: 4/4, 스키마 없이 같은 프롬프트는 121초에 정상) — 판정 턴은 서버의 형식 강제 없이 묻는다. 유휴 상한은 게이트웨이의
+# 유휴 끊김(~180초, 10-08) 바로 아래 — 사내 측정 #12b: 판정 턴이 664조각 뒤 120초(라이브러리 기본)에 끊겼다(R3-5c ②).
+_ROLE_DEFAULTS: dict[str, dict] = {"conclude": {"response_format": "none", "stream_idle_s": 170.0}}
 
 
 class LlmRoles(StrictModel):

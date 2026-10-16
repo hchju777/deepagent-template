@@ -183,7 +183,16 @@ def folded_evidence(state: CaseState) -> frozenset[str]:
     return frozenset(ids - set(state.walk.chain_ids()))
 
 
-def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
+def chain_middle(state: CaseState) -> frozenset[str]:
+    """걷기 사슬의 중간 홉 증거 — 대상 키(`t-1`)와 멈춘 홉을 뺀 것. 판정 턴은 이 본문을 접는다(R3-5c ②, 사람 결정 10-16 — 행 상태·단일값 비교식 줄은
+    홉 표에 있다)."""
+    if state.walk is None:
+        return frozenset()
+    keep = {state.walk.stop_at} | {e for t in state.plan_tasks if t.id == "t-1" for e in t.result_evidence_ids}
+    return frozenset(set(state.walk.chain_ids()) - keep)
+
+
+def evidence_block(state: CaseState, *, budget: int = 12000, fold_chain: bool = False) -> str:
     """**리드가 실제로 본 것**만. 이게 나중에 판정이 인용할 수 있는 우주다(12a).
 
     ## 왜 `summary`가 아니라 `body`인가
@@ -212,6 +221,11 @@ def evidence_block(state: CaseState, *, budget: int = 12000) -> str:
     # 증거가 지금 판단에 쓰인다). 고정만으로 예산을 넘으면 나머지는 최근 하나만 본문이 남는다.
     pinned = pinned_evidence(state)
     folded = folded_evidence(state)
+    if fold_chain:
+        # 판정 턴: 사슬 중간 홉의 본문도 접는다(R3-5c ②) — 사내 측정 #12b: 고정 증거는 예산 축소 밖이라 판정 프롬프트가 16.7~24K(상한 10K)였다. 접혀도
+        # `- id | 출처 | 요약` 줄은 남아 인용할 수 있다.
+        middle = chain_middle(state)
+        pinned, folded = pinned - middle, folded | middle
     detailed = {ref.id for ref in state.evidence if ref.id in pinned}
     used = sum(len(ref.body or ref.summary) for ref in state.evidence if ref.id in pinned)
     for ref in reversed(state.evidence):
@@ -913,7 +927,7 @@ def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 120
                                texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ())),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state, fold=fold_tasks),
-            "evidence": evidence_block(state, budget=evidence_budget),
+            "evidence": evidence_block(state, budget=evidence_budget, fold_chain=True),
             "open": open_questions_block(state),
             "ended": ended_line(state),
             "rewrite": rewrite_block(state),

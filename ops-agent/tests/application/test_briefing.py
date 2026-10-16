@@ -1624,3 +1624,26 @@ def test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸
     assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in second] == [("code.read", {"service": "batch", "path": "batch/refresh.py", "line": 9}, ["t-2.e1"])]
     assert "다음 홉: code.read line=12 path='batch/refresh.py' service='batch'" in briefing.integrate_fields(
         stepped, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(), code_index=True)["case"]
+
+
+
+def test_판정_프롬프트는_사슬_중간_홉의_본문을_접고_대상_키와_멈춘_홉은_남기며_접힌_id는_인용할_수_있다():
+    """R3-5c ②(사람 결정 10-16): 판정 프롬프트가 16.7~24K(상한 10K)였다 — 고정 증거(사슬)는 예산 축소 밖이라 걷기가 모든 행에서 돌며 그대로 실렸다.
+    판정 턴에서는 사슬 중간 홉의 본문을 접는다 — 행 상태·단일값 비교식 줄은 걷기 표에 있고 id는 그대로 인용할 수 있다. 리드 턴은 그대로."""
+    from src.application.state import CaseState
+    from src.domain.case import Hop, TargetPick, Walk
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"], writer="SummaryRefresh",
+                        writer_at="metadata.event_type")
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", service="batch", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1"),
+                      Hop(key="alarm:domain:L1", depth=1, writer="DomainBuilder", status="빈 배열 (record)", bad=True, evidence_id="t-3.e1", parent="t-1.e1"),
+                      Hop(key="alarm:raw:L1", depth=2, status="빈 배열 (rows)", bad=True, evidence_id="t-5.e1", parent="t-3.e1")],
+                reads=5, stopped="쓴 쪽을 모른다 — alarm:raw:L1(값에 인덱스의 클래스 이름이 없다)", stop_at="t-5.e1")
+    state = CaseState(case=_patrol_case(), target=picked, walk=walk, plan_tasks=_intake_state().plan_tasks + [
+        task(f"t-{n}", action="redis.get", params={"key": f"k{n}"}, status="ok", result_evidence_ids=[f"t-{n}.e1"], walked=True) for n in (2, 3, 4, 5)],
+        evidence=[EvidenceRef(id=f"t-{n}.e1", source="s", summary=f"요약 {n}", body=f"본문{n} " + "x" * 300) for n in range(6)])
+    conclude = briefing.conclude_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy())["evidence"]
+    assert "본문1 " in conclude and "본문5 " in conclude and "본문3 " not in conclude                 # 대상 키·멈춘 홉은 본문, 중간 홉은 접힘
+    assert "- t-3.e1 | s | 요약 3" in conclude                                                          # 접혀도 인용할 수 있다
+    lead_view = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(),
+                                          code_index=True)["evidence"]
+    assert "본문3 " in lead_view                                                                      # 리드 턴은 사슬 그대로

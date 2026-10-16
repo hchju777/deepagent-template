@@ -271,12 +271,23 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
                     note = f"답 도중 끊김 — 받은 글 {len(text):,}자, 같은 질문으로 다시 묻는다"
             elif reply.status == "error":
                 last = Parsed(False, error=reply.error or "알 수 없는 LLM 오류")
-                timed_out = _is_timeout(last.error or "")
+                # 조각이 온 뒤의 멈춤은 같은 상한의 재대기가 아니다 — 답을 만들던 중에 끊겼다(사내 측정 #12b: 판정 턴이 664조각 뒤 멈췄는데 조각의
+                # 본문이 비어 받은 글이 없었다). 같은 질문으로 한 번 더. 조각도 없이 났으면 같은 상한을 또 기다릴 이유가 없다.
+                timed_out = _is_timeout(last.error or "") and not reply.chunks
+                if reply.chunks:
+                    note = f"조각 {reply.chunks}개 뒤 끊김(받은 글 없음) — 같은 질문으로 다시 묻는다"
                 if timed_out:
                     # 같은 상한을 한 번 더 기다릴 이유가 없다 — 사내 실측에서 60초 시간 초과를 두 번 기다려
                     # 한 호출에 분 단위를 썼다. 몇 초 만에 났는지는 사유에 남긴다.
                     took = f"({latency:.0f}초) " if latency is not None else ""
                     last = Parsed(False, error=f"시간 초과 {took}— {last.error}")
+            elif not (reply.text or "").strip():
+                # 빈 응답 — 형식을 틀린 것이 아니다(고칠 글이 없다). 사유를 붙인 재질문이 아니라 같은 질문으로 한 번 더(사내 측정 #12b: 판정 턴 빈 응답 2회).
+                # 종료 사유가 토큰 상한(`length`)이면 같은 질문도 같은 상한에 걸린다 — 다시 안 묻는다.
+                text = reply.text or ""
+                last = Parsed(False, error=f"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})")
+                transport = True
+                timed_out = reply.finish_reason == "length"
             else:
                 text = reply.text or ""
                 parsed = parse_object(text)

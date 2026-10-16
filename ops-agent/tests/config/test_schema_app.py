@@ -91,5 +91,13 @@ def test_판정_역할은_따로_안_적으면_response_format이_none이다():
     assert app.llm_for("lead") is app.llm and app.llm_for("report") is app.llm
     asked = AppConfig(llm=GATEWAY, llm_roles={"conclude": {"response_format": "json_object"}})
     assert asked.llm_for("conclude").response_format == "json_object"                 # 적으면 이긴다
-    plain = AppConfig(llm={**GATEWAY, "response_format": "none"})
+    plain = AppConfig(llm={**GATEWAY, "response_format": "none", "stream_idle_s": 170})
     assert plain.llm_for("conclude") is plain.llm                                      # 바뀌는 게 없으면 같은 객체
+
+
+def test_판정_역할의_유휴_상한_기본은_게이트웨이_유휴_끊김_바로_아래다():
+    """사내 측정 #12b: 판정 턴이 664조각 뒤 120초(langchain-openai 기본) 멈춤에 끊겼다 — 판정 역할에 유휴 상한이 없었다. 사내 게이트웨이의 끊김은 ~180초
+    유휴다(10-08) — 그 바로 아래(170초)를 판정 역할의 기본으로. 다른 역할은 그대로, 적으면 그 값이 이긴다."""
+    app = AppConfig(llm=GATEWAY)
+    assert app.llm_for("conclude").stream_idle_s == 170 and app.llm_for("lead").stream_idle_s is None
+    assert AppConfig(llm=GATEWAY, llm_roles={"conclude": {"stream_idle_s": 90}}).llm_for("conclude").stream_idle_s == 90

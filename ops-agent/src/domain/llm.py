@@ -46,6 +46,10 @@ class LlmReply(StrictModel):
     # 스트림이 끊기기 전까지 받은 글 — 실패한 답에만. 사내 측정 #4에서 리드 턴이 조각 520개 뒤 멈췄는데 트레이스엔
     # "(응답 없음)"뿐이라 끝 표시만 빠진 답이었는지 알 수 없었다. `text`와 따로 둔다 — `text`는 성공한 답이다.
     partial_text: str = ""
+    # 스트림에서 받은 조각 수와 종료 사유(`finish_reason`, R3-5c ②) — 사내 측정 #12b: 판정 턴이 664조각 뒤 멈췄는데 본문이 빈 조각들이라(생각 모델의
+    # 추론 조각으로 보인다) 받은 글이 없었고, 빈 응답 두 번이 토큰 상한 탓인지 알 수 없었다. 0·빈 문자열이면 모른다(스트리밍이 아니거나 어댑터가 안 센다).
+    chunks: int = 0
+    finish_reason: str = ""
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):

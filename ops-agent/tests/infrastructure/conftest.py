@@ -26,6 +26,7 @@ class _Recorder:
         self.rate_limit: list = []   # 비어 있지 않으면 요청마다 하나씩 꺼내 **429 본문**으로 돌려준다
         self.retry_after = None      # 429에 붙일 Retry-After 헤더
         self.stall: list = []        # 비어 있지 않으면 스트리밍 요청마다 하나씩 꺼내 — 조각을 보낸 뒤 끝 표시 없이 그 초만큼 멈춘다
+        self.finish = "stop"         # 스트림 마지막 조각의 종료 사유 — `length`면 토큰 상한(R3-5c ②)
 
 
 def _handler_for(recorder: _Recorder):
@@ -85,7 +86,7 @@ def _handler_for(recorder: _Recorder):
                 # `response_metadata.model_name`으로 올린다. 없으면 스트리밍 답의 reported_model이 비어 모델 확인이 죽는다.
                 chunk = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": model,
                          "choices": [{"index": 0, "delta": {"role": "assistant", "content": piece},
-                                      "finish_reason": "stop" if n == len(pieces) - 1 and stall is None else None}]}
+                                      "finish_reason": recorder.finish if n == len(pieces) - 1 and stall is None else None}]}
                 self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
             if stall is not None:

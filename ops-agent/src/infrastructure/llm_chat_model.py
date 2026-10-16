@@ -103,6 +103,7 @@ class ChatModelAdapter(LlmPort):
         messages = [{"role": "user", "content": prompt}]
         first = None
         parts: list[str] = []
+        metadata: dict = {}
         # 호출마다 넘긴다 — langchain-openai는 호출 kwargs를 요청 본문에 그대로 합친다(`_get_request_payload`). 모델 객체에
         # 박으면 자유 질문(`llm ask`)까지 JSON을 강요한다.
         fmt = response_format(self._cfg.response_format, schema)
@@ -110,7 +111,6 @@ class ChatModelAdapter(LlmPort):
         try:
             if self._cfg.stream:
                 # 조각을 모아 한 답으로 — 호출부는 스트리밍을 모른다. 첫 조각 시각은 유휴 상한을 보는 재료다.
-                metadata = {}
                 async for chunk in self.client().astream(messages, **extra):
                     if first is None:
                         first = round(self._ticker() - started, 3)
@@ -125,11 +125,13 @@ class ChatModelAdapter(LlmPort):
             # 받은 조각은 버리지 않는다 — 끝 표시만 빠진 답일 수 있다(사내 측정 #4). 쓸지는 답을 아는 쪽(`lead.ask_json`)이 정한다.
             failed = LlmReply(status="error", asked_at=self._clock(), model=self._cfg.model,
                               error=f"{type(exc).__name__}: {exc}", partial_text="".join(parts),
-                              latency_s=round(self._ticker() - started, 3), first_token_s=first)
+                              latency_s=round(self._ticker() - started, 3), first_token_s=first,
+                              chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or ""))
             return failed, _quota_info(exc)
         return LlmReply(status="ok", asked_at=self._clock(), model=self._cfg.model,
                         text=text, reported_model=metadata.get("model_name"),
-                        latency_s=round(self._ticker() - started, 3), first_token_s=first), None
+                        latency_s=round(self._ticker() - started, 3), first_token_s=first,
+                        chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or "")), None
 
 
 def _quota_info(exc: Exception):

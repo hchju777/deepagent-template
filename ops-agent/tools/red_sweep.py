@@ -2090,7 +2090,7 @@ CASES += [
 ROLE_RF = "tests/config/test_schema_app.py::test_판정_역할은_따로_안_적으면_response_format이_none이다"
 CASES += [
  ("판정 역할도 기본 형식이 json_schema다", SAP,
-  '_ROLE_DEFAULTS: dict[str, dict] = {"conclude": {"response_format": "none"}}', '_ROLE_DEFAULTS: dict[str, dict] = {}',
+  '_ROLE_DEFAULTS: dict[str, dict] = {"conclude": {"response_format": "none", "stream_idle_s": 170.0}}', '_ROLE_DEFAULTS: dict[str, dict] = {"conclude": {"stream_idle_s": 170.0}}',
   [ROLE_RF]),
  ("역할 기본값이 덮어쓰기를 이긴다", SAP,
   "        merged = _merged(_merged(base, _ROLE_DEFAULTS.get(role, {})), getattr(self.llm_roles, role))",
@@ -2853,7 +2853,26 @@ CASES += [
  ("측정판 행 안의 라벨이 클래스 이름이 아니다", LC, "\"v\": i, \"view\": \"Overview\"}", "\"v\": i, \"view\": \"overview\"}", [LC_ALL_T]),
 ]
 
-assert len(CASES) >= 852, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5c ② — 판정 턴: 조각 뒤 멈춤·빈 응답·유휴 상한, 판정 프롬프트의 사슬 중간 홉 접기 ──
+ADAPTER_T = "tests/infrastructure/test_llm_adapters.py::test_스트림의_조각_수와_종료_사유가_답에_남는다"
+STALL_T = "tests/application/test_lead.py::test_조각이_온_뒤의_멈춤은_본문이_없어도_시간_초과가_아니라_같은_질문으로_한_번_다시_묻는다"
+EMPTY_T = "tests/application/test_lead.py::test_빈_응답은_같은_질문으로_한_번_다시_묻고_토큰_상한이면_다시_안_묻는다"
+IDLE_T = "tests/config/test_schema_app.py::test_판정_역할의_유휴_상한_기본은_게이트웨이_유휴_끊김_바로_아래다"
+FOLD_T = "tests/application/test_briefing.py::test_판정_프롬프트는_사슬_중간_홉의_본문을_접고_대상_키와_멈춘_홉은_남기며_접힌_id는_인용할_수_있다"
+CASES += [
+ ("성공한 답에 조각 수와 종료 사유를 안 남긴다", LCM, "                        chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\")), None", "                        ), None", [ADAPTER_T]),
+ ("실패한 답에 조각 수를 안 남긴다", LCM, "                              chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\"))", "                              )", [ADAPTER_T]),
+ ("조각이 온 뒤의 멈춤도 시간 초과다", LD, "timed_out = _is_timeout(last.error or \"\") and not reply.chunks", "timed_out = _is_timeout(last.error or \"\")", [STALL_T]),
+ ("빈 응답을 고칠 글로 다시 묻는다", LD, "                transport = True\n                timed_out = reply.finish_reason == \"length\"", "                transport = False\n                timed_out = reply.finish_reason == \"length\"", [EMPTY_T]),
+ ("토큰 상한이어도 다시 묻는다", LD, "                timed_out = reply.finish_reason == \"length\"", "                timed_out = False", [EMPTY_T]),
+ ("빈 응답을 형식 오류로 본다", LD, "            elif not (reply.text or \"\").strip():", "            elif False:", [EMPTY_T]),
+ ("판정 역할에 유휴 상한 기본이 없다", SAP, "_ROLE_DEFAULTS: dict[str, dict] = {\"conclude\": {\"response_format\": \"none\", \"stream_idle_s\": 170.0}}", "_ROLE_DEFAULTS: dict[str, dict] = {\"conclude\": {\"response_format\": \"none\"}}", [IDLE_T]),
+ ("판정 턴이 사슬 중간 홉을 안 접는다", B, "            \"evidence\": evidence_block(state, budget=evidence_budget, fold_chain=True),", "            \"evidence\": evidence_block(state, budget=evidence_budget),", [FOLD_T]),
+ ("멈춘 홉의 본문도 접는다", B, "    keep = {state.walk.stop_at} | {e for t in state.plan_tasks if t.id == \"t-1\" for e in t.result_evidence_ids}", "    keep = {e for t in state.plan_tasks if t.id == \"t-1\" for e in t.result_evidence_ids}", [FOLD_T]),
+]
+
+assert len(CASES) >= 861, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

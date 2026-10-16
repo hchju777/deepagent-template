@@ -295,3 +295,22 @@ def test_받은_글은_실패한_답에만_실린다():
 
     with pytest.raises(ValueError, match="partial_text"):
         LlmReply(status="ok", asked_at=T0, model="m", text="x", partial_text="x")
+
+
+
+# ── R3-5c ② — 조각 수와 종료 사유 ──
+
+async def test_스트림의_조각_수와_종료_사유가_답에_남는다(gateway, clock):
+    """사내 측정 #12b: 판정 턴이 664조각 뒤 멈췄는데 받은 글이 없었고(본문이 빈 조각들 — 생각 모델의 추론 조각으로 보인다), 빈 응답 두 번이 토큰
+    상한 탓인지 알 수 없었다. 조각 수와 종료 사유를 답에 — 실패한 답에도."""
+    base_url, recorder = gateway
+    recorder.reply = '{"tasks": []}'
+    llm = build_llm(_cfg(base_url, "chat_model", stream=True, stream_idle_s=0.2), clock=clock)
+    whole = await llm.ask("hi")
+    assert whole.status == "ok" and whole.chunks >= 2 and whole.finish_reason == "stop"           # 라이브러리가 넘긴 조각 수(끝 조각 포함)
+    recorder.reply, recorder.stall = "", [0.6]
+    stalled = await llm.ask("hi")
+    assert stalled.status == "error" and stalled.partial_text == "" and stalled.chunks >= 2       # 조각은 왔고 본문은 비었다
+    recorder.finish = "length"
+    empty = await llm.ask("hi")
+    assert empty.status == "ok" and empty.text == "" and empty.finish_reason == "length"
