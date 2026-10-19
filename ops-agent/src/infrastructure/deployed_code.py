@@ -93,6 +93,93 @@ def component_names(text: str) -> tuple[list[str], list[str]]:
     return literals, list(dict.fromkeys(variables))
 
 
+def _param_defaults(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
+    """함수 인자 → 문자열 리터럴 기본값(있는 것만). 위치 인자는 뒤에서부터 기본값이 붙는다."""
+    out: dict[str, str] = {}
+    args = fn.args
+    for arg, default in zip(args.args[len(args.args) - len(args.defaults):], args.defaults):
+        if isinstance(default, ast.Constant) and isinstance(default.value, str):
+            out[arg.arg] = default.value
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        if isinstance(default, ast.Constant) and isinstance(default.value, str):
+            out[arg.arg] = default.value
+    return out
+
+
+def _positional_index(fn: ast.FunctionDef | ast.AsyncFunctionDef, name: str) -> int | None:
+    """호출이 위치로 넘길 때의 자리 — 첫 인자가 `self`·`cls`면 뺀다(메서드 호출 `self.m(a, b)`의 인자 자리)."""
+    names = [a.arg for a in fn.args.args]
+    if names and names[0] in ("self", "cls"):
+        names = names[1:]
+    return names.index(name) if name in names else None
+
+
+def default_links(sources: dict[str, str]) -> dict[str, str]:
+    """`<수신자>.get(<변수>)`의 변수 → 이을 리터럴(R3-5e ③, 사람 결정 10-19). 그 변수가 그 호출을 품은 함수의 **인자**이고 기본값이 문자열 리터럴이며 범위
+    안의 호출(같은 이름의 메서드·함수 호출)이 그 인자를 안 넘기면 그 기본값이다 — AST 사실이지 실행이 아니다. 호출이 넘긴 것이 또 그 호출 함수의 같은 모양의
+    인자면 한 단계 더(깊이 3). 호출들이 다른 리터럴을 넘기거나 변수를 넘기면 못 잇는다(지금처럼 "못 이음 — 변수"). 측정 #15 P0-3: 부모 파일의 `get(<변수>)`
+    둘이 못 이음으로 세어져 N/N 대조에도 `미확인` 59행이었다. 깨진 파일은 없는 것."""
+    funcs: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    calls: list[tuple[ast.Call, ast.FunctionDef | ast.AsyncFunctionDef | None]] = []
+    for text in sources.values():
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                funcs.append(node)
+                for inner in ast.walk(node):
+                    if isinstance(inner, ast.Call):
+                        calls.append((inner, node))
+    by_name: dict[str, list] = {}
+    for fn in funcs:
+        by_name.setdefault(fn.name, []).append(fn)
+
+    def called_name(call: ast.Call) -> str | None:
+        if isinstance(call.func, ast.Attribute):
+            return call.func.attr
+        return call.func.id if isinstance(call.func, ast.Name) else None
+
+    def resolve(fn, param: str, depth: int) -> str | None:
+        """이 함수의 이 인자가 실행 때 가질 **하나의** 리터럴 — 기본값과, 범위 안 호출들이 넘긴 값들이 전부 같은 하나여야 한다."""
+        default = _param_defaults(fn).get(param)
+        if default is None or depth > 3:
+            return None
+        pos = _positional_index(fn, param)
+        values = set()
+        for call, caller in calls:
+            if called_name(call) != fn.name:
+                continue
+            passed = next((kw.value for kw in call.keywords if kw.arg == param), None)
+            if passed is None and pos is not None and pos < len(call.args):
+                passed = call.args[pos]
+            if passed is None:
+                values.add(default)                                     # 안 넘겼다 — 기본값
+            elif isinstance(passed, ast.Constant) and isinstance(passed.value, str):
+                values.add(passed.value)
+            elif isinstance(passed, ast.Name) and caller is not None and passed.id in _param_defaults(caller):
+                got = resolve(caller, passed.id, depth + 1)             # 넘긴 것이 또 그런 인자 — 한 단계 더
+                if got is None:
+                    return None
+                values.add(got)
+            else:
+                return None                                             # 변수·식을 넘겼다 — 실행 때 값은 모른다
+        values = values or {default}
+        return next(iter(values)) if len(values) == 1 else None
+
+    out: dict[str, str] = {}
+    for fn in funcs:
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args
+                    and isinstance(node.args[0], ast.Name) and node.args[0].id in _param_defaults(fn)):
+                var = node.args[0].id
+                got = resolve(fn, var, 0)
+                if got is not None and var not in out:
+                    out[var] = got
+    return out
+
+
 def comparison_pairs(text: str) -> list[tuple[int, str, str, str]]:
     """코드 줄의 비교식에서 **필드와 리터럴이 양쪽**인 짝 `(줄, 필드, 값, 본문)` 전부 — `x["f"] != "v"`·`r.get("f") == "v"`·`getattr(r, "f") == "v"`, 뒤집힌
     순서도. 사전 리터럴(`{"f": "v"}`)·주석·변수(`r[f]`, `!= v`)는 아니다. 먼저 전부 뽑아 두고 단일값 전부와 맞춘다(R3-5 ③ (a) — 필드 상한 없음)."""
@@ -380,10 +467,13 @@ class DeployedCode(DeployedCodePort):
             if path in snap and path not in files:
                 files.append(path)
         literals, variables = component_names("\n".join(snap.get(path, "") for path in files))
+        # 변수 인자의 기본값 리터럴로 잇는다(R3-5e ③) — 범위 파일 안에서 그 인자를 안 넘기면 실행 때 값은 그 기본값이다. 못 이으면 전처럼 "못 이음".
+        resolved = default_links({path: snap.get(path, "") for path in files})
+        literals += [resolved[v] for v in variables if v in resolved and resolved[v] not in literals]
         regs = self._registered(sym.repo, snap)
         linked: list[str] = []
         linked_at: list[FilterHit] = []
-        unlinked = [f"변수 {v}" for v in variables]
+        unlinked = [f"변수 {v}" for v in variables if v not in resolved]
         for comp in literals:
             picked = self._site_picks(regs, comp)
             if not picked:

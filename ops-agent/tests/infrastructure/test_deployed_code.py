@@ -917,7 +917,11 @@ FILES = {"pipe/__init__.py": "",
          "pipe/registry.py": REGISTRY,
          "pipe/other.py": 'DEFAULTS = {"state": "-"}\n\n\ndef lookup(r):\n    return r.get("state")\n',                 # 사전 리터럴 — 비교식이 아니다
          "config/gbm/mx.json": '{"state": "-", "k": {"state": "-"}}\n',                                                  # config — 범위 밖
-         "pipe/var.py": 'class Var:\n    def _run(self, name):\n        self.components.get("state_filter")\n        return self.components.get(name)\n'}
+         "pipe/var.py": 'class Var:\n    def _run(self, name):\n        self.components.get("state_filter")\n        return self.components.get(name)\n',
+         # 인자 기본값이 리터럴이고 범위 안 호출이 그 인자를 안 넘긴다 — 그 리터럴로 잇는다(R3-5e ③). Passer는 다른 값을 넘겨 못 잇는다.
+         "pipe/dflt.py": ('class Dflt:\n    def _run(self, rows, shape="shape_filter"):\n        rows = self.components.get("state_filter").apply(rows)\n'
+                          '        return self.components.get(shape).apply(rows)\n'),
+         "pipe/passer.py": 'from pipe.dflt import Dflt\n\n\nclass Passer(Dflt):\n    def go(self, rows):\n        return self._run(rows, "state_filter")\n'}
 
 
 class _FilterSrc:
@@ -980,6 +984,11 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     assert (await code.filter_lines("Job", fields={"state": "x"})).hits == []
     var = await code.filter_lines("Var", fields={"state": "-"})
     assert var.files == ["pipe/var.py", "pipe/filters.py"] and var.unlinked == ["변수 name"] and [h.line for h in var.hits] == [3, 8]
+    # 기본값 리터럴로 이은 변수(R3-5e ③) — 못 이음이 아니고 그 컴포넌트 파일이 범위에 든다; 범위 안 호출이 리터럴을 넘기면 그 리터럴로
+    dflt = await code.filter_lines("Dflt", fields={"state": "-"})
+    assert dflt.unlinked == [] and dflt.linked == ["state_filter", "shape_filter"] and dflt.files == ["pipe/dflt.py", "pipe/filters.py", "pipe/shapes.py"]
+    passer = await code.filter_lines("Passer", fields={"state": "-"})
+    assert passer.unlinked == [] and passer.linked == ["state_filter"] and passer.files == ["pipe/passer.py", "pipe/dflt.py", "pipe/filters.py"]
     assert "인덱스에 없다" in (await code.filter_lines("Nope", fields={})).problem
     assert "없는 서비스" in (await code.filter_lines("Job", fields={}, service="nope")).problem
     assert "없는 레포" in (await code.filter_lines("Job", fields={}, repo="nope")).problem
@@ -1081,3 +1090,30 @@ async def test_code_resources는_진입에서_호출_그래프로_닿는_부모_
     other = await flow_code.resources("Other")
     assert "  읽기 2:" in other.data and "workday:{line} [rediskey] — batch.base.Base.workday (batch/base.py:L7)" in other.data
     assert "뺌" not in other.data.splitlines()[1]
+
+
+
+def test_get_변수는_인자_기본값_리터럴로_잇되_범위_안_호출이_그_인자를_넘기면_안_잇는다():
+    """측정 #15 P0-3: 부모 파일의 `get(<변수>)` 둘이 "못 이음"으로 세어져 N/N 대조에도 `미확인` 59행, `입력을 다 못 봤다(일부만 검사)` 6건. 사람 결정 10-19:
+    변수가 그 호출을 품은 함수의 인자이고 기본값이 문자열 리터럴이며 호출이 그 인자를 안 넘기면 그 리터럴(AST 사실), 넘긴 값이 또 그런 인자면 한 단계 더.
+    못 이으면 지금처럼."""
+    from src.infrastructure.deployed_code import default_links
+
+    base = 'class D:\n    def _run(self, rows, shape="shape_filter"):\n        return self.components.get(shape).apply(rows)\n'
+    assert default_links({"d.py": base}) == {"shape": "shape_filter"}
+    assert default_links({"d.py": base, "p.py": "class P(D):\n    def go(self, rows):\n        return self._run(rows)\n"}) == {"shape": "shape_filter"}
+    # 호출이 리터럴을 넘기면 그 리터럴(AST 사실) — 둘이 다른 리터럴을 넘기거나 변수·식을 넘기면 못 잇는다
+    assert default_links({"d.py": base, "p.py": 'class P(D):\n    def go(self, rows):\n        return self._run(rows, "other")\n'}) == {"shape": "other"}
+    assert default_links({"d.py": base, "p.py": 'class P(D):\n    def go(self, rows):\n        return self._run(rows, shape="other")\n'}) == {"shape": "other"}
+    assert default_links({"d.py": base, "p.py": 'class P(D):\n    def go(self, rows):\n        return self._run(rows, "other")\n',
+                          "q.py": 'class Q(D):\n    def go(self, rows):\n        return self._run(rows, "third")\n'}) == {}
+    assert default_links({"d.py": base, "p.py": 'class P(D):\n    def go(self, rows):\n        return self._run(rows, pick())\n'}) == {}
+    # 넘긴 것이 그 함수의 같은 기본값 인자면 한 단계 더 — 그 위에서 아무도 안 넘기면 그 기본값, 넘기면 그 값
+    chain = 'class P(D):\n    def go(self, rows, shape="shape_filter"):\n        return self._run(rows, shape)\n'
+    assert default_links({"d.py": base, "p.py": chain}) == {"shape": "shape_filter"}
+    assert default_links({"d.py": base, "p.py": chain, "q.py": 'class Q(P):\n    def run(self, rows):\n        return self.go(rows, "other")\n'}) == {"shape": "other"}
+    # 기본값이 없거나 리터럴이 아니면, 변수가 인자가 아니면 못 잇는다; 깨진 파일은 없는 것
+    assert default_links({"v.py": "class V:\n    def _run(self, name):\n        return self.components.get(name)\n"}) == {}
+    assert default_links({"v.py": "class V:\n    def _run(self, name=NAME):\n        return self.components.get(name)\n"}) == {}
+    assert default_links({"v.py": "class V:\n    def _run(self):\n        name = pick()\n        return self.components.get(name)\n"}) == {}
+    assert default_links({"v.py": "class V(:\n"}) == {}

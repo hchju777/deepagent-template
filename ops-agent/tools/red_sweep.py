@@ -2684,7 +2684,7 @@ CASES += [
  ("뒤집힌 비교식을 안 센다", DCP, "        for m in (*_FORWARD.finditer(line), *_REVERSED.finditer(line)):", "        for m in _FORWARD.finditer(line):", [FILTER_T]),
  ("컴포넌트를 안 잇는다", DCP, "        for comp in literals:", "        for comp in []:", [FILTER_T]),
  ("등록의 클래스 파일을 범위에 안 넣는다", DCP, "                if csym.file not in files:\n                    files.append(csym.file)", "                if False:\n                    files.append(csym.file)", [FILTER_T]),
- ("변수 get을 못 이음으로 안 적는다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables]", "        unlinked = []", [FILTER_T]),
+ ("변수 get을 못 이음으로 안 적는다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in resolved]", "        unlinked = []", [FILTER_T]),
  ("클래스 파일을 안 본다", DCP, "        files = [sym.file]", "        files = []", [FILTER_T]),
  ("스냅샷 없음을 문제로 안 적는다", DCP, "        if snap is None:\n            return FilterScan(problem=f\"{sym.repo}의 스냅샷을 못 받았다\")", "        if snap is None:\n            return FilterScan()", [FILTER_T]),
  ("나쁨에 행 수를 안 적는다", WK, "status, bad, carry = (f\"나쁨 — {len(rows)}행 전부 {shown_fields}", "status, bad, carry = (f\"나쁨 — 모든 행이 {shown_fields}", [LIT_T]),
@@ -3050,7 +3050,18 @@ CASES += [
  ("단일값 범위가 전 조상 파일이다", DCP, "        _, reached, _ = qy.reachable_members(self._index, found[0])\n        for mid in reached:", "        for mid in [m.id for b in qy.ancestors(self._index, found[0]) for m in self._index.symbols if m.class_id == b]:", [INHERIT_SCOPE_T]),
 ]
 
-assert len(CASES) >= 945, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5e ③ — get(<변수>)를 인자 기본값 리터럴로 잇는다 ──
+DEFAULT_LINK_T = "tests/infrastructure/test_deployed_code.py::test_get_변수는_인자_기본값_리터럴로_잇되_범위_안_호출이_그_인자를_넘기면_안_잇는다"
+FILTER_T = "tests/infrastructure/test_deployed_code.py::test_filter_lines는_이_사이트의_등록이_가리키는_클래스_파일을_범위로_비교식을_먼저_뽑아_단일값_전부와_맞춘다"
+CASES += [
+ ("기본값 리터럴로 안 잇는다", DCP, "        default = _param_defaults(fn).get(param)\n        if default is None or depth > 3:", "        default = None\n        if default is None or depth > 3:", [DEFAULT_LINK_T, FILTER_T]),
+ ("호출이 넘긴 값을 안 본다", DCP, "            if called_name(call) != fn.name:\n                continue", "            if True:\n                continue", [DEFAULT_LINK_T]),
+ ("다른 리터럴 둘을 하나로 잇는다", DCP, "        return next(iter(values)) if len(values) == 1 else None", "        return next(iter(values))", [DEFAULT_LINK_T]),
+ ("이은 변수를 여전히 못 이음으로 센다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in resolved]", "        unlinked = [f\"변수 {v}\" for v in variables]", [FILTER_T]),
+]
+
+assert len(CASES) >= 949, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
