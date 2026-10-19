@@ -732,6 +732,19 @@ def test_트레이스가_스트림_끊김을_적는다(tmp_path):
     assert "스트림:" not in written[1].read_text(encoding="utf-8")
 
 
+def test_트레이스가_턴의_조각_수_종료_사유_토큰을_적는다(tmp_path):
+    """R3-5d ②(측정 #13 추가분 1): 성공한 턴도 조각 수·종료 사유·usage를 머리에 — 토큰을 모르면(끊긴 스트림) 그렇다고. 셋 다 모르면 줄이 없다."""
+    from src.__main__ import _make_tracer
+
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("conclude", 3, "물음", "", None, 274.0, None, None, None, {"chunks": 5124, "finish_reason": "length", "input_tokens": 14712, "output_tokens": 5120})
+    assert "턴: 조각 5,124 · 종료 length · 토큰 입력 14,712 · 출력 5,120" in written[0].read_text(encoding="utf-8")
+    trace("conclude", 3, "물음", None, "StreamChunkTimeoutError: x", 120.0, None, None, None, {"chunks": 664, "finish_reason": "", "input_tokens": 0, "output_tokens": 0})
+    assert "턴: 조각 664 · 종료 모름 · 토큰 모름" in written[1].read_text(encoding="utf-8")
+    trace("frame", 0, "물음", "답", None, 3.0, None, None, None, {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0})
+    assert "턴:" not in written[2].read_text(encoding="utf-8")
+
+
 def test_스트림_유휴_경고_줄만_거른다(caplog):
     """사내 측정 #4: stderr에 `langchain_openai.stream_chunk_timeout fired`가 찍혔다 — 그 사실은 트레이스가 이미 적는다. 같은
     로거의 다른 경고는 그대로 둔다."""

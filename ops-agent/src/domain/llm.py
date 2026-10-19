@@ -50,6 +50,10 @@ class LlmReply(StrictModel):
     # 추론 조각으로 보인다) 받은 글이 없었고, 빈 응답 두 번이 토큰 상한 탓인지 알 수 없었다. 0·빈 문자열이면 모른다(스트리밍이 아니거나 어댑터가 안 센다).
     chunks: int = 0
     finish_reason: str = ""
+    # 게이트웨이가 실은 usage(R3-5d ②) — 0이면 모른다(끊긴 스트림엔 없다, 생각 토큰 구분도 없다). 요청은 안 바꾼다 — 게이트웨이가 `stream_options`
+    # 없이도 마지막 조각에 싣고 langchain-openai가 `usage_metadata`로 옮긴다(사람 확인 10-19).
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):

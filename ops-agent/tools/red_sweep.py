@@ -1612,7 +1612,7 @@ CASES += [
   '    return bool(_TIMEOUT_WORDS.search(error))', '    return False',
   ["tests/application/test_lead.py::test_시간_초과는_되묻지_않는다"]),
  ("걸린 초가 트레이스로 안 간다", LD,
-  '        _tell(on_exchange, asked, text, failure, latency, waited, source, note)', '        _tell(on_exchange, asked, text, failure, None, waited, source, note)',
+  '        _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)', '        _tell(on_exchange, asked, text, failure, None, waited, source, note, stats)',
   ["tests/application/test_lead.py::test_응답_시간이_트레이스로_간다"]),
  ("트레이스 파일에 응답 초를 안 적는다", MN,
   '        took = f"응답: {latency_s:.1f}초\\n" if latency_s is not None else ""', '        took = ""',
@@ -2189,8 +2189,8 @@ CASES += [
   '                    note, timed_out = f"답 도중 끊김 — 받은 글 {len(text):,}자, 같은 질문으로 다시 묻는다", True', [CUT_RE]),
  ("받은 글을 트레이스 날것에 안 싣는다", LD, "                text = reply.partial_text\n                parsed = parse_object(text)",
   "                parsed = parse_object(reply.partial_text)", [CUT_OK, CUT_RE]),
- ("끊김 메모를 트레이스에 안 넘긴다", LD, "        _tell(on_exchange, asked, text, failure, latency, waited, source, note)",
-  "        _tell(on_exchange, asked, text, failure, latency, waited, source)", [CUT_OK]),
+ ("끊김 메모를 트레이스에 안 넘긴다", LD, "        _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)",
+  "        _tell(on_exchange, asked, text, failure, latency, waited, source, None, stats)", [CUT_OK]),
  ("라이브러리 오류 문구를 통째로 싣는다", LD, '    return error.split(". ", 1)[0]', "    return error", [CUT_OK]),
  ("트레이서가 스트림 줄을 안 쓴다", MN, '        took += f"스트림: {note}\\n" if note else ""\n', "", [CUT_TR]),
  ("유휴 경고를 안 거른다", MN, '    return getattr(record, "source", None) != "stream_chunk_timeout"', "    return True", [CUT_LOG]),
@@ -2856,15 +2856,15 @@ CASES += [
 # ── 12a-R3-5c ② — 판정 턴: 조각 뒤 멈춤·빈 응답·유휴 상한, 판정 프롬프트의 사슬 중간 홉 접기 ──
 ADAPTER_T = "tests/infrastructure/test_llm_adapters.py::test_스트림의_조각_수와_종료_사유가_답에_남는다"
 STALL_T = "tests/application/test_lead.py::test_조각이_온_뒤의_멈춤은_본문이_없어도_시간_초과가_아니라_같은_질문으로_한_번_다시_묻는다"
-EMPTY_T = "tests/application/test_lead.py::test_빈_응답은_같은_질문으로_한_번_다시_묻고_토큰_상한이면_다시_안_묻는다"
+EMPTY_T = "tests/application/test_lead.py::test_빈_응답은_종료_사유와_무관하게_같은_질문으로_한_번_다시_묻는다"
 IDLE_T = "tests/config/test_schema_app.py::test_판정_역할의_유휴_상한_기본은_게이트웨이_유휴_끊김_바로_아래다"
 FOLD_T = "tests/application/test_briefing.py::test_판정_프롬프트는_사슬_중간_홉의_본문을_접고_대상_키와_멈춘_홉은_남기며_접힌_id는_인용할_수_있다"
 CASES += [
- ("성공한 답에 조각 수와 종료 사유를 안 남긴다", LCM, "                        chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\")), None", "                        ), None", [ADAPTER_T]),
- ("실패한 답에 조각 수를 안 남긴다", LCM, "                              chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\"))", "                              )", [ADAPTER_T]),
+ ("성공한 답에 조각 수와 종료 사유를 안 남긴다", LCM, "                        chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\"), **_tokens(usage)), None", "                        ), None", [ADAPTER_T]),
+ ("실패한 답에 조각 수를 안 남긴다", LCM, "                              chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\"), **_tokens(usage))", "                              )", [ADAPTER_T]),
  ("조각이 온 뒤의 멈춤도 시간 초과다", LD, "timed_out = _is_timeout(last.error or \"\") and not reply.chunks", "timed_out = _is_timeout(last.error or \"\")", [STALL_T]),
- ("빈 응답을 고칠 글로 다시 묻는다", LD, "                transport = True\n                timed_out = reply.finish_reason == \"length\"", "                transport = False\n                timed_out = reply.finish_reason == \"length\"", [EMPTY_T]),
- ("토큰 상한이어도 다시 묻는다", LD, "                timed_out = reply.finish_reason == \"length\"", "                timed_out = False", [EMPTY_T]),
+ ("빈 응답을 고칠 글로 다시 묻는다", LD, "                last = Parsed(False, error=f\"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})\")\n                transport = True", "                last = Parsed(False, error=f\"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})\")\n                transport = False", [EMPTY_T]),
+ ("빈 응답을 다시 안 묻는다", LD, "                transport = True\n            else:\n                text = reply.text or \"\"\n                parsed = parse_object(text)", "                transport = True\n                timed_out = True\n            else:\n                text = reply.text or \"\"\n                parsed = parse_object(text)", [EMPTY_T]),
  ("빈 응답을 형식 오류로 본다", LD, "            elif not (reply.text or \"\").strip():", "            elif False:", [EMPTY_T]),
  ("판정 역할에 유휴 상한 기본이 없다", SAP, "_ROLE_DEFAULTS: dict[str, dict] = {\"conclude\": {\"response_format\": \"none\", \"stream_idle_s\": 170.0}}", "_ROLE_DEFAULTS: dict[str, dict] = {\"conclude\": {\"response_format\": \"none\"}}", [IDLE_T]),
  ("판정 턴이 사슬 중간 홉을 안 접는다", B, "            \"evidence\": evidence_block(state, budget=evidence_budget, fold_chain=True),", "            \"evidence\": evidence_block(state, budget=evidence_budget),", [FOLD_T]),
@@ -2912,7 +2912,25 @@ CASES += [
  ("서비스 아닌 후보를 되묻는다", ND, "            verdict = drop_foreign_alternates(verdict, component_problem)", "            pass", [TOPIC_ALT_T]),
 ]
 
-assert len(CASES) >= 879, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5d ② — length도 1회 다시, usage, 트레이스 머리의 턴 줄 ──
+TD = ROOT / "src/application/trace_digest.py"
+USAGE_T = "tests/infrastructure/test_llm_adapters.py::test_게이트웨이가_실은_usage가_답에_남는다"
+STATS_T = "tests/application/test_lead.py::test_턴의_조각_수_종료_사유_토큰이_트레이스로_간다"
+TRACE_TURN_T = "tests/test_cli.py::test_트레이스가_턴의_조각_수_종료_사유_토큰을_적는다"
+DIGEST_TURN_T = "tests/application/test_trace_digest.py::test_요약_머리줄에_턴의_조각_수_종료_사유_토큰이_붙는다"
+CASES += [
+ ("스트림의 usage를 안 읽는다", LCM, "                    usage = getattr(chunk, \"usage_metadata\", None) or usage\n", "", [USAGE_T]),
+ ("비스트림의 usage를 안 읽는다", LCM, "                usage = getattr(message, \"usage_metadata\", None) or {}\n", "                usage = {}\n", [USAGE_T]),
+ ("성공한 답에 토큰을 안 싣는다", LCM, "finish_reason=str(metadata.get(\"finish_reason\") or \"\"), **_tokens(usage)), None", "finish_reason=str(metadata.get(\"finish_reason\") or \"\")), None", [USAGE_T]),
+ ("턴 통계를 트레이스에 안 넘긴다", LD, "        _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)", "        _tell(on_exchange, asked, text, failure, latency, waited, source, note, None)", [STATS_T]),
+ ("성공한 턴의 통계를 안 만든다", LD, "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens}", "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens} if reply.status == \"error\" else None", [STATS_T]),
+ ("트레이스 머리에 턴 줄이 없다", MN, "            took += f\"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}\\n\"", "            pass", [TRACE_TURN_T]),
+ ("토큰을 모르는데 0으로 적는다", MN, "                      if stats.get(\"input_tokens\") or stats.get(\"output_tokens\") else \"토큰 모름\")", "                      if True else \"토큰 모름\")", [TRACE_TURN_T]),
+ ("요약이 턴 줄을 안 올린다", TD, "           + (f\" · {turn}\" if turn else \"\")\n", "", [DIGEST_TURN_T]),
+]
+
+assert len(CASES) >= 887, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

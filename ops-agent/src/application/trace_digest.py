@@ -39,6 +39,7 @@ _FILE = re.compile(r"^(\d+)-r(\d+)-(\w+)\.md$")
 _VERDICT = re.compile(r"^결과: (.+)$", re.M)
 _LATENCY = re.compile(r"^응답: ([\d.]+)초$", re.M)
 _WAIT = re.compile(r"^대기: ([\d.]+)초", re.M)
+_TURN = re.compile(r"^턴: (.+)$", re.M)
 _WAIT_SOURCE = re.compile(r"^대기: [\d.]+초\(429·([^)]+)\)", re.M)
 _STREAM = re.compile(r"^스트림: (.+)$", re.M)
 _NO_REPLY = "(응답 없음"
@@ -95,7 +96,7 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
             failures[reason] = failures.get(reason, 0) + 1
         lines += _round(round_no, node, prompt, reply, asked,
                         attempt=attempts[(round_no, node)], verdict=verdict,
-                        latency=_latency(text), waited=waited, brief=brief)
+                        latency=_latency(text), waited=waited, turn=_turn(text), brief=brief)
         last_added = set(asked) - before
     if len(lines) == 1:
         lines.append("  (읽을 수 있는 트레이스 파일이 없다)")
@@ -131,6 +132,12 @@ def _latency(text: str) -> str:
     return match.group(1) if match else ""
 
 
+def _turn(text: str) -> str:
+    """트레이스 파일 머리의 `턴: 조각 N · 종료 X · 토큰 …`(R3-5d ②) — 옛 파일엔 없다(빈 문자열)."""
+    match = _TURN.search(text)
+    return match.group(1) if match else ""
+
+
 def _waited(text: str) -> str:
     """트레이스 파일 머리의 `대기: N초(429)` — 할당량에 걸려 기다린 초. 없으면 빈 문자열."""
     match = _WAIT.search(text)
@@ -139,7 +146,7 @@ def _waited(text: str) -> str:
 
 def _round(round_no: str, node: str, prompt: str, reply: str,
            asked: dict[str, str], *, attempt: int = 1, verdict: str = "",
-           latency: str = "", waited: str = "", brief: bool = False) -> list[str]:
+           latency: str = "", waited: str = "", turn: str = "", brief: bool = False) -> list[str]:
     evidence = _block(prompt, "모은 증거")
     rejected = _block(prompt, "버려진 태스크")
     # 이름이 증거에 있나 — 문자열로 본다. `<데이터 흐름>` 블록이 준 이름도 찾은 것이다
@@ -171,6 +178,7 @@ def _round(round_no: str, node: str, prompt: str, reply: str,
            f" = {_sizes(prompt, evidence)}"
            + (f" · 응답 {latency}초" if latency else "")
            + (f" · 대기 {waited}초" if waited else "")
+           + (f" · {turn}" if turn else "")
            + (f" · 결과: {verdict}" if verdict else "")]
     out.append(f"  리드가 본 것 : 태스크 {_count(_block(prompt, '지금까지의 태스크'))}"
                f" · 증거 {_count(evidence)}(잘림 {evidence.count('⚠ 표본이 잘렸다')})"

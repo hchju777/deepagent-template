@@ -314,3 +314,19 @@ async def test_스트림의_조각_수와_종료_사유가_답에_남는다(gate
     recorder.finish = "length"
     empty = await llm.ask("hi")
     assert empty.status == "ok" and empty.text == "" and empty.finish_reason == "length"
+
+
+
+async def test_게이트웨이가_실은_usage가_답에_남는다(gateway, clock):
+    """R3-5d ②(사람 확인 10-19): 게이트웨이는 `stream_options` 없이도 마지막 조각 하나에 usage를 싣고 langchain-openai가 `usage_metadata`로 옮긴다 —
+    요청은 그대로, 어댑터가 읽기만 한다. 없으면 0(모른다)."""
+    base_url, recorder = gateway
+    recorder.reply = '{"tasks": []}'
+    recorder.usage = {"prompt_tokens": 147, "completion_tokens": 31, "total_tokens": 178}
+    streamed = await build_llm(_cfg(base_url, "chat_model", stream=True), clock=clock).ask("hi")
+    assert streamed.status == "ok" and (streamed.input_tokens, streamed.output_tokens) == (147, 31)
+    plain = await build_llm(_cfg(base_url, "chat_model", stream=False), clock=clock).ask("hi")
+    assert plain.status == "ok" and (plain.input_tokens, plain.output_tokens) == (147, 31)
+    assert "stream_options" not in recorder.requests[-1]["body"] and "stream_options" not in recorder.requests[-2]["body"]
+    recorder.usage = None
+    assert (await build_llm(_cfg(base_url, "chat_model", stream=True), clock=clock).ask("hi")).input_tokens == 0

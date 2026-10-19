@@ -104,6 +104,7 @@ class ChatModelAdapter(LlmPort):
         first = None
         parts: list[str] = []
         metadata: dict = {}
+        usage: dict = {}
         # 호출마다 넘긴다 — langchain-openai는 호출 kwargs를 요청 본문에 그대로 합친다(`_get_request_payload`). 모델 객체에
         # 박으면 자유 질문(`llm ask`)까지 JSON을 강요한다.
         fmt = response_format(self._cfg.response_format, schema)
@@ -116,22 +117,32 @@ class ChatModelAdapter(LlmPort):
                         first = round(self._ticker() - started, 3)
                     parts.append(str(getattr(chunk, "content", "") or ""))
                     metadata = getattr(chunk, "response_metadata", None) or metadata
+                    usage = getattr(chunk, "usage_metadata", None) or usage
                 text = "".join(parts)
             else:
                 message = await self.client().ainvoke(messages, **extra)
                 metadata = getattr(message, "response_metadata", None) or {}
+                usage = getattr(message, "usage_metadata", None) or {}
                 text = str(getattr(message, "content", message) or "")
         except Exception as exc:                                   # noqa: BLE001
             # 받은 조각은 버리지 않는다 — 끝 표시만 빠진 답일 수 있다(사내 측정 #4). 쓸지는 답을 아는 쪽(`lead.ask_json`)이 정한다.
             failed = LlmReply(status="error", asked_at=self._clock(), model=self._cfg.model,
                               error=f"{type(exc).__name__}: {exc}", partial_text="".join(parts),
                               latency_s=round(self._ticker() - started, 3), first_token_s=first,
-                              chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or ""))
+                              chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or ""), **_tokens(usage))
             return failed, _quota_info(exc)
         return LlmReply(status="ok", asked_at=self._clock(), model=self._cfg.model,
                         text=text, reported_model=metadata.get("model_name"),
                         latency_s=round(self._ticker() - started, 3), first_token_s=first,
-                        chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or "")), None
+                        chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or ""), **_tokens(usage)), None
+
+
+def _tokens(usage) -> dict:
+    """langchain의 `usage_metadata`(`input_tokens`·`output_tokens`) → 답의 두 칸. 없거나 모양이 다르면 0(모른다)."""
+    try:
+        return {"input_tokens": int(usage.get("input_tokens") or 0), "output_tokens": int(usage.get("output_tokens") or 0)}
+    except (AttributeError, TypeError, ValueError):
+        return {}
 
 
 def _quota_info(exc: Exception):

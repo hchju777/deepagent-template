@@ -311,3 +311,12 @@ def test_요약_끝에_전송_실패와_스트림_끊김을_센다():
     assert "전송 실패: 1회 — BadRequestError: Error code: 400 - filter server request failed" in text
     assert "스트림 끊김: 3회 — 받은 글로 읽음 2 · 다시 물음 1" in text
     assert "전송 실패" not in "\n".join(digest([cut])) and "스트림 끊김" not in "\n".join(digest([failed]))
+
+
+
+def test_요약_머리줄에_턴의_조각_수_종료_사유_토큰이_붙는다():
+    """R3-5d ②: 트레이스 파일 머리의 `턴: …`을 요약 머리줄로 올린다 — 어느 턴이 length였고 토큰을 얼마나 썼는지 라운드마다 뒤지지 않게."""
+    name, text = _file(_prompt(), json.dumps({"tasks": []}))[0]
+    turned = text.replace("결과: 읽었다\n", "결과: 읽었다\n응답: 274.0초\n턴: 조각 5,124 · 종료 length · 토큰 입력 14,712 · 출력 5,120\n")
+    head = [line for line in digest([(name, turned)]) if "r2 integrate" in line]
+    assert head and "응답 274.0초" in head[0] and "조각 5,124 · 종료 length · 토큰 입력 14,712 · 출력 5,120" in head[0]

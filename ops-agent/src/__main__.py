@@ -932,7 +932,7 @@ def _make_tracer(case_id: str, *, folder: Path):
     written: list[Path] = []
 
     def trace(node: str, round_no: int, prompt: str, text, error, latency_s=None, waited_s=None,
-              wait_source=None, note=None) -> None:
+              wait_source=None, note=None, stats=None) -> None:
         path = folder / f"{next(seq):02d}-r{round_no}-{node}.md"
         verdict = "읽었다" if error is None else f"**못 읽었다** — {error}"
         # 호출이 걸린 초 — 사내 실측 두 판이 시간 초과로 죽었는데 어느 호출이 몇 초였는지가 아무 데도 없었다.
@@ -941,6 +941,11 @@ def _make_tracer(case_id: str, *, folder: Path):
         took += f"대기: {waited_s:.1f}초(429{'·' + wait_source if wait_source else ''})\n" if waited_s else ""
         # 스트림이 끝 표시 없이 끊겼으면 — 받은 글로 읽었나, 다시 묻나(사내 측정 #4의 멈춤을 측정 #5에서 센다).
         took += f"스트림: {note}\n" if note else ""
+        # 턴의 조각 수·종료 사유·usage(R3-5d ②, 측정 #13 추가분 1) — 성공한 턴도. 모르는 것은 모른다고(끊긴 스트림엔 usage가 없다), 셋 다 모르면 줄이 없다.
+        if stats and (stats.get("chunks") or stats.get("finish_reason") or stats.get("input_tokens") or stats.get("output_tokens")):
+            tokens = (f"토큰 입력 {stats['input_tokens']:,} · 출력 {stats['output_tokens']:,}"
+                      if stats.get("input_tokens") or stats.get("output_tokens") else "토큰 모름")
+            took += f"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}\n"
         path.write_text(
             f"# {case_id} · {node} · 라운드 {round_no}\n\n"
             f"결과: {verdict}\n{took}\n"

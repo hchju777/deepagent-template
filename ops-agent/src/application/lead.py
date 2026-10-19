@@ -242,7 +242,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             # **스키마는 뗀다.** 스키마를 건 답이 깨졌다면 모델이 그 강제에 약한 것이고, 같은 스키마로 다시 물으면 같은 모양으로
             # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다.
             use_schema = None
-        text, failure, latency, waited, source, note = None, None, None, None, None, None
+        text, failure, latency, waited, source, note, stats = None, None, None, None, None, None, None
         timed_out = False
         try:
             reply = await llm.ask(asked, schema=use_schema)
@@ -253,6 +253,8 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         else:
             transport = reply.status == "error"
             latency = reply.latency_s
+            # 턴의 조각 수·종료 사유·usage — 성공한 턴도 트레이스 머리에(R3-5d ②, 측정 #13 추가분 1: length가 고정 상한인지 보려면 턴마다 보여야 한다)
+            stats = {"chunks": reply.chunks, "finish_reason": reply.finish_reason, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens}
             waited = reply.waited_s or None            # 429 뒤 기다린 초 — 트레이스가 적는다(브리프의 "429 횟수와 대기 초")
             source = reply.rate_source or None
             if reply.status == "error" and reply.partial_text:
@@ -283,17 +285,16 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
                     last = Parsed(False, error=f"시간 초과 {took}— {last.error}")
             elif not (reply.text or "").strip():
                 # 빈 응답 — 형식을 틀린 것이 아니다(고칠 글이 없다). 사유를 붙인 재질문이 아니라 같은 질문으로 한 번 더(사내 측정 #12b: 판정 턴 빈 응답 2회).
-                # 종료 사유가 토큰 상한(`length`)이면 같은 질문도 같은 상한에 걸린다 — 다시 안 묻는다.
+                # 종료 사유가 `length`여도 한 번 더 — 고정 상한이 아니었다(측정 #13 추가분 1: 같은 질문 재전송 7번 전부 stop, 생각 폭주). 사유는 문구에 남는다.
                 text = reply.text or ""
                 last = Parsed(False, error=f"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})")
                 transport = True
-                timed_out = reply.finish_reason == "length"
             else:
                 text = reply.text or ""
                 parsed = parse_object(text)
                 last = validate(parsed.data, model) if parsed.ok else parsed
         failure = None if last.ok else last.error
-        _tell(on_exchange, asked, text, failure, latency, waited, source, note)
+        _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)
         if last.ok:
             return last
         if timed_out:
@@ -315,11 +316,11 @@ def _first_sentence(error: str) -> str:
     return error.split(". ", 1)[0]
 
 
-def _tell(on_exchange, prompt: str, text, error, latency_s=None, waited_s=None, wait_source=None, note=None) -> None:
+def _tell(on_exchange, prompt: str, text, error, latency_s=None, waited_s=None, wait_source=None, note=None, stats=None) -> None:
     if on_exchange is None:
         return
     try:
-        on_exchange(prompt, text, error, latency_s, waited_s, wait_source, note)
+        on_exchange(prompt, text, error, latency_s, waited_s, wait_source, note, stats)
     except Exception:                                               # noqa: BLE001
         pass          # 트레이스는 편의다. 이것 때문에 조사가 멈추면 안 된다
 
@@ -386,10 +387,10 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
     def _hook(node: str, state: CaseState):
         if trace is None:
             return None
-        # 여섯째는 그 호출이 걸린 초, 일곱째는 429 뒤 기다린 초(둘 다 모르면 None), 아홉째는 스트림 끊김 메모 — 위치 인자라
-        # 옛 트레이서(`*row`)도 받는다.
-        return lambda prompt, text, error, latency_s=None, waited_s=None, wait_source=None, note=None: trace(
-            node, state.round, prompt, text, error, latency_s, waited_s, wait_source, note)
+        # 여섯째는 그 호출이 걸린 초, 일곱째는 429 뒤 기다린 초(둘 다 모르면 None), 아홉째는 스트림 끊김 메모, 열째는 턴의 조각 수·종료 사유·usage
+        # (R3-5d ②) — 위치 인자라 옛 트레이서(`*row`)도 받는다.
+        return lambda prompt, text, error, latency_s=None, waited_s=None, wait_source=None, note=None, stats=None: trace(
+            node, state.round, prompt, text, error, latency_s, waited_s, wait_source, note, stats)
 
     async def frame(state: CaseState) -> dict:
         prompt = fill(prompts["frame"],

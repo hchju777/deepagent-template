@@ -585,8 +585,9 @@ async def test_트레이스가_시도마다_날것을_건넨다(case):
     await frame(CaseState(case=case, round=2))
 
     assert len(seen) == 2                       # 실패한 1차도 남는다
-    (node, round_no, prompt, text, error, _latency, waited, source, note) = seen[0]
+    (node, round_no, prompt, text, error, _latency, waited, source, note, stats) = seen[0]
     assert (node, round_no, text, note) == ("frame", 2, "쓰레기", None)       # 끊김 메모는 끊겼을 때만
+    assert stats == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0}   # 열째는 턴 통계(R3-5d ②) — 대본은 모른다
     assert error and "JSON" in error and waited == 4.0 and source == "nextAccessTime"
     assert "다시" in seen[1][2]                  # 2차는 수리 프롬프트
     assert seen[1][4] is None and seen[1][6] is None   # 2차는 성공, 안 기다렸다
@@ -1332,14 +1333,36 @@ async def test_조각이_온_뒤의_멈춤은_본문이_없어도_시간_초과�
     assert len(none.prompts) == 1 and "시간 초과" in patch["llm_errors"][0]
 
 
-async def test_빈_응답은_같은_질문으로_한_번_다시_묻고_토큰_상한이면_다시_안_묻는다(case):
+async def test_빈_응답은_종료_사유와_무관하게_같은_질문으로_한_번_다시_묻는다(case):
     """사내 측정 #12b: 판정 턴이 빈 응답을 두 번(220초씩) 냈다. 빈 답은 형식을 틀린 것이 아니다 — 사유를 붙인 재질문("앞의 답을 읽을 수 없었다")이
-    아니라 같은 질문으로 한 번 더. 종료 사유가 토큰 상한(`length`)이면 같은 질문도 같은 상한에 걸린다 — 다시 안 묻고 그 사실을 적는다."""
+    아니라 같은 질문으로 한 번 더. 측정 #13 추가분 1: `length`는 고정 상한이 아니었다(같은 질문 재전송 7번 전부 stop — 생각 폭주) — length도 한 번 더.
+    종료 사유는 오류 문구에 남는다."""
     llm = ScriptedAdapter([_empty("stop"), reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
     assert "stopped_by" not in patch and len(llm.prompts) == 2 and llm.prompts[1] == llm.prompts[0] and llm.schemas[1] == llm.schemas[0]
-    capped = ScriptedAdapter([_empty("length")], clock=lambda: T0)
+    capped = ScriptedAdapter([_empty("length"), reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(capped, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
-    assert len(capped.prompts) == 1 and "빈 응답(조각 40개, 종료 사유 length)" in patch["llm_errors"][0]
+    assert "stopped_by" not in patch and len(capped.prompts) == 2
+    twice = ScriptedAdapter([_empty("length"), _empty("length")], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(twice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(twice.prompts) == 2 and "2회 시도 실패 — 빈 응답(조각 40개, 종료 사유 length)" in patch["llm_errors"][0]
+
+
+async def test_턴의_조각_수_종료_사유_토큰이_트레이스로_간다(case):
+    """R3-5d ②: 성공한 턴도 트레이스 머리에 조각 수·종료 사유·usage — 사내 측정 #13에서 length가 고정 상한인지 보려고 트레이스를 뒤졌다."""
+    from src.domain.llm import LlmReply
+
+    seen = []
+    full = LlmReply(status="ok", asked_at=T0, model="scripted", text=reply(tasks=[TASK]), chunks=3, finish_reason="stop", input_tokens=1200, output_tokens=80)
+    frame, _, _ = lead.make_lead(ScriptedAdapter([full], clock=lambda: T0), site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                 trace=lambda *a, **kw: seen.append(a))
+    await frame(CaseState(case=case))
+    assert seen[0][9] == {"chunks": 3, "finish_reason": "stop", "input_tokens": 1200, "output_tokens": 80}
+    plain = []
+    frame, _, _ = lead.make_lead(ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0), site_config=site_config(), prompts=PROMPTS, max_rounds=3,
+                                 trace=lambda *a, **kw: plain.append(a))
+    await frame(CaseState(case=case))
+    assert plain[0][9] == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0}            # 모르면 0·빈 문자열
