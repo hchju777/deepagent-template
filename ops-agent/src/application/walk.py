@@ -162,6 +162,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     evidence: list[EvidenceRef] = []
     started = clock() if clock is not None else None
     counter = 0
+    aside = 0.0                                                    # 메시지 읽기에 쓴 초 — 시간 상한 밖(R3-5e ⑥)
     from src.application.briefing import next_task_number          # 지연 import — briefing이 이 모듈을 import한다
 
     start = next_task_number(state)
@@ -173,7 +174,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         """읽기 수·시간 상한에 걸렸으면 그 문장(깊이는 호출부가 본다). 상한은 코드가 쥔다(규율 6)."""
         if counter >= MAX_READS:
             return f"읽기 {MAX_READS} 상한 — {writer}의 {label}부터는 리드가"
-        if elapsed() > MAX_SECONDS:
+        if elapsed() - aside > MAX_SECONDS:
             return f"{MAX_SECONDS:.0f}초 상한 — {writer}의 {label}부터는 리드가"
         return ""
 
@@ -425,8 +426,12 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
             else:
                 seen.add(label)
+                before = elapsed()
                 _, got = await run(f"걷기 — {writer}{tag}를 댄 키의 포인터 메시지 {label}", "kafka.message_at",
                                    {"topic": topic, "partition": part, "offset": off})
+                # 메시지 한 건 읽기는 브로커 왕복이라 걷기의 시간 상한 밖이다(R3-5e ⑥, 측정 #15 메모: 두 건이 53초로 상한에 걸렸다). 읽기 수 상한은
+                # 그대로 — 세는 것이지 재는 것이 아니다. `seconds`는 실제 시간 그대로.
+                aside += elapsed() - before
                 ev = got.evidence[0].id if got.evidence else ""
                 data = runner.raw(ev) if got.status == "ok" and ev else None
                 readings[label] = ("ok" if isinstance(data, dict) else "fail", "")

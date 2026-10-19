@@ -618,3 +618,36 @@ async def test_포인터_메시지_읽기가_실패하면_다_못_봤다():
                            clock=lambda: T0))["walk"]
     assert walk.hops[-1].status == "읽기 실패 — 대본 없음" and not walk.hops[-1].bad
     assert walk.stopped == "입력을 다 못 봤다 — W0(읽기 실패 t[0]@5)"
+
+
+async def test_시간_상한은_메시지_읽기에_쓴_시간을_빼고_잰다():
+    """측정 #15 메모: 메시지 한 건 읽기(브로커 왕복)로 걷기 두 건이 53초 — 30초 상한에 걸렸다. 그 시간은 상한 밖이다(읽기 수 상한은 그대로 — 세는 것이지
+    재는 것이 아니다). 같은 시간이 키 읽기에 들면 전처럼 상한이다. `seconds`는 실제로 걸린 시간 그대로."""
+    class Clock:
+        def __init__(self):
+            self.n = 0
+
+        def __call__(self):
+            return T0 + timedelta(seconds=20 * self.n)
+
+    class Slow(_Reads):
+        def __init__(self, table, clock, slow):
+            super().__init__(table)
+            self.clock, self.slow = clock, slow
+
+        async def run(self, task, *, case):
+            if task.action == self.slow:
+                self.clock.n += 2                                                            # 그 읽기 한 번에 40초
+            return await super().run(task, case=case)
+
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(record=[], metadata={"event_type": "W1"}),
+             ("kafka.message_at", "t"): _msg({"rows": [{"ws": "A", "n": 1}]}),
+             ("code.resources", "W1"): _res("W1", [])}
+    clock = Clock()
+    walk = (await run_walk(_pointed(), runner=Slow(table, clock, "kafka.message_at"), classes=frozenset({"W0", "W1"}), clock=clock))["walk"]
+    assert "상한" not in walk.stopped and walk.stopped.startswith("입력을 모른다 — W1") and walk.seconds >= 40
+    assert [h.key for h in walk.hops] == ["alarm:stats:L1", "in:a:L1", "t[0]@5"]
+    clock = Clock()
+    walk = (await run_walk(_pointed(), runner=Slow(table, clock, "redis.get"), classes=frozenset({"W0", "W1"}), clock=clock))["walk"]
+    assert walk.stopped == f"{MAX_SECONDS:.0f}초 상한 — W0의 메시지부터는 리드가"

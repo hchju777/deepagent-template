@@ -2537,7 +2537,7 @@ CASES += [
  ("쓰기 구간도 걷는다", WK, "    m = _WRITES_AT.search(text)\n    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [WALK_T]),
  ("깊이 상한이 없다", WK, "        if depth >= MAX_DEPTH:", "        if False:", [CAP_T]),
  ("읽기 상한이 없다", WK, "        if counter >= MAX_READS:\n            return f\"읽기", "        if False:\n            return f\"읽기", [CAP_T]),
- ("시간 상한이 없다", WK, "        if elapsed() > MAX_SECONDS:", "        if False:", [CAP_T]),
+ ("시간 상한이 없다", WK, "        if elapsed() - aside > MAX_SECONDS:", "        if False:", [CAP_T]),
  ("쓴 쪽 모름에서 uses를 안 가리킨다", WK, "            rungs.append(Rung(action=\"code.uses\", params={\"name\": declared_names.get(ev, stop_hop.key)}, evidence=ev))", "            pass", [UNKNOWN_T]),
  ("scan 뒤 전부 읽는다", WK, "for k in scanned_keys[:SCAN_READS]]", "for k in scanned_keys[:SCAN_READS * 2]]", [UNKNOWN_T]),
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
@@ -2640,7 +2640,7 @@ CASES += [
  ("레포 안내에 서비스를 안 적는다", QY, "    shown = \", \".join(f\"{repo}({', '.join(repo_services.get(repo, ())) or '서비스 없음'})\" for repo in repos)", "    shown = \", \".join(repos)", [REPO_HINT_T, RES_SVC_T]),
  ("repo_services가 서비스를 안 묶는다", FLW, "        out.setdefault(svc.repo, []).append(name)", "        out.setdefault(svc.repo, [name])", [REPO_SVC_T, RES_SVC_T]),
  ("등재 목록에 uses의 service 인자가 없다", AC, "    \"code.uses\":           (\"code\",  \"uses\",          (\"name\",),               (\"service\",)),", "    \"code.uses\":           (\"code\",  \"uses\",          (\"name\",),               ()),", [ACT_USES_T, RES_SVC_T]),
- ("번역이 걷기의 후보를 안 쓴다", ND, "    resolved = {h.writer: tuple(h.candidates) for h in (walk.hops if walk is not None else []) if h.writer and h.candidates}", "    resolved = {}", [CLS_T]),
+ ("번역이 걷기의 후보를 안 쓴다", ND, "    resolved = {h.writer: tuple(h.candidates) for h in hops if h.writer and h.candidates}", "    resolved = {}", [CLS_T]),
  ("공유 레포 후보에 caveat을 안 단다", ND, "            note = (f\" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)\" if shared", "            note = (\"\" if shared", [CLS_T]),
  ("걷기 노드가 레포 지도를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by", "declared_by=deps.declared_by", [WNODE_T]),
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
@@ -3078,7 +3078,20 @@ CASES += [
  ("조각 메타데이터를 통째로 덮는다", LCM, "                    metadata = merge_metadata(metadata, getattr(chunk, \"response_metadata\", None))", "                    metadata = getattr(chunk, \"response_metadata\", None) or metadata", [USAGE_T]),
  ("빈 값이 이전 값을 지운다", LCM, "        return {**so_far, **{k: v for k, v in dict(fresh or {}).items() if v not in (None, \"\")}}", "        return {**so_far, **{k: v for k, v in dict(fresh or {}).items()}}", [MERGE_T]),
 ]
-assert len(CASES) >= 954, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5e ⑥ — 레포 이름 번역, 못 본 멈춤 뒤의 상한, 메시지 읽기 시간 ──
+REPO_T = "tests/application/test_verdict.py::test_번역은_레포_이름과_홉_표의_쓴_쪽_글자도_그_레포의_서비스로_바꾼다"
+UNSEEN_T = "tests/application/test_verdict.py::test_걷기가_멈춘_자리를_못_봤으면_high는_medium이고_caveat에_그_멈춤이_남는다"
+TIME_T = "tests/application/test_walk.py::test_시간_상한은_메시지_읽기에_쓴_시간을_빼고_잰다"
+CASES += [
+ ("레포 이름 component를 안 바꾼다", ND, "        if link.component in by_repo and link.component not in class_services:", "        if False:", [REPO_T]),
+ ("홉 표의 쓴 쪽 글자를 레포로 안 본다", ND, "        if len(h.candidates) > 1 and h.service and h.service not in by_repo:", "        if False:", [REPO_T]),
+ ("못 본 멈춤에 상한을 안 건다", ND, "    if not (stopped.startswith(UNSEEN_STOPS) or \" 상한 — \" in stopped or \"의 자원을 못 읽었다 — \" in stopped):\n        return verdict", "    if True:\n        return verdict", [UNSEEN_T]),
+ ("본 멈춤에도 상한을 건다", ND, "    if not (stopped.startswith(UNSEEN_STOPS) or \" 상한 — \" in stopped or \"의 자원을 못 읽었다 — \" in stopped):\n        return verdict", "    if False:\n        return verdict", [UNSEEN_T]),
+ ("verify 노드가 못 본 멈춤 상한을 안 거친다", ND, "            capped = cap_not_a_defect(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))", "            capped = cap_not_a_defect(cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk))", [UNSEEN_T]),
+ ("메시지 읽기 시간을 상한에서 안 뺀다", WK, "                aside += elapsed() - before", "                aside += 0.0", [TIME_T]),
+]
+assert len(CASES) >= 960, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

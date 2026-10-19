@@ -905,6 +905,23 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence, walk: Wa
     return verdict.model_copy(update={"confidence": confidence, "caveats": verdict.caveats + [note]})
 
 
+UNSEEN_STOPS = ("키가 없다 — ", "입력을 모른다 — ", "입력을 다 못 봤다 — ")
+
+
+def cap_unseen_stop(verdict: Verdict, *, walk: Walk | None) -> Verdict:
+    """걷기가 멈춘 자리를 **못 봤으면** 확신 상한 medium + caveat에 그 멈춤 — 연결 상한(`cap_unlinked_key`)과 같은 모양, 되묻지 않는다(R3-5e ⑥).
+    측정 #15 P1-8: high 4건이 모두 "키가 없다"에서 한 홉 모자랐다 — 멈춘 자리 너머를 아무도 안 봤는데 high는 근거가 한 칸 비어 있다. 못 본 멈춤은 키가
+    없다·입력을 모른다(포인터 없음 포함)·입력을 다 못 봤다(읽기 실패 포함)·자원을 못 읽었다·깊이/읽기/초 상한(사람 결정 10-19). 멈춘 자리를 본 멈춤(입력이
+    다 정상·입력 메시지가 나쁘다·키를 만든 메시지가 토픽에 없다·쓴 쪽을 모른다/0행 — 값은 봤다)은 밖. 바뀐 것이 없으면 같은 객체."""
+    if walk is None or verdict.confidence != "high":
+        return verdict
+    stopped = walk.stopped
+    if not (stopped.startswith(UNSEEN_STOPS) or " 상한 — " in stopped or "의 자원을 못 읽었다 — " in stopped):
+        return verdict
+    return verdict.model_copy(update={"confidence": "medium",
+                                      "caveats": verdict.caveats + [f"걷기가 멈춘 자리를 못 봤다 — {stopped}; 확신 상한 medium"]})
+
+
 def not_a_defect_problems(verdict: Verdict, *, walk: Walk | None, plan_tasks) -> list[str]:
     """`not_a_defect`(결함 아님)의 조건(R3-5d ⑤, 사람 결정 10-19 (3)) — "증거 id 하나 이상"은 모든 판정이 이미 지나 구분력이 없다. 15건에 대 보면
     정상 공백 3건만 지나고 12건이 탈락하는 조건: (a) 걷기가 `입력이 다 정상`에서 멈췄다(포인터 메시지 홉 포함) (b) 홉 표에 `나쁨`(단일값이 거르는 줄에
@@ -947,14 +964,32 @@ def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | No
     """component가 인덱스의 **클래스 이름**이면 그 서비스로 바꾸고 caveat(R3-3 ⑤). 측정 #9 c-2: 리드가 쓴 쪽 클래스 이름을 원인 칸에 적었고
     verify가 "서비스 아닌 component"로 걷어냈다 — 클래스는 서비스 안에 있으니 걷어낼 것이 아니라 번역할 것이다. 두 레포면 걷기가 가른 쪽(홉의
     후보 — 한 레포를 여러 서비스가 공유하면 그 전부라 첫 것으로 바꾸고 caveat에 전부, R3-4 ①), 못 갈랐으면 첫 것 + "전부 후보". 바뀐 것이 없으면
-    같은 객체."""
-    if not class_services:
+    같은 객체.
+
+    **레포 이름**과 홉 표의 쓴 쪽 글자 `<레포>(서비스 N개 공유)`도 같은 번역이다(R3-5e ⑥, 측정 #15 P1-7: 리드가 그 칸의 글자를 최상위에(c-4 → 강등),
+    레포 이름을 후보에(c-7 → 제외) 냈다) — 레포는 서비스가 아니지만 그 레포의 서비스 전부가 후보다."""
+    hops = walk.hops if walk is not None else []
+    if not class_services and not service_repos and not hops:
         return verdict
-    resolved = {h.writer: tuple(h.candidates) for h in (walk.hops if walk is not None else []) if h.writer and h.candidates}
+    resolved = {h.writer: tuple(h.candidates) for h in hops if h.writer and h.candidates}
+    by_repo: dict[str, tuple[str, ...]] = {}
+    for svc, repo in sorted((service_repos or {}).items()):
+        if repo != svc and repo not in service_repos:                                   # 서비스가 곧 레포(지도 없음)면 서비스 이름이다
+            by_repo[repo] = by_repo.get(repo, ()) + (svc,)
+    for h in hops:
+        if len(h.candidates) > 1 and h.service and h.service not in by_repo:          # 표의 글자 그대로 — 리드는 그 칸을 베낀다
+            by_repo[h.service] = tuple(h.candidates)
     caveats: list[str] = []
 
     def fix(link: CauseLink | None) -> CauseLink | None:
-        if link is None or link.component not in class_services:
+        if link is None:
+            return link
+        if link.component in by_repo and link.component not in class_services:
+            candidates = by_repo[link.component]
+            shared = f" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)" if len(candidates) > 1 else ""
+            caveats.append(f"component {link.component}는 서비스가 아니라 레포 — 그 레포의 서비스 {candidates[0]}로 바꿨다{shared}")
+            return link.model_copy(update={"component": candidates[0]})
+        if link.component not in class_services:
             return link
         services = class_services[link.component]
         if not services:
@@ -1143,7 +1178,8 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         if not problems:
             if not deps.check_discovery:
                 return {"verify_problems": [], **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
-            capped = cap_not_a_defect(cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk))
+            capped = cap_not_a_defect(cap_unseen_stop(
+                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))
             return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.

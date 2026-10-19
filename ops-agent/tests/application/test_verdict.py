@@ -767,3 +767,59 @@ def test_판정_예시와_프롬프트가_결함_아님과_basis를_말한다():
     assert "not_a_defect" in example["verdict_type"] and example["basis"] == []
     text = (Path(__file__).resolve().parents[2] / "config/prompts/investigate-conclude.md").read_text(encoding="utf-8")
     assert "`not_a_defect`(결함 아님" in text and "`basis`" in text and "입력이 다 정상" in text
+
+
+# ── R3-5e ⑥ — 레포 이름·홉 표 글자의 번역, 못 본 멈춤 뒤의 확신 상한 ──
+
+async def test_번역은_레포_이름과_홉_표의_쓴_쪽_글자도_그_레포의_서비스로_바꾼다(case):
+    """측정 #15 P1-7: 홉 표 쓴 쪽 칸이 `<레포>(서비스 5개 공유)`라 리드가 그 글자(c-4 최상위 → 강등)와 레포 이름(c-7 후보 → 제외)을 component로 냈다.
+    레포는 서비스가 아니지만 그 레포의 서비스 전부가 후보다 — 첫 것으로 바꾸고 caveat에 전부. 홉 표 글자는 걷기가 있어야 안다."""
+    from src.application.nodes import translate_classes
+    from src.domain.case import Hop, Walk
+
+    repos = {"col": "dt-col", "p1": "dt-proc", "p2": "dt-proc", "p3": "dt-proc"}
+    walk = Walk(hops=[Hop(key="k", writer="Shared", service="dt-proc(서비스 3개 공유)", candidates=["p1", "p2", "p3"], status="정상")])
+    v = verdict(root_cause=cause("dt-proc(서비스 3개 공유)", "t-1.e1"),
+                alternates=[cause("dt-proc", "t-1.e1", confidence="low"), cause("dt-col", "t-1.e1", confidence="low")])
+    got = translate_classes(v, class_services={}, walk=walk, service_repos=repos)
+    assert (got.root_cause.component, [a.component for a in got.alternates]) == ("p1", ["p1", "col"])
+    assert got.caveats == [
+        "component dt-proc(서비스 3개 공유)는 서비스가 아니라 레포 — 그 레포의 서비스 p1로 바꿨다 (레포를 p1, p2, p3가 공유 — 첫 것, 전부 후보)",
+        "component dt-proc는 서비스가 아니라 레포 — 그 레포의 서비스 p1로 바꿨다 (레포를 p1, p2, p3가 공유 — 첫 것, 전부 후보)",
+        "component dt-col는 서비스가 아니라 레포 — 그 레포의 서비스 col로 바꿨다"]
+    text_only = verdict(root_cause=cause("dt-proc(서비스 3개 공유)", "t-1.e1"))
+    assert translate_classes(text_only, class_services={}, walk=None, service_repos=repos) is text_only          # 걷기가 없으면 그 글자를 모른다
+    same = verdict(root_cause=cause("col", "t-1.e1"))
+    assert translate_classes(same, class_services={}, walk=None, service_repos={"col": "col"}) is same           # 서비스가 곧 레포면 건드리지 않는다
+    # verify 노드 — 번역된 component는 서비스라 문제가 아니다
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset(repos), service_repos=repos))
+    patch = await nodes["verify"](_state(case, verdict=v, walk=walk))
+    assert patch["verify_problems"] == [] and patch["verdict"].root_cause.component == "p1"
+
+
+async def test_걷기가_멈춘_자리를_못_봤으면_high는_medium이고_caveat에_그_멈춤이_남는다(case):
+    """측정 #15 P1-8: high 4건이 모두 "키가 없다"에서 한 홉 모자랐다 — 걷기가 멈춘 자리를 못 본 판정의 high는 근거가 한 칸 비어 있다. 연결 상한과
+    같은 모양: 되묻지 않고 medium + caveat에 그 멈춤. 멈춘 자리를 본 멈춤(다 정상·메시지가 나쁘다·토픽에 없다)과 high 아닌 판정은 그대로."""
+    from src.application.nodes import cap_unseen_stop
+    from src.domain.case import Walk
+
+    unseen = ["키가 없다 — alarm:source:L1", "입력을 모른다 — W(인덱스 자원 0 — 메시지 입력일 수 있다 · 포인터 없음)", "입력을 다 못 봤다 — W(읽기 실패 k)",
+              "읽기 15 상한 — W의 k부터는 리드가", "30초 상한 — W의 k부터는 리드가", "깊이 4 상한 — W부터는 리드가", "W (x.py:L1)의 자원을 못 읽었다 — 대본 없음"]
+    for stopped in unseen:
+        capped = cap_unseen_stop(verdict(), walk=Walk(stopped=stopped))
+        assert capped.confidence == "medium" and capped.caveats == [f"걷기가 멈춘 자리를 못 봤다 — {stopped}; 확신 상한 medium"], stopped
+    seen = ["입력이 다 정상 — W", "입력 메시지가 나쁘다 — W의 t[0]@5(발행 선언 없음(우리 밖))",
+            "키를 만든 메시지가 토픽에 없다 — W의 t[0]@5(보존 범위 100~105 · 발행 선언: a)"]
+    for stopped in seen:
+        v = verdict()
+        assert cap_unseen_stop(v, walk=Walk(stopped=stopped)) is v, stopped
+    low = verdict(confidence="medium")
+    assert cap_unseen_stop(low, walk=Walk(stopped=unseen[0])) is low and cap_unseen_stop(verdict(), walk=None) is not None
+    assert cap_unseen_stop(low, walk=None) is low
+    # verify 노드가 건다 — 대본 경로(check_discovery=False)는 안 건다
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    patch = await nodes["verify"](_state(case, verdict=verdict(), walk=Walk(stopped=unseen[0])))
+    assert patch["verify_problems"] == [] and patch["verdict"].confidence == "medium"
+    assert patch["verdict"].caveats == ["걷기가 멈춘 자리를 못 봤다 — 키가 없다 — alarm:source:L1; 확신 상한 medium"]
+    loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
+    assert await loose["verify"](_state(case, verdict=verdict(), walk=Walk(stopped=unseen[0]))) == {"verify_problems": []}
