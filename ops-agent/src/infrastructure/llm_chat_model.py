@@ -116,7 +116,7 @@ class ChatModelAdapter(LlmPort):
                     if first is None:
                         first = round(self._ticker() - started, 3)
                     parts.append(str(getattr(chunk, "content", "") or ""))
-                    metadata = getattr(chunk, "response_metadata", None) or metadata
+                    metadata = merge_metadata(metadata, getattr(chunk, "response_metadata", None))
                     usage = getattr(chunk, "usage_metadata", None) or usage
                 text = "".join(parts)
             else:
@@ -135,6 +135,16 @@ class ChatModelAdapter(LlmPort):
                         text=text, reported_model=metadata.get("model_name"),
                         latency_s=round(self._ticker() - started, 3), first_token_s=first,
                         chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or ""), **_tokens(usage)), None
+
+
+def merge_metadata(so_far: dict, fresh) -> dict:
+    """조각의 `response_metadata`를 모은다 — **비지 않은 값만** 덮는다. 측정 #15 P1-6: 리드 턴의 종료 사유가 30/30 "모름"이었다 — 끝 표시 뒤에 오는
+    조각(usage만 실은 것 등)의 메타데이터가 비어 있지 않아(langchain-openai가 조각마다 붙이는 값) 통째로 덮으면서 `finish_reason`이 사라졌다. 리드는
+    max_tokens 상한이 있어 `length`를 알아야 한다. 종료 사유가 다시 오면 마지막 비지 않은 것. 모양이 이상하면 모은 것 그대로."""
+    try:
+        return {**so_far, **{k: v for k, v in dict(fresh or {}).items() if v not in (None, "")}}
+    except (TypeError, ValueError):
+        return so_far
 
 
 def _tokens(usage) -> dict:

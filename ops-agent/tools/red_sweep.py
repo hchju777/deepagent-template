@@ -3070,7 +3070,15 @@ CASES += [
  ("리드가 이미 적은 id에도 또 단다", ND, "if e in incomplete and not _id_mentioned(e, verdict.caveats)})", "if e in incomplete})", [TRUNC_T]),
 ]
 
-assert len(CASES) >= 952, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5e ⑤ — 조각 메타데이터는 비지 않은 값만 덮는다 ──
+USAGE_T = "tests/infrastructure/test_llm_adapters.py::test_게이트웨이가_실은_usage가_답에_남는다"
+MERGE_T = "tests/infrastructure/test_llm_adapters.py::test_조각_메타데이터는_비지_않은_값만_덮는다"
+CASES += [
+ ("조각 메타데이터를 통째로 덮는다", LCM, "                    metadata = merge_metadata(metadata, getattr(chunk, \"response_metadata\", None))", "                    metadata = getattr(chunk, \"response_metadata\", None) or metadata", [USAGE_T]),
+ ("빈 값이 이전 값을 지운다", LCM, "        return {**so_far, **{k: v for k, v in dict(fresh or {}).items() if v not in (None, \"\")}}", "        return {**so_far, **{k: v for k, v in dict(fresh or {}).items()}}", [MERGE_T]),
+]
+assert len(CASES) >= 954, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

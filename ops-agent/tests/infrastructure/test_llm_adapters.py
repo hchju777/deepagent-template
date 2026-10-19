@@ -325,8 +325,21 @@ async def test_게이트웨이가_실은_usage가_답에_남는다(gateway, cloc
     recorder.usage = {"prompt_tokens": 147, "completion_tokens": 31, "total_tokens": 178}
     streamed = await build_llm(_cfg(base_url, "chat_model", stream=True), clock=clock).ask("hi")
     assert streamed.status == "ok" and (streamed.input_tokens, streamed.output_tokens) == (147, 31)
+    # usage를 실은 뒷조각이 끝 조각의 종료 사유·모델 이름을 지우지 않는다(R3-5e ⑤, 측정 #15 P1-6: 리드 턴 30/30 "모름")
+    assert streamed.finish_reason == "stop" and streamed.reported_model
     plain = await build_llm(_cfg(base_url, "chat_model", stream=False), clock=clock).ask("hi")
     assert plain.status == "ok" and (plain.input_tokens, plain.output_tokens) == (147, 31)
     assert "stream_options" not in recorder.requests[-1]["body"] and "stream_options" not in recorder.requests[-2]["body"]
     recorder.usage = None
     assert (await build_llm(_cfg(base_url, "chat_model", stream=True), clock=clock).ask("hi")).input_tokens == 0
+
+
+def test_조각_메타데이터는_비지_않은_값만_덮는다():
+    """측정 #15 P1-6: 끝 표시 뒤에 오는 조각(usage만 실은 것 등)의 `response_metadata`가 비어 있지 않아 통째로 덮으면서 종료 사유가 사라졌다 —
+    리드는 max_tokens 상한이 있어 `length`를 알아야 한다. 비지 않은 값만 덮고, 종료 사유가 다시 오면 마지막 것."""
+    from src.infrastructure.llm_chat_model import merge_metadata
+
+    assert merge_metadata({"finish_reason": "stop", "model_name": "m"}, {"model_provider": "openai", "finish_reason": None, "model_name": ""}) == {
+        "finish_reason": "stop", "model_name": "m", "model_provider": "openai"}
+    assert merge_metadata({"finish_reason": "stop"}, {"finish_reason": "length"}) == {"finish_reason": "length"}
+    assert merge_metadata({"a": 1}, None) == {"a": 1} and merge_metadata({"a": 1}, "이상한 모양") == {"a": 1}

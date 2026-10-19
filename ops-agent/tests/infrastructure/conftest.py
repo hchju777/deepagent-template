@@ -27,7 +27,7 @@ class _Recorder:
         self.retry_after = None      # 429에 붙일 Retry-After 헤더
         self.stall: list = []        # 비어 있지 않으면 스트리밍 요청마다 하나씩 꺼내 — 조각을 보낸 뒤 끝 표시 없이 그 초만큼 멈춘다
         self.finish = "stop"         # 스트림 마지막 조각의 종료 사유 — `length`면 토큰 상한(R3-5c ②)
-        self.usage = None            # 설정하면 마지막 조각(스트림)·응답(비스트림)에 `usage`를 싣는다 — 사내 게이트웨이의 모양(R3-5d ②)
+        self.usage = None            # 설정하면 끝 표시 뒤 본문 없는 뒷조각(스트림)·응답(비스트림)에 `usage`를 싣는다(R3-5d ②, R3-5e ⑤)
 
 
 def _handler_for(recorder: _Recorder):
@@ -89,14 +89,20 @@ def _handler_for(recorder: _Recorder):
                 last = n == len(pieces) - 1 and stall is None
                 chunk = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": model,
                          "choices": [{"index": 0, "delta": {"role": "assistant", "content": piece},
-                                      "finish_reason": recorder.finish if last else None}],
-                         # 사내 게이트웨이는 `stream_options` 없이도 마지막 조각에 usage를 싣는다(사람 확인 10-19)
-                         **({"usage": recorder.usage} if last and recorder.usage else {})}
+                                      "finish_reason": recorder.finish if last else None}]}
                 self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
             if stall is not None:
                 time.sleep(stall)
                 return
+            if recorder.usage:
+                # 게이트웨이는 `stream_options` 없이도 usage를 싣는다(사람 확인 10-19) — 어느 조각에 싣는지는 게이트웨이의 일이고, 여기서는 끝 표시
+                # **뒤** 본문 없는 조각에 싣는다. 그 뒷조각의 `response_metadata`가 비어 있지 않아(langchain-openai가 조각마다 붙이는 값) 종료
+                # 사유를 덮던 것이 측정 #15 P1-6(30/30 "모름")의 모양이다.
+                trailer = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": model,
+                           "choices": [{"index": 0, "delta": {}, "finish_reason": None}], "usage": recorder.usage}
+                self.wfile.write(f"data: {json.dumps(trailer, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.flush()
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
     return Handler
