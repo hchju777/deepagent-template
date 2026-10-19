@@ -684,11 +684,19 @@ class _WithClass(_Src):
 class _WithBase(_Src):
     """읽기는 부모(믹스인)의 `_run`에, 쓰기는 자식에 — 사내 처리기의 모양(측정 #13 추가분 3: 상속 38파일, 공용 필터 믹스인 셋)."""
     FILES = {**_Src.FILES, "batch/__init__.py": "",
+             # `workday`는 부모에 있지만 Sub의 진입(`_run` → `handle`)에서 안 닿는다 — 다른 자식(Other)만 부른다(측정 #15 P0-2의 `<근무일 키>` 모양).
              "batch/base.py": ("class Base:\n"
                                "    def _run(self, cfg, redis):\n"
                                "        src = redis.get(cfg[\"redis_key\"][\"alarm_source\"].format(line=\"L1\"))\n"
-                               "        return self.handle(cfg, src)\n"),
+                               "        return self.handle(cfg, src)\n"
+                               "\n"
+                               "    def workday(self, cfg, redis):\n"
+                               "        return redis.get(cfg[\"redis_key\"][\"workday\"].format(line=\"L1\"))\n"),
              "batch/mid.py": "from batch.base import Base\n\n\nclass Mid(Base):\n    pass\n",
+             "batch/other.py": ("from batch.mid import Mid\n\n\n"
+                                "class Other(Mid):\n"
+                                "    def handle(self, cfg, src):\n"
+                                "        return self.workday(cfg, self.redis)\n"),
              "batch/sub.py": ("from batch.mid import Mid\n\n\n"
                               "class Sub(Mid):\n"
                               "    def handle(self, cfg, src):\n"
@@ -1029,9 +1037,12 @@ async def test_filter_lines의_범위와_컴포넌트_링크에_부모_클래스
     from src.knowledge import index as ix
     from src.knowledge.schema import Deployment, Service, Topology
 
+    # `Audit.audit`은 Child의 진입에서 안 닿는 부모 메서드(다른 자식 Keeper만 부른다) — 그 파일의 비교식은 범위 밖이다(R3-5e ②).
     files = {**FILES, "pipe/base.py": 'class JobBase:\n    def _run(self, rows):\n        rows = self.components.get("shape_filter").apply(rows)\n'
                                        '        return [r for r in rows if r["state"] != "-"]\n',
-             "pipe/child.py": "from pipe.base import JobBase\n\n\nclass Child(JobBase):\n    pass\n"}
+             "pipe/mixin.py": 'class Audit:\n    def audit(self, rows):\n        return [r for r in rows if r["state"] != "-"]\n',
+             "pipe/keeper.py": "from pipe.mixin import Audit\n\n\nclass Keeper(Audit):\n    def run(self, rows):\n        return self.audit(rows)\n",
+             "pipe/child.py": "from pipe.base import JobBase\nfrom pipe.mixin import Audit\n\n\nclass Child(JobBase, Audit):\n    pass\n"}
 
     class Src:
         async def files(self):
@@ -1048,4 +1059,25 @@ async def test_filter_lines의_범위와_컴포넌트_링크에_부모_클래스
     code.attach_index(await ix.build_index({"dt-proc": Src()}, commits={"dt-proc": "c2"}))
     scan = await code.filter_lines("Child", fields={"state": "-"})
     assert scan.files == ["pipe/child.py", "pipe/base.py", "pipe/shapes.py"] and scan.linked == ["shape_filter"]
-    assert [(h.path, h.line) for h in scan.hits] == [("pipe/base.py", 4)]
+    assert [(h.path, h.line) for h in scan.hits] == [("pipe/base.py", 4)] and "pipe/mixin.py" not in scan.files
+
+
+
+async def test_code_resources는_진입에서_호출_그래프로_닿는_부모_메서드의_자원만_센다(flow_code):
+    """측정 #15 P0-2: 부모 믹스인의 멤버 자원을 전부 붙이니 `<근무일 키>` 읽기가 홉 29/33에 실렸다 — 그 메서드를 부르는 파일은 75개 중 6개였고 정상 배지에
+    가짜 멈춤 `키가 없다`가 났다. 진입 = 자기 메서드 + 호출 엣지가 하나도 없는 부모 메서드(프레임워크가 부르는 `_run`); 거기서 `calls`로 닿는 부모 메서드만.
+    둘째 줄에 뺀 수를 적는다."""
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+
+    idx = await ix.build_index({"dt-core": _WithBase()}, names=[Name("rediskey", "alarm:source:{line}", "redis_key.alarm_source"),
+                                                                Name("rediskey", "workday:{line}", "redis_key.workday"),
+                                                                Name("topic", "mx.alarm.main", "infra.kafka.producer.topic.topic1")],
+                               commits={"dt-core": "c0ffee"})
+    flow_code.attach_index(idx)
+    sub = await flow_code.resources("Sub")
+    assert sub.status == "ok" and "  읽기 1:" in sub.data and "workday" not in sub.data
+    assert sub.data.splitlines()[1] == "  부모 클래스의 자원 포함: batch.mid.Mid, batch.base.Base · 진입에서 안 닿은 부모 메서드 1개 뺌"
+    other = await flow_code.resources("Other")
+    assert "  읽기 2:" in other.data and "workday:{line} [rediskey] — batch.base.Base.workday (batch/base.py:L7)" in other.data
+    assert "뺌" not in other.data.splitlines()[1]

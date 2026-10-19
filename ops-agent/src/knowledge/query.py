@@ -207,21 +207,49 @@ def ancestors(index: Index, sid: int) -> list[int]:
     return out
 
 
+def reachable_members(index: Index, sid: int) -> tuple[list[int], list[int], int]:
+    """클래스의 **진입에서 호출 그래프로 닿는** 메서드들(R3-5e ②) → (자기 메서드들, 닿은 부모 메서드들, 안 닿은 부모 메서드 수). 진입 = 자기 메서드 전부 +
+    부모 메서드 중 `calls` 엣지가 하나도 안 들어오는 것(프레임워크가 부르는 `_run` 같은 것 — 사람 결정 10-19, 토폴로지에 진입 이름을 적게 하지 않는다).
+    거기서 `calls`(exact·candidate — 템플릿 메서드의 `self.handle()`은 하위 클래스들로 candidate)로 닿는 부모 메서드만, 이 클래스와 부모들의 메서드 안에서.
+    측정 #15 P0-2: 부모 믹스인의 메서드 전부를 붙이니 다른 자식만 부르는 `<근무일 키>` 읽기가 홉 29/33에 실렸다(그 메서드를 부르는 파일은 75개 중 6개).
+    함수면 자기만."""
+    s = index.symbols[sid]
+    if s.kind != "class":
+        return [sid], [], 0
+    bases = ancestors(index, sid)
+    own = [m.id for m in index.symbols if m.class_id == sid]
+    parents = [m.id for b in bases for m in index.symbols if m.class_id == b]
+    family = set(own) | set(parents)
+    roots = own + [m for m in parents if not index.edges_to(m, "calls")]
+    seen: set[int] = set()
+    stack = list(roots)
+    while stack:
+        m = stack.pop()
+        if m in seen:
+            continue
+        seen.add(m)
+        stack += [e.dst for e in index.edges_from(m, "calls") if e.dst in family and e.dst not in seen]
+    reached = [m for m in parents if m in seen]
+    return own, reached, len(parents) - len(reached)
+
+
 def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str]:
-    """`code.resources` 한 벌 — 이 클래스의 메서드들(함수면 자기)과 **부모 클래스들의 메서드들**이 읽고 쓰는 자원, 읽기가 앞. 자원 하나는 한 번(첫
-    메서드·줄 — 자기 것이 부모 것보다 앞). 측정 #13 추가분 3: 읽기가 부모(믹스인)의 `_run`에 있는 클래스가 "자원이 자기 출력뿐"으로 보였다. 줄의 메서드
-    자리가 부모의 것이면 어느 부모인지 거기 보인다. 자원이 없으면 그 사실 — 키를 조립식으로 만들면 텍스트로는 못 찾는다(없는 것이 아니라 못 본 것)."""
+    """`code.resources` 한 벌 — 이 클래스의 메서드들(함수면 자기)과 **진입에서 닿는 부모 클래스 메서드들**(`reachable_members`)이 읽고 쓰는 자원, 읽기가 앞.
+    자원 하나는 한 번(첫 메서드·줄 — 자기 것이 부모 것보다 앞). 측정 #13 추가분 3: 읽기가 부모(믹스인)의 `_run`에 있는 클래스가 "자원이 자기 출력뿐"으로
+    보였다; 측정 #15 P0-2: 부모 메서드 전부를 붙이니 안 부르는 메서드의 키가 실렸다 — 둘째 줄에 뺀 수를 적는다. 줄의 메서드 자리가 부모의 것이면 어느
+    부모인지 거기 보인다. 자원이 없으면 그 사실 — 키를 조립식으로 만들면 텍스트로는 못 찾는다(없는 것이 아니라 못 본 것)."""
     s = index.symbols[sid]
     bases = ancestors(index, sid) if s.kind == "class" else []
-    members = ([m for m in index.symbols if m.class_id == sid] + [m for b in bases for m in index.symbols if m.class_id == b]
-               if s.kind == "class" else [s])
+    own, reached, skipped = reachable_members(index, sid)
+    members = own + reached
     lines = [f"{display(index, sid)} {where(sid)}".rstrip()]
     if bases:
-        lines.append(f"  부모 클래스의 자원 포함: {', '.join(index.symbols[b].qualname for b in bases)}")
+        lines.append(f"  부모 클래스의 자원 포함: {', '.join(index.symbols[b].qualname for b in bases)}"
+                     + (f" · 진입에서 안 닿은 부모 메서드 {skipped}개 뺌" if skipped else ""))
     seen: dict[tuple[str, str, str], tuple[int, int]] = {}
-    for m in members:
-        for r in m.resources:
-            seen.setdefault((r.direction, r.kind, r.name), (m.id, r.line))
+    for mid in members:
+        for r in index.symbols[mid].resources:
+            seen.setdefault((r.direction, r.kind, r.name), (mid, r.line))
     for direction, label in (("reads", "읽기"), ("writes", "쓰기")):
         rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)
         if not rows:

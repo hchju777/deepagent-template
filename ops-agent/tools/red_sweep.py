@@ -2456,7 +2456,7 @@ CASES += [
   "        writer, writer_at, writer_problem = \"\", \"\", \"\"", [WRITER_T]),
  ("인덱스 없이도 모른다고 말한다", IM, "                                writer_searched=bool(classes), **folded,", "                                writer_searched=True, **folded,", [WRITER_T]),
  ("쓴 쪽을 알아도 uses로 간다", IM, "    if target.writer:\n        return \"code.resources\", {\"name\": target.writer}", "    if False:\n        return \"code.resources\", {\"name\": target.writer}", [HOP2_T, WRITER_B_T]),
- ("resources가 메서드 자원을 안 모은다", QYP, "               if s.kind == \"class\" else [s])", "               if False else [s])", [RESOURCES_T]),
+ ("resources가 메서드 자원을 안 모은다", QYP, "    if s.kind != \"class\":\n        return [sid], [], 0", "    if True:\n        return [sid], [], 0", [RESOURCES_T]),
  ("resources가 읽기와 쓰기를 안 가른다", QYP, "        rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)", "        rows = sorted((k, v) for k, v in seen.items())", [RESOURCES_T]),
  ("code.resources가 여럿이어도 하나를 고른다", DCP, "        if len(found) > 1:\n            lines = qy.ambiguous_lines(self._index, name, found)", "        if False:\n            lines = qy.ambiguous_lines(self._index, name, found)", [RESOURCES_DC_T]),
  ("class_names가 함수까지 센다", DCP, "        return frozenset(s.name for s in self._index.symbols if s.kind == \"class\")", "        return frozenset(s.name for s in self._index.symbols)", [RESOURCES_DC_T]),
@@ -2935,11 +2935,11 @@ CASES += [
 INHERIT_RES_T = "tests/infrastructure/test_deployed_code.py::test_code_resources는_부모_클래스의_멤버_자원까지_세고_어느_부모의_것인지_적는다"
 INHERIT_SCOPE_T = "tests/infrastructure/test_deployed_code.py::test_filter_lines의_범위와_컴포넌트_링크에_부모_클래스_파일이_든다"
 CASES += [
- ("부모 클래스의 멤버 자원을 안 센다", QYP, "    members = ([m for m in index.symbols if m.class_id == sid] + [m for b in bases for m in index.symbols if m.class_id == b]", "    members = ([m for m in index.symbols if m.class_id == sid]", [INHERIT_RES_T, BOARD_C1_T]),
+ ("부모 클래스의 멤버 자원을 안 센다", QYP, "    members = own + reached", "    members = list(own)", [INHERIT_RES_T, BOARD_C1_T]),
  ("부모를 한 단계만 따라간다", QYP, "        stack += [e.dst for e in index.edges_from(base, \"inherits\")]\n", "", [INHERIT_RES_T]),
  ("순환 상속에서 자기 자신으로 돌아온다", QYP, "    seen = {sid}\n    stack = [e.dst for e in index.edges_from(sid, \"inherits\")]", "    seen = set()\n    stack = [e.dst for e in index.edges_from(sid, \"inherits\")]", [INHERIT_RES_T]),
- ("부모 포함 줄이 없다", QYP, "        lines.append(f\"  부모 클래스의 자원 포함: {', '.join(index.symbols[b].qualname for b in bases)}\")\n", "", [INHERIT_RES_T]),
- ("단일값 범위에 부모 파일이 없다", DCP, "        for base in qy.ancestors(self._index, found[0]):", "        for base in []:", [INHERIT_SCOPE_T]),
+ ("부모 포함 줄이 없다", QYP, "        lines.append(f\"  부모 클래스의 자원 포함: {', '.join(index.symbols[b].qualname for b in bases)}\"\n                     + (f\" · 진입에서 안 닿은 부모 메서드 {skipped}개 뺌\" if skipped else \"\"))\n", "", [INHERIT_RES_T]),
+ ("단일값 범위에 부모 파일이 없다", DCP, "        for mid in reached:\n            path = self._index.symbols[mid].file", "        for mid in []:\n            path = self._index.symbols[mid].file", [INHERIT_SCOPE_T]),
  ("부모 파일의 get을 링크로 안 본다", DCP, "        literals, variables = component_names(\"\\n\".join(snap.get(path, \"\") for path in files))", "        literals, variables = component_names(snap[sym.file])", [INHERIT_SCOPE_T]),
 ]
 
@@ -3040,7 +3040,17 @@ CASES += [
  ("측정판 사이트 층이 발행 토픽을 안 덮는다", LC, "\"consumer\": {\"group_id\": \"gumi-mx-core\", \"topic\": {\"topic3\": \"gumi.alarm.audit\"}},\n                            \"producer\": {\"topic\": {\"topic2\": \"gumi.alarm.audit\"}}}}},", "\"consumer\": {\"group_id\": \"gumi-mx-core\", \"topic\": {\"topic3\": \"gumi.alarm.audit\"}}}}},", [LC_MSG_T, BOARD_GONE_T]),
 ]
 
-assert len(CASES) >= 941, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5e ② — 진입에서 호출 그래프로 닿는 부모 메서드의 자원만 ──
+REACH_T = "tests/infrastructure/test_deployed_code.py::test_code_resources는_진입에서_호출_그래프로_닿는_부모_메서드의_자원만_센다"
+CASES += [
+ ("호출 그래프로 안 좁힌다", QYP, "    reached = [m for m in parents if m in seen]", "    reached = list(parents)", [REACH_T, INHERIT_SCOPE_T]),
+ ("호출 없는 부모 메서드를 진입으로 안 잡는다", QYP, "    roots = own + [m for m in parents if not index.edges_to(m, \"calls\")]", "    roots = list(own)", [INHERIT_RES_T]),
+ ("뺀 메서드 수를 안 적는다", QYP, "                     + (f\" · 진입에서 안 닿은 부모 메서드 {skipped}개 뺌\" if skipped else \"\"))", "                     )", [REACH_T]),
+ ("단일값 범위가 전 조상 파일이다", DCP, "        _, reached, _ = qy.reachable_members(self._index, found[0])\n        for mid in reached:", "        for mid in [m.id for b in qy.ancestors(self._index, found[0]) for m in self._index.symbols if m.class_id == b]:", [INHERIT_SCOPE_T]),
+]
+
+assert len(CASES) >= 945, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
