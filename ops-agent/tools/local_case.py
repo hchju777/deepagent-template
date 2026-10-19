@@ -250,18 +250,28 @@ register(
 )
 ''',
     # 도메인 키를 쓰는 배치 클래스 — 원천 묶음을 읽는다(사내 c-1·c-2의 가운데 홉).
-    "batch/domain.py": '''"""도메인 키를 만든다 — 원천 묶음의 행을 그대로 record로."""
+    # 읽기는 부모(다른 파일)의 `_run`에, 쓰기는 자식에 — 사내 처리기의 상속 모양(R3-5d ③, 측정 #13 추가분 3). `code.resources`가 부모의 읽기를 안 세면
+    # 걷기가 여기서 "자원이 자기 출력뿐"으로 멈춘다.
+    "common/readers.py": '''"""라인마다 원천 묶음을 읽어 자식에게 넘기는 부모 클래스."""
 
 
-class DomainBuilder:
+class LineReader:
     def __init__(self, cfg, redis):
         self.cfg, self.redis = cfg, redis
 
     def _run(self):
         for line in self.cfg["lines"]:
             raw = json.loads(self.redis.get(self.cfg["redis_key"]["alarm_raw"].format(line=line)) or "{}")
-            record = {"metadata": {"event_type": "DomainBuilder"}, "record": raw.get("rows", [])}
-            self.redis.set(self.cfg["redis_key"]["alarm_domain"].format(line=line), json.dumps(record))
+            self.handle(line, raw)
+''',
+    "batch/domain.py": '''"""도메인 키를 만든다 — 원천 묶음의 행을 그대로 record로."""
+from common.readers import LineReader
+
+
+class DomainBuilder(LineReader):
+    def handle(self, line, raw):
+        record = {"metadata": {"event_type": "DomainBuilder"}, "record": raw.get("rows", [])}
+        self.redis.set(self.cfg["redis_key"]["alarm_domain"].format(line=line), json.dumps(record))
 ''',
     # c-1형의 원천 클래스 — 토픽 메시지를 받아 인덱스 자원(읽기)이 0이다. 같은 이름이 dt-api에도 있다(그쪽은 alarm:raw를 선언하지 않는다).
     "common/source.py": '''"""원천 수집 — 메시지를 행으로 바꿔 원천 묶음에 둔다."""

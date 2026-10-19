@@ -348,7 +348,7 @@ c-11 첫 답의 후보 토픽은 증거에 있었고 진짜 원인 방향이었�
 | R3-5d ①-a ✅ | 걷기 | 키 선언 레포 가르기를 **모든 홉**에(정상 홉의 쓴 쪽도 — 표의 쓴 쪽 칸·후보·주 줄; 못 가르면 "둘 다 후보"), 값 없는 홉의 멈춤은 `키가 없다 — K` / `0행 — K(값이 비어 쓴 쪽을 알 수 없다)` | `walk.py`, 측정판 테스트 |
 | R3-5d ①-b ✅ | 검증 | 번역은 레포 지도로 "한 레포를 여러 서비스가 공유"와 "두 레포를 못 가름"을 구분(고침 1), 연결 확인에 걷기 홉의 키(고침 2), 판정이 걷기와 어긋나면 caveat + 멈춘 홉의 서비스 후보(정상으로 본 홉의 쓴 쪽이면 그 사실; external·쓴 쪽 모름은 제외)(고침 4), 후보의 component가 케이스에 나온 토픽과 완전 일치하면 허용·그 밖의 서비스 아닌 후보는 재작성 없이 그 후보만 제외(추가분 5) | `nodes.py` |
 | R3-5d ② ✅ | LLM | `length`도 같은 질문으로 1회 다시, 답에 usage(`usage_metadata`에서), 트레이스 머리에 조각 수·종료 사유·usage(성공 턴도) | `lead`, `llm_chat_model`, `domain/llm`, `__main__` 트레이서, `trace_digest` |
-| R3-5d ③ | 상속 | `code.resources`가 `inherits` 엣지로 부모 클래스의 멤버 자원까지(줄에 부모 표시), 단일값 검사 범위에 부모 클래스 파일 — 인덱스에 엣지가 있어 **`code graph` 재생성 불필요** | `query.py`, `deployed_code` |
+| R3-5d ③ ✅ | 상속 | `code.resources`가 `inherits` 엣지로 부모 클래스의 멤버 자원까지(줄에 부모 표시), 단일값 검사 범위에 부모 클래스 파일 — 인덱스에 엣지가 있어 **`code graph` 재생성 불필요** | `query.py`, `deployed_code` |
 | — | **측정 #14** | ①~③ 뒤. `code graph` 재생성: 불필요 | 브리프 |
 | R3-5d ④ | 4-b | Kafka 포트 `fetch(topic, partition, offset)`(assign·seek, 그룹 미참여·커밋 없음)·stub·실어댑터·등재; 걷기: "입력을 모른다" 클래스의 출력 키 값 `metadata.source` → 메시지 한 건 홉(행 N·같은 값 / 0행 / 보존 범위 밖 "키를 만든 메시지가 토픽에 없다" / "포인터 없음"), 봉투 없는 목록, 본문은 증거에 안 담는다(세기만), 발행 쪽은 config 발행 선언으로 | `ports`, `stubs`, `kafka_inspector`, `actions`, `walk`, 측정판 |
 | R3-5d ⑤ | 결함 아님 | `not_a_defect` — (a)~(d) | `domain/case`, 프롬프트, verify, 보고서, 벤치 |

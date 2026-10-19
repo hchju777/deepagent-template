@@ -681,6 +681,21 @@ class _WithClass(_Src):
         "jobs/again.py": "class Refresh:\n    def go(self):\n        return 1\n"}
 
 
+class _WithBase(_Src):
+    """읽기는 부모(믹스인)의 `_run`에, 쓰기는 자식에 — 사내 처리기의 모양(측정 #13 추가분 3: 상속 38파일, 공용 필터 믹스인 셋)."""
+    FILES = {**_Src.FILES, "batch/__init__.py": "",
+             "batch/base.py": ("class Base:\n"
+                               "    def _run(self, cfg, redis):\n"
+                               "        src = redis.get(cfg[\"redis_key\"][\"alarm_source\"].format(line=\"L1\"))\n"
+                               "        return self.handle(cfg, src)\n"),
+             "batch/mid.py": "from batch.base import Base\n\n\nclass Mid(Base):\n    pass\n",
+             "batch/sub.py": ("from batch.mid import Mid\n\n\n"
+                              "class Sub(Mid):\n"
+                              "    def handle(self, cfg, src):\n"
+                              "        self.producer.send(cfg[\"infra\"][\"kafka\"][\"producer\"][\"topic\"][\"topic1\"], src)\n"),
+             "batch/loop.py": "class A(B):\n    pass\n\n\nclass B(A):\n    pass\n"}
+
+
 async def test_code_resources는_클래스가_읽고_쓰는_자원을_주고_없거나_여럿이면_실패로_답한다(flow_code):
     """입구가 값에서 고른 쓴 쪽 클래스의 **입력**이 다음 홉이다(R3-1c ①-a). 이름이 여럿이면 코드가 고르지 않는다(`callers`와 같다)."""
     from src.knowledge import index as ix
@@ -978,3 +993,59 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     assert comparison_pairs(text) == [(3, "f", "v", 'ok = r["f"] != "v"'), (4, "f", "v", 'rev = "v" == r.get("f", None)'), (7, "f", "v", 'at = getattr(r, "f") == "v"')]
     assert comparison_lines(text, "f", "v") == [(3, 'ok = r["f"] != "v"'), (4, 'rev = "v" == r.get("f", None)'), (7, 'at = getattr(r, "f") == "v"')]
     assert component_names('a = reg.get("x")\nb = reg.get(\'y\', None)\nc = reg.get(key)\nd = reg.get("x")\ne = cfg.get(other)\n') == (["x", "y"], ["key"])
+
+
+
+# ── R3-5d ③ — 상속: 부모 클래스의 자원과 파일 ──
+
+async def test_code_resources는_부모_클래스의_멤버_자원까지_세고_어느_부모의_것인지_적는다(flow_code):
+    """측정 #13 추가분 3: 읽기가 부모(믹스인)의 `_run`에 있는 클래스는 "인덱스 자원이 자기 출력뿐"이었다(`<BMS 배지>` 5종). 인덱스는 처음부터
+    `inherits` 엣지를 저장하니 그 엣지로 부모의 멤버까지 — 줄의 메서드 자리가 부모의 것이라 어느 부모인지 보인다. 순환은 한 번만."""
+    from src.knowledge import index as ix
+    from src.knowledge import query as qy
+    from src.knowledge.flow import Name
+
+    idx = await ix.build_index({"dt-core": _WithBase()}, names=[Name("rediskey", "alarm:source:{line}", "redis_key.alarm_source"),
+                                                                Name("topic", "mx.alarm.main", "infra.kafka.producer.topic.topic1")],
+                               commits={"dt-core": "c0ffee"})
+    flow_code.attach_index(idx)
+    sub = await flow_code.resources("Sub")
+    assert sub.status == "ok" and sub.data.splitlines()[0].startswith("batch.sub.Sub (batch/sub.py:L4)")
+    assert "  부모 클래스의 자원 포함: batch.mid.Mid, batch.base.Base" in sub.data.splitlines()[1]
+    assert "  읽기 1:" in sub.data and "alarm:source:{line} [rediskey] — batch.base.Base._run (batch/base.py:L3)" in sub.data
+    assert "  쓰기 1:" in sub.data and "mx.alarm.main [topic] — batch.sub.Sub.handle (batch/sub.py:L6)" in sub.data
+    base = await flow_code.resources("Base")
+    assert "부모 클래스" not in base.data and "  읽기 1:" in base.data                                       # 부모가 없으면 줄도 없다
+    sid = next(s.id for s in idx.symbols if s.kind == "class" and s.name == "Sub")
+    assert [idx.symbols[a].name for a in qy.ancestors(idx, sid)] == ["Mid", "Base"]                       # 가까운 것부터
+    loop = next(s.id for s in idx.symbols if s.kind == "class" and s.name == "A")
+    assert [idx.symbols[a].name for a in qy.ancestors(idx, loop)] == ["B"]                                   # 순환은 한 번만
+
+
+async def test_filter_lines의_범위와_컴포넌트_링크에_부모_클래스_파일이_든다(clock):
+    """측정 #13 추가분 3: 단일값 검사 범위에 부모 믹스인 파일이 없었다 — 비교식이 거기 있으면 못 잡는다. 부모의 `_run`이 부르는 `get("X")`도 링크다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    files = {**FILES, "pipe/base.py": 'class JobBase:\n    def _run(self, rows):\n        rows = self.components.get("shape_filter").apply(rows)\n'
+                                       '        return [r for r in rows if r["state"] != "-"]\n',
+             "pipe/child.py": "from pipe.base import JobBase\n\n\nclass Child(JobBase):\n    pass\n"}
+
+    class Src:
+        async def files(self):
+            return sorted(files)
+
+        async def read(self, path):
+            return files.get(path)
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(files), source="s", clock=clock)
+
+    code = DeployedCode(Reader(), Topology(services={"processor": Service(repo="dt-proc", role="가공한다")}), Deployment(), gbm="mx", fct="gumi", clock=clock)
+    code.attach_index(await ix.build_index({"dt-proc": Src()}, commits={"dt-proc": "c2"}))
+    scan = await code.filter_lines("Child", fields={"state": "-"})
+    assert scan.files == ["pipe/child.py", "pipe/base.py", "pipe/shapes.py"] and scan.linked == ["shape_filter"]
+    assert [(h.path, h.line) for h in scan.hits] == [("pipe/base.py", 4)]

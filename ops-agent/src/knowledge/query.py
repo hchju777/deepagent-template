@@ -192,12 +192,32 @@ def uses(index: Index, name: str) -> list[Use]:
     return collect(lambda n: n == name) or collect(lambda n: name in n)
 
 
+def ancestors(index: Index, sid: int) -> list[int]:
+    """클래스의 부모들 — `inherits` 엣지를 끝까지, 가까운 것부터, 순환은 한 번만(R3-5d ③). 인덱스는 처음부터 이 엣지를 저장한다."""
+    out: list[int] = []
+    seen = {sid}
+    stack = [e.dst for e in index.edges_from(sid, "inherits")]
+    while stack:
+        base = stack.pop(0)
+        if base in seen:
+            continue
+        seen.add(base)
+        out.append(base)
+        stack += [e.dst for e in index.edges_from(base, "inherits")]
+    return out
+
+
 def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str]:
-    """`code.resources` 한 벌 — 이 클래스의 메서드들(함수면 자기)이 읽고 쓰는 자원, 읽기가 앞. 자원 하나는 한 번(첫 메서드·줄).
-    자원이 없으면 그 사실 — 키를 조립식으로 만들면 텍스트로는 못 찾는다(없는 것이 아니라 못 본 것)."""
+    """`code.resources` 한 벌 — 이 클래스의 메서드들(함수면 자기)과 **부모 클래스들의 메서드들**이 읽고 쓰는 자원, 읽기가 앞. 자원 하나는 한 번(첫
+    메서드·줄 — 자기 것이 부모 것보다 앞). 측정 #13 추가분 3: 읽기가 부모(믹스인)의 `_run`에 있는 클래스가 "자원이 자기 출력뿐"으로 보였다. 줄의 메서드
+    자리가 부모의 것이면 어느 부모인지 거기 보인다. 자원이 없으면 그 사실 — 키를 조립식으로 만들면 텍스트로는 못 찾는다(없는 것이 아니라 못 본 것)."""
     s = index.symbols[sid]
-    members = [m for m in index.symbols if m.class_id == sid] if s.kind == "class" else [s]
+    bases = ancestors(index, sid) if s.kind == "class" else []
+    members = ([m for m in index.symbols if m.class_id == sid] + [m for b in bases for m in index.symbols if m.class_id == b]
+               if s.kind == "class" else [s])
     lines = [f"{display(index, sid)} {where(sid)}".rstrip()]
+    if bases:
+        lines.append(f"  부모 클래스의 자원 포함: {', '.join(index.symbols[b].qualname for b in bases)}")
     seen: dict[tuple[str, str, str], tuple[int, int]] = {}
     for m in members:
         for r in m.resources:

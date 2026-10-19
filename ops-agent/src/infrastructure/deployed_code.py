@@ -371,8 +371,12 @@ class DeployedCode(DeployedCodePort):
             return FilterScan(problem=f"{sym.repo}의 스냅샷을 못 받았다")
         if sym.file not in snap:
             return FilterScan(problem=f"{sym.repo}의 스냅샷에 {sym.file}이 없다")
+        # 범위 = 클래스 파일 + 부모 클래스들의 파일(R3-5d ③ — 측정 #13 추가분 3: 비교식·`get("X")`가 부모 믹스인의 `_run`에 있었다) + 이은 컴포넌트 클래스 파일
         files = [sym.file]
-        literals, variables = component_names(snap[sym.file])
+        for base in qy.ancestors(self._index, found[0]):
+            if self._index.symbols[base].file in snap and self._index.symbols[base].file not in files:
+                files.append(self._index.symbols[base].file)
+        literals, variables = component_names("\n".join(snap.get(path, "") for path in files))
         regs = self._registered(sym.repo, snap)
         linked: list[str] = []
         linked_at: list[FilterHit] = []

@@ -232,3 +232,13 @@ def test_그룹과_제목이_같은_배지와_행_안의_클래스_이름_미끼
     assert _badge(s, "ALL", "ALL")
     assert _value(s, "alarm:scan:L1")["record"][0]["summary_info"]["scope"] == "ALL"
     assert {r["view"] for r in _value(s, "alarm:rate:L1")["record"][0]["data"]} == {"Overview"} and "class Overview:" in API_FILES["api/schemas.py"]
+
+
+
+def test_도메인_키를_쓰는_클래스는_읽기를_부모의_run에서_받는다():
+    """측정 #13 추가분 3(R3-5d ③)의 모양 — 읽기는 부모(다른 파일)의 `_run`에, 쓰기는 자식에. 걷기가 DomainBuilder를 지나 원천 묶음으로 가려면
+    `code.resources`가 부모의 읽기를 세어야 한다(측정판 걷기 테스트가 그걸 잰다)."""
+    from tools.local_case import CORE_FILES
+    child, base = CORE_FILES["batch/domain.py"], CORE_FILES["common/readers.py"]
+    assert "class DomainBuilder(LineReader):" in child and "def _run" not in child and 'cfg["redis_key"]["alarm_domain"]' in child
+    assert "class LineReader:" in base and "def _run(self" in base and 'cfg["redis_key"]["alarm_raw"]' in base
