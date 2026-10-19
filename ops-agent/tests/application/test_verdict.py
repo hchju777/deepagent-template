@@ -201,14 +201,17 @@ async def test_verify_노드의_component는_토폴로지_서비스여야_하고
                                                cause("ghost-svc", "t-1.e1", confidence="low")]))
     nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
     patch = await nodes["verify"](state)
-    assert [p.split(" — ")[0] for p in patch["verify_problems"]] == [
-        "토폴로지 서비스가 아닌 component 'alarm_events'", "토폴로지 서비스가 아닌 component 'ghost-svc'"]
+    # 후보(ghost-svc)의 서비스 아닌 component는 되묻지 않고 그 후보만 뺀다(R3-5d ①-b) — 문제로 남는 것은 최상위뿐
+    assert [p.split(" — ")[0] for p in patch["verify_problems"]] == ["토폴로지 서비스가 아닌 component 'alarm_events'"]
     assert "(sink)" in patch["verify_problems"][0]                              # 어느 이름이면 되는지 같이
+    fine = state.model_copy(update={"verdict": verdict(root_cause=cause("sink", "t-1.e1"))})
+    good = await nodes["verify"](fine)
+    assert good["verify_problems"] == [] and "verdict" not in good                 # 서비스 이름은 그대로 지난다
     external = state.model_copy(update={"verdict": verdict(verdict_type="external", root_cause=cause("alarm_events", "t-1.e1"))})
     assert (await nodes["verify"](external))["verify_problems"] == []
     blind = make_nodes(deps_for(ScriptedRunner(), components=frozenset()))
     patch = await blind["verify"](state)
-    assert patch["verify_problems"] == ["증거에도 토폴로지에도 없는 component 'ghost-svc'"]
+    assert patch["verify_problems"] == [] and patch["verdict"].caveats == ["후보 제외(서비스도 이 케이스의 토픽도 아닌 component): ghost-svc"]
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
     assert (await loose["verify"](state))["verify_problems"] == []
 
@@ -414,7 +417,9 @@ async def test_강등은_서비스_아닌_component_다리도_걷어낸다(case)
     got = (await nodes["verify"](_state(case, verdict=bad, verify_attempts=1)))["verdict"]
     assert [a.component for a in got.alternates] == ["api"] and got.contributing == []
     assert got.root_cause.component == "sink" and got.verdict_type == "data_loss"      # 멀쩡한 최상위는 그대로
-    assert any("서비스 아닌 component 제외" in c and "후보 external" in c and "기여 요인 alarm:stats" in c for c in got.caveats)
+    # 후보 external은 되묻기 전에 그 후보만 뺐고(R3-5d ①-b), 기여 요인은 강등이 걷어냈다 — 둘 다 caveat에
+    assert any("후보 제외" in c and "external" in c for c in got.caveats)
+    assert any("서비스 아닌 component 제외" in c and "기여 요인 alarm:stats" in c for c in got.caveats)
     wrong_root = verdict(root_cause=cause("alarm:stats", "t-1.e1"))
     got = (await nodes["verify"](_state(case, verdict=wrong_root, verify_attempts=1)))["verdict"]
     assert got.root_cause is None and got.verdict_type == "inconclusive"
@@ -546,3 +551,108 @@ async def test_component의_근거로_인용한_코드가_다른_레포의_것�
     nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset(repos), service_repos=repos))
     patch = await nodes["verify"](_state(case, verdict=v, plan_tasks=tasks, evidence=[_ev(f"t-{n}.e1") for n in (11, 12, 13, 14)]))
     assert patch["verify_problems"] == [] and any("레포 batch-repo의 코드다" in c for c in patch["verdict"].caveats)
+
+
+
+# ── R3-5d ①-b — 검증: 번역의 공유/못 가름, 연결 확인에 걷기 키, 걷기와 어긋남, 후보의 토픽 ──
+
+def test_번역은_레포_지도로_한_레포_공유와_두_레포_못_가름을_가른다():
+    """측정 #13 고침 1: 번역이 걷기가 안 가른 홉의 후보(레포 둘)를 "레포를 …가 공유"라 적고 첫 것(`<수집기>`)을 골랐다 — 거짓. 후보의 레포가 하나면
+    공유, 둘 이상이면 못 가른다(첫 것으로 바꾸되 전부 후보)."""
+    from src.application.nodes import translate_classes
+    from src.domain.case import Hop, Walk
+
+    repos = {"col": "dt-col", "p1": "dt-proc", "p2": "dt-proc", "p3": "dt-proc"}
+    classes = {"Both": ("col", "p1", "p2", "p3"), "Shared": ("p1", "p2", "p3")}
+    unsplit = Walk(hops=[Hop(key="k", writer="Both", service="col, dt-proc(서비스 3개 공유)", candidates=["col", "p1", "p2", "p3"], status="정상")])
+    got = translate_classes(verdict(root_cause=cause("Both", "t-1.e1")), class_services=classes, walk=unsplit, service_repos=repos)
+    assert got.root_cause.component == "col"
+    assert got.caveats == ["component Both는 클래스 이름 — 인덱스로 서비스 col로 바꿨다 (col, p1, p2, p3에 다 있다 — 못 가른다, 전부 후보)"]
+    split = Walk(hops=[Hop(key="k", writer="Both", service="dt-proc(서비스 3개 공유)", candidates=["p1", "p2", "p3"], status="정상")])
+    got = translate_classes(verdict(root_cause=cause("Both", "t-1.e1")), class_services=classes, walk=split, service_repos=repos)
+    assert got.root_cause.component == "p1" and got.caveats[0].endswith("p1로 바꿨다 (레포를 p1, p2, p3가 공유 — 첫 것, 전부 후보)")
+    # 걷기에 없는 클래스라도 레포 지도가 한 레포라 하면 공유다
+    got = translate_classes(verdict(root_cause=cause("Shared", "t-1.e1")), class_services=classes, walk=None, service_repos=repos)
+    assert got.caveats[0].endswith("p1로 바꿨다 (레포를 p1, p2, p3가 공유 — 첫 것, 전부 후보)")
+
+
+async def test_verify_노드가_번역에_레포_지도를_넘긴다(case):
+    from src.domain.case import Hop, Walk
+
+    repos = {"col": "dt-col", "p1": "dt-proc", "p2": "dt-proc", "p3": "dt-proc"}
+    unsplit = Walk(hops=[Hop(key="k", writer="Both", service="col, dt-proc(서비스 3개 공유)", candidates=["col", "p1", "p2", "p3"], status="정상")])
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset(repos), class_services={"Both": ("col", "p1", "p2", "p3")}, service_repos=repos))
+    got = (await nodes["verify"](_state(case, verdict=verdict(root_cause=cause("Both", "t-1.e1")), walk=unsplit)))["verdict"]
+    assert got.caveats[0].endswith("(col, p1, p2, p3에 다 있다 — 못 가른다, 전부 후보)")
+
+
+async def test_걷기_홉의_키를_인용한_최상위는_연결이_확인된_것이다(case):
+    """측정 #13 고침 2: 걷기 홉 표에 있는 키를 인용해도 "연결이 확인되지 않았다"(5/8)였다 — 걷기가 이은 키는 연결된 것이다."""
+    from src.application.nodes import cap_unlinked_key
+    from src.domain.case import Hop, TargetPick, Walk
+
+    target = TargetPick(key="alarm:stats:L1", basis="b")
+    evidence = [EvidenceRef(id="t-3.e1", source="redis.get key='alarm:source:L1'", summary="x", body=""),
+                EvidenceRef(id="t-9.e1", source="redis.get key='other:L1'", summary="x", body="")]
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="W", status="빈 배열 (data)", bad=True, evidence_id="t-1.e1"),
+                      Hop(key="alarm:source:L1", depth=1, status="0행", bad=True, evidence_id="t-3.e1", parent="t-1.e1")])
+    linked = verdict(root_cause=cause("sink", "t-3.e1"))
+    assert cap_unlinked_key(linked, target=target, evidence=evidence, walk=walk) is linked
+    other = verdict(root_cause=cause("sink", "t-9.e1"))
+    capped = cap_unlinked_key(other, target=target, evidence=evidence, walk=walk)
+    assert capped.confidence == "medium" and "other:L1" in capped.caveats[0]
+    # verify 노드가 걷기를 넘긴다
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    patch = await nodes["verify"](_state(case, verdict=linked, target=target, walk=walk, evidence=evidence))
+    assert patch["verify_problems"] == [] and "verdict" not in patch                     # 바뀐 것이 없다 — 상한도 caveat도 아니다
+
+
+def test_판정이_걷기가_멈춘_자리와_어긋나면_caveat에_멈춘_홉의_서비스를_후보로_적는다():
+    """측정 #13 고침 4: c-8은 멈춘 홉(`<처리기>`) 아래(`<배치>`)를, c-9는 걷기가 정상으로 본 홉의 쓴 쪽을 원인으로 댔다 — 둘 다 걷기가 맞았다.
+    걷기가 그 클래스의 입력까지 본 멈춤(`입력…`)에서만, external과 쓴 쪽을 모르는 멈춤은 뺀다."""
+    from src.application.nodes import caveat_walk_disagreement
+    from src.domain.case import Hop, Walk
+
+    hops = [Hop(key="sum:L1", writer="Batch", service="batch", candidates=["batch"], status="빈 배열 (data)", bad=True, evidence_id="t-1.e1"),
+            Hop(key="dom:L1", depth=1, writer="Proc", service="processor", candidates=["processor"], status="빈 배열 (record)", bad=True,
+                evidence_id="t-3.e1", parent="t-1.e1"),
+            Hop(key="pal", depth=1, writer="Palette", service="api", candidates=["api"], status="정상 — colors: 행 2", evidence_id="t-4.e1", parent="t-1.e1"),
+            Hop(key="src:L1", depth=2, status="정상 — 행 9", evidence_id="t-6.e1", parent="t-3.e1")]
+    walk = Walk(hops=hops, stopped="입력이 다 정상 — Proc", stop_at="t-3.e1")
+    services = frozenset({"batch", "processor", "api", "sink"})
+    below = caveat_walk_disagreement(verdict(root_cause=cause("batch", "t-1.e1")), walk=walk, components=services)
+    assert below.caveats == ["판정의 component batch는 걷기가 멈춘 자리(dom:L1, 쓴 쪽 Proc [processor])의 서비스가 아니다 — processor도 후보"]
+    normal = caveat_walk_disagreement(verdict(root_cause=cause("api", "t-4.e1")), walk=walk, components=services)
+    assert normal.caveats == ["판정의 component api는 걷기가 멈춘 자리(dom:L1, 쓴 쪽 Proc [processor])의 서비스가 아니다 — processor도 후보 "
+                              "(걷기는 pal을 정상으로 봤다 — 그 쓴 쪽이 api)"]
+    agree = verdict(root_cause=cause("processor", "t-3.e1"))
+    assert caveat_walk_disagreement(agree, walk=walk, components=services) is agree
+    external = verdict(verdict_type="external", root_cause=cause("feed-x", "t-6.e1"))
+    assert caveat_walk_disagreement(external, walk=walk, components=services) is external
+    unknown = walk.model_copy(update={"stopped": "쓴 쪽을 모른다 — src:L1(값에 인덱스의 클래스 이름이 없다)", "stop_at": "t-6.e1"})
+    assert caveat_walk_disagreement(below, walk=unknown, components=services) is below
+    capped = walk.model_copy(update={"stopped": "깊이 4 상한 — Proc부터는 리드가"})
+    fresh = verdict(root_cause=cause("batch", "t-1.e1"))
+    assert caveat_walk_disagreement(fresh, walk=capped, components=services) is fresh       # 상한에 걸린 걷기는 어긋났다 할 근거가 없다
+
+
+async def test_후보의_component가_케이스에_나온_토픽과_같으면_통과하고_그_밖의_서비스_아닌_후보는_재작성_없이_제외한다(case):
+    """측정 #13 추가분 5(사람 결정 10-19): c-11 첫 답의 후보 토픽은 증거에 있었고 진짜 원인 방향이었는데 external이 아니라고 걷어내 재작성 뒤 강등됐다.
+    케이스에 나온 토픽(kafka 읽기의 topic)과 완전 일치하면 component로 허용. 그 밖(자유 문장·오타)의 후보는 되묻지 않고 그 후보만 뺀다 — 최상위·기여
+    요인의 문제는 전처럼 재작성."""
+    tasks = [task("t-5", action="kafka.tail", params={"topic": "mx.alarm.raw", "limit": 5}, status="ok", result_evidence_ids=["t-5.e1"])]
+    evidence = [_ev("t-1.e1"), EvidenceRef(id="t-5.e1", source="kafka.tail topic='mx.alarm.raw'", summary="x", body="5건")]
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink", "processor"})))
+    v = verdict(root_cause=cause("sink", "t-1.e1"),
+                alternates=[cause("mx.alarm.raw", "t-5.e1", confidence="low"), cause("외부 피드가 멈춤", "t-5.e1", confidence="low")])
+    patch = await nodes["verify"](_state(case, verdict=v, plan_tasks=tasks, evidence=evidence))
+    assert patch["verify_problems"] == [] and "verify_attempts" not in patch
+    assert [a.component for a in patch["verdict"].alternates] == ["mx.alarm.raw"]
+    assert patch["verdict"].caveats == ["후보 제외(서비스도 이 케이스의 토픽도 아닌 component): 외부 피드가 멈춤"]
+    typo = verdict(root_cause=cause("sink", "t-1.e1"), alternates=[cause("mx.alarm.row", "t-5.e1", confidence="low")])
+    patch = await nodes["verify"](_state(case, verdict=typo, plan_tasks=tasks, evidence=evidence))
+    assert patch["verdict"].alternates == [] and "mx.alarm.row" in patch["verdict"].caveats[0]
+    root = verdict(root_cause=cause("mx.alarm.raw", "t-5.e1"))                                     # 최상위의 토픽도 케이스에 나온 것이면 허용
+    assert (await nodes["verify"](_state(case, verdict=root, plan_tasks=tasks, evidence=evidence)))["verify_problems"] == []
+    bad_root = verdict(root_cause=cause("외부 피드가 멈춤", "t-1.e1"))                              # 최상위는 전처럼 되묻는다
+    assert (await nodes["verify"](_state(case, verdict=bad_root, plan_tasks=tasks, evidence=evidence)))["verify_problems"]

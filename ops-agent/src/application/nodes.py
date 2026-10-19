@@ -862,18 +862,19 @@ def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str],
         "contributing": contributing, "confidence": "low", "caveats": caveats})
 
 
-def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence) -> Verdict:
+def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence, walk: Walk | None = None) -> Verdict:
     """최상위 원인이 인용한 **키 읽기**가 대상 키(링크 토큰에서 고른 것)가 아니면 확신 상한 medium + caveat. 되묻지 않는다 — 한도다.
 
     사내 측정 #5: 리드가 이름이 비슷한 다른 배지의 키를 읽어 `None`을 유실의 증거로 삼아 `data_loss(high)`로 틀렸다. 이 규칙은
     판정을 맞게 만들지 않는다 — 거짓 확신을 막을 뿐이다(맞게 만드는 것은 R3-0 ①과 R3-1의 frame 전 읽기). 키를 인용하지 않은
     최상위는 이 규칙 밖(R3-2 (b)(c)). 대상 키를 모를 때(고를 재료 없음·못 고름)도 건다 — 연결이 확인되지 않은 것은 같다. 바뀐 것이
-    없으면 같은 객체.
+    없으면 같은 객체. 걷기 홉 표의 키는 걷기가 대상 키에서 이은 것이라 연결된 것이다(R3-5d ①-b, 측정 #13 고침 2: 5/8이 그 키를 인용하고도 걸렸다).
     """
     if verdict.root_cause is None:
         return verdict
     keys = cited_keys(verdict.root_cause.evidence_ids, evidence)
-    if not keys or (target.key and any(present(target.key, [k]) for k in keys)):
+    linked = [k for k in [target.key, *(h.key for h in (walk.hops if walk is not None else []))] if k]
+    if not keys or any(present(known, [k]) for k in keys for known in linked):
         return verdict
     known = (f"대상 키 {target.key}" if target.key
              else "대상 키를 못 골랐다 — " + (target.problem or "입구 노드가 고르지 않았다(접수 읽기 없음)"))
@@ -882,7 +883,7 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence) -> Verdi
     return verdict.model_copy(update={"confidence": confidence, "caveats": verdict.caveats + [note]})
 
 
-def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | None) -> Verdict:
+def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | None, service_repos: dict[str, str] | None = None) -> Verdict:
     """component가 인덱스의 **클래스 이름**이면 그 서비스로 바꾸고 caveat(R3-3 ⑤). 측정 #9 c-2: 리드가 쓴 쪽 클래스 이름을 원인 칸에 적었고
     verify가 "서비스 아닌 component"로 걷어냈다 — 클래스는 서비스 안에 있으니 걷어낼 것이 아니라 번역할 것이다. 두 레포면 걷기가 가른 쪽(홉의
     후보 — 한 레포를 여러 서비스가 공유하면 그 전부라 첫 것으로 바꾸고 caveat에 전부, R3-4 ①), 못 갈랐으면 첫 것 + "전부 후보". 바뀐 것이 없으면
@@ -902,7 +903,10 @@ def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | No
         picked = candidates[0]
         note = ""
         if len(candidates) > 1:
-            note = (f" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)" if link.component in resolved
+            # 후보가 한 레포의 서비스들이면 "공유"(레포 단위 가르기의 결과), 두 레포에 걸치면 "못 가른다"(측정 #13 고침 1: 걷기가 안 가른 홉의 후보를 공유라
+            # 적고 첫 것을 골랐다 — 거짓). 레포 지도가 없으면 걷기의 후보만 공유로 본다(전과 같다).
+            shared = (len({service_repos.get(s, s) for s in candidates}) == 1) if service_repos else link.component in resolved
+            note = (f" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)" if shared
                     else f" ({', '.join(candidates)}에 다 있다 — 못 가른다, 전부 후보)")
         elif len(services) > 1:
             note = f" ({', '.join(services)} 중 걷기가 고른 것)"
@@ -916,6 +920,40 @@ def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | No
         return verdict
     return verdict.model_copy(update={"root_cause": root, "alternates": alternates, "contributing": contributing,
                                       "caveats": verdict.caveats + caveats})
+
+
+def caveat_walk_disagreement(verdict: Verdict, *, walk: Walk | None, components: frozenset[str]) -> Verdict:
+    """최상위 component(서비스)가 걷기가 멈춘 홉의 쓴 쪽 서비스가 아니면 caveat — 멈춘 홉의 서비스를 후보로(R3-5d ①-b, 측정 #13 고침 4: c-8은 멈춘 홉
+    아래를, c-9는 걷기가 정상으로 본 홉의 쓴 쪽을 댔고 둘 다 걷기가 맞았다). 걷기가 그 클래스의 입력까지 본 멈춤(`입력…`)에서만 — 쓴 쪽을 모르거나 상한에
+    걸린 걷기는 어긋났다고 할 근거가 없다. `external`은 밖이다. component는 안 바꾼다."""
+    if walk is None or verdict.root_cause is None or verdict.verdict_type == "external" or not walk.stopped.startswith("입력"):
+        return verdict
+    stop = next((h for h in walk.hops if h.evidence_id == walk.stop_at and h.candidates), None)
+    component = verdict.root_cause.component
+    if stop is None or component not in components or component in stop.candidates:
+        return verdict
+    note = (f"판정의 component {component}는 걷기가 멈춘 자리({stop.key}, 쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}])의 서비스가 아니다"
+            f" — {', '.join(stop.candidates)}도 후보")
+    normal = next((h for h in walk.hops if not h.bad and component in h.candidates), None)
+    if normal is not None:
+        note += f" (걷기는 {normal.key}을 정상으로 봤다 — 그 쓴 쪽이 {component})"
+    return verdict.model_copy(update={"caveats": verdict.caveats + [note]})
+
+
+def case_topics(plan_tasks) -> frozenset[str]:
+    """이 케이스에 나온 토픽 — kafka 읽기 태스크의 `topic`. 도구 config에는 실제 토픽 목록이 없어 이것이 토픽 이름의 닫힌 집합이다(사람 결정 10-19)."""
+    return frozenset(str(t.params["topic"]) for t in plan_tasks if t.action.startswith("kafka.") and t.params.get("topic"))
+
+
+def drop_foreign_alternates(verdict: Verdict, component_problem: Callable[[str], str | None]) -> Verdict:
+    """component가 서비스도 이 케이스의 토픽도 아닌 **후보**는 되묻지 않고 그 후보만 뺀다(R3-5d ①-b, 측정 #13 추가분 5: 후보 이름 하나로 4분짜리 판정 턴을
+    다시 묻고 결국 강등됐다). 최상위·기여 요인은 전처럼 verify가 되묻는다."""
+    foreign = [a for a in verdict.alternates if component_problem(a.component)]
+    if not foreign:
+        return verdict
+    kept = [a for a in verdict.alternates if a not in foreign]
+    note = f"후보 제외(서비스도 이 케이스의 토픽도 아닌 component): {', '.join(a.component for a in foreign)}"
+    return verdict.model_copy(update={"alternates": kept, "caveats": verdict.caveats + [note]})
 
 
 def caveat_code_repos(verdict: Verdict, *, plan_tasks, service_repos: dict[str, str]) -> Verdict:
@@ -951,9 +989,13 @@ def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> 
         return lambda component: None
     universe = _universe(state, deps)
     services = ", ".join(sorted(deps.components))
+    topics = case_topics(state.plan_tasks)
 
     def problem(component: str) -> str | None:
         if component in deps.components:
+            return None
+        # 이 케이스에 나온 토픽과 완전 일치하면 된다(사람 결정 10-19: c-11의 후보 토픽은 증거에 있었고 진짜 원인 방향이었다). 부분 일치·오타는 아니다.
+        if component in topics:
             return None
         # 토폴로지를 아는 조사에서는 서비스만 — 키·컬렉션 이름은 데이터지 원인이 아니다(사내 c-2가 Redis 키 이름으로 통과했다).
         # `external`만 예외: 바깥 시스템은 토폴로지에 없고, 증거에 나온 이름이면 된다.
@@ -1020,18 +1062,22 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             # conclude가 항상 verdict를 만들지만, 그래프 변경·재개 엣지에 대한 방어다.
             return {"verify_problems": []}
         # 클래스 이름 component는 검사 전에 서비스로 번역한다(R3-3 ⑤) — 걷어낼 것이 아니라 바꿀 것이다.
-        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk)
-        # 인용한 코드의 레포가 component의 레포와 다르면 caveat(R3-5c ③) — 검증 문제가 아니라 적어 둘 사실이다.
+        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk, service_repos=deps.service_repos)
+        # 인용한 코드의 레포가 component의 레포와 다르면 caveat(R3-5c ③), 걷기가 멈춘 자리와 어긋나면 caveat(R3-5d ①-b) — 검증 문제가 아니라 적어 둘 사실이다.
         verdict = caveat_code_repos(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos)
+        verdict = caveat_walk_disagreement(verdict, walk=state.walk, components=deps.components)
+        component_problem = _component_problem(state, deps, verdict)
+        if deps.check_discovery:
+            # 서비스도 토픽도 아닌 **후보**는 되묻지 않고 뺀다 — 재작성은 최상위·기여 요인의 문제에만(R3-5d ①-b).
+            verdict = drop_foreign_alternates(verdict, component_problem)
         changed = verdict is not state.verdict
         citable = state.evidence_ids()
         incomplete = {e.id for e in state.evidence if not e.complete}
-        component_problem = _component_problem(state, deps, verdict)
         problems = verify_verdict(verdict, citable=citable, incomplete=incomplete, component_problem=component_problem)
         if not problems:
             if not deps.check_discovery:
                 return {"verify_problems": [], **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
-            capped = cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence)
+            capped = cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk)
             return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.

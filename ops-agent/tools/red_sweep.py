@@ -2286,9 +2286,8 @@ CAP2_T = "tests/application/test_verdict.py::test_대상_키를_못_골랐어도
 CASES += [
  ("키를 인용해도 확신을 안 낮춘다", ND, '    confidence = "medium" if verdict.confidence == "high" else verdict.confidence',
   "    confidence = verdict.confidence", [CAP_T]),
- ("대상 키를 읽었어도 낮춘다", ND, "    if not keys or (target.key and any(present(target.key, [k]) for k in keys)):", "    if not keys:", [CAP_T]),
- ("키를 인용하지 않은 최상위도 낮춘다", ND, "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence)\n    if not keys or",
-  "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence) or [\"?\"]\n    if not keys or", [CAP_T]),
+ ("대상 키를 읽었어도 낮춘다", ND, "    if not keys or any(present(known, [k]) for k in keys for known in linked):", "    if not keys:", [CAP_T]),
+ ("키를 인용하지 않은 최상위도 낮춘다", ND, "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence)\n    linked", "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence) or [\"?\"]\n    linked", [CAP_T]),
  ("verify가 상한을 안 건다", ND, '            return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}',
   '            return {"verify_problems": [], **({"verdict": verdict} if changed else {})}', [CAP_T, CAP2_T]),
  ("대본 경로에도 상한을 건다", ND, "            if not deps.check_discovery:\n                return {\"verify_problems\": [], **({\"verdict\": verdict} if changed else {})}", "            if False:\n                return {\"verify_problems\": [], **({\"verdict\": verdict} if changed else {})}", [CAP2_T]),
@@ -2596,7 +2595,7 @@ CASES += [
  ("클래스 이름을 서비스로 안 바꾼다", ND, "        return link.model_copy(update={\"component\": picked})", "        return link", [CLS_T]),
  ("두 레포에서 걷기가 가른 쪽을 안 쓴다", ND, "        candidates = resolved.get(link.component) or services", "        candidates = services", [CLS_T]),
  ("번역에 caveat을 안 단다", ND, "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing,\n                                      \"caveats\": verdict.caveats + caveats})", "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing})", [CLS_T]),
- ("verify가 번역 전 판정을 검사한다", ND, "        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk)", "        verdict = state.verdict", [CLS_T]),
+ ("verify가 번역 전 판정을 검사한다", ND, "        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk, service_repos=deps.service_repos)", "        verdict = state.verdict", [CLS_T]),
  ("번역한 판정을 State에 안 둔다", ND, "            return {\"verify_problems\": [], **({\"verdict\": capped} if (changed or capped is not verdict) else {})}", "            return {\"verify_problems\": []} if capped is verdict else {\"verdict\": capped, \"verify_problems\": []}", [CLS_T]),
 ]
 
@@ -2642,7 +2641,7 @@ CASES += [
  ("repo_services가 서비스를 안 묶는다", FLW, "        out.setdefault(svc.repo, []).append(name)", "        out.setdefault(svc.repo, [name])", [REPO_SVC_T, RES_SVC_T]),
  ("등재 목록에 uses의 service 인자가 없다", AC, "    \"code.uses\":           (\"code\",  \"uses\",          (\"name\",),               (\"service\",)),", "    \"code.uses\":           (\"code\",  \"uses\",          (\"name\",),               ()),", [ACT_USES_T, RES_SVC_T]),
  ("번역이 걷기의 후보를 안 쓴다", ND, "    resolved = {h.writer: tuple(h.candidates) for h in (walk.hops if walk is not None else []) if h.writer and h.candidates}", "    resolved = {}", [CLS_T]),
- ("공유 레포 후보에 caveat을 안 단다", ND, "            note = (f\" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)\" if link.component in resolved", "            note = (\"\" if link.component in resolved", [CLS_T]),
+ ("공유 레포 후보에 caveat을 안 단다", ND, "            note = (f\" (레포를 {', '.join(candidates)}가 공유 — 첫 것, 전부 후보)\" if shared", "            note = (\"\" if shared", [CLS_T]),
  ("걷기 노드가 레포 지도를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by", "declared_by=deps.declared_by", [WNODE_T]),
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
  ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
@@ -2894,7 +2893,26 @@ CASES += [
  ("0행을 쓴 쪽 모름이라 한다", WK, "                       else f\"0행 — {stop_hop.key}(값이 비어 쓴 쪽을 알 수 없다)\" if stop_hop.status == \"0행\"", "                       else f\"0행 — {stop_hop.key}(값이 비어 쓴 쪽을 알 수 없다)\" if False", [NOVALUE_T]),
 ]
 
-assert len(CASES) >= 870, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5d ①-b — 번역의 공유/못 가름, 연결 확인에 걷기 키, 걷기와 어긋남, 후보의 토픽 ──
+XLATE_REPO_T = "tests/application/test_verdict.py::test_번역은_레포_지도로_한_레포_공유와_두_레포_못_가름을_가른다"
+XLATE_NODE_T = "tests/application/test_verdict.py::test_verify_노드가_번역에_레포_지도를_넘긴다"
+LINKED_T = "tests/application/test_verdict.py::test_걷기_홉의_키를_인용한_최상위는_연결이_확인된_것이다"
+DISAGREE_T = "tests/application/test_verdict.py::test_판정이_걷기가_멈춘_자리와_어긋나면_caveat에_멈춘_홉의_서비스를_후보로_적는다"
+TOPIC_ALT_T = "tests/application/test_verdict.py::test_후보의_component가_케이스에_나온_토픽과_같으면_통과하고_그_밖의_서비스_아닌_후보는_재작성_없이_제외한다"
+CASES += [
+ ("번역이 레포 지도를 안 본다", ND, "            shared = (len({service_repos.get(s, s) for s in candidates}) == 1) if service_repos else link.component in resolved", "            shared = link.component in resolved", [XLATE_REPO_T]),
+ ("verify가 번역에 레포 지도를 안 넘긴다", ND, "walk=state.walk, service_repos=deps.service_repos)", "walk=state.walk)", [XLATE_NODE_T, CLS_T]),
+ ("걷기 홉의 키를 연결로 안 본다", ND, "    linked = [k for k in [target.key, *(h.key for h in (walk.hops if walk is not None else []))] if k]", "    linked = [k for k in [target.key] if k]", [LINKED_T]),
+ ("verify가 연결 확인에 걷기를 안 넘긴다", ND, "evidence=state.evidence, walk=state.walk)", "evidence=state.evidence)", [LINKED_T]),
+ ("걷기와 어긋나도 caveat가 없다", ND, "    if stop is None or component not in components or component in stop.candidates:", "    if True:", [DISAGREE_T]),
+ ("정상으로 본 홉을 안 적는다", ND, "    if normal is not None:\n        note +=", "    if False:\n        note +=", [DISAGREE_T]),
+ ("입력을 안 본 멈춤에서도 어긋났다 한다", ND, "or not walk.stopped.startswith(\"입력\"):", ":", [DISAGREE_T]),
+ ("케이스의 토픽을 component로 안 받는다", ND, "        if component in topics:\n            return None", "        if False:\n            return None", [TOPIC_ALT_T]),
+ ("서비스 아닌 후보를 되묻는다", ND, "            verdict = drop_foreign_alternates(verdict, component_problem)", "            pass", [TOPIC_ALT_T]),
+]
+
+assert len(CASES) >= 879, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
