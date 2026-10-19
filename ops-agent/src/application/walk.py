@@ -202,25 +202,37 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     def who(name: str) -> str:
         return ", ".join(shown_as(r, s) for r, s in homes(name))
 
-    def branches(writer: str, template: str) -> tuple[list[_Branch], str, tuple[str, ...]]:
-        """→ (걸을 가지들, 표에 적을 이름, 판정의 component 후보 서비스들). 한 레포뿐이면 인자 없이(리드의 중복이 같은 질의여야 잡힌다). 레포
-        둘이면 **그 키를 선언한 서비스가 있는 레포**로 가른다(측정 #9 P1 4: `파일:qualname`도 같아 그걸로는 못 가른다 → 측정 #10 P0 2: 서비스가
-        아니라 **레포** 단위 — 공유 레포의 서비스들은 같은 config를 읽어 선언으로 서로를 못 가르고, 가른 레포를 `code.resources`에 넘겨야 같은
-        이름 둘 중 하나가 열린다; 사람 결정: 후보끼리 가를 때만, 표에 근거). 둘 다 선언이거나 선언이 없으면 둘 다 걷는다 — 후보도 전부."""
+    def split(writer: str, template: str, *, walking: bool) -> tuple[list[tuple[str, tuple[str, ...]]], str, tuple[str, ...]]:
+        """레포 가르기 → (고른 레포들 `(레포, 서비스들)`, 표에 적을 이름, 판정의 component 후보 서비스들). 레포 둘이면 **그 키를 선언한 서비스가
+        있는 레포**로 가른다(측정 #9 P1 4: `파일:qualname`도 같아 그걸로는 못 가른다 → 측정 #10 P0 2: 서비스가 아니라 **레포** 단위 — 공유 레포의
+        서비스들은 같은 config를 읽어 선언으로 서로를 못 가른다; 사람 결정: 후보끼리 가를 때만, 표에 근거). 둘 다 선언이거나 선언이 없으면 둘 다 —
+        후보도 전부. **모든 홉**에 쓴다(R3-5d ①-a, 측정 #13 고침 1: 나쁜 홉에서만 갈라 정상 홉의 쓴 쪽은 두 레포의 서비스 전부가 후보로 실렸고,
+        판정 번역이 그 목록을 가른 결과로 믿어 첫 것을 골랐다). 주 줄은 한 번만."""
         found = homes(writer)
         if len(found) <= 1:
-            svcs = found[0][1] if found else ()
-            return [_Branch({}, "", svcs)], who(writer), svcs
+            return found, who(writer), (found[0][1] if found else ())
         declared = set(owners.get(template, ()))
         picked = [(r, s) for r, s in found if declared & set(s)]
         shown = ", ".join(shown_as(r, s) for r, s in found)
         if len(picked) == 1:
             repo, svcs = picked[0]
-            notes.append(f"{writer}는 레포 {len(found)}곳({shown})에 있다 — {template}을 선언한 {shown_as(repo, svcs)}로 골랐다")
-            return [_Branch(params_for(repo, svcs), shown_as(repo, svcs), svcs)], shown_as(repo, svcs), svcs
-        notes.append(f"{writer}는 레포 {len(found)}곳({shown})에 있다 — {template}을 선언한 쪽으로 못 가른다"
-                     f"({'둘 다 선언' if picked else '선언 없음'}): 둘 다 걷는다")
-        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)
+            note = f"{writer}는 레포 {len(found)}곳({shown})에 있다 — {template}을 선언한 {shown_as(repo, svcs)}로 골랐다"
+            result = picked, shown_as(repo, svcs), svcs
+        else:
+            note = (f"{writer}는 레포 {len(found)}곳({shown})에 있다 — {template}을 선언한 쪽으로 못 가른다"
+                    f"({'둘 다 선언' if picked else '선언 없음'}): {'둘 다 걷는다' if walking else '둘 다 후보'}")
+            result = found, shown, tuple(x for _, s in found for x in s)
+        if note not in notes:
+            notes.append(note)
+        return result
+
+    def branches(writer: str, template: str) -> tuple[list[_Branch], str, tuple[str, ...]]:
+        """→ (걸을 가지들, 표에 적을 이름, 후보 서비스들). 한 레포뿐이면 인자 없이(리드의 중복이 같은 질의여야 잡힌다). 가른 레포를 `code.resources`에
+        넘겨야 같은 이름 둘 중 하나가 열린다."""
+        found, shown, cands = split(writer, template, walking=True)
+        if len(homes(writer)) <= 1:
+            return [_Branch({}, "", cands)], shown, cands
+        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, cands
 
     first = next((t for t in state.plan_tasks if t.id == "t-1" and t.result_evidence_ids), None)
     first_branches, first_shown, first_cands = branches(target.writer, target.declared)
@@ -364,9 +376,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         status += f" · 단일값 {passed} — 거르는 줄 없음({scope_note})"
                     if len(same_all) > len(same):
                         status += f" · 대조 안 함 {len(same_all) - len(same)}개(문자열 아님)"
-                # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다.
-                next_branches, shown, cands = (branches(w, name) if (bad and w)
-                                               else ([], who(w), tuple(x for _, s in homes(w) for x in s)))
+                # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다. 정상 홉의 쓴 쪽도
+                # 같은 가르기로(걷지는 않는다) — 표의 쓴 쪽 칸과 판정의 후보가 같은 근거를 갖는다.
+                if bad and w:
+                    next_branches, shown, cands = branches(w, name)
+                elif w:
+                    next_branches, (_, shown, cands) = [], split(w, name, walking=False)
+                else:
+                    next_branches, shown, cands = [], "", ()
                 declared_names[ev] = name
                 hops.append(Hop(key=label, kind=kind, depth=depth + 1, writer=w, service=shown, candidates=list(cands), status=status, bad=bad,
                                 evidence_id=ev, basis=f"{writer}{tag}가 읽는 자원 ({res_id})", parent=came_from))
@@ -386,7 +403,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     rungs: list[Rung] = []
     if not stopped:
         if stop_hop is not hops[0] and not stop_hop.writer:
-            stopped = f"쓴 쪽을 모른다 — {stop_hop.key}(값에 인덱스의 클래스 이름이 없다)"
+            # 값이 없으면 볼 것도 없다 — "값에 클래스 이름이 없다"는 값이 있을 때의 말이다(측정 #13 추가분 4). 다음 칸은 셋 다 그 키를 누가 쓰나.
+            stopped = (f"키가 없다 — {stop_hop.key}" if stop_hop.status == "없음"
+                       else f"0행 — {stop_hop.key}(값이 비어 쓴 쪽을 알 수 없다)" if stop_hop.status == "0행"
+                       else f"쓴 쪽을 모른다 — {stop_hop.key}(값에 인덱스의 클래스 이름이 없다)")
             rungs.append(Rung(action="code.uses", params={"name": declared_names.get(ev, stop_hop.key)}, evidence=ev))
         elif ev in failed_at:
             tag, why, here = failed_at[ev]

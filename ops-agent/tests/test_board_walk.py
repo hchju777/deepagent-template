@@ -122,7 +122,9 @@ def _at(path, needle):
 
 SOURCE_ROW = ("alarm:source:L1 | — | 정상 — 행 4 · 필드 3 · 모든 행이 같은 값: unit='ea' · 단일값 unit='ea' — 거르는 줄 없음(1/1 대조, 2파일, "
               "이은 컴포넌트 state_filter)")
-PALETTE_ROW = "alarm:palette | PaletteLoader [api, dt-core(서비스 3개 공유)] | 정상 — colors: 행 2 · 필드 2"
+# 정상 홉의 쓴 쪽도 키 선언으로 가른다(R3-5d ①-a) — 두 레포 중 alarm:palette을 선언한 쪽.
+PALETTE_ROW = "alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 정상 — colors: 행 2 · 필드 2"
+PALETTE_NOTE = "PaletteLoader는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — alarm:palette을 선언한 dt-core(서비스 3개 공유)로 골랐다"
 
 
 def test_c1형_빈_배열_사슬은_메시지_입력_원천_클래스에서_입력을_모른다로_멈추고_다음_칸은_그_클래스와_이은_컴포넌트의_본문이다(board, monkeypatch):
@@ -134,7 +136,7 @@ def test_c1형_빈_배열_사슬은_메시지_입력_원천_클래스에서_입�
                     "alarm:domain:L1 | DomainBuilder [batch] | 빈 배열 (record)",
                     PALETTE_ROW, SOURCE_ROW,
                     "alarm:raw:L1 | SourceCollector [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
-    assert notes == ["SourceCollector는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — alarm:raw:{line}을 선언한 dt-core(서비스 3개 공유)로 골랐다"]
+    assert notes == [PALETTE_NOTE, "SourceCollector는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — alarm:raw:{line}을 선언한 dt-core(서비스 3개 공유)로 골랐다"]
     assert stopped == "입력을 모른다 — SourceCollector(인덱스 자원 0 — 메시지 입력일 수 있다)"
     assert rungs == [f"code.read line={_at('common/source.py', 'class SourceCollector')} path='common/source.py' service='batch'",
                      f"code.read line={_at('common/parsers.py', 'class RowParser')} path='common/parsers.py' service='batch'"]
@@ -155,7 +157,7 @@ def test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클�
                     "feed:events:L1 | — | 정상 — 행 4 · 필드 2",
                     "feed:ref | — | 정상 — codes: 행 3 · 필드 2",
                     "feed:status:L1 | — | 정상 — 행 4 · 필드 2"]
-    assert notes == []
+    assert notes == [PALETTE_NOTE]
     assert stopped == f"입력이 다 정상 — SourceMerger (단일값이 든 비교식 batch/components.py:L{n})"
     assert rungs == [f"code.read line={n} path='batch/components.py' service='batch'",
                      f"code.read line={_at('common/merge.py', 'feed_events')} path='common/merge.py' service='batch'",

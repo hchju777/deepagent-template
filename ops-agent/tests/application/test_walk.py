@@ -112,7 +112,7 @@ async def test_나쁜_입력의_쓴_쪽을_모르면_거기서_멈추고_다음_
     runner = _Reads(table)
     walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
     assert [(h.key, h.status, h.bad) for h in walk.hops[1:]] == [("in:a:L1", "없음", True)] + [(n, "0행", True) for n in names[:SCAN_READS]]
-    assert walk.stopped == "쓴 쪽을 모른다 — in:a:L1(값에 인덱스의 클래스 이름이 없다)"
+    assert walk.stopped == "키가 없다 — in:a:L1"                                     # 값이 없으면 볼 것도 없다(R3-5d ①-a)
     assert walk.next_hop() == ("code.uses", {"name": "in:a:{line}"}) and walk.next_evidence == "t-3.e1"
     assert ("redis.get", names[SCAN_READS]) not in runner.ran and walk.reads == 1 + 1 + 1 + SCAN_READS
     # 읽기 실패는 나쁨이 아니다 — 모르는 것이지 비어 있는 것이 아니다. 그래서 멈춤도 "입력이 다 정상"이 아니라 "다 못 봤다"(R3-5b ②, 사람 결정 10-16 —
@@ -391,7 +391,7 @@ async def test_리터럴_줄을_잡고도_위가_다_정상이면_다음_홉은_
     # 서비스를 모르고 쓴 쪽도 모르면 `code.uses`가 남는다
     unknown = _Reads({**table, ("redis.get", "src:L1"): {"type": "string", "value": "[]"}})
     walk = (await run_walk(_state(), runner=unknown, classes=frozenset({"W0", "W1"}), lookup=free, clock=lambda: T0))["walk"]
-    assert walk.next_hop() == ("code.uses", {"name": "src:{line}"}) and walk.stopped.startswith("쓴 쪽을 모른다 — src:L1")
+    assert walk.next_hop() == ("code.uses", {"name": "src:{line}"}) and walk.stopped.startswith("0행 — src:L1(값이 비어")
 
 
 async def test_한_줄에_짝이_둘이면_한_줄로_센다():
@@ -447,7 +447,7 @@ async def test_입력이_다_정상은_나열된_입력을_전부_읽고_전부_
     # 키 없음은 읽기 실패가 아니다 — 사실 `없음`, 나쁨(그 키에서 멈춘다)
     gone = {**failed, ("redis.get", "in:L1"): None}
     walk = (await run_walk(_state(empty=()), runner=_Reads(gone), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
-    assert walk.hops[1].status == "없음" and walk.hops[1].bad and walk.stopped.startswith("쓴 쪽을 모른다 — in:L1")
+    assert walk.hops[1].status == "없음" and walk.hops[1].bad and walk.stopped == "키가 없다 — in:L1"
     # 다 읽고 다 정상일 때만 "입력이 다 정상"
     fine = {**failed, ("redis.get", "in:L1"): _value(rows=[{"a": 1}, {"a": 3}])}
     walk = (await run_walk(_state(empty=()), runner=_Reads(fine), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
@@ -489,3 +489,43 @@ async def test_걷기의_입력도_행_안의_클래스_이름을_쓴_쪽으로_
              ("redis.get", "in:L1"): {"type": "string", "value": json.dumps([{"view": "W1"}, {"view": "W1"}])}}
     walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
     assert walk.hops[1].key == "in:L1" and walk.hops[1].writer == ""
+
+
+
+# ── R3-5d ①-a — 레포 가르기는 모든 홉에, 값 없는 홉의 멈춤 문구 ──
+
+async def test_정상_홉의_쓴_쪽도_키_선언으로_레포를_가르고_못_가르면_둘_다_후보다():
+    """측정 #13 고침 1: 걷기는 나쁜 홉에서만 레포를 갈랐다 — 정상 홉의 쓴 쪽은 두 레포의 서비스 전부가 후보로 실렸고, 판정 번역이 그 목록을 "가른
+    결과"로 믿어 첫 것(`<수집기>`)을 골랐다. 정상 홉도 그 키의 선언으로 가른다(표의 쓴 쪽 칸·후보·주 줄). 못 가르면 "둘 다 후보"."""
+    # `q:{z}`는 못 채우는 템플릿 — scan한 실재 키 둘의 쓴 쪽이 같은 두 레포 클래스라 주 줄이 두 번 나올 자리(한 번만 적어야 한다)
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey"), ("pal", "rediskey"), ("q:{z}", "rediskey")]),
+             ("redis.get", "in:L1"): _value(rows=[{"a": 1}, {"a": 2}], metadata={"event_type": "W1"}),
+             ("redis.get", "pal"): _value(colors=[{"c": 1}, {"c": 2}], metadata={"event_type": "W2"}),
+             ("redis.scan", "q:*"): ["q:1", "q:2"],
+             **{("redis.get", k): _value(rows=[{"a": 1}, {"a": 2}], metadata={"event_type": "W2"}) for k in ("q:1", "q:2")}}
+    repos = {"api": "dt-api", "p1": "dt-core", "p2": "dt-core", "p3": "dt-core"}
+    services = {"W0": ("p1",), "W1": ("api", "p1", "p2", "p3"), "W2": ("api", "p1", "p2", "p3")}
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1", "W2"}), class_services=services, service_repos=repos,
+                           declared_by={"in:{line}": ("p1", "p2", "p3"), "pal": ("api", "p1")}, clock=lambda: T0))["walk"]
+    by_key = {h.key: h for h in walk.hops}
+    assert (by_key["in:L1"].service, by_key["in:L1"].candidates) == ("dt-core(서비스 3개 공유)", ["p1", "p2", "p3"])      # 선언으로 골랐다
+    assert (by_key["pal"].service, by_key["pal"].candidates) == ("api, dt-core(서비스 3개 공유)", ["api", "p1", "p2", "p3"])   # 못 가른다 — 둘 다
+    assert walk.notes == ["W1는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — in:{line}을 선언한 dt-core(서비스 3개 공유)로 골랐다",
+                          "W2는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — pal을 선언한 쪽으로 못 가른다(둘 다 선언): 둘 다 후보",
+                          "W2는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — q:{z}을 선언한 쪽으로 못 가른다(선언 없음): 둘 다 후보"]   # q:1·q:2에 한 번
+    assert walk.stopped == "입력이 다 정상 — W0" and walk.reads == 6                                                       # 정상 홉은 걷지 않는다
+
+
+async def test_값이_없는_홉에서_멈추면_키가_없다_또는_0행이라_적는다():
+    """측정 #13 추가분 4: 키가 없거나 컬렉션이 0행이어도 "값에 인덱스의 클래스 이름이 없다"였다 — 값이 없으면 볼 것도 없다. 다음 칸은 그대로
+    `code.uses`(그 키를 누가 쓰나)."""
+    base = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey"), ("docs", "collection")])}
+    walk = (await run_walk(_state(), runner=_Reads({**base, ("redis.get", "in:L1"): None, ("mongo.find", "docs"): []}), classes=frozenset({"W0"}),
+                           clock=lambda: T0))["walk"]
+    assert walk.stopped == "키가 없다 — in:L1" and walk.next_hop() == ("code.uses", {"name": "in:{line}"})
+    walk = (await run_walk(_state(), runner=_Reads({**base, ("redis.get", "in:L1"): _value(n=1), ("mongo.find", "docs"): []}), classes=frozenset({"W0"}),
+                           clock=lambda: T0))["walk"]
+    assert walk.stopped == "0행 — docs(값이 비어 쓴 쪽을 알 수 없다)" and walk.next_hop() == ("code.uses", {"name": "docs"})
+    walk = (await run_walk(_state(), runner=_Reads({**base, ("redis.get", "in:L1"): _value(record=[]), ("mongo.find", "docs"): [{"a": 1}]}),
+                           classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
+    assert walk.stopped == "쓴 쪽을 모른다 — in:L1(값에 인덱스의 클래스 이름이 없다)"                                    # 값은 있는데 이름이 없다

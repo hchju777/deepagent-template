@@ -2532,8 +2532,8 @@ WBRIEF_T = "tests/application/test_briefing.py::test_걷기가_있으면_케이�
 CASES += [
  ("출력을 입력으로 센다", WK, "                if w and w == writer:\n", "                if False:\n", [WALK_T]),
  ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]", "                pass", [WALK_T]),
- ("정상인 입력으로도 간다", WK, "(branches(w, name) if (bad and w)", "(branches(w, name) if w", [WALK_T]),
- ("쓴 쪽 모름을 걷는다", WK, "(branches(w, name) if (bad and w)", "(branches(w, name) if bad", [UNKNOWN_T]),
+ ("정상인 입력으로도 간다", WK, "                if bad and w:\n                    next_branches, shown, cands = branches(w, name)", "                if w:\n                    next_branches, shown, cands = branches(w, name)", [WALK_T]),
+ ("쓴 쪽 모름을 걷는다", WK, "                if bad and w:\n                    next_branches, shown, cands = branches(w, name)", "                if bad:\n                    next_branches, shown, cands = branches(w, name)", [UNKNOWN_T]),
  ("대상 키를 또 읽는다", WK, "    seen = {target.key, target.declared}", "    seen = set()", [WALK_T]),
  ("쓰기 구간도 걷는다", WK, "    m = _WRITES_AT.search(text)\n    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [WALK_T]),
  ("깊이 상한이 없다", WK, "        if depth >= MAX_DEPTH:", "        if False:", [CAP_T]),
@@ -2564,9 +2564,9 @@ RES_SVC_T = "tests/infrastructure/test_deployed_code.py::test_code_resources는_
 DECL_T = "tests/knowledge/test_flow.py::test_declaring_services는_그_자원을_config로_선언한_서비스들이다"
 CASES += [
  ("선언한 서비스로 안 가른다", WK, "        if len(picked) == 1:\n            repo, svcs = picked[0]", "        if False:\n            repo, svcs = picked[0]", [TIE_T]),
- ("못 가르면 한 쪽만 걷는다", WK, "        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, tuple(x for _, s in found for x in s)", "        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found[:1]], shown, tuple(x for _, s in found for x in s)", [TIE_T]),
- ("한 곳뿐인데도 service 인자를 단다", WK, "            return [_Branch({}, \"\", svcs)], who(writer), svcs", "            return [_Branch({\"service\": svcs[0]} if len(svcs) == 1 else {}, \"\", svcs)], who(writer), svcs", [TIE_T]),
- ("깊은 홉을 대상 키의 선언으로 가른다", WK, "                next_branches, shown, cands = (branches(w, name) if (bad and w)", "                next_branches, shown, cands = (branches(w, target.declared) if (bad and w)", [TIE_T]),
+ ("못 가르면 한 쪽만 걷는다", WK, "        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, cands", "        return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found[:1]], shown, cands", [TIE_T]),
+ ("한 곳뿐인데도 service 인자를 단다", WK, "            return [_Branch({}, \"\", cands)], shown, cands", "            return [_Branch({\"service\": cands[0]} if len(cands) == 1 else {}, \"\", cands)], shown, cands", [TIE_T]),
+ ("깊은 홉을 대상 키의 선언으로 가른다", WK, "                    next_branches, shown, cands = branches(w, name)", "                    next_branches, shown, cands = branches(w, target.declared)", [TIE_T]),
  ("service로 레포를 안 좁힌다", DCP, "            text = f\"{known.repo}:{name}\"\n        elif repo:\n            # 한 레포를", "            text = name\n        elif repo:\n            # 한 레포를", [RES_SVC_T]),
  ("두 서비스 안내를 안 한다", DCP, "            lines += self._repo_hint(found)", "            pass", [RES_SVC_T]),
  ("등재 목록에 service 인자가 없다", ROOT / "src/domain/actions.py", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"service\", \"repo\")),", "    \"code.resources\":      (\"code\",  \"resources\",     (\"name\",),               (\"repo\",)),", [RES_SVC_T]),
@@ -2882,7 +2882,19 @@ CASES += [
  ("그 레포의 서비스를 후보로 안 적는다", ND, "의 코드다 — 그 레포의 서비스 {others}도 후보\")", "의 코드다\")", [CAVEAT_T]),
 ]
 
-assert len(CASES) >= 865, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5d ①-a — 레포 가르기는 모든 홉에, 값 없는 홉의 멈춤 문구 ──
+SPLIT_ALL_T = "tests/application/test_walk.py::test_정상_홉의_쓴_쪽도_키_선언으로_레포를_가르고_못_가르면_둘_다_후보다"
+NOVALUE_T = "tests/application/test_walk.py::test_값이_없는_홉에서_멈추면_키가_없다_또는_0행이라_적는다"
+CASES += [
+ ("정상 홉의 쓴 쪽을 안 가른다", WK, "                    next_branches, (_, shown, cands) = [], split(w, name, walking=False)", "                    next_branches, shown, cands = [], who(w), tuple(x for _, s in homes(w) for x in s)", [SPLIT_ALL_T, BOARD_C1_T]),
+ ("정상 홉의 주 줄이 걷는다고 말한다", WK, "{'둘 다 걷는다' if walking else '둘 다 후보'}", "'둘 다 걷는다'", [SPLIT_ALL_T]),
+ ("같은 주 줄을 두 번 적는다", WK, "        if note not in notes:\n            notes.append(note)", "        notes.append(note)", [SPLIT_ALL_T]),
+ ("키 없음을 쓴 쪽 모름이라 한다", WK, "            stopped = (f\"키가 없다 — {stop_hop.key}\" if stop_hop.status == \"없음\"", "            stopped = (f\"키가 없다 — {stop_hop.key}\" if False", [NOVALUE_T]),
+ ("0행을 쓴 쪽 모름이라 한다", WK, "                       else f\"0행 — {stop_hop.key}(값이 비어 쓴 쪽을 알 수 없다)\" if stop_hop.status == \"0행\"", "                       else f\"0행 — {stop_hop.key}(값이 비어 쓴 쪽을 알 수 없다)\" if False", [NOVALUE_T]),
+]
+
+assert len(CASES) >= 870, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
