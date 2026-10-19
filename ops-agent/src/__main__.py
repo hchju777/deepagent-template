@@ -1026,7 +1026,7 @@ def cmd_case_walk(args, env) -> int:
                               class_services=code.class_services() if code else {},
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
-                              declared_by=flow.declaring_map(flow_graph), clock=clock)
+                              declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph), clock=clock)
             state = await (walk_from_key(case, args.key, deps) if args.key else walk_only(case, deps))
             return state, flow_graph, (code.has_index() if code else False), graph_note
         finally:
@@ -1137,7 +1137,7 @@ def cmd_case_investigate(args, env) -> int:
                               class_services=code.class_services() if code else {},
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
-                              declared_by=flow.declaring_map(flow_graph), clock=clock)
+                              declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph), clock=clock)
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()

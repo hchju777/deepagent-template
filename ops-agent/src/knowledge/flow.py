@@ -1132,6 +1132,21 @@ def declaring_map(graph: dict | None) -> dict[str, tuple[str, ...]]:
     return {label: declaring_services(graph, label) for label in sorted(labels)}
 
 
+def producing_map(graph: dict | None) -> dict[str, tuple[str, ...]]:
+    """토픽 → config로 발행을 선언한 서비스들(`produces` 엣지 중 **config 출처**, 출발이 서비스인 것). 메시지 홉의 발행 쪽(R3-5d ④, 사람 결정 10-19:
+    같은 이름 클래스가 두 레포라 클래스 이름이 아니라 config 발행 선언으로). 코드 grep의 `produces`는 추정이라 안 센다. 선언이 없는 토픽은 비어 있다 —
+    우리 밖이다. 엔진에 넘기는 닫힌 표 — 엔진은 그래프를 들지 않는다."""
+    if not graph:
+        return {}
+    by_id = {n["id"]: n for n in graph.get("nodes", [])}
+    out: dict[str, set[str]] = {n["label"]: set() for n in graph.get("nodes", []) if n.get("type") == "topic" and n.get("label")}
+    for e in graph.get("links", []):
+        src, dst = by_id.get(e.get("source"), {}), by_id.get(e.get("target"), {})
+        if e.get("relation") == "produces" and e.get("origin") == "config" and src.get("type") == "service" and dst.get("label") in out:
+            out[dst["label"]].add(src["label"])
+    return {label: tuple(sorted(found)) for label, found in sorted(out.items())}
+
+
 def known_names(graph: dict | None) -> str:
     """그래프의 이름 전부, 한 줄에 하나. 엔진의 "찾지 않고 이름을 댔다" 검사가 증거와 합쳐
     본다 — 그래프에 있는 이름은 지어낸 것이 아니다. None이면 빈 문자열이라 검사가 예전과 같다."""

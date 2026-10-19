@@ -319,3 +319,21 @@ def test_identity가_같은_값_둘이면_그_값이_두_번_든_객체만_맞�
     assert holds_identity({"group": "X", "title": "Y"}, ("X", "X")) is None
     assert holds_identity({"group": "X", "title": "X", "n": 1}, ("X", "X")) == "(맨 위)"
     assert holds_identity({"a": {"scope": "X", "t": "C"}, "b": {"g": "X", "t": "X"}}, ("X", "X")) == "b"
+
+
+
+async def test_값_안의_포인터는_topic_partition_offset이_함께_든_객체이고_입구가_대상_키에_적는다():
+    """측정 #13 추가분 2(R3-5d ④): 처리기가 쓴 키 값의 `metadata.source`가 그 키를 만든 메시지 한 건을 가리킨다(법인 둘 122/122키). 필드 이름은
+    `topic`·`partition`·`offset`으로 가정 — 다르면 포인터 없음(걷기는 토픽을 짐작하지 않는다). 행 안의 것은 안 본다, 숫자 문자열은 받는다."""
+    from src.application.intake_map import pointer_of
+    value = {"record": [{"topic": "in-row", "partition": 0, "offset": 1}],
+             "metadata": {"event_type": "W", "source": {"topic": "t.raw", "partition": "2", "offset": 77}}}
+    assert pointer_of(value) == {"topic": "t.raw", "partition": 2, "offset": 77, "at": "metadata.source"}
+    assert pointer_of({"metadata": {"source": {"topic": "t", "partition": 0}}}) == {} and pointer_of([{"topic": "t", "partition": 0, "offset": 1}]) == {}
+    assert pointer_of({"topic": "t", "partition": True, "offset": 1}) == {} and pointer_of("x") == {}
+    full = json.dumps({**json.loads(_value("L1", "Alarm")), "metadata": {"event_type": "SummaryRefresh", "source": {"topic": "t.raw", "partition": 1, "offset": 5}}})
+    runner = _runner(keys={"alarm:stats:L1": full}, picked="alarm:stats:L1")
+    pick = (await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:L1",), classes=frozenset({"SummaryRefresh"})))["target"]
+    assert pick.pointer == {"topic": "t.raw", "partition": 1, "offset": 5, "at": "metadata.source"}
+    plain = _runner(keys={"alarm:stats:L1": _value()}, picked="alarm:stats:L1")
+    assert (await run_intake(CaseState(case=_case()), SPEC, runner=plain, declared=("alarm:stats:L1",)))["target"].pointer == {}

@@ -68,22 +68,27 @@ def test_키의_선언_이름은_흐름_그래프의_선언_키와_자리가_맞
 async def test_walk_from_key는_입구_없이_그_키를_t_1로_읽어_대상_키로_삼고_걷는다():
     """측정 #12: 배지 밖 끝점은 라우트가 리터럴 → config로 키를 정해 입구가 막힌다(B는 아직 없다). 사람이 키를 대면 그 키부터 걷는다 — 쓴 쪽은 값에서,
     빈 자리는 걷기와 같은 판정(값의 맨 위), 선언 이름은 흐름 그래프에서."""
-    value = {"type": "string", "value": json.dumps({"record": {}, "metadata": {"event_type": "Writer"}})}
+    value = {"type": "string", "value": json.dumps({"record": {}, "metadata": {"event_type": "Writer", "source": {"topic": "t.raw", "partition": 0, "offset": 3}}})}
     res_text = "Writer (w.py:L1) [dt-core · sink]\n  읽기 1:\n    src:{line} [rediskey] — Writer._run (w.py:L3)"
     src = {"type": "string", "value": json.dumps([{"a": 1}, {"a": 2}])}
+    # 키 값의 포인터(R3-5d ④)로 그 키를 만든 메시지 한 건도 입력으로 읽는다 — 발행 쪽은 노드가 넘긴 config 발행 선언.
+    msg = {"topic": "t.raw", "partition": 0, "offset": 3, "begin": 0, "end": 9, "found": True, "bytes": 20,
+           "message": {"partition": 0, "offset": 3, "timestamp": None, "key": None, "value": {"rows": [{"a": 1}]}}}
     runner = ScriptedRunner({"t-1": _ok("t-1", value, "redis.get key='dom:L1'"), "t-2": _ok("t-2", res_text, "code.resources name='Writer'"),
-                             "t-3": _ok("t-3", src, "redis.get key='src:L1'")},
-                            raws={"t-1.e1": value, "t-2.e1": res_text, "t-3.e1": src})
+                             "t-3": _ok("t-3", src, "redis.get key='src:L1'"), "t-4": _ok("t-4", msg, "kafka.message_at offset=3 partition=0 topic='t.raw'")},
+                            raws={"t-1.e1": value, "t-2.e1": res_text, "t-3.e1": src, "t-4.e1": msg})
     deps = deps_for(runner, classes=frozenset({"Writer"}), code_index=True, class_services={"Writer": ("sink",)},
-                    declared_by={"dom:{line}": ("sink",), "src:{line}": ("sink",)}, clock=lambda: T0)
+                    declared_by={"dom:{line}": ("sink",), "src:{line}": ("sink",)}, topic_producers={"t.raw": ("collector",)}, clock=lambda: T0)
     case = Case(id="walk-key", gbm="mx", fct="gumi", origin="human", symptom="dom:L1 — case walk --key(측정)", t0=T0)
     state = await walk_from_key(case, "dom:L1", deps)
     pick = state.target
     assert (pick.key, pick.declared, pick.writer, pick.empty_objects) == ("dom:L1", "dom:{line}", "Writer", ["record"])
+    assert pick.pointer == {"topic": "t.raw", "partition": 0, "offset": 3, "at": "metadata.source"}
     assert pick.line() == "대상 키: dom:L1 — --key로 댄 키 (t-1.e1)"
-    assert [t.id for t in state.plan_tasks] == ["t-1", "t-2", "t-3"] and [e.id for e in state.evidence] == ["t-1.e1", "t-2.e1", "t-3.e1"]
-    assert [(h.key, h.status) for h in state.walk.hops] == [("dom:L1", "빈 객체 (record)"), ("src:L1", "정상 — 행 2 · 필드 1")]
-    assert state.walk.stopped == "입력이 다 정상 — Writer"
+    assert [t.id for t in state.plan_tasks] == ["t-1", "t-2", "t-3", "t-4"] and [e.id for e in state.evidence] == ["t-1.e1", "t-2.e1", "t-3.e1", "t-4.e1"]
+    assert [(h.key, h.status) for h in state.walk.hops] == [("dom:L1", "빈 객체 (record)"), ("src:L1", "정상 — 행 2 · 필드 1"),
+                                                            ("t.raw[0]@3", "정상 — rows: 행 1 · 필드 1")]
+    assert state.walk.hops[-1].service == "발행 선언: collector" and state.walk.stopped == "입력이 다 정상 — Writer"
     # 키가 없거나 읽기가 실패하면 그 사실만 — 걷지 않는다
     gone = ScriptedRunner({"t-1": _ok("t-1", None, "redis.get key='dom:L1'")}, raws={"t-1.e1": None})
     state = await walk_from_key(case, "dom:L1", deps_for(gone, classes=frozenset({"Writer"}), code_index=True, clock=lambda: T0))

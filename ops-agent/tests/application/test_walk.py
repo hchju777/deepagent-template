@@ -257,7 +257,7 @@ async def test_멈춘_자리는_가장_깊은_나쁜_홉이고_다음_칸은_늘
     # 입력이 0이면 "입력을 모른다" — 다음 칸은 그 클래스 본문(`code.read line=`이 머리 줄을 품은 심볼 전체를 준다)
     none = _Reads({("code.resources", "W0"): "W0 (x.py:L1) [dt-core · a]\n  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 2개"})
     walk = (await run_walk(_state(), runner=none, classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
-    assert walk.stopped == "입력을 모른다 — W0(인덱스 자원 0 — 메시지 입력일 수 있다)" and walk.stop_at == "t-1.e1"
+    assert walk.stopped == "입력을 모른다 — W0(인덱스 자원 0 — 메시지 입력일 수 있다 · 포인터 없음)" and walk.stop_at == "t-1.e1"
     assert walk.rungs == [Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-2.e1")]
     # 읽는 쪽 서비스를 모르면 code.read를 못 만든다 — 칸 없음
     walk = (await run_walk(_state(), runner=none, classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
@@ -437,7 +437,7 @@ async def test_입력이_다_정상은_나열된_입력을_전부_읽고_전부_
     # 대상 키의 쓴 쪽이 읽는 자원이 대상 키(자기 출력)뿐 — 대상 홉은 정상이어도 "모른다", 다음 칸은 클래스 본문
     own = {("code.resources", "W0"): _res("W0", [("alarm:stats:{line}", "rediskey")])}
     walk = (await run_walk(_state(empty=()), runner=_Reads(own), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
-    assert walk.stopped == "입력을 모른다 — W0(인덱스 자원이 자기 출력뿐)" and walk.rungs[0].params == {"service": "a", "path": "x.py", "line": 1}
+    assert walk.stopped == "입력을 모른다 — W0(인덱스 자원이 자기 출력뿐 · 포인터 없음)" and walk.rungs[0].params == {"service": "a", "path": "x.py", "line": 1}
     # 읽기 실패 — 그 행은 나쁨이 아니지만 멈춤은 "다 못 봤다"
     failed = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey"), ("ok:{line}", "rediskey")]),
               ("redis.get", "ok:L1"): _value(rows=[{"a": 1}, {"a": 2}])}
@@ -529,3 +529,92 @@ async def test_값이_없는_홉에서_멈추면_키가_없다_또는_0행이라
     walk = (await run_walk(_state(), runner=_Reads({**base, ("redis.get", "in:L1"): _value(record=[]), ("mongo.find", "docs"): [{"a": 1}]}),
                            classes=frozenset({"W0"}), clock=lambda: T0))["walk"]
     assert walk.stopped == "쓴 쪽을 모른다 — in:L1(값에 인덱스의 클래스 이름이 없다)"                                    # 값은 있는데 이름이 없다
+
+
+
+# ── R3-5d ④ — 키를 만든 메시지 한 건을 입력으로(포인터 홉) ──
+
+_POINTER = {"topic": "t", "partition": 0, "offset": 5, "at": "metadata.source"}
+_NONE_RES = "W0 (x.py:L1) [dt-core · a]\n  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 2개"
+
+
+def _msg(value, *, found=True, begin=0, end=9):
+    """`kafka.message_at`의 원본 모양(실어댑터·stub과 같다)."""
+    return {"topic": "t", "partition": 0, "offset": 5, "begin": begin, "end": end, "found": found, "bytes": 30 if found else 0,
+            "message": {"partition": 0, "offset": 5, "timestamp": None, "key": None, "value": value} if found else None,
+            **({} if found else {"note": "보존 범위 밖"})}
+
+
+def _pointed(state=None):
+    state = state or _state()
+    return state.model_copy(update={"target": state.target.model_copy(update={"pointer": dict(_POINTER)})})
+
+
+async def test_포인터가_있으면_그_메시지_한_건을_입력으로_읽고_정상이면_다_정상_비었으면_거기서_멈춘다():
+    """측정 #13 추가분 2(사람 결정 10-19): 메시지 입력은 인덱스가 못 세고 키 값의 포인터가 그 키를 만든 메시지를 가리킨다 — 한 건이면 충분하다. 발행 쪽은
+    클래스가 아니라 config 발행 선언(같은 이름 클래스가 두 레포), 없으면 우리 밖. 그 메시지로 더 걷지는 않는다. 메시지만 읽은 클래스의 다음 칸은 본문."""
+    rows = [{"ws": "A", "n": 1}, {"ws": "B", "n": 2}]
+    table = {("code.resources", "W0"): _NONE_RES, ("kafka.message_at", "t"): _msg({"line": "L1", "rows": rows})}
+    runner = _Reads(table)
+    walk = (await run_walk(_pointed(), runner=runner, classes=frozenset({"W0"}), class_services={"W0": ("a",)}, topic_producers={"t": ("col", "pub")},
+                           clock=lambda: T0))["walk"]
+    assert runner.params[-1] == ("kafka.message_at", {"topic": "t", "partition": 0, "offset": 5})
+    hop = walk.hops[-1]
+    assert (hop.key, hop.kind, hop.writer, hop.service, hop.candidates, hop.status, hop.bad, hop.parent) == (
+        "t[0]@5", "message", "", "발행 선언: col, pub", ["col", "pub"], "정상 — rows: 행 2 · 필드 2", False, "t-1.e1")
+    assert hop.basis == "W0를 댄 키 값의 포인터 metadata.source (t-1.e1)" and hop.line() == "  t[0]@5 | 발행 선언: col, pub | 정상 — rows: 행 2 · 필드 2 | t-3.e1"
+    assert walk.stopped == "입력이 다 정상 — W0" and walk.reads == 2
+    assert walk.rungs == [Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-2.e1")]
+    # 비었으면(봉투 없는 목록도 맨 위 목록으로 센다) 거기서 멈춘다 — 발행 선언이 없으면 우리 밖. 다음 칸: 그 메시지를 받는 클래스 본문 → 지금 오는 것
+    empty = _Reads({**table, ("kafka.message_at", "t"): _msg([])})
+    walk = (await run_walk(_pointed(), runner=empty, classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert (walk.hops[-1].status, walk.hops[-1].bad, walk.hops[-1].service, walk.hops[-1].candidates) == ("0행", True, "발행 선언 없음(우리 밖)", [])
+    assert walk.stopped == "입력 메시지가 나쁘다 — W0의 t[0]@5(발행 선언 없음(우리 밖))" and walk.stop_at == "t-3.e1"
+    assert walk.rungs == [Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-2.e1"),
+                          Rung(action="kafka.tail", params={"topic": "t", "limit": 5}, evidence="t-3.e1")]
+    assert walk.chain_ids() == frozenset({"t-1.e1", "t-3.e1"})
+
+
+async def test_포인터의_메시지가_보존_범위_밖이면_키를_만든_메시지가_토픽에_없다고_멈추고_다음_칸은_지금_오는_것이_먼저다():
+    """측정 #13 추가분 2: 범위 밖 2개가 둘 다 진짜 원인 자리 — 읽기 실패가 아니라 사실 `없음`(나쁨, 키 없음과 같은 종류)."""
+    table = {("code.resources", "W0"): _NONE_RES, ("kafka.message_at", "t"): _msg(None, found=False, begin=100, end=105)}
+    walk = (await run_walk(_pointed(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, topic_producers={"t": ("col",)},
+                           clock=lambda: T0))["walk"]
+    assert walk.hops[-1].status == "없음 — 키를 만든 메시지가 토픽에 없다(보존 범위 100~105)" and walk.hops[-1].bad
+    assert walk.stopped == "키를 만든 메시지가 토픽에 없다 — W0의 t[0]@5(보존 범위 100~105 · 발행 선언: col)"
+    assert [r.action for r in walk.rungs] == ["kafka.tail", "code.read"] and walk.rungs[0].params == {"topic": "t", "limit": 5}
+
+
+async def test_포인터가_없으면_그_사실만_적고_나쁜_입력의_쓴_쪽으로_내려가면_그_키_값의_포인터를_따라간다():
+    """포인터가 없으면 토픽을 짐작하지 않는다(사람 결정 10-19: "포인터 없음"만). 아래 홉의 쓴 쪽은 **그 키 값**의 포인터로 메시지를 읽는다."""
+    none = _Reads({("code.resources", "W0"): _NONE_RES})
+    walk = (await run_walk(_state(), runner=none, classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0))["walk"]
+    assert walk.stopped == "입력을 모른다 — W0(인덱스 자원 0 — 메시지 입력일 수 있다 · 포인터 없음)" and walk.reads == 1
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): _value(record=[], metadata={"event_type": "W1", "source": {"topic": "t", "partition": 0, "offset": 5}}),
+             ("code.resources", "W1"): "W1 (y.py:L1) [dt-core · a]\n  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 1개",
+             ("kafka.message_at", "t"): _msg({"rows": [{"a": 1}]})}
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, clock=lambda: T0))["walk"]
+    assert [(h.key, h.parent) for h in walk.hops] == [("alarm:stats:L1", ""), ("in:L1", "t-1.e1"), ("t[0]@5", "t-3.e1")]
+    assert walk.stopped == "입력이 다 정상 — W1" and ("kafka.message_at", "t") in runner.ran
+
+
+async def test_메시지의_단일값도_읽는_쪽_코드_줄로_판정하고_그_줄의_함수가_첫_칸이다():
+    """사내 `<작업자 배지>`의 모양: 메시지는 오는데 한 필드가 전부 같은 값이라 처리기가 거른다 — 키 값과 같은 단일값 판정(③)을 메시지에도."""
+    rows = [{"ws": "-", "n": i} for i in range(3)]
+    hit = FilterHit(path="p.py", line=7, text='if row.get("ws") != "-"', repo="r", field="ws", value="-")
+    lookup = _Lookup({("W0", (("ws", "-"),)): FilterScan(files=["w0.py", "p.py"], checked=["ws"], hits=[hit])})
+    table = {("code.resources", "W0"): _NONE_RES, ("kafka.message_at", "t"): _msg({"rows": rows})}
+    walk = (await run_walk(_pointed(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=lookup, clock=lambda: T0))["walk"]
+    assert walk.hops[-1].status == "나쁨 — 3행 전부 ws='-' · 이 필드 값이 든 비교식 p.py:L7 'if row.get(\"ws\") != \"-\"'" and walk.hops[-1].bad
+    assert walk.stopped == "입력 메시지가 나쁘다 — W0의 t[0]@5(발행 선언 없음(우리 밖)) (단일값이 든 비교식 p.py:L7)"
+    assert [(r.action, r.params.get("line") or r.params.get("topic")) for r in walk.rungs] == [("code.read", 7), ("code.read", 1), ("kafka.tail", "t")]
+
+
+async def test_포인터_메시지_읽기가_실패하면_다_못_봤다():
+    """읽기 실패는 모르는 것이지 비어 있는 것이 아니다(R3-5b ②) — 메시지도 같다."""
+    walk = (await run_walk(_pointed(), runner=_Reads({("code.resources", "W0"): _NONE_RES}), classes=frozenset({"W0"}), class_services={"W0": ("a",)},
+                           clock=lambda: T0))["walk"]
+    assert walk.hops[-1].status == "읽기 실패 — 대본 없음" and not walk.hops[-1].bad
+    assert walk.stopped == "입력을 다 못 봤다 — W0(읽기 실패 t[0]@5)"

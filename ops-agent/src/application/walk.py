@@ -14,13 +14,17 @@
 pinned 본문은 그 홉까지의 사슬만(P0 4). 읽기의 id는 리드와 같은 한 단계(`t-2`…, `walked` 플래그 — P1 5).
 상한 깊이 4·읽기 15·30초(주입 시계) — 상한에서 멈추면 다음 홉은 그 자리의 `code.resources`(리드가 이어 걷는다; 이미 읽은 것이면 ③의 입력 칸
 사다리가 이어 받는다). 걸은 읽기는 State에 증거로 남고(판정이 인용한다) 브리핑이 접는다. 던지지 않는다 — 호출부(노드)가 한 번 더 감싼다.
+메시지 입력(R3-5d ④, 사람 결정 10-19): 인덱스는 토픽 입력을 자원으로 못 센다 — 걸은 클래스를 댄 키 값의 포인터(`metadata.source`: 토픽·파티션·오프셋)가
+그 키를 만든 메시지 **한 건**을 가리키니 그 한 건을 입력으로 읽는다(`kafka.message_at`, 증거는 세기만). 값 판정·단일값 판정은 키 값과 같다. 보존 범위
+밖이면 "키를 만든 메시지가 토픽에 없다"(나쁨), 포인터가 없으면 "포인터 없음"만(토픽을 짐작하지 않는다). 발행 쪽은 클래스가 아니라 config 발행 선언
+(같은 이름 클래스가 두 레포)이고 그쪽으로 걷지는 않는다 — 선언이 없으면 우리 밖.
 """
 import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable, NamedTuple
 
 from src.application.facts import key_head
-from src.application.intake_map import _finish, _task, _unwrap, empties, empty_text, writer_of
+from src.application.intake_map import _finish, _task, _unwrap, empties, empty_text, pointer_of, writer_of
 from src.application.runner_probe import _same_valued, profile
 from src.application.state import CaseState
 from src.domain.case import EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
@@ -141,6 +145,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    class_services: dict[str, tuple[str, ...]] | None = None,
                    service_repos: dict[str, str] | None = None,
                    declared_by: dict[str, tuple[str, ...]] | None = None,
+                   topic_producers: dict[str, tuple[str, ...]] | None = None,
                    lookup: Callable[..., Awaitable[FilterScan]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
@@ -151,6 +156,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     services = class_services or {}
     repos = service_repos or {}
     owners = declared_by or {}
+    producers = topic_producers or {}
     notes: list[str] = []
     tasks: list[PlanTask] = []
     evidence: list[EvidenceRef] = []
@@ -234,6 +240,47 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             return [_Branch({}, "", cands)], shown, cands
         return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, cands
 
+    async def judged(rows: list, status: str, bad: bool, ev: str) -> tuple[str, bool, tuple[str, str] | None]:
+        """단일값 필드(③) — 아래 홉에서 잡힌 `(필드, 값)`이 여기도 그대로면 나쁨(grep 없이 이어진다). 아니면 읽는 쪽 코드 줄이 정한다. 키 값과
+        포인터 메시지(④)가 같은 판정을 받는다. → (상태, 나쁜가, 위로 이어 볼 단일값). 걷고 있는 클래스·가지·이어 온 단일값은 바깥 루프의 것."""
+        nonlocal literal
+        carry = None
+        same_all = dict(_same_valued(rows))
+        same = {k: v for k, v in same_all.items() if isinstance(v, str)}
+        if not bad and watch is not None and same.get(watch[0]) == watch[1]:
+            status, bad, carry = f"나쁨 — 같은 단일값 {watch[0]}={watch[1]!r} (아래 홉과 같다)", True, watch
+        elif not bad and same and status.startswith("정상") and lookup is not None:
+            # 어댑터 안의 조회(R3-4 ③ → R3-5 ③) — 가지의 인자(service·repo)를 그대로 넘겨 같은 이름 둘 중 그 레포의 파일을 본다. 단일값 전부를 한 번에
+            # 대조한다(상한 없음). runner를 안 거치므로 읽기 상한·증거 밖이다. 문구는 사실만 — 행 수·그 값인 필드·그 값이 든 비교식의 자리(사람 결정 10-15).
+            scan = await lookup(writer, fields=same, **branch.params)
+            passed = ", ".join(f"{f}={v!r}" for f, v in same.items())
+            if scan.hits:
+                hit = scan.hits[0]
+                caught = dict.fromkeys((h.field, h.value) for h in scan.hits)
+                shown_fields = " ".join(f"{f}={v!r}" for f, v in caught)
+                # 줄로 센다 — 한 줄에 짝이 둘(`r.get("state") != "-" and r.get("wg") != "-"`)이면 짝 수로 센 "외 1줄"은 없는 줄을 말한다(R3-5 ④).
+                lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))
+                more = f" 외 {lines_hit - 1}줄" if lines_hit > 1 else ""
+                status, bad, carry = (f"나쁨 — {len(rows)}행 전부 {shown_fields} · 이 필드 값이 든 비교식 {hit.path}:L{hit.line} '{hit.text}'{more}", True,
+                                      (hit.field, hit.value))
+                if literal is None:
+                    literal = (scope, hit.path, hit.line, ev)
+            elif scan.problem:
+                # 조회가 안 됐으면 대조한 것이 없다(0/M) — 정상이라 하지 않는다(사람 결정 10-15: 일부만 봤으면 "일부만 검사").
+                status = "미확인" + status[len("정상"):] + f" · 단일값 {passed} — 일부만 검사(0/{len(same)}): {scan.problem}"
+                partial.add(came_from)
+            elif scan.unlinked:
+                # 못 이은 컴포넌트가 하나라도 있으면 N=M이라도 일부만이다 — 그 컴포넌트에 비교식이 있을 수 있다.
+                status = ("미확인" + status[len("정상"):]
+                          + f" · 단일값 {passed} — 일부만 검사({len(scan.checked)}/{len(same)}, 못 이음: {', '.join(scan.unlinked[:3])})")
+                partial.add(came_from)
+            else:
+                scope_note = f"{len(scan.checked)}/{len(same)} 대조, {len(scan.files)}파일" + (f", 이은 컴포넌트 {', '.join(scan.linked)}" if scan.linked else "")
+                status += f" · 단일값 {passed} — 거르는 줄 없음({scope_note})"
+            if len(same_all) > len(same):
+                status += f" · 대조 안 함 {len(same_all) - len(same)}개(문자열 아님)"
+        return status, bad, carry
+
     first = next((t for t in state.plan_tasks if t.id == "t-1" and t.result_evidence_ids), None)
     first_branches, first_shown, first_cands = branches(target.writer, target.declared)
     hops = [Hop(key=target.key, depth=0, writer=target.writer, service=first_shown, candidates=list(first_cands),
@@ -241,20 +288,23 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 evidence_id=first.result_evidence_ids[0] if first else "",
                 basis=f"대상 키 — 값의 {target.writer_at}이 {target.writer}")]
     seen = {target.key, target.declared}
-    # (쓴 클래스, 가지 — 인자·꼬리표·후보, 깊이, 여기로 오게 한 증거, 이어 볼 단일값 `(필드, 값)` — ③)
-    frontier: list[tuple[str, _Branch, int, str, tuple[str, str] | None]] = [(target.writer, b, 0, hops[0].evidence_id, None) for b in first_branches]
+    # (쓴 클래스, 가지 — 인자·꼬리표·후보, 깊이, 여기로 오게 한 증거, 이어 볼 단일값 `(필드, 값)` — ③, 그 키 값의 메시지 포인터 — ④)
+    frontier: list[tuple[str, _Branch, int, str, tuple[str, str] | None, dict]] = [(target.writer, b, 0, hops[0].evidence_id, None, dict(target.pointer))
+                                                                                  for b in first_branches]
     declared_names: dict[str, str] = {}                                                     # 홉의 증거 → 그 키의 선언 이름(`code.uses`는 선언 이름으로 묻는다)
     failed_at: dict[str, tuple[str, str, dict]] = {}                                        # 자원을 못 읽은 가지 — 그 홉의 증거 → (쓴 쪽[꼬리표], 사유, 질의 인자)
     walked_at: dict[str, _Walked] = {}                                                      # 걸은 가지 — 그 홉의 증거 → 기록
     linked_at: dict[str, list[FilterHit]] = {}                                              # 걸은 가지 — 그 홉의 증거 → 이은 컴포넌트 클래스들의 자리(③)
     partial: set[str] = set()                                                               # 입력을 다 못 본 가지 — 그 홉의 증거(일부만 검사한 입력이 있다)
+    pointerless: set[str] = set()                                                           # 입력을 못 본 가지 중 포인터도 없는 것 — 그 홉의 증거(④)
+    pointed_at: dict[str, tuple[str, Any, Any]] = {}                                        # 메시지 홉의 증거 → (토픽, 보존 시작, 끝)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
     # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
     readings: dict[str, tuple[str, str]] = {target.key: ("ok", target.writer), target.declared: ("ok", target.writer)}
     stopped, nxt, nxt_ev, last = "", None, "", target.writer
     while frontier and not stopped:
-        writer, branch, depth, came_from, watch = frontier.pop(0)
+        writer, branch, depth, came_from, watch, pointer = frontier.pop(0)
         last = writer
         here = {"name": writer, **branch.params}
         tag = f"[{branch.tag}]" if branch.tag else ""
@@ -339,43 +389,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     missed.append(f"읽기 실패 {label}")
                 elif w != writer:
                     real += 1
-                # 단일값 필드(③) — 아래 홉에서 잡힌 `(필드, 값)`이 여기도 그대로면 나쁨(grep 없이 이어진다). 아니면 읽는 쪽 코드 줄이 정한다.
-                carry = None
-                rows = rows_of(raw) if raw is not None else []
-                same_all = dict(_same_valued(rows))
-                same = {k: v for k, v in same_all.items() if isinstance(v, str)}
-                if not bad and watch is not None and same.get(watch[0]) == watch[1]:
-                    status, bad, carry = f"나쁨 — 같은 단일값 {watch[0]}={watch[1]!r} (아래 홉과 같다)", True, watch
-                elif not bad and same and status.startswith("정상") and lookup is not None:
-                    # 어댑터 안의 조회(R3-4 ③ → R3-5 ③) — 가지의 인자(service·repo)를 그대로 넘겨 같은 이름 둘 중 그 레포의 파일을 본다. 단일값 전부를 한 번에
-                    # 대조한다(상한 없음). runner를 안 거치므로 읽기 상한·증거 밖이다. 문구는 사실만 — 행 수·그 값인 필드·그 값이 든 비교식의 자리(사람 결정 10-15).
-                    scan = await lookup(writer, fields=same, **branch.params)
-                    passed = ", ".join(f"{f}={v!r}" for f, v in same.items())
-                    if scan.hits:
-                        hit = scan.hits[0]
-                        caught = dict.fromkeys((h.field, h.value) for h in scan.hits)
-                        shown_fields = " ".join(f"{f}={v!r}" for f, v in caught)
-                        # 줄로 센다 — 한 줄에 짝이 둘(`r.get("state") != "-" and r.get("wg") != "-"`)이면 짝 수로 센 "외 1줄"은 없는 줄을 말한다(R3-5 ④).
-                        lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))
-                        more = f" 외 {lines_hit - 1}줄" if lines_hit > 1 else ""
-                        status, bad, carry = (f"나쁨 — {len(rows)}행 전부 {shown_fields} · 이 필드 값이 든 비교식 {hit.path}:L{hit.line} '{hit.text}'{more}", True,
-                                              (hit.field, hit.value))
-                        if literal is None:
-                            literal = (scope, hit.path, hit.line, ev)
-                    elif scan.problem:
-                        # 조회가 안 됐으면 대조한 것이 없다(0/M) — 정상이라 하지 않는다(사람 결정 10-15: 일부만 봤으면 "일부만 검사").
-                        status = "미확인" + status[len("정상"):] + f" · 단일값 {passed} — 일부만 검사(0/{len(same)}): {scan.problem}"
-                        partial.add(came_from)
-                    elif scan.unlinked:
-                        # 못 이은 컴포넌트가 하나라도 있으면 N=M이라도 일부만이다 — 그 컴포넌트에 비교식이 있을 수 있다.
-                        status = ("미확인" + status[len("정상"):]
-                                  + f" · 단일값 {passed} — 일부만 검사({len(scan.checked)}/{len(same)}, 못 이음: {', '.join(scan.unlinked[:3])})")
-                        partial.add(came_from)
-                    else:
-                        scope_note = f"{len(scan.checked)}/{len(same)} 대조, {len(scan.files)}파일" + (f", 이은 컴포넌트 {', '.join(scan.linked)}" if scan.linked else "")
-                        status += f" · 단일값 {passed} — 거르는 줄 없음({scope_note})"
-                    if len(same_all) > len(same):
-                        status += f" · 대조 안 함 {len(same_all) - len(same)}개(문자열 아님)"
+                status, bad, carry = await judged(rows_of(raw) if raw is not None else [], status, bad, ev)
                 # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다. 정상 홉의 쓴 쪽도
                 # 같은 가르기로(걷지는 않는다) — 표의 쓴 쪽 칸과 판정의 후보가 같은 근거를 갖는다.
                 if bad and w:
@@ -389,20 +403,84 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                                 evidence_id=ev, basis=f"{writer}{tag}가 읽는 자원 ({res_id})", parent=came_from))
                 if stopped:
                     break
-                frontier += [(w, b, depth + 1, ev, carry) for b in next_branches]          # 나쁜 입력의 아는 쓴 쪽만 — 그때만 가지가 있다
+                # 나쁜 입력의 아는 쓴 쪽만 — 그때만 가지가 있다. 그 키 값의 포인터를 들고 간다(④) — 그 클래스를 만든 메시지가 거기 적혀 있다.
+                frontier += [(w, b, depth + 1, ev, carry, pointer_of(_unwrap(raw)) if raw is not None else {}) for b in next_branches]
             if stopped:
                 break
+        if not stopped and pointer:
+            # 키를 만든 메시지 한 건(④, 사람 결정 10-19) — 이 클래스를 댄 키 값의 포인터가 가리키는 메시지를 입력으로 읽는다. 메시지(토픽) 입력은 인덱스가
+            # 자원으로 못 센다(측정 #12 "입력을 모른다"의 자리). 발행 쪽은 클래스가 아니라 config 발행 선언 — 같은 이름 클래스가 두 레포(F1); 선언이 없으면
+            # 우리 밖이다. 그 메시지로는 더 걷지 않는다.
+            topic, part, off = pointer["topic"], pointer["partition"], pointer["offset"]
+            label = f"{topic}[{part}]@{off}"
+            svcs = tuple(producers.get(topic, ()))
+            shown = f"발행 선언: {', '.join(svcs)}" if svcs else "발행 선언 없음(우리 밖)"
+            if label in seen:
+                result, _ = readings.get(label, ("", ""))
+                if result == "ok":
+                    real += 1
+                elif result == "fail":
+                    missed.append(f"읽기 실패 {label}")
+            elif (why := over(writer, "메시지")):
+                stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
+            else:
+                seen.add(label)
+                _, got = await run(f"걷기 — {writer}{tag}를 댄 키의 포인터 메시지 {label}", "kafka.message_at",
+                                   {"topic": topic, "partition": part, "offset": off})
+                ev = got.evidence[0].id if got.evidence else ""
+                data = runner.raw(ev) if got.status == "ok" and ev else None
+                readings[label] = ("ok" if isinstance(data, dict) else "fail", "")
+                carry = None
+                if not isinstance(data, dict):
+                    status, bad = f"읽기 실패 — {got.error or '증거 없음'}", False
+                    missed.append(f"읽기 실패 {label}")
+                elif not data.get("found"):
+                    # 보존 범위 밖·압축 구멍 — 읽은 것이고 사실 `없음`(나쁨)이다(측정 #13: 범위 밖 2개가 둘 다 진짜 원인 자리). 키 없음과 같은 종류.
+                    status, bad = f"없음 — 키를 만든 메시지가 토픽에 없다(보존 범위 {data.get('begin')}~{data.get('end')})", True
+                    real += 1                                                          # 읽었고 없다 — 키 없음과 같은 종류
+                    pointed_at[ev] = (topic, data.get("begin"), data.get("end"))
+                else:
+                    # 값 판정은 키 값과 하나(`status_of` — 봉투 없는 목록도 맨 위 목록으로 센다). 포장은 `redis.get` 원본 모양으로 — 메시지 자신의 `value`
+                    # 필드가 풀리지 않게.
+                    boxed = {"value": (data.get("message") or {}).get("value")}
+                    # 값이 null인 레코드(톰스톤)는 "없다"가 아니라 "비었다"다 — `status_of(None)`의 `없음`은 키 없음의 말이라 여기선 안 쓴다.
+                    status, bad = status_of(boxed) if boxed["value"] is not None else ("빈 메시지 — 값이 null", True)
+                    real += 1                                                          # 메시지도 읽은 입력이다 — 정상이면 "입력이 다 정상"에 든다
+                    pointed_at[ev] = (topic, data.get("begin"), data.get("end"))
+                    status, bad, carry = await judged(rows_of(boxed), status, bad, ev)
+                hops.append(Hop(key=label, kind="message", depth=depth + 1, service=shown, candidates=list(svcs), status=status, bad=bad,
+                                evidence_id=ev, basis=f"{writer}{tag}를 댄 키 값의 포인터 {pointer.get('at', '')} ({came_from})", parent=came_from))
+        elif not stopped and not real and not missed:
+            pointerless.add(came_from)
         # 이 클래스가 실제로 읽은 입력과 못 본 입력 — 멈춘 자리가 이 클래스면 사유가 여기서 나온다. 다음 칸은 읽기가 있었으면(실패한 읽기도) 읽는 메서드,
-        # 읽은 입력이 없으면("모른다") 클래스 본문.
+        # 읽은 입력이 없으면("모른다") 클래스 본문. 메시지만 읽은 클래스(인덱스 자원 0)는 읽는 메서드 줄이 없어 클래스 본문이다.
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),
-                                                             at=reader_at(text) if real or missed else class_at(text))
+                                                             at=(reader_at(text) if real or missed else None) or class_at(text))
     # 멈춘 자리 = 가장 깊은 나쁜 홉(같은 깊이면 먼저 읽은 것). 사유와 다음 칸은 **그 홉**의 일로 만든다 — 마지막 실패나 첫 "모름"이 아니라.
     bad_hops = [h for h in hops if h.bad]
     stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]
     ev = stop_hop.evidence_id
     rungs: list[Rung] = []
     if not stopped:
-        if stop_hop is not hops[0] and not stop_hop.writer:
+        if stop_hop is not hops[0] and stop_hop.kind == "message":
+            # 키를 만든 메시지가 나쁘거나 없다(④) — 그 메시지를 받는 클래스가 멈춘 자리다. 발행 쪽은 config 선언(없으면 우리 밖)이고 그쪽으로 걷지는 않는다.
+            # 다음 칸: 없음이면 지금 토픽에 오는 것(`kafka.tail`)이 먼저, 나쁨이면 그 메시지를 받는 클래스 본문과 이은 컴포넌트가 먼저.
+            info = walked_at.get(stop_hop.parent)
+            who = f"{info.writer}의 " if info is not None else ""
+            topic, begin, end = pointed_at.get(ev, (stop_hop.key.split("[", 1)[0], None, None))
+            tail = Rung(action="kafka.tail", params={"topic": topic, "limit": 5}, evidence=ev)
+            code: list[Rung] = []
+            if info is not None and info.scope and info.at is not None:
+                code.append(Rung(action="code.read", params={"service": info.scope, "path": info.at[0], "line": info.at[1]}, evidence=info.res_id))
+                code += [Rung(action="code.read", params={"service": info.scope, "path": found_at.path, "line": found_at.line}, evidence=info.res_id)
+                         for found_at in linked_at.get(stop_hop.parent, [])[:3]]
+            if stop_hop.status.startswith("없음"):
+                stopped = f"키를 만든 메시지가 토픽에 없다 — {who}{stop_hop.key}(보존 범위 {begin}~{end} · {stop_hop.service})"
+                rungs += [tail, *code]
+            else:
+                stopped = f"입력 메시지가 나쁘다 — {who}{stop_hop.key}({stop_hop.service})"
+                rungs += [*code, tail]
+        elif stop_hop is not hops[0] and not stop_hop.writer:
             # 값이 없으면 볼 것도 없다 — "값에 클래스 이름이 없다"는 값이 있을 때의 말이다(측정 #13 추가분 4). 다음 칸은 셋 다 그 키를 누가 쓰나.
             stopped = (f"키가 없다 — {stop_hop.key}" if stop_hop.status == "없음"
                        else f"0행 — {stop_hop.key}(값이 비어 쓴 쪽을 알 수 없다)" if stop_hop.status == "0행"
@@ -418,10 +496,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             # scan 일부)이나 일부만 검사(못 이은 컴포넌트에 비교식이 있을 수 있다, 10-15)가 있으면 "다 못 봤다". 실제로 읽은 입력이 0이면 "모름" — 메시지
             # (토픽) 입력은 인덱스가 자원으로 못 세고, 읽는 자원이 자기 출력뿐인 클래스도 있다(측정 #12).
             unseen = [*info.missed, *(["일부만 검사"] if ev in partial else [])]
+            # 포인터가 없으면 그 사실만(사람 결정 10-19) — 토픽을 짐작하지 않는다.
+            none = " · 포인터 없음" if ev in pointerless else ""
+            # 읽은 입력이 하나라도 있으면(포인터 메시지만 읽은 클래스 — 인덱스 자원 0 — 도) 그 결과가 말한다.
             stopped = (f"입력을 다 못 봤다 — {info.writer}({' · '.join(unseen)})" if unseen
-                       else f"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다)" if not info.listed
-                       else f"입력을 모른다 — {info.writer}(인덱스 자원이 자기 출력뿐)" if not info.inputs
-                       else f"입력이 다 정상 — {info.writer}")
+                       else f"입력이 다 정상 — {info.writer}" if info.inputs
+                       else f"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다{none})" if not info.listed
+                       else f"입력을 모른다 — {info.writer}(인덱스 자원이 자기 출력뿐{none})")
             if info.scope and info.at is not None:
                 rungs.append(Rung(action="code.read", params={"service": info.scope, "path": info.at[0], "line": info.at[1]}, evidence=info.res_id))
                 # 이은 컴포넌트 **클래스 본문**이 그 뒤 칸들 — 결정적인 줄은 컴포넌트에 있다(사람 결정 10-14·10-15: 등록 줄이 아니라 그 클래스).

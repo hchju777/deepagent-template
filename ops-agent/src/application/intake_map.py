@@ -197,6 +197,38 @@ def writer_of(value: Any, classes: frozenset[str]) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def _objects(value: Any, path: str = ""):
+    """값 안의 객체들 — `(자리, dict)`, 문서 목록(행) 밖의 것만(`_string_leaves`와 같은 범위)."""
+    if isinstance(value, dict):
+        yield path or "(맨 위)", value
+        for k, v in value.items():
+            yield from _objects(v, f"{path}.{k}" if path else str(k))
+    elif isinstance(value, list):
+        if value and all(isinstance(r, dict) for r in value):
+            return
+        for i, v in enumerate(value):
+            yield from _objects(v, f"{path}[{i}]")
+
+
+def _int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return int(value) if isinstance(value, str) and value.isdigit() else None
+
+
+def pointer_of(value: Any) -> dict:
+    """키를 만든 메시지의 포인터 `{"topic", "partition", "offset", "at"}`(R3-5d ④) — 값 안(문서 목록 밖)의 객체에 문자열 `topic`과 정수 `partition`·`offset`이
+    함께 있으면 그것(사내 `metadata.source`, 측정 #13 추가분 2: 법인 둘 122/122키 — 그 오프셋 한 건이 그 키를 만든 메시지). 필드 이름은 그 셋으로 **가정**한다
+    — 다르면 빈 dict("포인터 없음")이고 걷기는 토픽을 짐작하지 않는다(사람 결정 10-19). 여럿이면 첫 것."""
+    for at, obj in _objects(value):
+        topic, partition, offset = obj.get("topic"), _int(obj.get("partition")), _int(obj.get("offset"))
+        if isinstance(topic, str) and topic and partition is not None and offset is not None:
+            return {"topic": topic, "partition": partition, "offset": offset, "at": at}
+    return {}
+
+
 def next_hop(target: TargetPick | None, *, code_index: bool, walk=None) -> tuple[str, dict] | None:
     """입구 결과로 **코드가 정하는** 다음 홉 — 쓴 쪽을 알면 그 클래스가 읽는 자원(`code.resources <클래스>`, R3-1c ①-a), 모르면 고른 키를 누가
     쓰나(`code.uses <선언 이름>`, R3-1b ③ — 인덱스는 템플릿 이름으로 답하므로 선언 이름이다). 심볼 인덱스가 없으면 없는 문이라 None —
@@ -357,7 +389,7 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
         # 빈 자리도 후보 읽기의 전체 값에서 — 자리 문법이 전체 값 기준 하나다(좁힌 값이면 `record[0].data`가 `data`가 됐다).
         arrays, objects = empties_at(value, at)
         return patch(TargetPick(key=key, basis=basis, declared=declared_of.get(key, key),
-                                empty=arrays, empty_objects=objects,
+                                empty=arrays, empty_objects=objects, pointer=pointer_of(value),
                                 writer=writer, writer_at=writer_at, writer_problem=writer_problem,
                                 writer_searched=bool(classes), **folded,
                                 problem=f"후보 {MAX_CANDIDATES}개 상한에서 끊었다" if capped else ""))

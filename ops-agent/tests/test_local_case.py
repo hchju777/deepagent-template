@@ -242,3 +242,24 @@ def test_도메인_키를_쓰는_클래스는_읽기를_부모의_run에서_받�
     child, base = CORE_FILES["batch/domain.py"], CORE_FILES["common/readers.py"]
     assert "class DomainBuilder(LineReader):" in child and "def _run" not in child and 'cfg["redis_key"]["alarm_domain"]' in child
     assert "class LineReader:" in base and "def _run(self" in base and 'cfg["redis_key"]["alarm_raw"]' in base
+
+
+
+def test_message_변형_셋은_원천_묶음_키_값에_포인터가_있고_그_메시지가_비었거나_지워졌거나_행이_전부_자리_표시다():
+    """측정 #13 추가분 2(R3-5d ④)의 모양 — `metadata.source`(토픽·파티션·오프셋)가 그 키를 만든 메시지 한 건을 가리킨다. message-gone은 발행 선언이
+    있는 가공 토픽의 보존 앞 오프셋이다. 다른 변형엔 포인터가 없다(정답 표가 그대로)."""
+    from tools.local_case import CORE_FILES, VARIANTS, _EMPTY_DATA, _MESSAGE_VARIANTS
+    assert _MESSAGE_VARIANTS <= set(VARIANTS) & _EMPTY_DATA
+    for variant in _MESSAGE_VARIANTS:
+        raw = _value(_seeds(NOW, variant), "alarm:raw:L1")
+        assert raw["rows"] == [] and raw["metadata"]["event_type"] == "SourceCollector"
+        assert set(raw["metadata"]["source"]) == {"topic", "partition", "offset"} and raw["metadata"]["source"]["partition"] == 0
+    empty, gone, blank = (_seeds(NOW, v) for v in ("message-empty", "message-gone", "message-blank"))
+    ptr = _value(empty, "alarm:raw:L1")["metadata"]["source"]
+    assert ptr["topic"] == "mx.alarm.raw" and empty["kafka"]["mx.alarm.raw"][ptr["offset"]]["rows"] == []
+    ptr = _value(gone, "alarm:raw:L1")["metadata"]["source"]
+    assert ptr["topic"] == "mx.alarm.main" and gone["kafka"]["mx.alarm.main"]["begin"] > ptr["offset"]
+    ptr = _value(blank, "alarm:raw:L1")["metadata"]["source"]
+    rows = blank["kafka"]["mx.alarm.raw"][ptr["offset"]]["rows"]
+    assert len(rows) == 5 and all(r["ws"] == "-" for r in rows) and 'row.get("ws") != "-"' in CORE_FILES["common/parsers.py"]
+    assert "source" not in _value(_seeds(NOW, "chain-empty"), "alarm:raw:L1")["metadata"]

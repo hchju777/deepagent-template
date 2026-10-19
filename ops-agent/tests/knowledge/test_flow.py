@@ -966,3 +966,18 @@ def test_declaring_services는_그_자원을_config로_선언한_서비스들이
                    {"source": "repo_r", "target": "rediskey_j", "relation": "declares"}]}
     assert flow.declaring_services(g, "k:{line}") == ("a",) and flow.declaring_services(g, "j") == () and flow.declaring_services(None, "k") == ()
     assert flow.declaring_map(g) == {"j": (), "k:{line}": ("a",)} and flow.declaring_map(None) == {}
+
+
+
+def test_producing_map은_토픽마다_config로_발행을_선언한_서비스들이다():
+    """R3-5d ④(사람 결정 10-19): 메시지 홉의 발행 쪽은 클래스 이름이 아니라 config 발행 선언 — 같은 이름 클래스가 두 레포에 있다. `produces` 엣지 중
+    **config 출처**의 서비스만(코드 grep의 추정 `produces`·레포 노드는 아니다). 선언이 없는 토픽은 비어 있다 — 우리 밖."""
+    g = {"nodes": [{"id": "service_a", "label": "a", "type": "service"}, {"id": "service_b", "label": "b", "type": "service"},
+                   {"id": "topic_t1", "label": "t1", "type": "topic"}, {"id": "topic_t2", "label": "t2", "type": "topic"},
+                   {"id": "rediskey_k", "label": "k", "type": "rediskey"}, {"id": "repo_r", "label": "r", "type": "repo"}],
+         "links": [{"source": "service_a", "target": "topic_t1", "relation": "produces", "origin": "config"},
+                   {"source": "service_b", "target": "topic_t1", "relation": "produces", "origin": "code"},
+                   {"source": "service_b", "target": "topic_t1", "relation": "consumes", "origin": "config"},
+                   {"source": "repo_r", "target": "topic_t2", "relation": "produces", "origin": "config"},
+                   {"source": "service_a", "target": "rediskey_k", "relation": "writes", "origin": "config"}]}
+    assert flow.producing_map(g) == {"t1": ("a",), "t2": ()} and flow.producing_map(None) == {}

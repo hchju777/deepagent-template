@@ -634,6 +634,12 @@ def test_판정이_걷기가_멈춘_자리와_어긋나면_caveat에_멈춘_홉�
     capped = walk.model_copy(update={"stopped": "깊이 4 상한 — Proc부터는 리드가"})
     fresh = verdict(root_cause=cause("batch", "t-1.e1"))
     assert caveat_walk_disagreement(fresh, walk=capped, components=services) is fresh       # 상한에 걸린 걷기는 어긋났다 할 근거가 없다
+    # 메시지 홉(R3-5d ④)이 멈춘 자리면 쓴 클래스가 없다 — 발행 선언 글 그대로, 발행 서비스가 후보
+    msg = Walk(hops=hops + [Hop(key="t[0]@5", kind="message", depth=3, service="발행 선언: collector", candidates=["collector"], status="0행", bad=True,
+                                evidence_id="t-8.e1", parent="t-3.e1")],
+               stopped="입력 메시지가 나쁘다 — Proc의 t[0]@5(발행 선언: collector)", stop_at="t-8.e1")
+    judged = caveat_walk_disagreement(verdict(root_cause=cause("processor", "t-3.e1")), walk=msg, components=services | {"collector"})
+    assert judged.caveats == ["판정의 component processor는 걷기가 멈춘 자리(t[0]@5, 발행 선언: collector)의 서비스가 아니다 — collector도 후보"]
 
 
 async def test_후보의_component가_케이스에_나온_토픽과_같으면_통과하고_그_밖의_서비스_아닌_후보는_재작성_없이_제외한다(case):

@@ -97,6 +97,9 @@ class EngineDeps:
     filter_lines: Callable[..., Awaitable[FilterScan]] | None = None
     # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
     declared_by: dict = field(default_factory=dict)
+    # 토픽 → config로 발행을 선언한 서비스들(`flow.producing_map`, R3-5d ④) — 메시지 홉의 발행 쪽. 사람 결정 10-19: 같은 이름 클래스가 두 레포라 클래스
+    # 이름이 아니라 config 발행 선언으로; 선언이 없는 토픽은 우리 밖이다.
+    topic_producers: dict = field(default_factory=dict)
     clock: Callable[[], datetime] | None = None
 
 
@@ -477,7 +480,8 @@ def make_nodes(deps: EngineDeps) -> dict:
             return {}
         try:
             return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
-                                  service_repos=deps.service_repos, declared_by=deps.declared_by, lookup=deps.filter_lines, clock=deps.clock)
+                                  service_repos=deps.service_repos, declared_by=deps.declared_by,
+                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 
@@ -932,7 +936,9 @@ def caveat_walk_disagreement(verdict: Verdict, *, walk: Walk | None, components:
     component = verdict.root_cause.component
     if stop is None or component not in components or component in stop.candidates:
         return verdict
-    note = (f"판정의 component {component}는 걷기가 멈춘 자리({stop.key}, 쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}])의 서비스가 아니다"
+    # 메시지 홉(R3-5d ④)은 쓴 클래스가 없고 발행 쪽이 config 선언이다 — 그 글을 그대로.
+    where = f"쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}]" if stop.writer else stop.service
+    note = (f"판정의 component {component}는 걷기가 멈춘 자리({stop.key}, {where})의 서비스가 아니다"
             f" — {', '.join(stop.candidates)}도 후보")
     normal = next((h for h in walk.hops if not h.bad and component in h.candidates), None)
     if normal is not None:

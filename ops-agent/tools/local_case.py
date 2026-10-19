@@ -286,12 +286,12 @@ class SourceCollector:
         record = {"metadata": {"event_type": "SourceCollector"}, "rows": rows}
         self.redis.set(self.cfg["redis_key"]["alarm_raw"].format(line=message["line"]), json.dumps(record))
 ''',
-    "common/parsers.py": '''"""메시지 → 행 — 이벤트 행만 남긴다."""
+    "common/parsers.py": '''"""메시지 → 행 — 자리 표시('-')인 행을 거른다."""
 
 
 class RowParser:
     def parse(self, message):
-        return [row for row in message.get("rows", []) if row.get("kind") == "event"]
+        return [row for row in message.get("rows", []) if row.get("ws") != "-"]
 ''',
     # 읽는 자원이 자기 출력뿐인 원천 클래스(R3-5b ② — 측정 #12의 `<클래스>` 모양) — 원천 묶음을 읽어 행을 덧붙여 다시 쓴다.
     "common/appender.py": '''"""원천 묶음에 행을 덧붙인다 — 지금 값을 읽어 행을 더해 다시 쓴다."""
@@ -472,11 +472,19 @@ VARIANTS = {
     "chain-objects": "요약 키 data는 빈 배열이고 도메인 키 record가 빈 객체다 — 원천 묶음은 빈 배열이고 그 쓴 쪽 RawAppender는 그 묶음만 읽는다(자기 출력)",
     # 입력 읽기 실패(R3-5b ② — 키 없음과 다른 사실). palette-empty에 원천 색 키 읽기 실패를 더했다.
     "palette-unread": "palette-empty와 같고 PaletteLoader가 읽는 원천 색 키의 읽기가 실패한다(WRONGTYPE)",
+    # 측정 #13 추가분 2(R3-5d ④) — 원천 묶음 키 값에 그 키를 만든 메시지의 포인터(`metadata.source`)가 있다. 걷기가 그 메시지 한 건을 입력으로 읽는다.
+    "message-empty": "chain-empty와 같고 원천 묶음 키 값에 포인터가 있다 — 가리키는 메시지의 rows가 빈 배열이라 걷기가 메시지 홉에서 멈춘다(발행 선언 없는 토픽)",
+    "message-gone": "chain-empty와 같고 포인터가 발행 선언이 있는 가공 토픽의 지워진 오프셋을 가리킨다 — '키를 만든 메시지가 토픽에 없다'",
+    "message-blank": "chain-empty와 같고 포인터 메시지의 행은 있지만 모든 행의 ws가 '-'다 — 수집기의 파서가 그 값을 걸러 원천 묶음이 빈 배열",
 }
+_MESSAGE_VARIANTS = {"message-empty", "message-gone", "message-blank"}
+# 포인터의 자리 — 라인마다 다른 오프셋(토픽 하나, 파티션 0). message-gone은 가공 토픽(dt-core가 발행 선언)의 보존(100부터) 앞이다.
+_POINTER_OFFSET = {"L1": 2, "L2": 3, "L3": 4}
+_POINTER_TOPIC = {"message-gone": "mx.alarm.main"}
 _EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered",
-               "chain-objects", "palette-unread"}
+               "chain-objects", "palette-unread", *_MESSAGE_VARIANTS}
 # 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
-_RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender"}
+_RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender", **{v: "SourceCollector" for v in _MESSAGE_VARIANTS}}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 # 증감 배지 요약 키의 data 행 수 — 입구의 후보 본문(기본 evidence_chars 2400)이 잘릴 만큼(R3-5b ①).
 _RATE_ROWS = 150
@@ -495,11 +503,16 @@ _FILTERED_ROW = {"unit": "ea", "zone": "A", "shift": "D", "area": "G1", "model":
 
 def _chain_rows(docs, line, variant):
     """도메인 키 record·원천 묶음 rows — chain-empty는 빈 배열, chain-filtered는 state·wg가 전부 '-'인 다섯 행, 나머지는 그 라인의 문서 요약(정상)."""
-    if variant in ("chain-empty", "chain-objects"):
+    if variant in ("chain-empty", "chain-objects") or variant in _MESSAGE_VARIANTS:
         return []
     if variant == "chain-filtered":
         return [{"alarm_code": f"A{500 + i}", **_FILTERED_ROW} for i in range(5)]
     return [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"]} for d in docs if d["line"] == line]
+
+
+def _message_rows(variant: str, i: int) -> list[dict]:
+    """포인터 메시지의 행 — message-blank만 모든 행의 ws가 '-'(수집기의 파서가 거르는 값), 나머지는 빈 배열."""
+    return [{"code": f"A{600 + 10 * i + k}", "ws": "-"} for k in range(5)] if variant == "message-blank" else []
 
 
 def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
@@ -529,10 +542,13 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             "alarm_events": docs,
             "line_state": [{"line": l, "status": "RUN", "updated_at": fresh(1)} for l in LINES]},
         "kafka": {
-            "mx.alarm.raw": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "ts": fresh(14 - 3 * i)}
-                             for i in range(5)],
-            "mx.alarm.main": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor",
-                               "ts": fresh(13 - 3 * i)} for i in range(5)]},
+            # 메시지 변형(R3-5d ④)은 원천 토픽의 메시지가 포인터가 가리키는 모양이다 — rows가 빈 배열(message-empty)이거나 모든 행의 ws가 '-'(message-blank).
+            # message-gone은 가공 토픽의 보존이 100부터라 포인터(2~4)가 범위 밖이다(stub 시드의 `begin`).
+            "mx.alarm.raw": ([{"line": LINES[i % 3], "rows": _message_rows(variant, i)} for i in range(5)] if variant in _MESSAGE_VARIANTS
+                             else [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "ts": fresh(14 - 3 * i)} for i in range(5)]),
+            "mx.alarm.main": ({"begin": 100, "messages": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i)}
+                                                          for i in range(5)]} if variant == "message-gone"
+                              else [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i)} for i in range(5)])},
         # 그룹은 레포당 하나라 processor·sink가 공유한다 — lag만으로는 누가 멈췄는지 모른다.
         # 그룹은 레포 공유라 processor(raw)와 sink(main)가 같은 이름이다. 실제 Kafka는
         # 토픽별로 답하고, 어느 토픽이 밀리는지가 두 서비스를 가르는 유일한 숫자다.
@@ -558,7 +574,10 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             # 도메인 키·원천 묶음과 그 입력 셋(R3-5 ④ — 사내 c-1·c-2의 사슬). 기본은 정상이라 다른 변형의 걷기는 여기서 안 멈춘다.
             **{f"alarm:domain:{l}": json.dumps({"metadata": {"event_type": "DomainBuilder"},
                                                 "record": {} if variant == "chain-objects" else _chain_rows(docs, l, variant)}) for l in LINES},
-            **{f"alarm:raw:{l}": json.dumps({"metadata": {"event_type": _RAW_WRITER.get(variant, "SourceMerger")},
+            **{f"alarm:raw:{l}": json.dumps({"metadata": {"event_type": _RAW_WRITER.get(variant, "SourceMerger"),
+                                                          # 그 키를 만든 메시지의 포인터(사내 모양 `metadata.source`, R3-5d ④) — 메시지 변형에만.
+                                                          **({"source": {"topic": _POINTER_TOPIC.get(variant, "mx.alarm.raw"), "partition": 0,
+                                                                         "offset": _POINTER_OFFSET[l]}} if variant in _MESSAGE_VARIANTS else {})},
                                              "rows": _chain_rows(docs, l, variant)}) for l in LINES},
             **{f"feed:events:{l}": json.dumps([{"id": i, "alarm_code": d["alarm_code"]} for i, d in enumerate(docs) if d["line"] == l]) for l in LINES},
             **{f"feed:status:{l}": json.dumps([{"id": i, "status": ["RUN", "STOP"][i % 2]} for i in range(4)]) for l in LINES},

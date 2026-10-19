@@ -49,7 +49,7 @@ async def walk_from_key(case: Case, key: str, deps: EngineDeps) -> CaseState:
     """`case walk --key`(R3-5b ③): 입구 없이 그 키를 `t-1`로 읽어 대상 키로 삼고 걷기만 돌린다. 측정 #12: 배지 밖 끝점은 라우트가 리터럴 → config로 키를
     정해 입구가 막힌다(B는 아직 없다) — 사람이 키를 대고 걷기를 잰다. 쓴 쪽은 값에서, 빈 자리는 걷기와 같은 판정(값의 맨 위), 선언 이름은 흐름 그래프에서.
     키가 없거나 읽기가 실패하면 그 사실만 적고 걷지 않는다."""
-    from src.application.intake_map import _finish, _task, _unwrap, empties, writer_of
+    from src.application.intake_map import _finish, _task, _unwrap, empties, pointer_of, writer_of
 
     task = _task("t-1", f"대상 키 읽기 — {key} (--key)", "redis.get", {"key": key})
     outcome = await deps.runner.run(task, case=case)
@@ -64,7 +64,7 @@ async def walk_from_key(case: Case, key: str, deps: EngineDeps) -> CaseState:
         writer, writer_at, writer_problem = writer_of(value, deps.classes)
         arrays, objects = empties(value)
         pick = TargetPick(key=key, basis=f"--key로 댄 키 ({ev})", declared=declared_for(key, tuple(deps.declared_by)),
-                          empty=arrays, empty_objects=objects, writer=writer, writer_at=writer_at, writer_problem=writer_problem,
+                          empty=arrays, empty_objects=objects, pointer=pointer_of(value), writer=writer, writer_at=writer_at, writer_problem=writer_problem,
                           writer_searched=bool(deps.classes))
     state = apply_patch(CaseState(case=case), {"plan_tasks": [_finish(task, outcome)], "evidence": list(outcome.evidence), "target": pick})
     return apply_patch(state, await make_nodes(deps)["walk"](state))

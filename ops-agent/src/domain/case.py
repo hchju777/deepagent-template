@@ -123,6 +123,9 @@ class TargetPick(StrictModel):
     writer_problem: str = ""
     # 클래스 이름 집합을 **받고도** 못 골랐나 — 받지 않았으면(인덱스 없음) "모른다"를 말할 자격이 없다.
     writer_searched: bool = False
+    # 키를 만든 메시지의 포인터(R3-5d ④) — 후보 읽기의 전체 값 안 `{"topic", "partition", "offset", "at"}`(사내 `metadata.source`, 측정 #13 추가분 2: 법인 둘
+    # 122/122키). 없으면 빈 dict — 걷기가 "포인터 없음"이라 적는다. 좁힌 다시 읽기엔 형제 자리가 빠지니 전체 값에서(쓴 쪽과 같은 이유).
+    pointer: dict = {}
 
     def line(self) -> str:
         if self.key:
@@ -149,7 +152,7 @@ class Hop(StrictModel):
     """걷기의 표 한 행(R3-3 ②) — 코드가 읽은 키 하나와 그 상태. `writer`는 그 키 값의 잎이 댄 클래스(`writer_of`), 없으면 빈 문자열.
     `bad`는 없음·빈 배열·0행뿐(사람 결정 10-14 — 손 규칙 없음)."""
     key: str
-    kind: str = "rediskey"
+    kind: str = "rediskey"                  # rediskey·collection·topic, 포인터 메시지 홉은 "message"(키는 `토픽[파티션]@오프셋`, R3-5d ④)
     depth: int = 0
     writer: str = ""
     service: str = ""
@@ -164,7 +167,8 @@ class Hop(StrictModel):
     parent: str = ""
 
     def line(self) -> str:
-        who = (self.writer + (f" [{self.service}]" if self.service else "")) if self.writer else "—"
+        # 메시지 홉(R3-5d ④)은 쓴 클래스가 없고 발행 쪽이 config 선언이라 `service`만 있다 — 그걸 쓴 쪽 칸에 적는다.
+        who = (self.writer + (f" [{self.service}]" if self.service else "")) if self.writer else (self.service or "—")
         return f"  {self.key} | {who} | {self.status} | {self.evidence_id or '—'}"
 
 

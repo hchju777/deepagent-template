@@ -29,7 +29,7 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
-VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread")
+VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank")
 
 
 def _repo(root, url, files):
@@ -66,6 +66,8 @@ def board(tmp_path_factory):
     (config / "app.json").write_text(json.dumps(app), encoding="utf-8")
     layer = json.loads((config / "gbm" / "mx.json").read_text(encoding="utf-8"))
     layer["code"] = {"repos": [{"name": n, "url": u, "path": str(root / "target-code" / n)} for n, u in URLS.items()]}
+    # 포인터 메시지 읽기(R3-5d ④)는 kafka 어댑터가 있어야 한다 — 시드의 토픽을 선언한다(stub은 seeds의 kafka 절로 선다).
+    layer["infra"]["kafka"] = {"consumer": {"bootstrap_server": ["kafka.example:9092"], "topic": {"topic1": "mx.alarm.raw", "topic2": "mx.alarm.main"}}}
     (config / "gbm" / "mx.json").write_text(json.dumps(layer, ensure_ascii=False), encoding="utf-8")
     (root / "knowledge" / "topology").mkdir(parents=True)
     (root / "knowledge" / "topology" / "mx.json").write_text(json.dumps(TOPOLOGY, ensure_ascii=False), encoding="utf-8")
@@ -137,7 +139,7 @@ def test_c1형_빈_배열_사슬은_메시지_입력_원천_클래스에서_입�
                     PALETTE_ROW, SOURCE_ROW,
                     "alarm:raw:L1 | SourceCollector [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
     assert notes == [PALETTE_NOTE, "SourceCollector는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — alarm:raw:{line}을 선언한 dt-core(서비스 3개 공유)로 골랐다"]
-    assert stopped == "입력을 모른다 — SourceCollector(인덱스 자원 0 — 메시지 입력일 수 있다)"
+    assert stopped == "입력을 모른다 — SourceCollector(인덱스 자원 0 — 메시지 입력일 수 있다 · 포인터 없음)"
     assert rungs == [f"code.read line={_at('common/source.py', 'class SourceCollector')} path='common/source.py' service='batch'",
                      f"code.read line={_at('common/parsers.py', 'class RowParser')} path='common/parsers.py' service='batch'"]
 
@@ -194,7 +196,7 @@ def test_빈_객체_입력과_자기_출력뿐인_원천_클래스는_사실대�
                     "alarm:domain:L1 | DomainBuilder [batch] | 빈 객체 (record)",
                     PALETTE_ROW, SOURCE_ROW,
                     "alarm:raw:L1 | RawAppender [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
-    assert stopped == "입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐)"
+    assert stopped == "입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐 · 포인터 없음)"
     assert rungs == [f"code.read line={_at('common/appender.py', 'class RawAppender')} path='common/appender.py' service='batch'"]
 
 
@@ -220,7 +222,7 @@ def test_key로_댄_키부터_입구_없이_걷는다(board, monkeypatch):
     head = next(i for i, line in enumerate(lines) if line.startswith("걷기(코드가 상류를 걸었다)"))
     rows = [line.strip().rsplit(" | ", 1)[0] for line in lines[head + 2:head + 4]]
     assert rows == ["alarm:domain:L1 | DomainBuilder [batch] | 빈 객체 (record)", "alarm:raw:L1 | RawAppender [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
-    assert lines[head].endswith("멈춤: 입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐)") and "읽기 전용" in out
+    assert lines[head].endswith("멈춤: 입력을 모른다 — RawAppender(인덱스 자원이 자기 출력뿐 · 포인터 없음)") and "읽기 전용" in out
 
 
 
@@ -228,3 +230,40 @@ def test_그룹과_제목이_같은_배지는_그_값이_한_번_든_키와_안_
     """측정 #12b P0 2(R3-5c ①): 집합 비교로 `ALL/ALL`이 그 값이 한 번 든 미끼 키 셋과 맞아 "3개 — 못 고른다"였다. 개수를 세면 든 키가 없다."""
     out = _out(board, monkeypatch, "healthy", "ALL/ALL")
     assert "중 값에 대상 identity(ALL/ALL)가 든 키가 없다" in out and "하나로 못 좁힌다" not in out
+
+
+
+# ── R3-5d ④ — 키를 만든 메시지 한 건(포인터 홉) ──
+
+def test_메시지_변형_빈_메시지는_메시지_홉에서_멈추고_다음_칸은_받는_클래스_본문_이은_컴포넌트_지금_오는_것이다(board, monkeypatch):
+    """측정 #13 추가분 2(사람 결정 10-19): 원천 묶음 키 값의 포인터가 가리키는 메시지 한 건이 입력이다 — rows가 비어 거기서 멈춘다. 발행 선언이 없는 토픽은
+    우리 밖. 다음 칸: 그 메시지를 받는 클래스 본문 → 이은 컴포넌트 → 지금 토픽에 오는 것."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "message-empty")
+    assert rows[-2:] == ["alarm:raw:L1 | SourceCollector [dt-core(서비스 3개 공유)] | 빈 배열 (rows)",
+                         "mx.alarm.raw[0]@2 | 발행 선언 없음(우리 밖) | 빈 배열 (rows)"]
+    assert stopped == "입력 메시지가 나쁘다 — SourceCollector의 mx.alarm.raw[0]@2(발행 선언 없음(우리 밖))"
+    assert rungs == [f"code.read line={_at('common/source.py', 'class SourceCollector')} path='common/source.py' service='batch'",
+                     f"code.read line={_at('common/parsers.py', 'class RowParser')} path='common/parsers.py' service='batch'",
+                     "kafka.tail limit=5 topic='mx.alarm.raw'"]
+
+
+def test_메시지_변형_지워진_메시지는_키를_만든_메시지가_토픽에_없다이고_발행_선언은_config에서_온다(board, monkeypatch):
+    """측정 #13 추가분 2: 오프셋이 보존 범위 밖인 키 둘이 진짜 원인 자리였다. 발행 쪽은 CLI가 흐름 그래프의 config 발행 선언으로 넘긴다(dt-core의 세 서비스).
+    다음 칸은 지금 토픽에 오는 것이 먼저."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "message-gone")
+    assert rows[-1] == "mx.alarm.main[0]@2 | 발행 선언: batch, processor, sink | 없음 — 키를 만든 메시지가 토픽에 없다(보존 범위 100~105)"
+    assert stopped == "키를 만든 메시지가 토픽에 없다 — SourceCollector의 mx.alarm.main[0]@2(보존 범위 100~105 · 발행 선언: batch, processor, sink)"
+    assert rungs[0] == "kafka.tail limit=5 topic='mx.alarm.main'" and len(rungs) == 3
+
+
+def test_메시지_변형_행이_전부_자리_표시면_파서의_비교식_줄이_첫_칸이다(board, monkeypatch):
+    """사내 `<작업자 배지>`의 모양 — 메시지는 오는데 한 필드가 전원 빈 값이라 처리기가 거른다. 단일값 판정은 키 값과 같고, 그 줄의 함수가 첫 칸이다."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "message-blank")
+    n = _at("common/parsers.py", 'row.get("ws") != "-"')
+    text = CORE_FILES["common/parsers.py"].splitlines()[n - 1].strip()
+    assert rows[-1] == f"mx.alarm.raw[0]@2 | 발행 선언 없음(우리 밖) | 나쁨 — 5행 전부 ws='-' · 이 필드 값이 든 비교식 common/parsers.py:L{n} '{text}'"
+    assert stopped == f"입력 메시지가 나쁘다 — SourceCollector의 mx.alarm.raw[0]@2(발행 선언 없음(우리 밖)) (단일값이 든 비교식 common/parsers.py:L{n})"
+    assert rungs == [f"code.read line={n} path='common/parsers.py' service='batch'",
+                     f"code.read line={_at('common/source.py', 'class SourceCollector')} path='common/source.py' service='batch'",
+                     f"code.read line={_at('common/parsers.py', 'class RowParser')} path='common/parsers.py' service='batch'",
+                     "kafka.tail limit=5 topic='mx.alarm.raw'"]
