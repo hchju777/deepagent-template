@@ -39,7 +39,9 @@
 - {?open}실패한 태스크(`[error]`)는 "조회했더니 비어 있다"가 아니라 "아무것도 모른다"다.
 - `verdict_type`은 다음 중 하나를 **그대로** 적어라 — `logic_bug`(코드의 논리) · `data_loss`(데이터가
   유실됐거나 유입이 멈춤) · `config_error`(설정) · `stale_data`(캐시·집계가 낡음) · `external`(우리
-  시스템 밖 — 현장·상류) · `inconclusive`(못 가렸다). **억지 결론 금지** — 모르면 `inconclusive`다.
+  시스템 밖 — 현장·상류) · `not_a_defect`(결함 아님 — 정상 공백) · `inconclusive`(못 가렸다). **억지 결론 금지** — 모르면 `inconclusive`다.
+- `not_a_defect`는 걷기가 `입력이 다 정상`에서 멈췄고 홉 표에 `나쁨`이 없을 때만 — 비어 있는 것이 그 클래스 코드의 의도된 결과일 때다. `root_cause`
+  없이 `basis`에 멈춘 클래스의 코드 증거 id와 그 클래스의 비지 않은 입력 증거 id를 **함께** 적어라(코드가 걷기와 대조한다).
 - 근본 원인은 하나다. 후보가 여럿이면 가장 유력한 것을 `root_cause`에, 나머지를 `alternates`에
   유력한 순으로(최대 3) 적고, 각 후보에 `relation`(왜 후보이고 왜 최상위가 아닌가)과 `confidence`를 적어라.
 - `recommendations`는 **사람이 할 조치**다. 이 시스템은 대상에 쓰지 않는다.

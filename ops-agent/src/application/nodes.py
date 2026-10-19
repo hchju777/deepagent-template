@@ -774,10 +774,12 @@ def resolve_task_citations(verdict: Verdict, tasks) -> Verdict:
     root = fix(verdict.root_cause) if verdict.root_cause is not None else None
     alternates = [fix(link) for link in verdict.alternates]
     contributing = [fix(link) for link in verdict.contributing]
+    # 결함 아님의 근거(`basis`, R3-5d ⑤)도 같은 정리를 받는다 — 다리가 아니라 id 목록이다.
+    basis = fix(CauseLink(component="basis", evidence_ids=list(verdict.basis))).evidence_ids if verdict.basis else list(verdict.basis)
     if not fixed:
         return verdict
     note = f"인용 정리: 태스크 id를 그 태스크의 유일한 증거 id로 바꿨다 — {', '.join(dict.fromkeys(fixed))}"
-    return verdict.model_copy(update={"root_cause": root, "alternates": alternates, "contributing": contributing,
+    return verdict.model_copy(update={"root_cause": root, "alternates": alternates, "contributing": contributing, "basis": basis,
                                       "caveats": verdict.caveats + [note]})
 
 
@@ -824,6 +826,10 @@ def verify_verdict(verdict: Verdict, *, citable: set[str], incomplete: set[str],
         problem = component_problem(link.component)
         if problem:
             problems.append(problem)
+    # 결함 아님의 근거(`basis`)도 리드가 인용한 id다(규율 3).
+    for evidence_id in verdict.basis:
+        if evidence_id not in citable:
+            problems.append(f"없는 id {evidence_id} 인용 (basis)")
     return problems
 
 
@@ -858,6 +864,9 @@ def demote_verdict(verdict: Verdict, problems: list[str], *, citable: set[str],
     verdict_type = verdict.verdict_type
     if verdict.root_cause is not None and root is None:
         verdict_type = "inconclusive"
+    # 검증을 못 지난 "결함 아님"은 결함 아님이 아니다(R3-5d ⑤) — 근거 없는 "정상"을 보고서에 내보내지 않는다.
+    if verdict.verdict_type == "not_a_defect":
+        verdict_type = "inconclusive"
     caveats = verdict.caveats + ["검증 미통과: " + "; ".join(problems)] + (
         [f"근거 없는 다리 제외: {', '.join(unsupported)}"] if unsupported else []) + (
         [f"서비스 아닌 component 제외: {', '.join(foreign)}"] if foreign else [])
@@ -885,6 +894,44 @@ def cap_unlinked_key(verdict: Verdict, *, target: TargetPick, evidence, walk: Wa
     note = f"대상과 키의 연결이 확인되지 않았다 — 최상위가 인용한 키 {', '.join(keys)}; {known}"
     confidence = "medium" if verdict.confidence == "high" else verdict.confidence
     return verdict.model_copy(update={"confidence": confidence, "caveats": verdict.caveats + [note]})
+
+
+def not_a_defect_problems(verdict: Verdict, *, walk: Walk | None, plan_tasks) -> list[str]:
+    """`not_a_defect`(결함 아님)의 조건(R3-5d ⑤, 사람 결정 10-19 (3)) — "증거 id 하나 이상"은 모든 판정이 이미 지나 구분력이 없다. 15건에 대 보면
+    정상 공백 3건만 지나고 12건이 탈락하는 조건: (a) 걷기가 `입력이 다 정상`에서 멈췄다(포인터 메시지 홉 포함) (b) 홉 표에 `나쁨`(단일값이 거르는 줄에
+    걸린 행)이 없다 (c) `basis`가 멈춘 클래스의 코드 증거(`code.resources`나 칸의 `code.read`)와 그 클래스의 비지 않은 입력 증거(그 홉의 정상 입력)를
+    **함께** 인용한다. 하나라도 아니면 문제 — verify가 되묻고, 그래도면 inconclusive로 강등한다. 다른 판정 유형엔 빈 목록."""
+    if verdict.verdict_type != "not_a_defect":
+        return []
+    if walk is None or not walk.hops:
+        return ["결함 아님은 걷기가 있을 때만 — 걷기가 없다(입구가 키나 쓴 쪽을 못 골랐다)"]
+    problems: list[str] = []
+    if not walk.stopped.startswith("입력이 다 정상"):
+        problems.append(f"결함 아님은 걷기가 '입력이 다 정상'에서 멈췄을 때만 — 멈춤: {walk.stopped}")
+    bad = [h.key for h in walk.hops if h.status.startswith("나쁨")]
+    if bad:
+        problems.append(f"홉 표에 나쁨이 있다 — {', '.join(bad)}")
+    stop = next((h for h in walk.hops if h.evidence_id == walk.stop_at), None)
+    writer = stop.writer if stop is not None else ""
+    rung_at = {(r.params.get("path"), r.params.get("line")) for r in walk.rungs if r.action == "code.read"}
+    code_ids = sorted({e for t in plan_tasks for e in t.result_evidence_ids
+                       if (t.action == "code.resources" and t.params.get("name") == writer)
+                       or (t.action == "code.read" and (t.params.get("path"), t.params.get("line")) in rung_at)})
+    input_ids = sorted({h.evidence_id for h in walk.hops if h.parent == walk.stop_at and h.status.startswith("정상") and h.evidence_id})
+    cited = set(verdict.basis)
+    if not cited & set(code_ids):
+        problems.append(f"basis에 멈춘 클래스 {writer or '?'}의 코드 증거가 없다 — {', '.join(code_ids) or '없음'} 중 하나")
+    if not cited & set(input_ids):
+        problems.append(f"basis에 그 클래스의 비지 않은 입력 증거가 없다 — {', '.join(input_ids) or '없음'} 중 하나")
+    return problems
+
+
+def cap_not_a_defect(verdict: Verdict) -> Verdict:
+    """(d) 결함 아님의 확신 상한 medium — 걷기는 나열된 입력과 포인터 메시지 한 건만 봤다(조인으로 거르는 처리기는 못 본다, P1-5). 바뀐 것이 없으면 같은 객체."""
+    if verdict.verdict_type != "not_a_defect" or verdict.confidence != "high":
+        return verdict
+    note = "결함 아님의 확신 상한은 medium — 걷기는 나열된 입력과 키를 만든 메시지 한 건만 봤다"
+    return verdict.model_copy(update={"confidence": "medium", "caveats": verdict.caveats + [note]})
 
 
 def translate_classes(verdict: Verdict, *, class_services: dict, walk: Walk | None, service_repos: dict[str, str] | None = None) -> Verdict:
@@ -1080,10 +1127,13 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         citable = state.evidence_ids()
         incomplete = {e.id for e in state.evidence if not e.complete}
         problems = verify_verdict(verdict, citable=citable, incomplete=incomplete, component_problem=component_problem)
+        if deps.check_discovery:
+            # 결함 아님(R3-5d ⑤)은 걷기가 지킨다 — 대본 경로는 걷기가 없다.
+            problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)
         if not problems:
             if not deps.check_discovery:
                 return {"verify_problems": [], **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
-            capped = cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk)
+            capped = cap_not_a_defect(cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk))
             return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.

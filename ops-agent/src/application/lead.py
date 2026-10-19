@@ -127,7 +127,7 @@ class ConcludeReply(StrictModel):
     """
 
     verdict_type: Literal["logic_bug", "data_loss", "config_error", "stale_data",
-                          "external", "inconclusive"]
+                          "external", "inconclusive", "not_a_defect"]
     root_cause: CauseLink | None = None
     alternates: list[CauseLink] = []
     contributing: list[CauseLink] = []
@@ -135,12 +135,16 @@ class ConcludeReply(StrictModel):
     recommendations: list[str] = []
     caveats: list[str] = []
     narrative: str
+    basis: list[str] = []
 
     @model_validator(mode="after")
     def _conclusive_needs_root_cause(self):
         # `Verdict`와 같은 규칙을 여기서도 — 그래야 수리 재시도가 "root_cause가 필요하다"를 전한다.
-        if self.verdict_type != "inconclusive" and self.root_cause is None:
+        if self.verdict_type not in ("inconclusive", "not_a_defect") and self.root_cause is None:
             raise ValueError("결론이 있는 판정에는 root_cause가 필요하다 — 모르면 inconclusive")
+        # 결함 아님(R3-5d ⑤)은 원인 없이 근거만 — 다리가 없으니 `basis`가 비면 인용할 것이 없다.
+        if self.verdict_type == "not_a_defect" and (self.root_cause is not None or not self.basis):
+            raise ValueError("결함 아님(not_a_defect)은 root_cause 없이 basis에 증거 id를 — 멈춘 클래스의 코드 증거와 그 클래스의 비지 않은 입력 증거")
         return self
 
 

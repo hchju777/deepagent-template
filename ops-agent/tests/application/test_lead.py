@@ -1155,6 +1155,7 @@ def test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다():
     conclude = response_schema(ConcludeReply)
     assert is_closed(conclude) and conclude["title"] == "concludereply"
     assert "degraded" not in conclude["properties"]["verdict_type"]["enum"]                       # 코드만 찍는 낙인
+    assert "not_a_defect" in conclude["properties"]["verdict_type"]["enum"] and "basis" in conclude["properties"]   # R3-5d ⑤
 
 
 async def test_ask_json은_답_스키마를_어댑터에_넘긴다(case):
@@ -1366,3 +1367,19 @@ async def test_턴의_조각_수_종료_사유_토큰이_트레이스로_간다(
                                  trace=lambda *a, **kw: plain.append(a))
     await frame(CaseState(case=case))
     assert plain[0][9] == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0}            # 모르면 0·빈 문자열
+
+
+
+async def test_결함_아님_판정은_root_cause_없이_basis를_요구한다(case):
+    """R3-5d ⑤: `not_a_defect`는 원인이 없는 판정이다 — root_cause 없이 `basis`(증거 id)가 있어야 한다. 없으면 수리 재시도, 그래도 없으면 판정 없이 사유만."""
+    bare = reply(verdict_type="not_a_defect", confidence="medium", narrative="정상 공백 — 입력이 다 정상이고 코드가 거른 것이 없다")
+    good = reply(verdict_type="not_a_defect", confidence="medium", narrative="정상 공백", basis=["t-1.e1"])
+    llm = ScriptedAdapter([bare, good], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3)
+    patch = await conclude(_ended(case))
+    assert patch["verdict"].verdict_type == "not_a_defect" and patch["verdict"].basis == ["t-1.e1"] and patch["verdict"].root_cause is None
+    assert len(llm.prompts) == 2                                                   # 수리 재시도 한 번
+    llm = ScriptedAdapter([bare, bare], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3)
+    patch = await conclude(_ended(case))
+    assert "verdict" not in patch and any("basis" in e for e in patch["llm_errors"])

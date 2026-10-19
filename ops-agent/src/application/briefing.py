@@ -905,7 +905,7 @@ def verdict_example() -> str:
     낙인이다). `verdict_type` 자리는 값이 아니라 고를 목록이라 그대로 두면 검증이 거부하고 수리
     재시도가 "그중 하나를 적어라"를 전한다."""
     body = {
-        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | inconclusive 중 하나>",
+        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | not_a_defect | inconclusive 중 하나>",
         "root_cause": {"component": "위 component 후보 중 하나",
                        "evidence_ids": ["위 <모은 증거>에 실제로 있는 id"]},
         "alternates": [{"component": "위 component 후보 중 하나",
@@ -913,6 +913,8 @@ def verdict_example() -> str:
                         "confidence": "low",
                         "relation": "왜 후보이고 왜 최상위가 아닌가 (한국어)"}],
         "contributing": [],
+        # 결함 아님(R3-5d ⑤)의 근거 자리 — 빈 목록으로 둔다: 자리표시 문장을 두면 다른 판정도 그 문장을 베껴 "없는 id"가 된다.
+        "basis": [],
         "confidence": "<high | medium | low 중 하나>",
         "recommendations": ["사람이 할 조치 (한국어)"],
         "caveats": ["한 문장으로 — 무엇이 잘리거나 실패해서 무엇을 단정 못 하는가, 그 증거 id와 함께 (한국어)"],

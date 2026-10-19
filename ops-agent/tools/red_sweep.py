@@ -1335,8 +1335,8 @@ CASES += [
   '        "confidence": link.confidence})',
   [f"{V}::test_인과_사슬의_형태는_코드가_정한다"]),
  ("리드가 degraded를 낼 수 있다", LD,
-  '                          "external", "inconclusive"]\n    root_cause: CauseLink | None = None',
-  '                          "external", "inconclusive", "degraded"]\n    root_cause: CauseLink | None = None',
+  '                          "external", "inconclusive", "not_a_defect"]\n    root_cause: CauseLink | None = None',
+  '                          "external", "inconclusive", "not_a_defect", "degraded"]\n    root_cause: CauseLink | None = None',
   ["tests/application/test_lead.py::test_degraded_판정은_LLM이_못_낸다",
    "tests/domain/test_verdict_model.py::test_degraded는_판정_어휘에_있지만_LLM_어휘에는_없다"]),
  ("판정 턴이 트레이스에 안 남는다", LD,
@@ -1344,8 +1344,8 @@ CASES += [
   '        got = await ask_json(llm, prompt, ConcludeReply)',
   ["tests/application/test_lead.py::test_conclude가_판정_JSON을_Verdict로_받고_프롬프트에_본_것만_싣는다"]),
  ("판정 예시가 degraded를 보여 준다", B,
-  '        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | inconclusive 중 하나>",',
-  '        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | inconclusive | degraded 중 하나>",',
+  '        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | not_a_defect | inconclusive 중 하나>",',
+  '        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | not_a_defect | inconclusive | degraded 중 하나>",',
   ["tests/application/test_briefing.py::test_판정_예시는_degraded를_안_보여주고_component_후보를_서비스에서_만든다"]),
  ("재작성 블록이 늘 실린다", B,
   '    if not state.verify_problems:\n        return ""\n    return ("## 재작성',
@@ -1393,7 +1393,7 @@ CASES += [
   '    pass',
   ["tests/application/test_dryrun.py::test_CLI가_사다리_대본을_돈다"]),
  ("결론에 root_cause가 없어도 선다", CS,
-  '        if self.verdict_type not in ("inconclusive", "degraded") and self.root_cause is None:',
+  '        if self.verdict_type not in ("inconclusive", "degraded", "not_a_defect") and self.root_cause is None:',
   '        if False:',
   ["tests/domain/test_verdict_model.py::test_결론이_있는_판정에는_root_cause가_필요하다"]),
  ("판정 프롬프트 기본값이 바뀐다", SA,
@@ -3004,7 +3004,34 @@ CASES += [
  ("측정판에 포인터가 없다", LC, "\"offset\": _POINTER_OFFSET[l]}} if variant in _MESSAGE_VARIANTS else {})},", "\"offset\": _POINTER_OFFSET[l]}} if False else {})},", [LC_MSG_T, BOARD_MSG_T]),
 ]
 
-assert len(CASES) >= 923, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5d ⑤ — 결함 아님(not_a_defect)은 걷기가 지킨다 ──
+ICP = ROOT / "config/prompts/investigate-conclude.md"
+VOCAB_T = "tests/domain/test_verdict_model.py::test_degraded는_판정_어휘에_있지만_LLM_어휘에는_없다"
+MODEL_NAD_T = "tests/domain/test_verdict_model.py::test_결함_아님은_root_cause_없이_basis로_서고_root_cause가_있으면_거부한다"
+LEAD_NAD_T = "tests/application/test_lead.py::test_결함_아님_판정은_root_cause_없이_basis를_요구한다"
+VERIFY_NAD_T = "tests/application/test_verdict.py::test_결함_아님은_걷기가_다_정상에서_멈췄고_나쁨이_없고_basis가_코드와_입력_증거를_함께_인용할_때만_지나고_확신_상한은_medium"
+CITE_NAD_T = "tests/application/test_verdict.py::test_basis의_태스크_id도_그_태스크의_유일한_증거_id로_고친다"
+EXAMPLE_NAD_T = "tests/application/test_verdict.py::test_판정_예시와_프롬프트가_결함_아님과_basis를_말한다"
+CASES += [
+ ("결함 아님이 판정 어휘에 없다", CS, "                      \"external\", \"inconclusive\", \"degraded\", \"not_a_defect\"]", "                      \"external\", \"inconclusive\", \"degraded\"]", [VOCAB_T, MODEL_NAD_T]),
+ ("결함 아님에 root_cause가 있어도 선다", CS, "        if self.verdict_type == \"not_a_defect\" and self.root_cause is not None:", "        if False:", [MODEL_NAD_T]),
+ ("리드가 결함 아님에 basis 없이 낸다", LD, "        if self.verdict_type == \"not_a_defect\" and (self.root_cause is not None or not self.basis):", "        if False:", [LEAD_NAD_T]),
+ ("결함 아님 조건을 안 본다", ND, "            problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)", "            pass", [VERIFY_NAD_T]),
+ ("걷기 없는 결함 아님을 지난다", ND, "        return [\"결함 아님은 걷기가 있을 때만 — 걷기가 없다(입구가 키나 쓴 쪽을 못 골랐다)\"]", "        return []", [VERIFY_NAD_T]),
+ ("멈춤이 다 정상이 아니어도 결함 아님을 지난다", ND, "    if not walk.stopped.startswith(\"입력이 다 정상\"):", "    if False:", [VERIFY_NAD_T]),
+ ("홉 표의 나쁨을 안 본다", ND, "    bad = [h.key for h in walk.hops if h.status.startswith(\"나쁨\")]", "    bad = [h.key for h in walk.hops if False]", [VERIFY_NAD_T]),
+ ("코드 증거 없이도 지난다", ND, "    if not cited & set(code_ids):", "    if False:", [VERIFY_NAD_T]),
+ ("입력 증거 없이도 지난다", ND, "    if not cited & set(input_ids):", "    if False:", [VERIFY_NAD_T]),
+ ("결함 아님의 확신 상한이 없다", ND, "    if verdict.verdict_type != \"not_a_defect\" or verdict.confidence != \"high\":", "    if True:", [VERIFY_NAD_T]),
+ ("강등이 결함 아님을 그대로 둔다", ND, "    if verdict.verdict_type == \"not_a_defect\":\n        verdict_type = \"inconclusive\"\n", "", [VERIFY_NAD_T]),
+ ("basis의 태스크 id를 안 고친다", ND, "    basis = fix(CauseLink(component=\"basis\", evidence_ids=list(verdict.basis))).evidence_ids if verdict.basis else list(verdict.basis)", "    basis = list(verdict.basis)", [CITE_NAD_T]),
+ ("basis의 없는 id를 안 잡는다", ND, "    for evidence_id in verdict.basis:\n        if evidence_id not in citable:", "    for evidence_id in []:\n        if evidence_id not in citable:", [VERIFY_NAD_T]),
+ ("예시에 결함 아님이 없다", B, "| external | not_a_defect | inconclusive 중 하나>", "| external | inconclusive 중 하나>", [EXAMPLE_NAD_T]),
+ ("프롬프트가 결함 아님을 설명하지 않는다", ICP, "- `not_a_defect`는 걷기가 `입력이 다 정상`에서 멈췄고 홉 표에 `나쁨`이 없을 때만 — 비어 있는 것이 그 클래스 코드의 의도된 결과일 때다. `root_cause`\n  없이 `basis`에 멈춘 클래스의 코드 증거 id와 그 클래스의 비지 않은 입력 증거 id를 **함께** 적어라(코드가 걷기와 대조한다).\n", "", [EXAMPLE_NAD_T]),
+]
+
+assert len(CASES) >= 938, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -278,8 +278,11 @@ class Case(StrictModel):
 # `degraded`는 **코드만 찍는 낙인**이다 — "조사가 안 돌았다"(리드 LLM 실패·증거 0건·판정을 못
 # 받음)를 "조사했는데 못 가렸다"(`inconclusive`)와 가르기 위한 값이라, 리드가 고르면 뜻이
 # 사라진다. 리드가 낼 수 있는 집합은 `lead.ConcludeReply`가 이 하나를 뺀 것이다.
+# `not_a_defect`(결함 아님, R3-5d ⑤ — 사람 결정 10-19 (3))는 원인이 없는 판정이다 — root_cause 없이 `basis`에 근거(증거 id)를 둔다. 리드가 낼 수
+# 있지만 verify가 걷기와 대조해서만 통과시킨다: (a) 걷기 멈춤 `입력이 다 정상` (b) 홉 표에 `나쁨` 없음 (c) 멈춘 클래스의 코드 증거와 비지 않은 입력
+# 증거를 함께 인용 (d) 확신 상한 medium. "증거 id 하나 이상"은 모든 판정이 지나 구분력이 없었다.
 VerdictType = Literal["logic_bug", "data_loss", "config_error", "stale_data",
-                      "external", "inconclusive", "degraded"]
+                      "external", "inconclusive", "degraded", "not_a_defect"]
 Confidence = Literal["high", "medium", "low"]
 
 
@@ -309,9 +312,13 @@ class Verdict(StrictModel):
     recommendations: list[str] = []
     caveats: list[str] = []
     narrative: str
+    # 원인 없는 판정(`not_a_defect`)의 근거 증거 id들(R3-5d ⑤) — 다리가 없으니 인용이 여기 실린다. verify가 실재·조건 (c)를 검사한다.
+    basis: list[str] = []
 
     @model_validator(mode="after")
     def _conclusive_needs_root_cause(self):
-        if self.verdict_type not in ("inconclusive", "degraded") and self.root_cause is None:
+        if self.verdict_type not in ("inconclusive", "degraded", "not_a_defect") and self.root_cause is None:
             raise ValueError("결론이 있는 판정에는 root_cause가 필요하다")
+        if self.verdict_type == "not_a_defect" and self.root_cause is not None:
+            raise ValueError("결함 아님(not_a_defect)에는 root_cause가 없다 — 근거는 basis에")
         return self

@@ -662,3 +662,89 @@ async def test_후보의_component가_케이스에_나온_토픽과_같으면_�
     assert (await nodes["verify"](_state(case, verdict=root, plan_tasks=tasks, evidence=evidence)))["verify_problems"] == []
     bad_root = verdict(root_cause=cause("외부 피드가 멈춤", "t-1.e1"))                              # 최상위는 전처럼 되묻는다
     assert (await nodes["verify"](_state(case, verdict=bad_root, plan_tasks=tasks, evidence=evidence)))["verify_problems"]
+
+
+
+# ── R3-5d ⑤ — 결함 아님(not_a_defect)은 걷기가 지킨다 ──
+
+def _nad_state(case, *, stopped="입력이 다 정상 — Proc", extra_hops=(), rungs=None, **over) -> CaseState:
+    """걷기가 Proc에서 "입력이 다 정상"으로 멈춘 State — 대상 키 홉(t-1.e1, 빈 배열) ← 입력 키(t-3.e1, 정상)·포인터 메시지(t-4.e1, 정상). 코드 증거는
+    Proc의 `code.resources`(t-2.e1)와 칸의 `code.read`(t-5.e1)."""
+    from src.domain.case import Hop, Rung, TargetPick, Walk
+
+    hops = [Hop(key="sum:L1", writer="Proc", service="processor", candidates=["processor"], status="빈 배열 (data)", bad=True, evidence_id="t-1.e1"),
+            Hop(key="src:L1", depth=1, status="정상 — 행 3 · 필드 2", evidence_id="t-3.e1", parent="t-1.e1", basis="Proc가 읽는 자원 (t-2.e1)"),
+            Hop(key="t[0]@5", kind="message", depth=1, service="발행 선언 없음(우리 밖)", status="정상 — rows: 행 4 · 필드 3", evidence_id="t-4.e1",
+                parent="t-1.e1"), *extra_hops]
+    rungs = rungs if rungs is not None else [Rung(action="code.read", params={"service": "processor", "path": "p.py", "line": 4}, evidence="t-2.e1")]
+    walk = Walk(hops=hops, reads=4, stopped=stopped, stop_at="t-1.e1", rungs=rungs)
+    tasks = [task("t-1", action="redis.get", params={"key": "sum:L1"}, status="ok", result_evidence_ids=["t-1.e1"]),
+             task("t-2", action="code.resources", params={"name": "Proc"}, status="ok", result_evidence_ids=["t-2.e1"], walked=True),
+             task("t-3", action="redis.get", params={"key": "src:L1"}, status="ok", result_evidence_ids=["t-3.e1"], walked=True),
+             task("t-4", action="kafka.message_at", params={"topic": "t", "partition": 0, "offset": 5}, status="ok", result_evidence_ids=["t-4.e1"], walked=True),
+             task("t-5", action="code.read", params={"service": "processor", "path": "p.py", "line": 4}, status="ok", result_evidence_ids=["t-5.e1"])]
+    evidence = [_ev(f"t-{n}.e1") for n in range(1, 6)]
+    base = dict(plan_tasks=tasks, evidence=evidence, walk=walk, target=TargetPick(key="sum:L1", writer="Proc"))
+    base.update(over)
+    return _state(case, **base)
+
+
+def _nad(*basis, confidence="high", **over) -> Verdict:
+    return Verdict(verdict_type="not_a_defect", confidence=confidence, narrative="정상 공백 — 입력이 다 정상이고 코드가 거른 것이 없다",
+                   basis=list(basis), **over)
+
+
+async def test_결함_아님은_걷기가_다_정상에서_멈췄고_나쁨이_없고_basis가_코드와_입력_증거를_함께_인용할_때만_지나고_확신_상한은_medium(case):
+    """사람 결정 10-19 (3): "증거 id 하나 이상"은 모든 판정이 이미 지나 구분력이 없다 → (a) 걷기 멈춤 `입력이 다 정상`(메시지 홉 포함) (b) 홉 표에 `나쁨` 없음
+    (c) 멈춘 클래스의 코드 증거와 그 클래스의 비지 않은 입력 증거를 함께 인용 (d) 확신 상한 medium. 15건에 대 보면 정상 공백 3건만 통과, 12건 탈락."""
+    from src.domain.case import Hop
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor"})))
+    got = await nodes["verify"](_nad_state(case, verdict=_nad("t-2.e1", "t-3.e1")))
+    assert got["verify_problems"] == [] and got["verdict"].confidence == "medium" and got["verdict"].verdict_type == "not_a_defect"
+    assert any("결함 아님의 확신 상한은 medium" in c for c in got["verdict"].caveats)
+    # 칸의 code.read와 메시지 홉도 각각 코드 증거·입력 증거다; medium이면 상한에 안 걸려 그대로
+    assert await nodes["verify"](_nad_state(case, verdict=_nad("t-5.e1", "t-4.e1", confidence="medium"))) == {"verify_problems": []}
+    # (c) 둘 중 하나가 빠지면 되묻는다
+    code_only = await nodes["verify"](_nad_state(case, verdict=_nad("t-2.e1")))
+    assert code_only["verify_attempts"] == 1 and any("비지 않은 입력 증거가 없다" in p and "t-3.e1" in p for p in code_only["verify_problems"])
+    input_only = await nodes["verify"](_nad_state(case, verdict=_nad("t-3.e1")))
+    assert any("코드 증거가 없다" in p and "Proc" in p for p in input_only["verify_problems"])
+    # (a) 멈춤이 "입력이 다 정상"이 아니면, (b) 홉 표에 나쁨이 있으면, 걷기가 없으면
+    stopped = await nodes["verify"](_nad_state(case, stopped="입력 메시지가 나쁘다 — Proc의 t[0]@5(발행 선언 없음(우리 밖))", verdict=_nad("t-2.e1", "t-3.e1")))
+    assert any("'입력이 다 정상'에서 멈췄을 때만" in p for p in stopped["verify_problems"])
+    filtered = Hop(key="dom:L1", depth=2, status="나쁨 — 5행 전부 ws='-' · 이 필드 값이 든 비교식 p.py:L9 'x'", bad=True, evidence_id="t-6.e1", parent="t-3.e1")
+    bad = await nodes["verify"](_nad_state(case, extra_hops=(filtered,), verdict=_nad("t-2.e1", "t-3.e1")))
+    assert any("홉 표에 나쁨이 있다" in p and "dom:L1" in p for p in bad["verify_problems"])
+    none = await nodes["verify"](_nad_state(case, walk=None, verdict=_nad("t-2.e1", "t-3.e1")))
+    assert any("걷기가 없다" in p for p in none["verify_problems"])
+    # basis의 없는 id도 인용 검사에 걸린다
+    ghost = await nodes["verify"](_nad_state(case, verdict=_nad("t-2.e1", "t-9.e1")))
+    assert any("없는 id t-9.e1" in p for p in ghost["verify_problems"])
+    # 재작성 뒤에도 미통과면 결함 아님 주장은 inconclusive로 강등된다(근거 없는 단정을 "결함 아님"으로 내보내지 않는다)
+    demoted = await nodes["verify"](_nad_state(case, verify_attempts=1, verdict=_nad("t-2.e1")))
+    assert demoted["verify_problems"] == [] and demoted["verdict"].verdict_type == "inconclusive" and demoted["verdict"].confidence == "low"
+    assert any("검증 미통과" in c for c in demoted["verdict"].caveats)
+    # 대본 경로는 안 건다
+    loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
+    assert await loose["verify"](_nad_state(case, walk=None, verdict=_nad("t-2.e1"))) == {"verify_problems": []}
+
+
+def test_basis의_태스크_id도_그_태스크의_유일한_증거_id로_고친다():
+    from src.application.nodes import resolve_task_citations
+
+    tasks = [task("t-2", action="code.resources", params={"name": "Proc"}, status="ok", result_evidence_ids=["t-2.e1"])]
+    fixed = resolve_task_citations(_nad("t-2", "t-3.e1"), tasks)
+    assert fixed.basis == ["t-2.e1", "t-3.e1"] and any("t-2→t-2.e1" in c for c in fixed.caveats)
+
+
+def test_판정_예시와_프롬프트가_결함_아님과_basis를_말한다():
+    """예시가 곧 출력이다 — `not_a_defect`가 목록에 있고 `basis`는 빈 목록(자리표시 문장을 베껴 없는 id가 되지 않게). 프롬프트는 조건을 말한다."""
+    from pathlib import Path
+
+    from src.application import briefing
+
+    example = json.loads(briefing.verdict_example())
+    assert "not_a_defect" in example["verdict_type"] and example["basis"] == []
+    text = (Path(__file__).resolve().parents[2] / "config/prompts/investigate-conclude.md").read_text(encoding="utf-8")
+    assert "`not_a_defect`(결함 아님" in text and "`basis`" in text and "입력이 다 정상" in text
