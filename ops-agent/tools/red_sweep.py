@@ -3031,7 +3031,16 @@ CASES += [
  ("프롬프트가 결함 아님을 설명하지 않는다", ICP, "- `not_a_defect`는 걷기가 `입력이 다 정상`에서 멈췄고 홉 표에 `나쁨`이 없을 때만 — 비어 있는 것이 그 클래스 코드의 의도된 결과일 때다. `root_cause`\n  없이 `basis`에 멈춘 클래스의 코드 증거 id와 그 클래스의 비지 않은 입력 증거 id를 **함께** 적어라(코드가 걷기와 대조한다).\n", "", [EXAMPLE_NAD_T]),
 ]
 
-assert len(CASES) >= 938, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5e ① — 사이트가 덮은 같은 값의 둘째 행도 그 관계로 config 엣지 ──
+SITE_DUP_T = "tests/knowledge/test_flow.py::test_같은_값을_다른_key_path로_덮은_둘째_행도_그_관계로_config_엣지를_단다"
+CASES += [
+ ("같은 값의 둘째 행에 엣지를 안 단다", FLW, "        existing = next((n for n in nodes if n[\"id\"] == new_id), None)\n        if existing is None:", "        existing = next((n for n in nodes if n[\"id\"] == new_id), None)\n        if existing is not None:\n            continue\n        if existing is None:", [SITE_DUP_T, BOARD_GONE_T]),
+ ("둘째 행의 엣지를 두 번 단다", FLW, "            if any(e[\"source\"] == source and rename.get(e[\"target\"], e[\"target\"]) == new_id and e[\"relation\"] == relation\n                   and e.get(\"origin\") == \"config\" for e in links):\n                continue\n", "", [SITE_DUP_T]),
+ ("측정판 사이트 층이 발행 토픽을 안 덮는다", LC, "\"consumer\": {\"group_id\": \"gumi-mx-core\", \"topic\": {\"topic3\": \"gumi.alarm.audit\"}},\n                            \"producer\": {\"topic\": {\"topic2\": \"gumi.alarm.audit\"}}}}},", "\"consumer\": {\"group_id\": \"gumi-mx-core\", \"topic\": {\"topic3\": \"gumi.alarm.audit\"}}}}},", [LC_MSG_T, BOARD_GONE_T]),
+]
+
+assert len(CASES) >= 941, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

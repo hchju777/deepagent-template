@@ -130,8 +130,11 @@ CORE_FILES = {
         "sink": {"batch_size": 200, "flush_sec": 5}},
     # `badge.state`는 미끼(측정 #10 P0 1의 가짜 ① — 사이트 상수 config 줄): 필드와 값이 한 줄에 리터럴로 있지만 비교식도 코드도 아니다.
     "config/factories/gumi/common.json": {"lines": LINES, "site_code": "gumi", "badge": {"empty_state": "-", "state": "-"}},
+    # 사이트 층이 소비·발행 토픽을 **같은 값**으로 덮는 행(측정 #15 P0-1의 모양 — GBM 층엔 없는 키라 그래프엔 사이트 행으로만 든다). 감사 토픽은
+    # message-gone의 포인터가 가리키는 자리다.
     "config/factories/gumi/mx.json": {
-        "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core"}}}},
+        "infra": {"kafka": {"consumer": {"group_id": "gumi-mx-core", "topic": {"topic3": "gumi.alarm.audit"}},
+                            "producer": {"topic": {"topic2": "gumi.alarm.audit"}}}}},
     # 두 번째 사이트 — 11e-2의 "번들은 GBM 하나, 사이트는 덮은 값만"을 측정판에서 보기 위해서다.
     "config/factories/sevt/common.json": {"lines": LINES, "site_code": "sevt"},
     "config/factories/sevt/mx.json": {
@@ -474,13 +477,14 @@ VARIANTS = {
     "palette-unread": "palette-empty와 같고 PaletteLoader가 읽는 원천 색 키의 읽기가 실패한다(WRONGTYPE)",
     # 측정 #13 추가분 2(R3-5d ④) — 원천 묶음 키 값에 그 키를 만든 메시지의 포인터(`metadata.source`)가 있다. 걷기가 그 메시지 한 건을 입력으로 읽는다.
     "message-empty": "chain-empty와 같고 원천 묶음 키 값에 포인터가 있다 — 가리키는 메시지의 rows가 빈 배열이라 걷기가 메시지 홉에서 멈춘다(발행 선언 없는 토픽)",
-    "message-gone": "chain-empty와 같고 포인터가 발행 선언이 있는 가공 토픽의 지워진 오프셋을 가리킨다 — '키를 만든 메시지가 토픽에 없다'",
+    "message-gone": "chain-empty와 같고 포인터가 사이트 층이 소비·발행으로 같은 값으로 덮은 감사 토픽의 지워진 오프셋을 가리킨다 — '키를 만든 메시지가 토픽에 없다', "
+                    "발행 선언은 사이트 행에서",
     "message-blank": "chain-empty와 같고 포인터 메시지의 행은 있지만 모든 행의 ws가 '-'다 — 수집기의 파서가 그 값을 걸러 원천 묶음이 빈 배열",
 }
 _MESSAGE_VARIANTS = {"message-empty", "message-gone", "message-blank"}
-# 포인터의 자리 — 라인마다 다른 오프셋(토픽 하나, 파티션 0). message-gone은 가공 토픽(dt-core가 발행 선언)의 보존(100부터) 앞이다.
+# 포인터의 자리 — 라인마다 다른 오프셋(토픽 하나, 파티션 0). message-gone은 사이트 층이 덮은 감사 토픽(dt-core 세 서비스가 소비·발행 선언)의 보존(100부터) 앞이다.
 _POINTER_OFFSET = {"L1": 2, "L2": 3, "L3": 4}
-_POINTER_TOPIC = {"message-gone": "mx.alarm.main"}
+_POINTER_TOPIC = {"message-gone": "gumi.alarm.audit"}
 _EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered",
                "chain-objects", "palette-unread", *_MESSAGE_VARIANTS}
 # 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
@@ -543,12 +547,12 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             "line_state": [{"line": l, "status": "RUN", "updated_at": fresh(1)} for l in LINES]},
         "kafka": {
             # 메시지 변형(R3-5d ④)은 원천 토픽의 메시지가 포인터가 가리키는 모양이다 — rows가 빈 배열(message-empty)이거나 모든 행의 ws가 '-'(message-blank).
-            # message-gone은 가공 토픽의 보존이 100부터라 포인터(2~4)가 범위 밖이다(stub 시드의 `begin`).
+            # message-gone은 사이트 층이 덮은 감사 토픽의 보존이 100부터라 포인터(2~4)가 범위 밖이다(stub 시드의 `begin`).
             "mx.alarm.raw": ([{"line": LINES[i % 3], "rows": _message_rows(variant, i)} for i in range(5)] if variant in _MESSAGE_VARIANTS
                              else [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "ts": fresh(14 - 3 * i)} for i in range(5)]),
-            "mx.alarm.main": ({"begin": 100, "messages": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i)}
-                                                          for i in range(5)]} if variant == "message-gone"
-                              else [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i)} for i in range(5)])},
+            "mx.alarm.main": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i)} for i in range(5)],
+            **({"gumi.alarm.audit": {"begin": 100, "messages": [{"line": LINES[i % 3], "note": f"audit-{i}"} for i in range(5)]}}
+               if variant == "message-gone" else {})},
         # 그룹은 레포당 하나라 processor·sink가 공유한다 — lag만으로는 누가 멈췄는지 모른다.
         # 그룹은 레포 공유라 processor(raw)와 sink(main)가 같은 이름이다. 실제 Kafka는
         # 토픽별로 답하고, 어느 토픽이 밀리는지가 두 서비스를 가르는 유일한 숫자다.

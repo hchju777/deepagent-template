@@ -1159,7 +1159,8 @@ def known_names(graph: dict | None) -> str:
 
 def apply_site(graph: dict, overrides: list[dict]) -> dict:
     """GBM 오버레이 사본에 **그 사이트의 값**을 입힌다 — 같은 `key_path`의 노드는 이름(id·label)만 바꾸고
-    엣지가 따라가며, GBM 층에 없던 이름은 새 노드로 들되 config 엣지(`declares` 또는 출처의 관계)만 단다.
+    엣지가 따라가며, GBM 층에 없던 이름은 새 노드로 들되 config 엣지(`declares` 또는 출처의 관계)만 단다. 같은 값이 다른 key_path로 또 오면
+    (소비·발행 토픽이 같은 값 — 사내 모양) 노드는 하나이고 엣지는 행마다(R3-5e ①).
     코드 엣지는 못 만든다 — 그 값으로 grep한 적이 없다. 두 번 입혀도 같다(값이 같으면 바꿀 것이 없다).
 
     왜 입히는가: 사이트는 "무엇을 읽고 무엇을 돌릴지"를 고르는 층이지 이름을 새로 정하는 층이 아니라 그래프는
@@ -1184,16 +1185,23 @@ def apply_site(graph: dict, overrides: list[dict]) -> dict:
                 rename[node["id"]] = new_id
             node["id"], node["label"] = new_id, value
             continue
-        if any(n["id"] == new_id for n in nodes):
-            continue
-        fresh = {"id": new_id, "label": value, "type": kind, "source_file": "config(site)",
-                 "source_location": "L0", "key_path": key_path}
-        nodes.append(fresh)
-        by_key[(kind, key_path)] = fresh
+        existing = next((n for n in nodes if n["id"] == new_id), None)
+        if existing is None:
+            existing = {"id": new_id, "label": value, "type": kind, "source_file": "config(site)",
+                        "source_location": "L0", "key_path": key_path}
+            nodes.append(existing)
+        by_key[(kind, key_path)] = existing
+        # 같은 값을 다른 key_path(소비·발행)로 또 만나면 노드는 하나, 엣지는 **그 행의 관계로** 더 단다 — 측정 #15 P0-1: 둘째 행에서 그냥 넘어가 발행
+        # 선언이 16행 전부 "없음(우리 밖)"이었다(측정판은 토픽을 사이트 층이 안 덮어 못 잡았다). 같은 (출발, 도착, 관계)의 config 엣지는 한 번 — 두 번
+        # 입혀도 같고, GBM 엣지가 이름을 따라온 자리에 또 안 붙는다(도착은 바뀐 이름으로 견준다).
         for svc in sorted(row.get("services") or []):
             repo = repo_of.get(svc, "")
-            links.append({"source": f"service_{_slug(svc)}", "target": new_id,
-                          "relation": row.get("relation") or "declares", "confidence": "EXTRACTED",
+            source, relation = f"service_{_slug(svc)}", row.get("relation") or "declares"
+            if any(e["source"] == source and rename.get(e["target"], e["target"]) == new_id and e["relation"] == relation
+                   and e.get("origin") == "config" for e in links):
+                continue
+            links.append({"source": source, "target": new_id,
+                          "relation": relation, "confidence": "EXTRACTED",
                           "attributed": "service", "origin": "config", "source_file": f"config({repo})",
                           "source_location": "L0", "repo": repo, "commit": "", "text": ""})
     for e in links:

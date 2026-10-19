@@ -258,7 +258,11 @@ def test_message_변형_셋은_원천_묶음_키_값에_포인터가_있고_그_
     ptr = _value(empty, "alarm:raw:L1")["metadata"]["source"]
     assert ptr["topic"] == "mx.alarm.raw" and empty["kafka"]["mx.alarm.raw"][ptr["offset"]]["rows"] == []
     ptr = _value(gone, "alarm:raw:L1")["metadata"]["source"]
-    assert ptr["topic"] == "mx.alarm.main" and gone["kafka"]["mx.alarm.main"]["begin"] > ptr["offset"]
+    assert ptr["topic"] == "gumi.alarm.audit" and gone["kafka"]["gumi.alarm.audit"]["begin"] > ptr["offset"]
+    # 그 토픽은 사이트 층만 선언한다 — 소비·발행 key_path 둘에 같은 값(측정 #15 P0-1의 모양). GBM 층엔 없다.
+    site = CORE_FILES["config/factories/gumi/mx.json"]["infra"]["kafka"]
+    assert site["consumer"]["topic"]["topic3"] == site["producer"]["topic"]["topic2"] == "gumi.alarm.audit"
+    assert "gumi.alarm.audit" not in str(CORE_FILES["config/gbm/mx.json"])
     ptr = _value(blank, "alarm:raw:L1")["metadata"]["source"]
     rows = blank["kafka"]["mx.alarm.raw"][ptr["offset"]]["rows"]
     assert len(rows) == 5 and all(r["ws"] == "-" for r in rows) and 'row.get("ws") != "-"' in CORE_FILES["common/parsers.py"]

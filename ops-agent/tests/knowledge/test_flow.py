@@ -339,7 +339,7 @@ def test_요약과_권고():
     g = graph()
     s = flow.summary(g)
     assert s["nodes"] > 5 and s["links"] > 5 and s["repo_level"] > 0
-    assert s["unreferenced"] == 1, "line_state는 config에만 있다 — 권고가 아니라 요약의 숫자다"
+    assert s["unreferenced"] == 2, "line_state와 gumi 층의 감사 토픽은 config에만 있다 — 권고가 아니라 요약의 숫자다"
     advice = "\n".join(flow.advise(g, TOPOLOGY))
     # 측정판은 processor/·sink/ 디렉터리로 갈리므로 공유 코드 줄이 없다. "path를 채워라"와
     # "안 쓰는 이름"은 사내에서 둘 다 틀린 권고였다 — 다시 나오면 안 된다.
@@ -981,3 +981,25 @@ def test_producing_map은_토픽마다_config로_발행을_선언한_서비스�
                    {"source": "repo_r", "target": "topic_t2", "relation": "produces", "origin": "config"},
                    {"source": "service_a", "target": "rediskey_k", "relation": "writes", "origin": "config"}]}
     assert flow.producing_map(g) == {"t1": ("a",), "t2": ()} and flow.producing_map(None) == {}
+
+
+
+def test_같은_값을_다른_key_path로_덮은_둘째_행도_그_관계로_config_엣지를_단다():
+    """측정 #15 P0-1: 사내 사이트 층은 소비 토픽과 발행 토픽을 같은 값으로 덮는다(GBM 층엔 없는 값). 둘째 행(발행 key_path)을 만나면 노드가 이미 있다고
+    엣지 없이 넘어가 발행 선언이 16행 전부 "없음(우리 밖)"이었다. 노드는 하나, 엣지는 행마다 그 관계로(같은 엣지는 한 번 — 두 번 입혀도 같다). GBM 노드를
+    이름만 바꾼 뒤 같은 값의 다른 key_path가 와도 같다."""
+    rows = [{"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic3", "value": "site.audit", "services": ["sink"], "relation": "consumes"},
+            {"kind": "topic", "key_path": "infra.kafka.producer.topic.topic2", "value": "site.audit", "services": ["sink"], "relation": "produces"}]
+    got = flow.apply_site(_gbm_graph(), rows)
+    audit = [n for n in got["nodes"] if n["label"] == "site.audit"]
+    assert len(audit) == 1 and len(got["nodes"]) == 4
+    assert sorted((e["source"], e["relation"], e["origin"]) for e in got["links"] if e["target"] == audit[0]["id"]) == [
+        ("service_sink", "consumes", "config"), ("service_sink", "produces", "config")]
+    assert flow.producing_map(got) == {"mx.alarm.main": (), "site.audit": ("sink",)}
+    assert flow.apply_site(got, rows) == got
+    renamed = flow.apply_site(_gbm_graph(), [
+        {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic2", "value": "site.main", "services": ["sink"], "relation": "consumes"},
+        {"kind": "topic", "key_path": "infra.kafka.producer.topic.topic1", "value": "site.main", "services": ["sink"], "relation": "produces"}])
+    assert [n["label"] for n in renamed["nodes"] if n["type"] == "topic"] == ["site.main"]
+    assert flow.producing_map(renamed) == {"site.main": ("sink",)}
+    assert len([e for e in renamed["links"] if e["relation"] == "produces"]) == 1

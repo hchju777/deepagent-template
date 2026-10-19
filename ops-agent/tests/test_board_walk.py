@@ -248,12 +248,13 @@ def test_메시지_변형_빈_메시지는_메시지_홉에서_멈추고_다음_
 
 
 def test_메시지_변형_지워진_메시지는_키를_만든_메시지가_토픽에_없다이고_발행_선언은_config에서_온다(board, monkeypatch):
-    """측정 #13 추가분 2: 오프셋이 보존 범위 밖인 키 둘이 진짜 원인 자리였다. 발행 쪽은 CLI가 흐름 그래프의 config 발행 선언으로 넘긴다(dt-core의 세 서비스).
-    다음 칸은 지금 토픽에 오는 것이 먼저."""
+    """측정 #13 추가분 2: 오프셋이 보존 범위 밖인 키 둘이 진짜 원인 자리였다. 발행 쪽은 CLI가 흐름 그래프의 config 발행 선언으로 넘긴다(dt-core의 세 서비스)
+    — 그 토픽은 사이트 층이 소비·발행 key_path 둘에 같은 값으로 덮은 것이라 발행 선언이 **사이트 행**으로 온다(측정 #15 P0-1: 둘째 행이 엣지 없이 넘어가
+    16행 전부 "없음(우리 밖)"이었다). 다음 칸은 지금 토픽에 오는 것이 먼저."""
     rows, notes, stopped, rungs = _walk(board, monkeypatch, "message-gone")
-    assert rows[-1] == "mx.alarm.main[0]@2 | 발행 선언: batch, processor, sink | 없음 — 키를 만든 메시지가 토픽에 없다(보존 범위 100~105)"
-    assert stopped == "키를 만든 메시지가 토픽에 없다 — SourceCollector의 mx.alarm.main[0]@2(보존 범위 100~105 · 발행 선언: batch, processor, sink)"
-    assert rungs[0] == "kafka.tail limit=5 topic='mx.alarm.main'" and len(rungs) == 3
+    assert rows[-1] == "gumi.alarm.audit[0]@2 | 발행 선언: batch, processor, sink | 없음 — 키를 만든 메시지가 토픽에 없다(보존 범위 100~105)"
+    assert stopped == "키를 만든 메시지가 토픽에 없다 — SourceCollector의 gumi.alarm.audit[0]@2(보존 범위 100~105 · 발행 선언: batch, processor, sink)"
+    assert rungs[0] == "kafka.tail limit=5 topic='gumi.alarm.audit'" and len(rungs) == 3
 
 
 def test_메시지_변형_행이_전부_자리_표시면_파서의_비교식_줄이_첫_칸이다(board, monkeypatch):
