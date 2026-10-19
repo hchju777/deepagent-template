@@ -48,6 +48,8 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     "kafka.list_topics":      ("kafka", "list_topics",      (), ()),
     "kafka.group_offsets": ("kafka", "group_offsets", ("group",),              ()),
     "kafka.tail":          ("kafka", "tail",          ("topic",),              ("limit",)),
+    # 포인터(토픽·파티션·오프셋)의 메시지 **한 건**(R3-5d ④) — 키 값의 `metadata.source`가 그 키를 만든 메시지를 가리킨다. 걷기가 낸다.
+    "kafka.message_at":    ("kafka", "message_at",    ("topic", "partition", "offset"), ()),
     # `params`가 두 번 나오는 것은 포트 시그니처 그대로다 — `query(entry, params)`.
     # 이름을 바꾸면 표와 포트가 갈라지고, 갈라진 것을 아무도 안 본다.
     "rest.query":          ("rest",  "query",         ("entry", "params"),     ()),
@@ -116,6 +118,9 @@ DISCOVERED_ARGS = frozenset({"collection", "topic", "key", "group"})
 # 예산이 아니라 증거 블록 전체 예산까지 싣는다(`runner_probe`) — 좁힌 결과가 또 잘리면 좁힌 뜻이 없다. `filter`·
 # `limit`·`projection`은 여기 없다: 좁혀도 문서 목록이라 한 건이 통째로 보이는 것이 요점이지 전부가 아니다.
 NARROWING_ARGS = frozenset({"path", "key", "offset"})
+# **본문을 증거에 싣지 않는** 읽기 — 포인터 메시지 한 건은 10MB까지 올 수 있다(사람 결정 10-19: 세기만). 실행기가 행 요약·크기 한 줄만 증거로
+# 남기고 원본은 프로세스 안에 들고 있어 걷기가 행을 본다. 리드 목록에는 없다(`briefing._WALK_READS`).
+SUMMARY_ONLY = frozenset({"kafka.message_at"})
 
 
 def narrowed(action: str, params: dict) -> bool:

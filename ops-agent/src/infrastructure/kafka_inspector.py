@@ -224,6 +224,61 @@ class RealKafkaInspector(KafkaInspectorPort):
                 except Exception:                                  # noqa: BLE001
                     pass
 
+    async def message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:
+        """포인터가 가리키는 메시지 한 건 — `assign` 뒤 `seek`. 그룹 미참여, 오프셋 커밋 없음. 범위 밖·압축 구멍은 `found=False`(오류 아님)."""
+        actual = self.resolve_topic(topic)
+        source = f"kafka:message_at {actual}[{partition}]@{offset}"
+        consumer = None
+        try:
+            from aiokafka import AIOKafkaConsumer, TopicPartition
+
+            partition, offset = int(partition), int(offset)
+            tp = TopicPartition(actual, partition)
+            consumer = AIOKafkaConsumer(bootstrap_servers=self._brokers,
+                                        group_id=None,              # ← 그룹에 안 들어간다
+                                        enable_auto_commit=False)   # ← 커밋도 안 한다
+            await consumer.start()
+            consumer.assign([tp])                                   # ← subscribe가 아니다
+            begin = (await consumer.beginning_offsets([tp]))[tp]
+            end = (await consumer.end_offsets([tp]))[tp]
+            head = {"topic": actual, "partition": partition, "offset": offset, "begin": begin, "end": end}
+            if not begin <= offset < end:
+                # 범위 밖은 읽으러 가지 않는다 — 앞은 지워진 것, 뒤는 아직 없는 것. 둘 다 "키를 만든 메시지가 토픽에 없다"는 사실이다.
+                return ProbeResult.succeeded({**head, "found": False, "message": None, "bytes": 0,
+                                              "note": f"보존 범위 밖 — 남은 것은 {begin}부터 {end} 전까지"},
+                                             source=source, clock=self._clock)
+            consumer.seek(tp, offset)
+            record, empties = None, 0
+            deadline = time.monotonic() + TAIL_WAIT_S
+            while record is None and time.monotonic() < deadline:
+                batches = await consumer.getmany(timeout_ms=1000, max_records=1)
+                got = [r for rs in batches.values() for r in rs]
+                if not got:
+                    empties += 1
+                    if empties >= EMPTY_POLLS:          # 한 건도 안 오면 tail과 같은 기준으로 그만둔다
+                        break
+                    continue
+                record = got[0]
+            if record is None:
+                return ProbeResult.failed(f"오프셋 {offset}은 보존 범위({begin}~{end}) 안인데 브로커가 빈 응답 {EMPTY_POLLS}번 — 모른다",
+                                          source=source, clock=self._clock)
+            if record.offset != offset:
+                # 압축·삭제로 빈 오프셋에 seek하면 브로커는 그 다음 레코드를 준다 — 그건 그 메시지가 아니다.
+                return ProbeResult.succeeded({**head, "found": False, "message": None, "bytes": 0,
+                                              "note": f"그 오프셋의 레코드가 없다 — 다음 레코드는 {record.offset}(압축·삭제)"},
+                                             source=source, clock=self._clock)
+            return ProbeResult.succeeded({**head, "found": True, "message": _render(record), "bytes": len(record.value or b"")},
+                                         source=source, clock=self._clock)
+        except Exception as exc:                                   # noqa: BLE001
+            return ProbeResult.failed(f"{type(exc).__name__}: {exc}",
+                                      source=source, clock=self._clock)
+        finally:
+            if consumer is not None:
+                try:
+                    await consumer.stop()
+                except Exception:                                  # noqa: BLE001
+                    pass
+
 
 def _render(record: Any) -> dict:
     import json

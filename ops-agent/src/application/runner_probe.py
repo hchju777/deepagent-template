@@ -18,7 +18,7 @@ from collections import OrderedDict
 from typing import Any
 
 from src.application.recompute import Recomputer
-from src.domain.actions import ACTIONS, DISCOVERY_ACTIONS, action_problem, describe, narrowed, run_action
+from src.domain.actions import ACTIONS, DISCOVERY_ACTIONS, SUMMARY_ONLY, action_problem, describe, narrowed, run_action
 from src.domain.base import Clock
 from src.domain.case import Case, EvidenceRef, PlanTask
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
@@ -98,8 +98,14 @@ class ProbeRunner(TaskRunnerPort):
             return TaskOutcome(task_id=task.id, status="error",
                                error=f"{source} — {result.error}")
 
-        body, ours = detail(result.data, limit=(self._narrowed_chars if narrowed(task.action, task.params)
-                                                else self._detail_chars), focus=focus_of(case))
+        if task.action in SUMMARY_ONLY:
+            # 포인터 메시지는 세기만(사람 결정 10-19) — 본문도 요약 줄도 행 요약·크기 한 줄이다. 원본은 아래 `_raw`에 그대로 남아 걷기가 행을 본다.
+            head = _message_line(result.data)
+            body, ours = [head, "(메시지 본문은 증거에 싣지 않는다 — 크기와 행 요약만)"], False
+        else:
+            body, ours = detail(result.data, limit=(self._narrowed_chars if narrowed(task.action, task.params)
+                                                    else self._detail_chars), focus=focus_of(case))
+            head = _summarize(result.data)
         # 재집계의 filter에 대상 identity가 하나도 없으면 그 수는 대상 행의 수가 아니다(R3-1 ③) — 머리에 "참고"를 박아 요약·본문·
         # 태스크 줄 어디서 봐도 보이게 한다. 사내 측정 #6 c-1 t-10: 컬렉션 전체 987281 vs 화면 0이 "불일치" 사실로 남았다.
         aside = ""
@@ -108,7 +114,7 @@ class ProbeRunner(TaskRunnerPort):
         ref = EvidenceRef(
             id=EvidenceRef.make_id(task.id, 1),
             source=source,
-            summary=aside + _summarize(result.data),
+            summary=aside + head,
             body="\n".join([aside.rstrip(), *body] if aside else body),
             as_of=result.envelope.observed_at,
             # **우리가 자른 것도 잘린 것이다.** 예전엔 봉투만 봤고, 예산에서
@@ -208,6 +214,21 @@ def _summarize(data: Any) -> str:
     if isinstance(data, list):
         return f"{len(data)}건 {head}{repr(data)[:_SUMMARY_CHARS]}"
     return f"{head}{repr(data)[:_SUMMARY_CHARS]}"
+
+
+def _message_line(data: Any) -> str:
+    """포인터 메시지 한 건(`kafka.message_at`)의 증거 줄 — 어디의 것인가, 있는가, 행 요약, 크기, 보존 범위. 본문은 없다(사람 결정 10-19: 10MB까지 —
+    세기만)."""
+    if not isinstance(data, dict):
+        return _summarize(data)
+    where = f"{data.get('topic')}[{data.get('partition')}]@{data.get('offset')}"
+    if not data.get("found"):
+        return f"{where} — 없음 · {data.get('note') or '보존 범위 밖'}"
+    value = (data.get("message") or {}).get("value")
+    rows = _first_profile(value).strip()
+    shape = (rows if rows else f"객체(필드 {len(value)})" if isinstance(value, dict) else f"목록 {len(value)}건" if isinstance(value, list)
+             else type(value).__name__)
+    return f"{where} — 있음 · {shape} · {data.get('bytes', 0):,}바이트 · 보존 {data.get('begin')}~{data.get('end')}"
 
 
 _SAME_FIELDS = 6

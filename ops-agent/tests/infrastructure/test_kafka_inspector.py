@@ -35,6 +35,8 @@ class _Consumer:
     empties_first = 0
     stall = False
     flaky = False                    # 홀수 번째 호출마다 빈 배치 — 받는 사이사이에 비는 것
+    begin = 0                        # 보존 시작(`beginning_offsets`) — message_at의 범위 검사
+    holes: set = set()               # 압축·삭제로 빈 오프셋 — seek하면 다음 레코드가 온다
 
     def __init__(self, ends, **kwargs):
         self._ends, self._pos = ends, {}
@@ -43,7 +45,7 @@ class _Consumer:
     async def stop(self): pass
     def assign(self, tps): pass
     async def end_offsets(self, tps): return {tp: self._ends[tp.partition] for tp in tps}
-    async def beginning_offsets(self, tps): return {tp: 0 for tp in tps}
+    async def beginning_offsets(self, tps): return {tp: _Consumer.begin for tp in tps}
     def seek(self, tp, offset): self._pos[tp.partition] = offset
 
     async def getmany(self, timeout_ms, max_records):
@@ -53,6 +55,9 @@ class _Consumer:
         out, budget = {}, min(2, max_records)
         for p, pos in sorted(self._pos.items()):
             while budget and pos < self._ends[p]:
+                if pos in _Consumer.holes:
+                    pos += 1
+                    continue
                 out.setdefault(p, []).append(_Record(p, pos))
                 pos += 1
                 budget -= 1
@@ -71,6 +76,7 @@ def _inspector(monkeypatch, ends: dict, partitions: list):
         return list(partitions)
     monkeypatch.setattr(inspector, "_partitions_of", partitions_of)
     _Consumer.calls, _Consumer.empties_first, _Consumer.stall, _Consumer.flaky = 0, 0, False, False
+    _Consumer.begin, _Consumer.holes = 0, set()
     return inspector
 
 
@@ -114,3 +120,43 @@ async def test_tail은_받는_사이사이_빈_배치는_연속으로_세지_않
     got = await inspector.tail("t", limit=30)
     assert len(got.data["messages"]) == 30 and got.envelope.truncated_reason == "끝에서 30건만"
 
+
+
+# ── R3-5d ④ — 포인터의 메시지 한 건 ──
+
+async def test_message_at은_포인터의_그_메시지_한_건만_읽고_그룹에_안_들어간다(monkeypatch):
+    """측정 #13 추가분 2: 키 값의 `metadata.source`(토픽·파티션·오프셋) 한 건이 그 키를 만든 메시지다(사내 122/122키). `assign` 뒤 `seek` —
+    그룹 미참여·커밋 없음. 본문은 원본에 있고 크기는 바이트다."""
+    got = await _inspector(monkeypatch, {0: 100}, [0]).message_at("t", 0, 42)
+    assert got.status == "ok", got.error
+    assert got.data == {"topic": "t", "partition": 0, "offset": 42, "begin": 0, "end": 100, "found": True, "bytes": 9,
+                        "message": {"partition": 0, "offset": 42, "timestamp": 1042, "key": None, "value": {"n": 42}}}
+    assert got.envelope.complete and got.source == "kafka:message_at t[0]@42"
+
+
+async def test_message_at은_보존_범위_밖이면_없다고_하고_오류가_아니다(monkeypatch):
+    """측정 #13 추가분 2: 오프셋이 보존 범위 밖인 키 2개가 둘 다 진짜 원인 자리였다 — "키를 만든 메시지가 토픽에 없다"는 사실이지 읽기 실패가 아니다.
+    범위 앞(지워짐)·뒤(아직 없음) 둘 다, 읽으러 가지도 않는다."""
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.begin = 40
+    for offset in (39, 100):
+        got = await inspector.message_at("t", 0, offset)
+        assert got.status == "ok" and got.data["found"] is False and got.data["message"] is None, offset
+        assert (got.data["begin"], got.data["end"]) == (40, 100) and "보존 범위 밖" in got.data["note"]
+    assert _Consumer.calls == 0
+
+
+async def test_message_at은_압축으로_빠진_오프셋의_다음_레코드를_그_메시지라_하지_않는다(monkeypatch):
+    """`seek`한 오프셋이 압축·삭제로 비면 브로커는 그 다음 레코드를 준다 — 오프셋이 다르면 그 메시지는 없는 것이다."""
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.holes = {42}
+    got = await inspector.message_at("t", 0, 42)
+    assert got.status == "ok" and got.data["found"] is False and got.data["message"] is None and "다음 레코드는 43" in got.data["note"]
+
+
+async def test_message_at은_브로커가_안_주면_빈_응답_셋_뒤_실패로_답한다(monkeypatch):
+    """범위 안인데 안 오면 모르는 것이다 — 없다고 하지 않고 실패로(tail과 같은 기준: 빈 배치 연속 셋)."""
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.stall = True
+    got = await inspector.message_at("t", 0, 42)
+    assert got.status == "error" and "빈 응답" in got.error and _Consumer.calls == 3

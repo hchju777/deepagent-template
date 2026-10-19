@@ -6,6 +6,7 @@
 
 계약이 갈라지면 테스트는 통과하는데 사내에서 깨진다 — 제일 나쁜 모양이다.
 """
+import json
 from typing import Any
 
 from src.domain.base import Clock
@@ -137,9 +138,18 @@ class StubMongoReader(MongoReaderPort):
 
 
 class StubKafkaInspector(KafkaInspectorPort):
-    def __init__(self, topics: dict[str, list[dict]] | None = None,
+    def __init__(self, topics: dict[str, Any] | None = None,
                  lags: dict[str, int | dict[str, int]] | None = None, *, clock: Clock):
-        self._topics = {k: list(v) for k, v in (topics or {}).items()}
+        # 토픽 시드는 메시지 목록(오프셋 = 차례, 파티션 0 하나)이거나 `{"begin": n, "messages": […]}` — 보존이 n부터(그 앞은 지워진 것). 측정판이
+        # "키를 만든 메시지가 토픽에 없다"(R3-5d ④)를 심는 자리다.
+        self._topics: dict[str, list] = {}
+        self._begins: dict[str, int] = {}
+        for name, seed in (topics or {}).items():
+            if isinstance(seed, dict):
+                self._begins[name] = int(seed.get("begin") or 0)
+                self._topics[name] = list(seed.get("messages") or [])
+            else:
+                self._topics[name] = list(seed)
         self._lags = dict(lags or {})
         self._clock = clock
 
@@ -173,6 +183,24 @@ class StubKafkaInspector(KafkaInspectorPort):
         messages = self._topics.get(topic, [])[-limit:]
         return ProbeResult.succeeded({"topic": topic, "messages": messages},
                                      source=f"stub-kafka:tail {topic}", clock=self._clock)
+
+    async def message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:
+        source = f"stub-kafka:message_at {topic}[{partition}]@{offset}"
+        if topic not in self._topics:
+            return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {topic}", source=source, clock=self._clock)
+        if int(partition) != 0:
+            return ProbeResult.failed(f"파티션 {partition}이 없다 — 스텁 토픽은 파티션 0 하나다", source=source, clock=self._clock)
+        begin = self._begins.get(topic, 0)
+        messages = self._topics[topic]
+        end = begin + len(messages)
+        head = {"topic": topic, "partition": 0, "offset": int(offset), "begin": begin, "end": end}
+        if not begin <= int(offset) < end:
+            return ProbeResult.succeeded({**head, "found": False, "message": None, "bytes": 0,
+                                          "note": f"보존 범위 밖 — 남은 것은 {begin}부터 {end} 전까지"}, source=source, clock=self._clock)
+        value = messages[int(offset) - begin]
+        return ProbeResult.succeeded({**head, "found": True, "bytes": len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")),
+                                      "message": {"partition": 0, "offset": int(offset), "timestamp": None, "key": None, "value": value}},
+                                     source=source, clock=self._clock)
 
 
 class StubDeployedCode(DeployedCodePort):

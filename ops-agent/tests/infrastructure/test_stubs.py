@@ -106,3 +106,23 @@ async def test_stub_redis는_오류_신호_시드를_읽기_실패로_돌려준�
     bad, gone, ok = await redis.get("k"), await redis.get("없음"), await redis.get("v")
     assert bad.status == "error" and "WRONGTYPE" in (bad.error or "")
     assert gone.status == "ok" and gone.data is None and ok.status == "ok"
+
+
+
+async def test_stub_kafka는_포인터의_메시지_한_건을_주고_보존_범위_밖이면_없다고_한다():
+    """R3-5d ④ — 실어댑터와 같은 모양. 토픽 시드는 메시지 목록(오프셋 = 차례, 파티션 0 하나)이거나 `{"begin": n, "messages": […]}`(보존이 n부터 —
+    측정판이 "키를 만든 메시지가 토픽에 없다"를 심는 자리)."""
+    stub = StubKafkaInspector({"t": [{"a": 1}, {"a": 2}], "old": {"begin": 100, "messages": [{"b": 1}]}}, {}, clock=_clock)
+    got = await stub.message_at("t", 0, 1)
+    assert got.data == {"topic": "t", "partition": 0, "offset": 1, "begin": 0, "end": 2, "found": True, "bytes": 8,
+                        "message": {"partition": 0, "offset": 1, "timestamp": None, "key": None, "value": {"a": 2}}}
+    gone = await stub.message_at("t", 0, 2)
+    assert gone.status == "ok" and gone.data["found"] is False and gone.data["message"] is None and "보존 범위 밖" in gone.data["note"]
+    kept = await stub.message_at("old", 0, 100)
+    assert kept.data["found"] is True and kept.data["message"]["value"] == {"b": 1} and (kept.data["begin"], kept.data["end"]) == (100, 101)
+    assert (await stub.message_at("old", 0, 3)).data["found"] is False                 # 보존 시작 앞 — 지워진 것
+    assert (await stub.tail("old", limit=5)).data["messages"] == [{"b": 1}]            # 목록 시드와 같이 읽힌다
+    assert (await stub.list_topics()).data == ["old", "t"]
+    for topic, partition in (("none", 0), ("t", 1)):
+        bad = await stub.message_at(topic, partition, 0)
+        assert bad.status == "error", (topic, partition)

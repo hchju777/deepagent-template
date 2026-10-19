@@ -2943,7 +2943,35 @@ CASES += [
  ("부모 파일의 get을 링크로 안 본다", DCP, "        literals, variables = component_names(\"\\n\".join(snap.get(path, \"\") for path in files))", "        literals, variables = component_names(snap[sym.file])", [INHERIT_SCOPE_T]),
 ]
 
-assert len(CASES) >= 893, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5d ④-a — Kafka 포인터 읽기: 포트·stub·실어댑터·등재·증거는 세기만 ──
+PTS = ROOT / "src/domain/ports.py"
+PORT_MSG_T = "tests/domain/test_ports.py::test_포인터_메시지_한_건을_읽을_수_있다"
+PORT_SURF_T = "tests/domain/test_actions.py::test_등재_목록이_포트_표면_안에_있다"
+ACT_MSG_T = "tests/domain/test_actions.py::test_포인터_메시지_읽기가_등재돼_있고_본문은_증거에_안_싣는다"
+KI_FOUND_T = "tests/infrastructure/test_kafka_inspector.py::test_message_at은_포인터의_그_메시지_한_건만_읽고_그룹에_안_들어간다"
+KI_RANGE_T = "tests/infrastructure/test_kafka_inspector.py::test_message_at은_보존_범위_밖이면_없다고_하고_오류가_아니다"
+KI_HOLE_T = "tests/infrastructure/test_kafka_inspector.py::test_message_at은_압축으로_빠진_오프셋의_다음_레코드를_그_메시지라_하지_않는다"
+KI_STALL_T = "tests/infrastructure/test_kafka_inspector.py::test_message_at은_브로커가_안_주면_빈_응답_셋_뒤_실패로_답한다"
+STUB_MSG_T = "tests/infrastructure/test_stubs.py::test_stub_kafka는_포인터의_메시지_한_건을_주고_보존_범위_밖이면_없다고_한다"
+RP_MSG_T = "tests/application/test_runner_probe.py::test_포인터_메시지_읽기의_증거는_크기와_행_요약만이고_본문은_안_싣는다"
+CAT_MSG_T = "tests/application/test_briefing.py::test_걷기의_포인터_읽기는_리드_목록에_없다"
+CASES += [
+ ("포트에 포인터 읽기가 없다", PTS, "    async def message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:\n        \"\"\"포인터(토픽·파티션·오프셋)가 가리키는 메시지 **한 건**(R3-5d ④).", "    async def message_at_(self, topic: str, partition: int, offset: int) -> ProbeResult:\n        \"\"\"포인터(토픽·파티션·오프셋)가 가리키는 메시지 **한 건**(R3-5d ④).", [PORT_MSG_T, PORT_SURF_T]),
+ ("포인터 읽기가 등재 목록에 없다", AC, "    \"kafka.message_at\":    (\"kafka\", \"message_at\",    (\"topic\", \"partition\", \"offset\"), ()),\n", "", [ACT_MSG_T]),
+ ("본문을 안 싣는 읽기 목록이 비었다", AC, "SUMMARY_ONLY = frozenset({\"kafka.message_at\"})", "SUMMARY_ONLY = frozenset()", [ACT_MSG_T, RP_MSG_T]),
+ ("포인터 읽기의 본문을 증거에 싣는다", RP, "        if task.action in SUMMARY_ONLY:", "        if False:", [RP_MSG_T]),
+ ("요약 줄은 여전히 원본 repr이다", RP, "            summary=aside + head,", "            summary=aside + _summarize(result.data),", [RP_MSG_T]),
+ ("범위 밖 오프셋을 읽으러 간다", KI, "            if not begin <= offset < end:", "            if False:", [KI_RANGE_T]),
+ ("압축된 오프셋의 다음 레코드를 그 메시지라 한다", KI, "            if record.offset != offset:", "            if False:", [KI_HOLE_T]),
+ ("브로커가 안 주면 바로 포기한다", KI, "                    if empties >= EMPTY_POLLS:          # 한 건도 안 오면 tail과 같은 기준으로 그만둔다", "                    if True:          # 한 건도 안 오면 tail과 같은 기준으로 그만둔다", [KI_STALL_T]),
+ ("메시지 크기를 안 센다", KI, "\"bytes\": len(record.value or b\"\")}", "\"bytes\": 0}", [KI_FOUND_T]),
+ ("스텁이 보존 시작을 무시한다", ST, "        begin = self._begins.get(topic, 0)", "        begin = 0", [STUB_MSG_T]),
+ ("스텁이 범위 밖에도 메시지를 지어낸다", ST, "        if not begin <= int(offset) < end:", "        if False:", [STUB_MSG_T]),
+ ("리드 목록에 포인터 읽기가 보인다", B, "        if name in _RENDERED_SEPARATELY or name in _WALK_READS or name in hide:", "        if name in _RENDERED_SEPARATELY or name in hide:", [CAT_MSG_T]),
+]
+
+assert len(CASES) >= 905, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

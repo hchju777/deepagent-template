@@ -425,3 +425,26 @@ def test_요약_머리는_빈_배열에도_행_0을_적는다():
     assert _first_profile([]) == "[행 0] " and _first_profile({"record": []}) == "[record: 행 0] "
     assert _first_profile({"value": {"record": []}}) == "[value.record: 행 0] " and _first_profile({"value": "[]"}) == "[value: 행 0] "
     assert _first_profile({"n": 1}) == "" and _first_profile([{"a": 1}]) == "[행 1 · 필드 1] "
+
+
+
+# ── R3-5d ④ — 포인터 메시지의 증거는 세기만 ──
+
+async def test_포인터_메시지_읽기의_증거는_크기와_행_요약만이고_본문은_안_싣는다(case):
+    """사람 결정 10-19: 메시지는 10.4MB까지 — 세기만 보고 본문은 증거에 안 담는다. 원본은 실행기가 들고 있어 걷기가 행을 본다."""
+    data = {"topic": "t", "partition": 0, "offset": 7, "begin": 0, "end": 9, "found": True, "bytes": 123,
+            "message": {"partition": 0, "offset": 7, "timestamp": 1, "key": None,
+                        "value": {"rows": [{"id": "secret-a", "ws": ""}, {"id": "secret-b", "ws": ""}]}}}
+    kafka = Recorder(result=ProbeResult.succeeded(data, source="k", clock=lambda: T0))
+    runner = ProbeRunner(Bundle(kafka=kafka), clock=lambda: T0)
+    out = await runner.run(task("t-5", action="kafka.message_at", params={"topic": "t", "partition": 0, "offset": 7}), case=case)
+    assert out.status == "ok", out.error
+    ref = out.evidence[0]
+    assert ref.summary == "t[0]@7 — 있음 · [rows: 행 2 · 필드 2 · 모든 행이 같은 값: ws=''] · 123바이트 · 보존 0~9"
+    assert ref.body.splitlines()[0] == ref.summary and "secret" not in ref.body and "secret" not in out.summary and ref.complete
+    assert runner.raw(ref.id) == data
+    gone = Recorder(result=ProbeResult.succeeded({**data, "found": False, "message": None, "bytes": 0, "note": "보존 범위 밖 — 남은 것은 0부터 9 전까지"},
+                                                 source="k", clock=lambda: T0))
+    out = await ProbeRunner(Bundle(kafka=gone), clock=lambda: T0).run(
+        task("t-6", action="kafka.message_at", params={"topic": "t", "partition": 0, "offset": 7}), case=case)
+    assert out.evidence[0].summary == "t[0]@7 — 없음 · 보존 범위 밖 — 남은 것은 0부터 9 전까지"

@@ -350,7 +350,8 @@ c-11 첫 답의 후보 토픽은 증거에 있었고 진짜 원인 방향이었�
 | R3-5d ② ✅ | LLM | `length`도 같은 질문으로 1회 다시, 답에 usage(`usage_metadata`에서), 트레이스 머리에 조각 수·종료 사유·usage(성공 턴도) | `lead`, `llm_chat_model`, `domain/llm`, `__main__` 트레이서, `trace_digest` |
 | R3-5d ③ ✅ | 상속 | `code.resources`가 `inherits` 엣지로 부모 클래스의 멤버 자원까지(줄에 부모 표시), 단일값 검사 범위에 부모 클래스 파일 — 인덱스에 엣지가 있어 **`code graph` 재생성 불필요** | `query.py`, `deployed_code` |
 | — | **측정 #14** | ①~③ 뒤. `code graph` 재생성: 불필요 | 브리프 |
-| R3-5d ④ | 4-b | Kafka 포트 `fetch(topic, partition, offset)`(assign·seek, 그룹 미참여·커밋 없음)·stub·실어댑터·등재; 걷기: "입력을 모른다" 클래스의 출력 키 값 `metadata.source` → 메시지 한 건 홉(행 N·같은 값 / 0행 / 보존 범위 밖 "키를 만든 메시지가 토픽에 없다" / "포인터 없음"), 봉투 없는 목록, 본문은 증거에 안 담는다(세기만), 발행 쪽은 config 발행 선언으로 | `ports`, `stubs`, `kafka_inspector`, `actions`, `walk`, 측정판 |
+| R3-5d ④-a ✅ | 4-b 읽기 | Kafka 포트 `message_at(topic, partition, offset)`(assign·seek 한 건, 그룹 미참여·커밋 없음 — `fetch`는 포트 금지 동사(레포 동사)라 이 이름)·stub(시드 `{"begin": n, "messages": […]}`로 보존 시작)·실어댑터(범위 밖·압축 구멍은 `found=False`, 오류 아님; 범위 안인데 안 오면 실패)·등재 `kafka.message_at`·증거는 세기만(`SUMMARY_ONLY` — 포인터·행 요약·크기·보존 범위 한 줄, 원본은 실행기 안)·리드 목록에는 없다 | `ports`, `kafka_inspector`, `stubs`, `actions`, `runner_probe`, `briefing` |
+| R3-5d ④-b | 4-b 걷기 | 걷기: 걸은 클래스를 댄 키 값의 포인터(`metadata.source` — 필드 이름 `topic`·`partition`·`offset`으로 가정, 다르면 "포인터 없음")로 메시지 한 건 홉(행 N·같은 값·단일값 검사 / 0행·빈 배열 / 보존 범위 밖 "키를 만든 메시지가 토픽에 없다" / 포인터 없으면 "포인터 없음"), 봉투 없는 목록, 발행 쪽은 config 발행 선언(`produces`)으로(없으면 "발행 선언 없음(우리 밖)"), 입구·`--key`가 포인터를 `TargetPick`에, 측정판 변형 셋 | `walk`, `intake_map`, `walk_only`, `flow`, `nodes`, `__main__`, 측정판 |
 | R3-5d ⑤ | 결함 아님 | `not_a_defect` — (a)~(d) | `domain/case`, 프롬프트, verify, 보고서, 벤치 |
 | — | **측정 #15** | ④~⑤ 뒤 | 브리프 |
 | 동결 | — | P1-5 조인, 판정 역할 `max_tokens` 미설정(게이트웨이 기본값) 메모 | — |

@@ -123,6 +123,13 @@ class KafkaInspectorPort(ABC):
     async def list_topics(self) -> ProbeResult:
         """이 브로커에 무슨 토픽이 있는가. `MongoReaderPort.list_collections`와 같은 이유다."""
 
+    @abstractmethod
+    async def message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:
+        """포인터(토픽·파티션·오프셋)가 가리키는 메시지 **한 건**(R3-5d ④). 키 값의 `metadata.source`가 그 키를 만든 메시지를 가리킨다
+        (사내 122/122키) — `tail`은 끝에서 몇 건이라 그 메시지가 아니다. `assign` 뒤 `seek`, 그룹 미참여·커밋 없음. 오프셋이 보존 범위
+        밖이면 오류가 아니라 `found=False`다 — 그 자체가 사실이다(측정 #13: 범위 밖 2개가 둘 다 진짜 원인 자리). 이름이 `fetch`가 아닌 이유:
+        레포 동사라 포트 표면 검사가 막는다."""
+
 
 class RestProberPort(ABC):
     """대상 REST API 읽기.

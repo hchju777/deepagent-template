@@ -117,3 +117,10 @@ def test_등재된_code_액션의_메서드는_전부_포트에_있다():
     missing = [name for name, (adapter, method, *_rest) in ACTIONS.items()
                if adapter == "code" and not hasattr(DeployedCodePort, method)]
     assert missing == []
+
+
+
+def test_포인터_메시지_한_건을_읽을_수_있다():
+    """R3-5d ④: 메시지(토픽) 입력은 인덱스가 자원으로 못 세고, 키 값의 포인터(토픽·파티션·오프셋)가 그 키를 만든 메시지를 가리킨다(사내 122/122키).
+    `tail`은 끝에서 몇 건이라 그 메시지가 아니다. 이름이 `fetch`가 아닌 이유: 위 WRITE_VERBS의 레포 동사다."""
+    assert "message_at" in _public_methods(KafkaInspectorPort)

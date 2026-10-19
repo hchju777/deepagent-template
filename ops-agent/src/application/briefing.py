@@ -35,6 +35,9 @@ from src.knowledge import flow as flowgraph
 
 # 리드가 쓸 수 없는 action. rest.query는 등재 항목마다 따로 적는다(인자가 다르다).
 _RENDERED_SEPARATELY = {"rest.query"}
+# 걷기가 키 값의 포인터(토픽·파티션·오프셋)로 내는 읽기 — 리드 목록에는 없다(R3-5d ④). 리드가 오프셋을 옮겨 적으면 그 수의 전사 실수를 검증하게
+# 된다(recompute의 `expect`를 증거 안 위치로 받는 이유와 같다). 리드는 걷기 홉 표와 그 증거로 받는다.
+_WALK_READS = {"kafka.message_at"}
 
 
 def action_catalog(site_config, *, services: tuple[str, ...] = (),
@@ -49,7 +52,7 @@ def action_catalog(site_config, *, services: tuple[str, ...] = (),
     """
     lines: list[str] = []
     for name, (adapter, _, required, optional) in sorted(ACTIONS.items()):
-        if name in _RENDERED_SEPARATELY or name in hide:
+        if name in _RENDERED_SEPARATELY or name in _WALK_READS or name in hide:
             continue
         if not _has(site_config, adapter, services):
             continue          # 이 사이트에 없는 시스템은 목록에 없다

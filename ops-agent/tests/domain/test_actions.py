@@ -197,3 +197,11 @@ def test_범위_경로_키_인자는_선택이다():
     assert narrowed("code.read", {"service": "s", "path": "p", "offset": 3})
     # `redis.get`의 `key`는 키 이름이지 좁히는 자리가 아니다 — 이름이 같아도 필수 인자는 안 센다.
     assert not narrowed("redis.get", {"key": "k"}) and not narrowed("code.read", {"service": "s", "path": "p"})
+
+
+
+def test_포인터_메시지_읽기가_등재돼_있고_본문은_증거에_안_싣는다():
+    """R3-5d ④(사람 결정 10-19): 걷기가 키 값의 포인터로 그 키를 만든 메시지 한 건을 읽는다. 메시지는 10MB까지라 증거에는 세기만 싣는다."""
+    from src.domain.actions import SUMMARY_ONLY
+    assert ACTIONS["kafka.message_at"] == ("kafka", "message_at", ("topic", "partition", "offset"), ())
+    assert "kafka.message_at" in SUMMARY_ONLY

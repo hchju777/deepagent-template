@@ -1647,3 +1647,11 @@ def test_판정_프롬프트는_사슬_중간_홉의_본문을_접고_대상_키
     lead_view = briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(),
                                           code_index=True)["evidence"]
     assert "본문3 " in lead_view                                                                      # 리드 턴은 사슬 그대로
+
+
+
+def test_걷기의_포인터_읽기는_리드_목록에_없다():
+    """R3-5d ④: `kafka.message_at`은 걷기가 키 값의 포인터(토픽·파티션·오프셋)로 내는 읽기다. 리드 목록에 두면 오프셋을 옮겨 적게 되고 그 수의 전사
+    실수를 검증하게 된다(recompute의 `expect`와 같은 이유) — 걷기 홉 표와 그 증거로 받는다."""
+    catalog = briefing.action_catalog(site())
+    assert "kafka.tail" in catalog and "kafka.message_at" not in catalog
