@@ -1278,14 +1278,14 @@ CASES += [
   '            if evidence_id not in citable:\n                problems.append(f"없는 id',
   '            if False:\n                problems.append(f"없는 id',
   [f"{V}::test_verify는_리드가_본_증거만_인용으로_친다"]),
- ("잘린 증거의 caveat을 안 본다", ND,
-  '            elif evidence_id in incomplete and not _id_mentioned(evidence_id, verdict.caveats):',
-  '            elif False:',
-  [f"{V}::test_잘린_증거로_주장하면_caveat에_그_id가_있어야_한다"]),
+ ("잘린 인용에 caveat을 안 단다", ND,
+  '    missing = sorted({e for e in cited if e in incomplete and not _id_mentioned(e, verdict.caveats)})',
+  '    missing = []',
+  [f"{V}::test_잘린_증거_인용은_되묻지_않고_코드가_caveat를_단다"]),
  ("id 경계를 안 본다", ND,
   '    pattern = re.compile(rf"(?<![A-Za-z0-9_.-]){re.escape(evidence_id)}(?![A-Za-z0-9_-])")',
   '    pattern = re.compile(re.escape(evidence_id))',
-  [f"{V}::test_잘린_증거로_주장하면_caveat에_그_id가_있어야_한다"]),
+  [f"{V}::test_잘린_증거_인용은_되묻지_않고_코드가_caveat를_단다"]),
  ("인용 없는 다리를 받는다", ND,
   '        if not link.evidence_ids:\n            problems.append(f"다리에 인용 없음: {link.component}")\n            continue',
   '        if not link.evidence_ids:\n            continue',
@@ -3061,7 +3061,16 @@ CASES += [
  ("이은 변수를 여전히 못 이음으로 센다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in resolved]", "        unlinked = [f\"변수 {v}\" for v in variables]", [FILTER_T]),
 ]
 
-assert len(CASES) >= 949, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5e ④ — 잘린 인용은 되묻지 않고 코드가 caveat ──
+TRUNC_T = "tests/application/test_verdict.py::test_잘린_증거_인용은_되묻지_않고_코드가_caveat를_단다"
+TRUNC_NODE_T = "tests/application/test_verdict.py::test_verify_노드는_잘린_인용에_caveat를_달고_되묻지_않는다"
+CASES += [
+ ("잘린 caveat을 노드가 안 거친다", ND, "        verdict = caveat_truncated(verdict, incomplete={e.id for e in state.evidence if not e.complete})", "        verdict = verdict", [TRUNC_NODE_T]),
+ ("basis의 잘린 인용을 안 본다", ND, "    cited = [e for link in _links(verdict) for e in link.evidence_ids] + list(verdict.basis)", "    cited = [e for link in _links(verdict) for e in link.evidence_ids]", [TRUNC_T]),
+ ("리드가 이미 적은 id에도 또 단다", ND, "if e in incomplete and not _id_mentioned(e, verdict.caveats)})", "if e in incomplete})", [TRUNC_T]),
+]
+
+assert len(CASES) >= 952, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

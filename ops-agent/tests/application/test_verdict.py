@@ -152,9 +152,9 @@ def test_바뀐_것이_없으면_같은_객체다():
 
 # ── verify: LLM 없는 검사 ────────────────────────────────────────────
 
-def _problems(v: Verdict, *, citable=("t-1.e1",), incomplete=(), ok=lambda c: True):
+def _problems(v: Verdict, *, citable=("t-1.e1",), ok=lambda c: True):
     # `ok`는 옛 모양(참/거짓)의 편의 — 노드는 사유 문자열을 돌려주는 `component_problem`을 쓴다.
-    return verify_verdict(v, citable=set(citable), incomplete=set(incomplete), component_problem=lambda c: None if ok(c) else f"증거에도 토폴로지에도 없는 component {c!r}")
+    return verify_verdict(v, citable=set(citable), component_problem=lambda c: None if ok(c) else f"증거에도 토폴로지에도 없는 component {c!r}")
 
 
 def test_verify는_리드가_본_증거만_인용으로_친다():
@@ -171,14 +171,33 @@ def test_후보와_기여_요인의_인용도_검사한다():
     assert "다리에 인용 없음: processor" in got
 
 
-def test_잘린_증거로_주장하면_caveat에_그_id가_있어야_한다():
+def test_잘린_증거_인용은_되묻지_않고_코드가_caveat를_단다():
+    """측정 #15 P0-4: 잘린 표본을 인용했는데 caveat에 그 id가 없다고 여섯 번 되물었고, c-2는 맞는 첫 답(external)을 버린 뒤 두 번이 length로 죽었다.
+    되묻지 않는다 — 코드가 caveat를 붙이고 첫 답을 쓴다. 리드가 이미 그 id를 caveat에 적었으면 그대로(같은 객체)."""
+    from src.application.nodes import caveat_truncated
+
     bad = verdict(root_cause=cause("sink", "t-1.e1"))
-    assert _problems(bad, incomplete=("t-1.e1",)) == ["불완전 증거 t-1.e1가 caveat에 명시되지 않음"]
+    assert _problems(bad) == []                                                                           # 검증 문제가 아니다
+    got = caveat_truncated(bad, incomplete={"t-1.e1"})
+    assert got.caveats == ["잘린 표본 t-1.e1을 인용했다 — 그 표본으로는 '없다'를 단정할 수 없다"] and got.confidence == "high"
     ok = verdict(root_cause=cause("sink", "t-1.e1"), caveats=["t-1.e1은 표본이 잘려 상한 밖은 못 봤다"])
-    assert _problems(ok, incomplete=("t-1.e1",)) == []
+    assert caveat_truncated(ok, incomplete={"t-1.e1"}) is ok
     # 토큰 경계 — `t-1.e1`이 `t-1.e10` 안에 있다고 명시된 것이 아니다.
     near = verdict(root_cause=cause("sink", "t-1.e1"), caveats=["t-1.e10만 잘렸다"])
-    assert _problems(near, incomplete=("t-1.e1",)) != []
+    assert len(caveat_truncated(near, incomplete={"t-1.e1"}).caveats) == 2
+    # 후보·기여 요인·basis의 인용도 — id마다 한 번, 인용 안 한 잘린 표본은 아니다
+    many = verdict(verdict_type="not_a_defect", root_cause=None, basis=["t-3.e1", "t-1.e1"],
+                   contributing=[cause("api", "t-2.e1", "t-1.e1")])
+    noted = caveat_truncated(many, incomplete={"t-1.e1", "t-2.e1", "t-3.e1", "t-9.e1"})
+    assert [c.split()[2] for c in noted.caveats] == ["t-1.e1을", "t-2.e1을", "t-3.e1을"]
+
+
+async def test_verify_노드는_잘린_인용에_caveat를_달고_되묻지_않는다(case):
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    state = _state(case, evidence=[_ev("t-1.e1", complete=False)], verdict=verdict(root_cause=cause("sink", "t-1.e1")))
+    patch = await nodes["verify"](state)
+    assert patch["verify_problems"] == [] and "verify_attempts" not in patch and "llm_errors" not in patch
+    assert patch["verdict"].confidence == "high" and patch["verdict"].caveats == ["잘린 표본 t-1.e1을 인용했다 — 그 표본으로는 '없다'를 단정할 수 없다"]
 
 
 def test_component는_토폴로지나_증거에_있어야_한다():

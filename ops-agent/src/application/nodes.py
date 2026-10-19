@@ -800,14 +800,25 @@ def _id_mentioned(evidence_id: str, caveats: list[str]) -> bool:
     return any(pattern.search(c) for c in caveats)
 
 
-def verify_verdict(verdict: Verdict, *, citable: set[str], incomplete: set[str],
-                   component_problem: Callable[[str], str | None]) -> list[str]:
+def caveat_truncated(verdict: Verdict, *, incomplete: set[str]) -> Verdict:
+    """잘린 표본(`complete=False`)을 인용했는데 caveat에 그 id가 없으면 **코드가** 적는다 — 되묻지 않는다(R3-5e ④). 잘린 표본으로는 "없다"를
+    단정할 수 없고 그 사실이 보고서에 남아야 하는데, 그것은 리드에게 되물을 일이 아니라 코드가 적을 사실이다 — 측정 #15 P0-4: 이 규칙으로 여섯 번
+    되물었고 c-2는 맞는 첫 답(external)을 버린 뒤 두 번이 length로 죽었다. 리드가 이미 적은 id는 건너뛴다(토큰 경계 `_id_mentioned`). 바뀐 것이 없으면
+    같은 객체."""
+    cited = [e for link in _links(verdict) for e in link.evidence_ids] + list(verdict.basis)
+    missing = sorted({e for e in cited if e in incomplete and not _id_mentioned(e, verdict.caveats)})
+    if not missing:
+        return verdict
+    return verdict.model_copy(update={"caveats": verdict.caveats + [
+        f"잘린 표본 {e}을 인용했다 — 그 표본으로는 '없다'를 단정할 수 없다" for e in missing]})
+
+
+def verify_verdict(verdict: Verdict, *, citable: set[str], component_problem: Callable[[str], str | None]) -> list[str]:
     """LLM 없는 검사. 인용 우주는 **`state.evidence`**(리드가 실제로 본 것)다 — Store 전체를
     기준으로 삼으면 리드가 본 적도 없는 id를 인용해도 통과한다(규율 3).
 
     1. 다리마다 인용이 있어야 하고, 인용한 id는 전부 실재해야 한다.
-    2. 잘린 표본(`complete=False`)으로 주장했으면 caveat에 그 id를 적어야 한다 — 잘린 표본으로는
-       "없다"를 주장할 수 없고, 그 사실이 보고서에 남아야 한다.
+    2. (옛 규칙 — 잘린 표본의 인용은 이제 문제가 아니라 코드가 적는 caveat다, `caveat_truncated`. 되물으면 맞는 첫 답을 버린다.)
     3. `component`는 **토폴로지의 서비스 이름**이어야 한다(`_component_problem`) — 사내 10-08에서 Redis 키 이름이 원인 칸에
        들어가 통과했다. 원인은 그 데이터를 만들거나 쓰는 쪽이지 데이터의 이름이 아니다. 토폴로지가 없는 조사만 옛 규칙
        (증거에 나온 이름)으로, `external` 판정만 증거에 나온 바깥 이름을 허용한다.
@@ -820,8 +831,6 @@ def verify_verdict(verdict: Verdict, *, citable: set[str], incomplete: set[str],
         for evidence_id in link.evidence_ids:
             if evidence_id not in citable:
                 problems.append(f"없는 id {evidence_id} 인용 ({link.component})")
-            elif evidence_id in incomplete and not _id_mentioned(evidence_id, verdict.caveats):
-                problems.append(f"불완전 증거 {evidence_id}가 caveat에 명시되지 않음")
     for link in _links(verdict):
         problem = component_problem(link.component)
         if problem:
@@ -1119,14 +1128,15 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         # 인용한 코드의 레포가 component의 레포와 다르면 caveat(R3-5c ③), 걷기가 멈춘 자리와 어긋나면 caveat(R3-5d ①-b) — 검증 문제가 아니라 적어 둘 사실이다.
         verdict = caveat_code_repos(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos)
         verdict = caveat_walk_disagreement(verdict, walk=state.walk, components=deps.components)
+        # 잘린 표본의 인용도 검증 문제가 아니라 적어 둘 사실이다(R3-5e ④) — 되물으면 맞는 첫 답을 버린다(측정 #15 c-2).
+        verdict = caveat_truncated(verdict, incomplete={e.id for e in state.evidence if not e.complete})
         component_problem = _component_problem(state, deps, verdict)
         if deps.check_discovery:
             # 서비스도 토픽도 아닌 **후보**는 되묻지 않고 뺀다 — 재작성은 최상위·기여 요인의 문제에만(R3-5d ①-b).
             verdict = drop_foreign_alternates(verdict, component_problem)
         changed = verdict is not state.verdict
         citable = state.evidence_ids()
-        incomplete = {e.id for e in state.evidence if not e.complete}
-        problems = verify_verdict(verdict, citable=citable, incomplete=incomplete, component_problem=component_problem)
+        problems = verify_verdict(verdict, citable=citable, component_problem=component_problem)
         if deps.check_discovery:
             # 결함 아님(R3-5d ⑤)은 걷기가 지킨다 — 대본 경로는 걷기가 없다.
             problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)
