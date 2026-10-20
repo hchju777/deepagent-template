@@ -1346,6 +1346,8 @@ async def test_빈_응답은_종료_사유와_무관하게_같은_질문으로_�
     frame, _, _ = lead.make_lead(capped, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
     assert "stopped_by" not in patch and len(capped.prompts) == 2
+    # length 뒤의 재질문에는 "짧게" 한 줄이 **맨 뒤에** 붙는다(R3-5f ④, 사람 결정 10-20 기본값: 상한을 두지 않고 답의 모양을 말한다) — stop 뒤에는 안 붙는다
+    assert capped.prompts[1].startswith(capped.prompts[0]) and "## 짧게" in capped.prompts[1] and "## 짧게" not in llm.prompts[1]
     twice = ScriptedAdapter([_empty("length"), _empty("length")], clock=lambda: T0)
     frame, _, _ = lead.make_lead(twice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
@@ -1383,3 +1385,16 @@ async def test_결함_아님_판정은_root_cause_없이_basis를_요구한다(c
     _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3)
     patch = await conclude(_ended(case))
     assert "verdict" not in patch and any("basis" in e for e in patch["llm_errors"])
+
+
+async def test_길이_상한에서_깨진_답의_재질문에는_사유와_짧게가_같이_붙는다(case):
+    """측정 #16: 판정 호출 18번 중 length 2(+유휴 1, c-14는 두 번 다 실패). 같은 질문을 그대로 다시 보내면 같은 길이로 또 끊길 수 있다 — 깨진 긴 답은 사유
+    재질문(`## 다시`)에, 빈 긴 답은 같은 질문에 "짧게" 한 줄을 더한다. 상한(`max_tokens`)은 동결(사람 결정)."""
+    from src.domain.llm import LlmReply
+
+    cut = LlmReply(status="ok", asked_at=T0, model="scripted", text='{"tasks": [', chunks=5, finish_reason="length")
+    llm = ScriptedAdapter([cut, reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch and len(llm.prompts) == 2
+    assert "## 다시" in llm.prompts[1] and llm.prompts[1].rstrip().endswith("후보(alternates)는 둘 이내로 내라.") and llm.schemas[1] is None

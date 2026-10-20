@@ -2103,8 +2103,8 @@ CASES += [
   "            use_schema = None", "            pass",
   ["tests/application/test_lead.py::test_스키마를_건_답이_깨지면_재시도는_스키마_없이_묻는다"]),
  ("호출 실패의 재시도는 스키마를 뗀다", LD,
-  "            await asyncio.sleep(RETRY_BACKOFF_S)\n            asked = prompt",
-  "            await asyncio.sleep(RETRY_BACKOFF_S)\n            asked = prompt\n            use_schema = None",
+  "            await asyncio.sleep(RETRY_BACKOFF_S)\n            asked = brief_prompt(prompt) if shorten else prompt",
+  "            await asyncio.sleep(RETRY_BACKOFF_S)\n            asked = brief_prompt(prompt) if shorten else prompt\n            use_schema = None",
   ["tests/application/test_lead.py::test_호출이_실패한_재시도는_스키마를_그대로_건다"]),
 ]
 
@@ -3123,7 +3123,15 @@ CASES += [
  ("가장 가까운 정의만이 아니라 전부 싣는다", QRY, "            for o, r in cands:\n                if o == nearest:", "            for o, r in cands:\n                if True:", [QUERY_ATTR_T]),
  ("못 푼 속성을 조용히 뺀다", QRY, "                unresolved.setdefault(attr, set()).update(owners)", "                pass", [QUERY_ATTR_T, BOARD_ATTR_T]),
 ]
-assert len(CASES) >= 972, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5f ④ — length 뒤 재질문에 짧게 한 줄 ──
+EMPTY_RETRY_T = "tests/application/test_lead.py::test_빈_응답은_종료_사유와_무관하게_같은_질문으로_한_번_다시_묻는다"
+CUT_RETRY_T = "tests/application/test_lead.py::test_길이_상한에서_깨진_답의_재질문에는_사유와_짧게가_같이_붙는다"
+CASES += [
+ ("length 뒤에도 같은 질문을 그대로 보낸다", LD, "            asked = brief_prompt(prompt) if shorten else prompt", "            asked = prompt", [EMPTY_RETRY_T]),
+ ("깨진 긴 답의 재질문에 짧게를 안 붙인다", LD, "            if shorten:\n                asked = brief_prompt(asked)", "            if False:\n                asked = brief_prompt(asked)", [CUT_RETRY_T]),
+]
+assert len(CASES) >= 974, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

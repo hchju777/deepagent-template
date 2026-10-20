@@ -218,6 +218,13 @@ def repair_prompt(prompt: str, reason: str) -> str:
             f"위 형식 그대로, **JSON 객체 하나만** 내라. 설명도 코드펜스도 붙이지 마라.")
 
 
+def brief_prompt(prompt: str) -> str:
+    """길이 상한(`length`) 뒤의 재질문 — "짧게" 한 줄을 **맨 뒤에**(R3-5f ④, 사람 결정 10-20 기본값: 판정 역할 `max_tokens`는 동결, 상한 대신 답의 모양을
+    말한다). 측정 #16: 판정 호출 18번 중 length 2 — 같은 질문을 그대로 다시 보내면 같은 길이로 또 끊길 수 있다(c-14는 두 번 다 실패)."""
+    return (f"{prompt}\n\n---\n\n## 짧게\n\n앞의 답이 길이 상한에서 끊겼다. 같은 형식으로, 서술은 핵심 몇 문장으로 짧게, "
+            f"후보(alternates)는 둘 이내로 내라.")
+
+
 async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
                    on_exchange=None) -> Parsed:
     """묻고, JSON을 꺼내고, 모델로 검증한다. **절대 raise하지 않는다.**
@@ -230,6 +237,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     schema = response_schema(model)
     use_schema = schema
     transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
+    shorten = False             # 직전 답이 길이 상한(`length`)에서 끊겼나 — 재질문에 "짧게" 한 줄(R3-5f ④)
     attempts = 0
     for attempt in range(RETRIES + 1):
         attempts = attempt + 1
@@ -239,10 +247,12 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             # 고치라고 시키는 꼴이다 — 사내에서 실제로 그렇게 나갔다. 같은 프롬프트로,
             # 잠깐 쉬고 다시 부른다.
             await asyncio.sleep(RETRY_BACKOFF_S)
-            asked = prompt
+            asked = brief_prompt(prompt) if shorten else prompt
         elif attempt:
             # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
             asked = repair_prompt(prompt, last.error or "알 수 없음")
+            if shorten:
+                asked = brief_prompt(asked)
             # **스키마는 뗀다.** 스키마를 건 답이 깨졌다면 모델이 그 강제에 약한 것이고, 같은 스키마로 다시 물으면 같은 모양으로
             # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다.
             use_schema = None
@@ -254,8 +264,10 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
             last = Parsed(False, error=f"{type(exc).__name__}: {exc}")
             transport = True
+            shorten = False
         else:
             transport = reply.status == "error"
+            shorten = reply.finish_reason == "length"
             latency = reply.latency_s
             # 턴의 조각 수·종료 사유·usage — 성공한 턴도 트레이스 머리에(R3-5d ②, 측정 #13 추가분 1: length가 고정 상한인지 보려면 턴마다 보여야 한다)
             stats = {"chunks": reply.chunks, "finish_reason": reply.finish_reason, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens}
