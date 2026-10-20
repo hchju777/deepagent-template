@@ -2992,7 +2992,7 @@ CASES += [
  ("메시지의 단일값을 안 본다", WK, "                    status, bad, carry = await judged(rows_of(boxed), status, bad, ev)", "                    pass", [WALK_SAME_T]),
  ("없음의 다음 칸이 지금 오는 것이 아니다", WK, "                rungs += [tail, *code]", "                rungs += [*code, tail]", [WALK_GONE_T]),
  ("메시지만 읽은 클래스의 다음 칸이 없다", WK, "at=(reader_at(text) if real or missed else None) or class_at(text))", "at=reader_at(text) if real or missed else class_at(text))", [WALK_MSG_T]),
- ("메시지 읽기 실패를 못 본 입력으로 안 센다", WK, "                    missed.append(f\"읽기 실패 {label}\")\n                elif not data.get(\"found\"):", "                elif not data.get(\"found\"):", [WALK_FAIL_T]),
+ ("메시지 읽기 실패를 못 본 입력으로 안 센다", WK, "                    missed.append(f\"읽기 실패 {label}\")\n                    message_failed = message_failed or (got.error or \"증거 없음\").splitlines()[0][:80]\n                elif not data.get(\"found\"):", "                    message_failed = message_failed or (got.error or \"증거 없음\").splitlines()[0][:80]\n                elif not data.get(\"found\"):", [WALK_FAIL_T]),
  ("입구가 포인터를 안 적는다", IM, "                                empty=arrays, empty_objects=objects, pointer=pointer_of(value),", "                                empty=arrays, empty_objects=objects,", [INTAKE_PTR_T]),
  ("포인터가 행 안의 것도 집는다", IM, "        if value and all(isinstance(r, dict) for r in value):\n            return\n        for i, v in enumerate(value):\n            yield from _objects(v, f\"{path}[{i}]\")", "        for i, v in enumerate(value):\n            yield from _objects(v, f\"{path}[{i}]\")", [INTAKE_PTR_T]),
  ("--key가 포인터를 안 적는다", WO, "empty=arrays, empty_objects=objects, pointer=pointer_of(value), writer=writer,", "empty=arrays, empty_objects=objects, writer=writer,", [WALK_KEY_T]),
@@ -3140,7 +3140,13 @@ CASES += [
  ("자원 아닌 정의를 못 이음으로 센다", QRY, "            nearest = next((q for q in order if ((q in owners) if legacy else (attr in consts[q]))), None)", "            nearest = next((q for q in order if q in owners), None)", [QUERY_ATTR_T, BOARD_ATTR_T]),
  ("옛 번들에서 전부 못 이음으로 본다", QRY, "    legacy = not any(consts.values())", "    legacy = False", [LEGACY_ATTR_T]),
 ]
-assert len(CASES) >= 977, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5g ③ — 메시지 읽기 실패 뒤 건너뛰기 ──
+SKIP_MSG_T = "tests/application/test_walk.py::test_메시지_읽기가_한_번_실패하면_같은_걷기의_다음_메시지_읽기는_건너뛴다"
+CASES += [
+ ("실패 뒤에도 메시지를 또 읽는다", WK, "            elif message_failed:", "            elif False:", [SKIP_MSG_T]),
+]
+assert len(CASES) >= 978, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

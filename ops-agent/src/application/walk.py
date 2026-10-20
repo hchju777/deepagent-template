@@ -163,6 +163,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     started = clock() if clock is not None else None
     counter = 0
     aside = 0.0                                                    # 메시지 읽기에 쓴 초 — 시간 상한 밖(R3-5e ⑥)
+    message_failed = ""                                            # 이 걷기에서 처음 실패한 메시지 읽기의 사유 — 있으면 다음 메시지는 안 읽는다(R3-5g ③)
     from src.application.briefing import next_task_number          # 지연 import — briefing이 이 모듈을 import한다
 
     start = next_task_number(state)
@@ -422,6 +423,15 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     real += 1
                 elif result == "fail":
                     missed.append(f"읽기 실패 {label}")
+            elif message_failed:
+                # 같은 걷기에서 앞 메시지 읽기가 실패했으면 다시 안 붙는다(R3-5g ③) — 측정 #17: 접속 실패가 한 건에 50~60초이고 시간 상한 밖(R3-5e ⑥)이라 한
+                # 걷기가 135초였다. 읽기 수에 안 세고 증거도 없다 — 못 본 입력으로만 적는다(멈춤은 전처럼 "입력을 다 못 봤다").
+                seen.add(label)
+                readings[label] = ("fail", "")
+                missed.append(f"읽기 실패 {label}")
+                hops.append(Hop(key=label, kind="message", depth=depth + 1, service=shown, candidates=list(svcs),
+                                status=f"읽기 실패 — 앞 메시지 읽기가 실패해 건너뜀({message_failed})", bad=False, evidence_id="",
+                                basis=f"{writer}{tag}를 댄 키 값의 포인터 {pointer.get('at', '')} ({came_from})", parent=came_from))
             elif (why := over(writer, "메시지")):
                 stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
             else:
@@ -439,6 +449,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 if not isinstance(data, dict):
                     status, bad = f"읽기 실패 — {got.error or '증거 없음'}", False
                     missed.append(f"읽기 실패 {label}")
+                    message_failed = message_failed or (got.error or "증거 없음").splitlines()[0][:80]
                 elif not data.get("found"):
                     # 보존 범위 밖·압축 구멍 — 읽은 것이고 사실 `없음`(나쁨)이다(측정 #13: 범위 밖 2개가 둘 다 진짜 원인 자리). 키 없음과 같은 종류.
                     status, bad = f"없음 — 키를 만든 메시지가 토픽에 없다(보존 범위 {data.get('begin')}~{data.get('end')})", True

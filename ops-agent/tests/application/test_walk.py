@@ -651,3 +651,18 @@ async def test_시간_상한은_메시지_읽기에_쓴_시간을_빼고_잰다(
     clock = Clock()
     walk = (await run_walk(_pointed(), runner=Slow(table, clock, "redis.get"), classes=frozenset({"W0", "W1"}), clock=clock))["walk"]
     assert walk.stopped == f"{MAX_SECONDS:.0f}초 상한 — W0의 메시지부터는 리드가"
+
+
+async def test_메시지_읽기가_한_번_실패하면_같은_걷기의_다음_메시지_읽기는_건너뛴다():
+    """측정 #17 메모: kafka 접속 실패는 메시지 한 건에 50~60초이고 시간 상한 밖(R3-5e ⑥)이라 c-9 걷기가 135초였다. 한 걷기에서 한 번 실패하면 다시 안 붙는다 —
+    건너뛴 홉은 읽기 실패로 적고(사유에 앞 실패), 읽기 수·증거에 안 센다. 멈춤은 전처럼 "입력을 다 못 봤다"."""
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(record=[], metadata={"event_type": "W1", "source": {"topic": "t", "partition": 0, "offset": 6}}),
+             ("code.resources", "W1"): _res("W1", [])}
+    runner = _Reads(table)
+    walk = (await run_walk(_pointed(), runner=runner, classes=frozenset({"W0", "W1"}), clock=lambda: T0))["walk"]
+    assert [r for r in runner.ran if r[0] == "kafka.message_at"] == [("kafka.message_at", "t")]              # 두 번째는 안 읽었다
+    first, second = [h for h in walk.hops if h.kind == "message"]
+    assert first.key == "t[0]@5" and first.status == "읽기 실패 — 대본 없음"
+    assert second.key == "t[0]@6" and second.status == "읽기 실패 — 앞 메시지 읽기가 실패해 건너뜀(대본 없음)" and second.evidence_id == ""
+    assert walk.stopped == "입력을 다 못 봤다 — W1(읽기 실패 t[0]@6)" and walk.reads == 4
