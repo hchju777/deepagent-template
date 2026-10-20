@@ -2538,7 +2538,7 @@ CASES += [
  ("깊이 상한이 없다", WK, "        if depth >= MAX_DEPTH:", "        if False:", [CAP_T]),
  ("읽기 상한이 없다", WK, "        if counter >= MAX_READS:\n            return f\"읽기", "        if False:\n            return f\"읽기", [CAP_T]),
  ("시간 상한이 없다", WK, "        if elapsed() - aside > MAX_SECONDS:", "        if False:", [CAP_T]),
- ("쓴 쪽 모름에서 uses를 안 가리킨다", WK, "            rungs.append(Rung(action=\"code.uses\", params={\"name\": declared_names.get(ev, stop_hop.key)}, evidence=ev))", "            pass", [UNKNOWN_T]),
+ ("쓴 쪽 모름에서 uses를 안 가리킨다", WK, "                       else f\"쓴 쪽을 모른다 — {stop_hop.key}(값에 인덱스의 클래스 이름이 없다)\")\n            rungs.append(Rung(action=\"code.uses\", params={\"name\": declared_names.get(ev, stop_hop.key)}, evidence=ev))", "                       else f\"쓴 쪽을 모른다 — {stop_hop.key}(값에 인덱스의 클래스 이름이 없다)\")\n            pass", [UNKNOWN_T]),
  ("scan 뒤 전부 읽는다", WK, "for k in scanned_keys[:SCAN_READS]]", "for k in scanned_keys[:SCAN_READS * 2]]", [UNKNOWN_T]),
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
@@ -2691,7 +2691,7 @@ CASES += [
  ("통과한 필드를 안 적는다", WK, "                status += f\" · 단일값 {passed} — 거르는 줄 없음({scope_note})\"", "                pass", [LIT_T, LINK_T]),
  ("이은 컴포넌트를 뒤 칸으로 안 낸다", WK, "                          for found_at in linked_at.get(ev, [])[:3]]", "                          for found_at in []]", [LINK_T]),
  ("조회 문제를 일부만 검사로 안 적는다", WK, "            elif scan.problem:", "            elif False:", [LINK_T]),
- ("링크를 안 모은다", WK, "            linked_at[came_from] = list((await lookup(writer, fields=dict([watch]) if watch else {}, **branch.params)).linked_at)", "            linked_at[came_from] = []", [LINK_T]),
+ ("링크를 안 모은다", WK, "            linked_at[came_from], merges = list(scan0.linked_at), list(scan0.merges)", "            linked_at[came_from], merges = [], list(scan0.merges)", [LINK_T]),
  ("리터럴 칸의 입력 증거가 그 홉의 읽기가 아니다", WK, "                    literal = (scope, hit.path, hit.line, ev)", "                    literal = (scope, hit.path, hit.line, \"\")", [LIT_T]),
  ("못 이음이 있어도 정상이라 한다", WK, "            elif scan.unlinked:", "            elif False:", [LINK_T]),
  ("걷기 노드가 조회를 안 넘긴다", ND, "lookup=deps.filter_lines, ", "", [WNODE_T]),
@@ -2761,7 +2761,7 @@ CASES += [
  ("측정판에 사이트 인자 등록이 없다", LC, "register(component=\"state_filter\", gbm=\"mx\", factory=\"gumi\")(comp.GumiStateFilter)", "register(component=\"state_filter\")(comp.GumiStateFilter)", [REG_BOARD_T]),
  ("측정판 등록이 여러 줄이 아니다", LC, "register(\n    component=\"row_filler\",\n)(\n    fillers.RowFiller\n)", "register(component=\"row_filler\")(fillers.RowFiller)", [REG_BOARD_T]),
  ("측정판 c-2 행의 나쁜 필드가 일곱 필드 앞이다", LC, "_FILTERED_ROW = {\"unit\": \"ea\",", "_FILTERED_ROW = {\"state\": \"-\", \"unit\": \"ea\",", [CHAIN_T]),
- ("chain-empty의 원천 쓴 쪽이 메시지 입력 클래스가 아니다", LC, "_RAW_WRITER = {\"chain-empty\": \"SourceCollector\", \"chain-objects\": \"RawAppender\", **{v: \"SourceCollector\" for v in _MESSAGE_VARIANTS}}", "_RAW_WRITER = {\"chain-objects\": \"RawAppender\", **{v: \"SourceCollector\" for v in _MESSAGE_VARIANTS}}", [CHAIN_T, BOARD_C1_T]),
+ ("chain-empty의 원천 쓴 쪽이 메시지 입력 클래스가 아니다", LC, "_RAW_WRITER = {\"chain-empty\": \"SourceCollector\", \"chain-objects\": \"RawAppender\", \"join-empty\": \"SourceJoiner\",", "_RAW_WRITER = {\"chain-objects\": \"RawAppender\", \"join-empty\": \"SourceJoiner\",", [CHAIN_T, BOARD_C1_T]),
  ("측정판 원천 클래스가 다른 레포에 같은 이름으로 없다", LC, "class SourceCollector:\n    def __init__(self, cfg):\n", "class SourceTable:\n    def __init__(self, cfg):\n", [BOARD_C1_T]),
  ("측정판 원천 행에 통과할 단일값이 없다", LC, "\"occ_date\": d[\"occ_date\"], \"unit\": \"ea\",", "\"occ_date\": d[\"occ_date\"],", [BOARD_C1_T]),
 ]
@@ -3154,7 +3154,18 @@ CASES += [
  ("키가 변수인 병합식도 뽑는다", DCP, "        if not left or not right or len(left) != len(right):\n            continue", "        if False:\n            continue", [MERGE_PAIRS_T]),
  ("filter_lines가 병합식을 안 싣는다", DCP, "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges)", "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked)", [FILTER_T]),
 ]
-assert len(CASES) >= 981, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5g ④-b — 걷기의 조인 검사 ──
+JOIN_CHECK_T = "tests/application/test_walk.py::test_join_check는_병합식의_키_필드를_가진_두_입력의_값이_하나도_안_겹칠_때만_짝_없음이다"
+JOIN_WALK_T = "tests/application/test_walk.py::test_걷기는_병합식의_두_입력이_안_겹치면_둘_다_나쁨으로_적고_쓴_쪽으로_한_홉_더_가며_멈춤은_병합_0건이다"
+BOARD_JOIN_T = "tests/test_board_walk.py::test_조인_변형은_이벤트_행과_기준표가_각각_정상인데_병합이_0건이라_두_홉이_나쁨이고_첫_칸은_병합_줄이다"
+CASES += [
+ ("겹침이 있어도 짝 없음으로 본다", WK, "                if a_ev == b_ev or pair in done or not a_keys or not b_keys or (a_keys & b_keys):", "                if a_ev == b_ev or pair in done or not a_keys or not b_keys:", [JOIN_CHECK_T]),
+ ("조인 결과로 홉을 나쁨으로 안 바꾼다", WK, "                    hops[at] = hops[at].model_copy(update={\"bad\": True, \"status\": f\"나쁨 — 병합 짝 없음: {note} ({merge.path}:L{merge.line}) · \"", "                    hops[at] = hops[at].model_copy(update={\"bad\": False, \"status\": f\"나쁨 — 병합 짝 없음: {note} ({merge.path}:L{merge.line}) · \"", [JOIN_WALK_T, BOARD_JOIN_T]),
+ ("조인 멈춤 사유를 안 쓴다", WK, "        if ev in joined_at and ev not in walked_at and ev not in failed_at:\n            # 병합 0건(④-b)", "        if False:\n            # 병합 0건(④-b)", [JOIN_WALK_T, BOARD_JOIN_T]),
+ ("나빠진 입력의 쓴 쪽으로 안 걷는다", WK, "                        frontier += [(w_, b, depth + 1, ev_, None, pointer_of(_unwrap(raw_)) if raw_ is not None else {}) for b in next_branches]", "                        pass", [JOIN_WALK_T]),
+]
+assert len(CASES) >= 985, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

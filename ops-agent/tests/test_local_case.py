@@ -267,3 +267,14 @@ def test_message_변형_셋은_원천_묶음_키_값에_포인터가_있고_그_
     rows = blank["kafka"]["mx.alarm.raw"][ptr["offset"]]["rows"]
     assert len(rows) == 5 and all(r["ws"] == "-" for r in rows) and 'row.get("ws") != "-"' in CORE_FILES["common/parsers.py"]
     assert "source" not in _value(_seeds(NOW, "chain-empty"), "alarm:raw:L1")["metadata"]
+
+
+def test_join_empty_변형은_이벤트_행의_키가_전부_비고_원천_묶음의_쓴_쪽이_SourceJoiner다():
+    """P1-5 조인(R3-5g ④): 기준표에 없는 값 — inner 병합이 0건인 자리."""
+    from tools.local_case import CORE_FILES
+
+    s = _seeds(datetime(2026, 10, 15, 9, 0, 0), "join-empty")
+    events = _value(s, "feed:events:L1")
+    assert events and all(e["alarm_code"] == "" for e in events)
+    assert _value(s, "alarm:raw:L1") == {"metadata": {"event_type": "SourceJoiner"}, "rows": []}
+    assert '.merge(ref, left_on="alarm_code", right_on="code", how="inner")' in CORE_FILES["common/joiner_pd.py"]

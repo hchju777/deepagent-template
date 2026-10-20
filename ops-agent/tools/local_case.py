@@ -361,6 +361,22 @@ class SourceMerger:
             record = {"metadata": {"event_type": "SourceMerger"}, "rows": rows}
             self.redis.set(self.cfg["redis_key"]["alarm_raw"].format(line=line), json.dumps(record))
 ''',
+    # P1-5 조인의 사내 모양(사람 결정 10-20: pandas merge) — 이벤트 행과 기준표를 inner 병합해 원천 묶음에 둔다. 비교식이 없고, 거름은 두 입력의 키 값 차이로만 보인다.
+    "common/joiner_pd.py": '''"""이벤트에 기준표를 붙인다 — 안쪽 병합이라 짝이 없는 행은 사라진다."""
+import pandas as pd
+
+
+class SourceJoiner:
+    def __init__(self, cfg, redis):
+        self.cfg, self.redis = cfg, redis
+
+    def _run(self):
+        ref = pd.DataFrame(json.loads(self.redis.get(self.cfg["redis_key"]["feed_ref"]) or "{}").get("codes", []))
+        for line in self.cfg["lines"]:
+            events = pd.DataFrame(json.loads(self.redis.get(self.cfg["redis_key"]["feed_events"].format(line=line)) or "[]"))
+            rows = events.merge(ref, left_on="alarm_code", right_on="code", how="inner").to_dict("records")
+            self.redis.set(self.cfg["redis_key"]["alarm_raw"].format(line=line), json.dumps({"metadata": {"event_type": "SourceJoiner"}, "rows": rows}))
+''',
     "common/joiners.py": '''"""이벤트에 상태·기준표를 붙인다 — 바깥 병합이라 짝이 없으면 칸이 빈다."""
 
 
@@ -509,6 +525,8 @@ VARIANTS = {
     "chain-filtered": "요약 키 data는 빈 배열이고 도메인·원천 묶음 행은 있지만 모든 행의 state·wg가 '-'다 — 원천을 쓴 SourceMerger의 입력 셋은 정상이다",
     # 측정 #12의 걷기 틀린 사실 둘(R3-5b ②) — 도메인 키 `record {}`(빈 객체)와, 읽는 자원이 자기 출력뿐인 원천 클래스.
     "chain-objects": "요약 키 data는 빈 배열이고 도메인 키 record가 빈 객체다 — 원천 묶음은 빈 배열이고 그 쓴 쪽 RawAppender는 그 묶음만 읽는다(자기 출력)",
+    # P1-5 조인(R3-5g ④, 사람 결정 10-20) — 사내 작업자 배지의 모양: 원천 행의 키 값이 전부 비어 기준표와 pandas inner 병합이 0건. 입력 둘은 각각 정상이다.
+    "join-empty": "chain-empty와 같고 원천 묶음을 쓴 SourceJoiner가 이벤트 행과 기준표를 pandas inner 병합으로 잇는데 이벤트 행의 alarm_code가 전부 ''라 병합이 0건이다",
     # 입력 읽기 실패(R3-5b ② — 키 없음과 다른 사실). palette-empty에 원천 색 키 읽기 실패를 더했다.
     "palette-unread": "palette-empty와 같고 PaletteLoader가 읽는 원천 색 키의 읽기가 실패한다(WRONGTYPE)",
     # 측정 #13 추가분 2(R3-5d ④) — 원천 묶음 키 값에 그 키를 만든 메시지의 포인터(`metadata.source`)가 있다. 걷기가 그 메시지 한 건을 입력으로 읽는다.
@@ -522,9 +540,10 @@ _MESSAGE_VARIANTS = {"message-empty", "message-gone", "message-blank"}
 _POINTER_OFFSET = {"L1": 2, "L2": 3, "L3": 4}
 _POINTER_TOPIC = {"message-gone": "gumi.alarm.audit"}
 _EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered",
-               "chain-objects", "palette-unread", *_MESSAGE_VARIANTS}
+               "chain-objects", "palette-unread", "join-empty", *_MESSAGE_VARIANTS}
 # 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
-_RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender", **{v: "SourceCollector" for v in _MESSAGE_VARIANTS}}
+_RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender", "join-empty": "SourceJoiner",
+               **{v: "SourceCollector" for v in _MESSAGE_VARIANTS}}
 _FRESH_PER_LINE = {"L1": 2, "L2": 1, "L3": 3}
 # 증감 배지 요약 키의 data 행 수 — 입구의 후보 본문(기본 evidence_chars 2400)이 잘릴 만큼(R3-5b ①).
 _RATE_ROWS = 150
@@ -543,7 +562,7 @@ _FILTERED_ROW = {"unit": "ea", "zone": "A", "shift": "D", "area": "G1", "model":
 
 def _chain_rows(docs, line, variant):
     """도메인 키 record·원천 묶음 rows — chain-empty는 빈 배열, chain-filtered는 state·wg가 전부 '-'인 다섯 행, 나머지는 그 라인의 문서 요약(정상)."""
-    if variant in ("chain-empty", "chain-objects") or variant in _MESSAGE_VARIANTS:
+    if variant in ("chain-empty", "chain-objects", "join-empty") or variant in _MESSAGE_VARIANTS:
         return []
     if variant == "chain-filtered":
         return [{"alarm_code": f"A{500 + i}", **_FILTERED_ROW} for i in range(5)]
@@ -619,7 +638,9 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                                                           **({"source": {"topic": _POINTER_TOPIC.get(variant, "mx.alarm.raw"), "partition": 0,
                                                                          "offset": _POINTER_OFFSET[l]}} if variant in _MESSAGE_VARIANTS else {})},
                                              "rows": _chain_rows(docs, l, variant)}) for l in LINES},
-            **{f"feed:events:{l}": json.dumps([{"id": i, "alarm_code": d["alarm_code"]} for i, d in enumerate(docs) if d["line"] == l]) for l in LINES},
+            # join-empty는 이벤트 행의 키 값이 전부 '' — 기준표(`feed:ref`의 codes)에 없는 값이라 SourceJoiner의 inner 병합이 0건(R3-5g ④).
+            **{f"feed:events:{l}": json.dumps([{"id": i, "alarm_code": "" if variant == "join-empty" else d["alarm_code"]}
+                                               for i, d in enumerate(docs) if d["line"] == l]) for l in LINES},
             **{f"feed:status:{l}": json.dumps([{"id": i, "status": ["RUN", "STOP"][i % 2]} for i in range(4)]) for l in LINES},
             "feed:ref": json.dumps({"codes": [{"code": f"A{110 + i}", "name": f"code-{i}"} for i in range(3)]}),
             **{f"alarm:scan:{l}": json.dumps({

@@ -666,3 +666,55 @@ async def test_메시지_읽기가_한_번_실패하면_같은_걷기의_다음_
     assert first.key == "t[0]@5" and first.status == "읽기 실패 — 대본 없음"
     assert second.key == "t[0]@6" and second.status == "읽기 실패 — 앞 메시지 읽기가 실패해 건너뜀(대본 없음)" and second.evidence_id == ""
     assert walk.stopped == "입력을 다 못 봤다 — W1(읽기 실패 t[0]@6)" and walk.reads == 4
+
+
+# ── R3-5g ④-b — 조인 검사: 병합식의 키 필드로 두 입력의 값이 겹치는지 ──
+
+def test_join_check는_병합식의_키_필드를_가진_두_입력의_값이_하나도_안_겹칠_때만_짝_없음이다():
+    """P1-5(사람 결정 10-20): 코드 비교식이 아니라 양쪽 데이터의 키 차이로만 보이는 거름 — 병합식(AST 사실)의 필드로 읽은 두 입력의 값 집합을 센다. 변수를
+    따라가지 않는다: 왼쪽 키 필드를 전부 가진 입력이 왼쪽, 오른쪽 키 필드를 가진 다른 입력이 오른쪽. 한쪽이 비었거나 겹치는 값이 하나라도 있으면 아니다."""
+    from src.application.walk import join_check
+    from src.domain.case import MergeHit
+
+    m = MergeHit(path="j.py", line=7, text="x.merge(y, left_on='ws', right_on='code')", left=["ws"], right=["code"])
+    events = ("ev:L1", "t-2.e1", [{"ws": "", "n": 1}, {"ws": "", "n": 2}], "", None, "ev:{line}")
+    ref = ("ref", "t-3.e1", [{"code": "A1"}, {"code": "A2"}, {"code": "A3"}, {"code": "A4"}], "", None, "ref")
+    other = ("st:L1", "t-4.e1", [{"id": 1}], "", None, "st:{line}")
+    got = join_check([m], [events, ref, other])
+    assert [(a, b, note) for a, b, note, _ in got] == [(("ev:L1", "t-2.e1"), ("ref", "t-3.e1"),
+                                                        "ev:L1.ws {''} ↔ ref.code {'A1', 'A2', 'A3', …} 겹침 0 (inner 병합)")]
+    assert join_check([m], [("ev:L1", "t-2.e1", [{"ws": "A2"}], "", None, "ev:{line}"), ref]) == []            # 하나라도 겹치면 아니다
+    assert join_check([m], [("ev:L1", "t-2.e1", [], "", None, "ev:{line}"), ref]) == []                          # 빈 쪽은 겹침을 셀 수 없다
+    assert join_check([m], [events]) == [] and join_check([], [events, ref]) == []
+    same = MergeHit(path="j.py", line=9, text="x.merge(y, on=['ws', 'd'])", left=["ws", "d"], right=["ws", "d"])
+    a = ("a", "t-2.e1", [{"ws": "x", "d": 1}], "", None, "a")
+    b = ("b", "t-3.e1", [{"ws": "x", "d": 2}], "", None, "b")
+    pairs = join_check([same], [a, b])
+    assert len(pairs) == 1 and pairs[0][2] == "a.ws+d {('x', 1)} ↔ b.ws+d {('x', 2)} 겹침 0 (inner 병합)"        # 같은 필드면 한 쌍만, 키는 묶음
+
+
+async def test_걷기는_병합식의_두_입력이_안_겹치면_둘_다_나쁨으로_적고_쓴_쪽으로_한_홉_더_가며_멈춤은_병합_0건이다():
+    """사내 작업자 배지: 원천의 빈 작업대 코드가 기준표에 없어 inner 병합이 0건 — 입력 둘은 각각 정상이다. 병합식은 어댑터(`FilterScan.merges`)가 주고 걷기가
+    값을 센다. 첫 칸은 병합 줄, 그다음은 전처럼 그 입력의 칸. 나빠진 입력에 아는 쓴 쪽이 있으면 한 홉 더 간다."""
+    from src.domain.case import MergeHit
+
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("ref:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(metadata={"event_type": "W1"}, rows=[{"ws": "", "n": 1}, {"ws": "", "n": 2}]),
+             ("redis.get", "ref:L1"): _value(codes=[{"ws": "A"}, {"ws": "B"}]),
+             ("code.resources", "W1"): _res("W1", [("up:{line}", "rediskey")]),
+             ("redis.get", "up:L1"): _value(rows=[{"ws": "", "n": 1}])}
+    merge = MergeHit(path="w0.py", line=5, text="pd.merge(a, b, on='ws')", left=["ws"], right=["ws"])
+    lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[merge])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), lookup=lookup, clock=lambda: T0))["walk"]
+    by_key = {h.key: h for h in walk.hops}
+    note = "in:a:L1.ws {''} ↔ ref:L1.ws {'A', 'B'} 겹침 0 (inner 병합)"
+    assert by_key["in:a:L1"].bad and by_key["in:a:L1"].status.startswith(f"나쁨 — 병합 짝 없음: {note} (w0.py:L5) · rows: 행 2")
+    assert by_key["ref:L1"].bad and by_key["ref:L1"].status.startswith(f"나쁨 — 병합 짝 없음: {note} (w0.py:L5) · codes: 행 2")
+    assert by_key["in:a:L1"].writer == "W1" and by_key["up:L1"].parent == by_key["in:a:L1"].evidence_id    # 쓴 쪽으로 한 홉 더
+    assert walk.stopped == "입력이 다 정상 — W1"                                                                  # 더 깊은 홉이 정상이라 멈춤은 거기
+    # 쓴 쪽을 모르는 쪽이 멈춘 자리면 사유는 병합 0건이고 첫 칸은 병합 줄
+    flat = {k: v for k, v in table.items() if k[1] != "W1"}
+    flat[("redis.get", "in:a:L1")] = _value(rows=[{"ws": "", "n": 1}, {"ws": "", "n": 2}])
+    walk = (await run_walk(_state(), runner=_Reads(flat), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
+    assert walk.stopped == f"병합이 0건 — W0: {note} (w0.py:L5)"
+    assert [r.action for r in walk.rungs][:2] == ["code.read", "code.uses"] and walk.rungs[0].params == {"service": "", "path": "w0.py", "line": 5}

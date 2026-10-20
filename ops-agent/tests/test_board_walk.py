@@ -29,7 +29,7 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
-VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank")
+VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty")
 
 
 def _repo(root, url, files):
@@ -287,3 +287,18 @@ def test_클래스_속성으로_키를_고르는_부모_메서드는_하위_클�
     assert "self.redis_key" in parent and "못 이음" in parent and "feed:ref [rediskey]" not in parent
     # R3-5g ①(측정 #17 작은 결함): 자기 속성이 자원 아닌 리터럴(`mode = "material"`)이면 풀린 것 — 형제가 그 속성에 키 이름을 써도 줄도 못 이음도 없다
     assert "self.mode" not in palette and "self.mode" in parent and "값을 가진 다른 클래스" in parent and "하위 클래스" not in parent
+
+
+def test_조인_변형은_이벤트_행과_기준표가_각각_정상인데_병합이_0건이라_두_홉이_나쁨이고_첫_칸은_병합_줄이다(board, monkeypatch):
+    """P1-5(사람 결정 10-20): 사내 작업자 배지 — 원천 행의 키 값이 전부 비어 기준표와 pandas inner 병합이 0건. 코드 비교식이 없으니 걷기가 두 입력의 키 값
+    겹침을 센다. 멈춤은 `병합이 0건 — <클래스>: …`, 첫 칸은 병합 줄, 그다음은 그 입력의 칸(쓴 쪽을 모르는 키 → `code.uses`)."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "join-empty")
+    n = _at("common/joiner_pd.py", ".merge(")
+    note = "feed:events:L1.alarm_code {''} ↔ feed:ref.code {'A110', 'A111', 'A112'} 겹침 0 (inner 병합)"
+    assert rows[:5] == ["alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data)",
+                        "alarm:domain:L1 | DomainBuilder [batch] | 빈 배열 (record)", PALETTE_ROW, SOURCE_ROW,
+                        "alarm:raw:L1 | SourceJoiner [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
+    assert rows[5].startswith(f"feed:events:L1 | — | 나쁨 — 병합 짝 없음: {note} (common/joiner_pd.py:L{n}) · 행 4 · 필드 2 · 모든 행이 같은 값: alarm_code=''")
+    assert rows[6] == f"feed:ref | — | 나쁨 — 병합 짝 없음: {note} (common/joiner_pd.py:L{n}) · codes: 행 3 · 필드 2" and len(rows) == 7
+    assert stopped == f"병합이 0건 — SourceJoiner: {note} (common/joiner_pd.py:L{n})"
+    assert rungs[0] == f"code.read line={n} path='common/joiner_pd.py' service='batch'" and rungs[1] == "code.uses name='feed:events:{line}'"

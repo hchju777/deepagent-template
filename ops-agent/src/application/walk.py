@@ -19,6 +19,7 @@ pinned 본문은 그 홉까지의 사슬만(P0 4). 읽기의 id는 리드와 같
 밖이면 "키를 만든 메시지가 토픽에 없다"(나쁨), 포인터가 없으면 "포인터 없음"만(토픽을 짐작하지 않는다). 발행 쪽은 클래스가 아니라 config 발행 선언
 (같은 이름 클래스가 두 레포)이고 그쪽으로 걷지는 않는다 — 선언이 없으면 우리 밖.
 """
+import json
 import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable, NamedTuple
@@ -38,6 +39,42 @@ SCAN_READS = 5
 # 단일값 필드의 나쁨은 **코드 줄**이 정한다(R3-3 ③ → R3-5 ③, 사람 결정 10-14·10-15 — 자리표시자 목록 같은 손 규칙은 두지 않는다): 입력을 읽는 쪽(걷고
 # 있는 클래스)의 파일과 이은 컴포넌트 클래스 파일에서 필드 이름과 그 값이 한 비교식의 양쪽에 리터럴로 있으면(실측 `["<필드>"] != "-"`) 그 값의 행은
 # 그 줄을 지나지 못한다. 필드 수 상한은 없다 — 어댑터가 비교식을 먼저 뽑아 단일값 전부와 맞춘다(측정 #11: 상한 6에 가려 7번째 필드를 못 봤다).
+
+
+def _hashable(value: Any):
+    return value if isinstance(value, (str, int, float, bool, type(None))) else json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def _shown_keys(keys: set) -> str:
+    shown = sorted(keys, key=repr)[:3]
+    return "{" + ", ".join(repr(k[0] if len(k) == 1 else k) for k in shown) + (", …" if len(keys) > 3 else "") + "}"
+
+
+def join_check(merges, inputs) -> list[tuple[tuple[str, str], tuple[str, str], str, Any]]:
+    """조인 검사(R3-5g ④-b, P1-5 — 사람 결정 10-20): 병합식마다 그 키 필드를 가진 두 입력의 값 집합이 겹치는지. 안 겹치면 `((왼쪽 라벨, 증거), (오른쪽 라벨,
+    증거), 문구, 병합식)`. 왼쪽 키 필드를 전부 가진 행이 있는 입력이 왼쪽, 오른쪽 키 필드를 가진 **다른** 입력이 오른쪽 — 변수를 따라가지 않는다(필드 이름이
+    사실이다). 한쪽이 비었거나 겹치는 값이 하나라도 있으면 아니다. 코드 비교식이 아니라 양쪽 데이터의 키 차이로만 보이는 거름(사내 작업자 배지: 원천의 빈
+    작업대 코드가 기준표에 없어 inner 병합이 0건)을 이것으로 본다. `inputs`는 `(라벨, 증거, 행들, 쓴 쪽, 원본, 선언 이름)`."""
+    out: list[tuple[tuple[str, str], tuple[str, str], str, Any]] = []
+    done: set[frozenset] = set()
+    for m in merges:
+        def keyed(fields):
+            found = []
+            for label, ev, rows, *_ in inputs:
+                with_fields = [r for r in rows if isinstance(r, dict) and all(f in r for f in fields)]
+                if with_fields:
+                    found.append((label, ev, {tuple(_hashable(r.get(f)) for f in fields) for r in with_fields}))
+            return found
+        for a_label, a_ev, a_keys in keyed(m.left):
+            for b_label, b_ev, b_keys in keyed(m.right):
+                pair = frozenset((a_ev, b_ev))
+                if a_ev == b_ev or pair in done or not a_keys or not b_keys or (a_keys & b_keys):
+                    continue
+                done.add(pair)
+                note = (f"{a_label}.{'+'.join(m.left)} {_shown_keys(a_keys)} ↔ {b_label}.{'+'.join(m.right)} {_shown_keys(b_keys)} 겹침 0 "
+                        f"({m.how} 병합)")
+                out.append(((a_label, a_ev), (b_label, b_ev), note, m))
+    return out
 
 
 def rows_of(raw: Any) -> list[dict]:
@@ -300,6 +337,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     partial: set[str] = set()                                                               # 입력을 다 못 본 가지 — 그 홉의 증거(일부만 검사한 입력이 있다)
     pointerless: set[str] = set()                                                           # 입력을 못 본 가지 중 포인터도 없는 것 — 그 홉의 증거(④)
     pointed_at: dict[str, tuple[str, Any, Any]] = {}                                        # 메시지 홉의 증거 → (토픽, 보존 시작, 끝)
+    joined_at: dict[str, tuple[Any, str]] = {}                                              # 병합 짝 없음으로 나빠진 홉의 증거 → (병합식, 문구)(④-b)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
     # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
@@ -332,11 +370,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         found_inputs = inputs_in(text)
         walked_at[came_from] = _Walked(writer, tag, scope, 0, res_id, class_at(text), len(found_inputs))
         real, missed = 0, []                                                                # 실제로 읽은 입력 수, 못 본 입력(R3-5b ②)
+        read_inputs: list[tuple[str, str, list, str, Any, str]] = []                        # 이 클래스가 읽은 입력 — (라벨, 증거, 행들, 쓴 쪽, 원본, 선언 이름)
+        merges: list = []
         if lookup is not None:
             # 컴포넌트 링크는 입력의 단일값과 무관하게 클래스 파일에서 뽑는다(사람 결정 10-15: 자원 0인 클래스도 `get("X")` 리터럴이 있다) — 멈춘 자리의 뒤 칸.
             # 이어 온 단일값이 있으면 그 필드로 묻는다 — 어댑터가 그 필드 이름이 리터럴로 든 컴포넌트를 앞에 둔다(10-15 (c)). 필드 없이 물으면 코드
             # 차례 그대로라 뒤 칸 셋에서 잘릴 수 있다(측정판 R3-5 ④).
-            linked_at[came_from] = list((await lookup(writer, fields=dict([watch]) if watch else {}, **branch.params)).linked_at)
+            scan0 = await lookup(writer, fields=dict([watch]) if watch else {}, **branch.params)
+            linked_at[came_from], merges = list(scan0.linked_at), list(scan0.merges)
         for name, kind in found_inputs:
             if kind == "rediskey":
                 filled = fill_key(name, declared=target.declared, key=target.key)
@@ -403,6 +444,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 declared_names[ev] = name
                 hops.append(Hop(key=label, kind=kind, depth=depth + 1, writer=w, service=shown, candidates=list(cands), status=status, bad=bad,
                                 evidence_id=ev, basis=f"{writer}{tag}가 읽는 자원 ({res_id})", parent=came_from))
+                if got.status == "ok" and raw is not None and w != writer:
+                    read_inputs.append((label, ev, rows_of(raw), w, raw, name))
                 if stopped:
                     break
                 # 나쁜 입력의 아는 쓴 쪽만 — 그때만 가지가 있다. 그 키 값의 포인터를 들고 간다(④) — 그 클래스를 만든 메시지가 거기 적혀 있다.
@@ -464,10 +507,27 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     real += 1                                                          # 메시지도 읽은 입력이다 — 정상이면 "입력이 다 정상"에 든다
                     pointed_at[ev] = (topic, data.get("begin"), data.get("end"))
                     status, bad, carry = await judged(rows_of(boxed), status, bad, ev)
+                    read_inputs.append((label, ev, rows_of(boxed), "", None, topic))
                 hops.append(Hop(key=label, kind="message", depth=depth + 1, service=shown, candidates=list(svcs), status=status, bad=bad,
                                 evidence_id=ev, basis=f"{writer}{tag}를 댄 키 값의 포인터 {pointer.get('at', '')} ({came_from})", parent=came_from))
         elif not stopped and not real and not missed:
             pointerless.add(came_from)
+        if merges and not stopped:
+            # 조인 검사(④-b, P1-5): 병합식의 키 필드로 두 입력의 값이 겹치는지 — 안 겹치면 두 홉이 나쁨이고, 읽을 때는 정상이라 안 낸 가지(아는 쓴 쪽)를 지금 낸다.
+            for (a_label, a_ev), (b_label, b_ev), note, merge in join_check(merges, read_inputs):
+                for ev_ in (a_ev, b_ev):
+                    at = next((i for i, h in enumerate(hops) if h.evidence_id == ev_), None)
+                    if at is None or hops[at].bad:
+                        continue
+                    old = hops[at].status
+                    hops[at] = hops[at].model_copy(update={"bad": True, "status": f"나쁨 — 병합 짝 없음: {note} ({merge.path}:L{merge.line}) · "
+                                                                                    + (old[len("정상 — "):] if old.startswith("정상 — ") else old)})
+                    joined_at[ev_] = (merge, note)
+                    _, _, _, w_, raw_, name_ = next(e for e in read_inputs if e[1] == ev_)
+                    if w_:
+                        next_branches, shown_, cands_ = branches(w_, name_)
+                        hops[at] = hops[at].model_copy(update={"service": shown_, "candidates": list(cands_)})
+                        frontier += [(w_, b, depth + 1, ev_, None, pointer_of(_unwrap(raw_)) if raw_ is not None else {}) for b in next_branches]
         # 이 클래스가 실제로 읽은 입력과 못 본 입력 — 멈춘 자리가 이 클래스면 사유가 여기서 나온다. 다음 칸은 읽기가 있었으면(실패한 읽기도) 읽는 메서드,
         # 읽은 입력이 없으면("모른다") 클래스 본문. 메시지만 읽은 클래스(인덱스 자원 0)는 읽는 메서드 줄이 없어 클래스 본문이다.
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),
@@ -478,7 +538,19 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     ev = stop_hop.evidence_id
     rungs: list[Rung] = []
     if not stopped:
-        if stop_hop is not hops[0] and stop_hop.kind == "message":
+        if ev in joined_at and ev not in walked_at and ev not in failed_at:
+            # 병합 0건(④-b) — 짝 없는 입력의 쓴 쪽으로 더 걸었으면 멈춤은 전처럼 거기(그쪽 입력의 사유 — 홉 상태에 병합이 남는다). 더 못 걸었으면(쓴 쪽
+            # 모름·메시지) 사유는 병합이고 첫 칸은 병합 줄(그 클래스의 레포), 그다음은 전처럼 그 입력의 칸.
+            merge, note = joined_at[ev]
+            owner = walked_at.get(stop_hop.parent)
+            stopped = f"병합이 0건 — {owner.writer if owner else '?'}: {note} ({merge.path}:L{merge.line})"
+            rungs.append(Rung(action="code.read", params={"service": owner.scope if owner else "", "path": merge.path, "line": merge.line},
+                              evidence=owner.res_id if owner else ev))
+            if stop_hop.kind == "message":
+                rungs.append(Rung(action="kafka.tail", params={"topic": stop_hop.key.split("[", 1)[0], "limit": 5}, evidence=ev))
+            else:
+                rungs.append(Rung(action="code.uses", params={"name": declared_names.get(ev, stop_hop.key)}, evidence=ev))
+        elif stop_hop is not hops[0] and stop_hop.kind == "message":
             # 키를 만든 메시지가 나쁘거나 없다(④) — 그 메시지를 받는 클래스가 멈춘 자리다. 발행 쪽은 config 선언(없으면 우리 밖)이고 그쪽으로 걷지는 않는다.
             # 다음 칸: 없음이면 지금 토픽에 오는 것(`kafka.tail`)이 먼저, 나쁨이면 그 메시지를 받는 클래스 본문과 이은 컴포넌트가 먼저.
             info = walked_at.get(stop_hop.parent)
