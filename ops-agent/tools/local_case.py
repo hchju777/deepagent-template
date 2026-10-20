@@ -276,16 +276,29 @@ class DomainBuilder(LineReader):
         record = {"metadata": {"event_type": "DomainBuilder"}, "record": raw.get("rows", [])}
         self.redis.set(self.cfg["redis_key"]["alarm_domain"].format(line=line), json.dumps(record))
 ''',
+    # 측정 #16 P0-3의 실코드 모양: `get(<변수>)`를 품은 부모 메서드에는 기본값이 없고, 기본값은 재정의에 있으며 재정의가 super()로 그 인자를 넘긴다 —
+    # 이름 단위로 풀어야 `row_parser`가 이어진다(R3-5f ②). 함수 단위로 풀던 코드는 "못 이음 — 변수 parser"라 parsers.py의 비교식을 못 봤다.
+    "common/jobs.py": '''"""메시지 작업의 뼈대 — 파서는 하위 클래스가 고른다."""
+
+
+class MessageJob:
+    def _run(self, message, parser):
+        rows = self.components.get(parser).parse(message)
+        self._store(message, rows)
+''',
     # c-1형의 원천 클래스 — 토픽 메시지를 받아 인덱스 자원(읽기)이 0이다. 같은 이름이 dt-api에도 있다(그쪽은 alarm:raw를 선언하지 않는다).
     "common/source.py": '''"""원천 수집 — 메시지를 행으로 바꿔 원천 묶음에 둔다."""
+from common.jobs import MessageJob
 
 
-class SourceCollector:
+class SourceCollector(MessageJob):
     def __init__(self, cfg, redis, components):
         self.cfg, self.redis, self.components = cfg, redis, components
 
-    def _run(self, message):
-        rows = self.components.get("row_parser").parse(message)
+    def _run(self, message, parser="row_parser"):
+        return super()._run(message, parser)
+
+    def _store(self, message, rows):
         record = {"metadata": {"event_type": "SourceCollector"}, "rows": rows}
         self.redis.set(self.cfg["redis_key"]["alarm_raw"].format(line=message["line"]), json.dumps(record))
 ''',

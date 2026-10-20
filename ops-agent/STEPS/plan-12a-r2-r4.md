@@ -399,7 +399,7 @@ key_path(`default_topic`) 두 행은 데이터 토픽 행이 먼저 — 그래�
 | 순서 | 항목 | 할 것 | 자리 |
 |---|---|---|---|
 | R3-5f ① ✅ | P0-b | `site_overrides`: 서비스별 base로 견준다. `apply_site`: 그 행의 서비스가 선언한 노드만 rename, 바꾼 id가 이미 있으면 합치지 않고 엣지만. 측정판: dt-api가 같은 key_path(`producer.topic.topic1`)로 다른 토픽을 선언 + 사이트 층이 원천 토픽을 덮는 행 → `test_flow`·보드 걷기 정답 표 | `deployed_code`, `knowledge/flow`, `tools/local_case` |
-| R3-5f ② | P0-3 | `default_links`를 이름 단위로(기본값 없는 부모 + 기본값 있는 재정의의 `super()` 전달 + 인자 없이 부르는 하위 클래스; `super()` 호출은 부모 쪽). 측정판에 그 모양 | `deployed_code` |
+| R3-5f ② ✅ | P0-3 | `default_links`를 이름 단위로(기본값 없는 부모 + 기본값 있는 재정의의 `super()` 전달 + 인자 없이 부르는 하위 클래스; `super()` 호출은 부모 쪽). 측정판에 그 모양 | `deployed_code` |
 | R3-5f ③ | P0-c | 인덱스: 클래스 속성 리터럴을 클래스별로(`attach_resources`의 모듈 별칭에서 뺀다), `self.<속성>` 자원은 자리표시자 + 질의 때 구체 클래스의 MRO로 해석(`resources_lines`·`filter_lines`·걷기), 못 풀면 `못 이음 — self.<속성>`. 측정판: 부모 `config.get("redis_key", self.<속성>)` + 속성이 다른 하위 클래스 둘 | `knowledge/index`, `knowledge/query`, `deployed_code` |
 | R3-5f ④ | 메모 | (사람 결정 (2) 뒤) length 뒤 재질문에 "짧게" 한 줄; c-13의 서술–component 어긋남은 기록만 | `lead`, 프롬프트 |
 | — | **측정 #17** | ①~④ 뒤. **`code graph` 재생성: 필요**(①은 `sites/<fct>.json`을 다시 쓰고 ③은 인덱스 자원이 바뀐다). 발행 선언 행·`미확인`·`일부만 검사`·`<ATR 키>` 홉·`not_a_defect`·length를 다시 잰다 | 브리프 |

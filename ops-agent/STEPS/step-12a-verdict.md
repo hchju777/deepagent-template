@@ -1328,6 +1328,20 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 테스트 먼저(RED → GREEN). 스윕 +4(964), 옛 앵커 넷(rename 둘·`site_overrides` 둘) 재지정. **측정 #17 전에 `code graph` 재생성 필요**(`sites/<fct>.json`을
   다시 쓴다).
 
+#### R3-5f ② (10-20) ✅ — `get(<변수>)`를 이름 단위로 잇는다
+
+- 측정 #16 P0-3(실코드): `default_links`에 `<배치 레포>`의 base.py + 하위 클래스 파일을 넣으면 `{}` — `get(<변수>)`를 품은 부모 함수에는 기본값이 없고 리터럴
+  기본값은 재정의(super()로 위치 인자 전달)에 있다. 함수 단위 `resolve`는 부모에서 "기본값 없음"으로 바로 None이었고, 호출을 이름만으로 맞춰 재정의 안의
+  `super()._run(rows, shape)`를 재정의 자신의 호출로도 세어 자기 인자로 되돌았다. 못 이음 두 변수 50번씩, `미확인` 50행, `일부만 검사` 11건.
+- `default_links.resolve(name, param)`: 같은 이름의 정의들과 호출들을 한 묶음으로 — 호출이 넘긴 값(리터럴, 호출한 쪽의 인자면 그 이름에서 한 단계 더),
+  안 넘긴 호출이 쓸 기본값(같은 이름 정의들의 문자열 기본값, 하나일 때만), 호출이 없으면 그 기본값 — 전부 같은 하나여야 잇는다. 재정의가 자기 인자를
+  `super()`로 넘기는 것은 호출이 아니라 전달이다. 정의마다 인자 자리가 다르면 못 잇는다. 수신자에 리터럴 `get("…")`이 하나도 없는 범위(뼈대의 `get(<변수>)`뿐)에서는
+  `component_names`가 그 변수를 안 세므로(사전 get과 못 가른다), 이은 리터럴이 등록된 컴포넌트면 그 변수도 컴포넌트 변수로 센다.
+- 측정판: 보드의 `SourceCollector`가 `MessageJob._run(message, parser)`(기본값 없음, `components.get(parser)`)를 잇고 재정의 `_run(message, parser="row_parser")`가
+  super()로 넘긴다 — 옛 코드는 "못 이음 — 변수 parser"라 parsers.py의 `ws != '-'` 비교식을 못 봐 message-blank·source-blank 행이 깨졌다(RED). 단위 fixture에도
+  `Based`/`Overrider`와 순수 함수 사례(부르는 쪽 없음·리터럴 넘김·재정의 둘의 기본값이 다름·기본값이 어디에도 없음).
+- 테스트 먼저(RED → GREEN). 스윕 +4(968), 옛 앵커 둘 재지정. `code graph` 재생성과 무관(질의 때 스냅샷 AST).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

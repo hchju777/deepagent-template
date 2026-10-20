@@ -921,7 +921,11 @@ FILES = {"pipe/__init__.py": "",
          # 인자 기본값이 리터럴이고 범위 안 호출이 그 인자를 안 넘긴다 — 그 리터럴로 잇는다(R3-5e ③). Passer는 다른 값을 넘겨 못 잇는다.
          "pipe/dflt.py": ('class Dflt:\n    def _run(self, rows, shape="shape_filter"):\n        rows = self.components.get("state_filter").apply(rows)\n'
                           '        return self.components.get(shape).apply(rows)\n'),
-         "pipe/passer.py": 'from pipe.dflt import Dflt\n\n\nclass Passer(Dflt):\n    def go(self, rows):\n        return self._run(rows, "state_filter")\n'}
+         "pipe/passer.py": 'from pipe.dflt import Dflt\n\n\nclass Passer(Dflt):\n    def go(self, rows):\n        return self._run(rows, "state_filter")\n',
+         # 실코드 모양(측정 #16 P0-3): `get(<변수>)`를 품은 부모에는 기본값이 없고 기본값은 재정의에 있으며 재정의가 super()로 그 인자를 넘긴다(R3-5f ②).
+         "pipe/based.py": 'class Based:\n    def _run(self, rows, shape):\n        return self.components.get(shape).apply(rows)\n',
+         "pipe/overrider.py": ('from pipe.based import Based\n\n\nclass Overrider(Based):\n    def _run(self, rows, shape="shape_filter"):\n'
+                               '        return super()._run(rows, shape)\n')}
 
 
 class _FilterSrc:
@@ -989,6 +993,9 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     assert dflt.unlinked == [] and dflt.linked == ["state_filter", "shape_filter"] and dflt.files == ["pipe/dflt.py", "pipe/filters.py", "pipe/shapes.py"]
     passer = await code.filter_lines("Passer", fields={"state": "-"})
     assert passer.unlinked == [] and passer.linked == ["state_filter"] and passer.files == ["pipe/passer.py", "pipe/dflt.py", "pipe/filters.py"]
+    # 기본값 없는 부모 + 기본값 있는 재정의가 super()로 넘김(실코드 모양, R3-5f ②) — 재정의의 기본값으로 잇는다
+    over = await code.filter_lines("Overrider", fields={"state": "-"})
+    assert over.unlinked == [] and over.linked == ["shape_filter"] and over.files == ["pipe/overrider.py", "pipe/based.py", "pipe/shapes.py"]
     assert "인덱스에 없다" in (await code.filter_lines("Nope", fields={})).problem
     assert "없는 서비스" in (await code.filter_lines("Job", fields={}, service="nope")).problem
     assert "없는 레포" in (await code.filter_lines("Job", fields={}, repo="nope")).problem
@@ -1114,6 +1121,18 @@ def test_get_변수는_인자_기본값_리터럴로_잇되_범위_안_호출이
     assert default_links({"d.py": base, "p.py": chain, "q.py": 'class Q(P):\n    def run(self, rows):\n        return self.go(rows, "other")\n'}) == {"shape": "other"}
     # 기본값이 없거나 리터럴이 아니면, 변수가 인자가 아니면 못 잇는다; 깨진 파일은 없는 것
     assert default_links({"v.py": "class V:\n    def _run(self, name):\n        return self.components.get(name)\n"}) == {}
+    # 측정 #16 P0-3(실코드, 사람 결정 10-20): 기본값 없는 부모 + 기본값 있는 재정의가 super()로 그 인자를 넘김 + 인자 없이 부르는 하위 클래스 — 이름 단위로 푼다.
+    # super() 전달은 호출이 아니고, 안 넘긴 호출은 같은 이름 정의들의 기본값(하나일 때만)을 쓴다.
+    parent = "class B:\n    def _run(self, rows, shape):\n        return self.components.get(shape).apply(rows)\n"
+    mid = 'class M(B):\n    def _run(self, rows, shape="shape_filter"):\n        return super()._run(rows, shape)\n'
+    leaf = "class L(M):\n    def go(self, rows):\n        return self._run(rows)\n"
+    assert default_links({"b.py": parent, "m.py": mid, "l.py": leaf}) == {"shape": "shape_filter"}
+    assert default_links({"b.py": parent, "m.py": mid}) == {"shape": "shape_filter"}                                   # 부르는 쪽이 없어도 재정의의 기본값
+    assert default_links({"b.py": parent, "m.py": mid, "l.py": 'class L(M):\n    def go(self, rows):\n        return self._run(rows, "other")\n'}) == {"shape": "other"}
+    narrow = 'class N(B):\n    def _run(self, rows, shape="narrow"):\n        return super()._run(rows, shape)\n'
+    assert default_links({"b.py": parent, "m.py": mid, "n.py": narrow}) == {}                                       # 재정의 둘의 기본값이 다르다
+    assert default_links({"b.py": parent, "m.py": mid, "n.py": narrow, "l.py": leaf}) == {}                         # 안 넘긴 호출이 있어도 하나를 고르지 않는다
+    assert default_links({"b.py": parent, "l.py": leaf}) == {}                                                         # 기본값이 어디에도 없다
     assert default_links({"v.py": "class V:\n    def _run(self, name=NAME):\n        return self.components.get(name)\n"}) == {}
     assert default_links({"v.py": "class V:\n    def _run(self):\n        name = pick()\n        return self.components.get(name)\n"}) == {}
     assert default_links({"v.py": "class V(:\n"}) == {}

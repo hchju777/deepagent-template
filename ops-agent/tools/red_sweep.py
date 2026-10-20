@@ -3055,8 +3055,8 @@ CASES += [
 DEFAULT_LINK_T = "tests/infrastructure/test_deployed_code.py::test_get_변수는_인자_기본값_리터럴로_잇되_범위_안_호출이_그_인자를_넘기면_안_잇는다"
 FILTER_T = "tests/infrastructure/test_deployed_code.py::test_filter_lines는_이_사이트의_등록이_가리키는_클래스_파일을_범위로_비교식을_먼저_뽑아_단일값_전부와_맞춘다"
 CASES += [
- ("기본값 리터럴로 안 잇는다", DCP, "        default = _param_defaults(fn).get(param)\n        if default is None or depth > 3:", "        default = None\n        if default is None or depth > 3:", [DEFAULT_LINK_T, FILTER_T]),
- ("호출이 넘긴 값을 안 본다", DCP, "            if called_name(call) != fn.name:\n                continue", "            if True:\n                continue", [DEFAULT_LINK_T]),
+ ("기본값 리터럴로 안 잇는다", DCP, "        default_values = {_param_defaults(d).get(param) for d in defs} - {None}", "        default_values = set()", [DEFAULT_LINK_T, FILTER_T]),
+ ("호출이 넘긴 값을 안 본다", DCP, "            if called_name(call) != name:\n                continue", "            if True:\n                continue", [DEFAULT_LINK_T]),
  ("다른 리터럴 둘을 하나로 잇는다", DCP, "        return next(iter(values)) if len(values) == 1 else None", "        return next(iter(values))", [DEFAULT_LINK_T]),
  ("이은 변수를 여전히 못 이음으로 센다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in resolved]", "        unlinked = [f\"변수 {v}\" for v in variables]", [FILTER_T]),
 ]
@@ -3102,7 +3102,15 @@ CASES += [
  ("base가 갈리는 서비스를 한 행에 넣는다", FLW, "            split.setdefault(b, []).append(svc)", "            split.setdefault(None, []).append(svc)", [SITE_ROWS_T]),
  ("site_overrides가 옛 셈을 쓴다", D, "        return flowgraph.site_rows(mine, base)", "        return [{\"kind\": n.kind, \"key_path\": n.key_path, \"value\": n.value, \"base\": None, \"services\": sorted(n.services), \"relation\": n.relation} for n in sorted(mine, key=lambda n: (n.kind, n.key_path, n.value)) if n.value not in {b.value for b in base}]", [DCT_SITE_T]),
 ]
-assert len(CASES) >= 964, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5f ② — get(<변수>)를 이름 단위로 잇는다 ──
+CASES += [
+ ("수신자에 리터럴 get이 없는 변수를 안 센다", DCP, "        variables += [v for v, lit in resolved.items() if v not in variables and any(r.component == lit for r in regs)]", "        variables += []", [FILTER_T]),
+ ("super() 전달을 호출로 센다", DCP, "            if isinstance(passed, ast.Name) and caller in defs and passed.id == param:\n                continue", "            if False:\n                continue", [DEFAULT_LINK_T]),
+ ("기본값은 첫 정의 것만 본다", DCP, "        default_values = {_param_defaults(d).get(param) for d in defs} - {None}", "        default_values = {_param_defaults(defs[0]).get(param)} - {None}", [DEFAULT_LINK_T, FILTER_T]),
+ ("기본값이 갈려도 하나를 고른다", DCP, "                if len(default_values) != 1:\n                    return None", "                if not default_values:\n                    return None", [DEFAULT_LINK_T]),
+]
+assert len(CASES) >= 968, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
