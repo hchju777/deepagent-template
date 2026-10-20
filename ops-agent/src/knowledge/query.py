@@ -246,16 +246,37 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
     if bases:
         lines.append(f"  부모 클래스의 자원 포함: {', '.join(index.symbols[b].qualname for b in bases)}"
                      + (f" · 진입에서 안 닿은 부모 메서드 {skipped}개 뺌" if skipped else ""))
+    # `self.<속성>`으로 고른 자원(`attr:<속성>:<클래스>`, R3-5f ③)은 **이 클래스의 MRO에서 가장 가까운 정의**의 것만 — 측정 #16 P0-c: 형제 클래스의 키가 입력으로
+    # 실렸다. MRO에 그 속성의 리터럴이 없으면 못 이음(어느 하위 클래스가 값을 가졌는지만 적는다).
+    root = sid if s.kind == "class" else s.class_id
+    order = [index.symbols[c].qualname for c in ([root] + (bases if s.kind == "class" else ancestors(index, root)))] if root is not None else []
     seen: dict[tuple[str, str, str], tuple[int, int]] = {}
+    unresolved: dict[str, set[str]] = {}
     for mid in members:
+        by_attr: dict[str, list] = {}
         for r in index.symbols[mid].resources:
+            parts = r.via.split(":", 2) if r.via.startswith("attr:") else []
+            if len(parts) == 3:
+                by_attr.setdefault(parts[1], []).append((parts[2], r))
+                continue
             seen.setdefault((r.direction, r.kind, r.name), (mid, r.line))
+        for attr, cands in by_attr.items():
+            owners = {o for o, _ in cands}
+            nearest = next((q for q in order if q in owners), None)
+            if nearest is None:
+                unresolved.setdefault(attr, set()).update(owners)
+                continue
+            for o, r in cands:
+                if o == nearest:
+                    seen.setdefault((r.direction, r.kind, r.name), (mid, r.line))
     for direction, label in (("reads", "읽기"), ("writes", "쓰기")):
         rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)
         if not rows:
             continue
         lines.append(f"  {label} {len(rows)}:")
         lines += [f"    {name} [{kind}] — {display(index, mid, line)}" for (_, kind, name), (mid, line) in rows[:cap]]
+    for attr, owners in sorted(unresolved.items()):
+        lines.append(f"  self.{attr}: 이 클래스와 부모에 그 속성의 리터럴이 없다 — 못 이음(값을 가진 하위 클래스: {', '.join(sorted(owners))})")
     if not seen:
         lines.append(f"  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 {len(members)}개 (키를 조립식으로 만들면 텍스트로는 못 찾는다)")
     return lines

@@ -268,3 +268,20 @@ def test_메시지_변형_행이_전부_자리_표시면_파서의_비교식_줄
                      f"code.read line={_at('common/source.py', 'class SourceCollector')} path='common/source.py' service='batch'",
                      f"code.read line={_at('common/parsers.py', 'class RowParser')} path='common/parsers.py' service='batch'",
                      "kafka.tail limit=5 topic='mx.alarm.raw'"]
+
+
+def test_클래스_속성으로_키를_고르는_부모_메서드는_하위_클래스마다_자기_속성의_키만_읽는다(board, monkeypatch):
+    """측정 #16 P0-c: 한 하위 클래스의 키가 형제 클래스의 입력으로 붙어 c-10이 `키가 없다 — <남의 키>`에서 멈췄다. `code resources <하위 클래스>`는 그 클래스
+    (없으면 가장 가까운 조상)의 속성 리터럴만, 부모 자신은 못 이음."""
+    for key, value in ENV.items():
+        monkeypatch.setenv(key, value)
+
+    def resources(name):
+        code, out = _cli("--config-root", str(board / "config"), "--env-file", str(board / "none"), "code", "resources", name, "--repo", "dt-core")
+        assert code == 0, out
+        return out
+
+    palette, feed, parent = resources("PaletteSync"), resources("FeedRefSync"), resources("KeyedJob")
+    assert "alarm:palette [rediskey]" in palette and "feed:ref" not in palette
+    assert "feed:ref [rediskey]" in feed and "alarm:palette" not in feed
+    assert "self.redis_key" in parent and "못 이음" in parent and "feed:ref [rediskey]" not in parent

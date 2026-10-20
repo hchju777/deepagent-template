@@ -188,6 +188,25 @@ class SummaryRefresh:
                        "colors": palette.get("colors", [])}
             self.producer.send(self.cfg["infra"]["kafka"]["producer"]["topic"]["topic1"], command)
 ''',
+    # 측정 #16 P0-c의 실코드 모양: 부모가 `config.get("redis_key", self.<속성>)`으로 키를 고르고 하위 클래스마다 속성이 다르다 — 옛 인덱스는 클래스 속성을
+    # 모듈 별칭으로 삼아 한 하위 클래스의 키를 부모 메서드에 박았고(이 파일에서는 마지막 `feed:ref`), 형제 클래스에 남의 키가 입력으로 실렸다(R3-5f ③).
+    "batch/keyed.py": '''"""키를 클래스 속성으로 고르는 배치 — config에 redis_key 항목이 없으면 하위 클래스의 속성을 쓴다."""
+
+
+class KeyedJob:
+    redis_key = ""
+
+    def _run(self):
+        return json.loads(self.redis.get(self.cfg.get("redis_key", self.redis_key)) or "{}")
+
+
+class PaletteSync(KeyedJob):
+    redis_key = "alarm:palette"
+
+
+class FeedRefSync(KeyedJob):
+    redis_key = "feed:ref"
+''',
     # 제목에 '/'가 든 배지의 요약 키를 쓰는 배치 클래스(R3-5b ①) — 요약 키 이름을 메시지에 실어 보낸다.
     "batch/rate.py": '''"""증감 배지 요약을 다시 만든다 — 원천 키를 읽고 요약 키 이름을 메시지에 실어 보낸다."""
 

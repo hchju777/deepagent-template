@@ -3110,7 +3110,20 @@ CASES += [
  ("기본값은 첫 정의 것만 본다", DCP, "        default_values = {_param_defaults(d).get(param) for d in defs} - {None}", "        default_values = {_param_defaults(defs[0]).get(param)} - {None}", [DEFAULT_LINK_T, FILTER_T]),
  ("기본값이 갈려도 하나를 고른다", DCP, "                if len(default_values) != 1:\n                    return None", "                if not default_values:\n                    return None", [DEFAULT_LINK_T]),
 ]
-assert len(CASES) >= 968, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5f ③ — 클래스 속성 리터럴은 그 클래스의 것 ──
+IDX = ROOT / "src/knowledge/index.py"
+QRY = ROOT / "src/knowledge/query.py"
+INDEX_ATTR_T = "tests/knowledge/test_index.py::test_클래스_속성_리터럴은_모듈_별칭이_아니라_self_속성을_읽는_메서드에_가족_클래스마다_붙는다"
+QUERY_ATTR_T = "tests/knowledge/test_query.py::test_resources는_self_속성_키를_질의_클래스의_MRO에서_가장_가까운_정의로_풀고_없으면_못_이음을_적는다"
+BOARD_ATTR_T = "tests/test_board_walk.py::test_클래스_속성으로_키를_고르는_부모_메서드는_하위_클래스마다_자기_속성의_키만_읽는다"
+CASES += [
+ ("클래스 속성을 모듈 별칭으로 삼는다", IDX, "                        class_.attr_consts[t.id] = st.value.value", "                        self.mod.string_consts[t.id] = st.value.value", [INDEX_ATTR_T, BOARD_ATTR_T]),
+ ("속성 자원을 자기 클래스에만 붙인다", IDX, "            stack += self.base_of.get(c, []) + self.sub_of.get(c, [])", "            pass", [INDEX_ATTR_T]),
+ ("가장 가까운 정의만이 아니라 전부 싣는다", QRY, "            for o, r in cands:\n                if o == nearest:", "            for o, r in cands:\n                if True:", [QUERY_ATTR_T]),
+ ("못 푼 속성을 조용히 뺀다", QRY, "                unresolved.setdefault(attr, set()).update(owners)", "                pass", [QUERY_ATTR_T, BOARD_ATTR_T]),
+]
+assert len(CASES) >= 972, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

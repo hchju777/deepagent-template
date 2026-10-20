@@ -244,6 +244,7 @@ class _Class:
     bases: list[tuple[str, ...]]
     methods: dict[str, int] = field(default_factory=dict)
     attr_annotations: dict[str, ast.expr] = field(default_factory=dict)
+    attr_consts: dict[str, str] = field(default_factory=dict)           # 클래스 수준 `NAME = "리터럴"` — 이 클래스의 것(R3-5f ③)
     is_port: bool = False       # Protocol/ABC 또는 본문이 `...`·abstractmethod뿐인 메서드가 있다
 
 
@@ -382,10 +383,14 @@ class _Collector:
                 self._func(st, owner_qual, class_)
             elif class_ is not None and isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name):
                 class_.attr_annotations[st.target.id] = st.annotation
+                if isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
+                    class_.attr_consts[st.target.id] = st.value.value
             elif class_ is not None and isinstance(st, ast.Assign):
+                # 클래스 속성 리터럴은 **그 클래스의 것**이지 모듈 별칭이 아니다(R3-5f ③). 측정 #16 P0-c: 모듈 별칭 표(식별자당 첫 모듈이 이긴다)로 두니
+                # 부모의 `config.get("redis_key", self.redis_key)`에 한 하위 클래스의 키가 박혀 형제 클래스에 남의 키가 입력으로 실렸다.
                 for t in st.targets:
                     if isinstance(t, ast.Name) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
-                        self.mod.string_consts[t.id] = st.value.value
+                        class_.attr_consts[t.id] = st.value.value
             elif isinstance(st, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
                 # `if TYPE_CHECKING:`·`try: import` 아래의 정의도 심볼이다.
                 for inner in getattr(st, "body", []) + getattr(st, "orelse", []) + getattr(st, "finalbody", []):
@@ -484,6 +489,17 @@ def _nested_defs(func: ast.AST) -> list[ast.AST]:
             continue
         queue.extend(ast.iter_child_nodes(node))
     return sorted(out, key=lambda n: n.lineno)
+
+
+def _self_reads(node: ast.AST) -> list[tuple[str, int]]:
+    """함수 본문이 읽는 `self.<속성>`들 — `(속성, 줄)`, 처음 나온 자리, 대입(`self.x = …`)은 아니다."""
+    out: dict[str, int] = {}
+    for st in _body_walk(getattr(node, "body", [])):
+        for inner in ast.walk(st):
+            if (isinstance(inner, ast.Attribute) and isinstance(inner.value, ast.Name) and inner.value.id == "self"
+                    and isinstance(inner.ctx, ast.Load)):
+                out.setdefault(inner.attr, inner.lineno)
+    return sorted(out.items(), key=lambda kv: kv[1])
 
 
 def _body_walk(body: list[ast.stmt]):
@@ -1342,6 +1358,18 @@ class _Resolver:
                                     f"{', '.join(missing[:3])}")
 
     # ── 자원 참조 ──
+    def attr_literals(self, csid: int, attr: str) -> list[tuple[int, str]]:
+        """이 클래스의 가족(자기·조상·후손)에서 클래스 속성 `attr`의 문자열 리터럴 — `(클래스 sid, 리터럴)`, 순환은 한 번만."""
+        family, stack = [], [csid]
+        while stack:
+            c = stack.pop()
+            if c in family:
+                continue
+            family.append(c)
+            stack += self.base_of.get(c, []) + self.sub_of.get(c, [])
+        return [(c, self.classes[c].attr_consts[attr]) for c in sorted(family)
+                if c in self.classes and attr in self.classes[c].attr_consts]
+
     def attach_resources(self) -> None:
         if not self.names:
             return
@@ -1373,6 +1401,14 @@ class _Resolver:
                     found.append(r)
 
             _collect_reads(segment, body_start, fn.mod.path, "확실", self.names, aliases, add)
+            # `self.<속성>` 읽기 — 그 속성의 리터럴은 구체 클래스마다 다를 수 있다(부모의 `config.get("redis_key", self.redis_key)`). 가족(자기·조상·후손)이
+            # 정의한 리터럴마다 `attr:<속성>:<클래스>`로 붙이고, 어느 것인지는 질의가 그 클래스의 MRO로 고른다(R3-5f ③).
+            if fn.class_sid is not None:
+                for attr, line in _self_reads(node):
+                    for csid, literal in self.attr_literals(fn.class_sid, attr):
+                        n = wanted.get(literal)
+                        if n is not None:
+                            add(n.kind, n.value, "추정", fn.mod.path, line, f"attr:{attr}:{self.index.symbols[csid].qualname}")
             if found:
                 sym = self.index.symbols[fn.sid]
                 self.index.symbols[fn.sid] = Symbol(**{**asdict(sym), "resources": tuple(found),

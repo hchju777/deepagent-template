@@ -1342,6 +1342,20 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   `Based`/`Overrider`와 순수 함수 사례(부르는 쪽 없음·리터럴 넘김·재정의 둘의 기본값이 다름·기본값이 어디에도 없음).
 - 테스트 먼저(RED → GREEN). 스윕 +4(968), 옛 앵커 둘 재지정. `code graph` 재생성과 무관(질의 때 스냅샷 AST).
 
+#### R3-5f ③ (10-20) ✅ — 클래스 속성 리터럴은 그 클래스의 것
+
+- 측정 #16 P0-c: 부모 메서드가 `config.get("redis_key", self.<속성>)`으로 키를 고르는데 인덱스가 다른 하위 클래스의 속성 값 키까지 이 클래스 입력으로
+  붙였다 — `<배송 처리 클래스>`에 `<ATR 키>`가 붙어 c-10 걷기가 `키가 없다 — <ATR 키>`에서 멈추고 판정이 그걸 근거로 data_loss. 원인: `index._walk_body`가
+  클래스 수준 `NAME = "리터럴"`을 모듈의 `string_consts`에 넣고 `attach_resources`가 그것을 모듈 전체의 별칭 표(식별자당 첫 모듈이 이긴다)로 만들어 그
+  식별자가 보이는 모든 함수에 붙였다(`via=alias`).
+- 인덱스: 클래스 속성 리터럴은 `_Class.attr_consts`(그 클래스의 것). `self.<속성>`을 읽는 메서드에는 그 속성을 정의한 **가족**(자기·조상·후손) 클래스마다
+  그 리터럴의 이름을 `attr:<속성>:<클래스>`로 붙인다(`attr_literals`·`_self_reads`). 질의(`resources_lines`): 질의 클래스의 MRO에서 **가장 가까운 정의**의 것만
+  남기고, MRO에 리터럴이 없으면 `self.<속성>: 이 클래스와 부모에 그 속성의 리터럴이 없다 — 못 이음(값을 가진 하위 클래스: …)` 한 줄(입력으로 안 센다). 걷기는
+  `code.resources` 줄을 읽으므로 그대로 따라온다.
+- 측정판: 보드 `batch/keyed.py` — `KeyedJob._run`이 `self.cfg.get("redis_key", self.redis_key)`, `PaletteSync`(alarm:palette)·`FeedRefSync`(feed:ref). 옛 인덱스는
+  마지막 속성(feed:ref)을 부모에 박아 `code resources PaletteSync`가 feed:ref를 보였다(RED).
+- 테스트 먼저(RED → GREEN). 스윕 +4(972). **측정 #17 전에 `code graph` 재생성 필요**(인덱스 자원이 바뀐다 — ①과 같은 이유로 한 번이면 된다).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

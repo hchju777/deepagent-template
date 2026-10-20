@@ -164,3 +164,22 @@ def test_repo_hint는_찾은_심볼이_레포_둘_이상에_걸칠_때만_레포
     assert qy.repo_hint(index, [0, 1, 2], repos, how="repo=") == ["  같은 이름이 레포 2곳에 있다 — repo=로 고른다: dt-col(collector), dt-proc(p1, p2, p3)"]
     assert qy.repo_hint(index, [1, 2], repos, how="repo=") == []                                     # 한 레포 안의 여럿은 `파일:qualname`의 몫
     assert qy.repo_hint(index, [0, 1], {}, how="--repo") == ["  같은 이름이 레포 2곳에 있다 — --repo로 고른다: dt-col(서비스 없음), dt-proc(서비스 없음)"]
+
+
+# ── R3-5f ③ — self 속성 키는 질의 클래스의 MRO로 ──
+
+async def test_resources는_self_속성_키를_질의_클래스의_MRO에서_가장_가까운_정의로_풀고_없으면_못_이음을_적는다():
+    """측정 #16 P0-c(사람 결정 10-20): `self.<속성>`은 그 클래스(없으면 가장 가까운 조상)의 클래스 속성 리터럴로 — 다른 하위 클래스의 값은 안 붙인다. 못 풀면
+    못 이음(값을 가진 하위 클래스가 무엇인지만 적는다 — 그 키를 입력으로 세지 않는다)."""
+    from tests.knowledge.test_index import KEYED, KEYED_NAMES
+
+    idx = await ix.build_index({REPO: _Src(KEYED)}, names=KEYED_NAMES, commits={REPO: "c0ffee"})
+
+    def lines(qualname):
+        return "\n".join(qy.resources_lines(idx, idx.lookup(REPO, qualname), where=lambda sid: ""))
+
+    a, b, c, base = lines("k.a.A"), lines("k.b.B"), lines("k.c.C"), lines("k.base.KeyedJob")
+    assert "k:a [rediskey]" in a and "k:b" not in a
+    assert "k:b [rediskey]" in b and "k:a" not in b                                                   # 재정의 — 가장 가까운 정의
+    assert "k:a" not in c and "k:b" not in c and "self.redis_key" in c and "못 이음" in c and "k.a.A, k.b.B" in c
+    assert "k:a" not in base and "self.redis_key" in base and "못 이음" in base

@@ -806,3 +806,23 @@ async def test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다():
     back = ix.Index.from_dict(old)
     assert [s.resources for s in back.symbols] == [s.resources for s in idx.symbols]
     assert all(len(ix.asdict_tuple(r)) == 5 for s in idx.symbols for r in s.resources)
+
+
+# ── R3-5f ③ — 클래스 속성 리터럴은 그 클래스의 것 ──
+
+KEYED = {'k/__init__.py': '', 'k/base.py': 'class KeyedJob:\n    def _run(self):\n        return self.redis.get(self.cfg.get("redis_key", self.redis_key))\n', 'k/a.py': 'from k.base import KeyedJob\n\n\nclass A(KeyedJob):\n    redis_key = "k:a"\n\n    def peek(self):\n        return self.redis.get(self.redis_key)\n', 'k/b.py': 'from k.a import A\n\n\nclass B(A):\n    redis_key = "k:b"\n', 'k/c.py': 'from k.base import KeyedJob\n\n\nclass C(KeyedJob):\n    pass\n', 'k/other.py': 'def redis_key_user(redis_key):\n    return redis_key\n'}
+KEYED_NAMES = [Name("rediskey", "k:a", "redis_key.a"), Name("rediskey", "k:b", "redis_key.b")]
+
+
+async def test_클래스_속성_리터럴은_모듈_별칭이_아니라_self_속성을_읽는_메서드에_가족_클래스마다_붙는다():
+    """측정 #16 P0-c: 부모 메서드가 `config.get("redis_key", self.<속성>)`으로 키를 고르는데, 클래스 수준 `redis_key = "<키>"`가 모듈 별칭 표에 들어가
+    (식별자당 첫 모듈이 이긴다) 그 식별자가 보이는 모든 함수에 한 하위 클래스의 키가 붙었다 — 다른 하위 클래스에 남의 키가 입력으로 실려 c-10이 `키가 없다`에서
+    멈췄다. 클래스 속성은 클래스별로 두고, `self.<속성>`을 읽는 메서드에는 그 속성을 정의한 가족 클래스(자기·조상·후손)마다 `attr:<속성>:<클래스>`로 붙인다
+    — 어느 것을 쓸지는 질의가 MRO로 고른다(`query.resources_lines`)."""
+    idx = await _index(KEYED, KEYED_NAMES)
+    run = idx.symbols[_sid(idx, "k.base.KeyedJob._run")].resources
+    assert sorted((r.name, r.direction, r.via) for r in run) == [("k:a", "reads", "attr:redis_key:k.a.A"), ("k:b", "reads", "attr:redis_key:k.b.B")]
+    peek = idx.symbols[_sid(idx, "k.a.A.peek")].resources
+    assert sorted((r.name, r.via) for r in peek) == [("k:a", "attr:redis_key:k.a.A"), ("k:b", "attr:redis_key:k.b.B")]       # 자기와 후손 — 형제 C는 아니다
+    assert idx.symbols[_sid(idx, "k.other.redis_key_user")].resources == ()                                                 # 식별자가 같아도 별칭이 아니다
+    assert idx.symbols[_sid(idx, "k.c.C")].resources == () and not any(r.via == "alias" for s in idx.symbols for r in s.resources)
