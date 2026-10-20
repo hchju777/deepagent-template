@@ -1461,12 +1461,12 @@ CASES += [
   [f"{GBT}::test_번들은_GBM_단위이고_사이트는_덮은_값_파일이다",
    "tests/knowledge/test_cli_code.py::test_사이트_파일이_없으면_GBM_값_그대로_싣고_말한다"]),
  ("덮은 값을 입혀도 엣지가 옛 노드를 가리킨다", FLW,
-  '            if node["id"] != new_id:\n                rename[node["id"]] = new_id',
-  '            if False:\n                rename[node["id"]] = new_id',
+  '            rename[old["id"]] = new_id\n            if existing is None:',
+  '            if existing is None:',
   [f"{FLT}::test_덮은_값은_같은_key_path의_노드를_이름만_바꾸고_엣지를_따라간다"]),
  ("덮은 값이 노드 이름을 안 바꾼다", FLW,
-  '            node["id"], node["label"] = new_id, value\n            continue',
-  '            continue',
+  '                old["id"], old["label"] = new_id, value\n                by_label[(kind, value)] = old',
+  '                by_label[(kind, value)] = old',
   [f"{FLT}::test_덮은_값은_같은_key_path의_노드를_이름만_바꾸고_엣지를_따라간다", CLI_GBM]),
  ("GBM 층에 없는 이름이 config 엣지 없이 든다", FLW,
   '        for svc in sorted(row.get("services") or []):\n            repo = repo_of.get(svc, "")',
@@ -1476,8 +1476,8 @@ CASES += [
   '        return [p.replace("{gbm}", self._gbm) for p in self._topology.config_paths if "{fct}" not in p]',
   '        return self._topology.resolved_config_paths(self._gbm, self._fct)',
   [f"{DCT}::test_names_for는_층을_스냅샷에서_읽고_GBM_층만으로도_뽑는다", CLI_GBM]),
- ("사이트 파일에 GBM과 같은 값도 적는다", D,
-  '            if base_by.get((n.kind, n.key_path)) == n.value:\n                continue',
+ ("사이트 파일에 GBM과 같은 값도 적는다", FLW,
+  '            if b == n.value:\n                continue',
   '            if False:\n                continue',
   [f"{DCT}::test_site_overrides는_GBM_값과_다른_것만_적는다", CLI_GBM]),
  ("사이트 층을 스냅샷 대신 show로 읽는다", D,
@@ -1516,9 +1516,9 @@ CASES += [
   '                got = await self._reader.show(known.repo, commit, path, whole=True)\n                text = got.data if',
   '                got = await self._reader.show(known.repo, commit, path)\n                text = got.data if',
   [f"{DCT}::test_스냅샷이_없으면_사이트_층도_통째로_읽는다"]),
- ("사이트 파일 행이 GBM 값을 안 든다", D,
-  '                         "base": base_by.get((n.kind, n.key_path)),',
-  '                         "base": None,',
+ ("사이트 파일 행이 GBM 값을 안 든다", FLW,
+  '            rows.append({"kind": n.kind, "key_path": n.key_path, "value": n.value, "base": b,',
+  '            rows.append({"kind": n.kind, "key_path": n.key_path, "value": n.value, "base": None,',
   [f"{DCT}::test_site_overrides는_GBM_값과_다른_것만_적는다", CLI_GBM]),
  ("자원 이름 표가 같은 값도 바꾼다", FLW,
   '        if kind and base and value and str(base) != value:',
@@ -3035,7 +3035,7 @@ CASES += [
 # ── 12a-R3-5e ① — 사이트가 덮은 같은 값의 둘째 행도 그 관계로 config 엣지 ──
 SITE_DUP_T = "tests/knowledge/test_flow.py::test_같은_값을_다른_key_path로_덮은_둘째_행도_그_관계로_config_엣지를_단다"
 CASES += [
- ("같은 값의 둘째 행에 엣지를 안 단다", FLW, "        existing = next((n for n in nodes if n[\"id\"] == new_id), None)\n        if existing is None:", "        existing = next((n for n in nodes if n[\"id\"] == new_id), None)\n        if existing is not None:\n            continue\n        if existing is None:", [SITE_DUP_T, BOARD_GONE_T]),
+ ("같은 값의 둘째 행에 엣지를 안 단다", FLW, "        if existing is None:\n            existing = {\"id\": new_id, \"label\": value, \"type\": kind, \"source_file\": \"config(site)\",", "        if existing is not None:\n            continue\n        if existing is None:\n            existing = {\"id\": new_id, \"label\": value, \"type\": kind, \"source_file\": \"config(site)\",", [SITE_DUP_T, BOARD_GONE_T]),
  ("둘째 행의 엣지를 두 번 단다", FLW, "            if any(e[\"source\"] == source and rename.get(e[\"target\"], e[\"target\"]) == new_id and e[\"relation\"] == relation\n                   and e.get(\"origin\") == \"config\" for e in links):\n                continue\n", "", [SITE_DUP_T]),
  ("측정판 사이트 층이 발행 토픽을 안 덮는다", LC, "\"consumer\": {\"group_id\": \"gumi-mx-core\", \"topic\": {\"topic3\": \"gumi.alarm.audit\"}},\n                            \"producer\": {\"topic\": {\"topic2\": \"gumi.alarm.audit\"}}}}},", "\"consumer\": {\"group_id\": \"gumi-mx-core\", \"topic\": {\"topic3\": \"gumi.alarm.audit\"}}}}},", [LC_MSG_T, BOARD_GONE_T]),
 ]
@@ -3091,7 +3091,18 @@ CASES += [
  ("verify 노드가 못 본 멈춤 상한을 안 거친다", ND, "            capped = cap_not_a_defect(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))", "            capped = cap_not_a_defect(cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk))", [UNSEEN_T]),
  ("메시지 읽기 시간을 상한에서 안 뺀다", WK, "                aside += elapsed() - before", "                aside += 0.0", [TIME_T]),
 ]
-assert len(CASES) >= 960, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5f ① — 사이트 행의 정체는 (종류, key_path, 서비스) ──
+BASE_ROW_T = "tests/knowledge/test_flow.py::test_base_있는_행은_그_값의_노드를_바꾸고_사이트_값이_이미_다른_노드면_합친다"
+SITE_ROWS_T = "tests/knowledge/test_flow.py::test_site_rows는_서비스마다_그_서비스의_GBM_값과_견준다"
+DCT_SITE_T = "tests/infrastructure/test_deployed_code.py::test_site_overrides는_GBM_값과_다른_것만_적는다"
+CASES += [
+ ("합칠 때 옛 노드를 안 뺀다", FLW, "            elif existing is not old:\n                nodes.remove(old)", "            elif existing is not old:\n                pass", [BASE_ROW_T]),
+ ("서비스별 GBM 값을 안 본다", FLW, "            b = by_service.get((n.kind, n.key_path, svc)) if svc else any_value.get((n.kind, n.key_path))", "            b = any_value.get((n.kind, n.key_path))", [SITE_ROWS_T]),
+ ("base가 갈리는 서비스를 한 행에 넣는다", FLW, "            split.setdefault(b, []).append(svc)", "            split.setdefault(None, []).append(svc)", [SITE_ROWS_T]),
+ ("site_overrides가 옛 셈을 쓴다", D, "        return flowgraph.site_rows(mine, base)", "        return [{\"kind\": n.kind, \"key_path\": n.key_path, \"value\": n.value, \"base\": None, \"services\": sorted(n.services), \"relation\": n.relation} for n in sorted(mine, key=lambda n: (n.kind, n.key_path, n.value)) if n.value not in {b.value for b in base}]", [DCT_SITE_T]),
+]
+assert len(CASES) >= 964, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -758,19 +758,10 @@ class DeployedCode(DeployedCodePort):
                  for k, n in found.items()], problems)
 
     async def site_overrides(self, fct: str, base: list[Name]) -> list[dict]:
-        """그 사이트 층이 GBM 기준(`base`)과 **다르게** 정한 값만 — `sites/<fct>.json`의 내용. 행의 `base`는 그 키의
-        GBM 값(GBM 층에 없던 키면 None): 그래프 노드는 `key_path`로 찾지만 심볼 인덱스의 함수별 자원은 이름뿐이라,
-        조사 때 인덱스 쪽도 입히려면 "무엇이 무엇으로"가 행에 있어야 한다(`flow.site_renames`)."""
+        """그 사이트 층이 GBM 기준(`base`)과 **다르게** 정한 값만 — `sites/<fct>.json`의 내용(`flow.site_rows`: 서비스마다 그 서비스의 GBM 값과
+        견준다, R3-5f ①)."""
         mine, _ = await self.names_for(fct)
-        base_by = {(n.kind, n.key_path): n.value for n in base}
-        rows = []
-        for n in sorted(mine, key=lambda n: (n.kind, n.key_path, n.value)):
-            if base_by.get((n.kind, n.key_path)) == n.value:
-                continue
-            rows.append({"kind": n.kind, "key_path": n.key_path, "value": n.value,
-                         "base": base_by.get((n.kind, n.key_path)),
-                         "services": sorted(n.services), "relation": n.relation})
-        return rows
+        return flowgraph.site_rows(mine, base)
 
     def source_for(self, repo: str) -> "_GitSource":
         """추적기(`knowledge.trace`)의 `Source` — 그 레포의 배포 커밋에서 파일과 리터럴 grep."""

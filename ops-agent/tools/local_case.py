@@ -373,6 +373,9 @@ API_FILES = {
                       "alarm_rate": {"key": "alarm:rate:{line}", "ttl": 30}},
         "api": {"alarm_window_min": 60, "badge_format": "compact"}},
     "config/factories/gumi/common.json": {"lines": LINES},
+    # 사내 모양(측정 #16 P0-b): 다른 레포가 **같은 key_path**(`producer.topic.topic2`)로 다른 사이트 전용 토픽을 선언한다 — 이름의 정체는 (종류, key_path)가
+    # 아니라 (종류, key_path, 서비스)다. key_path로 찾던 `apply_site`는 이 행으로 dt-core의 `gumi.alarm.audit` 노드 이름을 바꿔 message-gone의 발행 선언을 지웠다.
+    "config/factories/gumi/mx.json": {"infra": {"kafka": {"producer": {"topic": {"topic2": "gumi.api.audit"}}}}},
     "config/factories/sevt/common.json": {"lines": LINES},
     # 사내 핸들러 모양(2026-09 확인): 캐시 키를 먼저 보고, 비면 저장소를 조회하고, 형식 같은 것은
     # config 이름으로 getattr해 고른다. 캐시만 읽는 핸들러로는 "핸들러에서 컬렉션까지 이어지나"를 잴 수 없다.

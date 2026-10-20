@@ -1158,10 +1158,15 @@ def known_names(graph: dict | None) -> str:
 # ── 사이트 층이 덮은 값 입히기 (11e-2) ─────────────────────────────────
 
 def apply_site(graph: dict, overrides: list[dict]) -> dict:
-    """GBM 오버레이 사본에 **그 사이트의 값**을 입힌다 — 같은 `key_path`의 노드는 이름(id·label)만 바꾸고
-    엣지가 따라가며, GBM 층에 없던 이름은 새 노드로 들되 config 엣지(`declares` 또는 출처의 관계)만 단다. 같은 값이 다른 key_path로 또 오면
-    (소비·발행 토픽이 같은 값 — 사내 모양) 노드는 하나이고 엣지는 행마다(R3-5e ①).
+    """GBM 오버레이 사본에 **그 사이트의 값**을 입힌다 — `base`(그 서비스들의 GBM 값)가 있는 행은 **그 값의 노드**를 이름(id·label)만 바꾸고 엣지가
+    따라가며, base 없는 행(GBM 층에 없던 이름)은 새 노드로 들거나 이미 있는 노드에 config 엣지(`declares` 또는 출처의 관계)만 단다 — 이름 바꾸기는 하지
+    않는다(R3-5f ①, 사람 결정 10-20). 같은 값이 다른 key_path로 또 오면 노드는 하나이고 엣지는 행마다(R3-5e ①).
     코드 엣지는 못 만든다 — 그 값으로 grep한 적이 없다. 두 번 입혀도 같다(값이 같으면 바꿀 것이 없다).
+
+    왜 key_path로 찾지 않는가: 같은 key_path(`…producer.topic.default_topic`)를 두 레포가 다른 토픽으로 쓴다(사내 수집기·처리기). 측정 #16 P0-b: key_path로
+    찾으니 수집기의 base 없는 행이 처리기가 같은 key_path로 선언한 데이터 토픽 노드의 이름을 원천 토픽으로 바꿔 두 토픽이 한 노드가 됐다(발행 선언이
+    "처리기 5개", 수집기 없음, 데이터 토픽 노드 사라짐 — 사이트 행 17개가 전부 base 없음, GBM 그래프에 토픽 노드 0). 사이트 값이 이미 다른 노드로 있으면
+    옛 노드를 빼고 엣지를 옮긴다 — id가 둘인 노드를 만들지 않는다.
 
     왜 입히는가: 사이트는 "무엇을 읽고 무엇을 돌릴지"를 고르는 층이지 이름을 새로 정하는 층이 아니라 그래프는
     GBM에 하나다. 그래도 덮은 값(`gumi-mx-core`)은 그 사이트의 리드가 보는 이름이어야 한다 — 아니면
@@ -1171,26 +1176,31 @@ def apply_site(graph: dict, overrides: list[dict]) -> dict:
         return graph
     nodes = [dict(n) for n in graph.get("nodes", [])]
     links = [dict(e) for e in graph.get("links", [])]
-    by_key = {(n.get("type"), n.get("key_path")): n for n in nodes if n.get("key_path")}
+    by_label = {(n.get("type"), n.get("label")): n for n in nodes}
     repo_of = {n["label"]: n.get("repo", "") for n in nodes if n.get("type") == "service"}
     rename: dict[str, str] = {}
     for row in overrides:
         kind, key_path, value = str(row.get("kind", "")), str(row.get("key_path", "")), str(row.get("value", ""))
         if not (kind and key_path and value):
             continue
+        base = str(row.get("base") or "")
         new_id = _node_id(kind, value)
-        node = by_key.get((kind, key_path))
-        if node is not None:
-            if node["id"] != new_id:
-                rename[node["id"]] = new_id
-            node["id"], node["label"] = new_id, value
-            continue
-        existing = next((n for n in nodes if n["id"] == new_id), None)
+        existing = by_label.get((kind, value))
+        old = by_label.get((kind, base)) if base and base != value else None
+        if old is not None:
+            rename[old["id"]] = new_id
+            if existing is None:
+                old["id"], old["label"] = new_id, value
+                by_label[(kind, value)] = old
+            elif existing is not old:
+                nodes.remove(old)
+            by_label.pop((kind, base), None)
+            continue                                   # GBM 엣지가 이름을 따라간다 — 그 서비스들의 선언은 이미 거기 있다
         if existing is None:
             existing = {"id": new_id, "label": value, "type": kind, "source_file": "config(site)",
                         "source_location": "L0", "key_path": key_path}
             nodes.append(existing)
-        by_key[(kind, key_path)] = existing
+            by_label[(kind, value)] = existing
         # 같은 값을 다른 key_path(소비·발행)로 또 만나면 노드는 하나, 엣지는 **그 행의 관계로** 더 단다 — 측정 #15 P0-1: 둘째 행에서 그냥 넘어가 발행
         # 선언이 16행 전부 "없음(우리 밖)"이었다(측정판은 토픽을 사이트 층이 안 덮어 못 잡았다). 같은 (출발, 도착, 관계)의 config 엣지는 한 번 — 두 번
         # 입혀도 같고, GBM 엣지가 이름을 따라온 자리에 또 안 붙는다(도착은 바뀐 이름으로 견준다).
@@ -1208,6 +1218,32 @@ def apply_site(graph: dict, overrides: list[dict]) -> dict:
         e["source"] = rename.get(e["source"], e["source"])
         e["target"] = rename.get(e["target"], e["target"])
     return {**graph, "nodes": nodes, "links": links}
+
+
+def site_rows(mine: list[Name], base: list[Name]) -> list[dict]:
+    """그 사이트 층이 GBM 기준(`base`)과 **다르게** 정한 값만 — `sites/<fct>.json`의 행 `{kind, key_path, value, base, services, relation}`. 서비스마다
+    **그 서비스의** GBM 값과 견준다(R3-5f ①): 같은 key_path(`…producer.topic.default_topic`)를 두 레포가 다른 토픽으로 쓰므로, key_path 하나에 GBM 값
+    하나로 견주면 덮지 않은 쪽이 덮은 행이 된다(측정 #16 P0-b). 행의 `base`는 그 서비스들의 GBM 값(GBM 층에 없던 키면 None) — 그래프 노드는 그 값으로
+    찾고(`apply_site`), 인덱스의 함수별 자원은 이름뿐이라 "무엇이 무엇으로"가 행에 있어야 한다(`site_renames`). base가 갈리는 서비스들은 행을 나눈다.
+    서비스를 모르는 이름(테스트의 파일 뭉치)은 그 key_path의 아무 GBM 값과 견준다."""
+    by_service: dict[tuple[str, str, str], str] = {}
+    any_value: dict[tuple[str, str], str] = {}
+    for n in base:
+        any_value.setdefault((n.kind, n.key_path), n.value)
+        for svc in n.services:
+            by_service[(n.kind, n.key_path, svc)] = n.value
+    rows: list[dict] = []
+    for n in sorted(mine, key=lambda n: (n.kind, n.key_path, n.value)):
+        split: dict[str | None, list[str]] = {}
+        for svc in (n.services or ("",)):
+            b = by_service.get((n.kind, n.key_path, svc)) if svc else any_value.get((n.kind, n.key_path))
+            if b == n.value:
+                continue
+            split.setdefault(b, []).append(svc)
+        for b in sorted(split, key=lambda v: v or ""):
+            rows.append({"kind": n.kind, "key_path": n.key_path, "value": n.value, "base": b,
+                         "services": sorted(s for s in split[b] if s), "relation": n.relation})
+    return rows
 
 
 def site_renames(overrides: list[dict]) -> dict[tuple[str, str], str]:

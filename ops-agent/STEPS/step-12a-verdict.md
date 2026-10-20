@@ -1309,6 +1309,25 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 메모: 걷기의 30초 상한에서 `kafka.message_at` 읽기에 쓴 시간을 뺀다(`aside`) — 읽기 수 상한과 `Walk.seconds`(실제 시간)는 그대로.
 - 테스트 먼저(RED → GREEN). 스윕 +6(960), 옛 사례 둘(시간 상한·번역의 걷기 후보) 재지정. **R3-5e 끝** — 다음은 측정 #16 브리프(`code graph` 재생성 불필요).
 
+### 측정 #16(10-20)과 R3-5f
+
+측정 #16(걷기 36·LLM 15): ②·④·⑤·⑥ 작동, `not_a_defect` 1/15, length 2/18. 틀린 것 셋 — 발행 선언이 `<처리기>` 5개로 잘못(P0-b), `default_links`가 실코드
+모양에서 `{}`(P0-3), 부모 메서드의 `self.<속성>` 키가 다른 하위 클래스 값으로(P0-c). 원인·결정은 리뷰 문서 "측정 #16 결과"와 계획 문서 R3-5f.
+
+#### R3-5f ① (10-20) ✅ — 사이트 행의 정체는 (종류, key_path, 서비스): base 있는 행만 이름을 바꾼다
+
+- 사람 답(10-20): 사내 사이트 행 17개는 전부 base 없음(GBM 그래프에 토픽 노드 0). `…producer.topic.default_topic`에 처리기·배치의 데이터 토픽 행과 수집기의
+  원천 토픽 행이 차례로 와서, key_path로 노드를 찾던 `apply_site`가 데이터 토픽 노드의 이름을 원천 토픽으로 바꿨다 — 발행 선언 "처리기 5개", 수집기 없음,
+  데이터 토픽 노드 사라짐. 결정: base 없는 행은 만들거나 붙이기만, 이름 바꾸기는 하지 않는다.
+- `flow.apply_site`: `base`가 있는 행만 **그 값의 노드**를(key_path가 아니라) 이름 바꾸고(`by_label`), 사이트 값이 이미 다른 노드면 옛 노드를 빼고 엣지를
+  옮긴다(id가 둘인 노드를 안 만든다). base 없는 행은 새 노드 또는 기존 노드에 config 엣지만. `flow.site_rows`(순수 함수, `site_overrides`가 쓴다): 서비스마다
+  그 서비스의 GBM 값과 견주고 base가 갈리면 행을 나눈다 — key_path 하나에 GBM 값 하나로 견주면 같은 key_path를 다른 값으로 쓰는 두 레포 중 한쪽이 덮지
+  않았는데도 덮은 행이 됐다.
+- 측정판: dt-api의 gumi 층이 dt-core와 같은 key_path(`producer.topic.topic2`)로 사이트 전용 토픽 `gumi.api.audit`를 선언한다 — 옛 코드에서는 이 행이
+  `gumi.alarm.audit` 노드 이름을 바꿔 보드의 message-gone 홉이 `발행 선언 없음(우리 밖)`이 됐다(RED). `code graph`의 gumi 덮은 값 3 → 4.
+- 테스트 먼저(RED → GREEN). 스윕 +4(964), 옛 앵커 넷(rename 둘·`site_overrides` 둘) 재지정. **측정 #17 전에 `code graph` 재생성 필요**(`sites/<fct>.json`을
+  다시 쓴다).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

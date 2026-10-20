@@ -339,7 +339,7 @@ def test_요약과_권고():
     g = graph()
     s = flow.summary(g)
     assert s["nodes"] > 5 and s["links"] > 5 and s["repo_level"] > 0
-    assert s["unreferenced"] == 2, "line_state와 gumi 층의 감사 토픽은 config에만 있다 — 권고가 아니라 요약의 숫자다"
+    assert s["unreferenced"] == 3, "line_state와 gumi 층의 감사 토픽 둘(dt-core·dt-api)은 config에만 있다 — 권고가 아니라 요약의 숫자다"
     advice = "\n".join(flow.advise(g, TOPOLOGY))
     # 측정판은 processor/·sink/ 디렉터리로 갈리므로 공유 코드 줄이 없다. "path를 채워라"와
     # "안 쓰는 이름"은 사내에서 둘 다 틀린 권고였다 — 다시 나오면 안 된다.
@@ -824,7 +824,7 @@ def _gbm_graph() -> dict:
 
 
 def test_덮은_값은_같은_key_path의_노드를_이름만_바꾸고_엣지를_따라간다():
-    got = flow.apply_site(_gbm_graph(), [{"kind": "group", "key_path": "infra.kafka.consumer.group_id",
+    got = flow.apply_site(_gbm_graph(), [{"kind": "group", "key_path": "infra.kafka.consumer.group_id", "base": "mx-core",
                                          "value": "gumi-mx-core", "services": ["sink"], "relation": "consumes_as"}])
     ids = {n["id"]: n for n in got["nodes"]}
     assert "group_mx_core" not in ids and ids["group_gumi_mx_core"]["label"] == "gumi-mx-core"
@@ -860,7 +860,7 @@ def test_덮은_값_행은_인덱스의_자원_이름을_바꿀_표도_준다():
 
 
 def test_덮은_값_입히기는_두_번_해도_같다():
-    rows = [{"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "gumi-mx-core",
+    rows = [{"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "gumi-mx-core", "base": "mx-core",
              "services": ["sink"], "relation": "consumes_as"}]
     once = flow.apply_site(_gbm_graph(), rows)
     assert flow.apply_site(once, rows) == once
@@ -998,8 +998,73 @@ def test_같은_값을_다른_key_path로_덮은_둘째_행도_그_관계로_con
     assert flow.producing_map(got) == {"mx.alarm.main": (), "site.audit": ("sink",)}
     assert flow.apply_site(got, rows) == got
     renamed = flow.apply_site(_gbm_graph(), [
-        {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic2", "value": "site.main", "services": ["sink"], "relation": "consumes"},
+        {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic2", "value": "site.main", "base": "mx.alarm.main", "services": ["sink"], "relation": "consumes"},
         {"kind": "topic", "key_path": "infra.kafka.producer.topic.topic1", "value": "site.main", "services": ["sink"], "relation": "produces"}])
     assert [n["label"] for n in renamed["nodes"] if n["type"] == "topic"] == ["site.main"]
     assert flow.producing_map(renamed) == {"site.main": ("sink",)}
     assert len([e for e in renamed["links"] if e["relation"] == "produces"]) == 1
+
+
+# ── R3-5f ① — 사이트 행의 정체는 (종류, key_path, 서비스): base 있는 행만 이름을 바꾼다 ──
+
+def test_base_없는_행은_이름을_바꾸지_않고_같은_key_path의_다른_값은_다른_노드다():
+    """측정 #16 P0-b(사람 결정 10-20): 사내 사이트 행 17개는 전부 base 없음(GBM 그래프에 토픽 노드 0)이고 `…producer.topic.default_topic`에 <처리기>·<배치>의
+    <데이터 토픽> 행과 <수집기>의 <원천 토픽> 행이 차례로 온다 — key_path로 노드를 찾던 옛 코드는 둘째 행이 <데이터 토픽> 노드의 이름을 <원천 토픽>으로 바꿔
+    두 토픽이 한 노드가 됐다(발행 선언 "<처리기> 5개", <수집기> 없음, <데이터 토픽> 노드 사라짐). base 없는 행은 만들거나 붙이기만 한다."""
+    plain = _gbm_graph()
+    gbm = {**plain, "nodes": [n for n in plain["nodes"] if n["type"] != "topic"] + [
+        {"id": "service_proc", "label": "proc", "type": "service", "repo": "dt-core", "source_file": "dt-core", "source_location": "L0"},
+        {"id": "service_collector", "label": "collector", "type": "service", "repo": "dt-col", "source_file": "dt-col", "source_location": "L0"}],
+           "links": [e for e in plain["links"] if e["target"] != "topic_mx_alarm_main"]}
+    rows = [{"kind": "topic", "key_path": "infra.kafka.consumer.topic.fetch", "value": "src.topic", "base": None, "services": ["proc"], "relation": "consumes"},
+            {"kind": "topic", "key_path": "infra.kafka.consumer.topic.data", "value": "data.topic", "base": None, "services": ["sink"], "relation": "consumes"},
+            {"kind": "topic", "key_path": "infra.kafka.producer.topic.default", "value": "data.topic", "base": None, "services": ["proc"], "relation": "produces"},
+            {"kind": "topic", "key_path": "infra.kafka.producer.topic.default", "value": "src.topic", "base": None, "services": ["collector"], "relation": "produces"}]
+    got = flow.apply_site(gbm, rows)
+    assert sorted(n["label"] for n in got["nodes"] if n["type"] == "topic") == ["data.topic", "src.topic"]
+    assert len({n["id"] for n in got["nodes"]}) == len(got["nodes"]) == 6                   # 서비스 3 · 그룹 1 · 토픽 2
+    assert flow.producing_map(got) == {"data.topic": ("proc",), "src.topic": ("collector",)}
+    consumes = sorted((e["source"], flow.label_of(got, e["target"])) for e in got["links"] if e["relation"] == "consumes")
+    assert consumes == [("service_proc", "src.topic"), ("service_sink", "data.topic")]
+    assert flow.apply_site(got, rows) == got
+
+
+def test_base_있는_행은_그_값의_노드를_바꾸고_사이트_값이_이미_다른_노드면_합친다():
+    """이름 바꾸기는 `base`(그 서비스들의 GBM 값)가 있는 행만, key_path가 아니라 **그 값의 노드**를 — 같은 key_path를 다른 레포가 다른 값으로 쓸 수 있어서다.
+    사이트 값이 이미 다른 노드로 있으면 둘은 같은 이름이라 옛 노드를 빼고 엣지를 옮긴다(id가 둘인 노드를 만들지 않는다)."""
+    moved = flow.apply_site(_gbm_graph(), [{"kind": "topic", "key_path": "infra.kafka.consumer.topic.other", "value": "site.main", "base": "mx.alarm.main",
+                                            "services": ["sink"], "relation": "consumes"}])
+    ids = {n["id"]: n for n in moved["nodes"]}
+    assert "topic_mx_alarm_main" not in ids and ids["topic_site_main"]["label"] == "site.main" and len(moved["nodes"]) == 3
+    assert [e["target"] for e in moved["links"] if e["relation"] == "consumes"] == ["topic_site_main"]
+    first = flow.apply_site(_gbm_graph(), [{"kind": "topic", "key_path": "infra.kafka.producer.topic.topic9", "value": "site.main", "base": None,
+                                            "services": ["sink"], "relation": "produces"}])
+    assert len(first["nodes"]) == 4
+    merged_g = flow.apply_site(first, [{"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic2", "value": "site.main", "base": "mx.alarm.main",
+                                        "services": ["sink"], "relation": "consumes"}])
+    assert len(merged_g["nodes"]) == 3 and len({n["id"] for n in merged_g["nodes"]}) == 3
+    assert sorted((e["relation"], e["target"]) for e in merged_g["links"] if e["target"].startswith("topic_")) == [
+        ("consumes", "topic_site_main"), ("produces", "topic_site_main")]
+
+
+def test_site_rows는_서비스마다_그_서비스의_GBM_값과_견준다():
+    """측정 #16 P0-b의 다른 반쪽: key_path 하나에 GBM 값 하나로 견주면, 같은 key_path를 다른 값으로 쓰는 두 레포 중 한쪽이 덮지 않았는데도 덮은 행이 된다.
+    서비스마다 그 서비스의 GBM 값과; base가 갈리면 행을 나눈다; 서비스를 모르는 이름(테스트의 파일 뭉치)은 그 key_path의 아무 GBM 값과."""
+    path = "infra.kafka.producer.topic.default"
+    base = [Name("topic", "data.topic", path, "produces", services=("proc",)),
+            Name("topic", "src.topic", path, "produces", services=("collector",)),
+            Name("group", "mx-core", "infra.kafka.consumer.group_id", "consumes_as", services=("proc", "sink"))]
+    mine = [Name("topic", "data.topic", path, "produces", services=("proc",)),
+            Name("topic", "src.topic", path, "produces", services=("collector",)),
+            Name("group", "gumi-mx-core", "infra.kafka.consumer.group_id", "consumes_as", services=("proc", "sink")),
+            Name("topic", "site.audit", "infra.kafka.consumer.topic.audit", "consumes", services=("sink",))]
+    assert flow.site_rows(mine, base) == [
+        {"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "gumi-mx-core", "base": "mx-core", "services": ["proc", "sink"], "relation": "consumes_as"},
+        {"kind": "topic", "key_path": "infra.kafka.consumer.topic.audit", "value": "site.audit", "base": None, "services": ["sink"], "relation": "consumes"}]
+    both = [Name("topic", "site.x", "infra.kafka.consumer.topic.x", "consumes", services=("proc", "sink"))]
+    assert flow.site_rows(both, [Name("topic", "gbm.x", "infra.kafka.consumer.topic.x", "consumes", services=("proc",))]) == [
+        {"kind": "topic", "key_path": "infra.kafka.consumer.topic.x", "value": "site.x", "base": None, "services": ["sink"], "relation": "consumes"},
+        {"kind": "topic", "key_path": "infra.kafka.consumer.topic.x", "value": "site.x", "base": "gbm.x", "services": ["proc"], "relation": "consumes"}]
+    assert flow.site_rows([Name("group", "g2", "infra.kafka.consumer.group_id", "consumes_as")],
+                          [Name("group", "g1", "infra.kafka.consumer.group_id", "consumes_as")]) == [
+        {"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "g2", "base": "g1", "services": [], "relation": "consumes_as"}]
