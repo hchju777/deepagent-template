@@ -3146,7 +3146,15 @@ SKIP_MSG_T = "tests/application/test_walk.py::test_메시지_읽기가_한_번_�
 CASES += [
  ("실패 뒤에도 메시지를 또 읽는다", WK, "            elif message_failed:", "            elif False:", [SKIP_MSG_T]),
 ]
-assert len(CASES) >= 978, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5g ④-a — pandas 병합식 ──
+MERGE_PAIRS_T = "tests/infrastructure/test_deployed_code.py::test_merge_pairs는_pandas_병합식의_키_필드와_how를_뽑는다"
+CASES += [
+ ("병합식을 안 뽑는다", DCP, "        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == \"merge\"):\n            continue", "        if True:\n            continue", [MERGE_PAIRS_T, FILTER_T]),
+ ("키가 변수인 병합식도 뽑는다", DCP, "        if not left or not right or len(left) != len(right):\n            continue", "        if False:\n            continue", [MERGE_PAIRS_T]),
+ ("filter_lines가 병합식을 안 싣는다", DCP, "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges)", "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked)", [FILTER_T]),
+]
+assert len(CASES) >= 981, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

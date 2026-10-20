@@ -925,7 +925,10 @@ FILES = {"pipe/__init__.py": "",
          # 실코드 모양(측정 #16 P0-3): `get(<변수>)`를 품은 부모에는 기본값이 없고 기본값은 재정의에 있으며 재정의가 super()로 그 인자를 넘긴다(R3-5f ②).
          "pipe/based.py": 'class Based:\n    def _run(self, rows, shape):\n        return self.components.get(shape).apply(rows)\n',
          "pipe/overrider.py": ('from pipe.based import Based\n\n\nclass Overrider(Based):\n    def _run(self, rows, shape="shape_filter"):\n'
-                               '        return super()._run(rows, shape)\n')}
+                               '        return super()._run(rows, shape)\n'),
+         # pandas 병합식(R3-5g ④ — 사람 결정 10-20: 사내 병합식은 pandas merge). 범위 파일의 병합식을 어댑터가 뽑아 걷기에 준다.
+         "pipe/joiner.py": ('import pandas as pd\n\n\nclass Joiner:\n    def _run(self, rows, ref):\n'
+                            '        return pd.DataFrame(rows).merge(pd.DataFrame(ref), left_on="alarm_code", right_on="code").to_dict("records")\n')}
 
 
 class _FilterSrc:
@@ -996,6 +999,10 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     # 기본값 없는 부모 + 기본값 있는 재정의가 super()로 넘김(실코드 모양, R3-5f ②) — 재정의의 기본값으로 잇는다
     over = await code.filter_lines("Overrider", fields={"state": "-"})
     assert over.unlinked == [] and over.linked == ["shape_filter"] and over.files == ["pipe/overrider.py", "pipe/based.py", "pipe/shapes.py"]
+    # 범위 파일의 pandas 병합식(R3-5g ④-a) — 걷기가 두 입력의 그 필드 값이 겹치는지 센다. 병합식이 없는 클래스는 빈 목록.
+    joiner = await code.filter_lines("Joiner")
+    assert [(m.path, m.line, m.left, m.right, m.how) for m in joiner.merges] == [("pipe/joiner.py", 6, ["alarm_code"], ["code"], "inner")]
+    assert joiner.merges[0].text.startswith("return pd.DataFrame(rows).merge(") and over.merges == []
     assert "인덱스에 없다" in (await code.filter_lines("Nope", fields={})).problem
     assert "없는 서비스" in (await code.filter_lines("Job", fields={}, service="nope")).problem
     assert "없는 레포" in (await code.filter_lines("Job", fields={}, repo="nope")).problem
@@ -1136,3 +1143,20 @@ def test_get_변수는_인자_기본값_리터럴로_잇되_범위_안_호출이
     assert default_links({"v.py": "class V:\n    def _run(self, name=NAME):\n        return self.components.get(name)\n"}) == {}
     assert default_links({"v.py": "class V:\n    def _run(self):\n        name = pick()\n        return self.components.get(name)\n"}) == {}
     assert default_links({"v.py": "class V(:\n"}) == {}
+
+
+def test_merge_pairs는_pandas_병합식의_키_필드와_how를_뽑는다():
+    """측정 #17 사람 결정(10-20): P1-5 조인의 동결을 푼다 — 사내 병합식은 pandas `merge`. `on`·`left_on`/`right_on`(문자열·문자열 목록)과 `how`(없으면
+    inner)를 AST로 뽑는다. 키가 변수면 모른다(실행이 아니라 사실만). 깨진 파일은 빈 목록."""
+    from src.infrastructure.deployed_code import merge_pairs
+
+    text = ('import pandas as pd\n'
+            'def f(a, b, k):\n'
+            '    x = a.merge(b, on="ws")\n'
+            '    y = pd.merge(a, b, left_on=["ws", "d"], right_on=["code", "d"], how="left")\n'
+            '    z = a.merge(b, on=k)\n'
+            '    w = a.merge(b, left_on="ws")\n'
+            '    return x, y, z, w\n')
+    assert merge_pairs(text) == [(3, ("ws",), ("ws",), "inner", 'x = a.merge(b, on="ws")'),
+                                 (4, ("ws", "d"), ("code", "d"), "left", 'y = pd.merge(a, b, left_on=["ws", "d"], right_on=["code", "d"], how="left")')]
+    assert merge_pairs("def f(:\n") == [] and merge_pairs("") == []

@@ -183,6 +183,17 @@ class FilterHit(StrictModel):
     value: str = ""
 
 
+class MergeHit(StrictModel):
+    """pandas 병합식 한 줄(R3-5g ④ — 사람 결정 10-20: 사내 병합식은 pandas `merge`) — 어느 필드로 양쪽을 잇는지. 걷기가 그 클래스의 두 입력에서 그 필드
+    값이 겹치는지 센다(P1-5 조인: 코드 비교식이 아니라 양쪽 데이터의 키 차이로만 보이는 거름)."""
+    path: str
+    line: int
+    text: str
+    left: list[str]
+    right: list[str]
+    how: str = "inner"
+
+
 class FilterScan(StrictModel):
     """걷기의 단일값 검사 — 어댑터 안에서 한 조회의 결과(R3-4 ③, 사람 결정 10-14). 범위 = 그 입력을 읽는 클래스의 파일 + `get("X")`(리터럴)↔
     `register(component="X")`로 이은 컴포넌트 파일(config 제외). runner를 안 거치므로 읽기 상한·증거 밖이다 — 표에 적히는 것은 줄의 자리와 본문."""
@@ -193,6 +204,7 @@ class FilterScan(StrictModel):
     linked_at: list[FilterHit] = []          # 이은 컴포넌트 **클래스**의 자리(나쁜 필드 이름이 리터럴로 든 파일 먼저) — 뒤 칸
     unlinked: list[str] = []                 # 못 이은 것 — `변수 x`·`X: Cls(인덱스에 없음)`·`X(이 사이트의 등록 없음)`. 하나라도 있으면 "일부만 검사"
     problem: str = ""                        # 조회 자체가 안 됐을 때(인덱스·클래스·스냅샷) — "없음"과 다르다
+    merges: list[MergeHit] = []              # 범위 파일의 pandas 병합식들(R3-5g ④) — 걷기의 조인 검사 재료
 
 
 class Rung(StrictModel):

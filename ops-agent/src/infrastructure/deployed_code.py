@@ -34,7 +34,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from src.domain.base import Clock
-from src.domain.case import FilterHit, FilterScan
+from src.domain.case import FilterHit, FilterScan, MergeHit
 from src.domain.envelope import ProbeResult
 from src.domain.jsonpath import select
 from src.domain.ports import CodeReaderPort, DeployedCodePort
@@ -206,6 +206,38 @@ def comparison_pairs(text: str) -> list[tuple[int, str, str, str]]:
         for m in (*_FORWARD.finditer(line), *_REVERSED.finditer(line)):
             out.append((i, m.group("f1") or m.group("f2") or m.group("f3"), m.group("v"), line.strip()))
     return out
+
+
+def _str_list(node) -> tuple[str, ...]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return (node.value,)
+    if isinstance(node, (ast.List, ast.Tuple)) and node.elts and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+        return tuple(e.value for e in node.elts)
+    return ()
+
+
+def merge_pairs(text: str) -> list[tuple[int, tuple[str, ...], tuple[str, ...], str, str]]:
+    """코드의 pandas 병합식 — `(줄, 왼쪽 키 필드들, 오른쪽 키 필드들, how, 본문)`. `x.merge(y, on=…)`·`pd.merge(x, y, on=…)`, `left_on`/`right_on`, `how`(없으면
+    inner). 키가 리터럴(문자열·문자열 목록)일 때만 — 변수면 모른다(실행이 아니라 사실만). R3-5g ④(사람 결정 10-20: P1-5 조인의 동결을 푼다, 사내 병합식은
+    pandas merge). 깨진 파일은 빈 목록."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    lines = text.splitlines()
+    out: list[tuple[int, tuple[str, ...], tuple[str, ...], str, str]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "merge"):
+            continue
+        kw = {k.arg: k.value for k in node.keywords if k.arg}
+        on = _str_list(kw.get("on"))
+        left, right = _str_list(kw.get("left_on")) or on, _str_list(kw.get("right_on")) or on
+        if not left or not right or len(left) != len(right):
+            continue
+        how = kw["how"].value if isinstance(kw.get("how"), ast.Constant) and isinstance(kw["how"].value, str) else "inner"
+        body = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
+        out.append((node.lineno, left, right, how, body))
+    return sorted(out)
 
 
 def comparison_lines(text: str, field: str, value: str) -> list[tuple[int, str]]:
@@ -517,7 +549,10 @@ class DeployedCode(DeployedCodePort):
             linked_at.sort(key=lambda h: 0 if any(q in snap.get(h.path, "") for q in quoted) else 1)
         hits = [FilterHit(path=path, line=i, text=body, repo=sym.repo, field=f, value=v)
                 for path in files for i, f, v, body in comparison_pairs(snap.get(path, "")) if f in fields and fields[f] == v]
-        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked)
+        # 범위 파일의 pandas 병합식(R3-5g ④) — 걷기가 두 입력의 그 필드 값이 겹치는지 센다. 비교식과 같은 범위, 같은 사실의 종류(코드가 무엇으로 잇나).
+        merges = [MergeHit(path=path, line=i, text=body, left=list(left), right=list(right), how=how)
+                  for path in files for i, left, right, how, body in merge_pairs(snap.get(path, ""))]
+        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges)
 
     async def uses(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy

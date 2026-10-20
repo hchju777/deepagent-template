@@ -1388,6 +1388,14 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   많아야 몇 건이고, 두 번째도 실패할 확률이 높은 쪽에 베팅한다.
 - 테스트 먼저(RED → GREEN). 스윕 +1(978). `code graph`와 무관.
 
+#### R3-5g ④-a (10-20) ✅ — pandas 병합식을 어댑터가 뽑는다
+
+- 사람 결정(10-20): P1-5 조인의 동결을 푼다, 사내 병합식은 pandas `merge`. 비교식(`comparison_pairs`)과 같은 자리에서 **코드가 무엇으로 잇나**를 AST로 —
+  `deployed_code.merge_pairs`: `x.merge(y, on=…)`·`pd.merge(x, y, on=…)`, `left_on`/`right_on`(문자열·문자열 목록), `how`(없으면 inner). 키가 변수면 모른다.
+- `FilterScan.merges`(`MergeHit`: 경로·줄·본문·왼쪽 필드들·오른쪽 필드들·how) — `filter_lines`가 단일값 범위(클래스 파일 + 닿는 부모 파일 + 이은 컴포넌트
+  파일)에서 뽑는다. 걷기는 ④-b에서 쓴다.
+- 테스트 먼저(RED → GREEN). 스윕 +3(981). `code graph`와 무관.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.
