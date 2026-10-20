@@ -402,7 +402,7 @@ key_path(`default_topic`) 두 행은 데이터 토픽 행이 먼저 — 그래�
 | R3-5f ② ✅ | P0-3 | `default_links`를 이름 단위로(기본값 없는 부모 + 기본값 있는 재정의의 `super()` 전달 + 인자 없이 부르는 하위 클래스; `super()` 호출은 부모 쪽). 측정판에 그 모양 | `deployed_code` |
 | R3-5f ③ ✅ | P0-c | 인덱스: 클래스 속성 리터럴을 클래스별로(`attach_resources`의 모듈 별칭에서 뺀다), `self.<속성>` 자원은 자리표시자 + 질의 때 구체 클래스의 MRO로 해석(`resources_lines`·`filter_lines`·걷기), 못 풀면 `못 이음 — self.<속성>`. 측정판: 부모 `config.get("redis_key", self.<속성>)` + 속성이 다른 하위 클래스 둘 | `knowledge/index`, `knowledge/query`, `deployed_code` |
 | R3-5f ④ ✅ | 메모 | (사람 결정 (2) 뒤) length 뒤 재질문에 "짧게" 한 줄; c-13의 서술–component 어긋남은 기록만 | `lead`, 프롬프트 |
-| — | **측정 #17** | ①~④ 뒤. **`code graph` 재생성: 필요**(①은 `sites/<fct>.json`을 다시 쓰고 ③은 인덱스 자원이 바뀐다). 발행 선언 행·`미확인`·`일부만 검사`·`<ATR 키>` 홉·`not_a_defect`·length를 다시 잰다 | 브리프 |
+| — | **측정 #17** | ①~④ 뒤. **`code graph` 재생성: 필요**(①은 `sites/<fct>.json`을 다시 쓰고 ③은 인덱스 자원이 바뀐다). 발행 선언 행·`미확인`·`일부만 검사`·`<ATR 키>` 홉·`not_a_defect`·length를 다시 잰다 | 브리프 ✅ ([review-12a-4.md](review-12a-4.md)) |
 
 
 (옛 메모) R3-3(옛 triage — 코드가 상류를 걷는 주체 — 와 `data.value_counts`)은 ①-a의 첫 고리(대상 키 → 쓴 클래스 → 입력 키) 뒤에 둔다: 입력 키마다 있나·비었나·값 분포(c-1 원천 키 TTL -2, c-2 원천 키 컬럼 전부 '-'). B는 그대로 미룬다 — 쓴 쪽은 값에서 오므로 B의 쓰는 쪽 절반은 필요가 없어졌고, 읽는 쪽은 끝점 사슬이 한다.
