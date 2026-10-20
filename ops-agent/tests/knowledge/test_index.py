@@ -810,7 +810,7 @@ async def test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다():
 
 # ── R3-5f ③ — 클래스 속성 리터럴은 그 클래스의 것 ──
 
-KEYED = {'k/__init__.py': '', 'k/base.py': 'class KeyedJob:\n    def _run(self):\n        return self.redis.get(self.cfg.get("redis_key", self.redis_key))\n', 'k/a.py': 'from k.base import KeyedJob\n\n\nclass A(KeyedJob):\n    redis_key = "k:a"\n\n    def peek(self):\n        return self.redis.get(self.redis_key)\n', 'k/b.py': 'from k.a import A\n\n\nclass B(A):\n    redis_key = "k:b"\n', 'k/c.py': 'from k.base import KeyedJob\n\n\nclass C(KeyedJob):\n    pass\n', 'k/other.py': 'def redis_key_user(redis_key):\n    return redis_key\n'}
+KEYED = {'k/__init__.py': '', 'k/base.py': 'class KeyedJob:\n    def _run(self):\n        data = self.redis.get(self.cfg.get("redis_key", self.redis_key))\n        return data if self.mode == "material" else None\n', 'k/a.py': 'from k.base import KeyedJob\n\n\nclass A(KeyedJob):\n    redis_key = "k:a"\n    mode = "material"\n\n    def peek(self):\n        return self.redis.get(self.redis_key)\n', 'k/b.py': 'from k.a import A\n\n\nclass B(A):\n    redis_key = "k:b"\n', 'k/c.py': 'from k.base import KeyedJob\n\n\nclass C(KeyedJob):\n    pass\n', 'k/d.py': 'from k.base import KeyedJob\n\n\nclass D(KeyedJob):\n    mode = "k:b"\n', 'k/other.py': 'def redis_key_user(redis_key):\n    return redis_key\n'}
 KEYED_NAMES = [Name("rediskey", "k:a", "redis_key.a"), Name("rediskey", "k:b", "redis_key.b")]
 
 
@@ -821,8 +821,21 @@ async def test_클래스_속성_리터럴은_모듈_별칭이_아니라_self_속
     — 어느 것을 쓸지는 질의가 MRO로 고른다(`query.resources_lines`)."""
     idx = await _index(KEYED, KEYED_NAMES)
     run = idx.symbols[_sid(idx, "k.base.KeyedJob._run")].resources
-    assert sorted((r.name, r.direction, r.via) for r in run) == [("k:a", "reads", "attr:redis_key:k.a.A"), ("k:b", "reads", "attr:redis_key:k.b.B")]
+    assert sorted((r.name, r.direction, r.via) for r in run) == [
+        ("k:a", "reads", "attr:redis_key:k.a.A"), ("k:b", "reads", "attr:mode:k.d.D"), ("k:b", "reads", "attr:redis_key:k.b.B")]
     peek = idx.symbols[_sid(idx, "k.a.A.peek")].resources
     assert sorted((r.name, r.via) for r in peek) == [("k:a", "attr:redis_key:k.a.A"), ("k:b", "attr:redis_key:k.b.B")]       # 자기와 후손 — 형제 C는 아니다
     assert idx.symbols[_sid(idx, "k.other.redis_key_user")].resources == ()                                                 # 식별자가 같아도 별칭이 아니다
     assert idx.symbols[_sid(idx, "k.c.C")].resources == () and not any(r.via == "alias" for s in idx.symbols for r in s.resources)
+
+
+async def test_클래스_속성_리터럴은_자원이_아니어도_클래스_심볼에_남고_빈_리터럴은_정의가_아니다():
+    """측정 #17 작은 결함: 자원 아닌 리터럴(`"material"`)로 정의한 자기 속성이 "없음"으로 보였다 — 후보가 config 이름뿐이라서. 리터럴은 전부 클래스 심볼에
+    남겨 질의가 "풀렸으나 자원 아님"을 가른다(R3-5g ①). JSON으로 나갔다 와도 같다. 빈 문자열은 자리표시자라 정의가 아니다."""
+    idx = await _index(KEYED, KEYED_NAMES)
+    assert idx.symbols[_sid(idx, "k.a.A")].consts == (("mode", "material"), ("redis_key", "k:a"))
+    assert idx.symbols[_sid(idx, "k.b.B")].consts == (("redis_key", "k:b"),) and idx.symbols[_sid(idx, "k.base.KeyedJob")].consts == ()
+    again = ix.Index.from_dict(json.loads(json.dumps(idx.to_dict())))
+    assert again.symbols[_sid(again, "k.a.A")].consts == (("mode", "material"), ("redis_key", "k:a"))
+    blank = await _index({**KEYED, "k/e.py": 'from k.base import KeyedJob\n\n\nclass E(KeyedJob):\n    redis_key = ""\n'}, KEYED_NAMES)
+    assert blank.symbols[_sid(blank, "k.e.E")].consts == ()

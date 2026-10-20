@@ -82,6 +82,9 @@ class Symbol:
     signature: str = ""
     parse_error: str = ""                       # module만. 파싱 실패도 모듈이다 — 커버리지는 전수여야 한다
     resources: tuple[Resource, ...] = ()        # function·method만. 함수별 자원 참조(방향 포함)
+    # class만. 클래스 수준 `NAME = "리터럴"` 전부(자원 이름이 아니어도, 빈 문자열은 빼고) — `self.<속성>` 자원을 질의 클래스의 MRO로 풀 때 "정의는 있는데
+    # 자원이 아니다"를 가르는 재료(R3-5g ①, 측정 #17: 자기 속성이 `"material"`인 클래스가 못 이음으로 보였다).
+    consts: tuple[tuple[str, str], ...] = ()
     # function·method만. (줄, 호출식, 사유) — 못 푼 호출과 `getattr(` 자리. 끝점 사슬을 인덱스에서 만들 때(6d-3)
     # 추적기가 남기던 "못 따라감"을 같게 내려면 집계(6b-0)만으로는 안 되고 함수에 남아 있어야 한다.
     unresolved: tuple[tuple[int, str, str], ...] = ()
@@ -190,7 +193,7 @@ class Index:
     def to_dict(self) -> dict:
         return {"commits": dict(self.commits),
                 "symbols": [{**asdict(s), "resources": [list(r) for r in map(asdict_tuple, s.resources)],
-                             "decorators": list(s.decorators)} for s in self.symbols],
+                             "decorators": list(s.decorators), "consts": [list(c) for c in s.consts]} for s in self.symbols],
                 "edges": [asdict(e) for e in self.edges],
                 "gaps": list(self.gaps), "unresolved": dict(self.unresolved),
                 "unresolved_shapes": {k: dict(v) for k, v in self.unresolved_shapes.items()},
@@ -205,6 +208,7 @@ class Index:
             d["resources"] = tuple(Resource(*r[:5]) for r in d.get("resources", []))
             d["decorators"] = tuple(d.get("decorators", ()))
             d["unresolved"] = tuple(tuple(u) for u in d.get("unresolved", ()))
+            d["consts"] = tuple(tuple(c) for c in d.get("consts", ()))                 # R3-5g ① 전 번들엔 없다 — 빈 튜플
             symbols.append(Symbol(**d))
         edges = [Edge(**e) for e in data.get("edges", [])]
         return cls(symbols=symbols, edges=edges, commits=dict(data.get("commits", {})),
@@ -383,13 +387,14 @@ class _Collector:
                 self._func(st, owner_qual, class_)
             elif class_ is not None and isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name):
                 class_.attr_annotations[st.target.id] = st.annotation
-                if isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
+                if isinstance(st.value, ast.Constant) and isinstance(st.value.value, str) and st.value.value:
                     class_.attr_consts[st.target.id] = st.value.value
             elif class_ is not None and isinstance(st, ast.Assign):
                 # 클래스 속성 리터럴은 **그 클래스의 것**이지 모듈 별칭이 아니다(R3-5f ③). 측정 #16 P0-c: 모듈 별칭 표(식별자당 첫 모듈이 이긴다)로 두니
                 # 부모의 `config.get("redis_key", self.redis_key)`에 한 하위 클래스의 키가 박혀 형제 클래스에 남의 키가 입력으로 실렸다.
+                # 빈 문자열은 자리표시자지 값이 아니다(R3-5g ①) — 정의로 세면 "풀렸다"가 되어 하위 클래스의 값을 못 본다.
                 for t in st.targets:
-                    if isinstance(t, ast.Name) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str):
+                    if isinstance(t, ast.Name) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str) and st.value.value:
                         class_.attr_consts[t.id] = st.value.value
             elif isinstance(st, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
                 # `if TYPE_CHECKING:`·`try: import` 아래의 정의도 심볼이다.
@@ -408,6 +413,8 @@ class _Collector:
         if outer is None and owner_qual == self.mod.fqn:
             self.mod.defs[node.name] = sym.id
         self._walk_body(node.body, owner_qual=qual, class_=cls)
+        if cls.attr_consts:
+            self.index.symbols[sym.id] = replace(self.index.symbols[sym.id], consts=tuple(sorted(cls.attr_consts.items())))
 
     def _func(self, node: ast.AST, owner_qual: str, class_: _Class | None, *, outer: "_Func | None" = None) -> None:
         qual = f"{owner_qual}.{node.name}"

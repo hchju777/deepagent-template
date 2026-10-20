@@ -247,9 +247,13 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
         lines.append(f"  부모 클래스의 자원 포함: {', '.join(index.symbols[b].qualname for b in bases)}"
                      + (f" · 진입에서 안 닿은 부모 메서드 {skipped}개 뺌" if skipped else ""))
     # `self.<속성>`으로 고른 자원(`attr:<속성>:<클래스>`, R3-5f ③)은 **이 클래스의 MRO에서 가장 가까운 정의**의 것만 — 측정 #16 P0-c: 형제 클래스의 키가 입력으로
-    # 실렸다. MRO에 그 속성의 리터럴이 없으면 못 이음(어느 하위 클래스가 값을 가졌는지만 적는다).
+    # 실렸다. 정의는 `Symbol.consts`(자원 아닌 리터럴도)로 본다(R3-5g ①, 측정 #17: 자기 속성이 `"material"`인 클래스가 못 이음으로 보였다) — 가장 가까운
+    # 정의가 자원이 아니면 풀린 것이라 줄이 없고, MRO에 정의가 없을 때만 못 이음(값을 가진 다른 클래스만 적는다). `consts`가 없는 옛 번들은 후보 중 가장 가까운 것.
     root = sid if s.kind == "class" else s.class_id
-    order = [index.symbols[c].qualname for c in ([root] + (bases if s.kind == "class" else ancestors(index, root)))] if root is not None else []
+    chain = [root] + (bases if s.kind == "class" else ancestors(index, root)) if root is not None else []
+    order = [index.symbols[c].qualname for c in chain]
+    consts = {index.symbols[c].qualname: dict(index.symbols[c].consts) for c in chain}
+    legacy = not any(consts.values())
     seen: dict[tuple[str, str, str], tuple[int, int]] = {}
     unresolved: dict[str, set[str]] = {}
     for mid in members:
@@ -262,7 +266,7 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
             seen.setdefault((r.direction, r.kind, r.name), (mid, r.line))
         for attr, cands in by_attr.items():
             owners = {o for o, _ in cands}
-            nearest = next((q for q in order if q in owners), None)
+            nearest = next((q for q in order if ((q in owners) if legacy else (attr in consts[q]))), None)
             if nearest is None:
                 unresolved.setdefault(attr, set()).update(owners)
                 continue
@@ -276,7 +280,7 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
         lines.append(f"  {label} {len(rows)}:")
         lines += [f"    {name} [{kind}] — {display(index, mid, line)}" for (_, kind, name), (mid, line) in rows[:cap]]
     for attr, owners in sorted(unresolved.items()):
-        lines.append(f"  self.{attr}: 이 클래스와 부모에 그 속성의 리터럴이 없다 — 못 이음(값을 가진 하위 클래스: {', '.join(sorted(owners))})")
+        lines.append(f"  self.{attr}: 이 클래스와 부모에 그 속성의 리터럴이 없다 — 못 이음(자원 값을 가진 다른 클래스: {', '.join(sorted(owners))})")
     if not seen:
         lines.append(f"  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 {len(members)}개 (키를 조립식으로 만들면 텍스트로는 못 찾는다)")
     return lines

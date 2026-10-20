@@ -194,18 +194,19 @@ class SummaryRefresh:
 
 
 class KeyedJob:
-    redis_key = ""
-
     def _run(self):
-        return json.loads(self.redis.get(self.cfg.get("redis_key", self.redis_key)) or "{}")
+        data = json.loads(self.redis.get(self.cfg.get("redis_key", self.redis_key)) or "{}")
+        return data if self.mode == "material" else {}
 
 
 class PaletteSync(KeyedJob):
     redis_key = "alarm:palette"
+    mode = "material"
 
 
 class FeedRefSync(KeyedJob):
     redis_key = "feed:ref"
+    mode = "feed:ref"
 ''',
     # 제목에 '/'가 든 배지의 요약 키를 쓰는 배치 클래스(R3-5b ①) — 요약 키 이름을 메시지에 실어 보낸다.
     "batch/rate.py": '''"""증감 배지 요약을 다시 만든다 — 원천 키를 읽고 요약 키 이름을 메시지에 실어 보낸다."""

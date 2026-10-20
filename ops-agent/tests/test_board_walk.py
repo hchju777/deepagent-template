@@ -285,3 +285,5 @@ def test_클래스_속성으로_키를_고르는_부모_메서드는_하위_클�
     assert "alarm:palette [rediskey]" in palette and "feed:ref" not in palette
     assert "feed:ref [rediskey]" in feed and "alarm:palette" not in feed
     assert "self.redis_key" in parent and "못 이음" in parent and "feed:ref [rediskey]" not in parent
+    # R3-5g ①(측정 #17 작은 결함): 자기 속성이 자원 아닌 리터럴(`mode = "material"`)이면 풀린 것 — 형제가 그 속성에 키 이름을 써도 줄도 못 이음도 없다
+    assert "self.mode" not in palette and "self.mode" in parent and "값을 가진 다른 클래스" in parent and "하위 클래스" not in parent

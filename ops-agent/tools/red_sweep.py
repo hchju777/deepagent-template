@@ -3131,7 +3131,16 @@ CASES += [
  ("length 뒤에도 같은 질문을 그대로 보낸다", LD, "            asked = brief_prompt(prompt) if shorten else prompt", "            asked = prompt", [EMPTY_RETRY_T]),
  ("깨진 긴 답의 재질문에 짧게를 안 붙인다", LD, "            if shorten:\n                asked = brief_prompt(asked)", "            if False:\n                asked = brief_prompt(asked)", [CUT_RETRY_T]),
 ]
-assert len(CASES) >= 974, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5g ① — 속성 리터럴은 자원이 아니어도 정의다 ──
+CONSTS_T = "tests/knowledge/test_index.py::test_클래스_속성_리터럴은_자원이_아니어도_클래스_심볼에_남고_빈_리터럴은_정의가_아니다"
+LEGACY_ATTR_T = "tests/knowledge/test_query.py::test_옛_번들에_속성_리터럴이_없으면_전처럼_후보_중_가장_가까운_것을_고른다"
+CASES += [
+ ("속성 리터럴을 클래스 심볼에 안 둔다", IDX, "        if cls.attr_consts:\n            self.index.symbols[sym.id] = replace(self.index.symbols[sym.id], consts=tuple(sorted(cls.attr_consts.items())))", "        if False:\n            self.index.symbols[sym.id] = replace(self.index.symbols[sym.id], consts=tuple(sorted(cls.attr_consts.items())))", [CONSTS_T, QUERY_ATTR_T]),
+ ("자원 아닌 정의를 못 이음으로 센다", QRY, "            nearest = next((q for q in order if ((q in owners) if legacy else (attr in consts[q]))), None)", "            nearest = next((q for q in order if q in owners), None)", [QUERY_ATTR_T, BOARD_ATTR_T]),
+ ("옛 번들에서 전부 못 이음으로 본다", QRY, "    legacy = not any(consts.values())", "    legacy = False", [LEGACY_ATTR_T]),
+]
+assert len(CASES) >= 977, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

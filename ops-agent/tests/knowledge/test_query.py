@@ -183,3 +183,20 @@ async def test_resources는_self_속성_키를_질의_클래스의_MRO에서_가
     assert "k:b [rediskey]" in b and "k:a" not in b                                                   # 재정의 — 가장 가까운 정의
     assert "k:a" not in c and "k:b" not in c and "self.redis_key" in c and "못 이음" in c and "k.a.A, k.b.B" in c
     assert "k:a" not in base and "self.redis_key" in base and "못 이음" in base
+    # R3-5g ①(측정 #17 작은 결함): 자기 속성이 자원 아닌 리터럴이면 풀린 것 — 줄도 못 이음도 없다. 형제(D)가 그 속성에 키 이름을 써도 안 섞인다.
+    assert "self.mode" not in a and "self.mode" not in b
+    assert "self.mode" in c and "값을 가진 다른 클래스: k.d.D" in c and "하위 클래스" not in c
+    assert "self.mode" in base and "k.d.D" in base
+
+
+async def test_옛_번들에_속성_리터럴이_없으면_전처럼_후보_중_가장_가까운_것을_고른다():
+    """`Symbol.consts`가 없는 번들(R3-5g ① 전) — `code graph`를 다시 만들기 전까지는 R3-5f ③의 규칙(후보 중 MRO에서 가장 가까운 것, 없으면 못 이음) 그대로."""
+    from tests.knowledge.test_index import KEYED, KEYED_NAMES
+
+    idx = await ix.build_index({REPO: _Src(KEYED)}, names=KEYED_NAMES, commits={REPO: "c0ffee"})
+    data = idx.to_dict()
+    for s in data["symbols"]:
+        s.pop("consts", None)
+    old = ix.Index.from_dict(data)
+    a = "\n".join(qy.resources_lines(old, old.lookup(REPO, "k.a.A"), where=lambda sid: ""))
+    assert "k:a [rediskey]" in a and "k:b" not in a and "self.mode" in a and "못 이음" in a
