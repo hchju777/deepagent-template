@@ -3161,7 +3161,7 @@ JOIN_WALK_T = "tests/application/test_walk.py::test_걷기는_병합식의_두_�
 BOARD_JOIN_T = "tests/test_board_walk.py::test_조인_변형은_이벤트_행과_기준표가_각각_정상인데_병합이_0건이라_두_홉이_나쁨이고_첫_칸은_병합_줄이다"
 CASES += [
  ("겹침이 있어도 짝 없음으로 본다", WK, "                if a_ev == b_ev or pair in done or not a_keys or not b_keys or (a_keys & b_keys):", "                if a_ev == b_ev or pair in done or not a_keys or not b_keys:", [JOIN_CHECK_T]),
- ("조인 결과로 홉을 나쁨으로 안 바꾼다", WK, "                    hops[at] = hops[at].model_copy(update={\"bad\": True, \"status\": f\"나쁨 — 병합 짝 없음: {note} ({merge.path}:L{merge.line}) · \"", "                    hops[at] = hops[at].model_copy(update={\"bad\": False, \"status\": f\"나쁨 — 병합 짝 없음: {note} ({merge.path}:L{merge.line}) · \"", [JOIN_WALK_T, BOARD_JOIN_T]),
+ ("조인 결과로 홉을 나쁨으로 안 바꾼다", WK, "                    hops[at] = hops[at].model_copy(update={\"bad\": True, \"status\": f\"나쁨 — {what}: {text} ({merge.path}:L{merge.line}) · \"", "                    hops[at] = hops[at].model_copy(update={\"bad\": False, \"status\": f\"나쁨 — {what}: {text} ({merge.path}:L{merge.line}) · \"", [JOIN_WALK_T, BOARD_JOIN_T]),
  ("조인 멈춤 사유를 안 쓴다", WK, "        if ev in joined_at and ev not in walked_at and ev not in failed_at:\n            # 병합 0건(④-b)", "        if False:\n            # 병합 0건(④-b)", [JOIN_WALK_T, BOARD_JOIN_T]),
  ("나빠진 입력의 쓴 쪽으로 안 걷는다", WK, "                        frontier += [(w_, b, depth + 1, ev_, None, pointer_of(_unwrap(raw_)) if raw_ is not None else {}) for b in next_branches]", "                        pass", [JOIN_WALK_T]),
 ]
@@ -3175,7 +3175,20 @@ CASES += [
  ("키 필드 없는 병합식의 주를 안 남긴다", WK, "            if read_inputs:\n                # 키 필드를 가진 입력 행이 없는 병합식", "            if False:\n                # 키 필드를 가진 입력 행이 없는 병합식", [UNMATCHED_T]),
  ("키 필드가 없는 쪽을 안 가른다", WK, "        out.append((m, \"양쪽\" if not left_ok and not right_ok else \"왼쪽\" if not left_ok else \"오른쪽\"))", "        out.append((m, \"양쪽\"))", [UNMATCHED_T]),
 ]
-assert len(CASES) >= 989, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5h ② — 이어진 호출의 채움값을 거르는 줄 ──
+FILL_PAIRS_T = "tests/infrastructure/test_deployed_code.py::test_merge_pairs는_pandas_병합식의_키_필드와_how를_뽑는다"
+FILL_FIELDS_T = "tests/application/test_walk.py::test_fill_fields는_보존_안_되는_쪽_입력의_열을_채움값_후보로_하고_같은_이름의_키는_뺀다"
+FILL_WALK_T = "tests/application/test_walk.py::test_inner가_아닌_병합의_겹침_0에_이어진_호출의_채움값을_거르는_줄이_있으면_두_홉이_나쁨이고_멈춤은_병합_뒤_채움값이다"
+BOARD_OUTER_T = "tests/test_board_walk.py::test_조인_outer_변형은_행이_남지만_짝_없는_행의_채움값을_거르는_줄이_있어_두_홉이_나쁨이고_첫_칸은_그_거르는_줄이다"
+CASES += [
+ ("이어진 호출의 문자열 인자를 안 뽑는다", D, "        out.append((node.lineno, left, right, how, body, chained.get(id(node))))", "        out.append((node.lineno, left, right, how, body, None))", [FILL_PAIRS_T, BOARD_OUTER_T]),
+ ("문자열 인자가 둘인 호출도 이어진 호출로 본다", D, "            if len(literals) == 1:", "            if literals:", [FILL_PAIRS_T]),
+ ("채움값 조회를 안 한다", WK, "                    if merge.chained and lookup is not None:", "                    if False:", [FILL_WALK_T, BOARD_OUTER_T]),
+ ("채움값 거르는 줄을 첫 칸으로 안 댄다", WK, "            if first is not None:\n                # 채움값을 거르는 줄(R3-5h ②)이 먼저", "            if False:\n                # 채움값을 거르는 줄(R3-5h ②)이 먼저", [FILL_WALK_T, BOARD_OUTER_T]),
+ ("합쳐진 키 열도 채움 후보로 본다", WK, "    coalesced = {f for f, g in zip(merge.left, merge.right) if f == g}", "    coalesced = set()", [FILL_FIELDS_T, FILL_WALK_T]),
+]
+assert len(CASES) >= 994, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

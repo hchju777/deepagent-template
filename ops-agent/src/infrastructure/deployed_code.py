@@ -216,16 +216,23 @@ def _str_list(node) -> tuple[str, ...]:
     return ()
 
 
-def merge_pairs(text: str) -> list[tuple[int, tuple[str, ...], tuple[str, ...], str, str]]:
-    """코드의 pandas 병합식 — `(줄, 왼쪽 키 필드들, 오른쪽 키 필드들, how, 본문)`. `x.merge(y, on=…)`·`pd.merge(x, y, on=…)`, `left_on`/`right_on`, `how`(없으면
-    inner). 키가 리터럴(문자열·문자열 목록)일 때만 — 변수면 모른다(실행이 아니라 사실만). R3-5g ④(사람 결정 10-20: P1-5 조인의 동결을 푼다, 사내 병합식은
-    pandas merge). 깨진 파일은 빈 목록."""
+def merge_pairs(text: str) -> list[tuple[int, tuple[str, ...], tuple[str, ...], str, str, tuple[str, str] | None]]:
+    """코드의 pandas 병합식 — `(줄, 왼쪽 키 필드들, 오른쪽 키 필드들, how, 본문, 이어진 호출)`. `x.merge(y, on=…)`·`pd.merge(x, y, on=…)`, `left_on`/`right_on`,
+    `how`(없으면 inner). 키가 리터럴(문자열·문자열 목록)일 때만 — 변수면 모른다(실행이 아니라 사실만). R3-5g ④(사람 결정 10-20: P1-5 조인의 동결을 푼다,
+    사내 병합식은 pandas merge). 이어진 호출은 병합식 결과에 바로 붙은 `.<이름>(…)` 중 문자열 인자가 꼭 하나인 것 — `(이름, 그 문자열)`, 없으면 None
+    (R3-5h ②: 채움값 후보. 호출 이름은 정하지 않는다). 깨진 파일은 빈 목록."""
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
         return []
     lines = text.splitlines()
-    out: list[tuple[int, tuple[str, ...], tuple[str, ...], str, str]] = []
+    chained: dict[int, tuple[str, str]] = {}
+    for call in ast.walk(tree):
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Call):
+            literals = [a.value for a in (*call.args, *(k.value for k in call.keywords)) if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            if len(literals) == 1:
+                chained[id(call.func.value)] = (call.func.attr, literals[0])
+    out: list[tuple[int, tuple[str, ...], tuple[str, ...], str, str, tuple[str, str] | None]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "merge"):
             continue
@@ -236,7 +243,7 @@ def merge_pairs(text: str) -> list[tuple[int, tuple[str, ...], tuple[str, ...], 
             continue
         how = kw["how"].value if isinstance(kw.get("how"), ast.Constant) and isinstance(kw["how"].value, str) else "inner"
         body = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
-        out.append((node.lineno, left, right, how, body))
+        out.append((node.lineno, left, right, how, body, chained.get(id(node))))
     return sorted(out)
 
 
@@ -550,8 +557,8 @@ class DeployedCode(DeployedCodePort):
         hits = [FilterHit(path=path, line=i, text=body, repo=sym.repo, field=f, value=v)
                 for path in files for i, f, v, body in comparison_pairs(snap.get(path, "")) if f in fields and fields[f] == v]
         # 범위 파일의 pandas 병합식(R3-5g ④) — 걷기가 두 입력의 그 필드 값이 겹치는지 센다. 비교식과 같은 범위, 같은 사실의 종류(코드가 무엇으로 잇나).
-        merges = [MergeHit(path=path, line=i, text=body, left=list(left), right=list(right), how=how)
-                  for path in files for i, left, right, how, body in merge_pairs(snap.get(path, ""))]
+        merges = [MergeHit(path=path, line=i, text=body, left=list(left), right=list(right), how=how, chained=follow)
+                  for path in files for i, left, right, how, body, follow in merge_pairs(snap.get(path, ""))]
         return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges)
 
     async def uses(self, name: str, service: str = "") -> ProbeResult:

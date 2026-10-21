@@ -192,6 +192,9 @@ class MergeHit(StrictModel):
     left: list[str]
     right: list[str]
     how: str = "inner"
+    # 결과에 바로 이어진 호출(이름, 문자열 인자 하나) — 채움값 **후보**(R3-5h ②, 측정 #18 P0-a: outer 병합 뒤 짝 없는 칸을 채운 값을 같은 파일의 비교식이
+    # 거른다). 호출 이름은 정하지 않는다 — 어느 호출이든 그 값이 비교식에 있을 때만 뜻이 있고, 걷기가 그것을 가린다.
+    chained: tuple[str, str] | None = None
 
 
 class FilterScan(StrictModel):

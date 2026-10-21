@@ -1003,6 +1003,7 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     joiner = await code.filter_lines("Joiner")
     assert [(m.path, m.line, m.left, m.right, m.how) for m in joiner.merges] == [("pipe/joiner.py", 6, ["alarm_code"], ["code"], "inner")]
     assert joiner.merges[0].text.startswith("return pd.DataFrame(rows).merge(") and over.merges == []
+    assert joiner.merges[0].chained == ("to_dict", "records")                                     # 이어진 호출(R3-5h ②) — 후보일 뿐, 걷기가 비교식으로 가린다
     assert "인덱스에 없다" in (await code.filter_lines("Nope", fields={})).problem
     assert "없는 서비스" in (await code.filter_lines("Job", fields={}, service="nope")).problem
     assert "없는 레포" in (await code.filter_lines("Job", fields={}, repo="nope")).problem
@@ -1156,7 +1157,15 @@ def test_merge_pairs는_pandas_병합식의_키_필드와_how를_뽑는다():
             '    y = pd.merge(a, b, left_on=["ws", "d"], right_on=["code", "d"], how="left")\n'
             '    z = a.merge(b, on=k)\n'
             '    w = a.merge(b, left_on="ws")\n'
-            '    return x, y, z, w\n')
-    assert merge_pairs(text) == [(3, ("ws",), ("ws",), "inner", 'x = a.merge(b, on="ws")'),
-                                 (4, ("ws", "d"), ("code", "d"), "left", 'y = pd.merge(a, b, left_on=["ws", "d"], right_on=["code", "d"], how="left")')]
+            '    v = a.merge(b, on="ws", how="outer").pipe(fill_blanks, "-")\n'
+            '    u = a.merge(b, on="ws").to_dict("records")\n'
+            '    t = a.merge(b, on="ws").replace("x", "y")\n'
+            '    return x, y, z, w, v, u, t\n')
+    # 결과에 바로 이어진 호출의 문자열 인자 하나(R3-5h ②) — 채움값 후보. 호출 이름은 정하지 않는다(어느 호출이든 그 값이 비교식에 있을 때만 뜻이 있다);
+    # 문자열 인자가 둘이면 모른다.
+    assert merge_pairs(text) == [(3, ("ws",), ("ws",), "inner", 'x = a.merge(b, on="ws")', None),
+                                 (4, ("ws", "d"), ("code", "d"), "left", 'y = pd.merge(a, b, left_on=["ws", "d"], right_on=["code", "d"], how="left")', None),
+                                 (7, ("ws",), ("ws",), "outer", 'v = a.merge(b, on="ws", how="outer").pipe(fill_blanks, "-")', ("pipe", "-")),
+                                 (8, ("ws",), ("ws",), "inner", 'u = a.merge(b, on="ws").to_dict("records")', ("to_dict", "records")),
+                                 (9, ("ws",), ("ws",), "inner", 't = a.merge(b, on="ws").replace("x", "y")', None)]
     assert merge_pairs("def f(:\n") == [] and merge_pairs("") == []

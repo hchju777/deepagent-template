@@ -278,3 +278,14 @@ def test_join_empty_변형은_이벤트_행의_키가_전부_비고_원천_묶�
     assert events and all(e["alarm_code"] == "" for e in events)
     assert _value(s, "alarm:raw:L1") == {"metadata": {"event_type": "SourceJoiner"}, "rows": []}
     assert '.merge(ref, left_on="alarm_code", right_on="code", how="inner")' in CORE_FILES["common/joiner_pd.py"]
+
+
+def test_join_outer_변형은_이벤트_행의_키가_전부_비고_쓴_쪽이_outer_병합_뒤_채움값을_거르는_SourceOuterJoiner다():
+    """측정 #18 P0-a(R3-5h ②): outer 병합 + 이어진 채움 호출 + 그 값을 거르는 줄 — 결과가 비지 않는데 거르는 줄이 비운다."""
+    from tools.local_case import CORE_FILES
+
+    s = _seeds(datetime(2026, 10, 15, 9, 0, 0), "join-outer")
+    assert all(e["alarm_code"] == "" for e in _value(s, "feed:events:L1"))
+    assert _value(s, "alarm:raw:L1") == {"metadata": {"event_type": "SourceOuterJoiner"}, "rows": []}
+    src = CORE_FILES["common/joiner_outer.py"]
+    assert 'how="outer").pipe(fill_blanks, "-")' in src and '(merged["code"] != "-") & (merged["alarm_code"] != "-")' in src

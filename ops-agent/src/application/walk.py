@@ -72,6 +72,23 @@ def join_unmatched(merges, inputs) -> list[tuple[Any, str]]:
     return out
 
 
+def fill_fields(merge, left_rows: list, right_rows: list) -> tuple[dict[str, str], dict[str, str]]:
+    """채움값 후보 열(R3-5h ②) — 이어진 호출의 문자열을 받는 열은 보존 안 되는 쪽 입력의 열이다: left면 오른쪽, right면 왼쪽, outer면 양쪽. 양쪽 이름이 같은
+    키는 하나로 합쳐져 채워지지 않으니 뺀다. → ({열: 채움값}, {열: 왼쪽|오른쪽}). 이어진 호출이 없으면 둘 다 빈 사전."""
+    if not merge.chained:
+        return {}, {}
+    value = merge.chained[1]
+    left_cols = {k for r in left_rows if isinstance(r, dict) for k in r}
+    right_cols = {k for r in right_rows if isinstance(r, dict) for k in r}
+    coalesced = {f for f, g in zip(merge.left, merge.right) if f == g}
+    sides: dict[str, str] = {}
+    if merge.how in ("right", "outer"):
+        sides.update({c: "왼쪽" for c in left_cols - coalesced})
+    if merge.how in ("left", "outer"):
+        sides.update({c: "오른쪽" for c in right_cols - coalesced})
+    return {c: value for c in sorted(sides)}, sides
+
+
 def join_check(merges, inputs) -> list[tuple[tuple[str, str], tuple[str, str], str, Any]]:
     """조인 검사(R3-5g ④-b, P1-5 — 사람 결정 10-20): 병합식마다 그 키 필드를 가진 두 입력의 값 집합이 겹치는지. 안 겹치면 `((왼쪽 라벨, 증거), (오른쪽 라벨,
     증거), 문구, 병합식)`. 왼쪽 키 필드를 전부 가진 행이 있는 입력이 왼쪽, 오른쪽 키 필드를 가진 **다른** 입력이 오른쪽 — 변수를 따라가지 않는다(필드 이름이
@@ -356,7 +373,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     partial: set[str] = set()                                                               # 입력을 다 못 본 가지 — 그 홉의 증거(일부만 검사한 입력이 있다)
     pointerless: set[str] = set()                                                           # 입력을 못 본 가지 중 포인터도 없는 것 — 그 홉의 증거(④)
     pointed_at: dict[str, tuple[str, Any, Any]] = {}                                        # 메시지 홉의 증거 → (토픽, 보존 시작, 끝)
-    joined_at: dict[str, tuple[Any, str]] = {}                                              # 병합 짝 없음으로 나빠진 홉의 증거 → (병합식, 문구)(④-b)
+    joined_at: dict[str, tuple[Any, str, str, tuple[str, int] | None]] = {}                 # 병합으로 나빠진 홉의 증거 → (병합식, 문구, 멈춤 머리, 거르는 줄)(④-b·R3-5h ②)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
     # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
@@ -534,19 +551,31 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if merges and not stopped:
             # 조인 검사(④-b, P1-5): 병합식의 키 필드로 두 입력의 값이 겹치는지 — 안 겹치면 두 홉이 나쁨이고, 읽을 때는 정상이라 안 낸 가지(아는 쓴 쪽)를 지금 낸다.
             for (a_label, a_ev), (b_label, b_ev), note, merge in join_check(merges, read_inputs):
+                head, what, text, first = "병합이 0건", "병합 짝 없음", note, None
                 if merge.how != "inner":
                     # inner가 아니면 겹침 0이어도 행은 남는다(측정 #18 P0-b: left 병합의 겹침 0이 가짜 나쁨 6행 — c-1이 `키가 없다` 대신 읽기 상한까지).
-                    # 사실은 주로만.
-                    remember(f"{writer}: {note} — {merge.how} 병합이라 행은 남는다 ({merge.path}:L{merge.line})")
-                    continue
+                    # 사실은 주로만 — 결과에 바로 이어진 호출이 빈 칸을 채우고 **그 값을 거르는 줄이 범위에 있을 때만**(P0-a: 작업자 배지 — outer 병합 뒤
+                    # '-' 채움을 같은 파일의 비교식이 거른다) 두 홉이 나쁨이다. 채워지는 열은 보존 안 되는 쪽의 열(`fill_fields`), 조회는 단일값 검사와 같은 조회.
+                    filled = None
+                    if merge.chained and lookup is not None:
+                        fields, sides = fill_fields(merge, next(e[2] for e in read_inputs if e[1] == a_ev), next(e[2] for e in read_inputs if e[1] == b_ev))
+                        scan = await lookup(writer, fields=fields, **branch.params) if fields else None
+                        if scan is not None and scan.hits:
+                            hit, (call, value) = scan.hits[0], merge.chained
+                            filled = (f"{note} → {merge.how} 병합이라 행은 남고 짝 없는 행의 {hit.field}({sides.get(hit.field, '?')} 열) 값이 {value!r}"
+                                      f"({call}({value!r})) · 이 값을 거르는 줄 {hit.path}:L{hit.line} '{hit.text}'", (hit.path, hit.line))
+                    if filled is None:
+                        remember(f"{writer}: {note} — {merge.how} 병합이라 행은 남는다 ({merge.path}:L{merge.line})")
+                        continue
+                    head, what, (text, first) = "병합 뒤 채움값을 거른다", "병합 뒤 채움값", filled
                 for ev_ in (a_ev, b_ev):
                     at = next((i for i, h in enumerate(hops) if h.evidence_id == ev_), None)
                     if at is None or hops[at].bad:
                         continue
                     old = hops[at].status
-                    hops[at] = hops[at].model_copy(update={"bad": True, "status": f"나쁨 — 병합 짝 없음: {note} ({merge.path}:L{merge.line}) · "
+                    hops[at] = hops[at].model_copy(update={"bad": True, "status": f"나쁨 — {what}: {text} ({merge.path}:L{merge.line}) · "
                                                                                     + (old[len("정상 — "):] if old.startswith("정상 — ") else old)})
-                    joined_at[ev_] = (merge, note)
+                    joined_at[ev_] = (merge, text, head, first)
                     _, _, _, w_, raw_, name_ = next(e for e in read_inputs if e[1] == ev_)
                     if w_:
                         next_branches, shown_, cands_ = branches(w_, name_)
@@ -570,11 +599,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if ev in joined_at and ev not in walked_at and ev not in failed_at:
             # 병합 0건(④-b) — 짝 없는 입력의 쓴 쪽으로 더 걸었으면 멈춤은 전처럼 거기(그쪽 입력의 사유 — 홉 상태에 병합이 남는다). 더 못 걸었으면(쓴 쪽
             # 모름·메시지) 사유는 병합이고 첫 칸은 병합 줄(그 클래스의 레포), 그다음은 전처럼 그 입력의 칸.
-            merge, note = joined_at[ev]
+            merge, text, head, first = joined_at[ev]
             owner = walked_at.get(stop_hop.parent)
-            stopped = f"병합이 0건 — {owner.writer if owner else '?'}: {note} ({merge.path}:L{merge.line})"
-            rungs.append(Rung(action="code.read", params={"service": owner.scope if owner else "", "path": merge.path, "line": merge.line},
-                              evidence=owner.res_id if owner else ev))
+            stopped = f"{head} — {owner.writer if owner else '?'}: {text} ({merge.path}:L{merge.line})"
+            scope_, gev = (owner.scope, owner.res_id) if owner else ("", ev)
+            if first is not None:
+                # 채움값을 거르는 줄(R3-5h ②)이 먼저 — 리드가 먼저 볼 곳은 그 비교식을 품은 함수다(단일값 비교식과 같은 자리). 그다음이 병합 줄.
+                rungs.append(Rung(action="code.read", params={"service": scope_, "path": first[0], "line": first[1]}, evidence=gev))
+            rungs.append(Rung(action="code.read", params={"service": scope_, "path": merge.path, "line": merge.line}, evidence=gev))
             if stop_hop.kind == "message":
                 rungs.append(Rung(action="kafka.tail", params={"topic": stop_hop.key.split("[", 1)[0], "limit": 5}, evidence=ev))
             else:

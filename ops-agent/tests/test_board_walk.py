@@ -29,7 +29,8 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
-VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty")
+VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
+            "join-outer")
 
 
 def _repo(root, url, files):
@@ -302,3 +303,21 @@ def test_조인_변형은_이벤트_행과_기준표가_각각_정상인데_병�
     assert rows[6] == f"feed:ref | — | 나쁨 — 병합 짝 없음: {note} (common/joiner_pd.py:L{n}) · codes: 행 3 · 필드 2" and len(rows) == 7
     assert stopped == f"병합이 0건 — SourceJoiner: {note} (common/joiner_pd.py:L{n})"
     assert rungs[0] == f"code.read line={n} path='common/joiner_pd.py' service='batch'" and rungs[1] == "code.uses name='feed:events:{line}'"
+
+
+def test_조인_outer_변형은_행이_남지만_짝_없는_행의_채움값을_거르는_줄이_있어_두_홉이_나쁨이고_첫_칸은_그_거르는_줄이다(board, monkeypatch):
+    """측정 #18 P0-a(R3-5h ②): 사내 작업자 배지의 실제 모양 — outer 병합이라 병합 결과는 비지 않고, 결과에 바로 이어진 호출이 짝 없는 칸을 '-'로 채우며 같은
+    파일의 비교식이 그 값을 거른다. 걷기는 채워지는 열을 채움값으로 단일값 조회해 그 줄을 찾는다. 멈춤 `병합 뒤 채움값을 거른다 — <클래스>: …`, 칸은 거르는
+    줄 → 병합 줄 → 입력 칸."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "join-outer")
+    m, f = _at("common/joiner_outer.py", ".merge("), _at("common/joiner_outer.py", '!= "-"')
+    text = ("feed:events:L1.alarm_code {''} ↔ feed:ref.code {'A110', 'A111', 'A112'} 겹침 0 (outer 병합) → outer 병합이라 행은 남고 짝 없는 행의 code(오른쪽 열) "
+            f"값이 '-'(pipe('-')) · 이 값을 거르는 줄 common/joiner_outer.py:L{f} 'rows = merged[(merged[\"code\"] != \"-\") & (merged[\"alarm_code\"] != \"-\")].to_dict(\"records\")'")
+    assert rows[:5] == ["alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data)",
+                        "alarm:domain:L1 | DomainBuilder [batch] | 빈 배열 (record)", PALETTE_ROW, SOURCE_ROW,
+                        "alarm:raw:L1 | SourceOuterJoiner [dt-core(서비스 3개 공유)] | 빈 배열 (rows)"]
+    assert rows[5].startswith(f"feed:events:L1 | — | 나쁨 — 병합 뒤 채움값: {text} (common/joiner_outer.py:L{m}) · 행 4 · 필드 2 · 모든 행이 같은 값: alarm_code=''")
+    assert rows[6] == f"feed:ref | — | 나쁨 — 병합 뒤 채움값: {text} (common/joiner_outer.py:L{m}) · codes: 행 3 · 필드 2" and len(rows) == 7
+    assert stopped == f"병합 뒤 채움값을 거른다 — SourceOuterJoiner: {text} (common/joiner_outer.py:L{m})" and not any("겹침" in n for n in notes)
+    assert rungs[:3] == [f"code.read line={f} path='common/joiner_outer.py' service='batch'", f"code.read line={m} path='common/joiner_outer.py' service='batch'",
+                         "code.uses name='feed:events:{line}'"]

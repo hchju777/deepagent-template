@@ -761,3 +761,51 @@ async def test_병합식의_키_필드를_가진_입력_행이_없으면_겹침�
     assert [side for _, side in join_unmatched([both, right, MergeHit(path="w0.py", line=1, text="", left=["n"], right=["ws"])], inputs)] == ["양쪽", "오른쪽"]
     # 왼쪽만 없는 병합식
     assert [side for _, side in join_unmatched([MergeHit(path="w0.py", line=2, text="", left=["zz"], right=["ws"])], inputs)] == ["왼쪽"]
+
+
+# ── R3-5h ② — inner 아닌 병합의 겹침 0 + 이어진 호출의 채움값을 거르는 줄 ──
+
+def test_fill_fields는_보존_안_되는_쪽_입력의_열을_채움값_후보로_하고_같은_이름의_키는_뺀다():
+    from src.application.walk import fill_fields
+    from src.domain.case import MergeHit
+
+    left_rows, right_rows = [{"ws": "", "n": 1}], [{"ws": "A", "name": "x"}]
+    on_ws = dict(path="w0.py", line=5, text="", left=["ws"], right=["ws"], chained=("pipe", "-"))
+    assert fill_fields(MergeHit(how="left", **on_ws), left_rows, right_rows) == ({"name": "-"}, {"name": "오른쪽"})
+    assert fill_fields(MergeHit(how="right", **on_ws), left_rows, right_rows) == ({"n": "-"}, {"n": "왼쪽"})
+    assert fill_fields(MergeHit(how="outer", **on_ws), left_rows, right_rows) == ({"n": "-", "name": "-"}, {"n": "왼쪽", "name": "오른쪽"})
+    # 이름이 다른 키는 둘 다 열로 남는다; 이어진 호출이 없으면 후보 없음
+    diff = MergeHit(path="w0.py", line=5, text="", left=["ws"], right=["code"], how="outer", chained=("pipe", "-"))
+    assert fill_fields(diff, [{"ws": ""}], [{"code": "A"}]) == ({"code": "-", "ws": "-"}, {"ws": "왼쪽", "code": "오른쪽"})
+    assert fill_fields(MergeHit(path="w0.py", line=5, text="", left=["ws"], right=["ws"], how="outer"), left_rows, right_rows) == ({}, {})
+
+
+async def test_inner가_아닌_병합의_겹침_0에_이어진_호출의_채움값을_거르는_줄이_있으면_두_홉이_나쁨이고_멈춤은_병합_뒤_채움값이다():
+    """측정 #18 P0-a: 작업자 배지의 핵심 병합은 outer이고 결과에 바로 이어진 호출이 빈 칸을 '-'로 채우며 같은 파일의 비교식이 그 값을 거른다 — 결과가 비지
+    않으니 "빈 결과"가 아니라 "짝 없는 행의 그 열이 전부 채움값"이 사실이고, 그것이 비교식과 이어진다. 채워지는 열(보존 안 되는 쪽의 열)을 채움값으로
+    단일값 조회해 거르는 줄이 있을 때만 두 홉 나쁨; 멈춤 `병합 뒤 채움값을 거른다`, 칸은 거르는 줄 → 병합 줄 → 입력 칸. 거르는 줄이 없으면 ①의 주뿐."""
+    from src.domain.case import FilterHit, MergeHit
+
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("ref:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(rows=[{"ws": "", "n": 1}, {"ws": "", "n": 2}]),
+             ("redis.get", "ref:L1"): _value(codes=[{"ws": "A"}, {"ws": "B"}])}
+    merge = MergeHit(path="w0.py", line=5, text="pd.merge(a, b, on='ws', how='outer').pipe(fill_blanks, '-')", left=["ws"], right=["ws"], how="outer",
+                     chained=("pipe", "-"))
+    hit = FilterHit(path="w0.py", line=9, text='rows = rows[rows["n"] != "-"]', repo="r", field="n", value="-")
+    lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[merge]), ("W0", (("n", "-"),)): FilterScan(files=["w0.py"], checked=["n"], hits=[hit])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
+    by_key = {h.key: h for h in walk.hops}
+    text = ("in:a:L1.ws {''} ↔ ref:L1.ws {'A', 'B'} 겹침 0 (outer 병합) → outer 병합이라 행은 남고 짝 없는 행의 n(왼쪽 열) 값이 '-'(pipe('-')) · "
+            "이 값을 거르는 줄 w0.py:L9 'rows = rows[rows[\"n\"] != \"-\"]'")
+    assert by_key["in:a:L1"].bad and by_key["in:a:L1"].status.startswith(f"나쁨 — 병합 뒤 채움값: {text} (w0.py:L5) · rows: 행 2")
+    assert by_key["ref:L1"].bad and by_key["ref:L1"].status.startswith(f"나쁨 — 병합 뒤 채움값: {text} (w0.py:L5) · codes: 행 2")
+    assert walk.stopped == f"병합 뒤 채움값을 거른다 — W0: {text} (w0.py:L5)" and walk.notes == []
+    assert [(r.action, r.params) for r in walk.rungs][:3] == [("code.read", {"service": "", "path": "w0.py", "line": 9}),
+                                                                ("code.read", {"service": "", "path": "w0.py", "line": 5}),
+                                                                ("code.uses", {"name": "in:a:{line}"})]
+    assert [c for c in lookup.calls if c[1] == {"n": "-"}] == [("W0", {"n": "-"}, {})]                   # 채움값 조회는 채워지는 열만(합쳐진 키 ws는 빼고)
+    # 거르는 줄이 없으면 나쁨이 아니다 — ①의 주만
+    plain = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[merge])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=plain, clock=lambda: T0))["walk"]
+    assert not any(h.bad for h in walk.hops[1:]) and walk.stopped == "입력이 다 정상 — W0"
+    assert walk.notes == ["W0: in:a:L1.ws {''} ↔ ref:L1.ws {'A', 'B'} 겹침 0 (outer 병합) — outer 병합이라 행은 남는다 (w0.py:L5)"]
