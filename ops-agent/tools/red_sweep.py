@@ -3173,7 +3173,7 @@ CASES += [
  ("inner 아닌 병합의 겹침 0도 나쁨으로 본다", WK, "                if merge.how != \"inner\":", "                if False:", [NONINNER_T]),
  ("inner 아닌 겹침 0의 주를 안 남긴다", WK, "                    remember(f\"{writer}: {note} — {merge.how} 병합이라 행은 남는다 ({merge.path}:L{merge.line})\")", "                    pass", [NONINNER_T]),
  ("키 필드 없는 병합식의 주를 안 남긴다", WK, "            if read_inputs:\n                # 키 필드를 가진 입력 행이 없는 병합식", "            if False:\n                # 키 필드를 가진 입력 행이 없는 병합식", [UNMATCHED_T]),
- ("키 필드가 없는 쪽을 안 가른다", WK, "        out.append((m, \"양쪽\" if not left_ok and not right_ok else \"왼쪽\" if not left_ok else \"오른쪽\"))", "        out.append((m, \"양쪽\"))", [UNMATCHED_T]),
+ ("키 필드가 없는 쪽을 안 가른다", WK, "            side = \"양쪽\" if not lefts and not rights else \"왼쪽\" if not lefts else \"오른쪽\"", "            side = \"양쪽\"", [UNMATCHED_T]),
 ]
 
 # ── 12a-R3-5h ② — 이어진 호출의 채움값을 거르는 줄 ──
@@ -3196,7 +3196,14 @@ CASES += [
  ("root_cause의 증거 id를 basis로 안 옮긴다", LD, "        return {**data, \"root_cause\": None, \"basis\": basis + [i for i in ids if i not in basis],", "        return {**data, \"root_cause\": None, \"basis\": basis,", [CAUSE_T]),
  ("옮긴 것을 caveat에 안 남긴다", LD, "                \"caveats\": [*(caveats or []), CAUSE_MOVED]}", "                \"caveats\": [*(caveats or [])]}", [CAUSE_T]),
 ]
-assert len(CASES) >= 997, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5i ① — 양쪽 키 필드를 가진 행이 한 입력에만 ──
+SAMEIN_T = "tests/application/test_walk.py::test_양쪽_키_필드를_가진_행이_한_입력에만_있으면_짝이_없어_못_센다는_주가_남고_값이_전부_None이면_그것도_적는다"
+CASES += [
+ ("같은 입력뿐인 키 필드를 못 센다로 안 적는다", WK, "        if any(a_ev != b_ev for _, a_ev, _ in lefts for _, b_ev, _ in rights):\n            continue", "        if True:\n            continue", [SAMEIN_T]),
+ ("한 입력뿐일 때 값 전부 None을 안 적는다", WK, "        tail = f\"({'·'.join(nones)} 값 전부 None)\" if nones else \"\"", "        tail = \"\"", [SAMEIN_T]),
+]
+assert len(CASES) >= 999, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

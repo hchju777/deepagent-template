@@ -61,14 +61,25 @@ def _keyed(inputs, fields) -> list[tuple[str, str, set]]:
 
 
 def join_unmatched(merges, inputs) -> list[tuple[Any, str]]:
-    """키 필드를 가진 입력 행이 없는 병합식과 그쪽(`왼쪽`·`오른쪽`·`양쪽`) — 겹침을 못 센 사실(R3-5h ①, 측정 #18 P0-a: 작업자 배지의 병합식이 안 세어진
-    까닭이 변환 뒤 이름이 달라서일 수 있다 — 다음 판이 보이게)."""
+    """겹침을 못 센 병합식과 그 까닭(R3-5h ①·R3-5i ①) — 키 필드를 가진 입력 행이 한쪽에 없거나(`… 입력 행이 <왼쪽·오른쪽·양쪽>에 없다`), 양쪽 키 필드를
+    가진 행이 한 입력에만 있어 짝이 안 나오거나(`… 행이 한 입력 <라벨>에만 있다(<쪽> 값 전부 None)`). 측정 #19 P0-a: 작업자 배지는 오른쪽 키 필드를 왼쪽
+    입력의 전 행이 None으로 가진다 — 진짜 오른쪽은 열 이름이 변환을 거친 메시지라 AST 사실로는 못 잇는다(사람 결정 10-21: 이름 규칙 없이 여기까지)."""
     out = []
     for m in merges:
-        left_ok, right_ok = bool(_keyed(inputs, m.left)), bool(_keyed(inputs, m.right))
-        if left_ok and right_ok:
+        fields = f"키 필드({'+'.join(m.left)} ↔ {'+'.join(m.right)})"
+        lefts, rights = _keyed(inputs, m.left), _keyed(inputs, m.right)
+        if not lefts or not rights:
+            side = "양쪽" if not lefts and not rights else "왼쪽" if not lefts else "오른쪽"
+            out.append((m, f"{fields}를 가진 입력 행이 {side}에 없다"))
             continue
-        out.append((m, "양쪽" if not left_ok and not right_ok else "왼쪽" if not left_ok else "오른쪽"))
+        if any(a_ev != b_ev for _, a_ev, _ in lefts for _, b_ev, _ in rights):
+            continue
+        # 양쪽 키 필드를 가진 행이 한 입력에만 있다 — 짝이 안 나온다. 그 입력에서 한쪽 값이 전부 None이면 그 사실도(열은 있으나 비어 있다).
+        label = lefts[0][0]
+        nones = [side for side, found in (("왼쪽", lefts), ("오른쪽", rights))
+                 if all(all(v is None for v in keys) for _, _, key_set in found for keys in key_set)]
+        tail = f"({'·'.join(nones)} 값 전부 None)" if nones else ""
+        out.append((m, f"{fields}를 가진 행이 한 입력 {label}에만 있다{tail}"))
     return out
 
 
@@ -583,9 +594,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         frontier += [(w_, b, depth + 1, ev_, None, pointer_of(_unwrap(raw_)) if raw_ is not None else {}) for b in next_branches]
             if read_inputs:
                 # 키 필드를 가진 입력 행이 없는 병합식(측정 #18 P0-a의 다른 가능성 — 변환 뒤 이름이 다르면 겹침을 못 센다). 읽은 입력이 없으면 "입력을 모른다"가 말한다.
-                for merge, side in join_unmatched(merges, read_inputs):
-                    remember(f"{writer}: 병합식 {merge.path}:L{merge.line}의 키 필드({'+'.join(merge.left)} ↔ {'+'.join(merge.right)})를 가진 입력 행이 "
-                             f"{side}에 없다 — 겹침을 못 센다")
+                for merge, why in join_unmatched(merges, read_inputs):
+                    remember(f"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} — 겹침을 못 센다")
         # 이 클래스가 실제로 읽은 입력과 못 본 입력 — 멈춘 자리가 이 클래스면 사유가 여기서 나온다. 다음 칸은 읽기가 있었으면(실패한 읽기도) 읽는 메서드,
         # 읽은 입력이 없으면("모른다") 클래스 본문. 메시지만 읽은 클래스(인덱스 자원 0)는 읽는 메서드 줄이 없어 클래스 본문이다.
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),
