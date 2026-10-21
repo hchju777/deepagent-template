@@ -718,3 +718,46 @@ async def test_걷기는_병합식의_두_입력이_안_겹치면_둘_다_나쁨
     walk = (await run_walk(_state(), runner=_Reads(flat), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
     assert walk.stopped == f"병합이 0건 — W0: {note} (w0.py:L5)"
     assert [r.action for r in walk.rungs][:2] == ["code.read", "code.uses"] and walk.rungs[0].params == {"service": "", "path": "w0.py", "line": 5}
+
+
+# ── R3-5h ① — 병합 짝 없음은 inner만, 나머지는 주 ──
+
+async def test_inner가_아닌_병합의_겹침_0은_나쁨이_아니라_주로만_남고_걷기는_전처럼_멈춘다():
+    """측정 #18 P0-b: `병합 짝 없음 … (left 병합)` 6행이 가짜 나쁨 — left 병합은 겹침 0이어도 왼쪽 행이 남는다(c-1이 `키가 없다` 대신 읽기 상한까지 갔다).
+    나쁨은 inner만. inner 아닌 겹침 0은 사실이라 주(`주:` 줄)에 남기고 홉·멈춤은 그대로다."""
+    from src.domain.case import MergeHit
+
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("ref:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(rows=[{"ws": "", "n": 1}, {"ws": "", "n": 2}]),
+             ("redis.get", "ref:L1"): _value(codes=[{"ws": "A"}, {"ws": "B"}])}
+    for how in ("left", "outer"):
+        merge = MergeHit(path="w0.py", line=5, text=f"pd.merge(a, b, on='ws', how='{how}')", left=["ws"], right=["ws"], how=how)
+        lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[merge])})
+        walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
+        by_key = {h.key: h for h in walk.hops}
+        assert not by_key["in:a:L1"].bad and not by_key["ref:L1"].bad and by_key["in:a:L1"].status.startswith("정상 — rows: 행 2")
+        assert walk.stopped == "입력이 다 정상 — W0"
+        assert walk.notes == [f"W0: in:a:L1.ws {{''}} ↔ ref:L1.ws {{'A', 'B'}} 겹침 0 ({how} 병합) — {how} 병합이라 행은 남는다 (w0.py:L5)"]
+
+
+async def test_병합식의_키_필드를_가진_입력_행이_없으면_겹침을_못_센다는_주가_남는다():
+    """측정 #18 P0-a의 다른 가능성: 작업자 배지의 병합식이 안 세어진 것이 "키 필드가 읽은 입력 행에 없어서"일 수 있다(변환 뒤 이름이 다르다) — 다음 판이
+    그것을 보이게 한다. 어느 쪽이 없는지까지. 읽은 입력이 없으면(입력을 모른다) 이 주는 없다."""
+    from src.application.walk import join_unmatched
+    from src.domain.case import MergeHit
+
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("ref:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(rows=[{"ws": "", "n": 1}, {"ws": "", "n": 2}]),
+             ("redis.get", "ref:L1"): _value(codes=[{"ws": "A"}, {"ws": "B"}])}
+    both = MergeHit(path="w0.py", line=5, text="pd.merge(a, b, on='code')", left=["code"], right=["code"])
+    right = MergeHit(path="w0.py", line=9, text="pd.merge(a, b, left_on='ws', right_on='code')", left=["ws"], right=["code"])
+    lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[both, right])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
+    assert not any(h.bad for h in walk.hops[1:]) and walk.stopped == "입력이 다 정상 — W0"
+    assert walk.notes == ["W0: 병합식 w0.py:L5의 키 필드(code ↔ code)를 가진 입력 행이 양쪽에 없다 — 겹침을 못 센다",
+                          "W0: 병합식 w0.py:L9의 키 필드(ws ↔ code)를 가진 입력 행이 오른쪽에 없다 — 겹침을 못 센다"]
+    inputs = [("ev", "e1", [{"ws": "", "n": 1}], "", None, "ev"), ("ref", "e2", [{"id": "A"}], "", None, "ref")]
+    # 양쪽 다 가진 병합식(n ↔ ws — 같은 입력이 양쪽이어도 된다)은 목록에 없다
+    assert [side for _, side in join_unmatched([both, right, MergeHit(path="w0.py", line=1, text="", left=["n"], right=["ws"])], inputs)] == ["양쪽", "오른쪽"]
+    # 왼쪽만 없는 병합식
+    assert [side for _, side in join_unmatched([MergeHit(path="w0.py", line=2, text="", left=["zz"], right=["ws"])], inputs)] == ["왼쪽"]

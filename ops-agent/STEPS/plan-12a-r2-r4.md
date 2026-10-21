@@ -444,7 +444,7 @@ outer면 양쪽; 양쪽 이름이 같은 키는 하나로 합쳐져 제외)을 �
 
 | 순서 | 항목 | 할 것 | 자리 |
 |---|---|---|---|
-| R3-5h ① | P0-b | 걷기: `병합 짝 없음`은 inner만 나쁨; left/right/outer의 겹침 0은 주; 키 필드를 가진 입력 행이 없으면 주(겹침을 못 센다) | `walk` |
+| R3-5h ① ✅ | P0-b | 걷기: `병합 짝 없음`은 inner만 나쁨; left/right/outer의 겹침 0은 주; 키 필드를 가진 입력 행이 없으면 주(겹침을 못 센다) | `walk` |
 | R3-5h ② | P0-a | 어댑터: `merge(…).<호출>(<문자열>)` → `MergeHit.fill`; 걷기: inner 아닌 겹침 0 + fill → 채워지는 열을 채움값으로 단일값 조회, 거르는 줄이 있으면 두 홉 `나쁨 — 병합 뒤 채움값`, 멈춤 `병합 뒤 채움값을 거른다`, 칸은 거르는 줄 → 병합 줄 → 입력 칸; 측정판 `join-outer` | `deployed_code`, `walk`, `tools/local_case` |
 | R3-5h ③ | P0-c | `ConcludeReply`: not_a_defect의 root_cause를 코드가 비우고 증거 id를 basis로, caveat 한 줄 | `lead` |
 | — | **측정 #19** | ①~③ 뒤. **`code graph` 재생성: 불필요**(인덱스 변경 없음). config 그대로(16K). 작업자 배지의 `병합 뒤 채움값`·주 줄, c-1의 `키가 없다`, c-10·c-12의 `not_a_defect` 통과를 본다 | 브리프 |

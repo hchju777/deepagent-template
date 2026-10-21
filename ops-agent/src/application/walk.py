@@ -50,6 +50,28 @@ def _shown_keys(keys: set) -> str:
     return "{" + ", ".join(repr(k[0] if len(k) == 1 else k) for k in shown) + (", …" if len(keys) > 3 else "") + "}"
 
 
+def _keyed(inputs, fields) -> list[tuple[str, str, set]]:
+    """그 필드를 전부 가진 행이 있는 입력들 — (라벨, 증거, 그 필드 값(묶음)의 집합)."""
+    found = []
+    for label, ev, rows, *_ in inputs:
+        with_fields = [r for r in rows if isinstance(r, dict) and all(f in r for f in fields)]
+        if with_fields:
+            found.append((label, ev, {tuple(_hashable(r.get(f)) for f in fields) for r in with_fields}))
+    return found
+
+
+def join_unmatched(merges, inputs) -> list[tuple[Any, str]]:
+    """키 필드를 가진 입력 행이 없는 병합식과 그쪽(`왼쪽`·`오른쪽`·`양쪽`) — 겹침을 못 센 사실(R3-5h ①, 측정 #18 P0-a: 작업자 배지의 병합식이 안 세어진
+    까닭이 변환 뒤 이름이 달라서일 수 있다 — 다음 판이 보이게)."""
+    out = []
+    for m in merges:
+        left_ok, right_ok = bool(_keyed(inputs, m.left)), bool(_keyed(inputs, m.right))
+        if left_ok and right_ok:
+            continue
+        out.append((m, "양쪽" if not left_ok and not right_ok else "왼쪽" if not left_ok else "오른쪽"))
+    return out
+
+
 def join_check(merges, inputs) -> list[tuple[tuple[str, str], tuple[str, str], str, Any]]:
     """조인 검사(R3-5g ④-b, P1-5 — 사람 결정 10-20): 병합식마다 그 키 필드를 가진 두 입력의 값 집합이 겹치는지. 안 겹치면 `((왼쪽 라벨, 증거), (오른쪽 라벨,
     증거), 문구, 병합식)`. 왼쪽 키 필드를 전부 가진 행이 있는 입력이 왼쪽, 오른쪽 키 필드를 가진 **다른** 입력이 오른쪽 — 변수를 따라가지 않는다(필드 이름이
@@ -58,15 +80,8 @@ def join_check(merges, inputs) -> list[tuple[tuple[str, str], tuple[str, str], s
     out: list[tuple[tuple[str, str], tuple[str, str], str, Any]] = []
     done: set[frozenset] = set()
     for m in merges:
-        def keyed(fields):
-            found = []
-            for label, ev, rows, *_ in inputs:
-                with_fields = [r for r in rows if isinstance(r, dict) and all(f in r for f in fields)]
-                if with_fields:
-                    found.append((label, ev, {tuple(_hashable(r.get(f)) for f in fields) for r in with_fields}))
-            return found
-        for a_label, a_ev, a_keys in keyed(m.left):
-            for b_label, b_ev, b_keys in keyed(m.right):
+        for a_label, a_ev, a_keys in _keyed(inputs, m.left):
+            for b_label, b_ev, b_keys in _keyed(inputs, m.right):
                 pair = frozenset((a_ev, b_ev))
                 if a_ev == b_ev or pair in done or not a_keys or not b_keys or (a_keys & b_keys):
                     continue
@@ -195,6 +210,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     owners = declared_by or {}
     producers = topic_producers or {}
     notes: list[str] = []
+
+    def remember(note: str) -> None:
+        if note not in notes:
+            notes.append(note)
+
     tasks: list[PlanTask] = []
     evidence: list[EvidenceRef] = []
     started = clock() if clock is not None else None
@@ -267,8 +287,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             note = (f"{writer}는 레포 {len(found)}곳({shown})에 있다 — {template}을 선언한 쪽으로 못 가른다"
                     f"({'둘 다 선언' if picked else '선언 없음'}): {'둘 다 걷는다' if walking else '둘 다 후보'}")
             result = found, shown, tuple(x for _, s in found for x in s)
-        if note not in notes:
-            notes.append(note)
+        remember(note)
         return result
 
     def branches(writer: str, template: str) -> tuple[list[_Branch], str, tuple[str, ...]]:
@@ -515,6 +534,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if merges and not stopped:
             # 조인 검사(④-b, P1-5): 병합식의 키 필드로 두 입력의 값이 겹치는지 — 안 겹치면 두 홉이 나쁨이고, 읽을 때는 정상이라 안 낸 가지(아는 쓴 쪽)를 지금 낸다.
             for (a_label, a_ev), (b_label, b_ev), note, merge in join_check(merges, read_inputs):
+                if merge.how != "inner":
+                    # inner가 아니면 겹침 0이어도 행은 남는다(측정 #18 P0-b: left 병합의 겹침 0이 가짜 나쁨 6행 — c-1이 `키가 없다` 대신 읽기 상한까지).
+                    # 사실은 주로만.
+                    remember(f"{writer}: {note} — {merge.how} 병합이라 행은 남는다 ({merge.path}:L{merge.line})")
+                    continue
                 for ev_ in (a_ev, b_ev):
                     at = next((i for i, h in enumerate(hops) if h.evidence_id == ev_), None)
                     if at is None or hops[at].bad:
@@ -528,6 +552,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         next_branches, shown_, cands_ = branches(w_, name_)
                         hops[at] = hops[at].model_copy(update={"service": shown_, "candidates": list(cands_)})
                         frontier += [(w_, b, depth + 1, ev_, None, pointer_of(_unwrap(raw_)) if raw_ is not None else {}) for b in next_branches]
+            if read_inputs:
+                # 키 필드를 가진 입력 행이 없는 병합식(측정 #18 P0-a의 다른 가능성 — 변환 뒤 이름이 다르면 겹침을 못 센다). 읽은 입력이 없으면 "입력을 모른다"가 말한다.
+                for merge, side in join_unmatched(merges, read_inputs):
+                    remember(f"{writer}: 병합식 {merge.path}:L{merge.line}의 키 필드({'+'.join(merge.left)} ↔ {'+'.join(merge.right)})를 가진 입력 행이 "
+                             f"{side}에 없다 — 겹침을 못 센다")
         # 이 클래스가 실제로 읽은 입력과 못 본 입력 — 멈춘 자리가 이 클래스면 사유가 여기서 나온다. 다음 칸은 읽기가 있었으면(실패한 읽기도) 읽는 메서드,
         # 읽은 입력이 없으면("모른다") 클래스 본문. 메시지만 읽은 클래스(인덱스 자원 0)는 읽는 메서드 줄이 없어 클래스 본문이다.
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),

@@ -3165,7 +3165,17 @@ CASES += [
  ("조인 멈춤 사유를 안 쓴다", WK, "        if ev in joined_at and ev not in walked_at and ev not in failed_at:\n            # 병합 0건(④-b)", "        if False:\n            # 병합 0건(④-b)", [JOIN_WALK_T, BOARD_JOIN_T]),
  ("나빠진 입력의 쓴 쪽으로 안 걷는다", WK, "                        frontier += [(w_, b, depth + 1, ev_, None, pointer_of(_unwrap(raw_)) if raw_ is not None else {}) for b in next_branches]", "                        pass", [JOIN_WALK_T]),
 ]
-assert len(CASES) >= 985, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5h ① — 병합 짝 없음은 inner만, 나머지는 주 ──
+NONINNER_T = "tests/application/test_walk.py::test_inner가_아닌_병합의_겹침_0은_나쁨이_아니라_주로만_남고_걷기는_전처럼_멈춘다"
+UNMATCHED_T = "tests/application/test_walk.py::test_병합식의_키_필드를_가진_입력_행이_없으면_겹침을_못_센다는_주가_남는다"
+CASES += [
+ ("inner 아닌 병합의 겹침 0도 나쁨으로 본다", WK, "                if merge.how != \"inner\":", "                if False:", [NONINNER_T]),
+ ("inner 아닌 겹침 0의 주를 안 남긴다", WK, "                    remember(f\"{writer}: {note} — {merge.how} 병합이라 행은 남는다 ({merge.path}:L{merge.line})\")", "                    pass", [NONINNER_T]),
+ ("키 필드 없는 병합식의 주를 안 남긴다", WK, "            if read_inputs:\n                # 키 필드를 가진 입력 행이 없는 병합식", "            if False:\n                # 키 필드를 가진 입력 행이 없는 병합식", [UNMATCHED_T]),
+ ("키 필드가 없는 쪽을 안 가른다", WK, "        out.append((m, \"양쪽\" if not left_ok and not right_ok else \"왼쪽\" if not left_ok else \"오른쪽\"))", "        out.append((m, \"양쪽\"))", [UNMATCHED_T]),
+]
+assert len(CASES) >= 989, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
