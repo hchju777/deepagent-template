@@ -1340,8 +1340,8 @@ CASES += [
   ["tests/application/test_lead.py::test_degraded_판정은_LLM이_못_낸다",
    "tests/domain/test_verdict_model.py::test_degraded는_판정_어휘에_있지만_LLM_어휘에는_없다"]),
  ("판정 턴이 트레이스에 안 남는다", LD,
-  '        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
-  '        got = await ask_json(llm, prompt, ConcludeReply)',
+  '        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state),\n                             schema=conclude_schema([e.id for e in state.evidence]))',
+  '        got = await ask_json(llm, prompt, ConcludeReply,\n                             schema=conclude_schema([e.id for e in state.evidence]))',
   ["tests/application/test_lead.py::test_conclude가_판정_JSON을_Verdict로_받고_프롬프트에_본_것만_싣는다"]),
  ("판정 예시가 degraded를 보여 준다", B,
   '        "verdict_type": "<logic_bug | data_loss | config_error | stale_data | external | not_a_defect | inconclusive 중 하나>",',
@@ -1672,8 +1672,8 @@ CASES += [
   '        if False:\n            body["max_tokens"] = self._cfg.max_tokens',
   ["tests/infrastructure/test_llm_adapters.py::test_토큰_상한이_요청에_실린다"]),
  ("판정 턴이 액션 LLM에게 간다", LD,
-  '        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
-  '        got = await ask_json(llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))',
+  '        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state),\n                             schema=conclude_schema([e.id for e in state.evidence]))',
+  '        got = await ask_json(llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state),\n                             schema=conclude_schema([e.id for e in state.evidence]))',
   ["tests/application/test_lead.py::test_판정_턴은_다른_LLM을_쓸_수_있다", "tests/application/test_lead.py::test_CLI가_역할별_LLM을_따로_꽂는다"]),
  ("investigate가 판정 LLM을 안 꽂는다", MN,
   '                flow_graph=flow_graph, code_index=code.has_index() if code else False,\n                conclude_llm=conclude_llm,',
@@ -1689,8 +1689,8 @@ CASES += [
 VT = "tests/application/test_verdict.py"
 CASES += [
  ("llm_error 뒤 판정이 와도 degraded로 찍는다", ND,
-  '            if reply.get("verdict") is not None:\n                return {"verdict": sanitize_verdict(resolve_task_citations(reply["verdict"], state.plan_tasks)),',
-  '            if False:\n                return {"verdict": sanitize_verdict(resolve_task_citations(reply["verdict"], state.plan_tasks)),',
+  '            if reply.get("verdict") is not None:\n                return {"verdict": sanitize_verdict(resolve_task_citations(',
+  '            if False:\n                return {"verdict": sanitize_verdict(resolve_task_citations(',
   [f"{VT}::test_llm_error여도_증거가_있으면_판정을_한_번_묻는다"]),
  ("증거가 없어도 죽은 리드 뒤에 판정을 묻는다", ND,
   '        if not state.evidence:\n            why = (', '        if False:\n            why = (',
@@ -2144,8 +2144,8 @@ CASES += [
 CITE_T = "tests/application/test_verdict.py::test_태스크_id를_인용하면_그_태스크의_증거가_하나일_때_코드가_고친다"
 CASES += [
  ("태스크 id 인용을 안 고친다", ND,
-  '        return {"verdict": sanitize_verdict(resolve_task_citations(verdict, state.plan_tasks)), "llm_errors": notes}',
-  '        return {"verdict": sanitize_verdict(verdict), "llm_errors": notes}',
+  '        return {"verdict": sanitize_verdict(resolve_task_citations(resolve_described_citations(verdict, [e.id for e in state.evidence]),\n                                                                   state.plan_tasks)), "llm_errors": notes}',
+  '        return {"verdict": sanitize_verdict(resolve_described_citations(verdict, [e.id for e in state.evidence])), "llm_errors": notes}',
   [CITE_T]),
  ("증거가 여럿인 태스크도 첫 증거로 고친다", ND,
   "    only = {t.id: t.result_evidence_ids[0] for t in tasks if len(t.result_evidence_ids) == 1}",
@@ -3203,7 +3203,20 @@ CASES += [
  ("같은 입력뿐인 키 필드를 못 센다로 안 적는다", WK, "        if any(a_ev != b_ev for _, a_ev, _ in lefts for _, b_ev, _ in rights):\n            continue", "        if True:\n            continue", [SAMEIN_T]),
  ("한 입력뿐일 때 값 전부 None을 안 적는다", WK, "        tail = f\"({'·'.join(nones)} 값 전부 None)\" if nones else \"\"", "        tail = \"\"", [SAMEIN_T]),
 ]
-assert len(CASES) >= 999, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5i ② — basis enum·설명이 붙은 인용 ──
+SCHEMA_ENUM_T = "tests/application/test_lead.py::test_판정_스키마는_그_케이스_증거_id를_basis와_evidence_ids의_enum으로_건다"
+SCHEMA_PASS_T = "tests/application/test_lead.py::test_판정_턴은_그_케이스_증거_id_enum이_든_스키마를_어댑터에_넘긴다"
+DESCRIBED_T = "tests/application/test_verdict.py::test_설명이_붙은_증거_id_인용은_그_id가_실재하면_id만으로_고치고_caveat에_적는다"
+DESCRIBED_NODE_T = "tests/application/test_verdict.py::test_conclude_노드는_설명이_붙은_인용을_id만으로_고친_뒤_태스크_id_정리를_한다"
+CASES += [
+ ("판정 스키마에 증거 id enum을 안 건다", LD, "    if not ids:\n        return schema", "    if True:\n        return schema", [SCHEMA_ENUM_T, SCHEMA_PASS_T]),
+ ("evidence_ids 항목엔 enum을 안 건다", LD, "        link[\"evidence_ids\"][\"items\"] = dict(item)", "        pass", [SCHEMA_ENUM_T]),
+ ("판정 턴이 케이스 스키마를 안 넘긴다", LD, "                             schema=conclude_schema([e.id for e in state.evidence]))", "                             schema=None)", [SCHEMA_PASS_T]),
+ ("설명이 붙은 인용을 안 고친다", ND, "    if not described:\n        return verdict", "    if True:\n        return verdict", [DESCRIBED_T, DESCRIBED_NODE_T]),
+ ("conclude 노드가 설명 인용 정리를 안 한다", ND, "        return {\"verdict\": sanitize_verdict(resolve_task_citations(resolve_described_citations(verdict, [e.id for e in state.evidence]),\n                                                                   state.plan_tasks)), \"llm_errors\": notes}", "        return {\"verdict\": sanitize_verdict(resolve_task_citations(verdict, state.plan_tasks)), \"llm_errors\": notes}", [DESCRIBED_NODE_T]),
+]
+assert len(CASES) >= 1004, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

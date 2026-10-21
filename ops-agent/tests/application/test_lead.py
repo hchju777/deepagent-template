@@ -1158,6 +1158,27 @@ def test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다():
     assert "not_a_defect" in conclude["properties"]["verdict_type"]["enum"] and "basis" in conclude["properties"]   # R3-5d ⑤
 
 
+def test_판정_스키마는_그_케이스_증거_id를_basis와_evidence_ids의_enum으로_건다():
+    """측정 #19 P0-c: "없는 id" 되묻기 11회 — basis 원소가 `<id>: <설명>` 문장이었다. 서버가 스키마를 강제하면 리드는 그 케이스 증거 id 밖을 못 쓴다.
+    증거가 없으면 전처럼 열린 문자열. 닫힘(strict)은 그대로."""
+    from src.application.lead import ConcludeReply, conclude_schema, response_schema
+    from src.domain.llm_schema import is_closed
+
+    s = conclude_schema(["t-1.e1", "t-2.e1", "t-1.e1"])
+    assert s["properties"]["basis"]["items"] == {"type": "string", "enum": ["t-1.e1", "t-2.e1"]}
+    assert s["$defs"]["CauseLink"]["properties"]["evidence_ids"]["items"] == {"type": "string", "enum": ["t-1.e1", "t-2.e1"]}
+    assert is_closed(s) and s["title"] == "concludereply"
+    assert conclude_schema([]) == response_schema(ConcludeReply)
+
+
+async def test_판정_턴은_그_케이스_증거_id_enum이_든_스키마를_어댑터에_넘긴다(case):
+    llm = ScriptedAdapter([reply(verdict_type="not_a_defect", confidence="medium", narrative="정상 공백", basis=["t-1.e1"])], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3)
+    patch = await conclude(_ended(case))
+    assert patch["verdict"].basis == ["t-1.e1"]
+    assert llm.schemas[-1]["properties"]["basis"]["items"] == {"type": "string", "enum": ["t-1.e1"]}
+
+
 async def test_ask_json은_답_스키마를_어댑터에_넘긴다(case):
     llm = ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)

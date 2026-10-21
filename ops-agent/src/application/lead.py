@@ -199,6 +199,21 @@ def response_schema(model: type[StrictModel]) -> dict:
     return schema
 
 
+def conclude_schema(evidence_ids) -> dict:
+    """판정 턴의 스키마 — `basis`와 다리의 `evidence_ids` 항목을 **그 케이스 증거 id의 enum**으로(R3-5i ②, 측정 #19 P0-c: basis 원소가 `<id>: <설명>`
+    문장이라 verify가 "없는 id"로 11번 되물었다). 서버가 스키마를 강제하면 리드는 그 밖을 못 쓴다. 증거가 없으면 열린 문자열 그대로. 닫힘은 그대로다."""
+    schema = response_schema(ConcludeReply)
+    ids = list(dict.fromkeys(i for i in evidence_ids if isinstance(i, str) and i))
+    if not ids:
+        return schema
+    item = {"type": "string", "enum": ids}
+    schema["properties"]["basis"]["items"] = item
+    link = schema.get("$defs", {}).get("CauseLink", {}).get("properties", {})
+    if "evidence_ids" in link:
+        link["evidence_ids"]["items"] = dict(item)
+    return schema
+
+
 # 증거 예산을 여기까지만 줄인다 — **상한보다 이긴다.** 사내 측정 #3에서 고정부가 7.1~7.9K라 8K 상한을 맞추려다 증거가 1.6K까지
 # 깎였다. 상한의 이유였던 지연은 빠른 모델이 13~17K를 4~14초에 처리해 약해졌고, 증거를 굶기는 쪽이 더 큰 손해다. 고정부는 따로
 # 줄인다(`_role_brief`·`{?블록}`·흐름 예산).
@@ -245,7 +260,7 @@ def brief_prompt(prompt: str) -> str:
 
 
 async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
-                   on_exchange=None) -> Parsed:
+                   on_exchange=None, schema: dict | None = None) -> Parsed:
     """묻고, JSON을 꺼내고, 모델로 검증한다. **절대 raise하지 않는다.**
 
     `on_exchange(prompt, reply_text, error)`는 시도마다 불린다 — `--trace`가 여기서
@@ -253,7 +268,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     """
     last = Parsed(False, error="시도하지 않았다")
     asked = prompt
-    schema = response_schema(model)
+    schema = response_schema(model) if schema is None else schema                   # 판정 턴은 케이스마다 다른 스키마(증거 id enum, R3-5i ②)
     use_schema = schema
     transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
     shorten = False             # 직전 답이 길이 상한(`length`)에서 끊겼나 — 재질문에 "짧게" 한 줄(R3-5f ④)
@@ -474,7 +489,8 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
                                                  services=services, flow_graph=flow_graph,
                                                  fold_tasks=fold))
         prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("conclude"), budget=evidence_budget)
-        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state))
+        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state),
+                             schema=conclude_schema([e.id for e in state.evidence]))
         if not got.ok:
             return {"llm_errors": [f"conclude: {got.error}"]}
         return {"verdict": Verdict.model_validate(got.data),

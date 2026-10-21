@@ -823,3 +823,34 @@ async def test_걷기가_멈춘_자리를_못_봤으면_high는_medium이고_cav
     assert patch["verdict"].caveats == ["걷기가 멈춘 자리를 못 봤다 — 키가 없다 — alarm:source:L1; 확신 상한 medium"]
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
     assert await loose["verify"](_state(case, verdict=verdict(), walk=Walk(stopped=unseen[0]))) == {"verify_problems": []}
+
+
+# ── R3-5i ② — 설명이 붙은 증거 id 인용 ──
+
+def test_설명이_붙은_증거_id_인용은_그_id가_실재하면_id만으로_고치고_caveat에_적는다():
+    """측정 #19 P0-c: basis 원소가 `<id>: <설명>` 문장이라 verify가 "없는 id"로 11번 되물었다 — 뜻이 하나인 실수(`resolve_task_citations`와 같은 자리).
+    앞 토큰이 그 케이스의 증거 id(또는 태스크 id — 그다음 정리가 받는다)일 때만. 모르는 id는 그대로 두어 verify가 전처럼 거른다. 바뀐 것이 없으면 같은 객체."""
+    from src.application.nodes import resolve_described_citations
+    from src.domain.case import CauseLink
+
+    ids = ["t-1.e1", "t-3.e1"]
+    v = _nad("t-3.e1: Proc의 코드 증거", "t-1.e1 비지 않은 입력", "t-9.e1: 없는 것", confidence="medium")
+    fixed = resolve_described_citations(v, ids)
+    assert fixed.basis == ["t-3.e1", "t-1.e1", "t-9.e1: 없는 것"]
+    assert fixed.caveats[-1].startswith("인용 정리: 설명이 붙은 증거 id를 id만으로 바꿨다 — ") and "t-3.e1" in fixed.caveats[-1]
+    bug = Verdict(verdict_type="logic_bug", confidence="high", narrative="n",
+                  root_cause=CauseLink(component="processor", evidence_ids=["t-1.e1: 입력", "t-3.e1"]),
+                  alternates=[CauseLink(component="sink", evidence_ids=["t-3.e1 코드"], confidence="low")])
+    fixed = resolve_described_citations(bug, ids)
+    assert fixed.root_cause.evidence_ids == ["t-1.e1", "t-3.e1"] and fixed.alternates[0].evidence_ids == ["t-3.e1"]
+    same = _nad("t-1.e1", confidence="medium")
+    assert resolve_described_citations(same, ids) is same
+
+
+async def test_conclude_노드는_설명이_붙은_인용을_id만으로_고친_뒤_태스크_id_정리를_한다(case):
+    concluder = Concluder({"verdict": _nad("t-1.e1: 입력 증거", "t-2: 코드", confidence="medium")})
+    nodes = make_nodes(deps_for(ScriptedRunner(), conclude=concluder))
+    state = _state(case, plan_tasks=[task("t-2", action="code.resources", params={"name": "Proc"}, status="ok", result_evidence_ids=["t-2.e1"])],
+                   evidence=[_ev("t-1.e1"), _ev("t-2.e1")])
+    got = (await nodes["conclude"](state))["verdict"]
+    assert got.basis == ["t-1.e1", "t-2.e1"] and sum("인용 정리" in c for c in got.caveats) == 2
