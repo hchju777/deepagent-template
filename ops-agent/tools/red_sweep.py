@@ -3188,7 +3188,15 @@ CASES += [
  ("채움값 거르는 줄을 첫 칸으로 안 댄다", WK, "            if first is not None:\n                # 채움값을 거르는 줄(R3-5h ②)이 먼저", "            if False:\n                # 채움값을 거르는 줄(R3-5h ②)이 먼저", [FILL_WALK_T, BOARD_OUTER_T]),
  ("합쳐진 키 열도 채움 후보로 본다", WK, "    coalesced = {f for f, g in zip(merge.left, merge.right) if f == g}", "    coalesced = set()", [FILL_FIELDS_T, FILL_WALK_T]),
 ]
-assert len(CASES) >= 994, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5h ③ — 결함 아님의 root_cause를 코드가 basis로 ──
+CAUSE_T = "tests/application/test_lead.py::test_결함_아님_판정에_root_cause가_실려_오면_코드가_비우고_증거_id를_basis로_옮기며_caveat을_남긴다"
+CASES += [
+ ("결함 아님의 root_cause를 코드가 안 옮긴다", LD, "        if not isinstance(data, dict) or data.get(\"verdict_type\") != \"not_a_defect\" or data.get(\"root_cause\") is None:\n            return data", "        if True:\n            return data", [CAUSE_T]),
+ ("root_cause의 증거 id를 basis로 안 옮긴다", LD, "        return {**data, \"root_cause\": None, \"basis\": basis + [i for i in ids if i not in basis],", "        return {**data, \"root_cause\": None, \"basis\": basis,", [CAUSE_T]),
+ ("옮긴 것을 caveat에 안 남긴다", LD, "                \"caveats\": [*(caveats or []), CAUSE_MOVED]}", "                \"caveats\": [*(caveats or [])]}", [CAUSE_T]),
+]
+assert len(CASES) >= 997, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

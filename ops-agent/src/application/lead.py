@@ -119,6 +119,10 @@ class IntegrateReply(StrictModel):
     note: str = Field(default="", max_length=2000)
 
 
+# 결함 아님에 실려 온 root_cause를 코드가 옮겼다는 표시 — 보고서의 주의 줄에 남는다(`caveat_truncated`처럼 코드가 더하는 caveat).
+CAUSE_MOVED = "결함 아님 판정에 root_cause가 실려 있어 코드가 그 증거 id를 basis로 옮겼다(결함 아님에는 원인이 없다)"
+
+
 class ConcludeReply(StrictModel):
     """판정 턴의 답 — `Verdict`와 같은 모양이되 `verdict_type`에 **`degraded`가 없다.**
 
@@ -136,6 +140,21 @@ class ConcludeReply(StrictModel):
     caveats: list[str] = []
     narrative: str
     basis: list[str] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _not_a_defect_moves_cause_to_basis(cls, data):
+        """결함 아님에 root_cause가 실려 오면 코드가 비우고 그 증거 id를 basis로(R3-5h ③, 측정 #18 P0-c: c-10·c-12가 두 번 다 실어 degraded — 수리 재질문이
+        같은 모양을 또 낸다). 뜻이 하나인 실수다. 조용히 고치지 않는다 — caveat 한 줄. 증거 id가 어디에도 없으면 아래 검증이 전처럼 거른다."""
+        if not isinstance(data, dict) or data.get("verdict_type") != "not_a_defect" or data.get("root_cause") is None:
+            return data
+        cause, basis, caveats = data.get("root_cause"), data.get("basis"), data.get("caveats")
+        if not isinstance(basis, (list, type(None))) or not isinstance(caveats, (list, type(None))):
+            return data
+        ids = [i for i in (cause.get("evidence_ids") or []) if isinstance(i, str)] if isinstance(cause, dict) else []
+        basis = list(basis or [])                                              # 문자열 아닌 항목은 걷어내지 않는다 — 형식 오류는 아래 검증이 말한다
+        return {**data, "root_cause": None, "basis": basis + [i for i in ids if i not in basis],
+                "caveats": [*(caveats or []), CAUSE_MOVED]}
 
     @model_validator(mode="after")
     def _conclusive_needs_root_cause(self):

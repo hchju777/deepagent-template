@@ -1387,6 +1387,29 @@ async def test_결함_아님_판정은_root_cause_없이_basis를_요구한다(c
     assert "verdict" not in patch and any("basis" in e for e in patch["llm_errors"])
 
 
+async def test_결함_아님_판정에_root_cause가_실려_오면_코드가_비우고_증거_id를_basis로_옮기며_caveat을_남긴다(case):
+    """측정 #18 P0-c: c-10·c-12(정상 공백)가 두 번 다 `not_a_defect`에 root_cause를 같이 실어 degraded — 수리 재질문이 같은 모양을 또 낸다. 뜻이 하나인
+    실수라 코드가 옮긴다(component가 없는 반쪽 root_cause도). 조용히 고치지 않는다 — caveat 한 줄(코드가 더하는 caveat). 증거 id가 어디에도 없으면 전처럼
+    수리 재시도."""
+    from src.application.lead import CAUSE_MOVED, ConcludeReply
+
+    half = reply(verdict_type="not_a_defect", confidence="medium", narrative="정상 공백", root_cause={"evidence_ids": ["t-1.e1"]})
+    llm = ScriptedAdapter([half], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3)
+    patch = await conclude(_ended(case))
+    v = patch["verdict"]
+    assert v.verdict_type == "not_a_defect" and v.root_cause is None and v.basis == ["t-1.e1"] and v.caveats == [CAUSE_MOVED]
+    assert len(llm.prompts) == 1                                                  # 수리 재시도 없이
+    full = ConcludeReply.model_validate({"verdict_type": "not_a_defect", "confidence": "low", "narrative": "n", "basis": ["t-2.e1"], "caveats": ["c"],
+                                         "root_cause": {"component": "x", "evidence_ids": ["t-1.e1", "t-2.e1"]}})
+    assert full.root_cause is None and full.basis == ["t-2.e1", "t-1.e1"] and full.caveats == ["c", CAUSE_MOVED]
+    empty = reply(verdict_type="not_a_defect", confidence="medium", narrative="정상 공백", root_cause={"component": "x", "evidence_ids": []})
+    llm = ScriptedAdapter([empty, empty], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3)
+    patch = await conclude(_ended(case))
+    assert "verdict" not in patch and any("basis" in e for e in patch["llm_errors"]) and len(llm.prompts) == 2
+
+
 async def test_길이_상한에서_깨진_답의_재질문에는_사유와_짧게가_같이_붙는다(case):
     """측정 #16: 판정 호출 18번 중 length 2(+유휴 1, c-14는 두 번 다 실패). 같은 질문을 그대로 다시 보내면 같은 길이로 또 끊길 수 있다 — 깨진 긴 답은 사유
     재질문(`## 다시`)에, 빈 긴 답은 같은 질문에 "짧게" 한 줄을 더한다. 상한(`max_tokens`)은 동결(사람 결정)."""

@@ -1437,6 +1437,16 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   정답 표: 두 입력 홉 `병합 뒤 채움값`, 멈춤 `병합 뒤 채움값을 거른다 — SourceOuterJoiner: …`, 첫 칸 거르는 줄, 둘째 칸 병합 줄.
 - 테스트 먼저(RED → GREEN). 스윕 +5(994). `code graph`와 무관(인덱스 심볼은 그대로 — 측정판의 새 파일은 그 보드의 `code graph`가 읽는다).
 
+#### R3-5h ③ (10-21) ✅ — 결함 아님의 root_cause를 코드가 basis로
+
+- 측정 #18 P0-c: c-10·c-12(정상 공백)가 두 번 다 `not_a_defect`에 root_cause를 같이 실어 실패 → degraded(`root_cause.component: Field required` →
+  `root_cause 없이 basis에`). 지난번엔 둘 다 통과. 수리 재질문이 같은 모양을 또 낸다 — 뜻이 하나인 실수(결함 아님에는 원인이 없고, 거기 적힌 증거 id가
+  곧 근거다)라 코드가 옮긴다.
+- `ConcludeReply`의 사전 검증(`mode="before"`): `not_a_defect` + root_cause → root_cause의 증거 id(있으면)를 basis 뒤에 붙이고(중복 없이) root_cause를 비운다.
+  component가 없는 반쪽 root_cause도 같다. 조용히 고치지 않는다 — caveat `CAUSE_MOVED` 한 줄(코드가 더하는 caveat, `caveat_truncated`와 같은 자리 —
+  보고서의 주의 줄에 남는다). 증거 id가 어디에도 없으면 사후 검증이 전처럼 거르고 수리 재시도.
+- 테스트 먼저(RED → GREEN). 스윕 +3(997). `code graph`와 무관. **R3-5h 끝** — 다음은 측정 #19 브리프(`code graph` 재생성 **불필요**).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.
