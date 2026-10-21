@@ -839,3 +839,32 @@ async def test_클래스_속성_리터럴은_자원이_아니어도_클래스_�
     assert again.symbols[_sid(again, "k.a.A")].consts == (("mode", "material"), ("redis_key", "k:a"))
     blank = await _index({**KEYED, "k/e.py": 'from k.base import KeyedJob\n\n\nclass E(KeyedJob):\n    redis_key = ""\n'}, KEYED_NAMES)
     assert blank.symbols[_sid(blank, "k.e.E")].consts == ()
+
+
+# ── R3-5i ③ — config로 푼 이름은 쓰임새로 흐를 때만 자원 ──
+
+FLOW = {'f/__init__.py': '', 'f/jobs.py': (
+    'class Base:\n    def _run(self):\n        key = self.cfg.get("tmp_alarm")\n        if self.cmd and key:\n            return self.step()\n\n\n'
+    'class Reader:\n    def _run(self):\n        key = self.cfg.get("tmp_alarm")\n        return self.redis.get(key)\n\n\n'
+    'class Direct:\n    def _run(self):\n        return self.redis.get(self.cfg.get("tmp_alarm"))\n\n\n'
+    'class Builder:\n    def _run(self):\n        key = self.cfg.get("tmp_alarm")\n        full = f"{key}:L1"\n        for k in [full]:\n            self.redis.get(k)\n\n\n'
+    'class Giver:\n    def _run(self):\n        return self.cfg.get("tmp_alarm")\n\n\n'
+    'class Keeper:\n    def _run(self):\n        self.key = self.cfg.get("tmp_alarm")\n\n\n'
+    'class Packer:\n    def _run(self):\n        return {"k": self.cfg.get("tmp_alarm")}\n\n\n'
+    'class Checker:\n    def _run(self):\n        if self.cfg.get("tmp_alarm"):\n            return 1\n        return 0\n')}
+FLOW_NAMES = [Name("rediskey", "tmp:alarm:{line}", "redis_key.tmp_alarm")]
+
+
+async def test_config_키_토큰으로_푼_이름은_풀린_값이_쓰임새로_흐를_때만_그_함수의_자원이다():
+    """측정 #19 P0-b: `키가 없다 — <임시 알람 키>` 틀린 사실 2건 — 부모 메서드가 `config.get`으로 이름만 풀고 `if <명령> and <변수>:` 참거짓에만 썼다.
+    `key` 표식은 토큰이 따옴표로 있는 줄이면 자원으로 세었다. 이제 풀린 값이 지역 변수에 묶이면 그 변수(와 그것으로 만든 변수·반복 변수)가 호출 인자·return·
+    self 속성으로 흐를 때만; 조건식에만 쓰이면 아니다. 호출 인자 안에 바로 있거나 return이면 그대로 자원, 모르는 모양(사전 안 등)은 자원으로 둔다(보수)."""
+    idx = await _index(FLOW, FLOW_NAMES)
+
+    def res(cls):
+        return [(r.name, r.direction, r.via) for r in idx.symbols[_sid(idx, f"f.jobs.{cls}._run")].resources]
+
+    assert res("Base") == [] and res("Checker") == []                                               # 조건식에만
+    assert res("Reader") == [("tmp:alarm:{line}", "reads", "key")] and res("Direct") == res("Reader")
+    assert res("Builder") == res("Reader") and res("Giver") == res("Reader")                          # f-string·반복 변수를 거쳐도, return도
+    assert res("Keeper") == res("Reader") and res("Packer") == res("Reader")                          # self 속성 대입·사전 안(모르는 모양)

@@ -3216,7 +3216,15 @@ CASES += [
  ("설명이 붙은 인용을 안 고친다", ND, "    if not described:\n        return verdict", "    if True:\n        return verdict", [DESCRIBED_T, DESCRIBED_NODE_T]),
  ("conclude 노드가 설명 인용 정리를 안 한다", ND, "        return {\"verdict\": sanitize_verdict(resolve_task_citations(resolve_described_citations(verdict, [e.id for e in state.evidence]),\n                                                                   state.plan_tasks)), \"llm_errors\": notes}", "        return {\"verdict\": sanitize_verdict(resolve_task_citations(verdict, state.plan_tasks)), \"llm_errors\": notes}", [DESCRIBED_NODE_T]),
 ]
-assert len(CASES) >= 1004, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5i ③ — config로 푼 이름은 쓰임새로 흐를 때만 자원 ──
+KEY_FLOW_T = "tests/knowledge/test_index.py::test_config_키_토큰으로_푼_이름은_풀린_값이_쓰임새로_흐를_때만_그_함수의_자원이다"
+CASES += [
+ ("조건식에만 쓰인 config 키도 자원으로 센다", IDX, "                    if n is not None and not _key_flows(node, line, n.key_token):\n                        return", "                    if False:\n                        return", [KEY_FLOW_T]),
+ ("풀린 변수의 흐름을 안 따라간다", IDX, "            if len(names) != len(targets) or _tainted_reaches_sink(fn_node, names):\n                return True", "            if len(names) != len(targets):\n                return True", [KEY_FLOW_T]),
+ ("모르는 모양을 자원에서 뺀다", IDX, "        if isinstance(up, _CONDITION):\n            continue\n        return True", "        if isinstance(up, _CONDITION):\n            continue\n        return False", [KEY_FLOW_T]),
+]
+assert len(CASES) >= 1007, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

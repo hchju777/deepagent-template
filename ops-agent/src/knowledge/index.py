@@ -498,6 +498,67 @@ def _nested_defs(func: ast.AST) -> list[ast.AST]:
     return sorted(out, key=lambda n: n.lineno)
 
 
+_CHAIN = (ast.Call, ast.Subscript, ast.Attribute, ast.JoinedStr, ast.FormattedValue, ast.BinOp)
+_CONDITION = (ast.If, ast.While, ast.Assert, ast.BoolOp, ast.Compare, ast.UnaryOp, ast.IfExp)
+
+
+def _has_name(node: ast.AST, idents: set[str]) -> bool:
+    return any(isinstance(n, ast.Name) and n.id in idents for n in ast.walk(node))
+
+
+def _tainted_reaches_sink(fn_node: ast.AST, seeds: set[str]) -> bool:
+    """풀린 값을 받은 지역 변수들이 쓰임새(호출 인자·return·yield·self 속성·첨자 대입)에 닿는가 — 대입·f-string·반복 변수로 번진 이름까지(고정점)."""
+    tainted = set(seeds)
+    while True:
+        more = set(tainted)
+        for n in ast.walk(fn_node):
+            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and n.value is not None and _has_name(n.value, tainted):
+                for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                    if isinstance(t, ast.Name):
+                        more.add(t.id)
+                    else:
+                        return True                                     # self.x = …·d[k] = … — 밖으로 나간다
+            elif isinstance(n, (ast.For, ast.comprehension)) and _has_name(n.iter, tainted) and isinstance(n.target, ast.Name):
+                more.add(n.target.id)
+        if more == tainted:
+            break
+        tainted = more
+    for n in ast.walk(fn_node):
+        if isinstance(n, ast.Call) and any(_has_name(a, tainted) for a in (*n.args, *(k.value for k in n.keywords))):
+            return True
+        if isinstance(n, (ast.Return, ast.Yield, ast.YieldFrom)) and n.value is not None and _has_name(n.value, tainted):
+            return True
+    return False
+
+
+def _key_flows(fn_node: ast.AST, line: int, token: str) -> bool:
+    """config 키 토큰을 따옴표로 푼 줄의 값이 쓰임새로 흐르는가(R3-5i ③). 토큰 상수 → 그것을 푸는 식(`cfg.get("tok")`·`cfg["tok"]`와 그 위에 이어진 호출·첨자·
+    f-string)의 바로 위가: 다른 호출의 인자·return·yield면 True; 지역 변수 대입이면 그 변수의 흐름(`_tainted_reaches_sink`); 조건식(`if`·`while`·`assert`·
+    비교)뿐이면 False. 토큰을 못 찾거나 모르는 모양이면 True — 자원을 잃는 쪽이 더 나쁘다(사람 결정 10-21)."""
+    parents = {child: parent for parent in ast.walk(fn_node) for child in ast.iter_child_nodes(parent)}
+    consts = [n for n in ast.walk(fn_node) if isinstance(n, ast.Constant) and n.value == token and getattr(n, "lineno", None) == line]
+    if not consts:
+        return True
+    for const in consts:
+        node, up = const, parents.get(const)
+        while isinstance(up, _CHAIN):
+            if isinstance(up, ast.Call) and node is not up.func and node is not const and any(node is a for a in (*up.args, *(k.value for k in up.keywords))):
+                return True                                             # 푼 값이 다른 호출의 인자
+            node, up = up, parents.get(up)
+        if isinstance(up, (ast.Return, ast.Yield, ast.YieldFrom, ast.Await)):
+            return True
+        if isinstance(up, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node is up.value:
+            targets = up.targets if isinstance(up, ast.Assign) else [up.target]
+            names = {t.id for t in targets if isinstance(t, ast.Name)}
+            if len(names) != len(targets) or _tainted_reaches_sink(fn_node, names):
+                return True
+            continue
+        if isinstance(up, _CONDITION):
+            continue
+        return True
+    return False
+
+
 def _self_reads(node: ast.AST) -> list[tuple[str, int]]:
     """함수 본문이 읽는 `self.<속성>`들 — `(속성, 줄)`, 처음 나온 자리, 대입(`self.x = …`)은 아니다."""
     out: dict[str, int] = {}
@@ -1390,6 +1451,9 @@ class _Resolver:
                 for ident, value in mod.string_consts.items():
                     if value in wanted and ident not in aliases:
                         aliases[ident] = wanted[value]
+        by_value: dict[str, Name] = {}
+        for known in list(self.names):
+            by_value.setdefault(known.value, known)
         for fn in self.funcs.values():
             node = fn.node
             start, end = node.lineno, node.end_lineno or node.lineno
@@ -1399,6 +1463,12 @@ class _Resolver:
             found: list[Resource] = []
 
             def add(kind: str, name: str, grade: str, file: str, line: int, via: str) -> None:
+                if via == "key":
+                    # config 키 토큰을 따옴표로 푼 줄(R3-5i ③, 측정 #19 P0-b: `config.get`으로 이름만 풀고 조건식에만 쓴 부모 메서드가 그 키의 읽는 쪽으로
+                    # 세어져 `키가 없다 — <임시 알람 키>` 틀린 사실 2건). 풀린 값이 쓰임새로 흐르는 줄만 자원이다.
+                    n = by_value.get(name)
+                    if n is not None and not _key_flows(node, line, n.key_token):
+                        return
                 text = fn.mod.lines[line - 1] if 0 < line <= len(fn.mod.lines) else ""
                 # 동사 없는 줄은 읽기(보수적). "뒷줄이 토픽으로 보내면 쓰라는 명령"이라는 동사 목록 규칙(R3-1b ②)은 사내 모양(뒷줄 `save`,
                 # 앞줄 클래스 이름)에서 틀려 걷어냈다(측정 #8) — 쓴 쪽은 키 값이 대는 클래스 이름으로 안다(R3-1c ①-a).
