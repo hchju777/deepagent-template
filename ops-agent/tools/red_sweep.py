@@ -3192,7 +3192,7 @@ CASES += [
 # ── 12a-R3-5h ③ — 결함 아님의 root_cause를 코드가 basis로 ──
 CAUSE_T = "tests/application/test_lead.py::test_결함_아님_판정에_root_cause가_실려_오면_코드가_비우고_증거_id를_basis로_옮기며_caveat을_남긴다"
 CASES += [
- ("결함 아님의 root_cause를 코드가 안 옮긴다", LD, "        if not isinstance(data, dict) or data.get(\"verdict_type\") != \"not_a_defect\" or data.get(\"root_cause\") is None:\n            return data", "        if True:\n            return data", [CAUSE_T]),
+ ("결함 아님의 root_cause를 코드가 안 옮긴다", LD, "        if data.get(\"root_cause\") is None:\n            return data", "        if True:\n            return data", [CAUSE_T]),
  ("root_cause의 증거 id를 basis로 안 옮긴다", LD, "        return {**data, \"root_cause\": None, \"basis\": basis + [i for i in ids if i not in basis],", "        return {**data, \"root_cause\": None, \"basis\": basis,", [CAUSE_T]),
  ("옮긴 것을 caveat에 안 남긴다", LD, "                \"caveats\": [*(caveats or []), CAUSE_MOVED]}", "                \"caveats\": [*(caveats or [])]}", [CAUSE_T]),
 ]
@@ -3261,7 +3261,14 @@ CASES += [
  ("판정 스키마 이름에 증거 id 수를 안 붙인다", LD, "    return str(schema.get(\"title\") or \"이름 없음\") + (f\"(증거 id {len(ids)})\" if ids else \"\")", "    return str(schema.get(\"title\") or \"이름 없음\")", [SCHEMA_STAT_T]),
  ("트레이스 턴 줄에 스키마를 안 적는다", MN, "            schema = f\" · 스키마 {stats['schema']}\" if stats.get(\"schema\") else \"\"", "            schema = \"\"", [SCHEMA_LINE_T]),
 ]
-assert len(CASES) >= 1018, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5k ③ — 결함 아님의 문자열 basis·caveats ──
+STR_BASIS_T = "tests/application/test_lead.py::test_결함_아님의_basis나_caveats가_문자열_하나여도_root_cause를_옮기고_한_원소_목록으로_받는다"
+CASES += [
+ ("문자열 basis를 한 원소 목록으로 안 받는다", LD, "        data = {**data, **{k: [data[k]] for k in (\"basis\", \"caveats\") if isinstance(data.get(k), str)}}", "        pass", [STR_BASIS_T]),
+ ("목록 아닌 basis면 root_cause를 안 옮긴다", LD, "            return {**data, \"root_cause\": None}                                 # 다른 모양은", "            return data                                 # 다른 모양은", [STR_BASIS_T]),
+]
+assert len(CASES) >= 1020, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

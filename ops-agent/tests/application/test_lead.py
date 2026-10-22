@@ -1449,6 +1449,24 @@ async def test_트레이스의_턴_통계에_그_턴에_보낸_스키마가_남�
     assert [row[9]["schema"] for row in seen] == ["concludereply(증거 id 1)", "concludereply(증거 id 1)"]
 
 
+def test_결함_아님의_basis나_caveats가_문자열_하나여도_root_cause를_옮기고_한_원소_목록으로_받는다():
+    """측정 #21: `<50V>` 첫 판정이 `root_cause.component/evidence_ids: Field required`로 못 읽혔다 — 그 오류를 내는 답 모양은 basis나 caveats가 목록이 아니라
+    문자열 하나일 때뿐이다(R3-5h ③의 사전 검증이 그때 손대지 않고 넘겼다). 문자열은 한 원소 목록으로(원소 안의 id는 노드가 나눈다 — R3-5j ②), root_cause는
+    그래도 옮긴다. 다른 모양(사전 등)이면 root_cause만 비우고 그 칸의 오류만 남긴다."""
+    from src.application.lead import CAUSE_MOVED, ConcludeReply
+    from src.application.schemas import validate
+
+    base = {"verdict_type": "not_a_defect", "confidence": "medium", "narrative": "정상 공백", "root_cause": {}}
+    got = validate({**base, "basis": "t-1.e1과 t-3.e1"}, ConcludeReply)
+    assert got.ok and got.data["basis"] == ["t-1.e1과 t-3.e1"] and got.data["root_cause"] is None and got.data["caveats"] == [CAUSE_MOVED]
+    got = validate({**base, "basis": ["t-1.e1"], "caveats": "잘림 없음"}, ConcludeReply)
+    assert got.ok and got.data["caveats"] == ["잘림 없음", CAUSE_MOVED]
+    got = validate({**base, "basis": {"id": "t-1.e1"}}, ConcludeReply)
+    assert not got.ok and "root_cause" not in got.error and got.error.startswith("basis")
+    no_cause = validate({k: v for k, v in base.items() if k != "root_cause"} | {"basis": "t-1.e1"}, ConcludeReply)
+    assert no_cause.ok and no_cause.data["basis"] == ["t-1.e1"] and no_cause.data["caveats"] == []        # 원인이 없으면 옮긴 것도 없다
+
+
 async def test_길이_상한에서_깨진_답의_재질문에는_사유와_짧게가_같이_붙는다(case):
     """측정 #16: 판정 호출 18번 중 length 2(+유휴 1, c-14는 두 번 다 실패). 같은 질문을 그대로 다시 보내면 같은 길이로 또 끊길 수 있다 — 깨진 긴 답은 사유
     재질문(`## 다시`)에, 빈 긴 답은 같은 질문에 "짧게" 한 줄을 더한다. 상한(`max_tokens`)은 동결(사람 결정). 길이에 끊긴 답은 형식 탓이 아니라 재질문에

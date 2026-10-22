@@ -1529,6 +1529,14 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 트레이스(`_make_tracer`): `턴:` 줄 끝에 ` · 스키마 <이름>` — `case trace`가 그 줄을 그대로 머리줄로 옮긴다(요약 쪽 변경 없음). 스키마 칸만 있어도 줄이 선다.
 - 테스트 먼저(RED → GREEN). 스윕 +3(1018). `code graph`와 무관.
 
+#### R3-5k ③ (10-22) ✅ — 결함 아님의 문자열 basis·caveats
+
+- 측정 #21: `<50V>` 첫 판정이 `root_cause.component/evidence_ids: Field required`로 못 읽혀 재질문 한 번. 그 오류를 내는 답 모양을 여기서 재현해 보니 둘뿐이다
+  — basis나 caveats가 목록이 아니라 **문자열 하나**. R3-5h ③의 사전 검증이 그때 손대지 않고 넘겨 root_cause가 남았다.
+- `ConcludeReply`의 사전 검증: not_a_defect면 문자열 basis·caveats를 한 원소 목록으로(원소 안의 id는 노드가 나눈다 — R3-5j ②), root_cause는 그래도 옮긴다.
+  다른 모양(사전 등)이면 root_cause만 비우고 그 칸의 오류만 남겨 재질문이 그것만 말하게 한다. 실제 모양은 다음 판 트레이스의 날것 응답으로 확인한다.
+- 테스트 먼저(RED → GREEN). 스윕 +2(1020). `code graph`와 무관.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

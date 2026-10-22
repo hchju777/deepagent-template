@@ -146,11 +146,15 @@ class ConcludeReply(StrictModel):
     def _not_a_defect_moves_cause_to_basis(cls, data):
         """결함 아님에 root_cause가 실려 오면 코드가 비우고 그 증거 id를 basis로(R3-5h ③, 측정 #18 P0-c: c-10·c-12가 두 번 다 실어 degraded — 수리 재질문이
         같은 모양을 또 낸다). 뜻이 하나인 실수다. 조용히 고치지 않는다 — caveat 한 줄. 증거 id가 어디에도 없으면 아래 검증이 전처럼 거른다."""
-        if not isinstance(data, dict) or data.get("verdict_type") != "not_a_defect" or data.get("root_cause") is None:
+        if not isinstance(data, dict) or data.get("verdict_type") != "not_a_defect":
+            return data
+        # 목록 자리에 문자열 하나(R3-5k ③, 측정 #21 `<50V>` 첫 판정 — 이 모양만 그 오류를 냈다) — 한 원소 목록으로. 원소 안의 id는 노드가 나눈다(R3-5j ②).
+        data = {**data, **{k: [data[k]] for k in ("basis", "caveats") if isinstance(data.get(k), str)}}
+        if data.get("root_cause") is None:
             return data
         cause, basis, caveats = data.get("root_cause"), data.get("basis"), data.get("caveats")
         if not isinstance(basis, (list, type(None))) or not isinstance(caveats, (list, type(None))):
-            return data
+            return {**data, "root_cause": None}                                 # 다른 모양은 아래 검증이 그 칸만 말한다
         ids = [i for i in (cause.get("evidence_ids") or []) if isinstance(i, str)] if isinstance(cause, dict) else []
         basis = list(basis or [])                                              # 문자열 아닌 항목은 걷어내지 않는다 — 형식 오류는 아래 검증이 말한다
         return {**data, "root_cause": None, "basis": basis + [i for i in ids if i not in basis],
