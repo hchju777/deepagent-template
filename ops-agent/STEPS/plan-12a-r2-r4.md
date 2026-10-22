@@ -515,7 +515,7 @@ caveats가 목록이 아니라 **문자열 하나**. R3-5h ③의 사전 검증�
 
 | 순서 | 항목 | 할 것 | 자리 |
 |---|---|---|---|
-| R3-5k ① | (1) 키워드 | 인덱스: 키워드 인자의 값도 호출 인자로 — 부모 표가 키워드 노드를 건너뛰어 그 호출을 가리킨다(`_flows`·`_tainted_reaches_sink` 둘 다); 남은 줄은 남긴다, P1-7 | `knowledge/index` |
+| R3-5k ① ✅ | (1) 키워드 | 인덱스: 키워드 인자의 값도 호출 인자로 — 부모 표가 키워드 노드를 건너뛰어 그 호출을 가리킨다(`_flows`·`_tainted_reaches_sink` 둘 다); 남은 줄은 남긴다, P1-7 | `knowledge/index` |
 | R3-5k ② | (2) 스키마 표시 | 리드: 턴마다 보낸 스키마를 stats에 — `스키마 <title>(증거 id N)`·`스키마 없음`; 트레이스 `턴:` 줄 끝 | `lead`, `__main__` |
 | R3-5k ③ | (3) 50V | `ConcludeReply`: not_a_defect의 root_cause를 basis·caveats가 문자열이어도 옮기고, 문자열은 한 원소 목록으로 | `lead` |
 | R3-5k ④ | (4) A/B | `tools/conclude_ab.py <판정 트레이스 파일>`: 병합 주 줄(걷기가 쓰는 두 꼴)을 넣은 판·뺀 판을 판정 역할 LLM에 N번씩 — 유형·component·확신만 찍는다(증거 본문·접속 정보 없음); `--dry-run`은 뺄 줄만 | `tools/` |

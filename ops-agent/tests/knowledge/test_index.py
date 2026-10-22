@@ -907,3 +907,28 @@ async def test_속성으로_푼_토큰도_흐름을_보고_호출_인자로_넘�
     assert res("Deep") == [("tmp:alarm:{line}", "reads", "key")]                                  # 네 번째 함수까지는 안 따라간다 — 자원(보수)
     assert res("Outside") == []                                                                   # 같은 모듈 함수도 푼다
     assert res("RoleParent") == []                                                                # 비교에만 쓰는 속성은 자원이 아니다 — 형제의 값이 키 이름이어도
+
+
+# ── R3-5k ① — 키워드 인자의 값도 받는 함수로 ──
+
+FLOW3 = {'h/__init__.py': '', 'h/jobs.py': (
+    'class KwParent:\n    role = ""\n\n    def _run(self):\n        self.reset(cmd=self.cmd, key=self.role)\n\n'
+    '    def reset(self, cmd, key):\n        if cmd and key:\n            return 1\n\n\n'
+    'class KwChild(KwParent):\n    role = "tmp_alarm"\n\n\n'
+    'class KwRegistry:\n    role = ""\n\n    def _run(self):\n        self.reset(key=self.role)\n\n'
+    '    def reset(self, key):\n        return self.registry.get("proc").process({"key": key})\n\n\n'
+    'class KwRegistryChild(KwRegistry):\n    role = "tmp_alarm"\n\n\n'
+    'class KwToken:\n    def _run(self):\n        self.check(key=self.cfg.get("tmp_alarm"))\n\n    def check(self, key):\n        if key:\n            return 1\n')}
+
+
+async def test_키워드_인자로_넘긴_값도_받는_함수의_매개변수_쓰임새까지_이어_본다():
+    """측정 #21: 남은 부모 조회 줄의 속성 읽기가 `<매개변수>=self.<역할 속성>` 키워드 인자였다 — 부모 노드가 `keyword`라 호출 인자로 못 보고 "모르는 모양"으로
+    자원이 됐다. 키워드 값도 그 호출의 인자로 보고 받는 함수의 매개변수를 따라간다. 받는 함수가 값을 못 푸는 호출(레지스트리 디스패치)로 넘기면 전처럼
+    자원이다 — 그 규칙이 저장소 클라이언트 읽기를 지킨다(측정 #21 판단: 남긴다, P1-7)."""
+    idx = await _index(FLOW3, FLOW2_NAMES)
+
+    def res(cls):
+        return sorted((r.name, r.direction, r.via) for r in idx.symbols[_sid(idx, f"h.jobs.{cls}._run")].resources)
+
+    assert res("KwParent") == [] and res("KwToken") == []                                         # 받는 함수는 조건식뿐
+    assert res("KwRegistry") == [("tmp:alarm:{line}", "reads", "attr:role:h.jobs.KwRegistryChild")]  # 못 푸는 호출로 넘김 — 남긴다

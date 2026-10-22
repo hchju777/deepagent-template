@@ -582,6 +582,11 @@ def _flows(fn: "_Func", resolve, *, line: int | None = None, token: str | None =
     찾거나 모르는 모양이면 True — 자원을 잃는 쪽이 더 나쁘다(사람 결정 10-21)."""
     fn_node = fn.node
     parents = {child: parent for parent in ast.walk(fn_node) for child in ast.iter_child_nodes(parent)}
+    for call in ast.walk(fn_node):
+        if isinstance(call, ast.Call):
+            for kw in call.keywords:
+                # 키워드 인자의 값 → 그 호출(키워드 노드를 건너뛴다 — R3-5k ①, 측정 #21: `<매개변수>=self.<역할 속성>`이 `keyword` 밑이라 호출 인자로 못 봤다)
+                parents[kw.value] = call
     if token is not None:
         starts = [n for n in ast.walk(fn_node) if isinstance(n, ast.Constant) and n.value == token and getattr(n, "lineno", None) == line]
     else:

@@ -3246,7 +3246,13 @@ CASES += [
  ("람다 인자를 쓰임새로 본다", IDX, "    if isinstance(arg, ast.Lambda):\n        return False", "    if isinstance(arg, ast.Lambda):\n        return True", [ATTR_FLOW_T]),
  ("config 조회의 기본값 자리를 쓰임새로 본다", IDX, "                if node is start and (token is not None or _lookup_default(up, start)):", "                if node is start and token is not None:", [ATTR_FLOW_T]),
 ]
-assert len(CASES) >= 1014, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5k ① — 키워드 인자의 값도 받는 함수로 ──
+KW_FLOW_T = "tests/knowledge/test_index.py::test_키워드_인자로_넘긴_값도_받는_함수의_매개변수_쓰임새까지_이어_본다"
+CASES += [
+ ("키워드 인자를 호출 인자로 안 본다", IDX, "                parents[kw.value] = call", "                pass", [KW_FLOW_T]),
+]
+assert len(CASES) >= 1015, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
