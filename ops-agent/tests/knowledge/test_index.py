@@ -810,7 +810,7 @@ async def test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다():
 
 # ── R3-5f ③ — 클래스 속성 리터럴은 그 클래스의 것 ──
 
-KEYED = {'k/__init__.py': '', 'k/base.py': 'class KeyedJob:\n    def _run(self):\n        data = self.redis.get(self.cfg.get("redis_key", self.redis_key))\n        return data if self.mode == "material" else None\n', 'k/a.py': 'from k.base import KeyedJob\n\n\nclass A(KeyedJob):\n    redis_key = "k:a"\n    mode = "material"\n\n    def peek(self):\n        return self.redis.get(self.redis_key)\n', 'k/b.py': 'from k.a import A\n\n\nclass B(A):\n    redis_key = "k:b"\n', 'k/c.py': 'from k.base import KeyedJob\n\n\nclass C(KeyedJob):\n    pass\n', 'k/d.py': 'from k.base import KeyedJob\n\n\nclass D(KeyedJob):\n    mode = "k:b"\n', 'k/other.py': 'def redis_key_user(redis_key):\n    return redis_key\n'}
+KEYED = {'k/__init__.py': '', 'k/base.py': 'class KeyedJob:\n    def _run(self):\n        data = self.redis.get(self.cfg.get("redis_key", self.redis_key))\n        return self.redis.get(self.mode) if data else None\n', 'k/a.py': 'from k.base import KeyedJob\n\n\nclass A(KeyedJob):\n    redis_key = "k:a"\n    mode = "material"\n\n    def peek(self):\n        return self.redis.get(self.redis_key)\n', 'k/b.py': 'from k.a import A\n\n\nclass B(A):\n    redis_key = "k:b"\n', 'k/c.py': 'from k.base import KeyedJob\n\n\nclass C(KeyedJob):\n    pass\n', 'k/d.py': 'from k.base import KeyedJob\n\n\nclass D(KeyedJob):\n    mode = "k:b"\n', 'k/other.py': 'def redis_key_user(redis_key):\n    return redis_key\n'}
 KEYED_NAMES = [Name("rediskey", "k:a", "redis_key.a"), Name("rediskey", "k:b", "redis_key.b")]
 
 
@@ -868,3 +868,42 @@ async def test_config_키_토큰으로_푼_이름은_풀린_값이_쓰임새로_
     assert res("Reader") == [("tmp:alarm:{line}", "reads", "key")] and res("Direct") == res("Reader")
     assert res("Builder") == res("Reader") and res("Giver") == res("Reader")                          # f-string·반복 변수를 거쳐도, return도
     assert res("Keeper") == res("Reader") and res("Packer") == res("Reader")                          # self 속성 대입·사전 안(모르는 모양)
+
+
+# ── R3-5j ③ — 속성으로 푼 토큰도, 받는 함수의 매개변수까지 ──
+
+FLOW2 = {'g/__init__.py': '', 'g/jobs.py': (
+    'class Parent:\n    redis_key = ""\n\n    def _run(self):\n        key = self.cfg.get("redis_key", self.redis_key)\n'
+    '        self.later(lambda: self.reset(cmd=self.cmd, key=key))\n\n    def reset(self, cmd, key):\n        if cmd and key:\n            return 1\n\n'
+    '    def later(self, fn):\n        return fn()\n\n\n'
+    'class Child(Parent):\n    redis_key = "tmp_alarm"\n\n\n'
+    'class Parent2:\n    redis_key = ""\n\n    def _run(self):\n        key = self.cfg.get("redis_key", self.redis_key)\n        return self.load(key)\n\n'
+    '    def load(self, key):\n        return self.redis.get(key)\n\n\n'
+    'class Child2(Parent2):\n    redis_key = "tmp_alarm"\n\n\n'
+    'class Passer:\n    def _run(self):\n        return self.check(self.cfg.get("tmp_alarm"))\n\n    def check(self, key):\n        if key:\n            return 1\n\n\n'
+    'class Passer2:\n    def _run(self):\n        return self.check(self.cfg.get("tmp_alarm"))\n\n    def check(self, key):\n        return self.redis.get(key)\n\n\n'
+    'class Deep:\n    def _run(self):\n        key = self.cfg.get("tmp_alarm")\n        self.a(key)\n\n    def a(self, k):\n        self.b(k)\n\n'
+    '    def b(self, k):\n        self.c(k)\n\n    def c(self, k):\n        self.d(k)\n\n    def d(self, k):\n        if k:\n            return 1\n\n\n'
+    'class Outside:\n    def _run(self):\n        key = self.cfg.get("tmp_alarm")\n        helper(key)\n\n\n'
+    'def helper(key):\n    if key:\n        return 1\n\n\n'
+    'class RoleParent:\n    role = ""\n\n    def _run(self):\n        return 1 if self.role == "material" else 0\n\n\n'
+    'class RoleChild(RoleParent):\n    role = "tmp_alarm"\n')}
+FLOW2_NAMES = [Name("rediskey", "tmp:alarm:{line}", "redis_key.tmp_alarm")]
+
+
+async def test_속성으로_푼_토큰도_흐름을_보고_호출_인자로_넘기면_받는_함수의_매개변수_쓰임새까지_이어_본다():
+    """측정 #20: `키가 없다 — <임시 알람 키>`가 그대로였다 — (a) 그 줄의 토큰이 리터럴이 아니라 `self.<속성>`(값은 하위 클래스, `attr:` 표식)이라 흐름 검사 밖,
+    (b) 리터럴이어도 람다 안 `self.<리셋>(…, <인자>=<변수>)` 키워드 인자라 "호출 인자 = 쓰임새"로 끝났는데 받는 함수 안은 `if <명령> and <인자>:`뿐.
+    이제 `attr:` 표식도 검사하고, 받는 함수를 가족 메서드·같은 모듈 함수에서 풀어 그 매개변수의 쓰임새를 이어 본다(깊이 3 — 넘으면 자원, 못 풀어도 자원 —
+    저장소 클라이언트가 바로 그것이다). 람다 인자는 싱크가 아니고 그 몸체의 호출을 본다."""
+    idx = await _index(FLOW2, FLOW2_NAMES)
+
+    def res(cls):
+        return sorted((r.name, r.direction, r.via) for r in idx.symbols[_sid(idx, f"g.jobs.{cls}._run")].resources)
+
+    assert res("Parent") == []                                                                   # (a)+(b): 람다 안 reset(key=key) → 조건식뿐
+    assert res("Parent2") == [("tmp:alarm:{line}", "reads", "attr:redis_key:g.jobs.Child2")]      # load(key) → self.redis.get(key)
+    assert res("Passer") == [] and res("Passer2") == [("tmp:alarm:{line}", "reads", "key")]       # 토큰이 바로 호출 인자 — 받는 쪽으로
+    assert res("Deep") == [("tmp:alarm:{line}", "reads", "key")]                                  # 네 번째 함수까지는 안 따라간다 — 자원(보수)
+    assert res("Outside") == []                                                                   # 같은 모듈 함수도 푼다
+    assert res("RoleParent") == []                                                                # 비교에만 쓰는 속성은 자원이 아니다 — 형제의 값이 키 이름이어도

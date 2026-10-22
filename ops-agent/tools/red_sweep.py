@@ -3220,8 +3220,8 @@ CASES += [
 # ── 12a-R3-5i ③ — config로 푼 이름은 쓰임새로 흐를 때만 자원 ──
 KEY_FLOW_T = "tests/knowledge/test_index.py::test_config_키_토큰으로_푼_이름은_풀린_값이_쓰임새로_흐를_때만_그_함수의_자원이다"
 CASES += [
- ("조건식에만 쓰인 config 키도 자원으로 센다", IDX, "                    if n is not None and not _key_flows(node, line, n.key_token):\n                        return", "                    if False:\n                        return", [KEY_FLOW_T]),
- ("풀린 변수의 흐름을 안 따라간다", IDX, "            if len(names) != len(targets) or _tainted_reaches_sink(fn_node, names):\n                return True", "            if len(names) != len(targets):\n                return True", [KEY_FLOW_T]),
+ ("조건식에만 쓰인 config 키도 자원으로 센다", IDX, "                    if n is not None and not _flows(fn, resolve, line=line, token=n.key_token):\n                        return", "                    if False:\n                        return", [KEY_FLOW_T]),
+ ("풀린 변수의 흐름을 안 따라간다", IDX, "            if len(names) != len(targets) or _tainted_reaches_sink(fn, names, resolve):\n                return True", "            if len(names) != len(targets):\n                return True", [KEY_FLOW_T]),
  ("모르는 모양을 자원에서 뺀다", IDX, "        if isinstance(up, _CONDITION):\n            continue\n        return True", "        if isinstance(up, _CONDITION):\n            continue\n        return False", [KEY_FLOW_T]),
 ]
 
@@ -3237,7 +3237,16 @@ CASES += [
  ("길이 재질문에서도 스키마를 뗀다", LD, "            if not shorten:\n                use_schema = None", "            if True:\n                use_schema = None", [LENGTH_SCHEMA_T]),
  ("원소 안의 여러 증거 id를 안 나눈다", ND, "        if found:\n            # 원소 안에 든 케이스 증거 id들로 나눈다", "        if False:\n            # 원소 안에 든 케이스 증거 id들로 나눈다", [DESCRIBED_T]),
 ]
-assert len(CASES) >= 1010, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5j ③ — attr 표식 흐름 검사·받는 함수까지 ──
+ATTR_FLOW_T = "tests/knowledge/test_index.py::test_속성으로_푼_토큰도_흐름을_보고_호출_인자로_넘기면_받는_함수의_매개변수_쓰임새까지_이어_본다"
+CASES += [
+ ("attr 표식은 흐름 검사를 안 한다", IDX, "                elif via.startswith(\"attr:\"):", "                elif False:", [ATTR_FLOW_T]),
+ ("받는 함수의 매개변수 쓰임새를 안 이어 본다", IDX, "    callee = resolve(fn, call) if resolve is not None else None\n    if callee is None or depth >= _FLOW_DEPTH:", "    callee = None\n    if callee is None or depth >= _FLOW_DEPTH:", [ATTR_FLOW_T]),
+ ("람다 인자를 쓰임새로 본다", IDX, "    if isinstance(arg, ast.Lambda):\n        return False", "    if isinstance(arg, ast.Lambda):\n        return True", [ATTR_FLOW_T]),
+ ("config 조회의 기본값 자리를 쓰임새로 본다", IDX, "                if node is start and (token is not None or _lookup_default(up, start)):", "                if node is start and token is not None:", [ATTR_FLOW_T]),
+]
+assert len(CASES) >= 1014, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

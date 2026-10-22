@@ -500,14 +500,56 @@ def _nested_defs(func: ast.AST) -> list[ast.AST]:
 
 _CHAIN = (ast.Call, ast.Subscript, ast.Attribute, ast.JoinedStr, ast.FormattedValue, ast.BinOp)
 _CONDITION = (ast.If, ast.While, ast.Assert, ast.BoolOp, ast.Compare, ast.UnaryOp, ast.IfExp)
+_FLOW_DEPTH = 3         # 받는 함수를 따라 들어가는 깊이 — 넘으면 자원으로 둔다(보수)
 
 
 def _has_name(node: ast.AST, idents: set[str]) -> bool:
     return any(isinstance(n, ast.Name) and n.id in idents for n in ast.walk(node))
 
 
-def _tainted_reaches_sink(fn_node: ast.AST, seeds: set[str]) -> bool:
-    """풀린 값을 받은 지역 변수들이 쓰임새(호출 인자·return·yield·self 속성·첨자 대입)에 닿는가 — 대입·f-string·반복 변수로 번진 이름까지(고정점)."""
+def _param_of(callee: "_Func", call: ast.Call, arg: ast.AST) -> str | None:
+    """호출 인자 → 받는 함수의 매개변수 이름(위치·키워드). `*args`·범위 밖이면 None(못 푼다)."""
+    for kw in call.keywords:
+        if kw.value is arg:
+            return kw.arg if kw.arg in callee.params else None
+    for i, a in enumerate(call.args):
+        if a is arg:
+            if isinstance(a, ast.Starred):
+                return None
+            at = i + (1 if callee.class_sid is not None else 0)
+            return callee.params[at] if at < len(callee.params) else None
+    return None
+
+
+def _lookup_default(call: ast.Call, start: ast.AST) -> bool:
+    """`cfg.get("redis_key", self.<속성>)` — 속성이 config 조회의 **기본값** 자리다(사내 모양: config에 항목이 없으면 하위 클래스의 속성). 첫 인자가 문자열
+    리터럴인 `.get` 호출이면 푸는 호출이고, 속성이 첫 인자인 호출(`self.redis.get(self.<속성>)`)은 쓰임새다."""
+    return (isinstance(call.func, ast.Attribute) and call.func.attr == "get" and bool(call.args) and call.args[0] is not start
+            and isinstance(call.args[0], ast.Constant) and isinstance(call.args[0].value, str))
+
+
+def _arg_sink(fn: "_Func", call: ast.Call, arg: ast.AST, resolve, depth: int, seen: frozenset) -> bool:
+    """풀린 값(또는 번진 변수)이 호출 인자로 갔다 — 받는 함수를 풀 수 있으면 그 매개변수의 쓰임새를 이어 본다(R3-5j ③, 측정 #20 (b): 람다 안
+    `self.<리셋>(…, <인자>=<변수>)`의 받는 쪽이 조건식뿐이었다). 못 풀면(저장소 클라이언트·외부 함수) 쓰임새다. 람다 인자는 싱크가 아니다 — 그 몸체의 호출을
+    따로 본다. 깊이를 넘으면 자원으로 둔다."""
+    if isinstance(arg, ast.Lambda):
+        return False
+    callee = resolve(fn, call) if resolve is not None else None
+    if callee is None or depth >= _FLOW_DEPTH:
+        return True
+    param = _param_of(callee, call, arg)
+    if param is None:
+        return True
+    key = (callee.sid, param)
+    if key in seen:
+        return False
+    return _tainted_reaches_sink(callee, {param}, resolve, depth + 1, seen | {key})
+
+
+def _tainted_reaches_sink(fn: "_Func", seeds: set[str], resolve=None, depth: int = 0, seen: frozenset = frozenset()) -> bool:
+    """풀린 값을 받은 지역 변수들이 쓰임새(호출 인자·return·yield·self 속성·첨자 대입)에 닿는가 — 대입·f-string·반복 변수로 번진 이름까지(고정점). 호출
+    인자는 받는 함수까지(`_arg_sink`)."""
+    fn_node = fn.node
     tainted = set(seeds)
     while True:
         more = set(tainted)
@@ -524,33 +566,50 @@ def _tainted_reaches_sink(fn_node: ast.AST, seeds: set[str]) -> bool:
             break
         tainted = more
     for n in ast.walk(fn_node):
-        if isinstance(n, ast.Call) and any(_has_name(a, tainted) for a in (*n.args, *(k.value for k in n.keywords))):
-            return True
+        if isinstance(n, ast.Call):
+            for a in (*n.args, *(k.value for k in n.keywords)):
+                if _has_name(a, tainted) and _arg_sink(fn, n, a, resolve, depth, seen):
+                    return True
         if isinstance(n, (ast.Return, ast.Yield, ast.YieldFrom)) and n.value is not None and _has_name(n.value, tainted):
             return True
     return False
 
 
-def _key_flows(fn_node: ast.AST, line: int, token: str) -> bool:
-    """config 키 토큰을 따옴표로 푼 줄의 값이 쓰임새로 흐르는가(R3-5i ③). 토큰 상수 → 그것을 푸는 식(`cfg.get("tok")`·`cfg["tok"]`와 그 위에 이어진 호출·첨자·
-    f-string)의 바로 위가: 다른 호출의 인자·return·yield면 True; 지역 변수 대입이면 그 변수의 흐름(`_tainted_reaches_sink`); 조건식(`if`·`while`·`assert`·
-    비교)뿐이면 False. 토큰을 못 찾거나 모르는 모양이면 True — 자원을 잃는 쪽이 더 나쁘다(사람 결정 10-21)."""
+def _flows(fn: "_Func", resolve, *, line: int | None = None, token: str | None = None, attr: str | None = None) -> bool:
+    """config로 푼 키가 쓰임새로 흐르는가(R3-5i ③ → R3-5j ③). 출발은 그 줄의 토큰 상수(`key` 표식)거나 그 함수의 `self.<속성>` 읽기 전부(`attr:` 표식).
+    출발 → 그것을 푸는 식(`cfg.get("tok")`·`cfg["tok"]`와 그 위에 이어진 호출·첨자·f-string)의 바로 위가: 다른 호출의 인자면 받는 함수의 매개변수 쓰임새
+    (`_arg_sink`); return·yield면 True; 지역 변수 대입이면 그 변수의 흐름(`_tainted_reaches_sink`); 조건식(`if`·`while`·`assert`·비교)뿐이면 False. 출발을 못
+    찾거나 모르는 모양이면 True — 자원을 잃는 쪽이 더 나쁘다(사람 결정 10-21)."""
+    fn_node = fn.node
     parents = {child: parent for parent in ast.walk(fn_node) for child in ast.iter_child_nodes(parent)}
-    consts = [n for n in ast.walk(fn_node) if isinstance(n, ast.Constant) and n.value == token and getattr(n, "lineno", None) == line]
-    if not consts:
+    if token is not None:
+        starts = [n for n in ast.walk(fn_node) if isinstance(n, ast.Constant) and n.value == token and getattr(n, "lineno", None) == line]
+    else:
+        starts = [n for n in ast.walk(fn_node) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "self"
+                  and n.attr == attr and isinstance(n.ctx, ast.Load)]
+    if not starts:
         return True
-    for const in consts:
-        node, up = const, parents.get(const)
+    for start in starts:
+        node, up = start, parents.get(start)
+        handed = False
         while isinstance(up, _CHAIN):
-            if isinstance(up, ast.Call) and node is not up.func and node is not const and any(node is a for a in (*up.args, *(k.value for k in up.keywords))):
-                return True                                             # 푼 값이 다른 호출의 인자
+            if isinstance(up, ast.Call) and node is not up.func and any(node is a for a in (*up.args, *(k.value for k in up.keywords))):
+                if node is start and (token is not None or _lookup_default(up, start)):
+                    pass                                                # 푸는 호출(`cfg.get("tok")`·`cfg.get("redis_key", self.<속성>)`) — 그 위를 본다
+                else:
+                    if _arg_sink(fn, up, node, resolve, 0, frozenset()):
+                        return True                                     # 푼 값이 다른 호출의 인자 — 받는 쪽이 쓰임새다(못 풀면 그 자체로)
+                    handed = True
+                    break
             node, up = up, parents.get(up)
+        if handed:
+            continue
         if isinstance(up, (ast.Return, ast.Yield, ast.YieldFrom, ast.Await)):
             return True
         if isinstance(up, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node is up.value:
             targets = up.targets if isinstance(up, ast.Assign) else [up.target]
             names = {t.id for t in targets if isinstance(t, ast.Name)}
-            if len(names) != len(targets) or _tainted_reaches_sink(fn_node, names):
+            if len(names) != len(targets) or _tainted_reaches_sink(fn, names, resolve):
                 return True
             continue
         if isinstance(up, _CONDITION):
@@ -1454,6 +1513,21 @@ class _Resolver:
         by_value: dict[str, Name] = {}
         for known in list(self.names):
             by_value.setdefault(known.value, known)
+
+        def resolve(caller: _Func, call: ast.Call) -> "_Func | None":
+            """호출의 받는 함수 — `self.<이름>`은 자기·조상의 메서드, 맨이름은 같은 모듈의 함수. 그 밖(저장소 클라이언트·외부)은 None(못 푼다 = 쓰임새)."""
+            f = call.func
+            if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "self" and caller.class_sid is not None:
+                for c in [caller.class_sid, *self.ancestors(caller.class_sid)]:
+                    sid = self.classes[c].methods.get(f.attr) if c in self.classes else None
+                    if sid is not None and sid in self.funcs:
+                        return self.funcs[sid]
+                return None
+            if isinstance(f, ast.Name):
+                sid = caller.mod.defs.get(f.id)
+                return self.funcs.get(sid) if sid is not None else None
+            return None
+
         for fn in self.funcs.values():
             node = fn.node
             start, end = node.lineno, node.end_lineno or node.lineno
@@ -1467,7 +1541,12 @@ class _Resolver:
                     # config 키 토큰을 따옴표로 푼 줄(R3-5i ③, 측정 #19 P0-b: `config.get`으로 이름만 풀고 조건식에만 쓴 부모 메서드가 그 키의 읽는 쪽으로
                     # 세어져 `키가 없다 — <임시 알람 키>` 틀린 사실 2건). 풀린 값이 쓰임새로 흐르는 줄만 자원이다.
                     n = by_value.get(name)
-                    if n is not None and not _key_flows(node, line, n.key_token):
+                    if n is not None and not _flows(fn, resolve, line=line, token=n.key_token):
+                        return
+                elif via.startswith("attr:"):
+                    # `self.<속성>`으로 푼 키도 같다(R3-5j ③, 측정 #20 (a): 토큰이 리터럴이 아니라 속성이라 검사 밖이었다) — 그 함수의 그 속성 읽기 전부 중
+                    # 하나라도 쓰임새로 흐르면 자원.
+                    if not _flows(fn, resolve, attr=via.split(":", 2)[1]):
                         return
                 text = fn.mod.lines[line - 1] if 0 < line <= len(fn.mod.lines) else ""
                 # 동사 없는 줄은 읽기(보수적). "뒷줄이 토픽으로 보내면 쓰라는 명령"이라는 동사 목록 규칙(R3-1b ②)은 사내 모양(뒷줄 `save`,
