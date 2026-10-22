@@ -788,23 +788,34 @@ def resolve_described_citations(verdict: Verdict, evidence_ids) -> Verdict:
     이어 받는다)일 때만 id만으로 — caveat에 적는다. 측정 #19 P0-c: 이 모양으로 verify가 "없는 id"를 11번 되물었다(판정 턴 한 번에 분 단위). 뜻이
     하나인 실수다. 모르는 id는 그대로 두어 verify가 전처럼 거른다. 바뀐 것이 없으면 같은 객체."""
     known = set(evidence_ids)
+    # 문장 안의 증거 id — **완전일치**(앞뒤가 영숫자·밑줄·대시가 아니고, 뒤의 점은 문장 끝일 때만 — 한글 조사는 붙어도 된다: `t-1.e1과`). `t-1.e10`은
+    # `t-1.e1`이 아니다.
+    exact = re.compile(r"(?<![A-Za-z0-9_.\-])(" + "|".join(re.escape(i) for i in sorted(known, key=len, reverse=True)) + r")(?![A-Za-z0-9_\-])(?!\.[A-Za-z0-9_])") if known else None
     described: list[str] = []
 
-    def one(cited: str) -> str:
-        head = re.split(r"[\s:：]", cited.strip(), 1)[0]
-        if head != cited.strip() and (head in known or _TASK_ID.match(head)):
+    def one(cited: str) -> list[str]:
+        text = cited.strip()
+        if text in known:
+            return [cited]
+        found = list(dict.fromkeys(m.group(1) for m in exact.finditer(text))) if exact is not None else []
+        if found:
+            # 원소 안에 든 케이스 증거 id들로 나눈다(R3-5j ②, 측정 #20: `## 짧게` 턴의 한 원소에 id 셋이 든 문장) — 앞 토큰만의 경우도 여기 든다.
+            described.append(f"'{cited[:40]}'→{'+'.join(found)}")
+            return found
+        head = re.split(r"[\s:：]", text, 1)[0]
+        if head != text and _TASK_ID.match(head):
             described.append(f"'{cited[:40]}'→{head}")
-            return head
-        return cited
+            return [head]
+        return [cited]
 
     def fix(link: CauseLink) -> CauseLink:
-        ids = [one(e) for e in link.evidence_ids]
+        ids = [i for e in link.evidence_ids for i in one(e)]
         return link if ids == link.evidence_ids else link.model_copy(update={"evidence_ids": ids})
 
     root = fix(verdict.root_cause) if verdict.root_cause is not None else None
     alternates = [fix(link) for link in verdict.alternates]
     contributing = [fix(link) for link in verdict.contributing]
-    basis = [one(e) for e in verdict.basis]
+    basis = [i for e in verdict.basis for i in one(e)]
     if not described:
         return verdict
     note = f"인용 정리: 설명이 붙은 증거 id를 id만으로 바꿨다 — {', '.join(dict.fromkeys(described))}"

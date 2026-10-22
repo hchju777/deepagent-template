@@ -1433,7 +1433,8 @@ async def test_결함_아님_판정에_root_cause가_실려_오면_코드가_비
 
 async def test_길이_상한에서_깨진_답의_재질문에는_사유와_짧게가_같이_붙는다(case):
     """측정 #16: 판정 호출 18번 중 length 2(+유휴 1, c-14는 두 번 다 실패). 같은 질문을 그대로 다시 보내면 같은 길이로 또 끊길 수 있다 — 깨진 긴 답은 사유
-    재질문(`## 다시`)에, 빈 긴 답은 같은 질문에 "짧게" 한 줄을 더한다. 상한(`max_tokens`)은 동결(사람 결정)."""
+    재질문(`## 다시`)에, 빈 긴 답은 같은 질문에 "짧게" 한 줄을 더한다. 상한(`max_tokens`)은 동결(사람 결정). 길이에 끊긴 답은 형식 탓이 아니라 재질문에
+    스키마를 **그대로 둔다**(R3-5j ②, 측정 #20: 판정 역할의 `## 짧게` 턴에 스키마가 없어 증거 id enum이 안 걸렸다) — 형식이 깨진 답 뒤만 뗀다."""
     from src.domain.llm import LlmReply
 
     cut = LlmReply(status="ok", asked_at=T0, model="scripted", text='{"tasks": [', chunks=5, finish_reason="length")
@@ -1441,4 +1442,5 @@ async def test_길이_상한에서_깨진_답의_재질문에는_사유와_짧�
     frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
     assert "stopped_by" not in patch and len(llm.prompts) == 2
-    assert "## 다시" in llm.prompts[1] and llm.prompts[1].rstrip().endswith("후보(alternates)는 둘 이내로 내라.") and llm.schemas[1] is None
+    assert "## 다시" in llm.prompts[1] and llm.prompts[1].rstrip().endswith("후보(alternates)는 둘 이내로 내라.")
+    assert llm.schemas[1] is not None and llm.schemas[1] == llm.schemas[0]

@@ -845,6 +845,11 @@ def test_설명이_붙은_증거_id_인용은_그_id가_실재하면_id만으로
     assert fixed.root_cause.evidence_ids == ["t-1.e1", "t-3.e1"] and fixed.alternates[0].evidence_ids == ["t-3.e1"]
     same = _nad("t-1.e1", confidence="medium")
     assert resolve_described_citations(same, ids) is same
+    # 한 원소에 증거 id 여럿이 든 문장(측정 #20: 판정 역할 `## 짧게` 턴의 남은 1건) — 그 안에 완전일치로 든 케이스 증거 id들로 나눈다. 모르는 id는 안 든다.
+    many = _nad("t-1.e1과 t-3.e1, 그리고 t-9.e1을 함께 보면 정상 공백이다. 마지막은 t-3.e1.", confidence="medium")
+    fixed = resolve_described_citations(many, ids)
+    assert fixed.basis == ["t-1.e1", "t-3.e1"] and "→t-1.e1+t-3.e1" in fixed.caveats[-1]
+    assert resolve_described_citations(_nad("t-1.e10을 보라", confidence="medium"), ids).basis == ["t-1.e10을 보라"]      # 부분 문자열은 아니다
 
 
 async def test_conclude_노드는_설명이_붙은_인용을_id만으로_고친_뒤_태스크_id_정리를_한다(case):

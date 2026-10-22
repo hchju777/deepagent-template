@@ -3230,7 +3230,14 @@ FIELD_NONE_T = "tests/application/test_walk.py::test_한_입력뿐일_때_None_�
 CASES += [
  ("None 꼬리를 필드별로 안 센다", WK, "            if empty:\n                blank.append(f\"{side} {'+'.join(empty)}\")", "            if len(empty) == len(side_fields):\n                blank.append(f\"{side} {'+'.join(empty)}\")", [FIELD_NONE_T]),
 ]
-assert len(CASES) >= 1008, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5j ② — 길이 재질문의 스키마·원소 안 id 나누기 ──
+LENGTH_SCHEMA_T = "tests/application/test_lead.py::test_길이_상한에서_깨진_답의_재질문에는_사유와_짧게가_같이_붙는다"
+CASES += [
+ ("길이 재질문에서도 스키마를 뗀다", LD, "            if not shorten:\n                use_schema = None", "            if True:\n                use_schema = None", [LENGTH_SCHEMA_T]),
+ ("원소 안의 여러 증거 id를 안 나눈다", ND, "        if found:\n            # 원소 안에 든 케이스 증거 id들로 나눈다", "        if False:\n            # 원소 안에 든 케이스 증거 id들로 나눈다", [DESCRIBED_T]),
+]
+assert len(CASES) >= 1010, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

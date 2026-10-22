@@ -288,8 +288,10 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             if shorten:
                 asked = brief_prompt(asked)
             # **스키마는 뗀다.** 스키마를 건 답이 깨졌다면 모델이 그 강제에 약한 것이고, 같은 스키마로 다시 물으면 같은 모양으로
-            # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다.
-            use_schema = None
+            # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다. 길이 상한에서 끊긴 답도 둔다 — 형식 탓이 아니고,
+            # 떼면 판정 역할의 `## 짧게` 턴에 증거 id enum이 안 걸린다(R3-5j ②, 측정 #20: 없는 id 되묻기·인용 정리가 전부 그 턴).
+            if not shorten:
+                use_schema = None
         text, failure, latency, waited, source, note, stats = None, None, None, None, None, None, None
         timed_out = False
         try:
