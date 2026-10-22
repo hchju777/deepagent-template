@@ -3201,7 +3201,7 @@ CASES += [
 SAMEIN_T = "tests/application/test_walk.py::test_양쪽_키_필드를_가진_행이_한_입력에만_있으면_짝이_없어_못_센다는_주가_남고_값이_전부_None이면_그것도_적는다"
 CASES += [
  ("같은 입력뿐인 키 필드를 못 센다로 안 적는다", WK, "        if any(a_ev != b_ev for _, a_ev, _ in lefts for _, b_ev, _ in rights):\n            continue", "        if True:\n            continue", [SAMEIN_T]),
- ("한 입력뿐일 때 값 전부 None을 안 적는다", WK, "        tail = f\"({'·'.join(nones)} 값 전부 None)\" if nones else \"\"", "        tail = \"\"", [SAMEIN_T]),
+ ("한 입력뿐일 때 값 전부 None을 안 적는다", WK, "        tail = f\"({'·'.join(blank)} 값 전부 None)\" if blank else \"\"", "        tail = \"\"", [SAMEIN_T]),
 ]
 
 # ── 12a-R3-5i ② — basis enum·설명이 붙은 인용 ──
@@ -3224,7 +3224,13 @@ CASES += [
  ("풀린 변수의 흐름을 안 따라간다", IDX, "            if len(names) != len(targets) or _tainted_reaches_sink(fn_node, names):\n                return True", "            if len(names) != len(targets):\n                return True", [KEY_FLOW_T]),
  ("모르는 모양을 자원에서 뺀다", IDX, "        if isinstance(up, _CONDITION):\n            continue\n        return True", "        if isinstance(up, _CONDITION):\n            continue\n        return False", [KEY_FLOW_T]),
 ]
-assert len(CASES) >= 1007, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5j ① — None 꼬리는 필드별 ──
+FIELD_NONE_T = "tests/application/test_walk.py::test_한_입력뿐일_때_None_꼬리는_필드별이다"
+CASES += [
+ ("None 꼬리를 필드별로 안 센다", WK, "            if empty:\n                blank.append(f\"{side} {'+'.join(empty)}\")", "            if len(empty) == len(side_fields):\n                blank.append(f\"{side} {'+'.join(empty)}\")", [FIELD_NONE_T]),
+]
+assert len(CASES) >= 1008, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -74,11 +74,15 @@ def join_unmatched(merges, inputs) -> list[tuple[Any, str]]:
             continue
         if any(a_ev != b_ev for _, a_ev, _ in lefts for _, b_ev, _ in rights):
             continue
-        # 양쪽 키 필드를 가진 행이 한 입력에만 있다 — 짝이 안 나온다. 그 입력에서 한쪽 값이 전부 None이면 그 사실도(열은 있으나 비어 있다).
+        # 양쪽 키 필드를 가진 행이 한 입력에만 있다 — 짝이 안 나온다. 그 입력에서 한쪽 키 값이 전부 None이면 그 사실도 — **필드별로**(측정 #20: 오른쪽
+        # 3필드 중 하나만 전 행 None이라 튜플 전체 기준으론 안 달렸다. 열은 있으나 비어 있다).
         label = lefts[0][0]
-        nones = [side for side, found in (("왼쪽", lefts), ("오른쪽", rights))
-                 if all(all(v is None for v in keys) for _, _, key_set in found for keys in key_set)]
-        tail = f"({'·'.join(nones)} 값 전부 None)" if nones else ""
+        blank = []
+        for side, found, side_fields in (("왼쪽", lefts, m.left), ("오른쪽", rights, m.right)):
+            empty = [f for i, f in enumerate(side_fields) if all(keys[i] is None for _, _, key_set in found for keys in key_set)]
+            if empty:
+                blank.append(f"{side} {'+'.join(empty)}")
+        tail = f"({'·'.join(blank)} 값 전부 None)" if blank else ""
         out.append((m, f"{fields}를 가진 행이 한 입력 {label}에만 있다{tail}"))
     return out
 

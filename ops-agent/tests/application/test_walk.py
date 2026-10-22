@@ -827,8 +827,21 @@ async def test_양쪽_키_필드를_가진_행이_한_입력에만_있으면_짝
     lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[merge])})
     walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
     assert not any(h.bad for h in walk.hops[1:]) and walk.stopped == "입력이 다 정상 — W0"
-    assert walk.notes == ["W0: 병합식 w0.py:L5의 키 필드(code ↔ ws)를 가진 행이 한 입력 ref:L1에만 있다(오른쪽 값 전부 None) — 겹침을 못 센다"]
+    assert walk.notes == ["W0: 병합식 w0.py:L5의 키 필드(code ↔ ws)를 가진 행이 한 입력 ref:L1에만 있다(오른쪽 ws 값 전부 None) — 겹침을 못 센다"]
     inputs = [("ref", "e2", [{"code": "A", "ws": None}, {"code": "B", "ws": "x"}], "", None, "ref")]
     assert [why for _, why in join_unmatched([merge], inputs)] == ["키 필드(code ↔ ws)를 가진 행이 한 입력 ref에만 있다"]       # 값이 하나라도 있으면 꼬리 없음
     both = [("ref", "e2", [{"code": None, "ws": None}], "", None, "ref")]
-    assert [why for _, why in join_unmatched([merge], both)] == ["키 필드(code ↔ ws)를 가진 행이 한 입력 ref에만 있다(왼쪽·오른쪽 값 전부 None)"]
+    assert [why for _, why in join_unmatched([merge], both)] == ["키 필드(code ↔ ws)를 가진 행이 한 입력 ref에만 있다(왼쪽 code·오른쪽 ws 값 전부 None)"]
+
+
+# ── R3-5j ① — None 꼬리는 필드별 ──
+
+def test_한_입력뿐일_때_None_꼬리는_필드별이다():
+    """측정 #20: 오른쪽 키 3필드 중 하나만 전 행 None(라인 키 2개는 값 있음) — 튜플 전체 기준으로 달아 꼬리가 없었다. 필드별로 센다."""
+    from src.application.walk import join_unmatched
+    from src.domain.case import MergeHit
+
+    m = MergeHit(path="w0.py", line=5, text="", left=["code"], right=["ws", "line", "shift"])
+    rows = [{"code": "A", "ws": None, "line": "L1", "shift": None}, {"code": "B", "ws": None, "line": "L2", "shift": "D"}]
+    inputs = [("ref", "e2", rows, "", None, "ref")]
+    assert [why for _, why in join_unmatched([m], inputs)] == ["키 필드(code ↔ ws+line+shift)를 가진 행이 한 입력 ref에만 있다(오른쪽 ws 값 전부 None)"]
