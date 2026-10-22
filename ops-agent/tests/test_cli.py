@@ -774,3 +774,24 @@ def test_트레이스_턴_줄_끝에_그_턴의_스키마를_적는다(tmp_path)
     assert "턴: 조각 3 · 종료 stop · 토큰 모름 · 스키마 concludereply(증거 id 12)" in written[0].read_text(encoding="utf-8")
     trace("frame", 0, "물음", "답", None, 3.0, None, None, None, {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0, "schema": "없음"})
     assert "턴: 조각 0 · 종료 모름 · 토큰 모름 · 스키마 없음" in written[1].read_text(encoding="utf-8")
+
+
+
+def test_llm_ab는_판정_트레이스_파일의_병합_주_줄을_넣은_판과_뺀_판으로_묻는다(echo_config, tmp_path, capsys):
+    """R3-5k ④(측정 #21 요청): 사내 모델로 사람이 돌리는 측정 명령. `--dry-run`은 뺄 줄만, 병합 주가 없으면 묻지 않고 1. 대역(echo)은 JSON을 못 내니 줄마다
+    `못 읽음`이고 요약까지 찍힌다 — 배선만 본다."""
+    from src.__main__ import _make_tracer, main
+
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    note = "  주: W0: 병합식 w0.py:L9의 키 필드(code ↔ zz)를 가진 행이 한 입력 ref:L1에만 있다(오른쪽 zz 값 전부 None) — 겹침을 못 센다"
+    trace("conclude", 3, f"## 사건\n{note}\n## 모은 증거\n- t-1.e1 | x | y", "{}", None, 9.0)
+    trace("conclude", 4, "## 사건\n## 모은 증거\n- t-1.e1 | x | y", "{}", None, 9.0)
+    base = ["--config-root", str(echo_config), "--env-file", "/dev/null", "llm", "ab"]
+    assert main([*base, str(written[0]), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "뺀 병합 주 1줄" in out and note.strip() in out and "A1" not in out
+    assert main([*base, str(written[1])]) == 1 and "병합 주 줄이 없다" in capsys.readouterr().out
+    assert main([*base, str(written[0]), "--runs", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "A1 못 읽음 — " in out and "B1 못 읽음 — " in out and "A(주 있음): 못 읽음 1" in out
+    assert "[echo]" not in out and "t-1.e1 | x | y" not in out                                    # 답(여기선 프롬프트 메아리)의 발췌를 안 찍는다

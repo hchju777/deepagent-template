@@ -3268,7 +3268,21 @@ CASES += [
  ("문자열 basis를 한 원소 목록으로 안 받는다", LD, "        data = {**data, **{k: [data[k]] for k in (\"basis\", \"caveats\") if isinstance(data.get(k), str)}}", "        pass", [STR_BASIS_T]),
  ("목록 아닌 basis면 root_cause를 안 옮긴다", LD, "            return {**data, \"root_cause\": None}                                 # 다른 모양은", "            return data                                 # 다른 모양은", [STR_BASIS_T]),
 ]
-assert len(CASES) >= 1020, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5k ④ — 판정 턴 A/B 측정 명령 ──
+ABM = ROOT / "src/application/conclude_ab.py"
+AB_STRIP_T = "tests/application/test_conclude_ab.py::test_병합_주의_두_꼴을_실제_걷기_출력에서_빼고_다른_주와_나머지는_그대로_둔다"
+AB_RUN_T = "tests/application/test_conclude_ab.py::test_두_판을_번갈아_물어_유형_component_확신만_세고_판정_스키마에_그_프롬프트의_증거_id를_건다"
+AB_CLI_T = "tests/test_cli.py::test_llm_ab는_판정_트레이스_파일의_병합_주_줄을_넣은_판과_뺀_판으로_묻는다"
+CASES += [
+ ("병합 주 줄을 안 뺀다", ABM, "        (removed if line.startswith(_NOTE) and any(m in line for m in JOIN_NOTE_MARKS) else kept).append(line)", "        kept.append(line)", [AB_STRIP_T, AB_CLI_T]),
+ ("B판에도 원래 프롬프트를 묻는다", ABM, "        for arm, text in ((\"A\", prompt), (\"B\", stripped)):", "        for arm, text in ((\"A\", prompt), (\"B\", prompt)):", [AB_RUN_T]),
+ ("A/B에 판정 스키마를 안 건다", ABM, "            rows.append((arm, i, _line(await ask_json(llm, text, ConcludeReply, schema=schema))))", "            rows.append((arm, i, _line(await ask_json(llm, text, ConcludeReply))))", [AB_RUN_T]),
+ ("못 읽은 답의 발췌를 찍는다", ABM, "        reason = re.split(r\"\\s—\\s['\\\"]\", ((got.error or \"\").splitlines() or [\"\"])[0], maxsplit=1)[0]", "        reason = ((got.error or \"\").splitlines() or [\"\"])[0]", [AB_RUN_T, AB_CLI_T]),
+ ("병합 주가 없어도 묻는다", MN, "    if not removed:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\")\n        return 1", "    if False:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\")\n        return 1", [AB_CLI_T]),
+ ("dry-run도 묻는다", MN, "    if args.dry_run:\n        return 0\n    cfg = _llm_config(args, env, \"conclude\")", "    if False:\n        return 0\n    cfg = _llm_config(args, env, \"conclude\")", [AB_CLI_T]),
+]
+assert len(CASES) >= 1026, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

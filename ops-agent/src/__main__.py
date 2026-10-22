@@ -385,6 +385,45 @@ def cmd_llm_ask(args, env) -> int:
     return 1 if reply.status == "error" else 0
 
 
+def cmd_llm_ab(args, env) -> int:
+    """판정 턴 A/B(R3-5k ④, 측정 #21 요청) — `case investigate --trace`가 쓴 판정 턴 파일로, 걷기의 병합 주 줄을 넣은 판·뺀 판을 판정 역할 LLM에 묻는다. 사내
+    모델로 사람이 돌리는 측정 명령이다. 유형·component·확신만 찍는다."""
+    from src.application.conclude_ab import prompt_of, run_ab, strip_join_notes, summary
+    from src.infrastructure.llm_factory import build_llm
+
+    path = Path(args.trace_file)
+    if not path.exists():
+        raise SystemExit(f"트레이스 파일이 없다 — {path}")
+    prompt = prompt_of(path.read_text(encoding="utf-8"))
+    if prompt is None:
+        raise SystemExit(f"`## 물어본 것` 칸이 없다 — `case investigate --trace`가 쓴 판정 턴 파일인가: {path.name}")
+    _, removed = strip_join_notes(prompt)
+    print(f"판정 A/B — {path.name} · 뺀 병합 주 {len(removed)}줄")
+    for line in removed:
+        print(f"  {line.strip()}")
+    if not removed:
+        print("  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다")
+        return 1
+    if args.dry_run:
+        return 0
+    cfg = _llm_config(args, env, "conclude")
+    llm = build_llm(cfg, clock=_clock(args, env))
+    print(f"  판정 역할 {cfg.describe()} · 판마다 {args.runs}번(A·B 번갈아)")
+
+    async def go():
+        try:
+            return await run_ab(llm, prompt, runs=args.runs)
+        finally:
+            await _close_llms(llm)
+
+    rows = _run(go())
+    for arm, i, line in rows:
+        print(f"  {arm}{i} {line}")
+    for line in summary(rows):
+        print(f"  {line}")
+    return 0
+
+
 # 간단한 질문 묶음. **JSON 항목이 제일 중요하다** — 8단계의 노드들이 전부 LLM
 # 응답을 JSON으로 파싱하므로, 모델이 그걸 못 하면 조사가 도중에 조용히 멈춘다.
 _CHECKS = [
@@ -2578,6 +2617,11 @@ def build_parser() -> argparse.ArgumentParser:
     check_llm.add_argument("--role", choices=("lead", "conclude", "report"),
                            help="그 역할의 실효 설정으로")
     check_llm.set_defaults(run=cmd_llm_check)
+    ab = llm_sub.add_parser("ab", help="판정 턴 A/B — 판정 트레이스 파일의 프롬프트에서 걷기의 병합 주 줄을 넣은 판·뺀 판 (측정 도구)")
+    ab.add_argument("trace_file", help="`case investigate --trace`가 쓴 판정 턴 파일(NN-rK-conclude.md)")
+    ab.add_argument("--runs", type=int, default=3, help="판마다 몇 번(기본 3)")
+    ab.add_argument("--dry-run", action="store_true", help="뺄 줄만 찍고 묻지 않는다")
+    ab.set_defaults(run=cmd_llm_ab)
 
     mail = sub.add_parser("mail", help="보고서를 메일로 보낸다")
     mail_sub = mail.add_subparsers(dest="what", required=True)
