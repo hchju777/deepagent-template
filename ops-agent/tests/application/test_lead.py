@@ -587,7 +587,9 @@ async def test_트레이스가_시도마다_날것을_건넨다(case):
     assert len(seen) == 2                       # 실패한 1차도 남는다
     (node, round_no, prompt, text, error, _latency, waited, source, note, stats) = seen[0]
     assert (node, round_no, text, note) == ("frame", 2, "쓰레기", None)       # 끊김 메모는 끊겼을 때만
-    assert stats == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0}   # 열째는 턴 통계(R3-5d ②) — 대본은 모른다
+    assert stats == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0,   # 열째는 턴 통계(R3-5d ②) — 대본은 모른다
+                     "schema": "frame_reply"}                                                    # 그 턴에 보낸 스키마(R3-5k ②)
+    assert seen[1][9]["schema"] == "없음"                                                        # 형식이 깨진 답 뒤의 재질문은 스키마를 뗀다
     assert error and "JSON" in error and waited == 4.0 and source == "nextAccessTime"
     assert "다시" in seen[1][2]                  # 2차는 수리 프롬프트
     assert seen[1][4] is None and seen[1][6] is None   # 2차는 성공, 안 기다렸다
@@ -1384,12 +1386,13 @@ async def test_턴의_조각_수_종료_사유_토큰이_트레이스로_간다(
     frame, _, _ = lead.make_lead(ScriptedAdapter([full], clock=lambda: T0), site_config=site_config(), prompts=PROMPTS, max_rounds=3,
                                  trace=lambda *a, **kw: seen.append(a))
     await frame(CaseState(case=case))
-    assert seen[0][9] == {"chunks": 3, "finish_reason": "stop", "input_tokens": 1200, "output_tokens": 80}
+    assert seen[0][9] == {"chunks": 3, "finish_reason": "stop", "input_tokens": 1200, "output_tokens": 80, "schema": "frame_reply"}
     plain = []
     frame, _, _ = lead.make_lead(ScriptedAdapter([reply(tasks=[TASK])], clock=lambda: T0), site_config=site_config(), prompts=PROMPTS, max_rounds=3,
                                  trace=lambda *a, **kw: plain.append(a))
     await frame(CaseState(case=case))
-    assert plain[0][9] == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0}            # 모르면 0·빈 문자열
+    assert plain[0][9] == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0,            # 모르면 0·빈 문자열
+                           "schema": "frame_reply"}
 
 
 
@@ -1429,6 +1432,21 @@ async def test_결함_아님_판정에_root_cause가_실려_오면_코드가_비
     _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3)
     patch = await conclude(_ended(case))
     assert "verdict" not in patch and any("basis" in e for e in patch["llm_errors"]) and len(llm.prompts) == 2
+
+
+async def test_트레이스의_턴_통계에_그_턴에_보낸_스키마가_남고_길이_재질문에도_판정_스키마가_간다(case):
+    """측정 #21: `## 짧게` 턴에 json_schema가 갔는지 트레이스로 못 봤다 — 턴 통계에 그 턴의 스키마 이름(판정이면 증거 id enum 수)을 싣는다(R3-5k ②).
+    길이 상한 재질문은 스키마를 그대로 둔다(R3-5j ②)."""
+    from src.domain.llm import LlmReply
+
+    seen = []
+    cut = LlmReply(status="ok", asked_at=T0, model="scripted", text='{"verdict_type": "not_a', chunks=5, finish_reason="length")
+    good = reply(verdict_type="not_a_defect", confidence="medium", narrative="정상 공백", basis=["t-1.e1"])
+    llm = ScriptedAdapter([cut, good], clock=lambda: T0)
+    _, _, conclude = lead.make_lead(llm, site_config=site_config(), prompts=shipped_prompts(), max_rounds=3, trace=lambda *row: seen.append(row))
+    patch = await conclude(_ended(case))
+    assert patch["verdict"].verdict_type == "not_a_defect" and "## 짧게" in llm.prompts[1]
+    assert [row[9]["schema"] for row in seen] == ["concludereply(증거 id 1)", "concludereply(증거 id 1)"]
 
 
 async def test_길이_상한에서_깨진_답의_재질문에는_사유와_짧게가_같이_붙는다(case):

@@ -760,3 +760,17 @@ def test_스트림_유휴_경고_줄만_거른다(caplog):
         log.warning("langchain_openai.stream_chunk_timeout fired", extra={"source": "stream_chunk_timeout"})
         log.warning("다른 경고")
     assert [r.getMessage() for r in caplog.records] == ["다른 경고"]
+
+
+
+def test_트레이스_턴_줄_끝에_그_턴의_스키마를_적는다(tmp_path):
+    """R3-5k ②(측정 #21): `## 짧게` 턴에 스키마가 갔는지 트레이스로 못 봤다 — 턴 통계의 `schema`를 `턴:` 줄 끝에(`case trace`가 그 줄을 그대로 옮긴다).
+    통계가 비어도 스키마가 있으면 줄이 선다. 스키마 칸이 없는 옛 통계는 전과 같다."""
+    from src.__main__ import _make_tracer
+
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("conclude", 4, "물음", "답", None, 9.0, None, None, None,
+          {"chunks": 3, "finish_reason": "stop", "input_tokens": 0, "output_tokens": 0, "schema": "concludereply(증거 id 12)"})
+    assert "턴: 조각 3 · 종료 stop · 토큰 모름 · 스키마 concludereply(증거 id 12)" in written[0].read_text(encoding="utf-8")
+    trace("frame", 0, "물음", "답", None, 3.0, None, None, None, {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0, "schema": "없음"})
+    assert "턴: 조각 0 · 종료 모름 · 토큰 모름 · 스키마 없음" in written[1].read_text(encoding="utf-8")

@@ -942,10 +942,12 @@ def _make_tracer(case_id: str, *, folder: Path):
         # 스트림이 끝 표시 없이 끊겼으면 — 받은 글로 읽었나, 다시 묻나(사내 측정 #4의 멈춤을 측정 #5에서 센다).
         took += f"스트림: {note}\n" if note else ""
         # 턴의 조각 수·종료 사유·usage(R3-5d ②, 측정 #13 추가분 1) — 성공한 턴도. 모르는 것은 모른다고(끊긴 스트림엔 usage가 없다), 셋 다 모르면 줄이 없다.
-        if stats and (stats.get("chunks") or stats.get("finish_reason") or stats.get("input_tokens") or stats.get("output_tokens")):
+        # 그 턴에 보낸 답 스키마(R3-5k ②, 측정 #21) — 같은 줄 끝에. `case trace`가 이 줄을 그대로 머리줄로 옮긴다. 스키마 칸이 있으면 줄이 선다.
+        if stats and (stats.get("chunks") or stats.get("finish_reason") or stats.get("input_tokens") or stats.get("output_tokens") or stats.get("schema")):
             tokens = (f"토큰 입력 {stats['input_tokens']:,} · 출력 {stats['output_tokens']:,}"
                       if stats.get("input_tokens") or stats.get("output_tokens") else "토큰 모름")
-            took += f"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}\n"
+            schema = f" · 스키마 {stats['schema']}" if stats.get("schema") else ""
+            took += f"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}{schema}\n"
         path.write_text(
             f"# {case_id} · {node} · 라운드 {round_no}\n\n"
             f"결과: {verdict}\n{took}\n"

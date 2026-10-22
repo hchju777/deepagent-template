@@ -199,6 +199,15 @@ def response_schema(model: type[StrictModel]) -> dict:
     return schema
 
 
+def schema_label(schema: dict | None) -> str:
+    """턴에 보낸 답 스키마의 이름 — 트레이스 머리에 남긴다(R3-5k ②, 측정 #21: `## 짧게` 턴에 스키마가 갔는지 트레이스로 못 봤다). 판정 스키마면 증거 id enum
+    수까지. 안 보냈으면 `없음`."""
+    if not schema:
+        return "없음"
+    ids = (((schema.get("properties") or {}).get("basis") or {}).get("items") or {}).get("enum")
+    return str(schema.get("title") or "이름 없음") + (f"(증거 id {len(ids)})" if ids else "")
+
+
 def conclude_schema(evidence_ids) -> dict:
     """판정 턴의 스키마 — `basis`와 다리의 `evidence_ids` 항목을 **그 케이스 증거 id의 enum**으로(R3-5i ②, 측정 #19 P0-c: basis 원소가 `<id>: <설명>`
     문장이라 verify가 "없는 id"로 11번 되물었다). 서버가 스키마를 강제하면 리드는 그 밖을 못 쓴다. 증거가 없으면 열린 문자열 그대로. 닫힘은 그대로다."""
@@ -306,7 +315,8 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             shorten = reply.finish_reason == "length"
             latency = reply.latency_s
             # 턴의 조각 수·종료 사유·usage — 성공한 턴도 트레이스 머리에(R3-5d ②, 측정 #13 추가분 1: length가 고정 상한인지 보려면 턴마다 보여야 한다)
-            stats = {"chunks": reply.chunks, "finish_reason": reply.finish_reason, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens}
+            stats = {"chunks": reply.chunks, "finish_reason": reply.finish_reason, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens,
+                     "schema": schema_label(use_schema)}
             waited = reply.waited_s or None            # 429 뒤 기다린 초 — 트레이스가 적는다(브리프의 "429 횟수와 대기 초")
             source = reply.rate_source or None
             if reply.status == "error" and reply.partial_text:

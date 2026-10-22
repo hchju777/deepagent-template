@@ -2924,8 +2924,8 @@ CASES += [
  ("비스트림의 usage를 안 읽는다", LCM, "                usage = getattr(message, \"usage_metadata\", None) or {}\n", "                usage = {}\n", [USAGE_T]),
  ("성공한 답에 토큰을 안 싣는다", LCM, "finish_reason=str(metadata.get(\"finish_reason\") or \"\"), **_tokens(usage)), None", "finish_reason=str(metadata.get(\"finish_reason\") or \"\")), None", [USAGE_T]),
  ("턴 통계를 트레이스에 안 넘긴다", LD, "        _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)", "        _tell(on_exchange, asked, text, failure, latency, waited, source, note, None)", [STATS_T]),
- ("성공한 턴의 통계를 안 만든다", LD, "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens}", "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens} if reply.status == \"error\" else None", [STATS_T]),
- ("트레이스 머리에 턴 줄이 없다", MN, "            took += f\"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}\\n\"", "            pass", [TRACE_TURN_T]),
+ ("성공한 턴의 통계를 안 만든다", LD, "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens,\n                     \"schema\": schema_label(use_schema)}", "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens,\n                     \"schema\": schema_label(use_schema)} if reply.status == \"error\" else None", [STATS_T]),
+ ("트레이스 머리에 턴 줄이 없다", MN, "            took += f\"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}{schema}\\n\"", "            pass", [TRACE_TURN_T]),
  ("토큰을 모르는데 0으로 적는다", MN, "                      if stats.get(\"input_tokens\") or stats.get(\"output_tokens\") else \"토큰 모름\")", "                      if True else \"토큰 모름\")", [TRACE_TURN_T]),
  ("요약이 턴 줄을 안 올린다", TD, "           + (f\" · {turn}\" if turn else \"\")\n", "", [DIGEST_TURN_T]),
 ]
@@ -3252,7 +3252,16 @@ KW_FLOW_T = "tests/knowledge/test_index.py::test_키워드_인자로_넘긴_값�
 CASES += [
  ("키워드 인자를 호출 인자로 안 본다", IDX, "                parents[kw.value] = call", "                pass", [KW_FLOW_T]),
 ]
-assert len(CASES) >= 1015, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5k ② — 턴의 스키마를 트레이스에 ──
+SCHEMA_STAT_T = "tests/application/test_lead.py::test_트레이스의_턴_통계에_그_턴에_보낸_스키마가_남고_길이_재질문에도_판정_스키마가_간다"
+SCHEMA_LINE_T = "tests/test_cli.py::test_트레이스_턴_줄_끝에_그_턴의_스키마를_적는다"
+CASES += [
+ ("턴 통계에 스키마를 안 싣는다", LD, "                     \"schema\": schema_label(use_schema)}", "                     \"schema\": \"\"}", [SCHEMA_STAT_T]),
+ ("판정 스키마 이름에 증거 id 수를 안 붙인다", LD, "    return str(schema.get(\"title\") or \"이름 없음\") + (f\"(증거 id {len(ids)})\" if ids else \"\")", "    return str(schema.get(\"title\") or \"이름 없음\")", [SCHEMA_STAT_T]),
+ ("트레이스 턴 줄에 스키마를 안 적는다", MN, "            schema = f\" · 스키마 {stats['schema']}\" if stats.get(\"schema\") else \"\"", "            schema = \"\"", [SCHEMA_LINE_T]),
+]
+assert len(CASES) >= 1018, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

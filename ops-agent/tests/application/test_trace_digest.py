@@ -320,3 +320,7 @@ def test_요약_머리줄에_턴의_조각_수_종료_사유_토큰이_붙는다
     turned = text.replace("결과: 읽었다\n", "결과: 읽었다\n응답: 274.0초\n턴: 조각 5,124 · 종료 length · 토큰 입력 14,712 · 출력 5,120\n")
     head = [line for line in digest([(name, turned)]) if "r2 integrate" in line]
     assert head and "응답 274.0초" in head[0] and "조각 5,124 · 종료 length · 토큰 입력 14,712 · 출력 5,120" in head[0]
+    # 그 턴의 스키마(R3-5k ②)도 같은 줄이라 그대로 올라온다
+    schemed = turned.replace("출력 5,120\n", "출력 5,120 · 스키마 concludereply(증거 id 3)\n")
+    head = [line for line in digest([(name, schemed)]) if "r2 integrate" in line]
+    assert head and "스키마 concludereply(증거 id 3)" in head[0]
