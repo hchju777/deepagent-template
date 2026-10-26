@@ -2419,7 +2419,7 @@ CASES += [
  ("identity 옆 빈 목록을 안 적는다", IM, "    return ([place(k) for k, v in obj.items() if isinstance(v, list) and not v],", "    return ([],", [DECL_T]),
  ("인덱스가 없어도 다음 홉을 낸다", IM, "    if target is None or not target.key or not code_index:", "    if target is None or not target.key:", [HOP_T]),
  ("입구 줄이 이미 읽은 것을 안 적는다", IM, "    if done:\n        lines.append(\"입구 노드가 이미 읽었다: \"", "    if False:\n        lines.append(\"입구 노드가 이미 읽었다: \"", [LINES_T]),
- ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake_lines(state, code_index=code_index)}\" if intake_lines(state, code_index=code_index) else \"\"))", "            )", [FRAME_HOP_T]),
+ ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake}\" if (intake := intake_lines(state, code_index=code_index, join_notes=join_notes)) else \"\"))", "            )", [FRAME_HOP_T]),
  ("입구가 돌았는데 frame 예시에 접수 읽기를 둔다", B, "            if not intake_done:\n                shapes.append(first_read)", "            if True:\n                shapes.append(first_read)", [FRAME_HOP_T]),
  ("frame 예시에 다음 홉을 안 둔다", B, "        if hop:\n            shapes.append(hop)", "        if False:\n            shapes.append(hop)", [FRAME_HOP_T]),
  ("사다리 첫 칸이 고른 키의 uses가 아니다", B, "        hop = (pending.action, dict(pending.params))\n    if hop is not None:", "        hop = (pending.action, dict(pending.params))\n    if False:", [LADDER_HOP_T]),
@@ -2548,7 +2548,7 @@ CASES += [
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
  ("다음 홉이 걷기를 안 본다", IM, "    if walk is not None and walk.hops:\n        return walk.next_hop() if code_index else None", "    if False:\n        return walk.next_hop() if code_index else None", [WBRIEF_T]),
- ("홉 표를 안 싣는다", IM, "    if state.walk is not None:\n        lines += state.walk.lines()", "    if False:\n        lines += state.walk.lines()", [WBRIEF_T]),
+ ("홉 표를 안 싣는다", IM, "    if state.walk is not None:\n        lines += state.walk.lines(join_notes=join_notes)", "    if False:\n        lines += state.walk.lines(join_notes=join_notes)", [WBRIEF_T]),
  ("나쁜 홉의 증거를 안 고정한다", B, "        ids |= set(state.walk.chain_ids())", "        pass", [WBRIEF_T]),
  ("걸은 읽기 본문을 안 접는다", B, "        if ref.id in pinned or ref.id in folded:\n            continue", "        if ref.id in pinned:\n            continue", [WBRIEF_T]),
  ("걸은 태스크를 한 줄로 안 접는다", B, "        if task.walked:\n            # 걷기 노드의 읽기는 한 줄로", "        if False:\n            # 걷기 노드의 읽기는 한 줄로", [WBRIEF_T]),
@@ -3171,7 +3171,7 @@ NONINNER_T = "tests/application/test_walk.py::test_inner가_아닌_병합의_겹
 UNMATCHED_T = "tests/application/test_walk.py::test_병합식의_키_필드를_가진_입력_행이_없으면_겹침을_못_센다는_주가_남는다"
 CASES += [
  ("inner 아닌 병합의 겹침 0도 나쁨으로 본다", WK, "                if merge.how != \"inner\":", "                if False:", [NONINNER_T]),
- ("inner 아닌 겹침 0의 주를 안 남긴다", WK, "                    remember(f\"{writer}: {note} — {merge.how} 병합이라 행은 남는다 ({merge.path}:L{merge.line})\")", "                    pass", [NONINNER_T]),
+ ("inner 아닌 겹침 0의 주를 안 남긴다", WK, "                    remember(f\"{writer}: {note} — {merge.how} {JOIN_NOTE_MARKS[0]} ({merge.path}:L{merge.line})\")", "                    pass", [NONINNER_T]),
  ("키 필드 없는 병합식의 주를 안 남긴다", WK, "            if read_inputs:\n                # 키 필드를 가진 입력 행이 없는 병합식", "            if False:\n                # 키 필드를 가진 입력 행이 없는 병합식", [UNMATCHED_T]),
  ("키 필드가 없는 쪽을 안 가른다", WK, "            side = \"양쪽\" if not lefts and not rights else \"왼쪽\" if not lefts else \"오른쪽\"", "            side = \"양쪽\"", [UNMATCHED_T]),
 ]
@@ -3282,7 +3282,19 @@ CASES += [
  ("병합 주가 없어도 묻는다", MN, "    if not removed:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\")\n        return 1", "    if False:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\")\n        return 1", [AB_CLI_T]),
  ("dry-run도 묻는다", MN, "    if args.dry_run:\n        return 0\n    cfg = _llm_config(args, env, \"conclude\")", "    if False:\n        return 0\n    cfg = _llm_config(args, env, \"conclude\")", [AB_CLI_T]),
 ]
-assert len(CASES) >= 1026, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5l ① — 병합 주는 판정 프롬프트에서만 뺀다 ──
+WALK_JOIN_T = "tests/application/test_walk.py::test_판정용_lines는_실제_걷기가_쓴_병합_주_두_꼴만_빼고_레포를_가른_주와_홉_표는_그대로_둔다"
+BRIEF_JOIN_T = "tests/application/test_briefing.py::test_판정_블록만_걷기의_병합_주를_빼고_조사_프롬프트와_레포를_가른_주는_그대로다"
+CASES += [
+ ("판정 블록이 병합 주를 안 뺀다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False),", "    return {\"case\": case_block(state, site_config=site_config, target=target),", [BRIEF_JOIN_T]),
+ ("판정용 lines가 병합 주를 그대로 싣는다", CS, "        notes = self.notes if join_notes else [n for n in self.notes if not any(m in n for m in JOIN_NOTE_MARKS)]", "        notes = self.notes", [WALK_JOIN_T, BRIEF_JOIN_T]),
+ ("lines의 기본이 병합 주를 뺀다", CS, "    def lines(self, *, join_notes: bool = True) -> list[str]:", "    def lines(self, *, join_notes: bool = False) -> list[str]:", [WALK_JOIN_T, BRIEF_JOIN_T]),
+ ("intake_lines가 선택을 안 넘긴다", IM, "        lines += state.walk.lines(join_notes=join_notes)", "        lines += state.walk.lines()", [BRIEF_JOIN_T]),
+ ("걷기가 표식 밖의 글로 못 센다 주를 쓴다", WK, "                    remember(f\"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} {JOIN_NOTE_MARKS[1]}\")", "                    remember(f\"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} — 겹침을 못 셌다\")", [WALK_JOIN_T, UNMATCHED_T]),
+ ("A/B 도구가 자기 표식을 따로 둔다", ABM, "from src.domain.case import JOIN_NOTE_MARKS", "JOIN_NOTE_MARKS = (\"병합이라 행은 남는다\", \"— 겹침을 못 센다\")", [AB_STRIP_T]),
+]
+assert len(CASES) >= 1032, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

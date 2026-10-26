@@ -28,7 +28,7 @@ from src.application.facts import key_head
 from src.application.intake_map import _finish, _task, _unwrap, empties, empty_text, pointer_of, writer_of
 from src.application.runner_probe import _same_valued, profile
 from src.application.state import CaseState
-from src.domain.case import EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
+from src.domain.case import JOIN_NOTE_MARKS, EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
 from src.domain.investigation import TaskRunnerPort
 
 MAX_DEPTH = 4
@@ -580,7 +580,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                             filled = (f"{note} → {merge.how} 병합이라 행은 남고 짝 없는 행의 {hit.field}({sides.get(hit.field, '?')} 열) 값이 {value!r}"
                                       f"({call}({value!r})) · 이 값을 거르는 줄 {hit.path}:L{hit.line} '{hit.text}'", (hit.path, hit.line))
                     if filled is None:
-                        remember(f"{writer}: {note} — {merge.how} 병합이라 행은 남는다 ({merge.path}:L{merge.line})")
+                        remember(f"{writer}: {note} — {merge.how} {JOIN_NOTE_MARKS[0]} ({merge.path}:L{merge.line})")
                         continue
                     head, what, (text, first) = "병합 뒤 채움값을 거른다", "병합 뒤 채움값", filled
                 for ev_ in (a_ev, b_ev):
@@ -599,7 +599,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             if read_inputs:
                 # 키 필드를 가진 입력 행이 없는 병합식(측정 #18 P0-a의 다른 가능성 — 변환 뒤 이름이 다르면 겹침을 못 센다). 읽은 입력이 없으면 "입력을 모른다"가 말한다.
                 for merge, why in join_unmatched(merges, read_inputs):
-                    remember(f"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} — 겹침을 못 센다")
+                    remember(f"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} {JOIN_NOTE_MARKS[1]}")
         # 이 클래스가 실제로 읽은 입력과 못 본 입력 — 멈춘 자리가 이 클래스면 사유가 여기서 나온다. 다음 칸은 읽기가 있었으면(실패한 읽기도) 읽는 메서드,
         # 읽은 입력이 없으면("모른다") 클래스 본문. 메시지만 읽은 클래스(인덱스 자원 0)는 읽는 메서드 줄이 없어 클래스 본문이다.
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),

@@ -1599,6 +1599,33 @@ def test_걷기가_있으면_케이스_블록에_홉_표가_실리고_다음_홉
     assert "다음 홉" not in plain["case"] and "멈춤: 입력이 다 정상" in plain["case"]
 
 
+def test_판정_블록만_걷기의_병합_주를_빼고_조사_프롬프트와_레포를_가른_주는_그대로다():
+    """R3-5l ①(사람 결정 10-25): 측정 #22 A/B에서 병합 주가 든 판은 외부 상류 1/15, 뺀 판은 4/15 — 병합 주는 **판정 프롬프트에서만** 뺀다. frame·integrate의
+    케이스 블록·홉 표·레포를 가른 주는 그대로."""
+    from src.application.state import CaseState
+    from src.domain.case import JOIN_NOTE_MARKS, Hop, Rung, TargetPick, Walk
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"], writer="SummaryRefresh",
+                        writer_at="metadata.event_type")
+    join = f"SummaryRefresh: in:a:L1.ws {{''}} ↔ ref:L1.ws {{'A'}} 겹침 0 (left 병합) — left {JOIN_NOTE_MARKS[0]} (w0.py:L5)"
+    uncounted = f"SummaryRefresh: 병합식 w0.py:L9의 키 필드(code ↔ zz)를 가진 입력 행이 오른쪽에 없다 {JOIN_NOTE_MARKS[1]}"
+    repo = "SummaryRefresh는 레포 2곳(a, b)에 있다 — alarm:stats:{line}을 선언한 a로 골랐다"
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", service="batch", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1"),
+                      Hop(key="alarm:source:L1", depth=1, status="0행", bad=True, evidence_id="t-3.e1", basis="SummaryRefresh가 읽는 자원 (t-2.e1)", parent="t-1.e1")],
+                reads=2, seconds=0.4, stopped="쓴 쪽을 모른다 — alarm:source:L1(값에 인덱스의 클래스 이름이 없다)", stop_at="t-3.e1",
+                rungs=[Rung(action="code.uses", params={"name": "alarm:source:{line}"}, evidence="t-3.e1")], notes=[join, uncounted, repo])
+    state = CaseState(case=_patrol_case(), target=picked, walk=walk, plan_tasks=_intake_state().plan_tasks + [
+        task("t-2", action="code.resources", params={"name": "SummaryRefresh"}, status="ok", result_evidence_ids=["t-2.e1"], walked=True),
+        task("t-3", action="redis.get", params={"key": "alarm:source:L1"}, status="ok", result_evidence_ids=["t-3.e1"], walked=True)],
+        evidence=[EvidenceRef(id=i, source="s", summary=f"요약 {i}", body="x") for i in ("t-0.e1", "t-1.e1", "t-2.e1", "t-3.e1")])
+    verdict = briefing.conclude_fields(state, site_config=_site_with_check())["case"]
+    assert "  alarm:source:L1 | — | 0행 | t-3.e1" in verdict and f"  주: {repo}" in verdict                 # 홉 표·레포 주는 판정에도 있다
+    assert join not in verdict and uncounted not in verdict and "겹침" not in verdict
+    for fields in (briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=True),
+                   briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(), code_index=True)):
+        assert f"  주: {join}" in fields["case"] and f"  주: {uncounted}" in fields["case"] and f"  주: {repo}" in fields["case"]
+    assert f"  주: {join}" in briefing.case_block(state, site_config=_site_with_check(), target=picked, code_index=True)   # `case walk`가 찍는 블록도 그대로
+
+
 def test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸_칸은_건너뛴다():
     """R3-4 ②: 다음 칸은 늘 있고 차례가 있다(리터럴 줄의 함수 → 그 자리의 질의). 첫 칸을 냈으면(끝났든 실패했든) 둘째 칸이 예시의 첫 줄이고 입력은
     그 칸의 증거다. 다 밟았으면 마지막 칸의 결과로 옛 사다리가 이어진다(`code.uses` 뒤 `code.callers`)."""

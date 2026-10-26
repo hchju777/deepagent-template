@@ -217,6 +217,11 @@ class Rung(StrictModel):
     evidence: str = ""
 
 
+# 걷기의 병합 주 두 꼴의 표식 — inner 아닌 겹침 0(행은 남는다, R3-5h ①)·겹침을 못 센 병합식(R3-5h ①·R3-5i ①). `walk.run_walk`가 이 표식으로 주를 쓰고 판정
+# 블록(`briefing.conclude_fields`)과 `llm ab`가 같은 표식으로 뺀다(R3-5l ①, 사람 결정 10-25: 측정 #22 A/B에서 주가 든 판은 외부 상류 1/15, 뺀 판은 4/15).
+JOIN_NOTE_MARKS = ("병합이라 행은 남는다", "— 겹침을 못 센다")
+
+
 class Walk(StrictModel):
     """코드가 상류를 걸은 결과(R3-3 ②) — 홉 표, 멈춘 이유, 멈춘 자리의 다음 칸들. 브리핑의 다음 홉과 중복 거부의 홉은 입구 홉이 아니라 **이것**을
     본다(측정 #9: 입구 홉에 고정돼 있어 리드가 코드가 이미 읽은 자리로 또 갔다)."""
@@ -254,14 +259,16 @@ class Walk(StrictModel):
             cur = by_id.get(cur.parent) if cur.parent else None
         return frozenset(ids)
 
-    def lines(self) -> list[str]:
+    def lines(self, *, join_notes: bool = True) -> list[str]:
+        """`join_notes=False`는 판정 프롬프트용 — 병합 주 두 꼴만 빠진다(R3-5l ①). 걷기 표·`case walk`·조사 프롬프트는 기본값 그대로."""
         if not self.hops and not self.stopped:
             return []
         head = [f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}"]
         if not self.hops:
             # 던진 걷기(홉 0)도 보인다(측정 #11 P0 2) — 사유 한 줄이 없으면 리드도 사람도 걷기가 있었는지 모른다.
             return head
-        return head + ["  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in self.notes]
+        notes = self.notes if join_notes else [n for n in self.notes if not any(m in n for m in JOIN_NOTE_MARKS)]
+        return head + ["  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in notes]
 
 
 class Case(StrictModel):

@@ -5,9 +5,9 @@ import re
 from collections import Counter
 
 from src.application.lead import ConcludeReply, ask_json, conclude_schema
+# 걷기가 쓰는 병합 주의 두 꼴의 표식 — 걷기가 같은 표식으로 주를 쓴다(R3-5l ①부터 판정 블록도 이 표식으로 뺀다 — 이 도구는 그 전의 트레이스에만 뺄 줄이 있다).
+from src.domain.case import JOIN_NOTE_MARKS
 
-# 걷기가 쓰는 병합 주의 두 꼴(`walk.run_walk` — inner 아닌 겹침 0, 겹침을 못 센 병합식). 시험이 실제 걷기 출력으로 대 본다 — 문구가 바뀌면 시험이 깨진다.
-JOIN_NOTE_MARKS = ("병합이라 행은 남는다", "— 겹침을 못 센다")
 _NOTE = "  주: "
 _EVIDENCE_ID = re.compile(r"(?<![A-Za-z0-9_.\-])t-\d+\.e\d+(?![A-Za-z0-9_\-])")
 _FENCE = "````\n"

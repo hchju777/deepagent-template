@@ -293,6 +293,29 @@ async def test_단일값_통과_뒤_두_레포_가르기가_같은_걷기에서_
     assert Walk().lines() == []                                                                 # 걷기 자체가 없으면 전처럼 빈 목록
 
 
+async def test_판정용_lines는_실제_걷기가_쓴_병합_주_두_꼴만_빼고_레포를_가른_주와_홉_표는_그대로_둔다():
+    """R3-5l ①(사람 결정 10-25: 병합 주는 판정 프롬프트에서만 뺀다 — 걷기 표·`case walk`·조사 프롬프트에는 남긴다). 빠지는 줄은 **실제 걷기가** 쓴 두 꼴
+    (inner 아닌 겹침 0, 겹침을 못 센 병합식)이고 표식은 `JOIN_NOTE_MARKS` 하나다 — 걷기 문구가 표식 밖으로 바뀌면 이 시험이 깨진다."""
+    from src.domain.case import JOIN_NOTE_MARKS, MergeHit
+
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("ref:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(rows=[{"ws": "", "n": 1}]),
+             ("redis.get", "ref:L1"): _value(codes=[{"ws": "A"}, {"code": "B", "zz": None}])}
+    merges = [MergeHit(path="w0.py", line=5, text="", left=["ws"], right=["ws"], how="left"),
+              MergeHit(path="w0.py", line=9, text="", left=["code"], right=["zz"])]
+    lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=merges)})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
+    assert len(walk.notes) == 2 and all(any(m in n for m in JOIN_NOTE_MARKS) for n in walk.notes), walk.notes
+    repo_note = "W0는 레포 2곳(a, b)에 있다 — in:a:{line}을 선언한 a로 골랐다"
+    both = walk.model_copy(update={"notes": [*walk.notes, repo_note]})
+    full, verdict = both.lines(), both.lines(join_notes=False)
+    assert full[-3:] == [f"  주: {n}" for n in both.notes]                                      # 기본은 전처럼 전부
+    assert verdict == [line for line in full if not any(m in line for m in JOIN_NOTE_MARKS)]      # 판정용은 병합 주만 없다
+    assert verdict[-1] == f"  주: {repo_note}" and verdict[1] == "  키 | 쓴 쪽 | 상태 | 증거" and len(verdict) == len(full) - 2
+    thrown = both.model_copy(update={"hops": []})
+    assert thrown.lines(join_notes=False) == thrown.lines() == thrown.lines()[:1]                   # 던진 걷기는 머리줄뿐(전처럼)
+
+
 # ── R3-3 ③ → R3-4 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다(어댑터 안의 조회) ──
 
 HIT = FilterHit(path="proc/job.py", line=50, text='rows = [r for r in rows if r["wg"] != "-"]', repo="r", field="wg", value="-")

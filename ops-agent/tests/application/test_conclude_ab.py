@@ -29,8 +29,11 @@ def _prompt(walk) -> str:
 async def test_병합_주의_두_꼴을_실제_걷기_출력에서_빼고_다른_주와_나머지는_그대로_둔다():
     """빼는 줄은 걷기가 쓰는 병합 주 두 꼴(`… 병합이라 행은 남는다 …`, `… — 겹침을 못 센다`)뿐 — 레포를 가른 주·홉 표·증거는 그대로. 걷기 문구가 바뀌면 이
     시험이 깨진다(도구가 문구와 함께 움직이게)."""
+    from src.application import conclude_ab
     from src.application.conclude_ab import strip_join_notes
+    from src.domain.case import JOIN_NOTE_MARKS
 
+    assert conclude_ab.JOIN_NOTE_MARKS is JOIN_NOTE_MARKS                                        # 표식의 출처는 걷기 쪽 하나(R3-5l ①)
     walk = await _join_walk()
     assert len(walk.notes) == 2, walk.notes
     prompt = _prompt(walk)
