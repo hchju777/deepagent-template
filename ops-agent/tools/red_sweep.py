@@ -2684,7 +2684,7 @@ CASES += [
  ("뒤집힌 비교식을 안 센다", DCP, "        for m in (*_FORWARD.finditer(line), *_REVERSED.finditer(line)):", "        for m in _FORWARD.finditer(line):", [FILTER_T]),
  ("컴포넌트를 안 잇는다", DCP, "        for comp in literals:", "        for comp in []:", [FILTER_T]),
  ("등록의 클래스 파일을 범위에 안 넣는다", DCP, "                if csym.file not in files:\n                    files.append(csym.file)", "                if False:\n                    files.append(csym.file)", [FILTER_T]),
- ("변수 get을 못 이음으로 안 적는다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in resolved]", "        unlinked = []", [FILTER_T]),
+ ("변수 get을 못 이음으로 안 적는다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in linked_vars]", "        unlinked = []", [FILTER_T]),
  ("클래스 파일을 안 본다", DCP, "        files = [sym.file]", "        files = []", [FILTER_T]),
  ("스냅샷 없음을 문제로 안 적는다", DCP, "        if snap is None:\n            return FilterScan(problem=f\"{sym.repo}의 스냅샷을 못 받았다\")", "        if snap is None:\n            return FilterScan()", [FILTER_T]),
  ("나쁨에 행 수를 안 적는다", WK, "status, bad, carry = (f\"나쁨 — {len(rows)}행 전부 {shown_fields}", "status, bad, carry = (f\"나쁨 — 모든 행이 {shown_fields}", [LIT_T]),
@@ -3058,7 +3058,7 @@ CASES += [
  ("기본값 리터럴로 안 잇는다", DCP, "        default_values = {_param_defaults(d).get(param) for d in defs} - {None}", "        default_values = set()", [DEFAULT_LINK_T, FILTER_T]),
  ("호출이 넘긴 값을 안 본다", DCP, "            if called_name(call) != name:\n                continue", "            if True:\n                continue", [DEFAULT_LINK_T]),
  ("다른 리터럴 둘을 하나로 잇는다", DCP, "        return next(iter(values)) if len(values) == 1 else None", "        return next(iter(values))", [DEFAULT_LINK_T]),
- ("이은 변수를 여전히 못 이음으로 센다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in resolved]", "        unlinked = [f\"변수 {v}\" for v in variables]", [FILTER_T]),
+ ("이은 변수를 여전히 못 이음으로 센다", DCP, "        unlinked = [f\"변수 {v}\" for v in variables if v not in linked_vars]", "        unlinked = [f\"변수 {v}\" for v in variables]", [FILTER_T]),
 ]
 
 # ── 12a-R3-5e ④ — 잘린 인용은 되묻지 않고 코드가 caveat ──
@@ -3105,7 +3105,7 @@ CASES += [
 
 # ── 12a-R3-5f ② — get(<변수>)를 이름 단위로 잇는다 ──
 CASES += [
- ("수신자에 리터럴 get이 없는 변수를 안 센다", DCP, "        variables += [v for v, lit in resolved.items() if v not in variables and any(r.component == lit for r in regs)]", "        variables += []", [FILTER_T]),
+ ("수신자에 리터럴 get이 없는 변수를 안 센다", DCP, "        variables += [v for v, lits in linked_vars.items() if v not in variables and any(r.component == lit for r in regs for lit in lits)]", "        variables += []", [FILTER_T]),
  ("super() 전달을 호출로 센다", DCP, "            if isinstance(passed, ast.Name) and caller in defs and passed.id == param:\n                continue", "            if False:\n                continue", [DEFAULT_LINK_T]),
  ("기본값은 첫 정의 것만 본다", DCP, "        default_values = {_param_defaults(d).get(param) for d in defs} - {None}", "        default_values = {_param_defaults(defs[0]).get(param)} - {None}", [DEFAULT_LINK_T, FILTER_T]),
  ("기본값이 갈려도 하나를 고른다", DCP, "                if len(default_values) != 1:\n                    return None", "                if not default_values:\n                    return None", [DEFAULT_LINK_T]),
@@ -3306,7 +3306,17 @@ CASES += [
  ("채움값 검사가 == 짝도 거른다", WK, "                        drops = dropping(scan.hits) if scan is not None else []", "                        drops = list(scan.hits) if scan is not None else []", [WALK_FILL_OP_T]),
  ("거르는 줄 수에 == 줄을 센다", WK, "                lines_hit = len(dict.fromkeys((h.path, h.line) for h in drops))", "                lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))", [WALK_OP_T]),
 ]
-assert len(CASES) >= 1038, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5m ① — 리터럴 묶음을 도는 반복 변수로 잇는다 ──
+LOOP_T = "tests/infrastructure/test_deployed_code.py::test_get_변수가_같은_함수의_for나_컴프리헨션에서_문자열_리터럴_튜플을_도는_대상이면_그_리터럴_전부로_잇는다"
+CASES += [
+ ("반복 변수를 안 잇는다", DCP, "        for v, lits in loop_links({path: snap.get(path, \"\") for path in files}).items():", "        for v, lits in {}.items():", [FILTER_T]),
+ ("못 읽는 묶음이 있어도 잇는다", DCP, "    return {var: tuple(lits) for var, lits in found.items() if var not in broken}", "    return {var: tuple(lits) for var, lits in found.items()}", [LOOP_T]),
+ ("for 문의 묶음을 안 본다", DCP, "        elif isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(node.target, ast.Name) and node.target.id == var and child is not node.iter:", "        elif False:", [LOOP_T]),
+ ("컴프리헨션의 묶음을 안 본다", DCP, "        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):", "        if False:", [LOOP_T, FILTER_T]),
+ ("문자열 하나를 묶음으로 본다", DCP, "    if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and node.elts and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):\n        return tuple(e.value for e in node.elts)", "    if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and node.elts and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):\n        return tuple(e.value for e in node.elts)\n    if isinstance(node, ast.Constant) and isinstance(node.value, str):\n        return (node.value,)", [LOOP_T]),
+]
+assert len(CASES) >= 1043, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

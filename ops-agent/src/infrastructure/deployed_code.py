@@ -196,6 +196,61 @@ def default_links(sources: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def _literal_items(node) -> tuple[str, ...]:
+    """반복이 도는 묶음이 **문자열 리터럴만 든 튜플·목록·집합**이면 그 원소들, 아니면 빈 튜플(못 읽는다). 문자열 하나는 묶음이 아니다 — 글자를 돈다."""
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and node.elts and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+        return tuple(e.value for e in node.elts)
+    return ()
+
+
+def _loop_items(call: ast.Call, var: str, parents: dict[int, ast.AST]) -> tuple[str, ...] | None:
+    """호출을 품은 가장 가까운 for·컴프리헨션 중 `var`를 도는 것의 묶음 — 리터럴만이면 그 원소들, 못 읽으면 빈 튜플, 그런 반복이 없으면 None(반복 변수가
+    아니다). 호출이 그 반복의 묶음 식 자체에 있으면(`for key in c.get(key)`) 변수는 아직 안 묶였다 — 그 반복은 아니다."""
+    node, child = parents.get(id(call)), call
+    while node is not None and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef, ast.Module)):
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            for gen in node.generators:
+                if isinstance(gen.target, ast.Name) and gen.target.id == var and child is not gen.iter:
+                    return _literal_items(gen.iter)
+        elif isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(node.target, ast.Name) and node.target.id == var and child is not node.iter:
+            return _literal_items(node.iter)
+        node, child = parents.get(id(node)), node
+    return None
+
+
+def loop_links(sources: dict[str, str]) -> dict[str, tuple[str, ...]]:
+    """`<수신자>.get(<변수>)`의 변수가 **같은 함수의 for·컴프리헨션에서 문자열 리터럴만 든 묶음을 도는 대상**이면 → 그 리터럴들 전부(R3-5m ①, 측정 #23
+    `<지그 클래스>`의 유력한 줄 `<인덱스>.get(key) for key in ("<a>", "<b>")`). AST 사실이지 실행이 아니다 — 값은 그 묶음의 원소뿐이다. 이름 단위·전부-또는-전무
+    (`default_links`와 같은 규칙): 같은 이름의 묶음이 여럿이면 합치고, 하나라도 못 읽으면(변수 묶음·리터럴 아닌 원소) 그 이름은 못 잇는다. 호출이 그 반복 **안**에
+    있어야 한다 — 반복 뒤의 변수는 마지막 값이다. 런타임 객체의 속성(`get(handler.kind)`)은 `ast.Name`이 아니라 여기 오지 않는다(못 이음 그대로 — 측정 #23의
+    `<이벤트 처리 클래스>`, P1-8). 깨진 파일은 없는 것."""
+    found: dict[str, list[str]] = {}
+    broken: set[str] = set()
+    for text in sources.values():
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            continue
+        parents: dict[int, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args
+                    and isinstance(node.args[0], ast.Name)):
+                continue
+            var = node.args[0].id
+            items = _loop_items(node, var, parents)
+            if items is None:
+                continue
+            if items:
+                found.setdefault(var, [])
+                found[var] += [x for x in items if x not in found[var]]
+            else:
+                broken.add(var)
+    return {var: tuple(lits) for var, lits in found.items() if var not in broken}
+
+
 def comparison_pairs(text: str) -> list[tuple[int, str, str, str, str]]:
     """코드 줄의 비교식에서 **필드와 리터럴이 양쪽**인 짝 `(줄, 필드, 값, 연산자, 본문)` 전부 — `x["f"] != "v"`·`r.get("f") == "v"`·`getattr(r, "f") == "v"`,
     뒤집힌 순서도. 사전 리터럴(`{"f": "v"}`)·주석·변수(`r[f]`, `!= v`)는 아니다. 먼저 전부 뽑아 두고 단일값 전부와 맞춘다(R3-5 ③ (a) — 필드 상한 없음).
@@ -527,13 +582,17 @@ class DeployedCode(DeployedCodePort):
         regs = self._registered(sym.repo, snap)
         # 변수 인자의 기본값 리터럴로 잇는다(R3-5e ③) — 범위 파일 안에서 그 인자를 안 넘기면 실행 때 값은 그 기본값이다. 못 이으면 전처럼 "못 이음".
         resolved = default_links({path: snap.get(path, "") for path in files})
+        # 반복 변수(R3-5m ①) — 같은 함수의 for·컴프리헨션이 리터럴 묶음을 돌면 그 리터럴 전부. 기본값 리터럴과 합쳐 "변수 → 리터럴들"로 본다.
+        linked_vars: dict[str, tuple[str, ...]] = {v: (lit,) for v, lit in resolved.items()}
+        for v, lits in loop_links({path: snap.get(path, "") for path in files}).items():
+            linked_vars[v] = tuple(dict.fromkeys((*linked_vars.get(v, ()), *lits)))
         # 수신자에 리터럴 get이 하나도 없는 범위(뼈대의 `get(<변수>)`뿐 — 측정 #16 P0-3의 실코드 모양)에서는 `component_names`가 그 변수를 안 센다(사전 get과 못
-        # 가른다). 기본값으로 이은 리터럴이 등록된 컴포넌트면 그 변수도 컴포넌트 변수다(R3-5f ②).
-        variables += [v for v, lit in resolved.items() if v not in variables and any(r.component == lit for r in regs)]
-        literals += [resolved[v] for v in variables if v in resolved and resolved[v] not in literals]
+        # 가른다). 이은 리터럴이 등록된 컴포넌트면 그 변수도 컴포넌트 변수다(R3-5f ②).
+        variables += [v for v, lits in linked_vars.items() if v not in variables and any(r.component == lit for r in regs for lit in lits)]
+        literals += [lit for v in variables for lit in linked_vars.get(v, ()) if lit not in literals]
         linked: list[str] = []
         linked_at: list[FilterHit] = []
-        unlinked = [f"변수 {v}" for v in variables if v not in resolved]
+        unlinked = [f"변수 {v}" for v in variables if v not in linked_vars]
         for comp in literals:
             picked = self._site_picks(regs, comp)
             if not picked:

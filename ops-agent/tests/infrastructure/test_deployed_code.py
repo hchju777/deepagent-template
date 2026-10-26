@@ -918,6 +918,9 @@ FILES = {"pipe/__init__.py": "",
          "pipe/other.py": 'DEFAULTS = {"state": "-"}\n\n\ndef lookup(r):\n    return r.get("state")\n',                 # 사전 리터럴 — 비교식이 아니다
          "config/gbm/mx.json": '{"state": "-", "k": {"state": "-"}}\n',                                                  # config — 범위 밖
          "pipe/var.py": 'class Var:\n    def _run(self, name):\n        self.components.get("state_filter")\n        return self.components.get(name)\n',
+         # 변수가 같은 함수의 컴프리헨션에서 문자열 리터럴 튜플을 도는 대상(R3-5m ①, 측정 #23 `<지그 클래스>`의 유력한 줄) — 그 리터럴 전부로 잇는다
+         "pipe/looper.py": ('class Looper:\n    def _run(self, rows):\n        self.components.get("ghost")\n'
+                            '        return [self.components.get(key).apply(rows) for key in ("state_filter", "shape_filter")]\n'),
          # 인자 기본값이 리터럴이고 범위 안 호출이 그 인자를 안 넘긴다 — 그 리터럴로 잇는다(R3-5e ③). Passer는 다른 값을 넘겨 못 잇는다.
          "pipe/dflt.py": ('class Dflt:\n    def _run(self, rows, shape="shape_filter"):\n        rows = self.components.get("state_filter").apply(rows)\n'
                           '        return self.components.get(shape).apply(rows)\n'),
@@ -995,6 +998,10 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     # 기본값 리터럴로 이은 변수(R3-5e ③) — 못 이음이 아니고 그 컴포넌트 파일이 범위에 든다; 범위 안 호출이 리터럴을 넘기면 그 리터럴로
     dflt = await code.filter_lines("Dflt", fields={"state": "-"})
     assert dflt.unlinked == [] and dflt.linked == ["state_filter", "shape_filter"] and dflt.files == ["pipe/dflt.py", "pipe/filters.py", "pipe/shapes.py"]
+    # 리터럴 튜플을 도는 변수(R3-5m ①) — 못 이음이 아니고 그 리터럴들의 컴포넌트 파일이 전부 범위에 든다
+    looper = await code.filter_lines("Looper", fields={"state": "-"})
+    assert "변수 key" not in looper.unlinked and looper.linked == ["state_filter", "shape_filter"]
+    assert looper.files == ["pipe/looper.py", "pipe/filters.py", "pipe/shapes.py"] and [h.line for h in looper.hits] == [3, 8]
     passer = await code.filter_lines("Passer", fields={"state": "-"})
     assert passer.unlinked == [] and passer.linked == ["state_filter"] and passer.files == ["pipe/passer.py", "pipe/dflt.py", "pipe/filters.py"]
     # 기본값 없는 부모 + 기본값 있는 재정의가 super()로 넘김(실코드 모양, R3-5f ②) — 재정의의 기본값으로 잇는다
@@ -1109,6 +1116,29 @@ async def test_code_resources는_진입에서_호출_그래프로_닿는_부모_
     assert "  읽기 2:" in other.data and "workday:{line} [rediskey] — batch.base.Base.workday (batch/base.py:L7)" in other.data
     assert "뺌" not in other.data.splitlines()[1]
 
+
+
+def test_get_변수가_같은_함수의_for나_컴프리헨션에서_문자열_리터럴_튜플을_도는_대상이면_그_리터럴_전부로_잇는다():
+    """측정 #23 (3): `<지그 클래스>`의 `못 이음: 변수 key` — 유력한 줄은 `<인덱스>.get(key) for key in ("<a>", "<b>")`. 변수의 값은 그 리터럴들 전부라는 것이 AST
+    사실이다(R3-5m ①). 전부-또는-전무: 묶음에 리터럴 아닌 원소가 있거나 같은 이름의 다른 묶음을 못 읽으면 못 잇는다. 호출이 그 반복 안에 있어야 한다 — 반복
+    뒤의 `get(key)`는 마지막 값이라 안 잇는다. 런타임 객체의 속성(`get(handler.kind)`)은 변수 그대로."""
+    from src.infrastructure.deployed_code import loop_links
+
+    comp = 'class L:\n    def _run(self, rows):\n        return [self.c.get(key).apply(rows) for key in ("state_filter", "shape_filter")]\n'
+    assert loop_links({"l.py": comp}) == {"key": ("state_filter", "shape_filter")}
+    loop = 'class L:\n    def _run(self, rows):\n        out = []\n        for key in ["a", "b"]:\n            out.append(self.c.get(key))\n        return out\n'
+    assert loop_links({"l.py": loop}) == {"key": ("a", "b")}
+    nested = 'class L:\n    def _run(self, rows):\n        return [r for key in ("a",) for r in self.c.get(key).apply(rows) if r]\n'
+    assert loop_links({"l.py": nested}) == {"key": ("a",)}
+    # 같은 이름의 두 묶음은 합친다; 하나라도 못 읽으면(변수 묶음·리터럴 아닌 원소) 그 이름은 못 잇는다
+    assert loop_links({"l.py": comp, "m.py": loop.replace("key", "key").replace('["a", "b"]', '("shape_filter", "c")')}) == {"key": ("state_filter", "shape_filter", "c")}
+    assert loop_links({"l.py": comp, "m.py": 'class M:\n    def go(self):\n        return [self.c.get(key) for key in self.keys]\n'}) == {}
+    assert loop_links({"l.py": 'class L:\n    def go(self, name):\n        return [self.c.get(key) for key in ("a", name)]\n'}) == {}
+    # 반복 밖의 get(key)·반복 변수가 아닌 변수·런타임 객체의 속성은 안 잇는다; 깨진 파일은 없는 것
+    assert loop_links({"l.py": 'class L:\n    def go(self):\n        for key in ("a",):\n            pass\n        return self.c.get(key)\n'}) == {}
+    assert loop_links({"l.py": 'class L:\n    def go(self, msg):\n        handler = self.f.create(msg.code)\n        return self.c.get(handler.kind)\n'}) == {}
+    assert loop_links({"l.py": 'class L:\n    def go(self):\n        return [self.c.get(key) for key in "state_filter"]\n'}) == {}      # 문자열 하나는 글자를 돈다
+    assert loop_links({"bad.py": "def (:\n"}) == {}
 
 
 def test_get_변수는_인자_기본값_리터럴로_잇되_범위_안_호출이_그_인자를_넘기면_안_잇는다():
