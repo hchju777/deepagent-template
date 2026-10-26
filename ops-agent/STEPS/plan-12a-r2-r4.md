@@ -542,7 +542,7 @@ caveats가 목록이 아니라 **문자열 하나**. R3-5h ③의 사전 검증�
 | R3-5l ① ✅ | (2) 병합 주 | 걷기 표의 병합 주 두 꼴을 `walk.py`가 하나의 표식으로 쥐고(`JOIN_NOTE_MARKS`), `Walk.lines(join_notes=…)`·`intake_lines`·`case_block`이 그 선택을 받으며, **판정 블록(`conclude_fields`)만 뺀다**; `llm ab`는 그 표식을 가져다 쓴다 | `walk`, `domain/case`, `intake_map`, `briefing`, `conclude_ab` |
 | R3-5l ② ✅ | (1) 연산자 | 어댑터: `comparison_pairs`가 연산자를 같이(`(줄, 필드, 값, 연산자, 본문)`), `FilterHit.op`; 걷기: `!=` 짝만 나쁨·이어 볼 단일값·첫 칸, `==` 짝은 상태에 사실 한 토막(`== 비교식 <자리> 안 센다`), 채움값 검사도 같은 규칙; 측정판에 `==`로 남기는 변형(`keep-filter`)과 정답 홉 표 | `deployed_code`, `domain/case`, `walk`, `tools/local_case` |
 | R3-5l ③ | (3) 점 이름 | **보류 — 사실 필요**(측정 #23 (a)): 꼬리 원문·`.get(` 줄의 모양. 코드 변경 없음 | — |
-| — | **측정 #23** | ①~② 뒤. **`code graph` 재생성: 불필요**(인덱스·자원 표식 변경 없음 — 걷기·브리핑·어댑터 조회만). config 그대로. `==` 짝의 행 전부, 미확인 10의 꼬리 원문, 판정 블록에 병합 주 없음, 작업자 배지 5건의 유형·component | 브리프 |
+| — | **측정 #23** | ①~② 뒤. **`code graph` 재생성: 불필요**(인덱스·자원 표식 변경 없음 — 걷기·브리핑·어댑터 조회만). config 그대로. `==` 짝의 행 전부, 미확인 10의 꼬리 원문, 판정 블록에 병합 주 없음, 작업자 배지 5건의 유형·component | 브리프 ✅ ([review-12a-4.md](review-12a-4.md)) |
 
 
 
