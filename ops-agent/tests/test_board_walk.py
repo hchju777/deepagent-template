@@ -123,8 +123,11 @@ def _at(path, needle):
     return found[0]
 
 
+# 기본 StateFilter의 `== "ea"`는 그 값을 남기는 쪽 — 거르는 줄이 아니고 사실 토막만(R3-5l ②, 측정 #22의 틀린 사실 모양).
+_KEEP_LINE = _at("batch/components.py", '== "ea"')
 SOURCE_ROW = ("alarm:source:L1 | — | 정상 — 행 4 · 필드 3 · 모든 행이 같은 값: unit='ea' · 단일값 unit='ea' — 거르는 줄 없음(1/1 대조, 2파일, "
-              "이은 컴포넌트 state_filter)")
+              f"이은 컴포넌트 state_filter) · == 비교식 batch/components.py:L{_KEEP_LINE} "
+              "'return [r for r in rows if r.get(\"unit\") == \"ea\"]' — 그 값을 남기는 쪽이라 안 센다")
 # 정상 홉의 쓴 쪽도 키 선언으로 가른다(R3-5d ①-a) — 두 레포 중 alarm:palette을 선언한 쪽.
 PALETTE_ROW = "alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 정상 — colors: 행 2 · 필드 2"
 PALETTE_NOTE = "PaletteLoader는 레포 2곳(api, dt-core(서비스 3개 공유))에 있다 — alarm:palette을 선언한 dt-core(서비스 3개 공유)로 골랐다"

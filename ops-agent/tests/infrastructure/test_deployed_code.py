@@ -983,6 +983,7 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     assert [(h.path, h.line, h.field, h.value) for h in scan.hits] == [("pipe/job.py", 7, "state", "-"), ("pipe/filters.py", 3, "state", "-"),
                                                                        ("pipe/filters.py", 8, "state", "-"), ("pipe/filters.py", 8, "kind", "x")]   # 파일 차례: 클래스 → 이은 것
     assert scan.hits[2].text == 'return [r for r in rows if r.get("state") != "-" and r["kind"] != "x"]' and scan.hits[0].repo == "dt-proc"
+    assert [h.op for h in scan.hits] == ["==", "!=", "!=", "!="]                                  # 뒤집힌 `"-" == …`도 연산자 그대로(R3-5l ②)
     # 뒤 칸의 자리는 등록 줄이 아니라 **클래스**의 자리 — 나쁜 필드 이름이 리터럴로 든 파일 먼저
     assert [(h.path, h.line) for h in scan.linked_at] == [("pipe/filters.py", 6), ("pipe/shapes.py", 1)] and "register(component='state_filter')" in scan.linked_at[0].text
     assert scan.unlinked == ["ghost: GhostFilter(인덱스에 없음)"]                                                 # 사전 get("kind")은 등록이 없다 — 못 이음 아님
@@ -1022,7 +1023,9 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     assert [(h.path, h.line) for h in scan3.linked_at] == [("pipe/shapes.py", 1), ("pipe/filters.py", 1)]        # 사이트 인자 없는 (a)만 후보
     # 순수 조각 — 짝 전부, 특정 짝, 컴포넌트 이름(같은 수신자의 변수만 "못 이음")
     text = 'x = {"f": "v"}\n# r["f"] != "v"\nok = r["f"] != "v"\nrev = "v" == r.get("f", None)\nnm = r[f] != "v"\nraw = r["f"] != v\nat = getattr(r, "f") == "v"\n'
-    assert comparison_pairs(text) == [(3, "f", "v", 'ok = r["f"] != "v"'), (4, "f", "v", 'rev = "v" == r.get("f", None)'), (7, "f", "v", 'at = getattr(r, "f") == "v"')]
+    # 연산자도 사실로(R3-5l ②) — 거르는 쪽(`!=`)인지는 걷기가 정한다
+    assert comparison_pairs(text) == [(3, "f", "v", "!=", 'ok = r["f"] != "v"'), (4, "f", "v", "==", 'rev = "v" == r.get("f", None)'),
+                                      (7, "f", "v", "==", 'at = getattr(r, "f") == "v"')]
     assert comparison_lines(text, "f", "v") == [(3, 'ok = r["f"] != "v"'), (4, 'rev = "v" == r.get("f", None)'), (7, 'at = getattr(r, "f") == "v"')]
     assert component_names('a = reg.get("x")\nb = reg.get(\'y\', None)\nc = reg.get(key)\nd = reg.get("x")\ne = cfg.get(other)\n') == (["x", "y"], ["key"])
 

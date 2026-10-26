@@ -224,13 +224,14 @@ class RateRefresh:
 ''',
     # 사내 모양(측정 #10·#11): `_run`은 조립뿐이고 **비교식은 컴포넌트 클래스에** 있다 — `_run`의 `get("<컴포넌트>")`와 등록 모음 파일의
     # `register(component="<컴포넌트>", …)(<클래스>)`가 리터럴로 이어진다(호출 그래프에는 없다). 단일값 검사의 범위는 등록이 가리키는 클래스의 파일이다
-    # (R3-5 ③). 기본 클래스는 거르지 않고, 이 사이트 전용 클래스가 비교한다 — 한 줄에 짝이 둘이다.
+    # (R3-5 ③). 기본 클래스는 `== "ea"`로 **남기는** 선택뿐(측정 #22의 틀린 사실 모양 — 연산자를 안 보면 원천 행의 `unit='ea'`가 가짜 나쁨, R3-5l ②),
+    # 이 사이트 전용 클래스가 `!=`로 거른다 — 한 줄에 짝이 둘이다.
     "batch/components.py": '''"""배치 파이프라인의 컴포넌트 — 등록은 등록 모음 파일에 있고 `_run`이 `get("…")`로 찾는다."""
 
 
 class StateFilter:
     def apply(self, rows):
-        return rows
+        return [r for r in rows if r.get("unit") == "ea"]
 
 
 class GumiStateFilter:

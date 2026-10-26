@@ -181,6 +181,8 @@ class FilterHit(StrictModel):
     repo: str = ""
     field: str = ""
     value: str = ""
+    # 비교식의 연산자(`==`·`!=`) — 사실만. 거르는 줄(`!=`)인지는 걷기가 정한다(R3-5l ②, 사람 결정 10-25). 컴포넌트 클래스 자리에는 없다.
+    op: str = ""
 
 
 class MergeHit(StrictModel):
@@ -200,7 +202,7 @@ class MergeHit(StrictModel):
 class FilterScan(StrictModel):
     """걷기의 단일값 검사 — 어댑터 안에서 한 조회의 결과(R3-4 ③, 사람 결정 10-14). 범위 = 그 입력을 읽는 클래스의 파일 + `get("X")`(리터럴)↔
     `register(component="X")`로 이은 컴포넌트 파일(config 제외). runner를 안 거치므로 읽기 상한·증거 밖이다 — 표에 적히는 것은 줄의 자리와 본문."""
-    hits: list[FilterHit] = []               # 필드 값이 든 비교식 줄들(파일 차례) — 어느 필드·값인지 함께
+    hits: list[FilterHit] = []               # 필드 값이 든 비교식 줄들(파일 차례) — 어느 필드·값·연산자인지 함께(`==`도 든다 — 거르는 줄은 걷기가 가린다)
     checked: list[str] = []                  # 대조한 필드들(N) — 조회가 안 되면 비어 있다(일부만 검사 0/M)
     files: list[str] = []                    # 본 파일들 — 클래스 파일 먼저, 그 뒤 이은 컴포넌트 클래스 파일
     linked: list[str] = []                   # 이은 컴포넌트 이름(리터럴)

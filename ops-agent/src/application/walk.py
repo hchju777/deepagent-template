@@ -37,8 +37,15 @@ MAX_SECONDS = 30.0
 # 못 채우는 템플릿(대상 키에 없는 자리) — scan 뒤 읽는 실재 키 수.
 SCAN_READS = 5
 # 단일값 필드의 나쁨은 **코드 줄**이 정한다(R3-3 ③ → R3-5 ③, 사람 결정 10-14·10-15 — 자리표시자 목록 같은 손 규칙은 두지 않는다): 입력을 읽는 쪽(걷고
-# 있는 클래스)의 파일과 이은 컴포넌트 클래스 파일에서 필드 이름과 그 값이 한 비교식의 양쪽에 리터럴로 있으면(실측 `["<필드>"] != "-"`) 그 값의 행은
-# 그 줄을 지나지 못한다. 필드 수 상한은 없다 — 어댑터가 비교식을 먼저 뽑아 단일값 전부와 맞춘다(측정 #11: 상한 6에 가려 7번째 필드를 못 봤다).
+# 있는 클래스)의 파일과 이은 컴포넌트 클래스 파일에서 필드 이름과 그 값이 한 비교식의 양쪽에 리터럴로 있고 **연산자가 `!=`면**(실측 `["<필드>"] != "-"`)
+# 그 값의 행은 그 줄을 지나지 못한다. `==`는 그 값을 남기는 쪽이라 거름이 아니다(R3-5l ②, 사람 결정 10-25 — 측정 #22: `(df["<f>"] == "<v>")`를 거름으로
+# 세어 기준 키가 가짜 나쁨). 필드 수 상한은 없다 — 어댑터가 비교식을 먼저 뽑아 단일값 전부와 맞춘다(측정 #11: 상한 6에 가려 7번째 필드를 못 봤다).
+
+
+def dropping(hits: list[FilterHit]) -> list[FilterHit]:
+    """거르는 줄 — `!=` 짝만(R3-5l ②). 한계(적어 둔다): `if r["f"] == "v": continue`처럼 `==`로 **버리는** 줄은 못 본다 — 결정이 연산자·리터럴까지라
+    거기서 멈춘다."""
+    return [h for h in hits if h.op == "!="]
 
 
 def _hashable(value: Any):
@@ -344,12 +351,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             # 대조한다(상한 없음). runner를 안 거치므로 읽기 상한·증거 밖이다. 문구는 사실만 — 행 수·그 값인 필드·그 값이 든 비교식의 자리(사람 결정 10-15).
             scan = await lookup(writer, fields=same, **branch.params)
             passed = ", ".join(f"{f}={v!r}" for f, v in same.items())
-            if scan.hits:
-                hit = scan.hits[0]
-                caught = dict.fromkeys((h.field, h.value) for h in scan.hits)
+            drops = dropping(scan.hits)
+            kept = [h for h in scan.hits if h.op != "!="]
+            if drops:
+                hit = drops[0]
+                caught = dict.fromkeys((h.field, h.value) for h in drops)
                 shown_fields = " ".join(f"{f}={v!r}" for f, v in caught)
                 # 줄로 센다 — 한 줄에 짝이 둘(`r.get("state") != "-" and r.get("wg") != "-"`)이면 짝 수로 센 "외 1줄"은 없는 줄을 말한다(R3-5 ④).
-                lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))
+                lines_hit = len(dict.fromkeys((h.path, h.line) for h in drops))
                 more = f" 외 {lines_hit - 1}줄" if lines_hit > 1 else ""
                 status, bad, carry = (f"나쁨 — {len(rows)}행 전부 {shown_fields} · 이 필드 값이 든 비교식 {hit.path}:L{hit.line} '{hit.text}'{more}", True,
                                       (hit.field, hit.value))
@@ -367,6 +376,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             else:
                 scope_note = f"{len(scan.checked)}/{len(same)} 대조, {len(scan.files)}파일" + (f", 이은 컴포넌트 {', '.join(scan.linked)}" if scan.linked else "")
                 status += f" · 단일값 {passed} — 거르는 줄 없음({scope_note})"
+            if kept and not drops:
+                # 같은 짝의 `==` 줄은 사실로만 — 리드가 그 줄을 보고 "코드가 거른다"로 읽지 않게 왜 안 세는지까지(측정 #22의 틀린 사실 모양).
+                k = kept[0]
+                more_kept = len(dict.fromkeys((h.path, h.line) for h in kept)) - 1
+                status += f" · == 비교식 {k.path}:L{k.line} '{k.text}'" + (f" 외 {more_kept}줄" if more_kept else "") + " — 그 값을 남기는 쪽이라 안 센다"
             if len(same_all) > len(same):
                 status += f" · 대조 안 함 {len(same_all) - len(same)}개(문자열 아님)"
         return status, bad, carry
@@ -575,8 +589,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     if merge.chained and lookup is not None:
                         fields, sides = fill_fields(merge, next(e[2] for e in read_inputs if e[1] == a_ev), next(e[2] for e in read_inputs if e[1] == b_ev))
                         scan = await lookup(writer, fields=fields, **branch.params) if fields else None
-                        if scan is not None and scan.hits:
-                            hit, (call, value) = scan.hits[0], merge.chained
+                        drops = dropping(scan.hits) if scan is not None else []
+                        if drops:
+                            hit, (call, value) = drops[0], merge.chained
                             filled = (f"{note} → {merge.how} 병합이라 행은 남고 짝 없는 행의 {hit.field}({sides.get(hit.field, '?')} 열) 값이 {value!r}"
                                       f"({call}({value!r})) · 이 값을 거르는 줄 {hit.path}:L{hit.line} '{hit.text}'", (hit.path, hit.line))
                     if filled is None:

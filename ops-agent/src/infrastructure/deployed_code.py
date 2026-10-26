@@ -73,9 +73,9 @@ _GET_LITERAL = re.compile(r"""(?P<recv>[\w.\]\)]+)\.get\(\s*(?P<q>["'])(?P<name>
 _GET_VARIABLE = re.compile(r"""(?P<recv>[\w.\]\)]+)\.get\(\s*(?P<var>[A-Za-z_][\w.]*)\s*[,)]""")
 _ACCESS = r"""(?:\[\s*(?P<q1>["'])(?P<f1>[^"'\n]+)(?P=q1)\s*\]|\.get\(\s*(?P<q2>["'])(?P<f2>[^"'\n]+)(?P=q2)[^()]*\)|getattr\([^(),]+,\s*(?P<q3>["'])(?P<f3>[^"'\n]+)(?P=q3)[^()]*\))"""
 _LITERAL = r"""(?P<q4>["'])(?P<v>[^"'\n]*)(?P=q4)"""
-_FORWARD = re.compile(_ACCESS + r"\s*(?:==|!=)\s*" + _LITERAL)
+_FORWARD = re.compile(_ACCESS + r"\s*(?P<op>==|!=)\s*" + _LITERAL)
 # 뒤집힌 순서는 연산자와 접근 사이에 수신자(`rows[0]`·`self.row`)가 온다 — 공백·따옴표·연산자가 없는 한 토막까지 허용한다.
-_REVERSED = re.compile(_LITERAL + r"""\s*(?:==|!=)\s*[^\s=!"']*""" + _ACCESS)
+_REVERSED = re.compile(_LITERAL + r"""\s*(?P<op>==|!=)\s*[^\s=!"']*""" + _ACCESS)
 # 등록의 사이트 인자 — 명시한 값이 전부 이 사이트와 같은 등록만 후보다(사람 결정 10-15: 같은 X가 사이트마다 다른 클래스).
 _SITE_KEYS = ("gbm", "factory", "fct")
 
@@ -196,15 +196,16 @@ def default_links(sources: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def comparison_pairs(text: str) -> list[tuple[int, str, str, str]]:
-    """코드 줄의 비교식에서 **필드와 리터럴이 양쪽**인 짝 `(줄, 필드, 값, 본문)` 전부 — `x["f"] != "v"`·`r.get("f") == "v"`·`getattr(r, "f") == "v"`, 뒤집힌
-    순서도. 사전 리터럴(`{"f": "v"}`)·주석·변수(`r[f]`, `!= v`)는 아니다. 먼저 전부 뽑아 두고 단일값 전부와 맞춘다(R3-5 ③ (a) — 필드 상한 없음)."""
-    out: list[tuple[int, str, str, str]] = []
+def comparison_pairs(text: str) -> list[tuple[int, str, str, str, str]]:
+    """코드 줄의 비교식에서 **필드와 리터럴이 양쪽**인 짝 `(줄, 필드, 값, 연산자, 본문)` 전부 — `x["f"] != "v"`·`r.get("f") == "v"`·`getattr(r, "f") == "v"`,
+    뒤집힌 순서도. 사전 리터럴(`{"f": "v"}`)·주석·변수(`r[f]`, `!= v`)는 아니다. 먼저 전부 뽑아 두고 단일값 전부와 맞춘다(R3-5 ③ (a) — 필드 상한 없음).
+    연산자(`==`·`!=`)는 사실로만 넘긴다 — 거르는 쪽인지는 걷기가 정한다(R3-5l ②, 측정 #22: `==`로 남기는 줄을 거름으로 셌다)."""
+    out: list[tuple[int, str, str, str, str]] = []
     for i, line in enumerate(text.splitlines(), 1):
         if line.lstrip().startswith("#"):
             continue
         for m in (*_FORWARD.finditer(line), *_REVERSED.finditer(line)):
-            out.append((i, m.group("f1") or m.group("f2") or m.group("f3"), m.group("v"), line.strip()))
+            out.append((i, m.group("f1") or m.group("f2") or m.group("f3"), m.group("v"), m.group("op"), line.strip()))
     return out
 
 
@@ -248,7 +249,7 @@ def merge_pairs(text: str) -> list[tuple[int, tuple[str, ...], tuple[str, ...], 
 
 
 def comparison_lines(text: str, field: str, value: str) -> list[tuple[int, str]]:
-    return [(i, body) for i, f, v, body in comparison_pairs(text) if f == field and v == value]
+    return [(i, body) for i, f, v, _op, body in comparison_pairs(text) if f == field and v == value]
 
 
 @dataclass(frozen=True)
@@ -482,7 +483,8 @@ class DeployedCode(DeployedCodePort):
     async def filter_lines(self, name: str, *, fields: dict[str, str] | None = None, service: str = "", repo: str = "") -> FilterScan:
         """걷기의 단일값 검사(R3-4 ③ → R3-5 ③) — **범위**는 그 입력을 읽는 클래스의 파일 + 거기서 `get("X")` 리터럴로 부르는 컴포넌트의 **클래스 파일**
         (등록 모음 파일의 `register(component="X", …)(<클래스>)`를 AST로 읽고 클래스를 인덱스로 푼다; 등록 줄의 파일이 아니다 — 측정 #11 P0 3), **짝**은
-        필드와 값이 한 비교식의 양쪽. 비교식을 먼저 뽑아 `fields` 전부와 맞춘다(상한 없음). 못 이은 것(변수·이 사이트의 등록 없음·인덱스에 없음·여럿)은
+        필드와 값이 한 비교식의 양쪽(연산자는 `op`에 사실로 — 거르는 쪽인지는 걷기가 정한다, R3-5l ②). 비교식을 먼저 뽑아 `fields` 전부와 맞춘다(상한
+        없음). 못 이은 것(변수·이 사이트의 등록 없음·인덱스에 없음·여럿)은
         `unlinked` — 하나라도 있으면 걷기가 "일부만 검사"로 적는다. runner를 안 거친다 — 읽기 상한·증거 밖. 던지지 않는다 — 조회가 안 되면 `problem`."""
         from src.knowledge import query as qy
 
@@ -554,8 +556,8 @@ class DeployedCode(DeployedCodePort):
             # 뒤 칸의 차례 — 나쁜 필드 이름이 리터럴로 든 클래스 파일 먼저(사람 결정 10-15 (c))
             quoted = [q + f + q for f in fields for q in ("'", '"')]
             linked_at.sort(key=lambda h: 0 if any(q in snap.get(h.path, "") for q in quoted) else 1)
-        hits = [FilterHit(path=path, line=i, text=body, repo=sym.repo, field=f, value=v)
-                for path in files for i, f, v, body in comparison_pairs(snap.get(path, "")) if f in fields and fields[f] == v]
+        hits = [FilterHit(path=path, line=i, text=body, repo=sym.repo, field=f, value=v, op=op)
+                for path in files for i, f, v, op, body in comparison_pairs(snap.get(path, "")) if f in fields and fields[f] == v]
         # 범위 파일의 pandas 병합식(R3-5g ④) — 걷기가 두 입력의 그 필드 값이 겹치는지 센다. 비교식과 같은 범위, 같은 사실의 종류(코드가 무엇으로 잇나).
         merges = [MergeHit(path=path, line=i, text=body, left=list(left), right=list(right), how=how, chained=follow)
                   for path in files for i, left, right, how, body, follow in merge_pairs(snap.get(path, ""))]

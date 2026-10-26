@@ -318,7 +318,7 @@ async def test_판정용_lines는_실제_걷기가_쓴_병합_주_두_꼴만_빼
 
 # ── R3-3 ③ → R3-4 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다(어댑터 안의 조회) ──
 
-HIT = FilterHit(path="proc/job.py", line=50, text='rows = [r for r in rows if r["wg"] != "-"]', repo="r", field="wg", value="-")
+HIT = FilterHit(path="proc/job.py", line=50, text='rows = [r for r in rows if r["wg"] != "-"]', repo="r", field="wg", value="-", op="!=")
 
 
 async def test_단일값_필드는_읽는_쪽_코드_줄에_필드와_값이_한_비교식_양쪽에_있을_때만_나쁘고_그_값이_이어지는_동안_위로_간다():
@@ -422,8 +422,8 @@ async def test_한_줄에_짝이_둘이면_한_줄로_센다():
     rows = [{"code": f"A{i}", "wg": "-", "st": "-"} for i in range(3)]
     table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("redis.get", "in:L1"): _value(record=rows)}
     one = 'r for r in rows if r["st"] != "-" and r["wg"] != "-"'
-    pair = [FilterHit(path="p.py", line=5, text=one, repo="r", field=f, value="-") for f in ("st", "wg")]
-    other = FilterHit(path="q.py", line=9, text='x["wg"] != "-"', repo="r", field="wg", value="-")
+    pair = [FilterHit(path="p.py", line=5, text=one, repo="r", field=f, value="-", op="!=") for f in ("st", "wg")]
+    other = FilterHit(path="q.py", line=9, text='x["wg"] != "-"', repo="r", field="wg", value="-", op="!=")
     for hits, tail in ((pair, f"p.py:L5 '{one}'"), (pair + [other], f"p.py:L5 '{one}' 외 1줄")):
         lookup = _Lookup({("W0", (("st", "-"), ("wg", "-"))): FilterScan(hits=hits, checked=["wg", "st"], files=["p.py", "q.py"])})
         walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=lookup,
@@ -626,7 +626,7 @@ async def test_포인터가_없으면_그_사실만_적고_나쁜_입력의_쓴_
 async def test_메시지의_단일값도_읽는_쪽_코드_줄로_판정하고_그_줄의_함수가_첫_칸이다():
     """사내 `<작업자 배지>`의 모양: 메시지는 오는데 한 필드가 전부 같은 값이라 처리기가 거른다 — 키 값과 같은 단일값 판정(③)을 메시지에도."""
     rows = [{"ws": "-", "n": i} for i in range(3)]
-    hit = FilterHit(path="p.py", line=7, text='if row.get("ws") != "-"', repo="r", field="ws", value="-")
+    hit = FilterHit(path="p.py", line=7, text='if row.get("ws") != "-"', repo="r", field="ws", value="-", op="!=")
     lookup = _Lookup({("W0", (("ws", "-"),)): FilterScan(files=["w0.py", "p.py"], checked=["ws"], hits=[hit])})
     table = {("code.resources", "W0"): _NONE_RES, ("kafka.message_at", "t"): _msg({"rows": rows})}
     walk = (await run_walk(_pointed(), runner=_Reads(table), classes=frozenset({"W0"}), class_services={"W0": ("a",)}, lookup=lookup, clock=lambda: T0))["walk"]
@@ -815,7 +815,7 @@ async def test_inner가_아닌_병합의_겹침_0에_이어진_호출의_채움�
              ("redis.get", "ref:L1"): _value(codes=[{"ws": "A"}, {"ws": "B"}])}
     merge = MergeHit(path="w0.py", line=5, text="pd.merge(a, b, on='ws', how='outer').pipe(fill_blanks, '-')", left=["ws"], right=["ws"], how="outer",
                      chained=("pipe", "-"))
-    hit = FilterHit(path="w0.py", line=9, text='rows = rows[rows["n"] != "-"]', repo="r", field="n", value="-")
+    hit = FilterHit(path="w0.py", line=9, text='rows = rows[rows["n"] != "-"]', repo="r", field="n", value="-", op="!=")
     lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[merge]), ("W0", (("n", "-"),)): FilterScan(files=["w0.py"], checked=["n"], hits=[hit])})
     walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
     by_key = {h.key: h for h in walk.hops}
@@ -868,3 +868,54 @@ def test_한_입력뿐일_때_None_꼬리는_필드별이다():
     rows = [{"code": "A", "ws": None, "line": "L1", "shift": None}, {"code": "B", "ws": None, "line": "L2", "shift": "D"}]
     inputs = [("ref", "e2", rows, "", None, "ref")]
     assert [why for _, why in join_unmatched([m], inputs)] == ["키 필드(code ↔ ws+line+shift)를 가진 행이 한 입력 ref에만 있다(오른쪽 ws 값 전부 None)"]
+
+
+# ── R3-5l ② — 단일값 나쁨은 거르는 쪽(`!=`) 짝만(사람 결정 10-25) ──
+
+def _keep(path, line, field, value):
+    return FilterHit(path=path, line=line, text=f'frame = frame[(frame["{field}"] == "{value}")]', repo="r", field=field, value=value, op="==")
+
+
+async def test_같은_짝이라도_등호_비교식은_그_값을_남기는_쪽이라_나쁨이_아니고_사실_한_토막만_남는다():
+    """측정 #22 (a)의 새 틀린 사실: `<기준 키> | 나쁨 — N행 전부 <f>='<v>' · … '(df["<f>"] == "<v>")'` — 그 줄은 `==`로 **남기는** 거름이라 그 값의 행은
+    전부 산다. 어댑터가 연산자를 사실로 넘기고(`FilterHit.op`) 걷기는 `!=` 짝만 거르는 줄로 센다: `==` 짝은 나쁨도, 위로 이어 볼 단일값도, 첫 칸(`단일값이 든
+    비교식`)도 아니고 상태에 사실 한 토막만 남는다. `!=` 짝이 같이 있으면 그것이 정하고 줄 수도 `!=` 줄만 센다. 한계: `if x == v: continue`처럼 `==`로
+    **버리는** 줄은 이 규칙이 못 본다 — 결정이 연산자·리터럴까지다."""
+    rows = [{"code": f"A{i}", "wg": "-", "lvl": "x"} for i in range(3)]
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows, "metadata": {"event_type": "W1"}})},
+             ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey")]),
+             ("redis.get", "src:L1"): {"type": "string", "value": json.dumps([{"id": i, "wg": "-"} for i in range(4)])}}
+    both = (("lvl", "x"), ("wg", "-"))
+    keep = _keep("proc/job.py", 51, "wg", "-")
+    lookup = _Lookup({("W0", both): FilterScan(hits=[keep], checked=["wg", "lvl"], files=["w0.py", "proc/job.py"], linked=["flt"])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)},
+                           lookup=lookup, clock=lambda: T0))["walk"]
+    assert not walk.hops[1].bad and walk.hops[1].status == ("정상 — record: 행 3 · 필드 3 · 모든 행이 같은 값: wg='-', lvl='x' · 단일값 wg='-', lvl='x' — 거르는 줄 없음"
+                                                            "(2/2 대조, 2파일, 이은 컴포넌트 flt) · == 비교식 proc/job.py:L51 'frame = frame[(frame[\"wg\"] == \"-\")]'"
+                                                            " — 그 값을 남기는 쪽이라 안 센다")
+    # 정상 입력이라 위로 안 걷는다(이어 볼 단일값도 없다) — 멈춤은 읽는 클래스의 `입력이 다 정상`으로 옮겨 가고 첫 칸도 그 줄이 아니라 읽는 메서드다
+    assert len(walk.hops) == 2 and lookup.calls == [("W0", {}, {}), ("W0", {"wg": "-", "lvl": "x"}, {})] and walk.reads == 2
+    assert walk.stopped == "입력이 다 정상 — W0" and "단일값이 든 비교식" not in walk.stopped
+    assert walk.rungs == [Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 9}, evidence="t-2.e1")]
+    # `!=` 짝이 같이 있으면 그것이 정한다 — 줄 수도 `!=` 줄만(`외 1줄` 없음), `==` 사실 토막도 없다
+    mixed = _Lookup({("W0", both): FilterScan(hits=[keep, HIT], checked=["wg", "lvl"], files=["w0.py", "proc/job.py"], linked=["flt"])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",)}, lookup=mixed, clock=lambda: T0))["walk"]
+    assert walk.hops[1].status == "나쁨 — 3행 전부 wg='-' · 이 필드 값이 든 비교식 proc/job.py:L50 'rows = [r for r in rows if r[\"wg\"] != \"-\"]'"
+    assert walk.hops[1].bad and walk.hops[2].status == "나쁨 — 같은 단일값 wg='-' (아래 홉과 같다)" and "proc/job.py:L50" in walk.stopped
+
+
+async def test_채움값_검사도_등호_비교식은_거르는_줄로_안_세어_주로만_남는다():
+    """R3-5h ②의 채움값 조회는 단일값 검사와 같은 조회라 같은 규칙 — 채움값을 `==`로 남기는 줄뿐이면 두 홉은 정상이고 inner 아닌 겹침 0의 주만 남는다."""
+    from src.domain.case import MergeHit
+
+    table = {("code.resources", "W0"): _res("W0", [("in:a:{line}", "rediskey"), ("ref:{line}", "rediskey")]),
+             ("redis.get", "in:a:L1"): _value(rows=[{"ws": "", "n": 1}, {"ws": "", "n": 2}]),
+             ("redis.get", "ref:L1"): _value(codes=[{"ws": "A"}, {"ws": "B"}])}
+    merge = MergeHit(path="w0.py", line=5, text="pd.merge(a, b, on='ws', how='outer').pipe(fill_blanks, '-')", left=["ws"], right=["ws"], how="outer",
+                     chained=("pipe", "-"))
+    lookup = _Lookup({("W0", ()): FilterScan(files=["w0.py"], merges=[merge]),
+                      ("W0", (("n", "-"),)): FilterScan(files=["w0.py"], checked=["n"], hits=[_keep("w0.py", 9, "n", "-")])})
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0"}), lookup=lookup, clock=lambda: T0))["walk"]
+    assert not any(h.bad for h in walk.hops[1:]) and walk.stopped == "입력이 다 정상 — W0" and lookup.calls[-1] == ("W0", {"n": "-"}, {})
+    assert walk.notes == ["W0: in:a:L1.ws {''} ↔ ref:L1.ws {'A', 'B'} 겹침 0 (outer 병합) — outer 병합이라 행은 남는다 (w0.py:L5)"]

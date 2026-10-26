@@ -2755,7 +2755,7 @@ CHAIN_T = "tests/test_local_case.py::test_chain_empty와_chain_filtered는_정�
 REG_BOARD_T = "tests/test_local_case.py::test_등록은_모음_파일에_호출형_네_모양으로_있고_문서_문자열_속_예시는_등록이_아니다"
 CASES += [
  ("링크 조회에 이어 온 단일값을 안 싣는다", WK, "fields=dict([watch]) if watch else {}, **branch.params", "fields={}, **branch.params", [LIT_T, BOARD_C2_T]),
- ("같은 줄의 짝을 따로 센다", WK, "lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))", "lines_hit = len(scan.hits)", [SAME_LINE_T, BOARD_C2_T]),
+ ("같은 줄의 짝을 따로 센다", WK, "lines_hit = len(dict.fromkeys((h.path, h.line) for h in drops))", "lines_hit = len(drops)", [SAME_LINE_T, BOARD_C2_T]),
  ("case walk가 칸을 안 찍는다", MN, "        for number, rung in enumerate(walk.rungs, 1):", "        for number, rung in enumerate([], 1):", [BOARD_C1_T, BOARD_C2_T]),
  ("측정판이 중첩 함수 가림을 못 잡는다", WK, "                status, bad, carry = await judged(rows_of(raw) if raw is not None else [], status, bad, ev)", "                status, bad, params_for = await judged(rows_of(raw) if raw is not None else [], status, bad, ev)", [BOARD_C1_T]),
  ("측정판에 사이트 인자 등록이 없다", LC, "register(component=\"state_filter\", gbm=\"mx\", factory=\"gumi\")(comp.GumiStateFilter)", "register(component=\"state_filter\")(comp.GumiStateFilter)", [REG_BOARD_T]),
@@ -3294,7 +3294,19 @@ CASES += [
  ("걷기가 표식 밖의 글로 못 센다 주를 쓴다", WK, "                    remember(f\"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} {JOIN_NOTE_MARKS[1]}\")", "                    remember(f\"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} — 겹침을 못 셌다\")", [WALK_JOIN_T, UNMATCHED_T]),
  ("A/B 도구가 자기 표식을 따로 둔다", ABM, "from src.domain.case import JOIN_NOTE_MARKS", "JOIN_NOTE_MARKS = (\"병합이라 행은 남는다\", \"— 겹침을 못 센다\")", [AB_STRIP_T]),
 ]
-assert len(CASES) >= 1032, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5l ② — 단일값 나쁨은 거르는 쪽(`!=`) 짝만 ──
+WALK_OP_T = "tests/application/test_walk.py::test_같은_짝이라도_등호_비교식은_그_값을_남기는_쪽이라_나쁨이_아니고_사실_한_토막만_남는다"
+WALK_FILL_OP_T = "tests/application/test_walk.py::test_채움값_검사도_등호_비교식은_거르는_줄로_안_세어_주로만_남는다"
+CASES += [
+ ("비교식의 연산자를 안 넘긴다", D, "            out.append((i, m.group(\"f1\") or m.group(\"f2\") or m.group(\"f3\"), m.group(\"v\"), m.group(\"op\"), line.strip()))", "            out.append((i, m.group(\"f1\") or m.group(\"f2\") or m.group(\"f3\"), m.group(\"v\"), \"!=\", line.strip()))", [FILTER_T, BOARD_C1_T]),
+ ("조회가 FilterHit에 연산자를 안 싣는다", D, "        hits = [FilterHit(path=path, line=i, text=body, repo=sym.repo, field=f, value=v, op=op)", "        hits = [FilterHit(path=path, line=i, text=body, repo=sym.repo, field=f, value=v)", [FILTER_T, BOARD_C1_T]),
+ ("== 짝도 거르는 줄로 센다", WK, "    return [h for h in hits if h.op == \"!=\"]", "    return list(hits)", [WALK_OP_T, WALK_FILL_OP_T, BOARD_C1_T]),
+ ("거르는 줄 없음에 == 사실을 안 적는다", WK, "            if kept and not drops:", "            if False:", [WALK_OP_T, BOARD_C1_T]),
+ ("채움값 검사가 == 짝도 거른다", WK, "                        drops = dropping(scan.hits) if scan is not None else []", "                        drops = list(scan.hits) if scan is not None else []", [WALK_FILL_OP_T]),
+ ("거르는 줄 수에 == 줄을 센다", WK, "                lines_hit = len(dict.fromkeys((h.path, h.line) for h in drops))", "                lines_hit = len(dict.fromkeys((h.path, h.line) for h in scan.hits))", [WALK_OP_T]),
+]
+assert len(CASES) >= 1038, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
