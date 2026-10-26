@@ -3276,10 +3276,10 @@ AB_RUN_T = "tests/application/test_conclude_ab.py::test_두_판을_번갈아_물
 AB_CLI_T = "tests/test_cli.py::test_llm_ab는_판정_트레이스_파일의_병합_주_줄을_넣은_판과_뺀_판으로_묻는다"
 CASES += [
  ("병합 주 줄을 안 뺀다", ABM, "        (removed if line.startswith(_NOTE) and any(m in line for m in JOIN_NOTE_MARKS) else kept).append(line)", "        kept.append(line)", [AB_STRIP_T, AB_CLI_T]),
- ("B판에도 원래 프롬프트를 묻는다", ABM, "        for arm, text in ((\"A\", prompt), (\"B\", stripped)):", "        for arm, text in ((\"A\", prompt), (\"B\", prompt)):", [AB_RUN_T]),
+ ("B판에도 원래 프롬프트를 묻는다", ABM, "        for arm, text in ((\"A\", with_notes), (\"B\", without)):", "        for arm, text in ((\"A\", with_notes), (\"B\", with_notes)):", [AB_RUN_T]),
  ("A/B에 판정 스키마를 안 건다", ABM, "            rows.append((arm, i, _line(await ask_json(llm, text, ConcludeReply, schema=schema))))", "            rows.append((arm, i, _line(await ask_json(llm, text, ConcludeReply))))", [AB_RUN_T]),
  ("못 읽은 답의 발췌를 찍는다", ABM, "        reason = re.split(r\"\\s—\\s['\\\"]\", ((got.error or \"\").splitlines() or [\"\"])[0], maxsplit=1)[0]", "        reason = ((got.error or \"\").splitlines() or [\"\"])[0]", [AB_RUN_T, AB_CLI_T]),
- ("병합 주가 없어도 묻는다", MN, "    if not removed:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\")\n        return 1", "    if False:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\")\n        return 1", [AB_CLI_T]),
+ ("병합 주가 없어도 묻는다", MN, "    if not removed and not notes:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\"", "    if False:\n        print(\"  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다\"", [AB_CLI_T]),
  ("dry-run도 묻는다", MN, "    if args.dry_run:\n        return 0\n    cfg = _llm_config(args, env, \"conclude\")", "    if False:\n        return 0\n    cfg = _llm_config(args, env, \"conclude\")", [AB_CLI_T]),
 ]
 
@@ -3325,7 +3325,17 @@ CASES += [
  ("짧게를 몇 번이고 다시 묻는다", LD, "        if attempt and shorten:\n            briefed = True", "        if False:\n            briefed = True", [BRIEF_ONCE_T]),
  ("짧게 안 쓴 턴도 3회 묻는다", LD, "    while attempt <= RETRIES + (1 if shorten and not briefed else 0):", "    while attempt <= RETRIES + 1:", [BRIEF_ONCE_T, GARBAGE_T]),
 ]
-assert len(CASES) >= 1046, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5m ③ — `llm ab --notes-from` ──
+AB_NOTES_T = "tests/application/test_conclude_ab.py::test_판정_턴에_주가_없으면_frame_턴의_병합_주를_걷기_표_아래에_끼운_판이_A다"
+AB_NOTES_CLI_T = "tests/test_cli.py::test_llm_ab는_notes_from으로_frame_턴의_병합_주를_판정_프롬프트의_걷기_표_아래에_끼운_판을_A로_묻는다"
+CASES += [
+ ("끼운 주를 A판에 안 넣는다", ABM, "    with_notes, without = (add_join_notes(prompt, notes) or prompt, prompt) if notes else (prompt, strip_join_notes(prompt)[0])", "    with_notes, without = (prompt, prompt) if notes else (prompt, strip_join_notes(prompt)[0])", [AB_NOTES_T]),
+ ("병합 주를 걷기 표 앞에 끼운다", ABM, "    return \"\\n\".join([*lines[:end], *notes, *lines[end:]])", "    return \"\\n\".join([*lines[:head + 1], *notes, *lines[head + 1:]])", [AB_NOTES_T]),
+ ("걷기 표가 없어도 끼운다", ABM, "    if head is None:\n        return None", "    if head is None:\n        return \"\\n\".join([*lines, *notes])", [AB_NOTES_T, AB_NOTES_CLI_T]),
+ ("frame 턴의 주를 안 읽는다", MN, "    notes = join_notes_of(turn_prompt(args.notes_from, \"frame 턴\")) if args.notes_from and not removed else []", "    notes = []", [AB_NOTES_CLI_T]),
+]
+assert len(CASES) >= 1050, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

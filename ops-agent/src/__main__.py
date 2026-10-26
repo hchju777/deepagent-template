@@ -388,21 +388,34 @@ def cmd_llm_ask(args, env) -> int:
 def cmd_llm_ab(args, env) -> int:
     """판정 턴 A/B(R3-5k ④, 측정 #21 요청) — `case investigate --trace`가 쓴 판정 턴 파일로, 걷기의 병합 주 줄을 넣은 판·뺀 판을 판정 역할 LLM에 묻는다. 사내
     모델로 사람이 돌리는 측정 명령이다. 유형·component·확신만 찍는다."""
-    from src.application.conclude_ab import prompt_of, run_ab, strip_join_notes, summary
+    from src.application.conclude_ab import add_join_notes, join_notes_of, prompt_of, run_ab, strip_join_notes, summary
     from src.infrastructure.llm_factory import build_llm
 
+    def turn_prompt(file: str, what: str) -> str:
+        path = Path(file)
+        if not path.exists():
+            raise SystemExit(f"{what} 파일이 없다 — {path}")
+        prompt = prompt_of(path.read_text(encoding="utf-8"))
+        if prompt is None:
+            raise SystemExit(f"`## 물어본 것` 칸이 없다 — `case investigate --trace`가 쓴 {what} 파일인가: {path.name}")
+        return prompt
+
     path = Path(args.trace_file)
-    if not path.exists():
-        raise SystemExit(f"트레이스 파일이 없다 — {path}")
-    prompt = prompt_of(path.read_text(encoding="utf-8"))
-    if prompt is None:
-        raise SystemExit(f"`## 물어본 것` 칸이 없다 — `case investigate --trace`가 쓴 판정 턴 파일인가: {path.name}")
+    prompt = turn_prompt(args.trace_file, "판정 턴")
     _, removed = strip_join_notes(prompt)
-    print(f"판정 A/B — {path.name} · 뺀 병합 주 {len(removed)}줄")
-    for line in removed:
+    # R3-5l ① 뒤 판정 턴엔 병합 주가 없다 — 같은 케이스 frame 턴의 주를 끼운 판이 A(R3-5m ③, 측정 #23: AGV 2건이 뺀 탓인지 못 가림).
+    notes = join_notes_of(turn_prompt(args.notes_from, "frame 턴")) if args.notes_from and not removed else []
+    if removed:
+        print(f"판정 A/B — {path.name} · 뺀 병합 주 {len(removed)}줄")
+    else:
+        print(f"판정 A/B — {path.name} · 끼운 병합 주 {len(notes)}줄" + (f" (frame 턴 {Path(args.notes_from).name})" if args.notes_from else ""))
+    for line in removed or notes:
         print(f"  {line.strip()}")
-    if not removed:
-        print("  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다")
+    if not removed and not notes:
+        print("  병합 주 줄이 없다 — 두 판이 같아 묻지 않는다" + (" (frame 턴에도 없다)" if args.notes_from else " (`--notes-from <frame 턴 파일>`로 끼울 수 있다)"))
+        return 1
+    if notes and add_join_notes(prompt, notes) is None:
+        print("  판정 프롬프트에 걷기 표가 없어 끼울 자리가 없다")
         return 1
     if args.dry_run:
         return 0
@@ -412,7 +425,7 @@ def cmd_llm_ab(args, env) -> int:
 
     async def go():
         try:
-            return await run_ab(llm, prompt, runs=args.runs)
+            return await run_ab(llm, prompt, runs=args.runs, notes=notes or None)
         finally:
             await _close_llms(llm)
 
@@ -2620,7 +2633,9 @@ def build_parser() -> argparse.ArgumentParser:
     ab = llm_sub.add_parser("ab", help="판정 턴 A/B — 판정 트레이스 파일의 프롬프트에서 걷기의 병합 주 줄을 넣은 판·뺀 판 (측정 도구)")
     ab.add_argument("trace_file", help="`case investigate --trace`가 쓴 판정 턴 파일(NN-rK-conclude.md)")
     ab.add_argument("--runs", type=int, default=3, help="판마다 몇 번(기본 3)")
-    ab.add_argument("--dry-run", action="store_true", help="뺄 줄만 찍고 묻지 않는다")
+    ab.add_argument("--dry-run", action="store_true", help="뺄(끼울) 줄만 찍고 묻지 않는다")
+    ab.add_argument("--notes-from", metavar="FRAME_TURN_FILE",
+                    help="판정 턴에 병합 주가 없으면(R3-5l ① 뒤) 같은 케이스 frame 턴 파일(NN-r1-frame.md)의 병합 주를 걷기 표 아래 끼운 판을 A로")
     ab.set_defaults(run=cmd_llm_ab)
 
     mail = sub.add_parser("mail", help="보고서를 메일로 보낸다")

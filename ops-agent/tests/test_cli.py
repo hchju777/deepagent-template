@@ -795,3 +795,29 @@ def test_llm_ab는_판정_트레이스_파일의_병합_주_줄을_넣은_판과
     out = capsys.readouterr().out
     assert "A1 못 읽음 — " in out and "B1 못 읽음 — " in out and "A(주 있음): 못 읽음 1" in out
     assert "[echo]" not in out and "t-1.e1 | x | y" not in out                                    # 답(여기선 프롬프트 메아리)의 발췌를 안 찍는다
+
+
+def test_llm_ab는_notes_from으로_frame_턴의_병합_주를_판정_프롬프트의_걷기_표_아래에_끼운_판을_A로_묻는다(echo_config, tmp_path, capsys):
+    """R3-5m ③: R3-5l ① 뒤 판정 턴 파일엔 병합 주가 없다 — 같은 케이스 frame 턴 파일의 주를 끼운 판이 A, 그대로가 B. `--dry-run`은 끼울 줄만. frame 턴에도
+    주가 없거나 판정 프롬프트에 걷기 표가 없으면 묻지 않고 1."""
+    from src.__main__ import _make_tracer, main
+    from src.domain.case import Hop, Walk
+
+    table = "\n".join(Walk(hops=[Hop(key="alarm:stats:L1", writer="W0", service="a", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1")],
+                            stopped="입력이 다 정상 — W0").lines())
+    note = "  주: W0: 병합식 w0.py:L9의 키 필드(code ↔ zz)를 가진 행이 한 입력 ref:L1에만 있다(오른쪽 zz 값 전부 None) — 겹침을 못 센다"
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("frame", 1, f"## 사건\n{table}\n{note}\n## 예시", "{}", None, 1.0)
+    trace("conclude", 3, f"## 사건\n{table}\n## 모은 증거\n- t-1.e1 | x | y", "{}", None, 9.0)
+    trace("frame", 2, "## 사건\n## 예시", "{}", None, 1.0)
+    trace("conclude", 4, "## 사건\n## 모은 증거\n- t-1.e1 | x | y", "{}", None, 9.0)
+    base = ["--config-root", str(echo_config), "--env-file", "/dev/null", "llm", "ab"]
+    assert main([*base, str(written[1]), "--notes-from", str(written[0]), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "끼운 병합 주 1줄" in out and note.strip() in out and "A1" not in out
+    assert main([*base, str(written[1])]) == 1 and "--notes-from" in capsys.readouterr().out                 # 뺄 줄도 없고 끼울 줄도 없다 — 길을 알려 준다
+    assert main([*base, str(written[1]), "--notes-from", str(written[2])]) == 1 and "frame 턴에도 없다" in capsys.readouterr().out
+    assert main([*base, str(written[3]), "--notes-from", str(written[0])]) == 1 and "끼울 자리가 없다" in capsys.readouterr().out
+    assert main([*base, str(written[1]), "--notes-from", str(written[0]), "--runs", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "A1 못 읽음 — " in out and "B1 못 읽음 — " in out and "A(주 있음): 못 읽음 1" in out and "[echo]" not in out

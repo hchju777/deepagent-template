@@ -74,3 +74,26 @@ async def test_두_판을_번갈아_물어_유형_component_확신만_세고_판
     enum = llm.schemas[0]["properties"]["basis"]["items"]["enum"]
     assert {"t-1.e1", "t-3.e1"} <= set(enum) and all(i in prompt for i in enum) and len(enum) == len(set(enum))
     assert summary(rows) == ["A(주 있음): logic_bug · processor 2", "B(주 없음): external · collector 1 / 못 읽음 1"]
+
+
+async def test_판정_턴에_주가_없으면_frame_턴의_병합_주를_걷기_표_아래에_끼운_판이_A다():
+    """R3-5m ③(측정 #23: `<AGV 2건>`이 3/6 inconclusive — 병합 주를 뺀 탓인지 못 가름). R3-5l ① 뒤 판정 턴엔 병합 주가 없어 뺄 줄이 없다 — frame 턴의 주를
+    R3-5l ①이 뺀 자리(걷기 표의 행과 있는 주 뒤, 다음 절 앞)에 끼운 판(A)과 그대로(B). 끼운 것을 빼면 원래 그대로다. 걷기 표가 없으면 끼울 자리가 없다."""
+    from src.application.conclude_ab import add_join_notes, join_notes_of, run_ab, strip_join_notes
+
+    walk = await _join_walk()
+    notes = join_notes_of(_prompt(walk))                                                      # frame 턴: 병합 주 둘(레포 주는 아니다)
+    assert notes == [f"  주: {n}" for n in walk.notes] and len(notes) == 2
+    verdict = "\n".join(["## 사건", *walk.lines(join_notes=False), REPO_NOTE, "## 모은 증거", "- t-1.e1 | redis.get key='alarm:stats:L1' | 빈 배열", "## 판정"])
+    assert strip_join_notes(verdict)[1] == []
+    inserted = add_join_notes(verdict, notes)
+    lines = inserted.split("\n")
+    at = lines.index(REPO_NOTE)
+    assert lines[at + 1:at + 3] == notes and lines[at + 3] == "## 모은 증거"                     # 레포 주 뒤, 다음 절 앞
+    assert strip_join_notes(inserted) == (verdict, notes)
+    assert add_join_notes("## 사건\n## 판정", notes) is None
+    answer = json.dumps({"verdict_type": "external", "root_cause": {"component": "collector", "evidence_ids": ["t-1.e1"]}, "confidence": "medium",
+                         "narrative": "서술", "basis": []})
+    llm = ScriptedAdapter([answer, answer], clock=lambda: T0)                                       # 읽히는 답 — 재질문 없이 판마다 한 번
+    assert await run_ab(llm, verdict, runs=1, notes=notes) == [("A", 1, "external · collector · medium"), ("B", 1, "external · collector · medium")]
+    assert llm.prompts == [inserted, verdict]

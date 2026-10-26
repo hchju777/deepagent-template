@@ -9,6 +9,8 @@ from src.application.lead import ConcludeReply, ask_json, conclude_schema
 from src.domain.case import JOIN_NOTE_MARKS
 
 _NOTE = "  주: "
+# 케이스 블록의 걷기 표 머리(`Walk.lines`) — 끼울 자리를 찾는 표식. 시험이 실제 걷기 출력으로 댄다.
+_WALK_HEAD = "걷기(코드가 상류를 걸었다)"
 _EVIDENCE_ID = re.compile(r"(?<![A-Za-z0-9_.\-])t-\d+\.e\d+(?![A-Za-z0-9_\-])")
 _FENCE = "````\n"
 
@@ -29,6 +31,23 @@ def strip_join_notes(prompt: str) -> tuple[str, list[str]]:
     return "\n".join(kept), removed
 
 
+def join_notes_of(prompt: str) -> list[str]:
+    """frame 턴 프롬프트의 병합 주 줄들 — `strip_join_notes`가 빼는 것과 같은 줄(R3-5m ③: R3-5l ① 뒤 판정 턴엔 그 줄이 없다)."""
+    return strip_join_notes(prompt)[1]
+
+
+def add_join_notes(prompt: str, notes: list[str]) -> str | None:
+    """병합 주 줄을 판정 프롬프트의 걷기 표 아래(행·있는 주 뒤, 다음 절 앞)에 끼운다 — R3-5l ①이 뺀 자리 그대로. 걷기 표가 없으면 None(끼울 자리가 없다)."""
+    lines = prompt.split("\n")
+    head = next((i for i, line in enumerate(lines) if line.startswith(_WALK_HEAD)), None)
+    if head is None:
+        return None
+    end = head + 1
+    while end < len(lines) and lines[end].startswith("  "):
+        end += 1
+    return "\n".join([*lines[:end], *notes, *lines[end:]])
+
+
 def _line(got) -> str:
     if not got.ok:
         # 사유만 — 못 읽은 답의 발췌(`… — '<답 머리>'`)는 자른다. 답에 증거 본문이 섞일 수 있다(`case trace`와 같은 선).
@@ -39,14 +58,15 @@ def _line(got) -> str:
     return f"{data['verdict_type']} · {cause} · {data['confidence']}"
 
 
-async def run_ab(llm, prompt: str, *, runs: int) -> list[tuple[str, int, str]]:
-    """→ `(판, 회차, 한 줄)` — A는 그대로, B는 병합 주 줄을 뺀 것. 회차마다 A·B를 번갈아(시간에 따른 쏠림을 나눈다). 판정 스키마는 실제 판정 턴과 같게 그
+async def run_ab(llm, prompt: str, *, runs: int, notes: list[str] | None = None) -> list[tuple[str, int, str]]:
+    """→ `(판, 회차, 한 줄)` — A는 병합 주가 있는 판, B는 없는 판. 프롬프트에 주가 있으면 B가 그것을 뺀 것이고, `notes`를 주면(판정 턴에 주가 없는 트레이스 —
+    R3-5l ① 뒤) A가 그 주를 걷기 표 아래 끼운 것이다(R3-5m ③). 회차마다 A·B를 번갈아(시간에 따른 쏠림을 나눈다). 판정 스키마는 실제 판정 턴과 같게 그
     프롬프트에 보인 증거 id의 enum(R3-5i ②). 던지지 않는다(`ask_json`)."""
-    stripped, _ = strip_join_notes(prompt)
+    with_notes, without = (add_join_notes(prompt, notes) or prompt, prompt) if notes else (prompt, strip_join_notes(prompt)[0])
     schema = conclude_schema(list(dict.fromkeys(_EVIDENCE_ID.findall(prompt))))
     rows = []
     for i in range(1, runs + 1):
-        for arm, text in (("A", prompt), ("B", stripped)):
+        for arm, text in (("A", with_notes), ("B", without)):
             rows.append((arm, i, _line(await ask_json(llm, text, ConcludeReply, schema=schema))))
     return rows
 
