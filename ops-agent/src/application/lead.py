@@ -37,9 +37,12 @@ from src.domain.llm_schema import strictify
 from src.domain.case import CauseLink, Hypothesis, PlanTask, Verdict
 from src.domain.llm import LlmPort
 
-RETRIES = 1
+RETRIES = 1                 # 깨진 형식의 사유 재질문 — 같은 모델이 같은 틀을 또 틀리니 한 번
+# 호출 자체의 실패(연결 끊김·조각 뒤 끊김·게이트웨이 오류)는 일시적이라 같은 질문으로 두 번(R3-5n ①, 측정 #24: `ReadError` → `ConnectionError`가 한 번뿐인
+# 재시도를 다 써 degraded). 조각 없는 시간 초과는 예외 — 같은 상한을 또 기다릴 이유가 없다(`ask_json`의 `timed_out`).
+CONNECTION_RETRIES = 2
 # 전송 오류(게이트웨이 403·타임아웃 등) 뒤에 쉬는 시간. 사내 세 번째 트레이스에서 되물음이
-# 앞 호출 직후에 나가자 게이트웨이가 403을 냈다 — 연달아 두 번 부른 것이 원인으로 보인다.
+# 앞 호출 직후에 나가자 게이트웨이가 403을 냈다 — 연달아 두 번 부른 것이 원인으로 보인다. 둘째 연결 재시도는 세 배 쉰다(`_pause`).
 RETRY_BACKOFF_S = 2.0
 
 
@@ -283,33 +286,36 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     asked = prompt
     schema = response_schema(model) if schema is None else schema                   # 판정 턴은 케이스마다 다른 스키마(증거 id enum, R3-5i ②)
     use_schema = schema
-    transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
-    shorten = False             # 직전 답이 길이 상한(`length`)에서 끊겼나 — 재질문에 "짧게" 한 줄(R3-5f ④)
-    # `## 짧게`는 전송·형식 재시도와 **다른 처방**이라 예산을 나누지 않는다 — 한 턴에 한 번(R3-5m ②, 측정 #23: 조각 뒤 끊김이 예산 1회를 쓴 뒤 length가 와
-    # 짧게를 못 묻고 degraded). 상한은 RETRIES + 1 + 짧게 1 = 3회.
-    briefed = False
+    # 실패의 종류마다 처방이 다르면 예산도 따로다(R3-5n ①, 측정 #24: degraded 6 중 셋이 다른 종류의 실패가 한 예산을 나눠 쓴 탓 — 전송 오류 둘, 짧게 뒤의 형식
+    # 실패, 짧게 뒤의 조각 끊김). 호출 자체의 실패(`connection`)는 같은 질문으로 두 번, 빈 응답(`empty`)·길이 상한(`length`, 짧게 — R3-5f ④·R3-5m ②)·깨진 형식
+    # (`format`, 사유 재질문)은 한 번씩. 조각 없는 시간 초과는 안 되묻는다(아래 `timed_out`). 최대 6회지만 실제 사슬은 셋을 넘기 어렵다.
+    budget = {"connection": CONNECTION_RETRIES, "empty": 1, "length": 1, "format": RETRIES}
+    kind = ""                   # 직전 실패의 종류 — 다음 처방을 고른다
+    briefed = False             # `## 짧게`로 바꿨나 — 바꾼 뒤엔 어떤 재시도든 짧게를 유지한다(길이 상한은 이 질문의 성질이지 그 호출의 사고가 아니다)
     attempts = attempt = 0
-    while attempt <= RETRIES + (1 if shorten and not briefed else 0):
+    while True:
+        if attempt:
+            if budget[kind] == 0:
+                break
+            budget[kind] -= 1
+            if kind in ("connection", "empty"):
+                # 호출이 실패하거나 답이 빈 것은 모델이 틀린 것이 아니다. "앞의 답을 읽을 수 없었다:
+                # OpenAIPermissionDeniedError…"를 붙여 다시 물으면 모델에게 오류 문자열을
+                # 고치라고 시키는 꼴이다 — 사내에서 실제로 그렇게 나갔다. 같은 프롬프트로,
+                # 잠깐 쉬고 다시 부른다.
+                await asyncio.sleep(_pause(kind, budget["connection"]))
+                asked = brief_prompt(prompt) if briefed else prompt
+            else:
+                # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
+                asked = repair_prompt(prompt, last.error or "알 수 없음")
+                if briefed:
+                    asked = brief_prompt(asked)
+                # **스키마는 뗀다.** 스키마를 건 답이 깨졌다면 모델이 그 강제에 약한 것이고, 같은 스키마로 다시 물으면 같은 모양으로
+                # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다. 길이 상한에서 끊긴 답도 둔다 — 형식 탓이 아니고,
+                # 떼면 판정 역할의 `## 짧게` 턴에 증거 id enum이 안 걸린다(R3-5j ②, 측정 #20: 없는 id 되묻기·인용 정리가 전부 그 턴).
+                if kind == "format":
+                    use_schema = None
         attempts = attempt + 1
-        if attempt and transport:
-            # 호출이 실패한 것은 모델이 틀린 것이 아니다. "앞의 답을 읽을 수 없었다:
-            # OpenAIPermissionDeniedError…"를 붙여 다시 물으면 모델에게 오류 문자열을
-            # 고치라고 시키는 꼴이다 — 사내에서 실제로 그렇게 나갔다. 같은 프롬프트로,
-            # 잠깐 쉬고 다시 부른다.
-            await asyncio.sleep(RETRY_BACKOFF_S)
-            asked = brief_prompt(prompt) if shorten else prompt
-        elif attempt:
-            # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
-            asked = repair_prompt(prompt, last.error or "알 수 없음")
-            if shorten:
-                asked = brief_prompt(asked)
-            # **스키마는 뗀다.** 스키마를 건 답이 깨졌다면 모델이 그 강제에 약한 것이고, 같은 스키마로 다시 물으면 같은 모양으로
-            # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다. 길이 상한에서 끊긴 답도 둔다 — 형식 탓이 아니고,
-            # 떼면 판정 역할의 `## 짧게` 턴에 증거 id enum이 안 걸린다(R3-5j ②, 측정 #20: 없는 id 되묻기·인용 정리가 전부 그 턴).
-            if not shorten:
-                use_schema = None
-        if attempt and shorten:
-            briefed = True
         text, failure, latency, waited, source, note, stats = None, None, None, None, None, None, None
         timed_out = False
         try:
@@ -317,11 +323,9 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         except Exception as exc:                                    # noqa: BLE001
             # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
             last = Parsed(False, error=f"{type(exc).__name__}: {exc}")
-            transport = True
-            shorten = False
+            kind = "connection"
         else:
-            transport = reply.status == "error"
-            shorten = reply.finish_reason == "length"
+            kind = "connection" if reply.status == "error" else ""
             latency = reply.latency_s
             # 턴의 조각 수·종료 사유·usage — 성공한 턴도 트레이스 머리에(R3-5d ②, 측정 #13 추가분 1: length가 고정 상한인지 보려면 턴마다 보여야 한다)
             stats = {"chunks": reply.chunks, "finish_reason": reply.finish_reason, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens,
@@ -359,11 +363,17 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
                 # 종료 사유가 `length`여도 한 번 더 — 고정 상한이 아니었다(측정 #13 추가분 1: 같은 질문 재전송 7번 전부 stop, 생각 폭주). 사유는 문구에 남는다.
                 text = reply.text or ""
                 last = Parsed(False, error=f"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})")
-                transport = True
+                kind = "empty"
+                if reply.finish_reason == "length":
+                    briefed = True          # 빈 긴 답 — 같은 질문에 짧게 한 줄(R3-5f ④)
             else:
                 text = reply.text or ""
                 parsed = parse_object(text)
                 last = validate(parsed.data, model) if parsed.ok else parsed
+                if not last.ok:
+                    kind = "length" if reply.finish_reason == "length" else "format"
+                    if kind == "length":
+                        briefed = True
         failure = None if last.ok else last.error
         _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)
         if last.ok:
@@ -372,6 +382,11 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             break
         attempt += 1
     return Parsed(False, error=f"{attempts}회 시도 실패 — {last.error}")
+
+
+def _pause(kind: str, connection_left: int) -> float:
+    """같은 질문을 다시 보내기 전에 쉬는 초 — 둘째 연결 재시도는 세 배(연달아 부른 것이 403의 원인으로 보였다). 빈 응답 뒤는 한 번."""
+    return RETRY_BACKOFF_S * (3 if kind == "connection" and connection_left == 0 else 1)
 
 
 _TIMEOUT_WORDS = re.compile(r"time ?out|timed out|시간 초과", re.I)

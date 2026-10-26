@@ -122,7 +122,7 @@ async def test_LLM이_던져도_흡수하고_llm_error로_끝낸다(case):
     assert patch["stopped_by"] == "llm_error"
     assert patch["decision"] == "conclude"
     assert "ConnectTimeout" in patch["llm_errors"][0]
-    assert len(llm.prompts) == lead.RETRIES + 1     # 던져도 재시도는 한다
+    assert len(llm.prompts) == lead.CONNECTION_RETRIES + 1     # 던져도 재시도는 한다 — 호출 자체의 실패는 두 번(R3-5n ①)
 
 
 async def test_시간_초과는_되묻지_않는다(case):
@@ -168,10 +168,10 @@ async def test_판정_턴은_다른_LLM을_쓸_수_있다(case):
 
 
 async def test_어댑터가_오류를_값으로_줘도_llm_error다(case):
-    frame, _, _ = leads(RuntimeError("429 Too Many Requests"),
-                        RuntimeError("429 Too Many Requests"))
+    frame, _, llm = leads(RuntimeError("429 Too Many Requests"), RuntimeError("429 Too Many Requests"),
+                          RuntimeError("429 Too Many Requests"))                              # 호출 자체의 실패는 두 번 더(R3-5n ①)
     patch = await frame(CaseState(case=case))
-    assert patch["stopped_by"] == "llm_error"
+    assert patch["stopped_by"] == "llm_error" and len(llm.prompts) == lead.CONNECTION_RETRIES + 1
     assert "429" in patch["llm_errors"][0]
 
 
@@ -623,8 +623,8 @@ async def test_frame이_죽으면_라운드를_시작하지_않는다(case):
 
     assert final["stopped_by"] == "llm_error"
     assert final["round"] == 1 and final["plan_tasks"] == []
-    # frame 두 번(재시도)뿐 — integrate는 아예 안 불렸다.
-    assert len(llm.prompts) == lead.RETRIES + 1
+    # frame 세 번(호출 실패의 재시도 둘)뿐 — integrate는 아예 안 불렸다.
+    assert len(llm.prompts) == lead.CONNECTION_RETRIES + 1
 
 
 async def test_integrate가_죽으면_상한이_그_이유를_덮지_않는다(case):
@@ -1394,7 +1394,7 @@ async def test_길이_상한의_짧게_재질문은_전송_형식_재시도와_�
     frame, _, _ = lead.make_lead(mixed, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
     assert "stopped_by" not in patch and len(mixed.prompts) == 3 and "## 다시" in mixed.prompts[1] and "## 짧게" in mixed.prompts[2]
-    # 짧게는 한 번뿐 — 짧게 뒤에 또 length면 끝(2회); 전송 실패 둘도 전처럼 2회
+    # 짧게는 한 번뿐 — 짧게 뒤에 또 length면 끝(2회); 호출 자체의 실패는 두 번 더(R3-5n ①)
     twice = ScriptedAdapter([_empty("length"), _empty("length"), reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(twice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
@@ -1402,12 +1402,48 @@ async def test_길이_상한의_짧게_재질문은_전송_형식_재시도와_�
     broken = ScriptedAdapter([broke, broke, reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(broken, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
-    assert len(broken.prompts) == 2 and "2회 시도 실패" in patch["llm_errors"][0]
+    assert len(broken.prompts) == 3 and "stopped_by" not in patch
     # 셋 다 실패하면 3회로 적힌다
     worst = ScriptedAdapter([broke, _empty("length"), _empty("length")], clock=lambda: T0)
     frame, _, _ = lead.make_lead(worst, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
     assert len(worst.prompts) == 3 and "3회 시도 실패" in patch["llm_errors"][0]
+
+
+async def test_재시도_예산은_실패의_종류마다_따로다(case, monkeypatch):
+    """측정 #24: degraded 6 중 셋 — 전송 오류 둘(`ReadError` → `ConnectionError`), 짧게 뒤 형식 실패(root_cause 누락), 짧게 뒤 조각 끊김 — 다른 종류의 실패가
+    한 예산을 나눠 썼다. 종류마다 처방이 다르면 예산도 따로(R3-5n ①): 호출 자체의 실패는 같은 질문으로 두 번(둘째는 더 쉰다), 빈 응답·길이 상한(짧게)·깨진
+    형식(사유 재질문, 스키마 뗌)은 한 번씩. 짧게로 바꾼 뒤엔 어떤 재시도든 짧게를 유지한다. 조각 없는 시간 초과는 전처럼 안 되묻는다."""
+    from src.domain.llm import LlmReply
+
+    broke = LlmReply(status="error", asked_at=T0, model="scripted", error="StreamChunkTimeout: 170초 동안 조각이 없다", chunks=3)
+    cut = LlmReply(status="ok", asked_at=T0, model="scripted", text='{"tasks": [', chunks=5, finish_reason="length")
+
+    async def run(*replies):
+        llm = ScriptedAdapter(list(replies), clock=lambda: T0)
+        frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+        return llm, await frame(CaseState(case=case))
+
+    # `<PGM>`: 전송 오류 둘 뒤 성공 — 같은 질문 셋
+    llm, patch = await run(ConnectionError("ReadError"), ConnectionError("ConnectionError"), reply(tasks=[TASK]))
+    assert "stopped_by" not in patch and len(llm.prompts) == 3 and llm.prompts[0] == llm.prompts[1] == llm.prompts[2]
+    # `<작업자 2>`: 길이 → 짧게(사유 재질문, 스키마 유지) → 형식 실패 → 사유 재질문에 짧게 유지, 스키마 뗌 → 성공
+    llm, patch = await run(cut, '{"tasks": "목록이 아니다"}', reply(tasks=[TASK]))
+    assert "stopped_by" not in patch and len(llm.prompts) == 3
+    assert "## 다시" in llm.prompts[1] and "## 짧게" in llm.prompts[1] and llm.schemas[1] == llm.schemas[0]
+    assert "## 다시" in llm.prompts[2] and "## 짧게" in llm.prompts[2] and llm.schemas[2] is None
+    # `<작업자 1>`: 길이 → 짧게 → 조각 뒤 끊김 → 같은 질문을 짧게로(사유 없이) → 성공
+    llm, patch = await run(cut, broke, reply(tasks=[TASK]))
+    assert "stopped_by" not in patch and len(llm.prompts) == 3
+    assert "## 짧게" in llm.prompts[2] and "## 다시" not in llm.prompts[2] and llm.prompts[2] == lead.brief_prompt(llm.prompts[0])
+    # 예산 끝 — 전송 오류 셋이면 3회로 끝나고 사유에 횟수가 남는다; 형식 실패는 전처럼 한 번(2회)
+    llm, patch = await run(ConnectionError("a"), ConnectionError("b"), ConnectionError("c"), reply(tasks=[TASK]))
+    assert len(llm.prompts) == 3 and "3회 시도 실패" in patch["llm_errors"][0]
+    llm, patch = await run('{"tasks": "x"}', '{"tasks": "y"}', reply(tasks=[TASK]))
+    assert len(llm.prompts) == 2 and "2회 시도 실패" in patch["llm_errors"][0]
+    # 둘째 연결 재시도는 더 쉰다(3배) — 빈 응답 뒤는 한 번 쉰다
+    monkeypatch.setattr(lead, "RETRY_BACKOFF_S", 2.0)
+    assert (lead._pause("connection", 1), lead._pause("connection", 0), lead._pause("empty", 0)) == (2.0, 6.0, 2.0)
 
 
 async def test_턴의_조각_수_종료_사유_토큰이_트레이스로_간다(case):
