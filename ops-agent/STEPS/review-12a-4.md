@@ -783,3 +783,16 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - P1-6(엔티티 스키마 검사 거름)·P1-7(레지스트리 풀기)·P1-8(런타임 처리기의 속성)은 보류 — 손대지 않았다.
 - 보고: (b) 15건의 유형·확신·caveat 줄, degraded 수·사유, 3회 이상 턴의 사슬, length 턴의 받은 글 종류·output_tokens, 되묻기·인용 정리·점수; (c) `<작업자 4>`
   멈춤·메시지 홉 원문; (d) 돌렸으면 AGV 2건 요약.
+
+## 측정 #25 결과 (10-27) → R3-5o
+
+- ① **degraded 1**(지난 7) — `<작업자 5>` 2회차 length → 짧게 → length. 3회 이상 시도한 사슬 0(그 경로는 이번에 안 나왔다). 전송 오류 뒤 같은 질문 재시도 성공 2
+  (`<AGV 1>` 1회차 `StreamChunkTimeout`, `<작업자 2>` 3회차 403). 게이트웨이 재실행 0.
+- length 10/42(1회차 3/19·2회차 4/11·3회차 3/12 — **차례로 돌려도 30%**), `## 짧게` 8/9, 1회차 회당 84초. **length 턴 10 중 9는 날것 응답이 비었고 출력 토큰이
+  정확히 16,000** — 생각이 상한을 먹었다. 잘린 JSON 1(`<작업자 3>` 3회차, narrative 중간).
+- 점수 7/24: 2-b 틀림 3/15·high 0 → 통과, 2-a 3/9·틀림 0 → 미달(`<PGM>` 1/3 — inconclusive 2, `<AGV 2건>` 1/3씩). 연속 통과 0. not_a_defect 1(`<50V>`), 없는 id 0,
+  인용 정리 1.
+- (c) `<작업자 4>`: 멈춤 `입력을 다 못 봤다 — <처리기 클래스>(읽기 실패 <원천 토픽>[0]@N)`, 메시지 홉 `읽기 실패 — … KafkaConnectionError: Unable to bootstrap` —
+  보존 범위 밖이 아니라 **측정 PC에서 그 법인 Kafka까지 안 닿는다**. 보이는 나쁨은 처리기가 쓴 `<f>='-'` 두 홉뿐이라 data_loss/processor ×2, inconclusive ×1.
+- (d) `<AGV 2건>` A/B `--runs 3`은 사람 결정으로 안 돌렸다.
+- 방향: R3-5o. 항목·자리는 [plan-12a-r2-r4.md](plan-12a-r2-r4.md) R3-5o.
