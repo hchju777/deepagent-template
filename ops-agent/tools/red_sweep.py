@@ -3316,7 +3316,16 @@ CASES += [
  ("컴프리헨션의 묶음을 안 본다", DCP, "        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):", "        if False:", [LOOP_T, FILTER_T]),
  ("문자열 하나를 묶음으로 본다", DCP, "    if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and node.elts and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):\n        return tuple(e.value for e in node.elts)", "    if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and node.elts and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):\n        return tuple(e.value for e in node.elts)\n    if isinstance(node, ast.Constant) and isinstance(node.value, str):\n        return (node.value,)", [LOOP_T]),
 ]
-assert len(CASES) >= 1043, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5m ② — 짧게 재질문은 별도의 한 번 ──
+BRIEF_ONCE_T = "tests/application/test_lead.py::test_길이_상한의_짧게_재질문은_전송_형식_재시도와_별도의_한_번이다"
+GARBAGE_T = "tests/application/test_lead.py::test_쓰레기_응답은_재시도_한_번_뒤에_포기한다"
+CASES += [
+ ("짧게 재질문이 예산을 나눠 쓴다", LD, "    while attempt <= RETRIES + (1 if shorten and not briefed else 0):", "    while attempt <= RETRIES:", [BRIEF_ONCE_T]),
+ ("짧게를 몇 번이고 다시 묻는다", LD, "        if attempt and shorten:\n            briefed = True", "        if False:\n            briefed = True", [BRIEF_ONCE_T]),
+ ("짧게 안 쓴 턴도 3회 묻는다", LD, "    while attempt <= RETRIES + (1 if shorten and not briefed else 0):", "    while attempt <= RETRIES + 1:", [BRIEF_ONCE_T, GARBAGE_T]),
+]
+assert len(CASES) >= 1046, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

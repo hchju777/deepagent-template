@@ -285,8 +285,11 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     use_schema = schema
     transport = False           # 직전 실패가 모델의 답이 아니라 **호출 자체**였나
     shorten = False             # 직전 답이 길이 상한(`length`)에서 끊겼나 — 재질문에 "짧게" 한 줄(R3-5f ④)
-    attempts = 0
-    for attempt in range(RETRIES + 1):
+    # `## 짧게`는 전송·형식 재시도와 **다른 처방**이라 예산을 나누지 않는다 — 한 턴에 한 번(R3-5m ②, 측정 #23: 조각 뒤 끊김이 예산 1회를 쓴 뒤 length가 와
+    # 짧게를 못 묻고 degraded). 상한은 RETRIES + 1 + 짧게 1 = 3회.
+    briefed = False
+    attempts = attempt = 0
+    while attempt <= RETRIES + (1 if shorten and not briefed else 0):
         attempts = attempt + 1
         if attempt and transport:
             # 호출이 실패한 것은 모델이 틀린 것이 아니다. "앞의 답을 읽을 수 없었다:
@@ -305,6 +308,8 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             # 떼면 판정 역할의 `## 짧게` 턴에 증거 id enum이 안 걸린다(R3-5j ②, 측정 #20: 없는 id 되묻기·인용 정리가 전부 그 턴).
             if not shorten:
                 use_schema = None
+        if attempt and shorten:
+            briefed = True
         text, failure, latency, waited, source, note, stats = None, None, None, None, None, None, None
         timed_out = False
         try:
@@ -365,6 +370,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             return last
         if timed_out:
             break
+        attempt += 1
     return Parsed(False, error=f"{attempts}회 시도 실패 — {last.error}")
 
 

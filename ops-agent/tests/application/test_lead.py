@@ -1377,6 +1377,39 @@ async def test_빈_응답은_종료_사유와_무관하게_같은_질문으로_�
     assert len(twice.prompts) == 2 and "2회 시도 실패 — 빈 응답(조각 40개, 종료 사유 length)" in patch["llm_errors"][0]
 
 
+async def test_길이_상한의_짧게_재질문은_전송_형식_재시도와_별도의_한_번이다(case):
+    """측정 #23: `<PGM>` 1회차가 조각 뒤 끊김(`StreamChunkTimeout`) → 같은 질문으로 한 번 더(예산 1회를 씀) → length → `## 짧게`를 물을 차례가 없어 degraded.
+    "length도 1회 다시"(R3-5d ②·R3-5f ④)는 짧게라는 **다른 처방**이라 전송·형식 재시도와 예산을 나누지 않는다 — 한 턴에 한 번, 상한 3회(R3-5m ②)."""
+    from src.domain.llm import LlmReply
+
+    broke = LlmReply(status="error", asked_at=T0, model="scripted", error="StreamChunkTimeout: 170초 동안 조각이 없다", chunks=3)
+    llm = ScriptedAdapter([broke, _empty("length"), reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(llm, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch and len(llm.prompts) == 3
+    assert llm.prompts[1] == llm.prompts[0] and "## 짧게" not in llm.prompts[1]                   # 조각 뒤 끊김 → 같은 질문(전처럼)
+    assert llm.prompts[2].startswith(llm.prompts[0]) and "## 짧게" in llm.prompts[2]              # length → 짧게는 그래도 한 번
+    # 형식이 깨진 답 → 사유 재질문 → 그 답이 length면 짧게 한 번 더(3회)
+    mixed = ScriptedAdapter(["그건 제가 알 수 없습니다.", _empty("length"), reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(mixed, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert "stopped_by" not in patch and len(mixed.prompts) == 3 and "## 다시" in mixed.prompts[1] and "## 짧게" in mixed.prompts[2]
+    # 짧게는 한 번뿐 — 짧게 뒤에 또 length면 끝(2회); 전송 실패 둘도 전처럼 2회
+    twice = ScriptedAdapter([_empty("length"), _empty("length"), reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(twice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(twice.prompts) == 2 and "2회 시도 실패" in patch["llm_errors"][0]
+    broken = ScriptedAdapter([broke, broke, reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(broken, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(broken.prompts) == 2 and "2회 시도 실패" in patch["llm_errors"][0]
+    # 셋 다 실패하면 3회로 적힌다
+    worst = ScriptedAdapter([broke, _empty("length"), _empty("length")], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(worst, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(worst.prompts) == 3 and "3회 시도 실패" in patch["llm_errors"][0]
+
+
 async def test_턴의_조각_수_종료_사유_토큰이_트레이스로_간다(case):
     """R3-5d ②: 성공한 턴도 트레이스 머리에 조각 수·종료 사유·usage — 사내 측정 #13에서 length가 고정 상한인지 보려고 트레이스를 뒤졌다."""
     from src.domain.llm import LlmReply
