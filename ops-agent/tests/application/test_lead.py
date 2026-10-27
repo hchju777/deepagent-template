@@ -1371,15 +1371,17 @@ async def test_빈_응답은_종료_사유와_무관하게_같은_질문으로_�
     assert "stopped_by" not in patch and len(capped.prompts) == 2
     # length 뒤의 재질문에는 "짧게" 한 줄이 **맨 뒤에** 붙는다(R3-5f ④, 사람 결정 10-20 기본값: 상한을 두지 않고 답의 모양을 말한다) — stop 뒤에는 안 붙는다
     assert capped.prompts[1].startswith(capped.prompts[0]) and "## 짧게" in capped.prompts[1] and "## 짧게" not in llm.prompts[1]
-    twice = ScriptedAdapter([_empty("length"), _empty("length")], clock=lambda: T0)
-    frame, _, _ = lead.make_lead(twice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    thrice = ScriptedAdapter([_empty("length"), _empty("length"), _empty("length")], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(thrice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
-    assert len(twice.prompts) == 2 and "2회 시도 실패 — 빈 응답(조각 40개, 종료 사유 length)" in patch["llm_errors"][0]
+    assert len(thrice.prompts) == 3 and "3회 시도 실패 — 빈 응답(조각 40개, 종료 사유 length)" in patch["llm_errors"][0]   # 빈 긴 답은 짧게 두 번(R3-5o ①)
 
 
-async def test_길이_상한의_짧게_재질문은_전송_형식_재시도와_별도의_한_번이다(case):
+async def test_길이_상한의_짧게_재질문은_전송_형식_재시도와_별도의_예산이다(case):
     """측정 #23: `<PGM>` 1회차가 조각 뒤 끊김(`StreamChunkTimeout`) → 같은 질문으로 한 번 더(예산 1회를 씀) → length → `## 짧게`를 물을 차례가 없어 degraded.
-    "length도 1회 다시"(R3-5d ②·R3-5f ④)는 짧게라는 **다른 처방**이라 전송·형식 재시도와 예산을 나누지 않는다 — 한 턴에 한 번, 상한 3회(R3-5m ②)."""
+    "length도 1회 다시"(R3-5d ②·R3-5f ④)는 짧게라는 **다른 처방**이라 전송·형식 재시도와 예산을 나누지 않는다(R3-5m ②). 측정 #25: length 턴 10 중 9는 빈 응답에
+    출력 토큰이 정확히 상한 — 생각이 상한을 먹었고 짧게가 8/9를 살린다. 빈 긴 답은 길이 상한의 실패로 세고 짧게를 **두 번**(R3-5o ①), 처방은 같은 질문에 짧게
+    (고칠 글이 없으니 사유 재질문은 아니다)."""
     from src.domain.llm import LlmReply
 
     broke = LlmReply(status="error", asked_at=T0, model="scripted", error="StreamChunkTimeout: 170초 동안 조각이 없다", chunks=3)
@@ -1394,20 +1396,26 @@ async def test_길이_상한의_짧게_재질문은_전송_형식_재시도와_�
     frame, _, _ = lead.make_lead(mixed, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
     assert "stopped_by" not in patch and len(mixed.prompts) == 3 and "## 다시" in mixed.prompts[1] and "## 짧게" in mixed.prompts[2]
-    # 짧게는 한 번뿐 — 짧게 뒤에 또 length면 끝(2회); 호출 자체의 실패는 두 번 더(R3-5n ①)
+    # 빈 긴 답은 짧게 두 번(R3-5o ①) — 같은 질문에 짧게, 사유 재질문(`## 다시`)은 아니다; 셋째도 length면 끝(3회)
     twice = ScriptedAdapter([_empty("length"), _empty("length"), reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(twice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
-    assert len(twice.prompts) == 2 and "2회 시도 실패" in patch["llm_errors"][0]
+    assert "stopped_by" not in patch and len(twice.prompts) == 3
+    assert all(p.startswith(twice.prompts[0]) and "## 짧게" in p and "## 다시" not in p for p in twice.prompts[1:])
+    thrice = ScriptedAdapter([_empty("length"), _empty("length"), _empty("length"), reply(tasks=[TASK])], clock=lambda: T0)
+    frame, _, _ = lead.make_lead(thrice, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
+    patch = await frame(CaseState(case=case))
+    assert len(thrice.prompts) == 3 and "3회 시도 실패 — 빈 응답(조각 40개, 종료 사유 length)" in patch["llm_errors"][0]
+    # 호출 자체의 실패는 두 번 더(R3-5n ①)
     broken = ScriptedAdapter([broke, broke, reply(tasks=[TASK])], clock=lambda: T0)
     frame, _, _ = lead.make_lead(broken, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
     assert len(broken.prompts) == 3 and "stopped_by" not in patch
-    # 셋 다 실패하면 3회로 적힌다
-    worst = ScriptedAdapter([broke, _empty("length"), _empty("length")], clock=lambda: T0)
+    # 넷 다 실패하면 4회로 적힌다 — 연결 1 + 짧게 2
+    worst = ScriptedAdapter([broke, _empty("length"), _empty("length"), _empty("length")], clock=lambda: T0)
     frame, _, _ = lead.make_lead(worst, site_config=site_config(), prompts=PROMPTS, max_rounds=3)
     patch = await frame(CaseState(case=case))
-    assert len(worst.prompts) == 3 and "3회 시도 실패" in patch["llm_errors"][0]
+    assert len(worst.prompts) == 4 and "4회 시도 실패" in patch["llm_errors"][0]
 
 
 async def test_재시도_예산은_실패의_종류마다_따로다(case, monkeypatch):

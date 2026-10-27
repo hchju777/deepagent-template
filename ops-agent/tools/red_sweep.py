@@ -459,7 +459,7 @@ CASES = [
   '                fresh = more',
   ["tests/application/test_nodes.py::test_되물은_답이_첫_답의_것을_빼도_남는다"]),
  ("전송 오류에도 수리 프롬프트를 보낸다", ROOT / "src/application/lead.py",
-  '            if kind in ("connection", "empty"):',
+  '            if kind in ("connection", "empty") or (kind == "length" and not text):',
   '            if False:',
   ["tests/application/test_lead.py::test_전송_오류는_같은_프롬프트로_다시_묻는다"]),
  ("brief가 아무것도 안 뺀다", TD,
@@ -2863,8 +2863,8 @@ CASES += [
  ("성공한 답에 조각 수와 종료 사유를 안 남긴다", LCM, "                        chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\"), **_tokens(usage)), None", "                        ), None", [ADAPTER_T]),
  ("실패한 답에 조각 수를 안 남긴다", LCM, "                              chunks=len(parts), finish_reason=str(metadata.get(\"finish_reason\") or \"\"), **_tokens(usage))", "                              )", [ADAPTER_T]),
  ("조각이 온 뒤의 멈춤도 시간 초과다", LD, "timed_out = _is_timeout(last.error or \"\") and not reply.chunks", "timed_out = _is_timeout(last.error or \"\")", [STALL_T]),
- ("빈 응답을 고칠 글로 다시 묻는다", LD, "                last = Parsed(False, error=f\"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})\")\n                kind = \"empty\"", "                last = Parsed(False, error=f\"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})\")\n                kind = \"format\"", [EMPTY_T]),
- ("빈 응답을 다시 안 묻는다", LD, "                kind = \"empty\"\n                if reply.finish_reason == \"length\":", "                kind = \"empty\"\n                timed_out = True\n                if reply.finish_reason == \"length\":", [EMPTY_T]),
+ ("빈 응답을 고칠 글로 다시 묻는다", LD, "                last = Parsed(False, error=f\"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})\")\n                kind = \"length\" if reply.finish_reason == \"length\" else \"empty\"", "                last = Parsed(False, error=f\"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})\")\n                kind = \"format\"", [EMPTY_T]),
+ ("빈 응답을 다시 안 묻는다", LD, "                kind = \"length\" if reply.finish_reason == \"length\" else \"empty\"\n                if kind == \"length\":", "                kind = \"length\" if reply.finish_reason == \"length\" else \"empty\"\n                timed_out = True\n                if kind == \"length\":", [EMPTY_T]),
  ("빈 응답을 형식 오류로 본다", LD, "            elif not (reply.text or \"\").strip():", "            elif False:", [EMPTY_T]),
  ("판정 역할에 유휴 상한 기본이 없다", SAP, "_ROLE_DEFAULTS: dict[str, dict] = {\"conclude\": {\"response_format\": \"none\", \"stream_idle_s\": 170.0}}", "_ROLE_DEFAULTS: dict[str, dict] = {\"conclude\": {\"response_format\": \"none\"}}", [IDLE_T]),
  ("판정 턴이 사슬 중간 홉을 안 접는다", B, "            \"evidence\": evidence_block(state, budget=evidence_budget, fold_chain=True),", "            \"evidence\": evidence_block(state, budget=evidence_budget),", [FOLD_T]),
@@ -3318,10 +3318,10 @@ CASES += [
 ]
 
 # ── 12a-R3-5m ② — 짧게 재질문은 별도의 한 번 ──
-BRIEF_ONCE_T = "tests/application/test_lead.py::test_길이_상한의_짧게_재질문은_전송_형식_재시도와_별도의_한_번이다"
+BRIEF_ONCE_T = "tests/application/test_lead.py::test_길이_상한의_짧게_재질문은_전송_형식_재시도와_별도의_예산이다"
 GARBAGE_T = "tests/application/test_lead.py::test_쓰레기_응답은_재시도_한_번_뒤에_포기한다"
 CASES += [
- ("짧게 재질문이 예산을 나눠 쓴다", LD, "    budget = {\"connection\": CONNECTION_RETRIES, \"empty\": 1, \"length\": 1, \"format\": RETRIES}", "    budget = {\"connection\": CONNECTION_RETRIES, \"empty\": 1, \"length\": 0, \"format\": RETRIES}", [CUT_RETRY_T]),
+ ("짧게 재질문이 예산을 나눠 쓴다", LD, "    budget = {\"connection\": CONNECTION_RETRIES, \"empty\": 1, \"length\": BRIEF_RETRIES, \"format\": RETRIES}", "    budget = {\"connection\": CONNECTION_RETRIES, \"empty\": 1, \"length\": 0, \"format\": RETRIES}", [CUT_RETRY_T]),
  ("짧게 안 쓴 턴도 3회 묻는다", LD, "\"format\": RETRIES}", "\"format\": RETRIES + 1}", [BRIEF_ONCE_T, GARBAGE_T]),
 ]
 
@@ -3342,10 +3342,17 @@ CASES += [
  ("연결 재시도가 한 번뿐이다", LD, "CONNECTION_RETRIES = 2", "CONNECTION_RETRIES = 1", [KINDS_T]),
  ("둘째 연결 재시도가 더 쉬지 않는다", LD, "    return RETRY_BACKOFF_S * (3 if kind == \"connection\" and connection_left == 0 else 1)", "    return RETRY_BACKOFF_S", [KINDS_T]),
  ("형식 실패가 짧게의 예산을 쓴다", LD, "                    kind = \"length\" if reply.finish_reason == \"length\" else \"format\"", "                    kind = \"length\"", [KINDS_T, SCHEMA_OFF_T]),
- ("빈 긴 답 뒤에 짧게로 안 바꾼다", LD, "                    briefed = True          # 빈 긴 답 — 같은 질문에 짧게 한 줄(R3-5f ④)", "                    briefed = False", [EMPTY_RETRY_T]),
+ ("빈 긴 답 뒤에 짧게로 안 바꾼다", LD, "                if kind == \"length\":\n                    briefed = True", "                if kind == \"length\":\n                    briefed = False", [EMPTY_RETRY_T]),
  ("잘린 긴 답 뒤에 짧게로 안 바꾼다", LD, "                    if kind == \"length\":\n                        briefed = True", "                    if False:\n                        briefed = True", [CUT_RETRY_T, KINDS_T]),
 ]
-assert len(CASES) >= 1054, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5o ① — 빈 긴 답은 길이 상한의 실패, 짧게 두 번 ──
+CASES += [
+ ("짧게 재질문이 한 번뿐이다", LD, "BRIEF_RETRIES = 2", "BRIEF_RETRIES = 1", [BRIEF_ONCE_T]),
+ ("빈 긴 답을 빈 응답의 예산으로 센다", LD, "                kind = \"length\" if reply.finish_reason == \"length\" else \"empty\"", "                kind = \"empty\"", [BRIEF_ONCE_T, EMPTY_RETRY_T]),
+ ("빈 긴 답에 사유 재질문을 보낸다", LD, "            if kind in (\"connection\", \"empty\") or (kind == \"length\" and not text):", "            if kind in (\"connection\", \"empty\"):", [BRIEF_ONCE_T]),
+]
+assert len(CASES) >= 1057, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

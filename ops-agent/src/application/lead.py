@@ -41,6 +41,10 @@ RETRIES = 1                 # 깨진 형식의 사유 재질문 — 같은 모�
 # 호출 자체의 실패(연결 끊김·조각 뒤 끊김·게이트웨이 오류)는 일시적이라 같은 질문으로 두 번(R3-5n ①, 측정 #24: `ReadError` → `ConnectionError`가 한 번뿐인
 # 재시도를 다 써 degraded). 조각 없는 시간 초과는 예외 — 같은 상한을 또 기다릴 이유가 없다(`ask_json`의 `timed_out`).
 CONNECTION_RETRIES = 2
+# 길이 상한 뒤 `## 짧게`는 두 번(R3-5o ①). 측정 #25: length 턴 10 중 9가 빈 응답에 출력 토큰이 정확히 상한 — 답이 아니라 **생각**이 상한을 먹는다. 프롬프트 모양으로
+# 생각을 못 줄이지만 짧게 한 줄이 8/9를 살렸고, 둘째 짧게는 남은 꼬리를 노린다(한 번 더 ~84초 vs degraded 한 건). 상한 자체는 사내 config의 `max_tokens`와
+# 게이트웨이의 추론 설정이 쥔다.
+BRIEF_RETRIES = 2
 # 전송 오류(게이트웨이 403·타임아웃 등) 뒤에 쉬는 시간. 사내 세 번째 트레이스에서 되물음이
 # 앞 호출 직후에 나가자 게이트웨이가 403을 냈다 — 연달아 두 번 부른 것이 원인으로 보인다. 둘째 연결 재시도는 세 배 쉰다(`_pause`).
 RETRY_BACKOFF_S = 2.0
@@ -287,9 +291,10 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     schema = response_schema(model) if schema is None else schema                   # 판정 턴은 케이스마다 다른 스키마(증거 id enum, R3-5i ②)
     use_schema = schema
     # 실패의 종류마다 처방이 다르면 예산도 따로다(R3-5n ①, 측정 #24: degraded 6 중 셋이 다른 종류의 실패가 한 예산을 나눠 쓴 탓 — 전송 오류 둘, 짧게 뒤의 형식
-    # 실패, 짧게 뒤의 조각 끊김). 호출 자체의 실패(`connection`)는 같은 질문으로 두 번, 빈 응답(`empty`)·길이 상한(`length`, 짧게 — R3-5f ④·R3-5m ②)·깨진 형식
-    # (`format`, 사유 재질문)은 한 번씩. 조각 없는 시간 초과는 안 되묻는다(아래 `timed_out`). 최대 6회지만 실제 사슬은 셋을 넘기 어렵다.
-    budget = {"connection": CONNECTION_RETRIES, "empty": 1, "length": 1, "format": RETRIES}
+    # 실패, 짧게 뒤의 조각 끊김). 호출 자체의 실패(`connection`)는 같은 질문으로 두 번, 길이 상한(`length` — 잘린 답이든 빈 긴 답이든, 짧게 — R3-5f ④·R3-5m ②·
+    # R3-5o ①)은 두 번, 빈 응답(`empty`, 종료 사유 stop)·깨진 형식(`format`, 사유 재질문)은 한 번씩. 조각 없는 시간 초과는 안 되묻는다(아래 `timed_out`). 최대 7회지만
+    # 실제 사슬은 셋을 넘기 어렵다.
+    budget = {"connection": CONNECTION_RETRIES, "empty": 1, "length": BRIEF_RETRIES, "format": RETRIES}
     kind = ""                   # 직전 실패의 종류 — 다음 처방을 고른다
     briefed = False             # `## 짧게`로 바꿨나 — 바꾼 뒤엔 어떤 재시도든 짧게를 유지한다(길이 상한은 이 질문의 성질이지 그 호출의 사고가 아니다)
     attempts = attempt = 0
@@ -298,8 +303,8 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             if budget[kind] == 0:
                 break
             budget[kind] -= 1
-            if kind in ("connection", "empty"):
-                # 호출이 실패하거나 답이 빈 것은 모델이 틀린 것이 아니다. "앞의 답을 읽을 수 없었다:
+            if kind in ("connection", "empty") or (kind == "length" and not text):
+                # 호출이 실패하거나 답이 빈 것은 모델이 틀린 것이 아니다(빈 긴 답도 — 고칠 글이 없다). "앞의 답을 읽을 수 없었다:
                 # OpenAIPermissionDeniedError…"를 붙여 다시 물으면 모델에게 오류 문자열을
                 # 고치라고 시키는 꼴이다 — 사내에서 실제로 그렇게 나갔다. 같은 프롬프트로,
                 # 잠깐 쉬고 다시 부른다.
@@ -362,10 +367,12 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
                 # 빈 응답 — 형식을 틀린 것이 아니다(고칠 글이 없다). 사유를 붙인 재질문이 아니라 같은 질문으로 한 번 더(사내 측정 #12b: 판정 턴 빈 응답 2회).
                 # 종료 사유가 `length`여도 한 번 더 — 고정 상한이 아니었다(측정 #13 추가분 1: 같은 질문 재전송 7번 전부 stop, 생각 폭주). 사유는 문구에 남는다.
                 text = reply.text or ""
+                # 빈 긴 답(종료 사유 length)은 길이 상한의 실패다 — 생각이 상한을 먹었다(측정 #25: 10 중 9, 출력 토큰 정확히 상한). 처방은 같은 질문에 짧게(고칠 글이
+                # 없다 — R3-5f ④), 예산은 길이 상한의 것(짧게 두 번 — R3-5o ①). 종료 사유가 stop인 빈 응답은 전처럼 같은 질문으로 한 번.
                 last = Parsed(False, error=f"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})")
-                kind = "empty"
-                if reply.finish_reason == "length":
-                    briefed = True          # 빈 긴 답 — 같은 질문에 짧게 한 줄(R3-5f ④)
+                kind = "length" if reply.finish_reason == "length" else "empty"
+                if kind == "length":
+                    briefed = True
             else:
                 text = reply.text or ""
                 parsed = parse_object(text)

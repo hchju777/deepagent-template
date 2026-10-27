@@ -602,7 +602,7 @@ medium으로 깎는다). **코드 변경 없음** — 그 법인 Kafka가 닿는
 
 | 순서 | 항목 | 할 것 | 자리 |
 |---|---|---|---|
-| R3-5o ① | (1) 빈 긴 답 | 리드: 빈 응답이라도 종료 사유가 length면 종류는 `length`(`BRIEF_RETRIES = 2` — 짧게 두 번), 처방은 같은 질문 + 짧게 그대로; 종료 사유가 stop인 빈 응답은 전처럼 `empty` 1회 | `lead` |
+| R3-5o ① ✅ | (1) 빈 긴 답 | 리드: 빈 응답이라도 종료 사유가 length면 종류는 `length`(`BRIEF_RETRIES = 2` — 짧게 두 번), 처방은 같은 질문 + 짧게 그대로; 종료 사유가 stop인 빈 응답은 전처럼 `empty` 1회 | `lead` |
 | R3-5o ② | (2) 작업자 4 | 코드 변경 없음 — 측정 환경(그 법인 Kafka 도달) 사람 결정 | — |
 | R3-5o ③ | (3) PGM | **사실 먼저**(측정 #26): inconclusive 2의 caveat·basis 줄. 코드 변경 없음 | — |
 | — | **측정 #26** | ① 뒤. **`code graph` 재생성: 불필요**(리드만). config 그대로. degraded 수, 짧게 둘째가 살린 수, length 턴의 빈 응답/잘린 JSON, `<PGM>` inconclusive의 caveat·basis, AGV A/B(사람 결정) | 브리프 |
