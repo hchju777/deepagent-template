@@ -821,3 +821,23 @@ def test_llm_ab는_notes_from으로_frame_턴의_병합_주를_판정_프롬프�
     assert main([*base, str(written[1]), "--notes-from", str(written[0]), "--runs", "1"]) == 0
     out = capsys.readouterr().out
     assert "A1 못 읽음 — " in out and "B1 못 읽음 — " in out and "A(주 있음): 못 읽음 1" in out and "[echo]" not in out
+
+
+def test_llm_ab는_legend로_걷기_머리_아래에_뜻_줄을_끼운_판을_B로_묻는다(echo_config, tmp_path, capsys):
+    """R3-5p ②: 바뀐 문구(뜻 줄) 판과 지금 판을 지난 트레이스로 비교한다 — A(지금)·B(뜻 줄). `--dry-run`은 끼울 줄만, 걷기 표가 없으면 1."""
+    from src.__main__ import _make_tracer, main
+    from src.domain.case import WALK_LEGEND, Hop, Walk
+
+    table = "\n".join(Walk(hops=[Hop(key="alarm:stats:L1", writer="W0", service="a", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1")],
+                            stopped="입력이 다 정상 — W0").lines())
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("conclude", 3, f"## 사건\n{table}\n## 모은 증거\n- t-1.e1 | x | y", "{}", None, 9.0)
+    trace("conclude", 4, "## 사건\n## 모은 증거\n- t-1.e1 | x | y", "{}", None, 9.0)
+    base = ["--config-root", str(echo_config), "--env-file", "/dev/null", "llm", "ab"]
+    assert main([*base, str(written[0]), "--legend", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "끼운 뜻 줄 1줄" in out and WALK_LEGEND.strip() in out and "A1" not in out
+    assert main([*base, str(written[1]), "--legend"]) == 1 and "끼울 자리가 없다" in capsys.readouterr().out
+    assert main([*base, str(written[0]), "--legend", "--runs", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "A1 못 읽음 — " in out and "B1 못 읽음 — " in out and "A(지금): 못 읽음 1" in out and "B(뜻 줄): 못 읽음 1" in out

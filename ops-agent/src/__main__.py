@@ -388,7 +388,8 @@ def cmd_llm_ask(args, env) -> int:
 def cmd_llm_ab(args, env) -> int:
     """판정 턴 A/B(R3-5k ④, 측정 #21 요청) — `case investigate --trace`가 쓴 판정 턴 파일로, 걷기의 병합 주 줄을 넣은 판·뺀 판을 판정 역할 LLM에 묻는다. 사내
     모델로 사람이 돌리는 측정 명령이다. 유형·component·확신만 찍는다."""
-    from src.application.conclude_ab import add_join_notes, join_notes_of, prompt_of, run_ab, strip_join_notes, summary
+    from src.application.conclude_ab import add_join_notes, add_legend, join_notes_of, prompt_of, run_ab, strip_join_notes, summary
+    from src.domain.case import WALK_LEGEND
     from src.infrastructure.llm_factory import build_llm
 
     def turn_prompt(file: str, what: str) -> str:
@@ -402,6 +403,35 @@ def cmd_llm_ab(args, env) -> int:
 
     path = Path(args.trace_file)
     prompt = turn_prompt(args.trace_file, "판정 턴")
+    if args.legend:
+        # 바뀐 문구(걷기 머리 아래 뜻 줄) 판과 지금 판(R3-5p ②) — 병합 주는 건드리지 않는다.
+        told = add_legend(prompt)
+        print(f"판정 A/B — {path.name} · 끼운 뜻 줄 {0 if told in (None, prompt) else 1}줄")
+        if told is None:
+            print("  판정 프롬프트에 걷기 표가 없어 끼울 자리가 없다")
+            return 1
+        if told == prompt:
+            print("  뜻 줄이 이미 있다 — 두 판이 같아 묻지 않는다")
+            return 1
+        print(f"  {WALK_LEGEND.strip()}")
+        if args.dry_run:
+            return 0
+        cfg = _llm_config(args, env, "conclude")
+        llm = build_llm(cfg, clock=_clock(args, env))
+        print(f"  판정 역할 {cfg.describe()} · 판마다 {args.runs}번(A·B 번갈아)")
+
+        async def go_legend():
+            try:
+                return await run_ab(llm, prompt, runs=args.runs, legend=True)
+            finally:
+                await _close_llms(llm)
+
+        rows = _run(go_legend())
+        for arm, i, line in rows:
+            print(f"  {arm}{i} {line}")
+        for line in summary(rows, labels=("지금", "뜻 줄")):
+            print(f"  {line}")
+        return 0
     _, removed = strip_join_notes(prompt)
     # R3-5l ① 뒤 판정 턴엔 병합 주가 없다 — 같은 케이스 frame 턴의 주를 끼운 판이 A(R3-5m ③, 측정 #23: AGV 2건이 뺀 탓인지 못 가림).
     notes = join_notes_of(turn_prompt(args.notes_from, "frame 턴")) if args.notes_from and not removed else []
@@ -2636,6 +2666,8 @@ def build_parser() -> argparse.ArgumentParser:
     ab.add_argument("trace_file", help="`case investigate --trace`가 쓴 판정 턴 파일(NN-rK-conclude.md)")
     ab.add_argument("--runs", type=int, default=3, help="판마다 몇 번(기본 3)")
     ab.add_argument("--dry-run", action="store_true", help="뺄(끼울) 줄만 찍고 묻지 않는다")
+    ab.add_argument("--legend", action="store_true",
+                    help="다른 비교: A는 지금 그대로, B는 걷기 머리 아래에 '정상'의 뜻 한 줄을 끼운 판(R3-5p ② — 바뀐 문구의 효과를 지난 트레이스로)")
     ab.add_argument("--notes-from", metavar="FRAME_TURN_FILE",
                     help="판정 턴에 병합 주가 없으면(R3-5l ① 뒤) 같은 케이스 frame 턴 파일(NN-r1-frame.md)의 병합 주를 걷기 표 아래 끼운 판을 A로")
     ab.set_defaults(run=cmd_llm_ab)

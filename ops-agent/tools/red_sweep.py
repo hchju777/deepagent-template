@@ -2419,7 +2419,7 @@ CASES += [
  ("identity 옆 빈 목록을 안 적는다", IM, "    return ([place(k) for k, v in obj.items() if isinstance(v, list) and not v],", "    return ([],", [DECL_T]),
  ("인덱스가 없어도 다음 홉을 낸다", IM, "    if target is None or not target.key or not code_index:", "    if target is None or not target.key:", [HOP_T]),
  ("입구 줄이 이미 읽은 것을 안 적는다", IM, "    if done:\n        lines.append(\"입구 노드가 이미 읽었다: \"", "    if False:\n        lines.append(\"입구 노드가 이미 읽었다: \"", [LINES_T]),
- ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake}\" if (intake := intake_lines(state, code_index=code_index, join_notes=join_notes)) else \"\"))", "            )", [FRAME_HOP_T]),
+ ("케이스 블록에 입구 줄이 없다", B, "            + (f\"\\n{intake}\" if (intake := intake_lines(state, code_index=code_index, join_notes=join_notes, legend=legend)) else \"\"))", "            )", [FRAME_HOP_T]),
  ("입구가 돌았는데 frame 예시에 접수 읽기를 둔다", B, "            if not intake_done:\n                shapes.append(first_read)", "            if True:\n                shapes.append(first_read)", [FRAME_HOP_T]),
  ("frame 예시에 다음 홉을 안 둔다", B, "        if hop:\n            shapes.append(hop)", "        if False:\n            shapes.append(hop)", [FRAME_HOP_T]),
  ("사다리 첫 칸이 고른 키의 uses가 아니다", B, "        hop = (pending.action, dict(pending.params))\n    if hop is not None:", "        hop = (pending.action, dict(pending.params))\n    if False:", [LADDER_HOP_T]),
@@ -2548,7 +2548,7 @@ CASES += [
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
  ("다음 홉이 걷기를 안 본다", IM, "    if walk is not None and walk.hops:\n        return walk.next_hop() if code_index else None", "    if False:\n        return walk.next_hop() if code_index else None", [WBRIEF_T]),
- ("홉 표를 안 싣는다", IM, "    if state.walk is not None:\n        lines += state.walk.lines(join_notes=join_notes)", "    if False:\n        lines += state.walk.lines(join_notes=join_notes)", [WBRIEF_T]),
+ ("홉 표를 안 싣는다", IM, "    if state.walk is not None:\n        lines += state.walk.lines(join_notes=join_notes, legend=legend)", "    if False:\n        lines += state.walk.lines(join_notes=join_notes, legend=legend)", [WBRIEF_T]),
  ("나쁜 홉의 증거를 안 고정한다", B, "        ids |= set(state.walk.chain_ids())", "        pass", [WBRIEF_T]),
  ("걸은 읽기 본문을 안 접는다", B, "        if ref.id in pinned or ref.id in folded:\n            continue", "        if ref.id in pinned:\n            continue", [WBRIEF_T]),
  ("걸은 태스크를 한 줄로 안 접는다", B, "        if task.walked:\n            # 걷기 노드의 읽기는 한 줄로", "        if False:\n            # 걷기 노드의 읽기는 한 줄로", [WBRIEF_T]),
@@ -3287,10 +3287,10 @@ CASES += [
 WALK_JOIN_T = "tests/application/test_walk.py::test_판정용_lines는_실제_걷기가_쓴_병합_주_두_꼴만_빼고_레포를_가른_주와_홉_표는_그대로_둔다"
 BRIEF_JOIN_T = "tests/application/test_briefing.py::test_판정_블록만_걷기의_병합_주를_빼고_조사_프롬프트와_레포를_가른_주는_그대로다"
 CASES += [
- ("판정 블록이 병합 주를 안 뺀다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False),", "    return {\"case\": case_block(state, site_config=site_config, target=target),", [BRIEF_JOIN_T]),
+ ("판정 블록이 병합 주를 안 뺀다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False, legend=True),", "    return {\"case\": case_block(state, site_config=site_config, target=target, legend=True),", [BRIEF_JOIN_T]),
  ("판정용 lines가 병합 주를 그대로 싣는다", CS, "        notes = self.notes if join_notes else [n for n in self.notes if not any(m in n for m in JOIN_NOTE_MARKS)]", "        notes = self.notes", [WALK_JOIN_T, BRIEF_JOIN_T]),
- ("lines의 기본이 병합 주를 뺀다", CS, "    def lines(self, *, join_notes: bool = True) -> list[str]:", "    def lines(self, *, join_notes: bool = False) -> list[str]:", [WALK_JOIN_T, BRIEF_JOIN_T]),
- ("intake_lines가 선택을 안 넘긴다", IM, "        lines += state.walk.lines(join_notes=join_notes)", "        lines += state.walk.lines()", [BRIEF_JOIN_T]),
+ ("lines의 기본이 병합 주를 뺀다", CS, "    def lines(self, *, join_notes: bool = True, legend: bool = False) -> list[str]:", "    def lines(self, *, join_notes: bool = False, legend: bool = False) -> list[str]:", [WALK_JOIN_T, BRIEF_JOIN_T]),
+ ("intake_lines가 선택을 안 넘긴다", IM, "        lines += state.walk.lines(join_notes=join_notes, legend=legend)", "        lines += state.walk.lines(legend=legend)", [BRIEF_JOIN_T]),
  ("걷기가 표식 밖의 글로 못 센다 주를 쓴다", WK, "                    remember(f\"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} {JOIN_NOTE_MARKS[1]}\")", "                    remember(f\"{writer}: 병합식 {merge.path}:L{merge.line}의 {why} — 겹침을 못 셌다\")", [WALK_JOIN_T, UNMATCHED_T]),
  ("A/B 도구가 자기 표식을 따로 둔다", ABM, "from src.domain.case import JOIN_NOTE_MARKS", "JOIN_NOTE_MARKS = (\"병합이라 행은 남는다\", \"— 겹침을 못 센다\")", [AB_STRIP_T]),
 ]
@@ -3331,7 +3331,7 @@ AB_NOTES_CLI_T = "tests/test_cli.py::test_llm_ab는_notes_from으로_frame_턴�
 CASES += [
  ("끼운 주를 A판에 안 넣는다", ABM, "    with_notes, without = (add_join_notes(prompt, notes) or prompt, prompt) if notes else (prompt, strip_join_notes(prompt)[0])", "    with_notes, without = (prompt, prompt) if notes else (prompt, strip_join_notes(prompt)[0])", [AB_NOTES_T]),
  ("병합 주를 걷기 표 앞에 끼운다", ABM, "    return \"\\n\".join([*lines[:end], *notes, *lines[end:]])", "    return \"\\n\".join([*lines[:head + 1], *notes, *lines[head + 1:]])", [AB_NOTES_T]),
- ("걷기 표가 없어도 끼운다", ABM, "    if head is None:\n        return None", "    if head is None:\n        return \"\\n\".join([*lines, *notes])", [AB_NOTES_T, AB_NOTES_CLI_T]),
+ ("걷기 표가 없어도 끼운다", ABM, "    if head is None:\n        return None\n    end = head + 1", "    if head is None:\n        return \"\\n\".join([*lines, *notes])\n    end = head + 1", [AB_NOTES_T, AB_NOTES_CLI_T]),
  ("frame 턴의 주를 안 읽는다", MN, "    notes = join_notes_of(turn_prompt(args.notes_from, \"frame 턴\")) if args.notes_from and not removed else []", "    notes = []", [AB_NOTES_CLI_T]),
 ]
 
@@ -3384,7 +3384,20 @@ CASES += [
  ("빈 토픽을 나쁨으로 안 본다", WK, "    return (f\"비었다 — {text}\" if not left else text), not left, f\"범위 {rng}, 남은 메시지 {left}\"", "    return (f\"비었다 — {text}\" if not left else text), False, f\"범위 {rng}, 남은 메시지 {left}\"", [KEYED_T, BOARD_KEYED_T]),
  ("구독 토픽이 비어도 멈춤이 키가 없다다", WK, "        if stop_hop.kind == \"topic\" and ev in topics_at:", "        if False:", [KEYED_T, BOARD_KEYED_T]),
 ]
-assert len(CASES) >= 1072, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5p ② — 판정 블록의 걷기 표 뜻 줄 + `llm ab --legend` ──
+WALK_LEGEND_T = "tests/application/test_walk.py::test_판정용_lines는_실제_걷기가_쓴_병합_주_두_꼴만_빼고_레포를_가른_주와_홉_표는_그대로_둔다"
+AB_LEGEND_T = "tests/application/test_conclude_ab.py::test_legend는_지난_트레이스의_걷기_머리_아래에_뜻_줄을_끼운_판이_B다"
+AB_LEGEND_CLI_T = "tests/test_cli.py::test_llm_ab는_legend로_걷기_머리_아래에_뜻_줄을_끼운_판을_B로_묻는다"
+CASES += [
+ ("lines가 뜻 줄을 안 둔다", CS, "        return head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return head + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
+ ("lines가 뜻 줄을 늘 둔다", CS, "        return head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return head + [WALK_LEGEND] + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
+ ("판정 블록이 뜻 줄을 안 켠다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False, legend=True),", "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False),", [BRIEF_JOIN_T]),
+ ("뜻 줄을 걷기 머리 앞에 끼운다", ABM, "    return \"\\n\".join([*lines[:head + 1], WALK_LEGEND, *lines[head + 1:]])", "    return \"\\n\".join([*lines[:head], WALK_LEGEND, *lines[head:]])", [AB_LEGEND_T]),
+ ("legend 비교가 B판에 뜻 줄을 안 끼운다", ABM, "        with_notes, without = prompt, add_legend(prompt) or prompt", "        with_notes, without = prompt, prompt", [AB_LEGEND_T]),
+ ("legend 요약 라벨이 병합 주의 것이다", MN, "        for line in summary(rows, labels=(\"지금\", \"뜻 줄\")):", "        for line in summary(rows):", [AB_LEGEND_CLI_T]),
+]
+assert len(CASES) >= 1078, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

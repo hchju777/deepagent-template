@@ -254,7 +254,7 @@ def hop_line(target: TargetPick | None, *, code_index: bool, walk=None) -> str:
     return f"다음 홉: {describe(*hop)} — {why}"
 
 
-def intake_lines(state: CaseState, *, code_index: bool, join_notes: bool = True) -> str:
+def intake_lines(state: CaseState, *, code_index: bool, join_notes: bool = True, legend: bool = False) -> str:
     """케이스 블록의 입구 줄들 — 입구 노드가 이미 읽은 것(다시 내지 마라), identity 옆의 빈 목록, 다음 홉. 측정 #7: 리드의 첫 수가 입구가 이미
     한 읽기라 중복 거부 → 되물어도 중복 → `no_runnable`로 끝났다. 입구가 안 돌았으면 빈 문자열. `join_notes=False`는 판정 블록(R3-5l ①)."""
     target = state.target
@@ -277,7 +277,7 @@ def intake_lines(state: CaseState, *, code_index: bool, join_notes: bool = True)
     if target.writer_line():
         lines.append(target.writer_line())
     if state.walk is not None:
-        lines += state.walk.lines(join_notes=join_notes)
+        lines += state.walk.lines(join_notes=join_notes, legend=legend)
     hop = hop_line(target, code_index=code_index, walk=state.walk)
     if hop:
         lines.append(hop)

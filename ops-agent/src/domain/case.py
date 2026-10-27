@@ -222,6 +222,10 @@ class Rung(StrictModel):
 # 걷기의 병합 주 두 꼴의 표식 — inner 아닌 겹침 0(행은 남는다, R3-5h ①)·겹침을 못 센 병합식(R3-5h ①·R3-5i ①). `walk.run_walk`가 이 표식으로 주를 쓰고 판정
 # 블록(`briefing.conclude_fields`)과 `llm ab`가 같은 표식으로 뺀다(R3-5l ①, 사람 결정 10-25: 측정 #22 A/B에서 주가 든 판은 외부 상류 1/15, 뺀 판은 4/15).
 JOIN_NOTE_MARKS = ("병합이라 행은 남는다", "— 겹침을 못 센다")
+# 판정 블록의 걷기 머리 아래 뜻 한 줄(R3-5p ②, 평가자 분석 10-28: `정상`·`입력이 다 정상`의 뜻이 표에 없어 리드가 `'-'`를 마지막으로 쓴 쪽을 원인으로 읽었다 —
+# 작업자 배지 60/60). 표식 하나 — `llm ab --legend`가 지난 트레이스에 같은 줄을 끼워 A(지금)·B(뜻 줄)로 비교한다. 조사 프롬프트·`case walk`에는 없다.
+WALK_LEGEND = ("  뜻: '정상'은 읽었고 거르는 비교식을 못 찾았다는 뜻이다 — 값이 뜻대로인지(예: '-'가 정상 값인지)는 보지 않았다. "
+               "'입력이 다 정상'도 같다(그 클래스의 입력을 전부 읽었고 어느 값도 거르는 줄에 안 걸렸다).")
 
 
 class Walk(StrictModel):
@@ -261,8 +265,9 @@ class Walk(StrictModel):
             cur = by_id.get(cur.parent) if cur.parent else None
         return frozenset(ids)
 
-    def lines(self, *, join_notes: bool = True) -> list[str]:
-        """`join_notes=False`는 판정 프롬프트용 — 병합 주 두 꼴만 빠진다(R3-5l ①). 걷기 표·`case walk`·조사 프롬프트는 기본값 그대로."""
+    def lines(self, *, join_notes: bool = True, legend: bool = False) -> list[str]:
+        """`join_notes=False`는 판정 프롬프트용 — 병합 주 두 꼴만 빠진다(R3-5l ①); `legend=True`도 판정용 — 머리 아래에 뜻 한 줄(R3-5p ②). 걷기 표·
+        `case walk`·조사 프롬프트는 기본값 그대로."""
         if not self.hops and not self.stopped:
             return []
         head = [f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}"]
@@ -270,7 +275,7 @@ class Walk(StrictModel):
             # 던진 걷기(홉 0)도 보인다(측정 #11 P0 2) — 사유 한 줄이 없으면 리드도 사람도 걷기가 있었는지 모른다.
             return head
         notes = self.notes if join_notes else [n for n in self.notes if not any(m in n for m in JOIN_NOTE_MARKS)]
-        return head + ["  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in notes]
+        return head + ([WALK_LEGEND] if legend else []) + ["  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in notes]
 
 
 class Case(StrictModel):

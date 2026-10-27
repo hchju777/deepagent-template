@@ -1624,6 +1624,14 @@ def test_판정_블록만_걷기의_병합_주를_빼고_조사_프롬프트와_
                    briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(), code_index=True)):
         assert f"  주: {join}" in fields["case"] and f"  주: {uncounted}" in fields["case"] and f"  주: {repo}" in fields["case"]
     assert f"  주: {join}" in briefing.case_block(state, site_config=_site_with_check(), target=picked, code_index=True)   # `case walk`가 찍는 블록도 그대로
+    # 판정 블록만 걷기 머리 아래에 뜻 한 줄(R3-5p ②) — frame·integrate·`case walk`에는 없다
+    from src.domain.case import WALK_LEGEND
+    lines = verdict.split("\n")
+    assert WALK_LEGEND in lines and lines[lines.index(WALK_LEGEND) - 1].startswith("걷기(코드가 상류를 걸었다)")
+    for fields in (briefing.frame_fields(state, site_config=_site_with_check(), flow_graph=_keyed_graph_with_decoy(), code_index=True),
+                   briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(), code_index=True)):
+        assert WALK_LEGEND not in fields["case"]
+    assert WALK_LEGEND not in briefing.case_block(state, site_config=_site_with_check(), target=picked, code_index=True)
 
 
 def test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸_칸은_건너뛴다():

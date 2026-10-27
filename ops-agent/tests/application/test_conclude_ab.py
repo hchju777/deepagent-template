@@ -97,3 +97,23 @@ async def test_판정_턴에_주가_없으면_frame_턴의_병합_주를_걷기_
     llm = ScriptedAdapter([answer, answer], clock=lambda: T0)                                       # 읽히는 답 — 재질문 없이 판마다 한 번
     assert await run_ab(llm, verdict, runs=1, notes=notes) == [("A", 1, "external · collector · medium"), ("B", 1, "external · collector · medium")]
     assert llm.prompts == [inserted, verdict]
+
+
+async def test_legend는_지난_트레이스의_걷기_머리_아래에_뜻_줄을_끼운_판이_B다():
+    """R3-5p ②(평가자 분석 10-28): 뜻 줄의 효과를 지난 트레이스로 잰다 — A(지금 그대로)·B(걷기 머리 아래 `WALK_LEGEND`). 이미 있으면 그대로, 걷기 표가 없으면
+    끼울 자리가 없다. 요약 라벨도 그에 맞게."""
+    from src.application.conclude_ab import add_legend, run_ab, summary
+    from src.domain.case import WALK_LEGEND
+
+    walk = await _join_walk()
+    prompt = "\n".join(["## 사건", *walk.lines(join_notes=False), "## 모은 증거", "- t-1.e1 | redis.get key='alarm:stats:L1' | 빈 배열", "## 판정"])
+    told = add_legend(prompt)
+    lines = told.split("\n")
+    assert lines[1].startswith("걷기(코드가 상류를 걸었다)") and lines[2] == WALK_LEGEND and lines[3] == "  키 | 쓴 쪽 | 상태 | 증거"
+    assert add_legend(told) == told and add_legend("## 사건\n## 판정") is None
+    answer = json.dumps({"verdict_type": "external", "root_cause": {"component": "collector", "evidence_ids": ["t-1.e1"]}, "confidence": "medium",
+                         "narrative": "서술", "basis": []})
+    llm = ScriptedAdapter([answer, answer], clock=lambda: T0)
+    rows = await run_ab(llm, prompt, runs=1, legend=True)
+    assert llm.prompts == [prompt, told] and rows == [("A", 1, "external · collector · medium"), ("B", 1, "external · collector · medium")]
+    assert summary(rows, labels=("지금", "뜻 줄")) == ["A(지금): external · collector 1", "B(뜻 줄): external · collector 1"]

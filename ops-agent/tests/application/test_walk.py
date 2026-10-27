@@ -314,6 +314,12 @@ async def test_판정용_lines는_실제_걷기가_쓴_병합_주_두_꼴만_빼
     assert verdict[-1] == f"  주: {repo_note}" and verdict[1] == "  키 | 쓴 쪽 | 상태 | 증거" and len(verdict) == len(full) - 2
     thrown = both.model_copy(update={"hops": []})
     assert thrown.lines(join_notes=False) == thrown.lines() == thrown.lines()[:1]                   # 던진 걷기는 머리줄뿐(전처럼)
+    # 판정용은 머리줄 아래에 뜻 한 줄(R3-5p ②, 평가자 분석 10-28: `정상`의 뜻이 표에 없어 리드가 `'-'`를 쓴 마지막 쪽을 탓했다) — 표식 하나, 다른 곳은 없다
+    from src.domain.case import WALK_LEGEND
+    told = both.lines(join_notes=False, legend=True)
+    assert told[0] == full[0] and told[1] == WALK_LEGEND and told[2:] == verdict[1:] and WALK_LEGEND.startswith("  뜻: ")
+    assert "거르는 비교식을 못 찾았다" in WALK_LEGEND and "'입력이 다 정상'" in WALK_LEGEND and WALK_LEGEND not in full
+    assert thrown.lines(join_notes=False, legend=True) == thrown.lines()[:1]                        # 표가 없으면 뜻 줄도 없다
 
 
 # ── R3-3 ③ → R3-4 ③ — 단일값 필드의 나쁨은 코드 줄이 정한다(어댑터 안의 조회) ──
