@@ -2531,8 +2531,8 @@ WBRIEF_T = "tests/application/test_briefing.py::test_걷기가_있으면_케이�
 CASES += [
  ("출력을 입력으로 센다", WK, "                if w and w == writer:\n", "                if False:\n", [WALK_T]),
  ("나쁜 입력의 쓴 쪽으로 안 간다", WK, "                frontier += [(w, b, depth + 1, ev, carry, pointer_of(_unwrap(raw)) if raw is not None else {}) for b in next_branches]", "                pass", [WALK_T]),
- ("정상인 입력으로도 간다", WK, "                if bad and w:\n                    next_branches, shown, cands = branches(w, name)", "                if w:\n                    next_branches, shown, cands = branches(w, name)", [WALK_T]),
- ("쓴 쪽 모름을 걷는다", WK, "                if bad and w:\n                    next_branches, shown, cands = branches(w, name)", "                if bad:\n                    next_branches, shown, cands = branches(w, name)", [UNKNOWN_T]),
+ ("정상인 입력으로도 간다", WK, "                elif bad and w:\n                    next_branches, shown, cands = branches(w, name)", "                elif w:\n                    next_branches, shown, cands = branches(w, name)", [WALK_T]),
+ ("쓴 쪽 모름을 걷는다", WK, "                elif bad and w:\n                    next_branches, shown, cands = branches(w, name)", "                elif bad:\n                    next_branches, shown, cands = branches(w, name)", [UNKNOWN_T]),
  ("대상 키를 또 읽는다", WK, "    seen = {target.key, target.declared}", "    seen = set()", [WALK_T]),
  ("쓰기 구간도 걷는다", WK, "    m = _WRITES_AT.search(text)\n    return _RESOURCE.findall(text[:m.start()] if m else text)", "    return _RESOURCE.findall(text)", [WALK_T]),
  ("깊이 상한이 없다", WK, "        if depth >= MAX_DEPTH:", "        if False:", [CAP_T]),
@@ -2543,7 +2543,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -2554,7 +2554,7 @@ CASES += [
  ("걸은 태스크를 한 줄로 안 접는다", B, "        if task.walked:\n            # 걷기 노드의 읽기는 한 줄로", "        if False:\n            # 걷기 노드의 읽기는 한 줄로", [WBRIEF_T]),
  ("사다리 칸의 입력이 걷기의 증거가 아니다", B, "                inputs = ([rung.evidence] if rung is not None and rung.evidence\n                          else [key_read.result_evidence_ids[0]] if key_read else [])", "                inputs = [key_read.result_evidence_ids[0]] if key_read else []", [WBRIEF_T]),
  ("class_services가 서비스를 안 단다", DCP, "                out.setdefault(s.name, set()).update([svc] if svc else shared.get(s.repo, ()))", "                out.setdefault(s.name, set())", ["tests/infrastructure/test_deployed_code.py::test_class_services는_클래스_이름을_그_파일의_서비스에_잇는다"]),
- ("source-missing에 원천 키가 있다", ROOT / "tools/local_case.py", "            **({} if variant == \"source-missing\" else", "            **({} if False else", ["tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"]),
+ ("source-missing에 원천 키가 있다", ROOT / "tools/local_case.py", "            **({} if variant in (\"source-missing\", \"source-missing-quiet\") else", "            **({} if False else", ["tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"]),
 ]
 
 # ── 12a-R3-3 ②-b — 두 레포의 같은 클래스 이름 ──
@@ -2658,7 +2658,7 @@ CASES += [
  ("입력이 0이어도 정상이라 한다", WK, "                       else f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다{none})\" if not info.listed", "                       else f\"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다{none})\" if False", [DEEP_T]),
  ("입력 0의 칸이 클래스 본문이 아니다", WK, "at=(reader_at(text) if real or missed else None) or class_at(text))", "at=reader_at(text))", [DEEP_T]),
  ("입력 정상의 칸이 읽는 메서드가 아니다", WK, "at=(reader_at(text) if real or missed else None) or class_at(text))", "at=class_at(text))", [WALK_T]),
- ("홉의 부모를 안 적는다", WK, "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\", parent=came_from))", "basis=f\"{writer}{tag}가 읽는 자원 ({res_id})\"))", [DEEP_T]),
+ ("홉의 부모를 안 적는다", WK, "                                evidence_id=ev, basis=basis, parent=came_from))", "                                evidence_id=ev, basis=basis))", [DEEP_T]),
  ("사슬이 부모를 안 따라간다", CS, "            cur = by_id.get(cur.parent) if cur.parent else None", "            cur = None", [DEEP_T]),
  ("사슬 밖의 나쁜 홉도 고정한다", B, "        ids |= set(state.walk.chain_ids())", "        ids |= set(state.walk.bad_ids())", [WBRIEF_T]),
  ("접는 범위가 사슬 밖이 아니다", B, "    return frozenset(ids - set(state.walk.chain_ids()))", "    return frozenset(ids - set(state.walk.bad_ids()))", [WBRIEF_T]),
@@ -2694,7 +2694,7 @@ CASES += [
  ("링크를 안 모은다", WK, "            linked_at[came_from], merges = list(scan0.linked_at), list(scan0.merges)", "            linked_at[came_from], merges = [], list(scan0.merges)", [LINK_T]),
  ("리터럴 칸의 입력 증거가 그 홉의 읽기가 아니다", WK, "                    literal = (scope, hit.path, hit.line, ev)", "                    literal = (scope, hit.path, hit.line, \"\")", [LIT_T]),
  ("못 이음이 있어도 정상이라 한다", WK, "            elif scan.unlinked:", "            elif False:", [LINK_T]),
- ("걷기 노드가 조회를 안 넘긴다", ND, "lookup=deps.filter_lines, ", "", [WNODE_T]),
+ ("걷기 노드가 조회를 안 넘긴다", ND, "subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "subscriptions=deps.subscriptions,", [WNODE_T]),
  ("측정판의 거르는 줄이 컴포넌트에 없다", LC, "        return [r for r in rows if r.get(\"state\") != \"-\" and r.get(\"wg\") != \"-\"]", "        return [r for r in rows if r.get(\"wg\") != \"-\"]", [LC_SRC_T]),
  ("측정판 batch가 컴포넌트를 안 찾는다", LC, "            rows = self.components.get(\"state_filter\").apply(domain.get(\"record\", []) + json.loads(source or \"[]\"))", "            rows = domain.get(\"record\", []) + json.loads(source or \"[]\")", [LC_SRC_T]),
 ]
@@ -2997,10 +2997,10 @@ CASES += [
  ("포인터가 행 안의 것도 집는다", IM, "        if value and all(isinstance(r, dict) for r in value):\n            return\n        for i, v in enumerate(value):\n            yield from _objects(v, f\"{path}[{i}]\")", "        for i, v in enumerate(value):\n            yield from _objects(v, f\"{path}[{i}]\")", [INTAKE_PTR_T]),
  ("--key가 포인터를 안 적는다", WO, "empty=arrays, empty_objects=objects, pointer=pointer_of(value), writer=writer,", "empty=arrays, empty_objects=objects, writer=writer,", [WALK_KEY_T]),
  ("발행 선언을 코드 추정에서도 센다", FLW, "        if e.get(\"relation\") == \"produces\" and e.get(\"origin\") == \"config\" and src.get(\"type\") == \"service\" and dst.get(\"label\") in out:", "        if e.get(\"relation\") == \"produces\" and src.get(\"type\") == \"service\" and dst.get(\"label\") in out:", [PRODUCING_T]),
- ("걷기 노드가 발행 선언을 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines, clock=deps.clock)", "                                  lookup=deps.filter_lines, clock=deps.clock)", [WALK_KEY_T]),
+ ("걷기 노드가 발행 선언을 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "                                  subscriptions=deps.subscriptions, lookup=deps.filter_lines,", [WALK_KEY_T]),
  ("어긋남 caveat가 메시지 홉의 발행 선언을 안 적는다", ND, "    where = f\"쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}]\" if stop.writer else stop.service", "    where = f\"쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}]\"", [DISAGREE_T]),
  ("메시지 홉의 발행 선언이 표에 안 보인다", CS, "        who = (self.writer + (f\" [{self.service}]\" if self.service else \"\")) if self.writer else (self.service or \"—\")", "        who = (self.writer + (f\" [{self.service}]\" if self.service else \"\")) if self.writer else \"—\"", [WALK_MSG_T]),
- ("CLI가 발행 선언을 안 넘긴다", MN, "declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph), clock=clock)", "declared_by=flow.declaring_map(flow_graph), clock=clock)", [BOARD_GONE_T]),
+ ("CLI가 발행 선언을 안 넘긴다", MN, "topic_producers=flow.producing_map(flow_graph),\n                              subscriptions=flow.consuming_map(flow_graph), clock=clock)", "subscriptions=flow.consuming_map(flow_graph), clock=clock)", [BOARD_GONE_T]),
  ("측정판에 포인터가 없다", LC, "\"offset\": _POINTER_OFFSET[l]}} if variant in _MESSAGE_VARIANTS else {})},", "\"offset\": _POINTER_OFFSET[l]}} if False else {})},", [LC_MSG_T, BOARD_MSG_T]),
 ]
 
@@ -3162,7 +3162,7 @@ BOARD_JOIN_T = "tests/test_board_walk.py::test_조인_변형은_이벤트_행과
 CASES += [
  ("겹침이 있어도 짝 없음으로 본다", WK, "                if a_ev == b_ev or pair in done or not a_keys or not b_keys or (a_keys & b_keys):", "                if a_ev == b_ev or pair in done or not a_keys or not b_keys:", [JOIN_CHECK_T]),
  ("조인 결과로 홉을 나쁨으로 안 바꾼다", WK, "                    hops[at] = hops[at].model_copy(update={\"bad\": True, \"status\": f\"나쁨 — {what}: {text} ({merge.path}:L{merge.line}) · \"", "                    hops[at] = hops[at].model_copy(update={\"bad\": False, \"status\": f\"나쁨 — {what}: {text} ({merge.path}:L{merge.line}) · \"", [JOIN_WALK_T, BOARD_JOIN_T]),
- ("조인 멈춤 사유를 안 쓴다", WK, "        if ev in joined_at and ev not in walked_at and ev not in failed_at:\n            # 병합 0건(④-b)", "        if False:\n            # 병합 0건(④-b)", [JOIN_WALK_T, BOARD_JOIN_T]),
+ ("조인 멈춤 사유를 안 쓴다", WK, "        elif ev in joined_at and ev not in walked_at and ev not in failed_at:\n            # 병합 0건(④-b)", "        elif False:\n            # 병합 0건(④-b)", [JOIN_WALK_T, BOARD_JOIN_T]),
  ("나빠진 입력의 쓴 쪽으로 안 걷는다", WK, "                        frontier += [(w_, b, depth + 1, ev_, None, pointer_of(_unwrap(raw_)) if raw_ is not None else {}) for b in next_branches]", "                        pass", [JOIN_WALK_T]),
 ]
 
@@ -3366,7 +3366,25 @@ CASES += [
  ("실어댑터 범위가 남은 수를 끝 오프셋으로 센다", KI, "            return ProbeResult.succeeded({\"topic\": actual, \"partitions\": rows, \"messages\": sum(r[\"end\"] - r[\"begin\"] for r in rows)},", "            return ProbeResult.succeeded({\"topic\": actual, \"partitions\": rows, \"messages\": sum(r[\"end\"] for r in rows)},", [KI_OFFSETS_T]),
  ("실어댑터 범위가 파티션 없음을 넘긴다", KI, "            if not partitions:\n                return ProbeResult.failed(f\"토픽이 없거나 파티션을 못 찾았다 — {actual}\", source=source, clock=self._clock)\n            tps = [TopicPartition(actual, p) for p in partitions]", "            tps = [TopicPartition(actual, p) for p in partitions]", [KI_OFFSETS_T]),
 ]
-assert len(CASES) >= 1063, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5p ①-b·c — 없는 키의 쓰는 클래스·구독 토픽·범위 홉 ──
+FL = ROOT / "src/knowledge/flow.py"
+CONSUMING_T = "tests/knowledge/test_flow.py::test_consuming_map은_서비스마다_config로_구독을_선언한_토픽들이다"
+WRITERS_IN_T = "tests/application/test_walk.py::test_writers_in은_code_uses_글의_쓰기_줄에서_인덱스_클래스와_서비스를_읽는다"
+KEYED_T = "tests/application/test_walk.py::test_키가_없으면_인덱스의_쓰는_클래스와_그_서비스의_구독_토픽과_토픽의_보존_범위를_홉으로_적는다"
+BOARD_KEYED_T = "tests/test_board_walk.py::test_원천_키가_없으면_인덱스의_쓰는_클래스와_구독_토픽의_보존_범위가_홉으로_실리고_토픽이_비었으면_거기서_멈춘다"
+CASES += [
+ ("구독 지도가 코드 추정 consumes도 센다", FL, "        if e.get(\"relation\") == \"consumes\" and e.get(\"origin\") == \"config\" and src.get(\"label\") in out and dst.get(\"type\") == \"topic\" and dst.get(\"label\"):", "        if e.get(\"relation\") == \"consumes\" and src.get(\"label\") in out and dst.get(\"type\") == \"topic\" and dst.get(\"label\"):", [CONSUMING_T]),
+ ("엔진이 구독 지도를 걷기에 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines,", [BOARD_KEYED_T]),
+ ("쓰기 줄을 읽기 줄처럼 센다", WK, "            writing = head.startswith(\"쓰기\")", "            writing = True", [WRITERS_IN_T]),
+ ("쓰는 클래스를 선언한 서비스로 안 거른다", WK, "        picked = [(c, s) for c, s in found if s in declared] or found", "        picked = found", [KEYED_T]),
+ ("쓰는 클래스가 여럿이어도 첫 것을 채운다", WK, "        if len(writers) != 1:\n            if writers:", "        if not writers:\n            if writers:", [KEYED_T]),
+ ("없는 키의 쓴 쪽을 안 찾는다", WK, "                keyed = (await keyed_writer(name)) if (got.status == \"ok\" and raw is None and not w and kind == \"rediskey\") else None", "                keyed = None", [KEYED_T, BOARD_KEYED_T]),
+ ("쓰는 클래스로 더 걷는다", WK, "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches = []", "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches, _, _ = branches(w, name)", [KEYED_T]),
+ ("빈 토픽을 나쁨으로 안 본다", WK, "    return (f\"비었다 — {text}\" if not left else text), not left, f\"범위 {rng}, 남은 메시지 {left}\"", "    return (f\"비었다 — {text}\" if not left else text), False, f\"범위 {rng}, 남은 메시지 {left}\"", [KEYED_T, BOARD_KEYED_T]),
+ ("구독 토픽이 비어도 멈춤이 키가 없다다", WK, "        if stop_hop.kind == \"topic\" and ev in topics_at:", "        if False:", [KEYED_T, BOARD_KEYED_T]),
+]
+assert len(CASES) >= 1072, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

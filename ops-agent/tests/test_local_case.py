@@ -118,6 +118,11 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     """R3-3 ② 걷기가 나쁜 입력에서 멈추는 두 모양 — 없음(키가 없다)과 0행(빈 배열). 요약 키는 c-1형(`data-empty`) 그대로."""
     import json
     missing, blank = _seeds(NOW, "source-missing"), _seeds(NOW, "source-blank")
+    # 원천 토픽이 빈 변형(R3-5p ①-c) — 원천 키도 없고 그 키를 쓰는 SourceSink가 구독하는 원천 토픽이 비었다
+    from tools.local_case import CORE_FILES
+    quiet = _seeds(NOW, "source-missing-quiet")
+    assert "alarm:source:L1" not in quiet["redis"] and quiet["kafka"]["mx.alarm.raw"] == [] and len(quiet["kafka"]["mx.alarm.main"]) == 5
+    assert "class SourceSink" in CORE_FILES["processor/source_sink.py"] and 'kafka["consumer"]["topic"]["topic1"]' in CORE_FILES["processor/source_sink.py"]
     assert not [k for k in missing["redis"] if k.startswith("alarm:source:")]
     assert json.loads(blank["redis"]["alarm:source:L1"]) == []
     for s in (missing, blank):

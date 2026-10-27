@@ -152,6 +152,20 @@ def run(cfg, consumer, producer, redis):
         producer.send(kafka["producer"]["topic"]["topic1"], event)
         redis.set(cfg["redis_key"]["heartbeat"].format(service="processor"), now())
 ''',
+    # 원천 키(`alarm:source:{line}`)를 **쓰는** 클래스(R3-5p ①-c) — 원천 토픽을 구독해 행 묶음을 키로 쓴다. `source-missing`에서 걷기가 인덱스의 쓰기 자원과
+    # 선언으로 이 클래스를 찾고, 그 서비스(processor)가 config로 구독하는 토픽의 보존 범위를 홉으로 적는다.
+    "processor/source_sink.py": '''"""alarm_raw를 받아 라인별 원천 묶음 키를 쓴다."""
+
+
+class SourceSink:
+    def __init__(self, cfg, consumer, redis):
+        self.cfg, self.consumer, self.redis = cfg, consumer, redis
+
+    def run(self):
+        kafka = self.cfg["infra"]["kafka"]
+        for msg in self.consumer.subscribe(kafka["consumer"]["topic"]["topic1"], group=kafka["consumer"]["group_id"]):
+            self.redis.set(self.cfg["redis_key"]["alarm_source"].format(line=msg["line"]), msg["rows"])
+''',
     "sink/writer.py": '''"""alarm_main을 읽어 alarm_events에 넣고 alarm:stats:{line}을 갱신한다."""
 
 
@@ -533,6 +547,8 @@ VARIANTS = {
     "data-empty": "sink가 요약 키를 갱신하지만 data가 빈 배열 — 키는 있고 화면은 0, 컬렉션엔 최근 문서가 있다",
     # R3-3 ② — 걷기가 나쁜 입력에서 멈추는 두 모양. 요약 키는 c-1형 그대로이고 쓴 쪽(batch)의 원천 키가 없거나 빈 배열이다.
     "source-missing": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 아예 없다 — 걷기가 '없음'에서 멈춘다",
+    # R3-5p ①-c — 원천 키가 없고, 그 키를 쓰는 SourceSink가 구독하는 원천 토픽도 비었다(걷기가 `구독 토픽이 비었다`에서 멈춘다).
+    "source-missing-quiet": "source-missing과 같고 원천 키를 쓰는 SourceSink가 구독하는 원천 토픽(mx.alarm.raw)도 비었다 — 입력이 없다",
     "source-blank": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 빈 배열이다 — 걷기가 '0행'에서 멈춘다",
     # 사내 c-2형(측정 #9) — 원천 행은 있는데 모든 행의 한 필드가 '-'이고 batch 코드가 그 값을 거른다(`r.get("state") != "-"`).
     "source-filtered": "요약 키 data는 빈 배열이고 원천 키 행은 있지만 모든 행의 state가 '-'다 — batch가 그 값을 걸러 아무것도 안 남는다",
@@ -563,7 +579,7 @@ _MESSAGE_VARIANTS = {"message-empty", "message-gone", "message-blank"}
 # 포인터의 자리 — 라인마다 다른 오프셋(토픽 하나, 파티션 0). message-gone은 사이트 층이 덮은 감사 토픽(dt-core 세 서비스가 소비·발행 선언)의 보존(100부터) 앞이다.
 _POINTER_OFFSET = {"L1": 2, "L2": 3, "L3": 4}
 _POINTER_TOPIC = {"message-gone": "gumi.alarm.audit"}
-_EMPTY_DATA = {"data-empty", "source-missing", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered",
+_EMPTY_DATA = {"data-empty", "source-missing", "source-missing-quiet", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered",
                "chain-objects", "palette-unread", "join-empty", "join-outer", *_MESSAGE_VARIANTS}
 # 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
 _RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender", "join-empty": "SourceJoiner", "join-outer": "SourceOuterJoiner",
@@ -628,6 +644,7 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             # 메시지 변형(R3-5d ④)은 원천 토픽의 메시지가 포인터가 가리키는 모양이다 — rows가 빈 배열(message-empty)이거나 모든 행의 ws가 '-'(message-blank).
             # message-gone은 사이트 층이 덮은 감사 토픽의 보존이 100부터라 포인터(2~4)가 범위 밖이다(stub 시드의 `begin`).
             "mx.alarm.raw": ([{"line": LINES[i % 3], "rows": _message_rows(variant, i)} for i in range(5)] if variant in _MESSAGE_VARIANTS
+                             else [] if variant == "source-missing-quiet"
                              else [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "ts": fresh(14 - 3 * i)} for i in range(5)]),
             "mx.alarm.main": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i)} for i in range(5)],
             **({"gumi.alarm.audit": {"begin": 100, "messages": [{"line": LINES[i % 3], "note": f"audit-{i}"} for i in range(5)]}}
@@ -649,7 +666,7 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                     "count_1h": counts[l], "updated_at": fresh(1) if stats_fresh or variant in _EMPTY_DATA else _iso(stale)})
                 for l in LINES}),
             # 쓴 쪽의 입력 — 원천 키. `source-missing`은 키가 없고 `source-blank`은 빈 배열(R3-3 ②).
-            **({} if variant == "source-missing" else
+            **({} if variant in ("source-missing", "source-missing-quiet") else
                {f"alarm:source:{l}": json.dumps([] if variant == "source-blank" else
                                                 [{"alarm_code": d["alarm_code"], "occ_date": d["occ_date"], "unit": "ea",
                                                   **({"state": "-"} if variant == "source-filtered" else {})} for d in docs if d["line"] == l])

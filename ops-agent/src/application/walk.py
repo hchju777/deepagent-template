@@ -188,6 +188,40 @@ def fill_key(template: str, *, declared: str, key: str) -> str | None:
         return None
 
 
+_USES_ENTRY = re.compile(r"^\s*(?P<qual>[\w.]+) \([^)]*\) \[(?P<repo>[^\]·]+) · (?P<service>[^\]]+)\]")
+
+
+def writers_in(text: str, classes: frozenset[str]) -> list[tuple[str, str]]:
+    """`code.uses` 글의 **쓰기** 줄에서 `(인덱스 클래스, 서비스)`들 — 없는 키의 쓴 쪽 후보(R3-5p ①-c). 읽기 줄은 안 보고, 클래스 이름이 안 든 모듈 함수는
+    안 센다(쓴 쪽은 늘 클래스였다 — 측정 #8). 글의 모양은 `query.uses_lines`가 정한다."""
+    found: list[tuple[str, str]] = []
+    writing = False
+    for line in (text or "").splitlines():
+        head = line.strip()
+        if re.match(r"^(쓰기|읽기) \d+:$", head):
+            writing = head.startswith("쓰기")
+            continue
+        m = _USES_ENTRY.match(line) if writing else None
+        if m is None:
+            continue
+        cls = next((part for part in m.group("qual").split(".") if part in classes), "")
+        if cls and (cls, m.group("service").strip()) not in found:
+            found.append((cls, m.group("service").strip()))
+    return found
+
+
+def _topic_status(data: Any, error: str) -> tuple[str, bool, str]:
+    """구독 토픽의 보존 범위 홉 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)` — 비었으면(남은 메시지 0) 나쁨. 못 읽었으면 모르는 것."""
+    if not isinstance(data, dict):
+        return f"읽기 실패 — {error}", False, "범위 읽기 실패"
+    parts = data.get("partitions") or []
+    rng = (f"{parts[0]['begin']}~{parts[0]['end']}" if len(parts) == 1
+           else ", ".join(f"{p['partition']}: {p['begin']}~{p['end']}" for p in parts))
+    left = data.get("messages", 0)
+    text = f"보존 범위 {rng} · 남은 메시지 {left}"
+    return (f"비었다 — {text}" if not left else text), not left, f"범위 {rng}, 남은 메시지 {left}"
+
+
 def status_of(raw: Any) -> tuple[str, bool]:
     """읽은 값의 상태 `(문장, 나쁜가)` — 없음·0행·빈 배열·빈 객체만 나쁘다. 정상이면 행 요약(`profile`)을 같이 — 표 한 줄에서 "554행 두 필드 전부 '-'"가
     보여야 한다(측정 #9 P0 2)."""
@@ -237,6 +271,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    service_repos: dict[str, str] | None = None,
                    declared_by: dict[str, tuple[str, ...]] | None = None,
                    topic_producers: dict[str, tuple[str, ...]] | None = None,
+                   subscriptions: dict[str, tuple[str, ...]] | None = None,
                    lookup: Callable[..., Awaitable[FilterScan]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
@@ -337,6 +372,24 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             return [_Branch({}, "", cands)], shown, cands
         return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, cands
 
+    async def keyed_writer(template: str):
+        """없는 키의 쓴 쪽 — 값에는 없으니 인덱스의 쓰기 자원(`code.uses`)에서, 그 키를 선언한 서비스의 클래스를 먼저(R3-5p ①-c, 평가자 분석 10-28). 한
+        클래스로 좁혀지면 `(클래스, 표시, 후보 서비스들, 질의 인자, 증거)`, 아니면 None(전처럼 `키가 없다`)."""
+        _, got = await run(f"걷기 — 없는 키 {template}을 쓰는 클래스(인덱스)", "code.uses", {"name": template})
+        uev = got.evidence[0].id if got.evidence else ""
+        text = runner.raw(uev) if got.status == "ok" and uev else None
+        found = writers_in(text, classes) if isinstance(text, str) else []
+        declared = set(owners.get(template, ()))
+        picked = [(c, s) for c, s in found if s in declared] or found
+        writers = list(dict.fromkeys(c for c, _ in picked))
+        if len(writers) != 1:
+            if writers:
+                remember(f"{template}을 쓰는 클래스가 여럿({', '.join(writers)}) — 쓴 쪽을 채우지 않는다")
+            return None
+        found_homes, shown, cands = split(writers[0], template, walking=False)
+        params = params_for(*found_homes[0]) if len(homes(writers[0])) > 1 and found_homes else {}
+        return writers[0], shown, cands, params, uev
+
     async def judged(rows: list, status: str, bad: bool, ev: str) -> tuple[str, bool, tuple[str, str] | None]:
         """단일값 필드(③) — 아래 홉에서 잡힌 `(필드, 값)`이 여기도 그대로면 나쁨(grep 없이 이어진다). 아니면 읽는 쪽 코드 줄이 정한다. 키 값과
         포인터 메시지(④)가 같은 판정을 받는다. → (상태, 나쁜가, 위로 이어 볼 단일값). 걷고 있는 클래스·가지·이어 온 단일값은 바깥 루프의 것."""
@@ -403,6 +456,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     pointerless: set[str] = set()                                                           # 입력을 못 본 가지 중 포인터도 없는 것 — 그 홉의 증거(④)
     pointed_at: dict[str, tuple[str, Any, Any]] = {}                                        # 메시지 홉의 증거 → (토픽, 보존 시작, 끝)
     joined_at: dict[str, tuple[Any, str, str, tuple[str, int] | None]] = {}                 # 병합으로 나빠진 홉의 증거 → (병합식, 문구, 멈춤 머리, 거르는 줄)(④-b·R3-5h ②)
+    subscribed = dict(subscriptions or {})                                                  # 서비스 → config로 구독을 선언한 토픽들(R3-5p ①-b)
+    keyed_at: dict[str, tuple[str, str, dict, list[tuple[str, str, str]]]] = {}             # 없는 키의 홉 증거 → (쓰는 클래스, 표시, 질의 인자, [(토픽, 범위 토막, 증거)])(①-c)
+    topics_at: dict[str, tuple[str, str, dict, str]] = {}                                   # 구독 토픽 홉의 증거 → (쓰는 클래스, 표시, 질의 인자, 없는 키 홉의 증거)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
     # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
@@ -498,19 +554,44 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 elif w != writer:
                     real += 1
                 status, bad, carry = await judged(rows_of(raw) if raw is not None else [], status, bad, ev)
+                # 없는 키의 쓴 쪽은 값에 없다 — 인덱스의 쓰기 자원과 그 키를 선언한 서비스로 채운다(R3-5p ①-c). 그 클래스로 더 걷지는 않고(다른 입력은 리드의
+                # `code.resources` 칸), 그 서비스가 구독하는 토픽의 보존 범위만 아래에서 홉으로 적는다.
+                keyed = (await keyed_writer(name)) if (got.status == "ok" and raw is None and not w and kind == "rediskey") else None
                 # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다. 정상 홉의 쓴 쪽도
                 # 같은 가르기로(걷지는 않는다) — 표의 쓴 쪽 칸과 판정의 후보가 같은 근거를 갖는다.
-                if bad and w:
+                if keyed is not None:
+                    w, shown, cands, params_k, uses_ev = keyed
+                    next_branches = []
+                elif bad and w:
                     next_branches, shown, cands = branches(w, name)
                 elif w:
                     next_branches, (_, shown, cands) = [], split(w, name, walking=False)
                 else:
                     next_branches, shown, cands = [], "", ()
                 declared_names[ev] = name
+                basis = f"{writer}{tag}가 읽는 자원 ({res_id})"
+                if keyed is not None:
+                    basis += f" · 쓴 쪽은 인덱스의 쓰기 자원({uses_ev})에서, {name}을 선언한 서비스의 것"
                 hops.append(Hop(key=label, kind=kind, depth=depth + 1, writer=w, service=shown, candidates=list(cands), status=status, bad=bad,
-                                evidence_id=ev, basis=f"{writer}{tag}가 읽는 자원 ({res_id})", parent=came_from))
+                                evidence_id=ev, basis=basis, parent=came_from))
                 if got.status == "ok" and raw is not None and w != writer:
                     read_inputs.append((label, ev, rows_of(raw), w, raw, name))
+                if keyed is not None:
+                    # 쓰는 클래스의 서비스가 config로 구독하는 토픽마다 보존 범위 한 번(`kafka.offsets`, 본문 없음) — 비었으면 그 홉이 나쁨이다.
+                    ranges: list[tuple[str, str, str]] = []
+                    for topic in sorted({t for s in cands for t in subscribed.get(s, ())})[:3]:
+                        if (why := over(writer, topic)):
+                            stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
+                            break
+                        _, tgot = await run(f"걷기 — {w}가 구독하는 토픽 {topic}의 보존 범위", "kafka.offsets", {"topic": topic})
+                        tev = tgot.evidence[0].id if tgot.evidence else ""
+                        tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
+                        tstatus, tbad, piece = _topic_status(tdata, tgot.error or "증거 없음")
+                        hops.append(Hop(key=topic, kind="topic", depth=depth + 2, service=f"{w} [{shown}] 구독", candidates=list(cands), status=tstatus,
+                                        bad=tbad, evidence_id=tev, basis=f"{w}의 구독 선언(config) — {name}을 쓰는 클래스의 메시지 입력 ({ev})", parent=ev))
+                        ranges.append((topic, piece, tev))
+                        topics_at[tev] = (w, shown, params_k, ev)
+                    keyed_at[ev] = (w, shown, params_k, ranges)
                 if stopped:
                     break
                 # 나쁜 입력의 아는 쓴 쪽만 — 그때만 가지가 있다. 그 키 값의 포인터를 들고 간다(④) — 그 클래스를 만든 메시지가 거기 적혀 있다.
@@ -625,7 +706,21 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     ev = stop_hop.evidence_id
     rungs: list[Rung] = []
     if not stopped:
-        if ev in joined_at and ev not in walked_at and ev not in failed_at:
+        if stop_hop.kind == "topic" and ev in topics_at:
+            # 없는 키를 쓰는 클래스가 구독하는 토픽이 비었다(R3-5p ①-c) — 입력이 없다. 첫 칸은 지금 오는 것, 그다음 그 클래스의 자원.
+            w_, shown_, params_, key_ev = topics_at[ev]
+            stopped = f"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])"
+            rungs += [Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev),
+                      Rung(action="code.resources", params={"name": w_, **params_}, evidence=key_ev)]
+        elif ev in keyed_at:
+            # 키가 없는데 쓰는 클래스는 안다(R3-5p ①-c) — 그 클래스가 구독하는 토픽에 남은 것이 멈춤 문구에 같이 간다(입력을 받고도 키를 안 만든 것인지를
+            # 리드가 사실로 가른다). 첫 칸은 그 클래스의 자원, 그다음 토픽마다 지금 오는 것.
+            w_, shown_, params_, ranges_ = keyed_at[ev]
+            tail = " / ".join(f"구독 {t} {piece}" for t, piece, _ in ranges_) or "구독 선언 없음"
+            stopped = f"키가 없다 — {stop_hop.key}(쓰는 {w_} [{shown_}] · {tail})"
+            rungs.append(Rung(action="code.resources", params={"name": w_, **params_}, evidence=ev))
+            rungs += [Rung(action="kafka.tail", params={"topic": t, "limit": 5}, evidence=tev) for t, _, tev in ranges_ if tev]
+        elif ev in joined_at and ev not in walked_at and ev not in failed_at:
             # 병합 0건(④-b) — 짝 없는 입력의 쓴 쪽으로 더 걸었으면 멈춤은 전처럼 거기(그쪽 입력의 사유 — 홉 상태에 병합이 남는다). 더 못 걸었으면(쓴 쪽
             # 모름·메시지) 사유는 병합이고 첫 칸은 병합 줄(그 클래스의 레포), 그다음은 전처럼 그 입력의 칸.
             merge, text, head, first = joined_at[ev]

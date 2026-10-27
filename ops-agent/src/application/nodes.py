@@ -100,6 +100,8 @@ class EngineDeps:
     # 토픽 → config로 발행을 선언한 서비스들(`flow.producing_map`, R3-5d ④) — 메시지 홉의 발행 쪽. 사람 결정 10-19: 같은 이름 클래스가 두 레포라 클래스
     # 이름이 아니라 config 발행 선언으로; 선언이 없는 토픽은 우리 밖이다.
     topic_producers: dict = field(default_factory=dict)
+    # 서비스 → config로 구독을 선언한 토픽들(`flow.consuming_map`, R3-5p ①-b) — 없는 키를 쓰는 클래스의 메시지 입력(그 토픽의 보존 범위가 홉이 된다).
+    subscriptions: dict = field(default_factory=dict)
     clock: Callable[[], datetime] | None = None
 
 
@@ -481,7 +483,8 @@ def make_nodes(deps: EngineDeps) -> dict:
         try:
             return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
                                   service_repos=deps.service_repos, declared_by=deps.declared_by,
-                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines, clock=deps.clock)
+                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,
+                                  clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 

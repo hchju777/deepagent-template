@@ -623,8 +623,8 @@ medium으로 깎는다). **코드 변경 없음** — 그 법인 Kafka가 닿는
 | 순서 | 항목 | 할 것 | 자리 |
 |---|---|---|---|
 | R3-5p ①-a ✅ | (1) 토픽 범위 읽기 | 포트 `KafkaInspectorPort.offsets(topic)`(파티션별 `begin`·`end`, 본문 없음) — 스텁·실어댑터(`beginning_offsets`/`end_offsets`, assign·그룹 미참여)·등재 `kafka.offsets`·포트 표면 시험 | `domain/ports`, `stubs`, `kafka_inspector`, `domain/actions` |
-| R3-5p ①-b | (1) 구독 선언 | `flow.consuming_map(graph)`: 서비스 → config로 구독을 선언한 토픽들(`consumes`·config 출처); 걷기 인자 `topic_consumers`(엔진 deps·`case walk` 두 자리) | `knowledge/flow`, `nodes`, `__main__` |
-| R3-5p ①-c | (1) 없는 키의 홉 | 걷기: 입력 키가 `없음`이고 값에 쓴 쪽이 없으면 `code.uses <선언 이름>`의 쓰기 클래스 중 그 키를 선언한 서비스의 것으로 쓴 쪽을 채우고, 그 서비스의 구독 토픽마다 `kafka.offsets` 홉(`topic` 종류, 범위·끝 오프셋; 비었으면 나쁨) — 멈춤 `구독 토픽이 비었다 — <토픽>(<클래스> [서비스])` / `키가 없다 — <키>(쓰는 <클래스> [서비스] · 구독 <토픽> 범위 b~e)`, 칸 `code.resources <클래스>`·`kafka.tail <토픽>`; 측정판 `source-missing`에 쓰는 클래스·구독 토픽을 두고 정답 홉 표 | `walk`, `tools/local_case`, `tests/test_board_walk` |
+| R3-5p ①-b ✅ | (1) 구독 선언 | `flow.consuming_map(graph)`: 서비스 → config로 구독을 선언한 토픽들(`consumes`·config 출처); 걷기 인자 `topic_consumers`(엔진 deps·`case walk` 두 자리) | `knowledge/flow`, `nodes`, `__main__` |
+| R3-5p ①-c ✅ | (1) 없는 키의 홉 | 걷기: 입력 키가 `없음`이고 값에 쓴 쪽이 없으면 `code.uses <선언 이름>`의 쓰기 클래스 중 그 키를 선언한 서비스의 것으로 쓴 쪽을 채우고, 그 서비스의 구독 토픽마다 `kafka.offsets` 홉(`topic` 종류, 범위·끝 오프셋; 비었으면 나쁨) — 멈춤 `구독 토픽이 비었다 — <토픽>(<클래스> [서비스])` / `키가 없다 — <키>(쓰는 <클래스> [서비스] · 구독 <토픽> 범위 b~e)`, 칸 `code.resources <클래스>`·`kafka.tail <토픽>`; 측정판 `source-missing`에 쓰는 클래스·구독 토픽을 두고 정답 홉 표 | `walk`, `tools/local_case`, `tests/test_board_walk` |
 | R3-5p ② | (2) 뜻 줄 | `Walk.lines(legend=True)`가 머리 아래에 `WALK_LEGEND` 한 줄(판정 블록만); `llm ab --legend`: A(지금)·B(뜻 줄 끼움), 요약 라벨도 그에 맞게 | `domain/case`, `intake_map`, `briefing`, `conclude_ab`, `__main__` |
 | R3-5p ③ | (3) 기준값 | **사람 결정 대기** — P1-9. 코드 변경 없음 | — |
 | — | **측정 #27** | ①~② 뒤. **`code graph` 재생성: 불필요**(인덱스·그래프 파일 그대로 — `consumes` 엣지는 이미 있다). config 그대로. `키가 없다` 케이스의 새 홉 셋과 판정, 뜻 줄 뒤 작업자 배지 5건, `llm ab --legend` 5건 × 3 | 브리프 |

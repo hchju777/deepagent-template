@@ -30,7 +30,7 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
 VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
-            "join-outer")
+            "join-outer", "source-missing", "source-missing-quiet")
 
 
 def _repo(root, url, files):
@@ -325,3 +325,25 @@ def test_조인_outer_변형은_행이_남지만_짝_없는_행의_채움값을_
     assert stopped == f"병합 뒤 채움값을 거른다 — SourceOuterJoiner: {text} (common/joiner_outer.py:L{m})" and not any("겹침" in n for n in notes)
     assert rungs[:3] == [f"code.read line={f} path='common/joiner_outer.py' service='batch'", f"code.read line={m} path='common/joiner_outer.py' service='batch'",
                          "code.uses name='feed:events:{line}'"]
+
+
+def test_원천_키가_없으면_인덱스의_쓰는_클래스와_구독_토픽의_보존_범위가_홉으로_실리고_토픽이_비었으면_거기서_멈춘다(board, monkeypatch):
+    """R3-5p ①-c(평가자 분석 10-28): `키가 없다`에서 쓰는 클래스·구독 토픽·범위를 적지 않아 2-a 전부 inconclusive. 측정판 `source-missing`: 원천 키를 쓰는
+    `SourceSink`(processor, 인덱스의 쓰기 자원 + 그 키를 선언한 서비스)가 config로 구독하는 토픽 둘(공유 config)의 범위가 홉으로 — 메시지가 남아 있으니
+    멈춤은 `키가 없다`에 그 사실. `source-missing-quiet`는 원천 토픽이 비어 그 홉이 나쁨이고 멈춤이다."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "source-missing")
+    assert rows[:2] == ["alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data)", "alarm:domain:L1 | DomainBuilder [batch] | 정상 — record: 행 4 · 필드 2"]
+    assert rows[2] == PALETTE_ROW and rows[3] == "alarm:source:L1 | SourceSink [processor] | 없음"
+    # 공유 config의 소비 선언 셋(사이트 층의 감사 토픽까지) — 브로커에 없는 토픽은 `읽기 실패`(모르는 것, 나쁨 아님)
+    assert rows[4].startswith("gumi.alarm.audit | SourceSink [processor] 구독 | 읽기 실패 — ") and "토픽이 없거나" in rows[4]
+    assert rows[5:] == ["mx.alarm.main | SourceSink [processor] 구독 | 보존 범위 0~5 · 남은 메시지 5",
+                        "mx.alarm.raw | SourceSink [processor] 구독 | 보존 범위 0~5 · 남은 메시지 5"]
+    assert stopped == ("키가 없다 — alarm:source:L1(쓰는 SourceSink [processor] · 구독 gumi.alarm.audit 범위 읽기 실패 / 구독 mx.alarm.main 범위 0~5, 남은 메시지 5"
+                       " / 구독 mx.alarm.raw 범위 0~5, 남은 메시지 5)")
+    assert rungs[:3] == ["code.resources name='SourceSink'", "kafka.tail limit=5 topic='mx.alarm.main'", "kafka.tail limit=5 topic='mx.alarm.raw'"]
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "source-missing-quiet")
+    assert rows[3] == "alarm:source:L1 | SourceSink [processor] | 없음" and rows[4].startswith("gumi.alarm.audit | SourceSink [processor] 구독 | 읽기 실패 — ")
+    assert rows[5:] == ["mx.alarm.main | SourceSink [processor] 구독 | 보존 범위 0~5 · 남은 메시지 5",
+                        "mx.alarm.raw | SourceSink [processor] 구독 | 비었다 — 보존 범위 0~0 · 남은 메시지 0"]
+    assert stopped == "구독 토픽이 비었다 — mx.alarm.raw(SourceSink [processor])"
+    assert rungs[:2] == ["kafka.tail limit=5 topic='mx.alarm.raw'", "code.resources name='SourceSink'"]

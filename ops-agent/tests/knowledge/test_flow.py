@@ -983,6 +983,19 @@ def test_producing_map은_토픽마다_config로_발행을_선언한_서비스�
     assert flow.producing_map(g) == {"t1": ("a",), "t2": ()} and flow.producing_map(None) == {}
 
 
+def test_consuming_map은_서비스마다_config로_구독을_선언한_토픽들이다():
+    """R3-5p ①-b(평가자 분석 10-28): 없는 키를 쓰는 클래스의 입력 중 메시지(토픽)는 인덱스 자원이 아니라 config의 구독 선언으로만 안다 — 발행 선언
+    (`producing_map`)과 같은 길, 방향만 반대(서비스 → 토픽들). `consumes` 엣지 중 **config 출처**만. 선언이 없는 서비스는 비어 있다."""
+    g = {"nodes": [{"id": "service_a", "label": "a", "type": "service"}, {"id": "service_b", "label": "b", "type": "service"},
+                   {"id": "topic_t1", "label": "t1", "type": "topic"}, {"id": "topic_t2", "label": "t2", "type": "topic"}],
+         "links": [{"source": "service_b", "target": "topic_t1", "relation": "consumes", "origin": "config"},
+                   {"source": "service_b", "target": "topic_t2", "relation": "consumes", "origin": "code"},
+                   {"source": "service_a", "target": "topic_t2", "relation": "produces", "origin": "config"},
+                   {"source": "service_a", "target": "topic_t1", "relation": "consumes", "origin": "config"},
+                   {"source": "service_a", "target": "topic_t2", "relation": "consumes", "origin": "config"}]}
+    assert flow.consuming_map(g) == {"a": ("t1", "t2"), "b": ("t1",)} and flow.consuming_map(None) == {}
+
+
 
 def test_같은_값을_다른_key_path로_덮은_둘째_행도_그_관계로_config_엣지를_단다():
     """측정 #15 P0-1: 사내 사이트 층은 소비 토픽과 발행 토픽을 같은 값으로 덮는다(GBM 층엔 없는 값). 둘째 행(발행 key_path)을 만나면 노드가 이미 있다고

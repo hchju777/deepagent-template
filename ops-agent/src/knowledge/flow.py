@@ -1147,6 +1147,21 @@ def producing_map(graph: dict | None) -> dict[str, tuple[str, ...]]:
     return {label: tuple(sorted(found)) for label, found in sorted(out.items())}
 
 
+def consuming_map(graph: dict | None) -> dict[str, tuple[str, ...]]:
+    """서비스 → config로 구독을 선언한 토픽들(`consumes` 엣지 중 **config 출처**, 출발이 서비스인 것) — 발행 선언(`producing_map`)과 같은 길, 방향만 반대
+    (R3-5p ①-b, 평가자 분석 10-28: 없는 키를 쓰는 클래스의 메시지 입력은 인덱스 자원이 아니라 이 선언으로만 안다). 코드 grep의 `consumes`는 추정이라 안
+    센다. 선언이 없는 서비스는 비어 있다. 엔진에 넘기는 닫힌 표 — 엔진은 그래프를 들지 않는다."""
+    if not graph:
+        return {}
+    by_id = {n["id"]: n for n in graph.get("nodes", [])}
+    out: dict[str, set[str]] = {n["label"]: set() for n in graph.get("nodes", []) if n.get("type") == "service" and n.get("label")}
+    for e in graph.get("links", []):
+        src, dst = by_id.get(e.get("source"), {}), by_id.get(e.get("target"), {})
+        if e.get("relation") == "consumes" and e.get("origin") == "config" and src.get("label") in out and dst.get("type") == "topic" and dst.get("label"):
+            out[src["label"]].add(dst["label"])
+    return {label: tuple(sorted(found)) for label, found in sorted(out.items())}
+
+
 def known_names(graph: dict | None) -> str:
     """그래프의 이름 전부, 한 줄에 하나. 엔진의 "찾지 않고 이름을 댔다" 검사가 증거와 합쳐
     본다 — 그래프에 있는 이름은 지어낸 것이 아니다. None이면 빈 문자열이라 검사가 예전과 같다."""
