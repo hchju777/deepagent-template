@@ -3287,7 +3287,7 @@ CASES += [
 WALK_JOIN_T = "tests/application/test_walk.py::test_판정용_lines는_실제_걷기가_쓴_병합_주_두_꼴만_빼고_레포를_가른_주와_홉_표는_그대로_둔다"
 BRIEF_JOIN_T = "tests/application/test_briefing.py::test_판정_블록만_걷기의_병합_주를_빼고_조사_프롬프트와_레포를_가른_주는_그대로다"
 CASES += [
- ("판정 블록이 병합 주를 안 뺀다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False, legend=True),", "    return {\"case\": case_block(state, site_config=site_config, target=target, legend=True),", [BRIEF_JOIN_T]),
+ ("판정 블록이 병합 주를 안 뺀다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False),", "    return {\"case\": case_block(state, site_config=site_config, target=target),", [BRIEF_JOIN_T]),
  ("판정용 lines가 병합 주를 그대로 싣는다", CS, "        notes = self.notes if join_notes else [n for n in self.notes if not any(m in n for m in JOIN_NOTE_MARKS)]", "        notes = self.notes", [WALK_JOIN_T, BRIEF_JOIN_T]),
  ("lines의 기본이 병합 주를 뺀다", CS, "    def lines(self, *, join_notes: bool = True, legend: bool = False) -> list[str]:", "    def lines(self, *, join_notes: bool = False, legend: bool = False) -> list[str]:", [WALK_JOIN_T, BRIEF_JOIN_T]),
  ("intake_lines가 선택을 안 넘긴다", IM, "        lines += state.walk.lines(join_notes=join_notes, legend=legend)", "        lines += state.walk.lines(legend=legend)", [BRIEF_JOIN_T]),
@@ -3392,7 +3392,7 @@ AB_LEGEND_CLI_T = "tests/test_cli.py::test_llm_ab는_legend로_걷기_머리_아
 CASES += [
  ("lines가 뜻 줄을 안 둔다", CS, "        return head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return head + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
  ("lines가 뜻 줄을 늘 둔다", CS, "        return head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return head + [WALK_LEGEND] + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
- ("판정 블록이 뜻 줄을 안 켠다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False, legend=True),", "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False),", [BRIEF_JOIN_T]),
+ ("판정 블록이 뜻 줄을 켠다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False),", "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False, legend=True),", [BRIEF_JOIN_T]),
  ("뜻 줄을 걷기 머리 앞에 끼운다", ABM, "    return \"\\n\".join([*lines[:head + 1], WALK_LEGEND, *lines[head + 1:]])", "    return \"\\n\".join([*lines[:head], WALK_LEGEND, *lines[head:]])", [AB_LEGEND_T]),
  ("legend 비교가 B판에 뜻 줄을 안 끼운다", ABM, "        with_notes, without = prompt, add_legend(prompt) or prompt", "        with_notes, without = prompt, prompt", [AB_LEGEND_T]),
  ("legend 요약 라벨이 병합 주의 것이다", MN, "        for line in summary(rows, labels=(\"지금\", \"뜻 줄\")):", "        for line in summary(rows):", [AB_LEGEND_CLI_T]),

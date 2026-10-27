@@ -931,8 +931,9 @@ def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 120
     target = target_key(state, site_config=site_config, flow_graph=flow_graph)
     # 판정 블록은 걷기의 병합 주를 뺀다(R3-5l ①, 사람 결정 10-25) — 측정 #22 A/B: 주가 든 판은 외부 상류 1/15·logic_bug 6·high 6, 뺀 판은 4/15·2·0. 조사
     # 프롬프트(frame·integrate)는 그 주로 어디를 볼지 고르므로 그대로 두고, 걷기 표·`case walk`·보고서도 그대로다.
-    # 걷기 머리 아래 뜻 한 줄도 판정 블록만(R3-5p ②) — `정상`이 "거르는 줄을 못 찾았다"는 뜻임을 리드가 알아야 `'-'`를 쓴 마지막 쪽을 탓하지 않는다.
-    return {"case": case_block(state, site_config=site_config, target=target, join_notes=False, legend=True),
+    # 걷기 머리 아래 뜻 한 줄(R3-5p ②)은 판정 블록에서도 뺐다(R3-5q ②, 사람 결정 10-29): 측정 #27 A/B에서 뜻 줄이 처리기 쪽 틀림을 늘렸다(2 → 4, 본 판 3/15).
+    # 배선(`legend=`)은 `llm ab --legend`의 측정용으로 남는다.
+    return {"case": case_block(state, site_config=site_config, target=target, join_notes=False),
             "flow": flow_block(state, flow_graph,
                                texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ())),
             "hypotheses": hypotheses_block(state),
