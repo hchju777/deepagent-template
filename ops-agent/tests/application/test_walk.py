@@ -943,6 +943,9 @@ def test_writers_in은_code_uses_글의_쓰기_줄에서_인덱스_클래스와_
     text = ("k [rediskey]\n  쓰기 2:\n    proc.sink.W1.run (proc/sink.py:L4) [dt-core · a] — 진입점\n    sink.writer.run (sink/writer.py:L3) [dt-core · b] — 진입점\n"
             "  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점")
     assert writers_in(text, frozenset({"W0", "W1"})) == [("W1", "a")]                         # 모듈 함수(클래스 없음)는 안 센다, 읽기 줄은 안 본다
+    # 공유 레포의 쓰기 줄은 `[<레포>]`뿐(서비스 없음) — 측정 #27: 사내 `<AGV 키>`의 쓰기 줄이 이 꼴이라 빠졌다(R3-5q ①)
+    shared = "k [rediskey]\n  쓰기 1:\n    proc.load.W1._load_initial_state (proc/load.py:L4) [dt-core] — 진입점"
+    assert writers_in(shared, frozenset({"W1"})) == [("W1", "")]
     assert writers_in("k [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점", frozenset({"W0"})) == []
     assert writers_in("", frozenset({"W1"})) == []
 
@@ -991,3 +994,16 @@ async def test_키가_없으면_인덱스의_쓰는_클래스와_그_서비스�
     walk = (await run_walk(_state(), runner=_Reads(other), classes=frozenset({"W0", "W1", "W2"}), class_services={"W0": ("a",), "W1": ("a",), "W2": ("b",)},
                            declared_by={"in:{line}": ("a",)}, subscriptions={"a": ("t.raw",)}, clock=lambda: T0))["walk"]
     assert walk.hops[1].writer == "W1" and walk.stopped.startswith("키가 없다 — in:L1(쓰는 W1 [a]") and not walk.notes
+    # 공유 레포의 쓰기 줄(서비스 없음)도 쓴 쪽이다 — 서비스는 인덱스의 클래스 → 서비스로(`split`), 구독 토픽도 그 서비스의 것(R3-5q ①, 측정 #27 (a))
+    shared = {**table, ("code.uses", "in:{line}"): USES_W1.replace("[dt-core · a] — 진입점: 이 함수(부르는 곳 없음)\n  읽기", "[dt-core] — 진입점\n  읽기")}
+    walk = (await run_walk(_state(), runner=_Reads(shared), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert walk.hops[1].line() == "  in:L1 | W1 [a] | 없음 | t-3.e1" and walk.hops[2].key == "t.raw" and not walk.notes
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    # 쓰기 0줄·클래스 아닌 쓰기 줄·`code.uses` 실패는 조용히 넘기지 않고 주 한 줄(측정 #27 (b): `<PGM 키>`는 쓰기 0줄 — 인덱스가 쓴 쪽을 모른다)
+    walk = (await run_walk(_state(), runner=_Reads(none), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽을 채우지 않는다"]
+    module = {**table, ("code.uses", "in:{line}"): "in:{line} [rediskey]\n  쓰기 1:\n    sink.writer.run (sink/writer.py:L3) [dt-core · a] — 진입점"}
+    walk = (await run_walk(_state(), runner=_Reads(module), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert walk.notes == ["in:{line}: 쓰는 함수 1줄이 인덱스 클래스의 것이 아니다 — 쓴 쪽을 채우지 않는다"] and walk.stopped == "키가 없다 — in:L1"
+    walk = (await run_walk(_state(), runner=_Reads({k: v for k, v in table.items() if k[0] != "code.uses"}), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert walk.notes == ["in:{line}: code.uses 실패 — 대본 없음"] and walk.stopped == "키가 없다 — in:L1"

@@ -188,7 +188,9 @@ def fill_key(template: str, *, declared: str, key: str) -> str | None:
         return None
 
 
-_USES_ENTRY = re.compile(r"^\s*(?P<qual>[\w.]+) \([^)]*\) \[(?P<repo>[^\]·]+) · (?P<service>[^\]]+)\]")
+# 쓰기 줄의 자리표는 `[<레포> · <서비스>]` 또는 공유 레포의 `[<레포>]`(서비스 없음 — 측정 #27: 사내 `<AGV 키>`의 쓰기 줄이 이 꼴이라 빠졌다, R3-5q ①).
+_USES_ENTRY = re.compile(r"^\s*(?P<qual>[\w.]+) \([^)]*\) \[(?P<repo>[^\]·]+?)(?: · (?P<service>[^\]]+))?\]")
+_USES_WRITES = re.compile(r"^\s*쓰기 (\d+):$")
 
 
 def writers_in(text: str, classes: frozenset[str]) -> list[tuple[str, str]]:
@@ -205,9 +207,19 @@ def writers_in(text: str, classes: frozenset[str]) -> list[tuple[str, str]]:
         if m is None:
             continue
         cls = next((part for part in m.group("qual").split(".") if part in classes), "")
-        if cls and (cls, m.group("service").strip()) not in found:
-            found.append((cls, m.group("service").strip()))
+        service = (m.group("service") or "").strip()
+        if cls and (cls, service) not in found:
+            found.append((cls, service))
     return found
+
+
+def writes_in(text: str) -> int:
+    """`code.uses` 글의 쓰기 줄 수(머리의 `쓰기 N:`) — 0이면 인덱스가 쓴 쪽을 모른다(측정 #27 (b): `<PGM 키>`)."""
+    for line in (text or "").splitlines():
+        m = _USES_WRITES.match(line)
+        if m:
+            return int(m.group(1))
+    return 0
 
 
 def _topic_status(data: Any, error: str) -> tuple[str, bool, str]:
@@ -378,13 +390,21 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         _, got = await run(f"걷기 — 없는 키 {template}을 쓰는 클래스(인덱스)", "code.uses", {"name": template})
         uev = got.evidence[0].id if got.evidence else ""
         text = runner.raw(uev) if got.status == "ok" and uev else None
-        found = writers_in(text, classes) if isinstance(text, str) else []
+        if not isinstance(text, str):
+            # 조용히 넘기지 않는다(측정 #27: 쓴 쪽 0이 어디서 났는지 표에 안 보였다) — 사실 한 줄.
+            remember(f"{template}: code.uses 실패 — {(got.error or '증거 없음').splitlines()[0][:120]}")
+            return None
+        found = writers_in(text, classes)
+        if not found:
+            lines = writes_in(text)
+            remember(f"{template}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽을 채우지 않는다" if not lines
+                     else f"{template}: 쓰는 함수 {lines}줄이 인덱스 클래스의 것이 아니다 — 쓴 쪽을 채우지 않는다")
+            return None
         declared = set(owners.get(template, ()))
         picked = [(c, s) for c, s in found if s in declared] or found
         writers = list(dict.fromkeys(c for c, _ in picked))
         if len(writers) != 1:
-            if writers:
-                remember(f"{template}을 쓰는 클래스가 여럿({', '.join(writers)}) — 쓴 쪽을 채우지 않는다")
+            remember(f"{template}을 쓰는 클래스가 여럿({', '.join(writers)}) — 쓴 쪽을 채우지 않는다")
             return None
         found_homes, shown, cands = split(writers[0], template, walking=False)
         params = params_for(*found_homes[0]) if len(homes(writers[0])) > 1 and found_homes else {}

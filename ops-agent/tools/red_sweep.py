@@ -3378,7 +3378,7 @@ CASES += [
  ("엔진이 구독 지도를 걷기에 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines,", [BOARD_KEYED_T]),
  ("쓰기 줄을 읽기 줄처럼 센다", WK, "            writing = head.startswith(\"쓰기\")", "            writing = True", [WRITERS_IN_T]),
  ("쓰는 클래스를 선언한 서비스로 안 거른다", WK, "        picked = [(c, s) for c, s in found if s in declared] or found", "        picked = found", [KEYED_T]),
- ("쓰는 클래스가 여럿이어도 첫 것을 채운다", WK, "        if len(writers) != 1:\n            if writers:", "        if not writers:\n            if writers:", [KEYED_T]),
+ ("쓰는 클래스가 여럿이어도 첫 것을 채운다", WK, "        if len(writers) != 1:\n            remember(", "        if not writers:\n            remember(", [KEYED_T]),
  ("없는 키의 쓴 쪽을 안 찾는다", WK, "                keyed = (await keyed_writer(name)) if (got.status == \"ok\" and raw is None and not w and kind == \"rediskey\") else None", "                keyed = None", [KEYED_T, BOARD_KEYED_T]),
  ("쓰는 클래스로 더 걷는다", WK, "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches = []", "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches, _, _ = branches(w, name)", [KEYED_T]),
  ("빈 토픽을 나쁨으로 안 본다", WK, "    return (f\"비었다 — {text}\" if not left else text), not left, f\"범위 {rng}, 남은 메시지 {left}\"", "    return (f\"비었다 — {text}\" if not left else text), False, f\"범위 {rng}, 남은 메시지 {left}\"", [KEYED_T, BOARD_KEYED_T]),
@@ -3397,7 +3397,15 @@ CASES += [
  ("legend 비교가 B판에 뜻 줄을 안 끼운다", ABM, "        with_notes, without = prompt, add_legend(prompt) or prompt", "        with_notes, without = prompt, prompt", [AB_LEGEND_T]),
  ("legend 요약 라벨이 병합 주의 것이다", MN, "        for line in summary(rows, labels=(\"지금\", \"뜻 줄\")):", "        for line in summary(rows):", [AB_LEGEND_CLI_T]),
 ]
-assert len(CASES) >= 1078, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5q ① — 공유 레포 쓰기 줄·쓴 쪽 0의 주 줄 ──
+CASES += [
+ ("공유 레포의 쓰기 줄을 안 받는다", WK, "_USES_ENTRY = re.compile(r\"^\\s*(?P<qual>[\\w.]+) \\([^)]*\\) \\[(?P<repo>[^\\]·]+?)(?: · (?P<service>[^\\]]+))?\\]\")", "_USES_ENTRY = re.compile(r\"^\\s*(?P<qual>[\\w.]+) \\([^)]*\\) \\[(?P<repo>[^\\]·]+) · (?P<service>[^\\]]+)\\]\")", [WRITERS_IN_T, KEYED_T]),
+ ("code.uses 실패를 조용히 넘긴다", WK, "            remember(f\"{template}: code.uses 실패 — {(got.error or '증거 없음').splitlines()[0][:120]}\")\n            return None", "            return None", [KEYED_T]),
+ ("쓰기 0줄을 조용히 넘긴다", WK, "        if not found:\n            lines = writes_in(text)", "        if not found:\n            return None\n            lines = writes_in(text)", [KEYED_T]),
+ ("쓰기 줄 수를 안 센다", WK, "            return int(m.group(1))", "            return 0", [KEYED_T]),
+]
+assert len(CASES) >= 1082, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
