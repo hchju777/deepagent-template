@@ -608,6 +608,28 @@ medium으로 깎는다). **코드 변경 없음** — 그 법인 Kafka가 닿는
 | — | **측정 #26** | ① 뒤. **`code graph` 재생성: 불필요**(리드만). config 그대로. degraded 수, 짧게 둘째가 살린 수, length 턴의 빈 응답/잘린 JSON, `<PGM>` inconclusive의 caveat·basis, AGV A/B(사람 결정) | 브리프 ✅ ([review-12a-4.md](review-12a-4.md)) |
 
 
+**R3-5p — 평가자 분석(#22~#25) 뒤 (10-28). 원칙은 R3-5 그대로.**
+
+사실·판단(10-28): (1) `키가 없다`에서 걷기는 그 키 값이 없어 쓴 쪽을 **값에서** 못 읽고 멈췄다(`쓴 쪽을 모른다`와 같은 가지). 쓴 쪽은 값 말고도 있다 — 인덱스의
+쓰기 자원(`code.uses`의 쓰기 방향)과 config 선언(`declared_by`)이 일치하는 클래스. 그 클래스의 입력 중 메시지(토픽)는 인덱스 자원이 아니라 config의 구독
+선언(`infra.kafka.consumer.topic`, `consumes` 엣지)으로만 안다 — 발행 선언(`producing_map`)과 같은 길. 토픽에 무엇이 있는지는 브로커 읽기 하나로 안다 —
+`message_at`이 머리에 주는 보존 범위(`begin`~`end`)만 따로 읽는 `kafka.offsets`(그룹 미참여, 메시지 본문 없음). 그래서 홉 셋: 없는 키 행에 쓰는 클래스를 채우고,
+그 클래스가 구독하는 토픽 행(범위·끝 오프셋), 비었으면 그 행이 나쁨이고 멈춤은 `구독 토픽이 비었다`, 있으면 멈춤은 그대로 `키가 없다`에 쓰는 클래스·구독
+토픽·범위를 붙인다(쓴 쪽이 입력을 받고도 키를 안 만든 것인지, 입력이 없는 것인지를 리드가 사실로 가른다). 인덱스에 쓰는 클래스가 없으면 전처럼. (2) 걷기 표의
+`정상`은 "읽었고 거르는 비교식을 못 찾았다"는 뜻이고 값이 뜻대로인지는 보지 않는다 — 표에 그 뜻이 없어 리드가 `'-'`를 마지막으로 쓴 쪽을 탓했다. 판정 블록의
+걷기 머리 아래에 뜻 한 줄(`WALK_LEGEND`)을 둔다 — 문구는 표식 하나라 `llm ab --legend`가 지난 트레이스에 같은 줄을 끼워 A(지금)·B(뜻 줄)로 비교한다. (3) 기준값
+(다른 법인·지난 날의 같은 키 필드)은 새 사실의 종류다 — 사람 결정 대기, P1-9로 적는다.
+
+| 순서 | 항목 | 할 것 | 자리 |
+|---|---|---|---|
+| R3-5p ①-a | (1) 토픽 범위 읽기 | 포트 `KafkaInspectorPort.offsets(topic)`(파티션별 `begin`·`end`, 본문 없음) — 스텁·실어댑터(`beginning_offsets`/`end_offsets`, assign·그룹 미참여)·등재 `kafka.offsets`·포트 표면 시험 | `domain/ports`, `stubs`, `kafka_inspector`, `domain/actions` |
+| R3-5p ①-b | (1) 구독 선언 | `flow.consuming_map(graph)`: 서비스 → config로 구독을 선언한 토픽들(`consumes`·config 출처); 걷기 인자 `topic_consumers`(엔진 deps·`case walk` 두 자리) | `knowledge/flow`, `nodes`, `__main__` |
+| R3-5p ①-c | (1) 없는 키의 홉 | 걷기: 입력 키가 `없음`이고 값에 쓴 쪽이 없으면 `code.uses <선언 이름>`의 쓰기 클래스 중 그 키를 선언한 서비스의 것으로 쓴 쪽을 채우고, 그 서비스의 구독 토픽마다 `kafka.offsets` 홉(`topic` 종류, 범위·끝 오프셋; 비었으면 나쁨) — 멈춤 `구독 토픽이 비었다 — <토픽>(<클래스> [서비스])` / `키가 없다 — <키>(쓰는 <클래스> [서비스] · 구독 <토픽> 범위 b~e)`, 칸 `code.resources <클래스>`·`kafka.tail <토픽>`; 측정판 `source-missing`에 쓰는 클래스·구독 토픽을 두고 정답 홉 표 | `walk`, `tools/local_case`, `tests/test_board_walk` |
+| R3-5p ② | (2) 뜻 줄 | `Walk.lines(legend=True)`가 머리 아래에 `WALK_LEGEND` 한 줄(판정 블록만); `llm ab --legend`: A(지금)·B(뜻 줄 끼움), 요약 라벨도 그에 맞게 | `domain/case`, `intake_map`, `briefing`, `conclude_ab`, `__main__` |
+| R3-5p ③ | (3) 기준값 | **사람 결정 대기** — P1-9. 코드 변경 없음 | — |
+| — | **측정 #27** | ①~② 뒤. **`code graph` 재생성: 불필요**(인덱스·그래프 파일 그대로 — `consumes` 엣지는 이미 있다). config 그대로. `키가 없다` 케이스의 새 홉 셋과 판정, 뜻 줄 뒤 작업자 배지 5건, `llm ab --legend` 5건 × 3 | 브리프 |
+
+
 
 (옛 메모) R3-3(옛 triage — 코드가 상류를 걷는 주체 — 와 `data.value_counts`)은 ①-a의 첫 고리(대상 키 → 쓴 클래스 → 입력 키) 뒤에 둔다: 입력 키마다 있나·비었나·값 분포(c-1 원천 키 TTL -2, c-2 원천 키 컬럼 전부 '-'). B는 그대로 미룬다 — 쓴 쪽은 값에서 오므로 B의 쓰는 쪽 절반은 필요가 없어졌고, 읽는 쪽은 끝점 사슬이 한다.
 
