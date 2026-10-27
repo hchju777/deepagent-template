@@ -950,41 +950,54 @@ def test_writers_in은_code_uses_글의_쓰기_줄에서_인덱스_클래스와_
     assert writers_in("", frozenset({"W1"})) == []
 
 
-async def test_키가_없으면_인덱스의_쓰는_클래스와_그_서비스의_구독_토픽과_토픽의_보존_범위를_홉으로_적는다():
+async def test_키가_없으면_인덱스의_쓰는_클래스와_그_클래스_코드의_구독_토픽과_토픽의_보존_범위를_홉으로_적는다():
     """평가자 분석(#22~#25): `키가 없다`에서 쓰는 클래스와 그 입력을 적지 않고 멈춰 판정이 "쓰는 주체를 확정 못 함" → inconclusive(2-a 전부). 쓴 쪽은 값이
-    아니라 인덱스의 쓰기 자원(`code.uses`)과 그 키를 선언한 서비스로, 그 서비스가 config로 구독하는 토픽은 `kafka.offsets`로 범위를 읽어 홉으로(R3-5p ①-c).
-    토픽에 메시지가 남아 있으면 멈춤은 `키가 없다`에 그 사실을 붙이고(쓴 쪽이 입력을 받고도 키를 안 만든 것), 비었으면 그 토픽 홉이 나쁨이고 멈춤이다.
-    쓰는 클래스로 더 걷지는 않는다(그 클래스의 다른 입력은 리드의 `code.resources` 칸)."""
-    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+    아니라 인덱스의 쓰기 자원(`code.uses`)과 그 키를 선언한 서비스로(R3-5p ①-c). 구독 토픽은 **그 클래스 코드**에서 — 그 클래스의 `code.resources` 읽기
+    `[topic]`마다 `kafka.offsets`로 범위를 읽어 홉으로, 상한 없음(R3-5r ② — 평가자 회신 10-30 4(b): 공유 config의 서비스 선언은 법인마다 10~11개라 상한 3은
+    고르는 규칙이 된다; 서비스 선언은 수만 주에). 토픽에 메시지가 남아 있으면 멈춤은 `키가 없다`에 그 사실을 붙이고(쓴 쪽이 입력을 받고도 키를 안 만든 것),
+    비었으면 그 토픽 홉이 나쁨이고 멈춤이다. 쓰는 클래스로 더 걷지는 않는다 — 첫 칸은 그 클래스 본문."""
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): _res("W1", [("t.raw", "topic")]),
              ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): USES_W1, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
     kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)}, clock=lambda: T0)
     runner = _Reads(table)
-    walk = (await run_walk(_state(), runner=runner, subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    walk = (await run_walk(_state(), runner=runner, subscriptions={"a": ("t.raw", "t.main", "t.x")}, **kw))["walk"]
     assert walk.hops[1].line() == "  in:L1 | W1 [a] | 없음 | t-3.e1" and walk.hops[1].bad and walk.hops[1].candidates == ["a"]
     assert "쓴 쪽은 인덱스의 쓰기 자원(t-4.e1)" in walk.hops[1].basis
-    assert walk.hops[2].line() == "  t.raw | W1 [a] 구독 | 보존 범위 40~100 · 남은 메시지 60 | t-5.e1" and not walk.hops[2].bad
-    assert walk.hops[2].kind == "topic" and walk.hops[2].depth == 2 and walk.hops[2].parent == "t-3.e1" and len(walk.hops) == 3
+    assert walk.hops[2].line() == "  t.raw | W1 [a] 구독 | 보존 범위 40~100 · 남은 메시지 60 | t-6.e1" and not walk.hops[2].bad
+    assert walk.hops[2].kind == "topic" and walk.hops[2].depth == 2 and walk.hops[2].parent == "t-3.e1" and len(walk.hops) == 3   # 서비스 선언 셋은 안 읽는다
+    assert walk.hops[2].basis.startswith("W1가 읽는 토픽(code.resources t-5.e1)")
     assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 t.raw 범위 40~100, 남은 메시지 60)"
-    assert walk.rungs == [Rung(action="code.resources", params={"name": "W1"}, evidence="t-3.e1"),
-                          Rung(action="kafka.tail", params={"topic": "t.raw", "limit": 5}, evidence="t-5.e1")]
-    assert runner.ran[-2:] == [("code.uses", "in:{line}"), ("kafka.offsets", "t.raw")] and walk.reads == 4   # 쓰는 클래스로 더 걷지 않는다
-    # 비었으면 그 토픽 홉이 나쁨 — 멈춤은 거기, 첫 칸은 지금 오는 것
+    assert walk.rungs == [Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-5.e1"),
+                          Rung(action="kafka.tail", params={"topic": "t.raw", "limit": 5}, evidence="t-6.e1")]
+    assert runner.ran[-3:] == [("code.uses", "in:{line}"), ("code.resources", "W1"), ("kafka.offsets", "t.raw")] and walk.reads == 5   # 더 걷지 않는다
+    assert not walk.notes
+    # 비었으면 그 토픽 홉이 나쁨 — 멈춤은 거기, 첫 칸은 지금 오는 것, 그다음 그 클래스 본문
     walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.offsets", "t.raw"): _offsets(100, 100)}), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
     assert walk.hops[2].status == "비었다 — 보존 범위 100~100 · 남은 메시지 0" and walk.hops[2].bad
     assert walk.stopped == "구독 토픽이 비었다 — t.raw(W1 [a])"
-    assert walk.rungs == [Rung(action="kafka.tail", params={"topic": "t.raw", "limit": 5}, evidence="t-5.e1"),
-                          Rung(action="code.resources", params={"name": "W1"}, evidence="t-3.e1")]
+    assert walk.rungs == [Rung(action="kafka.tail", params={"topic": "t.raw", "limit": 5}, evidence="t-6.e1"),
+                          Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-5.e1")]
     # 범위 읽기 실패는 모르는 것 — 나쁨이 아니고 멈춤은 `키가 없다`에 그 사실
     walk = (await run_walk(_state(), runner=_Reads({k: v for k, v in table.items() if k[0] != "kafka.offsets"}), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
     assert walk.hops[2].status.startswith("읽기 실패 — ") and not walk.hops[2].bad
     assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 t.raw 범위 읽기 실패)"
-    # 구독 선언이 없으면 쓰는 클래스만
-    walk = (await run_walk(_state(), runner=_Reads(table), subscriptions={}, **kw))["walk"]
-    assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 선언 없음)" and walk.rungs[0].action == "code.resources"
-    # 인덱스에 쓰는 클래스가 없거나 둘 이상이면 전처럼(값이 없어 쓴 쪽을 모른다)
+    # 클래스 코드에 구독 토픽이 없으면 서비스 선언을 읽지 않는다 — 주 한 줄과 멈춤 꼬리에 선언 수만
+    none_topic = {**table, ("code.resources", "W1"): _res("W1", [("k2", "rediskey")])}
+    walk = (await run_walk(_state(), runner=_Reads(none_topic), subscriptions={"a": ("t.raw", "t.main")}, **kw))["walk"]
+    assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 토픽 없음(클래스 코드 · 서비스 선언 2개))"
+    assert walk.notes == ["W1: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 2개는 그 클래스의 것인지 몰라 안 읽는다"]
+    assert walk.rungs[0] == Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-5.e1") and walk.reads == 4
+    walk = (await run_walk(_state(), runner=_Reads(none_topic), subscriptions={}, **kw))["walk"]
+    assert walk.stopped.endswith("구독 토픽 없음(클래스 코드 · 서비스 선언 0개))")
+    # 그 클래스의 `code.resources`가 실패하면 토픽을 모른다 — 주 한 줄, 첫 칸은 전처럼 그 질의
+    walk = (await run_walk(_state(), runner=_Reads({k: v for k, v in table.items() if k != ("code.resources", "W1")}), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert walk.notes == ["W1: code.resources 실패 — 대본 없음 — 구독 토픽을 모른다"]
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 토픽 모름(code.resources 실패))"
+    assert walk.rungs[0] == Rung(action="code.resources", params={"name": "W1"}, evidence="t-3.e1")
+    # 인덱스에 쓰는 클래스가 없거나 둘 이상이면 전처럼(값이 없어 쓴 쪽을 모른다) — 그 클래스의 자원도 안 읽는다
     none = {**table, ("code.uses", "in:{line}"): "in:{line} [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점"}
     walk = (await run_walk(_state(), runner=_Reads(none), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
-    assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1" and walk.next_hop() == ("code.uses", {"name": "in:{line}"})
+    assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1" and walk.next_hop() == ("code.uses", {"name": "in:{line}"}) and walk.reads == 3
     two = {**table, ("code.uses", "in:{line}"): USES_W1.replace("  읽기 1:", "    proc.other.W2.run (proc/other.py:L4) [dt-core · a] — 진입점\n  읽기 1:")}
     walk = (await run_walk(_state(), runner=_Reads(two), classes=frozenset({"W0", "W1", "W2"}), class_services={"W0": ("a",), "W1": ("a",), "W2": ("a",)},
                            declared_by={"in:{line}": ("a",)}, subscriptions={"a": ("t.raw",)}, clock=lambda: T0))["walk"]
@@ -994,7 +1007,7 @@ async def test_키가_없으면_인덱스의_쓰는_클래스와_그_서비스�
     walk = (await run_walk(_state(), runner=_Reads(other), classes=frozenset({"W0", "W1", "W2"}), class_services={"W0": ("a",), "W1": ("a",), "W2": ("b",)},
                            declared_by={"in:{line}": ("a",)}, subscriptions={"a": ("t.raw",)}, clock=lambda: T0))["walk"]
     assert walk.hops[1].writer == "W1" and walk.stopped.startswith("키가 없다 — in:L1(쓰는 W1 [a]") and not walk.notes
-    # 공유 레포의 쓰기 줄(서비스 없음)도 쓴 쪽이다 — 서비스는 인덱스의 클래스 → 서비스로(`split`), 구독 토픽도 그 서비스의 것(R3-5q ①, 측정 #27 (a))
+    # 공유 레포의 쓰기 줄(서비스 없음)도 쓴 쪽이다 — 서비스는 인덱스의 클래스 → 서비스로(`split`), 토픽은 그 클래스 코드에서(R3-5q ①, 측정 #27 (a))
     shared = {**table, ("code.uses", "in:{line}"): USES_W1.replace("[dt-core · a] — 진입점: 이 함수(부르는 곳 없음)\n  읽기", "[dt-core] — 진입점\n  읽기")}
     walk = (await run_walk(_state(), runner=_Reads(shared), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
     assert walk.hops[1].line() == "  in:L1 | W1 [a] | 없음 | t-3.e1" and walk.hops[2].key == "t.raw" and not walk.notes

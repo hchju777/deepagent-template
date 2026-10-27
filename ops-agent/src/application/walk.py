@@ -476,8 +476,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     pointerless: set[str] = set()                                                           # 입력을 못 본 가지 중 포인터도 없는 것 — 그 홉의 증거(④)
     pointed_at: dict[str, tuple[str, Any, Any]] = {}                                        # 메시지 홉의 증거 → (토픽, 보존 시작, 끝)
     joined_at: dict[str, tuple[Any, str, str, tuple[str, int] | None]] = {}                 # 병합으로 나빠진 홉의 증거 → (병합식, 문구, 멈춤 머리, 거르는 줄)(④-b·R3-5h ②)
-    subscribed = dict(subscriptions or {})                                                  # 서비스 → config로 구독을 선언한 토픽들(R3-5p ①-b)
-    keyed_at: dict[str, tuple[str, str, dict, list[tuple[str, str, str]]]] = {}             # 없는 키의 홉 증거 → (쓰는 클래스, 표시, 질의 인자, [(토픽, 범위 토막, 증거)])(①-c)
+    subscribed = dict(subscriptions or {})                                                  # 서비스 → config로 구독을 선언한 토픽들(R3-5p ①-b) — 수만 센다(R3-5r ②)
+    # 없는 키의 홉 증거 → (쓰는 클래스, 표시, 질의 인자, [(토픽, 범위 토막, 증거)], 토픽 없을 때의 멈춤 꼬리, 그 클래스 code.resources 증거, 본문 자리, 후보 서비스들)(①-c·R3-5r ②)
+    keyed_at: dict[str, tuple[str, str, dict, list[tuple[str, str, str]], str, str, tuple[str, int] | None, tuple[str, ...]]] = {}
     topics_at: dict[str, tuple[str, str, dict, str]] = {}                                   # 구독 토픽 홉의 증거 → (쓰는 클래스, 표시, 질의 인자, 없는 키 홉의 증거)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
@@ -597,9 +598,29 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 if got.status == "ok" and raw is not None and w != writer:
                     read_inputs.append((label, ev, rows_of(raw), w, raw, name))
                 if keyed is not None:
-                    # 쓰는 클래스의 서비스가 config로 구독하는 토픽마다 보존 범위 한 번(`kafka.offsets`, 본문 없음) — 비었으면 그 홉이 나쁨이다.
+                    # 구독 토픽은 **그 클래스 코드**에서(R3-5r ② — 평가자 회신 10-30 4(b): 공유 config의 서비스 선언은 법인마다 10~11개라 상한 3은 고르는 규칙이
+                    # 된다): 그 클래스의 `code.resources` 읽기 `[topic]`마다 보존 범위 한 번(`kafka.offsets`, 본문 없음, 상한 없음) — 비었으면 그 홉이 나쁨이다.
+                    # 서비스 선언(`subscribed`)은 수만 주 줄에 적는다. 그 클래스로 더 걷지는 않는다(다른 입력은 그 클래스 본문 칸).
                     ranges: list[tuple[str, str, str]] = []
-                    for topic in sorted({t for s in cands for t in subscribed.get(s, ())})[:3]:
+                    declared_n = len({t for s in cands for t in subscribed.get(s, ())})
+                    topics: list[str] = []
+                    tail_note, rev, body_at = "구독 토픽 모름", "", None
+                    if (why := over(writer, f"{w}의 자원")):
+                        stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
+                    else:
+                        _, rgot = await run(f"걷기 — {w}가 읽는 토픽(인덱스)", "code.resources", {"name": w, **params_k})
+                        rev = rgot.evidence[0].id if rgot.evidence else ""
+                        rtext = runner.raw(rev) if rgot.status == "ok" and rev else None
+                        if not isinstance(rtext, str):
+                            remember(f"{w}: code.resources 실패 — {(rgot.error or '증거 없음').splitlines()[0][:120]} — 구독 토픽을 모른다")
+                            tail_note, rev = "구독 토픽 모름(code.resources 실패)", ""
+                        else:
+                            body_at = class_at(rtext)
+                            topics = sorted({n for n, k in inputs_in(rtext) if k == "topic"})
+                            if not topics:
+                                remember(f"{w}: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 {declared_n}개는 그 클래스의 것인지 몰라 안 읽는다")
+                                tail_note = f"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)"
+                    for topic in topics:
                         if (why := over(writer, topic)):
                             stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
                             break
@@ -608,10 +629,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
                         tstatus, tbad, piece = _topic_status(tdata, tgot.error or "증거 없음")
                         hops.append(Hop(key=topic, kind="topic", depth=depth + 2, service=f"{w} [{shown}] 구독", candidates=list(cands), status=tstatus,
-                                        bad=tbad, evidence_id=tev, basis=f"{w}의 구독 선언(config) — {name}을 쓰는 클래스의 메시지 입력 ({ev})", parent=ev))
+                                        bad=tbad, evidence_id=tev, basis=f"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev})", parent=ev))
                         ranges.append((topic, piece, tev))
                         topics_at[tev] = (w, shown, params_k, ev)
-                    keyed_at[ev] = (w, shown, params_k, ranges)
+                    keyed_at[ev] = (w, shown, params_k, ranges, tail_note, rev, body_at, tuple(cands))
                 if stopped:
                     break
                 # 나쁜 입력의 아는 쓴 쪽만 — 그때만 가지가 있다. 그 키 값의 포인터를 들고 간다(④) — 그 클래스를 만든 메시지가 거기 적혀 있다.
@@ -725,20 +746,27 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]
     ev = stop_hop.evidence_id
     rungs: list[Rung] = []
+
+    def body_rungs(key_ev: str) -> list[Rung]:
+        """없는 키를 쓰는 클래스의 칸 — 그 클래스 본문(`code.read`; 걷기가 이미 읽은 `code.resources`의 머리 줄, R3-5r ②). 자원을 못 읽었으면 전처럼 그 질의."""
+        w_, _, params_, _, _, rev_, body_, cands_ = keyed_at[key_ev]
+        if body_ is None or not rev_:
+            return [Rung(action="code.resources", params={"name": w_, **params_}, evidence=key_ev)]
+        return [Rung(action="code.read", params={"service": cands_[0] if cands_ else "", "path": body_[0], "line": body_[1]}, evidence=rev_)]
+
     if not stopped:
         if stop_hop.kind == "topic" and ev in topics_at:
-            # 없는 키를 쓰는 클래스가 구독하는 토픽이 비었다(R3-5p ①-c) — 입력이 없다. 첫 칸은 지금 오는 것, 그다음 그 클래스의 자원.
+            # 없는 키를 쓰는 클래스가 구독하는 토픽이 비었다(R3-5p ①-c) — 입력이 없다. 첫 칸은 지금 오는 것, 그다음 그 클래스 본문.
             w_, shown_, params_, key_ev = topics_at[ev]
             stopped = f"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])"
-            rungs += [Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev),
-                      Rung(action="code.resources", params={"name": w_, **params_}, evidence=key_ev)]
+            rungs += [Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev), *body_rungs(key_ev)]
         elif ev in keyed_at:
-            # 키가 없는데 쓰는 클래스는 안다(R3-5p ①-c) — 그 클래스가 구독하는 토픽에 남은 것이 멈춤 문구에 같이 간다(입력을 받고도 키를 안 만든 것인지를
-            # 리드가 사실로 가른다). 첫 칸은 그 클래스의 자원, 그다음 토픽마다 지금 오는 것.
-            w_, shown_, params_, ranges_ = keyed_at[ev]
-            tail = " / ".join(f"구독 {t} {piece}" for t, piece, _ in ranges_) or "구독 선언 없음"
+            # 키가 없는데 쓰는 클래스는 안다(R3-5p ①-c) — 그 클래스 코드가 구독하는 토픽에 남은 것이 멈춤 문구에 같이 간다(입력을 받고도 키를 안 만든 것인지를
+            # 리드가 사실로 가른다). 토픽이 없으면 그 사실(클래스 코드에 없음·서비스 선언 수). 첫 칸은 그 클래스 본문, 그다음 토픽마다 지금 오는 것.
+            w_, shown_, _, ranges_, tail_note, _, _, _ = keyed_at[ev]
+            tail = " / ".join(f"구독 {t} {piece}" for t, piece, _ in ranges_) or tail_note
             stopped = f"키가 없다 — {stop_hop.key}(쓰는 {w_} [{shown_}] · {tail})"
-            rungs.append(Rung(action="code.resources", params={"name": w_, **params_}, evidence=ev))
+            rungs += body_rungs(ev)
             rungs += [Rung(action="kafka.tail", params={"topic": t, "limit": 5}, evidence=tev) for t, _, tev in ranges_ if tev]
         elif ev in joined_at and ev not in walked_at and ev not in failed_at:
             # 병합 0건(④-b) — 짝 없는 입력의 쓴 쪽으로 더 걸었으면 멈춤은 전처럼 거기(그쪽 입력의 사유 — 홉 상태에 병합이 남는다). 더 못 걸었으면(쓴 쪽

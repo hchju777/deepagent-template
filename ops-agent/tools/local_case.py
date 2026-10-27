@@ -550,6 +550,8 @@ VARIANTS = {
     "source-missing": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 아예 없다 — 걷기가 '없음'에서 멈춘다",
     # R3-5p ①-c — 원천 키가 없고, 그 키를 쓰는 SourceSink가 구독하는 원천 토픽도 비었다(걷기가 `구독 토픽이 비었다`에서 멈춘다).
     "source-missing-quiet": "source-missing과 같고 원천 키를 쓰는 SourceSink가 구독하는 원천 토픽(mx.alarm.raw)도 비었다 — 입력이 없다",
+    # R3-5r ② — 없는 키를 쓰는 클래스(PaletteLoader)의 코드에 구독 토픽이 없다(걷기가 서비스 선언을 읽지 않고 수만 적는다).
+    "palette-missing": "palette-empty와 같되 공용 팔레트 키가 아예 없다 — 쓴 쪽 PaletteLoader(인덱스 쓰기 줄, 두 레포)의 코드엔 구독 토픽이 없다",
     "source-blank": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 빈 배열이다 — 걷기가 '0행'에서 멈춘다",
     # 사내 c-2형(측정 #9) — 원천 행은 있는데 모든 행의 한 필드가 '-'이고 batch 코드가 그 값을 거른다(`r.get("state") != "-"`).
     "source-filtered": "요약 키 data는 빈 배열이고 원천 키 행은 있지만 모든 행의 state가 '-'다 — batch가 그 값을 걸러 아무것도 안 남는다",
@@ -580,8 +582,8 @@ _MESSAGE_VARIANTS = {"message-empty", "message-gone", "message-blank"}
 # 포인터의 자리 — 라인마다 다른 오프셋(토픽 하나, 파티션 0). message-gone은 사이트 층이 덮은 감사 토픽(dt-core 세 서비스가 소비·발행 선언)의 보존(100부터) 앞이다.
 _POINTER_OFFSET = {"L1": 2, "L2": 3, "L3": 4}
 _POINTER_TOPIC = {"message-gone": "gumi.alarm.audit"}
-_EMPTY_DATA = {"data-empty", "source-missing", "source-missing-quiet", "source-blank", "source-filtered", "palette-empty", "chain-empty", "chain-filtered",
-               "chain-objects", "palette-unread", "join-empty", "join-outer", *_MESSAGE_VARIANTS}
+_EMPTY_DATA = {"data-empty", "source-missing", "source-missing-quiet", "source-blank", "source-filtered", "palette-empty", "palette-missing", "chain-empty",
+               "chain-filtered", "chain-objects", "palette-unread", "join-empty", "join-outer", *_MESSAGE_VARIANTS}
 # 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
 _RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender", "join-empty": "SourceJoiner", "join-outer": "SourceOuterJoiner",
                **{v: "SourceCollector" for v in _MESSAGE_VARIANTS}}
@@ -699,9 +701,10 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                                 "data": [{"seq": i, "dir": ["up", "down"][i % 2], "v": i, "view": "Overview"} for i in range(_RATE_ROWS)]}],
                     "metadata": {"event_type": "RateRefresh"}, "updated_at": fresh(1)})
                for l in LINES},
-            # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①).
-            "alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader"},
-                                         "colors": [] if variant in ("palette-empty", "palette-unread") else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]}),
+            # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①), `palette-missing`은 키가 없다(R3-5r ②).
+            **({} if variant == "palette-missing" else
+               {"alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader"},
+                                             "colors": [] if variant in ("palette-empty", "palette-unread") else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]})}),
             # palette-unread는 이 키의 읽기가 실패한다 — stub이 오류 신호 시드(`{"__error__": …}`)를 실패로 돌려준다.
             "palette:source": {"__error__": "WRONGTYPE Operation against a key holding the wrong kind of value"} if variant == "palette-unread" else json.dumps([{"name": "alarm", "hex": "#d33", "enabled": True}, {"name": "caution", "hex": "#fc0", "enabled": True},
                                           {"name": "normal", "hex": "#3a3", "enabled": False}]),

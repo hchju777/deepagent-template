@@ -2646,7 +2646,7 @@ CASES += [
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
  ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
  ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\") else", "\"colors\": [] if variant in (\"palette-unread\",) else", [PAL_T]),
- ("palette-empty가 빈 data가 아니다", LC, "\"source-filtered\", \"palette-empty\", \"chain-empty\"", "\"source-filtered\", \"chain-empty\"", [PAL_T]),
+ ("palette-empty가 빈 data가 아니다", LC, "\"source-filtered\", \"palette-empty\", \"palette-missing\"", "\"source-filtered\", \"palette-missing\"", [PAL_T]),
 ]
 
 
@@ -3371,11 +3371,13 @@ CASES += [
 FL = ROOT / "src/knowledge/flow.py"
 CONSUMING_T = "tests/knowledge/test_flow.py::test_consuming_map은_서비스마다_config로_구독을_선언한_토픽들이다"
 WRITERS_IN_T = "tests/application/test_walk.py::test_writers_in은_code_uses_글의_쓰기_줄에서_인덱스_클래스와_서비스를_읽는다"
-KEYED_T = "tests/application/test_walk.py::test_키가_없으면_인덱스의_쓰는_클래스와_그_서비스의_구독_토픽과_토픽의_보존_범위를_홉으로_적는다"
+KEYED_T = "tests/application/test_walk.py::test_키가_없으면_인덱스의_쓰는_클래스와_그_클래스_코드의_구독_토픽과_토픽의_보존_범위를_홉으로_적는다"
 BOARD_KEYED_T = "tests/test_board_walk.py::test_원천_키가_없으면_인덱스의_쓰는_클래스와_구독_토픽의_보존_범위가_홉으로_실리고_토픽이_비었으면_거기서_멈춘다"
+# R3-5r ②가 쓴다 — 선언 수만 적는 보드(쓰는 클래스의 코드에 토픽이 없는 모양). 앞 블록의 '엔진이 구독 지도를 걷기에 안 넘긴다'도 이것으로.
+BOARD_PALETTE_T = "tests/test_board_walk.py::test_공용_키가_없고_쓰는_클래스_코드에_구독_토픽이_없으면_서비스_선언을_읽지_않고_그_수만_적는다"
 CASES += [
  ("구독 지도가 코드 추정 consumes도 센다", FL, "        if e.get(\"relation\") == \"consumes\" and e.get(\"origin\") == \"config\" and src.get(\"label\") in out and dst.get(\"type\") == \"topic\" and dst.get(\"label\"):", "        if e.get(\"relation\") == \"consumes\" and src.get(\"label\") in out and dst.get(\"type\") == \"topic\" and dst.get(\"label\"):", [CONSUMING_T]),
- ("엔진이 구독 지도를 걷기에 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines,", [BOARD_KEYED_T]),
+ ("엔진이 구독 지도를 걷기에 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "                                  topic_producers=deps.topic_producers, lookup=deps.filter_lines,", [BOARD_PALETTE_T]),
  ("쓰기 줄을 읽기 줄처럼 센다", WK, "            writing = head.startswith(\"쓰기\")", "            writing = True", [WRITERS_IN_T]),
  ("쓰는 클래스를 선언한 서비스로 안 거른다", WK, "        picked = [(c, s) for c, s in found if s in declared] or found", "        picked = found", [KEYED_T]),
  ("쓰는 클래스가 여럿이어도 첫 것을 채운다", WK, "        if len(writers) != 1:\n            remember(", "        if not writers:\n            remember(", [KEYED_T]),
@@ -3423,7 +3425,18 @@ CASES += [
  ("자원 줄에 넘긴 동사를 안 적는다", QRY, "    return f\" · 키를 조립해 {verb}()로 넘긴다\" if verb else \"\"\n", "    return \"\"\n", [HANDOFF_SHOW_T]),
  ("uses 줄에 넘긴 동사를 안 적는다", QRY, "{entry_brief(index, graph, u.sid)}{handoff_note(u.handoff)}\"", "{entry_brief(index, graph, u.sid)}\"", [HANDOFF_SHOW_T]),
 ]
-assert len(CASES) >= 1093, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5r ② — 없는 키를 쓰는 클래스의 구독 토픽은 그 클래스 코드에서 ──
+CASES += [
+ ("쓰는 클래스의 토픽을 서비스 선언에서 읽는다", WK, "                            topics = sorted({n for n, k in inputs_in(rtext) if k == \"topic\"})\n", "                            topics = sorted({t for s in cands for t in subscribed.get(s, ())})\n", [KEYED_T, BOARD_KEYED_T]),
+ ("구독 토픽 0을 조용히 넘긴다", WK, "                                remember(f\"{w}: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 {declared_n}개는 그 클래스의 것인지 몰라 안 읽는다\")\n", "                                pass\n", [KEYED_T, BOARD_PALETTE_T]),
+ ("code.resources 실패를 조용히 넘긴다", WK, "                            remember(f\"{w}: code.resources 실패 — {(rgot.error or '증거 없음').splitlines()[0][:120]} — 구독 토픽을 모른다\")\n", "                            pass\n", [KEYED_T]),
+ ("멈춤 꼬리에 서비스 선언 수를 안 적는다", WK, "                                tail_note = f\"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)\"\n", "                                tail_note = \"구독 토픽 없음\"\n", [KEYED_T, BOARD_PALETTE_T]),
+ ("첫 칸이 클래스 본문이 아니다", WK, "        if body_ is None or not rev_:\n            return [Rung(action=\"code.resources\"", "        if True:\n            return [Rung(action=\"code.resources\"", [KEYED_T, BOARD_KEYED_T]),
+ ("토픽 홉의 근거가 클래스의 자원 증거를 안 댄다", WK, "basis=f\"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev})\"", "basis=f\"{w}가 읽는 토픽 — {name}을 쓰는 클래스의 메시지 입력 ({ev})\"", [KEYED_T]),
+ ("빈 토픽 멈춤의 둘째 칸이 본문이 아니다", WK, "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), *body_rungs(key_ev)]\n", "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), Rung(action=\"code.resources\", params={\"name\": w_, **params_}, evidence=key_ev)]\n", [KEYED_T, BOARD_KEYED_T]),
+]
+assert len(CASES) >= 1100, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

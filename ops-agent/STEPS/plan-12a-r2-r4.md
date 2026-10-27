@@ -690,7 +690,7 @@ medium으로 깎는다). **코드 변경 없음** — 그 법인 Kafka가 닿는
 | 순서 | 항목 | 할 것 | 자리 |
 |---|---|---|---|
 | R3-5r ① ✅ | 4(a) 명령 흐름의 쓰기 | `attach_resources`: 동사 없는 자원 줄은 조립한 값이 처음 닿는 호출의 동사(`READ_VERBS`/`WRITE_VERBS`)로 — 대입·사전·생성자·`return` → 부르는 쪽(exact `calls`)까지 깊이 3, config 조회는 건너뜀, 부르는 쪽이 갈리면 읽기; `Resource.handoff`(여섯째 칸 — 옛 번들의 여섯째 칸은 동사표에 없으면 버림); `code.resources`·`code.uses` 줄에 ` · 키를 조립해 send()로 넘긴다`; 측정판 `SummaryRefresh`가 요약 키의 쓰기가 된다 | `index`, `query` |
-| R3-5r ② | 4(b) 클래스의 토픽 | `keyed_writer` 뒤 그 클래스의 `code.resources`를 읽어 읽기 `[topic]`을 구독 토픽으로(상한 없음, 서비스 선언은 안 읽음) — 없으면 주 `… 클래스 코드에 구독 토픽이 없다 … 서비스 선언 N개 …`·멈춤 꼬리 `구독 토픽 없음(클래스 코드 · 서비스 선언 N개)`; 첫 칸은 그 클래스 본문(`code.read`), 토픽마다 `kafka.tail`; 측정판 `source-missing`은 `mx.alarm.raw` 한 줄 | `walk` |
+| R3-5r ② ✅ | 4(b) 클래스의 토픽 | `keyed_writer` 뒤 그 클래스의 `code.resources`를 읽어 읽기 `[topic]`을 구독 토픽으로(상한 없음, 서비스 선언은 안 읽음) — 없으면 주 `… 클래스 코드에 구독 토픽이 없다 … 서비스 선언 N개 …`·멈춤 꼬리 `구독 토픽 없음(클래스 코드 · 서비스 선언 N개)`; 첫 칸은 그 클래스 본문(`code.read`), 토픽마다 `kafka.tail`; 측정판 `source-missing`은 `mx.alarm.raw` 한 줄 | `walk` |
 | R3-5r ③ | 2 못 읽은 상류 | `cap_unread_upstream`: 멈춘 홉의 입력 홉이 `읽기 실패`거나 멈춤이 `입력을 다 못 봤다`면 확신 low + caveat `상류를 못 읽었다 — <키들>; 읽은 범위 안의 판정이라 확신 상한 low`(되묻지 않음, 유형은 그대로) | `nodes.verify` |
 | R3-5r ④ | 5 실패한 태스크 | 태스크 줄 `[error]`에 ` · 증거 없음(인용 불가)`, 기억 줄도; verify의 "없는 id"가 실패한 태스크 id면 `실패한 태스크 id t-N 인용 … — 증거가 없다(인용 불가)` | `briefing`, `nodes` |
 | — | **측정 #29** | ①~④ 뒤. **`code graph` 재생성: 필요**(①이 인덱스의 방향을 바꾼다). `<PGM 키>`·`<충전 키>`의 `code uses` 쓰기 줄(` · 키를 조립해 …로 넘긴다`)과 걷기의 쓴 쪽·토픽 홉, 쓰기로 안 잡힌 `<대상 자원 속성>` 처리기 수(43 중), 라우터 표의 줄 모양, `<작업자 4>`의 low·caveat, 실패한 태스크 인용 0 | 브리프 |

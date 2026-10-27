@@ -158,6 +158,10 @@ def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_�
     assert 'cfg["redis_key"]["alarm_palette"]' in CORE_FILES["batch/refresh.py"] and 'cfg["redis_key"]["palette_source"]' in CORE_FILES["common/palette.py"]
     assert CORE_FILES["config/gbm/mx.json"]["redis_key"]["alarm_palette"] == "alarm:palette"
     assert "alarm_palette" not in API_FILES["config/gbm/mx.json"]["redis_key"]
+    # `palette-missing`(R3-5r ②) — 공용 키가 아예 없다(쓰는 클래스의 코드에 구독 토픽이 없는 모양). 나머지는 palette-empty와 같다.
+    assert "palette-missing" in VARIANTS and "palette-missing" in _EMPTY_DATA
+    gone = _seeds(NOW, "palette-missing")
+    assert "alarm:palette" not in gone["redis"] and json.loads(gone["redis"]["palette:source"]) and json.loads(gone["redis"]["alarm:stats:L1"])["record"][0]["data"] == []
 
 
 # ── R3-5 ④ — 사내 c-1·c-2의 사슬과 등록 모음 파일 ──
