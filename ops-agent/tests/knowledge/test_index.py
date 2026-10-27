@@ -799,13 +799,17 @@ async def test_resources는_클래스의_메서드들이_읽고_쓰는_자원을
 
 async def test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다():
     """R3-1b ②가 자원 튜플에 여섯째 칸(`how`)을 넣어 번들을 만들었고 사내가 그걸로 측정했다(#8). R3-1c ①-b가 그 칸을 걷어냈어도 그 번들은
-    읽혀야 한다 — 다섯 칸만 받고 나머지는 버린다."""
+    읽혀야 한다. R3-5r ①부터 여섯째 칸은 다시 있다(`handoff` — 조립한 값을 넘긴 동사): 동사표의 동사만 받고 그 밖의 값(옛 "command")은 버린다."""
     idx = await _index()
     old = idx.to_dict()
-    old["symbols"] = [{**s, "resources": [[*r, "command"] for r in s["resources"]]} for s in old["symbols"]]
+    old["symbols"] = [{**s, "resources": [[*r[:5], "command"] for r in s["resources"]]} for s in old["symbols"]]
     back = ix.Index.from_dict(old)
     assert [s.resources for s in back.symbols] == [s.resources for s in idx.symbols]
-    assert all(len(ix.asdict_tuple(r)) == 5 for s in idx.symbols for r in s.resources)
+    assert all(len(ix.asdict_tuple(r)) == 6 and r.handoff == "" for s in idx.symbols for r in s.resources)
+    verbed = {**old, "symbols": [{**s, "resources": [[*r[:5], "send"] for r in s["resources"]]} for s in old["symbols"]]}
+    assert all(r.handoff == "send" for s in ix.Index.from_dict(verbed).symbols for r in s.resources)
+    five = {**old, "symbols": [{**s, "resources": [r[:5] for r in s["resources"]]} for s in old["symbols"]]}
+    assert [s.resources for s in ix.Index.from_dict(five).symbols] == [s.resources for s in idx.symbols]
 
 
 # ── R3-5f ③ — 클래스 속성 리터럴은 그 클래스의 것 ──
@@ -932,3 +936,72 @@ async def test_키워드_인자로_넘긴_값도_받는_함수의_매개변수_�
 
     assert res("KwParent") == [] and res("KwToken") == []                                         # 받는 함수는 조건식뿐
     assert res("KwRegistry") == [("tmp:alarm:{line}", "reads", "attr:role:h.jobs.KwRegistryChild")]  # 못 푸는 호출로 넘김 — 남긴다
+
+
+# ── R3-5r ① — 동사 없는 줄의 방향은 조립한 값이 처음 닿는 호출의 동사로 ──
+
+HANDOFF = {'h/__init__.py': '', 'h/jobs.py': (
+    'class Direct:\n    def _run(self, line):\n        command = {"op": "refresh", "target": self.cfg["redis_key"]["alarm_stats"].format(line=line)}\n'
+    '        self.producer.send("t", command)\n\n\n'
+    'class Assembler:\n    def target_key(self, line):\n        return self.cfg["redis_key"]["alarm_stats"].format(line=line)\n\n'
+    '    def _run(self, line):\n        cmd = {"op": "refresh", "target": self.target_key(line)}\n        self.producer.send("t", cmd)\n\n\n'
+    'class Saver:\n    def _run(self, line):\n        key = self.cfg["redis_key"]["alarm_stats"].format(line=line)\n        self.store.save(Command(key=key))\n\n\n'
+    'class Helped:\n    def target_key(self, line):\n        return self.cfg["redis_key"]["alarm_stats"].format(line=line)\n\n'
+    '    def _run(self, line):\n        return json.loads(self.redis.get(self.target_key(line)) or "{}")\n\n\n'
+    'class Mixed:\n    def target_key(self, line):\n        return self.cfg["redis_key"]["alarm_stats"].format(line=line)\n\n'
+    '    def read(self, line):\n        return self.redis.get(self.target_key(line))\n\n'
+    '    def push(self, line):\n        self.producer.send("t", {"target": self.target_key(line)})\n\n\n'
+    'class Quiet:\n    def target_key(self, line):\n        return self.cfg["redis_key"]["alarm_stats"].format(line=line)\n\n\n'
+    'class Setter:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        self.redis.set(key, 1)\n\n\n'
+    'class Logged:\n    def _run(self, line):\n        key = self.cfg["redis_key"]["alarm_stats"].format(line=line)\n        self.log.info(key)\n        self.redis.set(key, 1)\n\n\n'
+    'class Deep:\n    def _run(self, line):\n        key = self.cfg["redis_key"]["alarm_stats"].format(line=line)\n        self.a(key)\n\n'
+    '    def a(self, k):\n        self.b(k)\n\n    def b(self, k):\n        self.producer.send("t", k)\n\n\n'
+    'class Far:\n    def _run(self, line):\n        key = self.cfg["redis_key"]["alarm_stats"].format(line=line)\n        self.a(key)\n\n'
+    '    def a(self, k):\n        self.b(k)\n\n    def b(self, k):\n        self.c(k)\n\n    def c(self, k):\n        self.d(k)\n\n    def d(self, k):\n        self.producer.send("t", k)\n\n\n'
+    'def make_key(cfg):\n    return cfg["redis_key"]["alarm_stats"]\n\n\ndef job(cfg, producer):\n    producer.send("t", {"target": make_key(cfg)})\n\n\n'
+    'class Verbed:\n    def _run(self, line):\n        return self.redis.get(self.cfg["redis_key"]["alarm_stats"].format(line=line))\n')}
+HANDOFF_NAMES = [Name("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats")]
+
+
+async def test_동사_없는_자원_줄의_방향은_조립한_값이_처음_닿는_호출의_동사로_정하고_부르는_쪽까지_따라간다():
+    """평가자 회신(10-30) 4(a): 사내 `<PGM 처리기>`의 `<대상 자원 속성>`이 키를 조립하고 명령 DTO로 `<싱크>`가 쓴다 — 그 줄엔 동사가 없어 인덱스가 읽기로
+    적었다(이 모양 43개, `code.uses` 쓰기 0줄 → 걷기가 쓴 쪽을 모른다). 같은 줄 동사가 없으면 조립한 값이 **처음 닿는 호출의 동사**로: 대입·사전·생성자를
+    지나고, `return`이면 부르는 쪽(exact `calls`)에서 이어 본다(깊이 3). config 조회는 호출이 아니라 푸는 자리. 부르는 쪽이 읽기·쓰기로 갈리면 읽기(보수).
+    넘긴 동사는 `Resource.handoff`에 남아 `code.resources`·`code.uses` 줄이 보인다. 같은 줄에 동사가 있으면 전과 같다."""
+    idx = await _index(HANDOFF, HANDOFF_NAMES)
+
+    def res(qual):
+        return [(r.direction, r.handoff) for r in idx.symbols[_sid(idx, f"h.jobs.{qual}")].resources]
+
+    assert res("Direct._run") == [("writes", "send")]                      # 사전에 담아 send
+    assert res("Assembler.target_key") == [("writes", "send")]             # return → 부르는 쪽의 사전 → send
+    assert res("Saver._run") == [("writes", "save")]                       # 생성자 안에서 save의 인자
+    assert res("Helped.target_key") == [("reads", "get")]                  # return → 부르는 쪽의 redis.get
+    assert res("Mixed.target_key") == [("reads", "")]                      # 부르는 쪽이 갈린다 — 읽기(보수)
+    assert res("Quiet.target_key") == [("reads", "")]                      # 부르는 쪽 없음
+    assert res("Setter._run") == [("writes", "set")]                       # config 조회는 호출이 아니다 — 그다음 set
+    assert res("Logged._run") == [("writes", "set")]                       # 동사 없는 호출(log.info)은 지나간다
+    assert res("Deep._run") == [("writes", "send")]                        # 가족 메서드 둘을 지나 send(깊이 2)
+    assert res("Far._run") == [("reads", "")]                              # 깊이 3을 넘는다
+    assert res("make_key") == [("writes", "send")]                         # 모듈 함수도 부르는 쪽으로
+    assert res("Verbed._run") == [("reads", "")]                           # 같은 줄 동사 — 전과 같다
+    writers = {idx.symbols[s].qualname for s in idx.writers("rediskey", "alarm:stats:{line}")}
+    assert writers == {"h.jobs.Direct._run", "h.jobs.Assembler.target_key", "h.jobs.Saver._run", "h.jobs.Setter._run", "h.jobs.Logged._run",
+                       "h.jobs.Deep._run", "h.jobs.make_key"}
+    again = ix.Index.from_dict(json.loads(json.dumps(idx.to_dict())))
+    assert [s.resources for s in again.symbols] == [s.resources for s in idx.symbols]
+
+
+async def test_넘긴_동사는_resources와_uses_줄에_보인다():
+    from src.knowledge import query as qy
+    idx = await _index(HANDOFF, HANDOFF_NAMES)
+    lines = qy.resources_lines(idx, _sid(idx, "h.jobs.Direct"), where=lambda sid: "")
+    assert lines[1:] == ["  쓰기 1:", "    alarm:stats:{line} [rediskey] — h.jobs.Direct._run (h/jobs.py:L3) · 키를 조립해 send()로 넘긴다"]
+    helped = qy.resources_lines(idx, _sid(idx, "h.jobs.Helped"), where=lambda sid: "")
+    assert helped[1:] == ["  읽기 1:", "    alarm:stats:{line} [rediskey] — h.jobs.Helped.target_key (h/jobs.py:L24) · 키를 조립해 get()로 넘긴다"]
+    quiet = qy.resources_lines(idx, _sid(idx, "h.jobs.Quiet"), where=lambda sid: "")
+    assert quiet[1:] == ["  읽기 1:", "    alarm:stats:{line} [rediskey] — h.jobs.Quiet.target_key (h/jobs.py:L43)"]
+    uses = qy.uses_lines(idx, qy.Graph(idx), qy.uses(idx, "alarm:stats:{line}"), where=lambda sid: "[r]", cap=None)
+    assembler = next(l for l in uses if l.startswith("    h.jobs.Assembler.target_key (h/jobs.py:L9) [r] — 진입점: "))
+    assert assembler.endswith(" · 키를 조립해 send()로 넘긴다") and uses.index(assembler) < uses.index("  읽기 5:")
+    assert "    h.jobs.Quiet.target_key (h/jobs.py:L43) [r] — 진입점: 이 함수(부르는 곳 없음)" in uses

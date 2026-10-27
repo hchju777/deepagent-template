@@ -46,6 +46,7 @@ class Use:
     direction: str     # "writes" | "reads"
     sid: int
     line: int
+    handoff: str = ""  # 방향을 넘긴 호출의 동사로 정했으면 그 동사(R3-5r ①)
 
 
 class Graph:
@@ -186,7 +187,7 @@ def uses(index: Index, name: str) -> list[Use]:
     """이 이름의 자원(컬렉션·토픽·키·그룹)을 쓰고 읽는 함수들 — 쓰기가 앞. 정확한 이름이 없으면 부분 일치(키 템플릿
     `alarm:stats:{line}`을 그대로 치기는 어렵다)."""
     def collect(match) -> list[Use]:
-        found = [Use(r.kind, r.name, r.direction, s.id, r.line)
+        found = [Use(r.kind, r.name, r.direction, s.id, r.line, r.handoff)
                  for s in index.symbols for r in s.resources if match(r.name)]
         return sorted(found, key=lambda u: (u.direction != "writes", u.name, u.sid, u.line))
     return collect(lambda n: n == name) or collect(lambda n: name in n)
@@ -233,6 +234,12 @@ def reachable_members(index: Index, sid: int) -> tuple[list[int], list[int], int
     return own, reached, len(parents) - len(reached)
 
 
+def handoff_note(verb: str) -> str:
+    """조립한 값을 넘긴 동사(R3-5r ①) — 자원 줄 끝의 사실. 직접 쓴 줄이 아니라 명령으로 보낸 줄임을 리드가 안다. 걷기의 `_RESOURCE`·`_USES_ENTRY`는 줄
+    머리만 보므로 뒤에 붙어도 된다."""
+    return f" · 키를 조립해 {verb}()로 넘긴다" if verb else ""
+
+
 def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str]:
     """`code.resources` 한 벌 — 이 클래스의 메서드들(함수면 자기)과 **진입에서 닿는 부모 클래스 메서드들**(`reachable_members`)이 읽고 쓰는 자원, 읽기가 앞.
     자원 하나는 한 번(첫 메서드·줄 — 자기 것이 부모 것보다 앞). 측정 #13 추가분 3: 읽기가 부모(믹스인)의 `_run`에 있는 클래스가 "자원이 자기 출력뿐"으로
@@ -254,7 +261,7 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
     order = [index.symbols[c].qualname for c in chain]
     consts = {index.symbols[c].qualname: dict(index.symbols[c].consts) for c in chain}
     legacy = not any(consts.values())
-    seen: dict[tuple[str, str, str], tuple[int, int]] = {}
+    seen: dict[tuple[str, str, str], tuple[int, int, str]] = {}
     unresolved: dict[str, set[str]] = {}
     for mid in members:
         by_attr: dict[str, list] = {}
@@ -263,7 +270,7 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
             if len(parts) == 3:
                 by_attr.setdefault(parts[1], []).append((parts[2], r))
                 continue
-            seen.setdefault((r.direction, r.kind, r.name), (mid, r.line))
+            seen.setdefault((r.direction, r.kind, r.name), (mid, r.line, r.handoff))
         for attr, cands in by_attr.items():
             owners = {o for o, _ in cands}
             nearest = next((q for q in order if ((q in owners) if legacy else (attr in consts[q]))), None)
@@ -272,13 +279,13 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
                 continue
             for o, r in cands:
                 if o == nearest:
-                    seen.setdefault((r.direction, r.kind, r.name), (mid, r.line))
+                    seen.setdefault((r.direction, r.kind, r.name), (mid, r.line, r.handoff))
     for direction, label in (("reads", "읽기"), ("writes", "쓰기")):
         rows = sorted((k, v) for k, v in seen.items() if k[0] == direction)
         if not rows:
             continue
         lines.append(f"  {label} {len(rows)}:")
-        lines += [f"    {name} [{kind}] — {display(index, mid, line)}" for (_, kind, name), (mid, line) in rows[:cap]]
+        lines += [f"    {name} [{kind}] — {display(index, mid, line)}{handoff_note(verb)}" for (_, kind, name), (mid, line, verb) in rows[:cap]]
     for attr, owners in sorted(unresolved.items()):
         lines.append(f"  self.{attr}: 이 클래스와 부모에 그 속성의 리터럴이 없다 — 못 이음(자원 값을 가진 다른 클래스: {', '.join(sorted(owners))})")
     if not seen:
@@ -404,7 +411,7 @@ def uses_lines(index: Index, graph: Graph, found: list[Use], *, where, cap: int 
             if not rows:
                 continue
             lines.append(f"  {label} {len(rows)}:")
-            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}"
+            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}{handoff_note(u.handoff)}"
                       for u in rows[:cap]]
             lines += [("  " + l) for l in _more(len(rows), cap, more)]
     return lines

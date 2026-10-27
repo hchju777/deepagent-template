@@ -32,7 +32,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Iterable, Protocol
 
-from src.knowledge.flow import Name, direction
+from src.knowledge.flow import READ_VERBS, WRITE_VERBS, Name, direction
 from src.knowledge.trace import _collect_reads
 
 # 사내 도구가 측정으로 정한 값들. candidate 매칭에서 제외하는 흔한 이름 — 안 막으면 `.get(` 하나가 후보 수십 개로
@@ -61,9 +61,12 @@ _UPPER_ASSIGN = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*(?::\s*[^=]+)?=\s*['\"]([^'
 class Resource:
     kind: str
     name: str
-    direction: str      # "reads" | "writes" — 줄의 동사. 없거나 둘 다면 reads(보수적). 쓴 쪽은 여기가 아니라 키 값에서 안다(R3-1c ①-a).
+    direction: str      # "reads" | "writes" — 줄의 동사. 없으면 조립한 값이 처음 닿는 호출의 동사(R3-5r ①), 그것도 없거나 둘 다면 reads(보수적).
     line: int
-    via: str            # literal | key | alias
+    via: str            # literal | key | alias | attr:<속성>:<클래스>
+    # 방향을 같은 줄이 아니라 **넘긴 호출**의 동사로 정했을 때 그 동사(`send`·`save`·`get` …) — 평가자 회신(10-30) 4(a): 사내 `<PGM 처리기>`의 `<대상 자원 속성>`이
+    # 키를 조립하고 명령 DTO로 `<싱크>`가 쓴다(43개) — 그 줄엔 동사가 없어 읽기로 적혔고 걷기가 쓴 쪽을 몰랐다. 줄에 보여야 리드가 "직접 쓴 줄이 아니다"를 안다.
+    handoff: str = ""
 
 
 @dataclass
@@ -174,7 +177,7 @@ class Index:
         for s in self.symbols:
             if any((r.kind, r.name) in renames for r in s.resources):
                 s = replace(s, resources=tuple(Resource(r.kind, renames.get((r.kind, r.name), r.name), r.direction,
-                                                        r.line, r.via) for r in s.resources))
+                                                        r.line, r.via, r.handoff) for r in s.resources))
             symbols.append(s)
         return replace(self, symbols=symbols)
 
@@ -204,8 +207,9 @@ class Index:
         symbols = []
         for d in data.get("symbols", []):
             d = dict(d)
-            # R3-1b ②가 여섯째 칸(`how`)을 넣은 번들이 사내에 있다 — 다섯 칸만 받는다. 옛 번들을 못 읽으면 `code graph`를 다시 만들기 전까지 전부 막힌다.
-            d["resources"] = tuple(Resource(*r[:5]) for r in d.get("resources", []))
+            # 여섯째 칸은 넘긴 동사(R3-5r ①)다. R3-1b ②가 같은 자리에 `how`("command")를 넣은 번들이 사내에 있다 — 동사표의 동사만 받고 그 밖은 버린다.
+            # 옛 번들을 못 읽으면 `code graph`를 다시 만들기 전까지 전부 막힌다.
+            d["resources"] = tuple(Resource(*r[:5], handoff=(r[5] if len(r) > 5 and r[5] in _VERBS else "")) for r in d.get("resources", []))
             d["decorators"] = tuple(d.get("decorators", ()))
             d["unresolved"] = tuple(tuple(u) for u in d.get("unresolved", ()))
             d["consts"] = tuple(tuple(c) for c in d.get("consts", ()))                 # R3-5g ① 전 번들엔 없다 — 빈 튜플
@@ -218,7 +222,10 @@ class Index:
 
 
 def asdict_tuple(r: Resource) -> tuple:
-    return (r.kind, r.name, r.direction, r.line, r.via)
+    return (r.kind, r.name, r.direction, r.line, r.via, r.handoff)
+
+
+_VERBS = frozenset(READ_VERBS) | frozenset(WRITE_VERBS)
 
 
 # ── pass 1: 수집 ─────────────────────────────────────────────────────────
@@ -621,6 +628,133 @@ def _flows(fn: "_Func", resolve, *, line: int | None = None, token: str | None =
             continue
         return True
     return False
+
+
+# ── 조립한 값이 처음 닿는 호출의 동사(R3-5r ①) ──
+# 값이 그대로 실려 가는 그릇 — 호출·첨자·속성·f-string·연산에 더해 사전·목록·튜플·집합·`*`·await. 조건식(`_CONDITION`)은 아니다.
+_CARRY = _CHAIN + (ast.Dict, ast.List, ast.Tuple, ast.Set, ast.Starred, ast.Await)
+_CONFIG_WORD = re.compile(r"config|cfg|settings", re.IGNORECASE)
+
+
+def _args_of(call: ast.Call) -> list[ast.AST]:
+    return [*call.args, *(k.value for k in call.keywords)]
+
+
+def _pos(node: ast.AST) -> tuple[int, int]:
+    return (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+
+
+def _is_config_call(call: ast.Call) -> bool:
+    """`cfg.get(…)`·`self.config.get(…)` — 값을 **푸는** 호출이지 쓰임새가 아니다(`direction`의 `_CONFIG_GET`과 같은 규칙)."""
+    chain = _chain(call.func) or ()
+    return len(chain) >= 2 and chain[-1] == "get" and any(_CONFIG_WORD.search(part) for part in chain[:-1])
+
+
+def _verb_direction(call: ast.Call) -> tuple[str, str] | None:
+    verb = (_chain(call.func) or ("",))[-1]
+    if verb in READ_VERBS:
+        return "reads", verb
+    if verb in WRITE_VERBS:
+        return "writes", verb
+    return None
+
+
+def _handoff(fn: "_Func", starts: list[ast.AST], resolve, callers, depth: int = 0, seen: frozenset = frozenset()) -> tuple[str, str] | None:
+    """동사 없는 자원 줄의 방향 — 출발(그 줄의 토큰·리터럴·별칭·`self.<속성>`)에서 위로 올라가 조립한 값이 **처음 닿는 호출**의 동사 → `("reads"|"writes", 동사)`.
+    평가자 회신(10-30) 4(a): `<대상 자원 속성>`이 키를 조립하고 명령 DTO로 넘기는 처리기 43개가 읽기로 적혀 걷기가 쓴 쪽을 몰랐다. R3-1b ②의 "뒷줄 토픽 전송"
+    (줄 위치 규칙, 측정 #8에서 틀림)과 다르다 — AST 흐름이다. config 조회는 푸는 자리라 더 올라가고, 동사 없는 호출은 받는 함수를 풀 수 있으면 그 매개변수로
+    이어 보고(깊이 3) 못 풀면 그 결과가 값을 품고 간다(`json.dumps(key)`·`Command(key=key)`). 꼭대기가 대입이면 그 변수들의 뒤 호출을 차례로(`_handoff_names`),
+    `return`이면 부르는 쪽(`_handoff_callers`). 조건식·`self.x = …`·모르는 모양이면 None — 호출부가 전처럼 읽기로 둔다(추정을 확실처럼 말하지 않는다)."""
+    fn_node = fn.node
+    parents = {child: parent for parent in ast.walk(fn_node) for child in ast.iter_child_nodes(parent)}
+    for call in ast.walk(fn_node):
+        if isinstance(call, ast.Call):
+            for kw in call.keywords:
+                parents[kw.value] = call
+    for start in starts:
+        node, up = start, parents.get(start)
+        while up is not None:
+            if isinstance(up, ast.Call) and node is not up.func and any(node is a for a in _args_of(up)):
+                if not (_is_config_call(up) or (node is start and _lookup_default(up, start))):
+                    got = _verb_direction(up) or _handoff_into(fn, up, node, resolve, callers, depth, seen)
+                    if got is not None:
+                        return got
+            elif not isinstance(up, _CARRY):
+                break
+            node, up = up, parents.get(up)
+        if isinstance(up, (ast.Return, ast.Yield, ast.YieldFrom)):
+            got = _handoff_callers(fn, resolve, callers, depth, seen)
+        elif isinstance(up, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node is up.value:
+            targets = up.targets if isinstance(up, ast.Assign) else [up.target]
+            names = {t.id for t in targets if isinstance(t, ast.Name)}
+            got = _handoff_names(fn, names, resolve, callers, depth, seen, after=up) if len(names) == len(targets) else None
+        else:
+            got = None
+        if got is not None:
+            return got
+    return None
+
+
+def _handoff_into(fn: "_Func", call: ast.Call, arg: ast.AST, resolve, callers, depth: int, seen: frozenset) -> tuple[str, str] | None:
+    """동사 없는 호출의 받는 함수(가족 메서드·같은 모듈 함수)를 풀 수 있으면 그 매개변수가 닿는 호출로 이어 본다."""
+    callee = resolve(fn, call) if resolve is not None else None
+    if callee is None or depth >= _FLOW_DEPTH:
+        return None
+    param = _param_of(callee, call, arg)
+    if param is None or (callee.sid, param) in seen:
+        return None
+    return _handoff_names(callee, {param}, resolve, callers, depth + 1, seen | {(callee.sid, param)})
+
+
+def _handoff_names(fn: "_Func", seeds: set[str], resolve, callers, depth: int, seen: frozenset, after: ast.AST | None = None) -> tuple[str, str] | None:
+    """변수들이 닿는 호출을 **코드 순서로** — 처음 동사 있는 호출이 정한다. 대입·반복 변수로 번진 이름까지(고정점 — `_tainted_reaches_sink`와 같다). 동사
+    없는 호출은 받는 함수를 풀 수 있으면 이어 보고 아니면 지나간다(`log.info(key)`). 호출이 없고 `return`이면 부르는 쪽."""
+    fn_node = fn.node
+    tainted = set(seeds)
+    while True:
+        more = set(tainted)
+        for n in ast.walk(fn_node):
+            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and n.value is not None and _has_name(n.value, tainted):
+                more.update(t.id for t in (n.targets if isinstance(n, ast.Assign) else [n.target]) if isinstance(t, ast.Name))
+            elif isinstance(n, (ast.For, ast.comprehension)) and _has_name(n.iter, tainted) and isinstance(n.target, ast.Name):
+                more.add(n.target.id)
+        if more == tainted:
+            break
+        tainted = more
+    floor = _pos(after) if after is not None else (0, 0)
+    for call in sorted((c for c in ast.walk(fn_node) if isinstance(c, ast.Call) and _pos(c) > floor), key=_pos):
+        arg = next((a for a in _args_of(call) if _has_name(a, tainted)), None)
+        if arg is None or _is_config_call(call):
+            continue
+        got = _verb_direction(call) or _handoff_into(fn, call, arg, resolve, callers, depth, seen)
+        if got is not None:
+            return got
+    if any(isinstance(n, (ast.Return, ast.Yield, ast.YieldFrom)) and n.value is not None and _has_name(n.value, tainted) for n in ast.walk(fn_node)):
+        return _handoff_callers(fn, resolve, callers, depth, seen)
+    return None
+
+
+def _handoff_callers(fn: "_Func", resolve, callers, depth: int, seen: frozenset) -> tuple[str, str] | None:
+    """`return`으로 나간 값은 부르는 쪽(exact `calls`)에서 이어 본다 — 부르는 자리의 호출식(프로퍼티면 `.<이름>` 접근)이 출발이다. 부르는 쪽이 여럿이면
+    방향이 다 같아야 그 방향, 읽기·쓰기로 갈리면 None(읽는 쪽도 쓰는 쪽도 되는 헬퍼는 어느 쪽이라 못 한다 — 보수)."""
+    if depth >= _FLOW_DEPTH or fn.sid in seen or callers is None:
+        return None
+    node = fn.node
+    name = getattr(node, "name", "")
+    is_property = any(ast.unparse(d).endswith("property") for d in getattr(node, "decorator_list", []))
+    found: set[tuple[str, str]] = set()
+    for caller in callers(fn):
+        calls = [c for c in ast.walk(caller.node) if isinstance(c, ast.Call) and (_chain(c.func) or ("",))[-1] == name]
+        starts: list[ast.AST] = list(calls)
+        if is_property:
+            funcs = {id(c.func) for c in ast.walk(caller.node) if isinstance(c, ast.Call)}
+            starts += [a for a in ast.walk(caller.node) if isinstance(a, ast.Attribute) and a.attr == name and isinstance(a.ctx, ast.Load) and id(a) not in funcs]
+        got = _handoff(caller, starts, resolve, callers, depth + 1, seen | {fn.sid})
+        if got is not None:
+            found.add(got)
+    if len({d for d, _ in found}) != 1:
+        return None
+    return sorted(found)[0]
 
 
 def _self_reads(node: ast.AST) -> list[tuple[str, int]]:
@@ -1518,6 +1652,31 @@ class _Resolver:
         by_value: dict[str, Name] = {}
         for known in list(self.names):
             by_value.setdefault(known.value, known)
+        alias_of: dict[str, list[str]] = {}
+        for ident, known in aliases.items():
+            alias_of.setdefault(known.value, []).append(ident)
+
+        def callers(fn: _Func) -> list[_Func]:
+            """이 함수를 **확실히** 부르는 함수들(exact `calls`, 부르는 쪽 순) — 넘긴 동사를 부르는 쪽에서 이어 볼 때. candidate는 안 센다(엉뚱한 쓰는 쪽을 만든다)."""
+            return [self.funcs[e.src] for e in sorted(self.index.edges_to(fn.sid, "calls"), key=lambda e: (e.src, e.line))
+                    if e.certainty == "exact" and e.src != fn.sid and e.src in self.funcs]
+
+        def starts_for(fn: _Func, name: str, line: int, via: str) -> list[ast.AST]:
+            """그 자원 줄의 출발 노드들 — `key`는 그 줄의 토큰 상수, `literal`은 그 줄의 리터럴을 품은 문자열 상수(f-string 조각·템플릿), `alias`는 그 줄의 별칭
+            이름, `attr:`은 그 함수의 `self.<속성>` 읽기 전부."""
+            n = by_value.get(name)
+            if via.startswith("attr:"):
+                attr = via.split(":", 2)[1]
+                return [x for x in ast.walk(fn.node) if isinstance(x, ast.Attribute) and isinstance(x.value, ast.Name) and x.value.id == "self"
+                        and x.attr == attr and isinstance(x.ctx, ast.Load)]
+            at_line = [x for x in ast.walk(fn.node) if getattr(x, "lineno", None) == line]
+            if via == "key":
+                return [x for x in at_line if isinstance(x, ast.Constant) and n is not None and x.value == n.key_token]
+            if via == "alias":
+                idents = set(alias_of.get(name, ()))
+                return [x for x in at_line if isinstance(x, ast.Name) and x.id in idents]
+            literal = n.literal if n is not None else ""
+            return [x for x in at_line if isinstance(x, ast.Constant) and isinstance(x.value, str) and literal and literal in x.value]
 
         def resolve(caller: _Func, call: ast.Call) -> "_Func | None":
             """호출의 받는 함수 — `self.<이름>`은 자기·조상의 메서드, 맨이름은 같은 모듈의 함수. 그 밖(저장소 클라이언트·외부)은 None(못 푼다 = 쓰임새)."""
@@ -1554,10 +1713,15 @@ class _Resolver:
                     if not _flows(fn, resolve, attr=via.split(":", 2)[1]):
                         return
                 text = fn.mod.lines[line - 1] if 0 < line <= len(fn.mod.lines) else ""
-                # 동사 없는 줄은 읽기(보수적). "뒷줄이 토픽으로 보내면 쓰라는 명령"이라는 동사 목록 규칙(R3-1b ②)은 사내 모양(뒷줄 `save`,
-                # 앞줄 클래스 이름)에서 틀려 걷어냈다(측정 #8) — 쓴 쪽은 키 값이 대는 클래스 이름으로 안다(R3-1c ①-a).
-                d = "writes" if direction(text) == "writes" else "reads"
-                r = Resource(kind, name, d, line, via)
+                # 같은 줄의 동사가 먼저. 없으면 조립한 값이 처음 닿는 호출의 동사(R3-5r ① — 평가자 회신 10-30 4(a): 키를 조립해 명령 DTO로 넘기는 처리기).
+                # "뒷줄이 토픽으로 보내면 쓰라는 명령"이라는 줄 위치 규칙(R3-1b ②)은 사내 모양에서 틀려 걷어냈다(측정 #8) — 이것은 AST 흐름이다. 그래도
+                # 없으면 읽기(보수적) — 값에 적힌 쓴 쪽(R3-1c ①-a)은 그대로 먼저다.
+                d, verb = direction(text), ""
+                if d is None:
+                    handed = _handoff(fn, starts_for(fn, name, line, via), resolve, callers)
+                    if handed is not None:
+                        d, verb = handed
+                r = Resource(kind, name, "writes" if d == "writes" else "reads", line, via, verb)
                 if r not in found:
                     found.append(r)
 

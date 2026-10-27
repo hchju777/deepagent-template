@@ -1128,8 +1128,8 @@ CASES = [
   '    if False:\n        lines.append(f"진입점 {len(res.entries)}:")',
   ['tests/infrastructure/test_deployed_code.py::test_code_callers와_uses는_붙인_인덱스로_답하고_없거나_모호하면_실패로_답한다']),
  ('uses 조립이 진입점 꼬리를 안 붙인다', ROOT / 'src/knowledge/query.py',
-  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}"',
-  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)}"',
+  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}{handoff_note(u.handoff)}"',
+  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)}{handoff_note(u.handoff)}"',
   ['tests/knowledge/test_cli_code.py::test_code_callers_path_uses가_인덱스로_역질문에_답한다']),
  ('재집계 뒤 uses 칸이 없다', ROOT / 'src/application/briefing.py',
   '    if not code_index or flow_graph is None:\n        return None\n    keys =',
@@ -2465,7 +2465,7 @@ CASES += [
   ["tests/domain/test_ports.py::test_등재된_code_액션의_메서드는_전부_포트에_있다"]),
  ("CLI code resources가 찾은 심볼을 안 쓴다", MN, "    for line in qy.resources_lines(index, found[0], where=where):", "    for line in []:",
   ["tests/knowledge/test_cli_code.py::test_code_resources가_클래스가_읽고_쓰는_자원에_답한다"]),
- ("옛 번들의 여섯 칸 자원을 못 읽는다", IXP, "            d[\"resources\"] = tuple(Resource(*r[:5]) for r in d.get(\"resources\", []))", "            d[\"resources\"] = tuple(Resource(*r) for r in d.get(\"resources\", []))",
+ ("옛 번들의 여섯 칸 자원을 못 읽는다", IXP, "            d[\"resources\"] = tuple(Resource(*r[:5], handoff=(r[5] if len(r) > 5 and r[5] in _VERBS else \"\")) for r in d.get(\"resources\", []))", "            d[\"resources\"] = tuple(Resource(*r) for r in d.get(\"resources\", []))",
   ["tests/knowledge/test_index.py::test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다"]),
  ("입구 노드가 클래스 집합을 안 넘긴다", ND, "                                    declared=tuple(deps.declared.get(\"rediskey\", ())), classes=deps.classes)",
   "                                    declared=tuple(deps.declared.get(\"rediskey\", ())))", ["tests/application/test_nodes.py::test_입구_노드는_frame_전에_접수를_읽고_대상_키를_State에_둔다"]),
@@ -3242,7 +3242,7 @@ CASES += [
 ATTR_FLOW_T = "tests/knowledge/test_index.py::test_속성으로_푼_토큰도_흐름을_보고_호출_인자로_넘기면_받는_함수의_매개변수_쓰임새까지_이어_본다"
 CASES += [
  ("attr 표식은 흐름 검사를 안 한다", IDX, "                elif via.startswith(\"attr:\"):", "                elif False:", [ATTR_FLOW_T]),
- ("받는 함수의 매개변수 쓰임새를 안 이어 본다", IDX, "    callee = resolve(fn, call) if resolve is not None else None\n    if callee is None or depth >= _FLOW_DEPTH:", "    callee = None\n    if callee is None or depth >= _FLOW_DEPTH:", [ATTR_FLOW_T]),
+ ("받는 함수의 매개변수 쓰임새를 안 이어 본다", IDX, "    callee = resolve(fn, call) if resolve is not None else None\n    if callee is None or depth >= _FLOW_DEPTH:\n        return True", "    callee = None\n    if callee is None or depth >= _FLOW_DEPTH:\n        return True", [ATTR_FLOW_T]),
  ("람다 인자를 쓰임새로 본다", IDX, "    if isinstance(arg, ast.Lambda):\n        return False", "    if isinstance(arg, ast.Lambda):\n        return True", [ATTR_FLOW_T]),
  ("config 조회의 기본값 자리를 쓰임새로 본다", IDX, "                if node is start and (token is not None or _lookup_default(up, start)):", "                if node is start and token is not None:", [ATTR_FLOW_T]),
 ]
@@ -3250,7 +3250,7 @@ CASES += [
 # ── 12a-R3-5k ① — 키워드 인자의 값도 받는 함수로 ──
 KW_FLOW_T = "tests/knowledge/test_index.py::test_키워드_인자로_넘긴_값도_받는_함수의_매개변수_쓰임새까지_이어_본다"
 CASES += [
- ("키워드 인자를 호출 인자로 안 본다", IDX, "                parents[kw.value] = call", "                pass", [KW_FLOW_T]),
+ ("키워드 인자를 호출 인자로 안 본다", IDX, "                parents[kw.value] = call\n    if token is not None:", "                pass\n    if token is not None:", [KW_FLOW_T]),
 ]
 
 # ── 12a-R3-5k ② — 턴의 스키마를 트레이스에 ──
@@ -3405,7 +3405,25 @@ CASES += [
  ("쓰기 0줄을 조용히 넘긴다", WK, "        if not found:\n            lines = writes_in(text)", "        if not found:\n            return None\n            lines = writes_in(text)", [KEYED_T]),
  ("쓰기 줄 수를 안 센다", WK, "            return int(m.group(1))", "            return 0", [KEYED_T]),
 ]
-assert len(CASES) >= 1082, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5r ① — 동사 없는 자원 줄의 방향은 조립한 값이 처음 닿는 호출의 동사로 ──
+HANDOFF_T = "tests/knowledge/test_index.py::test_동사_없는_자원_줄의_방향은_조립한_값이_처음_닿는_호출의_동사로_정하고_부르는_쪽까지_따라간다"
+HANDOFF_SHOW_T = "tests/knowledge/test_index.py::test_넘긴_동사는_resources와_uses_줄에_보인다"
+OLD6_T = "tests/knowledge/test_index.py::test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다"
+CASES += [
+ ("넘긴 호출의 동사를 안 본다", IDX, "                    handed = _handoff(fn, starts_for(fn, name, line, via), resolve, callers)\n", "                    handed = None\n", [HANDOFF_T]),
+ ("같은 줄 동사가 있어도 넘긴 호출을 본다", IDX, "                if d is None:\n                    handed = _handoff(", "                if True:\n                    handed = _handoff(", [HANDOFF_T]),
+ ("쓰기 동사를 넘긴 호출에서 안 본다", IDX, "    if verb in WRITE_VERBS:\n        return \"writes\", verb\n", "    if verb in WRITE_VERBS:\n        return None\n", [HANDOFF_T]),
+ ("return으로 나간 값을 부르는 쪽에서 안 잇는다", IDX, "    if depth >= _FLOW_DEPTH or fn.sid in seen or callers is None:\n        return None\n", "    if True:\n        return None\n", [HANDOFF_T]),
+ ("부르는 쪽이 갈려도 쓰기로 본다", IDX, "    if len({d for d, _ in found}) != 1:\n        return None\n    return sorted(found)[0]\n", "    if not found:\n        return None\n    return sorted(found)[-1]\n", [HANDOFF_T]),
+ ("config 조회를 넘긴 호출로 본다", IDX, "    return len(chain) >= 2 and chain[-1] == \"get\" and any(_CONFIG_WORD.search(part) for part in chain[:-1])\n", "    return False\n", [HANDOFF_T]),
+ ("동사 없는 호출에서 멈춘다", IDX, "        got = _verb_direction(call) or _handoff_into(fn, call, arg, resolve, callers, depth, seen)\n        if got is not None:\n            return got\n    if any(", "        got = _verb_direction(call) or _handoff_into(fn, call, arg, resolve, callers, depth, seen)\n        return got\n    if any(", [HANDOFF_T]),
+ ("받는 함수를 깊이 상한 없이 따라간다", IDX, "    if callee is None or depth >= _FLOW_DEPTH:\n        return None\n", "    if callee is None:\n        return None\n", [HANDOFF_T]),
+ ("옛 번들의 여섯째 칸을 동사표로 거르지 않는다", IDX, "handoff=(r[5] if len(r) > 5 and r[5] in _VERBS else \"\")", "handoff=(r[5] if len(r) > 5 else \"\")", [OLD6_T]),
+ ("자원 줄에 넘긴 동사를 안 적는다", QRY, "    return f\" · 키를 조립해 {verb}()로 넘긴다\" if verb else \"\"\n", "    return \"\"\n", [HANDOFF_SHOW_T]),
+ ("uses 줄에 넘긴 동사를 안 적는다", QRY, "{entry_brief(index, graph, u.sid)}{handoff_note(u.handoff)}\"", "{entry_brief(index, graph, u.sid)}\"", [HANDOFF_SHOW_T]),
+]
+assert len(CASES) >= 1093, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
