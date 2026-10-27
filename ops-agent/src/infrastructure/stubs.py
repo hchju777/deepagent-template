@@ -202,6 +202,15 @@ class StubKafkaInspector(KafkaInspectorPort):
                                       "message": {"partition": 0, "offset": int(offset), "timestamp": None, "key": None, "value": value}},
                                      source=source, clock=self._clock)
 
+    async def offsets(self, topic: str) -> ProbeResult:
+        source = f"stub-kafka:offsets {topic}"
+        if topic not in self._topics:
+            return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {topic}", source=source, clock=self._clock)
+        first = self._begins.get(topic, 0)
+        last = first + len(self._topics[topic])
+        return ProbeResult.succeeded({"topic": topic, "partitions": [{"partition": 0, "begin": first, "end": last}], "messages": last - first},
+                                     source=source, clock=self._clock)
+
 
 class StubDeployedCode(DeployedCodePort):
     """`case dryrun`의 코드 자리. **seed의 `trace`·`uses`·`callers`만 안다** — 본문은 사람이 적은 그대로

@@ -134,6 +134,19 @@ async def test_message_at은_포인터의_그_메시지_한_건만_읽고_그룹
     assert got.envelope.complete and got.source == "kafka:message_at t[0]@42"
 
 
+async def test_offsets는_파티션마다_보존_범위만_읽고_메시지는_안_가져온다(monkeypatch):
+    """R3-5p ①-a(평가자 분석 10-28): 없는 키의 쓰는 클래스가 구독하는 토픽에 무엇이 남아 있는지 — `message_at`이 머리에 주는 범위만 따로. `assign`만, 그룹
+    미참여, seek·fetch 없음(`getmany` 0회). 파티션을 못 찾으면 실패(토픽 없음)."""
+    inspector = _inspector(monkeypatch, {0: 100, 1: 50}, [0, 1])
+    _Consumer.begin = 40
+    got = await inspector.offsets("t")
+    assert got.status == "ok", got.error
+    assert got.data == {"topic": "t", "partitions": [{"partition": 0, "begin": 40, "end": 100}, {"partition": 1, "begin": 40, "end": 50}], "messages": 70}
+    assert got.source == "kafka:offsets t" and _Consumer.calls == 0 and got.envelope.complete
+    none = await _inspector(monkeypatch, {}, []).offsets("t")
+    assert none.status == "error" and "파티션" in none.error
+
+
 async def test_message_at은_보존_범위_밖이면_없다고_하고_오류가_아니다(monkeypatch):
     """측정 #13 추가분 2: 오프셋이 보존 범위 밖인 키 2개가 둘 다 진짜 원인 자리였다 — "키를 만든 메시지가 토픽에 없다"는 사실이지 읽기 실패가 아니다.
     범위 앞(지워짐)·뒤(아직 없음) 둘 다, 읽으러 가지도 않는다."""

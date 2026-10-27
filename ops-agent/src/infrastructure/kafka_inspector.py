@@ -279,6 +279,36 @@ class RealKafkaInspector(KafkaInspectorPort):
                 except Exception:                                  # noqa: BLE001
                     pass
 
+    async def offsets(self, topic: str) -> ProbeResult:
+        """토픽의 보존 범위만 — 파티션마다 `beginning_offsets`·`end_offsets`(R3-5p ①-a). `assign`만, 그룹 미참여·커밋 없음, seek·fetch 없음(브로커 왕복 둘).
+        파티션은 `message_at`과 달리 모른 채 오므로 AdminClient에게 묻는다(`_partitions_of`) — 없으면 토픽이 없는 것."""
+        actual = self.resolve_topic(topic)
+        source = f"kafka:offsets {actual}"
+        consumer = None
+        try:
+            from aiokafka import AIOKafkaConsumer, TopicPartition
+
+            partitions = await self._partitions_of(actual)
+            if not partitions:
+                return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {actual}", source=source, clock=self._clock)
+            tps = [TopicPartition(actual, p) for p in partitions]
+            consumer = AIOKafkaConsumer(bootstrap_servers=self._brokers, group_id=None, enable_auto_commit=False)
+            await consumer.start()
+            consumer.assign(tps)
+            begins = await consumer.beginning_offsets(tps)
+            ends = await consumer.end_offsets(tps)
+            rows = [{"partition": tp.partition, "begin": begins[tp], "end": ends[tp]} for tp in tps]
+            return ProbeResult.succeeded({"topic": actual, "partitions": rows, "messages": sum(r["end"] - r["begin"] for r in rows)},
+                                         source=source, clock=self._clock)
+        except Exception as exc:                                   # noqa: BLE001
+            return ProbeResult.failed(f"{type(exc).__name__}: {exc}", source=source, clock=self._clock)
+        finally:
+            if consumer is not None:
+                try:
+                    await consumer.stop()
+                except Exception:                                  # noqa: BLE001
+                    pass
+
 
 def _render(record: Any) -> dict:
     import json

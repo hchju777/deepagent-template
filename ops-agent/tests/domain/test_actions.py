@@ -205,3 +205,5 @@ def test_포인터_메시지_읽기가_등재돼_있고_본문은_증거에_안_
     from src.domain.actions import SUMMARY_ONLY
     assert ACTIONS["kafka.message_at"] == ("kafka", "message_at", ("topic", "partition", "offset"), ())
     assert "kafka.message_at" in SUMMARY_ONLY
+    # 토픽의 보존 범위만(R3-5p ①-a) — 본문이 없어 세기만 할 것도 없다
+    assert ACTIONS["kafka.offsets"] == ("kafka", "offsets", ("topic",), ()) and "kafka.offsets" not in SUMMARY_ONLY

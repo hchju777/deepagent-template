@@ -1681,4 +1681,4 @@ def test_걷기의_포인터_읽기는_리드_목록에_없다():
     """R3-5d ④: `kafka.message_at`은 걷기가 키 값의 포인터(토픽·파티션·오프셋)로 내는 읽기다. 리드 목록에 두면 오프셋을 옮겨 적게 되고 그 수의 전사
     실수를 검증하게 된다(recompute의 `expect`와 같은 이유) — 걷기 홉 표와 그 증거로 받는다."""
     catalog = briefing.action_catalog(site())
-    assert "kafka.tail" in catalog and "kafka.message_at" not in catalog
+    assert "kafka.tail" in catalog and "kafka.message_at" not in catalog and "kafka.offsets" not in catalog   # 범위 읽기도 걷기의 것(R3-5p ①-a)

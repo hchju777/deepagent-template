@@ -130,6 +130,12 @@ class KafkaInspectorPort(ABC):
         밖이면 오류가 아니라 `found=False`다 — 그 자체가 사실이다(측정 #13: 범위 밖 2개가 둘 다 진짜 원인 자리). 이름이 `fetch`가 아닌 이유:
         레포 동사라 포트 표면 검사가 막는다."""
 
+    @abstractmethod
+    async def offsets(self, topic: str) -> ProbeResult:
+        """토픽의 보존 범위 — 파티션마다 `begin`(보존 시작)·`end`(끝 오프셋)와 남은 메시지 수, 본문 없음(R3-5p ①-a, 평가자 분석 10-28). `message_at`이
+        머리에 주는 범위만 따로 읽는다 — 없는 키를 쓰는 클래스가 구독하는 토픽에 무엇이 남아 있는지(비었는지)를 걷기가 홉으로 적는다. `assign`만, 그룹
+        미참여·커밋 없음·seek 없음."""
+
 
 class RestProberPort(ABC):
     """대상 REST API 읽기.

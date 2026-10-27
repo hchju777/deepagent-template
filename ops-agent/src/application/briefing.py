@@ -37,7 +37,8 @@ from src.knowledge import flow as flowgraph
 _RENDERED_SEPARATELY = {"rest.query"}
 # 걷기가 키 값의 포인터(토픽·파티션·오프셋)로 내는 읽기 — 리드 목록에는 없다(R3-5d ④). 리드가 오프셋을 옮겨 적으면 그 수의 전사 실수를 검증하게
 # 된다(recompute의 `expect`를 증거 안 위치로 받는 이유와 같다). 리드는 걷기 홉 표와 그 증거로 받는다.
-_WALK_READS = {"kafka.message_at"}
+# `kafka.offsets`(토픽의 보존 범위만, R3-5p ①-a)도 걷기의 것 — 리드에겐 `kafka.tail`이 있고, 범위 수를 옮겨 적게 할 까닭이 없다.
+_WALK_READS = {"kafka.message_at", "kafka.offsets"}
 
 
 def action_catalog(site_config, *, services: tuple[str, ...] = (),

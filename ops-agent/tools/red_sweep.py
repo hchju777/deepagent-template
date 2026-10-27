@@ -3352,7 +3352,21 @@ CASES += [
  ("빈 긴 답을 빈 응답의 예산으로 센다", LD, "                kind = \"length\" if reply.finish_reason == \"length\" else \"empty\"", "                kind = \"empty\"", [BRIEF_ONCE_T, EMPTY_RETRY_T]),
  ("빈 긴 답에 사유 재질문을 보낸다", LD, "            if kind in (\"connection\", \"empty\") or (kind == \"length\" and not text):", "            if kind in (\"connection\", \"empty\"):", [BRIEF_ONCE_T]),
 ]
-assert len(CASES) >= 1057, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5p ①-a — `kafka.offsets`: 토픽의 보존 범위만 ──
+PORT_OFFSETS_T = "tests/domain/test_ports.py::test_토픽의_보존_범위만_읽을_수_있다"
+ACT_OFFSETS_T = "tests/domain/test_actions.py::test_포인터_메시지_읽기가_등재돼_있고_본문은_증거에_안_싣는다"
+CATALOG_WALK_T = "tests/application/test_briefing.py::test_걷기의_포인터_읽기는_리드_목록에_없다"
+KI_OFFSETS_T = "tests/infrastructure/test_kafka_inspector.py::test_offsets는_파티션마다_보존_범위만_읽고_메시지는_안_가져온다"
+CASES += [
+ ("포트에 범위 읽기가 없다", PTS, "    async def offsets(self, topic: str) -> ProbeResult:\n        \"\"\"토픽의 보존 범위 — 파티션마다", "    async def _offsets(self, topic: str) -> ProbeResult:\n        \"\"\"토픽의 보존 범위 — 파티션마다", [PORT_OFFSETS_T]),
+ ("범위 읽기가 등재 목록에 없다", AC, "    \"kafka.offsets\":       (\"kafka\", \"offsets\",       (\"topic\",),              ()),", "", [ACT_OFFSETS_T]),
+ ("범위 읽기를 리드 목록에 보인다", B, "_WALK_READS = {\"kafka.message_at\", \"kafka.offsets\"}", "_WALK_READS = {\"kafka.message_at\"}", [CATALOG_WALK_T]),
+ ("스텁 범위가 보존 시작을 안 본다", ST, "        first = self._begins.get(topic, 0)\n        last = first + len(self._topics[topic])\n        return ProbeResult.succeeded({\"topic\": topic, \"partitions\": [{\"partition\": 0, \"begin\": first, \"end\": last}], \"messages\": last - first},", "        first = 0\n        last = len(self._topics[topic])\n        return ProbeResult.succeeded({\"topic\": topic, \"partitions\": [{\"partition\": 0, \"begin\": first, \"end\": last}], \"messages\": last - first},", [STUB_MSG_T]),
+ ("실어댑터 범위가 남은 수를 끝 오프셋으로 센다", KI, "            return ProbeResult.succeeded({\"topic\": actual, \"partitions\": rows, \"messages\": sum(r[\"end\"] - r[\"begin\"] for r in rows)},", "            return ProbeResult.succeeded({\"topic\": actual, \"partitions\": rows, \"messages\": sum(r[\"end\"] for r in rows)},", [KI_OFFSETS_T]),
+ ("실어댑터 범위가 파티션 없음을 넘긴다", KI, "            if not partitions:\n                return ProbeResult.failed(f\"토픽이 없거나 파티션을 못 찾았다 — {actual}\", source=source, clock=self._clock)\n            tps = [TopicPartition(actual, p) for p in partitions]", "            tps = [TopicPartition(actual, p) for p in partitions]", [KI_OFFSETS_T]),
+]
+assert len(CASES) >= 1063, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

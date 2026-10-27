@@ -124,3 +124,9 @@ def test_포인터_메시지_한_건을_읽을_수_있다():
     """R3-5d ④: 메시지(토픽) 입력은 인덱스가 자원으로 못 세고, 키 값의 포인터(토픽·파티션·오프셋)가 그 키를 만든 메시지를 가리킨다(사내 122/122키).
     `tail`은 끝에서 몇 건이라 그 메시지가 아니다. 이름이 `fetch`가 아닌 이유: 위 WRITE_VERBS의 레포 동사다."""
     assert "message_at" in _public_methods(KafkaInspectorPort)
+
+
+def test_토픽의_보존_범위만_읽을_수_있다():
+    """R3-5p ①-a(평가자 분석 10-28): 없는 키의 쓰는 클래스가 구독하는 토픽에 무엇이 남아 있는지(비었는지) — `message_at`이 머리에 주는 범위(`begin`·`end`)만
+    본문 없이. `assign`만, 그룹 미참여·커밋 없음·seek 없음."""
+    assert "offsets" in _public_methods(KafkaInspectorPort)

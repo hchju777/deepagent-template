@@ -1627,6 +1627,14 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 상한 자체(생각 포함 16K)는 사내 config의 `max_tokens`와 게이트웨이의 추론 설정이 쥔다 — 코드 밖, 사람 결정. 차례로 돌려도 30%라 동시 실행 탓이 아니었다.
 - 테스트 먼저(RED → GREEN). 스윕 +3(1057). `code graph`와 무관. **R3-5o 끝** — 다음은 측정 #26 브리프(`code graph` 재생성 **불필요**).
 
+#### R3-5p ①-a (10-28) ✅ — `kafka.offsets`: 토픽의 보존 범위만
+
+- 평가자 분석(#22~#25): `키가 없다` 멈춤에서 그 키를 쓰는 클래스·구독 토픽·토픽의 보존 범위 끝 오프셋을 홉으로 적어 달라(메시지 한 건 읽기와 같은 읽기).
+  읽기는 `message_at`이 머리에 주는 범위(`begin`·`end`)만 따로 — 포트 `KafkaInspectorPort.offsets(topic)`: 파티션마다 `begin`·`end`와 남은 메시지 수, 본문
+  없음. `assign`만, 그룹 미참여·커밋 없음, seek·fetch 없음(브로커 왕복 둘). 파티션은 AdminClient(`_partitions_of`)로 — 없으면 토픽이 없는 것(실패).
+- 스텁은 파티션 0 하나(시드의 `begin`·메시지 수). 등재 `kafka.offsets topic`. 리드 목록에는 없다(`_WALK_READS` — 걷기가 낸다; 리드에겐 `kafka.tail`).
+- 테스트 먼저(RED → GREEN) — 포트 표면·등재·스텁·실어댑터(가짜 aiokafka, `getmany` 0회)·리드 목록. 스윕 +6(1063). `code graph`와 무관.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

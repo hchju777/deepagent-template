@@ -50,6 +50,8 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     "kafka.tail":          ("kafka", "tail",          ("topic",),              ("limit",)),
     # 포인터(토픽·파티션·오프셋)의 메시지 **한 건**(R3-5d ④) — 키 값의 `metadata.source`가 그 키를 만든 메시지를 가리킨다. 걷기가 낸다.
     "kafka.message_at":    ("kafka", "message_at",    ("topic", "partition", "offset"), ()),
+    # 토픽의 보존 범위만(파티션별 begin·end, 본문 없음 — R3-5p ①-a): 없는 키를 쓰는 클래스가 구독하는 토픽이 비었는지. 걷기가 낸다.
+    "kafka.offsets":       ("kafka", "offsets",       ("topic",),              ()),
     # `params`가 두 번 나오는 것은 포트 시그니처 그대로다 — `query(entry, params)`.
     # 이름을 바꾸면 표와 포트가 갈라지고, 갈라진 것을 아무도 안 본다.
     "rest.query":          ("rest",  "query",         ("entry", "params"),     ()),

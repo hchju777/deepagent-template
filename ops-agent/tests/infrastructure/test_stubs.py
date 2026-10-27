@@ -123,6 +123,10 @@ async def test_stub_kafka는_포인터의_메시지_한_건을_주고_보존_범
     assert (await stub.message_at("old", 0, 3)).data["found"] is False                 # 보존 시작 앞 — 지워진 것
     assert (await stub.tail("old", limit=5)).data["messages"] == [{"b": 1}]            # 목록 시드와 같이 읽힌다
     assert (await stub.list_topics()).data == ["old", "t"]
+    # 보존 범위만(R3-5p ①-a) — 파티션 0 하나, 남은 메시지 수
+    assert (await stub.offsets("t")).data == {"topic": "t", "partitions": [{"partition": 0, "begin": 0, "end": 2}], "messages": 2}
+    assert (await stub.offsets("old")).data == {"topic": "old", "partitions": [{"partition": 0, "begin": 100, "end": 101}], "messages": 1}
+    assert (await stub.offsets("none")).status == "error"
     for topic, partition in (("none", 0), ("t", 1)):
         bad = await stub.message_at(topic, partition, 0)
         assert bad.status == "error", (topic, partition)
