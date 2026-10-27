@@ -825,6 +825,39 @@ async def test_걷기가_멈춘_자리를_못_봤으면_high는_medium이고_cav
     assert await loose["verify"](_state(case, verdict=verdict(), walk=Walk(stopped=unseen[0]))) == {"verify_problems": []}
 
 
+async def test_멈춘_홉의_입력을_못_읽었으면_확신_상한_low와_고정_caveat이고_유형은_그대로다(case):
+    """R3-5r ③ — 평가자 회신(10-30) 2: 못 읽은 상류 위의 하류를 탓하지 못하게(`<작업자 4>`: 측정 PC가 그 법인 Kafka에 안 닿아 메시지 홉이 읽기 실패인데
+    data_loss/processor high ×3). 멈춘 홉에서 나간 입력 홉이 `읽기 실패`거나 멈춤이 `입력을 다 못 봤다`면 low + caveat. inconclusive 강제는 안 한다(코드가 판정을
+    정하게 된다). 다른 가지의 읽기 실패는 아니다 — 멈춘 홉의 입력이 아니다. `cap_unseen_stop`(medium)보다 세다."""
+    from src.application.nodes import cap_unread_upstream
+    from src.domain.case import Hop, Walk
+
+    hops = [Hop(key="alarm:stats:L1", writer="W0", status="빈 배열", bad=True, evidence_id="t-1.e1"),
+            Hop(key="in:L1", depth=1, writer="W1", status="없음", bad=True, evidence_id="t-3.e1", parent="t-1.e1"),
+            Hop(key="t.raw[0]@5", kind="message", depth=2, status="읽기 실패 — KafkaConnectionError: Unable to bootstrap", evidence_id="t-4.e1", parent="t-3.e1")]
+    walk = Walk(hops=hops, stopped="입력을 다 못 봤다 — W1(읽기 실패 t.raw[0]@5)", stop_at="t-3.e1")
+    capped = cap_unread_upstream(verdict(), walk=walk)
+    assert capped.confidence == "low" and capped.verdict_type == "data_loss"
+    assert capped.caveats == ["상류를 못 읽었다 — t.raw[0]@5; 읽은 범위 안의 판정이라 확신 상한 low"]
+    assert cap_unread_upstream(verdict(confidence="medium"), walk=walk).confidence == "low"
+    low = verdict(confidence="low")
+    assert cap_unread_upstream(low, walk=walk) is low
+    # 멈춤만 `입력을 다 못 봤다`(scan 일부)여도 — 그 꼬리가 사실이다
+    partial = Walk(hops=hops[:2], stopped="입력을 다 못 봤다 — W1(in:{line} scan 3개 중 2개)", stop_at="t-3.e1")
+    assert cap_unread_upstream(verdict(), walk=partial).caveats == ["상류를 못 읽었다 — W1(in:{line} scan 3개 중 2개); 읽은 범위 안의 판정이라 확신 상한 low"]
+    # 다른 가지의 읽기 실패(멈춘 홉의 입력이 아니다)·읽기 실패 없음·걷기 없음은 그대로
+    aside = Walk(hops=[hops[0], hops[1], Hop(key="k9", depth=1, status="읽기 실패 — WRONGTYPE", evidence_id="t-5.e1", parent="t-1.e1")],
+                 stopped="키가 없다 — in:L1", stop_at="t-3.e1")
+    v = verdict()
+    assert cap_unread_upstream(v, walk=aside) is v and cap_unread_upstream(v, walk=Walk(hops=hops[:2], stopped="키가 없다 — in:L1", stop_at="t-3.e1")) is v
+    assert cap_unread_upstream(v, walk=None) is v
+    # verify 노드가 건다 — 못 본 멈춤(medium) 뒤에, 그보다 세다
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    patch = await nodes["verify"](_state(case, verdict=verdict(), walk=walk))
+    assert patch["verify_problems"] == [] and patch["verdict"].confidence == "low"
+    assert patch["verdict"].caveats[-1] == "상류를 못 읽었다 — t.raw[0]@5; 읽은 범위 안의 판정이라 확신 상한 low"
+
+
 # ── R3-5i ② — 설명이 붙은 증거 id 인용 ──
 
 def test_설명이_붙은_증거_id_인용은_그_id가_실재하면_id만으로_고치고_caveat에_적는다():

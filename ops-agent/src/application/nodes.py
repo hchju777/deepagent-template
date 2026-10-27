@@ -965,6 +965,22 @@ def cap_unseen_stop(verdict: Verdict, *, walk: Walk | None) -> Verdict:
                                       "caveats": verdict.caveats + [f"걷기가 멈춘 자리를 못 봤다 — {stopped}; 확신 상한 medium"]})
 
 
+def cap_unread_upstream(verdict: Verdict, *, walk: Walk | None) -> Verdict:
+    """멈춘 홉의 **입력을 못 읽었으면** 확신 상한 low + 고정 caveat(R3-5r ③ — 평가자 회신 10-30 2: 못 읽은 상류 위의 하류를 탓하지 못하게; inconclusive 강제는 반대
+    — 코드가 판정을 정하게 된다). 못 읽은 상류 = 멈춘 홉에서 나간 입력 홉 중 `읽기 실패`인 것(키·컬렉션·토픽 범위·포인터 메시지)과 멈춤 `입력을 다 못 봤다`
+    (scan 일부 포함). `cap_unseen_stop`(medium)과 같은 꼴이되 세다 — 멈춘 자리 너머를 못 본 것이 아니라 멈춘 자리의 입력 자체를 못 봤다(`<작업자 4>`: 측정 PC가
+    그 법인 Kafka에 안 닿아 메시지 홉이 읽기 실패인데 data_loss/처리기 high가 셋). 다른 가지의 읽기 실패는 아니다 — 그 홉의 입력이 아니다. 유형은 그대로.
+    바뀐 것이 없으면 같은 객체."""
+    if walk is None or verdict.confidence == "low":
+        return verdict
+    unread = list(dict.fromkeys(h.key for h in walk.hops if h.parent == walk.stop_at and h.status.startswith("읽기 실패")))
+    if not unread and not walk.stopped.startswith("입력을 다 못 봤다 — "):
+        return verdict
+    what = ", ".join(unread) if unread else walk.stopped.split(" — ", 1)[1]
+    return verdict.model_copy(update={"confidence": "low",
+                                      "caveats": verdict.caveats + [f"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low"]})
+
+
 def not_a_defect_problems(verdict: Verdict, *, walk: Walk | None, plan_tasks) -> list[str]:
     """`not_a_defect`(결함 아님)의 조건(R3-5d ⑤, 사람 결정 10-19 (3)) — "증거 id 하나 이상"은 모든 판정이 이미 지나 구분력이 없다. 15건에 대 보면
     정상 공백 3건만 지나고 12건이 탈락하는 조건: (a) 걷기가 `입력이 다 정상`에서 멈췄다(포인터 메시지 홉 포함) (b) 홉 표에 `나쁨`(단일값이 거르는 줄에
@@ -1223,8 +1239,8 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         if not problems:
             if not deps.check_discovery:
                 return {"verify_problems": [], **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
-            capped = cap_not_a_defect(cap_unseen_stop(
-                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))
+            capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(
+                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))
             return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.

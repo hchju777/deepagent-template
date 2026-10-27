@@ -3088,7 +3088,7 @@ CASES += [
  ("홉 표의 쓴 쪽 글자를 레포로 안 본다", ND, "        if len(h.candidates) > 1 and h.service and h.service not in by_repo:", "        if False:", [REPO_T]),
  ("못 본 멈춤에 상한을 안 건다", ND, "    if not (stopped.startswith(UNSEEN_STOPS) or \" 상한 — \" in stopped or \"의 자원을 못 읽었다 — \" in stopped):\n        return verdict", "    if True:\n        return verdict", [UNSEEN_T]),
  ("본 멈춤에도 상한을 건다", ND, "    if not (stopped.startswith(UNSEEN_STOPS) or \" 상한 — \" in stopped or \"의 자원을 못 읽었다 — \" in stopped):\n        return verdict", "    if False:\n        return verdict", [UNSEEN_T]),
- ("verify 노드가 못 본 멈춤 상한을 안 거친다", ND, "            capped = cap_not_a_defect(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))", "            capped = cap_not_a_defect(cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk))", [UNSEEN_T]),
+ ("verify 노드가 못 본 멈춤 상한을 안 거친다", ND, "            capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))", "            capped = cap_not_a_defect(cap_unread_upstream(cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))", [UNSEEN_T]),
  ("메시지 읽기 시간을 상한에서 안 뺀다", WK, "                aside += elapsed() - before", "                aside += 0.0", [TIME_T]),
 ]
 
@@ -3436,7 +3436,17 @@ CASES += [
  ("토픽 홉의 근거가 클래스의 자원 증거를 안 댄다", WK, "basis=f\"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev})\"", "basis=f\"{w}가 읽는 토픽 — {name}을 쓰는 클래스의 메시지 입력 ({ev})\"", [KEYED_T]),
  ("빈 토픽 멈춤의 둘째 칸이 본문이 아니다", WK, "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), *body_rungs(key_ev)]\n", "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), Rung(action=\"code.resources\", params={\"name\": w_, **params_}, evidence=key_ev)]\n", [KEYED_T, BOARD_KEYED_T]),
 ]
-assert len(CASES) >= 1100, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5r ③ — 멈춘 홉의 입력을 못 읽었으면 확신 low ──
+UNREAD_T = "tests/application/test_verdict.py::test_멈춘_홉의_입력을_못_읽었으면_확신_상한_low와_고정_caveat이고_유형은_그대로다"
+CASES += [
+ ("못 읽은 상류를 verify가 안 본다", ND, "            capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))\n", "            capped = cap_not_a_defect(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))\n", [UNREAD_T]),
+ ("다른 가지의 읽기 실패도 상류로 본다", ND, "    unread = list(dict.fromkeys(h.key for h in walk.hops if h.parent == walk.stop_at and h.status.startswith(\"읽기 실패\")))\n", "    unread = list(dict.fromkeys(h.key for h in walk.hops if h.status.startswith(\"읽기 실패\")))\n", [UNREAD_T]),
+ ("입력을 다 못 봤다 멈춤을 안 본다", ND, "    if not unread and not walk.stopped.startswith(\"입력을 다 못 봤다 — \"):\n        return verdict\n", "    if not unread:\n        return verdict\n", [UNREAD_T]),
+ ("못 읽은 상류의 상한이 medium이다", ND, "    return verdict.model_copy(update={\"confidence\": \"low\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", "    return verdict.model_copy(update={\"confidence\": \"medium\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", [UNREAD_T]),
+ ("못 읽은 상류가 유형을 inconclusive로 바꾼다", ND, "    return verdict.model_copy(update={\"confidence\": \"low\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", "    return verdict.model_copy(update={\"confidence\": \"low\", \"verdict_type\": \"inconclusive\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", [UNREAD_T]),
+]
+assert len(CASES) >= 1105, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
