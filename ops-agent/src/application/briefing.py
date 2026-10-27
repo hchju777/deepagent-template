@@ -270,6 +270,11 @@ def _oneline(text: str) -> str:
     return text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
 
 
+# 실패한 태스크는 증거를 못 만들어 인용할 수 없다 — 줄 끝에 그 사실(R3-5r ④, P-3). 측정 #27: 판정이 실패한 태스크 id를 인용해 "없는 id"로 되물었다(2건, 한 번에
+# ~108초). 성공한 태스크 id는 `resolve_task_citations`가 그 증거 id로 고친다 — 이건 고칠 증거가 없는 쪽이다.
+NOT_CITABLE = " · 증거 없음(인용 불가)"
+
+
 def tasks_block(state: CaseState, *, fold: bool = False) -> str:
     """`fold`면 **끝난** 태스크는 id·상태·goal 앞머리만 — 프롬프트 상한(`lead.fit_prompt`)에서 증거를 접어도 모자랄 때.
     대기 중인 태스크는 리드의 큐라 그대로 둔다."""
@@ -287,7 +292,7 @@ def tasks_block(state: CaseState, *, fold: bool = False) -> str:
             line = f"- {task.id} [{task.status}] {_oneline(task.goal)[:60]}"
             if not task.result_evidence_ids and task.action:
                 line += f" · 질의: {describe(task.action, task.params)}"
-            lines.append(line)
+            lines.append(line + (NOT_CITABLE if task.status == "error" and not task.result_evidence_ids else ""))
             continue
         # goal·error도 한 줄로 눕힌다. goal은 리드가 쓴 문장이라 개행이 들어올 수
         # 있고, error는 대상 시스템의 예외 메시지라 여러 줄인 것이 흔하다.
@@ -300,7 +305,7 @@ def tasks_block(state: CaseState, *, fold: bool = False) -> str:
         # (두 번째 전체 트레이스의 t-11 `kafka.tail`, "증거엔 안 보였다").
         if task.status != "pending" and not task.result_evidence_ids and task.action:
             line += f" · 질의: {describe(task.action, task.params)}"
-        lines.append(line)
+        lines.append(line + (NOT_CITABLE if task.status == "error" and not task.result_evidence_ids else ""))
     return "\n".join(lines)
 
 
@@ -778,7 +783,7 @@ def open_questions_block(state: CaseState) -> str:
                      f"projection·limit·path로 좁혀 다시 읽어라")
     failed = [t for t in state.plan_tasks if t.status == "error"]
     if failed:
-        lines.append(f"- 실패한 읽기 {len(failed)}건: " + "; ".join(f"{t.id} ({_oneline(t.error or '원인 불명')[:120]})"
+        lines.append(f"- 실패한 읽기 {len(failed)}건(증거 없음 — 인용 불가): " + "; ".join(f"{t.id} ({_oneline(t.error or '원인 불명')[:120]})"
                                                                 for t in failed))
     dup = [e for e in state.llm_errors if _DUP_MARK in e]
     if dup:

@@ -856,7 +856,15 @@ def caveat_truncated(verdict: Verdict, *, incomplete: set[str]) -> Verdict:
         f"잘린 표본 {e}을 인용했다 — 그 표본으로는 '없다'를 단정할 수 없다" for e in missing]})
 
 
-def verify_verdict(verdict: Verdict, *, citable: set[str], component_problem: Callable[[str], str | None]) -> list[str]:
+def _missing_citation(evidence_id: str, where: str, failed: frozenset[str]) -> str:
+    """없는 id의 문제 글 — 실패한 태스크의 id면 그 사실(R3-5r ④, P-3): 되묻는 글이 왜를 말해야 판정이 같은 id를 또 안 댄다(측정 #27: 없는 id 2가 그것)."""
+    if evidence_id in failed:
+        return f"실패한 태스크 id {evidence_id} 인용 ({where}) — 증거가 없다(인용 불가)"
+    return f"없는 id {evidence_id} 인용 ({where})"
+
+
+def verify_verdict(verdict: Verdict, *, citable: set[str], component_problem: Callable[[str], str | None],
+                   failed: frozenset[str] = frozenset()) -> list[str]:
     """LLM 없는 검사. 인용 우주는 **`state.evidence`**(리드가 실제로 본 것)다 — Store 전체를
     기준으로 삼으면 리드가 본 적도 없는 id를 인용해도 통과한다(규율 3).
 
@@ -873,7 +881,7 @@ def verify_verdict(verdict: Verdict, *, citable: set[str], component_problem: Ca
             continue
         for evidence_id in link.evidence_ids:
             if evidence_id not in citable:
-                problems.append(f"없는 id {evidence_id} 인용 ({link.component})")
+                problems.append(_missing_citation(evidence_id, link.component, failed))
     for link in _links(verdict):
         problem = component_problem(link.component)
         if problem:
@@ -881,7 +889,7 @@ def verify_verdict(verdict: Verdict, *, citable: set[str], component_problem: Ca
     # 결함 아님의 근거(`basis`)도 리드가 인용한 id다(규율 3).
     for evidence_id in verdict.basis:
         if evidence_id not in citable:
-            problems.append(f"없는 id {evidence_id} 인용 (basis)")
+            problems.append(_missing_citation(evidence_id, "basis", failed))
     return problems
 
 
@@ -1232,7 +1240,8 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             verdict = drop_foreign_alternates(verdict, component_problem)
         changed = verdict is not state.verdict
         citable = state.evidence_ids()
-        problems = verify_verdict(verdict, citable=citable, component_problem=component_problem)
+        problems = verify_verdict(verdict, citable=citable, component_problem=component_problem,
+                                  failed=frozenset(t.id for t in state.plan_tasks if t.status == "error"))
         if deps.check_discovery:
             # 결함 아님(R3-5d ⑤)은 걷기가 지킨다 — 대본 경로는 걷기가 없다.
             problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)

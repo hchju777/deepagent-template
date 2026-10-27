@@ -1275,8 +1275,8 @@ CASES += [
   '            reasons = notes',
   [f"{V}::test_판정자의_비LLM_사유는_caveat에만_남는다"]),
  ("없는 id 인용을 안 본다", ND,
-  '            if evidence_id not in citable:\n                problems.append(f"없는 id',
-  '            if False:\n                problems.append(f"없는 id',
+  '            if evidence_id not in citable:\n                problems.append(_missing_citation(evidence_id, link.component, failed))',
+  '            if False:\n                problems.append(_missing_citation(evidence_id, link.component, failed))',
   [f"{V}::test_verify는_리드가_본_증거만_인용으로_친다"]),
  ("잘린 인용에 caveat을 안 단다", ND,
   '    missing = sorted({e for e in cited if e in incomplete and not _id_mentioned(e, verdict.caveats)})',
@@ -3446,7 +3446,17 @@ CASES += [
  ("못 읽은 상류의 상한이 medium이다", ND, "    return verdict.model_copy(update={\"confidence\": \"low\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", "    return verdict.model_copy(update={\"confidence\": \"medium\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", [UNREAD_T]),
  ("못 읽은 상류가 유형을 inconclusive로 바꾼다", ND, "    return verdict.model_copy(update={\"confidence\": \"low\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", "    return verdict.model_copy(update={\"confidence\": \"low\", \"verdict_type\": \"inconclusive\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", [UNREAD_T]),
 ]
-assert len(CASES) >= 1105, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5r ④ — 실패한 태스크는 인용 불가 ──
+BRIEF_FAIL_T = "tests/application/test_briefing.py::test_실패한_태스크는_오류가_적힌다"
+FAIL_CITE_T = "tests/application/test_verdict.py::test_실패한_태스크_id를_인용하면_증거가_없어_인용_불가라고_되묻는다"
+CASES += [
+ ("실패한 태스크 줄에 인용 불가를 안 적는다", B, "NOT_CITABLE = \" · 증거 없음(인용 불가)\"\n", "NOT_CITABLE = \"\"\n", [BRIEF_FAIL_T]),
+ ("열린 질문의 실패한 읽기 줄이 인용 불가를 안 적는다", B, "        lines.append(f\"- 실패한 읽기 {len(failed)}건(증거 없음 — 인용 불가): \" + \"; \".join(", "        lines.append(f\"- 실패한 읽기 {len(failed)}건: \" + \"; \".join(", [BRIEF_FAIL_T]),
+ ("실패한 태스크 id 인용을 없는 id로만 말한다", ND, "    if evidence_id in failed:\n        return f\"실패한 태스크 id {evidence_id} 인용 ({where}) — 증거가 없다(인용 불가)\"\n", "    if False:\n        return f\"실패한 태스크 id {evidence_id} 인용 ({where}) — 증거가 없다(인용 불가)\"\n", [FAIL_CITE_T]),
+ ("verify가 실패한 태스크 목록을 안 넘긴다", ND, "                                  failed=frozenset(t.id for t in state.plan_tasks if t.status == \"error\"))\n", "                                  failed=frozenset())\n", [FAIL_CITE_T]),
+]
+assert len(CASES) >= 1109, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

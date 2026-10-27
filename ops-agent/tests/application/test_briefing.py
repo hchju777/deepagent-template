@@ -184,6 +184,11 @@ def test_실패한_태스크는_오류가_적힌다(case):
         task("t-1", status="error", error="ConnectTimeout")])
     assert "[error]" in briefing.tasks_block(state)
     assert "ConnectTimeout" in briefing.tasks_block(state)
+    # 증거가 없어 인용할 수 없다는 사실을 줄 끝에(R3-5r ④, P-3 — 측정 #27: 없는 id 2가 실패한 태스크 id였다). 접은 줄과 열린 질문의 실패한 읽기 줄도.
+    assert briefing.tasks_block(state).endswith(" · 증거 없음(인용 불가)") and " · 증거 없음(인용 불가)" in briefing.tasks_block(state, fold=True)
+    assert "- 실패한 읽기 1건(증거 없음 — 인용 불가): t-1 (ConnectTimeout)" in briefing.open_questions_block(state)
+    fine = CaseState(case=case, plan_tasks=[task("t-2", status="ok", result_evidence_ids=["t-2.e1"])])
+    assert "인용 불가" not in briefing.tasks_block(fine) and "인용 불가" not in briefing.tasks_block(fine, fold=True)
 
 
 def test_아직_없는_것은_없다고_적는다(case):
@@ -1147,7 +1152,7 @@ def test_열린_질문_블록은_잘린_증거_실패한_읽기_거부된_중복
                       llm_errors=["t-7: 이미 한 읽기를 또 냈다 — 받지 않는다 (redis.get key=k) — 그 결과는 t-1.e1"])
     text = briefing.open_questions_block(state)
     assert "잘린 증거 1건: t-2.e1" in text and "없다" in text          # 잘린 표본으로 "없다"를 주장할 수 없다
-    assert "실패한 읽기 1건: t-3" in text and "프록시 경유 의심" in text
+    assert "실패한 읽기 1건(증거 없음 — 인용 불가): t-3" in text and "프록시 경유 의심" in text
     assert "같은 읽기를 1번 다시 냈다" in text and "t-1.e1" in text
     assert briefing.open_questions_block(CaseState(case=case)) == "(없음)"
 

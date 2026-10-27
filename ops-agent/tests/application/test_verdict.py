@@ -858,6 +858,21 @@ async def test_멈춘_홉의_입력을_못_읽었으면_확신_상한_low와_고
     assert patch["verdict"].caveats[-1] == "상류를 못 읽었다 — t.raw[0]@5; 읽은 범위 안의 판정이라 확신 상한 low"
 
 
+async def test_실패한_태스크_id를_인용하면_증거가_없어_인용_불가라고_되묻는다(case):
+    """R3-5r ④(P-3) — 측정 #27: 없는 id 2가 실패한 태스크 id였다. 태스크 줄이 `증거 없음(인용 불가)`라 말하고(briefing), 그래도 인용하면 verify의 문제가
+    "없는 id"가 아니라 그 사실이다 — 되묻는 글이 왜를 말해야 같은 실수를 안 한다. 성공한 태스크 id는 전처럼(`resolve_task_citations`가 먼저 고친다)."""
+    from src.application.nodes import verify_verdict
+
+    got = verify_verdict(verdict(root_cause=cause("sink", "t-9"), basis=["t-9"]), citable={"t-1.e1"}, component_problem=lambda c: None,
+                         failed=frozenset({"t-9"}))
+    assert got == ["실패한 태스크 id t-9 인용 (sink) — 증거가 없다(인용 불가)", "실패한 태스크 id t-9 인용 (basis) — 증거가 없다(인용 불가)"]
+    assert verify_verdict(verdict(root_cause=cause("sink", "t-9")), citable={"t-1.e1"}, component_problem=lambda c: None) == ["없는 id t-9 인용 (sink)"]
+    tasks = [task("t-1", status="ok", result_evidence_ids=["t-1.e1"]), task("t-9", status="error", error="ConnectTimeout")]
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
+    patch = await nodes["verify"](_state(case, plan_tasks=tasks, verdict=verdict(root_cause=cause("sink", "t-9"))))
+    assert patch["verify_problems"] == ["실패한 태스크 id t-9 인용 (sink) — 증거가 없다(인용 불가)"]
+
+
 # ── R3-5i ② — 설명이 붙은 증거 id 인용 ──
 
 def test_설명이_붙은_증거_id_인용은_그_id가_실재하면_id만으로_고치고_caveat에_적는다():
