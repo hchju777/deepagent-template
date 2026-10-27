@@ -796,3 +796,18 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
   보존 범위 밖이 아니라 **측정 PC에서 그 법인 Kafka까지 안 닿는다**. 보이는 나쁨은 처리기가 쓴 `<f>='-'` 두 홉뿐이라 data_loss/processor ×2, inconclusive ×1.
 - (d) `<AGV 2건>` A/B `--runs 3`은 사람 결정으로 안 돌렸다.
 - 방향: R3-5o. 항목·자리는 [plan-12a-r2-r4.md](plan-12a-r2-r4.md) R3-5o.
+
+## R3-5o ① 뒤 측정 #26에서 볼 것 (10-27)
+
+- 같은 설정, 토폴로지 변경 없음, config 그대로(판정 `max_tokens` 16,000 유지 — 바꾸기로 했다면 그 값을 같이). 트리 교체(브랜치 head). **`code graph` 재생성:
+  불필요** — 리드의 재시도만 바뀌었다.
+- (a) LLM 없이 `case walk`는 안 해도 된다(걷기 변경 없음).
+- (b) LLM 조사 — 지난번 15건: 유형·확신·caveat. ① **degraded 수와 사유 줄**(지난번 1). length 턴마다 받은 글 종류(빈 응답/잘린 JSON)·output_tokens와 그 뒤 사슬 —
+  짧게 첫째가 살린 수(지난번 8/9), **짧게 둘째가 살린 수**(새 것), 둘 다 length면 그 케이스. length 횟수(지난번 10/42)·회당 시간(84초), 없는 id 되묻기 수(0)·
+  인용 정리 수(1)·`not_a_defect` 수(1), 정답 아는 8건의 점수(지난번 7/24).
+- (c) ③ `<PGM>` inconclusive 2의 **caveat 줄과 basis(증거 id)** — 무엇을 못 봐서 inconclusive로 갔는지. 걷기 머리줄(`멈춤:`)도 한 줄.
+- (d) `<작업자 4>`는 그 법인 Kafka가 닿는 자리에서 돌렸다면 메시지 홉 상태와 판정, 아니면 지난번과 같다는 한 줄. `<AGV 2건>` `llm ab --notes-from … --runs 3`은
+  사람 결정 — 돌리면 요약 두 줄씩.
+- P1-6(엔티티 스키마 검사 거름)·P1-7(레지스트리 풀기)·P1-8(런타임 처리기의 속성)은 보류 — 손대지 않았다.
+- 보고: (b) 15건의 유형·확신·caveat 줄, degraded 수·사유, length 턴의 종류·사슬·짧게 둘째가 살린 수, 되묻기·인용 정리·점수; (c) `<PGM>` inconclusive의 caveat·
+  basis·멈춤; (d) 돌렸으면 작업자 4·AGV.
