@@ -123,6 +123,8 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     quiet = _seeds(NOW, "source-missing-quiet")
     assert "alarm:source:L1" not in quiet["redis"] and quiet["kafka"]["mx.alarm.raw"] == [] and len(quiet["kafka"]["mx.alarm.main"]) == 5
     assert "class SourceSink" in CORE_FILES["processor/source_sink.py"] and 'kafka["consumer"]["topic"]["topic1"]' in CORE_FILES["processor/source_sink.py"]
+    # 사이트 층에만 있는 토픽(topic3)을 config 경로 호출로 구독한다(R3-5s ③ — 사내 `<AGV 클래스>`의 모양)
+    assert 'self.cfg.get("infra", "kafka", "consumer", "topic", "topic3")' in CORE_FILES["processor/source_sink.py"]
     assert not [k for k in missing["redis"] if k.startswith("alarm:source:")]
     assert json.loads(blank["redis"]["alarm:source:L1"]) == []
     for s in (missing, blank):

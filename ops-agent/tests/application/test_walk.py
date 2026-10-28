@@ -989,6 +989,14 @@ async def test_키가_없으면_인덱스의_쓰는_클래스와_그_클래스_�
     assert walk.rungs[0] == Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-5.e1") and walk.reads == 4
     walk = (await run_walk(_state(), runner=_Reads(none_topic), subscriptions={}, **kw))["walk"]
     assert walk.stopped.endswith("구독 토픽 없음(클래스 코드 · 서비스 선언 0개))")
+    # 값으로 안 풀린 config 경로(`…consumer.topic.<이름>` — 사이트 행이 못 바꿨다, R3-5s ③)는 토픽이 아니다 — 주 한 줄, 읽지 않는다
+    pathed = {**table, ("code.resources", "W1"): _res("W1", [("infra.kafka.consumer.topic.site_topic", "topic"), ("t.raw", "topic")])}
+    walk = (await run_walk(_state(), runner=_Reads(pathed), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert [h.key for h in walk.hops[2:]] == ["t.raw"] and walk.reads == 5
+    assert walk.notes == ["W1: 토픽 경로 infra.kafka.consumer.topic.site_topic의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다"]
+    only_path = {**table, ("code.resources", "W1"): _res("W1", [("infra.kafka.consumer.topic.site_topic", "topic")])}
+    walk = (await run_walk(_state(), runner=_Reads(only_path), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 토픽 경로 1개의 값을 모름(사이트 선언에 없음))"
     # 그 클래스의 `code.resources`가 실패하면 토픽을 모른다 — 주 한 줄, 첫 칸은 전처럼 그 질의
     walk = (await run_walk(_state(), runner=_Reads({k: v for k, v in table.items() if k != ("code.resources", "W1")}), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
     assert walk.notes == ["W1: code.resources 실패 — 대본 없음 — 구독 토픽을 모른다"]

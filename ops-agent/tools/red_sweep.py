@@ -3428,7 +3428,7 @@ CASES += [
 
 # ── 12a-R3-5r ② — 없는 키를 쓰는 클래스의 구독 토픽은 그 클래스 코드에서 ──
 CASES += [
- ("쓰는 클래스의 토픽을 서비스 선언에서 읽는다", WK, "                            topics = sorted({n for n, k in inputs_in(rtext) if k == \"topic\"})\n", "                            topics = sorted({t for s in cands for t in subscribed.get(s, ())})\n", [KEYED_T, BOARD_KEYED_T]),
+ ("쓰는 클래스의 토픽을 서비스 선언에서 읽는다", WK, "                            listed = sorted({n for n, k in inputs_in(rtext) if k == \"topic\"})\n", "                            listed = sorted({t for s in cands for t in subscribed.get(s, ())})\n", [KEYED_T, BOARD_KEYED_T]),
  ("구독 토픽 0을 조용히 넘긴다", WK, "                                remember(f\"{w}: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 {declared_n}개는 그 클래스의 것인지 몰라 안 읽는다\")\n", "                                pass\n", [KEYED_T, BOARD_PALETTE_T]),
  ("code.resources 실패를 조용히 넘긴다", WK, "                            remember(f\"{w}: code.resources 실패 — {(rgot.error or '증거 없음').splitlines()[0][:120]} — 구독 토픽을 모른다\")\n", "                            pass\n", [KEYED_T]),
  ("멈춤 꼬리에 서비스 선언 수를 안 적는다", WK, "                                tail_note = f\"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)\"\n", "                                tail_note = \"구독 토픽 없음\"\n", [KEYED_T, BOARD_PALETTE_T]),
@@ -3488,7 +3488,19 @@ CASES += [
  ("프로퍼티를 읽는 가족 메서드를 부르는 쪽으로 안 본다", IDX, "            if fn.class_sid is not None and any(ast.unparse(d).endswith(\"property\") for d in getattr(node, \"decorator_list\", [])):\n                name = node.name\n", "            if False:\n                name = node.name\n", [OVERRIDE_T]),
  ("그 이름을 다시 정의한 후손도 읽는 쪽으로 센다", IDX, "                family += [d for d in self.descendants(fn.class_sid) if d in self.classes and name not in self.classes[d].methods]\n", "                family += [d for d in self.descendants(fn.class_sid) if d in self.classes]\n", [OVERRIDE_T]),
 ]
-assert len(CASES) >= 1124, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5s ③ — config 경로 호출은 토픽 읽기 자원, 사이트 행이 key_path → 값 ──
+TOPIC_PATH_T = "tests/knowledge/test_index.py::test_config_경로_호출은_그_클래스의_토픽_읽기_자원이고_GBM_이름에_없으면_경로가_이름이다"
+SITE_RENAMES_T = "tests/knowledge/test_flow.py::test_덮은_값_행은_인덱스의_자원_이름을_바꿀_표도_준다"
+CASES += [
+ ("config 경로 호출을 토픽 읽기로 안 적는다", IDX, "            for call, key_path, line in _topic_path_calls(node):\n", "            for call, key_path, line in []:\n", [TOPIC_PATH_T, BOARD_KEYED_T]),
+ ("발행 경로도 구독으로 적는다", IDX, "            if len(parts) != len(call.args) or len(parts) < 3 or parts[-3:-1] != [\"consumer\", \"topic\"]:\n", "            if len(parts) != len(call.args) or len(parts) < 3 or parts[-2] != \"topic\":\n", [TOPIC_PATH_T]),
+ ("GBM 이름에 있는 경로도 key_path를 이름으로 적는다", IDX, "                name = known.value if known is not None else key_path\n", "                name = key_path\n", [TOPIC_PATH_T]),
+ ("사이트 행이 토픽 key_path를 안 바꾼다", FL, "    for key_path, values in by_path.items():\n        if len(values) == 1:\n            out[(\"topic\", key_path)] = next(iter(values))\n", "    for key_path, values in by_path.items():\n        if False:\n            out[(\"topic\", key_path)] = next(iter(values))\n", [SITE_RENAMES_T, BOARD_KEYED_T]),
+ ("서비스마다 값이 다른 key_path도 바꾼다", FL, "        if len(values) == 1:\n            out[(\"topic\", key_path)] = next(iter(values))\n", "        if values:\n            out[(\"topic\", key_path)] = sorted(values)[0]\n", [SITE_RENAMES_T]),
+ ("못 푼 토픽 경로를 토픽으로 읽는다", WK, "                            topics = [n for n in listed if \".topic.\" not in n]\n", "                            topics = list(listed)\n", [KEYED_T]),
+]
+assert len(CASES) >= 1130, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

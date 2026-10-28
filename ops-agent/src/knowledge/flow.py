@@ -1273,4 +1273,13 @@ def site_renames(overrides: list[dict]) -> dict[tuple[str, str], str]:
         kind, base, value = str(row.get("kind", "")), row.get("base"), str(row.get("value", ""))
         if kind and base and value and str(base) != value:
             out[(kind, str(base))] = value
+    # 토픽 행은 key_path → 값도 준다(R3-5s ③): GBM 이름에 없던 토픽을 코드가 `config.get(…, "consumer", "topic", "<이름>")`로 구독하면 인덱스 자원의 이름이 그
+    # key_path라서(`_topic_path_calls`). 같은 key_path를 서비스마다 다른 값으로 쓰면(측정 #16 P0-b) 어느 것이라 못 하니 안 바꾼다 — 걷기가 주로 적는다.
+    by_path: dict[str, set[str]] = {}
+    for row in overrides:
+        if str(row.get("kind", "")) == "topic" and row.get("key_path") and row.get("value"):
+            by_path.setdefault(str(row["key_path"]), set()).add(str(row["value"]))
+    for key_path, values in by_path.items():
+        if len(values) == 1:
+            out[("topic", key_path)] = next(iter(values))
     return out

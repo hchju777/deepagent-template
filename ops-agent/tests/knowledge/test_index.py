@@ -1095,3 +1095,30 @@ async def test_하위_클래스가_재정의한_프로퍼티나_메서드의_부
     assert res("Child4.target") == [("reads", "")]                     # 부모는 쓰고 손자는 읽는다 — 갈리면 읽기(보수)
     assert res("Base6.target") == [("writes", "save")]                 # target을 다시 정의한 후손의 읽기는 이 프로퍼티의 것이 아니다
     assert res("Child6.target") == []                                  # "other"는 자원이 아니다
+
+
+# ── R3-5s ③ — config 경로 호출(`…, "consumer", "topic", "<이름>"`)은 그 클래스의 토픽 읽기 자원(측정 #29 재측정 1부: 인덱스에 [topic] 0) ──
+
+TOPICS = {'tp/__init__.py': '', 'tp/jobs.py': (
+    'class Agv:\n    def run(self):\n        self.kafka_collector.subscribe_topic(topic=self.config.get("infra", "kafka", "consumer", "topic", "agv_topic"), group="g")\n'
+    '        self.kafka_collector.subscribe_topic(topic=self.config.get("infra", "kafka", "consumer", "topic", "site_topic"), group="g")\n\n\n'
+    'class Producer:\n    def run(self):\n        self.producer.send(self.config.get("infra", "kafka", "producer", "topic", "out_topic"), {})\n\n\n'
+    'class Partial:\n    def run(self):\n        names = self.config.get("infra", "kafka", "consumer", "topic")\n        return self.cfg.get("consumer", "topic", name)\n')}
+TOPICS_NAMES = [Name("topic", "x.agv", "infra.kafka.consumer.topic.agv_topic", "consumes")]
+
+
+async def test_config_경로_호출은_그_클래스의_토픽_읽기_자원이고_GBM_이름에_없으면_경로가_이름이다():
+    """측정 #29 재측정 1부(평가자 10-31): 인덱스에 `[topic]` 자원이 0 — 사내 토픽은 사이트 층에만 선언돼 GBM 이름으로 선 인덱스가 `kafka_collector.subscribe_topic(
+    topic=self.config.get("infra", "kafka", "consumer", "topic", "<x>_topic"), …)` 줄을 자원으로 못 봤다. 요청: 그 호출을 그 클래스의 토픽 읽기 자원으로(경로가
+    consumer라 구독 — 동사표 불필요). GBM 이름에 그 key_path가 있으면 값으로(전처럼), 없으면 key_path가 이름(`via=path`) — 사이트 행이 바꾼다(`site_renames`).
+    producer 경로·이름 없는 경로는 아니다."""
+    idx = await _index(TOPICS, TOPICS_NAMES)
+
+    def res(qual):
+        return [(r.kind, r.name, r.direction, r.via) for r in idx.symbols[_sid(idx, f"tp.jobs.{qual}")].resources]
+
+    assert res("Agv.run") == [("topic", "x.agv", "reads", "key"), ("topic", "infra.kafka.consumer.topic.site_topic", "reads", "path")]
+    assert res("Producer.run") == [] and res("Partial.run") == []
+    renamed = idx.renamed({("topic", "infra.kafka.consumer.topic.site_topic"): "x.site"})
+    assert [(r.name, r.via) for r in renamed.symbols[_sid(idx, "tp.jobs.Agv.run")].resources] == [("x.agv", "key"), ("x.site", "path")]
+    assert idx.readers("topic", "infra.kafka.consumer.topic.site_topic") == [_sid(idx, "tp.jobs.Agv.run")]

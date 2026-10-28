@@ -805,6 +805,21 @@ def _handoff_callers(fn: "_Func", resolve, callers, is_ctor, depth: int, seen: f
     return sorted(found)[0]
 
 
+def _topic_path_calls(node: ast.AST) -> list[tuple[ast.Call, str, int]]:
+    """함수 본문의 config 경로 호출 중 소비 토픽 경로 — `config.get("infra", "kafka", "consumer", "topic", "<이름>")`처럼 문자열 인자만이고 끝 셋이
+    `consumer`, `topic`, <이름>인 것 → `(호출, key_path, 줄)`. 발행 경로(producer)는 아니다 — 평가자 요청은 구독뿐이고, 발행 쪽은 config 선언으로 안다."""
+    out: list[tuple[ast.Call, str, int]] = []
+    for st in _body_walk(getattr(node, "body", [])):
+        for call in ast.walk(st):
+            if not isinstance(call, ast.Call) or not _is_config_call(call) or call.keywords:
+                continue
+            parts = [a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            if len(parts) != len(call.args) or len(parts) < 3 or parts[-3:-1] != ["consumer", "topic"]:
+                continue
+            out.append((call, ".".join(parts), call.lineno))
+    return out
+
+
 def _self_reads(node: ast.AST) -> list[tuple[str, int]]:
     """함수 본문이 읽는 `self.<속성>`들 — `(속성, 줄)`, 처음 나온 자리, 대입(`self.x = …`)은 아니다."""
     out: dict[str, int] = {}
@@ -1700,6 +1715,7 @@ class _Resolver:
         by_value: dict[str, Name] = {}
         for known in list(self.names):
             by_value.setdefault(known.value, known)
+        topic_paths: dict[str, Name] = {n.key_path: n for n in self.names if n.kind == "topic"}
         alias_of: dict[str, list[str]] = {}
         for ident, known in aliases.items():
             alias_of.setdefault(known.value, []).append(ident)
@@ -1810,6 +1826,14 @@ class _Resolver:
                     found.append(r)
 
             _collect_reads(segment, body_start, fn.mod.path, "확실", self.names, aliases, add)
+            # config 경로 호출 `config.get(…, "consumer", "topic", "<이름>")`은 그 클래스의 **토픽 읽기**다(R3-5s ③, 측정 #29 재측정 1부: 인덱스에 [topic] 0 — 사내
+            # 토픽은 사이트 층에만 선언돼 GBM 이름으로 선 인덱스가 그 줄을 못 봤다). 경로가 consumer라 구독이다(동사표 불필요). GBM 이름에 그 key_path가 있으면
+            # 값(위 `_collect_reads`가 이미 적었다 — 같은 줄이면 안 겹치게), 없으면 key_path가 이름이고 사이트 행이 바꾼다(`flow.site_renames` → `Index.renamed`).
+            for call, key_path, line in _topic_path_calls(node):
+                known = topic_paths.get(key_path)
+                name = known.value if known is not None else key_path
+                if not any(r.kind == "topic" and r.name == name and r.line == line for r in found):
+                    found.append(Resource("topic", name, "reads", line, "path"))
             # `self.<속성>` 읽기 — 그 속성의 리터럴은 구체 클래스마다 다를 수 있다(부모의 `config.get("redis_key", self.redis_key)`). 가족(자기·조상·후손)이
             # 정의한 리터럴마다 `attr:<속성>:<클래스>`로 붙이고, 어느 것인지는 질의가 그 클래스의 MRO로 고른다(R3-5f ③).
             if fn.class_sid is not None:

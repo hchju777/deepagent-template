@@ -339,7 +339,8 @@ def test_요약과_권고():
     g = graph()
     s = flow.summary(g)
     assert s["nodes"] > 5 and s["links"] > 5 and s["repo_level"] > 0
-    assert s["unreferenced"] == 3, "line_state와 gumi 층의 감사 토픽 둘(dt-core·dt-api)은 config에만 있다 — 권고가 아니라 요약의 숫자다"
+    # dt-core의 감사 토픽은 R3-5s ③부터 SourceSink가 config 경로 호출로 구독해 코드 줄이 있다 — config에만 있는 것은 line_state와 dt-api의 감사 토픽.
+    assert s["unreferenced"] == 2, "line_state와 dt-api의 감사 토픽은 config에만 있다 — 권고가 아니라 요약의 숫자다"
     advice = "\n".join(flow.advise(g, TOPOLOGY))
     # 측정판은 processor/·sink/ 디렉터리로 갈리므로 공유 코드 줄이 없다. "path를 채워라"와
     # "안 쓰는 이름"은 사내에서 둘 다 틀린 권고였다 — 다시 나오면 안 된다.
@@ -855,8 +856,15 @@ def test_덮은_값_행은_인덱스의_자원_이름을_바꿀_표도_준다():
              "services": ["sink"], "relation": None},
             {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic2", "value": "mx.alarm.main",
              "base": "mx.alarm.main", "services": ["sink"], "relation": "consumes"}]
-    assert flow.site_renames(rows) == {("group", "mx-core"): "gumi-mx-core"}
+    # 토픽 행은 key_path → 값도 준다(R3-5s ③): GBM 이름에 없던 토픽을 코드가 `config.get(…, "consumer", "topic", "<이름>")`로 구독하면 인덱스 자원의 이름이 그
+    # key_path라서. 같은 key_path를 서비스마다 다른 값으로 쓰면(측정 #16) 못 고른다 — 안 바꾼다.
+    assert flow.site_renames(rows) == {("group", "mx-core"): "gumi-mx-core", ("topic", "infra.kafka.consumer.topic.topic2"): "mx.alarm.main"}
     assert flow.site_renames([]) == {}
+    split = rows + [{"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic2", "value": "other.main", "base": None, "services": ["batch"],
+                     "relation": "consumes"},
+                    {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic3", "value": "gumi.alarm.audit", "base": None, "services": ["sink"],
+                     "relation": "consumes"}]
+    assert flow.site_renames(split) == {("group", "mx-core"): "gumi-mx-core", ("topic", "infra.kafka.consumer.topic.topic3"): "gumi.alarm.audit"}
 
 
 def test_덮은_값_입히기는_두_번_해도_같다():

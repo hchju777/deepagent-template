@@ -335,13 +335,17 @@ def test_원천_키가_없으면_인덱스의_쓰는_클래스와_구독_토픽�
     rows, notes, stopped, rungs = _walk(board, monkeypatch, "source-missing")
     assert rows[:2] == ["alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data)", "alarm:domain:L1 | DomainBuilder [batch] | 정상 — record: 행 4 · 필드 2"]
     assert rows[2] == PALETTE_ROW and rows[3] == "alarm:source:L1 | SourceSink [processor] | 없음"
-    assert rows[4:] == ["mx.alarm.raw | SourceSink [processor] 구독 | 보존 범위 0~5 · 남은 메시지 5"]       # 클래스 코드의 토픽 하나 — 서비스 선언 셋은 안 읽는다
-    assert stopped == "키가 없다 — alarm:source:L1(쓰는 SourceSink [processor] · 구독 mx.alarm.raw 범위 0~5, 남은 메시지 5)"
+    # 클래스 코드의 토픽 둘 — GBM 선언 topic1(mx.alarm.raw)과 사이트 층에만 있는 topic3(gumi.alarm.audit — 코드는 `cfg.get("infra", "kafka", "consumer",
+    # "topic", "topic3")` 경로 호출, R3-5s ③: 인덱스엔 key_path로 섰다가 사이트 행이 이름을 바꾼다). 브로커에 없는 토픽은 `읽기 실패`(모르는 것). 서비스 선언
+    # 셋(main 포함)은 안 읽는다.
+    assert rows[4].startswith("gumi.alarm.audit | SourceSink [processor] 구독 | 읽기 실패 — ") and "토픽이 없거나" in rows[4]
+    assert rows[5:] == ["mx.alarm.raw | SourceSink [processor] 구독 | 보존 범위 0~5 · 남은 메시지 5"]
+    assert stopped == "키가 없다 — alarm:source:L1(쓰는 SourceSink [processor] · 구독 gumi.alarm.audit 범위 읽기 실패 / 구독 mx.alarm.raw 범위 0~5, 남은 메시지 5)"
     body = f"code.read line={_at('processor/source_sink.py', 'class SourceSink')} path='processor/source_sink.py' service='processor'"
     assert rungs[:2] == [body, "kafka.tail limit=5 topic='mx.alarm.raw'"] and notes == [PALETTE_NOTE]
     rows, notes, stopped, rungs = _walk(board, monkeypatch, "source-missing-quiet")
-    assert rows[3] == "alarm:source:L1 | SourceSink [processor] | 없음"
-    assert rows[4:] == ["mx.alarm.raw | SourceSink [processor] 구독 | 비었다 — 보존 범위 0~0 · 남은 메시지 0"]
+    assert rows[3] == "alarm:source:L1 | SourceSink [processor] | 없음" and rows[4].startswith("gumi.alarm.audit | SourceSink [processor] 구독 | 읽기 실패 — ")
+    assert rows[5:] == ["mx.alarm.raw | SourceSink [processor] 구독 | 비었다 — 보존 범위 0~0 · 남은 메시지 0"]
     assert stopped == "구독 토픽이 비었다 — mx.alarm.raw(SourceSink [processor])"
     assert rungs[:2] == ["kafka.tail limit=5 topic='mx.alarm.raw'", body]
 

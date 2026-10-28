@@ -153,7 +153,8 @@ def run(cfg, consumer, producer, redis):
         redis.set(cfg["redis_key"]["heartbeat"].format(service="processor"), now())
 ''',
     # 원천 키(`alarm:source:{line}`)를 **쓰는** 클래스(R3-5p ①-c) — 원천 토픽을 구독해 행 묶음을 키로 쓴다. `source-missing`에서 걷기가 인덱스의 쓰기 자원과
-    # 선언으로 이 클래스를 찾고, 그 서비스(processor)가 config로 구독하는 토픽의 보존 범위를 홉으로 적는다.
+    # 선언으로 이 클래스를 찾고, 그 클래스 코드가 구독하는 토픽의 보존 범위를 홉으로 적는다(R3-5r ②). 감사 토픽(topic3)은 사이트 층에만 있고 코드는 config 경로
+    # 호출로 구독한다 — 사내 `<AGV 클래스>`의 모양(R3-5s ③): 인덱스엔 key_path로 섰다가 사이트 행이 이름을 바꾼다.
     "processor/source_sink.py": '''"""alarm_raw를 받아 라인별 원천 묶음 키를 쓴다."""
 
 
@@ -163,6 +164,7 @@ class SourceSink:
 
     def run(self):
         kafka = self.cfg["infra"]["kafka"]
+        self.consumer.subscribe(self.cfg.get("infra", "kafka", "consumer", "topic", "topic3"), group=kafka["consumer"]["group_id"])
         for msg in self.consumer.subscribe(kafka["consumer"]["topic"]["topic1"], group=kafka["consumer"]["group_id"]):
             self.redis.set(self.cfg["redis_key"]["alarm_source"].format(line=msg["line"]), msg["rows"])
 ''',

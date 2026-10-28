@@ -616,10 +616,19 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                             tail_note, rev = "구독 토픽 모름(code.resources 실패)", ""
                         else:
                             body_at = class_at(rtext)
-                            topics = sorted({n for n, k in inputs_in(rtext) if k == "topic"})
+                            listed = sorted({n for n, k in inputs_in(rtext) if k == "topic"})
+                            # 값으로 안 풀린 config 경로(`…consumer.topic.<이름>`, R3-5s ③ — 사이트 행이 못 바꿨다: 선언이 없거나 서비스마다 값이 다르다)는 토픽이
+                            # 아니다 — 주 한 줄, 읽지 않는다(그 이름으로 범위를 읽으면 "없는 토픽"이 된다).
+                            topics = [n for n in listed if ".topic." not in n]
+                            for path in (n for n in listed if ".topic." in n):
+                                remember(f"{w}: 토픽 경로 {path}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다")
                             if not topics:
-                                remember(f"{w}: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 {declared_n}개는 그 클래스의 것인지 몰라 안 읽는다")
-                                tail_note = f"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)"
+                                unknown = len(listed) - len(topics)
+                                if unknown:
+                                    tail_note = f"구독 토픽 경로 {unknown}개의 값을 모름(사이트 선언에 없음)"
+                                else:
+                                    remember(f"{w}: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 {declared_n}개는 그 클래스의 것인지 몰라 안 읽는다")
+                                    tail_note = f"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)"
                     for topic in topics:
                         if (why := over(writer, topic)):
                             stopped, nxt, nxt_ev = why, ("code.resources", here), came_from

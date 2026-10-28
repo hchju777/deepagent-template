@@ -1756,7 +1756,21 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   그 이름을 다시 정의한 후손은 뺌) 메서드 중 `self.<이름>`을 읽는 것. 그다음은 전과 같다 — 부모 `_wrap`이 `Command(key=self.target)`으로 `save`하면 하위 property의
   키가 쓰기(생성자가 품는다), `redis.get(self.target)`이면 읽기, 부모는 쓰고 손자는 읽으면 갈려서 읽기(보수). 레지스트리 `process()` 결과 언패킹을 거치는 모양은
   P1-7까지 안 잡힌다 — 재측정에서 43개가 어느 모양인지 본다.
-- 테스트 먼저(RED → GREEN). 스윕 +3(1124). **R3-5s 끝** — 다음은 측정 #29 재측정 브리프(`code graph` 재생성 **필요**).
+- 테스트 먼저(RED → GREEN). 스윕 +3(1124). 다음은 측정 #29 재측정 브리프(`code graph` 재생성 **필요**).
+
+#### R3-5s ③ (10-31) ✅ — config 경로 호출은 그 클래스의 토픽 읽기, 사이트 행이 key_path를 이름으로
+
+- 측정 #29 재측정 1부: 인덱스에 `[topic]` 자원이 0 — `<AGV 클래스>`가 `kafka_collector.subscribe_topic(topic=self.config.get("infra", "kafka", "consumer", "topic",
+  "<x>_topic"), …)`로 구독하는데 사내 토픽은 사이트 층에만 선언돼(측정 #16) GBM 이름으로 선 인덱스가 그 줄을 자원으로 못 봤다 → 토픽 행 0, 2-a 근거 소실.
+- 인덱스(`_topic_path_calls`): 문자열 인자만이고 끝 셋이 `consumer`, `topic`, <이름>인 config 호출은 그 함수의 토픽 읽기(경로가 consumer라 구독 — 동사표
+  불필요). GBM 이름에 그 key_path가 있으면 값(전처럼), 없으면 key_path가 이름이고 `via=path`. 발행 경로(producer)·이름 없는 경로는 아니다.
+- `flow.site_renames`: 토픽 행마다 `("topic", key_path) → 값`도 준다 — `_code_if_ready`·`code resources`의 `Index.renamed`가 그 경로 이름을 사이트 토픽으로
+  바꾼다. 같은 key_path를 서비스마다 다른 값으로 쓰면(측정 #16 P0-b) 안 바꾼다.
+- 걷기: 값으로 안 풀린 경로(`…consumer.topic.<이름>`)는 토픽이 아니다 — 주 `<클래스>: 토픽 경로 <경로>의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다`,
+  전부 그러면 꼬리 `구독 토픽 경로 N개의 값을 모름(사이트 선언에 없음)`.
+- 측정판: `SourceSink`가 사이트 전용 감사 토픽(topic3)을 `self.cfg.get("infra", "kafka", "consumer", "topic", "topic3")`로 구독 — `source-missing`에 `gumi.alarm.audit`
+  행(브로커에 없어 읽기 실패)이 `mx.alarm.raw` 앞에 선다. 보드 CLI로 확인. 흐름 그래프의 config에만 있는 이름이 3 → 2(그 줄이 코드 줄이다).
+- 테스트 먼저(RED → GREEN). 스윕 +6(1130). **`code graph` 재생성 필요**(인덱스 자원이 는다).
 
 ## 범위 밖 — 12b·13으로
 
