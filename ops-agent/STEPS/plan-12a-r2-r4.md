@@ -717,7 +717,7 @@ medium으로 깎는다). **코드 변경 없음** — 그 법인 Kafka가 닿는
 | R3-5s ② ✅ | override 잇기 | `callers(fn)`: 재정의 사슬(`override_of`)의 베이스를 부르는 쪽도 넣고, property면 가족(자기·조상·후손, 그 이름을 다시 정의한 후손은 뺌) 메서드 중 `self.<이름>`을 읽는 것도 넣는다 — 부모 `_wrap`이 `Command(key=self.target)`로 `save`하면 하위 property의 키가 쓰기 | `index` |
 | R3-5s ③ ✅ | 4 토픽 경로 호출 | 인덱스: `config.get(…, "consumer", "topic", "<이름>")` 호출을 그 클래스의 `[topic]` 읽기 자원으로(이름은 그 key_path의 config 값, GBM 이름에 없으면 key_path 그대로 — `via=path`); 사이트 행 → `site_renames`에 `("topic", key_path)` → 사이트 값(서비스마다 값이 다르면 안 바꿈)이라 `renamed` 인덱스가 토픽 이름을 보인다; 걷기는 값으로 안 풀린 경로를 주 한 줄로 적고 건너뜀; 측정판 `SourceSink`가 사이트 전용 토픽(topic3)을 이 모양으로 구독 | `index`, `flow`, `walk`, 보드 |
 | R3-5s ④ ✅ | (c) `set_key` 줄 | 줄 동사 검사에서 `set_<x>(`·`set<X>(` 호출 이름을 뺀다(`_without_setters`) — `set_key(config.get(…))` 한 줄은 넘김 규칙으로 가서 같은 수신자의 뒤 호출(`collect`)이 정한다; 맨 `set(`은 그대로 쓰기 | `index` |
-| — | **측정 #29 재측정** | ①~② 뒤. **`code graph` 재생성: 필요**. 쓰기 줄 수(235 → ?)와 `metadata.event_type` 대조(맞음/틀림), 걷기 홉 수 복구, `<대상 자원 속성>` 43개의 쓰기 여부(override 잇기 뒤), R3-5r ②③④ 항목 | 브리프 ✅ ([review-12a-4.md](review-12a-4.md)) · 1부 ✅(걷기만: 정정 OK — 틀림 142 → 0, 홉 복구; 회귀 둘 → ③④; LLM 2부는 ③④ 뒤) |
+| — | **측정 #29 재측정** | ①~② 뒤. **`code graph` 재생성: 필요**. 쓰기 줄 수(235 → ?)와 `metadata.event_type` 대조(맞음/틀림), 걷기 홉 수 복구, `<대상 자원 속성>` 43개의 쓰기 여부(override 잇기 뒤), R3-5r ②③④ 항목 | 브리프 ✅ ([review-12a-4.md](review-12a-4.md)) · 1부 ✅(걷기만: 정정 OK — 틀림 142 → 0, 홉 복구; 회귀 둘 → ③④; LLM 2부는 ③④ 뒤) · 2부 브리프 ✅ |
 
 
 
