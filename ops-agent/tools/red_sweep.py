@@ -3413,13 +3413,13 @@ HANDOFF_T = "tests/knowledge/test_index.py::test_동사_없는_자원_줄의_방
 HANDOFF_SHOW_T = "tests/knowledge/test_index.py::test_넘긴_동사는_resources와_uses_줄에_보인다"
 OLD6_T = "tests/knowledge/test_index.py::test_옛_번들의_여섯_칸_자원_튜플도_그대로_읽힌다"
 CASES += [
- ("넘긴 호출의 동사를 안 본다", IDX, "                    handed = _handoff(fn, starts_for(fn, name, line, via), resolve, callers)\n", "                    handed = None\n", [HANDOFF_T]),
+ ("넘긴 호출의 동사를 안 본다", IDX, "                    handed = _handoff(fn, starts_for(fn, name, line, via), resolve, callers, is_ctor)\n", "                    handed = None\n", [HANDOFF_T]),
  ("같은 줄 동사가 있어도 넘긴 호출을 본다", IDX, "                if d is None:\n                    handed = _handoff(", "                if True:\n                    handed = _handoff(", [HANDOFF_T]),
  ("쓰기 동사를 넘긴 호출에서 안 본다", IDX, "    if verb in WRITE_VERBS:\n        return \"writes\", verb\n", "    if verb in WRITE_VERBS:\n        return None\n", [HANDOFF_T]),
  ("return으로 나간 값을 부르는 쪽에서 안 잇는다", IDX, "    if depth >= _FLOW_DEPTH or fn.sid in seen or callers is None:\n        return None\n", "    if True:\n        return None\n", [HANDOFF_T]),
  ("부르는 쪽이 갈려도 쓰기로 본다", IDX, "    if len({d for d, _ in found}) != 1:\n        return None\n    return sorted(found)[0]\n", "    if not found:\n        return None\n    return sorted(found)[-1]\n", [HANDOFF_T]),
  ("config 조회를 넘긴 호출로 본다", IDX, "    return len(chain) >= 2 and chain[-1] == \"get\" and any(_CONFIG_WORD.search(part) for part in chain[:-1])\n", "    return False\n", [HANDOFF_T]),
- ("동사 없는 호출에서 멈춘다", IDX, "        got = _verb_direction(call) or _handoff_into(fn, call, arg, resolve, callers, depth, seen)\n        if got is not None:\n            return got\n    if any(", "        got = _verb_direction(call) or _handoff_into(fn, call, arg, resolve, callers, depth, seen)\n        return got\n    if any(", [HANDOFF_T]),
+ ("동사 없는 호출에서 멈춘다", IDX, "        if got is not None:\n            return got\n    if any(", "        return got\n    if any(", [HANDOFF_T]),
  ("받는 함수를 깊이 상한 없이 따라간다", IDX, "    if callee is None or depth >= _FLOW_DEPTH:\n        return None\n", "    if callee is None:\n        return None\n", [HANDOFF_T]),
  ("옛 번들의 여섯째 칸을 동사표로 거르지 않는다", IDX, "handoff=(r[5] if len(r) > 5 and r[5] in _VERBS else \"\")", "handoff=(r[5] if len(r) > 5 else \"\")", [OLD6_T]),
  ("자원 줄에 넘긴 동사를 안 적는다", QRY, "    return f\" · 키를 조립해 {verb}()로 넘긴다\" if verb else \"\"\n", "    return \"\"\n", [HANDOFF_SHOW_T]),
@@ -3467,7 +3467,20 @@ CASES += [
  ("mongodb가 운영 주소 _url을 안 받는다", SS, "    dev_url: str | None = Field(default=None, alias=\"_url\")\n    database: str\n", "    dev_url: str | None = Field(default=None, alias=\"_prod_url\")\n    database: str\n", [SITE_MONGO_URL_T]),
  ("mongodb 운영 주소의 스킴을 안 본다", SS, "    @field_validator(\"url\", \"dev_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", "    @field_validator(\"url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", [SITE_MONGO_URL_T]),
 ]
-assert len(CASES) >= 1113, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5s ① — 결과를 품는 것은 생성자뿐, 상태 설정은 같은 수신자의 뒤 호출 ──
+HANDOFF2_T = "tests/knowledge/test_index.py::test_결과를_품는_것은_생성자뿐이고_상태_설정은_같은_수신자의_뒤_호출이_방향을_정한다"
+CASES += [
+ ("함수 결과가 키를 품고 간다", IDX, "        if is_ctor(fn, node) or _string_method(node):\n            return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node))\n        return isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor)\n", "        return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node)) or (isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor))\n", [HANDOFF2_T]),
+ ("생성자 결과가 키를 안 품는다", IDX, "        if is_ctor(fn, node) or _string_method(node):\n            return any(", "        if _string_method(node):\n            return any(", [HANDOFF2_T]),
+ ("같은 수신자의 뒤 호출을 안 본다", IDX, "    if not chain or len(chain) < 2 or chain[-1] == \"()\":\n        return None\n    receiver, fluent", "    if True:\n        return None\n    receiver, fluent", [HANDOFF2_T]),
+ ("뒤 호출의 수신자를 안 맞춘다", IDX, "        if head and (head == receiver or head == fluent):\n", "        if head:\n", [HANDOFF2_T]),
+ ("인덱스 밖 대문자 이름을 생성자로 안 본다", IDX, "            got, _ = self.resolve_prefix(fn.mod, chain)\n            return got is None\n", "            got, _ = self.resolve_prefix(fn.mod, chain)\n            return False\n", [HANDOFF2_T]),
+ ("리터럴 문자열 메서드의 결과가 키를 안 품는다", IDX, "    return isinstance(call.func, ast.Attribute) and isinstance(call.func.value, (ast.Constant, ast.JoinedStr))\n", "    return False\n", [HANDOFF2_T]),
+ ("올라가기에서 받는 쪽 결과를 품는다", IDX, "                        up = None                                       # 받는 쪽 결과는 값을 품지 않는다 — 이 출발은 여기까지\n                        break\n", "                        pass\n", [HANDOFF2_T]),
+ ("collect를 읽기 동사로 안 센다", FL, "\"fetch\", \"select\", \"read\", \"collect\")", "\"fetch\", \"select\", \"read\")", [HANDOFF2_T]),
+]
+assert len(CASES) >= 1121, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

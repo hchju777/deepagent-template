@@ -30,7 +30,7 @@ from src.knowledge.schema import FLOW_FIELDS, Service, Topology
 # 같은 줄의 동사로 방향을 정한다. 표는 여기 하나뿐이고 테스트가 지킨다.
 READ_VERBS = ("subscribe", "consume", "poll", "find", "aggregate", "count", "distinct",
               "get", "mget", "hget", "hgetall", "scan", "lrange", "xread", "query",
-              "fetch", "select", "read")
+              "fetch", "select", "read", "collect")                    # collect — 수집기의 읽기(사내 `set_key_options → collect`, R3-5s ①)
 WRITE_VERBS = ("send", "produce", "publish", "emit", "insert", "update", "upsert",
                "replace", "delete", "remove", "set", "hset", "lpush", "rpush", "xadd",
                "expire", "incr", "save", "write")

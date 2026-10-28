@@ -659,12 +659,50 @@ def _verb_direction(call: ast.Call) -> tuple[str, str] | None:
     return None
 
 
-def _handoff(fn: "_Func", starts: list[ast.AST], resolve, callers, depth: int = 0, seen: frozenset = frozenset()) -> tuple[str, str] | None:
+def _string_method(call: ast.Call) -> bool:
+    """리터럴의 문자열 메서드(`"{}:{}".format(key, line)`·`":".join(parts)`) — 결과는 인자로 만든 문자열이라 값을 품는다."""
+    return isinstance(call.func, ast.Attribute) and isinstance(call.func.value, (ast.Constant, ast.JoinedStr))
+
+
+def _carries(fn: "_Func", node: ast.AST, tainted: set[str], is_ctor) -> bool:
+    """식이 그 값을 **품고** 가는가 — 이름, 그릇(사전·목록·튜플·f-string·연산), 값 자신의 메서드(`key.format(…)`), 리터럴의 문자열 메서드, 그리고 **클래스 생성자**
+    (`Command(key=key)` — 필드로 담는다)뿐이다. 그 밖 호출의 결과는 품지 않는다(측정 #29 중단, 평가자 10-31: 레지스트리 컴포넌트에 키를 설정만 하고 `collect()`로
+    읽은 데이터를 키처럼 따라가 출력의 `save`에 닿아 219줄 중 142줄이 틀린 쓰기가 됐다 — 결과로 잇는 것은 받는 쪽이 생성자로 풀릴 때만)."""
+    if isinstance(node, ast.Name):
+        return node.id in tainted
+    if isinstance(node, ast.Call):
+        if is_ctor(fn, node) or _string_method(node):
+            return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node))
+        return isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor)
+    if isinstance(node, ast.Lambda):
+        return False
+    return any(_carries(fn, child, tainted, is_ctor) for child in ast.iter_child_nodes(node))
+
+
+def _next_receiver_verb(fn_node: ast.AST, call: ast.Call) -> tuple[str, str] | None:
+    """동사 없는 호출에 값을 넘겼으면 **같은 수신자의 뒤 호출**(AST 순서, `x.set(k).go()` 유창 사슬 포함) 중 처음 동사 있는 것이 방향 — `x.set_key(k)` 뒤
+    `x.save()`는 쓰기, `x.set_key_options(k)` 뒤 `x.collect()`는 읽기(평가자 10-31 (2)). 뒤 호출이 없으면 None(모른다)."""
+    chain = _chain(call.func)
+    if not chain or len(chain) < 2 or chain[-1] == "()":
+        return None
+    receiver, fluent = chain[:-1], chain + ("()",)
+    for later in sorted((c for c in ast.walk(fn_node) if isinstance(c, ast.Call) and c is not call and _pos(c) >= _pos(call)), key=_pos):
+        head = (_chain(later.func) or ())[:-1]
+        if head and (head == receiver or head == fluent):
+            got = _verb_direction(later)
+            if got is not None:
+                return got
+    return None
+
+
+def _handoff(fn: "_Func", starts: list[ast.AST], resolve, callers, is_ctor, depth: int = 0, seen: frozenset = frozenset()) -> tuple[str, str] | None:
     """동사 없는 자원 줄의 방향 — 출발(그 줄의 토큰·리터럴·별칭·`self.<속성>`)에서 위로 올라가 조립한 값이 **처음 닿는 호출**의 동사 → `("reads"|"writes", 동사)`.
     평가자 회신(10-30) 4(a): `<대상 자원 속성>`이 키를 조립하고 명령 DTO로 넘기는 처리기 43개가 읽기로 적혀 걷기가 쓴 쪽을 몰랐다. R3-1b ②의 "뒷줄 토픽 전송"
     (줄 위치 규칙, 측정 #8에서 틀림)과 다르다 — AST 흐름이다. config 조회는 푸는 자리라 더 올라가고, 동사 없는 호출은 받는 함수를 풀 수 있으면 그 매개변수로
-    이어 보고(깊이 3) 못 풀면 그 결과가 값을 품고 간다(`json.dumps(key)`·`Command(key=key)`). 꼭대기가 대입이면 그 변수들의 뒤 호출을 차례로(`_handoff_names`),
-    `return`이면 부르는 쪽(`_handoff_callers`). 조건식·`self.x = …`·모르는 모양이면 None — 호출부가 전처럼 읽기로 둔다(추정을 확실처럼 말하지 않는다)."""
+    이어 본다(깊이 3). 못 풀면: **생성자**(`Command(key=key)`)나 리터럴의 문자열 메서드면 그 결과가 값을 품으니 더 올라가고, 아니면 같은 수신자의 뒤 호출이 정한다
+    (`_next_receiver_verb`) — 그것도 없으면 그 출발은 모르는 것(R3-5s ①, 측정 #29 중단: 함수·레지스트리 결과를 키처럼 따라간 것이 142줄의 틀린 쓰기였다). 꼭대기가
+    대입이면 그 변수들의 뒤 호출을 차례로(`_handoff_names`), `return`이면 부르는 쪽(`_handoff_callers`). 조건식·`self.x = …`·모르는 모양이면 None — 호출부가
+    전처럼 읽기로 둔다(추정을 확실처럼 말하지 않는다)."""
     fn_node = fn.node
     parents = {child: parent for parent in ast.walk(fn_node) for child in ast.iter_child_nodes(parent)}
     for call in ast.walk(fn_node):
@@ -676,18 +714,24 @@ def _handoff(fn: "_Func", starts: list[ast.AST], resolve, callers, depth: int = 
         while up is not None:
             if isinstance(up, ast.Call) and node is not up.func and any(node is a for a in _args_of(up)):
                 if not (_is_config_call(up) or (node is start and _lookup_default(up, start))):
-                    got = _verb_direction(up) or _handoff_into(fn, up, node, resolve, callers, depth, seen)
+                    got = _verb_direction(up) or _handoff_into(fn, up, node, resolve, callers, is_ctor, depth, seen)
                     if got is not None:
                         return got
+                    if not (is_ctor(fn, up) or _string_method(up)):
+                        got = _next_receiver_verb(fn_node, up)
+                        if got is not None:
+                            return got
+                        up = None                                       # 받는 쪽 결과는 값을 품지 않는다 — 이 출발은 여기까지
+                        break
             elif not isinstance(up, _CARRY):
                 break
             node, up = up, parents.get(up)
         if isinstance(up, (ast.Return, ast.Yield, ast.YieldFrom)):
-            got = _handoff_callers(fn, resolve, callers, depth, seen)
+            got = _handoff_callers(fn, resolve, callers, is_ctor, depth, seen)
         elif isinstance(up, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node is up.value:
             targets = up.targets if isinstance(up, ast.Assign) else [up.target]
             names = {t.id for t in targets if isinstance(t, ast.Name)}
-            got = _handoff_names(fn, names, resolve, callers, depth, seen, after=up) if len(names) == len(targets) else None
+            got = _handoff_names(fn, names, resolve, callers, is_ctor, depth, seen, after=up) if len(names) == len(targets) else None
         else:
             got = None
         if got is not None:
@@ -695,7 +739,7 @@ def _handoff(fn: "_Func", starts: list[ast.AST], resolve, callers, depth: int = 
     return None
 
 
-def _handoff_into(fn: "_Func", call: ast.Call, arg: ast.AST, resolve, callers, depth: int, seen: frozenset) -> tuple[str, str] | None:
+def _handoff_into(fn: "_Func", call: ast.Call, arg: ast.AST, resolve, callers, is_ctor, depth: int, seen: frozenset) -> tuple[str, str] | None:
     """동사 없는 호출의 받는 함수(가족 메서드·같은 모듈 함수)를 풀 수 있으면 그 매개변수가 닿는 호출로 이어 본다."""
     callee = resolve(fn, call) if resolve is not None else None
     if callee is None or depth >= _FLOW_DEPTH:
@@ -703,20 +747,22 @@ def _handoff_into(fn: "_Func", call: ast.Call, arg: ast.AST, resolve, callers, d
     param = _param_of(callee, call, arg)
     if param is None or (callee.sid, param) in seen:
         return None
-    return _handoff_names(callee, {param}, resolve, callers, depth + 1, seen | {(callee.sid, param)})
+    return _handoff_names(callee, {param}, resolve, callers, is_ctor, depth + 1, seen | {(callee.sid, param)})
 
 
-def _handoff_names(fn: "_Func", seeds: set[str], resolve, callers, depth: int, seen: frozenset, after: ast.AST | None = None) -> tuple[str, str] | None:
-    """변수들이 닿는 호출을 **코드 순서로** — 처음 동사 있는 호출이 정한다. 대입·반복 변수로 번진 이름까지(고정점 — `_tainted_reaches_sink`와 같다). 동사
-    없는 호출은 받는 함수를 풀 수 있으면 이어 보고 아니면 지나간다(`log.info(key)`). 호출이 없고 `return`이면 부르는 쪽."""
+def _handoff_names(fn: "_Func", seeds: set[str], resolve, callers, is_ctor, depth: int, seen: frozenset,
+                   after: ast.AST | None = None) -> tuple[str, str] | None:
+    """변수들이 닿는 호출을 **코드 순서로** — 처음 동사 있는 호출이 정한다. 대입·반복 변수로 번진 이름은 그 오른쪽이 값을 **품을 때만**(`_carries` — 생성자·그릇·값
+    자신의 메서드; 함수·레지스트리 결과는 아니다, R3-5s ①). 동사 없는 호출은 받는 함수를 풀 수 있으면 이어 보고, 아니면 같은 수신자의 뒤 호출이 정하고
+    (`_next_receiver_verb`), 그것도 없으면 지나간다(`log.info(key)`). 호출이 없고 `return`이면 부르는 쪽."""
     fn_node = fn.node
     tainted = set(seeds)
     while True:
         more = set(tainted)
         for n in ast.walk(fn_node):
-            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and n.value is not None and _has_name(n.value, tainted):
+            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and n.value is not None and _carries(fn, n.value, tainted, is_ctor):
                 more.update(t.id for t in (n.targets if isinstance(n, ast.Assign) else [n.target]) if isinstance(t, ast.Name))
-            elif isinstance(n, (ast.For, ast.comprehension)) and _has_name(n.iter, tainted) and isinstance(n.target, ast.Name):
+            elif isinstance(n, (ast.For, ast.comprehension)) and _carries(fn, n.iter, tainted, is_ctor) and isinstance(n.target, ast.Name):
                 more.add(n.target.id)
         if more == tainted:
             break
@@ -726,15 +772,17 @@ def _handoff_names(fn: "_Func", seeds: set[str], resolve, callers, depth: int, s
         arg = next((a for a in _args_of(call) if _has_name(a, tainted)), None)
         if arg is None or _is_config_call(call):
             continue
-        got = _verb_direction(call) or _handoff_into(fn, call, arg, resolve, callers, depth, seen)
+        got = _verb_direction(call) or _handoff_into(fn, call, arg, resolve, callers, is_ctor, depth, seen)
+        if got is None and not (is_ctor(fn, call) or _string_method(call)):
+            got = _next_receiver_verb(fn_node, call)
         if got is not None:
             return got
-    if any(isinstance(n, (ast.Return, ast.Yield, ast.YieldFrom)) and n.value is not None and _has_name(n.value, tainted) for n in ast.walk(fn_node)):
-        return _handoff_callers(fn, resolve, callers, depth, seen)
+    if any(isinstance(n, (ast.Return, ast.Yield, ast.YieldFrom)) and n.value is not None and _carries(fn, n.value, tainted, is_ctor) for n in ast.walk(fn_node)):
+        return _handoff_callers(fn, resolve, callers, is_ctor, depth, seen)
     return None
 
 
-def _handoff_callers(fn: "_Func", resolve, callers, depth: int, seen: frozenset) -> tuple[str, str] | None:
+def _handoff_callers(fn: "_Func", resolve, callers, is_ctor, depth: int, seen: frozenset) -> tuple[str, str] | None:
     """`return`으로 나간 값은 부르는 쪽(exact `calls`)에서 이어 본다 — 부르는 자리의 호출식(프로퍼티면 `.<이름>` 접근)이 출발이다. 부르는 쪽이 여럿이면
     방향이 다 같아야 그 방향, 읽기·쓰기로 갈리면 None(읽는 쪽도 쓰는 쪽도 되는 헬퍼는 어느 쪽이라 못 한다 — 보수)."""
     if depth >= _FLOW_DEPTH or fn.sid in seen or callers is None:
@@ -749,7 +797,7 @@ def _handoff_callers(fn: "_Func", resolve, callers, depth: int, seen: frozenset)
         if is_property:
             funcs = {id(c.func) for c in ast.walk(caller.node) if isinstance(c, ast.Call)}
             starts += [a for a in ast.walk(caller.node) if isinstance(a, ast.Attribute) and a.attr == name and isinstance(a.ctx, ast.Load) and id(a) not in funcs]
-        got = _handoff(caller, starts, resolve, callers, depth + 1, seen | {fn.sid})
+        got = _handoff(caller, starts, resolve, callers, is_ctor, depth + 1, seen | {fn.sid})
         if got is not None:
             found.add(got)
     if len({d for d, _ in found}) != 1:
@@ -1661,6 +1709,17 @@ class _Resolver:
             return [self.funcs[e.src] for e in sorted(self.index.edges_to(fn.sid, "calls"), key=lambda e: (e.src, e.line))
                     if e.certainty == "exact" and e.src != fn.sid and e.src in self.funcs]
 
+        def is_ctor(fn: _Func, call: ast.Call) -> bool:
+            """이 호출이 클래스 생성자인가 — 인덱스의 클래스로 풀리면 그렇고, 아무것으로도 안 풀리는 대문자 이름(인덱스 밖의 DTO)도 그렇게 본다. 소문자 이름·`self.`
+            메서드·호출 결과에 대한 호출은 아니다(평가자 10-31 (1): 결과로 잇는 것은 받는 쪽이 생성자로 풀릴 때만)."""
+            chain = _chain(call.func)
+            if not chain or chain[-1] == "()" or chain[0] == "self" or not chain[-1][:1].isupper():
+                return False
+            if self.class_of_annotation(fn.mod, call.func) is not None:
+                return True
+            got, _ = self.resolve_prefix(fn.mod, chain)
+            return got is None
+
         def starts_for(fn: _Func, name: str, line: int, via: str) -> list[ast.AST]:
             """그 자원 줄의 출발 노드들 — `key`는 그 줄의 토큰 상수, `literal`은 그 줄의 리터럴을 품은 문자열 상수(f-string 조각·템플릿), `alias`는 그 줄의 별칭
             이름, `attr:`은 그 함수의 `self.<속성>` 읽기 전부."""
@@ -1718,7 +1777,7 @@ class _Resolver:
                 # 없으면 읽기(보수적) — 값에 적힌 쓴 쪽(R3-1c ①-a)은 그대로 먼저다.
                 d, verb = direction(text), ""
                 if d is None:
-                    handed = _handoff(fn, starts_for(fn, name, line, via), resolve, callers)
+                    handed = _handoff(fn, starts_for(fn, name, line, via), resolve, callers, is_ctor)
                     if handed is not None:
                         d, verb = handed
                 r = Resource(kind, name, "writes" if d == "writes" else "reads", line, via, verb)

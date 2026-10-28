@@ -1005,3 +1005,54 @@ async def test_넘긴_동사는_resources와_uses_줄에_보인다():
     assembler = next(l for l in uses if l.startswith("    h.jobs.Assembler.target_key (h/jobs.py:L9) [r] — 진입점: "))
     assert assembler.endswith(" · 키를 조립해 send()로 넘긴다") and uses.index(assembler) < uses.index("  읽기 5:")
     assert "    h.jobs.Quiet.target_key (h/jobs.py:L43) [r] — 진입점: 이 함수(부르는 곳 없음)" in uses
+
+
+# ── R3-5s ① — 결과를 품는 것은 생성자뿐, 상태 설정은 같은 수신자의 뒤 호출(측정 #29 중단) ──
+
+HANDOFF2 = {'h2/__init__.py': '', 'h2/jobs.py': (
+    'class Command:\n    def __init__(self, key=None, data=None):\n        self.key, self.data = key, data\n\n\n'
+    'class SetterRead:\n    def _run(self):\n        key_options = self.cfg.get("alarm_stats")\n        self.collector.set_key_options(key_options)\n'
+    '        data = self.collector.collect()\n        self.storage.save(Command(data=data))\n\n\n'
+    'class SetterWrite:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        self.sink.set_key(key)\n        self.sink.save()\n\n\n'
+    'class FluentRead:\n    def _run(self):\n        data = self.collector.set_key_options(self.cfg.get("alarm_stats")).collect()\n'
+    '        self.storage.save(Command(data=data))\n\n\n'
+    'class FluentNext:\n    def _run(self):\n        key_options = self.cfg.get("alarm_stats")\n        data = (self.collector\n'
+    '                .set_key_options(key_options)\n                .collect())\n        self.storage.save(Command(data=data))\n\n\n'
+    'class Registry:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        data = self.registry.get("loader").load(key)\n'
+    '        self.storage.save(Command(data=data))\n\n\n'
+    'class Loader:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        data = self.loader.load(key)\n        self.storage.save(Command(data=data))\n\n\n'
+    'class LoaderArg:\n    def _run(self):\n        data = self.loader.load(self.cfg.get("alarm_stats"))\n        self.storage.save(Command(data=data))\n\n\n'
+    'class Dto:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        cmd = Command(key=key)\n        self.storage.save(cmd)\n\n\n'
+    'class Unknown:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        cmd = ExternalCommand(key=key)\n        self.storage.save(cmd)\n\n\n'
+    'class Template:\n    def _run(self, line):\n        key = "{}:{}".format(self.cfg.get("alarm_stats"), line)\n        self.redis.set(key, 1)\n\n\n'
+    'class SetterOnly:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        self.sink.set_key(key)\n\n\n'
+    'class SetterLater:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        self.sink.set_key(key)\n        self.log.info("x")\n'
+    '        self.sink.flush()\n        self.sink.save()\n')}
+HANDOFF2_NAMES = [Name("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats")]
+
+
+async def test_결과를_품는_것은_생성자뿐이고_상태_설정은_같은_수신자의_뒤_호출이_방향을_정한다():
+    """측정 #29 중단(평가자 10-31): "못 풀면 결과가 값을 품고 간다"가 틀렸다 — `<배치 읽기 헬퍼>`가 키를 `<수집기>.set_key_options(…)`로만 넘기고 `collect()`는 키를
+    안 받는데, 읽은 데이터를 키처럼 따라가 출력의 `save`에 닿아 219줄 중 142줄이 틀린 쓰기가 됐다. 요청: (1) 결과로 잇는 것은 받는 쪽이 클래스 생성자로 풀릴
+    때만(맞았던 77줄 — `<명령 DTO>(<대상 자원 속성>=…) → save`), 못 푸는 함수·레지스트리 결과는 키를 품지 않는다. (2) 상태 설정 모양은 같은 수신자의 뒤 입출력
+    호출이 방향(`collect` 읽기, `save` 쓰기), AST 순서. (3) 사내 모양 그대로."""
+    idx = await _index(HANDOFF2, HANDOFF2_NAMES)
+
+    def res(qual):
+        return [(r.direction, r.handoff) for r in idx.symbols[_sid(idx, f"h2.jobs.{qual}._run")].resources]
+
+    assert res("SetterRead") == [("reads", "collect")]                  # set_key_options → 같은 수신자의 collect
+    assert res("SetterWrite") == [("writes", "save")]                   # set_key → 같은 수신자의 save
+    assert res("FluentRead") == [("reads", "")]                         # 같은 줄에 collect — 줄 동사가 먼저(넘긴 동사 없음)
+    assert res("FluentNext") == [("reads", "collect")]                  # 줄을 나눈 유창 사슬 — 설정 호출의 결과에 대한 collect가 같은 수신자(키 조회는 윗줄 —
+    #                                                                     같은 줄이면 줄 동사 규칙이 `set_key_options`의 `set` 조각을 쓰기로 본다, 아는 한계)
+    assert res("Registry") == [("reads", "")]                           # 레지스트리 컴포넌트의 결과는 키를 품지 않는다
+    assert res("Loader") == [("reads", "")]                             # 못 푸는 함수의 결과도
+    assert res("LoaderArg") == [("reads", "")]                          # 키를 바로 넘겨도 — 올라가기에서도 받는 쪽 결과는 품지 않는다
+    assert res("Dto") == [("writes", "save")]                           # 생성자 결과는 품는다(인덱스의 클래스)
+    assert res("Unknown") == [("writes", "save")]                       # 인덱스 밖이라 못 풀어도 대문자 이름은 생성자
+    assert res("Template") == [("writes", "set")]                       # 리터럴의 문자열 메서드는 그 값을 만든다
+    assert res("SetterOnly") == [("reads", "")]                         # 뒤 호출이 없다 — 모른다
+    assert res("SetterLater") == [("writes", "save")]                   # 같은 수신자의 뒤 호출 중 처음 동사 있는 것(다른 수신자·동사 없는 호출은 지난다)
+    writers = {idx.symbols[s].qualname for s in idx.writers("rediskey", "alarm:stats:{line}")}
+    assert writers == {"h2.jobs.SetterWrite._run", "h2.jobs.Dto._run", "h2.jobs.Unknown._run", "h2.jobs.Template._run", "h2.jobs.SetterLater._run"}
