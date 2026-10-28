@@ -1779,8 +1779,23 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - `_without_setters`: 줄 동사 검사 전에 `set_<x>(`·`set<X>(` 호출 이름을 지운다 — 그 줄은 동사 없는 줄이 되어 넘김 규칙으로 가고, `_verb_direction`은 통째 이름
   (`set_key`)을 동사로 안 보므로 같은 수신자의 뒤 호출(`collect` 읽기·`save` 쓰기)이 정한다. 맨 `set(`(redis)은 그대로 쓰기. 흐름 그래프의 `direction`(grep 엣지)은
   안 바꿨다 — 인덱스 자원 줄에서만.
-- 테스트 먼저(RED → GREEN) — `set_key(config.get(…))` 뒤 `collect`/`save`, camelCase `setKey`, 맨 `set(`. 스윕 +2(1132). **R3-5s 끝** — 다음은 측정 #29
-  재측정 2부 브리프(`code graph` 재생성 **필요**).
+- 테스트 먼저(RED → GREEN) — `set_key(config.get(…))` 뒤 `collect`/`save`, camelCase `setKey`, 맨 `set(`. 스윕 +2(1132). 다음은 측정 #29 재측정 2부 브리프(`code graph` 재생성 **필요**).
+
+#### R3-5s ⑤ (10-31) ✅ — config 조회의 인자가 품는 값은 그 결과가 품는다
+
+- 측정 #29 재측정 2부: `<AGV 2건>`이 `키가 없다 — <AGV 키>`(쓴 쪽 칸 없음, `code.uses` 쓰기 줄 0)로 돌아갔다 — 쓴 쪽은 그동안 `set_key` 버그로만 잡혔고(그 줄은
+  `_load_initial_state`의 읽기, ④로 맞게 읽기가 됐다), 진짜 쓰기는 `<AGV 클래스> L<줄>` `config_key="<토큰>"`(키워드 인자) → `<AGV 부모>._flush_runtime_snapshot`
+  `target_key = self.config.get("redis_key", config_key)` → `_save_snapshot(storage, target_key, …)` → `save`. 받는 함수의 매개변수까지는 들어갔지만(R3-5j ③·
+  R3-5s ①) config 조회 호출의 **결과**가 그 인자의 값을 품는다고 보지 않아 `target_key`에서 끊겼다.
+- `_carries`: config 조회 호출(`_is_config_call`)은 인자가 값을 품으면 그 결과가 품는다 — 토큰을 키로 푸는 자리라서. 그래서 `_handoff_into`로 들어간 매개변수가
+  `target_key`로 번지고 다음 호출(`_save_snapshot` → `save`)이 방향을 정한다. 인자와 무관한 config 조회 결과(`self.config.get("redis_key", "heartbeat")`)는 전처럼
+  품지 않는다 — 매개변수가 로그로만 가면 모르는 것(읽기).
+- 사내 모양 테스트: 키워드 리터럴 → 부모 매개변수 → 조회 → 헬퍼 → `save`, 같은 길의 읽기(`get`), 위치 인자·조회 결과를 바로 넘김, 같은 모듈 함수로 넘김, 무관한
+  조회. 아는 한계: 하위 클래스의 호출 줄에 동사 조각이 있으면(`_read_snapshot(…)`의 `read`) 줄 동사 규칙이 먼저다(R3-1 조각 매칭) — 방향은 맞고 넘긴 동사 칸만 빈다.
+- 측정판: `SourceSink`의 쓰기를 이 모양으로(`SnapshotSink` 부모 — 사내 `<AGV 부모>`): 쓰기 줄은 하위 클래스의 호출 줄 하나(`config_key="alarm_source"`)뿐이라
+  인덱스가 못 이으면 `source-missing`의 쓴 쪽이 사라진다 — 보드 CLI로 확인(`code uses alarm:source:{line}` 쓰기 1 ` · 키를 조립해 set()로 넘긴다`, `source-missing`
+  걷기 전과 같음).
+- 테스트 먼저(RED → GREEN). 스윕 +2(1134). **`code graph` 재생성 필요**(인덱스 방향).
 
 ## 범위 밖 — 12b·13으로
 

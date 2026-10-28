@@ -1132,3 +1132,64 @@ async def test_config_경로_호출은_그_클래스의_토픽_읽기_자원이�
     renamed = idx.renamed({("topic", "infra.kafka.consumer.topic.site_topic"): "x.site"})
     assert [(r.name, r.via) for r in renamed.symbols[_sid(idx, "tp.jobs.Agv.run")].resources] == [("x.agv", "key"), ("x.site", "path")]
     assert idx.readers("topic", "infra.kafka.consumer.topic.site_topic") == [_sid(idx, "tp.jobs.Agv.run")]
+
+
+# ── R3-5s ⑤ — 리터럴 인자 → 받는 함수의 매개변수 → config 조회 → 그 뒤 동사(측정 #29 재측정 2부: `<AGV 키>`의 쓴 쪽 소실) ──
+
+HANDOFF3 = {'h3/__init__.py': '', 'h3/jobs.py': (
+    'class SnapshotBase:\n'
+    '    def _flush_snapshot(self, storage, config_key, payload=None):\n'
+    '        target_key = self.config.get("redis_key", config_key)\n'
+    '        self._store_snapshot(storage, target_key, payload)\n\n'
+    '    def _store_snapshot(self, storage, key, payload):\n'
+    '        storage.save(key, payload)\n\n'
+    '    def _restore_snapshot(self, storage, config_key):\n'
+    '        target_key = self.config.get("redis_key", config_key)\n'
+    '        return storage.get(target_key)\n\n'
+    '    def _flush_direct(self, storage, config_key, payload=None):\n'
+    '        self._store_snapshot(storage, self.config.get("redis_key", config_key), payload)\n\n'
+    '    def _flush_module(self, storage, config_key, payload=None):\n'
+    '        target_key = self.config.get("redis_key", config_key)\n'
+    '        store_snapshot(storage, target_key, payload)\n\n'
+    '    def _flush_unrelated(self, storage, config_key, payload=None):\n'
+    '        other = self.config.get("redis_key", "heartbeat")\n'
+    '        self.log.info(config_key)\n'
+    '        self._store_snapshot(storage, other, payload)\n\n\n'
+    'def store_snapshot(storage, key, payload):\n'
+    '    storage.save(key, payload)\n\n\n'
+    'class Agv(SnapshotBase):\n'
+    '    def on_tick(self, storage):\n'
+    '        self._flush_snapshot(storage, config_key="agv_state", payload=self.state)\n\n'
+    '    def on_start(self, storage):\n'
+    '        return self._restore_snapshot(storage, config_key="agv_state")\n\n\n'
+    'class AgvDirect(SnapshotBase):\n'
+    '    def on_tick(self, storage):\n'
+    '        self._flush_direct(storage, "agv_state", self.state)\n\n\n'
+    'class AgvModule(SnapshotBase):\n'
+    '    def on_tick(self, storage):\n'
+    '        self._flush_module(storage, config_key="agv_state")\n\n\n'
+    'class AgvUnrelated(SnapshotBase):\n'
+    '    def on_tick(self, storage):\n'
+    '        self._flush_unrelated(storage, config_key="agv_state")\n')}
+HANDOFF3_NAMES = [Name("rediskey", "agv:state:{line}", "redis_key.agv_state"), Name("rediskey", "hb:{service}", "redis_key.heartbeat")]
+
+
+async def test_리터럴_인자는_받는_함수의_매개변수로_들어가_config_조회를_거쳐_그_뒤_동사가_방향이다():
+    """측정 #29 재측정 2부(평가자 10-31): `<AGV 2건>`이 `키가 없다 — <AGV 키>`(쓴 쪽 칸 없음)로 돌아갔다 — 쓴 쪽은 그동안 `set_key` 버그로만 잡혔고(그 줄은
+    `_load_initial_state`의 읽기, ④로 맞게 읽기가 됐다), 진짜 쓰기는 `<AGV 클래스> L<줄>` `config_key="<토큰>"`(키워드 인자) → `<AGV 부모>` `target_key =
+    self.config.get("redis_key", config_key)` → `_save_snapshot(storage, target_key, …)` → `save`인데 못 이었다: 받는 함수의 매개변수까지는 들어갔지만(R3-5j ③·
+    R3-5s ①) config 조회 호출의 **결과**가 그 인자의 값을 품는다고 보지 않아 `target_key`가 끊겼다. 요청: 리터럴 인자 → 매개변수 → `config.get("redis_key",
+    <매개변수>)`를 잇고 그 뒤 동사로 방향. 인자와 무관한 config 조회 결과는 전처럼 품지 않는다."""
+    idx = await _index(HANDOFF3, HANDOFF3_NAMES)
+
+    def res(qual):
+        return [(r.name, r.direction, r.handoff) for r in idx.symbols[_sid(idx, f"h3.jobs.{qual}")].resources]
+
+    assert res("Agv.on_tick") == [("agv:state:{line}", "writes", "save")]           # 키워드 리터럴 → 부모 매개변수 → config 조회 결과 → 헬퍼 → save
+    assert res("Agv.on_start") == [("agv:state:{line}", "reads", "get")]            # 같은 길로 읽기(사내 `_load_initial_state`의 모양)
+    assert res("AgvDirect.on_tick") == [("agv:state:{line}", "writes", "save")]     # 위치 인자, 조회 결과를 바로 넘김
+    assert res("AgvModule.on_tick") == [("agv:state:{line}", "writes", "save")]     # 같은 모듈의 함수로 넘겨도
+    assert res("AgvUnrelated.on_tick") == [("agv:state:{line}", "reads", "")]       # 인자와 무관한 config 조회 결과는 품지 않는다 — 매개변수는 로그로만
+    assert res("SnapshotBase._flush_unrelated") == [("hb:{service}", "writes", "save")]
+    writers = {idx.symbols[s].qualname for s in idx.writers("rediskey", "agv:state:{line}")}
+    assert writers == {"h3.jobs.Agv.on_tick", "h3.jobs.AgvDirect.on_tick", "h3.jobs.AgvModule.on_tick"}

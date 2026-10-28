@@ -154,19 +154,30 @@ def run(cfg, consumer, producer, redis):
 ''',
     # 원천 키(`alarm:source:{line}`)를 **쓰는** 클래스(R3-5p ①-c) — 원천 토픽을 구독해 행 묶음을 키로 쓴다. `source-missing`에서 걷기가 인덱스의 쓰기 자원과
     # 선언으로 이 클래스를 찾고, 그 클래스 코드가 구독하는 토픽의 보존 범위를 홉으로 적는다(R3-5r ②). 감사 토픽(topic3)은 사이트 층에만 있고 코드는 config 경로
-    # 호출로 구독한다 — 사내 `<AGV 클래스>`의 모양(R3-5s ③): 인덱스엔 key_path로 섰다가 사이트 행이 이름을 바꾼다.
+    # 호출로 구독한다 — 사내 `<AGV 클래스>`의 모양(R3-5s ③): 인덱스엔 key_path로 섰다가 사이트 행이 이름을 바꾼다. 쓰기도 그 클래스의 모양(R3-5s ⑤): 키 토큰을
+    # 키워드 인자로 부모(`SnapshotSink` — 사내 `<AGV 부모>`)에 넘기고, 부모가 `cfg.get("redis_key", config_key)`로 풀어 헬퍼로 저장한다 — 쓰기 줄은 하위
+    # 클래스의 호출 줄 하나뿐이라 인덱스가 그 잇기를 못 하면 `source-missing`의 쓴 쪽이 사라진다(측정 #29 재측정 2부의 `<AGV 키>`).
     "processor/source_sink.py": '''"""alarm_raw를 받아 라인별 원천 묶음 키를 쓴다."""
 
 
-class SourceSink:
+class SnapshotSink:
     def __init__(self, cfg, consumer, redis):
         self.cfg, self.consumer, self.redis = cfg, consumer, redis
 
+    def _flush_snapshot(self, payload, line, config_key):
+        target_key = self.cfg.get("redis_key", config_key).format(line=line)
+        self._store_snapshot(target_key, payload)
+
+    def _store_snapshot(self, key, payload):
+        self.redis.set(key, payload)
+
+
+class SourceSink(SnapshotSink):
     def run(self):
         kafka = self.cfg["infra"]["kafka"]
         self.consumer.subscribe(self.cfg.get("infra", "kafka", "consumer", "topic", "topic3"), group=kafka["consumer"]["group_id"])
         for msg in self.consumer.subscribe(kafka["consumer"]["topic"]["topic1"], group=kafka["consumer"]["group_id"]):
-            self.redis.set(self.cfg["redis_key"]["alarm_source"].format(line=msg["line"]), msg["rows"])
+            self._flush_snapshot(msg["rows"], msg["line"], config_key="alarm_source")
 ''',
     "sink/writer.py": '''"""alarm_main을 읽어 alarm_events에 넣고 alarm:stats:{line}을 갱신한다."""
 

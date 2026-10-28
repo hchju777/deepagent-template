@@ -678,7 +678,10 @@ def _carries(fn: "_Func", node: ast.AST, tainted: set[str], is_ctor) -> bool:
     if isinstance(node, ast.Name):
         return node.id in tainted
     if isinstance(node, ast.Call):
-        if is_ctor(fn, node) or _string_method(node):
+        # config 조회의 인자가 값을 품으면 그 **결과**도 품는다 — 토큰을 키로 푸는 자리다(R3-5s ⑤, 측정 #29 재측정 2부: `<AGV 클래스>`가 `config_key="<토큰>"`을
+        # 부모 메서드에 넘기고 부모가 `target_key = self.config.get("redis_key", config_key)`로 풀어 `save`하는데, 매개변수까지 들어가고도 여기서 끊겨 쓴 쪽이 0).
+        # 인자와 무관한 조회 결과는 전처럼 품지 않는다.
+        if _is_config_call(node) or is_ctor(fn, node) or _string_method(node):
             return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node))
         return isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor)
     if isinstance(node, ast.Lambda):

@@ -3471,8 +3471,8 @@ CASES += [
 # ── 12a-R3-5s ① — 결과를 품는 것은 생성자뿐, 상태 설정은 같은 수신자의 뒤 호출 ──
 HANDOFF2_T = "tests/knowledge/test_index.py::test_결과를_품는_것은_생성자뿐이고_상태_설정은_같은_수신자의_뒤_호출이_방향을_정한다"
 CASES += [
- ("함수 결과가 키를 품고 간다", IDX, "        if is_ctor(fn, node) or _string_method(node):\n            return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node))\n        return isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor)\n", "        return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node)) or (isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor))\n", [HANDOFF2_T]),
- ("생성자 결과가 키를 안 품는다", IDX, "        if is_ctor(fn, node) or _string_method(node):\n            return any(", "        if _string_method(node):\n            return any(", [HANDOFF2_T]),
+ ("함수 결과가 키를 품고 간다", IDX, "        if _is_config_call(node) or is_ctor(fn, node) or _string_method(node):\n            return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node))\n        return isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor)\n", "        return any(_carries(fn, a, tainted, is_ctor) for a in _args_of(node)) or (isinstance(node.func, ast.Attribute) and _carries(fn, node.func.value, tainted, is_ctor))\n", [HANDOFF2_T]),
+ ("생성자 결과가 키를 안 품는다", IDX, "        if _is_config_call(node) or is_ctor(fn, node) or _string_method(node):\n            return any(", "        if _is_config_call(node) or _string_method(node):\n            return any(", [HANDOFF2_T]),
  ("같은 수신자의 뒤 호출을 안 본다", IDX, "    if not chain or len(chain) < 2 or chain[-1] == \"()\":\n        return None\n    receiver, fluent", "    if True:\n        return None\n    receiver, fluent", [HANDOFF2_T]),
  ("뒤 호출의 수신자를 안 맞춘다", IDX, "        if head and (head == receiver or head == fluent):\n", "        if head:\n", [HANDOFF2_T]),
  ("인덱스 밖 대문자 이름을 생성자로 안 본다", IDX, "            got, _ = self.resolve_prefix(fn.mod, chain)\n            return got is None\n", "            got, _ = self.resolve_prefix(fn.mod, chain)\n            return False\n", [HANDOFF2_T]),
@@ -3506,7 +3506,14 @@ CASES += [
  ("set_ 호출을 줄 동사로 센다", IDX, "                d, verb = direction(_without_setters(text)), \"\"\n", "                d, verb = direction(text), \"\"\n", [HANDOFF2_T]),
  ("맨 set 호출까지 지운다", IDX, "_SETTER_CALL = re.compile(r\"\\bset(?:_\\w+|[A-Z]\\w*)\\s*\\(\")\n", "_SETTER_CALL = re.compile(r\"\\bset\\w*\\s*\\(\")\n", [HANDOFF2_T]),
 ]
-assert len(CASES) >= 1132, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5s ⑤ — config 조회의 인자가 품는 값은 그 결과가 품는다(리터럴 인자 → 매개변수 → config 조회 → 동사) ──
+HANDOFF3_T = "tests/knowledge/test_index.py::test_리터럴_인자는_받는_함수의_매개변수로_들어가_config_조회를_거쳐_그_뒤_동사가_방향이다"
+CASES += [
+ ("config 조회 결과가 인자의 값을 품지 않는다", IDX, "        if _is_config_call(node) or is_ctor(fn, node) or _string_method(node):\n", "        if is_ctor(fn, node) or _string_method(node):\n", [HANDOFF3_T, BOARD_KEYED_T]),
+ ("인자와 무관한 config 조회 결과도 품는다", IDX, "        if _is_config_call(node) or is_ctor(fn, node) or _string_method(node):\n", "        if _is_config_call(node):\n            return True\n        if is_ctor(fn, node) or _string_method(node):\n", [HANDOFF3_T]),
+]
+assert len(CASES) >= 1134, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
