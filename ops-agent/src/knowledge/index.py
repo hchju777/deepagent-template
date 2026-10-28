@@ -1704,10 +1704,35 @@ class _Resolver:
         for ident, known in aliases.items():
             alias_of.setdefault(known.value, []).append(ident)
 
+        def exact_callers(sid: int) -> list[_Func]:
+            return [self.funcs[e.src] for e in sorted(self.index.edges_to(sid, "calls"), key=lambda e: (e.src, e.line))
+                    if e.certainty == "exact" and e.src != sid and e.src in self.funcs]
+
         def callers(fn: _Func) -> list[_Func]:
-            """이 함수를 **확실히** 부르는 함수들(exact `calls`, 부르는 쪽 순) — 넘긴 동사를 부르는 쪽에서 이어 볼 때. candidate는 안 센다(엉뚱한 쓰는 쪽을 만든다)."""
-            return [self.funcs[e.src] for e in sorted(self.index.edges_to(fn.sid, "calls"), key=lambda e: (e.src, e.line))
-                    if e.certainty == "exact" and e.src != fn.sid and e.src in self.funcs]
+            """이 함수를 부르는 함수들 — 넘긴 동사를 부르는 쪽에서 이어 볼 때. exact `calls`(candidate는 안 센다 — 엉뚱한 쓰는 쪽을 만든다)에 더해(R3-5s ②,
+            측정 #29 중단: 부모 `<기록 처리기>._return_wrapper`의 `self.<속성>`이 부모 property에 묶여 하위 override로 안 이어져 `<대상 자원 속성>` 43개가 쓰기 0):
+            (a) 재정의 사슬 — 이 메서드가 재정의한 베이스 메서드를 부르는 쪽(베이스 안의 `self.<이름>()`은 실행 때 이 재정의로 온다), (b) 프로퍼티면 가족(자기·조상·
+            후손, 그 이름을 다시 정의한 후손은 뺌) 메서드 중 `self.<이름>`을 읽는 것(속성 접근은 calls 엣지가 없다)."""
+            out = exact_callers(fn.sid)
+            base, hops = self.override_of.get(fn.sid), 0
+            while base is not None and hops < 8:
+                out += exact_callers(base)
+                base, hops = self.override_of.get(base), hops + 1
+            node = fn.node
+            if fn.class_sid is not None and any(ast.unparse(d).endswith("property") for d in getattr(node, "decorator_list", [])):
+                name = node.name
+                family = [fn.class_sid, *self.ancestors(fn.class_sid)]
+                family += [d for d in self.descendants(fn.class_sid) if d in self.classes and name not in self.classes[d].methods]
+                for c in family:
+                    for msid in (self.classes[c].methods.values() if c in self.classes else ()):
+                        m = self.funcs.get(msid)
+                        if m is not None and m is not fn and any(isinstance(a, ast.Attribute) and a.attr == name and isinstance(a.ctx, ast.Load)
+                                                                 and isinstance(a.value, ast.Name) and a.value.id == "self" for a in ast.walk(m.node)):
+                            out.append(m)
+            picked: dict[int, _Func] = {}
+            for f in out:
+                picked.setdefault(f.sid, f)
+            return list(picked.values())
 
         def is_ctor(fn: _Func, call: ast.Call) -> bool:
             """이 호출이 클래스 생성자인가 — 인덱스의 클래스로 풀리면 그렇고, 아무것으로도 안 풀리는 대문자 이름(인덱스 밖의 DTO)도 그렇게 본다. 소문자 이름·`self.`

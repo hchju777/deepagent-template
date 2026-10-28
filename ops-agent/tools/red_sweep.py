@@ -3480,7 +3480,15 @@ CASES += [
  ("올라가기에서 받는 쪽 결과를 품는다", IDX, "                        up = None                                       # 받는 쪽 결과는 값을 품지 않는다 — 이 출발은 여기까지\n                        break\n", "                        pass\n", [HANDOFF2_T]),
  ("collect를 읽기 동사로 안 센다", FL, "\"fetch\", \"select\", \"read\", \"collect\")", "\"fetch\", \"select\", \"read\")", [HANDOFF2_T]),
 ]
-assert len(CASES) >= 1121, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5s ② — 재정의·프로퍼티 읽기의 부르는 쪽 잇기 ──
+OVERRIDE_T = "tests/knowledge/test_index.py::test_하위_클래스가_재정의한_프로퍼티나_메서드의_부르는_쪽은_그것을_읽는_부모_메서드다"
+CASES += [
+ ("재정의한 베이스를 부르는 쪽을 안 잇는다", IDX, "            base, hops = self.override_of.get(fn.sid), 0\n", "            base, hops = None, 0\n", [OVERRIDE_T]),
+ ("프로퍼티를 읽는 가족 메서드를 부르는 쪽으로 안 본다", IDX, "            if fn.class_sid is not None and any(ast.unparse(d).endswith(\"property\") for d in getattr(node, \"decorator_list\", [])):\n                name = node.name\n", "            if False:\n                name = node.name\n", [OVERRIDE_T]),
+ ("그 이름을 다시 정의한 후손도 읽는 쪽으로 센다", IDX, "                family += [d for d in self.descendants(fn.class_sid) if d in self.classes and name not in self.classes[d].methods]\n", "                family += [d for d in self.descendants(fn.class_sid) if d in self.classes]\n", [OVERRIDE_T]),
+]
+assert len(CASES) >= 1124, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

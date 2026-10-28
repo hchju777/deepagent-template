@@ -1056,3 +1056,42 @@ async def test_결과를_품는_것은_생성자뿐이고_상태_설정은_같�
     assert res("SetterLater") == [("writes", "save")]                   # 같은 수신자의 뒤 호출 중 처음 동사 있는 것(다른 수신자·동사 없는 호출은 지난다)
     writers = {idx.symbols[s].qualname for s in idx.writers("rediskey", "alarm:stats:{line}")}
     assert writers == {"h2.jobs.SetterWrite._run", "h2.jobs.Dto._run", "h2.jobs.Unknown._run", "h2.jobs.Template._run", "h2.jobs.SetterLater._run"}
+
+
+# ── R3-5s ② — 재정의·프로퍼티 읽기의 부르는 쪽 잇기(측정 #29 중단: `<대상 자원 속성>` 43개가 여전히 쓰기 0) ──
+
+OVERRIDE = {'o/__init__.py': '', 'o/jobs.py': (
+    'class Command:\n    def __init__(self, key=None):\n        self.key = key\n\n\n'
+    'class Base:\n    @property\n    def target(self):\n        return ""\n\n    def _wrap(self):\n        self.storage.save({"target": self.target})\n\n\n'
+    'class Child(Base):\n    @property\n    def target(self):\n        return self.cfg["redis_key"]["alarm_stats"]\n\n\n'
+    'class Base2:\n    def key(self):\n        return ""\n\n    def _run(self):\n        self.producer.send("t", {"target": self.key()})\n\n\n'
+    'class Child2(Base2):\n    def key(self):\n        return self.cfg["redis_key"]["alarm_stats"]\n\n\n'
+    'class Base3:\n    @property\n    def target(self):\n        return ""\n\n    def _wrap(self):\n        return self.redis.get(self.target)\n\n\n'
+    'class Child3(Base3):\n    @property\n    def target(self):\n        return self.cfg["redis_key"]["alarm_stats"]\n\n\n'
+    'class Lonely:\n    @property\n    def target(self):\n        return self.cfg["redis_key"]["alarm_stats"]\n\n\n'
+    'class Base4:\n    @property\n    def target(self):\n        return ""\n\n    def _wrap(self):\n        self.storage.save(Command(key=self.target))\n\n\n'
+    'class Child4(Base4):\n    @property\n    def target(self):\n        return self.cfg["redis_key"]["alarm_stats"]\n\n\n'
+    'class Grand4(Child4):\n    def peek(self):\n        return self.redis.get(self.target)\n\n\n'
+    'class Base6:\n    @property\n    def target(self):\n        return self.cfg["redis_key"]["alarm_stats"]\n\n    def _wrap(self):\n        self.storage.save(Command(key=self.target))\n\n\n'
+    'class Child6(Base6):\n    @property\n    def target(self):\n        return "other"\n\n    def peek(self):\n        return self.redis.get(self.target)\n')}
+OVERRIDE_NAMES = [Name("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats")]
+
+
+async def test_하위_클래스가_재정의한_프로퍼티나_메서드의_부르는_쪽은_그것을_읽는_부모_메서드다():
+    """측정 #29 중단(평가자 10-31): `<대상 자원 속성>` 43개가 여전히 쓰기 0 — 부모 `<기록 처리기>._return_wrapper`의 `self.<속성>`이 부모 property에 묶여 하위
+    override로 안 이어진다. 재정의의 "부르는 쪽"에 (a) 재정의한 베이스 메서드를 부르는 쪽(베이스의 `self.<이름>()`은 실행 때 재정의로 온다)과 (b) 프로퍼티면
+    가족(자기·조상·후손 — 그 이름을 다시 정의한 후손은 뺌) 메서드 중 `self.<이름>`을 읽는 것을 넣는다(속성 접근은 calls 엣지가 없다). 레지스트리 `process()` 결과
+    언패킹은 P1-7과 같이 — 여기선 생성자에 바로 넣는 모양까지."""
+    idx = await _index(OVERRIDE, OVERRIDE_NAMES)
+
+    def res(qual):
+        return [(r.direction, r.handoff) for r in idx.symbols[_sid(idx, f"o.jobs.{qual}")].resources]
+
+    assert res("Child.target") == [("writes", "save")]                 # 부모 _wrap이 self.target을 사전에 담아 save — 사전 안의 속성 읽기는 엣지가 없어 가족
+    #                                                                     메서드 훑기로만 잇는다(인자로 바로 넘기거나 지역 별칭이면 callback 엣지가 있다 — Base4)
+    assert res("Child2.key") == [("writes", "send")]                   # 부모 _run의 self.key()가 재정의로 온다
+    assert res("Child3.target") == [("reads", "get")]                  # 부모 _wrap이 redis.get(self.target)
+    assert res("Lonely.target") == [("reads", "")]                     # 읽는 쪽 없음
+    assert res("Child4.target") == [("reads", "")]                     # 부모는 쓰고 손자는 읽는다 — 갈리면 읽기(보수)
+    assert res("Base6.target") == [("writes", "save")]                 # target을 다시 정의한 후손의 읽기는 이 프로퍼티의 것이 아니다
+    assert res("Child6.target") == []                                  # "other"는 자원이 아니다
