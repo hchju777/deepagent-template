@@ -35,7 +35,12 @@ from src.config import (schema_app, schema_llm, schema_mail, schema_report,
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 동적으로 읽혀서 정적으로는 안 보이는 것들. **비워 두는 것이 정상**이다.
-ALLOWED: dict[str, str] = {}
+ALLOWED: dict[str, str] = {
+    # 운영 배포 주소의 기록 칸 — 사내 사이트 config가 `url` 옆에 `_url`로 같이 적는다(사내 적용 10-30). 접속은 `url`만 쓰고 이 칸을 읽는 코드는 **없어야**
+    # 한다(`test_schema_site.test_접속_코드는_dev_url을_읽지_않는다`가 지킨다). "읽는 곳이 없는 칸"이지만 조용히 거짓말하는 칸이 아니다 — 안 읽는 것이 계약이다.
+    "RedisConfig.dev_url": "운영 주소 기록용 — 접속은 url만, 읽는 곳이 없어야 한다",
+    "MongoConfig.dev_url": "운영 주소 기록용 — 접속은 url만, 읽는 곳이 없어야 한다",
+}
 
 
 def _models() -> list[type[pydantic.BaseModel]]:

@@ -3456,7 +3456,18 @@ CASES += [
  ("실패한 태스크 id 인용을 없는 id로만 말한다", ND, "    if evidence_id in failed:\n        return f\"실패한 태스크 id {evidence_id} 인용 ({where}) — 증거가 없다(인용 불가)\"\n", "    if False:\n        return f\"실패한 태스크 id {evidence_id} 인용 ({where}) — 증거가 없다(인용 불가)\"\n", [FAIL_CITE_T]),
  ("verify가 실패한 태스크 목록을 안 넘긴다", ND, "                                  failed=frozenset(t.id for t in state.plan_tasks if t.status == \"error\"))\n", "                                  failed=frozenset())\n", [FAIL_CITE_T]),
 ]
-assert len(CASES) >= 1109, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 사내 적용 반영(10-30) — 사이트 config의 redis·mongodb 운영 주소 `_url`(접속엔 안 씀) ──
+SS = ROOT / "src/config/schema_site.py"
+SITE_REDIS_URL_T = "tests/config/test_schema_site.py::test_redis의_운영_주소_url은_dev_url로_읽히고_없으면_None이며_스킴과_미지_키는_여전히_거른다"
+SITE_MONGO_URL_T = "tests/config/test_schema_site.py::test_mongodb의_운영_주소_url은_dev_url로_읽히고_없으면_None이며_스킴과_미지_키는_여전히_거른다"
+CASES += [
+ ("redis가 운영 주소 _url을 안 받는다", SS, "    dev_url: str | None = Field(default=None, alias=\"_url\")\n    db: int = 0\n", "    dev_url: str | None = Field(default=None, alias=\"_prod_url\")\n    db: int = 0\n", [SITE_REDIS_URL_T]),
+ ("redis 운영 주소의 스킴을 안 본다", SS, "    @field_validator(\"url\", \"dev_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"redis://\", \"rediss://\")):", "    @field_validator(\"url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"redis://\", \"rediss://\")):", [SITE_REDIS_URL_T]),
+ ("mongodb가 운영 주소 _url을 안 받는다", SS, "    dev_url: str | None = Field(default=None, alias=\"_url\")\n    database: str\n", "    dev_url: str | None = Field(default=None, alias=\"_prod_url\")\n    database: str\n", [SITE_MONGO_URL_T]),
+ ("mongodb 운영 주소의 스킴을 안 본다", SS, "    @field_validator(\"url\", \"dev_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", "    @field_validator(\"url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", [SITE_MONGO_URL_T]),
+]
+assert len(CASES) >= 1113, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -63,6 +63,43 @@ def test_auth_source_기본값은_admin이다():
     assert cfg.auth_source == "admin"
 
 
+# ── 운영 주소 `_url` — 사내 사이트 config가 같이 적는다, 접속엔 안 쓴다 ─────────────────
+
+def test_redis의_운영_주소_url은_dev_url로_읽히고_없으면_None이며_스킴과_미지_키는_여전히_거른다():
+    """사내 사이트 config는 `url`(지금 로컬에서 붙는 주소 — 사내 서비스 config의 `_url`, IP:NodePort) 옆에 `_url`(운영 배포 주소 — 사내 서비스 config의 `url`,
+    k8s 안 이름)을 같이 적는다. StrictModel(extra=forbid)이라 필드가 없으면 로드가 죽는다 — 받아 두되 접속은 `url`만 쓴다(사내 적용 10-30). 키는 `_url`뿐이다
+    (필드 이름 `dev_url`로는 안 받는다 — config의 키가 둘이 되면 안 된다)."""
+    cfg = RedisConfig.model_validate({"url": "redis://10.0.0.1:30379", "_url": "redis://cache.ns.svc:6379"})
+    assert cfg.url == "redis://10.0.0.1:30379" and cfg.dev_url == "redis://cache.ns.svc:6379"
+    assert RedisConfig(url="redis://h:6379").dev_url is None
+    with pytest.raises(ValidationError, match="redis://"):
+        RedisConfig.model_validate({"url": "redis://h:6379", "_url": "http://cache.ns.svc:6379"})
+    for unknown in ("_urll", "dev_url", "prod_url"):
+        with pytest.raises(ValidationError, match=unknown):
+            RedisConfig.model_validate({"url": "redis://h:6379", unknown: "redis://cache.ns.svc:6379"})
+    site = {**MINIMAL, "infra": {"redis": {"url": "redis://h:6379", "_url": "rediss://cache.ns.svc:6379"}}}
+    assert SiteConfig.model_validate(site).infra.redis.dev_url == "rediss://cache.ns.svc:6379"
+
+
+def test_mongodb의_운영_주소_url은_dev_url로_읽히고_없으면_None이며_스킴과_미지_키는_여전히_거른다():
+    cfg = MongoConfig.model_validate({"url": "mongodb://10.0.0.1:30017", "database": "data", "_url": "mongodb://store.ns.svc:27017"})
+    assert cfg.url == "mongodb://10.0.0.1:30017" and cfg.dev_url == "mongodb://store.ns.svc:27017"
+    assert MongoConfig(url="mongodb://h:27017", database="data").dev_url is None
+    with pytest.raises(ValidationError, match="mongodb://"):
+        MongoConfig.model_validate({"url": "mongodb://h:27017", "database": "data", "_url": "redis://store.ns.svc:27017"})
+    for unknown in ("_urll", "dev_url", "prod_url"):
+        with pytest.raises(ValidationError, match=unknown):
+            MongoConfig.model_validate({"url": "mongodb://h:27017", "database": "data", unknown: "mongodb://store.ns.svc:27017"})
+
+
+def test_접속_코드는_dev_url을_읽지_않는다():
+    """운영 주소는 기록일 뿐이다 — 어댑터·팩토리·기동 어디서도 `.dev_url`을 읽으면 안 된다(사내 요청 4). 스키마 파일 밖에 그 이름이 있으면 실패."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2] / "src"
+    found = [str(p.relative_to(root)) for p in sorted(root.rglob("*.py")) if "dev_url" in p.read_text(encoding="utf-8")]
+    assert found == ["config/schema_site.py"], found
+
+
 # ── Kafka ────────────────────────────────────────────────────────────
 
 def test_브로커_주소_형식을_검사한다():

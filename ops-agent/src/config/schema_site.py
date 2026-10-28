@@ -27,13 +27,17 @@ from src.domain.base import StrictModel
 
 class RedisConfig(StrictModel):
     url: str
+    # 운영 배포 주소(k8s 안 이름) — 사내 서비스 config의 `url`. 우리 `url`은 지금 로컬에서 붙는 주소(사내의 `_url`, IP:NodePort)다. **접속에 안 쓴다** — 사내
+    # 사이트 config가 두 주소를 같이 적고 StrictModel은 모르는 키에 죽으므로 받아 둘 뿐이다(사내 적용 10-30). 키 이름은 `_url`(파이썬 필드는 밑줄로 못 시작한다).
+    # 읽는 코드가 없어야 한다 — `tests/config/test_schema_site.py`가 지킨다.
+    dev_url: str | None = Field(default=None, alias="_url")
     db: int = 0
     password: SecretStr | None = None      # ACL username은 쓰지 않는다(사내 확인)
 
-    @field_validator("url")
+    @field_validator("url", "dev_url")
     @classmethod
-    def _scheme(cls, v: str) -> str:
-        if not v.startswith(("redis://", "rediss://")):
+    def _scheme(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith(("redis://", "rediss://")):
             raise ValueError(f"redis url은 redis:// 또는 rediss://로 시작해야 한다 — {v}")
         return v
 
@@ -47,6 +51,8 @@ class RedisConfig(StrictModel):
 
 class MongoConfig(StrictModel):
     url: str
+    # 운영 배포 주소 — RedisConfig.dev_url과 같은 이유·같은 규칙(접속에 안 쓴다, 키는 `_url`).
+    dev_url: str | None = Field(default=None, alias="_url")
     database: str
     user: str | None = None
     password: SecretStr | None = None
@@ -54,10 +60,10 @@ class MongoConfig(StrictModel):
     # 대상 DB에서 직접 만들었다면 그 DB 이름을 적어야 인증이 통과한다.
     auth_source: str = "admin"
 
-    @field_validator("url")
+    @field_validator("url", "dev_url")
     @classmethod
-    def _scheme(cls, v: str) -> str:
-        if not v.startswith(("mongodb://", "mongodb+srv://")):
+    def _scheme(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith(("mongodb://", "mongodb+srv://")):
             raise ValueError(f"mongodb url은 mongodb://로 시작해야 한다 — {v}")
         return v
 
