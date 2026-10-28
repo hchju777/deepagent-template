@@ -96,8 +96,9 @@ def test_접속_코드는_dev_url을_읽지_않는다():
     """운영 주소는 기록일 뿐이다 — 어댑터·팩토리·기동 어디서도 `.dev_url`을 읽으면 안 된다(사내 요청 4). 스키마 파일 밖에 그 이름이 있으면 실패."""
     from pathlib import Path
     root = Path(__file__).resolve().parents[2] / "src"
-    found = [str(p.relative_to(root)) for p in sorted(root.rglob("*.py")) if "dev_url" in p.read_text(encoding="utf-8")]
-    assert found == ["config/schema_site.py"], found
+    # 경로를 문자열로 안 만든다 — 조각(`parts`)으로 댄다. 사내는 Windows라 `str(relative_to)`가 `config\\schema_site.py`였고 그렇게 한 번 실패했다.
+    found = [p.relative_to(root).parts for p in sorted(root.rglob("*.py")) if "dev_url" in p.read_text(encoding="utf-8")]
+    assert found == [("config", "schema_site.py")], found
 
 
 # ── Kafka ────────────────────────────────────────────────────────────
