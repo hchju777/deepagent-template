@@ -634,6 +634,13 @@ def _flows(fn: "_Func", resolve, *, line: int | None = None, token: str | None =
 # 값이 그대로 실려 가는 그릇 — 호출·첨자·속성·f-string·연산에 더해 사전·목록·튜플·집합·`*`·await. 조건식(`_CONDITION`)은 아니다.
 _CARRY = _CHAIN + (ast.Dict, ast.List, ast.Tuple, ast.Set, ast.Starred, ast.Await)
 _CONFIG_WORD = re.compile(r"config|cfg|settings", re.IGNORECASE)
+# 상태 설정 호출(`x.set_key(…)`·`x.setKey(…)`)의 이름은 줄 동사가 아니다(R3-5s ④, 측정 #29 재측정 1부 (c): `<수집기>.set_key(config.get(…))` 한 줄 7개가 `set`
+# 조각으로 쓰기가 됐다) — 그 줄은 넘김 규칙으로 가서 같은 수신자의 뒤 호출(`collect`·`save`)이 정한다. 맨 `set(`(redis)은 그대로 동사다.
+_SETTER_CALL = re.compile(r"\bset(?:_\w+|[A-Z]\w*)\s*\(")
+
+
+def _without_setters(text: str) -> str:
+    return _SETTER_CALL.sub("(", text)
 
 
 def _args_of(call: ast.Call) -> list[ast.AST]:
@@ -1816,7 +1823,7 @@ class _Resolver:
                 # 같은 줄의 동사가 먼저. 없으면 조립한 값이 처음 닿는 호출의 동사(R3-5r ① — 평가자 회신 10-30 4(a): 키를 조립해 명령 DTO로 넘기는 처리기).
                 # "뒷줄이 토픽으로 보내면 쓰라는 명령"이라는 줄 위치 규칙(R3-1b ②)은 사내 모양에서 틀려 걷어냈다(측정 #8) — 이것은 AST 흐름이다. 그래도
                 # 없으면 읽기(보수적) — 값에 적힌 쓴 쪽(R3-1c ①-a)은 그대로 먼저다.
-                d, verb = direction(text), ""
+                d, verb = direction(_without_setters(text)), ""
                 if d is None:
                     handed = _handoff(fn, starts_for(fn, name, line, via), resolve, callers, is_ctor)
                     if handed is not None:

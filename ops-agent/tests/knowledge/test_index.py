@@ -1027,7 +1027,12 @@ HANDOFF2 = {'h2/__init__.py': '', 'h2/jobs.py': (
     'class Template:\n    def _run(self, line):\n        key = "{}:{}".format(self.cfg.get("alarm_stats"), line)\n        self.redis.set(key, 1)\n\n\n'
     'class SetterOnly:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        self.sink.set_key(key)\n\n\n'
     'class SetterLater:\n    def _run(self):\n        key = self.cfg.get("alarm_stats")\n        self.sink.set_key(key)\n        self.log.info("x")\n'
-    '        self.sink.flush()\n        self.sink.save()\n')}
+    '        self.sink.flush()\n        self.sink.save()\n\n\n'
+    'class SetterLine:\n    def _run(self):\n        self.collector.set_key(self.cfg.get("alarm_stats"))\n        data = self.collector.collect()\n'
+    '        self.storage.save(Command(data=data))\n\n\n'
+    'class SetterLineWrite:\n    def _run(self):\n        self.sink.set_key(self.cfg.get("alarm_stats"))\n        self.sink.save()\n\n\n'
+    'class BareSet:\n    def _run(self):\n        self.redis.set(self.cfg.get("alarm_stats"), 1)\n\n\n'
+    'class CamelSetter:\n    def _run(self):\n        self.collector.setKey(self.cfg.get("alarm_stats"))\n        return self.collector.collect()\n')}
 HANDOFF2_NAMES = [Name("rediskey", "alarm:stats:{line}", "redis_key.alarm_stats")]
 
 
@@ -1054,8 +1059,13 @@ async def test_결과를_품는_것은_생성자뿐이고_상태_설정은_같�
     assert res("Template") == [("writes", "set")]                       # 리터럴의 문자열 메서드는 그 값을 만든다
     assert res("SetterOnly") == [("reads", "")]                         # 뒤 호출이 없다 — 모른다
     assert res("SetterLater") == [("writes", "save")]                   # 같은 수신자의 뒤 호출 중 처음 동사 있는 것(다른 수신자·동사 없는 호출은 지난다)
+    # 한 줄 `set_key(config.get(…))`(측정 #29 재측정 1부 (c): 틀린 쓰기 7줄) — 줄 동사 검사가 `set_key`의 `set` 조각을 안 센다(R3-5s ④), 같은 수신자의 뒤 호출이 정한다.
+    assert res("SetterLine") == [("reads", "collect")] and res("CamelSetter") == [("reads", "collect")]
+    assert res("SetterLineWrite") == [("writes", "save")]
+    assert res("BareSet") == [("writes", "")]                           # 맨 `set(`은 그대로 줄 동사(redis.set)
     writers = {idx.symbols[s].qualname for s in idx.writers("rediskey", "alarm:stats:{line}")}
-    assert writers == {"h2.jobs.SetterWrite._run", "h2.jobs.Dto._run", "h2.jobs.Unknown._run", "h2.jobs.Template._run", "h2.jobs.SetterLater._run"}
+    assert writers == {"h2.jobs.SetterWrite._run", "h2.jobs.Dto._run", "h2.jobs.Unknown._run", "h2.jobs.Template._run", "h2.jobs.SetterLater._run",
+                       "h2.jobs.SetterLineWrite._run", "h2.jobs.BareSet._run"}
 
 
 # ── R3-5s ② — 재정의·프로퍼티 읽기의 부르는 쪽 잇기(측정 #29 중단: `<대상 자원 속성>` 43개가 여전히 쓰기 0) ──

@@ -1772,6 +1772,16 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   행(브로커에 없어 읽기 실패)이 `mx.alarm.raw` 앞에 선다. 보드 CLI로 확인. 흐름 그래프의 config에만 있는 이름이 3 → 2(그 줄이 코드 줄이다).
 - 테스트 먼저(RED → GREEN). 스윕 +6(1130). **`code graph` 재생성 필요**(인덱스 자원이 는다).
 
+#### R3-5s ④ (10-31) ✅ — 줄 동사 검사에서 상태 설정 호출 이름을 뺀다
+
+- 측정 #29 재측정 1부 (c): `<수집기>.set_key(self.config.get("redis_key", "<토큰>"))` 한 줄이 줄 동사로 쓰기 — 틀린 쓰기 7줄(`_parts`가 `set_key`를 `set` 조각으로
+  쪼갠다, R3-1의 조각 단위 매칭). 요청: `set_key`도 같은 수신자의 다음 동사(`collect`)로.
+- `_without_setters`: 줄 동사 검사 전에 `set_<x>(`·`set<X>(` 호출 이름을 지운다 — 그 줄은 동사 없는 줄이 되어 넘김 규칙으로 가고, `_verb_direction`은 통째 이름
+  (`set_key`)을 동사로 안 보므로 같은 수신자의 뒤 호출(`collect` 읽기·`save` 쓰기)이 정한다. 맨 `set(`(redis)은 그대로 쓰기. 흐름 그래프의 `direction`(grep 엣지)은
+  안 바꿨다 — 인덱스 자원 줄에서만.
+- 테스트 먼저(RED → GREEN) — `set_key(config.get(…))` 뒤 `collect`/`save`, camelCase `setKey`, 맨 `set(`. 스윕 +2(1132). **R3-5s 끝** — 다음은 측정 #29
+  재측정 2부 브리프(`code graph` 재생성 **필요**).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

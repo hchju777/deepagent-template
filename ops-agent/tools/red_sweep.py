@@ -3500,7 +3500,13 @@ CASES += [
  ("서비스마다 값이 다른 key_path도 바꾼다", FL, "        if len(values) == 1:\n            out[(\"topic\", key_path)] = next(iter(values))\n", "        if values:\n            out[(\"topic\", key_path)] = sorted(values)[0]\n", [SITE_RENAMES_T]),
  ("못 푼 토픽 경로를 토픽으로 읽는다", WK, "                            topics = [n for n in listed if \".topic.\" not in n]\n", "                            topics = list(listed)\n", [KEYED_T]),
 ]
-assert len(CASES) >= 1130, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5s ④ — 줄 동사 검사에서 상태 설정 호출 이름을 뺀다 ──
+CASES += [
+ ("set_ 호출을 줄 동사로 센다", IDX, "                d, verb = direction(_without_setters(text)), \"\"\n", "                d, verb = direction(text), \"\"\n", [HANDOFF2_T]),
+ ("맨 set 호출까지 지운다", IDX, "_SETTER_CALL = re.compile(r\"\\bset(?:_\\w+|[A-Z]\\w*)\\s*\\(\")\n", "_SETTER_CALL = re.compile(r\"\\bset\\w*\\s*\\(\")\n", [HANDOFF2_T]),
+]
+assert len(CASES) >= 1132, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
