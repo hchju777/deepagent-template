@@ -167,7 +167,7 @@ class Hop(StrictModel):
     parent: str = ""
 
     def line(self) -> str:
-        # 메시지 홉(R3-5d ④)은 쓴 클래스가 없고 발행 쪽이 config 선언이라 `service`만 있다 — 그걸 쓴 쪽 칸에 적는다.
+        # 메시지 홉(R3-5d ④)과 걸은 클래스의 구독 토픽 홉(R3-5s ⑥)은 쓴 클래스가 없고 발행 쪽이 config 선언이라 `service`만 있다 — 그걸 쓴 쪽 칸에 적는다.
         who = (self.writer + (f" [{self.service}]" if self.service else "")) if self.writer else (self.service or "—")
         return f"  {self.key} | {who} | {self.status} | {self.evidence_id or '—'}"
 

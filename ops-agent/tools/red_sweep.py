@@ -3513,7 +3513,20 @@ CASES += [
  ("config 조회 결과가 인자의 값을 품지 않는다", IDX, "        if _is_config_call(node) or is_ctor(fn, node) or _string_method(node):\n", "        if is_ctor(fn, node) or _string_method(node):\n", [HANDOFF3_T, BOARD_KEYED_T]),
  ("인자와 무관한 config 조회 결과도 품는다", IDX, "        if _is_config_call(node) or is_ctor(fn, node) or _string_method(node):\n", "        if _is_config_call(node):\n            return True\n        if is_ctor(fn, node) or _string_method(node):\n", [HANDOFF3_T]),
 ]
-assert len(CASES) >= 1134, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5s ⑥ — 걸은 클래스의 구독 토픽 입력은 보존 범위·발행 선언으로 ──
+WALK_TOPIC_T = "tests/application/test_walk.py::test_걸은_클래스의_구독_토픽_입력은_보존_범위로_읽고_쓴_쪽은_발행_선언이며_비었으면_거기서_멈춘다"
+BOARD_QUIET_T = "tests/test_board_walk.py::test_걸은_클래스가_구독하는_토픽은_보존_범위와_발행_선언으로_읽고_비었으면_거기서_멈춘다"
+LOCAL_SOURCE_T = "tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"
+CASES += [
+ ("토픽 입력을 kafka.tail로 읽어 값의 쓴 쪽을 찾는다", WK, "        for name, kind in found_inputs:\n            if kind == \"topic\":\n", "        for name, kind in found_inputs:\n            if kind == \"topic\" and False:\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+ ("토픽 홉의 쓴 쪽 칸에 발행 선언을 안 적는다", WK, "                svcs = tuple(producers.get(name, ()))\n                shown = f\"발행 선언: {', '.join(svcs)}\" if svcs else \"발행 선언 없음(우리 밖)\"\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", "                svcs = ()\n                shown = \"\"\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+ ("빈 토픽 입력에서 값의 쓴 쪽을 찾는다", WK, "        elif stop_hop.kind == \"topic\" and ev in subscribed_at:\n", "        elif False:\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+ ("범위 읽기 실패한 토픽 입력을 본 것으로 센다", WK, "                if isinstance(tdata, dict):\n                    real += 1\n                else:\n                    missed.append(f\"읽기 실패 {name}\")\n", "                real += 1\n                if False:\n                    missed.append(f\"읽기 실패 {name}\")\n", [WALK_TOPIC_T]),
+ ("못 푼 토픽 경로를 걸은 클래스의 토픽으로 읽는다", WK, "                if \".topic.\" in name:\n                    remember(f\"{writer}: 토픽 경로 {name}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다\")\n                    missed.append(f\"토픽 경로 {name} 값 모름\")\n", "                if False:\n                    remember(f\"{writer}: 토픽 경로 {name}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다\")\n                    missed.append(f\"토픽 경로 {name} 값 모름\")\n", [WALK_TOPIC_T]),
+ ("source-quiet의 원천 토픽이 비지 않았다", LC, "                             else [] if variant in (\"source-missing-quiet\", \"source-quiet\")\n", "                             else [] if variant == \"source-missing-quiet\"\n", [LOCAL_SOURCE_T, BOARD_QUIET_T]),
+]
+assert len(CASES) >= 1140, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

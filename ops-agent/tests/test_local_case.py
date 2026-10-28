@@ -130,6 +130,12 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     sink_src = CORE_FILES["processor/source_sink.py"]
     assert "class SourceSink(SnapshotSink):" in sink_src and 'config_key="alarm_source"' in sink_src and 'self.cfg.get("redis_key", config_key)' in sink_src
     assert '["alarm_source"]' not in sink_src
+    # `source-quiet`(R3-5s ⑥) — 원천 키 값이 SourceSink를 대고 rows가 빈 배열이라 걷기가 그 클래스로 내려가고, 그 코드가 구독하는 원천 토픽이 비었다
+    from tools.local_case import VARIANTS, _EMPTY_DATA
+    assert "source-quiet" in VARIANTS and "source-quiet" in _EMPTY_DATA
+    sq = _seeds(NOW, "source-quiet")
+    assert json.loads(sq["redis"]["alarm:source:L1"]) == {"metadata": {"event_type": "SourceSink"}, "rows": []} and sq["kafka"]["mx.alarm.raw"] == []
+    assert json.loads(sq["redis"]["alarm:stats:L1"])["record"][0]["data"] == [] and len(sq["kafka"]["mx.alarm.main"]) == 5
     assert not [k for k in missing["redis"] if k.startswith("alarm:source:")]
     assert json.loads(blank["redis"]["alarm:source:L1"]) == []
     for s in (missing, blank):

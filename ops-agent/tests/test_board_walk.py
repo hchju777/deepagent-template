@@ -30,7 +30,7 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
 VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
-            "join-outer", "source-missing", "source-missing-quiet", "palette-missing")
+            "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet")
 
 
 def _repo(root, url, files):
@@ -348,6 +348,21 @@ def test_원천_키가_없으면_인덱스의_쓰는_클래스와_구독_토픽�
     assert rows[5:] == ["mx.alarm.raw | SourceSink [processor] 구독 | 비었다 — 보존 범위 0~0 · 남은 메시지 0"]
     assert stopped == "구독 토픽이 비었다 — mx.alarm.raw(SourceSink [processor])"
     assert rungs[:2] == ["kafka.tail limit=5 topic='mx.alarm.raw'", body]
+
+
+def test_걸은_클래스가_구독하는_토픽은_보존_범위와_발행_선언으로_읽고_비었으면_거기서_멈춘다(board, monkeypatch):
+    """R3-5s ⑥(측정 #29 재측정 2부): ③으로 인덱스에 `[topic]`이 돌아오자 걸은 클래스의 구독 토픽이 `kafka.tail` 입력 홉이 되어 `<ATR 토픽> | — | 빈 배열 (messages)`
+    → `쓴 쪽을 모른다`로 멈췄다. 측정판 `source-quiet`: 원천 키 값이 `SourceSink`를 대고 rows가 빈 배열이라 걷기가 그 클래스로 내려가는데, 그 코드가 구독하는 토픽
+    둘(사이트 전용 감사 토픽은 브로커에 없어 읽기 실패, 원천 토픽은 비었음)을 보존 범위로 읽고 쓴 쪽 칸은 발행 선언이다 — 원천 토픽이 비어 거기서 멈추고, 첫 칸은
+    지금 오는 것, 그다음 그 클래스 본문. 발행 쪽으로 걷지 않는다."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "source-quiet")
+    assert rows[:2] == ["alarm:stats:L1 | SummaryRefresh [batch] | 빈 배열 (record[0].data)", "alarm:domain:L1 | DomainBuilder [batch] | 정상 — record: 행 4 · 필드 2"]
+    assert rows[2] == PALETTE_ROW and rows[3] == "alarm:source:L1 | SourceSink [processor] | 빈 배열 (rows)"
+    assert rows[4].startswith("gumi.alarm.audit | 발행 선언: batch, processor, sink | 읽기 실패 — ") and "토픽이 없거나" in rows[4]
+    assert rows[5:] == ["mx.alarm.raw | 발행 선언 없음(우리 밖) | 비었다 — 보존 범위 0~0 · 남은 메시지 0"]
+    assert stopped == "구독 토픽이 비었다 — mx.alarm.raw(SourceSink [processor] · 발행 선언 없음(우리 밖))"
+    body = f"code.read line={_at('processor/source_sink.py', 'class SourceSink')} path='processor/source_sink.py' service='processor'"
+    assert rungs[:2] == ["kafka.tail limit=5 topic='mx.alarm.raw'", body] and notes == [PALETTE_NOTE]
 
 
 def test_공용_키가_없고_쓰는_클래스_코드에_구독_토픽이_없으면_서비스_선언을_읽지_않고_그_수만_적는다(board, monkeypatch):

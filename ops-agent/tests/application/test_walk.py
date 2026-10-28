@@ -1028,3 +1028,44 @@ async def test_키가_없으면_인덱스의_쓰는_클래스와_그_클래스_�
     assert walk.notes == ["in:{line}: 쓰는 함수 1줄이 인덱스 클래스의 것이 아니다 — 쓴 쪽을 채우지 않는다"] and walk.stopped == "키가 없다 — in:L1"
     walk = (await run_walk(_state(), runner=_Reads({k: v for k, v in table.items() if k[0] != "code.uses"}), subscriptions={"a": ("t.raw",)}, **kw))["walk"]
     assert walk.notes == ["in:{line}: code.uses 실패 — 대본 없음"] and walk.stopped == "키가 없다 — in:L1"
+
+
+# ── R3-5s ⑥ — 걸은 클래스의 구독 토픽 입력은 보존 범위·발행 선언으로(측정 #29 재측정 2부: `<ATR 토픽>`이 `쓴 쪽을 모른다`로 멈춤) ──
+
+
+async def test_걸은_클래스의_구독_토픽_입력은_보존_범위로_읽고_쓴_쪽은_발행_선언이며_비었으면_거기서_멈춘다():
+    """측정 #29 재측정 2부(평가자 10-31): ③으로 인덱스에 `[topic]` 자원이 돌아오자 걸은 클래스의 구독 토픽이 `kafka.tail` 입력 홉이 되어 `<ATR 토픽> | — | 빈 배열
+    (messages)` → `쓴 쪽을 모른다 — <ATR 토픽>(값에 인덱스의 클래스 이름이 없다)`로 멈췄다 — 토픽의 값에 쓴 클래스 이름이 있을 리 없다. 요청: 토픽 홉은 값의 쓴
+    쪽이 아니라 보존 범위(남은 메시지)와 발행 선언으로 — 비었으면 `구독 토픽이 비었다`(#28과 같은 멈춤). 발행 쪽으로 걷지 않는다(포인터 메시지 홉과 같다). 범위
+    읽기 실패와 값으로 안 풀린 경로는 못 본 입력이다."""
+    table = {("code.resources", "W0"): _res("W0", [("t.raw", "topic"), ("k:{line}", "rediskey")]),
+             ("redis.get", "k:L1"): _value(rows=[{"a": 1}]), ("kafka.offsets", "t.raw"): _offsets(100, 100)}
+    kw = dict(classes=frozenset({"W0"}), class_services={"W0": ("a",)}, topic_producers={"t.raw": ("col", "pub")}, clock=lambda: T0)
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, **kw))["walk"]
+    hop = walk.hops[1]
+    assert (hop.key, hop.kind, hop.depth, hop.writer, hop.service, hop.candidates, hop.status, hop.bad, hop.parent) == (
+        "t.raw", "topic", 1, "", "발행 선언: col, pub", ["col", "pub"], "비었다 — 보존 범위 100~100 · 남은 메시지 0", True, "t-1.e1")
+    assert hop.line() == "  t.raw | 발행 선언: col, pub | 비었다 — 보존 범위 100~100 · 남은 메시지 0 | t-3.e1"
+    assert hop.basis == "W0가 구독하는 토픽 (t-2.e1) — 보존 범위, 발행 쪽은 config 선언"
+    assert walk.stopped == "구독 토픽이 비었다 — t.raw(W0 [a] · 발행 선언: col, pub)" and walk.stop_at == "t-3.e1"
+    assert walk.rungs == [Rung(action="kafka.tail", params={"topic": "t.raw", "limit": 5}, evidence="t-3.e1"),
+                          Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-2.e1")]
+    assert ("kafka.tail", "t.raw") not in runner.ran and ("code.uses", "t.raw") not in runner.ran and walk.reads == 3     # 발행 쪽으로 걷지 않는다
+    # 메시지가 남아 있으면 그 홉은 나쁨이 아니고 읽은 입력이다 — 다른 입력도 정상이면 입력이 다 정상
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.offsets", "t.raw"): _offsets(40, 100)}), **kw))["walk"]
+    assert walk.hops[1].status == "보존 범위 40~100 · 남은 메시지 60" and not walk.hops[1].bad and walk.stopped == "입력이 다 정상 — W0"
+    # 발행 선언이 없으면 우리 밖 — 후보도 없다
+    walk = (await run_walk(_state(), runner=_Reads(table), **{**kw, "topic_producers": {}}))["walk"]
+    assert (walk.hops[1].service, walk.hops[1].candidates) == ("발행 선언 없음(우리 밖)", [])
+    assert walk.stopped == "구독 토픽이 비었다 — t.raw(W0 [a] · 발행 선언 없음(우리 밖))"
+    # 범위 읽기 실패는 모르는 것 — 나쁨이 아니고 못 본 입력(다 못 봤다)
+    walk = (await run_walk(_state(), runner=_Reads({k: v for k, v in table.items() if k[0] != "kafka.offsets"}), **kw))["walk"]
+    assert walk.hops[1].status == "읽기 실패 — 대본 없음" and not walk.hops[1].bad
+    assert walk.stopped == "입력을 다 못 봤다 — W0(읽기 실패 t.raw)"
+    # 값으로 안 풀린 config 경로(`…consumer.topic.<이름>`, R3-5s ③)는 토픽이 아니다 — 주 한 줄, 읽지 않고 못 본 입력
+    pathed = _Reads({**table, ("code.resources", "W0"): _res("W0", [("infra.kafka.consumer.topic.site_topic", "topic"), ("k:{line}", "rediskey")])})
+    walk = (await run_walk(_state(), runner=pathed, **kw))["walk"]
+    assert [h.key for h in walk.hops] == ["alarm:stats:L1", "k:L1"] and ("kafka.offsets", "infra.kafka.consumer.topic.site_topic") not in pathed.ran
+    assert walk.notes == ["W0: 토픽 경로 infra.kafka.consumer.topic.site_topic의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다"]
+    assert walk.stopped == "입력을 다 못 봤다 — W0(토픽 경로 infra.kafka.consumer.topic.site_topic 값 모름)"

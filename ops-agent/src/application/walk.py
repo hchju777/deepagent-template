@@ -18,6 +18,9 @@ pinned 본문은 그 홉까지의 사슬만(P0 4). 읽기의 id는 리드와 같
 그 키를 만든 메시지 **한 건**을 가리키니 그 한 건을 입력으로 읽는다(`kafka.message_at`, 증거는 세기만). 값 판정·단일값 판정은 키 값과 같다. 보존 범위
 밖이면 "키를 만든 메시지가 토픽에 없다"(나쁨), 포인터가 없으면 "포인터 없음"만(토픽을 짐작하지 않는다). 발행 쪽은 클래스가 아니라 config 발행 선언
 (같은 이름 클래스가 두 레포)이고 그쪽으로 걷지는 않는다 — 선언이 없으면 우리 밖.
+구독 토픽 입력(R3-5s ⑥): 걸은 클래스의 `[topic]` 입력은 값이 아니라 **보존 범위**(`kafka.offsets`)로 읽고 쓴 쪽 칸은 발행 선언이다 — 토픽의 값에 쓴 클래스 이름이
+있을 리 없다(측정 #29 재측정 2부: `kafka.tail`로 읽어 `쓴 쪽을 모른다`로 멈췄다). 비었으면 `구독 토픽이 비었다`(없는 키의 쓰는 클래스의 토픽 홉과 같다), 발행
+쪽으로 걷지는 않는다.
 """
 import json
 import re
@@ -480,6 +483,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     # 없는 키의 홉 증거 → (쓰는 클래스, 표시, 질의 인자, [(토픽, 범위 토막, 증거)], 토픽 없을 때의 멈춤 꼬리, 그 클래스 code.resources 증거, 본문 자리, 후보 서비스들)(①-c·R3-5r ②)
     keyed_at: dict[str, tuple[str, str, dict, list[tuple[str, str, str]], str, str, tuple[str, int] | None, tuple[str, ...]]] = {}
     topics_at: dict[str, tuple[str, str, dict, str]] = {}                                   # 구독 토픽 홉의 증거 → (쓰는 클래스, 표시, 질의 인자, 없는 키 홉의 증거)
+    subscribed_at: dict[str, tuple[str, str, tuple[str, int] | None, str]] = {}            # 걸은 클래스의 구독 토픽 홉의 증거 → (클래스 [서비스], 레포 범위, 본문 자리, 자원 증거)(R3-5s ⑥)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
     # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
@@ -521,6 +525,44 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             scan0 = await lookup(writer, fields=dict([watch]) if watch else {}, **branch.params)
             linked_at[came_from], merges = list(scan0.linked_at), list(scan0.merges)
         for name, kind in found_inputs:
+            if kind == "topic":
+                # 구독 토픽 입력은 **보존 범위**로 읽고 쓴 쪽 칸은 **발행 선언**(config)이다(R3-5s ⑥ — 측정 #29 재측정 2부: ③으로 인덱스에 [topic]이 돌아오자 걸은
+                # 클래스의 구독 토픽이 `kafka.tail` 입력 홉이 되어 `<ATR 토픽> | — | 빈 배열 (messages)` → `쓴 쪽을 모른다`로 멈췄다 — 토픽의 값에 쓴 클래스 이름이
+                # 있을 리 없다). 비었으면 그 홉이 나쁨이고 멈춤은 `구독 토픽이 비었다`(없는 키의 쓰는 클래스의 토픽 홉과 같다). 발행 쪽으로 걷지는 않는다(포인터
+                # 메시지 홉과 같다 — 선언이 없으면 우리 밖). 값으로 안 풀린 config 경로(R3-5s ③)는 토픽이 아니다 — 주 한 줄, 못 본 입력.
+                if ".topic." in name:
+                    remember(f"{writer}: 토픽 경로 {name}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다")
+                    missed.append(f"토픽 경로 {name} 값 모름")
+                    continue
+                if name in seen:
+                    result, _ = readings.get(name, ("", ""))
+                    if result == "ok":
+                        real += 1
+                    elif result == "fail":
+                        missed.append(f"읽기 실패 {name}")
+                    continue
+                if (why := over(writer, name)):
+                    stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
+                    break
+                seen.add(name)
+                _, tgot = await run(f"걷기 — {writer}{tag}가 구독하는 토픽 {name}의 보존 범위", "kafka.offsets", {"topic": name})
+                tev = tgot.evidence[0].id if tgot.evidence else ""
+                tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
+                tstatus, tbad, _ = _topic_status(tdata, tgot.error or "증거 없음")
+                svcs = tuple(producers.get(name, ()))
+                shown = f"발행 선언: {', '.join(svcs)}" if svcs else "발행 선언 없음(우리 밖)"
+                readings[name] = ("ok" if isinstance(tdata, dict) else "fail", "")
+                if isinstance(tdata, dict):
+                    real += 1
+                else:
+                    missed.append(f"읽기 실패 {name}")
+                hops.append(Hop(key=name, kind="topic", depth=depth + 1, service=shown, candidates=list(svcs), status=tstatus, bad=tbad, evidence_id=tev,
+                                basis=f"{writer}{tag}가 구독하는 토픽 ({res_id}) — 보존 범위, 발행 쪽은 config 선언", parent=came_from))
+                if tev:
+                    # 멈춤 문구의 클래스는 여기로 오게 한 홉의 표시로(`W [서비스]`) — 가지 꼬리표는 레포가 둘일 때만 있다.
+                    svc = branch.tag or next((h.service for h in hops if h.evidence_id == came_from and h.writer == writer), "")
+                    subscribed_at[tev] = (f"{writer} [{svc}]" if svc else writer, scope, class_at(text), res_id)
+                continue
             if kind == "rediskey":
                 filled = fill_key(name, declared=target.declared, key=target.key)
                 if filled is not None:
@@ -538,10 +580,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         missed.append(f"읽기 실패 {name}(scan)")
                     elif len(reads) < len(scanned_keys) or not scanned_keys:
                         missed.append(f"{name} scan {len(scanned_keys)}개 중 {len(reads)}개")
-            elif kind == "collection":
-                reads = [("mongo.find", {"collection": name, "filter": {}, "limit": 5}, name)]
             else:
-                reads = [("kafka.tail", {"topic": name, "limit": 5}, name)]
+                reads = [("mongo.find", {"collection": name, "filter": {}, "limit": 5}, name)]
             for action, params, label in reads:
                 if label in seen:
                     # 이미 읽은 키 — 값이 이 클래스를 대면 자기 출력이라 입력으로 안 센다(사람 결정 10-16: 자원이 자기 출력뿐이면 "입력을 모른다"). 다른
@@ -769,6 +809,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             w_, shown_, params_, key_ev = topics_at[ev]
             stopped = f"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])"
             rungs += [Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev), *body_rungs(key_ev)]
+        elif stop_hop.kind == "topic" and ev in subscribed_at:
+            # 걸은 클래스가 구독하는 토픽이 비었다(R3-5s ⑥) — 값의 쓴 쪽이 아니라 보존 범위가 사실이고 발행 쪽은 config 선언(홉의 쓴 쪽 칸). 첫 칸은 지금 오는 것,
+            # 그다음 그 클래스 본문.
+            who, scope_, body_, rev_ = subscribed_at[ev]
+            stopped = f"구독 토픽이 비었다 — {stop_hop.key}({who} · {stop_hop.service})"
+            rungs.append(Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev))
+            if scope_ and body_ is not None:
+                rungs.append(Rung(action="code.read", params={"service": scope_, "path": body_[0], "line": body_[1]}, evidence=rev_))
         elif ev in keyed_at:
             # 키가 없는데 쓰는 클래스는 안다(R3-5p ①-c) — 그 클래스 코드가 구독하는 토픽에 남은 것이 멈춤 문구에 같이 간다(입력을 받고도 키를 안 만든 것인지를
             # 리드가 사실로 가른다). 토픽이 없으면 그 사실(클래스 코드에 없음·서비스 선언 수). 첫 칸은 그 클래스 본문, 그다음 토픽마다 지금 오는 것.
