@@ -175,6 +175,13 @@ def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_�
     assert "palette-missing" in VARIANTS and "palette-missing" in _EMPTY_DATA
     gone = _seeds(NOW, "palette-missing")
     assert "alarm:palette" not in gone["redis"] and json.loads(gone["redis"]["palette:source"]) and json.loads(gone["redis"]["alarm:stats:L1"])["record"][0]["data"] == []
+    # `palette-source-missing`(R3-5t ②) — 원천 색 키가 없고(팔레트는 빈 배열), 쓰는 `PaletteSeeder`는 레지스트리 결과를 저장해 인덱스가 쓰는 줄을 못 본다(P1-7의
+    # 모양). 같은 GBM의 sevt 시드(`peers`)가 그 키 값에 그 이름을 댄다 — 다른 변형의 시드엔 `peers`가 없다.
+    assert "palette-source-missing" in VARIANTS and "palette-source-missing" in _EMPTY_DATA
+    psm = _seeds(NOW, "palette-source-missing")
+    assert "palette:source" not in psm["redis"] and json.loads(psm["redis"]["alarm:palette"])["colors"] == []
+    assert json.loads(psm["peers"]["sevt"]["redis"]["palette:source"])["metadata"]["event_type"] == "PaletteSeeder" and "peers" not in gone
+    assert "class PaletteSeeder:" in CORE_FILES["common/palette.py"] and "palette_source" not in CORE_FILES["common/palette.py"].split("class PaletteSeeder:")[1]
 
 
 # ── R3-5 ④ — 사내 c-1·c-2의 사슬과 등록 모음 파일 ──

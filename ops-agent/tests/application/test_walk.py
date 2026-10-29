@@ -1078,3 +1078,55 @@ async def test_걸은_클래스의_구독_토픽_입력은_보존_범위로_읽�
     assert [h.key for h in walk.hops] == ["alarm:stats:L1", "k:L1"] and ("kafka.offsets", "infra.kafka.consumer.topic.site_topic") not in pathed.ran
     assert walk.notes == ["W0: 토픽 경로 infra.kafka.consumer.topic.site_topic의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다"]
     assert walk.stopped == "입력을 다 못 봤다 — W0(토픽 경로 infra.kafka.consumer.topic.site_topic 값 모름)"
+
+
+# ── R3-5t ② — 인덱스에 쓰는 클래스가 없으면 다른 사이트의 같은 키 값이 대는 클래스로(측정 #29 3부: `<PGM>`의 주 줄 오독 → logic_bug) ──
+
+
+class _Peer:
+    """`peer(키, 템플릿)` 대역 — 키 → (사이트, 읽은 키, 값). 없는 키는 None. 던지는 키는 예외."""
+
+    def __init__(self, table, *, raise_on=()):
+        self.table, self.raise_on, self.asked = dict(table), set(raise_on), []
+
+    async def __call__(self, key, template):
+        self.asked.append((key, template))
+        if key in self.raise_on:
+            raise RuntimeError("peer down")
+        return self.table.get(key)
+
+
+async def test_인덱스에_쓰는_클래스가_없으면_다른_사이트의_같은_키_값이_대는_클래스를_쓴_쪽으로_채우고_출처를_칸에_적는다():
+    """측정 #29 재측정 3부(평가자 10-31): `<없는 키>: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0)` 주를 리드가 "쓰는 코드 누락"으로 읽어 `<PGM 케이스>` 1회차
+    logic_bug `<배치 서비스>`(2-a의 유일한 틀림). 요청: 같은 키 꼬리가 다른 사이트에 있으면 그 값의 `metadata.event_type`으로 쓴 쪽을 채우고 칸에 출처(`<FCT> 값의
+    event_type`)를 적어 걷기가 그 클래스의 입력(구독 토픽)까지 이어지게; 다른 사이트에도 없으면 지금 주 줄. 근본은 P1-7(레지스트리 경유 쓰기)."""
+    no_writer = "in:{line} [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점"
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): _res("W1", [("t.raw", "topic")]),
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): no_writer, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)}, clock=lambda: T0)
+    peer = _Peer({"in:L1": ("sevt", "in:L1", _value(record=[], metadata={"event_type": "W1"}))})
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, peer=peer, **kw))["walk"]
+    assert peer.asked == [("in:L1", "in:{line}")]
+    assert walk.hops[1].line() == "  in:L1 | W1 [a · sevt 값의 metadata.event_type] | 없음 | t-3.e1" and walk.hops[1].candidates == ["a"]
+    assert walk.hops[1].basis == "W0가 읽는 자원 (t-2.e1) · 쓴 쪽은 sevt의 같은 키 값(metadata.event_type)에서 — 인덱스 쓰기 줄 0(t-4.e1)"
+    assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 in:L1 값의 metadata.event_type에서 채웠다: W1"]
+    # 그다음은 전처럼 그 클래스의 구독 토픽까지(R3-5p ①-c) — 멈춤과 칸도 같다
+    assert walk.hops[2].line() == "  t.raw | 발행 선언 없음(우리 밖) | 정상 — 보존 범위 40~100 · 남은 메시지 60 · 구독 W1 [a · sevt 값의 metadata.event_type] | t-6.e1"
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a · sevt 값의 metadata.event_type] · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    assert walk.rungs[0] == Rung(action="code.read", params={"service": "a", "path": "x.py", "line": 1}, evidence="t-5.e1") and walk.reads == 5
+    # 같은 키가 없어 같은 템플릿의 다른 키를 읽었으면 그 키를 적는다
+    sibling = _Peer({"in:L1": ("suwon", "in:L7", _value(metadata={"event_type": "W1"}))})
+    walk = (await run_walk(_state(), runner=_Reads(table), peer=sibling, **kw))["walk"]
+    assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 suwon의 같은 키 in:L7 값의 metadata.event_type에서 채웠다: W1"]
+    # 다른 사이트에도 없거나(None), 값이 인덱스 클래스를 안 대거나, 다른 사이트 읽기가 던지면 — 전처럼 주 줄 그대로, 쓴 쪽을 채우지 않는다
+    for peer_ in (_Peer({}), _Peer({"in:L1": ("sevt", "in:L1", _value(metadata={"event_type": "refresh-job"}))}), _Peer({}, raise_on={"in:L1"})):
+        walk = (await run_walk(_state(), runner=_Reads(table), peer=peer_, **kw))["walk"]
+        assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1" and walk.hops[1].writer == ""
+        assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽을 채우지 않는다"]
+    # peer가 없으면(대본·사이트 하나) 전과 같다; 인덱스에 쓰는 클래스가 있으면 다른 사이트를 묻지 않는다
+    walk = (await run_walk(_state(), runner=_Reads(table), **kw))["walk"]
+    assert walk.stopped == "키가 없다 — in:L1"
+    quiet = _Peer({"in:L1": ("sevt", "in:L1", _value(metadata={"event_type": "W1"}))})
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("code.uses", "in:{line}"): USES_W1}), peer=quiet, **kw))["walk"]
+    assert quiet.asked == [] and walk.hops[1].line() == "  in:L1 | W1 [a] | 없음 | t-3.e1"

@@ -734,7 +734,7 @@ medium으로 깎는다). **코드 변경 없음** — 그 법인 Kafka가 닿는
 |---|---|---|---|
 | R3-5t ① ✅ | 1 토픽 행의 쓴 쪽 칸 | 없는 키 경로(R3-5p ①-c)의 구독 토픽 홉도 ⑥처럼: 쓴 쪽 칸은 발행 선언(`발행 선언: …`/`발행 선언 없음(우리 밖)`, 후보도 그 서비스들), 구독 클래스는 상태 칸 꼬리 `· 구독 <클래스> [<서비스>]`(⑥ 행도 같은 꼬리 — 행 모양 하나), 멈춤 `구독 토픽이 비었다 — <토픽>(<클래스> [<서비스>] · 발행 선언 …)`; 발행 선언 조립은 한 함수(`published`)로 메시지 홉과 같이 | `walk` |
 | R3-5t ③ ✅ | 3 판정 낱말 | `_topic_status`: 메시지가 남아 있으면 `정상 — 보존 범위 a~b · 남은 메시지 n`(빈 행 `비었다 — …`·`읽기 실패 — …`와 같은 꼴) | `walk` |
-| R3-5t ② | 2 다른 사이트 값의 쓴 쪽 | `keyed_writer`: `code.uses`에 인덱스 클래스의 쓰기 줄이 없으면 `peer(키, 템플릿)`(같은 GBM의 다른 사이트 Redis — 같은 키, 없으면 같은 템플릿의 첫 키)의 값에서 `writer_of` → 쓴 쪽 칸 `<클래스> [<서비스> · <FCT> 값의 metadata.event_type]`, 근거·주에 출처, 그다음은 전처럼 그 클래스의 구독 토픽; 다른 사이트에도 없으면 지금 주 줄; CLI `_peer_reader`(registry의 같은 GBM 다른 사이트, stub은 시드 `peers.<fct>.redis`, 안 닿는 사이트는 기억, 키마다 3곳까지), `EngineDeps.peer`; 측정판 `palette-source-missing`(원천 색 키 없음 — 쓰는 `PaletteSeeder`는 레지스트리 결과로 써서 인덱스 쓰기 줄 0, sevt 시드의 값이 그 이름을 댄다) | `walk`, `nodes`, CLI, 보드 |
+| R3-5t ② ✅ | 2 다른 사이트 값의 쓴 쪽 | `keyed_writer`: `code.uses`에 인덱스 클래스의 쓰기 줄이 없으면 `peer(키, 템플릿)`(같은 GBM의 다른 사이트 Redis — 같은 키, 없으면 같은 템플릿의 첫 키)의 값에서 `writer_of` → 쓴 쪽 칸 `<클래스> [<서비스> · <FCT> 값의 metadata.event_type]`, 근거·주에 출처, 그다음은 전처럼 그 클래스의 구독 토픽; 다른 사이트에도 없으면 지금 주 줄; CLI `_peer_reader`(registry의 같은 GBM 다른 사이트, stub은 시드 `peers.<fct>.redis`, 안 닿는 사이트는 기억, 키마다 3곳까지), `EngineDeps.peer`; 측정판 `palette-source-missing`(원천 색 키 없음 — 쓰는 `PaletteSeeder`는 레지스트리 결과로 써서 인덱스 쓰기 줄 0, sevt 시드의 값이 그 이름을 댄다) | `walk`, `nodes`, CLI, 보드 |
 | — | **측정 #30** | ①③② 뒤. **`code graph` 재생성: 불필요**(인덱스 변경 없음). `<AGV 2건>`의 토픽 행(`발행 선언 없음(우리 밖)` · 구독 꼬리)과 external 여부, `<PGM>`의 쓴 쪽 칸(`<FCT> 값의 event_type`)과 그 뒤 토픽 홉, 비지 않은 토픽 행의 `정상 —`, 점수 | 브리프(①③② 뒤) |
 
 

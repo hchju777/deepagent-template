@@ -187,6 +187,79 @@ async def _close_llms(*llms) -> None:
             pass
 
 
+# 없는 키의 쓴 쪽을 다른 사이트 값에서 찾을 때(R3-5t ②) 키마다 물어볼 사이트 수 상한 — 안 닿는 사이트(접속 5초 × N)가 많은 법인에서 걷기 시간이 새지 않게.
+PEER_SITES = 3
+
+
+def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], clock, seeds: dict | None):
+    """같은 GBM의 다른 사이트에서 같은 키의 값을 읽는 `peer(키, 템플릿)`와 닫는 함수(R3-5t ② — 측정 #29 3부: 인덱스가 모르는 쓴 쪽을 리드가 "쓰는 코드 누락"으로
+    읽었다). `(사이트, 읽은 키, 값)` — 같은 키가 없으면 같은 템플릿의 첫 키, 그것도 없으면 다음 사이트; registry 순서, 키마다 `PEER_SITES`곳까지, 한 번 못 읽은
+    사이트는 다시 안 묻는다. 읽기 전용(`get`·`scan`)이고 stub은 시드의 `peers.<fct>.redis`(없는 사이트는 못 읽는 사이트). 던지지 않는다 — 못 읽으면 None."""
+    from src.application.facts import key_head
+
+    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]
+    readers: dict[str, object] = {}
+    dead: set[str] = set()
+
+    def reader(entry):
+        if entry.fct in readers:
+            return readers[entry.fct]
+        if seeds is not None:
+            from src.infrastructure.stubs import StubRedisReader
+            peer_seeds = (seeds.get("peers") or {}).get(entry.fct) or {}
+            found = StubRedisReader(peer_seeds.get("redis"), clock=clock) if peer_seeds else None
+        else:
+            cfg, _ = load_site_config(config_root, entry.gbm, entry.fct, env=env)
+            if cfg.infra.redis is None:
+                found = None
+            else:
+                from src.infrastructure.redis_reader import RealRedisReader
+                found = RealRedisReader(cfg.infra.redis, clock=clock)
+        readers[entry.fct] = found
+        return found
+
+    async def peer(key: str, template: str):
+        asked = 0
+        for entry in others:
+            if entry.fct in dead or asked >= PEER_SITES:
+                continue
+            try:
+                got_reader = reader(entry)
+            except Exception:                                      # noqa: BLE001 — 그 사이트의 층이 없거나 깨졌다
+                dead.add(entry.fct)
+                continue
+            if got_reader is None:
+                dead.add(entry.fct)
+                continue
+            asked += 1
+            try:
+                got = await got_reader.get(key)
+                if got.status != "ok":
+                    dead.add(entry.fct)
+                    continue
+                if got.data is not None:
+                    return entry.fct, key, got.data
+                scanned = await got_reader.scan(f"{key_head(template)}*")
+                keys = [k for k in (scanned.data or []) if isinstance(k, str)] if scanned.status == "ok" else []
+                for sibling in keys[:1]:
+                    got = await got_reader.get(sibling)
+                    if got.status == "ok" and got.data is not None:
+                        return entry.fct, sibling, got.data
+            except Exception:                                      # noqa: BLE001
+                dead.add(entry.fct)
+        return None
+
+    async def close():
+        for found in readers.values():
+            try:
+                if found is not None and hasattr(found, "close"):
+                    await found.close()
+            except Exception:                                      # noqa: BLE001
+                pass
+
+    return peer, close
+
+
 def cmd_boot(args, env) -> int:
     errors = validate_boot(args.config_root, env=env, knowledge_root=_knowledge_root(args))
     if not errors:
@@ -1097,6 +1170,7 @@ def cmd_case_walk(args, env) -> int:
         code, services, flow_graph, graph_note = _code_if_ready(
             site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock, graph_dir=_graph_dir(args, env, gbm))
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
+        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)
         try:
             # 조사(`cmd_case_investigate`)와 같은 재료 — 다른 것은 리드(`_no_lead`)뿐이다. 여기서 갈라지면 `case walk`가 조사와 다른 걷기를 보여 준다.
             deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock, detail_chars=app.investigation.evidence_chars,
@@ -1111,11 +1185,12 @@ def cmd_case_walk(args, env) -> int:
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
-                              subscriptions=flow.consuming_map(flow_graph), clock=clock)
+                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)
             state = await (walk_from_key(case, args.key, deps) if args.key else walk_only(case, deps))
             return state, flow_graph, (code.has_index() if code else False), graph_note
         finally:
             await adapters.close()
+            await close_peers()
 
     state, flow_graph, code_index, graph_note = _run(go())
     target = briefing.target_key(state, site_config=site, flow_graph=flow_graph)
@@ -1190,6 +1265,7 @@ def cmd_case_investigate(args, env) -> int:
         built["code"] = code.describe() if code else "코드 없음"
         built["graph"] = graph_note
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
+        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)
         try:
             frame, integrate, conclude = make_lead(
                 llm, site_config=site, prompts=prompts,
@@ -1223,10 +1299,11 @@ def cmd_case_investigate(args, env) -> int:
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
-                              subscriptions=flow.consuming_map(flow_graph), clock=clock)
+                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()
+            await close_peers()
             await _close_llms(llm, conclude_llm)
 
     final = _run(go())

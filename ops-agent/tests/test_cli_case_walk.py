@@ -63,3 +63,36 @@ def test_case_walk은_target으로_입구를_돌리고_케이스_블록만_찍�
     assert "(response[1] 대상 행은 찾았다)" in out.out and "대상 행이 없다" not in out.out
     assert "걷기 없음" in out.out and "읽기 전용" in out.out
     assert sorted(p.name for p in tmp_path.iterdir()) == before                                 # cases.json·out/ 어느 것도 생기지 않았다
+
+
+def test_peer_reader는_같은_GBM의_다른_사이트에서_같은_키를_없으면_같은_템플릿의_첫_키를_읽고_안_닿는_사이트는_다시_안_묻는다(tmp_path):
+    """R3-5t ② — 걷기의 `peer(키, 템플릿)`: registry의 같은 GBM 다른 사이트를 차례로(키마다 `PEER_SITES`곳까지), stub은 시드 `peers.<fct>.redis`. 같은 키가
+    없으면 같은 템플릿의 첫 키, 그것도 없으면 다음 사이트. 한 번 못 읽은 사이트는 그 걷기에서 다시 안 묻는다. 던지지 않는다."""
+    import asyncio
+    from datetime import datetime
+    from src.__main__ import PEER_SITES, _peer_reader
+
+    clock = lambda: datetime(2026, 10, 15, 9, 0, 0)          # noqa: E731 — stub 봉투의 observed_at
+    root = _root(tmp_path)
+    # 다른 GBM(nw/vina)과 비활성(mx/off)은 같은 키를 들고 있어도 안 묻는다 — registry 순서상 앞에 둬서 거르지 않으면 그쪽이 먼저 답한다.
+    (root / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}, {"gbm": "nw", "fct": "vina"}, {"gbm": "mx", "fct": "off", "enabled": False},
+                                                              {"gbm": "mx", "fct": "sevt"}, {"gbm": "mx", "fct": "suwon"}]}), encoding="utf-8")
+    seeds = {"redis": {}, "peers": {"vina": {"redis": {"k:L1": "nw"}}, "off": {"redis": {"k:L1": "off"}},
+                                    "sevt": {"redis": {"k:L7": json.dumps({"metadata": {"event_type": "W1"}})}},
+                                    "suwon": {"redis": {"k:L1": json.dumps({"metadata": {"event_type": "W2"}}), "other": "x"}}}}
+    peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=seeds)
+    assert asyncio.run(peer("k:L1", "k:{line}")) == ("sevt", "k:L7", {"type": "string", "value": json.dumps({"metadata": {"event_type": "W1"}})})
+    assert asyncio.run(peer("other", "other")) == ("suwon", "other", {"type": "string", "value": "x"})          # sevt엔 없고 같은 템플릿의 키도 없다 → 다음 사이트
+    assert asyncio.run(peer("none:L1", "none:{line}")) is None
+    asyncio.run(close())
+    # 읽기가 실패한 사이트(오류 시드)는 그 뒤로 안 묻는다 — 첫 키는 다음 사이트의 같은 템플릿 키로, 둘째 키는 sevt에 있어도 suwon에서
+    bad = {"redis": {}, "peers": {"sevt": {"redis": {"k:L1": {"__error__": "down"}, "k:L2": "y"}}, "suwon": {"redis": {"k:L2": "z"}}}}
+    peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=bad)
+    assert asyncio.run(peer("k:L1", "k:{line}")) == ("suwon", "k:L2", {"type": "string", "value": "z"})
+    assert asyncio.run(peer("k:L2", "k:{line}")) == ("suwon", "k:L2", {"type": "string", "value": "z"})
+    asyncio.run(close())
+    # 사이트가 하나뿐이면 늘 None(묻지 않는다); 상한은 상수
+    (root / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")
+    peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=seeds)
+    assert asyncio.run(peer("k:L1", "k:{line}")) is None and PEER_SITES == 3
+    asyncio.run(close())

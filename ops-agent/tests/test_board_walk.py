@@ -30,7 +30,7 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
 VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
-            "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet")
+            "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet", "palette-source-missing")
 
 
 def _repo(root, url, files):
@@ -65,6 +65,8 @@ def board(tmp_path_factory):
     app = json.loads((config / "app.json").read_text(encoding="utf-8"))
     app.update(output_dir=str(root / "out"), case_store=str(root / "out" / "cases.json"))
     (config / "app.json").write_text(json.dumps(app), encoding="utf-8")
+    # 같은 GBM의 다른 사이트(R3-5t ②) — 없는 키의 쓴 쪽을 그 사이트의 같은 키 값에서 채운다. stub은 시드의 `peers` 절만 읽으니 그 사이트의 층은 없어도 된다.
+    (config / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}, {"gbm": "mx", "fct": "sevt"}]}), encoding="utf-8")
     layer = json.loads((config / "gbm" / "mx.json").read_text(encoding="utf-8"))
     layer["code"] = {"repos": [{"name": n, "url": u, "path": str(root / "target-code" / n)} for n, u in URLS.items()]}
     # 포인터 메시지 읽기(R3-5d ④)는 kafka 어댑터가 있어야 한다 — 시드의 토픽을 선언한다(stub은 seeds의 kafka 절로 선다).
@@ -366,6 +368,22 @@ def test_걸은_클래스가_구독하는_토픽은_보존_범위와_발행_선�
     assert stopped == "구독 토픽이 비었다 — mx.alarm.raw(SourceSink [processor] · 발행 선언 없음(우리 밖))"
     body = f"code.read line={_at('processor/source_sink.py', 'class SourceSink')} path='processor/source_sink.py' service='processor'"
     assert rungs[:2] == ["kafka.tail limit=5 topic='mx.alarm.raw'", body] and notes == [PALETTE_NOTE]
+
+
+def test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다(board, monkeypatch):
+    """R3-5t ②(측정 #29 3부): `인덱스에 쓰는 함수가 없다` 주를 리드가 "쓰는 코드 누락"으로 읽었다. 측정판 `palette-source-missing`: 원천 색 키가 없고, 쓰는
+    `PaletteSeeder`는 레지스트리 결과(명령)를 저장해 인덱스가 쓰는 줄을 못 본다(P1-7의 모양) — 같은 GBM의 sevt 시드가 그 키 값에 `PaletteSeeder`를 대서 쓴 쪽 칸에
+    출처(`sevt 값의 metadata.event_type`)와 함께 채우고, 그 클래스가 구독하는 토픽(GBM 선언 topic2)의 보존 범위까지 걷는다. 멈춤은 `키가 없다`에 그 사실."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "palette-source-missing")
+    assert "alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 빈 배열 (colors)" in rows
+    assert "palette:source | PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] | 없음" in rows
+    topic = [r for r in rows if r.startswith("mx.alarm.main | ")]
+    assert topic and topic[0].endswith(" | 정상 — 보존 범위 0~5 · 남은 메시지 5 · 구독 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]")
+    assert stopped == ("키가 없다 — palette:source(쓰는 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] · 구독 mx.alarm.main 범위 0~5, "
+                       "남은 메시지 5)")
+    assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 palette:source 값의 metadata.event_type에서 채웠다: PaletteSeeder"]
+    assert rungs[:2] == [f"code.read line={_at('common/palette.py', 'class PaletteSeeder')} path='common/palette.py' service='batch'",
+                         "kafka.tail limit=5 topic='mx.alarm.main'"]
 
 
 def test_공용_키가_없고_쓰는_클래스_코드에_구독_토픽이_없으면_서비스_선언을_읽지_않고_그_수만_적는다(board, monkeypatch):

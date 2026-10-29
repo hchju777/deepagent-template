@@ -21,6 +21,9 @@ pinned 본문은 그 홉까지의 사슬만(P0 4). 읽기의 id는 리드와 같
 구독 토픽 입력(R3-5s ⑥): 걸은 클래스의 `[topic]` 입력은 값이 아니라 **보존 범위**(`kafka.offsets`)로 읽고 쓴 쪽 칸은 발행 선언이다 — 토픽의 값에 쓴 클래스 이름이
 있을 리 없다(측정 #29 재측정 2부: `kafka.tail`로 읽어 `쓴 쪽을 모른다`로 멈췄다). 비었으면 `구독 토픽이 비었다`(없는 키의 쓰는 클래스의 토픽 홉과 같다), 발행
 쪽으로 걷지는 않는다.
+없는 키의 쓴 쪽을 인덱스가 모르면(R3-5t ②, 측정 #29 3부: `인덱스에 쓰는 함수가 없다` 주를 리드가 "쓰는 코드 누락"으로 읽어 logic_bug): 같은 GBM의 **다른 사이트**에서
+같은 키(없으면 같은 템플릿의 첫 키)의 값을 읽어(`peer` — 호출부가 준다, 읽기 전용) 그 값이 대는 인덱스 클래스를 쓴 쪽으로, 쓴 쪽 칸에 출처(`<FCT> 값의 <자리>`)를
+적고 그 클래스의 구독 토픽까지 전처럼 걷는다. 다른 사이트에도 없으면 주 줄 그대로. 근본은 P1-7(레지스트리 경유 쓰기)이라 그때까지의 메움이다.
 """
 import json
 import re
@@ -289,9 +292,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    topic_producers: dict[str, tuple[str, ...]] | None = None,
                    subscriptions: dict[str, tuple[str, ...]] | None = None,
                    lookup: Callable[..., Awaitable[FilterScan]] | None = None,
+                   peer: Callable[[str, str], Awaitable[tuple[str, str, Any] | None]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
-    (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만."""
+    (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만. `peer(키, 템플릿)`은 같은 GBM 다른
+    사이트의 같은 키 값 `(사이트, 읽은 키, 값)`(R3-5t ②); 없으면(사이트 하나·대본) 인덱스가 모르는 쓴 쪽은 전처럼 비운다."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
@@ -395,9 +400,27 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             return [_Branch({}, "", cands)], shown, cands
         return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, cands
 
-    async def keyed_writer(template: str):
-        """없는 키의 쓴 쪽 — 값에는 없으니 인덱스의 쓰기 자원(`code.uses`)에서, 그 키를 선언한 서비스의 클래스를 먼저(R3-5p ①-c, 평가자 분석 10-28). 한
-        클래스로 좁혀지면 `(클래스, 표시, 후보 서비스들, 질의 인자, 증거)`, 아니면 None(전처럼 `키가 없다`)."""
+    async def peer_writer(template: str, key: str) -> tuple[str, str, str, str] | None:
+        """다른 사이트의 같은 키 값이 대는 인덱스 클래스 → (클래스, 값의 자리, 사이트, 읽은 키)(R3-5t ②). 없거나·못 읽거나·이름이 인덱스 클래스가 아니면 None.
+        읽기 수·시간 상한 안에서만(그 읽기는 runner 밖이라 수에 안 세고 증거도 아니다 — 표의 사실로만 간다). 던지지 않는다 — 다른 사이트 읽기 실패는 쓴 쪽을 못
+        채운 것일 뿐이다."""
+        if peer is None or over(template, "다른 사이트 값"):
+            return None
+        try:
+            hit = await peer(key, template)
+        except Exception:                                                                   # noqa: BLE001
+            return None
+        if hit is None:
+            return None
+        fct, read_key, raw = hit
+        w, at, _ = writer_of(_unwrap(raw), classes)
+        return (w, at, fct, read_key) if w else None
+
+    async def keyed_writer(template: str, key: str):
+        """없는 키의 쓴 쪽 — 값에는 없으니 인덱스의 쓰기 자원(`code.uses`)에서, 그 키를 선언한 서비스의 클래스를 먼저(R3-5p ①-c, 평가자 분석 10-28). 인덱스에
+        쓰는 클래스가 없으면 같은 GBM 다른 사이트의 같은 키 값이 대는 클래스로(`peer_writer`, R3-5t ② — 측정 #29 3부: `인덱스에 쓰는 함수가 없다` 주를 리드가
+        "쓰는 코드 누락"으로 읽어 logic_bug; 근본은 P1-7). 한 클래스로 좁혀지면 `(클래스, 표시, 후보 서비스들, 질의 인자, 증거, 근거 토막)`, 아니면 None(전처럼
+        `키가 없다`)."""
         _, got = await run(f"걷기 — 없는 키 {template}을 쓰는 클래스(인덱스)", "code.uses", {"name": template})
         uev = got.evidence[0].id if got.evidence else ""
         text = runner.raw(uev) if got.status == "ok" and uev else None
@@ -408,9 +431,17 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         found = writers_in(text, classes)
         if not found:
             lines = writes_in(text)
-            remember(f"{template}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽을 채우지 않는다" if not lines
-                     else f"{template}: 쓰는 함수 {lines}줄이 인덱스 클래스의 것이 아니다 — 쓴 쪽을 채우지 않는다")
-            return None
+            why = "인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0)" if not lines else f"쓰는 함수 {lines}줄이 인덱스 클래스의 것이 아니다"
+            elsewhere = await peer_writer(template, key)
+            if elsewhere is None:
+                remember(f"{template}: {why} — 쓴 쪽을 채우지 않는다")
+                return None
+            w, at, fct, read_key = elsewhere
+            found_homes, shown, cands = split(w, template, walking=False)
+            params = params_for(*found_homes[0]) if len(homes(w)) > 1 and found_homes else {}
+            remember(f"{template}: {why} — 쓴 쪽은 {fct}의 같은 키 {read_key} 값의 {at}에서 채웠다: {w}")
+            # 출처는 쓴 쪽 칸에(리드가 그 칸을 베낀다) — 그 사이트의 값이 대는 것이지 이 사이트의 값도 인덱스도 아니다.
+            return w, f"{shown} · {fct} 값의 {at}", cands, params, uev, f"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})"
         declared = set(owners.get(template, ()))
         picked = [(c, s) for c, s in found if s in declared] or found
         writers = list(dict.fromkeys(c for c, _ in picked))
@@ -419,7 +450,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             return None
         found_homes, shown, cands = split(writers[0], template, walking=False)
         params = params_for(*found_homes[0]) if len(homes(writers[0])) > 1 and found_homes else {}
-        return writers[0], shown, cands, params, uev
+        return writers[0], shown, cands, params, uev, f"쓴 쪽은 인덱스의 쓰기 자원({uev})에서, {template}을 선언한 서비스의 것"
 
     async def judged(rows: list, status: str, bad: bool, ev: str) -> tuple[str, bool, tuple[str, str] | None]:
         """단일값 필드(③) — 아래 홉에서 잡힌 `(필드, 값)`이 여기도 그대로면 나쁨(grep 없이 이어진다). 아니면 읽는 쪽 코드 줄이 정한다. 키 값과
@@ -626,11 +657,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 status, bad, carry = await judged(rows_of(raw) if raw is not None else [], status, bad, ev)
                 # 없는 키의 쓴 쪽은 값에 없다 — 인덱스의 쓰기 자원과 그 키를 선언한 서비스로 채운다(R3-5p ①-c). 그 클래스로 더 걷지는 않고(다른 입력은 리드의
                 # `code.resources` 칸), 그 서비스가 구독하는 토픽의 보존 범위만 아래에서 홉으로 적는다.
-                keyed = (await keyed_writer(name)) if (got.status == "ok" and raw is None and not w and kind == "rediskey") else None
+                keyed = (await keyed_writer(name, label)) if (got.status == "ok" and raw is None and not w and kind == "rediskey") else None
                 # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다. 정상 홉의 쓴 쪽도
                 # 같은 가르기로(걷지는 않는다) — 표의 쓴 쪽 칸과 판정의 후보가 같은 근거를 갖는다.
                 if keyed is not None:
-                    w, shown, cands, params_k, uses_ev = keyed
+                    w, shown, cands, params_k, uses_ev, origin = keyed
                     next_branches = []
                 elif bad and w:
                     next_branches, shown, cands = branches(w, name)
@@ -641,7 +672,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 declared_names[ev] = name
                 basis = f"{writer}{tag}가 읽는 자원 ({res_id})"
                 if keyed is not None:
-                    basis += f" · 쓴 쪽은 인덱스의 쓰기 자원({uses_ev})에서, {name}을 선언한 서비스의 것"
+                    basis += f" · {origin}"
                 hops.append(Hop(key=label, kind=kind, depth=depth + 1, writer=w, service=shown, candidates=list(cands), status=status, bad=bad,
                                 evidence_id=ev, basis=basis, parent=came_from))
                 if got.status == "ok" and raw is not None and w != writer:

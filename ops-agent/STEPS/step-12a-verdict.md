@@ -1828,6 +1828,25 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   그대로.
 - 테스트 먼저(RED → GREEN). 스윕 +1(1145). `code graph` 재생성 불필요.
 
+#### R3-5t ② (10-31) ✅ — 인덱스가 모르는 쓴 쪽은 같은 GBM 다른 사이트의 같은 키 값에서
+
+- 측정 #29 재측정 3부 (2): `<없는 키>: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0)` 주를 리드가 "쓰는 코드 누락"으로 읽어 `<PGM 케이스>` 1회차 logic_bug
+  `<배치 서비스>`(2-a의 유일한 틀림). 근본은 P1-7(레지스트리 경유 `<대상 자원 속성>` 쓰기)이라 그때까지의 메움 — 평가자 요청: 같은 키 꼬리가 다른 사이트에 있으면
+  그 값의 `metadata.event_type`으로 쓴 쪽을 채우고 칸에 출처를 적어 걷기가 그 클래스의 입력까지 이어지게, 다른 사이트에도 없으면 지금 주 줄.
+- 걷기(`keyed_writer` → `peer_writer`): `code.uses`에 인덱스 클래스의 쓰기 줄이 없을 때만 `peer(키, 템플릿)`을 묻고, 값이 대는 인덱스 클래스를 쓴 쪽으로 — 쓴 쪽 칸
+  `<클래스> [<서비스> · <FCT> 값의 metadata.event_type]`, 근거 `쓴 쪽은 <FCT>의 같은 키 값(…)에서 — 인덱스 쓰기 줄 0(<code.uses 증거>)`, 주 `… 쓴 쪽은 <FCT>의 같은
+  키 <읽은 키> 값의 …에서 채웠다: <클래스>`. 그다음은 전처럼 그 클래스의 구독 토픽(R3-5p ①-c). 없거나·못 읽거나·값이 인덱스 클래스를 안 대면 전처럼 주 줄 그대로.
+  그 읽기는 runner 밖이라 읽기 수에 안 세고 증거도 아니다 — 표의 사실로만.
+- CLI `_peer_reader(config_root, gbm, fct, env, clock, seeds)` → `(peer, close)`: registry의 같은 GBM·활성·다른 사이트를 차례로, 같은 키 → 없으면 같은 템플릿의 첫 키
+  (`scan`) → 다음 사이트; 키마다 `PEER_SITES`(3)곳까지, 한 번 못 읽은 사이트(접속 실패·층 없음·Redis 없음)는 그 걷기에서 다시 안 묻는다. 읽기 전용(`get`·`scan`).
+  stub은 시드 `peers.<fct>.redis`(없는 사이트는 못 읽는 사이트 — 다른 변형·다른 CLI 테스트는 전과 같다). `case walk`·`case investigate` 둘 다 `EngineDeps.peer`로
+  넘기고 어댑터와 같이 닫는다. 사내: 측정 PC가 다른 법인 Redis에 닿는지가 효과를 정한다 — 안 닿으면 5초씩 3곳까지 쓰고 주 줄 그대로(브리프에 적음).
+- 측정판 `palette-source-missing`: 원천 색 키가 없고 쓰는 `PaletteSeeder`(dt-core `common/`, 세 서비스 공유)는 레지스트리 결과(명령)를 저장해 인덱스 쓰기 줄 0;
+  sevt 시드가 그 키 값에 `PaletteSeeder`를 댄다 → 쓴 쪽 칸 `PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]`, 그 클래스가 구독하는
+  `mx.alarm.main`의 보존 범위 홉, 멈춤 `키가 없다 — palette:source(쓰는 … · 구독 mx.alarm.main 범위 0~5, 남은 메시지 5)`. 보드 CLI로 확인(`code uses palette:source`
+  쓰기 0).
+- 테스트 먼저(RED → GREEN). 스윕 +8(1153). **R3-5t 끝** — 다음은 측정 #30 브리프(`code graph` 재생성 **불필요**).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

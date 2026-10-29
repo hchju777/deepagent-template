@@ -95,6 +95,9 @@ class EngineDeps:
     service_repos: dict = field(default_factory=dict)
     # R3-4 ③ — 어댑터의 단일값 조회(`DeployedCodePort.filter_lines`). None이면(인덱스 없음·대본) 걷기가 단일값을 표시만 한다.
     filter_lines: Callable[..., Awaitable[FilterScan]] | None = None
+    # R3-5t ② — 같은 GBM 다른 사이트의 같은 키 값 `peer(키, 템플릿) → (사이트, 읽은 키, 값) | None`(CLI `_peer_reader`, 읽기 전용). 인덱스가 없는 키의 쓴 쪽을
+    # 모를 때만 걷기가 묻는다. None이면(사이트 하나·대본) 전처럼 쓴 쪽을 비운다.
+    peer: Callable[[str, str], Awaitable[tuple[str, str, object] | None]] | None = None
     # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
     declared_by: dict = field(default_factory=dict)
     # 토픽 → config로 발행을 선언한 서비스들(`flow.producing_map`, R3-5d ④) — 메시지 홉의 발행 쪽. 사람 결정 10-19: 같은 이름 클래스가 두 레포라 클래스
@@ -484,7 +487,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
                                   service_repos=deps.service_repos, declared_by=deps.declared_by,
                                   topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,
-                                  clock=deps.clock)
+                                  peer=deps.peer, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 

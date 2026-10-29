@@ -1873,7 +1873,7 @@ CASES += [
   '                await client.aclose() if hasattr(client, "aclose") else client.close()', "                continue",
   ["tests/infrastructure/test_llm_adapters.py::test_close는_chat_model의_httpx_클라이언트를_닫는다"]),
  ("조사가 끝나도 LLM을 안 닫는다", MN,
-  "            await adapters.close()\n            await _close_llms(llm, conclude_llm)", "            await adapters.close()",
+  "            await close_peers()\n            await _close_llms(llm, conclude_llm)", "            await close_peers()",
   ["tests/application/test_lead.py::test_CLI가_역할별_LLM을_따로_꽂는다"]),
  ("거름망이 태스크 예외까지 삼킨다", MN,
   "    if transport_level and quiet:", "    if quiet:",
@@ -2543,7 +2543,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -2645,7 +2645,7 @@ CASES += [
  ("걷기 노드가 레포 지도를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by", "declared_by=deps.declared_by", [WNODE_T]),
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
  ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
- ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\") else", "\"colors\": [] if variant in (\"palette-unread\",) else", [PAL_T]),
+ ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\", \"palette-source-missing\")", "\"colors\": [] if variant in (\"palette-unread\", \"palette-source-missing\")", [PAL_T]),
  ("palette-empty가 빈 data가 아니다", LC, "\"source-filtered\", \"palette-empty\", \"palette-missing\"", "\"source-filtered\", \"palette-missing\"", [PAL_T]),
 ]
 
@@ -2817,7 +2817,7 @@ CASES += [
  ("읽기 실패의 칸이 클래스 머리다", WK, "at=(reader_at(text) if real or missed else None) or class_at(text))", "at=(reader_at(text) if real else None) or class_at(text))", [BOARD_UNREAD_T]),
  ("stub이 오류 신호를 값으로 돌려준다", STB, "        if isinstance(found, dict) and set(found) == {\"__error__\"}:", "        if False:", [STUB_ERR_T, BOARD_UNREAD_T]),
  ("측정판 원천 클래스가 자기 출력을 안 읽는다", LC, "        raw = json.loads(self.redis.get(self.cfg[\"redis_key\"][\"alarm_raw\"].format(line=message[\"line\"])) or \"{}\")\n        rows = raw.get(\"rows\", []) + [message]", "        rows = [message]", [LC_OBJ_T, BOARD_OBJ_T]),
- ("palette-unread의 원천 색 키가 읽힌다", LC, "} if variant == \"palette-unread\" else json.dumps(", "} if False else json.dumps(", [LC_OBJ_T, BOARD_UNREAD_T]),
+ ("palette-unread의 원천 색 키가 읽힌다", LC, "} if variant == \"palette-unread\"\n                else json.dumps(", "} if False\n                else json.dumps(", [LC_OBJ_T, BOARD_UNREAD_T]),
  ("chain-objects의 도메인 record가 빈 객체가 아니다", LC, "\"record\": {} if variant == \"chain-objects\" else", "\"record\": [] if variant == \"chain-objects\" else", [LC_OBJ_T, BOARD_OBJ_T]),
 ]
 
@@ -3000,7 +3000,7 @@ CASES += [
  ("걷기 노드가 발행 선언을 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "                                  subscriptions=deps.subscriptions, lookup=deps.filter_lines,", [WALK_KEY_T]),
  ("어긋남 caveat가 메시지 홉의 발행 선언을 안 적는다", ND, "    where = f\"쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}]\" if stop.writer else stop.service", "    where = f\"쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}]\"", [DISAGREE_T]),
  ("메시지 홉의 발행 선언이 표에 안 보인다", CS, "        who = (self.writer + (f\" [{self.service}]\" if self.service else \"\")) if self.writer else (self.service or \"—\")", "        who = (self.writer + (f\" [{self.service}]\" if self.service else \"\")) if self.writer else \"—\"", [WALK_MSG_T]),
- ("CLI가 발행 선언을 안 넘긴다", MN, "topic_producers=flow.producing_map(flow_graph),\n                              subscriptions=flow.consuming_map(flow_graph), clock=clock)", "subscriptions=flow.consuming_map(flow_graph), clock=clock)", [BOARD_GONE_T]),
+ ("CLI가 발행 선언을 안 넘긴다", MN, "topic_producers=flow.producing_map(flow_graph),\n                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)", "subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)", [BOARD_GONE_T]),
  ("측정판에 포인터가 없다", LC, "\"offset\": _POINTER_OFFSET[l]}} if variant in _MESSAGE_VARIANTS else {})},", "\"offset\": _POINTER_OFFSET[l]}} if False else {})},", [LC_MSG_T, BOARD_MSG_T]),
 ]
 
@@ -3381,8 +3381,8 @@ CASES += [
  ("쓰기 줄을 읽기 줄처럼 센다", WK, "            writing = head.startswith(\"쓰기\")", "            writing = True", [WRITERS_IN_T]),
  ("쓰는 클래스를 선언한 서비스로 안 거른다", WK, "        picked = [(c, s) for c, s in found if s in declared] or found", "        picked = found", [KEYED_T]),
  ("쓰는 클래스가 여럿이어도 첫 것을 채운다", WK, "        if len(writers) != 1:\n            remember(", "        if not writers:\n            remember(", [KEYED_T]),
- ("없는 키의 쓴 쪽을 안 찾는다", WK, "                keyed = (await keyed_writer(name)) if (got.status == \"ok\" and raw is None and not w and kind == \"rediskey\") else None", "                keyed = None", [KEYED_T, BOARD_KEYED_T]),
- ("쓰는 클래스로 더 걷는다", WK, "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches = []", "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches, _, _ = branches(w, name)", [KEYED_T]),
+ ("없는 키의 쓴 쪽을 안 찾는다", WK, "                keyed = (await keyed_writer(name, label)) if (got.status == \"ok\" and raw is None and not w and kind == \"rediskey\") else None", "                keyed = None", [KEYED_T, BOARD_KEYED_T]),
+ ("쓰는 클래스로 더 걷는다", WK, "                    w, shown, cands, params_k, uses_ev, origin = keyed\n                    next_branches = []", "                    w, shown, cands, params_k, uses_ev, origin = keyed\n                    next_branches, _, _ = branches(w, name)", [KEYED_T]),
  ("빈 토픽을 나쁨으로 안 본다", WK, "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), not left, f\"범위 {rng}, 남은 메시지 {left}\"", "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), False, f\"범위 {rng}, 남은 메시지 {left}\"", [KEYED_T, BOARD_KEYED_T]),
  ("구독 토픽이 비어도 멈춤이 키가 없다다", WK, "        if stop_hop.kind == \"topic\" and ev in topics_at:", "        if False:", [KEYED_T, BOARD_KEYED_T]),
 ]
@@ -3539,7 +3539,23 @@ CASES += [
 CASES += [
  ("비지 않은 토픽 행에 판정 낱말이 없다", WK, "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), not left, f\"범위 {rng}, 남은 메시지 {left}\"\n", "    return (f\"비었다 — {text}\" if not left else text), not left, f\"범위 {rng}, 남은 메시지 {left}\"\n", [KEYED_T, WALK_TOPIC_T, BOARD_KEYED_T]),
 ]
-assert len(CASES) >= 1145, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5t ② — 인덱스가 모르는 쓴 쪽은 같은 GBM 다른 사이트의 같은 키 값에서 ──
+PEER_T = "tests/application/test_walk.py::test_인덱스에_쓰는_클래스가_없으면_다른_사이트의_같은_키_값이_대는_클래스를_쓴_쪽으로_채우고_출처를_칸에_적는다"
+PEER_CLI_T = "tests/test_cli_case_walk.py::test_peer_reader는_같은_GBM의_다른_사이트에서_같은_키를_없으면_같은_템플릿의_첫_키를_읽고_안_닿는_사이트는_다시_안_묻는다"
+BOARD_PEER_T = "tests/test_board_walk.py::test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다"
+LOCAL_PALETTE_T = "tests/test_local_case.py::test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_클래스는_서비스_디렉터리_밖과_다른_레포에_같은_이름으로_있다"
+CASES += [
+ ("쓰기 줄 0이어도 다른 사이트 값을 안 본다", WK, "            elsewhere = await peer_writer(template, key)\n", "            elsewhere = None\n", [PEER_T, BOARD_PEER_T]),
+ ("다른 사이트 값의 출처를 쓴 쪽 칸에 안 적는다", WK, "            return w, f\"{shown} · {fct} 값의 {at}\", cands, params, uev, f\"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})\"\n", "            return w, shown, cands, params, uev, f\"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})\"\n", [PEER_T, BOARD_PEER_T]),
+ ("다른 사이트 값이 인덱스 클래스를 안 대도 쓴 쪽으로 쓴다", WK, "        return (w, at, fct, read_key) if w else None\n", "        return (w or \"refresh-job\", at, fct, read_key)\n", [PEER_T]),
+ ("peer 리더가 다른 GBM의 사이트도 묻는다", MN, "    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]\n", "    others = [e for e in load_registry(config_root).active() if e.fct != fct]\n", [PEER_CLI_T]),
+ ("peer 리더가 비활성 사이트도 묻는다", MN, "    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]\n", "    others = [e for e in load_registry(config_root).sites if e.gbm == gbm and e.fct != fct]\n", [PEER_CLI_T]),
+ ("안 닿은 사이트를 다시 묻는다", MN, "                if got.status != \"ok\":\n                    dead.add(entry.fct)\n                    continue\n", "                if got.status != \"ok\":\n                    continue\n", [PEER_CLI_T]),
+ ("같은 키가 없을 때 같은 템플릿의 키를 안 본다", MN, "                for sibling in keys[:1]:\n", "                for sibling in keys[:0]:\n", [PEER_CLI_T]),
+ ("palette-source-missing에 원천 색 키가 있다", LC, "            **({} if variant == \"palette-source-missing\" else\n", "            **({} if False else\n", [LOCAL_PALETTE_T, BOARD_PEER_T]),
+]
+assert len(CASES) >= 1153, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

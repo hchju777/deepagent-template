@@ -458,6 +458,20 @@ class PaletteLoader:
         source = self.redis.get(self.cfg["redis_key"]["palette_source"])
         colors = [c for c in json.loads(source or "[]") if c.get("enabled")]
         self.redis.set(self.cfg["redis_key"]["alarm_palette"], json.dumps({"metadata": {"event_type": "PaletteLoader"}, "colors": colors}))
+
+
+class PaletteSeeder:
+    """원천 색 목록을 메시지로 받아 키로 쓴다 — 쓰기가 레지스트리 컴포넌트의 결과(명령)를 거쳐 **인덱스가 쓰는 줄을 못 본다**(사내 P1-7의 모양, R3-5t ②).
+    키 토큰이 이 파일에 없으니 `code uses palette:source`의 쓰기 줄은 0이고, 쓴 쪽은 값(`metadata.event_type`)에서만 알 수 있다."""
+
+    def __init__(self, cfg, consumer, registry, storage):
+        self.cfg, self.consumer, self.registry, self.storage = cfg, consumer, registry, storage
+
+    def run(self):
+        kafka = self.cfg["infra"]["kafka"]
+        for msg in self.consumer.subscribe(kafka["consumer"]["topic"]["topic2"], group=kafka["consumer"]["group_id"]):
+            command = self.registry["palette_writer"].process(msg)
+            self.storage.save(command)
 ''',
 }
 
@@ -569,6 +583,10 @@ VARIANTS = {
                     "클래스의 구독 토픽 입력에서 '구독 토픽이 비었다'로 멈춘다",
     # R3-5r ② — 없는 키를 쓰는 클래스(PaletteLoader)의 코드에 구독 토픽이 없다(걷기가 서비스 선언을 읽지 않고 수만 적는다).
     "palette-missing": "palette-empty와 같되 공용 팔레트 키가 아예 없다 — 쓴 쪽 PaletteLoader(인덱스 쓰기 줄, 두 레포)의 코드엔 구독 토픽이 없다",
+    # R3-5t ② — 원천 색 키가 없고 쓰는 PaletteSeeder는 레지스트리 결과를 저장해 인덱스 쓰기 줄이 0(P1-7의 모양). 같은 GBM의 sevt 시드(`peers`)가 그 키 값에 그 이름을
+    # 댄다 — 걷기가 쓴 쪽 칸에 출처와 함께 채우고 그 클래스의 구독 토픽까지 걷는다.
+    "palette-source-missing": "palette-empty와 같되 PaletteLoader가 읽는 원천 색 키가 아예 없다 — 쓴 쪽 PaletteSeeder는 인덱스에 쓰기 줄이 없고(레지스트리 경유) "
+                              "같은 GBM의 sevt에 있는 같은 키 값이 그 이름을 댄다",
     "source-blank": "요약 키 data는 빈 배열이고 batch가 읽는 원천 키가 빈 배열이다 — 걷기가 '0행'에서 멈춘다",
     # 사내 c-2형(측정 #9) — 원천 행은 있는데 모든 행의 한 필드가 '-'이고 batch 코드가 그 값을 거른다(`r.get("state") != "-"`).
     "source-filtered": "요약 키 data는 빈 배열이고 원천 키 행은 있지만 모든 행의 state가 '-'다 — batch가 그 값을 걸러 아무것도 안 남는다",
@@ -599,7 +617,8 @@ _MESSAGE_VARIANTS = {"message-empty", "message-gone", "message-blank"}
 # 포인터의 자리 — 라인마다 다른 오프셋(토픽 하나, 파티션 0). message-gone은 사이트 층이 덮은 감사 토픽(dt-core 세 서비스가 소비·발행 선언)의 보존(100부터) 앞이다.
 _POINTER_OFFSET = {"L1": 2, "L2": 3, "L3": 4}
 _POINTER_TOPIC = {"message-gone": "gumi.alarm.audit"}
-_EMPTY_DATA = {"data-empty", "source-missing", "source-missing-quiet", "source-quiet", "source-blank", "source-filtered", "palette-empty", "palette-missing", "chain-empty",
+_EMPTY_DATA = {"data-empty", "source-missing", "source-missing-quiet", "source-quiet", "source-blank", "source-filtered", "palette-empty", "palette-missing",
+               "palette-source-missing", "chain-empty",
                "chain-filtered", "chain-objects", "palette-unread", "join-empty", "join-outer", *_MESSAGE_VARIANTS}
 # 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
 _RAW_WRITER = {"chain-empty": "SourceCollector", "chain-objects": "RawAppender", "join-empty": "SourceJoiner", "join-outer": "SourceOuterJoiner",
@@ -722,11 +741,18 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①), `palette-missing`은 키가 없다(R3-5r ②).
             **({} if variant == "palette-missing" else
                {"alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader"},
-                                             "colors": [] if variant in ("palette-empty", "palette-unread") else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]})}),
-            # palette-unread는 이 키의 읽기가 실패한다 — stub이 오류 신호 시드(`{"__error__": …}`)를 실패로 돌려준다.
-            "palette:source": {"__error__": "WRONGTYPE Operation against a key holding the wrong kind of value"} if variant == "palette-unread" else json.dumps([{"name": "alarm", "hex": "#d33", "enabled": True}, {"name": "caution", "hex": "#fc0", "enabled": True},
-                                          {"name": "normal", "hex": "#3a3", "enabled": False}]),
+                                             "colors": [] if variant in ("palette-empty", "palette-unread", "palette-source-missing")
+                                             else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]})}),
+            # palette-unread는 이 키의 읽기가 실패한다 — stub이 오류 신호 시드(`{"__error__": …}`)를 실패로 돌려준다. palette-source-missing은 키가 없다(R3-5t ②).
+            **({} if variant == "palette-source-missing" else
+               {"palette:source": {"__error__": "WRONGTYPE Operation against a key holding the wrong kind of value"} if variant == "palette-unread"
+                else json.dumps([{"name": "alarm", "hex": "#d33", "enabled": True}, {"name": "caution", "hex": "#fc0", "enabled": True},
+                                 {"name": "normal", "hex": "#3a3", "enabled": False}])}),
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
+        # 같은 GBM의 다른 사이트(sevt)의 Redis — 걷기가 인덱스가 모르는 쓴 쪽을 거기 같은 키 값에서 채운다(R3-5t ②). 그 변형에만 — 다른 변형의 걷기는 안 묻는다.
+        **({"peers": {"sevt": {"redis": {"palette:source": json.dumps({"metadata": {"event_type": "PaletteSeeder"},
+                                                                       "colors": [{"name": "alarm", "hex": "#d33", "enabled": True}]})}}}}
+           if variant == "palette-source-missing" else {}),
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게
         # "API가 죽었다"로 읽힌다(첫 로컬 실행에서 `prod_status`가 그랬다).
         "rest": {"lines": LINES,
