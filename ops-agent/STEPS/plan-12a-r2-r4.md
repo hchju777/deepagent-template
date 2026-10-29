@@ -736,7 +736,7 @@ medium으로 깎는다). **코드 변경 없음** — 그 법인 Kafka가 닿는
 | R3-5t ③ ✅ | 3 판정 낱말 | `_topic_status`: 메시지가 남아 있으면 `정상 — 보존 범위 a~b · 남은 메시지 n`(빈 행 `비었다 — …`·`읽기 실패 — …`와 같은 꼴) | `walk` |
 | R3-5t ② ✅ | 2 다른 사이트 값의 쓴 쪽 | `keyed_writer`: `code.uses`에 인덱스 클래스의 쓰기 줄이 없으면 `peer(키, 템플릿)`(같은 GBM의 다른 사이트 Redis — 같은 키, 없으면 같은 템플릿의 첫 키)의 값에서 `writer_of` → 쓴 쪽 칸 `<클래스> [<서비스> · <FCT> 값의 metadata.event_type]`, 근거·주에 출처, 그다음은 전처럼 그 클래스의 구독 토픽; 다른 사이트에도 없으면 지금 주 줄; CLI `_peer_reader`(registry의 같은 GBM 다른 사이트, stub은 시드 `peers.<fct>.redis`, 안 닿는 사이트는 기억, 키마다 3곳까지), `EngineDeps.peer`; 측정판 `palette-source-missing`(원천 색 키 없음 — 쓰는 `PaletteSeeder`는 레지스트리 결과로 써서 인덱스 쓰기 줄 0, sevt 시드의 값이 그 이름을 댄다) | `walk`, `nodes`, CLI, 보드 |
 | R3-5t ④ ✅ | 2 다른 사이트의 키 이름 | `_peer_reader`에 `names_for`(이 사이트 키를 만든 것과 같은 config 경로 — `code.names_for(fct)`): 이 사이트 이름 목록에서 템플릿의 key_path를 찾고 그 사이트 이름 목록의 같은 key_path 값으로 물을 키를 다시 만든다(자리는 이 사이트 키에서, `fill_key`), scan 패턴도 그 값의 머리로; 그 사이트가 그 key_path를 안 선언하면 거기엔 없는 것(읽지 않음), 이름 목록이 없으면(인덱스 없음) 글자 그대로; 읽은 키(그 사이트 이름)가 주에 그대로; 측정판 sevt 층에 키 접두어 `prefix`(gumi는 그대로) — `palette-source-missing`의 sevt 시드 키가 `sevt:palette:source` | CLI, 보드 |
-| — | **측정 #30** | ①③② 뒤. **`code graph` 재생성: 불필요**(인덱스 변경 없음). `<AGV 2건>`의 토픽 행(`발행 선언 없음(우리 밖)` · 구독 꼬리)과 external 여부, `<PGM>`의 쓴 쪽 칸(`<FCT> 값의 event_type`)과 그 뒤 토픽 홉, 비지 않은 토픽 행의 `정상 —`, 점수 | 브리프 ✅ ([review-12a-4.md](review-12a-4.md)) · 걷기 ✅(①③ 의도대로; ② 채움 0 — 이 사이트 키를 글자 그대로 물었다, 사이트마다 접두어 → ④; LLM은 ④ 뒤) |
+| — | **측정 #30** | ①③② 뒤. **`code graph` 재생성: 불필요**(인덱스 변경 없음). `<AGV 2건>`의 토픽 행(`발행 선언 없음(우리 밖)` · 구독 꼬리)과 external 여부, `<PGM>`의 쓴 쪽 칸(`<FCT> 값의 event_type`)과 그 뒤 토픽 홉, 비지 않은 토픽 행의 `정상 —`, 점수 | 브리프 ✅ ([review-12a-4.md](review-12a-4.md)) · 걷기 ✅(①③ 의도대로; ② 채움 0 — 이 사이트 키를 글자 그대로 물었다, 사이트마다 접두어 → ④; LLM은 ④ 뒤) · 재측정 브리프 ✅ |
 
 
 
