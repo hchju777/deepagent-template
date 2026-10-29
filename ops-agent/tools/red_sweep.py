@@ -3433,7 +3433,7 @@ CASES += [
  ("code.resources 실패를 조용히 넘긴다", WK, "                            remember(f\"{w}: code.resources 실패 — {(rgot.error or '증거 없음').splitlines()[0][:120]} — 구독 토픽을 모른다\")\n", "                            pass\n", [KEYED_T]),
  ("멈춤 꼬리에 서비스 선언 수를 안 적는다", WK, "                                tail_note = f\"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)\"\n", "                                tail_note = \"구독 토픽 없음\"\n", [KEYED_T, BOARD_PALETTE_T]),
  ("첫 칸이 클래스 본문이 아니다", WK, "        if body_ is None or not rev_:\n            return [Rung(action=\"code.resources\"", "        if True:\n            return [Rung(action=\"code.resources\"", [KEYED_T, BOARD_KEYED_T]),
- ("토픽 홉의 근거가 클래스의 자원 증거를 안 댄다", WK, "basis=f\"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev})\"", "basis=f\"{w}가 읽는 토픽 — {name}을 쓰는 클래스의 메시지 입력 ({ev})\"", [KEYED_T]),
+ ("토픽 홉의 근거가 클래스의 자원 증거를 안 댄다", WK, "basis=f\"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언\"", "basis=f\"{w}가 읽는 토픽 — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언\"", [KEYED_T]),
  ("빈 토픽 멈춤의 둘째 칸이 본문이 아니다", WK, "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), *body_rungs(key_ev)]\n", "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), Rung(action=\"code.resources\", params={\"name\": w_, **params_}, evidence=key_ev)]\n", [KEYED_T, BOARD_KEYED_T]),
 ]
 
@@ -3520,13 +3520,21 @@ BOARD_QUIET_T = "tests/test_board_walk.py::test_걸은_클래스가_구독하는
 LOCAL_SOURCE_T = "tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"
 CASES += [
  ("토픽 입력을 kafka.tail로 읽어 값의 쓴 쪽을 찾는다", WK, "        for name, kind in found_inputs:\n            if kind == \"topic\":\n", "        for name, kind in found_inputs:\n            if kind == \"topic\" and False:\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
- ("토픽 홉의 쓴 쪽 칸에 발행 선언을 안 적는다", WK, "                svcs = tuple(producers.get(name, ()))\n                shown = f\"발행 선언: {', '.join(svcs)}\" if svcs else \"발행 선언 없음(우리 밖)\"\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", "                svcs = ()\n                shown = \"\"\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+ ("토픽 홉의 쓴 쪽 칸에 발행 선언을 안 적는다", WK, "                shown, svcs = published(name)\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", "                shown, svcs = \"\", ()\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
  ("빈 토픽 입력에서 값의 쓴 쪽을 찾는다", WK, "        elif stop_hop.kind == \"topic\" and ev in subscribed_at:\n", "        elif False:\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
  ("범위 읽기 실패한 토픽 입력을 본 것으로 센다", WK, "                if isinstance(tdata, dict):\n                    real += 1\n                else:\n                    missed.append(f\"읽기 실패 {name}\")\n", "                real += 1\n                if False:\n                    missed.append(f\"읽기 실패 {name}\")\n", [WALK_TOPIC_T]),
  ("못 푼 토픽 경로를 걸은 클래스의 토픽으로 읽는다", WK, "                if \".topic.\" in name:\n                    remember(f\"{writer}: 토픽 경로 {name}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다\")\n                    missed.append(f\"토픽 경로 {name} 값 모름\")\n", "                if False:\n                    remember(f\"{writer}: 토픽 경로 {name}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다\")\n                    missed.append(f\"토픽 경로 {name} 값 모름\")\n", [WALK_TOPIC_T]),
  ("source-quiet의 원천 토픽이 비지 않았다", LC, "                             else [] if variant in (\"source-missing-quiet\", \"source-quiet\")\n", "                             else [] if variant == \"source-missing-quiet\"\n", [LOCAL_SOURCE_T, BOARD_QUIET_T]),
 ]
-assert len(CASES) >= 1140, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5t ① — 구독 토픽 행의 쓴 쪽 칸은 발행 선언 하나로, 구독 클래스는 상태 꼬리 ──
+CASES += [
+ ("없는 키의 토픽 행이 쓴 쪽 칸에 구독 클래스를 적는다", WK, "                        pub, pub_svcs = published(topic)\n", "                        pub, pub_svcs = f\"{w} [{shown}] 구독\", cands\n", [KEYED_T, BOARD_KEYED_T]),
+ ("없는 키의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {w} [{shown}]\",\n", "status=tstatus,\n", [KEYED_T, BOARD_KEYED_T]),
+ ("빈 구독 토픽의 멈춤에 발행 선언이 없다", WK, "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}] · {stop_hop.service})\"\n", "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])\"\n", [KEYED_T, BOARD_KEYED_T]),
+ ("걸은 클래스의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {who_}\", bad=tbad, evidence_id=tev,\n", "status=tstatus, bad=tbad, evidence_id=tev,\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+]
+assert len(CASES) >= 1144, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

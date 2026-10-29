@@ -356,6 +356,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     def who(name: str) -> str:
         return ", ".join(shown_as(r, s) for r, s in homes(name))
 
+    def published(topic: str) -> tuple[str, tuple[str, ...]]:
+        """토픽의 발행 쪽 — 클래스가 아니라 config 발행 선언(같은 이름 클래스가 두 레포, R3-5d ④), 없으면 우리 밖 → (표에 적을 글자, 후보 서비스들). 메시지 홉·
+        걸은 클래스의 구독 토픽 홉·없는 키의 쓰는 클래스의 구독 토픽 홉의 쓴 쪽 칸이 전부 이것이다(R3-5t ① — 측정 #29 3부: `<ACS 토픽>`에 발행하는 레포가 없는데 그
+        행이 구독 클래스를 적어 그 사실이 안 보였고, AGV 6회 중 4회가 external로 못 갔다)."""
+        svcs = tuple(producers.get(topic, ()))
+        return (f"발행 선언: {', '.join(svcs)}" if svcs else "발행 선언 없음(우리 밖)"), svcs
+
     def split(writer: str, template: str, *, walking: bool) -> tuple[list[tuple[str, tuple[str, ...]]], str, tuple[str, ...]]:
         """레포 가르기 → (고른 레포들 `(레포, 서비스들)`, 표에 적을 이름, 판정의 component 후보 서비스들). 레포 둘이면 **그 키를 선언한 서비스가
         있는 레포**로 가른다(측정 #9 P1 4: `파일:qualname`도 같아 그걸로는 못 가른다 → 측정 #10 P0 2: 서비스가 아니라 **레포** 단위 — 공유 레포의
@@ -549,19 +556,20 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 tev = tgot.evidence[0].id if tgot.evidence else ""
                 tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
                 tstatus, tbad, _ = _topic_status(tdata, tgot.error or "증거 없음")
-                svcs = tuple(producers.get(name, ()))
-                shown = f"발행 선언: {', '.join(svcs)}" if svcs else "발행 선언 없음(우리 밖)"
+                shown, svcs = published(name)
                 readings[name] = ("ok" if isinstance(tdata, dict) else "fail", "")
                 if isinstance(tdata, dict):
                     real += 1
                 else:
                     missed.append(f"읽기 실패 {name}")
-                hops.append(Hop(key=name, kind="topic", depth=depth + 1, service=shown, candidates=list(svcs), status=tstatus, bad=tbad, evidence_id=tev,
+                # 구독 클래스는 상태 칸 꼬리에(R3-5t ①) — 쓴 쪽 칸은 발행 선언 하나로(없는 키 경로의 토픽 행과 같은 모양). 서비스는 여기로 오게 한 홉의 표시
+                # (`W [서비스]`), 가지 꼬리표는 레포가 둘일 때만 있다.
+                svc = branch.tag or next((h.service for h in hops if h.evidence_id == came_from and h.writer == writer), "")
+                who_ = f"{writer} [{svc}]" if svc else writer
+                hops.append(Hop(key=name, kind="topic", depth=depth + 1, service=shown, candidates=list(svcs), status=f"{tstatus} · 구독 {who_}", bad=tbad, evidence_id=tev,
                                 basis=f"{writer}{tag}가 구독하는 토픽 ({res_id}) — 보존 범위, 발행 쪽은 config 선언", parent=came_from))
                 if tev:
-                    # 멈춤 문구의 클래스는 여기로 오게 한 홉의 표시로(`W [서비스]`) — 가지 꼬리표는 레포가 둘일 때만 있다.
-                    svc = branch.tag or next((h.service for h in hops if h.evidence_id == came_from and h.writer == writer), "")
-                    subscribed_at[tev] = (f"{writer} [{svc}]" if svc else writer, scope, class_at(text), res_id)
+                    subscribed_at[tev] = (who_, scope, class_at(text), res_id)
                 continue
             if kind == "rediskey":
                 filled = fill_key(name, declared=target.declared, key=target.key)
@@ -677,8 +685,12 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         tev = tgot.evidence[0].id if tgot.evidence else ""
                         tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
                         tstatus, tbad, piece = _topic_status(tdata, tgot.error or "증거 없음")
-                        hops.append(Hop(key=topic, kind="topic", depth=depth + 2, service=f"{w} [{shown}] 구독", candidates=list(cands), status=tstatus,
-                                        bad=tbad, evidence_id=tev, basis=f"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev})", parent=ev))
+                        # 쓴 쪽 칸은 발행 선언, 후보도 그 서비스들, 구독 클래스는 상태 꼬리(R3-5t ① — 걸은 클래스의 토픽 행과 같은 모양; 측정 #29 3부: 쓴 쪽 칸의
+                        # `<AGV 클래스> [<서비스>] 구독`이 "발행하는 레포가 없다"를 가렸다).
+                        pub, pub_svcs = published(topic)
+                        hops.append(Hop(key=topic, kind="topic", depth=depth + 2, service=pub, candidates=list(pub_svcs), status=f"{tstatus} · 구독 {w} [{shown}]",
+                                        bad=tbad, evidence_id=tev, parent=ev,
+                                        basis=f"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언"))
                         ranges.append((topic, piece, tev))
                         topics_at[tev] = (w, shown, params_k, ev)
                     keyed_at[ev] = (w, shown, params_k, ranges, tail_note, rev, body_at, tuple(cands))
@@ -694,8 +706,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             # 우리 밖이다. 그 메시지로는 더 걷지 않는다.
             topic, part, off = pointer["topic"], pointer["partition"], pointer["offset"]
             label = f"{topic}[{part}]@{off}"
-            svcs = tuple(producers.get(topic, ()))
-            shown = f"발행 선언: {', '.join(svcs)}" if svcs else "발행 선언 없음(우리 밖)"
+            shown, svcs = published(topic)
             if label in seen:
                 result, _ = readings.get(label, ("", ""))
                 if result == "ok":
@@ -807,7 +818,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if stop_hop.kind == "topic" and ev in topics_at:
             # 없는 키를 쓰는 클래스가 구독하는 토픽이 비었다(R3-5p ①-c) — 입력이 없다. 첫 칸은 지금 오는 것, 그다음 그 클래스 본문.
             w_, shown_, params_, key_ev = topics_at[ev]
-            stopped = f"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])"
+            stopped = f"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}] · {stop_hop.service})"
             rungs += [Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev), *body_rungs(key_ev)]
         elif stop_hop.kind == "topic" and ev in subscribed_at:
             # 걸은 클래스가 구독하는 토픽이 비었다(R3-5s ⑥) — 값의 쓴 쪽이 아니라 보존 범위가 사실이고 발행 쪽은 config 선언(홉의 쓴 쪽 칸). 첫 칸은 지금 오는 것,
