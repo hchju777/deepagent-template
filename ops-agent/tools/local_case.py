@@ -137,8 +137,11 @@ CORE_FILES = {
                             "producer": {"topic": {"topic2": "gumi.alarm.audit"}}}}},
     # 두 번째 사이트 — 11e-2의 "번들은 GBM 하나, 사이트는 덮은 값만"을 측정판에서 보기 위해서다.
     "config/factories/sevt/common.json": {"lines": LINES, "site_code": "sevt"},
+    # sevt 층은 redis 키에 자기 접두어를 붙인다 — 사내 모양(측정 #30): 사이트마다 `키 접두어 항목`가 달라 다른 사이트의 같은 키는 그 사이트의 이름으로 물어야
+    # 한다(R3-5t ④). gumi는 접두어 없이 둔다 — 측정판의 키 이름 전부가 바뀌지 않게, 번역은 sevt 쪽에서 보인다.
     "config/factories/sevt/mx.json": {
-        "infra": {"kafka": {"consumer": {"group_id": "sevt-mx-core"}}}},
+        "infra": {"kafka": {"consumer": {"group_id": "sevt-mx-core"}}},
+        "redis_key": {"prefix": "sevt"}},
     "processor/handler.py": '''"""alarm_raw를 읽어 정규화한 뒤 alarm_main으로 낸다."""
 from shared_lib import normalize, now
 
@@ -750,7 +753,7 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                                  {"name": "normal", "hex": "#3a3", "enabled": False}])}),
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
         # 같은 GBM의 다른 사이트(sevt)의 Redis — 걷기가 인덱스가 모르는 쓴 쪽을 거기 같은 키 값에서 채운다(R3-5t ②). 그 변형에만 — 다른 변형의 걷기는 안 묻는다.
-        **({"peers": {"sevt": {"redis": {"palette:source": json.dumps({"metadata": {"event_type": "PaletteSeeder"},
+        **({"peers": {"sevt": {"redis": {"sevt:palette:source": json.dumps({"metadata": {"event_type": "PaletteSeeder"},
                                                                        "colors": [{"name": "alarm", "hex": "#d33", "enabled": True}]})}}}}
            if variant == "palette-source-missing" else {}),
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게

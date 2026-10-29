@@ -191,15 +191,45 @@ async def _close_llms(*llms) -> None:
 PEER_SITES = 3
 
 
-def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], clock, seeds: dict | None):
+def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], clock, seeds: dict | None, names_for=None):
     """같은 GBM의 다른 사이트에서 같은 키의 값을 읽는 `peer(키, 템플릿)`와 닫는 함수(R3-5t ② — 측정 #29 3부: 인덱스가 모르는 쓴 쪽을 리드가 "쓰는 코드 누락"으로
-    읽었다). `(사이트, 읽은 키, 값)` — 같은 키가 없으면 같은 템플릿의 첫 키, 그것도 없으면 다음 사이트; registry 순서, 키마다 `PEER_SITES`곳까지, 한 번 못 읽은
-    사이트는 다시 안 묻는다. 읽기 전용(`get`·`scan`)이고 stub은 시드의 `peers.<fct>.redis`(없는 사이트는 못 읽는 사이트). 던지지 않는다 — 못 읽으면 None."""
+    읽었다). `(사이트, 읽은 키, 값)`. 물을 키는 **그 사이트의 이름**으로 다시 만든다(R3-5t ④ — 측정 #30: 사이트마다 키에 자기 접두어(`키 접두어 항목`)가 붙어 이
+    사이트 키를 글자 그대로 물으면 어느 사이트에도 없다, 채움 0): 이 사이트의 이름 목록(`names_for(fct)` — 이 사이트 키를 만든 것과 같은 config 경로)에서 그 템플릿의
+    key_path를 찾고, 그 사이트의 이름 목록에서 같은 key_path의 값을 가져와 자리는 이 사이트 키에서 채운다(`fill_key`); scan 패턴도 그 값의 머리로. 문자열 바꿈 규칙이
+    아니다. 이름 목록이 없거나(인덱스 없음) 이 사이트 이름에 그 템플릿이 없으면 글자 그대로; 그 사이트가 그 key_path를 선언하지 않으면 거기엔 없는 것(읽지 않는다).
+    같은 키가 없으면 같은 템플릿의 첫 키, 그것도 없으면 다음 사이트; registry 순서, 키마다 `PEER_SITES`곳까지, 한 번 못 읽은 사이트는 다시 안 묻는다. 읽기 전용
+    (`get`·`scan`)이고 stub은 시드의 `peers.<fct>.redis`(없는 사이트는 못 읽는 사이트). 던지지 않는다 — 못 읽으면 None."""
     from src.application.facts import key_head
+    from src.application.walk import fill_key
 
     others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]
     readers: dict[str, object] = {}
     dead: set[str] = set()
+    tables: dict[str, dict[str, str] | None] = {}                  # 사이트 → key_path → 그 사이트의 키 값(rediskey); None이면 이름 목록이 없다
+
+    async def names_of(site: str):
+        if site not in tables:
+            table = None
+            if names_for is not None:
+                try:
+                    found, _ = await names_for(site)
+                    table = {n.key_path: n.value for n in found if n.kind == "rediskey"}
+                except Exception:                                  # noqa: BLE001 — 그 사이트의 층을 못 읽었다
+                    table = None
+            tables[site] = table
+        return tables[site]
+
+    async def renamed(entry, key: str, template: str) -> tuple[str, str] | None:
+        """(그 사이트에 물을 키, 그 사이트의 템플릿) — 이름 목록이 없거나 이 사이트 이름에 그 템플릿이 없으면 글자 그대로, 그 사이트가 그 key_path를 안 가지면
+        None(거기엔 없다). 자리를 못 채우면 키는 빈 문자열(scan만)."""
+        mine, theirs = await names_of(fct), await names_of(entry.fct)
+        key_path = next((p for p, v in (mine or {}).items() if v == template), None)
+        if mine is None or theirs is None or key_path is None:
+            return key, template
+        other = theirs.get(key_path)
+        if other is None:
+            return None
+        return (fill_key(other, declared=template, key=key) or ""), other
 
     def reader(entry):
         if entry.fct in readers:
@@ -231,15 +261,19 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
             if got_reader is None:
                 dead.add(entry.fct)
                 continue
-            asked += 1
             try:
-                got = await got_reader.get(key)
-                if got.status != "ok":
+                named = await renamed(entry, key, template)
+                if named is None:
+                    continue                                       # 그 사이트는 그 키를 선언하지 않는다 — 읽지 않는다(묻는 수에도 안 센다)
+                their_key, their_template = named
+                asked += 1
+                got = await got_reader.get(their_key) if their_key else None
+                if got is not None and got.status != "ok":
                     dead.add(entry.fct)
                     continue
-                if got.data is not None:
-                    return entry.fct, key, got.data
-                scanned = await got_reader.scan(f"{key_head(template)}*")
+                if got is not None and got.data is not None:
+                    return entry.fct, their_key, got.data
+                scanned = await got_reader.scan(f"{key_head(their_template)}*")
                 keys = [k for k in (scanned.data or []) if isinstance(k, str)] if scanned.status == "ok" else []
                 for sibling in keys[:1]:
                     got = await got_reader.get(sibling)
@@ -1170,7 +1204,7 @@ def cmd_case_walk(args, env) -> int:
         code, services, flow_graph, graph_note = _code_if_ready(
             site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock, graph_dir=_graph_dir(args, env, gbm))
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
-        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)
+        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)
         try:
             # 조사(`cmd_case_investigate`)와 같은 재료 — 다른 것은 리드(`_no_lead`)뿐이다. 여기서 갈라지면 `case walk`가 조사와 다른 걷기를 보여 준다.
             deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock, detail_chars=app.investigation.evidence_chars,
@@ -1265,7 +1299,7 @@ def cmd_case_investigate(args, env) -> int:
         built["code"] = code.describe() if code else "코드 없음"
         built["graph"] = graph_note
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
-        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)
+        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)
         try:
             frame, integrate, conclude = make_lead(
                 llm, site_config=site, prompts=prompts,

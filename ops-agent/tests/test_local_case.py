@@ -180,7 +180,9 @@ def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_�
     assert "palette-source-missing" in VARIANTS and "palette-source-missing" in _EMPTY_DATA
     psm = _seeds(NOW, "palette-source-missing")
     assert "palette:source" not in psm["redis"] and json.loads(psm["redis"]["alarm:palette"])["colors"] == []
-    assert json.loads(psm["peers"]["sevt"]["redis"]["palette:source"])["metadata"]["event_type"] == "PaletteSeeder" and "peers" not in gone
+    # sevt 층은 키에 자기 접두어를 붙인다(R3-5t ④ — 사내 모양: 사이트마다 `키 접두어 항목`); gumi는 접두어 없이 그대로라 측정판 키 이름은 안 바뀐다
+    assert CORE_FILES["config/factories/sevt/mx.json"]["redis_key"] == {"prefix": "sevt"} and "redis_key" not in CORE_FILES["config/factories/gumi/mx.json"]
+    assert json.loads(psm["peers"]["sevt"]["redis"]["sevt:palette:source"])["metadata"]["event_type"] == "PaletteSeeder" and "peers" not in gone
     assert "class PaletteSeeder:" in CORE_FILES["common/palette.py"] and "palette_source" not in CORE_FILES["common/palette.py"].split("class PaletteSeeder:")[1]
 
 

@@ -3542,7 +3542,7 @@ CASES += [
 
 # ── 12a-R3-5t ② — 인덱스가 모르는 쓴 쪽은 같은 GBM 다른 사이트의 같은 키 값에서 ──
 PEER_T = "tests/application/test_walk.py::test_인덱스에_쓰는_클래스가_없으면_다른_사이트의_같은_키_값이_대는_클래스를_쓴_쪽으로_채우고_출처를_칸에_적는다"
-PEER_CLI_T = "tests/test_cli_case_walk.py::test_peer_reader는_같은_GBM의_다른_사이트에서_같은_키를_없으면_같은_템플릿의_첫_키를_읽고_안_닿는_사이트는_다시_안_묻는다"
+PEER_CLI_T = "tests/test_cli_case_walk.py::test_peer_reader는_같은_GBM의_다른_사이트에_같은_키를_그_사이트의_이름으로_묻고_없으면_같은_템플릿의_첫_키를_읽고_안_닿는_사이트는_다시_안_묻는다"
 BOARD_PEER_T = "tests/test_board_walk.py::test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다"
 LOCAL_PALETTE_T = "tests/test_local_case.py::test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_클래스는_서비스_디렉터리_밖과_다른_레포에_같은_이름으로_있다"
 CASES += [
@@ -3551,11 +3551,21 @@ CASES += [
  ("다른 사이트 값이 인덱스 클래스를 안 대도 쓴 쪽으로 쓴다", WK, "        return (w, at, fct, read_key) if w else None\n", "        return (w or \"refresh-job\", at, fct, read_key)\n", [PEER_T]),
  ("peer 리더가 다른 GBM의 사이트도 묻는다", MN, "    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]\n", "    others = [e for e in load_registry(config_root).active() if e.fct != fct]\n", [PEER_CLI_T]),
  ("peer 리더가 비활성 사이트도 묻는다", MN, "    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]\n", "    others = [e for e in load_registry(config_root).sites if e.gbm == gbm and e.fct != fct]\n", [PEER_CLI_T]),
- ("안 닿은 사이트를 다시 묻는다", MN, "                if got.status != \"ok\":\n                    dead.add(entry.fct)\n                    continue\n", "                if got.status != \"ok\":\n                    continue\n", [PEER_CLI_T]),
+ ("안 닿은 사이트를 다시 묻는다", MN, "                if got is not None and got.status != \"ok\":\n                    dead.add(entry.fct)\n                    continue\n", "                if got is not None and got.status != \"ok\":\n                    continue\n", [PEER_CLI_T]),
  ("같은 키가 없을 때 같은 템플릿의 키를 안 본다", MN, "                for sibling in keys[:1]:\n", "                for sibling in keys[:0]:\n", [PEER_CLI_T]),
  ("palette-source-missing에 원천 색 키가 있다", LC, "            **({} if variant == \"palette-source-missing\" else\n", "            **({} if False else\n", [LOCAL_PALETTE_T, BOARD_PEER_T]),
 ]
-assert len(CASES) >= 1153, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5t ④ — 다른 사이트에 물을 키는 그 사이트의 이름 목록으로 ──
+CASES += [
+ ("다른 사이트 키를 이 사이트 이름 그대로 묻는다", MN, "                named = await renamed(entry, key, template)\n", "                named = (key, template)\n", [PEER_CLI_T, BOARD_PEER_T]),
+ ("scan 패턴을 이 사이트 템플릿의 머리로 만든다", MN, "                scanned = await got_reader.scan(f\"{key_head(their_template)}*\")\n", "                scanned = await got_reader.scan(f\"{key_head(template)}*\")\n", [PEER_CLI_T]),
+ ("그 사이트가 선언하지 않은 키도 글자 그대로 묻는다", MN, "                if named is None:\n                    continue                                       # 그 사이트는 그 키를 선언하지 않는다 — 읽지 않는다(묻는 수에도 안 센다)\n", "                if named is None:\n                    named = (key, template)\n", [PEER_CLI_T]),
+ ("CLI가 peer 리더에 이름 목록을 안 준다", MN, "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)\n        try:\n            # 조사(", "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)\n        try:\n            # 조사(", [BOARD_PEER_T]),
+ ("palette-source-missing의 sevt 키에 접두어가 없다", LC, "        **({\"peers\": {\"sevt\": {\"redis\": {\"sevt:palette:source\": json.dumps(", "        **({\"peers\": {\"sevt\": {\"redis\": {\"palette:source\": json.dumps(", [BOARD_PEER_T, LOCAL_PALETTE_T]),
+ ("sevt 층에 키 접두어가 없다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\"}}},\n        \"redis_key\": {\"prefix\": \"sevt\"}},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\"}}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
+]
+assert len(CASES) >= 1159, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -373,7 +373,8 @@ def test_걸은_클래스가_구독하는_토픽은_보존_범위와_발행_선�
 def test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다(board, monkeypatch):
     """R3-5t ②(측정 #29 3부): `인덱스에 쓰는 함수가 없다` 주를 리드가 "쓰는 코드 누락"으로 읽었다. 측정판 `palette-source-missing`: 원천 색 키가 없고, 쓰는
     `PaletteSeeder`는 레지스트리 결과(명령)를 저장해 인덱스가 쓰는 줄을 못 본다(P1-7의 모양) — 같은 GBM의 sevt 시드가 그 키 값에 `PaletteSeeder`를 대서 쓴 쪽 칸에
-    출처(`sevt 값의 metadata.event_type`)와 함께 채우고, 그 클래스가 구독하는 토픽(GBM 선언 topic2)의 보존 범위까지 걷는다. 멈춤은 `키가 없다`에 그 사실."""
+    출처(`sevt 값의 metadata.event_type`)와 함께 채우고, 그 클래스가 구독하는 토픽(GBM 선언 topic2)의 보존 범위까지 걷는다. 멈춤은 `키가 없다`에 그 사실.
+    sevt 층은 키에 자기 접두어(`키 접두어 항목`)를 붙인다(R3-5t ④, 측정 #30: 글자 그대로 물어 채움 0) — 물을 키는 sevt의 이름 `sevt:palette:source`다."""
     rows, notes, stopped, rungs = _walk(board, monkeypatch, "palette-source-missing")
     assert "alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 빈 배열 (colors)" in rows
     assert "palette:source | PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] | 없음" in rows
@@ -381,7 +382,7 @@ def test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같�
     assert topic and topic[0].endswith(" | 정상 — 보존 범위 0~5 · 남은 메시지 5 · 구독 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]")
     assert stopped == ("키가 없다 — palette:source(쓰는 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] · 구독 mx.alarm.main 범위 0~5, "
                        "남은 메시지 5)")
-    assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 palette:source 값의 metadata.event_type에서 채웠다: PaletteSeeder"]
+    assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 sevt:palette:source 값의 metadata.event_type에서 채웠다: PaletteSeeder"]
     assert rungs[:2] == [f"code.read line={_at('common/palette.py', 'class PaletteSeeder')} path='common/palette.py' service='batch'",
                          "kafka.tail limit=5 topic='mx.alarm.main'"]
 
