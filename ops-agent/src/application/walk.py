@@ -226,7 +226,8 @@ def writes_in(text: str) -> int:
 
 
 def _topic_status(data: Any, error: str) -> tuple[str, bool, str]:
-    """구독 토픽의 보존 범위 홉 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)` — 비었으면(남은 메시지 0) 나쁨. 못 읽었으면 모르는 것."""
+    """구독 토픽의 보존 범위 홉 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)` — 비었으면(남은 메시지 0) 나쁨, 남아 있으면 `정상 —`(R3-5t ③, 측정 #29 3부: 판정 낱말이
+    없어 빈 행과 한눈에 안 갈렸다 — 키 행의 `정상 — …`과 같은 꼴). 못 읽었으면 모르는 것."""
     if not isinstance(data, dict):
         return f"읽기 실패 — {error}", False, "범위 읽기 실패"
     parts = data.get("partitions") or []
@@ -234,7 +235,7 @@ def _topic_status(data: Any, error: str) -> tuple[str, bool, str]:
            else ", ".join(f"{p['partition']}: {p['begin']}~{p['end']}" for p in parts))
     left = data.get("messages", 0)
     text = f"보존 범위 {rng} · 남은 메시지 {left}"
-    return (f"비었다 — {text}" if not left else text), not left, f"범위 {rng}, 남은 메시지 {left}"
+    return (f"비었다 — {text}" if not left else f"정상 — {text}"), not left, f"범위 {rng}, 남은 메시지 {left}"
 
 
 def status_of(raw: Any) -> tuple[str, bool]:

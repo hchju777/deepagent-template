@@ -965,7 +965,8 @@ async def test_키가_없으면_인덱스의_쓰는_클래스와_그_클래스_�
     assert "쓴 쪽은 인덱스의 쓰기 자원(t-4.e1)" in walk.hops[1].basis
     # 쓴 쪽 칸은 발행 선언(R3-5t ① — 측정 #29 3부: `<ACS 토픽>`에 발행하는 레포가 없는데 행이 구독 클래스를 적어 그 사실이 안 보였고 AGV 6회 중 4회가 external로 못
     # 갔다), 후보도 그 서비스들; 구독 클래스는 상태 칸 꼬리 — 걸은 클래스의 토픽 행(R3-5s ⑥)과 같은 모양.
-    assert walk.hops[2].line() == "  t.raw | 발행 선언 없음(우리 밖) | 보존 범위 40~100 · 남은 메시지 60 · 구독 W1 [a] | t-6.e1" and not walk.hops[2].bad
+    # 비지 않은 행은 `정상 —`을 앞에(R3-5t ③ — 측정 #29 3부: 빈 행 `비었다 — …`과 구분되게 판정 낱말을 앞에).
+    assert walk.hops[2].line() == "  t.raw | 발행 선언 없음(우리 밖) | 정상 — 보존 범위 40~100 · 남은 메시지 60 · 구독 W1 [a] | t-6.e1" and not walk.hops[2].bad
     assert walk.hops[2].candidates == [] and walk.hops[2].writer == ""
     assert walk.hops[2].kind == "topic" and walk.hops[2].depth == 2 and walk.hops[2].parent == "t-3.e1" and len(walk.hops) == 3   # 서비스 선언 셋은 안 읽는다
     assert walk.hops[2].basis.startswith("W1가 읽는 토픽(code.resources t-5.e1)")
@@ -1062,7 +1063,7 @@ async def test_걸은_클래스의_구독_토픽_입력은_보존_범위로_읽�
     assert ("kafka.tail", "t.raw") not in runner.ran and ("code.uses", "t.raw") not in runner.ran and walk.reads == 3     # 발행 쪽으로 걷지 않는다
     # 메시지가 남아 있으면 그 홉은 나쁨이 아니고 읽은 입력이다 — 다른 입력도 정상이면 입력이 다 정상
     walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.offsets", "t.raw"): _offsets(40, 100)}), **kw))["walk"]
-    assert walk.hops[1].status == "보존 범위 40~100 · 남은 메시지 60 · 구독 W0 [a]" and not walk.hops[1].bad and walk.stopped == "입력이 다 정상 — W0"
+    assert walk.hops[1].status == "정상 — 보존 범위 40~100 · 남은 메시지 60 · 구독 W0 [a]" and not walk.hops[1].bad and walk.stopped == "입력이 다 정상 — W0"
     # 발행 선언이 없으면 우리 밖 — 후보도 없다
     walk = (await run_walk(_state(), runner=_Reads(table), **{**kw, "topic_producers": {}}))["walk"]
     assert (walk.hops[1].service, walk.hops[1].candidates) == ("발행 선언 없음(우리 밖)", [])

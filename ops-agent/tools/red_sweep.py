@@ -3383,7 +3383,7 @@ CASES += [
  ("쓰는 클래스가 여럿이어도 첫 것을 채운다", WK, "        if len(writers) != 1:\n            remember(", "        if not writers:\n            remember(", [KEYED_T]),
  ("없는 키의 쓴 쪽을 안 찾는다", WK, "                keyed = (await keyed_writer(name)) if (got.status == \"ok\" and raw is None and not w and kind == \"rediskey\") else None", "                keyed = None", [KEYED_T, BOARD_KEYED_T]),
  ("쓰는 클래스로 더 걷는다", WK, "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches = []", "                    w, shown, cands, params_k, uses_ev = keyed\n                    next_branches, _, _ = branches(w, name)", [KEYED_T]),
- ("빈 토픽을 나쁨으로 안 본다", WK, "    return (f\"비었다 — {text}\" if not left else text), not left, f\"범위 {rng}, 남은 메시지 {left}\"", "    return (f\"비었다 — {text}\" if not left else text), False, f\"범위 {rng}, 남은 메시지 {left}\"", [KEYED_T, BOARD_KEYED_T]),
+ ("빈 토픽을 나쁨으로 안 본다", WK, "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), not left, f\"범위 {rng}, 남은 메시지 {left}\"", "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), False, f\"범위 {rng}, 남은 메시지 {left}\"", [KEYED_T, BOARD_KEYED_T]),
  ("구독 토픽이 비어도 멈춤이 키가 없다다", WK, "        if stop_hop.kind == \"topic\" and ev in topics_at:", "        if False:", [KEYED_T, BOARD_KEYED_T]),
 ]
 
@@ -3534,7 +3534,12 @@ CASES += [
  ("빈 구독 토픽의 멈춤에 발행 선언이 없다", WK, "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}] · {stop_hop.service})\"\n", "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])\"\n", [KEYED_T, BOARD_KEYED_T]),
  ("걸은 클래스의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {who_}\", bad=tbad, evidence_id=tev,\n", "status=tstatus, bad=tbad, evidence_id=tev,\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
 ]
-assert len(CASES) >= 1144, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5t ③ — 비지 않은 토픽 행은 `정상 — …` ──
+CASES += [
+ ("비지 않은 토픽 행에 판정 낱말이 없다", WK, "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), not left, f\"범위 {rng}, 남은 메시지 {left}\"\n", "    return (f\"비었다 — {text}\" if not left else text), not left, f\"범위 {rng}, 남은 메시지 {left}\"\n", [KEYED_T, WALK_TOPIC_T, BOARD_KEYED_T]),
+]
+assert len(CASES) >= 1145, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

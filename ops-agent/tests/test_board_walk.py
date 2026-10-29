@@ -341,7 +341,7 @@ def test_원천_키가_없으면_인덱스의_쓰는_클래스와_구독_토픽�
     # 쓴 쪽 칸은 발행 선언(R3-5t ①): 감사 토픽은 사이트 행의 발행 선언 셋, 원천 토픽은 발행 선언이 없어 우리 밖 — 구독 클래스는 상태 꼬리.
     assert rows[4].startswith("gumi.alarm.audit | 발행 선언: batch, processor, sink | 읽기 실패 — ") and "토픽이 없거나" in rows[4]
     assert rows[4].endswith(" · 구독 SourceSink [processor]")
-    assert rows[5:] == ["mx.alarm.raw | 발행 선언 없음(우리 밖) | 보존 범위 0~5 · 남은 메시지 5 · 구독 SourceSink [processor]"]
+    assert rows[5:] == ["mx.alarm.raw | 발행 선언 없음(우리 밖) | 정상 — 보존 범위 0~5 · 남은 메시지 5 · 구독 SourceSink [processor]"]
     assert stopped == "키가 없다 — alarm:source:L1(쓰는 SourceSink [processor] · 구독 gumi.alarm.audit 범위 읽기 실패 / 구독 mx.alarm.raw 범위 0~5, 남은 메시지 5)"
     body = f"code.read line={_at('processor/source_sink.py', 'class SourceSink')} path='processor/source_sink.py' service='processor'"
     assert rungs[:2] == [body, "kafka.tail limit=5 topic='mx.alarm.raw'"] and notes == [PALETTE_NOTE]
