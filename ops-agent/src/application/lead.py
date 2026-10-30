@@ -1,0 +1,562 @@
+"""리드 LLM — `frame`(가설과 계획)과 `integrate`(갱신과 결정).
+
+## 무엇을 LLM이 정하고 무엇을 코드가 쥐는가
+
+LLM은 **가설 내용 · 무엇을 볼지 · 계속할지 끝낼지**를 정한다. 그 밖은 전부 코드다:
+라운드 상한 · 병렬 폭 · 실행 가능 판정 · 태스크 개수 상한 · 수명주기 소독
+(`nodes.py`의 표 참고). 여기서 LLM이 하는 일은 **JSON 하나를 내는 것**이고, 그
+JSON이 State에 들어가기 전에 전부 검사된다.
+
+## 실패가 조용하면 안 된다
+
+LLM이 죽거나 JSON이 안 나오면 태스크가 0개가 되고, 그러면 `no_runnable`로 끝난다 —
+**"조사했는데 아무것도 안 했다"가 "조사할 게 없었다"와 같은 모양이 된다.** 5단계의
+`unreachable` 문제와 정확히 같다.
+
+그래서 `llm_errors`에 사유를 쌓고 `stopped_by="llm_error"`로 끝낸다. 12a가 이걸 보고
+"미확정"이 아니라 **"조사 실패(degraded)"**로 낙인한다.
+
+## 재시도는 한 번뿐이다
+
+파싱 실패는 모델이 형식을 놓친 것이라 한 번 더 물으면 대개 된다. 두 번 이상은
+같은 실패를 반복하며 라운드 시간만 늘린다 — 조사는 라운드마다 LLM을 부르므로
+재시도가 길면 전체가 늘어진다.
+"""
+import asyncio
+import re
+from typing import Literal
+
+from pydantic import Field, model_validator
+
+from src.application import briefing
+from src.application.schemas import Parsed, parse_object, validate
+from src.application.state import CaseState
+from src.domain.actions import ACTIONS, role_for
+from src.domain.base import StrictModel
+from src.domain.llm_schema import strictify
+from src.domain.case import CauseLink, Hypothesis, PlanTask, Verdict
+from src.domain.llm import LlmPort
+
+RETRIES = 1                 # 깨진 형식의 사유 재질문 — 같은 모델이 같은 틀을 또 틀리니 한 번
+# 호출 자체의 실패(연결 끊김·조각 뒤 끊김·게이트웨이 오류)는 일시적이라 같은 질문으로 두 번(R3-5n ①, 측정 #24: `ReadError` → `ConnectionError`가 한 번뿐인
+# 재시도를 다 써 degraded). 조각 없는 시간 초과는 예외 — 같은 상한을 또 기다릴 이유가 없다(`ask_json`의 `timed_out`).
+CONNECTION_RETRIES = 2
+# 길이 상한 뒤 `## 짧게`는 두 번(R3-5o ①). 측정 #25: length 턴 10 중 9가 빈 응답에 출력 토큰이 정확히 상한 — 답이 아니라 **생각**이 상한을 먹는다. 프롬프트 모양으로
+# 생각을 못 줄이지만 짧게 한 줄이 8/9를 살렸고, 둘째 짧게는 남은 꼬리를 노린다(한 번 더 ~84초 vs degraded 한 건). 상한 자체는 사내 config의 `max_tokens`와
+# 게이트웨이의 추론 설정이 쥔다.
+BRIEF_RETRIES = 2
+# 전송 오류(게이트웨이 403·타임아웃 등) 뒤에 쉬는 시간. 사내 세 번째 트레이스에서 되물음이
+# 앞 호출 직후에 나가자 게이트웨이가 403을 냈다 — 연달아 두 번 부른 것이 원인으로 보인다. 둘째 연결 재시도는 세 배 쉰다(`_pause`).
+RETRY_BACKOFF_S = 2.0
+
+
+def fill(template: str, fields: dict[str, str]) -> str:
+    """템플릿의 `{이름}` 자리를 채운다.
+
+    **`str.format`을 쓰지 않는다.** 프롬프트에 JSON 예시가 들어 있어서 `{`가 그대로
+    있고, `format`은 그걸 자리로 읽어 `KeyError`로 죽는다. 9e가 같은 함정을 겪고
+    주석까지 남겨 뒀다(`report/comment.py`의 `build_prompt`).
+
+    치환 자리가 몇 개뿐이라 replace가 맞다.
+
+    **여기서는 남은 자리를 검사하지 않는다.** 오타 난 `{max_round}`는 라운드마다
+    똑같이 남으므로 매번 검사할 이유가 없고, 여기서 발견해 봐야 조사가 이미 시작된
+    뒤다. 템플릿은 **기동 때 한 번** `slots_in`으로 검사한다
+    (`__main__._load_lead_prompt`) — 9e에서 `{max_chars}`가 치환되지 않은 채 LLM에게
+    나간 적이 있고, 리포트는 정상으로 보여서 아무도 못 봤다.
+    """
+    filled = _conditional(template, fields)
+    for name, value in fields.items():
+        filled = filled.replace("{" + name + "}", value)
+    return filled
+
+
+_COND = re.compile(r"\{\?([a-z_][a-z0-9_]*)\}")
+_EMPTY_BLOCK = ("", "(없음)", "(아직 없다)")
+
+
+def _conditional(template: str, fields: dict[str, str]) -> str:
+    """`{?블록}` 표지가 든 줄은 그 블록이 **비었으면** 이어지는 들여쓴 줄까지 같이 뺀다(차 있으면 표지만 지운다).
+
+    사내 측정 #3: integrate 고정부가 7.1~7.9K였다. 열린 질문이 없는 라운드의 "열린 질문을 보라", 버려진 것이 없는 라운드의 "버려진
+    것은 이미 거부됐다"는 읽을 것 없이 자리만 먹는다. 무엇을 뺄지는 템플릿(운영이 고치는 파일)이 표지로 정하고, 코드는 블록이
+    비었는지만 본다. 모르는 블록 이름은 빈 것으로 — 표지가 그대로 LLM에게 나가지 않게.
+    """
+    out, dropping = [], False
+    for line in template.splitlines(keepends=True):
+        mark = _COND.search(line)
+        if mark is not None:
+            dropping = fields.get(mark.group(1), "").strip() in _EMPTY_BLOCK
+            if not dropping:
+                out.append(_COND.sub("", line, count=1))
+            continue
+        if dropping and line.startswith("  "):
+            continue
+        dropping = False
+        out.append(line)
+    return "".join(out)
+
+
+def slots_in(template: str) -> set[str]:
+    """템플릿이 쓰는 `{이름}` 자리들.
+
+    프롬프트에는 JSON 예시가 들어 있어 `{`가 널려 있다. 그래서 **식별자 모양만**
+    자리로 센다 — `{ "decision": ... }`는 공백과 따옴표가 있어 안 걸리고,
+    `"params": {}`도 안 걸린다.
+    """
+    return set(_SLOT.findall(template))
+
+
+_SLOT = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
+
+
+# 태스크·가설은 여기서 `dict`로 받고 **낱개로** 검증한다(`_items`). 목록째 모델로 받으면
+# 태스크 하나의 모양이 틀렸을 때 답 전체가 거부되고, 수리 재시도는 **다른 계획**을 낸다 —
+# 사내 네 번째 트레이스에서 `role` 하나 때문에 integrate 셋이 그렇게 날아갔다.
+class FrameReply(StrictModel):
+    hypotheses: list[dict] = []
+    tasks: list[dict] = []
+
+
+class IntegrateReply(StrictModel):
+    decision: Literal["continue", "conclude"] = "continue"
+    hypotheses: list[dict] = []
+    tasks: list[dict] = []
+    # 모델이 설명을 덧붙이고 싶어 하는 자리. 없으면 지어내서 다른 칸에 넣는다.
+    note: str = Field(default="", max_length=2000)
+
+
+# 결함 아님에 실려 온 root_cause를 코드가 옮겼다는 표시 — 보고서의 주의 줄에 남는다(`caveat_truncated`처럼 코드가 더하는 caveat).
+CAUSE_MOVED = "결함 아님 판정에 root_cause가 실려 있어 코드가 그 증거 id를 basis로 옮겼다(결함 아님에는 원인이 없다)"
+
+
+class ConcludeReply(StrictModel):
+    """판정 턴의 답 — `Verdict`와 같은 모양이되 `verdict_type`에 **`degraded`가 없다.**
+
+    `degraded`는 "조사가 안 돌았다"는 코드의 낙인이다. 리드가 내면 어휘 위반이라 `validate`가
+    거부하고 수리 재시도로 간다 — 그래도 내면 판정 없이 사유만 남고 노드가 degraded를 찍는다.
+    """
+
+    verdict_type: Literal["logic_bug", "data_loss", "config_error", "stale_data",
+                          "external", "inconclusive", "not_a_defect"]
+    root_cause: CauseLink | None = None
+    alternates: list[CauseLink] = []
+    contributing: list[CauseLink] = []
+    confidence: Literal["high", "medium", "low"]
+    recommendations: list[str] = []
+    caveats: list[str] = []
+    narrative: str
+    basis: list[str] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _not_a_defect_moves_cause_to_basis(cls, data):
+        """결함 아님에 root_cause가 실려 오면 코드가 비우고 그 증거 id를 basis로(R3-5h ③, 측정 #18 P0-c: c-10·c-12가 두 번 다 실어 degraded — 수리 재질문이
+        같은 모양을 또 낸다). 뜻이 하나인 실수다. 조용히 고치지 않는다 — caveat 한 줄. 증거 id가 어디에도 없으면 아래 검증이 전처럼 거른다."""
+        if not isinstance(data, dict) or data.get("verdict_type") != "not_a_defect":
+            return data
+        # 목록 자리에 문자열 하나(R3-5k ③, 측정 #21 `<50V>` 첫 판정 — 이 모양만 그 오류를 냈다) — 한 원소 목록으로. 원소 안의 id는 노드가 나눈다(R3-5j ②).
+        data = {**data, **{k: [data[k]] for k in ("basis", "caveats") if isinstance(data.get(k), str)}}
+        if data.get("root_cause") is None:
+            return data
+        cause, basis, caveats = data.get("root_cause"), data.get("basis"), data.get("caveats")
+        if not isinstance(basis, (list, type(None))) or not isinstance(caveats, (list, type(None))):
+            return {**data, "root_cause": None}                                 # 다른 모양은 아래 검증이 그 칸만 말한다
+        ids = [i for i in (cause.get("evidence_ids") or []) if isinstance(i, str)] if isinstance(cause, dict) else []
+        basis = list(basis or [])                                              # 문자열 아닌 항목은 걷어내지 않는다 — 형식 오류는 아래 검증이 말한다
+        return {**data, "root_cause": None, "basis": basis + [i for i in ids if i not in basis],
+                "caveats": [*(caveats or []), CAUSE_MOVED]}
+
+    @model_validator(mode="after")
+    def _conclusive_needs_root_cause(self):
+        # `Verdict`와 같은 규칙을 여기서도 — 그래야 수리 재시도가 "root_cause가 필요하다"를 전한다.
+        if self.verdict_type not in ("inconclusive", "not_a_defect") and self.root_cause is None:
+            raise ValueError("결론이 있는 판정에는 root_cause가 필요하다 — 모르면 inconclusive")
+        # 결함 아님(R3-5d ⑤)은 원인 없이 근거만 — 다리가 없으니 `basis`가 비면 인용할 것이 없다.
+        if self.verdict_type == "not_a_defect" and (self.root_cause is not None or not self.basis):
+            raise ValueError("결함 아님(not_a_defect)은 root_cause 없이 basis에 증거 id를 — 멈춘 클래스의 코드 증거와 그 클래스의 비지 않은 입력 증거")
+        return self
+
+
+_ID = {"type": "string"}
+_HYPOTHESIS_SCHEMA = {"type": "object", "properties": {
+    "id": _ID, "statement": {"type": "string"},
+    "status": {"type": "string", "enum": ["open", "supported", "refuted"]},
+    "supporting_ids": {"type": "array", "items": _ID}, "refuting_ids": {"type": "array", "items": _ID}},
+    "required": ["id", "statement"]}
+# `params`는 자유형이다 — action마다 인자가 다르고 `filter`는 질의 그 자체라 닫을 수 없다. 그래서 액션 턴의 스키마는 strict가
+# 못 되고(`llm_schema.is_closed`), 서버는 문법과 윗단 모양만 강제한다. 그것으로 충분하다 — 깨진 것은 따옴표였다.
+# `params`에는 속성을 **하나도 적지 않는다**(R3-5u ③-b — 측정 #31: `offset`·`line`·`limit` 셋에 하한 1을 적자 게이트웨이의 구조화 출력에서 모델이 그 셋만
+# 채워 `code.read`에 service·path가 빠졌다 — 15건 전부 리드 작업 0, 반려 92. `additionalProperties`를 안 적어도 자유형으로 안 간다). 0 인자는 `_range_problem`이
+# 소켓 전에 거르고 반려 사유가 다음 라운드 프롬프트로 돌아간다. 액션별 인자 스키마를 쓰려면 action마다 required까지 묶어서 — 몇 속성만 따로 적지 말 것.
+_TASK_SCHEMA = {"type": "object", "properties": {
+    "id": _ID, "goal": {"type": "string"}, "action": {"type": "string"}, "params": {"type": "object"},
+    "priority": {"type": "integer"}, "input_evidence_ids": {"type": "array", "items": _ID}},
+    "required": ["id", "goal", "action", "params"]}
+
+
+def per_action_task_schema() -> dict:
+    """태스크 항목을 **액션마다** 묶은 anyOf(R3-5v ⑦ — 네이티브 함수 호출의 옵션). 액션은 상수, `params`는 그 액션의 인자로 닫고 필수 인자는 required —
+    몇 속성만 따로 적으면 모델이 그것만 채운다(측정 #31, R3-5u ③-b). 인자의 모양은 적지 않는다(`{}`) — 받는 쪽 검사가 한다."""
+    choices = []
+    for name in sorted(ACTIONS):
+        _, _, required, optional = ACTIONS[name]
+        choices.append({"type": "object", "properties": {
+            "id": _ID, "goal": {"type": "string"}, "action": {"type": "string", "const": name},
+            "params": {"type": "object", "properties": {arg: {} for arg in (*required, *optional)},
+                       "required": list(required), "additionalProperties": False},
+            "priority": {"type": "integer"}, "input_evidence_ids": {"type": "array", "items": _ID}},
+            "required": ["id", "goal", "action", "params"]})
+    return {"anyOf": choices}
+
+
+def response_schema(model: type[StrictModel], *, per_action: bool = False) -> dict:
+    """답 모델 → 서버에 보낼 JSON 스키마. 액션 턴 둘은 항목 모양을 손으로 적는다(pydantic 쪽은 `list[dict]`로 느슨하게
+    받으므로 — 낱개 검증 때문이다), 판정 턴은 pydantic 스키마를 닫아서(strict) 보낸다."""
+    lists = {"hypotheses": {"type": "array", "items": _HYPOTHESIS_SCHEMA},
+             "tasks": {"type": "array", "items": per_action_task_schema() if per_action else _TASK_SCHEMA}}
+    if model is FrameReply:
+        return {"title": "frame_reply", "type": "object", "properties": lists,
+                "required": ["hypotheses", "tasks"], "additionalProperties": False}
+    if model is IntegrateReply:
+        return {"title": "integrate_reply", "type": "object",
+                "properties": {"decision": {"type": "string", "enum": ["continue", "conclude"]}, **lists,
+                               "note": {"type": "string"}},
+                "required": ["decision", "hypotheses", "tasks"], "additionalProperties": False}
+    schema = strictify(model.model_json_schema())
+    schema["title"] = f"{model.__name__}".lower()
+    return schema
+
+
+def schema_label(schema: dict | None) -> str:
+    """턴에 보낸 답 스키마의 이름 — 트레이스 머리에 남긴다(R3-5k ②, 측정 #21: `## 짧게` 턴에 스키마가 갔는지 트레이스로 못 봤다). 판정 스키마면 증거 id enum
+    수까지. 안 보냈으면 `없음`."""
+    if not schema:
+        return "없음"
+    ids = (((schema.get("properties") or {}).get("basis") or {}).get("items") or {}).get("enum")
+    return str(schema.get("title") or "이름 없음") + (f"(증거 id {len(ids)})" if ids else "")
+
+
+def conclude_schema(evidence_ids) -> dict:
+    """판정 턴의 스키마 — `basis`와 다리의 `evidence_ids` 항목을 **그 케이스 증거 id의 enum**으로(R3-5i ②, 측정 #19 P0-c: basis 원소가 `<id>: <설명>`
+    문장이라 verify가 "없는 id"로 11번 되물었다). 서버가 스키마를 강제하면 리드는 그 밖을 못 쓴다. 증거가 없으면 열린 문자열 그대로. 닫힘은 그대로다."""
+    schema = response_schema(ConcludeReply)
+    ids = list(dict.fromkeys(i for i in evidence_ids if isinstance(i, str) and i))
+    if not ids:
+        return schema
+    item = {"type": "string", "enum": ids}
+    schema["properties"]["basis"]["items"] = item
+    link = schema.get("$defs", {}).get("CauseLink", {}).get("properties", {})
+    if "evidence_ids" in link:
+        link["evidence_ids"]["items"] = dict(item)
+    return schema
+
+
+# 증거 예산을 여기까지만 줄인다 — **상한보다 이긴다.** 사내 측정 #3에서 고정부가 7.1~7.9K라 8K 상한을 맞추려다 증거가 1.6K까지
+# 깎였다. 상한의 이유였던 지연은 빠른 모델이 13~17K를 4~14초에 처리해 약해졌고, 증거를 굶기는 쪽이 더 큰 손해다. 고정부는 따로
+# 줄인다(`_role_brief`·`{?블록}`·흐름 예산).
+_EVIDENCE_FLOOR = 4000
+
+
+def fit_prompt(render, *, cap: int | None, budget: int) -> tuple[str, int]:
+    """프롬프트를 상한 안에 — 오래된 증거부터 접고(예산을 넘친 만큼 줄인다), 그래도 넘으면 끝난 태스크 줄을 접는다.
+
+    `render(evidence_budget, fold_tasks)`가 프롬프트를 만든다. 사내 재측정에서 r2 integrate가 22.8K자였다(2-4). 상한이 없으면
+    한 번 만들고 끝. 바닥까지 접어도 넘으면 그대로 보낸다 — 자르는 것보다 조금 큰 쪽이 낫고, 크기는 트레이스 머리에 남는다.
+    `(프롬프트, 쓴 증거 예산)`.
+    """
+    prompt = render(budget, False)
+    if cap is None:
+        return prompt, budget
+    while len(prompt) > cap and budget > _EVIDENCE_FLOOR:
+        budget = max(_EVIDENCE_FLOOR, budget - (len(prompt) - cap))
+        prompt = render(budget, False)
+    if len(prompt) > cap:
+        prompt = render(budget, True)
+    return prompt, budget
+
+
+def repair_prompt(prompt: str, reason: str) -> str:
+    """재시도 프롬프트 — **무엇이 틀렸는지 붙여서** 다시 묻는다.
+
+    같은 프롬프트를 한 번 더 보내는 것은 약한 모델에겐 재시도가 아니다. 사내 모델은
+    판단해서 답을 고르는 게 아니라 **주어진 틀을 채운다** — 같은 틀을 주면 같은 답이
+    온다. 사유를 붙여야 그게 새 입력이 된다.
+
+    사유를 **맨 뒤에** 붙이는 이유: 모델은 마지막에 읽은 지시를 더 따른다(9e의 울타리가
+    <사실> 뒤에도 한 겹 있는 것과 같은 이유).
+    """
+    return (f"{prompt}\n\n---\n\n## 다시\n\n앞의 답을 읽을 수 없었다: **{reason}**\n\n"
+            f"위 형식 그대로, **JSON 객체 하나만** 내라. 설명도 코드펜스도 붙이지 마라.")
+
+
+def brief_prompt(prompt: str) -> str:
+    """길이 상한(`length`) 뒤의 재질문 — "짧게" 한 줄을 **맨 뒤에**(R3-5f ④, 사람 결정 10-20 기본값: 판정 역할 `max_tokens`는 동결, 상한 대신 답의 모양을
+    말한다). 측정 #16: 판정 호출 18번 중 length 2 — 같은 질문을 그대로 다시 보내면 같은 길이로 또 끊길 수 있다(c-14는 두 번 다 실패)."""
+    return (f"{prompt}\n\n---\n\n## 짧게\n\n앞의 답이 길이 상한에서 끊겼다. 같은 형식으로, 서술은 핵심 몇 문장으로 짧게, "
+            f"후보(alternates)는 둘 이내로 내라.")
+
+
+async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
+                   on_exchange=None, schema: dict | None = None) -> Parsed:
+    """묻고, JSON을 꺼내고, 모델로 검증한다. **절대 raise하지 않는다.**
+
+    `on_exchange(prompt, reply_text, error)`는 시도마다 불린다 — `--trace`가 여기서
+    날것을 건진다. **트레이스가 던져도 조사는 계속돼야 한다**(아래 흡수).
+    """
+    last = Parsed(False, error="시도하지 않았다")
+    asked = prompt
+    # 판정 턴은 케이스마다 다른 스키마(증거 id enum, R3-5i ②). 어댑터가 네이티브 함수 호출이면 액션 턴은 액션마다 묶은 스키마(R3-5v ⑦).
+    schema = response_schema(model, per_action=bool(getattr(llm, "per_action", False))) if schema is None else schema
+    use_schema = schema
+    # 실패의 종류마다 처방이 다르면 예산도 따로다(R3-5n ①, 측정 #24: degraded 6 중 셋이 다른 종류의 실패가 한 예산을 나눠 쓴 탓 — 전송 오류 둘, 짧게 뒤의 형식
+    # 실패, 짧게 뒤의 조각 끊김). 호출 자체의 실패(`connection`)는 같은 질문으로 두 번, 길이 상한(`length` — 잘린 답이든 빈 긴 답이든, 짧게 — R3-5f ④·R3-5m ②·
+    # R3-5o ①)은 두 번, 빈 응답(`empty`, 종료 사유 stop)·깨진 형식(`format`, 사유 재질문)은 한 번씩. 조각 없는 시간 초과는 안 되묻는다(아래 `timed_out`). 최대 7회지만
+    # 실제 사슬은 셋을 넘기 어렵다.
+    budget = {"connection": CONNECTION_RETRIES, "empty": 1, "length": BRIEF_RETRIES, "format": RETRIES}
+    kind = ""                   # 직전 실패의 종류 — 다음 처방을 고른다
+    briefed = False             # `## 짧게`로 바꿨나 — 바꾼 뒤엔 어떤 재시도든 짧게를 유지한다(길이 상한은 이 질문의 성질이지 그 호출의 사고가 아니다)
+    attempts = attempt = 0
+    while True:
+        if attempt:
+            if budget[kind] == 0:
+                break
+            budget[kind] -= 1
+            if kind in ("connection", "empty") or (kind == "length" and not text):
+                # 호출이 실패하거나 답이 빈 것은 모델이 틀린 것이 아니다(빈 긴 답도 — 고칠 글이 없다). "앞의 답을 읽을 수 없었다:
+                # OpenAIPermissionDeniedError…"를 붙여 다시 물으면 모델에게 오류 문자열을
+                # 고치라고 시키는 꼴이다 — 사내에서 실제로 그렇게 나갔다. 같은 프롬프트로,
+                # 잠깐 쉬고 다시 부른다.
+                await asyncio.sleep(_pause(kind, budget["connection"]))
+                asked = brief_prompt(prompt) if briefed else prompt
+            else:
+                # 사유를 실어 다시 묻는다. 사유가 없으면 같은 질문을 반복하는 것과 같다.
+                asked = repair_prompt(prompt, last.error or "알 수 없음")
+                if briefed:
+                    asked = brief_prompt(asked)
+                # **스키마는 뗀다.** 스키마를 건 답이 깨졌다면 모델이 그 강제에 약한 것이고, 같은 스키마로 다시 물으면 같은 모양으로
+                # 또 깨진다(사내 측정 #3: 판정 턴 4/4). 호출 자체가 실패한 재시도(위)는 스키마를 그대로 둔다. 길이 상한에서 끊긴 답도 둔다 — 형식 탓이 아니고,
+                # 떼면 판정 역할의 `## 짧게` 턴에 증거 id enum이 안 걸린다(R3-5j ②, 측정 #20: 없는 id 되묻기·인용 정리가 전부 그 턴).
+                if kind == "format":
+                    use_schema = None
+        attempts = attempt + 1
+        text, failure, latency, waited, source, note, stats = None, None, None, None, None, None, None
+        timed_out = False
+        try:
+            reply = await llm.ask(asked, schema=use_schema)
+        except Exception as exc:                                    # noqa: BLE001
+            # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
+            last = Parsed(False, error=f"{type(exc).__name__}: {exc}")
+            kind = "connection"
+        else:
+            kind = "connection" if reply.status == "error" else ""
+            latency = reply.latency_s
+            # 턴의 조각 수·종료 사유·usage — 성공한 턴도 트레이스 머리에(R3-5d ②, 측정 #13 추가분 1: length가 고정 상한인지 보려면 턴마다 보여야 한다)
+            stats = {"chunks": reply.chunks, "finish_reason": reply.finish_reason, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens,
+                     "schema": schema_label(use_schema)}
+            waited = reply.waited_s or None            # 429 뒤 기다린 초 — 트레이스가 적는다(브리프의 "429 횟수와 대기 초")
+            source = reply.rate_source or None
+            if reply.status == "error" and reply.partial_text:
+                # 조각을 받은 뒤 끊겼다 — 같은 상한을 또 기다리는 시간 초과가 아니다. 받은 글이 온전한 답이면(끝 표시만 빠짐)
+                # 그대로 쓰고, 아니면 전송 실패처럼 같은 질문을 한 번 더(사내 측정 #4: 오류 문구의 "timeout"에 걸려 1라운드로 끝났다).
+                # JSON 객체는 닫는 괄호까지 와야 읽히므로 잘린 답이 검증을 지날 수는 없다.
+                text = reply.partial_text
+                parsed = parse_object(text)
+                got = validate(parsed.data, model) if parsed.ok else parsed
+                why = _first_sentence(reply.error or "")
+                if got.ok:
+                    last = got
+                    note = f"끝 표시 없이 끊김 — 받은 글 {len(text):,}자로 읽었다 · {why}"
+                else:
+                    last = Parsed(False, error=f"답 도중 끊김({len(text):,}자 받음) — {why}")
+                    note = f"답 도중 끊김 — 받은 글 {len(text):,}자, 같은 질문으로 다시 묻는다"
+            elif reply.status == "error":
+                last = Parsed(False, error=reply.error or "알 수 없는 LLM 오류")
+                # 조각이 온 뒤의 멈춤은 같은 상한의 재대기가 아니다 — 답을 만들던 중에 끊겼다(사내 측정 #12b: 판정 턴이 664조각 뒤 멈췄는데 조각의
+                # 본문이 비어 받은 글이 없었다). 같은 질문으로 한 번 더. 조각도 없이 났으면 같은 상한을 또 기다릴 이유가 없다.
+                timed_out = _is_timeout(last.error or "") and not reply.chunks
+                if reply.chunks:
+                    note = f"조각 {reply.chunks}개 뒤 끊김(받은 글 없음) — 같은 질문으로 다시 묻는다"
+                if timed_out:
+                    # 같은 상한을 한 번 더 기다릴 이유가 없다 — 사내 실측에서 60초 시간 초과를 두 번 기다려
+                    # 한 호출에 분 단위를 썼다. 몇 초 만에 났는지는 사유에 남긴다.
+                    took = f"({latency:.0f}초) " if latency is not None else ""
+                    last = Parsed(False, error=f"시간 초과 {took}— {last.error}")
+            elif not (reply.text or "").strip():
+                # 빈 응답 — 형식을 틀린 것이 아니다(고칠 글이 없다). 사유를 붙인 재질문이 아니라 같은 질문으로 한 번 더(사내 측정 #12b: 판정 턴 빈 응답 2회).
+                # 종료 사유가 `length`여도 한 번 더 — 고정 상한이 아니었다(측정 #13 추가분 1: 같은 질문 재전송 7번 전부 stop, 생각 폭주). 사유는 문구에 남는다.
+                text = reply.text or ""
+                # 빈 긴 답(종료 사유 length)은 길이 상한의 실패다 — 생각이 상한을 먹었다(측정 #25: 10 중 9, 출력 토큰 정확히 상한). 처방은 같은 질문에 짧게(고칠 글이
+                # 없다 — R3-5f ④), 예산은 길이 상한의 것(짧게 두 번 — R3-5o ①). 종료 사유가 stop인 빈 응답은 전처럼 같은 질문으로 한 번.
+                last = Parsed(False, error=f"빈 응답(조각 {reply.chunks}개, 종료 사유 {reply.finish_reason or '모름'})")
+                kind = "length" if reply.finish_reason == "length" else "empty"
+                if kind == "length":
+                    briefed = True
+            else:
+                text = reply.text or ""
+                parsed = parse_object(text)
+                last = validate(parsed.data, model) if parsed.ok else parsed
+                if not last.ok:
+                    kind = "length" if reply.finish_reason == "length" else "format"
+                    if kind == "length":
+                        briefed = True
+        failure = None if last.ok else last.error
+        _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)
+        if last.ok:
+            return last
+        if timed_out:
+            break
+        attempt += 1
+    return Parsed(False, error=f"{attempts}회 시도 실패 — {last.error}")
+
+
+def _pause(kind: str, connection_left: int) -> float:
+    """같은 질문을 다시 보내기 전에 쉬는 초 — 둘째 연결 재시도는 세 배(연달아 부른 것이 403의 원인으로 보였다). 빈 응답 뒤는 한 번."""
+    return RETRY_BACKOFF_S * (3 if kind == "connection" and connection_left == 0 else 1)
+
+
+_TIMEOUT_WORDS = re.compile(r"time ?out|timed out|시간 초과", re.I)
+
+
+def _is_timeout(error: str) -> bool:
+    """전송 오류가 **시간 초과**인가 — SDK(`APITimeoutError`)·httpx(`ReadTimeout`)·표준(`TimeoutError`)이 다 이름에 담는다."""
+    return bool(_TIMEOUT_WORDS.search(error))
+
+
+def _first_sentence(error: str) -> str:
+    """오류 문구의 첫 문장 — langchain-openai의 유휴 상한 문구는 설정 안내까지 400자 가까이라, 사내에서 손으로 옮기는 트레이스
+    머리줄이 그것으로 찬다. 첫 문장에 상한·모델·받은 조각 수가 다 있다."""
+    return error.split(". ", 1)[0]
+
+
+def _tell(on_exchange, prompt: str, text, error, latency_s=None, waited_s=None, wait_source=None, note=None, stats=None) -> None:
+    if on_exchange is None:
+        return
+    try:
+        on_exchange(prompt, text, error, latency_s, waited_s, wait_source, note, stats)
+    except Exception:                                               # noqa: BLE001
+        pass          # 트레이스는 편의다. 이것 때문에 조사가 멈추면 안 된다
+
+
+def _failure(where: str, reason: str) -> dict:
+    return {"llm_errors": [f"{where}: {reason}"],
+            "decision": "conclude", "stopped_by": "llm_error"}
+
+
+def _items(where: str, kind: str, raw: list, model, *, fix=None) -> tuple[list, list[str]]:
+    """목록의 항목을 **낱개로** 검증한다 — 틀린 것만 버리고 사유를 남긴다.
+
+    `fix`는 검증 전에 코드가 강제로 채우는 것(태스크의 `role`). 곁다리 키는
+    `validate`가 걷어내고, 그것도 기록한다.
+    """
+    kept, notes = [], []
+    for item in raw:
+        if not isinstance(item, dict):
+            notes.append(f"{where}: {kind} 하나가 객체가 아니다 — 받지 않는다")
+            continue
+        body = fix(item) if fix else item
+        got = validate(body, model)
+        label = body.get("id") or kind
+        if not got.ok:
+            notes.append(f"{label}: {kind} 모양이 틀렸다 — {got.error} — 받지 않는다")
+            continue
+        if got.dropped:
+            notes.append(f"{label}: 스키마에 없는 키를 걷어냈다 — {', '.join(got.dropped)}")
+        kept.append(model.model_validate(got.data))
+    return kept, notes
+
+
+def _with_role(task: dict) -> dict:
+    return {**task, "role": role_for(str(task.get("action", "")))}
+
+
+def _dropped_note(where: str, got: Parsed) -> list[str]:
+    """걷어낸 곁다리 키를 `llm_errors`에 남길 한 줄. 조용히 고치지 않는다."""
+    if not got.dropped:
+        return []
+    return [f"{where}: 스키마에 없는 키를 걷어냈다 — {', '.join(got.dropped)}"]
+
+
+def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds: int,
+              evidence_budget: int = 12000, trace=None,
+              services: tuple[str, ...] = (), roles: dict[str, str] | None = None,
+              flow_graph: dict | None = None, code_index: bool = False,
+              conclude_llm: LlmPort | None = None, prompt_caps: dict[str, int] | None = None):
+    """`EngineDeps`의 `frame`·`integrate`·`conclude` 자리에 꽂을 세 함수를 만든다.
+
+    `prompt_caps`는 턴별 프롬프트 글자 상한(`{"integrate": 8000, "conclude": 10000}`) — `fit_prompt`가 지킨다. 없으면 상한 없음.
+
+    `services`는 대상 코드(11a)가 준비됐을 때만 채워진다. 비어 있으면 `code.*`가
+    목록에도 예시에도 안 나온다 — 없는 문을 열라고 적어 두면 리드가 거기로 가고,
+    매 라운드가 "미등재 action"으로 날아간다.
+
+    `conclude_llm`은 판정 턴만 묻는 LLM이다(역할별 모델 — 액션 턴은 빠른 모델, 판정은 생각하는 모델). 없으면 `llm`.
+
+    `trace(node, round, prompt, reply_text, error, latency_s)`를 주면 매 시도가 그대로 흘러간다.
+    **프롬프트를 고치려면 모델이 뭐라 했는지 봐야 한다** — 10b를 끝낼 때 이게 없어서
+    프롬프트 설계가 전부 추측 위에 있었다.
+    """
+
+    def _hook(node: str, state: CaseState):
+        if trace is None:
+            return None
+        # 여섯째는 그 호출이 걸린 초, 일곱째는 429 뒤 기다린 초(둘 다 모르면 None), 아홉째는 스트림 끊김 메모, 열째는 턴의 조각 수·종료 사유·usage
+        # (R3-5d ②) — 위치 인자라 옛 트레이서(`*row`)도 받는다.
+        return lambda prompt, text, error, latency_s=None, waited_s=None, wait_source=None, note=None, stats=None: trace(
+            node, state.round, prompt, text, error, latency_s, waited_s, wait_source, note, stats)
+
+    async def frame(state: CaseState) -> dict:
+        prompt = fill(prompts["frame"],
+                      briefing.frame_fields(state, site_config=site_config,
+                                            services=services, roles=roles,
+                                            flow_graph=flow_graph, code_index=code_index))
+        got = await ask_json(llm, prompt, FrameReply, on_exchange=_hook("frame", state))
+        if not got.ok:
+            return _failure("frame", got.error)
+        hypotheses, h_notes = _items("frame", "가설", got.data["hypotheses"], Hypothesis)
+        tasks, t_notes = _items("frame", "태스크", got.data["tasks"], PlanTask, fix=_with_role)
+        return {"hypotheses": hypotheses, "plan_tasks": tasks,
+                "llm_errors": _dropped_note("frame", got) + h_notes + t_notes}
+
+    async def integrate(state: CaseState) -> dict:
+        def render(budget: int, fold: bool) -> str:
+            return fill(prompts["integrate"],
+                        briefing.integrate_fields(state, site_config=site_config,
+                                                  max_rounds=max_rounds,
+                                                  evidence_budget=budget,
+                                                  services=services, roles=roles,
+                                                  flow_graph=flow_graph, code_index=code_index,
+                                                  fold_tasks=fold))
+        prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("integrate"), budget=evidence_budget)
+        got = await ask_json(llm, prompt, IntegrateReply,
+                             on_exchange=_hook("integrate", state))
+        if not got.ok:
+            return _failure("integrate", got.error)
+        hypotheses, h_notes = _items("integrate", "가설", got.data["hypotheses"], Hypothesis)
+        tasks, t_notes = _items("integrate", "태스크", got.data["tasks"], PlanTask,
+                                fix=_with_role)
+        return {"decision": got.data["decision"],
+                "hypotheses": hypotheses, "plan_tasks": tasks,
+                "llm_errors": _dropped_note("integrate", got) + h_notes + t_notes}
+
+    async def conclude(state: CaseState) -> dict:
+        """판정 턴. 실패는 `verdict` 없이 사유만 — degraded를 찍는 것은 노드다(코드의 낙인)."""
+        template = prompts.get("conclude")
+        if template is None:
+            return {"llm_errors": ["conclude: 프롬프트가 없다 — app.json의 "
+                                   "investigation.conclude_prompt"]}
+        def render(budget: int, fold: bool) -> str:
+            return fill(template,
+                        briefing.conclude_fields(state, site_config=site_config,
+                                                 evidence_budget=budget,
+                                                 services=services, flow_graph=flow_graph,
+                                                 fold_tasks=fold))
+        prompt, _ = fit_prompt(render, cap=(prompt_caps or {}).get("conclude"), budget=evidence_budget)
+        got = await ask_json(conclude_llm or llm, prompt, ConcludeReply, on_exchange=_hook("conclude", state),
+                             schema=conclude_schema([e.id for e in state.evidence]))
+        if not got.ok:
+            return {"llm_errors": [f"conclude: {got.error}"]}
+        return {"verdict": Verdict.model_validate(got.data),
+                "llm_errors": _dropped_note("conclude", got)}
+
+    return frame, integrate, conclude

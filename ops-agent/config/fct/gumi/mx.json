@@ -1,0 +1,17 @@
+{
+  "infra": {
+    "redis": { "url": "redis://gumi-redis.example.net:6379" },
+    "mongodb": { "url": "mongodb://gumi-mongo.example.net:27017" },
+    "kafka": {
+      "consumer": {
+        "bootstrap_server": [
+          "gumi-kafka-1.example.net:9092",
+          "gumi-kafka-2.example.net:9092",
+          "gumi-kafka-3.example.net:9092"
+        ],
+        "group_ids": ["dt-processor-mx-gumi", "dt-sink-mx-gumi"]
+      }
+    },
+    "rest": { "base_url": "http://gumi-twin-api.example.net:8080" }
+  }
+}
