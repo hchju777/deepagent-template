@@ -429,6 +429,20 @@ def _issued(tasks, action: str, **match) -> bool:
                for t in tasks)
 
 
+# 한 라운드에 묶는 걷기 칸의 상한(R3-5v ⑤) — 걷기는 멈춘 자리부터 차례로 칸을 낸다(보통 둘~넷).
+WALK_RUNGS_PER_ROUND = 3
+
+
+def pending_rungs(walk, tasks, *, code_index: bool) -> list[tuple[str, dict, list[str]]]:
+    """걷기의 아직 안 낸 칸들 `(action, 인자, 입력 증거)` — 셋까지(R3-5v ⑤ — 검토 회신 11-03 8: 한 턴 한 액션은 안 당긴다, 라운드당 작업이 1.2라 대신 한 라운드에
+    사다리 칸을 묶어 내게). 걷기의 칸은 입력이 이미 있는 증거(걷기가 멈춘 홉의 읽기)라 서로 기다리지 않는다 — 옛 사다리의 한 칸씩 규칙(다음 칸의 입력이 이 칸의
+    증거)과 다르다. 걷기·인덱스가 없거나 다 냈으면 빈 목록."""
+    if walk is None or not walk.hops or not code_index:
+        return []
+    left = [(r.action, dict(r.params), [r.evidence] if r.evidence else []) for r in walk.rungs if not _issued(tasks, r.action, **r.params)]
+    return left[:WALK_RUNGS_PER_ROUND]
+
+
 def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[str, ...],
                  flow_graph: dict | None, evidence=(), code_index: bool = False, target: TargetPick | None = None, walk=None):
     """사다리의 **다음 한 칸** — `((action, params), input_evidence_ids)` 또는 None.
@@ -458,21 +472,17 @@ def _ladder_step(site_config, tasks, *, services: tuple[str, ...], used: tuple[s
     hop = next_hop(target, code_index=code_index, walk=walk)
     rungs = list(walk.rungs) if walk is not None and walk.hops and code_index else []
     if rungs:
-        # 걷기의 칸들을 차례로(R3-4 ②) — 아직 안 낸 첫 칸(냈는데 실패한 칸은 또 안 낸다). 다 밟았으면 마지막 칸의 결과로 아래가 이어진다
+        # 여기 오면 걷기의 칸은 다 냈다 — 아직 안 낸 칸은 예시가 한 라운드에 묶는다(`pending_rungs`, R3-5v ⑤). 마지막 칸의 결과로 아래가 이어진다
         # (`code.uses` → `code.callers`, `code.resources` → 입력 읽기).
-        pending = next((r for r in rungs if not _issued(tasks, r.action, **r.params)), rungs[-1])
-        hop = (pending.action, dict(pending.params))
+        hop = (rungs[-1].action, dict(rungs[-1].params))
     if hop is not None:
         action, params = hop
         used_hop = _done(tasks, action, **params)
         if used_hop is None:
             if not _issued(tasks, action, **params):
-                # 입력은 그 칸의 증거(걷기가 멈추게 한 홉의 읽기, R3-3 ②), 걷기가 없으면 대상 키 읽기.
+                # 걷기가 없을 때의 입구 홉 — 입력은 대상 키 읽기.
                 key_read = _done(tasks, "redis.get", key=target.key)
-                rung = next((r for r in rungs if (r.action, r.params) == (action, params)), None)
-                inputs = ([rung.evidence] if rung is not None and rung.evidence
-                          else [key_read.result_evidence_ids[0]] if key_read else [])
-                return hop, inputs
+                return hop, [key_read.result_evidence_ids[0]] if key_read else []
         elif action == "code.uses":
             writer = _first_writer(evidence, used_hop.result_evidence_ids[0])
             if writer is not None and not _issued(tasks, "code.callers", name=writer):
@@ -619,7 +629,8 @@ def example_block(site_config, *, phase: str, start: int = 1,
                   services: tuple[str, ...] = (), used: tuple[str, ...] = (),
                   first_read: tuple[str, dict] | None = None,
                   flow_graph: dict | None = None, tasks=(), evidence=(), code_index: bool = False,
-                  intake_done: bool = False, hop: tuple[str, dict] | None = None, target: TargetPick | None = None, walk=None) -> str:
+                  intake_done: bool = False, hop: tuple[str, dict] | None = None, target: TargetPick | None = None, walk=None,
+                  rungs: list[tuple[str, dict, list[str]]] = ()) -> str:
     """프롬프트의 `{example}` 자리. **이게 다음 라운드의 실제 출력이 된다.**
 
     `used`는 이 케이스에서 **이미 낸 action**들이다. 빼지 않으면 예시가 라운드마다
@@ -633,9 +644,12 @@ def example_block(site_config, *, phase: str, start: int = 1,
         shapes: list[tuple[str, dict]] = []
         # 입구가 돌았으면 첫 칸은 다음 홉이고 접수 읽기는 **예시에 없다**(R3-1b ③) — 측정 #7에서 입구가 이미 한 읽기를 예시가 그대로
         # 보여 줘 리드가 베꼈고, 중복 거부 → 되물어도 중복 → `no_runnable`로 끝났다.
-        if hop:
+        if rungs:
+            # 걷기의 칸을 묶는다(R3-5v ⑤) — 홉 한 칸 대신 아직 안 낸 칸 셋까지.
+            shapes.extend((a, p) for a, p, _ in rungs)
+        elif hop:
             shapes.append(hop)
-        if first_read and not hop and _has(site_config, ACTIONS[first_read[0]][0], services):
+        if first_read and not hop and not rungs and _has(site_config, ACTIONS[first_read[0]][0], services):
             # 사다리의 첫 두 칸이 예시다 — ① 판정이 본 읽기로 증상을 재현하고 ② 그 path를 코드에서
             # 찾는다. 예시가 곧 출력이라(위) 규칙 문장으로는 안 되고 여기 있어야 리드가 밟는다.
             if not intake_done:
@@ -648,7 +662,7 @@ def example_block(site_config, *, phase: str, start: int = 1,
                                              **({"service": served[0]} if len(served) == 1 else {})}))
         # 홉이 있으면 frame 예시도 **그 한 칸**이다(R3-3 ①, 측정 #9 P1 5) — 넷 중 셋(`code.grep`·`code.config`·`mongo.list_collections`)을 리드가
         # 그대로 내 라운드를 낭비했고, 그 잘린 증거가 끝까지 예산을 먹었다.
-        room = 0 if hop else (4 if shapes else 3) - len(shapes)
+        room = 0 if (hop or rungs) else (4 if shapes else 3) - len(shapes)
         shapes += _available(site_config, _discovery(services), room, services)
         free = None if (first_read or intake_done) else _free_rest_entry(site_config)
         if free and len(shapes) < 3:
@@ -686,10 +700,14 @@ def example_block(site_config, *, phase: str, start: int = 1,
             # 나가서 모델이 **그대로 부른다** — 이 파일 맨 위가 경고하는 그 실패다.
             entry = _free_rest_entry(site_config)
             shapes = [entry] if entry else []
-        ladder = _ladder_step(site_config, tasks, services=services, used=used, flow_graph=flow_graph,
-                              evidence=evidence, code_index=code_index, target=target, walk=walk)
-        lead = ([_task(start, ladder[0][0], ladder[0][1], rank=1, input_evidence_ids=ladder[1])]
-                if ladder else [])
+        if rungs:
+            # 걷기의 아직 안 낸 칸을 한 라운드에 묶는다(R3-5v ⑤) — 각 칸의 입력은 그 칸을 낳은 걷기 증거라 서로 안 기다린다. 다 냈으면 옛 사다리로 이어진다.
+            lead = [_task(start + n, a, p, rank=n + 1, input_evidence_ids=ins) for n, (a, p, ins) in enumerate(rungs)]
+        else:
+            ladder = _ladder_step(site_config, tasks, services=services, used=used, flow_graph=flow_graph,
+                                  evidence=evidence, code_index=code_index, target=target, walk=walk)
+            lead = ([_task(start, ladder[0][0], ladder[0][1], rank=1, input_evidence_ids=ladder[1])]
+                    if ladder else [])
         # 입구가 홉을 정한 케이스에서 사다리 칸이 있으면 예시는 **그 칸 하나**다(R3-1c ③) — 측정 #8에서 둘째 칸 `mongo.find`를 리드가 그대로
         # 베껴 무관한 컬렉션으로 샜다. 홉 칸이 다 끝나 사다리가 없으면 전처럼(빈 예시는 형식을 못 보여 준다).
         if lead and next_hop(target, code_index=code_index, walk=walk) is not None:
@@ -822,7 +840,8 @@ def frame_fields(state: CaseState, *, site_config,
                                      services=services,
                                      first_read=start_read(state.case, site_config),
                                      flow_graph=flow_graph, intake_done=state.target is not None,
-                                     hop=next_hop(target, code_index=code_index, walk=state.walk)),
+                                     hop=next_hop(target, code_index=code_index, walk=state.walk),
+                                     rungs=pending_rungs(state.walk, state.plan_tasks, code_index=code_index)),
             "flow": flow_block(state, flow_graph,
                                texts=(origin_line(state.case, site_config) or "",), prefer=((target.key,) if target.key else ()))}
 
@@ -856,7 +875,8 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                                      used=tuple(t.action for t in state.plan_tasks
                                                 if t.action),
                                      tasks=tuple(state.plan_tasks), flow_graph=flow_graph,
-                                     evidence=tuple(state.evidence), code_index=code_index, target=target, walk=state.walk),
+                                     evidence=tuple(state.evidence), code_index=code_index, target=target, walk=state.walk,
+                                     rungs=pending_rungs(state.walk, state.plan_tasks, code_index=code_index)),
             "hypotheses": hypotheses_block(state),
             "tasks": tasks_block(state, fold=fold_tasks),
             "evidence": evidence_block(state, budget=evidence_budget),

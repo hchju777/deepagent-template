@@ -1660,7 +1660,8 @@ def test_판정_블록만_걷기의_병합_주를_빼고_조사_프롬프트와_
 
 def test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸_칸은_건너뛴다():
     """R3-4 ②: 다음 칸은 늘 있고 차례가 있다(리터럴 줄의 함수 → 그 자리의 질의). 첫 칸을 냈으면(끝났든 실패했든) 둘째 칸이 예시의 첫 줄이고 입력은
-    그 칸의 증거다. 다 밟았으면 마지막 칸의 결과로 옛 사다리가 이어진다(`code.uses` 뒤 `code.callers`)."""
+    그 칸의 증거다. 다 밟았으면 마지막 칸의 결과로 옛 사다리가 이어진다(`code.uses` 뒤 `code.callers`). R3-5v ⑤(검토 회신 11-03 8): 아직 안 낸 칸은 한 라운드에
+    함께 낸다(셋까지) — 각 칸의 입력이 이미 있는 걷기 증거라 서로 안 기다린다."""
     from src.application.state import CaseState
     from src.domain.case import Hop, Rung, TargetPick, Walk
     picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"], writer="SummaryRefresh",
@@ -1675,7 +1676,8 @@ def test_걷기의_칸들은_사다리가_한_라운드에_한_칸씩_밟고_낸
         evidence=[EvidenceRef(id=i, source="s", summary=f"요약 {i}", body="x") for i in ("t-0.e1", "t-1.e1", "t-2.e1", "t-3.e1")])
     first = json.loads(briefing.integrate_fields(base, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(),
                                                  code_index=True)["example"])["tasks"]
-    assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in first] == [("code.read", {"service": "batch", "path": "batch/refresh.py", "line": 12}, ["t-3.e1"])]
+    assert [(t["action"], t["params"], t["input_evidence_ids"]) for t in first] == [("code.read", {"service": "batch", "path": "batch/refresh.py", "line": 12}, ["t-3.e1"]),
+                                                                                   ("code.read", {"service": "batch", "path": "batch/refresh.py", "line": 9}, ["t-2.e1"])]
     stepped = base.model_copy(update={"plan_tasks": base.plan_tasks + [
         task("t-4", action="code.read", params={"service": "batch", "path": "batch/refresh.py", "line": 12}, status="error", error="x")]})
     second = json.loads(briefing.integrate_fields(stepped, site_config=_site_with_check(), max_rounds=3, flow_graph=_keyed_graph_with_decoy(),
@@ -1714,3 +1716,41 @@ def test_걷기의_포인터_읽기는_리드_목록에_없다():
     실수를 검증하게 된다(recompute의 `expect`와 같은 이유) — 걷기 홉 표와 그 증거로 받는다."""
     catalog = briefing.action_catalog(site())
     assert "kafka.tail" in catalog and "kafka.message_at" not in catalog and "kafka.offsets" not in catalog   # 범위 읽기도 걷기의 것(R3-5p ①-a)
+
+
+# ── R3-5v ⑤ — 걷기의 칸은 한 라운드에 묶어 낸다 ──
+
+def test_예시는_걷기의_아직_안_낸_칸을_셋까지_한_라운드에_묶는다():
+    """검토 회신(11-03) 8: 한 턴 한 액션은 안 당긴다 — 라운드당 작업이 1.2라, 대신 한 라운드에 사다리 칸을 묶어 내게. 걷기의 칸은 입력이 이미 있는 증거(걷기가
+    멈춘 홉의 읽기)라 서로 기다리지 않는다 — 옛 사다리의 한 칸씩 규칙(다음 칸의 입력이 이 칸의 증거)과 다르다. frame·integrate 예시 둘 다, 이미 낸 칸은 빼고 셋까지."""
+    from src.application.state import CaseState
+    from src.domain.case import Hop, Rung, TargetPick, Walk
+
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", empty=["record[0].data"], writer="SummaryRefresh",
+                        writer_at="metadata.event_type")
+    rungs = [Rung(action="code.read", params={"service": "batch", "path": "batch/job.py", "line": 4}, evidence="t-3.e1"),
+             Rung(action="kafka.tail", params={"topic": "mx.alarm.raw", "limit": 5}, evidence="t-3.e1"),
+             Rung(action="code.resources", params={"name": "SourceSink"}, evidence="t-4.e1"),
+             Rung(action="code.uses", params={"name": "alarm:source:{line}"}, evidence="t-4.e1")]
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", service="batch", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1")],
+                reads=3, stopped="키가 없다 — alarm:source:L1", stop_at="t-1.e1", rungs=rungs)
+    state = CaseState(case=_patrol_case(), target=picked, walk=walk, plan_tasks=list(_intake_state().plan_tasks),
+                      evidence=[EvidenceRef(id=i, source="s", summary="x") for i in ("t-0.e1", "t-1.e1", "t-3.e1", "t-4.e1")])
+    shown = [(t["action"], t["params"], t["input_evidence_ids"]) for t in
+             json.loads(briefing.integrate_fields(state, site_config=_site_with_check(), max_rounds=3, code_index=True)["example"])["tasks"]]
+    assert shown == [(r.action, r.params, [r.evidence]) for r in rungs[:3]]                  # 셋까지 — 넷째는 다음 라운드
+    framed = json.loads(briefing.frame_fields(state, site_config=_site_with_check(), code_index=True)["example"])["tasks"]
+    assert [(t["action"], t["params"]) for t in framed] == [(r.action, r.params) for r in rungs[:3]]
+    issued = state.model_copy(update={"plan_tasks": state.plan_tasks + [task("t-5", action="code.read", params=dict(rungs[0].params), status="ok",
+                                                                             result_evidence_ids=["t-5.e1"])]})
+    shown = [(t["action"], t["params"]) for t in
+             json.loads(briefing.integrate_fields(issued, site_config=_site_with_check(), max_rounds=3, code_index=True)["example"])["tasks"]]
+    assert shown == [(r.action, r.params) for r in rungs[1:4]]                              # 낸 칸은 빼고 다음 셋
+    # 칸을 다 냈으면 **마지막 칸**의 결과로 옛 사다리가 이어진다 — 넷째 칸 `code.uses`의 쓰는 함수의 호출자(첫 칸 `code.read`의 결과가 아니라).
+    uses_t, uses_e = _uses_done(name="alarm:source:{line}", task_id="t-9")
+    walked = state.model_copy(update={"plan_tasks": state.plan_tasks + [task(f"t-{5 + n}", action=r.action, params=dict(r.params), status="ok",
+                                                                             result_evidence_ids=[f"t-{5 + n}.e1"]) for n, r in enumerate(rungs[:3])] + [uses_t],
+                                      "evidence": state.evidence + [uses_e]})
+    after = json.loads(briefing.integrate_fields(walked, site_config=_site_with_check(), max_rounds=3, code_index=True)["example"])["tasks"]
+    assert (after[0]["action"], after[0]["params"], after[0]["input_evidence_ids"]) == ("code.callers", {"name": "sink.writer.run"}, ["t-9.e1"])
+

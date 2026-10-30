@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Awaitable, Callable
 
+from src.application.briefing import WALK_RUNGS_PER_ROUND
 from src.application.facts import facts_for, present
 from src.application.intake_map import IntakeSpec, cited_keys, hop_line, next_hop, run_intake
 from src.application.state import CaseState, merge_by_id
@@ -241,16 +242,33 @@ def _intake_ids(state: CaseState) -> frozenset:
     return frozenset(e for t in state.plan_tasks if t.id in ("t-0", "t-1") or t.walked for e in t.result_evidence_ids)
 
 
-def _hop(state: CaseState, deps: "EngineDeps") -> tuple[str, dict] | None:
-    """받을 때 pinned를 달 홉 — 걷기가 있으면 **아직 안 낸 첫 칸**(R3-4 ②: 사다리가 한 칸씩이라 둘째 칸의 태스크도 고정돼야 예산에서 안 잘린다).
-    칸이 없으면 None — 입구 홉으로 돌아가지 않는다(걷기가 이미 그 자리를 읽었다)."""
+def _open_rungs(state: CaseState, deps: "EngineDeps") -> list[tuple[str, dict]] | None:
+    """걷기의 아직 안 돈 칸들 — 걷기 칸이 없으면 None(입구 홉으로 돌아가지 않는다 — 걷기가 이미 그 자리를 읽었다)."""
     walk = state.walk
-    if walk is not None and walk.hops and deps.code_index and walk.rungs:
-        # 돈 칸만 "낸 것"이다 — 되묻기의 base에는 첫 답에서 받은 태스크가 대기로 실려 있어, 대기까지 세면 그 태스크가 자기 칸을 가린다.
-        ran = {_query(t) for t in state.plan_tasks if t.action and t.status != "pending"}
-        return next(((r.action, dict(r.params)) for r in walk.rungs
-                     if f"{r.action}|{json.dumps(r.params, sort_keys=True, ensure_ascii=False)}" not in ran), None)
-    return next_hop(state.target, code_index=deps.code_index, walk=walk)
+    if walk is None or not walk.hops or not deps.code_index or not walk.rungs:
+        return None
+    # 돈 칸만 "낸 것"이다 — 되묻기의 base에는 첫 답에서 받은 태스크가 대기로 실려 있어, 대기까지 세면 그 태스크가 자기 칸을 가린다.
+    ran = {_query(t) for t in state.plan_tasks if t.action and t.status != "pending"}
+    return [(r.action, dict(r.params)) for r in walk.rungs
+            if f"{r.action}|{json.dumps(r.params, sort_keys=True, ensure_ascii=False)}" not in ran]
+
+
+def _hop(state: CaseState, deps: "EngineDeps") -> tuple[str, dict] | None:
+    """거부 기록이 견주는 홉 — 걷기가 있으면 **아직 안 낸 첫 칸**, 다 냈으면 None."""
+    rungs = _open_rungs(state, deps)
+    if rungs is not None:
+        return rungs[0] if rungs else None
+    return next_hop(state.target, code_index=deps.code_index, walk=state.walk)
+
+
+def _pins(state: CaseState, deps: "EngineDeps") -> list[tuple[str, dict]]:
+    """받을 때 pinned를 달 칸들 — 예시가 한 라운드에 묶는 걷기 칸 셋까지(R3-5v ⑤). R3-4 ②는 첫 칸만 달았다(사다리가 한 칸씩이라 둘째 칸은 다음
+    라운드에 첫 칸이 됐다) — 묶어 내면 둘째·셋째 칸은 그런 라운드가 없어 증거 본문이 예산에서 잘린다."""
+    rungs = _open_rungs(state, deps)
+    if rungs is not None:
+        return rungs[:WALK_RUNGS_PER_ROUND]
+    hop = next_hop(state.target, code_index=deps.code_index, walk=state.walk)
+    return [hop] if hop is not None else []
 
 
 def _rejected_reads(state: CaseState) -> dict[str, list[str]]:
@@ -357,7 +375,8 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   evidence_of: dict[str, list[str]] | None = None,
                   inputs_of: dict[str, list[str] | None] | None = None,
                   hint: str = "", hint_for: frozenset = frozenset(),
-                  hop: tuple[str, dict] | None = None
+                  hop: tuple[str, dict] | None = None,
+                  pins: list[tuple[str, dict]] | None = None
                   ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
@@ -463,9 +482,10 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
         fixed.append(task)
         resolved += notes
     kept = fixed
-    if hop is not None:
+    pins = pins or ([hop] if hop is not None else [])
+    if pins:
         # 코드가 지정한 홉을 그대로 낸 태스크 — 브리핑이 그 증거 본문을 예산에서 빼지 않는다(R3-1c ②). action·params가 정확히 같을 때만.
-        kept = [t.model_copy(update={"pinned": True}) if (t.action, t.params) == hop else t for t in kept]
+        kept = [t.model_copy(update={"pinned": True}) if (t.action, t.params) in pins else t for t in kept]
     if seen is None:
         return kept, reused, resolved
     guessed = list(resolved)
@@ -513,7 +533,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),
             hint=hop_line(state.target, code_index=deps.code_index, walk=state.walk), hint_for=_intake_ids(state),
-            hop=_hop(state, deps),
+            hop=_hop(state, deps), pins=_pins(state, deps),
             seen=_universe(state, deps) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -560,7 +580,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                 waiting=_waiting(base), evidence_of=_evidence_of(base),
                 inputs_of={**_rejected_reads(base), **_inputs_of(base)},
                 hint=hop_line(base.target, code_index=deps.code_index, walk=base.walk), hint_for=_intake_ids(base),
-                hop=_hop(base, deps),
+                hop=_hop(base, deps), pins=_pins(base, deps),
                 seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed

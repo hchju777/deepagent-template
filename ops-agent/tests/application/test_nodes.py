@@ -951,6 +951,39 @@ async def test_걷기가_있으면_받을_때의_홉과_거부_기록의_홉은_
     assert [(t.id, t.pinned) for t in patch["plan_tasks"]] == [("t-12", False)]
 
 
+
+async def test_한_라운드에_묶어_낸_걷기_칸은_전부_pinned다(case):
+    """R3-5v ⑤: 예시가 걷기의 아직 안 낸 칸을 셋까지 한 라운드에 묶으므로, 둘째·셋째 칸은 "아직 안 낸 첫 칸"이 될 다음 라운드가 없다 — 첫 칸만
+    pinned면 그 증거 본문이 예산에서 잘린다(R3-4 ②가 막던 것). 받을 때 묶음 안의 칸이면 다 pinned, 묶음 밖(넷째 칸)과 칸이 아닌 읽기는 아니다."""
+    from src.domain.case import Hop, Rung, TargetPick, Walk
+
+    rungs = [Rung(action="code.uses", params={"name": "alarm:source:{line}"}, evidence="t-3.e1"),
+             Rung(action="code.read", params={"service": "batch", "path": "batch/refresh.py", "line": 9}, evidence="t-2.e1"),
+             Rung(action="code.resources", params={"name": "SourceSink"}, evidence="t-3.e1"),
+             Rung(action="code.callers", params={"name": "SourceSink"}, evidence="t-3.e1")]
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="SummaryRefresh", status="빈 배열 (record[0].data)", bad=True, evidence_id="t-1.e1"),
+                      Hop(key="alarm:source:L1", depth=1, status="0행", bad=True, evidence_id="t-3.e1")],
+                reads=2, stopped="쓴 쪽을 모른다 — alarm:source:L1", stop_at="t-3.e1", rungs=rungs)
+    state = CaseState(case=case.model_copy(update={"origin": "patrol", "check": "badge_all_zero", "target": "L1/Alarm"}), round=1, walk=walk,
+                      target=TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", writer="SummaryRefresh", writer_at="metadata.event_type"),
+                      plan_tasks=[task("t-1", action="redis.get", params={"key": "alarm:stats:L1"}, status="ok", result_evidence_ids=["t-1.e1"]),
+                                  task("t-2", action="code.resources", params={"name": "SummaryRefresh"}, status="ok", result_evidence_ids=["t-2.e1"], walked=True),
+                                  task("t-3", action="redis.get", params={"key": "alarm:source:L1"}, status="ok", result_evidence_ids=["t-3.e1"], walked=True)],
+                      evidence=[_ev("t-1.e1"), _ev("t-2.e1"), _ev("t-3.e1")])
+
+    async def bundled(state):
+        return {"decision": "continue", "plan_tasks": [task(f"t-{5 + n}", action=r.action, params=dict(r.params)) for n, r in enumerate(rungs[:3])]
+                + [task("t-8", action="redis.get", params={"key": "alarm:other:L1"})]}
+
+    patch = await nodes_for(bundled, code_index=True)["integrate"](state)
+    assert {t.id: t.pinned for t in patch["plan_tasks"]} == {"t-5": True, "t-6": True, "t-7": True, "t-8": False}
+    first = make_nodes(deps_for(ScriptedRunner(), first_tasks=[task("t-9", action=rungs[1].action, params=dict(rungs[1].params)),
+                                                              task("t-10", action=rungs[3].action, params=dict(rungs[3].params))],
+                                code_index=True))
+    patch = await first["frame"](state.model_copy(update={"plan_tasks": [], "evidence": []}))
+    assert {t.id: t.pinned for t in patch["plan_tasks"]} == {"t-9": True, "t-10": False}          # 넷째 칸은 이번 묶음 밖이다
+
+
 # ── R3-5v ④ — 정체 감지(R4에서 당김) ──
 
 async def test_라운드의_새_증거가_0이면_사유를_주고_연달아_둘째면_리드가_계속이어도_판정한다(case):
