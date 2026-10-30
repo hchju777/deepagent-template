@@ -3,7 +3,8 @@
 > **목적**: 조사가 끝나면 **판정이 항상 생기고**, 그 판정의 인용은 **코드가 검사한다.** 10a·10b의
 > 울타리는 안 바꿨다 — integrate 뒤에 두 노드(`conclude`·`verify`)를 붙였고, 판정자는 10b의
 > frame·integrate처럼 **주입받는 함수**다(`EngineDeps.conclude`).
-> 상태: **됐다(10-06)** — 리뷰 대기. 보고서·이벤트는 12b.
+> 상태: **만들기 끝(10-06)** → 사내 리뷰 4번 뒤 정확도 라운드 R2~R4 — R2 끝(측정 #5, 10-13), **R3 진행 중**(R3-5v, 11-03; 종료 조건은
+> [plan-12a-r2-r4.md](plan-12a-r2-r4.md) R3-5v). 측정 기록은 [review-12a-4.md](review-12a-4.md). 보고서·이벤트는 12b.
 
 ```bash
 python -m src case investigate c-1 --stub-seeds examples/stub-seeds.json
