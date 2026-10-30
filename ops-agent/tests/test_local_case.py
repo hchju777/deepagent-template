@@ -112,8 +112,8 @@ def test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다(
                                        "selects": {"SERVICE_ROLE": "batch"}}
     made = _board_topology({"_설명": ["x"], "services": {"real-svc": {"repo": "real-repo"}}, "flow": {"sources": []}, "config_paths": ["c"]})
     assert made["services"] == BOARD_SERVICES and made["flow"] == {"sources": []} and made["config_paths"] == ["c"] and made["_설명"] == ["x"]
-    # 파이프라인 항목의 모양(R3-5v ②)은 측정판 config의 것을 더한다 — 리포의 토폴로지에는 안 적는다(사내 이름이 들어갈 자리다).
-    assert made["pipelines"] == {"class_key": "class", "enabled_key": "enabled"}
+    # 파이프라인 항목의 모양(R3-5v ②)과 라우터의 유형표(R3-5w ②)는 측정판 config·코드의 것을 더한다 — 리포의 토폴로지에는 안 적는다(사내 이름이 들어갈 자리다).
+    assert made["pipelines"] == {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline"}}
 
 
 def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다():

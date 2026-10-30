@@ -64,9 +64,10 @@ BOARD_SERVICES = {
 
 
 def _board_topology(topo: dict) -> dict:
-    """복사한 토폴로지의 `services`를 측정판 것으로 — 나머지(흐름 출처·config 경로·설명)는 그대로. 파이프라인 항목의 모양(R3-5v ②)은 측정판 config의 것을
-    더한다 — 리포의 토폴로지는 사내에서 바뀌는 파일이라 거기 적지 않는다."""
-    return {**topo, "services": dict(BOARD_SERVICES), "pipelines": {"class_key": "class", "enabled_key": "enabled"}}
+    """복사한 토폴로지의 `services`를 측정판 것으로 — 나머지(흐름 출처·config 경로·설명)는 그대로. 파이프라인 항목의 모양(R3-5v ②)과 라우터의 유형표
+    (R3-5w ②)는 측정판 config·코드의 것을 더한다 — 리포의 토폴로지는 사내에서 바뀌는 파일이라 거기 적지 않는다."""
+    return {**topo, "services": dict(BOARD_SERVICES),
+            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline"}}}
 
 
 def _write(root: Path, rel: str, content) -> None:
@@ -457,6 +458,31 @@ class RowFiller:
 ''',
     # 측정 #10 P0 2의 모양 — 공용 키의 쓴 쪽이 서비스 디렉터리 **밖**(`common/`)에 있다. 토폴로지에 `path`가 없으니 processor·sink·batch 중 어느
     # 것인지 코드로는 못 가른다(사내 처리기 레포: 서비스 5개가 한 레포·한 config). 같은 이름이 dt-api에도 있어 레포 둘이다.
+    # 라우터의 유형표(R3-5w ② — 사내 모양, 검토 회신 11-03 4: 원천 토픽의 메시지를 유형 필드로 나눠 파이프라인 항목 이름으로 돌린다). PaletteSeeder·
+    # PaletteImporter는 이 표를 거쳐 받는다 — 그 구독 토픽의 남은 메시지가 PALETTE 유형의 것인지는 모른다(측정 #31 a).
+    "common/router.py": '''"""원천 토픽의 메시지를 유형별로 파이프라인에 보낸다."""
+from enum import Enum
+
+
+class FeedKind(Enum):
+    ALARM = "alarm"
+    AUDIT = "audit"
+    PALETTE = "palette"
+
+
+class Pipeline(Enum):
+    ALARM_FEED = "alarm_feed"
+    AUDIT_FEED = "audit_feed"
+    PALETTE_SEED = "palette_seed"
+    PALETTE_IMPORT = "palette_import"
+
+
+ROUTES = [
+    (FeedKind.ALARM, Pipeline.ALARM_FEED),
+    (FeedKind.AUDIT, Pipeline.AUDIT_FEED),
+    (FeedKind.PALETTE, Pipeline.PALETTE_SEED, Pipeline.PALETTE_IMPORT),
+]
+''',
     "common/palette.py": '''"""배지 색 표 — 원천 색 목록에서 켜진 것만 남겨 alarm:palette에 둔다."""
 
 

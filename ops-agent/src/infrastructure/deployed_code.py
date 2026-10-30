@@ -413,6 +413,39 @@ def _has_path(node, path: list[str]) -> bool:
     return True
 
 
+def _enum_ref(node, enum: str) -> str | None:
+    """`<열거>.X`(또는 `<모듈>.<열거>.X`)면 X."""
+    if isinstance(node, ast.Attribute):
+        base = node.value
+        if (isinstance(base, ast.Name) and base.id == enum) or (isinstance(base, ast.Attribute) and base.attr == enum):
+            return node.attr
+    return None
+
+
+def _enum_members(tree, enum: str) -> dict[str, str]:
+    """`class <열거>(…)`의 멤버 이름 → 값(문자열 상수만, 아니면 빈 문자열)."""
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == enum:
+            for item in node.body:
+                if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+                    value = item.value.value if isinstance(item.value, ast.Constant) and isinstance(item.value.value, str) else ""
+                    out[item.targets[0].id] = value
+    return out
+
+
+def _type_pairs(tree, type_enum: str, pipeline_enum: str) -> list[tuple[str, tuple[str, ...]]]:
+    """유형표 짝 `(<유형 열거>.X, <파이프라인 열거>.Y, …)` — 첫 원소가 유형, 나머지가 전부 파이프라인인 튜플·리스트만."""
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Tuple, ast.List)) and len(node.elts) >= 2:
+            kind = _enum_ref(node.elts[0], type_enum)
+            flows = [_enum_ref(e, pipeline_enum) for e in node.elts[1:]]
+            if kind is not None and all(f is not None for f in flows):
+                out.append((kind, tuple(flows)))
+    return out
+
+
 def _truthy(value) -> bool:
     """켜짐 잎 — JSON 참, 1, 문자열 "true"·"on"·"yes"·"1"."""
     if isinstance(value, bool):
@@ -446,6 +479,8 @@ class DeployedCode(DeployedCodePort):
         self._layer_texts: dict[tuple[str, str, str], str | None] = {}
         # 레포 스냅샷의 등록들(AST) — `(repo, commit)`마다 한 번(R3-5 ③). 걷기가 클래스마다 묻는다.
         self._registrations: dict[tuple[str, str], list[Registration]] = {}
+        # 클래스 → 라우터 유형표 확인 결과(R3-5w ②). 걷기가 토픽 홉마다 묻는다 — git grep·show는 클래스마다 한 번.
+        self._routed: dict[str, str] = {}
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -992,6 +1027,61 @@ class DeployedCode(DeployedCodePort):
         if any(by_site for *_, by_site in on):
             return ""
         return await self._defined_at_pin(class_name, on[0][0])
+
+    async def routed_types(self, class_name: str) -> str:
+        """그 클래스가 라우터의 유형표를 거쳐 받으면 그 사실 한 줄 `유형 <N>개가 섞인 토픽 — <그 클래스의 유형들> 유형의 메시지 수는 세지 않았다`, 아니면 빈
+        문자열(R3-5w ② — 측정 #31 a: `<원천 토픽>`은 라우터가 여러 유형을 나눠 보내는 토픽이라 `정상 — 남은 메시지 10만`이 그 유형의 메시지가 오는지를 말하지
+        않았고 판정이 처리 서비스를 탓했다). 그 클래스의 파이프라인 항목 이름(이 사이트 병합 config에서 클래스 키 값이 그 클래스인 항목)을 값이나 이름으로 가진
+        파이프라인 열거 멤버가 유형표 짝에 있으면 라우터를 거친다. 짝 목록의 유형이 하나뿐이면 섞이지 않았다. 선언(토폴로지 `pipelines.router`)이 없으면 빈 문자열 —
+        모른다(전처럼). 던지지 않는다 — 확인이 실패하면 그 사실을 돌려준다(정상이라 쓰지 않게)."""
+        if class_name not in self._routed:
+            try:
+                self._routed[class_name] = await self._routed_types(class_name)
+            except Exception as exc:                                # noqa: BLE001
+                self._routed[class_name] = f"라우터 유형표를 확인하지 못했다({type(exc).__name__})"
+        return self._routed[class_name]
+
+    async def _routed_types(self, class_name: str) -> str:
+        spec = self._topology.pipelines
+        router = spec.router if spec is not None else None
+        if router is None:
+            return ""
+        wanted: set[str] = set()
+        repos: dict[str, str] = {}
+        for service in sorted(self.class_services().get(class_name, ())):
+            got = await self._layers_in(service, self._fct)
+            if isinstance(got, ProbeResult):
+                continue
+            merged = merge_target([(path, value) for path, _, value in got])
+            wanted |= {where[-1] for where, _ in _entries_naming(merged, spec.class_key, class_name) if where}
+            known = self._topology.services[service]
+            repos.setdefault(known.repo, self._deployment.pin_for(service, fct=self._fct).commit or self._deployment.default_ref)
+        if not wanted:
+            return ""
+        for repo, commit in sorted(repos.items()):
+            got = await self._reader.grep(repo, commit, [f"class {router.pipeline_enum}", f"{router.type_enum}."], fixed=True,
+                                          max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)
+            if got.status != "ok" or not isinstance(got.data, str):
+                raise RuntimeError(got.error or "grep 실패")
+            files = sorted({hit.file for hit in parse_grep(repo, commit, got.data) if hit.file.endswith(_CODE_SUFFIX)})
+            members: dict[str, str] = {}
+            pairs: list[tuple[str, tuple[str, ...]]] = []
+            for path in files:
+                shown = await self._reader.show(repo, commit, path, whole=True)
+                if shown.status != "ok" or not isinstance(shown.data, str):
+                    continue
+                try:
+                    tree = ast.parse(shown.data)
+                except SyntaxError:
+                    continue
+                members.update(_enum_members(tree, router.pipeline_enum))
+                pairs += _type_pairs(tree, router.type_enum, router.pipeline_enum)
+            mine = {m for m, v in members.items() if m in wanted or v in wanted}
+            kinds = {t for t, _ in pairs}
+            hit = sorted({t for t, flows in pairs if mine & set(flows)})
+            if hit and len(kinds) > 1:
+                return f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
+        return ""
 
     async def _defined_at_pin(self, class_name: str, service: str) -> str:
         """이 사이트 배포 커밋의 그 클래스 파일에 정의가 있나 — 있으면 빈 문자열."""

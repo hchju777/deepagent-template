@@ -1215,3 +1215,43 @@ async def test_다른_사이트_값이_대는_쓴_쪽은_이_사이트에서_그
         walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, pipeline_here=here, **kw))["walk"]
         assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1" and walk.hops[1].writer == ""
         assert walk.notes == [f"in:{{line}}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — sevt의 같은 키 in:L1 값이 대는 W1 — {why} — 쓴 쪽을 채우지 않는다"]
+
+
+# ── R3-5w ② — 라우터가 유형별로 나눠 보내는 토픽은 남은 메시지가 있어도 정상이 아니라 모름 ──
+
+async def test_라우터가_유형별로_나눠_보내는_토픽은_남은_메시지가_있어도_정상이_아니라_모름이다():
+    """측정 #31 a: `<원천 토픽>`의 `정상 — … 남은 메시지 10만`은 그 클래스 유형의 메시지가 오는지를 말하지 않는다 — 판정이 그 줄을 근거로 `<처리 서비스>`를
+    탓했다. 구독 클래스가 라우터 유형표를 거쳐 받으면(`routed(클래스)`) 그 토픽 행은 `모름 — 유형 <N>개가 섞인 토픽 — …`이고 나쁨도 정상도 아니다 — 걸은
+    클래스면 그 입력을 못 본 것(`입력이 다 정상`이라 쓰지 않는다), 없는 키의 쓴 쪽이면 멈춤 꼬리에 그 사실. 비었으면 어느 유형도 안 왔으니 그대로 나쁨.
+    확인이 던지면 모르는 것이다 — 정상이라 쓰지 않는다."""
+    mixed = "유형 3개가 섞인 토픽 — COLOR 유형의 메시지 수는 세지 않았다"
+
+    async def routed(name):
+        return mixed if name in ("W0", "W1") else ""
+
+    async def boom(name):
+        raise RuntimeError("git down")
+
+    # 걸은 클래스의 구독 토픽(R3-5s ⑥의 길)
+    table = {("code.resources", "W0"): _res("W0", [("t.raw", "topic"), ("k:{line}", "rediskey")]),
+             ("redis.get", "k:L1"): _value(rows=[{"a": 1}]), ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0"}), class_services={"W0": ("a",)}, topic_producers={"t.raw": ("col", "pub")}, clock=lambda: T0)
+    walk = (await run_walk(_state(), runner=_Reads(table), routed=routed, **kw))["walk"]
+    assert walk.hops[1].status == f"모름 — {mixed} · 보존 범위 40~100 · 남은 메시지 60 · 구독 W0 [a]" and not walk.hops[1].bad
+    assert walk.stopped == "입력을 다 못 봤다 — W0(t.raw 유형별 메시지 수 모름)"
+    walk = (await run_walk(_state(), runner=_Reads(table), routed=boom, **kw))["walk"]
+    assert walk.hops[1].status.startswith("모름 — 라우터 유형표를 확인하지 못했다(RuntimeError) · 보존 범위 40~100")
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.offsets", "t.raw"): _offsets(100, 100)}), routed=routed, **kw))["walk"]
+    assert walk.hops[1].status == "비었다 — 보존 범위 100~100 · 남은 메시지 0 · 구독 W0 [a]" and walk.hops[1].bad     # 비었으면 그대로 나쁨
+    walk = (await run_walk(_state(), runner=_Reads(table), **kw))["walk"]
+    assert walk.hops[1].status.startswith("정상 — ") and walk.stopped == "입력이 다 정상 — W0"                  # 확인이 없으면 전처럼
+    # 없는 키의 쓴 쪽(다른 사이트 값이 댄 W1)의 구독 토픽
+    no_writer = "in:{line} [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점"
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): _res("W1", [("t.raw", "topic")]),
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): no_writer, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)}, clock=lambda: T0)
+    peer = _Peer({"in:L1": ("sevt", "in:L1", _value(record=[], metadata={"event_type": "W1"}))})
+    walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, routed=routed, **kw))["walk"]
+    topic = walk.hops[2]
+    assert topic.key == "t.raw" and topic.status.startswith(f"모름 — {mixed} · 보존 범위 40~100 · 남은 메시지 60 · 구독 W1 [") and not topic.bad
+    assert walk.stopped.startswith("키가 없다 — in:L1(쓰는 W1 [") and walk.stopped.endswith(f"구독 t.raw 범위 40~100, 남은 메시지 60 — {mixed})")

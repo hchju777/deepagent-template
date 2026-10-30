@@ -2432,7 +2432,7 @@ CASES += [
 
 # ── 핫픽스 10-14 — 측정판 토폴로지는 사본에만 · 리포 knowledge를 테스트가 안 읽는다 ──
 CASES += [
- ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES), \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\"}}", "    return dict(topo)",
+ ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\"}}}", "    return dict(topo)",
   ["tests/test_local_case.py::test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다"]),
  ("예외 목록을 OS 구분자 그대로 비교한다", ROOT / "tests/test_portability.py", "        return path.relative_to(root).as_posix()", "        return str(path.relative_to(root))",
   ["tests/test_portability.py::test_예외_목록은_Windows_구분자에도_맞는다"]),
@@ -2543,7 +2543,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=state.walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -3520,9 +3520,9 @@ BOARD_QUIET_T = "tests/test_board_walk.py::test_걸은_클래스가_구독하는
 LOCAL_SOURCE_T = "tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다"
 CASES += [
  ("토픽 입력을 kafka.tail로 읽어 값의 쓴 쪽을 찾는다", WK, "        for name, kind in found_inputs:\n            if kind == \"topic\":\n", "        for name, kind in found_inputs:\n            if kind == \"topic\" and False:\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
- ("토픽 홉의 쓴 쪽 칸에 발행 선언을 안 적는다", WK, "                shown, svcs = published(name)\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", "                shown, svcs = \"\", ()\n                readings[name] = (\"ok\" if isinstance(tdata, dict) else \"fail\", \"\")\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+ ("토픽 홉의 쓴 쪽 칸에 발행 선언을 안 적는다", WK, "                shown, svcs = published(name)\n                # 섞인 토픽", "                shown, svcs = \"\", ()\n                # 섞인 토픽", [WALK_TOPIC_T, BOARD_QUIET_T]),
  ("빈 토픽 입력에서 값의 쓴 쪽을 찾는다", WK, "        elif stop_hop.kind == \"topic\" and ev in subscribed_at:\n", "        elif False:\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
- ("범위 읽기 실패한 토픽 입력을 본 것으로 센다", WK, "                if isinstance(tdata, dict):\n                    real += 1\n                else:\n                    missed.append(f\"읽기 실패 {name}\")\n", "                real += 1\n                if False:\n                    missed.append(f\"읽기 실패 {name}\")\n", [WALK_TOPIC_T]),
+ ("범위 읽기 실패한 토픽 입력을 본 것으로 센다", WK, "                elif isinstance(tdata, dict):\n                    real += 1\n                else:\n                    missed.append(f\"읽기 실패 {name}\")\n", "                else:\n                    real += 1\n                if False:\n                    missed.append(f\"읽기 실패 {name}\")\n", [WALK_TOPIC_T]),
  ("못 푼 토픽 경로를 걸은 클래스의 토픽으로 읽는다", WK, "                if \".topic.\" in name:\n                    remember(f\"{writer}: 토픽 경로 {name}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다\")\n                    missed.append(f\"토픽 경로 {name} 값 모름\")\n", "                if False:\n                    remember(f\"{writer}: 토픽 경로 {name}의 값을 모른다(사이트 선언에서 못 바꿨다) — 읽지 않는다\")\n                    missed.append(f\"토픽 경로 {name} 값 모름\")\n", [WALK_TOPIC_T]),
  ("source-quiet의 원천 토픽이 비지 않았다", LC, "                             else [] if variant in (\"source-missing-quiet\", \"source-quiet\")\n", "                             else [] if variant == \"source-missing-quiet\"\n", [LOCAL_SOURCE_T, BOARD_QUIET_T]),
 ]
@@ -3642,11 +3642,11 @@ CASES += [
  ("켜짐을 사이트 층이 적었는지 안 본다", D, "                by_site = any(_has_path(value, [*where, spec.enabled_key]) for value in site_values)\n", "                by_site = True\n", [PIPE_T]),
  ("다른 사이트 값이 대는 쓴 쪽을 이 사이트 확인 없이 쓴다", WK, "            if off:\n                return f\"{fct}의 같은 키 {read_key} 값이 대는 {w} — {off}\"\n", "", [PIPE_WALK_T, BOARD_ELSEWHERE_T]),
  ("이 사이트 확인이 던지면 채운다", WK, "                off = f\"이 사이트에서 도는지 확인하지 못했다({type(exc).__name__})\"\n", "                off = \"\"\n", [PIPE_WALK_T]),
- ("걷기 노드가 이 사이트 확인을 안 넘긴다", ND, "peer=deps.peer, pipeline_here=deps.pipeline_here, clock=deps.clock)", "peer=deps.peer, clock=deps.clock)", [BOARD_ELSEWHERE_T]),
- ("case walk가 이 사이트 확인을 안 넘긴다", MN, "                              pipeline_here=code.pipeline_here if code else None,\n", "", [BOARD_ELSEWHERE_T]),
+ ("걷기 노드가 이 사이트 확인을 안 넘긴다", ND, "peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed, clock=deps.clock)", "peer=deps.peer, routed=deps.routed, clock=deps.clock)", [BOARD_ELSEWHERE_T]),
+ ("case walk가 이 사이트 확인을 안 넘긴다", MN, "                              pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,\n", "                              routed=code.routed_types if code else None,\n", [BOARD_ELSEWHERE_T]),
  ("측정판이 sevt에서만 켜진 쓴 쪽을 안 심는다", LC, "\"event_type\": \"PaletteImporter\" if variant == \"palette-seeder-elsewhere\"\n", "\"event_type\": \"PaletteSeeder\" if variant == \"palette-seeder-elsewhere\"\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
  ("측정판 GBM 층이 PaletteImporter를 켠다", LC, "\"palette_import\": {\"enabled\": False, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", "\"palette_import\": {\"enabled\": True, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
- ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES), \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\"}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
+ ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\"}}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
 ]
 
 # ── 12a-R3-5v ③ — 이름 목록이 레포 전체 스냅샷을 받지 않는다(받아 둔 것은 쓰고, 없으면 층 파일만 경로마다 한 번) ──
@@ -3721,7 +3721,27 @@ CASES += [
  ("case walk가 번들 자리를 안 넘긴다", MN, "clock=clock, graph_dir=_graph_dir(args, env, gbm))\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None,\n                                         bundle=_graph_dir(args, env, gbm))", "clock=clock, graph_dir=_graph_dir(args, env, gbm))\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)", [WALK_WIRE_T]),
  ("조사가 번들 자리를 안 넘긴다", MN, "        built[\"graph\"] = graph_note\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None,\n                                         bundle=_graph_dir(args, env, gbm))", "        built[\"graph\"] = graph_note\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)", [INV_WIRE_T]),
 ]
-assert len(CASES) >= 1243, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5w ② — 라우터가 유형별로 나눠 보내는 토픽은 정상이 아니라 모름 ──
+ROUTED_T = "tests/infrastructure/test_deployed_code.py::test_routed_types는_클래스가_라우터_유형표를_거쳐_받으면_섞인_유형_수와_그_클래스의_유형을_적는다"
+MIXED_T = "tests/application/test_walk.py::test_라우터가_유형별로_나눠_보내는_토픽은_남은_메시지가_있어도_정상이_아니라_모름이다"
+BOARD_MIXED_T = "tests/test_board_walk.py::test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다"
+CASES += [
+ ("라우터 선언이 있어도 유형표를 안 본다", DCP, "        if router is None:\n            return \"\"\n        wanted: set[str] = set()", "        if True:\n            return \"\"\n        wanted: set[str] = set()", [ROUTED_T]),
+ ("유형 하나뿐인 짝도 섞였다고 한다", DCP, "            if hit and len(kinds) > 1:", "            if hit:", [ROUTED_T]),
+ ("파이프라인 열거 멤버를 값으로 안 맞춘다", DCP, "if m in wanted or v in wanted}", "if m in wanted}", [ROUTED_T]),
+ ("짝의 둘째 파이프라인부터 안 본다", DCP, "            flows = [_enum_ref(e, pipeline_enum) for e in node.elts[1:]]", "            flows = [_enum_ref(e, pipeline_enum) for e in node.elts[1:2]]", [ROUTED_T]),
+ ("유형표 확인 실패를 빈 문자열로 삼킨다", DCP, "                self._routed[class_name] = f\"라우터 유형표를 확인하지 못했다({type(exc).__name__})\"", "                self._routed[class_name] = \"\"", [ROUTED_T]),
+ ("섞인 토픽도 정상이라 한다", WK, "    if left and mixed:\n", "    if False:\n", [MIXED_T]),
+ ("빈 섞인 토픽도 모름이라 한다", WK, "    if left and mixed:\n", "    if mixed:\n", [MIXED_T]),
+ ("걸은 클래스의 토픽에 라우터를 안 묻는다", WK, "_topic_status(tdata, tgot.error or \"증거 없음\", await mixed_of(writer))", "_topic_status(tdata, tgot.error or \"증거 없음\")", [MIXED_T]),
+ ("쓴 쪽의 토픽에 라우터를 안 묻는다", WK, "_topic_status(tdata, tgot.error or \"증거 없음\", await mixed_of(w))", "_topic_status(tdata, tgot.error or \"증거 없음\")", [MIXED_T]),
+ ("섞인 토픽을 본 입력으로 센다", WK, "                unsure = isinstance(tdata, dict) and tstatus.startswith(\"모름 — \")", "                unsure = False", [MIXED_T]),
+ ("라우터 확인이 던지면 정상이라 한다", WK, "            return f\"라우터 유형표를 확인하지 못했다({type(exc).__name__})\"\n", "            return \"\"\n", [MIXED_T]),
+ ("걷기 노드가 라우터 확인을 안 넘긴다", ND, "pipeline_here=deps.pipeline_here, routed=deps.routed, clock=deps.clock)", "pipeline_here=deps.pipeline_here, clock=deps.clock)", [BOARD_MIXED_T]),
+ ("case walk가 라우터 확인을 안 넘긴다", MN, "pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,", "pipeline_here=code.pipeline_here if code else None,", [BOARD_MIXED_T]),
+ ("측정판 토폴로지에 라우터 선언이 없다", ROOT / "tools/local_case.py", ", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\"}}}", "}}", [LOCAL_TOPO_PIPE_T]),
+]
+assert len(CASES) >= 1257, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

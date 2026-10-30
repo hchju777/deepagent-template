@@ -94,12 +94,21 @@ class FlowSpec(StrictModel):
     ]
 
 
+class RouterSpec(StrictModel):
+    """원천 토픽의 메시지를 유형별로 파이프라인에 나눠 보내는 라우터의 유형표(R3-5w ② — 측정 #31 a). 코드에 `(<유형 열거>.X, <파이프라인 열거>.Y, …)` 짝 목록이
+    있고, 파이프라인 열거 멤버의 값(또는 이름)이 config 파이프라인 항목의 이름이다(검토 회신 11-03 4). 두 열거의 클래스 이름 — 사내 이름은 사내 토폴로지에만."""
+    type_enum: str = Field(min_length=1)
+    pipeline_enum: str = Field(min_length=1)
+
+
 class PipelineSpec(StrictModel):
     """대상 config에서 파이프라인 항목을 알아보는 법(R3-5v ② — 검토 회신 11-03 3: 두 사이트에만 켜진 클래스가 이 사이트 키의 쓴 쪽으로 채워졌다). 항목은
     `class_key` 잎에 클래스 이름이 든 객체이고, `enabled_key` 잎이 참이면 그 사이트에서 돈다. 키 이름은 대상 config의 것이라 리포엔 자리표시자만 — 사내
     토폴로지가 적는다."""
     class_key: str = Field(min_length=1)
     enabled_key: str = Field(min_length=1)
+    # 라우터의 유형표(R3-5w ②). 없으면 걸은 클래스의 구독 토픽이 여러 유형이 섞인 토픽인지 모른다 — 걷기는 전처럼 남은 메시지로 정상이라 쓴다.
+    router: RouterSpec | None = None
 
 
 class Topology(StrictModel):

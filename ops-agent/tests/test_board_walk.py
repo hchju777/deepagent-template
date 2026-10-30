@@ -29,8 +29,8 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]},
-            # 측정판 config의 파이프라인 항목(R3-5v ②) — 클래스 키·켜짐 키의 이름. 사내 이름은 사내 토폴로지에만.
-            "pipelines": {"class_key": "class", "enabled_key": "enabled"}}
+            # 측정판 config의 파이프라인 항목(R3-5v ②) — 클래스 키·켜짐 키의 이름 — 과 측정판 코드의 라우터 유형표(R3-5w ②). 사내 이름은 사내 토폴로지에만.
+            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline"}}}
 VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
             "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet", "palette-source-missing", "palette-seeder-elsewhere")
 
@@ -382,10 +382,12 @@ def test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같�
     rows, notes, stopped, rungs = _walk(board, monkeypatch, "palette-source-missing")
     assert "alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 빈 배열 (colors)" in rows
     assert "palette:source | PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] | 없음" in rows
+    # 그 토픽은 라우터가 유형별로 나눠 보낸다(R3-5w ② — 측정 #31 a): 남은 메시지 5는 PALETTE 유형의 것인지 모른다 — 정상이 아니라 모름.
+    mixed = "유형 3개가 섞인 토픽 — PALETTE 유형의 메시지 수는 세지 않았다"
     topic = [r for r in rows if r.startswith("mx.alarm.main | ")]
-    assert topic and topic[0].endswith(" | 정상 — 보존 범위 0~5 · 남은 메시지 5 · 구독 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]")
+    assert topic and topic[0].endswith(f" | 모름 — {mixed} · 보존 범위 0~5 · 남은 메시지 5 · 구독 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]")
     assert stopped == ("키가 없다 — palette:source(쓰는 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] · 구독 mx.alarm.main 범위 0~5, "
-                       "남은 메시지 5)")
+                       f"남은 메시지 5 — {mixed})")
     assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 sevt:palette:source 값의 metadata.event_type에서 채웠다: PaletteSeeder",
                      "PaletteSeeder: 클래스 코드에 구독 토픽이 없다 — sevt 값의 source.topic sevt.alarm.main을 이 사이트 이름 mx.alarm.main으로 이었다"]
     assert rungs[:2] == [f"code.read line={_at('common/palette.py', 'class PaletteSeeder')} path='common/palette.py' service='batch'",

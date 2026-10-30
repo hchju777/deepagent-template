@@ -102,6 +102,8 @@ class EngineDeps:
     # R3-5v ② — 다른 사이트 값이 댄 쓴 쪽이 이 사이트에서 도는가 `pipeline_here(클래스) → "" | 까닭`(DeployedCode — 병합 config의 켜짐, GBM 층에서만 켜졌으면
     # 배포 커밋의 클래스 정의). None이면(대본) 확인 없이 전처럼.
     pipeline_here: Callable[[str], Awaitable[str]] | None = None
+    # R3-5w ② — 구독 클래스가 라우터 유형표를 거쳐 받는가 `routed(클래스) → "" | 사실`(DeployedCode.routed_types). None이면(대본) 토픽 행은 전처럼.
+    routed: Callable[[str], Awaitable[str]] | None = None
     # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
     declared_by: dict = field(default_factory=dict)
     # 토픽 → config로 발행을 선언한 서비스들(`flow.producing_map`, R3-5d ④) — 메시지 홉의 발행 쪽. 사람 결정 10-19: 같은 이름 클래스가 두 레포라 클래스
@@ -518,7 +520,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
                                   service_repos=deps.service_repos, declared_by=deps.declared_by,
                                   topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,
-                                  peer=deps.peer, pipeline_here=deps.pipeline_here, clock=deps.clock)
+                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 

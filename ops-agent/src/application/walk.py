@@ -228,9 +228,10 @@ def writes_in(text: str) -> int:
     return 0
 
 
-def _topic_status(data: Any, error: str) -> tuple[str, bool, str]:
+def _topic_status(data: Any, error: str, mixed: str = "") -> tuple[str, bool, str]:
     """구독 토픽의 보존 범위 홉 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)` — 비었으면(남은 메시지 0) 나쁨, 남아 있으면 `정상 —`(R3-5t ③, 측정 #29 3부: 판정 낱말이
-    없어 빈 행과 한눈에 안 갈렸다 — 키 행의 `정상 — …`과 같은 꼴). 못 읽었으면 모르는 것."""
+    없어 빈 행과 한눈에 안 갈렸다 — 키 행의 `정상 — …`과 같은 꼴). 못 읽었으면 모르는 것. `mixed`는 라우터가 유형별로 나눠 보내는 토픽이라는 사실(R3-5w ② —
+    측정 #31 a: `정상 — 남은 메시지 10만`이 그 클래스 유형의 메시지가 오는지를 말하지 않았다) — 남아 있어도 `모름 —`이다. 비었으면 어느 유형도 안 왔으니 나쁨."""
     if not isinstance(data, dict):
         return f"읽기 실패 — {error}", False, "범위 읽기 실패"
     parts = data.get("partitions") or []
@@ -238,6 +239,8 @@ def _topic_status(data: Any, error: str) -> tuple[str, bool, str]:
            else ", ".join(f"{p['partition']}: {p['begin']}~{p['end']}" for p in parts))
     left = data.get("messages", 0)
     text = f"보존 범위 {rng} · 남은 메시지 {left}"
+    if left and mixed:
+        return f"모름 — {mixed} · {text}", False, f"범위 {rng}, 남은 메시지 {left} — {mixed}"
     return (f"비었다 — {text}" if not left else f"정상 — {text}"), not left, f"범위 {rng}, 남은 메시지 {left}"
 
 
@@ -294,11 +297,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    lookup: Callable[..., Awaitable[FilterScan]] | None = None,
                    peer: Callable[[str, str], Awaitable[tuple[str, str, Any] | None]] | None = None,
                    pipeline_here: Callable[[str], Awaitable[str]] | None = None,
+                   routed: Callable[[str], Awaitable[str]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
     (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만. `peer(키, 템플릿)`은 같은 GBM 다른
     사이트의 같은 키 값 `(사이트, 읽은 키, 값)`(R3-5t ②); 없으면(사이트 하나·대본) 인덱스가 모르는 쓴 쪽은 전처럼 비운다. `pipeline_here(클래스)`는 그 값이 댄
-    클래스가 이 사이트에서 도는지 — 돌면 빈 문자열, 아니면 까닭(R3-5v ②); 없으면(대본) 확인 없이 채운다."""
+    클래스가 이 사이트에서 도는지 — 돌면 빈 문자열, 아니면 까닭(R3-5v ②); 없으면(대본) 확인 없이 채운다. `routed(클래스)`는 그 클래스가 라우터 유형표를 거쳐
+    받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
@@ -311,6 +316,15 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     def remember(note: str) -> None:
         if note not in notes:
             notes.append(note)
+
+    async def mixed_of(cls: str) -> str:
+        """구독 클래스가 라우터 유형표를 거쳐 받으면 그 사실(R3-5w ②). 확인이 던지면 모르는 것 — 정상이라 쓰지 않게 그 사실을 돌려준다."""
+        if routed is None:
+            return ""
+        try:
+            return await routed(cls)
+        except Exception as exc:                                                            # noqa: BLE001
+            return f"라우터 유형표를 확인하지 못했다({type(exc).__name__})"
 
     tasks: list[PlanTask] = []
     evidence: list[EvidenceRef] = []
@@ -599,6 +613,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         real += 1
                     elif result == "fail":
                         missed.append(f"읽기 실패 {name}")
+                    elif result == "mixed":
+                        missed.append(f"{name} 유형별 메시지 수 모름")
                     continue
                 if (why := over(writer, name)):
                     stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
@@ -607,10 +623,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 _, tgot = await run(f"걷기 — {writer}{tag}가 구독하는 토픽 {name}의 보존 범위", "kafka.offsets", {"topic": name})
                 tev = tgot.evidence[0].id if tgot.evidence else ""
                 tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
-                tstatus, tbad, _ = _topic_status(tdata, tgot.error or "증거 없음")
+                tstatus, tbad, _ = _topic_status(tdata, tgot.error or "증거 없음", await mixed_of(writer))
                 shown, svcs = published(name)
-                readings[name] = ("ok" if isinstance(tdata, dict) else "fail", "")
-                if isinstance(tdata, dict):
+                # 섞인 토픽(R3-5w ②)은 읽었어도 그 클래스의 입력을 본 것이 아니다 — `입력이 다 정상`이라 쓰지 않는다.
+                unsure = isinstance(tdata, dict) and tstatus.startswith("모름 — ")
+                readings[name] = ("mixed" if unsure else "ok" if isinstance(tdata, dict) else "fail", "")
+                if unsure:
+                    missed.append(f"{name} 유형별 메시지 수 모름")
+                elif isinstance(tdata, dict):
                     real += 1
                 else:
                     missed.append(f"읽기 실패 {name}")
@@ -747,7 +767,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         _, tgot = await run(f"걷기 — {w}가 구독하는 토픽 {topic}의 보존 범위", "kafka.offsets", {"topic": topic})
                         tev = tgot.evidence[0].id if tgot.evidence else ""
                         tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
-                        tstatus, tbad, piece = _topic_status(tdata, tgot.error or "증거 없음")
+                        tstatus, tbad, piece = _topic_status(tdata, tgot.error or "증거 없음", await mixed_of(w))
                         # 쓴 쪽 칸은 발행 선언, 후보도 그 서비스들, 구독 클래스는 상태 꼬리(R3-5t ① — 걸은 클래스의 토픽 행과 같은 모양; 측정 #29 3부: 쓴 쪽 칸의
                         # `<AGV 클래스> [<서비스>] 구독`이 "발행하는 레포가 없다"를 가렸다).
                         pub, pub_svcs = published(topic)

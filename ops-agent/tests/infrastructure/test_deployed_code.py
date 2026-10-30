@@ -1311,3 +1311,84 @@ async def test_pipeline_here는_이_사이트_병합_config의_켜짐을_보고_
     assert await behind.pipeline_here("Shaper") == ""                     # 사이트가 일부러 켠 것 — 배포 커밋을 안 본다
     bare = code_at(Deployment(), topology.model_copy(update={"pipelines": None}))
     assert await bare.pipeline_here("Seeder") == "이 사이트에서 도는지 확인할 선언이 없다(토폴로지 pipelines)"
+
+
+# ── R3-5w ② — 라우터가 유형별로 나눠 보내는 토픽 ──
+
+async def test_routed_types는_클래스가_라우터_유형표를_거쳐_받으면_섞인_유형_수와_그_클래스의_유형을_적는다(tmp_path, clock):
+    """측정 #31 a: `<원천 토픽>`은 라우터가 여러 유형을 나눠 보내는 토픽이라 `정상 — 남은 메시지 10만`이 그 클래스 유형의 메시지가 오는지를 말하지 않았고 판정이
+    `<처리 서비스>`를 탓했다. 라우터의 모양(검토 회신 11-03 4): 메시지의 유형 필드로 유형표 `(<유형 열거>.X, <파이프라인 열거>.Y, …)` 짝 목록에서 파이프라인
+    이름을 꺼내 config 항목(클래스 키)의 파이프라인을 돌린다. 토폴로지 `pipelines.router`가 두 열거의 이름을 선언한다. 클래스의 항목 이름을 값으로 가진 파이프라인
+    열거 멤버가 짝에 있으면 라우터를 거치는 클래스다 — `유형 <N>개가 섞인 토픽 — <그 클래스의 유형들> 유형의 메시지 수는 세지 않았다`. 짝에 없거나 유형이
+    하나뿐이면 섞이지 않았다(빈 문자열). 선언이 없으면 모른다(빈 문자열 — 전처럼)."""
+    from src.knowledge import index as ix
+    from src.knowledge.schema import PipelineSpec, RouterSpec
+
+    root = make_git_repo(tmp_path / "dt-core", origin="https://git.example.com/team/dt-core")
+
+    def write(path, value):
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value if isinstance(value, str) else json.dumps(value), encoding="utf-8")
+
+    def entry(cls):
+        return {"enabled": True, "module": "jobs.x", "class": cls}
+
+    write("config/gbm/mx.json", {"pipelines": {"seed": entry("Seeder"), "pack": entry("Packer"), "lone": entry("Lonely"), "solo": entry("Solo")}})
+    files = {"jobs/__init__.py": "",
+             "jobs/kinds.py": ("from enum import Enum\n\n\nclass Kind(Enum):\n    COLOR = \"color\"\n    BOX = \"box\"\n    NOTE = \"note\"\n\n\n"
+                               "class Flow(Enum):\n    SEED = \"seed\"\n    PACK = \"pack\"\n    SOLO = \"solo\"\n"),
+             "jobs/route.py": ("from jobs.kinds import Flow, Kind\n\nPAIRS = [\n    (Kind.COLOR, Flow.SEED),\n    (Kind.BOX, Flow.PACK, Flow.SEED),\n"
+                               "    (Kind.NOTE, Flow.PACK),\n]\n"),
+             "jobs/seed.py": "class Seeder:\n    pass\n", "jobs/pack.py": "class Packer:\n    pass\n", "jobs/lonely.py": "class Lonely:\n    pass\n",
+             "jobs/solo.py": "class Solo:\n    pass\n"}
+    for path, text in files.items():
+        write(path, text)
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "head", cwd=root)
+
+    class _Head:
+        async def files(self):
+            return sorted(files)
+
+        async def read(self, path):
+            return files.get(path)
+
+    topology = Topology(services={"jobs": Service(repo="dt-core", role="일을 한다")}, config_paths=LAYERS,
+                        pipelines=PipelineSpec(class_key="class", enabled_key="enabled", router=RouterSpec(type_enum="Kind", pipeline_enum="Flow")))
+    reader = RealCodeReader([RepoConfig(name="dt-core", path=str(root), url="https://git.example.com/team/dt-core")], clock=clock)
+    index = await ix.build_index({"dt-core": _Head()}, commits={"dt-core": "head"})
+
+    def code_at(topo=topology):
+        made = DeployedCode(reader, topo, Deployment(), gbm="mx", fct="gumi", clock=clock)
+        made.attach_index(index)
+        return made
+
+    here = code_at()
+    assert await here.routed_types("Seeder") == "유형 3개가 섞인 토픽 — BOX·COLOR 유형의 메시지 수는 세지 않았다"
+    assert await here.routed_types("Packer") == "유형 3개가 섞인 토픽 — BOX·NOTE 유형의 메시지 수는 세지 않았다"
+    assert await here.routed_types("Lonely") == ""                       # 짝에 없다 — 라우터를 거치지 않는다
+    assert await here.routed_types("Solo") == ""                         # 열거 멤버는 있지만 짝에 없다
+    assert await here.routed_types("Nobody") == ""                       # 파이프라인 항목이 없다
+    # 확인이 실패하면(git grep 실패) 그 사실 — 빈 문자열이면 걷기가 정상이라 쓴다
+    from src.domain.envelope import ProbeResult
+
+    class _NoGrep:
+        def __getattr__(self, name):
+            return getattr(reader, name)
+
+        async def grep(self, *args, **kwargs):
+            return ProbeResult.failed("git down", source="grep", clock=clock)
+
+    down = DeployedCode(_NoGrep(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    down.attach_index(index)
+    assert await down.routed_types("Seeder") == "라우터 유형표를 확인하지 못했다(RuntimeError)"
+    # 유형이 하나뿐인 짝 목록이면 섞이지 않았다
+    files["jobs/route.py"] = "from jobs.kinds import Flow, Kind\n\nPAIRS = [(Kind.COLOR, Flow.SEED)]\n"
+    write("jobs/route.py", files["jobs/route.py"])
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "one", cwd=root)
+    assert await code_at().routed_types("Seeder") == ""
+    # 선언이 없으면 모른다 — 전처럼
+    bare = code_at(topology.model_copy(update={"pipelines": PipelineSpec(class_key="class", enabled_key="enabled")}))
+    assert await bare.routed_types("Seeder") == ""
