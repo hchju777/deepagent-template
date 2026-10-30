@@ -62,7 +62,7 @@ class CaseState(StrictModel):
     decision: Decision | None = None
     # 왜 끝났는가. "답을 찾아서"와 "상한에 걸려서"와 "LLM이 죽어서"는 전부 다른
     # 사실이고, 12a가 "미확정"과 "조사 실패(degraded)"를 가르는 근거가 된다.
-    stopped_by: Literal["decision", "max_rounds", "no_runnable", "llm_error"] | None = None
+    stopped_by: Literal["decision", "max_rounds", "no_runnable", "llm_error", "stalled", "settled"] | None = None
     # LLM이 죽거나 형식을 못 지킨 기록. **비어 있지 않으면 그 조사는 반쪽이다.**
     # 없으면 "아무것도 안 했다"가 "조사할 게 없었다"와 같은 모양이 된다.
     llm_errors: Annotated[list[str], operator.add] = []
@@ -80,6 +80,10 @@ class CaseState(StrictModel):
     target: TargetPick | None = None
     # R3-3 ② — 입구 뒤 걷기 노드가 상류를 걸은 결과(홉 표·멈춘 자리). 브리핑의 다음 홉과 중복 거부의 홉은 이것을 본다.
     walk: Walk | None = None
+    # R3-5v ④ — 정체 감지(검토 회신 11-03 8, R4에서 당김). frame이 라운드를 시작할 때의 진척(증거 수 + 끝난 태스크 수)을 표시하고(None이면 표시 전 — 세지
+    # 않는다), integrate가 진척이 없는 라운드(낸 읽기가 전부 반려·중복·실패)를 연달아 센다. 둘째면 판정.
+    progress_mark: int | None = None
+    stalls: int = 0
 
     def evidence_ids(self) -> set[str]:
         """select 게이트가 보는 우주 — **리드가 실제로 본 것**뿐이다."""

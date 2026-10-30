@@ -119,6 +119,14 @@ REDO_NOTE = " (그 자리에서 다시 물었다)"
 # 대기 태스크는 있는데 돌릴 것이 없을 때 리드에게 되묻는 기록의 종류(R3-1 ②(c)) — State에 남아 "케이스당 한 번"의 표식이 된다.
 # 다른 기록과 같은 모양(`t-3: 종류 — 자세히`)이어야 진단이 종류를 센다(보드에서 `1× t-3(막힘`으로 깨져 보였다).
 BLOCKED_MARK = "막힘 — 대기 태스크가 못 돈다"
+# R3-5v ④ — 진척 없는 라운드의 사유 줄 머리. `<버려진 태스크>`로 다음 턴에 간다.
+STALL_MARK = "정체"
+
+
+def _progress(state: CaseState) -> int:
+    """정체 감지의 진척 — 모은 증거 수 + 끝난(ok) 태스크 수. 실접속에선 성공한 읽기가 늘 증거를 내지만, 증거 없는 성공(대본)도 진척으로 센다 — 정체는
+    "낸 읽기가 전부 반려·중복·실패"다(검토 회신 11-03 8)."""
+    return len(state.evidence) + sum(1 for t in state.plan_tasks if t.status == "ok")
 # 중복 거부 기록의 두 조각 — `_rejected_reads`가 앞 라운드의 기록에서 "그 id의 결과는 어디"를 되읽는다. 모양을 바꾸면 둘 다 바꿔라.
 DUP_KIND = ": 이미 한 읽기를 또 냈다"
 DUP_WHERE = " — 그 결과는 "
@@ -512,6 +520,8 @@ def make_nodes(deps: EngineDeps) -> dict:
                 "plan_tasks": tasks,
                 "llm_errors": (list(patch.get("llm_errors", []))
                                + complaints + rejected + guessed),
+                # 라운드 시작의 진척(입구·걷기가 실은 증거 + 끝난 태스크) — 정체 감지(R3-5v ④)가 이 뒤의 진척을 센다.
+                "progress_mark": _progress(state),
                 "round": 1}
 
     async def select(state: CaseState) -> dict:
@@ -602,6 +612,15 @@ def make_nodes(deps: EngineDeps) -> dict:
                            if g.split(":")[0] in {t.id for t in fresh}] + more_guessed
         patch = {**patch, "plan_tasks": fresh, "hypotheses": hypotheses,
                  "llm_errors": list(patch.get("llm_errors", [])) + refused + guessed}
+        # 정체 감지(R3-5v ④ — 검토 회신 11-03 8: R4에서 이것만 당긴다). 라운드에 진척이 없으면(새 증거도 끝난 읽기도 0 — 낸 읽기가 전부 반려·중복·실패) 사유를
+        # 주고 한 번 더, 연달아 둘째면 리드가 continue여도 판정한다 — 상한까지 빈 라운드를 돌지 않는다. 사유는 `<버려진 태스크>`로 다음 턴에 간다. frame이 표시를
+        # 안 했으면 안 센다.
+        progress = _progress(state)
+        stalls = state.stalls + 1 if state.progress_mark is not None and progress <= state.progress_mark else 0
+        if stalls:
+            tail = " — 한 번 더: 다른 읽기를 내거나 conclude" if stalls == 1 else " — 연달아 둘째라 판정으로 간다"
+            patch = {**patch, "llm_errors": patch["llm_errors"] + [f"{STALL_MARK} — 라운드 {state.round}에서 새 증거 0(낸 읽기가 전부 반려·중복·실패){tail}"]}
+        patch = {**patch, "progress_mark": progress, "stalls": stalls}
 
         # 리드가 이미 끝낸 이유를 댔으면(LLM 실패 등) 그것이 이긴다. 아래 규칙들이
         # 덮어쓰면 "LLM이 죽어서"가 "상한에 걸려서"로 둔갑한다 — 12a가 "미확정"과
@@ -614,6 +633,12 @@ def make_nodes(deps: EngineDeps) -> dict:
             return {**patch, "decision": "conclude", "stopped_by": "max_rounds"}
         if patch.get("decision") == "conclude":
             return {**patch, "stopped_by": "decision"}
+        if stalls >= 2:
+            return {**patch, "decision": "conclude", "stopped_by": "stalled"}
+        # 열린 가설이 없고 새로 낸 작업도 없으면 판정(R3-5v ④) — 남은 대기 태스크는 리드가 다 닫은 뒤의 남은 읽기다.
+        settled = merge_by_id(state.hypotheses, hypotheses)
+        if not fresh and settled and not any(h.status == "open" for h in settled):
+            return {**patch, "decision": "conclude", "stopped_by": "settled"}
 
         # 계속하기로 했는데 **돌릴 것이 없으면** 상한까지 빈 라운드를 돈다.
         # 그러면 보고서가 "N라운드 조사했다"고 적는데 실제로는 아무것도 안 했다.

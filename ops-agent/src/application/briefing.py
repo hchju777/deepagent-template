@@ -877,7 +877,9 @@ CONCLUDE_REQUIRED = ("case", "evidence", "example")
 _ENDED = {"decision": "리드가 끝냈다(원인이 충분히 좁혀졌다고 판단)",
           "max_rounds": "라운드 상한에 닿았다 — 억지 결론 대신 미확정을 허용한다",
           "no_runnable": "더 볼 것이 없었다(낼 읽기가 남지 않았다)",
-          "llm_error": "리드 LLM이 응답하지 못했다"}
+          "llm_error": "리드 LLM이 응답하지 못했다",
+          "stalled": "두 라운드 연달아 새 증거가 없었다(낸 읽기가 전부 반려·중복·실패)",
+          "settled": "열린 가설이 없고 새로 낼 읽기도 없었다"}
 
 
 def ended_line(state: CaseState) -> str:

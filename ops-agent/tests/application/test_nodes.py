@@ -949,3 +949,55 @@ async def test_걷기가_있으면_받을_때의_홉과_거부_기록의_홉은_
 
     patch = await nodes_for(back, code_index=True)["integrate"](none)
     assert [(t.id, t.pinned) for t in patch["plan_tasks"]] == [("t-12", False)]
+
+
+# ── R3-5v ④ — 정체 감지(R4에서 당김) ──
+
+async def test_라운드의_새_증거가_0이면_사유를_주고_연달아_둘째면_리드가_계속이어도_판정한다(case):
+    """검토 회신(11-03) 8: R4에서 정체 감지만 당긴다 — 라운드의 새 증거가 0(낸 읽기가 전부 반려·중복·실패)이면 사유를 주고 한 번 더, 또 0이면 판정. 상한까지 빈
+    라운드를 돌지 않는다. frame이 라운드 시작의 진척(증거 수 + 끝난 태스크 수)을 표시하고(`progress_mark`), 표시가 없으면(직접 만든 State) 세지 않는다. 성공한 읽기가 있는 라운드는
+    정체가 아니다(실접속에선 성공한 읽기가 늘 증거를 낸다 — 대본의 빈 성공도 진척으로 센다)."""
+    from src.domain.case import EvidenceRef
+
+    async def more(state):
+        return {"decision": "continue", "plan_tasks": [task(f"t-{state.round + 5}")]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), integrate=more, max_rounds=9))
+    ev = [EvidenceRef(id="t-1.e1", source="s", summary="x")]
+    framed = await nodes["frame"](CaseState(case=case, evidence=ev))
+    assert framed["progress_mark"] == 1                                       # 라운드 시작의 진척(입구·걷기가 실은 증거 하나)
+    first = await nodes["integrate"](CaseState(case=case, round=2, evidence=ev, progress_mark=1, plan_tasks=[task("t-1", status="error")]))
+    assert first["decision"] == "continue" and first["stalls"] == 1 and first["progress_mark"] == 1
+    assert first["llm_errors"][-1] == "정체 — 라운드 2에서 새 증거 0(낸 읽기가 전부 반려·중복·실패) — 한 번 더: 다른 읽기를 내거나 conclude"
+    second = await nodes["integrate"](CaseState(case=case, round=3, evidence=ev, progress_mark=1, stalls=1, plan_tasks=[task("t-1", status="error")]))
+    assert second["decision"] == "conclude" and second["stopped_by"] == "stalled" and second["stalls"] == 2
+    from src.application import briefing
+    assert "두 라운드 연달아 새 증거가 없었다" in briefing.ended_line(CaseState(case=case, round=3, stopped_by="stalled"))   # 판정 재료가 끝난 이유를 말로
+    grown = ev + [EvidenceRef(id="t-2.e1", source="s", summary="y")]
+    moved = await nodes["integrate"](CaseState(case=case, round=3, evidence=grown, progress_mark=1, stalls=1, plan_tasks=[task("t-1", status="ok")]))
+    assert moved["decision"] == "continue" and moved["stalls"] == 0 and moved["progress_mark"] == 3          # 증거 둘 + 끝난 태스크 하나
+    unmarked = await nodes["integrate"](CaseState(case=case, round=2, plan_tasks=[task("t-1", status="error")]))
+    assert unmarked["stalls"] == 0 and not any(e.startswith("정체") for e in unmarked["llm_errors"])
+
+
+async def test_열린_가설이_없고_새_작업이_없으면_리드가_계속이어도_판정한다(case):
+    """검토 회신(11-03) 8: 열린 가설 0 + 새 작업 없음으로도 판정 — 남은 대기 태스크가 있어도 리드가 다 닫았고 더 낼 것이 없으면 그 읽기는 남은 일이 아니다."""
+    from src.domain.case import EvidenceRef
+
+    def replying(status, tasks=()):
+        async def reply(state):
+            return {"decision": "continue", "plan_tasks": list(tasks),
+                    "hypotheses": [Hypothesis(id="h1", statement="처리기가 거른다", status=status, supporting_ids=["t-1.e1"])]}
+        return reply
+
+    ev = [EvidenceRef(id="t-1.e1", source="s", summary="x")]
+    state = CaseState(case=case, round=2, evidence=ev, plan_tasks=[task("t-1", status="ok"), task("t-2")])
+    done = await make_nodes(deps_for(ScriptedRunner(), integrate=replying("supported"), max_rounds=9))["integrate"](state)
+    assert done["decision"] == "conclude" and done["stopped_by"] == "settled"
+    from src.application import briefing
+    assert "열린 가설이 없고 새로 낼 읽기도 없었다" in briefing.ended_line(CaseState(case=case, round=2, stopped_by="settled"))
+    still = await make_nodes(deps_for(ScriptedRunner(), integrate=replying("open"), max_rounds=9))["integrate"](state)
+    assert still["decision"] == "continue"                                   # 열린 가설이 있으면 대기 태스크를 돌린다
+    asks = await make_nodes(deps_for(ScriptedRunner(), integrate=replying("supported", [task("t-3")]), max_rounds=9))["integrate"](state)
+    assert asks["decision"] == "continue"                                    # 새 작업을 냈으면 그것을 돌린다
+

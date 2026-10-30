@@ -3659,7 +3659,22 @@ CASES += [
  ("받아 둔 스냅샷을 이름 목록이 안 쓴다", D, "            if snap is not None:\n                text = snap.get(path)\n", "            if False:\n                text = snap.get(path)\n", [NAMES_SNAP_T]),
  ("code graph가 스냅샷을 먼저 안 받는다", MN, "        for repo in code.pinned():\n            await code.snapshot_for(repo)\n", "", [GRAPH_BUNDLE_T]),
 ]
-assert len(CASES) >= 1208, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5v ④ — 정체 감지(R4에서 당김): 새 증거 0인 라운드는 사유를 주고, 연달아 둘째면 판정; 열린 가설 0 + 새 작업 없음도 판정 ──
+STALL_T = "tests/application/test_nodes.py::test_라운드의_새_증거가_0이면_사유를_주고_연달아_둘째면_리드가_계속이어도_판정한다"
+SETTLED_T = "tests/application/test_nodes.py::test_열린_가설이_없고_새_작업이_없으면_리드가_계속이어도_판정한다"
+CASES += [
+ ("정체를 안 센다", ND, "        stalls = state.stalls + 1 if state.progress_mark is not None and progress <= state.progress_mark else 0\n", "        stalls = 0\n", [STALL_T]),
+ ("표시 전 State도 정체로 센다", ND, "state.progress_mark is not None and progress <= state.progress_mark", "progress <= (state.progress_mark or 0)", [STALL_T]),
+ ("정체 사유를 안 준다", ND, "        if stalls:\n            tail = ", "        if False:\n            tail = ", [STALL_T]),
+ ("정체 둘째에도 판정 안 한다", ND, "        if stalls >= 2:\n            return {**patch, \"decision\": \"conclude\", \"stopped_by\": \"stalled\"}\n", "", [STALL_T]),
+ ("frame이 라운드 시작의 진척을 안 적는다", ND, "                \"progress_mark\": _progress(state),\n                \"round\": 1}", "                \"round\": 1}", [STALL_T]),
+ ("끝난 읽기를 진척으로 안 센다", ND, "    return len(state.evidence) + sum(1 for t in state.plan_tasks if t.status == \"ok\")\n", "    return len(state.evidence)\n", [STALL_T]),
+ ("가설이 다 닫혀도 계속한다", ND, "        if not fresh and settled and not any(h.status == \"open\" for h in settled):\n", "        if False:\n", [SETTLED_T]),
+ ("새 작업이 있어도 가설이 닫히면 판정한다", ND, "        if not fresh and settled and not any(", "        if settled and not any(", [SETTLED_T]),
+ ("정체로 끝난 이유를 판정 재료가 말로 안 옮긴다", B, "          \"stalled\": \"두 라운드 연달아 새 증거가 없었다(낸 읽기가 전부 반려·중복·실패)\",\n", "", [STALL_T]),
+]
+assert len(CASES) >= 1217, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
