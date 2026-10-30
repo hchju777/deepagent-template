@@ -792,8 +792,17 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr("sys.argv", [
         "src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"),
         "case", "investigate", case_id, "--stub-seeds", str(seeds)])
+    import src.__main__ as cli
+    handed, real = {}, cli._peer_reader
+
+    def spy(*args, **kwargs):
+        handed.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_peer_reader", spy)
 
     assert main() == 0                       # LLM 오류가 없으면 0
+    assert (handed["bundle"].parent.name, handed["bundle"].name) == ("graph", "mx")     # 다른 사이트 이름 목록은 번들에서(R3-5w ①)
     out = capsys.readouterr().out
     assert "끝난 이유: decision" in out
     assert "h-1 [refuted]" in out

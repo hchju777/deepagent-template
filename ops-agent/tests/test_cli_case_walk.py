@@ -53,9 +53,18 @@ def test_case_walk은_target으로_입구를_돌리고_케이스_블록만_찍�
              "redis": {"alarm:stats:L1": json.dumps({"record": [{"summary_info": {"group": "L1", "title": "Alarm"}, "data": []}]})}}
     (tmp_path / "seeds.json").write_text(json.dumps(seeds, ensure_ascii=False), encoding="utf-8")
     before = sorted(p.name for p in tmp_path.iterdir())
+    import src.__main__ as cli
+    handed, real = {}, cli._peer_reader
+
+    def spy(*args, **kwargs):
+        handed.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_peer_reader", spy)
     code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk", "--target", "L1/Up/Down Rate", "--check", "badge_all_zero",
                      "--stub-seeds", str(tmp_path / "seeds.json"), "--gbm", "mx", "--fct", "gumi")
     assert code == 0, out.out + out.err
+    assert handed["bundle"] == tmp_path / "out" / "graph" / "mx"                     # 다른 사이트 이름 목록은 번들에서(R3-5w ①)
     assert "사이트: mx/gumi" in out.out and "증상: L1/Up/Down Rate — case walk(측정)" in out.out
     assert "입구 노드가 이미 읽었다: 접수 읽기(t-0.e1)" in out.out
     # 제목의 '/'를 쪼개지 않고 통째로 대상 행을 골랐다 — 코드 번들이 없어 후보 키가 없다는 데서 멈추지만 대상 행은 찾았다. R3-5 ②의 이 테스트는
@@ -117,6 +126,47 @@ def test_peer_reader는_같은_GBM의_다른_사이트에_같은_키를_그_사�
     (root / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")
     peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=seeds, names_for=names_for)
     assert asyncio.run(peer("gumi:k:L1", "gumi:k:{line}")) is None and PEER_SITES == 3
+    asyncio.run(close())
+
+
+def test_peer_reader는_번들의_사이트별_이름_목록을_만들_때_읽고_번들에_없는_사이트만_층에서_찾는다(tmp_path):
+    """R3-5w ① — 측정 #31 b: 이 사이트 이름 목록의 첫 생성이 12초(층 파일을 git으로)였고 그 시간이 걷기 30초 상한 안이었다(다른 사이트 0.3초, 그 Redis 0.1초).
+    `code graph`가 사이트마다 푼 이름 목록(`sites/<fct>.names.json`)을 리더를 **만들 때** 읽는다 — 걷기 시계가 돌기 전이다. 번들에 없는 사이트만 전처럼
+    `names_for`(걷기 안에서, 그 사이트를 처음 물을 때)."""
+    import asyncio
+    import shutil
+    from datetime import datetime
+    from src.__main__ import _peer_reader
+    from src.knowledge import graph_build as gb
+    from src.knowledge.flow import Name
+
+    clock = lambda: datetime(2026, 11, 3, 9, 0)                                      # noqa: E731
+    root = _root(tmp_path)
+    (root / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}, {"gbm": "mx", "fct": "sevt"}, {"gbm": "mx", "fct": "suwon"}]}),
+                                        encoding="utf-8")
+
+    def listed(site, *tokens):
+        return ([Name("rediskey", f"{site}:{tok}" + (":{line}" if tok == "k" else ""), f"redis_key.{tok}", code_value=tok) for tok in tokens]
+                + [Name("topic", f"{site}.raw", "infra.kafka.consumer.topic.topic1", "consumes")])
+
+    bundle = tmp_path / "bundle"
+    gb.write_site_names(bundle, "gumi", listed("gumi", "k", "other"))
+    gb.write_site_names(bundle, "sevt", listed("sevt", "k"))
+    asked = []
+
+    async def names_for(site):
+        asked.append(site)
+        return listed(site, "k", "other"), []
+
+    w1 = json.dumps({"metadata": {"event_type": "W1"}})
+    seeds = {"redis": {}, "peers": {"sevt": {"redis": {"sevt:k:L7": w1}}, "suwon": {"redis": {"suwon:other": "x"}}}}
+    peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=seeds, names_for=names_for, bundle=bundle)
+    shutil.rmtree(bundle)                                                             # 만들 때 읽었다 — 걷기 중에는 번들을 안 본다
+    assert asyncio.run(peer("gumi:k:L1", "gumi:k:{line}")) == ("sevt", "sevt:k:L7", {"type": "string", "value": w1}, {"sevt.raw": "gumi.raw"})
+    assert asked == []                                                                # 이 사이트도 sevt도 번들에서
+    # sevt는 `other`를 선언하지 않는다(번들) — suwon은 번들에 없어 층에서
+    assert asyncio.run(peer("gumi:other", "gumi:other")) == ("suwon", "suwon:other", {"type": "string", "value": "x"}, {"suwon.raw": "gumi.raw"})
+    assert asked == ["suwon"]
     asyncio.run(close())
 
 

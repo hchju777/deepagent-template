@@ -369,6 +369,29 @@ def read_site(bundle: Path, fct: str) -> list[dict] | None:
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
 
 
+def site_names_file(bundle: Path, fct: str) -> Path:
+    """그 사이트의 이름 목록 **전부** — `[{kind, key_path, value, services}]`(R3-5w ① — 측정 #31 b: 걷기의 다른 사이트 조회가 이 사이트 이름 목록을 처음
+    만들 때 층 파일을 git으로 읽어 12초, 걷기 30초 상한 안이었다). `code graph`가 덮은 값을 가르려고 어차피 사이트마다 푼다 — 걷기는 이것을 읽는다."""
+    return Path(bundle) / "sites" / f"{fct}.names.json"
+
+
+def write_site_names(bundle: Path, fct: str, names) -> None:
+    path = site_names_file(bundle, fct)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [{"kind": n.kind, "key_path": n.key_path, "value": n.value, "services": list(n.services)}
+            for n in sorted(names, key=lambda n: (n.kind, n.key_path, n.value))]
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def read_site_names(bundle: Path, fct: str) -> list[dict] | None:
+    """없으면 None — 그 사이트를 번들에 안 만들었다(옛 번들·`--fct`로 고른 사이트 밖). 빈 목록은 "이름이 없다"."""
+    try:
+        rows = json.loads(site_names_file(bundle, fct).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
+
+
 def now_text(clock) -> str:
     when = clock()
     return when.isoformat(timespec="seconds") if isinstance(when, datetime) else str(when)

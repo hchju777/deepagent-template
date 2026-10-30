@@ -842,6 +842,11 @@ def test_code_graph는_GBM_하나에_번들을_만들고_사이트는_덮은_값
     sites = {fct: json.loads((bundle / "sites" / f"{fct}.json").read_text(encoding="utf-8")) for fct in ("gumi", "sevt")}
     assert [(r["key_path"], r["value"]) for r in sites["gumi"]] == [("infra.kafka.consumer.group_id", "gumi-mx-core")]
     assert [(r["key_path"], r["value"]) for r in sites["sevt"]] == [("infra.kafka.consumer.group_id", "sevt-mx-core")]
+    # 덮은 값만이 아니라 그 사이트의 이름 전부도(R3-5w ①) — 걷기의 다른 사이트 조회가 git 없이 읽는다.
+    from src.knowledge import graph_build as gb
+    for fct in ("gumi", "sevt"):
+        listed = {(n["kind"], n["key_path"], n["value"]) for n in gb.read_site_names(bundle, fct)}
+        assert ("group", "infra.kafka.consumer.group_id", f"{fct}-mx-core") in listed and len(listed) > 1
     # 사이트 층은 스냅샷에서 — config 파일을 git에 다시 묻지 않는다(사이트 28 × 서비스 × 층).
     assert [a for a in spawned if a[0] == "show" and "config/" in a[1]] == [], "config 층을 show로 읽었다"
     assert "사이트 2" in captured.out and "gumi" in captured.out and "sevt" in captured.out

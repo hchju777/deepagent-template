@@ -242,6 +242,24 @@ def test_번들은_GBM_단위이고_사이트는_덮은_값_파일이다(tmp_pat
     assert gb.read_site(bundle, "sevt") == []
 
 
+def test_번들은_사이트마다_그_사이트의_이름_목록_전부도_든다(tmp_path):
+    """R3-5w ① — 측정 #31 b: 걷기의 다른 사이트 조회가 이 사이트 이름 목록을 처음 만들 때 12초(층 파일을 git으로)였고 걷기 30초 상한 안이었다. `code graph`는
+    사이트마다 이름을 이미 푼다(덮은 값을 가르려고) — 덮은 값만이 아니라 그 사이트의 이름 전부를 `sites/<fct>.names.json`에 둔다. 없으면 None(안 만든 사이트)."""
+    from src.knowledge.flow import Name
+
+    bundle = gb.bundle_dir(tmp_path / "out", "mx")
+    names = [Name("rediskey", "sevt:k:{line}", "redis_key.k", services=("batch",), code_value="k"),
+             Name("topic", "sevt.raw", "infra.kafka.consumer.topic.topic1", "consumes", services=("processor",))]
+    gb.write_site_names(bundle, "sevt", names)
+    assert gb.site_names_file(bundle, "sevt") == bundle / "sites" / "sevt.names.json"
+    assert gb.read_site_names(bundle, "sevt") == [
+        {"kind": "rediskey", "key_path": "redis_key.k", "value": "sevt:k:{line}", "services": ["batch"]},
+        {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic1", "value": "sevt.raw", "services": ["processor"]}]
+    assert gb.read_site_names(bundle, "gumi") is None
+    gb.write_site_names(bundle, "gumi", [])
+    assert gb.read_site_names(bundle, "gumi") == []
+
+
 def test_옛_번들의_meta도_읽힌다():
     """`sites`가 없던 번들(11e 전)을 읽어도 죽지 않는다 — 낡음 판정이 말하게 둔다."""
     meta = gb.GraphMeta(gbm="mx", fct="gumi", commits={}, built_at="t", graphify="없음")

@@ -1456,8 +1456,8 @@ CASES += [
   '    return Path(output_dir) / "graph" / f"{gbm}-gumi"\n',
   [f"{GBT}::test_번들은_GBM_단위이고_사이트는_덮은_값_파일이다"]),
  ("없는 사이트 파일이 빈 목록으로 읽힌다", GBD,
-  '    except (OSError, ValueError):\n        return None\n    return [r for r in rows',
-  '    except (OSError, ValueError):\n        return []\n    return [r for r in rows',
+  '        rows = json.loads(site_file(bundle, fct).read_text(encoding="utf-8"))\n    except (OSError, ValueError):\n        return None\n    return [r for r in rows',
+  '        rows = json.loads(site_file(bundle, fct).read_text(encoding="utf-8"))\n    except (OSError, ValueError):\n        return []\n    return [r for r in rows',
   [f"{GBT}::test_번들은_GBM_단위이고_사이트는_덮은_값_파일이다",
    "tests/knowledge/test_cli_code.py::test_사이트_파일이_없으면_GBM_값_그대로_싣고_말한다"]),
  ("덮은 값을 입혀도 엣지가 옛 노드를 가리킨다", FLW,
@@ -3561,7 +3561,7 @@ CASES += [
  ("다른 사이트 키를 이 사이트 이름 그대로 묻는다", MN, "                named = await renamed(entry, key, template)\n", "                named = (key, template)\n", [PEER_CLI_T, BOARD_PEER_T]),
  ("scan 패턴을 이 사이트 템플릿의 머리로 만든다", MN, "                scanned = await got_reader.scan(f\"{key_head(their_template)}*\")\n", "                scanned = await got_reader.scan(f\"{key_head(template)}*\")\n", [PEER_CLI_T]),
  ("그 사이트가 선언하지 않은 키도 글자 그대로 묻는다", MN, "                if named is None:\n                    continue                                       # 그 사이트는 그 키를 선언하지 않는다 — 읽지 않는다(묻는 수에도 안 센다)\n", "                if named is None:\n                    named = (key, template)\n", [PEER_CLI_T]),
- ("CLI가 peer 리더에 이름 목록을 안 준다", MN, "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)\n        try:\n            # 조사(", "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)\n        try:\n            # 조사(", [BOARD_PEER_T]),
+ ("CLI가 peer 리더에 이름 목록을 안 준다", MN, "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None,\n                                         bundle=_graph_dir(args, env, gbm))\n        try:\n            # 조사(", "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)\n        try:\n            # 조사(", [BOARD_PEER_T]),
  ("palette-source-missing의 sevt 키에 접두어가 없다", LC, "        **({\"peers\": {\"sevt\": {\"redis\": {\"sevt:palette:source\": json.dumps(", "        **({\"peers\": {\"sevt\": {\"redis\": {\"palette:source\": json.dumps(", [BOARD_PEER_T, LOCAL_PALETTE_T]),
  ("sevt 층에 키 접두어가 없다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n        \"redis_key\": {\"prefix\": \"sevt\"},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
 ]
@@ -3707,7 +3707,21 @@ CASES += [
  ("액션마다 스키마의 인자를 닫지 않는다", LD, "                       \"required\": list(required), \"additionalProperties\": False},\n", "                       \"required\": list(required)},\n", [SCHEMA_PER_ACTION_T]),
  ("액션마다 스키마에 필수 인자가 없다", LD, "                       \"required\": list(required), \"additionalProperties\": False},\n", "                       \"required\": [], \"additionalProperties\": False},\n", [SCHEMA_PER_ACTION_T]),
 ]
-assert len(CASES) >= 1237, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5w ① — 다른 사이트 이름 목록은 번들에서, 걷기 시계 밖에서 ──
+GNAMES_T = "tests/knowledge/test_graph_build.py::test_번들은_사이트마다_그_사이트의_이름_목록_전부도_든다"
+GNAMES_CLI_T = "tests/knowledge/test_cli_code.py::test_code_graph는_GBM_하나에_번들을_만들고_사이트는_덮은_값만_적는다"
+PEER_BUNDLE_T = "tests/test_cli_case_walk.py::test_peer_reader는_번들의_사이트별_이름_목록을_만들_때_읽고_번들에_없는_사이트만_층에서_찾는다"
+WALK_WIRE_T = "tests/test_cli_case_walk.py::test_case_walk은_target으로_입구를_돌리고_케이스_블록만_찍으며_아무것도_남기지_않는다"
+INV_WIRE_T = "tests/application/test_lead.py::test_CLI가_실제로_돈다"
+CASES += [
+ ("번들에 사이트 이름 목록을 안 쓴다", MN, "        gb.write_site_names(out_dir, one, _run(code.names_for(one))[0])\n", "", [GNAMES_CLI_T]),
+ ("번들 이름 목록을 안 읽는다", MN, "    if bundle is not None:\n        from src.knowledge import graph_build as gb\n", "    if False:\n        from src.knowledge import graph_build as gb\n", [PEER_BUNDLE_T]),
+ ("번들에 없는 사이트도 층에서 안 찾는다", MN, "            if names_for is not None:\n                try:\n                    found, _ = await names_for(site)", "            if names_for is not None and bundle is None:\n                try:\n                    found, _ = await names_for(site)", [PEER_BUNDLE_T]),
+ ("없는 이름 목록 파일을 빈 목록으로 읽는다", GBD, "        rows = json.loads(site_names_file(bundle, fct).read_text(encoding=\"utf-8\"))\n    except (OSError, ValueError):\n        return None", "        rows = json.loads(site_names_file(bundle, fct).read_text(encoding=\"utf-8\"))\n    except (OSError, ValueError):\n        return []", [GNAMES_T]),
+ ("case walk가 번들 자리를 안 넘긴다", MN, "clock=clock, graph_dir=_graph_dir(args, env, gbm))\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None,\n                                         bundle=_graph_dir(args, env, gbm))", "clock=clock, graph_dir=_graph_dir(args, env, gbm))\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)", [WALK_WIRE_T]),
+ ("조사가 번들 자리를 안 넘긴다", MN, "        built[\"graph\"] = graph_note\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None,\n                                         bundle=_graph_dir(args, env, gbm))", "        built[\"graph\"] = graph_note\n        adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)\n        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)", [INV_WIRE_T]),
+]
+assert len(CASES) >= 1243, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

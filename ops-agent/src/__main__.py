@@ -191,14 +191,17 @@ async def _close_llms(*llms) -> None:
 PEER_SITES = 3
 
 
-def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], clock, seeds: dict | None, names_for=None):
+def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], clock, seeds: dict | None, names_for=None, bundle: Path | None = None):
     """같은 GBM의 다른 사이트에서 같은 키의 값을 읽는 `peer(키, 템플릿)`와 닫는 함수(R3-5t ② — 측정 #29 3부: 인덱스가 모르는 쓴 쪽을 리드가 "쓰는 코드 누락"으로
     읽었다). `(사이트, 읽은 키, 값, 그 사이트 토픽 값 → 이 사이트 토픽 값)`(넷째는 R3-5u ① — 값의 `metadata.source.topic`을 이 사이트 이름으로). 물을 키는 **그 사이트의 이름**으로 다시 만든다(R3-5t ④ — 측정 #30: 사이트마다 키에 자기 접두어(`키 접두어 항목`)가 붙어 이
     사이트 키를 글자 그대로 물으면 어느 사이트에도 없다, 채움 0): 이 사이트의 이름 목록(`names_for(fct)` — 이 사이트 키를 만든 것과 같은 config 경로)에서 그 템플릿의
     key_path를 찾고, 그 사이트의 이름 목록에서 같은 key_path의 값을 가져와 자리는 이 사이트 키에서 채운다(`fill_key`); scan 패턴도 그 값의 머리로. 문자열 바꿈 규칙이
     아니다. 이름 목록이 없거나(인덱스 없음) 이 사이트 이름에 그 템플릿이 없으면 글자 그대로; 그 사이트가 그 key_path를 선언하지 않으면 거기엔 없는 것(읽지 않는다).
     같은 키가 없으면 같은 템플릿의 첫 키, 그것도 없으면 다음 사이트; registry 순서, 키마다 `PEER_SITES`곳까지, 한 번 못 읽은 사이트는 다시 안 묻는다. 읽기 전용
-    (`get`·`scan`)이고 stub은 시드의 `peers.<fct>.redis`(없는 사이트는 못 읽는 사이트). 던지지 않는다 — 못 읽으면 None."""
+    (`get`·`scan`)이고 stub은 시드의 `peers.<fct>.redis`(없는 사이트는 못 읽는 사이트). 던지지 않는다 — 못 읽으면 None.
+
+    이름 목록은 번들(`bundle`)의 사이트별 목록(`sites/<fct>.names.json`)을 **여기서**, 걷기 전에 읽는다(R3-5w ① — 측정 #31 b: 이 사이트 목록의 첫 생성이
+    층 파일 git으로 12초였고 걷기 30초 상한 안이었다). 번들에 없는 사이트만 `names_for`로, 그 사이트를 처음 물을 때."""
     from src.application.facts import key_head
     from src.application.walk import fill_key
 
@@ -207,14 +210,23 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
     dead: set[str] = set()
     tables: dict[str, dict[str, dict[str, str]] | None] = {}       # 사이트 → 종류(rediskey·topic) → key_path → 그 사이트의 값; None이면 이름 목록이 없다
 
+    def table_of(rows) -> dict[str, dict[str, str]]:
+        return {kind: {r["key_path"]: r["value"] for r in rows if r["kind"] == kind} for kind in ("rediskey", "topic")}
+
+    if bundle is not None:
+        from src.knowledge import graph_build as gb
+        for site in (fct, *(e.fct for e in others)):
+            rows = gb.read_site_names(bundle, site)
+            if rows is not None:
+                tables[site] = table_of(rows)
+
     async def names_of(site: str):
         if site not in tables:
             table = None
             if names_for is not None:
                 try:
                     found, _ = await names_for(site)
-                    table = {"rediskey": {n.key_path: n.value for n in found if n.kind == "rediskey"},
-                             "topic": {n.key_path: n.value for n in found if n.kind == "topic"}}
+                    table = table_of([{"kind": n.kind, "key_path": n.key_path, "value": n.value} for n in found])
                 except Exception:                                  # noqa: BLE001 — 그 사이트의 층을 못 읽었다
                     table = None
             tables[site] = table
@@ -1213,7 +1225,8 @@ def cmd_case_walk(args, env) -> int:
         code, services, flow_graph, graph_note = _code_if_ready(
             site, gbm, fct, knowledge_root=_knowledge_root(args), clock=clock, graph_dir=_graph_dir(args, env, gbm))
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
-        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)
+        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None,
+                                         bundle=_graph_dir(args, env, gbm))
         try:
             # 조사(`cmd_case_investigate`)와 같은 재료 — 다른 것은 리드(`_no_lead`)뿐이다. 여기서 갈라지면 `case walk`가 조사와 다른 걷기를 보여 준다.
             deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock, detail_chars=app.investigation.evidence_chars,
@@ -1309,7 +1322,8 @@ def cmd_case_investigate(args, env) -> int:
         built["code"] = code.describe() if code else "코드 없음"
         built["graph"] = graph_note
         adapters = build_adapters(site, clock=clock, seeds=seeds, code=code)
-        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)
+        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None,
+                                         bundle=_graph_dir(args, env, gbm))
         try:
             frame, integrate, conclude = make_lead(
                 llm, site_config=site, prompts=prompts,
@@ -1763,6 +1777,8 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
     for one in fcts:
         rows = _run(code.site_overrides(one, names))
         gb.write_site(out_dir, one, rows)
+        # 그 사이트의 이름 전부도(R3-5w ①) — 걷기의 다른 사이트 조회가 git 없이, 걷기 시계 밖에서 읽는다. 스냅샷에서 병합하므로 git은 안 는다.
+        gb.write_site_names(out_dir, one, _run(code.names_for(one))[0])
         site_counts[one] = len(rows)
     progress(f"사이트 {len(fcts)}개 덮은 값: " + " · ".join(f"{f} {n}" for f, n in site_counts.items()))
     shutil.rmtree(out_dir / "worktrees", ignore_errors=True)      # 빈 껍데기만 남는다
