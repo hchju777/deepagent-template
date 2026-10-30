@@ -3382,7 +3382,7 @@ CASES += [
  ("쓰는 클래스를 선언한 서비스로 안 거른다", WK, "        picked = [(c, s) for c, s in found if s in declared] or found", "        picked = found", [KEYED_T]),
  ("쓰는 클래스가 여럿이어도 첫 것을 채운다", WK, "        if len(writers) != 1:\n            remember(", "        if not writers:\n            remember(", [KEYED_T]),
  ("없는 키의 쓴 쪽을 안 찾는다", WK, "                keyed = (await keyed_writer(name, label)) if (got.status == \"ok\" and raw is None and not w and kind == \"rediskey\") else None", "                keyed = None", [KEYED_T, BOARD_KEYED_T]),
- ("쓰는 클래스로 더 걷는다", WK, "                    w, shown, cands, params_k, uses_ev, origin = keyed\n                    next_branches = []", "                    w, shown, cands, params_k, uses_ev, origin = keyed\n                    next_branches, _, _ = branches(w, name)", [KEYED_T]),
+ ("쓰는 클래스로 더 걷는다", WK, "                    w, shown, cands, params_k, uses_ev, origin, source = keyed\n                    next_branches = []", "                    w, shown, cands, params_k, uses_ev, origin, source = keyed\n                    next_branches, _, _ = branches(w, name)", [KEYED_T]),
  ("빈 토픽을 나쁨으로 안 본다", WK, "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), not left, f\"범위 {rng}, 남은 메시지 {left}\"", "    return (f\"비었다 — {text}\" if not left else f\"정상 — {text}\"), False, f\"범위 {rng}, 남은 메시지 {left}\"", [KEYED_T, BOARD_KEYED_T]),
  ("구독 토픽이 비어도 멈춤이 키가 없다다", WK, "        if stop_hop.kind == \"topic\" and ev in topics_at:", "        if False:", [KEYED_T, BOARD_KEYED_T]),
 ]
@@ -3433,7 +3433,7 @@ CASES += [
  ("code.resources 실패를 조용히 넘긴다", WK, "                            remember(f\"{w}: code.resources 실패 — {(rgot.error or '증거 없음').splitlines()[0][:120]} — 구독 토픽을 모른다\")\n", "                            pass\n", [KEYED_T]),
  ("멈춤 꼬리에 서비스 선언 수를 안 적는다", WK, "                                tail_note = f\"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)\"\n", "                                tail_note = \"구독 토픽 없음\"\n", [KEYED_T, BOARD_PALETTE_T]),
  ("첫 칸이 클래스 본문이 아니다", WK, "        if body_ is None or not rev_:\n            return [Rung(action=\"code.resources\"", "        if True:\n            return [Rung(action=\"code.resources\"", [KEYED_T, BOARD_KEYED_T]),
- ("토픽 홉의 근거가 클래스의 자원 증거를 안 댄다", WK, "basis=f\"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언\"", "basis=f\"{w}가 읽는 토픽 — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언\"", [KEYED_T]),
+ ("토픽 홉의 근거가 클래스의 자원 증거를 안 댄다", WK, "                    topic_basis = topic_basis or f\"{w}가 읽는 토픽(code.resources {rev})\"\n", "                    topic_basis = topic_basis or f\"{w}가 읽는 토픽\"\n", [KEYED_T]),
  ("빈 토픽 멈춤의 둘째 칸이 본문이 아니다", WK, "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), *body_rungs(key_ev)]\n", "            rungs += [Rung(action=\"kafka.tail\", params={\"topic\": stop_hop.key, \"limit\": 5}, evidence=ev), Rung(action=\"code.resources\", params={\"name\": w_, **params_}, evidence=key_ev)]\n", [KEYED_T, BOARD_KEYED_T]),
 ]
 
@@ -3546,9 +3546,9 @@ PEER_CLI_T = "tests/test_cli_case_walk.py::test_peer_reader는_같은_GBM의_다
 BOARD_PEER_T = "tests/test_board_walk.py::test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다"
 LOCAL_PALETTE_T = "tests/test_local_case.py::test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_클래스는_서비스_디렉터리_밖과_다른_레포에_같은_이름으로_있다"
 CASES += [
- ("쓰기 줄 0이어도 다른 사이트 값을 안 본다", WK, "            elsewhere = await peer_writer(template, key)\n", "            elsewhere = None\n", [PEER_T, BOARD_PEER_T]),
- ("다른 사이트 값의 출처를 쓴 쪽 칸에 안 적는다", WK, "            return w, f\"{shown} · {fct} 값의 {at}\", cands, params, uev, f\"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})\"\n", "            return w, shown, cands, params, uev, f\"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})\"\n", [PEER_T, BOARD_PEER_T]),
- ("다른 사이트 값이 인덱스 클래스를 안 대도 쓴 쪽으로 쓴다", WK, "        return (w, at, fct, read_key) if w else None\n", "        return (w or \"refresh-job\", at, fct, read_key)\n", [PEER_T]),
+ ("쓰기 줄 0이어도 다른 사이트 값을 안 본다", WK, "            elsewhere = await peer_writer(template, key)\n", "            elsewhere = \"다른 사이트에도 없다\"\n", [PEER_T, BOARD_PEER_T]),
+ ("다른 사이트 값의 출처를 쓴 쪽 칸에 안 적는다", WK, "            return (w, f\"{shown} · {fct} 값의 {at}\", cands, params, uev, f\"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})\",\n", "            return (w, shown, cands, params, uev, f\"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})\",\n", [PEER_T, BOARD_PEER_T]),
+ ("다른 사이트 값이 인덱스 클래스를 안 대도 쓴 쪽으로 쓴다", WK, "        if not w:\n            return f\"{fct}의 같은 키 {read_key} 값이 대는 이름은 인덱스 클래스가 아니다\"\n", "        if not w:\n            w = \"refresh-job\"\n", [PEER_T]),
  ("peer 리더가 다른 GBM의 사이트도 묻는다", MN, "    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]\n", "    others = [e for e in load_registry(config_root).active() if e.fct != fct]\n", [PEER_CLI_T]),
  ("peer 리더가 비활성 사이트도 묻는다", MN, "    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]\n", "    others = [e for e in load_registry(config_root).sites if e.gbm == gbm and e.fct != fct]\n", [PEER_CLI_T]),
  ("안 닿은 사이트를 다시 묻는다", MN, "                if got is not None and got.status != \"ok\":\n                    dead.add(entry.fct)\n                    continue\n", "                if got is not None and got.status != \"ok\":\n                    continue\n", [PEER_CLI_T]),
@@ -3563,9 +3563,20 @@ CASES += [
  ("그 사이트가 선언하지 않은 키도 글자 그대로 묻는다", MN, "                if named is None:\n                    continue                                       # 그 사이트는 그 키를 선언하지 않는다 — 읽지 않는다(묻는 수에도 안 센다)\n", "                if named is None:\n                    named = (key, template)\n", [PEER_CLI_T]),
  ("CLI가 peer 리더에 이름 목록을 안 준다", MN, "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)\n        try:\n            # 조사(", "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)\n        try:\n            # 조사(", [BOARD_PEER_T]),
  ("palette-source-missing의 sevt 키에 접두어가 없다", LC, "        **({\"peers\": {\"sevt\": {\"redis\": {\"sevt:palette:source\": json.dumps(", "        **({\"peers\": {\"sevt\": {\"redis\": {\"palette:source\": json.dumps(", [BOARD_PEER_T, LOCAL_PALETTE_T]),
- ("sevt 층에 키 접두어가 없다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\"}}},\n        \"redis_key\": {\"prefix\": \"sevt\"}},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\"}}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
+ ("sevt 층에 키 접두어가 없다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n        \"redis_key\": {\"prefix\": \"sevt\"}},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
 ]
-assert len(CASES) >= 1159, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5u ① — 채운 쓴 쪽의 코드에 구독 토픽이 없으면 다른 사이트 값의 source.topic을 이 사이트 이름으로 ──
+PEER_TOPIC_T = "tests/application/test_walk.py::test_채운_쓴_쪽의_코드에_구독_토픽이_없으면_다른_사이트_값의_source_topic을_이_사이트_이름으로_바꿔_입력_토픽_홉으로_잇는다"
+CASES += [
+ ("채운 쓴 쪽의 토픽을 값의 source.topic으로 안 잇는다", WK, "                    if not topics and not stopped and src_here:\n                        topics = [src_here]\n", "                    if False:\n                        topics = [src_here]\n", [PEER_TOPIC_T, BOARD_PEER_T]),
+ ("코드에 구독 토픽이 있어도 값의 source.topic으로 바꾼다", WK, "                    if not topics and not stopped and src_here:\n", "                    if not stopped and src_here:\n", [PEER_TOPIC_T]),
+ ("값의 source.topic을 이 사이트 이름으로 안 바꾼다", MN, "        return {their: mine[\"topic\"][path] for path, their in theirs[\"topic\"].items() if path in mine[\"topic\"]}\n", "        return {}\n", [PEER_CLI_T, BOARD_PEER_T]),
+ ("다른 사이트를 안 물은 까닭을 주에 안 적는다", WK, "            return \"다른 사이트 값은 안 물었다(읽기·시간 상한)\"\n", "            return \"다른 사이트에도 없다\"\n", [PEER_TOPIC_T]),
+ ("palette-source-missing의 sevt 값에 source가 없다", LC, "                                                                                    \"source\": {\"topic\": \"sevt.alarm.main\", \"partition\": 0, \"offset\": 3}},\n", "                                                                                    },\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
+ ("sevt 층이 topic2를 사이트 이름으로 안 덮는다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\"}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
+]
+assert len(CASES) >= 1165, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

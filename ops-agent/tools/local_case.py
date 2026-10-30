@@ -139,8 +139,9 @@ CORE_FILES = {
     "config/factories/sevt/common.json": {"lines": LINES, "site_code": "sevt"},
     # sevt 층은 redis 키에 자기 접두어를 붙인다 — 사내 모양(측정 #30): 사이트마다 `키 접두어 항목`가 달라 다른 사이트의 같은 키는 그 사이트의 이름으로 물어야
     # 한다(R3-5t ④). gumi는 접두어 없이 둔다 — 측정판의 키 이름 전부가 바뀌지 않게, 번역은 sevt 쪽에서 보인다.
+    # topic2도 사이트 이름으로 덮는다 — 다른 사이트 값의 `metadata.source.topic`이 그 사이트 이름이라 이 사이트 이름으로 바꿔야 한다(R3-5u ①).
     "config/factories/sevt/mx.json": {
-        "infra": {"kafka": {"consumer": {"group_id": "sevt-mx-core"}}},
+        "infra": {"kafka": {"consumer": {"group_id": "sevt-mx-core", "topic": {"topic2": "sevt.alarm.main"}}}},
         "redis_key": {"prefix": "sevt"}},
     "processor/handler.py": '''"""alarm_raw를 읽어 정규화한 뒤 alarm_main으로 낸다."""
 from shared_lib import normalize, now
@@ -465,14 +466,14 @@ class PaletteLoader:
 
 class PaletteSeeder:
     """원천 색 목록을 메시지로 받아 키로 쓴다 — 쓰기가 레지스트리 컴포넌트의 결과(명령)를 거쳐 **인덱스가 쓰는 줄을 못 본다**(사내 P1-7의 모양, R3-5t ②).
-    키 토큰이 이 파일에 없으니 `code uses palette:source`의 쓰기 줄은 0이고, 쓴 쪽은 값(`metadata.event_type`)에서만 알 수 있다."""
+    키 토큰이 이 파일에 없으니 `code uses palette:source`의 쓰기 줄은 0이고, 쓴 쪽은 값(`metadata.event_type`)에서만 알 수 있다. 구독도 레지스트리 경유라
+    코드에 토픽이 없다(R3-5u ① — 사내 `<PGM 클래스>`의 모양): 입력 토픽은 값의 `metadata.source`(메시지 포인터)에서만."""
 
-    def __init__(self, cfg, consumer, registry, storage):
-        self.cfg, self.consumer, self.registry, self.storage = cfg, consumer, registry, storage
+    def __init__(self, cfg, registry, storage):
+        self.cfg, self.registry, self.storage = cfg, registry, storage
 
     def run(self):
-        kafka = self.cfg["infra"]["kafka"]
-        for msg in self.consumer.subscribe(kafka["consumer"]["topic"]["topic2"], group=kafka["consumer"]["group_id"]):
+        for msg in self.registry["palette_feed"].messages():
             command = self.registry["palette_writer"].process(msg)
             self.storage.save(command)
 ''',
@@ -753,7 +754,9 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                                  {"name": "normal", "hex": "#3a3", "enabled": False}])}),
             "hb:processor": fresh(0), "hb:sink": fresh(0) if sink_alive else _iso(stale)},
         # 같은 GBM의 다른 사이트(sevt)의 Redis — 걷기가 인덱스가 모르는 쓴 쪽을 거기 같은 키 값에서 채운다(R3-5t ②). 그 변형에만 — 다른 변형의 걷기는 안 묻는다.
-        **({"peers": {"sevt": {"redis": {"sevt:palette:source": json.dumps({"metadata": {"event_type": "PaletteSeeder"},
+        **({"peers": {"sevt": {"redis": {"sevt:palette:source": json.dumps({"metadata": {"event_type": "PaletteSeeder",
+                                                                                    # 그 키를 만든 메시지의 포인터 — sevt 이름의 토픽(R3-5u ①)
+                                                                                    "source": {"topic": "sevt.alarm.main", "partition": 0, "offset": 3}},
                                                                        "colors": [{"name": "alarm", "hex": "#d33", "enabled": True}]})}}}}
            if variant == "palette-source-missing" else {}),
         # 등재된 항목 전부에 답을 둔다 — 없는 항목은 stub이 404를 내고, 그건 리드에게

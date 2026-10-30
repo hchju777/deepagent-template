@@ -182,8 +182,15 @@ def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_�
     assert "palette:source" not in psm["redis"] and json.loads(psm["redis"]["alarm:palette"])["colors"] == []
     # sevt 층은 키에 자기 접두어를 붙인다(R3-5t ④ — 사내 모양: 사이트마다 `키 접두어 항목`); gumi는 접두어 없이 그대로라 측정판 키 이름은 안 바뀐다
     assert CORE_FILES["config/factories/sevt/mx.json"]["redis_key"] == {"prefix": "sevt"} and "redis_key" not in CORE_FILES["config/factories/gumi/mx.json"]
-    assert json.loads(psm["peers"]["sevt"]["redis"]["sevt:palette:source"])["metadata"]["event_type"] == "PaletteSeeder" and "peers" not in gone
-    assert "class PaletteSeeder:" in CORE_FILES["common/palette.py"] and "palette_source" not in CORE_FILES["common/palette.py"].split("class PaletteSeeder:")[1]
+    seeded = json.loads(psm["peers"]["sevt"]["redis"]["sevt:palette:source"])["metadata"]
+    assert seeded["event_type"] == "PaletteSeeder" and "peers" not in gone
+    seeder_src = CORE_FILES["common/palette.py"].split("class PaletteSeeder:")[1]
+    assert "class PaletteSeeder:" in CORE_FILES["common/palette.py"] and "palette_source" not in seeder_src
+    # 구독도 레지스트리 경유라 코드에 토픽이 없다(R3-5u ① — 사내 `<PGM 클래스>`의 모양). 값의 `metadata.source.topic`은 sevt 이름(sevt 층이 topic2를 덮은 값)이고
+    # 걷기가 이 사이트 이름(`mx.alarm.main`)으로 바꿔 입력 토픽 홉으로 잇는다.
+    assert "subscribe" not in seeder_src and "topic" not in seeder_src
+    assert seeded["source"] == {"topic": "sevt.alarm.main", "partition": 0, "offset": 3}
+    assert CORE_FILES["config/factories/sevt/mx.json"]["infra"]["kafka"]["consumer"]["topic"] == {"topic2": "sevt.alarm.main"}
 
 
 # ── R3-5 ④ — 사내 c-1·c-2의 사슬과 등록 모음 파일 ──

@@ -1084,7 +1084,7 @@ async def test_걸은_클래스의_구독_토픽_입력은_보존_범위로_읽�
 
 
 class _Peer:
-    """`peer(키, 템플릿)` 대역 — 키 → (사이트, 읽은 키, 값). 없는 키는 None. 던지는 키는 예외."""
+    """`peer(키, 템플릿)` 대역 — 키 → (사이트, 읽은 키, 값, 그 사이트 토픽 값 → 이 사이트 토픽 값). 셋짜리는 빈 표를 붙인다. 없는 키는 None. 던지는 키는 예외."""
 
     def __init__(self, table, *, raise_on=()):
         self.table, self.raise_on, self.asked = dict(table), set(raise_on), []
@@ -1093,7 +1093,8 @@ class _Peer:
         self.asked.append((key, template))
         if key in self.raise_on:
             raise RuntimeError("peer down")
-        return self.table.get(key)
+        hit = self.table.get(key)
+        return hit if hit is None or len(hit) == 4 else (*hit, {})
 
 
 async def test_인덱스에_쓰는_클래스가_없으면_다른_사이트의_같은_키_값이_대는_클래스를_쓴_쪽으로_채우고_출처를_칸에_적는다():
@@ -1119,14 +1120,65 @@ async def test_인덱스에_쓰는_클래스가_없으면_다른_사이트의_�
     sibling = _Peer({"in:L1": ("suwon", "in:L7", _value(metadata={"event_type": "W1"}))})
     walk = (await run_walk(_state(), runner=_Reads(table), peer=sibling, **kw))["walk"]
     assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 suwon의 같은 키 in:L7 값의 metadata.event_type에서 채웠다: W1"]
-    # 다른 사이트에도 없거나(None), 값이 인덱스 클래스를 안 대거나, 다른 사이트 읽기가 던지면 — 전처럼 주 줄 그대로, 쓴 쪽을 채우지 않는다
-    for peer_ in (_Peer({}), _Peer({"in:L1": ("sevt", "in:L1", _value(metadata={"event_type": "refresh-job"}))}), _Peer({}, raise_on={"in:L1"})):
+    # 다른 사이트에도 없거나(None), 값이 인덱스 클래스를 안 대거나, 다른 사이트 읽기가 던지면 — 쓴 쪽을 채우지 않고 주 줄에 **그 까닭**(R3-5u ① (4): 안 물은
+    # 키의 주가 "어디에도 없음"과 같았다)
+    for peer_, reason in ((_Peer({}), "다른 사이트에도 없다"),
+                          (_Peer({"in:L1": ("sevt", "in:L1", _value(metadata={"event_type": "refresh-job"}))}), "sevt의 같은 키 in:L1 값이 대는 이름은 인덱스 클래스가 아니다"),
+                          (_Peer({}, raise_on={"in:L1"}), "다른 사이트 읽기 실패")):
         walk = (await run_walk(_state(), runner=_Reads(table), peer=peer_, **kw))["walk"]
         assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1" and walk.hops[1].writer == ""
-        assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽을 채우지 않는다"]
+        assert walk.notes == [f"in:{{line}}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — {reason} — 쓴 쪽을 채우지 않는다"]
     # peer가 없으면(대본·사이트 하나) 전과 같다; 인덱스에 쓰는 클래스가 있으면 다른 사이트를 묻지 않는다
     walk = (await run_walk(_state(), runner=_Reads(table), **kw))["walk"]
     assert walk.stopped == "키가 없다 — in:L1"
     quiet = _Peer({"in:L1": ("sevt", "in:L1", _value(metadata={"event_type": "W1"}))})
     walk = (await run_walk(_state(), runner=_Reads({**table, ("code.uses", "in:{line}"): USES_W1}), peer=quiet, **kw))["walk"]
     assert quiet.asked == [] and walk.hops[1].line() == "  in:L1 | W1 [a] | 없음 | t-3.e1"
+
+
+# ── R3-5u ① — 채운 쓴 쪽의 코드에 구독 토픽이 없으면 다른 사이트 값의 source.topic을 이 사이트 이름으로(측정 #30 재측정: `<PGM>` 0/3) ──
+
+
+async def test_채운_쓴_쪽의_코드에_구독_토픽이_없으면_다른_사이트_값의_source_topic을_이_사이트_이름으로_바꿔_입력_토픽_홉으로_잇는다():
+    """측정 #30 재측정(평가자 11-02): `<PGM 케이스>` 0/3 — 채운 쓴 쪽 `<PGM 클래스>`의 입력 토픽을 못 이어(`구독 토픽 없음`) 판정이 `<처리 서비스>`를 탓했다. 요청:
+    다른 사이트 값의 `metadata.source.topic`(그 사이트 이름)을 ④처럼 이 사이트 이름으로 다시 만들어 그 클래스의 입력 토픽 홉(보존 범위, 발행 선언)으로; 값에
+    source가 없으면 지금 멈춤 그대로. (4) 읽기 상한으로 다른 사이트를 안 물었으면 그 까닭을 주에 — "어디에도 없음"과 다르다."""
+    no_writer = "in:{line} [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점"
+    value = _value(metadata={"event_type": "W1", "source": {"topic": "sevt.raw", "partition": 0, "offset": 3}})
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("code.resources", "W1"): "W1 (y.py:L1) [dt-core · a]\n  읽거나 쓰는 자원이 인덱스에 없다 — 메서드 1개",
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): no_writer, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)}, clock=lambda: T0)
+    peer = _Peer({"in:L1": ("sevt", "sevt:in:L1", value, {"sevt.raw": "t.raw", "sevt.main": "t.main"})})
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, peer=peer, topic_producers={"t.raw": ("col",)}, **kw))["walk"]
+    assert walk.hops[2].line() == "  t.raw | 발행 선언: col | 정상 — 보존 범위 40~100 · 남은 메시지 60 · 구독 W1 [a · sevt 값의 metadata.event_type] | t-6.e1"
+    assert walk.hops[2].basis == ("W1가 읽는 토픽(sevt 값의 metadata.source.topic sevt.raw, 이 사이트 이름으로) — in:{line}을 쓰는 클래스의 메시지 입력 (t-3.e1)"
+                                  " · 발행 쪽은 config 선언")
+    assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 sevt:in:L1 값의 metadata.event_type에서 채웠다: W1",
+                          "W1: 클래스 코드에 구독 토픽이 없다 — sevt 값의 source.topic sevt.raw을 이 사이트 이름 t.raw으로 이었다"]
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a · sevt 값의 metadata.event_type] · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    assert ("kafka.offsets", "t.raw") in runner.ran and walk.rungs[0] == Rung(action="code.read", params={"service": "a", "path": "y.py", "line": 1}, evidence="t-5.e1")
+    # 비었으면 거기서 멈춘다 — 다른 토픽 홉과 같은 멈춤(발행 선언 없으면 우리 밖)
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.offsets", "t.raw"): _offsets(100, 100)}), peer=peer, **kw))["walk"]
+    assert walk.stopped == "구독 토픽이 비었다 — t.raw(W1 [a · sevt 값의 metadata.event_type] · 발행 선언 없음(우리 밖))"
+    # 코드에 구독 토픽이 있으면 값의 source.topic은 안 쓴다 — 전처럼 코드의 것
+    coded = {**table, ("code.resources", "W1"): _res("W1", [("t.main", "topic")]), ("kafka.offsets", "t.main"): _offsets(40, 100)}
+    walk = (await run_walk(_state(), runner=_Reads(coded), peer=peer, **kw))["walk"]
+    assert [h.key for h in walk.hops[2:]] == ["t.main"] and not [n for n in walk.notes if "source.topic" in n]
+    # 이름으로 못 바꾸면(그 사이트 토픽이 이름 목록에 없음) 주 한 줄, 멈춤은 전처럼 `구독 토픽 없음`
+    unknown = _Peer({"in:L1": ("sevt", "sevt:in:L1", value, {})})
+    walk = (await run_walk(_state(), runner=_Reads(table), peer=unknown, **kw))["walk"]
+    assert walk.notes[-1] == "W1: sevt 값의 source.topic sevt.raw을 이 사이트 이름으로 못 바꿨다(이름 목록에 없음) — 읽지 않는다"
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a · sevt 값의 metadata.event_type] · 구독 토픽 없음(클래스 코드 · 서비스 선언 0개))"
+    # 값에 source가 없으면 지금 멈춤 그대로
+    plain = _Peer({"in:L1": ("sevt", "sevt:in:L1", _value(metadata={"event_type": "W1"}), {"sevt.raw": "t.raw"})})
+    walk = (await run_walk(_state(), runner=_Reads(table), peer=plain, **kw))["walk"]
+    assert walk.stopped.endswith("구독 토픽 없음(클래스 코드 · 서비스 선언 0개))")
+    assert walk.notes[-1].startswith("W1: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄)")
+    # (4) 읽기 상한에 걸려 다른 사이트를 안 물었으면 그 까닭이 주에 — 자원 1 + 정상 입력 13 뒤의 없는 키(15번째 읽기) → code.uses 뒤엔 상한
+    many = [(f"n{i}:{{line}}", "rediskey") for i in range(13)] + [("in:{line}", "rediskey")]
+    capped = {**table, ("code.resources", "W0"): _res("W0", many), **{("redis.get", f"n{i}:L1"): _value(rows=[{"a": 1}]) for i in range(13)}}
+    walk = (await run_walk(_state(), runner=_Reads(capped), peer=peer, **kw))["walk"]
+    assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 다른 사이트 값은 안 물었다(읽기·시간 상한) — 쓴 쪽을 채우지 않는다"]
+    assert walk.stopped == "키가 없다 — in:L1"

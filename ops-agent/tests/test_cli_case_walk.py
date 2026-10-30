@@ -84,8 +84,10 @@ def test_peer_reader는_같은_GBM의_다른_사이트에_같은_키를_그_사�
     declared = {"gumi": ("k", "other"), "sevt": ("k",), "suwon": ("k", "other"), "vina": ("k",), "off": ("k",)}
 
     async def names_for(site):
-        # 사이트마다 자기 접두어 — `<사이트>:k:{line}`·`<사이트>:other`(사내 `키 접두어 항목`의 모양). sevt는 `other`를 선언하지 않는다.
-        return [Name("rediskey", f"{site}:{tok}" + (":{line}" if tok == "k" else ""), f"redis_key.{tok}", code_value=tok) for tok in declared[site]], []
+        # 사이트마다 자기 접두어 — `<사이트>:k:{line}`·`<사이트>:other`(사내 `키 접두어 항목`의 모양). sevt는 `other`를 선언하지 않는다. 토픽도 사이트 이름 —
+        # 값의 `metadata.source.topic`을 이 사이트 이름으로 바꾸는 표(R3-5u ①)가 같은 key_path로 선다.
+        return ([Name("rediskey", f"{site}:{tok}" + (":{line}" if tok == "k" else ""), f"redis_key.{tok}", code_value=tok) for tok in declared[site]]
+                + [Name("topic", f"{site}.raw", "infra.kafka.consumer.topic.topic1", "consumes")]), []
 
     w1 = json.dumps({"metadata": {"event_type": "W1"}})
     seeds = {"redis": {}, "peers": {"vina": {"redis": {"vina:k:L1": "nw"}}, "off": {"redis": {"off:k:L1": "off"}},
@@ -93,22 +95,23 @@ def test_peer_reader는_같은_GBM의_다른_사이트에_같은_키를_그_사�
                                     "suwon": {"redis": {"suwon:k:L1": json.dumps({"metadata": {"event_type": "W2"}}), "suwon:other": "x"}}}}
     peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=seeds, names_for=names_for)
     # 이 사이트 키 `gumi:k:L1` → sevt의 이름 `sevt:k:{line}` → `sevt:k:L1`은 없고 같은 템플릿의 첫 키(scan `sevt:k:*`) — suwon의 똑같은 자리 키보다 먼저
-    assert asyncio.run(peer("gumi:k:L1", "gumi:k:{line}")) == ("sevt", "sevt:k:L7", {"type": "string", "value": w1})
+    # 넷째는 그 사이트의 토픽 값 → 이 사이트의 토픽 값(같은 key_path) — 값의 source.topic을 이 사이트 이름으로 바꾸는 표(R3-5u ①)
+    assert asyncio.run(peer("gumi:k:L1", "gumi:k:{line}")) == ("sevt", "sevt:k:L7", {"type": "string", "value": w1}, {"sevt.raw": "gumi.raw"})
     # sevt는 `other`를 선언하지 않는다 — 글자 그대로의 키를 들고 있어도 안 읽고 suwon의 이름으로
-    assert asyncio.run(peer("gumi:other", "gumi:other")) == ("suwon", "suwon:other", {"type": "string", "value": "x"})
+    assert asyncio.run(peer("gumi:other", "gumi:other")) == ("suwon", "suwon:other", {"type": "string", "value": "x"}, {"suwon.raw": "gumi.raw"})
     # 이 사이트 이름에 없는 템플릿은 글자 그대로 — 어디에도 없다
     assert asyncio.run(peer("gumi:none:L1", "gumi:none:{line}")) is None
     asyncio.run(close())
     # 이름 목록이 없으면(인덱스 없음) 글자 그대로
     plain = {"redis": {}, "peers": {"sevt": {"redis": {"k:L7": w1}}}}
     peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=plain)
-    assert asyncio.run(peer("k:L1", "k:{line}")) == ("sevt", "k:L7", {"type": "string", "value": w1})
+    assert asyncio.run(peer("k:L1", "k:{line}")) == ("sevt", "k:L7", {"type": "string", "value": w1}, {})
     asyncio.run(close())
     # 읽기가 실패한 사이트(오류 시드)는 그 뒤로 안 묻는다 — 첫 키는 다음 사이트의 같은 템플릿 키로, 둘째 키는 sevt에 있어도 suwon에서
     bad = {"redis": {}, "peers": {"sevt": {"redis": {"sevt:k:L1": {"__error__": "down"}, "sevt:k:L2": "y"}}, "suwon": {"redis": {"suwon:k:L2": "z"}}}}
     peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=bad, names_for=names_for)
-    assert asyncio.run(peer("gumi:k:L1", "gumi:k:{line}")) == ("suwon", "suwon:k:L2", {"type": "string", "value": "z"})
-    assert asyncio.run(peer("gumi:k:L2", "gumi:k:{line}")) == ("suwon", "suwon:k:L2", {"type": "string", "value": "z"})
+    assert asyncio.run(peer("gumi:k:L1", "gumi:k:{line}")) == ("suwon", "suwon:k:L2", {"type": "string", "value": "z"}, {"suwon.raw": "gumi.raw"})
+    assert asyncio.run(peer("gumi:k:L2", "gumi:k:{line}")) == ("suwon", "suwon:k:L2", {"type": "string", "value": "z"}, {"suwon.raw": "gumi.raw"})
     asyncio.run(close())
     # 사이트가 하나뿐이면 늘 None(묻지 않는다); 상한은 상수
     (root / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}]}), encoding="utf-8")

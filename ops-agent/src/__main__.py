@@ -193,7 +193,7 @@ PEER_SITES = 3
 
 def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], clock, seeds: dict | None, names_for=None):
     """같은 GBM의 다른 사이트에서 같은 키의 값을 읽는 `peer(키, 템플릿)`와 닫는 함수(R3-5t ② — 측정 #29 3부: 인덱스가 모르는 쓴 쪽을 리드가 "쓰는 코드 누락"으로
-    읽었다). `(사이트, 읽은 키, 값)`. 물을 키는 **그 사이트의 이름**으로 다시 만든다(R3-5t ④ — 측정 #30: 사이트마다 키에 자기 접두어(`키 접두어 항목`)가 붙어 이
+    읽었다). `(사이트, 읽은 키, 값, 그 사이트 토픽 값 → 이 사이트 토픽 값)`(넷째는 R3-5u ① — 값의 `metadata.source.topic`을 이 사이트 이름으로). 물을 키는 **그 사이트의 이름**으로 다시 만든다(R3-5t ④ — 측정 #30: 사이트마다 키에 자기 접두어(`키 접두어 항목`)가 붙어 이
     사이트 키를 글자 그대로 물으면 어느 사이트에도 없다, 채움 0): 이 사이트의 이름 목록(`names_for(fct)` — 이 사이트 키를 만든 것과 같은 config 경로)에서 그 템플릿의
     key_path를 찾고, 그 사이트의 이름 목록에서 같은 key_path의 값을 가져와 자리는 이 사이트 키에서 채운다(`fill_key`); scan 패턴도 그 값의 머리로. 문자열 바꿈 규칙이
     아니다. 이름 목록이 없거나(인덱스 없음) 이 사이트 이름에 그 템플릿이 없으면 글자 그대로; 그 사이트가 그 key_path를 선언하지 않으면 거기엔 없는 것(읽지 않는다).
@@ -205,7 +205,7 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
     others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]
     readers: dict[str, object] = {}
     dead: set[str] = set()
-    tables: dict[str, dict[str, str] | None] = {}                  # 사이트 → key_path → 그 사이트의 키 값(rediskey); None이면 이름 목록이 없다
+    tables: dict[str, dict[str, dict[str, str]] | None] = {}       # 사이트 → 종류(rediskey·topic) → key_path → 그 사이트의 값; None이면 이름 목록이 없다
 
     async def names_of(site: str):
         if site not in tables:
@@ -213,7 +213,8 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
             if names_for is not None:
                 try:
                     found, _ = await names_for(site)
-                    table = {n.key_path: n.value for n in found if n.kind == "rediskey"}
+                    table = {"rediskey": {n.key_path: n.value for n in found if n.kind == "rediskey"},
+                             "topic": {n.key_path: n.value for n in found if n.kind == "topic"}}
                 except Exception:                                  # noqa: BLE001 — 그 사이트의 층을 못 읽었다
                     table = None
             tables[site] = table
@@ -223,13 +224,21 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
         """(그 사이트에 물을 키, 그 사이트의 템플릿) — 이름 목록이 없거나 이 사이트 이름에 그 템플릿이 없으면 글자 그대로, 그 사이트가 그 key_path를 안 가지면
         None(거기엔 없다). 자리를 못 채우면 키는 빈 문자열(scan만)."""
         mine, theirs = await names_of(fct), await names_of(entry.fct)
-        key_path = next((p for p, v in (mine or {}).items() if v == template), None)
+        key_path = next((p for p, v in (mine or {}).get("rediskey", {}).items() if v == template), None)
         if mine is None or theirs is None or key_path is None:
             return key, template
-        other = theirs.get(key_path)
+        other = theirs["rediskey"].get(key_path)
         if other is None:
             return None
         return (fill_key(other, declared=template, key=key) or ""), other
+
+    async def topics_here(entry) -> dict[str, str]:
+        """그 사이트의 토픽 값 → 이 사이트의 토픽 값(같은 key_path) — 값의 `metadata.source.topic`을 이 사이트 이름으로 바꾸는 표(R3-5u ① — 측정 #30 재측정: 채운 쓴
+        쪽의 코드에 구독 토픽이 없어 걷기가 `구독 토픽 없음`에서 멈췄다). 이름 목록이 없으면 빈 표."""
+        mine, theirs = await names_of(fct), await names_of(entry.fct)
+        if mine is None or theirs is None:
+            return {}
+        return {their: mine["topic"][path] for path, their in theirs["topic"].items() if path in mine["topic"]}
 
     def reader(entry):
         if entry.fct in readers:
@@ -272,13 +281,13 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
                     dead.add(entry.fct)
                     continue
                 if got is not None and got.data is not None:
-                    return entry.fct, their_key, got.data
+                    return entry.fct, their_key, got.data, await topics_here(entry)
                 scanned = await got_reader.scan(f"{key_head(their_template)}*")
                 keys = [k for k in (scanned.data or []) if isinstance(k, str)] if scanned.status == "ok" else []
                 for sibling in keys[:1]:
                     got = await got_reader.get(sibling)
                     if got.status == "ok" and got.data is not None:
-                        return entry.fct, sibling, got.data
+                        return entry.fct, sibling, got.data, await topics_here(entry)
             except Exception:                                      # noqa: BLE001
                 dead.add(entry.fct)
         return None

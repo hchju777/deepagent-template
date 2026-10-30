@@ -400,27 +400,34 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             return [_Branch({}, "", cands)], shown, cands
         return [_Branch(params_for(r, s), shown_as(r, s), s) for r, s in found], shown, cands
 
-    async def peer_writer(template: str, key: str) -> tuple[str, str, str, str] | None:
-        """다른 사이트의 같은 키 값이 대는 인덱스 클래스 → (클래스, 값의 자리, 사이트, 읽은 키)(R3-5t ②). 없거나·못 읽거나·이름이 인덱스 클래스가 아니면 None.
+    async def peer_writer(template: str, key: str) -> tuple[str, str, str, str, str, str] | str:
+        """다른 사이트의 같은 키 값이 대는 인덱스 클래스 → (클래스, 값의 자리, 사이트, 읽은 키, 값의 source.topic(그 사이트 이름), 그것의 이 사이트 이름)(R3-5t ②,
+        R3-5u ①). 못 채우면 **까닭 문자열**(R3-5u ① (4) — 측정 #30 재측정: 읽기 상한으로 안 물은 키의 주가 "어디에도 없음"과 같았다) — peer가 없으면 빈 문자열.
         읽기 수·시간 상한 안에서만(그 읽기는 runner 밖이라 수에 안 세고 증거도 아니다 — 표의 사실로만 간다). 던지지 않는다 — 다른 사이트 읽기 실패는 쓴 쪽을 못
         채운 것일 뿐이다."""
-        if peer is None or over(template, "다른 사이트 값"):
-            return None
+        if peer is None:
+            return ""
+        if over(template, "다른 사이트 값"):
+            return "다른 사이트 값은 안 물었다(읽기·시간 상한)"
         try:
             hit = await peer(key, template)
         except Exception:                                                                   # noqa: BLE001
-            return None
+            return "다른 사이트 읽기 실패"
         if hit is None:
-            return None
-        fct, read_key, raw = hit
-        w, at, _ = writer_of(_unwrap(raw), classes)
-        return (w, at, fct, read_key) if w else None
+            return "다른 사이트에도 없다"
+        fct, read_key, raw, topics_map = hit
+        value = _unwrap(raw)
+        w, at, _ = writer_of(value, classes)
+        if not w:
+            return f"{fct}의 같은 키 {read_key} 값이 대는 이름은 인덱스 클래스가 아니다"
+        src_topic = pointer_of(value).get("topic", "")
+        return w, at, fct, read_key, src_topic, (topics_map or {}).get(src_topic, "")
 
     async def keyed_writer(template: str, key: str):
         """없는 키의 쓴 쪽 — 값에는 없으니 인덱스의 쓰기 자원(`code.uses`)에서, 그 키를 선언한 서비스의 클래스를 먼저(R3-5p ①-c, 평가자 분석 10-28). 인덱스에
         쓰는 클래스가 없으면 같은 GBM 다른 사이트의 같은 키 값이 대는 클래스로(`peer_writer`, R3-5t ② — 측정 #29 3부: `인덱스에 쓰는 함수가 없다` 주를 리드가
-        "쓰는 코드 누락"으로 읽어 logic_bug; 근본은 P1-7). 한 클래스로 좁혀지면 `(클래스, 표시, 후보 서비스들, 질의 인자, 증거, 근거 토막)`, 아니면 None(전처럼
-        `키가 없다`)."""
+        "쓰는 코드 누락"으로 읽어 logic_bug; 근본은 P1-7). 한 클래스로 좁혀지면 `(클래스, 표시, 후보 서비스들, 질의 인자, 증거, 근거 토막, 값의 source.topic
+        (사이트, 그 사이트 이름, 이 사이트 이름) 또는 None)`, 아니면 None(전처럼 `키가 없다`)."""
         _, got = await run(f"걷기 — 없는 키 {template}을 쓰는 클래스(인덱스)", "code.uses", {"name": template})
         uev = got.evidence[0].id if got.evidence else ""
         text = runner.raw(uev) if got.status == "ok" and uev else None
@@ -433,15 +440,17 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             lines = writes_in(text)
             why = "인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0)" if not lines else f"쓰는 함수 {lines}줄이 인덱스 클래스의 것이 아니다"
             elsewhere = await peer_writer(template, key)
-            if elsewhere is None:
-                remember(f"{template}: {why} — 쓴 쪽을 채우지 않는다")
+            if isinstance(elsewhere, str):
+                # 못 채운 까닭을 같이(R3-5u ① (4)) — 안 물은 것(상한)과 어디에도 없는 것은 다른 사실이다.
+                remember(f"{template}: {why} — {elsewhere + ' — ' if elsewhere else ''}쓴 쪽을 채우지 않는다")
                 return None
-            w, at, fct, read_key = elsewhere
+            w, at, fct, read_key, src_topic, src_here = elsewhere
             found_homes, shown, cands = split(w, template, walking=False)
             params = params_for(*found_homes[0]) if len(homes(w)) > 1 and found_homes else {}
             remember(f"{template}: {why} — 쓴 쪽은 {fct}의 같은 키 {read_key} 값의 {at}에서 채웠다: {w}")
             # 출처는 쓴 쪽 칸에(리드가 그 칸을 베낀다) — 그 사이트의 값이 대는 것이지 이 사이트의 값도 인덱스도 아니다.
-            return w, f"{shown} · {fct} 값의 {at}", cands, params, uev, f"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})"
+            return (w, f"{shown} · {fct} 값의 {at}", cands, params, uev, f"쓴 쪽은 {fct}의 같은 키 값({at})에서 — 인덱스 쓰기 줄 0({uev})",
+                    (fct, src_topic, src_here))
         declared = set(owners.get(template, ()))
         picked = [(c, s) for c, s in found if s in declared] or found
         writers = list(dict.fromkeys(c for c, _ in picked))
@@ -450,7 +459,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             return None
         found_homes, shown, cands = split(writers[0], template, walking=False)
         params = params_for(*found_homes[0]) if len(homes(writers[0])) > 1 and found_homes else {}
-        return writers[0], shown, cands, params, uev, f"쓴 쪽은 인덱스의 쓰기 자원({uev})에서, {template}을 선언한 서비스의 것"
+        return writers[0], shown, cands, params, uev, f"쓴 쪽은 인덱스의 쓰기 자원({uev})에서, {template}을 선언한 서비스의 것", None
 
     async def judged(rows: list, status: str, bad: bool, ev: str) -> tuple[str, bool, tuple[str, str] | None]:
         """단일값 필드(③) — 아래 홉에서 잡힌 `(필드, 값)`이 여기도 그대로면 나쁨(grep 없이 이어진다). 아니면 읽는 쪽 코드 줄이 정한다. 키 값과
@@ -661,7 +670,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 # 나쁜 입력의 쓴 쪽은 **그 입력 키의 선언 이름**으로 가른다 — 대상 키를 선언한 쪽이 상류 키까지 선언했으리란 법은 없다. 정상 홉의 쓴 쪽도
                 # 같은 가르기로(걷지는 않는다) — 표의 쓴 쪽 칸과 판정의 후보가 같은 근거를 갖는다.
                 if keyed is not None:
-                    w, shown, cands, params_k, uses_ev, origin = keyed
+                    w, shown, cands, params_k, uses_ev, origin, source = keyed
                     next_branches = []
                 elif bad and w:
                     next_branches, shown, cands = branches(w, name)
@@ -685,6 +694,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     declared_n = len({t for s in cands for t in subscribed.get(s, ())})
                     topics: list[str] = []
                     tail_note, rev, body_at = "구독 토픽 모름", "", None
+                    # 채운 쓴 쪽(다른 사이트 값)의 코드에 구독 토픽이 없으면 그 값의 `metadata.source.topic`을 이 사이트 이름으로 바꿔 입력 토픽으로(R3-5u ① — 측정 #30
+                    # 재측정: `<PGM 클래스>`가 `구독 토픽 없음`에서 멈춰 판정이 처리 서비스를 탓했다, 0/3). 값에 source가 없거나 이름으로 못 바꾸면 전처럼.
+                    src_fct, src_topic, src_here = source if source is not None else ("", "", "")
+                    topic_basis = ""
                     if (why := over(writer, f"{w}의 자원")):
                         stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
                     else:
@@ -706,9 +719,16 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                                 unknown = len(listed) - len(topics)
                                 if unknown:
                                     tail_note = f"구독 토픽 경로 {unknown}개의 값을 모름(사이트 선언에 없음)"
-                                else:
+                                elif not src_here:
                                     remember(f"{w}: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 {declared_n}개는 그 클래스의 것인지 몰라 안 읽는다")
                                     tail_note = f"구독 토픽 없음(클래스 코드 · 서비스 선언 {declared_n}개)"
+                    if not topics and not stopped and src_here:
+                        topics = [src_here]
+                        topic_basis = f"{w}가 읽는 토픽({src_fct} 값의 metadata.source.topic {src_topic}, 이 사이트 이름으로)"
+                        remember(f"{w}: 클래스 코드에 구독 토픽이 없다 — {src_fct} 값의 source.topic {src_topic}을 이 사이트 이름 {src_here}으로 이었다")
+                    elif not topics and not stopped and src_topic:
+                        remember(f"{w}: {src_fct} 값의 source.topic {src_topic}을 이 사이트 이름으로 못 바꿨다(이름 목록에 없음) — 읽지 않는다")
+                    topic_basis = topic_basis or f"{w}가 읽는 토픽(code.resources {rev})"
                     for topic in topics:
                         if (why := over(writer, topic)):
                             stopped, nxt, nxt_ev = why, ("code.resources", here), came_from
@@ -722,7 +742,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         pub, pub_svcs = published(topic)
                         hops.append(Hop(key=topic, kind="topic", depth=depth + 2, service=pub, candidates=list(pub_svcs), status=f"{tstatus} · 구독 {w} [{shown}]",
                                         bad=tbad, evidence_id=tev, parent=ev,
-                                        basis=f"{w}가 읽는 토픽(code.resources {rev}) — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언"))
+                                        basis=f"{topic_basis} — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언"))
                         ranges.append((topic, piece, tev))
                         topics_at[tev] = (w, shown, params_k, ev)
                     keyed_at[ev] = (w, shown, params_k, ranges, tail_note, rev, body_at, tuple(cands))
