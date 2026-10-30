@@ -266,6 +266,17 @@ class Walk(StrictModel):
             cur = by_id.get(cur.parent) if cur.parent else None
         return frozenset(ids)
 
+    def outside_topic(self) -> str:
+        """발행 선언 없는(우리 밖) 구독 토픽에서 `구독 토픽이 비었다`로 멈췄으면 그 토픽 이름 — 판정이 바깥 쪽을 적을 **자리**(R3-5u ②, 측정 #30 재측정: 우리 밖
+        토픽 7/7회에 리드가 원인 자리에 발행자 이름을 지어냈다 — 후보 목록이 서비스와 증거의 자원 이름뿐이라 바깥 쪽을 이름 없이 적을 자리가 없었다). 발행 선언이
+        있는 토픽은 우리 안이라 아니고, 메시지 홉의 멈춤(`입력 메시지가 나쁘다`)은 내용의 문제라 여기 안 든다. 아니면 빈 문자열."""
+        if not self.stopped.startswith("구독 토픽이 비었다"):
+            return ""
+        stop = next((h for h in self.hops if h.evidence_id == self.stop_at), None)
+        if stop is None or stop.kind != "topic" or not stop.service.startswith("발행 선언 없음"):
+            return ""
+        return stop.key
+
     def lines(self, *, join_notes: bool = True, legend: bool = False) -> list[str]:
         """`join_notes=False`는 판정 프롬프트용 — 병합 주 두 꼴만 빠진다(R3-5l ①); `legend=True`도 판정용 — 머리 아래에 뜻 한 줄(R3-5p ②). 걷기 표·
         `case walk`·조사 프롬프트는 기본값 그대로."""

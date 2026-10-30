@@ -1352,8 +1352,8 @@ CASES += [
   '    if False:\n        return ""\n    return ("## 재작성',
   ["tests/application/test_briefing.py::test_재작성_블록은_문제가_있을_때만_실린다"]),
  ("component 후보에 서비스가 빠진다", B,
-  '    return "서비스 " + ", ".join(services) + " — 또는 " + tail',
-  '    return tail',
+  '    line = ("서비스 " + ", ".join(services) + " — 또는 " + tail) if services else (tail + " 또는 <데이터 흐름>의 서비스 이름")',
+  '    line = tail + " 또는 <데이터 흐름>의 서비스 이름"',
   ["tests/application/test_briefing.py::test_판정_예시는_degraded를_안_보여주고_component_후보를_서비스에서_만든다"]),
  ("태스크 오류율을 안 센다", B,
   '    errors = sum(1 for t in state.plan_tasks if t.status == "error")\n    return (f"라운드 {state.round}에서 끝났다',
@@ -3576,7 +3576,21 @@ CASES += [
  ("palette-source-missing의 sevt 값에 source가 없다", LC, "                                                                                    \"source\": {\"topic\": \"sevt.alarm.main\", \"partition\": 0, \"offset\": 3}},\n", "                                                                                    },\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
  ("sevt 층이 topic2를 사이트 이름으로 안 덮는다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\"}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
 ]
-assert len(CASES) >= 1165, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5u ② — 발행 선언 없는 구독 토픽에서 멈췄으면 그 토픽 이름이 바깥 쪽의 원인 자리 ──
+OUTSIDE_T = "tests/application/test_verdict.py::test_걷기가_발행_선언_없는_구독_토픽에서_멈췄으면_그_토픽_이름이_바깥_쪽의_자리다"
+OUTSIDE_VERIFY_T = "tests/application/test_verdict.py::test_verify는_바깥_토픽_이름을_component로_받고_되묻기_줄에_그_자리를_댄다"
+OUTSIDE_BRIEF_T = "tests/application/test_briefing.py::test_판정_재료의_component_후보는_걷기가_멈춘_발행_선언_없는_구독_토픽을_바깥_쪽의_자리로_댄다"
+OUTSIDE_PROMPT_T = "tests/application/test_verdict.py::test_판정_프롬프트는_component가_데이터를_만드는_서비스라고_말한다"
+CASES += [
+ ("바깥 토픽 자리가 멈춤을 안 본다", CS, "        if not self.stopped.startswith(\"구독 토픽이 비었다\"):\n            return \"\"\n", "        if False:\n            return \"\"\n", [OUTSIDE_T]),
+ ("발행 선언 있는 토픽도 바깥 자리로 준다", CS, "        if stop is None or stop.kind != \"topic\" or not stop.service.startswith(\"발행 선언 없음\"):\n", "        if stop is None or stop.kind != \"topic\":\n", [OUTSIDE_T, OUTSIDE_VERIFY_T, OUTSIDE_BRIEF_T]),
+ ("판정 재료가 바깥 자리를 안 준다", B, "            \"components\": components_line(tuple(services), outside=state.walk.outside_topic() if state.walk else \"\"),\n", "            \"components\": components_line(tuple(services)),\n", [OUTSIDE_BRIEF_T]),
+ ("바깥 토픽 이름을 component로 안 받는다", ND, "        if outside and component == outside:\n            return None\n", "        if False:\n            return None\n", [OUTSIDE_VERIFY_T]),
+ ("되묻기 줄이 바깥 자리를 안 댄다", ND, "    slot = f\" — 발행 선언 없는 구독 토픽은 그 이름 그대로 external로: {outside}\" if outside else \"\"\n", "    slot = \"\"\n", [OUTSIDE_VERIFY_T]),
+ ("판정 프롬프트가 바깥 자리를 안 말한다", ICP, "  걷기가 발행 선언이 없는 구독 토픽(우리 밖)에서 멈췄으면 그 토픽 이름이 위 목록에 바깥 쪽의 자리로 적혀 있다 — 바깥 쪽이 원인이면 발행자 이름을\n  지어내지 말고 그 토픽 이름을 component에 그대로 적어라.\n", "", [OUTSIDE_PROMPT_T]),
+]
+assert len(CASES) >= 1171, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

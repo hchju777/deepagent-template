@@ -1157,6 +1157,10 @@ def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> 
     universe = _universe(state, deps)
     services = ", ".join(sorted(deps.components))
     topics = case_topics(state.plan_tasks)
+    # 걷기가 발행 선언 없는 구독 토픽에서 멈췄으면 그 토픽 이름이 바깥 쪽의 자리(R3-5u ② — 측정 #30 재측정: 우리 밖 토픽 7/7회에 지어낸 발행자 이름) — 리드의
+    # kafka 태스크와 무관하게 걷기가 세운 사실로 통과하고, 되묻는 문장 끝에도 그 자리를 댄다.
+    outside = state.walk.outside_topic() if state.walk else ""
+    slot = f" — 발행 선언 없는 구독 토픽은 그 이름 그대로 external로: {outside}" if outside else ""
 
     def problem(component: str) -> str | None:
         if component in deps.components:
@@ -1164,13 +1168,15 @@ def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> 
         # 이 케이스에 나온 토픽과 완전 일치하면 된다(사람 결정 10-19: c-11의 후보 토픽은 증거에 있었고 진짜 원인 방향이었다). 부분 일치·오타는 아니다.
         if component in topics:
             return None
+        if outside and component == outside:
+            return None
         # 토폴로지를 아는 조사에서는 서비스만 — 키·컬렉션 이름은 데이터지 원인이 아니다(사내 c-2가 Redis 키 이름으로 통과했다).
         # `external`만 예외: 바깥 시스템은 토폴로지에 없고, 증거에 나온 이름이면 된다.
         if deps.components and verdict.verdict_type != "external":
-            return f"토폴로지 서비스가 아닌 component {component!r} — 원인은 그 데이터를 만들거나 쓰는 서비스다 ({services})"
+            return f"토폴로지 서비스가 아닌 component {component!r} — 원인은 그 데이터를 만들거나 쓰는 서비스다 ({services}){slot}"
         if name_known(component, universe):
             return None
-        return f"증거에도 토폴로지에도 없는 component {component!r}"
+        return f"증거에도 토폴로지에도 없는 component {component!r}{slot}"
     return problem
 
 

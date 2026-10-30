@@ -454,6 +454,8 @@ def test_판정_프롬프트는_component가_데이터를_만드는_서비스라
     text = (Path(__file__).resolve().parents[2] / "config/prompts/investigate-conclude.md").read_text(encoding="utf-8")
     rule = re.search(r"^- `component`는.*?(?=^- )", text, re.M | re.S).group(0)
     assert "데이터를 **만드는** 서비스" in rule and "판정 종류" in rule and "external" in rule and "{components}" in rule
+    # 바깥 쪽은 발행자 이름이 아니라 걷기가 멈춘 그 토픽 이름으로(R3-5u ② — 측정 #30 재측정: 우리 밖 토픽 7/7회에 지어낸 이름)
+    assert "발행 선언이 없는 구독 토픽" in rule and "그 토픽 이름을 component에 그대로" in rule
 
 
 # ── R3-0 ② — 대상과 연결 안 된 키로 high 금지 ──
@@ -681,6 +683,52 @@ async def test_후보의_component가_케이스에_나온_토픽과_같으면_�
     assert (await nodes["verify"](_state(case, verdict=root, plan_tasks=tasks, evidence=evidence)))["verify_problems"] == []
     bad_root = verdict(root_cause=cause("외부 피드가 멈춤", "t-1.e1"))                              # 최상위는 전처럼 되묻는다
     assert (await nodes["verify"](_state(case, verdict=bad_root, plan_tasks=tasks, evidence=evidence)))["verify_problems"]
+
+
+# ── R3-5u ② — 발행 선언 없는 구독 토픽에서 멈췄으면 그 토픽 이름이 바깥 쪽의 원인 자리 ──
+
+def _outside_walk(*, stopped=None, service="발행 선언 없음(우리 밖)", kind="topic"):
+    """쓰는 클래스 Proc의 구독 토픽 ext.feed(발행 선언 없음)에서 `구독 토픽이 비었다`로 멈춘 걷기."""
+    from src.domain.case import Hop, Rung, Walk
+    hops = [Hop(key="sum:L1", writer="Proc", service="processor", candidates=["processor"], status="빈 배열 (data)", bad=True, evidence_id="t-1.e1"),
+            Hop(key="ext.feed", kind=kind, depth=1, service=service, status="비었다 — 범위 0~0, 남은 메시지 0 · 구독 Proc [processor]", bad=True,
+                evidence_id="t-3.e1", parent="t-1.e1", basis="Proc가 읽는 토픽(code.resources t-2.e1)")]
+    stop = stopped if stopped is not None else f"구독 토픽이 비었다 — ext.feed(Proc [processor] · {service})"
+    return Walk(hops=hops, reads=3, stopped=stop, stop_at="t-3.e1",
+                rungs=[Rung(action="kafka.tail", params={"topic": "ext.feed", "limit": 5}, evidence="t-3.e1")])
+
+
+def test_걷기가_발행_선언_없는_구독_토픽에서_멈췄으면_그_토픽_이름이_바깥_쪽의_자리다():
+    """측정 #30 재측정: 우리 밖 토픽 7/7회에 리드가 원인 자리에 발행자 이름을 지어냈다 — 후보 목록이 서비스와 증거의 자원 이름뿐이라 바깥 쪽을 이름 없이 적을
+    자리가 없었다. 걷기 멈춤이 `구독 토픽이 비었다 … 발행 선언 없음(우리 밖)`이면 그 토픽 이름이 그 자리다. 발행 선언이 있는 토픽(우리 안)·다른 멈춤·메시지 홉은
+    아니다."""
+    from src.domain.case import Walk
+    assert _outside_walk().outside_topic() == "ext.feed"
+    assert _outside_walk(service="발행 선언: collector").outside_topic() == ""
+    assert _outside_walk(stopped="입력이 다 정상 — Proc").outside_topic() == ""
+    assert _outside_walk(kind="message").outside_topic() == ""
+    assert Walk().outside_topic() == ""
+
+
+async def test_verify는_바깥_토픽_이름을_component로_받고_되묻기_줄에_그_자리를_댄다(case):
+    """토픽 이름은 리드의 kafka 태스크와 무관하게 걷기가 세운 사실로 통과한다(케이스 토픽과 같은 규칙, 사람 결정 10-19). 지어낸 바깥 이름은 전처럼 되묻되
+    문장 끝에 그 자리(토픽 이름 그대로 external로)를 댄다. 발행 선언이 있는 토픽은 우리 안이라 전처럼."""
+    walk = _outside_walk()
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor"})))
+    ok = _state(case, walk=walk, verdict=verdict(verdict_type="external", root_cause=cause("ext.feed", "t-1.e1")))
+    assert (await nodes["verify"](ok))["verify_problems"] == []
+    typed = _state(case, walk=walk, verdict=verdict(root_cause=cause("ext.feed", "t-1.e1")))
+    assert (await nodes["verify"](typed))["verify_problems"] == []
+    made_up = _state(case, walk=walk, verdict=verdict(verdict_type="external", root_cause=cause("외부 피드 시스템", "t-1.e1")))
+    assert (await nodes["verify"](made_up))["verify_problems"] == [
+        "증거에도 토폴로지에도 없는 component '외부 피드 시스템' — 발행 선언 없는 구독 토픽은 그 이름 그대로 external로: ext.feed"]
+    wrong = _state(case, walk=walk, verdict=verdict(root_cause=cause("외부 피드 시스템", "t-1.e1")))
+    assert (await nodes["verify"](wrong))["verify_problems"] == [
+        "토폴로지 서비스가 아닌 component '외부 피드 시스템' — 원인은 그 데이터를 만들거나 쓰는 서비스다 (processor)"
+        " — 발행 선언 없는 구독 토픽은 그 이름 그대로 external로: ext.feed"]
+    inside = _state(case, walk=_outside_walk(service="발행 선언: collector"),
+                    verdict=verdict(verdict_type="external", root_cause=cause("ext.feed", "t-1.e1")))
+    assert (await nodes["verify"](inside))["verify_problems"] == ["증거에도 토폴로지에도 없는 component 'ext.feed'"]
 
 
 

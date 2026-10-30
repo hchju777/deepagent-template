@@ -899,12 +899,15 @@ def rewrite_block(state: CaseState) -> str:
             + "\n".join(f"- {_oneline(p)}" for p in state.verify_problems))
 
 
-def components_line(services: tuple[str, ...]) -> str:
-    """`component`에 쓸 수 있는 이름 — 토폴로지에서 **생성**한다(손으로 적으면 ⑮를 어긴다)."""
+def components_line(services: tuple[str, ...], *, outside: str = "") -> str:
+    """`component`에 쓸 수 있는 이름 — 토폴로지에서 **생성**한다(손으로 적으면 ⑮를 어긴다). `outside`는 걷기가 멈춘 발행 선언 없는 구독 토픽(R3-5u ② — 측정 #30
+    재측정: 우리 밖 토픽 7/7회에 리드가 발행자 이름을 지어냈다, 바깥 쪽을 이름 없이 적을 자리가 없어서) — 그 토픽 이름이 바깥 쪽의 자리다."""
     tail = "위 <모은 증거>에 나온 자원 이름(컬렉션·토픽·키)"
-    if not services:
-        return tail + " 또는 <데이터 흐름>의 서비스 이름"
-    return "서비스 " + ", ".join(services) + " — 또는 " + tail
+    line = ("서비스 " + ", ".join(services) + " — 또는 " + tail) if services else (tail + " 또는 <데이터 흐름>의 서비스 이름")
+    if outside:
+        line += (f" — 바깥 쪽의 자리: 걷기가 멈춘 구독 토픽 {outside}(발행 선언 없음, 우리 밖) — 그 바깥 쪽이 원인이면 component에 이 토픽 이름을 그대로 적고 "
+                 "verdict_type을 external로(발행자 이름을 지어내지 마라)")
+    return line
 
 
 def verdict_example() -> str:
@@ -947,5 +950,5 @@ def conclude_fields(state: CaseState, *, site_config, evidence_budget: int = 120
             "open": open_questions_block(state),
             "ended": ended_line(state),
             "rewrite": rewrite_block(state),
-            "components": components_line(tuple(services)),
+            "components": components_line(tuple(services), outside=state.walk.outside_topic() if state.walk else ""),
             "example": verdict_example()}

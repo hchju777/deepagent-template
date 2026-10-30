@@ -1110,6 +1110,25 @@ def test_판정_예시는_degraded를_안_보여주고_component_후보를_서�
     assert "sink" not in without and "증거" in without   # 서비스가 없으면 증거의 자원 이름만
 
 
+def test_판정_재료의_component_후보는_걷기가_멈춘_발행_선언_없는_구독_토픽을_바깥_쪽의_자리로_댄다(state):
+    """측정 #30 재측정(R3-5u ②): 우리 밖 토픽 7/7회에 리드가 발행자 이름을 지어냈다 — 후보 목록이 서비스와 "증거의 자원 이름"뿐이라 바깥 쪽을 적을 자리가
+    없었다. 걷기가 `구독 토픽이 비었다 … 발행 선언 없음(우리 밖)`에서 멈췄으면 그 토픽 이름을 그 자리로 적는다. 발행 선언이 있는 토픽·걷기 없음이면 전처럼."""
+    from src.domain.case import Hop, Walk
+    hops = [Hop(key="sum:L1", writer="Proc", service="processor", status="빈 배열 (data)", bad=True, evidence_id="t-1.e1"),
+            Hop(key="ext.feed", kind="topic", depth=1, service="발행 선언 없음(우리 밖)", status="비었다 — 범위 0~0, 남은 메시지 0 · 구독 Proc [processor]",
+                bad=True, evidence_id="t-3.e1", parent="t-1.e1")]
+    walk = Walk(hops=hops, reads=3, stopped="구독 토픽이 비었다 — ext.feed(Proc [processor] · 발행 선언 없음(우리 밖))", stop_at="t-3.e1")
+    outside = briefing.conclude_fields(state.model_copy(update={"walk": walk}), site_config=site(), services=("processor",))["components"]
+    assert outside.startswith("서비스 processor — 또는 위 <모은 증거>에 나온 자원 이름(컬렉션·토픽·키)")
+    assert "바깥 쪽의 자리: 걷기가 멈춘 구독 토픽 ext.feed(발행 선언 없음, 우리 밖)" in outside
+    assert "component에 이 토픽 이름을 그대로 적고 verdict_type을 external로(발행자 이름을 지어내지 마라)" in outside
+    assert briefing.components_line(("processor",), outside="ext.feed") == outside
+    inside = walk.model_copy(update={"hops": [hops[0], hops[1].model_copy(update={"service": "발행 선언: collector"})],
+                                     "stopped": "구독 토픽이 비었다 — ext.feed(Proc [processor] · 발행 선언: collector)"})
+    assert "바깥" not in briefing.conclude_fields(state.model_copy(update={"walk": inside}), site_config=site(), services=("processor",))["components"]
+    assert "바깥" not in briefing.conclude_fields(state, site_config=site(), services=("processor",))["components"]   # 걷기 없음
+
+
 def test_재작성_블록은_문제가_있을_때만_실린다(case):
     plain = CaseState(case=case, stopped_by="decision")
     assert briefing.conclude_fields(plain, site_config=site())["rewrite"] == ""
