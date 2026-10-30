@@ -4,6 +4,7 @@
 MockTransport)로, 소켓 단계는 이 기계의 127.0.0.1에 실제로 띄운 서버로 본다.
 """
 import asyncio
+import contextlib
 import json
 import socket
 import struct
@@ -96,38 +97,53 @@ def test_URL에서_호스트와_포트를_뽑는다(url, default, expected):
     assert host_port(url, default) == expected
 
 
-async def _server(handler):
+@contextlib.asynccontextmanager
+async def serving(handler):
+    """127.0.0.1의 임시 서버. 나갈 때 **받은 연결의 처리가 끝나기를 기다린 뒤** 닫는다 — 안 기다리면 처리 태스크가 못 돈
+    채 테스트가 끝나고, 닫히지 않은 transport가 다음 테스트 중에 GC되며 asyncio가 경고를 낸다(가끔)."""
+    finished = asyncio.Event()
+
     async def closing(reader, writer):
-        # 닫힘까지 기다린다 — 안 기다리면 서버가 닫힌 뒤 transport가 GC될 때 asyncio가 경고를 낸다(가끔).
         try:
             await handler(reader, writer)
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError):
                 await writer.wait_closed()
-            except OSError:
-                pass
+            finished.set()
     server = await asyncio.start_server(closing, "127.0.0.1", 0)
-    return server, server.sockets[0].getsockname()[1]
+    async with server:
+        yield server.sockets[0].getsockname()[1]
+        await asyncio.wait_for(finished.wait(), 5)
 
 
 async def test_http면_DNS와_TCP를_보고_TLS는_없다고_적는다():
     async def handler(reader, writer):
         pass
-    server, port = await _server(handler)
-    async with server:
+    async with serving(handler) as port:
         steps = await connect_steps(f"http://127.0.0.1:{port}/x", verify=True, timeout=2.0)
     assert [(s["step"], s["ok"]) for s in steps] == [("dns", True), ("tcp", True), ("tls", None)]
     assert steps[1]["detail"] == f"127.0.0.1:{port}"
 
 
 async def test_TCP가_안_붙으면_거기서_멈추고_던지지_않는다():
+    """**이유는 단정하지 않는다** — 플랫폼이 정한다. Linux는 닫힌 포트에서 바로 거부가 오지만, Windows는 SYN을 몇 번
+    다시 보내 상한(2초) 안에 거부가 안 오고 시간 초과가 된다(사내 PC에서 그렇게 났다). 지킬 것은 "TCP에서 멈췄다"다."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]                 # 듣지 않는 포트
     steps = await connect_steps(f"https://127.0.0.1:{port}", verify=True, timeout=2.0)
     assert [(s["step"], s["ok"]) for s in steps] == [("dns", True), ("tcp", False)]
-    assert "Error" in steps[1]["detail"] or "refused" in steps[1]["detail"].lower()
+    assert steps[1]["detail"].startswith(f"127.0.0.1:{port} — ")
+
+
+async def test_TCP가_상한_안에_안_오면_시간_초과라고_적는다(monkeypatch):
+    async def never(*args, **kwargs):
+        await asyncio.sleep(10)
+    monkeypatch.setattr(asyncio, "open_connection", never)
+    steps = await connect_steps("https://127.0.0.1:9", verify=True, timeout=0.2)
+    assert [(s["step"], s["ok"]) for s in steps] == [("dns", True), ("tcp", False)]
+    assert steps[1]["detail"] == "127.0.0.1:9 — 시간 초과(0.2초)"
 
 
 async def test_TLS가_아닌_상대면_TLS_단계에서_실패를_적는다():
@@ -135,8 +151,7 @@ async def test_TLS가_아닌_상대면_TLS_단계에서_실패를_적는다():
         await reader.read(10)
         writer.write(b"HTTP/1.1 400 Bad\r\n\r\n")
         await writer.drain()
-    server, port = await _server(handler)
-    async with server:
+    async with serving(handler) as port:
         steps = await connect_steps(f"https://127.0.0.1:{port}", verify=True, timeout=2.0)
     assert [(s["step"], s["ok"]) for s in steps] == [("dns", True), ("tcp", True), ("tls", False)]
 
@@ -227,8 +242,7 @@ async def test_trace는_예산을_넘기면_멈춘다():
 async def test_진짜_소켓으로_로컬_서버까지_한_hop에_닿는다():
     async def handler(reader, writer):
         pass
-    server, port = await _server(handler)
-    async with server:
+    async with serving(handler) as port:
         hop = await asyncio.to_thread(probe_once, "127.0.0.1", port, 1, 2.0)
     assert hop["kind"] == "reached" and hop["addr"] == "127.0.0.1"
 

@@ -201,6 +201,14 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
 - output 밖을 가리키는 심볼릭 링크 거부는 손으로 확인했다(테스트로는 못 둔다 — 테스트가 심볼릭 링크를 만들면 사내
   Windows에서 깨진다, `test_portability`).
 
+**사내 pytest 뒤 고친 것**
+
+- `test_TCP가_안_붙으면…`이 사내 PC(Windows)에서 실패했다 — 닫힌 포트에 Windows는 SYN을 다시 보내 2초 상한 안에 거부가
+  안 오고 `시간 초과(2초)`가 된다. 코드는 맞게 TCP에서 멈췄고 테스트가 **이유**(거부)까지 단정한 것이 틀렸다. 이제 "TCP에서
+  멈췄다"만 보고, 시간 초과 문구는 연결을 붙잡아 두는 테스트로 따로 본다(여기서 그 모양을 재현해 옛 단정이 거짓인 것을 확인).
+- 같은 종류의 가정 둘을 같이 걷었다: `python3`이라는 이름(Windows엔 없거나 스토어 별칭), 자식 cwd의 글자 비교(→ `samefile`).
+- 테스트용 로컬 서버가 받은 연결의 처리를 기다리지 않고 닫혀, 가끔 다음 테스트에서 asyncio 경고가 났다 — 처리가 끝난 뒤 닫는다.
+
 **사내에서 볼 것(평가자)**
 
 1. 사내 PyPI에 `fastapi`·`uvicorn`이 있는가(`pip install -r requirements.txt`).

@@ -1,6 +1,8 @@
 """작업 실행기 — 셸 없이, 한 번에 하나, 시간을 넘기면 죽이고 그때까지의 출력을 남긴다."""
 import asyncio
 import json
+import os
+import shlex
 import sys
 
 import pytest
@@ -44,7 +46,7 @@ async def test_성공하면_ok와_종료코드_0_그리고_stdout(cli_root):
     printed = json.loads(job.stdout)
     # 셸이 없으므로 공백·세미콜론이 든 인자도 그대로 한 칸이다.
     assert printed["argv"] == ["echo", "a b", "; rm -rf /"]
-    assert printed["cwd"] == str(cli_root)
+    assert os.path.samefile(printed["cwd"], cli_root)      # 글자 비교는 Windows의 대소문자·짧은 이름에서 갈린다
     assert printed["io"] == "utf-8"
     assert job.took_s is not None and job.started_at == NOW
 
@@ -126,9 +128,10 @@ async def test_출력이_너무_크면_끝을_남기고_앞을_잘랐다고_적�
 
 
 async def test_보기는_명령_전체와_상태를_담는다(cli_root):
-    job = await run(runner_for(cli_root, python="python3"), ["exit", "0"], timeout_s=12.0)
+    # 지금 도는 파이썬으로 — `python3`이라는 이름은 Windows에 없거나 스토어 별칭이다.
+    job = await run(runner_for(cli_root), ["exit", "0"], timeout_s=12.0)
     view = job.view()
-    assert view["command"] == "python3 -u -m src exit 0"
+    assert view["command"] == shlex.join([sys.executable, "-u", "-m", "src", "exit", "0"])
     assert view["argv"] == ["exit", "0"]
     assert view["status"] == "ok" and view["exit_code"] == 0
     assert view["timeout_s"] == 12.0
