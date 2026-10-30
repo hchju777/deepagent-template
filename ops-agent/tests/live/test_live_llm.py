@@ -453,3 +453,26 @@ async def test_리드가_이름을_찍지_않고_먼저_찾는다(llm, lead_prom
     assert discovery & set(actions), (
         f"찾는 읽기 없이 바로 이름을 찍었다 — {actions}. "
         f"프롬프트의 '추측하지 마라'가 안 먹히고 있다")
+
+
+# ── 리드 스키마: 자유형 params가 실제 게이트웨이의 구조화 출력에서 인자를 다 싣는가 (R3-5u ③-b) ─────
+# 측정 #31: `params`에 `offset`·`line`·`limit` 세 속성(하한 1)을 적자 게이트웨이의 구조화 출력에서 모델이 **그 셋만** 채워 `code.read`에 service·path가
+# 빠졌다(15건 전부 리드 작업 0, 반려 92). 오프라인 테스트는 스키마의 모양만 잠그고, 모델이 그 스키마로 **무엇을 채우는지**는 여기서만 안다.
+
+async def test_리드가_code_read_태스크에_service_path_line을_다_싣는다(llm):
+    """integrate 턴과 같은 경로(`ask_json` + `response_schema(IntegrateReply)`)로, 값을 다 준 code.read 태스크 하나를 그대로 내게 한다 — 스키마가
+    인자를 떨구면 여기서 빠진다. 대상 시스템에는 붙지 않는다."""
+    from src.application.lead import IntegrateReply, ask_json
+
+    prompt = ("다음 JSON 객체 하나만 그대로 출력하라. 값을 바꾸거나 빼지 마라:\n"
+              '{"decision": "continue", "hypotheses": [{"id": "h1", "statement": "처리기가 입력을 거른다", "status": "open"}], '
+              '"tasks": [{"id": "t1", "goal": "처리기 코드를 읽는다", "action": "code.read", '
+              '"params": {"service": "processor", "path": "processor/handler.py", "line": 12}, "priority": 1, "input_evidence_ids": []}]}')
+    got = await ask_json(llm, prompt, IntegrateReply)
+    assert got.ok, got.error
+    reads = [t for t in got.data["tasks"] if t.get("action") == "code.read"]
+    assert reads, f"code.read 태스크가 없다 — {got.data['tasks']}"
+    params = reads[0]["params"]
+    print(f"\n  code.read params: {params}")
+    assert {"service", "path", "line"} <= set(params), f"스키마가 인자를 떨궜다 — {params}"
+    assert params["service"] == "processor" and params["path"] == "processor/handler.py" and params["line"] == 12

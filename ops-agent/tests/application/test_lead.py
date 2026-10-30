@@ -1152,11 +1152,9 @@ def test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다():
     integrate = response_schema(IntegrateReply)
     assert integrate["properties"]["decision"]["enum"] == ["continue", "conclude"]
     task = integrate["properties"]["tasks"]["items"]
-    params = task["properties"]["params"]
-    assert params["type"] == "object" and "additionalProperties" not in params and "action" in task["required"]   # 자유형 — 닫을 수 없다
-    # 열린 채로 정수 인자 셋만 하한 1(R3-5u ③ — 측정 #30 재측정: 리드가 3/3회 offset=0으로 읽었다)
-    assert params["properties"] == {"offset": {"type": "integer", "minimum": 1}, "line": {"type": "integer", "minimum": 1},
-                                    "limit": {"type": "integer", "minimum": 1}}
+    # `params`에는 속성을 하나도 적지 않는다(R3-5u ③-b — 측정 #31: `offset`·`line`·`limit` 셋만 적자 게이트웨이의 구조화 출력이 그 셋만 채워 service·path가
+    # 빠지고 반려 92건, 15건 전부 리드 작업 0). `additionalProperties`를 안 적어도 자유형으로 안 간다 — 액션별 스키마는 action마다 required까지 묶을 때만.
+    assert task["properties"]["params"] == {"type": "object"} and "action" in task["required"]   # 자유형 — 닫을 수 없다
     assert not is_closed(integrate) and not is_closed(response_schema(FrameReply))
     conclude = response_schema(ConcludeReply)
     assert is_closed(conclude) and conclude["title"] == "concludereply"

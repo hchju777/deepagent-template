@@ -1903,8 +1903,21 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   않는다 — 배포 커밋과 인덱스가 다른 것이지 경로가 틀린 게 아니다. 리드의 `code.read`(`DeployedCode.read`) 경로다 — 사람용 CLI `code read`는 `RealCodeReader`에
   직결이라 이 꼬리도 R3-1c ③의 다른 레포 안내도 안 붙는다(전부터 그랬다; 보드로 확인은 `DeployedCode`를 CLI와 같은 조립으로 불러서).
 - `lead._TASK_SCHEMA.params` — 열린 객체 그대로(strict 아님) `offset`·`line`·`limit`만 `integer, minimum 1`(`_range_problem`이 소켓 전에 거르지만 스키마가
-  막으면 턴을 안 버린다).
+  막으면 턴을 안 버린다) — **③-b에서 되돌렸다**(측정 #31 회귀).
 - 테스트 먼저(RED → GREEN). 스윕 +4(1175). `code graph` 재생성 불필요. **R3-5u 끝** — 다음은 측정 #31 브리프(`code graph` 재생성 **불필요**).
+
+#### R3-5u ③-b (11-03) ✅ — 리드 스키마의 params를 다시 자유형으로(측정 #31 회귀)
+
+- 측정 #31 중단: 15건 모두 리드 작업 0 — 반려 92(필요한 인자 없음 63, 모르는 인자 29), 1라운드 `no_runnable`로 걷기만 보고 판정. ③이 `params`에 세 속성(하한 1)을
+  적자 게이트웨이의 구조화 출력에서 모델이 **그 셋만** 채웠다(`code.read`에 `{"line": 50, "limit": 20}`만, `redis.get`·`code.config`에도 `limit`).
+  `additionalProperties`를 안 적어도 자유형으로 안 간다.
+- `_TASK_SCHEMA.params`를 `{"type": "object"}`로 되돌렸다. 0 인자는 전처럼 `_range_problem`이 소켓 전에 거르고 반려 사유가 다음 라운드 프롬프트로 돌아간다.
+  액션별 인자 스키마를 쓰려면 action마다 `required`까지 묶는다 — 몇 속성만 따로 적지 말 것(코드 주석으로 남김).
+- 테스트: 오프라인은 스키마 모양(`params == {"type": "object"}`); **실제 게이트웨이 한 턴**(`tests/live/test_live_llm.py`, `live_llm` — 사내에서만)은 integrate
+  턴과 같은 `ask_json` + `response_schema(IntegrateReply)` 경로로 값을 다 준 `code.read` 태스크를 그대로 내게 하고 `service`·`path`·`line`이 다 실려 오는지 본다.
+  여기서는 대본 어댑터로 그 테스트의 논리(다 실리면 통과, 셋만 오면 실패)만 확인했다.
+- 테스트 먼저(RED → GREEN). 스윕 1175(사례 교체: 정수 하한 → params에 속성을 적는다). `code graph` 재생성 불필요. 다음은 측정 #31 재측정 — 브리프는 #31
+  것 그대로, "스키마 주의" 문단만 무효.
 
 ## 범위 밖 — 12b·13으로
 

@@ -1108,3 +1108,9 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
   `code.read` 태스크가 `service`·`path`·`line`을 다 가진 채 나오는지 보는 확인 하나. 트리 교체는 지금 도는 반복(약 14:40 끝)이 끝난 뒤에.
 - 방향: **R3-5u ③-b**(params 자유형 복귀 + live 한 턴 테스트) → 측정 #31 재측정(`code graph` 재생성 불필요 — 브리프는 위 #31의 것 그대로, "스키마 주의"
   문단만 무효). 항목·자리는 [plan-12a-r2-r4.md](plan-12a-r2-r4.md) R3-5u.
+
+## R3-5u ③-b 뒤 측정 #31 재측정에서 볼 것 (11-03)
+
+- 브리프는 위 "R3-5u ③ 뒤 측정 #31에서 볼 것" 그대로 — **"스키마 주의" 문단만 무효**(params는 자유형으로 돌아갔다). `code graph` 재생성: 불필요.
+- 더 볼 것: 반려 수(지난 92 — 필요한 인자 없음/모르는 인자 각각), `offset`·`line`·`limit`이 0인 태스크 수와 그 반려 사유가 다음 라운드 프롬프트에 돌아갔는지,
+  live_llm 한 턴(`pytest tests/live -m live_llm -k code_read`)의 결과 한 줄(params 원문).

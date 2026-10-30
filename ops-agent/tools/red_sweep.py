@@ -3591,14 +3591,14 @@ CASES += [
  ("판정 프롬프트가 바깥 자리를 안 말한다", ICP, "  걷기가 발행 선언이 없는 구독 토픽(우리 밖)에서 멈췄으면 그 토픽 이름이 위 목록에 바깥 쪽의 자리로 적혀 있다 — 바깥 쪽이 원인이면 발행자 이름을\n  지어내지 말고 그 토픽 이름을 component에 그대로 적어라.\n", "", [OUTSIDE_PROMPT_T]),
 ]
 
-# ── 12a-R3-5u ③ — 없는 경로엔 인덱스의 같은 이름 파일, 리드 스키마의 정수 인자 하한 1 ──
+# ── 12a-R3-5u ③·③-b — 없는 경로엔 인덱스의 같은 이름 파일 · 리드 스키마의 params는 자유형(③의 세 속성이 측정 #31에서 회귀) ──
 ELSEWHERE_T = "tests/infrastructure/test_deployed_code.py::test_code_read에_다른_서비스의_경로를_주면_그_경로가_어느_서비스에_있는지_안내한다"
 SCHEMA_T = "tests/application/test_lead.py::test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다"
 CASES += [
  ("없는 경로에 같은 이름 파일을 안 댄다", D, "        return f\" — 인덱스에 같은 이름의 파일: {', '.join(shown(r, f) for r, f in same[:3])}{more} — 그 path로 다시 내라\"\n", "        return \"\"\n", [ELSEWHERE_T]),
  ("인덱스가 아는 경로에도 같은 이름 파일을 댄다", D, "        if any(s.file == path and s.repo == repo for s in modules):\n            return \"\"\n", "        if False:\n            return \"\"\n", [ELSEWHERE_T]),
  ("같은 이름 파일을 서비스 없이 댄다", D, "            return f\"{r}:{f}\" + (f\"(service={svc!r})\" if svc else \"\")\n", "            return f\"{r}:{f}\"\n", [ELSEWHERE_T]),
- ("리드 스키마의 정수 인자에 하한이 없다", LD, "_INT_FROM_1 = {\"type\": \"integer\", \"minimum\": 1}\n", "_INT_FROM_1 = {\"type\": \"integer\"}\n", [SCHEMA_T]),
+ ("리드 스키마의 params에 속성을 적는다", LD, "    \"id\": _ID, \"goal\": {\"type\": \"string\"}, \"action\": {\"type\": \"string\"}, \"params\": {\"type\": \"object\"},\n", "    \"id\": _ID, \"goal\": {\"type\": \"string\"}, \"action\": {\"type\": \"string\"}, \"params\": {\"type\": \"object\", \"properties\": {\"line\": {\"type\": \"integer\", \"minimum\": 1}}},\n", [SCHEMA_T]),
 ]
 assert len(CASES) >= 1175, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
