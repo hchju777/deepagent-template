@@ -1152,7 +1152,11 @@ def test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다():
     integrate = response_schema(IntegrateReply)
     assert integrate["properties"]["decision"]["enum"] == ["continue", "conclude"]
     task = integrate["properties"]["tasks"]["items"]
-    assert task["properties"]["params"] == {"type": "object"} and "action" in task["required"]   # 자유형 — 닫을 수 없다
+    params = task["properties"]["params"]
+    assert params["type"] == "object" and "additionalProperties" not in params and "action" in task["required"]   # 자유형 — 닫을 수 없다
+    # 열린 채로 정수 인자 셋만 하한 1(R3-5u ③ — 측정 #30 재측정: 리드가 3/3회 offset=0으로 읽었다)
+    assert params["properties"] == {"offset": {"type": "integer", "minimum": 1}, "line": {"type": "integer", "minimum": 1},
+                                    "limit": {"type": "integer", "minimum": 1}}
     assert not is_closed(integrate) and not is_closed(response_schema(FrameReply))
     conclude = response_schema(ConcludeReply)
     assert is_closed(conclude) and conclude["title"] == "concludereply"

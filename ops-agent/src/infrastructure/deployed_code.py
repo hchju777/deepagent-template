@@ -908,19 +908,33 @@ class DeployedCode(DeployedCodePort):
 
     def _elsewhere(self, path: str, repo: str) -> str:
         """`code.read`가 git에서 실패했을 때의 꼬리 — 인덱스가 이 경로를 **다른 레포**의 모듈로 알면 그 서비스를 말한다(측정 #8 P1 5: 리드가
-        `code.uses` 증거의 경로를 다른 서비스 이름으로 읽어 git의 `fatal: path`만 받았다). 같은 레포에서 없는 경로는 꾸미지 않는다 — 인덱스와
-        배포 커밋이 다를 수 있다."""
+        `code.uses` 증거의 경로를 다른 서비스 이름으로 읽어 git의 `fatal: path`만 받았다). 어느 레포에도 없는 경로면 인덱스에서 **같은 파일 이름**의
+        모듈을 댄다(R3-5u ③ — 측정 #30 재측정: 리드가 3/3회 같은 틀린 디렉터리로 읽어 `fatal: path`만 받았다). 경로가 없다고 단정하지는 않는다 —
+        인덱스와 배포 커밋이 다를 수 있다; 인덱스가 이 레포의 그 경로를 알면 꾸미지 않고, 아니면 인덱스가 아는 같은 이름을 말할 뿐이다."""
         if self._index is None:
             return ""
-        repos = sorted({s.repo for s in self._index.symbols if s.kind == "module" and s.file == path and s.repo != repo})
-        if not repos:
+        modules = [s for s in self._index.symbols if s.kind == "module"]
+        repos = sorted({s.repo for s in modules if s.file == path and s.repo != repo})
+        if repos:
+            other = repos[0]
+            svc = flowgraph.owner(path, other, self._topology)[0]
+            svcs = [svc] if svc else sorted(n for n, s in self._topology.services.items() if s.repo == other)
+            if not svcs:
+                return f" — 이 경로는 {other} 레포에 있다(토폴로지에 그 레포의 서비스가 없다)"
+            return f" — 이 경로는 {'·'.join(svcs)}({other})에 있다 — service={svcs[0]!r}로 다시 내라"
+        if any(s.file == path and s.repo == repo for s in modules):
             return ""
-        other = repos[0]
-        svc = flowgraph.owner(path, other, self._topology)[0]
-        names = [svc] if svc else sorted(n for n, s in self._topology.services.items() if s.repo == other)
-        if not names:
-            return f" — 이 경로는 {other} 레포에 있다(토폴로지에 그 레포의 서비스가 없다)"
-        return f" — 이 경로는 {'·'.join(names)}({other})에 있다 — service={names[0]!r}로 다시 내라"
+        base = path.rsplit("/", 1)[-1]
+        same = sorted({(s.repo, s.file) for s in modules if s.file != path and s.file.rsplit("/", 1)[-1] == base})
+        if not same:
+            return ""
+
+        def shown(r: str, f: str) -> str:
+            svc = flowgraph.owner(f, r, self._topology)[0]
+            return f"{r}:{f}" + (f"(service={svc!r})" if svc else "")
+
+        more = f" 외 {len(same) - 3}" if len(same) > 3 else ""
+        return f" — 인덱스에 같은 이름의 파일: {', '.join(shown(r, f) for r, f in same[:3])}{more} — 그 path로 다시 내라"
 
     # ── action 넷 ────────────────────────────────────────────────
 

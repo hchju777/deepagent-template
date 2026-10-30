@@ -2501,7 +2501,7 @@ CASES += [
  ("홉 자체의 중복에도 홉 줄을 붙인다", ND, "                   else \" — 그 홉은 이미 돌았다. 예시의 첫 칸(그 결과를 입력으로 한 다음 읽기)을 내라\" if hop is not None and (task.action, task.params) == hop\n", "", [DUP3_T]),
  ("거부 기록의 증거 id에 홉 안내가 섞인다", ND, "            out[head] = tail.rsplit(DUP_WHERE, 1)[1].split(\" — \", 1)[0].split(\", \")", "            out[head] = tail.rsplit(DUP_WHERE, 1)[1].split(\", \")", [REJ3_T]),
  ("다른 레포의 경로에 안내를 안 붙인다", DCP, "            return ProbeResult.failed(got.error + self._elsewhere(path, known.repo), source=pinned, clock=self._clock)", "            return ProbeResult.failed(got.error, source=pinned, clock=self._clock)", [READ3_T]),
- ("같은 레포의 없는 경로에도 안내를 붙인다", DCP, "        repos = sorted({s.repo for s in self._index.symbols if s.kind == \"module\" and s.file == path and s.repo != repo})", "        repos = sorted({s.repo for s in self._index.symbols if s.kind == \"module\" and s.file == path} or {repo})", [READ3_T]),
+ ("같은 레포의 없는 경로에도 안내를 붙인다", DCP, "        repos = sorted({s.repo for s in modules if s.file == path and s.repo != repo})\n", "        repos = sorted({s.repo for s in modules if s.file == path} or {repo})\n", [READ3_T]),
 ]
 
 # ── 12a-R3-3 ① — 행 목록 요약 · frame 예시 한 칸 · code.uses 클래스 안내 ──
@@ -3590,7 +3590,17 @@ CASES += [
  ("되묻기 줄이 바깥 자리를 안 댄다", ND, "    slot = f\" — 발행 선언 없는 구독 토픽은 그 이름 그대로 external로: {outside}\" if outside else \"\"\n", "    slot = \"\"\n", [OUTSIDE_VERIFY_T]),
  ("판정 프롬프트가 바깥 자리를 안 말한다", ICP, "  걷기가 발행 선언이 없는 구독 토픽(우리 밖)에서 멈췄으면 그 토픽 이름이 위 목록에 바깥 쪽의 자리로 적혀 있다 — 바깥 쪽이 원인이면 발행자 이름을\n  지어내지 말고 그 토픽 이름을 component에 그대로 적어라.\n", "", [OUTSIDE_PROMPT_T]),
 ]
-assert len(CASES) >= 1171, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5u ③ — 없는 경로엔 인덱스의 같은 이름 파일, 리드 스키마의 정수 인자 하한 1 ──
+ELSEWHERE_T = "tests/infrastructure/test_deployed_code.py::test_code_read에_다른_서비스의_경로를_주면_그_경로가_어느_서비스에_있는지_안내한다"
+SCHEMA_T = "tests/application/test_lead.py::test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다"
+CASES += [
+ ("없는 경로에 같은 이름 파일을 안 댄다", D, "        return f\" — 인덱스에 같은 이름의 파일: {', '.join(shown(r, f) for r, f in same[:3])}{more} — 그 path로 다시 내라\"\n", "        return \"\"\n", [ELSEWHERE_T]),
+ ("인덱스가 아는 경로에도 같은 이름 파일을 댄다", D, "        if any(s.file == path and s.repo == repo for s in modules):\n            return \"\"\n", "        if False:\n            return \"\"\n", [ELSEWHERE_T]),
+ ("같은 이름 파일을 서비스 없이 댄다", D, "            return f\"{r}:{f}\" + (f\"(service={svc!r})\" if svc else \"\")\n", "            return f\"{r}:{f}\"\n", [ELSEWHERE_T]),
+ ("리드 스키마의 정수 인자에 하한이 없다", LD, "_INT_FROM_1 = {\"type\": \"integer\", \"minimum\": 1}\n", "_INT_FROM_1 = {\"type\": \"integer\"}\n", [SCHEMA_T]),
+]
+assert len(CASES) >= 1175, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

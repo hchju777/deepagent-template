@@ -186,8 +186,12 @@ _HYPOTHESIS_SCHEMA = {"type": "object", "properties": {
     "required": ["id", "statement"]}
 # `params`는 자유형이다 — action마다 인자가 다르고 `filter`는 질의 그 자체라 닫을 수 없다. 그래서 액션 턴의 스키마는 strict가
 # 못 되고(`llm_schema.is_closed`), 서버는 문법과 윗단 모양만 강제한다. 그것으로 충분하다 — 깨진 것은 따옴표였다.
+# 열린 채로 정수 인자 셋만 하한 1(R3-5u ③ — 측정 #30 재측정: 리드가 3/3회 `offset=0`으로 읽었다; `_range_problem`이 소켓 전에 거르지만 스키마가 막으면 턴을
+# 안 버린다). 속성을 적어도 `additionalProperties`가 없어 여전히 자유형이다(`is_closed`가 거짓).
+_INT_FROM_1 = {"type": "integer", "minimum": 1}
 _TASK_SCHEMA = {"type": "object", "properties": {
-    "id": _ID, "goal": {"type": "string"}, "action": {"type": "string"}, "params": {"type": "object"},
+    "id": _ID, "goal": {"type": "string"}, "action": {"type": "string"},
+    "params": {"type": "object", "properties": {"offset": _INT_FROM_1, "line": _INT_FROM_1, "limit": _INT_FROM_1}},
     "priority": {"type": "integer"}, "input_evidence_ids": {"type": "array", "items": _ID}},
     "required": ["id", "goal", "action", "params"]}
 

@@ -750,7 +750,25 @@ async def test_code_read에_다른_서비스의_경로를_주면_그_경로가_�
     assert got.status == "error" and got.error.startswith("fatal: path")
     assert "이 경로는 sink(dt-core)에 있다 — service='sink'로 다시 내라" in got.error
     same = await code.read("sink", "sink/nope.py")
-    assert same.status == "error" and "이 경로는" not in same.error
+    assert same.status == "error" and "이 경로는" not in same.error and "같은 이름" not in same.error
+    # 어느 레포에도 없는 경로 — 인덱스에서 **같은 파일 이름**의 모듈을 댄다(R3-5u ③ — 측정 #30 재측정: 리드가 3/3회 같은 틀린 디렉터리로 읽어 `fatal: path`만
+    # 받았다). 경로가 없다고 단정하지는 않는다 — 인덱스가 아는 같은 이름을 말할 뿐이다.
+    moved = await code.read("sink", "sink/pipelines/writer.py")
+    assert moved.status == "error" and moved.error.startswith("fatal: path")
+    assert moved.error.endswith(" — 인덱스에 같은 이름의 파일: dt-core:sink/writer.py(service='sink') — 그 path로 다시 내라")
+
+    class _Two:
+        FILES = {"sink/writer.py": "x = 1\n", "api/writer.py": "y = 2\n"}
+
+        async def files(self):
+            return sorted(self.FILES)
+
+        async def read(self, path):
+            return self.FILES.get(path)
+
+    code.attach_index(await ix.build_index({"dt-core": _Two()}, commits={"dt-core": "c0ffee"}))
+    known = await code.read("sink", "sink/writer.py")
+    assert known.status == "error" and "같은 이름" not in known.error and "이 경로는" not in known.error   # 인덱스가 아는 경로 — 커밋이 다른 것이지 경로가 틀린 게 아니다
 
 
 # ── R3-3 ① — code.uses에 클래스 이름 ──
