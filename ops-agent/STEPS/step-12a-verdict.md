@@ -1994,6 +1994,13 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   박고 있어서(첫 칸으로 바꿔도 초록) 묶음 테스트에 단정을 더했다. 사례 셋은 같은 변이로 새 자리에.
 - 테스트 먼저(RED → GREEN). 스윕 +11(1228). `code graph` 재생성 불필요.
 
+#### R3-5v ⑥ (11-03) ✅ — live `code_read` 한 턴을 리드 역할로도
+
+- 검토 회신(11-03) 6: live `code_read` 한 턴은 통과(params에 service·path·line 전부)했지만 부른 모델이 판정 역할(기본 `llm`)이었다 — 리드 역할로도 한 턴.
+- `tests/live/test_live_llm.py`: `lead_llm` 픽스처(`app.llm_for("lead")` — 역할 덮어쓰기가 없으면 기본과 같다)와 같은 한 턴을 그 어댑터로 부르는 테스트.
+  `live_llm` 마커라 기본 실행에서 빠진다(deselected 27 → 28). 사내: `pytest tests/live -m live_llm -k code_read -v`(두 역할 다).
+- 소스 변경 없음 — 스윕 그대로(1228). 여기서는 수집만 확인했다(게이트웨이가 없다).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

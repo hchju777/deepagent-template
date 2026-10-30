@@ -476,3 +476,16 @@ async def test_리드가_code_read_태스크에_service_path_line을_다_싣는�
     print(f"\n  code.read params: {params}")
     assert {"service", "path", "line"} <= set(params), f"스키마가 인자를 떨궜다 — {params}"
     assert params["service"] == "processor" and params["path"] == "processor/handler.py" and params["line"] == 12
+
+
+@pytest.fixture(scope="module")
+def lead_llm(llm_config):
+    """리드 역할(`llm_roles.lead`)의 어댑터 — 액션 턴을 실제로 내는 모델. 역할 덮어쓰기가 없으면 기본과 같다."""
+    app = load_app_config(CONFIG_ROOT, env=os.environ)
+    return build_llm(app.llm_for("lead"), clock=lambda: datetime.now().astimezone(), warn=print)
+
+
+async def test_리드_역할_LLM도_code_read_태스크에_service_path_line을_다_싣는다(lead_llm):
+    """검토 회신(11-03) 6: 위 한 턴은 판정 역할 모델로 돌았다(기본 `llm`). 액션 턴을 실제로 내는 리드 역할로도 같은 한 턴."""
+    await test_리드가_code_read_태스크에_service_path_line을_다_싣는다(lead_llm)
+
