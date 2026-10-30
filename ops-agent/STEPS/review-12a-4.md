@@ -1097,3 +1097,14 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - (d) 라벨 파일 열 이름(R3-5v 8 재생을 위해, 자리표시자로) — 지난번에 못 받았으면 이번에. 보류·사람 결정은 그대로(P1-6~P1-9, `--notes-from`, `max_tokens`).
 - 보고: (a) PGM 토픽 홉·주 원문, 못 바꾼 수·source 없는 수, 까닭별 수, 채움 수, 걷기 초; (b) 43개; (c) 우리 밖 7회의 첫 답·다시 쓰기 수, PGM 3건, `code.read`
   실패 수와 꼬리, 0 인자 수(스키마 거부가 있었으면 원문), 15건 줄·점수; (d) 열 이름.
+
+## 측정 #31 중단 (11-03, 평가자) → R3-5u ③-b
+
+- **리드 스키마 회귀**: 15건 모두 리드 작업 0 — 반려 92(필요한 인자 없음 63, 모르는 인자 29), 1라운드 `no_runnable`로 걷기만 보고 판정.
+- 원인: ③이 태스크 `params`에 `offset`·`line`·`limit` 세 속성(하한 1)을 적자 게이트웨이의 구조화 출력에서 모델이 **그 셋만** 채운다 — `code.read`에
+  `{"line": 50, "limit": 20}`만(service·path 없음), `redis.get`·`code.config`에도 `limit`. `additionalProperties`를 안 적어도 자유형으로 안 간다.
+- **요청**: `params`를 다시 자유형(`{"type": "object"}`)으로. 0 인자는 지금처럼 소켓 전 검사(`_range_problem`)가 거르고 반려 사유를 다음 라운드 프롬프트에
+  돌려준다. 액션별 인자 스키마를 쓰려면 action마다 `required`까지 적어 묶는다 — 세 속성만 따로 적지 말 것. 테스트: stub이 아니라 **실제 게이트웨이 한 턴**으로
+  `code.read` 태스크가 `service`·`path`·`line`을 다 가진 채 나오는지 보는 확인 하나. 트리 교체는 지금 도는 반복(약 14:40 끝)이 끝난 뒤에.
+- 방향: **R3-5u ③-b**(params 자유형 복귀 + live 한 턴 테스트) → 측정 #31 재측정(`code graph` 재생성 불필요 — 브리프는 위 #31의 것 그대로, "스키마 주의"
+  문단만 무효). 항목·자리는 [plan-12a-r2-r4.md](plan-12a-r2-r4.md) R3-5u.
