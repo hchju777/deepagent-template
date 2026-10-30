@@ -31,7 +31,7 @@ from pydantic import Field, model_validator
 from src.application import briefing
 from src.application.schemas import Parsed, parse_object, validate
 from src.application.state import CaseState
-from src.domain.actions import role_for
+from src.domain.actions import ACTIONS, role_for
 from src.domain.base import StrictModel
 from src.domain.llm_schema import strictify
 from src.domain.case import CauseLink, Hypothesis, PlanTask, Verdict
@@ -195,11 +195,26 @@ _TASK_SCHEMA = {"type": "object", "properties": {
     "required": ["id", "goal", "action", "params"]}
 
 
-def response_schema(model: type[StrictModel]) -> dict:
+def per_action_task_schema() -> dict:
+    """태스크 항목을 **액션마다** 묶은 anyOf(R3-5v ⑦ — 네이티브 함수 호출의 옵션). 액션은 상수, `params`는 그 액션의 인자로 닫고 필수 인자는 required —
+    몇 속성만 따로 적으면 모델이 그것만 채운다(측정 #31, R3-5u ③-b). 인자의 모양은 적지 않는다(`{}`) — 받는 쪽 검사가 한다."""
+    choices = []
+    for name in sorted(ACTIONS):
+        _, _, required, optional = ACTIONS[name]
+        choices.append({"type": "object", "properties": {
+            "id": _ID, "goal": {"type": "string"}, "action": {"type": "string", "const": name},
+            "params": {"type": "object", "properties": {arg: {} for arg in (*required, *optional)},
+                       "required": list(required), "additionalProperties": False},
+            "priority": {"type": "integer"}, "input_evidence_ids": {"type": "array", "items": _ID}},
+            "required": ["id", "goal", "action", "params"]})
+    return {"anyOf": choices}
+
+
+def response_schema(model: type[StrictModel], *, per_action: bool = False) -> dict:
     """답 모델 → 서버에 보낼 JSON 스키마. 액션 턴 둘은 항목 모양을 손으로 적는다(pydantic 쪽은 `list[dict]`로 느슨하게
     받으므로 — 낱개 검증 때문이다), 판정 턴은 pydantic 스키마를 닫아서(strict) 보낸다."""
     lists = {"hypotheses": {"type": "array", "items": _HYPOTHESIS_SCHEMA},
-             "tasks": {"type": "array", "items": _TASK_SCHEMA}}
+             "tasks": {"type": "array", "items": per_action_task_schema() if per_action else _TASK_SCHEMA}}
     if model is FrameReply:
         return {"title": "frame_reply", "type": "object", "properties": lists,
                 "required": ["hypotheses", "tasks"], "additionalProperties": False}
@@ -291,7 +306,8 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
     """
     last = Parsed(False, error="시도하지 않았다")
     asked = prompt
-    schema = response_schema(model) if schema is None else schema                   # 판정 턴은 케이스마다 다른 스키마(증거 id enum, R3-5i ②)
+    # 판정 턴은 케이스마다 다른 스키마(증거 id enum, R3-5i ②). 어댑터가 네이티브 함수 호출이면 액션 턴은 액션마다 묶은 스키마(R3-5v ⑦).
+    schema = response_schema(model, per_action=bool(getattr(llm, "per_action", False))) if schema is None else schema
     use_schema = schema
     # 실패의 종류마다 처방이 다르면 예산도 따로다(R3-5n ①, 측정 #24: degraded 6 중 셋이 다른 종류의 실패가 한 예산을 나눠 쓴 탓 — 전송 오류 둘, 짧게 뒤의 형식
     # 실패, 짧게 뒤의 조각 끊김). 호출 자체의 실패(`connection`)는 같은 질문으로 두 번, 길이 상한(`length` — 잘린 답이든 빈 긴 답이든, 짧게 — R3-5f ④·R3-5m ②·

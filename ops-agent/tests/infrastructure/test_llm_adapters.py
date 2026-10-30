@@ -343,3 +343,26 @@ def test_조각_메타데이터는_비지_않은_값만_덮는다():
         "finish_reason": "stop", "model_name": "m", "model_provider": "openai"}
     assert merge_metadata({"finish_reason": "stop"}, {"finish_reason": "length"}) == {"finish_reason": "length"}
     assert merge_metadata({"a": 1}, None) == {"a": 1} and merge_metadata({"a": 1}, "이상한 모양") == {"a": 1}
+
+
+# ── R3-5v ⑦ — 네이티브 함수 호출(옵션, 재생 A/B로만 고른다) ──
+
+@pytest.mark.parametrize("adapter,stream", [("http", None), ("chat_model", False), ("chat_model", True)])
+async def test_response_format이_tools면_스키마를_강제한_함수_호출로_보내고_그_인자를_답으로_읽는다(gateway, clock, adapter, stream):
+    """검토 회신(11-03) 6·8: 게이트웨이는 두 역할 다 tools를 받는다(tool_calls, 인자 셋). 네이티브 함수 호출은 옵션으로 만들어 재생 A/B로만 고른다 — 기본은
+    그대로 `json_schema`. 켜면 답 스키마를 함수 하나(`tool_choice`로 강제)의 인자로 보내고 `response_format`은 안 보낸다; 받은 인자 원문이 답의 글이다(`ask_json`이
+    전처럼 파싱한다). 스키마 없는 자유 질문엔 안 보낸다. 켠 어댑터는 액션 턴에 액션마다 묶은 스키마를 청한다(`per_action`)."""
+    base_url, recorder = gateway
+    recorder.reply = '{"a": "b"}'
+    llm = build_llm(_cfg(base_url, adapter, response_format="tools", **({"stream": stream} if stream is not None else {})), clock=clock)
+    assert llm.per_action is True
+    reply = await llm.ask("hi", schema=_CLOSED)
+    assert reply.status == "ok" and reply.text == '{"a": "b"}', reply.error
+    body = recorder.requests[-1]["body"]
+    assert "response_format" not in body and body.get("stream", False) is bool(stream)
+    assert body["tools"] == [{"type": "function", "function": {"name": "reply", "description": "답을 이 함수의 인자로 낸다", "parameters": _CLOSED}}]
+    assert body["tool_choice"] == {"type": "function", "function": {"name": "reply"}}
+    recorder.reply = "pong"
+    free = await llm.ask("hi")
+    assert free.text == "pong" and "tools" not in recorder.requests[-1]["body"]
+    assert build_llm(_cfg(base_url, adapter), clock=clock).per_action is False

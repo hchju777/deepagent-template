@@ -129,8 +129,10 @@ class LlmConfig(StrictModel):
     # 오래 걸릴 수 있어 기본 그대로). 없으면 라이브러리 기본.
     stream_idle_s: float | None = None
     # 답에 스키마가 있을 때 OpenAI 규약 `response_format`을 어떻게 보낼지. `json_schema`(기본)는 모양까지 — strict는 스키마가
-    # 닫힐 때만(`domain/llm_schema`); `json_object`는 문법만(게이트웨이가 json_schema를 거부할 때); `none`은 안 보낸다.
-    response_format: Literal["json_schema", "json_object", "none"] = "json_schema"
+    # 닫힐 때만(`domain/llm_schema`); `json_object`는 문법만(게이트웨이가 json_schema를 거부할 때); `none`은 안 보낸다. `tools`는 네이티브 함수 호출 —
+    # 답 스키마를 `tool_choice`로 강제한 함수 하나의 인자로 보내고 그 인자를 답으로 읽으며, 액션 턴은 액션마다 required까지 묶은 스키마로(R3-5v ⑦ — 검토 회신
+    # 11-03 8: 기본이 아니다, 재생 A/B로만 고른다).
+    response_format: Literal["json_schema", "json_object", "none", "tools"] = "json_schema"
     # 같은 게이트웨이로 가는 호출 사이의 최소 간격(초). 분당 할당량(429)은 모델을 가리지 않고 게이트웨이가 센다 — 리드와
     # 판정 어댑터가 base_url 단위 pacer를 나눠 쓴다(`llm_pacing`). 0이면 안 기다린다.
     min_interval_s: float = 0.0

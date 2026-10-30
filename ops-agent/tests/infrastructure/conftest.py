@@ -66,12 +66,38 @@ def _handler_for(recorder: _Recorder):
                 return self.wfile.write(raw)
             if recorder.payload is not None:
                 return self._send(200, recorder.payload)
+            if body.get("tools"):
+                # 네이티브 함수 호출(R3-5v ⑦) — 강제된 함수 하나를 부르고 그 인자에 답을 싣는다.
+                name = body["tools"][0]["function"]["name"]
+                if body.get("stream"):
+                    return self._stream_tool(body.get("model"), name, recorder.reply)
+                call = {"id": "call_fake", "type": "function", "function": {"name": name, "arguments": recorder.reply}}
+                return self._send(200, {"id": "chatcmpl-fake", "model": body.get("model"),
+                                        "choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [call]},
+                                                     "finish_reason": "tool_calls"}]})
             if body.get("stream"):
                 return self._stream(body.get("model"), recorder.reply)
             self._send(200, {"id": "chatcmpl-fake", "model": body.get("model"),
                              "choices": [{"message": {"role": "assistant",
                                                       "content": recorder.reply}}],
                              **({"usage": recorder.usage} if recorder.usage else {})})
+
+        def _stream_tool(self, model, name, args):
+            """SSE — 함수 호출의 인자를 두 조각으로(첫 조각에 id·이름), 끝은 `[DONE]`."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            half = max(1, len(args) // 2)
+            deltas = [{"role": "assistant", "content": None,
+                       "tool_calls": [{"index": 0, "id": "call_fake", "type": "function", "function": {"name": name, "arguments": args[:half]}}]},
+                      {"tool_calls": [{"index": 0, "function": {"arguments": args[half:]}}]}]
+            for n, delta in enumerate(deltas):
+                chunk = {"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": model,
+                         "choices": [{"index": 0, "delta": delta, "finish_reason": "tool_calls" if n == len(deltas) - 1 else None}]}
+                self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            self.wfile.write(b"data: [DONE]\n\n")
 
         def _stream(self, model, text):
             """SSE — 답을 두 조각으로 나눠 보낸다. 조각마다 `data:` 한 줄, 끝은 `[DONE]`(OpenAI 규약)."""

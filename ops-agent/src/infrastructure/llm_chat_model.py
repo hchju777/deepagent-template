@@ -10,12 +10,13 @@
 사내 인증서에서 조용히 실패한다. 둘 다 지정해 그 구멍을 닫는다.
 """
 import asyncio
+import json
 import time
 
 from src.config.schema_llm import LlmConfig
 from src.domain.base import Clock
 from src.domain.llm import LlmPort, LlmReply
-from src.infrastructure.llm_format import response_format
+from src.infrastructure.llm_format import request_fields
 from src.infrastructure.llm_pacing import pacer_for, quota_wait
 from src.infrastructure.tls import verify_arg
 
@@ -84,6 +85,11 @@ class ChatModelAdapter(LlmPort):
             except Exception:                                      # noqa: BLE001
                 pass
 
+    @property
+    def per_action(self) -> bool:
+        """액션 턴에 액션마다 묶은 태스크 스키마를 청하나 — 네이티브 함수 호출일 때(R3-5v ⑦)."""
+        return self._cfg.response_format == "tools"
+
     async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
         waited, limited, source = 0.0, 0, ""
@@ -107,8 +113,9 @@ class ChatModelAdapter(LlmPort):
         usage: dict = {}
         # 호출마다 넘긴다 — langchain-openai는 호출 kwargs를 요청 본문에 그대로 합친다(`_get_request_payload`). 모델 객체에
         # 박으면 자유 질문(`llm ask`)까지 JSON을 강요한다.
-        fmt = response_format(self._cfg.response_format, schema)
-        extra = {"response_format": fmt} if fmt is not None else {}
+        extra = request_fields(self._cfg.response_format, schema)
+        # 네이티브 함수 호출(R3-5v ⑦)이면 답은 강제한 함수의 인자 원문이다 — 스트림은 인자 조각을 모은다.
+        tool_parts: list[str] = []
         try:
             if self._cfg.stream:
                 # 조각을 모아 한 답으로 — 호출부는 스트리밍을 모른다. 첫 조각 시각은 유휴 상한을 보는 재료다.
@@ -116,14 +123,16 @@ class ChatModelAdapter(LlmPort):
                     if first is None:
                         first = round(self._ticker() - started, 3)
                     parts.append(str(getattr(chunk, "content", "") or ""))
+                    tool_parts.extend(str(tc.get("args") or "") for tc in (getattr(chunk, "tool_call_chunks", None) or [])
+                                      if (tc.get("index") or 0) == 0)
                     metadata = merge_metadata(metadata, getattr(chunk, "response_metadata", None))
                     usage = getattr(chunk, "usage_metadata", None) or usage
-                text = "".join(parts)
+                text = "".join(tool_parts) or "".join(parts)
             else:
                 message = await self.client().ainvoke(messages, **extra)
                 metadata = getattr(message, "response_metadata", None) or {}
                 usage = getattr(message, "usage_metadata", None) or {}
-                text = str(getattr(message, "content", message) or "")
+                text = _tool_arguments(message) or str(getattr(message, "content", message) or "")
         except Exception as exc:                                   # noqa: BLE001
             # 받은 조각은 버리지 않는다 — 끝 표시만 빠진 답일 수 있다(사내 측정 #4). 쓸지는 답을 아는 쪽(`lead.ask_json`)이 정한다.
             failed = LlmReply(status="error", asked_at=self._clock(), model=self._cfg.model,
@@ -135,6 +144,15 @@ class ChatModelAdapter(LlmPort):
                         text=text, reported_model=metadata.get("model_name"),
                         latency_s=round(self._ticker() - started, 3), first_token_s=first,
                         chunks=len(parts), finish_reason=str(metadata.get("finish_reason") or ""), **_tokens(usage)), None
+
+
+def _tool_arguments(message) -> str:
+    """비스트림 답의 강제한 함수 인자 원문(R3-5v ⑦) — langchain-openai는 원문을 `additional_kwargs.tool_calls`에, 파싱한 것을 `tool_calls`에 둔다. 없으면 빈 문자열."""
+    raw = (getattr(message, "additional_kwargs", None) or {}).get("tool_calls") or []
+    if raw:
+        return str(((raw[0] or {}).get("function") or {}).get("arguments") or "")
+    parsed = getattr(message, "tool_calls", None) or []
+    return json.dumps(parsed[0].get("args"), ensure_ascii=False) if parsed and parsed[0].get("args") is not None else ""
 
 
 def merge_metadata(so_far: dict, fresh) -> dict:

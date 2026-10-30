@@ -17,7 +17,7 @@ from typing import Any
 from src.config.schema_llm import LlmConfig
 from src.domain.base import Clock
 from src.domain.llm import LlmPort, LlmReply
-from src.infrastructure.llm_format import response_format
+from src.infrastructure.llm_format import request_fields
 from src.infrastructure.llm_pacing import pacer_for, quota_wait
 from src.infrastructure.tls import verify_arg
 
@@ -32,6 +32,11 @@ class HttpChatAdapter(LlmPort):
 
     def describe(self) -> str:
         return self._cfg.describe()
+
+    @property
+    def per_action(self) -> bool:
+        """액션 턴에 액션마다 묶은 태스크 스키마를 청하나 — 네이티브 함수 호출일 때(R3-5v ⑦)."""
+        return self._cfg.response_format == "tools"
 
     async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
@@ -61,9 +66,7 @@ class HttpChatAdapter(LlmPort):
                 "messages": [{"role": "user", "content": prompt}]}
         if self._cfg.max_tokens is not None:
             body["max_tokens"] = self._cfg.max_tokens
-        fmt = response_format(self._cfg.response_format, schema)
-        if fmt is not None:
-            body["response_format"] = fmt
+        body.update(request_fields(self._cfg.response_format, schema))
 
         started = self._ticker()
         try:
@@ -86,8 +89,13 @@ class HttpChatAdapter(LlmPort):
 
     def _from_payload(self, payload: Any, started: float) -> LlmReply:
         try:
-            text = payload["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
+            message = payload["choices"][0]["message"]
+            text = message["content"]
+            # 네이티브 함수 호출(R3-5v ⑦)이면 답은 강제한 함수의 인자 원문이다.
+            calls = message.get("tool_calls") or []
+            if calls:
+                text = calls[0]["function"]["arguments"]
+        except (KeyError, IndexError, TypeError, AttributeError):
             # 200인데 모양이 다르면 그것도 실패다. 조용히 빈 문자열을 돌려주면
             # 엔진은 "LLM이 아무 말도 안 했다"로 읽고 그 이유를 영원히 모른다.
             return self._failed(f"응답 모양이 OpenAI 규약과 다르다 — {str(payload)[:300]}",

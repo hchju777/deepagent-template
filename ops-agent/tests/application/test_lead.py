@@ -1559,3 +1559,33 @@ async def test_길이_상한에서_깨진_답의_재질문에는_사유와_짧�
     assert "stopped_by" not in patch and len(llm.prompts) == 2
     assert "## 다시" in llm.prompts[1] and llm.prompts[1].rstrip().endswith("후보(alternates)는 둘 이내로 내라.")
     assert llm.schemas[1] is not None and llm.schemas[1] == llm.schemas[0]
+
+
+# ── R3-5v ⑦ — 네이티브 함수 호출이면 액션 턴의 태스크 스키마를 액션마다 required까지 묶는다 ──
+
+def test_네이티브_함수_호출이면_액션_턴의_태스크_스키마가_액션마다_required까지_묶인다():
+    """검토 회신(11-03) 8: 네이티브 함수 호출은 액션별 required 스키마 옵션으로(측정 #31의 교훈 — 몇 속성만 따로 적으면 모델이 그것만 채운다, R3-5u ③-b).
+    액션마다 `action`을 상수로, `params`를 그 액션의 인자로 닫고 필수 인자를 required로 — 그 묶음들의 anyOf. 기본(자유형)은 그대로."""
+    from src.application.lead import FrameReply, IntegrateReply, response_schema
+    from src.domain.actions import ACTIONS
+
+    items = response_schema(IntegrateReply, per_action=True)["properties"]["tasks"]["items"]
+    by = {one["properties"]["action"]["const"]: one for one in items["anyOf"]}
+    assert set(by) == set(ACTIONS)
+    read = by["code.read"]["properties"]["params"]
+    assert read["required"] == ["service", "path"] and set(read["properties"]) == {"service", "path", "offset", "limit", "line"}
+    assert read["additionalProperties"] is False and by["code.read"]["required"] == ["id", "goal", "action", "params"]
+    assert response_schema(FrameReply, per_action=True)["properties"]["tasks"]["items"] == items
+    assert response_schema(IntegrateReply)["properties"]["tasks"]["items"]["properties"]["params"] == {"type": "object"}   # 기본은 자유형(③-b)
+
+
+async def test_어댑터가_네이티브_함수_호출이면_ask_json이_액션마다_묶인_스키마를_보낸다(clock):
+    from src.application.lead import IntegrateReply, ask_json
+    from src.infrastructure.llm_fakes import ScriptedAdapter
+
+    tools = ScriptedAdapter(['{"decision": "conclude", "hypotheses": [], "tasks": []}'], clock=clock)
+    tools.per_action = True
+    got = await ask_json(tools, "p", IntegrateReply)
+    assert got.ok and "anyOf" in tools.schemas[0]["properties"]["tasks"]["items"]
+    plain = ScriptedAdapter(['{"decision": "conclude", "hypotheses": [], "tasks": []}'], clock=clock)
+    assert (await ask_json(plain, "p", IntegrateReply)).ok and plain.schemas[0]["properties"]["tasks"]["items"]["properties"]["params"] == {"type": "object"}

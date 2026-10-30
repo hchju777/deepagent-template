@@ -1971,10 +1971,10 @@ CASES += [
   '"strict": is_closed(schema)}}', '"strict": False}}',
   [FMT_T]),
  ("http 어댑터가 response_format을 안 보낸다", LH,
-  '        if fmt is not None:\n            body["response_format"] = fmt', '        if False:\n            body["response_format"] = fmt',
+  '        body.update(request_fields(self._cfg.response_format, schema))', '        body.update({})',
   [FMT_T]),
  ("chat_model 어댑터가 response_format을 안 보낸다", LCM2,
-  '        extra = {"response_format": fmt} if fmt is not None else {}', "        extra = {}",
+  '        extra = request_fields(self._cfg.response_format, schema)', "        extra = {}",
   [FMT_T]),
  ("리드가 스키마를 어댑터에 안 넘긴다", LD,
   "            reply = await llm.ask(asked, schema=use_schema)", "            reply = await llm.ask(asked)",
@@ -1983,8 +1983,8 @@ CASES += [
   "    schema = strictify(model.model_json_schema())", "    schema = model.model_json_schema()",
   ["tests/application/test_lead.py::test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다"]),
  ("response_format 기본이 none이다", ROOT / "src/config/schema_llm.py",
-  '    response_format: Literal["json_schema", "json_object", "none"] = "json_schema"',
-  '    response_format: Literal["json_schema", "json_object", "none"] = "none"',
+  '    response_format: Literal["json_schema", "json_object", "none", "tools"] = "json_schema"',
+  '    response_format: Literal["json_schema", "json_object", "none", "tools"] = "none"',
   ["tests/config/test_schema_llm.py::test_response_format은_셋_중_하나이고_describe에_보인다"]),
 ]
 
@@ -3691,7 +3691,23 @@ CASES += [
  ("integrate가 묶음 pins를 안 넘긴다", ND, "                hop=_hop(base, deps), pins=_pins(base, deps),\n", "                hop=_hop(base, deps),\n", [PINS_T]),
  ("받을 때의 pins가 걷기를 안 본다", ND, "    hop = next_hop(state.target, code_index=deps.code_index, walk=state.walk)\n    return [hop]", "    hop = next_hop(state.target, code_index=deps.code_index)\n    return [hop]", [WHOP_T]),
 ]
-assert len(CASES) >= 1228, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5v ⑦ — 네이티브 함수 호출 옵션(response_format "tools"): 강제한 함수의 인자가 답, 액션 턴은 액션마다 required까지 묶은 스키마 ──
+TOOLS_T = "tests/infrastructure/test_llm_adapters.py::test_response_format이_tools면_스키마를_강제한_함수_호출로_보내고_그_인자를_답으로_읽는다"
+ASK_PER_ACTION_T = "tests/application/test_lead.py::test_어댑터가_네이티브_함수_호출이면_ask_json이_액션마다_묶인_스키마를_보낸다"
+SCHEMA_PER_ACTION_T = "tests/application/test_lead.py::test_네이티브_함수_호출이면_액션_턴의_태스크_스키마가_액션마다_required까지_묶인다"
+CASES += [
+ ("tools 모드에서도 response_format으로 보낸다", LFM, "    if mode == \"tools\":\n        if schema is None:\n", "    if False:\n        if schema is None:\n", [TOOLS_T]),
+ ("tools 모드가 함수를 강제하지 않는다", LFM, ",\n                \"tool_choice\": {\"type\": \"function\", \"function\": {\"name\": name}}}", "}", [TOOLS_T]),
+ ("http 어댑터가 함수 인자를 안 읽는다", LH, "            if calls:\n                text = calls[0][\"function\"][\"arguments\"]\n", "", [TOOLS_T]),
+ ("chat_model 스트림이 함수 인자 조각을 안 모은다", LCM, "                text = \"\".join(tool_parts) or \"\".join(parts)\n", "                text = \"\".join(parts)\n", [TOOLS_T]),
+ ("chat_model이 함수 인자를 안 읽는다", LCM, "                text = _tool_arguments(message) or str(getattr(message, \"content\", message) or \"\")\n", "                text = str(getattr(message, \"content\", message) or \"\")\n", [TOOLS_T]),
+ ("http 어댑터가 액션마다 묶은 스키마를 안 청한다", LH, "        return self._cfg.response_format == \"tools\"\n", "        return False\n", [TOOLS_T]),
+ ("ask_json이 어댑터의 함수 호출을 안 본다", LD, "per_action=bool(getattr(llm, \"per_action\", False))", "per_action=False", [ASK_PER_ACTION_T]),
+ ("액션마다 스키마의 인자를 닫지 않는다", LD, "                       \"required\": list(required), \"additionalProperties\": False},\n", "                       \"required\": list(required)},\n", [SCHEMA_PER_ACTION_T]),
+ ("액션마다 스키마에 필수 인자가 없다", LD, "                       \"required\": list(required), \"additionalProperties\": False},\n", "                       \"required\": [], \"additionalProperties\": False},\n", [SCHEMA_PER_ACTION_T]),
+]
+assert len(CASES) >= 1237, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

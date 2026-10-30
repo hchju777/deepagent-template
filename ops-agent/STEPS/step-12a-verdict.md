@@ -2001,6 +2001,22 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   `live_llm` 마커라 기본 실행에서 빠진다(deselected 27 → 28). 사내: `pytest tests/live -m live_llm -k code_read -v`(두 역할 다).
 - 소스 변경 없음 — 스윕 그대로(1228). 여기서는 수집만 확인했다(게이트웨이가 없다).
 
+#### R3-5v ⑦ (11-03) ✅ — 네이티브 함수 호출 옵션(`response_format: "tools"`)
+
+- 검토 회신(11-03) 6·8: 게이트웨이는 두 역할 다 tools를 받는다(tool_calls, 인자 셋). 네이티브 함수 호출은 액션별 required 스키마 옵션으로 만들어 재생 A/B로만 고른다.
+- `llm.response_format`(역할마다 덮어쓸 수 있다)에 `tools` — 기본은 그대로 `json_schema`. 켜면 어댑터 둘이 같은 함수(`llm_format.request_fields`)로 답 스키마를
+  함수 하나의 인자로 보내고 `tool_choice`로 그 함수를 강제한다(`response_format`은 안 보낸다). 답의 글은 그 함수의 인자 원문 — http는 `message.tool_calls`,
+  chat_model은 스트림이면 `tool_call_chunks`의 인자 조각을 모으고 비스트림이면 `additional_kwargs.tool_calls`(없으면 파싱된 `tool_calls`). 스키마 없는 자유
+  질문엔 안 얹는다. `ask_json`의 파싱·재시도는 그대로다.
+- 켠 어댑터는 `per_action`이 참 — `ask_json`이 액션 턴(frame·integrate)에 `per_action_task_schema()`를 보낸다: 액션마다 `action` 상수, `params`는 그 액션의 인자로
+  닫고(`additionalProperties: false`) 필수 인자는 required, 그 묶음들의 anyOf. 측정 #31의 교훈(몇 속성만 따로 적으면 그것만 채운다)대로 액션 단위로 묶었다.
+  판정 턴은 전처럼 케이스마다의 닫힌 스키마.
+- 가짜 게이트웨이가 tools를 받으면 tool_calls로 답한다(비스트림 한 번, 스트림은 인자 두 조각). http·chat_model(비스트림·스트림) 셋을 같은 테스트로.
+- A/B: `config/app.json`의 `llm_roles.lead.response_format`만 `tools`로 바꾼 트리와 그대로인 트리를 같은 재생 판으로. 사내 게이트웨이가 anyOf·`const`를 받는지는
+  그 판의 첫 턴이 말한다(거부면 오류 원문).
+- 테스트 먼저(RED → GREEN). 스윕 +9(1237), 옛 앵커 셋(두 어댑터의 `response_format` 얹기·설정 기본값) 같은 변이로 재지정. `code graph` 재생성
+  불필요. **R3-5v 끝** — 다음은 재생 판 브리프.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.
