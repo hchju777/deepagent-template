@@ -1182,3 +1182,36 @@ async def test_채운_쓴_쪽의_코드에_구독_토픽이_없으면_다른_사
     walk = (await run_walk(_state(), runner=_Reads(capped), peer=peer, **kw))["walk"]
     assert walk.notes == ["in:{line}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 다른 사이트 값은 안 물었다(읽기·시간 상한) — 쓴 쪽을 채우지 않는다"]
     assert walk.stopped == "키가 없다 — in:L1"
+
+
+# ── R3-5v ② — 다른 사이트 값이 대는 쓴 쪽은 이 사이트에서 그 파이프라인이 돌 때만 ──
+
+async def test_다른_사이트_값이_대는_쓴_쪽은_이_사이트에서_그_파이프라인이_돌_때만_채우고_아니면_그_사실을_주에_적는다():
+    """검토 회신(11-03) 3: `<포장 계획 클래스>`는 두 사이트에만 켜져 있는데 이 사이트 키의 쓴 쪽으로 채워 토픽까지 이었다. 채우기 전에 이 사이트에서 그
+    파이프라인이 도는지(`pipeline_here` — 병합 config의 켜짐, GBM 층에서만 켜졌으면 배포 커밋의 클래스 정의) 본다. 안 돌면 그 사실을 주에 적고 안 채운다(전처럼
+    `키가 없다`). 확인이 던져도 채우지 않는다 — 모르는 것을 사실로 쓰지 않는다."""
+    no_writer = "in:{line} [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점"
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): _res("W1", [("t.raw", "topic")]),
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): no_writer, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)}, clock=lambda: T0)
+    peer = _Peer({"in:L1": ("sevt", "in:L1", _value(record=[], metadata={"event_type": "W1"}))})
+    asked = []
+
+    async def runs(name):
+        asked.append(name)
+        return ""
+
+    walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, pipeline_here=runs, **kw))["walk"]
+    assert asked == ["W1"] and walk.hops[1].writer == "W1" and walk.hops[2].key == "t.raw"          # 돌면 전처럼 채우고 그 구독 토픽까지
+
+    async def off(name):
+        return f"이 사이트 config에서 {name} 파이프라인이 꺼져 있다(pipelines.w1.enabled=false)"
+
+    async def boom(name):
+        raise RuntimeError("git down")
+
+    for here, why in ((off, "이 사이트 config에서 W1 파이프라인이 꺼져 있다(pipelines.w1.enabled=false)"),
+                      (boom, "이 사이트에서 도는지 확인하지 못했다(RuntimeError)")):
+        walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, pipeline_here=here, **kw))["walk"]
+        assert len(walk.hops) == 2 and walk.stopped == "키가 없다 — in:L1" and walk.hops[1].writer == ""
+        assert walk.notes == [f"in:{{line}}: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — sevt의 같은 키 in:L1 값이 대는 W1 — {why} — 쓴 쪽을 채우지 않는다"]

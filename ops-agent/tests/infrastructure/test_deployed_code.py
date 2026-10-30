@@ -1220,3 +1220,69 @@ def test_merge_pairs는_pandas_병합식의_키_필드와_how를_뽑는다():
                                  (8, ("ws",), ("ws",), "inner", 'u = a.merge(b, on="ws").to_dict("records")', ("to_dict", "records")),
                                  (9, ("ws",), ("ws",), "inner", 't = a.merge(b, on="ws").replace("x", "y")', None)]
     assert merge_pairs("def f(:\n") == [] and merge_pairs("") == []
+
+
+# ── R3-5v ② — 다른 사이트 값이 댄 쓴 쪽이 이 사이트에서 도는가 ──
+
+async def test_pipeline_here는_이_사이트_병합_config의_켜짐을_보고_GBM_층에서만_켜졌으면_배포_커밋의_클래스_정의를_본다(tmp_path, clock):
+    """검토 회신(11-03) 3: 다른 사이트 값이 댄 쓴 쪽 `<포장 계획 클래스>`는 두 사이트에만 켜져 있었는데 이 사이트 키의 쓴 쪽으로 채워 토픽까지 이었다. 채우기
+    전에 이 사이트의 병합 config에서 클래스 키 값이 그 클래스인 항목의 켜짐 값을 본다 — 없으면·꺼졌으면 그 사실. 켜짐이 GBM 층에서만 오면(사이트 층이 안 덮는다)
+    이 사이트 배포 커밋의 그 클래스 파일에 정의가 있는지 git으로(`<PGM 클래스>`의 모양 — GBM 층의 항목은 모든 사이트에 같지만 배포 커밋은 사이트마다 다르다).
+    사이트 층이 켰으면 그 사이트가 일부러 켠 것이라 git을 안 본다. 선언(토폴로지 `pipelines`)이 없으면 확인할 수 없다는 사실을 돌려준다."""
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Pin, PipelineSpec
+
+    root = make_git_repo(tmp_path / "dt-core", origin="https://git.example.com/team/dt-core")
+
+    def write(path, value):
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value if isinstance(value, str) else json.dumps(value), encoding="utf-8")
+
+    def entry(cls, on):
+        return {"enabled": on, "module": "jobs.x", "class": cls}
+
+    write("config/gbm/mx.json", {"pipelines": {"seed": entry("Seeder", True), "pack": entry("Packer", False), "shape": entry("Shaper", False)}})
+    write("config/factories/gumi/mx.json", {"pipelines": {"shape": {"enabled": True}}})
+    write("config/factories/sevt/mx.json", {"pipelines": {"pack": {"enabled": True}}})
+    files = {"jobs/__init__.py": "", "jobs/pack.py": "class Packer:\n    pass\n", "jobs/lonely.py": "class Lonely:\n    pass\n",
+             "jobs/seed.py": "class OldSeeder:\n    pass\n"}
+    for path, text in files.items():
+        write(path, text)
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "old", cwd=root)
+    old = git("rev-parse", "HEAD", cwd=root).stdout.strip()
+    files["jobs/seed.py"] = "class OldSeeder:\n    pass\n\n\nclass Seeder:\n    pass\n"
+    files["jobs/shape.py"] = "class Shaper:\n    pass\n"
+    for path in ("jobs/seed.py", "jobs/shape.py"):
+        write(path, files[path])
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "head", cwd=root)
+
+    class _Head:
+        async def files(self):
+            return sorted(files)
+
+        async def read(self, path):
+            return files.get(path)
+
+    topology = Topology(services={"jobs": Service(repo="dt-core", role="일을 한다")}, config_paths=LAYERS,
+                        pipelines=PipelineSpec(class_key="class", enabled_key="enabled"))
+    reader = RealCodeReader([RepoConfig(name="dt-core", path=str(root), url="https://git.example.com/team/dt-core")], clock=clock)
+    index = await ix.build_index({"dt-core": _Head()}, commits={"dt-core": "head"})
+
+    def code_at(deployment, topo=topology):
+        made = DeployedCode(reader, topo, deployment, gbm="mx", fct="gumi", clock=clock)
+        made.attach_index(index)
+        return made
+
+    here = code_at(Deployment())
+    assert await here.pipeline_here("Seeder") == ""                       # GBM 층에서 켜졌고 배포 커밋(main)에 정의가 있다
+    assert await here.pipeline_here("Shaper") == ""                       # 이 사이트 층이 켰다
+    assert await here.pipeline_here("Packer") == "이 사이트 config에서 Packer 파이프라인이 꺼져 있다(pipelines.pack.enabled=false)"
+    assert await here.pipeline_here("Lonely") == "이 사이트 config에 Lonely 파이프라인이 없다"
+    behind = code_at(Deployment(sites={"gumi": {"jobs": Pin(commit=old, how="declared")}}))
+    assert await behind.pipeline_here("Seeder") == f"이 사이트 배포 커밋 {old[:12]}의 jobs/seed.py에 Seeder 정의가 없다 — 아직 배포되지 않았을 수 있다"
+    assert await behind.pipeline_here("Shaper") == ""                     # 사이트가 일부러 켠 것 — 배포 커밋을 안 본다
+    bare = code_at(Deployment(), topology.model_copy(update={"pipelines": None}))
+    assert await bare.pipeline_here("Seeder") == "이 사이트에서 도는지 확인할 선언이 없다(토폴로지 pipelines)"

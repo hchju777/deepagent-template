@@ -388,6 +388,40 @@ def _evidence(layers: list[tuple[str, str, dict]], value: str) -> tuple[str, int
     return None
 
 
+def _entries_naming(node, key: str, name: str, where: tuple = ()):
+    """합친 config에서 `key` 잎이 그 클래스 이름인 객체 — `(경로, 객체)`. 값이 점 표기(`<모듈>.<클래스>`)여도 끝 이름으로 본다."""
+    if isinstance(node, dict):
+        value = node.get(key)
+        if isinstance(value, str) and value.rsplit(".", 1)[-1] == name:
+            yield list(where), node
+        for k, v in node.items():
+            yield from _entries_naming(v, key, name, (*where, str(k)))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _entries_naming(v, key, name, (*where, str(i)))
+
+
+def _has_path(node, path: list[str]) -> bool:
+    """그 층이 그 잎을 직접 적었나 — 병합 결과가 아니라 층 하나의 값에서."""
+    for part in path:
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+            node = node[int(part)]
+        else:
+            return False
+    return True
+
+
+def _truthy(value) -> bool:
+    """켜짐 잎 — JSON 참, 1, 문자열 "true"·"on"·"yes"·"1"."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return isinstance(value, str) and value.strip().lower() in ("true", "1", "yes", "on")
+
+
 class DeployedCode(DeployedCodePort):
     """`Adapters.code`에 꽂히는 어댑터. 사이트 하나(=`(gbm, fct)`) 기준이다."""
 
@@ -905,6 +939,66 @@ class DeployedCode(DeployedCodePort):
     def _pinned(self, source: str, commit: str, how: str) -> str:
         """증거에 **어느 커밋을 읽었는지**가 남아야 판정을 되짚을 수 있다."""
         return f"{source} @ {commit[:12]}" + ("" if how == "declared" else " (가정)")
+
+    async def pipeline_here(self, class_name: str) -> str:
+        """이 사이트에서 그 클래스의 파이프라인이 도는가 — 돌면 빈 문자열, 아니면 그 사실 한 줄(R3-5v ② — 검토 회신 11-03 3: 다른 사이트 값이 댄 쓴 쪽
+        `<포장 계획 클래스>`는 두 사이트에만 켜져 있었는데 이 사이트 키의 쓴 쪽으로 채워 토픽까지 이었다). 이 사이트의 병합 config에서 클래스 키 값이 그 클래스인
+        항목(토폴로지 `pipelines`)의 켜짐 값을 본다. 켜짐이 GBM 층에서만 오면(사이트 층이 안 덮는다) 이 사이트 배포 커밋의 그 클래스 파일에 정의가 있는지
+        git으로 — GBM 층의 항목은 모든 사이트에 같지만 배포 커밋은 사이트마다 다르다. 사이트 층이 켰으면 그 사이트가 일부러 켠 것이다. 선언이 없으면 확인할
+        수 없다는 사실을 돌려준다(걷기가 채우지 않게). 던지지 않는다."""
+        try:
+            return await self._pipeline_here(class_name)
+        except Exception as exc:                                    # noqa: BLE001
+            return f"이 사이트에서 도는지 확인하지 못했다({type(exc).__name__})"
+
+    async def _pipeline_here(self, class_name: str) -> str:
+        spec = self._topology.pipelines
+        if spec is None:
+            return "이 사이트에서 도는지 확인할 선언이 없다(토폴로지 pipelines)"
+        services = sorted(self.class_services().get(class_name, ()))
+        if not services:
+            return f"인덱스에 {class_name}의 서비스가 없다"
+        base = set(self._layer_paths(""))
+        found, unread = [], []
+        for service in services:
+            got = await self._layers_in(service, self._fct)
+            if isinstance(got, ProbeResult):
+                unread.append(f"{service}: {got.error}")
+                continue
+            merged = merge_target([(path, value) for path, _, value in got])
+            site_values = [value for path, _, value in got if path not in base]
+            for where, entry in _entries_naming(merged, spec.class_key, class_name):
+                by_site = any(_has_path(value, [*where, spec.enabled_key]) for value in site_values)
+                found.append((service, where, entry.get(spec.enabled_key), by_site))
+        if not found:
+            if unread and len(unread) == len(services):
+                return f"이 사이트 config를 못 읽었다 — {unread[0]}"
+            return f"이 사이트 config에 {class_name} 파이프라인이 없다"
+        on = [f for f in found if _truthy(f[2])]
+        if not on:
+            _, where, enabled, _ = found[0]
+            return f"이 사이트 config에서 {class_name} 파이프라인이 꺼져 있다({'.'.join([*where, spec.enabled_key])}={json.dumps(enabled, ensure_ascii=False)})"
+        if any(by_site for *_, by_site in on):
+            return ""
+        return await self._defined_at_pin(class_name, on[0][0])
+
+    async def _defined_at_pin(self, class_name: str, service: str) -> str:
+        """이 사이트 배포 커밋의 그 클래스 파일에 정의가 있나 — 있으면 빈 문자열."""
+        known = self._topology.services[service]
+        files = sorted({s.file for s in self._index.symbols if s.kind == "class" and s.name == class_name and s.repo == known.repo})
+        if not files:
+            return f"인덱스에 {class_name}의 파일이 없다"
+        commit = self._deployment.pin_for(service, fct=self._fct).commit or self._deployment.default_ref
+        got = await self._reader.show(known.repo, commit, files[0], whole=True)
+        if got.status != "ok" or not isinstance(got.data, str):
+            return f"이 사이트 배포 커밋 {commit[:12]}에 {files[0]} 파일이 없다 — {class_name} 정의가 아직 배포되지 않았을 수 있다"
+        try:
+            tree = ast.parse(got.data)
+        except SyntaxError:
+            return f"이 사이트 배포 커밋 {commit[:12]}의 {files[0]}를 파싱하지 못했다"
+        if not any(isinstance(node, ast.ClassDef) and node.name == class_name for node in ast.walk(tree)):
+            return f"이 사이트 배포 커밋 {commit[:12]}의 {files[0]}에 {class_name} 정의가 없다 — 아직 배포되지 않았을 수 있다"
+        return ""
 
     def _elsewhere(self, path: str, repo: str) -> str:
         """`code.read`가 git에서 실패했을 때의 꼬리 — 인덱스가 이 경로를 **다른 레포**의 모듈로 알면 그 서비스를 말한다(측정 #8 P1 5: 리드가

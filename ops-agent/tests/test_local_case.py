@@ -112,6 +112,8 @@ def test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다(
                                        "selects": {"SERVICE_ROLE": "batch"}}
     made = _board_topology({"_설명": ["x"], "services": {"real-svc": {"repo": "real-repo"}}, "flow": {"sources": []}, "config_paths": ["c"]})
     assert made["services"] == BOARD_SERVICES and made["flow"] == {"sources": []} and made["config_paths"] == ["c"] and made["_설명"] == ["x"]
+    # 파이프라인 항목의 모양(R3-5v ②)은 측정판 config의 것을 더한다 — 리포의 토폴로지에는 안 적는다(사내 이름이 들어갈 자리다).
+    assert made["pipelines"] == {"class_key": "class", "enabled_key": "enabled"}
 
 
 def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다():
@@ -191,6 +193,15 @@ def test_palette_empty는_공용_팔레트_키가_빈_배열이고_그_쓴_쪽_�
     assert "subscribe" not in seeder_src and "topic" not in seeder_src
     assert seeded["source"] == {"topic": "sevt.alarm.main", "partition": 0, "offset": 3}
     assert CORE_FILES["config/factories/sevt/mx.json"]["infra"]["kafka"]["consumer"]["topic"] == {"topic2": "sevt.alarm.main"}
+    # 파이프라인 항목(R3-5v ②): PaletteSeeder는 GBM 층에서 켜졌고, PaletteImporter는 GBM 층에서 꺼지고 sevt 층만 켠다. `palette-seeder-elsewhere`의 sevt 값은
+    # PaletteImporter를 댄다 — gumi에서 꺼진 파이프라인이라 걷기가 채우지 않는다.
+    assert CORE_FILES["config/gbm/mx.json"]["pipelines"] == {
+        "palette_seed": {"enabled": True, "module": "common.palette", "class": "PaletteSeeder"},
+        "palette_import": {"enabled": False, "module": "common.palette", "class": "PaletteImporter"}}
+    assert CORE_FILES["config/factories/sevt/mx.json"]["pipelines"] == {"palette_import": {"enabled": True}}
+    assert "class PaletteImporter:" in CORE_FILES["common/palette.py"] and "palette-seeder-elsewhere" in VARIANTS
+    away = _seeds(NOW, "palette-seeder-elsewhere")
+    assert "palette:source" not in away["redis"] and json.loads(away["peers"]["sevt"]["redis"]["sevt:palette:source"])["metadata"]["event_type"] == "PaletteImporter"
 
 
 # ── R3-5 ④ — 사내 c-1·c-2의 사슬과 등록 모음 파일 ──

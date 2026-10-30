@@ -94,12 +94,22 @@ class FlowSpec(StrictModel):
     ]
 
 
+class PipelineSpec(StrictModel):
+    """대상 config에서 파이프라인 항목을 알아보는 법(R3-5v ② — 검토 회신 11-03 3: 두 사이트에만 켜진 클래스가 이 사이트 키의 쓴 쪽으로 채워졌다). 항목은
+    `class_key` 잎에 클래스 이름이 든 객체이고, `enabled_key` 잎이 참이면 그 사이트에서 돈다. 키 이름은 대상 config의 것이라 리포엔 자리표시자만 — 사내
+    토폴로지가 적는다."""
+    class_key: str = Field(min_length=1)
+    enabled_key: str = Field(min_length=1)
+
+
 class Topology(StrictModel):
     """GBM 하나의 서비스 지도. **사이트 단위가 아니다** — 코드는 GBM별로 같다."""
 
     services: dict[str, Service] = {}
     # 흐름 그래프(11c)가 이름을 뽑는 자리. 없으면 기본 표.
     flow: FlowSpec = FlowSpec()
+    # 파이프라인 항목의 모양(R3-5v ②). 없으면 다른 사이트 값이 댄 쓴 쪽이 이 사이트에서 도는지 확인할 수 없어 걷기가 채우지 않는다.
+    pipelines: PipelineSpec | None = None
     # 대상 레포 안에서 **이름이 사는 곳**. 층 순서대로 적는다(앞이 밑바닥).
     #
     # `{gbm}`·`{fct}`를 쓸 수 있다 — 대상의 config가 법인별로도 갈리기 때문이다

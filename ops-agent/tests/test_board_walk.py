@@ -28,9 +28,11 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "infra.kafka.producer.topic", "kind": "topic", "relation": "produces"},
                 {"path": "infra.kafka.consumer.group_id", "kind": "group", "relation": "consumes_as"},
                 {"path": "mongodb_collection", "kind": "collection"},
-                {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]}}
+                {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]},
+            # 측정판 config의 파이프라인 항목(R3-5v ②) — 클래스 키·켜짐 키의 이름. 사내 이름은 사내 토폴로지에만.
+            "pipelines": {"class_key": "class", "enabled_key": "enabled"}}
 VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
-            "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet", "palette-source-missing")
+            "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet", "palette-source-missing", "palette-seeder-elsewhere")
 
 
 def _repo(root, url, files):
@@ -399,3 +401,14 @@ def test_공용_키가_없고_쓰는_클래스_코드에_구독_토픽이_없으
     assert stopped == "키가 없다 — alarm:palette(쓰는 PaletteLoader [dt-core(서비스 3개 공유)] · 구독 토픽 없음(클래스 코드 · 서비스 선언 3개))"
     assert notes == [PALETTE_NOTE, "PaletteLoader: 클래스 코드에 구독 토픽이 없다(code.resources 읽기에 [topic] 0줄) — 서비스 선언 3개는 그 클래스의 것인지 몰라 안 읽는다"]
     assert rungs[0] == f"code.read line={_at('common/palette.py', 'class PaletteLoader')} path='common/palette.py' service='batch'"
+
+
+def test_다른_사이트_값이_대는_쓴_쪽이_이_사이트에서_꺼진_파이프라인이면_채우지_않고_그_사실을_주에_적는다(board, monkeypatch):
+    """R3-5v ② — 검토 회신(11-03) 3: 두 사이트에만 켜진 클래스가 이 사이트 키의 쓴 쪽으로 채워져 토픽까지 이어졌다. 측정판 `palette-seeder-elsewhere`: 원천 색
+    키가 없고(palette-source-missing과 같다) sevt 값은 `PaletteImporter`를 댄다 — 그 파이프라인은 GBM 층에서 꺼져 있고 sevt 층만 켠다. gumi 걷기는 채우지 않고
+    그 사실을 주에 적는다. `palette-source-missing`의 `PaletteSeeder`는 GBM 층에서 켜졌고 gumi 배포 커밋에 정의가 있어 전처럼 채운다(위 테스트)."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "palette-seeder-elsewhere")
+    assert any(r.startswith("palette:source | ") and r.endswith(" | 없음") and "Palette" not in r.split(" | ")[1] for r in rows), rows
+    assert stopped == "키가 없다 — palette:source" and not any(r.startswith("mx.alarm.main | ") for r in rows)
+    assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — sevt의 같은 키 sevt:palette:source 값이 대는 PaletteImporter — "
+                                   "이 사이트 config에서 PaletteImporter 파이프라인이 꺼져 있다(pipelines.palette_import.enabled=false) — 쓴 쪽을 채우지 않는다"]

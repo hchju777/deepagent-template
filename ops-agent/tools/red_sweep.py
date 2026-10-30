@@ -2432,7 +2432,7 @@ CASES += [
 
 # ── 핫픽스 10-14 — 측정판 토폴로지는 사본에만 · 리포 knowledge를 테스트가 안 읽는다 ──
 CASES += [
- ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES)}", "    return dict(topo)",
+ ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES), \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\"}}", "    return dict(topo)",
   ["tests/test_local_case.py::test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다"]),
  ("예외 목록을 OS 구분자 그대로 비교한다", ROOT / "tests/test_portability.py", "        return path.relative_to(root).as_posix()", "        return str(path.relative_to(root))",
   ["tests/test_portability.py::test_예외_목록은_Windows_구분자에도_맞는다"]),
@@ -2543,7 +2543,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -2645,7 +2645,7 @@ CASES += [
  ("걷기 노드가 레포 지도를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by", "declared_by=deps.declared_by", [WNODE_T]),
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
  ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
- ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\", \"palette-source-missing\")", "\"colors\": [] if variant in (\"palette-unread\", \"palette-source-missing\")", [PAL_T]),
+ ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\", \"palette-source-missing\", \"palette-seeder-elsewhere\")", "\"colors\": [] if variant in (\"palette-unread\", \"palette-source-missing\", \"palette-seeder-elsewhere\")", [PAL_T]),
  ("palette-empty가 빈 data가 아니다", LC, "\"source-filtered\", \"palette-empty\", \"palette-missing\"", "\"source-filtered\", \"palette-missing\"", [PAL_T]),
 ]
 
@@ -3553,7 +3553,7 @@ CASES += [
  ("peer 리더가 비활성 사이트도 묻는다", MN, "    others = [e for e in load_registry(config_root).active() if e.gbm == gbm and e.fct != fct]\n", "    others = [e for e in load_registry(config_root).sites if e.gbm == gbm and e.fct != fct]\n", [PEER_CLI_T]),
  ("안 닿은 사이트를 다시 묻는다", MN, "                if got is not None and got.status != \"ok\":\n                    dead.add(entry.fct)\n                    continue\n", "                if got is not None and got.status != \"ok\":\n                    continue\n", [PEER_CLI_T]),
  ("같은 키가 없을 때 같은 템플릿의 키를 안 본다", MN, "                for sibling in keys[:1]:\n", "                for sibling in keys[:0]:\n", [PEER_CLI_T]),
- ("palette-source-missing에 원천 색 키가 있다", LC, "            **({} if variant == \"palette-source-missing\" else\n", "            **({} if False else\n", [LOCAL_PALETTE_T, BOARD_PEER_T]),
+ ("palette-source-missing에 원천 색 키가 있다", LC, "            **({} if variant in _PALETTE_SOURCE_GONE else\n", "            **({} if False else\n", [LOCAL_PALETTE_T, BOARD_PEER_T]),
 ]
 
 # ── 12a-R3-5t ④ — 다른 사이트에 물을 키는 그 사이트의 이름 목록으로 ──
@@ -3563,7 +3563,7 @@ CASES += [
  ("그 사이트가 선언하지 않은 키도 글자 그대로 묻는다", MN, "                if named is None:\n                    continue                                       # 그 사이트는 그 키를 선언하지 않는다 — 읽지 않는다(묻는 수에도 안 센다)\n", "                if named is None:\n                    named = (key, template)\n", [PEER_CLI_T]),
  ("CLI가 peer 리더에 이름 목록을 안 준다", MN, "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds, names_for=code.names_for if code else None)\n        try:\n            # 조사(", "        peer, close_peers = _peer_reader(args.config_root, gbm, fct, env=env, clock=clock, seeds=seeds)\n        try:\n            # 조사(", [BOARD_PEER_T]),
  ("palette-source-missing의 sevt 키에 접두어가 없다", LC, "        **({\"peers\": {\"sevt\": {\"redis\": {\"sevt:palette:source\": json.dumps(", "        **({\"peers\": {\"sevt\": {\"redis\": {\"palette:source\": json.dumps(", [BOARD_PEER_T, LOCAL_PALETTE_T]),
- ("sevt 층에 키 접두어가 없다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n        \"redis_key\": {\"prefix\": \"sevt\"}},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
+ ("sevt 층에 키 접두어가 없다", LC, "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n        \"redis_key\": {\"prefix\": \"sevt\"},\n", "        \"infra\": {\"kafka\": {\"consumer\": {\"group_id\": \"sevt-mx-core\", \"topic\": {\"topic2\": \"sevt.alarm.main\"}}}},\n", [BOARD_PEER_T, LOCAL_PALETTE_T]),
 ]
 
 # ── 12a-R3-5u ① — 채운 쓴 쪽의 코드에 구독 토픽이 없으면 다른 사이트 값의 source.topic을 이 사이트 이름으로 ──
@@ -3626,7 +3626,29 @@ CASES += [
  ("다른 사이트 리더가 재생 머리를 안 받는다", MN, "clock=clock, snapshot=snapshot_of(seeds)) if peer_seeds else None\n", "clock=clock) if peer_seeds else None\n", [REPLAY_PEER_T]),
  ("입구가 scan 실패를 버린다", IM, "        if scanned.status != \"ok\":\n            unscanned.append(", "        if False:\n            unscanned.append(", [INTAKE_SCAN_T]),
 ]
-assert len(CASES) >= 1190, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5v ② — 다른 사이트 값이 댄 쓴 쪽은 이 사이트에서 그 파이프라인이 돌 때만(병합 config의 켜짐, GBM 층만이면 배포 커밋의 정의) ──
+PIPE_T = "tests/infrastructure/test_deployed_code.py::test_pipeline_here는_이_사이트_병합_config의_켜짐을_보고_GBM_층에서만_켜졌으면_배포_커밋의_클래스_정의를_본다"
+PIPE_WALK_T = "tests/application/test_walk.py::test_다른_사이트_값이_대는_쓴_쪽은_이_사이트에서_그_파이프라인이_돌_때만_채우고_아니면_그_사실을_주에_적는다"
+BOARD_ELSEWHERE_T = "tests/test_board_walk.py::test_다른_사이트_값이_대는_쓴_쪽이_이_사이트에서_꺼진_파이프라인이면_채우지_않고_그_사실을_주에_적는다"
+LOCAL_TOPO_PIPE_T = "tests/test_local_case.py::test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다"
+CASES += [
+ ("파이프라인 선언이 없어도 이 사이트에서 돈다고 본다", D, "        if spec is None:\n            return \"이 사이트에서 도는지 확인할 선언이 없다(토폴로지 pipelines)\"\n", "        if spec is None:\n            return \"\"\n", [PIPE_T]),
+ ("꺼진 파이프라인을 켜졌다고 본다", D, "        on = [f for f in found if _truthy(f[2])]\n", "        on = found\n", [PIPE_T, BOARD_ELSEWHERE_T]),
+ ("config에 없는 클래스도 돈다고 본다", D, "            return f\"이 사이트 config에 {class_name} 파이프라인이 없다\"\n", "            return \"\"\n", [PIPE_T]),
+ ("GBM 층에서만 켜져도 배포 커밋을 안 본다", D, "        return await self._defined_at_pin(class_name, on[0][0])\n", "        return \"\"\n", [PIPE_T]),
+ ("사이트 층이 켠 것도 배포 커밋을 본다", D, "        if any(by_site for *_, by_site in on):\n            return \"\"\n", "", [PIPE_T]),
+ ("배포 커밋에서 클래스 정의가 아니라 파일만 본다", D, "        if not any(isinstance(node, ast.ClassDef) and node.name == class_name for node in ast.walk(tree)):\n", "        if False:\n", [PIPE_T]),
+ ("켜짐을 사이트 층이 적었는지 안 본다", D, "                by_site = any(_has_path(value, [*where, spec.enabled_key]) for value in site_values)\n", "                by_site = True\n", [PIPE_T]),
+ ("다른 사이트 값이 대는 쓴 쪽을 이 사이트 확인 없이 쓴다", WK, "            if off:\n                return f\"{fct}의 같은 키 {read_key} 값이 대는 {w} — {off}\"\n", "", [PIPE_WALK_T, BOARD_ELSEWHERE_T]),
+ ("이 사이트 확인이 던지면 채운다", WK, "                off = f\"이 사이트에서 도는지 확인하지 못했다({type(exc).__name__})\"\n", "                off = \"\"\n", [PIPE_WALK_T]),
+ ("걷기 노드가 이 사이트 확인을 안 넘긴다", ND, "peer=deps.peer, pipeline_here=deps.pipeline_here, clock=deps.clock)", "peer=deps.peer, clock=deps.clock)", [BOARD_ELSEWHERE_T]),
+ ("case walk가 이 사이트 확인을 안 넘긴다", MN, "                              pipeline_here=code.pipeline_here if code else None,\n", "", [BOARD_ELSEWHERE_T]),
+ ("측정판이 sevt에서만 켜진 쓴 쪽을 안 심는다", LC, "\"event_type\": \"PaletteImporter\" if variant == \"palette-seeder-elsewhere\"\n", "\"event_type\": \"PaletteSeeder\" if variant == \"palette-seeder-elsewhere\"\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
+ ("측정판 GBM 층이 PaletteImporter를 켠다", LC, "\"palette_import\": {\"enabled\": False, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", "\"palette_import\": {\"enabled\": True, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
+ ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES), \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\"}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
+]
+assert len(CASES) >= 1204, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

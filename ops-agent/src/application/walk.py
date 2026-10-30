@@ -293,10 +293,12 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    subscriptions: dict[str, tuple[str, ...]] | None = None,
                    lookup: Callable[..., Awaitable[FilterScan]] | None = None,
                    peer: Callable[[str, str], Awaitable[tuple[str, str, Any] | None]] | None = None,
+                   pipeline_here: Callable[[str], Awaitable[str]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
     (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만. `peer(키, 템플릿)`은 같은 GBM 다른
-    사이트의 같은 키 값 `(사이트, 읽은 키, 값)`(R3-5t ②); 없으면(사이트 하나·대본) 인덱스가 모르는 쓴 쪽은 전처럼 비운다."""
+    사이트의 같은 키 값 `(사이트, 읽은 키, 값)`(R3-5t ②); 없으면(사이트 하나·대본) 인덱스가 모르는 쓴 쪽은 전처럼 비운다. `pipeline_here(클래스)`는 그 값이 댄
+    클래스가 이 사이트에서 도는지 — 돌면 빈 문자열, 아니면 까닭(R3-5v ②); 없으면(대본) 확인 없이 채운다."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
@@ -420,6 +422,15 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         w, at, _ = writer_of(value, classes)
         if not w:
             return f"{fct}의 같은 키 {read_key} 값이 대는 이름은 인덱스 클래스가 아니다"
+        if pipeline_here is not None:
+            # 그 클래스가 이 사이트에서 도는가(R3-5v ② — 검토 회신 11-03 3: 두 사이트에만 켜진 클래스가 이 사이트 키의 쓴 쪽으로 채워져 토픽까지 이어졌다).
+            # 확인이 던지면 모르는 것이다 — 채우지 않는다.
+            try:
+                off = await pipeline_here(w)
+            except Exception as exc:                                                        # noqa: BLE001
+                off = f"이 사이트에서 도는지 확인하지 못했다({type(exc).__name__})"
+            if off:
+                return f"{fct}의 같은 키 {read_key} 값이 대는 {w} — {off}"
         src_topic = pointer_of(value).get("topic", "")
         return w, at, fct, read_key, src_topic, (topics_map or {}).get(src_topic, "")
 
