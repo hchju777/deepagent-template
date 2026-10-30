@@ -4,3 +4,4 @@ __pycache__/
 .env
 output/
 .pytest_cache/
+.claude

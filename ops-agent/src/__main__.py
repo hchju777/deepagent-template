@@ -20,6 +20,7 @@
     python -m src mail describe         누구에게 보내게 돼 있는지(발송 안 함)
     python -m src mail send --subject "연결 테스트" --dry-run   나갈 요청만 보여준다
     python -m src mail send --subject "연결 테스트"             실제로 보낸다
+    python -m src mail send --to me@x.com --dry-run   이 주소에만(config 수신자는 무시)
     python -m src report scenarios      리포트 시나리오 목록
     python -m src report window         집계 대상 날짜와 실제로 나갈 Mongo 필터
     python -m src report window --today 2026-09-07   그날 돌았다면 어떻게 되는가
@@ -674,7 +675,7 @@ def cmd_mail_send(args, env) -> int:
     app = load_app_config(args.config_root, env=env)
     body = Path(args.file).read_text(encoding="utf-8") if args.file else (
         args.body or _TEST_BODY)
-    sender = build_mail(app.mail, clock=_clock(args, env))
+    sender = build_mail(_mail_to(app.mail, args.to), clock=_clock(args, env))
     subject = sender.full_subject(args.subject)
 
     if args.dry_run:
@@ -694,6 +695,21 @@ def cmd_mail_send(args, env) -> int:
         print(f"\n  ⚠  본문에서 필드 머리글처럼 보이는 줄 "
               f"{result.neutralized_lines}개를 인용 표시(| )로 무력화했다", file=sys.stderr)
     return 1 if result.status == "error" else 0
+
+
+def _mail_to(cfg, to: list[str] | None):
+    """`--to`가 있으면 그 주소들**만** — config 수신자에 더하지 않는다. 더하면 "시험 삼아 나한테만"이 전원에게 간다.
+
+    config와 **같은 검증**을 다시 탄다(`MailConfig`) — 줄바꿈이 든 주소는 그 자체가 주입 통로다(`schema_mail`).
+    """
+    if not to:
+        return cfg
+    from pydantic import ValidationError
+
+    try:
+        return type(cfg).model_validate({**cfg.model_dump(), "recipients": to})
+    except ValidationError as exc:
+        raise ConfigError(f"--to: {exc.errors()[0]['msg']}") from exc
 
 
 def _pick_scenario(args):
@@ -2840,6 +2856,8 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--file", help="본문을 파일에서 읽는다")
     send.add_argument("--dry-run", action="store_true",
                       help="나갈 요청만 보여주고 보내지 않는다")
+    send.add_argument("--to", action="append", metavar="ADDR",
+                      help="이 주소에만 보낸다(여러 번 쓸 수 있다). 주면 config 수신자는 무시한다")
     send.set_defaults(run=cmd_mail_send)
 
     report = sub.add_parser("report", help="운영 리포트")
