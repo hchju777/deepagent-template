@@ -2966,7 +2966,7 @@ CASES += [
  ("압축된 오프셋의 다음 레코드를 그 메시지라 한다", KI, "            if record.offset != offset:", "            if False:", [KI_HOLE_T]),
  ("브로커가 안 주면 바로 포기한다", KI, "                    if empties >= EMPTY_POLLS:          # 한 건도 안 오면 tail과 같은 기준으로 그만둔다", "                    if True:          # 한 건도 안 오면 tail과 같은 기준으로 그만둔다", [KI_STALL_T]),
  ("메시지 크기를 안 센다", KI, "\"bytes\": len(record.value or b\"\")}", "\"bytes\": 0}", [KI_FOUND_T]),
- ("스텁이 보존 시작을 무시한다", ST, "        begin = self._begins.get(topic, 0)", "        begin = 0", [STUB_MSG_T]),
+ ("스텁이 보존 시작을 무시한다", ST, "        begin, end = self._begins[topic], self._ends[topic]\n", "        begin, end = 0, self._ends[topic]\n", [STUB_MSG_T]),
  ("스텁이 범위 밖에도 메시지를 지어낸다", ST, "        if not begin <= int(offset) < end:", "        if False:", [STUB_MSG_T]),
  ("리드 목록에 포인터 읽기가 보인다", B, "        if name in _RENDERED_SEPARATELY or name in _WALK_READS or name in hide:", "        if name in _RENDERED_SEPARATELY or name in hide:", [CAT_MSG_T]),
 ]
@@ -3000,7 +3000,7 @@ CASES += [
  ("걷기 노드가 발행 선언을 안 넘긴다", ND, "                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,", "                                  subscriptions=deps.subscriptions, lookup=deps.filter_lines,", [WALK_KEY_T]),
  ("어긋남 caveat가 메시지 홉의 발행 선언을 안 적는다", ND, "    where = f\"쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}]\" if stop.writer else stop.service", "    where = f\"쓴 쪽 {stop.writer} [{', '.join(stop.candidates)}]\"", [DISAGREE_T]),
  ("메시지 홉의 발행 선언이 표에 안 보인다", CS, "        who = (self.writer + (f\" [{self.service}]\" if self.service else \"\")) if self.writer else (self.service or \"—\")", "        who = (self.writer + (f\" [{self.service}]\" if self.service else \"\")) if self.writer else \"—\"", [WALK_MSG_T]),
- ("CLI가 발행 선언을 안 넘긴다", MN, "topic_producers=flow.producing_map(flow_graph),\n                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)", "subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)", [BOARD_GONE_T]),
+ ("CLI가 발행 선언을 안 넘긴다", MN, "topic_producers=flow.producing_map(flow_graph),\n                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))", "subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))", [BOARD_GONE_T]),
  ("측정판에 포인터가 없다", LC, "\"offset\": _POINTER_OFFSET[l]}} if variant in _MESSAGE_VARIANTS else {})},", "\"offset\": _POINTER_OFFSET[l]}} if False else {})},", [LC_MSG_T, BOARD_MSG_T]),
 ]
 
@@ -3362,7 +3362,7 @@ CASES += [
  ("포트에 범위 읽기가 없다", PTS, "    async def offsets(self, topic: str) -> ProbeResult:\n        \"\"\"토픽의 보존 범위 — 파티션마다", "    async def _offsets(self, topic: str) -> ProbeResult:\n        \"\"\"토픽의 보존 범위 — 파티션마다", [PORT_OFFSETS_T]),
  ("범위 읽기가 등재 목록에 없다", AC, "    \"kafka.offsets\":       (\"kafka\", \"offsets\",       (\"topic\",),              ()),", "", [ACT_OFFSETS_T]),
  ("범위 읽기를 리드 목록에 보인다", B, "_WALK_READS = {\"kafka.message_at\", \"kafka.offsets\"}", "_WALK_READS = {\"kafka.message_at\"}", [CATALOG_WALK_T]),
- ("스텁 범위가 보존 시작을 안 본다", ST, "        first = self._begins.get(topic, 0)\n        last = first + len(self._topics[topic])\n        return ProbeResult.succeeded({\"topic\": topic, \"partitions\": [{\"partition\": 0, \"begin\": first, \"end\": last}], \"messages\": last - first},", "        first = 0\n        last = len(self._topics[topic])\n        return ProbeResult.succeeded({\"topic\": topic, \"partitions\": [{\"partition\": 0, \"begin\": first, \"end\": last}], \"messages\": last - first},", [STUB_MSG_T]),
+ ("스텁 범위가 보존 시작을 안 본다", ST, "        first, last = self._begins[topic], self._ends[topic]\n", "        first, last = 0, self._ends[topic] - self._begins[topic]\n", [STUB_MSG_T]),
  ("실어댑터 범위가 남은 수를 끝 오프셋으로 센다", KI, "            return ProbeResult.succeeded({\"topic\": actual, \"partitions\": rows, \"messages\": sum(r[\"end\"] - r[\"begin\"] for r in rows)},", "            return ProbeResult.succeeded({\"topic\": actual, \"partitions\": rows, \"messages\": sum(r[\"end\"] for r in rows)},", [KI_OFFSETS_T]),
  ("실어댑터 범위가 파티션 없음을 넘긴다", KI, "            if not partitions:\n                return ProbeResult.failed(f\"토픽이 없거나 파티션을 못 찾았다 — {actual}\", source=source, clock=self._clock)\n            tps = [TopicPartition(actual, p) for p in partitions]", "            tps = [TopicPartition(actual, p) for p in partitions]", [KI_OFFSETS_T]),
 ]
@@ -3600,7 +3600,33 @@ CASES += [
  ("같은 이름 파일을 서비스 없이 댄다", D, "            return f\"{r}:{f}\" + (f\"(service={svc!r})\" if svc else \"\")\n", "            return f\"{r}:{f}\"\n", [ELSEWHERE_T]),
  ("리드 스키마의 params에 속성을 적는다", LD, "    \"id\": _ID, \"goal\": {\"type\": \"string\"}, \"action\": {\"type\": \"string\"}, \"params\": {\"type\": \"object\"},\n", "    \"id\": _ID, \"goal\": {\"type\": \"string\"}, \"action\": {\"type\": \"string\"}, \"params\": {\"type\": \"object\", \"properties\": {\"line\": {\"type\": \"integer\", \"minimum\": 1}}},\n", [SCHEMA_T]),
 ]
-assert len(CASES) >= 1175, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5v ① — 재생 스냅샷(스냅샷 밖 읽기는 실패, Kafka 띄엄 오프셋, 뜬 시각 고정) + 입구의 scan 실패 ──
+KAFKA_SPARSE_T = "tests/infrastructure/test_stubs.py::test_kafka_시드가_begin_end와_띄엄_오프셋을_주면_그대로_답하고_안_뜬_오프셋과_꼬리는_실패다"
+REPLAY_T = "tests/infrastructure/test_factory.py::test_재생_스냅샷이면_스냅샷_밖_읽기는_없음이_아니라_실패이고_관측_시각은_뜬_시각이다"
+REPLAY_REST_T = "tests/infrastructure/test_factory.py::test_재생_REST는_인자별로_뜬_응답만_답하고_인자_없는_응답은_재생에서_안_쓴다"
+REPLAY_CLOCK_T = "tests/test_cli_case_walk.py::test_재생_스냅샷이면_CLI의_지금은_뜬_시각이고_LLM과_걷기_예산만_실시계다"
+REPLAY_WALK_T = "tests/test_cli_case_walk.py::test_case_walk은_재생_스냅샷의_인자별_REST_캡처로_입구를_읽고_인자_없는_응답은_안_쓴다"
+REPLAY_PEER_T = "tests/test_cli_case_walk.py::test_재생에서_다른_사이트_리더는_안_뜬_키를_없음으로_보지_않고_그_사이트를_못_읽은_것으로_넘긴다"
+INTAKE_SCAN_T = "tests/application/test_intake_map.py::test_템플릿_scan이_실패해_후보가_없으면_선언_키를_모른다가_아니라_scan_실패를_적는다"
+CASES += [
+ ("재생이 안 뜬 Redis 키를 없음으로 답한다", ST, "            if self._outside:\n                return ProbeResult.failed(f\"스냅샷 밖 — 키 {key}는 안 떴다\", source=source, clock=self._clock)\n            return ProbeResult.succeeded(None, source=source, clock=self._clock)\n", "            return ProbeResult.succeeded(None, source=source, clock=self._clock)\n", [REPLAY_T]),
+ ("재생의 관측 시각이 지금이다", ST, "    at = snapshot.captured_at\n    return lambda: at\n", "    return clock\n", [REPLAY_T]),
+ ("있는 키의 TTL을 재생에서도 만료 없음으로 답한다", ST, "            if self._snapshot is not None:\n", "            if False:\n", [REPLAY_T]),
+ ("Kafka 띄엄 오프셋의 빈 자리를 보존 범위 밖으로 답한다", ST, "        if caught is None:\n            return ProbeResult.failed(f\"스냅샷 밖 — {topic}[0]@{int(offset)}는 안 떴다(뜬 오프셋 {len(self._caught[topic])}개)\",\n                                      source=source, clock=self._clock)\n", "        if caught is None:\n            return ProbeResult.succeeded({**head, \"found\": False, \"message\": None, \"bytes\": 0, \"note\": \"보존 범위 밖\"}, source=source, clock=self._clock)\n", [KAFKA_SPARSE_T]),
+ ("Kafka 재생 꼴의 end를 안 본다", ST, "            if isinstance(seed, dict) and \"end\" in seed:\n", "            if False:\n", [KAFKA_SPARSE_T, REPLAY_T]),
+ ("꼬리의 안 뜬 오프셋을 건너뛴다", ST, "        missing = [o for o in want if o not in caught]\n", "        missing, want = [], [o for o in want if o in caught]\n", [KAFKA_SPARSE_T]),
+ ("재생 Mongo가 안 뜬 컬렉션을 빈 결과로 답한다", ST, "        if self._outside and collection not in self._collections:\n", "        if False:\n", [REPLAY_T]),
+ ("재생 Kafka가 안 뜬 토픽의 꼬리를 빈 목록으로 답한다", ST, "            if self._outside:\n                return ProbeResult.failed(f\"스냅샷 밖 — 토픽 {topic}은 안 떴다\", source=source, clock=self._clock)\n", "", [REPLAY_T]),
+ ("REST 캡처의 인자를 안 본다", ST, "                if json.dumps(theirs, sort_keys=True, ensure_ascii=False, default=str) == asked:\n", "                if True:\n", [REPLAY_REST_T]),
+ ("재생 REST가 인자 없는 응답을 쓴다", ST, "        elif self._outside:\n", "        elif False:\n", [REPLAY_REST_T, REPLAY_WALK_T]),
+ ("조립이 재생 머리를 스텁에 안 넘긴다", ROOT / "src/infrastructure/factory.py", "        snapshot = snapshot_of(seeds)\n", "        snapshot = None\n", [REPLAY_T]),
+ ("CLI의 지금이 재생에서도 실시계다", MN, "            made = lambda: at                                      # noqa: E731\n", "            made = _wall_clock(args, env)\n", [REPLAY_CLOCK_T, REPLAY_WALK_T]),
+ ("재생 머리 오류를 사람 말로 안 바꾼다", MN, "    except ValidationError as exc:\n        first = exc.errors()[0]\n", "    except KeyError as exc:\n        first = exc.errors()[0]\n", [REPLAY_CLOCK_T]),
+ ("다른 사이트 리더가 재생 머리를 안 받는다", MN, "clock=clock, snapshot=snapshot_of(seeds)) if peer_seeds else None\n", "clock=clock) if peer_seeds else None\n", [REPLAY_PEER_T]),
+ ("입구가 scan 실패를 버린다", IM, "        if scanned.status != \"ok\":\n            unscanned.append(", "        if False:\n            unscanned.append(", [INTAKE_SCAN_T]),
+]
+assert len(CASES) >= 1190, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

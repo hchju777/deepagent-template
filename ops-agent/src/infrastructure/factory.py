@@ -47,17 +47,19 @@ def build_adapters(site: SiteConfig, *, clock: Clock,
     infra = site.infra
     if seeds is not None:
         from src.infrastructure.stubs import (StubDeployedCode, StubKafkaInspector, StubMongoReader,
-                                              StubRedisReader, StubRestProber)
+                                              StubRedisReader, StubRestProber, snapshot_of)
         if code is None and "code" in seeds:
             # 대본이 `code` 절을 적었을 때만 — 달라고 하지 않은 실행에 코드 자리가 생기면 안 된다.
             code = StubDeployedCode(seeds["code"], clock=clock)
+        # 재생(R3-5v ①) — 시드에 `snapshot` 절이 있으면 스텁이 스냅샷 밖 읽기를 실패로, 관측 시각을 뜬 시각으로 답한다.
+        snapshot = snapshot_of(seeds)
         return Adapters(
-            redis=StubRedisReader(seeds.get("redis"), clock=clock) if infra.redis else None,
-            mongo=StubMongoReader(seeds.get("mongo"), clock=clock) if infra.mongodb else None,
+            redis=StubRedisReader(seeds.get("redis"), clock=clock, snapshot=snapshot) if infra.redis else None,
+            mongo=StubMongoReader(seeds.get("mongo"), clock=clock, snapshot=snapshot) if infra.mongodb else None,
             kafka=StubKafkaInspector(seeds.get("kafka"), seeds.get("lags"),
-                                     clock=clock) if infra.kafka else None,
+                                     clock=clock, snapshot=snapshot) if infra.kafka else None,
             rest=StubRestProber(infra.rest, seeds.get("rest"),
-                                clock=clock) if infra.rest else None,
+                                clock=clock, snapshot=snapshot) if infra.rest else None,
             code=code)
 
     # 지연 import — 스텁만 쓰는 환경에서 redis/pymongo/aiokafka를 요구하지 않는다.

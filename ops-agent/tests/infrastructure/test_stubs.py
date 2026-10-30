@@ -130,3 +130,29 @@ async def test_stub_kafka는_포인터의_메시지_한_건을_주고_보존_범
     for topic, partition in (("none", 0), ("t", 1)):
         bad = await stub.message_at(topic, partition, 0)
         assert bad.status == "error", (topic, partition)
+
+
+# ── R3-5v ① — 재생: Kafka의 실제 begin/end와 띄엄 오프셋 ──
+
+async def test_kafka_시드가_begin_end와_띄엄_오프셋을_주면_그대로_답하고_안_뜬_오프셋과_꼬리는_실패다():
+    """평가자 회신(11-03): 재생 스냅샷의 토픽은 실제 begin/end와 뜬 메시지 몇 건(tail 덤프·값의 포인터 메시지)뿐이다 — 오프셋이 0부터의 차례가 아니다. 범위 안인데
+    안 뜬 오프셋을 "보존 범위 밖"(없음)으로 답하면 틀린 사실이다 — 실패로. 범위 밖은 진짜 사실이라 전처럼. 옛 두 꼴(목록, begin + 차례 목록)은 그대로."""
+    seed = {"begin": 1200, "end": 1210, "messages": [
+        {"offset": 1203, "value": {"rows": [1]}, "timestamp": 1700000000000},
+        {"offset": 1208, "value": {"rows": [2]}}, {"offset": 1209, "value": {"rows": [3]}}]}
+    stub = StubKafkaInspector({"t.main": seed}, clock=_clock)
+    got = (await stub.offsets("t.main")).data
+    assert got["partitions"] == [{"partition": 0, "begin": 1200, "end": 1210}] and got["messages"] == 10
+    hit = (await stub.message_at("t.main", 0, 1203)).data
+    assert hit["found"] is True and hit["message"]["value"] == {"rows": [1]} and hit["message"]["timestamp"] == 1700000000000
+    gap = await stub.message_at("t.main", 0, 1205)
+    assert gap.status == "error" and gap.error.startswith("스냅샷 밖 — t.main[0]@1205는 안 떴다")
+    before = (await stub.message_at("t.main", 0, 1199)).data
+    assert before["found"] is False and "보존 범위 밖" in before["note"]
+    assert (await stub.tail("t.main", limit=2)).data["messages"] == [{"rows": [2]}, {"rows": [3]}]
+    short = await stub.tail("t.main", limit=3)
+    assert short.status == "error" and short.error.startswith("스냅샷 밖 — t.main의 끝 3건 중 1건이 안 떴다")
+    old = StubKafkaInspector({"a": [{"x": 1}, {"x": 2}], "b": {"begin": 5, "messages": [{"y": 1}]}}, clock=_clock)
+    assert (await old.tail("a", limit=5)).data["messages"] == [{"x": 1}, {"x": 2}]
+    assert (await old.message_at("b", 0, 5)).data["found"] is True and (await old.offsets("b")).data["partitions"][0]["end"] == 6
+    assert (await old.list_topics()).data == ["a", "b"]

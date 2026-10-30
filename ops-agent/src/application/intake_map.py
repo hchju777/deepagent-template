@@ -335,12 +335,17 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
     candidates: list[str] = [k for k in declared if "{" not in k]
     declared_of: dict[str, str] = {k: k for k in candidates}       # 실재 키 → 그 키가 나온 선언(템플릿) — 다음 홉의 `code.uses` 이름
     capped = False
+    # scan 실패는 버리지 않는다(R3-5v ① — 재생의 보드 확인: Redis를 다 뜨지 않은 재생에서 scan이 실패하자 "선언 키를 모른다(흐름 그래프)"로 적혔다; 선언은
+    # 알았고 읽기가 실패한 것이다).
+    unscanned: list[str] = []
     for template in (k for k in declared if "{" in k):
         if len(candidates) >= MAX_CANDIDATES:
             capped = True
             break
         head = key_head(template)
         _, scanned = await run(f"대상 키 후보 — {template}의 실재 키", "redis.scan", {"pattern": f"{head}*"}, keep=False)
+        if scanned.status != "ok":
+            unscanned.append(f"{head}* ({scanned.error or '사유 없음'})")
         names = runner.raw(scanned.evidence[0].id) if scanned.status == "ok" and scanned.evidence else None
         for name in (names if isinstance(names, list) else []):
             if len(candidates) >= MAX_CANDIDATES:
@@ -349,6 +354,8 @@ async def run_intake(state: CaseState, spec: IntakeSpec, *, runner: TaskRunnerPo
             if isinstance(name, str) and name not in candidates:
                 candidates.append(name)
                 declared_of[name] = template
+    if not candidates and unscanned:
+        return patch(TargetPick(problem=f"후보 키를 못 모았다 — scan 실패 {len(unscanned)}건: {'; '.join(unscanned[:2])} ({where} 대상 행은 찾았다)"))
     if not candidates:
         return patch(TargetPick(problem=f"후보 키가 없다 — 접수 끝점이 읽는 선언 키를 모른다(흐름 그래프) ({where} 대상 행은 찾았다)"))
 

@@ -163,6 +163,19 @@ async def test_템플릿_키는_머리로_scan해_실재하는_키를_후보로_
     assert len(patch["target"].candidates) == 50 and "상한" in patch["target"].problem
 
 
+async def test_템플릿_scan이_실패해_후보가_없으면_선언_키를_모른다가_아니라_scan_실패를_적는다():
+    """R3-5v ①(재생의 보드 확인에서 드러남): Redis를 다 뜨지 않은 재생에서 scan이 실패하자 입구가 그것을 버리고 `후보 키가 없다 — 접수 끝점이 읽는 선언 키를
+    모른다(흐름 그래프)`를 적었다 — 선언 키는 알았고 읽기가 실패한 것이다. 틀린 사실은 다음 고침을 엉뚱한 데(그래프)로 보낸다. 실접속에서 scan이 실패해도 같다."""
+    runner = _runner()
+    runner._outcomes["t-0-1"] = TaskOutcome(task_id="t-0-1", status="error", error="스냅샷 밖 — Redis를 다 뜨지 않아 scan에 답할 수 없다")
+    patch = await run_intake(CaseState(case=_case()), SPEC, runner=runner, declared=("alarm:stats:{line}",))
+    problem = patch["target"].problem
+    assert problem.startswith("후보 키를 못 모았다 — scan 실패 1건: alarm:stats:* (스냅샷 밖 — Redis를 다 뜨지 않아 scan에 답할 수 없다)")
+    assert "선언 키를 모른다" not in problem and problem.endswith("대상 행은 찾았다)")
+    nothing = await run_intake(CaseState(case=_case()), SPEC, runner=_runner(), declared=())
+    assert nothing["target"].problem.startswith("후보 키가 없다 — 접수 끝점이 읽는 선언 키를 모른다")      # 선언이 정말 없을 때는 그대로
+
+
 # ── R3-1b ③ — 다음 홉 ──
 
 async def test_고른_키의_선언_이름과_identity_옆의_빈_목록을_적는다():

@@ -118,3 +118,77 @@ def test_peer_reader는_같은_GBM의_다른_사이트에_같은_키를_그_사�
     peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=seeds, names_for=names_for)
     assert asyncio.run(peer("gumi:k:L1", "gumi:k:{line}")) is None and PEER_SITES == 3
     asyncio.run(close())
+
+
+# ── R3-5v ① — 재생 스냅샷 ──
+
+def test_재생에서_다른_사이트_리더는_안_뜬_키를_없음으로_보지_않고_그_사이트를_못_읽은_것으로_넘긴다(tmp_path):
+    """다른 사이트 값도 스냅샷이다. Redis를 다 안 뜬 재생에서 안 뜬 키를 "없음"으로 보면 같은 템플릿의 다른 키로 넘어가 엉뚱한 라인의 값을 쓴다 — 그 사이트를 못
+    읽은 것으로 넘기고 다음 사이트로. 재생이 아니면 전처럼 같은 템플릿의 첫 키."""
+    import asyncio
+    from datetime import datetime
+    from src.__main__ import _peer_reader
+
+    root = _root(tmp_path)
+    (root / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}, {"gbm": "mx", "fct": "sevt"}, {"gbm": "mx", "fct": "suwon"}]}),
+                                        encoding="utf-8")
+    w7, w1 = json.dumps({"metadata": {"event_type": "W7"}}), json.dumps({"metadata": {"event_type": "W1"}})
+    peers = {"sevt": {"redis": {"k:L7": w7}}, "suwon": {"redis": {"k:L1": w1}}}
+    clock = lambda: datetime(2026, 11, 3, 9, 0)                                      # noqa: E731
+    replay = {"snapshot": {"id": "s-1", "captured_at": "2026-11-01T09:00:00+09:00"}, "redis": {}, "peers": peers}
+    peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds=replay)
+    assert asyncio.run(peer("k:L1", "k:{line}")) == ("suwon", "k:L1", {"type": "string", "value": w1}, {})
+    asyncio.run(close())
+    peer, close = _peer_reader(root, "mx", "gumi", env=dict(ENV), clock=clock, seeds={"redis": {}, "peers": peers})
+    assert asyncio.run(peer("k:L1", "k:{line}")) == ("sevt", "k:L7", {"type": "string", "value": w7}, {})
+    asyncio.run(close())
+
+
+def test_재생_스냅샷이면_CLI의_지금은_뜬_시각이고_LLM과_걷기_예산만_실시계다(tmp_path, monkeypatch):
+    """평가자 회신(11-03): 재생 판의 "지금"은 스냅샷을 뜬 시각이다 — 케이스 시각·순찰 창·관측 시각이 그날 기준이어야 그날의 판과 같다. LLM 어댑터의 429 대기와
+    걷기의 초 상한은 실시계(지난 시각으로 대기를 계산하면 안 된다). 시간대 없는 시각은 거부한다."""
+    import argparse
+    import os
+    from datetime import datetime
+
+    import pytest
+
+    from src.__main__ import _clock, _wall_clock
+
+    set_real_config_env(monkeypatch)
+    for key, value in ENV.items():
+        monkeypatch.setenv(key, value)
+    root = _root(tmp_path)
+    (tmp_path / "snap.json").write_text(json.dumps({"snapshot": {"id": "s-1", "captured_at": "2026-11-01T00:00:00+00:00"}}), encoding="utf-8")
+    args = argparse.Namespace(config_root=root, stub_seeds=str(tmp_path / "snap.json"))
+    env = dict(os.environ)
+    now = _clock(args, env)()
+    assert now.isoformat() == "2026-11-01T09:00:00+09:00" and _clock(args, env)() == now
+    wall = _wall_clock(args, env)()
+    assert abs((wall - datetime.now(wall.tzinfo)).total_seconds()) < 5 and wall.utcoffset() == now.utcoffset()
+    plain = argparse.Namespace(config_root=root, stub_seeds=None)
+    assert abs((_clock(plain, env)() - datetime.now(wall.tzinfo)).total_seconds()) < 5
+    (tmp_path / "naive.json").write_text(json.dumps({"snapshot": {"id": "s-1", "captured_at": "2026-11-01T09:00:00"}}), encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _clock(argparse.Namespace(config_root=root, stub_seeds=str(tmp_path / "naive.json")), env)
+    assert "재생 스냅샷 머리가 틀렸다" in str(caught.value) and "captured_at" in str(caught.value)
+
+
+def test_case_walk은_재생_스냅샷의_인자별_REST_캡처로_입구를_읽고_인자_없는_응답은_안_쓴다(tmp_path, monkeypatch, capsys):
+    """재생 시드로 `case walk`이 입구를 읽는다 — REST는 접수 읽기가 내는 인자 그대로 뜬 캡처만. 인자 없는 옛 꼴이면 입구 읽기가 실패로 남는다(행을 고르지 않는다)."""
+    root = _root(tmp_path)
+    rows = [{"group": "L1", "title": "Alarm", "alarm": 0, "caution": 0, "normal": 0}]
+    stats = json.dumps({"record": [{"summary_info": {"group": "L1", "title": "Alarm"}, "data": []}]})
+    head = {"id": "s-1", "captured_at": "2026-11-01T09:00:00+09:00", "complete": ["redis"]}
+    caught = {"snapshot": head, "rest": {"summary_badge": {"captures": [{"params": {}, "response": rows}]}}, "redis": {"alarm:stats:L1": stats}}
+    (tmp_path / "replay.json").write_text(json.dumps(caught, ensure_ascii=False), encoding="utf-8")
+    code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk", "--target", "L1/Alarm", "--check", "badge_all_zero",
+                     "--stub-seeds", str(tmp_path / "replay.json"), "--gbm", "mx", "--fct", "gumi")
+    assert code == 0, out.out + out.err
+    assert "입구 노드가 이미 읽었다: 접수 읽기(t-0.e1)" in out.out and "(response[0] 대상 행은 찾았다)" in out.out
+    assert "발생 시각: 2026-11-01T09:00:00+09:00" in out.out                                    # 케이스의 지금은 뜬 시각
+    bare = {**caught, "rest": {"summary_badge": rows}}
+    (tmp_path / "bare.json").write_text(json.dumps(bare, ensure_ascii=False), encoding="utf-8")
+    code, out = _run(root, tmp_path, monkeypatch, capsys, "case", "walk", "--target", "L1/Alarm", "--check", "badge_all_zero",
+                     "--stub-seeds", str(tmp_path / "bare.json"), "--gbm", "mx", "--fct", "gumi")
+    assert "스냅샷 형식 — summary_badge의 응답에 인자가 없다" in out.out + out.err and "대상 행은 찾았다" not in out.out

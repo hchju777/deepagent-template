@@ -244,9 +244,9 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
         if entry.fct in readers:
             return readers[entry.fct]
         if seeds is not None:
-            from src.infrastructure.stubs import StubRedisReader
+            from src.infrastructure.stubs import StubRedisReader, snapshot_of
             peer_seeds = (seeds.get("peers") or {}).get(entry.fct) or {}
-            found = StubRedisReader(peer_seeds.get("redis"), clock=clock) if peer_seeds else None
+            found = StubRedisReader(peer_seeds.get("redis"), clock=clock, snapshot=snapshot_of(seeds)) if peer_seeds else None
         else:
             cfg, _ = load_site_config(config_root, entry.gbm, entry.fct, env=env)
             if cfg.infra.redis is None:
@@ -488,7 +488,7 @@ def cmd_llm_describe(args, env) -> int:
 def cmd_llm_ask(args, env) -> int:
     from src.infrastructure.llm_factory import build_llm
 
-    llm = build_llm(_llm_config(args, env, getattr(args, "role", None)), clock=_clock(args, env))
+    llm = build_llm(_llm_config(args, env, getattr(args, "role", None)), clock=_wall_clock(args, env))
 
     async def ask():
         try:
@@ -533,7 +533,7 @@ def cmd_llm_ab(args, env) -> int:
         if args.dry_run:
             return 0
         cfg = _llm_config(args, env, "conclude")
-        llm = build_llm(cfg, clock=_clock(args, env))
+        llm = build_llm(cfg, clock=_wall_clock(args, env))
         print(f"  판정 역할 {cfg.describe()} · 판마다 {args.runs}번(A·B 번갈아)")
 
         async def go_legend():
@@ -566,7 +566,7 @@ def cmd_llm_ab(args, env) -> int:
     if args.dry_run:
         return 0
     cfg = _llm_config(args, env, "conclude")
-    llm = build_llm(cfg, clock=_clock(args, env))
+    llm = build_llm(cfg, clock=_wall_clock(args, env))
     print(f"  판정 역할 {cfg.describe()} · 판마다 {args.runs}번(A·B 번갈아)")
 
     async def go():
@@ -612,7 +612,7 @@ def cmd_llm_check(args, env) -> int:
     from src.infrastructure.llm_factory import build_llm
 
     cfg = _llm_config(args, env, getattr(args, "role", None))
-    llm = build_llm(cfg, clock=_clock(args, env))
+    llm = build_llm(cfg, clock=_wall_clock(args, env))
     print(f"  {cfg.describe()}\n")
     failed = 0
     reported = None
@@ -802,7 +802,7 @@ async def _comments(args, env, scenario, facts):
     llm = None
     if app.llm is not None:
         from src.infrastructure.llm_factory import build_llm
-        llm = build_llm(app.llm_for("report"), clock=_clock(args, env))
+        llm = build_llm(app.llm_for("report"), clock=_wall_clock(args, env))
     try:
         return await comment_on(facts, llm=llm, spec=scenario.comment,
                                 template=load_prompt(args.config_root, scenario),
@@ -1228,7 +1228,7 @@ def cmd_case_walk(args, env) -> int:
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
-                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)
+                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))
             state = await (walk_from_key(case, args.key, deps) if args.key else walk_only(case, deps))
             return state, flow_graph, (code.has_index() if code else False), graph_note
         finally:
@@ -1298,8 +1298,8 @@ def cmd_case_investigate(args, env) -> int:
     async def go() -> dict:
         # 액션 턴과 판정 턴은 다른 LLM일 수 있다(역할별, R2-1). 설정이 같으면 어댑터도 하나다.
         lead_cfg, conclude_cfg = app.llm_for("lead"), app.llm_for("conclude")
-        llm = build_llm(lead_cfg, clock=clock)
-        conclude_llm = llm if conclude_cfg is lead_cfg else build_llm(conclude_cfg, clock=clock)
+        llm = build_llm(lead_cfg, clock=_wall_clock(args, env))
+        conclude_llm = llm if conclude_cfg is lead_cfg else build_llm(conclude_cfg, clock=_wall_clock(args, env))
         built["llm"] = llm.describe() + ("" if conclude_llm is llm else f"\n  판정: {conclude_llm.describe()}")
         from src.knowledge import flow
         code, services, flow_graph, graph_note = _code_if_ready(
@@ -1342,7 +1342,7 @@ def cmd_case_investigate(args, env) -> int:
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
-                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=clock)
+                              subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))
             return await build_engine(deps).ainvoke(CaseState(case=case))
         finally:
             await adapters.close()
@@ -2696,10 +2696,41 @@ def _clock(args, env):
     """
     made = getattr(args, "_clock_cached", None)
     if made is None:
-        zone = ZoneInfo(load_app_config(args.config_root, env=env).timezone)
-        made = lambda: datetime.now(zone)                          # noqa: E731
+        snapshot = _replay_snapshot(args)
+        if snapshot is not None:
+            # 재생(R3-5v ① — 평가자 회신 11-03): 이 실행의 "지금"은 스냅샷을 뜬 시각이다 — 케이스 시각·순찰 창·관측 시각이 그날 기준이어야 그날의 판과 같다.
+            # 실시계여야 하는 것(LLM의 429 대기, 걷기의 초 상한)은 `_wall_clock`.
+            at = snapshot.captured_at.astimezone(ZoneInfo(load_app_config(args.config_root, env=env).timezone))
+            made = lambda: at                                      # noqa: E731
+        else:
+            made = _wall_clock(args, env)
         args._clock_cached = made
     return made
+
+
+def _wall_clock(args, env):
+    """진짜 시계 — 재생에서도 실시계여야 하는 것에만: LLM 어댑터(게이트웨이의 429 대기를 지난 시각으로 계산하면 대기가 상한까지 늘어난다)와 걷기의 초 상한."""
+    made = getattr(args, "_wall_cached", None)
+    if made is None:
+        zone = ZoneInfo(load_app_config(args.config_root, env=env).timezone)
+        made = lambda: datetime.now(zone)                          # noqa: E731
+        args._wall_cached = made
+    return made
+
+
+def _replay_snapshot(args):
+    """`--stub-seeds` 파일의 재생 머리(`snapshot`) — 없으면 None. 머리가 틀렸으면 사람 말로 멈춘다(시간대 없는 시각은 그날이 언제인지 모른다)."""
+    path = getattr(args, "stub_seeds", None)
+    if not path:
+        return None
+    from pydantic import ValidationError
+
+    from src.infrastructure.stubs import snapshot_of
+    try:
+        return snapshot_of(json.loads(Path(path).read_text(encoding="utf-8")))
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        raise SystemExit(f"재생 스냅샷 머리가 틀렸다 — {path}: {'.'.join(str(p) for p in first['loc'])} {first['msg']}")
 
 
 # ── 파서 ──────────────────────────────────────────────────────────────
