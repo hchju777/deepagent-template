@@ -442,6 +442,8 @@ class DeployedCode(DeployedCodePort):
         # `code graph`가 사이트 28개의 config 층을 병합할 때 여기서 읽는다 — git은 레포당 한 번이다.
         # (파일들 또는 None, 못 본 것의 사유) — 사유는 흐름 히트의 "잘렸다" 메모가 된다(안 채워진 submodule 등).
         self._snapshots: dict[tuple[str, str], tuple[dict[str, str] | None, str]] = {}
+        # 스냅샷 없이 읽은 층 파일 — `(레포, 커밋, 경로) → 원문 | None`(R3-5v ③). 사이트를 바꿔 다시 물어도 같은 경로는 다시 안 읽는다.
+        self._layer_texts: dict[tuple[str, str, str], str | None] = {}
         # 레포 스냅샷의 등록들(AST) — `(repo, commit)`마다 한 번(R3-5 ③). 걷기가 클래스마다 묻는다.
         self._registrations: dict[tuple[str, str], list[Registration]] = {}
 
@@ -863,8 +865,9 @@ class DeployedCode(DeployedCodePort):
         return [p.replace("{gbm}", self._gbm) for p in self._topology.config_paths if "{fct}" not in p]
 
     async def _layers_in(self, service: str, fct: str):
-        """`_layers`와 같은 `[(경로, 원문, 값)]`을 **스냅샷에서** — 사이트 28개 × 서비스 × 층을 git에 다시 묻지
-        않기 위해서다. 스냅샷이 없으면 그 경로들만 `show`로 읽는다(같은 결과, 느릴 뿐). 못 읽으면 실패 `ProbeResult`."""
+        """`_layers`와 같은 `[(경로, 원문, 값)]`을 **이미 받은 스냅샷에서** — 사이트 28개 × 서비스 × 층을 git에 다시 묻지 않기 위해서다(`code graph`는
+        흐름 히트를 위해 스냅샷을 어차피 받는다). 스냅샷이 아직 없으면 **받지 않고** 그 경로들만 `show`로, 경로마다 한 번(R3-5v ③ — 검토 회신 11-03 7: 걷기의
+        다른 사이트 조회가 이름 목록 하나 때문에 레포 전체 스냅샷(사내 12초)을 받아 걷기 30초 상한을 먹었다). 같은 결과다. 못 읽으면 실패 `ProbeResult`."""
         source = f"code.config {service}" + (f" @{fct}" if fct else " @gbm")
         resolved = self._resolve(service, source)
         if isinstance(resolved, ProbeResult):
@@ -873,14 +876,14 @@ class DeployedCode(DeployedCodePort):
         wanted = self._layer_paths(fct)
         if not wanted:
             return ProbeResult.failed("config_paths가 선언돼 있지 않다", source=source, clock=self._clock)
-        snap = await self.snapshot_for(known.repo)
+        taken = self._snapshots.get((known.repo, self.pinned()[known.repo]))
+        snap = taken[0] if taken is not None else None
         layers = []
         for path in wanted:
             if snap is not None:
                 text = snap.get(path)
             else:
-                got = await self._reader.show(known.repo, commit, path, whole=True)
-                text = got.data if got.status == "ok" and got.envelope.complete else None
+                text = await self._layer_text(known.repo, commit, path)
             if text is None:
                 continue                    # 없는 층은 정상이다(층은 선택)
             value, _ = parse_layer(path, text)
@@ -890,6 +893,14 @@ class DeployedCode(DeployedCodePort):
             return ProbeResult.failed(f"쓸 수 있는 config 층이 없다 — 찾은 자리: {', '.join(wanted)}",
                                       source=source, clock=self._clock)
         return layers
+
+    async def _layer_text(self, repo: str, commit: str, path: str) -> str | None:
+        """층 파일 하나를 통째로 — 경로마다 한 번만 git을 띄운다. 없거나 잘렸으면 None(없는 층은 정상이다)."""
+        key = (repo, commit, path)
+        if key not in self._layer_texts:
+            got = await self._reader.show(repo, commit, path, whole=True)
+            self._layer_texts[key] = got.data if got.status == "ok" and got.envelope.complete and isinstance(got.data, str) else None
+        return self._layer_texts[key]
 
     async def names_for(self, fct: str) -> tuple[list[Name], list[str]]:
         """`flow_names`와 같은 이름들을 **그 사이트의 층**(스냅샷)에서. `fct=""`면 GBM 층만."""

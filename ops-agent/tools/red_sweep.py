@@ -1481,7 +1481,7 @@ CASES += [
   '            if False:\n                continue',
   [f"{DCT}::test_site_overrides는_GBM_값과_다른_것만_적는다", CLI_GBM]),
  ("사이트 층을 스냅샷 대신 show로 읽는다", D,
-  '        snap = await self.snapshot_for(known.repo)\n        layers = []',
+  '        snap = taken[0] if taken is not None else None\n        layers = []',
   '        snap = None\n        layers = []',
   [f"{DCT}::test_사이트_층_읽기는_스냅샷_뒤로는_git을_안_띄운다", CLI_GBM]),
  ("code graph가 사이트 층을 기준으로 삼는다", MN,
@@ -1513,8 +1513,8 @@ CASES += [
   '    rows = []\n    listed = ", ".join(meta.sites)',
   ["tests/knowledge/test_cli_code.py::test_code_status와_flow는_그_사이트의_값으로_말한다"]),
  ("사이트 층의 되돌아가는 길이 400줄에서 자른다", D,
-  '                got = await self._reader.show(known.repo, commit, path, whole=True)\n                text = got.data if',
-  '                got = await self._reader.show(known.repo, commit, path)\n                text = got.data if',
+  '            got = await self._reader.show(repo, commit, path, whole=True)\n',
+  '            got = await self._reader.show(repo, commit, path)\n',
   [f"{DCT}::test_스냅샷이_없으면_사이트_층도_통째로_읽는다"]),
  ("사이트 파일 행이 GBM 값을 안 든다", FLW,
   '            rows.append({"kind": n.kind, "key_path": n.key_path, "value": n.value, "base": b,',
@@ -3648,7 +3648,18 @@ CASES += [
  ("측정판 GBM 층이 PaletteImporter를 켠다", LC, "\"palette_import\": {\"enabled\": False, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", "\"palette_import\": {\"enabled\": True, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
  ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES), \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\"}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
 ]
-assert len(CASES) >= 1204, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+
+# ── 12a-R3-5v ③ — 이름 목록이 레포 전체 스냅샷을 받지 않는다(받아 둔 것은 쓰고, 없으면 층 파일만 경로마다 한 번) ──
+NAMES_FAST_T = "tests/infrastructure/test_deployed_code.py::test_이름_목록은_스냅샷이_없으면_레포_전체를_받지_않고_층_파일만_경로마다_한_번_읽는다"
+NAMES_SNAP_T = "tests/infrastructure/test_deployed_code.py::test_사이트_층_읽기는_스냅샷_뒤로는_git을_안_띄운다"
+GRAPH_BUNDLE_T = "tests/knowledge/test_cli_code.py::test_code_graph는_GBM_하나에_번들을_만들고_사이트는_덮은_값만_적는다"
+CASES += [
+ ("이름 목록이 레포 전체 스냅샷을 받는다", D, "        taken = self._snapshots.get((known.repo, self.pinned()[known.repo]))\n        snap = taken[0] if taken is not None else None\n", "        snap = await self.snapshot_for(known.repo)\n", [NAMES_FAST_T]),
+ ("층 파일을 물을 때마다 다시 읽는다", D, "        if key not in self._layer_texts:\n", "        if True:\n", [NAMES_FAST_T]),
+ ("받아 둔 스냅샷을 이름 목록이 안 쓴다", D, "            if snap is not None:\n                text = snap.get(path)\n", "            if False:\n                text = snap.get(path)\n", [NAMES_SNAP_T]),
+ ("code graph가 스냅샷을 먼저 안 받는다", MN, "        for repo in code.pinned():\n            await code.snapshot_for(repo)\n", "", [GRAPH_BUNDLE_T]),
+]
+assert len(CASES) >= 1208, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

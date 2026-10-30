@@ -1678,6 +1678,10 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
         print(f"  [{time.monotonic() - t0:6.1f}s] {msg}", file=sys.stderr, flush=True)
 
     async def gather():
+        # 흐름 히트가 어차피 레포 스냅샷을 받는다 — 먼저 받아 두면 이름 목록도 거기서 읽는다(R3-5v ③: 이름 목록은 받아 둔 스냅샷만 쓰고, 없으면 층 파일을
+        # show로 읽는다 — 걷기의 다른 사이트 조회용). 사이트 28개 × 서비스 × 층이 git을 다시 안 띄운다.
+        for repo in code.pinned():
+            await code.snapshot_for(repo)
         # GBM 층만으로 뽑은 이름이 그래프의 기준값이다(11e-2). 사이트 층은 값을 덮을 뿐이라 따로 입힌다.
         names, problems = await code.names_for("")
         if not names:

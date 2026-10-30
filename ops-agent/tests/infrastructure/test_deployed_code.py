@@ -560,6 +560,7 @@ async def test_스냅샷이_없으면_사이트_층도_통째로_읽는다(tmp_p
 
 
 async def test_사이트_층_읽기는_스냅샷_뒤로는_git을_안_띄운다(flow_code, monkeypatch):
+    """`code graph`는 흐름 히트를 위해 스냅샷을 어차피 받는다 — 그 뒤의 사이트 28개 × 서비스 × 층은 메모리에서. 스냅샷이 없을 때의 길(R3-5v ③)은 아래 테스트."""
     reader = flow_code._reader
     calls = []
     real = reader._git_bytes
@@ -569,6 +570,7 @@ async def test_사이트_층_읽기는_스냅샷_뒤로는_git을_안_띄운다(
         return await real(repo, args, **kw)
 
     monkeypatch.setattr(reader, "_git_bytes", counting)
+    await flow_code.snapshot_for("dt-core")
     base, _ = await flow_code.names_for("")
     first = len(calls)
     assert sum(1 for a in calls if a[:2] == ["cat-file", "--batch"]) == 1
@@ -578,6 +580,29 @@ async def test_사이트_층_읽기는_스냅샷_뒤로는_git을_안_띄운다(
     await flow_code.names_for("gumi")
     await flow_code.site_overrides("gumi", base)
     assert len(calls) == first                                     # 두 번째부터는 메모리에서
+
+
+async def test_이름_목록은_스냅샷이_없으면_레포_전체를_받지_않고_층_파일만_경로마다_한_번_읽는다(flow_code, monkeypatch):
+    """R3-5v ③ — 검토 회신(11-03) 7: 걷기의 다른 사이트 조회가 이름 목록 하나 때문에 레포 전체 git 스냅샷(사내 12초)을 받아 걷기 30초 상한을 먹었다. 스냅샷이
+    이미 있으면 쓰고(위 테스트), 없으면 층 파일만 `show` — 경로마다 한 번(사이트를 바꿔 다시 물어도 GBM 층은 다시 안 읽는다). 값은 스냅샷 길과 같다."""
+    reader = flow_code._reader
+    calls = []
+    real = reader._git_bytes
+
+    async def counting(repo, args, **kw):
+        calls.append(list(args))
+        return await real(repo, args, **kw)
+
+    monkeypatch.setattr(reader, "_git_bytes", counting)
+    base, problems = await flow_code.names_for("")
+    gumi, _ = await flow_code.names_for("gumi")
+    again, _ = await flow_code.names_for("gumi")
+    key = "infra.kafka.consumer.group_id"
+    assert problems == [] and {n.value for n in base if n.key_path == key} == {"mx-core"}
+    assert {n.value for n in gumi if n.key_path == key} == {"gumi-mx-core"} and again == gumi
+    assert not any(a[:2] == ["cat-file", "--batch"] for a in calls)                    # 레포 전체를 안 받았다
+    shown = [a[-1] for a in calls if a[0] == "show" and "config/" in a[-1]]
+    assert shown and len(shown) == len(set(shown))                                      # 층 파일만, 경로마다 한 번
 
 
 # ── R2-2b-1 — 골라서 전부: code.read 범위 · code.config key · grep은 코드 줄 먼저 ──
