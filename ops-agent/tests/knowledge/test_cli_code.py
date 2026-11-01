@@ -971,6 +971,12 @@ def test_code_status와_flow는_그_사이트의_값으로_말한다(tmp_path, m
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")      # --fct gumi
     assert code == 0 and "graph" + "/mx" in captured.out.replace("\\", "/")
     assert "사이트 gumi" in captured.out and "덮은 값 1" in captured.out
+    assert "사이트 이름 목록 없음" not in captured.out
+    # 옛 번들(사이트 이름 목록 없음)은 말한다(R3-5x ② — 측정 #32 사전 점검 2: 조용히 층 파일로 돌아가 걷기마다 약 3.6초). 이 사이트와 같은 GBM 사이트 전부를 본다 —
+    # 걷기의 다른 사이트 조회가 그 사이트들의 목록을 읽는다.
+    (tmp_path / "out" / "graph" / "mx" / "sites" / "sevt.names.json").unlink()
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0 and "       ⚠ 번들에 사이트 이름 목록 없음(sevt) — `code graph --gbm mx` 다시" in captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "flow", "sink")
     assert code == 0 and "gumi-mx-core" in captured.out and "sevt-mx-core" not in captured.out
 

@@ -788,7 +788,7 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | 순서 | 항목 | 할 것 | 자리 |
 |---|---|---|---|
 | R3-5x ① ✅ | 1 선언 없음 알림 | `boot`이 기동을 막지 않는 **주의**로: 토폴로지에 `pipelines`가 없으면 `토폴로지 pipelines 선언 없음 — 다른 사이트 채우기·라우터 판별 꺼짐`, `pipelines`는 있는데 `router`가 없으면 `… pipelines.router 선언 없음 — 라우터 판별 꺼짐`(GBM마다). `code status`도 같은 줄 | `boot`, `__main__` |
-| R3-5x ② | 2 옛 번들 알림 | `code status`의 그래프 절: 이 사이트와 같은 GBM 사이트들 중 `sites/<fct>.names.json`이 없는 사이트를 `번들에 사이트 이름 목록 없음(<사이트들>) — code graph 다시` | `__main__` |
+| R3-5x ② ✅ | 2 옛 번들 알림 | `code status`의 그래프 절: 이 사이트와 같은 GBM 사이트들 중 `sites/<fct>.names.json`이 없는 사이트를 `번들에 사이트 이름 목록 없음(<사이트들>) — code graph 다시` | `__main__` |
 | R3-5x ③ | 3 유형표 캐시 | `routed_types`의 유형표(파이프라인 열거 멤버·짝 목록)를 (레포, 커밋)마다 한 번만 푼다 — git grep·show가 클래스마다 다시 안 뜬다. 상한 값은 그대로 | `deployed_code` |
 | R3-5x ④ | 4 L1·L2 카운터 | 액션 턴의 트레이스 파일 머리에 `카운터: 정체 사유 <0/1> · 묶은 칸 <N>`; `case trace` 요약에 케이스 합계(정체 사유를 받은 라운드 수 · 묶은 칸 수와 그 라운드 수) | `lead`, `__main__`(트레이서), `trace_digest` |
 

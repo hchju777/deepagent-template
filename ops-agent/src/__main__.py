@@ -1890,6 +1890,12 @@ def _graph_status(args, env, *, site, gbm: str, fct: str) -> int:
     print(f"       사이트 {fct}: " + (f"덮은 값 {len(rows)}개" if rows is not None
                                    else f"파일 없음 — `code graph --gbm {gbm}`으로 다시 만든다")
           + f" · 번들의 사이트: {listed}")
+    # 사이트 이름 목록(R3-5w ①)이 없는 사이트 — 옛 번들이면 걷기의 다른 사이트 조회가 조용히 층 파일로 돌아간다(R3-5x ② — 측정 #32 사전 점검 2: 걷기마다 약
+    # 3.6초). 걷기가 묻는 것은 이 사이트와 같은 GBM의 사이트들이다.
+    asked = [fct] + [e.fct for e in load_registry(args.config_root).active() if e.gbm == gbm and e.fct != fct]
+    unlisted = [one for one in asked if gb.read_site_names(out_dir, one) is None]
+    if unlisted:
+        print(f"       ⚠ 번들에 사이트 이름 목록 없음({', '.join(unlisted)}) — `code graph --gbm {gbm}` 다시")
     for line in stale + problems:
         print(f"       ⚠ {line}")
     return 0

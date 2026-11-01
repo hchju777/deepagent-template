@@ -3751,7 +3751,14 @@ CASES += [
  ("주의가 기동을 막는다", MN, "            print(f\"  ⚠ {notice}\")\n        return 0\n", "            print(f\"  ⚠ {notice}\")\n        return 1 if notices else 0\n", [NOTICE_T]),
  ("code status가 선언 없음을 안 찍는다", MN, "    if (notice := pipeline_notice(topology)):", "    if False and (notice := pipeline_notice(topology)):", [NOTICE_T]),
 ]
-assert len(CASES) >= 1262, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5x ② — 옛 번들(사이트 이름 목록 없음)을 code status가 말한다 ──
+UNLISTED_T = "tests/knowledge/test_cli_code.py::test_code_status와_flow는_그_사이트의_값으로_말한다"
+CASES += [
+ ("옛 번들 사이트를 말하지 않는다", MN, "    if unlisted:\n        print(f\"       ⚠ 번들에 사이트 이름 목록 없음", "    if False:\n        print(f\"       ⚠ 번들에 사이트 이름 목록 없음", [UNLISTED_T]),
+ ("다른 사이트의 이름 목록은 안 본다", MN, "    asked = [fct] + [e.fct for e in load_registry(args.config_root).active() if e.gbm == gbm and e.fct != fct]", "    asked = [fct]", [UNLISTED_T]),
+ ("있는 이름 목록도 없다고 한다", MN, "    unlisted = [one for one in asked if gb.read_site_names(out_dir, one) is None]", "    unlisted = [one for one in asked if gb.read_site_names(out_dir, one) is not None]", [UNLISTED_T]),
+]
+assert len(CASES) >= 1265, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
