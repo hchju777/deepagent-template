@@ -3741,7 +3741,17 @@ CASES += [
  ("case walk가 라우터 확인을 안 넘긴다", MN, "pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,", "pipeline_here=code.pipeline_here if code else None,", [BOARD_MIXED_T]),
  ("측정판 토폴로지에 라우터 선언이 없다", ROOT / "tools/local_case.py", ", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\"}}}", "}}", [LOCAL_TOPO_PIPE_T]),
 ]
-assert len(CASES) >= 1257, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5x ① — 선언이 비어 꺼진 기능은 기동을 막지 않는 주의로 ──
+BOOTF = ROOT / "src/boot.py"
+NOTICE_T = "tests/knowledge/test_cli_code.py::test_토폴로지에_pipelines가_없으면_boot과_code_status가_기동을_막지_않는_주의로_말한다"
+CASES += [
+ ("pipelines 선언 없음을 말하지 않는다", BOOTF, "    if topology.pipelines is None:\n        return \"토폴로지 pipelines 선언 없음", "    if False:\n        return \"토폴로지 pipelines 선언 없음", [NOTICE_T]),
+ ("router 선언 없음을 말하지 않는다", BOOTF, "    if topology.pipelines.router is None:", "    if False:", [NOTICE_T]),
+ ("boot이 주의를 안 찍는다", MN, "        print(f\"✅ 기동 검증 통과 — {args.config_root}\")\n        for notice in notices:\n            print(f\"  ⚠ {notice}\")\n", "        print(f\"✅ 기동 검증 통과 — {args.config_root}\")\n", [NOTICE_T]),
+ ("주의가 기동을 막는다", MN, "            print(f\"  ⚠ {notice}\")\n        return 0\n", "            print(f\"  ⚠ {notice}\")\n        return 1 if notices else 0\n", [NOTICE_T]),
+ ("code status가 선언 없음을 안 찍는다", MN, "    if (notice := pipeline_notice(topology)):", "    if False and (notice := pipeline_notice(topology)):", [NOTICE_T]),
+]
+assert len(CASES) >= 1262, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -2049,6 +2049,16 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   측정판 테스트(`tests/test_board_walk.py`)와 `local_case` 테스트의 토폴로지 사본에도 `router`를 더했다.
 - 테스트 먼저(RED → GREEN). 스윕 +14(1257). `code graph` 재생성 필요(① 때문 — ②는 인덱스를 안 바꾼다). **사내 토폴로지에 `pipelines.router` 선언 추가.**
 
+#### R3-5x ① (11-04) ✅ — 선언이 비어 꺼진 기능은 기동을 막지 않는 주의로
+
+- 측정 #32 사전 점검 1: 토폴로지에 `pipelines`가 없으면 다른 사이트 채우기를 전부 거절하고 라우터 판별도 꺼지는데, 걷기마다 주 한 줄뿐이라 운영자가 몰랐다.
+- `boot.pipeline_notice(topology)` — `pipelines`가 없으면 `토폴로지 pipelines 선언 없음 — 다른 사이트 채우기·라우터 판별 꺼짐`, `router`만 없으면
+  `토폴로지 pipelines.router 선언 없음 — 라우터 판별 꺼짐`. `boot.boot_notices`가 GBM마다(서비스 없는 트리는 말하지 않는다) 모아 `boot`이 `⚠ [knowledge/<gbm>
+  topology] …`로 찍는다 — **오류가 아니다**(종료 코드 그대로): `validate_boot`은 기동을 거부하는 자리이고 선언 값은 사내 토폴로지에만 있어 리포 트리에서는 늘
+  나온다. 주의 때문에 기동이 막히면 사람이 기동 검증을 통째로 끈다. `code status`도 머리줄 아래 같은 줄(역시 종료 코드에 안 센다).
+- `code doctor`라는 명령은 없다 — 네트워크 없이 코드·번들 상태를 진단하는 것이 `code status`다.
+- 테스트 먼저(RED → GREEN). 스윕 +5(1262). `code graph` 재생성 불필요.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

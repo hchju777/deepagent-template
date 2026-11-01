@@ -43,6 +43,37 @@ def validate_boot(config_root: Path, *, env: dict[str, str],
                       knowledge_root or config_root.parent / "knowledge", env=env)
 
 
+def pipeline_notice(topology) -> str:
+    """토폴로지의 파이프라인 선언이 비어 꺼진 기능 — 없으면 빈 문자열(R3-5x ① — 측정 #32 사전 점검 1: 선언이 없으면 다른 사이트 채우기를 전부 거절하고 라우터
+    판별도 꺼지는데, 걷기마다 주 한 줄뿐이라 운영자가 몰랐다). 선언 값은 사내 토폴로지에만 있으니 리포 트리에서는 늘 나온다 — 그래서 오류가 아니다."""
+    if topology.pipelines is None:
+        return "토폴로지 pipelines 선언 없음 — 다른 사이트 채우기·라우터 판별 꺼짐"
+    if topology.pipelines.router is None:
+        return "토폴로지 pipelines.router 선언 없음 — 라우터 판별 꺼짐"
+    return ""
+
+
+def boot_notices(config_root: Path, *, env: dict[str, str], knowledge_root: Path | None = None) -> list[BootError]:
+    """기동을 **막지 않는** 주의 — 선언이 비어 꺼진 기능. `validate_boot`의 오류와 따로 둔다: 오류는 기동을 거부하고, 이것은 기능이 꺼진 채로 도는 것을 말할
+    뿐이다(사람이 주의 때문에 기동 검증을 통째로 끄지 않게). 코드를 안 쓰는 트리(서비스 없음)는 말하지 않는다. 던지지 않는다."""
+    from src.knowledge.loader import load_topology
+
+    try:
+        registry = load_registry(config_root)
+    except Exception:                                              # noqa: BLE001
+        return []
+    notices: list[BootError] = []
+    for gbm in sorted({e.gbm for e in registry.active()}):
+        try:
+            topology = load_topology(knowledge_root or config_root.parent / "knowledge", gbm)
+        except Exception:                                          # noqa: BLE001
+            continue           # 없거나 깨진 토폴로지는 `validate_boot`이 말한다
+        notice = pipeline_notice(topology) if topology.services else ""
+        if notice:
+            notices.append(BootError(where=f"knowledge/{gbm} topology", message=notice))
+    return notices
+
+
 def _repos_declared(config_root: Path, registry, gbm: str, *,
                     env: dict[str, str]) -> bool:
     site = next((e for e in registry.active() if e.gbm == gbm), None)

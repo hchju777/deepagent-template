@@ -159,6 +159,44 @@ def test_체크아웃이_없어도_기동은_막지_않는다(tmp_path, monkeypa
     assert main() == 0, capsys.readouterr().err
 
 
+
+def test_토폴로지에_pipelines가_없으면_boot과_code_status가_기동을_막지_않는_주의로_말한다(tmp_path, monkeypatch, capsys):
+    """측정 #32 사전 점검 1: 토폴로지에 `pipelines`가 없으면 다른 사이트 채우기를 전부 거절하고 라우터 판별도 꺼지는데, 걷기마다 주 한 줄뿐이라 운영자가 몰랐다.
+    `boot`은 오류가 있으면 기동을 거부하는 자리라 선언 없음은 오류가 아니라 주의로(종료 코드 그대로), `code status`도 같은 줄. `pipelines`는 있는데 `router`가
+    없으면 라우터 판별만 꺼진다. 둘 다 있으면 말하지 않는다."""
+    from src.__main__ import main
+
+    url = "https://git.example.com/team/dt-core"
+    _make_repo(tmp_path / "checkout", origin=url)
+    config_root = _tree(tmp_path, repo_path=str(tmp_path / "checkout"), url=url, config_paths=["a.py"])
+    topology_file = tmp_path / "knowledge" / "topology" / "mx.json"
+
+    def boot():
+        set_real_config_env(monkeypatch)
+        monkeypatch.setattr("sys.argv", ["src", "--config-root", str(config_root), "--env-file", str(tmp_path / "none"), "boot"])
+        code = main()
+        return code, capsys.readouterr().out
+
+    code, out = boot()
+    assert code == 0 and "✅ 기동 검증 통과" in out
+    assert "  ⚠ [knowledge/mx topology] 토폴로지 pipelines 선언 없음 — 다른 사이트 채우기·라우터 판별 꺼짐" in out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert code == 0 and "  ⚠ 토폴로지 pipelines 선언 없음 — 다른 사이트 채우기·라우터 판별 꺼짐" in captured.out
+    topology = json.loads(topology_file.read_text(encoding="utf-8"))
+    topology["pipelines"] = {"class_key": "class", "enabled_key": "enabled"}
+    topology_file.write_text(json.dumps(topology), encoding="utf-8")
+    code, out = boot()
+    assert code == 0 and "  ⚠ [knowledge/mx topology] 토폴로지 pipelines.router 선언 없음 — 라우터 판별 꺼짐" in out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert "  ⚠ 토폴로지 pipelines.router 선언 없음 — 라우터 판별 꺼짐" in captured.out
+    topology["pipelines"]["router"] = {"type_enum": "Kind", "pipeline_enum": "Flow"}
+    topology_file.write_text(json.dumps(topology), encoding="utf-8")
+    code, out = boot()
+    assert code == 0 and "선언 없음" not in out
+    code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "status")
+    assert "선언 없음" not in captured.out
+
+
 def test_법인별로_갈린_config_경로를_해석한다(tmp_path, monkeypatch, capsys):
     """대상의 config가 **법인별로도 갈린다**(`config/factories/{fct}/{gbm}.json`).
     토폴로지는 GBM 단위라 자리표시자로만 표현할 수 있다 — 우리 `SITE_LAYERS`와 같다.

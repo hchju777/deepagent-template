@@ -43,7 +43,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from src.boot import validate_boot
+from src.boot import boot_notices, pipeline_notice, validate_boot
 from src.config.loader import (ConfigError, load_app_config, load_prompt,
                                load_registry, load_scenarios, load_site_config)
 from src.infrastructure.factory import build_adapters
@@ -317,12 +317,18 @@ def _peer_reader(config_root: Path, gbm: str, fct: str, *, env: dict[str, str], 
 
 def cmd_boot(args, env) -> int:
     errors = validate_boot(args.config_root, env=env, knowledge_root=_knowledge_root(args))
+    # 주의는 기동을 막지 않는다(R3-5x ①) — 선언이 비어 꺼진 기능을 말할 뿐이다.
+    notices = boot_notices(args.config_root, env=env, knowledge_root=_knowledge_root(args))
     if not errors:
         print(f"✅ 기동 검증 통과 — {args.config_root}")
+        for notice in notices:
+            print(f"  ⚠ {notice}")
         return 0
     print(f"❌ 문제 {len(errors)}건:", file=sys.stderr)
     for error in errors:
         print(f"  {error}", file=sys.stderr)
+    for notice in notices:
+        print(f"  ⚠ {notice}")
     return 1
 
 
@@ -1532,6 +1538,8 @@ def cmd_code_status(args, env) -> int:
         return 1
 
     print(f"  {gbm} — 레포 {len(repos)}개 · 서비스 {len(topology.services)}개 · config 층은 {site_fct} 기준")
+    if (notice := pipeline_notice(topology)):
+        print(f"  ⚠ {notice}")                                    # 기능이 꺼진 것이지 못 읽는 것이 아니다 — 종료 코드에 안 센다(R3-5x ①)
     bad = 0
     for repo in repos:
         state = status_of(repo)
