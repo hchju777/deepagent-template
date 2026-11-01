@@ -3758,7 +3758,11 @@ CASES += [
  ("다른 사이트의 이름 목록은 안 본다", MN, "    asked = [fct] + [e.fct for e in load_registry(args.config_root).active() if e.gbm == gbm and e.fct != fct]", "    asked = [fct]", [UNLISTED_T]),
  ("있는 이름 목록도 없다고 한다", MN, "    unlisted = [one for one in asked if gb.read_site_names(out_dir, one) is None]", "    unlisted = [one for one in asked if gb.read_site_names(out_dir, one) is not None]", [UNLISTED_T]),
 ]
-assert len(CASES) >= 1265, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5x ③ — 유형표는 (레포, 커밋)마다 한 번 ──
+CASES += [
+ ("유형표를 클래스마다 다시 푼다", DCP, "        if key not in self._router_tables:", "        if True:", [ROUTED_T]),
+]
+assert len(CASES) >= 1266, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

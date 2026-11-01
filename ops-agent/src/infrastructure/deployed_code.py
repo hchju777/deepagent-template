@@ -479,8 +479,10 @@ class DeployedCode(DeployedCodePort):
         self._layer_texts: dict[tuple[str, str, str], str | None] = {}
         # 레포 스냅샷의 등록들(AST) — `(repo, commit)`마다 한 번(R3-5 ③). 걷기가 클래스마다 묻는다.
         self._registrations: dict[tuple[str, str], list[Registration]] = {}
-        # 클래스 → 라우터 유형표 확인 결과(R3-5w ②). 걷기가 토픽 홉마다 묻는다 — git grep·show는 클래스마다 한 번.
+        # 클래스 → 라우터 유형표 확인 결과(R3-5w ②). 걷기가 토픽 홉마다 묻는다.
         self._routed: dict[str, str] = {}
+        # (레포, 커밋, 유형 열거, 파이프라인 열거) → 유형표(멤버, 짝 목록)(R3-5x ③). 클래스가 달라도 같은 표다 — git grep·show는 여기서 한 번.
+        self._router_tables: dict[tuple[str, str, str, str], tuple[dict[str, str], list[tuple[str, tuple[str, ...]]]]] = {}
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -1059,6 +1061,20 @@ class DeployedCode(DeployedCodePort):
         if not wanted:
             return ""
         for repo, commit in sorted(repos.items()):
+            members, pairs = await self._router_table(repo, commit, router)
+            mine = {m for m, v in members.items() if m in wanted or v in wanted}
+            kinds = {t for t, _ in pairs}
+            hit = sorted({t for t, flows in pairs if mine & set(flows)})
+            if hit and len(kinds) > 1:
+                return f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
+        return ""
+
+    async def _router_table(self, repo: str, commit: str, router) -> tuple[dict[str, str], list[tuple[str, tuple[str, ...]]]]:
+        """그 커밋의 유형표 — 파이프라인 열거 멤버(이름 → 값)와 짝 목록. (레포, 커밋)마다 한 번 푼다(R3-5x ③ — 측정 #32 사전 점검 3: 클래스마다 git grep·show를
+        다시 띄워 걷기 하나에 35번, 약 1.3초였다; 배치의 첫 걷기는 캐시가 차가워 시간 상한에 걸렸다). 못 읽으면 던진다 — `routed_types`가 그 사실로 바꾸고,
+        실패는 캐시하지 않는다."""
+        key = (repo, commit, router.type_enum, router.pipeline_enum)
+        if key not in self._router_tables:
             got = await self._reader.grep(repo, commit, [f"class {router.pipeline_enum}", f"{router.type_enum}."], fixed=True,
                                           max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)
             if got.status != "ok" or not isinstance(got.data, str):
@@ -1076,12 +1092,8 @@ class DeployedCode(DeployedCodePort):
                     continue
                 members.update(_enum_members(tree, router.pipeline_enum))
                 pairs += _type_pairs(tree, router.type_enum, router.pipeline_enum)
-            mine = {m for m, v in members.items() if m in wanted or v in wanted}
-            kinds = {t for t, _ in pairs}
-            hit = sorted({t for t, flows in pairs if mine & set(flows)})
-            if hit and len(kinds) > 1:
-                return f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
-        return ""
+            self._router_tables[key] = (members, pairs)
+        return self._router_tables[key]
 
     async def _defined_at_pin(self, class_name: str, service: str) -> str:
         """이 사이트 배포 커밋의 그 클래스 파일에 정의가 있나 — 있으면 빈 문자열."""

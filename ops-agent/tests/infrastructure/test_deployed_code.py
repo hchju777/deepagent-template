@@ -1370,6 +1370,28 @@ async def test_routed_types는_클래스가_라우터_유형표를_거쳐_받으
     assert await here.routed_types("Lonely") == ""                       # 짝에 없다 — 라우터를 거치지 않는다
     assert await here.routed_types("Solo") == ""                         # 열거 멤버는 있지만 짝에 없다
     assert await here.routed_types("Nobody") == ""                       # 파이프라인 항목이 없다
+    # 유형표는 (레포, 커밋)마다 한 번만 푼다(R3-5x ③ — 측정 #32 사전 점검 3: 클래스마다 grep·show를 다시 띄워 걷기 하나에 35번, 약 1.3초). 클래스마다 다른
+    # 것은 파이프라인 항목 이름뿐이다.
+    calls = []
+
+    class _Counting:
+        def __getattr__(self, name):
+            return getattr(reader, name)
+
+        async def grep(self, repo, commit, patterns, **kwargs):
+            calls.append(("grep", commit))
+            return await reader.grep(repo, commit, patterns, **kwargs)
+
+        async def show(self, repo, commit, path, **kwargs):
+            if path.endswith(".py"):
+                calls.append(("show", path))
+            return await reader.show(repo, commit, path, **kwargs)
+
+    counted = DeployedCode(_Counting(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    counted.attach_index(index)
+    got = [await counted.routed_types(name) for name in ("Seeder", "Packer", "Lonely", "Solo")]
+    assert got == [await here.routed_types(name) for name in ("Seeder", "Packer", "Lonely", "Solo")]
+    assert [kind for kind, _ in calls].count("grep") == 1 and sorted(p for kind, p in calls if kind == "show") == ["jobs/kinds.py", "jobs/route.py"]
     # 확인이 실패하면(git grep 실패) 그 사실 — 빈 문자열이면 걷기가 정상이라 쓴다
     from src.domain.envelope import ProbeResult
 
