@@ -19,20 +19,16 @@ API가 부르는 일(리포트·메일·doctor·LLM 확인)은 전부 이미 CLI
 시간을 넘겨 죽일 때, 자식의 출력이 파이썬 버퍼에 남아 있으면 **같이 사라진다.** "어디까지 갔다가 멈췄나"가
 제일 필요한 순간에 빈 stdout이 남는다. `-u`면 찍은 것은 이미 파이프에 있다.
 
-## 왜 트리째 죽이는가
+## 죽인 뒤 기다림에도 상한이 있는 이유
 
-자식만 죽이면 안 된다. 진짜 일을 하는 프로세스가 손자이고 파이프를 물려받으면 손자가 살아서 일을 끝내고, 3.11의
-`proc.wait()`는 프로세스가 끝나도 **파이프가 다 닫혀야** 돌아온다(3.13은 바로 돌아온다) — 상한이 안 듣고, 최악이면 자리가
-영원히 안 비어 모든 요청이 409가 된다. POSIX는 새 세션으로 띄워 **그룹째** 죽인다.
+3.11의 `proc.wait()`는 프로세스가 끝나도 **파이프가 다 닫혀야** 돌아온다(3.13은 바로 돌아온다). 파이프를 물려받은 손자가
+살아 있으면 상한이 안 듣고, 최악이면 자리가 영원히 안 비어 모든 요청이 409가 된다. 그래서 죽인 뒤의 기다림·파이프
+읽기 모두 상한을 두고, 그래도 못 닫은 파이프는 직접 닫는다.
 
-Windows는 **죽이기 전에 프로세스 목록을 찍어 자손부터** 죽이고, 새로 생긴 자손이 없을 때까지 되풀이한다. `taskkill /T`는
-사내 PC에서 손자를 놓쳤다(11-01): venv의 `python.exe`는 진짜 파이썬을 Job Object에 넣어 띄우는 런처라, 위에서부터 죽이면
-런처가 죽는 순간 그 밑이 job째 먼저 죽고, 더 밑(손자의 런처·손자)은 부모를 잃어 트리에서 안 보인다. 미리 찍어 두면 부모가
-먼저 죽어도 누가 누구의 자손인지 안다. 한 번만 찍으면 찍은 **뒤에** 막 생긴 손자를 놓친다 — 그다음 실행에서 그렇게 3개만
-죽이고 손자가 남았다.
-
-무엇을 죽였는지는 작업의 stderr 끝에 한 줄로 남는다 — 상한에 걸린 작업이 왜 안 죽었는지를 사람이 볼 수 있게. 죽인 뒤
-기다리는 것에도 상한을 둔다.
+운영(Linux 컨테이너)은 새 세션으로 띄워 **그룹째** 죽인다. Windows는 `proc.kill()` 하나다 — venv의 `python.exe` 런처는 Job
+Object로 직계 자식(진짜 파이썬)을 같이 죽이고, API가 부르는 CLI는 우리 파이프를 물려받는 손자를 띄우지 않는다. Windows에서
+손자까지 쫓아 죽이는 코드(taskkill·스냅샷)를 한때 넣었다가 뺐다 — 운영에 없는 경우를 막으려고 여기서 돌려 볼 수 없는 코드를
+쌓았다(11-01, STEPS/plan-alarm-api.md).
 """
 import asyncio
 import contextlib
@@ -174,7 +170,7 @@ class JobRunner:
             await asyncio.wait_for(proc.wait(), job.timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
-            killed = await _kill_tree(proc)
+            await _kill_tree(proc)
             # 트리를 다 못 죽였으면 파이프가 안 닫혀 3.11의 wait()가 영원히 안 온다 — 기다림에도 상한을 둔다.
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(proc.wait(), _DRAIN_S)
@@ -189,167 +185,16 @@ class JobRunner:
         job.exit_code = proc.returncode
         job.stdout = _tail(out, self._max_output)
         job.stderr = _tail(err, self._max_output)
-        if timed_out:
-            job.stderr += f"\n[작업 실행기] 상한 {job.timeout_s:g}초 — {killed}"
         job.status = "timeout" if timed_out else ("ok" if proc.returncode == 0 else "failed")
 
 
-async def _kill_tree(proc) -> str:
-    """자식과 그 밑을 전부 죽이고 무엇을 했는지 한 줄로 돌려준다. **던지지 않는다** — 못 죽여도 부르는 쪽은 상한을 두고 기다린다."""
-    if sys.platform == "win32":
-        note = await asyncio.to_thread(_kill_windows_tree, proc.pid)
-    else:
-        try:
+async def _kill_tree(proc) -> None:
+    """POSIX는 그룹째, Windows는 자식만(위 docstring). **던지지 않는다** — 못 죽여도 부르는 쪽은 상한을 두고 기다린다."""
+    if os.name == "posix":
+        with contextlib.suppress(Exception):
             os.killpg(proc.pid, signal.SIGKILL)
-            note = f"프로세스 그룹 {proc.pid}을 죽였다"
-        except Exception as exc:                                   # noqa: BLE001
-            note = f"그룹째 못 죽였다 — {type(exc).__name__}: {exc}"
     with contextlib.suppress(ProcessLookupError, OSError):
-        proc.kill()                                                # 위가 안 들었을 때의 마지막 수
-    return note
-
-
-def descendants(rows: list[tuple[int, int]], known: set[int], created) -> list[int]:
-    """(PID, 부모 PID) 목록에서 `known`(이미 아는 계보 — 이번 목록에 없을 수 있다, 이미 죽였으니)의 새 자손 — **깊은 것부터**.
-
-    **부모보다 먼저 생긴 자식은 뺀다.** Windows는 죽은 프로세스의 PID를 다른 프로세스에 다시 준다. 목록의 부모 PID만 믿으면,
-    부모가 오래전에 죽은 **우리와 상관없는 고아**를 그 PID를 다시 받은 우리 CLI의 자식으로 보고 죽인다(사람의 편집기일 수
-    있다). 진짜 자식은 부모가 생긴 뒤에 생긴다 — psutil과 같은 규칙. `created(pid)`가 None이면(못 열면) 확인할 수 없으니
-    넣지 않는다.
-    """
-    raw: dict[int, list[int]] = {}
-    for pid, parent in rows:
-        if pid != parent:
-            raw.setdefault(parent, []).append(pid)
-    depth = {pid: 0 for pid in known}
-    found: list[int] = []
-    queue = deque(known)
-    while queue:
-        parent = queue.popleft()
-        for child in raw.get(parent, ()):
-            if child in depth:
-                continue
-            child_born, parent_born = created(child), created(parent)
-            if child_born is None or parent_born is None or child_born < parent_born:
-                continue
-            depth[child] = depth[parent] + 1
-            found.append(child)
-            queue.append(child)
-    return sorted(found, key=lambda pid: -depth[pid])
-
-
-# 다시 훑는 횟수와 그 사이 쉼. 한 번 찍고 끝내면, 찍은 **뒤에** 생긴 손자(죽이는 중인 런처가 막 띄운 것)가 목록에 없어 산다.
-_KILL_PASSES = 4
-_KILL_PAUSE_S = 0.2
-
-
-def _kill_windows_tree(root: int, *, sleep=time.sleep) -> str:
-    """새로 생긴 자손이 없을 때까지 찍고 자손부터 죽이기를 되풀이한다. 생긴 시각은 **처음 본 때 기억**해 둔다 — 부모가 이미
-    죽은 뒤에 찍힌 손자도 그 부모의 자식으로 확인할 수 있게(죽은 프로세스는 다시 열 수 없다)."""
-    born: dict[int, int | None] = {}
-
-    def created(pid: int):
-        if pid not in born:
-            born[pid] = _windows_created(pid)
-        return born[pid]
-    tried: set[int] = set()
-    missed: list[int] = []
-    passes = 0
-    try:
-        for passes in range(1, _KILL_PASSES + 1):
-            # 이미 죽인 것까지 계보의 출발점으로 — 중간이 죽어 목록에서 빠져도 그 밑에서 늦게 생긴 손자에 닿는다.
-            fresh = descendants(_windows_processes(), {root, *tried}, created)
-            if root not in tried:
-                fresh.append(root)                                 # 맨 위는 맨 끝에
-            if not fresh:
-                break
-            for pid in fresh:
-                created(pid)                                       # 죽이기 **전에** — 죽은 뒤엔 못 열어 그 밑의 늦은 자식을 확인 못 한다
-                tried.add(pid)
-                if not _windows_terminate(pid):
-                    missed.append(pid)
-            sleep(_KILL_PAUSE_S)
-    except Exception as exc:                                       # noqa: BLE001
-        return f"프로세스 목록을 못 읽었다 — {type(exc).__name__}: {exc} (그 전까지 {len(tried)}개)"
-    # 못 죽인 것 중에는 이미 스스로 끝난 것(손자가 죽어 따라 끝난 런처)도 있다 — 판정하지 않고 그대로 적는다.
-    return (f"자손부터 {len(tried)}개를 죽였다({passes}번 훑음)"
-            + (f" (TerminateProcess 실패 PID {missed})" if missed else ""))
-
-
-def _kernel32():
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    return kernel32
-
-
-def _windows_processes() -> list[tuple[int, int]]:
-    """(PID, 부모 PID) — Toolhelp 스냅샷 한 장. **죽이기 전에** 찍는다: 부모가 먼저 죽어도 자식 항목에는 부모 PID가 남는다."""
-    import ctypes
-    from ctypes import wintypes
-
-    class Entry(ctypes.Structure):                                 # PROCESSENTRY32W
-        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
-                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
-                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
-                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
-                    ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
-
-    kernel32 = _kernel32()
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel32.Process32FirstW.argtypes = kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
-    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)          # TH32CS_SNAPPROCESS
-    if snapshot in (None, wintypes.HANDLE(-1).value):
-        raise ctypes.WinError(ctypes.get_last_error())
-    rows: list[tuple[int, int]] = []
-    try:
-        entry = Entry()
-        entry.dwSize = ctypes.sizeof(Entry)
-        found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
-        while found:
-            rows.append((entry.th32ProcessID, entry.th32ParentProcessID))
-            found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
-    finally:
-        kernel32.CloseHandle(snapshot)
-    return rows
-
-
-def _windows_created(pid: int) -> int | None:
-    """프로세스가 생긴 시각(FILETIME 정수). 못 열면 None."""
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = _kernel32()
-    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
-    handle = kernel32.OpenProcess(0x1000, False, pid)              # PROCESS_QUERY_LIMITED_INFORMATION
-    if not handle:
-        return None
-    try:
-        times = [wintypes.FILETIME() for _ in range(4)]
-        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-            return None
-        return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def _windows_terminate(pid: int) -> bool:
-    from ctypes import wintypes
-
-    kernel32 = _kernel32()
-    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    handle = kernel32.OpenProcess(0x0001, False, pid)              # PROCESS_TERMINATE
-    if not handle:
-        return False
-    try:
-        return bool(kernel32.TerminateProcess(handle, 1))
-    finally:
-        kernel32.CloseHandle(handle)
+        proc.kill()
 
 
 async def _drain(stream, sink: bytearray) -> None:
