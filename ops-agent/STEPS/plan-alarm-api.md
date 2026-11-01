@@ -143,6 +143,10 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
    - 장부가 있으면 집계·LLM **전에** 멈추고 알린다("이미 보냄" 전용 종료 코드). `--force`로 덮어쓴다.
      스케줄·Swagger·CLI가 같은 규칙이다. dry_run·no_mail은 발송하지 않으므로 장부를 무시하고 돈다.
    - API: `POST /report/run`에 `force` 추가(쿼리 체크박스 — 장부가 있고 force가 false면 409와 장부).
+   - **종료 코드를 나눈다**(정한 것 4 — 11-01 사내 실측: 법인 둘의 Mongo가 안 닿아 `report aggregate`·`run`이 끝까지 돌고도
+     종료 코드 1 → 작업 `failed`). 일부 법인 못 읽음 = **성공-경고** 전용 코드, 이미 보냄 = 전용 코드. `aggregate`도 같은 규칙
+     (지금 둘 다 `return 1 if facts.unavailable`). **2는 못 쓴다** — argparse가 인자 오류에 2를 낸다(잘못 친 명령이 경고로
+     보인다). 코드 값과 작업 상태에서의 모양(`ok` + 경고 칸인가, 상태 하나를 더하는가)은 3단계 예고에서 정한다.
      `POST /report/resend`(date, force)는 집계·LLM 없이 그날 HTML을 그대로 `mail send --file`로 보내고,
      성공하면 **API가** 장부를 덮어쓴다(계기 `manual`). `GET /report/sent`, `GET /report/sent/{date}`.
 4. **출력 보관**

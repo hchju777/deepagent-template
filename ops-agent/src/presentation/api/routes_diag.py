@@ -61,7 +61,9 @@ def diag_router(ctx: ApiContext) -> APIRouter:
         argv = ["llm", "ask"] + (["--role", req.role] if req.role else []) + ["--", req.prompt]
         return await start(ctx, argv, timeout_s=SHORT_S, wait_s=req.wait_s)
 
-    @router.post("/llm/raw", tags=["진단 · 앱 안"], summary="SDK 없이 httpx로 게이트웨이에 한 번 — 원인 분리용")
+    @router.post("/llm/raw", tags=["진단 · 앱 안"], summary="SDK 없이 httpx로 게이트웨이에 한 번 — 원인 분리용",
+                 description="호출 간격(`min_interval_s`)·429 대기를 **지키지 않는다** — 간격은 CLI 프로세스 안에서만 센다. "
+                             "`llm/check` 바로 뒤에 부르면 429가 날 수 있으니 간격만큼 두고 부른다.")
     async def llm_raw(req: Annotated[LlmRawRequest, Query()]):
         try:
             app = ctx.app_config()
