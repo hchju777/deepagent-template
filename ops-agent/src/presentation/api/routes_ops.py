@@ -1,7 +1,8 @@
-"""운영용 — `/internal/v1/ops/...`: 작업, 스케줄 목록, 리포트, 메일, 출력 파일."""
+"""운영용 — `/internal/v1/ops/...`: 작업, 스케줄, 리포트, 메일, 출력 파일."""
 import mimetypes
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse, JSONResponse
@@ -70,22 +71,33 @@ def ops_router(ctx: ApiContext) -> APIRouter:
         await ctx.runner.wait(found, wait_s)
         return found.view()
 
+    @router.get("/schedule", tags=["스케줄"], summary="앱 안 스케줄 — 켜짐·cron·다음 시각·최근 결과")
+    async def schedule():
+        return ctx.scheduler.view()
+
+    @router.post("/schedule/pause", tags=["스케줄"], summary="일시정지(메모리 — 재시작하면 다시 켜진다)")
+    async def schedule_pause():
+        ctx.scheduler.pause()
+        return ctx.scheduler.view()
+
+    @router.post("/schedule/resume", tags=["스케줄"], summary="일시정지를 푼다")
+    async def schedule_resume():
+        ctx.scheduler.resume()
+        return ctx.scheduler.view()
+
     @router.post("/schedule/list", tags=["스케줄"], summary="`schedule --list` — 무엇이 언제 도는가")
-    async def schedule_list(req: ScheduleListRequest | None = None):
-        req = req or ScheduleListRequest()
+    async def schedule_list(req: Annotated[ScheduleListRequest, Query()]):
         argv = ["schedule", "--list"] + (["--scenario", req.scenario] if req.scenario else [])
         return await start(ctx, argv, timeout_s=SHORT_S, wait_s=req.wait_s)
 
     @router.post("/report/aggregate", tags=["리포트"], summary="`report aggregate` — 읽어서 숫자만(1800초)")
-    async def report_aggregate(req: ReportAggregateRequest | None = None):
-        req = req or ReportAggregateRequest()
+    async def report_aggregate(req: Annotated[ReportAggregateRequest, Query()]):
         return await start(ctx, ["report", "aggregate", *_scenario_today(req)],
                            timeout_s=REPORT_S, wait_s=req.wait_s)
 
     @router.post("/report/run", tags=["리포트"],
                  summary="`report run` — 집계·서술·파일·메일(dry_run 기본 true, 1800초)")
-    async def report_run(req: ReportRunRequest | None = None):
-        req = req or ReportRunRequest()
+    async def report_run(req: Annotated[ReportRunRequest, Query()]):
         argv = ["report", "run", *_scenario_today(req)]
         if req.dry_run:
             argv.append("--dry-run")
@@ -94,14 +106,12 @@ def ops_router(ctx: ApiContext) -> APIRouter:
         return await start(ctx, argv, timeout_s=REPORT_S, wait_s=req.wait_s)
 
     @router.post("/mail/describe", tags=["메일"], summary="`mail describe` — 누구에게 보내게 돼 있나")
-    async def mail_describe(req: Wait | None = None):
-        req = req or Wait()
+    async def mail_describe(req: Annotated[Wait, Query()]):
         return await start(ctx, ["mail", "describe"], timeout_s=SHORT_S, wait_s=req.wait_s)
 
     @router.post("/mail/send", tags=["메일"],
                  summary="`mail send` — dry_run 기본 true. to를 주면 config 수신자는 무시하고 그 주소들에만")
-    async def mail_send(req: MailSendRequest | None = None):
-        req = req or MailSendRequest()
+    async def mail_send(req: Annotated[MailSendRequest, Query()]):
         # `--subject=값` — 제목이 `-`로 시작해도 옵션으로 읽히지 않는다.
         argv = ["mail", "send", f"--subject={req.subject}"]
         if req.dry_run:

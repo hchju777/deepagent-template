@@ -4,7 +4,9 @@
 안 되는가"를 묻는 자리에서 답 대신 오류가 온다. config가 안 읽히면 `error` 한 칸이다.
 """
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Query
 
 from src.config.loader import load_registry, load_site_config
 from src.infrastructure.tls import verify_arg
@@ -40,31 +42,27 @@ def diag_router(ctx: ApiContext) -> APIRouter:
     probes = ctx.site_probes or RealSiteProbes()
 
     @router.post("/boot", tags=["진단 · CLI"], summary="`boot` — 기동 검증")
-    async def boot(req: Wait | None = None):
-        req = req or Wait()
+    async def boot(req: Annotated[Wait, Query()]):
         return await start(ctx, ["boot"], timeout_s=SHORT_S, wait_s=req.wait_s)
 
     @router.post("/doctor", tags=["진단 · CLI"], summary="`doctor` — 한 사이트를 네 시스템으로(60초)")
-    async def doctor(req: DoctorRequest | None = None):
-        req = req or DoctorRequest()
+    async def doctor(req: Annotated[DoctorRequest, Query()]):
         argv = ["doctor"] + (["--gbm", req.gbm] if req.gbm else []) + (["--fct", req.fct] if req.fct else [])
         return await start(ctx, argv, timeout_s=DOCTOR_S, wait_s=req.wait_s)
 
     @router.post("/llm/check", tags=["진단 · CLI"], summary="`llm check` — 붙는가·한국어·JSON")
-    async def llm_check(req: LlmCheckRequest | None = None):
-        req = req or LlmCheckRequest()
+    async def llm_check(req: Annotated[LlmCheckRequest, Query()]):
         argv = ["llm", "check"] + (["--role", req.role] if req.role else [])
         return await start(ctx, argv, timeout_s=SHORT_S, wait_s=req.wait_s)
 
     @router.post("/llm/ask", tags=["진단 · CLI"], summary="`llm ask` — 한 번 묻고 한 번 받는다(2000자까지)")
-    async def llm_ask(req: LlmAskRequest):
+    async def llm_ask(req: Annotated[LlmAskRequest, Query()]):
         # `--` 뒤에 둔다 — 질문이 `-h`로 시작해도 옵션으로 읽히지 않는다.
         argv = ["llm", "ask"] + (["--role", req.role] if req.role else []) + ["--", req.prompt]
         return await start(ctx, argv, timeout_s=SHORT_S, wait_s=req.wait_s)
 
     @router.post("/llm/raw", tags=["진단 · 앱 안"], summary="SDK 없이 httpx로 게이트웨이에 한 번 — 원인 분리용")
-    async def llm_raw(req: LlmRawRequest | None = None):
-        req = req or LlmRawRequest()
+    async def llm_raw(req: Annotated[LlmRawRequest, Query()]):
         try:
             app = ctx.app_config()
         except Exception as exc:                                   # noqa: BLE001 — 값으로 돌려준다
@@ -79,8 +77,7 @@ def diag_router(ctx: ApiContext) -> APIRouter:
         return env_report(ctx.config_root, ctx.env)
 
     @router.post("/doctor/all", tags=["진단 · 앱 안"], summary="켜진 사이트마다 Redis·Mongo 접속만(동시 몇 개)")
-    async def doctor_all(req: SitesRequest | None = None):
-        req = req or SitesRequest()
+    async def doctor_all(req: Annotated[SitesRequest, Query()]):
         return await survey(ctx.config_root, ctx.env, probes, mode="ping", gbm=req.gbm,
                             concurrency=req.concurrency)
 
@@ -115,15 +112,13 @@ def diag_router(ctx: ApiContext) -> APIRouter:
 
     @router.post("/net/egress", tags=["진단 · 앱 안"],
                  summary="법인 Redis CLIENT INFO·Mongo whatsmyuri — 밖에서 보이는 우리 IP")
-    async def egress(req: EgressRequest | None = None):
-        req = req or EgressRequest()
+    async def egress(req: Annotated[EgressRequest, Query()]):
         return await survey(ctx.config_root, ctx.env, probes, mode="egress", gbm=req.gbm, fct=req.fct,
                             concurrency=req.concurrency)
 
     @router.post("/net/trace", tags=["진단 · 앱 안"],
                  summary="실제 포트로 TCP SYN TTL 1..N — 도중 장비(ICMP 오류 큐, Linux)")
-    async def net_trace(req: TraceRequest | None = None):
-        req = req or TraceRequest()
+    async def net_trace(req: Annotated[TraceRequest, Query()]):
         try:
             url = _trace_url(ctx, req)
         except Exception as exc:                                   # noqa: BLE001 — 값으로 돌려준다

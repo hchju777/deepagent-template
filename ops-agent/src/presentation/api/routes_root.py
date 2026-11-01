@@ -60,10 +60,9 @@ def _secrets(ctx: ApiContext) -> dict:
 
 
 def _scheduler(ctx: ApiContext) -> dict:
-    if ctx.scheduler_alive is None:
-        return {"name": "scheduler", "ok": True, "detail": "스케줄러 없음(2단계에서 붙는다)"}
-    alive = bool(ctx.scheduler_alive())
-    return {"name": "scheduler", "ok": alive, "detail": "돌고 있다" if alive else "스케줄러 태스크가 죽었다"}
+    if ctx.scheduler.alive():
+        return {"name": "scheduler", "ok": True, "detail": "돌고 있다" + (" (일시정지)" if ctx.scheduler.paused else "")}
+    return {"name": "scheduler", "ok": False, "detail": f"스케줄러 태스크가 없다 — {ctx.scheduler.why_dead()}"}
 
 
 def config_hash(ctx: ApiContext) -> dict:

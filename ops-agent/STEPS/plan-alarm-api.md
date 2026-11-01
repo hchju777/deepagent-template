@@ -82,7 +82,8 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
 - 접두는 사내 원본과 같다: 운영 `/internal/v1/ops/...`, 진단 `/internal/v1/ops/diag/...`, `/health`·`/ready`·
   `/version`은 루트. (회신의 `/interval/v1/ops`는 진단 접두와 맞춰 `/internal`의 오타로 읽었다 — 다르면 상수 하나만 고친다.)
 - **메서드**: 작업 실행기에 작업을 만들거나 바깥에 요청을 내는 것은 POST, 우리 상태만 읽는 것은 GET.
-  POST의 인자는 JSON 본문이고, 본문을 비우면 전부 기본값이다(Swagger에서 그대로 누를 수 있게).
+  입력은 전부 **쿼리 파라미터**다(사내 원본과 같다 — Swagger에서 칸·선택으로 보인다, 11-01 회신 a). 리스트는 반복
+  쿼리(`to=a&to=b`), 안 주면 기본값이다. JSON 본문은 읽지 않는다 — 본문에 `dry_run: false`를 실어도 기본값(true)으로 돈다.
 
 | 구분 | 경로 | 방식 | 상한 |
 |---|---|---|---|
@@ -141,7 +142,7 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
      제목, 수신자 수, 계기(`schedule`|`manual`), 작업 id. 계기와 작업 id는 `--trigger`, `--job-id`로 받는다.
    - 장부가 있으면 집계·LLM **전에** 멈추고 알린다("이미 보냄" 전용 종료 코드). `--force`로 덮어쓴다.
      스케줄·Swagger·CLI가 같은 규칙이다. dry_run·no_mail은 발송하지 않으므로 장부를 무시하고 돈다.
-   - API: `POST /report/run`에 `force` 추가(장부가 있고 force가 false면 409와 장부).
+   - API: `POST /report/run`에 `force` 추가(쿼리 체크박스 — 장부가 있고 force가 false면 409와 장부).
      `POST /report/resend`(date, force)는 집계·LLM 없이 그날 HTML을 그대로 `mail send --file`로 보내고,
      성공하면 **API가** 장부를 덮어쓴다(계기 `manual`). `GET /report/sent`, `GET /report/sent/{date}`.
 4. **출력 보관**
@@ -217,6 +218,57 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
    `env`·`net`·`net/egress`·`net/trace`. 응답 **모양**이 원본과 다른 곳이 있으면 원본 쪽 모양을 알려 달라.
 4. 긴 `report/run` 중에 다른 경로 → 409와 돌고 있는 작업.
 
+## 2단계 — 한 것 (11-01)
+
+**파일**
+
+| | 파일 | 무엇 |
+|---|---|---|
+| A | `src/presentation/api/scheduler.py` | `ApiScheduler` — 기존 `run_all`을 lifespan 태스크로. 잡은 실행기에 `report run --scenario <이름>`(1800초) |
+| M | `src/presentation/api/assembly.py` | lifespan이 스케줄러를 띄우고 내린다. `sleeper`(가짜 시계용 이음매) |
+| M | `src/presentation/api/routes_ops.py` | `GET /schedule`, `POST /schedule/pause`·`/resume`. 입력을 쿼리로(a) |
+| M | `src/presentation/api/routes_diag.py`, `models.py` | 입력을 쿼리로(a). `to` 오류 문구가 두 번 붙던 것 |
+| M | `src/presentation/api/routes_root.py`, `context.py` | `/ready`가 진짜 스케줄러 태스크를 본다 |
+| M | `src/__main__.py` | `mail send` 확인 본문이 실제로 받는 쪽을 적는다(b) — mail 부분만 |
+| A·M | `tests/presentation/api/test_scheduler.py` 외 | 아래 |
+
+**정한 세부**
+
+- 발사 때 수동 작업이 돌고 있으면 **끝날 때까지 기다렸다** 들어간다(사람 요청은 여전히 409). 빈 뒤에 사람이 먼저 잡으면
+  다시 기다린다.
+- 일시정지 중의 발사는 건너뛰고 최근 결과에 `paused`로 남는다. 다음 시각은 계속 보인다(`on: false`). 재시작하면 켜진다.
+- `GET /schedule`: `running`(태스크 생존), `paused`, `error`, 시나리오마다 `enabled`(config)·`on`(켜짐 = config && 일시정지 아님)·
+  `kind`·`cron`·`next_run`·`last`(`status` ok|failed|timeout|paused — 3단계에서 "이미 보냄"이 는다, `scheduled`·`started`·`took_s`·
+  `job_id`·`exit_code`·`detail`).
+- `/ready`의 스케줄러 칸: 태스크가 살아 있으면 통과. 시나리오를 못 읽어 못 떴거나, 루프가 멈춤 신호 없이 끝났으면 503과 이유.
+  **돌릴 시나리오가 없는 것은 죽은 것이 아니다** — 멈춤 신호까지 산다(꺼 둔 것으로 503이 나면 틀린 경보다).
+- 시나리오는 뜰 때 한 번 읽는다 — config가 바뀌면 다시 띄운다.
+- 내릴 때 리포트 작업을 기다리던 중이면 5초 안에 스케줄러만 끊는다. 작업 자체는 실행기 것이라 같이 죽이지 않는다(그 작업의
+  상한이 정리한다).
+- (b) 확인 본문: "받는 사람: `--to`로 지정한 주소(config의 mail.recipients를 덮어씀) — N명: …" 또는
+  "받는 사람: config의 mail.recipients — N명: …". `--body`·`--file`을 주면 그대로.
+
+**확인한 것**
+
+- 테스트 134개(1단계 117 + 스케줄러 12 · 쿼리 칸/본문 무시/오류 문구 3 · 확인 본문 3 − 옮긴 1). 3.13·3.11 둘 다 초록. 전체 스위트 초록.
+- 실제 uvicorn을 띄워 lifespan이 스케줄러를 띄우는 것(`GET /schedule`의 `running`·`next_run`)과 종료 신호에 10초 안에
+  내려오는 것까지 본다.
+- RED 스윕 17가지(lifespan 띄움·내림, 수동 기다림, 일시정지, `--scenario`, 1800초, 죽은 루프, 돌릴 것 없음, 내릴 때 끊음,
+  실패 기록, 일시정지 중 다음 시각, ready, 쿼리 둘, 오류 문구, 본문 둘). 처음에 "돌릴 것 없음"이 초록이었다 — 테스트가
+  스케줄러 태스크가 첫 걸음을 떼기 전에 `/ready`를 물었다(ASGI 요청은 진짜 I/O가 없어 루프를 안 돌린다). 루프에 자리를
+  내준 뒤 보게 고쳐 빨개지는 것을 확인했다.
+
+**사내에서 볼 것(평가자)**
+
+1. 로컬 uvicorn을 띄운 채 `GET /schedule` — `running: true`, `next_run`이 다음 평일 08:00(KST).
+2. 사내 시나리오를 잠깐 `kind: interval`·`interval_seconds: 60`으로(사내 사본만) — 1분마다 `report run --scenario …`가
+   `/jobs`에 생기고 `last`가 바뀌는지. 그동안 Swagger에서 `report/run`을 눌러 두면 스케줄이 기다렸다 도는지. **dry_run이
+   아니다** — 스케줄 발사는 진짜 발송이므로 `mail.enabled`·수신자를 확인하고(또는 `--to` 시험 주소로) 본다.
+3. `pause` → 다음 발사가 `paused`로 건너뛰는지, `resume` → 다시 도는지.
+4. Swagger에서 POST 경로가 전부 칸(쿼리)으로 보이는지, `to`가 여러 칸으로 들어가는지.
+5. `llm/ask`의 `prompt`가 쿼리라 길이가 URL에 실린다 — 한글 2000자는 인코딩하면 약 18KB다. Ingress의 요청 줄 상한(nginx 기본
+  8KB)에 걸리면 414가 난다. 사내 원본도 같은 모양이면 그대로 두고, 긴 질문이 필요하면 알려 달라.
+
 ## 요청문의 오타를 이렇게 읽었다
 
 | 원문 | 읽은 뜻 |
@@ -249,3 +301,10 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
 - a) `/report/aggregate` 상한 180초 → **1800초**(28개 법인 집계, 사내 원본도 1800).
 - b) Dockerfile을 쓰지 않는다 — CMD 한 줄과 빌드 ARG만 위 절로. 실행기의 리포 루트는 새 파일 위치에서 다시 계산.
 - c) 경로 접두를 사내 원본과 같게.
+
+## 고친 것 (11-01 — 1단계 검증 회신, 2단계에 붙여서)
+
+- a) POST 입력을 JSON 본문이 아니라 쿼리 파라미터로(사내 원본과 같게). dry_run 기본 true 유지, `to`는 반복 쿼리. 3단계 `force`도
+  쿼리. `wait_s` 기본 55는 그대로.
+- b) `mail send` 확인 본문의 "수신자는 config의 mail.recipients가 정합니다(본문이 바꿀 수 없습니다)" — `--to`를 쓰면 틀린 말이다.
+  실제로 받는 쪽(덮어씀/설정)을 적는다.

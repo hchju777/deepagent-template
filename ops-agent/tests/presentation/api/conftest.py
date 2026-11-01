@@ -8,8 +8,10 @@
 
 가짜 CLI는 받은 argv를 JSON으로 그대로 찍는다. 경로 테스트는 그 줄로 "어떤 명령이 나갔는가"를 본다.
 """
+import asyncio
+import contextlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -119,9 +121,62 @@ def app(cli_root):
     return make_app(cli_root)
 
 
+@contextlib.asynccontextmanager
+async def serve(app, *, lifespan: bool = True):
+    """uvicorn이 하는 것처럼 lifespan(스케줄러)을 띄우고, 같은 이벤트 루프에서 요청한다 — 작업 실행기·스케줄러의 태스크가
+    요청 사이에 살아 있어야 한다. `ASGITransport`는 lifespan을 안 돌리므로 여기서 직접 연다."""
+    async with contextlib.AsyncExitStack() as stack:
+        if lifespan:
+            await stack.enter_async_context(app.router.lifespan_context(app))
+        client = await stack.enter_async_context(
+            httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api"))
+        yield client
+
+
 @pytest.fixture
 async def client(app):
-    """앱과 같은 이벤트 루프에서 돈다 — 작업 실행기의 태스크가 요청 사이에 살아 있어야 한다."""
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://api") as c:
+    async with serve(app) as c:
         yield c
+
+
+class FakeTime:
+    """가짜 시계와 잠 — 스케줄러에 `clock`·`sleeper`로 넣는다.
+
+    잠은 `wake()`를 받을 때까지(또는 멈춤 신호까지) **진짜로** 잔다 — 바로 돌려주면 루프가 가짜 시간 속에서 쉬지 않고
+    발사한다. 깨면 시계를 그 잠의 목표 시각으로(또는 `wake(to=)`의 시각으로) 옮긴다. `asked`는 루프가 자려고 한 목표 시각들.
+    """
+
+    def __init__(self, now: datetime):
+        self.now = now
+        self.asked: list[datetime] = []
+        self._wakes = asyncio.Semaphore(0)
+        self._jumps: list[datetime | None] = []
+
+    def clock(self) -> datetime:
+        return self.now
+
+    def wake(self, to: datetime | None = None) -> None:
+        self._jumps.append(to)
+        self._wakes.release()
+
+    async def sleeper(self, seconds: float, stop: asyncio.Event) -> bool:
+        target = self.now + timedelta(seconds=seconds)
+        self.asked.append(target)
+        waker = asyncio.ensure_future(self._wakes.acquire())
+        stopper = asyncio.ensure_future(stop.wait())
+        done, pending = await asyncio.wait({waker, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        if waker not in done:
+            return True
+        self.now = self._jumps.pop(0) or target
+        return stop.is_set()
+
+
+async def until(condition, *, timeout: float = 10.0) -> None:
+    """조건이 설 때까지 이벤트 루프를 돌린다. 안 서면 그 자리에서 실패한다 — 테스트가 영원히 걸리지 않게."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("기다린 조건이 안 섰다")
+        await asyncio.sleep(0.02)

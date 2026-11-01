@@ -23,8 +23,7 @@ class ApiContext:
     site_probes: Any = None
     trace_probe: Callable | None = None
     llm_transport: Any = None
-    # 스케줄러 태스크가 살아 있는가(2단계). None이면 아직 없다.
-    scheduler_alive: Callable[[], bool] | None = None
+    scheduler: Any = None                 # ApiScheduler — lifespan이 띄우고 내린다
 
     @property
     def config_root(self) -> Path:

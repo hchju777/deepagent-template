@@ -33,7 +33,7 @@ async def call(app, method, path, body=None):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as c:
         if method == "GET":
             return await c.get(path)
-        return await (c.post(path, json=body) if body is not None else c.post(path))
+        return await c.post(path, params=body)
 
 
 # ── env ──────────────────────────────────────────────────────────────────

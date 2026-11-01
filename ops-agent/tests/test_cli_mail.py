@@ -75,3 +75,30 @@ def test_실제_발송도_to로_바뀐_설정으로_간다(mail_config, monkeypa
     assert run(mail_config, "--to", "me@example.com", monkeypatch=monkeypatch) == 0
     assert [cfg.recipients for cfg in used] == [["me@example.com"]]
     assert json.loads(capsys.readouterr().out)["recipients"] == ["me@example.com"]
+
+
+# ── 확인용 본문 — 실제로 받는 쪽을 적는다 ─────────────────────────────────
+
+def _body(capsys) -> str:
+    return json.loads(capsys.readouterr().out)["body"]["input_value"].split("body : \n", 1)[1]
+
+
+def test_to로_보내면_본문이_덮어쓴_주소를_말한다(mail_config, monkeypatch, capsys):
+    """`--to`로 보냈는데 "수신자는 config가 정한다"고 쓰면 받은 사람이 틀린 말을 읽는다(사내 검증에서 나왔다)."""
+    assert run(mail_config, "--dry-run", "--to", "me@example.com", monkeypatch=monkeypatch) == 0
+    body = _body(capsys)
+    assert "받는 사람: `--to`로 지정한 주소(config의 mail.recipients를 덮어씀) — 1명: me@example.com" in body
+    assert "본문이 바꿀 수 없습니다" not in body and "all-1@example.com" not in body
+
+
+def test_to가_없으면_본문이_config_수신자를_말한다(mail_config, monkeypatch, capsys):
+    assert run(mail_config, "--dry-run", monkeypatch=monkeypatch) == 0
+    body = _body(capsys)
+    assert "받는 사람: config의 mail.recipients — 2명: all-1@example.com, all-2@example.com" in body
+    assert "덮어씀" not in body
+
+
+def test_본문을_주면_확인용_본문은_안_쓴다(mail_config, monkeypatch, capsys):
+    assert run(mail_config, "--dry-run", "--to", "me@example.com", "--body", "직접 쓴 본문",
+               monkeypatch=monkeypatch) == 0
+    assert _body(capsys) == "직접 쓴 본문"

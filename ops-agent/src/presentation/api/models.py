@@ -1,8 +1,9 @@
-"""요청 본문 — **명령이 나가기 전에** 거른다.
+"""요청 인자 — **명령이 나가기 전에** 거른다. 전부 **쿼리 파라미터**다(사내 원본과 같다 — Swagger에서 칸·선택으로 보인다).
 
 argv는 셸을 안 거치므로 주입은 없지만, 이름 자리에 `--today` 같은 옵션을 실으면 CLI 파서가 그것을 옵션으로
 읽는다. 그래서 이름은 영숫자로 시작하는 좁은 모양만 받고, 자유 글(제목·질문)은 `--subject=값`·`--` 뒤로만
-넘긴다(`routes_*`). 본문의 모르는 키는 422다(StrictModel) — 오타가 기본값으로 조용히 도는 것을 막는다.
+넘긴다(`routes_*`). 모르는 키는 422다(StrictModel) — 오타가 기본값으로 조용히 도는 것을 막는다. JSON 본문은 읽지 않는다
+— 본문에 `dry_run: false`를 실어도 기본값(true)으로 돈다. 위험한 쪽이 아니라 안전한 쪽으로 틀린다.
 """
 from datetime import date
 from typing import Annotated, Literal
@@ -51,7 +52,7 @@ class MailSendRequest(Wait):
         try:
             MailConfig(recipients=v)
         except ValidationError as exc:
-            raise ValueError(exc.errors()[0]["msg"]) from None
+            raise ValueError(exc.errors()[0]["msg"].removeprefix("Value error, ")) from None
         return v
 
 

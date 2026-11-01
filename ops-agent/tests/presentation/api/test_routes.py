@@ -12,13 +12,12 @@ from src.__main__ import parse_args
 from src.presentation.api.assembly import DIAG, OPS
 from src.presentation.api.jobs import DOCTOR_S, REPORT_S, SHORT_S
 
-from tests.presentation.api.conftest import NOW, make_app
+from tests.presentation.api.conftest import NOW, make_app, serve
 
 
-async def post(client, path, body=None):
-    if body is None:
-        return await client.post(path)
-    return await client.post(path, json=body)
+async def post(client, path, params=None):
+    """입력은 전부 **쿼리 파라미터**다(사내 원본과 같다). 리스트는 반복 쿼리(`to=a&to=b`)로 나간다."""
+    return await client.post(path, params=params)
 
 
 def printed(response) -> list[str]:
@@ -151,10 +150,8 @@ async def test_ready는_설정_비밀_스케줄러를_본다(client):
 
 
 async def test_비밀이_비면_ready가_503이고_이름을_말한다(cli_root):
-    import httpx
     env = {"LLM_BASE_URL": "https://gw.example.com/v1", "MAIL_AGENT_ID": "a"}
-    app = make_app(cli_root, env=env)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as c:
+    async with serve(make_app(cli_root, env=env)) as c:
         response = await c.get("/ready")
     assert response.status_code == 503
     checks = {c["name"]: c for c in response.json()["checks"]}
@@ -162,15 +159,7 @@ async def test_비밀이_비면_ready가_503이고_이름을_말한다(cli_root)
     for name in ("LLM_PASS_KEY", "LLM_CLIENT_KEY", "MAIL_AGENT_API_KEY"):
         assert name in checks["secrets"]["detail"]
     assert not checks["config"]["ok"]
-
-
-async def test_스케줄러가_죽었으면_ready가_503(cli_root):
-    import httpx
-    app = make_app(cli_root, scheduler_alive=lambda: False)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as c:
-        response = await c.get("/ready")
-    assert response.status_code == 503
-    assert {c["name"]: c["ok"] for c in response.json()["checks"]}["scheduler"] is False
+    assert checks["scheduler"]["ok"]          # 시나리오는 env 없이 읽힌다 — 스케줄러는 떠 있다
 
 
 async def test_version은_빌드_해시_시나리오_다음_실행(client, cli_root):
@@ -186,11 +175,8 @@ async def test_version은_빌드_해시_시나리오_다음_실행(client, cli_r
 
 
 async def test_version의_해시는_치환_전_원문이라_비밀이_안_섞이고_파일이_바뀌면_바뀐다(cli_root):
-    import httpx
-
     async def version(env):
-        app = make_app(cli_root, env=env)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as c:
+        async with serve(make_app(cli_root, env=env), lifespan=False) as c:
             return (await c.get("/version")).json()["config"]
 
     first = await version({"LLM_PASS_KEY": "하나"})
@@ -204,9 +190,7 @@ async def test_version의_해시는_치환_전_원문이라_비밀이_안_섞이
 
 
 async def test_빌드_ARG가_없으면_빈_값으로_나간다(cli_root):
-    import httpx
-    app = make_app(cli_root, build={})
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as c:
+    async with serve(make_app(cli_root, build={}), lifespan=False) as c:
         body = (await c.get("/version")).json()
     assert (body["commit"], body["built_at"]) == ("", "")
 
@@ -216,6 +200,7 @@ def test_Swagger에_경로가_전부_있다(app):
     expected = {
         ("GET", "/health"), ("GET", "/ready"), ("GET", "/version"),
         ("GET", f"{OPS}/jobs"), ("GET", f"{OPS}/jobs/{{job_id}}"),
+        ("GET", f"{OPS}/schedule"), ("POST", f"{OPS}/schedule/pause"), ("POST", f"{OPS}/schedule/resume"),
         ("POST", f"{OPS}/schedule/list"),
         ("POST", f"{OPS}/report/aggregate"), ("POST", f"{OPS}/report/run"),
         ("POST", f"{OPS}/mail/describe"), ("POST", f"{OPS}/mail/send"),
@@ -226,6 +211,37 @@ def test_Swagger에_경로가_전부_있다(app):
         ("POST", f"{DIAG}/net"), ("POST", f"{DIAG}/net/egress"), ("POST", f"{DIAG}/net/trace"),
     }
     assert paths == expected
+
+
+def test_POST의_입력은_본문이_아니라_쿼리_칸이다(app):
+    """사내 원본과 같다 — Swagger에서 칸·선택으로 보인다. 본문 칸이 하나라도 있으면 Swagger가 JSON 입력란을 띄운다."""
+    paths = app.openapi()["paths"]
+    with_body = [path for path, item in paths.items() if "requestBody" in item.get("post", {})]
+    assert with_body == []
+
+    def params(path):
+        return {p["name"]: p for p in paths[path]["post"]["parameters"]}
+    run = params(f"{OPS}/report/run")
+    assert set(run) == {"wait_s", "scenario", "today", "dry_run", "no_mail"}
+    assert all(p["in"] == "query" for p in run.values())
+    assert run["dry_run"]["schema"]["type"] == "boolean" and run["dry_run"]["schema"]["default"] is True
+    send = params(f"{OPS}/mail/send")
+    assert send["to"]["schema"]["type"] == "array"
+    assert params(f"{DIAG}/llm/ask")["prompt"]["required"] is True
+
+
+async def test_JSON_본문은_읽지_않는다_안전한_쪽으로_틀린다(client):
+    """본문에 `dry_run: false`를 실어도 기본값(true)으로 돈다 — 본문을 읽던 옛 호출이 발송으로 바뀌지 않는다."""
+    response = await client.post(f"{OPS}/report/run", json={"dry_run": False})
+    assert response.status_code == 200
+    assert printed(response) == ["report", "run", "--dry-run"]
+
+
+async def test_to가_틀리면_이유를_한_번만_말한다(client):
+    response = await post(client, f"{OPS}/mail/send", {"to": ["주소아님"]})
+    assert response.status_code == 422
+    assert "Value error, Value error" not in response.text
+    assert "수신자가 이메일 주소로 보이지 않는다" in response.text
 
 
 def test_접두는_사내_원본과_같다():

@@ -653,10 +653,14 @@ def cmd_llm_check(args, env) -> int:
 
 # ── mail ─────────────────────────────────────────────────────────────
 
-_TEST_BODY = """이 메일은 운영 모니터링 에이전트의 발송 경로 확인용입니다.
+def _test_body(recipients: list[str], *, overridden: bool) -> str:
+    """확인용 본문. **실제로 받는 쪽**을 적는다 — `--to`로 덮어썼는데 "config가 정한다"고 쓰면 받은 사람이 틀린 말을 읽는다."""
+    who = ("`--to`로 지정한 주소(config의 mail.recipients를 덮어씀)" if overridden
+           else "config의 mail.recipients")
+    return f"""이 메일은 운영 모니터링 에이전트의 발송 경로 확인용입니다.
 
 - 보낸 것: `python -m src mail send`
-- 수신자는 config의 mail.recipients가 정합니다(본문이 바꿀 수 없습니다).
+- 받는 사람: {who} — {len(recipients)}명: {", ".join(recipients)}
 
 받으셨다면 Agent API 연결이 정상입니다."""
 
@@ -673,9 +677,10 @@ def cmd_mail_send(args, env) -> int:
     from src.infrastructure.mail_factory import build_mail
 
     app = load_app_config(args.config_root, env=env)
+    mail = _mail_to(app.mail, args.to)
     body = Path(args.file).read_text(encoding="utf-8") if args.file else (
-        args.body or _TEST_BODY)
-    sender = build_mail(_mail_to(app.mail, args.to), clock=_clock(args, env))
+        args.body or _test_body(mail.recipients, overridden=bool(args.to)))
+    sender = build_mail(mail, clock=_clock(args, env))
     subject = sender.full_subject(args.subject)
 
     if args.dry_run:
