@@ -75,10 +75,57 @@ async def test_시간을_넘기면_손자_프로세스까지_죽인다(cli_root,
     marker = tmp_path / "손자가-살아남았다"
     started = time.monotonic()
     job = await run(runner_for(cli_root), ["grandchild", "3", str(marker)], timeout_s=1.0)
-    assert job.status == "timeout"
-    assert "손자 시작" in job.stdout and "손자 끝" not in job.stdout
+    # 실패하면 실행기가 무엇을 죽였는지(stderr 끝 줄)가 같이 나온다 — Windows에서 왜 놓쳤는지를 그 줄이 말한다.
+    killed = job.stderr.strip().splitlines()[-1]
+    assert job.status == "timeout", killed
+    assert killed.startswith("[작업 실행기] 상한 1초 — "), job.stderr
+    assert "손자 시작" in job.stdout and "손자 끝" not in job.stdout, killed
     await asyncio.sleep(max(0.0, 4.5 - (time.monotonic() - started)))    # 살아 있었다면 3초 뒤에 표시를 남긴다
-    assert not marker.exists(), "손자 프로세스가 살아남아 일을 끝냈다 — 트리째 죽이지 않았다"
+    assert not marker.exists(), f"손자 프로세스가 살아남아 일을 끝냈다 — {killed}"
+
+
+def test_트리_순서는_자손부터이고_root가_맨_끝이다():
+    from src.presentation.api.jobs import postorder
+    tree = {10: [20, 30], 20: [21], 21: [22], 30: []}
+    assert postorder(tree, 10) == [22, 21, 20, 30, 10]
+    assert postorder({1: [2], 2: [1]}, 1) == [2, 1]            # PID 재사용으로 고리가 생겨도 끝난다
+    assert postorder({}, 7) == [7]
+
+
+def test_Windows는_목록을_먼저_찍고_자손부터_죽인다(monkeypatch):
+    """위에서부터 죽이면 런처의 Job Object가 닫히며 중간이 먼저 죽고, 그 밑의 손자는 부모를 잃어 트리에서 안 보인다
+    (`taskkill /T`가 사내 PC에서 손자를 놓쳤다). 실제 호출(ctypes)은 Windows에서만 돈다 — 여기서는 순서와 기록만 본다."""
+    from src.presentation.api import jobs
+    killed = []
+    # 런처(100) → CLI(101) → 손자의 런처(102) → 손자(103). 생긴 시각은 부모 뒤.
+    monkeypatch.setattr(jobs, "_windows_processes", lambda: [(100, 1), (101, 100), (102, 101), (103, 102), (50, 1)])
+    monkeypatch.setattr(jobs, "_windows_created", lambda pid: {1: 0, 100: 10, 101: 11, 102: 12, 103: 13, 50: 5}[pid])
+    monkeypatch.setattr(jobs, "_windows_terminate", lambda pid: killed.append(pid) or pid != 102)
+    note = jobs._kill_windows_tree(100)
+    assert killed == [103, 102, 101, 100]
+    assert note == "자손부터 4개를 죽였다 (TerminateProcess 실패 PID [102])"
+
+
+def test_부모보다_먼저_생긴_자식은_자손이_아니다():
+    """Windows는 죽은 프로세스의 PID를 다시 준다. 부모(오래전에 죽은 PID 101)를 잃은 고아 900이 스냅샷에 "부모 101"로 남아
+    있고, 그 PID를 우리 CLI가 다시 받았다 — 부모 PID만 믿으면 사람의 프로그램을 죽인다."""
+    from src.presentation.api.jobs import descendants, postorder
+    rows = [(100, 1), (101, 100), (900, 101), (103, 101), (104, 999)]
+    created = {1: 0, 100: 10, 101: 11, 900: 3, 103: 12, 104: 20, 999: None}.get
+    tree = descendants(rows, 100, created)
+    assert tree == {100: [101], 101: [103]}
+    assert postorder(tree, 100) == [103, 101, 100]
+    # 생긴 시각을 못 읽으면 확인할 수 없으니 넣지 않는다
+    assert descendants([(100, 1), (101, 100)], 100, {100: 10, 101: None}.get) == {}
+
+
+def test_Windows_목록을_못_읽으면_던지지_않고_이유를_적는다(monkeypatch):
+    from src.presentation.api import jobs
+
+    def broken():
+        raise OSError("스냅샷 실패")
+    monkeypatch.setattr(jobs, "_windows_processes", broken)
+    assert jobs._kill_windows_tree(100) == "프로세스 목록을 못 읽었다 — OSError: 스냅샷 실패"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="새 세션으로 빠져나가는 손자는 POSIX에서만 만들 수 있다")

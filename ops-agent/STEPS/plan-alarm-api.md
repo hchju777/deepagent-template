@@ -269,6 +269,14 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
 재현한 뒤 고쳤다: POSIX는 새 세션으로 띄워 그룹째, Windows는 `taskkill /T`, 죽인 뒤 기다림에도 상한, 포기한 transport는 닫는다.
 다만 venv 런처는 Job Object로 직계 자식을 같이 죽이므로 **이것이 사내 실패의 원인이 아닐 수 있다** — 오류 문구를 받아 대조한다.
 
+그다음 사내 실행: 새 테스트(`…손자_프로세스까지_죽인다`)가 Windows에서 깨졌다 — `taskkill /T`가 손자를 놓쳐 `손자 끝`까지
+찍혔다. 사슬이 `런처 → CLI → 런처 → 손자`이고, 위에서부터 죽이면 첫 런처가 죽는 순간 그 Job Object가 닫혀 CLI가 먼저
+죽고, 그 밑은 부모를 잃어 트리에서 안 보이는 것으로 본다(Windows가 없어 여기서는 확인 못 했다). 바꾼 것: **죽이기 전에
+Toolhelp 스냅샷 한 장**으로 트리를 찍고 **자손부터** `TerminateProcess`. 부모보다 먼저 생긴 "자식"은 뺀다 — Windows는
+PID를 다시 쓰므로 부모 PID만 믿으면 상관없는 고아(사람의 프로그램)를 죽인다(psutil과 같은 규칙). 무엇을 죽였는지는
+작업 stderr 끝 줄(`[작업 실행기] 상한 N초 — …`)에 남고, 그 테스트가 실패하면 그 줄을 같이 보인다. ctypes 호출 자체는
+Windows에서만 돈다 — 순서·PID 재사용 거르기·기록은 이음매로 여기서 시험했고, 구조체 크기(Win64 568바이트)는 계산으로 맞췄다.
+
 **사내에서 볼 것(평가자)**
 
 1. 로컬 uvicorn을 띄운 채 `GET /schedule` — `running: true`, `next_run`이 다음 평일 08:00(KST).
