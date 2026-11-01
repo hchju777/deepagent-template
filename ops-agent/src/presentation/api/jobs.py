@@ -25,10 +25,11 @@ API가 부르는 일(리포트·메일·doctor·LLM 확인)은 전부 이미 CLI
 `proc.wait()`는 프로세스가 끝나도 **파이프가 다 닫혀야** 돌아온다(3.13은 바로 돌아온다) — 상한이 안 듣고, 최악이면 자리가
 영원히 안 비어 모든 요청이 409가 된다. POSIX는 새 세션으로 띄워 **그룹째** 죽인다.
 
-Windows는 **죽이기 전에 프로세스 목록을 한 번 찍어 자손부터** 죽인다. `taskkill /T`는 사내 PC에서 손자를 놓쳤다(11-01):
-venv의 `python.exe`는 진짜 파이썬을 Job Object에 넣어 띄우는 런처라, 위에서부터 죽이면 런처가 죽는 순간 그 밑이 job째
-먼저 죽고, 더 밑(손자의 런처·손자)은 부모를 잃어 트리에서 안 보인다. 미리 찍어 두면 부모가 먼저 죽어도 누가 누구의
-자손인지 안다.
+Windows는 **죽이기 전에 프로세스 목록을 찍어 자손부터** 죽이고, 새로 생긴 자손이 없을 때까지 되풀이한다. `taskkill /T`는
+사내 PC에서 손자를 놓쳤다(11-01): venv의 `python.exe`는 진짜 파이썬을 Job Object에 넣어 띄우는 런처라, 위에서부터 죽이면
+런처가 죽는 순간 그 밑이 job째 먼저 죽고, 더 밑(손자의 런처·손자)은 부모를 잃어 트리에서 안 보인다. 미리 찍어 두면 부모가
+먼저 죽어도 누가 누구의 자손인지 안다. 한 번만 찍으면 찍은 **뒤에** 막 생긴 손자를 놓친다 — 그다음 실행에서 그렇게 3개만
+죽이고 손자가 남았다.
 
 무엇을 죽였는지는 작업의 stderr 끝에 한 줄로 남는다 — 상한에 걸린 작업이 왜 안 죽었는지를 사람이 볼 수 있게. 죽인 뒤
 기다리는 것에도 상한을 둔다.
@@ -208,64 +209,71 @@ async def _kill_tree(proc) -> str:
     return note
 
 
-def postorder(children: dict[int, list[int]], root: int) -> list[int]:
-    """root와 그 자손 — **자손부터**(깊은 것 먼저, root가 맨 끝). 고리(PID 재사용 등)가 있어도 끝난다."""
-    order: list[int] = []
-    seen = {root}
-    stack = [(root, iter(children.get(root, ())))]
-    while stack:
-        pid, rest = stack[-1]
-        child = next(rest, None)
-        if child is None:
-            stack.pop()
-            order.append(pid)
-        elif child not in seen:
-            seen.add(child)
-            stack.append((child, iter(children.get(child, ()))))
-    return order
+def descendants(rows: list[tuple[int, int]], known: set[int], created) -> list[int]:
+    """(PID, 부모 PID) 목록에서 `known`(이미 아는 계보 — 이번 목록에 없을 수 있다, 이미 죽였으니)의 새 자손 — **깊은 것부터**.
 
-
-def descendants(rows: list[tuple[int, int]], root: int, created) -> dict[int, list[int]]:
-    """(PID, 부모 PID) 목록에서 root의 자손만 — 부모 → 자식. **부모보다 먼저 생긴 자식은 뺀다.**
-
-    Windows는 죽은 프로세스의 PID를 다른 프로세스에 다시 준다. 스냅샷의 부모 PID만 믿으면, 부모가 오래전에 죽은 **우리와
-    상관없는 고아**를 그 PID를 다시 받은 우리 CLI의 자식으로 보고 죽인다(사람의 편집기일 수 있다). 진짜 자식은 부모가 생긴
-    뒤에 생긴다 — psutil과 같은 규칙. `created(pid)`가 None이면(못 열면) 확인할 수 없으니 넣지 않는다.
+    **부모보다 먼저 생긴 자식은 뺀다.** Windows는 죽은 프로세스의 PID를 다른 프로세스에 다시 준다. 목록의 부모 PID만 믿으면,
+    부모가 오래전에 죽은 **우리와 상관없는 고아**를 그 PID를 다시 받은 우리 CLI의 자식으로 보고 죽인다(사람의 편집기일 수
+    있다). 진짜 자식은 부모가 생긴 뒤에 생긴다 — psutil과 같은 규칙. `created(pid)`가 None이면(못 열면) 확인할 수 없으니
+    넣지 않는다.
     """
     raw: dict[int, list[int]] = {}
     for pid, parent in rows:
         if pid != parent:
             raw.setdefault(parent, []).append(pid)
-    born: dict[int, int | None] = {}
-
-    def birth(pid: int):
-        if pid not in born:
-            born[pid] = created(pid)
-        return born[pid]
-    found: dict[int, list[int]] = {}
-    seen, todo = {root}, [root]
-    while todo:
-        parent = todo.pop()
+    depth = {pid: 0 for pid in known}
+    found: list[int] = []
+    queue = deque(known)
+    while queue:
+        parent = queue.popleft()
         for child in raw.get(parent, ()):
-            if child in seen:
+            if child in depth:
                 continue
-            child_born, parent_born = birth(child), birth(parent)
+            child_born, parent_born = created(child), created(parent)
             if child_born is None or parent_born is None or child_born < parent_born:
                 continue
-            seen.add(child)
-            found.setdefault(parent, []).append(child)
-            todo.append(child)
-    return found
+            depth[child] = depth[parent] + 1
+            found.append(child)
+            queue.append(child)
+    return sorted(found, key=lambda pid: -depth[pid])
 
 
-def _kill_windows_tree(root: int) -> str:
+# 다시 훑는 횟수와 그 사이 쉼. 한 번 찍고 끝내면, 찍은 **뒤에** 생긴 손자(죽이는 중인 런처가 막 띄운 것)가 목록에 없어 산다.
+_KILL_PASSES = 4
+_KILL_PAUSE_S = 0.2
+
+
+def _kill_windows_tree(root: int, *, sleep=time.sleep) -> str:
+    """새로 생긴 자손이 없을 때까지 찍고 자손부터 죽이기를 되풀이한다. 생긴 시각은 **처음 본 때 기억**해 둔다 — 부모가 이미
+    죽은 뒤에 찍힌 손자도 그 부모의 자식으로 확인할 수 있게(죽은 프로세스는 다시 열 수 없다)."""
+    born: dict[int, int | None] = {}
+
+    def created(pid: int):
+        if pid not in born:
+            born[pid] = _windows_created(pid)
+        return born[pid]
+    tried: set[int] = set()
+    missed: list[int] = []
+    passes = 0
     try:
-        order = postorder(descendants(_windows_processes(), root, _windows_created), root)
+        for passes in range(1, _KILL_PASSES + 1):
+            # 이미 죽인 것까지 계보의 출발점으로 — 중간이 죽어 목록에서 빠져도 그 밑에서 늦게 생긴 손자에 닿는다.
+            fresh = descendants(_windows_processes(), {root, *tried}, created)
+            if root not in tried:
+                fresh.append(root)                                 # 맨 위는 맨 끝에
+            if not fresh:
+                break
+            for pid in fresh:
+                created(pid)                                       # 죽이기 **전에** — 죽은 뒤엔 못 열어 그 밑의 늦은 자식을 확인 못 한다
+                tried.add(pid)
+                if not _windows_terminate(pid):
+                    missed.append(pid)
+            sleep(_KILL_PAUSE_S)
     except Exception as exc:                                       # noqa: BLE001
-        return f"프로세스 목록을 못 읽었다 — {type(exc).__name__}: {exc}"
-    missed = [pid for pid in order if not _windows_terminate(pid)]
+        return f"프로세스 목록을 못 읽었다 — {type(exc).__name__}: {exc} (그 전까지 {len(tried)}개)"
     # 못 죽인 것 중에는 이미 스스로 끝난 것(손자가 죽어 따라 끝난 런처)도 있다 — 판정하지 않고 그대로 적는다.
-    return f"자손부터 {len(order)}개를 죽였다" + (f" (TerminateProcess 실패 PID {missed})" if missed else "")
+    return (f"자손부터 {len(tried)}개를 죽였다({passes}번 훑음)"
+            + (f" (TerminateProcess 실패 PID {missed})" if missed else ""))
 
 
 def _kernel32():
