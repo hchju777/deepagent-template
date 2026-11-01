@@ -34,6 +34,20 @@ if argv[:1] == ["exit"]:
 if argv[:1] == ["hangul"]:
     print("한글 — 출력")
     sys.exit(0)
+if argv[:1] == ["grandchild"]:
+    # Windows venv의 python.exe 모양 — 진짜 일을 하는 프로세스가 **손자**이고 파이프를 물려받는다.
+    import subprocess
+    code = ("import pathlib, sys, time; print('손자 시작', flush=True); time.sleep(float(sys.argv[1])); "
+            "pathlib.Path(sys.argv[2]).write_text('살아남았다', encoding='utf-8'); print('손자 끝', flush=True)")
+    subprocess.Popen([sys.executable, "-c", code, argv[1], argv[2]])
+    time.sleep(float(argv[1]) + 1)
+    sys.exit(0)
+if argv[:1] == ["escaped"]:
+    # 스스로 새 세션으로 빠져나간 손자(POSIX) — 트리째 죽이기로도 못 죽는다. 파이프는 쥐고 있다.
+    import subprocess
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(%s)" % argv[1]], start_new_session=True)
+    time.sleep(float(argv[1]))
+    sys.exit(0)
 if argv[:1] == ["big"]:
     sys.stdout.write("x" * int(argv[1]))
     sys.exit(0)

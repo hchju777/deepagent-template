@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import sys
+import time
 
 import pytest
 
@@ -65,6 +66,32 @@ async def test_시간을_넘기면_죽이고_그때까지의_출력을_남긴다
     assert "시작" in job.stdout and "끝" not in job.stdout
     assert "에러 줄" in job.stderr
     assert job.took_s < 10
+
+
+async def test_시간을_넘기면_손자_프로세스까지_죽인다(cli_root, tmp_path):
+    """자식만 죽이면 안 된다. Windows venv의 `python.exe`는 진짜 파이썬을 **자식으로 띄우는 런처**라, 런처만 죽고 CLI는 계속
+    돈다 — 파이프를 쥔 채로. 그러면 3.11의 `proc.wait()`는 파이프가 다 닫힐 때까지 안 돌아와 상한이 안 듣는다(사내 PC에서
+    시간 초과 테스트가 그렇게 깨졌다). 여기서는 가짜 CLI가 손자를 띄워 같은 모양을 만든다 — 운영체제와 상관없이."""
+    marker = tmp_path / "손자가-살아남았다"
+    started = time.monotonic()
+    job = await run(runner_for(cli_root), ["grandchild", "3", str(marker)], timeout_s=1.0)
+    assert job.status == "timeout"
+    assert "손자 시작" in job.stdout and "손자 끝" not in job.stdout
+    await asyncio.sleep(max(0.0, 4.5 - (time.monotonic() - started)))    # 살아 있었다면 3초 뒤에 표시를 남긴다
+    assert not marker.exists(), "손자 프로세스가 살아남아 일을 끝냈다 — 트리째 죽이지 않았다"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="새 세션으로 빠져나가는 손자는 POSIX에서만 만들 수 있다")
+async def test_못_죽인_손자가_파이프를_쥐고_있어도_자리는_상한_안에_빈다(cli_root, monkeypatch):
+    """마지막 방어선. 3.11의 `wait()`는 파이프가 닫혀야 돌아오므로, 죽인 뒤의 기다림에 상한이 없으면 자리가 영원히 안 빈다 —
+    그러면 모든 요청이 409다."""
+    from src.presentation.api import jobs
+    monkeypatch.setattr(jobs, "_DRAIN_S", 0.5)
+    runner = runner_for(cli_root)
+    job = await run(runner, ["escaped", "6"], timeout_s=0.5)
+    assert job.status == "timeout"
+    assert job.took_s < 4
+    assert runner.running() is None
 
 
 async def test_한글_출력이_깨지지_않는다(cli_root):

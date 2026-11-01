@@ -262,6 +262,13 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
   스케줄러 태스크가 첫 걸음을 떼기 전에 `/ready`를 물었다(ASGI 요청은 진짜 I/O가 없어 루프를 안 돌린다). 루프에 자리를
   내준 뒤 보게 고쳐 빨개지는 것을 확인했다.
 
+**사내 pytest 뒤 고친 것(11-01)** — `test_jobs.py`에서 하나가 깨졌다는 보고(어느 테스트인지·오류 문구는 아직 못 받았다).
+여기서 찾은 것: 시간 초과에 **자식만** 죽였다. 진짜 일을 하는 프로세스가 손자이고 파이프를 쥐면(Windows venv의 `python.exe`
+런처가 그 모양이다) 손자가 살아서 일을 끝내고, 3.11의 `proc.wait()`는 파이프가 닫혀야 돌아와 상한이 안 듣는다(3.13은 바로
+돌아온다 — 표준 라이브러리 `base_subprocess._process_exited`에서 확인). 가짜 CLI가 손자를 띄우는 테스트로 3.11·3.13 둘 다
+재현한 뒤 고쳤다: POSIX는 새 세션으로 띄워 그룹째, Windows는 `taskkill /T`, 죽인 뒤 기다림에도 상한, 포기한 transport는 닫는다.
+다만 venv 런처는 Job Object로 직계 자식을 같이 죽이므로 **이것이 사내 실패의 원인이 아닐 수 있다** — 오류 문구를 받아 대조한다.
+
 **사내에서 볼 것(평가자)**
 
 1. 로컬 uvicorn을 띄운 채 `GET /schedule` — `running: true`, `next_run`이 다음 평일 08:00(KST).

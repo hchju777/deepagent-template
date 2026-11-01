@@ -18,10 +18,20 @@ API가 부르는 일(리포트·메일·doctor·LLM 확인)은 전부 이미 CLI
 
 시간을 넘겨 죽일 때, 자식의 출력이 파이썬 버퍼에 남아 있으면 **같이 사라진다.** "어디까지 갔다가 멈췄나"가
 제일 필요한 순간에 빈 stdout이 남는다. `-u`면 찍은 것은 이미 파이프에 있다.
+
+## 왜 트리째 죽이는가
+
+자식만 죽이면 안 된다. Windows venv의 `python.exe`는 진짜 파이썬을 **자식으로 띄우는 런처**라, 런처만 죽고 CLI(손자)는
+파이프를 쥔 채 계속 돈다. 그리고 3.11의 `proc.wait()`는 프로세스가 끝나도 **파이프가 다 닫혀야** 돌아온다(3.13은 바로
+돌아온다) — 그래서 상한이 안 듣고, 최악이면 자리가 영원히 안 비어 모든 요청이 409가 된다. 사내 PC에서 시간 초과
+테스트가 그렇게 깨졌다(11-01). POSIX는 새 세션으로 띄워 그룹째, Windows는 `taskkill /T`로 죽이고, 죽인 뒤 기다리는
+것에도 상한을 둔다.
 """
 import asyncio
+import contextlib
 import os
 import shlex
+import signal
 import sys
 import time
 import uuid
@@ -139,10 +149,12 @@ class JobRunner:
 
     async def _spawn_and_wait(self, job: Job) -> None:
         env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        # POSIX는 새 세션 — 그 그룹째 죽일 수 있게(`_kill_tree`). Windows에는 이 인자가 없다.
+        session = {"start_new_session": True} if os.name == "posix" else {}
         try:
             proc = await asyncio.create_subprocess_exec(
                 *job.command, cwd=self._root, env=env, stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **session)
         except Exception as exc:                                   # noqa: BLE001
             job.status = "failed"
             job.stderr = f"[작업 실행기] 못 띄웠다 — {type(exc).__name__}: {exc}"
@@ -155,15 +167,38 @@ class JobRunner:
             await asyncio.wait_for(proc.wait(), job.timeout_s)
         except asyncio.TimeoutError:
             timed_out = True
-            proc.kill()
-            await proc.wait()
+            await _kill_tree(proc)
+            # 트리를 다 못 죽였으면 파이프가 안 닫혀 3.11의 wait()가 영원히 안 온다 — 기다림에도 상한을 둔다.
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(proc.wait(), _DRAIN_S)
         _, pending = await asyncio.wait(readers, timeout=_DRAIN_S)
         for reader in pending:
             reader.cancel()
+        if pending:
+            # 못 죽인 손자가 파이프를 쥐고 있다 — transport가 스스로는 안 닫혀 그 손자가 끝날 때까지 fd가 샌다. 포기한 쪽이 닫는다.
+            # (`Process`에 닫는 공개 표면이 없다.)
+            with contextlib.suppress(Exception):
+                proc._transport.close()
         job.exit_code = proc.returncode
         job.stdout = _tail(out, self._max_output)
         job.stderr = _tail(err, self._max_output)
         job.status = "timeout" if timed_out else ("ok" if proc.returncode == 0 else "failed")
+
+
+async def _kill_tree(proc) -> None:
+    """자식과 그 밑을 전부. **던지지 않는다** — 이미 끝났거나 못 죽여도 부르는 쪽은 상한을 두고 기다린다."""
+    try:
+        if sys.platform == "win32":
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/F", "/T", "/PID", str(proc.pid),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(killer.wait(), _DRAIN_S)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:                                              # noqa: BLE001
+        pass
+    with contextlib.suppress(ProcessLookupError, OSError):
+        proc.kill()                                                # 그룹·taskkill이 안 들었을 때의 마지막 수
 
 
 async def _drain(stream, sink: bytearray) -> None:
