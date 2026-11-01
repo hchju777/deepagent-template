@@ -501,9 +501,13 @@ def make_lead(llm: LlmPort, *, site_config, prompts: dict[str, str], max_rounds:
         if trace is None:
             return None
         # 여섯째는 그 호출이 걸린 초, 일곱째는 429 뒤 기다린 초(둘 다 모르면 None), 아홉째는 스트림 끊김 메모, 열째는 턴의 조각 수·종료 사유·usage
-        # (R3-5d ②) — 위치 인자라 옛 트레이서(`*row`)도 받는다.
+        # (R3-5d ②) — 위치 인자라 옛 트레이서(`*row`)도 받는다. 열한째는 액션 턴의 L1·L2 카운터(R3-5x ④ — 측정 #32 사전 점검 4: 정체 감지와 사다리 칸 묶기의
+        # 효과를 가르려고) — 앞 라운드가 정체라 사유를 받은 턴인가, 이 턴의 예시에 묶인 걷기 칸 수. 판정 턴은 None.
+        counters = ({"stalled": 1 if state.stalls else 0,
+                     "rungs": len(briefing.pending_rungs(state.walk, state.plan_tasks, code_index=code_index))}
+                    if node in ("frame", "integrate") else None)
         return lambda prompt, text, error, latency_s=None, waited_s=None, wait_source=None, note=None, stats=None: trace(
-            node, state.round, prompt, text, error, latency_s, waited_s, wait_source, note, stats)
+            node, state.round, prompt, text, error, latency_s, waited_s, wait_source, note, stats, counters)
 
     async def frame(state: CaseState) -> dict:
         prompt = fill(prompts["frame"],

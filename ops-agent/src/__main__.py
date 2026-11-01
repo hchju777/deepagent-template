@@ -1148,7 +1148,7 @@ def _make_tracer(case_id: str, *, folder: Path):
     written: list[Path] = []
 
     def trace(node: str, round_no: int, prompt: str, text, error, latency_s=None, waited_s=None,
-              wait_source=None, note=None, stats=None) -> None:
+              wait_source=None, note=None, stats=None, counters=None) -> None:
         path = folder / f"{next(seq):02d}-r{round_no}-{node}.md"
         verdict = "읽었다" if error is None else f"**못 읽었다** — {error}"
         # 호출이 걸린 초 — 사내 실측 두 판이 시간 초과로 죽었는데 어느 호출이 몇 초였는지가 아무 데도 없었다.
@@ -1164,6 +1164,9 @@ def _make_tracer(case_id: str, *, folder: Path):
                       if stats.get("input_tokens") or stats.get("output_tokens") else "토큰 모름")
             schema = f" · 스키마 {stats['schema']}" if stats.get("schema") else ""
             took += f"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}{schema}\n"
+        # 액션 턴의 L1·L2 카운터(R3-5x ④) — `case trace`가 케이스 합계로 모은다.
+        if counters is not None:
+            took += f"카운터: 정체 사유 {counters.get('stalled', 0)} · 묶은 칸 {counters.get('rungs', 0)}\n"
         path.write_text(
             f"# {case_id} · {node} · 라운드 {round_no}\n\n"
             f"결과: {verdict}\n{took}\n"

@@ -3762,7 +3762,21 @@ CASES += [
 CASES += [
  ("유형표를 클래스마다 다시 푼다", DCP, "        if key not in self._router_tables:", "        if True:", [ROUTED_T]),
 ]
-assert len(CASES) >= 1266, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5x ④ — L1(정체 감지)·L2(사다리 칸 묶기) 카운터를 트레이스에 ──
+COUNTERS_T = "tests/application/test_lead.py::test_액션_턴마다_정체_사유와_묶은_칸_수가_트레이스로_간다"
+TRACER_COUNT_T = "tests/application/test_lead.py::test_트레이서가_액션_턴의_카운터를_파일_머리에_한_줄로_남기고_case_trace가_모은다"
+DIGEST_COUNT_T = "tests/application/test_trace_digest.py::test_요약_끝에_L1_L2_카운터의_케이스_합계가_붙는다"
+CASES += [
+ ("트레이서에 카운터를 안 넘긴다", LD, "            node, state.round, prompt, text, error, latency_s, waited_s, wait_source, note, stats, counters)", "            node, state.round, prompt, text, error, latency_s, waited_s, wait_source, note, stats, None)", [COUNTERS_T]),
+ ("정체 사유를 안 센다", LD, "        counters = ({\"stalled\": 1 if state.stalls else 0,", "        counters = ({\"stalled\": 0,", [COUNTERS_T]),
+ ("묶은 칸을 안 센다", LD, "                     \"rungs\": len(briefing.pending_rungs(state.walk, state.plan_tasks, code_index=code_index))}", "                     \"rungs\": 0}", [COUNTERS_T]),
+ ("판정 턴에도 카운터를 단다", LD, "                    if node in (\"frame\", \"integrate\") else None)", "                    if node else None)", [COUNTERS_T]),
+ ("트레이스 파일에 카운터 줄이 없다", MN, "        if counters is not None:\n            took += f\"카운터:", "        if False:\n            took += f\"카운터:", [TRACER_COUNT_T]),
+ ("case trace가 카운터를 안 모은다", ROOT / "src/application/trace_digest.py", "        if found:\n            counted[(round_no, node)] = (int(found.group(1)), int(found.group(2)))", "        if False:\n            counted[(round_no, node)] = (int(found.group(1)), int(found.group(2)))", [DIGEST_COUNT_T, TRACER_COUNT_T]),
+ ("재시도도 따로 센다", ROOT / "src/application/trace_digest.py", "            counted[(round_no, node)] = (int(found.group(1)), int(found.group(2)))", "            counted[(round_no, node, name)] = (int(found.group(1)), int(found.group(2)))", [DIGEST_COUNT_T]),
+ ("묶은 칸이 0인 라운드도 센다", ROOT / "src/application/trace_digest.py", "        bundled = [rungs for _, rungs in counted.values() if rungs]", "        bundled = [rungs for _, rungs in counted.values()]", [DIGEST_COUNT_T]),
+]
+assert len(CASES) >= 1274, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -324,3 +324,18 @@ def test_요약_머리줄에_턴의_조각_수_종료_사유_토큰이_붙는다
     schemed = turned.replace("출력 5,120\n", "출력 5,120 · 스키마 concludereply(증거 id 3)\n")
     head = [line for line in digest([(name, schemed)]) if "r2 integrate" in line]
     assert head and "스키마 concludereply(증거 id 3)" in head[0]
+
+
+
+def test_요약_끝에_L1_L2_카운터의_케이스_합계가_붙는다():
+    """측정 #32 사전 점검 4(R3-5x ④): 정체 감지(L1)와 사다리 칸 묶기(L2)의 효과를 가르는 카운터 — 정체 사유를 받은 라운드 수와 묶은 칸 수(그 라운드 수).
+    재시도(같은 라운드·같은 턴)는 한 번만 센다. 카운터 줄이 없는 옛 트레이스엔 이 줄도 없다."""
+    def counted(name, stalled, rungs):
+        _, text = _file(_prompt(), json.dumps({"tasks": []}), name=name)[0]
+        return name, text.replace("결과: 읽었다\n", f"결과: 읽었다\n카운터: 정체 사유 {stalled} · 묶은 칸 {rungs}\n")
+
+    entries = [counted("01-r1-frame.md", 0, 3), counted("02-r2-integrate.md", 0, 2), counted("03-r3-integrate.md", 1, 0),
+               counted("04-r3-integrate.md", 1, 0), counted("05-r4-integrate.md", 0, 0)]
+    end = [line for line in digest(entries) if line.startswith("L1·L2 카운터")]
+    assert end == ["L1·L2 카운터: 정체 사유를 받은 라운드 1 · 묶은 칸 5(라운드 2개)"]
+    assert not any(line.startswith("L1·L2 카운터") for line in digest(_file(_prompt(), json.dumps({"tasks": []}))))

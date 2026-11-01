@@ -42,6 +42,7 @@ _WAIT = re.compile(r"^대기: ([\d.]+)초", re.M)
 _TURN = re.compile(r"^턴: (.+)$", re.M)
 _WAIT_SOURCE = re.compile(r"^대기: [\d.]+초\(429·([^)]+)\)", re.M)
 _STREAM = re.compile(r"^스트림: (.+)$", re.M)
+_COUNTERS = re.compile(r"^카운터: 정체 사유 (\d+) · 묶은 칸 (\d+)$", re.M)
 _NO_REPLY = "(응답 없음"
 _FAILED = "**못 읽었다** — "
 _REASON_CHARS = 160
@@ -62,6 +63,7 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
     sources: dict[str, int] = {}
     failures: dict[str, int] = {}
     cuts = {"받은 글로 읽음": 0, "다시 물음": 0}
+    counted: dict[tuple[str, str], tuple[int, int]] = {}            # (라운드, 턴) → (정체 사유, 묶은 칸) — 재시도는 같은 칸에 덮어 한 번만 센다
     for name, text in sorted(entries):
         match = _FILE.match(name)
         if match is None:
@@ -88,6 +90,9 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
         # 호출 자체의 실패(답이 없다)와 조각을 받은 뒤의 끊김 — 사내 측정 #4: 400 한 번 뒤 재시도로 성공, 리드 턴이 조각 뒤
         # 멈춤. 라운드 줄 속에 묻히면 셀 수 없어 끝에 한 줄씩 모은다.
         stream = _STREAM.search(text)
+        found = _COUNTERS.search(text)
+        if found:
+            counted[(round_no, node)] = (int(found.group(1)), int(found.group(2)))
         verdict = _verdict(text)
         if stream:
             cuts["받은 글로 읽음" if "읽었다" in stream.group(1) else "다시 물음"] += 1
@@ -109,6 +114,10 @@ def digest(entries: list[tuple[str, str]], *, brief: bool = False) -> list[str]:
                      + " · ".join(f"{why}{f' ×{n}' if n > 1 else ''}" for why, n in failures.items()))
     if any(cuts.values()):
         lines.append(f"스트림 끊김: {sum(cuts.values())}회 — " + " · ".join(f"{k} {v}" for k, v in cuts.items()))
+    if counted:
+        # L1(정체 감지)·L2(사다리 칸 묶기)를 커밋별로 가르는 케이스 합계(R3-5x ④ — 측정 #32 사전 점검 4).
+        bundled = [rungs for _, rungs in counted.values() if rungs]
+        lines.append(f"L1·L2 카운터: 정체 사유를 받은 라운드 {sum(1 for s, _ in counted.values() if s)} · 묶은 칸 {sum(bundled)}(라운드 {len(bundled)}개)")
     return lines
 
 

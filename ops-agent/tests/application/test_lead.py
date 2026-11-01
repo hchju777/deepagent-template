@@ -585,8 +585,9 @@ async def test_트레이스가_시도마다_날것을_건넨다(case):
     await frame(CaseState(case=case, round=2))
 
     assert len(seen) == 2                       # 실패한 1차도 남는다
-    (node, round_no, prompt, text, error, _latency, waited, source, note, stats) = seen[0]
+    (node, round_no, prompt, text, error, _latency, waited, source, note, stats, counters) = seen[0]
     assert (node, round_no, text, note) == ("frame", 2, "쓰레기", None)       # 끊김 메모는 끊겼을 때만
+    assert counters == {"stalled": 0, "rungs": 0}                             # 열한째는 액션 턴의 L1·L2 카운터(R3-5x ④) — 걷기가 없으면 0
     assert stats == {"chunks": 0, "finish_reason": "", "input_tokens": 0, "output_tokens": 0,   # 열째는 턴 통계(R3-5d ②) — 대본은 모른다
                      "schema": "frame_reply"}                                                    # 그 턴에 보낸 스키마(R3-5k ②)
     assert seen[1][9]["schema"] == "없음"                                                        # 형식이 깨진 답 뒤의 재질문은 스키마를 뗀다
@@ -1598,3 +1599,39 @@ async def test_어댑터가_네이티브_함수_호출이면_ask_json이_액션�
     assert got.ok and "anyOf" in tools.schemas[0]["properties"]["tasks"]["items"]
     plain = ScriptedAdapter(['{"decision": "conclude", "hypotheses": [], "tasks": []}'], clock=clock)
     assert (await ask_json(plain, "p", IntegrateReply)).ok and plain.schemas[0]["properties"]["tasks"]["items"]["properties"]["params"] == {"type": "object"}
+
+
+# ── R3-5x ④ — L1(정체 감지)·L2(사다리 칸 묶기)의 효과를 가를 카운터 ──
+
+async def test_액션_턴마다_정체_사유와_묶은_칸_수가_트레이스로_간다(case):
+    """측정 #32 사전 점검 4: 정체 감지(R3-5v ④)와 사다리 칸 묶기(⑤)를 따로 잴 수 있게 커밋별 카운터를 트레이스에. 액션 턴(frame·integrate)마다 그 턴의 예시에
+    묶인 걷기 칸 수와, 앞 라운드가 정체라 사유를 받은 턴인지(`stalls`). 판정 턴은 카운터가 없다. 트레이서의 열한째 인자다 — 어댑터의 턴 통계(열째)와 섞지 않는다."""
+    from src.domain.case import Hop, Rung, TargetPick, Walk
+
+    walk = Walk(hops=[Hop(key="alarm:stats:L1", writer="W0", status="빈 배열", bad=True, evidence_id="t-1.e1")], reads=1, stopped="키가 없다", stop_at="t-1.e1",
+                rungs=[Rung(action="code.read", params={"service": "batch", "path": "a.py", "line": n}, evidence="t-1.e1") for n in (1, 2, 3, 4)])
+    picked = TargetPick(key="alarm:stats:L1", declared="alarm:stats:{line}", basis="b", writer="W0", writer_at="metadata.event_type")
+    seen = []
+    frame, integrate, conclude = lead.make_lead(ScriptedAdapter([reply(tasks=[TASK]), reply(decision="continue", tasks=[TASK]), reply(**VERDICT)], clock=lambda: T0),
+                                                site_config=site_config(), prompts=shipped_prompts(), max_rounds=3, code_index=True,
+                                                trace=lambda *a, **kw: seen.append(a))
+    state = CaseState(case=case, target=picked, walk=walk)
+    await frame(state)
+    await integrate(state.model_copy(update={"round": 2, "stalls": 1}))
+    await conclude(_ended(case))
+    assert [(a[0], a[10]) for a in seen] == [("frame", {"stalled": 0, "rungs": 3}), ("integrate", {"stalled": 1, "rungs": 3}), ("conclude", None)]
+
+
+def test_트레이서가_액션_턴의_카운터를_파일_머리에_한_줄로_남기고_case_trace가_모은다(tmp_path):
+    """R3-5x ④: 카운터는 트레이스 파일 머리에 `카운터: 정체 사유 <0/1> · 묶은 칸 <N>` 한 줄(판정 턴은 없다). 요약은 진짜 트레이서가 쓴 파일로 확인한다 — 형식이
+    갈리면 요약이 조용히 빈다."""
+    from src.__main__ import _make_tracer
+    from src.application.trace_digest import digest
+
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("integrate", 2, "물음", "{}", None, None, None, None, None, None, {"stalled": 1, "rungs": 2})
+    trace("conclude", 2, "물음", "{}", None)
+    assert "\n카운터: 정체 사유 1 · 묶은 칸 2\n" in written[0].read_text(encoding="utf-8")
+    assert "카운터:" not in written[1].read_text(encoding="utf-8")
+    lines = digest([(path.name, path.read_text(encoding="utf-8")) for path in written])
+    assert "L1·L2 카운터: 정체 사유를 받은 라운드 1 · 묶은 칸 2(라운드 1개)" in lines
