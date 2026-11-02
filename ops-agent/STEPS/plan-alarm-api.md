@@ -332,6 +332,16 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
   실패로(run·aggregate)·경고를 2로·깨진 장부를 없음으로·돌린 날로·실행기 경고를 실패로·뒤처리 순서·스케줄 계기·API 409 셋·
   resend 넷·missed 넷·주말 슬롯·API 기준일).
 
+**사내 pytest 뒤(11-02)**
+
+- `report/resend` 테스트 6개가 422 — 쿼리 모델의 별칭(`day` + alias `date`)을 FastAPI 0.115가 못 다룬다(값은 `date`로 받고
+  모델에는 `day`로 넘겨 "date 없음 + day는 모르는 키"). 여기 개발 환경은 0.162뿐이었다 — requirements가 허용하는 **바닥(0.115.0)**
+  venv를 따로 만들어 **같은 6개가 깨지는 것을 재현**했다. 고친 것: 별칭을 없애고 필드 이름을 `date`로(타입은 `dt.date` — 이름
+  충돌을 피한다). 0.115.0·0.162.0 둘 다 초록. 앞으로 API 테스트는 두 버전에서 돌린다.
+- `report/run` 경로 테스트·force 테스트의 `SystemExit: 2`는 **여기서 재현되지 않는다**(3.11·3.13, FastAPI 0.115·0.162 모두 초록).
+  argv가 기대와 같다는 단정은 통과했고, 그 argv를 **진짜 CLI 파서**에 넣는 데서 2(인자 오류)가 났다 — 사내 worktree의
+  `src/__main__.py`가 `--trigger`·`--job-id`·`--force`를 모르는 것으로 본다. 코드는 고치지 않고 사내 파일을 확인한다.
+
 **사내에서 볼 것(평가자)**
 
 1. `report/run`(dry_run=false, 시험 수신인으로) → `output/sent/`에 장부, 다시 누르면 409와 장부, force면 다시 나가고 장부가 바뀐다.

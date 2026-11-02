@@ -145,7 +145,7 @@ def ops_router(ctx: ApiContext) -> APIRouter:
             return JSONResponse({"detail": why}, status_code=400)
         name, scenario = picked
         output_dir = ctx.output_dir()
-        html = report_path(output_dir, name, req.day)
+        html = report_path(output_dir, name, req.date)
         if not html.is_file():
             return JSONResponse({"detail": f"그날 리포트 파일이 없다 — {html.name}"}, status_code=404)
         try:
@@ -155,10 +155,10 @@ def ops_router(ctx: ApiContext) -> APIRouter:
         if not mail.enabled:
             # 꺼져 있으면 `mail send`가 건너뛰고도 0으로 끝난다 — 그걸 발송으로 알고 장부를 쓰면 안 된다.
             return JSONResponse({"detail": "mail.enabled=false — 보내지 않는다"}, status_code=409)
-        record = ledger_view(output_dir, name, req.day)
+        record = ledger_view(output_dir, name, req.date)
         if record is not None and not req.force:
             return JSONResponse({"detail": "이미 보냈다 — force로 덮어쓴다", "ledger": record}, status_code=409)
-        subject = subject_for_day(scenario, req.day)
+        subject = subject_for_day(scenario, req.date)
         full_subject = f"{mail.subject_prefix} {subject}".strip() if mail.subject_prefix else subject
 
         def write_ledger(job: Job) -> None:
@@ -166,7 +166,7 @@ def ops_router(ctx: ApiContext) -> APIRouter:
             if job.status != "ok":
                 return
             problem = ledger.write(output_dir, ledger.SentRecord(
-                scenario=name, day=req.day, sent_at=ctx.clock(), subject=full_subject,
+                scenario=name, day=req.date, sent_at=ctx.clock(), subject=full_subject,
                 recipients=len(mail.recipients), trigger="manual", job_id=job.id))
             if problem:
                 job.status = "failed"

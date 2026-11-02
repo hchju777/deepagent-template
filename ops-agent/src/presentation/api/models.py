@@ -5,6 +5,7 @@ argv는 셸을 안 거치므로 주입은 없지만, 이름 자리에 `--today` 
 넘긴다(`routes_*`). 모르는 키는 422다(StrictModel) — 오타가 기본값으로 조용히 도는 것을 막는다. JSON 본문은 읽지 않는다
 — 본문에 `dry_run: false`를 실어도 기본값(true)으로 돈다. 위험한 쪽이 아니라 안전한 쪽으로 틀린다.
 """
+import datetime as dt
 from datetime import date
 from typing import Annotated, Literal
 
@@ -41,8 +42,9 @@ class ReportRunRequest(ReportAggregateRequest):
 
 
 class ReportResendRequest(Wait):
-    # 필드 이름을 `date`로 두면 타입 `date`와 부딪힌다(pydantic) — 쿼리 이름은 별칭으로 `date`.
-    day: date = Field(alias="date", description="기준일(YYYY-MM-DD) — output의 `<시나리오>-<기준일>.html`을 그대로 보낸다")
+    # 타입을 `dt.date`로 적는다 — `date: date`면 pydantic에서 필드 이름과 타입 이름이 부딪힌다. 별칭(`day` + alias "date")으로
+    # 피했더니 FastAPI 0.115의 쿼리 모델이 별칭을 못 다뤄 422가 났다(사내 11-02 — 0.162는 됐다).
+    date: dt.date = Field(description="기준일(YYYY-MM-DD) — output의 `<시나리오>-<기준일>.html`을 그대로 보낸다")
     scenario: Name | None = None
     force: bool = Field(default=False, description="그 기준일 장부가 있어도 보낸다(장부를 덮어쓴다)")
 
