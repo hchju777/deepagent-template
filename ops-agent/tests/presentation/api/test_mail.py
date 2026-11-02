@@ -117,6 +117,15 @@ async def test_이상한_입력은_보내기_전에_422(client, app, params):
     assert app.state.ctx.runner.recent() == []
 
 
+async def test_to를_두_번_주면_422(client, app):
+    """문자열 칸에 같은 이름을 두 번 실으면 FastAPI는 마지막 것만 조용히 쓴다 — '한 사람에게만'이 다른 사람에게 갈 수 있다."""
+    response = await client.post(f"{OPS}/mail/test", params=[("to", "a@example.com"), ("to", "b@example.com")])
+    assert response.status_code == 422, response.text
+    [error] = response.json()["detail"]
+    assert error["loc"] == ["query", "to"] and "한 주소" in error["msg"]
+    assert app.state.ctx.runner.recent() == []
+
+
 async def test_to는_한_칸이고_필수다(app):
     params = {p["name"]: p for p in app.openapi()["paths"][f"{OPS}/mail/test"]["post"]["parameters"]}
     assert set(params) == {"to", "date", "scenario", "wait_s"}

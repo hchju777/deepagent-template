@@ -18,10 +18,12 @@ def runner_for(root, **kwargs) -> JobRunner:
     return JobRunner(root=root, clock=lambda: NOW, **kwargs)
 
 
-async def run(runner: JobRunner, argv, *, timeout_s=30.0, wait_s=30.0):
+async def run(runner: JobRunner, argv, *, timeout_s=30.0):
+    """끝날 때까지 기다린다 — **상한보다 길게**(상한 + 여유). 기다림이 상한보다 짧으면 바쁜 기계에서 상한이 다 차기 전에
+    기다림이 먼저 끝나 `running`을 본다(사내 5단계 검증: 기동 11초 → 상한 33.7초인데 30초만 기다렸다)."""
     job, busy = runner.submit(argv, timeout_s=timeout_s)
     assert busy is None, f"돌고 있는 작업이 있다 — {busy}"
-    await runner.wait(job, wait_s)
+    await runner.wait(job, timeout_s + 60)
     return job
 
 
@@ -97,14 +99,15 @@ async def test_시간을_넘기면_죽이고_그때까지의_출력을_남긴다
     runner = runner_for(cli_root)
     startup = (await run(runner, ["hangul"])).took_s
     limit = max(1.0, round(startup * 3 + 0.5, 1))
-    job = await run(runner, ["sleep", "30"], timeout_s=limit)
+    # 자식은 상한보다 한참 더 잔다 — 30초 고정이면 상한이 30초 근처일 때 자식이 스스로 끝나 `ok`가 될 수 있다.
+    job = await run(runner, ["sleep", str(limit + 60)], timeout_s=limit)
     seen = f"기동 {startup:.2f}초 · 상한 {limit:g}초 · stdout={job.stdout!r} · stderr={job.stderr!r}"
     assert job.status == "timeout", seen
     assert job.exit_code is not None and job.exit_code != 0, seen
     # flush 없이 찍은 줄이다 — `-u`가 아니면 버퍼째 사라진다.
     assert "시작" in job.stdout and "끝" not in job.stdout, seen
     assert "에러 줄" in job.stderr, seen
-    assert job.took_s < limit + 10, seen
+    assert job.took_s < limit + 30, seen                         # 자식이 스스로 끝나는 때(상한 + 60)보다 한참 전 — 죽였다
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="운영(Linux)의 성질이다 — Windows는 자식만 죽인다(jobs.py docstring)")

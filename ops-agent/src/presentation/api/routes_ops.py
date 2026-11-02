@@ -4,7 +4,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 
 from src.presentation.api.context import ApiContext
@@ -62,6 +63,15 @@ def resolve_output(directory: Path, name: str) -> Path | None:
     if not target.is_relative_to(base) or target == base:
         return None
     return target
+
+
+def only_once(request: Request, name: str) -> None:
+    """문자열 칸에 같은 이름이 여럿 오면 FastAPI는 **마지막 것만 조용히** 쓴다. 칸 모양(Swagger의 문자열 한 칸)은 그대로 두고
+    여기서 거른다 — 다른 422와 같은 모양으로."""
+    given = request.query_params.getlist(name)
+    if len(given) > 1:
+        raise RequestValidationError([{"type": "value_error", "loc": ("query", name), "input": given,
+                                       "msg": f"{name}는 한 주소만 — {len(given)}개를 줬다"}])
 
 
 def ops_router(ctx: ApiContext) -> APIRouter:
@@ -208,7 +218,8 @@ def ops_router(ctx: ApiContext) -> APIRouter:
 
     @router.post("/mail/test", tags=["메일"],
                  summary="한 사람에게만 시험 발송 — date의 리포트가 있으면 그 파일을, 없으면 짧은 본문. 장부는 안 쓴다")
-    async def mail_test(req: Annotated[MailTestRequest, Query()]):
+    async def mail_test(req: Annotated[MailTestRequest, Query()], request: Request):
+        only_once(request, "to")
         try:
             mail = ctx.app_config().mail
         except Exception as exc:                                   # noqa: BLE001
