@@ -7,11 +7,10 @@ from datetime import date, datetime
 
 import pytest
 
-from src.__main__ import parse_args
 from src.presentation.api.assembly import OPS
 from src.report import ledger
 
-from tests.presentation.api.conftest import KST, NOW, SCENARIO, FakeTime, make_app, serve, until
+from tests.presentation.api.conftest import KST, NOW, SCENARIO, FakeTime, make_app, real_parse, serve, until
 
 THU = date(2026, 10, 29)                 # NOW(금)의 기준일
 FRI = date(2026, 10, 30)
@@ -60,7 +59,7 @@ async def test_force면_장부가_있어도_보내고_CLI에_force를_넘긴다(
     assert response.status_code == 200
     argv = json.loads(job["stdout"])["argv"]
     assert argv == ["report", "run", "--force", "--trigger", "manual", "--job-id", job["id"]]
-    parsed = parse_args(argv)
+    parsed = real_parse(argv)
     assert (parsed.force, parsed.trigger, parsed.job_id) == (True, "manual", job["id"])
 
 
@@ -82,7 +81,7 @@ async def test_resend는_그날_HTML을_원래_제목으로_보내고_끝나면_
     assert response.status_code == 200, job
     argv = json.loads(job["stdout"])["argv"]
     assert argv == ["mail", "send", f"--file={path}", "--subject=일일 알람 리포트 2026-10-30(금)"]
-    parsed = parse_args(argv)
+    parsed = real_parse(argv)
     assert (parsed.file, parsed.subject, parsed.dry_run) == (str(path), "일일 알람 리포트 2026-10-30(금)", False)
     record, _ = ledger.read(cli_root / "output", "daily-alarm", FRI)
     assert (record.trigger, record.job_id, record.recipients) == ("manual", job["id"], 2)

@@ -187,6 +187,22 @@ class FakeTime:
         return stop.is_set()
 
 
+def real_parse(argv: list[str]):
+    """진짜 CLI 파서(`src.__main__.parse_args`)로 읽는다. 거부하면(SystemExit) **argparse가 찍은 이유와 실제로 import된 파일**을
+    들고 실패한다 — 사내에서 이 자리가 `SystemExit: 2`로만 깨졌고, 같은 커밋인데 여기서는 재현이 안 됐다(11-02)."""
+    import contextlib
+    import io
+
+    import src.__main__ as cli
+    said = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(said):
+            return cli.parse_args(argv)
+    except SystemExit as exc:
+        pytest.fail(f"진짜 CLI 파서가 거부했다(종료 {exc.code}) — {said.getvalue().strip()!r} · "
+                    f"파서 파일: {cli.__file__} · argv: {argv}")
+
+
 async def until(condition, *, timeout: float = 10.0) -> None:
     """조건이 설 때까지 이벤트 루프를 돌린다. 안 서면 그 자리에서 실패한다 — 테스트가 영원히 걸리지 않게."""
     deadline = asyncio.get_running_loop().time() + timeout

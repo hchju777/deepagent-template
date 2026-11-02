@@ -8,11 +8,10 @@ import json
 
 import pytest
 
-from src.__main__ import parse_args
 from src.presentation.api.assembly import DIAG, OPS
 from src.presentation.api.jobs import DOCTOR_S, REPORT_S, SHORT_S
 
-from tests.presentation.api.conftest import NOW, make_app, serve
+from tests.presentation.api.conftest import NOW, make_app, real_parse, serve
 
 
 async def post(client, path, params=None):
@@ -61,16 +60,16 @@ async def test_경로마다_나가는_명령과_시간_상한(client, path, body
         argv = argv + ["--trigger", "manual", "--job-id", response.json()["id"]]
     assert printed(response) == argv
     assert response.json()["timeout_s"] == timeout_s
-    parse_args(argv)                                  # 진짜 CLI가 받아들인다(SystemExit이면 실패)
+    real_parse(argv)                                  # 진짜 CLI가 받아들인다(SystemExit이면 실패)
 
 
 def test_진짜_파서가_같은_뜻으로_읽는다():
     """`--`와 `--opt=값`이 없으면 `-h`로 시작하는 질문·`-x`로 시작하는 제목이 옵션으로 읽힌다."""
-    ask = parse_args(["llm", "ask", "--role", "report", "--", "-h"])
+    ask = real_parse(["llm", "ask", "--role", "report", "--", "-h"])
     assert (ask.prompt, ask.role) == ("-h", "report")
-    send = parse_args(["mail", "send", "--subject=-x 제목", "--to=a@example.com", "--to=b@example.com"])
+    send = real_parse(["mail", "send", "--subject=-x 제목", "--to=a@example.com", "--to=b@example.com"])
     assert (send.subject, send.to, send.dry_run) == ("-x 제목", ["a@example.com", "b@example.com"], False)
-    run = parse_args(["report", "run", "--today", "2026-10-29", "--no-mail"])
+    run = real_parse(["report", "run", "--today", "2026-10-29", "--no-mail"])
     assert (run.today, run.no_mail, run.dry_run) == ("2026-10-29", True, False)
 
 
