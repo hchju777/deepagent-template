@@ -10,27 +10,31 @@ from fastapi.responses import FileResponse, JSONResponse
 from src.presentation.api.context import ApiContext
 from src.presentation.api.jobs import REPORT_S, SHORT_S, Job
 from src.config.loader import load_scenarios
-from src.presentation.api.models import (WAIT_MAX_S, CleanupRequest, MailSendRequest, ReportAggregateRequest,
-                                         ReportResendRequest, ReportRunRequest, ScenarioQuery,
-                                         ScheduleListRequest, Wait)
+from src.presentation.api.mail_view import recipients_view
+from src.presentation.api.models import (WAIT_MAX_S, CleanupRequest, MailSendRequest, MailTestRequest,
+                                         ReportAggregateRequest, ReportResendRequest, ReportRunRequest,
+                                         ScenarioQuery, ScheduleListRequest, Wait)
 from src.presentation.api.sent import ledger_view, pick_scenario, report_day, today_status
 from src.report import ledger, retention
 from src.report.publish import report_path, subject_for_day
 
 
 async def start(ctx: ApiContext, argv: list[str], *, timeout_s: float, wait_s: float,
-                job_id: str | None = None, on_done=None) -> JSONResponse:
+                job_id: str | None = None, on_done=None, extra: dict | None = None) -> JSONResponse:
     job, busy = ctx.runner.submit(argv, timeout_s=timeout_s, job_id=job_id, on_done=on_done)
-    return await respond(ctx, job, busy, wait_s=wait_s)
+    return await respond(ctx, job, busy, wait_s=wait_s, extra=extra)
 
 
-async def respond(ctx: ApiContext, job: Job | None, busy: Job | None, *, wait_s: float) -> JSONResponse:
-    """200(끝남) · 202(아직 — `/jobs/{id}`로 본다) · 409(다른 작업이 돌고 있다 — 그 작업을 같이 준다)."""
+async def respond(ctx: ApiContext, job: Job | None, busy: Job | None, *, wait_s: float,
+                  extra: dict | None = None) -> JSONResponse:
+    """200(끝남) · 202(아직 — `/jobs/{id}`로 본다) · 409(다른 작업이 돌고 있다 — 그 작업을 같이 준다).
+
+    `extra`는 경로가 정한 것(무엇을 실었나)을 작업 보기 옆에 붙인다 — 작업 출력만으로는 안 보이는 결정이다."""
     if busy is not None:
         return JSONResponse({"detail": "다른 작업이 돌고 있다 — 끝난 뒤 다시", "running": busy.view()},
                             status_code=409)
     await ctx.runner.wait(job, wait_s)
-    return JSONResponse(job.view(), status_code=200 if job.finished else 202)
+    return JSONResponse({**job.view(), **(extra or {})}, status_code=200 if job.finished else 202)
 
 
 def _summary(job: Job) -> dict:
@@ -193,6 +197,48 @@ def ops_router(ctx: ApiContext) -> APIRouter:
     @router.post("/mail/describe", tags=["메일"], summary="`mail describe` — 누구에게 보내게 돼 있나")
     async def mail_describe(req: Annotated[Wait, Query()]):
         return await start(ctx, ["mail", "describe"], timeout_s=SHORT_S, wait_s=req.wait_s)
+
+    @router.get("/mail/recipients", tags=["메일"], summary="config 수신자 — 주소는 가리고(첫 글자·도메인) 수만")
+    async def mail_recipients():
+        try:
+            mail = ctx.app_config().mail
+        except Exception as exc:                                   # noqa: BLE001
+            return JSONResponse({"detail": f"app.json을 못 읽었다 — {exc}"}, status_code=400)
+        return recipients_view(mail)
+
+    @router.post("/mail/test", tags=["메일"],
+                 summary="한 사람에게만 시험 발송 — date의 리포트가 있으면 그 파일을, 없으면 짧은 본문. 장부는 안 쓴다")
+    async def mail_test(req: Annotated[MailTestRequest, Query()]):
+        try:
+            mail = ctx.app_config().mail
+        except Exception as exc:                                   # noqa: BLE001
+            return JSONResponse({"detail": f"app.json을 못 읽었다 — {exc}"}, status_code=400)
+        if not mail.enabled:
+            # 꺼져 있으면 `mail send`가 건너뛰고도 0으로 끝난다 — 시험이 '성공'으로 보이는데 아무도 못 받는다.
+            return JSONResponse({"detail": "mail.enabled=false — 보내지 않는다"}, status_code=409)
+        report, why = None, "date를 안 줬다"
+        if req.date is not None:
+            picked, problem = pick_scenario(ctx.config_root, req.scenario)
+            if picked is None:
+                return JSONResponse({"detail": problem}, status_code=400)
+            name, scenario = picked
+            # 보낸 리포트 이름만 — `.preview.html`(안 보낸 실행의 결과)은 그날 리포트가 아니다.
+            path = report_path(ctx.output_dir(), name, req.date)
+            if path.is_file():
+                report = path
+                subject = f"[테스트] {subject_for_day(scenario, req.date)}"
+            else:
+                why = f"그날 리포트 파일이 없다 — {path.name}"
+        # `--to`는 config 수신자를 **덮는다**(더하지 않는다 — `__main__._mail_to`). 장부는 안 쓴다: 한 사람에게 간 시험이
+        # '그날 나갔다'로 보이면 스케줄이 그날을 건너뛴다.
+        argv = ["mail", "send", f"--to={req.to}"]
+        if report is not None:
+            argv += [f"--subject={subject}", f"--file={report}"]
+            shown = {"to": req.to, "body": "report", "file": report.name}
+        else:
+            argv.append("--subject=[테스트] 메일 연결 확인")
+            shown = {"to": req.to, "body": "short", "why": why}
+        return await start(ctx, argv, timeout_s=SHORT_S, wait_s=req.wait_s, extra={"test": shown})
 
     @router.post("/mail/send", tags=["메일"],
                  summary="`mail send` — dry_run 기본 true. to를 주면 config 수신자는 무시하고 그 주소들에만")

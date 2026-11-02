@@ -207,6 +207,7 @@ def test_Swagger에_경로가_전부_있다(app):
         ("POST", f"{OPS}/report/aggregate"), ("POST", f"{OPS}/report/run"),
         ("POST", f"{OPS}/report/resend"), ("GET", f"{OPS}/report/sent"), ("GET", f"{OPS}/report/sent/{{day}}"),
         ("POST", f"{OPS}/mail/describe"), ("POST", f"{OPS}/mail/send"),
+        ("GET", f"{OPS}/mail/recipients"), ("POST", f"{OPS}/mail/test"),
         ("GET", f"{OPS}/output"), ("GET", f"{OPS}/output/{{name}}"), ("POST", f"{OPS}/output/cleanup"),
         ("POST", f"{DIAG}/boot"), ("POST", f"{DIAG}/doctor"), ("POST", f"{DIAG}/doctor/all"),
         ("POST", f"{DIAG}/llm/check"), ("POST", f"{DIAG}/llm/ask"), ("POST", f"{DIAG}/llm/raw"),

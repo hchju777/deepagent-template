@@ -102,3 +102,30 @@ def test_본문을_주면_확인용_본문은_안_쓴다(mail_config, monkeypatc
     assert run(mail_config, "--dry-run", "--to", "me@example.com", "--body", "직접 쓴 본문",
                monkeypatch=monkeypatch) == 0
     assert _body(capsys) == "직접 쓴 본문"
+
+
+def test_파일과_to를_같이_주면_그_파일을_그_한_사람에게만(mail_config, monkeypatch, tmp_path):
+    """API `POST /mail/test`가 내는 명령 그대로 — 그날 리포트를 시험 삼아 한 사람에게."""
+    from src.domain.mail import MailResult
+    from src.infrastructure import mail_factory
+
+    sent = []
+
+    class Sender:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+        def full_subject(self, key):
+            return f"{self.cfg.subject_prefix} {key}"
+
+        async def send(self, subject, body):
+            sent.append((list(self.cfg.recipients), subject, body))
+            return MailResult(status="sent", sent_at="2026-10-30T09:00:00+09:00",
+                              recipients=list(self.cfg.recipients), subject=subject)
+
+    monkeypatch.setattr(mail_factory, "build_mail", lambda cfg, *, clock, warn=None: Sender(cfg))
+    html = tmp_path / "daily-alarm-2026-10-29.html"
+    html.write_text("<html>그날 리포트</html>", encoding="utf-8")
+    assert run(mail_config, "--to=me@example.com", "--subject=[테스트] 일일 알람 리포트 2026-10-29(목)",
+               f"--file={html}", monkeypatch=monkeypatch) == 0
+    assert sent == [(["me@example.com"], "[운영리포트] [테스트] 일일 알람 리포트 2026-10-29(목)", "<html>그날 리포트</html>")]

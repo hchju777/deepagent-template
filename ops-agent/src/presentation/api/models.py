@@ -59,6 +59,15 @@ class CleanupRequest(StrictModel):
     scenario: Name | None = Field(default=None, description="없으면 keep_days가 있는 시나리오 전부")
 
 
+def _addresses(values: list[str]) -> list[str]:
+    # config와 같은 규칙(`MailConfig`)이다 — 여기서 따로 정하면 API는 통과시키고 CLI는 거르는 주소가 생긴다.
+    try:
+        MailConfig(recipients=values)
+    except ValidationError as exc:
+        raise ValueError(exc.errors()[0]["msg"].removeprefix("Value error, ")) from None
+    return values
+
+
 class MailSendRequest(Wait):
     subject: str = Field(default="연결 테스트", min_length=1, max_length=200)
     dry_run: bool = Field(default=True, description="기본 true — 나갈 요청만 보여 준다")
@@ -68,12 +77,20 @@ class MailSendRequest(Wait):
     @field_validator("to")
     @classmethod
     def _same_rule_as_config(cls, v: list[str]) -> list[str]:
-        # config와 같은 규칙(`MailConfig`)이다 — 여기서 따로 정하면 API는 통과시키고 CLI는 거르는 주소가 생긴다.
-        try:
-            MailConfig(recipients=v)
-        except ValidationError as exc:
-            raise ValueError(exc.errors()[0]["msg"].removeprefix("Value error, ")) from None
-        return v
+        return _addresses(v)
+
+
+class MailTestRequest(Wait):
+    # 한 칸(문자열)이다 — 시험은 한 사람에게만. 리스트로 받으면 "시험 삼아"가 여러 명에게 간다.
+    to: str = Field(description="받을 주소 하나 — config 수신자는 무시하고 이 사람에게만")
+    date: dt.date | None = Field(default=None, description="기준일(YYYY-MM-DD) — 그날 리포트 파일이 있으면 그것을, "
+                                                           "없으면(또는 안 주면) 짧은 시험 본문")
+    scenario: Name | None = Field(default=None, description="date의 리포트를 찾을 시나리오(하나뿐이면 안 줘도 된다)")
+
+    @field_validator("to")
+    @classmethod
+    def _same_rule_as_config(cls, v: str) -> str:
+        return _addresses([v])[0]
 
 
 class DoctorRequest(Wait):

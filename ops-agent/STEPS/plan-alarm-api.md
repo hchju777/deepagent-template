@@ -428,6 +428,47 @@ dry-run·no-mail `report run`이 기준일 HTML을 다시 쓴다 — 그날 장�
    이어서 `report/resend`(force) → 원래 HTML이 나가는지.
 3. `no_mail=true`도 같은지. `keep_days`가 있으면 오래된 날짜의 `.preview.html`도 정리되는지.
 
+## 5단계 — 한 것 (11-02)
+
+회신(11-02): 정한 것 그대로 — `GET /mail/recipients`(주소는 가리고 수만), `POST /mail/test`(to 한 주소, date — 그날 리포트가
+있으면 그것을, 없으면 짧은 본문을 그 한 사람에게만). 입력은 쿼리 칸.
+
+**파일**
+
+| | 파일 | 무엇 |
+|---|---|---|
+| A | `src/presentation/api/mail_view.py` | 주소 가리기(`o***@example.com` — 첫 글자와 도메인만, `***`는 길이와 상관없이 고정)와 수신자 보기 |
+| M | `src/presentation/api/models.py` | `MailTestRequest`(to 문자열 한 칸·필수, date, scenario, wait_s). 주소 규칙은 `mail/send`와 같은 함수(`MailConfig`) |
+| M | `src/presentation/api/routes_ops.py` | `GET /mail/recipients`, `POST /mail/test`. 응답에 무엇을 실었나(`test`)를 붙이려고 `start`/`respond`에 `extra` |
+
+**정한 세부**
+
+- `GET /mail/recipients`: 앱 안에서 바로 답한다(작업 실행기를 안 쓴다). `{"enabled", "count", "recipients": [가린 주소]}`.
+  메일이 꺼져 있어도 보인다. app.json을 못 읽으면 400과 이유.
+- `POST /mail/test`는 `mail send --to=<그 주소>`로 나간다 — `--to`는 config 수신자를 **덮는다**(더하지 않는다, 1단계).
+  - `date`의 `<시나리오>-<date>.html`이 있으면 그 파일을 제목 `[테스트] <원래 제목>`으로(접두 `[운영리포트]`는 그대로 붙는다).
+  - 없으면, 또는 `date`를 안 주면 짧은 시험 본문(제목 `[테스트] 메일 연결 확인`, 본문은 1단계의 "받는 사람: --to로 지정한 주소 — 1명").
+  - 응답에 `"test": {"to", "body": "report"|"short", "file" 또는 "why"}` — 파일이 없어 짧은 본문으로 간 것이 보이게.
+  - `.preview.html`(안 보낸 실행의 결과)은 그날 리포트로 치지 않는다.
+  - **장부를 안 쓴다** — 한 사람에게 간 시험이 "그날 나갔다"로 보이면 스케줄이 그날을 건너뛴다.
+  - 메일이 꺼져 있으면 409(띄우지 않는다) — `mail send`는 꺼져 있어도 0으로 끝나 시험이 성공으로 보인다.
+  - `date`를 줬는데 시나리오를 못 고르면 400. 이상한 `to`(주소 아님·줄바꿈·쉼표로 여럿)·없는 `to`는 422.
+  - dry_run 칸은 두지 않았다 — 받는 사람이 직접 친 한 명뿐이고, 나갈 요청을 보려면 `POST /mail/send`(dry_run 기본 true, `to`)가 있다.
+
+**확인한 것**
+
+- 테스트 추가: API 메일 22(`test_mail.py`), CLI 1(`--to`와 `--file`을 같이 주면 그 파일을 그 한 사람에게만), Swagger 경로 2.
+  나간 argv는 진짜 CLI 파서로도 읽는다. 전체 2107 통과, 3.11·FastAPI 0.115도 초록.
+- RED 스윕 12가지 전부 빨개진다(안 가림·길이 드러남·config 수신자에게·`--to`를 더함·장부를 씀·미리보기를 리포트로·
+  꺼짐을 안 봄·`[테스트]` 없음·무엇을 실었나 안 말함·to를 안 거름·모르는 시나리오도 보냄·to가 여러 칸).
+
+**사내에서 볼 것(평가자)**
+
+1. `GET /mail/recipients` — 수가 사내 config와 맞고 주소가 가려져 있는지.
+2. `POST /mail/test`에 본인 주소와 리포트가 있는 기준일 → 본인만 `[운영리포트] [테스트] … ` 제목으로 그날 리포트를 받는지,
+   `GET /report/sent`에 아무것도 안 생기는지.
+3. 리포트가 없는 날짜, 또는 date 없이 → 짧은 본문, 응답의 `test.why`.
+
 ## 요청문의 오타를 이렇게 읽었다
 
 | 원문 | 읽은 뜻 |
