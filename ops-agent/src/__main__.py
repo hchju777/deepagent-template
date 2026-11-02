@@ -2720,12 +2720,27 @@ def cmd_report_run(args, env) -> int:
             print(f"  ❌ 메일은 나갔는데 장부를 못 썼다 — {problem}", file=sys.stderr)
             return exit_codes.FAILED
 
+    if published.path is not None:
+        _keep_recent(out_dir, name, scenario, written=facts.window.yesterday)
+
     # 종료 코드는 스케줄러가 **조용한 실패**를 알아챌 유일한 신호다(표는 `src/report/exit_codes.py`). 파일·발송 실패는
     # 리포트가 안 나간 것이라 실패. 못 읽은 법인은 리포트는 나갔고 그 법인이 빠진 것이 본문에 보이므로 경고 — 28개 중
     # 하나는 거의 매일 안 붙어서, 실패로 세면 매일 실패가 된다(11-01 사내 실측). 코멘트 실패는 경고 표시까지만.
     if published.failed:
         return exit_codes.FAILED
     return exit_codes.WARNING if facts.unavailable else exit_codes.OK
+
+
+def _keep_recent(out_dir, name, scenario, *, written) -> None:
+    """파일을 쓴 직후의 보관 정리(`keep_days`) — 실패해도 리포트는 이미 나갔다. 경고만 하고 종료 코드는 그대로."""
+    from src.report import retention
+
+    if scenario.keep_days is None:
+        return
+    deleted, problems = retention.apply(retention.plan(out_dir, name, scenario.keep_days, keep_also=written))
+    print(f"  보관: 최근 {scenario.keep_days}개 날짜 — {len(deleted)}개 지움")
+    for problem in problems:
+        print(f"  ⚠  보관 정리 실패 — {problem}", file=sys.stderr)
 
 
 def _output_dir(args, env) -> Path:

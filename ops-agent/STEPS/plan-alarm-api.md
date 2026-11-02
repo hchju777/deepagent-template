@@ -349,6 +349,46 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
 3. `report/resend?date=<기준일>` → 그날 HTML이 원래 제목으로 나가고 장부의 계기 `manual`.
 4. 08:00 슬롯이 지난 뒤 파드를 다시 띄우고 `GET /schedule` → 그날 장부가 없으면 `today.missed: true`.
 
+## 4단계 — 한 것 (11-02)
+
+회신(11-02): 정한 것 그대로(파일명 날짜 기준 최근 N개, 같은 시나리오의 HTML과 장부만, `graph/`·`traces/`·`cases.json`은
+안 건드림, `GET /output`에 정책과 지울 예정, `POST /output/cleanup` dry_run 기본 true). 덧붙인 제안: 장부는 output에 있어
+**재시작하면 사라진다(받아들인 위험)** — 그러면 오늘 것이 이미 나갔어도 `today.missed`가 서고 중복 발송 막기도 사라진다.
+`today`에 앱이 오늘 슬롯 뒤에 떴다는 사실(`started_at`)을 같이 보여, 건너뛴 것인지 재시작으로 장부가 사라진 것인지 사람이 가르게.
+
+**파일**
+
+| | 파일 | 무엇 |
+|---|---|---|
+| A | `src/report/retention.py` | 계획(남길 날짜·지울 파일)과 적용 — 이름 규칙에 정확히 맞는 HTML·장부만, 못 지운 것은 이유로 |
+| M | `src/config/schema_report.py` | 시나리오 `keep_days: int ≥ 1 | 없음` — 없으면 안 지운다(지우는 쪽이 기본이면 설정을 안 본 배포가 리포트를 잃는다) |
+| M | `src/__main__.py` | `report run`이 파일을 쓴 직후 정리(방금 쓴 날은 남긴다). 실패해도 경고만 — 리포트는 이미 나갔다 |
+| M | `src/presentation/api/routes_ops.py`, `models.py` | `GET /output`의 `policy`, `POST /output/cleanup`(dry_run, scenario) |
+| M | `src/presentation/api/sent.py` | `today`에 `app_started_at`·`started_after_slot`, `missed`이고 슬롯 뒤에 떴으면 `note` |
+
+**정한 세부**
+
+- 같은 날짜의 HTML과 장부는 함께 남고 함께 지운다. 앞이 같은 다른 시나리오(`daily`·`daily-alarm`)는 안 섞인다.
+- `report run --today`로 옛 날을 다시 만들면 그 날은 최근 N개 밖이어도 남긴다(쓰자마자 지워지지 않게). 이미 보내서(4)
+  멈춘 실행은 파일을 안 쓰므로 정리도 안 한다.
+- API의 정리는 앱 안에서 한다(파일 지우기뿐 — 작업 실행기 자리를 쓰지 않는다). `report run`과 **같은 함수**를 쓴다.
+- 리포의 `config/scenarios/daily-alarm.json`에는 `keep_days`를 넣지 않았다 — 사내 config에서 정한다(예: `"keep_days": 3`).
+- `today`의 `note`는 `missed`이고 `started_after_slot`일 때만: "앱이 오늘 슬롯(08:00) 뒤(HH:MM)에 떴다 — 그때 앱이 없어
+  건너뛰었거나, 이전 파드가 이미 보냈는데 재시작으로 장부가 사라졌다. 받은 메일을 보고 정한다." 코드는 둘을 가를 수 없다.
+
+**확인한 것**
+
+- 테스트 추가: 보관 7, CLI 보관 4, API 보관 6, `today`의 뜬 시각 2(+기존 1 갱신). 3.13·FastAPI 0.162와 3.11·FastAPI 0.115 둘 다 초록.
+- RED 스윕 13가지 전부 빨개진다(달력 N일·방금 쓴 날·장부 제외·느슨한 이름 규칙·없을 때 다 지움·던짐·run이 안 지움·
+  cleanup dry_run 무시·기본 false·정책 없음·슬롯 뒤 안 셈·반대·설명 아무 때나).
+
+**사내에서 볼 것(평가자)**
+
+1. 사내 시나리오에 `keep_days`(예 3)를 넣고 `GET /output` → `policy`의 `keep`·`delete`가 파일명 날짜로 맞는지.
+2. `POST /output/cleanup`(기본 dry_run) → 안 지워지고 목록만, `dry_run=false` → 그 파일만 지워지고 `graph/`·`traces/`·`cases.json`은 그대로.
+3. `report run`(dry_run이어도 파일은 쓴다) 뒤 오래된 날짜가 정리되는지.
+4. 오늘 슬롯이 지난 뒤 파드를 다시 띄우고 `GET /schedule` → `today.started_after_slot: true`와 `note`.
+
 ## 요청문의 오타를 이렇게 읽었다
 
 | 원문 | 읽은 뜻 |

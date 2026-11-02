@@ -168,8 +168,28 @@ async def today(cli_root, now, **kwargs):
 async def test_오늘_슬롯이_지났는데_발사도_장부도_없으면_missed(cli_root):
     """08:00 근처에 파드가 다시 뜨면 그날 슬롯은 건너뛰어지고 실패 알림도 안 간다 — 사람이 여기서 본다."""
     got = await today(cli_root, NOW)
+    note = got.pop("note")
     assert got == {"day": THU.isoformat(), "sent": False, "ledger": None,
-                   "slot": "2026-10-30T08:00:00+09:00", "missed": True}
+                   "slot": "2026-10-30T08:00:00+09:00", "missed": True,
+                   "app_started_at": NOW.isoformat(), "started_after_slot": True}
+    assert "08:00" in note and "09:00" in note and "재시작으로 장부가 사라졌다" in note
+
+
+async def test_앱이_슬롯_전에_떴으면_슬롯_뒤라고_하지_않는다(cli_root):
+    """재시작으로 장부가 사라진 경우와 가르는 칸이다 — 슬롯 전부터 떠 있었으면 그 설명은 틀린 말이다."""
+    moments = iter([datetime(2026, 10, 30, 7, 0, tzinfo=KST)])
+    app = make_app(cli_root, clock=lambda: next(moments, NOW))
+    async with serve(app) as c:
+        [row] = (await c.get(f"{OPS}/schedule")).json()["scenarios"]
+    got = row["today"]
+    assert (got["app_started_at"], got["started_after_slot"]) == ("2026-10-30T07:00:00+09:00", False)
+    assert "note" not in got
+
+
+async def test_장부가_있으면_슬롯_뒤에_떴어도_설명을_안_붙인다(cli_root):
+    sent(cli_root / "output", THU)
+    got = await today(cli_root, NOW)
+    assert (got["missed"], got["started_after_slot"]) == (False, True) and "note" not in got
 
 
 async def test_장부가_있으면_보냈고_missed가_아니다(cli_root):

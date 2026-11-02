@@ -87,4 +87,5 @@ def test_uvicorn으로_떠서_진짜_CLI를_부른다(served):
     row = next(r for r in schedule["scenarios"] if r["name"] == "daily-alarm")
     assert row["on"] is True and row["next_run"]
     # 오늘 기준일 장부와 건너뜀 — 08:00 근처 재시작을 사람이 여기서 본다.
-    assert set(row["today"]) == {"day", "sent", "ledger", "slot", "missed"}, row["today"]
+    assert {"day", "sent", "ledger", "slot", "missed", "app_started_at", "started_after_slot"} <= set(row["today"]), \
+        row["today"]

@@ -51,12 +51,17 @@ def today_slot(spec, now: datetime) -> datetime | None:
 
 
 def today_status(output_dir, name: str, scenario, *, now: datetime, last: dict | None, firing: bool,
-                 paused: bool) -> dict:
+                 paused: bool, started_at: datetime) -> dict:
     """오늘 기준일의 장부와, **슬롯이 지났는데 아무 일도 없었는가**(`missed`).
 
     08:00 근처에 파드가 다시 뜨면 그날 슬롯은 건너뛰어지고(밀린 슬롯은 몰아서 쏘지 않는다) 실패도 아니라 알림도 안 간다.
     메모리의 최근 결과는 재시작과 함께 사라지므로, "오늘 슬롯이 지났다 · 오늘 발사 기록이 없다 · 장부가 없다"가 함께면
     건너뛴 것이다 — 사람이 Swagger 한 곳(`GET /schedule`)에서 본다. 다시 보내는 것은 사람이 정한다(`report/run`).
+
+    **장부도 재시작에 사라진다**(output은 컨테이너 안이라 남지 않는다 — 받아들인 위험, 11-02). 그러면 오늘 것이 이미
+    나갔어도 `missed`가 서고, 중복 발송 막기도 같이 사라진다. 둘을 코드는 가를 수 없다 — 그래서 앱이 뜬 시각과 "오늘 슬롯
+    뒤에 떴다"를 같이 보인다. 슬롯 바로 뒤에 떴으면 건너뛴 것, 한참 뒤에 떴으면 이전 파드가 이미 보냈을 수 있다 — 받은
+    메일을 보고 사람이 가른다.
     """
     day = report_day(scenario, now.date())
     record = ledger_view(output_dir, name, day)
@@ -64,5 +69,11 @@ def today_status(output_dir, name: str, scenario, *, now: datetime, last: dict |
     slot = today_slot(spec, now) if scenario.enabled and spec.enabled else None
     fired_today = bool(last and slot and datetime.fromisoformat(last["scheduled"]) >= slot)
     missed = bool(slot and slot <= now and record is None and not fired_today and not firing and not paused)
-    return {"day": day.isoformat(), "sent": record is not None, "ledger": record,
-            "slot": slot.isoformat() if slot else None, "missed": missed}
+    after_slot = bool(slot and started_at > slot)
+    shown = {"day": day.isoformat(), "sent": record is not None, "ledger": record,
+             "slot": slot.isoformat() if slot else None, "missed": missed,
+             "app_started_at": started_at.isoformat(), "started_after_slot": after_slot}
+    if missed and after_slot:
+        shown["note"] = (f"앱이 오늘 슬롯({slot:%H:%M}) 뒤({started_at:%H:%M})에 떴다 — 그때 앱이 없어 건너뛰었거나, 이전 파드가 "
+                         f"이미 보냈는데 재시작으로 장부가 사라졌다(output은 재시작에 남지 않는다). 받은 메일을 보고 정한다")
+    return shown

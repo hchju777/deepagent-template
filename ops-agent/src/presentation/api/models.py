@@ -53,6 +53,11 @@ class ScenarioQuery(StrictModel):
     scenario: Name | None = None
 
 
+class CleanupRequest(StrictModel):
+    dry_run: bool = Field(default=True, description="기본 true — 지울 것만 보여 준다")
+    scenario: Name | None = Field(default=None, description="없으면 keep_days가 있는 시나리오 전부")
+
+
 class MailSendRequest(Wait):
     subject: str = Field(default="연결 테스트", min_length=1, max_length=200)
     dry_run: bool = Field(default=True, description="기본 true — 나갈 요청만 보여 준다")

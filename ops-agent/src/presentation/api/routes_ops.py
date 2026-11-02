@@ -9,11 +9,12 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from src.presentation.api.context import ApiContext
 from src.presentation.api.jobs import REPORT_S, SHORT_S, Job
-from src.presentation.api.models import (WAIT_MAX_S, MailSendRequest, ReportAggregateRequest,
+from src.config.loader import load_scenarios
+from src.presentation.api.models import (WAIT_MAX_S, CleanupRequest, MailSendRequest, ReportAggregateRequest,
                                          ReportResendRequest, ReportRunRequest, ScenarioQuery,
                                          ScheduleListRequest, Wait)
 from src.presentation.api.sent import ledger_view, pick_scenario, report_day, today_status
-from src.report import ledger
+from src.report import ledger, retention
 from src.report.publish import report_path, subject_for_day
 
 
@@ -85,7 +86,7 @@ def ops_router(ctx: ApiContext) -> APIRouter:
             try:
                 row["today"] = today_status(ctx.output_dir(), row["name"], scenarios[row["name"]], now=now,
                                             last=row["last"], firing=ctx.scheduler.firing(row["name"]),
-                                            paused=view["paused"])
+                                            paused=view["paused"], started_at=ctx.started_at)
             except Exception as exc:                               # noqa: BLE001
                 row["today"] = {"error": f"{type(exc).__name__}: {exc}"}
         return view
@@ -203,7 +204,7 @@ def ops_router(ctx: ApiContext) -> APIRouter:
         argv += [f"--to={address}" for address in req.to]
         return await start(ctx, argv, timeout_s=SHORT_S, wait_s=req.wait_s)
 
-    @router.get("/output", tags=["출력"], summary="output 폴더의 파일(최근 순)")
+    @router.get("/output", tags=["출력"], summary="output 폴더의 파일(최근 순)과 보관 정책(keep_days)·지울 예정")
     async def output_list():
         directory = ctx.output_dir()
         zone = ctx.clock().tzinfo
@@ -216,7 +217,38 @@ def ops_router(ctx: ApiContext) -> APIRouter:
                         "name": path.name, "size": stat.st_size,
                         "modified": datetime.fromtimestamp(stat.st_mtime, tz=zone).isoformat()}))
         files.sort(key=lambda pair: pair[0], reverse=True)
-        return {"dir": str(directory), "files": [row for _, row in files]}
+        plans, problem = retention_plans(None)
+        policy = {"error": problem} if problem else [retention.describe(plan, directory) for _, plan in plans]
+        return {"dir": str(directory), "files": [row for _, row in files], "policy": policy}
+
+    def retention_plans(only: str | None):
+        """([(시나리오, 보관 계획)], None) 또는 (None, 이유). 같은 규칙(`src/report/retention.py`)을 `report run`도 쓴다."""
+        try:
+            scenarios = load_scenarios(ctx.config_root)
+        except Exception as exc:                                   # noqa: BLE001
+            return None, str(exc)
+        if only is not None and only not in scenarios:
+            return None, f"모르는 시나리오 — {only}. 있는 것: {', '.join(scenarios) or '없음'}"
+        directory = ctx.output_dir()
+        return [(name, retention.plan(directory, name, scenario.keep_days))
+                for name, scenario in scenarios.items() if only in (None, name)], None
+
+    @router.post("/output/cleanup", tags=["출력"],
+                 summary="보관 정책(keep_days)대로 지운다 — dry_run 기본 true. 같은 시나리오의 HTML과 장부만")
+    async def output_cleanup(req: Annotated[CleanupRequest, Query()]):
+        plans, problem = retention_plans(req.scenario)
+        if problem:
+            return JSONResponse({"detail": problem}, status_code=400)
+        directory = ctx.output_dir()
+        results = []
+        for _, plan in plans:
+            row = retention.describe(plan, directory)
+            if not req.dry_run and plan.keep_days is not None:
+                deleted, problems = retention.apply(plan)
+                row["deleted"] = [item.path.relative_to(directory).as_posix() for item in deleted]
+                row["problems"] = problems
+            results.append(row)
+        return {"dry_run": req.dry_run, "results": results}
 
     @router.get("/output/{name:path}", tags=["출력"], summary="output 파일 하나 — HTML은 그대로 보인다")
     async def output_file(name: str):

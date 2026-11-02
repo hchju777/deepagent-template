@@ -210,3 +210,69 @@ def test_종료_코드_2는_비워_둔다():
     with pytest.raises(SystemExit) as exit_:
         main(["report", "run", "--trigger", "모름"])
     assert exit_.value.code == 2
+
+
+# ── 출력 보관(keep_days) — 파일을 쓴 직후 ─────────────────────────────────
+
+def with_keep(config, keep_days):
+    root = config[0]
+    path = root / "scenarios" / "daily-alarm.json"
+    body = json.loads(path.read_text(encoding="utf-8"))
+    body["keep_days"] = keep_days
+    path.write_text(json.dumps(body), encoding="utf-8")
+
+
+def old_files(out):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "sent").mkdir(exist_ok=True)
+    for day in ("2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03"):
+        (out / f"daily-alarm-{day}.html").write_text("옛 리포트", encoding="utf-8")
+        (out / "sent" / f"daily-alarm-{day}.json").write_text("{}", encoding="utf-8")
+    (out / "cases.json").write_text("{}", encoding="utf-8")
+    (out / "traces").mkdir(exist_ok=True)
+
+
+def test_파일을_쓴_직후_최근_N개_날짜만_남긴다(config, monkeypatch, capsys):
+    Mail().install(monkeypatch)
+    with_keep(config, 2)
+    out = config[2]
+    old_files(out)
+    assert run(config) == exit_codes.OK
+    assert sorted(p.name for p in out.glob("daily-alarm-*.html")) == [
+        "daily-alarm-2026-09-03.html", f"daily-alarm-{DAY}.html"]
+    assert sorted(p.name for p in (out / "sent").glob("*.json")) == [
+        "daily-alarm-2026-09-03.json", f"daily-alarm-{DAY}.json"]
+    assert (out / "cases.json").exists() and (out / "traces").is_dir()
+    assert "보관: 최근 2개 날짜 — 6개 지움" in capsys.readouterr().out
+
+
+def test_keep_days가_없으면_안_지운다(config, monkeypatch):
+    Mail().install(monkeypatch)
+    old_files(config[2])
+    assert run(config) == exit_codes.OK
+    assert len(list(config[2].glob("daily-alarm-*.html"))) == 5
+
+
+def test_옛_날을_다시_만들면_그_파일은_남는다(config, monkeypatch):
+    Mail().install(monkeypatch)
+    with_keep(config, 1)
+    out = config[2]
+    old_files(out)
+    (out / f"daily-alarm-{DAY}.html").write_text("최근 것", encoding="utf-8")
+    root, seeds, _ = config
+    # 09-02(수)에 돌았다고 치면 기준일은 09-01(화) — 최근 1개(09-04) 밖이지만 방금 쓴 날이다.
+    code = main(["--config-root", str(root), "--env-file", "/dev/null", "report", "run", "--today", "2026-09-02",
+                 "--stub-seeds", seeds, "--out-dir", str(out), "--no-mail"])
+    assert code == exit_codes.OK
+    assert (out / "daily-alarm-2026-09-01.html").exists()
+    assert (out / f"daily-alarm-{DAY}.html").exists()
+    assert not (out / "daily-alarm-2026-08-31.html").exists()
+
+
+def test_이미_보냈으면_파일을_안_쓰니_정리도_안_한다(config, monkeypatch):
+    Mail().install(monkeypatch)
+    run(config)
+    with_keep(config, 1)
+    old_files(config[2])
+    assert run(config) == exit_codes.ALREADY_SENT
+    assert (config[2] / "daily-alarm-2026-08-31.html").exists()
