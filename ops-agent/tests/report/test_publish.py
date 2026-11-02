@@ -6,10 +6,13 @@
 """
 from datetime import datetime
 
+import pytest
+
 from src.config.schema_mail import MailConfig
 from src.domain.mail import MailPort, MailResult
 from src.infrastructure.mail_fakes import RecordingMailSender
-from src.report.publish import output_path, publish, subject_for
+from src.report import ledger
+from src.report.publish import output_path, preview_path, publish, subject_for
 
 from tests.support import YESTERDAY, scenario
 
@@ -145,6 +148,51 @@ async def test_dry_run_미리보기에_키가_없다(tmp_path, window, clock):
 
     assert published.preview["headers"]["x-api-key"] == "***"
     assert "hunter2-secret" not in str(published.preview)
+
+
+# ── 장부가 있는 날 — 보낸 HTML을 덮지 않는다 ─────────────────────────────
+
+def _already_sent(tmp_path):
+    """그날 이미 나갔다 — 장부와 **실제로 나간** HTML."""
+    out = tmp_path / "output"
+    assert ledger.write(out, ledger.SentRecord(
+        scenario="daily-alarm", day=YESTERDAY, sent_at=datetime(2026, 9, 7, 8, 1), subject="s",
+        recipients=1, trigger="schedule", job_id="j1")) is None
+    sent = out / f"daily-alarm-{YESTERDAY.isoformat()}.html"
+    sent.write_text("실제로 나간 것", encoding="utf-8")
+    return sent
+
+
+@pytest.mark.parametrize("how", ["dry_run", "no_mail"])
+async def test_장부가_있는_날의_안_보내는_실행은_보낸_HTML을_덮지_않고_따로_쓴다(tmp_path, window, clock, how):
+    """덮으면 `/report/resend`가 실제로 나간 것과 **다른** HTML을 보낸다(4단계 사내 검증의 보완 제안)."""
+    sent = _already_sent(tmp_path)
+    mail = None if how == "no_mail" else RecordingMailSender(ENABLED, clock=clock)
+
+    published = await _publish(tmp_path, window, mail=mail, dry_run=how == "dry_run")
+
+    assert sent.read_text(encoding="utf-8") == "실제로 나간 것"
+    assert published.path == preview_path(tmp_path / "output", "daily-alarm", YESTERDAY)
+    assert published.path.name == "daily-alarm-2026-09-04.preview.html"
+    assert published.path.read_text(encoding="utf-8") == HTML        # 볼 것은 그래도 남는다 — dry-run의 목적
+    assert any(sent.name in line and "덮지 않" in line for line in published.describe())
+    assert not published.failed
+
+
+async def test_장부가_있어도_보내는_실행은_그_이름에_쓴다(tmp_path, window, clock):
+    """`--force` — 새로 만들어 보내는 것이 그날의 HTML이 된다. 보낸 것과 파일이 같아야 resend가 맞다."""
+    sent = _already_sent(tmp_path)
+
+    published = await _publish(tmp_path, window, mail=RecordingMailSender(ENABLED, clock=clock))
+
+    assert published.path == sent and sent.read_text(encoding="utf-8") == HTML
+    assert not preview_path(tmp_path / "output", "daily-alarm", YESTERDAY).exists()
+
+
+async def test_장부가_없으면_안_보내는_실행도_그_이름에_쓴다(tmp_path, window):
+    published = await _publish(tmp_path, window, mail=None)
+
+    assert published.path == output_path(tmp_path / "output", "daily-alarm", window)
 
 
 # ── 파일을 못 써도 발송은 계속한다 ────────────────────────────────────

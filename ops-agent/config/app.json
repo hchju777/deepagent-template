@@ -30,6 +30,10 @@
       "ops-mx-gumi@example.com",
       "line-lead@example.com"
     ],
+    "notify_to": [
+      "ops-mx-gumi@example.com",
+      "line-lead@example.com"
+    ],
     "api_base": "https://agent.example.net/api/v1/run",
     "agent_id": "${MAIL_AGENT_ID}",
     "api_key": "${MAIL_AGENT_API_KEY}",

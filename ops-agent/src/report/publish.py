@@ -18,6 +18,13 @@
 
 같은 이유로 메일 실패가 파일 쓰기를 되돌리지 않는다. 반쪽이라도 남는 편이 낫다.
 
+## 장부가 있는 날의 안 보내는 실행은 다른 이름으로 쓴다
+
+dry-run·`--no-mail`도 파일은 쓴다(나갈 본문을 눈으로 보는 것이 목적이다). 그런데 그날이 이미 나간 날이면(발송 장부가
+있으면) 같은 이름에 쓰는 순간 **실제로 나간 HTML이 덮인다** — 그 뒤 `/report/resend`가 받은 사람이 본 것과 다른 숫자를
+보낸다. 그래서 그때만 `<시나리오>-<기준일>.preview.html`로 쓴다. 보내는 실행(`--force`)은 원래 이름에 쓴다 — 새로
+보낸 것이 그날의 HTML이 된다(4단계 사내 검증의 보완 제안).
+
 ## 제목에 기준일이 들어간다
 
 매일 같은 제목이면 받는 쪽 메일함에서 어제 것과 구분이 안 되고, 검색도 안 된다.
@@ -29,6 +36,7 @@ from pathlib import Path
 from src.config.schema_report import ReportScenario
 from src.domain.base import Clock
 from src.domain.mail import MailPort, MailResult
+from src.report import ledger
 from src.report.window import WEEKDAY_LABEL, ReportWindow
 
 
@@ -42,6 +50,7 @@ class Published:
     write_error: str | None = None
     mail: MailResult | None = None
     preview: dict | None = None          # --dry-run일 때 나갈 요청
+    kept_sent: Path | None = None        # 장부가 있어 덮지 않고 남겨 둔, 실제로 나간 HTML
 
     @property
     def failed(self) -> bool:
@@ -54,6 +63,8 @@ class Published:
             lines.append(f"파일을 쓰지 못했다 — {self.write_error}")
         elif self.path:
             lines.append(f"파일: {self.path}")
+        if self.kept_sent is not None:
+            lines.append(f"그날 장부가 있어 보낸 HTML({self.kept_sent.name})은 덮지 않았다 — resend는 그것을 보낸다")
         if self.preview is not None:
             lines.append(f"보내지 않았다(dry-run) — 수신자 "
                          f"{', '.join(self.preview['recipients'])}")
@@ -72,9 +83,12 @@ def subject_for(scenario: ReportScenario, window: ReportWindow) -> str:
 
     돌린 날을 쓰면 재실행·지연 실행에서 같은 데이터가 다른 제목으로 두 번 간다.
     """
-    day = window.yesterday
-    return (f"{scenario.title} {day.isoformat()}"
-            f"({WEEKDAY_LABEL[day.weekday()]})")
+    return subject_for_day(scenario, window.yesterday)
+
+
+def subject_for_day(scenario: ReportScenario, day) -> str:
+    """기준일 하나로 — 재발송(`report/resend`)이 그날 파일에 원래와 **같은 제목**을 붙인다."""
+    return f"{scenario.title} {day.isoformat()}({WEEKDAY_LABEL[day.weekday()]})"
 
 
 def output_path(directory: Path, scenario_name: str, window: ReportWindow) -> Path:
@@ -83,7 +97,24 @@ def output_path(directory: Path, scenario_name: str, window: ReportWindow) -> Pa
     기준일을 파일 이름에 넣는 이유: 매일 덮어쓰면 "어제 리포트를 다시 보고 싶다"가
     불가능해진다. 정렬도 날짜순으로 맞는다.
     """
-    return directory / f"{scenario_name}-{window.yesterday.isoformat()}.html"
+    return report_path(directory, scenario_name, window.yesterday)
+
+
+def report_path(directory: Path, scenario_name: str, day) -> Path:
+    """기준일 하나로 — 재발송이 그날 파일을 같은 규칙으로 찾는다."""
+    return directory / f"{scenario_name}-{day.isoformat()}.html"
+
+
+def preview_path(directory: Path, scenario_name: str, day) -> Path:
+    return directory / f"{scenario_name}-{day.isoformat()}.preview.html"
+
+
+def _already_sent(output_dir: Path, scenario_name: str, day) -> bool:
+    try:
+        return ledger.exists(output_dir, scenario_name, day)
+    except OSError:
+        # 모르면 덮지 않는 쪽 — 따로 쓴 미리보기는 지우면 그만이지만, 덮인 보낸 HTML은 되돌릴 수 없다.
+        return True
 
 
 async def publish(html: str, *, scenario: ReportScenario, scenario_name: str,
@@ -97,6 +128,9 @@ async def publish(html: str, *, scenario: ReportScenario, scenario_name: str,
     """
     subject = subject_for(scenario, window)
     path: Path | None = output_path(output_dir, scenario_name, window)
+    kept_sent: Path | None = None
+    if (mail is None or dry_run) and _already_sent(output_dir, scenario_name, window.yesterday):
+        kept_sent, path = path, preview_path(output_dir, scenario_name, window.yesterday)
     write_error: str | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,12 +139,12 @@ async def publish(html: str, *, scenario: ReportScenario, scenario_name: str,
         write_error, path = f"{type(exc).__name__}: {exc}", None
 
     if mail is None:
-        return Published(path=path, subject=subject, write_error=write_error)
+        return Published(path=path, subject=subject, write_error=write_error, kept_sent=kept_sent)
 
     full = mail.full_subject(subject)
     if dry_run:
         return Published(path=path, subject=full, write_error=write_error,
-                         preview=mail.preview(full, html))
+                         preview=mail.preview(full, html), kept_sent=kept_sent)
 
     try:
         result = await mail.send(full, html)

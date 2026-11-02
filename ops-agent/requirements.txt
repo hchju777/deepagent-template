@@ -31,3 +31,9 @@ uvloop>=0.19; sys_platform != "win32"
 # 사내 PyPI에 없을 때의 탈출구는 STEPS/decisions.md ①.
 # langchain-core는 7단계에서 이미 들어와 있고, ormsgpack·xxhash가 네이티브 휠이다.
 langgraph>=1.2,<2
+
+# ── 알람 메일 API: 운영 API ──────────────────────────────────────
+# 컨테이너는 uvicorn 하나다(STEPS/plan-alarm-api.md). httpx는 위에서 이미 들어와 있다 —
+# 진단의 LLM 원시 호출과 테스트의 ASGI 클라이언트가 그것을 쓴다.
+fastapi>=0.115,<1
+uvicorn>=0.20

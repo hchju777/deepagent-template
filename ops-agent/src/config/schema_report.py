@@ -227,6 +227,9 @@ class ReportScenario(StrictModel):
     thresholds: Thresholds = Thresholds()
     comment: CommentSpec = CommentSpec()
     schedule: ScheduleSpec = ScheduleSpec()
+    # 출력 보관 — 파일명 날짜 기준 **최근 N개 날짜**의 HTML과 장부만 남긴다(`src/report/retention.py`). 없으면 안 지운다 —
+    # 지우는 쪽이 기본이면 설정을 안 본 배포가 리포트를 잃는다.
+    keep_days: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _thresholds_fit_the_window(self):
