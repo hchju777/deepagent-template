@@ -14,6 +14,14 @@
 
 재시작하면 다시 켜진다. 파일로 남기면 "잠깐 멈춘" 것이 몇 주 뒤까지 남는다 — 멈춘 줄 모르는 상태가 제일 위험하다.
 
+## 실패하면 알린다(`notify.py`)
+
+스케줄 발사가 `failed`·`timeout`이면 같은 발사 안에서 `mail.notify_to`로 한 통을 실행기에 넣는다 — 시나리오마다 달력 하루에
+한 번만 **시도**한다(보내기에 실패해도 그날은 끝 — 자동 재시도 없음). interval 스케줄이 실패를 거듭하면 그만큼 메일이 가기
+때문이다. 기억은 메모리뿐이다: cron 슬롯은 하루 한 번이고 재시작 뒤 그날 슬롯은 건너뛰므로, 잃어도 두 통이 되지 않는다.
+결과(보냄·실패·안 보냄과 이유)는 최근 결과의 `notify`에 남는다 — 알림을 못 보낸 것도 사람이 알아야 한다.
+app.json은 그때 읽는다(시나리오와 달리) — 알림 받을 사람을 고치려고 스케줄을 다시 띄울 필요는 없다.
+
 ## 시나리오는 뜰 때 한 번 읽는다
 
 config가 바뀌면 컨테이너를 다시 띄운다(배포). 돌다가 다시 읽으면 반쯤 고친 파일을 읽는 순간이 생긴다.
@@ -22,9 +30,11 @@ import asyncio
 import contextlib
 from pathlib import Path
 
-from src.config.loader import ConfigError, load_scenarios
+from src.config.loader import ConfigError, load_app_config, load_scenarios
 from src.domain.base import Clock
-from src.presentation.api.jobs import REPORT_S, Job, JobRunner
+from src.presentation.api.jobs import REPORT_S, SHORT_S, Job, JobRunner
+from src.presentation.api.notify import NOTIFY_ON, compose
+from src.presentation.api.sent import report_day
 from src.schedule.runner import Fire, Sleeper, run_all, wait_or_stop
 from src.schedule.runner import Job as ScheduleJob
 
@@ -33,9 +43,10 @@ _STOP_GRACE_S = 5.0
 
 
 class ApiScheduler:
-    def __init__(self, *, config_root: Path, runner: JobRunner, clock: Clock,
+    def __init__(self, *, config_root: Path, runner: JobRunner, clock: Clock, env: dict[str, str] | None = None,
                  sleeper: Sleeper = wait_or_stop):
         self._config_root = config_root
+        self._env = env or {}
         self._runner = runner
         self._clock = clock
         self._sleeper = sleeper
@@ -48,6 +59,7 @@ class ApiScheduler:
         self._pending: dict[str, dict] = {}
         self._last: dict[str, dict] = {}
         self._firing: set[str] = set()
+        self._notified: dict[str, object] = {}         # 시나리오 → 알림을 시도한 날(달력)
 
     # ── 수명 ──────────────────────────────────────────────────────────
 
@@ -118,19 +130,55 @@ class ApiScheduler:
                 job_id = self._runner.new_id()
                 # 계기와 작업 id는 장부에 적힌다 — "오늘 것은 스케줄이 보냈나, 사람이 보냈나"를 장부만 보고 안다.
                 job = await self._submit_when_free(
-                    ["report", "run", "--scenario", name, "--trigger", "schedule", "--job-id", job_id], job_id)
+                    ["report", "run", "--scenario", name, "--trigger", "schedule", "--job-id", job_id], job_id,
+                    timeout_s=REPORT_S)
                 await job.done.wait()
+                notify = await self._notify(name, job) if job.status in NOTIFY_ON else None
             finally:
                 self._firing.discard(name)
             # 상태는 실행기가 종료 코드로 나눈 것 그대로 — ok·warning·already_sent·failed·timeout.
-            self._pending[name] = {"status": job.status, "job_id": job.id, "exit_code": job.exit_code}
+            self._pending[name] = {"status": job.status, "job_id": job.id, "exit_code": job.exit_code,
+                                   "notify": notify}
             return job.status in ("ok", "warning", "already_sent"), \
                 f"작업 {job.id} {job.status} (종료 코드 {job.exit_code})"
         return run
 
-    async def _submit_when_free(self, argv: list[str], job_id: str) -> Job:
+    async def _notify(self, name: str, failed: Job) -> dict:
+        """실패 알림 한 통 — 무엇을 했는지(보냄·실패·안 보냄과 이유)를 돌려준다. **던지지 않는다** — 발사가 죽으면 그 실패의
+        기록까지 사라진다."""
+        try:
+            today = self._clock().date()
+            if self._notified.get(name) == today:
+                return {"status": "skipped", "why": "오늘 이미 알렸다 — 시나리오마다 하루 한 통"}
+            try:
+                mail = load_app_config(self._config_root, env=self._env).mail
+            except Exception as exc:                               # noqa: BLE001
+                return {"status": "failed", "why": f"app.json을 못 읽었다 — {exc}"}
+            if not mail.enabled:
+                # 꺼져 있으면 `mail send`가 건너뛰고도 0으로 끝난다 — '보냈다'로 남으면 거짓말이다.
+                return {"status": "skipped", "why": "mail.enabled=false"}
+            if not mail.notify_to:
+                return {"status": "skipped", "why": "mail.notify_to가 비어 있다"}
+            scenario = self._scenarios[name]
+            subject, body = compose(name=name, scenario=scenario, day=report_day(scenario, failed.started_at.date()),
+                                    job=failed)
+            self._notified[name] = today
+            # `--to`는 config 수신자를 **덮는다** — 실패 알림이 리포트 수신자 전원에게 가지 않는다. 장부는 안 쓴다(`mail send`).
+            argv = ["mail", "send", *[f"--to={address}" for address in mail.notify_to],
+                    f"--subject={subject}", f"--body={body}"]
+            job = await self._submit_when_free(argv, self._runner.new_id(), timeout_s=SHORT_S)
+            await job.done.wait()
+            if job.status == "ok":
+                return {"status": "sent", "to": len(mail.notify_to), "job_id": job.id, "at": self._clock().isoformat()}
+            why = next((line for line in reversed(job.stderr.splitlines()) if line.strip()), "")
+            return {"status": "failed", "to": len(mail.notify_to), "job_id": job.id,
+                    "why": f"{job.status} (종료 코드 {job.exit_code}) — {why}".rstrip(" —")}
+        except Exception as exc:                                   # noqa: BLE001
+            return {"status": "failed", "why": f"{type(exc).__name__}: {exc}"}
+
+    async def _submit_when_free(self, argv: list[str], job_id: str, *, timeout_s: float) -> Job:
         while True:
-            job, busy = self._runner.submit(argv, timeout_s=REPORT_S, job_id=job_id)
+            job, busy = self._runner.submit(argv, timeout_s=timeout_s, job_id=job_id)
             if job is not None:
                 return job
             # 빈 뒤에 사람이 먼저 잡을 수 있다 — 그러면 다시 기다린다.
@@ -142,7 +190,7 @@ class ApiScheduler:
             "status": info.get("status", "ok" if fire.ok else "failed"),
             "scheduled": fire.scheduled.isoformat(), "started": fire.started.isoformat(),
             "took_s": round(fire.took_seconds, 3), "job_id": info.get("job_id"),
-            "exit_code": info.get("exit_code"), "detail": fire.detail}
+            "exit_code": info.get("exit_code"), "detail": fire.detail, "notify": info.get("notify")}
 
     # ── 보기·조작 ──────────────────────────────────────────────────────
 

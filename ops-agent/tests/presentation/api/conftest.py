@@ -200,9 +200,10 @@ class ScriptedRunner(JobRunner):
     가끔 깨졌다(4단계 사내 검증). 여기서는 작업이 이벤트 루프 몇 바퀴 안에 끝난다 — 끝나는 때를 테스트가 정할 수도 있다(`hold`).
     """
 
-    def __init__(self, root: Path, clock, *, exit_code: int = 0, stderr: str = ""):
+    def __init__(self, root: Path, clock, *, exit_code=0, stderr="", timed_out=False):
+        """각 값은 argv를 받는 함수여도 된다 — 리포트는 실패하고 알림 메일은 나가는 식으로 명령마다 다르게."""
         super().__init__(root=root, clock=clock)
-        self._exit_code, self._stderr = exit_code, stderr
+        self._exit_code, self._stderr, self._timed_out = exit_code, stderr, timed_out
         self._held: dict[str, asyncio.Event] = {}
 
     def hold(self, job_id: str) -> None:
@@ -215,10 +216,14 @@ class ScriptedRunner(JobRunner):
     async def _spawn_and_wait(self, job) -> None:
         if job.id in self._held:
             await self._held[job.id].wait()
-        job.exit_code = self._exit_code
+
+        def pick(value):
+            return value(job.argv) if callable(value) else value
+        timed_out = pick(self._timed_out)
+        job.exit_code = -9 if timed_out else pick(self._exit_code)          # 죽인 자식의 종료 코드(POSIX SIGKILL)
         job.stdout = json.dumps({"argv": job.argv}, ensure_ascii=False)
-        job.stderr = self._stderr
-        job.status = status_for(self._exit_code, timed_out=False)
+        job.stderr = pick(self._stderr)
+        job.status = status_for(job.exit_code, timed_out=timed_out)
 
 
 def real_parse(argv: list[str]):

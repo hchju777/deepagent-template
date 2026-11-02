@@ -480,6 +480,62 @@ dry-run·no-mail `report run`이 기준일 HTML을 다시 쓴다 — 그날 장�
 - b) `mail/test`에 `to`를 두 번 주면 FastAPI가 마지막 것만 조용히 썼다 → 422(`loc: [query, to]`, "to는 한 주소만 — 2개를 줬다").
   Swagger의 칸은 문자열 한 칸 그대로, 경로가 같은 이름이 여럿 왔는지 본다(`routes_ops.only_once`). FastAPI 0.115·0.162 둘 다.
 
+## 6단계 — 한 것 (11-02)
+
+회신(11-02) — 정한 것: 대상은 스케줄 실행이 `failed`·`timeout`일 때만(`warning`·`already_sent`는 안 알림). 받는 사람은
+`mail.notify_to` — `recipients` 옆, 지금 수신인과 같은 주소를 **리터럴로**(env 자리 아님, 코드에서 같게 하지 말고 config에 같은 값).
+내용: 시나리오, 기준일, 실패 종류, stderr 끝 30줄, "/jobs/{id} 보고 /report/resend". 하루 한 통, 자동 재시도 없음, 장부 안 씀.
+알림 발송 자체가 실패하면 `GET /schedule` 최근 결과에 남긴다.
+
+**파일**
+
+| | 파일 | 무엇 |
+|---|---|---|
+| A | `src/presentation/api/notify.py` | 언제(`NOTIFY_ON`)와 무엇을(제목·본문) — 순수 함수. stderr 끝 30줄, 줄마다 300자 |
+| A | `src/presentation/api/paths.py` | 경로 접두(`OPS`·`DIAG`)를 한 곳에 — 알림 본문도 같은 접두로 쓴다(assembly는 스케줄러를 import해서 거꾸로는 순환) |
+| M | `src/presentation/api/scheduler.py` | 발사가 `failed`·`timeout`이면 같은 발사 안에서 `_notify` — 결과를 최근 결과의 `notify`에 |
+| M | `src/presentation/api/assembly.py` | 스케줄러에 env(app.json의 `${}` 풀이용), 접두는 `paths`에서 |
+| M | `src/presentation/api/mail_view.py` | `GET /mail/recipients`에 `notify_count`·가린 `notify_to` |
+| M | `src/config/schema_mail.py` | `notify_to: list[str] = []` — 기본 빈 리스트, `recipients`와 같은 주소 규칙. 비면 알리지 않는다(recipients로 안 채운다) |
+| M | `config/app.json` | `"notify_to"`에 `recipients`와 같은 두 주소를 리터럴로. **다른 칸은 그대로** |
+
+**정한 세부**
+
+- 알림은 작업 실행기에 `mail send --to=<notify_to 각각> --subject=… --body=…`로 들어간다 — 발송 호출 자리를 늘리지 않고
+  (`test_publish.py`가 못 박는다), 알림도 `/jobs`에 작업으로 남는다. `--to`는 config 수신자를 덮으므로 리포트 수신자에게 안 간다.
+  `mail send`는 장부를 안 쓴다. 자리는 리포트와 같은 규칙(수동 작업이 돌고 있으면 기다린다), 상한은 180초.
+- 제목 `[운영리포트] [실패 알림] 일일 알람 리포트 2026-10-29(목) — 실패`(또는 `— 시간 초과`).
+- 본문: 시나리오(이름·제목), 기준일, 실패 종류(`실패 — 종료 코드 N` / `시간 초과 — 상한 1800초에 죽였다` / `실패 — 작업을
+  띄우지 못했다`), 작업 id·시작·소요, "할 일: /internal/v1/ops/jobs/{id} 보고 /internal/v1/ops/report/resend (date=…)" +
+  "그날 HTML이 없으면 /report/run (dry_run=false)", stderr 끝 30줄(비었으면 "(비어 있다 — 출력 전체는 /jobs/{id})").
+  stderr에 `to_email : …` 같은 줄이 섞여도 메일 어댑터가 `| `로 무력화한다(진짜 CLI dry-run으로 확인).
+- **하루 한 통 = 시나리오마다 달력 하루에 한 번 시도.** 보내기에 실패해도 그날은 다시 안 보낸다(자동 재시도 없음). 기억은
+  메모리 — cron 슬롯은 하루 한 번이고 재시작 뒤 그날 슬롯은 건너뛰므로 잃어도 두 통이 되지 않는다. interval 스케줄이 실패를
+  거듭할 때 메일 폭주를 막는 자리다. 시나리오가 둘 이상이 되면 각자 한 통.
+- 최근 결과의 `notify`: 알릴 일이 아니면 `null`. 보냈으면 `{"status": "sent", "to": 수, "job_id", "at"}`, 보내기 실패면
+  `{"status": "failed", "to", "job_id", "why": "<상태> (종료 코드) — <stderr 마지막 줄>"}`, 안 보냈으면 `{"status": "skipped",
+  "why": "오늘 이미 알렸다 …" | "mail.enabled=false" | "mail.notify_to가 비어 있다"}`. app.json을 못 읽으면 `failed`와 이유.
+- 사람이 Swagger로 돌린 실행의 실패는 알리지 않는다 — 그 사람이 이미 봤다.
+- app.json은 알릴 때 읽는다(시나리오는 뜰 때 한 번) — 받을 사람을 고치려고 다시 띄울 필요가 없다.
+
+**확인한 것**
+
+- 테스트 추가: 알림 21(`test_notify.py` — 언제·누구에게·무엇을·하루 한 통·재시도 없음·안 보낸 이유·config 규칙·가리기),
+  수신자 보기 1 갱신. `ScriptedRunner`가 명령마다 다른 결과를 낼 수 있게(리포트는 실패, 알림 메일은 성공). 알림 argv는 진짜
+  CLI 파서로 읽고, 진짜 CLI `mail send --dry-run`으로 Agent에 나갈 요청을 눈으로 봤다. 전체 2129 통과, 3.11·FastAPI 0.115도 초록.
+- RED 스윕 13가지 전부 빨개진다(경고도 알림·시간 초과 안 알림·리포트 수신자에게·비면 수신자로 채움·하루 한 통 없음·
+  시도가 아니라 성공으로 셈·꺼짐 안 봄·30줄 아님·긴 줄 안 자름·최근 결과에 안 남김·기준일 대신 돈 날·주소 안 거름·안 가림).
+
+**사내에서 볼 것(평가자)**
+
+0. **사내 app.json에 `notify_to`를 직접 넣는다** — 이 리포의 `config/app.json`을 덮어쓰지 말 것(llm 헤더·`trust_env_proxy` 등 사내 값).
+1. `GET /mail/recipients` → `notify_count`와 가린 `notify_to`.
+2. 스케줄 실패를 만든다(예: 시나리오 범위에 안 닿는 사이트만 두거나 상한을 넘기게) → `notify_to`만 `[실패 알림]` 한 통을 받는지,
+   `GET /schedule`의 `last.notify`가 `sent`인지, `GET /report/sent`에 아무것도 안 생기는지.
+3. 같은 날 다시 실패(interval이나 cron 두 슬롯) → 두 번째는 `skipped`(오늘 이미 알렸다).
+4. `notify_to`를 비우거나 `mail.enabled=false` → `skipped`와 이유. Agent 주소를 틀리게 → `failed`와 이유.
+5. 경고(일부 법인 못 읽음)로 끝난 스케줄 실행 → `last.notify`가 `null`.
+
 ## 요청문의 오타를 이렇게 읽었다
 
 | 원문 | 읽은 뜻 |

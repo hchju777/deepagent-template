@@ -28,7 +28,8 @@ def printed(response) -> list[str]:
 async def test_수신자는_가린_주소와_수만(client):
     response = await client.get(f"{OPS}/mail/recipients")
     assert response.status_code == 200
-    assert response.json() == {"enabled": True, "count": 2, "recipients": ["o***@example.com", "l***@example.com"]}
+    assert response.json() == {"enabled": True, "count": 2, "recipients": ["o***@example.com", "l***@example.com"],
+                               "notify_count": 0, "notify_to": []}
     assert "ops@" not in response.text and "lead@" not in response.text
 
 

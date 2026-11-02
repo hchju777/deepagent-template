@@ -20,6 +20,9 @@ _OBVIOUSLY_BAD = re.compile(r"[\s,;<>]")
 class MailConfig(StrictModel):
     enabled: bool = False
     recipients: list[str] = []
+    # 스케줄 실행이 실패하면 짧은 알림 한 통이 가는 곳(`src/presentation/api/notify.py`). 비면 알리지 않는다 — recipients로
+    # 대신 채우지 않는다: 리포트 수신자(현장)와 실패를 고칠 사람(운영)은 다를 수 있고, 같다면 config에 같은 값을 적는다.
+    notify_to: list[str] = []
     api_base: str = ""
     agent_id: str = ""
     # `${MAIL_AGENT_API_KEY}`로 참조한다. 어댑터가 os.environ을 몰래 읽으면
@@ -30,7 +33,7 @@ class MailConfig(StrictModel):
     timeout_s: float = 60.0
     tls: TlsConfig = TlsConfig()
 
-    @field_validator("recipients")
+    @field_validator("recipients", "notify_to")
     @classmethod
     def _addresses_are_sane(cls, v: list[str]) -> list[str]:
         for address in v:

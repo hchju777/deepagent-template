@@ -12,15 +12,13 @@ from fastapi import FastAPI
 from src.domain.base import Clock
 from src.presentation.api.context import ApiContext
 from src.presentation.api.jobs import JobRunner
+from src.presentation.api.paths import DIAG, OPS
 from src.presentation.api.routes_diag import diag_router
 from src.presentation.api.routes_ops import ops_router
 from src.presentation.api.routes_root import root_router
 from src.presentation.api.scheduler import ApiScheduler
 from src.schedule.runner import wait_or_stop
 
-# 사내 원본과 같은 접두. Ingress 규칙이 이 모양을 본다.
-OPS = "/internal/v1/ops"
-DIAG = f"{OPS}/diag"
 
 
 def create_app(*, root: Path, env: dict[str, str], clock: Clock, build: dict[str, str],
@@ -30,7 +28,7 @@ def create_app(*, root: Path, env: dict[str, str], clock: Clock, build: dict[str
     runner = runner or JobRunner(root=root, clock=clock, python=python)
     ctx = ApiContext(root=root, env=env, clock=clock, build=build, started_at=clock(), runner=runner,
                      site_probes=site_probes, trace_probe=trace_probe, llm_transport=llm_transport,
-                     scheduler=ApiScheduler(config_root=root / "config", runner=runner, clock=clock,
+                     scheduler=ApiScheduler(config_root=root / "config", runner=runner, clock=clock, env=env,
                                             sleeper=sleeper or wait_or_stop))
 
     @contextlib.asynccontextmanager

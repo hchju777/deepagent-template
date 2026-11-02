@@ -15,4 +15,5 @@ def mask_address(address: str) -> str:
 
 def recipients_view(mail: MailConfig) -> dict:
     return {"enabled": mail.enabled, "count": len(mail.recipients),
-            "recipients": [mask_address(address) for address in mail.recipients]}
+            "recipients": [mask_address(address) for address in mail.recipients],
+            "notify_count": len(mail.notify_to), "notify_to": [mask_address(address) for address in mail.notify_to]}
