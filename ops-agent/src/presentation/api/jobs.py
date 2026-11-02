@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.domain.base import Clock
+from src.report import exit_codes
 
 # `src/presentation/api/jobs.py`에서 세 칸 위 — `src/`와 `config/`가 나란히 있는 폴더. 컨테이너에서는 `/`다.
 # cwd를 쓰지 않는다: uvicorn을 어디서 띄웠느냐에 따라 CLI가 엉뚱한 `config/`·`.env`를 읽는다.
@@ -58,6 +59,9 @@ REPORT_S = 1800.0
 KEEP = 50
 # 스트림마다 남길 바이트 상한. 넘으면 **끝을** 남긴다 — 실패의 이유는 보통 마지막 줄에 있다.
 MAX_OUTPUT = 512 * 1024
+# CLI 종료 코드 → 작업 상태. 값의 뜻은 CLI가 정한다(`src/report/exit_codes.py`) — 표에 없는 0이 아닌 코드는 실패.
+# 일부 법인을 못 읽고 나간 리포트가 `failed`로 보이면 사람이 실패와 경고를 못 가른다(11-01 사내 실측).
+_STATUS_BY_EXIT = {exit_codes.OK: "ok", exit_codes.WARNING: "warning", exit_codes.ALREADY_SENT: "already_sent"}
 # 죽인 뒤 파이프가 닫히기를 기다리는 상한. 자식이 손자를 남겼으면 파이프가 안 닫힌다 — 그래도 자리는 비워야 한다.
 _DRAIN_S = 5.0
 
@@ -69,7 +73,7 @@ class Job:
     command: list[str]
     timeout_s: float
     started_at: datetime
-    status: str = "running"            # running | ok | failed | timeout
+    status: str = "running"            # running | ok | warning | already_sent | failed | timeout
     exit_code: int | None = None
     took_s: float | None = None
     stdout: str = ""
@@ -101,6 +105,10 @@ class JobRunner:
         self._current: Job | None = None
         self._tasks: set[asyncio.Task] = set()
 
+    def new_id(self) -> str:
+        """작업 id를 **띄우기 전에** 받는다 — 명령에 `--job-id`로 실어야 하는 경우(장부가 그 id를 적는다)."""
+        return self._new_id()
+
     def command(self, argv: list[str]) -> list[str]:
         return [self._python, "-u", "-m", "src", *argv]
 
@@ -113,19 +121,21 @@ class JobRunner:
     def get(self, job_id: str) -> Job | None:
         return next((job for job in self._jobs if job.id == job_id), None)
 
-    def submit(self, argv: list[str], *, timeout_s: float) -> tuple[Job | None, Job | None]:
+    def submit(self, argv: list[str], *, timeout_s: float, job_id: str | None = None,
+               on_done: Callable[[Job], None] | None = None) -> tuple[Job | None, Job | None]:
         """(띄운 작업, None) 또는 (None, 돌고 있는 작업). **던지지 않는다** — 거절도 값이다.
 
         확인과 자리 잡기 사이에 await가 없다 — 같은 루프의 두 요청이 둘 다 비었다고 보는 틈이 없다.
+        `on_done`은 작업이 끝나면(요청이 이미 202로 돌아갔어도) 한 번 불린다 — 끝났다고 알리기 **전에**.
         """
         busy = self.running()
         if busy is not None:
             return None, busy
-        job = Job(id=self._new_id(), argv=list(argv), command=self.command(argv),
+        job = Job(id=job_id or self._new_id(), argv=list(argv), command=self.command(argv),
                   timeout_s=timeout_s, started_at=self._clock())
         self._jobs.appendleft(job)
         self._current = job
-        task = asyncio.get_running_loop().create_task(self._run(job))
+        task = asyncio.get_running_loop().create_task(self._run(job, on_done))
         self._tasks.add(task)                       # 참조를 안 쥐면 태스크가 GC로 사라질 수 있다
         task.add_done_callback(self._tasks.discard)
         return job, None
@@ -138,7 +148,7 @@ class JobRunner:
             pass
         return job
 
-    async def _run(self, job: Job) -> None:
+    async def _run(self, job: Job, on_done: Callable[[Job], None] | None = None) -> None:
         started = self._ticker()
         try:
             await self._spawn_and_wait(job)
@@ -148,6 +158,11 @@ class JobRunner:
             job.stderr = (job.stderr + f"\n[작업 실행기] {type(exc).__name__}: {exc}").lstrip()
         finally:
             job.took_s = round(self._ticker() - started, 3)
+            if on_done is not None:
+                try:
+                    on_done(job)
+                except Exception as exc:                           # noqa: BLE001
+                    job.stderr += f"\n[작업 실행기] 끝난 뒤 처리 실패 — {type(exc).__name__}: {exc}"
             job.done.set()
 
     async def _spawn_and_wait(self, job: Job) -> None:
@@ -185,7 +200,7 @@ class JobRunner:
         job.exit_code = proc.returncode
         job.stdout = _tail(out, self._max_output)
         job.stderr = _tail(err, self._max_output)
-        job.status = "timeout" if timed_out else ("ok" if proc.returncode == 0 else "failed")
+        job.status = "timeout" if timed_out else _STATUS_BY_EXIT.get(proc.returncode, "failed")
 
 
 async def _kill_tree(proc) -> None:

@@ -202,7 +202,8 @@ def test_명령이_끝까지_돌아간다(echo_config, argv, capsys):
 
     try:
         code = main(["--config-root", str(echo_config), "--env-file", "/dev/null", *argv])
-        assert code in (0, 1)
+        # 3은 경고 — 이 설정엔 mongodb가 없어 `report aggregate`의 법인이 못 읽힘으로 남는다(`src/report/exit_codes.py`).
+        assert code in (0, 1, 3)
     except SystemExit as exit_:
         assert isinstance(exit_.code, (int, str)), f"예상 밖 종료 — {exit_.code!r}"
     out = capsys.readouterr().out
@@ -276,7 +277,8 @@ def test_report_run이_파일을_쓰고_메일은_꺼져_있어서_건너뛴다(
     code = main(["--config-root", str(echo_config), "--env-file", "/dev/null",
                  "report", "run", "--today", "2026-09-07", "--out-dir", str(out_dir)])
     captured = capsys.readouterr()
-    assert code in (0, 1), captured.err
+    # mongodb 설정이 없어 법인을 못 읽었다 — 파일은 나왔으니 실패가 아니라 경고다.
+    assert code == 3, captured.err
 
     written = list(out_dir.glob("*.html"))
     assert written, f"파일이 안 만들어졌다\n{captured.out}\n{captured.err}"

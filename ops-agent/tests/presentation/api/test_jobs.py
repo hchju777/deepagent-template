@@ -53,9 +53,38 @@ async def test_성공하면_ok와_종료코드_0_그리고_stdout(cli_root):
 
 
 async def test_실패하면_failed와_종료코드와_stderr(cli_root):
-    job = await run(runner_for(cli_root), ["exit", "3"])
-    assert (job.status, job.exit_code) == ("failed", 3)
+    job = await run(runner_for(cli_root), ["exit", "5"])
+    assert (job.status, job.exit_code) == ("failed", 5)
     assert "나가는 중" in job.stderr
+
+
+@pytest.mark.parametrize("code,status", [(0, "ok"), (3, "warning"), (4, "already_sent"), (1, "failed"), (2, "failed")])
+async def test_종료_코드를_CLI의_표대로_상태로_나눈다(cli_root, code, status):
+    """일부 법인을 못 읽고 나간 리포트가 `failed`로 보이면 실패와 경고를 못 가른다(사내 11-01). 2는 argparse의 인자 오류다."""
+    job = await run(runner_for(cli_root), ["exit", str(code)])
+    assert (job.status, job.exit_code) == (status, code)
+
+
+async def test_작업_id를_미리_받아_명령에_실을_수_있다(cli_root):
+    runner = runner_for(cli_root)
+    job_id = runner.new_id()
+    job, _ = runner.submit(["echo", "--job-id", job_id], timeout_s=30.0, job_id=job_id)
+    await runner.wait(job, 30)
+    assert job.id == job_id and json.loads(job.stdout)["argv"] == ["echo", "--job-id", job_id]
+
+
+async def test_끝나면_끝났다고_알리기_전에_뒤처리를_부른다(cli_root):
+    """재발송은 202로 먼저 돌아가도 끝난 뒤 장부를 써야 한다 — 기다린 사람이 끝을 보면 장부도 이미 있어야 한다."""
+    runner = runner_for(cli_root)
+    seen = []
+
+    def after(job):
+        seen.append((job.status, job.done.is_set()))
+        raise RuntimeError("뒤처리가 던져도")
+    job, _ = runner.submit(["exit", "0"], timeout_s=30.0, on_done=after)
+    await runner.wait(job, 30)
+    assert seen == [("ok", False)]
+    assert "끝난 뒤 처리 실패 — RuntimeError" in job.stderr and runner.running() is None
 
 
 async def test_시간을_넘기면_죽이고_그때까지의_출력을_남긴다(cli_root, monkeypatch):

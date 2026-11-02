@@ -37,6 +37,18 @@ class ReportAggregateRequest(Wait):
 class ReportRunRequest(ReportAggregateRequest):
     dry_run: bool = Field(default=True, description="기본 true — 나갈 메일만 보여 준다(파일은 쓴다)")
     no_mail: bool = False
+    force: bool = Field(default=False, description="그 기준일 장부가 있어도 보낸다(장부를 덮어쓴다)")
+
+
+class ReportResendRequest(Wait):
+    # 필드 이름을 `date`로 두면 타입 `date`와 부딪힌다(pydantic) — 쿼리 이름은 별칭으로 `date`.
+    day: date = Field(alias="date", description="기준일(YYYY-MM-DD) — output의 `<시나리오>-<기준일>.html`을 그대로 보낸다")
+    scenario: Name | None = None
+    force: bool = Field(default=False, description="그 기준일 장부가 있어도 보낸다(장부를 덮어쓴다)")
+
+
+class ScenarioQuery(StrictModel):
+    scenario: Name | None = None
 
 
 class MailSendRequest(Wait):

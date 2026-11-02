@@ -290,6 +290,55 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
 5. `llm/ask`의 `prompt`가 쿼리라 길이가 URL에 실린다 — 한글 2000자는 인코딩하면 약 18KB다. Ingress의 요청 줄 상한(nginx 기본
   8KB)에 걸리면 414가 난다. 사내 원본도 같은 모양이면 그대로 두고, 긴 질문이 필요하면 알려 달라.
 
+## 3단계 — 한 것 (11-02)
+
+회신(11-02): 정한 것 4 확정 — "이미 보냄"은 전용 종료 코드, 일부 법인을 못 읽고 메일이 나간 것은 성공(경고). `GET /schedule`의
+최근 결과도 성공·실패·이미 보냄·경고를 나눈다. 덧붙인 제안: `GET /schedule`에 오늘 기준일 장부 있음/없음 — 08:00 근처에
+파드가 다시 뜨면 그날 슬롯은 건너뛰어지고 실패 알림도 안 가므로, 사람이 Swagger 한 곳에서 알아채게.
+
+**파일**
+
+| | 파일 | 무엇 |
+|---|---|---|
+| A | `src/report/exit_codes.py` | 0 성공 · 1 실패 · **3 성공-경고** · **4 이미 보냄** (2는 argparse의 인자 오류라 비운다) |
+| A | `src/report/ledger.py` | `output/sent/<시나리오>-<기준일>.json` — 쓰기(임시 파일 → 바꿔 끼우기)·읽기·모아 보기. 깨져도 "있음" |
+| M | `src/report/publish.py` | `subject_for_day`·`report_path` — 재발송이 그날 파일에 원래와 같은 제목을 붙인다 |
+| M | `src/__main__.py` | `report run`: 집계 **전에** 장부를 보고 있으면 4, 실제 발송 뒤 장부, `--force`·`--trigger`·`--job-id`, 종료 코드 표. `report aggregate`: 못 읽은 법인은 3 |
+| M | `src/presentation/api/jobs.py` | 종료 코드 → 상태(ok·warning·already_sent·failed·timeout), 미리 받는 작업 id, 끝난 뒤 처리(`on_done`) |
+| M | `src/presentation/api/scheduler.py` | 발사에 `--trigger schedule --job-id`, 발사 중 표시, 최근 결과는 실행기 상태 그대로 |
+| A | `src/presentation/api/sent.py` | 시나리오 고르기·기준일(CLI와 같은 `build_window`)·오늘 상태 |
+| M | `src/presentation/api/routes_ops.py`, `models.py` | `report/run`의 `force`·409, `report/resend`, `report/sent`, `report/sent/{date}`, `/schedule`의 `today` |
+
+**정한 세부**
+
+- 장부는 `mail.status == "sent"`일 때만 쓴다(꺼짐·실패·dry-run·no-mail은 안 쓴다). 메일은 나갔는데 장부를 못 쓰면 **실패**
+  (다음에 누가 다시 돌리면 두 통이 된다).
+- `report/run`의 409는 **보내는 실행**(dry_run·no_mail 아님)이고 force가 아닐 때만. CLI도 같은 장부를 보고 4로 멈추므로 API의
+  확인은 30분짜리 작업을 안 띄우고 바로 답하려는 것이다.
+- `report/resend`(date — 기준일, scenario, force): 그날 HTML이 없으면 404, `mail.enabled=false`면 409(`mail send`가 건너뛰고도
+  0으로 끝나 그걸 발송으로 알면 안 된다), 장부가 있으면 409. 보낸 뒤 장부는 **API가** 쓴다(작업이 끝날 때 — 202로 먼저
+  돌아갔어도). 쿼리 이름은 `date`(필드는 `day` — pydantic에서 타입 이름과 부딪혀 별칭).
+- `GET /schedule`의 시나리오마다 `today`: `day`(오늘 돌면 쓸 기준일) · `sent` · `ledger` · `slot`(오늘 cron 시각, 주말·interval이면
+  null) · **`missed`** = 슬롯이 지났고 · 장부가 없고 · 오늘 발사 기록이 없고 · 지금 발사 중이 아니고 · 일시정지가 아닐 때.
+  오늘 발사했는데 실패한 것은 `missed`가 아니라 최근 결과의 `failed`다(6단계 알림). 건너뛴 날 다시 보내는 것은 사람이 정한다.
+- 손대지 않은 것: CLI `schedule`(옛 상주 명령)은 장부를 안 본다 — 컨테이너는 API의 스케줄러만 띄운다. `report render`의 종료
+  코드도 그대로(API가 부르지 않는다).
+
+**확인한 것**
+
+- 테스트 추가: 장부 6, CLI 장부·종료 코드 13, API(409·resend·sent·최근 결과 나눔·today) 23, 실행기(종료 코드 표·미리 받는 id·
+  뒤처리 순서) 7. 바뀐 모양에 맞춘 것: 기존 CLI 테스트 둘(못 읽은 법인 → 3), 경로·스케줄 테스트의 argv.
+- RED 스윕 27가지 전부 빨개진다(장부를 안 봄·dry-run도 봄·force 무시·안 씀·실패에도 씀·계기 무시·못 써도 성공·법인 실패를
+  실패로(run·aggregate)·경고를 2로·깨진 장부를 없음으로·돌린 날로·실행기 경고를 실패로·뒤처리 순서·스케줄 계기·API 409 셋·
+  resend 넷·missed 넷·주말 슬롯·API 기준일).
+
+**사내에서 볼 것(평가자)**
+
+1. `report/run`(dry_run=false, 시험 수신인으로) → `output/sent/`에 장부, 다시 누르면 409와 장부, force면 다시 나가고 장부가 바뀐다.
+2. 법인 일부가 안 붙는 날 `report/run`·`report/aggregate` → 작업 상태 `warning`(종료 코드 3), 메일은 나간다.
+3. `report/resend?date=<기준일>` → 그날 HTML이 원래 제목으로 나가고 장부의 계기 `manual`.
+4. 08:00 슬롯이 지난 뒤 파드를 다시 띄우고 `GET /schedule` → 그날 장부가 없으면 `today.missed: true`.
+
 ## 요청문의 오타를 이렇게 읽었다
 
 | 원문 | 읽은 뜻 |

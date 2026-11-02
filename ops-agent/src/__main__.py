@@ -30,6 +30,7 @@
     python -m src report prompt --gbm-only mx    LLM에게 나갈 프롬프트를 그대로 본다
     python -m src report run            집계→HTML→파일→메일. **스케줄에 거는 명령**
     python -m src report run --dry-run  나갈 메일만 보여주고 보내지 않는다
+    python -m src report run --force    그 기준일 장부(output/sent/)가 있어도 다시 보낸다
     python -m src schedule --list       무엇이 언제 도는지 (돌리지는 않는다)
     python -m src schedule              스케줄대로 계속 돈다 (상주 프로세스)
 """
@@ -48,6 +49,7 @@ from src.boot import validate_boot
 from src.config.loader import (ConfigError, load_app_config, load_prompt,
                                load_registry, load_scenarios, load_site_config)
 from src.infrastructure.factory import build_adapters
+from src.report import exit_codes
 
 
 def _out(obj) -> None:
@@ -798,7 +800,8 @@ def cmd_report_aggregate(args, env) -> int:
     _out(fact_sheet(facts))
     # 읽지 못한 법인이 있으면 종료 코드로도 말한다 — 스케줄러가 조용한 실패를
     # 알아챌 수 있는 유일한 신호다.
-    return 1 if facts.unavailable else 0
+    # 숫자는 나왔다 — 못 읽은 법인은 경고다(종료 코드 표는 `src/report/exit_codes.py`).
+    return exit_codes.WARNING if facts.unavailable else exit_codes.OK
 
 
 async def _collect_facts(args, env, scenario):
@@ -2637,11 +2640,30 @@ def cmd_report_run(args, env) -> int:
     from src.report.blocks import build_blocks
     from src.report.publish import publish
 
+    from src.report import ledger
+    from src.report.window import build_window
+
     name, scenario = _pick_scenario(args)
     today = _report_today(args, env)
     if today is None:
         return 1
     args._today = today
+
+    # 장부는 집계·LLM **전에** 본다 — 이미 보낸 날 다시 돌면 LLM 비용만 들고, 보낸 HTML을 다른 숫자로 덮어쓴다.
+    # dry-run·no-mail은 보내지 않으므로 장부를 안 본다.
+    day = build_window(scenario.window, today=today).yesterday
+    out_dir = _output_dir(args, env)
+    sending = not (args.dry_run or args.no_mail)
+    if sending and not args.force and ledger.exists(out_dir, name, day):
+        record, problem = ledger.read(out_dir, name, day)
+        print(f"  시나리오: {name}  ({scenario.title})")
+        print(f"  이미 보냈다 — 기준일 {day} 장부: {ledger.path_for(out_dir, name, day)}")
+        if record is not None:
+            print(f"  {record.sent_at:%Y-%m-%d %H:%M} · {record.trigger} · 수신 {record.recipients}명 · {record.subject}")
+        else:
+            print(f"  ⚠  {problem}", file=sys.stderr)
+        print("  다시 보내려면 --force (같은 날 HTML만 다시 보내려면 API의 /report/resend)")
+        return exit_codes.ALREADY_SENT
 
     facts = _run(_collect_facts(args, env, scenario))
     comments = _run(_comments(args, env, scenario, facts))
@@ -2658,7 +2680,7 @@ def cmd_report_run(args, env) -> int:
     # 제목의 날이 갈라질 수 있다(자정 직전에 돌면 실제로 갈라진다).
     published = _run(publish(
         html, scenario=scenario, scenario_name=name, window=facts.window,
-        output_dir=_output_dir(args, env), mail=mail, clock=_clock(args, env),
+        output_dir=out_dir, mail=mail, clock=_clock(args, env),
         dry_run=args.dry_run))
 
     print(f"  시나리오: {name}  ({scenario.title})")
@@ -2687,11 +2709,23 @@ def cmd_report_run(args, env) -> int:
     if not facts.complete:
         print("  ⚠  표본이 잘렸다 — 본문 숫자는 하한이다", file=sys.stderr)
 
-    # 종료 코드는 스케줄러가 **조용한 실패**를 알아챌 유일한 신호다. 무엇을 1로
-    # 셀지는 "사람이 오늘 봐야 하는가"로 가른다: 파일·발송 실패와 못 읽은 법인은
-    # 리포트 자체가 반쪽이므로 1. 코멘트 실패는 리포트가 이미 나갔고 본문에 그
-    # 자리가 비어 보이므로 경고까지만 — 경보가 잦아지면 아무도 안 본다.
-    return 1 if (published.failed or facts.unavailable) else 0
+    sent = published.mail is not None and published.mail.status == "sent"
+    if sent:
+        problem = ledger.write(out_dir, ledger.SentRecord(
+            scenario=name, day=facts.window.yesterday, sent_at=published.mail.sent_at,
+            subject=published.subject, recipients=len(published.mail.recipients),
+            trigger=args.trigger, job_id=args.job_id))
+        if problem:
+            # 메일은 나갔는데 장부가 없다 — 다음에 누가 다시 돌리면 두 통이 된다. 사람이 봐야 하는 실패다.
+            print(f"  ❌ 메일은 나갔는데 장부를 못 썼다 — {problem}", file=sys.stderr)
+            return exit_codes.FAILED
+
+    # 종료 코드는 스케줄러가 **조용한 실패**를 알아챌 유일한 신호다(표는 `src/report/exit_codes.py`). 파일·발송 실패는
+    # 리포트가 안 나간 것이라 실패. 못 읽은 법인은 리포트는 나갔고 그 법인이 빠진 것이 본문에 보이므로 경고 — 28개 중
+    # 하나는 거의 매일 안 붙어서, 실패로 세면 매일 실패가 된다(11-01 사내 실측). 코멘트 실패는 경고 표시까지만.
+    if published.failed:
+        return exit_codes.FAILED
+    return exit_codes.WARNING if facts.unavailable else exit_codes.OK
 
 
 def _output_dir(args, env) -> Path:
@@ -2901,6 +2935,11 @@ def build_parser() -> argparse.ArgumentParser:
                          help="나갈 요청만 보여주고 보내지 않는다(파일은 쓴다)")
     run_cmd.add_argument("--no-mail", action="store_true",
                          help="메일을 아예 조립하지 않는다 — 파일만 만든다")
+    run_cmd.add_argument("--force", action="store_true",
+                         help="그 기준일 장부(output/sent/)가 있어도 보낸다 — 장부를 덮어쓴다")
+    run_cmd.add_argument("--trigger", choices=("schedule", "manual"), default="manual",
+                         help="장부에 적을 계기(API의 스케줄러가 schedule로 부른다)")
+    run_cmd.add_argument("--job-id", default=None, help="장부에 적을 작업 id(API의 작업 실행기가 넘긴다)")
     run_cmd.set_defaults(run=cmd_report_run)
 
     patrol = sub.add_parser("patrol", help="순찰")

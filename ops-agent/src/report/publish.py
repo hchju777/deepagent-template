@@ -72,9 +72,12 @@ def subject_for(scenario: ReportScenario, window: ReportWindow) -> str:
 
     돌린 날을 쓰면 재실행·지연 실행에서 같은 데이터가 다른 제목으로 두 번 간다.
     """
-    day = window.yesterday
-    return (f"{scenario.title} {day.isoformat()}"
-            f"({WEEKDAY_LABEL[day.weekday()]})")
+    return subject_for_day(scenario, window.yesterday)
+
+
+def subject_for_day(scenario: ReportScenario, day) -> str:
+    """기준일 하나로 — 재발송(`report/resend`)이 그날 파일에 원래와 **같은 제목**을 붙인다."""
+    return f"{scenario.title} {day.isoformat()}({WEEKDAY_LABEL[day.weekday()]})"
 
 
 def output_path(directory: Path, scenario_name: str, window: ReportWindow) -> Path:
@@ -83,7 +86,12 @@ def output_path(directory: Path, scenario_name: str, window: ReportWindow) -> Pa
     기준일을 파일 이름에 넣는 이유: 매일 덮어쓰면 "어제 리포트를 다시 보고 싶다"가
     불가능해진다. 정렬도 날짜순으로 맞는다.
     """
-    return directory / f"{scenario_name}-{window.yesterday.isoformat()}.html"
+    return report_path(directory, scenario_name, window.yesterday)
+
+
+def report_path(directory: Path, scenario_name: str, day) -> Path:
+    """기준일 하나로 — 재발송이 그날 파일을 같은 규칙으로 찾는다."""
+    return directory / f"{scenario_name}-{day.isoformat()}.html"
 
 
 async def publish(html: str, *, scenario: ReportScenario, scenario_name: str,

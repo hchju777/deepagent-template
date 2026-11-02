@@ -49,7 +49,8 @@ async def test_시각이_되면_report_run_시나리오를_작업_실행기에_�
         fake.wake()
         await until(lambda: len(fake.asked) == 2)
         [job] = app.state.ctx.runner.recent()
-        assert job.argv == ["report", "run", "--scenario", "daily-alarm"]
+        # 계기와 작업 id가 장부에 적힌다 — 작업 id는 이 작업 자신의 것이다.
+        assert job.argv == ["report", "run", "--scenario", "daily-alarm", "--trigger", "schedule", "--job-id", job.id]
         assert json.loads(job.stdout)["argv"] == job.argv       # 진짜 하위 프로세스로 나갔다
         assert job.timeout_s == REPORT_S
         last = (await schedule_row(c))["last"]
@@ -84,7 +85,7 @@ async def test_수동_작업이_돌고_있으면_끝날_때까지_기다렸다_�
         await until(lambda: len(fake.asked) == 2, timeout=20)
         scheduled, first = runner.recent()
         assert first is manual and manual.status == "ok"           # 수동은 끝까지 돌았다(스케줄이 끊지 않았다)
-        assert scheduled.argv == ["report", "run", "--scenario", "daily-alarm"] and scheduled.status == "ok"
+        assert scheduled.argv[:4] == ["report", "run", "--scenario", "daily-alarm"] and scheduled.status == "ok"
         assert (await schedule_row(c))["last"]["job_id"] == scheduled.id
 
 

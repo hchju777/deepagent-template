@@ -47,6 +47,7 @@ class ApiScheduler:
         self._anchor = None
         self._pending: dict[str, dict] = {}
         self._last: dict[str, dict] = {}
+        self._firing: set[str] = set()
 
     # ── 수명 ──────────────────────────────────────────────────────────
 
@@ -112,15 +113,24 @@ class ApiScheduler:
             if self._paused:
                 self._pending[name] = {"status": "paused"}
                 return True, "일시정지 중 — 건너뛰었다"
-            job = await self._submit_when_free(["report", "run", "--scenario", name])
-            await job.done.wait()
+            self._firing.add(name)
+            try:
+                job_id = self._runner.new_id()
+                # 계기와 작업 id는 장부에 적힌다 — "오늘 것은 스케줄이 보냈나, 사람이 보냈나"를 장부만 보고 안다.
+                job = await self._submit_when_free(
+                    ["report", "run", "--scenario", name, "--trigger", "schedule", "--job-id", job_id], job_id)
+                await job.done.wait()
+            finally:
+                self._firing.discard(name)
+            # 상태는 실행기가 종료 코드로 나눈 것 그대로 — ok·warning·already_sent·failed·timeout.
             self._pending[name] = {"status": job.status, "job_id": job.id, "exit_code": job.exit_code}
-            return job.status == "ok", f"작업 {job.id} {job.status} (종료 코드 {job.exit_code})"
+            return job.status in ("ok", "warning", "already_sent"), \
+                f"작업 {job.id} {job.status} (종료 코드 {job.exit_code})"
         return run
 
-    async def _submit_when_free(self, argv: list[str]) -> Job:
+    async def _submit_when_free(self, argv: list[str], job_id: str) -> Job:
         while True:
-            job, busy = self._runner.submit(argv, timeout_s=REPORT_S)
+            job, busy = self._runner.submit(argv, timeout_s=REPORT_S, job_id=job_id)
             if job is not None:
                 return job
             # 빈 뒤에 사람이 먼저 잡을 수 있다 — 그러면 다시 기다린다.
@@ -139,6 +149,16 @@ class ApiScheduler:
     @property
     def paused(self) -> bool:
         return self._paused
+
+    @property
+    def scenarios(self) -> dict:
+        return dict(self._scenarios)
+
+    def last(self, name: str) -> dict | None:
+        return self._last.get(name)
+
+    def firing(self, name: str) -> bool:
+        return name in self._firing
 
     def pause(self) -> None:
         self._paused = True

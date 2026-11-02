@@ -56,6 +56,9 @@ CASES = [
 async def test_경로마다_나가는_명령과_시간_상한(client, path, body, argv, timeout_s):
     response = await post(client, path, body)
     assert response.status_code == 200, response.text
+    if path.endswith("/report/run"):
+        # 장부에 적을 계기와 작업 id — 작업 id는 응답의 그 작업이다.
+        argv = argv + ["--trigger", "manual", "--job-id", response.json()["id"]]
     assert printed(response) == argv
     assert response.json()["timeout_s"] == timeout_s
     parse_args(argv)                                  # 진짜 CLI가 받아들인다(SystemExit이면 실패)
@@ -203,6 +206,7 @@ def test_Swagger에_경로가_전부_있다(app):
         ("GET", f"{OPS}/schedule"), ("POST", f"{OPS}/schedule/pause"), ("POST", f"{OPS}/schedule/resume"),
         ("POST", f"{OPS}/schedule/list"),
         ("POST", f"{OPS}/report/aggregate"), ("POST", f"{OPS}/report/run"),
+        ("POST", f"{OPS}/report/resend"), ("GET", f"{OPS}/report/sent"), ("GET", f"{OPS}/report/sent/{{day}}"),
         ("POST", f"{OPS}/mail/describe"), ("POST", f"{OPS}/mail/send"),
         ("GET", f"{OPS}/output"), ("GET", f"{OPS}/output/{{name}}"),
         ("POST", f"{DIAG}/boot"), ("POST", f"{DIAG}/doctor"), ("POST", f"{DIAG}/doctor/all"),
@@ -222,7 +226,8 @@ def test_POST의_입력은_본문이_아니라_쿼리_칸이다(app):
     def params(path):
         return {p["name"]: p for p in paths[path]["post"]["parameters"]}
     run = params(f"{OPS}/report/run")
-    assert set(run) == {"wait_s", "scenario", "today", "dry_run", "no_mail"}
+    assert set(run) == {"wait_s", "scenario", "today", "dry_run", "no_mail", "force"}
+    assert run["force"]["schema"]["type"] == "boolean" and run["force"]["schema"]["default"] is False
     assert all(p["in"] == "query" for p in run.values())
     assert run["dry_run"]["schema"]["type"] == "boolean" and run["dry_run"]["schema"]["default"] is True
     send = params(f"{OPS}/mail/send")
@@ -234,7 +239,7 @@ async def test_JSON_본문은_읽지_않는다_안전한_쪽으로_틀린다(cli
     """본문에 `dry_run: false`를 실어도 기본값(true)으로 돈다 — 본문을 읽던 옛 호출이 발송으로 바뀌지 않는다."""
     response = await client.post(f"{OPS}/report/run", json={"dry_run": False})
     assert response.status_code == 200
-    assert printed(response) == ["report", "run", "--dry-run"]
+    assert printed(response)[:3] == ["report", "run", "--dry-run"]
 
 
 async def test_to가_틀리면_이유를_한_번만_말한다(client):
