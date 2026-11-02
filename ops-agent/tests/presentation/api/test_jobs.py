@@ -58,14 +58,24 @@ async def test_실패하면_failed와_종료코드와_stderr(cli_root):
     assert "나가는 중" in job.stderr
 
 
-async def test_시간을_넘기면_죽이고_그때까지의_출력을_남긴다(cli_root):
-    job = await run(runner_for(cli_root), ["sleep", "30"], timeout_s=1.0)
-    assert job.status == "timeout"
-    assert job.exit_code is not None and job.exit_code != 0
+async def test_시간을_넘기면_죽이고_그때까지의_출력을_남긴다(cli_root, monkeypatch):
+    """상한은 **자식이 뜨고 첫 줄을 찍는 시간보다 길어야** 한다 — 아니면 찍기 전에 죽어 이 시험이 아무것도 못 본다. 사내 PC
+    (Windows venv)에서 1초로는 stdout이 비었다(11-02). 이 기계에서 자식이 뜨는 데 걸리는 시간을 먼저 재서 그 몇 배로 잡는다.
+
+    `PYTHONUNBUFFERED`를 지운다 — 개발 컨테이너에 전역으로 걸려 있어, 있으면 `-u`가 없어도 출력이 안 사라져 이 시험이
+    `-u`를 못 본다(그렇게 한동안 초록이었다). 실행기는 자식에게 os.environ을 그대로 넘긴다."""
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    runner = runner_for(cli_root)
+    startup = (await run(runner, ["hangul"])).took_s
+    limit = max(1.0, round(startup * 3 + 0.5, 1))
+    job = await run(runner, ["sleep", "30"], timeout_s=limit)
+    seen = f"기동 {startup:.2f}초 · 상한 {limit:g}초 · stdout={job.stdout!r} · stderr={job.stderr!r}"
+    assert job.status == "timeout", seen
+    assert job.exit_code is not None and job.exit_code != 0, seen
     # flush 없이 찍은 줄이다 — `-u`가 아니면 버퍼째 사라진다.
-    assert "시작" in job.stdout and "끝" not in job.stdout
-    assert "에러 줄" in job.stderr
-    assert job.took_s < 10
+    assert "시작" in job.stdout and "끝" not in job.stdout, seen
+    assert "에러 줄" in job.stderr, seen
+    assert job.took_s < limit + 10, seen
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="운영(Linux)의 성질이다 — Windows는 자식만 죽인다(jobs.py docstring)")
