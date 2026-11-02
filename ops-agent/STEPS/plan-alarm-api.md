@@ -389,6 +389,45 @@ docker build --build-arg BUILD_COMMIT="$(git rev-parse --short HEAD)" \
 3. `report run`(dry_run이어도 파일은 쓴다) 뒤 오래된 날짜가 정리되는지.
 4. 오늘 슬롯이 지난 뒤 파드를 다시 띄우고 `GET /schedule` → `today.started_after_slot: true`와 `note`.
 
+## 4단계 보완 (11-02 — 4단계 검증 회신)
+
+회신: 808 통과. 실패 2건은 `test_sent.py`의 `스케줄_최근_결과는_…_나눈다[3-warning]`·`[4-already_sent]` — "기다린 조건이 안
+섰다"(`until` 10초), 기계가 바쁠 때만(따로 돌리면 3/3). 하위 프로세스를 벽시계 10초로 기다리지 않게. 보완 제안(3단계부터):
+dry-run·no-mail `report run`이 기준일 HTML을 다시 쓴다 — 그날 장부가 있으면 실제로 나간 HTML이 덮이고 resend가 다른 HTML을 보낸다.
+
+**1) 스케줄 테스트가 프로세스를 안 띄운다**
+
+- 원인: 스케줄 발사 → 진짜 `python -u -m src` 기동 → 끝을 `until`(벽시계 10초)로 기다렸다. 바쁜 PC에서 파이썬 기동이 그보다 길었다.
+- `tests/presentation/api/conftest.py`에 `ScriptedRunner` — 진짜 `JobRunner`를 상속하고 OS 프로세스 띄우기만 바꿨다. 자리(409)·
+  `on_done`·종료 코드→상태 표(`jobs.status_for`로 뽑아 냄)는 진짜다. `hold`/`release`로 "수동 작업이 자리를 쥔 동안"을
+  벽시계(전에는 `sleep 1` 프로세스) 없이 만든다.
+- 바꾼 테스트: `test_sent.py`의 그 셋과 `오늘_발사했으면…`, `test_scheduler.py`의 프로세스를 기다리던 일곱. 발사 명령은
+  진짜 프로세스의 echo 대신 **진짜 CLI 파서**(`real_parse`)가 받아들이는지로 본다. 프로세스 경계 자체는 `test_jobs.py`가 그대로 진짜로 본다.
+- "내릴 때 빨리 내린다"는 1.4초 벽시계 비교 대신, **풀어 주기 전엔 안 끝나는** 수동 작업을 두고 내려온다는 것으로 본다.
+
+**2) 장부가 있는 날의 안 보내는 실행은 `.preview.html`로**
+
+- `publish()`(발행 조립의 한 곳)가 정한다: 메일을 안 보내는 실행(dry-run·no-mail)이고 그 기준일 장부가 있으면
+  `<시나리오>-<기준일>.preview.html`에 쓰고, 보낸 HTML은 그대로 둔다. 출력에 "그날 장부가 있어 보낸 HTML(…)은 덮지 않았다".
+- 쓰지 않는 대신 다른 이름을 고른 이유: dry-run의 목적이 나갈 본문을 눈으로 보는 것이라(기존 계약) 볼 것은 남아야 한다.
+- 보내는 실행(`--force`)은 원래 이름에 쓴다 — 새로 보낸 것이 그날의 HTML이어야 resend가 맞다. 장부가 없는 날은 전과 같다.
+- 보관 정리(`keep_days`)가 `.preview.html`도 같은 날짜로 함께 지운다 — Swagger의 `report/run`은 dry-run이 기본이라 빼 두면 쌓인다.
+- 장부 확인이 OSError면 "있다"로 본다 — 미리보기는 지우면 그만이지만 덮인 보낸 HTML은 못 되돌린다.
+
+**확인한 것**
+
+- 테스트 추가: publish 4, CLI 2, 보관 1곳 확장. 바꾼 테스트 11개(파라미터 포함)는 하위 프로세스 0번(세어 봤다), 코어 수×3개의 CPU
+  부하 아래서 5회 연속 초록. 전체 2084 통과, 3.11·FastAPI 0.115도 초록.
+- RED 스윕 10가지 전부 빨개진다(장부 있어도 같은 이름·보내는 실행도 미리보기·장부 안 보고 미리보기·no-mail 빠뜨림·
+  설명 없음·보관에서 미리보기 빠짐·경고를 실패로·이미 보냄을 실패로·내릴 때 끝까지 기다림·찬 자리를 제 것으로).
+
+**사내에서 볼 것(평가자)**
+
+1. 전체 테스트를 바쁜 상태에서 — `test_sent.py`·`test_scheduler.py`가 더는 흔들리지 않는지.
+2. 장부가 있는 기준일에 `report/run`(기본 dry-run) → `<기준일>.html`은 그대로, `<기준일>.preview.html`이 생기고 출력에 "덮지 않았다".
+   이어서 `report/resend`(force) → 원래 HTML이 나가는지.
+3. `no_mail=true`도 같은지. `keep_days`가 있으면 오래된 날짜의 `.preview.html`도 정리되는지.
+
 ## 요청문의 오타를 이렇게 읽었다
 
 | 원문 | 읽은 뜻 |

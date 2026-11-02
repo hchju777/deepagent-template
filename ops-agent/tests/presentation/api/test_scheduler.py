@@ -6,13 +6,13 @@
 """
 import asyncio
 import json
-import time
 from datetime import datetime
 
 from src.presentation.api.assembly import DIAG, OPS
 from src.presentation.api.jobs import REPORT_S
 
-from tests.presentation.api.conftest import KST, NOW, SCENARIO, FakeTime, make_app, serve, until
+from tests.presentation.api.conftest import (KST, NOW, SCENARIO, FakeTime, ScriptedRunner, make_app, real_parse, serve,
+                                             until)
 
 MON_08 = datetime(2026, 11, 2, 8, 0, tzinfo=KST)        # NOW(금 09:00) 다음 평일 08:00
 TUE_08 = datetime(2026, 11, 3, 8, 0, tzinfo=KST)
@@ -21,6 +21,8 @@ THU_08 = datetime(2026, 11, 5, 8, 0, tzinfo=KST)
 
 
 def scheduled_app(cli_root, fake, **kwargs):
+    """작업은 하위 프로세스 없이 끝난다(`ScriptedRunner`) — 여기서 보는 것은 발사와 자리 다툼이다."""
+    kwargs.setdefault("runner", ScriptedRunner(cli_root, fake.clock))
     return make_app(cli_root, clock=fake.clock, sleeper=fake.sleeper, **kwargs)
 
 
@@ -51,7 +53,7 @@ async def test_시각이_되면_report_run_시나리오를_작업_실행기에_�
         [job] = app.state.ctx.runner.recent()
         # 계기와 작업 id가 장부에 적힌다 — 작업 id는 이 작업 자신의 것이다.
         assert job.argv == ["report", "run", "--scenario", "daily-alarm", "--trigger", "schedule", "--job-id", job.id]
-        assert json.loads(job.stdout)["argv"] == job.argv       # 진짜 하위 프로세스로 나갔다
+        real_parse(job.argv)                                    # 진짜 CLI가 받아들이는 명령이다
         assert job.timeout_s == REPORT_S
         last = (await schedule_row(c))["last"]
         assert {k: last[k] for k in ("status", "scheduled", "started", "job_id", "exit_code")} == {
@@ -80,9 +82,14 @@ async def test_수동_작업이_돌고_있으면_끝날_때까지_기다렸다_�
     runner = app.state.ctx.runner
     async with serve(app) as c:
         await until(lambda: len(fake.asked) == 1)
-        manual, _ = runner.submit(["sleep", "1"], timeout_s=10.0)
+        runner.hold("manual")
+        manual, _ = runner.submit(["diag", "boot"], timeout_s=10.0, job_id="manual")
         fake.wake()
-        await until(lambda: len(fake.asked) == 2, timeout=20)
+        await until(lambda: app.state.ctx.scheduler.firing("daily-alarm"))
+        await settle()
+        assert runner.recent() == [manual] and len(fake.asked) == 1   # 발사했지만 자리가 빌 때까지 안 들어갔다
+        runner.release("manual")
+        await until(lambda: len(fake.asked) == 2)
         scheduled, first = runner.recent()
         assert first is manual and manual.status == "ok"           # 수동은 끝까지 돌았다(스케줄이 끊지 않았다)
         assert scheduled.argv[:4] == ["report", "run", "--scenario", "daily-alarm"] and scheduled.status == "ok"
@@ -95,11 +102,14 @@ async def test_스케줄이_기다리는_동안_사람_요청은_여전히_409(c
     runner = app.state.ctx.runner
     async with serve(app) as c:
         await until(lambda: len(fake.asked) == 1)
-        manual, _ = runner.submit(["sleep", "1"], timeout_s=10.0)
+        runner.hold("manual")
+        manual, _ = runner.submit(["diag", "boot"], timeout_s=10.0, job_id="manual")
         fake.wake()
+        await until(lambda: app.state.ctx.scheduler.firing("daily-alarm"))
         response = await c.post(f"{DIAG}/boot", params={"wait_s": 0})
         assert response.status_code == 409 and response.json()["running"]["id"] == manual.id
-        await until(lambda: len(fake.asked) == 2, timeout=20)
+        runner.release("manual")
+        await until(lambda: len(fake.asked) == 2)
 
 
 async def test_일시정지면_건너뛰고_재개하면_다시_돈다(cli_root):
@@ -137,10 +147,8 @@ async def test_일시정지는_메모리뿐이라_다시_뜨면_켜진다(cli_ro
 
 
 async def test_실패한_작업은_실패로_남는다(cli_root):
-    (cli_root / "src" / "__main__.py").write_text(
-        "import sys\nprint('집계 실패', file=sys.stderr)\nsys.exit(1)\n", encoding="utf-8")
     fake = FakeTime(NOW)
-    app = scheduled_app(cli_root, fake)
+    app = scheduled_app(cli_root, fake, runner=ScriptedRunner(cli_root, fake.clock, exit_code=1, stderr="집계 실패"))
     async with serve(app) as c:
         await until(lambda: len(fake.asked) == 1)
         fake.wake()
@@ -171,18 +179,25 @@ async def test_내릴_때_리포트를_기다리는_중이어도_빨리_내린�
     fake = FakeTime(NOW)
     app = scheduled_app(cli_root, fake)
     runner = app.state.ctx.runner
-    started = time.monotonic()
-    async with serve(app):
-        await until(lambda: len(fake.asked) == 1)
-        manual, _ = runner.submit(["sleep", "30"], timeout_s=1.5)
-        fake.wake()
-        await until(lambda: not fake._jumps)                     # 깼다 — 이제 자리가 비기를 기다린다
-        await asyncio.sleep(0.1)
-    assert time.monotonic() - started < 1.4                      # 수동 작업(1.5초 상한)이 끝나기 전에 내려왔다
+
+    async def up_and_down():
+        async with serve(app):
+            await until(lambda: len(fake.asked) == 1)
+            runner.hold("manual")
+            runner.submit(["diag", "boot"], timeout_s=10.0, job_id="manual")
+            fake.wake()
+            await until(lambda: app.state.ctx.scheduler.firing("daily-alarm"))   # 깼다 — 이제 자리가 비기를 기다린다
+            await settle()
+
+    # 수동 작업은 풀어 주기 전엔 안 끝난다 — 내리기가 그것을 기다렸다면 여기서 걸린다.
+    await asyncio.wait_for(up_and_down(), 5)
+    manual = runner.get("manual")
     assert app.state.ctx.scheduler._task.cancelled()             # 기다리던 중이었다 — 스스로 끝난 게 아니라 끊었다
     assert runner.recent() == [manual]                           # 스케줄 작업은 안 들어갔다
-    await runner.wait(manual, 10)
-    assert manual.status == "timeout"
+    assert not manual.finished                                   # 기다리던 작업을 같이 죽이지 않았다
+    runner.release("manual")
+    await runner.wait(manual, 5)
+    assert manual.status == "ok"
 
 
 async def test_루프가_죽으면_ready가_503이고_이유를_말한다(cli_root):

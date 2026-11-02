@@ -36,8 +36,9 @@ class ReportAggregateRequest(Wait):
 
 
 class ReportRunRequest(ReportAggregateRequest):
-    dry_run: bool = Field(default=True, description="기본 true — 나갈 메일만 보여 준다(파일은 쓴다)")
-    no_mail: bool = False
+    dry_run: bool = Field(default=True, description="기본 true — 나갈 메일만 보여 준다(파일은 쓴다). "
+                                                    "그 기준일 장부가 있으면 .preview.html로 쓴다 — 보낸 HTML을 덮지 않는다")
+    no_mail: bool = Field(default=False, description="메일 없이 파일만. 장부가 있는 날이면 dry_run과 같이 .preview.html로")
     force: bool = Field(default=False, description="그 기준일 장부가 있어도 보낸다(장부를 덮어쓴다)")
 
 

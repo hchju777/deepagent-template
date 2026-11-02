@@ -200,7 +200,11 @@ class JobRunner:
         job.exit_code = proc.returncode
         job.stdout = _tail(out, self._max_output)
         job.stderr = _tail(err, self._max_output)
-        job.status = "timeout" if timed_out else _STATUS_BY_EXIT.get(proc.returncode, "failed")
+        job.status = status_for(proc.returncode, timed_out=timed_out)
+
+
+def status_for(returncode: int | None, *, timed_out: bool) -> str:
+    return "timeout" if timed_out else _STATUS_BY_EXIT.get(returncode, "failed")
 
 
 async def _kill_tree(proc) -> None:

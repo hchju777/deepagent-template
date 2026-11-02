@@ -16,6 +16,8 @@ def fill(out):
         touch(out / f"daily-alarm-{day}.html")
     for day in ("2026-10-29", "2026-10-30", "2026-11-02"):
         touch(out / "sent" / f"daily-alarm-{day}.json")
+    for day in ("2026-10-30", "2026-11-02"):
+        touch(out / f"daily-alarm-{day}.preview.html")          # 장부가 있는 날의 안 보내는 실행
     # 건드리면 안 되는 것들
     touch(out / "cases.json")
     touch(out / "report.html")
@@ -48,10 +50,12 @@ def test_이름_규칙에_정확히_맞는_것만_보고_나머지는_손대지_
     retention.apply(retention.plan(tmp_path, "daily-alarm", 1))
     for kept in ("cases.json", "report.html", "graph/mx/flow.html", "traces/case-1/summary.md",
                  "daily-2026-10-01.html", "daily-alarm-2026-13-40.html", "daily-alarm-2026-10-01.html.bak",
-                 "daily-alarm-2026-11-02.html", "sent/daily-alarm-2026-11-02.json"):
+                 "daily-alarm-2026-11-02.html", "sent/daily-alarm-2026-11-02.json",
+                 "daily-alarm-2026-11-02.preview.html"):
         assert (tmp_path / kept).exists(), kept
     assert not (tmp_path / "daily-alarm-2026-10-30.html").exists()
     assert not (tmp_path / "sent" / "daily-alarm-2026-10-30.json").exists()
+    assert not (tmp_path / "daily-alarm-2026-10-30.preview.html").exists()      # 미리보기도 같은 날짜로 함께
 
 
 def test_keep_days가_없으면_아무것도_안_지운다(tmp_path):

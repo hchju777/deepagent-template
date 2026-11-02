@@ -11,6 +11,9 @@ output 폴더에는 다른 것도 산다 — `graph/`(흐름 그래프), `traces
 (`<시나리오>-<YYYY-MM-DD>.html`, `sent/<시나리오>-<YYYY-MM-DD>.json`)에 **정확히** 맞는 파일만 본다 — 앞이 같은 다른
 시나리오(`daily`와 `daily-alarm`)도 안 섞인다. HTML과 장부는 같은 날짜로 함께 남고 함께 지운다.
 
+`<시나리오>-<YYYY-MM-DD>.preview.html`(장부가 있는 날의 안 보내는 실행이 쓴 것, `publish.py`)도 같은 시나리오의 HTML이라
+같은 날짜로 함께 지운다 — Swagger의 `report/run`은 dry-run이 기본이라, 빼 두면 누를 때마다 쌓인다.
+
 ## 방금 쓴 날은 안 지운다
 
 `report run --today`로 옛 날을 다시 만들면 그 날이 최근 N개 밖이라 쓰자마자 지워진다. 방금 쓴 날은 남긴다(`keep_also`).
@@ -27,7 +30,7 @@ from src.report.ledger import SENT_DIR
 class Item:
     path: Path
     day: date
-    kind: str                # "html" | "ledger"
+    kind: str                # "html" | "preview" | "ledger"
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,7 @@ def _dated(directory: Path, scenario: str, suffix: str, kind: str) -> list[Item]
 def plan(output_dir: Path, scenario: str, keep_days: int | None, *, keep_also: date | None = None) -> Plan:
     """무엇을 남기고 무엇을 지울지 — **지우지 않는다**. `keep_days`가 없으면 아무것도 안 지운다."""
     items = (_dated(output_dir, scenario, ".html", "html")
+             + _dated(output_dir, scenario, ".preview.html", "preview")
              + _dated(output_dir / SENT_DIR, scenario, ".json", "ledger"))
     days = sorted({item.day for item in items}, reverse=True)
     if keep_days is None:

@@ -7,6 +7,9 @@
 `<tmp>/src/__main__.py`를 진짜로 두고 `python -u -m src`가 그것을 찾게 한다 — 모양이 실물과 같다.
 
 가짜 CLI는 받은 argv를 JSON으로 그대로 찍는다. 경로 테스트는 그 줄로 "어떤 명령이 나갔는가"를 본다.
+
+예외는 스케줄러 테스트다(`ScriptedRunner`) — 거기서 보는 것은 발사 시각과 자리 다툼이지 프로세스 경계가 아니고, 진짜
+프로세스를 벽시계로 기다리면 바쁜 기계에서 깨진다.
 """
 import asyncio
 import contextlib
@@ -17,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+
+from src.presentation.api.jobs import JobRunner, status_for
 
 FAKE_MAIN = '''\
 import json, os, sys, time
@@ -185,6 +190,35 @@ class FakeTime:
             return True
         self.now = self._jumps.pop(0) or target
         return stop.is_set()
+
+
+class ScriptedRunner(JobRunner):
+    """하위 프로세스를 띄우지 않는 작업 실행기 — 스케줄러 테스트용. 자리(409)·`on_done`·종료 코드→상태 표는 진짜
+    `JobRunner`의 것이고, OS 프로세스만 없다. 프로세스를 띄우는 것 자체는 `test_jobs.py`가 진짜로 본다.
+
+    바쁜 사내 PC에서 파이썬 기동이 수 초씩 걸려, 발사 → 작업 끝을 벽시계 상한(`until` 10초)으로 기다리던 테스트가
+    가끔 깨졌다(4단계 사내 검증). 여기서는 작업이 이벤트 루프 몇 바퀴 안에 끝난다 — 끝나는 때를 테스트가 정할 수도 있다(`hold`).
+    """
+
+    def __init__(self, root: Path, clock, *, exit_code: int = 0, stderr: str = ""):
+        super().__init__(root=root, clock=clock)
+        self._exit_code, self._stderr = exit_code, stderr
+        self._held: dict[str, asyncio.Event] = {}
+
+    def hold(self, job_id: str) -> None:
+        """그 id의 작업은 `release`까지 '돌고 있다' — 수동 작업이 자리를 쥔 동안을 벽시계 없이 만든다."""
+        self._held[job_id] = asyncio.Event()
+
+    def release(self, job_id: str) -> None:
+        self._held[job_id].set()
+
+    async def _spawn_and_wait(self, job) -> None:
+        if job.id in self._held:
+            await self._held[job.id].wait()
+        job.exit_code = self._exit_code
+        job.stdout = json.dumps({"argv": job.argv}, ensure_ascii=False)
+        job.stderr = self._stderr
+        job.status = status_for(self._exit_code, timed_out=False)
 
 
 def real_parse(argv: list[str]):

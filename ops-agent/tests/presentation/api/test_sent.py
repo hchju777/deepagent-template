@@ -10,7 +10,8 @@ import pytest
 from src.presentation.api.assembly import OPS
 from src.report import ledger
 
-from tests.presentation.api.conftest import KST, NOW, SCENARIO, FakeTime, make_app, real_parse, serve, until
+from tests.presentation.api.conftest import (KST, NOW, SCENARIO, FakeTime, ScriptedRunner, make_app, real_parse, serve,
+                                             until)
 
 THU = date(2026, 10, 29)                 # NOW(금)의 기준일
 FRI = date(2026, 10, 30)
@@ -148,9 +149,9 @@ async def test_장부_목록과_하루(client, cli_root):
 
 @pytest.mark.parametrize("code,status", [(3, "warning"), (4, "already_sent"), (1, "failed")])
 async def test_스케줄_최근_결과는_성공_경고_이미보냄_실패를_나눈다(cli_root, code, status):
-    fail_cli(cli_root, code)
     fake = FakeTime(datetime(2026, 10, 30, 7, 0, tzinfo=KST))
-    app = make_app(cli_root, clock=fake.clock, sleeper=fake.sleeper)
+    app = make_app(cli_root, clock=fake.clock, sleeper=fake.sleeper,
+                   runner=ScriptedRunner(cli_root, fake.clock, exit_code=code))
     async with serve(app) as c:
         await until(lambda: len(fake.asked) == 1)
         fake.wake()
@@ -210,9 +211,9 @@ async def test_주말엔_슬롯이_없다(cli_root):
 
 async def test_오늘_발사했으면_장부가_없어도_missed가_아니다_결과가_말한다(cli_root):
     """실패한 발사는 최근 결과에 `failed`로 남는다(6단계에서 알림) — 건너뛴 것과 다르다."""
-    fail_cli(cli_root, 1)
     fake = FakeTime(datetime(2026, 10, 30, 7, 0, tzinfo=KST))
-    app = make_app(cli_root, clock=fake.clock, sleeper=fake.sleeper)
+    app = make_app(cli_root, clock=fake.clock, sleeper=fake.sleeper,
+                   runner=ScriptedRunner(cli_root, fake.clock, exit_code=1))
     async with serve(app) as c:
         await until(lambda: len(fake.asked) == 1)
         fake.wake()

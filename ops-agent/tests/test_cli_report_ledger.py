@@ -149,6 +149,26 @@ def test_보내지_않는_실행은_장부를_안_본다(config, monkeypatch, fl
     assert read_ledger(config[2]).job_id == "first"
 
 
+@pytest.mark.parametrize("flag", ["--dry-run", "--no-mail"])
+def test_보낸_날을_안_보내는_실행으로_돌려도_보낸_HTML은_그대로다(config, monkeypatch, capsys, flag):
+    """덮으면 `/report/resend`가 실제로 나간 것과 다른 HTML을 보낸다. 안 보내는 실행의 결과는 `.preview.html`로 간다."""
+    mail = Mail().install(monkeypatch)
+    out = config[2]
+    assert run(config) == exit_codes.OK
+    sent_html = out / f"daily-alarm-{DAY}.html"
+    sent_html.write_text("실제로 나간 것", encoding="utf-8")      # 다시 만든 HTML과 구별되게
+    capsys.readouterr()
+
+    assert run(config, flag) == exit_codes.OK
+
+    assert sent_html.read_text(encoding="utf-8") == "실제로 나간 것"
+    preview = out / f"daily-alarm-{DAY}.preview.html"
+    assert preview.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+    shown = capsys.readouterr().out
+    assert preview.name in shown and "덮지 않" in shown
+    assert len(mail.sent) == 1
+
+
 def test_메일이_실패하면_장부가_없고_실패다(config, monkeypatch):
     Mail(status="error").install(monkeypatch)
     assert run(config) == exit_codes.FAILED
