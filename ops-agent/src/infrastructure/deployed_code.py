@@ -1055,6 +1055,11 @@ class DeployedCode(DeployedCodePort):
             return f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
         return ""
 
+    def type_field(self) -> str | None:
+        """유형 세기의 유형 칸(토폴로지 `pipelines.router.type_field`) — 없으면 None. 걷기가 섞인 토픽 행을 셀지를 이것으로 정한다(R3-5y ④)."""
+        spec = self._topology.pipelines
+        return spec.router.type_field if spec is not None and spec.router is not None else None
+
     async def type_count_spec(self, class_name: str) -> tuple[str, list[str], list[str]] | str:
         """유형 세기(R3-5y ③)의 인자 `(유형 칸, 셀 값들, 유형 멤버 이름들)` 또는 못 세는 까닭. 값은 유형 열거 멤버의 **값**이다 — 라우터가 그 값으로 가른다(측정 #32
         회신의 답 2: 이름이 아니다). 리드는 값을 대지 않는다 — 클래스만 받고 여기서 푼다. 유형 칸은 토폴로지 `pipelines.router.type_field`(사내 값은 사내

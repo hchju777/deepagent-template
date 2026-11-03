@@ -30,7 +30,7 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]},
             # 측정판 config의 파이프라인 항목(R3-5v ②) — 클래스 키·켜짐 키의 이름 — 과 측정판 코드의 라우터 유형표(R3-5w ②). 사내 이름은 사내 토폴로지에만.
-            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline"}}}
+            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline", "type_field": "feed"}}}
 VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
             "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet", "palette-source-missing", "palette-seeder-elsewhere")
 
@@ -66,6 +66,8 @@ def board(tmp_path_factory):
     config = _with_patrol(root / "config", PROBES)
     app = json.loads((config / "app.json").read_text(encoding="utf-8"))
     app.update(output_dir=str(root / "out"), case_store=str(root / "out" / "cases.json"))
+    # 유형 세기 상한 N(R3-5y ④) — 기본값(2만)이면 원천 메인 토픽 5건을 전부 세어 CLI가 config를 넘기는지 못 가른다.
+    app.setdefault("investigation", {})["type_count_max"] = 4
     (config / "app.json").write_text(json.dumps(app), encoding="utf-8")
     # 같은 GBM의 다른 사이트(R3-5t ②) — 없는 키의 쓴 쪽을 그 사이트의 같은 키 값에서 채운다. stub은 시드의 `peers` 절만 읽으니 그 사이트의 층은 없어도 된다.
     (config / "registry.json").write_text(json.dumps({"sites": [{"gbm": "mx", "fct": "gumi"}, {"gbm": "mx", "fct": "sevt"}]}), encoding="utf-8")
@@ -382,16 +384,16 @@ def test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같�
     rows, notes, stopped, rungs = _walk(board, monkeypatch, "palette-source-missing")
     assert "alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 빈 배열 (colors)" in rows
     assert "palette:source | PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] | 없음" in rows
-    # 그 토픽은 라우터가 유형별로 나눠 보낸다(R3-5w ② — 측정 #31 a): 남은 메시지 5는 PALETTE 유형의 것인지 모른다 — 정상이 아니라 모름.
-    mixed = "유형 3개가 섞인 토픽 — PALETTE 유형의 메시지 수는 세지 않았다"
+    # 그 토픽은 라우터가 유형별로 나눠 보낸다(R3-5w ② — 측정 #31 a): 남은 메시지 5는 PALETTE 유형의 것인지 모른다. 걷기는 그 클래스의 유형만 센다(R3-5y ④ —
+    # 측정 #32 회신의 답 2): 원천 메인 토픽의 메시지는 alarm·audit 유형뿐이라 PALETTE 0건 — 그 토픽 행이 나쁨이고 멈춤은 `구독 토픽에 그 유형이 없다`. 센 창은
+    # config 상한 N=4(위 앱 config)라 끝 4건만 셌다.
+    seeder = "PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]"
     topic = [r for r in rows if r.startswith("mx.alarm.main | ")]
-    assert topic and topic[0].endswith(f" | 모름 — {mixed} · 보존 범위 0~5 · 남은 메시지 5 · 구독 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]")
-    assert stopped == ("키가 없다 — palette:source(쓰는 PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type] · 구독 mx.alarm.main 범위 0~5, "
-                       f"남은 메시지 5 — {mixed})")
+    assert topic and topic[0].endswith(f" | 비었다 — PALETTE 0건, 최근 4건(오프셋 1~5)만 셌다 — 그 앞은 안 셌다 · 구독 {seeder}")
+    assert stopped.startswith(f"구독 토픽에 그 유형이 없다 — mx.alarm.main(PALETTE 0건(최근 4건만) · {seeder} · 발행 선언: ")
     assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 sevt:palette:source 값의 metadata.event_type에서 채웠다: PaletteSeeder",
                      "PaletteSeeder: 클래스 코드에 구독 토픽이 없다 — sevt 값의 source.topic sevt.alarm.main을 이 사이트 이름 mx.alarm.main으로 이었다"]
-    assert rungs[:2] == [f"code.read line={_at('common/palette.py', 'class PaletteSeeder')} path='common/palette.py' service='batch'",
-                         "kafka.tail limit=5 topic='mx.alarm.main'"]
+    assert rungs == [f"code.read line={_at('common/palette.py', 'class PaletteSeeder')} path='common/palette.py' service='batch'"]   # 셌다 — tail 칸 없음
 
 
 def test_공용_키가_없고_쓰는_클래스_코드에_구독_토픽이_없으면_서비스_선언을_읽지_않고_그_수만_적는다(board, monkeypatch):

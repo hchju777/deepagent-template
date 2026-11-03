@@ -1286,3 +1286,144 @@ def test_유형_세기_문장은_0건_전부_0건_일부_k건_멈춤_유형_칸_
     two = data(matched=1, latest={"partition": 1, "offset": 55, "at": None},
                partitions=[{"partition": 0, "begin": 0, "end": 10, "from": 4, "to": 10}, {"partition": 1, "begin": 50, "end": 60, "from": 54, "to": 60}])
     assert type_count_status(two, "")[0].startswith("정상 — COLOR 1건, 최근 6건(p0 4~10, p1 54~60, ") and "파티션 1 오프셋 55" in type_count_status(two, "")[0]
+
+
+
+# ── R3-5y ④ — 걷기의 유형 세기: 섞인 토픽 행에서만, 0건이면 나쁨으로 멈춤, tail 칸 바꿈·비움 ──
+
+def _counted(matched, **over):
+    """`kafka.count_type`의 원본(실행기가 `types`를 얹은 꼴) — 보존 범위 40~100을 전부 셌다."""
+    return {"topic": "t.raw", "field": "meta.kind", "values": ["7"], "types": ["COLOR"], "max_messages": 20000, "max_seconds": 8.0,
+            "counted": 60, "with_field": 60, "matched": matched, "whole": True, "stopped": "",
+            "first_at": "2026-11-04T01:00:00+09:00", "last_at": "2026-11-04T09:00:00+09:00",
+            "latest": {"partition": 0, "offset": 90, "at": "2026-11-04T08:00:00+09:00"} if matched else None,
+            "partitions": [{"partition": 0, "begin": 40, "end": 100, "from": 40, "to": 100, "counted": 60, "with_field": 60, "matched": matched}], **over}
+
+
+_SPAN = "2026-11-04T01:00:00+09:00~2026-11-04T09:00:00+09:00"
+
+
+async def test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유형만_세고_0건이면_그_유형이_없다로_멈추며_tail_칸이_없다():
+    """측정 #32 회신의 답 2 — 걷기 동결의 예외(사람 승인): 라우터가 유형별로 나눠 보내는 토픽 행(R3-5w ②)에서만 그 클래스의 유형을 센다. 인자는 토픽과 클래스뿐
+    (`kafka.count_type {topic, class}` — 값·상한은 실행기가 푼다). 그 행의 상태가 센 문장이 되고 증거도 센 결과다. 0건이면 나쁨이고 멈춤은 `구독 토픽에 그 유형이
+    없다`(토픽은 비지 않았다 — `구독 토픽이 비었다`와 다르다). 셌으니 그 토픽의 tail 칸은 없다. k건이면 정상 — 그 입력을 본 것이다. 세다 멈췄으면 여전히 모름.
+    세기가 꺼졌으면(유형 칸 선언 없음 — `count_seconds` 없음) 전처럼 세지 않는다."""
+    mixed = "유형 3개가 섞인 토픽 — COLOR 유형의 메시지 수는 세지 않았다"
+
+    async def routed(name):
+        return mixed if name == "W0" else ""
+
+    table = {("code.resources", "W0"): _res("W0", [("t.raw", "topic"), ("k:{line}", "rediskey")]),
+             ("redis.get", "k:L1"): _value(rows=[{"a": 1}]), ("kafka.offsets", "t.raw"): _offsets(40, 100), ("kafka.count_type", "t.raw"): _counted(0)}
+    kw = dict(classes=frozenset({"W0"}), class_services={"W0": ("a",)}, topic_producers={"t.raw": ("col", "pub")}, routed=routed, clock=lambda: T0)
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, count_seconds=8.0, **kw))["walk"]
+    row = walk.hops[1]
+    assert row.status == f"비었다 — COLOR 0건, 보존 범위 40~100 전부(60건, {_SPAN}) · 구독 W0 [a]" and row.bad
+    assert ("kafka.count_type", {"topic": "t.raw", "class": "W0"}) in runner.params                      # 인자는 토픽과 클래스뿐
+    assert runner.raw(row.evidence_id)["types"] == ["COLOR"] and "그 클래스의 유형만 셌다" in row.basis       # 행의 증거는 센 결과
+    assert walk.stopped == "구독 토픽에 그 유형이 없다 — t.raw(COLOR 0건(보존 범위 전부 60건) · W0 [a] · 발행 선언: col, pub)"
+    assert walk.rungs and all(r.action != "kafka.tail" for r in walk.rungs)                               # 셌다 — tail 칸이 없다
+    assert walk.counts == 1 and "(유형 세기 1번 " in walk.lines()[0]
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(3)}), count_seconds=8.0, **kw))["walk"]
+    assert walk.hops[1].status == (f"정상 — COLOR 3건, 최근 60건(오프셋 40~100, {_SPAN}) 중, 가장 최근 그 유형 메시지 오프셋 90, 시각 2026-11-04T08:00:00+09:00"
+                                   " · 구독 W0 [a]") and not walk.hops[1].bad
+    assert walk.stopped == "입력이 다 정상 — W0"                                                           # 그 클래스의 입력을 봤다
+    stopped = _counted(0, whole=False, counted=30, stopped="시간 상한 8초")
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): stopped}), count_seconds=8.0, **kw))["walk"]
+    assert walk.hops[1].status == "모름 — COLOR 세다 멈춤(30건까지 0건, 시간 상한 8초) · 구독 W0 [a]" and not walk.hops[1].bad
+    assert walk.stopped == "입력을 다 못 봤다 — W0(t.raw COLOR 세다 멈춤(30건까지 0건))"
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, **kw))["walk"]                                         # 세기가 꺼졌다 — 전처럼
+    assert walk.hops[1].status == f"모름 — {mixed} · 보존 범위 40~100 · 남은 메시지 60 · 구독 W0 [a]" and "kafka.count_type" not in [a for a, _ in runner.ran]
+    assert walk.counts == 0 and "유형 세기" not in walk.lines()[0]
+
+
+async def test_걷기는_남은_시간이_유형_세기_상한보다_적으면_세지_않고_주에_적으며_센_초는_머리줄에_따로_적는다():
+    """측정 #32 회신의 답 2(5): 녹화와 재생의 인자가 같아야 하므로 걷기는 T를 줄여 세지 않는다 — 걷기의 시간 상한(30초)에서 남은 시간이 T보다 적으면 안 센다(그
+    행은 전처럼 모름, 주에 그 사실). 센 초는 시간 상한 안이고 머리줄에 따로 적는다(`(유형 세기 n번 s초)`)."""
+    mixed = "유형 3개가 섞인 토픽 — COLOR 유형의 메시지 수는 세지 않았다"
+
+    async def routed(name):
+        return mixed
+
+    class Clock:
+        def __init__(self, start):
+            self.n, self.start = 0, start
+
+        def __call__(self):
+            self.n += 1
+            return T0 if self.n == 1 else T0 + timedelta(seconds=self.start)
+
+    table = {("code.resources", "W0"): _res("W0", [("t.raw", "topic")]), ("kafka.offsets", "t.raw"): _offsets(40, 100),
+             ("kafka.count_type", "t.raw"): _counted(3)}
+    kw = dict(classes=frozenset({"W0"}), class_services={"W0": ("a",)}, routed=routed)
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, count_seconds=8.0, clock=Clock(25), **kw))["walk"]
+    assert "kafka.count_type" not in [a for a, _ in runner.ran] and walk.hops[1].status.startswith(f"모름 — {mixed}")
+    assert "W0: t.raw의 유형을 안 셌다 — 걷기 남은 시간 5.0초 < 유형 세기 상한 8초" in walk.notes
+
+    class Ticking:
+        def __init__(self):
+            self.t = 0.0
+
+        def __call__(self):
+            return T0 + timedelta(seconds=self.t)
+
+    class Slow(_Reads):
+        def __init__(self, table, clock):
+            super().__init__(table)
+            self.clock = clock
+
+        async def run(self, task, *, case):
+            self.clock.t += 3.0 if task.action == "kafka.count_type" else 1.0
+            return await super().run(task, case=case)
+
+    clock = Ticking()
+    walk = (await run_walk(_state(), runner=Slow(table, clock), count_seconds=8.0, clock=clock, **kw))["walk"]
+    assert (walk.counts, walk.count_seconds) == (1, 3.0) and walk.lines()[0].startswith(
+        f"걷기(코드가 상류를 걸었다): 홉 2 · 읽기 3 · {walk.seconds:.1f}초(유형 세기 1번 3.0초) — 멈춤: ")
+
+
+async def test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_셌으면_tail_칸을_비우며_상한으로_못_셌으면_tail_대신_세기_칸이다():
+    """측정 #32 회신의 답 2(4): 섞인 토픽 행 뒤 사다리 칸 `kafka.tail`이 리드의 tail 반복을 부추겼다 — 셌으면 그 칸을 비우고, 셀 수 있었는데 상한으로 못 셌으면
+    `kafka.count_type {topic, class}`로 바꾼다. 세기가 꺼졌으면(유형 칸 선언 없음) 전처럼 tail — 리드가 내도 셀 칸 이름을 몰라 못 센다. 멈춤 꼬리의 토막도 센 결과다.
+    0건이면 그 토픽 행이 나쁨이고 멈춤은 `구독 토픽에 그 유형이 없다`(칸은 그 클래스 본문)."""
+    mixed = "유형 3개가 섞인 토픽 — COLOR 유형의 메시지 수는 세지 않았다"
+
+    async def routed(name):
+        return mixed if name == "W1" else ""
+
+    no_writer = "in:{line} [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점"
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): _res("W1", [("t.raw", "topic")]),
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): no_writer, ("kafka.offsets", "t.raw"): _offsets(40, 100),
+             ("kafka.count_type", "t.raw"): _counted(2)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)}, routed=routed)
+    peer = _Peer({"in:L1": ("sevt", "in:L1", _value(record=[], metadata={"event_type": "W1"}))})
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, peer=peer, count_seconds=8.0, clock=lambda: T0, **kw))["walk"]
+    assert ("kafka.count_type", {"topic": "t.raw", "class": "W1"}) in runner.params
+    topic = walk.hops[2]
+    assert topic.status.startswith(f"정상 — COLOR 2건, 최근 60건(오프셋 40~100, {_SPAN}) 중, ") and topic.status.endswith(" · 구독 W1 [a · sevt 값의 metadata.event_type]")
+    assert walk.stopped.startswith("키가 없다 — in:L1(쓰는 W1 [") and walk.stopped.endswith(" · 구독 t.raw COLOR 2건/60건)")
+    assert walk.rungs and all(r.action not in ("kafka.tail", "kafka.count_type") for r in walk.rungs)       # 셌다 — 그 토픽 칸이 없다
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(0)}), peer=peer, count_seconds=8.0,
+                           clock=lambda: T0, **kw))["walk"]
+    assert walk.hops[2].bad and walk.stop_at == walk.hops[2].evidence_id
+    assert walk.stopped.startswith("구독 토픽에 그 유형이 없다 — t.raw(COLOR 0건(보존 범위 전부 60건) · W1 [") and walk.stopped.endswith(" · 발행 선언 없음(우리 밖))")
+    assert [r.action for r in walk.rungs] == ["code.read"]                                                  # 그 클래스 본문만
+
+    class Late:
+        def __init__(self):
+            self.n = 0
+
+        def __call__(self):
+            self.n += 1
+            return T0 if self.n == 1 else T0 + timedelta(seconds=25)
+
+    walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, count_seconds=8.0, clock=Late(), **kw))["walk"]
+    assert walk.stopped.endswith(f"구독 t.raw 범위 40~100, 남은 메시지 60 — {mixed})")                       # 못 셌다 — 전처럼
+    assert ("kafka.count_type", {"topic": "t.raw", "class": "W1"}) in [(r.action, dict(r.params)) for r in walk.rungs]
+    assert "kafka.tail" not in [r.action for r in walk.rungs]                                                # tail 대신 세기 칸
+    walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, clock=lambda: T0, **kw))["walk"]       # 세기가 꺼졌다 — 전처럼 tail
+    assert ("kafka.tail", {"topic": "t.raw", "limit": 5}) in [(r.action, dict(r.params)) for r in walk.rungs]

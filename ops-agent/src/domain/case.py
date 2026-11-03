@@ -235,6 +235,9 @@ class Walk(StrictModel):
     hops: list[Hop] = []
     reads: int = 0
     seconds: float = 0.0
+    # 섞인 토픽에서 그 클래스의 유형만 센 횟수와 초(R3-5y ④) — `seconds` 안이다(걷기의 시간 상한 안); 머리줄에 따로 적어 세기가 시간을 얼마나 먹었는지 보인다.
+    counts: int = 0
+    count_seconds: float = 0.0
     stopped: str = ""
     # 멈춘 자리 — **가장 깊은 나쁜 홉**의 증거 id(R3-4 ②; 측정 #10 P0 3: "마지막 실패"는 다른 가지의 일이었다). 나쁜 홉이 없으면 대상 키 홉.
     stop_at: str = ""
@@ -270,7 +273,8 @@ class Walk(StrictModel):
         """발행 선언 없는(우리 밖) 구독 토픽에서 `구독 토픽이 비었다`로 멈췄으면 그 토픽 이름 — 판정이 바깥 쪽을 적을 **자리**(R3-5u ②, 측정 #30 재측정: 우리 밖
         토픽 7/7회에 리드가 원인 자리에 발행자 이름을 지어냈다 — 후보 목록이 서비스와 증거의 자원 이름뿐이라 바깥 쪽을 이름 없이 적을 자리가 없었다). 발행 선언이
         있는 토픽은 우리 안이라 아니고, 메시지 홉의 멈춤(`입력 메시지가 나쁘다`)은 내용의 문제라 여기 안 든다. 아니면 빈 문자열."""
-        if not self.stopped.startswith("구독 토픽이 비었다"):
+        # 섞인 토픽에서 그 클래스의 유형이 0건인 멈춤(R3-5y ④)도 같다 — 우리 밖 발행자가 그 유형을 안 보냈다.
+        if not self.stopped.startswith(("구독 토픽이 비었다", "구독 토픽에 그 유형이 없다")):
             return ""
         stop = next((h for h in self.hops if h.evidence_id == self.stop_at), None)
         if stop is None or stop.kind != "topic" or not stop.service.startswith("발행 선언 없음"):
@@ -282,7 +286,8 @@ class Walk(StrictModel):
         `case walk`·조사 프롬프트는 기본값 그대로."""
         if not self.hops and not self.stopped:
             return []
-        head = [f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초 — 멈춤: {self.stopped}"]
+        counted = f"(유형 세기 {self.counts}번 {self.count_seconds:.1f}초)" if self.counts else ""
+        head = [f"걷기(코드가 상류를 걸었다): 홉 {len(self.hops)} · 읽기 {self.reads} · {self.seconds:.1f}초{counted} — 멈춤: {self.stopped}"]
         if not self.hops:
             # 던진 걷기(홉 0)도 보인다(측정 #11 P0 2) — 사유 한 줄이 없으면 리드도 사람도 걷기가 있었는지 모른다.
             return head

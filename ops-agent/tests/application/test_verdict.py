@@ -744,6 +744,8 @@ def test_걷기가_발행_선언_없는_구독_토픽에서_멈췄으면_그_토
     assert _outside_walk(stopped="입력이 다 정상 — Proc").outside_topic() == ""
     assert _outside_walk(kind="message").outside_topic() == ""
     assert Walk().outside_topic() == ""
+    # 섞인 토픽에서 그 클래스의 유형이 0건이어도(R3-5y ④) 우리 밖 토픽이면 그 토픽 이름이 바깥 쪽 자리다 — 발행자가 그 유형을 안 보냈다.
+    assert _outside_walk(stopped="구독 토픽에 그 유형이 없다 — ext.feed(COLOR 0건(최근 4건만) · Proc [processor] · 발행 선언 없음(우리 밖))").outside_topic() == "ext.feed"
 
 
 async def test_verify는_바깥_토픽_이름을_component로_받고_되묻기_줄에_그_자리를_댄다(case):

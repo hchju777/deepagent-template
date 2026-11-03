@@ -67,7 +67,7 @@ def _board_topology(topo: dict) -> dict:
     """복사한 토폴로지의 `services`를 측정판 것으로 — 나머지(흐름 출처·config 경로·설명)는 그대로. 파이프라인 항목의 모양(R3-5v ②)과 라우터의 유형표
     (R3-5w ②)는 측정판 config·코드의 것을 더한다 — 리포의 토폴로지는 사내에서 바뀌는 파일이라 거기 적지 않는다."""
     return {**topo, "services": dict(BOARD_SERVICES),
-            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline"}}}
+            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline", "type_field": "feed"}}}
 
 
 def _write(root: Path, rel: str, content) -> None:
@@ -737,7 +737,9 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
             "mx.alarm.raw": ([{"line": LINES[i % 3], "rows": _message_rows(variant, i)} for i in range(5)] if variant in _MESSAGE_VARIANTS
                              else [] if variant in ("source-missing-quiet", "source-quiet")
                              else [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "ts": fresh(14 - 3 * i)} for i in range(5)]),
-            "mx.alarm.main": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i)} for i in range(5)],
+            # 메인 토픽의 유형 칸(`feed`, 라우터의 FeedKind 값 — R3-5y ④)은 alarm·audit뿐이다: 라우터를 거쳐 받는 PaletteSeeder의 유형(palette)은 0건.
+            "mx.alarm.main": [{"line": LINES[i % 3], "alarm_code": f"A{200 + i}", "level": "minor", "ts": fresh(13 - 3 * i), "feed": ("alarm", "audit")[i % 2]}
+                              for i in range(5)],
             **({"gumi.alarm.audit": {"begin": 100, "messages": [{"line": LINES[i % 3], "note": f"audit-{i}"} for i in range(5)]}}
                if variant == "message-gone" else {})},
         # 그룹은 레포당 하나라 processor·sink가 공유한다 — lag만으로는 누가 멈췄는지 모른다.

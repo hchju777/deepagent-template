@@ -2432,7 +2432,7 @@ CASES += [
 
 # ── 핫픽스 10-14 — 측정판 토폴로지는 사본에만 · 리포 knowledge를 테스트가 안 읽는다 ──
 CASES += [
- ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\"}}}", "    return dict(topo)",
+ ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}", "    return dict(topo)",
   ["tests/test_local_case.py::test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다"]),
  ("예외 목록을 OS 구분자 그대로 비교한다", ROOT / "tests/test_portability.py", "        return path.relative_to(root).as_posix()", "        return str(path.relative_to(root))",
   ["tests/test_portability.py::test_예외_목록은_Windows_구분자에도_맞는다"]),
@@ -2543,7 +2543,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,\n                                  count_seconds=deps.type_count_seconds, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=state.walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -2668,7 +2668,7 @@ CASES += [
  ("다 밟은 사다리가 마지막 칸이 아니라 첫 칸에서 잇는다", B, "        hop = (rungs[-1].action, dict(rungs[-1].params))", "        hop = (rungs[0].action, dict(rungs[0].params))", ["tests/application/test_briefing.py::test_예시는_걷기의_아직_안_낸_칸을_셋까지_한_라운드에_묶는다"]),
  ("둘째 칸을 안 고정한다", ND, "    return [(r.action, dict(r.params)) for r in walk.rungs\n", "    return [(r.action, dict(r.params)) for r in walk.rungs[:1]\n", [WHOP_T]),
  ("대기 태스크를 낸 칸으로 센다", ND, "    ran = {_query(t) for t in state.plan_tasks if t.action and t.status != \"pending\"}", "    ran = {_query(t) for t in state.plan_tasks if t.action}", [WHOP_T]),
- ("stop_at을 안 적는다", WK, "stopped=stopped, stop_at=ev, rungs=rungs, notes=notes)", "stopped=stopped, rungs=rungs, notes=notes)", [DEEP_T, WALK_T]),
+ ("stop_at을 안 적는다", WK, "stopped=stopped, stop_at=ev, rungs=rungs,\n                         notes=notes)", "stopped=stopped, rungs=rungs,\n                         notes=notes)", [DEEP_T, WALK_T]),
  ("상한 멈춤의 칸을 안 낸다", WK, "    elif nxt is not None:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", "    elif False:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", [CAP_T]),
  ("리터럴 칸이 첫 칸이 아니다", WK, "            rungs = [head] + [r for r in rungs if r != head]", "            rungs = [r for r in rungs if r != head] + [head]", [LIT_NEXT_T]),
  ("walked로 입구 읽기 줄을 안 센다", IM, "    walked = [t for t in state.plan_tasks if t.walked and t.status == \"ok\"]", "    walked = []", [WBRIEF_T]),
@@ -3532,7 +3532,7 @@ CASES += [
  ("없는 키의 토픽 행이 쓴 쪽 칸에 구독 클래스를 적는다", WK, "                        pub, pub_svcs = published(topic)\n", "                        pub, pub_svcs = f\"{w} [{shown}] 구독\", cands\n", [KEYED_T, BOARD_KEYED_T]),
  ("없는 키의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {w} [{shown}]\",\n", "status=tstatus,\n", [KEYED_T, BOARD_KEYED_T]),
  ("빈 구독 토픽의 멈춤에 발행 선언이 없다", WK, "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}] · {stop_hop.service})\"\n", "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])\"\n", [KEYED_T, BOARD_KEYED_T]),
- ("걸은 클래스의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {who_}\", bad=tbad, evidence_id=tev,\n", "status=tstatus, bad=tbad, evidence_id=tev,\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+ ("걸은 클래스의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {who_}\", bad=tbad, evidence_id=hev,\n", "status=tstatus, bad=tbad, evidence_id=hev,\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
 ]
 
 # ── 12a-R3-5t ③ — 비지 않은 토픽 행은 `정상 — …` ──
@@ -3583,7 +3583,7 @@ OUTSIDE_VERIFY_T = "tests/application/test_verdict.py::test_verify는_바깥_토
 OUTSIDE_BRIEF_T = "tests/application/test_briefing.py::test_판정_재료의_component_후보는_걷기가_멈춘_발행_선언_없는_구독_토픽을_바깥_쪽의_자리로_댄다"
 OUTSIDE_PROMPT_T = "tests/application/test_verdict.py::test_판정_프롬프트는_component가_데이터를_만드는_서비스라고_말한다"
 CASES += [
- ("바깥 토픽 자리가 멈춤을 안 본다", CS, "        if not self.stopped.startswith(\"구독 토픽이 비었다\"):\n            return \"\"\n", "        if False:\n            return \"\"\n", [OUTSIDE_T]),
+ ("바깥 토픽 자리가 멈춤을 안 본다", CS, "        if not self.stopped.startswith((\"구독 토픽이 비었다\", \"구독 토픽에 그 유형이 없다\")):\n            return \"\"\n", "        if False:\n            return \"\"\n", [OUTSIDE_T]),
  ("발행 선언 있는 토픽도 바깥 자리로 준다", CS, "        if stop is None or stop.kind != \"topic\" or not stop.service.startswith(\"발행 선언 없음\"):\n", "        if stop is None or stop.kind != \"topic\":\n", [OUTSIDE_T, OUTSIDE_VERIFY_T, OUTSIDE_BRIEF_T]),
  ("판정 재료가 바깥 자리를 안 준다", B, "            \"components\": components_line(tuple(services), outside=state.walk.outside_topic() if state.walk else \"\"),\n", "            \"components\": components_line(tuple(services)),\n", [OUTSIDE_BRIEF_T]),
  ("바깥 토픽 이름을 component로 안 받는다", ND, "        if outside and component == outside:\n            return None\n", "        if False:\n            return None\n", [OUTSIDE_VERIFY_T]),
@@ -3642,11 +3642,11 @@ CASES += [
  ("켜짐을 사이트 층이 적었는지 안 본다", D, "                by_site = any(_has_path(value, [*where, spec.enabled_key]) for value in site_values)\n", "                by_site = True\n", [PIPE_T]),
  ("다른 사이트 값이 대는 쓴 쪽을 이 사이트 확인 없이 쓴다", WK, "            if off:\n                return f\"{fct}의 같은 키 {read_key} 값이 대는 {w} — {off}\"\n", "", [PIPE_WALK_T, BOARD_ELSEWHERE_T]),
  ("이 사이트 확인이 던지면 채운다", WK, "                off = f\"이 사이트에서 도는지 확인하지 못했다({type(exc).__name__})\"\n", "                off = \"\"\n", [PIPE_WALK_T]),
- ("걷기 노드가 이 사이트 확인을 안 넘긴다", ND, "peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed, clock=deps.clock)", "peer=deps.peer, routed=deps.routed, clock=deps.clock)", [BOARD_ELSEWHERE_T]),
+ ("걷기 노드가 이 사이트 확인을 안 넘긴다", ND, "peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,\n", "peer=deps.peer, routed=deps.routed,\n", [BOARD_ELSEWHERE_T]),
  ("case walk가 이 사이트 확인을 안 넘긴다", MN, "                              pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,\n", "                              routed=code.routed_types if code else None,\n", [BOARD_ELSEWHERE_T]),
  ("측정판이 sevt에서만 켜진 쓴 쪽을 안 심는다", LC, "\"event_type\": \"PaletteImporter\" if variant == \"palette-seeder-elsewhere\"\n", "\"event_type\": \"PaletteSeeder\" if variant == \"palette-seeder-elsewhere\"\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
  ("측정판 GBM 층이 PaletteImporter를 켠다", LC, "\"palette_import\": {\"enabled\": False, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", "\"palette_import\": {\"enabled\": True, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
- ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\"}}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
+ ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
 ]
 
 # ── 12a-R3-5v ③ — 이름 목록이 레포 전체 스냅샷을 받지 않는다(받아 둔 것은 쓰고, 없으면 층 파일만 경로마다 한 번) ──
@@ -3737,9 +3737,9 @@ CASES += [
  ("쓴 쪽의 토픽에 라우터를 안 묻는다", WK, "_topic_status(tdata, tgot.error or \"증거 없음\", await mixed_of(w))", "_topic_status(tdata, tgot.error or \"증거 없음\")", [MIXED_T]),
  ("섞인 토픽을 본 입력으로 센다", WK, "                unsure = isinstance(tdata, dict) and tstatus.startswith(\"모름 — \")", "                unsure = False", [MIXED_T]),
  ("라우터 확인이 던지면 정상이라 한다", WK, "            return f\"라우터 유형표를 확인하지 못했다({type(exc).__name__})\"\n", "            return \"\"\n", [MIXED_T]),
- ("걷기 노드가 라우터 확인을 안 넘긴다", ND, "pipeline_here=deps.pipeline_here, routed=deps.routed, clock=deps.clock)", "pipeline_here=deps.pipeline_here, clock=deps.clock)", [BOARD_MIXED_T]),
+ ("걷기 노드가 라우터 확인을 안 넘긴다", ND, "pipeline_here=deps.pipeline_here, routed=deps.routed,\n", "pipeline_here=deps.pipeline_here,\n", [BOARD_MIXED_T]),
  ("case walk가 라우터 확인을 안 넘긴다", MN, "pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,", "pipeline_here=code.pipeline_here if code else None,", [BOARD_MIXED_T]),
- ("측정판 토폴로지에 라우터 선언이 없다", ROOT / "tools/local_case.py", ", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\"}}}", "}}", [LOCAL_TOPO_PIPE_T]),
+ ("측정판 토폴로지에 라우터 선언이 없다", ROOT / "tools/local_case.py", ", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}", "}}", [LOCAL_TOPO_PIPE_T]),
 ]
 # ── 12a-R3-5x ① — 선언이 비어 꺼진 기능은 기동을 막지 않는 주의로 ──
 BOOTF = ROOT / "src/boot.py"
@@ -3834,7 +3834,38 @@ CASES += [
  ('유형을 멤버 이름이 아니라 값으로 말한다', RP, 'names = "·".join(data.get("types") or data.get("values") or [])', 'names = "·".join(data.get("values") or [])', [TCSENT_T, TCRUN_T]),
  ('맞은 건이 있어도 비었다로 쓴다', RP, '    if matched:\n        latest = data.get("latest") or {}', '    if False:\n        latest = data.get("latest") or {}', [TCSENT_T]),
 ]
-assert len(CASES) >= 1315, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5y ④ — 걷기의 유형 세기: 섞인 토픽 행에서만 · 0건이면 그 유형이 없다로 멈춤 · tail 칸 비움·바꿈 · 남은 예산 < T면 안 센다 · 머리줄의 센 초 ──
+TCWALK_T = "tests/application/test_walk.py::test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유형만_세고_0건이면_그_유형이_없다로_멈추며_tail_칸이_없다"
+TCBUDGET_T = "tests/application/test_walk.py::test_걷기는_남은_시간이_유형_세기_상한보다_적으면_세지_않고_주에_적으며_센_초는_머리줄에_따로_적는다"
+TCKEYED_T = "tests/application/test_walk.py::test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_셌으면_tail_칸을_비우며_상한으로_못_셌으면_tail_대신_세기_칸이다"
+TCCLI_T = "tests/test_cli_case_walk.py::test_걷기의_유형_세기_상한은_토폴로지가_유형_칸을_선언했을_때만_config에서_온다"
+CASES += [
+ ('걷기가 걸은 클래스의 섞인 토픽에서 안 센다', WK, '                if unsure:\n                    count = await count_mixed(writer, name)', '                if False:\n                    count = await count_mixed(writer, name)', [TCWALK_T]),
+ ('걷기가 없는 키의 쓴 쪽의 섞인 토픽에서 안 센다', WK, '                        if isinstance(tdata, dict) and tstatus.startswith("모름 — "):\n                            # 섞인 토픽이면', '                        if False:\n                            # 섞인 토픽이면', [TCKEYED_T, BOARD_PEER_T]),
+ ('세기가 꺼져도 센다', WK, '        if count_seconds is None:\n            return None\n        left', '        if False:\n            return None\n        left', [TCWALK_T, TCKEYED_T]),
+ ('남은 시간이 T보다 적어도 센다', WK, '        if counter >= MAX_READS or left < count_seconds:', '        if counter >= MAX_READS:', [TCBUDGET_T]),
+ ('안 센 사실을 주에 안 적는다', WK, '            remember(f"{cls}: {topic}의 유형을 안 셌다 — {why}")\n', '', [TCBUDGET_T]),
+ ('센 초를 안 잰다', WK, '        count_spent += elapsed() - before\n', '', [TCBUDGET_T]),
+ ('센 횟수를 안 센다', WK, '        count_runs += 1\n', '', [TCWALK_T, TCBUDGET_T]),
+ ('세기 인자에 클래스를 안 싣는다', WK, '"kafka.count_type", {"topic": topic, "class": cls})', '"kafka.count_type", {"topic": topic})', [TCWALK_T]),
+ ('센 행의 증거가 보존 범위 읽기다', WK, '                        hev = cev or tev\n                        counted_at[hev] = lack', '                        hev = tev\n                        counted_at[hev] = lack', [TCWALK_T]),
+ ('센 행이 정상이어도 입력을 못 봤다고 쓴다', WK, '                        unsure = tstatus.startswith("모름 — ")', '                        unsure = True', [TCWALK_T]),
+ ('세다 멈춘 사실을 못 본 입력에 안 적는다', WK, '                    missed.append(f"{name} {lack}")', '                    missed.append(f"{name} 유형별 메시지 수 모름")', [TCWALK_T]),
+ ('그 유형 0건도 구독 토픽이 비었다로 멈춘다(걸은 클래스)', WK, '            if ev in counted_at:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 셌으니 tail 칸은 없다.', '            if False:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 셌으니 tail 칸은 없다.', [TCWALK_T]),
+ ('그 유형 0건도 구독 토픽이 비었다로 멈춘다(없는 키의 쓴 쪽)', WK, '            if ev in counted_at:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 토픽은 비지 않았다.', '            if False:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 토픽은 비지 않았다.', [TCKEYED_T, BOARD_PEER_T]),
+ ('셌어도 그 토픽의 tail 칸을 둔다', WK, 'for t, _, tev in ranges_ if tev and tev not in counted_at]', 'for t, _, tev in ranges_ if tev]', [TCKEYED_T]),
+ ('상한으로 못 셌어도 세기 칸이 아니라 tail이다', WK, 'evidence=tev) if tev in uncounted\n', 'evidence=tev) if False\n', [TCKEYED_T]),
+ ('세기가 꺼졌는데도 세기 칸을 단다', WK, '                            elif count_seconds is not None:\n                                uncounted.add(tev)', '                            else:\n                                uncounted.add(tev)', [TCKEYED_T]),
+ ('머리줄에 센 횟수·초를 안 적는다', CS, '        counted = f"(유형 세기 {self.counts}번 {self.count_seconds:.1f}초)" if self.counts else ""', '        counted = ""', [TCWALK_T, TCBUDGET_T]),
+ ('센 횟수·초를 걷기에 안 싣는다', WK, 'counts=count_runs, count_seconds=count_spent, ', '', [TCWALK_T, TCBUDGET_T]),
+ ('그 유형 0건 멈춤의 바깥 토픽을 바깥 자리로 안 본다', CS, 'startswith(("구독 토픽이 비었다", "구독 토픽에 그 유형이 없다"))', 'startswith(("구독 토픽이 비었다",))', [OUTSIDE_T]),
+ ('걷기 노드가 세기 상한을 안 넘긴다', ND, '\n                                  count_seconds=deps.type_count_seconds, clock=deps.clock)', '\n                                  clock=deps.clock)', [BOARD_PEER_T]),
+ ('case walk가 세기 상한을 안 넘긴다', MN, 'routed=code.routed_types if code else None,\n                              type_count_seconds=_type_count_seconds(app, code),\n', 'routed=code.routed_types if code else None,\n', [BOARD_PEER_T]),
+ ('유형 칸 선언이 없어도 세기 상한을 준다', MN, '    return app.investigation.type_count_seconds if callable(field) and field() else None', '    return app.investigation.type_count_seconds', [TCCLI_T]),
+ ('코드가 유형 칸 선언을 안 알린다', DCP, '        return spec.router.type_field if spec is not None and spec.router is not None else None', '        return None', [BOARD_PEER_T]),
+ ('측정판 메인 토픽에 팔레트 유형이 온다', ROOT / "tools/local_case.py", '"feed": ("alarm", "audit")[i % 2]}', '"feed": "palette"}', [BOARD_PEER_T]),
+]
+assert len(CASES) >= 1339, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

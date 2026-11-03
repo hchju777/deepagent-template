@@ -32,7 +32,7 @@ from typing import Any, Awaitable, Callable, NamedTuple
 
 from src.application.facts import key_head
 from src.application.intake_map import _finish, _task, _unwrap, empties, empty_text, pointer_of, writer_of
-from src.application.runner_probe import _same_valued, profile
+from src.application.runner_probe import _same_valued, profile, type_count_status
 from src.application.state import CaseState
 from src.domain.case import JOIN_NOTE_MARKS, EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
 from src.domain.investigation import TaskRunnerPort
@@ -298,12 +298,14 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    peer: Callable[[str, str], Awaitable[tuple[str, str, Any] | None]] | None = None,
                    pipeline_here: Callable[[str], Awaitable[str]] | None = None,
                    routed: Callable[[str], Awaitable[str]] | None = None,
+                   count_seconds: float | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
     (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만. `peer(키, 템플릿)`은 같은 GBM 다른
     사이트의 같은 키 값 `(사이트, 읽은 키, 값)`(R3-5t ②); 없으면(사이트 하나·대본) 인덱스가 모르는 쓴 쪽은 전처럼 비운다. `pipeline_here(클래스)`는 그 값이 댄
     클래스가 이 사이트에서 도는지 — 돌면 빈 문자열, 아니면 까닭(R3-5v ②); 없으면(대본) 확인 없이 채운다. `routed(클래스)`는 그 클래스가 라우터 유형표를 거쳐
-    받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼."""
+    받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼. `count_seconds`는 그 모름 행에서 그 클래스의 유형만 셀 때의 상한 T초(R3-5y ④ —
+    `kafka.count_type {topic, class}`, 셀 값·N은 실행기가 푼다); 없으면(대본·유형 칸 선언 없음) 세지 않는다."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
@@ -357,6 +359,30 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         tasks.append(done)
         evidence.extend(outcome.evidence)
         return done, outcome
+
+    count_spent, count_runs = 0.0, 0                               # 유형 세기에 쓴 초·횟수(R3-5y ④) — 시간 상한 안이다; 머리줄에 따로 적는다
+    counted_at: dict[str, str] = {}                                # 센 토픽 홉의 증거 → 멈춤 토막 — 셌으니 그 토픽의 tail 칸은 없다
+    uncounted: set[str] = set()                                    # 셀 수 있었는데 상한으로 안 센 토픽 홉의 증거 — tail 칸 대신 세기 칸
+
+    async def count_mixed(cls: str, topic: str):
+        """섞인 토픽에서 그 클래스의 유형만 센다(R3-5y ④ — 측정 #32 회신의 답 2: 걷기 동결의 예외, 사람 승인). → (문장, 나쁜가, 멈춤 토막, 증거), 안 셌으면 None.
+        남은 시간이 T보다 적으면 T를 줄여 세지 않는다 — 녹화와 재생의 인자가 같아야 녹화가 맞는다(답 2(5)). 그 사실은 주에."""
+        nonlocal count_spent, count_runs
+        if count_seconds is None:
+            return None
+        left = MAX_SECONDS - (elapsed() - aside)
+        if counter >= MAX_READS or left < count_seconds:
+            why = f"읽기 {MAX_READS} 상한" if counter >= MAX_READS else f"걷기 남은 시간 {max(left, 0.0):.1f}초 < 유형 세기 상한 {count_seconds:g}초"
+            remember(f"{cls}: {topic}의 유형을 안 셌다 — {why}")
+            return None
+        before = elapsed()
+        _, got = await run(f"걷기 — {cls}가 받는 유형만 {topic}에서 센다", "kafka.count_type", {"topic": topic, "class": cls})
+        count_spent += elapsed() - before
+        count_runs += 1
+        cev = got.evidence[0].id if got.evidence else ""
+        data = runner.raw(cev) if got.status == "ok" and cev else None
+        status, bad, piece = type_count_status(data, (got.error or "증거 없음").splitlines()[0])
+        return status, bad, piece, cev
 
     def homes(name: str) -> list[tuple[str, tuple[str, ...]]]:
         """이 클래스가 있는 레포들과 레포마다 그 레포를 쓰는 서비스들(레포 이름순). 레포 지도가 없으면 서비스가 곧 레포다(전과 같다)."""
@@ -625,11 +651,22 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
                 tstatus, tbad, _ = _topic_status(tdata, tgot.error or "증거 없음", await mixed_of(writer))
                 shown, svcs = published(name)
-                # 섞인 토픽(R3-5w ②)은 읽었어도 그 클래스의 입력을 본 것이 아니다 — `입력이 다 정상`이라 쓰지 않는다.
+                # 섞인 토픽(R3-5w ②)은 읽었어도 그 클래스의 입력을 본 것이 아니다 — `입력이 다 정상`이라 쓰지 않는다. 셀 수 있으면 그 클래스의 유형만 센
+                # 문장이 행 상태다(R3-5y ④): 0건이면 나쁨, k건이면 본 것, 세다 멈췄거나 못 셌으면 여전히 모름.
                 unsure = isinstance(tdata, dict) and tstatus.startswith("모름 — ")
+                hev, lack = tev, "유형별 메시지 수 모름"
+                if unsure:
+                    count = await count_mixed(writer, name)
+                    if count is not None:
+                        tstatus, tbad, lack, cev = count
+                        hev = cev or tev
+                        counted_at[hev] = lack
+                        unsure = tstatus.startswith("모름 — ")
+                    elif count_seconds is not None:
+                        uncounted.add(tev)
                 readings[name] = ("mixed" if unsure else "ok" if isinstance(tdata, dict) else "fail", "")
                 if unsure:
-                    missed.append(f"{name} 유형별 메시지 수 모름")
+                    missed.append(f"{name} {lack}")
                 elif isinstance(tdata, dict):
                     real += 1
                 else:
@@ -638,10 +675,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 # (`W [서비스]`), 가지 꼬리표는 레포가 둘일 때만 있다.
                 svc = branch.tag or next((h.service for h in hops if h.evidence_id == came_from and h.writer == writer), "")
                 who_ = f"{writer} [{svc}]" if svc else writer
-                hops.append(Hop(key=name, kind="topic", depth=depth + 1, service=shown, candidates=list(svcs), status=f"{tstatus} · 구독 {who_}", bad=tbad, evidence_id=tev,
-                                basis=f"{writer}{tag}가 구독하는 토픽 ({res_id}) — 보존 범위, 발행 쪽은 config 선언", parent=came_from))
-                if tev:
-                    subscribed_at[tev] = (who_, scope, class_at(text), res_id)
+                hops.append(Hop(key=name, kind="topic", depth=depth + 1, service=shown, candidates=list(svcs), status=f"{tstatus} · 구독 {who_}", bad=tbad, evidence_id=hev,
+                                basis=f"{writer}{tag}가 구독하는 토픽 ({res_id}) — {'그 클래스의 유형만 셌다' if hev in counted_at else '보존 범위'}, 발행 쪽은 config 선언",
+                                parent=came_from))
+                if hev:
+                    subscribed_at[hev] = (who_, scope, class_at(text), res_id)
                 continue
             if kind == "rediskey":
                 filled = fill_key(name, declared=target.declared, key=target.key)
@@ -768,14 +806,25 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         tev = tgot.evidence[0].id if tgot.evidence else ""
                         tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
                         tstatus, tbad, piece = _topic_status(tdata, tgot.error or "증거 없음", await mixed_of(w))
+                        hev = tev
+                        if isinstance(tdata, dict) and tstatus.startswith("모름 — "):
+                            # 섞인 토픽이면 그 클래스의 유형만 센다(R3-5y ④) — 행 상태도 멈춤 꼬리의 토막도 센 결과다.
+                            count = await count_mixed(w, topic)
+                            if count is not None:
+                                tstatus, tbad, piece, cev = count
+                                hev = cev or tev
+                                counted_at[hev] = piece
+                            elif count_seconds is not None:
+                                uncounted.add(tev)
                         # 쓴 쪽 칸은 발행 선언, 후보도 그 서비스들, 구독 클래스는 상태 꼬리(R3-5t ① — 걸은 클래스의 토픽 행과 같은 모양; 측정 #29 3부: 쓴 쪽 칸의
                         # `<AGV 클래스> [<서비스>] 구독`이 "발행하는 레포가 없다"를 가렸다).
                         pub, pub_svcs = published(topic)
                         hops.append(Hop(key=topic, kind="topic", depth=depth + 2, service=pub, candidates=list(pub_svcs), status=f"{tstatus} · 구독 {w} [{shown}]",
-                                        bad=tbad, evidence_id=tev, parent=ev,
-                                        basis=f"{topic_basis} — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언"))
-                        ranges.append((topic, piece, tev))
-                        topics_at[tev] = (w, shown, params_k, ev)
+                                        bad=tbad, evidence_id=hev, parent=ev,
+                                        basis=f"{topic_basis} — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · "
+                                              f"{'그 클래스의 유형만 셌다 · ' if hev in counted_at else ''}발행 쪽은 config 선언"))
+                        ranges.append((topic, piece, hev))
+                        topics_at[hev] = (w, shown, params_k, ev)
                     keyed_at[ev] = (w, shown, params_k, ranges, tail_note, rev, body_at, tuple(cands))
                 if stopped:
                     break
@@ -901,14 +950,23 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if stop_hop.kind == "topic" and ev in topics_at:
             # 없는 키를 쓰는 클래스가 구독하는 토픽이 비었다(R3-5p ①-c) — 입력이 없다. 첫 칸은 지금 오는 것, 그다음 그 클래스 본문.
             w_, shown_, params_, key_ev = topics_at[ev]
-            stopped = f"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}] · {stop_hop.service})"
-            rungs += [Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev), *body_rungs(key_ev)]
+            if ev in counted_at:
+                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 토픽은 비지 않았다. 셌으니 tail 칸은 없다 — 칸은 그 클래스 본문.
+                stopped = f"구독 토픽에 그 유형이 없다 — {stop_hop.key}({counted_at[ev]} · {w_} [{shown_}] · {stop_hop.service})"
+                rungs += body_rungs(key_ev)
+            else:
+                stopped = f"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}] · {stop_hop.service})"
+                rungs += [Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev), *body_rungs(key_ev)]
         elif stop_hop.kind == "topic" and ev in subscribed_at:
             # 걸은 클래스가 구독하는 토픽이 비었다(R3-5s ⑥) — 값의 쓴 쪽이 아니라 보존 범위가 사실이고 발행 쪽은 config 선언(홉의 쓴 쪽 칸). 첫 칸은 지금 오는 것,
             # 그다음 그 클래스 본문.
             who, scope_, body_, rev_ = subscribed_at[ev]
-            stopped = f"구독 토픽이 비었다 — {stop_hop.key}({who} · {stop_hop.service})"
-            rungs.append(Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev))
+            if ev in counted_at:
+                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 셌으니 tail 칸은 없다.
+                stopped = f"구독 토픽에 그 유형이 없다 — {stop_hop.key}({counted_at[ev]} · {who} · {stop_hop.service})"
+            else:
+                stopped = f"구독 토픽이 비었다 — {stop_hop.key}({who} · {stop_hop.service})"
+                rungs.append(Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev))
             if scope_ and body_ is not None:
                 rungs.append(Rung(action="code.read", params={"service": scope_, "path": body_[0], "line": body_[1]}, evidence=rev_))
         elif ev in keyed_at:
@@ -918,7 +976,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             tail = " / ".join(f"구독 {t} {piece}" for t, piece, _ in ranges_) or tail_note
             stopped = f"키가 없다 — {stop_hop.key}(쓰는 {w_} [{shown_}] · {tail})"
             rungs += body_rungs(ev)
-            rungs += [Rung(action="kafka.tail", params={"topic": t, "limit": 5}, evidence=tev) for t, _, tev in ranges_ if tev]
+            # 셌으면 그 토픽 칸은 없고, 셀 수 있었는데 상한으로 못 셌으면 tail 대신 세기 칸(R3-5y ④ — 측정 #32: tail 칸이 리드의 tail 반복을 부추겼다).
+            rungs += [Rung(action="kafka.count_type", params={"topic": t, "class": w_}, evidence=tev) if tev in uncounted
+                      else Rung(action="kafka.tail", params={"topic": t, "limit": 5}, evidence=tev)
+                      for t, _, tev in ranges_ if tev and tev not in counted_at]
         elif ev in joined_at and ev not in walked_at and ev not in failed_at:
             # 병합 0건(④-b) — 짝 없는 입력의 쓴 쪽으로 더 걸었으면 멈춤은 전처럼 거기(그쪽 입력의 사유 — 홉 상태에 병합이 남는다). 더 못 걸었으면(쓴 쪽
             # 모름·메시지) 사유는 병합이고 첫 칸은 병합 줄(그 클래스의 레포), 그다음은 전처럼 그 입력의 칸.
@@ -993,4 +1054,5 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             head = Rung(action="code.read", params={"service": scope, "path": path, "line": line}, evidence=gev)
             rungs = [head] + [r for r in rungs if r != head]
     return {"plan_tasks": tasks, "evidence": evidence,
-            "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), stopped=stopped, stop_at=ev, rungs=rungs, notes=notes)}
+            "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), counts=count_runs, count_seconds=count_spent, stopped=stopped, stop_at=ev, rungs=rungs,
+                         notes=notes)}
