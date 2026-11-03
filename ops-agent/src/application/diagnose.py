@@ -122,6 +122,8 @@ def verdict_lines(state: CaseState) -> list[str]:
     lines += [f"    권고 {r}" for r in v.recommendations]
     lines += [f"    주의 {c}" for c in v.caveats]
     lines.append(f"    {verify_note(state)}")
+    if state.verify_facts:
+        lines.append(f"    검증 사실: {state.verify_facts}")       # R3-5y ① — 평가가 high를 받칠 근거를 이 줄로 센다
     return lines
 
 

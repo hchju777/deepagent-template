@@ -807,6 +807,7 @@ def test_CLI가_실제로_돈다(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "끝난 이유: decision" in out
     assert "h-1 [refuted]" in out
+    assert "    검증 사실: 최상위 인용 잘림 " in out                     # 판정 블록의 사실 한 줄(R3-5y ①) — 평가가 이 줄로 센다
     assert "t-1" in out and "t-1.e1" in out
     assert "t-0 접수 읽기" in out                       # R3-1 ① — 입구 노드가 frame 전에 접수를 읽었다
     # 12a — 판정 **블록**이 출력에 보이고(진단의 한 줄 요약과 다르다 — 서술·권고는 블록에만 있다),

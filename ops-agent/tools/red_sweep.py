@@ -2207,8 +2207,8 @@ CASES += [
  ("강등이 component 문제 다리를 안 걷는다", ND, "        if component_problem(link.component):\n            foreign.append",
   "        if False:\n            foreign.append", [DEMOTE_T]),
  ("verify가 강등에 component 검사를 안 넘긴다", ND,
-  "        return {\"verdict\": demote_verdict(verdict, problems, citable=citable, component_problem=component_problem),",
-  "        return {\"verdict\": demote_verdict(verdict, problems, citable=citable),", [DEMOTE_T]),
+  "        demoted = demote_verdict(verdict, problems, citable=citable, component_problem=component_problem)",
+  "        demoted = demote_verdict(verdict, problems, citable=citable)", [DEMOTE_T]),
  ("서비스 아닌 component 제외를 caveat에 안 적는다", ND,
   "        [f\"서비스 아닌 component 제외: {', '.join(foreign)}\"] if foreign else [])", "        [])", [DEMOTE_T]),
  ("판정 프롬프트가 만드는 서비스를 말하지 않는다", ROOT / "config/prompts/investigate-conclude.md",
@@ -2288,9 +2288,9 @@ CASES += [
   "    confidence = verdict.confidence", [CAP_T]),
  ("대상 키를 읽었어도 낮춘다", ND, "    if not keys or any(present(known, [k]) for k in keys for known in linked):", "    if not keys:", [CAP_T]),
  ("키를 인용하지 않은 최상위도 낮춘다", ND, "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence)\n    linked", "    keys = cited_keys(verdict.root_cause.evidence_ids, evidence) or [\"?\"]\n    linked", [CAP_T]),
- ("verify가 상한을 안 건다", ND, '            return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}',
-  '            return {"verify_problems": [], **({"verdict": verdict} if changed else {})}', [CAP_T, CAP2_T]),
- ("대본 경로에도 상한을 건다", ND, "            if not deps.check_discovery:\n                return {\"verify_problems\": [], **({\"verdict\": verdict} if changed else {})}", "            if False:\n                return {\"verify_problems\": [], **({\"verdict\": verdict} if changed else {})}", [CAP2_T]),
+ ("verify가 상한을 안 건다", ND, '            return {"verify_problems": [], "verify_facts": facts(capped), **({"verdict": capped} if (changed or capped is not verdict) else {})}',
+  '            return {"verify_problems": [], "verify_facts": facts(capped), **({"verdict": verdict} if changed else {})}', [CAP_T, CAP2_T]),
+ ("대본 경로에도 상한을 건다", ND, "            if not deps.check_discovery:\n                return {\"verify_problems\": [], \"verify_facts\": facts(verdict),", "            if False:\n                return {\"verify_problems\": [], \"verify_facts\": facts(verdict),", [CAP2_T]),
  ("scan 패턴을 키 읽기로 센다", IM, "_KEY_READ = re.compile(r\"^redis\\.get key='((?:[^'\\\\]|\\\\.)*)'\")",
   "_KEY_READ = re.compile(r\"^redis\\.(?:get|scan) (?:key|pattern)='((?:[^'\\\\]|\\\\.)*)'\")", [CAP_T]),
 ]
@@ -2596,7 +2596,7 @@ CASES += [
  ("두 레포에서 걷기가 가른 쪽을 안 쓴다", ND, "        candidates = resolved.get(link.component) or services", "        candidates = services", [CLS_T]),
  ("번역에 caveat을 안 단다", ND, "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing,\n                                      \"caveats\": verdict.caveats + caveats})", "    return verdict.model_copy(update={\"root_cause\": root, \"alternates\": alternates, \"contributing\": contributing})", [CLS_T]),
  ("verify가 번역 전 판정을 검사한다", ND, "        verdict = translate_classes(state.verdict, class_services=deps.class_services, walk=state.walk, service_repos=deps.service_repos)", "        verdict = state.verdict", [CLS_T]),
- ("번역한 판정을 State에 안 둔다", ND, "            return {\"verify_problems\": [], **({\"verdict\": capped} if (changed or capped is not verdict) else {})}", "            return {\"verify_problems\": []} if capped is verdict else {\"verdict\": capped, \"verify_problems\": []}", [CLS_T]),
+ ("번역한 판정을 State에 안 둔다", ND, "            return {\"verify_problems\": [], \"verify_facts\": facts(capped), **({\"verdict\": capped} if (changed or capped is not verdict) else {})}", "            return {\"verify_problems\": [], \"verify_facts\": facts(capped), **({\"verdict\": capped} if capped is not verdict else {})}", [CLS_T]),
 ]
 
 # ── 12a-R3-3 ④-a — code.read line= : 그 줄을 품은 함수 전체 ──
@@ -2877,7 +2877,7 @@ CAVEAT_T = "tests/application/test_verdict.py::test_component의_근거로_인�
 CASES += [
  ("인용한 코드의 레포를 안 본다", ND, "            if repo and repo != home:", "            if False:", [CAVEAT_T]),
  ("verify가 코드 레포 caveat를 안 건다", ND, "        verdict = caveat_code_repos(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos)\n", "", [CAVEAT_T]),
- ("코드 증거의 레포 인자를 안 본다", ND, "repo = str(made.params.get(\"repo\") or service_repos.get(str(made.params.get(\"service\", \"\")), \"\"))", "repo = str(service_repos.get(str(made.params.get(\"service\", \"\")), \"\"))", [CAVEAT_T]),
+ ("코드 증거의 레포 인자를 안 본다", ND, "            repo = str(made.params.get(\"repo\") or service_repos.get(str(made.params.get(\"service\", \"\")), \"\"))", "            repo = str(service_repos.get(str(made.params.get(\"service\", \"\")), \"\"))", [CAVEAT_T]),
  ("그 레포의 서비스를 후보로 안 적는다", ND, "의 코드다 — 그 레포의 서비스 {others}도 후보\")", "의 코드다\")", [CAVEAT_T]),
 ]
 
@@ -3776,7 +3776,17 @@ CASES += [
  ("재시도도 따로 센다", ROOT / "src/application/trace_digest.py", "            counted[(round_no, node)] = (int(found.group(1)), int(found.group(2)))", "            counted[(round_no, node, name)] = (int(found.group(1)), int(found.group(2)))", [DIGEST_COUNT_T]),
  ("묶은 칸이 0인 라운드도 센다", ROOT / "src/application/trace_digest.py", "        bundled = [rungs for _, rungs in counted.values() if rungs]", "        bundled = [rungs for _, rungs in counted.values()]", [DIGEST_COUNT_T]),
 ]
-assert len(CASES) >= 1274, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5y ① — 검증 사실 한 줄(최상위 인용의 잘림 · 다른 레포 코드) ──
+FACTS_T = "tests/application/test_verdict.py::test_검증은_최상위_인용의_잘림과_다른_레포_코드를_사실_한_줄로_남기고_판정_블록이_찍는다"
+FACTS_CLI_T = "tests/application/test_lead.py::test_CLI가_실제로_돈다"
+CASES += [
+ ("검증 사실에 잘림을 안 센다", ND, "최상위 인용 잘림 {sum(1 for e in ids if e in cut)}/{len(ids)}", "최상위 인용 잘림 {0}/{len(ids)}", [FACTS_T]),
+ ("검증 사실에 다른 레포 코드를 안 센다", ND, "다른 레포 코드 {sum(1 for r in repos if r != service_repos[root.component])}/{len(repos)}", "다른 레포 코드 {0}/{len(repos)}", [FACTS_T]),
+ ("서비스 아닌 component도 레포를 센다", ND, "    if root.component not in service_repos:\n        return f\"{head} · 다른 레포 코드 해당 없음", "    if False:\n        return f\"{head} · 다른 레포 코드 해당 없음", [FACTS_T]),
+ ("verify가 검증 사실을 안 남긴다", ND, "            return {\"verify_problems\": [], \"verify_facts\": facts(capped), **(", "            return {\"verify_problems\": [], **(", [FACTS_T]),
+ ("판정 블록이 검증 사실을 안 찍는다", ROOT / "src/application/diagnose.py", "    if state.verify_facts:\n", "    if False:\n", [FACTS_T, FACTS_CLI_T]),
+]
+assert len(CASES) >= 1279, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

@@ -36,6 +36,12 @@ def verdict(**over) -> Verdict:
     return Verdict.model_validate(body)
 
 
+
+def _untouched(patch: dict) -> bool:
+    """검증이 판정을 안 건드리고 문제도 없다 — 사실 한 줄(`verify_facts`, R3-5y ①)은 늘 남으니 그것은 안 본다."""
+    return "verdict" not in patch and patch.get("verify_problems") == []
+
+
 class Concluder:
     """`deps.conclude` 자리의 대본. 부른 횟수와 받은 State를 남긴다."""
 
@@ -263,7 +269,7 @@ async def test_첫_실패는_재작성을_요구하고_두_번째_실패는_강�
 async def test_통과하면_판정을_건드리지_않는다(case):
     nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"sink"})))
     patch = await nodes["verify"](_state(case, verdict=verdict()))
-    assert patch == {"verify_problems": []}
+    assert _untouched(patch)
 
 
 async def test_판정이_없으면_verify는_빈손으로_통과한다(case):
@@ -488,15 +494,15 @@ async def test_최상위가_인용한_키가_대상_키가_아니면_확신_상�
     assert got["verify_problems"] == [] and got["verdict"].confidence == "medium"
     assert any("대상과 키의 연결이 확인되지 않았다" in c and "alarm:scan:L1" in c and "alarm:stats:{line}" in c
                for c in got["verdict"].caveats)
-    assert await nodes["verify"](_linked_state(case, key_read="alarm:stats:L1", verdict=_citing("t-2.e1"))) == {"verify_problems": []}
-    assert await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-1.e1"))) == {"verify_problems": []}
+    assert _untouched(await nodes["verify"](_linked_state(case, key_read="alarm:stats:L1", verdict=_citing("t-2.e1"))))
+    assert _untouched(await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-1.e1"))))
     low = await nodes["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1", confidence="low")))
     assert low["verdict"].confidence == "low" and any("연결이 확인되지 않았다" in c for c in low["verdict"].caveats)
     # scan은 키 하나를 읽은 것이 아니다 — 패턴을 키로 세면 훑기만 한 최상위까지 낮아진다.
     scanned = _linked_state(case, key_read=None, verdict=_citing("t-3.e1"))
     scanned = scanned.model_copy(update={"evidence": scanned.evidence + [
         EvidenceRef(id="t-3.e1", source="redis.scan pattern='alarm:*'", summary="2건", body="alarm:scan:L1, alarm:stats:L1")]})
-    assert await nodes["verify"](scanned) == {"verify_problems": []}
+    assert _untouched(await nodes["verify"](scanned))
 
 
 async def test_대상_키를_못_골랐어도_키를_인용한_high는_medium이고_대본_경로는_안_건다(case):
@@ -508,7 +514,7 @@ async def test_대상_키를_못_골랐어도_키를_인용한_high는_medium이
     got = await nodes["verify"](_linked_state(case, key_read="alarm:stats:L1", target="unpicked", verdict=_citing("t-2.e1")))
     assert got["verdict"].confidence == "medium" and any("identity가 든 키가 없다" in c for c in got["verdict"].caveats)
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
-    assert await loose["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1"))) == {"verify_problems": []}
+    assert _untouched(await loose["verify"](_linked_state(case, key_read="alarm:scan:L1", verdict=_citing("t-2.e1"))))
 
 
 # ── R3-3 ⑤ — 클래스 이름 component는 서비스로 ──
@@ -573,6 +579,36 @@ async def test_component의_근거로_인용한_코드가_다른_레포의_것�
     patch = await nodes["verify"](_state(case, verdict=v, plan_tasks=tasks, evidence=[_ev(f"t-{n}.e1") for n in (11, 12, 13, 14)]))
     assert patch["verify_problems"] == [] and any("레포 batch-repo의 코드다" in c for c in patch["verdict"].caveats)
 
+
+
+
+# ── R3-5y ① — 검증 사실 한 줄(최상위 인용의 잘림 · 다른 레포 코드) ──
+
+async def test_검증은_최상위_인용의_잘림과_다른_레포_코드를_사실_한_줄로_남기고_판정_블록이_찍는다(case):
+    """측정 #32 회신의 답 1: high를 받칠 근거가 없는 판을 세는 칸(A 잘림 · B 다른 레포 코드)을 다음 판부터 이 줄로 센다 — 동작은 안 바꾼다. 최상위 원인
+    기준: 잘림 = 인용한 id 중 잘린 증거(`complete=False`), 다른 레포 = 인용한 코드 증거 중 레포가 component의 레포가 아닌 것(`caveat_code_repos`와 같은 셈).
+    component가 서비스가 아니면(external 등) 레포 칸은 해당 없음, 최상위 원인이 없으면 그렇게."""
+    from src.application.diagnose import verdict_lines
+    from src.application.nodes import verdict_facts
+
+    repos = {"processor": "core", "batchsvc": "batch-repo"}
+    tasks = [task("t-11", action="code.read", params={"service": "batchsvc", "path": "b/x.py", "line": 3}, status="ok", result_evidence_ids=["t-11.e1"]),
+             task("t-12", action="code.read", params={"service": "processor", "path": "p/y.py", "line": 1}, status="ok", result_evidence_ids=["t-12.e1"]),
+             task("t-13", action="redis.get", params={"key": "k"}, status="ok", result_evidence_ids=["t-13.e1"])]
+    evidence = [_ev("t-11.e1"), _ev("t-12.e1"), _ev("t-13.e1", complete=False)]
+    v = verdict(root_cause=cause("processor", "t-11.e1", "t-12.e1", "t-13.e1"))
+    facts = dict(evidence=evidence, plan_tasks=tasks, service_repos=repos)
+    assert verdict_facts(v, **facts) == "최상위 인용 잘림 1/3 · 다른 레포 코드 1/2"
+    outside = verdict(verdict_type="external", root_cause=cause("t.raw", "t-13.e1"))
+    assert verdict_facts(outside, **facts) == "최상위 인용 잘림 1/1 · 다른 레포 코드 해당 없음(component가 서비스가 아니다)"
+    assert verdict_facts(verdict(verdict_type="inconclusive", root_cause=None), **facts) == "최상위 원인 없음"
+    # verify 노드가 State에 남기고 판정 블록이 찍는다 — 확신은 그대로
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset(repos), service_repos=repos))
+    state = _state(case, verdict=v, plan_tasks=tasks, evidence=evidence)
+    patch = await nodes["verify"](state)
+    assert patch["verify_facts"] == "최상위 인용 잘림 1/3 · 다른 레포 코드 1/2" and patch["verdict"].confidence == "high"
+    assert "    검증 사실: 최상위 인용 잘림 1/3 · 다른 레포 코드 1/2" in verdict_lines(state.model_copy(update=patch))
+    assert not any(line.strip().startswith("검증 사실") for line in verdict_lines(state))       # 검증 전(빈 값)이면 줄이 없다
 
 
 # ── R3-5d ①-b — 검증: 번역의 공유/못 가름, 연결 확인에 걷기 키, 걷기와 어긋남, 후보의 토픽 ──
@@ -771,7 +807,7 @@ async def test_결함_아님은_걷기가_다_정상에서_멈췄고_나쁨이_�
     assert got["verify_problems"] == [] and got["verdict"].confidence == "medium" and got["verdict"].verdict_type == "not_a_defect"
     assert any("결함 아님의 확신 상한은 medium" in c for c in got["verdict"].caveats)
     # 칸의 code.read와 메시지 홉도 각각 코드 증거·입력 증거다; medium이면 상한에 안 걸려 그대로
-    assert await nodes["verify"](_nad_state(case, verdict=_nad("t-5.e1", "t-4.e1", confidence="medium"))) == {"verify_problems": []}
+    assert _untouched(await nodes["verify"](_nad_state(case, verdict=_nad("t-5.e1", "t-4.e1", confidence="medium"))))
     # (c) 둘 중 하나가 빠지면 되묻는다
     code_only = await nodes["verify"](_nad_state(case, verdict=_nad("t-2.e1")))
     assert code_only["verify_attempts"] == 1 and any("비지 않은 입력 증거가 없다" in p and "t-3.e1" in p for p in code_only["verify_problems"])
@@ -794,7 +830,7 @@ async def test_결함_아님은_걷기가_다_정상에서_멈췄고_나쁨이_�
     assert any("검증 미통과" in c for c in demoted["verdict"].caveats)
     # 대본 경로는 안 건다
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
-    assert await loose["verify"](_nad_state(case, walk=None, verdict=_nad("t-2.e1"))) == {"verify_problems": []}
+    assert _untouched(await loose["verify"](_nad_state(case, walk=None, verdict=_nad("t-2.e1"))))
 
 
 def test_basis의_태스크_id도_그_태스크의_유일한_증거_id로_고친다():
@@ -870,7 +906,7 @@ async def test_걷기가_멈춘_자리를_못_봤으면_high는_medium이고_cav
     assert patch["verify_problems"] == [] and patch["verdict"].confidence == "medium"
     assert patch["verdict"].caveats == ["걷기가 멈춘 자리를 못 봤다 — 키가 없다 — alarm:source:L1; 확신 상한 medium"]
     loose = make_nodes(deps_for(ScriptedRunner(), check_discovery=False))
-    assert await loose["verify"](_state(case, verdict=verdict(), walk=Walk(stopped=unseen[0]))) == {"verify_problems": []}
+    assert _untouched(await loose["verify"](_state(case, verdict=verdict(), walk=Walk(stopped=unseen[0]))))
 
 
 async def test_멈춘_홉의_입력을_못_읽었으면_확신_상한_low와_고정_caveat이고_유형은_그대로다(case):

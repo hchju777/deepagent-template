@@ -2088,6 +2088,18 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 트레이서 행이 열하나가 돼 행을 열로 풀던 옛 테스트(`test_트레이스가_시도마다_날것을_건넨다`)를 열하나로 고쳤다.
 - 테스트 먼저(RED → GREEN). 스윕 +8(1274). `code graph` 재생성 불필요. **R3-5x 끝.**
 
+#### R3-5y ① (11-04) ✅ — 검증 사실 한 줄(최상위 인용의 잘림 · 다른 레포 코드)
+
+- 측정 #32 회신의 답 1: high를 받칠 근거가 없는 판을 다음 판부터 이 줄로 센다(동작 변경 없음).
+- `nodes.verdict_facts` — 최상위 원인 기준 `최상위 인용 잘림 a/b · 다른 레포 코드 c/d`. 잘림 = 인용 id 중 `complete=False`인 증거, 다른 레포 = 인용한 코드 증거
+  (`_root_code_repos` — `caveat_code_repos`와 같은 셈: 태스크의 `repo`·`service` 인자) 중 component 레포 밖. component가 서비스가 아니면(external 등) `다른 레포 코드
+  해당 없음(component가 서비스가 아니다)`, 최상위 원인이 없으면 `최상위 원인 없음`.
+- verify가 판정이 정해진 길(통과·강등, 대본 경로 포함)에서 State `verify_facts`에 남기고, 판정 블록(`verdict_lines`)이 검증 줄 아래 `검증 사실: …`로 찍는다. 되묻는
+  길은 다음 판정을 다시 본다. 진짜 CLI(`case investigate`) 출력에 그 줄이 나오는지 끝까지 확인한다.
+- verify의 패치를 `{"verify_problems": []}`와 통째로 견주던 테스트 여덟 줄은 `_untouched`(판정이 패치에 없고 문제도 없다)로 — 뜻은 그대로다.
+- 옛 스윕 사례 다섯 같은 변이로 재지정(verify의 반환 줄들·강등 줄, 레포 인자 줄이 `_root_code_repos`와 겹쳐 들여쓰기까지).
+- 테스트 먼저(RED → GREEN). 스윕 +5(1279). `code graph` 재생성 불필요.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

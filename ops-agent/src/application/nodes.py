@@ -1199,6 +1199,35 @@ def caveat_code_repos(verdict: Verdict, *, plan_tasks, service_repos: dict[str, 
     return verdict.model_copy(update={"caveats": verdict.caveats + [c for c in dict.fromkeys(caveats) if c not in verdict.caveats]})
 
 
+def _root_code_repos(link: CauseLink, *, plan_tasks, service_repos: dict[str, str]) -> list[str]:
+    """그 다리가 인용한 **코드 증거**마다 그 레포 — `caveat_code_repos`와 같은 셈(태스크의 `repo`·`service` 인자, 없으면 모른다 — 안 센다)."""
+    made_by = {e: t for t in plan_tasks for e in t.result_evidence_ids} | {t.id: t for t in plan_tasks}
+    repos = []
+    for cited in dict.fromkeys(link.evidence_ids):
+        made = made_by.get(cited)
+        if made is None or not made.action.startswith("code."):
+            continue
+        repo = str(made.params.get("repo") or service_repos.get(str(made.params.get("service", "")), ""))
+        if repo:
+            repos.append(repo)
+    return repos
+
+
+def verdict_facts(verdict: Verdict, *, evidence, plan_tasks, service_repos: dict[str, str]) -> str:
+    """검증이 이미 아는 사실 한 줄 — 최상위 원인이 인용한 증거 중 잘린 것(`complete=False`), 인용한 코드 증거 중 component 레포 밖의 것(R3-5y ① — 측정 #32
+    회신의 답 1: high를 받칠 근거가 없는 판을 다음 판부터 이 줄로 센다). 동작은 안 바꾼다. component가 서비스가 아니면(external 등) 레포 칸은 해당 없음."""
+    root = verdict.root_cause
+    if root is None:
+        return "최상위 원인 없음"
+    ids = list(dict.fromkeys(root.evidence_ids))
+    cut = {e.id for e in evidence if not e.complete}
+    head = f"최상위 인용 잘림 {sum(1 for e in ids if e in cut)}/{len(ids)}"
+    if root.component not in service_repos:
+        return f"{head} · 다른 레포 코드 해당 없음(component가 서비스가 아니다)"
+    repos = _root_code_repos(root, plan_tasks=plan_tasks, service_repos=service_repos)
+    return f"{head} · 다른 레포 코드 {sum(1 for r in repos if r != service_repos[root.component])}/{len(repos)}"
+
+
 def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> Callable[[str], str | None]:
     """component 하나의 문제 — 없으면 None. 대본 경로(`check_discovery=False`)는 사람이 이름을 알고 적은 것이라 검사하지
     않는다(태스크의 "찾지 않고 이름을 댔다"와 같은 스위치)."""
@@ -1304,17 +1333,23 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
         if deps.check_discovery:
             # 결함 아님(R3-5d ⑤)은 걷기가 지킨다 — 대본 경로는 걷기가 없다.
             problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)
+        # 검증이 아는 사실 한 줄(R3-5y ①) — 판정이 정해진 길(통과·강등)에서만 남긴다. 되묻는 길은 다음 판정을 다시 본다.
+        def facts(final: Verdict) -> str:
+            return verdict_facts(final, evidence=state.evidence, plan_tasks=state.plan_tasks, service_repos=deps.service_repos or {})
+
         if not problems:
             if not deps.check_discovery:
-                return {"verify_problems": [], **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
+                return {"verify_problems": [], "verify_facts": facts(verdict),
+                        **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
             capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(
                 cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))
-            return {"verify_problems": [], **({"verdict": capped} if (changed or capped is not verdict) else {})}
+            return {"verify_problems": [], "verify_facts": facts(capped), **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.
             return {"verify_problems": problems, "verify_attempts": state.verify_attempts + 1,
                     "llm_errors": [f"verify: {p}" for p in problems]}
-        return {"verdict": demote_verdict(verdict, problems, citable=citable, component_problem=component_problem),
+        demoted = demote_verdict(verdict, problems, citable=citable, component_problem=component_problem)
+        return {"verdict": demoted, "verify_facts": facts(demoted),
                 "verify_problems": [],
                 "llm_errors": [f"verify: 재작성 뒤에도 미통과 — 걷어내고 강등 ({len(problems)}건)"]}
 

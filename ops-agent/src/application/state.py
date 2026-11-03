@@ -76,6 +76,8 @@ class CaseState(StrictModel):
     # 두 번째도 실패하면 verify가 강등해 통과시키고 비운다 — 세 번째는 없다.
     verify_problems: list[str] = []
     verify_attempts: int = 0
+    # R3-5y ① — 검증이 아는 사실 한 줄(최상위 인용의 잘림 · 다른 레포 코드). 판정 블록이 찍고 평가가 센다 — 동작은 안 바꾼다. 빈 값이면 검증 전.
+    verify_facts: str = ""
     # R3-1 ① — frame 전 입구 노드가 고른 대상 키(또는 못 고른 이유). 브리핑·verify가 이것을 본다 — 다시 고르지 않는다.
     target: TargetPick | None = None
     # R3-3 ② — 입구 뒤 걷기 노드가 상류를 걸은 결과(홉 표·멈춘 자리). 브리핑의 다음 홉과 중복 거부의 홉은 이것을 본다.
