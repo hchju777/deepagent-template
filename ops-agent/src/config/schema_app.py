@@ -52,6 +52,10 @@ class InvestigationConfig(StrictModel):
     # 클수록 느리다. 좁혀 읽은 증거도 같은 상한을 지킨다. frame은 작아서 상한이 없다.
     integrate_prompt_chars: int = Field(default=8000, ge=2000)
     conclude_prompt_chars: int = Field(default=10000, ge=2000)
+    # 섞인 토픽에서 한 유형만 셀 때(R3-5y ③)의 상한 — 파티션마다 끝에서 N건, T초(먼저 닿는 쪽). config에서 오는 이유: 녹화와 재생의 인자가 같아야 녹화가
+    # 맞는다(측정 #32 회신의 답 2(5)). 걷기의 시간 상한은 그대로다 — 남은 예산이 T보다 적으면 걷기는 세지 않는다(인자를 줄이지 않는다).
+    type_count_max: int = Field(default=20000, ge=1)
+    type_count_seconds: float = Field(default=8.0, gt=0)
     # 리드 프롬프트. config 안의 상대 경로다 — 운영이 직접 고치는 파일이라
     # 코드에 박아 두면 고치려고 배포를 해야 한다.
     frame_prompt: str = Field(default="prompts/investigate-frame.md", min_length=1)

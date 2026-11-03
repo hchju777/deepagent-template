@@ -52,6 +52,9 @@ ACTIONS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
     "kafka.message_at":    ("kafka", "message_at",    ("topic", "partition", "offset"), ()),
     # 토픽의 보존 범위만(파티션별 begin·end, 본문 없음 — R3-5p ①-a): 없는 키를 쓰는 클래스가 구독하는 토픽이 비었는지. 걷기가 낸다.
     "kafka.offsets":       ("kafka", "offsets",       ("topic",),              ()),
+    # 섞인 토픽에서 그 클래스의 유형만 센다(R3-5y ③ — 측정 #32: 리드가 tail을 20·50·200으로 냈지만 유형 30개가 섞인 10만 건 중 끝 몇백 건으로는 답이 안 났다).
+    # 인자는 토픽과 **클래스**뿐 — 셀 유형 칸·값은 실행기가 코드의 유형표에서 풀고 상한은 config다(리드가 값을 지어내지 않게). 포트는 `count_type(topic, field=…)`.
+    "kafka.count_type":    ("kafka", "count_type",    ("topic", "class"),      ()),
     # `params`가 두 번 나오는 것은 포트 시그니처 그대로다 — `query(entry, params)`.
     # 이름을 바꾸면 표와 포트가 갈라지고, 갈라진 것을 아무도 안 본다.
     "rest.query":          ("rest",  "query",         ("entry", "params"),     ()),

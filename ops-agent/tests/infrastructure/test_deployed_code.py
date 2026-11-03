@@ -1414,3 +1414,62 @@ async def test_routed_types는_클래스가_라우터_유형표를_거쳐_받으
     # 선언이 없으면 모른다 — 전처럼
     bare = code_at(topology.model_copy(update={"pipelines": PipelineSpec(class_key="class", enabled_key="enabled")}))
     assert await bare.routed_types("Seeder") == ""
+
+
+
+# ── R3-5y ③ — 유형 세기의 인자: 클래스 → 짝인 유형 멤버의 **값**, 선언한 유형 칸 ──
+
+async def test_type_count_spec은_클래스와_짝인_유형_열거_멤버의_값과_선언한_유형_칸을_준다(tmp_path, clock):
+    """측정 #32 회신의 답 2: 세는 유형은 유형표에서 그 클래스의 파이프라인과 짝인 유형 열거 멤버들이고, 메시지와 견주는 것은 멤버의 **값**이다(라우터가 그 값으로
+    가른다 — 이름이 아니다). 리드는 값을 대지 않는다 — 클래스만, 값은 여기서. 유형 칸은 `pipelines.router.type_field`. 멤버 값이 리터럴이 아니면 셀 값을
+    모른다. 유형 열거가 짝 목록과 다른 파일에 있어도 찾는다."""
+    from src.knowledge import index as ix
+    from src.knowledge.schema import PipelineSpec, RouterSpec
+
+    root = make_git_repo(tmp_path / "dt-core", origin="https://git.example.com/team/dt-core")
+
+    def write(path, value):
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value if isinstance(value, str) else json.dumps(value), encoding="utf-8")
+
+    write("config/gbm/mx.json", {"pipelines": {"seed": {"enabled": True, "class": "Seeder"}, "pack": {"enabled": True, "class": "Packer"},
+                                               "lone": {"enabled": True, "class": "Lonely"}}})
+    files = {"jobs/__init__.py": "",
+             "jobs/kinds.py": ("from enum import Enum, auto\n\n\nclass Kind(Enum):\n    COLOR = \"color\"\n    BOX = 2\n    NOTE = auto()\n"),
+             "jobs/flows.py": "from enum import Enum\n\n\nclass Flow(Enum):\n    SEED = \"seed\"\n    PACK = \"pack\"\n",
+             "jobs/route.py": ("from jobs.flows import Flow\nfrom jobs.kinds import Kind\n\nPAIRS = [\n    (Kind.COLOR, Flow.SEED),\n    (Kind.BOX, Flow.PACK, Flow.SEED),\n"
+                               "    (Kind.NOTE, Flow.PACK),\n]\n"),
+             "jobs/seed.py": "class Seeder:\n    pass\n", "jobs/pack.py": "class Packer:\n    pass\n", "jobs/lonely.py": "class Lonely:\n    pass\n"}
+    for path, text in files.items():
+        write(path, text)
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "head", cwd=root)
+
+    class _Head:
+        async def files(self):
+            return sorted(files)
+
+        async def read(self, path):
+            return files.get(path)
+
+    router = RouterSpec(type_enum="Kind", pipeline_enum="Flow", type_field="meta.kind")
+    topology = Topology(services={"jobs": Service(repo="dt-core", role="일을 한다")}, config_paths=LAYERS,
+                        pipelines=PipelineSpec(class_key="class", enabled_key="enabled", router=router))
+    reader = RealCodeReader([RepoConfig(name="dt-core", path=str(root), url="https://git.example.com/team/dt-core")], clock=clock)
+    index = await ix.build_index({"dt-core": _Head()}, commits={"dt-core": "head"})
+
+    def code_at(topo=topology):
+        made = DeployedCode(reader, topo, Deployment(), gbm="mx", fct="gumi", clock=clock)
+        made.attach_index(index)
+        return made
+
+    here = code_at()
+    # 값 — 이름이 아니다. 정수 값도 리터럴이다(문자열로 견준다 — 세는 쪽이 메시지의 값도 문자열로 바꿔 견준다).
+    assert await here.type_count_spec("Seeder") == ("meta.kind", ["2", "color"], ["BOX", "COLOR"])
+    assert await here.type_count_spec("Packer") == "유형 열거 멤버 NOTE의 값이 리터럴이 아니다 — 셀 값을 모른다"
+    assert await here.type_count_spec("Lonely") == "Lonely은 라우터 유형표를 거치지 않는다 — 셀 유형이 없다"
+    assert await here.routed_types("Seeder") == "유형 3개가 섞인 토픽 — BOX·COLOR 유형의 메시지 수는 세지 않았다"     # 판별은 그대로
+    bare = code_at(topology.model_copy(update={"pipelines": PipelineSpec(class_key="class", enabled_key="enabled",
+                                                                          router=RouterSpec(type_enum="Kind", pipeline_enum="Flow"))}))
+    assert await bare.type_count_spec("Seeder") == "유형 칸 선언 없음(토폴로지 pipelines.router.type_field) — 셀 수 없다"

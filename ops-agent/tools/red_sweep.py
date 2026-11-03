@@ -2960,7 +2960,7 @@ CASES += [
  ("포트에 포인터 읽기가 없다", PTS, "    async def message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:\n        \"\"\"포인터(토픽·파티션·오프셋)가 가리키는 메시지 **한 건**(R3-5d ④).", "    async def message_at_(self, topic: str, partition: int, offset: int) -> ProbeResult:\n        \"\"\"포인터(토픽·파티션·오프셋)가 가리키는 메시지 **한 건**(R3-5d ④).", [PORT_MSG_T, PORT_SURF_T]),
  ("포인터 읽기가 등재 목록에 없다", AC, "    \"kafka.message_at\":    (\"kafka\", \"message_at\",    (\"topic\", \"partition\", \"offset\"), ()),\n", "", [ACT_MSG_T]),
  ("본문을 안 싣는 읽기 목록이 비었다", AC, "SUMMARY_ONLY = frozenset({\"kafka.message_at\"})", "SUMMARY_ONLY = frozenset()", [ACT_MSG_T, RP_MSG_T]),
- ("포인터 읽기의 본문을 증거에 싣는다", RP, "        if task.action in SUMMARY_ONLY:", "        if False:", [RP_MSG_T]),
+ ("포인터 읽기의 본문을 증거에 싣는다", RP, "        elif task.action in SUMMARY_ONLY:", "        elif False:", [RP_MSG_T]),
  ("요약 줄은 여전히 원본 repr이다", RP, "            summary=aside + head,", "            summary=aside + _summarize(result.data),", [RP_MSG_T]),
  ("범위 밖 오프셋을 읽으러 간다", KI, "            if not begin <= offset < end:", "            if False:", [KI_RANGE_T]),
  ("압축된 오프셋의 다음 레코드를 그 메시지라 한다", KI, "            if record.offset != offset:", "            if False:", [KI_HOLE_T]),
@@ -3726,8 +3726,8 @@ ROUTED_T = "tests/infrastructure/test_deployed_code.py::test_routed_types는_클
 MIXED_T = "tests/application/test_walk.py::test_라우터가_유형별로_나눠_보내는_토픽은_남은_메시지가_있어도_정상이_아니라_모름이다"
 BOARD_MIXED_T = "tests/test_board_walk.py::test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다"
 CASES += [
- ("라우터 선언이 있어도 유형표를 안 본다", DCP, "        if router is None:\n            return \"\"\n        wanted: set[str] = set()", "        if True:\n            return \"\"\n        wanted: set[str] = set()", [ROUTED_T]),
- ("유형 하나뿐인 짝도 섞였다고 한다", DCP, "            if hit and len(kinds) > 1:", "            if hit:", [ROUTED_T]),
+ ("라우터 선언이 있어도 유형표를 안 본다", DCP, "        if router is None:\n            return None\n        wanted: set[str] = set()", "        if True:\n            return None\n        wanted: set[str] = set()", [ROUTED_T]),
+ ("유형 하나뿐인 짝도 섞였다고 한다", DCP, "        if hit and len(kinds) > 1:", "        if hit:", [ROUTED_T]),
  ("파이프라인 열거 멤버를 값으로 안 맞춘다", DCP, "if m in wanted or v in wanted}", "if m in wanted}", [ROUTED_T]),
  ("짝의 둘째 파이프라인부터 안 본다", DCP, "            flows = [_enum_ref(e, pipeline_enum) for e in node.elts[1:]]", "            flows = [_enum_ref(e, pipeline_enum) for e in node.elts[1:2]]", [ROUTED_T]),
  ("유형표 확인 실패를 빈 문자열로 삼킨다", DCP, "                self._routed[class_name] = f\"라우터 유형표를 확인하지 못했다({type(exc).__name__})\"", "                self._routed[class_name] = \"\"", [ROUTED_T]),
@@ -3802,7 +3802,39 @@ CASES += [
  ("재생 꼴 토픽도 시드 메시지에서 센다", ST, "        if topic in self._replayed or (topic not in self._ends and self._outside):", "        if topic not in self._ends and self._outside:", [COUNT_STUB_T]),
  ("녹화 인자를 안 맞춰 본다", ST, "\"max_seconds\": float(c[\"params\"].get(\"max_seconds\", -1))} == args), None)", "\"max_seconds\": float(c[\"params\"].get(\"max_seconds\", -1))} and True), None)", [COUNT_STUB_T]),
 ]
-assert len(CASES) >= 1289, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5y ③ — 유형 세기의 인자(코드가 유형표에서) · `kafka.count_type {topic, class}` · 결과 문장 ──
+TCSPEC_T = "tests/infrastructure/test_deployed_code.py::test_type_count_spec은_클래스와_짝인_유형_열거_멤버의_값과_선언한_유형_칸을_준다"
+TCRUN_T = "tests/application/test_runner_probe.py::test_kafka_count_type은_클래스에서_유형_값을_풀어_config의_상한으로_세고_그_문장을_증거_머리로_싣는다"
+TCSENT_T = "tests/application/test_walk.py::test_유형_세기_문장은_0건_전부_0건_일부_k건_멈춤_유형_칸_없음을_가르고_센_창의_오프셋과_시각을_붙인다"
+CASES += [
+ ('유형 열거 정의 파일을 안 읽는다', DCP, ', f"class {router.type_enum}", f"{router.type_enum}."]', ', f"{router.type_enum}."]', [TCSPEC_T]),
+ ('셀 값 대신 멤버 이름을 준다', DCP, 'return router.type_field, [kinds_of[name] for name in hit], hit', 'return router.type_field, list(hit), hit', [TCSPEC_T]),
+ ('리터럴 아닌 멤버 값을 그대로 센다', DCP, '            if unknown:\n                return f"유형 열거 멤버', '            if False:\n                return f"유형 열거 멤버', [TCSPEC_T]),
+ ('유형 칸 선언 없이도 센다', DCP, '            if router is None or not router.type_field:', '            if router is None:', [TCSPEC_T]),
+ ('정수 유형 값을 리터럴로 안 본다', DCP, 'isinstance(literal, (str, int)) and not isinstance(literal, bool)', 'isinstance(literal, str)', [TCSPEC_T]),
+ ('라우터를 안 거치는 클래스의 까닭을 안 적는다', DCP, '            if found is None:\n                return f"{class_name}은 라우터 유형표를', '            if False:\n                return f"{class_name}은 라우터 유형표를', [TCSPEC_T]),
+ ('셀 값을 파이프라인 열거에서 푼다', DCP, 'kinds_of.update(_enum_members(tree, router.type_enum))', 'kinds_of.update(_enum_members(tree, router.pipeline_enum))', [TCSPEC_T]),
+ ('유형 칸 선언을 못 받는다', ROOT / "src/knowledge/schema.py", '    type_field: str | None = Field(default=None, min_length=1)\n', '', [TCSPEC_T]),
+ ('유형 세기 액션이 등재되지 않았다', AC, '    "kafka.count_type":    ("kafka", "count_type",    ("topic", "class"),      ()),\n', '', [TCRUN_T]),
+ ('유형 세기 액션이 클래스를 안 받는다', AC, '("kafka", "count_type",    ("topic", "class"),', '("kafka", "count_type",    ("topic",),', [TCRUN_T]),
+ ('유형 세기 실행기 분기가 없다', RP, '        elif task.action == "kafka.count_type":\n            result = await self._count_type(task.params, source)\n', '', [TCRUN_T]),
+ ('리드가 댄 유형 값을 받는다', RP, '        problem = action_problem("kafka.count_type", params)\n        if problem is not None:', '        problem = None\n        if problem is not None:', [TCRUN_T]),
+ ('유형 세기가 config 상한을 안 쓴다', RP, 'max_messages=self._type_count[0], max_seconds=self._type_count[1])', 'max_messages=20000, max_seconds=self._type_count[1])', [TCRUN_T]),
+ ('유형 세기 결과에 멤버 이름을 안 얹는다', RP, '{**got.data, "types": list(names)}', '{**got.data}', [TCRUN_T]),
+ ('유형 세기 증거 머리가 문장이 아니다', RP, '            head = type_count_status(result.data, "")[0]', '            head = _summarize(result.data)', [TCRUN_T]),
+ ('코드가 푼 못 세는 까닭을 버린다', RP, '        if isinstance(spec, str):\n            return ProbeResult.failed(spec,', '        if isinstance(spec, str):\n            return ProbeResult.failed("셀 수 없다",', [TCRUN_T]),
+ ('0건이 보존 범위 전부여도 일부라고 쓴다', RP, '    if data.get("whole"):\n        ranges', '    if False:\n        ranges', [TCSENT_T]),
+ ('유형 칸이 없는 창을 0건 나쁨으로 쓴다', RP, '    if counted and not data.get("with_field"):', '    if False:', [TCSENT_T]),
+ ('멈춘 세기를 비었다로 쓴다', RP, '    if data.get("stopped"):\n        return f"모름 — {names} 세다 멈춤', '    if False:\n        return f"모름 — {names} 세다 멈춤', [TCSENT_T]),
+ ('센 창의 시각을 안 붙인다', RP, '    span = f", {data[\'first_at\']}~{data[\'last_at\']}" if data.get("first_at") and data.get("last_at") else ""', '    span = ""', [TCSENT_T]),
+ ('0건 일부를 나쁨으로 안 친다', RP, 'True, f"{names} 0건(최근 {counted}건만)")', 'False, f"{names} 0건(최근 {counted}건만)")', [TCSENT_T]),
+ ('0건 전부를 나쁨으로 안 친다', RP, 'True, f"{names} 0건(보존 범위 전부 {counted}건)"', 'False, f"{names} 0건(보존 범위 전부 {counted}건)"', [TCSENT_T]),
+ ('여러 파티션의 센 범위를 첫 파티션만 적는다', RP, '    window = (f"오프셋 {rows[0][\'from\']}~{rows[0][\'to\']}" if len(rows) == 1', '    window = (f"오프셋 {rows[0][\'from\']}~{rows[0][\'to\']}" if True', [TCSENT_T]),
+ ('가장 최근 그 유형 메시지의 파티션을 안 적는다', RP, '        where = f"오프셋 {latest.get(\'offset\')}" if len(rows) == 1 else', '        where = f"오프셋 {latest.get(\'offset\')}" if True else', [TCSENT_T]),
+ ('유형을 멤버 이름이 아니라 값으로 말한다', RP, 'names = "·".join(data.get("types") or data.get("values") or [])', 'names = "·".join(data.get("values") or [])', [TCSENT_T, TCRUN_T]),
+ ('맞은 건이 있어도 비었다로 쓴다', RP, '    if matched:\n        latest = data.get("latest") or {}', '    if False:\n        latest = data.get("latest") or {}', [TCSENT_T]),
+]
+assert len(CASES) >= 1315, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

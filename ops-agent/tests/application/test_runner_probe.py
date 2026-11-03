@@ -448,3 +448,32 @@ async def test_포인터_메시지_읽기의_증거는_크기와_행_요약만�
     out = await ProbeRunner(Bundle(kafka=gone), clock=lambda: T0).run(
         task("t-6", action="kafka.message_at", params={"topic": "t", "partition": 0, "offset": 7}), case=case)
     assert out.evidence[0].summary == "t[0]@7 — 없음 · 보존 범위 밖 — 남은 것은 0부터 9 전까지"
+
+
+
+# ── R3-5y ③ — 유형 세기 액션: 리드·걷기는 {topic, class}만, 셀 값은 코드가 ──
+
+async def test_kafka_count_type은_클래스에서_유형_값을_풀어_config의_상한으로_세고_그_문장을_증거_머리로_싣는다(case):
+    """측정 #32 회신의 답 2(3)(5): 인자는 `{topic, class}`뿐 — 유형 값은 코드가 유형표에서 푼다(리드가 값을 대면 받지 않는다). 상한 N·T는 config에서 와서
+    녹화와 재생의 인자가 같다. 결과에 셀 유형 멤버 이름을 얹어 문장이 이름으로 말하고, 견주는 것은 멤버의 값이다."""
+    from src.infrastructure.stubs import StubKafkaInspector
+
+    class _Code:
+        async def type_count_spec(self, name):
+            return ("meta.kind", ["7"], ["COLOR"]) if name == "Seeder" else f"{name}은 라우터 유형표를 거치지 않는다 — 셀 유형이 없다"
+
+    seeded = StubKafkaInspector({"t.raw": {"begin": 0, "messages": [{"meta": {"kind": "7" if n % 4 == 0 else "COLOR"}} for n in range(10)]}},
+                                clock=lambda: T0)
+    runner = ProbeRunner(clock=lambda: T0, adapters=Bundle(kafka=seeded, code=_Code()), type_count=(6, 8.0))
+    out = await runner.run(task("t-5", action="kafka.count_type", params={"topic": "t.raw", "class": "Seeder"}), case=case)
+    assert out.status == "ok", out.error
+    assert out.evidence[0].summary.startswith("정상 — COLOR 2건, 최근 6건(오프셋 4~10) 중, 가장 최근 그 유형 메시지 오프셋 8")   # 값 "7"로 견줬다 — 이름이면 6건
+    data = runner.raw(out.evidence[0].id)
+    assert (data["types"], data["values"], data["max_messages"], data["max_seconds"]) == (["COLOR"], ["7"], 6, 8.0)
+    off = await runner.run(task("t-6", action="kafka.count_type", params={"topic": "t.raw", "class": "Nobody"}), case=case)
+    assert off.status == "error" and "Nobody은 라우터 유형표를 거치지 않는다" in off.error
+    told = await runner.run(task("t-7", action="kafka.count_type", params={"topic": "t.raw", "class": "Seeder", "values": ["9"]}), case=case)
+    assert told.status == "error" and "values" in told.error                     # 리드가 값을 대면 받지 않는다
+    bare = ProbeRunner(clock=lambda: T0, adapters=Bundle(kafka=seeded))
+    nocode = await bare.run(task("t-8", action="kafka.count_type", params={"topic": "t.raw", "class": "Seeder"}), case=case)
+    assert nocode.status == "error" and "코드 번들이 없어" in nocode.error

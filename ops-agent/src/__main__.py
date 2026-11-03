@@ -1263,7 +1263,8 @@ def cmd_case_walk(args, env) -> int:
         try:
             # 조사(`cmd_case_investigate`)와 같은 재료 — 다른 것은 리드(`_no_lead`)뿐이다. 여기서 갈라지면 `case walk`가 조사와 다른 걷기를 보여 준다.
             deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock, detail_chars=app.investigation.evidence_chars,
-                                                 narrowed_chars=app.investigation.evidence_total_chars),
+                                                 narrowed_chars=app.investigation.evidence_total_chars,
+                                                 type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds)),
                               frame=_no_lead, integrate=_no_lead, max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width, max_tasks=app.investigation.max_tasks,
                               known_names=flow.known_names(flow_graph), components=frozenset(services),
@@ -1374,7 +1375,8 @@ def cmd_case_investigate(args, env) -> int:
             deps = EngineDeps(runner=ProbeRunner(
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars,
-                narrowed_chars=app.investigation.evidence_total_chars),
+                narrowed_chars=app.investigation.evidence_total_chars,
+                type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds)),
                               frame=frame, integrate=integrate, conclude=conclude,
                               max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width,

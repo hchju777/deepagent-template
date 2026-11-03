@@ -423,13 +423,15 @@ def _enum_ref(node, enum: str) -> str | None:
 
 
 def _enum_members(tree, enum: str) -> dict[str, str]:
-    """`class <열거>(…)`의 멤버 이름 → 값(문자열 상수만, 아니면 빈 문자열)."""
+    """`class <열거>(…)`의 멤버 이름 → 값(문자열·정수 상수만 — 정수는 문자열로, 아니면 빈 문자열). 유형 열거 값이 정수여도 셀 수 있게(R3-5y ③) —
+    유형 세기는 메시지의 값도 문자열로 바꿔 견준다."""
     out: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == enum:
             for item in node.body:
                 if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
-                    value = item.value.value if isinstance(item.value, ast.Constant) and isinstance(item.value.value, str) else ""
+                    literal = item.value.value if isinstance(item.value, ast.Constant) else None
+                    value = str(literal) if isinstance(literal, (str, int)) and not isinstance(literal, bool) else ""
                     out[item.targets[0].id] = value
     return out
 
@@ -481,8 +483,9 @@ class DeployedCode(DeployedCodePort):
         self._registrations: dict[tuple[str, str], list[Registration]] = {}
         # 클래스 → 라우터 유형표 확인 결과(R3-5w ②). 걷기가 토픽 홉마다 묻는다.
         self._routed: dict[str, str] = {}
-        # (레포, 커밋, 유형 열거, 파이프라인 열거) → 유형표(멤버, 짝 목록)(R3-5x ③). 클래스가 달라도 같은 표다 — git grep·show는 여기서 한 번.
-        self._router_tables: dict[tuple[str, str, str, str], tuple[dict[str, str], list[tuple[str, tuple[str, ...]]]]] = {}
+        # (레포, 커밋, 유형 열거, 파이프라인 열거) → 유형표(파이프라인 멤버, 유형 멤버, 짝 목록)(R3-5x ③·R3-5y ③). 클래스가 달라도 같은 표다 — git grep·show는
+        # 여기서 한 번.
+        self._router_tables: dict[tuple[str, str, str, str], tuple[dict[str, str], dict[str, str], list[tuple[str, tuple[str, ...]]]]] = {}
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -1044,10 +1047,41 @@ class DeployedCode(DeployedCodePort):
         return self._routed[class_name]
 
     async def _routed_types(self, class_name: str) -> str:
+        found = await self._class_types(class_name)
+        if found is None:
+            return ""
+        hit, kinds, _ = found
+        if hit and len(kinds) > 1:
+            return f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
+        return ""
+
+    async def type_count_spec(self, class_name: str) -> tuple[str, list[str], list[str]] | str:
+        """유형 세기(R3-5y ③)의 인자 `(유형 칸, 셀 값들, 유형 멤버 이름들)` 또는 못 세는 까닭. 값은 유형 열거 멤버의 **값**이다 — 라우터가 그 값으로 가른다(측정 #32
+        회신의 답 2: 이름이 아니다). 리드는 값을 대지 않는다 — 클래스만 받고 여기서 푼다. 유형 칸은 토폴로지 `pipelines.router.type_field`(사내 값은 사내
+        토폴로지에만). 멤버 값이 리터럴이 아니면 셀 값을 모른다. 던지지 않는다."""
+        try:
+            spec = self._topology.pipelines
+            router = spec.router if spec is not None else None
+            if router is None or not router.type_field:
+                return "유형 칸 선언 없음(토폴로지 pipelines.router.type_field) — 셀 수 없다"
+            found = await self._class_types(class_name)
+            if found is None:
+                return f"{class_name}은 라우터 유형표를 거치지 않는다 — 셀 유형이 없다"
+            hit, _, kinds_of = found
+            unknown = [name for name in hit if not kinds_of.get(name)]
+            if unknown:
+                return f"유형 열거 멤버 {', '.join(unknown)}의 값이 리터럴이 아니다 — 셀 값을 모른다"
+            return router.type_field, [kinds_of[name] for name in hit], hit
+        except Exception as exc:                                    # noqa: BLE001
+            return f"라우터 유형표를 확인하지 못했다({type(exc).__name__})"
+
+    async def _class_types(self, class_name: str):
+        """그 클래스가 유형표에서 짝인 것 `(유형 멤버 이름들, 짝 목록의 유형 전부, 유형 열거 멤버 이름 → 값)` — 선언이 없거나 라우터를 거치지 않으면 None. 못
+        읽으면 던진다(부르는 쪽이 그 사실로 바꾼다)."""
         spec = self._topology.pipelines
         router = spec.router if spec is not None else None
         if router is None:
-            return ""
+            return None
         wanted: set[str] = set()
         repos: dict[str, str] = {}
         for service in sorted(self.class_services().get(class_name, ())):
@@ -1059,28 +1093,29 @@ class DeployedCode(DeployedCodePort):
             known = self._topology.services[service]
             repos.setdefault(known.repo, self._deployment.pin_for(service, fct=self._fct).commit or self._deployment.default_ref)
         if not wanted:
-            return ""
+            return None
         for repo, commit in sorted(repos.items()):
-            members, pairs = await self._router_table(repo, commit, router)
+            members, kinds_of, pairs = await self._router_table(repo, commit, router)
             mine = {m for m, v in members.items() if m in wanted or v in wanted}
             kinds = {t for t, _ in pairs}
             hit = sorted({t for t, flows in pairs if mine & set(flows)})
-            if hit and len(kinds) > 1:
-                return f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
-        return ""
+            if hit:
+                return hit, kinds, kinds_of
+        return None
 
-    async def _router_table(self, repo: str, commit: str, router) -> tuple[dict[str, str], list[tuple[str, tuple[str, ...]]]]:
-        """그 커밋의 유형표 — 파이프라인 열거 멤버(이름 → 값)와 짝 목록. (레포, 커밋)마다 한 번 푼다(R3-5x ③ — 측정 #32 사전 점검 3: 클래스마다 git grep·show를
+    async def _router_table(self, repo: str, commit: str, router) -> tuple[dict[str, str], dict[str, str], list[tuple[str, tuple[str, ...]]]]:
+        """그 커밋의 유형표 — 파이프라인 열거 멤버(이름 → 값), 유형 열거 멤버(이름 → 값 — 유형 세기가 메시지와 견주는 것), 짝 목록. (레포, 커밋)마다 한 번 푼다(R3-5x ③ — 측정 #32 사전 점검 3: 클래스마다 git grep·show를
         다시 띄워 걷기 하나에 35번, 약 1.3초였다; 배치의 첫 걷기는 캐시가 차가워 시간 상한에 걸렸다). 못 읽으면 던진다 — `routed_types`가 그 사실로 바꾸고,
         실패는 캐시하지 않는다."""
         key = (repo, commit, router.type_enum, router.pipeline_enum)
         if key not in self._router_tables:
-            got = await self._reader.grep(repo, commit, [f"class {router.pipeline_enum}", f"{router.type_enum}."], fixed=True,
+            got = await self._reader.grep(repo, commit, [f"class {router.pipeline_enum}", f"class {router.type_enum}", f"{router.type_enum}."], fixed=True,
                                           max_lines=FLOW_MAX_LINES, max_chars=FLOW_MAX_CHARS)
             if got.status != "ok" or not isinstance(got.data, str):
                 raise RuntimeError(got.error or "grep 실패")
             files = sorted({hit.file for hit in parse_grep(repo, commit, got.data) if hit.file.endswith(_CODE_SUFFIX)})
             members: dict[str, str] = {}
+            kinds_of: dict[str, str] = {}
             pairs: list[tuple[str, tuple[str, ...]]] = []
             for path in files:
                 shown = await self._reader.show(repo, commit, path, whole=True)
@@ -1091,8 +1126,9 @@ class DeployedCode(DeployedCodePort):
                 except SyntaxError:
                     continue
                 members.update(_enum_members(tree, router.pipeline_enum))
+                kinds_of.update(_enum_members(tree, router.type_enum))
                 pairs += _type_pairs(tree, router.type_enum, router.pipeline_enum)
-            self._router_tables[key] = (members, pairs)
+            self._router_tables[key] = (members, kinds_of, pairs)
         return self._router_tables[key]
 
     async def _defined_at_pin(self, class_name: str, service: str) -> str:

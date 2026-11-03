@@ -21,6 +21,7 @@ from src.application.recompute import Recomputer
 from src.domain.actions import ACTIONS, DISCOVERY_ACTIONS, SUMMARY_ONLY, action_problem, describe, narrowed, run_action
 from src.domain.base import Clock
 from src.domain.case import Case, EvidenceRef, PlanTask
+from src.domain.envelope import ProbeResult
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
 from src.domain.jsonpath import steps
 
@@ -40,8 +41,10 @@ class ProbeRunner(TaskRunnerPort):
     """사이트 하나의 어댑터 묶음에 붙는다."""
 
     def __init__(self, adapters, *, clock: Clock, detail_chars: int = _DETAIL_CHARS,
-                 narrowed_chars: int = _NARROWED_CHARS):
+                 narrowed_chars: int = _NARROWED_CHARS, type_count: tuple[int, float] = (20000, 8.0)):
         self._adapters = adapters
+        # 유형 세기의 상한 (N건, T초)(R3-5y ③) — config `investigation.type_count_max`·`type_count_seconds`.
+        self._type_count = (int(type_count[0]), float(type_count[1]))
         self._detail_chars = detail_chars
         self._narrowed_chars = max(narrowed_chars, detail_chars)
         # 시계를 필수로 받는다(규율 2). 어댑터가 자기 시계를 갖고 있지만, 포트에
@@ -60,6 +63,28 @@ class ProbeRunner(TaskRunnerPort):
 
     def describe(self) -> str:
         return f"probe({', '.join(self._adapters.available()) or '없음'})"
+
+    async def _count_type(self, params, source: str) -> ProbeResult:
+        """유형 세기(R3-5y ③) — 리드·걷기는 `{topic, class}`만 대고, 셀 유형 칸·값은 코드가 유형표에서 푼다(LLM이 값을 지어내지 않게). 상한 N·T는 config —
+        녹화와 재생의 인자가 같게(측정 #32 회신의 답 2(5)). 결과에 셀 유형 멤버 이름(`types`)을 얹어 문장이 이름으로 말한다(견주는 것은 값이다)."""
+        problem = action_problem("kafka.count_type", params)
+        if problem is not None:
+            return ProbeResult.failed(problem, source=source, clock=self._clock)
+        kafka = getattr(self._adapters, "kafka", None)
+        if kafka is None:
+            return ProbeResult.failed("kafka 어댑터가 없다", source=source, clock=self._clock)
+        resolve = getattr(getattr(self._adapters, "code", None), "type_count_spec", None)
+        if resolve is None:
+            return ProbeResult.failed("코드 번들이 없어 셀 유형을 모른다 — 유형표는 코드에서 푼다", source=source, clock=self._clock)
+        spec = await resolve(str(params["class"]))
+        if isinstance(spec, str):
+            return ProbeResult.failed(spec, source=source, clock=self._clock)
+        field, values, names = spec
+        got = await kafka.count_type(str(params["topic"]), field=field, values=values,
+                                     max_messages=self._type_count[0], max_seconds=self._type_count[1])
+        if got.status != "ok" or not isinstance(got.data, dict):
+            return got
+        return got.model_copy(update={"data": {**got.data, "types": list(names)}})
 
     def raw(self, evidence_id: str):
         return self._raw.get(evidence_id)
@@ -91,6 +116,8 @@ class ProbeRunner(TaskRunnerPort):
             except Exception as exc:                                    # noqa: BLE001
                 return TaskOutcome(task_id=task.id, status="error",
                                    error=f"{source} — 재집계가 던졌다 — {type(exc).__name__}: {exc}")
+        elif task.action == "kafka.count_type":
+            result = await self._count_type(task.params, source)
         else:
             result = await run_action(self._adapters, task.action, task.params,
                                       clock=self._clock)
@@ -98,7 +125,12 @@ class ProbeRunner(TaskRunnerPort):
             return TaskOutcome(task_id=task.id, status="error",
                                error=f"{source} — {result.error}")
 
-        if task.action in SUMMARY_ONLY:
+        if task.action == "kafka.count_type":
+            # 셀 결과는 문장 하나가 머리다(R3-5y ③) — 걷기의 행 상태와 같은 문장. 본문은 파티션별 센 범위.
+            head = type_count_status(result.data, "")[0]
+            body, ours = [head, *(f"파티션 {r['partition']}: 보존 {r['begin']}~{r['end']} · 센 범위 {r['from']}~{r['to']} · {r['counted']}건 · 유형 칸 "
+                                  f"{r['with_field']}건 · 맞음 {r['matched']}건" for r in result.data.get("partitions") or [])], False
+        elif task.action in SUMMARY_ONLY:
             # 포인터 메시지는 세기만(사람 결정 10-19) — 본문도 요약 줄도 행 요약·크기 한 줄이다. 원본은 아래 `_raw`에 그대로 남아 걷기가 행을 본다.
             head = _message_line(result.data)
             body, ours = [head, "(메시지 본문은 증거에 싣지 않는다 — 크기와 행 요약만)"], False
@@ -214,6 +246,37 @@ def _summarize(data: Any) -> str:
     if isinstance(data, list):
         return f"{len(data)}건 {head}{repr(data)[:_SUMMARY_CHARS]}"
     return f"{head}{repr(data)[:_SUMMARY_CHARS]}"
+
+
+def type_count_status(data: Any, error: str) -> tuple[str, bool, str]:
+    """유형 세기(`kafka.count_type`) 결과의 행 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)`(R3-5y ③ — 측정 #32 회신의 답 2). 0건·보존 범위 전부 → 비었다, 0건·일부(N건
+    창) → 비었다 + 센 범위(그 앞은 안 셌다), k건 → 정상 + 가장 최근 그 유형 메시지, 시간 상한·빈 응답·실패 → 모름. 센 창의 오프셋과 첫·마지막 메시지 시각을 늘
+    붙인다 — 창이 몇 시간인지 몇 주인지가 나쁨의 무게를 정한다. 유형 칸이 든 메시지가 0건이면 모름 — 선언한 칸 이름이 틀렸을 때 "그 유형이 없다"가 되지 않게.
+    걷기의 행과 증거 머리가 같은 문장이다."""
+    if not isinstance(data, dict):
+        return f"모름 — 유형 세기 실패 — {error}", False, "유형 세기 실패"
+    names = "·".join(data.get("types") or data.get("values") or []) or "그 유형"
+    rows = data.get("partitions") or []
+    window = (f"오프셋 {rows[0]['from']}~{rows[0]['to']}" if len(rows) == 1
+              else ", ".join(f"p{r['partition']} {r['from']}~{r['to']}" for r in rows))
+    span = f", {data['first_at']}~{data['last_at']}" if data.get("first_at") and data.get("last_at") else ""
+    counted, matched = data.get("counted", 0), data.get("matched", 0)
+    if matched:
+        latest = data.get("latest") or {}
+        where = f"오프셋 {latest.get('offset')}" if len(rows) == 1 else f"파티션 {latest.get('partition')} 오프셋 {latest.get('offset')}"
+        at = f", 시각 {latest['at']}" if latest.get("at") else ""
+        return (f"정상 — {names} {matched}건, 최근 {counted}건({window}{span}) 중, 가장 최근 그 유형 메시지 {where}{at}", False,
+                f"{names} {matched}건/{counted}건")
+    if data.get("stopped"):
+        return f"모름 — {names} 세다 멈춤({counted}건까지 0건, {data['stopped']})", False, f"{names} 세다 멈춤({counted}건까지 0건)"
+    if counted and not data.get("with_field"):
+        return (f"모름 — 유형 칸 {data.get('field')}이 든 메시지 0건(최근 {counted}건, {window}{span}) — 선언을 확인", False,
+                f"유형 칸 {data.get('field')} 없음")
+    if data.get("whole"):
+        ranges = (f"{rows[0]['begin']}~{rows[0]['end']}" if len(rows) == 1
+                  else ", ".join(f"p{r['partition']} {r['begin']}~{r['end']}" for r in rows))
+        return f"비었다 — {names} 0건, 보존 범위 {ranges} 전부({counted}건{span})", True, f"{names} 0건(보존 범위 전부 {counted}건)"
+    return (f"비었다 — {names} 0건, 최근 {counted}건({window}{span})만 셌다 — 그 앞은 안 셌다", True, f"{names} 0건(최근 {counted}건만)")
 
 
 def _message_line(data: Any) -> str:

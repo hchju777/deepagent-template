@@ -99,6 +99,8 @@ class RouterSpec(StrictModel):
     있고, 파이프라인 열거 멤버의 값(또는 이름)이 config 파이프라인 항목의 이름이다(검토 회신 11-03 4). 두 열거의 클래스 이름 — 사내 이름은 사내 토폴로지에만."""
     type_enum: str = Field(min_length=1)
     pipeline_enum: str = Field(min_length=1)
+    # 메시지 값 안의 유형 칸(점 경로) — 섞인 토픽에서 그 클래스의 유형만 셀 때(R3-5y ③) 메시지와 견주는 자리. 없으면 세지 않는다(그 행은 지금처럼 모름).
+    type_field: str | None = Field(default=None, min_length=1)
 
 
 class PipelineSpec(StrictModel):
