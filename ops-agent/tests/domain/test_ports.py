@@ -130,3 +130,9 @@ def test_토픽의_보존_범위만_읽을_수_있다():
     """R3-5p ①-a(평가자 분석 10-28): 없는 키의 쓰는 클래스가 구독하는 토픽에 무엇이 남아 있는지(비었는지) — `message_at`이 머리에 주는 범위(`begin`·`end`)만
     본문 없이. `assign`만, 그룹 미참여·커밋 없음·seek 없음."""
     assert "offsets" in _public_methods(KafkaInspectorPort)
+
+
+def test_섞인_토픽에서_한_유형만_셀_수_있다():
+    """R3-5y ②(측정 #32 회신의 답 2): 라우터가 유형별로 나눠 보내는 토픽에서 그 클래스 유형의 메시지만 센다 — 메서드 하나, 한 번 부르면 결과 하나(녹화·재생이
+    인자별 결과 하나로 맞는다). tail·message_at을 여러 번 부르는 식이 아니다. 이름에 쓰기 동사가 없다(위 WRITE_VERBS)."""
+    assert "count_type" in _public_methods(KafkaInspectorPort)

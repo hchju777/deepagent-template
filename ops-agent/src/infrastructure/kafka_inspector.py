@@ -27,11 +27,13 @@ cluster 객체를 만들어 돌려줄 뿐 컨슈머 내부 캐시를 갱신하�
 "관리자에게 토폴로지를 묻고, 컨슈머는 지정된 파티션만 읽는다"는 역할 분리도 명확하다.
 """
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from src.config.schema_site import KafkaConsumerConfig
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
+from src.domain.jsonpath import select
 from src.domain.ports import KafkaInspectorPort
 
 DEFAULT_TAIL = 10
@@ -41,6 +43,62 @@ TAIL_WAIT_S = 15.0
 # 빈 배치를 몇 번 연속으로 받으면 그만 기다리나. 한 번으로는 안 된다 — 새 컨슈머의 첫 fetch는 1초를 넘기기 쉬워 사내 측정 #3에서
 # 파티션 하나에 0건이 나왔다. 셋이면 3초다(받을 것이 끝에 닿으면 그 전에 끝난다).
 EMPTY_POLLS = 3
+
+
+class TypeTally:
+    """`count_type`의 셈 — 실어댑터(받는 대로)와 스텁(시드에서)이 같은 규칙·같은 모양을 내게 한 곳에 둔다(R3-5y ②). 유형 칸이 있고 그 값이 스칼라인 메시지만
+    "유형 칸이 든" 것이다 — 선언한 칸 이름이 틀렸을 때 "0건"이 "그 유형이 없다"로 읽히지 않게 그 수를 따로 센다."""
+
+    def __init__(self, topic: str, *, field: str, values, max_messages: int, max_seconds: float, tz):
+        self.head = {"topic": topic, "field": field, "values": sorted({str(v) for v in values}),
+                     "max_messages": int(max_messages), "max_seconds": float(max_seconds)}
+        self._wanted = set(self.head["values"])
+        self._tz = tz or timezone.utc
+        self.rows: dict[int, dict] = {}
+        self._first = self._last = None
+        self._latest: tuple | None = None
+
+    def window(self, partition: int, begin: int, end: int) -> int:
+        """그 파티션에서 셀 첫 오프셋 — 끝에서 최대 N건."""
+        start = max(begin, end - max(self.head["max_messages"], 0))
+        self.rows[partition] = {"partition": partition, "begin": begin, "end": end, "from": start, "to": start,
+                                "counted": 0, "with_field": 0, "matched": 0}
+        return start
+
+    def pending(self) -> bool:
+        return any(row["to"] < row["end"] for row in self.rows.values())
+
+    def add(self, partition: int, offset: int, timestamp, value) -> None:
+        row = self.rows.get(partition)
+        if row is None or not row["from"] <= offset < row["end"]:
+            return                                       # 센 뒤에 온 새 메시지는 창 밖이다
+        row["counted"] += 1
+        row["to"] = max(row["to"], offset + 1)
+        if isinstance(timestamp, (int, float)):
+            self._first = timestamp if self._first is None else min(self._first, timestamp)
+            self._last = timestamp if self._last is None else max(self._last, timestamp)
+        ok, kind = select(value, self.head["field"]) if isinstance(value, (dict, str)) else (False, None)
+        if not ok or isinstance(kind, (dict, list)) or kind is None:
+            return
+        row["with_field"] += 1
+        if str(kind) in self._wanted:
+            row["matched"] += 1
+            key = (timestamp if isinstance(timestamp, (int, float)) else -1, partition, offset)
+            if self._latest is None or key > self._latest:
+                self._latest = key
+
+    def _at(self, ms) -> str | None:
+        return datetime.fromtimestamp(ms / 1000, tz=self._tz).isoformat() if isinstance(ms, (int, float)) else None
+
+    def result(self, stopped: str = "") -> dict:
+        rows = [self.rows[p] for p in sorted(self.rows)]
+        latest = None
+        if self._latest is not None:
+            ts, partition, offset = self._latest
+            latest = {"partition": partition, "offset": offset, "at": self._at(ts) if ts >= 0 else None}
+        return {**self.head, "partitions": rows, "counted": sum(r["counted"] for r in rows), "with_field": sum(r["with_field"] for r in rows),
+                "matched": sum(r["matched"] for r in rows), "first_at": self._at(self._first), "last_at": self._at(self._last), "latest": latest,
+                "whole": not stopped and all(r["from"] == r["begin"] and r["to"] >= r["end"] for r in rows), "stopped": stopped}
 
 
 class RealKafkaInspector(KafkaInspectorPort):
@@ -279,6 +337,60 @@ class RealKafkaInspector(KafkaInspectorPort):
                 except Exception:                                  # noqa: BLE001
                     pass
 
+    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
+        """섞인 토픽에서 한 유형만 센다(포트 docstring). `tail`과 같은 연결·같은 읽기 전용(assign·seek, 그룹 미참여·커밋 없음) — 다만 끝에서 N건을 끝까지 센다."""
+        actual = self.resolve_topic(topic)
+        source = f"kafka:count_type {actual} {field}"
+        consumer = None
+        try:
+            from aiokafka import AIOKafkaConsumer, TopicPartition
+
+            partitions = await self._partitions_of(actual)
+            if not partitions:
+                return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {actual}", source=source, clock=self._clock)
+            consumer = AIOKafkaConsumer(bootstrap_servers=self._brokers,
+                                        group_id=None,              # ← 그룹에 안 들어간다
+                                        enable_auto_commit=False,   # ← 커밋도 안 한다
+                                        auto_offset_reset="earliest")
+            await consumer.start()
+            tps = [TopicPartition(actual, p) for p in partitions]
+            consumer.assign(tps)                                    # ← subscribe가 아니다
+            ends = await consumer.end_offsets(tps)
+            begins = await consumer.beginning_offsets(tps)
+            tally = TypeTally(actual, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds,
+                              tz=self._clock().tzinfo)
+            for tp in tps:
+                start = tally.window(tp.partition, begins[tp], ends[tp])
+                if ends[tp] > start:
+                    consumer.seek(tp, start)
+            stopped, empties = "", 0
+            deadline = time.monotonic() + float(max_seconds)
+            while tally.pending():
+                if time.monotonic() >= deadline:
+                    stopped = f"시간 상한 {float(max_seconds):g}초"
+                    break
+                batches = await consumer.getmany(timeout_ms=1000, max_records=5000)
+                got = [record for rs in batches.values() for record in rs]
+                if not got:
+                    empties += 1
+                    if empties >= EMPTY_POLLS:
+                        stopped = f"빈 응답 {EMPTY_POLLS}번"
+                        break
+                    continue
+                empties = 0
+                for record in got:
+                    tally.add(record.partition, record.offset, record.timestamp, _decode(record.value))
+            return ProbeResult.succeeded(tally.result(stopped), source=source, clock=self._clock,
+                                         truncated_reason=(f"{stopped}에서 멈췄다 — 다 못 셌다" if stopped else None))
+        except Exception as exc:                                   # noqa: BLE001
+            return ProbeResult.failed(f"{type(exc).__name__}: {exc}", source=source, clock=self._clock)
+        finally:
+            if consumer is not None:
+                try:
+                    await consumer.stop()
+                except Exception:                                  # noqa: BLE001
+                    pass
+
     async def offsets(self, topic: str) -> ProbeResult:
         """토픽의 보존 범위만 — 파티션마다 `beginning_offsets`·`end_offsets`(R3-5p ①-a). `assign`만, 그룹 미참여·커밋 없음, seek·fetch 없음(브로커 왕복 둘).
         파티션은 `message_at`과 달리 모른 채 오므로 AdminClient에게 묻는다(`_partitions_of`) — 없으면 토픽이 없는 것."""
@@ -310,17 +422,19 @@ class RealKafkaInspector(KafkaInspectorPort):
                     pass
 
 
-def _render(record: Any) -> dict:
+def _decode(raw):
     import json
 
-    def decode(raw):
-        if raw is None:
-            return None
-        text = raw.decode("utf-8", errors="replace")
-        try:
-            return json.loads(text)      # JSON이면 파싱해서 읽기 좋게
-        except ValueError:
-            return text                  # 아니면 원문 그대로 — 무엇이 왔는지 보여야 한다
+    if raw is None:
+        return None
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        return json.loads(text)      # JSON이면 파싱해서 읽기 좋게
+    except ValueError:
+        return text                  # 아니면 원문 그대로 — 무엇이 왔는지 보여야 한다
+
+
+def _render(record: Any) -> dict:
     return {"partition": record.partition, "offset": record.offset,
-            "timestamp": record.timestamp, "key": decode(record.key),
-            "value": decode(record.value)}
+            "timestamp": record.timestamp, "key": _decode(record.key),
+            "value": _decode(record.value)}

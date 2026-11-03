@@ -131,6 +131,12 @@ class KafkaInspectorPort(ABC):
         레포 동사라 포트 표면 검사가 막는다."""
 
     @abstractmethod
+    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
+        """섞인 토픽에서 한 유형의 메시지만 센다(R3-5y ② — 측정 #32: 라우터가 유형 30개를 나눠 보내는 토픽에서 리드가 tail을 20·50·200으로 냈지만 끝 몇백 건으로는
+        답이 안 났다). 파티션마다 끝에서 최대 `max_messages`건, `max_seconds`초 안에서 — 먼저 닿는 쪽에서 멈춘다. 값의 `field`(점 경로)를 문자열로 `values`와
+        견준다. 한 번 부르면 결과 하나다 — 녹화·재생이 인자별 결과 하나로 맞는다. `assign` 뒤 `seek`, 그룹 미참여·커밋 없음."""
+
+    @abstractmethod
     async def offsets(self, topic: str) -> ProbeResult:
         """토픽의 보존 범위 — 파티션마다 `begin`(보존 시작)·`end`(끝 오프셋)와 남은 메시지 수, 본문 없음(R3-5p ①-a, 평가자 분석 10-28). `message_at`이
         머리에 주는 범위만 따로 읽는다 — 없는 키를 쓰는 클래스가 구독하는 토픽에 무엇이 남아 있는지(비었는지)를 걷기가 홉으로 적는다. `assign`만, 그룹

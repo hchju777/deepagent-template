@@ -23,9 +23,9 @@ class _TP:
 
 
 class _Record:
-    def __init__(self, partition, offset):
+    def __init__(self, partition, offset, value_of=None):
         self.partition, self.offset, self.timestamp = partition, offset, 1000 + offset
-        self.key, self.value = None, b'{"n": %d}' % offset
+        self.key, self.value = None, (value_of(partition, offset) if value_of else b'{"n": %d}' % offset)
 
 
 class _Consumer:
@@ -37,9 +37,12 @@ class _Consumer:
     flaky = False                    # 홀수 번째 호출마다 빈 배치 — 받는 사이사이에 비는 것
     begin = 0                        # 보존 시작(`beginning_offsets`) — message_at의 범위 검사
     holes: set = set()               # 압축·삭제로 빈 오프셋 — seek하면 다음 레코드가 온다
+    value_of = None                  # (파티션, 오프셋) → 값 바이트 — 유형 세기(R3-5y ②)의 섞인 토픽
+    made: list = []                  # 만든 컨슈머의 인자 — 그룹 미참여·커밋 없음을 본다
 
     def __init__(self, ends, **kwargs):
         self._ends, self._pos = ends, {}
+        _Consumer.made.append(kwargs)
 
     async def start(self): pass
     async def stop(self): pass
@@ -58,7 +61,7 @@ class _Consumer:
                 if pos in _Consumer.holes:
                     pos += 1
                     continue
-                out.setdefault(p, []).append(_Record(p, pos))
+                out.setdefault(p, []).append(_Record(p, pos, _Consumer.value_of))
                 pos += 1
                 budget -= 1
             self._pos[p] = pos
@@ -76,7 +79,7 @@ def _inspector(monkeypatch, ends: dict, partitions: list):
         return list(partitions)
     monkeypatch.setattr(inspector, "_partitions_of", partitions_of)
     _Consumer.calls, _Consumer.empties_first, _Consumer.stall, _Consumer.flaky = 0, 0, False, False
-    _Consumer.begin, _Consumer.holes = 0, set()
+    _Consumer.begin, _Consumer.holes, _Consumer.value_of, _Consumer.made = 0, set(), None, []
     return inspector
 
 
@@ -173,3 +176,50 @@ async def test_message_at은_브로커가_안_주면_빈_응답_셋_뒤_실패�
     _Consumer.stall = True
     got = await inspector.message_at("t", 0, 42)
     assert got.status == "error" and "빈 응답" in got.error and _Consumer.calls == 3
+
+
+
+# ── R3-5y ② — 섞인 토픽에서 한 유형만 센다 ──
+
+def _kinds(partition, offset):
+    """오프셋이 10의 배수면 유형 "7"(값 — 라우터가 가르는 것), 아니면 "9". 셋째마다 유형 칸이 없는 메시지, 다섯째마다 JSON이 아닌 메시지."""
+    if offset % 5 == 4:
+        return b"not json"
+    if offset % 3 == 2:
+        return b'{"meta": {}}'
+    return b'{"meta": {"kind": %s}}' % (b'"7"' if offset % 10 == 0 else b"9")
+
+
+async def test_count_type은_파티션마다_끝에서_N건을_세고_유형_칸의_값을_문자열로_견주며_그룹에_안_들어간다(monkeypatch):
+    """측정 #32 회신의 답 2: 유형 30개가 섞인 10만 건 중 끝 몇백 건(tail)으로는 답이 안 났다. 파티션마다 끝에서 최대 N건, 값의 유형 칸(점 경로)을 문자열로
+    값들과 견준다(라우터가 그 값으로 가른다 — 정수 값 9도 "9"). 칸이 없거나 JSON이 아닌 메시지는 센 범위에는 들고 유형 칸 있는 수에는 안 든다. 결과 하나에
+    파티션별 센 범위(오프셋)·센 수·맞은 수, 센 창의 첫·마지막 메시지 시각, 가장 최근 맞은 메시지. 그룹 미참여·커밋 없음."""
+    inspector = _inspector(monkeypatch, {0: 100, 1: 60}, [0, 1])
+    _Consumer.value_of = _kinds
+    got = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=30, max_seconds=8)
+    assert got.status == "ok" and got.envelope.complete, got.error
+    data = got.data
+    assert [(r["partition"], r["from"], r["to"], r["counted"]) for r in data["partitions"]] == [(0, 70, 100, 30), (1, 30, 60, 30)]
+    assert data["counted"] == 60 and data["matched"] == 4 and data["whole"] is False      # 70·90 / 30·40 — 80·50은 유형 칸이 없다 and data["stopped"] == ""
+    assert data["with_field"] == sum(1 for p, (a, b) in ((0, (70, 100)), (1, (30, 60))) for o in range(a, b) if o % 5 != 4 and o % 3 != 2)
+    assert data["latest"] == {"partition": 0, "offset": 90, "at": "1970-01-01T00:00:01.090000+00:00"}
+    assert (data["first_at"], data["last_at"]) == ("1970-01-01T00:00:01.030000+00:00", "1970-01-01T00:00:01.099000+00:00")
+    assert all(made.get("group_id") is None and made.get("enable_auto_commit") is False for made in _Consumer.made)
+    nine = await _inspector(monkeypatch, {0: 20}, [0]).count_type("t", field="meta.kind", values=["9"], max_messages=50, max_seconds=8)
+    assert nine.data["matched"] == 0                                    # 가짜는 값을 다시 안 심었다 — {"n": …}엔 유형 칸이 없다
+    inspector = _inspector(monkeypatch, {0: 20}, [0])
+    _Consumer.value_of = _kinds
+    whole = await inspector.count_type("t", field="meta.kind", values=["9"], max_messages=50, max_seconds=8)
+    assert whole.data["whole"] is True and whole.data["counted"] == 20 and whole.data["matched"] > 0     # 정수 9를 "9"로 견준다
+
+
+async def test_count_type은_시간_상한이나_빈_응답에서_멈추면_그_까닭을_적고_봉투는_잘린_것이다(monkeypatch):
+    """상한 둘 중 먼저 닿는 쪽에서 멈춘다 — N건(창)은 다 센 것이고, 시간(T초)·빈 응답은 다 못 센 것이다(봉투가 잘렸다고 말한다)."""
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.value_of = _kinds
+    timed = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=50, max_seconds=0)
+    assert timed.status == "ok" and timed.data["stopped"] == "시간 상한 0초" and timed.data["counted"] == 0 and not timed.envelope.complete
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.stall = True
+    stalled = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=50, max_seconds=8)
+    assert stalled.data["stopped"] == "빈 응답 3번" and not stalled.envelope.complete and stalled.data["whole"] is False

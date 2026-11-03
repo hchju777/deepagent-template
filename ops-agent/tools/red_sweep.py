@@ -3786,7 +3786,23 @@ CASES += [
  ("verify가 검증 사실을 안 남긴다", ND, "            return {\"verify_problems\": [], \"verify_facts\": facts(capped), **(", "            return {\"verify_problems\": [], **(", [FACTS_T]),
  ("판정 블록이 검증 사실을 안 찍는다", ROOT / "src/application/diagnose.py", "    if state.verify_facts:\n", "    if False:\n", [FACTS_T, FACTS_CLI_T]),
 ]
-assert len(CASES) >= 1279, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5y ② — KafkaInspectorPort.count_type: 섞인 토픽에서 한 유형만 센다 ──
+COUNT_KI_T = "tests/infrastructure/test_kafka_inspector.py::test_count_type은_파티션마다_끝에서_N건을_세고_유형_칸의_값을_문자열로_견주며_그룹에_안_들어간다"
+COUNT_STOP_T = "tests/infrastructure/test_kafka_inspector.py::test_count_type은_시간_상한이나_빈_응답에서_멈추면_그_까닭을_적고_봉투는_잘린_것이다"
+COUNT_STUB_T = "tests/infrastructure/test_stubs.py::test_스텁_count_type은_시드_메시지에서_세고_재생_꼴은_인자별_녹화_결과만_돌려준다"
+CASES += [
+ ("유형 값을 문자열로 안 견준다", KI, "        if str(kind) in self._wanted:", "        if kind in self._wanted:", [COUNT_KI_T]),
+ ("유형 칸이 없는 메시지도 유형 칸 든 수에 센다", KI, "        if not ok or isinstance(kind, (dict, list)) or kind is None:\n            return\n        row[\"with_field\"] += 1", "        if False:\n            return\n        row[\"with_field\"] += 1", [COUNT_KI_T]),
+ ("창을 끝에서 N건이 아니라 처음부터 센다", KI, "        start = max(begin, end - max(self.head[\"max_messages\"], 0))", "        start = begin", [COUNT_KI_T, COUNT_STUB_T]),
+ ("가장 최근 맞은 메시지를 안 고른다", KI, "            if self._latest is None or key > self._latest:", "            if self._latest is None:", [COUNT_KI_T]),
+ ("유형 세기가 시간 상한을 안 본다", KI, "                if time.monotonic() >= deadline:\n                    stopped = f\"시간 상한", "                if False:\n                    stopped = f\"시간 상한", [COUNT_STOP_T]),
+ ("빈 응답에서 멈춘 까닭을 안 적는다", KI, "                        stopped = f\"빈 응답 {EMPTY_POLLS}번\"", "                        stopped = \"\"", [COUNT_STOP_T]),
+ ("다 못 센 유형 세기도 봉투가 온전하다", KI, "                                         truncated_reason=(f\"{stopped}에서 멈췄다 — 다 못 셌다\" if stopped else None))", "                                         truncated_reason=None)", [COUNT_STOP_T]),
+ ("유형 세기가 오프셋을 커밋한다", KI, "enable_auto_commit=False,   # ← 커밋도 안 한다\n                                        auto_offset_reset=\"earliest\")\n            await consumer.start()\n            tps = [TopicPartition(actual, p) for p in partitions]\n            consumer.assign(tps)                                    # ← subscribe가 아니다\n            ends = await consumer.end_offsets(tps)\n            begins = await consumer.beginning_offsets(tps)\n            tally", "enable_auto_commit=True,\n                                        auto_offset_reset=\"earliest\")\n            await consumer.start()\n            tps = [TopicPartition(actual, p) for p in partitions]\n            consumer.assign(tps)                                    # ← subscribe가 아니다\n            ends = await consumer.end_offsets(tps)\n            begins = await consumer.beginning_offsets(tps)\n            tally", [COUNT_KI_T]),
+ ("재생 꼴 토픽도 시드 메시지에서 센다", ST, "        if topic in self._replayed or (topic not in self._ends and self._outside):", "        if topic not in self._ends and self._outside:", [COUNT_STUB_T]),
+ ("녹화 인자를 안 맞춰 본다", ST, "\"max_seconds\": float(c[\"params\"].get(\"max_seconds\", -1))} == args), None)", "\"max_seconds\": float(c[\"params\"].get(\"max_seconds\", -1))} and True), None)", [COUNT_STUB_T]),
+]
+assert len(CASES) >= 1289, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

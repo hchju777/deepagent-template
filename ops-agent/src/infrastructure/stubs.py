@@ -10,6 +10,8 @@
 - `snapshot`: `{"id", "captured_at"(시간대 포함), "complete": [전부 뜬 시스템]}` — 이 절이 있으면 재생이다(`Snapshot`).
 - `redis`: `{키: 값}` — 전부 떴으면 `complete`에 redis. `peers.<사이트>.redis`도 같은 꼴.
 - `kafka`: `{토픽: {"begin": b, "end": e, "messages": [{"offset", "value", "timestamp"?, "key"?}]}}` — 실제 begin/end와 뜬 메시지만(띄엄).
+  유형 세기(`count_type`, R3-5y ②)는 같은 토픽 시드의 `"type_counts": [{"params": {"field", "values", "max_messages", "max_seconds"}, "result": {…}}]` —
+  인자별 결과(재생은 이것만 본다, 인자가 다르면 실패). `result`는 실어댑터의 `data` 그대로.
 - `rest`: `{항목: {"captures": [{"params": {…}, "response": …}]}}` — 인자별. 재생에서 인자 없는 응답 꼴은 안 쓴다.
 - `mongo`: `{컬렉션: [문서…]}` — 뜬 컬렉션만.
 """
@@ -210,10 +212,17 @@ class StubKafkaInspector(KafkaInspectorPort):
         self._begins: dict[str, int] = {}
         self._ends: dict[str, int] = {}
         self._caught: dict[str, dict[int, dict]] = {}
+        # 유형 세기(R3-5y ②)의 녹화 — 토픽 시드의 `type_counts: [{"params": {field, values, max_messages, max_seconds}, "result": {…}}]`. 재생 꼴 토픽은 이것만
+        # 본다(측정 #32 회신의 답 2(5): 결과를 인자별로 — 인자가 다르면 녹화가 안 맞는다). 재생 꼴이 아니면 시드 메시지에서 센다.
+        self._type_counts: dict[str, list[dict]] = {}
+        self._replayed: set[str] = set()
         for name, seed in (topics or {}).items():
+            if isinstance(seed, dict):
+                self._type_counts[name] = [c for c in seed.get("type_counts") or [] if isinstance(c, dict)]
             if isinstance(seed, dict) and "end" in seed:
                 self._begins[name], self._ends[name] = int(seed.get("begin") or 0), int(seed["end"])
                 self._caught[name] = {int(m["offset"]): m for m in seed.get("messages") or [] if isinstance(m, dict) and "offset" in m}
+                self._replayed.add(name)
                 continue
             begin = int(seed.get("begin") or 0) if isinstance(seed, dict) else 0
             messages = list(seed.get("messages") or []) if isinstance(seed, dict) else list(seed)
@@ -288,6 +297,30 @@ class StubKafkaInspector(KafkaInspectorPort):
                                       "message": {"partition": 0, "offset": int(offset), "timestamp": caught.get("timestamp"),
                                                   "key": caught.get("key"), "value": value}},
                                      source=source, clock=self._clock)
+
+    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
+        from src.infrastructure.kafka_inspector import TypeTally
+
+        source = f"stub-kafka:count_type {topic} {field}"
+        args = {"field": field, "values": sorted({str(v) for v in values}), "max_messages": int(max_messages), "max_seconds": float(max_seconds)}
+        recorded = next((c.get("result") for c in self._type_counts.get(topic, [])
+                         if isinstance(c.get("params"), dict) and {**c["params"], "values": sorted(str(v) for v in c["params"].get("values") or []),
+                                                                   "max_messages": int(c["params"].get("max_messages", -1)),
+                                                                   "max_seconds": float(c["params"].get("max_seconds", -1))} == args), None)
+        if recorded is not None:
+            return ProbeResult.succeeded(recorded, source=source, clock=self._clock,
+                                         truncated_reason=(f"{recorded.get('stopped')}에서 멈췄다 — 다 못 셌다" if recorded.get("stopped") else None))
+        if topic in self._replayed or (topic not in self._ends and self._outside):
+            return ProbeResult.failed(f"스냅샷 밖 — {topic}의 유형 세기(인자 {json.dumps(args, ensure_ascii=False)})는 안 떴다", source=source, clock=self._clock)
+        if topic not in self._ends:
+            return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {topic}", source=source, clock=self._clock)
+        tally = TypeTally(topic, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds, tz=self._clock().tzinfo)
+        start = tally.window(0, self._begins[topic], self._ends[topic])
+        for offset in range(start, self._ends[topic]):
+            caught = self._caught[topic].get(offset)
+            if caught is not None:
+                tally.add(0, offset, caught.get("timestamp"), caught.get("value"))
+        return ProbeResult.succeeded(tally.result(), source=source, clock=self._clock)
 
     async def offsets(self, topic: str) -> ProbeResult:
         source = f"stub-kafka:offsets {topic}"

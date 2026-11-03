@@ -156,3 +156,28 @@ async def test_kafka_시드가_begin_end와_띄엄_오프셋을_주면_그대로
     assert (await old.tail("a", limit=5)).data["messages"] == [{"x": 1}, {"x": 2}]
     assert (await old.message_at("b", 0, 5)).data["found"] is True and (await old.offsets("b")).data["partitions"][0]["end"] == 6
     assert (await old.list_topics()).data == ["a", "b"]
+
+
+
+# ── R3-5y ② — 유형 세기: 스텁은 시드에서 세고, 재생은 인자별 녹화 결과만 ──
+
+async def test_스텁_count_type은_시드_메시지에서_세고_재생_꼴은_인자별_녹화_결과만_돌려준다():
+    """측정 #32 회신의 답 2(5): 재생은 (나) — 결과를 인자별로 녹화한다. 인자(유형 칸·값들·N·T)가 같아야 녹화가 맞는다 — 다르면 `스냅샷 밖`. 재생 꼴이 아닌
+    시드(측정판·테스트)는 시드 메시지에서 실어댑터와 같은 셈으로 센다."""
+    from datetime import datetime, timezone
+    from src.infrastructure.stubs import StubKafkaInspector, snapshot_of
+
+    clock = lambda: datetime(2026, 11, 4, 9, 0, tzinfo=timezone.utc)                       # noqa: E731
+    seeded = StubKafkaInspector({"t.raw": {"begin": 0, "messages": [{"meta": {"kind": "7" if n % 4 == 0 else "9"}} for n in range(10)]}}, clock=clock)
+    got = await seeded.count_type("t.raw", field="meta.kind", values=["7"], max_messages=6, max_seconds=8)
+    assert got.status == "ok" and got.data["partitions"] == [{"partition": 0, "begin": 0, "end": 10, "from": 4, "to": 10, "counted": 6, "with_field": 6, "matched": 2}]
+    assert got.data["matched"] == 2 and got.data["latest"]["offset"] == 8 and got.data["whole"] is False
+    recorded = {"partitions": [], "counted": 20000, "with_field": 20000, "matched": 0, "whole": False, "stopped": ""}
+    args = {"field": "meta.kind", "values": ["7"], "max_messages": 20000, "max_seconds": 8.0}
+    seeds = {"snapshot": {"id": "s-1", "captured_at": "2026-11-04T09:00:00+09:00", "complete": ["kafka"]},
+             "kafka": {"t.raw": {"begin": 0, "end": 100000, "messages": [], "type_counts": [{"params": args, "result": recorded}]}}}
+    replay = StubKafkaInspector(seeds["kafka"], clock=clock, snapshot=snapshot_of(seeds))
+    got = await replay.count_type("t.raw", field="meta.kind", values=["7"], max_messages=20000, max_seconds=8)
+    assert got.status == "ok" and got.data == recorded
+    other = await replay.count_type("t.raw", field="meta.kind", values=["7"], max_messages=5000, max_seconds=8)
+    assert other.status == "error" and other.error.startswith("스냅샷 밖 — t.raw의 유형 세기")
