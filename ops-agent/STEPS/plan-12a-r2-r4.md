@@ -792,6 +792,16 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | R3-5x ③ ✅ | 3 유형표 캐시 | `routed_types`의 유형표(파이프라인 열거 멤버·짝 목록)를 (레포, 커밋)마다 한 번만 푼다 — git grep·show가 클래스마다 다시 안 뜬다. 상한 값은 그대로 | `deployed_code` |
 | R3-5x ④ ✅ | 4 L1·L2 카운터 | 액션 턴의 트레이스 파일 머리에 `카운터: 정체 사유 <0/1> · 묶은 칸 <N>`; `case trace` 요약에 케이스 합계(정체 사유를 받은 라운드 수 · 묶은 칸 수와 그 라운드 수) | `lead`, `__main__`(트레이서), `trace_digest` |
 
+**R3-5y — 측정 #32 회신의 답 뒤 (11-04). 걷기 동결 그대로 — 예외는 유형 세기 하나(사람 승인).**
+
+| 순서 | 항목 | 할 것 | 자리 |
+|---|---|---|---|
+| R3-5y ① | 검증 사실 한 줄 | 조사 출력의 판정 아래 `검증 사실: 최상위 인용 잘림 a/b · 다른 레포 코드 c/d`(동작 변경 없음 — 다음 판부터 이것으로 센다) | `nodes`, `__main__` |
+| R3-5y ② | 유형 세기 — 포트 | `KafkaInspectorPort.count_type(topic, *, field, values, max_messages, max_seconds)` — 한 번에 ProbeResult 하나. 실제: assign·seek(그룹 미참여, 커밋 없음), 파티션마다 끝에서 N건, T초. 스텁: 시드 메시지에서 센다. 재생: 시드의 `type_counts`(인자별 결과) — 인자가 다르면 `스냅샷 밖` | `ports`, `kafka_inspector`, `stubs` |
+| R3-5y ③ | 유형 세기 — 액션·문장 | `pipelines.router.type_field`(유형 칸 이름 — 사내 값은 사내 토폴로지에만); config `investigation`의 N(2만)·T(8초); `DeployedCode`가 클래스 → 유형 열거 멤버 **값**(리터럴만); 액션 `kafka.count_type {topic, class}`(값은 코드가); 문장 넷 + 센 창의 오프셋·시각 범위, 유형 칸 든 메시지 0건·리터럴 아님 → 모름 | `knowledge/schema`, `config`, `deployed_code`, `runner_probe`, `actions` |
+| R3-5y ④ | 유형 세기 — 걷기 | 섞인 토픽 행(R3-5w ②)에서만 세고 그 행 상태를 문장으로; 0건이면 나쁨으로 멈춤; 그 토픽 뒤 사다리 칸 tail → 이 액션(셌으면 비움); 남은 걷기 예산 < T면 안 센다(인자를 줄이지 않는다 — 녹화와 같아야); 걷기 머리줄에 센 초 따로 | `walk` |
+| R3-5y ⑤ | B-전부 상한 | external 아닌 판정의 최상위가 인용한 코드 증거가 **전부** component 레포 밖이면 high → medium + caveat(네 판 B-전부 2회 다 틀림, 맞은 high 0) | `nodes.verify` |
+
 
 
 (옛 메모) R3-3(옛 triage — 코드가 상류를 걷는 주체 — 와 `data.value_counts`)은 ①-a의 첫 고리(대상 키 → 쓴 클래스 → 입력 키) 뒤에 둔다: 입력 키마다 있나·비었나·값 분포(c-1 원천 키 TTL -2, c-2 원천 키 컬럼 전부 '-'). B는 그대로 미룬다 — 쓴 쪽은 값에서 오므로 B의 쓰는 쪽 절반은 필요가 없어졌고, 읽는 쪽은 끝점 사슬이 한다.
