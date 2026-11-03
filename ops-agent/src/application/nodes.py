@@ -1217,6 +1217,22 @@ def _root_code_repos(link: CauseLink, *, plan_tasks, service_repos: dict[str, st
     return repos
 
 
+def cap_foreign_code(verdict: Verdict, *, plan_tasks, service_repos: dict[str, str]) -> Verdict:
+    """최상위 원인이 인용한 **코드 증거가 전부** component(서비스)의 레포 밖이면 확신 상한 medium + caveat(R3-5y ⑤ — 측정 #32 회신의 답 1: 네 판 합 B-전부 high
+    2회가 둘 다 틀렸고 맞은 high는 0 — 기준(맞은 high 0건인 칸만)대로 채택). 제 레포 코드가 하나라도 있으면 그대로다("하나라도" 규칙은 안 쓴다 — 그 칸엔 맞은
+    high가 있었다). external·component가 서비스가 아님·인용 코드 0건·이미 medium 이하는 밖. 레포 셈은 검증 사실 줄과 같다. 되묻지 않는다 — 한도다. 바뀐
+    것이 없으면 같은 객체."""
+    root = verdict.root_cause
+    if root is None or verdict.confidence != "high" or verdict.verdict_type == "external" or root.component not in service_repos:
+        return verdict
+    home = service_repos[root.component]
+    repos = _root_code_repos(root, plan_tasks=plan_tasks, service_repos=service_repos)
+    if not repos or home in repos:
+        return verdict
+    note = f"최상위가 인용한 코드 {len(repos)}건이 전부 component {root.component}의 레포({home}) 밖이다({', '.join(sorted(set(repos)))}) — 확신 상한 medium"
+    return verdict.model_copy(update={"confidence": "medium", "caveats": verdict.caveats + [note]})
+
+
 def verdict_facts(verdict: Verdict, *, evidence, plan_tasks, service_repos: dict[str, str]) -> str:
     """검증이 이미 아는 사실 한 줄 — 최상위 원인이 인용한 증거 중 잘린 것(`complete=False`), 인용한 코드 증거 중 component 레포 밖의 것(R3-5y ① — 측정 #32
     회신의 답 1: high를 받칠 근거가 없는 판을 다음 판부터 이 줄로 센다). 동작은 안 바꾼다. component가 서비스가 아니면(external 등) 레포 칸은 해당 없음."""
@@ -1345,8 +1361,10 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             if not deps.check_discovery:
                 return {"verify_problems": [], "verify_facts": facts(verdict),
                         **({"verdict": verdict} if changed else {})}   # 대본은 사람이 이름을 알고 쓴 것 — `_component_problem`과 같은 스위치
+            # 인용한 코드가 전부 다른 레포면 medium(R3-5y ⑤)이 맨 먼저 — 그 caveat이 high일 때만 붙는다(다른 상한이 먼저 깎으면 안 붙는다).
+            capped = cap_foreign_code(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos or {})
             capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(
-                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))
+                cap_unlinked_key(capped, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))
             return {"verify_problems": [], "verify_facts": facts(capped), **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.

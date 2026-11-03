@@ -3088,7 +3088,7 @@ CASES += [
  ("홉 표의 쓴 쪽 글자를 레포로 안 본다", ND, "        if len(h.candidates) > 1 and h.service and h.service not in by_repo:", "        if False:", [REPO_T]),
  ("못 본 멈춤에 상한을 안 건다", ND, "    if not (stopped.startswith(UNSEEN_STOPS) or \" 상한 — \" in stopped or \"의 자원을 못 읽었다 — \" in stopped):\n        return verdict", "    if True:\n        return verdict", [UNSEEN_T]),
  ("본 멈춤에도 상한을 건다", ND, "    if not (stopped.startswith(UNSEEN_STOPS) or \" 상한 — \" in stopped or \"의 자원을 못 읽었다 — \" in stopped):\n        return verdict", "    if False:\n        return verdict", [UNSEEN_T]),
- ("verify 노드가 못 본 멈춤 상한을 안 거친다", ND, "            capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))", "            capped = cap_not_a_defect(cap_unread_upstream(cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))", [UNSEEN_T]),
+ ("verify 노드가 못 본 멈춤 상한을 안 거친다", ND, "            capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(\n                cap_unlinked_key(capped, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))", "            capped = cap_not_a_defect(cap_unread_upstream(cap_unlinked_key(capped, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))", [UNSEEN_T]),
  ("메시지 읽기 시간을 상한에서 안 뺀다", WK, "                aside += elapsed() - before", "                aside += 0.0", [TIME_T]),
 ]
 
@@ -3440,7 +3440,7 @@ CASES += [
 # ── 12a-R3-5r ③ — 멈춘 홉의 입력을 못 읽었으면 확신 low ──
 UNREAD_T = "tests/application/test_verdict.py::test_멈춘_홉의_입력을_못_읽었으면_확신_상한_low와_고정_caveat이고_유형은_그대로다"
 CASES += [
- ("못 읽은 상류를 verify가 안 본다", ND, "            capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))\n", "            capped = cap_not_a_defect(cap_unseen_stop(\n                cap_unlinked_key(verdict, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))\n", [UNREAD_T]),
+ ("못 읽은 상류를 verify가 안 본다", ND, "            capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(\n                cap_unlinked_key(capped, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))\n", "            capped = cap_not_a_defect(cap_unseen_stop(\n                cap_unlinked_key(capped, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk))\n", [UNREAD_T]),
  ("다른 가지의 읽기 실패도 상류로 본다", ND, "    unread = list(dict.fromkeys(h.key for h in walk.hops if h.parent == walk.stop_at and h.status.startswith(\"읽기 실패\")))\n", "    unread = list(dict.fromkeys(h.key for h in walk.hops if h.status.startswith(\"읽기 실패\")))\n", [UNREAD_T]),
  ("입력을 다 못 봤다 멈춤을 안 본다", ND, "    if not unread and not walk.stopped.startswith(\"입력을 다 못 봤다 — \"):\n        return verdict\n", "    if not unread:\n        return verdict\n", [UNREAD_T]),
  ("못 읽은 상류의 상한이 medium이다", ND, "    return verdict.model_copy(update={\"confidence\": \"low\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", "    return verdict.model_copy(update={\"confidence\": \"medium\",\n                                      \"caveats\": verdict.caveats + [f\"상류를 못 읽었다 — {what}; 읽은 범위 안의 판정이라 확신 상한 low\"]})\n", [UNREAD_T]),
@@ -3865,7 +3865,19 @@ CASES += [
  ('코드가 유형 칸 선언을 안 알린다', DCP, '        return spec.router.type_field if spec is not None and spec.router is not None else None', '        return None', [BOARD_PEER_T]),
  ('측정판 메인 토픽에 팔레트 유형이 온다', ROOT / "tools/local_case.py", '"feed": ("alarm", "audit")[i % 2]}', '"feed": "palette"}', [BOARD_PEER_T]),
 ]
-assert len(CASES) >= 1339, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5y ⑤ — B-전부 상한: 최상위가 인용한 코드가 전부 component 레포 밖이면 high → medium ──
+CAPF_T = "tests/application/test_verdict.py::test_최상위가_인용한_코드가_전부_다른_레포면_확신_상한_medium이고_하나라도_제_레포면_그대로다"
+CASES += [
+ ('B-전부 상한이 verify에 없다', ND, '            capped = cap_foreign_code(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos or {})\n', '            capped = verdict\n', [CAPF_T]),
+ ('제 레포 코드가 하나라도 있어도 깎는다', ND, '    if not repos or home in repos:', '    if not repos:', [CAPF_T]),
+ ('인용 코드가 0건이어도 깎는다', ND, '    if not repos or home in repos:', '    if home in repos:', [CAPF_T]),
+ ('external도 깎는다', ND, 'if root is None or verdict.confidence != "high" or verdict.verdict_type == "external" or root.component not in service_repos:', 'if root is None or verdict.confidence != "high" or root.component not in service_repos:', [CAPF_T]),
+ ('이미 medium이어도 다시 깎는다', ND, 'if root is None or verdict.confidence != "high" or verdict.verdict_type == "external" or root.component not in service_repos:', 'if root is None or verdict.verdict_type == "external" or root.component not in service_repos:', [CAPF_T]),
+ ('서비스 아닌 component도 레포를 견준다', ND, 'if root is None or verdict.confidence != "high" or verdict.verdict_type == "external" or root.component not in service_repos:', 'if root is None or verdict.confidence != "high" or verdict.verdict_type == "external":', [CAPF_T]),
+ ('B-전부 상한의 caveat을 안 적는다', ND, '— 확신 상한 medium"\n    return verdict.model_copy(update={"confidence": "medium", "caveats": verdict.caveats + [note]})', '— 확신 상한 medium"\n    return verdict.model_copy(update={"confidence": "medium"})', [CAPF_T]),
+ ('B-전부 상한이 확신을 안 깎는다', ND, '— 확신 상한 medium"\n    return verdict.model_copy(update={"confidence": "medium", "caveats": verdict.caveats + [note]})', '— 확신 상한 medium"\n    return verdict.model_copy(update={"caveats": verdict.caveats + [note]})', [CAPF_T]),
+]
+assert len(CASES) >= 1347, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

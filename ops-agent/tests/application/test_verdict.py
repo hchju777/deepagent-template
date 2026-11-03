@@ -611,6 +611,43 @@ async def test_검증은_최상위_인용의_잘림과_다른_레포_코드를_�
     assert not any(line.strip().startswith("검증 사실") for line in verdict_lines(state))       # 검증 전(빈 값)이면 줄이 없다
 
 
+# ── R3-5y ⑤ — B-전부 상한: 최상위가 인용한 코드가 전부 component 레포 밖이면 high → medium ──
+
+async def test_최상위가_인용한_코드가_전부_다른_레포면_확신_상한_medium이고_하나라도_제_레포면_그대로다(case):
+    """측정 #32 회신의 답 1: 네 판 합 B-전부(최상위가 인용한 코드가 전부 component 레포 밖) high 2회가 둘 다 틀렸고 맞은 high는 0 — 기준(맞은 high 0건인 칸만)대로
+    high → medium + caveat. "하나라도"(B-하나)는 안 쓴다 — 제 레포 코드가 하나라도 있으면 그대로. external·component가 서비스가 아님·인용 코드 0건·이미 medium
+    이하는 밖. A-전부(잘림) 상한은 넣지 않는다(답 1: 네 판 0회, 효과 없음). 레포 셈은 검증 사실 줄·`caveat_code_repos`와 같다(태스크의 `repo`·`service` 인자)."""
+    from src.application.nodes import cap_foreign_code
+
+    repos = {"processor": "core", "batchsvc": "batch-repo"}
+    tasks = [task("t-11", action="code.read", params={"service": "batchsvc", "path": "b/x.py", "line": 3}, status="ok", result_evidence_ids=["t-11.e1"]),
+             task("t-12", action="code.read", params={"service": "processor", "path": "p/y.py", "line": 1}, status="ok", result_evidence_ids=["t-12.e1"]),
+             task("t-13", action="redis.get", params={"key": "k"}, status="ok", result_evidence_ids=["t-13.e1"]),
+             task("t-14", action="code.grep", params={"repo": "batch-repo", "patterns": ["x"]}, status="ok", result_evidence_ids=["t-14.e1"])]
+    kw = dict(plan_tasks=tasks, service_repos=repos)
+    foreign = verdict(root_cause=cause("processor", "t-11.e1", "t-14.e1", "t-13.e1"))
+    got = cap_foreign_code(foreign, **kw)
+    assert got.confidence == "medium" and got.verdict_type == foreign.verdict_type
+    assert got.caveats[-1] == "최상위가 인용한 코드 2건이 전부 component processor의 레포(core) 밖이다(batch-repo) — 확신 상한 medium"
+    mixed = verdict(root_cause=cause("processor", "t-11.e1", "t-12.e1"))
+    assert cap_foreign_code(mixed, **kw) is mixed                                      # 하나라도 제 레포 — 그대로
+    nocode = verdict(root_cause=cause("processor", "t-13.e1"))
+    assert cap_foreign_code(nocode, **kw) is nocode                                    # 인용 코드 0건 — 밖
+    outside = verdict(verdict_type="external", root_cause=cause("processor", "t-11.e1"))
+    assert cap_foreign_code(outside, **kw) is outside                                  # external — 밖
+    topic = verdict(root_cause=cause("t.raw", "t-11.e1"))
+    assert cap_foreign_code(topic, **kw) is topic                                      # component가 서비스가 아니다 — 견줄 레포가 없다
+    medium = foreign.model_copy(update={"confidence": "medium"})
+    assert cap_foreign_code(medium, **kw) is medium
+    assert cap_foreign_code(verdict(verdict_type="inconclusive", root_cause=None), **kw).root_cause is None
+    # verify 노드의 상한 사슬에 든다 — 검증 사실 줄은 그대로 센다
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset(repos), service_repos=repos))
+    two = verdict(root_cause=cause("processor", "t-11.e1", "t-14.e1"))
+    patch = await nodes["verify"](_state(case, verdict=two, plan_tasks=tasks, evidence=[_ev("t-11.e1"), _ev("t-14.e1")]))
+    assert patch["verdict"].confidence == "medium" and patch["verdict"].caveats[-1].startswith("최상위가 인용한 코드 2건이 전부 component processor의")
+    assert patch["verify_facts"] == "최상위 인용 잘림 0/2 · 다른 레포 코드 2/2"
+
+
 # ── R3-5d ①-b — 검증: 번역의 공유/못 가름, 연결 확인에 걷기 키, 걷기와 어긋남, 후보의 토픽 ──
 
 def test_번역은_레포_지도로_한_레포_공유와_두_레포_못_가름을_가른다():
