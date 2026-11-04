@@ -1,0 +1,462 @@
+# 11c — 데이터 흐름 그래프
+
+> 상태: 완료 (커밋 6/6). 앞: [11a](step-11a-code.md). 뒤: [11b](step-11b-trace.md) → 12a.
+
+## 왜 이 스텝인가
+
+11a의 네 번의 사내 실행과 세 번의 로컬 대역 실행이 같은 것을 보여 줬다. 리드가 못 한 것은
+"코드의 어느 줄을 읽을까"가 아니라 **"어느 서비스, 어느 흐름을 볼까"**였다. processor → 토픽
+→ sink → 컬렉션을 몰라서 api만 팠고, 역할을 목록에 붙여 줘도 "processor가 저장을 못 한다"고
+썼다. 12a의 verify가 그런 판정을 심사하면 "미확정"만 쌓인다. 흐름 지도가 먼저다.
+
+## graphify를 어떻게 쓰나 — 실험으로 정했다
+
+`graphify`(0.9.65)를 여기 설치해 로컬 측정판의 가짜 레포(dt-core·dt-api)에 `extract
+--code-only` → `cluster-only`를 돌렸다.
+
+- 노드 10, 엣지 7. 전부 `contains`(파일→함수)와 `rationale_for`(docstring→파일).
+  **서비스 사이 엣지 0개.** `alarm_events`·`mx.alarm.main`·`gumi-mx-sink` 노드 없음.
+  config JSON 6개를 스캔은 했지만 노드를 안 만들었다.
+- `explain "sink"` → 없음. `path "processor" "sink"` → 없음.
+- `cluster-only`가 커뮤니티 이름을 지으려고 **LLM을 불렀다**(입력 41,227토큰). `--no-label`이
+  있다. 사내에서는 이 호출이 게이트웨이나 `claude` CLI로 새어 나간다.
+
+토픽과 컬렉션은 config의 문자열이고 생산자·소비자는 각자 그 문자열을 읽을 뿐이라 AST에는
+둘을 잇는 관계가 없다. 레포가 커져도 안 변한다. 프로세스 사이를 브로커로 건너는 흐름은
+구문이 아니다.
+
+그다음 우리 흐름 엣지를 graphify의 `graph.json` 스키마로 적어 `graphify merge-graphs`로
+합치고 다시 물었다.
+
+```
+graphify path "processor" "sink" --graph merged.json --undirected
+  processor --produces [EXTRACTED]--> mx.alarm.main <--consumes [EXTRACTED]-- sink
+graphify explain "alarm_events" --graph merged.json
+  <-- sink [writes] dt-core/sink/writer.py:L10
+  <-- api  [reads]  dt-api/api/alarms.py:L5
+```
+
+**결정**: graphify를 엔진으로 쓴다(심볼 그래프, `explain`·`path`, `merge-graphs`). 우리는
+graphify가 못 보는 층 하나만 만든다 — 서비스↔자원 흐름 오버레이. 같은 스키마라 합친
+`graph.json` 하나를 리드 브리핑·`code.flow`·11b의 `code_tracer`가 같이 읽는다.
+
+지킬 것: `--code-only`와 `--no-label`만(의미 패스·LLM 라벨 금지), 커밋에 박제(`code sync`가
+만들고 `code status`가 대조, 훅 없음), git에 안 넣음(실제 이름이 든다, `output/`), `--strict`와
+`query`는 안 씀(브리핑은 코드가 이웃을 계산해 넣고 리드에겐 `code.flow` 하나). 그래프는
+"어디"를 주고 "무엇"은 프로브가 준다 — 12a의 verify가 그 경계를 코드로 지킨다.
+
+## 방법 (커밋 1 — `src/knowledge/flow.py`)
+
+1. **이름은 합친 config에서.** `Topology.flow.name_paths`(종류 → 점 경로). 끝이 dict면 값들이
+   이름, str이면 그것. 템플릿 값(`alarm:stats:{line}`)은 `{` 앞까지가 grep 리터럴.
+2. **쓰인 자리는 `git grep -n`으로.** 리터럴 일치 = EXTRACTED, config 키 토큰 일치
+   (`topics["alarm_main"]`) = INFERRED. 키 토큰은 **부모 키가 같은 줄에** 있어야 한다 —
+   `format(service="processor")`의 `processor`는 그룹이 아니다.
+3. **방향은 같은 줄(없으면 앞뒤 줄)의 동사로.** 식별자를 `_`·camelCase로 쪼개 조각으로 맞춘다
+   (`insert_many` → insert, `reset` ≠ set). 읽기·쓰기 표는 코드 상수 하나. 둘 다면
+   `mentions`(AMBIGUOUS), 없어도 `mentions` — 버리지 않는다. 종류별로 이름이 다르다:
+   토픽은 consumes/produces, 그룹은 consumes_as, 컬렉션·키는 reads/writes.
+4. **파일 → 서비스.** 레포에 서비스가 하나면 그것(EXTRACTED), 토폴로지 `path`(EXTRACTED),
+   첫 디렉터리 이름 = 서비스 이름(INFERRED), 못 가르면 레포 노드에 AMBIGUOUS.
+5. **config 파일 히트는 `declares`** — 레포 노드에서 자원으로.
+6. **결정론.** 이름·히트를 정렬해 처리. 같은 커밋이면 같은 JSON(테스트가 두 번 돌려 대조).
+7. **질의.** `neighbors(name, depth)`는 방향 무시. `shortest_path(a, b)`는 **데이터 흐름
+   방향**만 통과한다(쓰기→자원→읽기). 둘 다 쓰는 하트비트 키도 2홉이지만 흐름이 아니다.
+
+측정판에서 나온 엣지(전부 근거 줄 있음):
+
+```
+processor —consumes→ mx.alarm.raw      processor —produces→ mx.alarm.main
+sink —consumes→ mx.alarm.main          sink —consumes_as→ gumi-mx-sink
+sink —writes→ alarm_events             api —reads→ alarm_events
+processor·sink —writes→ hb:{service}   dt-core —declares→ (선언된 이름 전부)
+```
+
+## 사내 config의 실제 모양 (커밋 2에서 반영)
+
+사람 파트너가 확인해 준 모양이다(이름은 가려서):
+
+```
+infra.kafka.consumer.topic.{topic1, topic2, …}   ← 이 레포가 소비하는 토픽
+infra.kafka.consumer.group_id                     ← 컨슈머 그룹 (레포당 하나)
+infra.kafka.producer.topic.{topic1, …}           ← 생산하는 토픽
+mongodb_collection.{이름: 값}                     ← infra 밖, 최상위
+redis_key.{이름: 값}                              ← infra 밖, 최상위
+  (일부 서비스는 값이 객체다: {"collection": 값, "ttl": 3} / {"key": 값, "ttl": 30})
+```
+
+값이 객체면 `FlowSource.field`(기본은 종류별 `FLOW_FIELDS`: collection→`collection`,
+rediskey→`key`)에서 이름을 꺼낸다. 키 경로는 **맵의 키까지**(`mongodb_collection.alarm`)다 —
+코드는 그 키로 꺼내고, `collection`·`key`는 어디에나 있어 토큰으로 못 쓴다. 문자열과 객체가
+섞여 있어도 둘 다 뽑고 같은 이름은 하나로 접힌다(측정판은 dt-core가 문자열, dt-api가 객체).
+
+객체 모양은 코드 쪽도 바꾼다 — 이름 꺼내기와 동사가 **다른 줄**에 온다
+(`coll = cfg["mongodb_collection"]["alarm"]["collection"]` / 다음 줄 `mongo[coll].find(…)`).
+그래서 흐름 추출의 grep만 `-C1`로 앞뒤 한 줄을 받고(`Hit.context`), 그 줄에 동사가 없으면
+옆 줄의 동사를 쓴다. 다만 그 엣지는 **INFERRED**다 — 옆 줄의 동사가 다른 자원의 것일 수
+있다. 리드의 `code.grep`은 그대로 0줄이다(증거가 세 배로 불면 400줄 상한이 먼저 찬다).
+파서는 묶음(`--` 사이) 안에서 줄 번호로 앞뒤 한 줄만 붙인다 — 실제 `git grep -C1` 출력을
+그대로 먹이는 테스트가 있다.
+
+**`infra`는 레포당 하나다.** 레포에 서비스가 둘이면 둘이 공유하고 컨슈머 그룹도 같다.
+이 사실이 설계를 둘 바꿨다.
+
+- **config가 방향을 말한다.** `consumer.topic`에 있으면 소비, `producer.topic`에 있으면 생산.
+  코드의 동사를 추정할 필요가 없다. 그래서 `FlowSpec.name_paths`(종류 → 경로)를
+  `FlowSpec.sources`(경로 + 종류 + 관계)로 바꿨다. 관계가 있으면 config 층의 그 줄이 곧
+  EXTRACTED 엣지다. 없는 것(`mongodb_collection`·`redis_key`)만 코드의 동사로 간다.
+- **공유 레포에서는 config가 "이 레포의 누군가"까지만 안다.** 그 엣지는 레포 노드에
+  붙는다(`attributed: repo`). 어느 서비스인지는 코드 줄이 가른다 — 그런데 토픽 키가
+  소비·생산 양쪽 다 `topic1`이라 부모 키 하나(`topic`)로는 못 가르고, **조상 둘**
+  (`consumer`/`producer` + `topic`)을 같은 줄에 요구한다. 전부를 요구하지 않는 이유는
+  `kafka = cfg["infra"]["kafka"]`처럼 앞에서 묶으면 먼 조상은 그 줄에 없기 때문이다.
+
+로컬 측정판(`tools/local_case.py`)을 이 모양으로 바꿨다. 그룹도 하나(`gumi-mx-core`)를
+processor·sink가 공유하므로 lag만으로는 누가 멈췄는지 모른다 — 흐름 그래프가 필요한 이유가
+측정판에도 그대로 있다.
+
+## 배선 (커밋 2)
+
+- `code graph` — 지금 체크아웃으로 그래프를 만든다. 네트워크 없음. `code sync`도 끝에 같은
+  함수를 부른다(조립 한 벌).
+- 만드는 순서: 서비스별 합친 config → 이름 → **레포마다** 배포 커밋에서 `git grep -n -F -C1`
+  (패턴 20개씩 묶어서; 11e-3부터는 레포 스냅샷에서 같은 결과를 프로세스 없이 — git grep은 스냅샷을 못 받았을 때만) → 오버레이(`flow.extract`). 레포마다 배포 SHA로 **`git worktree`를 잠깐 만들어** 거기서
+  `graphify extract --code-only` + `cluster-only --no-label`을 돌리고 지운다(11e-3부터 레포 여럿을 겹쳐 돌린다, 폭 ≤ 4). 작업 트리는
+  안 건드리고 HEAD도 그대로다. 오버레이와 심볼 그래프를 id로 합친다.
+- 산출물: `<output_dir>/graph/<gbm>-<fct>/{overlay,graph,meta}.json`(11e-2부터 `graph/<gbm>/` 하나에 사이트별 `sites/<fct>.json`). `meta.commits`는
+  레포별 **실제 SHA**다(`main` 같은 참조는 움직인다). git에 안 들어간다.
+- `code status`에 그래프 절이 붙는다: 만든 시각, graphify 버전, 노드·엣지, 서비스를 못 가른
+  엣지 수. 배포 커밋과 다르면 **`⚠ 낡음`**. 없으면 만드는 법.
+- `code flow` — 사람용. 이름 하나면 이웃, `--to`면 흐름 경로(쓰기→자원→읽기 방향), 없으면
+  연결 많은 자원(god node의 우리 판).
+- **사람용 산출물**(같은 번들 디렉터리): `flow.html`은 오버레이를 우리가 직접 그린 한 장이다.
+  외부 참조 0(graphify의 `graph.html`은 vis-network를 unpkg.com에서 받아 사내망에서 빈 화면).
+  세 열 흐름 배치, 레포마다 색 하나(이름순 고정), 클릭 초점과 근거 패널, 관계·종류 필터,
+  `#node=`·`#repo=` 링크. 다크 고정. graphify가 있으면 레포별 `reports/<레포>/GRAPH_REPORT.md`
+  (worktree와 함께 지워지던 것)와 합친 그래프의 `wiki/`(`graphify export wiki`, md 묶음)도 남긴다.
+- graphify는 `GRAPHIFY_BIN` → 실행 중인 python 옆(`.venv/Scripts`) → PATH에서 찾는다.
+  없으면 오버레이만 만들고 그렇게 적는다. 조사는 돈다. 설치는 `requirements-graph.txt`(고정
+  버전), 반입 절차는 README.
+- 진행은 stderr에 경과 시간과 함께 찍는다. 사내 첫 실행이 몇 분을 말없이 돌자 "멈췄다"로
+  읽혔다 — 원인은 이름마다 `git grep`을 따로 띄우던 것이었다(이름 100개·레포 3개면 600번,
+  Windows 프로세스 비용). 지금은 레포마다 몇 번이다. 이때 리더의 400줄·2만 자 상한도 흐름
+  재료에는 맞지 않아(`alarm` 같은 키 토큰은 큰 레포에서 수백 줄이 정상) 호출부가 상한을 따로
+  주고, 그래도 잘리면 `meta.notes`와 `code graph` 출력에 "엣지가 빠졌을 수 있다"로 남긴다.
+
+## 배선 (커밋 3 — 그래프를 리드에게)
+
+- 브리핑의 `<데이터 흐름>` 블록(frame·integrate 둘 다, `{flow}` 자리). 씨앗은 증상·증거·가설
+  본문에 **글자 그대로** 나온 그래프 이름(세 글자부터, 서비스 먼저). 씨앗의 config 층 이웃
+  1단계, 그다음 씨앗 자원에 닿은 서비스의 토픽(2단계). 씨앗이 없으면 토픽 골격(누가 내고
+  누가 받나). 800자에서 끊고 끊었다고 적는다. 머리에 "config에서 뽑은 배선이다, 실제 동작은
+  프로브로 확인하라"를 박는다 — 그래프는 "어디"이고 프로브가 "무엇"이다.
+- `code.flow(name)` — 리드가 도중에 더 물을 때. config 엣지 먼저, 코드 엣지는 확신 순으로
+  첫 홉의 포인터까지(40줄 상한). 그래프가 없는 조사에서는 목록에서 뺀다.
+- **배포 커밋과 같은 그래프만 싣는다.** 없음과 낡음은 같은 취급(None)이다. 조사 시작 때
+  `_code_if_ready`가 번들의 `meta.commits`를 실제 SHA와 대조한다.
+
+측정판에서 실제로 돌린 결과:
+
+```
+그래프 mx/gumi → …/output/graph/mx-gumi
+     graphify 0.9.65 · dt-core ok · dt-api ok
+     오버레이 노드 12 · 엣지 27 · 합친 그래프 노드 22 · 엣지 34
+     권고:
+       - config에 선언됐지만 코드 어디서도 안 쓰는 이름 1개 — line_state
+       - 서비스를 못 가른 엣지 10개 (공유 레포 dt-core) — 토폴로지의 서비스 path를 채우면 코드 쪽은 갈린다
+$ code flow processor --to sink
+  processor —produces→ mx.alarm.main ←consumes— sink
+  processor —produces→ mx.alarm.main   [INFERRED] processor/handler.py:L8
+  sink —consumes→ mx.alarm.main   [INFERRED] sink/writer.py:L7
+```
+
+`Token cost: 0 input`이 GRAPH_REPORT에 찍히는 것을 테스트가 확인한다 — 라벨링 LLM 호출이
+안 나갔다는 뜻이다.
+
+## 사내 첫 실행에서 배운 것 (커밋 2 뒤)
+
+실제 레포에 처음 돌려 보니 그래프가 문서·테스트만 가리키고 "안 쓰는 이름 13개", "못 가른
+엣지 5374개", 서비스마다 "자원을 안 만진다"가 떴다. 원인은 셋이고, 셋 다 우리 가정이 틀렸다.
+
+1. **서비스는 같은 코드다.** processor 5개, sink 2개가 한 레포의 같은 코드를 환경변수
+   (`DEPLOY_DOMAIN` 등)로 역할만 바꿔 띄운다. "이 파일은 어느 서비스 것인가"는 질문이
+   틀렸다 — 파일은 레포 것이고 서비스는 레포에 역할을 얹은 것이다. 그래서: config 엣지는
+   **서비스별 합친 config**에서 grep 없이 만든다(역할마다 고른 층이 다르면 소비 토픽도
+   다르게 나온다). 코드 엣지는 레포에 붙이고 `runs` 엣지(서비스→레포)가 다리다. 경로 탐색은
+   자원만으로 먼저, 없으면 다리를 허용한다. "path를 채워라"는 권고는 지웠다.
+2. **이름은 Enum과 공통 헬퍼 뒤에 있다.** config는 `"prodcheck_before_cur_worker_all":
+   {"key": "BATCH:…", "ttl": 60}`, 코드는 `PROD_BEFORE_WORKER_ALL =
+   "prodcheck_before_cur_worker_all"`(Enum), 매핑 표, `for …, storage_key in MAPPING:`,
+   공통 함수의 `cfg["redis_key"][storage_key]`. 값도 조상 키도 같은 줄에 안 온다. 텍스트
+   매칭이 닿는 것은 **Enum 정의 줄 하나**뿐이라 그것만 잡는다(따옴표 통째 키 규칙,
+   `mentions`). 그다음 홉(Enum 멤버 → 표 → 루프 → 접근 함수)은 리드가 `code.grep`으로
+   밟는 11b의 일이다. "안 쓰는 이름"은 권고에서 빼고 요약의 숫자("코드 줄에서 직접 못
+   찾은 이름")로만 둔다.
+3. **문서·테스트·주석이 코드 엣지의 60%였다.** `*.md`, `tests/`, `test_*.py`, `#`·독스트링
+   줄은 히트에서 뺀다.
+4. **근거 줄이 `_dev` 층이었다.** config 엣지의 근거를 레포의 config 파일 grep에서 첫 파일로
+   집으니 알파벳순으로 앞선 `config/factories/_dev/…`가 찍혔다. 이제 `flow_names()`가 그
+   서비스가 실제로 합친 층 원문에서 값이 적힌 줄을 찾는다(마지막에 이긴 층부터). grep은 그것이
+   없을 때의 대체다.
+5. **같은 이름의 토픽과 컬렉션.** 데이터를 토픽 이름과 같은 컬렉션에 넣는 서비스가 있어
+   `consumes`와 `declares`가 같은 것을 가리키는 듯 보였다. `code flow`의 상세 줄은 자원에
+   종류를 붙인다(`… [collection]`). 경로 한 줄(`render_path`)은 관계가 종류를 말하므로 그대로다.
+
+그래서 11c의 그래프는 **config 층은 정확하게(서비스 단위, EXTRACTED), 코드 층은 첫 홉의
+포인터까지만** 준다. 커밋 3의 브리핑 블록도 config 층만 싣는다. 부수로 잡은 버그: worktree
+자리를 상대 경로로 `git -C <레포>`에 넘겨 대상 레포 안에 만들고 있었다(WinError 267).
+
+## 사내 첫 조사 trace에서 배운 것 (커밋 3a 뒤)
+
+블록은 사내에서 의도대로 렌더됐다(접기 `레포{…5}`, `공유 config`, `+4줄` 절단,
+`code.flow` 등재). 그런데 조사는 r0부터 r6까지 끝점을 만드는 코드에 한 번도 가지 않았다.
+trace를 읽으니 원인은 모델이 아니라 우리 쪽에 있었다.
+
+1. **frame 규칙이 블록과 모순된다.** `investigate-frame.md`에 "이번 라운드는 무엇이 있는지
+   찾는 라운드다 — 이름을 인자로 받는 읽기는 다음 라운드에 낸다"와 "지금은 데이터만 읽을 수
+   있으므로 `data_prober`를 써라"가 아직 있다. 둘 다 11a·11c 이전 문장이다. 블록이 이름을
+   주는데 규칙은 모른다고 하라 하고, 예시는 발견 3종이다. r0 태스크가 전부 예시와 같은
+   action이었던 것은 시킨 대로 한 것이다(10b의 "예시가 곧 출력이다").
+2. **끝점 층이 없다.** 그래프에 서비스·토픽·컬렉션·키는 있지만 "이 REST 경로를 누가
+   서빙하고 무엇을 읽어 만드는가"가 없다. 증상이 끝점 응답의 값인데 그 끝점에서 시작할
+   발판이 없으니 리드는 증상 문장의 단어로 컬렉션을 찍었다.
+3. **씨앗이 틀렸다.** 증상 문장의 응답 필드 이름이 같은 이름의 컬렉션에 글자로 걸려
+   그 컬렉션이 씨앗이 됐다. 글자 일치는 필드와 자원을 못 가른다.
+4. **순찰 케이스는 출발점을 이미 안다.** `CaseRecord.check` → `CheckConfig.probes` →
+   `ProbeSpec(rest.query, entry)` → `RestEntry.path`가 전부 config다. 지금은 `Case`에
+   symptom 문장만 넘어가서 리드가 그걸 못 본다. 사람이 끝점 별칭 표를 적을 일이 아니다 —
+   사람 케이스는 13단계 접수가 "어느 화면·어느 API"를 묻는다.
+
+지킬 것(⑮): 프롬프트에 사내 어휘를 넣지 않는다 — 출발점 줄도 config에서 **생성**한다.
+그 두 케이스로 튜닝하지 않는다 — 위 넷은 어느 사이트에서도 같은 일반 결함이다.
+
+"어떻게 조합되는가"는 그래프가 못 담는다. 끝점에서 DAO까지 함수 사슬과 읽는 자원을 뽑아
+**어느 함수 몇 줄을 읽을지**를 리드에게 주는 것이 [11b](step-11b-trace.md)이고, 조합
+논리를 읽고 해석하는 것은 리드다. 11b가 더하는 것은 재계산 대조 — 조합 결과가 원천과
+맞는지를 코드가 숫자로 확인한다.
+
+## 측정 — 결과를 보기 전에 적는다
+
+아래는 커밋 3(브리핑 블록·`code.flow`)을 돌리기 **전에** 못 박은 것이다. 나중에 유리한
+문항만 고르는 것을 막기 위해서다(11a 후반의 교훈, 그리고 참고한 글의 방식).
+
+고정 질문 8개 — 로컬 측정판, 심은 고장은 sink 컨슈머 정지:
+
+| # | 종류 | 질문 | 기대 |
+|---|---|---|---|
+| A1 | 구조 | `alarm_events`를 쓰는(writes) 서비스는 | sink |
+| A2 | 구조 | `mx.alarm.main`을 소비하는 서비스와 그룹은 | sink, gumi-mx-sink |
+| A3 | 구조 | processor에서 sink까지 데이터가 가는 경로는 | processor → mx.alarm.main → sink |
+| A4 | 구조 | api가 읽는 자원은 | alarm_events, alarm:stats:{line} |
+| A5 | 구조 | `mx.alarm.raw`를 만드는 서비스는 | (없음 — 외부 유입) |
+| A6 | 구조 | sink가 쓰는 자원은 | alarm_events, alarm:stats:{line}, hb:{service} |
+| B1 | 값 | sink의 batch_size는 | 그래프는 못 답해야 정상(`code.config`가 답) |
+| B2 | 값 | gumi-mx-sink의 현재 lag는 | 그래프는 못 답해야 정상(`kafka.group_offsets`가 답) |
+
+지표(로컬 haiku 루프, `<데이터 흐름>` 블록 유무로 각 3회):
+
+- 정답 부품(sink)을 처음 짚는 라운드 번호
+- 최종 가설이 부품 하나를 짚는가, "A 또는 B"로 얼버무리는가
+- 지어낸 이름(`찾지 않고 이름을 댔다`) 수
+- `kafka.group_offsets gumi-mx-sink`를 내는가(결정적 읽기)
+
+토큰 배율은 재지 않는다. 우리 병목은 토큰이 아니라 방향이다.
+
+### 결과 (3b — 프롬프트는 `fb86200` 그대로, 측정판은 `871eb14`)
+
+**그래프 질문 8개** — 측정판 번들에 `code flow`로 물었다.
+
+| # | 답 | 판정 |
+|---|---|---|
+| A1 | writes: sink (코드 INFERRED) · declares: api·processor·sink (config, 공유) | 일치 |
+| A2 | 코드: sink consumes · config: processor·sink 둘 다 (공유 config는 못 가른다) · 그룹 `gumi-mx-core` | 일치 — 단 기대에 적은 `gumi-mx-sink`는 커밋 2 이전 측정판 이름. 지금은 레포 공유 그룹 `gumi-mx-core`이고 결정적 읽기 지표도 그 이름으로 잰다 |
+| A3 | processor —produces→ mx.alarm.main ←consumes— sink | 일치 |
+| A4 | alarm_events, alarm:stats:{line} | 일치 |
+| A5 | consumes만, produces 없음 | 일치 |
+| A6 | alarm_events, alarm:stats:{line}, hb:{service} | 일치 |
+| B1 | `graph.json`에 `batch_size` 없음 | 정상 |
+| B2 | `graph.json`에 `lag` 없음 | 정상 |
+
+**haiku 루프** — 블록 켬 3회, 끔 3회. 리드 자리는 턴마다 새 haiku 에이전트(11a와 같은 규약).
+"끔"은 `code graph`를 안 돌린 측정판이라 블록도 `code.flow`도 없다.
+
+| 판 | 블록 | sink를 원인으로 짚은 가설이 supported가 된 첫 라운드 | 최종 가설 | 지어낸 이름 | `group_offsets gumi-mx-core` | 종료 |
+|---|---|---|---|---|---|---|
+| on-1 | 켬 | r4 | sink 하나 (정답) | 1 (`hb:sink`) | r3 | r6 conclude |
+| on-2 | 켬 | r2 | sink 하나 (정답) | 1 (`hb:sink`) | r1 | r6 상한 — 끝까지 continue |
+| on-3 | 켬 | r2 | sink 하나 (정답) | 1 (`hb:sink`) | r3 | r4 conclude |
+| off-1 | 끔 | r6 (r2~r5는 "processor가 Mongo에 못 쓴다") | sink 하나 (정답, 마지막 라운드) | 4 (`mx-alarm-processor` 그룹 + 템플릿 채움 3) | r5 | r6 conclude |
+| off-2 | 끔 | r2 | sink 하나 (정답) | 1 (`hb:sink`) | r1 | r4 conclude |
+| off-3 | 끔 | r4 | sink 하나 (정답) | 0 | r5 | r6 conclude |
+
+읽는 법:
+
+- **정답률은 같다** — 여섯 판 전부 sink 하나를 짚었고 "A 또는 B"는 없었다. 이 측정판은 haiku급에게
+  블록 없이도 풀린다. 로컬 결과는 사내의 상한이지 예측이 아니다(11a).
+- **블록은 길을 한두 라운드 줄인다.** sink 지목 라운드 중앙값 켬 2 / 끔 4, 결정적 읽기 평균 켬 2.3 /
+  끔 3.7. 끔 쪽은 그룹 이름을 `code.config` 증거에서 결국 얻지만 그게 r5까지 밀리는 판이 둘이다.
+- **진짜로 지어낸 이름은 끔 쪽에서만 나왔다.** off-1의 `mx-alarm-processor`. 나머지 "지어낸 이름"은
+  전부 `hb:{service}` 템플릿을 `hb:sink`로 채운 것이라 지어낸 게 아니다 — 계측기가 템플릿 이름을
+  채운 값과 못 맞춘다(후속 ①).
+- **블록이 못 하는 것이 그대로 보였다.** 공유 config라 `mx.alarm.main`의 produces·consumes가 둘 다
+  `dt-core{processor,sink}`로 접혀 방향을 못 가른다. 가른 것은 토픽별 lag(main 1830, raw 0)와
+  "토픽엔 새 메시지가 있는데 Mongo엔 없다"는 조합이지 블록이 아니다. 코드 층은 방향을 안다
+  (processor produces / sink consumes, INFERRED) — 블록이 config만 싣기로 한 대가다(커밋 4에서 재검토).
+- on-2는 r2에 좁혀 놓고 6라운드 내내 `continue`였다. 좁힌 뒤 끝내는 문제는 블록과 무관하고 12a의
+  conclude 규칙 몫이다.
+
+**측정판 결함 둘 — 첫 두 판을 버리고 고친 뒤(871eb14) 여섯 판을 다시 돌렸다.**
+
+1. 스텁 `group_offsets`가 `topic="stub"` 파티션 행을 지어냈다. 첫 on-2에서 리드는 그걸 "표시 시스템이
+   stub 토픽을 구독한다"로 읽고 결론을 그 위에 세웠다. seed가 토픽별 lag를 주면 실어댑터 모양으로,
+   총량만 주면 행을 비운다. 측정판 seed는 토픽별(main 1830 / raw 0)로 — 그룹이 레포 공유라 그것이
+   두 서비스를 가르는 유일한 숫자다.
+2. 블록이 준 컨슈머 그룹 이름을 엔진은 "찾지 않고 이름을 댔다"로, 요약은 "증거에 없는 이름"으로
+   찍었다. 블록에 불리한 거짓 양성이라 그 숫자로는 블록을 잴 수 없었다. `EngineDeps.known_names`
+   (`flow.known_names`)와 요약의 `<데이터 흐름>` 블록 텍스트를 아는 이름으로 친다. 고친 뒤 판에서
+   `gumi-mx-core`가 더 안 찍히는 것을 실제 trace로 확인했다.
+
+버린 두 판의 기록: 첫 on-1은 processor를 짚었다(오답) — 공유 그룹의 총 lag만 보고 "processor가
+소비 못 함"으로 읽었고 토픽별 숫자가 없어 되돌릴 근거가 없었다. 첫 on-2는 위 1의 결론이었다.
+
+### 재측정 (커밋 6 — `1c518b1`: 출발점·사다리·끝점 노드, 사다리 켬 3회)
+
+그래프 질문 8개는 3b와 같고, `code flow api`에 `api —serves→ /summary/badge [endpoint]`가 한 줄 는다.
+
+| 판 | sink를 원인으로 짚은 가설이 supported가 된 첫 라운드 | 최종 가설 | 지어낸 이름(검사) | `group_offsets gumi-mx-core` | 종료 |
+|---|---|---|---|---|---|
+| l-1 | r2 | sink 하나 (정답) | 0 | r3 | r5 conclude |
+| l-2 | r4 (r2에 "alarm_events에 저장 안 됨"까지) | sink 하나 (정답) | 0 | r2 | r5 conclude |
+| l-3 | 없음 — r2~r4 "processor가 소비 안 함", 최종 "gumi-mx-core 그룹이 소비 안 함" | 공유 그룹까지, 부품 미확정 | 0 | r4 | r5 conclude |
+
+3b와 나란히(sink 지목 라운드 / 결정적 읽기 라운드): 블록 끔 6·2·4 / 5·1·5 → 블록 켬 4·2·2 / 3·1·3 →
+사다리 2·4·없음 / 3·2·4.
+
+읽는 법:
+
+- **사다리는 "어디서 시작하나"를 바꿨다.** 세 판 모두 r0가 `rest.query`(판정이 본 읽기)로 시작했고,
+  l-1·l-2는 가설 자체가 끝점(`/summary/badge`)에서 출발했다. l-2는 `code.flow(alarm_events)`를 스스로
+  냈다. 3b에서는 여섯 판 다 발견 3종으로 시작했다.
+- **"공유 그룹의 lag를 누구 것으로 읽나"는 못 바꿨다.** l-3은 토픽별 lag(main 1830 / raw 0)와 블록의
+  `코드로는 produces: processor · consumes: sink` 줄을 보고도 "processor가 소비 안 함"에서 "그룹이 소비 안
+  함"까지만 갔다. 이건 사다리가 아니라 모델의 조합이고, 코드가 짚어 주는 것은 11b의 `code.trace`(핸들러에서
+  DAO까지)와 12a의 verify("supported에는 그 부품을 확인한 증거")다.
+- **계측기 구멍 하나.** 지어낸 이름 0은 사실이 아니다. l-1 `group:dt-core`(레포 이름을 그룹으로), l-3
+  `topic:alarm_events`(컬렉션을 토픽으로)·`group:processor`(서비스를 그룹으로)가 있었는데 `known_names`가
+  종류를 안 보고 그래프 라벨 전부를 아는 이름으로 치니 못 잡았다. 후속 ⑤: 인자 종류별로 본다(`group`
+  인자는 group 라벨, `topic`은 topic 라벨…). 스텁이 모르는 그룹에 "커밋된 오프셋 없음"으로 답한 덕에
+  l-1·l-3 모두 다음 라운드에 `gumi-mx-core`로 바로잡혔다 — 3b에서 lag 0을 돌려주던 때와 다르다.
+- n=3, haiku 대역, 로컬 측정판이다. 정답률은 3b(6/6)보다 이번(2/3)이 낮게 나왔지만 판 하나 차이이고 그
+  하나가 위 둘째 항목이다. 상한이지 예측이 아니다(11a).
+
+**사내 끝점 숫자(`1c518b1`의 `code graph`):** 끝점 156개 중 등재 2개, 서빙 서비스를 못 찾은 0개. serves
+엣지 168개, INFERRED 0, 레포에 붙은 것 6. 등재 둘의 path가 코드 라우트와 **정확히** 일치했으므로
+`include_router`의 prefix 조립이 사내 모양에 맞는다.
+
+11c는 여기서 닫는다. 그래프는 "어디"를 주고 사다리는 "어디서 시작하나"를 준다. "누가 그 데이터를 만들어
+그 값이 됐나"를 코드가 짚는 것은 [11b](step-11b-trace.md)다.
+
+**후속(커밋 4에 실었거나 백로그):**
+
+① "찾지 않고 이름을 댔다" 검사가 템플릿 이름(`hb:{service}`)의 채운 값(`hb:sink`)을 아는 이름으로
+   치게 — `Name.literal`처럼 `{` 앞까지의 접두어 일치. ② 스텁 `group_offsets`가 모르는 그룹에 lag 0을
+   돌려준다(off-1에서 지어낸 그룹이 "정상"으로 읽힘). 실어댑터처럼 "committed 없음"으로 답해야 한다.
+   ③ 블록이 config에서 못 가른 방향을 코드 층의 INFERRED 한 줄로 보태는 것 — 커밋 4의 블록 조정에서
+   같이 본다. ④ 에이전트 하나가 "written"이라 보고했지만 파일이 없었다(on-2 003) — 파일 턴 어댑터
+   쪽 문제가 아니라 대역 에이전트 쪽이고, 같은 턴을 새 에이전트로 다시 돌렸다. ①②③은 커밋 4·5에
+   실었다. ⑤ "찾지 않고 이름을 댔다" 검사를 인자 종류별로(위 재측정) — 11b에서 `code.trace`와 함께.
+
+## 커밋 계획
+
+1. 추출기 + 질의 + 사전 등록 ✅
+2. 사내 config 모양 반영, `code sync`/`code graph`에 graphify + 오버레이 + 병합 배선,
+   `code status`의 커밋 대조·권고, `code flow`, 측정판 갱신 ✅
+3. 브리핑 `<데이터 흐름>` 블록(config 층만, 800자), `code.flow` action ✅ (3a)
+   — 3b: 위 측정을 프롬프트를 고치기 전에 돌렸다 ✅ (결과는 "측정" 절). 이게 4·5의 기준선이다.
+4. **출발점과 사다리.** `Case`에 `check`·`target`을 실어 `case_block`이 접수 경로 한 줄을
+   config에서 생성한다("순찰 점검 X · 프로브 Y · rest.query Z · GET /path"; 사람 케이스는 없음).
+   frame 규칙에서 "이름을 모른다"·`data_prober` 문장을 빼고 사다리 규칙을 넣는다:
+   증상이 관찰된 자리(끝점·화면·리포트) → 그 자리를 만드는 서비스와 코드 → 그 코드가 읽는
+   데이터 → 그 데이터를 쓰는 서비스, 한 홉씩 상류로; 증상 문장의 단어가 자원 이름과 같다고
+   그 자원으로 바로 뛰지 않는다. frame 예시를 사다리 모양으로: 출발 REST 항목이 있으면
+   ① 그 항목 `rest.query`(재현) ② 그 path를 서빙 서비스에서 `code.grep` ③ 발견 수; 씨앗만
+   있으면 씨앗 서비스의 `code.config`·`code.flow`가 앞; 아무것도 없으면 지금과 같다.
+   integrate에 "확인된 홉의 상류로 한 홉" 한 줄. 블록 조정: 2단계는 produces·consumes만,
+   2단계에서도 접기, 관계당 8개 + "외 N개", 머리말 축소. 씨앗 순위: 접수 경로의 항목·서비스
+   먼저, 본문에서 글자로 걸린 자원은 뒤에 개수 제한.
+5. **끝점 노드(자동).** 출처 둘 — `rest.entries`의 path 전부, api 레포의 라우트 선언.
+   사내 모양은 FastAPI: 같은 파일의 `APIRouter(prefix="/line")` + `@router.get("/status")`을
+   ast로 붙여 `/line/status`; 앱 조립부의 `include_router(…, prefix=…)`가 있으면 앞에 붙이고
+   못 이으면 `partial`. `service serves endpoint` 엣지에 file:line. `flow_text`에서 끝점
+   씨앗은 "serves: api [service]" 줄이 맨 앞, `code.flow(path)`가 끝점에도 답한다.
+   flow.html에 종류 하나. `code graph` 권고에 "끝점 N개 중 등재 M개, 서빙 서비스를 못 찾은
+   K개". `endpoint reads resource` 엣지는 여기서 만들지 않는다 — 11b의 추적기가 채운다.
+6. **재측정.** 같은 8문항·같은 지표를 사다리 켜고 다시 잰다. 3b 기준선과 나란히 적고
+   README의 11c를 ✅로 닫는다 ✅ (결과는 "측정" 절의 "재측정").
+
+커밋 4는 계획대로 들어갔고 ✅, 계획과 다른 점과 덧붙인 점은 이렇다:
+
+- 접수 경로 줄은 `Case.check`·`target`(순찰 케이스만, 사람 케이스는 None)에서 브리핑이 config를
+  되짚어 만든다 — `순찰 점검 X · 대상 Y · 판정이 본 읽기 rest.query entry='…' params={} (POST /path)`.
+  판정이 **본** 프로브(`params.items.probe`)만 출발점이다. `only_when`의 프로브는 아니다.
+- frame 예시는 출발 읽기가 있을 때 `rest.query`(재현) → `code.grep`(그 path, 서비스 지정 없이 —
+  누가 서빙하는지는 커밋 5의 끝점 노드가 답한다) → 발견 수 둘, 넷이다. 없으면 전과 같다.
+- frame 규칙의 "이름을 모른다" 문장은 "이름은 찾은 것만 쓴다 — 접수 경로와 `<데이터 흐름>`의 이름은
+  써도 된다"로 바뀌었다. `role`·`data_prober` 문단은 지웠다(role은 코드가 정한다).
+- 블록: "2단계는 produces·consumes만"은 이미 그랬다(`topics_only`). 더한 것은 2단계 접기, 관계당 8개,
+  한 줄 머리말, 그리고 3b 후속 ③ — config가 produces·consumes를 같은 서비스들에 붙여 방향을 못 가를
+  때 코드 층이 서비스까지 짚은 엣지가 있으면 `코드로는 produces: processor · consumes: sink`를 보탠다.
+  레포에만 붙은 코드 엣지는 안 보탠다(아무것도 더해 주지 않는다).
+- 씨앗: 토큰 단위 일치(`alarm_events` 속 `alarm`은 안 친다), 자원은 셋까지, 서비스는 상한 없음.
+- 3b 후속 ①·②도 여기 실었다: 템플릿 이름(`hb:{service}`)을 채운 값은 아는 이름(`actions.name_known`,
+  엔진과 요약이 같이 쓴다), 스텁은 모르는 그룹에 실어댑터처럼 "커밋된 오프셋이 없다".
+- 측정판의 케이스는 config에 실제로 있는 점검(`badge_all_zero`)으로 열리고 api 코드에 라우트 한 줄이
+  있어, 출발점 줄과 예시 ①②가 측정판에서도 실제로 찍힌다(프롬프트 파일로 확인).
+
+커밋 5도 계획대로 들어갔고 ✅, 계획과 다른 점과 덧붙인 점은 이렇다:
+
+- 라우트 줄은 `git grep -e`(BRE라 `|` 없이 패턴 여덟 개)로 레포마다 한 번 모으고(`route_hits`),
+  조립은 순수 함수(`flow.routes_from_hits`)다. 같은 파일의 `APIRouter(prefix)` + 데코레이터 꼬리,
+  `include_router(mod.router, prefix)`는 **모듈 이름 = 파일 이름**일 때만 앞에 붙인다(EXTRACTED). 레포에
+  include_router가 있는데 못 이었으면 INFERRED이고, `add_endpoints`가 등재 path의 꼬리와 정확히 하나
+  맞을 때 그 항목에 붙인다. 파일에 APIRouter가 없는 데코레이터는 앱 직결(`@app.get`)로 그대로 EXTRACTED.
+  문서·테스트·주석 줄은 코드 엣지와 같은 필터로 뺀다.
+- 등재 항목은 코드에 없어도 노드다(serves 엣지만 없다). serves의 출발점은 레포에 서비스가 하나면 그
+  서비스, 여럿이면 레포 — 코드 엣지와 같은 규칙이다. 브리핑 예시의 `code.grep`은 **서비스가 하나로**
+  잡혔을 때만 `service`를 채운다.
+- 블록: `serves`는 코드에서 왔지만 배선이라 config 엣지와 같이 싣는다. 끝점 씨앗에 닿은 서비스의 2단계
+  줄은 토픽만이 아니라 **전부**다 — 사다리의 다음 칸이 "그 코드가 읽는 데이터"이고 그게 declares에 있다
+  (자원 씨앗에 닿은 서비스는 전처럼 토픽만). 보여 줄 관계가 없는 2단계 서비스는 줄을 안 낸다 — 측정판에서
+  `api [service]: (config 엣지 없음)`이 "아무것도 없다"로 읽혔다. 측정판 첫 프롬프트는 이제
+  `/summary/badge [endpoint]: serves: api` / `api [service · dt-api]: serves: … · declares: …` 두 줄이다.
+- `code graph` 진행줄과 권고, `code status`에 "끝점 N개 (등재 M · 서빙 미상 K)"가 붙는다. flow.html에
+  끝점 열과 serves 선이 는다. `code.flow(path)`는 이름 매칭이 라벨이라 그대로 끝점에도 답한다.
+- 끝점 → 자원(reads) 엣지는 없다. 11b 커밋 2가 채운다.
+
+## 검토 포인트
+
+1. 사내 config의 키 경로 — 커밋 2에서 사내 모양을 확인해 반영했다
+2. ~~공유 레포에서 서비스를 못 가른 엣지가 많으면 토폴로지 `path`를 채우는 것이 답이다~~ —
+   틀린 가정이었다("사내 첫 실행에서 배운 것" 1). 서비스는 같은 코드이고 config 층이 가른다
+3. graphify — 사내에 설치됐다(사내 `requirements.txt`). 이 리포에서는 `requirements-graph.txt`로
+   분리 유지, 없으면 오버레이만
+4. 라우트 선언 모양 — 확인됐다(FastAPI, 커밋 5). `include_router`의 prefix 사용 여부는 추적기가
+   두 경우를 다 다루므로 안 물어도 된다
+
+## 11b에서 돌아온 보정 (3a 보정)
+
+- **접두사 키** — `flow.sources` 항목에 `prefix`·`join`. 사내 관례 `redis_key.prefix` + `:` + 값을 지식이
+  말한다. `Name.value`는 완전한 키(라벨·브리핑·`redis.get`), `Name.code_value`는 코드에 있는 값(grep·추적).
+- **한 단어 리터럴** — grep 판정에서 `alarm`처럼 한 단어인 리터럴은 같은 줄에 읽기/쓰기 동사가 있어야
+  엣지가 된다. 배지 상태값 `"alarm"`이 alarm 컬렉션 읽기로 잡혔다(사내). 자세한 것은
+  [step-11b](step-11b-trace.md)의 "3a 보정".
+- **후속: 코드 쪽 키 템플릿** — `cfg.get("redis_key", f"<머리>_{name}")`처럼 키 토큰을 코드가 조립하면 토큰
+  단위 grep은 못 본다. 추적기는 잡는다(11b 3a 보정 2). 흐름 그래프의 코드 층에도 넣으려면 머리로 grep해야
+  한다 — 필요가 보이면 그때.
+- **flow.html 초점 상류 보기** (11b 3b 앞에 넣음) — 추적 엣지(끝점→자원)를 데이터에 싣되 CSS로 숨기고,
+  끝점을 클릭하면 상류 3홉을 켠다: 1홉 읽는 자원(서빙 서비스 포함), 2홉 그 자원을 쓰는 서비스(`writes`·
+  `produces`), 3홉 그 서비스가 읽는 것(`reads`·`consumes`). 홉은 파이썬 `flow_html.upstream`이 미리 계산해
+  싣는다(브라우저에서 같은 계산을 하면 테스트가 못 지킨다). 같은 열 안의 선은 오른쪽으로 휘는 호. 오른쪽
+  패널은 홉별로 묶는다. 사람이 "이 끝점은 어디서 오나"를 그림 한 장에서 본다는 첫 요구가 이것이었다.
+  덤으로 잡은 버그: 서빙만 하는 서비스가 왼쪽 열에 없어 `serves` 선이 아예 안 그려지고 있었다 — 헤드리스
+  브라우저로 DOM을 덤프해 초점 클래스를 확인하다 발견했다(pytest는 JS를 못 본다; 그 확인은 손으로 한다).
