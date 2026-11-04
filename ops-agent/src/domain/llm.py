@@ -54,6 +54,8 @@ class LlmReply(StrictModel):
     # 없이도 마지막 조각에 싣고 langchain-openai가 `usage_metadata`로 옮긴다(사람 확인 10-19).
     input_tokens: int = 0
     output_tokens: int = 0
+    # 이 호출의 요청 본문에 얹은 추가 본문의 키들(R3-5z ⑩ — `## 짧게` 재시도의 `brief_extra_body`). 트레이스가 턴 줄에 적는다. 비면 안 얹었다.
+    extra_body: list[str] = []
 
     @model_validator(mode="after")
     def _status_and_error_must_agree(self):
@@ -70,8 +72,11 @@ class LlmPort(ABC):
     """**이 표면이 전부다.** 갈아끼울 수 있으려면 좁아야 한다."""
 
     @abstractmethod
-    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None, brief: bool = False) -> LlmReply:
         """한 번 묻고 한 번 받는다. 절대 raise하지 않는다.
+
+        `brief`는 길이 상한 뒤의 `## 짧게` 재시도라는 표시다(R3-5z ⑩) — 어댑터는 설정의 `brief_extra_body`를 요청 본문 맨 위에 얹고 얹은 키를 답의
+        `extra_body`에 적는다. 그 기능이 없는 어댑터(파일 턴·대본)는 무시한다.
 
         `schema`는 답이 따라야 할 JSON 스키마(있으면). 어댑터는 그것을 OpenAI 규약의 `response_format`으로 보내 **서버가
         문법을 강제**하게 한다(`infrastructure/llm_format`) — 빠른 모델의 따옴표 누락이 파싱을 깨뜨렸다(사내 10-08). 없으면

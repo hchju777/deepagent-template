@@ -1183,10 +1183,13 @@ def _make_tracer(case_id: str, *, folder: Path):
         took += f"스트림: {note}\n" if note else ""
         # 턴의 조각 수·종료 사유·usage(R3-5d ②, 측정 #13 추가분 1) — 성공한 턴도. 모르는 것은 모른다고(끊긴 스트림엔 usage가 없다), 셋 다 모르면 줄이 없다.
         # 그 턴에 보낸 답 스키마(R3-5k ②, 측정 #21) — 같은 줄 끝에. `case trace`가 이 줄을 그대로 머리줄로 옮긴다. 스키마 칸이 있으면 줄이 선다.
-        if stats and (stats.get("chunks") or stats.get("finish_reason") or stats.get("input_tokens") or stats.get("output_tokens") or stats.get("schema")):
+        if stats and (stats.get("chunks") or stats.get("finish_reason") or stats.get("input_tokens") or stats.get("output_tokens") or stats.get("schema")
+                      or stats.get("extra_body")):
             tokens = (f"토큰 입력 {stats['input_tokens']:,} · 출력 {stats['output_tokens']:,}"
                       if stats.get("input_tokens") or stats.get("output_tokens") else "토큰 모름")
             schema = f" · 스키마 {stats['schema']}" if stats.get("schema") else ""
+            # `## 짧게` 재시도에 얹은 추가 본문의 키(R3-5z ⑩) — 얹었는지가 트레이스에 보여야 효과를 잰다.
+            schema += f" · 추가 본문 {', '.join(stats['extra_body'])}" if stats.get("extra_body") else ""
             took += f"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}{schema}\n"
         # 액션 턴의 L1·L2 카운터(R3-5x ④) — `case trace`가 케이스 합계로 모은다.
         if counters is not None:

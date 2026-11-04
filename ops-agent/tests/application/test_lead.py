@@ -1636,3 +1636,41 @@ def test_트레이서가_액션_턴의_카운터를_파일_머리에_한_줄로_
     assert "카운터:" not in written[1].read_text(encoding="utf-8")
     lines = digest([(path.name, path.read_text(encoding="utf-8")) for path in written])
     assert "L1·L2 카운터: 정체 사유를 받은 라운드 1 · 묶은 칸 2(라운드 1개)" in lines
+
+
+
+# ── R3-5z ⑩ — 길이 상한 뒤의 `## 짧게` 재시도에만 brief ──
+
+async def test_길이_상한_뒤의_짧게_재시도에만_brief를_넘기고_첫_시도와_다른_재시도는_그대로다():
+    """측정 #33 4 결정: 생각 끄기는 length 실패 뒤의 `## 짧게` 재시도에서만, 첫 시도는 그대로. `ask_json`은 짧게로 바꾼 시도에만 `brief=True`를 넘기고(어댑터가 config의 추가
+    본문을 얹는다), 어댑터가 얹은 키는 턴 통계(`extra_body`)로 트레이스에 간다. 얹은 것이 없으면 통계에 칸이 없다(옛 모양 그대로)."""
+    from src.config.schema_app import StrictModel
+    from src.domain.llm import LlmReply
+
+    class Tiny(StrictModel):
+        a: str
+
+    calls, seen = [], []
+
+    class Thinker:
+        def __init__(self, replies):
+            self.replies = list(replies)
+
+        async def ask(self, prompt, *, schema=None, brief=False):
+            calls.append((brief, "## 짧게" in prompt))
+            got = self.replies.pop(0)
+            return got.model_copy(update={"extra_body": ["chat_template_kwargs"]}) if brief else got
+
+    empty_long = LlmReply(status="ok", asked_at=T0, model="m", text="", finish_reason="length", chunks=3)
+    fine = LlmReply(status="ok", asked_at=T0, model="m", text='{"a": "x"}')
+    got = await lead.ask_json(Thinker([empty_long, fine]), "물음", Tiny, on_exchange=lambda *row: seen.append(row))
+    assert got.ok and calls == [(False, False), (True, True)]
+    assert seen[1][7]["extra_body"] == ["chat_template_kwargs"] and "extra_body" not in seen[0][7]
+    # 형식이 깨진 답의 재질문(짧게 아님)은 brief가 아니다
+    calls.clear()
+    broken = LlmReply(status="ok", asked_at=T0, model="m", text="쓰레기")
+    got = await lead.ask_json(Thinker([broken, fine]), "물음", Tiny)
+    assert got.ok and calls == [(False, False), (False, False)]
+    # 대본 어댑터는 시도마다 brief를 적는다 — 첫 시도는 아니다
+    old = ScriptedAdapter(['{"a": "x"}'], clock=lambda: T0)
+    assert (await lead.ask_json(old, "물음", Tiny)).ok and old.briefs == [False]

@@ -1977,7 +1977,7 @@ CASES += [
   '        extra = request_fields(self._cfg.response_format, schema)', "        extra = {}",
   [FMT_T]),
  ("리드가 스키마를 어댑터에 안 넘긴다", LD,
-  "            reply = await llm.ask(asked, schema=use_schema)", "            reply = await llm.ask(asked)",
+  '            reply = await (llm.ask(asked, schema=use_schema, brief=True) if briefed else llm.ask(asked, schema=use_schema))', '            reply = await (llm.ask(asked, brief=True) if briefed else llm.ask(asked))',
   ["tests/application/test_lead.py::test_ask_json은_답_스키마를_어댑터에_넘긴다"]),
  ("판정 스키마를 안 닫는다", LD,
   "    schema = strictify(model.model_json_schema())", "    schema = model.model_json_schema()",
@@ -2924,7 +2924,7 @@ CASES += [
  ("비스트림의 usage를 안 읽는다", LCM, "                usage = getattr(message, \"usage_metadata\", None) or {}\n", "                usage = {}\n", [USAGE_T]),
  ("성공한 답에 토큰을 안 싣는다", LCM, "finish_reason=str(metadata.get(\"finish_reason\") or \"\"), **_tokens(usage)), None", "finish_reason=str(metadata.get(\"finish_reason\") or \"\")), None", [USAGE_T]),
  ("턴 통계를 트레이스에 안 넘긴다", LD, "        _tell(on_exchange, asked, text, failure, latency, waited, source, note, stats)", "        _tell(on_exchange, asked, text, failure, latency, waited, source, note, None)", [STATS_T]),
- ("성공한 턴의 통계를 안 만든다", LD, "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens,\n                     \"schema\": schema_label(use_schema)}", "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens,\n                     \"schema\": schema_label(use_schema)} if reply.status == \"error\" else None", [STATS_T]),
+ ("성공한 턴의 통계를 안 만든다", LD, "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens,\n                     \"schema\": schema_label(use_schema), **({\"extra_body\": list(reply.extra_body)} if reply.extra_body else {})}", "            stats = {\"chunks\": reply.chunks, \"finish_reason\": reply.finish_reason, \"input_tokens\": reply.input_tokens, \"output_tokens\": reply.output_tokens,\n                     \"schema\": schema_label(use_schema), **({\"extra_body\": list(reply.extra_body)} if reply.extra_body else {})} if reply.status == \"error\" else None", [STATS_T]),
  ("트레이스 머리에 턴 줄이 없다", MN, "            took += f\"턴: 조각 {stats.get('chunks', 0):,} · 종료 {stats.get('finish_reason') or '모름'} · {tokens}{schema}\\n\"", "            pass", [TRACE_TURN_T]),
  ("토큰을 모르는데 0으로 적는다", MN, "                      if stats.get(\"input_tokens\") or stats.get(\"output_tokens\") else \"토큰 모름\")", "                      if True else \"토큰 모름\")", [TRACE_TURN_T]),
  ("요약이 턴 줄을 안 올린다", TD, "           + (f\" · {turn}\" if turn else \"\")\n", "", [DIGEST_TURN_T]),
@@ -3257,7 +3257,7 @@ CASES += [
 SCHEMA_STAT_T = "tests/application/test_lead.py::test_트레이스의_턴_통계에_그_턴에_보낸_스키마가_남고_길이_재질문에도_판정_스키마가_간다"
 SCHEMA_LINE_T = "tests/test_cli.py::test_트레이스_턴_줄_끝에_그_턴의_스키마를_적는다"
 CASES += [
- ("턴 통계에 스키마를 안 싣는다", LD, "                     \"schema\": schema_label(use_schema)}", "                     \"schema\": \"\"}", [SCHEMA_STAT_T]),
+ ("턴 통계에 스키마를 안 싣는다", LD, '                     "schema": schema_label(use_schema), **(', '                     "schema": "", **(', [SCHEMA_STAT_T]),
  ("판정 스키마 이름에 증거 id 수를 안 붙인다", LD, "    return str(schema.get(\"title\") or \"이름 없음\") + (f\"(증거 id {len(ids)})\" if ids else \"\")", "    return str(schema.get(\"title\") or \"이름 없음\")", [SCHEMA_STAT_T]),
  ("트레이스 턴 줄에 스키마를 안 적는다", MN, "            schema = f\" · 스키마 {stats['schema']}\" if stats.get(\"schema\") else \"\"", "            schema = \"\"", [SCHEMA_LINE_T]),
 ]
@@ -4047,7 +4047,25 @@ CASES += [
  ('frame이 실패한 읽기를 안 넘긴다', ND, '            pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state), failed_of=_failed_of(state),\n', '            pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),\n', ['tests/application/test_nodes.py::test_frame과_integrate는_실패한_읽기의_사유를_중복_반려에_넘긴다']),
  ('integrate가 실패한 읽기를 안 넘긴다', ND, '                waiting=_waiting(base), evidence_of=_evidence_of(base), failed_of=_failed_of(base),\n', '                waiting=_waiting(base), evidence_of=_evidence_of(base),\n', ['tests/application/test_nodes.py::test_frame과_integrate는_실패한_읽기의_사유를_중복_반려에_넘긴다']),
 ]
-assert len(CASES) >= 1484, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑩ — `## 짧게` 재시도에만 얹는 추가 본문(brief_extra_body) — 첫 시도 그대로, 뼈대 키 못 덮음, 트레이스에 얹은 키 ──
+CASES += [
+ ('추가 본문이 요청의 뼈대 키를 덮어도 받는다', SL, '        if clash:\n            raise ValueError(f"brief_extra_body는', '        if False:\n            raise ValueError(f"brief_extra_body는', ['tests/config/test_schema_llm.py::test_brief_extra_body는_기본이_비었고_요청의_뼈대_키는_덮지_못한다']),
+ ('chat_model이 첫 시도에도 추가 본문을 얹는다', LCM, '        added = dict(self._cfg.brief_extra_body) if brief else {}', '        added = dict(self._cfg.brief_extra_body)', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('http가 첫 시도에도 추가 본문을 얹는다', LHT, '        added = dict(self._cfg.brief_extra_body) if brief else {}', '        added = dict(self._cfg.brief_extra_body)', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('chat_model이 추가 본문을 요청에 안 싣는다', LCM, '            extra["extra_body"] = dict(added)\n', '            pass\n', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('http가 추가 본문을 요청에 안 싣는다', LHT, '        body.update(added or {})', '        body.update({})', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('chat_model이 추가 본문을 한 번 묻기에 안 넘긴다', LCM, '            reply, quota = await self._once(prompt, schema, added)', '            reply, quota = await self._once(prompt, schema)', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('http가 추가 본문을 한 번 묻기에 안 넘긴다', LHT, '            reply, quota = await self._once(prompt, schema, added)', '            reply, quota = await self._once(prompt, schema)', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('chat_model이 얹은 키를 답에 안 적는다', LCM, '"rate_source": source, "extra_body": sorted(added)})', '"rate_source": source, "extra_body": []})', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('http가 얹은 키를 답에 안 적는다', LHT, '"rate_source": source, "extra_body": sorted(added)})', '"rate_source": source, "extra_body": []})', ['tests/infrastructure/test_llm_adapters.py::test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다']),
+ ('짧게 재시도에도 brief를 안 넘긴다', LD, '            reply = await (llm.ask(asked, schema=use_schema, brief=True) if briefed else llm.ask(asked, schema=use_schema))', '            reply = await llm.ask(asked, schema=use_schema)', ['tests/application/test_lead.py::test_길이_상한_뒤의_짧게_재시도에만_brief를_넘기고_첫_시도와_다른_재시도는_그대로다']),
+ ('첫 시도에도 brief를 넘긴다', LD, '            reply = await (llm.ask(asked, schema=use_schema, brief=True) if briefed else llm.ask(asked, schema=use_schema))', '            reply = await llm.ask(asked, schema=use_schema, brief=True)', ['tests/application/test_lead.py::test_길이_상한_뒤의_짧게_재시도에만_brief를_넘기고_첫_시도와_다른_재시도는_그대로다']),
+ ('턴 통계에 얹은 키가 없다', LD, '"schema": schema_label(use_schema), **({"extra_body": list(reply.extra_body)} if reply.extra_body else {})}', '"schema": schema_label(use_schema)}', ['tests/application/test_lead.py::test_길이_상한_뒤의_짧게_재시도에만_brief를_넘기고_첫_시도와_다른_재시도는_그대로다']),
+ ('얹은 것이 없어도 턴 통계에 추가 본문 칸을 둔다', LD, '**({"extra_body": list(reply.extra_body)} if reply.extra_body else {})}', '"extra_body": list(reply.extra_body)}', ['tests/application/test_lead.py::test_길이_상한_뒤의_짧게_재시도에만_brief를_넘기고_첫_시도와_다른_재시도는_그대로다', 'tests/application/test_lead.py::test_트레이스가_시도마다_날것을_건넨다']),
+ ('트레이스 턴 줄에 얹은 키가 없다', MN, '            schema += f" · 추가 본문 {\', \'.join(stats[\'extra_body\'])}" if stats.get("extra_body") else ""\n', '', ['tests/test_cli.py::test_트레이스_턴_줄_끝에_얹은_추가_본문의_키를_적는다']),
+ ('대본 어댑터가 brief를 안 적는다', LFK, '        self.briefs.append(brief)\n', '', ['tests/application/test_lead.py::test_길이_상한_뒤의_짧게_재시도에만_brief를_넘기고_첫_시도와_다른_재시도는_그대로다']),
+]
+assert len(CASES) >= 1499, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

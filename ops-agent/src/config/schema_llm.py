@@ -29,7 +29,7 @@
 OpenAI 본체·vLLM·Ollama(`/v1`)·LiteLLM은 `api_key`만 채우고 `pass_key`/
 `client_key`를 비우면 된다.
 """
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import SecretStr, field_validator, model_validator
 
@@ -133,6 +133,10 @@ class LlmConfig(StrictModel):
     # 답 스키마를 `tool_choice`로 강제한 함수 하나의 인자로 보내고 그 인자를 답으로 읽으며, 액션 턴은 액션마다 required까지 묶은 스키마로(R3-5v ⑦ — 검토 회신
     # 11-03 8: 기본이 아니다, 재생 A/B로만 고른다).
     response_format: Literal["json_schema", "json_object", "none", "tools"] = "json_schema"
+    # 길이 상한 뒤의 `## 짧게` 재시도에만 요청 본문 맨 위에 얹을 조각(R3-5z ⑩ — 측정 #33 4: 판정 length 15번 모두 빈 답, 출력 16,000이 생각이었다; 게이트웨이의 추론
+    # 인자로 생각을 끄면 출력 2토큰). 키 이름은 코드가 모른다 — 사내 게이트웨이의 생각 끄기 같은 것을 사람이 적는다(역할별로는 `llm_roles.<역할>.brief_extra_body`).
+    # 첫 시도·다른 재시도엔 안 얹는다. 헤더는 안 건드린다. 요청의 뼈대 키는 못 덮는다(아래 검증).
+    brief_extra_body: dict[str, Any] = {}
     # 같은 게이트웨이로 가는 호출 사이의 최소 간격(초). 분당 할당량(429)은 모델을 가리지 않고 게이트웨이가 센다 — 리드와
     # 판정 어댑터가 base_url 단위 pacer를 나눠 쓴다(`llm_pacing`). 0이면 안 기다린다.
     min_interval_s: float = 0.0
@@ -155,6 +159,15 @@ class LlmConfig(StrictModel):
     tls: TlsConfig = TlsConfig()
     turn_dir: str = ""                     # adapter=file 전용
     turn_timeout_s: float = 1800.0         # 답 파일을 이만큼 기다리고 오류로 흡수한다
+
+    @field_validator("brief_extra_body")
+    @classmethod
+    def _brief_not_skeleton(cls, v: dict) -> dict:
+        # 요청의 뼈대(모델·메시지·스트림·답 형식·함수 호출)는 코드가 쥔다(규율 6) — 추가 본문이 덮으면 같은 설정이 턴마다 다른 요청이 된다.
+        clash = sorted(set(v) & {"model", "messages", "stream", "response_format", "tools", "tool_choice"})
+        if clash:
+            raise ValueError(f"brief_extra_body는 요청의 뼈대 키를 못 덮는다 — {', '.join(clash)}")
+        return v
 
     @field_validator("temperature")
     @classmethod

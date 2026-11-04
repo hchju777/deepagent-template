@@ -101,3 +101,11 @@ def test_판정_역할의_유휴_상한_기본은_게이트웨이_유휴_끊김_
     app = AppConfig(llm=GATEWAY)
     assert app.llm_for("conclude").stream_idle_s == 170 and app.llm_for("lead").stream_idle_s is None
     assert AppConfig(llm=GATEWAY, llm_roles={"conclude": {"stream_idle_s": 90}}).llm_for("conclude").stream_idle_s == 90
+
+
+
+def test_brief_extra_body는_역할별로_덮어쓴다():
+    """R3-5z ⑩: 생각 끄기는 판정 역할의 `## 짧게` 재시도에만 — 역할의 덮어쓰기(`llm_roles.<역할>.brief_extra_body`)로 그 역할만 켠다."""
+    app = AppConfig(llm=GATEWAY, llm_roles={"conclude": {"brief_extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}})
+    assert app.llm_for("conclude").brief_extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert app.llm_for("lead").brief_extra_body == {} and app.llm_for("lead") is app.llm

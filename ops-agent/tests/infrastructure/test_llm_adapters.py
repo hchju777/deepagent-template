@@ -366,3 +366,28 @@ async def test_response_format이_tools면_스키마를_강제한_함수_호출�
     free = await llm.ask("hi")
     assert free.text == "pong" and "tools" not in recorder.requests[-1]["body"]
     assert build_llm(_cfg(base_url, adapter), clock=clock).per_action is False
+
+
+
+# ── R3-5z ⑩ — `## 짧게` 재시도에만 얹는 추가 본문 ──
+
+@pytest.mark.parametrize("adapter,stream", [("http", None), ("chat_model", False), ("chat_model", True)])
+async def test_brief면_설정의_추가_본문을_요청_본문_맨_위에_얹고_아니면_안_얹는다(gateway, clock, adapter, stream):
+    """측정 #33 4: 판정 length 15번 모두 빈 답(출력 16,000 = 생각) — 게이트웨이의 추론 인자로 생각을 끄면 출력 2토큰. 결정: 생각 끄기는 `## 짧게` 재시도에서만, 첫 시도는
+    그대로. 끄는 조각은 코드에 키 이름을 박지 않고 config(`brief_extra_body`)로 받아 요청 본문 맨 위에 합친다(OpenAI `extra_body`와 같은 자리 — 두 어댑터가 같다).
+    헤더는 안 건드린다. 얹은 키는 답(`extra_body`)에 남아 트레이스가 적는다."""
+    base_url, recorder = gateway
+    kw = {"stream": stream} if stream is not None else {}
+    llm = build_llm(_cfg(base_url, adapter, brief_extra_body={"chat_template_kwargs": {"enable_thinking": False}}, **kw), clock=clock)
+    first = await llm.ask("hi", schema=_CLOSED)
+    assert first.status == "ok" and "chat_template_kwargs" not in recorder.requests[-1]["body"] and first.extra_body == []
+    plain_headers = set(recorder.requests[-1]["headers"])                    # 같은 스키마로 견준다 — SDK가 스키마 턴에 붙이는 헤더가 따로 있다
+    brief = await llm.ask("hi", schema=_CLOSED, brief=True)
+    sent = recorder.requests[-1]
+    assert brief.status == "ok" and sent["body"]["chat_template_kwargs"] == {"enable_thinking": False} and brief.extra_body == ["chat_template_kwargs"]
+    assert sent["body"]["response_format"]["json_schema"]["strict"] is True and sent["body"]["messages"][0]["content"] == "hi"   # 뼈대는 그대로
+    assert set(sent["headers"]) == plain_headers                                                                                    # 헤더는 안 건드린다
+    # 설정이 비면 brief여도 얹을 것이 없다
+    bare = build_llm(_cfg(base_url, adapter, **kw), clock=clock)
+    got = await bare.ask("hi", brief=True)
+    assert got.status == "ok" and "chat_template_kwargs" not in recorder.requests[-1]["body"] and got.extra_body == []

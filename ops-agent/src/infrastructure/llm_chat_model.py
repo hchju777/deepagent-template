@@ -90,20 +90,22 @@ class ChatModelAdapter(LlmPort):
         """액션 턴에 액션마다 묶은 태스크 스키마를 청하나 — 네이티브 함수 호출일 때(R3-5v ⑦)."""
         return self._cfg.response_format == "tools"
 
-    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None, brief: bool = False) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
         waited, limited, source = 0.0, 0, ""
+        # `## 짧게` 재시도의 추가 본문(R3-5z ⑩) — 얹은 키를 답에 적는다(트레이스).
+        added = dict(self._cfg.brief_extra_body) if brief else {}
         for attempt in (0, 1):
             await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
-            reply, quota = await self._once(prompt, schema)
+            reply, quota = await self._once(prompt, schema, added)
             if quota is None or attempt:
-                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited, "rate_source": source})
+                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited, "rate_source": source, "extra_body": sorted(added)})
             wait, source = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
             await self._sleep(wait)
             waited, limited = waited + wait, limited + 1
         return reply                                                 # 도달하지 않는다 — 형식상
 
-    async def _once(self, prompt: str, schema: dict | None = None):
+    async def _once(self, prompt: str, schema: dict | None = None, added: dict | None = None):
         """한 번 묻는다. `(답, 429면 (본문, 헤더) 아니면 None)` — SDK는 429를 예외(`status_code`)로 올린다."""
         started = self._ticker()
         messages = [{"role": "user", "content": prompt}]
@@ -114,6 +116,9 @@ class ChatModelAdapter(LlmPort):
         # 호출마다 넘긴다 — langchain-openai는 호출 kwargs를 요청 본문에 그대로 합친다(`_get_request_payload`). 모델 객체에
         # 박으면 자유 질문(`llm ask`)까지 JSON을 강요한다.
         extra = request_fields(self._cfg.response_format, schema)
+        if added:
+            # OpenAI 클라이언트의 `extra_body`는 요청 본문 맨 위에 합친다 — http 어댑터의 `body.update`와 같은 자리(R3-5z ⑩).
+            extra["extra_body"] = dict(added)
         # 네이티브 함수 호출(R3-5v ⑦)이면 답은 강제한 함수의 인자 원문이다 — 스트림은 인자 조각을 모은다.
         tool_parts: list[str] = []
         try:

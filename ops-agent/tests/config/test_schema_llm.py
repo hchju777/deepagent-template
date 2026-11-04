@@ -193,3 +193,22 @@ def test_스트림_유휴_상한은_양수이고_스트리밍일_때_describe에
     assert "유휴" not in LlmConfig(**GATEWAY, stream=True).describe()
     with pytest.raises(ValidationError, match="stream_idle_s"):
         LlmConfig(**GATEWAY, stream_idle_s=0)
+
+
+
+# ── R3-5z ⑩ — `## 짧게` 재시도의 추가 본문 ──
+
+def test_brief_extra_body는_기본이_비었고_요청의_뼈대_키는_덮지_못한다():
+    """키 이름은 코드가 모른다(사내 게이트웨이의 생각 끄기 같은 것을 사람이 적는다). 요청의 뼈대(모델·메시지·스트림·답 형식·함수 호출)는 코드가 쥔다 — 그 키를 적으면 기동에서
+    거부한다."""
+    import pytest
+    from pydantic import ValidationError
+
+    from src.config.schema_llm import LlmConfig
+
+    base = {"model": "m", "base_url": "https://g.example/v1"}
+    assert LlmConfig(**base).brief_extra_body == {}
+    assert LlmConfig(**base, brief_extra_body={"chat_template_kwargs": {"enable_thinking": False}}).brief_extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+    for key in ("model", "messages", "stream", "response_format", "tools", "tool_choice"):
+        with pytest.raises(ValidationError, match="brief_extra_body"):
+            LlmConfig(**base, brief_extra_body={key: 1})

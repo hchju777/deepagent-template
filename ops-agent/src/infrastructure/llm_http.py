@@ -38,20 +38,22 @@ class HttpChatAdapter(LlmPort):
         """액션 턴에 액션마다 묶은 태스크 스키마를 청하나 — 네이티브 함수 호출일 때(R3-5v ⑦)."""
         return self._cfg.response_format == "tools"
 
-    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None, brief: bool = False) -> LlmReply:
         # 429면 본문의 시각까지 기다렸다 **한 번만** 다시 묻는다 — 대기는 실패가 아니다(`llm_pacing`).
         waited, limited, source = 0.0, 0, ""
+        # `## 짧게` 재시도의 추가 본문(R3-5z ⑩) — 얹은 키를 답에 적는다(트레이스).
+        added = dict(self._cfg.brief_extra_body) if brief else {}
         for attempt in (0, 1):
             await self._pacer.wait_turn(self._cfg.min_interval_s, sleep=self._sleep)
-            reply, quota = await self._once(prompt, schema)
+            reply, quota = await self._once(prompt, schema, added)
             if quota is None or attempt:
-                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited, "rate_source": source})
+                return reply.model_copy(update={"waited_s": waited, "rate_limited": limited, "rate_source": source, "extra_body": sorted(added)})
             wait, source = quota_wait(quota[0], quota[1], now=self._clock(), cap=self._cfg.rate_wait_max_s)
             await self._sleep(wait)
             waited, limited = waited + wait, limited + 1
         return reply                                                 # 도달하지 않는다 — 형식상
 
-    async def _once(self, prompt: str, schema: dict | None = None):
+    async def _once(self, prompt: str, schema: dict | None = None, added: dict | None = None):
         """한 번 묻는다. `(답, 429면 (본문, 헤더) 아니면 None)`."""
         import httpx
 
@@ -67,6 +69,7 @@ class HttpChatAdapter(LlmPort):
         if self._cfg.max_tokens is not None:
             body["max_tokens"] = self._cfg.max_tokens
         body.update(request_fields(self._cfg.response_format, schema))
+        body.update(added or {})                                     # `## 짧게` 재시도의 추가 본문(R3-5z ⑩) — 맨 위에, 뼈대 키는 설정 검증이 막는다
 
         started = self._ticker()
         try:

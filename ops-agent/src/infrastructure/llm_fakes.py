@@ -27,7 +27,7 @@ class EchoAdapter(LlmPort):
     def describe(self) -> str:
         return f"echo {self._model} → (네트워크 없음)"
 
-    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None, brief: bool = False) -> LlmReply:
         self.prompts.append(prompt)
         self.schemas.append(schema)
         return LlmReply(status="ok", asked_at=self._clock(), model=self._model,
@@ -41,13 +41,15 @@ class ScriptedAdapter(LlmPort):
         self._model = model
         self.prompts: list[str] = []
         self.schemas: list = []
+        self.briefs: list[bool] = []                # 시도마다 `## 짧게` 재시도였나(R3-5z ⑩)
 
     def describe(self) -> str:
         return f"scripted {self._model} ({len(self._replies)}개 남음)"
 
-    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None, brief: bool = False) -> LlmReply:
         self.prompts.append(prompt)
         self.schemas.append(schema)
+        self.briefs.append(brief)
         if not self._replies:
             # 여기서 **던진다**. 대본 소진은 대상 시스템의 실패가 아니라
             # 테스트가 잘못 쓰인 것이고, 그건 조용히 넘어가면 안 된다.
@@ -78,7 +80,7 @@ class ExplodingAdapter(LlmPort):
     def describe(self) -> str:
         return "exploding(항상 던진다)"
 
-    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None, brief: bool = False) -> LlmReply:
         self.prompts.append(prompt)
         self.schemas.append(schema)
         raise RuntimeError(self._message)
@@ -113,7 +115,7 @@ class FileTurnAdapter(LlmPort):
         taken = [int(p.name[:3]) for p in self._dir.glob("[0-9][0-9][0-9]-ask.md") if p.name[:3].isdigit()]
         return max(taken, default=0) + 1
 
-    async def ask(self, prompt: str, *, schema: dict | None = None) -> LlmReply:
+    async def ask(self, prompt: str, *, schema: dict | None = None, brief: bool = False) -> LlmReply:
         asked_at = self._clock()
         try:
             self._dir.mkdir(parents=True, exist_ok=True)

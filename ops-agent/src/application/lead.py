@@ -343,7 +343,9 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
         text, failure, latency, waited, source, note, stats = None, None, None, None, None, None, None
         timed_out = False
         try:
-            reply = await llm.ask(asked, schema=use_schema)
+            # `## 짧게`로 바꾼 시도에만 brief(R3-5z ⑩ — 측정 #33 4 결정: 생각 끄기는 그 재시도에서만, 첫 시도는 그대로). 안 바꾼 시도는 전처럼 물어 brief를 모르는
+            # 어댑터도 그대로 돈다.
+            reply = await (llm.ask(asked, schema=use_schema, brief=True) if briefed else llm.ask(asked, schema=use_schema))
         except Exception as exc:                                    # noqa: BLE001
             # 어댑터가 계약을 어기고 던져도 superstep이 죽으면 안 된다.
             last = Parsed(False, error=f"{type(exc).__name__}: {exc}")
@@ -353,7 +355,7 @@ async def ask_json(llm: LlmPort, prompt: str, model: type[StrictModel], *,
             latency = reply.latency_s
             # 턴의 조각 수·종료 사유·usage — 성공한 턴도 트레이스 머리에(R3-5d ②, 측정 #13 추가분 1: length가 고정 상한인지 보려면 턴마다 보여야 한다)
             stats = {"chunks": reply.chunks, "finish_reason": reply.finish_reason, "input_tokens": reply.input_tokens, "output_tokens": reply.output_tokens,
-                     "schema": schema_label(use_schema)}
+                     "schema": schema_label(use_schema), **({"extra_body": list(reply.extra_body)} if reply.extra_body else {})}
             waited = reply.waited_s or None            # 429 뒤 기다린 초 — 트레이스가 적는다(브리프의 "429 횟수와 대기 초")
             source = reply.rate_source or None
             if reply.status == "error" and reply.partial_text:

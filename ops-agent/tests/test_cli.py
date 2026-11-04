@@ -843,3 +843,16 @@ def test_llm_ab는_legend로_걷기_머리_아래에_뜻_줄을_끼운_판을_B�
     assert main([*base, str(written[0]), "--legend", "--runs", "1"]) == 0
     out = capsys.readouterr().out
     assert "A1 못 읽음 — " in out and "B1 못 읽음 — " in out and "A(지금): 못 읽음 1" in out and "B(뜻 줄): 못 읽음 1" in out
+
+
+
+def test_트레이스_턴_줄_끝에_얹은_추가_본문의_키를_적는다(tmp_path):
+    """R3-5z ⑩: `## 짧게` 재시도에 config의 추가 본문을 얹었는지 트레이스로 본다 — 턴 통계의 `extra_body`(키 이름들)를 `턴:` 줄 끝에. 없으면 전과 같다."""
+    from src.__main__ import _make_tracer
+
+    trace, written = _make_tracer("c-1", folder=tmp_path / "c-1")
+    trace("conclude", 4, "물음", "답", None, 9.0, None, None, None,
+          {"chunks": 3, "finish_reason": "stop", "input_tokens": 0, "output_tokens": 0, "schema": "concludereply(증거 id 12)", "extra_body": ["chat_template_kwargs"]})
+    assert "턴: 조각 3 · 종료 stop · 토큰 모름 · 스키마 concludereply(증거 id 12) · 추가 본문 chat_template_kwargs" in written[0].read_text(encoding="utf-8")
+    trace("conclude", 4, "물음", "답", None, 9.0, None, None, None, {"chunks": 3, "finish_reason": "stop", "input_tokens": 0, "output_tokens": 0})
+    assert "추가 본문" not in written[1].read_text(encoding="utf-8")
