@@ -3967,7 +3967,26 @@ CASES += [
  ('코드가 상태 자리 선언을 안 알린다', DCP, '        return (spec.field, frozenset(spec.success)) if spec is not None else None', '        return None', ['tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
  ('측정판 팔레트 값에 성공 상태가 없다', LC, '**({"state": "done"} if variant == "palette-empty-done" else {})', '**{}', ['tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
 ]
-assert len(CASES) >= 1416, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑥ — 없는 키의 쓰기 경로: 코드 쓰기 줄 토픽 → config 구독 선언 · 이 키를 선언 → 키 ──
+CASES += [
+ ('쓰기 줄에 읽기 구간도 든다', WK, '    return _OUTPUT.findall(text[m.start():]) if m else []', '    return _OUTPUT.findall(text or "")', ['tests/application/test_walk.py::test_outputs_in은_code_resources_글의_쓰기_구간에서_자원과_쓰기_줄_자리를_읽는다', 'tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('눕힌 글의 쓰기 줄을 못 읽는다', WK, '_OUTPUT = re.compile(r"(?:\\\\n|\\n) {4}(\\S+)', '_OUTPUT = re.compile(r"(?:\\n) {4}(\\S+)', ['tests/application/test_walk.py::test_outputs_in은_code_resources_글의_쓰기_구간에서_자원과_쓰기_줄_자리를_읽는다']),
+ ('쓰기 줄 자리를 첫 자리로 안 고른다', WK, ' — [^\\n]*?\\(([^()\\s]+:L\\d+)\\)")', ' — [^\\n]*\\(([^()\\s]+:L\\d+)\\)")', ['tests/application/test_walk.py::test_outputs_in은_code_resources_글의_쓰기_구간에서_자원과_쓰기_줄_자리를_읽는다']),
+ ('키를 선언 안 한 구독 서비스도 잇는다', WK, '            loaders = [s for s in readers if s in declared]', '            loaders = readers', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('구독 선언을 안 보고 서비스 전부를 구독으로 센다', WK, '            readers = sorted(s for s, ts in subscribed.items() if topic in ts)', '            readers = sorted(subscribed)', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('이어진 길이 있어도 끊긴 길을 같이 적는다', WK, '        paths = joined or cut', '        paths = joined + cut', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('토픽 아닌 쓰기도 경로로 본다', WK, '        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic" and ".topic." not in o[0]):', '        for topic, _, at in (o for o in outputs_in(rtext) if ".topic." not in o[0]):', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('안 풀린 토픽 경로도 경로로 본다', WK, '        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic" and ".topic." not in o[0]):', '        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic"):', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('경로에 쓰기 줄 자리가 없다', WK, '            step = f"→ {topic}(코드의 쓰기 줄 {at})"', '            step = f"→ {topic}"', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('이어진 서비스를 하나만 적는다', WK, '                joined.append(f"{step} → {\', \'.join(loaders)}(config 구독 선언 · 이 키를 선언) → {key}")', '                joined.append(f"{step} → {loaders[0]}(config 구독 선언 · 이 키를 선언) → {key}")', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('이어진 길 끝에 키가 없다', WK, '(config 구독 선언 · 이 키를 선언) → {key}")', '(config 구독 선언 · 이 키를 선언)")', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('구독 선언이 없는 것과 선언 안 한 것을 안 가른다', WK, '(f"구독 선언 {len(readers)}곳 중 이 키를 선언한 곳 없음" if readers else "구독 선언 없음")', '"구독 선언 없음"', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('없는 키 행에 쓰기 경로를 안 싣는다', WK, '                                hops[row] = hops[row].model_copy(update={"write_path": path})', '                                pass', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('쓰기 경로를 엉뚱한 행에 싣는다', WK, '                    row = len(hops) - 1                                                     # 방금 적은 없는 키 행', '                    row = 0                                                                 # 방금 적은 없는 키 행', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('멈춤에 쓰기 경로가 없다', WK, '            path = paths_at.get(ev, "")', '            path = ""', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('행 글에 쓰기 경로가 없다', CS, '        who += f" {self.write_path}" if self.write_path else ""\n', '', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+]
+assert len(CASES) >= 1432, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

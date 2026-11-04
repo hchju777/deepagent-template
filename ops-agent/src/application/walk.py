@@ -166,6 +166,16 @@ def inputs_in(text: str) -> list[tuple[str, str]]:
     return _RESOURCE.findall(text[:m.start()] if m else text)
 
 
+# 쓰기 줄의 자리 — 줄 끝에 넘김 표시(` · 키를 조립해 send()로 넘긴다`)가 붙어도 첫 `(<파일>:L<줄>)`이 그 줄의 메서드 자리다.
+_OUTPUT = re.compile(r"(?:\\n|\n) {4}(\S+) \[(rediskey|collection|topic)\] — [^\n]*?\(([^()\s]+:L\d+)\)")
+
+
+def outputs_in(text: str) -> list[tuple[str, str, str]]:
+    """`code.resources` 텍스트에서 그 클래스가 **쓰는** 자원 `(이름, 종류, 쓰기 줄 자리)`들(R3-5z ⑥) — 읽기 구간은 뺀다."""
+    m = _WRITES_AT.search(text or "")
+    return _OUTPUT.findall(text[m.start():]) if m else []
+
+
 _LOC = re.compile(r"\(([^()\s]+):L(\d+)\)")
 
 
@@ -427,6 +437,23 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         svcs = tuple(producers.get(topic, ()))
         return (f"발행 선언: {', '.join(svcs)}" if svcs else "발행 선언 없음(우리 밖)"), svcs
 
+    def write_path(rtext: str, template: str, key: str) -> str:
+        """없는 키를 쓰는 클래스의 쓰기 경로(R3-5z ⑥ — 측정 #33 2 패턴 A: 판정이 "쓰는 서비스가 토픽에만 쓰고 키에 안 쓴다 → logic_bug"였는데, 명령을 토픽으로 내고 다른
+        서비스가 키에 썼다) — 그 클래스 코드의 쓰기 줄 토픽 → 그 토픽을 config로 구독하고 그 키를 선언한 서비스 → 키. 이어진 길이 있으면 그것만, 없으면 이어진 데까지.
+        쓰기 줄에 토픽이 없으면 빈 문자열. 사실만이다 — 그 토픽을 읽지도, 그 서비스로 걷지도 않는다."""
+        declared = set(owners.get(template, ()))
+        joined, cut = [], []
+        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic" and ".topic." not in o[0]):
+            readers = sorted(s for s, ts in subscribed.items() if topic in ts)
+            loaders = [s for s in readers if s in declared]
+            step = f"→ {topic}(코드의 쓰기 줄 {at})"
+            if loaders:
+                joined.append(f"{step} → {', '.join(loaders)}(config 구독 선언 · 이 키를 선언) → {key}")
+            else:
+                cut.append(f"{step} → " + (f"구독 선언 {len(readers)}곳 중 이 키를 선언한 곳 없음" if readers else "구독 선언 없음"))
+        paths = joined or cut
+        return " / ".join(paths[:3]) + (f" 외 {len(paths) - 3}" if len(paths) > 3 else "")
+
     def split(writer: str, template: str, *, walking: bool) -> tuple[list[tuple[str, tuple[str, ...]]], str, tuple[str, ...]]:
         """레포 가르기 → (고른 레포들 `(레포, 서비스들)`, 표에 적을 이름, 판정의 component 후보 서비스들). 레포 둘이면 **그 키를 선언한 서비스가
         있는 레포**로 가른다(측정 #9 P1 4: `파일:qualname`도 같아 그걸로는 못 가른다 → 측정 #10 P0 2: 서비스가 아니라 **레포** 단위 — 공유 레포의
@@ -598,6 +625,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     # 없는 키의 홉 증거 → (쓰는 클래스, 표시, 질의 인자, [(토픽, 범위 토막, 증거)], 토픽 없을 때의 멈춤 꼬리, 그 클래스 code.resources 증거, 본문 자리, 후보 서비스들)(①-c·R3-5r ②)
     keyed_at: dict[str, tuple[str, str, dict, list[tuple[str, str, str]], str, str, tuple[str, int] | None, tuple[str, ...]]] = {}
     topics_at: dict[str, tuple[str, str, dict, str]] = {}                                   # 구독 토픽 홉의 증거 → (쓰는 클래스, 표시, 질의 인자, 없는 키 홉의 증거)
+    paths_at: dict[str, str] = {}                                                           # 없는 키 홉의 증거 → 쓰는 클래스의 쓰기 경로(R3-5z ⑥)
     subscribed_at: dict[str, tuple[str, str, tuple[str, int] | None, str]] = {}            # 걸은 클래스의 구독 토픽 홉의 증거 → (클래스 [서비스], 레포 범위, 본문 자리, 자원 증거)(R3-5s ⑥)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
@@ -776,6 +804,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     # 된다): 그 클래스의 `code.resources` 읽기 `[topic]`마다 보존 범위 한 번(`kafka.offsets`, 본문 없음, 상한 없음) — 비었으면 그 홉이 나쁨이다.
                     # 서비스 선언(`subscribed`)은 수만 주 줄에 적는다. 그 클래스로 더 걷지는 않는다(다른 입력은 그 클래스 본문 칸).
                     ranges: list[tuple[str, str, str]] = []
+                    row = len(hops) - 1                                                     # 방금 적은 없는 키 행 — 토픽 행은 아래에서 붙는다
                     declared_n = len({t for s in cands for t in subscribed.get(s, ())})
                     topics: list[str] = []
                     tail_note, rev, body_at = "구독 토픽 모름", "", None
@@ -794,6 +823,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                             tail_note, rev = "구독 토픽 모름(code.resources 실패)", ""
                         else:
                             body_at = class_at(rtext)
+                            if (path := write_path(rtext, name, label)):
+                                paths_at[ev] = path
+                                hops[row] = hops[row].model_copy(update={"write_path": path})
                             listed = sorted({n for n, k in inputs_in(rtext) if k == "topic"})
                             # 값으로 안 풀린 config 경로(`…consumer.topic.<이름>`, R3-5s ③ — 사이트 행이 못 바꿨다: 선언이 없거나 서비스마다 값이 다르다)는 토픽이
                             # 아니다 — 주 한 줄, 읽지 않는다(그 이름으로 범위를 읽으면 "없는 토픽"이 된다).
@@ -1017,7 +1049,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             # 리드가 사실로 가른다). 토픽이 없으면 그 사실(클래스 코드에 없음·서비스 선언 수). 첫 칸은 그 클래스 본문, 그다음 토픽마다 지금 오는 것.
             w_, shown_, _, ranges_, tail_note, _, _, _ = keyed_at[ev]
             tail = " / ".join(f"구독 {t} {piece}" for t, piece, _ in ranges_) or tail_note
-            stopped = f"키가 없다 — {stop_hop.key}(쓰는 {w_} [{shown_}] · {tail})"
+            path = paths_at.get(ev, "")
+            stopped = f"키가 없다 — {stop_hop.key}(쓰는 {w_} [{shown_}]{' ' + path if path else ''} · {tail})"
             rungs += body_rungs(ev)
             # 셌으면 그 토픽 칸은 없고, 셀 수 있었는데 세기 수 상한으로 안 셌으면 tail 대신 세기 칸(R3-5y ④ — 측정 #32: tail 칸이 리드의 tail 반복을 부추겼다).
             rungs += [Rung(action="kafka.count_type", params={"topic": t, "class": w_}, evidence=tev) if tev in uncounted

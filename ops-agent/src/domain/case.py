@@ -165,10 +165,14 @@ class Hop(StrictModel):
     basis: str = ""
     # 여기로 오게 한 홉의 증거 id(R3-4 ②) — 멈춘 홉까지의 사슬(`Walk.chain_ids`)을 되짚는다. 대상 키 홉은 빈 문자열.
     parent: str = ""
+    # 없는 키를 쓰는 클래스의 쓰기 경로(R3-5z ⑥) — `→ <토픽>(코드의 쓰기 줄 …) → <서비스>(config 구독 선언 · 이 키를 선언) → <키>`. 쓴 쪽 칸 꼬리에 붙는다. `service`는
+    # 판정 번역이 그 글자로 서비스를 찾으니(`nodes`) 거기 섞지 않는다.
+    write_path: str = ""
 
     def line(self) -> str:
         # 메시지 홉(R3-5d ④)과 걸은 클래스의 구독 토픽 홉(R3-5s ⑥)은 쓴 클래스가 없고 발행 쪽이 config 선언이라 `service`만 있다 — 그걸 쓴 쪽 칸에 적는다.
         who = (self.writer + (f" [{self.service}]" if self.service else "")) if self.writer else (self.service or "—")
+        who += f" {self.write_path}" if self.write_path else ""
         return f"  {self.key} | {who} | {self.status} | {self.evidence_id or '—'}"
 
 

@@ -1506,3 +1506,66 @@ async def test_입력_키가_비었고_상태_자리가_성공_값이면_성공�
     assert "성공으로 비워" not in walk.stopped and any(h.key == "raw:L1" for h in walk.hops)          # 성공 값이 아니다 — 전처럼 올라간다
     walk = (await run_walk(_state(), runner=_Reads(table), **kw))["walk"]
     assert "성공으로 비워" not in walk.stopped                                                       # 선언이 없다 — 전처럼
+
+
+
+# ── R3-5z ⑥ — 없는 키의 쓰기 경로(측정 #33 2 패턴 A) ──
+
+def test_outputs_in은_code_resources_글의_쓰기_구간에서_자원과_쓰기_줄_자리를_읽는다():
+    from src.application.walk import outputs_in
+
+    text = _res("W", [("t.raw", "topic"), ("k:in", "rediskey")], writes=[("t.cmd", "topic"), ("k:{line}", "rediskey")])
+    assert outputs_in(text) == [("t.cmd", "topic", "x.py:L12"), ("k:{line}", "rediskey", "x.py:L12")]   # 읽기 구간(t.raw)은 안 든다
+    assert outputs_in(text.replace("\n", "\\n")) == outputs_in(text)                                     # 눕힌 글에서도 줄마다 그 줄의 자리
+    # 넘김 표시가 붙은 쓰기 줄(`· 키를 조립해 send()로 넘긴다`)과 실행기가 repr로 눕힌 글(개행이 `\\n` 두 글자)도 같다
+    handed = "W (x.py:L1) [r · s]\n  쓰기 1:\n    k:{line} [rediskey] — m.W._run (m/w.py:L14) · 키를 조립해 send()로 넘긴다"
+    assert outputs_in(handed) == [("k:{line}", "rediskey", "m/w.py:L14")]
+    assert outputs_in(handed.replace("\n", "\\n")) == [("k:{line}", "rediskey", "m/w.py:L14")]
+    assert outputs_in(_res("W", [("t.raw", "topic")])) == [] and outputs_in("") == []
+
+
+async def test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다():
+    """측정 #33 2 패턴 A: 걷기가 `키가 없다 — …(쓰는 <쓰는 클래스> …)`로 멈추고 판정은 "`<처리 서비스>`가 Kafka에만 쓰고 Redis에 안 쓴다 → logic_bug"였다. 실제로는
+    명령을 토픽으로 내고 `<적재 서비스>`가 키에 쓴다. 키 없음 행의 쓴 쪽 칸과 멈춤에 쓰기 경로(사실만): 그 클래스 코드의 쓰기 줄 토픽 → 그 토픽을 config로 구독하고
+    이 키를 선언한 서비스 → 키. 이어지지 않으면 이어진 데까지. 쓰기 줄에 토픽이 없으면 전과 같다."""
+    w1 = _res("W1", [("t.raw", "topic")], writes=[("t.cmd", "topic"), ("in:{line}", "rediskey")])
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): w1,
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): USES_W1, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, clock=lambda: T0)
+    path = "→ t.cmd(코드의 쓰기 줄 x.py:L12) → b(config 구독 선언 · 이 키를 선언) → in:L1"
+    walk = (await run_walk(_state(), runner=_Reads(table), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, **kw))["walk"]
+    assert walk.hops[1].write_path == path and walk.hops[1].service == "a" and walk.hops[1].candidates == ["a"]    # 표시·후보는 그대로
+    assert walk.hops[1].line() == f"  in:L1 | W1 [a] {path} | 없음 | t-3.e1"
+    assert walk.stopped == f"키가 없다 — in:L1(쓰는 W1 [a] {path} · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    assert walk.reads == 5 and [h.key for h in walk.hops] == ["alarm:stats:L1", "in:L1", "t.raw"]   # 쓴 토픽은 읽지 않는다 — 사실 한 칸
+    # 이어지는 서비스가 둘이면 둘 다
+    walk = (await run_walk(_state(), runner=_Reads(table), declared_by={"in:{line}": ("a", "b", "c")},
+                           subscriptions={"a": ("t.raw",), "b": ("t.cmd",), "c": ("t.cmd", "t.x")}, **kw))["walk"]
+    assert walk.hops[1].write_path == "→ t.cmd(코드의 쓰기 줄 x.py:L12) → b, c(config 구독 선언 · 이 키를 선언) → in:L1"
+    # 구독하는 서비스가 그 키를 선언하지 않았으면 이어진 데까지
+    walk = (await run_walk(_state(), runner=_Reads(table), declared_by={"in:{line}": ("a",)}, subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, **kw))["walk"]
+    assert walk.hops[1].write_path == "→ t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 선언 1곳 중 이 키를 선언한 곳 없음"
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] → t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 선언 1곳 중 이 키를 선언한 곳 없음 · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    # 구독 선언이 없으면 그것까지
+    walk = (await run_walk(_state(), runner=_Reads(table), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",)}, **kw))["walk"]
+    assert walk.hops[1].write_path == "→ t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 선언 없음"
+    # 이어지는 토픽이 있으면 그것만 — 안 이어진 토픽은 뺀다
+    two = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic")], writes=[("t.cmd", "topic"), ("t.log", "topic")])}
+    walk = (await run_walk(_state(), runner=_Reads(two), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, **kw))["walk"]
+    assert walk.hops[1].write_path == path
+    # 값으로 안 풀린 config 경로는 토픽이 아니다 — 쓰기 경로에 안 든다
+    pathed = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic")], writes=[("infra.kafka.producer.topic.cmd", "topic")])}
+    walk = (await run_walk(_state(), runner=_Reads(pathed), declared_by={"in:{line}": ("a", "b")},
+                           subscriptions={"a": ("t.raw",), "b": ("infra.kafka.producer.topic.cmd",)}, **kw))["walk"]
+    assert walk.hops[1].write_path == "" and walk.hops[1].line() == "  in:L1 | W1 [a] | 없음 | t-3.e1"
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    # 읽는 토픽은 쓰기 경로가 아니다 — 그 토픽을 구독하고 키를 선언한 서비스가 있어도
+    reads_only = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic")], writes=[("in:{line}", "rediskey")])}
+    walk = (await run_walk(_state(), runner=_Reads(reads_only), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",), "b": ("t.raw",)}, **kw))["walk"]
+    assert walk.hops[1].write_path == ""
+    # 다른 사이트 값으로 채운 쓴 쪽도 같은 길(쓴 쪽 칸의 출처 꼬리 뒤에)
+    no_writer = "in:{line} [rediskey]\n  읽기 1:\n    batch.job.W0._run (x.py:L9) [dt-core · a] — 진입점"
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("code.uses", "in:{line}"): no_writer}), declared_by={"in:{line}": ("a", "b")},
+                           subscriptions={"a": ("t.raw",), "b": ("t.cmd",)},
+                           peer=_Peer({"in:L1": ("sevt", "in:L1", _value(record=[], metadata={"event_type": "W1"}))}), **kw))["walk"]
+    assert walk.hops[1].line() == f"  in:L1 | W1 [a · sevt 값의 metadata.event_type] {path} | 없음 | t-3.e1"
