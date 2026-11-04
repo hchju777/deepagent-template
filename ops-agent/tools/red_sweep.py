@@ -2668,7 +2668,7 @@ CASES += [
  ("다 밟은 사다리가 마지막 칸이 아니라 첫 칸에서 잇는다", B, "        hop = (rungs[-1].action, dict(rungs[-1].params))", "        hop = (rungs[0].action, dict(rungs[0].params))", ["tests/application/test_briefing.py::test_예시는_걷기의_아직_안_낸_칸을_셋까지_한_라운드에_묶는다"]),
  ("둘째 칸을 안 고정한다", ND, "    return [(r.action, dict(r.params)) for r in walk.rungs\n", "    return [(r.action, dict(r.params)) for r in walk.rungs[:1]\n", [WHOP_T]),
  ("대기 태스크를 낸 칸으로 센다", ND, "    ran = {_query(t) for t in state.plan_tasks if t.action and t.status != \"pending\"}", "    ran = {_query(t) for t in state.plan_tasks if t.action}", [WHOP_T]),
- ("stop_at을 안 적는다", WK, "stopped=stopped, stop_at=ev, rungs=rungs,\n                         notes=notes)", "stopped=stopped, rungs=rungs,\n                         notes=notes)", [DEEP_T, WALK_T]),
+ ("stop_at을 안 적는다", WK, "stopped=stopped, stop_at=ev, rungs=rungs,\n                         notes=notes, facts=facts)", "stopped=stopped, rungs=rungs,\n                         notes=notes, facts=facts)", [DEEP_T, WALK_T]),
  ("상한 멈춤의 칸을 안 낸다", WK, "    elif nxt is not None:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", "    elif False:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", [CAP_T]),
  ("리터럴 칸이 첫 칸이 아니다", WK, "            rungs = [head] + [r for r in rungs if r != head]", "            rungs = [r for r in rungs if r != head] + [head]", [LIT_NEXT_T]),
  ("walked로 입구 읽기 줄을 안 센다", IM, "    walked = [t for t in state.plan_tasks if t.walked and t.status == \"ok\"]", "    walked = []", [WBRIEF_T]),
@@ -3392,8 +3392,8 @@ WALK_LEGEND_T = "tests/application/test_walk.py::test_판정용_lines는_실제_
 AB_LEGEND_T = "tests/application/test_conclude_ab.py::test_legend는_지난_트레이스의_걷기_머리_아래에_뜻_줄을_끼운_판이_B다"
 AB_LEGEND_CLI_T = "tests/test_cli.py::test_llm_ab는_legend로_걷기_머리_아래에_뜻_줄을_끼운_판을_B로_묻는다"
 CASES += [
- ("lines가 뜻 줄을 안 둔다", CS, "        return head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return head + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
- ("lines가 뜻 줄을 늘 둔다", CS, "        return head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return head + [WALK_LEGEND] + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
+ ("lines가 뜻 줄을 안 둔다", CS, "        return (head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return (head + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
+ ("lines가 뜻 줄을 늘 둔다", CS, "        return (head + ([WALK_LEGEND] if legend else []) + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", "        return (head + [WALK_LEGEND] + [\"  키 | 쓴 쪽 | 상태 | 증거\"] + [h.line() for h in self.hops] + [f\"  주: {note}\" for note in notes]", [WALK_LEGEND_T, BRIEF_JOIN_T]),
  ("판정 블록이 뜻 줄을 켠다", B, "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False),", "    return {\"case\": case_block(state, site_config=site_config, target=target, join_notes=False, legend=True),", [BRIEF_JOIN_T]),
  ("뜻 줄을 걷기 머리 앞에 끼운다", ABM, "    return \"\\n\".join([*lines[:head + 1], WALK_LEGEND, *lines[head + 1:]])", "    return \"\\n\".join([*lines[:head], WALK_LEGEND, *lines[head:]])", [AB_LEGEND_T]),
  ("legend 비교가 B판에 뜻 줄을 안 끼운다", ABM, "        with_notes, without = prompt, add_legend(prompt) or prompt", "        with_notes, without = prompt, prompt", [AB_LEGEND_T]),
@@ -3986,7 +3986,32 @@ CASES += [
  ('멈춤에 쓰기 경로가 없다', WK, '            path = paths_at.get(ev, "")', '            path = ""', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('행 글에 쓰기 경로가 없다', CS, '        who += f" {self.write_path}" if self.write_path else ""\n', '', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
 ]
-assert len(CASES) >= 1432, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑦ — B: 단일값 비교식 자리의 입력을 그대로 견준 통과 n/m · 빈 행 · 멈춘 클래스 입력의 그 필드 빈 행 — 걷기 주와 검증 사실 줄 ──
+CASES += [
+ ('비교식 입력을 견준 수를 안 남긴다', WK, '                    compared = (hit, sum(1 for r in rows if r.get(hit.field) != hit.value), len(rows),', '                    compared = None and (hit, sum(1 for r in rows if r.get(hit.field) != hit.value), len(rows),', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('통과 수를 거꾸로 센다', WK, 'sum(1 for r in rows if r.get(hit.field) != hit.value), len(rows),', 'sum(1 for r in rows if r.get(hit.field) == hit.value), len(rows),', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('통과 분모가 입력 행 수가 아니다', WK, 'hit.value), len(rows), sum(1 for r in rows if _blank(r.get(hit.field))), ev)', 'hit.value), 3, sum(1 for r in rows if _blank(r.get(hit.field))), ev)', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('비교식 입력의 빈 행을 안 센다', WK, 'len(rows), sum(1 for r in rows if _blank(r.get(hit.field))), ev)', 'len(rows), len(rows), ev)', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('공백뿐인 값을 빈 값으로 안 본다', WK, '    return value is None or (isinstance(value, str) and not value.strip())', '    return value is None or value == ""', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('없는 필드를 빈 값으로 안 본다', WK, '    return value is None or (isinstance(value, str) and not value.strip())', '    return isinstance(value, str) and not value.strip()', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('견준 수가 판정 함수 밖으로 안 나간다', WK, '        nonlocal literal, compared\n', '        nonlocal literal\n', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('이어진 단일값 홉에서 멈추면 멈춘 클래스 입력을 안 본다', WK, '        if (ev == at_ev or carried.get(ev) == (hit.field, hit.value)) and up is not None and inputs_at.get(ev):', '        if ev == at_ev and up is not None and inputs_at.get(ev):', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('이어진 단일값 홉을 안 적어 둔다', WK, '            carried[ev] = watch\n', '', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('멈춘 클래스를 비교식 입력의 쓴 쪽으로 본다', WK, '        up = walked_at.get(ev)\n', '        up = walked_at.get(at_ev)\n', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('그 필드가 없는 입력도 빈 행으로 센다', WK, '                     for lab, _, rows_ in inputs_at[ev] if any(hit.field in r for r in rows_)]', '                     for lab, _, rows_ in inputs_at[ev]]', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('멈춘 클래스 입력의 빈 행을 안 센다', WK, '{sum(1 for r in rows_ if _blank(r.get(hit.field)))}/{len(rows_)}', '{len(rows_)}/{len(rows_)}', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
+ ('멈춘 클래스 입력에 그 필드가 없다는 사실이 없다', WK, 'if parts else f" · 멈춘 {up.writer}의 입력에 {hit.field} 필드가 없다"', 'if parts else ""', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('클래스가 읽은 입력을 안 남긴다', WK, '        inputs_at[came_from] = [(e[0], e[1], e[2]) for e in read_inputs]\n', '', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('걷기가 사실 줄을 안 싣는다', WK, '                         notes=notes, facts=facts)}', '                         notes=notes)}', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('걷기 표가 사실 줄을 안 찍는다', CS, '                + [f"  주: {fact}" for fact in self.facts])', '                )', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('검증 사실 줄에 걷기 사실이 없다', ND, '    told = f" · 걷기 사실: {\' / \'.join(walk.facts)}" if walk is not None and walk.facts else ""', '    told = ""', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
+ ('걷기 사실끼리 가르는 표가 다르다', ND, "{' / '.join(walk.facts)}", "{' · '.join(walk.facts)}", ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
+ ('검증 노드가 걷기를 안 넘긴다', ND, 'service_repos=deps.service_repos or {}, walk=state.walk)', 'service_repos=deps.service_repos or {})', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
+ ('원인 없는 판정의 검증 사실에 걷기 사실이 없다', ND, '        return "최상위 원인 없음" + told', '        return "최상위 원인 없음"', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
+ ('서비스 아닌 원인의 검증 사실에 걷기 사실이 없다', ND, '(component가 서비스가 아니다)" + told', '(component가 서비스가 아니다)"', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
+ ('서비스 원인의 검증 사실에 걷기 사실이 없다', ND, '/{len(repos)}" + told', '/{len(repos)}"', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
+]
+assert len(CASES) >= 1454, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

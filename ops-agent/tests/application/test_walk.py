@@ -1569,3 +1569,51 @@ async def test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_
                            subscriptions={"a": ("t.raw",), "b": ("t.cmd",)},
                            peer=_Peer({"in:L1": ("sevt", "in:L1", _value(record=[], metadata={"event_type": "W1"}))}), **kw))["walk"]
     assert walk.hops[1].line() == f"  in:L1 | W1 [a · sevt 값의 metadata.event_type] {path} | 없음 | t-3.e1"
+
+
+
+# ── R3-5z ⑦ — 단일값 비교식 자리의 입력을 그대로 견준 수(측정 #33 2 패턴 B) ──
+
+async def test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다():
+    """측정 #33 2 패턴 B: 걷기가 `입력이 다 정상 — <파이프라인> (단일값이 든 비교식 <파일>:L<n>)`로 멈추고 판정 서술은 "원천 `<필드>`가 공백이라 '-'로 채워져 L<n>에서
+    전부 걸렸다"고 정답을 말하는데 component는 '-'를 채운 코드를 골랐다. 사실 먼저(규칙 없음): 그 비교식의 입력을 그 비교식으로 **그대로** 견준 `통과 n/m`과 그 필드가 빈
+    행 수 — 0/m이면 코드는 받은 대로 걸렀다. 코드가 비교 전에 값을 바꾸면(빈 값 → '-') 입력 그대로의 수는 코드가 본 수와 다르니, 멈춘 자리가 그 입력이고 걸은 클래스가 그
+    쓴 쪽이면 그 클래스 입력에서 그 필드가 빈 행도 적는다(그 필드가 든 입력마다). 걷기 주로 적고 검증 사실 줄에도 실린다."""
+    rows = [{"code": f"A{i}", "wg": "-"} for i in range(3)]
+    source = [{"id": 0, "wg": ""}, {"id": 1, "wg": " "}, {"id": 2, "wg": "A"}, {"id": 3}]
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows, "metadata": {"event_type": "W1"}})},
+             ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey"), ("ref:{line}", "rediskey")]),
+             ("redis.get", "src:L1"): {"type": "string", "value": json.dumps(source)},
+             ("redis.get", "ref:L1"): {"type": "string", "value": json.dumps([{"k": 1}, {"k": 2}])}}
+    lookup = _Lookup({("W0", (("wg", "-"),)): FilterScan(hits=[HIT], checked=["wg"], files=["proc/job.py"])})
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, lookup=lookup, clock=lambda: T0)
+    walk = (await run_walk(_state(), runner=_Reads(table), **kw))["walk"]
+    assert walk.stopped == "입력이 다 정상 — W1 (단일값이 든 비교식 proc/job.py:L50)"
+    fact = "비교식 proc/job.py:L50 — 그 입력 in:L1 그대로 견주면 통과 0/3 · 그 필드가 빈 행 0 · 멈춘 W1의 입력에서 wg가 빈 행 src:L1 3/4"   # ref:L1엔 그 필드가 없다
+    assert walk.facts == [fact]
+    assert walk.lines()[-1] == f"  주: {fact}" and walk.lines(join_notes=False)[-1] == f"  주: {fact}"      # 병합 주가 아니다 — 판정용에도 남는다
+    # 멈춘 클래스의 입력 어디에도 그 필드가 없으면 그 사실
+    bare = {**table, ("redis.get", "src:L1"): {"type": "string", "value": json.dumps([{"id": i} for i in range(4)])}}
+    walk = (await run_walk(_state(), runner=_Reads(bare), **kw))["walk"]
+    assert walk.facts == ["비교식 proc/job.py:L50 — 그 입력 in:L1 그대로 견주면 통과 0/3 · 그 필드가 빈 행 0 · 멈춘 W1의 입력에 wg 필드가 없다"]
+    # 멈춘 자리가 그 입력이 아니면(위로 더 나빴다) 그 입력의 수만
+    deeper = {**table, ("redis.get", "src:L1"): {"type": "string", "value": json.dumps([{"id": i, "wg": "-"} for i in range(4)])}}
+    walk = (await run_walk(_state(), runner=_Reads(deeper), **kw))["walk"]
+    assert walk.stopped.startswith("쓴 쪽을 모른다 — src:L1") and walk.facts == ["비교식 proc/job.py:L50 — 그 입력 in:L1 그대로 견주면 통과 0/3 · 그 필드가 빈 행 0"]
+    # 그 단일값이 그대로 이어진 홉에서 걸은 클래스가 멈췄으면 그 클래스의 입력(측정판 c-2형 — 원천 묶음까지 '-'가 이어지고 채운 쪽의 입력에 그 필드가 비었다)
+    carried = {**table, ("redis.get", "src:L1"): {"type": "string", "value": json.dumps({"rows": [{"id": i, "wg": "-"} for i in range(4)], "metadata": {"event_type": "W2"}})},
+               ("code.resources", "W2"): _res("W2", [("raw:{line}", "rediskey")]),
+               ("redis.get", "raw:L1"): {"type": "string", "value": json.dumps([{"id": 0, "wg": ""}, {"id": 1, "wg": "B"}])}}
+    walk = (await run_walk(_state(), runner=_Reads(carried), **{**kw, "classes": frozenset({"W0", "W1", "W2"}), "class_services": {"W0": ("a",), "W1": ("a",), "W2": ("a",)}}))["walk"]
+    assert walk.stopped == "입력이 다 정상 — W2 (단일값이 든 비교식 proc/job.py:L50)" and walk.hops[2].status.startswith("나쁨 — 같은 단일값 wg='-'")
+    assert walk.facts == ["비교식 proc/job.py:L50 — 그 입력 in:L1 그대로 견주면 통과 0/3 · 그 필드가 빈 행 0 · 멈춘 W2의 입력에서 wg가 빈 행 raw:L1 1/2"]
+    # 분모는 그 입력의 행 수다
+    two_rows = [{"code": "A0", "wg": "-"}, {"code": "A1", "wg": "-"}]
+    once = {**table, ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": two_rows, "metadata": {"event_type": "W1"}})}}
+    walk = (await run_walk(_state(), runner=_Reads(once), **kw))["walk"]
+    assert walk.facts[0].startswith("비교식 proc/job.py:L50 — 그 입력 in:L1 그대로 견주면 통과 0/2 · 그 필드가 빈 행 0 · ")
+    # 비교식이 없으면 사실 줄도 없다
+    lookup_none = _Lookup({})
+    walk = (await run_walk(_state(), runner=_Reads(table), **{**kw, "lookup": lookup_none}))["walk"]
+    assert walk.facts == [] and walk.stopped.startswith("입력이 다 정상 — ") and not any(line.startswith("  주: 비교식") for line in walk.lines())

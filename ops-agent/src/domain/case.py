@@ -250,6 +250,8 @@ class Walk(StrictModel):
     rungs: list[Rung] = []
     # 표 아래 주 — 같은 클래스 이름이 두 레포일 때 어느 서비스로 갈랐나(근거), 못 갈랐으면 둘 다 걸었다는 사실(R3-3 ②-b).
     notes: list[str] = []
+    # 걷기가 세운 사실 줄(R3-5z ⑦·⑧ — 측정 #33 2 패턴 B·C) — 주 뒤에 같은 `주:`로 찍히고, 검증 사실 줄 꼬리에도 실린다(평가가 판정과 나란히 센다).
+    facts: list[str] = []
 
     def next_hop(self) -> tuple[str, dict] | None:
         return (self.rungs[0].action, dict(self.rungs[0].params)) if self.rungs else None
@@ -296,7 +298,8 @@ class Walk(StrictModel):
             # 던진 걷기(홉 0)도 보인다(측정 #11 P0 2) — 사유 한 줄이 없으면 리드도 사람도 걷기가 있었는지 모른다.
             return head
         notes = self.notes if join_notes else [n for n in self.notes if not any(m in n for m in JOIN_NOTE_MARKS)]
-        return head + ([WALK_LEGEND] if legend else []) + ["  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in notes]
+        return (head + ([WALK_LEGEND] if legend else []) + ["  키 | 쓴 쪽 | 상태 | 증거"] + [h.line() for h in self.hops] + [f"  주: {note}" for note in notes]
+                + [f"  주: {fact}" for fact in self.facts])
 
 
 class Case(StrictModel):

@@ -172,7 +172,10 @@ def test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클�
                     "feed:events:L1 | — | 정상 — 행 4 · 필드 2",
                     "feed:ref | — | 정상 — codes: 행 3 · 필드 2",
                     "feed:status:L1 | — | 정상 — 행 4 · 필드 2"]
-    assert notes == [PALETTE_NOTE]
+    # 걷기 사실(R3-5z ⑦ — 측정 #33 2 패턴 B): 그 비교식의 입력을 그대로 견준 수, 그리고 '-'가 이어진 원천 묶음에서 멈춘 SourceMerger의 입력엔 그 필드가 아예 없다
+    # (RowFiller가 채운다).
+    assert notes == [PALETTE_NOTE, f"비교식 batch/components.py:L{n} — 그 입력 alarm:domain:L1 그대로 견주면 통과 0/5 · 그 필드가 빈 행 0"
+                                   " · 멈춘 SourceMerger의 입력에 state 필드가 없다"]
     assert stopped == f"입력이 다 정상 — SourceMerger (단일값이 든 비교식 batch/components.py:L{n})"
     assert rungs == [f"code.read line={n} path='batch/components.py' service='batch'",
                      f"code.read line={_at('common/merge.py', 'feed_events')} path='common/merge.py' service='batch'",

@@ -1265,19 +1265,21 @@ def cap_foreign_code(verdict: Verdict, *, plan_tasks, service_repos: dict[str, s
     return verdict.model_copy(update={"confidence": "medium", "caveats": verdict.caveats + [note]})
 
 
-def verdict_facts(verdict: Verdict, *, evidence, plan_tasks, service_repos: dict[str, str]) -> str:
+def verdict_facts(verdict: Verdict, *, evidence, plan_tasks, service_repos: dict[str, str], walk: Walk | None = None) -> str:
     """검증이 이미 아는 사실 한 줄 — 최상위 원인이 인용한 증거 중 잘린 것(`complete=False`), 인용한 코드 증거 중 component 레포 밖의 것(R3-5y ① — 측정 #32
-    회신의 답 1: high를 받칠 근거가 없는 판을 다음 판부터 이 줄로 센다). 동작은 안 바꾼다. component가 서비스가 아니면(external 등) 레포 칸은 해당 없음."""
+    회신의 답 1: high를 받칠 근거가 없는 판을 다음 판부터 이 줄로 센다). 동작은 안 바꾼다. component가 서비스가 아니면(external 등) 레포 칸은 해당 없음.
+    걷기가 세운 사실 줄(`Walk.facts`, R3-5z ⑦·⑧)은 꼬리에 `걷기 사실: …` — 판정이 어떻든 같이 센다."""
+    told = f" · 걷기 사실: {' / '.join(walk.facts)}" if walk is not None and walk.facts else ""
     root = verdict.root_cause
     if root is None:
-        return "최상위 원인 없음"
+        return "최상위 원인 없음" + told
     ids = list(dict.fromkeys(root.evidence_ids))
     cut = {e.id for e in evidence if not e.complete}
     head = f"최상위 인용 잘림 {sum(1 for e in ids if e in cut)}/{len(ids)}"
     if root.component not in service_repos:
-        return f"{head} · 다른 레포 코드 해당 없음(component가 서비스가 아니다)"
+        return f"{head} · 다른 레포 코드 해당 없음(component가 서비스가 아니다)" + told
     repos = _root_code_repos(root, plan_tasks=plan_tasks, service_repos=service_repos)
-    return f"{head} · 다른 레포 코드 {sum(1 for r in repos if r != service_repos[root.component])}/{len(repos)}"
+    return f"{head} · 다른 레포 코드 {sum(1 for r in repos if r != service_repos[root.component])}/{len(repos)}" + told
 
 
 def _component_problem(state: CaseState, deps: EngineDeps, verdict: Verdict) -> Callable[[str], str | None]:
@@ -1387,7 +1389,7 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)
         # 검증이 아는 사실 한 줄(R3-5y ①) — 판정이 정해진 길(통과·강등)에서만 남긴다. 되묻는 길은 다음 판정을 다시 본다.
         def facts(final: Verdict) -> str:
-            return verdict_facts(final, evidence=state.evidence, plan_tasks=state.plan_tasks, service_repos=deps.service_repos or {})
+            return verdict_facts(final, evidence=state.evidence, plan_tasks=state.plan_tasks, service_repos=deps.service_repos or {}, walk=state.walk)
 
         if not problems:
             if not deps.check_discovery:

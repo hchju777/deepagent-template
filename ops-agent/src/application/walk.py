@@ -59,6 +59,11 @@ def dropping(hits: list[FilterHit]) -> list[FilterHit]:
     return [h for h in hits if h.op == "!="]
 
 
+def _blank(value: Any) -> bool:
+    """빈 값 — 없음(필드 없음 포함)·빈 문자열·공백뿐인 문자열. 코드가 비교 전에 채우는 자리다(R3-5z ⑦)."""
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 def _hashable(value: Any):
     return value if isinstance(value, (str, int, float, bool, type(None))) else json.dumps(value, sort_keys=True, ensure_ascii=False)
 
@@ -558,12 +563,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     async def judged(rows: list, status: str, bad: bool, ev: str) -> tuple[str, bool, tuple[str, str] | None]:
         """단일값 필드(③) — 아래 홉에서 잡힌 `(필드, 값)`이 여기도 그대로면 나쁨(grep 없이 이어진다). 아니면 읽는 쪽 코드 줄이 정한다. 키 값과
         포인터 메시지(④)가 같은 판정을 받는다. → (상태, 나쁜가, 위로 이어 볼 단일값). 걷고 있는 클래스·가지·이어 온 단일값은 바깥 루프의 것."""
-        nonlocal literal
+        nonlocal literal, compared
         carry = None
         same_all = dict(_same_valued(rows))
         same = {k: v for k, v in same_all.items() if isinstance(v, str)}
         if not bad and watch is not None and same.get(watch[0]) == watch[1]:
             status, bad, carry = f"나쁨 — 같은 단일값 {watch[0]}={watch[1]!r} (아래 홉과 같다)", True, watch
+            carried[ev] = watch
         elif not bad and same and status.startswith("정상") and lookup is not None:
             # 어댑터 안의 조회(R3-4 ③ → R3-5 ③) — 가지의 인자(service·repo)를 그대로 넘겨 같은 이름 둘 중 그 레포의 파일을 본다. 단일값 전부를 한 번에
             # 대조한다(상한 없음). runner를 안 거치므로 읽기 상한·증거 밖이다. 문구는 사실만 — 행 수·그 값인 필드·그 값이 든 비교식의 자리(사람 결정 10-15).
@@ -582,6 +588,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                                       (hit.field, hit.value))
                 if literal is None:
                     literal = (scope, hit.path, hit.line, ev)
+                    # 그 입력을 그 비교식으로 **그대로** 견준다(R3-5z ⑦ — 측정 #33 2 패턴 B) — 행마다, 값을 바꾸지 않고.
+                    compared = (hit, sum(1 for r in rows if r.get(hit.field) != hit.value), len(rows), sum(1 for r in rows if _blank(r.get(hit.field))), ev)
             elif scan.problem:
                 # 조회가 안 됐으면 대조한 것이 없다(0/M) — 정상이라 하지 않는다(사람 결정 10-15: 일부만 봤으면 "일부만 검사").
                 status = "미확인" + status[len("정상"):] + f" · 단일값 {passed} — 일부만 검사(0/{len(same)}): {scan.problem}"
@@ -628,6 +636,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     paths_at: dict[str, str] = {}                                                           # 없는 키 홉의 증거 → 쓰는 클래스의 쓰기 경로(R3-5z ⑥)
     subscribed_at: dict[str, tuple[str, str, tuple[str, int] | None, str]] = {}            # 걸은 클래스의 구독 토픽 홉의 증거 → (클래스 [서비스], 레포 범위, 본문 자리, 자원 증거)(R3-5s ⑥)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
+    compared: tuple[FilterHit, int, int, int, str] | None = None                            # 그 줄의 입력을 그대로 견준 수 — (줄, 통과, 행, 빈 행, 그 입력 홉의 증거)(R3-5z ⑦)
+    inputs_at: dict[str, list[tuple[str, str, list]]] = {}                                  # 걸은 가지 — 그 홉의 증거 → 그 클래스가 읽은 입력 (라벨, 증거, 행들)(R3-5z ⑦)
+    carried: dict[str, tuple[str, str]] = {}                                                # 아래 홉의 단일값이 그대로 이어진 홉의 증거 → 그 (필드, 값)(R3-5z ⑦)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
     # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
     readings: dict[str, tuple[str, str]] = {target.key: ("ok", target.writer), target.declared: ("ok", target.writer)}
@@ -973,6 +984,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         # 읽은 입력이 없으면("모른다") 클래스 본문. 메시지만 읽은 클래스(인덱스 자원 0)는 읽는 메서드 줄이 없어 클래스 본문이다.
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),
                                                              at=(reader_at(text) if real or missed else None) or class_at(text))
+        inputs_at[came_from] = [(e[0], e[1], e[2]) for e in read_inputs]
     if mixed_rows and not stopped:
         # 걷기가 끝난 뒤 멈출 자리(가장 깊은 나쁜 홉 — 없으면 대상 키 홉)에서 나간 섞인 행만 센다(R3-5z ③), 많아야 MAX_COUNTS번. 0건이면 그 행이 나쁨이 되어 멈출 자리를
         # 아래에서 다시 고른다. 행·기록(걸은 클래스의 못 본 입력, 없는 키의 쓴 쪽 범위)을 센 결과로 바꾼다.
@@ -1129,6 +1141,20 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if scope:
             head = Rung(action="code.read", params={"service": scope, "path": path, "line": line}, evidence=gev)
             rungs = [head] + [r for r in rungs if r != head]
+    facts: list[str] = []
+    if compared is not None:
+        # 사실만(R3-5z ⑦, 규칙 없음 — 판정 하향은 이 줄의 효과를 한 판 잰 뒤에): 0/m이면 코드는 받은 대로 걸렀다. 코드가 비교 전에 값을 바꾸면(빈 값 → '-') 입력
+        # 그대로의 수는 코드가 본 수와 다르다 — 멈춘 자리가 그 입력이거나 그 단일값이 그대로 이어진 홉이고 걸은 클래스가 그 쓴 쪽이면, 그 클래스 입력에서 그 필드가
+        # 빈 행을 같이 적는다(측정판 c-2형: 원천 묶음까지 '-'가 이어지고 채운 쪽의 입력엔 그 필드가 없다).
+        hit, passed_n, rows_n, blank_n, at_ev = compared
+        fact = (f"비교식 {hit.path}:L{hit.line} — 그 입력 {next((h.key for h in hops if h.evidence_id == at_ev), '?')} 그대로 견주면 통과 {passed_n}/{rows_n}"
+                f" · 그 필드가 빈 행 {blank_n}")
+        up = walked_at.get(ev)
+        if (ev == at_ev or carried.get(ev) == (hit.field, hit.value)) and up is not None and inputs_at.get(ev):
+            parts = [f"{lab} {sum(1 for r in rows_ if _blank(r.get(hit.field)))}/{len(rows_)}"
+                     for lab, _, rows_ in inputs_at[ev] if any(hit.field in r for r in rows_)]
+            fact += f" · 멈춘 {up.writer}의 입력에서 {hit.field}가 빈 행 {', '.join(parts)}" if parts else f" · 멈춘 {up.writer}의 입력에 {hit.field} 필드가 없다"
+        facts.append(fact)
     return {"plan_tasks": tasks, "evidence": evidence,
             "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), counts=count_runs, count_seconds=count_spent, stopped=stopped, stop_at=ev, rungs=rungs,
-                         notes=notes)}
+                         notes=notes, facts=facts)}

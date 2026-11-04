@@ -1066,3 +1066,28 @@ async def test_성공으로_비워_썼다에서_멈춘_걷기도_결함_아님�
     other = verdict(root_cause=cause("processor", "t-2.e1"))
     patch = await nodes["verify"](_state(case, verdict=other, walk=walk, plan_tasks=tasks, evidence=[_ev("t-2.e1"), _ev("t-3.e1")]))
     assert not any("0이 업무상" in c for c in (patch.get("verdict") or other).caveats)                 # 결함 아님일 때만
+
+
+
+# ── R3-5z ⑦ — 검증 사실 줄에 걷기 사실 ──
+
+async def test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다(case):
+    """측정 #33 2(패턴 B·C): 걷기가 세운 사실(그대로 견준 통과 수·날짜 줄)을 평가가 판정과 나란히 센다 — 검증 사실 줄 꼬리에 `걷기 사실: …`(여럿이면 ` / `). 걷기 사실이
+    없으면 전과 같다. 동작은 안 바꾼다."""
+    from src.application.nodes import verdict_facts
+    from src.domain.case import Walk
+
+    walk = Walk(stopped="입력이 다 정상 — W1", facts=["비교식 p.py:L5 — 그 입력 k 그대로 견주면 통과 0/3 · 그 필드가 빈 행 0", "둘째 사실"])
+    told = " · 걷기 사실: 비교식 p.py:L5 — 그 입력 k 그대로 견주면 통과 0/3 · 그 필드가 빈 행 0 / 둘째 사실"
+    facts = dict(evidence=[_ev("t-1.e1")], plan_tasks=[], service_repos={})
+    assert verdict_facts(verdict(verdict_type="inconclusive", root_cause=None), **facts, walk=walk) == "최상위 원인 없음" + told
+    assert verdict_facts(verdict(verdict_type="external", root_cause=cause("t.raw", "t-1.e1")), **facts, walk=walk) == (
+        "최상위 인용 잘림 0/1 · 다른 레포 코드 해당 없음(component가 서비스가 아니다)" + told)
+    repos = {"sink": "core"}
+    assert verdict_facts(verdict(), evidence=[_ev("t-1.e1")], plan_tasks=[], service_repos=repos, walk=walk) == "최상위 인용 잘림 0/1 · 다른 레포 코드 0/0" + told
+    assert verdict_facts(verdict(verdict_type="inconclusive", root_cause=None), **facts, walk=Walk()) == "최상위 원인 없음"
+    assert verdict_facts(verdict(verdict_type="inconclusive", root_cause=None), **facts) == "최상위 원인 없음"
+    # verify 노드가 State의 걷기를 넘긴다
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset(repos), service_repos=repos))
+    patch = await nodes["verify"](_state(case, verdict=verdict(), walk=walk))
+    assert patch["verify_facts"].endswith(told), patch
