@@ -40,6 +40,8 @@ from src.domain.investigation import TaskRunnerPort
 MAX_DEPTH = 4
 MAX_READS = 15
 MAX_SECONDS = 30.0
+# 걷기가 끝난 뒤 멈출 자리의 섞인 토픽 행을 세는 횟수의 상한(R3-5z ③) — 세기 한 번이 T + 표본 상한(기본 28초)까지라 둘.
+MAX_COUNTS = 2
 # 못 채우는 템플릿(대상 키에 없는 자리) — scan 뒤 읽는 실재 키 수.
 SCAN_READS = 5
 # 단일값 필드의 나쁨은 **코드 줄**이 정한다(R3-3 ③ → R3-5 ③, 사람 결정 10-14·10-15 — 자리표시자 목록 같은 손 규칙은 두지 않는다): 입력을 읽는 쪽(걷고
@@ -298,14 +300,15 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    peer: Callable[[str, str], Awaitable[tuple[str, str, Any] | None]] | None = None,
                    pipeline_here: Callable[[str], Awaitable[str]] | None = None,
                    routed: Callable[[str], Awaitable[str]] | None = None,
-                   count_seconds: float | None = None,
+                   count_types: bool = False,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
     (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만. `peer(키, 템플릿)`은 같은 GBM 다른
     사이트의 같은 키 값 `(사이트, 읽은 키, 값)`(R3-5t ②); 없으면(사이트 하나·대본) 인덱스가 모르는 쓴 쪽은 전처럼 비운다. `pipeline_here(클래스)`는 그 값이 댄
     클래스가 이 사이트에서 도는지 — 돌면 빈 문자열, 아니면 까닭(R3-5v ②); 없으면(대본) 확인 없이 채운다. `routed(클래스)`는 그 클래스가 라우터 유형표를 거쳐
-    받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼. `count_seconds`는 그 모름 행에서 그 클래스의 유형만 셀 때의 상한 T초(R3-5y ④ —
-    `kafka.count_type {topic, class}`, 셀 값·N은 실행기가 푼다); 없으면(대본·유형 칸 선언 없음) 세지 않는다."""
+    받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼. `count_types`면 그 모름 행에서 그 클래스의 유형만 센다(R3-5y ④ —
+    `kafka.count_type {topic, class}`, 셀 값·상한은 실행기가 config에서) — 걷기가 끝난 뒤 멈출 자리의 행만, 읽기 수·시간 상한 밖에서(R3-5z ③). 꺼져 있으면(대본·유형 칸
+    선언 없음) 세지 않는다."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
@@ -360,23 +363,22 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         evidence.extend(outcome.evidence)
         return done, outcome
 
-    count_spent, count_runs = 0.0, 0                               # 유형 세기에 쓴 초·횟수(R3-5y ④) — 시간 상한 안이다; 머리줄에 따로 적는다
+    count_spent, count_runs = 0.0, 0                               # 유형 세기에 쓴 초·횟수 — 읽기 수·시간 상한 밖(R3-5z ③); 머리줄에 따로 적는다
     counted_at: dict[str, str] = {}                                # 센 토픽 홉의 증거 → 멈춤 토막 — 셌으니 그 토픽의 tail 칸은 없다
-    uncounted: set[str] = set()                                    # 셀 수 있었는데 상한으로 안 센 토픽 홉의 증거 — tail 칸 대신 세기 칸
+    uncounted: set[str] = set()                                    # 멈출 자리의 섞인 행인데 세기 수 상한으로 안 센 홉의 증거 — tail 칸 대신 세기 칸
+    mixed_rows: list[dict] = []                                    # 섞인 토픽 행 — 걷기가 끝난 뒤 멈출 자리의 것만 센다(R3-5z ③)
 
-    async def count_mixed(cls: str, topic: str):
-        """섞인 토픽에서 그 클래스의 유형만 센다(R3-5y ④ — 측정 #32 회신의 답 2: 걷기 동결의 예외, 사람 승인). → (문장, 나쁜가, 멈춤 토막, 증거), 안 셌으면 None.
-        남은 시간이 T보다 적으면 T를 줄여 세지 않는다 — 녹화와 재생의 인자가 같아야 녹화가 맞는다(답 2(5)). 그 사실은 주에."""
+    async def count_mixed(cls: str, topic: str, number: int):
+        """섞인 토픽에서 그 클래스의 유형만 센다(R3-5y ④ — 측정 #32 회신의 답 2: 걷기 동결의 예외, 사람 승인). → (문장, 나쁜가, 멈춤 토막, 증거). 걷기가 끝난 뒤에
+        부른다(R3-5z ③ — 측정 #33: 걷기 중에 세면 읽기 하나를 써 한 사이트 걷기가 한 홉 짧아졌고, 표본 상한이 들면 30초 안에서 돌 수 없다). 읽기 수에 안 세는
+        태스크다 — 번호만 걷기 읽기 뒤로 잇는다."""
         nonlocal count_spent, count_runs
-        if count_seconds is None:
-            return None
-        left = MAX_SECONDS - (elapsed() - aside)
-        if counter >= MAX_READS or left < count_seconds:
-            why = f"읽기 {MAX_READS} 상한" if counter >= MAX_READS else f"걷기 남은 시간 {max(left, 0.0):.1f}초 < 유형 세기 상한 {count_seconds:g}초"
-            remember(f"{cls}: {topic}의 유형을 안 셌다 — {why}")
-            return None
         before = elapsed()
-        _, got = await run(f"걷기 — {cls}가 받는 유형만 {topic}에서 센다", "kafka.count_type", {"topic": topic, "class": cls})
+        task = _task(f"t-{start + counter + number}", f"걷기 — {cls}가 받는 유형만 {topic}에서 센다", "kafka.count_type",
+                     {"topic": topic, "class": cls}).model_copy(update={"walked": True})
+        got = await runner.run(task, case=state.case)
+        tasks.append(_finish(task, got))
+        evidence.extend(got.evidence)
         count_spent += elapsed() - before
         count_runs += 1
         cev = got.evidence[0].id if got.evidence else ""
@@ -651,22 +653,12 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
                 tstatus, tbad, _ = _topic_status(tdata, tgot.error or "증거 없음", await mixed_of(writer))
                 shown, svcs = published(name)
-                # 섞인 토픽(R3-5w ②)은 읽었어도 그 클래스의 입력을 본 것이 아니다 — `입력이 다 정상`이라 쓰지 않는다. 셀 수 있으면 그 클래스의 유형만 센
-                # 문장이 행 상태다(R3-5y ④): 0건이면 나쁨, k건이면 본 것, 세다 멈췄거나 못 셌으면 여전히 모름.
+                # 섞인 토픽(R3-5w ②)은 읽었어도 그 클래스의 입력을 본 것이 아니다 — `입력이 다 정상`이라 쓰지 않는다. 세는 것은 걷기가 끝난 뒤 멈출 자리일
+                # 때만이다(R3-5z ③) — 그때 행 상태가 센 문장이 된다.
                 unsure = isinstance(tdata, dict) and tstatus.startswith("모름 — ")
-                hev, lack = tev, "유형별 메시지 수 모름"
-                if unsure:
-                    count = await count_mixed(writer, name)
-                    if count is not None:
-                        tstatus, tbad, lack, cev = count
-                        hev = cev or tev
-                        counted_at[hev] = lack
-                        unsure = tstatus.startswith("모름 — ")
-                    elif count_seconds is not None:
-                        uncounted.add(tev)
                 readings[name] = ("mixed" if unsure else "ok" if isinstance(tdata, dict) else "fail", "")
                 if unsure:
-                    missed.append(f"{name} {lack}")
+                    missed.append(f"{name} 유형별 메시지 수 모름")
                 elif isinstance(tdata, dict):
                     real += 1
                 else:
@@ -675,11 +667,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 # (`W [서비스]`), 가지 꼬리표는 레포가 둘일 때만 있다.
                 svc = branch.tag or next((h.service for h in hops if h.evidence_id == came_from and h.writer == writer), "")
                 who_ = f"{writer} [{svc}]" if svc else writer
-                hops.append(Hop(key=name, kind="topic", depth=depth + 1, service=shown, candidates=list(svcs), status=f"{tstatus} · 구독 {who_}", bad=tbad, evidence_id=hev,
-                                basis=f"{writer}{tag}가 구독하는 토픽 ({res_id}) — {'그 클래스의 유형만 셌다' if hev in counted_at else '보존 범위'}, 발행 쪽은 config 선언",
-                                parent=came_from))
-                if hev:
-                    subscribed_at[hev] = (who_, scope, class_at(text), res_id)
+                hops.append(Hop(key=name, kind="topic", depth=depth + 1, service=shown, candidates=list(svcs), status=f"{tstatus} · 구독 {who_}", bad=tbad, evidence_id=tev,
+                                basis=f"{writer}{tag}가 구독하는 토픽 ({res_id}) — 보존 범위, 발행 쪽은 config 선언", parent=came_from))
+                if tev:
+                    subscribed_at[tev] = (who_, scope, class_at(text), res_id)
+                if unsure and count_types:
+                    mixed_rows.append({"at": len(hops) - 1, "cls": writer, "topic": name, "who": who_, "walked": came_from,
+                                       "basis": f"{writer}{tag}가 구독하는 토픽 ({res_id}) — 그 클래스의 유형만 셌다, 발행 쪽은 config 선언"})
                 continue
             if kind == "rediskey":
                 filled = fill_key(name, declared=target.declared, key=target.key)
@@ -806,25 +800,17 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                         tev = tgot.evidence[0].id if tgot.evidence else ""
                         tdata = runner.raw(tev) if tgot.status == "ok" and tev else None
                         tstatus, tbad, piece = _topic_status(tdata, tgot.error or "증거 없음", await mixed_of(w))
-                        hev = tev
-                        if isinstance(tdata, dict) and tstatus.startswith("모름 — "):
-                            # 섞인 토픽이면 그 클래스의 유형만 센다(R3-5y ④) — 행 상태도 멈춤 꼬리의 토막도 센 결과다.
-                            count = await count_mixed(w, topic)
-                            if count is not None:
-                                tstatus, tbad, piece, cev = count
-                                hev = cev or tev
-                                counted_at[hev] = piece
-                            elif count_seconds is not None:
-                                uncounted.add(tev)
                         # 쓴 쪽 칸은 발행 선언, 후보도 그 서비스들, 구독 클래스는 상태 꼬리(R3-5t ① — 걸은 클래스의 토픽 행과 같은 모양; 측정 #29 3부: 쓴 쪽 칸의
                         # `<AGV 클래스> [<서비스>] 구독`이 "발행하는 레포가 없다"를 가렸다).
                         pub, pub_svcs = published(topic)
                         hops.append(Hop(key=topic, kind="topic", depth=depth + 2, service=pub, candidates=list(pub_svcs), status=f"{tstatus} · 구독 {w} [{shown}]",
-                                        bad=tbad, evidence_id=hev, parent=ev,
-                                        basis=f"{topic_basis} — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · "
-                                              f"{'그 클래스의 유형만 셌다 · ' if hev in counted_at else ''}발행 쪽은 config 선언"))
-                        ranges.append((topic, piece, hev))
-                        topics_at[hev] = (w, shown, params_k, ev)
+                                        bad=tbad, evidence_id=tev, parent=ev,
+                                        basis=f"{topic_basis} — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 발행 쪽은 config 선언"))
+                        ranges.append((topic, piece, tev))
+                        topics_at[tev] = (w, shown, params_k, ev)
+                        if count_types and isinstance(tdata, dict) and tstatus.startswith("모름 — "):
+                            mixed_rows.append({"at": len(hops) - 1, "cls": w, "topic": topic, "who": f"{w} [{shown}]", "key": ev,
+                                               "basis": f"{topic_basis} — {name}을 쓰는 클래스의 메시지 입력 ({ev}) · 그 클래스의 유형만 셌다 · 발행 쪽은 config 선언"})
                     keyed_at[ev] = (w, shown, params_k, ranges, tail_note, rev, body_at, tuple(cands))
                 if stopped:
                     break
@@ -933,6 +919,32 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         # 읽은 입력이 없으면("모른다") 클래스 본문. 메시지만 읽은 클래스(인덱스 자원 0)는 읽는 메서드 줄이 없어 클래스 본문이다.
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),
                                                              at=(reader_at(text) if real or missed else None) or class_at(text))
+    if mixed_rows and not stopped:
+        # 걷기가 끝난 뒤 멈출 자리(가장 깊은 나쁜 홉 — 없으면 대상 키 홉)에서 나간 섞인 행만 센다(R3-5z ③), 많아야 MAX_COUNTS번. 0건이면 그 행이 나쁨이 되어 멈출 자리를
+        # 아래에서 다시 고른다. 행·기록(걸은 클래스의 못 본 입력, 없는 키의 쓴 쪽 범위)을 센 결과로 바꾼다.
+        bad_now = [h for h in hops if h.bad]
+        at_stop = (max(bad_now, key=lambda h: h.depth) if bad_now else hops[0]).evidence_id
+        mine = [row for row in mixed_rows if hops[row["at"]].parent == at_stop]
+        for number, row in enumerate(mine[:MAX_COUNTS]):
+            status, bad_, piece, cev = await count_mixed(row["cls"], row["topic"], number)
+            old = hops[row["at"]]
+            hev = cev or old.evidence_id
+            counted_at[hev] = piece
+            hops[row["at"]] = old.model_copy(update={"status": f"{status} · 구독 {row['who']}", "bad": bad_, "evidence_id": hev, "basis": row["basis"]})
+            if "walked" in row:
+                if old.evidence_id in subscribed_at:
+                    subscribed_at[hev] = subscribed_at.pop(old.evidence_id)
+                info, lack = walked_at[row["walked"]], f"{row['topic']} 유형별 메시지 수 모름"
+                if status.startswith("모름 — "):
+                    walked_at[row["walked"]] = info._replace(missed=tuple(f"{row['topic']} {piece}" if m == lack else m for m in info.missed))
+                else:
+                    walked_at[row["walked"]] = info._replace(inputs=info.inputs + 1, missed=tuple(m for m in info.missed if m != lack))
+            else:
+                topics_at[hev] = topics_at.pop(old.evidence_id)
+                kw_, shown_k, params_kk, ranges_k, *rest_k = keyed_at[row["key"]]
+                keyed_at[row["key"]] = (kw_, shown_k, params_kk, [(t, piece if tev_ == old.evidence_id else p_, hev if tev_ == old.evidence_id else tev_)
+                                                                  for t, p_, tev_ in ranges_k], *rest_k)
+        uncounted.update(hops[row["at"]].evidence_id for row in mine[MAX_COUNTS:])
     # 멈춘 자리 = 가장 깊은 나쁜 홉(같은 깊이면 먼저 읽은 것). 사유와 다음 칸은 **그 홉**의 일로 만든다 — 마지막 실패나 첫 "모름"이 아니라.
     bad_hops = [h for h in hops if h.bad]
     stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]
@@ -976,7 +988,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             tail = " / ".join(f"구독 {t} {piece}" for t, piece, _ in ranges_) or tail_note
             stopped = f"키가 없다 — {stop_hop.key}(쓰는 {w_} [{shown_}] · {tail})"
             rungs += body_rungs(ev)
-            # 셌으면 그 토픽 칸은 없고, 셀 수 있었는데 상한으로 못 셌으면 tail 대신 세기 칸(R3-5y ④ — 측정 #32: tail 칸이 리드의 tail 반복을 부추겼다).
+            # 셌으면 그 토픽 칸은 없고, 셀 수 있었는데 세기 수 상한으로 안 셌으면 tail 대신 세기 칸(R3-5y ④ — 측정 #32: tail 칸이 리드의 tail 반복을 부추겼다).
             rungs += [Rung(action="kafka.count_type", params={"topic": t, "class": w_}, evidence=tev) if tev in uncounted
                       else Rung(action="kafka.tail", params={"topic": t, "limit": 5}, evidence=tev)
                       for t, _, tev in ranges_ if tev and tev not in counted_at]

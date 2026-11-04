@@ -1276,7 +1276,7 @@ def cmd_case_walk(args, env) -> int:
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
                               pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,
-                              type_count_seconds=_type_count_seconds(app, code),
+                              count_types=_counts_types(code),
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
                               subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))
             state = await (walk_from_key(case, args.key, deps) if args.key else walk_only(case, deps))
@@ -1306,11 +1306,11 @@ def _type_samples(app) -> tuple:
     return (list(inv.type_count_sample_ages), inv.type_count_sample_messages, inv.type_count_sample_seconds)
 
 
-def _type_count_seconds(app, code) -> float | None:
-    """걷기의 유형 세기 상한 T(R3-5y ④) — 토폴로지가 유형 칸(`pipelines.router.type_field`)을 선언했을 때만. 없으면 None — 셀 칸 이름을 모르니 걷기가 세지
-    않는다(대본의 코드 자리는 선언이 없다)."""
+def _counts_types(code) -> bool:
+    """걷기가 유형을 세는가(R3-5y ④·R3-5z ③) — 토폴로지가 유형 칸(`pipelines.router.type_field`)을 선언했을 때만. 없으면 셀 칸 이름을 모르니 세지 않는다(대본의
+    코드 자리는 선언이 없다). 상한은 실행기가 config에서 쥔다."""
     field = getattr(code, "type_field", None)
-    return app.investigation.type_count_seconds if callable(field) and field() else None
+    return bool(callable(field) and field())
 
 
 def cmd_case_investigate(args, env) -> int:
@@ -1409,7 +1409,7 @@ def cmd_case_investigate(args, env) -> int:
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
                               pipeline_here=getattr(code, "pipeline_here", None), routed=getattr(code, "routed_types", None),
-                              type_count_seconds=_type_count_seconds(app, code),
+                              count_types=_counts_types(code),
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
                               subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))
             return await build_engine(deps).ainvoke(CaseState(case=case))

@@ -244,14 +244,15 @@ def test_case_walk은_재생_스냅샷의_인자별_REST_캡처로_입구를_읽
     assert "스냅샷 형식 — summary_badge의 응답에 인자가 없다" in out.out + out.err and "대상 행은 찾았다" not in out.out
 
 
-def test_걷기의_유형_세기_상한은_토폴로지가_유형_칸을_선언했을_때만_config에서_온다():
-    """R3-5y ④: 섞인 토픽 행에서 그 클래스의 유형만 세려면 셀 칸 이름(`pipelines.router.type_field`)이 있어야 한다 — 없으면 걷기가 세지 않는다(세면 매번 `유형 칸
-    선언 없음` 실패 한 건이 읽기 수를 먹는다). 대본의 코드 자리(`StubDeployedCode`)에는 그 선언이 없다. 상한 T는 config `investigation.type_count_seconds`."""
+def test_걷기의_유형_세기는_토폴로지가_유형_칸을_선언했을_때만_켠다():
+    """R3-5y ④·R3-5z ③: 섞인 토픽 행에서 그 클래스의 유형만 세려면 셀 칸 이름(`pipelines.router.type_field`)이 있어야 한다 — 없으면 걷기가 세지 않는다(세면 매번
+    `유형 칸 선언 없음` 실패 한 건이 남는다). 대본의 코드 자리(`StubDeployedCode`)에는 그 선언이 없다. 상한(T·표본)은 실행기가 config에서 쥔다 — 걷기는 켜짐만 안다."""
     from types import SimpleNamespace
 
-    from src.__main__ import _type_count_seconds
+    from src.__main__ import _counts_types
 
-    app = SimpleNamespace(investigation=SimpleNamespace(type_count_seconds=6.5))
-    assert _type_count_seconds(app, SimpleNamespace(type_field=lambda: "meta.kind")) == 6.5
-    assert _type_count_seconds(app, SimpleNamespace(type_field=lambda: None)) is None
-    assert _type_count_seconds(app, SimpleNamespace()) is None and _type_count_seconds(app, None) is None
+    assert _counts_types(SimpleNamespace(type_field=lambda: "meta.kind")) is True
+    assert _counts_types(SimpleNamespace(type_field=lambda: None)) is False
+    assert _counts_types(SimpleNamespace()) is False and _counts_types(None) is False
+
+

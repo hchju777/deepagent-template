@@ -1319,7 +1319,7 @@ async def test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유�
     """측정 #32 회신의 답 2 — 걷기 동결의 예외(사람 승인): 라우터가 유형별로 나눠 보내는 토픽 행(R3-5w ②)에서만 그 클래스의 유형을 센다. 인자는 토픽과 클래스뿐
     (`kafka.count_type {topic, class}` — 값·상한은 실행기가 푼다). 그 행의 상태가 센 문장이 되고 증거도 센 결과다. 0건이면 나쁨이고 멈춤은 `구독 토픽에 그 유형이
     없다`(토픽은 비지 않았다 — `구독 토픽이 비었다`와 다르다). 셌으니 그 토픽의 tail 칸은 없다. k건이면 정상 — 그 입력을 본 것이다. 세다 멈췄으면 여전히 모름.
-    세기가 꺼졌으면(유형 칸 선언 없음 — `count_seconds` 없음) 전처럼 세지 않는다."""
+    세기가 꺼졌으면(유형 칸 선언 없음 — `count_types` 없음) 전처럼 세지 않는다."""
     mixed = "유형 3개가 섞인 토픽 — COLOR 유형의 메시지 수는 세지 않았다"
 
     async def routed(name):
@@ -1329,7 +1329,7 @@ async def test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유�
              ("redis.get", "k:L1"): _value(rows=[{"a": 1}]), ("kafka.offsets", "t.raw"): _offsets(40, 100), ("kafka.count_type", "t.raw"): _counted(0)}
     kw = dict(classes=frozenset({"W0"}), class_services={"W0": ("a",)}, topic_producers={"t.raw": ("col", "pub")}, routed=routed, clock=lambda: T0)
     runner = _Reads(table)
-    walk = (await run_walk(_state(), runner=runner, count_seconds=8.0, **kw))["walk"]
+    walk = (await run_walk(_state(), runner=runner, count_types=True, **kw))["walk"]
     row = walk.hops[1]
     assert row.status == f"비었다 — COLOR 0건, 보존 범위 40~100 전부(60건, {_SPAN}) · 구독 W0 [a]" and row.bad
     assert ("kafka.count_type", {"topic": "t.raw", "class": "W0"}) in runner.params                      # 인자는 토픽과 클래스뿐
@@ -1337,12 +1337,14 @@ async def test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유�
     assert walk.stopped == "구독 토픽에 그 유형이 없다 — t.raw(COLOR 0건(보존 범위 전부 60건) · W0 [a] · 발행 선언: col, pub)"
     assert walk.rungs and all(r.action != "kafka.tail" for r in walk.rungs)                               # 셌다 — tail 칸이 없다
     assert walk.counts == 1 and "(유형 세기 1번 " in walk.lines()[0]
-    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(3)}), count_seconds=8.0, **kw))["walk"]
+    made = await run_walk(_state(), runner=_Reads(table), count_types=True, **kw)
+    assert [t.walked for t in made["plan_tasks"] if t.action == "kafka.count_type"] == [True]                # 걷기가 낸 읽기다 — 리드가 같은 인자로 내면 중복
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(3)}), count_types=True, **kw))["walk"]
     assert walk.hops[1].status == (f"정상 — COLOR 3건, 보존 범위 전부 60건(오프셋 40~100, {_SPAN}) 중, 가장 최근 그 유형 메시지 오프셋 90, 시각 2026-11-04T08:00:00+09:00"
                                    " · 구독 W0 [a]") and not walk.hops[1].bad
     assert walk.stopped == "입력이 다 정상 — W0"                                                           # 그 클래스의 입력을 봤다
     stopped = _counted(0, whole=False, counted=30, stopped="시간 상한 8초")
-    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): stopped}), count_seconds=8.0, **kw))["walk"]
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): stopped}), count_types=True, **kw))["walk"]
     assert walk.hops[1].status == f"모름 — COLOR 세다 멈춤(끝 30건까지 0건 — 오프셋 40~100, {_SPAN} · 시간 상한 8초) · 구독 W0 [a]" and not walk.hops[1].bad
     assert walk.stopped == "입력을 다 못 봤다 — W0(t.raw COLOR 세다 멈춤(끝 30건까지 0건))"
     runner = _Reads(table)
@@ -1351,29 +1353,28 @@ async def test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유�
     assert walk.counts == 0 and "유형 세기" not in walk.lines()[0]
 
 
-async def test_걷기는_남은_시간이_유형_세기_상한보다_적으면_세지_않고_주에_적으며_센_초는_머리줄에_따로_적는다():
-    """측정 #32 회신의 답 2(5): 녹화와 재생의 인자가 같아야 하므로 걷기는 T를 줄여 세지 않는다 — 걷기의 시간 상한(30초)에서 남은 시간이 T보다 적으면 안 센다(그
-    행은 전처럼 모름, 주에 그 사실). 센 초는 시간 상한 안이고 머리줄에 따로 적는다(`(유형 세기 n번 s초)`)."""
+async def test_걷기는_섞인_행을_걷기가_끝난_뒤_멈출_자리에서만_세고_읽기_수와_시간_상한_밖이며_센_초는_머리줄에_따로_적는다():
+    """측정 #33 1: 걷기 중에 세면 읽기 하나를 써 한 사이트 걷기가 한 홉 짧아졌다. 표본 상한(기본 20초)이 들면 걷기 30초 안에서는 돌 수 없다. 그래서 세기는 걷기가
+    끝난 뒤, 멈출 자리(그 홉에서 나간 섞인 행)에서만 한다(R3-5z ③) — 읽기 수·시간 상한 밖, 자기 상한(T + 표본 상한)만. 멈출 자리 밖의 섞인 행은 안 센다. 센 초는 머리줄에
+    따로 적는다(`(유형 세기 n번 s초)`)."""
     mixed = "유형 3개가 섞인 토픽 — COLOR 유형의 메시지 수는 세지 않았다"
 
     async def routed(name):
         return mixed
 
-    class Clock:
-        def __init__(self, start):
-            self.n, self.start = 0, start
+    class Late:
+        def __init__(self):
+            self.n = 0
 
         def __call__(self):
             self.n += 1
-            return T0 if self.n == 1 else T0 + timedelta(seconds=self.start)
+            return T0 if self.n == 1 else T0 + timedelta(seconds=25)
 
     table = {("code.resources", "W0"): _res("W0", [("t.raw", "topic")]), ("kafka.offsets", "t.raw"): _offsets(40, 100),
              ("kafka.count_type", "t.raw"): _counted(3)}
     kw = dict(classes=frozenset({"W0"}), class_services={"W0": ("a",)}, routed=routed)
-    runner = _Reads(table)
-    walk = (await run_walk(_state(), runner=runner, count_seconds=8.0, clock=Clock(25), **kw))["walk"]
-    assert "kafka.count_type" not in [a for a, _ in runner.ran] and walk.hops[1].status.startswith(f"모름 — {mixed}")
-    assert "W0: t.raw의 유형을 안 셌다 — 걷기 남은 시간 5.0초 < 유형 세기 상한 8초" in walk.notes
+    walk = (await run_walk(_state(), runner=_Reads(table), count_types=True, clock=Late(), **kw))["walk"]
+    assert walk.counts == 1 and walk.stopped == "입력이 다 정상 — W0"                                     # 걷기가 25초를 써도 센다 — 30초 상한 밖
 
     class Ticking:
         def __init__(self):
@@ -1392,14 +1393,20 @@ async def test_걷기는_남은_시간이_유형_세기_상한보다_적으면_�
             return await super().run(task, case=case)
 
     clock = Ticking()
-    walk = (await run_walk(_state(), runner=Slow(table, clock), count_seconds=8.0, clock=clock, **kw))["walk"]
-    assert (walk.counts, walk.count_seconds) == (1, 3.0) and walk.lines()[0].startswith(
-        f"걷기(코드가 상류를 걸었다): 홉 2 · 읽기 3 · {walk.seconds:.1f}초(유형 세기 1번 3.0초) — 멈춤: ")
+    walk = (await run_walk(_state(), runner=Slow(table, clock), count_types=True, clock=clock, **kw))["walk"]
+    assert (walk.reads, walk.counts, walk.count_seconds) == (2, 1, 3.0) and walk.lines()[0].startswith(
+        f"걷기(코드가 상류를 걸었다): 홉 2 · 읽기 2 · {walk.seconds:.1f}초(유형 세기 1번 3.0초) — 멈춤: ")            # 읽기 수에 안 든다
+    # 멈출 자리 밖의 섞인 행은 안 센다 — 멈춘 자리는 형제 입력 k:L1(없음)이다
+    elsewhere = {**table, ("code.resources", "W0"): _res("W0", [("t.raw", "topic"), ("k:{line}", "rediskey")]), ("redis.get", "k:L1"): None}
+    runner = _Reads(elsewhere)
+    walk = (await run_walk(_state(), runner=runner, count_types=True, clock=lambda: T0, **kw))["walk"]
+    assert "kafka.count_type" not in [a for a, _ in runner.ran] and walk.counts == 0 and walk.stop_at != walk.hops[0].evidence_id
+    assert next(h for h in walk.hops if h.key == "t.raw").status.startswith(f"모름 — {mixed}")
 
 
-async def test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_셌으면_tail_칸을_비우며_상한으로_못_셌으면_tail_대신_세기_칸이다():
+async def test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_셌으면_tail_칸을_비우며_안_셌으면_tail_대신_세기_칸이다():
     """측정 #32 회신의 답 2(4): 섞인 토픽 행 뒤 사다리 칸 `kafka.tail`이 리드의 tail 반복을 부추겼다 — 셌으면 그 칸을 비우고, 셀 수 있었는데 상한으로 못 셌으면
-    `kafka.count_type {topic, class}`로 바꾼다. 세기가 꺼졌으면(유형 칸 선언 없음) 전처럼 tail — 리드가 내도 셀 칸 이름을 몰라 못 센다. 멈춤 꼬리의 토막도 센 결과다.
+    `kafka.count_type {topic, class}`로 바꾼다(R3-5z ③ 뒤로는 멈출 자리에서 셀 수의 상한 밖이었던 행). 세기가 꺼졌으면(유형 칸 선언 없음) 전처럼 tail — 리드가 내도 셀 칸 이름을 몰라 못 센다. 멈춤 꼬리의 토막도 센 결과다.
     0건이면 그 토픽 행이 나쁨이고 멈춤은 `구독 토픽에 그 유형이 없다`(칸은 그 클래스 본문)."""
     mixed = "유형 3개가 섞인 토픽 — COLOR 유형의 메시지 수는 세지 않았다"
 
@@ -1413,30 +1420,28 @@ async def test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_
     kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)}, routed=routed)
     peer = _Peer({"in:L1": ("sevt", "in:L1", _value(record=[], metadata={"event_type": "W1"}))})
     runner = _Reads(table)
-    walk = (await run_walk(_state(), runner=runner, peer=peer, count_seconds=8.0, clock=lambda: T0, **kw))["walk"]
+    walk = (await run_walk(_state(), runner=runner, peer=peer, count_types=True, clock=lambda: T0, **kw))["walk"]
     assert ("kafka.count_type", {"topic": "t.raw", "class": "W1"}) in runner.params
     topic = walk.hops[2]
     assert topic.status.startswith(f"정상 — COLOR 2건, 보존 범위 전부 60건(오프셋 40~100, {_SPAN}) 중, ") and topic.status.endswith(" · 구독 W1 [a · sevt 값의 metadata.event_type]")
     assert walk.stopped.startswith("키가 없다 — in:L1(쓰는 W1 [") and walk.stopped.endswith(" · 구독 t.raw COLOR 2건/60건)")
     assert walk.rungs and all(r.action not in ("kafka.tail", "kafka.count_type") for r in walk.rungs)       # 셌다 — 그 토픽 칸이 없다
-    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(0)}), peer=peer, count_seconds=8.0,
+    walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(0)}), peer=peer, count_types=True,
                            clock=lambda: T0, **kw))["walk"]
     assert walk.hops[2].bad and walk.stop_at == walk.hops[2].evidence_id
     assert walk.stopped.startswith("구독 토픽에 그 유형이 없다 — t.raw(COLOR 0건(보존 범위 전부 60건) · W1 [") and walk.stopped.endswith(" · 발행 선언 없음(우리 밖))")
     assert [r.action for r in walk.rungs] == ["code.read"]                                                  # 그 클래스 본문만
 
-    class Late:
-        def __init__(self):
-            self.n = 0
-
-        def __call__(self):
-            self.n += 1
-            return T0 if self.n == 1 else T0 + timedelta(seconds=25)
-
-    walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, count_seconds=8.0, clock=Late(), **kw))["walk"]
-    assert walk.stopped.endswith(f"구독 t.raw 범위 40~100, 남은 메시지 60 — {mixed})")                       # 못 셌다 — 전처럼
+    # 멈출 자리의 섞인 행은 많아야 둘만 센다(세기 한 번이 T + 표본 상한까지) — 안 센 행은 tail 칸 대신 세기 칸
+    three = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic"), ("t.b", "topic"), ("t.c", "topic")]),
+             ("kafka.offsets", "t.b"): _offsets(40, 100), ("kafka.offsets", "t.c"): _offsets(40, 100),
+             ("kafka.count_type", "t.b"): _counted(2), ("kafka.count_type", "t.c"): _counted(2)}
+    runner = _Reads(three)
+    walk = (await run_walk(_state(), runner=runner, peer=peer, count_types=True, clock=lambda: T0, **kw))["walk"]
+    assert [n for a, n in runner.ran if a == "kafka.count_type"] == ["t.b", "t.c"] and walk.counts == 2
+    assert walk.stopped.endswith(f"구독 t.raw 범위 40~100, 남은 메시지 60 — {mixed})")
     assert ("kafka.count_type", {"topic": "t.raw", "class": "W1"}) in [(r.action, dict(r.params)) for r in walk.rungs]
-    assert "kafka.tail" not in [r.action for r in walk.rungs]                                                # tail 대신 세기 칸
+    assert [r.params.get("topic") for r in walk.rungs if r.action.startswith("kafka.")] == ["t.raw"]          # 센 둘은 칸이 없다, 안 센 하나는 세기 칸
     walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, clock=lambda: T0, **kw))["walk"]       # 세기가 꺼졌다 — 전처럼 tail
     assert ("kafka.tail", {"topic": "t.raw", "limit": 5}) in [(r.action, dict(r.params)) for r in walk.rungs]
 

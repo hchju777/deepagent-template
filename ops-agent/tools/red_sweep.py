@@ -2543,7 +2543,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,\n                                  count_seconds=deps.type_count_seconds, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,\n                                  count_types=deps.count_types, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=state.walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -2662,7 +2662,7 @@ CASES += [
  ("사슬이 부모를 안 따라간다", CS, "            cur = by_id.get(cur.parent) if cur.parent else None", "            cur = None", [DEEP_T]),
  ("사슬 밖의 나쁜 홉도 고정한다", B, "        ids |= set(state.walk.chain_ids())", "        ids |= set(state.walk.bad_ids())", [WBRIEF_T]),
  ("접는 범위가 사슬 밖이 아니다", B, "    return frozenset(ids - set(state.walk.chain_ids()))", "    return frozenset(ids - set(state.walk.bad_ids()))", [WBRIEF_T]),
- ("걷기 읽기에 walked를 안 단다", WK, ".model_copy(update={\"walked\": True})", "", [WALK_T, WNODE_T]),
+ ('걷기 읽기에 walked를 안 단다', WK, 'params).model_copy(update={"walked": True})', 'params)', [WALK_T, WNODE_T]),
  ("걷기 id가 다음 빈 번호부터가 아니다", WK, "        task = _task(f\"t-{start + counter - 1}\", goal, action, params)", "        task = _task(f\"t-{counter}\", goal, action, params)", [WALK_T]),
  ("리드가 단 walked를 안 지운다", ND, "\"pinned\": False, \"walked\": False})", "\"pinned\": False})", [PIN_T]),
  ("다 밟은 사다리가 마지막 칸이 아니라 첫 칸에서 잇는다", B, "        hop = (rungs[-1].action, dict(rungs[-1].params))", "        hop = (rungs[0].action, dict(rungs[0].params))", ["tests/application/test_briefing.py::test_예시는_걷기의_아직_안_낸_칸을_셋까지_한_라운드에_묶는다"]),
@@ -3532,7 +3532,7 @@ CASES += [
  ("없는 키의 토픽 행이 쓴 쪽 칸에 구독 클래스를 적는다", WK, "                        pub, pub_svcs = published(topic)\n", "                        pub, pub_svcs = f\"{w} [{shown}] 구독\", cands\n", [KEYED_T, BOARD_KEYED_T]),
  ("없는 키의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {w} [{shown}]\",\n", "status=tstatus,\n", [KEYED_T, BOARD_KEYED_T]),
  ("빈 구독 토픽의 멈춤에 발행 선언이 없다", WK, "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}] · {stop_hop.service})\"\n", "            stopped = f\"구독 토픽이 비었다 — {stop_hop.key}({w_} [{shown_}])\"\n", [KEYED_T, BOARD_KEYED_T]),
- ("걸은 클래스의 토픽 행 상태에 구독 클래스가 없다", WK, "status=f\"{tstatus} · 구독 {who_}\", bad=tbad, evidence_id=hev,\n", "status=tstatus, bad=tbad, evidence_id=hev,\n", [WALK_TOPIC_T, BOARD_QUIET_T]),
+ ('걸은 클래스의 토픽 행 상태에 구독 클래스가 없다', WK, 'status=f"{tstatus} · 구독 {who_}", bad=tbad, evidence_id=tev,\n', 'status=tstatus, bad=tbad, evidence_id=tev,\n', [WALK_TOPIC_T, BOARD_QUIET_T]),
 ]
 
 # ── 12a-R3-5t ③ — 비지 않은 토픽 행은 `정상 — …` ──
@@ -3836,32 +3836,32 @@ CASES += [
 ]
 # ── 12a-R3-5y ④ — 걷기의 유형 세기: 섞인 토픽 행에서만 · 0건이면 그 유형이 없다로 멈춤 · tail 칸 비움·바꿈 · 남은 예산 < T면 안 센다 · 머리줄의 센 초 ──
 TCWALK_T = "tests/application/test_walk.py::test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유형만_세고_0건이면_그_유형이_없다로_멈추며_tail_칸이_없다"
-TCBUDGET_T = "tests/application/test_walk.py::test_걷기는_남은_시간이_유형_세기_상한보다_적으면_세지_않고_주에_적으며_센_초는_머리줄에_따로_적는다"
-TCKEYED_T = "tests/application/test_walk.py::test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_셌으면_tail_칸을_비우며_상한으로_못_셌으면_tail_대신_세기_칸이다"
-TCCLI_T = "tests/test_cli_case_walk.py::test_걷기의_유형_세기_상한은_토폴로지가_유형_칸을_선언했을_때만_config에서_온다"
+TCBUDGET_T = "tests/application/test_walk.py::test_걷기는_섞인_행을_걷기가_끝난_뒤_멈출_자리에서만_세고_읽기_수와_시간_상한_밖이며_센_초는_머리줄에_따로_적는다"
+TCKEYED_T = "tests/application/test_walk.py::test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_셌으면_tail_칸을_비우며_안_셌으면_tail_대신_세기_칸이다"
+TCCLI_T = "tests/test_cli_case_walk.py::test_걷기의_유형_세기는_토폴로지가_유형_칸을_선언했을_때만_켠다"
 CASES += [
- ('걷기가 걸은 클래스의 섞인 토픽에서 안 센다', WK, '                if unsure:\n                    count = await count_mixed(writer, name)', '                if False:\n                    count = await count_mixed(writer, name)', [TCWALK_T]),
- ('걷기가 없는 키의 쓴 쪽의 섞인 토픽에서 안 센다', WK, '                        if isinstance(tdata, dict) and tstatus.startswith("모름 — "):\n                            # 섞인 토픽이면', '                        if False:\n                            # 섞인 토픽이면', [TCKEYED_T, BOARD_PEER_T]),
- ('세기가 꺼져도 센다', WK, '        if count_seconds is None:\n            return None\n        left', '        if False:\n            return None\n        left', [TCWALK_T, TCKEYED_T]),
- ('남은 시간이 T보다 적어도 센다', WK, '        if counter >= MAX_READS or left < count_seconds:', '        if counter >= MAX_READS:', [TCBUDGET_T]),
- ('안 센 사실을 주에 안 적는다', WK, '            remember(f"{cls}: {topic}의 유형을 안 셌다 — {why}")\n', '', [TCBUDGET_T]),
+ ('걷기가 걸은 클래스의 섞인 토픽에서 안 센다', WK, '                if unsure and count_types:\n                    mixed_rows.append(', '                if False:\n                    mixed_rows.append(', [TCWALK_T]),
+ ('걷기가 없는 키의 쓴 쪽의 섞인 토픽에서 안 센다', WK, '                        if count_types and isinstance(tdata, dict) and tstatus.startswith("모름 — "):\n                            mixed_rows.append(', '                        if False:\n                            mixed_rows.append(', [TCKEYED_T, BOARD_PEER_T]),
+ ('세기가 꺼져도 센다', WK, '                if unsure and count_types:\n                    mixed_rows.append(', '                if unsure:\n                    mixed_rows.append(', [TCWALK_T]),
+ ('세기를 걷기 읽기 수에 센다', WK, '        nonlocal count_spent, count_runs\n        before = elapsed()\n        task = _task(f"t-{start + counter + number}"', '        nonlocal count_spent, count_runs, counter\n        counter += 1\n        before = elapsed()\n        task = _task(f"t-{start + counter - 1 + number}"', [TCBUDGET_T]),
+ ('멈출 자리 밖의 섞인 행도 센다', WK, '        mine = [row for row in mixed_rows if hops[row["at"]].parent == at_stop]', '        mine = list(mixed_rows)', [TCBUDGET_T]),
  ('센 초를 안 잰다', WK, '        count_spent += elapsed() - before\n', '', [TCBUDGET_T]),
  ('센 횟수를 안 센다', WK, '        count_runs += 1\n', '', [TCWALK_T, TCBUDGET_T]),
- ('세기 인자에 클래스를 안 싣는다', WK, '"kafka.count_type", {"topic": topic, "class": cls})', '"kafka.count_type", {"topic": topic})', [TCWALK_T]),
- ('센 행의 증거가 보존 범위 읽기다', WK, '                        hev = cev or tev\n                        counted_at[hev] = lack', '                        hev = tev\n                        counted_at[hev] = lack', [TCWALK_T]),
- ('센 행이 정상이어도 입력을 못 봤다고 쓴다', WK, '                        unsure = tstatus.startswith("모름 — ")', '                        unsure = True', [TCWALK_T]),
- ('세다 멈춘 사실을 못 본 입력에 안 적는다', WK, '                    missed.append(f"{name} {lack}")', '                    missed.append(f"{name} 유형별 메시지 수 모름")', [TCWALK_T]),
+ ('세기 인자에 클래스를 안 싣는다', WK, '{"topic": topic, "class": cls}).model_copy', '{"topic": topic}).model_copy', [TCWALK_T]),
+ ('센 행의 증거가 보존 범위 읽기다', WK, '            hev = cev or old.evidence_id\n            counted_at[hev] = piece', '            hev = old.evidence_id\n            counted_at[hev] = piece', [TCWALK_T]),
+ ('센 행이 정상이어도 입력을 못 봤다고 쓴다', WK, '                if status.startswith("모름 — "):\n                    walked_at[row["walked"]] = info._replace(missed=', '                if True:\n                    walked_at[row["walked"]] = info._replace(missed=', [TCWALK_T]),
+ ('세다 멈춘 사실을 못 본 입력에 안 적는다', WK, 'missed=tuple(f"{row[\'topic\']} {piece}" if m == lack else m for m in info.missed))', 'missed=info.missed)', [TCWALK_T]),
  ('그 유형 0건도 구독 토픽이 비었다로 멈춘다(걸은 클래스)', WK, '            if ev in counted_at:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 셌으니 tail 칸은 없다.', '            if False:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 셌으니 tail 칸은 없다.', [TCWALK_T]),
  ('그 유형 0건도 구독 토픽이 비었다로 멈춘다(없는 키의 쓴 쪽)', WK, '            if ev in counted_at:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 토픽은 비지 않았다.', '            if False:\n                # 섞인 토픽에서 그 클래스의 유형이 0건(R3-5y ④) — 토픽은 비지 않았다.', [TCKEYED_T, BOARD_PEER_T]),
  ('셌어도 그 토픽의 tail 칸을 둔다', WK, 'for t, _, tev in ranges_ if tev and tev not in counted_at]', 'for t, _, tev in ranges_ if tev]', [TCKEYED_T]),
  ('상한으로 못 셌어도 세기 칸이 아니라 tail이다', WK, 'evidence=tev) if tev in uncounted\n', 'evidence=tev) if False\n', [TCKEYED_T]),
- ('세기가 꺼졌는데도 세기 칸을 단다', WK, '                            elif count_seconds is not None:\n                                uncounted.add(tev)', '                            else:\n                                uncounted.add(tev)', [TCKEYED_T]),
+ ('세기 수 상한으로 안 센 행에 세기 칸을 안 단다', WK, '        uncounted.update(hops[row["at"]].evidence_id for row in mine[MAX_COUNTS:])', '        uncounted.update(())', [TCKEYED_T]),
  ('머리줄에 센 횟수·초를 안 적는다', CS, '        counted = f"(유형 세기 {self.counts}번 {self.count_seconds:.1f}초)" if self.counts else ""', '        counted = ""', [TCWALK_T, TCBUDGET_T]),
  ('센 횟수·초를 걷기에 안 싣는다', WK, 'counts=count_runs, count_seconds=count_spent, ', '', [TCWALK_T, TCBUDGET_T]),
  ('그 유형 0건 멈춤의 바깥 토픽을 바깥 자리로 안 본다', CS, 'startswith(("구독 토픽이 비었다", "구독 토픽에 그 유형이 없다"))', 'startswith(("구독 토픽이 비었다",))', [OUTSIDE_T]),
- ('걷기 노드가 세기 상한을 안 넘긴다', ND, '\n                                  count_seconds=deps.type_count_seconds, clock=deps.clock)', '\n                                  clock=deps.clock)', [BOARD_PEER_T]),
- ('case walk가 세기 상한을 안 넘긴다', MN, 'routed=code.routed_types if code else None,\n                              type_count_seconds=_type_count_seconds(app, code),\n', 'routed=code.routed_types if code else None,\n', [BOARD_PEER_T]),
- ('유형 칸 선언이 없어도 세기 상한을 준다', MN, '    return app.investigation.type_count_seconds if callable(field) and field() else None', '    return app.investigation.type_count_seconds', [TCCLI_T]),
+ ('걷기 노드가 세기 켜짐을 안 넘긴다', ND, '\n                                  count_types=deps.count_types, clock=deps.clock)', '\n                                  clock=deps.clock)', [BOARD_PEER_T]),
+ ('case walk가 세기 켜짐을 안 넘긴다', MN, 'routed=code.routed_types if code else None,\n                              count_types=_counts_types(code),\n', 'routed=code.routed_types if code else None,\n', [BOARD_PEER_T]),
+ ('유형 칸 선언이 없어도 세기를 켠다', MN, '    return bool(callable(field) and field())', '    return True', [TCCLI_T]),
  ('코드가 유형 칸 선언을 안 알린다', DCP, '        return spec.router.type_field if spec is not None and spec.router is not None else None', '        return None', [BOARD_PEER_T]),
  ('측정판 메인 토픽에 팔레트 유형이 온다', ROOT / "tools/local_case.py", '"feed": ("alarm", "audit")[i % 2]}', '"feed": "palette"}', [BOARD_PEER_T]),
 ]
@@ -3929,7 +3929,18 @@ CASES += [
  ('case walk가 표본 인자를 안 넘긴다', MN, 'type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds),\n                                                 type_samples=_type_samples(app)),', 'type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds)),', [TZBOARD_T]),
  ('표본 시점 기본값이 비었다', SAP, '    type_count_sample_ages: list[int] = Field(default_factory=lambda: [3600, 21600, 86400, 259200, 604800, 1209600, 1814400])', '    type_count_sample_ages: list[int] = Field(default_factory=lambda: [])', [TZBOARD_T]),
 ]
-assert len(CASES) >= 1387, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ③ — 유형 세기 자리: 걷기가 끝난 뒤 멈출 자리의 섞인 행만, 많아야 둘, 읽기 수·시간 상한 밖 ──
+CASES += [
+ ('걷기가 세는 읽기에 walked를 안 단다', WK, '{"topic": topic, "class": cls}).model_copy(update={"walked": True})', '{"topic": topic, "class": cls})', [TCWALK_T]),
+ ('멈출 자리에서 세기 수 상한을 안 본다', WK, '        for number, row in enumerate(mine[:MAX_COUNTS]):', '        for number, row in enumerate(mine):', [TCKEYED_T]),
+ ('센 0건 행을 나쁨으로 안 바꾼다', WK, '"bad": bad_, "evidence_id": hev,', '"bad": old.bad, "evidence_id": hev,', [TCWALK_T]),
+ ('센 행의 근거를 안 바꾼다', WK, '"evidence_id": hev, "basis": row["basis"]})', '"evidence_id": hev, "basis": old.basis})', [TCWALK_T]),
+ ('걸은 클래스의 구독 토픽 기록을 센 증거로 안 옮긴다', WK, '                    subscribed_at[hev] = subscribed_at.pop(old.evidence_id)', '                    pass', [TCWALK_T]),
+ ('없는 키 쪽 토픽 기록을 센 증거로 안 옮긴다', WK, '                topics_at[hev] = topics_at.pop(old.evidence_id)', '                pass', [TCKEYED_T]),
+ ('멈춤 꼬리 토막을 센 결과로 안 바꾼다', WK, 'piece if tev_ == old.evidence_id else p_', 'p_', [TCKEYED_T]),
+ ('센 행이 알려 준 입력을 센 수에 안 넣는다', WK, 'info._replace(inputs=info.inputs + 1, missed=', 'info._replace(inputs=info.inputs, missed=', [TCBUDGET_T]),
+]
+assert len(CASES) >= 1395, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

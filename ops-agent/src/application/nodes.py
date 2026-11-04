@@ -104,9 +104,9 @@ class EngineDeps:
     pipeline_here: Callable[[str], Awaitable[str]] | None = None
     # R3-5w ② — 구독 클래스가 라우터 유형표를 거쳐 받는가 `routed(클래스) → "" | 사실`(DeployedCode.routed_types). None이면(대본) 토픽 행은 전처럼.
     routed: Callable[[str], Awaitable[str]] | None = None
-    # R3-5y ④ — 섞인 토픽 행에서 그 클래스의 유형만 셀 때의 상한 T초(config `investigation.type_count_seconds`). None이면(대본·토폴로지에 유형 칸 선언 없음)
-    # 걷기가 세지 않는다 — 셀 칸 이름을 모른다.
-    type_count_seconds: float | None = None
+    # R3-5y ④·R3-5z ③ — 걷기가 섞인 토픽 행에서 그 클래스의 유형만 세는가(토폴로지에 유형 칸 선언이 있을 때). 상한은 실행기가 config에서 쥔다. 꺼져 있으면(대본·
+    # 선언 없음) 세지 않는다 — 셀 칸 이름을 모른다.
+    count_types: bool = False
     # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
     declared_by: dict = field(default_factory=dict)
     # 토픽 → config로 발행을 선언한 서비스들(`flow.producing_map`, R3-5d ④) — 메시지 홉의 발행 쪽. 사람 결정 10-19: 같은 이름 클래스가 두 레포라 클래스
@@ -524,7 +524,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                                   service_repos=deps.service_repos, declared_by=deps.declared_by,
                                   topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,
                                   peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,
-                                  count_seconds=deps.type_count_seconds, clock=deps.clock)
+                                  count_types=deps.count_types, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 
