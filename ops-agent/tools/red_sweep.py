@@ -3797,10 +3797,10 @@ CASES += [
  ("가장 최근 맞은 메시지를 안 고른다", KI, "            if self._latest is None or key > self._latest:", "            if self._latest is None:", [COUNT_KI_T, "tests/infrastructure/test_kafka_inspector.py::test_count_type은_끝에서_조각씩_뒤로_읽어_멈춰도_가장_최근_쪽을_덮고_센_범위를_조각_그대로_적는다"]),
  ('유형 세기가 시간 상한을 안 본다', KI, '                if _mono() >= deadline:\n                    stopped = f"시간 상한', '                if False:\n                    stopped = f"시간 상한', [COUNT_STOP_T]),
  ("빈 응답에서 멈춘 까닭을 안 적는다", KI, "                        stopped = f\"빈 응답 {EMPTY_POLLS}번\"", "                        stopped = \"\"", [COUNT_STOP_T]),
- ("다 못 센 유형 세기도 봉투가 온전하다", KI, "                                         truncated_reason=(f\"{stopped}에서 멈췄다 — 다 못 셌다\" if stopped else None))", "                                         truncated_reason=None)", [COUNT_STOP_T]),
+ ('다 못 센 유형 세기도 봉투가 온전하다', KI, '                                         truncated_reason=(f"{cut}에서 멈췄다 — 다 못 셌다" if cut else None))', '                                         truncated_reason=None)', [COUNT_STOP_T]),
  ('유형 세기가 오프셋을 커밋한다', KI, 'enable_auto_commit=False,   # ← 커밋도 안 한다\n                                        auto_offset_reset="earliest",\n                                        max_partition_fetch_bytes=COUNT_FETCH_BYTES)\n            await consumer.start()\n            tps = [TopicPartition(actual, p) for p in partitions]\n            consumer.assign(tps)                                    # ← subscribe가 아니다\n            ends = await consumer.end_offsets(tps)\n            begins = await consumer.beginning_offsets(tps)\n            called', 'enable_auto_commit=True,\n                                        auto_offset_reset="earliest",\n                                        max_partition_fetch_bytes=COUNT_FETCH_BYTES)\n            await consumer.start()\n            tps = [TopicPartition(actual, p) for p in partitions]\n            consumer.assign(tps)                                    # ← subscribe가 아니다\n            ends = await consumer.end_offsets(tps)\n            begins = await consumer.beginning_offsets(tps)\n            called', [COUNT_KI_T]),
  ("재생 꼴 토픽도 시드 메시지에서 센다", ST, "        if topic in self._replayed or (topic not in self._ends and self._outside):", "        if topic not in self._ends and self._outside:", [COUNT_STUB_T]),
- ("녹화 인자를 안 맞춰 본다", ST, "\"max_seconds\": float(c[\"params\"].get(\"max_seconds\", -1))} == args), None)", "\"max_seconds\": float(c[\"params\"].get(\"max_seconds\", -1))} and True), None)", [COUNT_STUB_T]),
+ ('녹화 인자를 안 맞춰 본다', ST, 'if isinstance(c.get("params"), dict) and recorded_args(c["params"]) == args), None)', 'if isinstance(c.get("params"), dict) and True), None)', [COUNT_STUB_T]),
 ]
 # ── 12a-R3-5y ③ — 유형 세기의 인자(코드가 유형표에서) · `kafka.count_type {topic, class}` · 결과 문장 ──
 TCSPEC_T = "tests/infrastructure/test_deployed_code.py::test_type_count_spec은_클래스와_짝인_유형_열거_멤버의_값과_선언한_유형_칸을_준다"
@@ -3819,7 +3819,7 @@ CASES += [
  ('유형 세기 액션이 클래스를 안 받는다', AC, '("kafka", "count_type",    ("topic", "class"),', '("kafka", "count_type",    ("topic",),', [TCRUN_T]),
  ('유형 세기 실행기 분기가 없다', RP, '        elif task.action == "kafka.count_type":\n            result = await self._count_type(task.params, source)\n', '', [TCRUN_T]),
  ('리드가 댄 유형 값을 받는다', RP, '        problem = action_problem("kafka.count_type", params)\n        if problem is not None:', '        problem = None\n        if problem is not None:', [TCRUN_T]),
- ('유형 세기가 config 상한을 안 쓴다', RP, 'max_messages=self._type_count[0], max_seconds=self._type_count[1])', 'max_messages=20000, max_seconds=self._type_count[1])', [TCRUN_T]),
+ ('유형 세기가 config 상한을 안 쓴다', RP, 'max_messages=self._type_count[0], max_seconds=self._type_count[1], sample_ages=self._type_samples[0],', 'max_messages=20000, max_seconds=self._type_count[1], sample_ages=self._type_samples[0],', [TCRUN_T]),
  ('유형 세기 결과에 멤버 이름을 안 얹는다', RP, '{**got.data, "types": list(names)}', '{**got.data}', [TCRUN_T]),
  ('유형 세기 증거 머리가 문장이 아니다', RP, '            head = type_count_status(result.data, "")[0]', '            head = _summarize(result.data)', [TCRUN_T]),
  ('코드가 푼 못 세는 까닭을 버린다', RP, '        if isinstance(spec, str):\n            return ProbeResult.failed(spec,', '        if isinstance(spec, str):\n            return ProbeResult.failed("셀 수 없다",', [TCRUN_T]),
@@ -3827,7 +3827,7 @@ CASES += [
  ('유형 칸이 없는 창을 0건 나쁨으로 쓴다', RP, '    if counted and not data.get("with_field"):', '    if False:', [TCSENT_T]),
  ('멈춘 세기를 비었다로 쓴다', RP, '    if data.get("stopped"):\n        return (f"모름 — {names} 세다 멈춤', '    if False:\n        return (f"모름 — {names} 세다 멈춤', [TCSENT_T]),
  ('센 창의 시각을 안 붙인다', RP, '    when = f"{data[\'first_at\']}~{data[\'last_at\']}" if data.get("first_at") and data.get("last_at") else ""', '    when = ""', [TCSENT_T]),
- ('0건 일부를 나쁨으로 안 친다', RP, 'True, f"{names} 0건(끝 {counted}건만)"', 'False, f"{names} 0건(끝 {counted}건만)"', [TCSENT_T]),
+ ('0건 일부를 나쁨으로 안 친다', RP, '그 앞은 안 셌다{sampled}", True,', '그 앞은 안 셌다{sampled}", False,', [TCSENT_T]),
  ('0건 전부를 나쁨으로 안 친다', RP, 'True,\n                f"{names} 0건(보존 범위 전부 {counted}건)"', 'False,\n                f"{names} 0건(보존 범위 전부 {counted}건)"', [TCSENT_T]),
  ('여러 파티션의 센 범위를 첫 파티션만 적는다', RP, '    elif len(rows) == 1:\n        where = f"오프셋 {pieces[0]}"', '    elif True:\n        where = f"오프셋 {pieces[0]}"', [TCSENT_T]),
  ('가장 최근 그 유형 메시지의 파티션을 안 적는다', RP, '        at_ = f"오프셋 {latest.get(\'offset\')}" if len(rows) == 1 else', '        at_ = f"오프셋 {latest.get(\'offset\')}" if True else', [TCSENT_T]),
@@ -3890,7 +3890,7 @@ CASES += [
  ('같은 배치의 옛 자리 레코드로 새 조각을 끝낸다', KI, '                    if p in moved or p not in reading:', '                    if p not in reading:', [TZTAIL_T]),
  ('세기에서 fetch 상한을 안 올린다', KI, 'auto_offset_reset="earliest",\n                                        max_partition_fetch_bytes=COUNT_FETCH_BYTES)', 'auto_offset_reset="earliest")', [TZTAIL_T]),
  ('읽은 바이트를 안 센다', KI, '        self.bytes += max(int(size), 0)', '        self.bytes += 0', [TZTAIL_T, COUNT_STUB_T]),
- ('유형 세기가 부른 시각을 안 남긴다', KI, '                              tz=called.tzinfo, called_at=called.isoformat())', '                              tz=called.tzinfo, called_at=None)', [TZTAIL_T]),
+ ('유형 세기가 부른 시각을 안 남긴다', KI, '                              tz=called.tzinfo, called_at=called.isoformat(), sample_ages=sample_ages,', '                              tz=called.tzinfo, called_at=None, sample_ages=sample_ages,', [TZTAIL_T]),
  ('유형 세기가 센 초를 안 남긴다', KI, 'tally.result(stopped, seconds=_mono() - started)', 'tally.result(stopped)', [TZTAIL_T]),
  ('부른 시각보다 얼마나 전을 안 붙인다', RP, '            when += f", 마지막 메시지는 부른 시각보다 {_ago(gap)} 전"', '            pass', [TCSENT_T]),
  ('보존 범위 전부와 끝 n건을 안 가른다', RP, '    scope = f"보존 범위 전부 {counted}건" if data.get("whole") else f"끝 {counted}건"', '    scope = f"끝 {counted}건"', [TCSENT_T]),
@@ -3901,7 +3901,35 @@ CASES += [
  ('센 메시지가 없어도 오프셋을 적는다', RP, '    if not any(pieces):\n        where = "센 메시지 없음"', '    if False:\n        where = "센 메시지 없음"', [TCSENT_T]),
  ('증거 본문에 바이트·초를 안 적는다', RP, 'f"읽은 바이트 {result.data.get(\'bytes\', 0)} · {result.data.get(\'seconds\', 0)}초 · 부른 시각 {result.data.get(\'called_at\') or \'모름\'}"], False', '""], False', [TZRUN_T]),
 ]
-assert len(CASES) >= 1366, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ② — 유형 세기 시각 표본: 상대 초 시점마다 파티션당 m건 · 표본 상한 · 비었다(표본) · 마지막으로 본 창 ──
+TZSAMP_T = "tests/infrastructure/test_kafka_inspector.py::test_count_type은_끝_창이_0건이면_부른_시각_기준_상대_시점마다_파티션당_m건을_세고_시각은_결과에만_담는다"
+TZSSENT_T = "tests/application/test_walk.py::test_유형_세기_문장은_끝_창과_표본이_전부_0건이면_비었다_표본이고_표본에서_보면_마지막으로_본_창을_적는다"
+TZSTUB_T = "tests/infrastructure/test_stubs.py::test_스텁_count_type은_시드_메시지에서_세고_재생_꼴은_인자별_녹화_결과만_돌려준다"
+TZBOARD_T = "tests/test_board_walk.py::test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같은_키_값이_대는_클래스로_쓴_쪽을_채우고_그_구독_토픽까지_걷는다"
+CASES += [
+ ('끝 창이 0건이어도 표본을 안 센다', KI, 'if not result["matched"] and not result["whole"] and sample_ages and sample_messages > 0 and sample_seconds > 0:\n                result.update(', 'if False:\n                result.update(', [TZSAMP_T]),
+ ('끝 창에서 봐도 표본을 센다', KI, 'if not result["matched"] and not result["whole"] and sample_ages and sample_messages > 0 and sample_seconds > 0:\n                result.update(', 'if not result["whole"] and sample_ages and sample_messages > 0 and sample_seconds > 0:\n                result.update(', [TZSAMP_T]),
+ ('시점을 부른 시각에서 안 뺀다', KI, 'found = await consumer.offsets_for_times({tp: called_ms - age * 1000 for tp in tps})', 'found = await consumer.offsets_for_times({tp: called_ms for tp in tps})', [TZSAMP_T]),
+ ('끝 창 안의 시점을 안 건너뛴다', KI, '                if off is None or off >= hi:', '                if off is None:', [TZSAMP_T]),
+ ('보존 처음보다 앞선 시점을 안 건너뛴다', KI, '                elif age is not None and off <= begins[tp]:', '                elif False:', [TZSAMP_T]),
+ ('앞 시점과 같은 자리를 또 센다', KI, '                elif (p, off) in used:', '                elif False:', [TZSAMP_T]),
+ ('창 사이에서 표본 상한을 안 본다', KI, '            if _mono() >= deadline:\n                stopped = f"표본 시간 상한 {seconds:g}초"\n                break\n            if age is None:', '            if False:\n                stopped = f"표본 시간 상한 {seconds:g}초"\n                break\n            if age is None:', [TZSAMP_T]),
+ ('창을 읽다 표본 상한을 안 본다', KI, '                if _mono() >= deadline:\n                    stopped = f"표본 시간 상한 {seconds:g}초"', '                if False:\n                    stopped = f"표본 시간 상한 {seconds:g}초"', [TZSAMP_T]),
+ ('본 창에서 안 멈춘다', KI, '            if stopped or windows[-1]["matched"]:', '            if stopped:', [TZSAMP_T]),
+ ('표본 창의 바이트를 안 센다', KI, '"sample_bytes": sum(w["bytes"] for w in windows)', '"sample_bytes": 0', [TZSAMP_T]),
+ ('표본 창 시각을 결과에 안 담는다', KI, '            at = datetime.fromtimestamp((called_ms - age * 1000) / 1000, tz=called.tzinfo).isoformat() if age is not None else None', '            at = None', [TZSAMP_T]),
+ ('스텁이 표본을 안 셌다고 안 적는다', ST, '            result["sample_note"] = "스텁은 시각으로 seek하지 않는다"\n', '            pass\n', [TZSTUB_T, TZBOARD_T]),
+ ('스텁이 표본 인자를 녹화 인자로 안 본다', ST, '"max_seconds": float(max_seconds),\n                "sample_ages": [int(a) for a in sample_ages], "sample_messages": int(sample_messages), "sample_seconds": float(sample_seconds)}', '"max_seconds": float(max_seconds)}', [TZSTUB_T]),
+ ('비었다(표본)을 나쁨으로 안 친다', RP, 'return f"비었다(표본) — {names} 0건: {scope}({window}){sampled}", True, sample_piece', 'return f"비었다(표본) — {names} 0건: {scope}({window}){sampled}", False, sample_piece', [TZSSENT_T]),
+ ('표본이 멈춰도 전부라 한다', RP, '    if data.get("samples") and empty is None and not data.get("sample_note"):', '    if False:', [TZSSENT_T]),
+ ('마지막으로 본 창을 안 적는다', RP, '    hit = next((w for w in samples if w.get("matched")), None)', '    hit = None', [TZSSENT_T]),
+ ('표본 창마다 시각·건수를 안 적는다', RP, '    listed = " · ".join(_sample_text(w) for w in samples)', '    listed = ""', [TZSSENT_T]),
+ ('표본 시점을 일로 안 쓴다', RP, '    for unit, name in ((86400, "일"), (3600, "시간"), (60, "분")):', '    for unit, name in ((3600, "시간"), (60, "분")):', [TZSSENT_T]),
+ ('실행기가 표본 인자를 안 넘긴다', RP, 'sample_ages=self._type_samples[0],\n', 'sample_ages=(),\n', [TCRUN_T]),
+ ('case walk가 표본 인자를 안 넘긴다', MN, 'type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds),\n                                                 type_samples=_type_samples(app)),', 'type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds)),', [TZBOARD_T]),
+ ('표본 시점 기본값이 비었다', SAP, '    type_count_sample_ages: list[int] = Field(default_factory=lambda: [3600, 21600, 86400, 259200, 604800, 1209600, 1814400])', '    type_count_sample_ages: list[int] = Field(default_factory=lambda: [])', [TZBOARD_T]),
+]
+assert len(CASES) >= 1387, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

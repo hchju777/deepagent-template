@@ -131,10 +131,12 @@ class KafkaInspectorPort(ABC):
         레포 동사라 포트 표면 검사가 막는다."""
 
     @abstractmethod
-    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
+    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float,
+                         sample_ages: list[int] = (), sample_messages: int = 0, sample_seconds: float = 0.0) -> ProbeResult:
         """섞인 토픽에서 한 유형의 메시지만 센다(R3-5y ② — 측정 #32: 라우터가 유형 30개를 나눠 보내는 토픽에서 리드가 tail을 20·50·200으로 냈지만 끝 몇백 건으로는
         답이 안 났다). 파티션마다 끝에서 최대 `max_messages`건, `max_seconds`초 안에서 — 먼저 닿는 쪽에서 멈춘다. 끝에서 뒤로 물러나며 읽어 멈춰도 가장 최근 쪽이
-        남는다(R3-5z ①). 값의 `field`(점 경로)를 문자열로 `values`와
+        남는다(R3-5z ①). 끝 창이 0건이고 전부가 아니면 부른 시각 기준 `sample_ages`(상대 초)와 보존 범위 처음에서 파티션당 `sample_messages`건씩,
+        `sample_seconds`초 안에서 더 센다(R3-5z ② — 절대 시각은 결과에만, 녹화와 재생의 인자가 같게). 값의 `field`(점 경로)를 문자열로 `values`와
         견준다. 한 번 부르면 결과 하나다 — 녹화·재생이 인자별 결과 하나로 맞는다. `assign` 뒤 `seek`, 그룹 미참여·커밋 없음."""
 
     @abstractmethod

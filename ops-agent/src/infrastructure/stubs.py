@@ -10,7 +10,8 @@
 - `snapshot`: `{"id", "captured_at"(시간대 포함), "complete": [전부 뜬 시스템]}` — 이 절이 있으면 재생이다(`Snapshot`).
 - `redis`: `{키: 값}` — 전부 떴으면 `complete`에 redis. `peers.<사이트>.redis`도 같은 꼴.
 - `kafka`: `{토픽: {"begin": b, "end": e, "messages": [{"offset", "value", "timestamp"?, "key"?}]}}` — 실제 begin/end와 뜬 메시지만(띄엄).
-  유형 세기(`count_type`, R3-5y ②)는 같은 토픽 시드의 `"type_counts": [{"params": {"field", "values", "max_messages", "max_seconds"}, "result": {…}}]` —
+  유형 세기(`count_type`, R3-5y ②)는 같은 토픽 시드의 `"type_counts": [{"params": {"field", "values", "max_messages", "max_seconds", "sample_ages",
+  "sample_messages", "sample_seconds"}, "result": {…}}]` — 표본 인자(R3-5z ②)는 부른 시각 기준 상대 초라 녹화와 재생이 같다;
   인자별 결과(재생은 이것만 본다, 인자가 다르면 실패). `result`는 실어댑터의 `data` 그대로.
 - `rest`: `{항목: {"captures": [{"params": {…}, "response": …}]}}` — 인자별. 재생에서 인자 없는 응답 꼴은 안 쓴다.
 - `mongo`: `{컬렉션: [문서…]}` — 뜬 컬렉션만.
@@ -298,15 +299,22 @@ class StubKafkaInspector(KafkaInspectorPort):
                                                   "key": caught.get("key"), "value": value}},
                                      source=source, clock=self._clock)
 
-    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
+    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float,
+                         sample_ages: list[int] = (), sample_messages: int = 0, sample_seconds: float = 0.0) -> ProbeResult:
         from src.infrastructure.kafka_inspector import TypeTally
 
         source = f"stub-kafka:count_type {topic} {field}"
-        args = {"field": field, "values": sorted({str(v) for v in values}), "max_messages": int(max_messages), "max_seconds": float(max_seconds)}
+        args = {"field": field, "values": sorted({str(v) for v in values}), "max_messages": int(max_messages), "max_seconds": float(max_seconds),
+                "sample_ages": [int(a) for a in sample_ages], "sample_messages": int(sample_messages), "sample_seconds": float(sample_seconds)}
+
+        def recorded_args(params: dict) -> dict:
+            # 녹화에 표본 인자가 없으면 표본 없이 부른 것이다(R3-5z ② 전의 녹화) — 표본을 청한 부름과는 안 맞는다.
+            return {**params, "values": sorted(str(v) for v in params.get("values") or []), "max_messages": int(params.get("max_messages", -1)),
+                    "max_seconds": float(params.get("max_seconds", -1)), "sample_ages": [int(a) for a in params.get("sample_ages") or []],
+                    "sample_messages": int(params.get("sample_messages", 0)), "sample_seconds": float(params.get("sample_seconds", 0))}
+
         recorded = next((c.get("result") for c in self._type_counts.get(topic, [])
-                         if isinstance(c.get("params"), dict) and {**c["params"], "values": sorted(str(v) for v in c["params"].get("values") or []),
-                                                                   "max_messages": int(c["params"].get("max_messages", -1)),
-                                                                   "max_seconds": float(c["params"].get("max_seconds", -1))} == args), None)
+                         if isinstance(c.get("params"), dict) and recorded_args(c["params"]) == args), None)
         if recorded is not None:
             return ProbeResult.succeeded(recorded, source=source, clock=self._clock,
                                          truncated_reason=(f"{recorded.get('stopped')}에서 멈췄다 — 다 못 셌다" if recorded.get("stopped") else None))
@@ -315,7 +323,8 @@ class StubKafkaInspector(KafkaInspectorPort):
         if topic not in self._ends:
             return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {topic}", source=source, clock=self._clock)
         called = self._clock()
-        tally = TypeTally(topic, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds, tz=called.tzinfo, called_at=called.isoformat())
+        tally = TypeTally(topic, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds, tz=called.tzinfo, called_at=called.isoformat(),
+                          sample_ages=sample_ages, sample_messages=sample_messages, sample_seconds=sample_seconds)
         low, high = self._begins[topic], self._ends[topic]
         tally.track(0, low, high)
         start = tally.tail_start(low, high)
@@ -325,7 +334,11 @@ class StubKafkaInspector(KafkaInspectorPort):
                 size = len(json.dumps(caught.get("value"), ensure_ascii=False, default=str).encode("utf-8"))
                 tally.add(0, offset, caught.get("timestamp"), caught.get("value"), size=size)
         tally.cover(0, start, high)
-        return ProbeResult.succeeded(tally.result(), source=source, clock=self._clock)
+        result = tally.result()
+        if not result["matched"] and not result["whole"] and sample_ages and sample_messages > 0 and sample_seconds > 0:
+            # 시드 메시지는 시각이 없다 — 표본을 지어내지 않고 안 셌다는 사실만(R3-5z ②).
+            result["sample_note"] = "스텁은 시각으로 seek하지 않는다"
+        return ProbeResult.succeeded(result, source=source, clock=self._clock)
 
     async def offsets(self, topic: str) -> ProbeResult:
         source = f"stub-kafka:offsets {topic}"

@@ -1264,7 +1264,8 @@ def cmd_case_walk(args, env) -> int:
             # 조사(`cmd_case_investigate`)와 같은 재료 — 다른 것은 리드(`_no_lead`)뿐이다. 여기서 갈라지면 `case walk`가 조사와 다른 걷기를 보여 준다.
             deps = EngineDeps(runner=ProbeRunner(adapters, clock=clock, detail_chars=app.investigation.evidence_chars,
                                                  narrowed_chars=app.investigation.evidence_total_chars,
-                                                 type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds)),
+                                                 type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds),
+                                                 type_samples=_type_samples(app)),
                               frame=_no_lead, integrate=_no_lead, max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width, max_tasks=app.investigation.max_tasks,
                               known_names=flow.known_names(flow_graph), components=frozenset(services),
@@ -1297,6 +1298,12 @@ def cmd_case_walk(args, env) -> int:
             if walk is not None else "걷기 없음(인덱스가 없거나 입구가 쓴 쪽을 못 골랐다)")
     print(f"\n  ({tail} · {graph_note} · 읽기 전용 — 저장소·보고서·트레이스에 남긴 것 없음)")
     return 0
+
+
+def _type_samples(app) -> tuple:
+    """유형 세기의 시각 표본 인자(R3-5z ②) — config에서, 녹화와 재생이 같게."""
+    inv = app.investigation
+    return (list(inv.type_count_sample_ages), inv.type_count_sample_messages, inv.type_count_sample_seconds)
 
 
 def _type_count_seconds(app, code) -> float | None:
@@ -1385,7 +1392,8 @@ def cmd_case_investigate(args, env) -> int:
                 adapters, clock=clock,
                 detail_chars=app.investigation.evidence_chars,
                 narrowed_chars=app.investigation.evidence_total_chars,
-                type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds)),
+                type_count=(app.investigation.type_count_max, app.investigation.type_count_seconds),
+                type_samples=_type_samples(app)),
                               frame=frame, integrate=integrate, conclude=conclude,
                               max_rounds=app.investigation.max_rounds,
                               parallel_width=app.investigation.parallel_width,

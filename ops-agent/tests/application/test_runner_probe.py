@@ -464,12 +464,13 @@ async def test_kafka_count_type은_클래스에서_유형_값을_풀어_config�
 
     seeded = StubKafkaInspector({"t.raw": {"begin": 0, "messages": [{"meta": {"kind": "7" if n % 4 == 0 else "COLOR"}} for n in range(10)]}},
                                 clock=lambda: T0)
-    runner = ProbeRunner(clock=lambda: T0, adapters=Bundle(kafka=seeded, code=_Code()), type_count=(6, 8.0))
+    runner = ProbeRunner(clock=lambda: T0, adapters=Bundle(kafka=seeded, code=_Code()), type_count=(6, 8.0), type_samples=([3600, 86400], 20, 20.0))
     out = await runner.run(task("t-5", action="kafka.count_type", params={"topic": "t.raw", "class": "Seeder"}), case=case)
     assert out.status == "ok", out.error
     assert out.evidence[0].summary.startswith("정상 — COLOR 2건, 끝 6건(오프셋 4~10) 중, 가장 최근 그 유형 메시지 오프셋 8")   # 값 "7"로 견줬다 — 이름이면 6건
     data = runner.raw(out.evidence[0].id)
     assert (data["types"], data["values"], data["max_messages"], data["max_seconds"]) == (["COLOR"], ["7"], 6, 8.0)
+    assert (data["sample_ages"], data["sample_messages"], data["sample_seconds"]) == ([3600, 86400], 20, 20.0)          # 표본 인자도 config에서(R3-5z ②)
     assert "센 범위 4~10 · 6건" in out.evidence[0].body and "읽은 바이트 " in out.evidence[0].body                  # R3-5z ① — 바이트·초·부른 시각
     off = await runner.run(task("t-6", action="kafka.count_type", params={"topic": "t.raw", "class": "Nobody"}), case=case)
     assert off.status == "error" and "Nobody은 라우터 유형표를 거치지 않는다" in off.error

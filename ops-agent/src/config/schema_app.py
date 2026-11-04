@@ -56,6 +56,11 @@ class InvestigationConfig(StrictModel):
     # 맞는다(측정 #32 회신의 답 2(5)). 걷기의 시간 상한은 그대로다 — 남은 예산이 T보다 적으면 걷기는 세지 않는다(인자를 줄이지 않는다).
     type_count_max: int = Field(default=20000, ge=1)
     type_count_seconds: float = Field(default=8.0, gt=0)
+    # 끝 창이 0건이면 보는 시각 표본(R3-5z ② — 측정 #33 회신의 답 1(가)): 부른 시각 기준 **상대 초** 목록(보존 범위 처음은 늘 더한다), 시점마다 파티션당 건수,
+    # 표본에만 쓰는 시간 상한. 절대 시각이 아니라 상대 초인 이유: 녹화와 재생의 시계가 달라도 인자가 같아야 녹화가 맞는다.
+    type_count_sample_ages: list[int] = Field(default_factory=lambda: [3600, 21600, 86400, 259200, 604800, 1209600, 1814400])
+    type_count_sample_messages: int = Field(default=20, ge=0)
+    type_count_sample_seconds: float = Field(default=20.0, ge=0)
     # 리드 프롬프트. config 안의 상대 경로다 — 운영이 직접 고치는 파일이라
     # 코드에 박아 두면 고치려고 배포를 해야 한다.
     frame_prompt: str = Field(default="prompts/investigate-frame.md", min_length=1)

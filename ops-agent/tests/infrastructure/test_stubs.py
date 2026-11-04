@@ -182,3 +182,16 @@ async def test_스텁_count_type은_시드_메시지에서_세고_재생_꼴은_
     assert got.status == "ok" and got.data == recorded
     other = await replay.count_type("t.raw", field="meta.kind", values=["7"], max_messages=5000, max_seconds=8)
     assert other.status == "error" and other.error.startswith("스냅샷 밖 — t.raw의 유형 세기")
+    # 표본 인자(R3-5z ②)도 녹화 인자다 — 상대 초 목록이 같아야 맞는다. 녹화에 없던 표본 인자는 녹화 밖이다.
+    sampled = {**args, "sample_ages": [3600, 86400], "sample_messages": 20, "sample_seconds": 20.0}
+    seeds["kafka"]["t.raw"]["type_counts"].append({"params": sampled, "result": {**recorded, "samples": []}})
+    replay = StubKafkaInspector(seeds["kafka"], clock=clock, snapshot=snapshot_of(seeds))
+    got = await replay.count_type("t.raw", field="meta.kind", values=["7"], max_messages=20000, max_seconds=8,
+                                  sample_ages=[3600, 86400], sample_messages=20, sample_seconds=20)
+    assert got.status == "ok" and got.data["samples"] == []
+    moved = await replay.count_type("t.raw", field="meta.kind", values=["7"], max_messages=20000, max_seconds=8,
+                                    sample_ages=[3600, 172800], sample_messages=20, sample_seconds=20)
+    assert moved.status == "error" and "스냅샷 밖" in moved.error
+    # 시드에서 셀 때는 시각으로 seek하지 않는다 — 표본을 청했으면 그 사실을 남긴다
+    zero = await seeded.count_type("t.raw", field="meta.kind", values=["8"], max_messages=6, max_seconds=8, sample_ages=[3600], sample_messages=20, sample_seconds=20)
+    assert zero.data["samples"] == [] and zero.data["sample_note"] == "스텁은 시각으로 seek하지 않는다"

@@ -1439,3 +1439,40 @@ async def test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_
     assert "kafka.tail" not in [r.action for r in walk.rungs]                                                # tail 대신 세기 칸
     walk = (await run_walk(_state(), runner=_Reads(table), peer=peer, clock=lambda: T0, **kw))["walk"]       # 세기가 꺼졌다 — 전처럼 tail
     assert ("kafka.tail", {"topic": "t.raw", "limit": 5}) in [(r.action, dict(r.params)) for r in walk.rungs]
+
+
+# ── R3-5z ② — 유형 세기 시각 표본의 문장 ──
+
+def test_유형_세기_문장은_끝_창과_표본이_전부_0건이면_비었다_표본이고_표본에서_보면_마지막으로_본_창을_적는다():
+    """측정 #33 회신의 답 1(나): 끝 연속 창 0건 + 표본 전부 0건 → 나쁨 `비었다(표본)`, 창마다 시각 범위와 센 건수. 표본에서 그 유형을 보면 `마지막으로 본 창` — 끝
+    창을 끝까지 셌으면 그 창이 0건이라 나쁨 그대로, 끝 창이 멈췄으면 그 사이를 못 셌으니 모름. 표본이 상한에 멈춰 다 못 셌으면 0건이어도 모름(전부가 아니다).
+    시드에서 센 결과(스텁)는 표본을 안 셌다고 적는다."""
+    from src.application.runner_probe import type_count_status
+
+    def window(age, a, b, matched=0, counted=20):
+        return {"age": age, "at": None, "skipped": "", "counted": counted, "with_field": counted, "matched": matched, "first_at": f"2026-11-{a}+09:00",
+                "last_at": f"2026-11-{b}+09:00", "partitions": [{"partition": 0, "spans": [[0, counted]]}],
+                "latest": {"partition": 0, "offset": 5, "at": f"2026-11-{b}+09:00"} if matched else None}
+
+    def data(**over):
+        base = {"field": "meta.kind", "values": ["7"], "types": ["COLOR"], "counted": 6, "with_field": 6, "matched": 0, "whole": False, "stopped": "",
+                "first_at": "2026-11-04T08:00:00+09:00", "last_at": "2026-11-04T09:00:00+09:00", "latest": None, "called_at": "2026-11-04T09:10:00+09:00",
+                "partitions": [{"partition": 0, "begin": 0, "end": 10, "spans": [[4, 10]]}], "sample_messages": 20, "sample_stopped": "", "samples_skipped": [],
+                "samples": [window(3600, "04T08:00:00", "04T08:01:00"), window(1814400, "14T09:00:00", "14T09:01:00"), window(None, "01T00:00:00", "01T00:01:00")]}
+        return {**base, **over}
+
+    tail = "끝 6건(오프셋 4~10, 2026-11-04T08:00:00+09:00~2026-11-04T09:00:00+09:00, 마지막 메시지는 부른 시각보다 10분 전)"
+    windows = ("1시간 전 2026-11-04T08:00:00+09:00~2026-11-04T08:01:00+09:00 20건 · 21일 전 2026-11-14T09:00:00+09:00~2026-11-14T09:01:00+09:00 20건 · "
+               "보존 처음 2026-11-01T00:00:00+09:00~2026-11-01T00:01:00+09:00 20건")
+    assert type_count_status(data(), "") == (f"비었다(표본) — COLOR 0건: {tail} · 표본 3창(1시간~21일 전, 보존 처음), 창마다 파티션당 20건, 0건 — {windows}", True,
+                                            "COLOR 0건(표본 3창)")
+    seen = data(samples=[window(3600, "04T08:00:00", "04T08:01:00"), window(86400, "03T09:00:00", "03T09:01:00", matched=2), window(None, "01T00:00:00", "01T00:01:00", 1)])
+    status, bad, piece = type_count_status(seen, "")
+    assert status.startswith(f"비었다 — COLOR 0건, {tail}만 셌다 — 그 앞은 안 셌다 · 마지막으로 본 창: 1일 전 2026-11-03T09:00:00+09:00~2026-11-03T09:01:00+09:00 ")
+    assert "20건 중 2건, 가장 최근 그 유형 메시지 2026-11-03T09:01:00+09:00" in status and bad and piece == "COLOR 마지막으로 본 창 1일 전"
+    status, bad, _ = type_count_status({**seen, "stopped": "시간 상한 8초"}, "")
+    assert status.startswith("모름 — COLOR 세다 멈춤(끝 6건까지 0건 — ") and "· 마지막으로 본 창: 1일 전 " in status and not bad
+    status, bad, _ = type_count_status(data(sample_stopped="표본 시간 상한 20초"), "")
+    assert status.startswith(f"모름 — COLOR 0건: {tail} · 표본 3창 0건(") and status.endswith("표본 시간 상한 20초에서 멈췄다 — 다 못 셌다") and not bad
+    stub = data(samples=[], sample_note="스텁은 시각으로 seek하지 않는다")
+    assert type_count_status(stub, "")[0].endswith("만 셌다 — 그 앞은 안 셌다 · 표본 안 셈(스텁은 시각으로 seek하지 않는다)")

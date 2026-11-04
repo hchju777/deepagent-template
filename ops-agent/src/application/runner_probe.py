@@ -42,10 +42,13 @@ class ProbeRunner(TaskRunnerPort):
     """사이트 하나의 어댑터 묶음에 붙는다."""
 
     def __init__(self, adapters, *, clock: Clock, detail_chars: int = _DETAIL_CHARS,
-                 narrowed_chars: int = _NARROWED_CHARS, type_count: tuple[int, float] = (20000, 8.0)):
+                 narrowed_chars: int = _NARROWED_CHARS, type_count: tuple[int, float] = (20000, 8.0),
+                 type_samples: tuple = ((), 0, 0.0)):
         self._adapters = adapters
         # 유형 세기의 상한 (N건, T초)(R3-5y ③) — config `investigation.type_count_max`·`type_count_seconds`.
         self._type_count = (int(type_count[0]), float(type_count[1]))
+        # 시각 표본 (상대 초 목록, 시점마다 파티션당 건수, 표본 상한 초)(R3-5z ②) — config `investigation.type_count_sample_*`. 녹화 인자가 된다.
+        self._type_samples = ([int(a) for a in type_samples[0]], int(type_samples[1]), float(type_samples[2]))
         self._detail_chars = detail_chars
         self._narrowed_chars = max(narrowed_chars, detail_chars)
         # 시계를 필수로 받는다(규율 2). 어댑터가 자기 시계를 갖고 있지만, 포트에
@@ -82,7 +85,8 @@ class ProbeRunner(TaskRunnerPort):
             return ProbeResult.failed(spec, source=source, clock=self._clock)
         field, values, names = spec
         got = await kafka.count_type(str(params["topic"]), field=field, values=values,
-                                     max_messages=self._type_count[0], max_seconds=self._type_count[1])
+                                     max_messages=self._type_count[0], max_seconds=self._type_count[1], sample_ages=self._type_samples[0],
+                                     sample_messages=self._type_samples[1], sample_seconds=self._type_samples[2])
         if got.status != "ok" or not isinstance(got.data, dict):
             return got
         return got.model_copy(update={"data": {**got.data, "types": list(names)}})
@@ -290,6 +294,42 @@ def _count_window(data: dict) -> tuple[str, str]:
     return where, when
 
 
+def _age_label(age) -> str:
+    if age is None:
+        return "보존 처음"
+    s = int(age)
+    for unit, name in ((86400, "일"), (3600, "시간"), (60, "분")):
+        if s % unit == 0:
+            return f"{s // unit}{name} 전"
+    return f"{s}초 전"
+
+
+def _sample_text(w: dict) -> str:
+    when = f" {w['first_at']}~{w['last_at']}" if w.get("first_at") and w.get("last_at") else ""
+    return f"{_age_label(w.get('age'))}{when} {w.get('counted', 0)}건"
+
+
+def _samples_part(data: dict, kinds: str) -> tuple[str, str, bool | None]:
+    """시각 표본(R3-5z ②)의 문장 토막 `(토막, 멈춤 토막, 판정)` — 판정은 True(표본 전부 0건 — 나쁨), False(표본에서 봤다), None(표본 없음·다 못 셌다)."""
+    samples = data.get("samples") or []
+    if not samples:
+        note = data.get("sample_note")
+        return (f" · 표본 안 셈({note})" if note else ""), "", None
+    hit = next((w for w in samples if w.get("matched")), None)
+    if hit is not None:
+        latest = (hit.get("latest") or {}).get("at")
+        tail = f", 가장 최근 그 유형 메시지 {latest}" if latest else ""
+        return (f" · 마지막으로 본 창: {_sample_text(hit)} 중 {hit['matched']}건{tail}", f"{kinds} 마지막으로 본 창 {_age_label(hit.get('age'))}", False)
+    listed = " · ".join(_sample_text(w) for w in samples)
+    if data.get("sample_stopped"):
+        return f" · 표본 {len(samples)}창 0건({listed}) — {data['sample_stopped']}에서 멈췄다 — 다 못 셌다", "", None
+    ages = [w.get("age") for w in samples if w.get("age") is not None]
+    reach = (f"{_age_label(min(ages))[:-2]}~{_age_label(max(ages))}" if len(ages) > 1 else _age_label(ages[0]) if ages else "")
+    first = ", 보존 처음" if any(w.get("age") is None for w in samples) else ""
+    head = f"표본 {len(samples)}창({reach}{first})" if reach else f"표본 {len(samples)}창(보존 처음)"
+    return f" · {head}, 창마다 파티션당 {data.get('sample_messages', 0)}건, 0건 — {listed}", f"{kinds} 0건(표본 {len(samples)}창)", True
+
+
 def type_count_status(data: Any, error: str) -> tuple[str, bool, str]:
     """유형 세기(`kafka.count_type`) 결과의 행 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)`(R3-5y ③ — 측정 #32 회신의 답 2). 0건·보존 범위 전부 → 비었다, 0건·끝 N건 창
     → 비었다 + 센 범위(그 앞은 안 셌다), k건 → 정상 + 가장 최근 그 유형 메시지, 시간 상한·빈 응답·실패 → 모름. 유형 칸이 든 메시지가 0건이면 모름 — 선언한 칸
@@ -308,9 +348,16 @@ def type_count_status(data: Any, error: str) -> tuple[str, bool, str]:
         at_ = f"오프셋 {latest.get('offset')}" if len(rows) == 1 else f"파티션 {latest.get('partition')} 오프셋 {latest.get('offset')}"
         at = f", 시각 {latest['at']}" if latest.get("at") else ""
         return (f"정상 — {names} {matched}건, {scope}({window}) 중, 가장 최근 그 유형 메시지 {at_}{at}", False, f"{names} {matched}건/{counted}건")
+    sampled, sample_piece, empty = _samples_part(data, names)
+    if empty is True:
+        # 끝 연속 창 0건 + 표본 전부 0건 → 나쁨(측정 #33 회신의 답 1(나)) — 끝 창이 시간 상한에 멈췄어도 같다(그 창도 0건이다).
+        return f"비었다(표본) — {names} 0건: {scope}({window}){sampled}", True, sample_piece
     if data.get("stopped"):
-        return (f"모름 — {names} 세다 멈춤(끝 {counted}건까지 0건 — {window} · {data['stopped']})", False,
-                f"{names} 세다 멈춤(끝 {counted}건까지 0건)")
+        return (f"모름 — {names} 세다 멈춤(끝 {counted}건까지 0건 — {window} · {data['stopped']}){sampled}", False,
+                sample_piece or f"{names} 세다 멈춤(끝 {counted}건까지 0건)")
+    if data.get("samples") and empty is None and not data.get("sample_note"):
+        # 표본이 상한에 멈춰 다 못 셌다 — 0건이어도 전부가 아니다.
+        return f"모름 — {names} 0건: {scope}({window}){sampled}", False, f"{names} 0건(표본 다 못 셈)"
     if counted and not data.get("with_field"):
         return f"모름 — 유형 칸 {data.get('field')}이 든 메시지 0건({scope}, {window}) — 선언을 확인", False, f"유형 칸 {data.get('field')} 없음"
     if data.get("whole"):
@@ -318,7 +365,8 @@ def type_count_status(data: Any, error: str) -> tuple[str, bool, str]:
                   else ", ".join(f"p{r['partition']} {r['begin']}~{r['end']}" for r in rows))
         return (f"비었다 — {names} 0건, 보존 범위 {ranges} 전부({counted}건{', ' + when if when else ''})", True,
                 f"{names} 0건(보존 범위 전부 {counted}건)")
-    return f"비었다 — {names} 0건, 끝 {counted}건({window})만 셌다 — 그 앞은 안 셌다", True, f"{names} 0건(끝 {counted}건만)"
+    return (f"비었다 — {names} 0건, 끝 {counted}건({window})만 셌다 — 그 앞은 안 셌다{sampled}", True,
+            sample_piece or f"{names} 0건(끝 {counted}건만)")
 
 
 def _message_line(data: Any) -> str:

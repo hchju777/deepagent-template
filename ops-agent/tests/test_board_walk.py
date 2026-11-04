@@ -389,7 +389,8 @@ def test_인덱스에_쓰는_클래스가_없는_키는_다른_사이트의_같�
     # config 상한 N=4(위 앱 config)라 끝 4건만 셌다.
     seeder = "PaletteSeeder [dt-core(서비스 3개 공유) · sevt 값의 metadata.event_type]"
     topic = [r for r in rows if r.startswith("mx.alarm.main | ")]
-    assert topic and topic[0].endswith(f" | 비었다 — PALETTE 0건, 끝 4건(오프셋 1~5)만 셌다 — 그 앞은 안 셌다 · 구독 {seeder}")
+    # 표본(R3-5z ②)은 config 기본값으로 청했고 측정판(스텁)은 시각으로 seek하지 않는다 — CLI가 표본 인자를 넘긴 것이 그 줄로 보인다.
+    assert topic and topic[0].endswith(f" | 비었다 — PALETTE 0건, 끝 4건(오프셋 1~5)만 셌다 — 그 앞은 안 셌다 · 표본 안 셈(스텁은 시각으로 seek하지 않는다) · 구독 {seeder}")
     assert stopped.startswith(f"구독 토픽에 그 유형이 없다 — mx.alarm.main(PALETTE 0건(끝 4건만) · {seeder} · 발행 선언: ")
     assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — 쓴 쪽은 sevt의 같은 키 sevt:palette:source 값의 metadata.event_type에서 채웠다: PaletteSeeder",
                      "PaletteSeeder: 클래스 코드에 구독 토픽이 없다 — sevt 값의 source.topic sevt.alarm.main을 이 사이트 이름 mx.alarm.main으로 이었다"]

@@ -58,9 +58,11 @@ class TypeTally:
     "유형 칸이 든" 것이다 — 선언한 칸 이름이 틀렸을 때 "0건"이 "그 유형이 없다"로 읽히지 않게 그 수를 따로 센다. 센 범위는 파티션마다 다 읽은 오프셋 범위들
     (`spans`, 최근 쪽부터 — R3-5z ①): 메시지 오프셋이 아니라 읽은 자리로 적는다(압축 구멍은 빈 것이 아니다)."""
 
-    def __init__(self, topic: str, *, field: str, values, max_messages: int, max_seconds: float, tz, called_at: str | None = None):
+    def __init__(self, topic: str, *, field: str, values, max_messages: int, max_seconds: float, tz, called_at: str | None = None,
+                 sample_ages=(), sample_messages: int = 0, sample_seconds: float = 0.0):
         self.head = {"topic": topic, "field": field, "values": sorted({str(v) for v in values}),
-                     "max_messages": int(max_messages), "max_seconds": float(max_seconds)}
+                     "max_messages": int(max_messages), "max_seconds": float(max_seconds),
+                     "sample_ages": [int(a) for a in sample_ages], "sample_messages": int(sample_messages), "sample_seconds": float(sample_seconds)}
         self._wanted = set(self.head["values"])
         self._tz = tz or timezone.utc
         self.rows: dict[int, dict] = {}
@@ -122,7 +124,15 @@ class TypeTally:
         whole = not stopped and all(r["begin"] >= r["end"] or r["spans"] == [[r["begin"], r["end"]]] for r in rows)
         return {**self.head, "partitions": rows, "counted": sum(r["counted"] for r in rows), "with_field": sum(r["with_field"] for r in rows),
                 "matched": sum(r["matched"] for r in rows), "first_at": self._at(self._first), "last_at": self._at(self._last), "latest": latest,
-                "whole": whole, "stopped": stopped, "bytes": self.bytes, "seconds": round(float(seconds), 2), "called_at": self.called_at}
+                "whole": whole, "stopped": stopped, "bytes": self.bytes, "seconds": round(float(seconds), 2), "called_at": self.called_at,
+                "samples": [], "samples_skipped": [], "sample_stopped": "", "sample_bytes": 0, "sample_seconds_used": 0.0}
+
+    def window(self, age, at: str | None) -> dict:
+        """표본 창 하나의 요약(R3-5z ②) — 이 셈을 창 하나로 썼을 때."""
+        full = self.result()
+        return {"age": age, "at": at, "skipped": "", "partitions": [{k: r[k] for k in ("partition", "spans", "counted", "with_field", "matched")}
+                                                                     for r in full["partitions"] if r["spans"]],
+                **{k: full[k] for k in ("counted", "with_field", "matched", "first_at", "last_at", "latest")}}
 
 
 class RealKafkaInspector(KafkaInspectorPort):
@@ -361,7 +371,8 @@ class RealKafkaInspector(KafkaInspectorPort):
                 except Exception:                                  # noqa: BLE001
                     pass
 
-    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
+    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float,
+                         sample_ages: list[int] = (), sample_messages: int = 0, sample_seconds: float = 0.0) -> ProbeResult:
         """섞인 토픽에서 한 유형만 센다(포트 docstring). `tail`과 같은 연결·같은 읽기 전용(assign·seek, 그룹 미참여·커밋 없음) — 다만 끝에서 N건을 센다.
         파티션마다 **끝에서 조각씩 뒤로** 물러나며 읽는다(R3-5z ① — 측정 #33: 끝−N에서 앞으로 읽어, 시간 상한에서 멈춘 세기가 창의 가장 오래된 끝만 셌다). 조각은
         작게 시작해 두 배씩 — 멈추면 가장 최근 쪽이 남고, 멈춘 조각은 읽은 데까지 따로 적는다. 다 센 파티션은 멈춰 둔다(이미 센 쪽을 또 받지 않게)."""
@@ -386,7 +397,8 @@ class RealKafkaInspector(KafkaInspectorPort):
             begins = await consumer.beginning_offsets(tps)
             called = self._clock()
             tally = TypeTally(actual, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds,
-                              tz=called.tzinfo, called_at=called.isoformat())
+                              tz=called.tzinfo, called_at=called.isoformat(), sample_ages=sample_ages, sample_messages=sample_messages,
+                              sample_seconds=sample_seconds)
             limit = max(int(max_messages), 0)
             by_partition = {tp.partition: tp for tp in tps}
             reading: dict[int, list[int]] = {}                      # 파티션 → [조각 시작, 조각 끝, 읽은 데까지, 조각 크기]
@@ -450,8 +462,13 @@ class RealKafkaInspector(KafkaInspectorPort):
                         moved.add(p)
             for p, (lo, _, upto, _) in reading.items():
                 tally.cover(p, lo, upto)                            # 멈춘 조각은 읽은 데까지 따로
-            return ProbeResult.succeeded(tally.result(stopped, seconds=_mono() - started), source=source, clock=self._clock,
-                                         truncated_reason=(f"{stopped}에서 멈췄다 — 다 못 셌다" if stopped else None))
+            result = tally.result(stopped, seconds=_mono() - started)
+            if not result["matched"] and not result["whole"] and sample_ages and sample_messages > 0 and sample_seconds > 0:
+                result.update(await self._samples(consumer, tps, begins, ends, tally, called, field=field, values=values,
+                                                  ages=sample_ages, per=int(sample_messages), seconds=float(sample_seconds)))
+            cut = stopped or result["sample_stopped"]
+            return ProbeResult.succeeded(result, source=source, clock=self._clock,
+                                         truncated_reason=(f"{cut}에서 멈췄다 — 다 못 셌다" if cut else None))
         except Exception as exc:                                   # noqa: BLE001
             return ProbeResult.failed(f"{type(exc).__name__}: {exc}", source=source, clock=self._clock)
         finally:
@@ -460,6 +477,89 @@ class RealKafkaInspector(KafkaInspectorPort):
                     await consumer.stop()
                 except Exception:                                  # noqa: BLE001
                     pass
+
+    async def _samples(self, consumer, tps, begins, ends, tally: TypeTally, called, *, field, values, ages, per: int, seconds: float) -> dict:
+        """시각 표본(R3-5z ② — 측정 #33 회신의 답 1(가)): 부른 시각 기준 상대 초 `ages`의 시점과 보존 범위 처음에서 파티션당 `per`건씩. 시점 → 오프셋은
+        `offsets_for_times`(읽기 전용 — 그룹·커밋 없음). 끝 창 안(이미 셌다)·보존 처음보다 앞선 시점(보존 처음 창이 센다)·앞 시점과 같은 자리는 건너뛰고 그
+        까닭을 적는다. 창마다 같은 셈(`TypeTally`)이고, 표본에만 쓰는 시간 상한에서 멈추면 그 창은 읽은 데까지다."""
+        called_ms = int(called.timestamp() * 1000)
+        tail_lo = {}
+        for tp in tps:
+            row = tally.rows[tp.partition]
+            spans = row["spans"]
+            tail_lo[tp.partition] = spans[0][0] if spans and spans[0][1] >= row["end"] else row["end"]   # 끝에 이어 붙은 범위의 시작 — 그 안은 셌다
+        windows, skipped, stopped, used = [], [], "", set()
+        consumer.pause(*tps)                                        # 끝 창에서 멈춘 파티션이 옛 자리를 계속 받지 않게 — 창마다 그 창의 파티션만 연다
+        started = _mono()
+        deadline = started + seconds
+        by_partition = {tp.partition: tp for tp in tps}
+        for age in [*(int(a) for a in ages), None]:
+            if _mono() >= deadline:
+                stopped = f"표본 시간 상한 {seconds:g}초"
+                break
+            if age is None:
+                starts = {tp.partition: begins[tp] for tp in tps}
+            else:
+                found = await consumer.offsets_for_times({tp: called_ms - age * 1000 for tp in tps})
+                starts = {tp.partition: (found.get(tp).offset if found.get(tp) is not None else None) for tp in tps}
+            ranges, why = {}, ""
+            for tp in tps:
+                p, off = tp.partition, starts[tp.partition]
+                hi = min(ends[tp], tail_lo[p])
+                if off is None or off >= hi:
+                    why = why or "끝 창 안"
+                elif age is not None and off <= begins[tp]:
+                    why = why or "보존 처음보다 앞선다"
+                elif (p, off) in used:
+                    why = why or "앞 시점과 같은 자리"
+                else:
+                    ranges[p] = [off, min(off + per, hi), off]
+            if not ranges:
+                skipped.append({"age": age, "why": why})
+                continue
+            win = TypeTally(tally.head["topic"], field=field, values=values, max_messages=per, max_seconds=seconds, tz=called.tzinfo)
+            for tp in tps:
+                win.track(tp.partition, begins[tp], ends[tp])
+            for p, (lo, _, _) in ranges.items():
+                used.add((p, lo))
+                consumer.seek(by_partition[p], lo)
+                consumer.resume(by_partition[p])
+            quiet = 0
+            while ranges:
+                if _mono() >= deadline:
+                    stopped = f"표본 시간 상한 {seconds:g}초"
+                    break
+                batches = await consumer.getmany(timeout_ms=1000, max_records=5000)
+                got = [record for rs in batches.values() for record in rs]
+                if not got:
+                    quiet += 1
+                    if quiet >= EMPTY_POLLS:                        # 그 창은 읽은 데까지다
+                        break
+                    continue
+                quiet = 0
+                for record in got:
+                    p = record.partition
+                    if p not in ranges:
+                        continue
+                    lo, hi, _ = ranges[p]
+                    if record.offset < lo:
+                        continue
+                    if record.offset < hi:
+                        win.add(p, record.offset, record.timestamp, _decode(record.value), size=len(record.value or b""))
+                        ranges[p][2] = record.offset + 1
+                    if record.offset + 1 >= hi:
+                        win.cover(p, lo, hi)
+                        consumer.pause(by_partition[p])
+                        del ranges[p]
+            for p, (lo, _, upto) in ranges.items():
+                win.cover(p, lo, upto)
+                consumer.pause(by_partition[p])
+            at = datetime.fromtimestamp((called_ms - age * 1000) / 1000, tz=called.tzinfo).isoformat() if age is not None else None
+            windows.append({**win.window(age, at), "bytes": win.bytes})
+            if stopped or windows[-1]["matched"]:
+                break                                               # 본 창이 "마지막으로 본 창"이다 — 더 오래된 창은 답을 안 바꾼다
+        return {"samples": [{k: v for k, v in w.items() if k != "bytes"} for w in windows], "samples_skipped": skipped, "sample_stopped": stopped,
+                "sample_bytes": sum(w["bytes"] for w in windows), "sample_seconds_used": round(_mono() - started, 2)}
 
     async def offsets(self, topic: str) -> ProbeResult:
         """토픽의 보존 범위만 — 파티션마다 `beginning_offsets`·`end_offsets`(R3-5p ①-a). `assign`만, 그룹 미참여·커밋 없음, seek·fetch 없음(브로커 왕복 둘).

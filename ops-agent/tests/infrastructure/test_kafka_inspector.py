@@ -24,7 +24,7 @@ class _TP:
 
 class _Record:
     def __init__(self, partition, offset, value_of=None):
-        self.partition, self.offset, self.timestamp = partition, offset, 1000 + offset
+        self.partition, self.offset, self.timestamp = partition, offset, (_Consumer.stamp or (lambda o: 1000 + o))(offset)
         self.key, self.value = None, (value_of(partition, offset) if value_of else b'{"n": %d}' % offset)
 
 
@@ -40,6 +40,8 @@ class _Consumer:
     value_of = None                  # (파티션, 오프셋) → 값 바이트 — 유형 세기(R3-5y ②)의 섞인 토픽
     made: list = []                  # 만든 컨슈머의 인자 — 그룹 미참여·커밋 없음을 본다
     paused: set = set()              # 멈춰 둔 파티션 — 유형 세기(R3-5z ①)가 다 센 파티션을 더 안 받는다
+    stamp = None                     # 오프셋 → 메시지 시각(ms) — 시각 표본(R3-5z ②)의 `offsets_for_times`도 이것으로 답한다
+    asked_at: list = []           # `offsets_for_times`에 물은 시각들
 
     def __init__(self, ends, **kwargs):
         self._ends, self._pos = ends, {}
@@ -52,6 +54,17 @@ class _Consumer:
     async def beginning_offsets(self, tps): return {tp: _Consumer.begin for tp in tps}
     def seek(self, tp, offset): self._pos[tp.partition] = offset
     def pause(self, *tps): _Consumer.paused.update(tp.partition for tp in tps)
+    def resume(self, *tps): _Consumer.paused.difference_update(tp.partition for tp in tps)
+
+    async def offsets_for_times(self, wanted):
+        """그 시각 이후 첫 메시지의 오프셋 — 없으면 None(aiokafka와 같다)."""
+        stamp = _Consumer.stamp or (lambda o: 1000 + o)
+        _Consumer.asked_at.extend(wanted.values())
+        out = {}
+        for tp, ts in wanted.items():
+            hit = next((o for o in range(_Consumer.begin, self._ends[tp.partition]) if stamp(o) >= ts), None)
+            out[tp] = None if hit is None else types.SimpleNamespace(offset=hit, timestamp=stamp(hit))
+        return out
 
     async def getmany(self, timeout_ms, max_records):
         _Consumer.calls += 1
@@ -84,6 +97,7 @@ def _inspector(monkeypatch, ends: dict, partitions: list):
     monkeypatch.setattr(inspector, "_partitions_of", partitions_of)
     _Consumer.calls, _Consumer.empties_first, _Consumer.stall, _Consumer.flaky = 0, 0, False, False
     _Consumer.begin, _Consumer.holes, _Consumer.value_of, _Consumer.made, _Consumer.paused = 0, set(), None, [], set()
+    _Consumer.stamp, _Consumer.asked_at = None, []
     return inspector
 
 
@@ -264,3 +278,76 @@ async def test_count_type은_끝에서_조각씩_뒤로_읽어_멈춰도_가장_
     pair = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=1000)
     assert pair.data["matched"] == 2 and pair.data["latest"]["offset"] == 98
 
+
+# ── R3-5z ② — 시각 표본: 끝 창이 0건이면 부른 시각 기준 여러 시점에서 파티션당 m건 ──
+
+T0_MS = int(T0.timestamp() * 1000)
+
+
+def _minutely(end):
+    """끝 오프셋이 부른 시각 1분 전 — 메시지가 1분에 한 건."""
+    return lambda o: T0_MS - (end - o) * 60_000
+
+
+async def test_count_type은_끝_창이_0건이면_부른_시각_기준_상대_시점마다_파티션당_m건을_세고_시각은_결과에만_담는다(monkeypatch):
+    """측정 #33 회신의 답 1(가)(나): 정답이 "그 유형이 3주 넘게 안 온다"인 케이스는 끝의 연속 창 하나로 답할 수 없다. 끝 창이 0건이고 전부가 아니면, 부른 시각 기준
+    상대 초 목록의 시점(−1시간 … −21일)과 보존 범위 처음에서 파티션당 m건씩 센다(`offsets_for_times` — 읽기 전용, 그룹·커밋 없음). 인자는 **상대 초**다 — 절대 시각을
+    인자에 넣으면 녹화 때와 재생 때 시계가 달라 재생이 매번 녹화 밖이 된다. 절대 시각은 결과에만. 끝 창 안의 시점, 보존 처음보다 앞선 시점(보존 처음 창이 센다),
+    앞 시점과 같은 자리는 건너뛴다. 표본에만 쓰는 시간 상한이 따로다."""
+    from src.infrastructure import kafka_inspector as ki
+
+    inspector = _inspector(monkeypatch, {0: 3000}, [0])
+    _Consumer.stamp = _minutely(3000)                                                     # 3000분(약 2일) — 3일 전은 보존 처음보다 앞선다
+    _Consumer.value_of = lambda p, o: b'{"meta": {"kind": "7"}}' if o in (3, 1562) else b'{"meta": {"kind": "9"}}'
+    ages = [3600, 21600, 86400, 259200]
+    got = await inspector.count_type("t", field="meta.kind", values=["8"], max_messages=10, max_seconds=1000,
+                                     sample_ages=ages, sample_messages=5, sample_seconds=1000)
+    data = got.data
+    assert data["matched"] == 0 and data["partitions"][0]["spans"] == [[2990, 3000]]                              # 끝 창은 0건
+    assert (data["sample_ages"], data["sample_messages"], data["sample_seconds"]) == (ages, 5, 1000.0)              # 인자는 상대 초 그대로
+    assert [(w["age"], w["partitions"][0]["spans"], w["counted"], w["matched"]) for w in data["samples"]] == [
+        (3600, [[2940, 2945]], 5, 0), (21600, [[2640, 2645]], 5, 0), (86400, [[1560, 1565]], 5, 0), (None, [[0, 5]], 5, 0)]
+    assert data["samples_skipped"] == [{"age": 259200, "why": "보존 처음보다 앞선다"}] and data["sample_stopped"] == ""
+    assert data["samples"][0]["at"] == "2026-03-01T08:00:00+00:00" and data["samples"][3]["at"] is None           # 절대 시각은 결과에만
+    assert _Consumer.asked_at == [T0_MS - a * 1000 for a in ages] and data["sample_bytes"] > 0
+    # 본 창에서 멈춘다 — 그 창이 "마지막으로 본 창"이고 더 오래된 창은 답을 안 바꾼다
+    inspector = _inspector(monkeypatch, {0: 3000}, [0])
+    _Consumer.stamp = _minutely(3000)
+    _Consumer.value_of = lambda p, o: b'{"meta": {"kind": "7"}}' if o in (3, 1562) else b'{"meta": {"kind": "9"}}'
+    hit = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=1000,
+                                     sample_ages=ages, sample_messages=5, sample_seconds=1000)
+    assert [(w["age"], w["matched"]) for w in hit.data["samples"]] == [(3600, 0), (21600, 0), (86400, 1)]
+    assert hit.data["samples"][2]["latest"]["offset"] == 1562
+    # 끝 창이 그 시점을 이미 덮었으면 건너뛴다
+    inspector = _inspector(monkeypatch, {0: 3000}, [0])
+    _Consumer.stamp, _Consumer.value_of = _minutely(3000), (lambda p, o: b'{"meta": {"kind": "9"}}')
+    covered = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=100, max_seconds=1000,
+                                         sample_ages=[3600], sample_messages=5, sample_seconds=1000)
+    assert covered.data["samples_skipped"] == [{"age": 3600, "why": "끝 창 안"}] and [w["age"] for w in covered.data["samples"]] == [None]
+    # 끝 창에서 보면 표본을 안 센다 · 표본 상한
+    inspector = _inspector(monkeypatch, {0: 3000}, [0])
+    _Consumer.stamp, _Consumer.value_of = _minutely(3000), (lambda p, o: b'{"meta": {"kind": "7"}}')
+    seen = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=1000,
+                                      sample_ages=ages, sample_messages=5, sample_seconds=1000)
+    assert seen.data["matched"] == 10 and seen.data["samples"] == [] and _Consumer.asked_at == []
+    inspector = _inspector(monkeypatch, {0: 3000}, [0])
+    _Consumer.stamp, _Consumer.value_of = _minutely(3000), (lambda p, o: b'{"meta": {"kind": "9"}}')
+    monkeypatch.setattr(ki, "_mono", lambda: float(_Consumer.calls))
+    cut = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=100,
+                                     sample_ages=ages, sample_messages=5, sample_seconds=4)
+    assert cut.data["sample_stopped"] == "표본 시간 상한 4초" and len(cut.data["samples"]) < 4 and not cut.envelope.complete
+    assert cut.data["samples"][-1]["counted"] == 2                                          # 창을 읽다 멈추면 읽은 데까지
+    # 창 사이에서 상한에 닿으면 다음 시점은 묻지도 않는다 — 빈 창을 지어 붙이지 않게
+    inspector = _inspector(monkeypatch, {0: 3000}, [0])
+    _Consumer.stamp, _Consumer.value_of = _minutely(3000), (lambda p, o: b'{"meta": {"kind": "9"}}')
+    edge = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=100,
+                                      sample_ages=ages, sample_messages=5, sample_seconds=3)
+    assert [w["age"] for w in edge.data["samples"]] == [3600] and len(_Consumer.asked_at) == 1
+    # 메시지가 없는 동안의 두 시점은 같은 자리다 — 한 번만 센다
+    inspector = _inspector(monkeypatch, {0: 3000}, [0])
+    monkeypatch.setattr(ki, "_mono", lambda: 0.0)
+    _Consumer.stamp = lambda o: T0_MS - (3000 - o) * 60_000 if o >= 1560 else T0_MS - 5 * 86_400_000 + o
+    _Consumer.value_of = lambda p, o: b'{"meta": {"kind": "9"}}'
+    gap = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=100,
+                                     sample_ages=[86400, 259200], sample_messages=5, sample_seconds=100)
+    assert [w["age"] for w in gap.data["samples"]] == [86400, None] and gap.data["samples_skipped"] == [{"age": 259200, "why": "앞 시점과 같은 자리"}]
