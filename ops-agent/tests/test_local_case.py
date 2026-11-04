@@ -116,6 +116,7 @@ def test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다(
     # 이름이 들어갈 자리다).
     assert made["pipelines"] == {"class_key": "class", "enabled_key": "enabled",
                                  "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline", "type_field": "feed"}}
+    assert made["value_status"] == {"field": "metadata.state", "success": ["done"]}
 
 
 def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다():

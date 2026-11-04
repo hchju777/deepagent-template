@@ -2432,7 +2432,7 @@ CASES += [
 
 # ── 핫픽스 10-14 — 측정판 토폴로지는 사본에만 · 리포 knowledge를 테스트가 안 읽는다 ──
 CASES += [
- ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}", "    return dict(topo)",
+ ("측정판이 토폴로지 사본의 services를 안 바꾼다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}},\n", "    return {**topo,\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}},\n",
   ["tests/test_local_case.py::test_batch는_요약_키를_직접_쓰지_않고_명령에_실어_보낸다"]),
  ("예외 목록을 OS 구분자 그대로 비교한다", ROOT / "tests/test_portability.py", "        return path.relative_to(root).as_posix()", "        return str(path.relative_to(root))",
   ["tests/test_portability.py::test_예외_목록은_Windows_구분자에도_맞는다"]),
@@ -2543,7 +2543,7 @@ CASES += [
  ("읽기 실패를 나쁨으로 본다", WK, "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", False", "                    status, bad = f\"읽기 실패 — {got.error or '증거 없음'}\", True", [UNKNOWN_T]),
  ("없음을 정상으로 본다", WK, "    if raw is None:\n        return \"없음\", True", "    if raw is None:\n        return \"정상\", False", [STATUS_T]),
  ("빈 배열을 정상으로 본다", WK, "        if arrays or objects:\n            return empty_text(arrays, objects), True", "        if False:\n            return empty_text(arrays, objects), True", [STATUS_T]),
- ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,\n                                  count_types=deps.count_types, clock=deps.clock)", "            return {}", [WNODE_T]),
+ ("걷기 노드가 안 돈다", ND, "            return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,\n                                  service_repos=deps.service_repos, declared_by=deps.declared_by,\n                                  topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,\n                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,\n                                  count_types=deps.count_types, value_status=deps.value_status, clock=deps.clock)", "            return {}", [WNODE_T]),
  ("인덱스 없이도 걷는다", ND, "        if (state.walk is not None or state.target is None or not state.target.writer or not deps.code_index\n                or not deps.check_discovery):", "        if (state.walk is not None or state.target is None or not state.target.writer\n                or not deps.check_discovery):", [WNODE_T]),
  ("걸은 읽기를 입구 읽기로 안 센다", ND, "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") or t.walked for e in t.result_evidence_ids)", "    return frozenset(e for t in state.plan_tasks if t.id in (\"t-0\", \"t-1\") for e in t.result_evidence_ids)", [WHOP_T]),
  ("받을 때의 홉이 걷기를 안 본다", ND, "    return next_hop(state.target, code_index=deps.code_index, walk=state.walk)", "    return next_hop(state.target, code_index=deps.code_index)", [WHOP_T]),
@@ -2645,7 +2645,7 @@ CASES += [
  ("걷기 노드가 레포 지도를 안 넘긴다", ND, "service_repos=deps.service_repos, declared_by=deps.declared_by", "declared_by=deps.declared_by", [WNODE_T]),
  ("CLI가 없는 레포를 안 거른다", MN, "        if args.repo not in repos:", "        if False:", [CLI_RES_T]),
  ("CLI uses가 없는 서비스를 안 거른다", MN, "            return 1\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", "            pass\n        found = [u for u in found if index.symbols[u.sid].repo == known.repo]", [CLI_RES_T]),
- ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\", \"palette-source-missing\", \"palette-seeder-elsewhere\")", "\"colors\": [] if variant in (\"palette-unread\", \"palette-source-missing\", \"palette-seeder-elsewhere\")", [PAL_T]),
+ ("palette-empty에 색이 있다", LC, "\"colors\": [] if variant in (\"palette-empty\", \"palette-unread\", \"palette-source-missing\", \"palette-seeder-elsewhere\",", "\"colors\": [] if variant in (\"palette-unread\", \"palette-source-missing\", \"palette-seeder-elsewhere\",", [PAL_T]),
  ("palette-empty가 빈 data가 아니다", LC, "\"source-filtered\", \"palette-empty\", \"palette-missing\"", "\"source-filtered\", \"palette-missing\"", [PAL_T]),
 ]
 
@@ -3019,9 +3019,9 @@ CASES += [
  ("리드가 결함 아님에 basis 없이 낸다", LD, "        if self.verdict_type == \"not_a_defect\" and (self.root_cause is not None or not self.basis):", "        if False:", [LEAD_NAD_T]),
  ("결함 아님 조건을 안 본다", ND, "            problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)", "            pass", [VERIFY_NAD_T]),
  ("걷기 없는 결함 아님을 지난다", ND, "        return [\"결함 아님은 걷기가 있을 때만 — 걷기가 없다(입구가 키나 쓴 쪽을 못 골랐다)\"]", "        return []", [VERIFY_NAD_T]),
- ("멈춤이 다 정상이 아니어도 결함 아님을 지난다", ND, "    if not walk.stopped.startswith(\"입력이 다 정상\"):", "    if False:", [VERIFY_NAD_T]),
+ ("멈춤이 다 정상이 아니어도 결함 아님을 지난다", ND, "    if not (walk.stopped.startswith(\"입력이 다 정상\") or emptied):", "    if False:", [VERIFY_NAD_T]),
  ("홉 표의 나쁨을 안 본다", ND, "    bad = [h.key for h in walk.hops if h.status.startswith(\"나쁨\")]", "    bad = [h.key for h in walk.hops if False]", [VERIFY_NAD_T]),
- ("코드 증거 없이도 지난다", ND, "    if not cited & set(code_ids):", "    if False:", [VERIFY_NAD_T]),
+ ("코드 증거 없이도 지난다", ND, "    if not cited & set(code_ids):\n        problems.append(f\"basis에 멈춘 클래스", "    if False:\n        problems.append(f\"basis에 멈춘 클래스", [VERIFY_NAD_T]),
  ("입력 증거 없이도 지난다", ND, "    if not cited & set(input_ids):", "    if False:", [VERIFY_NAD_T]),
  ("결함 아님의 확신 상한이 없다", ND, "    if verdict.verdict_type != \"not_a_defect\" or verdict.confidence != \"high\":", "    if True:", [VERIFY_NAD_T]),
  ("강등이 결함 아님을 그대로 둔다", ND, "    if verdict.verdict_type == \"not_a_defect\":\n        verdict_type = \"inconclusive\"\n", "", [VERIFY_NAD_T]),
@@ -3646,7 +3646,7 @@ CASES += [
  ('코드 묶음이 이 사이트 확인을 안 넘긴다', MN, '    return {"pipeline_here": getattr(code, "pipeline_here", None), "routed":', '    return {"pipeline_here": None, "routed":', [BOARD_ELSEWHERE_T, "tests/test_cli_case_walk.py::test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다"]),
  ("측정판이 sevt에서만 켜진 쓴 쪽을 안 심는다", LC, "\"event_type\": \"PaletteImporter\" if variant == \"palette-seeder-elsewhere\"\n", "\"event_type\": \"PaletteSeeder\" if variant == \"palette-seeder-elsewhere\"\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
  ("측정판 GBM 층이 PaletteImporter를 켠다", LC, "\"palette_import\": {\"enabled\": False, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", "\"palette_import\": {\"enabled\": True, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
- ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
+ ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}},\n", "    return {**topo, \"services\": dict(BOARD_SERVICES),\n", [LOCAL_TOPO_PIPE_T]),
 ]
 
 # ── 12a-R3-5v ③ — 이름 목록이 레포 전체 스냅샷을 받지 않는다(받아 둔 것은 쓰고, 없으면 층 파일만 경로마다 한 번) ──
@@ -3739,7 +3739,7 @@ CASES += [
  ("라우터 확인이 던지면 정상이라 한다", WK, "            return f\"라우터 유형표를 확인하지 못했다({type(exc).__name__})\"\n", "            return \"\"\n", [MIXED_T]),
  ("걷기 노드가 라우터 확인을 안 넘긴다", ND, "pipeline_here=deps.pipeline_here, routed=deps.routed,\n", "pipeline_here=deps.pipeline_here,\n", [BOARD_MIXED_T]),
  ('코드 묶음이 라우터 확인을 안 넘긴다', MN, '"routed": getattr(code, "routed_types", None),', '"routed": None,', [BOARD_MIXED_T]),
- ("측정판 토폴로지에 라우터 선언이 없다", ROOT / "tools/local_case.py", ", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}", "}}", [LOCAL_TOPO_PIPE_T]),
+ ("측정판 토폴로지에 라우터 선언이 없다", ROOT / "tools/local_case.py", ", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}},\n            # 값의 상태 자리", "},\n            # 값의 상태 자리", [LOCAL_TOPO_PIPE_T]),
 ]
 # ── 12a-R3-5x ① — 선언이 비어 꺼진 기능은 기동을 막지 않는 주의로 ──
 BOOTF = ROOT / "src/boot.py"
@@ -3859,7 +3859,7 @@ CASES += [
  ('머리줄에 센 횟수·초를 안 적는다', CS, '        counted = f"(유형 세기 {self.counts}번 {self.count_seconds:.1f}초)" if self.counts else ""', '        counted = ""', [TCWALK_T, TCBUDGET_T]),
  ('센 횟수·초를 걷기에 안 싣는다', WK, 'counts=count_runs, count_seconds=count_spent, ', '', [TCWALK_T, TCBUDGET_T]),
  ('그 유형 0건 멈춤의 바깥 토픽을 바깥 자리로 안 본다', CS, 'startswith(("구독 토픽이 비었다", "구독 토픽에 그 유형이 없다"))', 'startswith(("구독 토픽이 비었다",))', [OUTSIDE_T]),
- ('걷기 노드가 세기 켜짐을 안 넘긴다', ND, '\n                                  count_types=deps.count_types, clock=deps.clock)', '\n                                  clock=deps.clock)', [BOARD_PEER_T]),
+ ('걷기 노드가 세기 켜짐을 안 넘긴다', ND, '\n                                  count_types=deps.count_types, value_status=', '\n                                  value_status=', [BOARD_PEER_T]),
  ('코드 묶음이 세기 켜짐을 안 넘긴다', MN, '"count_types": _counts_types(code),', '"count_types": False,', [BOARD_PEER_T]),
  ('유형 칸 선언이 없어도 세기를 켠다', MN, '    return bool(callable(field) and field())', '    return True', [TCCLI_T]),
  ('코드가 유형 칸 선언을 안 알린다', DCP, '        return spec.router.type_field if spec is not None and spec.router is not None else None', '        return None', [BOARD_PEER_T]),
@@ -3948,9 +3948,26 @@ CASES += [
  ('frame이 유형 이름을 안 넘긴다', ND, '            hop=_hop(state, deps), pins=_pins(state, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),', '            hop=_hop(state, deps), pins=_pins(state, deps),', ['tests/application/test_nodes.py::test_frame은_코드가_아는_라우터_유형_이름을_받기_검사에_넘긴다']),
  ('integrate가 유형 이름을 안 넘긴다', ND, '                hop=_hop(base, deps), pins=_pins(base, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),', '                hop=_hop(base, deps), pins=_pins(base, deps),', ['tests/application/test_nodes.py::test_integrate도_코드가_아는_라우터_유형_이름을_받기_검사에_넘긴다']),
  ('받기가 유형 이름 목록을 검사에 안 넘긴다', ND, '        problem = _accept_problem(task, not_topics)', '        problem = _accept_problem(task)', ['tests/application/test_nodes.py::test_kafka_읽기의_topic이_라우터_유형_이름이면_받을_때_거부하고_kafka_count_type을_알려_준다']),
- ('코드 묶음이 유형 이름을 안 넘긴다', MN, '"router_types": getattr(code, "type_names", None)}', '"router_types": None}', ['tests/test_cli_case_walk.py::test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다']),
+ ('코드 묶음이 유형 이름을 안 넘긴다', MN, '"router_types": getattr(code, "type_names", None),\n', '"router_types": None,\n', ['tests/test_cli_case_walk.py::test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다']),
 ]
-assert len(CASES) >= 1402, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑤ — 성공으로 비워 썼다: 상태 자리 선언 · 거기서 멈춤 · 결함 아님 (a) · 0 확인 주의 ──
+CASES += [
+ ('성공으로 비워 쓴 키를 안 가린다', WK, '                if bad and raw is not None and w != writer and (mark := succeeded(_unwrap(raw))):', '                if False:', ['tests/application/test_walk.py::test_입력_키가_비었고_상태_자리가_성공_값이면_성공으로_비워_썼다로_멈추고_쓴_쪽으로_안_올라간다', 'tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
+ ('성공 값이 아니어도 성공으로 본다', WK, '        return f"{field}={got!r}" if found and not isinstance(got, (dict, list)) and str(got) in ok_values else ""', '        return f"{field}={got!r}" if found else ""', ['tests/application/test_walk.py::test_입력_키가_비었고_상태_자리가_성공_값이면_성공으로_비워_썼다로_멈추고_쓴_쪽으로_안_올라간다']),
+ ('성공으로 비워 썼어도 쓴 쪽으로 올라간다', WK, '                        next_branches = []                                          # 성공으로 비워 썼다 — 올라가지 않는다', '                        pass', ['tests/application/test_walk.py::test_입력_키가_비었고_상태_자리가_성공_값이면_성공으로_비워_썼다로_멈추고_쓴_쪽으로_안_올라간다', 'tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
+ ('성공으로 비워 쓴 멈춤이 없다', WK, '        elif ev in emptied:\n', '        elif False:\n', ['tests/application/test_walk.py::test_입력_키가_비었고_상태_자리가_성공_값이면_성공으로_비워_썼다로_멈추고_쓴_쪽으로_안_올라간다', 'tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
+ ('성공으로 비워 쓴 멈춤의 칸이 그 쓴 쪽이 아니다', WK, '                rungs.append(Rung(action="code.resources", params={"name": known[0], **known[1]}, evidence=ev))', '                pass', ['tests/application/test_walk.py::test_입력_키가_비었고_상태_자리가_성공_값이면_성공으로_비워_썼다로_멈추고_쓴_쪽으로_안_올라간다']),
+ ('성공으로 비워 쓴 멈춤이 결함 아님 (a)를 못 채운다', ND, '    if not (walk.stopped.startswith("입력이 다 정상") or emptied):', '    if not walk.stopped.startswith("입력이 다 정상"):', ['tests/application/test_verdict.py::test_성공으로_비워_썼다에서_멈춘_걷기도_결함_아님을_고를_수_있고_고르면_사람이_0을_확인하라는_주의가_붙는다']),
+ ('성공으로 비워 쓴 멈춤에서 비워 쓴 값 인용을 안 본다', ND, '        if walk.stop_at not in cited:', '        if False:', ['tests/application/test_verdict.py::test_성공으로_비워_썼다에서_멈춘_걷기도_결함_아님을_고를_수_있고_고르면_사람이_0을_확인하라는_주의가_붙는다']),
+ ('성공으로 비워 쓴 멈춤에서 읽는 클래스 코드를 안 본다', ND, '        writer = reader.writer if reader is not None else ""', '        writer = ""', ['tests/application/test_verdict.py::test_성공으로_비워_썼다에서_멈춘_걷기도_결함_아님을_고를_수_있고_고르면_사람이_0을_확인하라는_주의가_붙는다']),
+ ('결함 아님에 0을 사람이 확인하라는 주의가 없다', ND, '            capped = caveat_emptied(capped, walk=state.walk)\n', '', ['tests/application/test_verdict.py::test_성공으로_비워_썼다에서_멈춘_걷기도_결함_아님을_고를_수_있고_고르면_사람이_0을_확인하라는_주의가_붙는다']),
+ ('다른 판정에도 0 확인 주의를 붙인다', ND, '    if walk is None or verdict.verdict_type != "not_a_defect" or not walk.stopped.startswith(EMPTIED_STOP):', '    if walk is None or not walk.stopped.startswith(EMPTIED_STOP):', ['tests/application/test_verdict.py::test_성공으로_비워_썼다에서_멈춘_걷기도_결함_아님을_고를_수_있고_고르면_사람이_0을_확인하라는_주의가_붙는다']),
+ ('걷기 노드가 상태 자리를 안 넘긴다', ND, 'value_status=deps.value_status, clock=deps.clock)', 'clock=deps.clock)', ['tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
+ ('코드 묶음이 상태 자리를 안 넘긴다', MN, '            "value_status": code.value_status() if callable(getattr(code, "value_status", None)) else None}', '            "value_status": None}', ['tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다', 'tests/test_cli_case_walk.py::test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다']),
+ ('코드가 상태 자리 선언을 안 알린다', DCP, '        return (spec.field, frozenset(spec.success)) if spec is not None else None', '        return None', ['tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
+ ('측정판 팔레트 값에 성공 상태가 없다', LC, '**({"state": "done"} if variant == "palette-empty-done" else {})', '**{}', ['tests/test_board_walk.py::test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다']),
+]
+assert len(CASES) >= 1416, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

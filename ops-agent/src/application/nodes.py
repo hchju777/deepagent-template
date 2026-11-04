@@ -41,7 +41,7 @@ from src.application.briefing import WALK_RUNGS_PER_ROUND
 from src.application.facts import facts_for, present
 from src.application.intake_map import IntakeSpec, cited_keys, hop_line, next_hop, run_intake
 from src.application.state import CaseState, merge_by_id
-from src.application.walk import run_walk
+from src.application.walk import EMPTIED_STOP, run_walk
 from src.domain.actions import ACTIONS, DISCOVERED_ARGS, action_problem, describe, name_known
 from src.domain.case import Case, CauseLink, EvidenceRef, FilterScan, Hypothesis, PlanTask, TargetPick, Verdict, Walk
 from src.domain.investigation import TaskOutcome, TaskRunnerPort
@@ -107,6 +107,8 @@ class EngineDeps:
     # R3-5y ④·R3-5z ③ — 걷기가 섞인 토픽 행에서 그 클래스의 유형만 세는가(토폴로지에 유형 칸 선언이 있을 때). 상한은 실행기가 config에서 쥔다. 꺼져 있으면(대본·
     # 선언 없음) 세지 않는다 — 셀 칸 이름을 모른다.
     count_types: bool = False
+    # R3-5z ⑤ — 키 값의 상태 자리와 성공 값들(토폴로지 `value_status`). 걷기가 "성공으로 비워 썼다"를 알고 거기서 멈춘다. None이면 전처럼.
+    value_status: tuple[str, frozenset[str]] | None = None
     # R3-5z ④ — 코드가 아는 라우터 유형 멤버 이름(`DeployedCode.type_names`). `kafka.*`의 topic이 그 이름이면 받기 전에 반려한다(측정 #33 1: 리드가 유형 이름을
     # 토픽으로 넣었다). None이면(대본) 검사하지 않는다.
     router_types: Callable[[], frozenset[str]] | None = None
@@ -533,7 +535,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                                   service_repos=deps.service_repos, declared_by=deps.declared_by,
                                   topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,
                                   peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,
-                                  count_types=deps.count_types, clock=deps.clock)
+                                  count_types=deps.count_types, value_status=deps.value_status, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
 
@@ -1065,24 +1067,45 @@ def not_a_defect_problems(verdict: Verdict, *, walk: Walk | None, plan_tasks) ->
     if walk is None or not walk.hops:
         return ["결함 아님은 걷기가 있을 때만 — 걷기가 없다(입구가 키나 쓴 쪽을 못 골랐다)"]
     problems: list[str] = []
-    if not walk.stopped.startswith("입력이 다 정상"):
-        problems.append(f"결함 아님은 걷기가 '입력이 다 정상'에서 멈췄을 때만 — 멈춤: {walk.stopped}")
+    # 쓴 쪽이 성공으로 비워 쓴 키에서 멈춘 걷기도 (a)를 채운다(R3-5z ⑤ — 측정 #33 회신의 답 3: 고를 수 있게만, 고를지는 판정이 증거로).
+    emptied = walk.stopped.startswith(EMPTIED_STOP)
+    if not (walk.stopped.startswith("입력이 다 정상") or emptied):
+        problems.append(f"결함 아님은 걷기가 '입력이 다 정상'이나 '{EMPTIED_STOP}'에서 멈췄을 때만 — 멈춤: {walk.stopped}")
     bad = [h.key for h in walk.hops if h.status.startswith("나쁨")]
     if bad:
         problems.append(f"홉 표에 나쁨이 있다 — {', '.join(bad)}")
     stop = next((h for h in walk.hops if h.evidence_id == walk.stop_at), None)
     writer = stop.writer if stop is not None else ""
+    if emptied:
+        # 근거는 그 키를 **읽는** 클래스의 코드(그 클래스가 빈 값을 어떻게 다루나)와 비워 쓴 값 자체다 — 쓴 쪽으로는 안 걸었다.
+        reader = next((h for h in walk.hops if stop is not None and h.evidence_id == stop.parent), None)
+        writer = reader.writer if reader is not None else ""
     rung_at = {(r.params.get("path"), r.params.get("line")) for r in walk.rungs if r.action == "code.read"}
     code_ids = sorted({e for t in plan_tasks for e in t.result_evidence_ids
                        if (t.action == "code.resources" and t.params.get("name") == writer)
                        or (t.action == "code.read" and (t.params.get("path"), t.params.get("line")) in rung_at)})
     input_ids = sorted({h.evidence_id for h in walk.hops if h.parent == walk.stop_at and h.status.startswith("정상") and h.evidence_id})
     cited = set(verdict.basis)
+    if emptied:
+        if not cited & set(code_ids):
+            problems.append(f"basis에 그 키를 읽는 클래스 {writer or '?'}의 코드 증거가 없다 — {', '.join(code_ids) or '없음'} 중 하나")
+        if walk.stop_at not in cited:
+            problems.append(f"basis에 성공으로 비워 쓴 값의 증거가 없다 — {walk.stop_at or '없음'}")
+        return problems
     if not cited & set(code_ids):
         problems.append(f"basis에 멈춘 클래스 {writer or '?'}의 코드 증거가 없다 — {', '.join(code_ids) or '없음'} 중 하나")
     if not cited & set(input_ids):
         problems.append(f"basis에 그 클래스의 비지 않은 입력 증거가 없다 — {', '.join(input_ids) or '없음'} 중 하나")
     return problems
+
+
+def caveat_emptied(verdict: Verdict, *, walk: Walk | None) -> Verdict:
+    """걷기가 "성공으로 비워 썼다"에서 멈췄고 판정이 결함 아님이면 주의 줄(R3-5z ⑤ — 측정 #33 회신의 답 3): 상류 고장인데 쓴 쪽이 성공으로 비워 쓰는 경우가 있다 —
+    0이 업무상 맞는지는 사람이 확인한다. 바뀐 것이 없으면 같은 객체."""
+    if walk is None or verdict.verdict_type != "not_a_defect" or not walk.stopped.startswith(EMPTIED_STOP):
+        return verdict
+    note = f"걷기가 '{EMPTIED_STOP}'에서 멈췄다 — 0이 업무상 맞는지는 사람이 확인(상류 고장인데 쓴 쪽이 성공으로 비워 쓰는 경우가 있다)"
+    return verdict if note in verdict.caveats else verdict.model_copy(update={"caveats": verdict.caveats + [note]})
 
 
 def cap_not_a_defect(verdict: Verdict) -> Verdict:
@@ -1374,6 +1397,7 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             capped = cap_foreign_code(verdict, plan_tasks=state.plan_tasks, service_repos=deps.service_repos or {})
             capped = cap_not_a_defect(cap_unread_upstream(cap_unseen_stop(
                 cap_unlinked_key(capped, target=state.target or TargetPick(), evidence=state.evidence, walk=state.walk), walk=state.walk), walk=state.walk))
+            capped = caveat_emptied(capped, walk=state.walk)
             return {"verify_problems": [], "verify_facts": facts(capped), **({"verdict": capped} if (changed or capped is not verdict) else {})}
         if state.verify_attempts < VERIFY_REWRITES:
             # 되묻는다 — 문제 목록이 State에 실려 conclude 프롬프트의 재작성 블록이 된다.

@@ -1057,6 +1057,11 @@ class DeployedCode(DeployedCodePort):
                     "(유형 이름은 토픽이 아니다 — 그 유형만 세는 읽기는 kafka.count_type {topic, class})")
         return ""
 
+    def value_status(self) -> tuple[str, frozenset[str]] | None:
+        """키 값의 상태 자리와 성공 값들(토폴로지 `value_status`, R3-5z ⑤) — 없으면 None."""
+        spec = self._topology.value_status
+        return (spec.field, frozenset(spec.success)) if spec is not None else None
+
     def type_names(self) -> frozenset[str]:
         """걸으며 푼 유형표의 유형 열거 멤버 이름(R3-5z ④) — 리드가 그 이름을 토픽으로 넣으면 받기 전에 반려한다(측정 #33 1). 푼 표가 없으면(섞인 토픽을 안
         만났다) 빈 집합."""

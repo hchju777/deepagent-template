@@ -113,6 +113,14 @@ class PipelineSpec(StrictModel):
     router: RouterSpec | None = None
 
 
+class ValueStatusSpec(StrictModel):
+    """키 값 안의 **상태 자리**(R3-5z ⑤ — 측정 #33 3): 쓴 쪽이 값에 남기는 처리 결과 칸(점 경로)과 성공 값들. 값이 비었는데 이 칸이 성공이면 쓴 쪽이 끝까지 돌고
+    0을 남긴 것이다 — 걷기가 그 사실을 적고 더 올라가지 않는다. 사내 이름은 사내 토폴로지에만."""
+
+    field: str = Field(min_length=1)
+    success: list[str] = Field(min_length=1)
+
+
 class Topology(StrictModel):
     """GBM 하나의 서비스 지도. **사이트 단위가 아니다** — 코드는 GBM별로 같다."""
 
@@ -121,6 +129,8 @@ class Topology(StrictModel):
     flow: FlowSpec = FlowSpec()
     # 파이프라인 항목의 모양(R3-5v ②). 없으면 다른 사이트 값이 댄 쓴 쪽이 이 사이트에서 도는지 확인할 수 없어 걷기가 채우지 않는다.
     pipelines: PipelineSpec | None = None
+    # 키 값의 상태 자리(R3-5z ⑤). 없으면 걷기가 "성공으로 비워 썼다"를 모르고 전처럼 쓴 쪽으로 올라간다.
+    value_status: ValueStatusSpec | None = None
     # 대상 레포 안에서 **이름이 사는 곳**. 층 순서대로 적는다(앞이 밑바닥).
     #
     # `{gbm}`·`{fct}`를 쓸 수 있다 — 대상의 config가 법인별로도 갈리기 때문이다

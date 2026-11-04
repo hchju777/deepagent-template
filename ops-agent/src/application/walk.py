@@ -34,6 +34,7 @@ from src.application.facts import key_head
 from src.application.intake_map import _finish, _task, _unwrap, empties, empty_text, pointer_of, writer_of
 from src.application.runner_probe import _same_valued, profile, type_count_status
 from src.application.state import CaseState
+from src.domain.jsonpath import select
 from src.domain.case import JOIN_NOTE_MARKS, EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
 from src.domain.investigation import TaskRunnerPort
 
@@ -42,6 +43,8 @@ MAX_READS = 15
 MAX_SECONDS = 30.0
 # 걷기가 끝난 뒤 멈출 자리의 섞인 토픽 행을 세는 횟수의 상한(R3-5z ③) — 세기 한 번이 T + 표본 상한(기본 28초)까지라 둘.
 MAX_COUNTS = 2
+# 쓴 쪽이 성공으로 비워 쓴 키에서 멈춘 걷기의 멈춤 머리(R3-5z ⑤) — 결함 아님 조건 (a)와 그 주의 줄이 이 머리로 안다.
+EMPTIED_STOP = "성공으로 비워 썼다"
 # 못 채우는 템플릿(대상 키에 없는 자리) — scan 뒤 읽는 실재 키 수.
 SCAN_READS = 5
 # 단일값 필드의 나쁨은 **코드 줄**이 정한다(R3-3 ③ → R3-5 ③, 사람 결정 10-14·10-15 — 자리표시자 목록 같은 손 규칙은 두지 않는다): 입력을 읽는 쪽(걷고
@@ -301,6 +304,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    pipeline_here: Callable[[str], Awaitable[str]] | None = None,
                    routed: Callable[[str], Awaitable[str]] | None = None,
                    count_types: bool = False,
+                   value_status: tuple[str, frozenset[str]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
     """걷기 노드의 본문 — State 패치(`plan_tasks`·`evidence`·`walk`). 입구가 키와 쓴 쪽을 못 골랐으면 빈 패치. `lookup`은 어댑터의 단일값 조회
     (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만. `peer(키, 템플릿)`은 같은 GBM 다른
@@ -308,7 +312,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     클래스가 이 사이트에서 도는지 — 돌면 빈 문자열, 아니면 까닭(R3-5v ②); 없으면(대본) 확인 없이 채운다. `routed(클래스)`는 그 클래스가 라우터 유형표를 거쳐
     받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼. `count_types`면 그 모름 행에서 그 클래스의 유형만 센다(R3-5y ④ —
     `kafka.count_type {topic, class}`, 셀 값·상한은 실행기가 config에서) — 걷기가 끝난 뒤 멈출 자리의 행만, 읽기 수·시간 상한 밖에서(R3-5z ③). 꺼져 있으면(대본·유형 칸
-    선언 없음) 세지 않는다."""
+    선언 없음) 세지 않는다. `value_status`는 키 값의 상태 자리와 성공 값들(R3-5z ⑤) — 비었는데 성공이면 그 쓴 쪽으로 올라가지 않고 거기서
+    멈춘다."""
     target = state.target
     if target is None or not target.key or not target.writer:
         return {}
@@ -367,6 +372,15 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     counted_at: dict[str, str] = {}                                # 센 토픽 홉의 증거 → 멈춤 토막 — 셌으니 그 토픽의 tail 칸은 없다
     uncounted: set[str] = set()                                    # 멈출 자리의 섞인 행인데 세기 수 상한으로 안 센 홉의 증거 — tail 칸 대신 세기 칸
     mixed_rows: list[dict] = []                                    # 섞인 토픽 행 — 걷기가 끝난 뒤 멈출 자리의 것만 센다(R3-5z ③)
+    emptied: dict[str, tuple[str, dict] | None] = {}               # 쓴 쪽이 성공으로 비워 쓴 키 홉의 증거 → (쓴 쪽, 그 클래스의 자원 인자)(R3-5z ⑤)
+
+    def succeeded(value) -> str:
+        """값의 상태 자리가 성공 값이면 `<자리>=<값>`, 아니면 빈 문자열."""
+        if value_status is None or not isinstance(value, dict):
+            return ""
+        field, ok_values = value_status
+        found, got = select(value, field)
+        return f"{field}={got!r}" if found and not isinstance(got, (dict, list)) and str(got) in ok_values else ""
 
     async def count_mixed(cls: str, topic: str, number: int):
         """섞인 토픽에서 그 클래스의 유형만 센다(R3-5y ④ — 측정 #32 회신의 답 2: 걷기 동결의 예외, 사람 승인). → (문장, 나쁜가, 멈춤 토막, 증거). 걷기가 끝난 뒤에
@@ -727,6 +741,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 elif w != writer:
                     real += 1
                 status, bad, carry = await judged(rows_of(raw) if raw is not None else [], status, bad, ev)
+                # 쓴 쪽이 성공으로 비워 썼다(R3-5z ⑤ — 측정 #33 3: 걷기가 그 쓴 쪽을 쫓다 읽기 상한으로 끝났다). 값이 비었고(나쁨) 상태 자리가 성공 값이면 그 사실을 행에
+                # 적고 그 쓴 쪽으로 올라가지 않는다 — "0이 맞나"는 업무 뜻의 문제라 코드가 더 걸어도 못 가르고 예산만 먹는다.
+                if bad and raw is not None and w != writer and (mark := succeeded(_unwrap(raw))):
+                    status = f"{status} — 쓴 쪽이 성공으로 비워 썼다({mark})"
+                    emptied[ev] = None
                 # 없는 키의 쓴 쪽은 값에 없다 — 인덱스의 쓰기 자원과 그 키를 선언한 서비스로 채운다(R3-5p ①-c). 그 클래스로 더 걷지는 않고(다른 입력은 리드의
                 # `code.resources` 칸), 그 서비스가 구독하는 토픽의 보존 범위만 아래에서 홉으로 적는다.
                 keyed = (await keyed_writer(name, label)) if (got.status == "ok" and raw is None and not w and kind == "rediskey") else None
@@ -737,6 +756,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                     next_branches = []
                 elif bad and w:
                     next_branches, shown, cands = branches(w, name)
+                    if ev in emptied:
+                        emptied[ev] = (w, dict(next_branches[0].params) if next_branches else {})
+                        next_branches = []                                          # 성공으로 비워 썼다 — 올라가지 않는다
                 elif w:
                     next_branches, (_, shown, cands) = [], split(w, name, walking=False)
                 else:
@@ -981,6 +1003,15 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 rungs.append(Rung(action="kafka.tail", params={"topic": stop_hop.key, "limit": 5}, evidence=ev))
             if scope_ and body_ is not None:
                 rungs.append(Rung(action="code.read", params={"service": scope_, "path": body_[0], "line": body_[1]}, evidence=rev_))
+        elif ev in emptied:
+            # 쓴 쪽이 성공으로 비워 썼다(R3-5z ⑤) — 거기서 멈춘다. 칸은 그 쓴 쪽의 자원(쓴 쪽을 모르면 그 키를 누가 쓰나).
+            known = emptied[ev]
+            where = f" [{stop_hop.service}]" if stop_hop.service else ""
+            stopped = f"{EMPTIED_STOP} — {stop_hop.key}(쓴 쪽 {stop_hop.writer or '모름'}{where})"
+            if known is not None:
+                rungs.append(Rung(action="code.resources", params={"name": known[0], **known[1]}, evidence=ev))
+            else:
+                rungs.append(Rung(action="code.uses", params={"name": declared_names.get(ev, stop_hop.key)}, evidence=ev))
         elif ev in keyed_at:
             # 키가 없는데 쓰는 클래스는 안다(R3-5p ①-c) — 그 클래스 코드가 구독하는 토픽에 남은 것이 멈춤 문구에 같이 간다(입력을 받고도 키를 안 만든 것인지를
             # 리드가 사실로 가른다). 토픽이 없으면 그 사실(클래스 코드에 없음·서비스 선언 수). 첫 칸은 그 클래스 본문, 그다음 토픽마다 지금 오는 것.

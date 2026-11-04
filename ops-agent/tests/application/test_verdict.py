@@ -854,7 +854,7 @@ async def test_결함_아님은_걷기가_다_정상에서_멈췄고_나쁨이_�
     assert any("코드 증거가 없다" in p and "Proc" in p for p in input_only["verify_problems"])
     # (a) 멈춤이 "입력이 다 정상"이 아니면, (b) 홉 표에 나쁨이 있으면, 걷기가 없으면
     stopped = await nodes["verify"](_nad_state(case, stopped="입력 메시지가 나쁘다 — Proc의 t[0]@5(발행 선언 없음(우리 밖))", verdict=_nad("t-2.e1", "t-3.e1")))
-    assert any("'입력이 다 정상'에서 멈췄을 때만" in p for p in stopped["verify_problems"])
+    assert any("'입력이 다 정상'이나 '성공으로 비워 썼다'에서 멈췄을 때만" in p for p in stopped["verify_problems"])
     filtered = Hop(key="dom:L1", depth=2, status="나쁨 — 5행 전부 ws='-' · 이 필드 값이 든 비교식 p.py:L9 'x'", bad=True, evidence_id="t-6.e1", parent="t-3.e1")
     bad = await nodes["verify"](_nad_state(case, extra_hops=(filtered,), verdict=_nad("t-2.e1", "t-3.e1")))
     assert any("홉 표에 나쁨이 있다" in p and "dom:L1" in p for p in bad["verify_problems"])
@@ -1030,3 +1030,39 @@ async def test_conclude_노드는_설명이_붙은_인용을_id만으로_고친_
                    evidence=[_ev("t-1.e1"), _ev("t-2.e1")])
     got = (await nodes["conclude"](state))["verdict"]
     assert got.basis == ["t-1.e1", "t-2.e1"] and sum("인용 정리" in c for c in got.caveats) == 2
+
+
+
+# ── R3-5z ⑤ — 성공으로 비워 썼다 멈춤도 결함 아님의 조건 (a)를 채운다 ──
+
+def _emptied_walk():
+    """배지 처리기 Proc가 읽는 계획 키 plan:L1이 쓴 쪽 Planner의 성공으로 비워 쓴 값이라 거기서 멈춘 걷기."""
+    from src.domain.case import Hop, Rung, Walk
+    hops = [Hop(key="sum:L1", writer="Proc", service="processor", candidates=["processor"], status="빈 배열 (data)", bad=True, evidence_id="t-1.e1"),
+            Hop(key="plan:L1", depth=1, writer="Planner", service="planner", candidates=["planner"],
+                status="0행 — 쓴 쪽이 성공으로 비워 썼다(metadata.state='done')", bad=True, evidence_id="t-3.e1", parent="t-1.e1")]
+    return Walk(hops=hops, reads=3, stopped="성공으로 비워 썼다 — plan:L1(쓴 쪽 Planner [planner])", stop_at="t-3.e1",
+                rungs=[Rung(action="code.resources", params={"name": "Planner"}, evidence="t-3.e1")])
+
+
+async def test_성공으로_비워_썼다에서_멈춘_걷기도_결함_아님을_고를_수_있고_고르면_사람이_0을_확인하라는_주의가_붙는다(case):
+    """측정 #33 회신의 답 3: 결함 아님 조건 (a)에 이 멈춤을 넣는다 — 고를 수 있게만 하고 고를지는 판정이 증거로 정한다. 근거(c)는 그 키를 읽는 클래스의 코드 증거와
+    비워 쓴 값의 증거. 이 멈춤으로 not_a_defect를 내면 주의 줄에 "0이 업무상 맞는지는 사람이 확인"(상류 고장인데 쓴 쪽이 성공으로 비워 쓰는 경우)."""
+    from src.application.nodes import not_a_defect_problems
+
+    walk = _emptied_walk()
+    tasks = [task("t-2", action="code.resources", params={"name": "Proc"}, status="ok", result_evidence_ids=["t-2.e1"]),
+             task("t-3", action="redis.get", params={"key": "plan:L1"}, status="ok", result_evidence_ids=["t-3.e1"])]
+    fine = verdict(verdict_type="not_a_defect", confidence="medium", root_cause=None, basis=["t-2.e1", "t-3.e1"])
+    assert not_a_defect_problems(fine, walk=walk, plan_tasks=tasks) == []
+    short = fine.model_copy(update={"basis": ["t-2.e1"]})
+    assert not_a_defect_problems(short, walk=walk, plan_tasks=tasks) == ["basis에 성공으로 비워 쓴 값의 증거가 없다 — t-3.e1"]
+    nocode = fine.model_copy(update={"basis": ["t-3.e1"]})
+    assert not_a_defect_problems(nocode, walk=walk, plan_tasks=tasks) == ["basis에 그 키를 읽는 클래스 Proc의 코드 증거가 없다 — t-2.e1 중 하나"]
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor", "planner"})))
+    patch = await nodes["verify"](_state(case, verdict=fine, walk=walk, plan_tasks=tasks, evidence=[_ev("t-2.e1"), _ev("t-3.e1")]))
+    assert patch["verify_problems"] == [] and patch["verdict"].caveats[-1] == (
+        "걷기가 '성공으로 비워 썼다'에서 멈췄다 — 0이 업무상 맞는지는 사람이 확인(상류 고장인데 쓴 쪽이 성공으로 비워 쓰는 경우가 있다)")
+    other = verdict(root_cause=cause("processor", "t-2.e1"))
+    patch = await nodes["verify"](_state(case, verdict=other, walk=walk, plan_tasks=tasks, evidence=[_ev("t-2.e1"), _ev("t-3.e1")]))
+    assert not any("0이 업무상" in c for c in (patch.get("verdict") or other).caveats)                 # 결함 아님일 때만

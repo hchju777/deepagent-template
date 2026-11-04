@@ -67,7 +67,9 @@ def _board_topology(topo: dict) -> dict:
     """복사한 토폴로지의 `services`를 측정판 것으로 — 나머지(흐름 출처·config 경로·설명)는 그대로. 파이프라인 항목의 모양(R3-5v ②)과 라우터의 유형표
     (R3-5w ②)는 측정판 config·코드의 것을 더한다 — 리포의 토폴로지는 사내에서 바뀌는 파일이라 거기 적지 않는다."""
     return {**topo, "services": dict(BOARD_SERVICES),
-            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline", "type_field": "feed"}}}
+            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline", "type_field": "feed"}},
+            # 값의 상태 자리(R3-5z ⑤) — 측정판의 이름(`metadata.state`·`done`). 사내 이름은 사내 토폴로지에만.
+            "value_status": {"field": "metadata.state", "success": ["done"]}}
 
 
 def _write(root: Path, rel: str, content) -> None:
@@ -655,6 +657,8 @@ VARIANTS = {
     # 측정 #18 P0-a(R3-5h ②) — 사내 작업자 배지의 실제 모양: outer 병합이라 행은 남고, 결과에 바로 이어진 호출이 짝 없는 칸을 '-'로 채우며 같은 파일의
     # 비교식이 그 값을 거른다. 입력 둘은 각각 정상이다.
     "join-outer": "join-empty와 같되 쓴 쪽이 SourceOuterJoiner — outer 병합 뒤 짝 없는 칸을 '-'로 채우고 그 값을 거르는 줄이 같은 파일에 있어 원천 묶음이 빈 배열",
+    # 측정 #33 3(R3-5z ⑤) — 쓴 쪽이 성공으로 비워 쓴 키. 걷기가 거기서 멈추고 그 쓴 쪽으로 올라가지 않는다.
+    "palette-empty-done": "palette-empty와 같되 팔레트 값의 상태 자리(metadata.state)가 done이다 — 쓴 쪽 PaletteLoader가 끝까지 돌고 빈 색 표를 남겼다",
     # 입력 읽기 실패(R3-5b ② — 키 없음과 다른 사실). palette-empty에 원천 색 키 읽기 실패를 더했다.
     "palette-unread": "palette-empty와 같고 PaletteLoader가 읽는 원천 색 키의 읽기가 실패한다(WRONGTYPE)",
     # 측정 #13 추가분 2(R3-5d ④) — 원천 묶음 키 값에 그 키를 만든 메시지의 포인터(`metadata.source`)가 있다. 걷기가 그 메시지 한 건을 입력으로 읽는다.
@@ -670,6 +674,7 @@ _MESSAGE_VARIANTS = {"message-empty", "message-gone", "message-blank"}
 _POINTER_OFFSET = {"L1": 2, "L2": 3, "L3": 4}
 _POINTER_TOPIC = {"message-gone": "gumi.alarm.audit"}
 _EMPTY_DATA = {"data-empty", "source-missing", "source-missing-quiet", "source-quiet", "source-blank", "source-filtered", "palette-empty", "palette-missing",
+               "palette-empty-done",
                "palette-source-missing", "palette-seeder-elsewhere", "chain-empty",
                "chain-filtered", "chain-objects", "palette-unread", "join-empty", "join-outer", *_MESSAGE_VARIANTS}
 # 원천 묶음의 쓴 쪽 — c-1형은 메시지 입력 클래스, chain-objects는 자기 출력만 읽는 클래스, 나머지는 입력 셋을 합치는 클래스.
@@ -794,8 +799,9 @@ def _seeds(now: datetime, variant: str = "sink-stopped") -> dict:
                for l in LINES},
             # batch가 읽는 공용 팔레트 키 — 값이 쓴 쪽(`PaletteLoader`)을 댄다. `palette-empty`만 colors가 빈 배열(R3-4 ①), `palette-missing`은 키가 없다(R3-5r ②).
             **({} if variant == "palette-missing" else
-               {"alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader"},
-                                             "colors": [] if variant in ("palette-empty", "palette-unread", "palette-source-missing", "palette-seeder-elsewhere")
+               {"alarm:palette": json.dumps({"metadata": {"event_type": "PaletteLoader", **({"state": "done"} if variant == "palette-empty-done" else {})},
+                                             "colors": [] if variant in ("palette-empty", "palette-unread", "palette-source-missing", "palette-seeder-elsewhere",
+                                                                         "palette-empty-done")
                                              else [{"name": "alarm", "hex": "#d33"}, {"name": "caution", "hex": "#fc0"}]})}),
             # palette-unread는 이 키의 읽기가 실패한다 — stub이 오류 신호 시드(`{"__error__": …}`)를 실패로 돌려준다. palette-source-missing은 키가 없다(R3-5t ②).
             **({} if variant in _PALETTE_SOURCE_GONE else

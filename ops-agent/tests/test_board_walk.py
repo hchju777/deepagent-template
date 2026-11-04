@@ -30,9 +30,12 @@ TOPOLOGY = {"services": BOARD_SERVICES,
                 {"path": "mongodb_collection", "kind": "collection"},
                 {"path": "redis_key", "kind": "rediskey", "prefix": "prefix", "join": ":"}]},
             # 측정판 config의 파이프라인 항목(R3-5v ②) — 클래스 키·켜짐 키의 이름 — 과 측정판 코드의 라우터 유형표(R3-5w ②). 사내 이름은 사내 토폴로지에만.
-            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline", "type_field": "feed"}}}
+            "pipelines": {"class_key": "class", "enabled_key": "enabled", "router": {"type_enum": "FeedKind", "pipeline_enum": "Pipeline", "type_field": "feed"}},
+            # 값의 상태 자리(R3-5z ⑤) — 측정판의 이름이다. 사내 이름은 사내 토폴로지에만.
+            "value_status": {"field": "metadata.state", "success": ["done"]}}
 VARIANTS = ("chain-empty", "chain-filtered", "healthy", "chain-objects", "palette-unread", "message-empty", "message-gone", "message-blank", "join-empty",
-            "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet", "palette-source-missing", "palette-seeder-elsewhere")
+            "join-outer", "source-missing", "source-missing-quiet", "palette-missing", "source-quiet", "palette-source-missing", "palette-seeder-elsewhere",
+            "palette-empty-done")
 
 
 def _repo(root, url, files):
@@ -417,3 +420,13 @@ def test_다른_사이트_값이_대는_쓴_쪽이_이_사이트에서_꺼진_�
     assert stopped == "키가 없다 — palette:source" and not any(r.startswith("mx.alarm.main | ") for r in rows)
     assert notes == [PALETTE_NOTE, "palette:source: 인덱스에 쓰는 함수가 없다(code.uses 쓰기 줄 0) — sevt의 같은 키 sevt:palette:source 값이 대는 PaletteImporter — "
                                    "이 사이트 config에서 PaletteImporter 파이프라인이 꺼져 있다(pipelines.palette_import.enabled=false) — 쓴 쪽을 채우지 않는다"]
+
+
+def test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_걷기가_거기서_멈추고_쓴_쪽으로_안_올라간다(board, monkeypatch):
+    """R3-5z ⑤ — 측정 #33 3의 모양: 측정판 `palette-empty-done`은 palette-empty와 같되 팔레트 값의 상태 자리(`metadata.state`)가 성공 값(`done`)이다. 걷기가 그 행에
+    `쓴 쪽이 성공으로 비워 썼다`를 붙이고 거기서 멈춘다 — palette-empty처럼 PaletteLoader의 원천 색 키까지 올라가지 않는다."""
+    rows, notes, stopped, rungs = _walk(board, monkeypatch, "palette-empty-done")
+    assert "alarm:palette | PaletteLoader [dt-core(서비스 3개 공유)] | 빈 배열 (colors) — 쓴 쪽이 성공으로 비워 썼다(metadata.state='done')" in rows
+    assert not any(r.startswith("palette:source | ") for r in rows)
+    assert stopped == "성공으로 비워 썼다 — alarm:palette(쓴 쪽 PaletteLoader [dt-core(서비스 3개 공유)])"
+    assert rungs[0].startswith("code.resources name='PaletteLoader'")

@@ -265,8 +265,11 @@ def test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_�
     from src import __main__ as cli
 
     code = SimpleNamespace(pipeline_here=lambda c: "", routed_types=lambda c: "", type_field=lambda: "meta.kind", type_names=lambda: frozenset({"COLOR"}))
-    assert cli._code_deps(code) == {"pipeline_here": code.pipeline_here, "routed": code.routed_types, "count_types": True, "router_types": code.type_names}
-    assert cli._code_deps(None) == {"pipeline_here": None, "routed": None, "count_types": False, "router_types": None}
+    assert cli._code_deps(code) == {"pipeline_here": code.pipeline_here, "routed": code.routed_types, "count_types": True, "router_types": code.type_names,
+                                    "value_status": None}
+    assert cli._code_deps(None) == {"pipeline_here": None, "routed": None, "count_types": False, "router_types": None, "value_status": None}
+    declared = SimpleNamespace(value_status=lambda: ("metadata.state", frozenset({"done"})))
+    assert cli._code_deps(declared)["value_status"] == ("metadata.state", frozenset({"done"}))                 # 성공으로 비워 씀의 상태 자리(R3-5z ⑤)
     source = inspect.getsource(cli)
     assert source.count("**_code_deps(code)") == 2 and "type_names=getattr" not in source
 

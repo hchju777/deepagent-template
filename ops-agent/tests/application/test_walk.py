@@ -1481,3 +1481,28 @@ def test_유형_세기_문장은_끝_창과_표본이_전부_0건이면_비었�
     assert status.startswith(f"모름 — COLOR 0건: {tail} · 표본 3창 0건(") and status.endswith("표본 시간 상한 20초에서 멈췄다 — 다 못 셌다") and not bad
     stub = data(samples=[], sample_note="스텁은 시각으로 seek하지 않는다")
     assert type_count_status(stub, "")[0].endswith("만 셌다 — 그 앞은 안 셌다 · 표본 안 셈(스텁은 시각으로 seek하지 않는다)")
+
+
+
+# ── R3-5z ⑤ — 쓴 쪽이 성공으로 비워 썼다: 표시하고 거기서 멈춘다 ──
+
+async def test_입력_키가_비었고_상태_자리가_성공_값이면_성공으로_비워_썼다로_멈추고_쓴_쪽으로_안_올라간다():
+    """측정 #33 3: 걷기가 `<계획 키>`(행 0, 상태 성공)를 읽고 그 쓴 쪽을 쫓다 `읽기 15 상한`으로 끝나 inconclusive가 됐다 — 배지 처리기는 계획을 거쳐 걸러 계획이 0행이면
+    배지가 비는 것이 맞다. 토폴로지가 선언한 상태 자리(`value_status`)가 성공 값이면 그 행에 `쓴 쪽이 성공으로 비워 썼다(<자리>=<값>)`를 붙이고 거기서 멈춘다(그 쓴 쪽으로
+    더 걷지 않는다 — "0이 맞나"는 업무 뜻의 문제라 코드가 더 걸어도 못 가르고 예산만 먹는다). 멈춤은 `성공으로 비워 썼다 — <키>(쓴 쪽 <클래스>)`, 칸은 그 클래스의
+    자원. 상태 자리가 성공 값이 아니거나 선언이 없으면 전처럼 올라간다."""
+    table = {("code.resources", "W0"): _res("W0", [("plan:{line}", "rediskey")]),
+             ("redis.get", "plan:L1"): _value(rows=[], metadata={"event_type": "W1", "state": "done"}),
+             ("code.resources", "W1"): _res("W1", [("raw:{line}", "rediskey")]), ("redis.get", "raw:L1"): _value(rows=[{"a": 1}])}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("b",)}, clock=lambda: T0)
+    runner = _Reads(table)
+    walk = (await run_walk(_state(), runner=runner, value_status=("metadata.state", frozenset({"done"})), **kw))["walk"]
+    plan = walk.hops[1]
+    assert plan.key == "plan:L1" and plan.bad and plan.status.endswith(" — 쓴 쪽이 성공으로 비워 썼다(metadata.state='done')")
+    assert ("code.resources", "W1") not in runner.ran and len(walk.hops) == 2                       # 올라가지 않는다
+    assert walk.stopped == "성공으로 비워 썼다 — plan:L1(쓴 쪽 W1 [b])" and walk.stop_at == plan.evidence_id
+    assert [(r.action, dict(r.params)) for r in walk.rungs] == [("code.resources", {"name": "W1"})]
+    walk = (await run_walk(_state(), runner=_Reads(table), value_status=("metadata.state", frozenset({"ok"})), **kw))["walk"]
+    assert "성공으로 비워" not in walk.stopped and any(h.key == "raw:L1" for h in walk.hops)          # 성공 값이 아니다 — 전처럼 올라간다
+    walk = (await run_walk(_state(), runner=_Reads(table), **kw))["walk"]
+    assert "성공으로 비워" not in walk.stopped                                                       # 선언이 없다 — 전처럼
