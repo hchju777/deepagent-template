@@ -625,6 +625,12 @@ def next_task_number(state: CaseState) -> int:
     return max(used, default=0) + 1
 
 
+def next_id_line(state: CaseState) -> str:
+    """frame·integrate 프롬프트의 케이스 칸 끝 한 줄(R3-5z ⑪ — 측정 #33 4: 리드 계약 위반 103 중 "이미 있는 태스크 id를 다시 냈다" 23). 예시의 id도 이 번호부터다."""
+    n = next_task_number(state)
+    return f"다음 태스크 id: t-{n}부터" + (f" — 이미 있는 id(t-1~t-{n - 1})는 다시 내면 받지 않는다" if n > 1 else "")
+
+
 def example_block(site_config, *, phase: str, start: int = 1,
                   services: tuple[str, ...] = (), used: tuple[str, ...] = (),
                   first_read: tuple[str, dict] | None = None,
@@ -832,7 +838,7 @@ def frame_fields(state: CaseState, *, site_config,
                  roles: dict[str, str] | None = None,
                  flow_graph: dict | None = None, code_index: bool = False) -> dict[str, str]:
     target = target_key(state, site_config=site_config, flow_graph=flow_graph)
-    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index),
+    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index) + "\n" + next_id_line(state),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
             "example": example_block(site_config, phase="frame",
@@ -864,7 +870,7 @@ def integrate_fields(state: CaseState, *, site_config, max_rounds: int,
                      flow_graph: dict | None = None, code_index: bool = False,
                      fold_tasks: bool = False) -> dict[str, str]:
     target = target_key(state, site_config=site_config, flow_graph=flow_graph)
-    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index),
+    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index) + "\n" + next_id_line(state),
             "actions": action_catalog(site_config, services=services, roles=roles,
                                       hide=_hidden(flow_graph, code_index)),
             "flow": flow_block(state, flow_graph,

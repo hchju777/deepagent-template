@@ -1113,3 +1113,17 @@ async def test_frame과_integrate는_실패한_읽기의_사유를_중복_반려
     for node in ("frame", "integrate"):
         patch = await nodes[node](CaseState(case=case, round=2, plan_tasks=[task("t-1", status="ok"), failed]))
         assert any(e.endswith(" — 앞 읽기 t-2가 실패했다: fatal: path 없음") for e in patch["llm_errors"]), (node, patch["llm_errors"])
+
+
+
+# ── R3-5z ⑪ — 이미 있는 id를 다시 내면 다음 빈 id ──
+
+def test_이미_있는_태스크_id를_다시_내면_반려에_다음_빈_id를_적는다():
+    """측정 #33 4: "이미 있는 태스크 id를 다시 냈다" 23건 — 반려 문구에 다음 빈 id를 붙여 되묻기에서 바로 고쳐 내게 한다. 같은 답에서 받은 id도 센다."""
+    from src.application.nodes import _accept_tasks
+
+    patch = {"plan_tasks": [task("t-3", params={"key": "a"}), task("t-1", params={"key": "b"}), task("t-2", params={"key": "c"})]}
+    kept, refused, _ = _accept_tasks(patch, room=5, taken=frozenset({"t-1", "t-2"}))
+    assert [t.id for t in kept] == ["t-3"]
+    assert refused == ["t-1: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다 — 다음 빈 id는 t-4",
+                       "t-2: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다 — 다음 빈 id는 t-4"]

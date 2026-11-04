@@ -4065,7 +4065,16 @@ CASES += [
  ('트레이스 턴 줄에 얹은 키가 없다', MN, '            schema += f" · 추가 본문 {\', \'.join(stats[\'extra_body\'])}" if stats.get("extra_body") else ""\n', '', ['tests/test_cli.py::test_트레이스_턴_줄_끝에_얹은_추가_본문의_키를_적는다']),
  ('대본 어댑터가 brief를 안 적는다', LFK, '        self.briefs.append(brief)\n', '', ['tests/application/test_lead.py::test_길이_상한_뒤의_짧게_재시도에만_brief를_넘기고_첫_시도와_다른_재시도는_그대로다']),
 ]
-assert len(CASES) >= 1499, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑪ — 다음 태스크 id: frame·integrate 케이스 칸 끝 줄 · 이미 있는 id 반려에 다음 빈 id ──
+CASES += [
+ ('frame 케이스 칸에 다음 태스크 id가 없다', B, '    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index) + "\\n" + next_id_line(state),\n            "actions": action_catalog(site_config, services=services, roles=roles,\n                                      hide=_hidden(flow_graph, code_index)),\n            "example": example_block(site_config, phase="frame",', '    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index),\n            "actions": action_catalog(site_config, services=services, roles=roles,\n                                      hide=_hidden(flow_graph, code_index)),\n            "example": example_block(site_config, phase="frame",', ['tests/application/test_briefing.py::test_frame과_integrate의_케이스_칸_끝에_다음_빈_태스크_id를_적고_판정에는_안_적는다']),
+ ('integrate 케이스 칸에 다음 태스크 id가 없다', B, '    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index) + "\\n" + next_id_line(state),\n            "actions": action_catalog(site_config, services=services, roles=roles,\n                                      hide=_hidden(flow_graph, code_index)),\n            "flow": flow_block(', '    return {"case": case_block(state, site_config=site_config, target=target, code_index=code_index),\n            "actions": action_catalog(site_config, services=services, roles=roles,\n                                      hide=_hidden(flow_graph, code_index)),\n            "flow": flow_block(', ['tests/application/test_briefing.py::test_frame과_integrate의_케이스_칸_끝에_다음_빈_태스크_id를_적고_판정에는_안_적는다']),
+ ('다음 태스크 id 줄이 이미 있는 범위를 안 적는다', B, '    return f"다음 태스크 id: t-{n}부터" + (f" — 이미 있는 id(t-1~t-{n - 1})는 다시 내면 받지 않는다" if n > 1 else "")', '    return f"다음 태스크 id: t-{n}부터"', ['tests/application/test_briefing.py::test_frame과_integrate의_케이스_칸_끝에_다음_빈_태스크_id를_적고_판정에는_안_적는다']),
+ ('아직 없을 때도 이미 있는 범위를 적는다', B, '는 다시 내면 받지 않는다" if n > 1 else "")', '는 다시 내면 받지 않는다" if n > 0 else "")', ['tests/application/test_briefing.py::test_frame과_integrate의_케이스_칸_끝에_다음_빈_태스크_id를_적고_판정에는_안_적는다']),
+ ('이미 있는 id 반려에 다음 빈 id가 없다', ND, '            reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다 — 다음 빈 id는 t-{free}")', '            reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")', ['tests/application/test_nodes.py::test_이미_있는_태스크_id를_다시_내면_반려에_다음_빈_id를_적는다']),
+ ('다음 빈 id가 받은 id 다음이 아니다', ND, '            free = max((int(m.group(1)) for u in used if (m := re.match(r"t-(\\d+)$", u))), default=0) + 1', '            free = max((int(m.group(1)) for u in used if (m := re.match(r"t-(\\d+)$", u))), default=0)', ['tests/application/test_nodes.py::test_이미_있는_태스크_id를_다시_내면_반려에_다음_빈_id를_적는다']),
+]
+assert len(CASES) >= 1505, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

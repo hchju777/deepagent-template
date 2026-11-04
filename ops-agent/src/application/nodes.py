@@ -461,7 +461,9 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
             asked.add(_query(task))
             continue
         if task.id in used:
-            reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")
+            # 다음 빈 id를 같이(R3-5z ⑪) — 같은 답에서 받은 id까지 센다. 되묻기에서 바로 고쳐 낸다.
+            free = max((int(m.group(1)) for u in used if (m := re.match(r"t-(\d+)$", u))), default=0) + 1
+            reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다 — 다음 빈 id는 t-{free}")
             continue
         query = _query(task)
         # 같은 질의가 **아직 안 돈 채** 대기 중이면, 새 id로 다시 낸 것도 그 태스크의

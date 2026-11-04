@@ -1754,3 +1754,19 @@ def test_예시는_걷기의_아직_안_낸_칸을_셋까지_한_라운드에_�
     after = json.loads(briefing.integrate_fields(walked, site_config=_site_with_check(), max_rounds=3, code_index=True)["example"])["tasks"]
     assert (after[0]["action"], after[0]["params"], after[0]["input_evidence_ids"]) == ("code.callers", {"name": "sink.writer.run"}, ["t-9.e1"])
 
+
+
+# ── R3-5z ⑪ — 다음 태스크 id ──
+
+def test_frame과_integrate의_케이스_칸_끝에_다음_빈_태스크_id를_적고_판정에는_안_적는다(case):
+    """측정 #33 4: 리드 계약 위반 103 중 둘째로 많은 "이미 있는 태스크 id를 다시 냈다" 23 — 리드가 다음 빈 id를 모르는 탓인지 보려고 frame·integrate 프롬프트의 케이스 칸
+    끝에 `다음 태스크 id: t-<n>부터` 한 줄(예시의 id도 그 번호부터다). 판정 프롬프트는 태스크를 안 내니 없다."""
+    state = CaseState(case=case, plan_tasks=[task("t-1", status="ok"), task("t-2", status="error"), task("t-5", status="pending")])
+    line = "다음 태스크 id: t-6부터 — 이미 있는 id(t-1~t-5)는 다시 내면 받지 않는다"
+    framed = briefing.frame_fields(state, site_config=site())
+    assert framed["case"].endswith("\n" + line)
+    integrated = briefing.integrate_fields(state, site_config=site(), max_rounds=3)
+    assert integrated["case"].endswith("\n" + line)
+    assert line not in briefing.conclude_fields(state, site_config=site())["case"]
+    fresh = briefing.frame_fields(CaseState(case=case), site_config=site())
+    assert fresh["case"].endswith("\n다음 태스크 id: t-1부터")                                         # 아직 없으면 범위도 없다
