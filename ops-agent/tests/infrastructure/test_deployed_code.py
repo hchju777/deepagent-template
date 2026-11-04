@@ -1023,7 +1023,9 @@ async def test_filter_lines는_이_사이트의_등록이_가리키는_클래스
     index = await ix.build_index({"dt-proc": _FilterSrc()}, commits={"dt-proc": "c2"})
     code.attach_index(index)
     scan = await code.filter_lines("Job", fields={"state": "-", "kind": "x"})
-    assert scan.problem == "" and scan.checked == ["state", "kind"]
+    assert scan.problem == "" and scan.checked == ["state", "kind"] and scan.read == ["state", "kind"]
+    # 코드가 읽는 필드(R3-5z ⑧ — 날짜 줄이 쓴다) = 대조할 필드 중 범위 파일에 이름이 리터럴로 든 것. 범위 밖(config·다른 모듈)은 안 센다.
+    assert (await code.filter_lines("Job", fields={"state": "", "other": "", "nowhere": "", "k": ""})).read == ["state", "other"]
     assert scan.files == ["pipe/job.py", "pipe/shapes.py", "pipe/filters.py"] and scan.linked == ["shape_filter", "state_filter"]
     # 범위는 **파일**(사람 결정) — 사이트 인자가 맞는 등록(SiteFilter)의 파일에 (a)의 StateFilter도 있어 그 줄(L3)도 든다. 두 필드가 한 줄의 비교식에 각각
     assert [(h.path, h.line, h.field, h.value) for h in scan.hits] == [("pipe/job.py", 7, "state", "-"), ("pipe/filters.py", 3, "state", "-"),

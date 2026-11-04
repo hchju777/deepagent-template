@@ -696,7 +696,9 @@ class DeployedCode(DeployedCodePort):
         # 범위 파일의 pandas 병합식(R3-5g ④) — 걷기가 두 입력의 그 필드 값이 겹치는지 센다. 비교식과 같은 범위, 같은 사실의 종류(코드가 무엇으로 잇나).
         merges = [MergeHit(path=path, line=i, text=body, left=list(left), right=list(right), how=how, chained=follow)
                   for path in files for i, left, right, how, body, follow in merge_pairs(snap.get(path, ""))]
-        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges)
+        # 코드가 읽는 필드(R3-5z ⑧) — 이름이 범위 파일에 리터럴로 든 것(`r["f"]`·`get("f")`·`df["f"]`). 속성 접근(`df.f`)은 못 본다.
+        read = [f for f in fields if any(q + f + q in snap.get(path, "") for path in files for q in ("'", '"'))]
+        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges, read=read)
 
     async def uses(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy

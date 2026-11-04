@@ -1617,3 +1617,76 @@ async def test_단일값이_든_비교식이_있으면_그_입력을_그대로_�
     lookup_none = _Lookup({})
     walk = (await run_walk(_state(), runner=_Reads(table), **{**kw, "lookup": lookup_none}))["walk"]
     assert walk.facts == [] and walk.stopped.startswith("입력이 다 정상 — ") and not any(line.startswith("  주: 비교식") for line in walk.lines())
+
+
+
+# ── R3-5z ⑧ — 멈춘 클래스 입력의 날짜 줄(측정 #33 2 패턴 C) ──
+
+def test_latest_dates는_비지_않은_값이_전부_날짜_꼴인_필드마다_가장_늦은_값을_준다():
+    from datetime import date
+
+    from src.application.walk import latest_dates
+
+    rows = [{"work_date": "2026-11-03", "at": "2026-11-04T09:00:00+09:00", "day": "20261101", "lot": "20261199", "code": "A", "n": 3},
+            {"work_date": "2026-11-02", "at": "2026-11-04 08:00:00", "day": "", "lot": "20261101", "code": "2026-11-01", "n": 4},
+            {"work_date": None}]
+    # 없는 날짜(11-99)가 섞인 필드·날짜 아닌 값이 섞인 필드·문자열 아닌 값은 날짜 칸이 아니다. 빈 값은 건너뛴다.
+    assert latest_dates(rows) == {"work_date": ("2026-11-03", date(2026, 11, 3)), "at": ("2026-11-04T09:00:00+09:00", date(2026, 11, 4)),
+                                  "day": ("20261101", date(2026, 11, 1))}
+    assert latest_dates([]) == {} and latest_dates([{"n": 1}]) == {} and latest_dates([{"d": ""}]) == {}
+
+
+class _Dated(_Reads):
+    """증거에 부른 시각을 단다 — 실 실행기는 봉투의 관측 시각, 재생은 녹화 시각이다."""
+
+    async def run(self, task, *, case):
+        got = await super().run(task, case=case)
+        return got.model_copy(update={"evidence": [e.model_copy(update={"as_of": T0}) for e in got.evidence]})
+
+
+async def test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다():
+    """측정 #33 2 패턴 C: `<날짜 기준 필터>`(현재 주기를 찾는 함수)가 어제 날짜뿐인 입력을 전부 지운 것을 logic_bug/stale_data로 골랐다 — 오늘 활동이 없는 정상 상태였다.
+    사실 한 줄(규칙 없음): 멈춘 클래스 입력의 날짜 꼴 필드 중 **그 클래스 코드가 읽는 필드**(평가자 덧붙임 — 입력엔 처리 시각처럼 오늘인 필드가 따로 있어 아무 필드나
+    고르면 "0일 전"이 나온다; 단일값 조회와 같은 범위에 필드 이름이 리터럴로 든 것)의 가장 늦은 값과 부른 날(그 입력 증거의 시각 — 재생이면 녹화 시각)의 차. 읽는 필드를
+    못 풀면 날짜 꼴 필드마다 가장 늦은 값을 다 적는다."""
+    rows = [{"work_date": "2026-09-13", "updated_at": "2026-09-14T08:00:00", "n": 1}, {"work_date": "2026-09-12", "updated_at": "2026-09-14T07:00:00", "n": 2}]
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): {"type": "string", "value": json.dumps(rows)}}
+    asked = ("W0", (("updated_at", ""), ("work_date", "")))
+    lookup = _Lookup({asked: FilterScan(files=["w0.py"], checked=["work_date", "updated_at"], read=["work_date"])})
+    kw = dict(classes=frozenset({"W0"}), class_services={"W0": ("a",)}, clock=lambda: T0)
+    walk = (await run_walk(_state(), runner=_Dated(table), lookup=lookup, **kw))["walk"]
+    assert walk.stopped == "입력이 다 정상 — W0"
+    assert walk.facts == ["멈춘 W0의 입력 날짜(코드가 읽는 필드): in:L1 가장 늦은 work_date 2026-09-13 — 부른 날 2026-09-14보다 1일 전"]
+    assert ("W0", {"work_date": "", "updated_at": ""}, {}) in lookup.calls and walk.lines()[-1] == f"  주: {walk.facts[0]}"
+    # 같은 이름이 두 레포면 가른 가지의 인자로 묻는다 — 그 레포의 파일이어야 한다
+    split = _Lookup(lookup.table)
+    await run_walk(_state(), runner=_Dated(table), lookup=split, **{**kw, "class_services": {"W0": ("a", "b")}}, declared_by={"alarm:stats:{line}": ("b",)})
+    assert ("W0", {"work_date": "", "updated_at": ""}, {"service": "b"}) in split.calls
+    every = ("멈춘 W0의 입력 날짜(코드가 읽는 필드를 못 풀어 날짜 꼴 필드 전부): in:L1 가장 늦은 work_date 2026-09-13 — 부른 날 2026-09-14보다 1일 전"
+             " · in:L1 가장 늦은 updated_at 2026-09-14T08:00:00 — 부른 날 2026-09-14와 같은 날")
+    # 읽는 필드를 못 풀면(조회 없음 · 조회 실패 · 못 이은 컴포넌트) 날짜 꼴 필드 전부
+    walk = (await run_walk(_state(), runner=_Dated(table), **kw))["walk"]
+    assert walk.facts == [every]
+    walk = (await run_walk(_state(), runner=_Dated(table), lookup=_Lookup({asked: FilterScan(problem="dt-core의 스냅샷을 못 받았다")}), **kw))["walk"]
+    assert walk.facts == [every]
+    walk = (await run_walk(_state(), runner=_Dated(table), lookup=_Lookup({asked: FilterScan(unlinked=["변수 name"], read=["work_date"])}), **kw))["walk"]
+    assert walk.facts == [every]
+    # 풀었는데 코드가 날짜 꼴 필드를 하나도 안 읽으면 줄이 없다
+    walk = (await run_walk(_state(), runner=_Dated(table), lookup=_Lookup({asked: FilterScan(files=["w0.py"], read=[])}), **kw))["walk"]
+    assert walk.facts == []
+    # 부른 시각이 없으면 차는 안 적는다 · 입력이 부른 날보다 늦으면 뒤
+    walk = (await run_walk(_state(), runner=_Reads(table), lookup=lookup, **kw))["walk"]
+    assert walk.facts == ["멈춘 W0의 입력 날짜(코드가 읽는 필드): in:L1 가장 늦은 work_date 2026-09-13"]
+    later = {**table, ("redis.get", "in:L1"): {"type": "string", "value": json.dumps([{"work_date": "2026-09-16", "updated_at": "2026-09-14T08:00:00"}])}}
+    walk = (await run_walk(_state(), runner=_Dated(later), lookup=lookup, **kw))["walk"]
+    assert walk.facts == ["멈춘 W0의 입력 날짜(코드가 읽는 필드): in:L1 가장 늦은 work_date 2026-09-16 — 부른 날 2026-09-14보다 2일 뒤"]
+    # 날짜 꼴 필드가 없으면 조회도 줄도 없다
+    plain = {**table, ("redis.get", "in:L1"): {"type": "string", "value": json.dumps([{"n": 1}, {"n": 2}])}}
+    quiet = _Lookup({})
+    walk = (await run_walk(_state(), runner=_Dated(plain), lookup=quiet, **kw))["walk"]
+    assert walk.facts == [] and all(fields == {} for _, fields, _ in quiet.calls)
+    # 멈춘 자리가 걸은 클래스가 아니면(키가 없다) 날짜 줄은 없다
+    gone = {**table, ("redis.get", "in:L1"): None}
+    walk = (await run_walk(_state(), runner=_Dated(gone), lookup=lookup, **kw))["walk"]
+    assert walk.stopped.startswith("키가 없다 — ") and walk.facts == []

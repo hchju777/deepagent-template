@@ -27,7 +27,7 @@ pinned 본문은 그 홉까지의 사슬만(P0 4). 읽기의 id는 리드와 같
 """
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Awaitable, Callable, NamedTuple
 
 from src.application.facts import key_head
@@ -62,6 +62,31 @@ def dropping(hits: list[FilterHit]) -> list[FilterHit]:
 def _blank(value: Any) -> bool:
     """빈 값 — 없음(필드 없음 포함)·빈 문자열·공백뿐인 문자열. 코드가 비교 전에 채우는 자리다(R3-5z ⑦)."""
     return value is None or (isinstance(value, str) and not value.strip())
+
+
+# 날짜 꼴 값(R3-5z ⑧) — ISO 날짜(뒤에 시각이 붙어도)와 `YYYYMMDD` 문자열. 날짜로 안 서는 값(11-99)은 아니다.
+_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:[T ][\d:.+\-Z]*)?$|^(\d{4})(\d{2})(\d{2})$")
+
+
+def _date_of(value: Any) -> date | None:
+    m = _DATE.match(value.strip()) if isinstance(value, str) else None
+    if m is None:
+        return None
+    y, mo, d = m.group(1, 2, 3) if m.group(1) else m.group(4, 5, 6)
+    try:
+        return date(int(y), int(mo), int(d))
+    except ValueError:
+        return None
+
+
+def latest_dates(rows: list[dict]) -> dict[str, tuple[str, date]]:
+    """행들의 날짜 꼴 필드마다 가장 늦은 값 `(원문, 날짜)`(R3-5z ⑧) — 비지 않은 값이 **전부** 날짜 꼴인 필드만(하나라도 아니면 그 필드는 날짜 칸이 아니다)."""
+    out: dict[str, tuple[str, date]] = {}
+    for f in dict.fromkeys(f for r in rows for f in r):
+        seen = [(v, _date_of(v)) for v in (r.get(f) for r in rows) if not _blank(v)]
+        if seen and all(d is not None for _, d in seen):
+            out[f] = max(seen, key=lambda p: p[1])
+    return out
 
 
 def _hashable(value: Any):
@@ -638,6 +663,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     compared: tuple[FilterHit, int, int, int, str] | None = None                            # 그 줄의 입력을 그대로 견준 수 — (줄, 통과, 행, 빈 행, 그 입력 홉의 증거)(R3-5z ⑦)
     inputs_at: dict[str, list[tuple[str, str, list]]] = {}                                  # 걸은 가지 — 그 홉의 증거 → 그 클래스가 읽은 입력 (라벨, 증거, 행들)(R3-5z ⑦)
+    params_at: dict[str, dict] = {}                                                         # 걸은 가지 — 그 홉의 증거 → 그 클래스의 조회 인자(service·repo)(R3-5z ⑧)
     carried: dict[str, tuple[str, str]] = {}                                                # 아래 홉의 단일값이 그대로 이어진 홉의 증거 → 그 (필드, 값)(R3-5z ⑦)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
     # 출력이라 입력으로 안 센다(R3-5b ②). 대상 키는 입구가 읽었다.
@@ -669,6 +695,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         text = text if isinstance(text, str) else ""
         found_inputs = inputs_in(text)
         walked_at[came_from] = _Walked(writer, tag, scope, 0, res_id, class_at(text), len(found_inputs))
+        params_at[came_from] = dict(branch.params)
         real, missed = 0, []                                                                # 실제로 읽은 입력 수, 못 본 입력(R3-5b ②)
         read_inputs: list[tuple[str, str, list, str, Any, str]] = []                        # 이 클래스가 읽은 입력 — (라벨, 증거, 행들, 쓴 쪽, 원본, 선언 이름)
         merges: list = []
@@ -1016,6 +1043,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]
     ev = stop_hop.evidence_id
     rungs: list[Rung] = []
+    dated: _Walked | None = None                                                            # 걸은 클래스에서 멈췄으면 그 기록 — 날짜 줄(R3-5z ⑧)
 
     def body_rungs(key_ev: str) -> list[Rung]:
         """없는 키를 쓰는 클래스의 칸 — 그 클래스 본문(`code.read`; 걷기가 이미 읽은 `code.resources`의 머리 줄, R3-5r ②). 자원을 못 읽었으면 전처럼 그 질의."""
@@ -1112,7 +1140,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             stopped = f"{tag}의 자원을 못 읽었다 — {why}"
             rungs.append(Rung(action="code.resources", params=here, evidence=ev))
         elif ev in walked_at:
-            info = walked_at[ev]
+            info = dated = walked_at[ev]
             # `입력이 다 정상`은 나열된 입력을 전부 실제로 읽었고 전부 정상이고 단일값 검사도 완전할 때만이다(사람 결정 10-16). 못 본 입력(읽기 실패·
             # scan 일부)이나 일부만 검사(못 이은 컴포넌트에 비교식이 있을 수 있다, 10-15)가 있으면 "다 못 봤다". 실제로 읽은 입력이 0이면 "모름" — 메시지
             # (토픽) 입력은 인덱스가 자원으로 못 세고, 읽는 자원이 자기 출력뿐인 클래스도 있다(측정 #12).
@@ -1141,6 +1169,35 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         if scope:
             head = Rung(action="code.read", params={"service": scope, "path": path, "line": line}, evidence=gev)
             rungs = [head] + [r for r in rungs if r != head]
+    async def date_line(info: _Walked, at_ev: str) -> str:
+        """멈춘 클래스 입력의 날짜 줄(R3-5z ⑧ — 측정 #33 2 패턴 C: 날짜 기준 함수가 어제 날짜뿐인 입력을 지운 정상 상태를 logic_bug로 골랐다). 날짜 꼴 필드 중
+        **그 클래스 코드가 읽는 필드**(평가자 덧붙임 — 처리 시각처럼 오늘인 필드를 고르면 "0일 전"이 나온다; 단일값 조회와 같은 범위에 필드 이름이 리터럴로 든 것)의
+        가장 늦은 값과 부른 날(그 입력 증거의 시각 — 재생이면 녹화 시각; 걷기의 시계는 지금이다)의 차. 읽는 필드를 못 풀면(조회 없음·실패·못 이은 컴포넌트) 날짜 꼴
+        필드 전부. 풀었는데 하나도 안 읽으면 빈 문자열."""
+        found = [(lab, iev, latest_dates(rows_)) for lab, iev, rows_ in inputs_at[at_ev]]
+        dated_fields = list(dict.fromkeys(f for _, _, got in found for f in got))
+        if not dated_fields:
+            return ""
+        read: set[str] | None = None
+        if lookup is not None:
+            scan = await lookup(info.writer, fields={f: "" for f in dated_fields}, **params_at.get(at_ev, {}))
+            if not scan.problem and not scan.unlinked:
+                read = set(scan.read)
+        parts = []
+        for lab, iev, got in found:
+            as_of = next((e.as_of for e in evidence if e.id == iev), None)
+            for f, (raw, day) in got.items():
+                if read is not None and f not in read:
+                    continue
+                gap = (as_of.date() - day).days if as_of is not None else None
+                when = ("" if gap is None else f" — 부른 날 {as_of:%Y-%m-%d}와 같은 날" if gap == 0
+                        else f" — 부른 날 {as_of:%Y-%m-%d}보다 {gap}일 전" if gap > 0 else f" — 부른 날 {as_of:%Y-%m-%d}보다 {-gap}일 뒤")
+                parts.append(f"{lab} 가장 늦은 {f} {raw}{when}")
+        if not parts:
+            return ""
+        how = "코드가 읽는 필드" if read is not None else "코드가 읽는 필드를 못 풀어 날짜 꼴 필드 전부"
+        return f"멈춘 {info.writer}의 입력 날짜({how}): " + " · ".join(parts[:6]) + (f" 외 {len(parts) - 6}" if len(parts) > 6 else "")
+
     facts: list[str] = []
     if compared is not None:
         # 사실만(R3-5z ⑦, 규칙 없음 — 판정 하향은 이 줄의 효과를 한 판 잰 뒤에): 0/m이면 코드는 받은 대로 걸렀다. 코드가 비교 전에 값을 바꾸면(빈 값 → '-') 입력
@@ -1155,6 +1212,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                      for lab, _, rows_ in inputs_at[ev] if any(hit.field in r for r in rows_)]
             fact += f" · 멈춘 {up.writer}의 입력에서 {hit.field}가 빈 행 {', '.join(parts)}" if parts else f" · 멈춘 {up.writer}의 입력에 {hit.field} 필드가 없다"
         facts.append(fact)
+    if dated is not None and inputs_at.get(ev) and (line := await date_line(dated, ev)):
+        facts.append(line)
     return {"plan_tasks": tasks, "evidence": evidence,
             "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), counts=count_runs, count_seconds=count_spent, stopped=stopped, stop_at=ev, rungs=rungs,
                          notes=notes, facts=facts)}

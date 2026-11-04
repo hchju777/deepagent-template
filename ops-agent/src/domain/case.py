@@ -214,6 +214,7 @@ class FilterScan(StrictModel):
     unlinked: list[str] = []                 # 못 이은 것 — `변수 x`·`X: Cls(인덱스에 없음)`·`X(이 사이트의 등록 없음)`. 하나라도 있으면 "일부만 검사"
     problem: str = ""                        # 조회 자체가 안 됐을 때(인덱스·클래스·스냅샷) — "없음"과 다르다
     merges: list[MergeHit] = []              # 범위 파일의 pandas 병합식들(R3-5g ④) — 걷기의 조인 검사 재료
+    read: list[str] = []                     # 대조할 필드 중 범위 파일에 이름이 리터럴로 든 것 — 그 클래스 코드가 읽는 필드(R3-5z ⑧, 날짜 줄)
 
 
 class Rung(StrictModel):

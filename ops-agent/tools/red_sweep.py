@@ -3152,7 +3152,7 @@ MERGE_PAIRS_T = "tests/infrastructure/test_deployed_code.py::test_merge_pairs는
 CASES += [
  ("병합식을 안 뽑는다", DCP, "        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == \"merge\"):\n            continue", "        if True:\n            continue", [MERGE_PAIRS_T, FILTER_T]),
  ("키가 변수인 병합식도 뽑는다", DCP, "        if not left or not right or len(left) != len(right):\n            continue", "        if False:\n            continue", [MERGE_PAIRS_T]),
- ("filter_lines가 병합식을 안 싣는다", DCP, "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges)", "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked)", [FILTER_T]),
+ ("filter_lines가 병합식을 안 싣는다", DCP, "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges, read=read)", "        return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, read=read)", [FILTER_T]),
 ]
 
 # ── 12a-R3-5g ④-b — 걷기의 조인 검사 ──
@@ -4011,7 +4011,27 @@ CASES += [
  ('서비스 아닌 원인의 검증 사실에 걷기 사실이 없다', ND, '(component가 서비스가 아니다)" + told', '(component가 서비스가 아니다)"', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
  ('서비스 원인의 검증 사실에 걷기 사실이 없다', ND, '/{len(repos)}" + told', '/{len(repos)}"', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
 ]
-assert len(CASES) >= 1454, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑧ — C: 멈춘 클래스 입력의 날짜 꼴 필드 중 코드가 읽는 필드의 가장 늦은 값과 부른 날의 차(못 풀면 전부) ──
+CASES += [
+ ('날짜 아닌 값이 섞인 필드도 날짜 칸으로 본다', WK, '        if seen and all(d is not None for _, d in seen):', '        if seen and any(d is not None for _, d in seen):', ['tests/application/test_walk.py::test_latest_dates는_비지_않은_값이_전부_날짜_꼴인_필드마다_가장_늦은_값을_준다']),
+ ('날짜 칸에서 빈 값을 안 건너뛴다', WK, '        seen = [(v, _date_of(v)) for v in (r.get(f) for r in rows) if not _blank(v)]', '        seen = [(v, _date_of(v)) for v in (r.get(f) for r in rows)]', ['tests/application/test_walk.py::test_latest_dates는_비지_않은_값이_전부_날짜_꼴인_필드마다_가장_늦은_값을_준다']),
+ ('가장 늦은 값이 아니라 가장 이른 값을 고른다', WK, '            out[f] = max(seen, key=lambda p: p[1])', '            out[f] = min(seen, key=lambda p: p[1])', ['tests/application/test_walk.py::test_latest_dates는_비지_않은_값이_전부_날짜_꼴인_필드마다_가장_늦은_값을_준다', 'tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('시각이 붙은 ISO 날짜를 날짜로 안 본다', WK, '(\\d{2})(?:[T ][\\d:.+\\-Z]*)?$|', '(\\d{2})$|', ['tests/application/test_walk.py::test_latest_dates는_비지_않은_값이_전부_날짜_꼴인_필드마다_가장_늦은_값을_준다', 'tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('여덟 자리 날짜를 날짜로 안 본다', WK, '?$|^(\\d{4})(\\d{2})(\\d{2})$")', '?$")', ['tests/application/test_walk.py::test_latest_dates는_비지_않은_값이_전부_날짜_꼴인_필드마다_가장_늦은_값을_준다']),
+ ('날짜로 안 서는 값도 날짜로 본다', WK, '    except ValueError:\n        return None\n\n\ndef latest_dates', '    except ValueError:\n        return date(2000, 1, 1)\n\n\ndef latest_dates', ['tests/application/test_walk.py::test_latest_dates는_비지_않은_값이_전부_날짜_꼴인_필드마다_가장_늦은_값을_준다']),
+ ('코드가 안 읽는 날짜 필드도 적는다', WK, '                if read is not None and f not in read:\n', '                if False:\n', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('못 이은 컴포넌트가 있어도 읽는 필드를 푼 것으로 본다', WK, '            if not scan.problem and not scan.unlinked:', '            if not scan.problem:', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('조회가 실패해도 읽는 필드를 푼 것으로 본다', WK, '            if not scan.problem and not scan.unlinked:', '            if not scan.unlinked:', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('날짜 줄이 고른 근거를 거꾸로 적는다', WK, '        how = "코드가 읽는 필드" if read is not None else', '        how = "코드가 읽는 필드" if read is None else', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('부른 날과의 차를 거꾸로 센다', WK, '                gap = (as_of.date() - day).days if as_of is not None else None', '                gap = (day - as_of.date()).days if as_of is not None else None', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('같은 날을 따로 안 적는다', WK, '와 같은 날" if gap == 0', '와 같은 날" if gap == 99', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('부른 날을 그 입력 증거의 시각에서 안 읽는다', WK, '            as_of = next((e.as_of for e in evidence if e.id == iev), None)', '            as_of = None', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('날짜 조회가 가지의 인자를 안 넘긴다', WK, '        params_at[came_from] = dict(branch.params)\n', '', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('걸은 클래스에서 멈춘 것을 안 적어 둔다', WK, '            info = dated = walked_at[ev]\n', '            info = walked_at[ev]\n', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('날짜 줄을 사실에 안 싣는다', WK, '    if dated is not None and inputs_at.get(ev) and (line := await date_line(dated, ev)):', '    if False:', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
+ ('코드가 읽는 필드를 범위 파일에서 안 찾는다', DCP, '        read = [f for f in fields if any(q + f + q in snap.get(path, "") for path in files for q in ("\'", \'"\'))]', '        read = list(fields)', ['tests/infrastructure/test_deployed_code.py::test_filter_lines는_이_사이트의_등록이_가리키는_클래스_파일을_범위로_비교식을_먼저_뽑아_단일값_전부와_맞춘다']),
+]
+assert len(CASES) >= 1471, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
