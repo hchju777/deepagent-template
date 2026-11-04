@@ -15,6 +15,7 @@
 import json
 import re
 from collections import OrderedDict
+from datetime import datetime
 from typing import Any
 
 from src.application.recompute import Recomputer
@@ -128,8 +129,10 @@ class ProbeRunner(TaskRunnerPort):
         if task.action == "kafka.count_type":
             # 셀 결과는 문장 하나가 머리다(R3-5y ③) — 걷기의 행 상태와 같은 문장. 본문은 파티션별 센 범위.
             head = type_count_status(result.data, "")[0]
-            body, ours = [head, *(f"파티션 {r['partition']}: 보존 {r['begin']}~{r['end']} · 센 범위 {r['from']}~{r['to']} · {r['counted']}건 · 유형 칸 "
-                                  f"{r['with_field']}건 · 맞음 {r['matched']}건" for r in result.data.get("partitions") or [])], False
+            spans = ["·".join(f"{a}~{b}" for a, b in _spans_of(r)) or "없음" for r in result.data.get("partitions") or []]
+            body, ours = [head, *(f"파티션 {r['partition']}: 보존 {r['begin']}~{r['end']} · 센 범위 {piece} · {r.get('counted', 0)}건 · 유형 칸 "
+                                  f"{r.get('with_field', 0)}건 · 맞음 {r.get('matched', 0)}건" for r, piece in zip(result.data.get("partitions") or [], spans)),
+                          f"읽은 바이트 {result.data.get('bytes', 0)} · {result.data.get('seconds', 0)}초 · 부른 시각 {result.data.get('called_at') or '모름'}"], False
         elif task.action in SUMMARY_ONLY:
             # 포인터 메시지는 세기만(사람 결정 10-19) — 본문도 요약 줄도 행 요약·크기 한 줄이다. 원본은 아래 `_raw`에 그대로 남아 걷기가 행을 본다.
             head = _message_line(result.data)
@@ -248,35 +251,74 @@ def _summarize(data: Any) -> str:
     return f"{head}{repr(data)[:_SUMMARY_CHARS]}"
 
 
+def _ago(seconds: float) -> str:
+    s = max(0, int(seconds))
+    if s < 60:
+        return f"{s}초"
+    if s < 3600:
+        return f"{s // 60}분"
+    if s < 2 * 86400:
+        return f"{s // 3600}시간"
+    return f"{s // 86400}일"
+
+
+def _spans_of(row: dict) -> list:
+    """파티션의 센 범위 — `spans`(R3-5z ①), 이전 녹화의 모양이면 `from`~`to` 하나."""
+    if "spans" in row:
+        return list(row.get("spans") or [])
+    return [[row["from"], row["to"]]] if "from" in row and "to" in row and row["to"] > row["from"] else []
+
+
+def _count_window(data: dict) -> tuple[str, str]:
+    """센 창 `(오프셋 범위, 시각 범위·얼마나 전)` — 문장의 모든 갈래가 붙인다(R3-5z ① — 측정 #33: 멈춘 문장에 창이 없었고, "최근 456건"은 부른 시각보다 13시간
+    전이었다)."""
+    rows = data.get("partitions") or []
+    pieces = ["·".join(f"{a}~{b}" for a, b in _spans_of(r)) for r in rows]
+    if not any(pieces):
+        where = "센 메시지 없음"
+    elif len(rows) == 1:
+        where = f"오프셋 {pieces[0]}"
+    else:
+        where = ", ".join(f"p{r['partition']} {piece or '없음'}" for r, piece in zip(rows, pieces))
+    when = f"{data['first_at']}~{data['last_at']}" if data.get("first_at") and data.get("last_at") else ""
+    if data.get("last_at") and data.get("called_at"):
+        try:
+            gap = (datetime.fromisoformat(data["called_at"]) - datetime.fromisoformat(data["last_at"])).total_seconds()
+            when += f", 마지막 메시지는 부른 시각보다 {_ago(gap)} 전"
+        except (TypeError, ValueError):
+            pass
+    return where, when
+
+
 def type_count_status(data: Any, error: str) -> tuple[str, bool, str]:
-    """유형 세기(`kafka.count_type`) 결과의 행 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)`(R3-5y ③ — 측정 #32 회신의 답 2). 0건·보존 범위 전부 → 비었다, 0건·일부(N건
-    창) → 비었다 + 센 범위(그 앞은 안 셌다), k건 → 정상 + 가장 최근 그 유형 메시지, 시간 상한·빈 응답·실패 → 모름. 센 창의 오프셋과 첫·마지막 메시지 시각을 늘
-    붙인다 — 창이 몇 시간인지 몇 주인지가 나쁨의 무게를 정한다. 유형 칸이 든 메시지가 0건이면 모름 — 선언한 칸 이름이 틀렸을 때 "그 유형이 없다"가 되지 않게.
-    걷기의 행과 증거 머리가 같은 문장이다."""
+    """유형 세기(`kafka.count_type`) 결과의 행 상태 `(문장, 나쁜가, 멈춤에 붙일 토막)`(R3-5y ③ — 측정 #32 회신의 답 2). 0건·보존 범위 전부 → 비었다, 0건·끝 N건 창
+    → 비었다 + 센 범위(그 앞은 안 셌다), k건 → 정상 + 가장 최근 그 유형 메시지, 시간 상한·빈 응답·실패 → 모름. 유형 칸이 든 메시지가 0건이면 모름 — 선언한 칸
+    이름이 틀렸을 때 "그 유형이 없다"가 되지 않게. 센 창(오프셋·시각·부른 시각보다 얼마나 전)은 모든 갈래에 붙는다 — 창이 몇 시간인지 몇 주인지, 얼마나 오래된
+    것인지가 나쁨의 무게를 정한다(R3-5z ①). 걷기의 행과 증거 머리가 같은 문장이다."""
     if not isinstance(data, dict):
         return f"모름 — 유형 세기 실패 — {error}", False, "유형 세기 실패"
     names = "·".join(data.get("types") or data.get("values") or []) or "그 유형"
     rows = data.get("partitions") or []
-    window = (f"오프셋 {rows[0]['from']}~{rows[0]['to']}" if len(rows) == 1
-              else ", ".join(f"p{r['partition']} {r['from']}~{r['to']}" for r in rows))
-    span = f", {data['first_at']}~{data['last_at']}" if data.get("first_at") and data.get("last_at") else ""
+    where, when = _count_window(data)
+    window = f"{where}, {when}" if when else where
     counted, matched = data.get("counted", 0), data.get("matched", 0)
+    scope = f"보존 범위 전부 {counted}건" if data.get("whole") else f"끝 {counted}건"
     if matched:
         latest = data.get("latest") or {}
-        where = f"오프셋 {latest.get('offset')}" if len(rows) == 1 else f"파티션 {latest.get('partition')} 오프셋 {latest.get('offset')}"
+        at_ = f"오프셋 {latest.get('offset')}" if len(rows) == 1 else f"파티션 {latest.get('partition')} 오프셋 {latest.get('offset')}"
         at = f", 시각 {latest['at']}" if latest.get("at") else ""
-        return (f"정상 — {names} {matched}건, 최근 {counted}건({window}{span}) 중, 가장 최근 그 유형 메시지 {where}{at}", False,
-                f"{names} {matched}건/{counted}건")
+        return (f"정상 — {names} {matched}건, {scope}({window}) 중, 가장 최근 그 유형 메시지 {at_}{at}", False, f"{names} {matched}건/{counted}건")
     if data.get("stopped"):
-        return f"모름 — {names} 세다 멈춤({counted}건까지 0건, {data['stopped']})", False, f"{names} 세다 멈춤({counted}건까지 0건)"
+        return (f"모름 — {names} 세다 멈춤(끝 {counted}건까지 0건 — {window} · {data['stopped']})", False,
+                f"{names} 세다 멈춤(끝 {counted}건까지 0건)")
     if counted and not data.get("with_field"):
-        return (f"모름 — 유형 칸 {data.get('field')}이 든 메시지 0건(최근 {counted}건, {window}{span}) — 선언을 확인", False,
-                f"유형 칸 {data.get('field')} 없음")
+        return f"모름 — 유형 칸 {data.get('field')}이 든 메시지 0건({scope}, {window}) — 선언을 확인", False, f"유형 칸 {data.get('field')} 없음"
     if data.get("whole"):
         ranges = (f"{rows[0]['begin']}~{rows[0]['end']}" if len(rows) == 1
                   else ", ".join(f"p{r['partition']} {r['begin']}~{r['end']}" for r in rows))
-        return f"비었다 — {names} 0건, 보존 범위 {ranges} 전부({counted}건{span})", True, f"{names} 0건(보존 범위 전부 {counted}건)"
-    return (f"비었다 — {names} 0건, 최근 {counted}건({window}{span})만 셌다 — 그 앞은 안 셌다", True, f"{names} 0건(최근 {counted}건만)")
+        return (f"비었다 — {names} 0건, 보존 범위 {ranges} 전부({counted}건{', ' + when if when else ''})", True,
+                f"{names} 0건(보존 범위 전부 {counted}건)")
+    return f"비었다 — {names} 0건, 끝 {counted}건({window})만 셌다 — 그 앞은 안 셌다", True, f"{names} 0건(끝 {counted}건만)"
 
 
 def _message_line(data: Any) -> str:

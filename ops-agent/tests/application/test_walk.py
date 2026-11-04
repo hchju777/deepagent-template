@@ -1262,31 +1262,43 @@ async def test_라우터가_유형별로_나눠_보내는_토픽은_남은_메�
 
 def test_유형_세기_문장은_0건_전부_0건_일부_k건_멈춤_유형_칸_없음을_가르고_센_창의_오프셋과_시각을_붙인다():
     """측정 #32 회신의 답 2(1)(2): 0건이고 보존 범위 전부 → 비었다(나쁨), 0건이고 일부(N건 창) → 비었다 + 센 범위(그 앞은 안 셌다, 나쁨), k건 → 정상 + 가장 최근 그
-    유형 메시지, 시간 상한·빈 응답·실패 → 모름. 센 창의 오프셋과 첫·마지막 메시지 시각을 늘 붙인다 — 창이 몇 시간인지 몇 주인지가 나쁨의 무게를 정한다. 유형 칸이
-    든 메시지가 0건이면 모름(선언한 칸 이름이 틀렸을 때 "그 유형이 없다"가 되지 않게)."""
+    유형 메시지, 시간 상한·빈 응답·실패 → 모름. 유형 칸이 든 메시지가 0건이면 모름(선언한 칸 이름이 틀렸을 때 "그 유형이 없다"가 되지 않게). 측정 #33 1: 창은
+    **모든 갈래**(멈춤 포함 — 멈춘 문장에 창이 없었다)에 센 범위(조각 그대로)·첫·마지막 메시지 시각, 그리고 마지막 메시지가 부른 시각보다 얼마나 전인지 — 작은 메시지
+    사이트의 "최근 456건(01:34~01:53)"은 부른 시각보다 13시간 전이었다. 창은 "최근"이 아니라 `끝 n건`(전부면 `보존 범위 전부 n건`)."""
     from src.application.runner_probe import type_count_status
+
+    span = "2026-11-04T01:00:00+09:00~2026-11-04T09:00:00+09:00, 마지막 메시지는 부른 시각보다 13시간 전"
 
     def data(**over):
         base = {"field": "meta.kind", "values": ["7"], "types": ["COLOR"], "counted": 6, "with_field": 6, "matched": 0, "whole": False, "stopped": "",
-                "first_at": "2026-11-04T01:00:00+09:00", "last_at": "2026-11-04T09:00:00+09:00", "latest": None,
-                "partitions": [{"partition": 0, "begin": 0, "end": 10, "from": 4, "to": 10, "counted": 6, "with_field": 6, "matched": 0}]}
+                "first_at": "2026-11-04T01:00:00+09:00", "last_at": "2026-11-04T09:00:00+09:00", "latest": None, "called_at": "2026-11-04T22:00:00+09:00",
+                "partitions": [{"partition": 0, "begin": 0, "end": 10, "spans": [[4, 10]], "counted": 6, "with_field": 6, "matched": 0}]}
         return {**base, **over}
 
-    assert type_count_status(data(whole=True, counted=10, partitions=[{"partition": 0, "begin": 0, "end": 10, "from": 0, "to": 10}]), "") == (
-        "비었다 — COLOR 0건, 보존 범위 0~10 전부(10건, 2026-11-04T01:00:00+09:00~2026-11-04T09:00:00+09:00)", True, "COLOR 0건(보존 범위 전부 10건)")
-    assert type_count_status(data(), "") == (
-        "비었다 — COLOR 0건, 최근 6건(오프셋 4~10, 2026-11-04T01:00:00+09:00~2026-11-04T09:00:00+09:00)만 셌다 — 그 앞은 안 셌다", True, "COLOR 0건(최근 6건만)")
-    found = type_count_status(data(matched=2, latest={"partition": 0, "offset": 8, "at": "2026-11-04T08:00:00+09:00"}), "")
-    assert found == ("정상 — COLOR 2건, 최근 6건(오프셋 4~10, 2026-11-04T01:00:00+09:00~2026-11-04T09:00:00+09:00) 중, 가장 최근 그 유형 메시지 오프셋 8, "
-                     "시각 2026-11-04T08:00:00+09:00", False, "COLOR 2건/6건")
-    assert type_count_status(data(stopped="시간 상한 8초", counted=3), "") == ("모름 — COLOR 세다 멈춤(3건까지 0건, 시간 상한 8초)", False, "COLOR 세다 멈춤(3건까지 0건)")
+    latest = {"partition": 0, "offset": 8, "at": "2026-11-04T08:00:00+09:00"}
+    assert type_count_status(data(whole=True, counted=10, partitions=[{"partition": 0, "begin": 0, "end": 10, "spans": [[0, 10]]}]), "") == (
+        f"비었다 — COLOR 0건, 보존 범위 0~10 전부(10건, {span})", True, "COLOR 0건(보존 범위 전부 10건)")
+    assert type_count_status(data(), "") == (f"비었다 — COLOR 0건, 끝 6건(오프셋 4~10, {span})만 셌다 — 그 앞은 안 셌다", True, "COLOR 0건(끝 6건만)")
+    assert type_count_status(data(matched=2, latest=latest), "") == (
+        f"정상 — COLOR 2건, 끝 6건(오프셋 4~10, {span}) 중, 가장 최근 그 유형 메시지 오프셋 8, 시각 2026-11-04T08:00:00+09:00", False, "COLOR 2건/6건")
+    assert type_count_status(data(matched=2, latest=latest, whole=True), "")[0].startswith(f"정상 — COLOR 2건, 보존 범위 전부 6건(오프셋 4~10, {span}) 중, ")
+    # 멈춤도 창을 붙인다 — 조각이 둘이면 그대로
+    cut = data(stopped="시간 상한 8초", counted=9, partitions=[{"partition": 0, "begin": 0, "end": 100, "spans": [[95, 100], [85, 89]]}])
+    assert type_count_status(cut, "") == (f"모름 — COLOR 세다 멈춤(끝 9건까지 0건 — 오프셋 95~100·85~89, {span} · 시간 상한 8초)", False,
+                                         "COLOR 세다 멈춤(끝 9건까지 0건)")
+    none = data(stopped="시간 상한 0초", counted=0, first_at=None, last_at=None, partitions=[{"partition": 0, "begin": 0, "end": 100, "spans": []}])
+    assert type_count_status(none, "")[0] == "모름 — COLOR 세다 멈춤(끝 0건까지 0건 — 센 메시지 없음 · 시간 상한 0초)"
     assert type_count_status(None, "BrokerError: down") == ("모름 — 유형 세기 실패 — BrokerError: down", False, "유형 세기 실패")
-    assert type_count_status(data(with_field=0), "")[:2] == (
-        "모름 — 유형 칸 meta.kind이 든 메시지 0건(최근 6건, 오프셋 4~10, 2026-11-04T01:00:00+09:00~2026-11-04T09:00:00+09:00) — 선언을 확인", False)
+    assert type_count_status(data(with_field=0), "")[:2] == (f"모름 — 유형 칸 meta.kind이 든 메시지 0건(끝 6건, 오프셋 4~10, {span}) — 선언을 확인", False)
     two = data(matched=1, latest={"partition": 1, "offset": 55, "at": None},
-               partitions=[{"partition": 0, "begin": 0, "end": 10, "from": 4, "to": 10}, {"partition": 1, "begin": 50, "end": 60, "from": 54, "to": 60}])
-    assert type_count_status(two, "")[0].startswith("정상 — COLOR 1건, 최근 6건(p0 4~10, p1 54~60, ") and "파티션 1 오프셋 55" in type_count_status(two, "")[0]
-
+               partitions=[{"partition": 0, "begin": 0, "end": 10, "spans": [[4, 10]]}, {"partition": 1, "begin": 50, "end": 60, "spans": [[54, 60]]}])
+    assert type_count_status(two, "")[0].startswith("정상 — COLOR 1건, 끝 6건(p0 4~10, p1 54~60, ") and "파티션 1 오프셋 55" in type_count_status(two, "")[0]
+    # 얼마나 전 — 분·일
+    assert "마지막 메시지는 부른 시각보다 30분 전" in type_count_status(data(called_at="2026-11-04T09:30:00+09:00"), "")[0]
+    assert "마지막 메시지는 부른 시각보다 3일 전" in type_count_status(data(called_at="2026-11-07T10:00:00+09:00"), "")[0]
+    # 이전 녹화의 모양(`from`·`to`)도 읽는다
+    old = data(partitions=[{"partition": 0, "begin": 0, "end": 10, "from": 4, "to": 10}])
+    assert type_count_status(old, "")[0].startswith("비었다 — COLOR 0건, 끝 6건(오프셋 4~10, ")
 
 
 # ── R3-5y ④ — 걷기의 유형 세기: 섞인 토픽 행에서만, 0건이면 나쁨으로 멈춤, tail 칸 바꿈·비움 ──
@@ -1326,13 +1338,13 @@ async def test_걸은_클래스의_섞인_구독_토픽은_그_클래스의_유�
     assert walk.rungs and all(r.action != "kafka.tail" for r in walk.rungs)                               # 셌다 — tail 칸이 없다
     assert walk.counts == 1 and "(유형 세기 1번 " in walk.lines()[0]
     walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(3)}), count_seconds=8.0, **kw))["walk"]
-    assert walk.hops[1].status == (f"정상 — COLOR 3건, 최근 60건(오프셋 40~100, {_SPAN}) 중, 가장 최근 그 유형 메시지 오프셋 90, 시각 2026-11-04T08:00:00+09:00"
+    assert walk.hops[1].status == (f"정상 — COLOR 3건, 보존 범위 전부 60건(오프셋 40~100, {_SPAN}) 중, 가장 최근 그 유형 메시지 오프셋 90, 시각 2026-11-04T08:00:00+09:00"
                                    " · 구독 W0 [a]") and not walk.hops[1].bad
     assert walk.stopped == "입력이 다 정상 — W0"                                                           # 그 클래스의 입력을 봤다
     stopped = _counted(0, whole=False, counted=30, stopped="시간 상한 8초")
     walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): stopped}), count_seconds=8.0, **kw))["walk"]
-    assert walk.hops[1].status == "모름 — COLOR 세다 멈춤(30건까지 0건, 시간 상한 8초) · 구독 W0 [a]" and not walk.hops[1].bad
-    assert walk.stopped == "입력을 다 못 봤다 — W0(t.raw COLOR 세다 멈춤(30건까지 0건))"
+    assert walk.hops[1].status == f"모름 — COLOR 세다 멈춤(끝 30건까지 0건 — 오프셋 40~100, {_SPAN} · 시간 상한 8초) · 구독 W0 [a]" and not walk.hops[1].bad
+    assert walk.stopped == "입력을 다 못 봤다 — W0(t.raw COLOR 세다 멈춤(끝 30건까지 0건))"
     runner = _Reads(table)
     walk = (await run_walk(_state(), runner=runner, **kw))["walk"]                                         # 세기가 꺼졌다 — 전처럼
     assert walk.hops[1].status == f"모름 — {mixed} · 보존 범위 40~100 · 남은 메시지 60 · 구독 W0 [a]" and "kafka.count_type" not in [a for a, _ in runner.ran]
@@ -1404,7 +1416,7 @@ async def test_없는_키를_쓰는_클래스의_섞인_구독_토픽도_세고_
     walk = (await run_walk(_state(), runner=runner, peer=peer, count_seconds=8.0, clock=lambda: T0, **kw))["walk"]
     assert ("kafka.count_type", {"topic": "t.raw", "class": "W1"}) in runner.params
     topic = walk.hops[2]
-    assert topic.status.startswith(f"정상 — COLOR 2건, 최근 60건(오프셋 40~100, {_SPAN}) 중, ") and topic.status.endswith(" · 구독 W1 [a · sevt 값의 metadata.event_type]")
+    assert topic.status.startswith(f"정상 — COLOR 2건, 보존 범위 전부 60건(오프셋 40~100, {_SPAN}) 중, ") and topic.status.endswith(" · 구독 W1 [a · sevt 값의 metadata.event_type]")
     assert walk.stopped.startswith("키가 없다 — in:L1(쓰는 W1 [") and walk.stopped.endswith(" · 구독 t.raw COLOR 2건/60건)")
     assert walk.rungs and all(r.action not in ("kafka.tail", "kafka.count_type") for r in walk.rungs)       # 셌다 — 그 토픽 칸이 없다
     walk = (await run_walk(_state(), runner=_Reads({**table, ("kafka.count_type", "t.raw"): _counted(0)}), peer=peer, count_seconds=8.0,

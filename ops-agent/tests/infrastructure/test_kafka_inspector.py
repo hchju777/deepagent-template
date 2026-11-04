@@ -39,6 +39,7 @@ class _Consumer:
     holes: set = set()               # 압축·삭제로 빈 오프셋 — seek하면 다음 레코드가 온다
     value_of = None                  # (파티션, 오프셋) → 값 바이트 — 유형 세기(R3-5y ②)의 섞인 토픽
     made: list = []                  # 만든 컨슈머의 인자 — 그룹 미참여·커밋 없음을 본다
+    paused: set = set()              # 멈춰 둔 파티션 — 유형 세기(R3-5z ①)가 다 센 파티션을 더 안 받는다
 
     def __init__(self, ends, **kwargs):
         self._ends, self._pos = ends, {}
@@ -50,6 +51,7 @@ class _Consumer:
     async def end_offsets(self, tps): return {tp: self._ends[tp.partition] for tp in tps}
     async def beginning_offsets(self, tps): return {tp: _Consumer.begin for tp in tps}
     def seek(self, tp, offset): self._pos[tp.partition] = offset
+    def pause(self, *tps): _Consumer.paused.update(tp.partition for tp in tps)
 
     async def getmany(self, timeout_ms, max_records):
         _Consumer.calls += 1
@@ -57,6 +59,8 @@ class _Consumer:
             return {}
         out, budget = {}, min(2, max_records)
         for p, pos in sorted(self._pos.items()):
+            if p in _Consumer.paused:
+                continue
             while budget and pos < self._ends[p]:
                 if pos in _Consumer.holes:
                     pos += 1
@@ -79,7 +83,7 @@ def _inspector(monkeypatch, ends: dict, partitions: list):
         return list(partitions)
     monkeypatch.setattr(inspector, "_partitions_of", partitions_of)
     _Consumer.calls, _Consumer.empties_first, _Consumer.stall, _Consumer.flaky = 0, 0, False, False
-    _Consumer.begin, _Consumer.holes, _Consumer.value_of, _Consumer.made = 0, set(), None, []
+    _Consumer.begin, _Consumer.holes, _Consumer.value_of, _Consumer.made, _Consumer.paused = 0, set(), None, [], set()
     return inspector
 
 
@@ -199,7 +203,7 @@ async def test_count_type은_파티션마다_끝에서_N건을_세고_유형_칸
     got = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=30, max_seconds=8)
     assert got.status == "ok" and got.envelope.complete, got.error
     data = got.data
-    assert [(r["partition"], r["from"], r["to"], r["counted"]) for r in data["partitions"]] == [(0, 70, 100, 30), (1, 30, 60, 30)]
+    assert [(r["partition"], r["spans"], r["counted"]) for r in data["partitions"]] == [(0, [[70, 100]], 30), (1, [[30, 60]], 30)]
     assert data["counted"] == 60 and data["matched"] == 4 and data["whole"] is False      # 70·90 / 30·40 — 80·50은 유형 칸이 없다 and data["stopped"] == ""
     assert data["with_field"] == sum(1 for p, (a, b) in ((0, (70, 100)), (1, (30, 60))) for o in range(a, b) if o % 5 != 4 and o % 3 != 2)
     assert data["latest"] == {"partition": 0, "offset": 90, "at": "1970-01-01T00:00:01.090000+00:00"}
@@ -223,3 +227,40 @@ async def test_count_type은_시간_상한이나_빈_응답에서_멈추면_그_
     _Consumer.stall = True
     stalled = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=50, max_seconds=8)
     assert stalled.data["stopped"] == "빈 응답 3번" and not stalled.envelope.complete and stalled.data["whole"] is False
+
+
+# ── R3-5z ① — 끝에서 조각씩 뒤로: 멈춰도 가장 최근 쪽이 남는다 ──
+
+async def test_count_type은_끝에서_조각씩_뒤로_읽어_멈춰도_가장_최근_쪽을_덮고_센_범위를_조각_그대로_적는다(monkeypatch):
+    """측정 #33 1: 끝−N으로 seek하고 앞으로 읽어, 시간 상한에서 멈춘 세기가 창의 가장 오래된 끝(부른 시각보다 14시간 전 3분치)을 셌다. 파티션마다 끝에서 조각씩
+    뒤로 물러나며 읽는다(조각은 5건에서 두 배씩) — 멈추면 가장 최근 쪽이 남는다. 센 범위는 조각 그대로(`spans`, 최근 쪽부터): 다 읽은 조각은 끝에 이어 붙고, 멈춘
+    조각은 읽은 데까지 따로. 세기에서만 fetch 상한을 올린다(277KB 메시지면 기본 1MB는 왕복마다 3건 남짓). 읽은 바이트·초·부른 시각을 결과에 남긴다. 다 센 파티션은
+    멈춰 둔다 — 이미 센 쪽을 또 받지 않게."""
+    from src.infrastructure import kafka_inspector as ki
+
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.value_of = _kinds
+    monkeypatch.setattr(ki, "_mono", lambda: float(_Consumer.calls))                      # getmany 한 번에 1초
+    got = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=50, max_seconds=5)
+    data = got.data
+    assert data["stopped"] == "시간 상한 5초" and data["partitions"][0]["spans"] == [[95, 100], [85, 89]] and data["counted"] == 9
+    assert data["bytes"] == sum(len(_kinds(0, o)) for o in [*range(95, 100), *range(85, 89)]) and data["seconds"] == 5.0
+    assert data["called_at"] == T0.isoformat() and not got.envelope.complete
+    assert _Consumer.made[0]["max_partition_fetch_bytes"] == ki.COUNT_FETCH_BYTES > 1024 * 1024
+    assert all(made.get("group_id") is None and made.get("enable_auto_commit") is False for made in _Consumer.made)
+    inspector = _inspector(monkeypatch, {0: 100, 1: 60}, [0, 1])
+    _Consumer.value_of = _kinds
+    done = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=30, max_seconds=1000)
+    assert [r["spans"] for r in done.data["partitions"]] == [[[70, 100]], [[30, 60]]] and _Consumer.paused == {0, 1}   # 다 센 파티션은 멈춘다
+    assert done.data["stopped"] == "" and done.envelope.complete
+    # 압축 구멍: 조각 끝이 구멍이면 다음 레코드(그 뒤 오프셋)로 조각이 끝난 줄 안다. 같은 배치에 남은 옛 자리 레코드는 새 조각의 것이 아니다.
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.value_of, _Consumer.holes = _kinds, {90, 94}
+    holed = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=50, max_seconds=1000)
+    assert holed.data["partitions"][0]["spans"] == [[50, 100]] and holed.data["counted"] == 48 and holed.data["stopped"] == ""
+    # 한 조각 안에서는 앞으로 읽는다 — 먼저 본 맞은 메시지가 가장 최근은 아니다
+    inspector = _inspector(monkeypatch, {0: 100}, [0])
+    _Consumer.value_of = lambda p, o: b'{"meta": {"kind": "7"}}' if o in (95, 98) else b'{"meta": {"kind": "9"}}'
+    pair = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=1000)
+    assert pair.data["matched"] == 2 and pair.data["latest"]["offset"] == 98
+

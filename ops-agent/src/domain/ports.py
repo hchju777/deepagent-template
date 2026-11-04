@@ -133,7 +133,8 @@ class KafkaInspectorPort(ABC):
     @abstractmethod
     async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
         """섞인 토픽에서 한 유형의 메시지만 센다(R3-5y ② — 측정 #32: 라우터가 유형 30개를 나눠 보내는 토픽에서 리드가 tail을 20·50·200으로 냈지만 끝 몇백 건으로는
-        답이 안 났다). 파티션마다 끝에서 최대 `max_messages`건, `max_seconds`초 안에서 — 먼저 닿는 쪽에서 멈춘다. 값의 `field`(점 경로)를 문자열로 `values`와
+        답이 안 났다). 파티션마다 끝에서 최대 `max_messages`건, `max_seconds`초 안에서 — 먼저 닿는 쪽에서 멈춘다. 끝에서 뒤로 물러나며 읽어 멈춰도 가장 최근 쪽이
+        남는다(R3-5z ①). 값의 `field`(점 경로)를 문자열로 `values`와
         견준다. 한 번 부르면 결과 하나다 — 녹화·재생이 인자별 결과 하나로 맞는다. `assign` 뒤 `seek`, 그룹 미참여·커밋 없음."""
 
     @abstractmethod

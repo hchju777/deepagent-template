@@ -170,7 +170,8 @@ async def test_스텁_count_type은_시드_메시지에서_세고_재생_꼴은_
     clock = lambda: datetime(2026, 11, 4, 9, 0, tzinfo=timezone.utc)                       # noqa: E731
     seeded = StubKafkaInspector({"t.raw": {"begin": 0, "messages": [{"meta": {"kind": "7" if n % 4 == 0 else "9"}} for n in range(10)]}}, clock=clock)
     got = await seeded.count_type("t.raw", field="meta.kind", values=["7"], max_messages=6, max_seconds=8)
-    assert got.status == "ok" and got.data["partitions"] == [{"partition": 0, "begin": 0, "end": 10, "from": 4, "to": 10, "counted": 6, "with_field": 6, "matched": 2}]
+    assert got.status == "ok" and got.data["partitions"] == [{"partition": 0, "begin": 0, "end": 10, "spans": [[4, 10]], "counted": 6, "with_field": 6, "matched": 2}]
+    assert got.data["called_at"] == clock().isoformat() and got.data["bytes"] > 0                  # 실어댑터와 같은 모양 — 부른 시각·읽은 바이트
     assert got.data["matched"] == 2 and got.data["latest"]["offset"] == 8 and got.data["whole"] is False
     recorded = {"partitions": [], "counted": 20000, "with_field": 20000, "matched": 0, "whole": False, "stopped": ""}
     args = {"field": "meta.kind", "values": ["7"], "max_messages": 20000, "max_seconds": 8.0}

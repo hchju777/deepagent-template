@@ -45,11 +45,20 @@ TAIL_WAIT_S = 15.0
 EMPTY_POLLS = 3
 
 
+# 유형 세기에서만 올리는 파티션당 fetch 상한(R3-5z ① — 측정 #33: 메시지 중간값 277KB라 기본 1MB는 왕복마다 3건 남짓). 조각 끝을 넘어 받는 양도 이만큼까지라
+# 무작정 키우지 않는다.
+COUNT_FETCH_BYTES = 4 * 1024 * 1024
+# 끝에서 뒤로 물러나며 읽는 첫 조각(파티션마다, 그 뒤 두 배씩) — 작게 시작해야 멈춰도 가장 최근 쪽이 남는다(측정 #33: 277KB 메시지 8초에 60건 남짓).
+COUNT_FIRST_CHUNK = 5
+_mono = time.monotonic                 # 세기의 시간 상한만 이것으로 잰다 — 테스트가 갈아 끼우는 자리(이벤트 루프의 시계는 건드리지 않게)
+
+
 class TypeTally:
     """`count_type`의 셈 — 실어댑터(받는 대로)와 스텁(시드에서)이 같은 규칙·같은 모양을 내게 한 곳에 둔다(R3-5y ②). 유형 칸이 있고 그 값이 스칼라인 메시지만
-    "유형 칸이 든" 것이다 — 선언한 칸 이름이 틀렸을 때 "0건"이 "그 유형이 없다"로 읽히지 않게 그 수를 따로 센다."""
+    "유형 칸이 든" 것이다 — 선언한 칸 이름이 틀렸을 때 "0건"이 "그 유형이 없다"로 읽히지 않게 그 수를 따로 센다. 센 범위는 파티션마다 다 읽은 오프셋 범위들
+    (`spans`, 최근 쪽부터 — R3-5z ①): 메시지 오프셋이 아니라 읽은 자리로 적는다(압축 구멍은 빈 것이 아니다)."""
 
-    def __init__(self, topic: str, *, field: str, values, max_messages: int, max_seconds: float, tz):
+    def __init__(self, topic: str, *, field: str, values, max_messages: int, max_seconds: float, tz, called_at: str | None = None):
         self.head = {"topic": topic, "field": field, "values": sorted({str(v) for v in values}),
                      "max_messages": int(max_messages), "max_seconds": float(max_seconds)}
         self._wanted = set(self.head["values"])
@@ -57,23 +66,37 @@ class TypeTally:
         self.rows: dict[int, dict] = {}
         self._first = self._last = None
         self._latest: tuple | None = None
+        self.bytes = 0
+        self.called_at = called_at
 
-    def window(self, partition: int, begin: int, end: int) -> int:
-        """그 파티션에서 셀 첫 오프셋 — 끝에서 최대 N건."""
-        start = max(begin, end - max(self.head["max_messages"], 0))
-        self.rows[partition] = {"partition": partition, "begin": begin, "end": end, "from": start, "to": start,
-                                "counted": 0, "with_field": 0, "matched": 0}
-        return start
+    def track(self, partition: int, begin: int, end: int) -> None:
+        self.rows[partition] = {"partition": partition, "begin": begin, "end": end, "spans": [], "counted": 0, "with_field": 0, "matched": 0}
 
-    def pending(self) -> bool:
-        return any(row["to"] < row["end"] for row in self.rows.values())
+    def tail_start(self, begin: int, end: int) -> int:
+        """끝에서 최대 N건의 첫 오프셋."""
+        return max(begin, end - max(self.head["max_messages"], 0))
 
-    def add(self, partition: int, offset: int, timestamp, value) -> None:
+    def covered(self, partition: int) -> int:
+        return sum(hi - lo for lo, hi in self.rows[partition]["spans"])
+
+    def cover(self, partition: int, lo: int, hi: int) -> None:
+        """[lo, hi)를 다 읽었다 — 맞닿은 범위는 하나로, 최근 쪽부터."""
+        if hi <= lo:
+            return
+        merged: list[list[int]] = []
+        for a, b in sorted([*self.rows[partition]["spans"], [lo, hi]]):
+            if merged and a <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        self.rows[partition]["spans"] = sorted(merged, key=lambda span: -span[0])
+
+    def add(self, partition: int, offset: int, timestamp, value, size: int = 0) -> None:
         row = self.rows.get(partition)
-        if row is None or not row["from"] <= offset < row["end"]:
-            return                                       # 센 뒤에 온 새 메시지는 창 밖이다
+        if row is None:
+            return
         row["counted"] += 1
-        row["to"] = max(row["to"], offset + 1)
+        self.bytes += max(int(size), 0)
         if isinstance(timestamp, (int, float)):
             self._first = timestamp if self._first is None else min(self._first, timestamp)
             self._last = timestamp if self._last is None else max(self._last, timestamp)
@@ -90,15 +113,16 @@ class TypeTally:
     def _at(self, ms) -> str | None:
         return datetime.fromtimestamp(ms / 1000, tz=self._tz).isoformat() if isinstance(ms, (int, float)) else None
 
-    def result(self, stopped: str = "") -> dict:
+    def result(self, stopped: str = "", seconds: float = 0.0) -> dict:
         rows = [self.rows[p] for p in sorted(self.rows)]
         latest = None
         if self._latest is not None:
             ts, partition, offset = self._latest
             latest = {"partition": partition, "offset": offset, "at": self._at(ts) if ts >= 0 else None}
+        whole = not stopped and all(r["begin"] >= r["end"] or r["spans"] == [[r["begin"], r["end"]]] for r in rows)
         return {**self.head, "partitions": rows, "counted": sum(r["counted"] for r in rows), "with_field": sum(r["with_field"] for r in rows),
                 "matched": sum(r["matched"] for r in rows), "first_at": self._at(self._first), "last_at": self._at(self._last), "latest": latest,
-                "whole": not stopped and all(r["from"] == r["begin"] and r["to"] >= r["end"] for r in rows), "stopped": stopped}
+                "whole": whole, "stopped": stopped, "bytes": self.bytes, "seconds": round(float(seconds), 2), "called_at": self.called_at}
 
 
 class RealKafkaInspector(KafkaInspectorPort):
@@ -338,7 +362,9 @@ class RealKafkaInspector(KafkaInspectorPort):
                     pass
 
     async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float) -> ProbeResult:
-        """섞인 토픽에서 한 유형만 센다(포트 docstring). `tail`과 같은 연결·같은 읽기 전용(assign·seek, 그룹 미참여·커밋 없음) — 다만 끝에서 N건을 끝까지 센다."""
+        """섞인 토픽에서 한 유형만 센다(포트 docstring). `tail`과 같은 연결·같은 읽기 전용(assign·seek, 그룹 미참여·커밋 없음) — 다만 끝에서 N건을 센다.
+        파티션마다 **끝에서 조각씩 뒤로** 물러나며 읽는다(R3-5z ① — 측정 #33: 끝−N에서 앞으로 읽어, 시간 상한에서 멈춘 세기가 창의 가장 오래된 끝만 셌다). 조각은
+        작게 시작해 두 배씩 — 멈추면 가장 최근 쪽이 남고, 멈춘 조각은 읽은 데까지 따로 적는다. 다 센 파티션은 멈춰 둔다(이미 센 쪽을 또 받지 않게)."""
         actual = self.resolve_topic(topic)
         source = f"kafka:count_type {actual} {field}"
         consumer = None
@@ -351,22 +377,49 @@ class RealKafkaInspector(KafkaInspectorPort):
             consumer = AIOKafkaConsumer(bootstrap_servers=self._brokers,
                                         group_id=None,              # ← 그룹에 안 들어간다
                                         enable_auto_commit=False,   # ← 커밋도 안 한다
-                                        auto_offset_reset="earliest")
+                                        auto_offset_reset="earliest",
+                                        max_partition_fetch_bytes=COUNT_FETCH_BYTES)
             await consumer.start()
             tps = [TopicPartition(actual, p) for p in partitions]
             consumer.assign(tps)                                    # ← subscribe가 아니다
             ends = await consumer.end_offsets(tps)
             begins = await consumer.beginning_offsets(tps)
+            called = self._clock()
             tally = TypeTally(actual, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds,
-                              tz=self._clock().tzinfo)
+                              tz=called.tzinfo, called_at=called.isoformat())
+            limit = max(int(max_messages), 0)
+            by_partition = {tp.partition: tp for tp in tps}
+            reading: dict[int, list[int]] = {}                      # 파티션 → [조각 시작, 조각 끝, 읽은 데까지, 조각 크기]
             for tp in tps:
-                start = tally.window(tp.partition, begins[tp], ends[tp])
-                if ends[tp] > start:
-                    consumer.seek(tp, start)
+                begin, end = begins[tp], ends[tp]
+                tally.track(tp.partition, begin, end)
+                lo = max(begin, end - min(COUNT_FIRST_CHUNK, limit))
+                if lo < end:
+                    reading[tp.partition] = [lo, end, lo, end - lo]
+                    consumer.seek(tp, lo)
+            idle = [tp for tp in tps if tp.partition not in reading]
+            if idle:
+                consumer.pause(*idle)                               # seek 안 한 파티션은 처음부터 온다 — 셀 것이 없으면 받지 않는다
+
+            def step(partition: int) -> None:
+                """조각 하나를 다 읽었다 — 끝에 이어 붙이고, 남았으면 그 앞 조각으로(두 배), 다 셌으면 멈춰 둔다."""
+                lo, hi, _, size = reading[partition]
+                tally.cover(partition, lo, hi)
+                begin, left = tally.rows[partition]["begin"], limit - tally.covered(partition)
+                if lo <= begin or left <= 0:
+                    del reading[partition]
+                    consumer.pause(by_partition[partition])
+                    return
+                size = min(size * 2, left)
+                start = max(begin, lo - size)
+                reading[partition] = [start, lo, start, size]
+                consumer.seek(by_partition[partition], start)
+
             stopped, empties = "", 0
-            deadline = time.monotonic() + float(max_seconds)
-            while tally.pending():
-                if time.monotonic() >= deadline:
+            started = _mono()
+            deadline = started + float(max_seconds)
+            while reading:
+                if _mono() >= deadline:
                     stopped = f"시간 상한 {float(max_seconds):g}초"
                     break
                 batches = await consumer.getmany(timeout_ms=1000, max_records=5000)
@@ -378,9 +431,26 @@ class RealKafkaInspector(KafkaInspectorPort):
                         break
                     continue
                 empties = 0
+                moved: set[int] = set()                             # 이 배치에서 다음 조각으로 옮긴 파티션 — 남은 레코드는 옛 자리의 것이다
                 for record in got:
-                    tally.add(record.partition, record.offset, record.timestamp, _decode(record.value))
-            return ProbeResult.succeeded(tally.result(stopped), source=source, clock=self._clock,
+                    p = record.partition
+                    if p in moved or p not in reading:
+                        continue
+                    lo, hi = reading[p][0], reading[p][1]
+                    if record.offset < lo:
+                        continue
+                    if record.offset >= hi:                         # 조각 끝이 압축 구멍이었다 — 다 읽은 것이다
+                        step(p)
+                        moved.add(p)
+                        continue
+                    tally.add(p, record.offset, record.timestamp, _decode(record.value), size=len(record.value or b""))
+                    reading[p][2] = record.offset + 1
+                    if record.offset + 1 >= hi:
+                        step(p)
+                        moved.add(p)
+            for p, (lo, _, upto, _) in reading.items():
+                tally.cover(p, lo, upto)                            # 멈춘 조각은 읽은 데까지 따로
+            return ProbeResult.succeeded(tally.result(stopped, seconds=_mono() - started), source=source, clock=self._clock,
                                          truncated_reason=(f"{stopped}에서 멈췄다 — 다 못 셌다" if stopped else None))
         except Exception as exc:                                   # noqa: BLE001
             return ProbeResult.failed(f"{type(exc).__name__}: {exc}", source=source, clock=self._clock)

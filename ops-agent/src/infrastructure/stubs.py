@@ -314,12 +314,17 @@ class StubKafkaInspector(KafkaInspectorPort):
             return ProbeResult.failed(f"스냅샷 밖 — {topic}의 유형 세기(인자 {json.dumps(args, ensure_ascii=False)})는 안 떴다", source=source, clock=self._clock)
         if topic not in self._ends:
             return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {topic}", source=source, clock=self._clock)
-        tally = TypeTally(topic, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds, tz=self._clock().tzinfo)
-        start = tally.window(0, self._begins[topic], self._ends[topic])
-        for offset in range(start, self._ends[topic]):
+        called = self._clock()
+        tally = TypeTally(topic, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds, tz=called.tzinfo, called_at=called.isoformat())
+        low, high = self._begins[topic], self._ends[topic]
+        tally.track(0, low, high)
+        start = tally.tail_start(low, high)
+        for offset in range(start, high):
             caught = self._caught[topic].get(offset)
             if caught is not None:
-                tally.add(0, offset, caught.get("timestamp"), caught.get("value"))
+                size = len(json.dumps(caught.get("value"), ensure_ascii=False, default=str).encode("utf-8"))
+                tally.add(0, offset, caught.get("timestamp"), caught.get("value"), size=size)
+        tally.cover(0, start, high)
         return ProbeResult.succeeded(tally.result(), source=source, clock=self._clock)
 
     async def offsets(self, topic: str) -> ProbeResult:
