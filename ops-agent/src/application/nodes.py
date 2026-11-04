@@ -356,6 +356,12 @@ def _evidence_of(state: CaseState) -> dict[str, list[str]]:
     return out
 
 
+def _failed_of(state: CaseState) -> dict[str, tuple[str, str]]:
+    """질의 → (그 읽기의 태스크 id, 실패 사유) — 실패한 읽기만(R3-5z ⑨ — 측정 #33 4: 실패한 읽기를 또 내면 중복 반려에 "그 결과는"이 비어 있고 실패 사유도 없어
+    리드가 같은 경로를 또 냈다). 사유는 한 줄로 눕혀 400자까지 — 없는 경로면 후보가 그 안에 있다."""
+    return {_query(t): (t.id, " ".join((t.error or "사유 없음").split())[:400]) for t in state.plan_tasks if t.action and t.status == "error"}
+
+
 def runnable_tasks(state: CaseState) -> list[PlanTask]:
     """지금 실행할 수 있는 태스크 — 우선순위 오름차순, 동률이면 FIFO.
 
@@ -388,6 +394,7 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   pending: frozenset = frozenset(),
                   waiting: dict[str, PlanTask] | None = None,
                   evidence_of: dict[str, list[str]] | None = None,
+                  failed_of: dict[str, tuple[str, str]] | None = None,
                   inputs_of: dict[str, list[str] | None] | None = None,
                   hint: str = "", hint_for: frozenset = frozenset(),
                   hop: tuple[str, dict] | None = None,
@@ -480,9 +487,12 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
             tip = (f" — 입구 노드가 이미 읽었다. {hint}" if at_intake
                    else " — 그 홉은 이미 돌았다. 예시의 첫 칸(그 결과를 입력으로 한 다음 읽기)을 내라" if hop is not None and (task.action, task.params) == hop
                    else f" — {hint}" if hint else "")
+            # 결과가 없는 중복은 앞 읽기가 실패한 것이다 — 그 id와 사유(R3-5z ⑨). 같은 실패를 또 내지 않게 후보가 사유 안에 있다(없는 경로).
+            failed = (failed_of or {}).get(query) if not where else None
             reused.append(f"{task.id}{DUP_KIND} — 받지 않는다 "
                           f"({describe(task.action, task.params)})"
-                          + (f"{DUP_WHERE}{', '.join(where)}" if where else "") + tip)
+                          + (f"{DUP_WHERE}{', '.join(where)}" if where else "")
+                          + (f" — 앞 읽기 {failed[0]}가 실패했다: {failed[1]}" if failed else "") + tip)
             aliases[task.id] = list(where) or None
             continue
         used.add(task.id)
@@ -548,7 +558,7 @@ def make_nodes(deps: EngineDeps) -> dict:
         # 그게 맞다: 아직 아무것도 안 봤는데 이름을 안다면 찍은 것이다.
         tasks, rejected, guessed = _accept_tasks(
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
-            pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),
+            pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state), failed_of=_failed_of(state),
             hint=hop_line(state.target, code_index=deps.code_index, walk=state.walk), hint_for=_intake_ids(state),
             hop=_hop(state, deps), pins=_pins(state, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),
             seen=_universe(state, deps) if deps.check_discovery else None)
@@ -594,7 +604,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             fresh, rejected, guessed = _accept_tasks(
                 reply, room=deps.max_tasks - len(base.plan_tasks),
                 taken=_taken(base), done=_done(base), pending=_pending(base),
-                waiting=_waiting(base), evidence_of=_evidence_of(base),
+                waiting=_waiting(base), evidence_of=_evidence_of(base), failed_of=_failed_of(base),
                 inputs_of={**_rejected_reads(base), **_inputs_of(base)},
                 hint=hop_line(base.target, code_index=deps.code_index, walk=base.walk), hint_for=_intake_ids(base),
                 hop=_hop(base, deps), pins=_pins(base, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),

@@ -1478,3 +1478,51 @@ async def test_type_count_spec은_클래스와_짝인_유형_열거_멤버의_�
     bare = code_at(topology.model_copy(update={"pipelines": PipelineSpec(class_key="class", enabled_key="enabled",
                                                                           router=RouterSpec(type_enum="Kind", pipeline_enum="Flow"))}))
     assert await bare.type_count_spec("Seeder") == "유형 칸 선언 없음(토폴로지 pipelines.router.type_field) — 셀 수 없다"
+
+
+
+# ── R3-5z ⑨ — 없는 경로의 후보: 경로 끝 이름과 맞는 클래스를 정의한 파일 ──
+
+async def test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래스를_정의한_파일을_후보로_댄다(clock):
+    """측정 #33 4: 리드가 부모 클래스 파일 경로를 지어냈다(없는 파일) — 같은 실패 읽기를 또 내고 정체로 끝났다. 실제 경로는 이미 읽은 파일의 import 줄에 있었다. 없는 경로의
+    꼬리에 같은 파일 이름(R3-5u ③)에 더해 **경로 끝 이름과 맞는 클래스를 정의한 파일**(`base_pipeline.py` ↔ `BasePipeline` — 밑줄·대소문자를 떼고 같은 이름)을 댄다.
+    합쳐 다섯까지, 나머지는 `외 n`. 경로가 없다고 단정하지는 않는다 — 인덱스가 아는 것을 말할 뿐이다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    class Reader:
+        async def show(self, repo, commit, path, *, whole=False):
+            return ProbeResult.failed(f"fatal: path '{path}' does not exist in '{commit}'", source="w", clock=clock)
+
+    def source(files):
+        class Src:
+            async def files(self):
+                return sorted(files)
+
+            async def read(self, path):
+                return files.get(path)
+        return Src()
+
+    topology = Topology(services={"api": Service(repo="dt-api", role="화면"), "sink": Service(repo="dt-core", role="저장한다")}, config_paths=LAYERS)
+    code = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    files = {"pipe/base.py": "class BasePipeline:\n    pass\n", "pipe/job.py": "from pipe.base import BasePipeline\n\n\nclass Job(BasePipeline):\n    pass\n"}
+    code.attach_index(await ix.build_index({"dt-core": source(files)}, commits={"dt-core": "c0ffee"}))
+    got = await code.read("sink", "common/base_pipeline.py")
+    assert got.status == "error" and got.error.startswith("fatal: path")
+    assert got.error.endswith(" — 경로 끝 이름과 맞는 클래스를 정의한 파일: dt-core:pipe/base.py(class BasePipeline, service='sink') — 그 path로 다시 내라")
+    # 같은 파일 이름이 있으면 그것이 먼저, 클래스 파일이 뒤
+    both = {**files, "lib/base_pipeline.py": "x = 1\n"}
+    code.attach_index(await ix.build_index({"dt-core": source(both)}, commits={"dt-core": "c0ffee"}))
+    got = await code.read("sink", "common/base_pipeline.py")
+    assert got.error.endswith(" — 인덱스에 같은 이름의 파일: dt-core:lib/base_pipeline.py(service='sink') · 경로 끝 이름과 맞는 클래스를 정의한 파일: "
+                              "dt-core:pipe/base.py(class BasePipeline, service='sink') — 그 path로 다시 내라")
+    # 합쳐 다섯까지
+    many = {f"p{i}/w.py": "class Writer:\n    pass\n" for i in range(7)}
+    code.attach_index(await ix.build_index({"dt-core": source(many)}, commits={"dt-core": "c0ffee"}))
+    got = await code.read("sink", "q/writer.py")
+    assert got.error.count("(class Writer, service='sink')") == 5 and got.error.endswith(" 외 2 — 그 path로 다시 내라")
+    # 맞는 이름이 없으면 git 말 그대로
+    got = await code.read("sink", "q/nothing_here.py")
+    assert got.error.startswith("fatal: path 'q/nothing_here.py' does not exist") and "다시 내라" not in got.error

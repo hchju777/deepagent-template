@@ -3595,9 +3595,9 @@ CASES += [
 ELSEWHERE_T = "tests/infrastructure/test_deployed_code.py::test_code_read에_다른_서비스의_경로를_주면_그_경로가_어느_서비스에_있는지_안내한다"
 SCHEMA_T = "tests/application/test_lead.py::test_답_스키마는_턴마다_모양이_다르고_판정만_닫힌다"
 CASES += [
- ("없는 경로에 같은 이름 파일을 안 댄다", D, "        return f\" — 인덱스에 같은 이름의 파일: {', '.join(shown(r, f) for r, f in same[:3])}{more} — 그 path로 다시 내라\"\n", "        return \"\"\n", [ELSEWHERE_T]),
+ ('없는 경로에 같은 이름 파일을 안 댄다', D, '        return f" — {\' · \'.join(parts)}{f\' 외 {left}\' if left else \'\'} — 그 path로 다시 내라"\n', '        return ""\n', [ELSEWHERE_T]),
  ("인덱스가 아는 경로에도 같은 이름 파일을 댄다", D, "        if any(s.file == path and s.repo == repo for s in modules):\n            return \"\"\n", "        if False:\n            return \"\"\n", [ELSEWHERE_T]),
- ("같은 이름 파일을 서비스 없이 댄다", D, "            return f\"{r}:{f}\" + (f\"(service={svc!r})\" if svc else \"\")\n", "            return f\"{r}:{f}\"\n", [ELSEWHERE_T]),
+ ('같은 이름 파일을 서비스 없이 댄다', D, '(f"service={svc!r}" if svc else "")', '("")', [ELSEWHERE_T]),
  ("리드 스키마의 params에 속성을 적는다", LD, "    \"id\": _ID, \"goal\": {\"type\": \"string\"}, \"action\": {\"type\": \"string\"}, \"params\": {\"type\": \"object\"},\n", "    \"id\": _ID, \"goal\": {\"type\": \"string\"}, \"action\": {\"type\": \"string\"}, \"params\": {\"type\": \"object\", \"properties\": {\"line\": {\"type\": \"integer\", \"minimum\": 1}}},\n", [SCHEMA_T]),
 ]
 
@@ -4031,7 +4031,23 @@ CASES += [
  ('날짜 줄을 사실에 안 싣는다', WK, '    if dated is not None and inputs_at.get(ev) and (line := await date_line(dated, ev)):', '    if False:', ['tests/application/test_walk.py::test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코드가_읽는_필드의_가장_늦은_값과_부른_날의_차를_걷기_주에_적는다']),
  ('코드가 읽는 필드를 범위 파일에서 안 찾는다', DCP, '        read = [f for f in fields if any(q + f + q in snap.get(path, "") for path in files for q in ("\'", \'"\'))]', '        read = list(fields)', ['tests/infrastructure/test_deployed_code.py::test_filter_lines는_이_사이트의_등록이_가리키는_클래스_파일을_범위로_비교식을_먼저_뽑아_단일값_전부와_맞춘다']),
 ]
-assert len(CASES) >= 1471, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑨ — 없는 경로의 후보(경로 끝 이름과 맞는 클래스를 정의한 파일, 합쳐 다섯) · 실패한 읽기를 또 내면 중복 반려에 앞 읽기의 실패 사유 ──
+CASES += [
+ ('경로 끝 이름을 밑줄·대소문자 떼고 클래스 이름과 안 맞춘다', DCP, 's.name.replace("_", "").lower() == stem})', 's.name == stem})', ['tests/infrastructure/test_deployed_code.py::test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래스를_정의한_파일을_후보로_댄다']),
+ ('같은 파일 이름이 없으면 클래스 후보도 안 본다', DCP, '        if not same and not defined:\n', '        if not same:\n', ['tests/infrastructure/test_deployed_code.py::test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래스를_정의한_파일을_후보로_댄다']),
+ ('클래스 후보를 합쳐 다섯으로 안 자른다', DCP, '        classed = [shown(r, f, c) for r, f, c in defined][:5 - len(named)]', '        classed = [shown(r, f, c) for r, f, c in defined]', ['tests/infrastructure/test_deployed_code.py::test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래스를_정의한_파일을_후보로_댄다']),
+ ('자른 후보 수를 안 적는다', DCP, '        left = len(same) + len(defined) - len(named) - len(classed)', '        left = 0', ['tests/infrastructure/test_deployed_code.py::test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래스를_정의한_파일을_후보로_댄다']),
+ ('두 갈래 후보를 가르지 않는다', DCP, '        return f" — {\' · \'.join(parts)}', '        return f" — {\', \'.join(parts)}', ['tests/infrastructure/test_deployed_code.py::test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래스를_정의한_파일을_후보로_댄다']),
+ ('클래스 후보에 클래스 이름이 없다', DCP, '(f"class {cls}" if cls else "")', '("")', ['tests/infrastructure/test_deployed_code.py::test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래스를_정의한_파일을_후보로_댄다']),
+ ('성공한 읽기도 실패로 센다', ND, 'for t in state.plan_tasks if t.action and t.status == "error"}', 'for t in state.plan_tasks if t.action}', ['tests/application/test_nodes.py::test_실패한_읽기를_또_내면_중복_반려에_앞_읽기의_id와_실패_사유를_적는다']),
+ ('실패 사유를 한 줄로 안 눕힌다', ND, '(t.id, " ".join((t.error or "사유 없음").split())[:400])', '(t.id, (t.error or "사유 없음")[:400])', ['tests/application/test_nodes.py::test_실패한_읽기를_또_내면_중복_반려에_앞_읽기의_id와_실패_사유를_적는다']),
+ ('실패 사유를 안 자른다', ND, '" ".join((t.error or "사유 없음").split())[:400])', '" ".join((t.error or "사유 없음").split()))', ['tests/application/test_nodes.py::test_실패한_읽기를_또_내면_중복_반려에_앞_읽기의_id와_실패_사유를_적는다']),
+ ('결과가 있는 중복에도 앞 읽기 실패를 붙인다', ND, '            failed = (failed_of or {}).get(query) if not where else None', '            failed = (failed_of or {}).get(query)', ['tests/application/test_nodes.py::test_실패한_읽기를_또_내면_중복_반려에_앞_읽기의_id와_실패_사유를_적는다']),
+ ('중복 반려에 앞 읽기의 실패 사유가 없다', ND, '(f" — 앞 읽기 {failed[0]}가 실패했다: {failed[1]}" if failed else "")', '""', ['tests/application/test_nodes.py::test_실패한_읽기를_또_내면_중복_반려에_앞_읽기의_id와_실패_사유를_적는다', 'tests/application/test_nodes.py::test_frame과_integrate는_실패한_읽기의_사유를_중복_반려에_넘긴다']),
+ ('frame이 실패한 읽기를 안 넘긴다', ND, '            pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state), failed_of=_failed_of(state),\n', '            pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),\n', ['tests/application/test_nodes.py::test_frame과_integrate는_실패한_읽기의_사유를_중복_반려에_넘긴다']),
+ ('integrate가 실패한 읽기를 안 넘긴다', ND, '                waiting=_waiting(base), evidence_of=_evidence_of(base), failed_of=_failed_of(base),\n', '                waiting=_waiting(base), evidence_of=_evidence_of(base),\n', ['tests/application/test_nodes.py::test_frame과_integrate는_실패한_읽기의_사유를_중복_반려에_넘긴다']),
+]
+assert len(CASES) >= 1484, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

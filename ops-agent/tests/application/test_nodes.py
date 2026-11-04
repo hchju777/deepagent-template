@@ -1071,3 +1071,45 @@ async def test_integrate도_코드가_아는_라우터_유형_이름을_받기_�
     patch = await make_nodes(deps)["integrate"](CaseState(case=case, round=1, plan_tasks=[task("t-1", status="ok")]))
     assert not any(t.id == "t-2" for t in patch.get("plan_tasks", [])) and any("메시지 유형 이름이지 토픽이 아니다" in e for e in patch["llm_errors"])
 
+
+
+# ── R3-5z ⑨ — 실패한 읽기를 또 내면 중복 반려에 앞 읽기의 실패 사유 ──
+
+def test_실패한_읽기를_또_내면_중복_반려에_앞_읽기의_id와_실패_사유를_적는다(case):
+    """측정 #33 4: 리드가 지어낸 부모 클래스 파일 경로로 `code.read`를 냈고(없는 파일), 같은 실패 읽기를 또 내 정체로 끝났다 — 중복 반려에 "그 결과는"이 비어 있었고(증거가
+    없다) 실패 사유도 안 붙었다. 앞 읽기가 실패했으면 그 id와 사유를 적는다(한 줄로 눕혀 400자까지 — 없는 경로면 후보가 그 안에 있다). 결과가 있는 중복은 전과 같다."""
+    from src.application.nodes import _accept_tasks, _failed_of, _query
+
+    params = {"service": "sink", "path": "common/base_pipeline.py"}
+    why = ("fatal: path 'common/base_pipeline.py' does not exist in 'c0ffee'\n — 경로 끝 이름과 맞는 클래스를 정의한 파일: "
+           "dt-core:pipe/base.py(class BasePipeline, service='sink') — 그 path로 다시 내라")
+    state = CaseState(case=case, plan_tasks=[task("t-4", action="code.read", params=params, status="error", error=why),
+                                             task("t-5", status="ok", result_evidence_ids=["t-5.e1"])])
+    failed = _failed_of(state)
+    assert failed == {_query(state.plan_tasks[0]): ("t-4", " ".join(why.split()))}                       # 실패한 것만, 한 줄로
+    again = task("t-9", action="code.read", params=params)
+    _, refused, _ = _accept_tasks({"plan_tasks": [again]}, room=5, done=frozenset({_query(again)}), failed_of=failed)
+    assert refused[0].startswith("t-9: 이미 한 읽기를 또 냈다 — 받지 않는다 (code.read ")
+    assert refused[0].endswith(" — 앞 읽기 t-4가 실패했다: " + " ".join(why.split()))
+    # 결과가 있는 중복은 그 자리(앞 읽기 실패보다 먼저) — 실패 사유는 안 붙는다
+    _, found, _ = _accept_tasks({"plan_tasks": [again]}, room=5, done=frozenset({_query(again)}), failed_of=failed,
+                                evidence_of={_query(again): ["t-6.e1"]})
+    assert found[0].endswith("그 결과는 t-6.e1") and "앞 읽기" not in found[0]
+    long = CaseState(case=case, plan_tasks=[task("t-4", action="code.read", params=params, status="error", error="x" * 1000)])
+    assert len(_failed_of(long)[_query(again)][1]) == 400
+
+
+async def test_frame과_integrate는_실패한_읽기의_사유를_중복_반려에_넘긴다(case):
+    from src.application.nodes import make_nodes
+
+    params = {"service": "sink", "path": "common/base_pipeline.py"}
+    failed = task("t-2", action="code.read", params=params, status="error", error="fatal: path 없음")
+    again = task("t-3", action="code.read", params=params)
+
+    async def lead(state):
+        return {"decision": "continue", "plan_tasks": [again]}
+
+    nodes = make_nodes(deps_for(ScriptedRunner(), first_tasks=[again], integrate=lead, max_rounds=9))
+    for node in ("frame", "integrate"):
+        patch = await nodes[node](CaseState(case=case, round=2, plan_tasks=[task("t-1", status="ok"), failed]))
+        assert any(e.endswith(" — 앞 읽기 t-2가 실패했다: fatal: path 없음") for e in patch["llm_errors"]), (node, patch["llm_errors"])

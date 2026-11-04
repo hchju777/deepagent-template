@@ -1188,15 +1188,24 @@ class DeployedCode(DeployedCodePort):
             return ""
         base = path.rsplit("/", 1)[-1]
         same = sorted({(s.repo, s.file) for s in modules if s.file != path and s.file.rsplit("/", 1)[-1] == base})
-        if not same:
+        # 경로 끝 이름과 맞는 클래스를 정의한 파일(R3-5z ⑨ — 측정 #33 4: 리드가 부모 클래스 파일 경로를 지어냈고 같은 실패 읽기를 또 냈다; 실제 경로는 이미 읽은 파일의
+        # import 줄에 있었다). `base_pipeline.py` ↔ `BasePipeline` — 밑줄·대소문자를 떼고 같은 이름. 같은 파일 이름이 먼저, 합쳐 다섯.
+        stem = base.rsplit(".", 1)[0].replace("_", "").lower()
+        defined = sorted({(s.repo, s.file, s.name) for s in self._index.symbols
+                          if s.kind == "class" and (s.repo, s.file) not in same and s.name.replace("_", "").lower() == stem})
+        if not same and not defined:
             return ""
 
-        def shown(r: str, f: str) -> str:
+        def shown(r: str, f: str, cls: str = "") -> str:
             svc = flowgraph.owner(f, r, self._topology)[0]
-            return f"{r}:{f}" + (f"(service={svc!r})" if svc else "")
+            inner = ", ".join(x for x in ((f"class {cls}" if cls else ""), (f"service={svc!r}" if svc else "")) if x)
+            return f"{r}:{f}" + (f"({inner})" if inner else "")
 
-        more = f" 외 {len(same) - 3}" if len(same) > 3 else ""
-        return f" — 인덱스에 같은 이름의 파일: {', '.join(shown(r, f) for r, f in same[:3])}{more} — 그 path로 다시 내라"
+        named = [shown(r, f) for r, f in same][:5]
+        classed = [shown(r, f, c) for r, f, c in defined][:5 - len(named)]
+        parts = ([f"인덱스에 같은 이름의 파일: {', '.join(named)}"] if named else []) + ([f"경로 끝 이름과 맞는 클래스를 정의한 파일: {', '.join(classed)}"] if classed else [])
+        left = len(same) + len(defined) - len(named) - len(classed)
+        return f" — {' · '.join(parts)}{f' 외 {left}' if left else ''} — 그 path로 다시 내라"
 
     # ── action 넷 ────────────────────────────────────────────────
 
