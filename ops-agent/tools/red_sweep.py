@@ -2366,7 +2366,7 @@ ACCEPT_T = "tests/application/test_nodes.py::test_모르는_인자나_빠진_인
 ASIDE_T = "tests/application/test_runner_probe.py::test_recompute_filter에_대상_identity가_하나도_없으면_결과를_참고로_표시한다"
 LADDER_ASIDE_T = "tests/application/test_briefing.py::test_참고_재집계의_match는_사다리가_사실로_쓰지_않는다"
 CASES += [
- ("모르는 인자를 받을 때 안 거른다", ND, "        problem = _accept_problem(task)\n        if problem is not None:", "        problem = _accept_problem(task)\n        if False:", [ACCEPT_T]),
+ ('모르는 인자를 받을 때 안 거른다', ND, '        problem = _accept_problem(task, not_topics)\n        if problem is not None:', '        problem = _accept_problem(task, not_topics)\n        if False:', [ACCEPT_T]),
  ("거부 기록에 받는 인자를 안 적는다", ND, "    return problem + hint", "    return problem", [ACCEPT_T]),
  ("action 없는 태스크를 받는다", ND, "    if not task.action:\n        return \"action이 없다", "    if False:\n        return \"action이 없다", [ACCEPT_T]),
  ("identity 없는 재집계를 참고로 안 표시한다", RP, "    return bool(focus) and not (set(focus) & _leaves(filter_))", "    return False", [ASIDE_T]),
@@ -2478,7 +2478,7 @@ PIN_B_T = "tests/application/test_briefing.py::test_입구_읽기와_pinned_태�
 CASES += [
  ("홉과 같은 태스크에 pinned를 안 단다", ND, "        kept = [t.model_copy(update={\"pinned\": True}) if (t.action, t.params) in pins else t for t in kept]", "        kept = list(kept)", [PIN_T]),
  ("리드가 단 pinned를 안 지운다", ND, "                                   \"input_evidence_ids\": ids, \"pinned\": False, \"walked\": False})", "                                   \"input_evidence_ids\": ids, \"walked\": False})", [PIN_T]),
- ("integrate가 홉을 받을 때 안 넘긴다", ND, "                hop=_hop(base, deps), pins=_pins(base, deps),\n", "", [PIN_WIRE_T]),
+ ('integrate가 홉을 받을 때 안 넘긴다', ND, '                hop=_hop(base, deps), pins=_pins(base, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),\n', '                not_topics=deps.router_types() if deps.router_types else frozenset(),\n', [PIN_WIRE_T]),
  ("고정 증거의 본문을 안 남긴다", B, "    detailed = {ref.id for ref in state.evidence if ref.id in pinned}", "    detailed = set()", [PIN_B_T]),
  ("고정 증거가 예산을 안 쓴다", B, "    used = sum(len(ref.body or ref.summary) for ref in state.evidence if ref.id in pinned)", "    used = 0", [PIN_B_T]),
  ("입구 읽기를 고정으로 안 본다", B, "        if t.pinned or (state.target is not None and t.id in (\"t-0\", \"t-1\")):", "        if t.pinned:", [PIN_B_T]),
@@ -3643,7 +3643,7 @@ CASES += [
  ("다른 사이트 값이 대는 쓴 쪽을 이 사이트 확인 없이 쓴다", WK, "            if off:\n                return f\"{fct}의 같은 키 {read_key} 값이 대는 {w} — {off}\"\n", "", [PIPE_WALK_T, BOARD_ELSEWHERE_T]),
  ("이 사이트 확인이 던지면 채운다", WK, "                off = f\"이 사이트에서 도는지 확인하지 못했다({type(exc).__name__})\"\n", "                off = \"\"\n", [PIPE_WALK_T]),
  ("걷기 노드가 이 사이트 확인을 안 넘긴다", ND, "peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,\n", "peer=deps.peer, routed=deps.routed,\n", [BOARD_ELSEWHERE_T]),
- ("case walk가 이 사이트 확인을 안 넘긴다", MN, "                              pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,\n", "                              routed=code.routed_types if code else None,\n", [BOARD_ELSEWHERE_T]),
+ ('코드 묶음이 이 사이트 확인을 안 넘긴다', MN, '    return {"pipeline_here": getattr(code, "pipeline_here", None), "routed":', '    return {"pipeline_here": None, "routed":', [BOARD_ELSEWHERE_T, "tests/test_cli_case_walk.py::test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다"]),
  ("측정판이 sevt에서만 켜진 쓴 쪽을 안 심는다", LC, "\"event_type\": \"PaletteImporter\" if variant == \"palette-seeder-elsewhere\"\n", "\"event_type\": \"PaletteSeeder\" if variant == \"palette-seeder-elsewhere\"\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
  ("측정판 GBM 층이 PaletteImporter를 켠다", LC, "\"palette_import\": {\"enabled\": False, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", "\"palette_import\": {\"enabled\": True, \"module\": \"common.palette\", \"class\": \"PaletteImporter\"}}},\n", [BOARD_ELSEWHERE_T, LOCAL_PALETTE_T]),
  ("측정판 토폴로지에 파이프라인 선언이 없다", LC, "    return {**topo, \"services\": dict(BOARD_SERVICES),\n            \"pipelines\": {\"class_key\": \"class\", \"enabled_key\": \"enabled\", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}\n", "    return {**topo, \"services\": dict(BOARD_SERVICES)}\n", [LOCAL_TOPO_PIPE_T]),
@@ -3687,8 +3687,8 @@ CASES += [
  ("integrate 재료가 걷기 칸을 안 넘긴다", B, "target=target, walk=state.walk,\n                                     rungs=pending_rungs(state.walk, state.plan_tasks, code_index=code_index)),", "target=target, walk=state.walk,\n                                     rungs=()),", [RUNGS_T]),
  ("묶음의 둘째 칸부터 pinned를 안 단다", ND, "        return rungs[:WALK_RUNGS_PER_ROUND]\n", "        return rungs[:1]\n", [PINS_T]),
  ("받을 때 묶음 pins를 안 본다", ND, "    pins = pins or ([hop] if hop is not None else [])\n", "    pins = [hop] if hop is not None else []\n", [PINS_T]),
- ("frame이 묶음 pins를 안 넘긴다", ND, "            hop=_hop(state, deps), pins=_pins(state, deps),\n", "            hop=_hop(state, deps),\n", [PINS_T]),
- ("integrate가 묶음 pins를 안 넘긴다", ND, "                hop=_hop(base, deps), pins=_pins(base, deps),\n", "                hop=_hop(base, deps),\n", [PINS_T]),
+ ('frame이 묶음 pins를 안 넘긴다', ND, '            hop=_hop(state, deps), pins=_pins(state, deps), not_topics=', '            hop=_hop(state, deps), not_topics=', [PINS_T]),
+ ('integrate가 묶음 pins를 안 넘긴다', ND, '                hop=_hop(base, deps), pins=_pins(base, deps), not_topics=', '                hop=_hop(base, deps), not_topics=', [PINS_T]),
  ("받을 때의 pins가 걷기를 안 본다", ND, "    hop = next_hop(state.target, code_index=deps.code_index, walk=state.walk)\n    return [hop]", "    hop = next_hop(state.target, code_index=deps.code_index)\n    return [hop]", [WHOP_T]),
 ]
 
@@ -3738,7 +3738,7 @@ CASES += [
  ("섞인 토픽을 본 입력으로 센다", WK, "                unsure = isinstance(tdata, dict) and tstatus.startswith(\"모름 — \")", "                unsure = False", [MIXED_T]),
  ("라우터 확인이 던지면 정상이라 한다", WK, "            return f\"라우터 유형표를 확인하지 못했다({type(exc).__name__})\"\n", "            return \"\"\n", [MIXED_T]),
  ("걷기 노드가 라우터 확인을 안 넘긴다", ND, "pipeline_here=deps.pipeline_here, routed=deps.routed,\n", "pipeline_here=deps.pipeline_here,\n", [BOARD_MIXED_T]),
- ("case walk가 라우터 확인을 안 넘긴다", MN, "pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,", "pipeline_here=code.pipeline_here if code else None,", [BOARD_MIXED_T]),
+ ('코드 묶음이 라우터 확인을 안 넘긴다', MN, '"routed": getattr(code, "routed_types", None),', '"routed": None,', [BOARD_MIXED_T]),
  ("측정판 토폴로지에 라우터 선언이 없다", ROOT / "tools/local_case.py", ", \"router\": {\"type_enum\": \"FeedKind\", \"pipeline_enum\": \"Pipeline\", \"type_field\": \"feed\"}}}", "}}", [LOCAL_TOPO_PIPE_T]),
 ]
 # ── 12a-R3-5x ① — 선언이 비어 꺼진 기능은 기동을 막지 않는 주의로 ──
@@ -3860,7 +3860,7 @@ CASES += [
  ('센 횟수·초를 걷기에 안 싣는다', WK, 'counts=count_runs, count_seconds=count_spent, ', '', [TCWALK_T, TCBUDGET_T]),
  ('그 유형 0건 멈춤의 바깥 토픽을 바깥 자리로 안 본다', CS, 'startswith(("구독 토픽이 비었다", "구독 토픽에 그 유형이 없다"))', 'startswith(("구독 토픽이 비었다",))', [OUTSIDE_T]),
  ('걷기 노드가 세기 켜짐을 안 넘긴다', ND, '\n                                  count_types=deps.count_types, clock=deps.clock)', '\n                                  clock=deps.clock)', [BOARD_PEER_T]),
- ('case walk가 세기 켜짐을 안 넘긴다', MN, 'routed=code.routed_types if code else None,\n                              count_types=_counts_types(code),\n', 'routed=code.routed_types if code else None,\n', [BOARD_PEER_T]),
+ ('코드 묶음이 세기 켜짐을 안 넘긴다', MN, '"count_types": _counts_types(code),', '"count_types": False,', [BOARD_PEER_T]),
  ('유형 칸 선언이 없어도 세기를 켠다', MN, '    return bool(callable(field) and field())', '    return True', [TCCLI_T]),
  ('코드가 유형 칸 선언을 안 알린다', DCP, '        return spec.router.type_field if spec is not None and spec.router is not None else None', '        return None', [BOARD_PEER_T]),
  ('측정판 메인 토픽에 팔레트 유형이 온다', ROOT / "tools/local_case.py", '"feed": ("alarm", "audit")[i % 2]}', '"feed": "palette"}', [BOARD_PEER_T]),
@@ -3940,7 +3940,17 @@ CASES += [
  ('멈춤 꼬리 토막을 센 결과로 안 바꾼다', WK, 'piece if tev_ == old.evidence_id else p_', 'p_', [TCKEYED_T]),
  ('센 행이 알려 준 입력을 센 수에 안 넣는다', WK, 'info._replace(inputs=info.inputs + 1, missed=', 'info._replace(inputs=info.inputs, missed=', [TCBUDGET_T]),
 ]
-assert len(CASES) >= 1395, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ④ — 리드 쪽: 유형 이름은 토픽이 아니다 · kafka.* topic이 유형 이름이면 반려 · 코드 묶음 하나 ──
+CASES += [
+ ('섞인 행이 유형은 토픽이 아니라고 안 말한다', DCP, '                    "(유형 이름은 토픽이 아니다 — 그 유형만 세는 읽기는 kafka.count_type {topic, class})")', '                    "")', ['tests/infrastructure/test_deployed_code.py::test_routed_types는_클래스가_라우터_유형표를_거쳐_받으면_섞인_유형_수와_그_클래스의_유형을_적는다', 'tests/infrastructure/test_deployed_code.py::test_type_count_spec은_클래스와_짝인_유형_열거_멤버의_값과_선언한_유형_칸을_준다']),
+ ('유형표의 유형 이름을 안 모은다', DCP, '        return frozenset(name for _, kinds_of, _ in self._router_tables.values() for name in kinds_of)', '        return frozenset()', ['tests/infrastructure/test_deployed_code.py::test_type_count_spec은_클래스와_짝인_유형_열거_멤버의_값과_선언한_유형_칸을_준다']),
+ ('유형 이름 토픽을 받는다', ND, '    if task.action.startswith("kafka.") and isinstance(topic, str) and topic in not_topics:', '    if False:', ['tests/application/test_nodes.py::test_kafka_읽기의_topic이_라우터_유형_이름이면_받을_때_거부하고_kafka_count_type을_알려_준다']),
+ ('frame이 유형 이름을 안 넘긴다', ND, '            hop=_hop(state, deps), pins=_pins(state, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),', '            hop=_hop(state, deps), pins=_pins(state, deps),', ['tests/application/test_nodes.py::test_frame은_코드가_아는_라우터_유형_이름을_받기_검사에_넘긴다']),
+ ('integrate가 유형 이름을 안 넘긴다', ND, '                hop=_hop(base, deps), pins=_pins(base, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),', '                hop=_hop(base, deps), pins=_pins(base, deps),', ['tests/application/test_nodes.py::test_integrate도_코드가_아는_라우터_유형_이름을_받기_검사에_넘긴다']),
+ ('받기가 유형 이름 목록을 검사에 안 넘긴다', ND, '        problem = _accept_problem(task, not_topics)', '        problem = _accept_problem(task)', ['tests/application/test_nodes.py::test_kafka_읽기의_topic이_라우터_유형_이름이면_받을_때_거부하고_kafka_count_type을_알려_준다']),
+ ('코드 묶음이 유형 이름을 안 넘긴다', MN, '"router_types": getattr(code, "type_names", None)}', '"router_types": None}', ['tests/test_cli_case_walk.py::test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다']),
+]
+assert len(CASES) >= 1402, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

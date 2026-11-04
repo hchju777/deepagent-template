@@ -1275,8 +1275,7 @@ def cmd_case_walk(args, env) -> int:
                               class_services=code.class_services() if code else {},
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
-                              pipeline_here=code.pipeline_here if code else None, routed=code.routed_types if code else None,
-                              count_types=_counts_types(code),
+                              **_code_deps(code),
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
                               subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))
             state = await (walk_from_key(case, args.key, deps) if args.key else walk_only(case, deps))
@@ -1304,6 +1303,13 @@ def _type_samples(app) -> tuple:
     """유형 세기의 시각 표본 인자(R3-5z ②) — config에서, 녹화와 재생이 같게."""
     inv = app.investigation
     return (list(inv.type_count_sample_ages), inv.type_count_sample_messages, inv.type_count_sample_seconds)
+
+
+def _code_deps(code) -> dict:
+    """걷기와 받기 검사가 코드 자리에서 받는 것 — `case walk`와 `case investigate`가 같은 묶음을 쓴다(R3-5z ④). 한쪽 조립에만 새 칸을 넣으면 다른 쪽은 조용히
+    전처럼 돈다(규율 8과 같은 까닭)."""
+    return {"pipeline_here": getattr(code, "pipeline_here", None), "routed": getattr(code, "routed_types", None),
+            "count_types": _counts_types(code), "router_types": getattr(code, "type_names", None)}
 
 
 def _counts_types(code) -> bool:
@@ -1408,8 +1414,7 @@ def cmd_case_investigate(args, env) -> int:
                               class_services=code.class_services() if code else {},
                               service_repos=code.service_repos() if code else {},
                               filter_lines=code.filter_lines if code else None,
-                              pipeline_here=getattr(code, "pipeline_here", None), routed=getattr(code, "routed_types", None),
-                              count_types=_counts_types(code),
+                              **_code_deps(code),
                               declared_by=flow.declaring_map(flow_graph), topic_producers=flow.producing_map(flow_graph),
                               subscriptions=flow.consuming_map(flow_graph), peer=peer, clock=_wall_clock(args, env))
             return await build_engine(deps).ainvoke(CaseState(case=case))

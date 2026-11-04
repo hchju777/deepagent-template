@@ -256,3 +256,17 @@ def test_걷기의_유형_세기는_토폴로지가_유형_칸을_선언했을_�
     assert _counts_types(SimpleNamespace()) is False and _counts_types(None) is False
 
 
+def test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다():
+    """R3-5z ④: 걷기의 이 사이트 확인·라우터 판별·유형 세기 켜짐과 받기 검사의 라우터 유형 이름은 한 묶음(`_code_deps`)이다 — 두 조립이 그것을 같이 쓴다. 한쪽
+    조립에만 새 칸을 넣으면 다른 쪽은 조용히 전처럼 돈다."""
+    import inspect
+    from types import SimpleNamespace
+
+    from src import __main__ as cli
+
+    code = SimpleNamespace(pipeline_here=lambda c: "", routed_types=lambda c: "", type_field=lambda: "meta.kind", type_names=lambda: frozenset({"COLOR"}))
+    assert cli._code_deps(code) == {"pipeline_here": code.pipeline_here, "routed": code.routed_types, "count_types": True, "router_types": code.type_names}
+    assert cli._code_deps(None) == {"pipeline_here": None, "routed": None, "count_types": False, "router_types": None}
+    source = inspect.getsource(cli)
+    assert source.count("**_code_deps(code)") == 2 and "type_names=getattr" not in source
+

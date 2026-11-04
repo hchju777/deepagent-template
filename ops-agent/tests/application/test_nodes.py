@@ -1034,3 +1034,40 @@ async def test_열린_가설이_없고_새_작업이_없으면_리드가_계속�
     asks = await make_nodes(deps_for(ScriptedRunner(), integrate=replying("supported", [task("t-3")]), max_rounds=9))["integrate"](state)
     assert asks["decision"] == "continue"                                    # 새 작업을 냈으면 그것을 돌린다
 
+
+# ── R3-5z ④ — 리드가 라우터 유형 이름을 토픽으로 넣으면 받기 전에 반려 ──
+
+def test_kafka_읽기의_topic이_라우터_유형_이름이면_받을_때_거부하고_kafka_count_type을_알려_준다():
+    """측정 #33 1: 리드가 메시지 유형 이름(`<유형>`)을 토픽으로 넣었다 — 그 이름이 섞인 행 문구에 있으니 "찾은 이름" 검사도 통과했고, 읽기는 없는 토픽으로 실패했다.
+    걸으며 푼 유형표의 유형 멤버 이름이면 받기 전에 거부하고, 그 유형만 세는 읽기(`kafka.count_type {topic, class}`)를 같이 적는다. 다른 토픽은 그대로 받는다."""
+    from src.application.nodes import _accept_tasks
+
+    patch = {"plan_tasks": [task("t-1", action="kafka.tail", params={"topic": "COLOR", "limit": 5}),
+                            task("t-2", action="kafka.tail", params={"topic": "t.raw", "limit": 5})]}
+    kept, refused, _ = _accept_tasks(patch, room=10, not_topics=frozenset({"COLOR", "BOX"}))
+    assert [t.id for t in kept] == ["t-2"]
+    assert refused == ["t-1: 받지 않는다 — topic='COLOR'은 라우터의 메시지 유형 이름이지 토픽이 아니다 — 그 유형만 세는 읽기는 "
+                       "kafka.count_type {topic: <걷기 표의 섞인 토픽>, class: <받는 클래스>}"]
+    kept, refused, _ = _accept_tasks(patch, room=10)
+    assert [t.id for t in kept] == ["t-1", "t-2"] and refused == []                                     # 유형표를 모르면 전처럼
+
+
+async def test_frame은_코드가_아는_라우터_유형_이름을_받기_검사에_넘긴다(case):
+    from dataclasses import replace
+
+    tail = task("t-1", action="kafka.tail", params={"topic": "COLOR", "limit": 5})
+    deps = replace(deps_for(ScriptedRunner(), first_tasks=[tail], check_discovery=False), router_types=lambda: frozenset({"COLOR"}))
+    patch = await make_nodes(deps)["frame"](CaseState(case=case))
+    assert patch["plan_tasks"] == [] and any("메시지 유형 이름이지 토픽이 아니다" in e for e in patch["llm_errors"])
+
+
+async def test_integrate도_코드가_아는_라우터_유형_이름을_받기_검사에_넘긴다(case):
+    from dataclasses import replace
+
+    async def adds(state):
+        return {"decision": "continue", "plan_tasks": [task("t-2", action="kafka.tail", params={"topic": "COLOR", "limit": 5})]}
+
+    deps = replace(deps_for(ScriptedRunner(), integrate=adds, max_rounds=9, check_discovery=False), router_types=lambda: frozenset({"COLOR"}))
+    patch = await make_nodes(deps)["integrate"](CaseState(case=case, round=1, plan_tasks=[task("t-1", status="ok")]))
+    assert not any(t.id == "t-2" for t in patch.get("plan_tasks", [])) and any("메시지 유형 이름이지 토픽이 아니다" in e for e in patch["llm_errors"])
+

@@ -107,6 +107,9 @@ class EngineDeps:
     # R3-5y ④·R3-5z ③ — 걷기가 섞인 토픽 행에서 그 클래스의 유형만 세는가(토폴로지에 유형 칸 선언이 있을 때). 상한은 실행기가 config에서 쥔다. 꺼져 있으면(대본·
     # 선언 없음) 세지 않는다 — 셀 칸 이름을 모른다.
     count_types: bool = False
+    # R3-5z ④ — 코드가 아는 라우터 유형 멤버 이름(`DeployedCode.type_names`). `kafka.*`의 topic이 그 이름이면 받기 전에 반려한다(측정 #33 1: 리드가 유형 이름을
+    # 토픽으로 넣었다). None이면(대본) 검사하지 않는다.
+    router_types: Callable[[], frozenset[str]] | None = None
     # 키 템플릿 → config로 선언한 서비스들(`flow.declaring_map`, R3-3 ②-b) — 같은 클래스 이름이 두 레포면 이것으로 가른다.
     declared_by: dict = field(default_factory=dict)
     # 토픽 → config로 발행을 선언한 서비스들(`flow.producing_map`, R3-5d ④) — 메시지 홉의 발행 쪽. 사람 결정 10-19: 같은 이름 클래스가 두 레포라 클래스
@@ -228,10 +231,15 @@ def _done(state: CaseState) -> frozenset:
     return frozenset(_query(t) for t in state.plan_tasks if t.action)
 
 
-def _accept_problem(task: PlanTask) -> str | None:
-    """받을 때의 등재·인자 검사 한 줄 — 통과하면 None. 받는 인자 목록을 붙인다(선택 인자는 `?`)."""
+def _accept_problem(task: PlanTask, not_topics: frozenset = frozenset()) -> str | None:
+    """받을 때의 등재·인자 검사 한 줄 — 통과하면 None. 받는 인자 목록을 붙인다(선택 인자는 `?`). `not_topics`는 라우터 유형 멤버 이름 — 토픽 자리에 오면
+    거부한다(R3-5z ④)."""
     if not task.action:
         return "action이 없다 — 등재된 읽기 하나를 적어라"
+    topic = task.params.get("topic") if isinstance(task.params, dict) else None
+    if task.action.startswith("kafka.") and isinstance(topic, str) and topic in not_topics:
+        return (f"topic={topic!r}은 라우터의 메시지 유형 이름이지 토픽이 아니다 — 그 유형만 세는 읽기는 "
+                "kafka.count_type {topic: <걷기 표의 섞인 토픽>, class: <받는 클래스>}")
     problem = action_problem(task.action, task.params if isinstance(task.params, dict) else {})
     if problem is None:
         return None
@@ -381,7 +389,8 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
                   inputs_of: dict[str, list[str] | None] | None = None,
                   hint: str = "", hint_for: frozenset = frozenset(),
                   hop: tuple[str, dict] | None = None,
-                  pins: list[tuple[str, dict]] | None = None
+                  pins: list[tuple[str, dict]] | None = None,
+                  not_topics: frozenset = frozenset()
                   ) -> tuple[list[PlanTask], list[str], list[str]]:
     """만들어진 태스크를 소독하고 개수 상한으로 자른다.
 
@@ -428,7 +437,7 @@ def _accept_tasks(patch: dict, *, room: int, seen: str | None = "",
         # 등재·인자 검사를 **받을 때** 한다(R3-1 ③). 실행에서 거르면 리드는 한 라운드 뒤에야 안다 — 사내 측정 #6에서 `redis.scan
         # limit`·`mongo.count expect`가 그렇게 라운드를 잃었다. 거부라 되묻기가 그 자리에서 고쳐 받는다. 실행기의 같은 검사는
         # 마지막 방어선으로 그대로 둔다. 받는 인자를 같이 적는다 — "모르는 인자"만으로는 같은 모양으로 다시 틀린다.
-        problem = _accept_problem(task)
+        problem = _accept_problem(task, not_topics)
         if problem is not None:
             reused.append(f"{task.id}: 받지 않는다 — {problem}")
             continue
@@ -539,7 +548,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             patch, room=deps.max_tasks, taken=_taken(state), done=_done(state),
             pending=_pending(state), waiting=_waiting(state), evidence_of=_evidence_of(state),
             hint=hop_line(state.target, code_index=deps.code_index, walk=state.walk), hint_for=_intake_ids(state),
-            hop=_hop(state, deps), pins=_pins(state, deps),
+            hop=_hop(state, deps), pins=_pins(state, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),
             seen=_universe(state, deps) if deps.check_discovery else None)
         return {**patch,
                 "hypotheses": hypotheses,
@@ -586,7 +595,7 @@ def make_nodes(deps: EngineDeps) -> dict:
                 waiting=_waiting(base), evidence_of=_evidence_of(base),
                 inputs_of={**_rejected_reads(base), **_inputs_of(base)},
                 hint=hop_line(base.target, code_index=deps.code_index, walk=base.walk), hint_for=_intake_ids(base),
-                hop=_hop(base, deps), pins=_pins(base, deps),
+                hop=_hop(base, deps), pins=_pins(base, deps), not_topics=deps.router_types() if deps.router_types else frozenset(),
                 seen=_universe(base, deps) if deps.check_discovery else None)
             hypotheses, ghosts = _accept_hypotheses(reply, have=base.evidence_ids())
             return fresh, hypotheses, ghosts + rejected, guessed

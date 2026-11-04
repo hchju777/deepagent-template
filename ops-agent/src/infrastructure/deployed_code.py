@@ -1052,8 +1052,15 @@ class DeployedCode(DeployedCodePort):
             return ""
         hit, kinds, _ = found
         if hit and len(kinds) > 1:
-            return f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
+            # 유형 이름이 행에 보이니 리드가 그것을 토픽으로 넣었다(측정 #33 1) — 토픽이 아니라는 것과 그 유형만 세는 읽기를 같이 말한다(R3-5z ④).
+            return (f"유형 {len(kinds)}개가 섞인 토픽 — {'·'.join(hit)} 유형의 메시지 수는 세지 않았다"
+                    "(유형 이름은 토픽이 아니다 — 그 유형만 세는 읽기는 kafka.count_type {topic, class})")
         return ""
+
+    def type_names(self) -> frozenset[str]:
+        """걸으며 푼 유형표의 유형 열거 멤버 이름(R3-5z ④) — 리드가 그 이름을 토픽으로 넣으면 받기 전에 반려한다(측정 #33 1). 푼 표가 없으면(섞인 토픽을 안
+        만났다) 빈 집합."""
+        return frozenset(name for _, kinds_of, _ in self._router_tables.values() for name in kinds_of)
 
     def type_field(self) -> str | None:
         """유형 세기의 유형 칸(토폴로지 `pipelines.router.type_field`) — 없으면 None. 걷기가 섞인 토픽 행을 셀지를 이것으로 정한다(R3-5y ④)."""

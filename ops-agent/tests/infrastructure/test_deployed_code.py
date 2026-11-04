@@ -1365,8 +1365,9 @@ async def test_routed_types는_클래스가_라우터_유형표를_거쳐_받으
         return made
 
     here = code_at()
-    assert await here.routed_types("Seeder") == "유형 3개가 섞인 토픽 — BOX·COLOR 유형의 메시지 수는 세지 않았다"
-    assert await here.routed_types("Packer") == "유형 3개가 섞인 토픽 — BOX·NOTE 유형의 메시지 수는 세지 않았다"
+    # 측정 #33 1(R3-5z ④): 리드가 유형 이름을 토픽으로 넣었다 — 그 행이 유형은 토픽이 아니라고, 그 유형만 세는 읽기가 무엇인지 말한다.
+    assert await here.routed_types("Seeder") == "유형 3개가 섞인 토픽 — BOX·COLOR 유형의 메시지 수는 세지 않았다(유형 이름은 토픽이 아니다 — 그 유형만 세는 읽기는 kafka.count_type {topic, class})"
+    assert await here.routed_types("Packer") == "유형 3개가 섞인 토픽 — BOX·NOTE 유형의 메시지 수는 세지 않았다(유형 이름은 토픽이 아니다 — 그 유형만 세는 읽기는 kafka.count_type {topic, class})"
     assert await here.routed_types("Lonely") == ""                       # 짝에 없다 — 라우터를 거치지 않는다
     assert await here.routed_types("Solo") == ""                         # 열거 멤버는 있지만 짝에 없다
     assert await here.routed_types("Nobody") == ""                       # 파이프라인 항목이 없다
@@ -1469,7 +1470,9 @@ async def test_type_count_spec은_클래스와_짝인_유형_열거_멤버의_�
     assert await here.type_count_spec("Seeder") == ("meta.kind", ["2", "color"], ["BOX", "COLOR"])
     assert await here.type_count_spec("Packer") == "유형 열거 멤버 NOTE의 값이 리터럴이 아니다 — 셀 값을 모른다"
     assert await here.type_count_spec("Lonely") == "Lonely은 라우터 유형표를 거치지 않는다 — 셀 유형이 없다"
-    assert await here.routed_types("Seeder") == "유형 3개가 섞인 토픽 — BOX·COLOR 유형의 메시지 수는 세지 않았다"     # 판별은 그대로
+    assert await here.routed_types("Seeder") == "유형 3개가 섞인 토픽 — BOX·COLOR 유형의 메시지 수는 세지 않았다(유형 이름은 토픽이 아니다 — 그 유형만 세는 읽기는 kafka.count_type {topic, class})"     # 판별은 그대로
+    # 걸으며 푼 유형표의 유형 멤버 이름 — 리드가 그 이름을 토픽으로 넣으면 받기 전에 반려한다(R3-5z ④). 푼 표가 없으면 빈 집합.
+    assert here.type_names() == {"BOX", "COLOR", "NOTE"} and code_at().type_names() == frozenset()
     bare = code_at(topology.model_copy(update={"pipelines": PipelineSpec(class_key="class", enabled_key="enabled",
                                                                           router=RouterSpec(type_enum="Kind", pipeline_enum="Flow"))}))
     assert await bare.type_count_spec("Seeder") == "유형 칸 선언 없음(토폴로지 pipelines.router.type_field) — 셀 수 없다"
