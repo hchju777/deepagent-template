@@ -1283,3 +1283,22 @@ def site_renames(overrides: list[dict]) -> dict[tuple[str, str], str]:
         if len(values) == 1:
             out[("topic", key_path)] = next(iter(values))
     return out
+
+
+def site_renames_by_repo(overrides: list[dict], service_repos: dict[str, str]) -> dict[str, dict[tuple[str, str], str]]:
+    """토픽 행의 key_path → 값을 **레포마다**(R3-5z ⑫ — 측정 #34 사전 점검): 발행 경로를 key_path로 세웠는데 같은 key_path를 레포마다 다른 값으로 쓰면(측정판:
+    처리기 레포는 감사 토픽, api 레포는 api 감사 토픽) 사이트 전체 표(`site_renames`)는 못 바꿔 경로 그대로 남고 걷기의 쓰기 경로가 끊긴다. 자원은 늘 한 레포의
+    심볼에 붙으니 그 레포 서비스들의 값이 하나면 그 레포 자원만 바꾼다. 레포 안에서도 갈리면 안 바꾼다(측정 #16 P0-b), 레포를 모르는 서비스는 안 센다."""
+    by: dict[tuple[str, str], set[str]] = {}
+    for row in overrides:
+        if str(row.get("kind", "")) != "topic" or not row.get("key_path") or not row.get("value"):
+            continue
+        for svc in row.get("services") or ():
+            repo = service_repos.get(str(svc))
+            if repo:
+                by.setdefault((repo, str(row["key_path"])), set()).add(str(row["value"]))
+    out: dict[str, dict[tuple[str, str], str]] = {}
+    for (repo, key_path), values in sorted(by.items()):
+        if len(values) == 1:
+            out.setdefault(repo, {})[("topic", key_path)] = next(iter(values))
+    return out

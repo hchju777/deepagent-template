@@ -168,15 +168,18 @@ class Index:
         return [s.id for s in self.symbols
                 if any(r.kind == kind and r.name == name and r.direction == "reads" for r in s.resources)]
 
-    def renamed(self, renames: dict[tuple[str, str], str]) -> "Index":
+    def renamed(self, table: dict[tuple[str, str], str], *, by_repo: dict[str, dict[tuple[str, str], str]] | None = None) -> "Index":
         """자원 이름을 바꾼 **새** 인덱스 — 사이트 층이 GBM 값을 덮었을 때(11e-2, `flow.site_renames`). 번들의 인덱스는
-        GBM 기준값으로 서 있고 조사·`code uses`는 그 사이트의 이름으로 묻는다. 심볼 id·엣지는 그대로, 원본은 안 바뀐다."""
-        if not renames:
+        GBM 기준값으로 서 있고 조사·`code uses`는 그 사이트의 이름으로 묻는다. 심볼 id·엣지는 그대로, 원본은 안 바뀐다.
+        `by_repo`는 그 레포 심볼의 자원에만 입히는 표(R3-5z ⑫, `flow.site_renames_by_repo`) — 같은 이름을 레포마다 다른 값으로 쓸 때. 있으면 그것이 먼저다."""
+        by_repo = by_repo or {}
+        if not table and not by_repo:
             return self
         symbols = []
         for s in self.symbols:
-            if any((r.kind, r.name) in renames for r in s.resources):
-                s = replace(s, resources=tuple(Resource(r.kind, renames.get((r.kind, r.name), r.name), r.direction,
+            local = by_repo.get(s.repo, {})
+            if any((r.kind, r.name) in table or (r.kind, r.name) in local for r in s.resources):
+                s = replace(s, resources=tuple(Resource(r.kind, local.get((r.kind, r.name)) or table.get((r.kind, r.name), r.name), r.direction,
                                                         r.line, r.via, r.handoff) for r in s.resources))
             symbols.append(s)
         return replace(self, symbols=symbols)
@@ -815,18 +818,19 @@ def _handoff_callers(fn: "_Func", resolve, callers, is_ctor, depth: int, seen: f
     return sorted(found)[0]
 
 
-def _topic_path_calls(node: ast.AST) -> list[tuple[ast.Call, str, int]]:
-    """함수 본문의 config 경로 호출 중 소비 토픽 경로 — `config.get("infra", "kafka", "consumer", "topic", "<이름>")`처럼 문자열 인자만이고 끝 셋이
-    `consumer`, `topic`, <이름>인 것 → `(호출, key_path, 줄)`. 발행 경로(producer)는 아니다 — 평가자 요청은 구독뿐이고, 발행 쪽은 config 선언으로 안다."""
-    out: list[tuple[ast.Call, str, int]] = []
+def _topic_path_calls(node: ast.AST) -> list[tuple[ast.Call, str, int, str]]:
+    """함수 본문의 config 경로 호출 중 토픽 경로 — `config.get("infra", "kafka", "consumer", "topic", "<이름>")`처럼 문자열 인자만이고 끝 셋이
+    `consumer`|`producer`, `topic`, <이름>인 것 → `(호출, key_path, 줄, "reads"|"writes")`. 경로가 방향을 말한다 — 구독은 읽기, 발행은 쓰기(R3-5z ⑫: R3-5s ③ 때는
+    요청이 구독뿐이라 발행을 뺐는데, 측정 #34 사전 점검에서 그 탓에 토픽 쓰기가 0이었다)."""
+    out: list[tuple[ast.Call, str, int, str]] = []
     for st in _body_walk(getattr(node, "body", [])):
         for call in ast.walk(st):
             if not isinstance(call, ast.Call) or not _is_config_call(call) or call.keywords:
                 continue
             parts = [a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
-            if len(parts) != len(call.args) or len(parts) < 3 or parts[-3:-1] != ["consumer", "topic"]:
+            if len(parts) != len(call.args) or len(parts) < 3 or parts[-3:-1] not in (["consumer", "topic"], ["producer", "topic"]):
                 continue
-            out.append((call, ".".join(parts), call.lineno))
+            out.append((call, ".".join(parts), call.lineno, "reads" if parts[-3] == "consumer" else "writes"))
     return out
 
 
@@ -1839,11 +1843,23 @@ class _Resolver:
             # config 경로 호출 `config.get(…, "consumer", "topic", "<이름>")`은 그 클래스의 **토픽 읽기**다(R3-5s ③, 측정 #29 재측정 1부: 인덱스에 [topic] 0 — 사내
             # 토픽은 사이트 층에만 선언돼 GBM 이름으로 선 인덱스가 그 줄을 못 봤다). 경로가 consumer라 구독이다(동사표 불필요). GBM 이름에 그 key_path가 있으면
             # 값(위 `_collect_reads`가 이미 적었다 — 같은 줄이면 안 겹치게), 없으면 key_path가 이름이고 사이트 행이 바꾼다(`flow.site_renames` → `Index.renamed`).
-            for call, key_path, line in _topic_path_calls(node):
+            # 발행 경로 호출은 **토픽 쓰기**다(R3-5z ⑫ — 측정 #34 사전 점검: 처리기 61곳이 `<명령 DTO>(topic=config.get(<발행 경로>), …)`를 `<저장소>.save(command)`로
+            # 내는데 그 save는 키 쓰기로만 잡혀 토픽 쓰기 0, 걷기의 쓰기 경로 0건). 경로가 방향을 말하니 동사를 못 찾아도 쓰기고, 넘긴 동사는 키처럼 흐름으로 찾아
+            # 줄 끝에 적는다(DTO 생성자를 지나 처음 닿는 `save`). 같은 줄의 GBM 이름이 동사 없는 줄이라 읽기로 섰으면 쓰기로 바꾼다 — 발행 경로를 읽는다고 하지 않는다.
+            for call, key_path, line, way in _topic_path_calls(node):
                 known = topic_paths.get(key_path)
                 name = known.value if known is not None else key_path
-                if not any(r.kind == "topic" and r.name == name and r.line == line for r in found):
-                    found.append(Resource("topic", name, "reads", line, "path"))
+                same = next((r for r in found if r.kind == "topic" and r.name == name and r.line == line), None)
+                if way == "reads":
+                    if same is None:
+                        found.append(Resource("topic", name, "reads", line, "path"))
+                    continue
+                if same is not None and same.direction == "writes":
+                    continue
+                if same is not None:
+                    found.remove(same)
+                handed = _handoff(fn, [call], resolve, callers, is_ctor)
+                found.append(Resource("topic", name, "writes", line, "path", handed[1] if handed is not None and handed[0] == "writes" else ""))
             # `self.<속성>` 읽기 — 그 속성의 리터럴은 구체 클래스마다 다를 수 있다(부모의 `config.get("redis_key", self.redis_key)`). 가족(자기·조상·후손)이
             # 정의한 리터럴마다 `attr:<속성>:<클래스>`로 붙이고, 어느 것인지는 질의가 그 클래스의 MRO로 고른다(R3-5f ③).
             if fn.class_sid is not None:

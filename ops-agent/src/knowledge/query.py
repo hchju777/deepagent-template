@@ -234,10 +234,12 @@ def reachable_members(index: Index, sid: int) -> tuple[list[int], list[int], int
     return own, reached, len(parents) - len(reached)
 
 
-def handoff_note(verb: str) -> str:
+def handoff_note(verb: str, kind: str = "") -> str:
     """조립한 값을 넘긴 동사(R3-5r ①) — 자원 줄 끝의 사실. 직접 쓴 줄이 아니라 명령으로 보낸 줄임을 리드가 안다. 걷기의 `_RESOURCE`·`_USES_ENTRY`는 줄
-    머리만 보므로 뒤에 붙어도 된다."""
-    return f" · 키를 조립해 {verb}()로 넘긴다" if verb else ""
+    머리만 보므로 뒤에 붙어도 된다. 토픽(발행 경로, R3-5z ⑫)이면 키를 조립한 것이 아니라 토픽을 실어 보낸 것이다."""
+    if not verb:
+        return ""
+    return f" · 토픽을 실어 {verb}()로 넘긴다" if kind == "topic" else f" · 키를 조립해 {verb}()로 넘긴다"
 
 
 def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str]:
@@ -285,7 +287,7 @@ def resources_lines(index: Index, sid: int, *, where, cap: int = 20) -> list[str
         if not rows:
             continue
         lines.append(f"  {label} {len(rows)}:")
-        lines += [f"    {name} [{kind}] — {display(index, mid, line)}{handoff_note(verb)}" for (_, kind, name), (mid, line, verb) in rows[:cap]]
+        lines += [f"    {name} [{kind}] — {display(index, mid, line)}{handoff_note(verb, kind)}" for (_, kind, name), (mid, line, verb) in rows[:cap]]
     for attr, owners in sorted(unresolved.items()):
         lines.append(f"  self.{attr}: 이 클래스와 부모에 그 속성의 리터럴이 없다 — 못 이음(자원 값을 가진 다른 클래스: {', '.join(sorted(owners))})")
     if not seen:
@@ -411,7 +413,7 @@ def uses_lines(index: Index, graph: Graph, found: list[Use], *, where, cap: int 
             if not rows:
                 continue
             lines.append(f"  {label} {len(rows)}:")
-            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}{handoff_note(u.handoff)}"
+            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}{handoff_note(u.handoff, kind)}"
                       for u in rows[:cap]]
             lines += [("  " + l) for l in _more(len(rows), cap, more)]
     return lines

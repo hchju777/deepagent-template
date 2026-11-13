@@ -473,7 +473,11 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         쓰기 줄에 토픽이 없으면 빈 문자열. 사실만이다 — 그 토픽을 읽지도, 그 서비스로 걷지도 않는다."""
         declared = set(owners.get(template, ()))
         joined, cut = [], []
-        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic" and ".topic." not in o[0]):
+        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic"):
+            if ".topic." in topic:
+                # 사이트 값으로 못 바꾼 발행 경로(R3-5z ⑫ — 측정 #34 사전 점검: 빼면 쓰기가 있었다는 사실까지 사라진다). 이름을 모르니 구독 쪽은 못 잇는다.
+                cut.append(f"→ 토픽 경로 {topic}(코드의 쓰기 줄 {at}) → 값을 모름(사이트 선언에서 못 바꿨다)")
+                continue
             readers = sorted(s for s, ts in subscribed.items() if topic in ts)
             loaders = [s for s in readers if s in declared]
             step = f"→ {topic}(코드의 쓰기 줄 {at})"

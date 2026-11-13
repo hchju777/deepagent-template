@@ -339,8 +339,10 @@ def test_요약과_권고():
     g = graph()
     s = flow.summary(g)
     assert s["nodes"] > 5 and s["links"] > 5 and s["repo_level"] > 0
-    # dt-core의 감사 토픽은 R3-5s ③부터 SourceSink가 config 경로 호출로 구독해 코드 줄이 있다 — config에만 있는 것은 line_state와 dt-api의 감사 토픽.
-    assert s["unreferenced"] == 2, "line_state와 dt-api의 감사 토픽은 config에만 있다 — 권고가 아니라 요약의 숫자다"
+    # dt-core의 감사 토픽은 R3-5s ③부터 SourceSink가 config 경로 호출로 구독해 코드 줄이 있다. dt-api의 감사 토픽은 R3-5z ⑫부터 dt-core의 FeedCommander가 같은
+    # 토큰(topic2)의 발행 경로를 써서 grep이 코드 줄로 센다 — grep은 토큰만 보고 레포를 안 가른다(흐름 그래프의 한계, 걷기의 발행 선언은 config 엣지만 본다).
+    # config에만 있는 것은 line_state다.
+    assert s["unreferenced"] == 1, "line_state는 config에만 있다 — 권고가 아니라 요약의 숫자다"
     advice = "\n".join(flow.advise(g, TOPOLOGY))
     # 측정판은 processor/·sink/ 디렉터리로 갈리므로 공유 코드 줄이 없다. "path를 채워라"와
     # "안 쓰는 이름"은 사내에서 둘 다 틀린 권고였다 — 다시 나오면 안 된다.
@@ -1089,3 +1091,21 @@ def test_site_rows는_서비스마다_그_서비스의_GBM_값과_견준다():
     assert flow.site_rows([Name("group", "g2", "infra.kafka.consumer.group_id", "consumes_as")],
                           [Name("group", "g1", "infra.kafka.consumer.group_id", "consumes_as")]) == [
         {"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "g2", "base": "g1", "services": [], "relation": "consumes_as"}]
+
+
+
+def test_토픽_key_path가_레포마다_다른_값이면_레포마다_바꿀_표를_준다():
+    """R3-5z ⑫(측정 #34 사전 점검): 발행 경로를 key_path로 세웠는데 같은 key_path를 레포마다 다른 값으로 쓰면(측정판: 처리기 레포는 감사 토픽, api 레포는 api 감사
+    토픽) 사이트 전체 표는 못 바꾸고 경로 그대로 남아 걷기의 쓰기 경로가 끊긴다. 자원은 늘 한 레포의 심볼에 붙으니 그 레포 서비스들의 값이 하나면 그 레포 자원만
+    바꾼다. 레포 안에서도 갈리면 안 바꾼다(측정 #16 P0-b), 레포를 모르는 서비스는 안 센다."""
+    rows = [{"kind": "topic", "key_path": "infra.kafka.producer.topic.topic2", "value": "gumi.alarm.audit", "base": None,
+             "services": ["batch", "processor", "sink"], "relation": "produces"},
+            {"kind": "topic", "key_path": "infra.kafka.producer.topic.topic2", "value": "gumi.api.audit", "base": None, "services": ["api"], "relation": "produces"},
+            {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic9", "value": "a.one", "base": None, "services": ["batch"], "relation": "consumes"},
+            {"kind": "topic", "key_path": "infra.kafka.consumer.topic.topic9", "value": "a.two", "base": None, "services": ["sink", "ghost"], "relation": "consumes"},
+            {"kind": "group", "key_path": "infra.kafka.consumer.group_id", "value": "g", "base": "b", "services": ["sink"], "relation": "consumes_as"}]
+    repos = {"batch": "dt-core", "processor": "dt-core", "sink": "dt-core", "api": "dt-api"}
+    assert flow.site_renames(rows) == {("group", "b"): "g"}                                       # 사이트 전체로는 둘 다 갈린다
+    assert flow.site_renames_by_repo(rows, repos) == {"dt-core": {("topic", "infra.kafka.producer.topic.topic2"): "gumi.alarm.audit"},
+                                                      "dt-api": {("topic", "infra.kafka.producer.topic.topic2"): "gumi.api.audit"}}
+    assert flow.site_renames_by_repo(rows, {}) == {} and flow.site_renames_by_repo([], repos) == {}

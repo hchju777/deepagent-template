@@ -1553,12 +1553,17 @@ async def test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_
     two = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic")], writes=[("t.cmd", "topic"), ("t.log", "topic")])}
     walk = (await run_walk(_state(), runner=_Reads(two), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, **kw))["walk"]
     assert walk.hops[1].write_path == path
-    # 값으로 안 풀린 config 경로는 토픽이 아니다 — 쓰기 경로에 안 든다
+    # 사이트 값으로 못 바꾼 발행 경로는 토픽 이름을 모른다 — 빼지 않고 이어진 데까지(R3-5z ⑫, 측정 #34 사전 점검: 빼면 쓰기가 있었다는 사실까지 사라진다). 구독 쪽은 못 잇는다.
     pathed = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic")], writes=[("infra.kafka.producer.topic.cmd", "topic")])}
     walk = (await run_walk(_state(), runner=_Reads(pathed), declared_by={"in:{line}": ("a", "b")},
                            subscriptions={"a": ("t.raw",), "b": ("infra.kafka.producer.topic.cmd",)}, **kw))["walk"]
-    assert walk.hops[1].write_path == "" and walk.hops[1].line() == "  in:L1 | W1 [a] | 없음 | t-3.e1"
-    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    unnamed = "→ 토픽 경로 infra.kafka.producer.topic.cmd(코드의 쓰기 줄 x.py:L12) → 값을 모름(사이트 선언에서 못 바꿨다)"
+    assert walk.hops[1].write_path == unnamed and walk.hops[1].line() == f"  in:L1 | W1 [a] {unnamed} | 없음 | t-3.e1"
+    assert walk.stopped == f"키가 없다 — in:L1(쓰는 W1 [a] {unnamed} · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    # 이어진 길이 있으면 그것만이다
+    both = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic")], writes=[("infra.kafka.producer.topic.cmd", "topic"), ("t.cmd", "topic")])}
+    walk = (await run_walk(_state(), runner=_Reads(both), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, **kw))["walk"]
+    assert walk.hops[1].write_path == path
     # 읽는 토픽은 쓰기 경로가 아니다 — 그 토픽을 구독하고 키를 선언한 서비스가 있어도
     reads_only = {**table, ("code.resources", "W1"): _res("W1", [("t.raw", "topic")], writes=[("in:{line}", "rediskey")])}
     walk = (await run_walk(_state(), runner=_Reads(reads_only), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",), "b": ("t.raw",)}, **kw))["walk"]

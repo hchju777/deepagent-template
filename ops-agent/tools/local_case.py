@@ -170,6 +170,19 @@ def run(cfg, consumer, producer, redis):
     # 호출로 구독한다 — 사내 `<AGV 클래스>`의 모양(R3-5s ③): 인덱스엔 key_path로 섰다가 사이트 행이 이름을 바꾼다. 쓰기도 그 클래스의 모양(R3-5s ⑤): 키 토큰을
     # 키워드 인자로 부모(`SnapshotSink` — 사내 `<AGV 부모>`)에 넘기고, 부모가 `cfg.get("redis_key", config_key)`로 풀어 헬퍼로 저장한다 — 쓰기 줄은 하위
     # 클래스의 호출 줄 하나뿐이라 인덱스가 그 잇기를 못 하면 `source-missing`의 쓴 쪽이 사라진다(측정 #29 재측정 2부의 `<AGV 키>`).
+    # 사내 처리기의 발행 모양(R3-5z ⑫ — 측정 #34 사전 점검: 처리기 61곳이 `<명령 DTO>(topic=config.get(<발행 토픽 경로>), …)`를 `<저장소>.save(command)`로 낸다). 발행
+    # 경로 topic2는 사이트 층에만 있고 레포마다 값이 다르다(dt-core는 감사 토픽, dt-api는 api 감사 토픽) — 인덱스가 레포마다 바꾼다. 어느 걷기에도 안 닿는다.
+    "processor/feed_command.py": '''"""라인 상태 명령을 감사 토픽으로 낸다 — 명령 DTO에 토픽을 싣고 저장소의 save로 보낸다."""
+
+
+class FeedCommander:
+    def __init__(self, cfg, repository):
+        self.cfg, self.repository = cfg, repository
+
+    def run(self, line):
+        command = FeedCommand(topic=self.cfg.get("infra", "kafka", "producer", "topic", "topic2"), line=line)
+        self.repository.save(command)
+''',
     "processor/source_sink.py": '''"""alarm_raw를 받아 라인별 원천 묶음 키를 쓴다."""
 
 

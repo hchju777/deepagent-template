@@ -1113,7 +1113,8 @@ TOPICS = {'tp/__init__.py': '', 'tp/jobs.py': (
     'class Agv:\n    def run(self):\n        self.kafka_collector.subscribe_topic(topic=self.config.get("infra", "kafka", "consumer", "topic", "agv_topic"), group="g")\n'
     '        self.kafka_collector.subscribe_topic(topic=self.config.get("infra", "kafka", "consumer", "topic", "site_topic"), group="g")\n\n\n'
     'class Producer:\n    def run(self):\n        self.producer.send(self.config.get("infra", "kafka", "producer", "topic", "out_topic"), {})\n\n\n'
-    'class Partial:\n    def run(self):\n        names = self.config.get("infra", "kafka", "consumer", "topic")\n        return self.cfg.get("consumer", "topic", name)\n')}
+    'class Partial:\n    def run(self):\n        names = self.config.get("infra", "kafka", "consumer", "topic")\n'
+    '        admin = self.config.get("infra", "kafka", "admin", "topic", "ops")\n        return self.cfg.get("consumer", "topic", name)\n')}
 TOPICS_NAMES = [Name("topic", "x.agv", "infra.kafka.consumer.topic.agv_topic", "consumes")]
 
 
@@ -1121,14 +1122,14 @@ async def test_config_경로_호출은_그_클래스의_토픽_읽기_자원이�
     """측정 #29 재측정 1부(평가자 10-31): 인덱스에 `[topic]` 자원이 0 — 사내 토픽은 사이트 층에만 선언돼 GBM 이름으로 선 인덱스가 `kafka_collector.subscribe_topic(
     topic=self.config.get("infra", "kafka", "consumer", "topic", "<x>_topic"), …)` 줄을 자원으로 못 봤다. 요청: 그 호출을 그 클래스의 토픽 읽기 자원으로(경로가
     consumer라 구독 — 동사표 불필요). GBM 이름에 그 key_path가 있으면 값으로(전처럼), 없으면 key_path가 이름(`via=path`) — 사이트 행이 바꾼다(`site_renames`).
-    producer 경로·이름 없는 경로는 아니다."""
+    이름 없는 경로는 아니다. producer 경로는 R3-5z ⑫부터 토픽 쓰기다(아래)."""
     idx = await _index(TOPICS, TOPICS_NAMES)
 
     def res(qual):
         return [(r.kind, r.name, r.direction, r.via) for r in idx.symbols[_sid(idx, f"tp.jobs.{qual}")].resources]
 
     assert res("Agv.run") == [("topic", "x.agv", "reads", "key"), ("topic", "infra.kafka.consumer.topic.site_topic", "reads", "path")]
-    assert res("Producer.run") == [] and res("Partial.run") == []
+    assert res("Producer.run") == [("topic", "infra.kafka.producer.topic.out_topic", "writes", "path")] and res("Partial.run") == []
     renamed = idx.renamed({("topic", "infra.kafka.consumer.topic.site_topic"): "x.site"})
     assert [(r.name, r.via) for r in renamed.symbols[_sid(idx, "tp.jobs.Agv.run")].resources] == [("x.agv", "key"), ("x.site", "path")]
     assert idx.readers("topic", "infra.kafka.consumer.topic.site_topic") == [_sid(idx, "tp.jobs.Agv.run")]
@@ -1193,3 +1194,57 @@ async def test_리터럴_인자는_받는_함수의_매개변수로_들어가_co
     assert res("SnapshotBase._flush_unrelated") == [("hb:{service}", "writes", "save")]
     writers = {idx.symbols[s].qualname for s in idx.writers("rediskey", "agv:state:{line}")}
     assert writers == {"h3.jobs.Agv.on_tick", "h3.jobs.AgvDirect.on_tick", "h3.jobs.AgvModule.on_tick"}
+
+
+
+# ── R3-5z ⑫ — 발행 경로 호출(`…, "producer", "topic", "<이름>"`)은 그 함수의 토픽 쓰기(측정 #34 사전 점검: 쓰기 경로 0건) ──
+
+PRODUCE = {'pr/__init__.py': '', 'pr/jobs.py': (
+    'class Commander:\n    def run(self, line):\n'
+    '        command = Command(topic=self.config.get("infra", "kafka", "producer", "topic", "cmd_topic"), line=line)\n'
+    '        self.repository.save(command)\n\n\n'
+    'class Sender:\n    def run(self):\n        self.producer.send(self.config.get("infra", "kafka", "producer", "topic", "out_topic"), {})\n\n\n'
+    'class Noted:\n    def run(self):\n        name = self.config.get("infra", "kafka", "producer", "topic", "log_topic")\n        self.log.info(name)\n\n\n'
+    'class Known:\n    def run(self):\n        name = self.config.get("infra", "kafka", "producer", "topic", "gbm_topic")\n        self.log.info(name)\n\n\n'
+    'class KnownSaved:\n    def run(self):\n        self.store.save(Command(topic=self.config.get("infra", "kafka", "producer", "topic", "gbm_topic")))\n')}
+PRODUCE_NAMES = [Name("topic", "x.gbm", "infra.kafka.producer.topic.gbm_topic", "produces")]
+
+
+async def test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다():
+    """측정 #34 사전 점검: 인덱스의 `[topic]` 자원 11개가 전부 읽기(구독 경로)였고 토픽 쓰기 0 — 처리기 61곳이 `<명령 DTO>(topic=config.get(<발행 토픽 경로>), …)`를
+    `<저장소>.save(command)`로 내는데 그 save는 키 쓰기로만 잡혔다. 그래서 걷기의 쓰기 경로(⑥)가 0건이었다. 발행 경로 호출은 그 함수의 **토픽 쓰기**다(구독 경로가 늘
+    읽기인 것과 짝 — 경로가 방향을 말한다). 넘긴 동사는 키처럼 흐름으로(R3-5r ①) — DTO 생성자를 지나 처음 닿는 `save`, 바로 넘긴 `send`. 못 찾아도 쓰기다(동사만
+    비운다). 이름은 key_path(GBM 이름에 있으면 그 값)이고 사이트 행이 바꾼다. GBM 이름이 동사 없는 줄이라 읽기로 섰어도 발행 경로면 쓰기로 바꾼다."""
+    idx = await _index(PRODUCE, PRODUCE_NAMES)
+
+    def res(qual):
+        return [(r.kind, r.name, r.direction, r.via, r.handoff) for r in idx.symbols[_sid(idx, f"pr.jobs.{qual}")].resources]
+
+    assert res("Commander.run") == [("topic", "infra.kafka.producer.topic.cmd_topic", "writes", "path", "save")]
+    assert res("Sender.run") == [("topic", "infra.kafka.producer.topic.out_topic", "writes", "path", "send")]
+    assert res("Noted.run") == [("topic", "infra.kafka.producer.topic.log_topic", "writes", "path", "")]
+    assert res("Known.run") == [("topic", "x.gbm", "writes", "path", "")]
+    assert res("KnownSaved.run") == [("topic", "x.gbm", "writes", "key", "")]                  # 같은 줄의 동사로 이미 쓰기로 선 GBM 이름은 그대로
+    renamed = idx.renamed({("topic", "infra.kafka.producer.topic.cmd_topic"): "site.cmd"})
+    assert [(r.name, r.direction, r.handoff) for r in renamed.symbols[_sid(idx, "pr.jobs.Commander.run")].resources] == [("site.cmd", "writes", "save")]
+    assert idx.writers("topic", "infra.kafka.producer.topic.cmd_topic") == [_sid(idx, "pr.jobs.Commander.run")]
+    # 줄 끝의 넘김 표시는 토픽이면 토픽을 실어 보낸 것으로(키의 "키를 조립해"가 아니다) — resources와 uses 둘 다
+    from src.knowledge import query as qy
+    lines = qy.resources_lines(idx, _sid(idx, "pr.jobs.Commander"), where=lambda sid: "")
+    assert lines[1:] == ["  쓰기 1:", "    infra.kafka.producer.topic.cmd_topic [topic] — pr.jobs.Commander.run (pr/jobs.py:L3) · 토픽을 실어 save()로 넘긴다"]
+    uses = qy.uses_lines(idx, qy.Graph(idx), qy.uses(idx, "infra.kafka.producer.topic.cmd_topic"), where=lambda sid: "[r]", cap=None)
+    assert uses[0] == "infra.kafka.producer.topic.cmd_topic [topic]" and uses[1] == "  쓰기 1:" and uses[2].endswith(" · 토픽을 실어 save()로 넘긴다")
+
+
+
+async def test_이름_바꾸기는_레포마다_표를_따로_받는다():
+    """R3-5z ⑫: 레포마다 바꿀 표(`flow.site_renames_by_repo`)는 그 레포 심볼의 자원만 바꾼다 — 같은 이름을 다른 레포에서 다른 값으로 쓴다. 사이트 전체 표와 함께 받는다."""
+    idx = await ix.build_index({"r1": _Src(PRODUCE), "r2": _Src(PRODUCE)}, names=PRODUCE_NAMES, commits={"r1": "c1", "r2": "c2"})
+    path = "infra.kafka.producer.topic.cmd_topic"
+    renamed = idx.renamed({}, by_repo={"r1": {("topic", path): "one.cmd"}, "r2": {("topic", path): "two.cmd"}})
+    assert [r.name for r in renamed.symbols[idx.lookup("r1", "pr.jobs.Commander.run")].resources] == ["one.cmd"]
+    assert [r.name for r in renamed.symbols[idx.lookup("r2", "pr.jobs.Commander.run")].resources] == ["two.cmd"]
+    both = idx.renamed({("topic", "x.gbm"): "site.gbm"}, by_repo={"r1": {("topic", path): "one.cmd"}})
+    assert [r.name for r in both.symbols[idx.lookup("r2", "pr.jobs.Known.run")].resources] == ["site.gbm"]
+    assert [r.name for r in both.symbols[idx.lookup("r2", "pr.jobs.Commander.run")].resources] == [path]
+    assert idx.renamed({}, by_repo={}) is idx and idx.renamed({}) is idx

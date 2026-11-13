@@ -130,6 +130,9 @@ def test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며
     assert "class SourceSink" in CORE_FILES["processor/source_sink.py"] and 'kafka["consumer"]["topic"]["topic1"]' in CORE_FILES["processor/source_sink.py"]
     # 사이트 층에만 있는 토픽(topic3)을 config 경로 호출로 구독한다(R3-5s ③ — 사내 `<AGV 클래스>`의 모양)
     assert 'self.cfg.get("infra", "kafka", "consumer", "topic", "topic3")' in CORE_FILES["processor/source_sink.py"]
+    # 사내 처리기의 발행 모양(R3-5z ⑫) — 명령 DTO에 발행 경로를 싣고 저장소의 save로 낸다
+    assert 'FeedCommand(topic=self.cfg.get("infra", "kafka", "producer", "topic", "topic2")' in CORE_FILES["processor/feed_command.py"]
+    assert "self.repository.save(command)" in CORE_FILES["processor/feed_command.py"]
     # 원천 키의 쓰기도 사내 `<AGV 클래스>`의 모양(R3-5s ⑤): 하위 클래스가 키 토큰을 키워드 인자로 넘기고 부모가 `cfg.get("redis_key", config_key)`로 풀어 저장한다 —
     # `source-missing`의 쓴 쪽(인덱스 쓰기 줄)이 이 잇기에 달린다.
     sink_src = CORE_FILES["processor/source_sink.py"]

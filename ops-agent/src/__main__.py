@@ -1967,13 +1967,15 @@ def _symbol_index(args, env, *, site_values: bool = False):
     if index is None:
         print("  심볼 인덱스가 없다 — `python -m src code graph`로 만든다")
         return None
-    if site_values:
-        from src.knowledge import flow
-        index = index.renamed(flow.site_renames(gb.read_site(_graph_dir(args, env, gbm), fct) or []))
     try:
         code = _build_code(site, gbm, fct, knowledge_root=_knowledge_root(args), clock=_clock(args, env))
     except (ConfigError, FileNotFoundError) as exc:
         raise SystemExit(f"지식 층을 읽을 수 없다 — {exc}")
+    if site_values:
+        # 레포마다 바꾸는 표도(R3-5z ⑫) — 조사 조립(`_code_if_ready`)과 같다.
+        from src.knowledge import flow
+        rows = gb.read_site(_graph_dir(args, env, gbm), fct) or []
+        index = index.renamed(flow.site_renames(rows), by_repo=flow.site_renames_by_repo(rows, code.service_repos()))
     commits, _ = _resolved_commits(site, code)
     stale = [f"{r}: 인덱스는 {c[:12]}, 배포는 {commits.get(r, '?')[:12]}" for r, c in sorted(index.commits.items())
              if commits.get(r) != c]
@@ -2355,7 +2357,8 @@ def _code_if_ready(site, gbm: str, fct: str, *, knowledge_root, clock, graph_dir
                 note += " · 심볼 인덱스 없음(`code graph`로 다시 만든다)"
             elif rows:
                 # 인덱스의 함수별 자원도 그 사이트의 이름으로 — 리드가 <데이터 흐름>에서 본 이름으로 `code.uses`를 묻는다.
-                index = index.renamed(flowmod.site_renames(rows))
+                # 같은 key_path를 레포마다 다른 값으로 쓰면 레포마다 바꾼다(R3-5z ⑫ — 측정 #34 사전 점검: 발행 경로가 경로 그대로 남아 쓰기 경로가 끊겼다).
+                index = index.renamed(flowmod.site_renames(rows), by_repo=flowmod.site_renames_by_repo(rows, code.service_repos()))
     code.attach_flow_graph(graph)
     code.attach_index(index)
     return code, code.service_names(), graph, note

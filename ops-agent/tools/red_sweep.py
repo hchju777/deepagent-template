@@ -1128,8 +1128,8 @@ CASES = [
   '    if False:\n        lines.append(f"진입점 {len(res.entries)}:")',
   ['tests/infrastructure/test_deployed_code.py::test_code_callers와_uses는_붙인_인덱스로_답하고_없거나_모호하면_실패로_답한다']),
  ('uses 조립이 진입점 꼬리를 안 붙인다', ROOT / 'src/knowledge/query.py',
-  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}{handoff_note(u.handoff)}"',
-  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)}{handoff_note(u.handoff)}"',
+  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)} — {entry_brief(index, graph, u.sid)}{handoff_note(u.handoff, kind)}"',
+  '            lines += [f"    {display(index, u.sid, u.line)} {where(u.sid)}{handoff_note(u.handoff, kind)}"',
   ['tests/knowledge/test_cli_code.py::test_code_callers_path_uses가_인덱스로_역질문에_답한다']),
  ('재집계 뒤 uses 칸이 없다', ROOT / 'src/application/briefing.py',
   '    if not code_index or flow_graph is None:\n        return None\n    keys =',
@@ -1525,7 +1525,7 @@ CASES += [
   '        if kind and base and value:',
   [f"{FLT}::test_덮은_값_행은_인덱스의_자원_이름을_바꿀_표도_준다"]),
  ("인덱스가 자원 이름을 안 바꾼다", IX,
-  '        if not renames:\n            return self\n        symbols = []',
+  '        if not table and not by_repo:\n            return self\n        symbols = []',
   '        if True:\n            return self\n        symbols = []',
   ["tests/knowledge/test_index.py::test_renamed는_자원_이름만_바꾼_새_인덱스를_준다", CLI_GBM]),
  ("조사가 인덱스에는 사이트 값을 안 입힌다", MN,
@@ -1533,8 +1533,8 @@ CASES += [
   '            elif False:\n                # 인덱스의 함수별 자원도 그 사이트의 이름으로',
   [CLI_GBM]),
  ("code uses가 GBM 값 그대로 묻는다", MN,
-  '    if site_values:\n        from src.knowledge import flow',
-  '    if False:\n        from src.knowledge import flow',
+  '    if site_values:\n        # 레포마다 바꾸는 표도',
+  '    if False:\n        # 레포마다 바꾸는 표도',
   [CLI_GBM]),
  ("code flow가 사이트 값을 안 입힌다", MN,
   '    graph = flow.apply_site(graph, gb.read_site(_graph_dir(args, env, gbm), fct) or [])\n    args.name, args.to =',
@@ -3422,8 +3422,8 @@ CASES += [
  ("동사 없는 호출에서 멈춘다", IDX, "        if got is not None:\n            return got\n    if any(", "        return got\n    if any(", [HANDOFF_T]),
  ("받는 함수를 깊이 상한 없이 따라간다", IDX, "    if callee is None or depth >= _FLOW_DEPTH:\n        return None\n", "    if callee is None:\n        return None\n", [HANDOFF_T]),
  ("옛 번들의 여섯째 칸을 동사표로 거르지 않는다", IDX, "handoff=(r[5] if len(r) > 5 and r[5] in _VERBS else \"\")", "handoff=(r[5] if len(r) > 5 else \"\")", [OLD6_T]),
- ("자원 줄에 넘긴 동사를 안 적는다", QRY, "    return f\" · 키를 조립해 {verb}()로 넘긴다\" if verb else \"\"\n", "    return \"\"\n", [HANDOFF_SHOW_T]),
- ("uses 줄에 넘긴 동사를 안 적는다", QRY, "{entry_brief(index, graph, u.sid)}{handoff_note(u.handoff)}\"", "{entry_brief(index, graph, u.sid)}\"", [HANDOFF_SHOW_T]),
+ ('자원 줄에 넘긴 동사를 안 적는다', QRY, '    if not verb:\n        return ""\n', '    if True:\n        return ""\n', [HANDOFF_SHOW_T]),
+ ("uses 줄에 넘긴 동사를 안 적는다", QRY, "{entry_brief(index, graph, u.sid)}{handoff_note(u.handoff, kind)}\"", "{entry_brief(index, graph, u.sid)}\"", [HANDOFF_SHOW_T]),
 ]
 
 # ── 12a-R3-5r ② — 없는 키를 쓰는 클래스의 구독 토픽은 그 클래스 코드에서 ──
@@ -3493,8 +3493,8 @@ CASES += [
 TOPIC_PATH_T = "tests/knowledge/test_index.py::test_config_경로_호출은_그_클래스의_토픽_읽기_자원이고_GBM_이름에_없으면_경로가_이름이다"
 SITE_RENAMES_T = "tests/knowledge/test_flow.py::test_덮은_값_행은_인덱스의_자원_이름을_바꿀_표도_준다"
 CASES += [
- ("config 경로 호출을 토픽 읽기로 안 적는다", IDX, "            for call, key_path, line in _topic_path_calls(node):\n", "            for call, key_path, line in []:\n", [TOPIC_PATH_T, BOARD_KEYED_T]),
- ("발행 경로도 구독으로 적는다", IDX, "            if len(parts) != len(call.args) or len(parts) < 3 or parts[-3:-1] != [\"consumer\", \"topic\"]:\n", "            if len(parts) != len(call.args) or len(parts) < 3 or parts[-2] != \"topic\":\n", [TOPIC_PATH_T]),
+ ("config 경로 호출을 토픽 읽기로 안 적는다", IDX, "            for call, key_path, line, way in _topic_path_calls(node):\n", "            for call, key_path, line, way in []:\n", [TOPIC_PATH_T, BOARD_KEYED_T]),
+ ('구독·발행 아닌 토픽 경로도 받는다', IDX, 'parts[-3:-1] not in (["consumer", "topic"], ["producer", "topic"]):', 'parts[-2] != "topic":', [TOPIC_PATH_T]),
  ("GBM 이름에 있는 경로도 key_path를 이름으로 적는다", IDX, "                name = known.value if known is not None else key_path\n", "                name = key_path\n", [TOPIC_PATH_T]),
  ("사이트 행이 토픽 key_path를 안 바꾼다", FL, "    for key_path, values in by_path.items():\n        if len(values) == 1:\n            out[(\"topic\", key_path)] = next(iter(values))\n", "    for key_path, values in by_path.items():\n        if False:\n            out[(\"topic\", key_path)] = next(iter(values))\n", [SITE_RENAMES_T, BOARD_KEYED_T]),
  ("서비스마다 값이 다른 key_path도 바꾼다", FL, "        if len(values) == 1:\n            out[(\"topic\", key_path)] = next(iter(values))\n", "        if values:\n            out[(\"topic\", key_path)] = sorted(values)[0]\n", [SITE_RENAMES_T]),
@@ -3975,8 +3975,8 @@ CASES += [
  ('키를 선언 안 한 구독 서비스도 잇는다', WK, '            loaders = [s for s in readers if s in declared]', '            loaders = readers', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('구독 선언을 안 보고 서비스 전부를 구독으로 센다', WK, '            readers = sorted(s for s, ts in subscribed.items() if topic in ts)', '            readers = sorted(subscribed)', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('이어진 길이 있어도 끊긴 길을 같이 적는다', WK, '        paths = joined or cut', '        paths = joined + cut', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
- ('토픽 아닌 쓰기도 경로로 본다', WK, '        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic" and ".topic." not in o[0]):', '        for topic, _, at in (o for o in outputs_in(rtext) if ".topic." not in o[0]):', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
- ('안 풀린 토픽 경로도 경로로 본다', WK, '        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic" and ".topic." not in o[0]):', '        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic"):', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('토픽 아닌 쓰기도 경로로 본다', WK, '        for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic"):', '        for topic, _, at in (o for o in outputs_in(rtext)):', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('안 풀린 토픽 경로도 경로로 본다', WK, '            if ".topic." in topic:\n', '            if False:\n', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('경로에 쓰기 줄 자리가 없다', WK, '            step = f"→ {topic}(코드의 쓰기 줄 {at})"', '            step = f"→ {topic}"', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('이어진 서비스를 하나만 적는다', WK, '                joined.append(f"{step} → {\', \'.join(loaders)}(config 구독 선언 · 이 키를 선언) → {key}")', '                joined.append(f"{step} → {loaders[0]}(config 구독 선언 · 이 키를 선언) → {key}")', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('이어진 길 끝에 키가 없다', WK, '(config 구독 선언 · 이 키를 선언) → {key}")', '(config 구독 선언 · 이 키를 선언)")', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
@@ -4074,7 +4074,29 @@ CASES += [
  ('이미 있는 id 반려에 다음 빈 id가 없다', ND, '            reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다 — 다음 빈 id는 t-{free}")', '            reused.append(f"{task.id}: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다")', ['tests/application/test_nodes.py::test_이미_있는_태스크_id를_다시_내면_반려에_다음_빈_id를_적는다']),
  ('다음 빈 id가 받은 id 다음이 아니다', ND, '            free = max((int(m.group(1)) for u in used if (m := re.match(r"t-(\\d+)$", u))), default=0) + 1', '            free = max((int(m.group(1)) for u in used if (m := re.match(r"t-(\\d+)$", u))), default=0)', ['tests/application/test_nodes.py::test_이미_있는_태스크_id를_다시_내면_반려에_다음_빈_id를_적는다']),
 ]
-assert len(CASES) >= 1505, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑫ — 발행 경로 호출은 토픽 쓰기(넘긴 동사는 흐름으로) · 토픽 넘김 표시 · 못 바꾼 발행 경로도 쓰기 경로에 · 사이트 이름 바꾸기를 레포마다 ──
+CASES += [
+ ('발행 경로 호출을 토픽 자원으로 안 본다', IX, 'parts[-3:-1] not in (["consumer", "topic"], ["producer", "topic"]):', 'parts[-3:-1] != ["consumer", "topic"]:', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다', 'tests/knowledge/test_index.py::test_config_경로_호출은_그_클래스의_토픽_읽기_자원이고_GBM_이름에_없으면_경로가_이름이다', 'tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('발행 경로를 읽기로 본다', IX, 'call.lineno, "reads" if parts[-3] == "consumer" else "writes"))', 'call.lineno, "reads"))', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다', 'tests/knowledge/test_index.py::test_config_경로_호출은_그_클래스의_토픽_읽기_자원이고_GBM_이름에_없으면_경로가_이름이다', 'tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('구독 경로를 쓰기로 본다', IX, '                if way == "reads":\n', '                if False:\n', ['tests/knowledge/test_index.py::test_config_경로_호출은_그_클래스의_토픽_읽기_자원이고_GBM_이름에_없으면_경로가_이름이다']),
+ ('발행 경로에 넘긴 동사를 안 적는다', IX, '"path", handed[1] if handed is not None and handed[0] == "writes" else ""))', '"path", ""))', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다', 'tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('발행 경로를 읽기로 선 GBM 이름을 그대로 둔다', IX, '                if same is not None:\n                    found.remove(same)\n', '                if False:\n                    found.remove(same)\n', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다']),
+ ('쓰기로 선 GBM 이름을 발행 경로로 덮는다', IX, '                if same is not None and same.direction == "writes":\n                    continue\n', '', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다']),
+ ('토픽 넘김 표시를 키처럼 적는다', QY, 'return f" · 토픽을 실어 {verb}()로 넘긴다" if kind == "topic" else', 'return f" · 토픽을 실어 {verb}()로 넘긴다" if False else', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다', 'tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('자원 줄이 넘김 표시에 종류를 안 넘긴다', QY, '{handoff_note(verb, kind)}', '{handoff_note(verb)}', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다', 'tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('쓰는 함수 줄이 넘김 표시에 종류를 안 넘긴다', QY, '{handoff_note(u.handoff, kind)}', '{handoff_note(u.handoff)}', ['tests/knowledge/test_index.py::test_발행_경로_호출은_그_함수의_토픽_쓰기이고_넘긴_동사는_흐름으로_찾는다']),
+ ('못 바꾼 발행 경로를 쓰기 경로에서 뺀다', WK, '                cut.append(f"→ 토픽 경로 {topic}(코드의 쓰기 줄 {at}) → 값을 모름(사이트 선언에서 못 바꿨다)")\n                continue\n', '                continue\n', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('레포 안에서 갈린 값도 바꾼다', FLW, '    for (repo, key_path), values in sorted(by.items()):\n        if len(values) == 1:\n', '    for (repo, key_path), values in sorted(by.items()):\n        if True:\n', ['tests/knowledge/test_flow.py::test_토픽_key_path가_레포마다_다른_값이면_레포마다_바꿀_표를_준다']),
+ ('레포를 모르는 서비스도 센다', FLW, '            repo = service_repos.get(str(svc))\n            if repo:\n', '            repo = service_repos.get(str(svc))\n            if True:\n', ['tests/knowledge/test_flow.py::test_토픽_key_path가_레포마다_다른_값이면_레포마다_바꿀_표를_준다']),
+ ('레포마다 표에 토픽 아닌 행도 넣는다', FLW, '        if str(row.get("kind", "")) != "topic" or not row.get("key_path") or not row.get("value"):\n            continue\n        for svc in row.get("services") or ():', '        if not row.get("key_path") or not row.get("value"):\n            continue\n        for svc in row.get("services") or ():', ['tests/knowledge/test_flow.py::test_토픽_key_path가_레포마다_다른_값이면_레포마다_바꿀_표를_준다']),
+ ('이름 바꾸기가 레포마다 표를 안 쓴다', IX, '            local = by_repo.get(s.repo, {})\n', '            local = {}\n', ['tests/knowledge/test_index.py::test_이름_바꾸기는_레포마다_표를_따로_받는다', 'tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('레포마다 표만 있는 심볼을 안 바꾼다', IX, '            if any((r.kind, r.name) in table or (r.kind, r.name) in local for r in s.resources):', '            if any((r.kind, r.name) in table for r in s.resources):', ['tests/knowledge/test_index.py::test_이름_바꾸기는_레포마다_표를_따로_받는다']),
+ ('레포마다 표만 받으면 안 바꾼다', IX, '        if not table and not by_repo:\n            return self\n', '        if not table:\n            return self\n', ['tests/knowledge/test_index.py::test_이름_바꾸기는_레포마다_표를_따로_받는다']),
+ ('조사 조립이 레포마다 이름을 안 바꾼다', MN, 'index = index.renamed(flowmod.site_renames(rows), by_repo=flowmod.site_renames_by_repo(rows, code.service_repos()))', 'index = index.renamed(flowmod.site_renames(rows))', ['tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('code 질의가 레포마다 이름을 안 바꾼다', MN, 'index = index.renamed(flow.site_renames(rows), by_repo=flow.site_renames_by_repo(rows, code.service_repos()))', 'index = index.renamed(flow.site_renames(rows))', ['tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
+ ('측정판에 사내 발행 모양이 없다', LC, 'FeedCommand(topic=self.cfg.get("infra", "kafka", "producer", "topic", "topic2"), line=line)', 'FeedCommand(topic=self.cfg.get("infra", "kafka", "topic2"), line=line)', ['tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다', 'tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다']),
+]
+assert len(CASES) >= 1524, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

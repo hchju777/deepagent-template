@@ -433,3 +433,27 @@ def test_공용_팔레트_키가_쓴_쪽의_성공으로_비워_쓴_값이면_�
     assert not any(r.startswith("palette:source | ") for r in rows)
     assert stopped == "성공으로 비워 썼다 — alarm:palette(쓴 쪽 PaletteLoader [dt-core(서비스 3개 공유)])"
     assert rungs[0].startswith("code.resources name='PaletteLoader'")
+
+
+
+def test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다(board, monkeypatch):
+    """R3-5z ⑫(측정 #34 사전 점검: 쓰기 경로 0건 — 처리기 61곳이 `<명령 DTO>(topic=config.get(<발행 토픽 경로>), …)`를 `<저장소>.save(command)`로 내는데 토픽 쓰기 0).
+    측정판 `FeedCommander`가 그 모양이다. 발행 경로 `topic2`는 사이트 층에만 있고 레포마다 값이 달라(dt-core는 감사 토픽, dt-api는 api 감사 토픽) 사이트 전체 표로는 못
+    바꾼다 — 레포마다 바꿔 그 레포의 값이 된다. `code resources`와 조사 조립(`_code_if_ready` — 걷기가 읽는 것) 둘 다."""
+    import asyncio
+
+    from src import __main__ as m
+
+    for key, value in ENV.items():
+        monkeypatch.setenv(key, value)
+    line = (f"gumi.alarm.audit [topic] — processor.feed_command.FeedCommander.run (processor/feed_command.py:L{_at('processor/feed_command.py', 'FeedCommand(')})"
+            " · 토픽을 실어 save()로 넘긴다")
+    code, out = _cli("--config-root", str(board / "config"), "--env-file", str(board / "none"), "code", "resources", "FeedCommander", "--gbm", "mx", "--fct", "gumi")
+    assert code == 0 and line in out, out
+    args = m.parse_args(["--config-root", str(board / "config"), "--env-file", str(board / "none"), "code", "read", "--service", "processor", "--path", "x",
+                         "--gbm", "mx", "--fct", "gumi"])
+    env = m._load_env(args.env_file)
+    site, gbm, fct, _ = m._code_site(args, env)
+    deployed, _, _, _ = m._code_if_ready(site, gbm, fct, knowledge_root=m._knowledge_root(args), clock=m._clock(args, env), graph_dir=m._graph_dir(args, env, gbm))
+    got = asyncio.run(deployed.resources("FeedCommander"))
+    assert got.status == "ok" and line in got.data, got
