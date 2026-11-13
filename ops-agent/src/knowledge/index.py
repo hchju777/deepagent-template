@@ -871,6 +871,7 @@ class _Resolver:
         self.override_of: dict[int, int] = {}                          # 메서드 → 가장 가까운 재정의 대상(베이스 메서드)
         self._shared_present: dict[tuple[str, str], bool] = {}         # (레포, 공유 접두사) → 그 레포 인덱스에 있나
         self.classes: dict[int, _Class] = {}
+        self.families: dict[int, list[int]] = {}                       # 클래스 → 가족(자기·조상·후손, 정렬) — `attr_literals`가 클래스마다 한 번(R3-5z ⑭)
         self.funcs: dict[int, _Func] = {}
         self.methods_by_name: dict[str, list[int]] = defaultdict(list)
         self.funcs_by_name: dict[str, list[int]] = defaultdict(list)
@@ -1702,15 +1703,19 @@ class _Resolver:
 
     # ── 자원 참조 ──
     def attr_literals(self, csid: int, attr: str) -> list[tuple[int, str]]:
-        """이 클래스의 가족(자기·조상·후손)에서 클래스 속성 `attr`의 문자열 리터럴 — `(클래스 sid, 리터럴)`, 순환은 한 번만."""
-        family, stack = [], [csid]
-        while stack:
-            c = stack.pop()
-            if c in family:
-                continue
-            family.append(c)
-            stack += self.base_of.get(c, []) + self.sub_of.get(c, [])
-        return [(c, self.classes[c].attr_consts[attr]) for c in sorted(family)
+        """이 클래스의 가족(자기·조상·후손)에서 클래스 속성 `attr`의 문자열 리터럴 — `(클래스 sid, 리터럴)`, 순환은 한 번만. 가족은 클래스마다 한 번 만든다
+        (R3-5z ⑭ — 목록으로 겹침을 봐 가족 수의 제곱이었고, `self.<속성>` 읽기마다 다시 만들었다: 합성 레포 하위 클래스 400개에서 빌드의 절반)."""
+        family = self.families.get(csid)
+        if family is None:
+            seen, stack = set(), [csid]
+            while stack:
+                c = stack.pop()
+                if c in seen:
+                    continue
+                seen.add(c)
+                stack += self.base_of.get(c, []) + self.sub_of.get(c, [])
+            family = self.families[csid] = sorted(seen)
+        return [(c, self.classes[c].attr_consts[attr]) for c in family
                 if c in self.classes and attr in self.classes[c].attr_consts]
 
     def attach_resources(self) -> None:
@@ -1734,9 +1739,16 @@ class _Resolver:
         for ident, known in aliases.items():
             alias_of.setdefault(known.value, []).append(ident)
 
+        # 받는 쪽 → exact `calls` 엣지 표 — 한 번 만든다(R3-5z ⑭: `edges_to`는 부를 때마다 엣지 전체를 훑어, 넘긴 동사를 부르는 쪽까지 찾는 흐름이 엣지 수십만인 사내에서
+        # 그 훑기를 반복했다 — 측정 #34 재생 걷기의 재생성 3분 → 11분 37초). 엣지는 이 단계 전에 다 섰다(`connect`).
+        calls_to: dict[int, list] = {}
+        for e in self.index.edges:
+            if e.type == "calls" and e.certainty == "exact":
+                calls_to.setdefault(e.dst, []).append(e)
+
         def exact_callers(sid: int) -> list[_Func]:
-            return [self.funcs[e.src] for e in sorted(self.index.edges_to(sid, "calls"), key=lambda e: (e.src, e.line))
-                    if e.certainty == "exact" and e.src != sid and e.src in self.funcs]
+            return [self.funcs[e.src] for e in sorted(calls_to.get(sid, ()), key=lambda e: (e.src, e.line))
+                    if e.src != sid and e.src in self.funcs]
 
         def callers(fn: _Func) -> list[_Func]:
             """이 함수를 부르는 함수들 — 넘긴 동사를 부르는 쪽에서 이어 볼 때. exact `calls`(candidate는 안 센다 — 엉뚱한 쓰는 쪽을 만든다)에 더해(R3-5s ②,
@@ -1858,7 +1870,8 @@ class _Resolver:
                     continue
                 if same is not None:
                     found.remove(same)
-                handed = _handoff(fn, [call], resolve, callers, is_ctor)
+                # 넘긴 동사는 그 함수 안에서만(R3-5z ⑭) — 방향은 경로가 말하고 동사는 줄 끝 사실이라, 부르는 쪽(재정의 사슬·프로퍼티 가족)까지 올라가 찾을 값이 없다.
+                handed = _handoff(fn, [call], None, None, is_ctor)
                 found.append(Resource("topic", name, "writes", line, "path", handed[1] if handed is not None and handed[0] == "writes" else ""))
             # `self.<속성>` 읽기 — 그 속성의 리터럴은 구체 클래스마다 다를 수 있다(부모의 `config.get("redis_key", self.redis_key)`). 가족(자기·조상·후손)이
             # 정의한 리터럴마다 `attr:<속성>:<클래스>`로 붙이고, 어느 것인지는 질의가 그 클래스의 MRO로 고른다(R3-5f ③).

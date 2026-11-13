@@ -4096,7 +4096,13 @@ CASES += [
  ('code 질의가 레포마다 이름을 안 바꾼다', MN, 'index = index.renamed(flow.site_renames(rows), by_repo=flow.site_renames_by_repo(rows, code.service_repos()))', 'index = index.renamed(flow.site_renames(rows))', ['tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다']),
  ('측정판에 사내 발행 모양이 없다', LC, 'FeedCommand(topic=self.cfg.get("infra", "kafka", "producer", "topic", "topic2"), line=line)', 'FeedCommand(topic=self.cfg.get("infra", "kafka", "topic2"), line=line)', ['tests/test_board_walk.py::test_발행_경로를_명령_DTO에_실어_save로_내는_클래스는_그_레포의_사이트_값으로_토픽_쓰기다', 'tests/test_local_case.py::test_source_missing은_원천_키가_없고_source_blank은_빈_배열이며_둘_다_요약_키의_data는_빈_배열이다']),
 ]
-assert len(CASES) >= 1524, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑭ — 그래프 빌드 비용: 받는 쪽 표를 한 번 · 발행 경로의 넘긴 동사는 그 함수 안에서만 ──
+CASES += [
+ ('부르는 쪽을 엣지 전체 훑기로 찾는다', IX, 'sorted(calls_to.get(sid, ()), key=lambda e: (e.src, e.line))', 'sorted((e for e in self.index.edges_to(sid, "calls") if e.certainty == "exact"), key=lambda e: (e.src, e.line))', ['tests/knowledge/test_index.py::test_자원_단계는_부르는_쪽을_엣지_전체_훑기로_찾지_않는다']),
+ ('받는 쪽 표에 후보 호출도 넣는다', IX, '            if e.type == "calls" and e.certainty == "exact":\n                calls_to.setdefault(e.dst, []).append(e)', '            if e.type == "calls":\n                calls_to.setdefault(e.dst, []).append(e)', ['tests/knowledge/test_index.py::test_넘긴_동사는_후보_호출의_부르는_쪽에서는_안_찾는다']),
+ ('발행 경로의 넘긴 동사를 부르는 쪽까지 찾는다', IX, '                handed = _handoff(fn, [call], None, None, is_ctor)\n', '                handed = _handoff(fn, [call], resolve, callers, is_ctor)\n', ['tests/knowledge/test_index.py::test_발행_경로의_넘긴_동사는_그_함수_안에서만_찾는다']),
+]
+assert len(CASES) >= 1527, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

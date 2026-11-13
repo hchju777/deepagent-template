@@ -1248,3 +1248,47 @@ async def test_이름_바꾸기는_레포마다_표를_따로_받는다():
     assert [r.name for r in both.symbols[idx.lookup("r2", "pr.jobs.Known.run")].resources] == ["site.gbm"]
     assert [r.name for r in both.symbols[idx.lookup("r2", "pr.jobs.Commander.run")].resources] == [path]
     assert idx.renamed({}, by_repo={}) is idx and idx.renamed({}) is idx
+
+
+
+# ── R3-5z ⑭ — 그래프 빌드 비용(측정 #34 재생 걷기: 재생성 3분 → 11분 37초) ──
+
+async def test_자원_단계는_부르는_쪽을_엣지_전체_훑기로_찾지_않는다(monkeypatch):
+    """`edges_to`는 부를 때마다 엣지 전체를 훑는다 — 넘긴 동사를 부르는 쪽까지 찾는 흐름(R3-5r ①)이 엣지 수십만인 사내에서 그 훑기를 반복했다. 자원 단계는 처음에
+    만든 받는 쪽 표로 찾는다. 결과는 같다(부르는 쪽까지 올라가 동사를 찾는 키가 그대로 쓰기다)."""
+    expected = await _index(HANDOFF, HANDOFF_NAMES)
+
+    def scan(self, sid, type=None):
+        raise AssertionError("자원 단계가 edges_to로 엣지 전체를 훑었다")
+
+    monkeypatch.setattr(ix.Index, "edges_to", scan)
+    got = await _index(HANDOFF, HANDOFF_NAMES)
+    assert [s.resources for s in got.symbols] == [s.resources for s in expected.symbols]
+    assert any(r.handoff for s in got.symbols for r in s.resources)                       # 부르는 쪽까지 간 동사가 실제로 있다
+
+
+async def test_발행_경로의_넘긴_동사는_그_함수_안에서만_찾는다():
+    """발행 경로 호출은 경로가 방향(쓰기)을 말하고 넘긴 동사는 줄 끝의 사실일 뿐이다 — 부르는 쪽(재정의 사슬·프로퍼티 가족)까지 올라가 찾지 않는다(R3-5z ⑭). 값을
+    돌려주는 헬퍼의 발행 경로는 동사 없이 쓰기다. 같은 함수에서 DTO를 거쳐 save에 닿으면 전처럼 그 동사다."""
+    files = {'hp/__init__.py': '', 'hp/jobs.py': (
+        'class Helper:\n    def topic(self):\n        return self.config.get("infra", "kafka", "producer", "topic", "helper_topic")\n\n'
+        '    def run(self):\n        self.store.save(Command(topic=self.topic()))\n')}
+    idx = await _index(files, PRODUCE_NAMES)                                                # 자원 단계는 config 이름이 있어야 돈다
+    assert [(r.name, r.direction, r.handoff) for r in idx.symbols[_sid(idx, "hp.jobs.Helper.topic")].resources] == [
+        ("infra.kafka.producer.topic.helper_topic", "writes", "")]
+    idx = await _index(PRODUCE, PRODUCE_NAMES)
+    assert [r.handoff for r in idx.symbols[_sid(idx, "pr.jobs.Commander.run")].resources] == ["save"]
+
+
+async def test_넘긴_동사는_후보_호출의_부르는_쪽에서는_안_찾는다():
+    """부르는 쪽은 exact `calls`만이다(R3-5s ② — candidate는 엉뚱한 쓰는 쪽을 만든다). 받는 쪽 표(R3-5z ⑭)로 옮겨도 같다 — 같은 이름 메서드가 둘이라 후보로만 이어진
+    호출(`other.target_key()`)에서 save로 넘겨도 그 키는 쓰기가 아니다."""
+    files = {'cd/__init__.py': '', 'cd/jobs.py': (
+        'class A:\n    def target_key(self):\n        return self.config.get("redis_key", "alarm_stats")\n\n\n'
+        'class B:\n    def target_key(self):\n        return "x"\n\n\n'
+        'class User:\n    def run(self, other):\n        self.store.save(other.target_key(), 1)\n')}
+    idx = await _index(files, HANDOFF_NAMES)
+    assert {("cd.jobs.User.run", "calls", "candidate")} <= {(idx.symbols[e.src].qualname, e.type, e.certainty) for e in idx.edges
+                                                            if idx.symbols[e.dst].qualname == "cd.jobs.A.target_key"}
+    assert [(r.name, r.direction) for r in idx.symbols[_sid(idx, "cd.jobs.A.target_key")].resources] == [("alarm:stats:{line}", "reads")]
+
