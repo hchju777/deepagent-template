@@ -217,6 +217,29 @@ class FilterScan(StrictModel):
     read: list[str] = []                     # 대조할 필드 중 범위 파일에 이름이 리터럴로 든 것 — 그 클래스 코드가 읽는 필드(R3-5z ⑧, 날짜 줄)
 
 
+class MessageKeyHit(StrictModel):
+    """쓰기 경로의 받는 쪽 한 곳(R3-5z ⑬ — 측정 #34 재생 걷기: 받는 쪽이 키를 config로 선언하지 않고 `save(key=<메시지 봉투>.<대상 자원 필드>)`로 메시지가 실은
+    이름으로 써서 A 꼬리 24번이 전부 끊겼다). 구독 서비스 코드에서 쓰기 동사 호출의 키 인자가 메시지 필드인 줄, 그리고 쓴 쪽 코드에서 생성자 호출이 그 필드를 키워드로
+    채우는 자리. 사실만이다 — 그 필드에 실린 값이 이 키인지는 실행 때 메시지가 정한다(`carries`는 이 키의 쓰기 줄이 그 인자 안에 있다는 코드 사실)."""
+    service: str
+    field: str
+    path: str
+    line: int
+    text: str = ""
+    broad: bool = False                      # 그 토픽을 읽는 클래스 범위가 아니라 그 서비스 코드 전체에서 찾았다
+    filled_path: str = ""                    # 쓴 쪽 생성자의 `<필드>=` 자리 — 못 찾으면 비어 있다
+    filled_line: int = 0
+    carries: bool = False                    # 쓴 쪽의 이 키 쓰기 줄이 그 인자 값 안에 있다
+
+
+class MessageKeys(StrictModel):
+    """`DeployedCode.message_keys`의 결과(R3-5z ⑬) — 구독 서비스마다 많아야 한 줄. 조회 자체가 안 되면 `problem`(못 찾음과 다르다), 쓴 쪽 범위를 못 보면
+    `writer_problem`(채우는 자리를 못 찾은 것과 다르다)."""
+    hits: list[MessageKeyHit] = []
+    problem: str = ""
+    writer_problem: str = ""
+
+
 class Rung(StrictModel):
     """걷기가 멈춘 자리의 다음 칸 하나(R3-4 ②) — 리드가 낼 질의와 그 입력 증거. 사다리가 한 라운드에 한 칸씩 밟는다(`briefing._ladder_step`)."""
     action: str

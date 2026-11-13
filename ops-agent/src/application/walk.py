@@ -35,7 +35,7 @@ from src.application.intake_map import _finish, _task, _unwrap, empties, empty_t
 from src.application.runner_probe import _same_valued, profile, type_count_status
 from src.application.state import CaseState
 from src.domain.jsonpath import select
-from src.domain.case import JOIN_NOTE_MARKS, EvidenceRef, FilterHit, FilterScan, Hop, PlanTask, Rung, Walk
+from src.domain.case import JOIN_NOTE_MARKS, EvidenceRef, FilterHit, FilterScan, Hop, MessageKeys, PlanTask, Rung, Walk
 from src.domain.investigation import TaskRunnerPort
 
 MAX_DEPTH = 4
@@ -343,6 +343,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                    peer: Callable[[str, str], Awaitable[tuple[str, str, Any] | None]] | None = None,
                    pipeline_here: Callable[[str], Awaitable[str]] | None = None,
                    routed: Callable[[str], Awaitable[str]] | None = None,
+                   message_keys: Callable[..., Awaitable[MessageKeys]] | None = None,
                    count_types: bool = False,
                    value_status: tuple[str, frozenset[str]] | None = None,
                    clock: Callable[[], datetime] | None = None) -> dict:
@@ -350,7 +351,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     (`DeployedCodePort.filter_lines` — `lookup(클래스, fields=, service=|repo=)`); 없으면(인덱스 없음) 단일값은 표시만. `peer(키, 템플릿)`은 같은 GBM 다른
     사이트의 같은 키 값 `(사이트, 읽은 키, 값)`(R3-5t ②); 없으면(사이트 하나·대본) 인덱스가 모르는 쓴 쪽은 전처럼 비운다. `pipeline_here(클래스)`는 그 값이 댄
     클래스가 이 사이트에서 도는지 — 돌면 빈 문자열, 아니면 까닭(R3-5v ②); 없으면(대본) 확인 없이 채운다. `routed(클래스)`는 그 클래스가 라우터 유형표를 거쳐
-    받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼. `count_types`면 그 모름 행에서 그 클래스의 유형만 센다(R3-5y ④ —
+    받는지 — 그러면 구독 토픽 행은 정상이 아니라 모름(R3-5w ②); 없으면 전처럼. `message_keys(토픽, 구독 서비스들, 쓴 쪽, at=, service=|repo=)`는
+    받는 쪽이 키 이름을 메시지 필드에서 받아 쓰는지(R3-5z ⑬); 없으면(대본) 쓰기 경로는 config 선언으로만 잇는다. `count_types`면 그 모름 행에서 그 클래스의 유형만 센다(R3-5y ④ —
     `kafka.count_type {topic, class}`, 셀 값·상한은 실행기가 config에서) — 걷기가 끝난 뒤 멈출 자리의 행만, 읽기 수·시간 상한 밖에서(R3-5z ③). 꺼져 있으면(대본·유형 칸
     선언 없음) 세지 않는다. `value_status`는 키 값의 상태 자리와 성공 값들(R3-5z ⑤) — 비었는데 성공이면 그 쓴 쪽으로 올라가지 않고 거기서
     멈춘다."""
@@ -467,11 +469,23 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         svcs = tuple(producers.get(topic, ()))
         return (f"발행 선언: {', '.join(svcs)}" if svcs else "발행 선언 없음(우리 밖)"), svcs
 
-    def write_path(rtext: str, template: str, key: str) -> str:
+    async def keys_of(topic: str, readers: list[str], writer: str, at: list[str], params: dict) -> MessageKeys | None:
+        """받는 쪽이 키 이름을 메시지 필드에서 받아 쓰는지(R3-5z ⑬) — 조회가 없으면(대본) None, 던지면 그 사실을 `problem`으로."""
+        if message_keys is None:
+            return None
+        try:
+            return await message_keys(topic, readers, writer, at=tuple(at), service=params.get("service", ""), repo=params.get("repo", ""))
+        except Exception as exc:                                                            # noqa: BLE001
+            return MessageKeys(problem=f"{type(exc).__name__}: {exc}")
+
+    async def write_path(rtext: str, template: str, key: str, writer: str, params: dict) -> str:
         """없는 키를 쓰는 클래스의 쓰기 경로(R3-5z ⑥ — 측정 #33 2 패턴 A: 판정이 "쓰는 서비스가 토픽에만 쓰고 키에 안 쓴다 → logic_bug"였는데, 명령을 토픽으로 내고 다른
         서비스가 키에 썼다) — 그 클래스 코드의 쓰기 줄 토픽 → 그 토픽을 config로 구독하고 그 키를 선언한 서비스 → 키. 이어진 길이 있으면 그것만, 없으면 이어진 데까지.
-        쓰기 줄에 토픽이 없으면 빈 문자열. 사실만이다 — 그 토픽을 읽지도, 그 서비스로 걷지도 않는다."""
+        쓰기 줄에 토픽이 없으면 빈 문자열. 사실만이다 — 그 토픽을 읽지도, 그 서비스로 걷지도 않는다. 구독 서비스가 이 키를 선언하지 않으면 그 서비스 코드가 키 이름을
+        메시지 필드에서 받아 쓰는지와 쓴 쪽 명령이 그 필드를 채우는지로 잇는다(R3-5z ⑬ — 측정 #34 재생 걷기: A 꼬리 24번이 전부 "구독 n곳 중 선언 없음"이었다). 끊긴
+        문장은 구독 서비스 이름을 적는다 — 이름이 없으면 "받는 쪽 없음"처럼 읽혔다."""
         declared = set(owners.get(template, ()))
+        at_key = [at for name, _, at in outputs_in(rtext) if name == template]
         joined, cut = [], []
         for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic"):
             if ".topic." in topic:
@@ -483,8 +497,22 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             step = f"→ {topic}(코드의 쓰기 줄 {at})"
             if loaders:
                 joined.append(f"{step} → {', '.join(loaders)}(config 구독 선언 · 이 키를 선언) → {key}")
-            else:
-                cut.append(f"{step} → " + (f"구독 선언 {len(readers)}곳 중 이 키를 선언한 곳 없음" if readers else "구독 선언 없음"))
+                continue
+            if not readers:
+                cut.append(f"{step} → 구독 선언 없음")
+                continue
+            got = await keys_of(topic, readers, writer, at_key, params)
+            for h in (got.hits if got is not None else ()):
+                where = f"메시지 필드 {h.field}에서 키 이름을 받아 쓴다 {h.path}:L{h.line}" + (" · 그 토픽을 읽는 클래스 밖" if h.broad else "")
+                if h.filled_path:
+                    filled = f"쓴 쪽 명령의 {h.field}= 인자{'에 이 키' if h.carries else ''} {h.filled_path}:L{h.filled_line}"
+                    joined.append(f"{step} → {h.service}(config 구독 선언 · {where} · {filled}) → {key}")
+                else:
+                    cut.append(f"{step} → {h.service}(config 구독 선언 · {where}) — "
+                               + (f"쓴 쪽 명령은 못 봤다({got.writer_problem})" if got.writer_problem else f"쓴 쪽 코드에 {h.field}= 인자 못 찾음"))
+            if got is None or not got.hits:
+                why = "" if got is None else f" · 메시지 필드 확인 못 함 — {got.problem}" if got.problem else " · 메시지 필드에서 키 이름을 받아 쓰는 줄 못 찾음"
+                cut.append(f"{step} → 구독 {', '.join(readers)}(이 키를 선언 안 함{why})")
         paths = joined or cut
         return " / ".join(paths[:3]) + (f" 외 {len(paths) - 3}" if len(paths) > 3 else "")
 
@@ -865,7 +893,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                             tail_note, rev = "구독 토픽 모름(code.resources 실패)", ""
                         else:
                             body_at = class_at(rtext)
-                            if (path := write_path(rtext, name, label)):
+                            if (path := await write_path(rtext, name, label, w, params_k)):
                                 paths_at[ev] = path
                                 hops[row] = hops[row].model_copy(update={"write_path": path})
                             listed = sorted({n for n, k in inputs_in(rtext) if k == "topic"})

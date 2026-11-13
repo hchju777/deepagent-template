@@ -1544,8 +1544,8 @@ async def test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_
     assert walk.hops[1].write_path == "→ t.cmd(코드의 쓰기 줄 x.py:L12) → b, c(config 구독 선언 · 이 키를 선언) → in:L1"
     # 구독하는 서비스가 그 키를 선언하지 않았으면 이어진 데까지
     walk = (await run_walk(_state(), runner=_Reads(table), declared_by={"in:{line}": ("a",)}, subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, **kw))["walk"]
-    assert walk.hops[1].write_path == "→ t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 선언 1곳 중 이 키를 선언한 곳 없음"
-    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] → t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 선언 1곳 중 이 키를 선언한 곳 없음 · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    assert walk.hops[1].write_path == "→ t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 b(이 키를 선언 안 함)"
+    assert walk.stopped == "키가 없다 — in:L1(쓰는 W1 [a] → t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 b(이 키를 선언 안 함) · 구독 t.raw 범위 40~100, 남은 메시지 60)"
     # 구독 선언이 없으면 그것까지
     walk = (await run_walk(_state(), runner=_Reads(table), declared_by={"in:{line}": ("a", "b")}, subscriptions={"a": ("t.raw",)}, **kw))["walk"]
     assert walk.hops[1].write_path == "→ t.cmd(코드의 쓰기 줄 x.py:L12) → 구독 선언 없음"
@@ -1695,3 +1695,60 @@ async def test_멈춘_클래스의_입력에_날짜_꼴_필드가_있으면_코�
     gone = {**table, ("redis.get", "in:L1"): None}
     walk = (await run_walk(_state(), runner=_Dated(gone), lookup=lookup, **kw))["walk"]
     assert walk.stopped.startswith("키가 없다 — ") and walk.facts == []
+
+
+# ── R3-5z ⑬ — 메시지 필드로 잇기(측정 #34 재생 걷기) ──
+
+async def test_구독_서비스가_키를_선언하지_않아도_메시지_필드에서_키_이름을_받아_쓰면_쓰기_경로를_잇고_못_이으면_구독_서비스_이름을_적는다():
+    """측정 #34 재생 걷기: A 꼬리 24번이 전부 `→ <데이터 토픽>(…) → 구독 선언 2곳 중 이 키를 선언한 곳 없음`이었다 — 받는 쪽 `<적재 서비스>`는 키를 config로 선언하지 않고
+    `save(key=<메시지 봉투>.<대상 자원 필드>)`로 메시지가 실은 이름으로 쓴다. 받는 쪽이 이 키를 선언하지 않으면 그 서비스 코드가 키 이름을 메시지 필드에서 받아 쓰는지와 쓴
+    쪽 명령이 그 필드를 채우는지(어댑터 `message_keys`)로 잇는다. 쓴 쪽이 안 채우면 이어진 데까지. 못 찾거나 못 보면 구독 서비스 이름을 적는다 — 이름이 없으면 "받는 쪽
+    없음"처럼 읽혔다(#33 c-1 r1 오판 모양)."""
+    from src.domain.case import MessageKeyHit, MessageKeys
+
+    w1 = _res("W1", [("t.raw", "topic")], writes=[("t.cmd", "topic"), ("in:{line}", "rediskey")])
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): w1,
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): USES_W1, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)},
+              subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, clock=lambda: T0)
+    asked = []
+
+    def keys(*hits, problem="", writer_problem=""):
+        async def message_keys(topic, services, writer, *, at=(), service="", repo=""):
+            asked.append((topic, tuple(services), writer, tuple(at), service, repo))
+            return MessageKeys(hits=list(hits), problem=problem, writer_problem=writer_problem)
+        return message_keys
+
+    async def walked(message_keys, **more):
+        return (await run_walk(_state(), runner=_Reads(table), message_keys=message_keys, **{**kw, **more}))["walk"]
+
+    step = "→ t.cmd(코드의 쓰기 줄 x.py:L12)"
+    hit = MessageKeyHit(service="b", field="target", path="load/l.py", line=9, filled_path="x.py", filled_line=12, carries=True)
+    walk = await walked(keys(hit))
+    path = f"{step} → b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9 · 쓴 쪽 명령의 target= 인자에 이 키 x.py:L12) → in:L1"
+    assert walk.hops[1].write_path == path
+    assert walk.stopped == f"키가 없다 — in:L1(쓰는 W1 [a] {path} · 구독 t.raw 범위 40~100, 남은 메시지 60)"
+    assert asked == [("t.cmd", ("b",), "W1", ("x.py:L12",), "", "")]                # 쓴 쪽의 이 키 쓰기 줄을 함께 넘긴다
+    # 채우는 자리가 이 키의 쓰기 줄을 안 품으면 그 자리만 · 그 토픽을 읽는 클래스 밖에서 찾은 줄은 그렇게 적는다
+    loose = hit.model_copy(update={"carries": False, "broad": True})
+    assert (await walked(keys(loose))).hops[1].write_path == (
+        f"{step} → b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9 · 그 토픽을 읽는 클래스 밖 · 쓴 쪽 명령의 target= 인자 x.py:L12) → in:L1")
+    # 쓴 쪽이 그 필드를 안 채우면 이어진 데까지 — 쓴 쪽을 못 봤으면 그 사실
+    bare = hit.model_copy(update={"filled_path": "", "filled_line": 0, "carries": False})
+    assert (await walked(keys(bare))).hops[1].write_path == (
+        f"{step} → b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9) — 쓴 쪽 코드에 target= 인자 못 찾음")
+    assert (await walked(keys(bare, writer_problem="W1: 여럿이다(2)"))).hops[1].write_path == (
+        f"{step} → b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9) — 쓴 쪽 명령은 못 봤다(W1: 여럿이다(2))")
+    # 못 찾음·못 봄·던짐·조회 없음 — 구독 서비스 이름을 적는다
+    assert (await walked(keys())).hops[1].write_path == f"{step} → 구독 b(이 키를 선언 안 함 · 메시지 필드에서 키 이름을 받아 쓰는 줄 못 찾음)"
+    assert (await walked(keys(problem="심볼 인덱스가 없다"))).hops[1].write_path == f"{step} → 구독 b(이 키를 선언 안 함 · 메시지 필드 확인 못 함 — 심볼 인덱스가 없다)"
+
+    async def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    assert (await walked(boom)).hops[1].write_path == f"{step} → 구독 b(이 키를 선언 안 함 · 메시지 필드 확인 못 함 — RuntimeError: boom)"
+    assert (await walked(None)).hops[1].write_path == f"{step} → 구독 b(이 키를 선언 안 함)"
+    # 선언으로 이어지거나 구독 선언이 없으면 묻지 않는다
+    asked.clear()
+    assert (await walked(keys(hit), declared_by={"in:{line}": ("a", "b")})).hops[1].write_path == f"{step} → b(config 구독 선언 · 이 키를 선언) → in:L1"
+    assert (await walked(keys(hit), subscriptions={"a": ("t.raw",)})).hops[1].write_path == f"{step} → 구독 선언 없음" and asked == []

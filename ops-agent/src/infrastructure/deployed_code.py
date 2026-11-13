@@ -34,7 +34,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from src.domain.base import Clock
-from src.domain.case import FilterHit, FilterScan, MergeHit
+from src.domain.case import FilterHit, FilterScan, MergeHit, MessageKeyHit, MessageKeys
 from src.domain.envelope import ProbeResult
 from src.domain.jsonpath import select
 from src.domain.ports import CodeReaderPort, DeployedCodePort
@@ -305,6 +305,94 @@ def merge_pairs(text: str) -> list[tuple[int, tuple[str, ...], tuple[str, ...], 
 
 def comparison_lines(text: str, field: str, value: str) -> list[tuple[int, str]]:
     return [(i, body) for i, f, v, _op, body in comparison_pairs(text) if f == field and v == value]
+
+
+# ── R3-5z ⑬ — 메시지 필드로 잇기(측정 #34 재생 걷기: 받는 쪽이 키를 config로 선언하지 않고 메시지가 실은 이름으로 쓴다) ──
+# 토픽 동사의 `key=`는 Kafka 메시지 키다 — 저장소 키가 아니다. 첫 위치 인자가 키인 것은 키-값 저장소 꼴 동사만(컬렉션 동사의 첫 인자는 문서·조건이다).
+_TOPIC_VERBS = frozenset(("send", "produce", "publish", "emit"))
+_KEY_FIRST = frozenset(("set", "hset", "lpush", "rpush", "xadd", "expire", "incr", "save"))
+_SETTING_WORD = re.compile(r"config|cfg|settings", re.IGNORECASE)
+
+
+def _callee(func) -> str:
+    return func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+
+
+def _message_field(node, outside: set[str]) -> str | None:
+    """`<변수>.<필드>`·`<변수>["<필드>"]`·`<변수>.get("<필드>")` → 필드. 변수가 self·cls·설정 꼴·import한 이름·대문자로 시작하는 이름(클래스·열거)이거나 필드가 전부
+    대문자면 메시지가 아니다 — 상수 자리(`Keys.SUMMARY`)와 설정 값이다."""
+    if isinstance(node, ast.Attribute):
+        base, name = node.value, node.attr
+        if name.isupper():
+            return None
+    elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+        base, name = node.value, node.slice.value
+    elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args
+          and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+        base, name = node.func.value, node.args[0].value
+    else:
+        return None
+    parts = []
+    while isinstance(base, ast.Attribute):
+        parts.append(base.attr)
+        base = base.value
+    if not isinstance(base, ast.Name):
+        return None
+    root = base.id
+    if root in ("self", "cls") or root in outside or root[:1].isupper() or any(_SETTING_WORD.search(p) for p in (root, *parts)):
+        return None
+    return name
+
+
+def message_key_lines(text: str) -> list[tuple[int, str, str]]:
+    """쓰기 동사 호출의 키 인자(키워드 `key`, 없으면 키-값 동사의 첫 위치 인자)가 메시지 필드인 줄 → `(줄, 필드, 줄 본문)`(R3-5z ⑬). 같은 함수에서 메시지 필드를
+    한 번만 받은 변수도 그 필드다(한 단계 — 두 번 받으면 어느 값인지 모른다). 함수 밖 줄은 안 본다. 못 읽는 파일은 없음 — 던지지 않는다."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    outside = {(a.asname or a.name).split(".")[0] for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    lines = text.splitlines()
+    found: dict[tuple[int, str], str] = {}
+    for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        given: dict[str, list] = {}
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+                given.setdefault(n.targets[0].id, []).append(n.value)
+            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+                given.setdefault(n.target.id, []).append(n.value)
+        for call in (n for n in ast.walk(fn) if isinstance(n, ast.Call)):
+            verb = _callee(call.func)
+            if verb not in flowgraph.WRITE_VERBS or verb in _TOPIC_VERBS:
+                continue
+            arg = next((k.value for k in call.keywords if k.arg == "key"), None)
+            if arg is None and verb in _KEY_FIRST and call.args:
+                arg = call.args[0]
+            if isinstance(arg, ast.Name) and len(given.get(arg.id, ())) == 1:
+                arg = given[arg.id][0]
+            field = _message_field(arg, outside) if arg is not None else None
+            if field and (call.lineno, field) not in found:
+                found[(call.lineno, field)] = lines[call.lineno - 1].strip() if 0 < call.lineno <= len(lines) else ""
+    return [(line, field, body) for (line, field), body in sorted(found.items())]
+
+
+def filled_fields(text: str, field: str) -> list[tuple[int, int, str]]:
+    """생성자 호출(이름이 대문자로 시작)이 키워드 `<필드>=`로 채우는 자리 → `(인자 줄, 값의 끝 줄, 줄 본문)`(R3-5z ⑬ — 쓴 쪽 명령이 그 필드를 싣는가). 소문자
+    호출(`dict(…)`·함수)은 명령이 아니다. 못 읽는 파일은 없음."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    lines = text.splitlines()
+    out = []
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        if not _callee(call.func)[:1].isupper():
+            continue
+        for k in call.keywords:
+            if k.arg == field:
+                body = lines[k.lineno - 1].strip() if 0 < k.lineno <= len(lines) else ""
+                out.append((k.lineno, k.value.end_lineno or k.lineno, body))
+    return sorted(out)
 
 
 @dataclass(frozen=True)
@@ -699,6 +787,100 @@ class DeployedCode(DeployedCodePort):
         # 코드가 읽는 필드(R3-5z ⑧) — 이름이 범위 파일에 리터럴로 든 것(`r["f"]`·`get("f")`·`df["f"]`). 속성 접근(`df.f`)은 못 본다.
         read = [f for f in fields if any(q + f + q in snap.get(path, "") for path in files for q in ("'", '"'))]
         return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges, read=read)
+
+    async def message_keys(self, topic: str, services, writer: str, *, at=(), service: str = "", repo: str = "") -> MessageKeys:
+        """쓰기 경로의 받는 쪽이 키 이름을 메시지 필드에서 받아 쓰는가(R3-5z ⑬ — 측정 #34 재생 걷기: `<적재 서비스>`는 키를 config로 선언하지 않고
+        `save(key=<메시지 봉투>.<대상 자원 필드>)`로 써서 "구독 + 이 키 선언" 조건이 늘 비었다). 구독 서비스마다 그 토픽을 읽는 인덱스 클래스 범위(진입에서 닿는 부모
+        메서드 파일까지)의 `message_key_lines`, 거기 없으면 그 서비스의 코드 파일 전부(`broad`). 쓴 쪽 클래스 범위의 생성자가 그 필드를 키워드로 채우면 그 자리 — 이
+        키의 쓰기 줄(`at`, `<파일>:L<n>`)이 그 인자 안이면 `carries`. 서비스마다 많아야 한 줄이고 쓴 쪽이 채우는 필드가 먼저다. 걷기 노드만 부른다(읽기 상한·증거
+        밖). 던지지 않는다 — 조회가 안 되면 `problem`."""
+        try:
+            return await self._message_keys(topic, tuple(services), writer, at=tuple(at), service=service, repo=repo)
+        except Exception as exc:                                    # noqa: BLE001
+            return MessageKeys(problem=f"메시지 필드를 확인하지 못했다({type(exc).__name__})")
+
+    async def _message_keys(self, topic: str, services: tuple[str, ...], writer: str, *, at: tuple[str, ...], service: str, repo: str) -> MessageKeys:
+        from src.knowledge import index as ix
+        from src.knowledge import query as qy
+
+        if self._index is None:
+            return MessageKeys(problem="심볼 인덱스가 없다")
+        scope = await self._class_scope(writer, service=service, repo=repo)
+        writer_problem = scope if isinstance(scope, str) else ""
+        wsnap, wfiles = ({}, []) if isinstance(scope, str) else scope
+        keyed = [(p, int(n)) for p, _, n in (a.rpartition(":L") for a in at) if n.isdigit()]
+        fills: dict[str, list[tuple[str, int, int]]] = {}
+
+        def filled(field: str) -> list[tuple[str, int, int]]:
+            if field not in fills:
+                fills[field] = [(path, line, end) for path in wfiles for line, end, _ in filled_fields(wsnap.get(path, ""), field)]
+            return fills[field]
+
+        hits: list[MessageKeyHit] = []
+        unread: list[str] = []
+        for name in sorted(set(services)):
+            svc = self._topology.services.get(name)
+            if svc is None:
+                unread.append(f"{name}: 토폴로지에 없다")
+                continue
+            snap = await self.snapshot_for(svc.repo)
+            if snap is None:
+                unread.append(f"{name}: {svc.repo}의 스냅샷을 못 받았다")
+                continue
+
+            def mine(path: str, name=name, svc_repo=svc.repo) -> bool:
+                return flowgraph.owner(path, svc_repo, self._topology)[0] in (name, None)
+
+            readers = sorted({s.class_id if s.class_id is not None else s.id for s in self._index.symbols if s.repo == svc.repo
+                              and any(r.kind == "topic" and r.name == topic and r.direction == "reads" for r in s.resources) and mine(s.file)})
+            files: list[str] = []
+            for sid in readers:
+                for path in (self._index.symbols[sid].file, *(self._index.symbols[m].file for m in qy.reachable_members(self._index, sid)[1])):
+                    if path in snap and path not in files:
+                        files.append(path)
+            found = [(path, line, field, body, False) for path in files for line, field, body in message_key_lines(snap[path])]
+            if not found:
+                # 그 토픽을 읽는 클래스를 인덱스가 모르거나(프레임워크가 구독한다) 그 범위에 그런 줄이 없다 — 그 서비스 코드 전체에서. 걷기가 "그 토픽을 읽는 클래스 밖"으로 적는다.
+                found = [(path, line, field, body, True) for path in sorted(snap) if ix.is_indexed(path) and mine(path)
+                         for line, field, body in message_key_lines(snap[path])]
+            if not found:
+                continue
+            path, line, field, body, broad = next((f for f in found if filled(f[2])), found[0])
+            spots = filled(field)
+            carried = [s for s in spots if any(p == s[0] and s[1] <= n <= s[2] for p, n in keyed)]
+            spot = (carried or spots or [("", 0, 0)])[0]
+            hits.append(MessageKeyHit(service=name, field=field, path=path, line=line, text=body, broad=broad,
+                                      filled_path=spot[0], filled_line=spot[1], carries=bool(carried)))
+        problem = "; ".join(unread[:2]) if unread and not hits else ""
+        return MessageKeys(hits=hits, problem=problem, writer_problem=writer_problem if hits else "")
+
+    async def _class_scope(self, name: str, *, service: str, repo: str) -> tuple[dict[str, str], list[str]] | str:
+        """클래스 하나의 범위 `(스냅샷, 파일들)` — 클래스 파일과 진입에서 닿는 부모 메서드 파일(단일값 조회의 범위에서 컴포넌트 링크만 뺀 것). 못 고르면 그 까닭."""
+        from src.knowledge import query as qy
+
+        text = name
+        if service:
+            known = self._topology.services.get(service)
+            if known is None:
+                return f"없는 서비스 — {service}"
+            text = f"{known.repo}:{name}"
+        elif repo:
+            text = f"{repo}:{name}"
+        found = [sid for sid in qy.find(self._index, text) if self._index.symbols[sid].kind == "class"]
+        if not found:
+            return f"{name}: 인덱스에 없다"
+        if len(found) > 1:
+            return f"{name}: 여럿이다({len(found)})"
+        sym = self._index.symbols[found[0]]
+        snap = await self.snapshot_for(sym.repo)
+        if snap is None:
+            return f"{sym.repo}의 스냅샷을 못 받았다"
+        files = [sym.file] if sym.file in snap else []
+        for mid in qy.reachable_members(self._index, found[0])[1]:
+            path = self._index.symbols[mid].file
+            if path in snap and path not in files:
+                files.append(path)
+        return snap, files
 
     async def uses(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy

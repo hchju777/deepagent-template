@@ -1312,6 +1312,7 @@ def _code_deps(code) -> dict:
     """걷기와 받기 검사가 코드 자리에서 받는 것 — `case walk`와 `case investigate`가 같은 묶음을 쓴다(R3-5z ④). 한쪽 조립에만 새 칸을 넣으면 다른 쪽은 조용히
     전처럼 돈다(규율 8과 같은 까닭)."""
     return {"pipeline_here": getattr(code, "pipeline_here", None), "routed": getattr(code, "routed_types", None),
+            "message_keys": getattr(code, "message_keys", None),
             "count_types": _counts_types(code), "router_types": getattr(code, "type_names", None),
             "value_status": code.value_status() if callable(getattr(code, "value_status", None)) else None}
 

@@ -1526,3 +1526,133 @@ async def test_code_read가_없는_경로면_경로_끝_이름과_맞는_클래�
     # 맞는 이름이 없으면 git 말 그대로
     got = await code.read("sink", "q/nothing_here.py")
     assert got.error.startswith("fatal: path 'q/nothing_here.py' does not exist") and "다시 내라" not in got.error
+
+
+# ── R3-5z ⑬ — 메시지 필드로 잇기(측정 #34 재생 걷기: A 꼬리 24번이 전부 "구독 n곳 중 이 키를 선언한 곳 없음") ──
+
+LOADER = (
+    'import keys\n'
+    '\n'
+    '\n'
+    'class Loader:\n'
+    '    def _run(self, message):\n'
+    '        self.repository.save(key=message.target, value=message.rows)\n'
+    '        self.redis.set(message["name"], 1)\n'
+    '        self.redis.hset(message.get("bucket"), "f", 1)\n'
+    '        target = message.envelope.dest\n'
+    '        self.redis.set(target, 1)\n'
+    '        self.redis.set(self.key, 1)\n'
+    '        self.redis.set(self.config.get("redis_key"), 1)\n'
+    '        self.redis.set(cfg.get("k"), 1)\n'
+    '        self.redis.set(keys.summary, 1)\n'
+    '        self.redis.set(Prefix.summary, 1)\n'
+    '        self.redis.set(message.SUMMARY, 1)\n'
+    '        self.producer.send("t", key=message.id, value=message)\n'
+    '        self.mongo.insert(message.doc)\n'
+    '        other = message.a\n'
+    '        other = message.b\n'
+    '        self.redis.set(other, 1)\n'
+    '        self.redis.get(message.target)\n'
+    '        self.repository.save(command)\n'
+)
+
+
+def test_message_key_lines는_쓰기_동사의_키_인자가_메시지_필드인_줄을_읽는다():
+    """측정 #34 재생 걷기: `<적재 서비스>`는 키를 config로 선언하지 않고 `save(key=<메시지 봉투>.<대상 자원 필드>)`로 메시지가 실은 이름으로 쓴다. 쓰기 동사 호출의 키 인자
+    (키워드 `key`, 없으면 키-값 동사의 첫 위치 인자)가 `<변수>.<필드>`·`<변수>["<필드>"]`·`<변수>.get("<필드>")`면 그 필드다 — 같은 함수에서 한 번만 받은 변수도(한 단계).
+    self·cls·설정 꼴·import한 이름·대문자 이름(상수 자리)과 토픽 동사의 `key=`(Kafka 메시지 키)·컬렉션 동사의 첫 인자(문서)·두 번 받은 변수·읽기 동사는 아니다."""
+    from src.infrastructure.deployed_code import message_key_lines
+
+    assert message_key_lines(LOADER) == [(6, "target", "self.repository.save(key=message.target, value=message.rows)"),
+                                         (7, "name", 'self.redis.set(message["name"], 1)'),
+                                         (8, "bucket", 'self.redis.hset(message.get("bucket"), "f", 1)'),
+                                         (10, "dest", "self.redis.set(target, 1)")]
+    assert message_key_lines("def (:\n") == [] and message_key_lines("store.save(key=message.target)\n") == []      # 못 읽는 파일·함수 밖은 없음
+
+
+def test_filled_fields는_생성자_호출이_키워드로_채우는_필드의_자리와_값의_끝_줄을_준다():
+    """쓴 쪽 명령(R3-5z ⑬)이 그 필드를 싣는가 — 이름이 대문자로 시작하는 호출의 키워드 `<필드>=`. 값이 여러 줄이면 끝 줄까지(이 키의 쓰기 줄이 그 안에 드는지 본다).
+    소문자 호출(`dict(…)`·함수)은 명령이 아니다."""
+    from src.infrastructure.deployed_code import filled_fields
+
+    text = ('class W:\n    def run(self, line):\n        command = Command(topic=self.topic,\n                          target=self.cfg.get("redis_key", "k")\n'
+            '                          .format(line=line), rows=[])\n        self.repository.save(command)\n        make(target=1)\n        d = dict(target=2)\n')
+    assert filled_fields(text, "target") == [(4, 5, 'target=self.cfg.get("redis_key", "k")')]
+    assert filled_fields(text, "nope") == [] and filled_fields("def (:\n", "target") == []
+
+
+def _repo_src(files):
+    class Src:
+        async def files(self):
+            return sorted(files)
+
+        async def read(self, path):
+            return files.get(path)
+    return Src()
+
+
+MK_REPOS = {
+    "dt-core": {"proc/__init__.py": "",
+                "proc/feed.py": ('class Feed:\n    def run(self, line):\n'
+                                 '        command = Command(topic=self.cfg.get("infra", "kafka", "producer", "topic", "out"),\n'
+                                 '                          target=self.cfg.get("redis_key", "feed").format(line=line))\n'
+                                 '        self.repository.save(command)\n'),
+                "proc/bare.py": ('class Bare:\n    def run(self, line):\n'
+                                 '        self.repository.save(Command(topic=self.cfg.get("infra", "kafka", "producer", "topic", "out"), line=line))\n')},
+    "dt-load": {"load/__init__.py": "",
+                "load/loader.py": ('class Loader:\n    def run(self):\n'
+                                   '        for message in self.consumer.subscribe(self.cfg.get("infra", "kafka", "consumer", "topic", "in")):\n'
+                                   '            self.redis.set(message.audit, 1)\n'
+                                   '            self.repository.save(key=message.target, value=message.rows)\n'),
+                # 그 토픽을 읽는 클래스 밖 — 클래스 범위에 줄이 있으면 안 본다
+                "load/side.py": 'def side(message, store):\n    store.save(key=message.other)\n'},
+    # 그 토픽을 읽는 클래스를 인덱스가 모른다(프레임워크가 구독한다) — 서비스 코드 전체에서
+    "dt-other": {"other/__init__.py": "", "other/job.py": 'def go(msg, store):\n    store.save(key=msg.target)\n'},
+}
+
+
+async def test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다(clock, monkeypatch):
+    """R3-5z ⑬: 구독 서비스마다 그 토픽을 읽는 인덱스 클래스 범위(진입에서 닿는 부모 메서드 파일까지)에서 먼저, 없으면 그 서비스 코드 전체에서(`broad`). 쓴 쪽 클래스 범위의
+    생성자가 그 필드를 키워드로 채우면 그 자리 — 이 키의 쓰기 줄(`at`)이 그 인자 안이면 `carries`. 서비스마다 많아야 한 줄이고 쓴 쪽이 채우는 필드가 먼저다. 쓴 쪽을 못
+    보면 `writer_problem`, 조회 자체가 안 되면 `problem`(못 찾음과 다르다). 던지지 않는다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(MK_REPOS[repo]), source="s", clock=clock)
+
+    topology = Topology(services={"sink": Service(repo="dt-core", role="낸다"), "loader": Service(repo="dt-load", role="싣는다"),
+                                  "other": Service(repo="dt-other", role="딴 일")})
+    code = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    assert (await code.message_keys("t.load", ["loader"], "Feed")).problem == "심볼 인덱스가 없다"
+    names = [Name("topic", "t.load", "infra.kafka.consumer.topic.in"), Name("rediskey", "feed:{line}", "redis_key.feed")]
+    code.attach_index(await ix.build_index({repo: _repo_src(files) for repo, files in MK_REPOS.items()}, names=names,
+                                           commits={repo: "c0ffee" for repo in MK_REPOS}))
+    got = await code.message_keys("t.load", ["loader", "other", "ghost"], "Feed", at=("proc/feed.py:L4",), service="sink")
+    assert got.problem == "" and got.writer_problem == ""
+    assert [(h.service, h.field, h.path, h.line, h.broad, h.filled_path, h.filled_line, h.carries) for h in got.hits] == [
+        ("loader", "target", "load/loader.py", 5, False, "proc/feed.py", 4, True),        # 쓴 쪽이 채우는 필드가 먼저(L4의 audit보다)
+        ("other", "target", "other/job.py", 2, True, "proc/feed.py", 4, True)]            # 그 토픽을 읽는 클래스가 없다 — 서비스 코드 전체
+    assert got.hits[0].text == "self.repository.save(key=message.target, value=message.rows)"
+    # 이 키의 쓰기 줄이 그 인자 밖이면 채우는 자리만(이 키를 싣는다고 안 한다)
+    assert [h.carries for h in (await code.message_keys("t.load", ["loader"], "Feed", at=("proc/feed.py:L9",), service="sink")).hits] == [False]
+    # 쓴 쪽이 아무 필드도 안 채우면 받는 쪽의 첫 줄, 채우는 자리는 비어 있다
+    bare = await code.message_keys("t.load", ["loader"], "Bare", repo="dt-core")
+    assert [(h.field, h.line, h.filled_path) for h in bare.hits] == [("audit", 4, "")] and bare.writer_problem == ""
+    # 쓴 쪽을 못 보면 그 사실(못 찾음과 다르다)
+    ghost = await code.message_keys("t.load", ["loader"], "Nope")
+    assert ghost.writer_problem == "Nope: 인덱스에 없다" and [h.field for h in ghost.hits] == ["audit"]
+    # 받는 쪽에 그런 줄이 없으면 빈 결과 — 조회는 됐다. 받는 쪽을 못 읽었으면 그 사실
+    none = await code.message_keys("t.load", ["sink"], "Feed")
+    assert none.hits == [] and none.problem == ""
+    assert (await code.message_keys("t.load", ["ghost"], "Feed")).problem == "ghost: 토폴로지에 없다"
+
+    async def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(code, "_message_keys", boom)
+    assert (await code.message_keys("t.load", ["loader"], "Feed")).problem == "메시지 필드를 확인하지 못했다(RuntimeError)"

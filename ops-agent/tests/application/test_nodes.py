@@ -1127,3 +1127,25 @@ def test_이미_있는_태스크_id를_다시_내면_반려에_다음_빈_id를_
     assert [t.id for t in kept] == ["t-3"]
     assert refused == ["t-1: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다 — 다음 빈 id는 t-4",
                        "t-2: 이미 있는 태스크 id를 다시 냈다 — 받지 않는다 — 다음 빈 id는 t-4"]
+
+
+async def test_걷기_노드는_어댑터의_메시지_필드_조회를_걷기에_넘긴다(case, monkeypatch):
+    """R3-5z ⑬: `message_keys`가 엔진 묶음(`EngineDeps`)을 거쳐 걷기에 닿는다 — 한 칸이라도 빠지면 걷기는 조용히 config 선언으로만 잇는다(측정 #34 재생 걷기의 끊긴 꼬리)."""
+    import dataclasses
+
+    from src.application import nodes as nodes_mod
+    from src.domain.case import TargetPick
+
+    got = {}
+
+    async def fake(state, **kw):
+        got.update(kw)
+        return {}
+
+    async def message_keys(*a, **k):
+        return None
+
+    monkeypatch.setattr(nodes_mod, "run_walk", fake)
+    deps = dataclasses.replace(deps_for(ScriptedRunner(), code_index=True), message_keys=message_keys)
+    await make_nodes(deps)["walk"](CaseState(case=case, target=TargetPick(key="k:L1", writer="W")))
+    assert got["message_keys"] is message_keys

@@ -104,6 +104,9 @@ class EngineDeps:
     pipeline_here: Callable[[str], Awaitable[str]] | None = None
     # R3-5w ② — 구독 클래스가 라우터 유형표를 거쳐 받는가 `routed(클래스) → "" | 사실`(DeployedCode.routed_types). None이면(대본) 토픽 행은 전처럼.
     routed: Callable[[str], Awaitable[str]] | None = None
+    # R3-5z ⑬ — 쓰기 경로의 받는 쪽이 키 이름을 메시지 필드에서 받아 쓰는가 `message_keys(토픽, 구독 서비스들, 쓴 쪽, at=, service=|repo=) → MessageKeys`
+    # (DeployedCode.message_keys). None이면(대본) 쓰기 경로는 config 선언으로만 잇는다.
+    message_keys: Callable[..., Awaitable[object]] | None = None
     # R3-5y ④·R3-5z ③ — 걷기가 섞인 토픽 행에서 그 클래스의 유형만 세는가(토폴로지에 유형 칸 선언이 있을 때). 상한은 실행기가 config에서 쥔다. 꺼져 있으면(대본·
     # 선언 없음) 세지 않는다 — 셀 칸 이름을 모른다.
     count_types: bool = False
@@ -546,7 +549,7 @@ def make_nodes(deps: EngineDeps) -> dict:
             return await run_walk(state, runner=deps.runner, classes=deps.classes, class_services=deps.class_services,
                                   service_repos=deps.service_repos, declared_by=deps.declared_by,
                                   topic_producers=deps.topic_producers, subscriptions=deps.subscriptions, lookup=deps.filter_lines,
-                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed,
+                                  peer=deps.peer, pipeline_here=deps.pipeline_here, routed=deps.routed, message_keys=deps.message_keys,
                                   count_types=deps.count_types, value_status=deps.value_status, clock=deps.clock)
         except Exception as exc:                                    # noqa: BLE001
             return {"walk": Walk(stopped=f"걷기 노드가 던졌다 — {type(exc).__name__}: {exc}")}
