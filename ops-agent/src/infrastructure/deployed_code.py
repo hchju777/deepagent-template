@@ -456,6 +456,36 @@ def returned_dicts(text: str, line: int) -> list[dict[str, tuple[int, int]]] | N
              if isinstance(k, ast.Constant) and isinstance(k.value, str)} for r in returns]
 
 
+def key_sources(text: str) -> list[tuple[str, str, int]]:
+    """입력 필드로 만든 열 — `(열, 입력 필드, 줄)`(R3-5z ⑱ — 측정 #34 4: 작업자 처리기는 병합 키 `<병합 키>`를 같은 클래스에서 `"<병합 키>": df.get("<입력 필드>")`로
+    만든다). 딕셔너리 리터럴의 `"<열>": <식>.get("<필드>")`·`<식>["<필드>"]`, 그리고 `<식>["<열>"] = <식>.get("<필드>")`·`<식>["<필드>"]`. 못 읽는 파일은 없음."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+
+    def field_of(node) -> str | None:
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            return node.slice.value
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args
+                and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+            return node.args[0].value
+        return None
+
+    out: dict[tuple[str, str, int], None] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                f = field_of(v)
+                if isinstance(k, ast.Constant) and isinstance(k.value, str) and f is not None:
+                    out[(k.value, f, k.lineno)] = None
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            t, f = node.targets[0], field_of(node.value)
+            if f is not None and isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant) and isinstance(t.slice.value, str):
+                out[(t.slice.value, f, node.lineno)] = None
+    return sorted(out, key=lambda x: (x[2], x[0]))
+
+
 @dataclass(frozen=True)
 class Registration:
     """등록 모음 파일의 `register(component="X", <사이트 인자>)(<클래스>)` 한 건 — 데코레이터 형도 같은 모양으로 둔다."""
@@ -859,6 +889,9 @@ class DeployedCode(DeployedCodePort):
         # 범위 파일의 pandas 병합식(R3-5g ④) — 걷기가 두 입력의 그 필드 값이 겹치는지 센다. 비교식과 같은 범위, 같은 사실의 종류(코드가 무엇으로 잇나).
         merges = [MergeHit(path=path, line=i, text=body, left=list(left), right=list(right), how=how, chained=follow)
                   for path in files for i, left, right, how, body, follow in merge_pairs(snap.get(path, ""))]
+        # 병합 키를 입력 필드로 만든 자리(R3-5z ⑱) — 같은 범위의 파일에서. 걷기가 채움값이 나쁜 값과 같은 병합의 키를 입력 필드까지 잇는다.
+        made = [(col, field, path, line) for path in files for col, field, line in key_sources(snap.get(path, ""))]
+        merges = [m.model_copy(update={"sources": [s for s in made if s[0] in m.left or s[0] in m.right]}) for m in merges]
         # 코드가 읽는 필드(R3-5z ⑧) — 이름이 범위 파일에 리터럴로 든 것(`r["f"]`·`get("f")`·`df["f"]`). 속성 접근(`df.f`)은 못 본다.
         read = [f for f in fields if any(q + f + q in snap.get(path, "") for path in files for q in ("'", '"'))]
         return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges, read=read)

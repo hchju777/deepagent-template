@@ -1806,3 +1806,41 @@ async def test_쓰기_경로는_걷기가_끝난_뒤_시간_상한_밖에서_보
     assert walk.hops[1].write_path == path and walk.hops[1].line() == f"  in:L1 | W1 [a] {path} | 없음 | t-3.e1"
     assert walk.stopped == f"키가 없다 — in:L1(쓰는 W1 [a] {path} · 구독 t.raw 범위 40~100, 남은 메시지 60)"      # 범위까지 읽었다 — 상한에 안 걸렸다
     assert walk.seconds >= 31                                                                                   # 걸린 시간은 그대로 적는다
+
+
+# ── R3-5z ⑱ — 병합 뒤 채움값이 이어 온 나쁜 값과 같으면 병합 키 ← 입력 필드(측정 #34 4) ──
+
+async def test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다():
+    """측정 #34 4(작업자, 2-b 틀림 6 중 5): 걷기가 `<처리기>`에서 `입력이 다 정상`으로 멈추고 판정문이 원천 공백을 말하지 않았다. 나쁜 단일값 `<v>`는 그 클래스의 outer
+    병합 바로 뒤 `fillna("<v>")`와 같고, 그 병합 키는 같은 클래스에서 `"<병합 키>": df.get("<입력 필드>")`로 만들며, 입력의 `<입력 필드>`는 모든 행이 공백이다. 이어 온 나쁜
+    값이 범위 병합의 채움값과 같으면 그 병합 키를 입력 필드까지 잇고, 그 클래스 입력에서 그 필드가 모든 행에 같은 값이면 멈춤 줄에 그 사실. 아니면 전처럼."""
+    from src.application.walk import fill_source
+    from src.domain.case import MergeHit
+
+    rows = [{"code": f"A{i}", "wg": "-", "lvl": "x"} for i in range(3)]
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]),
+             ("redis.get", "in:L1"): {"type": "string", "value": json.dumps({"record": rows, "metadata": {"event_type": "W1"}})},
+             ("code.resources", "W1"): _res("W1", [("src:{line}", "rediskey")]),
+             ("redis.get", "src:L1"): {"type": "string", "value": json.dumps([{"id": i, "wsCode": ""} for i in range(4)])}}
+    merge = MergeHit(path="w1.py", line=5, text="a.merge(b, left_on='code', right_on='ws', how='outer').fillna('-')", left=["code"], right=["ws"],
+                     how="outer", chained=("fillna", "-"), sources=[("ws", "wsCode", "w1.py", 3)])
+    both = (("lvl", "x"), ("wg", "-"))
+
+    async def walked(merges):
+        lookup = _Lookup({("W0", both): FilterScan(hits=[HIT], checked=["wg", "lvl"], files=["w0.py", "proc/job.py"]),
+                          ("W1", (("wg", "-"),)): FilterScan(files=["w1.py"], merges=merges)})
+        return (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)},
+                               lookup=lookup, clock=lambda: T0))["walk"]
+
+    walk = await walked([merge])
+    fact = "병합 뒤 fillna('-')가 이어 온 단일값 wg='-'와 같다(w1.py:L5) · 병합 키 ws ← 입력 필드 wsCode(w1.py:L3): src:L1 4행 전부 ''"
+    assert walk.stopped == f"입력이 다 정상 — W1 · {fact} (단일값이 든 비교식 proc/job.py:L50)"
+    # 채움값이 다르거나 키를 입력 필드로 만든 자리가 없으면 전처럼
+    assert (await walked([merge.model_copy(update={"chained": ("fillna", "?")})])).stopped == "입력이 다 정상 — W1 (단일값이 든 비교식 proc/job.py:L50)"
+    assert (await walked([merge.model_copy(update={"sources": []})])).stopped == "입력이 다 정상 — W1 (단일값이 든 비교식 proc/job.py:L50)"
+    # 입력에서 그 필드가 단일값이 아니거나 어떤 행에 없으면 사실이 아니다
+    mixed = [("src:L1", "e", [{"wsCode": ""}, {"wsCode": "B"}])]
+    gone = [("src:L1", "e", [{"wsCode": ""}, {"id": 2}])]
+    assert fill_source([merge], ("wg", "-"), mixed) == "" and fill_source([merge], ("wg", "-"), gone) == ""
+    assert fill_source([merge], None, [("src:L1", "e", [{"wsCode": ""}])]) == ""
+    assert fill_source([merge], ("wg", "-"), [("src:L1", "e", [{"wsCode": ""}])]).endswith("src:L1 1행 전부 ''")

@@ -1825,3 +1825,47 @@ async def test_message_keys는_같은_질의를_다시_안_하고_파일마다_�
     code.attach_index(code._index)
     await code.message_keys("t.load", ["loader", "other"], "Feed", at=("proc/feed.py:L4",), service="sink")
     assert len(parsed) == 2 * n                                                         # 인덱스를 붙이면 비운다
+
+
+# ── R3-5z ⑱ — 병합 키를 입력 필드로 만든 자리(측정 #34 4) ──
+
+def test_key_sources는_딕셔너리_리터럴과_대괄호_대입에서_입력_필드로_만든_열을_읽는다():
+    """측정 #34 4: 작업자 처리기는 병합 키를 같은 클래스에서 `"<병합 키>": df.get("<입력 필드>")`로 만든다. 딕셔너리 리터럴의 `"<열>": <식>.get("<필드>")`·`<식>["<필드>"]`와
+    `<식>["<열>"] = <식>.get("<필드>")`·`<식>["<필드>"]`가 `(열, 입력 필드, 줄)`이다. 리터럴 값·변수 키는 아니다."""
+    from src.infrastructure.deployed_code import key_sources
+
+    text = ('def build(df, row):\n'
+            '    out = {"ws": df.get("wsCode"),\n'
+            '           "line": row["lineCode"],\n'
+            '           "fixed": "-",\n'
+            '           name: df.get("x")}\n'
+            '    df["code"] = df.get("alarmCode")\n'
+            '    df["copy"] = df["src"]\n'
+            '    df[name] = df.get("y")\n'
+            '    return out\n')
+    assert key_sources(text) == [("ws", "wsCode", 2), ("line", "lineCode", 3), ("code", "alarmCode", 6), ("copy", "src", 7)]
+    assert key_sources("def (:\n") == []
+
+
+async def test_filter_lines의_병합식에는_같은_범위에서_그_키를_입력_필드로_만든_자리가_붙는다(clock):
+    """R3-5z ⑱: 걷기가 채움값이 나쁜 값과 같은 병합의 키를 입력 필드까지 잇도록, 병합식마다 같은 범위 파일에서 그 키(왼쪽·오른쪽)를 입력 필드로 만든 자리를 싣는다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    files = {"wk/__init__.py": "",
+             "wk/proc.py": ('import pandas as pd\n\n\nclass Proc:\n    def _run(self, rows, ref):\n'
+                            '        left = pd.DataFrame([{"ws": r.get("wsCode"), "n": r["n"]} for r in rows])\n'
+                            '        out = left.merge(pd.DataFrame(ref), left_on="ws", right_on="code", how="outer").fillna("-")\n'
+                            '        return out\n')}
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(files), source="s", clock=clock)
+
+    code = DeployedCode(Reader(), Topology(services={"processor": Service(repo="dt-proc", role="가공한다")}), Deployment(), gbm="mx", fct="gumi", clock=clock)
+    code.attach_index(await ix.build_index({"dt-proc": _repo_src(files)}, commits={"dt-proc": "c2"}))
+    scan = await code.filter_lines("Proc")
+    assert [(m.line, m.left, m.right, m.how, m.chained, m.sources) for m in scan.merges] == [
+        (7, ["ws"], ["code"], "outer", ("fillna", "-"), [("ws", "wsCode", "wk/proc.py", 6)])]

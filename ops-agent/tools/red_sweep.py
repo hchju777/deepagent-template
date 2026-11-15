@@ -4177,7 +4177,23 @@ CASES += [
  ('인덱스를 붙여도 기억을 안 비운다', D, '        self._mk_done, self._readers, self._members, self._parsed, self._owned, self._fills = {}, {}, {}, {}, {}, {}\n', '', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_같은_질의를_다시_안_하고_파일마다_한_번만_파싱하며_인덱스를_붙이면_비운다']),
  ('쓰기 경로를 걷기 안에서 본다', WK, '                            later.append((ev, row, rtext, name, label, w, dict(params_k)))\n', '                            paths_at[ev] = await write_path(rtext, name, label, w, params_k)\n', ['tests/application/test_walk.py::test_쓰기_경로는_걷기가_끝난_뒤_시간_상한_밖에서_보고_행과_멈춤은_같다']),
 ]
-assert len(CASES) >= 1590, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑱ — 병합 뒤 채움값이 이어 온 나쁜 값과 같으면 병합 키 ← 입력 필드(같은 범위의 "<열>": <식>.get("<필드>")) · 입력에서 단일값이면 멈춤 줄에 ──
+CASES += [
+ ('딕셔너리 리터럴의 입력 필드 열을 안 본다', D, '        if isinstance(node, ast.Dict):\n            for k, v in zip(node.keys, node.values):', '        if False:\n            for k, v in zip(node.keys, node.values):', ['tests/infrastructure/test_deployed_code.py::test_key_sources는_딕셔너리_리터럴과_대괄호_대입에서_입력_필드로_만든_열을_읽는다', 'tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_같은_범위에서_그_키를_입력_필드로_만든_자리가_붙는다']),
+ ('대괄호 대입의 입력 필드 열을 안 본다', D, '        elif isinstance(node, ast.Assign) and len(node.targets) == 1:\n            t, f = node.targets[0], field_of(node.value)', '        elif False:\n            t, f = node.targets[0], field_of(node.value)', ['tests/infrastructure/test_deployed_code.py::test_key_sources는_딕셔너리_리터럴과_대괄호_대입에서_입력_필드로_만든_열을_읽는다']),
+ ('변수 키도 열로 본다', D, '                if isinstance(k, ast.Constant) and isinstance(k.value, str) and f is not None:\n', '                if f is not None:\n', ['tests/infrastructure/test_deployed_code.py::test_key_sources는_딕셔너리_리터럴과_대괄호_대입에서_입력_필드로_만든_열을_읽는다']),
+ ('get 필드를 입력 필드로 안 본다', D, '        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args\n                and isinstance(node.args[0], ast.Constant)', '        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "nope" and node.args\n                and isinstance(node.args[0], ast.Constant)', ['tests/infrastructure/test_deployed_code.py::test_key_sources는_딕셔너리_리터럴과_대괄호_대입에서_입력_필드로_만든_열을_읽는다', 'tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_같은_범위에서_그_키를_입력_필드로_만든_자리가_붙는다']),
+ ('병합식에 키 출처를 안 싣는다', D, '        merges = [m.model_copy(update={"sources": [s for s in made if s[0] in m.left or s[0] in m.right]}) for m in merges]\n', '', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_같은_범위에서_그_키를_입력_필드로_만든_자리가_붙는다']),
+ ('병합 키 아닌 열도 출처로 싣는다', D, '[s for s in made if s[0] in m.left or s[0] in m.right]', 'made', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_같은_범위에서_그_키를_입력_필드로_만든_자리가_붙는다']),
+ ('채움값이 나쁜 값과 같은지 안 본다', WK, '        if not m.chained or m.chained[1] != value:\n            continue\n', '        if not m.chained:\n            continue\n', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('입력 필드가 단일값인지 안 본다', WK, 'if rows and len(vals) == len(rows) and len({json.dumps(v, sort_keys=True, default=str) for v in vals}) == 1:', 'if rows and vals:', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('입력 필드가 없는 행이 있어도 단일값으로 본다', WK, 'if rows and len(vals) == len(rows) and len(', 'if rows and vals and len(', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('이어 온 단일값이 없어도 잇는다', WK, '    if watch is None:\n        return ""\n    field, value = watch\n', '    field, value = watch or ("", "-")\n', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('멈춤 줄에 병합 키 사실을 안 싣는다', WK, '                stopped += f" · {source}"\n', '                pass\n', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('이어 온 단일값을 가지마다 안 적는다', WK, '        watched_at[came_from] = watch\n', '', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('가지의 병합식을 안 적는다', WK, '        merges_at[came_from] = merges\n', '', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+]
+assert len(CASES) >= 1603, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

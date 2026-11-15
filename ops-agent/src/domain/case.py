@@ -201,6 +201,9 @@ class MergeHit(StrictModel):
     # 결과에 바로 이어진 호출(이름, 문자열 인자 하나) — 채움값 **후보**(R3-5h ②, 측정 #18 P0-a: outer 병합 뒤 짝 없는 칸을 채운 값을 같은 파일의 비교식이
     # 거른다). 호출 이름은 정하지 않는다 — 어느 호출이든 그 값이 비교식에 있을 때만 뜻이 있고, 걷기가 그것을 가린다.
     chained: tuple[str, str] | None = None
+    # 병합 키를 같은 범위에서 입력 필드로 만든 자리 `(열, 입력 필드, 파일, 줄)`(R3-5z ⑱ — 측정 #34 4: `"<병합 키>": df.get("<입력 필드>")`). 걷기가 채움값이 이어 온 나쁜 값과
+    # 같은 병합에서 그 키를 입력 필드까지 잇는다.
+    sources: list[tuple[str, str, str, int]] = []
 
 
 class FilterScan(StrictModel):

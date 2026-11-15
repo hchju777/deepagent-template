@@ -152,6 +152,26 @@ def fill_fields(merge, left_rows: list, right_rows: list) -> tuple[dict[str, str
     return {c: value for c in sorted(sides)}, sides
 
 
+def fill_source(merges, watch: tuple[str, str] | None, inputs) -> str:
+    """병합 뒤 채움값이 이어 온 나쁜 단일값과 같으면 그 병합 키 ← 입력 필드 사실(R3-5z ⑱ — 측정 #34 4: 작업자 걷기가 처리기에서 `입력이 다 정상`으로 멈췄는데 나쁜 값은
+    그 클래스의 outer 병합 바로 뒤 `fillna("<v>")`와 같았고, 그 병합 키는 입력 필드로 만들며 입력에서 그 필드가 전부 공백이었다). 입력에서 그 필드가 모든 행에
+    있고 값이 하나일 때만 — `병합 뒤 <호출>(<v>)가 이어 온 단일값 <f>=<v>와 같다(<병합 자리>) · 병합 키 <열> ← 입력 필드 <필드>(<자리>): <입력> n행 전부 <값>`. 아니면
+    빈 문자열. `inputs`는 `(라벨, 증거, 행들)`."""
+    if watch is None:
+        return ""
+    field, value = watch
+    for m in merges:
+        if not m.chained or m.chained[1] != value:
+            continue
+        for col, src, path, line in m.sources:
+            for label, _, rows in inputs:
+                vals = [r[src] for r in rows if isinstance(r, dict) and src in r]
+                if rows and len(vals) == len(rows) and len({json.dumps(v, sort_keys=True, default=str) for v in vals}) == 1:
+                    return (f"병합 뒤 {m.chained[0]}({value!r})가 이어 온 단일값 {field}={value!r}와 같다({m.path}:L{m.line}) · "
+                            f"병합 키 {col} ← 입력 필드 {src}({path}:L{line}): {label} {len(rows)}행 전부 {vals[0]!r}")
+    return ""
+
+
 def join_check(merges, inputs) -> list[tuple[tuple[str, str], tuple[str, str], str, Any]]:
     """조인 검사(R3-5g ④-b, P1-5 — 사람 결정 10-20): 병합식마다 그 키 필드를 가진 두 입력의 값 집합이 겹치는지. 안 겹치면 `((왼쪽 라벨, 증거), (오른쪽 라벨,
     증거), 문구, 병합식)`. 왼쪽 키 필드를 전부 가진 행이 있는 입력이 왼쪽, 오른쪽 키 필드를 가진 **다른** 입력이 오른쪽 — 변수를 따라가지 않는다(필드 이름이
@@ -698,6 +718,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     compared: tuple[FilterHit, int, int, int, str] | None = None                            # 그 줄의 입력을 그대로 견준 수 — (줄, 통과, 행, 빈 행, 그 입력 홉의 증거)(R3-5z ⑦)
     inputs_at: dict[str, list[tuple[str, str, list]]] = {}                                  # 걸은 가지 — 그 홉의 증거 → 그 클래스가 읽은 입력 (라벨, 증거, 행들)(R3-5z ⑦)
+    watched_at: dict[str, tuple[str, str] | None] = {}                                      # 걸은 가지 — 그 홉의 증거 → 이어 온 나쁜 단일값(R3-5z ⑱)
+    merges_at: dict[str, list] = {}                                                         # 걸은 가지 — 그 홉의 증거 → 그 클래스 범위의 병합식(R3-5z ⑱)
     params_at: dict[str, dict] = {}                                                         # 걸은 가지 — 그 홉의 증거 → 그 클래스의 조회 인자(service·repo)(R3-5z ⑧)
     carried: dict[str, tuple[str, str]] = {}                                                # 아래 홉의 단일값이 그대로 이어진 홉의 증거 → 그 (필드, 값)(R3-5z ⑦)
     # 읽은 키 → (읽기 결과 "ok"·"fail", 값이 댄 쓴 쪽) — 이미 읽은 키를 다른 클래스가 또 나열하면 그 결과를 따르고, 값이 그 클래스를 대면 자기
@@ -731,6 +753,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         found_inputs = inputs_in(text)
         walked_at[came_from] = _Walked(writer, tag, scope, 0, res_id, class_at(text), len(found_inputs))
         params_at[came_from] = dict(branch.params)
+        watched_at[came_from] = watch
         real, missed = 0, []                                                                # 실제로 읽은 입력 수, 못 본 입력(R3-5b ②)
         read_inputs: list[tuple[str, str, list, str, Any, str]] = []                        # 이 클래스가 읽은 입력 — (라벨, 증거, 행들, 쓴 쪽, 원본, 선언 이름)
         merges: list = []
@@ -740,6 +763,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             # 차례 그대로라 뒤 칸 셋에서 잘릴 수 있다(측정판 R3-5 ④).
             scan0 = await lookup(writer, fields=dict([watch]) if watch else {}, **branch.params)
             linked_at[came_from], merges = list(scan0.linked_at), list(scan0.merges)
+        merges_at[came_from] = merges
         for name, kind in found_inputs:
             if kind == "topic":
                 # 구독 토픽 입력은 **보존 범위**로 읽고 쓴 쪽 칸은 **발행 선언**(config)이다(R3-5s ⑥ — 측정 #29 재측정 2부: ③으로 인덱스에 [topic]이 돌아오자 걸은
@@ -1192,6 +1216,10 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                        else f"입력이 다 정상 — {info.writer}" if info.inputs
                        else f"입력을 모른다 — {info.writer}(인덱스 자원 0 — 메시지 입력일 수 있다{none})" if not info.listed
                        else f"입력을 모른다 — {info.writer}(인덱스 자원이 자기 출력뿐{none})")
+            # 이어 온 나쁜 값이 그 클래스 병합 뒤 채움값과 같으면 병합 키 ← 입력 필드 단일값(R3-5z ⑱ — 측정 #34 4: 작업자 걷기가 처리기에서 `입력이 다 정상`으로 멈추고
+            # 판정문이 원천 공백을 말하지 않았다).
+            if (source := fill_source(merges_at.get(ev, []), watched_at.get(ev), inputs_at.get(ev, []))):
+                stopped += f" · {source}"
             if info.scope and info.at is not None:
                 rungs.append(Rung(action="code.read", params={"service": info.scope, "path": info.at[0], "line": info.at[1]}, evidence=info.res_id))
                 # 이은 컴포넌트 **클래스 본문**이 그 뒤 칸들 — 결정적인 줄은 컴포넌트에 있다(사람 결정 10-14·10-15: 등록 줄이 아니라 그 클래스).
