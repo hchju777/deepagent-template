@@ -1819,9 +1819,10 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
             for repo in site.code.repos if commits.get(repo.name)]
     width = gb.graphify_width(len(jobs))
     if binary and len(jobs) > 1:
-        progress(f"graphify: 레포 {len(jobs)}개를 {width}개씩 겹쳐 돌린다")
+        progress(f"graphify: 레포 {len(jobs)}개를 {width}개씩 겹쳐 돌린다(레포마다 작업 {gb.graphify_workers(width)}개)")
     done = dict(zip([name for name, *_ in jobs],
-                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"))))
+                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"),
+                                         cache_root=out_dir / "graphify-cache")))
     for repo in site.code.repos:
         if repo.name not in done:
             states.append(f"{repo.name} 건너뜀(커밋 없음)")

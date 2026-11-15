@@ -349,8 +349,13 @@ args = sys.argv[1:]
 if args[:1] == ["--version"]:
     print("graphify 0.0-fake")
 elif args[:1] == ["extract"]:
+    import os
     out = Path("graphify-out"); out.mkdir(exist_ok=True)
     (out / "graph.json").write_text(json.dumps({"nodes": [{"id": "sym_fake", "label": "fake()"}], "links": []}), encoding="utf-8")
+    seen = out / "cache" / "ast" / "seen.json"
+    had = seen.exists()
+    seen.parent.mkdir(parents=True, exist_ok=True); seen.write_text("{}", encoding="utf-8")
+    (out / "probe.json").write_text(json.dumps({"workers": os.environ.get("GRAPHIFY_MAX_WORKERS"), "had_cache": had}), encoding="utf-8")
 elif args[:1] == ["cluster-only"]:
     Path("graphify-out/GRAPH_REPORT.md").write_text("# Graph Report\\n- Token cost: 0 input - 0 output\\n", encoding="utf-8")
 elif args[:2] == ["export", "wiki"]:

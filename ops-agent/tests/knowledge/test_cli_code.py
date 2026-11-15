@@ -930,8 +930,8 @@ def test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서�
     config_root = _two_site_tree(tmp_path)
     seen = {}
 
-    def fake_many(jobs, binary, *, width, progress=None):
-        seen.update(jobs=[(name, sha) for name, _, sha, _ in jobs], width=width, binary=binary)
+    def fake_many(jobs, binary, *, width, progress=None, cache_root=None):
+        seen.update(jobs=[(name, sha) for name, _, sha, _ in jobs], width=width, binary=binary, cache_root=cache_root)
         if progress:
             progress(jobs[0][0], "가짜 진행")
         return [("ok", "", {"nodes": [{"id": "fake_symbol", "label": "fake", "type": "function"}], "links": []}, None)
@@ -942,6 +942,8 @@ def test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서�
     assert code == 0, captured.out + captured.err
     assert [n for n, _ in seen["jobs"]] == [REPO] and len(seen["jobs"][0][1]) == 40 and seen["width"] == 1
     assert seen["binary"] is None                                      # graphify가 없어도 같은 길 — 결과는 skipped
+    # graphify 캐시는 번들 자리의 graphify-cache/<레포>(R3-5z ⑲ — worktree와 함께 지워지지 않게)
+    assert seen["cache_root"].resolve() == (tmp_path / "out" / "graph" / "mx" / "graphify-cache").resolve()
     assert f"{REPO}: 가짜 진행" in captured.err
     graph = json.loads((tmp_path / "out" / "graph" / "mx" / "graph.json").read_text(encoding="utf-8"))
     assert any(n["id"] == "fake_symbol" for n in graph["nodes"]) and f"{REPO} ok" in captured.out

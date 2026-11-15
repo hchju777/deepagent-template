@@ -1588,7 +1588,7 @@ CASES += [
   '    return 1',
   [MANY]),
  ("code graph가 graphify를 레포마다 차례로 돌린다", MN,
-  '                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"))))',
+  '                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"),\n                                         cache_root=out_dir / "graphify-cache")))',
   '                    [gb.run_graphify_at(d, s, binary, sc, progress=lambda m, r=n: progress(f"{r}: {m}")) for n, d, s, sc in jobs]))',
   ["tests/knowledge/test_cli_code.py::test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서로_합친다"]),
 ]
@@ -4193,7 +4193,18 @@ CASES += [
  ('이어 온 단일값을 가지마다 안 적는다', WK, '        watched_at[came_from] = watch\n', '', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
  ('가지의 병합식을 안 적는다', WK, '        merges_at[came_from] = merges\n', '', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
 ]
-assert len(CASES) >= 1603, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑲ — graphify 작업 수는 코어 ÷ 동시 레포 수(GRAPHIFY_MAX_WORKERS) · 캐시를 worktree 밖(graphify-cache/<레포>)에 두었다가 되돌린다 ──
+CASES += [
+ ('graphify 작업 수를 안 넘긴다', GBD, '    env = {**os.environ, "GRAPHIFY_MAX_WORKERS": str(workers)} if workers else None\n', '    env = None\n', ['tests/knowledge/test_graph_build.py::test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다가_다음_자리에_되돌린다']),
+ ('작업 수를 코어 수로 둔다', GBD, '    return max(1, (os.cpu_count() or 1) // max(1, width))\n', '    return max(1, os.cpu_count() or 1)\n', ['tests/knowledge/test_graph_build.py::test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다가_다음_자리에_되돌린다', 'tests/knowledge/test_graph_build.py::test_graphify는_레포를_병렬로_돌리고_결과는_레포_순서다']),
+ ('graphify에 환경을 안 실어 보낸다', GBD, '                                  timeout=GRAPHIFY_TIMEOUT_S, env=env)\n', '                                  timeout=GRAPHIFY_TIMEOUT_S)\n', ['tests/knowledge/test_graph_build.py::test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다가_다음_자리에_되돌린다']),
+ ('캐시를 다음 자리에 안 되돌린다', GBD, '            shutil.copytree(cache, held, dirs_exist_ok=True)\n', '            pass\n', ['tests/knowledge/test_graph_build.py::test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다가_다음_자리에_되돌린다']),
+ ('캐시를 worktree 밖으로 안 옮긴다', GBD, '            shutil.rmtree(cache, ignore_errors=True)\n            shutil.copytree(held, cache)\n', '            pass\n', ['tests/knowledge/test_graph_build.py::test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다가_다음_자리에_되돌린다']),
+ ('worktree에서 돈 graphify에 작업 수·캐시를 안 넘긴다', GBD, '        status, detail, path = run_graphify(scratch, binary, progress=progress, workers=workers, cache=cache)\n', '        status, detail, path = run_graphify(scratch, binary, progress=progress)\n', ['tests/knowledge/test_graph_build.py::test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다가_다음_자리에_되돌린다']),
+ ('레포마다 작업 수·캐시 자리를 안 넘긴다', GBD, '                               workers=workers, cache=(cache_root / name) if cache_root is not None else None)\n', '                               workers=None, cache=None)\n', ['tests/knowledge/test_graph_build.py::test_graphify는_레포를_병렬로_돌리고_결과는_레포_순서다']),
+ ('code graph가 캐시 자리를 안 준다', MN, '                                         cache_root=out_dir / "graphify-cache")))\n', '                                         cache_root=None)))\n', ['tests/knowledge/test_cli_code.py::test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서로_합친다']),
+]
+assert len(CASES) >= 1611, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

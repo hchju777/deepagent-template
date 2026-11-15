@@ -317,8 +317,11 @@ def test_graphify는_레포를_병렬로_돌리고_결과는_레포_순서다(mo
     import time
     seen = []
 
-    def fake(repo_dir, sha, binary, scratch, *, progress=None):
+    handed = []
+
+    def fake(repo_dir, sha, binary, scratch, *, progress=None, workers=None, cache=None):
         t0 = time.monotonic()
+        handed.append((repo_dir.name, workers, cache))
         time.sleep(0.3)
         seen.append((repo_dir.name, t0, time.monotonic()))
         if progress:
@@ -333,8 +336,48 @@ def test_graphify는_레포를_병렬로_돌리고_결과는_레포_순서다(mo
     assert [g["nodes"][0]["id"] for _, _, g, _ in results] == ["c", "a", "b"]
     assert max(s for _, s, _ in seen) < min(e for _, _, e in seen)           # 셋이 겹쳐 돌았다
     assert sorted(lines) == ["a: 가짜", "b: 가짜", "c: 가짜"]
+    # 레포마다 graphify 작업 수는 코어 ÷ 폭, 캐시는 cache_root/<이름>(R3-5z ⑲) — 없으면 캐시 자리도 없다
+    assert sorted(handed) == [(n, gb.graphify_workers(3), None) for n in ("a", "b", "c")]
+    handed.clear()
+    gb.run_graphify_many(jobs[:1], "graphify", width=1, cache_root=Path("kept"))
+    assert handed == [("c", gb.graphify_workers(1), Path("kept") / "c")]
     seen.clear()
     gb.run_graphify_many(jobs, "graphify", width=1, progress=None)
     assert all(seen[i][2] <= seen[i + 1][1] for i in range(2))               # 폭 1이면 차례로
     assert gb.graphify_width(10) == min(4, os.cpu_count() or 1)
     assert gb.graphify_width(1) == 1 and gb.graphify_width(0) == 1
+
+
+# ── R3-5z ⑲ — graphify 작업 수와 캐시(측정 #34 5: 그래프 654초 중 graphify가 대부분) ──
+
+def test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다가_다음_자리에_되돌린다(tmp_path, monkeypatch):
+    """측정 #34 5: 레포 4개를 겹쳐 돌리면 graphify가 레포마다 코어 수만큼 작업 프로세스를 띄워(사내 22) 혼자 61초인 레포가 각 약 6분이었고, graphify 캐시
+    (`graphify-out/cache`)가 worktree와 함께 지워졌다(캐시가 있으면 61 → 48초). 작업 수는 `GRAPHIFY_MAX_WORKERS`로 넘기고(안 주면 graphify 기본값 — 환경을 안
+    건드린다), 캐시는 끝나면 worktree 밖으로 옮겨 두었다가 다음 자리에 되돌린다."""
+    monkeypatch.delenv("GRAPHIFY_MAX_WORKERS", raising=False)
+    fake = str(working_graphify(tmp_path / "bin", monkeypatch))
+    cache = tmp_path / "cache" / "repo"
+
+    def probe(where):
+        return json.loads((where / "graphify-out" / "probe.json").read_text(encoding="utf-8"))
+
+    first = tmp_path / "w1"
+    first.mkdir()
+    assert gb.run_graphify(first, fake, workers=3, cache=cache)[0] == "ok"
+    assert probe(first) == {"workers": "3", "had_cache": False} and (cache / "ast" / "seen.json").exists()
+    second = tmp_path / "w2"
+    second.mkdir()
+    assert gb.run_graphify(second, fake, workers=1, cache=cache)[0] == "ok"
+    assert probe(second) == {"workers": "1", "had_cache": True}                       # 다른 자리에서도 지난 캐시로 시작한다
+    third = tmp_path / "w3"
+    third.mkdir()
+    assert gb.run_graphify(third, fake)[0] == "ok"
+    assert probe(third) == {"workers": None, "had_cache": False}                      # 안 주면 전과 같다
+    # worktree에서 돌아도 캐시는 남는다 — worktree는 지워진다
+    repo, sha = _committed_repo(tmp_path)
+    kept = tmp_path / "cache" / "wt"
+    assert gb.run_graphify_at(repo, sha, fake, tmp_path / "scratch" / "repo", workers=2, cache=kept)[0] == "ok"
+    assert (kept / "ast" / "seen.json").exists() and not (tmp_path / "scratch" / "repo").exists()
+    # 레포 하나의 작업 수는 코어 ÷ 동시 레포 수
+    assert gb.graphify_workers(1) == (os.cpu_count() or 1) and gb.graphify_workers(0) == (os.cpu_count() or 1)
+    assert gb.graphify_workers(10_000) == 1

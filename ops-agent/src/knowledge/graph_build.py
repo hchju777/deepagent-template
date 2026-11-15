@@ -127,17 +127,27 @@ def graphify_width(n: int) -> int:
     return max(1, min(4, os.cpu_count() or 1, n))
 
 
+def graphify_workers(width: int) -> int:
+    """레포 하나의 graphify 작업 프로세스 수 — 코어 ÷ 동시에 돌리는 레포 수(R3-5z ⑲ — 측정 #34 5: graphify는 레포마다 코어 수만큼 작업 프로세스를 띄워(사내 22) 레포
+    4개를 겹치면 코어의 네 배가 됐다 — 혼자 61초인 레포가 각 약 6분, 그래프 재생성 654초 중 graphify가 대부분). 코드가 정한다(규율 6)."""
+    return max(1, (os.cpu_count() or 1) // max(1, width))
+
+
 def run_graphify_many(jobs, binary: str | None, *, width: int,
-                      progress: Callable[[str, str], None] | None = None) -> list[tuple]:
+                      progress: Callable[[str, str], None] | None = None, cache_root: Path | None = None) -> list[tuple]:
     """레포마다 `run_graphify_at`을 스레드 풀에서 겹쳐 돌리고 결과는 **준 순서**로 — 끝난 순서로 합치면 같은 입력에
     다른 번들이 나온다. `jobs`는 `[(이름, 레포 경로, sha, scratch)]`. graphify는 자식 프로세스라 GIL 밖이고 레포마다
-    worktree가 따로라 서로 안 건드린다. 사내 5레포 순차 296초의 답."""
+    worktree가 따로라 서로 안 건드린다. 사내 5레포 순차 296초의 답. 레포마다 graphify 작업 수는 코어 ÷ 폭(`graphify_workers`),
+    캐시는 `cache_root/<이름>`(R3-5z ⑲)."""
     from concurrent.futures import ThreadPoolExecutor
+
+    workers = graphify_workers(width)
 
     def one(job):
         name, repo_dir, sha, scratch = job
         return run_graphify_at(repo_dir, sha, binary, scratch,
-                               progress=(lambda m, r=name: progress(r, m)) if progress else None)
+                               progress=(lambda m, r=name: progress(r, m)) if progress else None,
+                               workers=workers, cache=(cache_root / name) if cache_root is not None else None)
 
     with ThreadPoolExecutor(max_workers=max(1, width)) as pool:
         return list(pool.map(one, jobs))
@@ -160,22 +170,34 @@ def find_graphify() -> str | None:
 
 
 def run_graphify(repo_dir: Path, binary: str | None, *,
-                 progress: Callable[[str], None] | None = None) -> tuple[str, str, Path | None]:
+                 progress: Callable[[str], None] | None = None, workers: int | None = None,
+                 cache: Path | None = None) -> tuple[str, str, Path | None]:
     """`(상태, 설명, graph.json 경로)`. 상태는 `ok` / `skipped` / `failed`. 던지지 않는다.
 
     `progress`는 단계마다 한 줄 — 큰 레포는 파싱이 분 단위고 타임아웃이 10분이라, 말없이
     기다리게 두면 사람은 멈춘 줄 안다(사내에서 그랬다).
+
+    `workers`는 graphify 작업 프로세스 수(`GRAPHIFY_MAX_WORKERS` — 안 주면 graphify 기본값, 코어 수). `cache`는 graphify 캐시
+    (`graphify-out/cache`)를 둘 worktree 밖 자리 — 돌기 전에 되돌리고 끝나면 옮겨 둔다(R3-5z ⑲ — 측정 #34 5: worktree와 함께 지워져
+    매번 처음부터 팠다, 캐시가 있으면 61 → 48초). 캐시를 못 옮겨도 그래프는 그대로다 — 다음 번이 느릴 뿐이다.
     """
     if not binary:
         return "skipped", "graphify가 없다 — 오버레이만 만든다 (GRAPHIFY_BIN 또는 PATH)", None
     out = repo_dir / "graphify-out" / "graph.json"
+    env = {**os.environ, "GRAPHIFY_MAX_WORKERS": str(workers)} if workers else None
+    held = repo_dir / "graphify-out" / "cache"
+    if cache is not None and cache.is_dir():
+        try:
+            shutil.copytree(cache, held, dirs_exist_ok=True)
+        except OSError:
+            pass
     for args in (["extract", ".", "--code-only"], ["cluster-only", ".", "--no-label"]):
         if progress:
             progress(f"graphify {args[0]} 중 (최대 {GRAPHIFY_TIMEOUT_S // 60}분)")
         try:
             done = subprocess.run([binary, *args], cwd=str(repo_dir), capture_output=True,
                                   text=True, encoding="utf-8", errors="replace",
-                                  timeout=GRAPHIFY_TIMEOUT_S)
+                                  timeout=GRAPHIFY_TIMEOUT_S, env=env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return "failed", f"graphify {args[0]}: {type(exc).__name__}: {exc}", None
         if done.returncode != 0:
@@ -183,12 +205,18 @@ def run_graphify(repo_dir: Path, binary: str | None, *,
             return "failed", f"graphify {args[0]} 종료코드 {done.returncode} — {tail[0]}", None
     if not out.exists():
         return "failed", f"graphify가 {out}을 안 만들었다", None
+    if cache is not None and held.is_dir():
+        try:
+            shutil.rmtree(cache, ignore_errors=True)
+            shutil.copytree(held, cache)
+        except OSError:
+            pass
     return "ok", str(out), out
 
 
 def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path, *,
-                    progress: Callable[[str], None] | None = None
-                    ) -> tuple[str, str, dict | None, str | None]:
+                    progress: Callable[[str], None] | None = None, workers: int | None = None,
+                    cache: Path | None = None) -> tuple[str, str, dict | None, str | None]:
     """**배포 커밋의** 코드로 graphify를 돌린다 — 작업 트리가 아니라.
 
     작업 트리는 `main` 최신일 수 있고, 그래프는 배포된 것이어야 한다. `git worktree`를
@@ -215,7 +243,7 @@ def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path,
     if made.returncode != 0:
         return "failed", f"worktree add 실패 — {(made.stderr or made.stdout).strip()[-200:]}", None, None
     try:
-        status, detail, path = run_graphify(scratch, binary, progress=progress)
+        status, detail, path = run_graphify(scratch, binary, progress=progress, workers=workers, cache=cache)
         if status != "ok" or path is None:
             return status, detail, None, None
         # 사람용 리포트(커뮤니티·연결 많은 노드·토큰 비용)는 worktree와 함께 지워지던 것이다.
