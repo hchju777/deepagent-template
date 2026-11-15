@@ -4100,7 +4100,7 @@ CASES += [
 CASES += [
  ('부르는 쪽을 엣지 전체 훑기로 찾는다', IX, 'sorted(calls_to.get(sid, ()), key=lambda e: (e.src, e.line))', 'sorted((e for e in self.index.edges_to(sid, "calls") if e.certainty == "exact"), key=lambda e: (e.src, e.line))', ['tests/knowledge/test_index.py::test_자원_단계는_부르는_쪽을_엣지_전체_훑기로_찾지_않는다']),
  ('받는 쪽 표에 후보 호출도 넣는다', IX, '            if e.type == "calls" and e.certainty == "exact":\n                calls_to.setdefault(e.dst, []).append(e)', '            if e.type == "calls":\n                calls_to.setdefault(e.dst, []).append(e)', ['tests/knowledge/test_index.py::test_넘긴_동사는_후보_호출의_부르는_쪽에서는_안_찾는다']),
- ('발행 경로의 넘긴 동사를 부르는 쪽까지 찾는다', IX, '                handed = _handoff(fn, [call], None, None, is_ctor)\n', '                handed = _handoff(fn, [call], resolve, callers, is_ctor)\n', ['tests/knowledge/test_index.py::test_발행_경로의_넘긴_동사는_그_함수_안에서만_찾는다']),
+ ('발행 경로의 넘긴 동사를 부르는 쪽까지 찾는다', IX, '올라가 찾을 값이 없다.\n                handed = _handoff(fn, [call], None, None, is_ctor)\n', '올라가 찾을 값이 없다.\n                handed = _handoff(fn, [call], resolve, callers, is_ctor)\n', ['tests/knowledge/test_index.py::test_발행_경로의_넘긴_동사는_그_함수_안에서만_찾는다']),
 ]
 # ── 12a-R3-5z ⑬ — 메시지 필드로 잇기: 받는 쪽이 키 이름을 메시지 필드에서 받아 쓰고 쓴 쪽 명령이 그 필드를 채우면 쓰기 경로를 잇는다 · 끊긴 문장은 구독 서비스 이름 ──
 CASES += [
@@ -4138,7 +4138,19 @@ CASES += [
  ('걷기에 메시지 필드 조회를 안 넘긴다', ND, ' message_keys=deps.message_keys,\n', '\n', ['tests/application/test_nodes.py::test_걷기_노드는_어댑터의_메시지_필드_조회를_걷기에_넘긴다']),
  ('코드 묶음에 메시지 필드 조회가 없다', MN, '            "message_keys": getattr(code, "message_keys", None),\n', '', ['tests/test_cli_case_walk.py::test_case_walk와_case_investigate는_코드_자리에서_같은_묶음을_받는다']),
 ]
-assert len(CASES) >= 1560, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑮ — 경로의 한 칸이 self.<속성>이면 가족의 클래스 속성 문자열로 풀어 토픽 자원(attr:<속성>:<클래스>) · 그 속성은 이름표로 안 붙인다 · 받는 쪽 범위는 그 문자열을 정의한 클래스 ──
+CASES += [
+ ('경로의 self 속성 칸을 안 푼다', IX, '                for call, parts, attr, line in _topic_attr_calls(node):\n', '                for call, parts, attr, line in []:\n', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다', 'tests/infrastructure/test_deployed_code.py::test_message_keys의_받는_쪽_범위는_부모가_self_속성으로_구독해도_그_토픽_문자열을_정의한_하위_클래스다']),
+ ('속성 칸을 가족 리터럴로 안 바꾼다', IX, '                        full = [literal if p is None else p for p in parts]\n', '                        full = [p or "" for p in parts]\n', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다']),
+ ('토픽 경로 아닌 속성 경로도 자원으로 본다', IX, '                        if full[-3:-1] not in (["consumer", "topic"], ["producer", "topic"]):\n                            continue\n                        pathed.add(attr)\n', '                        pathed.add(attr)\n', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다']),
+ ('속성 경로 이름을 GBM 값으로 안 바꾼다', IX, 'known.value if known is not None else key_path, way, line,', 'key_path, way, line,', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다']),
+ ('속성 발행 경로를 읽기로 본다', IX, '                        way, verb = ("reads", "") if full[-3] == "consumer" else ("writes", "")\n', '                        way, verb = ("reads", "")\n', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다']),
+ ('속성 발행 경로에 넘긴 동사를 안 적는다', IX, 'verb = handed[1] if handed is not None and handed[0] == "writes" else ""\n                        r = Resource(', 'verb = ""\n                        r = Resource(', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다']),
+ ('속성 경로 자원에 클래스를 안 붙인다', IX, 'f"attr:{attr}:{self.index.symbols[csid].qualname}", verb)', '"path", verb)', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다']),
+ ('토픽 경로로 푼 속성을 이름표로 또 붙인다', IX, '                    if attr in pathed:\n                        continue\n', '', ['tests/knowledge/test_index.py::test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다']),
+ ('받는 클래스를 속성 문자열의 클래스로 안 고른다', D, '        if resource.via.startswith("attr:"):\n            return self._index.lookup(sym.repo, resource.via.split(":", 2)[2])\n', '', ['tests/infrastructure/test_deployed_code.py::test_message_keys의_받는_쪽_범위는_부모가_self_속성으로_구독해도_그_토픽_문자열을_정의한_하위_클래스다']),
+]
+assert len(CASES) >= 1569, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

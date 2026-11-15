@@ -831,8 +831,9 @@ class DeployedCode(DeployedCodePort):
             def mine(path: str, name=name, svc_repo=svc.repo) -> bool:
                 return flowgraph.owner(path, svc_repo, self._topology)[0] in (name, None)
 
-            readers = sorted({s.class_id if s.class_id is not None else s.id for s in self._index.symbols if s.repo == svc.repo
-                              and any(r.kind == "topic" and r.name == topic and r.direction == "reads" for r in s.resources) and mine(s.file)})
+            readers = sorted({sid for s in self._index.symbols if s.repo == svc.repo for r in s.resources
+                              if r.kind == "topic" and r.name == topic and r.direction == "reads"
+                              for sid in [self._reader_of(s, r)] if sid is not None and mine(self._index.symbols[sid].file)})
             files: list[str] = []
             for sid in readers:
                 for path in (self._index.symbols[sid].file, *(self._index.symbols[m].file for m in qy.reachable_members(self._index, sid)[1])):
@@ -853,6 +854,13 @@ class DeployedCode(DeployedCodePort):
                                       filled_path=spot[0], filled_line=spot[1], carries=bool(carried)))
         problem = "; ".join(unread[:2]) if unread and not hits else ""
         return MessageKeys(hits=hits, problem=problem, writer_problem=writer_problem if hits else "")
+
+    def _reader_of(self, sym, resource) -> int | None:
+        """토픽 읽기 자원의 받는 클래스 — `self.<속성>`으로 푼 경로(`attr:<속성>:<클래스>`, R3-5z ⑮)면 그 문자열을 정의한 클래스(부모의 구독 메서드는 진입에서 닿는
+        부모 메서드로 그 범위에 든다), 아니면 그 함수의 클래스(함수면 자기)."""
+        if resource.via.startswith("attr:"):
+            return self._index.lookup(sym.repo, resource.via.split(":", 2)[2])
+        return sym.class_id if sym.class_id is not None else sym.id
 
     async def _class_scope(self, name: str, *, service: str, repo: str) -> tuple[dict[str, str], list[str]] | str:
         """클래스 하나의 범위 `(스냅샷, 파일들)` — 클래스 파일과 진입에서 닿는 부모 메서드 파일(단일값 조회의 범위에서 컴포넌트 링크만 뺀 것). 못 고르면 그 까닭."""

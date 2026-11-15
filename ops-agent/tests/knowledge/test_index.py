@@ -1292,3 +1292,58 @@ async def test_넘긴_동사는_후보_호출의_부르는_쪽에서는_안_찾�
                                                             if idx.symbols[e.dst].qualname == "cd.jobs.A.target_key"}
     assert [(r.name, r.direction) for r in idx.symbols[_sid(idx, "cd.jobs.A.target_key")].resources] == [("alarm:stats:{line}", "reads")]
 
+
+# ── R3-5z ⑮ — 경로의 한 칸이 `self.<속성>`인 구독·발행 경로(측정 #34 1: 받는 쪽 50갈래가 전부 "그 토픽을 읽는 클래스 밖") ──
+
+ATTR_TOPIC = {'at/__init__.py': '', 'at/load.py': (
+    'class LoaderBase:\n'
+    '    _topic_key = "base_load"\n\n'
+    '    def run(self):\n'
+    '        for message in self.consumer.subscribe(self.config.get("infra", "kafka", "consumer", "topic", self._topic_key)):\n'
+    '            self.handle(message)\n\n'
+    '    def handle(self, message):\n'
+    '        self.repository.save(key=message.target, value=message.rows)\n\n\n'
+    'class AlarmLoader(LoaderBase):\n'
+    '    _topic_key = "alarm_load"\n\n\n'
+    'class AuditLoader(LoaderBase):\n'
+    '    _topic_key = "audit_load"\n\n\n'
+    'class Sender:\n'
+    '    _out_key = "out_cmd"\n\n'
+    '    def run(self, line):\n'
+    '        self.store.save(Command(topic=self.config.get("infra", "kafka", "producer", "topic", self._out_key), line=line))\n\n\n'
+    'class Odd:\n'
+    '    _section = "database"\n\n'
+    '    def run(self):\n'
+    '        return self.config.get("infra", "mongodb", self._section)\n')}
+# `alarm_load`는 마침 컬렉션 이름의 키 토큰이기도 하다 — 전에는 그 속성이 이 이름표로 컬렉션이 됐다. `audit_load`는 GBM에 토픽으로 있다.
+ATTR_NAMES = [Name("collection", "alarm_load_events", "mongodb_collection.alarm_load"),
+              Name("topic", "x.audit", "infra.kafka.consumer.topic.audit_load", "consumes")]
+
+
+async def test_경로의_한_칸이_self_속성이면_가족의_클래스_속성_문자열로_풀어_토픽_경로면_그_클래스의_토픽_자원이다():
+    """측정 #34 1: `<적재 서비스>`의 부모가 `config.get(<소비 토픽 경로>, self._<속성>)`로 구독하고 하위 클래스마다 `_<속성> = "<설정 키>"`를 둔다. 인덱스는 인자가 전부
+    문자열인 경로만 봐서 그 호출을 놓쳤고, 그 속성은 키 토큰 이름표로 마침 같은 토큰의 컬렉션에 붙었다(하위 클래스 하나만, 종류도 틀리게). 경로 칸의 `self.<속성>`은
+    가족(자기·조상·후손)이 정의한 리터럴마다 풀어 구독·발행 토픽 경로면 토픽 자원 — `attr:<속성>:<클래스>`(질의가 그 클래스의 MRO로 고른다). 이름은 GBM에 그
+    key_path가 있으면 값, 없으면 key_path(사이트 행이 바꾼다). 그 속성은 다른 종류에 안 붙인다. 토픽 경로가 아니면 자원이 아니다."""
+    from src.knowledge import query as qy
+
+    idx = await _index(ATTR_TOPIC, ATTR_NAMES)
+
+    def res(qual):
+        return [(r.kind, r.name, r.direction, r.via, r.handoff) for r in idx.symbols[_sid(idx, f"at.load.{qual}")].resources]
+
+    assert res("LoaderBase.run") == [
+        ("topic", "infra.kafka.consumer.topic.base_load", "reads", "attr:_topic_key:at.load.LoaderBase", ""),
+        ("topic", "infra.kafka.consumer.topic.alarm_load", "reads", "attr:_topic_key:at.load.AlarmLoader", ""),
+        ("topic", "x.audit", "reads", "attr:_topic_key:at.load.AuditLoader", "")]                       # 컬렉션 alarm_load_events는 없다
+    assert res("Sender.run") == [("topic", "infra.kafka.producer.topic.out_cmd", "writes", "attr:_out_key:at.load.Sender", "save")]
+    assert res("Odd.run") == []
+    # 질의는 그 클래스의 MRO에서 가장 가까운 정의만 — 하위 클래스마다 자기 토픽 하나
+    renamed = idx.renamed({("topic", "infra.kafka.consumer.topic.alarm_load"): "x.alarm"})
+
+    def reads(qual):
+        return [line.strip() for line in qy.resources_lines(renamed, _sid(renamed, f"at.load.{qual}"), where=lambda sid: "") if "[topic]" in line]
+
+    assert [r.split(" — ")[0] for r in reads("AlarmLoader")] == ["x.alarm [topic]"]
+    assert [r.split(" — ")[0] for r in reads("AuditLoader")] == ["x.audit [topic]"]
+    assert [r.split(" — ")[0] for r in reads("LoaderBase")] == ["infra.kafka.consumer.topic.base_load [topic]"]

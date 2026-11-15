@@ -834,6 +834,30 @@ def _topic_path_calls(node: ast.AST) -> list[tuple[ast.Call, str, int, str]]:
     return out
 
 
+def _topic_attr_calls(node: ast.AST) -> list[tuple[ast.Call, list[str | None], str, int]]:
+    """config 경로 호출 중 한 칸이 `self.<속성>`이고 나머지가 문자열인 것 → `(호출, 칸들 — 속성 자리는 None, 속성, 줄)`(R3-5z ⑮ — 측정 #34 1: `<적재 서비스>`의 부모가
+    `config.get(<소비 토픽 경로>, self._<속성>)`로 구독하고 하위 클래스마다 `_<속성> = "<설정 키>"`를 둔다). 토픽 경로인지는 속성의 리터럴로 푼 뒤에 본다."""
+    out: list[tuple[ast.Call, list[str | None], str, int]] = []
+    for st in _body_walk(getattr(node, "body", [])):
+        for call in ast.walk(st):
+            if not isinstance(call, ast.Call) or not _is_config_call(call) or call.keywords:
+                continue
+            parts: list[str | None] = []
+            attr = None
+            for a in call.args:
+                if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                    parts.append(a.value)
+                elif attr is None and isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name) and a.value.id == "self":
+                    parts.append(None)
+                    attr = a.attr
+                else:
+                    break
+            else:
+                if attr is not None and len(parts) >= 3:
+                    out.append((call, parts, attr, call.lineno))
+    return out
+
+
 def _self_reads(node: ast.AST) -> list[tuple[str, int]]:
     """함수 본문이 읽는 `self.<속성>`들 — `(속성, 줄)`, 처음 나온 자리, 대입(`self.x = …`)은 아니다."""
     out: dict[str, int] = {}
@@ -1873,10 +1897,34 @@ class _Resolver:
                 # 넘긴 동사는 그 함수 안에서만(R3-5z ⑭) — 방향은 경로가 말하고 동사는 줄 끝 사실이라, 부르는 쪽(재정의 사슬·프로퍼티 가족)까지 올라가 찾을 값이 없다.
                 handed = _handoff(fn, [call], None, None, is_ctor)
                 found.append(Resource("topic", name, "writes", line, "path", handed[1] if handed is not None and handed[0] == "writes" else ""))
+            # 경로의 한 칸이 `self.<속성>`인 호출(R3-5z ⑮ — 측정 #34 1: 부모가 `config.get(<소비 토픽 경로>, self._<속성>)`로 구독하고 하위 클래스마다 설정 키를 둔다.
+            # 전에는 문자열 인자만 봐서 빠졌고, 그 속성은 아래 키 토큰 이름표로 마침 같은 토큰의 컬렉션에 붙었다). 가족이 정의한 리터럴마다 경로를 풀어 토픽 경로면 토픽
+            # 자원 — `attr:<속성>:<클래스>`로 붙여 질의가 그 클래스의 MRO로 고른다(R3-5f ③과 같다). 이름은 GBM에 그 key_path가 있으면 값, 없으면 key_path(사이트 행이
+            # 바꾼다). 토픽 경로로 푼 속성은 아래 이름표로 다른 종류에 안 붙인다.
+            pathed: set[str] = set()
+            if fn.class_sid is not None:
+                for call, parts, attr, line in _topic_attr_calls(node):
+                    for csid, literal in self.attr_literals(fn.class_sid, attr):
+                        full = [literal if p is None else p for p in parts]
+                        if full[-3:-1] not in (["consumer", "topic"], ["producer", "topic"]):
+                            continue
+                        pathed.add(attr)
+                        key_path = ".".join(full)
+                        known = topic_paths.get(key_path)
+                        way, verb = ("reads", "") if full[-3] == "consumer" else ("writes", "")
+                        if way == "writes":
+                            handed = _handoff(fn, [call], None, None, is_ctor)
+                            verb = handed[1] if handed is not None and handed[0] == "writes" else ""
+                        r = Resource("topic", known.value if known is not None else key_path, way, line,
+                                     f"attr:{attr}:{self.index.symbols[csid].qualname}", verb)
+                        if r not in found:
+                            found.append(r)
             # `self.<속성>` 읽기 — 그 속성의 리터럴은 구체 클래스마다 다를 수 있다(부모의 `config.get("redis_key", self.redis_key)`). 가족(자기·조상·후손)이
             # 정의한 리터럴마다 `attr:<속성>:<클래스>`로 붙이고, 어느 것인지는 질의가 그 클래스의 MRO로 고른다(R3-5f ③).
             if fn.class_sid is not None:
                 for attr, line in _self_reads(node):
+                    if attr in pathed:
+                        continue
                     for csid, literal in self.attr_literals(fn.class_sid, attr):
                         n = wanted.get(literal)
                         if n is not None:

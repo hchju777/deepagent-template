@@ -1656,3 +1656,46 @@ async def test_message_keys는_구독_서비스가_키_이름을_메시지_필�
 
     monkeypatch.setattr(code, "_message_keys", boom)
     assert (await code.message_keys("t.load", ["loader"], "Feed")).problem == "메시지 필드를 확인하지 못했다(RuntimeError)"
+
+
+# ── R3-5z ⑮ — 받는 쪽 범위는 구독 토픽 문자열을 정의한 클래스(측정 #34 1) ──
+
+SUB_REPOS = {
+    "dt-core": MK_REPOS["dt-core"],
+    "dt-sub": {"sub/__init__.py": "",
+               "sub/base.py": ('class LoaderBase:\n    def run(self):\n'
+                               '        for message in self.consumer.subscribe(self.config.get("infra", "kafka", "consumer", "topic", self._topic_key)):\n'
+                               '            self.handle(message)\n\n'
+                               '    def handle(self, message):\n'
+                               '        self.repository.save(key=message.target, value=message.rows)\n'),
+               # 하위 클래스가 받는 메서드를 재정의한다 — 그 줄은 하위 클래스 파일에 있다
+               "sub/alarm.py": ('from sub.base import LoaderBase\n\n\nclass AlarmLoader(LoaderBase):\n    _topic_key = "alarm_load"\n\n'
+                                '    def handle(self, message):\n        self.repository.save(key=message.target, value=message.rows)\n'),
+               "sub/audit.py": 'from sub.base import LoaderBase\n\n\nclass AuditLoader(LoaderBase):\n    _topic_key = "audit_load"\n',
+               # 그 토픽을 읽는 클래스 밖 — 범위 안에 줄이 있으면 안 본다
+               "sub/other.py": 'def keep(msg, store):\n    store.save(key=msg.other)\n'},
+}
+
+
+async def test_message_keys의_받는_쪽_범위는_부모가_self_속성으로_구독해도_그_토픽_문자열을_정의한_하위_클래스다(clock):
+    """측정 #34 1: 부모가 `config.get(<소비 토픽 경로>, self._<속성>)`로 구독하고 하위 클래스마다 설정 키를 둔다 — 인덱스가 그 경로를 토픽으로 풀면(`attr:<속성>:<클래스>`)
+    받는 쪽 범위는 그 문자열을 정의한 클래스다(그 파일과 진입에서 닿는 부모 메서드 파일). 그 범위에 메시지 필드로 쓰는 줄이 있으니 서비스 코드 전체로 안 넓힌다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(SUB_REPOS[repo]), source="s", clock=clock)
+
+    topology = Topology(services={"sink": Service(repo="dt-core", role="낸다"), "subl": Service(repo="dt-sub", role="싣는다")})
+    code = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    names = [Name("topic", "t.audit", "infra.kafka.consumer.topic.audit_load"), Name("rediskey", "feed:{line}", "redis_key.feed")]
+    index = await ix.build_index({repo: _repo_src(files) for repo, files in SUB_REPOS.items()}, names=names,
+                                 commits={repo: "c0ffee" for repo in SUB_REPOS})
+    code.attach_index(index.renamed({("topic", "infra.kafka.consumer.topic.alarm_load"): "t.alarm"}))
+    for topic, at in (("t.alarm", ("sub/alarm.py", 8)), ("t.audit", ("sub/base.py", 7))):
+        got = await code.message_keys(topic, ["subl"], "Feed", at=("proc/feed.py:L4",), service="sink")
+        assert [(h.service, h.field, h.path, h.line, h.broad, h.carries) for h in got.hits] == [("subl", "target", *at, False, True)], topic
