@@ -1752,3 +1752,29 @@ async def test_구독_서비스가_키를_선언하지_않아도_메시지_필�
     asked.clear()
     assert (await walked(keys(hit), declared_by={"in:{line}": ("a", "b")})).hops[1].write_path == f"{step} → b(config 구독 선언 · 이 키를 선언) → in:L1"
     assert (await walked(keys(hit), subscriptions={"a": ("t.raw",)})).hops[1].write_path == f"{step} → 구독 선언 없음" and asked == []
+
+
+# ── R3-5z ⑯ — 쓴 쪽 명령의 `**` 펼침(측정 #34 2) ──
+
+async def test_쓴_쪽_명령이_펼침으로_필드를_채우면_그_메서드의_반환_딕셔너리를_적고_못_따라가면_그렇게_적는다():
+    """측정 #34 2: `<f>= 인자 못 찾음` 28건이 전부 `<명령 DTO>(topic=…, **<식>)` 펼침이었다. 펼침이 가리킨 메서드의 반환 딕셔너리가 채우면 그 메서드와 자리로 잇고, 못
+    따라가면 `— 쓴 쪽 명령이 ** 펼침이라 못 따라감 <자리>`로 끊는다(못 찾음과 다르다)."""
+    from src.domain.case import MessageKeyHit, MessageKeys
+
+    w1 = _res("W1", [("t.raw", "topic")], writes=[("t.cmd", "topic"), ("in:{line}", "rediskey")])
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): w1,
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): USES_W1, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)},
+              subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, clock=lambda: T0)
+
+    async def walked(hit):
+        async def message_keys(topic, services, writer, *, at=(), service="", repo=""):
+            return MessageKeys(hits=[hit])
+        return (await run_walk(_state(), runner=_Reads(table), message_keys=message_keys, **kw))["walk"].hops[1].write_path
+
+    step = "→ t.cmd(코드의 쓰기 줄 x.py:L12) → b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9"
+    base = MessageKeyHit(service="b", field="target", path="load/l.py", line=9)
+    spread = base.model_copy(update={"filled_path": "proc/base.py", "filled_line": 3, "filled_via": "proc.base.ProcBase.result"})
+    assert await walked(spread) == f'{step} · 쓴 쪽 명령의 ** 펼침 — proc.base.ProcBase.result() 반환 딕셔너리의 "target" 키 proc/base.py:L3) → in:L1'
+    assert await walked(base.model_copy(update={"unfollowed": "proc/opaque.py:L3"})) == f"{step}) — 쓴 쪽 명령이 ** 펼침이라 못 따라감 proc/opaque.py:L3"
+    assert await walked(base) == f"{step}) — 쓴 쪽 코드에 target= 인자 못 찾음"

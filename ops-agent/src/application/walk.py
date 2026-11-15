@@ -505,11 +505,13 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             for h in (got.hits if got is not None else ()):
                 where = f"메시지 필드 {h.field}에서 키 이름을 받아 쓴다 {h.path}:L{h.line}" + (" · 그 토픽을 읽는 클래스 밖" if h.broad else "")
                 if h.filled_path:
-                    filled = f"쓴 쪽 명령의 {h.field}= 인자{'에 이 키' if h.carries else ''} {h.filled_path}:L{h.filled_line}"
+                    what = f"** 펼침 — {h.filled_via}() 반환 딕셔너리의 \"{h.field}\" 키" if h.filled_via else f"{h.field}= 인자"
+                    filled = f"쓴 쪽 명령의 {what}{'에 이 키' if h.carries else ''} {h.filled_path}:L{h.filled_line}"
                     joined.append(f"{step} → {h.service}(config 구독 선언 · {where} · {filled}) → {key}")
                 else:
                     cut.append(f"{step} → {h.service}(config 구독 선언 · {where}) — "
-                               + (f"쓴 쪽 명령은 못 봤다({got.writer_problem})" if got.writer_problem else f"쓴 쪽 코드에 {h.field}= 인자 못 찾음"))
+                               + (f"쓴 쪽 명령은 못 봤다({got.writer_problem})" if got.writer_problem
+                                  else f"쓴 쪽 명령이 ** 펼침이라 못 따라감 {h.unfollowed}" if h.unfollowed else f"쓴 쪽 코드에 {h.field}= 인자 못 찾음"))
             if got is None or not got.hits:
                 why = "" if got is None else f" · 메시지 필드 확인 못 함 — {got.problem}" if got.problem else " · 메시지 필드에서 키 이름을 받아 쓰는 줄 못 찾음"
                 cut.append(f"{step} → 구독 {', '.join(readers)}(이 키를 선언 안 함{why})")

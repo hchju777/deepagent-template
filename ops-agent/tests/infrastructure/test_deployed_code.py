@@ -1699,3 +1699,93 @@ async def test_message_keys의_받는_쪽_범위는_부모가_self_속성으로_
     for topic, at in (("t.alarm", ("sub/alarm.py", 8)), ("t.audit", ("sub/base.py", 7))):
         got = await code.message_keys(topic, ["subl"], "Feed", at=("proc/feed.py:L4",), service="sink")
         assert [(h.service, h.field, h.path, h.line, h.broad, h.carries) for h in got.hits] == [("subl", "target", *at, False, True)], topic
+
+
+# ── R3-5z ⑯ — 쓴 쪽 명령의 `**` 펼침(측정 #34 2: `<f>= 인자 못 찾음` 28건이 전부 `<명령 DTO>(topic=…, **<식>)`) ──
+
+def test_unpacked_calls는_생성자의_펼침이_가리키는_메서드를_읽고_못_따라가면_빈_칸이다():
+    """측정 #34 2: (a) `**<처리기 결과>` — 처리기 부모 메서드가 `{"<f>": self.<f>, …}` 리터럴을 돌려준다, (b) `**<페이로드 DTO>(…).<변환 메서드>()`. 생성자 호출(대문자)의
+    `**<식>`이 `self.<메서드>()`·`self.<프로퍼티>`면 `("self", 이름)`, `<클래스>(…).<메서드>()`면 `("class", 클래스, 메서드)`, 그 식을 한 번 받은 변수도 같다. 매개변수·
+    `dict(…)`·다른 객체의 메서드는 `()`(못 따라감). 소문자 호출의 펼침은 명령이 아니다."""
+    from src.infrastructure.deployed_code import unpacked_calls
+
+    text = ('class W:\n'
+            '    def run(self, extra):\n'
+            '        a = Command(**self.result())\n'
+            '        b = Command(**self.payload)\n'
+            '        c = Command(**Payload(x=1).to_dict())\n'
+            '        built = Payload(x=2).as_dict()\n'
+            '        d = Command(**built)\n'
+            '        e = Command(**extra)\n'
+            '        f = Command(**dict(x=1))\n'
+            '        g = make(**self.result())\n'
+            '        h = Command(**self.helper.build())\n')
+    assert unpacked_calls(text) == [(3, ("self", "result")), (4, ("self", "payload")), (5, ("class", "Payload", "to_dict")),
+                                    (7, ("class", "Payload", "as_dict")), (8, ()), (9, ()), (11, ())]
+    assert unpacked_calls("def (:\n") == [] and unpacked_calls("x = Command(**self.result())\n") == []
+
+
+def test_returned_dicts는_함수가_돌려주는_딕셔너리_리터럴의_키_자리를_준다():
+    """펼침이 가리킨 메서드(R3-5z ⑯)의 `return {…}` 리터럴마다 `{키: (키 줄, 값의 끝 줄)}`, 줄 차례. 정의 줄이든 데코레이터 줄이든 그 함수다. 함수가 없으면 None,
+    딕셔너리 리터럴을 안 돌려주면 빈 목록 — 둘 다 못 따라감."""
+    from src.infrastructure.deployed_code import returned_dicts
+
+    text = ('class P:\n    def a(self):\n        return {"target": self.t,\n                "rows": 1}\n\n'
+            '    @property\n    def b(self):\n        return self.__dict__\n\n'
+            '    def c(self):\n        if self.x:\n            return {"k": 1}\n        return {"target": 2}\n')
+    assert returned_dicts(text, 2) == [{"target": (3, 3), "rows": (4, 4)}]
+    assert returned_dicts(text, 7) == [] and returned_dicts(text, 6) == []
+    assert returned_dicts(text, 10) == [{"k": (12, 12)}, {"target": (13, 13)}]
+    assert returned_dicts(text, 99) is None and returned_dicts("def (:\n", 1) is None
+
+
+SPREAD_REPOS = {
+    "dt-load": MK_REPOS["dt-load"],
+    "dt-core": {"proc/__init__.py": "",
+                "proc/base.py": ('class ProcBase:\n    def result(self):\n        return {"target": self.target,\n                "rows": self.rows}\n\n'
+                                 '    @property\n    def meta(self):\n        return {"other": 1}\n\n'
+                                 '    def state(self):\n        return self.__dict__\n'),
+                "proc/payload.py": 'class Payload:\n    def to_dict(self):\n        return {"target": self.key}\n',
+                "proc/proc.py": ('from proc.base import ProcBase\n\n\nclass Proc(ProcBase):\n    def run(self):\n'
+                                 '        self.repository.save(Command(topic=self.topic, **self.result()))\n'),
+                "proc/pay.py": ('class Pay:\n    def run(self, line):\n        payload = Payload(line=line).to_dict()\n'
+                                '        self.repository.save(Command(topic=self.topic, **payload))\n'),
+                "proc/opaque.py": 'class Opaque:\n    def run(self, extra):\n        self.repository.save(Command(topic=self.topic, **extra))\n',
+                "proc/lacks.py": ('from proc.base import ProcBase\n\n\nclass Lacks(ProcBase):\n    def run(self):\n'
+                                  '        self.repository.save(Command(topic=self.topic, **self.meta))\n'),
+                # 딕셔너리 리터럴을 안 돌려주는 메서드 — 따라갈 수 없다
+                "proc/raw.py": ('from proc.base import ProcBase\n\n\nclass Raw(ProcBase):\n    def run(self):\n'
+                                '        self.repository.save(Command(topic=self.topic, **self.state()))\n')},
+}
+
+
+async def test_message_keys는_쓴_쪽_명령의_펼침이_가리키는_메서드의_반환_딕셔너리에서_필드를_찾고_못_따라가면_그_자리를_준다(clock):
+    """R3-5z ⑯: 쓴 쪽 명령이 `**self.<메서드>()`(부모 메서드)나 `**<클래스>(…).<메서드>()`(변수로 한 번 받은 것도)로 채우면 그 메서드의 반환 딕셔너리 리터럴의 `"<f>"` 키가
+    채우는 자리다(`filled_via` — 그 메서드). 못 따라가는 펼침(매개변수 등)뿐이면 그 자리(`unfollowed`) — "못 찾음"과 가른다. 따라갔는데 그 키가 없으면 못 찾음이다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(SPREAD_REPOS[repo]), source="s", clock=clock)
+
+    topology = Topology(services={"sink": Service(repo="dt-core", role="낸다"), "loader": Service(repo="dt-load", role="싣는다")})
+    code = DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    names = [Name("topic", "t.load", "infra.kafka.consumer.topic.in"), Name("rediskey", "feed:{line}", "redis_key.feed")]
+    code.attach_index(await ix.build_index({repo: _repo_src(files) for repo, files in SPREAD_REPOS.items()}, names=names,
+                                           commits={repo: "c0ffee" for repo in SPREAD_REPOS}))
+
+    async def hit(writer):
+        got = await code.message_keys("t.load", ["loader"], writer, service="sink")
+        assert got.problem == "" and got.writer_problem == "" and len(got.hits) == 1, writer
+        h = got.hits[0]
+        return h.field, h.line, h.filled_path, h.filled_line, h.filled_via, h.unfollowed
+
+    assert await hit("Proc") == ("target", 5, "proc/base.py", 3, "proc.base.ProcBase.result", "")          # 부모 메서드의 반환 딕셔너리
+    assert await hit("Pay") == ("target", 5, "proc/payload.py", 3, "proc.payload.Payload.to_dict", "")     # 변수로 받은 DTO 변환 메서드
+    assert await hit("Opaque") == ("audit", 4, "", 0, "", "proc/opaque.py:L3")                             # 매개변수 펼침 — 못 따라감
+    assert await hit("Lacks") == ("audit", 4, "", 0, "", "")                                               # 따라갔는데 그 키가 없다 — 못 찾음
+    assert await hit("Raw") == ("audit", 4, "", 0, "", "proc/raw.py:L6")                                    # 딕셔너리 리터럴을 안 돌려준다 — 못 따라감

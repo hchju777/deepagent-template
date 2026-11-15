@@ -229,6 +229,8 @@ class MessageKeyHit(StrictModel):
     broad: bool = False                      # 그 토픽을 읽는 클래스 범위가 아니라 그 서비스 코드 전체에서 찾았다
     filled_path: str = ""                    # 쓴 쪽 생성자의 `<필드>=` 자리 — 못 찾으면 비어 있다
     filled_line: int = 0
+    filled_via: str = ""                     # 그 자리가 `**` 펼침이 가리킨 메서드의 반환 딕셔너리면 그 메서드(qualname, R3-5z ⑯)
+    unfollowed: str = ""                     # 채우는 자리가 없고 쓴 쪽 범위에 따라가지 못한 `**` 펼침이 있으면 그 자리(`<파일>:L<n>`)
     carries: bool = False                    # 쓴 쪽의 이 키 쓰기 줄이 그 인자 값 안에 있다
 
 

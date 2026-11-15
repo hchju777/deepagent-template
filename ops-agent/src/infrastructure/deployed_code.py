@@ -355,12 +355,7 @@ def message_key_lines(text: str) -> list[tuple[int, str, str]]:
     lines = text.splitlines()
     found: dict[tuple[int, str], str] = {}
     for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
-        given: dict[str, list] = {}
-        for n in ast.walk(fn):
-            if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
-                given.setdefault(n.targets[0].id, []).append(n.value)
-            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
-                given.setdefault(n.target.id, []).append(n.value)
+        given = _assigned(fn)
         for call in (n for n in ast.walk(fn) if isinstance(n, ast.Call)):
             verb = _callee(call.func)
             if verb not in flowgraph.WRITE_VERBS or verb in _TOPIC_VERBS:
@@ -393,6 +388,72 @@ def filled_fields(text: str, field: str) -> list[tuple[int, int, str]]:
                 body = lines[k.lineno - 1].strip() if 0 < k.lineno <= len(lines) else ""
                 out.append((k.lineno, k.value.end_lineno or k.lineno, body))
     return sorted(out)
+
+
+def _assigned(fn) -> dict[str, list]:
+    """함수 안에서 이름 하나에 대입한 식들 — `이름 → [식, …]`(한 단계 잇기용: 한 번만 받았을 때만 그 식이다)."""
+    given: dict[str, list] = {}
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+            given.setdefault(n.targets[0].id, []).append(n.value)
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            given.setdefault(n.target.id, []).append(n.value)
+    return given
+
+
+def _spread_target(expr) -> tuple:
+    """`**` 뒤 식이 가리키는 곳 — `("self", 이름)`(`self.<메서드>()`·`self.<프로퍼티>`), `("class", 클래스, 메서드)`(`<클래스>(…).<메서드>()`), 그 밖은 `()`."""
+    if isinstance(expr, ast.Call):
+        f = expr.func
+        if isinstance(f, ast.Attribute):
+            if isinstance(f.value, ast.Name) and f.value.id == "self":
+                return ("self", f.attr)
+            if isinstance(f.value, ast.Call) and _callee(f.value.func)[:1].isupper():
+                return ("class", _callee(f.value.func), f.attr)
+        return ()
+    if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name) and expr.value.id == "self":
+        return ("self", expr.attr)
+    return ()
+
+
+def unpacked_calls(text: str) -> list[tuple[int, tuple]]:
+    """생성자 호출(이름이 대문자로 시작)의 `**<식>` 펼침 → `(줄, 가리키는 곳)`(R3-5z ⑯ — 측정 #34 2: 쓴 쪽 명령 28건이 `<명령 DTO>(topic=…, **<식>)`라 키워드 인자
+    이름으로는 못 찾았다). 가리키는 곳은 `_spread_target` — 그 식을 같은 함수에서 한 번만 받은 변수도 같다. 매개변수·`dict(…)`·다른 객체의 메서드는 `()`(못 따라간다).
+    함수 밖 줄은 안 본다. 못 읽는 파일은 없음."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    found: dict[int, tuple] = {}
+    for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        given = _assigned(fn)
+        for call in (n for n in ast.walk(fn) if isinstance(n, ast.Call)):
+            if not _callee(call.func)[:1].isupper():
+                continue
+            for k in call.keywords:
+                if k.arg is not None:
+                    continue
+                expr = k.value
+                if isinstance(expr, ast.Name) and len(given.get(expr.id, ())) == 1:
+                    expr = given[expr.id][0]
+                found.setdefault(k.value.lineno, _spread_target(expr))
+    return sorted(found.items())
+
+
+def returned_dicts(text: str, line: int) -> list[dict[str, tuple[int, int]]] | None:
+    """그 줄(정의 줄 또는 데코레이터 줄)에서 시작하는 함수의 `return {…}` 딕셔너리 리터럴마다 `{키: (키 줄, 값의 끝 줄)}`, 줄 차례(R3-5z ⑯). 함수를 못 찾으면 None,
+    딕셔너리 리터럴을 안 돌려주면 빈 목록 — 둘 다 "못 따라감"이다."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    fn = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and (n.lineno == line or any(d.lineno == line for d in n.decorator_list))), None)
+    if fn is None:
+        return None
+    returns = sorted((r for r in ast.walk(fn) if isinstance(r, ast.Return) and isinstance(r.value, ast.Dict)), key=lambda r: r.lineno)
+    return [{k.value: (k.lineno, v.end_lineno or v.lineno) for k, v in zip(r.value.keys, r.value.values)
+             if isinstance(k, ast.Constant) and isinstance(k.value, str)} for r in returns]
 
 
 @dataclass(frozen=True)
@@ -574,6 +635,8 @@ class DeployedCode(DeployedCodePort):
         # (레포, 커밋, 유형 열거, 파이프라인 열거) → 유형표(파이프라인 멤버, 유형 멤버, 짝 목록)(R3-5x ③·R3-5y ③). 클래스가 달라도 같은 표다 — git grep·show는
         # 여기서 한 번.
         self._router_tables: dict[tuple[str, str, str, str], tuple[dict[str, str], dict[str, str], list[tuple[str, tuple[str, ...]]]]] = {}
+        # 클래스 → 메서드 이름 → sid(R3-5z ⑯ — `**` 펼침이 가리킨 메서드를 MRO로 찾는다). 인덱스를 붙일 때 비운다.
+        self._methods: dict[int, dict[str, int]] | None = None
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -583,6 +646,7 @@ class DeployedCode(DeployedCodePort):
 
         self._index = index
         self._qgraph = qy.Graph(index) if index is not None else None
+        self._methods = None
 
     def has_index(self) -> bool:
         return self._index is not None
@@ -807,13 +871,18 @@ class DeployedCode(DeployedCodePort):
             return MessageKeys(problem="심볼 인덱스가 없다")
         scope = await self._class_scope(writer, service=service, repo=repo)
         writer_problem = scope if isinstance(scope, str) else ""
-        wsnap, wfiles = ({}, []) if isinstance(scope, str) else scope
+        wsnap, wfiles, wsid = ({}, [], None) if isinstance(scope, str) else scope
         keyed = [(p, int(n)) for p, _, n in (a.rpartition(":L") for a in at) if n.isdigit()]
-        fills: dict[str, list[tuple[str, int, int]]] = {}
+        fills: dict[str, list[tuple[str, int, int, str]]] = {}
+        # `**` 펼침(R3-5z ⑯ — 측정 #34 2: 못 찾음 28건이 전부 `<명령 DTO>(topic=…, **<식>)`) — 가리키는 메서드의 반환 딕셔너리 리터럴이 키워드 인자처럼 채운다.
+        spreads = await self._spreads(wsnap, wfiles, wsid)
+        unfollowed = [f"{path}:L{line}" for path, line, _, dicts in spreads if dicts is None]
 
-        def filled(field: str) -> list[tuple[str, int, int]]:
+        def filled(field: str) -> list[tuple[str, int, int, str]]:
             if field not in fills:
-                fills[field] = [(path, line, end) for path in wfiles for line, end, _ in filled_fields(wsnap.get(path, ""), field)]
+                fills[field] = ([(path, line, end, "") for path in wfiles for line, end, _ in filled_fields(wsnap.get(path, ""), field)]
+                                + [(self._index.symbols[m].file, *d[field], self._index.symbols[m].qualname)
+                                   for _, _, m, dicts in spreads if dicts for d in dicts if field in d])
             return fills[field]
 
         hits: list[MessageKeyHit] = []
@@ -849,11 +918,60 @@ class DeployedCode(DeployedCodePort):
             path, line, field, body, broad = next((f for f in found if filled(f[2])), found[0])
             spots = filled(field)
             carried = [s for s in spots if any(p == s[0] and s[1] <= n <= s[2] for p, n in keyed)]
-            spot = (carried or spots or [("", 0, 0)])[0]
+            spot = (carried or spots or [("", 0, 0, "")])[0]
             hits.append(MessageKeyHit(service=name, field=field, path=path, line=line, text=body, broad=broad,
-                                      filled_path=spot[0], filled_line=spot[1], carries=bool(carried)))
+                                      filled_path=spot[0], filled_line=spot[1], filled_via=spot[3],
+                                      unfollowed=unfollowed[0] if unfollowed and not spots else "", carries=bool(carried)))
         problem = "; ".join(unread[:2]) if unread and not hits else ""
         return MessageKeys(hits=hits, problem=problem, writer_problem=writer_problem if hits else "")
+
+    async def _spreads(self, wsnap: dict[str, str], wfiles: list[str], wsid: int | None) -> list[tuple[str, int, int | None, list | None]]:
+        """쓴 쪽 범위의 `**` 펼침마다 `(경로, 줄, 가리킨 메서드, 그 메서드의 반환 딕셔너리들)`(R3-5z ⑯). `self.<이름>`은 쓴 클래스의 MRO, `<클래스>(…).<메서드>()`는 그
+        클래스(같은 레포에 하나, 아니면 모든 레포에서 하나)의 MRO에서 찾는다. 못 따라가면(식 모양·메서드 없음·딕셔너리 리터럴을 안 돌려줌) 메서드·딕셔너리가 None."""
+        out: list[tuple[str, int, int | None, list | None]] = []
+        repo = self._index.symbols[wsid].repo if wsid is not None else ""
+        for path in wfiles:
+            for line, target in unpacked_calls(wsnap.get(path, "")):
+                msid = None
+                if target and target[0] == "self" and wsid is not None:
+                    msid = self._method_in(wsid, target[1])
+                elif target and target[0] == "class":
+                    cls = self._class_named(target[1], repo)
+                    msid = self._method_in(cls, target[2]) if cls is not None else None
+                dicts = None
+                if msid is not None:
+                    m = self._index.symbols[msid]
+                    msnap = await self.snapshot_for(m.repo)
+                    dicts = returned_dicts(msnap.get(m.file, ""), m.line) if msnap is not None else None
+                out.append((path, line, msid if dicts else None, dicts or None))
+        return out
+
+    def _method_in(self, csid: int, name: str) -> int | None:
+        """그 클래스의 MRO(자기, 그다음 부모 — 가까운 것부터)에서 그 이름의 메서드(R3-5z ⑯). 클래스 → 메서드 표는 인덱스마다 한 번 만든다."""
+        from src.knowledge import query as qy
+
+        if self._methods is None:
+            self._methods = {}
+            for s in self._index.symbols:
+                if s.class_id is not None:
+                    self._methods.setdefault(s.class_id, {}).setdefault(s.name, s.id)
+        for c in [csid, *qy.ancestors(self._index, csid)]:
+            sid = self._methods.get(c, {}).get(name)
+            if sid is not None:
+                return sid
+        return None
+
+    def _class_named(self, name: str, repo: str) -> int | None:
+        """그 이름의 클래스 하나 — 같은 레포에 하나면 그것, 같은 레포에 없으면 모든 레포에서 하나일 때만(여럿이면 못 고른다)."""
+        from src.knowledge import query as qy
+
+        for text in ([f"{repo}:{name}"] if repo else []) + [name]:
+            found = [sid for sid in qy.find(self._index, text) if self._index.symbols[sid].kind == "class"]
+            if len(found) == 1:
+                return found[0]
+            if found:
+                return None
+        return None
 
     def _reader_of(self, sym, resource) -> int | None:
         """토픽 읽기 자원의 받는 클래스 — `self.<속성>`으로 푼 경로(`attr:<속성>:<클래스>`, R3-5z ⑮)면 그 문자열을 정의한 클래스(부모의 구독 메서드는 진입에서 닿는
@@ -862,8 +980,8 @@ class DeployedCode(DeployedCodePort):
             return self._index.lookup(sym.repo, resource.via.split(":", 2)[2])
         return sym.class_id if sym.class_id is not None else sym.id
 
-    async def _class_scope(self, name: str, *, service: str, repo: str) -> tuple[dict[str, str], list[str]] | str:
-        """클래스 하나의 범위 `(스냅샷, 파일들)` — 클래스 파일과 진입에서 닿는 부모 메서드 파일(단일값 조회의 범위에서 컴포넌트 링크만 뺀 것). 못 고르면 그 까닭."""
+    async def _class_scope(self, name: str, *, service: str, repo: str) -> tuple[dict[str, str], list[str], int] | str:
+        """클래스 하나의 범위 `(스냅샷, 파일들, 클래스)` — 클래스 파일과 진입에서 닿는 부모 메서드 파일(단일값 조회의 범위에서 컴포넌트 링크만 뺀 것). 못 고르면 그 까닭."""
         from src.knowledge import query as qy
 
         text = name
@@ -888,7 +1006,7 @@ class DeployedCode(DeployedCodePort):
             path = self._index.symbols[mid].file
             if path in snap and path not in files:
                 files.append(path)
-        return snap, files
+        return snap, files, found[0]
 
     async def uses(self, name: str, service: str = "") -> ProbeResult:
         from src.knowledge import query as qy
