@@ -693,6 +693,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     keyed_at: dict[str, tuple[str, str, dict, list[tuple[str, str, str]], str, str, tuple[str, int] | None, tuple[str, ...]]] = {}
     topics_at: dict[str, tuple[str, str, dict, str]] = {}                                   # 구독 토픽 홉의 증거 → (쓰는 클래스, 표시, 질의 인자, 없는 키 홉의 증거)
     paths_at: dict[str, str] = {}                                                           # 없는 키 홉의 증거 → 쓰는 클래스의 쓰기 경로(R3-5z ⑥)
+    later: list[tuple] = []                                                                 # 쓰기 경로를 걷기 뒤에 볼 없는 키 홉 — (증거, 행, 자원 글, 선언 이름, 키, 쓰는 클래스, 인자)(R3-5z ⑰)
     subscribed_at: dict[str, tuple[str, str, tuple[str, int] | None, str]] = {}            # 걸은 클래스의 구독 토픽 홉의 증거 → (클래스 [서비스], 레포 범위, 본문 자리, 자원 증거)(R3-5s ⑥)
     literal: tuple[str, str, int, str] | None = None                                        # 첫 리터럴 줄 — (서비스, 경로, 줄, grep 증거)
     compared: tuple[FilterHit, int, int, int, str] | None = None                            # 그 줄의 입력을 그대로 견준 수 — (줄, 통과, 행, 빈 행, 그 입력 홉의 증거)(R3-5z ⑦)
@@ -895,9 +896,8 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                             tail_note, rev = "구독 토픽 모름(code.resources 실패)", ""
                         else:
                             body_at = class_at(rtext)
-                            if (path := await write_path(rtext, name, label, w, params_k)):
-                                paths_at[ev] = path
-                                hops[row] = hops[row].model_copy(update={"write_path": path})
+                            # 쓰기 경로는 걷기가 끝난 뒤 한 번에(R3-5z ⑰ — 측정 #34 3: 받는 쪽 코드 조회가 여기서 30초 상한을 먹어 c-1이 원천 유형 사실 전에 멈췄다).
+                            later.append((ev, row, rtext, name, label, w, dict(params_k)))
                             listed = sorted({n for n, k in inputs_in(rtext) if k == "topic"})
                             # 값으로 안 풀린 config 경로(`…consumer.topic.<이름>`, R3-5s ③ — 사이트 행이 못 바꿨다: 선언이 없거나 서비스마다 값이 다르다)는 토픽이
                             # 아니다 — 주 한 줄, 읽지 않는다(그 이름으로 범위를 읽으면 "없는 토픽"이 된다).
@@ -1046,6 +1046,12 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         walked_at[came_from] = walked_at[came_from]._replace(inputs=real, missed=tuple(missed),
                                                              at=(reader_at(text) if real or missed else None) or class_at(text))
         inputs_at[came_from] = [(e[0], e[1], e[2]) for e in read_inputs]
+    # 쓰기 경로(R3-5z ⑥·⑬)는 걷기가 끝난 뒤 — 읽기 수·시간 상한 밖에서(R3-5z ⑰ — 측정 #34 3: 없는 키 홉마다 받는 쪽 코드를 보느라 A 꼬리 걷기가 20초 → 40초, c-1이 30초
+    # 상한에 걸려 원천 유형 0건 사실 전에 멈췄다). 행과 멈춤 문구는 같다 — 멈춤은 아래에서 만든다.
+    for ev_, row_, rtext_, name_, label_, w_, params_ in later:
+        if (path := await write_path(rtext_, name_, label_, w_, params_)):
+            paths_at[ev_] = path
+            hops[row_] = hops[row_].model_copy(update={"write_path": path})
     if mixed_rows and not stopped:
         # 걷기가 끝난 뒤 멈출 자리(가장 깊은 나쁜 홉 — 없으면 대상 키 홉)에서 나간 섞인 행만 센다(R3-5z ③), 많아야 MAX_COUNTS번. 0건이면 그 행이 나쁨이 되어 멈출 자리를
         # 아래에서 다시 고른다. 행·기록(걸은 클래스의 못 본 입력, 없는 키의 쓴 쪽 범위)을 센 결과로 바꾼다.

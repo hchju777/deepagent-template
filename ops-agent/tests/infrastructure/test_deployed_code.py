@@ -1789,3 +1789,39 @@ async def test_message_keys는_쓴_쪽_명령의_펼침이_가리키는_메서�
     assert await hit("Opaque") == ("audit", 4, "", 0, "", "proc/opaque.py:L3")                             # 매개변수 펼침 — 못 따라감
     assert await hit("Lacks") == ("audit", 4, "", 0, "", "")                                               # 따라갔는데 그 키가 없다 — 못 찾음
     assert await hit("Raw") == ("audit", 4, "", 0, "", "proc/raw.py:L6")                                    # 딕셔너리 리터럴을 안 돌려준다 — 못 따라감
+
+
+# ── R3-5z ⑰ — 받는 쪽·쓴 쪽 조회의 기억(측정 #34 3: A 꼬리 걷기 20초 → 40초) ──
+
+async def test_message_keys는_같은_질의를_다시_안_하고_파일마다_한_번만_파싱하며_인덱스를_붙이면_비운다(clock, monkeypatch):
+    """측정 #34 3: 없는 키 홉 50갈래가 같은 받는 쪽을 갈래마다 다시 봤다 — 질의마다 인덱스 심볼 전부를 훑고 서비스 코드 파일을 전부 다시 파싱했다. 같은 질의는 기억한
+    결과를 돌려주고, 다른 질의(다른 쓰기 줄)도 파일은 다시 파싱하지 않는다. 스냅샷은 배포 커밋으로 고정이라 인덱스를 붙일 때만 비운다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure import deployed_code as dc
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(MK_REPOS[repo]), source="s", clock=clock)
+
+    topology = Topology(services={"sink": Service(repo="dt-core", role="낸다"), "loader": Service(repo="dt-load", role="싣는다"),
+                                  "other": Service(repo="dt-other", role="딴 일")})
+    code = dc.DeployedCode(Reader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    names = [Name("topic", "t.load", "infra.kafka.consumer.topic.in"), Name("rediskey", "feed:{line}", "redis_key.feed")]
+    code.attach_index(await ix.build_index({repo: _repo_src(files) for repo, files in MK_REPOS.items()}, names=names,
+                                           commits={repo: "c0ffee" for repo in MK_REPOS}))
+    parsed = []
+    real = dc.message_key_lines
+    monkeypatch.setattr(dc, "message_key_lines", lambda text: parsed.append(text) or real(text))
+    first = await code.message_keys("t.load", ["loader", "other"], "Feed", at=("proc/feed.py:L4",), service="sink")
+    n = len(parsed)
+    assert n > 0 and [h.carries for h in first.hits] == [True, True]
+    again = await code.message_keys("t.load", ["other", "loader"], "Feed", at=("proc/feed.py:L4",), service="sink")
+    assert again is first and len(parsed) == n                                          # 같은 질의(서비스 차례만 다르다)는 기억한 결과
+    moved = await code.message_keys("t.load", ["loader", "other"], "Feed", at=("proc/feed.py:L9",), service="sink")
+    assert len(parsed) == n and [h.carries for h in moved.hits] == [False, False]         # 다른 질의도 파일은 다시 안 파싱한다
+    code.attach_index(code._index)
+    await code.message_keys("t.load", ["loader", "other"], "Feed", at=("proc/feed.py:L4",), service="sink")
+    assert len(parsed) == 2 * n                                                         # 인덱스를 붙이면 비운다

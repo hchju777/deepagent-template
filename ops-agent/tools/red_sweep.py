@@ -3981,7 +3981,7 @@ CASES += [
  ('이어진 서비스를 하나만 적는다', WK, '                joined.append(f"{step} → {\', \'.join(loaders)}(config 구독 선언 · 이 키를 선언) → {key}")', '                joined.append(f"{step} → {loaders[0]}(config 구독 선언 · 이 키를 선언) → {key}")', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('이어진 길 끝에 키가 없다', WK, '(config 구독 선언 · 이 키를 선언) → {key}")', '(config 구독 선언 · 이 키를 선언)")', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('구독 선언이 없는 것과 선언 안 한 것을 안 가른다', WK, '            if not readers:\n                cut.append(f"{step} → 구독 선언 없음")\n                continue\n', '', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
- ('없는 키 행에 쓰기 경로를 안 싣는다', WK, '                                hops[row] = hops[row].model_copy(update={"write_path": path})', '                                pass', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
+ ('없는 키 행에 쓰기 경로를 안 싣는다', WK, '            hops[row_] = hops[row_].model_copy(update={"write_path": path})', '            pass', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('쓰기 경로를 엉뚱한 행에 싣는다', WK, '                    row = len(hops) - 1                                                     # 방금 적은 없는 키 행', '                    row = 0                                                                 # 방금 적은 없는 키 행', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('멈춤에 쓰기 경로가 없다', WK, '            path = paths_at.get(ev, "")', '            path = ""', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
  ('행 글에 쓰기 경로가 없다', CS, '        who += f" {self.write_path}" if self.write_path else ""\n', '', ['tests/application/test_walk.py::test_없는_키를_쓰는_클래스가_토픽에_쓰면_그_토픽을_구독하고_그_키를_선언한_서비스까지의_쓰기_경로를_행과_멈춤에_적는다']),
@@ -4168,7 +4168,16 @@ CASES += [
  ('펼침으로 채운 자리를 키워드 인자로 적는다', WK, 'what = f"** 펼침 — {h.filled_via}() 반환 딕셔너리의 \\"{h.field}\\" 키" if h.filled_via else f"{h.field}= 인자"', 'what = f"{h.field}= 인자"', ['tests/application/test_walk.py::test_쓴_쪽_명령이_펼침으로_필드를_채우면_그_메서드의_반환_딕셔너리를_적고_못_따라가면_그렇게_적는다']),
  ('못 따라감을 못 찾음으로 적는다', WK, 'else f"쓴 쪽 명령이 ** 펼침이라 못 따라감 {h.unfollowed}" if h.unfollowed else f"쓴 쪽 코드에', 'else f"쓴 쪽 코드에', ['tests/application/test_walk.py::test_쓴_쪽_명령이_펼침으로_필드를_채우면_그_메서드의_반환_딕셔너리를_적고_못_따라가면_그렇게_적는다']),
 ]
-assert len(CASES) >= 1584, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑰ — 쓰기 경로 비용: message_keys 결과·파일별 파싱·레포별 받는 클래스 표를 기억하고 인덱스를 붙이면 비운다 · 쓰기 경로는 걷기 뒤 상한 밖에서 ──
+CASES += [
+ ('같은 질의를 다시 한다', D, '        if key in self._mk_done:\n            return self._mk_done[key]\n', '', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_같은_질의를_다시_안_하고_파일마다_한_번만_파싱하며_인덱스를_붙이면_비운다']),
+ ('질의 결과를 안 기억한다', D, '        self._mk_done[key] = got\n', '', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_같은_질의를_다시_안_하고_파일마다_한_번만_파싱하며_인덱스를_붙이면_비운다']),
+ ('서비스 차례가 다르면 다른 질의로 본다', D, 'key = (topic, tuple(sorted(set(services))), writer,', 'key = (topic, tuple(services), writer,', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_같은_질의를_다시_안_하고_파일마다_한_번만_파싱하며_인덱스를_붙이면_비운다']),
+ ('파일마다 파싱을 안 기억한다', D, '        if (repo, path) not in self._parsed:\n            self._parsed[(repo, path)] = message_key_lines(snap.get(path, ""))\n        return self._parsed[(repo, path)]\n', '        return message_key_lines(snap.get(path, ""))\n', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_같은_질의를_다시_안_하고_파일마다_한_번만_파싱하며_인덱스를_붙이면_비운다']),
+ ('인덱스를 붙여도 기억을 안 비운다', D, '        self._mk_done, self._readers, self._members, self._parsed, self._owned, self._fills = {}, {}, {}, {}, {}, {}\n', '', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_같은_질의를_다시_안_하고_파일마다_한_번만_파싱하며_인덱스를_붙이면_비운다']),
+ ('쓰기 경로를 걷기 안에서 본다', WK, '                            later.append((ev, row, rtext, name, label, w, dict(params_k)))\n', '                            paths_at[ev] = await write_path(rtext, name, label, w, params_k)\n', ['tests/application/test_walk.py::test_쓰기_경로는_걷기가_끝난_뒤_시간_상한_밖에서_보고_행과_멈춤은_같다']),
+]
+assert len(CASES) >= 1590, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

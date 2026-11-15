@@ -637,6 +637,15 @@ class DeployedCode(DeployedCodePort):
         self._router_tables: dict[tuple[str, str, str, str], tuple[dict[str, str], dict[str, str], list[tuple[str, tuple[str, ...]]]]] = {}
         # 클래스 → 메서드 이름 → sid(R3-5z ⑯ — `**` 펼침이 가리킨 메서드를 MRO로 찾는다). 인덱스를 붙일 때 비운다.
         self._methods: dict[int, dict[str, int]] | None = None
+        # 받는 쪽·쓴 쪽 조회의 기억(R3-5z ⑰ — 측정 #34 3) — 질의 결과, 레포별 토픽 → 받는 클래스, 클래스별 범위 파일, 파일별 파싱, 서비스별 파일. 인덱스를 붙일 때 비운다.
+        self._mk_done: dict[tuple, MessageKeys] = {}
+        self._readers: dict[str, dict[str, set[int]]] = {}
+        self._members: dict[int, list[str]] = {}
+        self._parsed: dict[tuple[str, str], list[tuple[int, str, str]]] = {}
+        self._owned: dict[str, list[str]] = {}
+        self._fills: dict[tuple[str, str, str], list[tuple[int, int, str]]] = {}
+        self._scopes: dict[tuple[str, str, str], tuple | str] = {}
+        self._spread_done: dict[int | None, list] = {}
 
     def attach_flow_graph(self, graph: dict | None) -> None:
         self._flow_graph = graph
@@ -647,6 +656,8 @@ class DeployedCode(DeployedCodePort):
         self._index = index
         self._qgraph = qy.Graph(index) if index is not None else None
         self._methods = None
+        self._mk_done, self._readers, self._members, self._parsed, self._owned, self._fills = {}, {}, {}, {}, {}, {}
+        self._scopes, self._spread_done = {}, {}
 
     def has_index(self) -> bool:
         return self._index is not None
@@ -858,10 +869,16 @@ class DeployedCode(DeployedCodePort):
         메서드 파일까지)의 `message_key_lines`, 거기 없으면 그 서비스의 코드 파일 전부(`broad`). 쓴 쪽 클래스 범위의 생성자가 그 필드를 키워드로 채우면 그 자리 — 이
         키의 쓰기 줄(`at`, `<파일>:L<n>`)이 그 인자 안이면 `carries`. 서비스마다 많아야 한 줄이고 쓴 쪽이 채우는 필드가 먼저다. 걷기 노드만 부른다(읽기 상한·증거
         밖). 던지지 않는다 — 조회가 안 되면 `problem`."""
+        # 같은 질의는 한 번(R3-5z ⑰ — 측정 #34 3: 없는 키 홉 50갈래가 같은 받는 쪽을 갈래마다 다시 봐 A 꼬리 걷기가 20초 → 40초). 인덱스를 붙일 때 비운다.
+        key = (topic, tuple(sorted(set(services))), writer, tuple(at), service, repo)
+        if key in self._mk_done:
+            return self._mk_done[key]
         try:
-            return await self._message_keys(topic, tuple(services), writer, at=tuple(at), service=service, repo=repo)
+            got = await self._message_keys(topic, tuple(services), writer, at=tuple(at), service=service, repo=repo)
         except Exception as exc:                                    # noqa: BLE001
             return MessageKeys(problem=f"메시지 필드를 확인하지 못했다({type(exc).__name__})")
+        self._mk_done[key] = got
+        return got
 
     async def _message_keys(self, topic: str, services: tuple[str, ...], writer: str, *, at: tuple[str, ...], service: str, repo: str) -> MessageKeys:
         from src.knowledge import index as ix
@@ -869,7 +886,10 @@ class DeployedCode(DeployedCodePort):
 
         if self._index is None:
             return MessageKeys(problem="심볼 인덱스가 없다")
-        scope = await self._class_scope(writer, service=service, repo=repo)
+        skey = (writer, service, repo)
+        if skey not in self._scopes:
+            self._scopes[skey] = await self._class_scope(writer, service=service, repo=repo)
+        scope = self._scopes[skey]
         writer_problem = scope if isinstance(scope, str) else ""
         wsnap, wfiles, wsid = ({}, [], None) if isinstance(scope, str) else scope
         keyed = [(p, int(n)) for p, _, n in (a.rpartition(":L") for a in at) if n.isdigit()]
@@ -880,7 +900,7 @@ class DeployedCode(DeployedCodePort):
 
         def filled(field: str) -> list[tuple[str, int, int, str]]:
             if field not in fills:
-                fills[field] = ([(path, line, end, "") for path in wfiles for line, end, _ in filled_fields(wsnap.get(path, ""), field)]
+                fills[field] = ([(path, line, end, "") for path in wfiles for line, end, _ in self._filled(wsid, path, field, wsnap)]
                                 + [(self._index.symbols[m].file, *d[field], self._index.symbols[m].qualname)
                                    for _, _, m, dicts in spreads if dicts for d in dicts if field in d])
             return fills[field]
@@ -900,19 +920,17 @@ class DeployedCode(DeployedCodePort):
             def mine(path: str, name=name, svc_repo=svc.repo) -> bool:
                 return flowgraph.owner(path, svc_repo, self._topology)[0] in (name, None)
 
-            readers = sorted({sid for s in self._index.symbols if s.repo == svc.repo for r in s.resources
-                              if r.kind == "topic" and r.name == topic and r.direction == "reads"
-                              for sid in [self._reader_of(s, r)] if sid is not None and mine(self._index.symbols[sid].file)})
+            readers = sorted(sid for sid in self._topic_readers(svc.repo).get(topic, ()) if mine(self._index.symbols[sid].file))
             files: list[str] = []
             for sid in readers:
-                for path in (self._index.symbols[sid].file, *(self._index.symbols[m].file for m in qy.reachable_members(self._index, sid)[1])):
+                for path in self._member_files(sid):
                     if path in snap and path not in files:
                         files.append(path)
-            found = [(path, line, field, body, False) for path in files for line, field, body in message_key_lines(snap[path])]
+            found = [(path, line, field, body, False) for path in files for line, field, body in self._key_lines(svc.repo, path, snap)]
             if not found:
                 # 그 토픽을 읽는 클래스를 인덱스가 모르거나(프레임워크가 구독한다) 그 범위에 그런 줄이 없다 — 그 서비스 코드 전체에서. 걷기가 "그 토픽을 읽는 클래스 밖"으로 적는다.
-                found = [(path, line, field, body, True) for path in sorted(snap) if ix.is_indexed(path) and mine(path)
-                         for line, field, body in message_key_lines(snap[path])]
+                found = [(path, line, field, body, True) for path in self._own_files(name, svc.repo, snap)
+                         for line, field, body in self._key_lines(svc.repo, path, snap)]
             if not found:
                 continue
             path, line, field, body, broad = next((f for f in found if filled(f[2])), found[0])
@@ -928,6 +946,8 @@ class DeployedCode(DeployedCodePort):
     async def _spreads(self, wsnap: dict[str, str], wfiles: list[str], wsid: int | None) -> list[tuple[str, int, int | None, list | None]]:
         """쓴 쪽 범위의 `**` 펼침마다 `(경로, 줄, 가리킨 메서드, 그 메서드의 반환 딕셔너리들)`(R3-5z ⑯). `self.<이름>`은 쓴 클래스의 MRO, `<클래스>(…).<메서드>()`는 그
         클래스(같은 레포에 하나, 아니면 모든 레포에서 하나)의 MRO에서 찾는다. 못 따라가면(식 모양·메서드 없음·딕셔너리 리터럴을 안 돌려줌) 메서드·딕셔너리가 None."""
+        if wsid in self._spread_done:
+            return self._spread_done[wsid]
         out: list[tuple[str, int, int | None, list | None]] = []
         repo = self._index.symbols[wsid].repo if wsid is not None else ""
         for path in wfiles:
@@ -944,6 +964,7 @@ class DeployedCode(DeployedCodePort):
                     msnap = await self.snapshot_for(m.repo)
                     dicts = returned_dicts(msnap.get(m.file, ""), m.line) if msnap is not None else None
                 out.append((path, line, msid if dicts else None, dicts or None))
+        self._spread_done[wsid] = out
         return out
 
     def _method_in(self, csid: int, name: str) -> int | None:
@@ -972,6 +993,52 @@ class DeployedCode(DeployedCodePort):
             if found:
                 return None
         return None
+
+    # ── R3-5z ⑰ — 받는 쪽·쓴 쪽 조회의 기억(측정 #34 3). 스냅샷은 배포 커밋으로 고정이라 파일별 결과는 안 변한다 — 인덱스를 붙일 때만 비운다. ──
+
+    def _topic_readers(self, repo: str) -> dict[str, set[int]]:
+        """그 레포의 토픽 → 받는 클래스들(`_reader_of`) — 레포마다 한 번. 전에는 질의마다 인덱스 심볼 전부를 훑었다."""
+        if repo not in self._readers:
+            table: dict[str, set[int]] = {}
+            for s in self._index.symbols:
+                if s.repo != repo:
+                    continue
+                for r in s.resources:
+                    if r.kind == "topic" and r.direction == "reads" and (sid := self._reader_of(s, r)) is not None:
+                        table.setdefault(r.name, set()).add(sid)
+            self._readers[repo] = table
+        return self._readers[repo]
+
+    def _member_files(self, sid: int) -> list[str]:
+        """그 클래스 파일과 진입에서 닿는 부모 메서드 파일 — 클래스마다 한 번(`reachable_members`는 부모 메서드마다 엣지를 훑는다)."""
+        from src.knowledge import query as qy
+
+        if sid not in self._members:
+            self._members[sid] = list(dict.fromkeys([self._index.symbols[sid].file,
+                                                     *(self._index.symbols[m].file for m in qy.reachable_members(self._index, sid)[1])]))
+        return self._members[sid]
+
+    def _key_lines(self, repo: str, path: str, snap: dict[str, str]) -> list[tuple[int, str, str]]:
+        """`message_key_lines`를 파일마다 한 번 — 서비스 코드 전체를 볼 때 갈래마다 다시 파싱하던 것."""
+        if (repo, path) not in self._parsed:
+            self._parsed[(repo, path)] = message_key_lines(snap.get(path, ""))
+        return self._parsed[(repo, path)]
+
+    def _own_files(self, service: str, repo: str, snap: dict[str, str]) -> list[str]:
+        """그 서비스의 코드 파일(인덱스에 드는 것, 소유를 못 가르면 든다) — 서비스마다 한 번."""
+        from src.knowledge import index as ix
+
+        if service not in self._owned:
+            self._owned[service] = [path for path in sorted(snap) if ix.is_indexed(path)
+                                    and flowgraph.owner(path, repo, self._topology)[0] in (service, None)]
+        return self._owned[service]
+
+    def _filled(self, wsid: int | None, path: str, field: str, wsnap: dict[str, str]) -> list[tuple[int, int, str]]:
+        """`filled_fields`를 (파일, 필드)마다 한 번."""
+        repo = self._index.symbols[wsid].repo if wsid is not None else ""
+        if (repo, path, field) not in self._fills:
+            self._fills[(repo, path, field)] = filled_fields(wsnap.get(path, ""), field)
+        return self._fills[(repo, path, field)]
 
     def _reader_of(self, sym, resource) -> int | None:
         """토픽 읽기 자원의 받는 클래스 — `self.<속성>`으로 푼 경로(`attr:<속성>:<클래스>`, R3-5z ⑮)면 그 문자열을 정의한 클래스(부모의 구독 메서드는 진입에서 닿는

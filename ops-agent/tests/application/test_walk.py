@@ -1778,3 +1778,31 @@ async def test_쓴_쪽_명령이_펼침으로_필드를_채우면_그_메서드�
     assert await walked(spread) == f'{step} · 쓴 쪽 명령의 ** 펼침 — proc.base.ProcBase.result() 반환 딕셔너리의 "target" 키 proc/base.py:L3) → in:L1'
     assert await walked(base.model_copy(update={"unfollowed": "proc/opaque.py:L3"})) == f"{step}) — 쓴 쪽 명령이 ** 펼침이라 못 따라감 proc/opaque.py:L3"
     assert await walked(base) == f"{step}) — 쓴 쪽 코드에 target= 인자 못 찾음"
+
+
+# ── R3-5z ⑰ — 쓰기 경로는 걷기가 끝난 뒤 시간 상한 밖에서(측정 #34 3) ──
+
+async def test_쓰기_경로는_걷기가_끝난_뒤_시간_상한_밖에서_보고_행과_멈춤은_같다():
+    """측정 #34 3: A 꼬리가 있는 걷기만 20초 → 40초가 됐고 c-1은 3회 모두 원천 유형 0건 사실 전에 30초 상한에 걸렸다 — 쓰기 경로의 받는 쪽 코드 조회가 걷기 안(없는 키
+    홉마다, 구독 토픽 범위를 읽기 전)에서 상한 시간을 먹었다. 쓰기 경로는 걷기가 끝난 뒤 본다 — 조회가 31초 걸려도 구독 토픽 범위까지 읽고, 행과 멈춤 문구는 같다."""
+    from datetime import timedelta
+
+    from src.domain.case import MessageKeyHit, MessageKeys
+
+    w1 = _res("W1", [("t.raw", "topic")], writes=[("t.cmd", "topic"), ("in:{line}", "rediskey")])
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): w1,
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): USES_W1, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    now = [T0]
+
+    async def slow(topic, services, writer, *, at=(), service="", repo=""):
+        now[0] += timedelta(seconds=31)
+        return MessageKeys(hits=[MessageKeyHit(service="b", field="target", path="load/l.py", line=9, filled_path="x.py", filled_line=12, carries=True)])
+
+    walk = (await run_walk(_state(), runner=_Reads(table), classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)},
+                           declared_by={"in:{line}": ("a",)}, subscriptions={"a": ("t.raw",), "b": ("t.cmd",)}, message_keys=slow,
+                           clock=lambda: now[0]))["walk"]
+    path = ("→ t.cmd(코드의 쓰기 줄 x.py:L12) → b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9 · "
+            "쓴 쪽 명령의 target= 인자에 이 키 x.py:L12) → in:L1")
+    assert walk.hops[1].write_path == path and walk.hops[1].line() == f"  in:L1 | W1 [a] {path} | 없음 | t-3.e1"
+    assert walk.stopped == f"키가 없다 — in:L1(쓰는 W1 [a] {path} · 구독 t.raw 범위 40~100, 남은 메시지 60)"      # 범위까지 읽었다 — 상한에 안 걸렸다
+    assert walk.seconds >= 31                                                                                   # 걸린 시간은 그대로 적는다
