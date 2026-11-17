@@ -1869,3 +1869,74 @@ async def test_filter_lines의_병합식에는_같은_범위에서_그_키를_�
     scan = await code.filter_lines("Proc")
     assert [(m.line, m.left, m.right, m.how, m.chained, m.sources) for m in scan.merges] == [
         (7, ["ws"], ["code"], "outer", ("fillna", "-"), [("ws", "wsCode", "wk/proc.py", 6)])]
+
+
+# ── R3-5z ⑳ — 컬럼 이름 변환(측정 #35 후속 1: 워커 처리기가 camel → snake로 바꾼 뒤 snake 이름을 읽는다) ──
+
+SNAKE = ('import re\n\n\n'
+         'def to_snake(name):\n'
+         '    """camel → snake."""\n'
+         '    s = re.sub(r"(.)([A-Z][a-z]+)", r"\\1_\\2", name)\n'
+         '    return re.sub(r"([a-z0-9])([A-Z])", r"\\1_\\2", s).lower()\n\n\n'
+         'def tidy(name):\n'
+         '    return re.sub(r"\\s+", "_", name.strip()).lower()\n\n\n'
+         'def upper(name):\n'
+         '    return name.upper()\n\n\n'
+         'def noisy(name):\n'
+         '    log(name)\n'
+         '    return re.sub(r"-", "_", name).lower()\n')
+
+
+def test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다():
+    """측정 #35 후속 1: `<x>.columns = [F(v) for v in <x>.columns]`가 컬럼 이름 변환이다(두 `<x>`가 같은 식, 거르는 조건 없음). F는 맨이름이나 `<모듈>.<이름>`. F의 본문이
+    `re.sub(<리터럴>, <리터럴>, …)` 단계와 `.lower()`로만 이뤄졌을 때만 그 단계를 쓴다 — `strip`·`upper`·다른 호출이 하나라도 있으면 None."""
+    from src.infrastructure.deployed_code import column_renames, rename_steps
+
+    text = ('def normalize(df, other):\n'
+            '    df.columns = [to_snake(c) for c in df.columns]\n'
+            '    other.columns = [text.to_snake(c) for c in other.columns]\n'
+            '    df.columns = [to_snake(c) for c in other.columns]\n'
+            '    df.columns = [c.lower() for c in df.columns]\n'
+            '    df.columns = [to_snake(c) for c in df.columns if c]\n'
+            '    return df\n')
+    assert column_renames(text) == [("to_snake", 2), ("text.to_snake", 3)]
+    assert rename_steps(SNAKE, "to_snake") == [("sub", "(.)([A-Z][a-z]+)", "\\1_\\2"), ("sub", "([a-z0-9])([A-Z])", "\\1_\\2"), ("lower",)]
+    assert rename_steps(SNAKE, "tidy") is None and rename_steps(SNAKE, "upper") is None and rename_steps(SNAKE, "nope") is None
+    assert rename_steps(SNAKE, "noisy") is None                                                            # 대입·return 밖 문장이 있다
+    assert rename_steps("def f(x):\n    return x\n", "f") is None                                         # 단계가 없으면 이름 변환이 아니다
+    assert rename_steps('import re\n\n\ndef f(x):\n    return re.sub("(", "", x)\n', "f") is None              # 정규식으로 안 읽힌다
+    assert column_renames("def (:\n") == [] and rename_steps("def (:\n", "f") is None
+
+
+async def test_filter_lines의_병합식에는_범위의_컬럼_이름_변환_단계가_붙고_변환_함수는_import_대상에서도_찾는다(clock):
+    """R3-5z ⑳: 병합 키를 입력 필드로 만든 자리가 있는 병합식에 같은 범위(클래스·부모 멤버 파일)의 컬럼 이름 변환 단계와 그 자리 `F(<파일>:L<n>)`를 싣는다. F는 같은 파일,
+    아니면 import 대상 파일의 것이다. F의 본문이 `re.sub`·`lower`로만 이뤄지지 않았으면 안 싣는다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    files = {"wk/__init__.py": "", "common/__init__.py": "", "common/text.py": SNAKE,
+             "wk/base.py": ('import pandas as pd\nfrom common.text import to_snake\n\n\nclass Base:\n    def _normalize(self, df):\n'
+                            '        df.columns = [to_snake(c) for c in df.columns]\n        return df\n'),
+             "wk/proc.py": ('import pandas as pd\nfrom wk.base import Base\n\n\nclass Proc(Base):\n    def _run(self, rows, ref):\n'
+                            '        events = self._normalize(pd.DataFrame(rows))\n'
+                            '        left = pd.DataFrame([{"ws": r.get("ws_code"), "n": r["n"]} for r in events.to_dict("records")])\n'
+                            '        return left.merge(pd.DataFrame(ref), left_on="ws", right_on="code", how="outer").fillna("-")\n'),
+             "wk/tidy.py": ('import pandas as pd\nfrom common.text import tidy\n\n\nclass Tidy:\n    def _run(self, rows, ref):\n'
+                            '        events = pd.DataFrame(rows)\n        events.columns = [tidy(c) for c in events.columns]\n'
+                            '        left = pd.DataFrame([{"ws": r.get("ws_code")} for r in events.to_dict("records")])\n'
+                            '        return left.merge(pd.DataFrame(ref), left_on="ws", right_on="code", how="outer").fillna("-")\n')}
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(files), source="s", clock=clock)
+
+    code = DeployedCode(Reader(), Topology(services={"processor": Service(repo="dt-proc", role="가공한다")}), Deployment(), gbm="mx", fct="gumi", clock=clock)
+    code.attach_index(await ix.build_index({"dt-proc": _repo_src(files)}, commits={"dt-proc": "c2"}))
+    scan = await code.filter_lines("Proc")
+    assert [(m.sources, m.rename, m.rename_at) for m in scan.merges] == [
+        ([("ws", "ws_code", "wk/proc.py", 8)], [("sub", "(.)([A-Z][a-z]+)", "\\1_\\2"), ("sub", "([a-z0-9])([A-Z])", "\\1_\\2"), ("lower",)],
+         "to_snake(wk/base.py:L7)")]
+    tidy = await code.filter_lines("Tidy")
+    assert [(m.rename, m.rename_at) for m in tidy.merges] == [([], "")]                     # strip이 든 변환은 안 쓴다

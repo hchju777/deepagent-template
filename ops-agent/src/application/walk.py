@@ -165,11 +165,30 @@ def fill_source(merges, watch: tuple[str, str] | None, inputs) -> str:
             continue
         for col, src, path, line in m.sources:
             for label, _, rows in inputs:
-                vals = [r[src] for r in rows if isinstance(r, dict) and src in r]
+                # 입력 행에 그 이름이 없으면 같은 범위의 컬럼 이름 변환을 거친 이름으로 찾는다(R3-5z ⑳ — 측정 #35 후속 1: camel 원천 필드를 snake로 바꾼 뒤 읽는다).
+                key, renamed = src, ""
+                if rows and not any(isinstance(r, dict) and src in r for r in rows) and m.rename:
+                    key = next((k for k in dict.fromkeys(k for r in rows if isinstance(r, dict) for k in r) if renamed_by(m.rename, k) == src), src)
+                    renamed = f" — 입력 필드 {key}가 {m.rename_at} 뒤 {src}" if key != src else ""
+                vals = [r[key] for r in rows if isinstance(r, dict) and key in r]
                 if rows and len(vals) == len(rows) and len({json.dumps(v, sort_keys=True, default=str) for v in vals}) == 1:
                     return (f"병합 뒤 {m.chained[0]}({value!r})가 이어 온 단일값 {field}={value!r}와 같다({m.path}:L{m.line}) · "
-                            f"병합 키 {col} ← 입력 필드 {src}({path}:L{line}): {label} {len(rows)}행 전부 {vals[0]!r}")
+                            f"병합 키 {col} ← 입력 필드 {src}({path}:L{line}): {label} {len(rows)}행 전부 {vals[0]!r}{renamed}")
     return ""
+
+
+def renamed_by(steps, name) -> str | None:
+    """컬럼 이름 변환 단계(R3-5z ⑳)를 이름 하나에 — `re.sub`·`lower`만. 문자열이 아니거나 정규식이 안 읽히면 None."""
+    if not isinstance(name, str):
+        return None
+    try:
+        for step in steps:
+            name = re.sub(step[1], step[2], name) if step[0] == "sub" else name.lower() if step[0] == "lower" else None
+            if name is None:
+                return None
+    except re.error:
+        return None
+    return name
 
 
 def join_check(merges, inputs) -> list[tuple[tuple[str, str], tuple[str, str], str, Any]]:

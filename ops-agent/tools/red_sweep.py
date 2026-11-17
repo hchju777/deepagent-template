@@ -4204,7 +4204,23 @@ CASES += [
  ('레포마다 작업 수·캐시 자리를 안 넘긴다', GBD, '                               workers=workers, cache=(cache_root / name) if cache_root is not None else None)\n', '                               workers=None, cache=None)\n', ['tests/knowledge/test_graph_build.py::test_graphify는_레포를_병렬로_돌리고_결과는_레포_순서다']),
  ('code graph가 캐시 자리를 안 준다', MN, '                                         cache_root=out_dir / "graphify-cache")))\n', '                                         cache_root=None)))\n', ['tests/knowledge/test_cli_code.py::test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서로_합친다']),
 ]
-assert len(CASES) >= 1611, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑳ — 컬럼 이름 변환: 범위의 <x>.columns = [F(v) for v in <x>.columns]에서 F(같은 파일·import 대상)가 re.sub·lower로만이면 그 단계로 입력 행의 키를 바꿔 병합 키를 잇는다 ──
+CASES += [
+ ('컬럼 이름 변환을 안 찾는다', D, '            for name, line in column_renames(text):\n', '            for name, line in []:\n', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_범위의_컬럼_이름_변환_단계가_붙고_변환_함수는_import_대상에서도_찾는다']),
+ ('다른 프레임의 컬럼으로 바꿔도 변환으로 본다', D, ' and ast.dump(gen.iter.value) == ast.dump(node.targets[0].value)', '', ['tests/infrastructure/test_deployed_code.py::test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다']),
+ ('거르는 컴프리헨션도 변환으로 본다', D, 'and isinstance(gen.target, ast.Name) and not gen.ifs and', 'and isinstance(gen.target, ast.Name) and', ['tests/infrastructure/test_deployed_code.py::test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다']),
+ ('모듈 속성 변환 함수를 안 본다', D, '        elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):\n            out.append((f"{f.value.id}.{f.attr}", node.lineno))\n', '', ['tests/infrastructure/test_deployed_code.py::test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다']),
+ ('strip도 이름 변환 단계로 본다', D, 'if f.attr == "lower" and not e.args and not e.keywords:', 'if f.attr in ("lower", "strip", "upper") and not e.args and not e.keywords:', ['tests/infrastructure/test_deployed_code.py::test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다', 'tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_범위의_컬럼_이름_변환_단계가_붙고_변환_함수는_import_대상에서도_찾는다']),
+ ('단계 없는 함수도 이름 변환으로 본다', D, '            if not steps:\n                return None\n            try:', '            if steps is None:\n                return None\n            try:', ['tests/infrastructure/test_deployed_code.py::test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다']),
+ ('안 읽히는 정규식도 쓴다', D, '            except re.error:\n                return None\n            return steps\n', '            except re.error:\n                pass\n            return steps\n', ['tests/infrastructure/test_deployed_code.py::test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다']),
+ ('대입·return 밖 문장도 받는다', D, '        else:\n            return None\n    return None\n\n\ndef _import_of', '        else:\n            continue\n    return None\n\n\ndef _import_of', ['tests/infrastructure/test_deployed_code.py::test_column_renames와_rename_steps는_컬럼_이름_변환과_그_함수가_re_sub와_lower로만_이뤄졌는지_읽는다']),
+ ('import한 변환 함수를 안 찾는다', D, '                    target = _import_of(text, path, name)\n', '                    target = None\n', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_범위의_컬럼_이름_변환_단계가_붙고_변환_함수는_import_대상에서도_찾는다']),
+ ('변환 단계를 병합식에 안 싣는다', D, '                merges = [m.model_copy(update={"rename": steps, "rename_at": at}) if m.sources else m for m in merges]\n', '                pass\n', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_병합식에는_범위의_컬럼_이름_변환_단계가_붙고_변환_함수는_import_대상에서도_찾는다']),
+ ('입력 행 키를 변환을 거쳐 안 찾는다', WK, '                if rows and not any(isinstance(r, dict) and src in r for r in rows) and m.rename:\n', '                if False:\n', ['tests/application/test_walk.py::test_병합_키를_만든_필드가_입력_행에_없으면_컬럼_이름_변환을_거친_이름으로_잇고_사실_끝에_원이름을_적는다']),
+ ('변환한 원이름을 사실에 안 적는다', WK, 'renamed = f" — 입력 필드 {key}가 {m.rename_at} 뒤 {src}" if key != src else ""', 'renamed = ""', ['tests/application/test_walk.py::test_병합_키를_만든_필드가_입력_행에_없으면_컬럼_이름_변환을_거친_이름으로_잇고_사실_끝에_원이름을_적는다']),
+ ('변환 단계를 거꾸로 거친다', WK, '        for step in steps:\n            name = re.sub(', '        for step in reversed(steps):\n            name = re.sub(', ['tests/application/test_walk.py::test_병합_키를_만든_필드가_입력_행에_없으면_컬럼_이름_변환을_거친_이름으로_잇고_사실_끝에_원이름을_적는다']),
+]
+assert len(CASES) >= 1624, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

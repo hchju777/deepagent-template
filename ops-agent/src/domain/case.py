@@ -204,6 +204,10 @@ class MergeHit(StrictModel):
     # 병합 키를 같은 범위에서 입력 필드로 만든 자리 `(열, 입력 필드, 파일, 줄)`(R3-5z ⑱ — 측정 #34 4: `"<병합 키>": df.get("<입력 필드>")`). 걷기가 채움값이 이어 온 나쁜 값과
     # 같은 병합에서 그 키를 입력 필드까지 잇는다.
     sources: list[tuple[str, str, str, int]] = []
+    # 같은 범위의 컬럼 이름 변환 `<x>.columns = [F(v) for v in <x>.columns]`의 단계 `("sub", 패턴, 바꿈)`·`("lower",)`(R3-5z ⑳ — 측정 #35 후속 1: 워커 처리기가 camel →
+    # snake로 바꾼 뒤 snake 이름을 읽는데 원천 메시지 필드는 camel이다). F의 본문이 그 둘로만 이뤄졌을 때만 있다. `rename_at`은 `F(<파일>:L<n>)`(그 대입 자리).
+    rename: list[tuple[str, ...]] = []
+    rename_at: str = ""
 
 
 class FilterScan(StrictModel):

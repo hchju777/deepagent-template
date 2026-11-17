@@ -486,6 +486,113 @@ def key_sources(text: str) -> list[tuple[str, str, int]]:
     return sorted(out, key=lambda x: (x[2], x[0]))
 
 
+def column_renames(text: str) -> list[tuple[str, int]]:
+    """컬럼 이름 변환 `<x>.columns = [F(v) for v in <x>.columns]` → `(F, 줄)`(R3-5z ⑳ — 측정 #35 후속 1: 워커 처리기가 정규화 함수에서 camel → snake로 바꾼 뒤 snake 이름을
+    읽는다). F는 맨이름 또는 `<모듈>.<이름>` — 어디 정의됐는지는 부르는 쪽이 푼다. 두 `<x>`가 같은 식일 때만. 못 읽는 파일은 없음."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return []
+    out: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Attribute)
+                and node.targets[0].attr == "columns" and isinstance(node.value, ast.ListComp) and len(node.value.generators) == 1):
+            continue
+        gen, elt = node.value.generators[0], node.value.elt
+        if not (isinstance(gen.iter, ast.Attribute) and gen.iter.attr == "columns" and ast.dump(gen.iter.value) == ast.dump(node.targets[0].value)
+                and isinstance(gen.target, ast.Name) and not gen.ifs and isinstance(elt, ast.Call) and len(elt.args) == 1 and not elt.keywords
+                and isinstance(elt.args[0], ast.Name) and elt.args[0].id == gen.target.id):
+            continue
+        f = elt.func
+        if isinstance(f, ast.Name):
+            out.append((f.id, node.lineno))
+        elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+            out.append((f"{f.value.id}.{f.attr}", node.lineno))
+    return sorted(out, key=lambda x: x[1])
+
+
+def rename_steps(text: str, name: str) -> list[tuple[str, ...]] | None:
+    """모듈 수준 함수 `name`(인자 하나)의 본문이 `re.sub(<리터럴>, <리터럴>, …)` 단계와 `.lower()`로만 이뤄졌으면 그 단계들 `[("sub", 패턴, 바꿈) | ("lower",)]`, 아니면 None
+    (R3-5z ⑳). 문장은 이름 하나에 대입과 return뿐이고(앞 문서 문자열은 된다), 식은 인자·앞서 대입한 이름에 그 둘을 겹친 것뿐이다 — 그 밖이 하나라도 있으면 이름 변환으로
+    안 쓴다(평가자 결정: 그 모양일 때만). 패턴이 정규식으로 안 읽히면 None."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name), None)
+    if fn is None or len(fn.args.args) != 1 or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.posonlyargs:
+        return None
+    env: dict[str, list[tuple[str, ...]]] = {fn.args.args[0].arg: []}
+
+    def flat(e) -> list[tuple[str, ...]] | None:
+        if isinstance(e, ast.Name):
+            return list(env[e.id]) if e.id in env else None
+        if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute):
+            f = e.func
+            if (isinstance(f.value, ast.Name) and f.value.id == "re" and f.attr == "sub" and len(e.args) == 3 and not e.keywords
+                    and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in e.args[:2])):
+                inner = flat(e.args[2])
+                return None if inner is None else inner + [("sub", e.args[0].value, e.args[1].value)]
+            if f.attr == "lower" and not e.args and not e.keywords:
+                inner = flat(f.value)
+                return None if inner is None else inner + [("lower",)]
+        return None
+
+    body = fn.body[1:] if fn.body and isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant) else fn.body
+    for st in body:
+        if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+            steps = flat(st.value)
+            if steps is None:
+                return None
+            env[st.targets[0].id] = steps
+        elif isinstance(st, ast.Return) and st.value is not None:
+            steps = flat(st.value)
+            if not steps:
+                return None
+            try:
+                for step in steps:
+                    if step[0] == "sub":
+                        re.compile(step[1])
+            except re.error:
+                return None
+            return steps
+        else:
+            return None
+    return None
+
+
+def _import_of(text: str, path: str, name: str) -> tuple[list[str], str] | None:
+    """그 파일에서 `name`(맨이름 또는 `<별칭>.<이름>`)이 가리키는 모듈의 파일 후보와 그 모듈 안 이름 — `from m import F [as G]`, `import m [as a]` + `a.F`, 상대 import.
+    모르면 None."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    head, _, tail = name.partition(".")
+    pkg = path.split("/")[:-1]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            base = pkg[:len(pkg) - (node.level - 1)] if node.level else []
+            if node.level and node.level - 1 > len(pkg):
+                continue
+            module = [*base, *(node.module.split(".") if node.module else [])]
+            for a in list(node.names):
+                if not tail and (a.asname or a.name) == head:
+                    return _module_files(module), a.name
+                if tail and (a.asname or a.name) == head:
+                    return _module_files([*module, a.name]), tail
+        elif isinstance(node, ast.Import) and tail:
+            for a in list(node.names):
+                if (a.asname or a.name) == head:
+                    return _module_files(a.name.split(".")), tail
+    return None
+
+
+def _module_files(parts: list[str]) -> list[str]:
+    joined = "/".join(p for p in parts if p)
+    return [f"{joined}.py", f"{joined}/__init__.py"] if joined else []
+
+
 @dataclass(frozen=True)
 class Registration:
     """등록 모음 파일의 `register(component="X", <사이트 인자>)(<클래스>)` 한 건 — 데코레이터 형도 같은 모양으로 둔다."""
@@ -892,6 +999,11 @@ class DeployedCode(DeployedCodePort):
         # 병합 키를 입력 필드로 만든 자리(R3-5z ⑱) — 같은 범위의 파일에서. 걷기가 채움값이 나쁜 값과 같은 병합의 키를 입력 필드까지 잇는다.
         made = [(col, field, path, line) for path in files for col, field, line in key_sources(snap.get(path, ""))]
         merges = [m.model_copy(update={"sources": [s for s in made if s[0] in m.left or s[0] in m.right]}) for m in merges]
+        # 같은 범위의 컬럼 이름 변환(R3-5z ⑳ — 측정 #35 후속 1) — 병합 키를 만든 코드의 필드 이름이 변환 뒤 이름이면 걷기가 입력 행의 키를 이 단계로 바꿔 잇는다.
+        if any(m.sources for m in merges):
+            steps, at = self._column_rename(snap, files)
+            if steps:
+                merges = [m.model_copy(update={"rename": steps, "rename_at": at}) if m.sources else m for m in merges]
         # 코드가 읽는 필드(R3-5z ⑧) — 이름이 범위 파일에 리터럴로 든 것(`r["f"]`·`get("f")`·`df["f"]`). 속성 접근(`df.f`)은 못 본다.
         read = [f for f in fields if any(q + f + q in snap.get(path, "") for path in files for q in ("'", '"'))]
         return FilterScan(hits=hits, checked=list(fields), files=files, linked=linked, linked_at=linked_at, unlinked=unlinked, merges=merges, read=read)
@@ -1072,6 +1184,26 @@ class DeployedCode(DeployedCodePort):
         if (repo, path, field) not in self._fills:
             self._fills[(repo, path, field)] = filled_fields(wsnap.get(path, ""), field)
         return self._fills[(repo, path, field)]
+
+    def _column_rename(self, snap: dict[str, str], files: list[str]) -> tuple[list[tuple[str, ...]], str]:
+        """범위 파일의 컬럼 이름 변환 중 첫 것의 단계와 자리 `F(<파일>:L<n>)`(R3-5z ⑳). F는 같은 파일의 모듈 수준 함수, 아니면 import 대상 파일(레포 뿌리에서 못 찾으면
+        경로 끝이 같은 파일 하나)의 것. 본문이 `re.sub`·`lower`로만 이뤄졌을 때만 — 아니면 `([], "")`."""
+        for path in files:
+            text = snap.get(path, "")
+            for name, line in column_renames(text):
+                steps = rename_steps(text, name) if "." not in name else None
+                if steps is None:
+                    target = _import_of(text, path, name)
+                    if target is not None:
+                        cands, real = target
+                        found = next((c for c in cands if c in snap), None)
+                        if found is None:
+                            ends = [p for p in snap for c in cands if p.endswith("/" + c)]
+                            found = ends[0] if len(ends) == 1 else None
+                        steps = rename_steps(snap[found], real) if found is not None else None
+                if steps:
+                    return steps, f"{name.rsplit('.', 1)[-1]}({path}:L{line})"
+        return [], ""
 
     def _reader_of(self, sym, resource) -> int | None:
         """토픽 읽기 자원의 받는 클래스 — `self.<속성>`으로 푼 경로(`attr:<속성>:<클래스>`, R3-5z ⑮)면 그 문자열을 정의한 클래스(부모의 구독 메서드는 진입에서 닿는

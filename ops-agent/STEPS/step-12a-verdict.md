@@ -2553,6 +2553,26 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   자리, `code graph`가 캐시 자리를 줌. 가짜 graphify(`tests/support.py`)가 받은 작업 수와 캐시 유무를 남긴다. 스윕 +8(1611). 기존 사례 하나(`code graph`의
   레포 병렬 길)는 같은 돌연변이로 앵커만 넓혔다. `code graph` 재생성 때부터 적용된다.
 
+#### R3-5z ⑳ (11-17) ✅ — 컬럼 이름 변환: 병합 키를 만든 필드가 입력 행에 없으면 범위의 camel → snake 변환을 거쳐 잇는다 (측정 #35 후속 1)
+
+- 측정 #35 후속 1: `<워커 처리기>`가 `<정규화 함수>`에서 `df.columns = [<변환 함수>(c) for c in df.columns]`로 camel → snake 변환한 뒤 snake 이름을 읽는다. 메시지 원천 필드는
+  camel이라 `fill_source`(⑱)가 둘을 잇지 못했다 — 병합 키를 만든 코드의 필드 이름 그대로 입력 행에서 찾았다.
+- 어댑터(단일값 조회의 병합 사실):
+  - `column_renames`(AST): 범위 파일(클래스·진입에서 닿는 부모 멤버·이은 컴포넌트)에서 `<x>.columns = [F(v) for v in <x>.columns]` — 두 `<x>`가 같은 식이고 거르는 조건이
+    없을 때만. F는 맨이름이나 `<모듈>.<이름>`.
+  - F는 같은 파일의 모듈 수준 함수, 아니면 import 대상 파일(`from m import F`·`import m as a` + `a.F`·상대 import — 레포 뿌리에서 못 찾으면 경로 끝이 같은 파일 하나)에서 찾는다.
+  - `rename_steps`: F(인자 하나)의 본문이 `re.sub(<리터럴>, <리터럴>, …)` 단계와 `.lower()`로만 이뤄졌을 때만 그 단계를 쓴다 — 문장은 이름 하나에 대입과 return뿐(앞 문서 문자열은
+    된다). `strip`·다른 호출·다른 문장이 하나라도 있거나 단계가 없거나 정규식이 안 읽히면 이름 변환이 아니다.
+  - 병합 키를 입력 필드로 만든 자리가 있는 병합식에 그 단계와 자리 `F(<파일>:L<n>)`(그 대입 줄)를 싣는다(`MergeHit.rename`·`rename_at`).
+- 걷기(`fill_source`): 입력 행에 그 필드 이름이 없으면 입력 행의 키를 그 단계로 바꿔 같은 이름을 찾는다. 단일값이면 사실 끝에 `— 입력 필드 <원이름>가 F(<자리>) 뒤 <변환이름>`.
+  이름이 그대로 있거나 변환이 없으면 전과 같다.
+- 실제 소비자 확인: `output/`의 측정판 사본(⑱ 모양)에 부모 `Normalizer._normalize`(`df.columns = [to_snake(c) for c in df.columns]`, `to_snake`는 `common/text.py`에서 import —
+  `re.sub` 둘과 `lower`)를 더하고 이벤트 필드를 camel `wsCode`로 바꿨다. `case walk`의 멈춤:
+  `… · 병합 키 wg ← 입력 필드 ws_code(common/merge.py:L15): feed:events:L1 4행 전부 '' — 입력 필드 wsCode가 to_snake(common/normalize.py:L7) 뒤 ws_code (단일값이 든 비교식 …)`.
+  변환이 없는 ⑱ 사본의 멈춤은 전과 같다.
+- 테스트 먼저(RED → GREEN): 변환 모양(같은 프레임·거르는 조건·모듈 속성), 변환 함수(`re.sub`·`lower`만, `strip`·`upper`·다른 문장·단계 없음·안 읽히는 정규식), import 대상의 변환
+  함수와 병합 사실, 걷기 사실(camel → snake, 변환 없음, 이름 그대로, 단일값 아님). 스윕 +13(1624). `code graph` 재생성은 필요 없다(질의 때 스냅샷을 본다).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

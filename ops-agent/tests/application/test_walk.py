@@ -1844,3 +1844,26 @@ async def test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_
     assert fill_source([merge], ("wg", "-"), mixed) == "" and fill_source([merge], ("wg", "-"), gone) == ""
     assert fill_source([merge], None, [("src:L1", "e", [{"wsCode": ""}])]) == ""
     assert fill_source([merge], ("wg", "-"), [("src:L1", "e", [{"wsCode": ""}])]).endswith("src:L1 1행 전부 ''")
+
+
+# ── R3-5z ⑳ — 컬럼 이름 변환을 거쳐 입력 필드를 잇는다(측정 #35 후속 1) ──
+
+def test_병합_키를_만든_필드가_입력_행에_없으면_컬럼_이름_변환을_거친_이름으로_잇고_사실_끝에_원이름을_적는다():
+    """측정 #35 후속 1: 워커 처리기는 정규화 함수에서 camel → snake로 바꾼 뒤 snake 이름을 읽고, 원천 메시지 필드는 camel이라 `fill_source`가 둘을 잇지 못했다. 입력 행에
+    그 이름이 없으면 병합식에 실린 컬럼 이름 변환 단계로 입력 행의 키를 바꿔 찾고, 사실 끝에 `— 입력 필드 <원이름>가 F(<자리>) 뒤 <변환이름>`. 변환이 없거나 이름이 그대로
+    있으면 전과 같다."""
+    from src.application.walk import fill_source, renamed_by
+    from src.domain.case import MergeHit
+
+    steps = [("sub", "(.)([A-Z][a-z]+)", "\\1_\\2"), ("sub", "([a-z0-9])([A-Z])", "\\1_\\2"), ("lower",)]
+    merge = MergeHit(path="wk/proc.py", line=9, text="", left=["ws"], right=["code"], how="outer", chained=("fillna", "-"),
+                     sources=[("ws", "ws_code", "wk/proc.py", 8)], rename=steps, rename_at="to_snake(wk/base.py:L7)")
+    camel = [("src:L1", "e", [{"wsCode": "", "n": 1}, {"wsCode": "", "n": 2}])]
+    base = ("병합 뒤 fillna('-')가 이어 온 단일값 wg='-'와 같다(wk/proc.py:L9) · 병합 키 ws ← 입력 필드 ws_code(wk/proc.py:L8): src:L1 2행 전부 ''")
+    assert fill_source([merge], ("wg", "-"), camel) == f"{base} — 입력 필드 wsCode가 to_snake(wk/base.py:L7) 뒤 ws_code"
+    # 변환이 없으면 전처럼 못 잇는다 · 이름이 그대로 있으면 변환 없이(꼬리 없음)
+    assert fill_source([merge.model_copy(update={"rename": [], "rename_at": ""})], ("wg", "-"), camel) == ""
+    assert fill_source([merge], ("wg", "-"), [("src:L1", "e", [{"ws_code": ""}, {"ws_code": ""}])]) == base
+    # 변환한 이름이 단일값이 아니면 사실이 아니다
+    assert fill_source([merge], ("wg", "-"), [("src:L1", "e", [{"wsCode": ""}, {"wsCode": "B"}])]) == ""
+    assert renamed_by(steps, "alarmCode") == "alarm_code" and renamed_by(steps, 3) is None and renamed_by([("sub", "(", "")], "x") is None
