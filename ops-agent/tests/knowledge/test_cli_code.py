@@ -1007,3 +1007,24 @@ def test_code_resources가_클래스가_읽고_쓰는_자원에_답한다(tmp_pa
     assert code == 0 and "alarm_events" in captured.out, captured.out
     code, captured = _run(config_root, tmp_path, monkeypatch, capsys, "code", "uses", "alarm_events", "--service", "nope")
     assert code == 1 and "없는 서비스" in captured.out
+
+
+def test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다(tmp_path, monkeypatch, capsys):
+    """측정 #35 후속 3(R3-5z ㉒): worktree가 출력 폴더(저장소 안)에 생겨 graphify가 약 440초 걸렸다. `code graph`는 worktree 루트를 OS temp의 `dt-graphify-<gbm>-*`에 두고
+    끝나면 지운다 — temp에 `dt-graphify-*`가 남지 않고 대상 레포의 `git worktree list`에 남은 항목이 없다. 진행 줄에 그 자리와 TMPDIR로 바꿀 수 있다는 것을 적는다."""
+    import tempfile
+
+    from tests.support import working_graphify
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setenv("GRAPHIFY_BIN", str(working_graphify(tmp_path / "bin", monkeypatch)))
+    config_root = _two_site_tree(tmp_path)
+    code, captured = _run_gbm(config_root, tmp_path, monkeypatch, capsys, "code", "graph")
+    assert code == 0, captured.out + captured.err
+    assert f"{REPO} ok" in captured.out
+    assert "graphify worktree 자리: " in captured.err and str(tmp_path / "tmp" / "dt-graphify-mx-") in captured.err and "TMPDIR" in captured.err
+    assert list((tmp_path / "tmp").glob("dt-graphify-*")) == []                    # 끝나면 지운다
+    assert not (tmp_path / "out" / "graph" / "mx" / "worktrees").exists()          # 출력 폴더에는 안 생긴다
+    out = subprocess.run(["git", "-C", str(tmp_path / "checkout"), "worktree", "list", "--porcelain"], capture_output=True, text=True, encoding="utf-8", check=True).stdout
+    assert [line for line in out.splitlines() if line.startswith("worktree ")] == [f"worktree {(tmp_path / 'checkout').resolve().as_posix()}"]

@@ -1815,14 +1815,21 @@ def _build_graph(args, env, *, site, gbm: str, fct: str, fcts: list[str] | None 
         progress("graphify 없음 — 심볼 그래프는 건너뛴다 (requirements-graph.txt)")
     symbol_graphs, states, reports = [], [], {}
     # 레포마다 독립이라 겹쳐 돌린다(11e-3, 사내 5레포 순차 296초). 합치는 순서는 config의 레포 순서 그대로다.
-    jobs = [(repo.name, Path(repo.path), commits[repo.name], out_dir / "worktrees" / repo.name)
+    # worktree는 OS temp에(R3-5z ㉒ — 측정 #35 후속 3: 출력 폴더(저장소 안)에 두니 graphify가 약 440초). 끝나면 실패해도 그 루트를 지운다.
+    scratch = gb.scratch_root(gbm)
+    jobs = [(repo.name, Path(repo.path), commits[repo.name], scratch / repo.name)
             for repo in site.code.repos if commits.get(repo.name)]
     width = gb.graphify_width(len(jobs))
+    if binary:
+        progress(f"graphify worktree 자리: {scratch} — OS temp(TMPDIR로 바꾼다), 끝나면 지운다")
     if binary and len(jobs) > 1:
         progress(f"graphify: 레포 {len(jobs)}개를 {width}개씩 겹쳐 돌린다(레포마다 작업 {gb.graphify_workers(width)}개)")
-    done = dict(zip([name for name, *_ in jobs],
-                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"),
-                                         cache_root=out_dir / "graphify-cache")))
+    try:
+        done = dict(zip([name for name, *_ in jobs],
+                        gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"),
+                                             cache_root=out_dir / "graphify-cache")))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     for repo in site.code.repos:
         if repo.name not in done:
             states.append(f"{repo.name} 건너뜀(커밋 없음)")

@@ -2598,6 +2598,19 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   (토픽 줄에 없는 토픽 건너뜀·조회 수 그대로·모르면 전처럼). 스윕 +10(1634). 기존 사례 둘(⑬ — 폴백·쓴 쪽 못 봄)은 같은 돌연변이로 다시 겨눴다.
   `code graph` 재생성은 필요 없다.
 
+#### R3-5z ㉒ (11-17) ✅ — graphify worktree 자리: OS temp의 `dt-graphify-<gbm>-*`, 끝나면 지우고 add 전에 남은 기록을 치운다 (측정 #35 후속 3)
+
+- 측정 #35 후속 3: worktree가 `<출력 폴더>/graph/<gbm>/worktrees`(저장소 안)에 생겨 graphify가 약 440초 걸렸다.
+- 고침:
+  - `code graph`는 worktree 루트를 `tempfile.mkdtemp(prefix="dt-graphify-<gbm>-")`로 OS temp에 만들고(`gb.scratch_root`), 끝나면 실패해도 그 루트를 지운다(`finally`).
+  - 진행 줄에 그 자리를 적는다 — `graphify worktree 자리: <temp 루트> — OS temp(TMPDIR로 바꾼다), 끝나면 지운다`. graphify가 없으면 안 적는다.
+  - `run_graphify_at`은 worktree add 전에 그 레포의 `git worktree prune`으로 강제 종료로 남은 기록(폴더가 지워진 것)을 치운다. prune이 실패해도 add는 해 본다.
+- worktree 자리가 달라도 graphify 그래프는 같다 — graphify 캐시 키와 노드에 절대 경로가 안 든다(⑲에서 본 대로 파일 내용 + 레포 안 상대 경로).
+- 실제 소비자 확인(진짜 graphify 0.9.65, `output/`의 측정판 사본): 고치기 전 코드와 뒤 코드로 `code graph`를 돌려 `graph.json`(노드 181)이 같았다. 뒤에는 `/tmp`에 `dt-graphify-*`가
+  안 남고 대상 레포 둘의 `git worktree list`가 자기 하나뿐이다. 측정판은 작아 시간 차이는 없다(1.6초 → 1.2초) — 약 440초 → 200초 이하는 평가자 PC에서 재야 한다.
+- 테스트 먼저(RED → GREEN): temp 루트(자리·접두), 남은 기록 prune(지워진 worktree 폴더), `code graph`(진짜 경로 — 가짜 graphify로: 진행 줄의 자리와 TMPDIR, 끝나면 temp에 안 남음,
+  출력 폴더에 worktrees 없음, 대상 레포 worktree 목록이 하나). 스윕 +5(1639). 기존 사례 하나(`code graph`의 레포 병렬 길)는 같은 돌연변이로 앵커만 다시 겨눴다.
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

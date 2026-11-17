@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -133,6 +134,12 @@ def graphify_workers(width: int) -> int:
     return max(1, (os.cpu_count() or 1) // max(1, width))
 
 
+def scratch_root(gbm: str) -> Path:
+    """graphify worktree 루트 — OS temp의 새 폴더 `dt-graphify-<gbm>-*`(R3-5z ㉒ — 측정 #35 후속 3: 출력 폴더(저장소 안)의 `worktrees`에 두니 graphify가 약 440초). 자리는
+    `TMPDIR`(Windows는 `TEMP`)로 바꾼다. 지우는 것은 부르는 쪽이다 — 끝나면, 실패해도. worktree 자리가 달라도 graphify 그래프는 같다(그래프에 절대 경로가 안 든다)."""
+    return Path(tempfile.mkdtemp(prefix=f"dt-graphify-{gbm}-"))
+
+
 def run_graphify_many(jobs, binary: str | None, *, width: int,
                       progress: Callable[[str, str], None] | None = None, cache_root: Path | None = None) -> list[tuple]:
     """레포마다 `run_graphify_at`을 스레드 풀에서 겹쳐 돌리고 결과는 **준 순서**로 — 끝난 순서로 합치면 같은 입력에
@@ -234,6 +241,12 @@ def run_graphify_at(repo_dir: Path, sha: str, binary: str | None, scratch: Path,
         shutil.rmtree(scratch, ignore_errors=True)
     if progress:
         progress(f"worktree 만드는 중 @ {sha[:12]}")
+    # 강제 종료로 남은 worktree 기록부터 치운다(R3-5z ㉒ — 측정 #35 후속 3) — 폴더가 지워진 기록은 `worktree list`에 남고 같은 자리 add를 막는다. 실패해도 add는 해 본다.
+    try:
+        subprocess.run(["git", "-C", str(repo_dir), "worktree", "prune"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     try:
         made = subprocess.run(["git", "-C", str(repo_dir), "worktree", "add", "--detach",
                                str(scratch), sha], capture_output=True, text=True,

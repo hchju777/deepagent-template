@@ -1588,8 +1588,8 @@ CASES += [
   '    return 1',
   [MANY]),
  ("code graph가 graphify를 레포마다 차례로 돌린다", MN,
-  '                    gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"),\n                                         cache_root=out_dir / "graphify-cache")))',
-  '                    [gb.run_graphify_at(d, s, binary, sc, progress=lambda m, r=n: progress(f"{r}: {m}")) for n, d, s, sc in jobs]))',
+  '                        gb.run_graphify_many(jobs, binary, width=width, progress=lambda r, m: progress(f"{r}: {m}"),\n                                             cache_root=out_dir / "graphify-cache")))',
+  '                        [gb.run_graphify_at(d, s, binary, sc, progress=lambda m, r=n: progress(f"{r}: {m}")) for n, d, s, sc in jobs]))',
   ["tests/knowledge/test_cli_code.py::test_code_graph는_graphify를_레포_병렬_길로_돌리고_config_순서로_합친다"]),
 ]
 
@@ -4233,7 +4233,15 @@ CASES += [
  ('토픽 줄에 없는 토픽 출력도 잇는다', WK, '            if got is not None and got.topic_lines is not None and at not in got.topic_lines:\n                # 그 키를', '            if False:\n                # 그 키를', ['tests/application/test_walk.py::test_받는_쪽이_키를_선언하지_않으면_쓰기_경로는_그_키를_싣는_명령의_토픽_줄에_없는_토픽_출력을_건너뛴다']),
  ('토픽 줄을 모르면 토픽 출력을 다 건너뛴다', WK, 'got.topic_lines is not None and at not in got.topic_lines:', 'at not in (got.topic_lines or ()):', ['tests/application/test_walk.py::test_받는_쪽이_키를_선언하지_않으면_쓰기_경로는_그_키를_싣는_명령의_토픽_줄에_없는_토픽_출력을_건너뛴다']),
 ]
-assert len(CASES) >= 1634, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉒ — graphify worktree 루트는 OS temp의 dt-graphify-<gbm>-*(TMPDIR) · 끝나면 지운다 · add 전에 git worktree prune ──
+CASES += [
+ ('worktree 루트를 출력 폴더에 둔다', MN, '    scratch = gb.scratch_root(gbm)\n', '    scratch = out_dir / "worktrees"\n', ['tests/knowledge/test_cli_code.py::test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다']),
+ ('끝나면 worktree 루트를 안 지운다', MN, '    finally:\n        shutil.rmtree(scratch, ignore_errors=True)\n', '    finally:\n        pass\n', ['tests/knowledge/test_cli_code.py::test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다']),
+ ('worktree 자리와 TMPDIR을 안 알린다', MN, '        progress(f"graphify worktree 자리: {scratch} — OS temp(TMPDIR로 바꾼다), 끝나면 지운다")\n', '        pass\n', ['tests/knowledge/test_cli_code.py::test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다']),
+ ('add 전에 남은 worktree 기록을 안 치운다', GBD, '        subprocess.run(["git", "-C", str(repo_dir), "worktree", "prune"], capture_output=True, text=True,\n', '        subprocess.run(["git", "-C", str(repo_dir), "status"], capture_output=True, text=True,\n', ['tests/knowledge/test_graph_build.py::test_scratch_root는_OS_temp에_dt_graphify_폴더를_만들고_run_graphify_at은_add_전에_남은_worktree_기록을_치운다', 'tests/knowledge/test_cli_code.py::test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다']),
+ ('worktree 루트 이름에 접두를 안 붙인다', GBD, '    return Path(tempfile.mkdtemp(prefix=f"dt-graphify-{gbm}-"))\n', '    return Path(tempfile.mkdtemp(prefix="graphify-"))\n', ['tests/knowledge/test_graph_build.py::test_scratch_root는_OS_temp에_dt_graphify_폴더를_만들고_run_graphify_at은_add_전에_남은_worktree_기록을_치운다', 'tests/knowledge/test_cli_code.py::test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다']),
+]
+assert len(CASES) >= 1639, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

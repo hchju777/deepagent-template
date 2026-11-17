@@ -381,3 +381,29 @@ def test_graphify는_작업_수를_넘기고_캐시를_worktree_밖에_두었다
     # 레포 하나의 작업 수는 코어 ÷ 동시 레포 수
     assert gb.graphify_workers(1) == (os.cpu_count() or 1) and gb.graphify_workers(0) == (os.cpu_count() or 1)
     assert gb.graphify_workers(10_000) == 1
+
+
+# ── R3-5z ㉒ — graphify worktree는 OS temp에, 남은 기록은 치운다(측정 #35 후속 3) ──
+
+def test_scratch_root는_OS_temp에_dt_graphify_폴더를_만들고_run_graphify_at은_add_전에_남은_worktree_기록을_치운다(tmp_path, monkeypatch):
+    """측정 #35 후속 3: worktree가 출력 폴더(저장소 안)에 생겨 graphify가 약 440초 걸렸다. 루트는 OS temp의 `dt-graphify-<gbm>-*`(TMPDIR로 바꾼다)이고, worktree add 전에
+    그 레포의 `git worktree prune`으로 강제 종료로 남은 기록(폴더가 지워진 것)을 치운다 — 끝나면 `git worktree list`에 남은 항목이 없다."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    root = gb.scratch_root("mx")
+    assert root.parent == tmp_path / "tmp" and root.name.startswith("dt-graphify-mx-") and root.is_dir()
+    repo, sha = _committed_repo(tmp_path)
+    stale = tmp_path / "stale"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(stale), sha], check=True, capture_output=True)
+    shutil.rmtree(stale)                                                          # 강제 종료 — 폴더만 지워지고 기록은 남는다
+
+    def listed():
+        out = subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"], capture_output=True, text=True, encoding="utf-8", check=True).stdout
+        return [line for line in out.splitlines() if line.startswith("worktree ")]
+
+    assert len(listed()) == 2
+    status, detail, graph, _ = gb.run_graphify_at(repo, sha, str(working_graphify(tmp_path / "bin", monkeypatch)), root / "repo")
+    assert status == "ok", detail
+    assert len(listed()) == 1 and not (root / "repo").exists()                    # 남은 기록도, 이번 worktree도 없다
