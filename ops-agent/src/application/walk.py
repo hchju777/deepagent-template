@@ -541,6 +541,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
                 cut.append(f"{step} → 구독 선언 없음")
                 continue
             got = await keys_of(topic, readers, writer, at_key, params)
+            if got is not None and got.topic_lines is not None and at not in got.topic_lines:
+                # 그 키를 싣는 명령의 토픽 줄이 아니다(R3-5z ㉑ — 측정 #35 후속 2: 다시 대입되기 전의 알람 토픽 쓰기 줄이 그 키와 짝지어졌다) — 이 토픽은 이 키의 길이 아니다.
+                continue
             for h in (got.hits if got is not None else ()):
                 where = f"메시지 필드 {h.field}에서 키 이름을 받아 쓴다 {h.path}:L{h.line}" + (" · 그 토픽을 읽는 클래스 밖" if h.broad else "")
                 if h.filled_path:

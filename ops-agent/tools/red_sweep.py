@@ -4119,10 +4119,10 @@ CASES += [
  ('소문자 호출도 명령으로 본다', D, '        if not _callee(call.func)[:1].isupper():\n            continue\n', '', ['tests/infrastructure/test_deployed_code.py::test_filled_fields는_생성자_호출이_키워드로_채우는_필드의_자리와_값의_끝_줄을_준다']),
  ('인자 값의 끝 줄을 안 준다', D, 'out.append((k.lineno, k.value.end_lineno or k.lineno, body))', 'out.append((k.lineno, k.lineno, body))', ['tests/infrastructure/test_deployed_code.py::test_filled_fields는_생성자_호출이_키워드로_채우는_필드의_자리와_값의_끝_줄을_준다']),
  ('그 토픽을 읽는 클래스 범위를 안 본다', D, '            found = [(path, line, field, body, False) for path in files for', '            found = [(path, line, field, body, False) for path in [] for', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
- ('서비스 코드 전체로 넓히지 않는다', D, '            if not found:\n                # 그 토픽을', '            if False:\n                # 그 토픽을', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
+ ('서비스 코드 전체로 넓히지 않는다', D, '            if not found and not readers:\n                # 그 토픽을', '            if False:\n                # 그 토픽을', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
  ('쓴 쪽이 채우는 필드를 먼저 고르지 않는다', D, 'next((f for f in found if filled(f[2])), found[0])', 'found[0]', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
  ('이 키 쓰기 줄이 인자 안에 드는지 안 본다', D, 'carries=bool(carried)))', 'carries=bool(spots)))', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
- ('쓴 쪽 범위를 못 봐도 말하지 않는다', D, 'writer_problem=writer_problem if hits else "")', 'writer_problem="")', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
+ ('쓴 쪽 범위를 못 봐도 말하지 않는다', D, 'writer_problem=writer_problem if hits else "",', 'writer_problem="",', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
  ('받는 쪽을 못 읽은 것을 못 찾음으로 둔다', D, '        problem = "; ".join(unread[:2]) if unread and not hits else ""', '        problem = ""', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
  ('메시지 필드 조회가 던진다', D, '            return MessageKeys(problem=f"메시지 필드를 확인하지 못했다({type(exc).__name__})")', '            raise', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_구독_서비스가_키_이름을_메시지_필드에서_받아_쓰는_줄과_쓴_쪽_명령이_그_필드를_채우는_자리를_준다']),
  ('메시지 필드로 잇지 않는다', WK, '            got = await keys_of(topic, readers, writer, at_key, params)', '            got = None', ['tests/application/test_walk.py::test_구독_서비스가_키를_선언하지_않아도_메시지_필드에서_키_이름을_받아_쓰면_쓰기_경로를_잇고_못_이으면_구독_서비스_이름을_적는다']),
@@ -4220,7 +4220,20 @@ CASES += [
  ('변환한 원이름을 사실에 안 적는다', WK, 'renamed = f" — 입력 필드 {key}가 {m.rename_at} 뒤 {src}" if key != src else ""', 'renamed = ""', ['tests/application/test_walk.py::test_병합_키를_만든_필드가_입력_행에_없으면_컬럼_이름_변환을_거친_이름으로_잇고_사실_끝에_원이름을_적는다']),
  ('변환 단계를 거꾸로 거친다', WK, '        for step in steps:\n            name = re.sub(', '        for step in reversed(steps):\n            name = re.sub(', ['tests/application/test_walk.py::test_병합_키를_만든_필드가_입력_행에_없으면_컬럼_이름_변환을_거친_이름으로_잇고_사실_끝에_원이름을_적는다']),
 ]
-assert len(CASES) >= 1624, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉑ — 키를 싣는 명령의 토픽 줄: 키 줄부터 오염을 퍼뜨려 topic= 이름에 앞서 대입한 줄 · 그 줄에 없는 토픽 출력은 건너뛴다 · 받는 쪽 폴백은 읽는 클래스를 모를 때만 ──
+CASES += [
+ ('for 대상으로 오염을 안 퍼뜨린다', D, '                if isinstance(n, (ast.For, ast.AsyncFor, ast.comprehension)) and hot(n.iter):\n', '                if False:\n', ['tests/infrastructure/test_deployed_code.py::test_key_topic_lines는_키_줄부터_오염을_퍼뜨려_그_키를_싣는_명령의_topic_인자에_마지막으로_대입한_줄을_준다', 'tests/infrastructure/test_deployed_code.py::test_message_keys는_그_키를_싣는_명령의_토픽_줄을_주고_읽는_클래스를_알면_서비스_전체로_안_넓힌다']),
+ ('대입으로 오염을 안 퍼뜨린다', D, '                elif isinstance(n, ast.Assign) and hot(n.value):\n                    got = set().union(*(names(t) for t in n.targets))\n', '                elif False:\n                    got = set()\n', ['tests/infrastructure/test_deployed_code.py::test_key_topic_lines는_키_줄부터_오염을_퍼뜨려_그_키를_싣는_명령의_topic_인자에_마지막으로_대입한_줄을_준다']),
+ ('싣는 호출의 topic이 이름이 아니어도 고른다', D, '            if not isinstance(topic, ast.Name):\n                return None\n', '            if not isinstance(topic, ast.Name):\n                continue\n', ['tests/infrastructure/test_deployed_code.py::test_key_topic_lines는_키_줄부터_오염을_퍼뜨려_그_키를_싣는_명령의_topic_인자에_마지막으로_대입한_줄을_준다']),
+ ('갈래 안 대입도 모르는 척 넘어간다', D, '                        if any(isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Store) for n in ast.walk(prev)):\n                            return None\n', '', ['tests/infrastructure/test_deployed_code.py::test_key_topic_lines는_키_줄부터_오염을_퍼뜨려_그_키를_싣는_명령의_topic_인자에_마지막으로_대입한_줄을_준다']),
+ ('바깥 문장 목록으로 안 올라간다', D, '                    break\n        stmt = parent\n    return None\n', '                    return None\n        stmt = parent\n    return None\n', ['tests/infrastructure/test_deployed_code.py::test_key_topic_lines는_키_줄부터_오염을_퍼뜨려_그_키를_싣는_명령의_topic_인자에_마지막으로_대입한_줄을_준다']),
+ ('싣는 호출이 없어도 토픽 줄을 준다', D, '    return sorted(out) if carried else None\n', '    return sorted(out)\n', ['tests/infrastructure/test_deployed_code.py::test_key_topic_lines는_키_줄부터_오염을_퍼뜨려_그_키를_싣는_명령의_topic_인자에_마지막으로_대입한_줄을_준다']),
+ ('토픽 줄을 조회 결과에 안 싣는다', D, 'topic_lines=lines or None)', 'topic_lines=None)', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_그_키를_싣는_명령의_토픽_줄을_주고_읽는_클래스를_알면_서비스_전체로_안_넓힌다']),
+ ('읽는 클래스를 알아도 서비스 전체로 넓힌다', D, '            if not found and not readers:\n', '            if not found:\n', ['tests/infrastructure/test_deployed_code.py::test_message_keys는_그_키를_싣는_명령의_토픽_줄을_주고_읽는_클래스를_알면_서비스_전체로_안_넓힌다']),
+ ('토픽 줄에 없는 토픽 출력도 잇는다', WK, '            if got is not None and got.topic_lines is not None and at not in got.topic_lines:\n                # 그 키를', '            if False:\n                # 그 키를', ['tests/application/test_walk.py::test_받는_쪽이_키를_선언하지_않으면_쓰기_경로는_그_키를_싣는_명령의_토픽_줄에_없는_토픽_출력을_건너뛴다']),
+ ('토픽 줄을 모르면 토픽 출력을 다 건너뛴다', WK, 'got.topic_lines is not None and at not in got.topic_lines:', 'at not in (got.topic_lines or ()):', ['tests/application/test_walk.py::test_받는_쪽이_키를_선언하지_않으면_쓰기_경로는_그_키를_싣는_명령의_토픽_줄에_없는_토픽_출력을_건너뛴다']),
+]
+assert len(CASES) >= 1634, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

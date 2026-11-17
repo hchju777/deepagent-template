@@ -247,6 +247,9 @@ class MessageKeys(StrictModel):
     hits: list[MessageKeyHit] = []
     problem: str = ""
     writer_problem: str = ""
+    # 그 키를 싣는 명령의 토픽 줄 `<파일>:L<n>`(R3-5z ㉑ — 측정 #35 후속 2: `topic`을 다시 대입하는 함수에서 키를 싣는 명령이 앞의 알람 토픽과도 짝지어졌다). 판단 못 하면 None —
+    # 쓰기 경로가 전처럼 쓰기 구간의 토픽 전부를 본다.
+    topic_lines: list[str] | None = None
 
 
 class Rung(StrictModel):

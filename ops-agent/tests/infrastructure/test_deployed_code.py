@@ -1940,3 +1940,81 @@ async def test_filter_lines의_병합식에는_범위의_컬럼_이름_변환_�
          "to_snake(wk/base.py:L7)")]
     tidy = await code.filter_lines("Tidy")
     assert [(m.rename, m.rename_at) for m in tidy.merges] == [([], "")]                     # strip이 든 변환은 안 쓴다
+
+
+# ── R3-5z ㉑ — 그 키를 싣는 명령의 토픽 줄·받는 쪽 폴백(측정 #35 후속 2) ──
+
+CLEANUP = ('class Cleanup:\n'
+           '    def run(self, rows):\n'
+           '        topic = self.config.get("infra", "kafka", "producer", "topic", "alarm")\n'
+           '        for row in rows:\n'
+           '            self.repository.save(Alarm(topic=topic, row=row))\n'
+           '        topic = self.config.get("infra", "kafka", "producer", "topic",\n'
+           '                                "data")\n'
+           '        for name in ("summary_a", "summary_b"):\n'
+           '            key = self.config.get("redis_key", name)\n'
+           '            payload = {"target": key}\n'
+           '            self.repository.save(Command(topic=topic, **payload))\n\n'
+           '    def branch(self, flag):\n'
+           '        topic = "a"\n'
+           '        if flag:\n'
+           '            topic = "b"\n'
+           '        self.repository.save(Command(topic=topic, target=self.config.get("redis_key", "k2")))\n\n'
+           '    def param(self, topic):\n'
+           '        self.repository.save(Command(topic=topic, target=self.config.get("redis_key", "k3")))\n\n'
+           '    def attr(self):\n'
+           '        self.repository.save(Command(topic=self.topic, target=self.config.get("redis_key", "k4")))\n\n'
+           '    def inner(self, rows):\n'
+           '        topic = "outer"\n'
+           '        for row in rows:\n'
+           '            topic = "inner"\n'
+           '            self.repository.save(Command(topic=topic, target=self.config.get("redis_key", "k5")))\n\n'
+           '    def none(self):\n'
+           '        key = self.config.get("redis_key", "k6")\n'
+           '        self.redis.set(key, 1)\n')
+
+
+def test_key_topic_lines는_키_줄부터_오염을_퍼뜨려_그_키를_싣는_명령의_topic_인자에_마지막으로_대입한_줄을_준다():
+    """측정 #35 후속 2: `<알람 정리 파이프라인>.run`에서 `topic`이 알람 토픽(L<a>)에서 데이터 토픽(L<b>)으로 다시 대입되는데, 키를 싣는 명령(`<명령 DTO>(topic=topic,
+    **payload…)`)이 L<a>의 알람 토픽과 짝지어졌다. 키 줄부터 for·컴프리헨션 대상과 대입으로 오염을 고정점까지 퍼뜨리고, `topic=`을 가진 생성자 호출의 다른 인자가 오염됐으면
+    그 호출 앞 같은 문장 목록(바깥으로 올라가며)에서 그 이름에 마지막으로 대입한 문장의 줄들. 판단 못 하면 None."""
+    from src.infrastructure.deployed_code import key_topic_lines
+
+    assert key_topic_lines(CLEANUP, [8]) == [6, 7]                     # for 대상 → 대입 → ** 펼침 — 다시 대입한 데이터 토픽(두 줄 문장)
+    assert key_topic_lines(CLEANUP, [9]) == [6, 7]                     # config 조회 줄에서 시작해도 같다
+    assert key_topic_lines(CLEANUP, [29]) == [28]                      # 같은 목록 안 대입이 바깥 대입보다 가깝다
+    assert key_topic_lines(CLEANUP, [17]) is None                      # 앞 문장의 갈래 안에서도 바꾼다 — 어느 값인지 모른다
+    assert key_topic_lines(CLEANUP, [20]) is None                      # 매개변수 — 대입이 없다
+    assert key_topic_lines(CLEANUP, [23]) is None                      # topic= 이 이름이 아니다
+    assert key_topic_lines(CLEANUP, [32]) is None                      # 그 키를 싣는 명령이 없다
+    assert key_topic_lines("def (:\n", [1]) is None
+
+
+async def test_message_keys는_그_키를_싣는_명령의_토픽_줄을_주고_읽는_클래스를_알면_서비스_전체로_안_넓힌다(clock):
+    """R3-5z ㉑: 쓴 쪽 파일의 키 줄(`at`)로 그 키를 싣는 명령의 토픽 줄 `<파일>:L<n>`을 준다(판단 못 하면 None). 받는 쪽은 그 토픽을 읽는 클래스를 알면 그 범위에 줄이 없어도
+    서비스 코드 전체로 넓히지 않는다 — 넓힌 줄은 "그 토픽을 읽는 클래스 밖"으로 엉뚱하게 이어졌다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.flow import Name
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    repos = {"dt-core": {"proc/__init__.py": "", "proc/cleanup.py": CLEANUP},
+             "dt-load": {"load/__init__.py": "",
+                         "load/reader.py": ('class Reader:\n    def run(self):\n'
+                                            '        for message in self.consumer.subscribe(self.cfg.get("infra", "kafka", "consumer", "topic", "in")):\n'
+                                            '            self.store.put(message)\n'),
+                         "load/elsewhere.py": 'def keep(msg, store):\n    store.save(key=msg.target)\n'}}
+
+    class SnapReader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(repos[repo]), source="s", clock=clock)
+
+    topology = Topology(services={"sink": Service(repo="dt-core", role="낸다"), "loader": Service(repo="dt-load", role="싣는다")})
+    code = DeployedCode(SnapReader(), topology, Deployment(), gbm="mx", fct="gumi", clock=clock)
+    names = [Name("topic", "t.load", "infra.kafka.consumer.topic.in")]
+    code.attach_index(await ix.build_index({r: _repo_src(f) for r, f in repos.items()}, names=names, commits={r: "c0ffee" for r in repos}))
+    got = await code.message_keys("t.load", ["loader"], "Cleanup", at=("proc/cleanup.py:L8",), service="sink")
+    assert got.topic_lines == ["proc/cleanup.py:L6", "proc/cleanup.py:L7"]
+    assert got.hits == [] and got.problem == ""                         # 읽는 클래스(Reader)를 안다 — 범위 밖 elsewhere.py로 안 넓힌다
+    assert (await code.message_keys("t.load", ["loader"], "Cleanup", at=("proc/cleanup.py:L17",), service="sink")).topic_lines is None

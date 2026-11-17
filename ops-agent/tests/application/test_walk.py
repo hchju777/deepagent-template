@@ -1867,3 +1867,34 @@ def test_병합_키를_만든_필드가_입력_행에_없으면_컬럼_이름_�
     # 변환한 이름이 단일값이 아니면 사실이 아니다
     assert fill_source([merge], ("wg", "-"), [("src:L1", "e", [{"wsCode": ""}, {"wsCode": "B"}])]) == ""
     assert renamed_by(steps, "alarmCode") == "alarm_code" and renamed_by(steps, 3) is None and renamed_by([("sub", "(", "")], "x") is None
+
+
+# ── R3-5z ㉑ — 쓰기 경로는 그 키를 싣는 명령의 토픽 줄만(측정 #35 후속 2) ──
+
+async def test_받는_쪽이_키를_선언하지_않으면_쓰기_경로는_그_키를_싣는_명령의_토픽_줄에_없는_토픽_출력을_건너뛴다():
+    """측정 #35 후속 2: `topic`이 알람 토픽에서 데이터 토픽으로 다시 대입되는 함수에서 쓰기 경로가 알람 토픽 쓰기 줄과 그 키를 짝지었다. 받는 쪽이 그 키를 선언하지 않을 때
+    (메시지 필드로 잇는 길) 조회가 준 그 키의 토픽 줄에 없는 토픽 출력은 건너뛴다 — 같은 조회 결과를 쓰므로 조회 수는 그대로다. 토픽 줄을 모르면(None) 전처럼."""
+    from src.domain.case import MessageKeyHit, MessageKeys
+
+    w1 = ("W1 (x.py:L1) [dt-core · batch]\n  읽기 1:\n    t.raw [topic] — W1._run (x.py:L9)\n"
+          "  쓰기 3:\n    t.alarm [topic] — W1._run (x.py:L3)\n    t.cmd [topic] — W1._run (x.py:L6)\n    in:{line} [rediskey] — W1._run (x.py:L8)")
+    table = {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): w1,
+             ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): USES_W1, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)},
+              subscriptions={"a": ("t.raw",), "b": ("t.alarm", "t.cmd")}, clock=lambda: T0)
+    hit = MessageKeyHit(service="b", field="target", path="load/l.py", line=9, filled_path="x.py", filled_line=8, carries=True)
+    asked = []
+
+    def keys(lines):
+        async def message_keys(topic, services, writer, *, at=(), service="", repo=""):
+            asked.append(topic)
+            return MessageKeys(hits=[hit], topic_lines=lines)
+        return message_keys
+
+    tail = "b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9 · 쓴 쪽 명령의 target= 인자에 이 키 x.py:L8) → in:L1"
+    walk = (await run_walk(_state(), runner=_Reads(table), message_keys=keys(["x.py:L6"]), **kw))["walk"]
+    assert walk.hops[1].write_path == f"→ t.cmd(코드의 쓰기 줄 x.py:L6) → {tail}" and asked == ["t.alarm", "t.cmd"]     # 알람 토픽 줄은 건너뛴다 — 조회 수는 그대로
+    asked.clear()
+    walk = (await run_walk(_state(), runner=_Reads(table), message_keys=keys(None), **kw))["walk"]
+    assert walk.hops[1].write_path == f"→ t.alarm(코드의 쓰기 줄 x.py:L3) → {tail} / → t.cmd(코드의 쓰기 줄 x.py:L6) → {tail}"  # 모르면 전처럼
+    assert asked == ["t.alarm", "t.cmd"]

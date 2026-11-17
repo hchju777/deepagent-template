@@ -593,6 +593,82 @@ def _module_files(parts: list[str]) -> list[str]:
     return [f"{joined}.py", f"{joined}/__init__.py"] if joined else []
 
 
+def key_topic_lines(text: str, key_lines: list[int]) -> list[int] | None:
+    """그 키를 싣는 명령의 토픽 줄(R3-5z ㉑ — 측정 #35 후속 2: `<알람 정리 파이프라인>.run`에서 `topic`이 알람 토픽에서 데이터 토픽으로 다시 대입되는데, 쓰기 경로가 키를
+    싣는 명령을 앞의 알람 토픽과도 짝지었다). 키 줄을 품은 함수에서 그 줄부터 for·컴프리헨션 대상과 대입으로 오염을 고정점까지 퍼뜨린다. `topic=` 키워드를 가진 생성자
+    호출(이름이 대문자로 시작)의 다른 인자가 오염됐으면 그 호출이 키를 싣는다 — 그 `topic=` 이름에 그 호출 앞 같은 문장 목록에서(바깥 목록으로 올라가며) 마지막으로 대입한
+    문장의 줄들. 판단 못 하면(싣는 호출 없음, `topic=`이 이름이 아님, 앞 문장 안쪽 갈래에서도 대입, 대입 없음 — 매개변수 등) None — 부르는 쪽이 전처럼 둔다."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    keys = set(key_lines)
+    out: set[int] = set()
+    carried = False
+    for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        if not any(fn.lineno <= k <= (fn.end_lineno or fn.lineno) for k in keys):
+            continue
+        tainted: set[str] = set()
+
+        def hot(node) -> bool:
+            return any(getattr(n, "lineno", None) in keys or (isinstance(n, ast.Name) and n.id in tainted) for n in ast.walk(node))
+
+        def names(node) -> set[str]:
+            return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+        changed = True
+        while changed:
+            changed = False
+            for n in ast.walk(fn):
+                got: set[str] = set()
+                if isinstance(n, (ast.For, ast.AsyncFor, ast.comprehension)) and hot(n.iter):
+                    got = names(n.target)
+                elif isinstance(n, ast.Assign) and hot(n.value):
+                    got = set().union(*(names(t) for t in n.targets))
+                elif isinstance(n, (ast.AnnAssign, ast.AugAssign)) and n.value is not None and hot(n.value):
+                    got = names(n.target)
+                if got - tainted:
+                    tainted |= got
+                    changed = True
+        parents = {id(c): p for p in ast.walk(fn) for c in ast.iter_child_nodes(p)}
+        for call in (n for n in ast.walk(fn) if isinstance(n, ast.Call) and _callee(n.func)[:1].isupper()):
+            topic = next((k.value for k in call.keywords if k.arg == "topic"), None)
+            if topic is None or not any(hot(a) for a in [*call.args, *(k.value for k in call.keywords if k.arg != "topic")]):
+                continue
+            carried = True
+            if not isinstance(topic, ast.Name):
+                return None
+            line = _last_assignment(fn, call, topic.id, parents)
+            if line is None:
+                return None
+            out.update(line)
+    return sorted(out) if carried else None
+
+
+def _last_assignment(fn, node, name: str, parents: dict) -> list[int] | None:
+    """`node`를 품은 문장 앞, 같은 문장 목록에서(못 찾으면 바깥 목록으로 올라가며) `name`에 마지막으로 대입한 문장의 줄들. 그 사이 문장 안쪽(갈래·반복·with·try)에서도
+    `name`을 바꾸면 어느 값인지 모른다 — None. 함수 몸까지 없으면 None."""
+    stmt = node
+    while stmt is not fn:
+        parent = parents.get(id(stmt))
+        if parent is None:
+            return None
+        if isinstance(stmt, ast.stmt):
+            for field in ("body", "orelse", "finalbody"):
+                block = getattr(parent, field, None)
+                if isinstance(block, list) and any(s is stmt for s in block):
+                    for prev in reversed(block[:next(i for i, s in enumerate(block) if s is stmt)]):
+                        direct = (isinstance(prev, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in prev.targets)) or (
+                            isinstance(prev, ast.AnnAssign) and isinstance(prev.target, ast.Name) and prev.target.id == name and prev.value is not None)
+                        if direct:
+                            return list(range(prev.lineno, (prev.end_lineno or prev.lineno) + 1))
+                        if any(isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Store) for n in ast.walk(prev)):
+                            return None
+                    break
+        stmt = parent
+    return None
+
+
 @dataclass(frozen=True)
 class Registration:
     """등록 모음 파일의 `register(component="X", <사이트 인자>)(<클래스>)` 한 건 — 데코레이터 형도 같은 모양으로 둔다."""
@@ -1072,8 +1148,9 @@ class DeployedCode(DeployedCodePort):
                     if path in snap and path not in files:
                         files.append(path)
             found = [(path, line, field, body, False) for path in files for line, field, body in self._key_lines(svc.repo, path, snap)]
-            if not found:
-                # 그 토픽을 읽는 클래스를 인덱스가 모르거나(프레임워크가 구독한다) 그 범위에 그런 줄이 없다 — 그 서비스 코드 전체에서. 걷기가 "그 토픽을 읽는 클래스 밖"으로 적는다.
+            if not found and not readers:
+                # 그 토픽을 읽는 클래스를 인덱스가 모른다(프레임워크가 구독한다) — 그 서비스 코드 전체에서. 걷기가 "그 토픽을 읽는 클래스 밖"으로 적는다. 읽는 클래스를 알면
+                # 그 범위에 줄이 없어도 넓히지 않는다(R3-5z ㉑ — 측정 #35 후속 2: 읽는 클래스를 알면서도 서비스 전체로 넓혀 "클래스 밖" 줄을 엉뚱하게 이었다).
                 found = [(path, line, field, body, True) for path in self._own_files(name, svc.repo, snap)
                          for line, field, body in self._key_lines(svc.repo, path, snap)]
             if not found:
@@ -1086,7 +1163,18 @@ class DeployedCode(DeployedCodePort):
                                       filled_path=spot[0], filled_line=spot[1], filled_via=spot[3],
                                       unfollowed=unfollowed[0] if unfollowed and not spots else "", carries=bool(carried)))
         problem = "; ".join(unread[:2]) if unread and not hits else ""
-        return MessageKeys(hits=hits, problem=problem, writer_problem=writer_problem if hits else "")
+        # 그 키를 싣는 명령의 토픽 줄(R3-5z ㉑) — 쓴 쪽 파일마다, 그 파일의 키 줄로. 한 파일이라도 판단 못 하면 None(쓰기 경로가 전처럼 둔다).
+        lines: list[str] | None = []
+        for path in wfiles:
+            mine = [n for p, n in keyed if p == path]
+            if not mine:
+                continue
+            got = key_topic_lines(wsnap.get(path, ""), mine)
+            if got is None:
+                lines = None
+                break
+            lines += [f"{path}:L{n}" for n in got]
+        return MessageKeys(hits=hits, problem=problem, writer_problem=writer_problem if hits else "", topic_lines=lines or None)
 
     async def _spreads(self, wsnap: dict[str, str], wfiles: list[str], wsid: int | None) -> list[tuple[str, int, int | None, list | None]]:
         """쓴 쪽 범위의 `**` 펼침마다 `(경로, 줄, 가리킨 메서드, 그 메서드의 반환 딕셔너리들)`(R3-5z ⑯). `self.<이름>`은 쓴 클래스의 MRO, `<클래스>(…).<메서드>()`는 그
