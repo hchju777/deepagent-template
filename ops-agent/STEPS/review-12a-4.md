@@ -1429,3 +1429,32 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
 - 방향: **R3-5z ⑮**(클래스 속성 구독 경로)·**⑯**(`**` 펼침)·**⑰**(쓰기 경로 비용)·**⑱**(병합 키 ← 입력 필드)·**⑲**(graphify 동시 실행·캐시).
   답은 [reply.md](reply.md)의 #34 결과.
 
+## 측정 #35 후속 수정 3건 (11-17, 평가자) → R3-5z ⑳~㉒
+
+- **1 워커 병합 키 — 컬럼 이름 변환**: `<워커 처리기>`가 `<정규화 함수>`에서 `df.columns = [<변환 함수>(c) for c in df.columns]`로 camel → snake 변환한 뒤 snake 이름을
+  읽는다. 메시지 원천 필드는 camel이라 `fill_source`가 둘을 잇지 못한다.
+  - 요청: `filter_lines`가 병합 사실을 만들 때 그 컴포넌트와 부모 멤버 파일에서 `<x>.columns = [F(v) for v in <x>.columns]`를 찾는다. F를 같은 파일이나 import 대상에서
+    찾아, 본문이 `re.sub(<리터럴>, <리터럴>)` 단계와 `lower()`로만 이루어졌을 때만 이름 변환으로 쓴다. `fill_source`는 원천 행의 키를 이 변환을 거쳐 비교하고, 사실 끝에
+    "입력 필드 <원이름>가 F(<파일>:L<n>) 뒤 <변환이름>"을 붙인다.
+  - 완료 기준: `<워커 케이스>` 3건(gumi/sein/setk)에 이 사실이 붙는다. 변환 패턴이 없는 걷기는 결과가 그대로다.
+- **2 거짓 알람 토픽 결합**: `<알람 정리 파이프라인>.run`에서 `topic`이 L<a>(알람)에서 L<b>(데이터)로 다시 대입되는데, 키를 싣는 명령(L<c>,
+  `<명령 DTO>(topic=topic, **payload…)`)이 L<a>의 알람 토픽과 짝지어진다. 읽는 클래스를 이미 아는데도 "그 토픽을 읽는 클래스 밖" 폴백이 돈다.
+  - 요청 (a): 쓴 쪽 파일에서 키 리터럴 줄부터 for·컴프리헨션 대상과 대입을 따라 오염을 고정점까지 퍼뜨린다. `topic=` 인자를 가진 생성자 호출이 그 키를 싣는다면 그 호출
+    직전에 같은 문장 목록에서 `topic`에 대입된 줄만 그 키의 토픽 줄로 본다. 판단할 수 없으면 None — 기존 동작.
+  - 요청 (b): `write_path`에서 readers가 있고 loaders가 없으면 `keys_of`의 토픽 줄 목록에 없는 토픽 출력은 건너뛴다(`keys_of` 결과를 그대로 재사용 — 호출 수를 안 늘린다).
+  - 요청 (c): 폴백 조건을 "if not found and not readers"로.
+  - 완료 기준: 알람 토픽 쓰기 줄과 Redis 키를 짝지은 꼬리 0건, 데이터 토픽 경로는 유지, 출력 전체에서 "클래스 밖" 0건.
+  - 참고(이번에는 안 고침): 인덱스가 루프 리터럴 config 키를 쓰기가 아닌 읽기로 기록한다.
+- **3 graphify worktree 위치**: worktree가 `<출력 폴더>/graph/<gbm>/worktrees`(저장소 안)에 생겨 graphify가 약 440초 걸린다.
+  - 요청: worktree 루트를 `tempfile.mkdtemp(prefix="dt-graphify-<gbm>-")`로 OS temp에 만들고 끝나면 지운다. worktree add 전에 대상 레포마다 `git worktree prune`으로 강제 종료로
+    남은 기록을 치운다. temp 위치를 `TMPDIR`로 바꿀 수 있다는 것을 운영 문서나 그래프 빌드 출력에 한 줄.
+  - 완료 기준: 평가자 PC에서 다시 빌드할 때 전체 약 200초 이하이고 만들어진 그래프는 같다(배포 환경에서는 안 줄 수 있다). 끝나면 temp에 `dt-graphify-*`가 남지 않고
+    대상 레포의 `git worktree list`에 남은 항목이 없다.
+- **코드 확인**(11-17):
+  - 1: `fill_source`는 병합 키를 만든 코드의 필드 이름(`<식>.get("<필드>")`의 `<필드>`) 그대로 입력 행에서 찾는다. 컬럼 이름 변환은 어디서도 안 본다 — 변환 뒤 이름은
+    원천 행에 없다.
+  - 2: 쓰기 경로는 쓴 클래스 `code.resources` 쓰기 구간의 토픽마다 그 키와 짝짓는다 — 어느 호출이 그 키를 싣는지와 무관하다. 받는 쪽 범위의 폴백은 `if not found:`라
+    받는 클래스를 알아도 그 범위에 줄이 없으면 서비스 코드 전체로 넓힌다.
+  - 3: worktree는 `<출력 폴더>/graph/<gbm>/worktrees/<레포>`에 만들고 끝나면 지운다. `git worktree prune`은 안 부른다 — 강제 종료로 남은 기록은 그대로다.
+- 방향: **R3-5z ⑳**(컬럼 이름 변환)·**㉑**(키를 싣는 명령의 토픽 줄·폴백)·**㉒**(graphify worktree를 OS temp에). 답은 [reply.md](reply.md)의 #35 후속 수정.
+

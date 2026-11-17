@@ -825,6 +825,9 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | R3-5z ⑰ ✅ | 쓰기 경로 비용 | (측정 #34 3) `message_keys` 결과·파일별 파싱·레포별 읽는 클래스 표를 기억한다; 쓰기 경로는 걷기 뒤 상한 밖에서 한 번에(행·멈춤 문구는 같다) | `deployed_code`, `walk` |
 | R3-5z ⑱ ✅ | 병합 키 ← 입력 필드 | (측정 #34 4) 이어 온 나쁜 단일값이 범위의 병합 뒤 채움 리터럴과 같으면 그 병합 키를 같은 범위의 `"<키>": <변수>.get("<필드>")`(·`[...]`)로 입력 필드에 잇고, 그 클래스 입력에서 그 필드가 단일값이면 멈춤 줄에 | `deployed_code`, `case`, `walk` |
 | R3-5z ⑲ ✅ | graphify 동시 실행·캐시 | (측정 #34 5) 레포마다 graphify 작업 수를 코어 ÷ 동시 레포 수로(`GRAPHIFY_MAX_WORKERS`); graphify 캐시를 worktree 밖(번들 자리)에 두었다가 다음 worktree에 되돌린다 | `graph_build` |
+| R3-5z ⑳ | 컬럼 이름 변환 | (측정 #35 후속 1) 단일값 조회 범위(컴포넌트·부모 멤버 파일)에서 `<x>.columns = [F(v) for v in <x>.columns]`를 찾고, F(같은 파일 또는 import 대상)의 본문이 `re.sub(<리터럴>, <리터럴>, …)` 단계와 `.lower()`로만 이뤄졌을 때만 그 단계를 병합 사실에 싣는다; `fill_source`는 입력 행의 키를 그 단계로 바꿔 대조하고 사실 끝에 "입력 필드 <원이름>가 F(<자리>) 뒤 <변환이름>" | `deployed_code`, `case`, `walk` |
+| R3-5z ㉑ | 키를 싣는 명령의 토픽 줄 | (측정 #35 후속 2) 쓴 쪽 파일에서 키 줄부터 for·컴프리헨션 대상과 대입으로 오염을 고정점까지; `topic=` 인자를 가진 생성자 호출이 그 키를 실으면 그 호출 앞 같은 문장 목록(바깥 목록으로 올라가며)에서 그 이름에 마지막으로 대입한 줄이 그 키의 토픽 줄 — 갈래 안 대입·매개변수 등 판단 못 하면 None(전처럼); 쓰기 경로는 받는 쪽이 키를 선언 안 할 때 그 줄에 없는 토픽 출력을 건너뛴다(같은 `keys_of` 결과); 받는 쪽 폴백은 받는 클래스를 모를 때만 | `deployed_code`, `case`, `walk` |
+| R3-5z ㉒ | graphify worktree 자리 | (측정 #35 후속 3) worktree 루트를 `tempfile.mkdtemp(prefix="dt-graphify-<gbm>-")`로 OS temp에, 끝나면(실패해도) 지운다; worktree add 전에 그 레포 `git worktree prune`; 빌드 출력에 temp 자리와 `TMPDIR`로 바꿀 수 있다는 한 줄 | `graph_build`, `__main__` |
 
 
 
