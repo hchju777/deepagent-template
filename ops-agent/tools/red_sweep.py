@@ -4241,7 +4241,13 @@ CASES += [
  ('add 전에 남은 worktree 기록을 안 치운다', GBD, '        subprocess.run(["git", "-C", str(repo_dir), "worktree", "prune"], capture_output=True, text=True,\n', '        subprocess.run(["git", "-C", str(repo_dir), "status"], capture_output=True, text=True,\n', ['tests/knowledge/test_graph_build.py::test_scratch_root는_OS_temp에_dt_graphify_폴더를_만들고_run_graphify_at은_add_전에_남은_worktree_기록을_치운다', 'tests/knowledge/test_cli_code.py::test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다']),
  ('worktree 루트 이름에 접두를 안 붙인다', GBD, '    return Path(tempfile.mkdtemp(prefix=f"dt-graphify-{gbm}-"))\n', '    return Path(tempfile.mkdtemp(prefix="graphify-"))\n', ['tests/knowledge/test_graph_build.py::test_scratch_root는_OS_temp에_dt_graphify_폴더를_만들고_run_graphify_at은_add_전에_남은_worktree_기록을_치운다', 'tests/knowledge/test_cli_code.py::test_code_graph는_graphify_worktree를_OS_temp에_두고_끝나면_지우며_그_자리와_TMPDIR를_알린다']),
 ]
-assert len(CASES) >= 1639, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ⑳b — 이름 변환 조회 범위: 이은 컴포넌트 클래스마다 진입에서 닿는 멤버 파일을 더한다(비교 범위는 그대로) ──
+CASES += [
+ ('이은 컴포넌트의 부모 멤버 파일에서 이름 변환을 안 찾는다', D, '            extra = [p for cid in linked_ids for p in self._member_files(cid) if p in snap]\n', '            extra = [self._index.symbols[cid].file for cid in linked_ids]\n', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_이름_변환은_이은_컴포넌트_클래스가_진입에서_닿는_부모_멤버_파일에서도_찾고_비교_범위는_안_넓힌다']),
+ ('이은 컴포넌트 클래스를 안 모은다', D, '                if csym.id not in linked_ids:\n                    linked_ids.append(csym.id)\n', '', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_이름_변환은_이은_컴포넌트_클래스가_진입에서_닿는_부모_멤버_파일에서도_찾고_비교_범위는_안_넓힌다']),
+ ('이름 변환 조회 범위로 비교 범위를 넓힌다', D, '            steps, at = self._column_rename(snap, list(dict.fromkeys([*files, *extra])))\n', '            files += [p for p in extra if p not in files]\n            steps, at = self._column_rename(snap, files)\n', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_이름_변환은_이은_컴포넌트_클래스가_진입에서_닿는_부모_멤버_파일에서도_찾고_비교_범위는_안_넓힌다']),
+]
+assert len(CASES) >= 1642, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

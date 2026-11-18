@@ -1044,6 +1044,7 @@ class DeployedCode(DeployedCodePort):
         literals += [lit for v in variables for lit in linked_vars.get(v, ()) if lit not in literals]
         linked: list[str] = []
         linked_at: list[FilterHit] = []
+        linked_ids: list[int] = []
         unlinked = [f"변수 {v}" for v in variables if v not in linked_vars]
         for comp in literals:
             picked = self._site_picks(regs, comp)
@@ -1059,6 +1060,8 @@ class DeployedCode(DeployedCodePort):
                     continue
                 if csym.file not in files:
                     files.append(csym.file)
+                if csym.id not in linked_ids:
+                    linked_ids.append(csym.id)
                 if comp not in linked:
                     linked.append(comp)
                 linked_at.append(FilterHit(path=csym.file, line=csym.line, repo=sym.repo,
@@ -1076,8 +1079,10 @@ class DeployedCode(DeployedCodePort):
         made = [(col, field, path, line) for path in files for col, field, line in key_sources(snap.get(path, ""))]
         merges = [m.model_copy(update={"sources": [s for s in made if s[0] in m.left or s[0] in m.right]}) for m in merges]
         # 같은 범위의 컬럼 이름 변환(R3-5z ⑳ — 측정 #35 후속 1) — 병합 키를 만든 코드의 필드 이름이 변환 뒤 이름이면 걷기가 입력 행의 키를 이 단계로 바꿔 잇는다.
+        # 조회 범위만 이은 컴포넌트 클래스가 진입에서 닿는 멤버 파일까지(⑳b — 측정 #36 걷기: 변환은 컴포넌트의 부모 파일에 있었다). 비교 범위는 안 넓힌다.
         if any(m.sources for m in merges):
-            steps, at = self._column_rename(snap, files)
+            extra = [p for cid in linked_ids for p in self._member_files(cid) if p in snap]
+            steps, at = self._column_rename(snap, list(dict.fromkeys([*files, *extra])))
             if steps:
                 merges = [m.model_copy(update={"rename": steps, "rename_at": at}) if m.sources else m for m in merges]
         # 코드가 읽는 필드(R3-5z ⑧) — 이름이 범위 파일에 리터럴로 든 것(`r["f"]`·`get("f")`·`df["f"]`). 속성 접근(`df.f`)은 못 본다.

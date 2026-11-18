@@ -2611,6 +2611,22 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
 - 테스트 먼저(RED → GREEN): temp 루트(자리·접두), 남은 기록 prune(지워진 worktree 폴더), `code graph`(진짜 경로 — 가짜 graphify로: 진행 줄의 자리와 TMPDIR, 끝나면 temp에 안 남음,
   출력 폴더에 worktrees 없음, 대상 레포 worktree 목록이 하나). 스윕 +5(1639). 기존 사례 하나(`code graph`의 레포 병렬 길)는 같은 돌연변이로 앵커만 다시 겨눴다.
 
+#### R3-5z ⑳b (11-18) ✅ — 이름 변환 조회 범위: 이은 컴포넌트 클래스마다 진입에서 닿는 멤버 파일을 더한다 (측정 #36 걷기 20b)
+
+- 측정 #36 걷기 20b: `<워커 케이스>` 3건에서 변환 사실이 0건이었다. ⑳은 이름 변환을 비교 범위 `files`에서만 찾았는데, 그 범위에는 이은 컴포넌트의 **클래스 파일**만 들고 그
+  클래스가 진입에서 닿는 부모 멤버 파일은 없다. 실제 변환(`<x>.columns = [F(v) …]`)은 그 컴포넌트의 부모 클래스 파일에 있었다(⑳ 문단의 "이은 컴포넌트"는 클래스 파일뿐이었다).
+- 어댑터(`filter_lines`): 이은 컴포넌트 클래스를 모아 두고, 병합 키를 입력 필드로 만든 병합식이 있을 때 이름 변환 조회에만 `files` + 그 클래스마다 `_member_files`(클래스 파일과
+  `reachable_members`로 닿는 부모 멤버 파일, 클래스마다 한 번)를 넘긴다. 비교식·병합식·키 자리·코드가 읽는 필드의 범위(`files`)와 `FilterScan.files`는 그대로다.
+- 실제 소비자 확인: `output/`의 측정판 사본(⑳ 모양)에서 정규화를 등록된 컴포넌트 `NormComp(Normalizer)`로 옮겼다 — `SourceMerger._run`이
+  `self.components.get("normalizer").apply(…)`, `NormComp.apply`가 부모의 `self._normalize`를 부르고, 변환(`to_snake`)은 부모 파일 `common/normalize.py`에 있다.
+  - 이 단계 전 코드의 멈춤: `입력이 다 정상 — SourceMerger (단일값이 든 비교식 batch/components.py:L11)` — 병합 키 사실이 없다(입력 행에 snake 이름이 없어 못 이었다).
+  - 이 단계 뒤: `… · 병합 키 wg ← 입력 필드 ws_code(common/merge.py:L14): feed:events:L1 4행 전부 '' — 입력 필드 wsCode가 to_snake(common/normalize.py:L7) 뒤 ws_code (…)`.
+    키 행은 전부 같고 멈춤 줄과 다음 홉 줄만 바뀌었다. ⑳ 사본(부모 상속 모양)의 멈춤도 전과 같다.
+  - 관찰(고치지 않음): 진입 메서드(`apply`)를 컴포넌트가 아니라 부모가 가지면, 다른 클래스의 `.apply(…)` 호출이 이름으로 그 메서드에 후보 엣지를 걸어 `reachable_members`가 그것을
+    진입으로 안 보고 부모 파일이 범위에 안 든다. `reachable_members`를 바꾸면 `code.resources`와 다른 걷기가 바뀌므로 이번 범위가 아니다.
+- 테스트 먼저(RED → GREEN): 변환이 부모 파일에만 있는 이은 컴포넌트 — 변환 사실이 붙고 `files`는 그대로, 부모 파일의 비교식은 안 센다. 병합 키 자리가 없으면 변환을 안 싣는다.
+  스윕 +3(1642). `code graph` 재생성은 필요 없다(질의 때 스냅샷을 본다).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

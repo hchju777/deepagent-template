@@ -1942,6 +1942,44 @@ async def test_filter_lines의_병합식에는_범위의_컬럼_이름_변환_�
     assert [(m.rename, m.rename_at) for m in tidy.merges] == [([], "")]                     # strip이 든 변환은 안 쓴다
 
 
+async def test_filter_lines의_이름_변환은_이은_컴포넌트_클래스가_진입에서_닿는_부모_멤버_파일에서도_찾고_비교_범위는_안_넓힌다(clock):
+    """R3-5z ⑳b(측정 #36 걷기 20b): 실제 변환(`<x>.columns = [F(v) …]`)은 이은 컴포넌트의 **부모** 클래스 파일에 있었다 — 비교 범위(`files`)에는 컴포넌트의
+    클래스 파일만 들어 변환 사실이 0건이었다. 이름 변환 조회에만 이은 컴포넌트 클래스마다 진입에서 닿는 멤버 파일을 더한다. 비교 범위는 그대로다."""
+    from src.domain.envelope import ProbeResult
+    from src.infrastructure.deployed_code import DeployedCode
+    from src.knowledge import index as ix
+    from src.knowledge.schema import Deployment, Service, Topology
+
+    files = {"wk/__init__.py": "", "common/__init__.py": "", "common/text.py": SNAKE,
+             "wk/norm_base.py": ('import pandas as pd\nfrom common.text import to_snake\n\n\nclass NormBase:\n    def _normalize(self, df):\n'
+                                 '        df.columns = [to_snake(c) for c in df.columns]\n        return df\n'),
+             "wk/norm.py": ('from wk.norm_base import NormBase\n\n\nclass NormComp(NormBase):\n    def apply(self, df):\n'
+                            '        return self._normalize(df)\n'),
+             "wk/registry.py": 'from wk.norm import NormComp\n\nregister(component="normalizer")(NormComp)\n',
+             "wk/proc.py": ('import pandas as pd\n\n\nclass Proc:\n    def _run(self, rows, ref):\n'
+                            '        events = self.components.get("normalizer").apply(pd.DataFrame(rows))\n'
+                            '        left = pd.DataFrame([{"ws": r.get("ws_code"), "n": r["n"]} for r in events.to_dict("records")])\n'
+                            '        return left.merge(pd.DataFrame(ref), left_on="ws", right_on="code", how="outer").fillna("-")\n'),
+             "wk/plain.py": ('import pandas as pd\n\n\nclass Plain:\n    def _run(self, rows, ref):\n'
+                             '        events = self.components.get("normalizer").apply(pd.DataFrame(rows))\n'
+                             '        return events.merge(pd.DataFrame(ref), left_on="ws", right_on="code", how="outer").fillna("-")\n')}
+
+    class Reader:
+        async def snapshot(self, repo, commit):
+            return ProbeResult.succeeded(dict(files), source="s", clock=clock)
+
+    code = DeployedCode(Reader(), Topology(services={"processor": Service(repo="dt-proc", role="가공한다")}), Deployment(), gbm="mx", fct="gumi", clock=clock)
+    code.attach_index(await ix.build_index({"dt-proc": _repo_src(files)}, commits={"dt-proc": "c2"}))
+    scan = await code.filter_lines("Proc", fields={"ws": "-"})
+    assert scan.files == ["wk/proc.py", "wk/norm.py"] and scan.linked == ["normalizer"]                   # 비교 범위는 그대로
+    assert [(m.sources, m.rename, m.rename_at) for m in scan.merges] == [
+        ([("ws", "ws_code", "wk/proc.py", 7)], [("sub", "(.)([A-Z][a-z]+)", "\\1_\\2"), ("sub", "([a-z0-9])([A-Z])", "\\1_\\2"), ("lower",)],
+         "to_snake(wk/norm_base.py:L7)")]
+    assert scan.hits == []                                                                                   # 부모 파일의 비교식은 안 센다
+    # 병합 키를 입력 필드로 만든 자리가 없으면 이름 변환은 안 싣는다(전과 같다)
+    assert [(m.sources, m.rename, m.rename_at) for m in (await code.filter_lines("Plain")).merges] == [([], [], "")]
+
+
 # ── R3-5z ㉑ — 그 키를 싣는 명령의 토픽 줄·받는 쪽 폴백(측정 #35 후속 2) ──
 
 CLEANUP = ('class Cleanup:\n'
