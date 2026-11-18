@@ -4247,7 +4247,13 @@ CASES += [
  ('이은 컴포넌트 클래스를 안 모은다', D, '                if csym.id not in linked_ids:\n                    linked_ids.append(csym.id)\n', '', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_이름_변환은_이은_컴포넌트_클래스가_진입에서_닿는_부모_멤버_파일에서도_찾고_비교_범위는_안_넓힌다']),
  ('이름 변환 조회 범위로 비교 범위를 넓힌다', D, '            steps, at = self._column_rename(snap, list(dict.fromkeys([*files, *extra])))\n', '            files += [p for p in extra if p not in files]\n            steps, at = self._column_rename(snap, files)\n', ['tests/infrastructure/test_deployed_code.py::test_filter_lines의_이름_변환은_이은_컴포넌트_클래스가_진입에서_닿는_부모_멤버_파일에서도_찾고_비교_범위는_안_넓힌다']),
 ]
-assert len(CASES) >= 1642, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉑b — 키 자리: 쓰기 구간에 그 키가 없으면 code.resources 글 전체(읽기 구간 포함)에서 같은 키 이름의 자리로 토픽 줄을 묻는다 ──
+CASES += [
+ ('쓰기 구간에 키가 없으면 키 자리를 안 채운다', WK, '            at_key = [at for name, _, at in _OUTPUT.findall(rtext or "") if name == template]\n', '            pass\n', ['tests/application/test_walk.py::test_쓰기_구간에_그_키가_없으면_쓰기_경로는_읽기_구간의_같은_키_자리로_그_키를_싣는_명령의_토픽_줄을_묻는다']),
+ ('쓰기 구간에 키가 있어도 글 전체의 자리를 쓴다', WK, '        if not at_key:\n            # 인덱스가 그 키를 읽기로만', '        if True:\n            # 인덱스가 그 키를 읽기로만', ['tests/application/test_walk.py::test_쓰기_구간에_그_키가_없으면_쓰기_경로는_읽기_구간의_같은_키_자리로_그_키를_싣는_명령의_토픽_줄을_묻는다']),
+ ('읽기 구간의 다른 키 자리도 쓴다', WK, '            at_key = [at for name, _, at in _OUTPUT.findall(rtext or "") if name == template]\n', '            at_key = [at for name, kind, at in _OUTPUT.findall(rtext or "") if kind == "rediskey"]\n', ['tests/application/test_walk.py::test_쓰기_구간에_그_키가_없으면_쓰기_경로는_읽기_구간의_같은_키_자리로_그_키를_싣는_명령의_토픽_줄을_묻는다']),
+]
+assert len(CASES) >= 1645, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

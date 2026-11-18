@@ -829,7 +829,7 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | R3-5z ㉑ ✅ | 키를 싣는 명령의 토픽 줄 | (측정 #35 후속 2) 쓴 쪽 파일에서 키 줄부터 for·컴프리헨션 대상과 대입으로 오염을 고정점까지; `topic=` 인자를 가진 생성자 호출이 그 키를 실으면 그 호출 앞 같은 문장 목록(바깥 목록으로 올라가며)에서 그 이름에 마지막으로 대입한 줄이 그 키의 토픽 줄 — 갈래 안 대입·매개변수 등 판단 못 하면 None(전처럼); 쓰기 경로는 받는 쪽이 키를 선언 안 할 때 그 줄에 없는 토픽 출력을 건너뛴다(같은 `keys_of` 결과); 받는 쪽 폴백은 받는 클래스를 모를 때만 | `deployed_code`, `case`, `walk` |
 | R3-5z ㉒ ✅ | graphify worktree 자리 | (측정 #35 후속 3) worktree 루트를 `tempfile.mkdtemp(prefix="dt-graphify-<gbm>-")`로 OS temp에, 끝나면(실패해도) 지운다; worktree add 전에 그 레포 `git worktree prune`; 빌드 출력에 temp 자리와 `TMPDIR`로 바꿀 수 있다는 한 줄 | `graph_build`, `__main__` |
 | R3-5z ⑳b ✅ | 이름 변환 조회 범위 | (측정 #36 걷기 20b) 이름 변환 조회에만 이은 컴포넌트 클래스마다 진입에서 닿는 멤버 파일(`reachable_members`)을 더한다 — 비교 범위(`files`)는 그대로 | `deployed_code` |
-| R3-5z ㉑b | 키 자리를 읽기 구간까지 | (측정 #36 걷기 21b) `write_path`의 키 자리(`at_key`)가 쓰기 구간에서 비면 `code.resources` 글 전체(읽기 구간 포함)에서 같은 키 이름의 자리로 채운다 | `walk` |
+| R3-5z ㉑b ✅ | 키 자리를 읽기 구간까지 | (측정 #36 걷기 21b) `write_path`의 키 자리(`at_key`)가 쓰기 구간에서 비면 `code.resources` 글 전체(읽기 구간 포함)에서 같은 키 이름의 자리로 채운다 | `walk` |
 
 
 

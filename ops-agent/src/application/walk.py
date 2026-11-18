@@ -525,6 +525,9 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         문장은 구독 서비스 이름을 적는다 — 이름이 없으면 "받는 쪽 없음"처럼 읽혔다."""
         declared = set(owners.get(template, ()))
         at_key = [at for name, _, at in outputs_in(rtext) if name == template]
+        if not at_key:
+            # 인덱스가 그 키를 읽기로만 적으면(㉑b — 측정 #36 걷기: 루프 리터럴 config 키) 쓰기 구간이 비어 토픽 줄을 못 물었다 — 글 전체에서 같은 이름의 자리로.
+            at_key = [at for name, _, at in _OUTPUT.findall(rtext or "") if name == template]
         joined, cut = [], []
         for topic, _, at in (o for o in outputs_in(rtext) if o[1] == "topic"):
             if ".topic." in topic:

@@ -1898,3 +1898,39 @@ async def test_받는_쪽이_키를_선언하지_않으면_쓰기_경로는_그_
     walk = (await run_walk(_state(), runner=_Reads(table), message_keys=keys(None), **kw))["walk"]
     assert walk.hops[1].write_path == f"→ t.alarm(코드의 쓰기 줄 x.py:L3) → {tail} / → t.cmd(코드의 쓰기 줄 x.py:L6) → {tail}"  # 모르면 전처럼
     assert asked == ["t.alarm", "t.cmd"]
+
+
+async def test_쓰기_구간에_그_키가_없으면_쓰기_경로는_읽기_구간의_같은_키_자리로_그_키를_싣는_명령의_토픽_줄을_묻는다():
+    """측정 #36 걷기 21b: `<알람 정리 파이프라인>`의 키는 인덱스에 읽기로만 적혀(루프 리터럴 config 키) 쓰기 구간의 키 자리가 비었다 — 조회가 키 줄 없이 불려 토픽 줄이
+    None이었고 알람 토픽 꼬리가 남았다. 쓰기 구간에 그 키가 없으면 `code.resources` 글 전체(읽기 구간 포함)에서 같은 키 이름의 자리로 채운다. 쓰기 구간에 있으면 그것만."""
+    from src.domain.case import MessageKeyHit, MessageKeys
+
+    def resources(lines):
+        return "W1 (x.py:L1) [dt-core · batch]\n" + lines
+
+    reads_only = resources("  읽기 3:\n    t.raw [topic] — W1._run (x.py:L9)\n    cfg:{line} [rediskey] — W1._run (x.py:L5)\n"
+                           "    in:{line} [rediskey] — W1._run (x.py:L8)\n"
+                           "  쓰기 2:\n    t.alarm [topic] — W1._run (x.py:L3)\n    t.cmd [topic] — W1._run (x.py:L6)")
+    both = resources("  읽기 2:\n    t.raw [topic] — W1._run (x.py:L9)\n    in:{line} [rediskey] — W1._run (x.py:L8)\n"
+                     "  쓰기 3:\n    t.alarm [topic] — W1._run (x.py:L3)\n    t.cmd [topic] — W1._run (x.py:L6)\n    in:{line} [rediskey] — W1._run (x.py:L7)")
+    kw = dict(classes=frozenset({"W0", "W1"}), class_services={"W0": ("a",), "W1": ("a",)}, declared_by={"in:{line}": ("a",)},
+              subscriptions={"a": ("t.raw",), "b": ("t.alarm", "t.cmd")}, clock=lambda: T0)
+    hit = MessageKeyHit(service="b", field="target", path="load/l.py", line=9, filled_path="x.py", filled_line=8, carries=True)
+    asked = []
+
+    async def message_keys(topic, services, writer, *, at=(), service="", repo=""):
+        asked.append((topic, at))
+        return MessageKeys(hits=[hit], topic_lines=["x.py:L6"] if at else None)                    # 키 줄을 주면 그 키의 토픽 줄을 안다
+
+    def table(w1):
+        return {("code.resources", "W0"): _res("W0", [("in:{line}", "rediskey")]), ("code.resources", "W1"): w1,
+                ("redis.get", "in:L1"): None, ("code.uses", "in:{line}"): USES_W1, ("kafka.offsets", "t.raw"): _offsets(40, 100)}
+
+    tail = "b(config 구독 선언 · 메시지 필드 target에서 키 이름을 받아 쓴다 load/l.py:L9 · 쓴 쪽 명령의 target= 인자에 이 키 x.py:L8) → in:L1"
+    walk = (await run_walk(_state(), runner=_Reads(table(reads_only)), message_keys=message_keys, **kw))["walk"]
+    assert walk.hops[1].write_path == f"→ t.cmd(코드의 쓰기 줄 x.py:L6) → {tail}"                       # 알람 토픽 꼬리가 없다
+    assert asked == [("t.alarm", ("x.py:L8",)), ("t.cmd", ("x.py:L8",))]                                  # 읽기 구간의 그 키 자리만 — 조회 수는 그대로
+    asked.clear()
+    walk = (await run_walk(_state(), runner=_Reads(table(both)), message_keys=message_keys, **kw))["walk"]
+    assert walk.hops[1].write_path == f"→ t.cmd(코드의 쓰기 줄 x.py:L6) → {tail}"
+    assert asked == [("t.alarm", ("x.py:L7",)), ("t.cmd", ("x.py:L7",))]                                  # 쓰기 구간에 있으면 그 자리만
