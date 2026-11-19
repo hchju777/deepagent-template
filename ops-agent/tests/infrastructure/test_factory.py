@@ -128,3 +128,13 @@ def test_실구현에는_사이트와_프록시_예비_접속_스위치가_넘�
     assert not off.redis._route.armed and not off.mongo._route.armed
     assert build_adapters(proxied, clock=clock, fallback=True).mongo._route.armed                       # 인자가 env보다 앞선다
     assert not build_adapters(SITE, clock=clock, fallback=True).redis._route.armed                      # 예비 주소가 없으면
+
+
+def test_REST_실구현에도_사이트와_스위치가_넘어간다(clock, monkeypatch):
+    proxied = SiteConfig.model_validate({"site": {"gbm": "mx", "fct": "gumi"},
+                                         "infra": {"rest": {"base_url": "http://h:8080", "proxy_base_url": "http://p:8080/gumi/rest/h/"}}})
+    monkeypatch.delenv("AGENT_PROXY_FALLBACK", raising=False)
+    route = build_adapters(proxied, clock=clock).rest._route
+    assert (route.site, route.resource, route.armed) == ("mx/gumi", "rest", True)
+    monkeypatch.setenv("AGENT_PROXY_FALLBACK", "0")
+    assert not build_adapters(proxied, clock=clock).rest._route.armed

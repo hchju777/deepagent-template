@@ -17,6 +17,11 @@ POST가 필요한 API가 있다(조회 조건이 복잡하면 body로 받는다)
 
 대상의 OpenAPI를 읽어 호출 가능 목록을 자동으로 늘리는 코드는 만들지 않는다.
 대상이 새 POST를 배포하면 우리 허용 범위가 자동으로 넓어지는 fail-open이 된다.
+
+## 프록시 예비 주소(R3-5z ㉖)
+
+`proxy_base_url`이 있고 스위치가 켜졌으면 원 주소가 접속 단계에서 실패할 때(`ConnectError`·`ConnectTimeout`) `proxy_base_url + spec.path`로 다시 부른다
+(`infrastructure/fallback.py`). 4xx·5xx는 대상이 답한 것이라 대체하지 않는다. 원 주소는 그때만 접속 3초 — 읽기 타임아웃은 그대로다.
 """
 import os
 from typing import Any, Mapping
@@ -27,6 +32,7 @@ from src.config.schema_site import RestConfig, RestEntry
 from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
 from src.domain.ports import RestProberPort
+from src.infrastructure.fallback import ORIGIN_CONNECT_S, ProxyAlsoFailed, Route
 
 _PY_TYPES = {"str": str, "int": int, "float": (int, float), "bool": bool, "list": list}
 _SCALARS = (str, int, float)
@@ -95,10 +101,18 @@ def prepare_params(entry: RestEntry, params: dict) -> tuple[dict, list[str], lis
     return normalized, param_problems(entry, normalized), wrapped
 
 
+def connect_failure(exc: BaseException) -> bool:
+    """httpx의 접속 단계 오류 — 연결 거부·이름 해석 실패(`ConnectError`), 접속 타임아웃(`ConnectTimeout`). 응답(4xx·5xx)과 읽기 타임아웃은 붙은 뒤의 일이다."""
+    import httpx
+
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+
+
 class RealRestProber(RestProberPort):
-    def __init__(self, cfg: RestConfig, *, clock: Clock):
+    def __init__(self, cfg: RestConfig, *, clock: Clock, site: str = "", fallback: bool = True, pinned: set | None = None):
         self._cfg = cfg
         self._clock = clock
+        self._route = Route(site, "rest", cfg.proxy_base_url, enabled=fallback, pinned=pinned)
 
     async def query(self, entry: str, params: dict) -> ProbeResult:
         spec = self._cfg.entries.get(entry)
@@ -119,16 +133,22 @@ class RealRestProber(RestProberPort):
         source = f"rest:{entry} {spec.method} {spec.path} {params}"
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=self._cfg.timeout_s,
-                                         headers=self._cfg.headers) as client:
-                if spec.method == "GET":
-                    response = await client.get(url, params=params)
-                else:
-                    response = await client.post(url, json=params)
+
+            async def call(proxy: bool):
+                base = self._cfg.proxy_base_url if proxy else self._cfg.base_url
+                timeout = (httpx.Timeout(self._cfg.timeout_s, connect=min(ORIGIN_CONNECT_S, self._cfg.timeout_s))
+                           if self._route.armed and not proxy else self._cfg.timeout_s)
+                async with httpx.AsyncClient(timeout=timeout,
+                                             headers=self._cfg.headers) as client:
+                    if spec.method == "GET":
+                        return await client.get(f"{base}{spec.path}", params=params)
+                    return await client.post(f"{base}{spec.path}", json=params)
+            response, proxy = await self._route.attempt(call, connect_failure=connect_failure)
+            marked = source + self._route.mark(proxy)
             if response.status_code >= 400:
                 return ProbeResult.failed(
                     f"HTTP {response.status_code} — {response.text[:300]}",
-                    source=source, clock=self._clock)
+                    source=marked, clock=self._clock)
             request = {"method": spec.method, "path": spec.path, "params": params}
             if wrapped:
                 # 감싼 사실을 남긴다 — 사람이 준 것과 나간 것이 다르면 말해야 한다.
@@ -136,13 +156,15 @@ class RealRestProber(RestProberPort):
             return ProbeResult.succeeded(
                 {"request": request, "status": response.status_code,
                  "response": _decode(response)},
-                source=source, clock=self._clock)
+                source=marked, clock=self._clock)
         except Exception as exc:                                   # noqa: BLE001
             # 전송 계층 오류면 프록시 의심을 덧붙인다 — 사내에서 대상 호스트가 NO_PROXY에 없어 전사 프록시로 나갔고
-            # `RemoteProtocolError` 한 줄만 남아 원인을 찾는 데 시간이 들었다.
-            hint = proxy_suspicion(url) if isinstance(exc, httpx.TransportError) else ""
+            # `RemoteProtocolError` 한 줄만 남아 원인을 찾는 데 시간이 들었다. 예비 주소까지 실패했으면 마지막에 부른 주소로.
+            last = exc.proxy if isinstance(exc, ProxyAlsoFailed) else exc
+            at = f"{self._cfg.proxy_base_url}{spec.path}" if self._route.on_proxy else url
+            hint = proxy_suspicion(at) if isinstance(last, httpx.TransportError) else ""
             return ProbeResult.failed(f"{type(exc).__name__}: {exc}{hint}",
-                                      source=source, clock=self._clock)
+                                      source=source + self._route.mark(self._route.on_proxy), clock=self._clock)
 
 
 _PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")

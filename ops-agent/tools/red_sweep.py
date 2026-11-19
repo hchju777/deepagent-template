@@ -1628,7 +1628,7 @@ CASES += [
   '    if state.verdict is not None and state.verdict.verdict_type == "degraded":', '    if False:',
   ["tests/application/test_verdict.py::test_degraded_판정에는_검증_해당_없음이_붙는다"]),
  ("프록시 의심을 말하지 않는다", RPB,
-  '            hint = proxy_suspicion(url) if isinstance(exc, httpx.TransportError) else ""', '            hint = ""',
+  '            hint = proxy_suspicion(at) if isinstance(last, httpx.TransportError) else ""', '            hint = ""',
   ["tests/infrastructure/test_rest_prober.py::test_프록시_env가_있고_호스트가_NO_PROXY에_없으면_의심을_말한다"]),
  ("NO_PROXY를 안 본다", RPB,
   '    if proxy_bypass_environment(host, {"no": no_proxy}):\n        return ""', '    if False:\n        return ""',
@@ -4304,7 +4304,21 @@ CASES += [
  ('factory가 env 스위치를 안 읽는다', FCT, '    where, on = str(site.site), (fallback_on() if fallback is None else fallback)\n', '    where, on = str(site.site), (True if fallback is None else fallback)\n', ['tests/infrastructure/test_factory.py::test_실구현에는_사이트와_프록시_예비_접속_스위치가_넘어가고_스위치는_인자가_없으면_env에서_읽는다']),
  ('factory가 mongo에 스위치를 안 넘긴다', FCT, 'mongo=RealMongoReader(infra.mongodb, clock=clock, site=where, fallback=on)', 'mongo=RealMongoReader(infra.mongodb, clock=clock, site=where, fallback=True)', ['tests/infrastructure/test_factory.py::test_실구현에는_사이트와_프록시_예비_접속_스위치가_넘어가고_스위치는_인자가_없으면_env에서_읽는다']),
 ]
-assert len(CASES) >= 1684, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉖ — 프록시 예비 접속 3: REST의 proxy_base_url(경로 접두어, 끝 / 뗌), 원 접속 3초(읽기는 그대로), ConnectError·ConnectTimeout만 대체, 4xx·5xx는 그대로 ──
+CASES += [
+ ('rest 원 접속을 짧게 안 한다', RPB, 'if self._route.armed and not proxy else self._cfg.timeout_s)', 'if False else self._cfg.timeout_s)', ['tests/infrastructure/test_rest_prober.py::test_rest_원이_되면_원으로_부르고_원_접속은_짧은_타임아웃이고_source에_경로가_남는다']),
+ ('rest 프록시에도 짧은 접속을 쓴다', RPB, 'if self._route.armed and not proxy else self._cfg.timeout_s)', 'if self._route.armed else self._cfg.timeout_s)', ['tests/infrastructure/test_rest_prober.py::test_rest_원이_접속_단계에서_실패하면_프록시_접두어로_부르고_고정해_다음엔_원을_다시_안_친다']),
+ ('rest 원의 읽기 타임아웃도 짧게 한다', RPB, 'httpx.Timeout(self._cfg.timeout_s, connect=min(ORIGIN_CONNECT_S, self._cfg.timeout_s))', 'httpx.Timeout(ORIGIN_CONNECT_S)', ['tests/infrastructure/test_rest_prober.py::test_rest_원이_되면_원으로_부르고_원_접속은_짧은_타임아웃이고_source에_경로가_남는다']),
+ ('rest 프록시 접두어 대신 원 주소로 다시 부른다', RPB, '                base = self._cfg.proxy_base_url if proxy else self._cfg.base_url\n', '                base = self._cfg.base_url\n', ['tests/infrastructure/test_rest_prober.py::test_rest_원이_접속_단계에서_실패하면_프록시_접두어로_부르고_고정해_다음엔_원을_다시_안_친다']),
+ ('rest 읽기 타임아웃도 프록시로 대체한다', RPB, '    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))\n', '    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout))\n', ['tests/infrastructure/test_rest_prober.py::test_rest_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다']),
+ ('rest 접속 타임아웃은 프록시로 대체 안 한다', RPB, '    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))\n', '    return isinstance(exc, httpx.ConnectError)\n', ['tests/infrastructure/test_rest_prober.py::test_rest_원이_접속_단계에서_실패하면_프록시_접두어로_부르고_고정해_다음엔_원을_다시_안_친다']),
+ ('rest 읽은 경로를 source에 안 남긴다', RPB, '            marked = source + self._route.mark(proxy)\n', '            marked = source\n', ['tests/infrastructure/test_rest_prober.py::test_rest_원이_되면_원으로_부르고_원_접속은_짧은_타임아웃이고_source에_경로가_남는다', 'tests/infrastructure/test_rest_prober.py::test_rest_원이_접속_단계에서_실패하면_프록시_접두어로_부르고_고정해_다음엔_원을_다시_안_친다']),
+ ('rest 실패한 경로를 source에 안 남긴다', RPB, 'source=source + self._route.mark(self._route.on_proxy), clock=self._clock)', 'source=source, clock=self._clock)', ['tests/infrastructure/test_rest_prober.py::test_rest_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다']),
+ ('rest 예비 주소의 형식을 안 본다', SS, '    @field_validator("base_url", "proxy_base_url")\n', '    @field_validator("base_url")\n', ['tests/config/test_schema_site.py::test_rest의_proxy_base_url은_선택이고_빈_값은_프록시_없음이며_경로_접두어를_품고_끝_슬래시를_뗀다']),
+ ('rest 주소 형식 오류에 어느 칸인지 안 적는다', SS, 'raise ValueError(f"{info.field_name}은 http:// 또는 https://로 시작해야 한다 — {v}")', 'raise ValueError(f"주소는 http:// 또는 https://로 시작해야 한다 — {v}")', ['tests/config/test_schema_site.py::test_rest의_proxy_base_url은_선택이고_빈_값은_프록시_없음이며_경로_접두어를_품고_끝_슬래시를_뗀다']),
+ ('factory가 rest에 사이트·스위치를 안 넘긴다', FCT, 'rest=RealRestProber(infra.rest, clock=clock, site=where, fallback=on)', 'rest=RealRestProber(infra.rest, clock=clock)', ['tests/infrastructure/test_factory.py::test_REST_실구현에도_사이트와_스위치가_넘어간다']),
+]
+assert len(CASES) >= 1695, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

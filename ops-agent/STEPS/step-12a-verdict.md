@@ -2693,6 +2693,19 @@ inconclusive(low): 입구 노드가 후보 29개 읽기를 전부 증거로 실�
   `OperationFailure`)는 대체 안 함 / 예비 없음·빈 값·스위치 끔은 지금과 같음(고정돼 있어도); 스키마; factory 배선. 스윕 +18(1684) — 운영 주소(`_url`) 사례 넷의
   앵커를 새 줄로 옮겼다(같은 변이).
 
+#### R3-5z ㉖ (11-19) ✅ — 프록시 예비 접속 3: REST (사람 요청 11-18)
+
+- 스키마: `infra.rest.proxy_base_url` — 선택, 빈 값은 프록시 없음, 값이 있으면 `http(s)://`에 경로 접두어까지(`http://<프록시>:<포트>/<fct>/rest/<서비스>/`), 끝 `/`를 뗀다
+  (지금처럼 `+ spec.path`로 잇는다). 형식 오류 글에 어느 칸인지(`base_url`·`proxy_base_url`)를 적는다.
+- `rest_prober`: 원 → (접속 단계 실패면) `proxy_base_url + spec.path`. 접속 단계 판정은 `httpx.ConnectError`(연결 거부·이름 해석)·`ConnectTimeout`만 — 4xx·5xx는 응답이라
+  대체할 일이 없고, 읽기 타임아웃도 아니다. 대체가 걸렸을 때만 원의 접속 타임아웃 3초(`httpx.Timeout(timeout_s, connect=3)` — 읽기는 그대로), 프록시는 지금 `timeout_s`.
+  `source` 끝 경로 표시, 둘 다 실패면 두 오류. 프록시 경유 의심 꼬리(`HTTPS_PROXY`·`NO_PROXY`)는 마지막에 부른 주소로 본다.
+- factory가 사이트·스위치를 넘긴다.
+- 실제 소비자 확인(실제 httpx, 로컬 http 서버를 프록시 접두어 자리로): 원 거부 → 프록시 접두어로 200, `경로=프록시`, 두 번째도 프록시; 원 404 → 그대로 실패·`경로=원`·고정 없음;
+  둘 다 거부 → `ProxyAlsoFailed: 원 ConnectError: … → 프록시 ConnectError: …`.
+- 테스트 먼저(RED → GREEN): 원 성공(접속 3초·읽기 그대로) / 원 `ConnectError`·`ConnectTimeout` → 프록시 접두어·고정 / 둘 다 실패 / 404·401·403·읽기 타임아웃은 대체 안 함 /
+  예비 없음·빈 값·스위치 끔은 지금과 같음; 스키마; factory 배선. 스윕 +11(1695).
+
 ## 범위 밖 — 12b·13으로
 
 - 판정이 사람에게 닿는 경로(보고서·이벤트·메일)는 12b. 지금은 CLI 출력과 `--trace`의 `summary.md`뿐이다.

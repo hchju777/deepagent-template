@@ -19,7 +19,7 @@
 """
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 
 from src.config.schema_patrol import PatrolConfig
 from src.domain.base import StrictModel
@@ -185,15 +185,24 @@ class RestConfig(StrictModel):
     통과시키려고 전부 true로 적는다. 아무도 생각하지 않는 체크박스의 안전 가치는 0이다.
     """
     base_url: str
+    # 예비 주소(R3-5z ㉖) — 경로 접두어까지(`http://<프록시>:<포트>/<fct>/rest/<서비스>/`), 지금처럼 `+ spec.path`로 잇는다. 빈 값은 프록시 없음.
+    proxy_base_url: str | None = None
     timeout_s: float = 10.0
     headers: dict[str, str] = {}          # ${...}로 API 키를 참조할 수 있다
     entries: dict[str, RestEntry] = {}
 
-    @field_validator("base_url")
+    @field_validator("proxy_base_url", mode="before")
     @classmethod
-    def _scheme(cls, v: str) -> str:
+    def _blank_proxy(cls, v):
+        return _blank_to_none(v)
+
+    @field_validator("base_url", "proxy_base_url")
+    @classmethod
+    def _scheme(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if v is None:
+            return v
         if not v.startswith(("http://", "https://")):
-            raise ValueError(f"base_url은 http:// 또는 https://로 시작해야 한다 — {v}")
+            raise ValueError(f"{info.field_name}은 http:// 또는 https://로 시작해야 한다 — {v}")
         return v.rstrip("/")
 
     @field_validator("timeout_s")

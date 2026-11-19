@@ -215,3 +215,16 @@ def test_redis와_mongodb의_proxy_url은_선택이고_빈_값은_프록시_없�
     for wrong in ("proxy", "proxyurl", "proxy_uri"):
         with pytest.raises(ValidationError, match=wrong):
             RedisConfig.model_validate({"url": "redis://h:6379", wrong: "redis://p:16379"})
+
+
+def test_rest의_proxy_base_url은_선택이고_빈_값은_프록시_없음이며_경로_접두어를_품고_끝_슬래시를_뗀다():
+    """REST 예비 주소는 경로 접두어까지(`http://<프록시>:<포트>/<fct>/rest/<서비스>/`) — 지금처럼 `base_url + spec.path`로 잇으므로 끝 `/`를 뗀다(R3-5z ㉖)."""
+    from src.config.schema_site import RestConfig
+
+    rest = {"base_url": "http://api:8080"}
+    assert RestConfig(**rest).proxy_base_url is None and RestConfig(**rest, proxy_base_url="").proxy_base_url is None
+    assert RestConfig(**rest, proxy_base_url="http://p:8080/gumi/rest/api/").proxy_base_url == "http://p:8080/gumi/rest/api"
+    with pytest.raises(ValidationError, match="proxy_base_url은 http://"):
+        RestConfig(**rest, proxy_base_url="p:8080/gumi/rest/api/")
+    with pytest.raises(ValidationError, match="base_url은 http://"):
+        RestConfig(base_url="api:8080")

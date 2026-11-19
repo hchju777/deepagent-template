@@ -183,3 +183,94 @@ async def test_NO_PROXY에_있거나_프록시_env가_없으면_의심을_안_�
         monkeypatch.delenv(name, raising=False)
     plain = await RealRestProber(CFG, clock=clock).query("lines", {})
     assert plain.status == "error" and "프록시 경유 의심" not in plain.error
+
+
+# ── 프록시 예비 주소(R3-5z ㉖) — `httpx.AsyncClient` 자리에 주소마다 응답·예외 ──
+
+class _ByBase:
+    """요청 url이 어느 앞머리로 시작하느냐로 응답이나 예외. 만든 인자와 부른 url을 남긴다."""
+    plan: dict = {}
+    made: list = []
+    called: list = []
+
+    def __init__(self, **kwargs):
+        _ByBase.made.append(kwargs)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, **kwargs):
+        return self._answer(url)
+
+    async def post(self, url, **kwargs):
+        return self._answer(url)
+
+    def _answer(self, url):
+        _ByBase.called.append(url)
+        out = next(v for k, v in _ByBase.plan.items() if url.startswith(k))
+        if isinstance(out, BaseException):
+            raise out
+        return out
+
+
+ORIGIN, PROXY = "http://twin.example.net:8080", "http://p:8080/gumi/rest/twin"
+
+
+def _proxied(monkeypatch, clock, plan, *, proxy_base_url=PROXY + "/", fallback=True, pins=None):
+    import httpx
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)                                         # 프록시 의심 꼬리는 다른 테스트가 본다
+    monkeypatch.setattr(httpx, "AsyncClient", _ByBase)
+    _ByBase.plan, _ByBase.made, _ByBase.called = plan, [], []
+    cfg = CFG.model_copy(update={"proxy_base_url": proxy_base_url.rstrip("/") if proxy_base_url else None})
+    return RealRestProber(cfg, clock=clock, site="mx/gumi", fallback=fallback, pinned=set() if pins is None else pins)
+
+
+async def test_rest_원이_되면_원으로_부르고_원_접속은_짧은_타임아웃이고_source에_경로가_남는다(clock, monkeypatch):
+    import httpx
+    prober = _proxied(monkeypatch, clock, {ORIGIN: httpx.Response(200, json=[{"line": "L1"}])})
+    got = await prober.query("lines", {})
+    assert got.status == "ok" and got.data["response"] == [{"line": "L1"}] and got.source == "rest:lines GET /api/v1/lines {} · 경로=원"
+    assert _ByBase.called == [ORIGIN + "/api/v1/lines"]
+    timeout = _ByBase.made[0]["timeout"]
+    assert timeout.connect == 3.0 and timeout.read == 10.0                                  # 읽기 타임아웃은 그대로
+
+
+async def test_rest_원이_접속_단계에서_실패하면_프록시_접두어로_부르고_고정해_다음엔_원을_다시_안_친다(clock, monkeypatch):
+    import httpx
+    for failure in (httpx.ConnectError("[Errno 111] Connection refused"), httpx.ConnectTimeout("timed out")):
+        pins = set()
+        prober = _proxied(monkeypatch, clock, {ORIGIN: failure, PROXY: httpx.Response(200, json={"ok": 1})}, pins=pins)
+        got = await prober.query("oee_summary", {"line": "L3"})
+        assert got.status == "ok" and got.source == "rest:oee_summary POST /api/v1/oee/summary {'line': 'L3'} · 경로=프록시", failure
+        assert _ByBase.called == [ORIGIN + "/api/v1/oee/summary", PROXY + "/api/v1/oee/summary"] and pins == {("mx/gumi", "rest")}
+        assert _ByBase.made[1]["timeout"] == 10.0                                         # 프록시는 지금 타임아웃
+        await prober.query("lines", {})
+        assert _ByBase.called[2:] == [PROXY + "/api/v1/lines"]                             # 고정 — 원을 다시 안 친다
+
+
+async def test_rest_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다(clock, monkeypatch):
+    import httpx
+    prober = _proxied(monkeypatch, clock, {ORIGIN: httpx.ConnectError("origin refused"), PROXY: httpx.ConnectError("proxy refused")})
+    got = await prober.query("lines", {})
+    assert got.status == "error" and got.error == "ProxyAlsoFailed: 원 ConnectError: origin refused → 프록시 ConnectError: proxy refused"
+    assert got.source == "rest:lines GET /api/v1/lines {} · 경로=프록시"
+    for answered in (httpx.Response(404, text="no route"), httpx.Response(401, text="unauthorized"), httpx.Response(403, text="forbidden"),
+                     httpx.ReadTimeout("read timed out")):
+        pins = set()
+        prober = _proxied(monkeypatch, clock, {ORIGIN: answered, PROXY: httpx.Response(200, json={})}, pins=pins)
+        got = await prober.query("lines", {})
+        assert got.status == "error" and got.source.endswith(" · 경로=원") and _ByBase.called == [ORIGIN + "/api/v1/lines"] and pins == set(), answered
+
+
+async def test_rest_예비_주소가_없거나_비었거나_스위치가_꺼지면_지금과_같다(clock, monkeypatch):
+    import httpx
+    for proxy_base_url, fallback in ((None, True), ("", True), (PROXY, False)):
+        prober = _proxied(monkeypatch, clock, {ORIGIN: httpx.ConnectError("refused"), PROXY: httpx.Response(200, json={})},
+                                        proxy_base_url=proxy_base_url, fallback=fallback, pins={("mx/gumi", "rest")})
+        got = await prober.query("lines", {})
+        assert got.status == "error" and got.error == "ConnectError: refused" and got.source == "rest:lines GET /api/v1/lines {}"
+        assert _ByBase.called == [ORIGIN + "/api/v1/lines"] and _ByBase.made[0]["timeout"] == 10.0
