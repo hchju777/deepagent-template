@@ -831,10 +831,10 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | R3-5z ⑳b ✅ | 이름 변환 조회 범위 | (측정 #36 걷기 20b) 이름 변환 조회에만 이은 컴포넌트 클래스마다 진입에서 닿는 멤버 파일(`reachable_members`)을 더한다 — 비교 범위(`files`)는 그대로 | `deployed_code` |
 | R3-5z ㉑b ✅ | 키 자리를 읽기 구간까지 | (측정 #36 걷기 21b) `write_path`의 키 자리(`at_key`)가 쓰기 구간에서 비면 `code.resources` 글 전체(읽기 구간 포함)에서 같은 키 이름의 자리로 채운다 | `walk` |
 | R3-5z ㉓ ✅ | 읽는 쪽 탓 다시 묻기 | (측정 #36 c-1 r1) 걷기가 우리 안 토픽 홉(발행 선언 있음)에서 `구독 토픽이 비었다`·`구독 토픽에 그 유형이 없다`로 멈췄는데 최상위 서비스가 그 발행 선언에 없으면 verify 문제 1개 — 다시 묻고 두 번째도 같으면 기존 강등. external·not_a_defect·inconclusive·degraded와 서비스 아닌 component는 안 건드린다 | `nodes` |
-| R3-5z ㉔ | 프록시 예비 접속 1 — 스키마·스위치·공용 경로 | (사람 요청 11-18) `proxy_url`(redis·mongodb)·`proxy_bootstrap_server`(kafka)·`proxy_base_url`(rest) — 빈 값은 프록시 없음; 스위치 `AGENT_PROXY_FALLBACK`(기본 켬, 기동 줄 하나); (사이트, 자원) 고정과 원 → 프록시 도우미; factory가 사이트·스위치를 넘긴다 | `schema_site`·`fallback`·`factory`·`__main__` |
-| R3-5z ㉕ | 프록시 예비 접속 2 — Redis·Mongo | 원 접속 3초(redis 재시도 0)·접속 단계 실패만 대체·고정·`source`의 경로 | `redis_reader`·`mongo_reader` |
-| R3-5z ㉖ | 프록시 예비 접속 3 — REST | `proxy_base_url + spec.path`, `ConnectError`·`ConnectTimeout`만 대체, 4xx·5xx는 그대로 | `rest_prober` |
-| R3-5z ㉗ | 프록시 예비 접속 4 — Kafka | 원 부트스트랩 TCP 시험 → 프록시; 프록시 경로 실패면 브로커가 알려 준 주소를 오류에 | `kafka_inspector` |
+| R3-5z ㉔ ✅ | 프록시 예비 접속 1 — 스위치·공용 경로 | (사람 요청 11-18) 스위치 `AGENT_PROXY_FALLBACK`(기본 켬, boot·schedule 줄 하나); (사이트, 자원) 고정과 원 → 프록시 도우미. 스키마 키는 읽는 어댑터와 같이(죽은 설정 검사) | `fallback`·`__main__` |
+| R3-5z ㉕ | 프록시 예비 접속 2 — Redis·Mongo | `proxy_url` 두 키(빈 값은 프록시 없음)·factory가 사이트·스위치를 넘긴다; 원 접속 3초(redis 재시도 0)·접속 단계 실패만 대체·고정·`source`의 경로 | `redis_reader`·`mongo_reader` |
+| R3-5z ㉖ | 프록시 예비 접속 3 — REST | `proxy_base_url` 키; `proxy_base_url + spec.path`, `ConnectError`·`ConnectTimeout`만 대체, 4xx·5xx는 그대로 | `rest_prober` |
+| R3-5z ㉗ | 프록시 예비 접속 4 — Kafka | `proxy_bootstrap_server` 키; 원 부트스트랩 TCP 시험 → 프록시; 프록시 경로 실패면 브로커가 알려 준 주소를 오류에 | `kafka_inspector` |
 
 
 

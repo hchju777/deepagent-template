@@ -3747,7 +3747,7 @@ NOTICE_T = "tests/knowledge/test_cli_code.py::test_토폴로지에_pipelines가_
 CASES += [
  ("pipelines 선언 없음을 말하지 않는다", BOOTF, "    if topology.pipelines is None:\n        return \"토폴로지 pipelines 선언 없음", "    if False:\n        return \"토폴로지 pipelines 선언 없음", [NOTICE_T]),
  ("router 선언 없음을 말하지 않는다", BOOTF, "    if topology.pipelines.router is None:", "    if False:", [NOTICE_T]),
- ("boot이 주의를 안 찍는다", MN, "        print(f\"✅ 기동 검증 통과 — {args.config_root}\")\n        for notice in notices:\n            print(f\"  ⚠ {notice}\")\n", "        print(f\"✅ 기동 검증 통과 — {args.config_root}\")\n", [NOTICE_T]),
+ ("boot이 주의를 안 찍는다", MN, "        print(f\"  {switch_line(env)}\")\n        for notice in notices:\n            print(f\"  ⚠ {notice}\")\n", "        print(f\"  {switch_line(env)}\")\n", [NOTICE_T]),
  ("주의가 기동을 막는다", MN, "            print(f\"  ⚠ {notice}\")\n        return 0\n", "            print(f\"  ⚠ {notice}\")\n        return 1 if notices else 0\n", [NOTICE_T]),
  ("code status가 선언 없음을 안 찍는다", MN, "    if (notice := pipeline_notice(topology)):", "    if False and (notice := pipeline_notice(topology)):", [NOTICE_T]),
 ]
@@ -4267,7 +4267,21 @@ CASES += [
  ('발행 쪽 최상위도 읽는 쪽 탓으로 묻는다', ND, '    if component not in components or component in stop.candidates:\n        return []\n    return [f"최상위', '    if component not in components:\n        return []\n    return [f"최상위', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나', 'tests/application/test_verdict.py::test_verify는_읽는_쪽_탓이면_한_번_되묻고_고친_답은_지나고_두_번째도_같으면_low로_강등한다']),
  ('읽는 쪽 탓 문제에 발행 선언을 하나만 적는다', ND, "의 발행 쪽({', '.join(stop.candidates)})이 아니다", '의 발행 쪽({stop.candidates[0]})이 아니다', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
 ]
-assert len(CASES) >= 1656, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉔ — 프록시 예비 접속 1: 스위치(AGENT_PROXY_FALLBACK)·(사이트, 자원) 고정·원 → 프록시 시도·기동 줄 ──
+FB = ROOT / "src/infrastructure/fallback.py"
+CASES += [
+ ('스위치를 끄는 값을 안 본다', FB, '    return str(env.get(SWITCH, "")).strip().lower() not in _OFF\n', '    return True\n', ['tests/infrastructure/test_fallback.py::test_스위치는_기본_켬이고_0_false_off_no면_끈다']),
+ ('스위치 값의 대소문자를 가린다', FB, '    return str(env.get(SWITCH, "")).strip().lower() not in _OFF\n', '    return str(env.get(SWITCH, "")).strip() not in _OFF\n', ['tests/infrastructure/test_fallback.py::test_스위치는_기본_켬이고_0_false_off_no면_끈다']),
+ ('접속 단계가 아닌 실패도 프록시로 대체한다', FB, '            if not self.armed or not connect_failure(exc):\n', '            if not self.armed:\n', ['tests/infrastructure/test_fallback.py::test_둘_다_실패하면_두_오류를_다_든_실패이고_답한_실패는_대체하지_않는다']),
+ ('스위치가 꺼져도 프록시로 대체한다', FB, '        return bool(self.proxy) and self.enabled\n', '        return bool(self.proxy)\n', ['tests/infrastructure/test_fallback.py::test_프록시가_없거나_빈_값이거나_스위치가_꺼지면_지금과_같다']),
+ ('원이 접속 단계에서 실패해도 프록시로 고정하지 않는다', FB, '            self._pinned.add((self.site, self.resource))\n', '', ['tests/infrastructure/test_fallback.py::test_원이_되면_원이고_원이_접속_단계에서_실패하면_그_사이트_자원을_고정하고_프록시로', 'tests/infrastructure/test_fallback.py::test_고정되면_다음_시도는_원을_다시_안_치고_같은_사이트_자원의_새_경로도_그렇다']),
+ ('고정을 사이트 없이 자원으로만 본다', FB, '        return self.armed and (self.site, self.resource) in self._pinned\n', '        return self.armed and any(r == self.resource for _, r in self._pinned)\n', ['tests/infrastructure/test_fallback.py::test_고정되면_다음_시도는_원을_다시_안_치고_같은_사이트_자원의_새_경로도_그렇다']),
+ ('둘 다 실패하면 프록시 오류만 남긴다', FB, '                raise ProxyAlsoFailed(exc, again) from again\n', '                raise\n', ['tests/infrastructure/test_fallback.py::test_둘_다_실패하면_두_오류를_다_든_실패이고_답한_실패는_대체하지_않는다']),
+ ('경로 표시를 대체가 없는 접속에도 붙인다', FB, '        if not self.armed:\n            return ""\n        return " · 경로=프록시"', '        return " · 경로=프록시"', ['tests/infrastructure/test_fallback.py::test_프록시가_없거나_빈_값이거나_스위치가_꺼지면_지금과_같다']),
+ ('boot가 프록시 예비 접속 스위치 줄을 안 찍는다', MN, '        print(f"✅ 기동 검증 통과 — {args.config_root}")\n        print(f"  {switch_line(env)}")\n', '        print(f"✅ 기동 검증 통과 — {args.config_root}")\n', ['tests/test_cli.py::test_boot와_schedule은_프록시_예비_접속_스위치를_한_줄_찍는다']),
+ ('schedule이 프록시 예비 접속 스위치 줄을 안 찍는다', MN, '    from src.infrastructure.fallback import switch_line\n    print(f"  {switch_line(env)}")\n', '', ['tests/test_cli.py::test_boot와_schedule은_프록시_예비_접속_스위치를_한_줄_찍는다']),
+]
+assert len(CASES) >= 1666, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

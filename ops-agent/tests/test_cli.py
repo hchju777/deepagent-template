@@ -856,3 +856,19 @@ def test_트레이스_턴_줄_끝에_얹은_추가_본문의_키를_적는다(tm
     assert "턴: 조각 3 · 종료 stop · 토큰 모름 · 스키마 concludereply(증거 id 12) · 추가 본문 chat_template_kwargs" in written[0].read_text(encoding="utf-8")
     trace("conclude", 4, "물음", "답", None, 9.0, None, None, None, {"chunks": 3, "finish_reason": "stop", "input_tokens": 0, "output_tokens": 0})
     assert "추가 본문" not in written[1].read_text(encoding="utf-8")
+
+
+def test_boot와_schedule은_프록시_예비_접속_스위치를_한_줄_찍는다(seeded_config, capsys, monkeypatch):
+    """R3-5z ㉔ — 레포 밖 재생 도구가 옛 녹화를 돌릴 때 끈다. 켜졌는지 꺼졌는지는 기동 출력 한 줄로 보인다."""
+    from src.__main__ import main
+
+    echo_config, _ = seeded_config
+    _set_scenario(echo_config, schedule={"enabled": True, "kind": "cron", "cron": "0 8 * * 1-5"})
+    monkeypatch.delenv("AGENT_PROXY_FALLBACK", raising=False)
+    main(["--config-root", str(echo_config), "--env-file", "/dev/null", "boot"])
+    assert "프록시 예비 접속: 켬 (AGENT_PROXY_FALLBACK" in capsys.readouterr().out
+    monkeypatch.setenv("AGENT_PROXY_FALLBACK", "0")
+    main(["--config-root", str(echo_config), "--env-file", "/dev/null", "boot"])
+    assert "프록시 예비 접속: 끔 (AGENT_PROXY_FALLBACK" in capsys.readouterr().out
+    assert main(["--config-root", str(echo_config), "--env-file", "/dev/null", "schedule", "--list", "--list-count", "1"]) == 0
+    assert "  프록시 예비 접속: 끔 (AGENT_PROXY_FALLBACK" in capsys.readouterr().out

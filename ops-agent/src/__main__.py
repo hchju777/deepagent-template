@@ -322,14 +322,17 @@ def cmd_boot(args, env) -> int:
     errors = validate_boot(args.config_root, env=env, knowledge_root=_knowledge_root(args))
     # 주의는 기동을 막지 않는다(R3-5x ①) — 선언이 비어 꺼진 기능을 말할 뿐이다.
     notices = boot_notices(args.config_root, env=env, knowledge_root=_knowledge_root(args))
+    from src.infrastructure.fallback import switch_line
     if not errors:
         print(f"✅ 기동 검증 통과 — {args.config_root}")
+        print(f"  {switch_line(env)}")
         for notice in notices:
             print(f"  ⚠ {notice}")
         return 0
     print(f"❌ 문제 {len(errors)}건:", file=sys.stderr)
     for error in errors:
         print(f"  {error}", file=sys.stderr)
+    print(f"  {switch_line(env)}")
     for notice in notices:
         print(f"  ⚠ {notice}")
     return 1
@@ -2558,6 +2561,8 @@ def cmd_schedule(args, env) -> int:
               if sc.enabled and sc.schedule.enabled}
     print(f"  시계: {clock():%Y-%m-%d %H:%M:%S %Z} "
           f"({load_app_config(args.config_root, env=env).timezone})")
+    from src.infrastructure.fallback import switch_line
+    print(f"  {switch_line(env)}")
     for name, scenario in scenarios.items():
         mark = "on " if name in wanted else "off"
         print(f"  [{mark}] {name:14} {scenario.schedule.describe()}")
