@@ -228,3 +228,14 @@ def test_rest의_proxy_base_url은_선택이고_빈_값은_프록시_없음이�
         RestConfig(**rest, proxy_base_url="p:8080/gumi/rest/api/")
     with pytest.raises(ValidationError, match="base_url은 http://"):
         RestConfig(base_url="api:8080")
+
+
+def test_kafka의_proxy_bootstrap_server는_선택이고_빈_리스트는_프록시_없음이며_항목은_host_port다():
+    """빈 리스트(빈 문자열만 든 것도)는 프록시 없음 — 지금과 같다(R3-5z ㉗)."""
+    kafka = {"bootstrap_server": ["b:9092"], "topic": {"t": "t"}}
+    assert KafkaConsumerConfig(**kafka).proxy_bootstrap_server == []
+    assert KafkaConsumerConfig(**kafka, proxy_bootstrap_server=[]).proxy_bootstrap_server == []
+    assert KafkaConsumerConfig(**kafka, proxy_bootstrap_server=["", " "]).proxy_bootstrap_server == []
+    assert KafkaConsumerConfig(**kafka, proxy_bootstrap_server=["p:19092", "q:19092"]).proxy_bootstrap_server == ["p:19092", "q:19092"]
+    with pytest.raises(ValidationError, match="host:port"):
+        KafkaConsumerConfig(**kafka, proxy_bootstrap_server=["p"])

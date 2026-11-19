@@ -25,8 +25,19 @@ cluster 객체를 만들어 돌려줄 뿐 컨슈머 내부 캐시를 갱신하�
 
 그래서 파티션 목록은 **AdminClient의 `describe_topics`**로 얻는다. 공개 API이고,
 "관리자에게 토폴로지를 묻고, 컨슈머는 지정된 파티션만 읽는다"는 역할 분리도 명확하다.
+
+## 프록시 예비 주소(R3-5z ㉗)
+
+`proxy_bootstrap_server`가 있고 스위치가 켜졌으면, 읽기 전에 원 부트스트랩 주소에 짧은 TCP 접속을 해 본다(3초, 주소들 동시에). 하나라도 열리면 원(이 어댑터
+동안 기억), 하나도 안 열리면 접속 단계 실패라 (사이트, 자원)을 고정하고 프록시 부트스트랩으로 읽는다(`infrastructure/fallback.py`). aiokafka는 접속
+타임아웃이 요청 타임아웃(기본 40초) 하나뿐이고 주소를 차례로 그만큼씩 기다린다 — 요청 타임아웃을 줄이지 않고 접속 단계만 따로 잰다.
+
+프록시로 붙은 뒤 브로커가 메타데이터로 알려 주는 주소(advertised)로 다시 붙는다. 그 주소가 프록시가 아니고 거기서 실패하면 실패로 남기고 그 주소를 오류에 적는다 —
+인프라(리스너 설정) 확인 대상이다.
 """
+import asyncio
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,6 +46,7 @@ from src.domain.base import Clock
 from src.domain.envelope import ProbeResult
 from src.domain.jsonpath import select
 from src.domain.ports import KafkaInspectorPort
+from src.infrastructure.fallback import ORIGIN_CONNECT_S, Route
 
 DEFAULT_TAIL = 10
 # tail이 레코드를 모으는 데 쓸 시간. `getmany`는 레코드가 조금이라도 오면 바로 돌아오므로(한 번에 limit을 채우지 않는다 —
@@ -135,14 +147,122 @@ class TypeTally:
                 **{k: full[k] for k in ("counted", "with_field", "matched", "first_at", "last_at", "latest")}}
 
 
+# 이 읽기가 시작한 클라이언트들 — 읽기(태스크)마다 따로라 동시 읽기가 안 섞인다. 프록시 경로가 실패하면 그것들이 받은 브로커 주소를 오류에 싣는다.
+_STARTED: ContextVar[list | None] = ContextVar("kafka_started", default=None)
+
+
+class OriginUnreachable(Exception):
+    """원 부트스트랩 주소 어느 것에도 TCP로 못 붙었다 — 접속 단계 실패."""
+
+
+async def _open_tcp(host: str, port: int) -> None:
+    _, writer = await asyncio.open_connection(host, port)
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except Exception:                                              # noqa: BLE001
+        pass
+
+
+def _advertised(clients) -> list[str]:
+    """시작한 클라이언트들이 메타데이터로 받은 브로커 주소. 못 읽으면 빈 목록 — 이 사실은 덧붙일 뿐이다."""
+    seen: set[str] = set()
+    for client in clients or ():
+        try:
+            seen.update(f"{b.host}:{b.port}" for b in client._client.cluster.brokers())
+        except Exception:                                          # noqa: BLE001
+            continue
+    return sorted(seen)
+
+
 class RealKafkaInspector(KafkaInspectorPort):
-    def __init__(self, cfg: KafkaConsumerConfig, *, clock: Clock):
+    def __init__(self, cfg: KafkaConsumerConfig, *, clock: Clock, site: str = "", fallback: bool = True, pinned: set | None = None,
+                 opener=None):
+        """`opener(host, port)`은 원 부트스트랩 TCP 시험의 이음매다 — 프로덕션에서는 None이고 `asyncio.open_connection`을 쓴다."""
         self._cfg = cfg
         self._clock = clock
+        self._route = Route(site, "kafka", cfg.proxy_bootstrap_server, enabled=fallback, pinned=pinned)
+        self._opener = opener or _open_tcp
+        self._origin_ok = False
+        self._origin_error = ""
 
     @property
     def _brokers(self) -> list[str]:
-        return list(self._cfg.bootstrap_server)
+        return list(self._cfg.proxy_bootstrap_server if self._route.on_proxy else self._cfg.bootstrap_server)
+
+    async def _started(self, client) -> None:
+        made = _STARTED.get()
+        if made is not None:
+            made.append(client)                     # 시작이 실패해도 — 부트스트랩까지 받은 메타데이터가 있을 수 있다
+        await client.start()
+
+    async def _check_origin(self) -> None:
+        if self._origin_ok:
+            return
+
+        async def one(entry: str) -> str:
+            host, _, port = entry.rpartition(":")
+            try:
+                await asyncio.wait_for(self._opener(host, int(port)), ORIGIN_CONNECT_S)
+                return ""
+            except (OSError, asyncio.TimeoutError, ValueError) as exc:
+                return f"{entry} {type(exc).__name__}" + (f": {exc}" if str(exc) else "")
+        errors = await asyncio.gather(*(one(entry) for entry in self._cfg.bootstrap_server))
+        if "" in errors:
+            self._origin_ok = True
+            return
+        self._origin_error = "부트스트랩 주소에 TCP로 못 붙는다 — " + "; ".join(errors)
+        raise OriginUnreachable(self._origin_error)
+
+    async def _go(self, read) -> ProbeResult:
+        """`read()`(지금 경로의 브로커로 읽는 본문 — 던지지 않는다)에 원 → 프록시를 입힌다. 대체가 없는 접속은 본문 그대로(시험 접속도 없다)."""
+        if not self._route.armed:
+            return await read()
+        token = _STARTED.set([])
+        try:
+            async def run(proxy: bool) -> ProbeResult:
+                if not proxy:
+                    await self._check_origin()
+                return await read()
+            result, proxy = await self._route.attempt(run, connect_failure=lambda exc: isinstance(exc, OriginUnreachable))
+            update = {"source": result.source + self._route.mark(proxy)}
+            if proxy and result.status == "error":
+                origin = self._origin_error or "이 프로세스에서 접속 실패로 고정됨"
+                update["error"] = f"원 {origin} → 프록시 {result.error}{self._advertised_note(_STARTED.get())}"
+            return result.model_copy(update=update)
+        except Exception as exc:                                   # noqa: BLE001 — 본문은 던지지 않는다; 마지막 방어선
+            return ProbeResult.failed(f"{type(exc).__name__}: {exc}", source="kafka" + self._route.mark(self._route.on_proxy), clock=self._clock)
+        finally:
+            _STARTED.reset(token)
+
+    def _advertised_note(self, clients) -> str:
+        outside = [a for a in _advertised(clients) if a not in self._cfg.proxy_bootstrap_server]
+        if not outside:
+            return ""
+        return (f" · 브로커가 알려 준 주소 {', '.join(outside)} — 프록시({', '.join(self._cfg.proxy_bootstrap_server)})로 붙은 뒤 이 주소로 다시 붙는다"
+                f"(인프라 확인 대상: 리스너 주소)")
+
+    # ── 포트 구현 — 본문(`_…`)을 지금 경로의 브로커로 ────────────────
+
+    async def group_offsets(self, group: str) -> ProbeResult:
+        return await self._go(lambda: self._group_offsets(group))
+
+    async def list_topics(self) -> ProbeResult:
+        return await self._go(self._list_topics)
+
+    async def tail(self, topic: str, *, limit: int = DEFAULT_TAIL) -> ProbeResult:
+        return await self._go(lambda: self._tail(topic, limit=limit))
+
+    async def message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:
+        return await self._go(lambda: self._message_at(topic, partition, offset))
+
+    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float,
+                         sample_ages: list[int] = (), sample_messages: int = 0, sample_seconds: float = 0.0) -> ProbeResult:
+        return await self._go(lambda: self._count_type(topic, field=field, values=values, max_messages=max_messages, max_seconds=max_seconds,
+                                                       sample_ages=sample_ages, sample_messages=sample_messages, sample_seconds=sample_seconds))
+
+    async def offsets(self, topic: str) -> ProbeResult:
+        return await self._go(lambda: self._offsets(topic))
 
     def resolve_topic(self, name: str) -> str:
         """config의 논리 이름("topic1")을 실제 토픽 이름("GUMI_TOPIC")으로.
@@ -151,7 +271,7 @@ class RealKafkaInspector(KafkaInspectorPort):
         """
         return self._cfg.topic.get(name, name)
 
-    async def group_offsets(self, group: str) -> ProbeResult:
+    async def _group_offsets(self, group: str) -> ProbeResult:
         """**다른** 그룹의 커밋 오프셋과 lag. 우리가 그 그룹에 들어가는 게 아니다."""
         source = f"kafka:group_offsets {group}"
         admin = consumer = None
@@ -160,7 +280,7 @@ class RealKafkaInspector(KafkaInspectorPort):
             from aiokafka import AIOKafkaConsumer
 
             admin = AIOKafkaAdminClient(bootstrap_servers=self._brokers)
-            await admin.start()
+            await self._started(admin)
             committed = await admin.list_consumer_group_offsets(group)
             if not committed:
                 return ProbeResult.succeeded(
@@ -171,7 +291,7 @@ class RealKafkaInspector(KafkaInspectorPort):
             # end offset은 Admin이 아니라 컨슈머가 안다. group_id=None이라 그룹 밖이다.
             consumer = AIOKafkaConsumer(bootstrap_servers=self._brokers, group_id=None,
                                         enable_auto_commit=False)
-            await consumer.start()
+            await self._started(consumer)
             ends = await consumer.end_offsets(list(committed))
 
             rows = []
@@ -204,7 +324,7 @@ class RealKafkaInspector(KafkaInspectorPort):
         from aiokafka.admin import AIOKafkaAdminClient
 
         admin = AIOKafkaAdminClient(bootstrap_servers=self._brokers)
-        await admin.start()
+        await self._started(admin)
         try:
             described = await admin.describe_topics([topic])
             if not described or described[0].get("error_code"):
@@ -216,7 +336,7 @@ class RealKafkaInspector(KafkaInspectorPort):
             except Exception:                                      # noqa: BLE001
                 pass
 
-    async def list_topics(self) -> ProbeResult:
+    async def _list_topics(self) -> ProbeResult:
         """브로커의 토픽 이름들. **AdminClient에게 묻는다.**
 
         `consumer.topics()`를 쓰지 않는 이유는 `_partitions_of`와 같다 — 컨슈머
@@ -230,7 +350,7 @@ class RealKafkaInspector(KafkaInspectorPort):
             from aiokafka.admin import AIOKafkaAdminClient
 
             admin = AIOKafkaAdminClient(bootstrap_servers=self._brokers)
-            await admin.start()
+            await self._started(admin)
             names = await admin.list_topics()
             return ProbeResult.succeeded(
                 sorted(n for n in names if not n.startswith("__")),
@@ -245,7 +365,7 @@ class RealKafkaInspector(KafkaInspectorPort):
                 except Exception:                                  # noqa: BLE001
                     pass
 
-    async def tail(self, topic: str, *, limit: int = DEFAULT_TAIL) -> ProbeResult:
+    async def _tail(self, topic: str, *, limit: int = DEFAULT_TAIL) -> ProbeResult:
         """토픽 끝에서 최근 메시지를 읽는다. 그룹 미참여, 오프셋 커밋 없음."""
         actual = self.resolve_topic(topic)
         source = f"kafka:tail {actual} limit={limit}"
@@ -262,7 +382,7 @@ class RealKafkaInspector(KafkaInspectorPort):
                                         group_id=None,              # ← 그룹에 안 들어간다
                                         enable_auto_commit=False,   # ← 커밋도 안 한다
                                         auto_offset_reset="earliest")
-            await consumer.start()
+            await self._started(consumer)
 
             tps = [TopicPartition(actual, p) for p in partitions]
             consumer.assign(tps)                                    # ← subscribe가 아니다
@@ -316,7 +436,7 @@ class RealKafkaInspector(KafkaInspectorPort):
                 except Exception:                                  # noqa: BLE001
                     pass
 
-    async def message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:
+    async def _message_at(self, topic: str, partition: int, offset: int) -> ProbeResult:
         """포인터가 가리키는 메시지 한 건 — `assign` 뒤 `seek`. 그룹 미참여, 오프셋 커밋 없음. 범위 밖·압축 구멍은 `found=False`(오류 아님)."""
         actual = self.resolve_topic(topic)
         source = f"kafka:message_at {actual}[{partition}]@{offset}"
@@ -329,7 +449,7 @@ class RealKafkaInspector(KafkaInspectorPort):
             consumer = AIOKafkaConsumer(bootstrap_servers=self._brokers,
                                         group_id=None,              # ← 그룹에 안 들어간다
                                         enable_auto_commit=False)   # ← 커밋도 안 한다
-            await consumer.start()
+            await self._started(consumer)
             consumer.assign([tp])                                   # ← subscribe가 아니다
             begin = (await consumer.beginning_offsets([tp]))[tp]
             end = (await consumer.end_offsets([tp]))[tp]
@@ -371,8 +491,8 @@ class RealKafkaInspector(KafkaInspectorPort):
                 except Exception:                                  # noqa: BLE001
                     pass
 
-    async def count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float,
-                         sample_ages: list[int] = (), sample_messages: int = 0, sample_seconds: float = 0.0) -> ProbeResult:
+    async def _count_type(self, topic: str, *, field: str, values: list[str], max_messages: int, max_seconds: float,
+                          sample_ages: list[int] = (), sample_messages: int = 0, sample_seconds: float = 0.0) -> ProbeResult:
         """섞인 토픽에서 한 유형만 센다(포트 docstring). `tail`과 같은 연결·같은 읽기 전용(assign·seek, 그룹 미참여·커밋 없음) — 다만 끝에서 N건을 센다.
         파티션마다 **끝에서 조각씩 뒤로** 물러나며 읽는다(R3-5z ① — 측정 #33: 끝−N에서 앞으로 읽어, 시간 상한에서 멈춘 세기가 창의 가장 오래된 끝만 셌다). 조각은
         작게 시작해 두 배씩 — 멈추면 가장 최근 쪽이 남고, 멈춘 조각은 읽은 데까지 따로 적는다. 다 센 파티션은 멈춰 둔다(이미 센 쪽을 또 받지 않게)."""
@@ -390,7 +510,7 @@ class RealKafkaInspector(KafkaInspectorPort):
                                         enable_auto_commit=False,   # ← 커밋도 안 한다
                                         auto_offset_reset="earliest",
                                         max_partition_fetch_bytes=COUNT_FETCH_BYTES)
-            await consumer.start()
+            await self._started(consumer)
             tps = [TopicPartition(actual, p) for p in partitions]
             consumer.assign(tps)                                    # ← subscribe가 아니다
             ends = await consumer.end_offsets(tps)
@@ -561,7 +681,7 @@ class RealKafkaInspector(KafkaInspectorPort):
         return {"samples": [{k: v for k, v in w.items() if k != "bytes"} for w in windows], "samples_skipped": skipped, "sample_stopped": stopped,
                 "sample_bytes": sum(w["bytes"] for w in windows), "sample_seconds_used": round(_mono() - started, 2)}
 
-    async def offsets(self, topic: str) -> ProbeResult:
+    async def _offsets(self, topic: str) -> ProbeResult:
         """토픽의 보존 범위만 — 파티션마다 `beginning_offsets`·`end_offsets`(R3-5p ①-a). `assign`만, 그룹 미참여·커밋 없음, seek·fetch 없음(브로커 왕복 둘).
         파티션은 `message_at`과 달리 모른 채 오므로 AdminClient에게 묻는다(`_partitions_of`) — 없으면 토픽이 없는 것."""
         actual = self.resolve_topic(topic)
@@ -575,7 +695,7 @@ class RealKafkaInspector(KafkaInspectorPort):
                 return ProbeResult.failed(f"토픽이 없거나 파티션을 못 찾았다 — {actual}", source=source, clock=self._clock)
             tps = [TopicPartition(actual, p) for p in partitions]
             consumer = AIOKafkaConsumer(bootstrap_servers=self._brokers, group_id=None, enable_auto_commit=False)
-            await consumer.start()
+            await self._started(consumer)
             consumer.assign(tps)
             begins = await consumer.beginning_offsets(tps)
             ends = await consumer.end_offsets(tps)

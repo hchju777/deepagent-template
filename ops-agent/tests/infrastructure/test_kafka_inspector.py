@@ -351,3 +351,117 @@ async def test_count_type은_끝_창이_0건이면_부른_시각_기준_상대_�
     gap = await inspector.count_type("t", field="meta.kind", values=["7"], max_messages=10, max_seconds=100,
                                      sample_ages=[86400, 259200], sample_messages=5, sample_seconds=100)
     assert [w["age"] for w in gap.data["samples"]] == [86400, None] and gap.data["samples_skipped"] == [{"age": 259200, "why": "앞 시점과 같은 자리"}]
+
+
+# ── 프록시 예비 주소(R3-5z ㉗) — 가짜 aiokafka·관리 클라이언트와 TCP 시험 이음매 ──
+
+class _Admin:
+    made: list = []
+
+    def __init__(self, **kwargs):
+        _Admin.made.append(kwargs)
+
+    async def start(self): pass
+    async def close(self): pass
+    async def list_topics(self): return ["t", "__consumer_offsets"]
+    async def list_consumer_group_offsets(self, group): return {}
+
+    async def describe_topics(self, topics):
+        return [] if topics == ["nope"] else [{"partitions": [{"partition": 0}]}]
+
+
+class _Rerouted:
+    """시작은 되는데(부트스트랩) 브로커가 알려 준 주소로 다시 붙다 실패하는 컨슈머 — 메타데이터에 그 주소가 든다."""
+
+    def __init__(self, **kwargs):
+        _Consumer.made.append(kwargs)
+        brokers = [types.SimpleNamespace(host="broker-1.example", port=9092), types.SimpleNamespace(host="p", port=19092)]
+        self._client = types.SimpleNamespace(cluster=types.SimpleNamespace(brokers=lambda: brokers))
+
+    async def start(self): pass
+    async def stop(self): pass
+    def assign(self, tps): pass
+
+    async def beginning_offsets(self, tps):
+        raise ConnectionError("Unable to connect to node 1")
+
+
+def _proxied(monkeypatch, *, reachable=(), proxy=("p:19092",), fallback=True, pins=None, broken=""):
+    """`broken`: 그 쪽("origin"·"proxy") 컨슈머가 붙은 뒤 실패한다."""
+    fake, admin = types.ModuleType("aiokafka"), types.ModuleType("aiokafka.admin")
+    fake.TopicPartition = _TP
+    bad = {"origin": ["broker.example:9092"], "proxy": list(proxy)}.get(broken)
+    fake.AIOKafkaConsumer = lambda **kw: _Rerouted(**kw) if kw["bootstrap_servers"] == bad else _Consumer({0: 4}, **kw)
+    admin.AIOKafkaAdminClient = _Admin
+    monkeypatch.setitem(sys.modules, "aiokafka", fake)
+    monkeypatch.setitem(sys.modules, "aiokafka.admin", admin)
+    _Consumer.calls, _Consumer.empties_first, _Consumer.stall, _Consumer.flaky = 0, 0, False, False
+    _Consumer.begin, _Consumer.holes, _Consumer.value_of, _Consumer.made, _Consumer.paused = 0, set(), None, [], set()
+    _Consumer.stamp, _Consumer.asked_at, _Admin.made = None, [], []
+    tried = []
+
+    async def opener(host, port):
+        tried.append(f"{host}:{port}")
+        if f"{host}:{port}" not in reachable:
+            raise ConnectionRefusedError(111, "Connection refused")
+    cfg = KafkaConsumerConfig(bootstrap_server=["broker.example:9092"], topic={"t": "t"}, proxy_bootstrap_server=list(proxy))
+    inspector = RealKafkaInspector(cfg, clock=lambda: T0, site="mx/gumi", fallback=fallback, pinned=set() if pins is None else pins, opener=opener)
+    return inspector, tried
+
+
+def _bootstraps():
+    return [kw["bootstrap_servers"] for kw in _Admin.made + _Consumer.made]
+
+
+async def test_kafka_원_부트스트랩에_TCP로_붙으면_원으로_읽고_시험은_어댑터마다_한_번이며_source에_경로가_남는다(monkeypatch):
+    inspector, tried = _proxied(monkeypatch, reachable={"broker.example:9092"})
+    got = await inspector.offsets("t")
+    assert got.status == "ok" and got.data["messages"] == 4 and got.source == "kafka:offsets t · 경로=원"
+    assert tried == ["broker.example:9092"] and _bootstraps() == [["broker.example:9092"]] * 2
+    assert (await inspector.list_topics()).source == "kafka:topics · 경로=원" and tried == ["broker.example:9092"]
+
+
+async def test_kafka_원_부트스트랩에_TCP로_못_붙으면_프록시로_읽고_고정해_다음엔_원을_다시_안_친다(monkeypatch):
+    pins = set()
+    inspector, tried = _proxied(monkeypatch, pins=pins)
+    got = await inspector.offsets("t")
+    assert got.status == "ok" and got.source == "kafka:offsets t · 경로=프록시" and pins == {("mx/gumi", "kafka")}
+    assert tried == ["broker.example:9092"] and _bootstraps() == [["p:19092"]] * 2
+    assert (await inspector.offsets("t")).source.endswith(" · 경로=프록시") and tried == ["broker.example:9092"]   # 고정 — 시험도 다시 안 한다
+    fresh, fresh_tried = _proxied(monkeypatch, pins=pins)                                                     # 새 어댑터도(케이스마다 만든다)
+    assert (await fresh.list_topics()).source == "kafka:topics · 경로=프록시" and fresh_tried == [] and _bootstraps() == [["p:19092"]]
+
+
+async def test_kafka_둘_다_실패하면_원과_프록시_오류를_다_들고_브로커가_알려_준_주소를_적는다(monkeypatch):
+    inspector, _ = _proxied(monkeypatch, broken="proxy")
+    got = await inspector.offsets("t")
+    assert got.status == "error" and got.source == "kafka:offsets t · 경로=프록시"
+    assert got.error == ("원 부트스트랩 주소에 TCP로 못 붙는다 — broker.example:9092 ConnectionRefusedError: [Errno 111] Connection refused → "
+                         "프록시 ConnectionError: Unable to connect to node 1 · 브로커가 알려 준 주소 broker-1.example:9092 — "
+                         "프록시(p:19092)로 붙은 뒤 이 주소로 다시 붙는다(인프라 확인 대상: 리스너 주소)")
+
+
+async def test_kafka_원에_붙은_뒤의_실패는_대체하지_않는다(monkeypatch):
+    for topic, broken, error in (("nope", "", "토픽이 없거나 파티션을 못 찾았다 — nope"), ("t", "origin", "ConnectionError: Unable to connect to node 1")):
+        pins = set()
+        inspector, tried = _proxied(monkeypatch, reachable={"broker.example:9092"}, pins=pins, broken=broken)
+        got = await inspector.offsets(topic)
+        assert got.status == "error" and got.error == error and got.source == f"kafka:offsets {topic} · 경로=원"
+        assert pins == set() and all(b == ["broker.example:9092"] for b in _bootstraps())
+
+
+async def test_kafka_예비_주소가_없거나_비었거나_스위치가_꺼지면_지금과_같고_TCP_시험도_없다(monkeypatch):
+    for proxy, fallback in (((), True), (("",), True), (("p:19092",), False)):
+        inspector, tried = _proxied(monkeypatch, proxy=proxy, fallback=fallback, pins={("mx/gumi", "kafka")}, broken="origin")
+        got = await inspector.offsets("t")
+        assert got.status == "error" and got.error == "ConnectionError: Unable to connect to node 1" and got.source == "kafka:offsets t"
+        assert tried == [] and all(b == ["broker.example:9092"] for b in _bootstraps())
+
+
+async def test_kafka_포트의_읽기는_전부_지금_경로의_브로커로_간다(monkeypatch):
+    inspector, tried = _proxied(monkeypatch, pins={("mx/gumi", "kafka")})
+    results = [await inspector.group_offsets("g"), await inspector.list_topics(), await inspector.tail("t", limit=1),
+               await inspector.message_at("t", 0, 0), await inspector.offsets("t"),
+               await inspector.count_type("t", field="kind", values=["A"], max_messages=2, max_seconds=5.0)]
+    assert [r.source.endswith(" · 경로=프록시") for r in results] == [True] * 6, [r.source for r in results]
+    assert tried == [] and _bootstraps() and all(b == ["p:19092"] for b in _bootstraps())

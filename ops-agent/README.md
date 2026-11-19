@@ -81,6 +81,25 @@ Windows에서만 터지는 지점들은 [STEPS/windows.md](STEPS/windows.md)에 
 - env를 못 바꾸는 배치면 LLM 쪽만 `llm.trust_env_proxy: false`로 **그 커넥션만** 프록시를 무시하게 할 수 있다.
   REST 쪽은 env(`NO_PROXY`)로 푼다.
 
+### 프록시 예비 접속(`proxy_` 키)
+
+위의 전사 프록시(env)와는 다른 것이다 — 대상 시스템에 닿는 **예비 경로**다. 사이트 config의 접속마다 예비 주소를 둘 수 있다 — 원 주소가 **접속 단계에서** 실패하면(연결 거부·접속 타임아웃·이름 해석 실패) 그 주소로 다시 읽는다.
+키 없음·404·인증 실패·권한 없음은 대상이 답한 것이라 대체하지 않는다.
+
+| 키 | 값 |
+|---|---|
+| `infra.redis.proxy_url` | `redis://…` |
+| `infra.mongodb.proxy_url` | `mongodb://…` |
+| `infra.kafka.consumer.proxy_bootstrap_server` | `["<host>:<port>", …]` |
+| `infra.rest.proxy_base_url` | `http://<proxy_host>:<port>/<fct>/rest/<svc>/` — 지금처럼 `+ 항목 path`로 잇는다 |
+
+- 키가 없거나 빈 문자열·빈 리스트면 프록시 없음 — 지금과 같다.
+- 한 번 접속에 실패한 (사이트, 자원)은 프로세스가 끝날 때까지 프록시로 간다. 원 주소는 예비 주소가 있을 때만 접속 3초(redis 재시도 0), kafka는 원 부트스트랩에 TCP 시험(3초).
+- 증거의 `source` 끝에 ` · 경로=원`/` · 경로=프록시`가 붙는다(예비 주소가 있고 스위치가 켜졌을 때만). 둘 다 실패하면 두 오류를 다 적는다.
+- kafka: 프록시로 붙은 뒤 브로커가 알려 준 주소(리스너)로 다시 붙다 실패하면 그 주소를 오류에 적는다 — 인프라(리스너 설정) 확인 대상이다.
+- mongo: 프록시 경로에서 멤버 탐색이 원 주소로 돌아가는지는 실측 뒤에 정한다(필요하면 프록시 경로에만 직접 접속 옵션).
+- 스위치 `AGENT_PROXY_FALLBACK` — 기본 켬, `0`·`false`·`off`·`no`면 대체를 통째로 끈다(프록시 기록이 없는 옛 녹화를 재생할 때). `boot`·`schedule`이 켬/끔을 한 줄 찍는다.
+
 ## 설정 트리
 
 설정은 `config/` **하나**다. 리포에 들어 있고, 모든 명령의 `--config-root`

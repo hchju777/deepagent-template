@@ -75,6 +75,6 @@ def build_adapters(site: SiteConfig, *, clock: Clock,
     return Adapters(
         redis=RealRedisReader(infra.redis, clock=clock, site=where, fallback=on) if infra.redis else None,
         mongo=RealMongoReader(infra.mongodb, clock=clock, site=where, fallback=on) if infra.mongodb else None,
-        kafka=RealKafkaInspector(infra.kafka.consumer, clock=clock) if infra.kafka else None,
+        kafka=RealKafkaInspector(infra.kafka.consumer, clock=clock, site=where, fallback=on) if infra.kafka else None,
         rest=RealRestProber(infra.rest, clock=clock, site=where, fallback=on) if infra.rest else None,
         code=code)

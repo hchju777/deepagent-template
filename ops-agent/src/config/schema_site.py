@@ -118,6 +118,8 @@ class KafkaConsumerConfig(StrictModel):
     """
 
     bootstrap_server: list[str]
+    # 예비 부트스트랩 주소(R3-5z ㉗) — 빈 리스트(빈 문자열만 든 것도)는 프록시 없음.
+    proxy_bootstrap_server: list[str] = []
     group_ids: list[str] = []
     topic: dict[str, str] = {}    # 논리 이름 → 실제 토픽 이름 ("topic1": "GUMI_TOPIC")
 
@@ -130,6 +132,17 @@ class KafkaConsumerConfig(StrictModel):
             if ":" not in entry:
                 raise ValueError(f"bootstrap_server는 host:port 형식이다 — {entry}")
         return v
+
+    @field_validator("proxy_bootstrap_server", mode="before")
+    @classmethod
+    def _proxy_brokers(cls, v):
+        if not isinstance(v, list):
+            return v
+        kept = [entry for entry in v if not (isinstance(entry, str) and not entry.strip())]
+        for entry in kept:
+            if isinstance(entry, str) and ":" not in entry:
+                raise ValueError(f"proxy_bootstrap_server는 host:port 형식이다 — {entry}")
+        return kept
 
     @field_validator("group_ids")
     @classmethod

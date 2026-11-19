@@ -138,3 +138,14 @@ def test_REST_실구현에도_사이트와_스위치가_넘어간다(clock, monk
     assert (route.site, route.resource, route.armed) == ("mx/gumi", "rest", True)
     monkeypatch.setenv("AGENT_PROXY_FALLBACK", "0")
     assert not build_adapters(proxied, clock=clock).rest._route.armed
+
+
+def test_Kafka_실구현에도_사이트와_스위치가_넘어간다(clock, monkeypatch):
+    proxied = SiteConfig.model_validate({"site": {"gbm": "mx", "fct": "gumi"},
+                                         "infra": {"kafka": {"consumer": {"bootstrap_server": ["h:9092"], "topic": {"t": "t"},
+                                                                          "proxy_bootstrap_server": ["p:19092"]}}}})
+    monkeypatch.delenv("AGENT_PROXY_FALLBACK", raising=False)
+    route = build_adapters(proxied, clock=clock).kafka._route
+    assert (route.site, route.resource, route.armed) == ("mx/gumi", "kafka", True)
+    monkeypatch.setenv("AGENT_PROXY_FALLBACK", "no")
+    assert not build_adapters(proxied, clock=clock).kafka._route.armed

@@ -834,7 +834,7 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | R3-5z ㉔ ✅ | 프록시 예비 접속 1 — 스위치·공용 경로 | (사람 요청 11-18) 스위치 `AGENT_PROXY_FALLBACK`(기본 켬, boot·schedule 줄 하나); (사이트, 자원) 고정과 원 → 프록시 도우미. 스키마 키는 읽는 어댑터와 같이(죽은 설정 검사) | `fallback`·`__main__` |
 | R3-5z ㉕ ✅ | 프록시 예비 접속 2 — Redis·Mongo | `proxy_url` 두 키(빈 값은 프록시 없음)·factory가 사이트·스위치를 넘긴다; 원 접속 3초(redis 재시도 0)·접속 단계 실패만 대체·고정·`source`의 경로 | `redis_reader`·`mongo_reader` |
 | R3-5z ㉖ ✅ | 프록시 예비 접속 3 — REST | `proxy_base_url` 키; `proxy_base_url + spec.path`, `ConnectError`·`ConnectTimeout`만 대체, 4xx·5xx는 그대로 | `rest_prober` |
-| R3-5z ㉗ | 프록시 예비 접속 4 — Kafka | `proxy_bootstrap_server` 키; 원 부트스트랩 TCP 시험 → 프록시; 프록시 경로 실패면 브로커가 알려 준 주소를 오류에 | `kafka_inspector` |
+| R3-5z ㉗ ✅ | 프록시 예비 접속 4 — Kafka | `proxy_bootstrap_server` 키; 원 부트스트랩 TCP 시험 → 프록시; 프록시 경로 실패면 브로커가 알려 준 주소를 오류에 | `kafka_inspector` |
 
 
 
