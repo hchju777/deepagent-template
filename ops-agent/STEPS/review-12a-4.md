@@ -1494,3 +1494,32 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
   (`구독 토픽…`)에서는 아무 검사도 없어 통과했다. 토픽 홉의 `candidates`는 그 토픽의 발행 선언 서비스다(`published`).
 - 방향: **R3-5z ㉓**(읽는 쪽 탓 다시 묻기). 답은 [reply.md](reply.md)의 #36 c-1.
 
+## 프록시 예비 접속 지원 (11-18 요청, 11-19 착수, 사람) → R3-5z ㉔~㉗
+
+- 목표: 사이트 config의 각 접속에 `proxy_` 예비 주소를 둔다. 원 주소가 먼저, 원 주소가 **접속 단계에서** 실패하면 프록시, 프록시도 실패하면 실패.
+- 키(모두 선택 — 없거나 빈 문자열·빈 리스트면 프록시 없음, 지금과 같다; 빈 값은 url 형식 검사에서 뺀다): `infra.redis.proxy_url`, `infra.mongodb.proxy_url`,
+  `infra.kafka.consumer.proxy_bootstrap_server`(리스트), `infra.rest.proxy_base_url`(경로 접두어 포함 `http://<proxy_host>:<port>/<fct>/rest/<svc>/` — 지금처럼
+  `base_url + spec.path`로 잇는다).
+- 요구: (1) 스키마가 키를 받는다(StrictModel — config는 이 반영 뒤에 넣는다) (2) 원 주소에 짧은 접속 타임아웃, 한 번 접속 실패한 (사이트, 자원)은 프로세스 안에서 프록시로
+  고정, 걷기 30초 상한 안에 원 → 프록시가 끝난다 (3) 대체는 접속 단계 실패(연결 거부·타임아웃·이름 해석 실패)일 때만 — 키 없음·404·인증 실패·권한 없음은 그대로 실패
+  (4) kafka: 프록시로 붙은 뒤 브로커가 알려주는 주소로 재접속하는 문제가 있으면 실패로 남기고 증거에 그 주소를 적는다(인프라 확인 대상) (5) mongo: 프록시 경로에서 멤버 탐색으로
+  원 주소로 돌아가는지 사람이 실측해 알려 준다 — 필요하면 프록시 경로에만 직접 접속 옵션 (6) 증거와 보고에 어느 경로(원/프록시)로 읽었는지 (7) 대체를 통째로 끄는 스위치 하나
+  (환경변수, 기본 켬), 켜짐/꺼짐은 기동 로그에 한 줄 — 레포 밖 재생 도구가 프록시 기록 없는 옛 녹화를 돌릴 때 끈다(재생 코드는 레포에 안 넣는다) (8) 테스트: 원 성공 / 원 실패 →
+  프록시 성공 / 둘 다 실패 / 결과 실패(대체 안 함) / 고정 / `proxy_` 없음·빈 값 / 스위치 끔 — 자원마다.
+- **코드 확인**(11-19):
+  - 어댑터 넷(`redis_reader`·`mongo_reader`·`kafka_inspector`·`rest_prober`)은 각자 하위 config 하나만 받고 `factory.build_adapters`가 유일한 조립점이다(호출 9곳 + 보고 수집).
+    사이트(gbm/fct)는 어댑터가 모른다 — 고정 키를 위해 factory가 넘긴다.
+  - 접속 단계의 경계가 라이브러리마다 다르다. redis-py는 소켓 연결 실패를 `ConnectionError("Error N connecting to …")`·`TimeoutError("Timeout connecting to server")`로
+    내고 인증 실패(`AuthenticationError`·`AuthorizationError`)도 `ConnectionError`의 하위 타입이다; 기본 `Retry`가 연결 실패를 다시 시도한다. pymongo는 연결 거부·이름 해석·
+    타임아웃이 전부 `ServerSelectionTimeoutError`이고 인증 실패는 `OperationFailure`다. httpx는 `ConnectError`·`ConnectTimeout`, 4xx·5xx는 응답이다. aiokafka는 접속
+    타임아웃이 `request_timeout_ms`(기본 40초) 하나라 요청 타임아웃과 갈리지 않고, 부트스트랩 주소를 차례로 그 시간씩 기다린다.
+  - 증거의 `source` 문자열이 증거·보고에 실린다. 재생 도구가 옛 녹화와 맞추려면 프록시가 없거나 스위치가 꺼졌을 때 그 글자가 지금과 같아야 한다.
+- 방향(설계):
+  - 공용 `src/infrastructure/fallback.py`: 스위치(`AGENT_PROXY_FALLBACK`, `0`·`false`·`off`·`no`면 끔), (사이트, 자원) 고정 집합(프로세스 하나), 원 → 프록시 시도 도우미.
+    대체가 걸린 접속(프록시 키 있음 + 스위치 켬)에서만 `source` 끝에 ` · 경로=원`/` · 경로=프록시` — 아니면 지금 글자 그대로.
+  - 접속 단계 판정은 자원마다 라이브러리의 접속 오류로(redis: 위 두 오류 중 인증·권한이 아니고 "connecting to"인 것, mongo: `ServerSelectionTimeoutError`, rest: `ConnectError`·
+    `ConnectTimeout`). kafka는 원 부트스트랩 주소에 짧은 TCP 접속 시험(하나라도 열리면 원) — 요청 타임아웃을 줄이지 않으려고.
+  - 원 주소의 짧은 접속 타임아웃 3초(대체가 걸린 접속에서만; redis는 재시도 0), 프록시 쪽은 지금 타임아웃.
+  - mongo 직접 접속 옵션은 사람의 실측 결과를 받은 뒤에 — 그전에는 프록시 경로 실패의 오류 글(멤버 주소가 든 토폴로지 설명)을 그대로 남긴다.
+- 단계: **R3-5z ㉔**(스키마·스위치·공용 경로·factory·기동 줄) → **㉕**(Redis·Mongo) → **㉖**(REST) → **㉗**(Kafka·브로커 주소). 답은 [reply.md](reply.md)의 프록시 예비 접속.
+
