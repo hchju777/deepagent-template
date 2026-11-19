@@ -43,7 +43,9 @@ class Adapters:
 
 
 def build_adapters(site: SiteConfig, *, clock: Clock,
-                   seeds: dict[str, Any] | None = None, code=None) -> Adapters:
+                   seeds: dict[str, Any] | None = None, code=None, fallback: bool | None = None) -> Adapters:
+    """`fallback`은 프록시 예비 접속 스위치(R3-5z ㉕) — None이면 env(`AGENT_PROXY_FALLBACK`)를 **여기서** 한 번 읽는다. 어댑터가 env를 몰래 읽으면 무엇이 그
+    동작을 정하는지 config와 인자만 봐서는 안 보인다."""
     infra = site.infra
     if seeds is not None:
         from src.infrastructure.stubs import (StubDeployedCode, StubKafkaInspector, StubMongoReader,
@@ -67,9 +69,12 @@ def build_adapters(site: SiteConfig, *, clock: Clock,
     from src.infrastructure.mongo_reader import RealMongoReader
     from src.infrastructure.redis_reader import RealRedisReader
     from src.infrastructure.rest_prober import RealRestProber
+    from src.infrastructure.fallback import fallback_on
+    # (사이트, 자원)이 프록시 고정의 열쇠다 — 어댑터는 하위 config만 받아 사이트를 모른다.
+    where, on = str(site.site), (fallback_on() if fallback is None else fallback)
     return Adapters(
-        redis=RealRedisReader(infra.redis, clock=clock) if infra.redis else None,
-        mongo=RealMongoReader(infra.mongodb, clock=clock) if infra.mongodb else None,
+        redis=RealRedisReader(infra.redis, clock=clock, site=where, fallback=on) if infra.redis else None,
+        mongo=RealMongoReader(infra.mongodb, clock=clock, site=where, fallback=on) if infra.mongodb else None,
         kafka=RealKafkaInspector(infra.kafka.consumer, clock=clock) if infra.kafka else None,
         rest=RealRestProber(infra.rest, clock=clock) if infra.rest else None,
         code=code)

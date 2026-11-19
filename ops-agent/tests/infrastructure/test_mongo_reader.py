@@ -172,3 +172,87 @@ async def test_스텁이_컬렉션_이름을_정렬해_돌려준다():
                            clock=lambda: datetime(2026, 9, 18, tzinfo=UTC))
     result = await stub.list_collections()
     assert result.data == ["alpha", "mid", "zeta"]
+
+
+# ── 프록시 예비 주소(R3-5z ㉕) — 실서버 없이 `client_factory`로 주소마다 가짜 클라이언트 ──
+
+class _Raising:
+    """클라이언트·DB·컬렉션 자리 모두 — 질의마다 그 오류를 낸다(pymongo는 질의 때 서버를 고른다). 불린 수를 센다."""
+
+    def __init__(self, exc):
+        self._exc, self.calls = exc, 0
+
+    def __getitem__(self, _name):
+        return self
+
+    def find(self, *args, **kwargs):
+        self.calls += 1
+        raise self._exc
+
+    async def count_documents(self, *args, **kwargs):
+        self.calls += 1
+        raise self._exc
+
+
+def _unreachable(host="h:27017"):
+    from pymongo.errors import ServerSelectionTimeoutError
+    return ServerSelectionTimeoutError(f"{host}: [Errno 111] Connection refused")
+
+
+def _fallback_mongo(origin, proxy=None, *, proxy_url="mongodb://p:17017", fallback=True, pins=None):
+    opened = []
+
+    def factory(url, **kwargs):
+        opened.append((url, kwargs))
+        return {"mongodb://h:27017": origin, "mongodb://p:17017": proxy}[url]
+    cfg = MongoConfig(url="mongodb://h:27017", database="data", proxy_url=proxy_url)
+    reader = RealMongoReader(cfg, clock=lambda: datetime(2026, 9, 18, tzinfo=UTC), site="mx/gumi", fallback=fallback,
+                             pinned=set() if pins is None else pins, client_factory=factory)
+    return reader, opened
+
+
+async def test_mongo_원이_되면_원으로_읽고_원_접속은_짧은_타임아웃이고_source에_경로가_남는다():
+    reader, opened = _fallback_mongo({"data": _FakeDatabase([{"i": 1}])})
+    got = await reader.find("oee", {}, limit=5)
+    assert got.status == "ok" and got.data == [{"i": 1}] and got.source == "mongo:data.oee find={} limit=5 · 경로=원"
+    [(url, kwargs)] = opened
+    assert url == "mongodb://h:27017" and kwargs["serverSelectionTimeoutMS"] == 3000 and kwargs["connectTimeoutMS"] == 3000
+
+
+async def test_mongo_원이_서버를_못_고르면_프록시로_읽고_고정해_다음엔_원을_다시_안_친다():
+    origin, pins = _Raising(_unreachable()), set()
+    reader, opened = _fallback_mongo(origin, {"data": _FakeDatabase([{"i": 1}, {"i": 2}])}, pins=pins)
+    got = await reader.count("oee", {})
+    assert got.status == "ok" and got.data == 2 and got.source == "mongo:data.oee count={} · 경로=프록시"
+    assert pins == {("mx/gumi", "mongo")} and origin.calls == 1
+    url, kwargs = opened[1]
+    assert url == "mongodb://p:17017" and kwargs["serverSelectionTimeoutMS"] == 5000 and "connectTimeoutMS" not in kwargs
+    again = await reader.find("oee", {}, limit=1)
+    assert again.status == "ok" and again.source.endswith(" · 경로=프록시") and again.envelope.complete is False and origin.calls == 1
+
+
+async def test_mongo_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다():
+    from pymongo.errors import OperationFailure
+
+    reader, _ = _fallback_mongo(_Raising(_unreachable()), _Raising(_unreachable("p:17017")))
+    got = await reader.find("oee", {})
+    assert got.status == "error" and got.source.endswith(" · 경로=프록시")
+    assert got.error == ("ProxyAlsoFailed: 원 ServerSelectionTimeoutError: h:27017: [Errno 111] Connection refused → "
+                         "프록시 ServerSelectionTimeoutError: p:17017: [Errno 111] Connection refused")
+    for answered in (OperationFailure("Authentication failed.", code=18), OperationFailure("not authorized on data", code=13)):
+        pins = set()
+        reader, opened = _fallback_mongo(_Raising(answered), {"data": _FakeDatabase([])}, pins=pins)
+        got = await reader.count("oee", {})
+        assert got.status == "error" and got.error.startswith("OperationFailure") and got.source.endswith(" · 경로=원")
+        assert pins == set() and [u for u, _ in opened] == ["mongodb://h:27017"]
+
+
+async def test_mongo_예비_주소가_없거나_비었거나_스위치가_꺼지면_지금과_같다():
+    for proxy_url, fallback in ((None, True), ("", True), ("mongodb://p:17017", False)):
+        reader, opened = _fallback_mongo(_Raising(_unreachable()), {"data": _FakeDatabase([])}, proxy_url=proxy_url, fallback=fallback,
+                                         pins={("mx/gumi", "mongo")})
+        got = await reader.count("oee", {})
+        assert got.status == "error" and got.error == "ServerSelectionTimeoutError: h:27017: [Errno 111] Connection refused"
+        assert got.source == "mongo:data.oee count={}"
+        [(url, kwargs)] = opened
+        assert url == "mongodb://h:27017" and kwargs == {"serverSelectionTimeoutMS": 5000}

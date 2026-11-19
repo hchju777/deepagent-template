@@ -25,16 +25,28 @@ from src.config.schema_patrol import PatrolConfig
 from src.domain.base import StrictModel
 
 
+def _blank_to_none(v):
+    """빈 예비 주소는 프록시 없음 — 사내 config가 키를 비워 두고 배포한다. 형식 검사 전에 바꿔 빈 값이 형식 오류로 죽지 않게."""
+    return None if isinstance(v, str) and not v.strip() else v
+
+
 class RedisConfig(StrictModel):
     url: str
     # 운영 배포 주소(k8s 안 이름) — 사내 서비스 config의 `url`. 우리 `url`은 지금 로컬에서 붙는 주소(사내의 `_url`, IP:NodePort)다. **접속에 안 쓴다** — 사내
     # 사이트 config가 두 주소를 같이 적고 StrictModel은 모르는 키에 죽으므로 받아 둘 뿐이다(사내 적용 10-30). 키 이름은 `_url`(파이썬 필드는 밑줄로 못 시작한다).
     # 읽는 코드가 없어야 한다 — `tests/config/test_schema_site.py`가 지킨다.
     dev_url: str | None = Field(default=None, alias="_url")
+    # 예비 주소(R3-5z ㉕) — 원 주소가 접속 단계에서 실패하면 쓴다(`infrastructure/fallback.py`). 빈 값은 프록시 없음.
+    proxy_url: str | None = None
     db: int = 0
     password: SecretStr | None = None      # ACL username은 쓰지 않는다(사내 확인)
 
-    @field_validator("url", "dev_url")
+    @field_validator("proxy_url", mode="before")
+    @classmethod
+    def _blank_proxy(cls, v):
+        return _blank_to_none(v)
+
+    @field_validator("url", "dev_url", "proxy_url")
     @classmethod
     def _scheme(cls, v: str | None) -> str | None:
         if v is not None and not v.startswith(("redis://", "rediss://")):
@@ -53,6 +65,7 @@ class MongoConfig(StrictModel):
     url: str
     # 운영 배포 주소 — RedisConfig.dev_url과 같은 이유·같은 규칙(접속에 안 쓴다, 키는 `_url`).
     dev_url: str | None = Field(default=None, alias="_url")
+    proxy_url: str | None = None           # 예비 주소 — RedisConfig.proxy_url과 같은 규칙
     database: str
     user: str | None = None
     password: SecretStr | None = None
@@ -60,7 +73,12 @@ class MongoConfig(StrictModel):
     # 대상 DB에서 직접 만들었다면 그 DB 이름을 적어야 인증이 통과한다.
     auth_source: str = "admin"
 
-    @field_validator("url", "dev_url")
+    @field_validator("proxy_url", mode="before")
+    @classmethod
+    def _blank_proxy(cls, v):
+        return _blank_to_none(v)
+
+    @field_validator("url", "dev_url", "proxy_url")
     @classmethod
     def _scheme(cls, v: str | None) -> str | None:
         if v is not None and not v.startswith(("mongodb://", "mongodb+srv://")):

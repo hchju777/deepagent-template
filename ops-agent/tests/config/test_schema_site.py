@@ -192,3 +192,26 @@ def test_레포_이름이_중복이면_거부한다():
     with pytest.raises(ValueError, match="중복"):
         CodeConfig(repos=[{"name": "a", "url": "https://g/a", "path": "/1"},
                           {"name": "a", "url": "https://g/b", "path": "/2"}])
+
+
+# ── 프록시 예비 주소(R3-5z ㉕~㉗ — 사람 요청 11-18) ─────────────────────
+
+def test_redis와_mongodb의_proxy_url은_선택이고_빈_값은_프록시_없음이며_형식은_값이_있을_때만_본다():
+    """원 주소가 접속 단계에서 실패하면 쓰는 예비 주소. 없거나 빈 문자열이면 프록시 없음 — 지금과 같다. 빈 값은 url 형식 검사에서 뺀다(사내 config가 키를 비워
+    두고 배포한다). 값이 있으면 원 주소와 같은 규칙."""
+    assert RedisConfig(url="redis://h:6379").proxy_url is None
+    assert RedisConfig(url="redis://h:6379", proxy_url="").proxy_url is None and RedisConfig(url="redis://h:6379", proxy_url=" ").proxy_url is None
+    assert RedisConfig(url="redis://h:6379", proxy_url="rediss://p:16379").proxy_url == "rediss://p:16379"
+    with pytest.raises(ValidationError, match="redis://"):
+        RedisConfig(url="redis://h:6379", proxy_url="http://p:16379")
+    mongo = {"url": "mongodb://h:27017", "database": "data"}
+    assert MongoConfig(**mongo).proxy_url is None and MongoConfig(**mongo, proxy_url="").proxy_url is None
+    assert MongoConfig(**mongo, proxy_url="mongodb://p:17017").proxy_url == "mongodb://p:17017"
+    with pytest.raises(ValidationError, match="mongodb://"):
+        MongoConfig(**mongo, proxy_url="p:17017")
+    site = {**MINIMAL, "infra": {"redis": {"url": "redis://h:6379", "proxy_url": "redis://p:16379"}, "mongodb": {**mongo, "proxy_url": ""}}}
+    infra = SiteConfig.model_validate(site).infra
+    assert (infra.redis.proxy_url, infra.mongodb.proxy_url) == ("redis://p:16379", None)
+    for wrong in ("proxy", "proxyurl", "proxy_uri"):
+        with pytest.raises(ValidationError, match=wrong):
+            RedisConfig.model_validate({"url": "redis://h:6379", wrong: "redis://p:16379"})

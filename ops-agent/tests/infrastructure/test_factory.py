@@ -112,3 +112,19 @@ async def test_재생_REST는_인자별로_뜬_응답만_답하고_인자_없는
     old = build_adapters(site, clock=clock, seeds={"rest": {"lines": [{"line": "L1"}]}})
     assert (await old.rest.query("lines", {"line": "L2"})).data["response"] == [{"line": "L1"}]
     assert (await build_adapters(site, clock=clock, seeds={"rest": caught}).rest.query("lines", {"line": "L2"})).status == "error"
+
+
+def test_실구현에는_사이트와_프록시_예비_접속_스위치가_넘어가고_스위치는_인자가_없으면_env에서_읽는다(clock, monkeypatch):
+    """R3-5z ㉕ — (사이트, 자원)이 프록시 고정의 열쇠다. 어댑터는 하위 config만 받아 사이트를 모르므로 factory가 넘긴다. 스위치는 factory가 한 번 읽는다."""
+    proxied = SiteConfig.model_validate({"site": {"gbm": "mx", "fct": "gumi"},
+                                         "infra": {"redis": {"url": "redis://h:6379", "proxy_url": "redis://p:16379"},
+                                                   "mongodb": {"url": "mongodb://h:27017", "database": "data", "proxy_url": "mongodb://p:17017"}}})
+    monkeypatch.delenv("AGENT_PROXY_FALLBACK", raising=False)
+    adapters = build_adapters(proxied, clock=clock)
+    assert [(a._route.site, a._route.resource, a._route.armed) for a in (adapters.redis, adapters.mongo)] == [
+        ("mx/gumi", "redis", True), ("mx/gumi", "mongo", True)]
+    monkeypatch.setenv("AGENT_PROXY_FALLBACK", "off")
+    off = build_adapters(proxied, clock=clock)
+    assert not off.redis._route.armed and not off.mongo._route.armed
+    assert build_adapters(proxied, clock=clock, fallback=True).mongo._route.armed                       # 인자가 env보다 앞선다
+    assert not build_adapters(SITE, clock=clock, fallback=True).redis._route.armed                      # 예비 주소가 없으면

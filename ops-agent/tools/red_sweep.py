@@ -3462,10 +3462,10 @@ SS = ROOT / "src/config/schema_site.py"
 SITE_REDIS_URL_T = "tests/config/test_schema_site.py::test_redis의_운영_주소_url은_dev_url로_읽히고_없으면_None이며_스킴과_미지_키는_여전히_거른다"
 SITE_MONGO_URL_T = "tests/config/test_schema_site.py::test_mongodb의_운영_주소_url은_dev_url로_읽히고_없으면_None이며_스킴과_미지_키는_여전히_거른다"
 CASES += [
- ("redis가 운영 주소 _url을 안 받는다", SS, "    dev_url: str | None = Field(default=None, alias=\"_url\")\n    db: int = 0\n", "    dev_url: str | None = Field(default=None, alias=\"_prod_url\")\n    db: int = 0\n", [SITE_REDIS_URL_T]),
- ("redis 운영 주소의 스킴을 안 본다", SS, "    @field_validator(\"url\", \"dev_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"redis://\", \"rediss://\")):", "    @field_validator(\"url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"redis://\", \"rediss://\")):", [SITE_REDIS_URL_T]),
- ("mongodb가 운영 주소 _url을 안 받는다", SS, "    dev_url: str | None = Field(default=None, alias=\"_url\")\n    database: str\n", "    dev_url: str | None = Field(default=None, alias=\"_prod_url\")\n    database: str\n", [SITE_MONGO_URL_T]),
- ("mongodb 운영 주소의 스킴을 안 본다", SS, "    @field_validator(\"url\", \"dev_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", "    @field_validator(\"url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", [SITE_MONGO_URL_T]),
+ ("redis가 운영 주소 _url을 안 받는다", SS, "    dev_url: str | None = Field(default=None, alias=\"_url\")\n    # 예비 주소(R3-5z ㉕)", "    dev_url: str | None = Field(default=None, alias=\"_prod_url\")\n    # 예비 주소(R3-5z ㉕)", [SITE_REDIS_URL_T]),
+ ("redis 운영 주소의 스킴을 안 본다", SS, "    @field_validator(\"url\", \"dev_url\", \"proxy_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"redis://\", \"rediss://\")):", "    @field_validator(\"url\", \"proxy_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"redis://\", \"rediss://\")):", [SITE_REDIS_URL_T]),
+ ("mongodb가 운영 주소 _url을 안 받는다", SS, "    dev_url: str | None = Field(default=None, alias=\"_url\")\n    proxy_url: str | None = None           # 예비 주소", "    dev_url: str | None = Field(default=None, alias=\"_prod_url\")\n    proxy_url: str | None = None           # 예비 주소", [SITE_MONGO_URL_T]),
+ ("mongodb 운영 주소의 스킴을 안 본다", SS, "    @field_validator(\"url\", \"dev_url\", \"proxy_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", "    @field_validator(\"url\", \"proxy_url\")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith((\"mongodb://\", \"mongodb+srv://\")):", [SITE_MONGO_URL_T]),
 ]
 
 # ── 12a-R3-5s ① — 결과를 품는 것은 생성자뿐, 상태 설정은 같은 수신자의 뒤 호출 ──
@@ -4281,7 +4281,30 @@ CASES += [
  ('boot가 프록시 예비 접속 스위치 줄을 안 찍는다', MN, '        print(f"✅ 기동 검증 통과 — {args.config_root}")\n        print(f"  {switch_line(env)}")\n', '        print(f"✅ 기동 검증 통과 — {args.config_root}")\n', ['tests/test_cli.py::test_boot와_schedule은_프록시_예비_접속_스위치를_한_줄_찍는다']),
  ('schedule이 프록시 예비 접속 스위치 줄을 안 찍는다', MN, '    from src.infrastructure.fallback import switch_line\n    print(f"  {switch_line(env)}")\n', '', ['tests/test_cli.py::test_boot와_schedule은_프록시_예비_접속_스위치를_한_줄_찍는다']),
 ]
-assert len(CASES) >= 1666, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉕ — 프록시 예비 접속 2: Redis·Mongo의 proxy_url(빈 값은 없음), 원 접속 3초(redis 재시도 0), 접속 단계 실패만 대체·고정, source의 경로, factory의 사이트·스위치 ──
+MGR = ROOT / "src/infrastructure/mongo_reader.py"
+FCT = ROOT / "src/infrastructure/factory.py"
+CASES += [
+ ('redis 원 접속을 짧게 안 한다', RR, '            self._client = self._open(self._cfg.url, short=self._route.armed)\n', '            self._client = self._open(self._cfg.url, short=False)\n', ['tests/infrastructure/test_redis_reader.py::test_redis_원이_되면_원으로_읽고_원_접속은_짧은_타임아웃에_재시도_없음이고_source에_경로가_남는다']),
+ ('redis 원 접속에 재시도를 남긴다', RR, '            kwargs["retry"] = Retry(NoBackoff(), 0)\n', '            pass\n', ['tests/infrastructure/test_redis_reader.py::test_redis_원이_되면_원으로_읽고_원_접속은_짧은_타임아웃에_재시도_없음이고_source에_경로가_남는다']),
+ ('redis 인증 실패도 프록시로 대체한다', RR, '    if isinstance(exc, (rx.AuthenticationError, getattr(rx, "AuthorizationError", rx.AuthenticationError))):\n        return False\n', '', ['tests/infrastructure/test_redis_reader.py::test_redis_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다']),
+ ('redis 읽기 타임아웃도 프록시로 대체한다', RR, ' and "connecting to" in str(exc)', '', ['tests/infrastructure/test_redis_reader.py::test_redis_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다']),
+ ('redis 프록시 클라이언트를 원 주소로 연다', RR, '                self._proxy_client = self._open(self._cfg.proxy_url, short=False)\n', '                self._proxy_client = self._open(self._cfg.url, short=False)\n', ['tests/infrastructure/test_redis_reader.py::test_redis_원이_접속_단계에서_실패하면_프록시로_읽고_고정해_다음엔_원을_다시_안_친다']),
+ ('redis 읽은 경로를 source에 안 남긴다', RR, '        return got, source + self._route.mark(proxy)\n', '        return got, source\n', ['tests/infrastructure/test_redis_reader.py::test_redis_원이_되면_원으로_읽고_원_접속은_짧은_타임아웃에_재시도_없음이고_source에_경로가_남는다', 'tests/infrastructure/test_redis_reader.py::test_redis_원이_접속_단계에서_실패하면_프록시로_읽고_고정해_다음엔_원을_다시_안_친다']),
+ ('redis 실패한 경로를 source에 안 남긴다', RR, 'source=source + self._route.mark(self._route.on_proxy), clock=self._clock)', 'source=source, clock=self._clock)', ['tests/infrastructure/test_redis_reader.py::test_redis_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다']),
+ ('mongo 원 접속을 짧게 안 한다', MGR, '            if not proxy and self._route.armed:\n', '            if False:\n', ['tests/infrastructure/test_mongo_reader.py::test_mongo_원이_되면_원으로_읽고_원_접속은_짧은_타임아웃이고_source에_경로가_남는다']),
+ ('mongo 프록시에도 짧은 접속을 쓴다', MGR, '            if not proxy and self._route.armed:\n', '            if self._route.armed:\n', ['tests/infrastructure/test_mongo_reader.py::test_mongo_원이_서버를_못_고르면_프록시로_읽고_고정해_다음엔_원을_다시_안_친다']),
+ ('mongo 서버 선택 밖의 실패도 프록시로 대체한다', MGR, '    return isinstance(exc, ServerSelectionTimeoutError)\n', '    return isinstance(exc, Exception)\n', ['tests/infrastructure/test_mongo_reader.py::test_mongo_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다']),
+ ('mongo 프록시 클라이언트를 원 주소로 연다', MGR, 'self._client_factory(self._cfg.proxy_url if proxy else self._cfg.url, **kwargs)', 'self._client_factory(self._cfg.url, **kwargs)', ['tests/infrastructure/test_mongo_reader.py::test_mongo_원이_서버를_못_고르면_프록시로_읽고_고정해_다음엔_원을_다시_안_친다']),
+ ('mongo 읽은 경로를 source에 안 남긴다', MGR, '        return got, self._route.mark(proxy)\n', '        return got, ""\n', ['tests/infrastructure/test_mongo_reader.py::test_mongo_원이_되면_원으로_읽고_원_접속은_짧은_타임아웃이고_source에_경로가_남는다', 'tests/infrastructure/test_mongo_reader.py::test_mongo_원이_서버를_못_고르면_프록시로_읽고_고정해_다음엔_원을_다시_안_친다']),
+ ('mongo 실패한 경로를 source에 안 남긴다', MGR, 'source=source + self._route.mark(self._route.on_proxy), clock=self._clock)', 'source=source, clock=self._clock)', ['tests/infrastructure/test_mongo_reader.py::test_mongo_둘_다_실패하면_두_오류를_다_든_실패이고_대상이_답한_실패는_대체하지_않는다']),
+ ('빈 예비 주소를 형식 검사에 넣는다', SS, '    return None if isinstance(v, str) and not v.strip() else v\n', '    return v\n', ['tests/config/test_schema_site.py::test_redis와_mongodb의_proxy_url은_선택이고_빈_값은_프록시_없음이며_형식은_값이_있을_때만_본다']),
+ ('redis 예비 주소의 형식을 안 본다', SS, '    @field_validator("url", "dev_url", "proxy_url")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith(("redis://"', '    @field_validator("url", "dev_url")\n    @classmethod\n    def _scheme(cls, v: str | None) -> str | None:\n        if v is not None and not v.startswith(("redis://"', ['tests/config/test_schema_site.py::test_redis와_mongodb의_proxy_url은_선택이고_빈_값은_프록시_없음이며_형식은_값이_있을_때만_본다']),
+ ('factory가 어댑터에 사이트를 안 넘긴다', FCT, '    where, on = str(site.site), (fallback_on() if fallback is None else fallback)\n', '    where, on = "", (fallback_on() if fallback is None else fallback)\n', ['tests/infrastructure/test_factory.py::test_실구현에는_사이트와_프록시_예비_접속_스위치가_넘어가고_스위치는_인자가_없으면_env에서_읽는다']),
+ ('factory가 env 스위치를 안 읽는다', FCT, '    where, on = str(site.site), (fallback_on() if fallback is None else fallback)\n', '    where, on = str(site.site), (True if fallback is None else fallback)\n', ['tests/infrastructure/test_factory.py::test_실구현에는_사이트와_프록시_예비_접속_스위치가_넘어가고_스위치는_인자가_없으면_env에서_읽는다']),
+ ('factory가 mongo에 스위치를 안 넘긴다', FCT, 'mongo=RealMongoReader(infra.mongodb, clock=clock, site=where, fallback=on)', 'mongo=RealMongoReader(infra.mongodb, clock=clock, site=where, fallback=True)', ['tests/infrastructure/test_factory.py::test_실구현에는_사이트와_프록시_예비_접속_스위치가_넘어가고_스위치는_인자가_없으면_env에서_읽는다']),
+]
+assert len(CASES) >= 1684, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
