@@ -830,7 +830,7 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | R3-5z ㉒ ✅ | graphify worktree 자리 | (측정 #35 후속 3) worktree 루트를 `tempfile.mkdtemp(prefix="dt-graphify-<gbm>-")`로 OS temp에, 끝나면(실패해도) 지운다; worktree add 전에 그 레포 `git worktree prune`; 빌드 출력에 temp 자리와 `TMPDIR`로 바꿀 수 있다는 한 줄 | `graph_build`, `__main__` |
 | R3-5z ⑳b ✅ | 이름 변환 조회 범위 | (측정 #36 걷기 20b) 이름 변환 조회에만 이은 컴포넌트 클래스마다 진입에서 닿는 멤버 파일(`reachable_members`)을 더한다 — 비교 범위(`files`)는 그대로 | `deployed_code` |
 | R3-5z ㉑b ✅ | 키 자리를 읽기 구간까지 | (측정 #36 걷기 21b) `write_path`의 키 자리(`at_key`)가 쓰기 구간에서 비면 `code.resources` 글 전체(읽기 구간 포함)에서 같은 키 이름의 자리로 채운다 | `walk` |
-| R3-5z ㉓ | 읽는 쪽 탓 다시 묻기 | (측정 #36 c-1 r1) 걷기가 우리 안 토픽 홉(발행 선언 있음)에서 `구독 토픽이 비었다`·`구독 토픽에 그 유형이 없다`로 멈췄는데 최상위 서비스가 그 발행 선언에 없으면 verify 문제 1개 — 다시 묻고 두 번째도 같으면 기존 강등. external·not_a_defect·inconclusive·degraded와 서비스 아닌 component는 안 건드린다 | `nodes` |
+| R3-5z ㉓ ✅ | 읽는 쪽 탓 다시 묻기 | (측정 #36 c-1 r1) 걷기가 우리 안 토픽 홉(발행 선언 있음)에서 `구독 토픽이 비었다`·`구독 토픽에 그 유형이 없다`로 멈췄는데 최상위 서비스가 그 발행 선언에 없으면 verify 문제 1개 — 다시 묻고 두 번째도 같으면 기존 강등. external·not_a_defect·inconclusive·degraded와 서비스 아닌 component는 안 건드린다 | `nodes` |
 
 
 

@@ -806,6 +806,71 @@ async def test_verify는_바깥_토픽_이름을_component로_받고_되묻기_�
     assert (await nodes["verify"](inside))["verify_problems"] == ["증거에도 토폴로지에도 없는 component 'ext.feed'"]
 
 
+# ── R3-5z ㉓ — 비거나 그 유형이 없는 우리 안 토픽을 읽는 쪽 탓 판정은 다시 묻는다(측정 #36 c-1 r1) ──
+
+_TYPE_STOP = "구독 토픽에 그 유형이 없다 — src.feed(COLOR 0건(끝 4건만) · Proc [processor] · 발행 선언: collector)"
+
+
+def _inside_walk(*, stopped=_TYPE_STOP, candidates=("collector",), service="발행 선언: collector", kind="topic"):
+    """쓰는 클래스 Proc(processor)의 구독 토픽 src.feed(발행 선언: collector — 우리 안)에서 멈춘 걷기."""
+    from src.domain.case import Hop, Rung, Walk
+    hops = [Hop(key="sum:L1", writer="Proc", service="processor", candidates=["processor"], status="빈 배열 (data)", bad=True, evidence_id="t-1.e1"),
+            Hop(key="src.feed", kind=kind, depth=1, service=service, candidates=list(candidates), status="COLOR 0건(끝 4건만) · 구독 Proc [processor]",
+                bad=True, evidence_id="t-3.e1", parent="t-1.e1", basis="Proc가 읽는 토픽(code.resources t-2.e1)")]
+    return Walk(hops=hops, reads=3, stopped=stopped, stop_at="t-3.e1",
+                rungs=[Rung(action="code.read", params={"service": "processor", "path": "p.py", "line": 4}, evidence="t-2.e1")])
+
+
+def _reader_problem(component="processor", *, stopped=_TYPE_STOP, publishers="collector"):
+    return (f"최상위 {component}는 걷기가 멈춘 토픽 src.feed의 발행 쪽({publishers})이 아니다 — 걷기: {stopped}. 토픽이 비었거나 그 유형이 없다는 것은"
+            f" 발행 쪽의 일이다. {component}가 원인이라면 그 유형이 다른 토픽에 있다는 증거를 인용하고, 아니면 발행 쪽이나 그 토픽을 원인으로 다시 적어라")
+
+
+def test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나():
+    """측정 #36 c-1 r1: 걷기가 `구독 토픽에 그 유형이 없다 — <원천 토픽>(…, 발행 선언: <발행 서비스>)`에서 멈췄는데 판정이 그 토픽을 **읽는** 서비스를 최상위로
+    댔다(config_error — 그 서비스의 출력 기본 토픽 설정을 원천이 빈 원인으로 읽었다). 사실은 맞는데 방향을 뒤집었다. 발행 쪽·토픽 이름·external·
+    결함 아님·inconclusive·degraded, 우리 밖 토픽(발행 선언 없음)·다른 멈춤·토픽 홉이 아닌 멈춤·걷기 없음은 안 건드린다."""
+    from src.application.nodes import topic_reader_problems
+
+    services = frozenset({"processor", "collector", "sink"})
+    walk = _inside_walk()
+
+    def check(component="processor", *, kind="config_error", on=walk):
+        return topic_reader_problems(verdict(verdict_type=kind, root_cause=cause(component, "t-1.e1")), walk=on, components=services)
+
+    assert check() == [_reader_problem()]
+    empty = _inside_walk(stopped="구독 토픽이 비었다 — src.feed(Proc [processor] · 발행 선언: collector)")
+    assert check(on=empty) == [_reader_problem(stopped=empty.stopped)]                                         # 빈 토픽도 같다
+    assert check("sink") == [_reader_problem("sink")]                                                          # 읽는 쪽만이 아니다 — 발행 쪽이 아니면
+    assert check("collector") == [] and check("src.feed") == []                                                # 발행 쪽, 토픽 이름(서비스 아님)
+    for kind in ("external", "inconclusive", "degraded"):                                                      # not_a_defect는 최상위를 못 갖는다(모델 검증)
+        assert check(kind=kind) == [], kind
+    assert check(on=_inside_walk(candidates=(), service="발행 선언 없음(우리 밖)")) == []                       # 우리 밖 토픽은 바깥 쪽 규칙(R3-5u ②)
+    assert check(on=_inside_walk(stopped="입력이 다 정상 — Proc")) == []                                        # 다른 멈춤
+    assert check(on=_inside_walk(kind="message")) == []                                                         # 토픽 홉이 아닌 멈춤
+    assert check(on=None) == []
+    two = _inside_walk(candidates=("collector", "relay"))
+    assert check(on=two) == [_reader_problem(publishers="collector, relay")]
+
+
+async def test_verify는_읽는_쪽_탓이면_한_번_되묻고_고친_답은_지나고_두_번째도_같으면_low로_강등한다(case):
+    """R3-5z ㉓: 문제는 기존 되묻기 흐름을 탄다 — 첫 번째는 되묻기(`verify_attempts` 1), 발행 쪽으로 고친 답은 통과, 두 번째도 읽는 쪽이면 기존 강등(low, 검증 미통과
+    caveat). 대본 경로(`check_discovery=False`)는 안 건다."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor", "collector"})))
+    blamed = verdict(verdict_type="config_error", root_cause=cause("processor", "t-1.e1"))
+    first = await nodes["verify"](_state(case, walk=_inside_walk(), verdict=blamed))
+    assert first["verify_problems"] == [_reader_problem()] and first["verify_attempts"] == 1
+    fixed = await nodes["verify"](_state(case, walk=_inside_walk(), verify_attempts=1,
+                                         verdict=verdict(verdict_type="data_loss", root_cause=cause("collector", "t-1.e1"))))
+    assert fixed["verify_problems"] == [] and "verify_attempts" not in fixed and "llm_errors" not in fixed       # 강등 길이 아니라 통과 길
+    assert "verdict" not in fixed or fixed["verdict"].confidence == "high"
+    second = await nodes["verify"](_state(case, walk=_inside_walk(), verify_attempts=1, verdict=blamed))
+    got = second["verdict"]
+    assert second["verify_problems"] == [] and got.confidence == "low" and got.root_cause.component == "processor"
+    assert any(c.startswith("검증 미통과: 최상위 processor는 걷기가 멈춘 토픽 src.feed의 발행 쪽(collector)이 아니다") for c in got.caveats)
+    loose = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor", "collector"}), check_discovery=False))
+    assert (await loose["verify"](_state(case, walk=_inside_walk(), verdict=blamed)))["verify_problems"] == []
+
 
 # ── R3-5d ⑤ — 결함 아님(not_a_defect)은 걷기가 지킨다 ──
 

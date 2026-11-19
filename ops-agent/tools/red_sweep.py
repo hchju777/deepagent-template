@@ -4253,7 +4253,21 @@ CASES += [
  ('쓰기 구간에 키가 있어도 글 전체의 자리를 쓴다', WK, '        if not at_key:\n            # 인덱스가 그 키를 읽기로만', '        if True:\n            # 인덱스가 그 키를 읽기로만', ['tests/application/test_walk.py::test_쓰기_구간에_그_키가_없으면_쓰기_경로는_읽기_구간의_같은_키_자리로_그_키를_싣는_명령의_토픽_줄을_묻는다']),
  ('읽기 구간의 다른 키 자리도 쓴다', WK, '            at_key = [at for name, _, at in _OUTPUT.findall(rtext or "") if name == template]\n', '            at_key = [at for name, kind, at in _OUTPUT.findall(rtext or "") if kind == "rediskey"]\n', ['tests/application/test_walk.py::test_쓰기_구간에_그_키가_없으면_쓰기_경로는_읽기_구간의_같은_키_자리로_그_키를_싣는_명령의_토픽_줄을_묻는다']),
 ]
-assert len(CASES) >= 1645, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉓ — 읽는 쪽 탓 다시 묻기: 우리 안 토픽이 비었거나 그 유형이 없는 멈춤에서 최상위 서비스가 발행 선언에 없으면 verify 문제 ──
+CASES += [
+ ('읽는 쪽 탓을 안 묻는다', ND, '            problems += topic_reader_problems(verdict, walk=state.walk, components=deps.components)\n', '', ['tests/application/test_verdict.py::test_verify는_읽는_쪽_탓이면_한_번_되묻고_고친_답은_지나고_두_번째도_같으면_low로_강등한다']),
+ ('다른 멈춤에서도 읽는 쪽 탓을 묻는다', ND, '    if not walk.stopped.startswith(_TOPIC_STOPS):\n        return []\n    stop = next(', '    stop = next(', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('빈 토픽 멈춤은 안 묻는다', ND, '_TOPIC_STOPS = ("구독 토픽이 비었다", "구독 토픽에 그 유형이 없다")', '_TOPIC_STOPS = ("구독 토픽에 그 유형이 없다",)', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('우리 밖 토픽에서도 읽는 쪽 탓을 묻는다', ND, 'if stop is None or stop.kind != "topic" or not stop.candidates:\n        return []\n    component = verdict.root_cause.component', 'if stop is None or stop.kind != "topic":\n        return []\n    component = verdict.root_cause.component', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('토픽 홉이 아닌 멈춤에서도 읽는 쪽 탓을 묻는다', ND, 'if stop is None or stop.kind != "topic" or not stop.candidates:\n        return []\n    component = verdict.root_cause.component', 'if stop is None or not stop.candidates:\n        return []\n    component = verdict.root_cause.component', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('external도 읽는 쪽 탓을 묻는다', ND, 'verdict.verdict_type in ("external", "not_a_defect", "inconclusive", "degraded"):\n        return []\n    if not walk.stopped.startswith(_TOPIC_STOPS)', 'verdict.verdict_type in ("not_a_defect", "inconclusive", "degraded"):\n        return []\n    if not walk.stopped.startswith(_TOPIC_STOPS)', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('inconclusive도 읽는 쪽 탓을 묻는다', ND, 'verdict.verdict_type in ("external", "not_a_defect", "inconclusive", "degraded"):\n        return []\n    if not walk.stopped.startswith(_TOPIC_STOPS)', 'verdict.verdict_type in ("external", "not_a_defect", "degraded"):\n        return []\n    if not walk.stopped.startswith(_TOPIC_STOPS)', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('degraded도 읽는 쪽 탓을 묻는다', ND, 'verdict.verdict_type in ("external", "not_a_defect", "inconclusive", "degraded"):\n        return []\n    if not walk.stopped.startswith(_TOPIC_STOPS)', 'verdict.verdict_type in ("external", "not_a_defect", "inconclusive"):\n        return []\n    if not walk.stopped.startswith(_TOPIC_STOPS)', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('서비스 아닌 최상위도 읽는 쪽 탓으로 묻는다', ND, '    if component not in components or component in stop.candidates:\n        return []\n    return [f"최상위', '    if component in stop.candidates:\n        return []\n    return [f"최상위', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+ ('발행 쪽 최상위도 읽는 쪽 탓으로 묻는다', ND, '    if component not in components or component in stop.candidates:\n        return []\n    return [f"최상위', '    if component not in components:\n        return []\n    return [f"최상위', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나', 'tests/application/test_verdict.py::test_verify는_읽는_쪽_탓이면_한_번_되묻고_고친_답은_지나고_두_번째도_같으면_low로_강등한다']),
+ ('읽는 쪽 탓 문제에 발행 선언을 하나만 적는다', ND, "의 발행 쪽({', '.join(stop.candidates)})이 아니다", '의 발행 쪽({stop.candidates[0]})이 아니다', ['tests/application/test_verdict.py::test_우리_안_토픽이_비었거나_그_유형이_없는_멈춤에서_최상위가_그_토픽을_읽는_서비스면_문제_하나']),
+]
+assert len(CASES) >= 1656, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:
