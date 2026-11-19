@@ -1476,3 +1476,21 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
     `message_keys`의 토픽 줄도 None이다.
 - 방향: **R3-5z ⑳b**(이름 변환 조회 범위)·**㉑b**(키 자리를 읽기 구간까지). 답은 [reply.md](reply.md)의 #36 걷기 보완.
 
+## 측정 #36 c-1 r1 — 비거나 그 유형이 없는 토픽을 읽는 쪽 탓 판정 (11-19, 평가자) → R3-5z ㉓
+
+- 증상: 걷기가 `구독 토픽에 그 유형이 없다 — <원천 토픽>(…, 발행 선언: <발행 서비스>)`에서 멈췄다. 판정은 그 토픽을 **읽는** 서비스를 최상위로 댔고(config_error), 그 서비스의
+  **출력** 기본 토픽 설정을 원천이 빈 원인으로 읽었다. 사실은 맞는데 방향을 뒤집었고 검증은 통과했다.
+- 요청(`nodes.py` verify, `check_discovery`일 때 `not_a_defect_problems` 옆): 아래가 모두 참이면 문제 1개 — 다시 묻고, 두 번째도 같으면 기존 강등.
+  - `walk.stopped`가 `구독 토픽이 비었다` 또는 `구독 토픽에 그 유형이 없다`로 시작
+  - `walk.stop_at` 홉이 `kind == "topic"`이고 `candidates`(발행 선언 서비스)가 비지 않음(우리 밖 토픽은 제외)
+  - 판정 유형이 external·not_a_defect·inconclusive·degraded가 아님
+  - 최상위 component가 서비스(`deps.components`)이고 그 홉의 `candidates`에 없음
+  - 문제 글: "최상위 <component>는 걷기가 멈춘 토픽 <토픽>의 발행 쪽(<발행 서비스>)이 아니다 — 걷기: <멈춤>. 토픽이 비었거나 그 유형이 없다는 것은 발행 쪽의 일이다.
+    <component>가 원인이라면 그 유형이 다른 토픽에 있다는 증거를 인용하고, 아니면 발행 쪽이나 그 토픽을 원인으로 다시 적어라"
+  - 최상위가 토픽 이름처럼 서비스가 아니면 건드리지 않는다.
+- 테스트 요청: 읽는 쪽 탓이면 문제 1개 / 발행 쪽·토픽 이름·external·inconclusive면 통과 / 우리 밖 토픽·다른 멈춤·걷기 없음이면 통과 / verify 노드: 첫 번째는 다시 묻기
+  (`verify_attempts` 1), 고친 답은 통과, 두 번째도 같으면 low로 강등.
+- **코드 확인**(11-19): 걷기와 어긋난 최상위를 보는 것은 `caveat_walk_disagreement`(R3-5d ①-b)뿐인데, 멈춤이 `입력…`일 때만 돌고 문제가 아니라 caveat다. 토픽 홉 멈춤
+  (`구독 토픽…`)에서는 아무 검사도 없어 통과했다. 토픽 홉의 `candidates`는 그 토픽의 발행 선언 서비스다(`published`).
+- 방향: **R3-5z ㉓**(읽는 쪽 탓 다시 묻기). 답은 [reply.md](reply.md)의 #36 c-1.
+
