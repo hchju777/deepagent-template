@@ -1130,6 +1130,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
     # 멈춘 자리 = 가장 깊은 나쁜 홉(같은 깊이면 먼저 읽은 것). 사유와 다음 칸은 **그 홉**의 일로 만든다 — 마지막 실패나 첫 "모름"이 아니라.
     bad_hops = [h for h in hops if h.bad]
     stop_hop = max(bad_hops, key=lambda h: h.depth) if bad_hops else hops[0]
+    fill = ""
     ev = stop_hop.evidence_id
     rungs: list[Rung] = []
     dated: _Walked | None = None                                                            # 걸은 클래스에서 멈췄으면 그 기록 — 날짜 줄(R3-5z ⑧)
@@ -1244,6 +1245,7 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
             # 이어 온 나쁜 값이 그 클래스 병합 뒤 채움값과 같으면 병합 키 ← 입력 필드 단일값(R3-5z ⑱ — 측정 #34 4: 작업자 걷기가 처리기에서 `입력이 다 정상`으로 멈추고
             # 판정문이 원천 공백을 말하지 않았다).
             if (source := fill_source(merges_at.get(ev, []), watched_at.get(ev), inputs_at.get(ev, []))):
+                fill = source
                 stopped += f" · {source}"
             if info.scope and info.at is not None:
                 rungs.append(Rung(action="code.read", params={"service": info.scope, "path": info.at[0], "line": info.at[1]}, evidence=info.res_id))
@@ -1309,4 +1311,4 @@ async def run_walk(state: CaseState, *, runner: TaskRunnerPort, classes: frozens
         facts.append(line)
     return {"plan_tasks": tasks, "evidence": evidence,
             "walk": Walk(hops=hops, reads=counter, seconds=elapsed(), counts=count_runs, count_seconds=count_spent, stopped=stopped, stop_at=ev, rungs=rungs,
-                         notes=notes, facts=facts)}
+                         notes=notes, facts=facts, fill=fill)}

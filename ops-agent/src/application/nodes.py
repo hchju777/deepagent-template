@@ -1136,6 +1136,22 @@ def topic_reader_problems(verdict: Verdict, *, walk: Walk | None, components: fr
             f"없다는 것은 발행 쪽의 일이다. {component}가 원인이라면 그 유형이 다른 토픽에 있다는 증거를 인용하고, 아니면 발행 쪽이나 그 토픽을 원인으로 다시 적어라"]
 
 
+def fill_blame_problems(verdict: Verdict, *, walk: Walk | None, components: frozenset[str]) -> list[str]:
+    """걷기가 멈춘 클래스의 채움값이 입력 필드의 한 값에서 왔는데(`Walk.fill`) 최상위가 그 클래스의 서비스면 문제 하나(R3-5z ㉙ — 측정 #37 c-13 r2: 서술은 원천 필드가
+    모두 공백이라 쓰고도 그 병합을 한 서비스를 logic_bug(high)로 댔다). 되묻기만이다 — 그 값이 그 필드의 정상 값이라는 증거가 있으면 그 서비스가 맞을 수 있다. 그 클래스의
+    서비스는 멈춘 홉의 후보(공유 레포면 그 전부)다. 입력을 낸 쪽·아래쪽 서비스·서비스 아닌 최상위(토픽 이름 등)와 원인 서비스를 안 대는 유형은 안 건드린다."""
+    if walk is None or not walk.fill or verdict.root_cause is None or verdict.verdict_type in ("external", "not_a_defect", "inconclusive", "degraded"):
+        return []
+    stop = next((h for h in walk.hops if h.evidence_id == walk.stop_at), None)
+    if stop is None or not stop.candidates:
+        return []
+    component = verdict.root_cause.component
+    if component not in components or component not in stop.candidates:
+        return []
+    return [f"최상위 {component}는 걷기가 멈춘 클래스 {stop.writer or stop.key}의 서비스다 — 그 클래스의 채움값은 입력 필드에서 왔다: {walk.fill}. 입력 필드가 전부 한 값이면 "
+            f"병합이 못 맞는 것은 입력의 일이다. {component}가 원인이라면 그 값이 그 필드의 정상 값이라는 증거를 인용하고, 아니면 그 입력이나 그 입력을 낸 쪽을 원인으로 다시 적어라"]
+
+
 def caveat_emptied(verdict: Verdict, *, walk: Walk | None) -> Verdict:
     """걷기가 "성공으로 비워 썼다"에서 멈췄고 판정이 결함 아님이면 주의 줄(R3-5z ⑤ — 측정 #33 회신의 답 3): 상류 고장인데 쓴 쪽이 성공으로 비워 쓰는 경우가 있다 —
     0이 업무상 맞는지는 사람이 확인한다. 바뀐 것이 없으면 같은 객체."""
@@ -1425,6 +1441,7 @@ def make_verdict_nodes(deps: EngineDeps) -> dict:
             # 결함 아님(R3-5d ⑤)은 걷기가 지킨다 — 대본 경로는 걷기가 없다.
             problems += not_a_defect_problems(verdict, walk=state.walk, plan_tasks=state.plan_tasks)
             problems += topic_reader_problems(verdict, walk=state.walk, components=deps.components)
+            problems += fill_blame_problems(verdict, walk=state.walk, components=deps.components)
         # 검증이 아는 사실 한 줄(R3-5y ①) — 판정이 정해진 길(통과·강등)에서만 남긴다. 되묻는 길은 다음 판정을 다시 본다.
         def facts(final: Verdict) -> str:
             return verdict_facts(final, evidence=state.evidence, plan_tasks=state.plan_tasks, service_repos=deps.service_repos or {}, walk=state.walk)

@@ -288,6 +288,9 @@ class Walk(StrictModel):
     notes: list[str] = []
     # 걷기가 세운 사실 줄(R3-5z ⑦·⑧ — 측정 #33 2 패턴 B·C) — 주 뒤에 같은 `주:`로 찍히고, 검증 사실 줄 꼬리에도 실린다(평가가 판정과 나란히 센다).
     facts: list[str] = []
+    # 멈춘 클래스의 채움 사실(R3-5z ⑱의 `fill_source` 글) — 멈춤 글 꼬리에도 있지만 검증이 글을 되읽지 않게 따로 둔다(R3-5z ㉙ — 측정 #37 후속: 채움값이 입력 필드의
+    # 한 값에서 왔는데 판정이 그 병합을 한 서비스를 탓했다).
+    fill: str = ""
 
     def next_hop(self) -> tuple[str, dict] | None:
         return (self.rungs[0].action, dict(self.rungs[0].params)) if self.rungs else None

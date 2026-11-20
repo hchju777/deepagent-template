@@ -871,6 +871,62 @@ async def test_verify는_읽는_쪽_탓이면_한_번_되묻고_고친_답은_�
     loose = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor", "collector"}), check_discovery=False))
     assert (await loose["verify"](_state(case, walk=_inside_walk(), verdict=blamed)))["verify_problems"] == []
 
+# ── R3-5z ㉙ — 채움값이 입력 필드의 한 값에서 왔는데 그 병합을 한 서비스를 탓하면 다시 묻는다(측정 #37 후속) ──
+
+_FILL = "병합 뒤 fillna('-')가 이어 온 단일값 wg='-'와 같다(common/merge.py:L15) · 병합 키 wg ← 입력 필드 ws_code(common/merge.py:L14): feed:events:L1 4행 전부 ''"
+
+
+def _filled_walk(*, fill=_FILL, candidates=("processor", "batch", "sink")):
+    """쓰는 클래스 Merger(공유 레포 — 서비스 셋)에서 `입력이 다 정상`으로 멈추고 그 클래스의 채움 사실이 선 걷기."""
+    from src.domain.case import Hop, Rung, Walk
+    hops = [Hop(key="sum:L1", writer="Summary", service="batch", candidates=["batch"], status="나쁨 — 3행 전부 wg='-'", bad=True, evidence_id="t-1.e1"),
+            Hop(key="alarm:raw:L1", writer="Merger", service="dt-core(서비스 3개 공유)", candidates=list(candidates), status="나쁨 — 같은 단일값 wg='-'",
+                bad=True, evidence_id="t-3.e1", parent="t-1.e1"),
+            Hop(key="feed:events:L1", depth=2, status="정상 — 행 4 · 필드 3 · 모든 행이 같은 값: ws_code=''", evidence_id="t-4.e1", parent="t-3.e1")]
+    return Walk(hops=hops, reads=4, stopped="입력이 다 정상 — Merger" + (f" · {fill}" if fill else ""), stop_at="t-3.e1", fill=fill,
+                rungs=[Rung(action="code.read", params={"service": "processor", "path": "common/merge.py", "line": 10}, evidence="t-2.e1")])
+
+
+def _fill_problem(component="processor"):
+    return (f"최상위 {component}는 걷기가 멈춘 클래스 Merger의 서비스다 — 그 클래스의 채움값은 입력 필드에서 왔다: {_FILL}. 입력 필드가 전부 한 값이면 병합이 못 맞는 것은"
+            f" 입력의 일이다. {component}가 원인이라면 그 값이 그 필드의 정상 값이라는 증거를 인용하고, 아니면 그 입력이나 그 입력을 낸 쪽을 원인으로 다시 적어라")
+
+
+def test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나():
+    """측정 #37 c-13 r2: 서술은 "원천 필드가 모두 공백"이라 쓰고도 판정은 그 병합을 한 클래스의 서비스를 logic_bug(high)로 댔다. 멈춘 홉의 후보(그 클래스의 서비스 —
+    공유 레포면 그중 어느 것이든)를 탓하면 문제 하나. 입력을 낸 쪽·아래쪽 서비스·토픽 이름, 원인 서비스를 안 대는 유형, 채움 사실 없음·후보 없음·걷기 없음은 안 건드린다."""
+    from src.application.nodes import fill_blame_problems
+
+    services = frozenset({"processor", "batch", "sink", "collector", "api"})
+    walk = _filled_walk()
+
+    def check(component="processor", *, kind="logic_bug", on=walk):
+        return fill_blame_problems(verdict(verdict_type=kind, root_cause=cause(component, "t-1.e1")), walk=on, components=services)
+
+    assert check() == [_fill_problem()]
+    assert check("sink", kind="data_loss") == [_fill_problem("sink")]                                   # 공유 레포의 다른 서비스도
+    assert check("collector") == [] and check("api") == [] and check("feed.events") == []              # 입력을 낸 쪽·아래쪽·서비스 아닌 것
+    for kind in ("external", "inconclusive", "degraded"):                                               # not_a_defect는 최상위를 못 갖는다(모델 검증)
+        assert check(kind=kind) == [], kind
+    assert check(on=_filled_walk(fill="")) == [] and check(on=_filled_walk(candidates=())) == [] and check(on=None) == []
+
+
+async def test_verify는_채움값의_서비스_탓이면_한_번_되묻고_입력_쪽으로_고친_답은_지나고_두_번째도_같으면_low로_강등한다(case):
+    """R3-5z ㉙: 기존 되묻기 흐름 그대로 — 첫 번째는 되묻기, 입력을 낸 쪽으로 고친 답은 통과, 두 번째도 같으면 기존 강등. 대본 경로(`check_discovery=False`)는 안 건다."""
+    nodes = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor", "batch", "sink", "collector"})))
+    blamed = verdict(verdict_type="logic_bug", root_cause=cause("processor", "t-1.e1"))
+    first = await nodes["verify"](_state(case, walk=_filled_walk(), verdict=blamed))
+    assert first["verify_problems"] == [_fill_problem()] and first["verify_attempts"] == 1
+    fixed = await nodes["verify"](_state(case, walk=_filled_walk(), verify_attempts=1,
+                                         verdict=verdict(verdict_type="data_loss", root_cause=cause("collector", "t-1.e1"))))
+    assert fixed["verify_problems"] == [] and "verify_attempts" not in fixed and "llm_errors" not in fixed          # 강등 길이 아니라 통과 길
+    second = await nodes["verify"](_state(case, walk=_filled_walk(), verify_attempts=1, verdict=blamed))
+    got = second["verdict"]
+    assert second["verify_problems"] == [] and got.confidence == "low" and got.root_cause.component == "processor"
+    assert any(c.startswith("검증 미통과: 최상위 processor는 걷기가 멈춘 클래스 Merger의 서비스다") for c in got.caveats)
+    loose = make_nodes(deps_for(ScriptedRunner(), components=frozenset({"processor", "collector"}), check_discovery=False))
+    assert (await loose["verify"](_state(case, walk=_filled_walk(), verdict=blamed)))["verify_problems"] == []
+
 
 # ── R3-5d ⑤ — 결함 아님(not_a_defect)은 걷기가 지킨다 ──
 

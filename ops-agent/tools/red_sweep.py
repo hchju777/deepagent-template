@@ -2668,7 +2668,7 @@ CASES += [
  ("다 밟은 사다리가 마지막 칸이 아니라 첫 칸에서 잇는다", B, "        hop = (rungs[-1].action, dict(rungs[-1].params))", "        hop = (rungs[0].action, dict(rungs[0].params))", ["tests/application/test_briefing.py::test_예시는_걷기의_아직_안_낸_칸을_셋까지_한_라운드에_묶는다"]),
  ("둘째 칸을 안 고정한다", ND, "    return [(r.action, dict(r.params)) for r in walk.rungs\n", "    return [(r.action, dict(r.params)) for r in walk.rungs[:1]\n", [WHOP_T]),
  ("대기 태스크를 낸 칸으로 센다", ND, "    ran = {_query(t) for t in state.plan_tasks if t.action and t.status != \"pending\"}", "    ran = {_query(t) for t in state.plan_tasks if t.action}", [WHOP_T]),
- ("stop_at을 안 적는다", WK, "stopped=stopped, stop_at=ev, rungs=rungs,\n                         notes=notes, facts=facts)", "stopped=stopped, rungs=rungs,\n                         notes=notes, facts=facts)", [DEEP_T, WALK_T]),
+ ("stop_at을 안 적는다", WK, "stopped=stopped, stop_at=ev, rungs=rungs,\n                         notes=notes, facts=facts, fill=fill)", "stopped=stopped, rungs=rungs,\n                         notes=notes, facts=facts, fill=fill)", [DEEP_T, WALK_T]),
  ("상한 멈춤의 칸을 안 낸다", WK, "    elif nxt is not None:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", "    elif False:\n        rungs.append(Rung(action=nxt[0], params=nxt[1], evidence=nxt_ev))", [CAP_T]),
  ("리터럴 칸이 첫 칸이 아니다", WK, "            rungs = [head] + [r for r in rungs if r != head]", "            rungs = [r for r in rungs if r != head] + [head]", [LIT_NEXT_T]),
  ("walked로 입구 읽기 줄을 안 센다", IM, "    walked = [t for t in state.plan_tasks if t.walked and t.status == \"ok\"]", "    walked = []", [WBRIEF_T]),
@@ -4002,7 +4002,7 @@ CASES += [
  ('멈춘 클래스 입력의 빈 행을 안 센다', WK, '{sum(1 for r in rows_ if _blank(r.get(hit.field)))}/{len(rows_)}', '{len(rows_)}/{len(rows_)}', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다']),
  ('멈춘 클래스 입력에 그 필드가 없다는 사실이 없다', WK, 'if parts else f" · 멈춘 {up.writer}의 입력에 {hit.field} 필드가 없다"', 'if parts else ""', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
  ('클래스가 읽은 입력을 안 남긴다', WK, '        inputs_at[came_from] = [(e[0], e[1], e[2]) for e in read_inputs]\n', '', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
- ('걷기가 사실 줄을 안 싣는다', WK, '                         notes=notes, facts=facts)}', '                         notes=notes)}', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
+ ('걷기가 사실 줄을 안 싣는다', WK, '                         notes=notes, facts=facts, fill=fill)}', '                         notes=notes, fill=fill)}', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
  ('걷기 표가 사실 줄을 안 찍는다', CS, '                + [f"  주: {fact}" for fact in self.facts])', '                )', ['tests/application/test_walk.py::test_단일값이_든_비교식이_있으면_그_입력을_그대로_견준_통과_수와_빈_행_수와_멈춘_클래스_입력의_그_필드_빈_행을_걷기_주에_적는다', 'tests/test_board_walk.py::test_c2형_단일값_사슬은_비교식_줄을_사실로_적고_원천_클래스의_입력이_다_정상이면_멈추며_뒤_칸은_나쁜_필드가_든_컴포넌트가_먼저다']),
  ('검증 사실 줄에 걷기 사실이 없다', ND, '    told = f" · 걷기 사실: {\' / \'.join(walk.facts)}" if walk is not None and walk.facts else ""', '    told = ""', ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
  ('걷기 사실끼리 가르는 표가 다르다', ND, "{' / '.join(walk.facts)}", "{' · '.join(walk.facts)}", ['tests/application/test_verdict.py::test_검증_사실_줄은_걷기_사실을_꼬리에_싣는다']),
@@ -4340,7 +4340,20 @@ CASES += [
  ('kafka 예비 부트스트랩의 형식을 안 본다', SS, '            if isinstance(entry, str) and ":" not in entry:\n                raise ValueError(f"proxy_bootstrap_server는', '            if False:\n                raise ValueError(f"proxy_bootstrap_server는', ['tests/config/test_schema_site.py::test_kafka의_proxy_bootstrap_server는_선택이고_빈_리스트는_프록시_없음이며_항목은_host_port다']),
  ('factory가 kafka에 사이트·스위치를 안 넘긴다', FCT, 'kafka=RealKafkaInspector(infra.kafka.consumer, clock=clock, site=where, fallback=on)', 'kafka=RealKafkaInspector(infra.kafka.consumer, clock=clock)', ['tests/infrastructure/test_factory.py::test_Kafka_실구현에도_사이트와_스위치가_넘어간다']),
 ]
-assert len(CASES) >= 1714, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 12a-R3-5z ㉙ — 채움값 입력 탓 다시 묻기: Walk.fill(멈춘 클래스의 채움 사실), 최상위가 멈춘 홉 후보(그 클래스의 서비스)면 verify 문제 ──
+CASES += [
+ ('걷기가 채움 사실을 따로 안 담는다', WK, '                fill = source\n', '', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('걷기가 채움 사실을 Walk에 안 넘긴다', WK, 'notes=notes, facts=facts, fill=fill)}', 'notes=notes, facts=facts)}', ['tests/application/test_walk.py::test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_그_병합_키를_입력_필드까지_잇고_입력에서_단일값이면_멈춤_줄에_적는다']),
+ ('채움값의 서비스 탓을 안 묻는다', ND, '            problems += fill_blame_problems(verdict, walk=state.walk, components=deps.components)\n', '', ['tests/application/test_verdict.py::test_verify는_채움값의_서비스_탓이면_한_번_되묻고_입력_쪽으로_고친_답은_지나고_두_번째도_같으면_low로_강등한다']),
+ ('채움 사실이 없어도 서비스 탓을 묻는다', ND, '    if walk is None or not walk.fill or verdict.root_cause is None', '    if walk is None or verdict.root_cause is None', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
+ ('external도 채움값 서비스 탓으로 묻는다', ND, '("external", "not_a_defect", "inconclusive", "degraded"):\n        return []\n    stop = next(', '("not_a_defect", "inconclusive", "degraded"):\n        return []\n    stop = next(', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
+ ('inconclusive도 채움값 서비스 탓으로 묻는다', ND, '("external", "not_a_defect", "inconclusive", "degraded"):\n        return []\n    stop = next(', '("external", "not_a_defect", "degraded"):\n        return []\n    stop = next(', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
+ ('degraded도 채움값 서비스 탓으로 묻는다', ND, '("external", "not_a_defect", "inconclusive", "degraded"):\n        return []\n    stop = next(', '("external", "not_a_defect", "inconclusive"):\n        return []\n    stop = next(', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
+ ('입력을 낸 쪽 서비스도 채움값 탓으로 묻는다', ND, '    if component not in components or component not in stop.candidates:\n', '    if component not in components:\n', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
+ ('채움값 문제에 채움 사실 대신 멈춤 글을 적는다', ND, '그 클래스의 채움값은 입력 필드에서 왔다: {walk.fill}.', '그 클래스의 채움값은 입력 필드에서 왔다: {walk.stopped}.', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
+ ('채움값 문제에 멈춘 클래스 대신 키를 적는다', ND, '걷기가 멈춘 클래스 {stop.writer or stop.key}의 서비스다', '걷기가 멈춘 클래스 {stop.key}의 서비스다', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
+]
+assert len(CASES) >= 1724, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

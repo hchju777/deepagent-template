@@ -1835,9 +1835,11 @@ async def test_병합_뒤_채움값이_이어_온_나쁜_단일값과_같으면_
     walk = await walked([merge])
     fact = "병합 뒤 fillna('-')가 이어 온 단일값 wg='-'와 같다(w1.py:L5) · 병합 키 ws ← 입력 필드 wsCode(w1.py:L3): src:L1 4행 전부 ''"
     assert walk.stopped == f"입력이 다 정상 — W1 · {fact} (단일값이 든 비교식 proc/job.py:L50)"
-    # 채움값이 다르거나 키를 입력 필드로 만든 자리가 없으면 전처럼
-    assert (await walked([merge.model_copy(update={"chained": ("fillna", "?")})])).stopped == "입력이 다 정상 — W1 (단일값이 든 비교식 proc/job.py:L50)"
-    assert (await walked([merge.model_copy(update={"sources": []})])).stopped == "입력이 다 정상 — W1 (단일값이 든 비교식 proc/job.py:L50)"
+    assert walk.fill == fact                                         # 멈춤 글과 따로(R3-5z ㉙ — 측정 #37 후속) — 검증이 이것으로 그 클래스의 서비스 탓을 되묻는다
+    # 채움값이 다르거나 키를 입력 필드로 만든 자리가 없으면 전처럼 — 채움 사실도 없다
+    for other in (merge.model_copy(update={"chained": ("fillna", "?")}), merge.model_copy(update={"sources": []})):
+        plain = await walked([other])
+        assert plain.stopped == "입력이 다 정상 — W1 (단일값이 든 비교식 proc/job.py:L50)" and plain.fill == ""
     # 입력에서 그 필드가 단일값이 아니거나 어떤 행에 없으면 사실이 아니다
     mixed = [("src:L1", "e", [{"wsCode": ""}, {"wsCode": "B"}])]
     gone = [("src:L1", "e", [{"wsCode": ""}, {"id": 2}])]
