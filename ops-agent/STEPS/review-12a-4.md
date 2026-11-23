@@ -1545,3 +1545,19 @@ PYTHONUTF8=1 python -m src case trace <케이스id> --trace output/traces --brie
   후보 **밖**일 때만 caveat를 단다 — 이번은 후보 **안**(그 클래스의 서비스)이라 아무 검사도 없었다.
 - 방향: **R3-5z ㉙**(번호는 요청을 따른다 — ㉘은 비워 둔다). 답은 [reply.md](reply.md)의 #37 후속.
 
+## 메일 본문 잘림 (11-23, 사람) → 메일 ①
+
+- 원인: `mail_agent.py`의 `MAX_BODY_CHARS = 100000`인데 리포트 HTML이 약 147000자라 태그 중간에서 잘렸다.
+- 요청:
+  1. `MAX_BODY_CHARS`를 `MailConfig.max_body_chars`(기본 300000)로 옮긴다.
+  2. 한도를 넘으면 글자 위치가 아니라 마지막 `</tr>` 직후에서 자른다 — 열린 태그를 닫고, 잘림 안내는 화면에 보이는 행으로 붙인다.
+  3. `report_html.py`: `WRAP`을 각 `td`에서 빼고 바깥 720px 표 style에 한 번만. `td`의 `vertical-align:top`을 빼고 그 `tr`에 `valign="top"`. padding·border·color는 그대로
+     (Outlook 호환).
+  4. 오프라인 테스트로 고정한다.
+- 완료 기준: 같은 데이터로 렌더한 리포트가 전보다 25% 이상 짧다 / 렌더 결과에 `WRAP` 문자열이 5회 이하 / 150000자 본문은 안 잘린다 / 400000자 본문은 `</tr>` 경계에서
+  잘리고 안내 행이 보인다 / 기존 pytest 전부 통과.
+- **코드 확인**(11-23): `compose_input_value`가 필드 머리글 무력화 뒤 `safe_body[:MAX_BODY_CHARS]`에 글 한 줄을 붙인다 — 태그 경계를 안 본다. `report_html.py`의 `WRAP`은 배너·
+  표 칸·칸 안 목록·글머리·차트 경고·각주 여섯 자리에 붙고, 표 칸(`_cell`)·타일·글머리 칸에 `vertical-align:top`이 인라인이다. `word-break`·`overflow-wrap`은 상속되는 속성이라
+  바깥 표 한 곳이면 안쪽 칸에 다 미친다.
+- 방향: **메일 ①**(측정 단계와 성질이 달라 R3-5z 번호를 안 쓴다). 답은 [reply.md](reply.md)의 메일 본문 잘림.
+

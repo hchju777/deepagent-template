@@ -836,6 +836,7 @@ R3-1 ④ B는 관측되면 그때(10-13 원칙).
 | R3-5z ㉖ ✅ | 프록시 예비 접속 3 — REST | `proxy_base_url` 키; `proxy_base_url + spec.path`, `ConnectError`·`ConnectTimeout`만 대체, 4xx·5xx는 그대로 | `rest_prober` |
 | R3-5z ㉗ ✅ | 프록시 예비 접속 4 — Kafka | `proxy_bootstrap_server` 키; 원 부트스트랩 TCP 시험 → 프록시; 프록시 경로 실패면 브로커가 알려 준 주소를 오류에 | `kafka_inspector` |
 | R3-5z ㉙ ✅ | 채움값 입력 탓 다시 묻기 | (측정 #37 후속 11-20) `Walk.fill`(멈춘 클래스의 채움 사실, 멈춤 글은 그대로); 채움 사실이 선 걷기에서 최상위 서비스가 멈춘 홉의 후보(그 클래스의 서비스) 안이면 verify 문제 하나 — 다시 묻고 두 번째도 같으면 기존 강등. external·not_a_defect·inconclusive·degraded, 입력을 낸 쪽·아래쪽·서비스 아닌 component는 안 건드린다 | `case`·`walk`·`nodes` |
+| 메일 ① | 메일 본문 잘림 | (사람 요청 11-23) `MailConfig.max_body_chars`(기본 300000); 넘으면 마지막 `</tr>` 직후에서 자르고 열린 태그를 닫고 안내를 보이는 행으로; 리포트 HTML의 `WRAP`을 바깥 720px 표 한 곳에, 칸의 `vertical-align:top`을 행의 `valign="top"`으로 | `schema_mail`·`mail_agent`·`report_html` |
 
 
 
