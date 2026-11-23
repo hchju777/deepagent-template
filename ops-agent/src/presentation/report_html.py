@@ -84,6 +84,9 @@ FONT = ("'Malgun Gothic','맑은 고딕',-apple-system,'Segoe UI',"
 # Outlook의 Word 엔진은 이 속성들을 무시할 수 있다. 그래서 **끊기면 안 되는 짧은
 # 구절은 blocks.py가 줄바꿈 금지 공백(U+00A0)으로 붙여 둔다** — CSS는 개선이고
 # 그 문자가 보장이다.
+#
+# 바깥 720px 표에 **한 번만** 둔다(메일 ① — 칸마다 붙이니 리포트 HTML 약 147000자에서 큰 몫이었고 메일 본문 한도에 걸렸다). 두 속성은 상속되므로 안쪽 칸에 다 미친다.
+# 같은 이유로 칸의 위 정렬은 인라인 `vertical-align` 대신 행의 `valign="top"`이다. padding·border·color는 Word 엔진이 상속을 믿을 수 없어 칸에 그대로 둔다.
 WRAP = "word-break:keep-all;overflow-wrap:break-word;"
 
 _TONE_COLOR = {"plain": INK, "strong": INK, "muted": DIM,
@@ -127,7 +130,7 @@ def _banner(banner: Banner) -> str:
             f'width="100%" style="border-collapse:collapse;margin-top:14px;">'
             f'<tr><td width="4" style="background:{bar};font-size:0;line-height:0;">&nbsp;</td>'
             f'<td style="background:{background};padding:11px 14px;font-size:13px;'
-            f'color:{text};line-height:1.55;{WRAP}">{body}</td></tr></table>')
+            f'color:{text};line-height:1.55;">{body}</td></tr></table>')
 
 
 def _tiles(tiles: tuple[Tile, ...]) -> str:
@@ -143,7 +146,7 @@ def _tiles(tiles: tuple[Tile, ...]) -> str:
                 f'{e(tile.note)}</div>' if tile.note else "")
         cells.append(
             f'<td width="33%" style="background:{PANEL};border:1px solid {RULE};'
-            f'padding:13px 15px;vertical-align:top;">'
+            f'padding:13px 15px;">'
             f'<div style="font-size:11px;color:{DIM};letter-spacing:.4px;">'
             f'{e(tile.label)}{hint}</div>'
             f'<div style="font-size:26px;font-weight:700;line-height:1.15;margin-top:5px;'
@@ -152,7 +155,7 @@ def _tiles(tiles: tuple[Tile, ...]) -> str:
     rows = ["".join(cells[i:i + 3]) for i in range(0, len(cells), 3)]
     return (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
             f'width="100%" style="border-collapse:separate;border-spacing:8px 8px;">'
-            + "".join(f"<tr>{row}</tr>" for row in rows) + "</table>")
+            + "".join(f'<tr valign="top">{row}</tr>' for row in rows) + "</table>")
 
 
 # 차트 치수. 픽셀로 고정하는 이유: Word 엔진은 이미지의 `%` 폭을 제대로 안 다루고,
@@ -246,7 +249,7 @@ def _chart(chart: Chart) -> str:
     warning = ""
     if chart.warning:
         warning = (f'<div style="font-size:11px;color:{FAINT};line-height:1.6;'
-                   f'padding:8px 0 0;{WRAP}">{e(chart.warning)}</div>')
+                   f'padding:8px 0 0;">{e(chart.warning)}</div>')
 
     return (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
             f'width="100%" style="width:100%;border-collapse:collapse;">'
@@ -270,9 +273,9 @@ def _cell(cell: Cell, *, last: bool, total: bool = False,
         # 들여쓰기가 칸을 넘치거나 사라진다. 중첩 표는 어디서나 같게 그려진다.
         # `•`는 문자이므로 배경·테두리 없이도 반전에 견딘다.
         items = "".join(
-            f'<tr><td width="11" valign="top" style="vertical-align:top;'
-            f'font-size:12.5px;line-height:1.7;color:{FAINT};">•</td>'
-            f'<td style="font-size:12.5px;line-height:1.7;color:{color};{WRAP}">'
+            f'<tr valign="top"><td width="11" '
+            f'style="font-size:12.5px;line-height:1.7;color:{FAINT};">•</td>'
+            f'<td style="font-size:12.5px;line-height:1.7;color:{color};">'
             f'{e(line)}</td></tr>' for line in cell.lines)
         inner = (f'<table role="presentation" cellpadding="0" cellspacing="0" '
                  f'border="0" width="100%" style="width:100%;'
@@ -286,7 +289,7 @@ def _cell(cell: Cell, *, last: bool, total: bool = False,
     hint = (f'<span style="font-size:11px;color:{FAINT};"> · {e(cell.hint)}</span>'
             if cell.hint else "")
     return (f'<td align="{cell.align}" style="padding:9px 10px;{border}'
-            f'color:{color};{weight}vertical-align:top;{WRAP}">{inner}{hint}</td>')
+            f'color:{color};{weight}">{inner}{hint}</td>')
 
 
 def _table(table: Table) -> str:
@@ -300,10 +303,10 @@ def _table(table: Table) -> str:
     for index, row in enumerate(table.rows):
         last = index == len(table.rows) - 1 and table.total is None
         start = index in table.group_starts and index != 0
-        body.append("<tr>" + "".join(_cell(c, last=last, group_start=start)
-                                     for c in row) + "</tr>")
+        body.append('<tr valign="top">' + "".join(_cell(c, last=last, group_start=start)
+                                                for c in row) + "</tr>")
     if table.total is not None:
-        body.append(f'<tr style="background:{PANEL};">'
+        body.append(f'<tr valign="top" style="background:{PANEL};">'
                     + "".join(_cell(c, last=True, total=True) for c in table.total)
                     + "</tr>")
     return (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
@@ -314,10 +317,10 @@ def _table(table: Table) -> str:
 
 def _bullets(lines: tuple[str, ...]) -> str:
     items = "".join(
-        f'<tr><td width="12" style="font-size:13px;color:{FAINT};vertical-align:top;'
+        f'<tr valign="top"><td width="12" style="font-size:13px;color:{FAINT};'
         f'padding:3px 0;">·</td>'
-        f'<td style="font-size:12.5px;color:{BODY};line-height:1.65;padding:3px 0;'
-        f'{WRAP}">{e(line)}</td></tr>' for line in lines)
+        f'<td style="font-size:12.5px;color:{BODY};line-height:1.65;padding:3px 0;">'
+        f'{e(line)}</td></tr>' for line in lines)
     return (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
             f'width="100%" style="border-collapse:collapse;margin-top:10px;">'
             f'{items}</table>')
@@ -346,7 +349,7 @@ def _block(block: Block) -> str:
         parts.append(_row(_bullets(block.bullets), pad=f"0 {PAD}"))
     if block.footnote:
         parts.append(_row(f'<div style="font-size:11.5px;color:{FAINT};line-height:1.6;'
-                          f'margin-top:8px;{WRAP}">{e(block.footnote)}</div>',
+                          f'margin-top:8px;">{e(block.footnote)}</div>',
                           pad=f"0 {PAD}"))
     return "".join(parts)
 
@@ -376,7 +379,7 @@ def render(blocks: list[Block], *, title: str, generated_at: str,
         '<tr><td align="center" style="padding:0;">'
         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
         f'width="{WIDTH}" style="width:{WIDTH}px;max-width:{WIDTH}px;'
-        f'border-collapse:collapse;font-family:{FONT};color:{INK};background:{PAGE};">'
+        f'border-collapse:collapse;font-family:{FONT};color:{INK};background:{PAGE};{WRAP}">'
         f'<tr><td style="padding:26px {PAD} 16px;border-bottom:3px solid {INK};">'
         f'<div style="font-size:11px;letter-spacing:2px;color:{DIM};">{e(subtitle)}</div>'
         f'<div style="font-size:23px;font-weight:700;margin-top:7px;letter-spacing:-0.3px;'

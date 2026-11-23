@@ -4353,7 +4353,30 @@ CASES += [
  ('채움값 문제에 채움 사실 대신 멈춤 글을 적는다', ND, '그 클래스의 채움값은 입력 필드에서 왔다: {walk.fill}.', '그 클래스의 채움값은 입력 필드에서 왔다: {walk.stopped}.', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
  ('채움값 문제에 멈춘 클래스 대신 키를 적는다', ND, '걷기가 멈춘 클래스 {stop.writer or stop.key}의 서비스다', '걷기가 멈춘 클래스 {stop.key}의 서비스다', ['tests/application/test_verdict.py::test_채움_사실이_선_걷기에서_최상위가_멈춘_클래스의_서비스면_문제_하나']),
 ]
-assert len(CASES) >= 1724, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
+# ── 메일 ① — 본문 한도 config(기본 300000), 넘으면 마지막 </tr> 직후에서 자르고 열린 태그를 닫고 보이는 안내 행; 리포트 WRAP은 바깥 표에 한 번, 칸 위 정렬은 행의 valign ──
+MAG = ROOT / "src/infrastructure/mail_agent.py"
+RHT = ROOT / "src/presentation/report_html.py"
+SMAIL = ROOT / "src/config/schema_mail.py"
+CASES += [
+ ('메일 본문 한도를 config에서 안 읽는다', MAG, '    safe_body = cut_body(safe_body, cfg.max_body_chars)\n', '    safe_body = cut_body(safe_body, 100_000)\n', ['tests/infrastructure/test_mail_agent.py::test_한도_안의_리포트_본문은_안_잘린다', 'tests/infrastructure/test_mail_agent.py::test_한도를_넘은_리포트_본문은_마지막_행_끝에서_잘리고_열린_태그를_닫고_안내가_보이는_행으로_붙는다']),
+ ('메일 본문을 행 끝이 아니라 글자 자리에서 자른다', MAG, '    ends = [m.end() for m in _ROW_END.finditer(body, 0, max(0, limit - _RESERVE))]\n', '    ends = []\n', ['tests/infrastructure/test_mail_agent.py::test_한도를_넘은_리포트_본문은_마지막_행_끝에서_잘리고_열린_태그를_닫고_안내가_보이는_행으로_붙는다']),
+ ('잘린 메일 본문의 열린 태그를 안 닫는다', MAG, '        out = kept + note + "".join(f"</{name}>" for name, _ in reversed(stack))\n', '        out = kept + note\n', ['tests/infrastructure/test_mail_agent.py::test_한도를_넘은_리포트_본문은_마지막_행_끝에서_잘리고_열린_태그를_닫고_안내가_보이는_행으로_붙는다']),
+ ('메일 잘림 안내를 보이는 행 대신 주석으로 붙인다', MAG, '            note = _CUT_ROW.format(cols=cols, text=text)\n', '            note = f"<!-- {text} -->"\n', ['tests/infrastructure/test_mail_agent.py::test_한도를_넘은_리포트_본문은_마지막_행_끝에서_잘리고_열린_태그를_닫고_안내가_보이는_행으로_붙는다']),
+ ('메일 잘림 안내 행의 칸 수를 안 맞춘다', MAG, '            cols = next((s[1] for s in reversed(stack) if s[0] == "table"), 0) or 1\n', '            cols = 1\n', ['tests/infrastructure/test_mail_agent.py::test_한도를_넘은_리포트_본문은_마지막_행_끝에서_잘리고_열린_태그를_닫고_안내가_보이는_행으로_붙는다']),
+ ('메일 본문 표의 칸 수를 안 센다', MAG, '                row[1] += 1\n', '                pass\n', ['tests/infrastructure/test_mail_agent.py::test_한도를_넘은_리포트_본문은_마지막_행_끝에서_잘리고_열린_태그를_닫고_안내가_보이는_행으로_붙는다']),
+ ('표 행이 없는 메일 본문은 안 자른다', MAG, '    return body[:limit] + "\\n\\n…(본문이 너무 길어 잘렸다)"\n', '    return body\n', ['tests/infrastructure/test_mail_agent.py::test_표_행이_없는_본문은_전처럼_글자_자리에서_잘린다']),
+ ('메일 본문 한도 기본값이 옛 100000자다', SMAIL, '    max_body_chars: int = 300_000\n', '    max_body_chars: int = 100_000\n', ['tests/infrastructure/test_mail_agent.py::test_본문_한도는_config에_있고_기본_300000자다', 'tests/infrastructure/test_mail_agent.py::test_한도_안의_리포트_본문은_안_잘린다']),
+ ('메일 본문 한도가 0이어도 받는다', SMAIL, '        if v <= 0:\n            raise ValueError(f"max_body_chars는 양수다', '        if False:\n            raise ValueError(f"max_body_chars는 양수다', ['tests/infrastructure/test_mail_agent.py::test_본문_한도는_config에_있고_기본_300000자다']),
+ ('리포트 칸마다 줄바꿈 규칙을 다시 붙인다', RHT, '            f\'color:{color};{weight}">{inner}{hint}</td>\')', '            f\'color:{color};{weight}{WRAP}">{inner}{hint}</td>\')', ['tests/presentation/test_report_html.py::test_줄바꿈_규칙은_바깥_720px_표에_한_번만_붙는다']),
+ ('리포트 바깥 표에 줄바꿈 규칙을 안 둔다', RHT, 'font-family:{FONT};color:{INK};background:{PAGE};{WRAP}">\'', 'font-family:{FONT};color:{INK};background:{PAGE};">\'', ['tests/presentation/test_report_html.py::test_칸에_한국어_줄바꿈_규칙이_붙는다', 'tests/presentation/test_report_html.py::test_줄바꿈_규칙은_바깥_720px_표에_한_번만_붙는다']),
+ ('리포트 칸에 vertical-align:top을 다시 붙인다', RHT, '            f\'color:{color};{weight}">{inner}{hint}</td>\')', '            f\'color:{color};{weight}vertical-align:top;">{inner}{hint}</td>\')', ['tests/presentation/test_report_html.py::test_칸의_위_정렬은_행의_valign으로_주고_칸의_padding_border_color는_그대로다']),
+ ('리포트 표 행에 valign을 안 준다', RHT, '        body.append(\'<tr valign="top">\' + "".join(', '        body.append(\'<tr>\' + "".join(', ['tests/presentation/test_report_html.py::test_칸의_위_정렬은_행의_valign으로_주고_칸의_padding_border_color는_그대로다']),
+ ('리포트 타일 줄에 valign을 안 준다', RHT, '"".join(f\'<tr valign="top">{row}</tr>\' for row in rows)', '"".join(f\'<tr>{row}</tr>\' for row in rows)', ['tests/presentation/test_report_html.py::test_칸의_위_정렬은_행의_valign으로_주고_칸의_padding_border_color는_그대로다']),
+ ('리포트 칸 안 목록 줄에 valign을 안 준다', RHT, '            f\'<tr valign="top"><td width="11" \'', '            f\'<tr><td width="11" \'', ['tests/presentation/test_report_html.py::test_칸의_위_정렬은_행의_valign으로_주고_칸의_padding_border_color는_그대로다']),
+ ('리포트 글머리 줄에 valign을 안 준다', RHT, '        f\'<tr valign="top"><td width="12" style=', '        f\'<tr><td width="12" style=', ['tests/presentation/test_report_html.py::test_칸의_위_정렬은_행의_valign으로_주고_칸의_padding_border_color는_그대로다']),
+ ('리포트 칸의 padding을 뺀다', RHT, 'return (f\'<td align="{cell.align}" style="padding:9px 10px;{border}\'', 'return (f\'<td align="{cell.align}" style="{border}\'', ['tests/presentation/test_report_html.py::test_칸의_위_정렬은_행의_valign으로_주고_칸의_padding_border_color는_그대로다']),
+]
+assert len(CASES) >= 1741, f"케이스가 {len(CASES)}개뿐이다 — 붙이려던 것이 안 붙었나"
 
 bad = []
 for label, path, old, new, tests in CASES:

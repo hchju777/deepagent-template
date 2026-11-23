@@ -238,3 +238,80 @@ async def test_실제_응답에서_본문이_두_번_저장되지_않는다(mail
     result = await AgentMailSender(_cfg(api_base), clock=clock).send("제목", 본문)
     assert result.status == "sent"
     assert "OEE 512" not in str(result.response), "응답에 본문이 되돌아와 저장됐다"
+
+
+# ── 본문 한도(메일 ① — 리포트 HTML 약 147000자가 100000자에서 태그 중간에 잘렸다) ──
+
+def _report_like(total: int) -> str:
+    """리포트 HTML 꼴 — 바깥 720px 표 안에 두 칸짜리 행이 이어지는 문서를 `total`자 남짓으로."""
+    head = ('<!DOCTYPE html>\n<html lang="ko"><head><meta charset="utf-8"><title>t</title></head><body style="margin:0;">'
+            '<table role="presentation" width="720" style="width:720px;"><tr><td style="padding:0 28px;">'
+            '<table role="presentation" width="100%" style="border-collapse:collapse;">')
+    tail = "</table></td></tr></table></body></html>"
+    rows, i = [], 0
+    while len(head) + sum(map(len, rows)) + len(tail) < total:
+        rows.append(f'<tr valign="top"><td style="padding:9px 10px;color:#1a1a1a;">구미 {i}라인</td>'
+                    f'<td align="right" style="padding:9px 10px;color:#1a1a1a;">{i * 7}</td></tr>')
+        i += 1
+    return head + "".join(rows) + tail
+
+
+def _balanced(html: str) -> list[str]:
+    from html.parser import HTMLParser
+
+    class Balance(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack, self.problems = [], []
+
+        def handle_starttag(self, tag, attrs):
+            if tag not in {"meta", "br", "img", "hr", "input", "link"}:
+                self.stack.append(tag)
+
+        def handle_endtag(self, tag):
+            if not self.stack or self.stack[-1] != tag:
+                self.problems.append(f"{self.stack[-1:]} vs </{tag}>")
+            else:
+                self.stack.pop()
+    parser = Balance()
+    parser.feed(html)
+    return parser.problems + [f"안 닫힘 <{t}>" for t in parser.stack]
+
+
+def _body_of(value: str) -> str:
+    return value.split("body : \n", 1)[1]
+
+
+def test_본문_한도는_config에_있고_기본_300000자다():
+    from pydantic import ValidationError
+
+    assert MailConfig().max_body_chars == 300_000 and _cfg("http://x", max_body_chars=5000).max_body_chars == 5000
+    with pytest.raises(ValidationError, match="max_body_chars"):
+        MailConfig(max_body_chars=0)
+    import src.infrastructure.mail_agent as agent
+    assert not hasattr(agent, "MAX_BODY_CHARS")                     # 한도는 한 곳 — 상수가 남으면 둘 중 하나가 거짓말을 한다
+
+
+def test_한도_안의_리포트_본문은_안_잘린다():
+    body = _report_like(150_000)
+    assert len(body) >= 150_000
+    assert _body_of(compose_input_value(_cfg("http://x"), "제목", body)[0]) == body
+
+
+def test_한도를_넘은_리포트_본문은_마지막_행_끝에서_잘리고_열린_태그를_닫고_안내가_보이는_행으로_붙는다():
+    body = _report_like(400_000)
+    out = _body_of(compose_input_value(_cfg("http://x"), "제목", body)[0])
+    assert len(out) <= 300_000 and _balanced(out) == []
+    row = out.index('<tr><td colspan="2" ')
+    kept = out[:row]
+    assert kept.endswith("</tr>") and body.startswith(kept)                                     # 태그 중간이 아니라 행 경계
+    note = out[row:out.index("</tr>", row) + len("</tr>")]
+    assert "본문이 300,000자를 넘어 여기서 잘렸다" in note and f"전체 {len(body):,}자" in note and "background:" in note
+    assert out[row + len(note):] == "</table></td></tr></table></body></html>"                   # 안내 행은 그 표 안, 남은 태그는 차례로 닫는다
+    small = _body_of(compose_input_value(_cfg("http://x", max_body_chars=5000), "제목", body)[0])
+    assert len(small) <= 5000 and _balanced(small) == [] and "본문이 5,000자를 넘어" in small
+
+
+def test_표_행이_없는_본문은_전처럼_글자_자리에서_잘린다():
+    out = _body_of(compose_input_value(_cfg("http://x", max_body_chars=1000), "제목", "가" * 5000)[0])
+    assert out == "가" * 1000 + "\n\n…(본문이 너무 길어 잘렸다)"

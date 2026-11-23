@@ -66,7 +66,16 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FIELD_INLINE = re.compile(
     r"\b(to_email|to|cc|bcc|from|subject|title|body|content)\s*[:：]", re.IGNORECASE)
 
-MAX_BODY_CHARS = 100_000
+# 한도를 넘은 본문 자르기(메일 ① — 글자 자리에서 자르니 태그 중간이라 Outlook이 표를 통째로 잃었다). 표 행 끝에서 자르고 열린 태그를 닫는다. 안내는 주석이 아니라
+# 보이는 행으로 — 받는 사람이 잘린 줄 알아야 한다. 배경을 명시한다(다크모드 반전에서 투명 칸이 어두운 바탕에 앉는다).
+_TAG = re.compile(r"<!--.*?-->|<(/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>", re.S)
+_ROW_END = re.compile(r"</tr\s*>", re.I)
+_VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"})
+_SECTIONS = frozenset({"table", "tbody", "thead", "tfoot"})
+# 안내 행과 닫는 태그의 자리 — 그만큼 앞의 행 끝에서 잘라 한도 안에 둔다.
+_RESERVE = 2000
+_CUT_ROW = ('<tr><td colspan="{cols}" style="padding:12px 10px;background:#fef0c7;color:#7a3a07;font-size:13px;line-height:1.6;'
+            'border-top:2px solid #b54708;">{text}</td></tr>')
 
 
 def neutralize_subject(subject: str) -> str:
@@ -96,11 +105,53 @@ def neutralize_field_lines(text: str) -> tuple[str, int]:
     return "\n".join(lines), changed
 
 
+def _open_tags(html: str) -> list[list]:
+    """닫히지 않은 태그들 `[이름, 그 표의 마지막 행 칸 수]` — 끝이 가장 안쪽. 짝이 안 맞는 끝 태그는 가장 가까운 같은 이름까지 닫는다."""
+    stack: list[list] = []
+    for m in _TAG.finditer(html):
+        if m.group(2) is None:
+            continue                                     # 주석
+        name = m.group(2).lower()
+        if m.group(1):
+            at = next((i for i in range(len(stack) - 1, -1, -1) if stack[i][0] == name), None)
+            if at is None:
+                continue
+            closed = stack[at]
+            del stack[at:]
+            if name == "tr" and (table := next((s for s in reversed(stack) if s[0] == "table"), None)) is not None:
+                table[1] = closed[1]
+        elif name not in _VOID and not m.group(0).endswith("/>"):
+            if name in ("td", "th") and (row := next((s for s in reversed(stack) if s[0] == "tr"), None)) is not None:
+                row[1] += 1
+            stack.append([name, 0])
+    return stack
+
+
+def cut_body(body: str, limit: int) -> str:
+    """한도를 넘은 본문 — 한도 안의 마지막 `</tr>` 직후에서 자르고, 그 표 안에 보이는 안내 행을 붙이고, 열린 태그를 차례로 닫는다. 표 행이 없는 본문(글 보고서)은 전처럼
+    글자 자리에서."""
+    if len(body) <= limit:
+        return body
+    ends = [m.end() for m in _ROW_END.finditer(body, 0, max(0, limit - _RESERVE))]
+    for end in reversed(ends):
+        kept = body[:end]
+        stack = _open_tags(kept)
+        text = f"…(본문이 {limit:,}자를 넘어 여기서 잘렸다 — 전체 {len(body):,}자 중 {end:,}자까지)"
+        if stack and stack[-1][0] in _SECTIONS:
+            cols = next((s[1] for s in reversed(stack) if s[0] == "table"), 0) or 1
+            note = _CUT_ROW.format(cols=cols, text=text)
+        else:
+            note = f'<p style="padding:12px 10px;background:#fef0c7;color:#7a3a07;font-size:13px;">{text}</p>'
+        out = kept + note + "".join(f"</{name}>" for name, _ in reversed(stack))
+        if len(out) <= limit:
+            return out
+    return body[:limit] + "\n\n…(본문이 너무 길어 잘렸다)"
+
+
 def compose_input_value(cfg: MailConfig, subject: str, body: str) -> tuple[str, int]:
     """Agent에 보낼 한 덩어리 텍스트. **조립은 여기 하나뿐이다.**"""
     safe_body, changed = neutralize_field_lines(_CONTROL.sub("", body))
-    if len(safe_body) > MAX_BODY_CHARS:
-        safe_body = safe_body[:MAX_BODY_CHARS] + "\n\n…(본문이 너무 길어 잘렸다)"
+    safe_body = cut_body(safe_body, cfg.max_body_chars)
     return ("to_email : " + ", ".join(cfg.recipients) + "\n"
             + "subject : " + neutralize_subject(subject) + "\n"
             + "body : \n" + safe_body), changed

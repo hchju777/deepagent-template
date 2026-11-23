@@ -257,6 +257,36 @@ def test_칸에_한국어_줄바꿈_규칙이_붙는다(source, window):
     assert "overflow-wrap:break-word" in html
 
 
+def test_줄바꿈_규칙은_바깥_720px_표에_한_번만_붙는다(source, window):
+    """메일 ①: 리포트 HTML 약 147000자가 메일 본문 한도에 걸렸다 — 칸마다 붙던 규칙이 큰 몫이었다. `word-break`·`overflow-wrap`은 상속되는 속성이라 바깥 720px 표
+    한 곳이면 안쪽 칸에 다 미친다."""
+    from src.presentation.report_html import WRAP
+
+    docs = [doc(YESTERDAY, line=f"P{i}", scen=f"S{i % 3}") for i in range(12)]
+    html = html_of(build(docs, source=source, window=window))
+    assert html.count(WRAP) == 1
+    outer = html[html.index('width="720"'):]
+    assert outer[:outer.index(">")].count(WRAP) == 1
+
+
+def test_칸의_위_정렬은_행의_valign으로_주고_칸의_padding_border_color는_그대로다():
+    """메일 ①: 칸마다 `vertical-align:top`을 인라인으로 주던 것을 행의 `valign="top"` 하나로(Outlook의 Word 엔진도 읽는 속성). padding·border·color는 칸에 그대로 둔다."""
+    table = Table(columns=(Column("라인"), Column("건수", align="right")),
+                  rows=((Cell("조립2라인"), Cell("12", align="right")), (Cell("조립3라인", lines=("재고 불일치", "설비 정지")), Cell("3", align="right"))))
+    block = Block(key="x", title="x", table=table, tiles=(Tile(label="합계", value="15"),), bullets=("첫째", "둘째"))
+    html = render([block], title="t", generated_at="x")
+    assert "vertical-align:top" not in html
+    assert html.count('<tr valign="top">') == 2 + 2 + 1 + 2                   # 표 행 둘, 칸 안 목록 둘, 타일 줄 하나, 글머리 둘
+    assert '<td align="right" style="padding:9px 10px;border-bottom:1px solid' in html and "color:" in html
+    assert _balanced_html(html) == []
+
+
+def _balanced_html(html: str) -> list[str]:
+    parser = Balance()
+    parser.feed(html)
+    return parser.problems + [f"안 닫힘 <{t}>" for t in parser.stack]
+
+
 def test_줄바꿈_금지_공백이_그대로_살아_나간다(source, window):
     """`html.escape`가 U+00A0을 건드리면 `&amp;nbsp;`가 되거나 보통 공백으로 뭉개진다.
     Outlook의 Word 엔진은 CSS를 무시할 수 있으므로 이 문자가 유일한 보장이다."""

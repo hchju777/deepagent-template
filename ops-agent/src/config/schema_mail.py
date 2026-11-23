@@ -31,6 +31,8 @@ class MailConfig(StrictModel):
     api_key: SecretStr | None = None
     subject_prefix: str = "[운영리포트]"
     timeout_s: float = 60.0
+    # 본문 글자 상한(메일 ① — 리포트 HTML이 약 147000자인데 코드 상수 100000자에서 태그 중간에 잘렸다). 발송 API의 한도는 배치마다 다를 수 있어 config에 둔다.
+    max_body_chars: int = 300_000
     tls: TlsConfig = TlsConfig()
 
     @field_validator("recipients", "notify_to")
@@ -45,6 +47,13 @@ class MailConfig(StrictModel):
                 raise ValueError(
                     f"수신자에 공백·줄바꿈·구분자가 들어 있다 — {address!r}. "
                     f"여러 명은 리스트의 별도 항목으로 적어라")
+        return v
+
+    @field_validator("max_body_chars")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"max_body_chars는 양수다 — {v}")
         return v
 
     @field_validator("api_base")
